@@ -5,17 +5,19 @@ exports_files(
     ["rtos_slot_contracts.json"],
     visibility = ["//visibility:public"],
 )
+exports_files(["rb_media_permit_stock.S"], visibility = ["//replacement/develop:__pkg__"])
+
 
 filegroup(
     name = "module",
     srcs = ["src/lib.rs"],
-    visibility = ["//replacement/bank:__pkg__"],
+    visibility = ["//replacement/bank:__pkg__", "//replacement/develop:__pkg__"],
 )
 
 filegroup(
     name = "adapter",
     srcs = ["src/stock.rs"],
-    visibility = ["//replacement/bank:__pkg__"],
+    visibility = ["//replacement/bank:__pkg__", "//replacement/develop:__pkg__"],
 )
 
 filegroup(
@@ -26,7 +28,7 @@ filegroup(
         "src/stock.rs",
         "stock_calls.json",
     ],
-    visibility = ["//replacement/bank:__pkg__"],
+    visibility = ["//replacement/bank:__pkg__", "//replacement/develop:__pkg__"],
 )
 
 xm1_rust_staticlib(

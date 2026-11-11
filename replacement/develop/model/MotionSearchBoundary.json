@@ -1,0 +1,67 @@
+{
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "images": [
+    {"id":4,"base":"0x61c400","sha256":"f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"},
+    {"id":5,"base":"0xbf1a00","sha256":"3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"}
+  ],
+  "publications": "MotionSearchScenarios.motionSearchPublications",
+  "scenarioConstructor": "MotionSearchScenarios.motionSearchScenarios",
+  "findAbi": {"address":"0xdac8f8","symbol":"xm1_pipeline_image_find_motion","arguments":["source descriptor pointer","target descriptor pointer","unused context","three-word result pointer","variant"],"return":"normalized signed cost bits"},
+  "refineAbi": {"address":"0xdad060","symbol":"xm1_pipeline_image_refine_motion","arguments":["source descriptor pointer","target descriptor pointer","two-word delta pointer","four-word prediction storage pointer"],"return":"normalized signed cost bits","writesPredictionWords":[0,1,3],"preservesPredictionWords":[2]},
+  "layout": {"size":76,"source":32,"target":36,"evaluated":56,"maximum":60,"sampleX":64,"sampleY":68,"flags":72,"descriptorAddress":0,"descriptorByteStride":4},
+  "sourceCorrections": [
+    "A32 dac1a8 samples the low two bytes of a four-byte load at signed-even-rounded x times two; it does not compare all four bytes.",
+    "A32 dac32c snapshots all four directional thresholds before searching; each direction starts at that iteration's center. After three strict improvements horizontal steps become24 and vertical steps become6.",
+    "A32 dac748 initializer swaps donor width/height interpretations. ImageReferences owns its independent initializer.",
+    "A32 69a2cc writes control register48 before field4c and again after field90; both writes are retained.",
+    "A32 dad600 writes prediction0/1 and dad604 writes prediction3. No instruction writes prediction2."
+  ],
+  "definedOutputLaw": {
+    "refine": "Caller-provided prediction word2 is preserved without reading it.",
+    "frontend": "Stock e5a7a0 mode1 skips coarse search, then publishes an undefined local vector2. Modes0/2/3 get a defined vector2 from coarse search. No direct pinned-source reader of frame+31e4 was found by ScratchCensus; indirect readers are not excluded.",
+    "integrationPolicy": "Parent must resolve mode1 consumer law. This module does not initialize the skipped word, copy private stock stack storage, or treat undefined data as a successful value."
+  },
+  "algorithmLaw": {
+    "cost":"Signed thresholded sum of absolute differences of two packed components, sampled by source state steps; one visited key is appended per evaluation, including failures.",
+    "visited":"Key=x+(y<<16), checked for equality before zero sentinel; a zero key terminates later-key lookup.",
+    "search":"Vertical positive then negative candidates, horizontal positive then negative candidates, strict-improvement tie rule, followed by four-direction local descent.",
+    "hardwareError":"Negative hardware status returns incoming threshold, not accumulated cost.",
+    "hardwareBoundary":"Owned resample builders write fff20000 register words. MMIO ready/status, RTOS wait/notification, IRQ registration, and resource lifetime are explicit lower laws. No CPU algorithm is replaced by a scripted result."
+  },
+  "preconditions": ["Original source steps must advance each loop; zero steps retain the source nontermination rather than silently narrowing the search.","Descriptor and state storage must be valid; pixel word loads admit unaligned addresses.","Normalization divisors must be nonzero. Source __aeabi divide-by-zero consumer law is not established by these scenarios."],
+  "checks": {"sourceImageAndExtentSha256":"Observed matching original images and all32 extents below; dac040 is symbol-placed but absent from function-ranges, so its60-byte extent ends at dac07c.","nativeExecution":"Not run; integration owner runs cohesive verification."},
+  "extents": [
+    {"address":"0xdac8f8","size":1896,"sha256":"08738339e60d5dd7a1019b8bb575a3731d8f4f1a9000556840842ebd842aa0be"},
+    {"address":"0xdad060","size":1712,"sha256":"7a694e8f513399805ee4f532265bed156ed2ede407e4c6bb3e8b2f301315c0db"},
+    {"address":"0xdac07c","size":300,"sha256":"80c223586bc6e233096fec7febe40ecb12ddceb996b716bd8120ce7bf4330609"},
+    {"address":"0xdac1a8","size":388,"sha256":"944b5c8809ef21e84c9557f0c8717bc3438a1a4a379fdaf91359259c88e7bd5f"},
+    {"address":"0xdac32c","size":1052,"sha256":"f94b9329f89bb25d3335abee8f3c7789e3a3cd8b6da88ba27d23ab0066bc1fe5"},
+    {"address":"0xdac040","size":60,"sha256":"6f93622289e133c10c9ff609424b040abe09897f7c19cc528d670a6c200fe774","indexRange":false},
+    {"address":"0xda9e44","size":128,"sha256":"126ae05da4e45d08e8878411a9ddb206fbe9891b8ef2f043e77a9dc382b0af23"},
+    {"address":"0xda9ec4","size":20,"sha256":"6487ab6973bbafb76dc30027a53c28119599e6215d259a7b61d4d738008db2cf"},
+    {"address":"0xda9ed8","size":88,"sha256":"11170f40d1a456d0591faba2c5610111f4457b3d4e71837afd7eb764e3263872"},
+    {"address":"0xda9f30","size":376,"sha256":"2dc78f23f4daa69ca960dd983a5713cfe2f2af95b00722d22e662608d5bea3d8"},
+    {"address":"0xdaa0a8","size":344,"sha256":"cb4e5862931bfdb7c377fd21acb019945c482598afef735ae7c5b17a6c3a6a98"},
+    {"address":"0xdaa200","size":168,"sha256":"a4d51ed476de7476c0a078b7df16b51234663037e7bbbe442d29d917cd954936"},
+    {"address":"0xdaa2a8","size":92,"sha256":"0351c7a9b87ea0f774c5b4c7ba20448926c890ecba3f8f6fdace5fa03bb07adc"},
+    {"address":"0xdaa304","size":44,"sha256":"27347d352e01a9c56a45bb8d7ae82a940f695036fb737321be31626234d64313"},
+    {"address":"0xdaa330","size":268,"sha256":"97b2b8e54b61f818131e1562efffbd11136bf70dff3e01ef49155f7894410169"},
+    {"address":"0xdaa43c","size":48,"sha256":"5d5445be718a7d6991688746c16a17481af34be9b3403dfd4925d4013e855be3"},
+    {"address":"0x69a0d4","size":124,"sha256":"068304c6cb5bea912a002e6a2811a1e0299da205ad19e4e2df50232a5fab0960"},
+    {"address":"0x69a150","size":76,"sha256":"118accb5d897f662c9d111a11b90584a19f7a3bb6103d13bcadfebe648ac9f37"},
+    {"address":"0x69a19c","size":116,"sha256":"47e9ff7aada31641777029a33f9caa8bf0e0afb8f2710cdf99d9fdaa8138b94e"},
+    {"address":"0x69a210","size":108,"sha256":"1d246d73ff109811ae2875b945b9f02b5f109a3e7404ef12e4ba59b226aa9090"},
+    {"address":"0x69a27c","size":80,"sha256":"64e5e319efd0622524ac4c62967ed0e19172b2330bffb29fceb09269e470f90b"},
+    {"address":"0x69a2cc","size":1556,"sha256":"74c3f245cb66208bc146d355cb6ad2397150881c8d558bfd73c0e5e4c023fd69"},
+    {"address":"0x69a8e0","size":548,"sha256":"33c4806e2bc6929aa365e9071c42f5c9bae731882966852a86543fefce5862b8"},
+    {"address":"0x69ab04","size":124,"sha256":"7059b632998aa664bef6c1e279f6249fb49d28512b7998e0fb82084c9bad2bf2"},
+    {"address":"0x69ab80","size":164,"sha256":"f75891913ca1ca48280fcae6c0ec841c5039404459319ed3623709665d068b01"},
+    {"address":"0x69ae54","size":148,"sha256":"d7f75e458c79f5158f4d88c74ba3780ca3063591942b1dc765cc22a617657d43"},
+    {"address":"0x69aee8","size":212,"sha256":"b108073c0a00667ca68d03ab8fa2339376bfd53b75be09584e93f9506f118455"},
+    {"address":"0x69afbc","size":48,"sha256":"ad0f639f21d14f1b863527f6f22ece3252e797d33f66ac2a6b70ebc9701f3ca6"},
+    {"address":"0x69afec","size":68,"sha256":"a338b8c695d0837effacf90534da766e7a3222a2db4a97d3bb90860d5d0c8f4f"},
+    {"address":"0x69b030","size":108,"sha256":"cfc30411869330ab75049056b8202aee720ec848504e29d86cf0a5f00eceb710"},
+    {"address":"0x69b0c8","size":108,"sha256":"637b70036a42c345ecb358e9a39414c2f8620b408a987555468f8103347d852a"},
+    {"address":"0x69b134","size":108,"sha256":"7c2c3a09a785b64dbe195826595ffaf0ac65306abeaa9e5c8f2e60595ef449e4"}
+  ]
+}

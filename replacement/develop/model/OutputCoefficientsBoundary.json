@@ -1,0 +1,495 @@
+{
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "integrationBase": "279a7b77",
+  "qualification": "Source implementation and independent scenario definitions supplied. No builds, formatters, linters, tests, native runs or admission performed in this worktree.",
+  "implementation": {
+    "rust": "src/pipeline/output_coefficients.rs",
+    "assembly": "OutputCoefficients_stock.S",
+    "model": "model/OutputCoefficientsScenarios.hs",
+    "classification": "CPU configuration lookup, matrix conversion, interpolation, coefficient construction and record publication. No hardware exception or retained application wrapper.",
+    "allocation": "Freestanding, allocation-free Rust with bounded stack records. Caller-provided addresses retain original A32 register ABI through transparent types.",
+    "types": [
+      "CoefficientDescriptor",
+      "CoefficientBlock",
+      "ConfigurationKey",
+      "LookupId",
+      "MatrixValue",
+      "MatrixIndex",
+      "LookupColumn",
+      "BlendWeight",
+      "ThresholdPriority",
+      "CoefficientProfile"
+    ]
+  },
+  "sources": {
+    "index": "private-data/scratch/xm1-decomp/index/55436fc85c0560dd252b0410af6f2427fe198cd3-a5daad359532.tsv",
+    "images": [
+      {
+        "image": 4,
+        "base": "0x61c400",
+        "bytes": 2631680,
+        "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
+      },
+      {
+        "image": 5,
+        "base": "0xbf1a00",
+        "bytes": 5185120,
+        "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
+      }
+    ],
+    "pinnedC": [
+      "app/connectivity/ptp/vendor/imaging_config/tu_00d65f94.c",
+      "app/ui/record/tu_00d4d604.c",
+      "app/ui/record/tu_00d3cdfc.c",
+      "app/ui/core/ui_settings_usb_scan_api.c",
+      "app/connectivity/ptp/vendor/imaging_config/scan_configuration_transfer.c",
+      "app/connectivity/ptp/vendor/imaging_config/scan_configuration_key_values.c",
+      "app/drivers/isp/registers/tu_0069069c.c",
+      "app/settings/configuration_lookup_cache.c",
+      "app/settings/tu_0073ed54.c",
+      "app/settings/configuration_mode_codes.c"
+    ],
+    "pathPrefix": "decomp/firmwares/xm1-150/",
+    "authority": "Pinned git-show C and original A32 disassembly. NONMATCHING bodies and layouts use the authenticated original extents below. No sibling implementation or saved receipt is source authority."
+  },
+  "routes": [
+    {
+      "address": "0xd675a4",
+      "symbol": "xm1_pipeline_image_expand_matrix_coefficients",
+      "abi": "descriptor,block->void",
+      "bytes": 52,
+      "image": 5,
+      "sha256": "bdc73cb9af8ed07efa4c662b88987107fa87bcb2215cbf9c46cf40fda4b86b6d"
+    },
+    {
+      "address": "0xd67898",
+      "symbol": "xm1_pipeline_image_expand_blended_lookup",
+      "abi": "descriptor,block->void",
+      "bytes": 352,
+      "image": 5,
+      "sha256": "9fad77e24411fa31a768035347c0e4057c5ed609f578e688f84b205fb8f6d733"
+    },
+    {
+      "address": "0xd679f8",
+      "symbol": "xm1_pipeline_image_expand_paired_lookup",
+      "abi": "descriptor,block->void",
+      "bytes": 664,
+      "image": 5,
+      "sha256": "61d485c6338a0169388c447aeaf6c946e065ab6f043cb98cd15d7bbbe1f93ff8"
+    },
+    {
+      "address": "0xd67c90",
+      "symbol": "xm1_pipeline_image_expand_sensor_layout",
+      "abi": "descriptor,block->void",
+      "bytes": 240,
+      "image": 5,
+      "sha256": "61a1c3fb23252fc45cbc5317efdfff1435818449bdb889123e48b9b0458ca0cb"
+    },
+    {
+      "address": "0xd67d80",
+      "symbol": "xm1_pipeline_image_expand_signed_channels",
+      "abi": "descriptor,block->void",
+      "bytes": 228,
+      "image": 5,
+      "sha256": "05f6b9d6da6e5e0f0a493f9508eb2364fc420652ee802529d2a0c97a9d7a01b9"
+    },
+    {
+      "address": "0xd6893c",
+      "symbol": "xm1_pipeline_image_expand_auxiliary_channels",
+      "abi": "descriptor,block->void",
+      "bytes": 104,
+      "image": 5,
+      "sha256": "83219c7c84936507a9d22b5ce84ecd24b5998dc166c64c54493ddc64ea075649"
+    },
+    {
+      "address": "0xd68a68",
+      "symbol": "xm1_pipeline_image_expand_noise_controls",
+      "abi": "descriptor,block->void",
+      "bytes": 832,
+      "image": 5,
+      "sha256": "859b99df8b12069031ae70f39a0c053f0800e71e40d5011c43f7e38d350ce950"
+    },
+    {
+      "address": "0xd68da8",
+      "symbol": "xm1_pipeline_image_expand_noise_coefficients",
+      "abi": "descriptor,block->void",
+      "bytes": 884,
+      "image": 5,
+      "sha256": "8783f292414f7d1ff07dc39a435cd291e90ec3924bb3cc4a53059471ec53f74a"
+    },
+    {
+      "address": "0xd697f0",
+      "symbol": "xm1_pipeline_image_expand_threshold_curves",
+      "abi": "descriptor,block->void",
+      "bytes": 820,
+      "image": 5,
+      "sha256": "edb7e628e4126c85e2bbea9419c63a7f38754cd32dc70a03e6feba3ce5654da8"
+    },
+    {
+      "address": "0xd69f8c",
+      "symbol": "xm1_pipeline_image_expand_selected_lookup",
+      "abi": "descriptor,block->void",
+      "bytes": 400,
+      "image": 5,
+      "sha256": "c53ef6a5814dde04477cdeb0fb144b3c4b7c3c39a90f48437c011cc2de22ddf9"
+    },
+    {
+      "address": "0xd6a11c",
+      "symbol": "xm1_pipeline_image_expand_lookup_controls",
+      "abi": "descriptor,block->void",
+      "bytes": 308,
+      "image": 5,
+      "sha256": "646fa6bedecc0fe07b23579e6fd0b7a23985c9d8dfb0fc86dac4f6af0f6ad656"
+    },
+    {
+      "address": "0xd6a3f0",
+      "symbol": "xm1_pipeline_image_expand_export_coefficients",
+      "abi": "descriptor,block->void",
+      "bytes": 208,
+      "image": 5,
+      "sha256": "a6d0a186252c0de123e34255d1d185bb290d43e3d0b93c4a2f350dbd26b2dbee"
+    },
+    {
+      "address": "0x690924",
+      "symbol": "xm1_pipeline_image_lookup_coefficient_profile",
+      "abi": "u32,headerAddress,curveAddress->Address32",
+      "bytes": 592,
+      "image": 4,
+      "sha256": "07f75b16d66384aeb7b598e6bb878804b24c132c0978745fac7b4edbabff8cbb"
+    },
+    {
+      "address": "0x690b74",
+      "symbol": "xm1_pipeline_image_lookup_export_curve",
+      "abi": "u32,curveAddress->void",
+      "bytes": 368,
+      "image": 4,
+      "sha256": "be1f351b114aa2ae6d79dd5056a0c2ae4ad17ca826a64b1dc227b572d6502831"
+    },
+    {
+      "address": "0xd6703c",
+      "symbol": "xm1_pipeline_image_store_matrix_coefficients",
+      "abi": "packetAddress,block->void",
+      "bytes": 100,
+      "image": 5,
+      "sha256": "266e5287ae392fc85a24fc2c37e0f2508b76419dfb43889625159f88b8a859b0"
+    },
+    {
+      "address": "0xd670a0",
+      "symbol": "xm1_pipeline_image_read_matrix_coefficients",
+      "abi": "packetAddress,u32->void",
+      "bytes": 276,
+      "image": 5,
+      "sha256": "35880c03f8564d645e778c87a6105d8086c0df4216fc9408994bc5aed1801103"
+    },
+    {
+      "address": "0xd671b4",
+      "symbol": "xm1_pipeline_image_build_matrix_coefficients",
+      "abi": "packetAddress,descriptor->void",
+      "bytes": 1008,
+      "image": 5,
+      "sha256": "21d5349cdc3c1b1e0db3d8d279b912e39d57ad62d151b7b0be472108e69addbd"
+    },
+    {
+      "address": "0xd675d8",
+      "symbol": "xm1_pipeline_image_build_blended_lookup",
+      "abi": "descriptor,headerAddress,curveAddress,optionalHalfAddress->void",
+      "bytes": 704,
+      "image": 5,
+      "sha256": "7760fb783fa1c76141f7740c05fcf4bec8fa5d438da51de5790f21e16720c17c"
+    },
+    {
+      "address": "0xd66eac",
+      "symbol": "xm1_pipeline_image_select_parameter_coefficient",
+      "abi": "u32,u32,byteAddress->void",
+      "bytes": 84,
+      "image": 5,
+      "sha256": "78d3619572be908d1bcb9e057a5695242dbcde160828a40e37233662c38effde"
+    },
+    {
+      "address": "0xd69784",
+      "symbol": "xm1_pipeline_image_threshold_priority",
+      "abi": "descriptor->u32",
+      "bytes": 108,
+      "image": 5,
+      "sha256": "2f8cd80871cd8182399bb358a8293724de0da4f08918a98f3348bf37fed6692c"
+    },
+    {
+      "address": "0xd69c10",
+      "symbol": "xm1_pipeline_image_blend_export_curves",
+      "abi": "curveAddress,u32,u32,u32->void",
+      "bytes": 116,
+      "image": 5,
+      "sha256": "367fe96ddf2672b1ef7588b5b6c02603bd4ced82ba33206424e61b601933edd1"
+    },
+    {
+      "address": "0xd69c84",
+      "symbol": "xm1_pipeline_image_select_export_coefficient",
+      "abi": "u32,u32,byteAddress->void",
+      "bytes": 84,
+      "image": 5,
+      "sha256": "a08f6748abe82cbca4e821860603f32676e632bd4abd366603bab0dda2035cb9"
+    },
+    {
+      "address": "0xd69cd8",
+      "symbol": "xm1_pipeline_image_build_selected_export",
+      "abi": "descriptor,curveAddress->void",
+      "bytes": 280,
+      "image": 5,
+      "sha256": "f0c45a865ed19ce3af81249573fec4cfc9c15c9d29e19dcd8becc7a8eaddd7d9"
+    },
+    {
+      "address": "0xd69df0",
+      "symbol": "xm1_pipeline_image_build_grid_export",
+      "abi": "descriptor,curveAddress->void",
+      "bytes": 208,
+      "image": 5,
+      "sha256": "f8c04777d8e91bca8d464b77c7ae5727149b3b668164aa570082e4ffd4bac9a0"
+    },
+    {
+      "address": "0xd6a250",
+      "symbol": "xm1_pipeline_image_build_export_coefficients",
+      "abi": "descriptor,curveAddress->void",
+      "bytes": 416,
+      "image": 5,
+      "sha256": "96c267a14c39452ce5d6a2bfdace3fd70fc6dfe55310397be0b7da918868d5c3"
+    }
+  ],
+  "immutableSourceRanges": [
+    {
+      "address": "0x824bc4",
+      "bytes": 2668,
+      "sha256": "ddf65ba505e08db09879939dfa75c9651d6005f321c9b56ed432e435ec52d99f"
+    },
+    {
+      "address": "0x825630",
+      "bytes": 10852,
+      "sha256": "b78222f6caf76de50ed1bcd39afc007600c8021fdb950d29ce5f09a51c6b2036"
+    },
+    {
+      "address": "0x829ad8",
+      "bytes": 240,
+      "sha256": "f0c3a9bc047ae8cd93f1d1e0931de483e6e9919313cee53171b5a144cfd25896"
+    },
+    {
+      "address": "0xd67e64",
+      "bytes": 2776,
+      "sha256": "2d7e2554d98f097b37608daa402f833df8ca49cc320bfe24d4259b95f1e70068"
+    },
+    {
+      "address": "0xd689a4",
+      "bytes": 120,
+      "sha256": "5013a869c58b6bfcd26a41fda3b54f981547e8bb756e3b1a5edc6c85394f3189"
+    },
+    {
+      "address": "0xd6911c",
+      "bytes": 1640,
+      "sha256": "3ead49300e4410c4d884c1a8d58e7279c15b0a629edb25ed1f31ee532b74282e"
+    },
+    {
+      "address": "0xd69b68",
+      "bytes": 168,
+      "sha256": "ab0ea621b49748f7c1f4e84902c1d9f234148df198704ac8c36ebcfa5d30862e"
+    },
+    {
+      "address": "0xd6a4be",
+      "bytes": 2394,
+      "sha256": "85d2ee8fdc3d2ec9d3417c652b8c47a9000cbb4d78ff45c49204dedae3633410"
+    }
+  ],
+  "sharedDecoderExtent": {
+    "address": "0x73f7e8",
+    "bytes": 1272,
+    "sha256": "46baa198e52a963bda31879a76f7e096c8f51e103839b50cde9401c0a2cef114",
+    "classification": "Actual A32 confirmation of shared mode-value, stage-mode, kind-mode and selection-index laws used independently by the model."
+  },
+  "rootBlockOffsets": {
+    "d675a4": "0xa6",
+    "d67898": "0xa6",
+    "d679f8": "0xa6",
+    "d67c90": "0xa6",
+    "d67d80": "0xa6",
+    "d6893c": "0x19c",
+    "d68da8": "0x04",
+    "d697f0": "0x1a6",
+    "d69f8c": "0x30",
+    "d6a11c": "0x30",
+    "d6a3f0": "0x30"
+  },
+  "layouts": {
+    "descriptorBytes": 580,
+    "expandedRecordBytes": 1260,
+    "coefficientLookup": {
+      "countAddress": "0x824bc4",
+      "count": 37,
+      "rowsAddress": "0x824bc8",
+      "strideBytes": 72,
+      "idOffset": 0,
+      "headerOffset": 4,
+      "headerBytes": 9,
+      "curveOffset": 14,
+      "curveHalves": 28
+    },
+    "exportLookup": {
+      "countAddress": "0x825630",
+      "count": 226,
+      "rowsAddress": "0x825634",
+      "strideBytes": 48,
+      "idOffset": 0,
+      "curveOffset": 4,
+      "curveHalves": 22
+    },
+    "matrixPacket": {
+      "bytes": 20,
+      "enabledByte": 0,
+      "preservedByte": 1,
+      "coefficientOffset": 2,
+      "coefficientHalves": 9
+    },
+    "matrixWords": {
+      "bytes": 72,
+      "lanes": 9,
+      "laneBytes": 8
+    },
+    "exportScratch": [
+      {
+        "address": "0x1467ab4",
+        "bytes": 44,
+        "role": "first curve"
+      },
+      {
+        "address": "0x1467a88",
+        "bytes": 44,
+        "role": "second curve"
+      }
+    ],
+    "descriptorMutations": [
+      "word1bc from cfgA94E values1/2; other values preserve it",
+      "bytes1c4/1c5/1c6 from selected lookup ids and weight; B5/CB74 override paths preserve them",
+      "byte199 from selected export kind or255 on B5/CB74 override",
+      "half1a6 raised to100 when smaller"
+    ],
+    "descriptorTail": "This family reads word230 and fields below it. No reads of bytes23c..243."
+  },
+  "a32Behavior": [
+    "All eleven assigned roots take exactly descriptor in r0 and block address in r1, returning void. d68da8 forwards those same two arguments to owned d68a68; no draft extra arguments are consumed.",
+    "d66eac parameter keys start at d685f4 and have60 rows of6 u16 keys. d69c84 export keys start at d6a920 and have80 rows of6 u16 keys. Invalid row zero/out-of-range writes byte0 without a table access.",
+    "d671b4 matrix selection checks1..20. Matrix values with any bits above bit11 set are extended with all higher bits set, then optional signed scaling divides toward zero. Kind24 replaces the first row before that conversion.",
+    "d6703c loads the second and first halfword of each three-value group before either store, then loads/stores the third. The owned scatter preserves observable overlapping-packet behavior.",
+    "d675d8 constructs two lookup profiles, copies the first header and combines28 unsigned halfwords with wrapped32 arithmetic, logical shift7 and upper clip16383. Weight values above128 retain the source wrapped-negative behavior.",
+    "d675d8 optional fourth argument is a halfword pointer. B5 overrides CB74 and writes optional extra0. Normal selection publishes descriptor1c4..1c6 after header/curve/extra outputs.",
+    "690924 searches a37-row CPU table and defaults to row0. Its original R0 bits are preserved: found header-only returns header+8; found curve returns curve+54; missing curve returns62; a missing header-only or both-null call returns the requested id.",
+    "690b74 searches a226-row CPU table and defaults to its first22-halfword curve; null destination returns without reading table data.",
+    "d68a68 builds all noise controls before d68da8 adds its three gains. It preserves the descriptor1bc selector update, raw halfword scale, ratio thresholds, saturated products and four sign-extended control pairs.",
+    "d68da8 uses signed exposure remainder, wrapped32 unsigned interpolation products, two staged wide products with24-bit truncation, and511 output saturation. The noise override still executes the preceding controls builder.",
+    "d697f0 calls the two-argument73fce0 threshold law with byte16c and signed-comparison word230. It interleaves two canonical signed-half reads for each of28 lanes, then publishes priority-selected fields and source marker17/29.",
+    "d6a11c preserves block bytes0..1. Their source load/self-store carries no changed ordinary-RAM value; the owned implementation does not read them. This avoids undefined-byte reads in d64800 local scratch without initializing private caller scratch.",
+    "d69c10 publishes both44-byte global scratch curves before interpolating22 values. Signed mathematical interpolation modulo65536 models the source low16 result of its wrapped32 product/logical shift.",
+    "d6a250 preserves B5/CB74 override priority, selected/grid branch policy, selected-kind mutation, minimum scale100 and unsigned rounded division followed by8192 clipping."
+  ],
+  "divisionDomain": {
+    "classification": "Standard compiler unsigned division, not a retained application or device law.",
+    "proof": "The alternate noise ratio clamps its divisor to at least1. The other path rounds a u16 level to a multiple of10, reads table index0..408 only when rounded<=4089, and otherwise uses0x12cc6. Original table entries0..408 are nonzero. The sole zero among410 halfwords is unreachable padding at index409.",
+    "tableAddress": "0xd6916c",
+    "reachableBytes": 818,
+    "reachableSha256": "a2b50ae1e7921aa2dac090f48f653f502805b4b5d439a232c04845158fe3faf6",
+    "zeroPaddingIndex": 409,
+    "kernelReference": "Pinned kernel0/src/core/unsigned_divide.c identifies4d978 as __aeabi_uidiv. No SDK or division exception implementation is changed."
+  },
+  "sharedOwnedBindings": [
+    {
+      "owner": "PipelineBuffers",
+      "symbols": [
+        "xm1_buffers_configuration_byte",
+        "xm1_buffers_configuration_half"
+      ],
+      "contract": "Direct configuration offsets from the base word96ca50. 73ed6c uses the canonical half getter."
+    },
+    {
+      "owner": "PipelineImageReferences",
+      "symbols": [
+        "xm1_pipeline_image_configuration_signed_half"
+      ],
+      "contract": "69ff7c returns sign-extended i32; threshold publication truncates it to the original halfword bits."
+    },
+    {
+      "owner": "PipelineStripPlanner",
+      "symbols": [
+        "xm1_pipeline_sensor_selection_index",
+        "xm1_pipeline_sensor_configuration_key_bytes",
+        "xm1_pipeline_sensor_configuration_key_halves"
+      ],
+      "contract": "73fc64 writes one selection byte. 73ec0c/73ec7c transfer ordered values through canonical configuration getters."
+    },
+    {
+      "owner": "PipelineOutputTriplets",
+      "symbols": [
+        "xm1_pipeline_image_configuration_value_within_limit",
+        "xm1_pipeline_image_configuration_mode_value",
+        "xm1_pipeline_image_configuration_stage_mode",
+        "xm1_pipeline_image_configuration_kind_mode",
+        "xm1_pipeline_image_encode_configuration_mode",
+        "xm1_pipeline_image_configuration_threshold_band"
+      ],
+      "contract": "Owned CPU descriptor decoders and two-argument threshold selection. No stock application entry is retained."
+    }
+  ],
+  "models": {
+    "module": "OutputCoefficientsScenarios",
+    "imports": [
+      "PipelineModel"
+    ],
+    "sources": "CoefficientSources originalImage4 originalImage5",
+    "bundle": "coefficientSourceBundle originalImage4 originalImage5. outputCoefficientScenarios accepts that concatenation and splits at original image4 length2631680.",
+    "publications": "outputCoefficientPublications",
+    "scenarios": "outputCoefficientScenarios :: ByteString -> (StagePublication -> Address) -> [StageScenario]",
+    "composition": "coefficientEffects :: CoefficientSources -> (Word32 -> Word8) -> Address -> ByteString -> Address -> CoefficientPart -> [Patch]",
+    "compositionArguments": [
+      "authenticated source images",
+      "configuration byte accessor",
+      "descriptor address",
+      "580-byte descriptor snapshot",
+      "destination block address",
+      "closed CoefficientPart"
+    ],
+    "parts": [
+      "MatrixCoefficients",
+      "BlendedLookup",
+      "PairedLookup",
+      "SensorLayout",
+      "SignedChannels",
+      "AuxiliaryChannels",
+      "NoiseControls",
+      "NoiseCoefficients",
+      "ThresholdCurves",
+      "SelectedLookup",
+      "LookupControls",
+      "ExportCoefficients"
+    ],
+    "state": "Returned patches include descriptor mutations and real export scratch publication. Block offsets are local to the passed block, not root-record offsets. NoiseControls composes directly into other source-owned callers.",
+    "independence": "ROM dictionary lookup, integer interpolation, signed conversion and sparse returned-state laws do not call Rust, intercept application helpers or import SensorSettings/Metadata/Triplets. Native fixtures execute published source entries with no stageCalls.",
+    "coverage": [
+      "Twelve root/control publications across five descriptor states and four configuration states.",
+      "Normal and invalid lookup selection, B5/CB74 priority, preserved metadata on override, signed matrix scaling and custom scaling.",
+      "Noise selector mutation, gain override, exposure remainder overflow, signed threshold input and distinct high-key curve data.",
+      "Header/curve nullable outputs and the original690924 R0 cursor behavior; missing profile/export ids use actual source table row0.",
+      "All64 priority combinations for primary/secondary/readout selectors.",
+      "Alias-sensitive matrix scatter with literal expected returned memory bits."
+    ],
+    "notExecuted": true
+  },
+  "deviceBoundary": {
+    "retainedApplicationEntries": [],
+    "retainedHardwareEndpoints": [],
+    "assemblyCompanion": "GNU stack metadata only; no callable stock trampoline.",
+    "missingDeviceLaw": "None in this coefficient unit. Any later register/device consumer remains with its assigned owner; coefficient records and tables are CPU algorithms, not device exceptions."
+  },
+  "integration": {
+    "parentOwned": [
+      "Register Rust module and assembly companion",
+      "Consume fixed source-side routes and existing shared semantic exports",
+      "Compose independent record patches using both original images",
+      "Run compiler, model and native admission checks"
+    ],
+    "receiptPolicy": "No old17af/R12 receipt rebinding or saved native output is used."
+  }
+}

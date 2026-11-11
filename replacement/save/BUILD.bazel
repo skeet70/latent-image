@@ -10,12 +10,15 @@ _MODULE_SRCS = [
 ]
 
 package(default_visibility = ["//visibility:public"])
+exports_files(["save_stock.S"], visibility = ["//replacement/develop:__pkg__"])
+
 
 filegroup(
     name = "module",
     srcs = _MODULE_SRCS,
     visibility = [
         "//replacement/bank:__pkg__",
+        "//replacement/develop:__pkg__",
         "//menu:__pkg__",
     ],
 )
@@ -31,6 +34,7 @@ filegroup(
         "//host/firmware:__pkg__",
         "//menu:__pkg__",
         "//replacement/bank:__pkg__",
+        "//replacement/develop:__pkg__",
         "//transport:__pkg__",
     ],
 )

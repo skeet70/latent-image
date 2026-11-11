@@ -1,0 +1,207 @@
+{
+  "firmware": "xm1-150",
+  "decomp_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image5_sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+  "owned_functions": [
+    {
+      "address": 15283544,
+      "size": 24,
+      "sha256": "5614d8e9abb6e832124d2509a5127f77e116c6f6dc3b271bb7b0fc258bff9330"
+    },
+    {
+      "address": 15277392,
+      "size": 164,
+      "sha256": "4fc3db4919f149a060ae246609b714c586ef60aa24d76821ac49dc894cca9968"
+    },
+    {
+      "address": 15326080,
+      "size": 1208,
+      "sha256": "1154427c23b4f417316d50751a4d7abe0eb2d6d60c422defe77221d9d4aa1a79"
+    },
+    {
+      "address": 15284080,
+      "size": 136,
+      "sha256": "df3f8614519d6615181333152c9623f122f116d89fab9cdbf9510648d86b36c6"
+    },
+    {
+      "address": 15284216,
+      "size": 276,
+      "sha256": "5d9fcac014c3604f43c482b6f364092f08bd88d66849c744842891c7aed6a579"
+    },
+    {
+      "address": 15283508,
+      "size": 36,
+      "sha256": "d22e5c7f414adff099cec5b8666af47abe40700ca908772e51263ec97317840b"
+    },
+    {
+      "address": 15283812,
+      "size": 68,
+      "sha256": "ae5fa4500cf9c726ad1d2b6e8b8087ff94914355f6a3797cc9e14d5628985873"
+    },
+    {
+      "address": 15285212,
+      "size": 88,
+      "sha256": "c069c1c3bdf5ebfdffa480c0ea8210167029e2cc422efeaad9232763a87af3c9"
+    },
+    {
+      "address": 15276048,
+      "size": 132,
+      "sha256": "f184759becc658173066f186dea9f722bd378e5d55b3f52c5453f88b7f9c5da9"
+    },
+    {
+      "address": 15280408,
+      "size": 448,
+      "sha256": "4dc3c289baf14061c6d026075158de57a27a5580abb9e5702ea3f9f237ad3785"
+    },
+    {
+      "address": 15280856,
+      "size": 80,
+      "sha256": "ad14af84d51623a506b6a290a0d9fd0129854f10b5e9190cd9d2d95f847bc4b4"
+    },
+    {
+      "address": 15283880,
+      "size": 116,
+      "sha256": "8a1b3eeb4db8dd59587759548b2a2bdbdc95e77a6f481b30c690f38260e45d12"
+    },
+    {
+      "address": 15283996,
+      "size": 68,
+      "sha256": "16eabdfaec572419f1d022004c293e3a7028e12e9c0cd9b0d94b9eb459161d81"
+    },
+    {
+      "address": 15284492,
+      "size": 68,
+      "sha256": "8222947add54c5611c2e4d63077b21011b06cd9a4bac8b1af1e211688adb4166"
+    },
+    {
+      "address": 15284636,
+      "size": 196,
+      "sha256": "7c553340cf405c35acf79fb68657fc23f0377a6632dcaee9d1a6123d0ee39881"
+    },
+    {
+      "address": 15284832,
+      "size": 172,
+      "sha256": "398ae27673b339163d65e9be6ad38ee05ef1e44f8254aba86cbd6c0d3c939049"
+    },
+    {
+      "address": 15285004,
+      "size": 208,
+      "sha256": "206c108999aa4e2ce077191cfba04fa13957f1f19c1accfecade10d581620a0d"
+    },
+    {
+      "address": 15285300,
+      "size": 216,
+      "sha256": "a04644c75a58f17d6148c25b2fed9497875158151905bc8281d90f06a5e6fea6"
+    },
+    {
+      "address": 15285516,
+      "size": 152,
+      "sha256": "8e795219a0ed875981dbe13378ceffc539f71713543af33ebb4072562bd0885c"
+    },
+    {
+      "address": 15284064,
+      "size": 16,
+      "sha256": "242644782b9cfab67928c6e1a1ef586f0bce15ea0e829a988d6003edebe24357"
+    }
+  ],
+  "plan_table": {
+    "address": 15361848,
+    "record_bytes": 52,
+    "records": 126,
+    "sentinel_records": 1,
+    "extent": 6604,
+    "sha256": "b412c991485aab16063f194d4b25fda012ca7e8fc8c1c71ac46bada29fb045ca"
+  },
+  "byte_confirmed_corrections": {
+    "lookup_return_stride_bytes": 52,
+    "begin_object_argument_plan_word": 5,
+    "followup_store": "matched record word 2, not zero",
+    "callback_r3": "callback address, not caller flags"
+  },
+  "retained_services": [
+    {
+      "address": 14962108,
+      "interface": "object_entry(objects, group, kind) -> u32"
+    },
+    {
+      "address": 7479380,
+      "interface": "copy(destination, source, length)"
+    },
+    {
+      "address": 7478236,
+      "interface": "append(destination, source, length)"
+    },
+    {
+      "address": 7479832,
+      "interface": "decimal(destination, value, width, flags)"
+    },
+    {
+      "address": 7488856,
+      "interface": "notify(task, mask)"
+    },
+    {
+      "address": 15404616,
+      "interface": "bitmap_union(bitmap, mask, words)"
+    },
+    {
+      "address": 15404704,
+      "interface": "bitmap_set(bitmap, bit)"
+    },
+    {
+      "address": 15282496,
+      "interface": "set_objects(context, operation, phase, argument)"
+    },
+    {
+      "address": 15281712,
+      "interface": "object_rule(context, operation, phase, argument)"
+    },
+    {
+      "address": 15402136,
+      "interface": "callback_error(file, line, text, flags)"
+    },
+    {
+      "address": 7486648,
+      "interface": "task() -> u32"
+    },
+    {
+      "address": 7497304,
+      "interface": "text(task: u8, text)"
+    },
+    {
+      "address": 270728,
+      "interface": "trace(value)"
+    },
+    {
+      "address": 15404220,
+      "interface": "trace_begin(value)"
+    },
+    {
+      "address": 15404236,
+      "interface": "trace_end(value)"
+    },
+    {
+      "address": 7489080,
+      "interface": "release()"
+    },
+    {
+      "address": 15002792,
+      "interface": "stage_active(state)"
+    },
+    {
+      "address": 15271464,
+      "interface": "finish0(operand)"
+    },
+    {
+      "address": 15271176,
+      "interface": "finish1(operand)"
+    },
+    {
+      "address": 15268836,
+      "interface": "finish3(operand)"
+    },
+    {
+      "address": 15269604,
+      "interface": "finish4(operand)"
+    }
+  ]
+}

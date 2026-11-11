@@ -1,0 +1,85 @@
+{
+  "family": "preparation",
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "sourceTranslationUnit": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e93f18.c",
+  "image": {"base": "0x00bf1a00", "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"},
+  "bodyEvidence": "All eleven source extents independently hashed from image5 and compared with contract digests. NONMATCHING C was used only with original A32 instruction inspection. No native execution, compiler, test, formatter or linter was run by this family owner.",
+  "publicAbi": {"arguments": ["context: *mut u8"], "return": "u32", "instructionSet": "A32", "contextFramePointerOffset": 0},
+  "internalInterface": {"module": "pipeline::preparation", "stage": "Stage", "execute": "unsafe execute(StageContext, Stage) -> StageResult", "allocation": "none"},
+  "bodies": [
+    {"stock": "0x00e93f18", "bytes": 1600, "sha256": "209d053f39f081570d43607673ce4288588a56c558ab9e75f9e25f5576310e9e", "sourceLines": [15,241], "symbol": "xm1_develop_pipeline_resize_aligned_pair", "constructor": "ResizeAlignedPair", "operation": "0x62"},
+    {"stock": "0x00e94558", "bytes": 544, "sha256": "ba91af2dc367ce47c193109007b5b6bd15e5bac37e6cd9e723cabbb850115146", "sourceLines": [244,357], "symbol": "xm1_develop_pipeline_copy_aligned_pair", "constructor": "CopyAlignedPair", "operation": "0x61"},
+    {"stock": "0x00e94778", "bytes": 328, "sha256": "91514819bdf4922b315d98ce1085077b1a83b423cdc590ad340a71d0d6d927c3", "sourceLines": [360,416], "symbol": "xm1_develop_pipeline_blend_aligned_pair", "constructor": "BlendAlignedPair", "operation": "0x60"},
+    {"stock": "0x00e948c0", "bytes": 388, "sha256": "c147ca8a93f1f120ad7e56f57ed9cf605f59a4829390db65cb5153c917ae5bcb", "sourceLines": [419,494], "symbol": "xm1_develop_pipeline_correct_pair_shear", "constructor": "CorrectPairShear", "operation": "0x5f"},
+    {"stock": "0x00e94a44", "bytes": 440, "sha256": "6f48c9433d4e37f3fc4e529a07c264d3cb475031bd17f77379eca40b7d6df2fe", "sourceLines": [497,586], "symbol": "xm1_develop_pipeline_blend_reference", "constructor": "BlendReference", "operation": "0x5e"},
+    {"stock": "0x00e94bfc", "bytes": 468, "sha256": "2fbbd81160df594c8062c4304b14324dd92115311c1781ab830347dd2f81a9ac", "sourceLines": [589,659], "symbol": "xm1_develop_pipeline_analyze_pair_features", "constructor": "AnalyzePairFeatures", "operation": "0x5b"},
+    {"stock": "0x00e94dd0", "bytes": 316, "sha256": "9800f507dd814c97f7417629f017baeec9ec8e7c65a76ee8ad0975c5456845e8", "sourceLines": [662,713], "symbol": "xm1_develop_pipeline_extract_pair_features", "constructor": "ExtractPairFeatures", "operation": "0x5a"},
+    {"stock": "0x00e94f0c", "bytes": 2092, "sha256": "b230f0d3c3e87cfc472d162db79febc5e46405ae3c2bbbbdb6bd2d7d96287ee0", "sourceLines": [716,1019], "symbol": "xm1_develop_pipeline_find_pair_alignment", "constructor": "FindPairAlignment", "operation": "0x59"},
+    {"stock": "0x00e95738", "bytes": 572, "sha256": "65168ac32e1a06fc1398cc99104d1f25dbe6e05159e2c6d80480bdd0c72b1ccb", "sourceLines": [1022,1111], "symbol": "xm1_develop_pipeline_blend_frame_edge", "constructor": "BlendFrameEdge", "operation": "0x56"},
+    {"stock": "0x00e95974", "bytes": 1760, "sha256": "c69098ae25e5f3394951885194eccab4ca7dd614bab9cb43f0393fc1d580610f", "sourceLines": [1114,1362], "symbol": "xm1_develop_pipeline_measure_frame_motion", "constructor": "MeasureFrameMotion", "operation": "0x55"},
+    {"stock": "0x00e96054", "bytes": 2340, "sha256": "d32588186ab58b3913732d785e68a57784d1c920ce8b613b533cc06db73ec018", "sourceLines": [1365,1701], "symbol": "xm1_develop_pipeline_measure_predicted_motion", "constructor": "MeasurePredictedMotion", "operation": "0x58"}
+  ],
+  "ownedDependencies": [
+    {"stock": "0x00e91810", "symbol": "xm1_develop_plan_lookup", "role": "StagePlan::develop"},
+    {"stock": "0x00e93558", "symbol": "xm1_develop_lookup_object", "role": "StageContext::object"},
+    {"stock": "0x00e9390c", "symbol": "xm1_develop_store", "role": "StagePlan::skip"},
+    {"stock": "0x00e93c34", "symbol": "xm1_develop_begin", "role": "StagePlan::begin"},
+    {"stock": "0x00e93d0c", "symbol": "xm1_develop_complete", "role": "StagePlan::complete"},
+    {"stock": "0x00e9267c", "symbol": "xm1_develop_expand_planes", "owner": "PipelineBuffers", "classification": "CPU descriptor pyramid expansion"},
+    {"stock": "0x00e44dbc", "symbol": "xm1_develop_object_entry", "owner": "PipelineBuffers", "classification": "CPU object group, critical section and registry index lookup", "source": "app/capture/reccont/reccont_object_lists.c:128-136"},
+    {"stock": "0x00e4fae8", "symbol": "xm1_pipeline_image_resize_capture", "owner": "PipelineImagePlanes", "classification": "application resize orchestration", "source": "app/capture/reccont/tu_00e4ed00.c:598-702"},
+    {"stock": "0x00e4fd5c", "symbol": "xm1_pipeline_image_resize_through_crop", "owner": "PipelineImagePlanes", "classification": "application resize/reduction orchestration", "source": "app/capture/reccont/tu_00e4ed00.c:705-794"},
+    {"stock": "0x00e5bdcc", "symbol": "xm1_pipeline_image_copy_plane", "owner": "PipelineImagePixels", "classification": "application kind-7 image operation assembly; writes source descriptor", "source": "app/capture/reccont/tu_00e5a7a0.c:1035-1093"},
+    {"stock": "0x00e5baf8", "symbol": "xm1_pipeline_image_shear_plane", "owner": "PipelineImagePixels", "classification": "CPU shear parameters and application scale operation; writes source descriptor and slope", "source": "app/capture/reccont/tu_00e5a7a0.c:851-963"},
+    {"stock": "0x00e5a9c0", "symbol": "xm1_pipeline_image_blend_pixels", "owner": "PipelineImagePixels", "classification": "CPU four-channel linear blending with RTOS priority and cache maintenance", "source": "app/capture/reccont/tu_00e5a7a0.c:113-217"},
+    {"stock": "0x00e59510", "symbol": "xm1_pipeline_image_reduce_planes", "owner": "PipelineImageGeometry", "classification": "application crop-pyramid frontend", "source": "app/capture/reccont/tu_00e58f48.c:257-436"},
+    {"stock": "0x00e8ef98", "symbol": "xm1_pipeline_image_fill_pattern", "owner": "PipelineImagePlanes", "classification": "CPU pattern fill with cancellation and RTOS priority restoration", "source": "app/capture/frame/tu_00e8e3b0.c:450-489"},
+    {"stock": "0x00e5a7a0", "symbol": "xm1_pipeline_image_motion", "owner": "PipelineImageReferences", "classification": "application motion frontend with RTOS priority and cache maintenance", "source": "app/capture/reccont/tu_00e5a7a0.c:49-105"},
+    {"stock": "0x00e5f45c", "symbol": "xm1_pipeline_image_motion_primary", "owner": "PipelineImageReferences", "classification": "application feature hardware orchestration and notification wait", "source": "app/capture/reccont/tu_00e5c8e0.c:1237-1285"},
+    {"stock": "0x00e53d00", "symbol": "xm1_pipeline_image_write_debug_file", "owner": "PipelineDebugStorage", "classification": "application diagnostic storage frontend, not a hardware primitive", "source": "app/capture/reccont/tu_00e52950.c:1035-1071"}
+  ],
+  "retainedSourceAbi": [
+    {"stock": "0x0069f8fc", "symbol": "xm1_preparation_configuration_byte", "signature": "(key:u32)->u32", "classification": "configuration subsystem read", "order": "byte-pair reads preserve high byte then low byte order at direct callers"},
+    {"stock": "0x0069fec8", "symbol": "xm1_preparation_configuration_half", "signature": "(key:u32)->u32", "classification": "configuration subsystem u16 read", "order": "single source call; its implementation reads low byte before high byte"},
+    {"stock": "0x0004d978", "symbol": "xm1_preparation_unsigned_divide", "signature": "(numerator:u32,denominator:u32)->u32", "classification": "pure runtime arithmetic ABI; native model must execute arithmetic"},
+    {"stock": "0x0089aa90", "symbol": "xm1_preparation_signed_divide", "signature": "(numerator:i32,denominator:i32)->i32", "classification": "pure runtime arithmetic ABI; native model must execute arithmetic"}
+  ],
+  "unresolvedRealDeviceLaws": [
+    "Pixel output, error and completion laws for ISP physical endpoints 0x00666a0c/0x00666cb4/0x00666f98/0x00667128 below additionally owned e657ac -> da92f0 -> da78b0 -> da9124 are not established. These intermediate configuration/strip/formatter bodies are CPU application software, not retained hardware seams.",
+    "Motion search helpers dac748/dac8d8/dac8f8/dad060 are CPU application software owned by the additional reference slice. They are not permitted retained device seams. Any device-assisted suboperation beneath that owned search needs its own admitted device law.",
+    "Storage/debug publication device laws and persistent effects are not exercised by this host-only family work."
+  ],
+  "alignmentMetadataBoundary": {
+    "stock": "0x00e94f0c",
+    "finding": "The two temporary search descriptors passed to e4fd5c initialize words +4 through +20, not +0 or +24. A32 e95110-e95174 confirms these stores. e4fd5c propagates source +24 into destination flags; e64a44 consumes source flag bit 0x04000000 for crop selection and can consume bit 0x2000. A32 e64aac/e64ad0/e64b30 confirms these reads. Motion frontend e5a7a0 reads only +4,+12,+16,+20.",
+    "currentOwnedChoice": "Search descriptor format and flags derive from object 0x28. This is an explicit intended-initialization choice, not established stock equivalence for arbitrary prior stack contents.",
+    "consumerCensus": "PipelineScratchCensus closed the retained preparation descriptor census: +24 reaches consumed flags, word0 propagates but is unread in this stage. Integration policy for a deliberate initialization deviation remains unresolved.",
+    "parityEstablished": false,
+    "rootDispatcherParityEstablished": false
+  },
+  "motionVectorBoundary": {
+    "stockStages": ["0x00e96054"],
+    "finding": "A32 dad5fc/dad600 copies only two words into the vector output and dad604 writes vector+12; vector+8 is untouched. Coarse search dace24 writes vector+8 before refinement in modes 0,2,3. Mode 1 skips coarse search, so A32 e5a990/e5a998 then copies an uninitialized local word to caller vector2.",
+    "scope": "Only the predicted-motion stage with frame+0x2788 != 1 selects mode 1 and publishes the tainted value at frame+0x31e4. Measured motion selects mode 2. Alignment selects mode 3 and ignores vector2. Predicted motion with references selects mode 0. Those coarse-search paths initialize vector2.",
+    "census": "PipelineScratchCensus closed the vector path: only nonreference predicted mode 1 publishes the uninitialized local vector2. Its value reaches frame+0x31e4; it is not proven unobservable.",
+    "currentOwnedChoice": "MotionEstimate initializes all four vectors to zero before the owned motion call. The no-coarse mode 1 zero is a deliberate initialization choice, not established stock parity.",
+    "parityEstablished": false,
+    "rootDispatcherParityEstablished": false
+  },
+  "modelAdmission": {
+    "admitted": false,
+    "pendingApplicationScriptRemoval": ["0x00e657ac", "0x00e65268", "0x00e64a44"],
+    "pendingInheritedApplicationScriptRemoval": ["0x00e93140", "0x00e92e30"],
+    "missingActiveFeatureCoverage": "Minimum-level pyramid and invalid-output extraction are present; nontrivial crop pyramid and successful conversion extraction still require actual lower device endpoint models.",
+    "requiredClosure": "Replace provisional application response scripts with actual owned CPU execution and shared owners' source-derived device endpoint constructors. No scenario containing these scripts may be admitted as evidence for ownership.",
+    "rtosModel": "ImagePlanesScenarios supplies actual dispatch wrapper initialization and priority/current-task/current-signal endpoint events. BuffersScenarios supplies actual critical sections and object group/registry fixtures. DiagnosticLoggingScenarios supplies active text/calendar/trace records and actual retained critical events. The e4eca8 task-active source law is modeled as actual current-task sampling plus frame[(task+5)*4]=1.",
+    "cpuMotionWitness": "Measured mode 2, predicted mode 0 and alignment mode 3 execute owned initialization, coarse search, refinement and byte costs with uniform nonzero input. Ranges are zero, steps and evaluation limits are one, hardware flags are zero. Original A32 confirms configuration ordering. Expected displacement is (10,0), both evaluation counts are one and score is zero. This is an unexecuted source-derived witness, not a qualification claim."
+  },
+  "integration": {
+    "rootChanges": ["Declare mod preparation", "Route each recorded operation to its Stage constructor", "Compile Preparation_stock.S", "Add PreparationScenarios exports to the stage qualifier", "Admit each public symbol and each additional owned frontend without stock application fallback"],
+    "sharedAbiRequirement": "Rust link_name declarations bind application calls to recorded owned image symbols with original AAPCS conventions. Expand-planes count is u8. No application stock thunk exists in Preparation_stock.S. Integration must bind framework object-entry to xm1_develop_object_entry, use actual owned trace/text/signal wrappers, own the eight-instruction e4eca8 task-active helper and replace inherited object-family call scripts.",
+    "qualification": false,
+    "historicalReceiptRebinding": false,
+    "requiredChecks": "Integration owner compiles and runs new source-bound stock/owned native scenarios after every family and shared frontend lands; historical 17afdfa9/R12 remains unchanged."
+  }
+}

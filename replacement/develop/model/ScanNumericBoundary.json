@@ -1,0 +1,768 @@
+{
+  "family": "scan-numeric-cpu",
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "integrationCommon": "279a7b77",
+  "sourceReadMethod": "git -C /var/home/murph/Code/x70view show 55436fc85c0560dd252b0410af6f2427fe198cd3:PATH; user working tree was not changed",
+  "originalImage": {
+    "path": "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin",
+    "base": "0x00bf1a00",
+    "declaredSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
+  },
+  "roots": [
+    "0x00d6d2a0",
+    "0x00d6da54",
+    "0x00d6e564",
+    "0x00d6e600",
+    "0x00d72b7c",
+    "0x00d72c48",
+    "0x00d736cc",
+    "0x00d73f18"
+  ],
+  "bodies": [
+    {
+      "stockAddress": "0x00d6c2ec",
+      "symbol": "xm1_pipeline_image_scan_read_packed_sample",
+      "sourceSymbol": "FUN_00d6c2ec",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d588b8.c",
+      "sourceDeclarationLine": 1838,
+      "sourceBodyLines": [
+        1839,
+        1852
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 200,
+      "originalBytesSha256": "00ecf1c910fec794ef0cab28f0a53f915e32898df3ebe33e4d50931e4e15a7e5"
+    },
+    {
+      "stockAddress": "0x00d6d2a0",
+      "symbol": "xm1_pipeline_image_scan_select_region",
+      "sourceSymbol": "FUN_00d6d2a0",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d6d2a0.c",
+      "sourceDeclarationLine": 24,
+      "sourceBodyLines": [
+        25,
+        185
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 1972,
+      "originalBytesSha256": "3fddc7d2f8b89ee885b37ff2a7948f5f35b4aa33be6c009d56c309a579706238"
+    },
+    {
+      "stockAddress": "0x00d6da54",
+      "symbol": "xm1_pipeline_image_scan_region_brightness",
+      "sourceSymbol": "FUN_00d6da54",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d6d2a0.c",
+      "sourceDeclarationLine": 187,
+      "sourceBodyLines": [
+        188,
+        452
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 2832,
+      "originalBytesSha256": "c01d68780d5c8ab2f09d6b5e77867c0dc85187b3c34268199fca4d7283281299"
+    },
+    {
+      "stockAddress": "0x00d6e564",
+      "symbol": "xm1_pipeline_image_scan_measure_region",
+      "sourceSymbol": "FUN_00d6e564",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/configuration_entry_requests.c",
+      "sourceDeclarationLine": 7,
+      "sourceBodyLines": [
+        8,
+        21
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 156,
+      "originalBytesSha256": "7a46b975b2517b418574e501b7e4e7883b4dc5fd2ab0d9275cf8f4838930f241"
+    },
+    {
+      "stockAddress": "0x00d6e600",
+      "symbol": "xm1_pipeline_image_scan_analyze_samples",
+      "sourceSymbol": "FUN_00d6e600",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d588b8.c",
+      "sourceDeclarationLine": 1968,
+      "sourceBodyLines": [
+        1969,
+        2119
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 1852,
+      "originalBytesSha256": "99e486f2cf9852c76a1a06d4ab644edcad54e0e54be635fbb6d85af25365df68"
+    },
+    {
+      "stockAddress": "0x00d6ed3c",
+      "symbol": "xm1_pipeline_image_scan_sampling_grid",
+      "sourceSymbol": "FUN_00d6ed3c",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d6d2a0.c",
+      "sourceDeclarationLine": 454,
+      "sourceBodyLines": [
+        455,
+        515
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 552,
+      "originalBytesSha256": "ce80f4b907a5508a15d902160ef63354751c15ff5ffbd6b5b87c8880029b9631"
+    },
+    {
+      "stockAddress": "0x00d6ef64",
+      "symbol": "xm1_pipeline_image_scan_saturation",
+      "sourceSymbol": "FUN_00d6ef64",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d6d2a0.c",
+      "sourceDeclarationLine": 517,
+      "sourceBodyLines": [
+        518,
+        533
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 116,
+      "originalBytesSha256": "3da640608b6ef40675d99e02bebf73ceedfc8dea5b313adfaf8ede90029c0641"
+    },
+    {
+      "stockAddress": "0x00d6efd8",
+      "symbol": "xm1_pipeline_image_scan_sampling_period",
+      "sourceSymbol": "FUN_00d6efd8",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d6d2a0.c",
+      "sourceDeclarationLine": 535,
+      "sourceBodyLines": [
+        536,
+        566
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 240,
+      "originalBytesSha256": "43a8de2f90d371e79c19bab8ddd276d1aadbca4e4bd5b7fbbfcf4064fbaf0ffd"
+    },
+    {
+      "stockAddress": "0x00d6f0c8",
+      "symbol": "xm1_pipeline_image_scan_accumulate_sample",
+      "sourceSymbol": "FUN_00d6f0c8",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d6d2a0.c",
+      "sourceDeclarationLine": 568,
+      "sourceBodyLines": [
+        569,
+        781
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 3648,
+      "originalBytesSha256": "c5ff429051cb5e85c896edb09effe52e7dc3fd0c21bf95a820508d0d857f2ff9"
+    },
+    {
+      "stockAddress": "0x00d6ff08",
+      "symbol": "xm1_pipeline_image_scan_mosaic_channel",
+      "sourceSymbol": "FUN_00d6ff08",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d6d2a0.c",
+      "sourceDeclarationLine": 783,
+      "sourceBodyLines": [
+        784,
+        787
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 92,
+      "originalBytesSha256": "d0dc5a237548177af25783864a3f1dd9b724a96ca670d06e2f037d734b4b70d8"
+    },
+    {
+      "stockAddress": "0x00d6ff64",
+      "symbol": "xm1_pipeline_image_scan_normalize_samples",
+      "sourceSymbol": "FUN_00d6ff64",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/configuration_entry_requests.c",
+      "sourceDeclarationLine": 24,
+      "sourceBodyLines": [
+        24,
+        27
+      ],
+      "sourceStatus": "exact",
+      "originalByteLength": 4,
+      "originalBytesSha256": "02681191bf96faf103465102a1caa4e763d257a7c95b469ce0c84651413c4354"
+    },
+    {
+      "stockAddress": "0x00d6ff68",
+      "symbol": "xm1_pipeline_image_scan_normalize_samples_tail",
+      "sourceSymbol": "FUN_00d6ff68",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d588b8.c",
+      "sourceDeclarationLine": 2121,
+      "sourceBodyLines": [
+        2122,
+        2207
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 1488,
+      "originalBytesSha256": "249f6d0ce4fa6f4eafecfb18f97935df1b5e4ca1b1caad2d56a1d35f728f34ed"
+    },
+    {
+      "stockAddress": "0x00d70538",
+      "symbol": "xm1_pipeline_image_scan_finish_measurement",
+      "sourceSymbol": "FUN_00d70538",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d6d2a0.c",
+      "sourceDeclarationLine": 789,
+      "sourceBodyLines": [
+        790,
+        814
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 288,
+      "originalBytesSha256": "15821cc77737dc7402725e81cd401de05f06e4309f272da53206fafd6661fd7b"
+    },
+    {
+      "stockAddress": "0x00d70658",
+      "symbol": "xm1_pipeline_image_scan_red_ratio_window",
+      "sourceSymbol": "FUN_00d70658",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d6d2a0.c",
+      "sourceDeclarationLine": 816,
+      "sourceBodyLines": [
+        817,
+        906
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 1208,
+      "originalBytesSha256": "010fa0a743545e996e7891d08a53968f11993de9f1cf90d135cbf779b4d5183c"
+    },
+    {
+      "stockAddress": "0x00d70b10",
+      "symbol": "xm1_pipeline_image_scan_blue_ratio_window",
+      "sourceSymbol": "FUN_00d70b10",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d6d2a0.c",
+      "sourceDeclarationLine": 908,
+      "sourceBodyLines": [
+        909,
+        1009
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 1424,
+      "originalBytesSha256": "140d35b4d9b7921c043c5904984ad48b93d9b779f2e0b026bc7bdc37a041e28a"
+    },
+    {
+      "stockAddress": "0x00d710a0",
+      "symbol": "xm1_pipeline_image_scan_select_histogram_samples",
+      "sourceSymbol": "FUN_00d710a0",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d6d2a0.c",
+      "sourceDeclarationLine": 1011,
+      "sourceBodyLines": [
+        1012,
+        1053
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 752,
+      "originalBytesSha256": "86f6c604c939e65c21bd5845e2b9e0eabe2fdf2dc2c310aded67b00e80108d62"
+    },
+    {
+      "stockAddress": "0x00d71390",
+      "symbol": "xm1_pipeline_image_scan_weighted_ratios",
+      "sourceSymbol": "FUN_00d71390",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d6d2a0.c",
+      "sourceDeclarationLine": 1055,
+      "sourceBodyLines": [
+        1056,
+        1164
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 1520,
+      "originalBytesSha256": "389961bbe25467039d26e50618618b835c3cdd7e094ab68ca62dc1255bd984c9"
+    },
+    {
+      "stockAddress": "0x00d71980",
+      "symbol": "xm1_pipeline_image_scan_constrain_ratios",
+      "sourceSymbol": "FUN_00d71980",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d71980.c",
+      "sourceDeclarationLine": 36,
+      "sourceBodyLines": [
+        37,
+        108
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 1212,
+      "originalBytesSha256": "8448000d34d9d7d063b0334a33ba9fcbf06e165755b9baf5494cfb13f225d8d4"
+    },
+    {
+      "stockAddress": "0x00d71e3c",
+      "symbol": "xm1_pipeline_image_scan_project_curve",
+      "sourceSymbol": "FUN_00d71e3c",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d71980.c",
+      "sourceDeclarationLine": 110,
+      "sourceBodyLines": [
+        111,
+        356
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 3392,
+      "originalBytesSha256": "d75515ead382f10d10b912e3ec241b7bb3360ca07223646ae184368a7bac7f8d"
+    },
+    {
+      "stockAddress": "0x00d72b7c",
+      "symbol": "xm1_pipeline_image_scan_adjust_components",
+      "sourceSymbol": "FUN_00d72b7c",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d71980.c",
+      "sourceDeclarationLine": 358,
+      "sourceBodyLines": [
+        359,
+        369
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 204,
+      "originalBytesSha256": "bf8b641176b0ffa50b380ec19069c0df1b7cde3c2534b9a97e041e370c5de879"
+    },
+    {
+      "stockAddress": "0x00d72c48",
+      "symbol": "xm1_pipeline_image_scan_choose_adjustment",
+      "sourceSymbol": "FUN_00d72c48",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d588b8.c",
+      "sourceDeclarationLine": 2209,
+      "sourceBodyLines": [
+        2210,
+        2367
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 2692,
+      "originalBytesSha256": "df01d9d9a8938bf852e924a66a8e85ccb8279d51abbd8b462cf24f071b78a1a0"
+    },
+    {
+      "stockAddress": "0x00d736cc",
+      "symbol": "xm1_pipeline_image_scan_primary_adjustment",
+      "sourceSymbol": "FUN_00d736cc",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d71980.c",
+      "sourceDeclarationLine": 371,
+      "sourceBodyLines": [
+        372,
+        520
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 2124,
+      "originalBytesSha256": "3b2269be1c3130f13e7f3f3f702065500e593f3deb220c8fc888bc7d00c89c09"
+    },
+    {
+      "stockAddress": "0x00d73f18",
+      "symbol": "xm1_pipeline_image_scan_secondary_adjustment",
+      "sourceSymbol": "FUN_00d73f18",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d71980.c",
+      "sourceDeclarationLine": 522,
+      "sourceBodyLines": [
+        523,
+        669
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 1764,
+      "originalBytesSha256": "45f57ee37c9ba68232023d0cd00eba6958b9cae71a27c83fa584a263079ae7c4"
+    },
+    {
+      "stockAddress": "0x00d745fc",
+      "symbol": "xm1_pipeline_image_scan_spatial_correction",
+      "sourceSymbol": "FUN_00d745fc",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d588b8.c",
+      "sourceDeclarationLine": 2369,
+      "sourceBodyLines": [
+        2370,
+        2664
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 2832,
+      "originalBytesSha256": "c9d0d19ecfd5de43482ee6dc2d7dd5cbcd019b6df8444954c8161f590fd905b4"
+    },
+    {
+      "stockAddress": "0x00d7510c",
+      "symbol": "xm1_pipeline_image_scan_scale_region",
+      "sourceSymbol": "FUN_00d7510c",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d71980.c",
+      "sourceDeclarationLine": 671,
+      "sourceBodyLines": [
+        672,
+        697
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 452,
+      "originalBytesSha256": "f9fcbbe7f8a823895d11aad556293f125ec356c05051c66f5d4d175ec383e9c9"
+    },
+    {
+      "stockAddress": "0x00d752d0",
+      "symbol": "xm1_pipeline_image_scan_integer_sqrt",
+      "sourceSymbol": "FUN_00d752d0",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d71980.c",
+      "sourceDeclarationLine": 699,
+      "sourceBodyLines": [
+        700,
+        727
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 232,
+      "originalBytesSha256": "68aa30e1965908130c18bbb0512511802952f14a31f9162000c01bfd8ebea4b0"
+    },
+    {
+      "stockAddress": "0x00d75ae8",
+      "symbol": "xm1_pipeline_image_scan_exposure_gain",
+      "sourceSymbol": "FUN_00d75ae8",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d71980.c",
+      "sourceDeclarationLine": 814,
+      "sourceBodyLines": [
+        815,
+        830
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 292,
+      "originalBytesSha256": "76d24067bb3988636e44172ddad898fb9b96b0c11b42d7fc9bafd2ec0445f4ce"
+    },
+    {
+      "stockAddress": "0x00d75c0c",
+      "symbol": "xm1_pipeline_image_scan_reference_tables",
+      "sourceSymbol": "FUN_00d75c0c",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d71980.c",
+      "sourceDeclarationLine": 832,
+      "sourceBodyLines": [
+        833,
+        856
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 196,
+      "originalBytesSha256": "fa66282b1d096d99dc9828fae94d8e391a297d620a8dbe5b5eb8fa0d5a6d1a1d"
+    },
+    {
+      "stockAddress": "0x00d75cd0",
+      "symbol": "xm1_pipeline_image_scan_component_tables",
+      "sourceSymbol": "FUN_00d75cd0",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d71980.c",
+      "sourceDeclarationLine": 858,
+      "sourceBodyLines": [
+        859,
+        880
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 184,
+      "originalBytesSha256": "ddb3c5335dc8d83f60f66f7e273c746c6dcfbae96caedb3032c6c2bd0ead5b5b"
+    },
+    {
+      "stockAddress": "0x00d75d88",
+      "symbol": "xm1_pipeline_image_scan_first_anchor",
+      "sourceSymbol": "FUN_00d75d88",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d71980.c",
+      "sourceDeclarationLine": 882,
+      "sourceBodyLines": [
+        883,
+        899
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 148,
+      "originalBytesSha256": "3a8b35e0d3bf8b5b8009d6aca177afcfcc0a5c10ef45af7c2b7813bdbdbb8b16"
+    },
+    {
+      "stockAddress": "0x00d75e1c",
+      "symbol": "xm1_pipeline_image_scan_second_anchor",
+      "sourceSymbol": "FUN_00d75e1c",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d71980.c",
+      "sourceDeclarationLine": 901,
+      "sourceBodyLines": [
+        902,
+        918
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 148,
+      "originalBytesSha256": "309632d33daaf88a37ccfb37ed6cdeddeac5be32fdbd908a7af58e97bb176813"
+    },
+    {
+      "stockAddress": "0x00d75eb0",
+      "symbol": "xm1_pipeline_image_scan_target_anchor",
+      "sourceSymbol": "FUN_00d75eb0",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d71980.c",
+      "sourceDeclarationLine": 920,
+      "sourceBodyLines": [
+        921,
+        937
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 148,
+      "originalBytesSha256": "699f2d1dc6248f3d9683f4fd86f2cea8db57d39d8a69ea6ef63f38c8ed86d335"
+    },
+    {
+      "stockAddress": "0x00d75f44",
+      "symbol": "xm1_pipeline_image_scan_blue_attenuation_curve",
+      "sourceSymbol": "FUN_00d75f44",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d588b8.c",
+      "sourceDeclarationLine": 2666,
+      "sourceBodyLines": [
+        2667,
+        2687
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 264,
+      "originalBytesSha256": "56194452ea118de60223fe090bf74cda68e050b97f4dd2b3c3f82a0001f95d29"
+    },
+    {
+      "stockAddress": "0x00d7604c",
+      "symbol": "xm1_pipeline_image_scan_correction_points",
+      "sourceSymbol": "FUN_00d7604c",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d588b8.c",
+      "sourceDeclarationLine": 2689,
+      "sourceBodyLines": [
+        2690,
+        2706
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 204,
+      "originalBytesSha256": "1b4c1cf4d4d73f64790c01e95c1e13081183da8d0509d2a1a4c3b10871a504f7"
+    },
+    {
+      "stockAddress": "0x00d76118",
+      "symbol": "xm1_pipeline_image_scan_primary_responses",
+      "sourceSymbol": "FUN_00d76118",
+      "sourceFile": "decomp/firmwares/xm1-150/app/ui/record/tu_00d4d604.c",
+      "sourceDeclarationLine": 992,
+      "sourceBodyLines": [
+        993,
+        1026
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 364,
+      "originalBytesSha256": "3841acc8734281866c514ea03d9c109db492280607dc506c39e4f7faa2dd6f70"
+    },
+    {
+      "stockAddress": "0x00d76284",
+      "symbol": "xm1_pipeline_image_scan_primary_component_responses",
+      "sourceSymbol": "FUN_00d76284",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d71980.c",
+      "sourceDeclarationLine": 939,
+      "sourceBodyLines": [
+        940,
+        963
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 260,
+      "originalBytesSha256": "a4eaf8484ac7e9b8027dfa9fee82a7d9700bb9d2f2feefa55a1ed6272e4c3a6c"
+    },
+    {
+      "stockAddress": "0x00d76388",
+      "symbol": "xm1_pipeline_image_scan_secondary_responses",
+      "sourceSymbol": "FUN_00d76388",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/configuration_entry_requests.c",
+      "sourceDeclarationLine": 29,
+      "sourceBodyLines": [
+        30,
+        77
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 496,
+      "originalBytesSha256": "292c6c40a1039f665236a90061d3beca12705de3d9d72093dd80dbe81c146d11"
+    },
+    {
+      "stockAddress": "0x00d76578",
+      "symbol": "xm1_pipeline_image_scan_secondary_red_curve",
+      "sourceSymbol": "FUN_00d76578",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d588b8.c",
+      "sourceDeclarationLine": 2708,
+      "sourceBodyLines": [
+        2709,
+        2733
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 308,
+      "originalBytesSha256": "1c5df116eb4408ff412f7fefd4bfd05908eff6c73ca31ce47ad37e462b8e87ec"
+    },
+    {
+      "stockAddress": "0x00d766ac",
+      "symbol": "xm1_pipeline_image_scan_secondary_blue_curve",
+      "sourceSymbol": "FUN_00d766ac",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d588b8.c",
+      "sourceDeclarationLine": 2735,
+      "sourceBodyLines": [
+        2736,
+        2760
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 308,
+      "originalBytesSha256": "0cfc6aa0fe5c138275a6650d93929408d64692651f78e9eb105a4af4a51be03a"
+    },
+    {
+      "stockAddress": "0x00d767e0",
+      "symbol": "xm1_pipeline_image_scan_correction_limits",
+      "sourceSymbol": "FUN_00d767e0",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d71980.c",
+      "sourceDeclarationLine": 965,
+      "sourceBodyLines": [
+        966,
+        1134
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 1560,
+      "originalBytesSha256": "e8a36bf2063858055b1b440e5edac1d30713aa3db18d3e5870299c5b247e1b77"
+    },
+    {
+      "stockAddress": "0x00d76df8",
+      "symbol": "xm1_pipeline_image_scan_neighborhood_weight",
+      "sourceSymbol": "FUN_00d76df8",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d71980.c",
+      "sourceDeclarationLine": 1136,
+      "sourceBodyLines": [
+        1137,
+        1241
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 1496,
+      "originalBytesSha256": "6d2318e4866a977afe93ecab18283be5dc3062149f98c87347427218207e7edd"
+    },
+    {
+      "stockAddress": "0x00d773d0",
+      "symbol": "xm1_pipeline_image_scan_interpolate",
+      "sourceSymbol": "FUN_00d773d0",
+      "sourceFile": "decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d773d0.c",
+      "sourceDeclarationLine": 49,
+      "sourceBodyLines": [
+        50,
+        79
+      ],
+      "sourceStatus": "nonmatching",
+      "originalByteLength": 448,
+      "originalBytesSha256": "cd4c93b5de93741e08ab3e2fd70a708e6307e546330b281952e5156b14765d33"
+    }
+  ],
+  "ownedDependencies": [
+    {
+      "stockAddress": "0x0069f8fc",
+      "symbol": "xm1_buffers_configuration_byte",
+      "owner": "PipelineBuffers",
+      "abi": "ConfigurationKey(u32) -> u32"
+    },
+    {
+      "stockAddress": "0x0069fec8",
+      "symbol": "xm1_buffers_configuration_half",
+      "owner": "PipelineBuffers",
+      "abi": "ConfigurationKey(u32) -> u16"
+    },
+    {
+      "stockAddress": "0x0069ff68",
+      "symbol": "xm1_pipeline_image_configuration_signed_byte",
+      "owner": "PipelineImageReferences",
+      "abi": "ConfigurationKey(u32) -> i32"
+    },
+    {
+      "stockAddress": "0x006a0010",
+      "symbol": "xm1_pipeline_image_configuration_pointer",
+      "owner": "PipelineProfileCalibration",
+      "abi": "ConfigurationKey(u32) -> Address32"
+    }
+  ],
+  "dataReads": [
+    {
+      "address": "0x00d6ca64",
+      "bytes": 36,
+      "meaning": "Six-by-six sensor channel map; byte indexing, not draft int indexing."
+    },
+    {
+      "address": "0x00d6c99c",
+      "bytes": 200,
+      "meaning": "Exposure hundredths lookup; signed remainder plus 100 selects the byte."
+    }
+  ],
+  "byteConfirmedCorrections": [
+    {
+      "address": "0x00d6c2ec",
+      "fact": "A32 builds a little-endian halfword. Offset divisible by three selects low twelve bits; other offsets select high twelve bits. The draft final unconditional right shift is absent."
+    },
+    {
+      "address": "0x00d6da54",
+      "fact": "Plane+0x14 is read with LDRH at d6db40; the upper descriptor padding halfword is not consumed."
+    },
+    {
+      "address": "0x00d6f0c8",
+      "fact": "Plane+0x14 is LDRH at d6f178, not the draft signed short. The six-by-six map is LDRB at d6ff50."
+    },
+    {
+      "address": "0x00d6ff64",
+      "fact": "Entry reserves sixteen stack bytes before d6ff68. Tail writes incoming r1/r2/r3 to reserved words and restores sixteen additional stack bytes on return. The semantic normalizer retains ten original arguments."
+    },
+    {
+      "address": "0x00d72c48",
+      "fact": "Packed configuration pairs are little-endian u16 values, not the draft low-bit/high-byte-times-two expressions."
+    },
+    {
+      "address": "0x00d76df8",
+      "fact": "Automatic storage is bounded 64-element distance and selection arrays; the draft 32685-element automatic array is not allocated."
+    }
+  ],
+  "retainedHardware": [
+    {
+      "symbol": "scan_numeric_arithmetic_fault",
+      "instruction": "svc 0x1010 followed by a nonreturning loop",
+      "originalSource": "decomp/firmwares/xm1-150/kernel0/src/sched/dispatch_entry.c:19-29",
+      "argument": "r0 is zero, signed saturation 0x7fffffff/0x80000000, or unsigned saturation 0xffffffff. No CPU software target is forwarded.",
+      "law": "No successful return is supplied for a zero divisor."
+    }
+  ],
+  "models": {
+    "module": "ScanNumericScenarios",
+    "publications": "scanNumericPublications",
+    "scenarios": "scanNumericScenarios",
+    "constructors": [
+      "scanNumericInitial",
+      "scanNumericMeasuredEffects",
+      "scanNumericAdjustedEffects"
+    ],
+    "inputDomain": "Nonzero 8x8 raw sensor pixels, nonzero padding halfword, real calibration RAM, reference and spatial correction profiles, quarter and half primary correction.",
+    "expectations": [
+      "Exact return bits for successful measurement, saturation refusal, adjustment success and invalid component mapping.",
+      "Complete workspace and scratch bytes for measurement and normalization.",
+      "Region brightness-versus-height controls and already-valid bypass.",
+      "Reference and spatial numerical corrections change red gain 256 to 320/384 or 277/299; secondary-limit controls produce 288/320 or 267/278.",
+      "Independent packed 12-bit extraction, fixed-point curve projection, signed interpolation, exposure anchors, integer square root and sensor row-period cases."
+    ],
+    "appSuccessScripts": false,
+    "stageCodePointers": [],
+    "stageCodePointerReason": "Numeric bodies publish data and contain no mutable callback-code cells."
+  },
+  "proof": {
+    "status": "source-only-unexecuted",
+    "acceptance": false,
+    "buildsRun": false,
+    "testsRun": false,
+    "nativeComparisonsRun": false,
+    "mutationControlsRun": false,
+    "historicalR12Rebound": false,
+    "stockCpuForwarders": [],
+    "forbiddenStockTargets": [
+      "0x00d6c2ec",
+      "0x00d6d2a0",
+      "0x00d6da54",
+      "0x00d6e564",
+      "0x00d6e600",
+      "0x00d6ed3c",
+      "0x00d6ef64",
+      "0x00d6efd8",
+      "0x00d6f0c8",
+      "0x00d6ff08",
+      "0x00d6ff64",
+      "0x00d6ff68",
+      "0x00d70538",
+      "0x00d70658",
+      "0x00d70b10",
+      "0x00d710a0",
+      "0x00d71390",
+      "0x00d71980",
+      "0x00d71e3c",
+      "0x00d72b7c",
+      "0x00d72c48",
+      "0x00d736cc",
+      "0x00d73f18",
+      "0x00d745fc",
+      "0x00d7510c",
+      "0x00d752d0",
+      "0x00d75ae8",
+      "0x00d75c0c",
+      "0x00d75cd0",
+      "0x00d75d88",
+      "0x00d75e1c",
+      "0x00d75eb0",
+      "0x00d75f44",
+      "0x00d7604c",
+      "0x00d76118",
+      "0x00d76284",
+      "0x00d76388",
+      "0x00d76578",
+      "0x00d766ac",
+      "0x00d767e0",
+      "0x00d76df8",
+      "0x00d773d0"
+    ]
+  },
+  "remainingQualification": [
+    "Integration owner must compile and run original-versus-owned native comparisons and behavioral controls after all slices are admitted.",
+    "Root linker/model admission must include the four actual configuration getter owners and this module.",
+    "Arithmetic fault modeling needs native supervisor-trap observation, not a scripted CPU-helper return.",
+    "The neighborhood model domain uses calibrated neighbor counts 1..64. Counts beyond the original 64-element automatic-array bounds are not claimed as preserved A32 stale-stack behavior. No normalization or successful fallback is supplied."
+  ],
+  "missingDeviceLaw": [
+    "No ISP or image-device numerical law is needed for this CPU family. The supervisor trap service outcome is outside numerical success semantics."
+  ]
+}

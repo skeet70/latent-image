@@ -4,7 +4,7 @@
 use crate::media_permit::{
     apply_mirrored_permit, FrameCommand, FrameContext, FrameCount, FrameIndex, FrameKey, FrameKind,
     KeyField, KeyLayout, MirroredMessage, MinimumWord, PermitRuntime, PermitStatus, PermitWord,
-    SlotIndex, SlotSource, SubframeCount, SubframeIndex,
+    RetainedFrameSelector, SlotIndex, SlotSource, SubframeCount, SubframeIndex,
 };
 
 const LAYOUT_PRIMARY: usize = 0x0157_dd34;
@@ -51,10 +51,6 @@ fn write_u32(address: usize, value: u32) {
     unsafe { core::ptr::write_volatile(address as *mut u32, value) }
 }
 
-fn live_context(slot: SlotIndex) -> Option<FrameContext> {
-    FrameContext::from_address(unsafe { rb_mp_stock_context(slot.word()) })
-}
-
 struct StockSlots;
 
 impl SlotSource for StockSlots {
@@ -62,6 +58,7 @@ impl SlotSource for StockSlots {
         KeyLayout::from_selectors(read_u8(LAYOUT_PRIMARY), read_u8(LAYOUT_SECONDARY))
     }
 
+    #[inline(always)]
     fn slot_key(&self, slot: SlotIndex, layout: KeyLayout, field: KeyField) -> FrameKey {
         let base = match layout {
             KeyLayout::Primary => SLOT_KEY_PRIMARY as isize,
@@ -77,6 +74,7 @@ impl SlotSource for StockSlots {
         FrameKey(read_u32(address as usize))
     }
 
+    #[inline(always)]
     fn frame_kind(&self, slot: SlotIndex) -> Option<FrameKind> {
         // 0xe7e95c passes the slot in r0; 0xe75490 forwards it to 0xe87ad4.
         FrameKind::from_word(unsafe { rb_mp_stock_frame_kind(slot.word()) })
@@ -90,10 +88,12 @@ impl SlotSource for StockRuntime {
         StockSlots.layout()
     }
 
+    #[inline(always)]
     fn slot_key(&self, slot: SlotIndex, layout: KeyLayout, field: KeyField) -> FrameKey {
         StockSlots.slot_key(slot, layout, field)
     }
 
+    #[inline(always)]
     fn frame_kind(&self, slot: SlotIndex) -> Option<FrameKind> {
         StockSlots.frame_kind(slot)
     }
@@ -105,13 +105,13 @@ impl PermitRuntime for StockRuntime {
         unsafe { rb_mp_stock_mirror_read(0, storage.as_mut_ptr() as *mut u8) };
         let bytes = unsafe { storage.assume_init_ref() };
         MirroredMessage {
-            word0: PermitWord(u32::from_le_bytes([
+            permit: PermitWord(u32::from_le_bytes([
                 bytes[MIRROR_WORD0],
                 bytes[MIRROR_WORD0 + 1],
                 bytes[MIRROR_WORD0 + 2],
                 bytes[MIRROR_WORD0 + 3],
             ])),
-            word1: PermitWord(u32::from_le_bytes([
+            key: FrameKey(u32::from_le_bytes([
                 bytes[MIRROR_WORD1],
                 bytes[MIRROR_WORD1 + 1],
                 bytes[MIRROR_WORD1 + 2],
@@ -124,13 +124,17 @@ impl PermitRuntime for StockRuntime {
         unsafe { rb_mp_stock_fatal() };
     }
 
-    fn set_event_bit(&mut self, slot: SlotIndex, bit: crate::media_permit::EventBit) {
-        let base = BITMAP_BASE + slot.word() as usize * BITMAP_STRIDE;
+    fn retained_frame_kind(&self, selector: RetainedFrameSelector) -> Option<FrameKind> {
+        FrameKind::from_word(unsafe { rb_mp_stock_frame_kind(selector.word()) })
+    }
+
+    fn set_event_bit(&mut self, slot: RetainedFrameSelector, bit: crate::media_permit::EventBit) {
+        let base = (BITMAP_BASE as u32).wrapping_add(slot.word().wrapping_mul(BITMAP_STRIDE as u32)) as usize;
         unsafe { rb_mp_stock_bit_set(base, bit.0 as u32) };
     }
 
-    fn frame_context(&self, slot: SlotIndex) -> Option<FrameContext> {
-        live_context(slot)
+    fn frame_context(&self, slot: RetainedFrameSelector) -> FrameContext {
+        FrameContext::from_retained_address(unsafe { rb_mp_stock_context(slot.word()) })
     }
 
     fn clear_capture_word(&mut self, context: FrameContext) {
@@ -145,46 +149,34 @@ impl PermitRuntime for StockRuntime {
         read_u32(context.address() + KIND_FLAG) == 1
     }
 
-    fn subframe_count(&self, slot: SlotIndex) -> SubframeCount {
+    fn subframe_count(&self, slot: RetainedFrameSelector) -> SubframeCount {
         SubframeCount(unsafe { rb_mp_stock_subframe_count(slot.word()) })
     }
 
-    fn subframe(&self, slot: SlotIndex) -> Option<SlotIndex> {
+    fn subframe(&self, slot: RetainedFrameSelector) -> RetainedFrameSelector {
         let found = unsafe { rb_mp_stock_subframe(slot.word()) };
-        if found < 0 {
-            None
-        } else {
-            SlotIndex::from_word(found as u32)
-        }
+        RetainedFrameSelector::from_retained_word(found as u32)
     }
 
-    fn mapped_subframe(&self, slot: SlotIndex, index: SubframeIndex) -> Option<SlotIndex> {
+    fn mapped_subframe(&self, slot: RetainedFrameSelector, index: SubframeIndex) -> RetainedFrameSelector {
         let found = unsafe { rb_mp_stock_map_subframe(slot.word(), index.0 as u32, 1) };
-        if found < 0 {
-            None
-        } else {
-            SlotIndex::from_word(found as u32)
-        }
+        RetainedFrameSelector::from_retained_word(found as u32)
     }
 
     fn frames_of_kind(&self, kind: FrameKind) -> FrameCount {
         FrameCount(unsafe { rb_mp_stock_count_kind(kind.word()) })
     }
 
-    fn frame_of_kind(&self, index: FrameIndex, kind: FrameKind) -> Option<SlotIndex> {
+    fn frame_of_kind(&self, index: FrameIndex, kind: FrameKind) -> RetainedFrameSelector {
         let found = unsafe { rb_mp_stock_frame_of_kind(index.0, kind.word()) };
-        if found < 0 {
-            None
-        } else {
-            SlotIndex::from_word(found as u32)
-        }
+        RetainedFrameSelector::from_retained_word(found as u32)
     }
 
-    fn send_command(&mut self, slot: SlotIndex, command: FrameCommand) {
+    fn send_command(&mut self, slot: RetainedFrameSelector, command: FrameCommand) {
         unsafe { rb_mp_stock_command(slot.word(), command.0 as u32) };
     }
 
-    fn signal_cancel(&mut self, slot: SlotIndex, event: crate::media_permit::EventId) {
+    fn signal_cancel(&mut self, slot: RetainedFrameSelector, event: crate::media_permit::EventId) {
         unsafe { rb_mp_stock_cancel(slot.word(), event.0) };
     }
 
@@ -198,7 +190,7 @@ impl PermitRuntime for StockRuntime {
         write_u32(MINIMA + 8, word.0);
     }
 
-    fn set_active_slot(&mut self, slot: SlotIndex) {
+    fn set_active_slot(&mut self, slot: RetainedFrameSelector) {
         write_u32(ACTIVE_SLOT, slot.word());
     }
 

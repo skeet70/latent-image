@@ -2,8 +2,6 @@
 //! resolution and `FUN_00e7e95c` effects over the retained frame services.
 #![allow(unexpected_cfgs)]
 
-use core::cmp::Ordering;
-use core::num::NonZeroUsize;
 
 /// `FUN_00e77168`'s slot bound: slots `0..=200`.
 pub const SLOT_BOUND: u32 = 0xc9;
@@ -44,6 +42,28 @@ impl SlotIndex {
     }
 }
 
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct RetainedFrameSelector(u32);
+
+impl RetainedFrameSelector {
+    const UNRESOLVED: Self = Self(u32::MAX);
+
+    pub(crate) const fn from_retained_word(word: u32) -> Self {
+        Self(word)
+    }
+
+    pub const fn word(self) -> u32 {
+        self.0
+    }
+}
+
+impl From<SlotIndex> for RetainedFrameSelector {
+    fn from(slot: SlotIndex) -> Self {
+        Self(slot.word())
+    }
+}
+
 /// The layout selector read from `0x0157dd34` / `0x0157dd35`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum KeyLayout {
@@ -72,6 +92,7 @@ pub enum KeyField {
 }
 
 impl KeyField {
+    #[inline(always)]
     pub const fn for_kind(kind: FrameKind) -> Self {
         match kind {
             FrameKind::Zero | FrameKind::Two => KeyField::Word0,
@@ -92,6 +113,7 @@ pub enum FrameKind {
 }
 
 impl FrameKind {
+    #[inline(always)]
     pub const fn from_word(word: u32) -> Option<Self> {
         match word {
             0 => Some(FrameKind::Zero),
@@ -126,18 +148,17 @@ impl FrameCommand {
     pub const ZERO: Self = FrameCommand(0);
 }
 
-/// The nonzero retained `FUN_00e87ad4(slot)` result.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct FrameContext(NonZeroUsize);
+pub struct FrameContext(usize);
 
 impl FrameContext {
-    pub(crate) fn from_address(address: usize) -> Option<Self> {
-        NonZeroUsize::new(address).map(Self)
+    pub(crate) fn from_retained_address(address: usize) -> Self {
+        Self(address)
     }
 
     pub(crate) fn address(self) -> usize {
-        self.0.get()
+        self.0
     }
 }
 
@@ -154,8 +175,8 @@ impl PermitWord {
 /// The mirrored message as the handler reads it (`FUN_00e88e1c(0, ..)`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct MirroredMessage {
-    pub word0: PermitWord,
-    pub word1: PermitWord,
+    pub permit: PermitWord,
+    pub key: FrameKey,
 }
 
 /// A subframe count read from `FUN_00e74c68`.
@@ -192,16 +213,12 @@ pub struct MinimumWord(pub u32);
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ResolveError {
     UnknownKey,
-    /// e75490's source output is 0..4; another word is outside that domain.
-    UnknownKind,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PermitStatus {
     Applied(SlotIndex),
     UnresolvedKey,
-    /// A retained service returned outside its admitted domain. Stock
-    /// `0xe7e95c` continues there with the 0 context of `0xe87ad4(-1)`.
     Refused,
 }
 
@@ -216,21 +233,22 @@ pub trait SlotSource {
 pub trait PermitRuntime: SlotSource {
     fn mirror(&self) -> MirroredMessage;
     fn report_unresolved_key(&mut self);
-    fn set_event_bit(&mut self, slot: SlotIndex, bit: EventBit);
-    fn frame_context(&self, slot: SlotIndex) -> Option<FrameContext>;
+    fn retained_frame_kind(&self, selector: RetainedFrameSelector) -> Option<FrameKind>;
+    fn set_event_bit(&mut self, selector: RetainedFrameSelector, bit: EventBit);
+    fn frame_context(&self, selector: RetainedFrameSelector) -> FrameContext;
     fn clear_capture_word(&mut self, context: FrameContext);
     fn store_permit_word(&mut self, context: FrameContext, word: PermitWord);
     fn kind_flag_is_one(&self, context: FrameContext) -> bool;
-    fn subframe_count(&self, slot: SlotIndex) -> SubframeCount;
-    fn subframe(&self, slot: SlotIndex) -> Option<SlotIndex>;
-    fn mapped_subframe(&self, slot: SlotIndex, index: SubframeIndex) -> Option<SlotIndex>;
+    fn subframe_count(&self, selector: RetainedFrameSelector) -> SubframeCount;
+    fn subframe(&self, selector: RetainedFrameSelector) -> RetainedFrameSelector;
+    fn mapped_subframe(&self, selector: RetainedFrameSelector, index: SubframeIndex) -> RetainedFrameSelector;
     fn frames_of_kind(&self, kind: FrameKind) -> FrameCount;
-    fn frame_of_kind(&self, index: FrameIndex, kind: FrameKind) -> Option<SlotIndex>;
-    fn send_command(&mut self, slot: SlotIndex, command: FrameCommand);
-    fn signal_cancel(&mut self, slot: SlotIndex, event: EventId);
+    fn frame_of_kind(&self, index: FrameIndex, kind: FrameKind) -> RetainedFrameSelector;
+    fn send_command(&mut self, selector: RetainedFrameSelector, command: FrameCommand);
+    fn signal_cancel(&mut self, selector: RetainedFrameSelector, event: EventId);
     fn minimum(&self) -> MinimumWord;
     fn set_minimum(&mut self, word: MinimumWord);
-    fn set_active_slot(&mut self, slot: SlotIndex);
+    fn set_active_slot(&mut self, selector: RetainedFrameSelector);
 }
 
 /// The bounded key scan shared by all three layouts.
@@ -244,7 +262,7 @@ pub fn resolve(
         let field = match layout {
             KeyLayout::KindSelected => match source.frame_kind(slot) {
                 Some(kind) => KeyField::for_kind(kind),
-                None => return Err(ResolveError::UnknownKind),
+                None => KeyField::WordMinus1,
             },
             KeyLayout::Primary | KeyLayout::Secondary => KeyField::Word0,
         };
@@ -260,93 +278,66 @@ pub fn resolve(
 
 fn apply_kind_one(
     runtime: &mut impl PermitRuntime,
-    slot: SlotIndex,
+    slot: RetainedFrameSelector,
     initial: FrameContext,
     word0: PermitWord,
-) -> bool {
-    let mut index = 0u32;
-    while index < runtime.subframe_count(slot).0 {
-        let sub = match runtime.subframe(slot) {
-            Some(sub) => sub,
-            None => return false,
-        };
-        let mapped = match runtime.mapped_subframe(sub, SubframeIndex::from_index(index)) {
-            Some(mapped) => mapped,
-            None => return false,
-        };
-        runtime.set_event_bit(mapped, APPLIED_EVENT);
-        index += 1;
+) {
+    if runtime.retained_frame_kind(slot) == Some(FrameKind::Zero) {
+        runtime.set_event_bit(slot, APPLIED_EVENT);
+    } else {
+        let mut index = 0u32;
+        while (index as i32) < runtime.subframe_count(slot).0 as i32 {
+            let sub = runtime.subframe(slot);
+            let mapped = runtime.mapped_subframe(sub, SubframeIndex::from_index(index));
+            runtime.set_event_bit(mapped, APPLIED_EVENT);
+            index += 1;
+        }
     }
 
     let mut last = initial;
-    index = 0;
+    let mut index = 0;
     while index < runtime.subframe_count(slot).0 {
-        let sub = match runtime.subframe(slot) {
-            Some(sub) => sub,
-            None => return false,
-        };
-        let mapped = match runtime.mapped_subframe(sub, SubframeIndex::from_index(index)) {
-            Some(mapped) => mapped,
-            None => return false,
-        };
-        let context = match runtime.frame_context(mapped) {
-            Some(context) => context,
-            None => return false,
-        };
+        let sub = runtime.subframe(slot);
+        let mapped = runtime.mapped_subframe(sub, SubframeIndex::from_index(index));
+        let context = runtime.frame_context(mapped);
         runtime.store_permit_word(context, word0);
         last = context;
         index += 1;
     }
 
-    let count = runtime.subframe_count(slot);
-    let minimum = runtime.minimum();
     if runtime.kind_flag_is_one(last)
-        && word0.0.cmp(&count.0) == Ordering::Greater
-        && word0.0 < minimum.0
+        && word0.0 > runtime.subframe_count(slot).0
+        && word0.0 < runtime.minimum().0
     {
         runtime.set_minimum(MinimumWord(word0.0));
     }
 
     index = 0;
     while index < runtime.subframe_count(slot).0 {
-        let sub = match runtime.subframe(slot) {
-            Some(sub) => sub,
-            None => return false,
-        };
-        let mapped = match runtime.mapped_subframe(sub, SubframeIndex::from_index(index)) {
-            Some(mapped) => mapped,
-            None => return false,
-        };
+        let sub = runtime.subframe(slot);
+        let mapped = runtime.mapped_subframe(sub, SubframeIndex::from_index(index));
         runtime.set_active_slot(mapped);
         runtime.send_command(mapped, FrameCommand::ZERO);
         index += 1;
     }
-    true
 }
 
 fn apply_kind_broadcast(
     runtime: &mut impl PermitRuntime,
     kind: FrameKind,
     word0: PermitWord,
-) -> bool {
+) {
     let mut index = 0u32;
     while index < runtime.frames_of_kind(kind).0 {
-        let frame = match runtime.frame_of_kind(FrameIndex(index), kind) {
-            Some(frame) => frame,
-            None => return false,
-        };
+        let frame = runtime.frame_of_kind(FrameIndex(index), kind);
         runtime.signal_cancel(frame, CANCEL_WAIT_EVENT);
         runtime.set_event_bit(frame, APPLIED_EVENT);
-        let context = match runtime.frame_context(frame) {
-            Some(context) => context,
-            None => return false,
-        };
+        let context = runtime.frame_context(frame);
         if word0.is_zero() {
             runtime.clear_capture_word(context);
         }
         index += 1;
     }
-    true
 }
 
 /// `FUN_00e7e95c`: apply the mirrored permit to the frame named by word 1.
@@ -355,46 +346,41 @@ fn apply_kind_broadcast(
 /// machine 5 and 6 chains map only message 0x1367 to those classes.
 pub fn apply_mirrored_permit(runtime: &mut impl PermitRuntime) -> PermitStatus {
     let mirrored = runtime.mirror();
-    let slot = match resolve(runtime, runtime.layout(), FrameKey(mirrored.word1.0)) {
-        Ok(slot) => slot,
+    let resolved = resolve(runtime, runtime.layout(), mirrored.key);
+    let slot = match resolved {
+        Ok(slot) => RetainedFrameSelector::from(slot),
         Err(ResolveError::UnknownKey) => {
             runtime.report_unresolved_key();
-            return PermitStatus::UnresolvedKey;
+            RetainedFrameSelector::UNRESOLVED
         }
-        Err(ResolveError::UnknownKind) => return PermitStatus::Refused,
     };
 
-    let context = match runtime.frame_context(slot) {
-        Some(context) => context,
-        None => return PermitStatus::Refused,
-    };
+    let context = runtime.frame_context(slot);
 
-    let kind = match runtime.frame_kind(slot) {
+    let kind = match runtime.retained_frame_kind(slot) {
         Some(kind) => kind,
         None => return PermitStatus::Refused,
     };
 
-    let applied = match kind {
+    match kind {
         FrameKind::Zero => {
             runtime.set_active_slot(slot);
             runtime.set_event_bit(slot, APPLIED_EVENT);
-            if mirrored.word0.is_zero() {
+            if mirrored.permit.is_zero() {
                 runtime.clear_capture_word(context);
             }
             runtime.send_command(slot, FrameCommand::ZERO);
-            true
         }
-        FrameKind::One => apply_kind_one(runtime, slot, context, mirrored.word0),
+        FrameKind::One => apply_kind_one(runtime, slot, context, mirrored.permit),
         FrameKind::Two | FrameKind::Three => {
-            apply_kind_broadcast(runtime, kind, mirrored.word0)
+            apply_kind_broadcast(runtime, kind, mirrored.permit)
         }
-        FrameKind::Four => true,
-    };
+        FrameKind::Four => (),
+    }
 
-    if applied {
-        PermitStatus::Applied(slot)
-    } else {
-        PermitStatus::Refused
+    match resolved {
+        Ok(slot) => PermitStatus::Applied(slot),
+        Err(ResolveError::UnknownKey) => PermitStatus::UnresolvedKey,
     }
 }
 

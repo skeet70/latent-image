@@ -1,0 +1,429 @@
+{
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "imagePins": {
+    "4": {
+      "base": "0x61c400",
+      "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
+    },
+    "5": {
+      "base": "0xbf1a00",
+      "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
+    }
+  },
+  "sourceExtents": [
+    {
+      "address": "0x6a7f28",
+      "image": 4,
+      "size": 44,
+      "sha256": "0629af4770c437001fc14360a244deb3b15aea3df1953fcb37443e46e5967211",
+      "export": "xm1_pipeline_image_storage_counter"
+    },
+    {
+      "address": "0x6a7fd8",
+      "image": 4,
+      "size": 48,
+      "sha256": "7f20097a358f4465067affaab19910df32d033fe4d3b8ba77c6259af68e2e635",
+      "export": "xm1_pipeline_image_storage_directory"
+    },
+    {
+      "address": "0x6a801c",
+      "image": 4,
+      "size": 16,
+      "sha256": "f4dae2754cf7b069b9357211e60431669963ede7551d44deae7aaa4855b27283",
+      "implementation": "inlined CPU closure"
+    },
+    {
+      "address": "0x6a8040",
+      "image": 4,
+      "size": 16,
+      "sha256": "6aab602502c8e7d6186b799f8db8bb0f59f719e9f1fdeddd9c2769417c185378",
+      "implementation": "inlined CPU closure"
+    },
+    {
+      "address": "0x70eaa0",
+      "image": 4,
+      "size": 276,
+      "sha256": "16c434bf859f81f60b7a90a929fccd6bdebc9123ba4b9ce59b218059bfcef9d6",
+      "export": "xm1_pipeline_image_storage_decimal"
+    },
+    {
+      "address": "0x70ec08",
+      "image": 4,
+      "size": 124,
+      "sha256": "99c679e74b35928074dd2a4fd0d218cdfd6f6ebb2c74bef2c4c0c4bf5e505963",
+      "export": "xm1_pipeline_image_storage_drive_for_device"
+    },
+    {
+      "address": "0x70ec84",
+      "image": 4,
+      "size": 140,
+      "sha256": "53207f8bfa4508e95fc734189b26a380a17454949e5fde0d7846ff39b03b3c9e",
+      "implementation": "inlined CPU closure"
+    },
+    {
+      "address": "0x70f840",
+      "image": 4,
+      "size": 120,
+      "sha256": "f22bc7f86496c1c74d8ca70fae007b1a721955a9fc5aa410ff7a1d1d4752a177",
+      "export": "xm1_pipeline_image_storage_validate_name"
+    },
+    {
+      "address": "0x70fb68",
+      "image": 4,
+      "size": 148,
+      "sha256": "de20a88e3a591e17487f3d95fe9591f0ad9646ebd03f33e595083ebf28161a22",
+      "export": "xm1_pipeline_image_storage_read_numbers"
+    },
+    {
+      "address": "0x70fbfc",
+      "image": 4,
+      "size": 1512,
+      "sha256": "bcd59166b62935a8aafc5689983092a0d27e886ec616ddaadccf5a90007a31cb",
+      "export": "xm1_pipeline_image_prepare_debug_basename"
+    },
+    {
+      "address": "0x7111c4",
+      "image": 4,
+      "size": 28,
+      "sha256": "4ceec00dda6a68ce370626f7e1578f1ceebd9667f817b78d89193b4aea6d3cf8",
+      "implementation": "inlined CPU closure"
+    },
+    {
+      "address": "0x7111e0",
+      "image": 4,
+      "size": 32,
+      "sha256": "06b2e28d4f98b103c0b716c557b0b1de3f1ed26caf171a51b52308457ff71b83",
+      "implementation": "inlined CPU closure"
+    },
+    {
+      "address": "0x711200",
+      "image": 4,
+      "size": 40,
+      "sha256": "c45f9bbbdd15d30888281e9935b0b8ef6280d98100b435c29c066c8341305051",
+      "implementation": "inlined CPU closure"
+    },
+    {
+      "address": "0x712d08",
+      "image": 4,
+      "size": 164,
+      "sha256": "39c3c6710019c1cdb21518e30c89d436e051ab01dfc3cfb206691f9171412f17",
+      "export": "xm1_pipeline_image_storage_drive_prefix"
+    },
+    {
+      "address": "0x7159f8",
+      "image": 4,
+      "size": 52,
+      "sha256": "2a43ef7342a87c97b1105ffcd70c4e35b8b57c634d8f367e9e9c4b80ececf8e3",
+      "implementation": "inlined CPU closure"
+    },
+    {
+      "address": "0x715f0c",
+      "image": 4,
+      "size": 116,
+      "sha256": "fe764470d089a42807daf0d8164de86fb64b9e9cca8d361c2273397acd554e2b",
+      "export": "xm1_pipeline_image_storage_group"
+    },
+    {
+      "address": "0x716324",
+      "image": 4,
+      "size": 600,
+      "sha256": "d94d1380ecdf28fda6a2d89052be40920e96b51f7c2085bede463af40bbbbf84",
+      "export": "xm1_pipeline_image_storage_choose_pair"
+    },
+    {
+      "address": "0x71bfe0",
+      "image": 4,
+      "size": 340,
+      "sha256": "7774cabce0dfd2808dbf5782d5230f67bb7bdaadf374d5d04f6452940bcc82cb",
+      "implementation": "inlined CPU closure; request constructors only flags=0, mode=0 reached by original async entrypoints"
+    },
+    {
+      "address": "0x71c134",
+      "image": 4,
+      "size": 380,
+      "sha256": "5e9822cfa80f03af3c0ec1188a56086b7061c3218477604fd59b7ddc230bb76f",
+      "implementation": "inlined CPU closure; request constructors only flags=0, mode=0 reached by original async entrypoints"
+    },
+    {
+      "address": "0x71c2b0",
+      "image": 4,
+      "size": 596,
+      "sha256": "6f353f90732eb3fee2072c509c3b68f288a9246a6e2a636f22ed4ee8000bcfc0",
+      "implementation": "inlined CPU closure; request constructors only flags=0, mode=0 reached by original async entrypoints"
+    },
+    {
+      "address": "0x71c648",
+      "image": 4,
+      "size": 40,
+      "sha256": "19dda2284adab5d8c22f1897d15248cc57489cc5f9725adf63ebde57e1092891",
+      "export": "xm1_pipeline_image_debug_open"
+    },
+    {
+      "address": "0x71c75c",
+      "image": 4,
+      "size": 36,
+      "sha256": "39948ee0cba419bb1f1a2649dae58e6ef5577339ace080f0e96e9f04f7948944",
+      "export": "xm1_pipeline_image_debug_write"
+    },
+    {
+      "address": "0x71c7bc",
+      "image": 4,
+      "size": 36,
+      "sha256": "015ba78406fa1b07bcf924356bd03b4284f0f725ce5afbc89d2cdaecc118a60c",
+      "export": "xm1_pipeline_image_debug_entry"
+    },
+    {
+      "address": "0x71ddf0",
+      "image": 4,
+      "size": 228,
+      "sha256": "264fc68c3b4a76d101fdea38939d63b30da4129a40ef6615920f5d67aad84f7f",
+      "export": "xm1_pipeline_image_storage_ready"
+    },
+    {
+      "address": "0x71ef18",
+      "image": 4,
+      "size": 220,
+      "sha256": "e692c6aa506c7f82c2a0719036ce1a0723fe726520de89be6dd70a122680c5fc",
+      "export": "xm1_pipeline_image_storage_token"
+    },
+    {
+      "address": "0x71f708",
+      "image": 4,
+      "size": 16,
+      "sha256": "41d27d49ec2b62a5818d682c2ed90755eb70c100dfab07e454ba73d938f3c73a",
+      "export": "xm1_pipeline_image_storage_current_drive"
+    },
+    {
+      "address": "0x71fb18",
+      "image": 4,
+      "size": 60,
+      "sha256": "bbb6b68d246339c4dbc817a276d6db946c5709333160d646179ab4e4c8f05a82",
+      "export": "xm1_pipeline_image_storage_current_drive"
+    },
+    {
+      "address": "0x71fde4",
+      "image": 4,
+      "size": 72,
+      "sha256": "33a19be645775ad56753a3000c7c27e62fb18a8b01f4732cc9fefd73a84c0769",
+      "export": "xm1_pipeline_image_storage_submit"
+    },
+    {
+      "address": "0x721b04",
+      "image": 4,
+      "size": 60,
+      "sha256": "5edfd2221b2f2e6bc0ff37fdaa902d33c33b00af787b6db0d558c478ae4090b5",
+      "implementation": "inlined CPU closure"
+    },
+    {
+      "address": "0x721bac",
+      "image": 4,
+      "size": 48,
+      "sha256": "a2e6f20369cdfd1f658455162e2bf96a5719198b6ca293495a6b308830bbcc02",
+      "implementation": "inlined CPU closure"
+    },
+    {
+      "address": "0x721bdc",
+      "image": 4,
+      "size": 136,
+      "sha256": "db9fd441692b3dc57755ac84978ebc21d5c0b6f1e0ef9bb51842fae9dffee757",
+      "implementation": "inlined CPU closure"
+    },
+    {
+      "address": "0x722218",
+      "image": 4,
+      "size": 276,
+      "sha256": "9388453f9f70781f93f13762b1bea0e7918256d3e2908c1a1fefff947b8e8bee",
+      "export": "xm1_pipeline_image_storage_decimal"
+    },
+    {
+      "address": "0x723398",
+      "image": 4,
+      "size": 28,
+      "sha256": "71c79e0240a3c9ff4dbd17c4a0e21bd6c6d8488a64c41ef6796e7c7b35357d0e",
+      "export": "xm1_pipeline_image_storage_dispatch_error"
+    },
+    {
+      "address": "0x72503c",
+      "image": 4,
+      "size": 472,
+      "sha256": "0c02b587b70e68d634585bde3cd9f34240350253bb3a4f22341f742ed7da8b37",
+      "export": "xm1_pipeline_image_send_message"
+    },
+    {
+      "address": "0xe4e4c0",
+      "image": 5,
+      "size": 52,
+      "sha256": "f812b7cfcf3052695fab91b8c8f0afc78dc0c55c1125fbed4b880bde37b1546a",
+      "export": "xm1_pipeline_image_debug_entry_complete"
+    },
+    {
+      "address": "0xe4e4f4",
+      "image": 5,
+      "size": 52,
+      "sha256": "818c8006f92bb8266a400d6c4c50300fac3657ad3e33e74bb0fd19f8cd84c2db",
+      "export": "xm1_pipeline_image_debug_write_complete"
+    },
+    {
+      "address": "0xe4e528",
+      "image": 5,
+      "size": 64,
+      "sha256": "a039bc397f442224abb291034aa720de99d5fffc9bedca106966fea9d35ddb33",
+      "export": "xm1_pipeline_image_debug_open_complete"
+    },
+    {
+      "address": "0xe53d00",
+      "image": 5,
+      "size": 468,
+      "sha256": "b78b67425b41d295beb0d5aed045ff6e44b7551a25b214c08acc11ea171ee59f",
+      "export": "xm1_pipeline_image_write_debug_file"
+    },
+    {
+      "address": "0x725318",
+      "image": 4,
+      "size": 268,
+      "sha256": "2fbc20604b7a5221ec42d3aefa73dbd5e7546f72dc98244feb86cd878f310b8e",
+      "export": "xm1_pipeline_image_receive_message"
+    }
+  ],
+  "publicABI": {
+    "entry": "0xe53d00",
+    "export": "xm1_pipeline_image_write_debug_file",
+    "arguments": [
+      "r0: debug file kind u32",
+      "r1: data Address32",
+      "r2: byte count u32",
+      "r3: full suffix number u32",
+      "stack[0]: suffix C-string Address32; null selects table at e540b5+kind*12"
+    ],
+    "return": "void",
+    "numberingEntry": "0x70fbfc",
+    "numberingExport": "xm1_pipeline_image_prepare_debug_basename",
+    "numberingArguments": [
+      "r0: output writable 26-byte basename",
+      "r1: optional directory five-byte name",
+      "r2: optional four-byte filename prefix"
+    ],
+    "numberingReturn": "storage status u32"
+  },
+  "ownedBehavior": {
+    "contextSlot": "0x910204",
+    "filenameBuffer": "0x154cce0",
+    "basenameBuffer": "0x154cdb0",
+    "taskSlot": "0x154d898",
+    "handleSlot": "0x154c744",
+    "mutex": "0x66",
+    "numbering": "Directory modulo-ten and file thousands digit are coupled. Sequence at context+127d4 increments only when numbering state+16bd0 is2, then state becomes1. Directory transitions reset sequence1. Directory limit999 reports event(2,51) and returns6 without publishing a new name. Halfword arithmetic wraps. Invalid custom names fall back to configured bytes. Prefix mode1/2 uses owned configuration-byte reads142..145 and two-digit sequence. Prefix modes other than0/1/2 leave the existing four prefix bytes unchanged.",
+    "lifecycle": "Lock66 indefinitely; construct basename and suffix; retain current task; enqueue open2c17 and wait10 indefinitely; enqueue write2c19 and wait10; enqueue entry2c1a and wait10; unlock66. Naming, callback statuses, queue submission status, and wait status do not branch the constructor. Open completion stores the handle even on error. Every completion notifies retained task10 if nonzero. Task and handle slots are not cleared after return.",
+    "cancel": "No cancellation test or cleanup branch exists in e53d00. Status11 at each callback has the same notification behavior as other statuses.",
+    "reentry": "Serialized by original mutex66. A later invocation overwrites task and open handle. Late callbacks target the retained current task; no generation validation exists. Basename construction does not advance the catalog's current directory/file pair. Repeated naming against an unchanged catalog can publish the same basename; actual file completion belongs to the named storage consumer."
+  },
+  "queueABI": {
+    "entry": "0x72503c",
+    "export": "xm1_pipeline_image_send_message",
+    "header": "repr(C): u16 event,u8 sender,u8 destination,u32 payload length,Address32 payload",
+    "route": "96bd20 interface pointer array; selector method1618; namespace7cad9c[(channel&ffff)-1]; tag channel.u16 | namespace<<16",
+    "capacity": "40a0fa4c[channel] minus8; unsigned compare; oversize=-60",
+    "trace": "function pointer4089ea94 called before allocation",
+    "allocate": "selected interface method170(tag, Address32* output); allocation -50 maps-62",
+    "buffer": "first word retained; event+4,sender+6,destination+7,length+8,payload+12",
+    "send": "mode method148; result1 selects interrupt methodb0, all others select normal methodac; both(tag,buffer)",
+    "failure": "Kernel event41a34(1c,channel,status). Failed send releases buffer through methodf8 before writing last-error40a0f82c and invoking error callback4089ea8c. Failed allocation does not release.",
+    "submit": "Owned7fde4 copies12-byte header and enqueues to channel65. Payload bytes are copied into allocated queue storage before the asynchronous entrypoint returns."
+  },
+  "receiveABI": {
+    "entry": "0x725318",
+    "export": "xm1_pipeline_image_receive_message",
+    "arguments": "channel:u32, message:*mut StorageMessage, timeout:i32",
+    "lower": "Selected interface methodc8(tag,Address32* buffer,timeout), with the same channel tag law as send.",
+    "success": "Copy buffer event+4,sender+6,destination+7,length+8 into caller header+0..+7. Preserve caller payload pointer at header+8 and copy length bytes from buffer+12 there. Zero length does not access payload pointers. Release buffer through methodf8(tag,buffer), ignore release result, return0.",
+    "failure": "Receive -50 returns unchanged without header/payload writes, release or diagnostics. Other nonzero results record kernel event41a34(1f,channel,status), write last-error40a0f82c, invoke callback4089ea8c and return the original status.",
+    "models": "receiveInitial(channel); receiveCalls(channel,timeoutBits,messageAddress,payloadDestination,event,sender,destination,payloadBytes,status). Only actual RTOS methodc8 and releasef8 are intercepted."
+  },
+  "asyncPayloads": {
+    "open2c17": {
+      "length": 80,
+      "fields": "callback+0,path[48]+4,position0+52,count+56,token+60,wait0+64,statusptr0+68,resultptr0+72,flags1+76"
+    },
+    "write2c19": {
+      "length": 28,
+      "fields": "callback+0,handle+4,count+8,data+12,wait0+16,statusptr0+20,resultptr0+24"
+    },
+    "entry2c1a": {
+      "length": 40,
+      "fields": "callback+0,handle+4,request+8,path[20]+12,wait0+32,statusptr0+36"
+    },
+    "token": "Owned71ef18 locks3c, chooses unused positive token across16slots9101c0, wraps negative candidate to1, stores candidate910200 even when table full, returns0 for full table or wait failure.",
+    "alternateNumbering": "State8fc8a4.word0==1: open compares first21path bytes with8299fc and on match clears8fc8b0, calls callback(0,1); mismatch callback(6,0). Entry calls callback(0) without queuing. Write still uses storage media readiness and queue."
+  },
+  "dependencies": [
+    {
+      "kind": "owned-peer",
+      "owner": "PipelineBuffers",
+      "symbol": "xm1_buffers_configuration_byte",
+      "stock": "0x69f8fc"
+    },
+    {
+      "kind": "owned-peer",
+      "owner": "PipelineImagePlanes",
+      "symbols": [
+        "xm1_pipeline_image_current_task",
+        "xm1_pipeline_image_wait_all",
+        "xm1_pipeline_image_send_notification",
+        "xm1_pipeline_image_wait_reserved",
+        "xm1_pipeline_image_signal_reserved"
+      ]
+    },
+    {
+      "kind": "owned-peer",
+      "owner": "PipelineWarpEngine",
+      "symbol": "xm1_pipeline_image_diagnostic_event",
+      "stock": "0x726c74"
+    },
+    {
+      "kind": "retained-RTOS-ABI",
+      "stock": "0x41a34",
+      "symbol": "xm1_pipeline_debug_kernel_error",
+      "law": "kernel thread-event recorder; not application storage logic"
+    },
+    {
+      "kind": "retained-software-consumer",
+      "name": "storage_media_task-and-file-command-state-machine",
+      "entry": "0x71fe2c",
+      "commands": [
+        "0x2c17 open",
+        "0x2c19 write",
+        "0x2c1a entry"
+      ],
+      "law": "Receives copied channel65 packets and invokes callback with actual storage status/handle/count. This is application CPU software, not hardware. This slice owns construction and queue transport, not the filesystem command consumers. No success callback is fabricated by the RTOS queue model.",
+      "closureStatus": "Parent must retain this named dependency until independently owned; full successful-file lifecycle is not qualified by these scenarios."
+    }
+  ],
+  "models": {
+    "module": "DebugStorageScenarios",
+    "publications": "debugStoragePublications",
+    "scenarios": "debugStorageScenarios :: ByteString -> (StagePublication -> Address) -> [StageScenario]",
+    "coverage": [
+      "literal filename bytes",
+      "thousands/directory rollover",
+      "sequence increment and halfword wrap",
+      "configured/custom prefixes and invalid-name fallback",
+      "directory999 error without output publication",
+      "media readiness/error precedence",
+      "decimal padding/termination and overflow without writes",
+      "drive route selection",
+      "counter and directory clamping",
+      "open callback ignores error status and publishes handle",
+      "completion/cancel-status notification",
+      "queue allocation/copy/send/release with normal and interrupt modes",
+      "serialized async open/write/entry payload bytes, excluding undefined padding",
+      "token collision, signed wrap, full table and mutex timeout",
+      "constructor media failure executes all three owned callbacks and waits, with suffix1/2-digit branches and ignored wait timeout"
+    ]
+  },
+  "undefinedDataGaps": [
+    "For full suffix numbers above99 whose low byte selects a one/two-digit branch (for example257), decimal formatting returns-1 without writing its stack buffer; subsequent append consumes undefined stack bytes. No deterministic successful filename is claimed.",
+    "Prefix modes outside0/1/2 leave existing prefix bytes untouched. Path arrays in requests retain bytes after their first NUL; queue transport copies these bytes but consumers require only the terminated text. Models constrain defined fields rather than inventing padding.",
+    "Source routines use unbounded C-string copies. Caller must provide readable terminated suffix and sufficient output/path buffers; this implementation does not invent validation or recovery."
+  ],
+  "verification": "No builds, tests, formatters, linters, or native executions run by this worker. Both complete source images and all 39 listed function extents were SHA256 checked against the pinned index; NONMATCHING implementation decisions were read from original A32 bytes."
+}

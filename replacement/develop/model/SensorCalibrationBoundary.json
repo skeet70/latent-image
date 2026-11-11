@@ -1,0 +1,90 @@
+{
+  "family": "sensor-calibration",
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "sourceRepo": "/var/home/murph/Code/x70view",
+  "sharedIntegrationBase": "279a7b77",
+  "image": {"base": "0x00bf1a00", "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"},
+  "sourceTranslationUnits": ["app/capture/reccont/tu_00e563e0.c", "app/capture/reccont/tu_00e551ac.c", "app/capture/reccont/reccont_image_options.c", "app/imaging/pipeline/tu_00da8914.c", "app/imaging/pipeline/tu_00d98a80.c"],
+  "evidence": "All nineteen body extents were independently SHA-256 hashed from image5 and matched pinned extent records. Every NONMATCHING body was inspected as original A32 before implementation. C is a navigation lead, not the behavior authority.",
+  "bodies": [
+    {"stock":"0x00e563e0","bytes":336,"sha256":"0eb93d9dae043d40fb718be1a93f4dc44e2e5a27c5c5366cf14f867531bbdbb9","symbol":"xm1_pipeline_sensor_primary_geometry","sourceLines":[67,124]},
+    {"stock":"0x00e565dc","bytes":948,"sha256":"eb75d77c55023e9a739416eded47df32dad4412567a04e45d3dda07109aa8816","symbol":"xm1_pipeline_sensor_secondary_geometry","sourceLines":[127,290]},
+    {"stock":"0x00e55850","bytes":136,"sha256":"7d91edaafbb1d01f04611cde8a2201792495eed3c993c3ac66b54464e66dcc31","symbol":"xm1_pipeline_sensor_cached_primary_geometry","sourceLines":[238,256]},
+    {"stock":"0x00e56530","bytes":172,"sha256":"27ca7819dbb2b840b1e0f48a20e2e004e77fbd39241f99ba24adbe04fb3b5f21","symbol":"xm1_pipeline_sensor_calibration_unchanged","sourceLines":[33,46]},
+    {"stock":"0x00daa540","bytes":4536,"sha256":"9d322123d5790b8f91bec52a92d9da645ce66f08f18b48bd0d7a184b9a700b52","symbol":"xm1_pipeline_sensor_generate_calibration","sourceLines":[840,1528]},
+    {"stock":"0x00da0758","bytes":192,"sha256":"4ff3710298d002422072d1b73171559972645c555bc1ff88db68e502c8f52c21","symbol":"xm1_pipeline_sensor_extrapolate_cell","sourceLines":[1737,1768]},
+    {"stock":"0x00da0818","bytes":144,"sha256":"08719f40e9dd2b5bab25446deb1b24a0450a9e853d8ae058fda25faba7812252","symbol":"xm1_pipeline_sensor_sample_calibration","sourceLines":[1771,1791]},
+    {"stock":"0x00da08a8","bytes":268,"sha256":"b4abd91e3ce5c04aa5c0ee874d25f196c21e6ffacf54f3b67154746f7c81f22b","symbol":"xm1_pipeline_sensor_interpolate_calibration","sourceLines":[1794,1814]},
+    {"stock":"0x00da09b4","bytes":64,"sha256":"b19fb651448d16aa97846e6a65547ae3951deba28f5c1b7f69b8dbcbea377d17","symbol":"xm1_pipeline_sensor_copy_calibration_cell","sourceLines":[1817,1827]},
+    {"stock":"0x00da0c58","bytes":636,"sha256":"4ce8ccc0a824b627991ed79cbe918e7b0d35353ced52648d9350d6e805912577","symbol":"xm1_pipeline_sensor_select_calibration","sourceLines":[1913,2055]},
+    {"stock":"0x00da0ed4","bytes":164,"sha256":"cb198dc73d85828380bc9e85c28308629e9c20980e1a66d6469882f48921f98c","symbol":"xm1_pipeline_sensor_correction_key","sourceLines":[2058,2097]},
+    {"stock":"0x00da0f78","bytes":424,"sha256":"95b1f88e3ee52037d1769a799e2d5a73d5d3af99008040fd57b36c98a56da2d8","symbol":"xm1_pipeline_sensor_select_interpolated_calibration","sourceLines":[2100,2162]},
+    {"stock":"0x00da1120","bytes":92,"sha256":"fbdcf1d6dde7b85e24d7aafcc76f337aec79e11b88184066b3c7054db0ff410e","symbol":"xm1_pipeline_sensor_exposure_is_zero","sourceLines":[2165,2192]},
+    {"stock":"0x00da117c","bytes":300,"sha256":"730dc13ba7f8fb23c64f277f6d4902c679dfa92879831c9c288741eadf4106f6","symbol":"xm1_pipeline_sensor_calibration_axes","sourceLines":[2195,2235]},
+    {"stock":"0x00da12a8","bytes":400,"sha256":"ce2599638be186ba574403c8fdf28c86f9e0b4b5a2e83b713f49b30557e0653e","symbol":"xm1_pipeline_sensor_calibration_regions","sourceLines":[2238,2309]},
+    {"stock":"0x00da1438","bytes":56,"sha256":"57fce574f72262f0122c259af45ef9176da79f9e42c6cf804762d7e87953d2ac","symbol":"xm1_pipeline_sensor_read_axis_corrections","sourceLines":[2311,2323]},
+    {"stock":"0x00da1470","bytes":100,"sha256":"beb084b79db562a2e93922c7c4aaaa3bae17ca8d44628e177ed4f99d7ca72e46","symbol":"xm1_pipeline_sensor_read_channel_corrections","sourceLines":[2326,2352]},
+    {"stock":"0x00da14d4","bytes":700,"sha256":"cc8479f4ecf8ff223536baab13e2d88538c806e8493d6ba0d8407342fa7ce7dd","symbol":"xm1_pipeline_sensor_extend_calibration_border","sourceLines":[2355,2424]},
+    {"stock":"0x00da1790","bytes":32,"sha256":"34d1b5724ea9951d04233c54497e72f8c2a2ea837be291dbd6329578257de277","symbol":"xm1_pipeline_sensor_calibration_cell","sourceLines":[2427,2430]}
+  ],
+  "publicAbi": {
+    "instructionSet":"A32",
+    "primaryAndSecondary":"(stage:u32,output:u32,operation:u32,selection:u32,secondary:i32)->u32; final three source arguments are unused by these bodies",
+    "generator":"(profile:u32,mode:u32,channel:u32,temperature:i32,cached:u8,first:*const i8,second:*const i8,correction:i8,flags:u8,output:*mut CalibrationRecord)->void",
+    "selector":"(mode:u32,channel:u32,temperature:i32,modeOut:*mut u8,channelOut:*mut u8,temperatureOut:*mut u8)->void; stores mode before channel, then rereads mode for temperature selection",
+    "recordBytes":196,
+    "recordAlignment":4,
+    "recordOffsets":{"primaryEnabled":0,"secondaryEnabled":1,"primaryOffset":2,"primaryWidth":4,"secondaryOffset":6,"secondaryWidth":8,"horizontalMode":10,"verticalMode":11,"primaryHeight":12,"secondaryHeight":14,"secondaryStride":16,"borderMode":18,"primaryCurve":20,"fullBankPointers":76,"compactBankPointers":172},
+    "primaryOutputBytes":136,
+    "secondaryOutputBytes":21540
+  },
+  "romAliases": [
+    {"symbol":"sensor_calibration_primary_keys","address":"0x00dabcd0","bytes":260,"sha256":"24643c9b20098a75a0ac5e7a52b71867d55abbfa4c31c3e3c8dd12e889571b57"},
+    {"symbol":"sensor_calibration_secondary_keys","address":"0x00dabe50","bytes":312,"sha256":"010edb785c844d527487eeb54874b1c785af95fcb2282d5d4a32563d38943687"},
+    {"symbol":"sensor_calibration_border_keys","address":"0x00dabc70","bytes":52,"sha256":"168be39abd15dc3bab1fa495d512706e89e6bb2a6af01a427eab1e324e839f72"},
+    {"symbol":"sensor_calibration_exposure_starts","address":"0x00dabc3c","bytes":32,"sha256":"d00c13028932135d2852f2c4d67929bd81dbce4999f900adf6f123cfe6f0ddd9"},
+    {"symbol":"sensor_calibration_primary_components","address":"0x00dabc5c","bytes":18,"sha256":"4b51b3cfb4f05eb9f4409dc8508c629c59a36246bd17736dccd9b6c0f1dae9d0"},
+    {"symbol":"sensor_calibration_secondary_components","address":"0x00dabe10","bytes":6,"sha256":"4d3b1c7a6306267c14d72c92cbde2a2f17daa9e9c5eb60c24f466e0563170373"},
+    {"symbol":"sensor_calibration_cell_map","address":"0x00da1b0c","bytes":64,"sha256":"738df177aada76ac0936272b6459ed18085093818995be71380e9869e3101d4a"}
+  ],
+  "ownedDependencies": [
+    {"stock":"0x0069f8fc","symbol":"xm1_buffers_configuration_byte","owner":"PipelineBuffers"},
+    {"stock":"0x0069fec8","symbol":"xm1_buffers_configuration_half","owner":"PipelineBuffers"},
+    {"stock":"0x0069ff68","symbol":"xm1_pipeline_image_configuration_signed_byte","owner":"PipelineImageReferences"},
+    {"stock":"0x0069ff7c","symbol":"xm1_pipeline_image_configuration_signed_half","owner":"PipelineImageReferences"}
+  ],
+  "retainedStockCode": [],
+  "retainedHardwareServices": [],
+  "sourceLaw": {
+    "primary":"Normal generation writes output words 0..32, adds stage+0x498 after copying, and preserves word33. Disabled paths clear all136bytes. Capture mode11 executes cached extractor and normalizes only its returned byte; extractor always copies data and clears word33 even when the source enabled byte is zero.",
+    "secondary":"Unpacks six packed banks into three interleaved512byte planes per bank, then eight banks into planes at0x4420/0x3420/0x2420. Adds stage+0x498 to output word2 and publishes parameter-cache result at0x5420. Blocked state clears all21540bytes and invalidates cache without replacing prior cache keys.",
+    "calibration":"Enables are selected before unsupported profiles4/13/>13 are rejected. Original key tables provide profile metadata. Mean/difference quantization uses signed truncation. Specified exposure accumulation wraps16bits before division by9 and narrowing to signed8bits. Coefficients use wrapping32bit arithmetic, original A32 register-shift semantics and signed clamp0..1023.",
+    "banks":"Interior8x8 maps to cells0x44..0xbb. Border mode0 extrapolates with u16 wrapping; mode1 copies; other modes preserve existing border. Packing updates100cells per bank and preserves upper2bits and all other cells. Full layout writes14banks. Compact layout writes only5banks but publishes6pointers; the sixth bank remains prior state.",
+    "configuration":"Production reads live configuration RAM through actual owned getters. Assembly aliases name original immutable ROM key/permutation bytes, not fabricated parameter tables. Fixture calibration values are explicit inputs to the CPU law, not substituted implementations."
+  },
+  "definedInputBoundary": {
+    "memory":"Callers supply correctly aligned live buffers with source-required extents. Nonzero exposure vectors in specified mode require both four-byte vector pointers to be valid.",
+    "regionSelection":"In configured-grid paths cfg31d80[cell] must be nonzero. A32 daae3c-daae6c transforms zero to index255 and reads beyond an eight-byte stack region array. No private-stack imitation or invented region value is implemented.",
+    "componentSelection":"Permutation keys13433/13442 and1343c/1344b must select the18 primary and12 secondary correction entries. ROM component maps then select one of three axis corrections.",
+    "physicalAccuracy":"Physical calibration parameter provenance and sensor accuracy are not established by this CPU ownership change.",
+    "undefinedConfigurationParity":false
+  },
+  "model": {
+    "publications":"sensorCalibrationPublications",
+    "scenarios":"sensorCalibrationScenarios",
+    "composableSelector":"CalibrationSelection, selectCalibration(readByte,readHalf,mode,channel,temperature), calibrationSelectionEffects(modeAddress,channelAddress,temperatureAddress,selection)",
+    "stockExecution":"Scenarios request actual stock instruction execution on the stock side. No in-scope application or configuration getter is scripted. Call lists are empty for this pure CPU closure. These scenarios have not been run.",
+    "numericControls":["Literal -250/26/300 and -400/-200/0 sample endpoints","Literal -112/163 and -300/-100 interpolants","Signed mean -33 and difference15","Specified weights yield416/256/224 coefficients","Configured compound rounding yields280/272/263 and240 coefficients","Signed clipping to1023/256/0","A32 exponent32 produces zero primary coefficients without modulo32 shifts","Independent primary/secondary component permutations","Configured global primary bank with nonzero mode/channel bins","Zero/negative/nonzero correction selectors","Threshold equality, overflow bin and aliased selector outputs","Cache reset, invalidation, hit and each key transition","Byte-truncated generator inputs versus full-word cache keys","Nonzero prior bank cells, high-bit preservation and unwritten compact sixth bank","Active descriptor preserves inactive fields and pointers","Primary preserved tail and capture-cache disabled return with copied data"],
+    "admitted":false,
+    "checksRun":[]
+  },
+  "integration": {
+    "files":["src/pipeline/sensor_calibration.rs","SensorCalibration_stock.S","model/SensorCalibrationScenarios.hs","model/SensorCalibrationBoundary.json"],
+    "actions":["Declare pipeline::sensor_calibration","Compile SensorCalibration_stock.S data aliases","Route all nineteen stock entries to recorded owned symbols","Bind SensorRequests e563e0/e565dc callers and Output metadata da0c58 callers to canonical symbols","Add sensorCalibrationPublications/scenarios and BuffersScenarios dependencies to source admission and native qualification","Run fresh compiler and behavioral stock/owned native qualification after shared279a7b77 and signed getter5655f6f9 land"],
+    "outsideOwnership":["sensor_settings","e558d8 capture-settings byte copy","e55dc8 unused cached-secondary extractor","e560a0 preview wrapper","SensorRequests e57758/e561b4/e5639c","d78/d79 setters and da27xx/da46ac backends"],
+    "allocation":"No heap allocation; fixed stack records and live global banks only",
+    "qualification":false,
+    "historicalReceiptRebinding":false,
+    "historicalScope":"17afdfa9/R12 remains its original scope and is not evidence for these bodies"
+  }
+}

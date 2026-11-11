@@ -1,0 +1,328 @@
+{
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "routes": [
+    {
+      "stockEntry": "0x00e4fa90",
+      "ownedSymbol": "xm1_pipeline_image_copy_rows",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/reccont_capture_completions.c:73",
+      "sourceStatus": "exact",
+      "sourceSignature": "int record_copy_image_rows(int argument, const struct record_image_rows *source, struct record_image_rows *destination, int flags)"
+    },
+    {
+      "stockEntry": "0x00e4fae8",
+      "ownedSymbol": "xm1_pipeline_image_resize_capture",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e4ed00.c:598",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e4fae8(int arg0,int *arg1,int arg2,int arg3,int arg4,int arg5,int arg6,int arg7)"
+    },
+    {
+      "stockEntry": "0x00e4fd5c",
+      "ownedSymbol": "xm1_pipeline_image_resize_through_crop",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e4ed00.c:705",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e4fd5c(int arg0,int *arg1,int arg2,int *arg3,int arg4)"
+    },
+    {
+      "stockEntry": "0x00e50010",
+      "ownedSymbol": "xm1_pipeline_image_resize_software",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/reccont_capture_stamp.c:53",
+      "sourceStatus": "exact",
+      "sourceSignature": "int record_resize_capture_image_in_software(const struct record_image_description *source,"
+    },
+    {
+      "stockEntry": "0x00e500f0",
+      "ownedSymbol": "xm1_pipeline_image_rotate_software",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/reccont_capture_stamp.c:66",
+      "sourceStatus": "exact",
+      "sourceSignature": "int record_rotate_capture_image_in_software(struct stage_state *unused, const struct record_image_description *source, const struct record_image_description *destination, int rotation)"
+    },
+    {
+      "stockEntry": "0x00e50204",
+      "ownedSymbol": "xm1_pipeline_image_prepare_geometry",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e4ed00.c:797",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e50204(int arg0,int arg1,int *arg2,int *arg3,"
+    },
+    {
+      "stockEntry": "0x00e5092c",
+      "ownedSymbol": "xm1_pipeline_image_start_work",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e4ed00.c:1092",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e5092c(int arg0,int arg1,int arg2,int arg3,int arg4,int arg5,int arg6,int arg7)"
+    },
+    {
+      "stockEntry": "0x00e50c74",
+      "ownedSymbol": "xm1_pipeline_image_finish_copy",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e50c74.c:115",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e50c74(int arg0)"
+    },
+    {
+      "stockEntry": "0x00e51d00",
+      "ownedSymbol": "xm1_pipeline_image_configure_output",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e50c74.c:641",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e51d00(int arg0,int arg1)"
+    },
+    {
+      "stockEntry": "0x00e51b9c",
+      "ownedSymbol": "xm1_pipeline_image_prepare_output_stage",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e50c74.c:576",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e51b9c(int arg0,int arg1)"
+    },
+    {
+      "stockEntry": "0x00e51ee8",
+      "ownedSymbol": "xm1_pipeline_image_prepare_output_planes",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e50c74.c:818",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e51ee8(int job,struct record_image_plane *source,struct record_image_plane *second,"
+    },
+    {
+      "stockEntry": "0x00e51d5c",
+      "ownedSymbol": "xm1_pipeline_image_configure_output_geometry",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e50c74.c:659",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e51d5c(int arg0,int arg1,int arg2,int arg3,int arg4)"
+    },
+    {
+      "stockEntry": "0x00e523d4",
+      "ownedSymbol": "xm1_pipeline_image_configure_output_policy",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e50c74.c:705",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e523d4(int job,struct record_image_plane *output,const struct record_image_plane *layout,int buffer,"
+    },
+    {
+      "stockEntry": "0x00e5254c",
+      "ownedSymbol": "xm1_pipeline_image_prepare_output_mask",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e50c74.c:747",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e5254c(int job,struct record_image_plane *output,const struct record_image_plane *layout,"
+    },
+    {
+      "stockEntry": "0x00e5277c",
+      "ownedSymbol": "xm1_pipeline_image_prepare_output_request",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/reccont_capture_stamp.c:190",
+      "sourceStatus": "exact",
+      "sourceSignature": "int record_prepare_capture_output_request(struct stage_state *stage,struct record_image_description *source,"
+    },
+    {
+      "stockEntry": "0x00e531ac",
+      "ownedSymbol": "xm1_pipeline_image_prepare_triplets",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e52950.c:577",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e531ac(int job,struct record_image_plane *source,int argument,const struct record_capture_request_mode *request,"
+    },
+    {
+      "stockEntry": "0x00e53794",
+      "ownedSymbol": "xm1_pipeline_image_tune_triplets",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e52950.c:814",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e53794(int arg0,int *arg1,int arg2,int arg3,int *arg4)"
+    },
+    {
+      "stockEntry": "0x00e53d00",
+      "ownedSymbol": "xm1_pipeline_image_write_debug_file",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e52950.c:1035",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "void FUN_00e53d00(int arg0,int arg1,int arg2,int arg3,int arg4)"
+    },
+    {
+      "stockEntry": "0x00e53ed4",
+      "ownedSymbol": "xm1_pipeline_image_publish_debug_file",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/reccont_capture_geometry.c:75",
+      "sourceStatus": "exact",
+      "sourceSignature": "void record_publish_capture_debug_file(struct stage_state *unused, int kind,"
+    },
+    {
+      "stockEntry": "0x00e544b0",
+      "ownedSymbol": "xm1_pipeline_image_apply_triplet_tuning",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e52950.c:1170",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e544b0(int job,int image,const struct record_image_plane *primary,const struct record_image_plane *secondary,"
+    },
+    {
+      "stockEntry": "0x00e547e0",
+      "ownedSymbol": "xm1_pipeline_image_store_triplets",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e52950.c:1260",
+      "sourceStatus": "exact",
+      "sourceSignature": "int FUN_00e547e0(int arg0,unsigned short *arg1,int arg2)"
+    },
+    {
+      "stockEntry": "0x00e54870",
+      "ownedSymbol": "xm1_pipeline_image_process_output_triplets",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e52950.c:1279",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e54870(int arg0,int arg1)"
+    },
+    {
+      "stockEntry": "0x00e54c84",
+      "ownedSymbol": "xm1_pipeline_image_prepare_output_stamp",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e52950.c:1414",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e54c84(int arg0,int arg1,int arg2,int arg3)"
+    },
+    {
+      "stockEntry": "0x00e54c6c",
+      "ownedSymbol": "xm1_pipeline_image_output_disabled",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e52950.c:1408",
+      "sourceStatus": "exact",
+      "sourceSignature": "int FUN_00e54c6c(int arg0,int arg1)"
+    },
+    {
+      "stockEntry": "0x00e55164",
+      "ownedSymbol": "xm1_pipeline_image_stage_ready",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e52950.c:1583",
+      "sourceStatus": "exact",
+      "sourceSignature": "int FUN_00e55164(void)"
+    },
+    {
+      "stockEntry": "0x00e5517c",
+      "ownedSymbol": "xm1_pipeline_image_stage_complete",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e52950.c:1588",
+      "sourceStatus": "exact",
+      "sourceSignature": "int FUN_00e5517c(void)"
+    },
+    {
+      "stockEntry": "0x00e55194",
+      "ownedSymbol": "xm1_pipeline_image_stage_inactive",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/reccont_stage_configuration.c:47",
+      "sourceStatus": "exact",
+      "sourceSignature": "int record_stage_inactive_status(struct stage_state *state, void *request)"
+    },
+    {
+      "stockEntry": "0x00e551ac",
+      "ownedSymbol": "xm1_pipeline_image_configure_planes",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e551ac.c:31",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e551ac(int arg0,int arg1,int arg2)"
+    },
+    {
+      "stockEntry": "0x00e5716c",
+      "ownedSymbol": "xm1_pipeline_image_configure_plane_flags",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e563e0.c:639",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e5716c(int arg0,int arg1,int arg2)"
+    },
+    {
+      "stockEntry": "0x00e58cb8",
+      "ownedSymbol": "xm1_pipeline_image_reduce_border",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/reccont_image_options.c:411",
+      "sourceStatus": "exact",
+      "sourceSignature": "int record_reduce_bordered_capture_image(struct stage_state *stage,struct record_image_description *source,"
+    },
+    {
+      "stockEntry": "0x00e58e10",
+      "ownedSymbol": "xm1_pipeline_image_transform_border",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/reccont_image_options.c:429",
+      "sourceStatus": "exact",
+      "sourceSignature": "int record_transform_bordered_capture_image(struct stage_state *stage,"
+    },
+    {
+      "stockEntry": "0x00e58f48",
+      "ownedSymbol": "xm1_pipeline_image_prepare_border",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e58f48.c:23",
+      "sourceStatus": "exact",
+      "sourceSignature": "int FUN_00e58f48(int job,struct record_image_plane *source,struct record_image_plane *scratch,"
+    },
+    {
+      "stockEntry": "0x00e590e0",
+      "ownedSymbol": "xm1_pipeline_image_transform_planes",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e58f48.c:57",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e590e0(int arg0,int *arg1,int *arg2,int arg3)"
+    },
+    {
+      "stockEntry": "0x00e59510",
+      "ownedSymbol": "xm1_pipeline_image_reduce_planes",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e58f48.c:257",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e59510(int arg0,int *arg1,int arg2,int arg3,int arg4)"
+    },
+    {
+      "stockEntry": "0x00e5a9c0",
+      "ownedSymbol": "xm1_pipeline_image_blend_pixels",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e5a7a0.c:113",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "void FUN_00e5a9c0(int arg0,int arg1,int arg2,unsigned int arg3,int arg4)"
+    },
+    {
+      "stockEntry": "0x00e5ac04",
+      "ownedSymbol": "xm1_pipeline_image_reduce_pair",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e5a7a0.c:220",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e5ac04(int arg0,int arg1,int arg2,int arg3,int arg4)"
+    },
+    {
+      "stockEntry": "0x00e5adcc",
+      "ownedSymbol": "xm1_pipeline_image_reduce_pair_alternate",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e5a7a0.c:295",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e5adcc(int arg0,int arg1,int arg2)"
+    },
+    {
+      "stockEntry": "0x00e5b978",
+      "ownedSymbol": "xm1_pipeline_image_prepare_affine",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e5a7a0.c:766",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e5b978(int arg0,int *arg1,int *arg2)"
+    },
+    {
+      "stockEntry": "0x00e5baf8",
+      "ownedSymbol": "xm1_pipeline_image_shear_plane",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e5a7a0.c:851",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e5baf8(int arg0,int *arg1,int *arg2,unsigned int *arg3)"
+    },
+    {
+      "stockEntry": "0x00e5bc94",
+      "ownedSymbol": "xm1_pipeline_image_rotate_plane",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e5a7a0.c:966",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e5bc94(int arg0,int arg1,int *arg2,int arg3)"
+    },
+    {
+      "stockEntry": "0x00e5bdcc",
+      "ownedSymbol": "xm1_pipeline_image_copy_plane",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e5a7a0.c:1035",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e5bdcc(int arg0,int *arg1,int *arg2)"
+    },
+    {
+      "stockEntry": "0x00e4f950",
+      "ownedSymbol": "xm1_pipeline_image_prepare_special_plane",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e4ed00.c:566",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "void FUN_00e4f950(int arg0,int *arg1,int arg2,int arg3,"
+    },
+    {
+      "stockEntry": "0x00e4f898",
+      "ownedSymbol": "xm1_pipeline_image_prepare_auxiliary_plane",
+      "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e4ed00.c:540",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e4f898(int arg0,int arg1,int arg2,int arg3)"
+    },
+    {
+      "stockEntry": "0x00e8ef98",
+      "ownedSymbol": "xm1_pipeline_image_fill_pattern",
+      "source": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e8e3b0.c:450",
+      "sourceStatus": "nonmatching",
+      "sourceSignature": "int FUN_00e8ef98(const unsigned char *cancel, const struct software_fill_plane *plane, int pattern,"
+    },
+    {"stockEntry":"0x00723a14","ownedSymbol":"xm1_pipeline_image_configure_task","abi":"(u32,u32)->i32"},
+    {"stockEntry":"0x00723cb8","ownedSymbol":"xm1_pipeline_image_current_task","abi":"()->u32"},
+    {"stockEntry":"0x007243a8","ownedSymbol":"xm1_pipeline_image_wait_all","abi":"(u32,*mut u32,i32)->i32"},
+    {"stockEntry":"0x00724558","ownedSymbol":"xm1_pipeline_image_send_notification","abi":"(u32,u32)->i32"},
+    {"stockEntry":"0x00724b68","ownedSymbol":"xm1_pipeline_image_wait_reserved","abi":"(u32,u32)->i32"},
+    {"stockEntry":"0x00724c00","ownedSymbol":"xm1_pipeline_image_signal_reserved","abi":"(u32)->i32"},
+    {"stockEntry":"0x00724638","ownedSymbol":"xm1_pipeline_image_signal_current_zero","abi":"()->i32"},
+    {"stockEntry":"0x00e64a44","ownedSymbol":"xm1_pipeline_image_resize_planes","abi":"(stage,i32,i32,source,destination,auxiliary,configuration,i32)->u32"},
+    {"stockEntry":"0x00e57ab0","ownedSymbol":"xm1_pipeline_image_select_resize_mode","abi":"(*mut ResizeConfiguration)->void"},
+    {"stockEntry":"0x00e55dc8","ownedSymbol":"xm1_pipeline_image_expand_distortion","abi":"(stage,*mut u32)->void"},
+    {"stockEntry":"0x00e57b5c","ownedSymbol":"xm1_pipeline_image_distortion_band","abi":"(stage)->u32"},
+    {"stockEntry":"0x00e57ba4","ownedSymbol":"xm1_pipeline_image_distortion_enabled","abi":"(stage)->u32"},
+    {"stockEntry":"0x00e63f38","ownedSymbol":"xm1_pipeline_image_resize_complete","abi":"()->void"},
+    {"stockEntry":"0x00e64988","ownedSymbol":"xm1_pipeline_image_snapshot_warp","abi":"(stage)->void"},
+    {"stockEntry":"0x006df9bc","ownedSymbol":"xm1_pipeline_image_warp_read_registers","abi":"(*mut u32)->void"}
+  ]
+}

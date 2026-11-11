@@ -1,0 +1,2583 @@
+{
+  "sourceRevision": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "sourceIndex": "55436fc85c0560dd252b0410af6f2427fe198cd3-a5daad359532.tsv",
+  "ownership": "CPU sensor requests, settings, template projection, geometry, descriptor publication, capture and register field packing",
+  "sourceImages": [
+    {
+      "base": "0x61c400",
+      "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
+    },
+    {
+      "base": "0xbf1a00",
+      "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
+    }
+  ],
+  "originalABIRoutes": [
+    {
+      "address": "0x6742d8",
+      "symbol": "xm1_pipeline_sensor_driver_acquire",
+      "size": 400,
+      "sha256": "c9c299e03aef1e4a0a1328b57fbe49176c9b3a7ce581207420322ee6fe13b9a4",
+      "sourceName": "xm1_transform_open"
+    },
+    {
+      "address": "0x674468",
+      "symbol": "xm1_pipeline_sensor_driver_release",
+      "size": 364,
+      "sha256": "4cb28617f569b4ce99bc9eef05bd9df9eaed0641ae0a6ac8f9774f850b3fd170",
+      "sourceName": "xm1_transform_close"
+    },
+    {
+      "address": "0x67472c",
+      "symbol": "xm1_pipeline_sensor_start_output",
+      "size": 320,
+      "sha256": "d053c34bacd31200ff313608d1c78545c7438557cc5b725082ba89cf53cc7f41",
+      "sourceName": "xm1_transform_program_source"
+    },
+    {
+      "address": "0x67486c",
+      "symbol": "xm1_pipeline_sensor_ack_irq",
+      "size": 60,
+      "sha256": "f02949766d03b6c1a7ed31dfd870961b9f945d4960131ee4e8ac5808c0653b79",
+      "sourceName": "FUN_0067486c"
+    },
+    {
+      "address": "0x6756fc",
+      "symbol": "xm1_pipeline_sensor_reset_irq",
+      "size": 204,
+      "sha256": "f14049abfb9a7dddd097a24531186196e368b3f9d74e5572f58272e8ae799782",
+      "sourceName": "FUN_006756fc"
+    },
+    {
+      "address": "0x688e88",
+      "symbol": "xm1_pipeline_sensor_first_reset",
+      "size": 104,
+      "sha256": "9fa77439de2f5a2f5947d1b63916c04efce9ee6664c98f7e872074cb20983d5a",
+      "sourceName": "FUN_00688e88"
+    },
+    {
+      "address": "0x688ef0",
+      "symbol": "xm1_pipeline_sensor_first_start",
+      "size": 68,
+      "sha256": "de903d6a8bcd7b70ebb30199b006fa9a58fcbe976999d152a914fce3499af940",
+      "sourceName": "FUN_00688ef0"
+    },
+    {
+      "address": "0x688f34",
+      "symbol": "xm1_pipeline_sensor_first_wait",
+      "size": 36,
+      "sha256": "e421afd32e647f8512d3d9975c076c182d1b0725cf458996f42c3ec4b89fa8fc",
+      "sourceName": "xm1_isp_fff30000_reset"
+    },
+    {
+      "address": "0x68b680",
+      "symbol": "xm1_pipeline_sensor_second_reset",
+      "size": 104,
+      "sha256": "3326a37e4749388c10fe2fc67b0fa741b5e992d914a46321db9222bf6457322d",
+      "sourceName": "xm1_isp_fff300_acquire"
+    },
+    {
+      "address": "0x68b6e8",
+      "symbol": "xm1_pipeline_sensor_second_start",
+      "size": 68,
+      "sha256": "a2bceff9b01afda02a126f2d283a4807a0176a5b033a41a916eb94d7fa3890cc",
+      "sourceName": "xm1_isp_fff300_release"
+    },
+    {
+      "address": "0x68b72c",
+      "symbol": "xm1_pipeline_sensor_second_wait",
+      "size": 36,
+      "sha256": "1d5a472f9f8bda611e269438612503f007005df7cf5b4b7550b37b28138f73bc",
+      "sourceName": "xm1_isp_fff38000_reset"
+    },
+    {
+      "address": "0x68de38",
+      "symbol": "xm1_pipeline_sensor_pack_dimensions",
+      "size": 3348,
+      "sha256": "23cd9afc38a501259136ea6d88e63c6c7ce74dc2c513efbdf29bc7d1a883b130",
+      "sourceName": "hw_image_config_pack_words"
+    },
+    {
+      "address": "0x68ebe4",
+      "symbol": "xm1_pipeline_sensor_commit_dimension_registers",
+      "size": 44,
+      "sha256": "f0f380e8e54f8b48d3ba50d3544f7e0abb50667791b31c0865e869a6d4ecad62",
+      "sourceName": "FUN_0068ebe4"
+    },
+    {
+      "address": "0x68ec10",
+      "symbol": "xm1_pipeline_sensor_apply_dimension_registers",
+      "size": 40,
+      "sha256": "51cb9b99fa048ed2195478ce7b57944465be1502134956fd800a178291b7e3bf",
+      "sourceName": "FUN_0068ec10"
+    },
+    {
+      "address": "0x68ec38",
+      "symbol": "xm1_pipeline_sensor_commit_dimension_registers",
+      "size": 32,
+      "sha256": "81eb766c4a19d101b0c36ea1416a07b1f3b10542e8d5c11453f88a0bf174a53d",
+      "sourceName": "FUN_0068ec38"
+    },
+    {
+      "address": "0x68ec58",
+      "symbol": "xm1_pipeline_sensor_capture_dimension_registers",
+      "size": 44,
+      "sha256": "f0f380e8e54f8b48d3ba50d3544f7e0abb50667791b31c0865e869a6d4ecad62",
+      "sourceName": "FUN_0068ec58"
+    },
+    {
+      "address": "0x68ef08",
+      "symbol": "xm1_pipeline_sensor_clip_signed_field",
+      "size": 328,
+      "sha256": "f10467522e4f6f366dab6a485d7e738a3c9db4a3dc124482ba205e58096d9779",
+      "sourceName": "FUN_0068ef08"
+    },
+    {
+      "address": "0x68f050",
+      "symbol": "xm1_pipeline_sensor_pack_window",
+      "size": 1260,
+      "sha256": "1852a0d219317f2d65d20afe5bf19e9d49827abcc7ab3ddeb3a91af54116a3dd",
+      "sourceName": "FUN_0068f050"
+    },
+    {
+      "address": "0x68f53c",
+      "symbol": "xm1_pipeline_sensor_commit_window_registers",
+      "size": 44,
+      "sha256": "ebf611da2cb77f8aee965229173b27d3e76a35eab6a56aa1c3a2833edef3a206",
+      "sourceName": "FUN_0068f53c"
+    },
+    {
+      "address": "0x68f568",
+      "symbol": "xm1_pipeline_sensor_apply_window_registers",
+      "size": 40,
+      "sha256": "e798bdbedc2c88763f5195c00c569065665cc4307eb35a2a91d54ead0b7dae79",
+      "sourceName": "FUN_0068f568"
+    },
+    {
+      "address": "0x68f590",
+      "symbol": "xm1_pipeline_sensor_commit_window_registers",
+      "size": 32,
+      "sha256": "81eb766c4a19d101b0c36ea1416a07b1f3b10542e8d5c11453f88a0bf174a53d",
+      "sourceName": "FUN_0068f590"
+    },
+    {
+      "address": "0x68f668",
+      "symbol": "xm1_pipeline_sensor_capture_window_registers",
+      "size": 44,
+      "sha256": "885ab172d883768d95d453963599a2fe5c36457b5f65d82ef4b3f440e5979bcf",
+      "sourceName": "FUN_0068f668"
+    },
+    {
+      "address": "0x68f694",
+      "symbol": "xm1_pipeline_sensor_pack_region",
+      "size": 4104,
+      "sha256": "4eb926f102e609b5dbe6d43c40155921bbff50b6ee7840d46db58f468b1121af",
+      "sourceName": "hw_image_extended_config_pack_words"
+    },
+    {
+      "address": "0x69069c",
+      "symbol": "xm1_pipeline_sensor_apply_region_registers",
+      "size": 40,
+      "sha256": "c32d38d149446ef6a6474c55ae7e09c99b157f7da57a941aeceb3c7dbba22dbf",
+      "sourceName": "FUN_0069069c"
+    },
+    {
+      "address": "0x6906c4",
+      "symbol": "xm1_pipeline_sensor_commit_region_registers",
+      "size": 44,
+      "sha256": "6d56c1ce2bc37dec83edaeda7fe62107e9cc61bd2d6338b3de85dcc5393e541b",
+      "sourceName": "FUN_006906c4"
+    },
+    {
+      "address": "0x6906f0",
+      "symbol": "xm1_pipeline_sensor_capture_region_registers",
+      "size": 44,
+      "sha256": "bba3056aa3e7f5c4e796c0e42a3d70fc42692f637ba2900257de01d06568951e",
+      "sourceName": "FUN_006906f0"
+    },
+    {
+      "address": "0x690ce4",
+      "symbol": "xm1_pipeline_sensor_pack_coefficients",
+      "size": 1604,
+      "sha256": "b4837d03e83cfb54e8fd448869d1e7daca650647d2aae13c056bfe944d824404",
+      "sourceName": "FUN_00690ce4"
+    },
+    {
+      "address": "0x691328",
+      "symbol": "xm1_pipeline_sensor_apply_coefficient_registers",
+      "size": 40,
+      "sha256": "a578ba280f11a1ea849f1b54fcc2523cee92ff732c5a5ae73f68b20ea836ac2e",
+      "sourceName": "FUN_00691328"
+    },
+    {
+      "address": "0x691350",
+      "symbol": "xm1_pipeline_sensor_commit_coefficient_registers",
+      "size": 44,
+      "sha256": "b4384b35cc9c74a569e0282aaf86981bb3222f09b705924dc325ab810461236a",
+      "sourceName": "FUN_00691350"
+    },
+    {
+      "address": "0x69137c",
+      "symbol": "xm1_pipeline_sensor_capture_coefficient_registers",
+      "size": 44,
+      "sha256": "6b04e65e4812fdcd22fda8c888190012edbec06e11a7e363da3560100a3cc1af",
+      "sourceName": "FUN_0069137c"
+    },
+    {
+      "address": "0x6913a8",
+      "symbol": "xm1_pipeline_sensor_pack_snapshot_base",
+      "size": 1396,
+      "sha256": "bd5e18345c778ae339083c9ca95f0d919ec2c7c53a6029772f3fa7ce8096175c",
+      "sourceName": "FUN_006913a8"
+    },
+    {
+      "address": "0x69191c",
+      "symbol": "xm1_pipeline_sensor_pack_snapshot_window",
+      "size": 1292,
+      "sha256": "afe4b9f07b54cc39b9874c1d817ba9568ab4df0747b8a1792e4fe001a950dfd1",
+      "sourceName": "FUN_0069191c"
+    },
+    {
+      "address": "0x691f74",
+      "symbol": "xm1_pipeline_sensor_pack_snapshot_tail_controls",
+      "size": 540,
+      "sha256": "cc74b4ee0d057e2935629e6e549a1115b89399c6e0569188640d75734c52b872",
+      "sourceName": "FUN_00691f74"
+    },
+    {
+      "address": "0x692190",
+      "symbol": "xm1_pipeline_sensor_pack_snapshot_pairs",
+      "size": 576,
+      "sha256": "f2e35b928975d019b0e7db8d89fda6647380e310fa296a2872012484a58e5d50",
+      "sourceName": "FUN_00692190"
+    },
+    {
+      "address": "0x6923d0",
+      "symbol": "xm1_pipeline_sensor_pack_snapshot_signed",
+      "size": 784,
+      "sha256": "f80afdea8489723417b6701c4badb7d6beb0bd524ba4b8a2b068a32713f6378f",
+      "sourceName": "FUN_006923d0"
+    },
+    {
+      "address": "0x6926e0",
+      "symbol": "xm1_pipeline_sensor_pack_snapshot_curves",
+      "size": 936,
+      "sha256": "e4058e6d3e96629c473307907dc69095f1cd4a8e65b30a6f98cd28b6adbbd98f",
+      "sourceName": "FUN_006926e0"
+    },
+    {
+      "address": "0x692a88",
+      "symbol": "xm1_pipeline_sensor_pack_snapshot_flags",
+      "size": 260,
+      "sha256": "577bd34b95c024e0398a1d45f9bfbc1dd8bf4cf82e702ad870e73269c111e1d3",
+      "sourceName": "FUN_00692a88"
+    },
+    {
+      "address": "0x692b8c",
+      "symbol": "xm1_pipeline_sensor_pack_snapshot_coefficients",
+      "size": 348,
+      "sha256": "d34c44b989ee36420e3d4717fff10be132ea1f1c197230a963266ee65fba079f",
+      "sourceName": "FUN_00692b8c"
+    },
+    {
+      "address": "0x692ce8",
+      "symbol": "xm1_pipeline_sensor_pack_snapshot_byte_pairs",
+      "size": 300,
+      "sha256": "f345994c0da8e3b29cab40ab9e4d84388afdf0c8bedc0f246a878f5966bfe2e9",
+      "sourceName": "FUN_00692ce8"
+    },
+    {
+      "address": "0x692e14",
+      "symbol": "xm1_pipeline_sensor_pack_snapshot_signed_pairs",
+      "size": 1048,
+      "sha256": "beedfd97e33a9925212a0307279b0380f4be9892ece21f1f8af0320b44896107",
+      "sourceName": "FUN_00692e14"
+    },
+    {
+      "address": "0x69322c",
+      "symbol": "xm1_pipeline_sensor_pack_snapshot_curve_pairs",
+      "size": 356,
+      "sha256": "f457ccc2fdc9a937444d24a7b3a63849c9adf83fc5de0667f49084da01955715",
+      "sourceName": "FUN_0069322c"
+    },
+    {
+      "address": "0x693390",
+      "symbol": "xm1_pipeline_sensor_pack_snapshot_sixbit",
+      "size": 332,
+      "sha256": "2c87dc6f122bc7d4799edc5cb0dfe755af3f4d9e64cd57307b0dd960c8b16269",
+      "sourceName": "FUN_00693390"
+    },
+    {
+      "address": "0x6934dc",
+      "symbol": "xm1_pipeline_sensor_pack_snapshot_tail",
+      "size": 1552,
+      "sha256": "09f1dd53eed171250a1d1594338f52762357b631e22ed9b9c936c30108f0107a",
+      "sourceName": "FUN_006934dc"
+    },
+    {
+      "address": "0x693aec",
+      "symbol": "xm1_pipeline_sensor_pack_snapshot_bytes",
+      "size": 424,
+      "sha256": "54211257a1e6e2272f367d8194e0914c445cdcaaff53acfd88f794b4c81bf5c6",
+      "sourceName": "FUN_00693aec"
+    },
+    {
+      "address": "0x693c94",
+      "symbol": "xm1_pipeline_sensor_pack_snapshot",
+      "size": 196,
+      "sha256": "7711441b922f2fbecaaf00158d01a6ef5d46b099538017bb127c7b494feef39f",
+      "sourceName": "FUN_00693c94"
+    },
+    {
+      "address": "0x693d58",
+      "symbol": "xm1_pipeline_sensor_commit_snapshot_registers",
+      "size": 44,
+      "sha256": "d94bcdd68a8598b43fb02e0cc59d9c74a59d20da71e3d5ffd27b5e3011fdecca",
+      "sourceName": "FUN_00693d58"
+    },
+    {
+      "address": "0x693d84",
+      "symbol": "xm1_pipeline_sensor_apply_snapshot_registers",
+      "size": 40,
+      "sha256": "16baf93553bc288fd0a118949326a0cfdf1685701fd3db4dbec04082817a5e35",
+      "sourceName": "FUN_00693d84"
+    },
+    {
+      "address": "0x693dac",
+      "symbol": "xm1_pipeline_sensor_commit_snapshot_registers",
+      "size": 32,
+      "sha256": "81eb766c4a19d101b0c36ea1416a07b1f3b10542e8d5c11453f88a0bf174a53d",
+      "sourceName": "FUN_00693dac"
+    },
+    {
+      "address": "0x693dcc",
+      "symbol": "xm1_pipeline_sensor_capture_snapshot_registers",
+      "size": 44,
+      "sha256": "d94bcdd68a8598b43fb02e0cc59d9c74a59d20da71e3d5ffd27b5e3011fdecca",
+      "sourceName": "FUN_00693dcc"
+    },
+    {
+      "address": "0x6942e4",
+      "symbol": "xm1_pipeline_sensor_pack_filter_head",
+      "size": 1104,
+      "sha256": "bec3c2f94aedda14d4d0bf0993f4eb09d5ff1805a1d764ea196e1430e89d14da",
+      "sourceName": "FUN_006942e4"
+    },
+    {
+      "address": "0x694734",
+      "symbol": "xm1_pipeline_sensor_pack_filter_bytes",
+      "size": 1336,
+      "sha256": "55b01d61d758f8ffb66758fdd7e1b7def6022e86c2e5e54f8ba0abdc0bed156d",
+      "sourceName": "FUN_00694734"
+    },
+    {
+      "address": "0x694c6c",
+      "symbol": "xm1_pipeline_sensor_pack_filter_flags",
+      "size": 328,
+      "sha256": "a7da73e9e921025734194fedb0e3cf66a60859114ac7f7633a53bb438b64ac74",
+      "sourceName": "FUN_00694c6c"
+    },
+    {
+      "address": "0x694db4",
+      "symbol": "xm1_pipeline_sensor_pack_filter_coefficients",
+      "size": 784,
+      "sha256": "963779287db500414e8acb7d0c144b947194b8dfcb2d2c24486bec8c1a9bb6ba",
+      "sourceName": "FUN_00694db4"
+    },
+    {
+      "address": "0x6950c4",
+      "symbol": "xm1_pipeline_sensor_pack_filter_curves",
+      "size": 1620,
+      "sha256": "7507649498ecc530711ef48c7efcbb5179dbd6cf6271642adfb7beb1ff0eaefb",
+      "sourceName": "FUN_006950c4"
+    },
+    {
+      "address": "0x695718",
+      "symbol": "xm1_pipeline_sensor_pack_first_filter",
+      "size": 100,
+      "sha256": "5a174a96f485344ce22b05ef21fcc907b7ee4cd24f2fff18677e59a4457a702d",
+      "sourceName": "xm1_image_pack_c50c"
+    },
+    {
+      "address": "0x69577c",
+      "symbol": "xm1_pipeline_sensor_commit_first_filter_registers",
+      "size": 44,
+      "sha256": "215c4604916f45e51b22d5277cfbd4a8d5cb492281aebadca8bafed486cc508a",
+      "sourceName": "xm1_image_apply_c50c"
+    },
+    {
+      "address": "0x6957a8",
+      "symbol": "xm1_pipeline_sensor_apply_first_filter_registers",
+      "size": 40,
+      "sha256": "396594e88554f8fc726811cb362389a7dfa25ad2bcceabb3f8e2327a43fcf697",
+      "sourceName": "xm1_image_pack_006957a8"
+    },
+    {
+      "address": "0x6957d0",
+      "symbol": "xm1_pipeline_sensor_commit_first_filter_registers",
+      "size": 32,
+      "sha256": "81eb766c4a19d101b0c36ea1416a07b1f3b10542e8d5c11453f88a0bf174a53d",
+      "sourceName": "xm1_image_apply_c50c_wrapper"
+    },
+    {
+      "address": "0x6957f0",
+      "symbol": "xm1_pipeline_sensor_capture_first_filter_registers",
+      "size": 44,
+      "sha256": "215c4604916f45e51b22d5277cfbd4a8d5cb492281aebadca8bafed486cc508a",
+      "sourceName": "xm1_image_capture_c50c"
+    },
+    {
+      "address": "0x69581c",
+      "symbol": "xm1_pipeline_sensor_pack_filter_small",
+      "size": 488,
+      "sha256": "a147d7fbd558d9ace4be5158e45d0f82c0c6e7c5c7001fb3f616da3bbe69771a",
+      "sourceName": "FUN_0069581c"
+    },
+    {
+      "address": "0x695a04",
+      "symbol": "xm1_pipeline_sensor_commit_second_filter_registers",
+      "size": 44,
+      "sha256": "c5b7635ae262c237d55c1c140201de47a9067bc506d8dadd95347c2b7fb9e9b0",
+      "sourceName": "xm1_image_apply_c5a8"
+    },
+    {
+      "address": "0x695a30",
+      "symbol": "xm1_pipeline_sensor_apply_second_filter_registers",
+      "size": 40,
+      "sha256": "e7ed207ff167495b65a3b995795042da56370849905488c062756f9ce5c69ad7",
+      "sourceName": "xm1_image_pack_00695a30"
+    },
+    {
+      "address": "0x695a58",
+      "symbol": "xm1_pipeline_sensor_commit_second_filter_registers",
+      "size": 32,
+      "sha256": "81eb766c4a19d101b0c36ea1416a07b1f3b10542e8d5c11453f88a0bf174a53d",
+      "sourceName": "xm1_image_apply_c5a8_wrapper"
+    },
+    {
+      "address": "0x695a78",
+      "symbol": "xm1_pipeline_sensor_capture_second_filter_registers",
+      "size": 44,
+      "sha256": "c5b7635ae262c237d55c1c140201de47a9067bc506d8dadd95347c2b7fb9e9b0",
+      "sourceName": "xm1_image_capture_c5a8"
+    },
+    {
+      "address": "0x695aa4",
+      "symbol": "xm1_pipeline_sensor_pack_control",
+      "size": 1708,
+      "sha256": "fb2a03a6e27677f67b0440aba4f9019fda70978298a06c31bf1c3ec0452ce8bd",
+      "sourceName": "FUN_00695aa4"
+    },
+    {
+      "address": "0x696150",
+      "symbol": "xm1_pipeline_sensor_commit_control_registers",
+      "size": 44,
+      "sha256": "b91bca7d99630faef55d221b8ba7e22667de15100b286e9ac5b0b95775f5d76f",
+      "sourceName": "xm1_image_apply_c5cc"
+    },
+    {
+      "address": "0x69617c",
+      "symbol": "xm1_pipeline_sensor_apply_control_registers",
+      "size": 40,
+      "sha256": "c03d8989c891cd5e9a76d13b980a42b3124e8419480d12df08924c64d4d6285b",
+      "sourceName": "xm1_image_pack_0069617c"
+    },
+    {
+      "address": "0x6961a4",
+      "symbol": "xm1_pipeline_sensor_commit_control_registers",
+      "size": 32,
+      "sha256": "81eb766c4a19d101b0c36ea1416a07b1f3b10542e8d5c11453f88a0bf174a53d",
+      "sourceName": "xm1_image_apply_c5cc_wrapper"
+    },
+    {
+      "address": "0x6961c4",
+      "symbol": "xm1_pipeline_sensor_capture_control_registers",
+      "size": 44,
+      "sha256": "b91bca7d99630faef55d221b8ba7e22667de15100b286e9ac5b0b95775f5d76f",
+      "sourceName": "xm1_image_capture_c5cc"
+    },
+    {
+      "address": "0x6961f0",
+      "symbol": "xm1_pipeline_sensor_pack_input",
+      "size": 1576,
+      "sha256": "2695a4b01c644642792bcd397a2337e4221c05261c419b7b4339e2ce21fc382b",
+      "sourceName": "FUN_006961f0"
+    },
+    {
+      "address": "0x696818",
+      "symbol": "xm1_pipeline_sensor_commit_input_registers",
+      "size": 44,
+      "sha256": "428d2534c823d42ff2cccc7817d8fabde182db388eccafd5f48cdbf2571b102c",
+      "sourceName": "xm1_image_apply_c614"
+    },
+    {
+      "address": "0x696844",
+      "symbol": "xm1_pipeline_sensor_apply_input_registers",
+      "size": 40,
+      "sha256": "dbe7165adf2920b0215f3293251910ec7d1f96da33689741c909b5459e381b90",
+      "sourceName": "xm1_image_pack_00696844"
+    },
+    {
+      "address": "0x69686c",
+      "symbol": "xm1_pipeline_sensor_commit_input_registers",
+      "size": 32,
+      "sha256": "81eb766c4a19d101b0c36ea1416a07b1f3b10542e8d5c11453f88a0bf174a53d",
+      "sourceName": "xm1_image_apply_c614_wrapper"
+    },
+    {
+      "address": "0x69688c",
+      "symbol": "xm1_pipeline_sensor_capture_input_registers",
+      "size": 44,
+      "sha256": "428d2534c823d42ff2cccc7817d8fabde182db388eccafd5f48cdbf2571b102c",
+      "sourceName": "xm1_image_capture_c614"
+    },
+    {
+      "address": "0x6968b8",
+      "symbol": "xm1_pipeline_sensor_pack_origin",
+      "size": 1152,
+      "sha256": "48c9f6710e2c7a536fe34adf14a82ed8821de07bd91cc4ef88747d1c2cb9bd07",
+      "sourceName": "FUN_006968b8"
+    },
+    {
+      "address": "0x696d38",
+      "symbol": "xm1_pipeline_sensor_apply_origin_registers",
+      "size": 40,
+      "sha256": "16891ac7eb12d8d34166398149962ea28ee4a8d73c09756394f9e683ab005d80",
+      "sourceName": "xm1_image_pack_00696d38"
+    },
+    {
+      "address": "0x696d60",
+      "symbol": "xm1_pipeline_sensor_commit_origin_registers",
+      "size": 44,
+      "sha256": "89e0da9b91985c41e4e05731c815165149b97661b7a13f6d6d5af0f5eb9eb325",
+      "sourceName": "xm1_image_apply_c6a4"
+    },
+    {
+      "address": "0x696d8c",
+      "symbol": "xm1_pipeline_sensor_capture_origin_registers",
+      "size": 44,
+      "sha256": "8280d7573cf9188dfb70c3f12fcba3e882930d13d54a844bdf1e04c960a99f5e",
+      "sourceName": "xm1_image_capture_c6a4"
+    },
+    {
+      "address": "0x696db8",
+      "symbol": "xm1_pipeline_sensor_pack_primary_table",
+      "size": 5696,
+      "sha256": "ecd0378288074dcd4ae88eb3f6c59b4afb5ac9e22c90dcd69e4b5e0789c98da4",
+      "sourceName": "FUN_00696db8"
+    },
+    {
+      "address": "0x6983f8",
+      "symbol": "xm1_pipeline_sensor_commit_primary_table_registers",
+      "size": 80,
+      "sha256": "ae9736bab29ac023afbcbddb74fa8c9574ad74e12f3cd523aa00957e0aa7bad7",
+      "sourceName": "FUN_006983f8"
+    },
+    {
+      "address": "0x698448",
+      "symbol": "xm1_pipeline_sensor_commit_primary_control_registers",
+      "size": 44,
+      "sha256": "d994f1a8f876944d33eb561d0b1d1cdf461240db1772933dc7f4740693c35307",
+      "sourceName": "xm1_image_apply_c83c"
+    },
+    {
+      "address": "0x698474",
+      "symbol": "xm1_pipeline_sensor_apply_primary_table",
+      "size": 48,
+      "sha256": "bbdf7eeba6e0441d4e8b726a00386075260db71f610640c5cc642b50b4370e8d",
+      "sourceName": "FUN_00698474"
+    },
+    {
+      "address": "0x6984a4",
+      "symbol": "xm1_pipeline_sensor_commit_primary_table_registers",
+      "size": 32,
+      "sha256": "e0c7d529a73012f7403a9156a39acd302c549595277e4e3265fc0d985da9c720",
+      "sourceName": "xm1_image_apply_c6ec_wrapper"
+    },
+    {
+      "address": "0x6984c4",
+      "symbol": "xm1_pipeline_sensor_commit_primary_control_registers",
+      "size": 32,
+      "sha256": "b26ac83c0cf29f0bccb3453048f43c7cbb05e08acd729b22ba82397645666c01",
+      "sourceName": "xm1_image_apply_c83c_wrapper"
+    },
+    {
+      "address": "0x6984e4",
+      "symbol": "xm1_pipeline_sensor_capture_primary_table_registers",
+      "size": 44,
+      "sha256": "0bc741ebc96a086e09296dc13f6f4cb89bd10efb0abb064511c1e808e034360a",
+      "sourceName": "xm1_image_capture_c6ec"
+    },
+    {
+      "address": "0x698510",
+      "symbol": "xm1_pipeline_sensor_capture_primary_control_registers",
+      "size": 44,
+      "sha256": "60ed09619a95d5b2c3980097976249778ca2b92db895dee26013914aef81e5ec",
+      "sourceName": "xm1_image_capture_c83c"
+    },
+    {
+      "address": "0x69853c",
+      "symbol": "xm1_pipeline_sensor_prepare_primary_table",
+      "size": 3232,
+      "sha256": "42ef815a6222b62d44e9a29f56058e1cb7a7a0f1bd0fa93c76062bb63a86d5eb",
+      "sourceName": "FUN_0069853c"
+    },
+    {
+      "address": "0x6991dc",
+      "symbol": "xm1_pipeline_sensor_pack_secondary_table",
+      "size": 836,
+      "sha256": "016fb11bcd901708ed53f474b7461fbbeab9e041aa2c23d7a25e03308b27bb9d",
+      "sourceName": "FUN_006991dc"
+    },
+    {
+      "address": "0x699520",
+      "symbol": "xm1_pipeline_sensor_commit_secondary_table_registers",
+      "size": 44,
+      "sha256": "762b8b099519741836122ae749c1ac0f01ee3ec87c48b0740b4e106242549252",
+      "sourceName": "xm1_image_apply_c848"
+    },
+    {
+      "address": "0x69954c",
+      "symbol": "xm1_pipeline_sensor_apply_secondary_table_registers",
+      "size": 40,
+      "sha256": "a7b8f3b270557a7c14cc02a9da120f8436607d3c8be7d938674a33cdf03eac47",
+      "sourceName": "xm1_image_pack_0069954c"
+    },
+    {
+      "address": "0x699574",
+      "symbol": "xm1_pipeline_sensor_commit_secondary_table_registers",
+      "size": 32,
+      "sha256": "81eb766c4a19d101b0c36ea1416a07b1f3b10542e8d5c11453f88a0bf174a53d",
+      "sourceName": "xm1_image_apply_c848_wrapper"
+    },
+    {
+      "address": "0x699594",
+      "symbol": "xm1_pipeline_sensor_capture_secondary_table_registers",
+      "size": 44,
+      "sha256": "762b8b099519741836122ae749c1ac0f01ee3ec87c48b0740b4e106242549252",
+      "sourceName": "xm1_image_capture_c848"
+    },
+    {
+      "address": "0x69ff24",
+      "symbol": "xm1_pipeline_sensor_configuration_word",
+      "size": 68,
+      "sha256": "f0bc0b1cd9d67cd21e9399601725f59690ca7ea3812c4b44fc54618a1f8f36c5",
+      "sourceName": "FUN_0069ff24"
+    },
+    {
+      "address": "0x6deb08",
+      "symbol": "xm1_pipeline_sensor_apply_register_transfers",
+      "size": 116,
+      "sha256": "35d3bfacf8a4dfad99cc0589b699d41d2004dba1d9886397eaf5def7caf89504",
+      "sourceName": "FUN_006deb08"
+    },
+    {
+      "address": "0x6deb7c",
+      "symbol": "xm1_pipeline_sensor_capture_register_transfers",
+      "size": 116,
+      "sha256": "60caeb9f9ba16a22e2bf90f765bb6e0b7f9233552ee950feb888f95f5bd8fe32",
+      "sourceName": "FUN_006deb7c"
+    },
+    {
+      "address": "0x733e24",
+      "symbol": "xm1_pipeline_sensor_select_conversion",
+      "size": 84,
+      "sha256": "abdbaa92fad18104d7002d0e45e0c22f626f359eb28cdfa8af16b4f9332fb184",
+      "sourceName": "FUN_00733e24"
+    },
+    {
+      "address": "0x733e78",
+      "symbol": "xm1_pipeline_sensor_conversion_band",
+      "size": 104,
+      "sha256": "a1e67d7322a61ccf4977b8a85d07a652591a9a08986d143296eb11af02c87c5a",
+      "sourceName": "FUN_00733e78"
+    },
+    {
+      "address": "0x73aca4",
+      "symbol": "xm1_pipeline_sensor_cancel_configuration",
+      "size": 16,
+      "sha256": "961d3ae62976195216f5c06bcf50f8138aebad68f269878035895b1b172c80d5",
+      "sourceName": "flashloader_cancel_wrapper"
+    },
+    {
+      "address": "0x73b238",
+      "symbol": "xm1_pipeline_sensor_cancel_configuration_request",
+      "size": 284,
+      "sha256": "e2f7010d601129fa596a58824ad0511875c8faa19aab64fbdd3df9080d345140",
+      "sourceName": "flashloader_cancel"
+    },
+    {
+      "address": "0x73b728",
+      "symbol": "xm1_pipeline_sensor_wait_configuration",
+      "size": 56,
+      "sha256": "ef7b1a373f615962ab722c89a8b2402d332b74885d99b3b02c21f6deede3d242",
+      "sourceName": "flashloader_wait_channel"
+    },
+    {
+      "address": "0x73ec0c",
+      "symbol": "xm1_pipeline_sensor_configuration_key_bytes",
+      "size": 56,
+      "sha256": "0ed227c442c732b7452a1736e277cf3b8eb60f2cf37842de818c4e17c9e433a3",
+      "sourceName": "configuration_read_key_bytes"
+    },
+    {
+      "address": "0x73ec44",
+      "symbol": "xm1_pipeline_sensor_configuration_key_bytes",
+      "size": 56,
+      "sha256": "abdf71ef379a70917bb6887dfc8758e35452ee15e75dcb37f845e57e38b0e977",
+      "sourceName": "configuration_read_key_bytes_copy"
+    },
+    {
+      "address": "0x73ec7c",
+      "symbol": "xm1_pipeline_sensor_configuration_key_halves",
+      "size": 76,
+      "sha256": "d90c5ca5a317e5e56d8d4dc8bd1272e17f877bc4d67865d9775518f7ec27f28d",
+      "sourceName": "configuration_read_key_words"
+    },
+    {
+      "address": "0x73ecc8",
+      "symbol": "xm1_pipeline_sensor_configuration_key_halves",
+      "size": 76,
+      "sha256": "c5395c3fdffcd7667b993fda4815caa42c5a482ae550922aaa509da51b87832c",
+      "sourceName": "configuration_read_key_words_copy"
+    },
+    {
+      "address": "0x73ed94",
+      "symbol": "xm1_pipeline_sensor_copy_selected_words",
+      "size": 72,
+      "sha256": "0312b62427f22e1d5281cb0155548b45fada6ac4489dbfc5325dc66104f045c3",
+      "sourceName": "configuration_copy_selected_words"
+    },
+    {
+      "address": "0x73f760",
+      "symbol": "xm1_pipeline_sensor_select_type_mode_value",
+      "size": 44,
+      "sha256": "5a6b96604c6486b0ed6c49a3cda6cc3beb8100521c8bc4b677b00763a99f00be",
+      "sourceName": "configuration_select_type_mode_value"
+    },
+    {
+      "address": "0x73fc64",
+      "symbol": "xm1_pipeline_sensor_selection_index",
+      "size": 124,
+      "sha256": "dd3be6fee9f589417128de3fc276de2657c6ce6de6a3775787930778b136cb63",
+      "sourceName": "FUN_0073fc64"
+    },
+    {
+      "address": "0xd5d244",
+      "symbol": "xm1_pipeline_sensor_descriptor_acquire",
+      "size": 16,
+      "sha256": "8a8980f48228d659b7d97a193b65c975d993276f9387d2dd2c5ee301b9cbdde8",
+      "sourceName": "ui_request_image_pipeline_acquire_hardware"
+    },
+    {
+      "address": "0xd5d254",
+      "symbol": "xm1_pipeline_sensor_descriptor_release",
+      "size": 20,
+      "sha256": "3054dc63694d10358c8724fe0affc7e6094a960ce2c0d8c15fb47e832100553a",
+      "sourceName": "ui_request_image_pipeline_release_hardware_1"
+    },
+    {
+      "address": "0xd5da58",
+      "symbol": "xm1_pipeline_sensor_publish_descriptor",
+      "size": 144,
+      "sha256": "436826b93a468e2f57c0b145f5ca55b7d8a3ab169b8cb66cc39a8d415cf3eae7",
+      "sourceName": "image_pipeline_publish_record"
+    },
+    {
+      "address": "0xd5dae8",
+      "symbol": "xm1_pipeline_sensor_publish_descriptor",
+      "size": 16,
+      "sha256": "53547f96fddb361014ef2353b0c8044c575b871b05d9512ee5b9a3f299dff6d7",
+      "sourceName": "image_pipeline_forward_record"
+    },
+    {
+      "address": "0xd5daf8",
+      "symbol": "xm1_pipeline_sensor_reset_descriptor",
+      "size": 20,
+      "sha256": "aafa4c17d0adb23a5813bda24cf28ccf1bf7c6471e005dd2f169a8f8b33ccb72",
+      "sourceName": "image_pipeline_reset_record"
+    },
+    {
+      "address": "0xd5db0c",
+      "symbol": "xm1_pipeline_sensor_reset_descriptor",
+      "size": 16,
+      "sha256": "3213afd6bd735ce02570d51043985ad146efa51fd60de98251e2cc33f43ffedb",
+      "sourceName": "image_pipeline_forward_reset_record"
+    },
+    {
+      "address": "0xd5db1c",
+      "symbol": "xm1_pipeline_sensor_expand_template",
+      "size": 460,
+      "sha256": "2ed00f559152ba524e71107b70cbda90c0739f0aa8dfacae5261cb46cc44f1db",
+      "sourceName": "scan_expand_config_bytes_to_words_and_tail"
+    },
+    {
+      "address": "0xd5ddec",
+      "symbol": "xm1_pipeline_sensor_select_level",
+      "size": 196,
+      "sha256": "40cc92c0330c11750a23b6d7ca134fdb93c00e639321a38db3ab36548a59328d",
+      "sourceName": "scan_select_level"
+    },
+    {
+      "address": "0xd5deb0",
+      "symbol": "xm1_pipeline_sensor_select_adjusted_level",
+      "size": 76,
+      "sha256": "251644a48c0ca019da9271cdcd64a12208e7e6cf78f419e98cdaebf6ca506702",
+      "sourceName": "FUN_00d5deb0"
+    },
+    {
+      "address": "0xd5defc",
+      "symbol": "xm1_pipeline_sensor_compute_level",
+      "size": 200,
+      "sha256": "38003f94082c0a1b77c8a2ccd707846d101a5168ccdd2addaf48769727cfab89",
+      "sourceName": "FUN_00d5defc"
+    },
+    {
+      "address": "0xd5e584",
+      "symbol": "xm1_pipeline_sensor_update_center",
+      "size": 16,
+      "sha256": "6cd5b53bbb237d06fbbf89b36dad28538c7c4e738219a63e30ea2d9ba198d734",
+      "sourceName": "pipeline41004_forward_dimensions"
+    },
+    {
+      "address": "0xd5e594",
+      "symbol": "xm1_pipeline_sensor_update_secondary_center",
+      "size": 16,
+      "sha256": "6cd5b53bbb237d06fbbf89b36dad28538c7c4e738219a63e30ea2d9ba198d734",
+      "sourceName": "pipeline44730_forward_dimensions"
+    },
+    {
+      "address": "0xd5e658",
+      "symbol": "xm1_pipeline_sensor_read_noise_configuration",
+      "size": 20,
+      "sha256": "e4ec6cd3c48d2858c1392b952f0fd1d374c0199049922f040451449b5cbc580a",
+      "sourceName": "configuration_probe_cfg_byte_ba9d"
+    },
+    {
+      "address": "0xd5fab4",
+      "symbol": "xm1_pipeline_sensor_configuration_type_enabled",
+      "size": 904,
+      "sha256": "4372119be81184ff040050f8c12d004a9eb56eacdbd2b4001cea999cc3c8952d",
+      "sourceName": "FUN_00d5fab4"
+    },
+    {
+      "address": "0xd60594",
+      "symbol": "xm1_pipeline_sensor_board_configuration_enabled",
+      "size": 60,
+      "sha256": "c8a60ce91f38671990f6fb6218be8b852bd6202a8ed1dfe4feae9d5b22cfff7b",
+      "sourceName": "FUN_00d60594"
+    },
+    {
+      "address": "0xd60c5c",
+      "symbol": "xm1_pipeline_sensor_read_mode_configuration",
+      "size": 36,
+      "sha256": "0d52e88875cf34723c02e5dfcf13e7b0775b495d964438d41ebe9410ca4c1cdd",
+      "sourceName": "FUN_00d60c5c"
+    },
+    {
+      "address": "0xd61350",
+      "symbol": "xm1_pipeline_sensor_read_selection_flag",
+      "size": 56,
+      "sha256": "9fc7332f96aa2a894defe9cb2eb3bf5412c9ff990a9acbeb81f384530e21d89f",
+      "sourceName": "FUN_00d61350"
+    },
+    {
+      "address": "0xd6235c",
+      "symbol": "xm1_pipeline_sensor_read_selected_configuration",
+      "size": 84,
+      "sha256": "82b72935a9883388ec67597ad4741bd760382d2bbfd184af77f10166731360e5",
+      "sourceName": "FUN_00d6235c"
+    },
+    {
+      "address": "0xd63998",
+      "symbol": "xm1_pipeline_sensor_compute_configuration_mask",
+      "size": 164,
+      "sha256": "76769a9e3fceff2dc9de63c664e488c6fccc1b4385a1febd333fd356e07944c6",
+      "sourceName": "FUN_00d63998"
+    },
+    {
+      "address": "0xd6415c",
+      "symbol": "xm1_pipeline_sensor_collect_template_inputs",
+      "size": 712,
+      "sha256": "16103412f875a10f1059c64acc98011c10dfeda2c4093dc4a84e70487132b666",
+      "sourceName": "FUN_00d6415c"
+    },
+    {
+      "address": "0xd66f00",
+      "symbol": "xm1_pipeline_sensor_mode_selection_enabled",
+      "size": 144,
+      "sha256": "2cccf382d87a962295f125f3389f5141ddad508fbbf542ab8d73e8df380ed753",
+      "sourceName": "FUN_00d66f00"
+    },
+    {
+      "address": "0xd66f90",
+      "symbol": "xm1_pipeline_sensor_selection_mask_enabled",
+      "size": 172,
+      "sha256": "9a0650c6415e6d38b11f300fd3a84077ce3585e95e6fed9442405e4e6a7a36fd",
+      "sourceName": "FUN_00d66f90"
+    },
+    {
+      "address": "0xd68a1c",
+      "symbol": "xm1_pipeline_sensor_read_primary_configuration",
+      "size": 20,
+      "sha256": "367f8a0fcf03f7951ba1c3eecc1363d505178e462dba24b6a703ef4d1ba5e3a1",
+      "sourceName": "ui_request_read_cfgdata_byte_a935"
+    },
+    {
+      "address": "0xd68a30",
+      "symbol": "xm1_pipeline_sensor_read_secondary_configuration",
+      "size": 20,
+      "sha256": "ca14e7a55474efca7ecdb56f5a4258cad204c6c757fb6501c552b8659a41ab8d",
+      "sourceName": "ui_request_read_cfgdata_byte_a936"
+    },
+    {
+      "address": "0xd68a44",
+      "symbol": "xm1_pipeline_sensor_read_level_configuration",
+      "size": 36,
+      "sha256": "49e2cde4bfc0c12ea324191c326c621e629f12c5b8e03575bc2fd45c1881b332",
+      "sourceName": "FUN_00d68a44"
+    },
+    {
+      "address": "0xd69b24",
+      "symbol": "xm1_pipeline_sensor_threshold_enabled",
+      "size": 68,
+      "sha256": "345660466071cacc4cf9bf3a1cd331a22a5d94913291435dab7728510879fa73",
+      "sourceName": "FUN_00d69b24"
+    },
+    {
+      "address": "0xd69ec0",
+      "symbol": "xm1_pipeline_sensor_read_mode_selector",
+      "size": 132,
+      "sha256": "36ef9bebed438d3b7b75caeab6587f00f769d0b8df1974740eae351686f891ca",
+      "sourceName": "FUN_00d69ec0"
+    },
+    {
+      "address": "0xd69f44",
+      "symbol": "xm1_pipeline_sensor_read_alternate_selector",
+      "size": 72,
+      "sha256": "004050c53ee9060ae24ae6ab3f9083e8db8f5b8b6beba1a663f2e35670c91b1c",
+      "sourceName": "FUN_00d69f44"
+    },
+    {
+      "address": "0xd6ae18",
+      "symbol": "xm1_pipeline_sensor_update_capture_metadata",
+      "size": 460,
+      "sha256": "9604b17a4c04d4a32415b8e8d490a8cd94e5e09a743d5544bba9e3c3f144c5be",
+      "sourceName": "FUN_00d6ae18"
+    },
+    {
+      "address": "0xd6afe4",
+      "symbol": "xm1_pipeline_sensor_copy_capture_descriptor",
+      "size": 72,
+      "sha256": "b20b212895ffe071262d8512d5039ad3626b1bf82541bc6a31df917e23bb4216",
+      "sourceName": "FUN_00d6afe4"
+    },
+    {
+      "address": "0xd6b02c",
+      "symbol": "xm1_pipeline_sensor_capture_descriptor",
+      "size": 872,
+      "sha256": "e16410e01b3a1855b0c58056cd27a2cde6af4e328853f4764603e17f4f6971f3",
+      "sourceName": "FUN_00d6b02c"
+    },
+    {
+      "address": "0xd77590",
+      "symbol": "xm1_pipeline_sensor_update_template_flags",
+      "size": 1140,
+      "sha256": "927f6aa52daa2cb741ad7e23fedc88358b81ec33fac71460887ecdb5ac482a54",
+      "sourceName": "scan_update_template_flags"
+    },
+    {
+      "address": "0xd77a04",
+      "symbol": "xm1_pipeline_sensor_template_index",
+      "size": 68,
+      "sha256": "f3de6bda3ae633ba39aed42ed7750a2b32cb052932ea57883d0cdffc6aa6047c",
+      "sourceName": "FUN_00d77a04"
+    },
+    {
+      "address": "0xd77a48",
+      "symbol": "xm1_pipeline_sensor_configure_descriptor",
+      "size": 116,
+      "sha256": "8ccc8981e004edaee99c34292dffdcdaa5107f96ed05eaedd3f74932fb13bfec",
+      "sourceName": "FUN_00d77a48"
+    },
+    {
+      "address": "0xd78088",
+      "symbol": "xm1_pipeline_sensor_translate_format",
+      "size": 868,
+      "sha256": "6377bec6d7aa3e05c87917fd754af451bb5e6107f9b7fb8264857e0af18b241a",
+      "sourceName": "scan_translate_configuration_kind"
+    },
+    {
+      "address": "0xd786ac",
+      "symbol": "xm1_pipeline_sensor_import_primary_level",
+      "size": 268,
+      "sha256": "487998a267b193418891ea900287b8e7cfe34d2300f030102d4530a5c9b52ce3",
+      "sourceName": "scan_import_primary_level"
+    },
+    {
+      "address": "0xd787b8",
+      "symbol": "xm1_pipeline_sensor_import_strength",
+      "size": 36,
+      "sha256": "d10be74f50b5c8792872042c8cb9d87cdf915563b2211ab01e595ddb82341874",
+      "sourceName": "FUN_00d787b8"
+    },
+    {
+      "address": "0xd787dc",
+      "symbol": "xm1_pipeline_sensor_import_level_value",
+      "size": 160,
+      "sha256": "ae2dd375e8d6652a4dfbd063df6c3c724a645671ca0c36b9cdb4786167b7d524",
+      "sourceName": "scan_configuration_import:scan_import_level_value"
+    },
+    {
+      "address": "0xd7887c",
+      "symbol": "xm1_pipeline_sensor_import_level",
+      "size": 308,
+      "sha256": "1b7c00a773946d800e5a41defbcfbfab319e49fbfd6ea9cf9e071486c3f6d8ea",
+      "sourceName": "scan_import_level"
+    },
+    {
+      "address": "0xd79408",
+      "symbol": "xm1_pipeline_sensor_apply_settings",
+      "size": 924,
+      "sha256": "dbad1d6f513ef5219369ce656d9a7fe87d5a611a1af407c13acca3b5f3490cd6",
+      "sourceName": "FUN_00d79408"
+    },
+    {
+      "address": "0xda1b4c",
+      "symbol": "xm1_pipeline_sensor_acquire_hardware",
+      "size": 508,
+      "sha256": "ddf0127673b3058aad85d46e14981e1ed1f8bd09fe39de5ec15eef909d5ef441",
+      "sourceName": "FUN_00da1b4c"
+    },
+    {
+      "address": "0xda1d48",
+      "symbol": "xm1_pipeline_sensor_release_hardware",
+      "size": 524,
+      "sha256": "11ac6ba8ae3ddfeed087b89c8c013aed800bda9b8d7c87598413a26b5bd61c61",
+      "sourceName": "FUN_00da1d48"
+    },
+    {
+      "address": "0xda1f54",
+      "symbol": "xm1_pipeline_sensor_publish_configurations",
+      "size": 312,
+      "sha256": "950092ada3a1c8206e5cd68652e719f2d41502e6a48b358d9801105676395dc2",
+      "sourceName": "image_pipeline_publish_configurations"
+    },
+    {
+      "address": "0xda208c",
+      "symbol": "xm1_pipeline_sensor_reset_configurations",
+      "size": 320,
+      "sha256": "68ed3ab60eeb7628ebd5563cac2dc5d5c45f6758f2bab71cb6a1b37621ad0ed8",
+      "sourceName": "image_pipeline_reset_configurations"
+    },
+    {
+      "address": "0xda24b4",
+      "symbol": "xm1_pipeline_sensor_set_center",
+      "size": 16,
+      "sha256": "e973cdeb4a7ff2c32eeeb7447c2e3bf56ce0541b5b1ba0e989848a479affaa64",
+      "sourceName": "pipeline41004_set_dimensions"
+    },
+    {
+      "address": "0xda24c4",
+      "symbol": "xm1_pipeline_sensor_set_secondary_center",
+      "size": 16,
+      "sha256": "f75e3ca843decf645f150c4951c0d490da8cd89f5cc608ae154cddc34cf654bf",
+      "sourceName": "pipeline44730_set_dimensions"
+    },
+    {
+      "address": "0xda2508",
+      "symbol": "xm1_pipeline_sensor_reset",
+      "size": 236,
+      "sha256": "375f3f0340aaf35626f60dda92d5dc9b77850fa8bdb154da436787504feb90df",
+      "sourceName": "sensor_processing_reset_mode"
+    },
+    {
+      "address": "0xda25f4",
+      "symbol": "xm1_pipeline_sensor_stop",
+      "size": 60,
+      "sha256": "37bb52f0483813d396f685235f650e8579bd7f19d61a63e8137abbb46dc9336f",
+      "sourceName": "sensor_processing_stop_mode"
+    },
+    {
+      "address": "0xda2630",
+      "symbol": "xm1_pipeline_sensor_interrupt",
+      "size": 368,
+      "sha256": "1fb2ea330df9698d3d67a5f96fe9ea24233e7e47c22b2343305b0508764ef7e0",
+      "sourceName": "FUN_00da2630"
+    },
+    {
+      "address": "0xda27a0",
+      "symbol": "xm1_pipeline_image_sensor_initialize",
+      "size": 72,
+      "sha256": "d8fde6a39dcb69bbd35f6a5700d1fd0633867e6837d45e3d84df4482a79ce05c",
+      "sourceName": "sensor_processing_initialize_mode"
+    },
+    {
+      "address": "0xda27e8",
+      "symbol": "xm1_pipeline_image_sensor_release",
+      "size": 116,
+      "sha256": "99167ccf5829a92aec51f900eb404289265f0c6d6ba2303bccd7b043a1a16d82",
+      "sourceName": "sensor_processing_start_mode"
+    },
+    {
+      "address": "0xda285c",
+      "symbol": "xm1_pipeline_image_sensor_wait",
+      "size": 180,
+      "sha256": "6353f8e246e1ad499ef9fd60b6eb6b7636e39c32544555fd7308ce94ec7a4e05",
+      "sourceName": "sensor_processing_wait_mode"
+    },
+    {
+      "address": "0xda2910",
+      "symbol": "xm1_pipeline_image_sensor_start",
+      "size": 112,
+      "sha256": "d4a2227e077ad33e54d61e86846820d22dd9e2269b38176a548fb8f653e72b74",
+      "sourceName": "FUN_00da2910"
+    },
+    {
+      "address": "0xda2980",
+      "symbol": "xm1_pipeline_sensor_prepare_channels",
+      "size": 432,
+      "sha256": "a9a6e72b91ff7247c8f4368743e95681775e37867728d8f2bc63193ca3d94585",
+      "sourceName": "image_geometry_prepare_channels"
+    },
+    {
+      "address": "0xda2b30",
+      "symbol": "xm1_pipeline_sensor_prepare_dimensions",
+      "size": 916,
+      "sha256": "6a6b39693317fb1068a927558d8b54da02051ad59ce51e0cc7296889c5ea7df4",
+      "sourceName": "FUN_00da2b30"
+    },
+    {
+      "address": "0xda2ec4",
+      "symbol": "xm1_pipeline_sensor_select_padding",
+      "size": 356,
+      "sha256": "b943e83de27737b029d60b7c97ade49c3b5eeada258a84d6b8cedcb66aa1b364",
+      "sourceName": "sensor_processing_select_padding"
+    },
+    {
+      "address": "0xda3028",
+      "symbol": "xm1_pipeline_sensor_build_rows",
+      "size": 392,
+      "sha256": "aa02d9c6fbf8c0f2f71cfd110291b509c54ad355723ac28d3837b0521f82b885",
+      "sourceName": "sensor_processing_build_rows"
+    },
+    {
+      "address": "0xda31b0",
+      "symbol": "xm1_pipeline_sensor_find_alignment",
+      "size": 92,
+      "sha256": "52e14202fb8d98d081cb151552b1c43efc4112e6bf7c55ff795dda6a9f730e19",
+      "sourceName": "FUN_00da31b0"
+    },
+    {
+      "address": "0xda320c",
+      "symbol": "xm1_pipeline_sensor_align_color",
+      "size": 636,
+      "sha256": "26a43e48d234a966e9e19887eda028ed26c129f2c9946c2fe24dd226065dfbfd",
+      "sourceName": "FUN_00da320c"
+    },
+    {
+      "address": "0xda3488",
+      "symbol": "xm1_pipeline_sensor_prepare_color",
+      "size": 836,
+      "sha256": "8cd5dfa49483cadd072aaa947ce1e5801a5cc9d388676da96be8e8cd2ca34845",
+      "sourceName": "FUN_00da3488"
+    },
+    {
+      "address": "0xda37cc",
+      "symbol": "xm1_pipeline_sensor_build_configuration",
+      "size": 920,
+      "sha256": "84fb9d0be87cb202441bb9c8a65b98333f5143f4d04b747ccef22f20acef1a41",
+      "sourceName": "image_geometry_build_configuration"
+    },
+    {
+      "address": "0xda3b64",
+      "symbol": "xm1_pipeline_sensor_program_configuration",
+      "size": 1168,
+      "sha256": "b6f01c94e095192c3b342bdeae5c9f378f0a7cf1af5812b59ffbb237a54bc3ce",
+      "sourceName": "FUN_00da3b64"
+    },
+    {
+      "address": "0xda3ff4",
+      "symbol": "xm1_pipeline_sensor_strip_interrupt",
+      "size": 632,
+      "sha256": "d4d40770d9cbee224498ac72a8949aa7c8de0cddb752c07b367fe22e370776da",
+      "sourceName": "image_geometry_dispatch_completion"
+    },
+    {
+      "address": "0xda426c",
+      "symbol": "xm1_pipeline_sensor_configure_filters",
+      "size": 452,
+      "sha256": "c579928562ea5369840f472df633780f491f748783077e5f61a9cf9a1fec8fb0",
+      "sourceName": "image_geometry_configure_filter_controls"
+    },
+    {
+      "address": "0xda4430",
+      "symbol": "xm1_pipeline_sensor_configure_runtime_filters",
+      "size": 200,
+      "sha256": "9a567309368e7d7e169baae1a997e4565e706f7060e3bdadc56bf4819f1d7aba",
+      "sourceName": "image_geometry_apply_runtime_filters"
+    },
+    {
+      "address": "0xda44f8",
+      "symbol": "xm1_pipeline_sensor_configure_channels",
+      "size": 144,
+      "sha256": "206a7698b1fc09237be51fb6b675e0803039ba8e6cba1107ba3b189da0fd96a8",
+      "sourceName": "image_geometry_setup:geometry_configure_runtime_channels"
+    },
+    {
+      "address": "0xda4588",
+      "symbol": "xm1_pipeline_sensor_center_request",
+      "size": 292,
+      "sha256": "1745587a9c990138715471276731fa9a8dd4175da8a473c9b9c213638d59a8c6",
+      "sourceName": "FUN_00da4588"
+    },
+    {
+      "address": "0xda46ac",
+      "symbol": "xm1_pipeline_image_sensor_configure",
+      "size": 436,
+      "sha256": "5b9de9c2ecc5213e621b9b1d06065f60e441b7d77957013bb17d3fa7f23708af",
+      "sourceName": "FUN_00da46ac"
+    },
+    {
+      "address": "0xda493c",
+      "symbol": "xm1_pipeline_image_sensor_read_registers",
+      "size": 984,
+      "sha256": "74941312ea9863f271e2aa800737521f6a10620d1d19b2211b9abd7abb4edbf0",
+      "sourceName": "FUN_00da493c"
+    },
+    {
+      "address": "0xe558d8",
+      "symbol": "xm1_pipeline_sensor_copy_capture_settings",
+      "size": 64,
+      "sha256": "4f86fe5b212f1b34387468d4b0a0443e3bdb7a80ee316bff0b310e7ed657d4b6",
+      "sourceName": "FUN_00e558d8"
+    },
+    {
+      "address": "0xe55918",
+      "symbol": "xm1_pipeline_sensor_collect_settings",
+      "size": 1200,
+      "sha256": "234077af9f83b38f2b4014e9e1313bb7138c99729c200bc29247ffc95c0c79dd",
+      "sourceName": "FUN_00e55918"
+    },
+    {
+      "address": "0xe560cc",
+      "symbol": "xm1_pipeline_image_collect_processing_flags",
+      "size": 232,
+      "sha256": "19e745abb3041a5ae29a58959f9056a6ead5fdfb4d62fc8dd306fabe8c02d457",
+      "sourceName": "record_stage_collect_setting_flags"
+    },
+    {
+      "address": "0xe561b4",
+      "symbol": "xm1_pipeline_image_setup_processing",
+      "size": 488,
+      "sha256": "44e01637aaca92d4d8929d97a92cc493f0c1d8e865ece6c675ff2fca23c5cf92",
+      "sourceName": "FUN_00e561b4"
+    },
+    {
+      "address": "0xe5639c",
+      "symbol": "xm1_pipeline_image_saved_request_submit",
+      "size": 20,
+      "sha256": "5311b246b9b1d1a58982cadda0b670baa48ee6e9f93a3dcdb79cb9d062885bf8",
+      "sourceName": "record_stage_submit_saved_request"
+    },
+    {
+      "address": "0xe56990",
+      "symbol": "xm1_pipeline_sensor_filter_parameters",
+      "size": 800,
+      "sha256": "a562d328bb61af17063a507d00e6e79a6f0702a08edc20282ec070a736df8745",
+      "sourceName": "FUN_00e56990"
+    },
+    {
+      "address": "0xe56cb0",
+      "symbol": "xm1_pipeline_sensor_capture_gain",
+      "size": 248,
+      "sha256": "55f49898ea67b568cf7a957032a9ec1b93f1d975eb9a7529df03e17b7d109f12",
+      "sourceName": "FUN_00e56cb0"
+    },
+    {
+      "address": "0xe5725c",
+      "symbol": "xm1_pipeline_sensor_defect_rows",
+      "size": 928,
+      "sha256": "663a3c3bf34a18a40b1818043268bcc23086fc91196bafa7459e0608041b0c7b",
+      "sourceName": "FUN_00e5725c"
+    },
+    {
+      "address": "0xe575fc",
+      "symbol": "xm1_pipeline_sensor_profile_geometry",
+      "size": 348,
+      "sha256": "96a63e51be64bec6daa8f97893582d7a80df6a455168bf20e9c2e7a1719f3cdb",
+      "sourceName": "FUN_00e575fc"
+    },
+    {
+      "address": "0xe57758",
+      "symbol": "xm1_pipeline_image_prepare_processing",
+      "size": 856,
+      "sha256": "900bda2aae6c7a3e9a3e058e0ce48a36683cb0eda841e9a07e357dfa965dbd9f",
+      "sourceName": "FUN_00e57758"
+    },
+    {
+      "address": "0xef53d0",
+      "symbol": "xm1_pipeline_sensor_profile_feature",
+      "size": 40,
+      "sha256": "81ab9b9fe73c7a7e1b4d48c3b5c45c10d6f049d18fb81aff0b0fc2576c9d34dd",
+      "sourceName": "profile_get_feature"
+    },
+    {
+      "address": "0xef6964",
+      "symbol": "xm1_pipeline_sensor_profile_zero_first",
+      "size": 24,
+      "sha256": "aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543",
+      "sourceName": "profile_value_cell_zero1"
+    },
+    {
+      "address": "0xef697c",
+      "symbol": "xm1_pipeline_sensor_profile_zero_second",
+      "size": 24,
+      "sha256": "aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543",
+      "sourceName": "profile_value_cell_zero2"
+    }
+    ,{
+      "address": "0x737504",
+      "symbol": "xm1_pipeline_sensor_gain_adjustment",
+      "size": 188,
+      "sha256": "a059e186b50788e8b562c5d7cc1d4214587bb7f29cb3829a9581818ff548d86c",
+      "sourceName": "conversion_asymmetric_thirds"
+    },
+    {
+      "address": "0xe55e70",
+      "symbol": "xm1_pipeline_sensor_unused_operation",
+      "size": 24,
+      "sha256": "aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543",
+      "sourceName": "record_stage_unused_operation"
+    },
+    {
+      "address": "0xd61388",
+      "symbol": "xm1_pipeline_sensor_read_configuration_flag8",
+      "size": 60,
+      "sha256": "14e9ef680b3aa646746cbce5a932e809c01bc80ac9bb990c310aa967aac3b461",
+      "sourceName": "scan_read_configuration_flag8"
+    }
+  ],
+  "abi": {
+    "convention": "Original A32 C ABI, scalar transparent types occupy one 32-bit argument; declaration names identify semantic Rust implementations, not original-address forwarding.",
+    "prepareProcessing": "void(stage,request,source,features,operation,selection,int32 secondary,output,outputPointers,original)",
+    "setupProcessing": "void(stage,packet,saved,descriptor,operation,scale,option,firstFlags,thirdFlags,requestOption,output)",
+    "sensorLifecycle": [
+      "int32 initialize(mode)",
+      "int32 release(mode)",
+      "void start(mode)",
+      "int32 wait(mode)",
+      "void configure(request)",
+      "void read_registers(mode,output)"
+    ],
+    "registerPacking": "void pack(output,input); void apply(input,output); void commit(shadow); void capture(shadow)",
+    "registerTransfers": "void apply_or_capture(shadow,12-byte-transfer-descriptors,count)",
+    "copySelectedWords": "void copy(output,source,8-byte-offset-pairs,count), original73ed94",
+    "copyKeyBytes": "void copy(output,uint16-key-list,count), original73ec0c/73ec44",
+    "copyKeyHalves": "void copy(output,uint16-key-list,count), original73ec7c/73ecc8",
+    "acquireHardware": "uint32 acquire(uint32 flags)",
+    "releaseHardware": "void release(uint32 flags,uint32 users)",
+    "publishConfigurations": "void publish(flags,input,firstFilter,secondFilter,window,origin,region,coefficients,dimensions,control,primaryTable,secondaryTable,snapshot)",
+    "captureDescriptor": "void capture(context,uint32 sequence,uint32 settingsKind,expanded,descriptor)"
+  },
+  "rustModules": [
+    "sensor_requests",
+    "sensor_settings",
+    "sensor_descriptor",
+    "sensor_template",
+    "sensor_configuration",
+    "sensor_options",
+    "sensor_backend",
+    "sensor_geometry",
+    "sensor_filters",
+    "sensor_capture",
+    "sensor_registers",
+    "sensor_register_fields",
+    "sensor_snapshot_fields",
+    "sensor_publication"
+  ],
+  "assembly": "SensorRequests_stock.S retains fixed genuine MMIO leaves and implements the original partially-defined primary-table gate word. No application address dispatcher.",
+  "registerTransferTables": [
+    {
+      "bank": "dimensions",
+      "address": "0x820f98",
+      "entries": 22,
+      "sha256": "7ac8497cfdf404d8ce137b616ee5b4436cd077ded9c3927e3372d72b643d03fd",
+      "triples": [
+        [
+          4294199040,
+          0,
+          1
+        ],
+        [
+          4294199044,
+          4,
+          1
+        ],
+        [
+          4294199048,
+          8,
+          1
+        ],
+        [
+          4294199052,
+          12,
+          1
+        ],
+        [
+          4294199056,
+          16,
+          1
+        ],
+        [
+          4294199060,
+          20,
+          1
+        ],
+        [
+          4294199064,
+          24,
+          1
+        ],
+        [
+          4294199068,
+          28,
+          1
+        ],
+        [
+          4294199072,
+          32,
+          1
+        ],
+        [
+          4294199076,
+          36,
+          1
+        ],
+        [
+          4294199080,
+          40,
+          1
+        ],
+        [
+          4294199084,
+          44,
+          1
+        ],
+        [
+          4294199088,
+          48,
+          1
+        ],
+        [
+          4294199092,
+          52,
+          1
+        ],
+        [
+          4294199096,
+          56,
+          1
+        ],
+        [
+          4294199100,
+          60,
+          1
+        ],
+        [
+          4294199104,
+          64,
+          1
+        ],
+        [
+          4294199108,
+          68,
+          1
+        ],
+        [
+          4294199112,
+          72,
+          1
+        ],
+        [
+          4294199116,
+          76,
+          1
+        ],
+        [
+          4294199120,
+          80,
+          1
+        ],
+        [
+          4294199124,
+          84,
+          1
+        ]
+      ]
+    },
+    {
+      "bank": "window",
+      "address": "0x8210ac",
+      "entries": 6,
+      "sha256": "1bb5c743982d8269cbb7576609f95717def2000f11651c4de85228da7dbd330c",
+      "triples": [
+        [
+          4294184960,
+          0,
+          1
+        ],
+        [
+          4294184964,
+          4,
+          1
+        ],
+        [
+          4294184968,
+          8,
+          1
+        ],
+        [
+          4294184972,
+          12,
+          14
+        ],
+        [
+          4294185028,
+          68,
+          14
+        ],
+        [
+          4294185084,
+          124,
+          1
+        ]
+      ]
+    },
+    {
+      "bank": "region",
+      "address": "0x8210f4",
+      "entries": 31,
+      "sha256": "6e079144ee2c442c75f4938b0d3340f87eacca7a59eb6d2a91c114eb9fd836d3",
+      "triples": [
+        [
+          4294198528,
+          0,
+          1
+        ],
+        [
+          4294198532,
+          4,
+          1
+        ],
+        [
+          4294198536,
+          8,
+          1
+        ],
+        [
+          4294198540,
+          12,
+          1
+        ],
+        [
+          4294198544,
+          16,
+          1
+        ],
+        [
+          4294198548,
+          20,
+          1
+        ],
+        [
+          4294198552,
+          24,
+          1
+        ],
+        [
+          4294198556,
+          28,
+          1
+        ],
+        [
+          4294198560,
+          32,
+          1
+        ],
+        [
+          4294198564,
+          36,
+          1
+        ],
+        [
+          4294198568,
+          40,
+          1
+        ],
+        [
+          4294198572,
+          44,
+          1
+        ],
+        [
+          4294198576,
+          48,
+          1
+        ],
+        [
+          4294198580,
+          52,
+          1
+        ],
+        [
+          4294198584,
+          56,
+          1
+        ],
+        [
+          4294198588,
+          60,
+          1
+        ],
+        [
+          4294198592,
+          64,
+          1
+        ],
+        [
+          4294198596,
+          68,
+          1
+        ],
+        [
+          4294198600,
+          72,
+          1
+        ],
+        [
+          4294198604,
+          76,
+          1
+        ],
+        [
+          4294198608,
+          80,
+          1
+        ],
+        [
+          4294198612,
+          84,
+          1
+        ],
+        [
+          4294198616,
+          88,
+          1
+        ],
+        [
+          4294198620,
+          92,
+          1
+        ],
+        [
+          4294198624,
+          96,
+          1
+        ],
+        [
+          4294198628,
+          100,
+          1
+        ],
+        [
+          4294198632,
+          104,
+          1
+        ],
+        [
+          4294198636,
+          108,
+          1
+        ],
+        [
+          4294198640,
+          112,
+          1
+        ],
+        [
+          4294198644,
+          116,
+          1
+        ],
+        [
+          4294198648,
+          120,
+          1
+        ]
+      ]
+    },
+    {
+      "bank": "coefficients",
+      "address": "0x821268",
+      "entries": 11,
+      "sha256": "589b9fcabc783c5e01615108c03f897245651b1adbbacfd92c0a7d85adb7e53b",
+      "triples": [
+        [
+          4294198784,
+          0,
+          1
+        ],
+        [
+          4294198788,
+          4,
+          1
+        ],
+        [
+          4294198792,
+          8,
+          1
+        ],
+        [
+          4294198796,
+          12,
+          1
+        ],
+        [
+          4294198800,
+          16,
+          1
+        ],
+        [
+          4294198804,
+          20,
+          1
+        ],
+        [
+          4294198808,
+          24,
+          1
+        ],
+        [
+          4294198812,
+          28,
+          1
+        ],
+        [
+          4294198816,
+          32,
+          1
+        ],
+        [
+          4294198820,
+          36,
+          1
+        ],
+        [
+          4294198824,
+          40,
+          1
+        ]
+      ]
+    },
+    {
+      "bank": "snapshot",
+      "address": "0x8212ec",
+      "entries": 56,
+      "sha256": "22bf4f967f7dfdbff1f0f7effa51efb6c39dbc0d3fd6ce14c50a004cc0d09be4",
+      "triples": [
+        [
+          4294021120,
+          0,
+          1
+        ],
+        [
+          4294021124,
+          4,
+          1
+        ],
+        [
+          4294021128,
+          8,
+          1
+        ],
+        [
+          4294021376,
+          12,
+          1
+        ],
+        [
+          4294021380,
+          16,
+          1
+        ],
+        [
+          4294021384,
+          20,
+          1
+        ],
+        [
+          4294021388,
+          24,
+          1
+        ],
+        [
+          4294021392,
+          28,
+          1
+        ],
+        [
+          4294021396,
+          32,
+          1
+        ],
+        [
+          4294021400,
+          36,
+          1
+        ],
+        [
+          4294021404,
+          40,
+          4
+        ],
+        [
+          4294021420,
+          56,
+          1
+        ],
+        [
+          4294021632,
+          60,
+          1
+        ],
+        [
+          4294021636,
+          64,
+          1
+        ],
+        [
+          4294021640,
+          68,
+          1
+        ],
+        [
+          4294021644,
+          72,
+          1
+        ],
+        [
+          4294021648,
+          76,
+          1
+        ],
+        [
+          4294021888,
+          80,
+          1
+        ],
+        [
+          4294021892,
+          84,
+          11
+        ],
+        [
+          4294022144,
+          128,
+          1
+        ],
+        [
+          4294022148,
+          132,
+          1
+        ],
+        [
+          4294022152,
+          136,
+          1
+        ],
+        [
+          4294022156,
+          140,
+          1
+        ],
+        [
+          4294022160,
+          144,
+          1
+        ],
+        [
+          4294022164,
+          148,
+          1
+        ],
+        [
+          4294022400,
+          152,
+          1
+        ],
+        [
+          4294022404,
+          156,
+          1
+        ],
+        [
+          4294022408,
+          160,
+          15
+        ],
+        [
+          4294022656,
+          220,
+          1
+        ],
+        [
+          4294022660,
+          224,
+          1
+        ],
+        [
+          4294022664,
+          228,
+          1
+        ],
+        [
+          4294022668,
+          232,
+          1
+        ],
+        [
+          4294022672,
+          236,
+          5
+        ],
+        [
+          4294022692,
+          256,
+          1
+        ],
+        [
+          4294022696,
+          260,
+          1
+        ],
+        [
+          4294022700,
+          264,
+          1
+        ],
+        [
+          4294022704,
+          268,
+          1
+        ],
+        [
+          4294022708,
+          272,
+          1
+        ],
+        [
+          4294022712,
+          276,
+          1
+        ],
+        [
+          4294022716,
+          280,
+          1
+        ],
+        [
+          4294022720,
+          284,
+          1
+        ],
+        [
+          4294022724,
+          288,
+          5
+        ],
+        [
+          4294022912,
+          308,
+          1
+        ],
+        [
+          4294023168,
+          312,
+          6
+        ],
+        [
+          4294023192,
+          336,
+          1
+        ],
+        [
+          4294023196,
+          340,
+          1
+        ],
+        [
+          4294023200,
+          344,
+          1
+        ],
+        [
+          4294023204,
+          348,
+          1
+        ],
+        [
+          4294023208,
+          352,
+          1
+        ],
+        [
+          4294023212,
+          356,
+          1
+        ],
+        [
+          4294023216,
+          360,
+          1
+        ],
+        [
+          4294023220,
+          364,
+          1
+        ],
+        [
+          4294023224,
+          368,
+          1
+        ],
+        [
+          4294023424,
+          372,
+          1
+        ],
+        [
+          4294023428,
+          376,
+          1
+        ],
+        [
+          4294023432,
+          380,
+          1
+        ]
+      ]
+    },
+    {
+      "bank": "first_filter",
+      "address": "0x82182c",
+      "entries": 13,
+      "sha256": "9ebe0cb559da4e30bf55c95967d45369515979d57da51b2068a042a2a7db1432",
+      "triples": [
+        [
+          4294197760,
+          0,
+          1
+        ],
+        [
+          4294197764,
+          4,
+          1
+        ],
+        [
+          4294197768,
+          8,
+          1
+        ],
+        [
+          4294197772,
+          12,
+          2
+        ],
+        [
+          4294197780,
+          20,
+          7
+        ],
+        [
+          4294198016,
+          60,
+          1
+        ],
+        [
+          4294198020,
+          64,
+          6
+        ],
+        [
+          4294198044,
+          88,
+          1
+        ],
+        [
+          4294198048,
+          92,
+          1
+        ],
+        [
+          4294198052,
+          96,
+          14
+        ],
+        [
+          4294198108,
+          152,
+          1
+        ],
+        [
+          4294198112,
+          156,
+          14
+        ],
+        [
+          4294198168,
+          212,
+          14
+        ]
+      ]
+    },
+    {
+      "bank": "second_filter",
+      "address": "0x8218c8",
+      "entries": 3,
+      "sha256": "e3ef26fc7324f717f7378d6b647044d8e4e156bca89d8126802b35bec877bd61",
+      "triples": [
+        [
+          4294197808,
+          48,
+          1
+        ],
+        [
+          4294197812,
+          52,
+          1
+        ],
+        [
+          4294197816,
+          56,
+          1
+        ]
+      ]
+    },
+    {
+      "bank": "control",
+      "address": "0x8218ec",
+      "entries": 6,
+      "sha256": "ab36dec973815d1ae4781de9fcb094c6f34bc75270b14b372383b5b11f60fccd",
+      "triples": [
+        [
+          4294197504,
+          0,
+          1
+        ],
+        [
+          4294197508,
+          4,
+          1
+        ],
+        [
+          4294197512,
+          8,
+          11
+        ],
+        [
+          4294197556,
+          52,
+          1
+        ],
+        [
+          4294197560,
+          56,
+          1
+        ],
+        [
+          4294197564,
+          60,
+          14
+        ]
+      ]
+    },
+    {
+      "bank": "input",
+      "address": "0x821934",
+      "entries": 12,
+      "sha256": "87804199ca0e4f760dd34767c14e5830557adf8fe52d5fcafa0cceee3fef20fb",
+      "triples": [
+        [
+          4294197248,
+          0,
+          1
+        ],
+        [
+          4294197252,
+          4,
+          1
+        ],
+        [
+          4294197256,
+          8,
+          1
+        ],
+        [
+          4294197260,
+          12,
+          1
+        ],
+        [
+          4294197264,
+          16,
+          1
+        ],
+        [
+          4294197268,
+          20,
+          1
+        ],
+        [
+          4294197272,
+          24,
+          1
+        ],
+        [
+          4294197276,
+          28,
+          1
+        ],
+        [
+          4294197280,
+          32,
+          1
+        ],
+        [
+          4294197284,
+          36,
+          1
+        ],
+        [
+          4294197288,
+          40,
+          1
+        ],
+        [
+          4294197292,
+          44,
+          1
+        ]
+      ]
+    },
+    {
+      "bank": "origin",
+      "address": "0x8219c4",
+      "entries": 6,
+      "sha256": "f85f3bdba65f5c47a674ef50f4fb4e7816995b707a12929db45e2859c86052bc",
+      "triples": [
+        [
+          4294198828,
+          0,
+          1
+        ],
+        [
+          4294198832,
+          4,
+          1
+        ],
+        [
+          4294198836,
+          8,
+          1
+        ],
+        [
+          4294198840,
+          12,
+          1
+        ],
+        [
+          4294198844,
+          16,
+          1
+        ],
+        [
+          4294198848,
+          20,
+          1
+        ]
+      ]
+    },
+    {
+      "bank": "primary_control",
+      "address": "0x821a0c",
+      "entries": 1,
+      "sha256": "d2ab6f70e223a8bdfc280c1c37aa6dde15fd56eef1b18b808f5e747457bf145a",
+      "triples": [
+        [
+          4294199296,
+          0,
+          1
+        ]
+      ]
+    },
+    {
+      "bank": "primary_table",
+      "address": "0x821a18",
+      "entries": 28,
+      "sha256": "c6bf413dc3cfd2091ef188b2d7f5f8c318b4082f3d53050b3cd8337d2b1cf42b",
+      "triples": [
+        [
+          4294199300,
+          4,
+          1
+        ],
+        [
+          4294199304,
+          8,
+          1
+        ],
+        [
+          4294199308,
+          12,
+          1
+        ],
+        [
+          4294199312,
+          16,
+          1
+        ],
+        [
+          4294199316,
+          20,
+          1
+        ],
+        [
+          4294199320,
+          24,
+          1
+        ],
+        [
+          4294199324,
+          28,
+          1
+        ],
+        [
+          4294200320,
+          32,
+          41
+        ],
+        [
+          4294200576,
+          196,
+          41
+        ],
+        [
+          4294200832,
+          360,
+          41
+        ],
+        [
+          4294201088,
+          524,
+          41
+        ],
+        [
+          4294201344,
+          688,
+          41
+        ],
+        [
+          4294201600,
+          852,
+          41
+        ],
+        [
+          4294201856,
+          1016,
+          41
+        ],
+        [
+          4294202112,
+          1180,
+          41
+        ],
+        [
+          4294202368,
+          1344,
+          41
+        ],
+        [
+          4294202624,
+          1508,
+          41
+        ],
+        [
+          4294202880,
+          1672,
+          41
+        ],
+        [
+          4294203136,
+          1836,
+          41
+        ],
+        [
+          4294203392,
+          2000,
+          41
+        ],
+        [
+          4294203648,
+          2164,
+          41
+        ],
+        [
+          4294203904,
+          2328,
+          41
+        ],
+        [
+          4294204160,
+          2492,
+          41
+        ],
+        [
+          4294204416,
+          2656,
+          41
+        ],
+        [
+          4294204672,
+          2820,
+          41
+        ],
+        [
+          4294204928,
+          2984,
+          41
+        ],
+        [
+          4294205184,
+          3148,
+          41
+        ],
+        [
+          4294199296,
+          0,
+          1
+        ]
+      ]
+    },
+    {
+      "bank": "secondary_table",
+      "address": "0x821b68",
+      "entries": 5,
+      "sha256": "52f9d3510568d86caeaee2dcac46a835de03aec3ca1d5592c86549e37de6f596",
+      "triples": [
+        [
+          4294198272,
+          0,
+          1
+        ],
+        [
+          4294198276,
+          4,
+          1
+        ],
+        [
+          4294198280,
+          8,
+          1
+        ],
+        [
+          4294198284,
+          12,
+          1
+        ],
+        [
+          4294198288,
+          16,
+          1
+        ]
+      ]
+    }
+  ],
+  "peerOwnership": {
+    "PipelineOutputTriplets": [
+      "d5da2c submit_descriptor",
+      "d622c0 reset expansion",
+      "d5d294 descriptor expansion and recursive coefficients/settings projections",
+      "69fcfc canonical calibration bank",
+      "d6266c feature predicate"
+    ],
+    "PipelinePreparation": [
+      "e563e0/e565dc geometry selectors and daa540 calibration implementation"
+    ],
+    "PipelineImageOperations": [
+      "d78a10 small-kind translation"
+    ],
+    "PipelineImageGeometry": [
+      "e56da8 geometry levels",
+      "e55e88 geometry delta and packed12 writer"
+    ],
+    "PipelineImageReferences": [
+      "coefficient arithmetic and source table laws"
+    ],
+    "PipelineBuffers": [
+      "69f8fc/69feb0/69fec8 configuration byte/half",
+      "7235d8/7236b0 critical sections"
+    ],
+    "PipelineImagePlanes": [
+      "reserved wait/signal"
+    ],
+    "WarpEngine": [
+      "shared clock/IRQ acquisition and release"
+    ],
+    "PipelineDebugStorage": [
+      "task/message transport"
+    ]
+  },
+  "models": {
+    "SensorSettingsScenarios": "Independent sparse packet, descriptor and template expectations; source image5 input.",
+    "SensorRegistersScenarios": "Independent packed field schemas, signed saturation, swapped primary curve preparation and ordered scatter/gather; image5 input is unused.",
+    "SensorRequestsScenarios": "Request flags, gain ordering, alignment preservation, output selection and IRQ register laws; image5 input is unused.",
+    "noiseTableLaw": "Full image4<>image5 bundle. OrdinarySettings operation14/format2; delegates CPU expansion to independent OutputExpansionScenarios. Returns full580-byte descriptor,4704-byte record and normalized cache/scratch effects.",
+    "noiseTableLawFromMemory": "Additional entry-memory patches can warm cache or supply unrelated configuration inputs. Fixed OrdinarySettings and named template inputs remain unchanged. Explicit4MiB configuration and328-byte cache fixtures; no missing-RAM zero fallback."
+  },
+  "consumerLawGaps": [
+    {
+      "source": "e58cb8/e58e10 -> e57758",
+      "fact": "Constructors clear32 request bytes, leaving word6 zero. e57758 unconditionally reads word6+4. Source-root qualification needs proven address4 contents. Valid direct-helper fixtures supply a non-null auxiliary pointer and are not constructor-root evidence."
+    },
+    {
+      "source": "e57758 -> da426c -> 722054",
+      "fact": "Output pointer5 is zero; da426c unconditionally copies0xc68 bytes from request+d8 and0x5424 bytes from request+dc. Low-memory provenance is required. Owned code preserves actual copies without null guards or zero-fill."
+    },
+    {
+      "source": "6983f8",
+      "fact": "Only bit0 of the primary-table gate stack word is defined before the whole word is written tofff44800. Owned assembly preserves indeterminate other bits. A full-word equality assertion needs a defined-stack premise or reserved-bit consumer law."
+    },
+    {
+      "source": "ISP register/device boundary",
+      "fact": "MMIO requests and packed register effects do not establish the ISP pixel transformation or asynchronous acknowledgement law."
+    }
+  ],
+  "unreachableOrNonreturning": [
+    {
+      "source": "da31b0",
+      "fact": "Divisors below16 do not overwrite the supplied output. A remaining zero output loops atda3208; nonzero prior output returns unchanged."
+    },
+    {
+      "source": "da25f4",
+      "fact": "Stop clears MMIO request bits and polls for device acknowledgement. RAM-only final state cannot replace the acknowledgement protocol."
+    }
+    ,{
+      "source": "e56cb0 -> ef4ec4",
+      "fact": "e56cb0 calls ef4ec4 only with nonnegative gain adjustments. Its ef4d6c negative-adjustment branch is unreachable from this root. The reachable integer percentage projection is inlined into capture_gain.",
+      "originalSize": 260,
+      "originalSha256": "9e13c57350440149bc14e816d38a65dbe438709960786029d905dbe80c7b5edc"
+    }
+  ],
+  "verification": "Original image SHA256 and all192 exported original extents matched the pinned index. No builds, tests, formatters, linters or native executions were run. Parent owns final admissions and integration qualification."
+}

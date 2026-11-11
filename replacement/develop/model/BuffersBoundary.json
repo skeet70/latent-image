@@ -1,0 +1,253 @@
+{
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image5Sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+  "portableConfiguration": {
+    "module": "replacement/develop/src/calibration_core/configuration.rs",
+    "types": ["CfgKey(u32)", "ConfigAddress(u32)", "ConfigurationRegion<'data>", "Configuration<'data>", "ConfigurationError"],
+    "construction": "ConfigurationRegion::new(base, borrowed_bytes) authenticates the supplied slice's 32-bit address extent. Configuration::new(region, blob) requires a mapped starting byte.",
+    "scalarMethods": ["read_byte(CfgKey)->Result<u8>", "read_half(CfgKey)->Result<u16>", "read_signed_byte(CfgKey)->Result<i8>", "read_signed_half(CfgKey)->Result<i16>"],
+    "resources": "region()/blob_address(); pointer(CfgKey) returns a checked wrapping blob-relative address, not a fetched pointer value. Region scalar reads decode supplied byte, LE halfword and LE word resources; read_bytes returns a borrowed subslice.",
+    "bounds": "Address addition wraps at32 bits before resource membership is checked. Missing bytes and overflowing supplied extents return typed errors. No desired-value callbacks, copied configuration snapshots or zero-value fallback.",
+    "physicalBoundary": "buffers::configuration_view reads global0096ca50 and constructs a crate-private ARM-only bounded raw backing. Reads are volatile; no immutable physical slice is fabricated. Physical getters require live configuration allocation bytes. The halfword ABI reloads the global through each original byte getter.",
+    "rawPhysicalLoads": "Region read_half/read_word issue a single ARM LDRH/LDR after bounds checking. Configuration::read_half preserves the separate byte-getter law. Original mapped74690c loads one signed halfword at746938, confirmed id4.dis305480-305493.",
+    "physicalAllocation": {"initialBase": "0x41acd800", "bytes": 4325376, "hexBytes": "0x420000", "evidence": "id4.dis133974-134087:69f144 clears4325376 bytes;69f204 sets0096ca50 to41acd800 and clears the same extent."},
+    "scalarEvidence": "id4.dis134468-134476 and134839-134848: direct base-plus-key byte read, followed by ordered low/high byte calls without remapping.",
+    "borrowedSlices": "Physical RAM views reject read_bytes with PhysicalBorrowUnavailable; physical asset consumers use checked scalar reads.",
+    "physicalFailure": "The legacy scalar ABI cannot represent ConfigurationError. Invalid bounded physical access halts without returning a scalar; valid initialized-allocation inputs retain the original results.",
+    "hostTests": "Five source tests cover supplied scalar bits, signed interpretation, wrapping keys, strict missing-byte errors,32-bit extent overflow and borrowed subview bounds. Not executed by this owner.",
+    "qualification": "Source handoff only. Shared target wiring and joint Calibration/Vendor consumer proof remain integration-owned."
+  },
+  "routes": [
+    {
+      "address": "0x00e9267c",
+      "symbol": "xm1_develop_expand_planes",
+      "abi": "void(context,planes,source,auxiliary,u8 count,u32 parity)"
+    },
+    {
+      "address": "0x00e927dc",
+      "symbol": "xm1_develop_split_planes",
+      "abi": "void(context,planes,source,auxiliary,u8 count)"
+    },
+    {
+      "address": "0x00e924f4",
+      "symbol": "xm1_develop_fill_border",
+      "abi": "u32(context,plane,u32 lookup,u32 selector,u32 mode)"
+    },
+    {
+      "address": "0x00e92b28",
+      "symbol": "xm1_develop_buffer_policy_disabled",
+      "abi": "u32()"
+    },
+    {
+      "address": "0x00e92b40",
+      "symbol": "xm1_develop_output_matches",
+      "abi": "u32(context,plane,u32 output,u32 mode)"
+    },
+    {
+      "address": "0x00e92c48",
+      "symbol": "xm1_develop_conversion_required",
+      "abi": "u32(context,plane,u32 mode)"
+    },
+    {
+      "address": "0x00e92d68",
+      "symbol": "xm1_develop_open_object",
+      "abi": "u32(context,u32 group,u32 kind,u32 argument)"
+    },
+    {
+      "address": "0x00e93570",
+      "symbol": "xm1_develop_remap_object",
+      "abi": "u32(context,u32 object)"
+    },
+    {
+      "address": "0x00e91a48",
+      "symbol": "xm1_develop_descriptor_list",
+      "abi": "u32(context,plane,u32* enlarged)"
+    },
+    {
+      "address": "0x00e8f4a4",
+      "symbol": "xm1_develop_geometry",
+      "abi": "void(source,plane,u32* borders,u32 profile,u32 aspect,u32 capture,u32 mode,u32 anchor)"
+    },
+    {
+      "address": "0x00e90148",
+      "symbol": "xm1_develop_dimensions",
+      "abi": "void(u32 profile,u32 aspect,u32 mode,u32* width,u32* height)"
+    },
+    {
+      "address": "0x00e91df4",
+      "symbol": "xm1_develop_rotate_copy",
+      "abi": "void(u32 frame,source,target)"
+    },
+    {
+      "address": "0x00eb03d0",
+      "symbol": "xm1_develop_orientation",
+      "abi": "u32(u32 selection,u32 orientation)"
+    },
+    {
+      "address": "0x00e90014",
+      "symbol": "xm1_develop_fill_border_regions",
+      "abi": "u32(u32 task,u32 restore,plane,unused,u32* amounts)"
+    },
+    {
+      "address": "0x00734540",
+      "symbol": "xm1_develop_lookup_width",
+      "abi": "u32(u32 profile,u32 aspect)"
+    },
+    {
+      "address": "0x0073469c",
+      "symbol": "xm1_develop_lookup_height",
+      "abi": "u32(u32 profile,u32 aspect)"
+    },
+    {
+      "address": "0x00734394",
+      "symbol": "xm1_develop_fit_aspect",
+      "abi": "void(u32 width,u32 height,u32 aspect,Crop*)"
+    },
+    {
+      "address": "0x00734484",
+      "symbol": "xm1_develop_fit_ratio",
+      "abi": "void(u32 width,u32 height,u32 ratio_width,u32 ratio_height,Crop*)"
+    },
+    {
+      "address": "0x00e91894",
+      "symbol": "xm1_develop_operation_memory_size",
+      "abi": "u32(context,u32 group,u32 kind)"
+    }
+    ,
+    {
+      "address": "0x00e92dd4",
+      "symbol": "xm1_develop_close_object",
+      "abi": "u32(context,u32 group,u32 kind)"
+    },
+    {
+      "address": "0x0069f8fc",
+      "symbol": "xm1_buffers_configuration_byte",
+      "abi": "u32(u32 key)"
+    }
+    ,
+    {"address":"0x0069fec8","symbol":"xm1_buffers_configuration_half","abi":"u16(u32 key)"},
+    {"address":"0x007235d8","symbol":"xm1_develop_enter_critical","abi":"u32()"},
+    {"address":"0x007236b0","symbol":"xm1_develop_leave_critical","abi":"void(u32 token)"},
+    {"address":"0x00e44d6c","symbol":"xm1_develop_object_group","abi":"u32(u32 group)"},
+    {"address":"0x00e44e58","symbol":"xm1_develop_canonical_object_group","abi":"u32(u32 group)"},
+    {"address":"0x00e44b14","symbol":"xm1_develop_find_object_entry_index","abi":"i32(u32 objects,u32 group,u32 kind)"},
+    {"address":"0x00e44bcc","symbol":"xm1_develop_store_object","abi":"void(u32 objects,u32 group,u32 kind,Plane*)"},
+    {"address":"0x00e44dbc","symbol":"xm1_develop_object_entry","abi":"u32(u32 objects,u32 group,u32 kind)"},
+    {"address":"0x00e45bac","symbol":"xm1_develop_object_registry_lookup","abi":"void(i32 owner,u32 group,u32 kind,i32 slot,ObjectRecord*)"},
+    {"address":"0x00e45ccc","symbol":"xm1_develop_object_registry_insert","abi":"void(ObjectRecord*)"},
+    {"address":"0x00e45d78","symbol":"xm1_develop_object_registry_remove","abi":"void(ObjectRecord*)"},
+    {"address":"0x00e46d40","symbol":"xm1_develop_object_open","abi":"u32(u32 objects,u32 group,u32 kind,u32 argument,u32 size)"},
+    {"address":"0x00e46374","symbol":"xm1_develop_object_close","abi":"u32(u32 objects,u32 group,u32 kind,u32 size)"},
+    {"address":"0x00eb0498","symbol":"xm1_develop_report_error","abi":"void(u32 file,u32 line,u32 reason,u32 detail)"},
+    {"address":"0x00e456cc","symbol":"xm1_develop_trace_object_text","abi":"void(u32 group,i32 slot,u32 action)"},
+    {"address":"0x00e457c0","symbol":"xm1_develop_trace_object_event","abi":"void(u32 group,i32 slot,u32 action)"},
+    {"address":"0x00e4586c","symbol":"xm1_develop_trace_object_action","abi":"void(u32 group,i32 slot,u32 action)"}
+  ],
+  "qualification": "Source-only handoff. No builds, native execution or tests run. Parent owns integration and qualification.",
+  "layouts": {
+    "Plane": ["u32 format", "u32 address", "u32 length", "u32 stride", "u32 line_size", "u32 lines", "u32 flags"],
+    "PlaneSize": 28,
+    "Crop": ["u32 width", "u32 height", "u32 top", "u32 bottom", "u32 left", "u32 right"],
+    "CropSize": 24,
+    "ObjectRecord": ["i16 owner","u16 owner_reserved","u32 group","u32 kind","i16 slot","u16 slot_reserved","Plane plane"],
+    "ObjectRecordSize": 44,
+    "registrySmall": {"address":"0x0154a9bc","capacity":20},
+    "registryLarge": {"address":"0x0154ad2c","capacity":128}
+  },
+  "sourceEvidence": {
+    "tu_00e92488": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e92488.c:55-239,339-461,702-750",
+    "tu_00e8f620": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e8f620.c:434-552,1517-1623,1661-1721",
+    "geometry": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e8e3b0.c:650-716",
+    "orientation": "decomp/firmwares/xm1-150/app/imaging/pipeline/processing_dimension_profiles.c:31-57",
+    "fits": "decomp/firmwares/xm1-150/app/settings/conversion_geometry_helpers.c:165-250",
+    "lookup": "decomp/firmwares/xm1-150/app/settings/conversion_value_lookup.c:5-33",
+    "configuration": "decomp/firmwares/xm1-150/app/settings/configuration_byte_access.c:4-7",
+    "cacheWrapper": "decomp/firmwares/xm1-150/app/capture/record/tu_00eaa494.c:3681-3685",
+    "cacheEndpoint": "decomp/firmwares/xm1-150/kernel0/src/cpu/cache_maintenance.c:69-72",
+    "registry": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e44ec0.c (FUN_00e45bac, FUN_00e45ccc, FUN_00e45d78, FUN_00e46374, FUN_00e46d40)",
+    "objectEntry": "decomp/firmwares/xm1-150/app/capture/reccont/reccont_object_lists.c:128-136",
+    "store": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e4361c.c:678-718",
+    "diagnostic": "decomp/firmwares/xm1-150/app/imaging/pipeline/processing_error_reports.c:24-48",
+    "diagnosticPrimitives": ["decomp/firmwares/xm1-150/app/runtime/string_copy_n.c:2-30","decomp/firmwares/xm1-150/app/runtime/format_unsigned_decimal.c:4-40"],
+    "critical": "decomp/firmwares/xm1-150/app/platform/osal/dispatch_critical_sections.c:5-46",
+    "additionalA32": ["private-data/analysis/x-m1-1.50/lz/id5.dis:606602-606707,606752-606795,607352-607471,607664-607875,608162-608193,608789-608908,712879-712934","private-data/analysis/x-m1-1.50/lz/id4.dis:267772-267805"],
+    "nonmatchingA32": "private-data/analysis/x-m1-1.50/lz/id5.dis:679426-679520,680158-680234,681726-681780,681835-682028,682070-682154,682518-682782,682921-683108,683573-683633"
+  },
+  "extentEvidence": [
+    ["0x00e924f4",392,"7e78a1b33f48ebb2fec7d600b78b78014b6c51dcd771ed7721a2f1bd1ab45261"],
+    ["0x00e9267c",352,"338de9c8accf099ba26dc5d61eeeeaadac764a61123fd5c4feff89c23613f226"],
+    ["0x00e927dc",316,"cc0e1b3113bc8daad0feffd6c578a6b9e8b13c7346bfa60ebd1142f7f233a7b4"],
+    ["0x00e92b28",24,"aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543"],
+    ["0x00e92b40",264,"ae71f116786ab7b2bb61813baaa5e39b34145f2c56325c9cab44d0706eaf1ff9"],
+    ["0x00e92c48",200,"b343499e4571a6939085ff9406dc846a82f7f3240f788956b127489ad3057c9c"],
+    ["0x00e92d68",108,"89b76888bec41b4d79be08cf20b737df03c9e417487c121fc38868e2a71489b5"],
+    ["0x00e92dd4",92,"856a69894106a7431b674329b71c400a286631de18826e19dbca376b9b85d1d8"],
+    ["0x00e93570",244,"b332104f48d9573953ebc729c81723a3853217144653c6bba6f39b99c5996da9"],
+    ["0x00e91a48",776,"af71469983e50b2c687b687264f829fc37617b70e0637a7bf7ad99a782bb4857"],
+    ["0x00e8f4a4",380,"0b16d794eff91d5f00d36ed6845e05f3eb706d58bffb6786576d24d9aafa8b78"],
+    ["0x00e90148",432,"42b260a637195c0120cafac135b8170fc8aa2bd7d0dee1a272418cba7b7dfa8c"],
+    ["0x00e91df4",340,"e2bdb68de2de17d554c2737865b4f21e324dd0b238eb7f29296d702d9c8d9e22"],
+    ["0x00eb03d0",200,"cc8e23ef02de532ec1a0d5494cf0ecd3d5c61d22785020c043a670a7c18c5a6b"],
+    ["0x00e90014",308,"79ea83103394500264ae8d92b9df18f98ba500bce119fc5ebc52759767891245"],
+    ["0x00e91894",220,"4ad544d16bb755ee54f37a0ca6481d06e7b15cc609fc1a0c6734359ff051cf03"],
+    ["0x00734394",240,"24450928dd459f87583ce35575acd5a720d13828627acb4fa95e06bd43b25184"],
+    ["0x00734484",188,"d8e213d7e811cd9f776fd5e20ece4fad0e6d8b84f738f3e64e114a55e1989938"],
+    ["0x00734540",72,"db6370e25c5bbc3685e6d22839ca61f90dc4e87ab1e1d951c016578d259d6a24"],
+    ["0x0073469c",72,"d62c8d1596ae7b3b5b0fc6aa69f7ddec45e15a7e8f414ae0ea947634c5974a80"],
+    ["0x0069f8fc",36,"0491e27ccb707594c468745512f2212604611381f49a88242f83241025c74966"],
+    ["0x00042634",8,"8f0bd666ba3b42297514abf9c761bdce6b47235c638984ccaafe3e904027fe49"]
+    ,
+    ["0x00e44b14",184,"41c80e6cdbb5f9bd00e05c3a2d70b524a79b09963d5a1e4ae8465027c9424d7b"],
+    ["0x00e44bcc",240,"b10f34fefe2518bf929578e497a5d5beaa87e66b4ef2858df4b10d330e517b2f"],
+    ["0x00e44dbc",96,"68000558bd7666dc4523f0ba41b5f639555b4cacb00786e84731c2b67edd174e"],
+    ["0x00e44d6c",80,"c08fc1656cddadd6452734686799ec18fffddd84ff78db41266a790597fe628b"],
+    ["0x00e44e58",64,"73f7b5fe83db7b0d7e301d166a566c56fbe95ef4cd417cff28966566f759f61f"],
+    ["0x00e45bac",288,"924a51b9f16385d2de1bfbeda049a183079a21dca183bc686f6b80759f3f98b1"],
+    ["0x00e45ccc",172,"194d862271558f4eac6b81eb2ab400e52cceb707c283e9a61a1c002fa39e121d"],
+    ["0x00e45d78",388,"7593a336afbca6867340bbe85acbacd1a8084b4a61e6fb5412c53d7e293d76cd"],
+    ["0x00e46d40",480,"ea1d0c4b6456964995fae0d23e06897c345b091685631af59deaf16ee850656f"],
+    ["0x00e46374",128,"54eec7831fcbeedf4030c14e0fd815e15c8dbeb2084aaffb6086c6735dace4bd"],
+    ["0x00eb0498",224,"2df14dd6dc45acf0fe8e7787b63dc3bf9672ca3d1d2c988afb0113b125e132a3"],
+    ["0x007235d8",216,"b0e6aeb81c94b2452fc91ad3da77e36906b3fce7faadc7e904ac9c244fa09100"],
+    ["0x007236b0",224,"b25e942d182f58be142c11444355092b42f92b72b2464370114b2ecc4e0a44a8"],
+    ["0x0069fec8",40,"4e4bc955582336fcfdda409dcd515f3eb02da9ea97b0145da2ff962c4e155226"],
+    ["0x00e456cc",244,"25c696dfcf995dbb4e91c245f3f5d1c9839150ca1784573096b749276c24aadf"],
+    ["0x00e457c0",172,"0248db265051f6560c767e127a1768f45a8015136839fdc3fdf7d5cb8bd4ea36"],
+    ["0x00e4586c",64,"76422ff51b1fcb96b5b7171f4486e45a10d63fbd4090f3171d5caa264f029186"],
+    ["0x00042188",336,"94f2cd1cba9b37172b93a59072b293bb07966fe314b75ae413ec3aff3c951a9c"]
+  ],
+  "image4Sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+  "kernel0Sha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882",
+  "retainedEndpoints": [
+    {
+      "symbol": "xm1_buffers_cache_endpoint",
+      "address": "0x00042634",
+      "abi": "void(u32 address,u32 length)",
+      "calls": "Rotation requests (0,0) before and after copying.",
+      "missingDeviceLaw": "Cache maintenance and coherence effects are not modeled. Scenarios establish ordered endpoint admission and CPU pixel writes only."
+    }
+    ,
+    {
+      "symbol":"xm1_develop_trace_event",
+      "address":"0x00042188",
+      "abi":"void(u32 text)",
+      "boundary":"Actual kernel0 syslog_thread_name RTOS logging service.",
+      "missingDeviceLaw":"Kernel logging internals and physical trace transport remain retained; scenarios admit ordered text requests only."
+    }
+  ],
+  "ownedDependencies": [
+    ["0x00e8ef98","xm1_pipeline_image_fill_pattern","PipelineImagePixels"],
+    ["0x00723cb8","super::image_planes::current_task","PipelineImagePlanes"],
+    ["0x00723a14","super::image_planes::configure_priority","PipelineImagePlanes"],
+    ["0x00e51858","xm1_develop_capture_option_selection","PipelineProcessing"],
+    ["0x00e92ad8","xm1_develop_transform_required","framework"],
+    ["0x00e46808","xm1_develop_acquire_object","PipelineObjectAllocator"],
+    ["0x00e459e0","xm1_develop_release_object","PipelineObjectAllocator"],
+    ["0x00e46018","xm1_develop_notify_object_waiters","PipelineObjectAllocator"],
+    ["0x00726658","xm1_develop_append_stream_text","PipelineObjectAllocator"]
+  ],
+  "unresolvedBindings": [],
+  "integrationPrerequisites": ["Parent source integration must include completed object_allocator and diagnostic_logging groups from PipelineObjectAllocator, ImagePlanes RTOS adapters, ImagePixels fill, and PipelineModel shared Plane from 279a7b77.","Parent owns native admission, builds, checks and final recursive ownership review."],
+  "modelServices": ["objectLookupInitial","objectLookupRecords","objectStoreEffects","criticalInitial","criticalEnterCalls","criticalLeaveCalls","configurationInitial","expandPlanes","splitPlanes","bufferGeometry","descriptorList","rotateCopyWords","borderRegions"],
+  "modelScope": "Pure helper constructors execute descriptor, geometry, policy, dimension, orientation and pixel-copy laws. Active borders execute the owned image fill model. Scripts cover retained RTOS callbacks and the cache endpoint, not application helpers."
+}

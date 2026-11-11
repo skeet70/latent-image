@@ -1,0 +1,44 @@
+{
+  "firmware": "xm1-150",
+  "decomp_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image_base": 6407168,
+  "image_sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+  "functions": [
+    {"address": 7213188, "size": 896, "sha256": "6aa4e8b7a5e1dbd001498dabdbe2de65c4c810a3291b2cf36a3951fac9251203", "name": "image_scale_packed_buffer"},
+    {"address": 7214084, "size": 1152, "sha256": "4e4054e32fa5b6e524c30f9b36c6a6b8b418ef140407d37a1e8a05dcebc1f377", "name": "image_rotate_packed_buffer"},
+    {"address": 7217928, "size": 68, "sha256": "7917c7e37a43614ef15e78806b01e15a5db2eb55c04e0e816b6ecaa8e646d74c", "name": "fixed10_sine_degrees"},
+    {"address": 7217996, "size": 68, "sha256": "5323b3da0c6c9d5c78c5134ebf813d5364d8a1c0ebd63bc761c29c4c7c54f53d", "name": "fixed10_cosine_degrees"}
+  ],
+  "tables": [
+    {"address": 8192748, "size": 1440, "sha256": "bf35c5784768674ef28e2fda1866a9caad05d0312da22d5ed89689378d2969da"},
+    {"address": 8191308, "size": 1440, "sha256": "eddd2eeadb85eaf7fafd7752b27a28d96ce6ec2d283e6e20f301405dac942f6c"}
+  ],
+  "publications": [
+    {"stock_address": 7213188, "owned_symbol": "xm1_pipeline_image_scale_packed_buffer", "ownership": "owned"},
+    {"stock_address": 7214084, "owned_symbol": "xm1_pipeline_image_rotate_packed_buffer", "ownership": "owned"},
+    {"stock_address": 7217928, "owned_symbol": "xm1_pipeline_image_fixed10_sine_degrees", "ownership": "owned"},
+    {"stock_address": 7217996, "owned_symbol": "xm1_pipeline_image_fixed10_cosine_degrees", "ownership": "owned"}
+  ],
+  "abi": "r0 points to 14 words: source,destination,source width,height,destination width,height,source stride,destination stride,crop row,reserved,crop column,reserved,opacity,unsigned rotation degrees; returns r0 from cache write",
+  "seams": [
+    {"address": 271924, "symbol": "xm1_pipeline_packed_cache_read", "law": "cache source extent before pixel accesses"},
+    {"address": 271932, "symbol": "xm1_pipeline_packed_cache_write", "law": "cache destination extent after pixel accesses; propagate returned r0"}
+  ],
+  "laws": [
+    "Pointers clear bit30 after source crop arithmetic; crop offset is (row*source_stride+column)*2 with wrapping u32 arithmetic.",
+    "Scale opacity zero skips coordinate tables and pixel writes. Both cache operations still execute.",
+    "Opacity is full u32, not truncated: values at least128 overwrite; lower values blend every byte with denominator128.",
+    "Scale maps store floor(wrapping_u32(index*source_dimension*1024)/destination_dimension) at95e1f8 and9621f8, then sample coordinates shift right10. Map loop bound is destination_dimension<<10 modulo2^32.",
+    "Scale and destination row strides floor to packed pairs. Rotation source row stride uses signed arithmetic shift right1.",
+    "Odd destination widths discard the last pixel. Chroma is the floor average of the two selected packed pairs, while luma selects by coordinate parity.",
+    "Overlap is forward row/pair traversal with immediate writes, not snapshot copying.",
+    "Rotation bounding box transforms source corners using wrapping signed products and arithmetic shift10. Destination dimensions do not clip it.",
+    "Rotation includes source coordinates equal to source width or height, not just strictly lower coordinates. Out-of-bounds samples fall back to the current destination pair, retaining coordinate parity. With valid y and invalid x it first reads the source pair at x clamped to0 or width; fp-108 is initialized at6e1858 before every nonempty row.",
+    "Sine/cosine accept unsigned degrees modulo360 and load signed fixed10 values from their original read-only tables.",
+    "No request-adjacent descriptor writes occur. Reserved words and request storage remain unchanged."
+  ],
+  "gaps": [
+    "Scale dimensions whose left-shift10 is zero but dimension is nonzero consume stale lookup scratch; caller owns scratch validity and mapped extents. No validation or new failure status is invented.",
+    "Zero source dimensions can still read source coordinate0. Source and destination allocation bounds remain caller preconditions; rotation has no error return independent of cache completion."
+  ]
+}

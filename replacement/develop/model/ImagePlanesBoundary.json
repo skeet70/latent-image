@@ -1,0 +1,248 @@
+{
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "qualification": "Source and A32 inspection only. No builds, tests, formatter, linter or native execution performed.",
+  "extents": [
+    {
+      "stockEntry": "0xe4fa90",
+      "size": 88,
+      "extentSha256": "1997c6790d9fa7f59133a8f604d3e59dd2d83be79fb11e2aec88ba9fcebe84ed",
+      "imageSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+      "ownedSymbol": "xm1_pipeline_image_copy_rows"
+    },
+    {
+      "stockEntry": "0xe4fae8",
+      "size": 628,
+      "extentSha256": "88e6b2938989fcc6b73d0f6511dc91878bc762146653b191c832e4bac586ce81",
+      "imageSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+      "ownedSymbol": "xm1_pipeline_image_resize_capture"
+    },
+    {
+      "stockEntry": "0xe4fd5c",
+      "size": 692,
+      "extentSha256": "36c1d11f6f3ddd5de2550abbdd0c09c113b6a94ada58d8553e6b3a76b7e8b0f4",
+      "imageSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+      "ownedSymbol": "xm1_pipeline_image_resize_through_crop"
+    },
+    {
+      "stockEntry": "0xe50010",
+      "size": 224,
+      "extentSha256": "bae6c26767bb710768363e67d4c18907d7ed5e17629b2ec43151b274fd9f6671",
+      "imageSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+      "ownedSymbol": "xm1_pipeline_image_resize_software"
+    },
+    {
+      "stockEntry": "0xe500f0",
+      "size": 276,
+      "extentSha256": "878c3d39c8a8c4f0ec9497e086fa7ca666c154ca2bb503b9415b520a37166a51",
+      "imageSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+      "ownedSymbol": "xm1_pipeline_image_rotate_software"
+    },
+    {
+      "stockEntry": "0xe4f898",
+      "size": 184,
+      "extentSha256": "c005dd34f05dd1526c512a2b91a318a40bffaf6c4de7e845421f7929aeb9156b",
+      "imageSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+      "ownedSymbol": "xm1_pipeline_image_prepare_auxiliary_plane"
+    },
+    {
+      "stockEntry": "0xe4f950",
+      "size": 320,
+      "extentSha256": "bb8bee076ab54df39f4e228b17dfcb5e983f35d6aad2604393e68c0122f33700",
+      "imageSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+      "ownedSymbol": "xm1_pipeline_image_prepare_special_plane"
+    },
+    {
+      "stockEntry": "0xe5277c",
+      "size": 268,
+      "extentSha256": "6607a84289944e356a60f4de1c475be66109c9f27058dc0426274311bb339907",
+      "imageSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+      "ownedSymbol": "xm1_pipeline_image_prepare_output_request"
+    },
+    {
+      "stockEntry": "0xe53ed4",
+      "size": 188,
+      "extentSha256": "dd76b553c90dabc387e62eac73bb0176e89db03c12bf92201c15d7b19af8e74e",
+      "imageSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+      "ownedSymbol": "xm1_pipeline_image_publish_debug_file"
+    },
+    {
+      "stockEntry": "0xe547e0",
+      "size": 144,
+      "extentSha256": "fad93c17b0ccbd182d3abbb20f588af29d48582271cc60204503cf4dcb5c53ff",
+      "imageSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+      "ownedSymbol": "xm1_pipeline_image_store_triplets"
+    },
+    {
+      "stockEntry": "0xe54c6c",
+      "size": 24,
+      "extentSha256": "aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543",
+      "imageSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+      "ownedSymbol": "xm1_pipeline_image_output_disabled"
+    },
+    {
+      "stockEntry": "0xe55164",
+      "size": 24,
+      "extentSha256": "122b20d4ccac9fb3a634ba673079bb3577f9f68c0aacfb650a20e27cfe3050af",
+      "imageSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+      "ownedSymbol": "xm1_pipeline_image_stage_ready"
+    },
+    {
+      "stockEntry": "0xe5517c",
+      "size": 24,
+      "extentSha256": "122b20d4ccac9fb3a634ba673079bb3577f9f68c0aacfb650a20e27cfe3050af",
+      "imageSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+      "ownedSymbol": "xm1_pipeline_image_stage_complete"
+    },
+    {
+      "stockEntry": "0xe55194",
+      "size": 24,
+      "extentSha256": "aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543",
+      "imageSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+      "ownedSymbol": "xm1_pipeline_image_stage_inactive"
+    },
+    {
+      "stockEntry": "0xe8ef98",
+      "size": 388,
+      "extentSha256": "e8b1d25b26432fa399394fdfe4b00fa0c240c0b7a0a21ae0f55d7eb3fc319472",
+      "imageSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+      "ownedSymbol": "xm1_pipeline_image_fill_pattern"
+    },
+    {
+      "stockEntry": "0x723a14",
+      "size": 184,
+      "extentSha256": "24a319889cf448e9ccc5ff16707828629b5ca74ae3b3d56be8cce1ee1b61ddc3",
+      "imageSha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+      "ownedSymbol": "xm1_pipeline_image_configure_task"
+    },
+    {
+      "stockEntry": "0x723cb8",
+      "size": 48,
+      "extentSha256": "92681accf48089835d3c844a4fd99a7c3211ea1009cccd0f88273ce3de93a245",
+      "imageSha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+      "ownedSymbol": "xm1_pipeline_image_current_task"
+    },
+    {
+      "stockEntry": "0x723398",
+      "size": 28,
+      "extentSha256": "71c79e0240a3c9ff4dbd17c4a0e21bd6c6d8488a64c41ef6796e7c7b35357d0e",
+      "imageSha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+      "ownedSymbol": "inlined error callback delivery"
+    },
+    {"stockEntry":"0xe523d4","size":376,"extentSha256":"6c8aa2e549ebaa71829a187ba28aa54884027dd5d43cb38503b224b66e897b42","imageSha256":"3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a","ownedSymbol":"xm1_pipeline_image_configure_output_policy"},
+    {"stockEntry":"0xe5254c","size":560,"extentSha256":"48d8b5469b8279709708b0d2faf50c976267366898bcdefa11b1f8d805285d98","imageSha256":"3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a","ownedSymbol":"xm1_pipeline_image_prepare_output_mask"},
+    {"stockEntry":"0x7243a8","size":216,"extentSha256":"0a48860fce1d679fdf3eb0637ec8afe1ec324809394d20387218e598a3b6e96a","imageSha256":"f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16","ownedSymbol":"xm1_pipeline_image_wait_all"},
+    {"stockEntry":"0x724558","size":224,"extentSha256":"852ac7eae12c48792ba77973428e36c7be22ef2d8ae7abd845ab12cdc01dc73d","imageSha256":"f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16","ownedSymbol":"xm1_pipeline_image_send_notification"},
+    {"stockEntry":"0x724b68","size":152,"extentSha256":"6008c26df7818441ce9a7ece5f9802eca2d1f58e1da311c5a9ab09fcf1da39e4","imageSha256":"f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16","ownedSymbol":"xm1_pipeline_image_wait_reserved"},
+    {"stockEntry":"0x724c00","size":188,"extentSha256":"25383bb5f9a7c8baddf3ef1bdf38005651ffa2f64e26f17dfc83731f06d843c9","imageSha256":"f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16","ownedSymbol":"xm1_pipeline_image_signal_reserved"},
+    {"stockEntry":"0x724638","size":184,"extentSha256":"efa03c82be58b5a9bc4eb628c4d0f28020751579e2dbc75f6d0cb0df91b58361","imageSha256":"f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16","ownedSymbol":"xm1_pipeline_image_signal_current_zero"}
+  ],
+  "layouts": {
+    "ImagePlane": {
+      "size": 28,
+      "fields": {
+        "format": 0,
+        "address": 4,
+        "length": 8,
+        "stride": 12,
+        "width": 16,
+        "height": 20,
+        "flags": 24
+      }
+    },
+    "SoftImageRequest": {
+      "size": 56,
+      "fields": {
+        "source": 0,
+        "destination": 4,
+        "sourceWidth": 8,
+        "sourceHeight": 12,
+        "destinationWidth": 16,
+        "destinationHeight": 20,
+        "sourceStride": 24,
+        "destinationStride": 28,
+        "reserved": 32,
+        "scale": 48,
+        "rotation": 52
+      }
+    },
+    "PlaneRequest": {
+      "size": 32,
+      "fields": {
+        "kind": 0,
+        "firstByte": 4,
+        "secondByte": 5,
+        "selection": 20,
+        "completion": 24,
+        "enabled": 28
+      }
+    }
+  },
+  "cpuLaws": {
+    "fill": "Writes floor(width/4) packed words per row; row advance is stride-(width&3). Only cancel byte exactly1 cancels. Zero lines never reads cancellation. Priority12 then restoration occurs for every invocation.",
+    "constants": {
+      "0xe54c6c": 0,
+      "0xe55164": 1,
+      "0xe5517c": 1,
+      "0xe55194": 0
+    },
+    "softwareResize": "Reads only source/destination address,width,height,stride. Writes exactly the56byte global request0154cea8. Does not initialize any adjacent descriptor or caller stack.",
+    "specialRequest": "Original e4f950 returns e64268 result in r0 despite NONMATCHING source declaring void. Crop offsets use unsigned logical right shifts.",
+    "priority": "Reads fixed RTOS interface table0096bd20. Resolves current interface at+1618, current task at+16c, priority at+1c. Encodes low16 task ID with namespace007cad9c. Failure logs kernel event, publishes40a0f82c, then invokes fixed error callback4089ea8c."
+  },
+  "retainedEndpoints": [
+    {
+      "kind": "RTOS interface",
+      "entries": [
+        "current-interface+0x1618",
+        "current-task+0x16c",
+        "task-priority+0x1c",
+        "wait-current+0x9c",
+        "notification-mode+0x148",
+        "notification-send+0x88/+0x8c",
+        "reserved-wait+0x7c",
+        "reserved-signal+0x6c/+0x70",
+        "current-signal+0x90",
+        "error-callback@0x4089ea8c"
+      ],
+      "source": "app/platform/osal/tu_007233dc.c:159-178; interface_dispatch_state.c:21-27; interface_ring_operations.c:42-45",
+      "boundary": "Scheduler and error-handler effects, not application dispatch."
+    },
+    {
+      "kind": "kernel logging",
+      "entry": "0x00041a34",
+      "boundary": "Kernel thread-event log."
+    }
+  ],
+  "ownedCrossFamilyDependencies": {
+    "0x0069f8fc": "xm1_buffers_configuration_byte",
+    "0x00734540": "xm1_develop_lookup_width",
+    "0x0073469c": "xm1_develop_lookup_height",
+    "0x00e51858": "xm1_develop_capture_option_selection",
+    "0x00726658": "xm1_develop_append_stream_text",
+    "0x00eb0cbc": "xm1_pipeline_image_trace_begin",
+    "0x00eb0ccc": "xm1_pipeline_image_trace_end",
+    "0x00e4f3b0": "xm1_pipeline_image_configure_borders"
+  },
+  "sourceModels": [
+    "ImagePlanesScenarios.imagePlanesScenarios",
+    "ImagePlanesScenarios.priorityInitial",
+    "ImagePlanesScenarios.priorityCalls",
+    "ImagePlanesScenarios.priorityCallsWith",
+    "ImagePlanesScenarios.currentTaskCalls",
+    "ImagePlanesScenarios.fillEffects",
+    "ImagePlanesScenarios.waitCalls",
+    "ImagePlanesScenarios.notificationCalls",
+    "ImagePlanesScenarios.reservedInitial",
+    "ImagePlanesScenarios.reservedWaitCalls",
+    "ImagePlanesScenarios.reservedSignalCalls",
+    "ImagePlanesScenarios.signalCurrentCalls",
+    "ImagePlanesScenarios.debugDisabledInitial"
+  ],
+  "integrationDependencies": [
+    "xm1_pipeline_image_process_planes",
+    "xm1_pipeline_image_resize_planes",
+    "xm1_pipeline_image_scale_packed_buffer",
+    "xm1_pipeline_image_rotate_packed_buffer",
+    "xm1_pipeline_image_write_debug_file"
+  ]
+}

@@ -1,0 +1,616 @@
+{
+  "family": "font-builtin",
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "base": "279a7b77",
+  "engines": [
+    2,
+    6,
+    7
+  ],
+  "sharedBitmapCore": {
+    "source": "src/font_core/bitmap.rs",
+    "physicalAdapter": "src/pipeline/font_builtin.rs",
+    "preservedSourceCommits": [
+      "53a70baee8e53d9d5cb871b59551bf3bb9533b38",
+      "9b5ecd9b5c0216b3d44c8512259e5297f8732d8e"
+    ],
+    "reuse": "The physical ABI adapter and borrowed resources invoke the same CRLF framing, BDF token/line parser, header/glyph scanner, Thai property parser, bitmap decoder, icon directory lookup and packed-bit coverage core. Native state layouts, paged workspace serialization, keyword numbers, physical addresses, engine configuration and callbacks stay in the adapter.",
+    "resourceTypes": [
+      "font_core::bitmap::BdfResource<'asset>",
+      "font_core::bitmap::IconResource<'asset>"
+    ],
+    "resourceConstructor": "parse(&'asset [u8])->Result<Self,FontError>",
+    "metrics": "metrics(&self,GlyphId,FontSize)->Result<GlyphMetrics,FontError>",
+    "render": "render<'m>(&'m self,GlyphId,FontConfig,&'m mut [u8])->Result<GlyphMask<'m>,FontError>",
+    "size": "size(&self)->FontSize returns native fixed dimensions",
+    "baseline": "baseline(&self)->PixelOffset; BDF is header BBX height plus y offset, DCW is zero",
+    "bearing": "The shared mask bearing is relative to a baseline pen. BDF bearing_y is -glyph BBX y offset minus glyph height. The physical adapter separately adds the font baseline to preserve its font-top argument. DCW takes its caller y directly.",
+    "coverage": "BDF returns PackedMsb1 and rejects other requested encodings. DCW returns a borrowed PackedMsb1 mask or expands into caller workspace as Gray4 bytes 0/15 or Gray8 bytes 0/255. No bitmap scaling is introduced.",
+    "ownership": "Resources borrow validated bytes. BDF masks borrow the supplied decoded workspace. DCW packed masks borrow the resource; expanded masks borrow caller workspace. No heap allocation, fake initialized state, desired-values provider or GVFF equivalence.",
+    "sealedMask": "Producers use crate-private GlyphMask::from_renderer after producing source-defined packed or gray samples. DCW Gray4 expansion emits only zero or fifteen, so no second range scan is performed. Public GlyphMask::new validates active Gray4 samples, ignores stride padding and exposes read-only getters.",
+    "constructorOwner": "PipelineTransforms owns src/font_core.rs and font_core/resource.rs, including FontAsset::parse and FontEngine::new",
+    "sharedTypePrerequisiteCommit": "9565a43c",
+    "constructorPath": "FontAsset::parse(resource bytes) -> FontEngine::new(asset,FontConfig,FontWorkspace::bitmap(decoded)) -> glyph_mask(GlyphId)",
+    "consumerOwner": "GraphicsRuntime.GraphicsCpuRaster owns Surface::draw_glyph_mask(baseline,mask,colour) and the cross-family consumer fixtures",
+    "behavioralFixtures": "Seven tests in bitmap.rs exercise real FontAsset/FontEngine construction from independent literal CRLF BDF and DCW ICON resources, literal metrics and packed/gray pixels, missing glyph/workspace/invalid-resource errors, and public Gray4 mask range validation with stride padding. Original/native ABI scenarios retain their interfaces; Thai name-padding fixtures are corrected and extended from A32 word-comparison evidence.",
+    "qualification": "Source-only. No builds, tests, native runs, formatters or SDK/guest setup performed. Joint producer/consumer qualification remains the integration owner's gate."
+  },
+  "sourceEvidence": {
+    "overlay": "overlay44",
+    "base": "0x01100000",
+    "size": 705952,
+    "sha256": "2dfaa5d4bd025d68e991a329cc1377d5da16de656148dc4027d9a6bc0c349f5c",
+    "input": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+    "disassembly": "private-data/analysis/x-m1-1.50/decode/img6.dis",
+    "source": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_01190d18.c",
+    "nonmatching": "Draft C is a lead. Parser dispatch and metric stores, line scanning, Thai property stores, bitmap decode, BDF init/draw/advance/overhang and icon width/draw were read against original A32. Icon width/draw have no C definition in this pinned font source directory.",
+    "entryCorrections": [
+      "0x1190be8 is the height entry; 0x1190bec is its field load.",
+      "0x11932c4 is the initial workspace-size comparison; the following 0x11932c8 extent depends on its flags.",
+      "0x1193364 is BDF draw; 0x1193a14 is inside right-overhang.",
+      "0x1193f98 is icon initialization; 0x11940c4 is inside icon signature detection."
+    ],
+    "qualification": "not-run"
+  },
+  "bodies": [
+    {
+      "address": "0x011932c4",
+      "size": 160,
+      "sha256": "27372b816786b9587205c971f39606b1da32765c30037319fc3365df2ac5ef92",
+      "ownedSymbol": "xm1_pipeline_image_font_builtin_init",
+      "signature": "(state:u32,data:u32,size:i32,storage:u32,owner:u32)->i32",
+      "pinnedExtents": [
+        {
+          "address": "0x011932c8",
+          "size": 156,
+          "sha256": "2064ae4003eb79623cfcee90afb80cf9df3b8bab95b4aefa738e0124f4527a5b"
+        },
+        {
+          "address": "0x011932c4",
+          "size": 4,
+          "sha256": "454e15e6942b04ceadeb3dad2ee00a25e52c063174931591d4ddb128b5f4b9ea"
+        }
+      ],
+      "extentBasis": "pinned-function-ranges"
+    },
+    {
+      "address": "0x01193830",
+      "size": 456,
+      "sha256": "0e037b9dcb8dc3c2f9f96172c633ee2589b4c3f75698ae450406c00450b1325f",
+      "ownedSymbol": "xm1_pipeline_image_font_builtin_glyph_width",
+      "signature": "(state:u32,glyph:u16)->i32",
+      "pinnedExtents": [
+        {
+          "address": "0x01193830",
+          "size": 456,
+          "sha256": "0e037b9dcb8dc3c2f9f96172c633ee2589b4c3f75698ae450406c00450b1325f"
+        }
+      ],
+      "extentBasis": "pinned-function-ranges"
+    },
+    {
+      "address": "0x011939f8",
+      "size": 356,
+      "sha256": "55a19772fb322c77d871ea1daf172ac9e61ed9cbd21f680387a17304686ad978",
+      "ownedSymbol": "xm1_pipeline_image_font_builtin_right_overhang",
+      "signature": "(state:u32,glyph:u16)->i32",
+      "pinnedExtents": [
+        {
+          "address": "0x011939f8",
+          "size": 356,
+          "sha256": "55a19772fb322c77d871ea1daf172ac9e61ed9cbd21f680387a17304686ad978"
+        }
+      ],
+      "extentBasis": "pinned-function-ranges"
+    },
+    {
+      "address": "0x01190be8",
+      "size": 24,
+      "sha256": "3154dac59f48245fa7ff5e3f8b540385ad985ee96b2ebc254f1d3650c5c5ccf1",
+      "ownedSymbol": "xm1_pipeline_image_font_builtin_height",
+      "signature": "(state:u32)->i32",
+      "pinnedExtents": [],
+      "extentBasis": "A32 entry and following entry in pinned overlay44"
+    },
+    {
+      "address": "0x01190c00",
+      "size": 24,
+      "sha256": "0237c764c0fff145dc4dc9ab88747af7d11f168b20ee28521cc82c0dcb2b947c",
+      "ownedSymbol": "xm1_pipeline_image_font_builtin_width",
+      "signature": "(state:u32)->i32",
+      "pinnedExtents": [],
+      "extentBasis": "A32 entry and following entry in pinned overlay44"
+    },
+    {
+      "address": "0x01190c18",
+      "size": 44,
+      "sha256": "6a139e6de2df1a2a82bddebe10719ebc53e75e388b1e880697db80b7316d2cc9",
+      "ownedSymbol": "xm1_pipeline_image_font_builtin_secondary_extent",
+      "signature": "(state:u32)->i32",
+      "pinnedExtents": [],
+      "extentBasis": "A32 entry and following entry in pinned overlay44"
+    },
+    {
+      "address": "0x01193364",
+      "size": 1228,
+      "sha256": "ce44ed94c6d3186b4819d6e7fefda82dac3ec77a9186016a6efb9a421e9c1f29",
+      "ownedSymbol": "xm1_pipeline_image_font_draw_text_bitmap",
+      "signature": "(state:u32,glyph:u16,width:i32,height:i32,x:i32,y:i32,stride:i32,pixels:u32,extra:u32,format:u32)->i32",
+      "pinnedExtents": [
+        {
+          "address": "0x01193364",
+          "size": 1228,
+          "sha256": "ce44ed94c6d3186b4819d6e7fefda82dac3ec77a9186016a6efb9a421e9c1f29"
+        }
+      ],
+      "extentBasis": "pinned-function-ranges"
+    },
+    {
+      "address": "0x01190d18",
+      "size": 1364,
+      "sha256": "84ebd0d77c800a0ada9f2d51f1d1c88f0c50b08a199ccfda4fb0d19e05d96ad0",
+      "ownedSymbol": "xm1_pipeline_image_font_builtin_thai_metric",
+      "signature": "(output:u32,line:u32,length:u32,name:u32,name_length:u32,value_offset:u32)->()",
+      "pinnedExtents": [
+        {
+          "address": "0x01190d18",
+          "size": 1364,
+          "sha256": "84ebd0d77c800a0ada9f2d51f1d1c88f0c50b08a199ccfda4fb0d19e05d96ad0"
+        }
+      ],
+      "extentBasis": "pinned-function-ranges"
+    },
+    {
+      "address": "0x011915b8",
+      "size": 5816,
+      "sha256": "794e4e8d565912b74ed66f64fed2697a6723a4bbf49b6a56630e2e33557061bc",
+      "ownedSymbol": "xm1_pipeline_image_font_builtin_parse_line",
+      "signature": "(state:u32,line:u32,length:i32,header:u32,glyph:u32,mode:u32,keyword_out:*mut u32)->i32",
+      "pinnedExtents": [
+        {
+          "address": "0x011915b8",
+          "size": 5816,
+          "sha256": "794e4e8d565912b74ed66f64fed2697a6723a4bbf49b6a56630e2e33557061bc"
+        }
+      ],
+      "extentBasis": "pinned-function-ranges"
+    },
+    {
+      "address": "0x01192c70",
+      "size": 504,
+      "sha256": "ae386506d6d63ec538e410d6527d10c44c6a7de24b09ad69836d9a9dcc5baf0c",
+      "ownedSymbol": "xm1_pipeline_image_font_builtin_properties",
+      "signature": "(state:u32,output:u32)->i32",
+      "pinnedExtents": [
+        {
+          "address": "0x01192c70",
+          "size": 504,
+          "sha256": "ae386506d6d63ec538e410d6527d10c44c6a7de24b09ad69836d9a9dcc5baf0c"
+        }
+      ],
+      "extentBasis": "pinned-function-ranges"
+    },
+    {
+      "address": "0x01192fb4",
+      "size": 308,
+      "sha256": "52233081ea58d90f82111d3258aab8adc1029e393c5cf58bd9997addc83a690e",
+      "ownedSymbol": "xm1_pipeline_image_font_builtin_scan_header",
+      "signature": "(state:u32,data:u32,next:*mut u32)->i32",
+      "pinnedExtents": [
+        {
+          "address": "0x01192fb4",
+          "size": 308,
+          "sha256": "52233081ea58d90f82111d3258aab8adc1029e393c5cf58bd9997addc83a690e"
+        }
+      ],
+      "extentBasis": "pinned-function-ranges"
+    },
+    {
+      "address": "0x01192e68",
+      "size": 332,
+      "sha256": "3e9277ab49583c107222c1d6fec6e36e6f9c949ba4e51b57a3831ac5a971ee5f",
+      "ownedSymbol": "xm1_pipeline_image_font_builtin_scan_glyph",
+      "signature": "(state:u32,data:u32,offset:u32,metrics:*mut GlyphMetrics,next:*mut u32)->i32",
+      "pinnedExtents": [
+        {
+          "address": "0x01192e68",
+          "size": 332,
+          "sha256": "3e9277ab49583c107222c1d6fec6e36e6f9c949ba4e51b57a3831ac5a971ee5f"
+        }
+      ],
+      "extentBasis": "pinned-function-ranges"
+    },
+    {
+      "address": "0x011930e8",
+      "size": 476,
+      "sha256": "37ea67e027b86146fed7ddcb83bcb28e3a23fc34d3b488410053cd14958f0306",
+      "ownedSymbol": "xm1_pipeline_image_font_builtin_index_glyphs",
+      "signature": "(state:u32,data:u32,offset:u32,table:u32,capacity:u32)->i32",
+      "pinnedExtents": [
+        {
+          "address": "0x011930e8",
+          "size": 476,
+          "sha256": "37ea67e027b86146fed7ddcb83bcb28e3a23fc34d3b488410053cd14958f0306"
+        }
+      ],
+      "extentBasis": "pinned-function-ranges"
+    },
+    {
+      "address": "0x011913cc",
+      "size": 492,
+      "sha256": "368e04b0637a20c0a23d6360b7ffb3f80dc71f5e14f2cd5f121719c55d37539d",
+      "ownedSymbol": "xm1_pipeline_image_font_builtin_decode_bitmap",
+      "signature": "(state:u32,metrics:*const GlyphMetrics,destination:u32,stride:i32,y:i32)->i32",
+      "pinnedExtents": [
+        {
+          "address": "0x011913cc",
+          "size": 492,
+          "sha256": "368e04b0637a20c0a23d6360b7ffb3f80dc71f5e14f2cd5f121719c55d37539d"
+        }
+      ],
+      "extentBasis": "pinned-function-ranges"
+    },
+    {
+      "address": "0x0119126c",
+      "size": 352,
+      "sha256": "88f6350316262b725f9a30c506c88230531a5ebcbd928899190f3ff265047099",
+      "ownedSymbol": "xm1_pipeline_image_font_builtin_parse_text_lines",
+      "signature": "(state:u32,output:u32,data:u32,offset:u32,count:i32,next:*mut u32,consumed:*mut u32)->()",
+      "pinnedExtents": [
+        {
+          "address": "0x0119126c",
+          "size": 352,
+          "sha256": "88f6350316262b725f9a30c506c88230531a5ebcbd928899190f3ff265047099"
+        }
+      ],
+      "extentBasis": "pinned-function-ranges"
+    },
+    {
+      "address": "0x01190c44",
+      "size": 24,
+      "sha256": "656853e9c58afa823ccdce77fd5def8d02e1cac02908ede5031aae23b5aa2140",
+      "ownedSymbol": "xm1_pipeline_image_font_builtin_top_overhang",
+      "signature": "(state:u32)->i32",
+      "pinnedExtents": [],
+      "extentBasis": "A32 entry and following entry in pinned overlay44"
+    },
+    {
+      "address": "0x01190c5c",
+      "size": 76,
+      "sha256": "b3d7d18741f553830fa0d473ef7d000ad0d9be75aece346e30af60d74058af19",
+      "ownedSymbol": "xm1_pipeline_image_font_builtin_stroke_padding",
+      "signature": "(state:u32,first:*mut i32,second:*mut i32,third:*mut i32,fourth:*mut i32)->i32",
+      "pinnedExtents": [],
+      "extentBasis": "A32 entry and following entry in pinned overlay44"
+    },
+    {
+      "address": "0x01193f98",
+      "size": 40,
+      "sha256": "25f4ff68baff9d67ac052377ca60f54595cfaeaee249b54158b546165a083b50",
+      "ownedSymbol": "xm1_pipeline_image_font_icon_init",
+      "signature": "(state:u32,data:u32,size:i32,storage:u32,owner:u32)->i32",
+      "pinnedExtents": [
+        {
+          "address": "0x01193f98",
+          "size": 40,
+          "sha256": "25f4ff68baff9d67ac052377ca60f54595cfaeaee249b54158b546165a083b50"
+        }
+      ],
+      "extentBasis": "pinned-function-ranges"
+    },
+    {
+      "address": "0x01194190",
+      "size": 220,
+      "sha256": "408c21ba38c27563e722e15d1940599aed7edf7dc82d622c982cdba4106063c6",
+      "ownedSymbol": "xm1_pipeline_image_font_icon_glyph_width",
+      "signature": "(state:u32,glyph:u16)->i32",
+      "pinnedExtents": [],
+      "extentBasis": "A32 entry and following entry in pinned overlay44"
+    },
+    {
+      "address": "0x0119426c",
+      "size": 1172,
+      "sha256": "a66a56a803c032ff650bfc0793b6b4e1cd68a93d11eb1dfe50aaa38be810a7f5",
+      "ownedSymbol": "xm1_pipeline_image_font_draw_icon_bitmap",
+      "signature": "(state:u32,glyph:u16,width:i32,height:i32,x:i32,y:i32,stride:i32,pixels:u32,extra:u32,format:u32)->i32",
+      "pinnedExtents": [],
+      "extentBasis": "A32 entry and following entry in pinned overlay44"
+    },
+    {
+      "address": "0x01193ff0",
+      "size": 28,
+      "sha256": "d7254122dafb468d227891d59334849363fc54facec98d59c397894d6e76efad",
+      "ownedSymbol": "xm1_pipeline_image_font_icon_height",
+      "signature": "(state:u32)->i32",
+      "pinnedExtents": [],
+      "extentBasis": "A32 entry and following entry in pinned overlay44"
+    },
+    {
+      "address": "0x0119400c",
+      "size": 28,
+      "sha256": "8457c7c6449c86497a17d063f6a06f9f0467c2b14556e40fd859d1b28fcc621a",
+      "ownedSymbol": "xm1_pipeline_image_font_icon_width",
+      "signature": "(state:u32)->i32",
+      "pinnedExtents": [],
+      "extentBasis": "A32 entry and following entry in pinned overlay44"
+    },
+    {
+      "address": "0x01194028",
+      "size": 24,
+      "sha256": "656853e9c58afa823ccdce77fd5def8d02e1cac02908ede5031aae23b5aa2140",
+      "ownedSymbol": "xm1_pipeline_image_font_icon_secondary_extent",
+      "signature": "(state:u32)->i32",
+      "pinnedExtents": [],
+      "extentBasis": "A32 entry and following entry in pinned overlay44"
+    },
+    {
+      "address": "0x01194040",
+      "size": 24,
+      "sha256": "656853e9c58afa823ccdce77fd5def8d02e1cac02908ede5031aae23b5aa2140",
+      "ownedSymbol": "xm1_pipeline_image_font_icon_right_overhang",
+      "signature": "(state:u32,glyph:u16)->i32",
+      "pinnedExtents": [],
+      "extentBasis": "A32 entry and following entry in pinned overlay44"
+    },
+    {
+      "address": "0x01194058",
+      "size": 24,
+      "sha256": "656853e9c58afa823ccdce77fd5def8d02e1cac02908ede5031aae23b5aa2140",
+      "ownedSymbol": "xm1_pipeline_image_font_icon_top_overhang",
+      "signature": "(state:u32)->i32",
+      "pinnedExtents": [],
+      "extentBasis": "A32 entry and following entry in pinned overlay44"
+    },
+    {
+      "address": "0x01194070",
+      "size": 48,
+      "sha256": "760608aa6b4f4d9a39a1199351190ad4b12fb45159c1b23be6ad47698801f613",
+      "ownedSymbol": "xm1_pipeline_image_font_icon_stroke_padding",
+      "signature": "(state:u32,first:*mut i32,second:*mut i32,third:*mut i32,fourth:*mut i32)->i32",
+      "pinnedExtents": [],
+      "extentBasis": "A32 entry and following entry in pinned overlay44"
+    },
+    {
+      "address": "0x0119083c",
+      "size": 200,
+      "sha256": "8a929ae6e525ecc0c8adb2fe05837cdff066e6dc7105882c8928db9bb05d3b14",
+      "ownedSymbol": "xm1_pipeline_image_font_builtin_read_text_line",
+      "signature": "(data:u32,offset:u32,next:*mut u32,length:*mut u32,output:u32,copy:u32)->i32",
+      "pinnedExtents": [
+        {
+          "address": "0x0119083c",
+          "size": 200,
+          "sha256": "8a929ae6e525ecc0c8adb2fe05837cdff066e6dc7105882c8928db9bb05d3b14"
+        }
+      ],
+      "extentBasis": "pinned-function-ranges"
+    },
+    {
+      "address": "0x01190ba0",
+      "size": 24,
+      "sha256": "1d12830a1b6b07973775e4701c675daa48eb8939009847c6aa717956aadb3d45",
+      "ownedSymbol": "xm1_pipeline_image_font_builtin_storage_size",
+      "signature": "()->i32",
+      "pinnedExtents": [
+        {
+          "address": "0x01190ba0",
+          "size": 24,
+          "sha256": "1d12830a1b6b07973775e4701c675daa48eb8939009847c6aa717956aadb3d45"
+        }
+      ],
+      "extentBasis": "pinned-function-ranges"
+    },
+    {
+      "address": "0x01190bb8",
+      "size": 24,
+      "sha256": "656853e9c58afa823ccdce77fd5def8d02e1cac02908ede5031aae23b5aa2140",
+      "ownedSymbol": "xm1_pipeline_image_font_builtin_destroy",
+      "signature": "()->i32",
+      "pinnedExtents": [],
+      "extentBasis": "A32 entry and following entry in pinned overlay44"
+    },
+    {
+      "address": "0x01190bd0",
+      "size": 24,
+      "sha256": "656853e9c58afa823ccdce77fd5def8d02e1cac02908ede5031aae23b5aa2140",
+      "ownedSymbol": "xm1_pipeline_image_font_builtin_dimensions",
+      "signature": "()->i32",
+      "pinnedExtents": [],
+      "extentBasis": "A32 entry and following entry in pinned overlay44"
+    },
+    {
+      "address": "0x01193f80",
+      "size": 24,
+      "sha256": "656853e9c58afa823ccdce77fd5def8d02e1cac02908ede5031aae23b5aa2140",
+      "ownedSymbol": "xm1_pipeline_image_font_icon_storage_size",
+      "signature": "(mode:u32,first:i32,second:i32,third:i32)->i32",
+      "pinnedExtents": [
+        {
+          "address": "0x01193f80",
+          "size": 24,
+          "sha256": "656853e9c58afa823ccdce77fd5def8d02e1cac02908ede5031aae23b5aa2140"
+        }
+      ],
+      "extentBasis": "pinned-function-ranges"
+    },
+    {
+      "address": "0x01193fc0",
+      "size": 24,
+      "sha256": "656853e9c58afa823ccdce77fd5def8d02e1cac02908ede5031aae23b5aa2140",
+      "ownedSymbol": "xm1_pipeline_image_font_icon_destroy",
+      "signature": "()->i32",
+      "pinnedExtents": [],
+      "extentBasis": "A32 entry and following entry in pinned overlay44"
+    },
+    {
+      "address": "0x01193fd8",
+      "size": 24,
+      "sha256": "656853e9c58afa823ccdce77fd5def8d02e1cac02908ede5031aae23b5aa2140",
+      "ownedSymbol": "xm1_pipeline_image_font_icon_dimensions",
+      "signature": "()->i32",
+      "pinnedExtents": [],
+      "extentBasis": "A32 entry and following entry in pinned overlay44"
+    },
+    {
+      "address": "0x011940a0",
+      "size": 24,
+      "sha256": "2772ceab6b34b2aa80f4bce0eb0fded92c67cb862ce70a614ddce909b8b870d5",
+      "ownedSymbol": "xm1_pipeline_image_font_icon_weights",
+      "signature": "()->i32",
+      "pinnedExtents": [],
+      "extentBasis": "A32 entry and following entry in pinned overlay44"
+    }
+  ],
+  "layout": {
+    "bdfState": {
+      "0": "owner engine pointer",
+      "4": "44-byte parsed font header",
+      "48": "glyph index pointer",
+      "52": "glyph index byte capacity",
+      "56": "text resource pointer",
+      "60": "512-byte CRLF line scratch pointer",
+      "64": "256-byte keyword scratch pointer"
+    },
+    "headerRelativeToState": {
+      "4": "version byte, 0x21 or 0x22",
+      "6": "size triplet of signed halfwords",
+      "12": "font bounding box width,height,x,y signed halfwords",
+      "20": "metrics set signed halfword",
+      "22": "SWIDTH pair",
+      "26": "DWIDTH pair",
+      "30": "SWIDTH1 pair",
+      "34": "DWIDTH1 pair",
+      "38": "VVECTOR pair",
+      "42": "property count signed halfword",
+      "44": "CHARS signed word"
+    },
+    "GlyphMetrics": {
+      "size": 52,
+      "name": "0..13",
+      "code": 14,
+      "SWIDTH": 16,
+      "DWIDTH": 20,
+      "SWIDTH1": 24,
+      "DWIDTH1": 28,
+      "VVECTOR": 32,
+      "BBX": [
+        36,
+        38,
+        40,
+        42
+      ],
+      "bitmapResourceOffset": 48
+    },
+    "iconState": {
+      "0": "owner engine pointer",
+      "8": "DCW ICON resource pointer"
+    },
+    "iconResource": {
+      "signature": "DCW ICON",
+      "8": "nominal width byte",
+      "9": "nominal height byte",
+      "32": "little-endian page count halfword",
+      "34": "page-count pairs of high code byte and directory slot byte",
+      "directory": "base + 34 + 2*pageCount + 1024*slot + 4*lowCodeByte",
+      "glyphOffset": "directory little-endian word, zero absent; otherwise resource + 32 + offset",
+      "glyph": "width byte, height byte, then MSB-first rows with ceil(width/8) bytes; not GVFF"
+    }
+  },
+  "behavior": {
+    "bdf": "CRLF line framing; header CHARS terminates header scan. STARTPROPERTIES skips its declared line count. Glyph BITMAP records the text offset and skips height equal-length rows before ENDCHAR. Index uses a 256-word high-page directory and 256-word glyph pages. Initialization checks workspace size before state writes and compares indexed glyph count after writes.",
+    "parser": "Keyword dispatch uses token length plus its first four bytes; length-three tokens take BBX, length-nine tokens distinguish STARTCHAR by byte five. Decimal accumulation wraps and halfword fields retain low sixteen bits. No new validation is introduced.",
+    "bdfDrawing": "Missing glyph returns zero. Parse failure can invoke the engine fallback. Direct packed decode applies when engine text format is one and final x is zero. Scratch path checks byte capacity before fill and decode, merges set bits only for format bit 0x100, then translates and clears the optional rectangle. Return is raw DWIDTH, without engine bias.",
+    "iconDrawing": "Returns glyph width plus engine bias after drawing or format suppression. Packed aligned path indexes destination by y*stride+x exactly as original, while unaligned path indexes y*stride+(x>>3) and writes the spill byte. No last-byte mask is added. Coverage bit 0x200 expands set bits and ORs either 15 or 255 according to engine depth/options. Optional mode-one extra sets row count before destination height clipping.",
+    "errors": {
+      "bdfInit": {
+        "shortWorkspace": -6,
+        "headerFailureOrCountMismatch": -3,
+        "indexCapacity": -6
+      },
+      "bdfLine": {
+        "invalidModeOrMissingModeOutput": -1,
+        "CHARSInHeader": 1,
+        "ENDCHARInGlyph": 1,
+        "ENDFONT": 2
+      },
+      "bitmapDecode": {
+        "missingBitmapOrLineScratch": -1,
+        "missingENDCHARAfterPixelWrites": -2
+      },
+      "iconWeights": -1
+    },
+    "padding": "BDF padding outputs are independently nullable; icon padding writes all four unconditionally.",
+    "nativeThaiNamePadding": {
+      "evidence": "A32 0x1190e50..0x1190e80, 0x1190f24..0x1190f54 and 0x1190ff8..0x1191024 compare all three name words for nine/ten-byte names, including zero padding through byte eleven. THAI_TOP compares only its first eight bytes.",
+      "adapter": "Logical Thai property parsing is shared; the native adapter applies the original padded-word guard before writing output fields.",
+      "fixtureInference": "[INFERENCE] STARTPROPERTIES leaves nonzero bytes ten/eleven in token scratch, so the literal properties fixture updates THAI_TOP but leaves THAI_BASE unchanged. The two-property-lines fixture starts with zeroed scratch and updates both.",
+      "qualification": "not-run"
+    }
+  },
+  "preconditions": [
+    "Original ABI pointers name readable/writable mapped objects for the complete accessed extent and remain live for the call.",
+    "Text resources have CRLF framing and the original parser grammar; caller supplies scratch and a zeroed glyph index. These raw entries take no resource byte length.",
+    "Glyph index high-page and glyph offsets address the supplied text resource. Resources and output buffers do not overlap.",
+    "Owner engine pointers and their configuration/span/workspace objects are installed by the canonical frontend.",
+    "No concurrent engine mutation occurs during a backend call."
+  ],
+  "sharedInterfaces": [
+    {
+      "symbol": "xm1_pipeline_image_font_fill_memory",
+      "owner": "PipelineTransforms",
+      "original": "0x0117f51c",
+      "signature": "(destination:u32,byte:u32,count:u32)->u32"
+    }
+  ],
+  "fallbackRoleProof": {
+    "installer": "0x0118d488",
+    "source": "decomp/firmwares/xm1-150/app/graphics/fonts/font_script_directory.c:39-57",
+    "instructions": "0x0118d488..0x0118d540",
+    "guard": "signed engine+0x28 > 0 and engine+0x24 != 0",
+    "widthStore": "0x0118d4c4 writes literal 0x01194190 from 0x0118d520 to engine+0x3c",
+    "drawStore": "0x0118d504 writes literal 0x0119426c from 0x0118d540 to engine+0x34",
+    "stateArgument": "word at engine+0x64 is the icon context",
+    "widthSignature": "(state:u32,glyph:u16)->i32",
+    "drawSignature": "(state:u32,glyph:u16,width:i32,height:i32,x:i32,y:i32,stride:i32,pixels:u32,extra:u32,format:u32)->i32",
+    "cutover": "BDF invokes the canonical Rust icon implementations directly. It never executes the stored original callback addresses.",
+    "fixtures": "BDF parse-failure width/draw cases consume a separate literal icon resource through actual CPU software."
+  },
+  "frontiers": [
+    {
+      "kind": "owned-callback",
+      "name": "BDF fallback glyph width and draw",
+      "locations": [
+        "engine+0x3c",
+        "engine+0x34"
+      ],
+      "state": "closed inside this module by direct canonical icon calls; original installer roles are recorded in fallbackRoleProof"
+    },
+    {
+      "kind": "outside-assignment",
+      "name": "FDL, outline VM, scripts, raster and font heap/directory/config frontend",
+      "owner": "coordinated sibling modules"
+    }
+  ],
+  "nativeScenarios": {
+    "module": "FontBuiltinScenarios",
+    "publications": "fontBuiltinPublications",
+    "scenarios": "fontBuiltinScenarios",
+    "source": "model/FontBuiltinScenarios.hs",
+    "resources": "Independent literal CRLF BDF and DCW ICON resources. Expected metrics, packed bits, coverage, error codes and control effects are literals. No scripted software calls.",
+    "qualification": "not-run"
+  },
+  "originalEntries": {
+    "assembly": "FontBuiltin_stock.S",
+    "form": "Absolute original-entry symbols only; no application forwarding instructions."
+  },
+  "integration": {
+    "rustModule": "pipeline::font_builtin",
+    "sources": [
+      "src/pipeline/font_builtin.rs",
+      "src/font_core/bitmap.rs",
+      "FontBuiltin_stock.S"
+    ],
+    "hostModule": "model/FontBuiltinScenarios.hs",
+    "scope": "No root pipeline.rs, BUILD, global schema, heap, script, outline or raster edits."
+  }
+}

@@ -1,0 +1,816 @@
+{
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "integrationBase": "279a7b77",
+  "qualification": "Source implementation complete. Portable-core extraction and physical adapters are unqualified until joint integration gates. No build, formatter, test, native run or admission performed in this child. Full calibration-overlay frontend remains unqualified at the documented real device-law boundary.",
+  "portableCore": {
+    "module": "calibration_core",
+    "files": ["src/calibration_core.rs", "src/calibration_core/mapped.rs", "src/calibration_core/curves.rs", "src/calibration_core/math.rs"],
+    "readerFile": "src/calibration_core/configuration.rs",
+    "readerOwnerCommit": "PipelineBuffers c1ea5a98",
+    "constructor": "Calibration<'data>::new(Configuration<'data>)",
+    "configurationAccess": "configuration() -> &Configuration<'data>",
+    "types": ["CurveIndex(u32)", "ChannelIndex(i32)", "ChannelSample(i16)", "MappedWord(i16)", "CurveValue(u16)", "Tenths(i32)", "RoundedValue(i32)", "SplitCount::get()->u32", "ChannelCount::get()->u32", "CurveClass", "BiasBank"],
+    "methods": {
+      "split_count": "Result<SplitCount, ConfigurationError>",
+      "channel_count": "Result<ChannelCount, ConfigurationError>",
+      "classify_curve_index": "(CurveIndex) -> Result<CurveClass, ConfigurationError>",
+      "collapse_curve_index": "(CurveIndex) -> Result<CurveIndex, ConfigurationError>",
+      "mapped_word": "(CurveIndex, ChannelIndex) -> Result<MappedWord, ConfigurationError>",
+      "transform_mapped_word": "(CurveIndex, ChannelIndex) -> Result<CurveValue, ConfigurationError>",
+      "channel_curve_origin": "(ChannelIndex) -> Result<CurveValue, ConfigurationError>",
+      "channel_bias": "(ChannelIndex, BiasBank) -> Result<ChannelSample, ConfigurationError>",
+      "channel_biased_word": "(ChannelIndex, BiasBank) -> Result<ChannelSample, ConfigurationError>",
+      "interpolate_channel_curve": "(ChannelIndex, ChannelSample) -> Result<CurveValue, ConfigurationError>",
+      "channel_curve_value": "(ChannelIndex) -> Result<CurveValue, ConfigurationError>",
+      "scaled_channel_curve": "(ChannelIndex) -> Result<CurveValue, ConfigurationError>"
+    },
+    "rounding": "Public free round_tenths(Tenths)->RoundedValue.",
+    "implementation": "Mapped-word, bank selection, channel count, channel bias, eleven-knot interpolation, scaled curve, signed rounding and fixed-base-two polynomial arithmetic have one implementation in the portable core. Existing AAPCS exports are adapters.",
+    "data": "Concrete bounded raw configuration bytes and actual LE scalar resource reads. No desired-value trait, metadata callback, physical global or arbitrary-memory constructor is public in the scalar core.",
+    "rawHalfword": "74690c uses region.read_half at the final wrapped target address. Borrowed host bytes decode LE; the private physical backing uses one A32 LDRH. Configuration.read_half retains the canonical ordered two-byte law.",
+    "errors": "ConfigurationError propagates unchanged on the safe API. Missing data is not a zero value or a sentinel. Existing defined invalid-channel sentinel0xffff is preserved before any configuration access.",
+    "physicalBoundary": "profile_calibration::physical_calibration consumes buffers::configuration_view. The latter captures global96ca50 and the source-proven0x420000-byte initialized allocation. Read errors take the existing nonreturning failure path, never a counterfeit successful scalar.",
+    "allocationEvidence": {
+      "initializedBase": "0x41acd800",
+      "globalPointer": "0x96ca50",
+      "bytes": 4325376,
+      "a32": "69f214..69f21c publishes41acd800;69f15c and69f260 pass0x420000 to memset. Initializers are source evidence, not new retained endpoints.",
+      "extents": [
+        {"address":"0x69f144","bytes":192,"sha256":"0e531b589b7cea277ba39ddad25430200d8cb713c143d04e9df1520b59eca9aa"},
+        {"address":"0x69f204","bytes":264,"sha256":"d19f6820654a8873854540808c4a9a4fe98e0240fe5a4b24de1966399fa3022c"}
+      ]
+    },
+    "pointerBoundary": "Physical69fcb8/6a0010 remain exact global-base and wrapping-address adapters. Host Configuration.pointer validates a mapped resource byte and is not substituted for the original unchecked address calculation.",
+    "sharedChannelCount": "Authorized ImageReferences747b50 adapter delegates to Calibration::channel_count, preserving cfg3e0f80 clamp1..100 without a second algorithm.",
+    "mathDomain": "MappedWord is signed16; only fixed base2 and exponent(mapped/2000) are implemented. No general pow or logarithm API is claimed.",
+    "testsDefinedNotRun": ["signed rounding extrema and ties", "mapped bank collapse and channel stride", "actual curve knots and bias banks", "signed wrapped scale product", "typed missing-data errors and independent invalid-channel sentinel", "complete raw-halfword bounds requirement"],
+    "nativeModels": "Existing ProfileCalibrationScenarios and ImageReferencesScenarios retain original A32 publications and independent output expectations; adapters now reach the shared core.",
+    "integrationOwner": "Parent wires the root module, combines the reader and authorized channel adapter commits, and runs joint host/native gates. No host build target or SDK/native executable identity is claimed here."
+  },
+  "sources": {
+    "index": "private-data/scratch/xm1-decomp/index/55436fc85c0560dd252b0410af6f2427fe198cd3-a5daad359532.tsv",
+    "images": [
+      {
+        "image": 5,
+        "base": "0xbf1a00",
+        "path": "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin",
+        "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
+      },
+      {
+        "image": 4,
+        "base": "0x61c400",
+        "path": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin",
+        "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
+      },
+      {
+        "image": 0,
+        "base": "0x40000",
+        "path": "private-data/analysis/x-m1-1.50/decode/loader-40000.bin",
+        "sha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
+      }
+    ],
+    "pinnedC": [
+      "settings/tu_00ef4518.c",
+      "settings/profile_calibration_factor_operations.c",
+      "settings/profile_calibration_factors.h",
+      "capture/record/tu_00ef325c.c",
+      "settings/profile_triplets.c",
+      "storage/dcf/tu_00ee9ab0.c",
+      "settings/profile_value_conversion.c",
+      "settings/profile_value_queries.c",
+      "settings/profile_level_pair_encoding.c",
+      "settings/tu_00746018.c",
+      "settings/configuration_workspace.c",
+      "settings/tu_0069f30c.c",
+      "runtime/libm/tu_00893860.c",
+      "runtime/libm/runtime_power_float_checked.c",
+      "platform/osal/interface_tasks.c",
+      "capture/frame/current_frame_requests.c",
+      "capture/frame/record_calibration_overlay.h",
+      "imaging/pipeline/image_dma_jobs.c",
+      "imaging/pipeline/image_dma_job_setup.c",
+      "imaging/pipeline/image_dma_job_setup.h",
+      "drivers/isp/tu_006961f0.c",
+      "native_image_lifecycle/xm1_image_lifecycle.c",
+      "kernel0/src/cpu/cache_maintenance.c"
+    ],
+    "authority": "Pinned C is source context. NONMATCHING behavior, ABI and layout were resolved from original A32 bytes; route extents below identify those bytes, not generated Rust or saved execution receipts."
+  },
+  "routes": [
+    {
+      "address": "0xef4518",
+      "symbol": "xm1_pipeline_image_calibrate_profile",
+      "abi": "FactorRequest*,CalibrationTriplet*,Address32->void",
+      "image": 5,
+      "bytes": 232,
+      "sha256": "bd6576076753cfd09517ceb184c8ac1621342d09a49563168e0cadb4f7a78a66"
+    },
+    {
+      "address": "0xef4460",
+      "symbol": "xm1_pipeline_image_build_profile_factors",
+      "abi": "FactorRequest*,FactorSet*->void",
+      "image": 5,
+      "bytes": 184,
+      "sha256": "a22b11794f492feec442901026d27555d2f3a7c2b969cced2b143fbe0b199599"
+    },
+    {
+      "address": "0xef4600",
+      "symbol": "xm1_pipeline_image_clamp_profile",
+      "abi": "u32,CalibrationTriplet*,ClampFlags*,u32->void",
+      "image": 5,
+      "bytes": 1308,
+      "sha256": "089f0df679ee272700b1e3a998864a0ed4ddbe164bc9526fb757e89bd3aa4876"
+    },
+    {
+      "address": "0xef4b1c",
+      "symbol": "xm1_pipeline_image_clamp_geometry",
+      "abi": "u32,CalibrationTriplet*,u32,CalibrationTriplet*,u8*,i16,Address32->void",
+      "image": 5,
+      "bytes": 216,
+      "sha256": "78dcc9ad5be8e117aecdcb62f71f7b02432365b77151ac3ee631da09aad337ae"
+    },
+    {
+      "address": "0xef4bf4",
+      "symbol": "xm1_pipeline_image_clamp_profile_output",
+      "abi": "CalibrationTriplet*,CalibrationTriplet*,Address32->void",
+      "image": 5,
+      "bytes": 144,
+      "sha256": "24e7b9759b79a54b35dab1a4cc25ef156b40c1e256452c72518307152be720f4"
+    },
+    {
+      "address": "0xef4d6c",
+      "symbol": "xm1_pipeline_image_apply_negative_profile_gain",
+      "abi": "i32,CalibrationTriplet*,u8*->void",
+      "image": 5,
+      "bytes": 344,
+      "sha256": "6f6436b061b980b2fba04b15229f85958f2b5228a87abcec0664fbfe520bc7c4"
+    },
+    {
+      "address": "0xef4d18",
+      "symbol": "xm1_pipeline_image_profile_apply_positive",
+      "abi": "i32,CalibrationTriplet*->void",
+      "image": 5,
+      "bytes": 32,
+      "sha256": "a5eed542ee148bd8fd21037d55faf5046c88d35872f03e94702664a6afb59aa3"
+    },
+    {
+      "address": "0xef4d38",
+      "symbol": "xm1_pipeline_image_profile_apply_difference",
+      "abi": "i32,i32,CalibrationTriplet*->void",
+      "image": 5,
+      "bytes": 52,
+      "sha256": "3a237425c0b8d31062ab2b1a188811a36321e715146822ddebb613da1cde45bf"
+    },
+    {
+      "address": "0xef3410",
+      "symbol": "xm1_pipeline_image_profile_apply_converted_value",
+      "abi": "CalibrationTriplet*,i32->void",
+      "image": 5,
+      "bytes": 36,
+      "sha256": "e1a292d71bcde0410a6bfc3d05b513a796d31638a8b4918fb06d304304f2e190"
+    },
+    {
+      "address": "0xef73e4",
+      "symbol": "xm1_pipeline_image_decode_profile_level",
+      "abi": "i32->i32",
+      "image": 5,
+      "bytes": 88,
+      "sha256": "1438ae46d0aa744c72bcb801017d03affe3100033ab614b5739823ef748c70c1"
+    },
+    {
+      "address": "0xef74e4",
+      "symbol": "xm1_pipeline_image_profile_converted_decade",
+      "abi": "i32->i32",
+      "image": 5,
+      "bytes": 20,
+      "sha256": "a6375a926b81ccde614afe3861fb6fa7d153d75fec732eb43f02639963d7d6e2"
+    },
+    {
+      "address": "0xef3f04",
+      "symbol": "xm1_pipeline_image_profile_delta_factors",
+      "abi": "i32,i32,CalibrationTriplet*->void",
+      "image": 5,
+      "bytes": 796,
+      "sha256": "d5a38cdffa7ad7fdcae8c327530a5deed00e8436e9808524182f6cdd28ca7346"
+    },
+    {
+      "address": "0xef4220",
+      "symbol": "xm1_pipeline_image_profile_split_factors",
+      "abi": "i32,CalibrationTriplet*->void",
+      "image": 5,
+      "bytes": 84,
+      "sha256": "97d12612337f7f8aa31ff28c4d151bc89cf2b2594a0360d0cc0e0b06ff5e7d61"
+    },
+    {
+      "address": "0xef4274",
+      "symbol": "xm1_pipeline_image_profile_selected_factors",
+      "abi": "i32,CalibrationTriplet*->void",
+      "image": 5,
+      "bytes": 324,
+      "sha256": "0a46289d42697f79e728da0f8005afc9b78933d16aabaec758f71b3e21b216f2"
+    },
+    {
+      "address": "0xef33b4",
+      "symbol": "xm1_pipeline_image_profile_scale_percent",
+      "abi": "CalibrationTriplet*,u32->void",
+      "image": 5,
+      "bytes": 92,
+      "sha256": "713039bf0a3a3ace64f2dd2cd1a6dce680b06173473b3589fad13926887ec366"
+    },
+    {
+      "address": "0xee9ab0",
+      "symbol": "xm1_pipeline_image_profile_history_linearize",
+      "abi": "i32->u32",
+      "image": 5,
+      "bytes": 144,
+      "sha256": "3ddff2ca30a2f6dc49e157ebea861c1563e9f080858e8eacaa5c16f308659b7e"
+    },
+    {
+      "address": "0x74677c",
+      "symbol": "xm1_pipeline_image_profile_split_count",
+      "abi": "void->u32",
+      "image": 4,
+      "bytes": 40,
+      "sha256": "f8cb4920320e81a2f97ec5e2effcb1bc82bcc8de9a005726ad9311c1bd7ee2f4"
+    },
+    {
+      "address": "0x7467a4",
+      "symbol": "xm1_pipeline_image_classify_curve_index",
+      "abi": "u32->u32",
+      "image": 4,
+      "bytes": 68,
+      "sha256": "e76de90c3501638e2909a0d8b842a9b1f90a046dcf352a37b93d9f3f63768f2d"
+    },
+    {
+      "address": "0x746834",
+      "symbol": "xm1_pipeline_image_collapse_curve_index",
+      "abi": "u32->u32",
+      "image": 4,
+      "bytes": 132,
+      "sha256": "d639c427256803125d62e4236208519ddde7e9853c39eedd15582758d377f688"
+    },
+    {
+      "address": "0x74690c",
+      "symbol": "xm1_pipeline_image_configuration_mapped_word",
+      "abi": "u32,i32->i32",
+      "image": 4,
+      "bytes": 56,
+      "sha256": "624159c6ea11899700ea439a0fbc519a1b62f426b1cf794f9791aac3ca9be491"
+    },
+    {
+      "address": "0x74695c",
+      "symbol": "xm1_pipeline_image_transform_mapped_word",
+      "abi": "u32,i32->u16",
+      "image": 4,
+      "bytes": 68,
+      "sha256": "72f1aba902ebe20976d288a22001b8a687fb641eff5e6771e5eee2eef7e38009"
+    },
+    {
+      "address": "0x748818",
+      "symbol": "xm1_pipeline_image_scaled_channel_curve",
+      "abi": "i32->u32",
+      "image": 4,
+      "bytes": 116,
+      "sha256": "3e3b6a0909197608398c9492a68fff9b48b778bbf0c2966aa7cb32118f129226"
+    },
+    {
+      "address": "0x747354",
+      "symbol": "xm1_pipeline_image_channel_curve_origin",
+      "abi": "i32->u32",
+      "image": 4,
+      "bytes": 32,
+      "sha256": "669a7c563befa7f20cc9e218b3e9d265109d2997ca55e8c91765e86d7e4119aa"
+    },
+    {
+      "address": "0x747374",
+      "symbol": "xm1_pipeline_image_channel_bias",
+      "abi": "i32,u32->i32",
+      "image": 4,
+      "bytes": 148,
+      "sha256": "14c4bf311742be57c5add5aee829fd12fd9ee7134f838da2d47bdd9613e0ba85"
+    },
+    {
+      "address": "0x747a08",
+      "symbol": "xm1_pipeline_image_channel_biased_word",
+      "abi": "i32,u32->i32",
+      "image": 4,
+      "bytes": 64,
+      "sha256": "6cf9b1a7708e2c1ba4475d538c2305731c453954091229fec298058e7b6327af"
+    },
+    {
+      "address": "0x74782c",
+      "symbol": "xm1_pipeline_image_interpolate_channel_curve",
+      "abi": "i32,i16->u32",
+      "image": 4,
+      "bytes": 412,
+      "sha256": "659967adee0ac879ccf83b838db4e0d5fe4d5081b331835c709778a025478b4e"
+    },
+    {
+      "address": "0x747a88",
+      "symbol": "xm1_pipeline_image_channel_curve_value",
+      "abi": "i32->u32",
+      "image": 4,
+      "bytes": 36,
+      "sha256": "1dd13694c561e03dba9c72fd9097e8290cdc1883a6e7bbc5f7081934d0590e87"
+    },
+    {
+      "address": "0x741fa0",
+      "symbol": "xm1_pipeline_image_round_tenths",
+      "abi": "i32->i32",
+      "image": 4,
+      "bytes": 76,
+      "sha256": "f372929d8194f3676c2c0fc1827b2facf88f76f0a3f439823604bc3a2e6b63af"
+    },
+    {
+      "address": "0x69fcb8",
+      "symbol": "xm1_pipeline_image_configuration_base",
+      "abi": "void->Address32",
+      "image": 4,
+      "bytes": 32,
+      "sha256": "fb1388df01c749e2fce65decf0eb71d7c0df813136fb8269b3b61e31b5825ff9"
+    },
+    {
+      "address": "0x6a0010",
+      "symbol": "xm1_pipeline_image_configuration_pointer",
+      "abi": "u32->Address32",
+      "image": 4,
+      "bytes": 24,
+      "sha256": "f38fe2f9d86a68892f12d4e1252829ae843f1bf4d96b3bd8d1d645270609aca3"
+    },
+    {
+      "address": "0xe63fd4",
+      "symbol": "xm1_pipeline_image_process_calibration_overlay",
+      "abi": "Address32,CalibrationOverlay*->i32",
+      "image": 5,
+      "bytes": 316,
+      "sha256": "aae81cf218748cebd3440ae55e5cd0da6fd834bad1dd4099e570af9cb2ea4428"
+    },
+    {
+      "address": "0xe63fa0",
+      "symbol": "xm1_pipeline_image_calibration_overlay_complete",
+      "abi": "void->void",
+      "image": 5,
+      "bytes": 52,
+      "sha256": "70f855dda19b54e95bde0ec6e791e3dfa2373e76c906f88deb2de9a64cfd970a"
+    },
+    {
+      "address": "0xda9ae8",
+      "symbol": "xm1_pipeline_image_calibration_stream_initialize",
+      "abi": "void->i32",
+      "image": 5,
+      "bytes": 92,
+      "sha256": "ec819b4ec84f7c604d4ff6b783d37bfaad059890d6c569758cdab8d0bdc422ce"
+    },
+    {
+      "address": "0xda9b44",
+      "symbol": "xm1_pipeline_image_calibration_stream_release",
+      "abi": "void->i32",
+      "image": 5,
+      "bytes": 36,
+      "sha256": "4a7a552962c9612640aa09430ad99a6768d6f5f165cf412a0d6a76f97a05a453"
+    },
+    {
+      "address": "0xda9b68",
+      "symbol": "xm1_pipeline_image_calibration_stream_finish_request",
+      "abi": "StreamFinish*->i32",
+      "image": 5,
+      "bytes": 208,
+      "sha256": "244ffad98914135cf45afd53141600eb0bb7a739ffadb30daf826176b8244686"
+    },
+    {
+      "address": "0xda9c38",
+      "symbol": "xm1_pipeline_image_calibration_stream_stop",
+      "abi": "void->i32",
+      "image": 5,
+      "bytes": 156,
+      "sha256": "b5f3c01024d3e1592e19a5b04829cfc02124faaa34697835b045ba4d2f8d7652"
+    },
+    {
+      "address": "0xda9cd4",
+      "symbol": "xm1_pipeline_image_calibration_stream_write_parameters",
+      "abi": "StreamParameters*->i32",
+      "image": 5,
+      "bytes": 204,
+      "sha256": "33a03333a7054993f82d2ee46d5ae6fae697e25ab8d5a9e4c6bf5b3f2101ca2c"
+    },
+    {
+      "address": "0xda9da0",
+      "symbol": "xm1_pipeline_image_calibration_stream_complete",
+      "abi": "void->void",
+      "image": 5,
+      "bytes": 164,
+      "sha256": "196c3ecd2f35c2722eddfc9e93a96c20740d18334f563d7039068b4aadf81707"
+    },
+    {
+      "address": "0x6995c0",
+      "symbol": "xm1_pipeline_image_pfp_fault",
+      "abi": "u32->never",
+      "image": 4,
+      "bytes": 36,
+      "sha256": "faaf2252f7631038bd93c86f8a708eaefd7c01239876d53cbc4bb6cf5795a333"
+    },
+    {
+      "address": "0x6995e4",
+      "symbol": "xm1_pipeline_image_pfp_initialize_control",
+      "abi": "void->void",
+      "image": 4,
+      "bytes": 156,
+      "sha256": "446194a3f8c8646e1ed00562de2a87c7a3e27e9f1ca7ae209d9207f55bb75cd4"
+    },
+    {
+      "address": "0x699680",
+      "symbol": "xm1_pipeline_image_pfp_release_control",
+      "abi": "void->void",
+      "image": 4,
+      "bytes": 136,
+      "sha256": "212242c596b71926953a7e38bf1801361c318cc8a33a229bcf607bbb00ded468"
+    },
+    {
+      "address": "0x699708",
+      "symbol": "xm1_pipeline_image_pfp_wait_ready",
+      "abi": "void->void",
+      "image": 4,
+      "bytes": 172,
+      "sha256": "c120511d8ccfc0496f721beecb2422eadc2a778708863d57b270107e807c3a35"
+    },
+    {
+      "address": "0x6997b4",
+      "symbol": "xm1_pipeline_image_pfp_begin",
+      "abi": "u32*->void",
+      "image": 4,
+      "bytes": 228,
+      "sha256": "f2a199c78fae5b1595157f23b8b754d8ad54b4ba9dc991b5326dbbffb4124347"
+    },
+    {
+      "address": "0x699898",
+      "symbol": "xm1_pipeline_image_pfp_stop_control",
+      "abi": "void->void",
+      "image": 4,
+      "bytes": 56,
+      "sha256": "0c3a8e85f78e7084ecac7e378e68188d02bdf2f6f0268087ad0694b6712b9821"
+    },
+    {
+      "address": "0x6998d0",
+      "symbol": "xm1_pipeline_image_pfp_set_source",
+      "abi": "StreamParameters*->StreamParameters*",
+      "image": 4,
+      "bytes": 488,
+      "sha256": "cf30513896c3db71c9970974ef15b250312ad8684821ac43540750468765e1b4"
+    },
+    {
+      "address": "0x699ab8",
+      "symbol": "xm1_pipeline_image_pfp_set_span",
+      "abi": "StreamSpan*->void",
+      "image": 4,
+      "bytes": 308,
+      "sha256": "e38b2850a267b51f3af292865d54956d44c7a4d5c1d6cc0e2c583dc641b0dff8"
+    },
+    {
+      "address": "0x699bec",
+      "symbol": "xm1_pipeline_image_pfp_set_coefficients",
+      "abi": "Address32->void",
+      "image": 4,
+      "bytes": 520,
+      "sha256": "5f8527c52675aa323514880ca8dabc7733c6c545f180d4f83490a98ea91a6868"
+    },
+    {
+      "address": "0x699df4",
+      "symbol": "xm1_pipeline_image_pfp_set_pair",
+      "abi": "u32*->void",
+      "image": 4,
+      "bytes": 236,
+      "sha256": "a7c23f8dc177e10187fb887d54e7b123a5de969d3b2f1e37c59bcccaef1578ff"
+    },
+    {
+      "address": "0x699ee0",
+      "symbol": "xm1_pipeline_image_pfp_set_interrupt_mask",
+      "abi": "u32*->void",
+      "image": 4,
+      "bytes": 264,
+      "sha256": "4a67971e6b5134c1ac24d5913c9d1cfd11b1b3d8b5d0d0690ff8f2c67b214afc"
+    },
+    {
+      "address": "0x699fe8",
+      "symbol": "xm1_pipeline_image_pfp_read_status",
+      "abi": "u32*->void",
+      "image": 4,
+      "bytes": 92,
+      "sha256": "319a25cc1fb275fd24d34805df641105d9b6d257d1e45adf0d937b571f074ecb"
+    },
+    {
+      "address": "0x69a044",
+      "symbol": "xm1_pipeline_image_pfp_acknowledge",
+      "abi": "void->void",
+      "image": 4,
+      "bytes": 132,
+      "sha256": "2c2457e376bc024cc0d0a56b0e9cc9a52826c9cdc85f6b519a5247c9a6ef7286"
+    }
+  ],
+  "layouts": {
+    "FactorRequest": {
+      "bytes": 28,
+      "fields": {
+        "firstDelta": 0,
+        "secondDelta": 4,
+        "split": 8,
+        "selector": 12,
+        "values": 16,
+        "reservedHalf": 22,
+        "mode": 24
+      }
+    },
+    "CalibrationTriplet": {
+      "bytes": 6,
+      "gainBits": 16,
+      "lanes": 3
+    },
+    "FactorSet": {
+      "bytes": 24,
+      "tripletOffsets": [
+        0,
+        6,
+        12,
+        18
+      ],
+      "preservedHalfOffsetsForOtherModes": [
+        4,
+        10,
+        16
+      ]
+    },
+    "ClampFlags": {
+      "bytes": 8,
+      "upper": 0,
+      "lower": 4
+    },
+    "StreamParameters": {
+      "bytes": 28,
+      "fields": {
+        "format": 0,
+        "source": 4,
+        "widthBytes": 8,
+        "destination": 12,
+        "calibrationEntries": 16,
+        "coefficients": 20,
+        "pairControl": 24
+      }
+    },
+    "CalibrationOverlay": {
+      "bytes": 32,
+      "fields": {
+        "requested": 0,
+        "packing": 4,
+        "address": 8,
+        "strideBytes": 12,
+        "start": 16,
+        "calibrationEntries": 20,
+        "pairControl": 24,
+        "coefficients": 28
+      }
+    },
+    "StreamFinish": {
+      "bytes": 8,
+      "requested": 0,
+      "callback": 4
+    },
+    "StreamState": {
+      "bytes": 52,
+      "address": "0x14ce6f8",
+      "fields": {
+        "phase": 0,
+        "irqHandle": 4,
+        "parameters": 8,
+        "callback": 36,
+        "requested": 40,
+        "remainingEntries": 44,
+        "nextAddress": 48
+      }
+    },
+    "StreamDriver": {
+      "bytes": 16,
+      "address": "0x89f75c",
+      "fields": {
+        "enabled": 0,
+        "pending": 4,
+        "routeHandle": 8,
+        "error": 12
+      }
+    }
+  },
+  "a32Corrections": [
+    "ef4518 metadata fields are 0x9e688 through 0x9e6ac, not the recovered header offsets near 0x1ab218.",
+    "ef4b1c sixth argument is signed halfword from its stack slot. Metadata unconditionally reads the effective byte even when its pointer is zero; the optional output store remains conditional.",
+    "ef4d6c gain divisors are unsigned LDRH values. Each nonzero gain is loaded again after its configuration read. Exposure is narrowed to signed halfword before the history call.",
+    "ef4600 class 2 uses maxima [32767,cfg7cba,cfg7cbe], minima [256,cfg7cb4,cfg7cb8], and retains the unused cfg7938 read. ARM flag shifts use the low eight shift bits, including class-86 wrap.",
+    "74782c consumes eleven curve values and eleven knots. Signed-halfword coordinates, wrapped signed products and truncating signed division are retained.",
+    "748818 wraps the product and addition to signed 32 bits before division by 1000. Channel and 0xffff sentinel branches are retained.",
+    "699708 writes control zero, then waits for control bit16 to become set. The recovered infinite-loop C is not authoritative.",
+    "6998d0 and 699ab8 physically read the input word before checking the descriptor pointer for null. Dedicated A32 loads preserve address4/address0 accesses. 6998d0 returns its input descriptor pointer on the valid path.",
+    "699ee0 reads the input five times and publishes only bits0..4. A32 initializes the output to zero at 699f3c, extracts only those five bits and stores to fff1a020 at 699fdc. High27 input scratch bits are dead at this consumer. This does not qualify motion or other private-stack taint.",
+    "PFP coefficients validate four six-bit weights at positions0,7,14,21 with sum0 or32, then publish mask0xf7efdfbf. Validation and packing retain distinct ordered source loads.",
+    "da9cd4 extent and remaining fields count 34-bit calibration entries. Chunk0x3ffe0 advances the byte address by0x10ff78. Tail completion republishes phase2, not phase3.",
+    "Actual runtime release is da9b44. Relocated aliases1208e94/1213668/12176f4 resolve to ee9ab0/ef33b4/ef73e4. No relocated application entry is retained."
+  ],
+  "floatClosure": {
+    "mappedInput": "Signed halfword, fixed base2, exponent=(f32)input/2000. Output stays finite and normal throughout the complete input domain.",
+    "implementation": "Owned allocation-free specialization of the source fdlibm powf reduction and exponential polynomial, including original special exponents and A32-confirmed constants. No stock pow/log wrapper remains.",
+    "constantsHex": {
+      "lg2High": "3f317200",
+      "lg2": "3f317218",
+      "lg2Low": "35bfbe8c",
+      "p1": "3e2aaaab",
+      "p2": "bb360b61",
+      "p3": "388ab355",
+      "p4": "b5ddea0e",
+      "p5": "3331bb4c"
+    },
+    "sourceExtents": [
+      {
+        "address": "0x8948e4",
+        "bytes": 1284,
+        "sha256": "428aa03c67a0665bbd20baff63a223b068d87f7e9c4c47eddc2e0a6b7caa1b86"
+      },
+      {
+        "address": "0x897ea4",
+        "bytes": 2480,
+        "sha256": "42929effee1cdc5e0c6a1ea1796eec62fdc19219cab35911fb6782a48cf1f936"
+      }
+    ]
+  },
+  "sharedOwnedBindings": [
+    {
+      "owner": "PipelineBuffers",
+      "symbols": [
+        "xm1_buffers_configuration_byte",
+        "xm1_buffers_configuration_half",
+        "xm1_develop_trace_event"
+      ],
+      "contract": "Configuration base is the word at96ca50; keys are direct byte offsets. Trace event is the existing typed kernel42188 endpoint adapter."
+    },
+    {
+      "owner": "PipelineImageReferences",
+      "symbols": [
+        "xm1_pipeline_image_configuration_signed_byte",
+        "xm1_pipeline_image_channel_count"
+      ],
+      "contract": "Signed-byte result is sign-extended i32. No duplicate69f8fc/69fec8 getter is introduced."
+    },
+    {
+      "owner": "PipelineWarpEngine",
+      "symbols": [
+        "xm1_pipeline_image_route_request",
+        "xm1_pipeline_image_route_acquire",
+        "xm1_pipeline_image_route_release",
+        "xm1_pipeline_image_interrupt_acquire",
+        "xm1_pipeline_image_interrupt_release"
+      ],
+      "contract": "PFP route request(0x212,13,8), acquire slot44; IRQ source0x65 uses the owned stream-complete callback."
+    },
+    {
+      "owner": "PipelineImagePlanes",
+      "symbols": [
+        "xm1_pipeline_image_wait_reserved",
+        "xm1_pipeline_image_signal_reserved",
+        "xm1_pipeline_image_current_task",
+        "xm1_pipeline_image_send_notification",
+        "xm1_pipeline_image_wait_all"
+      ],
+      "contract": "Reserved semaphore49, completion notification0x10, wait-all mask0x30, infinite timeout0xffffffff."
+    },
+    {
+      "owner": "PipelineObjectAllocator",
+      "symbols": [
+        "xm1_pipeline_image_trace_begin",
+        "xm1_pipeline_image_trace_end"
+      ],
+      "contract": "Operation6023300; trace-end owns its existing operation-tag transformation."
+    }
+  ],
+  "externalOwnership": {
+    "PipelineOutputTriplets": [
+      "ef4c84 calibration_rate_adjustment",
+      "ef4cc0 scale_triplet_tenths"
+    ],
+    "PipelineOutputs": [
+      "ef3434 rate_grid_weights",
+      "ef4fc8 profile_adjusted_limits",
+      "74dbe4",
+      "74db20",
+      "74dc10",
+      "74dc78",
+      "722abc",
+      "723234"
+    ]
+  },
+  "realDeviceBoundary": {
+    "applicationWrappersOwned": [
+      "e63fd4 request construction, logging, trace interval, current-task capture, completion wait and cleanup",
+      "da9ae8/da9b44/da9b68/da9c38/da9cd4/da9da0 runtime lifecycle, chunking, IRQ setup and tail scheduling",
+      "6995c0 through69a044 PFP validation, coefficient packing and register publication"
+    ],
+    "registers": {
+      "control": "fff1a000",
+      "source": "fff1a004",
+      "width": "fff1a008",
+      "destination": "fff1a00c",
+      "entryCount": "fff1a010",
+      "pair": "fff1a014",
+      "status": "fff1a018",
+      "acknowledgment": "fff1a01c",
+      "interruptMask": "fff1a020",
+      "coefficients": "fff1a030..fff1a22c"
+    },
+    "missingLaw": [
+      "Ready-bit16 evolution after writing control zero.",
+      "Proprietary 34-bit calibration-entry transform, pixel/stencil output, memory visibility and interrupt timing.",
+      "Physical cache coherence and CP15 cache geometry effects."
+    ],
+    "cacheEndpoint": {
+      "symbol": "xm1_profile_cache_all",
+      "entry": "0x42634",
+      "arguments": [
+        0,
+        0
+      ],
+      "classification": "Actual kernel privileged cache service, not an application wrapper.",
+      "entryBytes": 8,
+      "entrySha256": "8f0bd666ba3b42297514abf9c761bdce6b47235c638984ccaafe3e904027fe49",
+      "rangeBytes": 184,
+      "rangeSha256": "5e6b1eeb90485a13ef406662700c5a37f5de5b5d0f742b878dfee766b4cff49d",
+      "wholeCacheEntry": "0x426fc",
+      "wholeCacheBytes": 188,
+      "wholeCacheSha256": "bdaad7ec77dd01dee3cada92033e16764ac0068675b256affa7955b5edd7b147",
+      "evidence": "Kernel entry selects whole-cache path for(0,0). Original A32 reads CP15 CLIDR/CCSIDR and issues set/way maintenance MCR c7,c14,2 at4278c."
+    },
+    "admission": "No synthetic ready transition, stencil output, fallback success, hardware echo or opaque application call script is supplied. Full frontend/native root qualification requires an admitted real device law."
+  },
+  "models": {
+    "module": "ProfileCalibrationScenarios",
+    "publications": "profileCalibrationPublications",
+    "scenarios": "profileCalibrationScenarios :: ByteString -> (StagePublication -> Address) -> [StageScenario]",
+    "byteStringContract": "Original image5 id5-00bf1a00.bin, basebf1a00, not kernel0 and not a candidate image. Only immutable split/history source bytes are copied into fixtures.",
+    "pureModels": [
+      "CalibrationValues",
+      "ProfileFactors",
+      "ClampParameters",
+      "clampMode",
+      "calibrateProfileValues",
+      "clampProfileValues",
+      "profileHistoryPercent",
+      "scaleProfileValues",
+      "negativeProfileValues",
+      "StreamParameters",
+      "streamProgramEffects"
+    ],
+    "coverage": [
+      "Factor modes and untouched halfword fields; calibrate metadata and null metadata.",
+      "Coupled minimum and maximum repairs, signed overflow, zero divisors, class2, class86 flag shift wrap and optional flags.",
+      "Geometry threshold/rate behavior and explicit physical address0 byte fixture; aliased and disjoint output clamps.",
+      "Negative, positive and encoded-difference exposure application, unsigned high gains and unchanged nonnegative branches.",
+      "Decimal rounding, configuration pointer wrap, curve-bank boundaries and invalid counts/indices.",
+      "Independent Float power model over mapped signed-halfword boundary/special exponents.",
+      "Channel interpolation bounds/repeated knots, signed bias banks, zero and sentinel factors, invalid channels and signed product overflow.",
+      "PFP mask garbage-bit elimination, source return ABI, coefficient packing, pair mask, entry chunking and completion/tail transitions."
+    ],
+    "stateConstructors": [
+      "profileCalibrationInitial",
+      "calibrationValuesPatch",
+      "streamParameterWords",
+      "streamProgramEffects"
+    ],
+    "streamEffects": "For a valid stable request and exactly128 coefficient words, successful patches follow source register-programming order: control/source/width, coefficient table, destination/entry-count/pair. Left reports validation failure, not a complete partial-effect trace.",
+    "faults": {
+      "constructor": "profileCalibrationFaultScenarios :: [StreamFaultScenario]",
+      "contract": "Separate definitions expect the persistent driver error word at89f768 followed by the source halt. They are not appended to ordinary returning StageScenario cases. Parent admission must terminate on the error marker or support the original halt; these fixtures have not executed.",
+      "cases": [
+        "disabled mask",
+        "pending begin",
+        "null descriptor physical address4 read",
+        "null span physical address0 read",
+        "unaligned span",
+        "out-of-range entry count",
+        "invalid coefficient sum"
+      ]
+    },
+    "retainedCalls": "Only actual kernel cache entry42634 is scripted in the tail scenario. No application helper is intercepted.",
+    "verification": "Not run. Parent must integrate module, assembly and model and perform all checks/admission."
+  },
+  "immutableData": [
+    {
+      "address": "0xef5048",
+      "bytes": 124,
+      "sha256": "fc22d87d05cb18d9467a57be7d9052c22795d15fb72909123fc2ec7e4c617f87"
+    },
+    {
+      "address": "0xee9dc8",
+      "bytes": 200,
+      "sha256": "5891de0e37483daa362b0d5d2555414ce65c13ca216535388bff01a38ce613af"
+    },
+    {
+      "address": "0xe58890",
+      "bytes": 512,
+      "sha256": "a9c3fe3862f563b0f734a594557a85230b6a13c26e1b1be99ce9c894f14b4eda",
+      "classification": "Original e54c84 coefficient table independently authenticated here; all128 rows satisfy the owned sum0/sum32 validator. Proprietary bytes are not embedded in Rust."
+    }
+  ]
+}

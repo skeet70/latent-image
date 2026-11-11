@@ -1,0 +1,114 @@
+{
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "qualification": "Source and actual A32 inspection. No checks or native execution run.",
+  "extents": [
+    {
+      "stockEntry": "0xe64a44",
+      "size": 1464,
+      "extentSha256": "dc3956a0553f8672fb0713c4cd728e28cfcc607593f31c709172e428d6a814a7",
+      "imageSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+      "ownedSymbol": "xm1_pipeline_image_resize_planes"
+    },
+    {
+      "stockEntry": "0xe57ab0",
+      "size": 172,
+      "extentSha256": "dd9c21cbf160a797896367a772b53eb46c6f2449dcfdfa794dd484baa67dfe1f",
+      "imageSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+      "ownedSymbol": "xm1_pipeline_image_select_resize_mode"
+    },
+    {
+      "stockEntry": "0xe55dc8",
+      "size": 168,
+      "extentSha256": "9d0e712909e9e2fdfb76de0a2ef8c5b50d032ae7286ed47d4d7f2aa46250bafb",
+      "imageSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+      "ownedSymbol": "xm1_pipeline_image_expand_distortion"
+    },
+    {
+      "stockEntry": "0xe57b5c",
+      "size": 72,
+      "extentSha256": "1afbd6e5e376ebfff845a495672e3309b933382325203119b55a3eeb2389d844",
+      "imageSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+      "ownedSymbol": "xm1_pipeline_image_distortion_band"
+    },
+    {
+      "stockEntry": "0xe57ba4",
+      "size": 272,
+      "extentSha256": "b5396263bec1054073cc8a7570b6af2f0ff41649edfb31eed62cbff4259f4bd5",
+      "imageSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+      "ownedSymbol": "xm1_pipeline_image_distortion_enabled"
+    },
+    {
+      "stockEntry": "0xe63f38",
+      "size": 52,
+      "extentSha256": "c72ab054a416af3302dab629ac50162d256864938b5741156c44a03aa6fe416a",
+      "imageSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+      "ownedSymbol": "xm1_pipeline_image_resize_complete"
+    },
+    {
+      "stockEntry": "0xe64988",
+      "size": 188,
+      "extentSha256": "65e0825461dfe5a385e8493d5f40d3c6d1d85d0e118786e34302f4c0afb340ff",
+      "imageSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+      "ownedSymbol": "xm1_pipeline_image_snapshot_warp"
+    },
+    {
+      "stockEntry": "0x6df9bc",
+      "size": 256,
+      "extentSha256": "e740a2d5f7d1fa17a834e678690f2ce862f408a348d470b931bb140c98137014",
+      "imageSha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+      "ownedSymbol": "xm1_pipeline_image_warp_read_registers"
+    }
+  ],
+  "configurationLayout": {
+    "size": 80,
+    "sourceWidth": 24,
+    "sourceHeight": 28,
+    "sourceLastX": 32,
+    "sourceLastY": 36,
+    "destinationWidth": 56,
+    "destinationHeight": 60,
+    "correction": 72,
+    "completion": 76
+  },
+  "numericLaws": [
+    "A32 register shifts use low8 count; counts>=32 yield0.",
+    "32-bit multiplication/addition/subtraction wrap before unsigned division.",
+    "Source crop pair490/494 or460/464 is selected by sourceflag04000000 and operation2.",
+    "Source expansion address and centering deltas use logical right shifts.",
+    "Resize shift is selected twice from real configuration thresholds and 16-bit decimation ratios.",
+    "Source NONMATCHING incoming_r1/incoming_r2 expressions are not implemented; A32 e64bb0..e64c4c confirms actual scalar crop dimensions.",
+    "Destination height rounds to8 after scales and optional correction construction.",
+    "A32 e649f0..e64a38 samples55hardware registers, copies55words only for debug count0..9, then increments count."
+  ],
+  "hardwareBoundary": {
+    "kind": "fixed warp MMIO sampling",
+    "base": "0xfff65000",
+    "ranges": [
+      "control0x00",
+      "mode0x04",
+      "parameters0x10..0x58",
+      "coefficients0x60..0xd8",
+      "final0x140..0x148"
+    ],
+    "missingDeviceLaw": "Actual warp processing, reset/ready bit transitions, IRQ delivery and image effects remain device-law boundaries owned by the integration oracle. No pixels or reset completion are fabricated."
+  },
+  "ownedDependencies": {
+    "warpEngine": "PipelineWarpEngine owns initialization, parameter-building, register-programming and lifecycle to actual MMIO.",
+    "configuration": "xm1_buffers_configuration_byte",
+    "logging": "PipelineObjectAllocator owns application trace wrappers; kernel42188 is retained thread-name logging.",
+    "synchronization": "image_planes owns current_task, wait_all and send_notification to typed RTOS interface slots.",
+    "distortionConstruction": "xm1_pipeline_image_build_distortion remains a required CPU calibration implementation, not a hardware endpoint."
+  },
+  "models": {
+    "module": "ImageResizeScenarios",
+    "publications": "imageResizePublications",
+    "scenarios": "imageResizeScenarios",
+    "coveredEffects": [
+      "two real prepared resize configuration outputs with nontrivial division results",
+      "configuration decimation ratios and thresholds",
+      "warp MMIO readback55words",
+      "debug snapshot count0/9/10 external buffers and magic markers"
+    ],
+    "nativeArithmetic": "Must append authenticated real ARM division routines, not per-call scripted return values."
+  }
+}

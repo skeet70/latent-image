@@ -1,0 +1,169 @@
+{
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image4Sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+  "image5Sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+  "routes": [
+    {
+      "address": "0x726658",
+      "symbol": "xm1_develop_append_stream_text",
+      "abi": "void(category:u32,text:u32)"
+    },
+    {
+      "address": "0x7263ec",
+      "symbol": "xm1_pipeline_image_stream_marker",
+      "abi": "void(length:u32,marker:u32)"
+    },
+    {
+      "address": "0x69d328",
+      "symbol": "xm1_pipeline_image_calendar_read",
+      "abi": "void(fields:*mut u8)"
+    },
+    {
+      "address": "0x6b199c",
+      "symbol": "xm1_pipeline_image_calendar_selected",
+      "abi": "i32(fields:*mut u8)"
+    },
+    {
+      "address": "0x6b1738",
+      "symbol": "xm1_pipeline_image_calendar_current",
+      "abi": "i32(fields:*mut u8)"
+    },
+    {
+      "address": "0x6b1770",
+      "symbol": "xm1_pipeline_image_calendar_adjusted",
+      "abi": "i32(fields:*mut u8)"
+    },
+    {
+      "address": "0x6a7854",
+      "symbol": "xm1_pipeline_image_clock_enabled",
+      "abi": "u32()"
+    },
+    {
+      "address": "0x6a7878",
+      "symbol": "xm1_pipeline_image_clock_fields",
+      "abi": "void(direction:*mut u32,hours:*mut u32,minutes:*mut u32)"
+    },
+    {
+      "address": "0x72872c",
+      "symbol": "xm1_pipeline_image_trace_operation",
+      "abi": "void(operation:u32)"
+    },
+    {
+      "address": "0xeb0cbc",
+      "symbol": "xm1_pipeline_image_trace_begin",
+      "abi": "void(operation:u32)"
+    },
+    {
+      "address": "0xeb0ccc",
+      "symbol": "xm1_pipeline_image_trace_end",
+      "abi": "void(operation:u32)"
+    },
+    {
+      "address": "0xeb0ce0",
+      "symbol": "xm1_pipeline_image_trace_operation_end",
+      "abi": "void(operation:u32)"
+    }
+  ],
+  "sourceExtents": [
+    {
+      "address": "0x0069d328",
+      "size": 16,
+      "sha256": "4ce3a7cb6f88cda8cc1222441f3dc80ab56c4235e8af54f19f0b14ac3b4fbde8"
+    },
+    {
+      "address": "0x006b1738",
+      "size": 56,
+      "sha256": "33049a6f2a00c455188ea21fe2451eb6d2daea0a64188b2554dddd31ccddbd9e"
+    },
+    {
+      "address": "0x006b1770",
+      "size": 556,
+      "sha256": "0af22b60faa163e7512cde66b6a58b6daf5766732f683c86dcd92d6a49560caa"
+    },
+    {
+      "address": "0x006b199c",
+      "size": 48,
+      "sha256": "0a4815c5449f3a30dafa212a0c3e23ab5b3d0115ae6489baa013265513478f4a"
+    },
+    {
+      "address": "0x007263ec",
+      "size": 140,
+      "sha256": "7dc7cf1a6a9b0cff95153134693c9c414d1b91ffd4e27901262d4252a02f60d5"
+    },
+    {
+      "address": "0x0072872c",
+      "size": 120,
+      "sha256": "1a82c880495fcac5a7d78559761026dc8b5af7d2e006692bfd9123562cc57cda"
+    },
+    {
+      "address": "0x00eb0cbc",
+      "size": 16,
+      "sha256": "5db0d64b598e802abdd9faee23bdc2f48115c24b21c9c6d0ef434cfcff8219f5"
+    },
+    {
+      "address": "0x00eb0ccc",
+      "size": 20,
+      "sha256": "262403f9a188bf12af8f68ba9dd527a52c9a086484d6eafdf696d63896eba53b"
+    },
+    {
+      "address": "0x00eb0ce0",
+      "size": 20,
+      "sha256": "fe476111b424db310b7b24edc62f0ff80148927ce848d3cc7df3f5a97e084416"
+    },
+    {
+      "address": "0x006a7854",
+      "size": 36,
+      "sha256": "602c2baed6abe75d9a8bf55a034c7288e376d4f67298817891e54c93ca9d5abb"
+    },
+    {
+      "address": "0x006a7878",
+      "size": 92,
+      "sha256": "9291a7a0307b6522e0e822364ab02e06de72184732439e2eb2a81927b80b182b"
+    },
+    {
+      "address": "0x00726658",
+      "size": 352,
+      "sha256": "c567d25550ae9bc39712ba689664c0766fbbabf521090dca27b33a60f99b8c8f"
+    }
+  ],
+  "layout": {
+    "streamControl": "0x40a5b5e0; write offset+4, buffer pointer+12",
+    "calendar": "0x409c34b8; year,month,day,hour,minute,second bytes",
+    "profile": "0x409c281c; clock enable bit7+0x5c, subtract bit7+0x5b, hours low5+0x28, quarter-hours top2+0x20",
+    "traceControl": "0x4089ebec; enabled iff word1",
+    "traceStorage": "pointer at0x40a5c8b0; count+32, entries+36 stride12 [operation,timerOffset,ticks]"
+  },
+  "laws": [
+    "Text records contain an 8-byte header deae/category/category/32 followed by 32 text bytes truncated or zero-padded.",
+    "Text wraps when aligned(offset+43)>8188, writes aaaaaaaa at old offset then resumes at8; it stamps six calendar bytes at buffer start then writes55555555 at the new offset.",
+    "Calendar snapshot executes the owned nested critical service; adjusted calendar follows profile add/subtract with year rollover0..50 and leap-year low2bits rule.",
+    "Trace eb0cbc records operation unchanged; eb0ccc ORs10000000; eb0ce0 ORs20000000. Aliases preserve existing frontend names rather than source naming.",
+    "Trace counts below5440 append [operation,30000-timer,ticks]; disabled/full rings have no writes."
+  ],
+  "retainedSeams": [
+    {
+      "kind": "MMIO read",
+      "address": "0xfff91000",
+      "law": "Hardware timer current counter; trace reads once per admitted append."
+    },
+    {
+      "kind": "MMIO read",
+      "address": "0x400c0800",
+      "law": "Tick counter; trace reads once after writing timer offset."
+    }
+  ],
+  "dependencies": [
+    {
+      "owner": "PipelineBuffers",
+      "symbols": [
+        "xm1_develop_enter_critical",
+        "xm1_develop_leave_critical"
+      ]
+    }
+  ],
+  "preconditionsAndGaps": [
+    "Current calendar month must be1..12 when month-day lookup is reached. Undefined source month data is not normalized.",
+    "Only hardware timer/tick reads and actual retained critical dispatch endpoints remain; no stock application wrapper calls.",
+    "No build, test, formatter or native execution performed; parent owns cohesive verification."
+  ]
+}

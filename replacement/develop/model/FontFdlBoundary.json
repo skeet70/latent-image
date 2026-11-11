@@ -1,0 +1,1605 @@
+{
+  "family": "font-fdl-frontends",
+  "sourceCommit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "qualification": {
+    "status": "source-only; no build, model execution, native execution, or qualification performed",
+    "historicalReceipt": "17afdfa9/R12 remains its original scope; not rebound",
+    "extentEvidence": "Indexed extents import pinned index hashes. Eighteen actual function extents are independently hashed against original overlay bytes; one overrides a broader index range. Matching bytes are not C-behavior proof."
+  },
+  "sourceImage": {
+    "path": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+    "base": "0x01100000",
+    "sha256": "ee211bdaad39005b4f72e3443a76ca194905381a967cab787d6a4ef14e2d889d"
+  },
+  "publicBodies": [
+    {
+      "original": "0x01197e68",
+      "owned": "xm1_pipeline_image_font_binary_info",
+      "abi": "(data: u32, info: *mut FontBinaryInfo) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_program_info",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_011978d8.c",
+          "firstLine": 214,
+          "lastLine": 230,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 152,
+        "sha256": "3d8a357418b313a11067b5f46c9d0c2bea8ae1da631286be212253d18d0f999a",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x0119f0fc",
+      "owned": "xm1_pipeline_image_font_binary_info",
+      "abi": "(data: u32, info: *mut FontBinaryInfo) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_raster_info",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/raster_binary_info.c",
+          "firstLine": 22,
+          "lastLine": 36,
+          "status": "exact"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 152,
+        "sha256": "3d8a357418b313a11067b5f46c9d0c2bea8ae1da631286be212253d18d0f999a",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01197b98",
+      "owned": "xm1_pipeline_image_font_program_initialize",
+      "abi": "(data: u32, bytes: u32, workspace: u32) -> u32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_program_initialize",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_011978d8.c",
+          "firstLine": 116,
+          "lastLine": 210,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 696,
+        "sha256": "40bc0b04657f338361ab26c1fd4effd283b2397f4e702f3611d8d73276329319",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01197f98",
+      "owned": "xm1_pipeline_image_font_program_load_glyph",
+      "abi": "(context: u32, code: u32, horizontal_x: *mut i16, horizontal_y: *mut i16, vertical_x: *mut i16, vertical_y: *mut i16) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_program_load_glyph",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_011978d8.c",
+          "firstLine": 234,
+          "lastLine": 447,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 1356,
+        "sha256": "d8fc1123eeaf69af1d9b97f6bb3e6a7ecd2c4f34cd326605af922b1942b39258",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x0119f74c",
+      "owned": "xm1_pipeline_image_font_raster_load_glyph",
+      "abi": "(context: u32, code: u32, horizontal_x: *mut i16, horizontal_y: *mut i16, vertical_x: *mut i16, vertical_y: *mut i16) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_raster_load_glyph",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_0119ce70.c",
+          "firstLine": 1090,
+          "lastLine": 1300,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 1392,
+        "sha256": "be0b3caa731e59d4e27c5bbc55174fff4b48031f7456f88a7c495f06f12944be",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01197f18",
+      "owned": "xm1_pipeline_image_font_program_read_byte",
+      "abi": "(program: u32) -> u8 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_program_read_byte",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/font_program_vm.c",
+          "firstLine": 10,
+          "lastLine": 16,
+          "status": "exact"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 56,
+        "sha256": "84eab459ae34293bee160d18dc69190d99e4577be594f18c200911251cb53ad3",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01197f50",
+      "owned": "xm1_pipeline_image_font_program_read_short",
+      "abi": "(program: u32) -> i16 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_program_read_short",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/font_program_vm.c",
+          "firstLine": 18,
+          "lastLine": 26,
+          "status": "exact"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 72,
+        "sha256": "e8e0fe36d7e78a16282267d511305b32bfc7e6971ab8adf581c0a66779eb9dca",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x0117f51c",
+      "owned": "xm1_pipeline_image_font_fill_memory",
+      "abi": "(destination: u32, byte: u32, count: u32) -> u32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "ov48b_fill_font_memory",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_0117e684.c",
+          "firstLine": 276,
+          "lastLine": 345,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 304,
+        "sha256": "7b4aa308fa2b67ffd3cc5b8876e24f121febe271c48ae088f07221a164ca776b",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x0117f64c",
+      "owned": "xm1_pipeline_image_font_copy_memory",
+      "abi": "(destination: u32, source: u32, count: u32) ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "ov48b_copy_font_memory",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_0117e684.c",
+          "firstLine": 349,
+          "lastLine": 446,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 464,
+        "sha256": "14f67fe59358036a06e849a9418293bb6586ad37ae52218f07d6ace5dea35d11",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x0118ed64",
+      "owned": "xm1_pipeline_image_font_engine_metrics",
+      "abi": "(engine: u32, output: *mut u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_query_engine_metrics",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_0118dd48.c",
+          "firstLine": 736,
+          "lastLine": 834,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 664,
+        "sha256": "f405e6abc8aa3a02ba0a1e8b3d45abb3a692f23f842946a05f3d89b7682f6c0e",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x0119fcbc",
+      "owned": "xm1_pipeline_image_font_raster_configure",
+      "abi": "(request: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_raster_configure",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_0119fcbc.c",
+          "firstLine": 13,
+          "lastLine": 184,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 1412,
+        "sha256": "1be97f1db3a77366fe25be3b4ab2a0775e6e9af8bbbdaca6aa158fa33bff211b",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x011a0340",
+      "owned": "xm1_pipeline_image_font_raster_glyph_advance",
+      "abi": "(request: u32, glyph: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_raster_glyph_advance",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_0119fcbc.c",
+          "firstLine": 230,
+          "lastLine": 335,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 624,
+        "sha256": "3a7141cb116e5206eeb719dd3f427866f87a8b52530cf6ce4b75f5fe5e25f671",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x0118dd48",
+      "owned": "xm1_pipeline_image_font_clear_context",
+      "abi": "(engine: u32, context: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_clear_context",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_0118dd48.c",
+          "firstLine": 14,
+          "lastLine": 54,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 188,
+        "sha256": "e35b2fb8c740a894926dc24e2b2f726a489ebf2799070c835f48291f246d3b50",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01182108",
+      "owned": "xm1_pipeline_image_font_export_outline",
+      "abi": "(object: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_export_outline_layout",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_011809d4.c",
+          "firstLine": 1052,
+          "lastLine": 1145,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 484,
+        "sha256": "0062fd40d2c3014a7fbd94c47255cf966371cc5132dc1e2a1e3e0f70ef654037",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01182578",
+      "owned": "xm1_pipeline_image_font_export_bitmap",
+      "abi": "(object: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_export_bitmap_layout",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_011809d4.c",
+          "firstLine": 1288,
+          "lastLine": 1348,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 340,
+        "sha256": "4368067b683d9a816a9fae0a3180f5529e1c583b71cf3d1b3dd660c9d003c22b",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x011822ec",
+      "owned": "xm1_pipeline_image_font_prepare_outline",
+      "abi": "(object: u32, text: *const u16, length: u32, flags: u32, output: *mut u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_prepare_outline",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_011809d4.c",
+          "firstLine": 1149,
+          "lastLine": 1284,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 652,
+        "sha256": "bac42df5c873a579f2fa2cbe91d16b95e9c9834fca3305046b2defe776f2a9ba",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x011826cc",
+      "owned": "xm1_pipeline_image_font_prepare_bitmap",
+      "abi": "(object: u32, text: *const u16, length: u32, flags: u32, output: *mut u32, buffer: u32, stride: u32, rows: u32, x: u32, y: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_prepare_bitmap",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_011809d4.c",
+          "firstLine": 1352,
+          "lastLine": 1500,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 764,
+        "sha256": "6f4f0b179951c6d7bf4e0b7b1d16fd0fc357f12244d198b830994b66050d5e0f",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01181ed0",
+      "owned": "xm1_pipeline_image_font_fill_leading_rows",
+      "abi": "(object: u32, context: u32) ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_fill_leading_rows",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_011809d4.c",
+          "firstLine": 942,
+          "lastLine": 1048,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 568,
+        "sha256": "efe5114d113e1c5ccfc156b97511cfc4b8466c44f511b92745032d7098cedb3a",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01181c98",
+      "owned": "xm1_pipeline_image_font_fill_trailing_rows",
+      "abi": "(object: u32, context: u32) ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_fill_trailing_rows",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_011809d4.c",
+          "firstLine": 832,
+          "lastLine": 938,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 568,
+        "sha256": "90ac0839f4a594aa8cd14da9ae52882772f230e981a2459d5446cc350abffd7d",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01181458",
+      "owned": "xm1_pipeline_image_font_get_option",
+      "abi": "(object: u32, key: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_object_get_option",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_011809d4.c",
+          "firstLine": 477,
+          "lastLine": 653,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 872,
+        "sha256": "eb0a18d56e048a75e6f672a2c2e69b29bafae27aad1afdc6174e47d01877a42c",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x0117f390",
+      "owned": "xm1_pipeline_image_font_draw",
+      "abi": "(object: u32, text: *const u16, length: u32, mode: u32, x: u32, y: u32, first: u32, second: u32, foreground: u32, background: u32, edge: u32, details: u32, state: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "ov48b_render_font_bitmap",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/font_lifecycle.c",
+          "firstLine": 12,
+          "lastLine": 18,
+          "status": "exact"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 96,
+        "sha256": "9b844a89b1f974641483ad1015c2be47f6f05b5c940620798a8b4c7eb20317b6",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x011829c8",
+      "owned": "xm1_pipeline_image_font_draw",
+      "abi": "(object: u32, text: *const u16, length: u32, mode: u32, x: u32, y: u32, first: u32, second: u32, foreground: u32, background: u32, edge: u32, details: u32, state: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_object_draw_text",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_011809d4.c",
+          "firstLine": 1504,
+          "lastLine": 1625,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 1232,
+        "sha256": "6eb2b9288a1c479b0575bd7260d5b7ad48ca57fc3d540f206dedef5ceb839774",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x0117f3f0",
+      "owned": "xm1_pipeline_image_font_allocate",
+      "abi": "(bytes: u32) -> u32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "ov48b_allocate_font_memory",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_0117e684.c",
+          "firstLine": 235,
+          "lastLine": 247,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 108,
+        "sha256": "81c7edb16419d69c51f40a7485ff9d04e3e9c0784bbad75356810739be457b89",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x0117f45c",
+      "owned": "xm1_pipeline_image_font_resize",
+      "abi": "(allocation: u32, bytes: u32) -> u32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "ov48b_resize_font_memory",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_0117e684.c",
+          "firstLine": 251,
+          "lastLine": 259,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 96,
+        "sha256": "0011cc483bf52b64a19ec073105677e522f66a33f2d3fb23aab6bdf4a02f7013",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x0117f4bc",
+      "owned": "xm1_pipeline_image_font_release",
+      "abi": "(allocation: u32) ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "ov48b_release_font_memory",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_0117e684.c",
+          "firstLine": 263,
+          "lastLine": 272,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 96,
+        "sha256": "0060ac43576efcea2ae96bcb7cf619dd74e6eef1eceed8cdb9d3920a58afdf22",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x0118e49c",
+      "owned": "xm1_pipeline_image_font_shape",
+      "abi": "(engine: u32, request: u32, context: u32, flags: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_shape_text",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_0118dd48.c",
+          "firstLine": 347,
+          "lastLine": 585,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 1452,
+        "sha256": "822bb2a8fa042eb1fcd14414295849e592618e91d14fb1c8922db5f4650b8db9",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x0118df74",
+      "owned": "xm1_pipeline_image_font_grow_workspace",
+      "abi": "(engine: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_grow_workspace",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_0118dd48.c",
+          "firstLine": 130,
+          "lastLine": 183,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 220,
+        "sha256": "d22dce1ca5991ddf8305a158fcd07d8aaf7a68d5f14bb94703d0bf3299b73f31",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x0118e12c",
+      "owned": "xm1_pipeline_image_font_finalize_runs",
+      "abi": "(engine: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_finalize_positioned_runs",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_0118dd48.c",
+          "firstLine": 187,
+          "lastLine": 343,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 880,
+        "sha256": "a48d07d5f8e4be6ee66575df1a2860a27dbad1b76902cd819a5eb44030ea70d0",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x011956ac",
+      "owned": "xm1_pipeline_image_font_raster_height",
+      "abi": "(layout: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [],
+      "originalExtent": {
+        "bytes": 184,
+        "sha256": "6b30fba958d29b2a3025804a6ae56022349b59334e8c4d9850da34d5240db155",
+        "kind": "inspected A32 entry through next confirmed entry"
+      }
+    },
+    {
+      "original": "0x01195764",
+      "owned": "xm1_pipeline_image_font_raster_width",
+      "abi": "(layout: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [],
+      "originalExtent": {
+        "bytes": 184,
+        "sha256": "03debaddc67a3c303e22192e0ec6f48130e2287d14a2d60ba689cc2417965e54",
+        "kind": "inspected A32 entry through next confirmed entry"
+      }
+    },
+    {
+      "original": "0x01194e60",
+      "owned": "xm1_pipeline_image_font_raster_right_overhang",
+      "abi": "(layout: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [],
+      "originalExtent": {
+        "bytes": 80,
+        "sha256": "d30fe6f5de997060d037f41e8dccd79f347793d07be0c023c5cddd376d192254",
+        "kind": "inspected A32 entry through next confirmed entry"
+      }
+    },
+    {
+      "original": "0x011953a4",
+      "owned": "xm1_pipeline_image_font_raster_secondary_extent",
+      "abi": "(state: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_layout_secondary_extent",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/font_layout.c",
+          "firstLine": 38,
+          "lastLine": 45,
+          "status": "exact"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 80,
+        "sha256": "d30fe6f5de997060d037f41e8dccd79f347793d07be0c023c5cddd376d192254",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x0119581c",
+      "owned": "xm1_pipeline_image_font_raster_top_overhang",
+      "abi": "(state: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [],
+      "originalExtent": {
+        "bytes": 284,
+        "sha256": "e62caf8b5e62d58630d5cfce8f216e1ec335c6e2c891ffa925e54c5d7a88da77",
+        "kind": "inspected A32 entry through next confirmed entry"
+      }
+    },
+    {
+      "original": "0x011953f4",
+      "owned": "xm1_pipeline_image_font_initialize_raster_layout",
+      "abi": "(state: u32, data: u32, bytes: u32, workspace: u32, engine: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_initialize_raster_layout",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_01190d18.c",
+          "firstLine": 2642,
+          "lastLine": 2784,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 1348,
+        "sha256": "58064a3349938ed20083eb457774ab220a0133b72722a21f123d03a49f29e506",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x0119eed8",
+      "owned": "xm1_pipeline_image_font_raster_find_property",
+      "abi": "(context: u32, property: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_raster_find_property",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/font_raster_find_property.c",
+          "firstLine": 6,
+          "lastLine": 38,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 188,
+        "sha256": "b38453c052a053e4e2af5e2c338804dd857dc35105f08a32cd4a5b5a0ebd2fe8",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x011a0240",
+      "owned": "xm1_pipeline_image_font_raster_adjust_size",
+      "abi": "(request: u32, glyph: u32, adjusted: *mut i32, context: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_raster_adjust_size",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_0119fcbc.c",
+          "firstLine": 188,
+          "lastLine": 226,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 256,
+        "sha256": "eadc9f0f7e1548acbe1f84ddea31d836af710114bbdb7b63dbbdf2b1f2d97778",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01196c98",
+      "owned": "xm1_pipeline_image_font_outline_stroke_padding",
+      "abi": "(_state: u32, first: *mut i32, second: *mut i32, third: *mut i32, fourth: *mut i32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [],
+      "originalExtent": {
+        "bytes": 76,
+        "sha256": "b3d7d18741f553830fa0d473ef7d000ad0d9be75aece346e30af60d74058af19",
+        "kind": "inspected A32 entry through next confirmed entry"
+      }
+    },
+    {
+      "original": "0x01194eb0",
+      "owned": "xm1_pipeline_image_font_raster_stroke_padding",
+      "abi": "(state: u32, first: *mut i32, second: *mut i32, third: *mut i32, fourth: *mut i32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [],
+      "originalExtent": {
+        "bytes": 192,
+        "sha256": "dde293acaab3977055bea73fae1eb3b6cb4e11a3e0416b1bd3141101241e7616",
+        "kind": "inspected A32 entry through next confirmed entry"
+      }
+    },
+    {
+      "original": "0x01196ce4",
+      "owned": "xm1_pipeline_image_font_binary_read",
+      "abi": "(data: u32, offset: u32, count: i32) -> u32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [],
+      "originalExtent": {
+        "bytes": 68,
+        "sha256": "31bd18e542c5881672a4bcce1383dbdf95542cbf5d3d5c5d5351f97b9e149966",
+        "kind": "inspected A32 entry through next confirmed entry"
+      }
+    },
+    {
+      "original": "0x01194f70",
+      "owned": "xm1_pipeline_image_font_binary_read",
+      "abi": "(data: u32, offset: u32, count: i32) -> u32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [],
+      "originalExtent": {
+        "bytes": 68,
+        "sha256": "31bd18e542c5881672a4bcce1383dbdf95542cbf5d3d5c5d5351f97b9e149966",
+        "kind": "inspected A32 entry through next confirmed entry"
+      }
+    },
+    {
+      "original": "0x011984e4",
+      "owned": "xm1_pipeline_image_font_program_glyph_width",
+      "abi": "(program: u32, glyph: u32, orientation: i32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_program_glyph_width",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_011984e4.c",
+          "firstLine": 13,
+          "lastLine": 56,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 180,
+        "sha256": "9f9b327d2ee57d5e3c0cde6383b4289157bbc70bc050d75383e45c67388f4a96",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01199068",
+      "owned": "xm1_pipeline_image_font_program_render",
+      "abi": "(program: u32, request: *mut OutlineGlyphRequest) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_program_render",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_011984e4.c",
+          "firstLine": 568,
+          "lastLine": 644,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 344,
+        "sha256": "1f6bd976cb147830809b3e010728041a45cf57984e0a79fb5018f676b621b5ca",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01196fa4",
+      "owned": "xm1_pipeline_image_font_handle_query_width",
+      "abi": "(state: u32, glyph: u32, orientation: i32) -> u32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_handle_query_width",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/font_program_lifecycle.c",
+          "firstLine": 32,
+          "lastLine": 47,
+          "status": "exact"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 160,
+        "sha256": "9b7f822d79732eeaefd92e2d27bc1d270fb2eccff06138fbc829179095e5e12b",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01197044",
+      "owned": "xm1_pipeline_image_font_handle_render",
+      "abi": "(state: u32, width: *mut i32, request: *mut OutlineGlyphRequest) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_handle_render",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/font_program_lifecycle.c",
+          "firstLine": 49,
+          "lastLine": 66,
+          "status": "exact"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 180,
+        "sha256": "32955c6bed6c8ef31b18646468b30178af0d3575a6b42986434d9f4df7257aca",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x011972ac",
+      "owned": "xm1_pipeline_image_font_handle_glyph_width",
+      "abi": "(state: u32, glyph: u16) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_handle_glyph_width",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_01196d28.c",
+          "firstLine": 169,
+          "lastLine": 208,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 216,
+        "sha256": "be1a5ceb2ace12372ad1accc1f9d6494f8b698151cc4fbd35ffbdaaf67f5c2e0",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x011970f8",
+      "owned": "xm1_pipeline_image_font_handle_append_bitmap",
+      "abi": "(state: u32, glyph: u16, _clip: u32, length: *mut u32, buffer: *mut u32, words: *mut u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_handle_append_bitmap",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_01196d28.c",
+          "firstLine": 80,
+          "lastLine": 137,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 304,
+        "sha256": "992d07071fe0b8e86a0bcbf5a9f0fcf3530f0c8c6e725f13d39a43ef8f3ac8cc",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01197228",
+      "owned": "xm1_pipeline_image_font_handle_bitmap",
+      "abi": "(state: u32, glyph: u16, size: u32, bitmap: u32, words: *mut u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_handle_bitmap",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_01196d28.c",
+          "firstLine": 141,
+          "lastLine": 165,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 132,
+        "sha256": "16aa76cf8979629c39314d5febb72a5894027a38495410f031a5cc40e8f56fc7",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x011a27fc",
+      "owned": "xm1_pipeline_image_font_raster_property",
+      "abi": "(request: u32, glyph: u32, property: u32) -> u32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_raster_property",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_0119fcbc.c",
+          "firstLine": 1798,
+          "lastLine": 1889,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 800,
+        "sha256": "89794d0956f80e25968a66dd5e4441f8d62b1fd6d7a40c6f99a7eea41311fd2a",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x0119512c",
+      "owned": "xm1_pipeline_image_font_query_fallback",
+      "abi": "(state: u32, request: u32, glyph: u32, property: u32) -> u32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_query_fallback",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_01190d18.c",
+          "firstLine": 2507,
+          "lastLine": 2558,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 228,
+        "sha256": "392b029e89c0e28f108de034eda85083af510c2b14a7653c13dc6e93b8908887",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01196d28",
+      "owned": "xm1_pipeline_image_font_handle_weights",
+      "abi": "(state: u32, output: *mut i16) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_handle_weights",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_01196d28.c",
+          "firstLine": 11,
+          "lastLine": 69,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 452,
+        "sha256": "3234d0bc92549300ebd906b78a129479780a87473f2f26603253c990e5650cfb",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01194fb4",
+      "owned": "xm1_pipeline_image_font_raster_weights",
+      "abi": "(state: u32, output: *mut i16) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_layout_weights",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_01190d18.c",
+          "firstLine": 2447,
+          "lastLine": 2503,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 376,
+        "sha256": "bd74f94c60826ba10522e80e145f04d0150c778da9c259e96706e483d08db866",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01195224",
+      "owned": "xm1_pipeline_image_font_layout_glyph_width",
+      "abi": "(state: u32, request: u32, glyph: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_layout_glyph_width",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/font_layout.c",
+          "firstLine": 21,
+          "lastLine": 36,
+          "status": "exact"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 112,
+        "sha256": "570177f12b3eed28a8b136d74626d020315896e02789c21591b7d9e9752e76f9",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01195294",
+      "owned": "xm1_pipeline_image_font_chained_glyph_width",
+      "abi": "(state: u32, glyph: u16) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_chained_glyph_width",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_01190d18.c",
+          "firstLine": 2587,
+          "lastLine": 2638,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 272,
+        "sha256": "2da7b45b35ef48f2d62b71ff7b2eacf5e9fcb8dc1d71d3935d638b4849a86e0b",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01196f08",
+      "owned": "xm1_pipeline_image_font_handle_init",
+      "abi": "(state: u32, data: u32, bytes: u32, workspace: u32, engine: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_handle_init",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/font_program_lifecycle.c",
+          "firstLine": 14,
+          "lastLine": 28,
+          "status": "exact"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 136,
+        "sha256": "2d85e1edfa834fafda71537b9671dd7a3f038b8e186b790ffb6ad565defb8031",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01197384",
+      "owned": "xm1_pipeline_image_font_handle_dimensions",
+      "abi": "(state: u32, glyph: u16, horizontal: *mut i32, vertical: *mut u32) -> u32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_handle_dimensions",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_01196d28.c",
+          "firstLine": 212,
+          "lastLine": 260,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 272,
+        "sha256": "8bdbf3a4af85f548f9eba54f913b5a177ee32d29086d805a794b6967aed01a34",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01197494",
+      "owned": "xm1_pipeline_image_font_cache_initialize",
+      "abi": "(state: u32) ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_cache_initialize",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/font_program_lifecycle.c",
+          "firstLine": 72,
+          "lastLine": 84,
+          "status": "exact"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 84,
+        "sha256": "0636d2858cf1c63ae775544a0c913984dd5bb605134018c3b08c0560c6f4ec24",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01197598",
+      "owned": "xm1_pipeline_image_font_cache_find_or_insert",
+      "abi": "(state: u32, key: u32, variant: u32, table: u32, count: *mut i32, eviction: i32, capacity: i32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_cache_find_or_insert",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_01196d28.c",
+          "firstLine": 264,
+          "lastLine": 340,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 464,
+        "sha256": "5d1e4230c6e8ac5d930b12325bef62d1a4a9d2c503be82eedca7621af0f116f2",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01197768",
+      "owned": "xm1_pipeline_image_font_cache_touch",
+      "abi": "(state: u32, glyph: u16, width: i16, height: i16, format: u16, kind: u16) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_cache_touch",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_01196d28.c",
+          "firstLine": 344,
+          "lastLine": 391,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 368,
+        "sha256": "245a4ec63e9d9c1921922f7ff816597277c3ab5cf7a34602f8c0b9a23021eee4",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x011978d8",
+      "owned": "xm1_pipeline_image_font_cache_find",
+      "abi": "(state: u32, glyph: u16, width: i16, height: i16, format: u16, kind: u16) -> u32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_cache_find",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_011978d8.c",
+          "firstLine": 11,
+          "lastLine": 30,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 196,
+        "sha256": "27c19152a57edbdd24d21bd0329a81df7fa6314a7e47b6140e1bec5cb617811e",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x0119799c",
+      "owned": "xm1_pipeline_image_font_cache_insert",
+      "abi": "(state: u32, glyph: u16, width: i16, height: i16, descriptor: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_cache_insert",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_011978d8.c",
+          "firstLine": 34,
+          "lastLine": 112,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 508,
+        "sha256": "199da5c63861ff705a77bd188cdf5d4195e23df4d742a63505bf59a8b5877a35",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x011947e4",
+      "owned": "xm1_pipeline_image_font_layout_dimensions",
+      "abi": "(request: u32, stride: *mut i32, height: *mut i32, width: *mut i32, left: *mut i32, top: *mut i32, expansion: *mut i32) ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_layout_dimensions",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_01190d18.c",
+          "firstLine": 2352,
+          "lastLine": 2443,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 2000,
+        "sha256": "68b043a016c6b7e52441ff5059aa7510bdb1ac404e3c65c2f6192e6af097e444",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01195938",
+      "owned": "xm1_pipeline_image_font_render_with_fallback_cache",
+      "abi": "(state: u32, advance: *mut i32, request: u32, glyph_request: *mut RasterGlyphRequest) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_render_with_fallback_cache",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_01190d18.c",
+          "firstLine": 2788,
+          "lastLine": 2882,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 656,
+        "sha256": "dd2970162bc365cd84cdbd0ea0377d860223a2f161c5d41564e6c6b5c7c2920b",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01195bc8",
+      "owned": "xm1_pipeline_image_font_draw_raster_bitmap",
+      "abi": "(state: u32, glyph: u16, width: i32, height: i32, x: i32, y: i32, stride: i32, pixels: u32, clip: u32, format: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_draw_raster_bitmap",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_01190d18.c",
+          "firstLine": 2887,
+          "lastLine": 3415,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 4072,
+        "sha256": "2784907e1621c5a9badaa617a443bbbc14884a317c72c5c9cb95dd80d92eed0a",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01196c20",
+      "owned": "xm1_pipeline_image_font_outline_height",
+      "abi": "(_state: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [],
+      "originalExtent": {
+        "bytes": 24,
+        "sha256": "526b6bcb98cdf41ba6c16cc710c9996caa5354de0ea56af7999e0114e48d278a",
+        "kind": "inspected A32 entry through next confirmed entry"
+      }
+    },
+    {
+      "original": "0x01196c38",
+      "owned": "xm1_pipeline_image_font_outline_width",
+      "abi": "(_state: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [],
+      "originalExtent": {
+        "bytes": 24,
+        "sha256": "526b6bcb98cdf41ba6c16cc710c9996caa5354de0ea56af7999e0114e48d278a",
+        "kind": "inspected A32 entry through next confirmed entry"
+      }
+    },
+    {
+      "original": "0x01196c50",
+      "owned": "xm1_pipeline_image_font_outline_secondary_extent",
+      "abi": "(_state: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [],
+      "originalExtent": {
+        "bytes": 24,
+        "sha256": "656853e9c58afa823ccdce77fd5def8d02e1cac02908ede5031aae23b5aa2140",
+        "kind": "inspected A32 entry through next confirmed entry"
+      }
+    },
+    {
+      "original": "0x01196c68",
+      "owned": "xm1_pipeline_image_font_outline_right_overhang",
+      "abi": "(_state: u32, _glyph: u16) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [],
+      "originalExtent": {
+        "bytes": 24,
+        "sha256": "656853e9c58afa823ccdce77fd5def8d02e1cac02908ede5031aae23b5aa2140",
+        "kind": "inspected A32 entry through next confirmed entry"
+      }
+    },
+    {
+      "original": "0x01196c80",
+      "owned": "xm1_pipeline_image_font_outline_top_overhang",
+      "abi": "(_state: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [],
+      "originalExtent": {
+        "bytes": 24,
+        "sha256": "656853e9c58afa823ccdce77fd5def8d02e1cac02908ede5031aae23b5aa2140",
+        "kind": "inspected A32 entry through next confirmed entry"
+      }
+    },
+    {
+      "original": "0x01196f90",
+      "owned": "xm1_pipeline_image_font_outline_storage_size",
+      "abi": "() -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_handle_storage_size",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_01196d28.c",
+          "firstLine": 73,
+          "lastLine": 76,
+          "status": "nonmatching"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 20,
+        "sha256": "09cb9ec055d7f4ef6ca8203eb725e21208f805735e942a6c5e9959f11602584b",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01197f00",
+      "owned": "xm1_pipeline_image_font_outline_storage_size",
+      "abi": "() -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [],
+      "originalExtent": {
+        "bytes": 24,
+        "sha256": "3c524329868cb6490f784fa7c723d85e2202ba47fabd771fa00433a0513816fd",
+        "kind": "inspected A32 entry through next confirmed entry"
+      }
+    },
+    {
+      "original": "0x01197e50",
+      "owned": "xm1_pipeline_image_font_program_destroy",
+      "abi": "(_program: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_program_destroy",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/font_program_vm.c",
+          "firstLine": 6,
+          "lastLine": 6,
+          "status": "exact"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 24,
+        "sha256": "656853e9c58afa823ccdce77fd5def8d02e1cac02908ede5031aae23b5aa2140",
+        "kind": "pinned-index extent"
+      }
+    },
+    {
+      "original": "0x01196eec",
+      "owned": "xm1_pipeline_image_font_handle_destroy",
+      "abi": "(state: u32) -> i32 ",
+      "implementation": "replacement/develop/src/pipeline/font_fdl.rs",
+      "evidence": "original A32 instructions; pinned C where indexed",
+      "sourceDefinitions": [
+        {
+          "name": "overlay_font_handle_destroy",
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/font_program_lifecycle.c",
+          "firstLine": 9,
+          "lastLine": 12,
+          "status": "exact"
+        }
+      ],
+      "originalExtent": {
+        "bytes": 28,
+        "sha256": "244e1d0a5aff2f99cc600d4ab1ec8e275427ea0f1ddee286a48af645c1db5be0",
+        "kind": "pinned-index extent"
+      }
+    },
+    {"original":"0x0118df0c","owned":"xm1_pipeline_image_font_create_engine","abi":"(output: *mut u32) -> i32","implementation":"replacement/develop/src/pipeline/font_fdl.rs","evidence":"Original A32 instructions and pinned C where indexed","sourceDefinitions":[{"name":"overlay_font_create_engine","file":"decomp/firmwares/xm1-150/app/graphics/fonts/tu_0118dd48.c","firstLine":109,"lastLine":126,"status":"nonmatching"}],"originalExtent":{"bytes":104,"sha256":"e651b5cb1e0e4fa9bc109ed973f2dfcb17153711597cc1e1f01d5a39f4a62eec","kind":"pinned-index extent"}},
+    {"original":"0x0118effc","owned":"xm1_pipeline_image_font_initialize_engine_backends","abi":"(script_data: u32, reference: u32, rendering_mode: u32, size: i32, output: *mut u32, fallback: u32, fallback_count: u32, icon: u32, icon_count: u32) -> i32","implementation":"replacement/develop/src/pipeline/font_fdl.rs","evidence":"Original A32 instructions and pinned C where indexed","sourceDefinitions":[{"name":"overlay_font_initialize_engine_backends","file":"decomp/firmwares/xm1-150/app/graphics/fonts/tu_0118dd48.c","firstLine":838,"lastLine":1057,"status":"nonmatching"}],"originalExtent":{"bytes":1680,"sha256":"304c595c621ce079576be7e652d7ec1351e4b6b1fa107372e4c8fbcd3cc2eef9","kind":"pinned-index extent"}},
+    {"original":"0x011818c8","owned":"xm1_pipeline_image_font_object_create","abi":"(reference: u32, request: u32, fallback: u32, icon: u32) -> u32","implementation":"replacement/develop/src/pipeline/font_fdl.rs","evidence":"Original A32 instructions and pinned C where indexed","sourceDefinitions":[{"name":"overlay_font_object_create","file":"decomp/firmwares/xm1-150/app/graphics/fonts/tu_011809d4.c","firstLine":657,"lastLine":828,"status":"nonmatching"}],"originalExtent":{"bytes":976,"sha256":"51ccdfba026a56e4d8dcaff64b2819bb615d9fb1a38a7927d217b87f6f0cf65e","kind":"pinned-index extent"}},
+    {"original":"0x011811a0","owned":"xm1_pipeline_image_font_reset_options","abi":"(object: u32)","implementation":"replacement/develop/src/pipeline/font_fdl.rs","evidence":"Original A32 instructions and pinned C where indexed","sourceDefinitions":[{"name":"overlay_font_object_reset_options","file":"decomp/firmwares/xm1-150/app/graphics/fonts/tu_011809d4.c","firstLine":358,"lastLine":396,"status":"nonmatching"}],"originalExtent":{"bytes":436,"sha256":"4e8e735f9a79ca7ad5fbe366ef8d996527f5184fe5ff8ec31b813fab36f6f016","kind":"pinned-index extent"}},
+    {"original":"0x011805f0","owned":"xm1_pipeline_image_font_object_mode","abi":"(class: u32, request: u32) -> u32","implementation":"replacement/develop/src/pipeline/font_fdl.rs","evidence":"Original A32 instructions and pinned C where indexed","sourceDefinitions":[{"name":"overlay_font_object_mode","file":"decomp/firmwares/xm1-150/app/graphics/fonts/tu_01180290.c","firstLine":105,"lastLine":132,"status":"nonmatching"}],"originalExtent":{"bytes":144,"sha256":"58e032f13252fe3fb40ca81a5c752f0f17e3b19c226a3551528d2e2782ecacae","kind":"original A32 function extent"},"indexedSuperset":{"bytes":424,"sha256":"a38aa9105557af44e84b5751200d1ac5dac3d5f4914b00289ce8650488d12823","note":"Pinned next-named-entry extent also contains separate functions beginning at 0x01180680; this body ends there."}},
+    {"original":"0x01180290","owned":"xm1_pipeline_image_font_open_reference","abi":"(reference: u32, _timeout: i32, _first: u32, _second: u32) -> i32","implementation":"replacement/develop/src/pipeline/font_fdl.rs","evidence":"Original A32 instructions and pinned C where indexed","sourceDefinitions":[{"name":"ov48b_open_font_file","file":"decomp/firmwares/xm1-150/app/graphics/fonts/tu_01180290.c","firstLine":11,"lastLine":73,"status":"nonmatching"}],"originalExtent":{"bytes":364,"sha256":"7b5467f0db14ee321a69fb7718768858eaf496119c206bb212466b40a5f116f4","kind":"pinned-index extent"}},
+    {"original":"0x011803fc","owned":"xm1_pipeline_image_font_close_reference","abi":"(reference: u32, _timeout: i32)","implementation":"replacement/develop/src/pipeline/font_fdl.rs","evidence":"Original A32 instructions and pinned C where indexed","sourceDefinitions":[{"name":"ov48b_close_font_file","file":"decomp/firmwares/xm1-150/app/graphics/fonts/font_files.c","firstLine":8,"lastLine":13,"status":"exact"}],"originalExtent":{"bytes":44,"sha256":"7db739c253761bcf063763d07cac0d5719895b13311146b61001d6e6f9639600","kind":"pinned-index extent"}},
+    {"original":"0x0117f850","owned":"xm1_pipeline_image_font_compare_prefix","abi":"(left: u32, right: u32, count: u32) -> i32","implementation":"replacement/develop/src/pipeline/font_fdl.rs","evidence":"Original A32 instructions and pinned C where indexed","sourceDefinitions":[{"name":"ov48b_compare_font_prefix","file":"decomp/firmwares/xm1-150/app/graphics/fonts/tu_0117e684.c","firstLine":450,"lastLine":530,"status":"nonmatching"}],"originalExtent":{"bytes":248,"sha256":"4401c299bd12d46fb82518b66f304d04160821062509b8e713f733fb752e3d30","kind":"pinned-index extent"}},
+    {"original":"0x01185b5c","owned":"xm1_pipeline_image_font_reference_at_index","abi":"(manager: u32, index: u32) -> u32","implementation":"replacement/develop/src/pipeline/font_fdl.rs","evidence":"Original A32 instructions and pinned C where indexed","sourceDefinitions":[{"name":"overlay_font_reference_at_index","file":"decomp/firmwares/xm1-150/app/graphics/fonts/font_object_formats.c","firstLine":428,"lastLine":431,"status":"exact"}],"originalExtent":{"bytes":32,"sha256":"d2bf86bc8db8971fdbd1ccf20bc5ac5035b2344669de473efab510dcb816f5e5","kind":"pinned-index extent"}},
+    {"original":"0x0118cc68","owned":"xm1_pipeline_image_font_read_directory","abi":"(engine: u32) -> i32","implementation":"replacement/develop/src/pipeline/font_fdl.rs","evidence":"Original A32 instructions and pinned C where indexed","sourceDefinitions":[{"name":"overlay_font_read_directory","file":"decomp/firmwares/xm1-150/app/graphics/fonts/tu_0118bda0.c","firstLine":507,"lastLine":606,"status":"nonmatching"}],"originalExtent":{"bytes":452,"sha256":"31d58858a639de1e85379c02178871aaf27ebe53ee54b8b0ec6f3dd82e1bda6d","kind":"pinned-index extent"}},
+    {"original":"0x0118d488","owned":"xm1_pipeline_image_font_install_methods","abi":"(engine: u32)","implementation":"replacement/develop/src/pipeline/font_fdl.rs","evidence":"Original A32 instructions and pinned C where indexed","sourceDefinitions":[{"name":"overlay_font_install_methods","file":"decomp/firmwares/xm1-150/app/graphics/fonts/font_script_directory.c","firstLine":39,"lastLine":58,"status":"exact"}],"originalExtent":{"bytes":188,"sha256":"39ffe4fbf0ffdafa466cdc52809b2ef69cd9d0d78659a035144d08b1e71fb68b","kind":"pinned-index extent"}},
+    {"original":"0x01195210","owned":"xm1_pipeline_image_font_raster_storage_size","abi":"(width: i32, height: i32, mode: i32) -> i32","implementation":"replacement/develop/src/pipeline/font_fdl.rs","evidence":"Original A32 instructions and pinned C where indexed","sourceDefinitions":[{"name":"overlay_font_layout_storage_size","file":"decomp/firmwares/xm1-150/app/graphics/fonts/tu_01190d18.c","firstLine":2562,"lastLine":2583,"status":"nonmatching"}],"originalExtent":{"bytes":20,"sha256":"7f1736745a0f9822d3092e0425302d5fb3a1ed456b052da3b9723045c13acf59","kind":"pinned-index extent"}},
+    {"original":"0x0119f08c","owned":"xm1_pipeline_image_font_raster_storage_size","abi":"(width: i32, height: i32, mode: i32) -> i32","implementation":"replacement/develop/src/pipeline/font_fdl.rs","evidence":"Original A32 instructions and pinned C where indexed","sourceDefinitions":[],"originalExtent":{"bytes":112,"sha256":"a9ba677591640bc10b3ea064cd7b616b8ea5df259f7b0e4856df5ea6f055b3b4","kind":"original A32 function extent"}},
+    {"original":"0x01194e30","owned":"xm1_pipeline_image_font_raster_destroy","abi":"() -> i32","implementation":"replacement/develop/src/pipeline/font_fdl.rs","evidence":"Original A32 instructions and pinned C where indexed","sourceDefinitions":[],"originalExtent":{"bytes":24,"sha256":"656853e9c58afa823ccdce77fd5def8d02e1cac02908ede5031aae23b5aa2140","kind":"original A32 function extent"}},
+    {"original":"0x01194e48","owned":"xm1_pipeline_image_font_raster_dimensions","abi":"() -> i32","implementation":"replacement/develop/src/pipeline/font_fdl.rs","evidence":"Original A32 instructions and pinned C where indexed","sourceDefinitions":[],"originalExtent":{"bytes":24,"sha256":"656853e9c58afa823ccdce77fd5def8d02e1cac02908ede5031aae23b5aa2140","kind":"original A32 function extent"}}
+  ],
+  "internalHeapBodies": [
+    {
+      "original": "0x01186418",
+      "owned": "heap_release",
+      "abi": "(heap, allocation) -> i32",
+      "bytes": 432,
+      "sha256": "663f7576fb3cbc89004287c80b2c97c843d33efc9de9e66c9ead11bbe75bce1c",
+      "sourceDefinitions": [
+        {
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_011809d4.c",
+          "firstLine": 2049,
+          "lastLine": 2136,
+          "status": "nonmatching"
+        }
+      ]
+    },
+    {
+      "original": "0x011865c8",
+      "owned": "heap_allocate",
+      "abi": "(heap, requested, zero) -> allocation",
+      "bytes": 388,
+      "sha256": "b6c5b769f0518293029dbedcd9101e8e33eef7be7e6744c27bffa94959d938ff",
+      "sourceDefinitions": [
+        {
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_011809d4.c",
+          "firstLine": 2140,
+          "lastLine": 2228,
+          "status": "nonmatching"
+        }
+      ]
+    },
+    {
+      "original": "0x0118674c",
+      "owned": "initialize_heap",
+      "abi": "(heap, bytes, fresh, minimum) -> heap",
+      "bytes": 188,
+      "sha256": "a7efe3286bef792ad754785c5a0fa193963873b94717cd3aba362ad89c674854",
+      "sourceDefinitions": [
+        {
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_011809d4.c",
+          "firstLine": 2232,
+          "lastLine": 2264,
+          "status": "nonmatching"
+        }
+      ]
+    },
+    {
+      "original": "0x01186808",
+      "owned": "heap_allocate",
+      "abi": "(heap, requested) -> allocation; zero=false",
+      "bytes": 360,
+      "sha256": "855018211358417746aebfd5daf5f8437497b8d02969c32928c3d250c2a20f72",
+      "sourceDefinitions": [
+        {
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_011809d4.c",
+          "firstLine": 2268,
+          "lastLine": 2349,
+          "status": "nonmatching"
+        }
+      ]
+    },
+    {
+      "original": "0x01186970",
+      "owned": "heap_resize",
+      "abi": "(heap, allocation, bytes) -> allocation",
+      "bytes": 1052,
+      "sha256": "00a23c0a8b4443a5a2407ac59731a9967704d1a63d70102ed909dc322a85defe",
+      "sourceDefinitions": [
+        {
+          "file": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_011809d4.c",
+          "firstLine": 2353,
+          "lastLine": 2444,
+          "status": "nonmatching"
+        }
+      ]
+    }
+  ],
+  "routing": {
+    "publications": "FontFdlScenarios.fontFdlPublications",
+    "scenarios": "FontFdlScenarios.fontFdlScenarios",
+    "constructors": [
+      "StagePublication",
+      "StageSymbol",
+      "StageScenario",
+      "StageCaseName"
+    ],
+    "entryResolution": "Role-specific proof-bound resolver supplied by integration owner; explicit stageCodePointers describe actual backend function cells. No address-named forwarding or application-body call scripting.",
+    "emittedCodePointers": "Every constructor-emitted method cell has both a stageCodePointers binding and a stageFinal word containing its original stock entry. Expected owned words are substituted by declared role before execution; observations are not normalized.",
+    "sharedFixtures": [
+      "fontRasterInitial",
+      "fontOutlineInitial",
+      "fontOutlineEngineInitial",
+      "fontRectangleRasterInitial"
+    ],
+    "scriptedApplicationCalls": []
+  },
+  "ownedCpuImports": {
+    "outlineVm": "font_outline_vm: actual 1198598/1199868 and handlers",
+    "rasterVm": "font_raster_vm: actual 11a05b0/11a0fa4 and handlers",
+    "scripts": "font_scripts: actual Unicode/script dispatch and script rows",
+    "builtin": "font_builtin: actual BDF/DCW parsing, metrics, draw and initialization",
+    "dateOverlay": "date_overlay: actual option setters, blending, diagnostics"
+  },
+  "boundaries": [
+    {
+      "kind": "KernelFatal",
+      "original": "0x00043604",
+      "owned": "xm1_font_division_fault",
+      "abi": "(saturated_numerator: u32) -> !",
+      "source": "Original signed divide/remainder zero path reaches SVC 1010 and does not return.",
+      "missingDeviceLaw": "Terminal kernel exception effects and any external observer are unqualified. No finite fallback return is modeled."
+    },
+    {
+      "kind": "CallerExtensionAbi",
+      "location": "Font heap reclaimer hook at heap+0x24, user data +0x28, depth +0x2c",
+      "classification": "Software caller extension, not hardware.",
+      "normalConstructorInvariant": "Owned heap initialization receives a null reclaimer hook. Non-null externally installed hooks retain their original callback ABI and are not claimed as closed application processing."
+    },
+    {
+      "kind": "IncomingWorkspaceState",
+      "location": "Outline program+0xc0/+0xc4, VM+0x48/+0x4c",
+      "classification": "Software state supplied by caller workspace, not a device service.",
+      "source": "Program initializer, render wrapper, and VM handlers do not assign these scale words. Public allocation does not promise zeroed reused storage. Physical adapter preserves actual words.",
+      "restriction": "No zero/2048 producer or arbitrary legacy workspace equivalence is claimed. Portable outline initialization is explicit typed software state."
+    }
+  ],
+  "resourceProvenance": {
+    "genuineFragment": {
+      "kind": "FDL Font format 4",
+      "glyph": "0xe14d",
+      "resourceBase": "0x003bc000",
+      "recordOffset": "0x0003edea",
+      "resourceSha256": "a52dfa0aaea0c3eecb106aed809e99fed71cb9a754dc7cd412ff488b98542dac",
+      "evidence": "Captured resource bytes, directory entry, glyph program and property bytes; source-derived 81-word outline expectation. No native observation claimed."
+    },
+    "authoredFixture": {
+      "kind": "FDL Font format 4, direct-page directory",
+      "glyph": 65,
+      "shape": "Closed full-cell rectangle with half-em advance",
+      "purpose": "Actual VM, raster, script, preparation, blending and cache behavior. Not a stock-font provenance claim."
+    },
+    "excludedEquivalence": "No GVFF-to-FDL equivalence."
+  },
+  "behavioralCoverage": {
+    "writtenNotRun": true,
+    "paths": [
+      "active and null/error frontends",
+      "real outline and bitmap preparation",
+      "external bitmap target validation",
+      "glyph directory compact/direct/sparse lookup, cached and missing entries",
+      "width/property scaling and restoration",
+      "cache hit, miss, full replacement, promotion and pixel insertion",
+      "allocation, resize, release, grow and OOM",
+      "actual object and engine constructors, embedded-resource open/close, callback installation and DFShaper directory parsing",
+      "real script and VM traversal without application echoes",
+      "packed clipping and source tail effects",
+      "source mono-to-byte destination-dependent control quirk"
+    ],
+    "incorrectControlWitnesses": [
+      "Corrupted glyph program fails without cache but cached pixels bypass that program.",
+      "Insufficient output capacity preserves partial contour output and returns the original error.",
+      "Zero-count unaligned fill still changes the alignment prefix.",
+      "Reallocation copies requested new byte count and releases the original allocation."
+    ]
+  },
+  "portableCore": {
+    "root": "replacement/develop/src/font_core.rs",
+    "resource": "replacement/develop/src/font_core/resource.rs",
+    "asset": "Borrowed validated FDL/BDF/DCW resources, no absolute physical address in core.",
+    "workspace": "Caller-owned typed state and borrowed output bytes, allocation-free.",
+    "renderRoute": "FDL uses actual requested-dimension RasterVM through raster::render_glyph, not a lossy normalized outline intermediate. BDF and DCW use actual shared bitmap parser/decoder.",
+    "glyphMask": "Sealed borrowed coverage with read-only getters, checked last-row span, signed baseline-relative bearings and advances. Public construction validates active Gray4 bytes; actual renderer producers avoid a redundant range scan. PackedMsb1 is MSB first; Gray4 is one 0..15 byte per pixel; Gray8 is one 0..255 byte per pixel.",
+    "integrationStatus": "Separate assigned backend modules and Graphics consumer must land before a coherent aggregate checkpoint can be admitted."
+  }
+}

@@ -1,0 +1,71 @@
+.syntax unified
+.arm
+.global xm1_original_font_builtin_init
+.set xm1_original_font_builtin_init, 0x011932c4
+.global xm1_original_font_builtin_glyph_width
+.set xm1_original_font_builtin_glyph_width, 0x01193830
+.global xm1_original_font_builtin_right_overhang
+.set xm1_original_font_builtin_right_overhang, 0x011939f8
+.global xm1_original_font_builtin_height
+.set xm1_original_font_builtin_height, 0x01190be8
+.global xm1_original_font_builtin_width
+.set xm1_original_font_builtin_width, 0x01190c00
+.global xm1_original_font_builtin_secondary_extent
+.set xm1_original_font_builtin_secondary_extent, 0x01190c18
+.global xm1_original_font_draw_text_bitmap
+.set xm1_original_font_draw_text_bitmap, 0x01193364
+.global xm1_original_font_builtin_thai_metric
+.set xm1_original_font_builtin_thai_metric, 0x01190d18
+.global xm1_original_font_builtin_parse_line
+.set xm1_original_font_builtin_parse_line, 0x011915b8
+.global xm1_original_font_builtin_properties
+.set xm1_original_font_builtin_properties, 0x01192c70
+.global xm1_original_font_builtin_scan_header
+.set xm1_original_font_builtin_scan_header, 0x01192fb4
+.global xm1_original_font_builtin_scan_glyph
+.set xm1_original_font_builtin_scan_glyph, 0x01192e68
+.global xm1_original_font_builtin_index_glyphs
+.set xm1_original_font_builtin_index_glyphs, 0x011930e8
+.global xm1_original_font_builtin_decode_bitmap
+.set xm1_original_font_builtin_decode_bitmap, 0x011913cc
+.global xm1_original_font_builtin_parse_text_lines
+.set xm1_original_font_builtin_parse_text_lines, 0x0119126c
+.global xm1_original_font_builtin_top_overhang
+.set xm1_original_font_builtin_top_overhang, 0x01190c44
+.global xm1_original_font_builtin_stroke_padding
+.set xm1_original_font_builtin_stroke_padding, 0x01190c5c
+.global xm1_original_font_icon_init
+.set xm1_original_font_icon_init, 0x01193f98
+.global xm1_original_font_icon_glyph_width
+.set xm1_original_font_icon_glyph_width, 0x01194190
+.global xm1_original_font_draw_icon_bitmap
+.set xm1_original_font_draw_icon_bitmap, 0x0119426c
+.global xm1_original_font_icon_height
+.set xm1_original_font_icon_height, 0x01193ff0
+.global xm1_original_font_icon_width
+.set xm1_original_font_icon_width, 0x0119400c
+.global xm1_original_font_icon_secondary_extent
+.set xm1_original_font_icon_secondary_extent, 0x01194028
+.global xm1_original_font_icon_right_overhang
+.set xm1_original_font_icon_right_overhang, 0x01194040
+.global xm1_original_font_icon_top_overhang
+.set xm1_original_font_icon_top_overhang, 0x01194058
+.global xm1_original_font_icon_stroke_padding
+.set xm1_original_font_icon_stroke_padding, 0x01194070
+.global xm1_original_font_builtin_read_text_line
+.set xm1_original_font_builtin_read_text_line, 0x0119083c
+.global xm1_original_font_builtin_storage_size
+.set xm1_original_font_builtin_storage_size, 0x01190ba0
+.global xm1_original_font_builtin_destroy
+.set xm1_original_font_builtin_destroy, 0x01190bb8
+.global xm1_original_font_builtin_dimensions
+.set xm1_original_font_builtin_dimensions, 0x01190bd0
+.global xm1_original_font_icon_storage_size
+.set xm1_original_font_icon_storage_size, 0x01193f80
+.global xm1_original_font_icon_destroy
+.set xm1_original_font_icon_destroy, 0x01193fc0
+.global xm1_original_font_icon_dimensions
+.set xm1_original_font_icon_dimensions, 0x01193fd8
+.global xm1_original_font_icon_weights
+.set xm1_original_font_icon_weights, 0x011940a0
+.section .note.GNU-stack,"",%progbits

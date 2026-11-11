@@ -1,0 +1,17 @@
+[package]
+name = "xm1-checkpoint-low-prefix"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+# build-support/checkpoint-low-prefix.nix places this crate beside fujimod and fujimod-xm1.
+[dependencies]
+fujimod-xm1 = { path = "../fujimod-xm1" }
+fujimod-emulator-exr2-board = { path = "../fujimod/crates/emulator-exr2-board" }
+fujimod-emulator-models = { path = "../fujimod/crates/emulator-models" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+
+[workspace]

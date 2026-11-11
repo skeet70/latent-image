@@ -390,7 +390,7 @@ fn rejected_id(raw: u32) -> u32 {
     let index = raw.wrapping_sub(1);
     if cfg!(property_defect_signed_bound) && (index as i32) <= 644 || cfg!(property_defect_upper_bound_plus_one) && index == 645 { 1 } else { 0 }
 }
-#[cfg(not(test))]
+#[cfg(all(not(test), not(feature = "component")))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! { loop {} }
 

@@ -1,0 +1,254 @@
+{
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image4Sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+  "kernel0Sha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882",
+  "ownedArithmeticSource": ["0x0004d978",244,"aff8e98aeffcf942b2bc3d5b9211a3af7239271251c0b5806e72d1d09f7b2d96"],
+  "exports": [
+    ["0x006df094","xm1_pipeline_image_warp_initialize","u32()"],
+    ["0x006df0c4","xm1_pipeline_image_warp_release","u32()"],
+    ["0x006df0d8","xm1_pipeline_image_warp_cancel","u32()"],
+    ["0x006df134","xm1_pipeline_image_warp_start","void()"],
+    ["0x006defbc","xm1_pipeline_image_warp_completion","void()"],
+    ["0x006df18c","xm1_pipeline_image_radial_select_format","void(configuration,parameters)"],
+    ["0x006df530","xm1_pipeline_image_warp_build_parameters","u32(configuration,parameters)"],
+    ["0x006df898","xm1_pipeline_image_warp_program","u32(configuration,parameters)"],
+    ["0x006df978","xm1_pipeline_image_warp_configure","u32(configuration)"],
+    ["0x0068c264","xm1_pipeline_image_warp_write_geometry","void(setup17words)"],
+    ["0x0068c738","xm1_pipeline_image_warp_write_filter","void(filter37words)"],
+    ["0x006499d0","xm1_pipeline_image_route_request","i32(selector,slot,level)"],
+    ["0x00649c4c","xm1_pipeline_image_route_acquire","i32(index,handleOutput)"],
+    ["0x00649ddc","xm1_pipeline_image_route_release","i32(handle)"],
+    ["0x0064a0bc","xm1_pipeline_image_route_resolve","u32(channel)"],
+    ["0x0064a224","xm1_pipeline_image_route_apply","i32(channel,level)"],
+    ["0x0065722c","xm1_pipeline_image_driver_allocate","i32(index,count,handles)"],
+    ["0x00657384","xm1_pipeline_image_driver_find","i32(handle,count,handles,indexOutput)"],
+    ["0x0065744c","xm1_pipeline_image_driver_clear","i32(index,count,handles)"],
+    ["0x0064e918","xm1_pipeline_image_interrupt_acquire","i32(source,callback,handleOutput)"],
+    ["0x0064eb20","xm1_pipeline_image_interrupt_release","i32(handle)"],
+    ["0x00726c74","xm1_pipeline_image_diagnostic_event","void(category,event)"],
+    ["0x00726a38","xm1_pipeline_image_diagnostic_trigger","void(category,event)"],
+    ["0x00726b30","xm1_pipeline_image_diagnostic_selected","void(category,event)"],
+    ["0x00726a80","xm1_pipeline_image_diagnostic_driver_text","void(category,event)"],
+    ["0x00723870","xm1_pipeline_image_irq_configure","i32(line,priority,mode,callback)"],
+    ["0x007239a0","xm1_pipeline_image_irq_release","i32(line)"]
+  ],
+  "sharedExtents": [
+    ["0x006499d0",224,"1535dcb1a27d6cb67f1fa7ccd31d6b52baef728f7c574709e2feaa5ddf10cbb2"],
+    ["0x00649c4c",400,"b52b7b9b32b4179290694ced0c5f8759ba48d90448ee28c4d657411f30ea2c88"],
+    ["0x00649ddc",564,"a9dd33460b1b170391778733820db1fa00638743b1280a28e707cb7cb7c0727a"],
+    ["0x0064a0bc",360,"929aaea7576732a9a8008b87ba04f9f0de4fbab3c22ecaf741af806a7341b884"],
+    ["0x0064a224",1008,"5020375e1deb3f9dcecccdef35fc4da80c4bf6a5f1ad6bbcd9d72b6311c896d4"],
+    ["0x0065722c",344,"586895bacfe3ad6ed738b7bd629ca35dc07e037a21884e0f2e1f90272248fa7f"],
+    ["0x00657384",200,"906044b5d122e5b38be1c45ff5cdc3a443efed825b96ed816f0f7a81d4d1ad57"],
+    ["0x0065744c",104,"c4bb3980c11c048de8e422ded354347ee9cf6040dc314cd40f01e5e02b22b435"],
+    ["0x0064e918",520,"fadd1e9211aa1e156fcc4ad5b88d2e4b72df3e532d66d8ef1d1ac94a21183d27"],
+    ["0x0064eb20",176,"7f8b5f37c59e3d347c5e66ff10822ebb4e9366e72f6f8df5249d90751902bad1"],
+    ["0x00726c74",132,"23ad9d06698619b0ddb0081bc770f3b3515dfbcb88343c55e33599d265730ac2"],
+    ["0x00726a38",72,"1d959ac047d62077344074b6615a9030a4ad9878e7e674a6669ad1c5582511c5"],
+    ["0x00726b30",88,"fcdfe1483f8feba11d5146a81161b1b9bae545a8b364dff3f7d840ce78aee618"],
+    ["0x00726a80",176,"0da83fc8d26c603eb212194a3c97b32ba19d580c98d516b516e6e6b1109450f3"],
+    ["0x00723870",304,"33bdbfa384256bc7809ddfc6cbf8b5f1f7e34fcdba25523e6fad07115017f24d"],
+    ["0x007239a0",116,"a3289c4f01f5d1e363a0be26542611a2e2c17553d8f23ceb234d44ae75c2070b"]
+  ],
+  "rtosAndKernelSeams": [
+    ["dispatch_interfaces.current_interface","Selected RTOS interface index"],
+    ["dispatch_interfaces.enter_critical/leave_critical","RTOS critical token"],
+    ["dispatch_interfaces.configure_handle","Consumes five words: reserved,callback,priority,enabled,kind"],
+    ["dispatch_interfaces.activate/prepare_handle","IRQ activation and preparation"],
+    ["0x00042574","Save IRQ mask"],
+    ["0x0004257c","Restore IRQ mask"],
+    ["0x00042634","Cache clean/invalidate range"],
+    ["0x000422e0","Kernel diagnostic record category/event"]
+  ],
+  "routes": [
+    {
+      "address": "0x0068bf44",
+      "size": 156,
+      "sha256": "96d4190ef346cfda86223672e6b6ae352ea22a84f735c37a7a655fd50b7ab010",
+      "implementation": "inlined owned driver CPU logic"
+    },
+    {
+      "address": "0x0068bfe0",
+      "size": 108,
+      "sha256": "e9faaed14a96047c58c411dc690c4bf031def98d81562c22f40244bf4138fd46",
+      "implementation": "inlined owned driver CPU logic"
+    },
+    {
+      "address": "0x0068c04c",
+      "size": 116,
+      "sha256": "c7943454e8fa79cc53110c233e629e0320e8c1b47811042e289d212ec8e06c04",
+      "implementation": "inlined owned driver CPU logic"
+    },
+    {
+      "address": "0x0068c0c0",
+      "size": 68,
+      "sha256": "6e0947a8b18f1cb0658fddd7ebec723c3a558cbfd13b812392cdb49ff702873c",
+      "implementation": "inlined owned driver CPU logic"
+    },
+    {
+      "address": "0x0068c158",
+      "size": 268,
+      "sha256": "62f10335931bfef1176a943a320e2c32834e68027aaa24b843bd678339509cad",
+      "implementation": "inlined owned driver CPU logic"
+    },
+    {
+      "address": "0x0068c9a8",
+      "size": 176,
+      "sha256": "a139b80573edb8f6487a7f1b3bdee8cd6a07e9944b7e21dcd1675aac31f97c19",
+      "implementation": "inlined owned driver CPU logic"
+    },
+    {
+      "address": "0x0068cab4",
+      "size": 120,
+      "sha256": "79d4c28c3defa37f415453d757200b8bfaa11f09793967d6c994c8c771b6bc7c",
+      "implementation": "inlined owned driver CPU logic"
+    },
+    {
+      "address": "0x0068cb58",
+      "size": 120,
+      "sha256": "788d9d05e3c39d4f499290a0aef9218a689e750fc976491e364872c4a3cdd24a",
+      "implementation": "inlined owned driver CPU logic"
+    },
+    {
+      "address": "0x006df094",
+      "size": 48,
+      "sha256": "54af65238d57ab6a3f5e6ebd41ea72f8edb767ef68c710dab03b59baaf3834ab",
+      "implementation": "public original-ABI export"
+    },
+    {
+      "address": "0x006df0c4",
+      "size": 20,
+      "sha256": "d6b6d4755ed0f5df4e4cceb545bd786e0699eee6c26655f93d5e9ca6d741ea95",
+      "implementation": "public original-ABI export"
+    },
+    {
+      "address": "0x006df0d8",
+      "size": 92,
+      "sha256": "b3d72d92acaf8a297fcc9112c390600ab91c2762d54df39879fd29663f6e7721",
+      "implementation": "public original-ABI export"
+    },
+    {
+      "address": "0x006df18c",
+      "size": 144,
+      "sha256": "9df4d596a6b7d90f5e97d8202bf9b668189306442d99d082881d911b98fc4f93",
+      "implementation": "public original-ABI export"
+    },
+    {
+      "address": "0x006df898",
+      "size": 224,
+      "sha256": "c89c1b8791b15a24edc86ad2f8a1599bbc0520fbc61bd32d78888ef8739edd1a",
+      "implementation": "public original-ABI export"
+    },
+    {
+      "address": "0x006df978",
+      "size": 68,
+      "sha256": "07a8f972cd9c8194ca4f398dff9b076f36cc8278b8559081a6ad091821d8f439",
+      "implementation": "public original-ABI export"
+    },
+    {
+      "address": "0x0068c104",
+      "size": 84,
+      "sha256": "09470c8fc0d2d707ed59d5d5ee956e022fe66007dd0c9aff1abbfb381c489f0a",
+      "implementation": "inlined owned driver CPU logic"
+    },
+    {
+      "address": "0x0068c264",
+      "size": 1236,
+      "sha256": "8d5654ff201b659927064c7cd9fedf7d248cd10cdd51004adff6d4881e09704e",
+      "implementation": "public original-ABI export"
+    },
+    {
+      "address": "0x0068c738",
+      "size": 624,
+      "sha256": "b7f989c25c8155ec2c00aa801b1d1a96db13477f2ba99297e796546208e57446",
+      "implementation": "public original-ABI export"
+    },
+    {
+      "address": "0x0068ca58",
+      "size": 48,
+      "sha256": "fd08e9da4ef1520ebc6a57428b934c6a56c0651f5bdcfd223f2645f4fb542c5f",
+      "implementation": "inlined owned driver CPU logic"
+    },
+    {
+      "address": "0x0068ca88",
+      "size": 44,
+      "sha256": "3400498b866201f5e0d8d5d924809734a9635f12e5b4a652818fd9dbcbfc1fad",
+      "implementation": "inlined owned driver CPU logic"
+    },
+    {
+      "address": "0x0068cbd0",
+      "size": 120,
+      "sha256": "a2b2aadbe35442cb13c2c67358a93779e5243f5d98f2817aa148fe3079893538",
+      "implementation": "inlined owned driver CPU logic"
+    },
+    {
+      "address": "0x006defbc",
+      "size": 216,
+      "sha256": "b0cfd18182821d2b06e4efb9b1db0591a285f6f4af10646ddab71e1a5ab3acc7",
+      "implementation": "public original-ABI export"
+    },
+    {
+      "address": "0x006df134",
+      "size": 88,
+      "sha256": "75809817c1eacb71f9886f407207ba294a58553ee5c87c9e18bbd3993a995723",
+      "implementation": "public original-ABI export"
+    },
+    {
+      "address": "0x006df530",
+      "size": 872,
+      "sha256": "7a203d1db7c994c517bc9eb53812b1ad108424907e55e7761aaa8aad2bdcc6ea",
+      "implementation": "public original-ABI export"
+    }
+  ],
+  "state": {
+    "runtime": "0x00942c04",
+    "runtimeBytes": 320,
+    "configurationOffset": 8,
+    "configurationBytes": 80,
+    "parameterOffset": 88,
+    "parameterBytes": 228,
+    "completionOffset": 84,
+    "completionCountOffset": 316,
+    "driver": "0x00942d64",
+    "driverBytes": 12,
+    "preservedParameterWords": [
+      6,
+      14,
+      15
+    ]
+  },
+  "sourceCorrections": [
+    "0x6df530 calls unsigned __aeabi_uidiv at0x0004d978, not signed division implied by draft declaration.",
+    "0x6df18c vertical scale test is (scale_y<<3)<=0x20fff, equivalent to <0x21000.",
+    "0x68c738 stock extent624bytes includes non-executed padding after return at0x68c9a4.",
+    "0x6df530 writes sparse228-byte parameters; words6,14,15 retain prior caller memory."
+  ],
+  "mmio": {
+    "base": "0xfff65000",
+    "resetLaw": "Clear control bit16, poll until hardware reasserts bit16. Ordinary RAM cannot provide this completion law.",
+    "statusLaw": "Read and acknowledge register0xfff65144; source models record the issued value without fabricating hardware status changes.",
+    "pixelLaw": "No pixel result is produced by this CPU closure. Hardware completion is an external event."
+  },
+  "nonreturningControls": {
+    "requestAlignment": [
+      "+0x28 &15",
+      "+0x14 &7",
+      "+0x30 &7",
+      "+0x34 &7",
+      "+0x2c &15",
+      "+0x38 &15"
+    ],
+    "explicitLimits": "Nonzero either source limit requires stride aligned16.",
+    "geometry": "Stride,width:15bits and aligned8; destination width13bits aligned8; heights15or13bits; paddings4bits; bounds and centers16bits.",
+    "filter": "Gains13bits; scale halfwords<=7; bounds16bits. Coefficients masked15bits; samples masked17bits.",
+    "format": "When no correction and none of modes0..2 fits capacity, stop forever.",
+    "resource": "Nonzero registration/release status stops forever."
+  },
+  "scenarioLimits": [
+    "StageScenario has no nonreturning-PC or MMIO-read timeline representation. Error stop PCs and reset completion need parent native runner admissions, not success-return scripts."
+  ],
+  "crossSliceDependencies": [
+    "PipelineBuffers owns critical enter/leave; PipelineImagePlanes owns current-task and reserved semaphore wait/signal plus6df9bc read_registers.",
+    "PipelineObjectAllocator owns diagnostic text append; its actual CPU implementation consumes selected-driver text."
+  ]
+}

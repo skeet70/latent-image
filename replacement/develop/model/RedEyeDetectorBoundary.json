@@ -1,0 +1,89 @@
+{
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image5Sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+  "sourceStatus": "nonmatching",
+  "sources": [
+    "decomp/firmwares/xm1-150/app/ui/record/tu_01075d9c.c",
+    "decomp/firmwares/xm1-150/app/ui/record/tu_01078f50.c",
+    "decomp/firmwares/xm1-150/app/ui/record/tu_01075500.c",
+    "decomp/firmwares/xm1-150/app/vision/redeye/redeye_classifier.h",
+    "decomp/firmwares/xm1-150/app/vision/redeye/redeye_candidates.c",
+    "decomp/firmwares/xm1-150/app/vision/redeye/redeye_angles.c"
+  ],
+  "evidence": "Original X-M1 1.50 A32 entry, stack arguments, data addresses, feature dispatch, signed halfword cascade accumulation, candidate publication and postfilter instructions were inspected. Extent sizes and SHA-256 records match the committed function-ranges.json and were independently computed from the complete pinned image5 bytes. NONMATCHING prototypes are leads, not ABI authority.",
+  "routes": [
+    {"entry":"0x01075d9c","size":12724,"sha256":"c8d16628690df2b4a424e254583785847630dcfadfdc81321d03cfddcbc0b6b5","symbol":"xm1_pipeline_image_redeye_detect"},
+    {"entry":"0x01078f50","size":11668,"sha256":"dd55642cd3e8da91a16dbcb037975bca0afeb7a76e7fb2a2ab32e40f58d48767","symbol":"xm1_pipeline_image_redeye_search_local"},
+    {"entry":"0x01075500","size":2204,"sha256":"43683fda7cd646d59100af58ad828c8aba38bcf517c3357fc6967585b816b4e2","symbol":"xm1_pipeline_image_redeye_gradient"},
+    {"entry":"0x010751a4","size":168,"sha256":"8271473a35ce291c5625dbeeab5b6920803db3326690b61929b91861bb8eab1e","symbol":"xm1_pipeline_image_redeye_remove_duplicates"},
+    {"entry":"0x0107524c","size":360,"sha256":"5ef92f2550440c54d46607eb19ee7fb4f82db98276f14abd36dc91eca63e0593","symbol":"xm1_pipeline_image_redeye_remove_nearby"},
+    {"entry":"0x010753b4","size":268,"sha256":"fe565c341b79a8559c4aed3d787fb6d2a047cc54d2f461678ebcb7d0a533d1ca","symbol":"xm1_pipeline_image_redeye_accumulate_scores"},
+    {"entry":"0x010754c0","size":64,"sha256":"889d5cf1d2d999a3eecd1ae9fb0d8af5c80cf24dbe59f58941ce6d428a729638","symbol":"xm1_pipeline_image_redeye_filter_candidates"},
+    {"entry":"0x0108678c","size":376,"sha256":"c65a49bcfa836f04a8a9f6ea980f2735719f9e486b667675f3cbafc2f8b87b6d","symbol":"xm1_pipeline_image_redeye_gradient_angle"},
+    {"entry":"0x01086904","size":828,"sha256":"5c3bb624678c5350fd3a3ae9d2878cc62df9e252193b1c499d58a5bf1130a651","symbol":"xm1_pipeline_image_redeye_angle_sine"},
+    {"entry":"0x01086c40","size":20,"sha256":"ab048eda84edc67a7e64f1f35d63624dca9bb5802dad989cf85049b67d3aab41","symbol":"xm1_pipeline_image_redeye_angle_cosine"}
+  ],
+  "dataDependencies": [
+    {"entry":"0x0107bd24","size":31792,"sha256":"87d62bf6d62d28f68294677e43feaadd57d3c5b31c65bf7c2329cd6c82338861","purpose":"Coarse/fine feature records and thresholds, three score matrices, final gradient component/orientation pairs, difference and orientation bins"},
+    {"entry":"0x01086da0","size":1548,"sha256":"875bd9dc644a82a1050095537638e6729129362ca4139729a99d8d829309c4a0","purpose":"Two sine interpolation tables and arctangent interpolation table"}
+  ],
+  "abi": {
+    "detect": "unsafe extern C fn(image:u32,destination:u32,detector:u32,arg3:u32,arg4:u32,options:u32,arg6:u32,arg7:u32,faces:u32,groups:u32) -> void",
+    "searchLocal": "unsafe extern C fn(image:u32,destination:u32,scale:i32,options:u32) -> void",
+    "filterCandidates": "unsafe extern C fn(list:u32,image:u32,radius:i32,options:u32) -> void",
+    "gradient": "unsafe extern C fn(pixels:u32,width:i32,height:i32,x:i32,y:i32,component:i32,orientation:u32) -> u32",
+    "gradientAngle": "unsafe extern C fn(vertical:i32,horizontal:i32) -> i32",
+    "sineAndCosine": "unsafe extern C fn(angle:i32) -> i32",
+    "removeDuplicatesAndAccumulate": "unsafe extern C fn(list:u32) -> void",
+    "removeNearby": "unsafe extern C fn(list:u32,radius:i32) -> void",
+    "taskArguments": "r0=state+0x84c, r1=state+0x830, r2=state+0x8ec, r3=0; caller stack words0..3=0, word4=state+0x1d90, word5=state+0x1e48. Ten arguments, not nine."
+  },
+  "layouts": {
+    "Image": ["pixels:address32","height:i32","width:i32"],
+    "Candidate": ["active:u32","x:i32","y:i32","scale:i16","final_score:i16","coarse_score:i16","fine_score:i16","score:i32"],
+    "RecordList": ["records:address32","stride:u32","capacity:i32","count:i32"],
+    "DetectorContext": "candidate RecordList at offset44",
+    "FaceList": "count:u8 at0; records advance18 bytes; face index0 x:u16 at8,y:u16 at10,scale:u16 at14,disabled:u8 at18,orientation:u8 at19",
+    "ScaleGroups": "group stride52; view0 at8; view stride12; pixels:address32,width:u16,height:u16,padding:u16,reserved:u16",
+    "Feature": ["component:i16","kind:u16","x:i16","y:i16","distance:i16"]
+  },
+  "sharedOwnership": {
+    "0x0069f8fc": "PipelineBuffers xm1_buffers_configuration_byte(key:u32)->u32",
+    "0x0089aa90": "PipelineRedEye xm1_pipeline_image_redeye_divide(i32,i32)->i32",
+    "0x01072978": "PipelineRedEye xm1_pipeline_image_redeye_reset_records(*mut u8)",
+    "0x01072994": "PipelineRedEye xm1_pipeline_image_redeye_record_at(*const u8,i32)->u32",
+    "0x010729c0": "PipelineRedEye xm1_pipeline_image_redeye_append_record(*mut u8,*const u8)",
+    "0x01072a08": "PipelineRedEye xm1_pipeline_image_redeye_compact_records(*mut u8)",
+    "0x01072a84": "PipelineRedEye xm1_pipeline_image_redeye_copy_records(*const u8,*mut u8)",
+    "0x010750b8": "PipelineRedEye owns orchestration and its refine/recover/sample-filter subtree; its partner searches import search_local",
+    "0x01072ad8 and 0x01072ff0": "PipelineBuffers owns pixel samplers; this detector consumes already prepared images and does not call either sampler"
+  },
+  "numericLaws": [
+    "Packed pixels contain two luminance bytes followed by shared blue and red chroma. Derived component is ((198*red-98*luma-43*blue)>>8)+99.",
+    "Each coarse/fine cascade has100 stages. Scores accumulate modulo65536, compare as signed halfwords to signed stage thresholds, and dispatch four feature kinds. Fine features use three-pixel strips or a nine-pixel mean.",
+    "Coarse final score must exceed23; fine final score must be nonnegative. Face detector final score must exceed-2160; local search final score must be nonnegative. All24 final stages must pass.",
+    "Malformed feature kind aborts the scan immediately. Face detector has already reset scratch count and written search settings, but does not copy scratch to destination on this path.",
+    "Detector faces advance18 bytes, scale groups52 bytes and views12 bytes. Face orientation0,1,11 searches the upper half;2..4 the right half;5..7 the lower half;8..10 the left half.",
+    "Local search appends without resetting. Row-major candidate positions are centered signed fixed-point coordinates divided by caller scale.",
+    "Exact duplicate key includes packed scale plus final_score, x and y. First record survives; compaction preserves order.",
+    "Score accumulation visits directed pairs and updates both records for each visit. Same-scale neighbors within eight squared scale units contribute their final scores twice.",
+    "Nearby suppression uses scale-factor-two eligibility, strict radius-square comparison, accumulated score then signed final score tie-breakers. Exact ties retain both. A negative wrapped distance or limit returns before compaction.",
+    "Angles use8192 units per turn. Sine/cosine return4096 amplitude; interpolation truncates toward zero. Gradient classification compares the negative directional projection against zero and returns the low eight bits of its scaled255 result."
+  ],
+  "preconditions": [
+    "Prepared face orientations are0..11, final-stage orientations are0..7, and all image/feature coordinates refer to accessible packed-pixel storage.",
+    "Configuration step is nonzero for a nonempty scan. Stock loops do not progress for step0.",
+    "Record lists have count within capacity,24-byte candidate stride, and accessible storage. Zero capacity is valid and appends retain no records."
+  ],
+  "undefinedOriginalInput": "Orientations above11 fall through without initializing the original scan rectangle. No exact-bit behavior is claimed for those inputs; fixtures use the producer's0..11 domain.",
+  "modelIntegration": {
+    "publications": "RedEyeDetectorScenarios.redEyeDetectorPublications :: [StagePublication]",
+    "scenarios": "RedEyeDetectorScenarios.redEyeDetectorScenarios :: ByteString -> [StageScenario]",
+    "data": "redEyeDetectorInitial image5 installs authenticated original table extents; scenarios then apply their explicitly synthetic classifier parameters.",
+    "runtime": "redEyeDetectorRuntime image4 installs original memcpy722054 and zero-fill7221c8 for original cases. Parent supplies authenticated arithmetic runtime for original89aa90 and resolves every shared CPU publication to owned source for replacement cases.",
+    "syntheticProvenance": "Images, cascade features, thresholds, score responses and bin parameters are independently constructed fixture inputs, not recovered photographs or a trained-eye performance claim. Bright uniform luminance has bin40, red181 has bin45, derived165 has bin41, blue73 has bin18; constant differences map to the synthetic zero-difference bin27. A single accepted score in stage0 followed by99 zero increments fixes coarse24/fine1; final stage0 contributes10 followed by23 zero increments. Expected positions and records are explicit, without detector execution in the host model.",
+    "coverage": ["positive and negative nonzero pixel workspaces","all four feature kinds and four components","coarse/fine/final rejection","malformed feature early abort with destination preservation","row-major ordering and append preservation","capacity0/1/2/4","ten-pixel no-window edge","enabled and disabled face records","real face publication and scratch record effects","stable duplicate compaction","packed score component of duplicate key","higher-score nearby selection and exact ties","scale-factor-two boundary","directed-pair score effects","negative wrapped-distance abort","axis angles and sine/cosine quarter-turns","nonzero inward/outward packed-pixel gradients"]
+  },
+  "retainedEndpoints": [],
+  "qualification": "Source-only implementation and fixture publication. No build, native execution, tests, linter, formatter or runtime qualification was run for this source assignment."
+}

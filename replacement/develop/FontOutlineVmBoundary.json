@@ -1,0 +1,174 @@
+{
+  "unit": "FontOutlineVm",
+  "source_pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_base": "279a7b77ea40cf1e13b2216070d8cf2afad58c19",
+  "qualification": "source-only; native execution, build, tests and formatting not run",
+  "original_image": "private-data/analysis/x-m1-1.50/decode/img6-01100000.bin",
+  "original_image_base": "0x01100000",
+  "source_leads": [
+    "decomp/firmwares/xm1-150/app/graphics/fonts/tu_011984e4.c:60",
+    "decomp/firmwares/xm1-150/app/graphics/fonts/tu_011984e4.c:843",
+    "decomp/firmwares/xm1-150/app/graphics/fonts/tu_0119ce70.c",
+    "decomp/firmwares/xm1-150/app/graphics/fonts/font_program.h",
+    "decomp/app/graphics/fonts/program_vm_handlers.c"
+  ],
+  "source_lead_status": "NONMATCHING leads; layouts, dispatch values, root extents and arithmetic/control instructions inspected in original X-M1 bytes",
+  "original_extents": [
+    {"address": "0x01198598", "bytes": 2768, "sha256": "be82f65d2d9c7c69c18cdf38bbc519174e51685bff6a3c3c3cb952d87f94451c"},
+    {"address": "0x01199440", "bytes": 1024, "sha256": "f4a41561f3bdf6f4902e0f98076a2f723f07c2fcc08a235749d6cb63ee04f77b"},
+    {"address": "0x01199868", "bytes": 704, "sha256": "c5c48952a6bb85a785ff870796ecc8c698f1fb34e10746887ab4e9ada01684f8"},
+    {"address": "0x0119ead8", "bytes": 1024, "sha256": "5a79b9a3db50e2ae6f1bbe5aa6cb110db8746b9fcea36c25ae044854720f67e9"},
+    {"address": "0x01198598", "bytes": 26944, "sha256": "ab0e06fafec1958b8d865540ccbbeaf7b92be4e013e843924db09a29f76b70e5", "scope": "whole enclosing code/data interval; includes neighboring Transforms-owned functions, not a claim of ownership of those neighbors"}
+  ],
+  "publications": [
+    {"original": "0x01198598", "original_adapter": "xm1_font_outline_original_render", "native": "xm1_pipeline_image_font_render_outline_program", "abi": "OriginalAAPCS r0=font_program*, r1=nullable transform descriptor*, r2=stream selector; r0=i32 status", "arguments": ["u32", "u32", "u32"], "result": "i32"},
+    {"original": "0x01199868", "original_adapter": "xm1_font_outline_original_execute", "native": "xm1_pipeline_image_font_execute_outline_program", "abi": "OriginalAAPCS r0=font_program_vm*; r1/r2 ignored by original; r0=i32 status", "arguments": ["u32", "u32", "u32"], "result": "i32"},
+    {"original": "0x01199440", "original_adapter": "xm1_font_outline_original_emit", "native": "xm1_pipeline_image_font_emit_outline", "abi": "OriginalAAPCS r0=font_program_vm*; return register not a result", "arguments": ["u32"], "result": "void"}
+  ],
+  "native_internal_boundary": {
+    "symbol": "xm1_pipeline_image_font_render_outline_program_state",
+    "signature": "unsafe extern C fn(u32,u32,u32,*mut RenderCallerState)->i32",
+    "state_layout": {"compression_mask_u32": 0, "descriptor_bytes_24": 4, "bytes": 28},
+    "entry_capture": "A32 adapter captures incoming r6 and entry-SP-60 through entry-SP-37 before calling Rust. Original stores its local descriptor at fp-56, with fp=entry-SP-4.",
+    "recursive_mask": "Four-argument internal assembly entry receives the parent compression mask explicitly. Original preserves r6 across the recursive call.",
+    "ambient_input_limit": "A missing/empty glyph-directory entry consumes prior context fields and incoming compression mask. A missing compound-directory entry consumes pre-existing descriptor scratch. Those bytes are inputs, not ignored output scratch. The adapter captures the entry descriptor bytes. Recursive malformed compound records also depend on the original compiler's deeper physical stack contents; equivalence for such records requires an explicit original-frame input correspondence and is not established by these scenarios."
+  },
+  "program_layout": {
+    "data": "0x08", "glyph_count": "0x0c", "compound_count": "0x10", "glyph_directory_u16": "0x18", "glyph_data": "0x1c", "compound_directory_u24": "0x20", "compound_data": "0x24", "primary_remaining": "0x60", "primary_cursor": "0x64", "active_stream": "0x6c", "alternate_remaining": "0x70", "alternate_cursor": "0x74", "vm": "0x78", "point_count": "0x90", "point_bytes": "0x94", "parameter_count": "0xa4", "parameter_bytes": "0xa8", "instruction_remaining": "0xb0", "instruction_cursor": "0xb4", "origin_x": "0xd4", "origin_y": "0xd8"
+  },
+  "vm_layout": {
+    "program": "0x00", "vertical_output": "0x04", "point_count": "0x18", "point_bytes": "0x1c", "parameter_count": "0x2c", "parameter_bytes": "0x30", "remaining_alias": "0x38", "cursor_alias": "0x3c", "origin_y_i16": "0x40", "origin_x_i32": "0x44", "output_cursor": "0x50", "output_capacity_halfwords": "0x54", "output_used_halfwords": "0x58", "vertical_offset": "0x5c", "horizontal_offset": "0x60", "forward_segments": "0x64", "reverse_segments": "0x364", "segment_cursors": "0x664", "opcode_u8": "0x66c", "x_values_16_i32": "0x670", "y_values_16_i32": "0x6b0", "parameters_8_i32": "0x6f0", "scaled_parameters": "0x710", "scaled_parameters_copy": "0x730", "scale": "0x750", "source_x_destination_x_source_y_destination_y": "0x754", "basis_origin_endpoint_extent": "0x764", "start_control_end_has_control_contour": "0x77c"
+  },
+  "decoded_dispatch": [
+    {"opcodes": "00,04", "handler": "0x0119c808", "meaning": "short rotated line with start"},
+    {"opcodes": "02,06", "handler": "0x0119c600", "meaning": "short rotated line"},
+    {"opcodes": "03,07", "handler": "0x0119db80", "meaning": "register-only line"},
+    {"opcodes": "08,0c", "handler": "0x0119a64c", "meaning": "short rotated curve with start"},
+    {"opcodes": "0a,0e", "handler": "0x0119a3bc", "meaning": "short rotated curve"},
+    {"opcodes": "0b,0f", "handler": "0x0119e178", "meaning": "short rotated close"},
+    {"opcodes": "10,14", "handler": "0x0119bc10", "meaning": "short axis line with start"},
+    {"opcodes": "12,16", "handler": "0x0119ba2c", "meaning": "short axis line"},
+    {"opcodes": "18,1c", "handler": "0x0119abcc", "meaning": "short axis curve with start"},
+    {"opcodes": "1a,1e", "handler": "0x0119a950", "meaning": "short axis curve"},
+    {"opcodes": "1b,1f", "handler": "0x0119c26c", "meaning": "short axis close"},
+    {"opcodes": "20-27", "handler": "0x01199ec4", "meaning": "scaled add x with discarded short"},
+    {"opcodes": "28-2f", "handler": "0x01199e60", "meaning": "scaled subtract x with discarded short"},
+    {"opcodes": "30", "handler": "0x01199228", "meaning": "normal basis"},
+    {"opcodes": "31", "handler": "0x01199294", "meaning": "cross basis"},
+    {"opcodes": "32", "handler": "0x011991c0", "meaning": "copy x"},
+    {"opcodes": "33", "handler": "0x011991f4", "meaning": "copy y"},
+    {"opcodes": "34", "handler": "0x01199fa0", "meaning": "short rotated point"},
+    {"opcodes": "35", "handler": "0x01199f28", "meaning": "short axis point"},
+    {"opcodes": "36", "handler": "0x01199410", "meaning": "actual empty instruction returning zero"},
+    {"opcodes": "37", "handler": "0x01199428", "meaning": "actual empty instruction returning zero"},
+    {"opcodes": "40-47", "handler": "0x01199dfc", "meaning": "scaled add y with discarded short"},
+    {"opcodes": "48-4f", "handler": "0x01199d98", "meaning": "scaled subtract y with discarded short"},
+    {"opcodes": "50-57", "handler": "0x01199d40", "meaning": "scaled add x"},
+    {"opcodes": "58-5f", "handler": "0x01199ce8", "meaning": "scaled subtract x"},
+    {"opcodes": "60-67", "handler": "0x01199c90", "meaning": "scaled add y using x indices"},
+    {"opcodes": "68-6f", "handler": "0x01199c38", "meaning": "scaled subtract y using x indices"},
+    {"opcodes": "70", "handler": "0x01199854", "meaning": "flush and continue, status8004"},
+    {"opcodes": "71", "handler": "0x01199840", "meaning": "flush and stop, status8003"},
+    {"opcodes": "78,79", "handler": "0x0119be68", "meaning": "byte rotated close normal basis"},
+    {"opcodes": "7a,7b", "handler": "0x0119ce70", "meaning": "byte axis close normal basis"},
+    {"opcodes": "7c,7d", "handler": "0x0119ca6c", "meaning": "byte rotated close cross basis"},
+    {"opcodes": "7e,7f", "handler": "0x0119d620", "meaning": "byte axis close cross basis"},
+    {"opcodes": "80,84", "handler": "0x0119a138", "meaning": "byte rotated line with start"},
+    {"opcodes": "82,86", "handler": "0x0119e8c4", "meaning": "byte rotated line"},
+    {"opcodes": "88,8c", "handler": "0x0119b704", "meaning": "byte rotated curve with start"},
+    {"opcodes": "8a,8e", "handler": "0x0119b45c", "meaning": "byte rotated curve"},
+    {"opcodes": "8b,8f", "handler": "0x0119d26c", "meaning": "byte rotated close"},
+    {"opcodes": "90,94", "handler": "0x0119df04", "meaning": "byte axis line with start"},
+    {"opcodes": "92,96", "handler": "0x0119dd14", "meaning": "byte axis line"},
+    {"opcodes": "98,9c", "handler": "0x0119b14c", "meaning": "byte axis curve with start"},
+    {"opcodes": "9a,9e", "handler": "0x0119aeb4", "meaning": "byte axis curve"},
+    {"opcodes": "9b,9f", "handler": "0x0119e518", "meaning": "byte axis close"},
+    {"opcodes": "a0-a7", "handler": "0x01199bf4", "meaning": "add x and discard short"},
+    {"opcodes": "a8-af", "handler": "0x01199bb0", "meaning": "subtract x and discard short"},
+    {"opcodes": "b4", "handler": "0x0119a0a8", "meaning": "byte rotated point"},
+    {"opcodes": "b5", "handler": "0x0119a020", "meaning": "byte axis point"},
+    {"opcodes": "c0-c7", "handler": "0x01199b6c", "meaning": "add y and discard short"},
+    {"opcodes": "c8-cf", "handler": "0x01199b28", "meaning": "subtract y and discard short"},
+    {"opcodes": "d0-d7", "handler": "0x01199300", "meaning": "add x"},
+    {"opcodes": "d8-df", "handler": "0x01199344", "meaning": "subtract x"},
+    {"opcodes": "e0-e7", "handler": "0x01199388", "meaning": "add y using x indices"},
+    {"opcodes": "e8-ef", "handler": "0x011993cc", "meaning": "subtract y using x indices"},
+    {"opcodes": "f0", "handler": "0x0119da1c", "meaning": "remaining+1,cursor-1,start-x sentinel,emit,status8004"}
+  ],
+  "null_dispatch": "Every opcode absent from decoded_dispatch returns -3 after consuming opcode and index byte. No indirect code-pointer table remains in the implementation.",
+  "semantics": {
+    "byte_coordinates": "255 denotes256; other values unsigned",
+    "short_coordinates": "signed little endian i16",
+    "arithmetic": "wrapping32-bit products and sums; negative fixed-point products add255 then arithmetic-shift8",
+    "segment_record": "six i16 values: startY,startX,controlY,controlX,endY,endX; line control is -1,-1",
+    "finalization": "forward contour followed by reverse contour; output counted in halfwords even beyond capacity; header allocated only when both contour counts nonzero; output kinds1 move,2 line,3 quadratic,4 close",
+    "control": "FA inline instructions, FC recursive compound glyph, FD skip primary stream, FF extended glyph index; primary/alternate cursor ownership preserved",
+    "memory": "All consumed coordinate, bank, output-count and state scratch is preserved. No blanket private-scratch exclusion. Memory validity and writable extent are caller preconditions matching the pointer ABI."
+  },
+  "dependencies": [
+    {"owner": "PipelineTransforms", "symbol": "xm1_pipeline_image_font_program_read_byte", "signature": "unsafe extern C fn(u32)->u8", "original": "0x01197f18"},
+    {"owner": "PipelineTransforms", "symbol": "xm1_pipeline_image_font_program_read_short", "signature": "unsafe extern C fn(u32)->i16", "original": "0x01197f50"},
+    {"owner": "PipelineTransforms", "symbol": "super::font_fdl::signed_quotient", "signature": "pub(crate) unsafe fn(i32,i32)->i32", "original": "0x0089aa90", "fatal_boundary": "division by zero enters xm1_font_division_fault, kernel0x43604 SVC0x1010 then terminal loop0x43610; no Rust division panic"}
+  ],
+  "remaining_device_laws": [
+    {"name": "kernel integer-divide fatal termination", "address": "0x00043604", "evidence": "PipelineTransforms original-byte inspection: loader-40000.bin, signed divide0x89aa90/0x89aba8 zero paths branch0x43614->0x43604", "qualification": "actual named kernel fatal boundary; physical/native termination not exercised here"}
+  ],
+  "model": {
+    "file": "model/FontOutlineVmScenarios.hs",
+    "exports": ["outlineScenarios", "outlineFatalScenarios", "genuineGlyphScenarios", "outlineOriginal", "outlineSymbol"],
+    "expectations": "Literal nonzero coordinates, independent segment/output records, malformed opcode errors, finish/continuation, cursor rewind, capacity and orientation. No internal software-call scripts.",
+    "genuine_font": {"path": "private-data/analysis/x-m1-1.50/native-case/classic-chrome-icon/a-a52dfa0aaea0c3eecb106aed.bin", "sha256": "a52dfa0aaea0c3eecb106aed809e99fed71cb9a754dc7cd412ff488b98542dac", "glyph": "E14D", "record_offset": "0x3edea", "record_bytes": 108, "program_offset": "0x3edf0", "program_bytes": 102, "independent_expected_output_halfwords": 81, "fixture_policy": "Caller supplies private font bytes; no original glyph instruction bytes embedded in public source"},
+    "native_memory_premise": "VM pointer is program+0x78. VM remaining/cursor aliases program+0xb0/+0xb4. Compare complete reachable context and output regions in addition to literal expected patches. OriginalAAPCS includes incoming r6 and read-before-write descriptor frame bytes where directory lookups do not initialize them."
+  },
+  "portable_cutover": {
+    "immutable_original_source_unit": "afd40bcbcc534542ca9cf720ba569099d979bfef",
+    "core": "src/font_core/outline.rs",
+    "physical_adapter": "src/pipeline/font_outline_vm.rs",
+    "architecture": "One typed instruction decoder and execution/finalization algorithm. VmState, ProgramReader, ContourStorage and OutlineOutput bind either borrowed domain state and buffers or the physical OriginalAAPCS context. No second VM, emulated address space or software-forwarding service.",
+    "public_api": [
+      "FdlResource::parse(&[u8])->Result<FdlResource,FontError>",
+      "FdlResource::render(GlyphId,WritingMode,&mut OutlineWorkspace,&mut [OutlineCommand])->Result<GlyphOutline,FontError>",
+      "OutlineWorkspace::new()",
+      "FdlResource::glyph_program(GlyphId,WritingMode)->Result<GlyphProgram,FontError>",
+      "FdlResource::subroutine_directory(GlyphId)->Result<ProgramSpan,FontError>",
+      "FdlResource::compound_directory(GlyphId)->Result<ProgramSpan,FontError>",
+      "FdlResource::bytes()->&[u8]",
+      "FdlResource::default_values()->&[u16;8]",
+      "FdlResource::format()->FdlFormat::Outline",
+      "FdlResource::property10()->Result<Option<ProgramSpan>,FontError>",
+      "FdlResource::glyph_scale(GlyphId)->Result<Option<ScalePerMille>,FontError>"
+    ],
+    "reader_contract": "ProgramSpan exposes a borrowed actual-byte slice and its AssetOffset. GlyphProgramMetrics preserves the loader's horizontal_x, horizontal_y, vertical_x and vertical_y AdvancePerMille fields, including zero outputs for the nonselected orientation. Compact, dense and paged directories, record metric prefixes and alternate vertical programs are decoded at the bounded resource boundary.",
+    "program_origin": "OutlineMetrics.program_origin.x is i16((raw horizontal_x*2048)/1000), program_origin.y is i16((raw vertical_x*2048)/1000), signed truncation. It is not an advance vector. Emitted path points are (VM_Y-program_origin.x, VM_X-program_origin.y), narrowed to i16. Vertical output then applies (a,b)->(i16(2048-b),a).",
+    "source_advance": "OutlineMetrics.source_advance retains selected raw horizontal_y or vertical_y as AdvancePerMille; encoded zero is GlyphAdvance::FullEm. Requested-size rasterization must use the source value, not rescale a truncated normalized value.",
+    "constructor_binding": {
+      "owner": "PipelineTransforms",
+      "source_commit": "9565a43c",
+      "route": "FontAsset::parse -> FdlResource::parse; FontEngine::new(asset,config,FontWorkspace::fdl(raster,pixels)); FontEngine::glyph_mask -> raster::render_glyph(resource,glyph,config,raster,pixels)",
+      "raster_owner": "PipelineMotionSearch and FontScanlineFlush",
+      "precision": "The glyph-mask route executes the actual raster VM at requested dimensions. It does not rescale a 2047-normalized outline and does not allocate an outline-command intermediate."
+    },
+    "graphics_consumer_binding": {
+      "owner": "GraphicsRuntime",
+      "source": "replacement/render_commands/src/raster.rs:140",
+      "route": "CpuRaster::draw_glyph_mask(baseline,&GlyphMask,colour)",
+      "behavior": "Revalidates the borrowed mask, applies bearing offsets, clips, decodes PackedMsb1/Gray4/Gray8 and blends coverage. The outline core has no framebuffer or device access."
+    },
+    "state_and_limits": [
+      "Fresh portable rendering owns explicitly initialized typed state. This is not a claim that an arbitrary retained legacy workspace is zero.",
+      "program+c0/c4 are incoming legacy workspace translation scales; decoded VM handlers do not produce them. The physical adapter preserves these inputs. The fresh portable constructor initializes its corresponding named fields to zero and the inline compound calculation consumes those fields.",
+      "OutlineWorkspace contains 64 segment slots per contour and 64 explicit compound frames. Exhaustion returns InsufficientWorkspace; these are software workspace capacities, not hardware laws. Compound execution does not recurse on the host stack.",
+      "Malformed or truncated asset data returns a typed boundary error. DivisionByZero retains the actual numerator; physical legacy transforms still enter the genuine shared kernel-fatal divide boundary.",
+      "No semantic count was invented for the otherwise unused paged-header+10 field. Plane/page reads use checked actual asset bounds and ARM shift semantics."
+    ],
+    "independent_source_scenarios": "The core's unrun public-API tests cover nonzero origin subtraction, source per-mille precision, compact and paged records, vertical geometry, actual record bytes, property10 coefficients, invalid instructions, truncated programs, insufficient command storage and the actual divide-zero numerator.",
+    "qualification": "Source-only. No build, test, native run, linter or formatter was executed for this cutover. Original qualification does not transfer."
+  },
+  "parent_wiring": {
+    "rust_module": "pipeline::font_outline_vm",
+    "assembly": "FontOutlineVm_stock.S contains native entry-state capture and original-only oracle adapters; original adapters are not application dependencies",
+    "source_target": "parent develop Rust source list plus assembly link inputs",
+    "model_target": "parent develop qualification model list and OriginalAAPCS publications",
+    "required_checks_by_parent": ["cohesive freestanding Rust and A32 link", "Haskell scenario compilation", "original/native and independent expected-output qualification", "full consumed scratch and output comparison", "genuine E14D input identity admission", "kernel divide-fault terminal observation", "independent review"]
+  }
+}

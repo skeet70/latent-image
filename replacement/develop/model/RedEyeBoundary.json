@@ -1,0 +1,33 @@
+{
+  "sourceCommit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image5Sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+  "image4Sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+  "status": "not-qualified-recursive-task-gap",
+  "exports": {
+    "0x00e50204": "xm1_pipeline_image_prepare_geometry",
+    "0x00e5092c": "xm1_pipeline_image_start_work",
+    "0x00e50c74": "xm1_pipeline_image_finish_copy",
+    "0x00734b00": "xm1_pipeline_image_normalize_faces",
+    "0x00e4e008": "xm1_pipeline_image_unpack_rectangle",
+    "0x00e4e04c": "xm1_pipeline_image_rectangle_to_bounds",
+    "0x00e4e67c": "xm1_pipeline_image_complete_primary_copy",
+    "0x00e4e6e0": "xm1_pipeline_image_complete_secondary_copy",
+    "0x01072794": "xm1_pipeline_image_submit_redeye_request",
+    "0x01072844": "xm1_pipeline_image_submit_redeye_value",
+    "0x007257a8": "xm1_pipeline_image_get_ticks",
+    "0x007257e0": "xm1_pipeline_image_elapsed"
+  },
+  "layouts": {
+    "plane": "seven u32: format,address,length,stride,width,height,flags",
+    "preparedFaces": "0x39c bytes; u8 count at 0; records stride0x5c at4; x,y,width,height:u32,tag:u16 at20;kind:u32 at24;orientation:u32 at28;four 16-byte packed-plane records at32",
+    "inputFaces": "0x740 bytes; normalization reads u32 count at0; face records stride0xb8; bounds:u32 at12,16,20,24;kind:u32 at28;orientation:u32 at32;tag:u16 at40",
+    "resultFaces": "0x1bc bytes; u8 count at0; records stride0x2c; sides:u32 at4; rectangles at8 and28 each fouru32 plusu16tag",
+    "queueMessage": "12 bytes; event:u16,sender:u8,destination:u8,size:u32,payload:address32"
+  },
+  "queue": {"channel": 56,"prepareEvent": 18432,"applyEvent": 18433,"callbackSuccess": 16,"callbackFailure": 32,"waitMask": 48},
+  "unqualified": [
+    {"address": "0x01071ca4", "symbol": "run_redeye_task", "reason": "Pinned index contains symbol but no definition. Queue delivery is an RTOS seam, not an implementation or model of the application's detector/filter/pixel-edit task. No task-success interception is admitted."},
+    {"condition": "normalization denominator zero", "reason": "Original unsigned division helper fault law must be preserved before admitting zero-denominator fixtures."},
+    {"condition": "input face count above ten", "reason": "Conversion loop follows original count before application loop is capped at ten. Original storage extent does not admit arbitrary counts."}
+  ]
+}

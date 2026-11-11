@@ -1,0 +1,1299 @@
+{
+  "family": "FontRasterHandlers",
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "integrationBase": "279a7b77",
+  "image": {
+    "name": "overlay44",
+    "file": "analysis/x-m1-1.50/lz/plain-01100000.bin",
+    "base": "0x01100000",
+    "size": 705952,
+    "sha256": "2dfaa5d4bd025d68e991a329cc1377d5da16de656148dc4027d9a6bc0c349f5c"
+  },
+  "publications": [
+    {
+      "address": "0x11a2ae0",
+      "symbol": "xm1_pipeline_image_font_raster_vm_large_scale",
+      "abi": "(RasterVm:u32,ScaleIndex:u32,ScaleValue:i32)->void",
+      "size": 60,
+      "sha256": "8b79191ed7f0d6dc602414820105f40491cabc8d468eac8046000126dcc70fad"
+    },
+    {
+      "address": "0x11a2b1c",
+      "symbol": "xm1_pipeline_image_font_raster_vm_set_scale",
+      "abi": "(RasterVm:u32,ScaleIndex:u32,ScaleValue:i32)->void",
+      "size": 116,
+      "sha256": "eb92696e6e7938ea1f2fac41d684fce86435ff57cf63c041586b83986df8bd31"
+    },
+    {
+      "address": "0x11a2b90",
+      "symbol": "xm1_pipeline_image_font_raster_vm_finish_3",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 100,
+      "sha256": "67b16c20e8b70545ff5c9481b6e25be0b5d51af5c136af25916eb4ef4c9353e5"
+    },
+    {
+      "address": "0x11a2bf4",
+      "symbol": "xm1_pipeline_image_font_raster_vm_finish_4",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 100,
+      "sha256": "b08f1a3893447744dda8026353f94d51ca2a0035e7d840cf41cc193c6c90d94b"
+    },
+    {
+      "address": "0x11a2c58",
+      "symbol": "xm1_pipeline_image_font_raster_vm_copy_x",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 68,
+      "sha256": "8f29ce57fe9699f5b4b658922f940c9f613e75e0915fab729b4b37bd45a10731"
+    },
+    {
+      "address": "0x11a2c9c",
+      "symbol": "xm1_pipeline_image_font_raster_vm_copy_y",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 60,
+      "sha256": "649444a2a315374b0251ae735e880b59784dbfd0f2fce062732f228cdd2b469d"
+    },
+    {
+      "address": "0x11a2cd8",
+      "symbol": "xm1_pipeline_image_font_raster_vm_capture_bounds",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 156,
+      "sha256": "7051760009036b9f57731d6b63f8fc580c6c1a48a7b160b4889ea8a93014bfdb"
+    },
+    {
+      "address": "0x11a2d74",
+      "symbol": "xm1_pipeline_image_font_raster_vm_capture_crossed_bounds",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 156,
+      "sha256": "d89fc690ffb0a1e345f7f7aa5d3e4b9bcbe658f475105f3d520bdb2a25699c01"
+    },
+    {
+      "address": "0x11a2e10",
+      "symbol": "xm1_pipeline_image_font_raster_vm_add_right_x",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 92,
+      "sha256": "13ba9464890d804f5d55f38226c390366d9a86f99db5d5025d4ecb477b9a6720"
+    },
+    {
+      "address": "0x11a2e6c",
+      "symbol": "xm1_pipeline_image_font_raster_vm_subtract_left_x",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 88,
+      "sha256": "07b8aaedbb151b55d7d149aeeded92ea7c389d365d9b784c9bec60893b48a5e9"
+    },
+    {
+      "address": "0x11a2ec4",
+      "symbol": "xm1_pipeline_image_font_raster_vm_add_left_to_y",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 80,
+      "sha256": "4b564bae13d1a4dc2e82d0274009189ed30b74936d616a83bd3e9cc7e60bffb3"
+    },
+    {
+      "address": "0x11a2f14",
+      "symbol": "xm1_pipeline_image_font_raster_vm_subtract_lower_y",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 84,
+      "sha256": "f7ef1a1f11d01b797ef0656ad31c0d1ef9a6b4ac22b67b3cc7d02849be89977e"
+    },
+    {
+      "address": "0x11a2f68",
+      "symbol": "xm1_pipeline_image_font_raster_vm_no_op_first",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 24,
+      "sha256": "656853e9c58afa823ccdce77fd5def8d02e1cac02908ede5031aae23b5aa2140"
+    },
+    {
+      "address": "0x11a2f80",
+      "symbol": "xm1_pipeline_image_font_raster_vm_no_op_second",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 24,
+      "sha256": "656853e9c58afa823ccdce77fd5def8d02e1cac02908ede5031aae23b5aa2140"
+    },
+    {
+      "address": "0x11a2f98",
+      "symbol": "xm1_pipeline_image_font_raster_vm_refresh_scales",
+      "abi": "(RasterVm:u32)->void",
+      "size": 1204,
+      "sha256": "33df210db1d440a01b2e4da1e4712fab5c9784f5f95aa51ac3c59c5cac7ffefb"
+    },
+    {
+      "address": "0x11a3700",
+      "symbol": "xm1_pipeline_image_font_raster_vm_subtract_bottom_y",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 88,
+      "sha256": "8863fbe840f6886909fa22c5b21f7c2c5e69abd53df04d9daba6b68996cbc122"
+    },
+    {
+      "address": "0x11a3758",
+      "symbol": "xm1_pipeline_image_font_raster_vm_add_top_y",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 84,
+      "sha256": "f7caaba52074fa462ccce5cbffd2cab2afb3ee21ddfa570652b385165ab30cd6"
+    },
+    {
+      "address": "0x11a37ac",
+      "symbol": "xm1_pipeline_image_font_raster_vm_subtract_left_y",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 96,
+      "sha256": "53d57841ff621b9af0c9a45baf2ad2e472604efe99aa8860a685f909ee5ec131"
+    },
+    {
+      "address": "0x11a380c",
+      "symbol": "xm1_pipeline_image_font_raster_vm_add_right_y",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 96,
+      "sha256": "297ce1deb4844e6bb7d533884c1b75c8f441533a1245899c2252f937cb2d742b"
+    },
+    {
+      "address": "0x11a386c",
+      "symbol": "xm1_pipeline_image_font_raster_vm_scale_subtract_left",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 104,
+      "sha256": "4884f4683439955ed4565ceaa7234a68f72aa00b00a5b6e2ac525a02d066ee54"
+    },
+    {
+      "address": "0x11a38d4",
+      "symbol": "xm1_pipeline_image_font_raster_vm_scale_add_middle",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 100,
+      "sha256": "c7fcbfc5f8924911743f407c255386dd4e9f4b9128557b27e05a90aaf98eda77"
+    },
+    {
+      "address": "0x11a3938",
+      "symbol": "xm1_pipeline_image_font_raster_vm_scale_subtract_middle",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 108,
+      "sha256": "aef8cacc5d7b2540fa400b10e372082ce5f6b0ae7317c27e955f8504dcf80470"
+    },
+    {
+      "address": "0x11a39a4",
+      "symbol": "xm1_pipeline_image_font_raster_vm_scale_add_right",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 112,
+      "sha256": "d2d747e14ea58e5b8820a1aad032d718e81fbd2253de2aff64cd4cc5f85135d8"
+    },
+    {
+      "address": "0x11a3a14",
+      "symbol": "xm1_pipeline_image_font_raster_vm_scale_subtract_bottom",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 120,
+      "sha256": "40d044dd3b7e70374d9fd664890267e931b03ff2f1f35d415f9182fc9aa76307"
+    },
+    {
+      "address": "0x11a3a8c",
+      "symbol": "xm1_pipeline_image_font_raster_vm_scale_add_top",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 116,
+      "sha256": "1687a76bfc70fa2430c77e3a6560452b448c20e17a055a94365908e072870d22"
+    },
+    {
+      "address": "0x11a3b00",
+      "symbol": "xm1_pipeline_image_font_raster_vm_scale_subtract_x",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 128,
+      "sha256": "e054efdc5f04ad8cf40f70cd1f9f62f4fe35318198ed13ab8470211637e9c6bb"
+    },
+    {
+      "address": "0x11a3b80",
+      "symbol": "xm1_pipeline_image_font_raster_vm_scale_add_x",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 128,
+      "sha256": "fa134e0a471eeffaf34329db16d5dbd9ef9e2cb9754e08ba05993877585edef3"
+    },
+    {
+      "address": "0x11a5438",
+      "symbol": "xm1_pipeline_image_font_raster_vm_finish_curve",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 56,
+      "sha256": "9a9b21c270bee1a92b4f04be2df68e890dec7bb235b0ea28ac8bd610f837e4ad"
+    },
+    {
+      "address": "0x11a5470",
+      "symbol": "xm1_pipeline_image_font_raster_vm_stored_line",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 180,
+      "sha256": "cf89fd34ece8fd4d463a982d6e5d320db9db90c7e07f3ab01ec0c223bc4e0e6d"
+    },
+    {
+      "address": "0x11a5524",
+      "symbol": "xm1_pipeline_image_font_raster_vm_short_curve",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 480,
+      "sha256": "d13cb423d6a8900b4518d315f16c8f55a581974a3c16118388ad16cc9bec0ea4"
+    },
+    {
+      "address": "0x11a5704",
+      "symbol": "xm1_pipeline_image_font_raster_vm_short_curve_to",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 452,
+      "sha256": "1f8b9f5f85fced902abcb09892e92f3d05f7d89055a2e611b6554267ebadba30"
+    },
+    {
+      "address": "0x11a58c8",
+      "symbol": "xm1_pipeline_image_font_raster_vm_rotated_curve",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 496,
+      "sha256": "72d68010cbb94755f280367dd02629123931c7d8c5a8ee498cf276ab34f87c4c"
+    },
+    {
+      "address": "0x11a5ab8",
+      "symbol": "xm1_pipeline_image_font_raster_vm_rotated_curve_to",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 476,
+      "sha256": "febe871eb07cf1a4a0e65f8987ca30678568522a1b26c898bece81f1ab44f327"
+    },
+    {
+      "address": "0x11a5c94",
+      "symbol": "xm1_pipeline_image_font_raster_vm_short_rotated_start",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 672,
+      "sha256": "e50a75c46b25c900e970ad98456f63899975574e3f040b45fd661b29a7fe0d16"
+    },
+    {
+      "address": "0x11a5f34",
+      "symbol": "xm1_pipeline_image_font_raster_vm_short_segment",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 452,
+      "sha256": "b839e8c8a047297591be5cd85318f15003a65126d231fabf06eca24214f61883"
+    },
+    {
+      "address": "0x11a60f8",
+      "symbol": "xm1_pipeline_image_font_raster_vm_short_axis_start",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 616,
+      "sha256": "2c7610c141437386e558db6b98b0759222674376eb8df8d343a87397b0f45fcc"
+    },
+    {
+      "address": "0x11a6360",
+      "symbol": "xm1_pipeline_image_font_raster_vm_translate_short",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 144,
+      "sha256": "21d36a264ebee38684c6ba6f5a136f78a7ea12ae02f162ae7eebc17d8e51a732"
+    },
+    {
+      "address": "0x11a63f0",
+      "symbol": "xm1_pipeline_image_font_raster_vm_short_line_to",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 300,
+      "sha256": "ff7545e1acedceee3e66fe11c032e5f53629f8216566b2f684086196427f778f"
+    },
+    {
+      "address": "0x11a651c",
+      "symbol": "xm1_pipeline_image_font_raster_vm_rotate_short",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 152,
+      "sha256": "4ccc84870e2a46e4bece564bf543d6cae52faeac8aa2247ae025fd6a9588a557"
+    },
+    {
+      "address": "0x11a65b4",
+      "symbol": "xm1_pipeline_image_font_raster_vm_rotated_line_to",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 356,
+      "sha256": "ce256015fc349bb7a9f250c70998a3de9252cc337f761a679f7f01ca4160157c"
+    },
+    {
+      "address": "0x11a6718",
+      "symbol": "xm1_pipeline_image_font_raster_vm_rotated_segment",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 504,
+      "sha256": "66cecd2933c7e9a8acc32bd06e7417a510bb464900d6ab8c3f79c3f0aa0536d1"
+    },
+    {
+      "address": "0x11a6910",
+      "symbol": "xm1_pipeline_image_font_raster_vm_byte_curve",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 504,
+      "sha256": "2487c38908346324a5653b499efb5d1279bf3e35b27f38cea1d47447e6c3492c"
+    },
+    {
+      "address": "0x11a6b08",
+      "symbol": "xm1_pipeline_image_font_raster_vm_byte_curve_to",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 476,
+      "sha256": "1e48fb02df2c95907ec39c8de6fd274bafef0a3713cb42f683d5d452a23d8408"
+    },
+    {
+      "address": "0x11a6ce4",
+      "symbol": "xm1_pipeline_image_font_raster_vm_byte_axis_close_cross_basis",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 632,
+      "sha256": "dc9532a2667fb06be2e1e5134b32bd148210f055788f22086b06c85ec97845f8"
+    },
+    {
+      "address": "0x11a6f5c",
+      "symbol": "xm1_pipeline_image_font_raster_vm_byte_axis_close_normal_basis",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 632,
+      "sha256": "1ec88098c64aec705a2c2153110dea6d2644cc00fc1e1a7fafe1f86f132e7ae6"
+    },
+    {
+      "address": "0x11a71d4",
+      "symbol": "xm1_pipeline_image_font_raster_vm_byte_rotated_close_cross_basis",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 660,
+      "sha256": "228246cced672ee168079fd5b1d728fe24cbf1e1a3a866aad71543e0c3ae0b87"
+    },
+    {
+      "address": "0x11a7468",
+      "symbol": "xm1_pipeline_image_font_raster_vm_byte_rotated_close_normal_basis",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 660,
+      "sha256": "757e1039a38192c268e33eb48c0a16c44edbfc659d790b93a0038b1d5dee7ce6"
+    },
+    {
+      "address": "0x11a76fc",
+      "symbol": "xm1_pipeline_image_font_raster_vm_byte_rotated_close",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 524,
+      "sha256": "3367395dfed677995074c0747c34c86f174351a6319ec41f22c173bb1a1420c3"
+    },
+    {
+      "address": "0x11a7908",
+      "symbol": "xm1_pipeline_image_font_raster_vm_rotated_byte_curve_to",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 504,
+      "sha256": "d4395363b12f2cbc52795caeb554ba2950602676696f9fa63bffaff115bf27f5"
+    },
+    {
+      "address": "0x11a7b00",
+      "symbol": "xm1_pipeline_image_font_raster_vm_byte_segment",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 480,
+      "sha256": "bef9b40732f098423aef7fdf9c568ba055d73594f9ed234ab163dfac3799c057"
+    },
+    {
+      "address": "0x11a7ce0",
+      "symbol": "xm1_pipeline_image_font_raster_vm_byte_axis_start",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 632,
+      "sha256": "39dbf1848d3810bdb74704f1f9b71e35aa9ab34e9a7c3bbbb1b91b03a884b972"
+    },
+    {
+      "address": "0x11a7f58",
+      "symbol": "xm1_pipeline_image_font_raster_vm_translate_byte",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 160,
+      "sha256": "11b3eeb4d327f341cefb0953151a18515d7b6576df3953d3f22c101649705146"
+    },
+    {
+      "address": "0x11a7ff8",
+      "symbol": "xm1_pipeline_image_font_raster_vm_byte_line_to",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 316,
+      "sha256": "80afeb7a00796d906910a63d410ef6b31d6000d73fc2d441e292df77d67d2be3"
+    },
+    {
+      "address": "0x11a8134",
+      "symbol": "xm1_pipeline_image_font_raster_vm_byte_rotated_start",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 716,
+      "sha256": "17893a3e48b250ba42660d7cb4d5bdfb783cbe4f669c5dcc2b4d90705507ca8b"
+    },
+    {
+      "address": "0x11a8400",
+      "symbol": "xm1_pipeline_image_font_raster_vm_rotate_byte",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 168,
+      "sha256": "ec65dc072446e5c26911b89b988791e51fea225e4ae5fa0b0277c1fd98e51b88"
+    },
+    {
+      "address": "0x11a84a8",
+      "symbol": "xm1_pipeline_image_font_raster_vm_rotated_byte_line_to",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 364,
+      "sha256": "abb29b4f74509fa8489cd60a9f2b58a8564f746831520a81d289e5e250de4585"
+    },
+    {
+      "address": "0x11a8614",
+      "symbol": "xm1_pipeline_image_font_raster_vm_byte_rotated_line",
+      "abi": "(RasterVm:u32)->RasterStatus:i32",
+      "size": 516,
+      "sha256": "21e714c07ec116b05259b81d4065c08d963cfed6bb0d2c56260c118ea6970979"
+    },
+    {
+      "address": "0x11ab010",
+      "symbol": "xm1_pipeline_image_font_raster_execute",
+      "abi": "(RasterVm:u32,RasterMode:u32)->RasterStatus:i32",
+      "size": 3564,
+      "sha256": "283fc4b3f98f499875f356c24055803fcc4ced5999afcd683f745224e997c623"
+    }
+  ],
+  "opcodeTable": {
+    "address": "0x011ab9fc",
+    "entries": 256,
+    "size": 1024,
+    "sha256": "e10ded719b92079baa6531d23482381c7a03e488dbf6af743a30c6bb5819e6dc",
+    "routing": [
+      {
+        "opcode": "0x00",
+        "target": "0x11a6718"
+      },
+      {
+        "opcode": "0x02",
+        "target": "0x11a65b4"
+      },
+      {
+        "opcode": "0x03",
+        "target": "0x11a5470"
+      },
+      {
+        "opcode": "0x04",
+        "target": "0x11a6718"
+      },
+      {
+        "opcode": "0x06",
+        "target": "0x11a65b4"
+      },
+      {
+        "opcode": "0x07",
+        "target": "0x11a5470"
+      },
+      {
+        "opcode": "0x08",
+        "target": "0x11a5c94"
+      },
+      {
+        "opcode": "0x0a",
+        "target": "0x11a5ab8"
+      },
+      {
+        "opcode": "0x0b",
+        "target": "0x11a58c8"
+      },
+      {
+        "opcode": "0x0c",
+        "target": "0x11a5c94"
+      },
+      {
+        "opcode": "0x0e",
+        "target": "0x11a5ab8"
+      },
+      {
+        "opcode": "0x0f",
+        "target": "0x11a58c8"
+      },
+      {
+        "opcode": "0x10",
+        "target": "0x11a5f34"
+      },
+      {
+        "opcode": "0x12",
+        "target": "0x11a63f0"
+      },
+      {
+        "opcode": "0x14",
+        "target": "0x11a5f34"
+      },
+      {
+        "opcode": "0x16",
+        "target": "0x11a63f0"
+      },
+      {
+        "opcode": "0x18",
+        "target": "0x11a60f8"
+      },
+      {
+        "opcode": "0x1a",
+        "target": "0x11a5704"
+      },
+      {
+        "opcode": "0x1b",
+        "target": "0x11a5524"
+      },
+      {
+        "opcode": "0x1c",
+        "target": "0x11a60f8"
+      },
+      {
+        "opcode": "0x1e",
+        "target": "0x11a5704"
+      },
+      {
+        "opcode": "0x1f",
+        "target": "0x11a5524"
+      },
+      {
+        "opcode": "0x20",
+        "target": "0x11a3b80"
+      },
+      {
+        "opcode": "0x21",
+        "target": "0x11a3b80"
+      },
+      {
+        "opcode": "0x22",
+        "target": "0x11a3b80"
+      },
+      {
+        "opcode": "0x23",
+        "target": "0x11a3b80"
+      },
+      {
+        "opcode": "0x24",
+        "target": "0x11a3b80"
+      },
+      {
+        "opcode": "0x25",
+        "target": "0x11a3b80"
+      },
+      {
+        "opcode": "0x26",
+        "target": "0x11a3b80"
+      },
+      {
+        "opcode": "0x27",
+        "target": "0x11a3b80"
+      },
+      {
+        "opcode": "0x28",
+        "target": "0x11a3b00"
+      },
+      {
+        "opcode": "0x29",
+        "target": "0x11a3b00"
+      },
+      {
+        "opcode": "0x2a",
+        "target": "0x11a3b00"
+      },
+      {
+        "opcode": "0x2b",
+        "target": "0x11a3b00"
+      },
+      {
+        "opcode": "0x2c",
+        "target": "0x11a3b00"
+      },
+      {
+        "opcode": "0x2d",
+        "target": "0x11a3b00"
+      },
+      {
+        "opcode": "0x2e",
+        "target": "0x11a3b00"
+      },
+      {
+        "opcode": "0x2f",
+        "target": "0x11a3b00"
+      },
+      {
+        "opcode": "0x30",
+        "target": "0x11a2cd8"
+      },
+      {
+        "opcode": "0x31",
+        "target": "0x11a2d74"
+      },
+      {
+        "opcode": "0x32",
+        "target": "0x11a2c58"
+      },
+      {
+        "opcode": "0x33",
+        "target": "0x11a2c9c"
+      },
+      {
+        "opcode": "0x34",
+        "target": "0x11a651c"
+      },
+      {
+        "opcode": "0x35",
+        "target": "0x11a6360"
+      },
+      {
+        "opcode": "0x36",
+        "target": "0x11a2f68"
+      },
+      {
+        "opcode": "0x37",
+        "target": "0x11a2f80"
+      },
+      {
+        "opcode": "0x40",
+        "target": "0x11a3a8c"
+      },
+      {
+        "opcode": "0x41",
+        "target": "0x11a3a8c"
+      },
+      {
+        "opcode": "0x42",
+        "target": "0x11a3a8c"
+      },
+      {
+        "opcode": "0x43",
+        "target": "0x11a3a8c"
+      },
+      {
+        "opcode": "0x44",
+        "target": "0x11a3a8c"
+      },
+      {
+        "opcode": "0x45",
+        "target": "0x11a3a8c"
+      },
+      {
+        "opcode": "0x46",
+        "target": "0x11a3a8c"
+      },
+      {
+        "opcode": "0x47",
+        "target": "0x11a3a8c"
+      },
+      {
+        "opcode": "0x48",
+        "target": "0x11a3a14"
+      },
+      {
+        "opcode": "0x49",
+        "target": "0x11a3a14"
+      },
+      {
+        "opcode": "0x4a",
+        "target": "0x11a3a14"
+      },
+      {
+        "opcode": "0x4b",
+        "target": "0x11a3a14"
+      },
+      {
+        "opcode": "0x4c",
+        "target": "0x11a3a14"
+      },
+      {
+        "opcode": "0x4d",
+        "target": "0x11a3a14"
+      },
+      {
+        "opcode": "0x4e",
+        "target": "0x11a3a14"
+      },
+      {
+        "opcode": "0x4f",
+        "target": "0x11a3a14"
+      },
+      {
+        "opcode": "0x50",
+        "target": "0x11a39a4"
+      },
+      {
+        "opcode": "0x51",
+        "target": "0x11a39a4"
+      },
+      {
+        "opcode": "0x52",
+        "target": "0x11a39a4"
+      },
+      {
+        "opcode": "0x53",
+        "target": "0x11a39a4"
+      },
+      {
+        "opcode": "0x54",
+        "target": "0x11a39a4"
+      },
+      {
+        "opcode": "0x55",
+        "target": "0x11a39a4"
+      },
+      {
+        "opcode": "0x56",
+        "target": "0x11a39a4"
+      },
+      {
+        "opcode": "0x57",
+        "target": "0x11a39a4"
+      },
+      {
+        "opcode": "0x58",
+        "target": "0x11a3938"
+      },
+      {
+        "opcode": "0x59",
+        "target": "0x11a3938"
+      },
+      {
+        "opcode": "0x5a",
+        "target": "0x11a3938"
+      },
+      {
+        "opcode": "0x5b",
+        "target": "0x11a3938"
+      },
+      {
+        "opcode": "0x5c",
+        "target": "0x11a3938"
+      },
+      {
+        "opcode": "0x5d",
+        "target": "0x11a3938"
+      },
+      {
+        "opcode": "0x5e",
+        "target": "0x11a3938"
+      },
+      {
+        "opcode": "0x5f",
+        "target": "0x11a3938"
+      },
+      {
+        "opcode": "0x60",
+        "target": "0x11a38d4"
+      },
+      {
+        "opcode": "0x61",
+        "target": "0x11a38d4"
+      },
+      {
+        "opcode": "0x62",
+        "target": "0x11a38d4"
+      },
+      {
+        "opcode": "0x63",
+        "target": "0x11a38d4"
+      },
+      {
+        "opcode": "0x64",
+        "target": "0x11a38d4"
+      },
+      {
+        "opcode": "0x65",
+        "target": "0x11a38d4"
+      },
+      {
+        "opcode": "0x66",
+        "target": "0x11a38d4"
+      },
+      {
+        "opcode": "0x67",
+        "target": "0x11a38d4"
+      },
+      {
+        "opcode": "0x68",
+        "target": "0x11a386c"
+      },
+      {
+        "opcode": "0x69",
+        "target": "0x11a386c"
+      },
+      {
+        "opcode": "0x6a",
+        "target": "0x11a386c"
+      },
+      {
+        "opcode": "0x6b",
+        "target": "0x11a386c"
+      },
+      {
+        "opcode": "0x6c",
+        "target": "0x11a386c"
+      },
+      {
+        "opcode": "0x6d",
+        "target": "0x11a386c"
+      },
+      {
+        "opcode": "0x6e",
+        "target": "0x11a386c"
+      },
+      {
+        "opcode": "0x6f",
+        "target": "0x11a386c"
+      },
+      {
+        "opcode": "0x70",
+        "target": "0x11a2bf4"
+      },
+      {
+        "opcode": "0x71",
+        "target": "0x11a2b90"
+      },
+      {
+        "opcode": "0x78",
+        "target": "0x11a7468"
+      },
+      {
+        "opcode": "0x79",
+        "target": "0x11a7468"
+      },
+      {
+        "opcode": "0x7a",
+        "target": "0x11a6f5c"
+      },
+      {
+        "opcode": "0x7b",
+        "target": "0x11a6f5c"
+      },
+      {
+        "opcode": "0x7c",
+        "target": "0x11a71d4"
+      },
+      {
+        "opcode": "0x7d",
+        "target": "0x11a71d4"
+      },
+      {
+        "opcode": "0x7e",
+        "target": "0x11a6ce4"
+      },
+      {
+        "opcode": "0x7f",
+        "target": "0x11a6ce4"
+      },
+      {
+        "opcode": "0x80",
+        "target": "0x11a8614"
+      },
+      {
+        "opcode": "0x82",
+        "target": "0x11a84a8"
+      },
+      {
+        "opcode": "0x84",
+        "target": "0x11a8614"
+      },
+      {
+        "opcode": "0x86",
+        "target": "0x11a84a8"
+      },
+      {
+        "opcode": "0x88",
+        "target": "0x11a8134"
+      },
+      {
+        "opcode": "0x8a",
+        "target": "0x11a7908"
+      },
+      {
+        "opcode": "0x8b",
+        "target": "0x11a76fc"
+      },
+      {
+        "opcode": "0x8c",
+        "target": "0x11a8134"
+      },
+      {
+        "opcode": "0x8e",
+        "target": "0x11a7908"
+      },
+      {
+        "opcode": "0x8f",
+        "target": "0x11a76fc"
+      },
+      {
+        "opcode": "0x90",
+        "target": "0x11a7b00"
+      },
+      {
+        "opcode": "0x92",
+        "target": "0x11a7ff8"
+      },
+      {
+        "opcode": "0x94",
+        "target": "0x11a7b00"
+      },
+      {
+        "opcode": "0x96",
+        "target": "0x11a7ff8"
+      },
+      {
+        "opcode": "0x98",
+        "target": "0x11a7ce0"
+      },
+      {
+        "opcode": "0x9a",
+        "target": "0x11a6b08"
+      },
+      {
+        "opcode": "0x9b",
+        "target": "0x11a6910"
+      },
+      {
+        "opcode": "0x9c",
+        "target": "0x11a7ce0"
+      },
+      {
+        "opcode": "0x9e",
+        "target": "0x11a6b08"
+      },
+      {
+        "opcode": "0x9f",
+        "target": "0x11a6910"
+      },
+      {
+        "opcode": "0xa0",
+        "target": "0x11a380c"
+      },
+      {
+        "opcode": "0xa1",
+        "target": "0x11a380c"
+      },
+      {
+        "opcode": "0xa2",
+        "target": "0x11a380c"
+      },
+      {
+        "opcode": "0xa3",
+        "target": "0x11a380c"
+      },
+      {
+        "opcode": "0xa4",
+        "target": "0x11a380c"
+      },
+      {
+        "opcode": "0xa5",
+        "target": "0x11a380c"
+      },
+      {
+        "opcode": "0xa6",
+        "target": "0x11a380c"
+      },
+      {
+        "opcode": "0xa7",
+        "target": "0x11a380c"
+      },
+      {
+        "opcode": "0xa8",
+        "target": "0x11a37ac"
+      },
+      {
+        "opcode": "0xa9",
+        "target": "0x11a37ac"
+      },
+      {
+        "opcode": "0xaa",
+        "target": "0x11a37ac"
+      },
+      {
+        "opcode": "0xab",
+        "target": "0x11a37ac"
+      },
+      {
+        "opcode": "0xac",
+        "target": "0x11a37ac"
+      },
+      {
+        "opcode": "0xad",
+        "target": "0x11a37ac"
+      },
+      {
+        "opcode": "0xae",
+        "target": "0x11a37ac"
+      },
+      {
+        "opcode": "0xaf",
+        "target": "0x11a37ac"
+      },
+      {
+        "opcode": "0xb4",
+        "target": "0x11a8400"
+      },
+      {
+        "opcode": "0xb5",
+        "target": "0x11a7f58"
+      },
+      {
+        "opcode": "0xc0",
+        "target": "0x11a3758"
+      },
+      {
+        "opcode": "0xc1",
+        "target": "0x11a3758"
+      },
+      {
+        "opcode": "0xc2",
+        "target": "0x11a3758"
+      },
+      {
+        "opcode": "0xc3",
+        "target": "0x11a3758"
+      },
+      {
+        "opcode": "0xc4",
+        "target": "0x11a3758"
+      },
+      {
+        "opcode": "0xc5",
+        "target": "0x11a3758"
+      },
+      {
+        "opcode": "0xc6",
+        "target": "0x11a3758"
+      },
+      {
+        "opcode": "0xc7",
+        "target": "0x11a3758"
+      },
+      {
+        "opcode": "0xc8",
+        "target": "0x11a3700"
+      },
+      {
+        "opcode": "0xc9",
+        "target": "0x11a3700"
+      },
+      {
+        "opcode": "0xca",
+        "target": "0x11a3700"
+      },
+      {
+        "opcode": "0xcb",
+        "target": "0x11a3700"
+      },
+      {
+        "opcode": "0xcc",
+        "target": "0x11a3700"
+      },
+      {
+        "opcode": "0xcd",
+        "target": "0x11a3700"
+      },
+      {
+        "opcode": "0xce",
+        "target": "0x11a3700"
+      },
+      {
+        "opcode": "0xcf",
+        "target": "0x11a3700"
+      },
+      {
+        "opcode": "0xd0",
+        "target": "0x11a2e10"
+      },
+      {
+        "opcode": "0xd1",
+        "target": "0x11a2e10"
+      },
+      {
+        "opcode": "0xd2",
+        "target": "0x11a2e10"
+      },
+      {
+        "opcode": "0xd3",
+        "target": "0x11a2e10"
+      },
+      {
+        "opcode": "0xd4",
+        "target": "0x11a2e10"
+      },
+      {
+        "opcode": "0xd5",
+        "target": "0x11a2e10"
+      },
+      {
+        "opcode": "0xd6",
+        "target": "0x11a2e10"
+      },
+      {
+        "opcode": "0xd7",
+        "target": "0x11a2e10"
+      },
+      {
+        "opcode": "0xd8",
+        "target": "0x11a2e6c"
+      },
+      {
+        "opcode": "0xd9",
+        "target": "0x11a2e6c"
+      },
+      {
+        "opcode": "0xda",
+        "target": "0x11a2e6c"
+      },
+      {
+        "opcode": "0xdb",
+        "target": "0x11a2e6c"
+      },
+      {
+        "opcode": "0xdc",
+        "target": "0x11a2e6c"
+      },
+      {
+        "opcode": "0xdd",
+        "target": "0x11a2e6c"
+      },
+      {
+        "opcode": "0xde",
+        "target": "0x11a2e6c"
+      },
+      {
+        "opcode": "0xdf",
+        "target": "0x11a2e6c"
+      },
+      {
+        "opcode": "0xe0",
+        "target": "0x11a2ec4"
+      },
+      {
+        "opcode": "0xe1",
+        "target": "0x11a2ec4"
+      },
+      {
+        "opcode": "0xe2",
+        "target": "0x11a2ec4"
+      },
+      {
+        "opcode": "0xe3",
+        "target": "0x11a2ec4"
+      },
+      {
+        "opcode": "0xe4",
+        "target": "0x11a2ec4"
+      },
+      {
+        "opcode": "0xe5",
+        "target": "0x11a2ec4"
+      },
+      {
+        "opcode": "0xe6",
+        "target": "0x11a2ec4"
+      },
+      {
+        "opcode": "0xe7",
+        "target": "0x11a2ec4"
+      },
+      {
+        "opcode": "0xe8",
+        "target": "0x11a2f14"
+      },
+      {
+        "opcode": "0xe9",
+        "target": "0x11a2f14"
+      },
+      {
+        "opcode": "0xea",
+        "target": "0x11a2f14"
+      },
+      {
+        "opcode": "0xeb",
+        "target": "0x11a2f14"
+      },
+      {
+        "opcode": "0xec",
+        "target": "0x11a2f14"
+      },
+      {
+        "opcode": "0xed",
+        "target": "0x11a2f14"
+      },
+      {
+        "opcode": "0xee",
+        "target": "0x11a2f14"
+      },
+      {
+        "opcode": "0xef",
+        "target": "0x11a2f14"
+      },
+      {
+        "opcode": "0xf0",
+        "target": "0x11a5438"
+      }
+    ],
+    "execution": "Closed typed Rust decode and owned instruction bodies. Original callback table is never executed."
+  },
+  "peerOwned": [
+    {
+      "address": "0x0119f60c",
+      "symbol": "xm1_pipeline_image_font_raster_read_byte",
+      "abi": "(RasterContext:u32)->u8",
+      "owner": "PipelineMotionSearch",
+      "law": "Read context.data[context.cursor], increment cursor, decrement remaining."
+    },
+    {
+      "address": "0x0119f644",
+      "symbol": "xm1_pipeline_image_font_raster_read_short",
+      "abi": "(RasterContext:u32)->i16",
+      "owner": "PipelineMotionSearch",
+      "law": "Read signed little-endian short; increment cursor and decrement remaining by two."
+    },
+    {
+      "address": "0x011a40b4",
+      "symbol": "xm1_pipeline_image_font_raster_draw_curve",
+      "abi": "(RasterVm:u32)->void",
+      "owner": "PipelineMotionSearch",
+      "law": "Execute owned scale/translation, line/recursive quadratic edge accumulation or coordinate output; no stubbed application callback."
+    },
+    {
+      "address": "0x011a8818",
+      "symbol": "xm1_pipeline_image_font_raster_flush_scanlines",
+      "abi": "(RasterVm:u32)->i32",
+      "owner": "FontScanlineFlush",
+      "law": "Execute actual eight-style bitmap/run rendering; zero maps to execute error -4. Owned semantic endpoint coordinated with FontScanlineFlush."
+    }
+  ],
+  "layout": {
+    "vmOffsetWithinContext": "0xb8",
+    "remaining": "vm+0x3c aliases context+0xf4",
+    "cursor": "vm+0x40 aliases context+0xf8",
+    "data": "context+0x48",
+    "pointArrays": [
+      "vm+0x7dc0:16 signed words",
+      "vm+0x7e00:16 signed words"
+    ],
+    "coefficientArrays": [
+      "vm+0x7e40:8 raw values",
+      "vm+0x7e60:8 scaled-x",
+      "vm+0x7e80:8 scaled-y"
+    ],
+    "gridShift": "vm+0x7eac",
+    "leftRows": "vm+0xbc",
+    "rightRows": "vm+0x32bc",
+    "minimumVmExtent": "0x8334"
+  },
+  "sourceCorrections": [
+    "F0 actual ABI entry is 0x011a5438, not index interior 0x011a5444. It loads remaining/cursor and constant 0x7edc before the indexed extent.",
+    "Stored-line actual ABI entry is 0x011a5470, not index interior 0x011a5478. It initializes the source-index offsets before the indexed extent.",
+    "Secondary setup coefficients are unsigned halfwords, passed in r2. Ghidra omits that third argument.",
+    "Mode-two scan initialization tests height bit 1 (height & 2), not parity.",
+    "Register shifts consume low eight shift bits; LSL >=32 is zero; ASR >=32 replicates sign.",
+    "set_scale adds 128 before signed truncation by 256; refresh_scales does not.",
+    "Short/byte axis line-to uses destination-x as the destination-y index; rotated line-to uses destination-y."
+  ],
+  "consumerLaws": [
+    "VM belongs to context at context+0xb8; otherwise byte-reader progress does not update the interpreter remaining field.",
+    "Font bytecode storage and VM workspace are disjoint under the original font/context producers.",
+    "Nibble point indices range 0..15; original coefficient/setup producer counts must fit their eight-value and sixteen-point ABI storage.",
+    "The verified closed opcode table returns only 0,0x8003,0x8004. The stock low-halfword 0xffff handler-result branch is unreachable for these bodies; InstructionSignal carries the reachable states.",
+    "Public root accepts raw original mode bits. Modes other than zero and two emit coordinate triples through the owned draw-curve helper.",
+    "Mode-two height 1,5,... leaves the final row unchanged during grid initialization. Fixtures assert preservation; no synthetic initialization or missing-data success is introduced.",
+    "Original bytecode readers do not validate per-instruction remaining lengths. Underfilled programs can read beyond their declared bytecode extent; malformed-input models supply explicit mapped bytes and do not claim bounds safety."
+  ],
+  "model": {
+    "constructor": "fontRasterHandlersScenarios :: ByteString -> (StagePublication -> Address) -> [StageScenario]",
+    "publications": "fontRasterHandlersPublications",
+    "applicationStubs": [],
+    "coverage": [
+      "Small/large coefficient updates and refresh, ARM shift corners, signed overflow and truncation",
+      "Independent coordinate/basis operations and reader consumption",
+      "Actual source-executing line and quadratic handlers with coordinate output",
+      "Every invalid opcode consumes both opcode/index bytes and returns -7",
+      "Active two-edge rectangle draw and source scanline fill/subtract",
+      "Real run-table allocation success, exhaustion and ordered partial output before error -4",
+      "Unsigned secondary halfword setup and aliased source/destination line points",
+      "Literal source grid-tail control law and one-byte F0 rewind"
+    ],
+    "codePointerFrontier": "vm+0 scale callback and vm+4 edge callback store owned code pointers. Initial-role normalization alone cannot assert final callback identity. Integration owner must supply final code-pointer role comparison."
+  },
+  "portableCore": {
+    "implementation": "src/font_core/raster_vm.rs",
+    "originalAdapter": "src/pipeline/font_raster_handlers.rs",
+    "entryPoints": [
+      "execute<T: Storage>(&mut T,RasterMode)->Result<ExecuteStatus,T::Error>",
+      "instruction<T: Storage>(&mut T,Instruction)->Result<InstructionSignal,T::Error>",
+      "set_scale<T: Storage>(&mut T,ScaleIndex,ScaleValue,Scale)->Result<(),T::Error>",
+      "refresh_scales<T: Storage>(&mut T)->Result<(),T::Error>"
+    ],
+    "state": "Named typed VmState fields and State accessors; separate semantic point/coefficient banks and byte-relative output spans. PhysicalState maps the original ABI fields directly without copying VmState.",
+    "errors": "Reader, point-bank, coefficient-bank and output-storage errors propagate unchanged. Invalid opcode and source run exhaustion remain separate ExecuteStatus values. PhysicalStorage uses Infallible and preserves the original unchecked ABI.",
+    "callbacks": "MotionSearch supplies owned draw_curve and bounded asset readers; FontScanlineFlush supplies owned scanline rendering. select_scale records a semantic role and maps to owned originalABI pointers only in the physical adapter.",
+    "contourPrefix": "contour_rows maps original absolute pointer ordering/clamping to a logical row count. It is storage-layout mapping, not min(left-count,right-count).",
+    "models": "Existing independent originalABI scenarios remain unchanged and now execute this same generic implementation through PhysicalStorage.",
+    "integration": "PipelineTransforms owns font_core module declarations and shared Opcode; MotionSearch owns RasterWorkspace, the Storage implementation, requested-dimension raster orchestration and portable render-glyph entry.",
+    "gaps": [
+      "A bounded portable Storage can reject malformed programs or capacity overflow where the original unchecked ABI reads or writes beyond its declared regions. Such errors are not converted into render success.",
+      "Original final callback-role comparison remains integration-owned. The portable core exposes semantic roles, not physical function pointers.",
+      "No compilation, tests, formatters, linters or native replay were run for this extraction."
+    ]
+  },
+  "checksRun": [],
+  "status": "Instruction/setup implementation and original byte routing complete; scanline rendering is peer-owned by FontScanlineFlush. Cohesive native verification and final callback-role comparison are integration-owned."
+}

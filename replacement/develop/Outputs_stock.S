@@ -1,0 +1,49 @@
+.syntax unified
+.arm
+
+.macro owned name, target
+.section .text.\name,"ax",%progbits
+.balign 4
+.global \name
+.type \name,%function
+\name:
+    b \target
+.size \name, .-\name
+.endm
+
+owned outputs_task, xm1_pipeline_image_current_task
+owned outputs_text, xm1_develop_append_stream_text
+owned outputs_notify, xm1_develop_stock_trace
+owned outputs_trace, xm1_pipeline_image_trace_begin
+owned outputs_trace_end, xm1_pipeline_image_trace_end
+owned outputs_signal, xm1_pipeline_image_signal_current_zero
+owned outputs_active, xm1_develop_mark_task_active
+owned outputs_width, xm1_develop_lookup_width
+owned outputs_height, xm1_develop_lookup_height
+owned outputs_expand_views, xm1_develop_expand_planes
+owned outputs_prepare_geometry, xm1_develop_output_matches
+owned outputs_open_object, xm1_develop_open_object
+owned outputs_config, xm1_buffers_configuration_byte
+owned outputs_copy_request, xm1_pipeline_image_prepare_output_request
+owned outputs_calibration_request, xm1_pipeline_image_prepare_output_stamp
+owned outputs_secondary_request, xm1_pipeline_image_configure_output_policy
+owned outputs_component_request, xm1_pipeline_image_apply_triplet_tuning
+owned outputs_level_request, xm1_pipeline_image_process_output_triplets
+owned outputs_correct_request, xm1_pipeline_image_configure_plane_flags
+owned outputs_debug_image, xm1_pipeline_image_publish_debug_file
+owned outputs_output_request, xm1_pipeline_image_configure_output_geometry
+owned outputs_scale_request, xm1_pipeline_image_resize_through_crop
+owned outputs_add_raw_request, xm1_pipeline_image_prepare_special_plane
+owned outputs_divide_raw_request, xm1_pipeline_image_prepare_auxiliary_plane
+owned outputs_resize, xm1_pipeline_image_resize_software
+owned outputs_rotate, xm1_pipeline_image_rotate_software
+owned outputs_copy_rows, xm1_pipeline_image_copy_rows
+owned outputs_prepare_display, xm1_pipeline_image_fill_pattern
+owned outputs_match_points, xm1_pipeline_image_motion_secondary
+owned outputs_finish_points, xm1_pipeline_image_reduce_pair_alternate
+owned outputs_match_triangles, xm1_pipeline_image_reduce_pair
+owned outputs_write_file, xm1_pipeline_image_write_debug_file
+owned outputs_output_enabled, xm1_develop_buffer_policy_disabled
+owned outputs_select_source, xm1_develop_descriptor_list
+owned outputs_store_levels, xm1_pipeline_image_store_triplets
+owned outputs_close_object, xm1_develop_close_object

@@ -1,0 +1,143 @@
+{
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image5Sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+  "source": "decomp/firmwares/xm1-150/app/capture/reccont/tu_00e5a7a0.c",
+  "sourceStatus": "nonmatching",
+  "evidence": "Argument registers, carried stack arguments, descriptor copies, branches, arithmetic and call order inspected from original A32 bytes. Range digests match the pinned index or explicitly described combined entry/body extents.",
+  "routes": [
+    {"entry":"0x00e5a9c0","size":580,"sha256":"f35ea77f31b7b031be8574ee0947f6d8fffbb3452fb767306bf4b1651d6efc65","symbol":"xm1_pipeline_image_blend_pixels"},
+    {"entry":"0x00e5ac04","size":456,"sha256":"4d49646078e0cceeb75da51cd70f7637900e00f7f8fb4a4cbe7ee507eac2c862","symbol":"xm1_pipeline_image_reduce_pair"},
+    {"entry":"0x00e5adcc","size":540,"sha256":"65d6b1b4d14cf0cf0acc03361aee8d389e526876ca207d2c1f3e23616f0d6bb4","symbol":"xm1_pipeline_image_reduce_pair_alternate"},
+    {"entry":"0x00e5afe8","size":716,"sha256":"f1caee4e407d2063e4564a084dfbf20d0def896d1833d96fe1c7bccf0f80bcab","symbol":"xm1_pipeline_image_affine_coefficients"},
+    {"entry":"0x00e5b2b4","size":876,"sha256":"ec4ce316931566302643ba0046f87b10710e7aa82bebc21b9ddb0138da0e45b2","symbol":"xm1_pipeline_image_select_affine_block"},
+    {"entry":"0x00e5b620","size":856,"sha256":"530a0ce8e250528349b471cdc522ad6086fa3f351019e200ea8f28de0df8e348","symbol":"xm1_pipeline_image_affine_copy_safe"},
+    {"entry":"0x00e5b978","size":384,"sha256":"ffa649fbab4b45e6e8aeeb298cc23240f8c6904f5bc8c32c616656d65fa5432d","symbol":"xm1_pipeline_image_prepare_affine"},
+    {"entry":"0x00e5baf8","size":412,"sha256":"563652a8d53799d272f04a728f071050a61597cd1e70edd281af81481c829f2f","symbol":"xm1_pipeline_image_shear_plane"},
+    {"entry":"0x00e5bc94","size":312,"sha256":"41ec7f6be949c027256e381906535f7b4b1349843dfa8be7a2341407d51a5e16","symbol":"xm1_pipeline_image_rotate_plane"},
+    {"entry":"0x00e5bdcc","size":208,"sha256":"99b7648277ba35729d459d1435133a58a56f77ca6a1a0227c94de4ae6f037c4d","symbol":"xm1_pipeline_image_copy_plane"},
+    {"entry":"0x00dae42c","size":1916,"sha256":"79bcd6dadaccd11a1f3b37bdeb9ec4299deaed41a1068c175f7c9f9177ed7a3c","symbol":"xm1_pipeline_image_mesh_warp"},
+    {"entry":"0x00daeba8","size":1112,"sha256":"c5c794e1c77176c9a50103447141d8d85bb0e1d5eb01aa98ce3e15d356ecef54","symbol":"xm1_pipeline_image_filter_motion_candidates"},
+    {"entry":"0x00daf000","size":620,"sha256":"92b42368ceeb23d8a94d0e79802f61cc14c01294038e8ae5e6cbe0eb0416ff25","symbol":"xm1_pipeline_image_select_motion_band"},
+    {"entry":"0x00daf26c","size":136,"sha256":"e9122b8779cbe23e643cf40ec990f6c6b3fbfec2cc494d1691d73c0330b99e20","symbol":"xm1_pipeline_image_motion_sqrt","extentNote":"Actual call entry includes cmp at daf26c and body range daf270."},
+    {"entry":"0x00dad71c","size":1032,"sha256":"dfc70b83e60e14419498ad295a62993d1b85710ffbc7a41964c1dd5c7d8d594c","symbol":"xm1_pipeline_image_fit_mesh_triangle"},
+    {"entry":"0x00dadb24","size":736,"sha256":"ef67fb563fc39f83a02ab9e3bdeb8c266b0457da33c3eb0648deeb4ed5a9acae","symbol":"xm1_pipeline_image_mesh_circle"},
+    {"entry":"0x00dade04","size":212,"sha256":"52f7d6444f5ecd3dd9d6473213bc9071c2c4c1c1d9c298b883958cbed9472a4b","symbol":"xm1_pipeline_image_mesh_transform_point"},
+    {"entry":"0x00daded8","size":260,"sha256":"8b7c2d12c3e7c7571ea5e231c6afbd80b21b0c6528c578db63a3ce63e2f31da3","symbol":"xm1_pipeline_image_build_mesh_affines"},
+    {"entry":"0x00dadfdc","size":1104,"sha256":"8981f1b53c67f857b1d4008e41d428e45c6f17b25ef9a3a802c78c7a734b7548","symbol":"xm1_pipeline_image_draw_mesh_labels","extentNote":"Actual call entry reserves eight stack bytes, then falls into dadfe0."}
+  ],
+  "sharedOwnership": {
+    "0x0069f8fc": "PipelineBuffers owns xm1_buffers_configuration_byte, reads byte at pointer96ca50 plus key",
+    "0x0069fec8": "PipelineBuffers owns xm1_buffers_configuration_half, two little-endian byte reads",
+    "0x00e8ef98": "PipelineImagePlanes owns xm1_pipeline_image_fill_pattern and its executable pixel models",
+    "0x00e657ac": "PipelineImageOperations owns xm1_pipeline_image_operate",
+    "0x00e65f1c": "PipelineImageOperations owns xm1_pipeline_image_pad_edges",
+    "0x00e65268": "xm1_pipeline_image_scale_configuration is a source-owned frontend, never a retained-device endpoint",
+    "0x00e653d0": "xm1_pipeline_image_copy_configuration is a source-owned frontend, never a retained-device endpoint",
+    "0x00dae42c": "xm1_pipeline_image_mesh_warp is a source-owned CPU algorithm, never a retained-device endpoint",
+    "0x00daeba8": "xm1_pipeline_image_filter_motion_candidates is a source-owned CPU algorithm, never a retained-device endpoint",
+    "0x00daf000": "xm1_pipeline_image_select_motion_band is a source-owned CPU algorithm, never a retained-device endpoint"
+  },
+  "layouts": {
+    "ImagePlane": ["format:u32","address:u32","length:u32","stride:u32","width:u32","height:u32","flags:u32"],
+    "AffineCoefficients": ["xx:i32","xy:i32","reserved0:i32[2]","x_bias:i32","yx:i32","yy:i32","reserved1:i32[2]","y_bias:i32","origin_x:i32","origin_y:i32","offset_x:i32","offset_y:i32"],
+    "ScaleConfiguration": ["block:u32","coefficients:address32"],
+    "MotionRegion": ["address:u32","stride:u32","width:u32","height:u32"],
+    "MeshRequest": ["count:u32","band:u32","x:i32","y:i32","bounds:i32[4]","first:address32","second:address32","valid:address32","points:address32","mapped:address32","triangles:address32"],
+    "MotionCandidateRequest": ["count:u32","band:u32","valid:address32","first:address32","second:address32","x:i32","y:i32"]
+  },
+  "numericLaws": [
+    "Unsigned division computes the real quotient. Its zero divisor reaches kernel arithmetic fault 0x43614/SVC 0x1010.",
+    "Signed wide division truncates toward zero, wraps MIN/-1, and returns signed saturation for division by zero; zero divided by zero is zero.",
+    "A32 word products, sums, address calculations and shifts wrap modulo 2^32. Signed wide products and differences wrap modulo 2^64.",
+    "Blend weight is floor((column*128)/(first.width/2)); column advances by two pixels and each operation reads/writes four packed bytes.",
+    "Blend rounds signed channel sums with +64, substitutes +191 when the wrapped +64 sum is negative, arithmetic-shifts by seven, and saturates to [0,255].",
+    "Blend task/cache order is current task, priority12, cache, pixels, cache, priority6, including empty images.",
+    "Affine bounds are strict absolute limits 0x20000 for coefficients and 0x20000000 for translations. Rejection does not modify the output.",
+    "Affine transforms are sequential: the second coordinate is computed first and becomes the input to the first coordinate transform.",
+    "Block selection preserves the original final adjacent-corner pair comparisons, rather than substituting a four-corner bounding box.",
+    "Shear writes slope before executing the scaler and then replaces the source descriptor with the original destination descriptor, restoring original source width.",
+    "Copy adjusts its local destination descriptor before operation7 and copies that operation result into the source descriptor afterward.",
+    "Rotation preserves the saved destination descriptor except width and height, ignoring frontend descriptor mutations. Rotations1 and3 swap half-width and doubled-height."
+  ],
+  "retainedEndpoints": [
+    {"entry":"0x00eb0d04","kind":"cache-maintenance","reason":"CPU cache ordering boundary"},
+    {"entry":"0x00043614","kind":"kernel-fault","reason":"original unsigned divide-zero SVC boundary"}
+  ],
+  "arithmeticModel": {
+    "constructor": "arithmeticInitial kernel0 image4",
+    "policy": "Execute authenticated original arithmetic bodies as code. No arithmetic call scripts or per-call quotient echoes.",
+    "ranges": [
+      {"entry":"0x0004d978","size":244,"sha256":"aff8e98aeffcf942b2bc3d5b9211a3af7239271251c0b5806e72d1d09f7b2d96"},
+      {"entry":"0x00043604","size":28,"sha256":"ee6e78298a9fdf16619f1238a7840461abbc595576a6404b5d902acb6b9cee03"},
+      {"entry":"0x0089aa90","size":328,"sha256":"93596623cdffc3ab9151e15482796ea90484b5582ddeaa885e4d12ee3be742e1"},
+      {"entry":"0x0089be8c","size":2700,"sha256":"165a1d89c79b413fb293ad85eb1ce91520a3087c1a0da0df80cdedd81810700c"},
+      {"entry":"0x007221a0","size":120,"sha256":"51b1a1f121246c404e91db21363301158e6364c34c679ed8a081a7ca96bd899b","purpose":"Execute original byte/word zero-fill runtime for mesh label storage"}
+    ]
+  },
+  "modelIntegration": {
+    "publications": "ImagePixelsScenarios.imagePixelsPublications :: [StagePublication]",
+    "scenarios": "ImagePixelsScenarios.imagePixelsScenarios :: ByteString -> (StagePublication -> Address) -> [StageScenario]",
+    "ownedFailureScenarios": "ImagePixelsScenarios.imagePixelsOwnedFailureScenarios :: ByteString -> (StagePublication -> Address) -> [StageScenario]. These intentional-difference cases execute owned code only, not stock-versus-owned snapshot comparison.",
+    "runtime": "Append arithmeticInitial kernel0 image4 to original cases after authenticating those input images.",
+    "configuration": "Execute Buffers-owned byte/half getters over pointer96ca50 and synthetic configuration RAM9e0000; no configuration application call scripts.",
+    "activeCases": ["nonzero packed blend with interpolation and extrapolation saturation", "blend priority failure with continued pixel work and priority restoration", "affine accepted/rejected/null-output boundaries", "affine block and buffer separation", "candidate duplicates/slope and distance filtering", "motion band mutation", "signed square-root edges", "motion request packing and threshold failure", "nonzero mesh pixels through circumcircles, affine records and triangle labels", "reduce-pair wrapper through the real owned mesh", "triangle fitting and collinear-circle rejection"],
+    "frontendCompositionDependency": "Active wrapper cases compose the shared CropProcess, StripPlanner, WarpEngine, DiagnosticLogging and ImagePlanes models. Their source modules must land together before integration qualification. Device pixel transfer is not inferred from request completion.",
+    "rotateComposition": "Active rotation0/1/2/3/invalid-mode and Completed/Failed cases compose CropProcessScenarios.copyProcessLaw through owned da9824/da9854/da98f4/da9914, device programming and real IRQ/RTOS contracts. Nonzero buffers feed the real CPU request path. These assert request/register/descriptor/error effects, not an unevidenced hardware pixel transfer law.",
+    "scaleComposition": "Active prepare_affine and shear_plane cases compose CropProcessScenarios.scaleProcessLaw through owned scale6dec*/6def* and device programming with source58/IRQ67. Shear covers signed/zero slope, all explicit burst choices and completion/failure, preserving slope publication and original-destination descriptor replacement. Prepare-affine executes actual decomposition, block selection, buffer separation and packed-edge writes before backend programming. Hardware pixel transfer remains outside the model claim.",
+    "copyComposition": "copy_plane active/error events execute real e657ac and da92f0 CPU request construction, centered-input geometry, strip payloads, reserved44, clock route, source61/IRQ68, cache and RTOS lifecycle. Stable request words, dimensions, main plan, descriptors, handle sequence1/2 and control0x24 are observed; ephemeral stack coefficient pointers are excluded while hardware coefficient values are asserted by StripPlanner. No hardware pixel output is invented.",
+    "pureMutationConstructors": ["blendCalls task", "copyPlaneOutput source7 destination7", "shearPlaneOutput source7 destination7"]
+  },
+  "originalUndefinedOutputs": {
+    "entry": "0x00e5ac04",
+    "trigger": "dae42c returns before storing request bounds offsets0x10/0x14",
+    "original": "e5ac04 unconditionally publishes two uninitialized private stack words to motion-state0x120/0x124 after an insufficient-points return. Request0x18 contains the retained-point count and request0x1c contains zero triangles.",
+    "owned": "A private MeshOutcome separates InsufficientPoints from Completed. The wrapper publishes origin fields only from Completed, preserves previous origin bytes as invalid storage on insufficiency, and still publishes the defined retained/triangle counts.",
+    "integration": "This is an authorized owned-internal failure repair. Original private-stack snapshot bits are not a compatibility target. Successful geometry and the public dae42c retained-count ABI remain unchanged."
+  },
+  "ownedFailureRepair": {
+    "issue": "https://github.com/skeet70/latent-image/issues/173",
+    "result": "MeshOutcome::InsufficientPoints { retained: MeshPointCount } or Completed { origin: MeshOrigin, retained_with_corners: MeshPointCount, triangles: MeshTriangleCount }",
+    "originMeaning": "State0x120 is the left mesh coordinate in the source.width/2 coordinate system. State0x124 is the vertical displacement. The completed mesh writes vertical displacement zero.",
+    "failureEffects": "Preserve state0x120/0x124 without treating old values as reusable geometry. Publish state0x128=retained and state0x12c=0. Keep auxiliary clearing, accepted point/mapping writes, unchanged destination dimensions, source/destination pixels, cache sequence and priority restoration.",
+    "acceptance": "InsufficientPoints always returns false from e5ac04, even when the wrapper's earlier threshold would accept the retained count. Completed preserves the original cached-threshold comparison.",
+    "notEmpty": "Zero origin is valid geometry, not a canonical Empty representation. Failure does not replace nonzero image dimensions with an invented empty descriptor.",
+    "producerEvidence": ["dae484/dae488 initialize counts", "dae598..dae5ac take the insufficient-points exit", "daea08/daea0c publish origins only after the warp", "e5ad88/e5ad94 originally copied uninitialized origin words unconditionally"],
+    "callerAndReaderClosure": [
+      {"call":"e5ad60","caller":"e5ac04","callee":"dae42c"},
+      {"call":"ea08e8","caller":"ea07ec","callee":"e5ac04","failure":"ea08ec..ea0900 sets motion-state0x110=1"},
+      {"call":"ea1588","caller":"ea0934 command0x5d","callee":"ea07ec"},
+      {"call":"ea1598","caller":"ea0934 command0x5e","callee":"e94a44"},
+      {"read":"e94b64","field":"motion-state0x120","effect":"adds origin_x*2 to source byte address"},
+      {"read":"e94b9c","field":"motion-state0x124","effect":"passes signed displacement to CPU blend e5a9c0"}
+    ],
+    "consumerGuard": "e94a74..e94a9c checks failure fields0x110/0x114/0x10c before either origin read. The failure path skips copy/blend. ea01f4 diagnostics read defined counts0x128/0x12c, not invalid origins.",
+    "frameAdmission": "e8160c..e8162c resets failure0x110 and0x10c for admission mode3. Preserved origin storage is not a fresh-frame success receipt.",
+    "readerProvenance": [
+      {"entry":"0x00ea07ec","size":328,"sha256":"5f3138d237d1869fa8030f8291aaed0fdbcead708e248b1aa6328c4bc37daa8d"},
+      {"entry":"0x00e94a44","size":440,"sha256":"6f48c9433d4e37f3fc4e529a07c264d3cb475031bd17f77379eca40b7d6df2fe"}
+    ],
+    "ownedModels": "Twelve wrapper cases cover nonzero source/destination/auxiliary/point sentinels, poisoned and previously valid origins, empty/partial insufficiency, successful replacement, and cached-threshold reentry controls. Two additional cases invoke real Preparation-owned e94a44 with the failure latch and stale origins, asserting the plan successor, unchanged descriptors/pixels and no blend/cache/RTOS calls.",
+    "reentryBoundary": "Reentry cases inject an environmental configuration change at the existing retained cache boundary between the wrapper and mesh reads. They test the stronger owned result invariant and do not claim the cache implementation itself writes configuration.",
+    "rootQualification": "MeshHistoryScenarios encodes sequential original-ABI public-step cases for ea07ec followed by e94a44. The parent must execute both entries against the same actual observed writable RAM before claiming qualification. This is not execution of the root dispatcher or ownership of its installed firmware callback.",
+    "sequentialHistory": {
+      "constructor": "MeshHistoryScenarios.meshHistoryScenarios :: ByteString -> (StagePublication -> Address) -> [MeshHistoryScenario]",
+      "phaseContract": "MeshHistoryScenario owns initial memory and code-pointer cells once. Its NonEmpty MeshHistoryPhase sequence has entry, arguments, expected memory, return and retained calls, but no phase initialization. The next entry receives the preceding actual observed writable memory. Expected patches are assertions only.",
+      "callerObserver": "Execute the separately emitted native caller_observer artifact at0x07200000, outside image4 ROM. Initialize its200-byte journal at0x9a3800 once. Real begin/complete callbacks produce literal BA/BB entries after5d and BC/BD entries after active5e. A skipped5e preserves the actual two-entry journal.",
+      "cases": "Twenty histories pair poisoned and previously valid origins with stable empty/partial insufficiency, cache-threshold-rise empty/partial insufficiency, completed acceptance, completed cached-threshold rejection, a non-unit initial failure flag, and each of the three preexisting failure guards.",
+      "visibleFields": "Literal expected frame successors are BB then BD. Insufficiency preserves both prior origin words, publishes retained count0/1 and triangle count0, and causes the actual5d frontend to set motion0x110=1. Completed cases publish origin8/0 and counts4/4. Existing guards preserve prior sentinel counts. Frame activity, descriptors, nonzero pixels, point/mapping writes, triangle records, workspace records, labels and callback journals are observed.",
+      "guardProof": "Phase2 executes the actual e94a44 public entry on phase1 observed RAM. Failed cases expect no copy, blend, cache or RTOS calls, unchanged pixels/descriptors, and unchanged invalid origin storage. No latch or origin patch is installed between phases.",
+      "positiveControl": "Accepted5d leaves failure0x110 clear and enters actual5e copy/blend/copy. Both hardware copies report completion with failure bits0x30, satisfying wait mask0x10. The external failure control precedes destination transfer. Original e5bdcc still publishes its descriptor and returns1, and the real CPU blend changes nonzero reference pixels from nonzero preexisting scratch. Literal pixel rows distinguish this control from an always-skip or unconditional-failure implementation.",
+      "deviceScope": "The positive control composes actual e657ac/da92f0 request construction and existing StripPlanner, WarpEngine and RTOS contracts. It scripts no hardware pixel writes, CPU algorithm results, callback echoes, origins or failure latches. No successful hardware pixel-transfer law is claimed.",
+      "planScope": "Authenticated EA4870 selector kind4 points to EA66C0, whose original command list contains adjacent5c,5d,5e,5f. Public-step sequencing uses this ordering evidence, not a claim that the whole dispatcher ran.",
+      "dataProvenance": [
+        {"entry":"0x00ea4870","size":264,"sha256":"a76b605e44e81980675d1a2ff81691c047b20512f964e0af3d345db11b52814a","purpose":"original command-list selector including kind4"},
+        {"entry":"0x00ea66c0","size":120,"sha256":"9a77dcfbb036233a68c28dea85fdf6cb9e0888b8c97de19a4ab813e7f3aaef80","purpose":"kind4 command list through sentinel80"},
+        {"entry":"0x00ea6738","size":6604,"sha256":"b412c991485aab16063f194d4b25fda012ca7e8fc8c1c71ac46bada29fb045ca","purpose":"original public-step plans"},
+        {"entry":"0x00ea3f70","size":2280,"sha256":"c91a830c9469e2ea998c55f679c20a218bf682d818b378267523de0761a0ecf9","purpose":"original object lifecycle rules"},
+        {"entry":"0x00ea55e8","size":144,"sha256":"c479d1f142fde909a85278733bab8d13b9594cac4e0ba27b0c5df88ee7ee038c","purpose":"original frame-kind object-rule selector"}
+      ],
+      "qualification": "Source-only model delivery. The cohesive parent phases runner must load the native observer and authenticated arithmetic runtimes, preserve actual writable memory between entries, and report exercised qualification."
+    }
+  },
+  "verification": "Source-only handoff. No builds, native runs, tests or formatters run by this worker. Integration owns verification after all source children land."
+}

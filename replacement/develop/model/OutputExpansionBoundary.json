@@ -1,0 +1,1026 @@
+{
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "module": "src/pipeline/output_expansion.rs",
+  "qualification": "Source-only owned CPU closure. No builds, tests, formatting, linting or native runs were performed. Independent model owned separately by OperationPredicates; native qualification belongs to parent.",
+  "images": [
+    {
+      "name": "image4",
+      "base": "0x0061c400",
+      "size": 2631680,
+      "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
+    },
+    {
+      "name": "image5",
+      "base": "0x00bf1a00",
+      "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
+    }
+  ],
+  "routes": [
+    {
+      "address": "0x0073ebcc",
+      "symbol": "xm1_pipeline_image_configuration_threshold_bucket",
+      "abi": {
+        "arguments": "value: ConfigurationSelection",
+        "result": "u32"
+      },
+      "size": 64,
+      "sha256": "9e52d1d7ecd90954c06401bee4fcf4ece975dea8d2f010c792a36b70c975f390"
+    },
+    {
+      "address": "0x0073f338",
+      "symbol": "xm1_pipeline_image_encode_configuration_mode",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: Address32",
+        "result": "void"
+      },
+      "size": 844,
+      "sha256": "35a6ff20d41b95a861b359eca3c2f6e7651e13b287c1a1e605f8e699f46e649d"
+    },
+    {
+      "address": "0x0073f78c",
+      "symbol": "xm1_pipeline_image_select_type_mode_value_copy",
+      "abi": {
+        "arguments": "kind: ConfigurationKind, mode: ConfigurationSelection, value: u32, alternate: u32",
+        "result": "u32"
+      },
+      "size": 44,
+      "sha256": "5a6b96604c6486b0ed6c49a3cda6cc3beb8100521c8bc4b677b00763a99f00be"
+    },
+    {
+      "address": "0x0073f7b8",
+      "symbol": "xm1_pipeline_image_configuration_value_within_limit",
+      "abi": {
+        "arguments": "value: ConfigurationSelection, limit: ConfigurationLimit",
+        "result": "u32"
+      },
+      "size": 48,
+      "sha256": "b663effe8e5201abbe32f35b62976f95247f100c8153428f2437a0c60d71caed"
+    },
+    {
+      "address": "0x0073f7e8",
+      "symbol": "xm1_pipeline_image_configuration_mode_value",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, limit: ConfigurationLimit",
+        "result": "u32"
+      },
+      "size": 344,
+      "sha256": "b1552f97770dccc91c3c5437d2197ae4f1dc8137d2efdc45ef72ef843932fdac"
+    },
+    {
+      "address": "0x0073f940",
+      "symbol": "xm1_pipeline_image_configuration_stage_mode",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: Address32",
+        "result": "void"
+      },
+      "size": 144,
+      "sha256": "c890fdb735c4b010e60b797dee6040bee9ce936d8293bf2867b61d6112fb677a"
+    },
+    {
+      "address": "0x0073f9d0",
+      "symbol": "xm1_pipeline_image_configuration_kind_mode",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: Address32",
+        "result": "void"
+      },
+      "size": 660,
+      "sha256": "6d1e3d8d5c130b677222b5bda8e04b378a34370932a9dd88a409936d83fd757d"
+    },
+    {
+      "address": "0x0073fce0",
+      "symbol": "xm1_pipeline_image_configuration_threshold_band",
+      "abi": {
+        "arguments": "family: ThresholdFamily, value: ThresholdValue",
+        "result": "u32"
+      },
+      "size": 128,
+      "sha256": "5fea2494e06ddd6ee9e6d5260800042bbb729b385dce72e719089608c5b7108a"
+    },
+    {
+      "address": "0x0073fdb8",
+      "symbol": "xm1_pipeline_image_configuration_cached_profile",
+      "abi": {
+        "arguments": "value: ConfigurationSelection",
+        "result": "u8"
+      },
+      "size": 108,
+      "sha256": "5b79e5396cea2e951ca970feb6df6544166492d2abbc2137fe2f7d346f4dd778"
+    },
+    {
+      "address": "0x0073fe24",
+      "symbol": "xm1_pipeline_image_configuration_cached_exposure",
+      "abi": {
+        "arguments": "value: ConfigurationSelection",
+        "result": "u8"
+      },
+      "size": 104,
+      "sha256": "37ad061923fd5238371a62bad2848de833806ec087bcea1ee535377d50f97f90"
+    },
+    {
+      "address": "0x0073fe8c",
+      "symbol": "xm1_pipeline_image_configuration_exposure_record",
+      "abi": {
+        "arguments": "selection: ConfigurationSelection, exposure: ConfigurationSelection, output: Address32",
+        "result": "void"
+      },
+      "size": 100,
+      "sha256": "e455943bd02fdcf4282681f88c99806dba6cfb7ad0577799c002a510a486231b"
+    },
+    {
+      "address": "0x00d5d294",
+      "symbol": "xm1_pipeline_image_expand_output_descriptor",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 1944,
+      "sha256": "d09eac14741e7738ce17e933759be8b3db8a969f2eef89339a858fa2594c6cfd"
+    },
+    {
+      "address": "0x00d5da2c",
+      "symbol": "xm1_pipeline_sensor_submit_descriptor",
+      "abi": {
+        "arguments": "output: ExpandedOutputAddress, descriptor: OutputDescriptorAddress",
+        "result": "void"
+      },
+      "size": 44,
+      "sha256": "108771c3537347ae3ae6b18c1ef65ab39555efcb294b69ff2cb20489ef043751"
+    },
+    {
+      "address": "0x00d5dce8",
+      "symbol": "xm1_pipeline_image_configuration_level",
+      "abi": {
+        "arguments": "value: ConfigurationSelection, table: TenLevelTableAddress",
+        "result": "u16"
+      },
+      "size": 260,
+      "sha256": "435e460f5aeaa2fe7f21d1223d01a62c15fafa92ac68ddf87a3c7bbc42fb2b43"
+    },
+    {
+      "address": "0x00d5e66c",
+      "symbol": "xm1_pipeline_image_expand_filter_matrix",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 476,
+      "sha256": "a97211d0c5e647e748c2df2f15053ff65d8e52cc54af54570e4ae16c499eb5d1"
+    },
+    {
+      "address": "0x00d5e848",
+      "symbol": "xm1_pipeline_image_expand_filter_gain",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 796,
+      "sha256": "4475ef3d8d13fed4956126e26ba5ebed2372e442b50049dfa25d7924eca5c849"
+    },
+    {
+      "address": "0x00d5eb64",
+      "symbol": "xm1_pipeline_image_expand_filter_channels",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 512,
+      "sha256": "094f68a6a99c34b09b72e6afda6a943febed5a33c1b72b4653816375e338d7d5"
+    },
+    {
+      "address": "0x00d5ed64",
+      "symbol": "xm1_pipeline_image_read_detail_profile",
+      "abi": {
+        "arguments": "output: Address32, selection: ConfigurationSelection",
+        "result": "void"
+      },
+      "size": 40,
+      "sha256": "fb147def61c4f95ed6ae57ee675cf628ccdb57c7f7e813c8f85affe0f9a207cb"
+    },
+    {
+      "address": "0x00d5ed8c",
+      "symbol": "xm1_pipeline_image_expand_detail_channels",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 324,
+      "sha256": "094fb39b2aa4ee9cc3e51776eea56dbdc11412dc2e38394ed925795e7aa15061"
+    },
+    {
+      "address": "0x00d5eed0",
+      "symbol": "xm1_pipeline_image_expand_filter_offsets",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 416,
+      "sha256": "adb2f68602a4442e0dc7cd94eb9c7b9ddf39524f2c6784f11fa4769908b875ee"
+    },
+    {
+      "address": "0x00d5f070",
+      "symbol": "xm1_pipeline_image_expand_filter_triplet",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 96,
+      "sha256": "93e3cd3a6e7210514b24e7843df1e0826d8371e6a7385e93a26ecaa6f104c9ff"
+    },
+    {
+      "address": "0x00d5f0d0",
+      "symbol": "xm1_pipeline_image_read_chroma_profile",
+      "abi": {
+        "arguments": "output: Address32, selection: ConfigurationSelection",
+        "result": "void"
+      },
+      "size": 36,
+      "sha256": "0ff542625db8dceda76e62a042989ae6fee8aa3eb3526f546642b2b7ebec8e08"
+    },
+    {
+      "address": "0x00d5f0f4",
+      "symbol": "xm1_pipeline_image_expand_filter_chroma",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 296,
+      "sha256": "5b0ed74777ae903f208db0cbf816d6daf24a66981f9eb372af7a5553efcaa79e"
+    },
+    {
+      "address": "0x00d5fe3c",
+      "symbol": "xm1_pipeline_image_select_output_profile",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, mode: ConfigurationSelection",
+        "result": "u32"
+      },
+      "size": 508,
+      "sha256": "1c75c05a4ae30dbe4ba631465e00d58b7e111a83fef09d331dca6d851d9a9c0c"
+    },
+    {
+      "address": "0x00d60038",
+      "symbol": "xm1_pipeline_image_select_output_profile_exposure",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, profile: ConfigurationSelection",
+        "result": "u32"
+      },
+      "size": 80,
+      "sha256": "c4b817ae8b1fe73c5da0139fbea606dd48d0cb1a178f39f920441f60f53af3b3"
+    },
+    {
+      "address": "0x00d60088",
+      "symbol": "xm1_pipeline_image_expand_output_profile",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 388,
+      "sha256": "19b57ed0dbba488fb5e6dcecb0e3d09b494399ec8d087f1312c5a285e3d2937f"
+    },
+    {
+      "address": "0x00d605d0",
+      "symbol": "xm1_pipeline_image_expand_calibration_grid",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 724,
+      "sha256": "9867e4318a7816e76ad2b3bafb5ec44c2ff964cf997c09f29dd8d43a6393cb52"
+    },
+    {
+      "address": "0x00d608a4",
+      "symbol": "xm1_pipeline_image_expand_calibration_controls",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 316,
+      "sha256": "20fc7ec26cba8dadc339b5f57de542e451ff29834897d03d2922670f6fe727ce"
+    },
+    {
+      "address": "0x00d609e0",
+      "symbol": "xm1_pipeline_image_expand_calibration_gain",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "u32"
+      },
+      "size": 440,
+      "sha256": "4bae4eab486454cebbd47029abb319bebdb2b58ae73171bce569bf2388db3826"
+    },
+    {
+      "address": "0x00d60c80",
+      "symbol": "xm1_pipeline_image_select_pair_profile",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: Address32",
+        "result": "void"
+      },
+      "size": 68,
+      "sha256": "3e989349ea45588b8cadffafddc7dacd4f7495d65f6dfb96bfce1a1d04684b9c"
+    },
+    {
+      "address": "0x00d60cc4",
+      "symbol": "xm1_pipeline_image_read_pair_coefficients",
+      "abi": {
+        "arguments": "output: Address32, selection: ConfigurationSelection",
+        "result": "void"
+      },
+      "size": 152,
+      "sha256": "dfe01200e8d8bf7e6a4ff8b31f49796600263486131849435fd55c8000751733"
+    },
+    {
+      "address": "0x00d60d5c",
+      "symbol": "xm1_pipeline_image_pair_option_gain",
+      "abi": {
+        "arguments": "output: Address32, descriptor: OutputDescriptorAddress",
+        "result": "void"
+      },
+      "size": 44,
+      "sha256": "2b6ecfa4613090f09a65518a92d850e413ac094c0abe90bb89d0a0ee9650ba3d"
+    },
+    {
+      "address": "0x00d60d88",
+      "symbol": "xm1_pipeline_image_pair_primary_gain",
+      "abi": {
+        "arguments": "output: Address32, descriptor: OutputDescriptorAddress",
+        "result": "void"
+      },
+      "size": 56,
+      "sha256": "6ec36a395cdbbd188faffe7f14d82bce96fc54ded4bb82f6f59f9994bbac0a1b"
+    },
+    {
+      "address": "0x00d60dc0",
+      "symbol": "xm1_pipeline_image_pair_selection_gain",
+      "abi": {
+        "arguments": "output: Address32, descriptor: OutputDescriptorAddress",
+        "result": "void"
+      },
+      "size": 124,
+      "sha256": "11696233245b146eee3b4b3ca2ca1e2900b371c20b298ea17313bb2a9b511b5b"
+    },
+    {
+      "address": "0x00d60e3c",
+      "symbol": "xm1_pipeline_image_pair_level_gain",
+      "abi": {
+        "arguments": "output: Address32, descriptor: OutputDescriptorAddress",
+        "result": "void"
+      },
+      "size": 44,
+      "sha256": "4f194880d209cf0e7545647e19f3e3e167c6b36d3427907acf06f1184d1b720f"
+    },
+    {
+      "address": "0x00d60e68",
+      "symbol": "xm1_pipeline_image_pair_mode_gain",
+      "abi": {
+        "arguments": "output: Address32, descriptor: OutputDescriptorAddress",
+        "result": "void"
+      },
+      "size": 64,
+      "sha256": "94d68d8f557f75377f06ff79d8a3729ad989d87cc276937001ce323669491221"
+    },
+    {
+      "address": "0x00d60ea8",
+      "symbol": "xm1_pipeline_image_build_pair_coefficients",
+      "abi": {
+        "arguments": "output: Address32, descriptor: OutputDescriptorAddress",
+        "result": "void"
+      },
+      "size": 1040,
+      "sha256": "19310ab06de3e5b76a719e293f8bded915882d178d126ba6a7d204eb3015ce4e"
+    },
+    {
+      "address": "0x00d612b8",
+      "symbol": "xm1_pipeline_image_expand_pair_coefficients",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 80,
+      "sha256": "9d8e12aaaf763f0e24338dc1c56be507032b76677d993939c384edf2e4fff03b"
+    },
+    {
+      "address": "0x00d61308",
+      "symbol": "xm1_pipeline_image_select_dual_coefficients",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, first: Address32, second: Address32",
+        "result": "void"
+      },
+      "size": 72,
+      "sha256": "6f365bcf1fd7fa16e153c962df956454e044d0c198a107891e61922e8f897782"
+    },
+    {
+      "address": "0x00d613c4",
+      "symbol": "xm1_pipeline_image_expand_dual_coefficients",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 640,
+      "sha256": "fb741d8fc28ca01066d29cc03a78060dbe1638aef15674f124af317d3a47abe3"
+    },
+    {
+      "address": "0x00d61644",
+      "symbol": "xm1_pipeline_image_expand_channel_matrix",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 608,
+      "sha256": "2dbe8a1c5d2c5bc028b62b2d825630bd510d9c41b5222bd221dd582dc5ee2870"
+    },
+    {
+      "address": "0x00d618a4",
+      "symbol": "xm1_pipeline_image_expand_channel_pairs",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 484,
+      "sha256": "2a7cc63ff79f3cd238a97d0ee0c2e26ee972b979932f176a5a2163c1ce006dac"
+    },
+    {
+      "address": "0x00d61a88",
+      "symbol": "xm1_pipeline_image_read_coefficient_header",
+      "abi": {
+        "arguments": "output: Address32",
+        "result": "void"
+      },
+      "size": 28,
+      "sha256": "e1fb42d3ace1ecfe54d863af3890ca2788cc0657aa9440794322ce979108a369"
+    },
+    {
+      "address": "0x00d61aa4",
+      "symbol": "xm1_pipeline_image_read_coefficient_channels",
+      "abi": {
+        "arguments": "output: Address32, primary: ConfigurationSelection",
+        "result": "void"
+      },
+      "size": 36,
+      "sha256": "802c184784ade24b3e7e61e9a21ac737feec80e634f9362c093426bfe4462d84"
+    },
+    {
+      "address": "0x00d61ac8",
+      "symbol": "xm1_pipeline_image_expand_header_channels",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 192,
+      "sha256": "df9e5d000bd6e2b866b62681489ed2e154edd327734a1e67745ce8cb9c8e56b2"
+    },
+    {
+      "address": "0x00d61b88",
+      "symbol": "xm1_pipeline_image_expand_channel_gains",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 148,
+      "sha256": "c13e0d9912c8f826fbc07da35d9cd6fbd18f28a090cc48e78284c7a44be7bacd"
+    },
+    {
+      "address": "0x00d622c0",
+      "symbol": "xm1_pipeline_image_reset_output_descriptor",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 136,
+      "sha256": "5761d9e8515235ea42fa2c6fe292501c76774729e3ba78a5919a06117e06ca31"
+    },
+    {
+      "address": "0x00d623b0",
+      "symbol": "xm1_pipeline_image_expand_channel_scaling",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 492,
+      "sha256": "30e350467e23312f62555d129654ef16a40067fc5915b0be657d0e06c7c1b3dd"
+    },
+    {
+      "address": "0x00d6259c",
+      "symbol": "xm1_pipeline_image_expand_channel_limits",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 208,
+      "sha256": "d5c4ab3e5a90f2938009bddac04f7f139f113a249e298347be44d5e05675378b"
+    },
+    {
+      "address": "0x00d6266c",
+      "symbol": "xm1_pipeline_image_configuration_feature_enabled",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress",
+        "result": "u32"
+      },
+      "size": 676,
+      "sha256": "5fbe787c299a09a0e3f832702f409b1e3c004350e99ae04d582e82e873a70671"
+    },
+    {
+      "address": "0x00d62910",
+      "symbol": "xm1_pipeline_image_gain_mix_mode",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress",
+        "result": "GainMixMode"
+      },
+      "size": 68,
+      "sha256": "3ae122d1ed772114e8c487f67c224596143674158b45b8a5472cab1302d60c93"
+    },
+    {
+      "address": "0x00d62954",
+      "symbol": "xm1_pipeline_image_expand_mix_limits",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 424,
+      "sha256": "97f59548f3f0bb6dd31f0e8241451aa278ed8bbce37bff7fc38185e4ef55ef1f"
+    },
+    {
+      "address": "0x00d62afc",
+      "symbol": "xm1_pipeline_image_expand_mixed_channel_gains",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 1376,
+      "sha256": "3b569026e981d4ddd21a695e2dbc21ad476e8e1a8b6ae633ac486e0f26a7c28d"
+    },
+    {
+      "address": "0x00d63a3c",
+      "symbol": "xm1_pipeline_image_expand_template_selectors",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, groups: TemplateGroups, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 136,
+      "sha256": "1a8a3226ef1a95447500bae228d0d9be84365e27d4e6c3cd5d80977c5274db5e"
+    },
+    {
+      "address": "0x00d63ac4",
+      "symbol": "xm1_pipeline_image_expand_template_gains",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, groups: TemplateGroups, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 680,
+      "sha256": "43fa492af65051a0c8c4c69cbc0ddf186ea40d01a81589a35462327bdca1e75a"
+    },
+    {
+      "address": "0x00d64424",
+      "symbol": "xm1_pipeline_image_expand_template_noise",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 988,
+      "sha256": "523a71be6aa13dc9e575ee14aa2a55ad0b6c7d38ca6811309515f39f8f8de035"
+    },
+    {
+      "address": "0x00d64800",
+      "symbol": "xm1_pipeline_image_expand_template_lookup_controls",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 64,
+      "sha256": "91e4850c9d305f0c42b79d4db6733368b0f05101233803dc9702deaa471843a5"
+    },
+    {
+      "address": "0x00d64840",
+      "symbol": "xm1_pipeline_image_forward_export_coefficients",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, curve: Address32",
+        "result": "void"
+      },
+      "size": 16,
+      "sha256": "ca71e2625d71f414fd7f008cf64c10693dbb641e9a72db28b82e16f568a71342"
+    },
+    {
+      "address": "0x00d64850",
+      "symbol": "xm1_pipeline_image_store_export_coefficients",
+      "abi": {
+        "arguments": "curve: Address32, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 196,
+      "sha256": "935546d687c590c49adf9fb1fa389a4f3b58b840794b7d1f33e1dd712c04b602"
+    },
+    {
+      "address": "0x00d64914",
+      "symbol": "xm1_pipeline_image_expand_template_export_coefficients",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 44,
+      "sha256": "c18eaf0d177961ed4315f372b68b8661648a01488cb1afffb43629e70d7a212f"
+    },
+    {
+      "address": "0x00d64940",
+      "symbol": "xm1_pipeline_image_forward_matrix_coefficients",
+      "abi": {
+        "arguments": "packet: Address32, descriptor: OutputDescriptorAddress",
+        "result": "void"
+      },
+      "size": 16,
+      "sha256": "8d5a8a0e05610cd9e2c3cea79d95c583a23cd65f7f2e6de4034aaa92b72019b6"
+    },
+    {
+      "address": "0x00d64950",
+      "symbol": "xm1_pipeline_image_store_template_matrix_coefficients",
+      "abi": {
+        "arguments": "packet: Address32, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 100,
+      "sha256": "3a0c6ecc772de4691f7c1d23b32d64928fa5b56f1c901ef87b35e67c200c51e2"
+    },
+    {
+      "address": "0x00d649b4",
+      "symbol": "xm1_pipeline_image_expand_template_matrix_coefficients",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 52,
+      "sha256": "53a0dc16b7385b8a59e084f2c4246397fa0fce095da1cc5bf7f018aed6f66891"
+    },
+    {
+      "address": "0x00d649e8",
+      "symbol": "xm1_pipeline_image_forward_template_lookup",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, header: Address32, curve: Address32, extra: Address32",
+        "result": "void"
+      },
+      "size": 16,
+      "sha256": "4cb3689772ed30d05e404a5e6b302a9f67d082211b457f42f0873947d3553635"
+    },
+    {
+      "address": "0x00d649f8",
+      "symbol": "xm1_pipeline_image_store_template_lookup",
+      "abi": {
+        "arguments": "header: Address32, curve: Address32, extra: Address32, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 356,
+      "sha256": "182a066bcf2f96bf7005c7e4190e749ac65fb3dc612cae223ed47101adeee072"
+    },
+    {
+      "address": "0x00d64b5c",
+      "symbol": "xm1_pipeline_image_expand_template_lookup",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 60,
+      "sha256": "33eb6a8aa78550f26ef4ba5f003f5e74858a083a9e23c48929c4e7114db23b0b"
+    },
+    {
+      "address": "0x00d64b98",
+      "symbol": "xm1_pipeline_image_pair_output_gain",
+      "abi": {
+        "arguments": "output: Address32, descriptor: OutputDescriptorAddress",
+        "result": "void"
+      },
+      "size": 116,
+      "sha256": "496c6934a9715dd3120dd940ec2a677cbcc64e09ec03acbbc28bf193b50f2d84"
+    },
+    {
+      "address": "0x00d64c0c",
+      "symbol": "xm1_pipeline_image_pair_stage_gains",
+      "abi": {
+        "arguments": "first: Address32, second: Address32, descriptor: OutputDescriptorAddress",
+        "result": "void"
+      },
+      "size": 500,
+      "sha256": "4fd04fe1cb4d9e4dd53d69765583e2559d36754bb1bf407dde841e248609db07"
+    },
+    {
+      "address": "0x00d64e00",
+      "symbol": "xm1_pipeline_image_pair_kind_gain",
+      "abi": {
+        "arguments": "output: Address32, descriptor: OutputDescriptorAddress",
+        "result": "void"
+      },
+      "size": 44,
+      "sha256": "fae99c92957f6d2e26c58ff835d5ebddf5d8b2d3c594ed01c191116109a9ab23"
+    },
+    {
+      "address": "0x00d64e2c",
+      "symbol": "xm1_pipeline_image_build_output_pair_coefficients",
+      "abi": {
+        "arguments": "output: Address32, descriptor: OutputDescriptorAddress",
+        "result": "void"
+      },
+      "size": 1360,
+      "sha256": "fdc189e79bf456d3085ef2062779719613c4b08cb756606b025a5ab6dc9f5187"
+    },
+    {
+      "address": "0x00d6537c",
+      "symbol": "xm1_pipeline_image_store_output_pair_coefficients",
+      "abi": {
+        "arguments": "pair: Address32, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 108,
+      "sha256": "915ceb9d1ea49e7a7b8bc1fc7e9da7a33bcee6ff26de24ae1bdf1e365323b4a8"
+    },
+    {
+      "address": "0x00d653e8",
+      "symbol": "xm1_pipeline_image_expand_output_pair_coefficients",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 52,
+      "sha256": "ffc3d76f0fcb739f020534deeced1d188b72c9bd4ba75b34bd6ba2f7e578c581"
+    },
+    {
+      "address": "0x00d6541c",
+      "symbol": "xm1_pipeline_image_expand_template_header_channels",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 264,
+      "sha256": "5621bd07a35e78c4e99f534df103a6dc13d6336360f564ef5dabdbb8851cc243"
+    },
+    {
+      "address": "0x00d65524",
+      "symbol": "xm1_pipeline_image_expand_template_dual_coefficients",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 208,
+      "sha256": "a0ba7e771b6eea6aa3ac85674e33c95db91ddef621f280e1d73433afafbccb78"
+    },
+    {
+      "address": "0x00d655f4",
+      "symbol": "xm1_pipeline_image_expand_template_channel_pairs",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 184,
+      "sha256": "6fb895bd2df01c7a311608f92e368ae5603202c6457387a49438d743d314c902"
+    },
+    {
+      "address": "0x00d656ac",
+      "symbol": "xm1_pipeline_image_expand_template_triplet",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 240,
+      "sha256": "d24bac4898b7f208d673f514822b53d572a18f10bb9228ec4b1e3b0c744107f8"
+    },
+    {
+      "address": "0x00d6579c",
+      "symbol": "xm1_pipeline_image_expand_template_header",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 152,
+      "sha256": "d8996cbc908d4d0dcd2ba8ec41ed8857b548bcfc7cb6ae71d8eac49b4d5660e9"
+    },
+    {
+      "address": "0x00d65834",
+      "symbol": "xm1_pipeline_image_expand_template_controls",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 108,
+      "sha256": "a82acb182d83b4a1f5111f38a78fc96ba595f315affb69d23dc2fe1aa8326bba"
+    },
+    {
+      "address": "0x00d658a0",
+      "symbol": "xm1_pipeline_image_expand_template_channel_scaling",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 284,
+      "sha256": "dce2e1b3a5cb3317efd576dcf628289b3ef861f3820a28b5c20318a825cf3318"
+    },
+    {
+      "address": "0x00d659bc",
+      "symbol": "xm1_pipeline_image_expand_template_channel_matrix",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 808,
+      "sha256": "1e07ce2dbc608db84049c969ab12c6adf1a4268d1b67d0b851119fc5164fbe8d"
+    },
+    {
+      "address": "0x00d65ce4",
+      "symbol": "xm1_pipeline_image_expand_template_chroma_gain",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 428,
+      "sha256": "12542ef52199839efb79d1ee5039c4202a1de360782a61abd4f87ae942406e50"
+    },
+    {
+      "address": "0x00d65e90",
+      "symbol": "xm1_pipeline_image_expand_template_chroma_controls",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 88,
+      "sha256": "953d98b3b1be325dc736aad80505acb86f59cdc1221620db34cfb202a834cc6d"
+    },
+    {
+      "address": "0x00d65ee8",
+      "symbol": "xm1_pipeline_image_expand_template_chroma_offsets",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 172,
+      "sha256": "3f1341c8ec594441456bdc5ac6fd2c1e222ae1e0e7e3aa37aee5dfe265e1b3ea"
+    },
+    {
+      "address": "0x00d65f94",
+      "symbol": "xm1_pipeline_image_expand_template_chroma",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 360,
+      "sha256": "3e50961fa34f3080a028561063bba69bc0a54fe0839811e572fddf8ea28612b9"
+    },
+    {
+      "address": "0x00d660fc",
+      "symbol": "xm1_pipeline_image_expand_template_detail",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 420,
+      "sha256": "ed1843ac6253ae7828b06a50b26a68a70dcbbd51150f3fbf94a93d35702564be"
+    },
+    {
+      "address": "0x00d662a0",
+      "symbol": "xm1_pipeline_image_expand_template_detail_limits",
+      "abi": {
+        "arguments": "descriptor: OutputDescriptorAddress, output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 320,
+      "sha256": "5c4e14a1d7fad995184b610ace7cc11154076ac0d09fd7c38ad51b7f9ebae6c4"
+    },
+    {
+      "address": "0x00d663e0",
+      "symbol": "xm1_pipeline_image_finish_template",
+      "abi": {
+        "arguments": "_descriptor: OutputDescriptorAddress, _output: ExpandedOutputAddress",
+        "result": "void"
+      },
+      "size": 20,
+      "sha256": "06923057baae437a94c3b2f5904ebc40a3d725722555328069576625b3fe02c8"
+    }
+  ],
+  "layout": {
+    "descriptorBytes": 580,
+    "constructorWrittenBytes": 572,
+    "expandedRecordBytes": 4704,
+    "reset": {
+      "address": "0x00d622c0",
+      "arguments": [
+        "descriptor",
+        "record"
+      ],
+      "writes": "Zero all 0x1260 record bytes; derive descriptor13c using nine cfg thresholds and authenticated ten-half lookup; conditionally rewrite descriptor154."
+    },
+    "submit": {
+      "address": "0x00d5da2c",
+      "arguments": [
+        "record",
+        "descriptor"
+      ],
+      "law": "Reset followed by full root expansion."
+    },
+    "root": {
+      "address": "0x00d5d294",
+      "arguments": [
+        "descriptor",
+        "record"
+      ],
+      "blocks": {
+        "noise": "0x4",
+        "lookup": "0x30",
+        "matrix": "0xa6",
+        "auxiliary": "0x19c",
+        "thresholds": "0x1a6",
+        "profile": "0x226",
+        "grid": "0x234",
+        "pairs": "0xf24",
+        "mix": "0xf9c",
+        "groups": "0xfc6",
+        "filter": "0xfd8",
+        "template": "0x101c"
+      },
+      "effects": "Ordered source-flag byte writes, conditional CPU builders, descriptor14c component-mask ORs, then record.word0=descriptor.wordd8. Header and controls are built unconditionally."
+    },
+    "gridTail": {
+      "descriptorHalfOffsets": [
+        "0x23c",
+        "0x23e",
+        "0x240",
+        "0x242"
+      ],
+      "law": "Write-only index and three raw axis values. No initialized constructor tail is invented."
+    }
+  },
+  "arithmetic": {
+    "d62afc": "Five unsigned-byte gains multiply in u64. Signed byte offset clamps source coefficients to 0..31. First secondary scale uses u64; second uses wrapping u32. Both rows clamp to31 before mixing. Interior branch is upper + unsigned_div((current-low)*(upper-lower),high-low), with wrapping u32 differences/products/addition, followed by unsigned minimum31. Branch condition establishes positive span.",
+    "d64424": "Signed i32 remainder modulo100, then wrapping u32 gain-difference product and unsigned division6400; interpolated sum truncates to u16. Four-factor u64 product shifts18 then clamps511.",
+    "pairs": "Base pair coefficients sign-fill twelve-bit inputs and clamp arithmetic-right-shifted signed i64 products to[-4096,4095]. Extended pairs preserve two separate right shifts28 then34.",
+    "packing": "Nine-, ten- and twelve-bit halfword fields set the complete high mask when any corresponding source high bit is set. Byte limit fields use masksc0/e0.",
+    "d663e0": "Authenticated twenty-byte original is a true no-effect body. Root still marks descriptor14c bit30."
+  },
+  "authenticatedData": [
+    {
+      "address": "0x007c2de0",
+      "size": 28,
+      "sha256": "23573987bcea1a25a0246eabc6fc5ec2405c1e18f56d96e9ca281a421986bc3f",
+      "numericProof": {
+        "halves": [
+          266,
+          7,
+          1,
+          1,
+          253,
+          353,
+          453,
+          553,
+          650,
+          751,
+          0,
+          0,
+          0,
+          0
+        ],
+        "axisCounts": [
+          1,
+          7,
+          1
+        ]
+      },
+      "reader": "Typed calibration axes bound grid index to0..6; first and third raw axis fields are not read when authenticated count equals1."
+    },
+    {
+      "address": "0x007c2dfc",
+      "size": 22680,
+      "sha256": "ecd541624ad07bf34027aa79c732776e2a18758af0c3b06133b56971229eda31",
+      "numericProof": {
+        "rows": 7,
+        "rowBytes": 3240,
+        "minimumHalf": 0,
+        "maximumHalf": 65535
+      },
+      "reader": "Root stores selected immutable row address in blockcec. Source axis values have no inferred physical units."
+    },
+    {
+      "address": "0x00829a38",
+      "size": 36,
+      "sha256": "644bf1c45e8a702cdcb1c3278bddfe8134fc3a5b94556ddef058f94f6063abdc",
+      "numericProof": {
+        "keys": 9,
+        "firstKey": "0x003e451a",
+        "lastKey": "0x003e4522"
+      },
+      "reader": "At most nine ordered threshold configuration-byte reads."
+    },
+    {
+      "address": "0x00829ad8",
+      "size": 240,
+      "sha256": "f0c3a9bc047ae8cd93f1d1e0931de483e6e9919313cee53171b5a144cfd25896",
+      "numericProof": {
+        "families": 15,
+        "keysPerFamily": 4,
+        "firstKey": "0x003e3d50",
+        "lastKey": "0x003e3dc6"
+      },
+      "reader": "ThresholdFamily source domain selects four original u32 keys, all four halfword configuration values are fetched before signed comparisons."
+    }
+  ],
+  "sharedOwnership": {
+    "coefficients": "PipelineImageReferences: OutputCoefficients commits9e84099f+898c0b46, all eleven d675a4..d6a3f0 roots plus d68a68/d675d8/d6a250/d671b4 and recursive CPU lookup.",
+    "settings": "PipelineStripPlanner owns canonical sensor selection, key-byte/key-half readers, configuration flags/type predicate and template inputs. d6266c b432..b436 feature predicate is owned here and distinct from d5fab4 ae58..ae5e.",
+    "buffers": "Canonical configuration-byte and configuration-half accessors only; no proprietary data embedded."
+  },
+  "modelContract": {
+    "input": "originalImage4 <> originalImage5; split at2631680",
+    "independence": "OutputExpansionScenarios may import PipelineModel and OutputCoefficientsScenarios, never SensorSettingsScenarios/OutputMetadataScenarios/OutputTripletsScenarios.",
+    "composition": "State law must propagate ordered record, descriptor and coefficient global-scratch patches. SensorRequestsScenarios composes settings/configure/submit for e55fc0/e56030.",
+    "privateScratch": "Read only producer-defined fields: d6a11c packet3..6; d671b4 packet0 and halfwords2..18, never byte1; d68a68 bytes4/5, halves8/10/12/22..42. d675d8 always initializes optional extra half when nonnull."
+  }
+}

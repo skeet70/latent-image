@@ -1,0 +1,56 @@
+{
+  "source_pin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "images": [
+    {"base": "0x00bf1a00", "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"},
+    {"base": "0x0061c400", "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"}
+  ],
+  "qualification": "Source handoff, not qualified. No builds, tests, formatters, linters or native admission exercised.",
+  "routing": [
+    {"entry":"0x00d7a820","extent":92,"sha256":"6a4529848c8c6e7a12e90b8ea1c3a5082ee10b028bf8bec0f9bf67a62030aaf1","symbol":"xm1_pipeline_image_scan_components","abi":"void(Address32 context, Address32 components)"},
+    {"entry":"0x00d7a2a0","extent":1408,"sha256":"75ff66f23ddbb49ead16a6208fc5591cbe46286ad6e924ffb6fac46d69c7625e","donor_alias":"0x010a8588","symbol":"xm1_pipeline_image_scan_prepare_components","abi":"void(Address32 context, Address32 request)"},
+    {"entry":"0x00d79e38","extent":240,"sha256":"080a4a83a6dfece37c1e263621e13d0ac71cc12d688d2d1c4284218bc78b47e5","symbol":"xm1_pipeline_image_scan_update_components","abi":"void(Address32 request, Address32 components)"},
+    {"entry":"0x00d6ca88","extent":488,"sha256":"7880d7f652e08ff4428f837ca50fd9fba18123b6f7e6b2ed001e767037688aa0","symbol":"xm1_pipeline_image_scan_process_components","abi":"i32(Address32 request, Address32 workspace)"},
+    {"entry":"0x00d6cc70","extent":1584,"sha256":"1d74fa5a8abe6d2eb7ca065771964fdffa26c98686e4f606e80a7da4d967896f","symbol":"xm1_pipeline_image_scan_validate_regions","abi":"i32(Address32 request)"},
+    {"entry":"0x00d753b8","extent":1840,"sha256":"1623f3fde59eed67e75e8a9e43dba37a63d9d8ae4868d11c9304603558a5cf4f","symbol":"xm1_pipeline_image_scan_export_diagnostics","abi":"void(Address32 request, Address32 workspace, Address32 output)"},
+    {"entry":"0x00d78a10","symbol":"xm1_pipeline_image_scan_translate_small_kind","abi":"void(Address32 output, u32 kind)","source":"scan_option_adapters.c:95-116, exact"},
+    {"entry":"0x00d79890","extent":832,"sha256":"59e5e6047e769048ee8ffb7ba1deadcad4175893182e868e565d06442bc7e0c3","symbol":"xm1_pipeline_image_scan_translate_operation","abi":"void(Address32 output, u32 kind)"},
+    {"entry":"0x00d79db4","extent":132,"sha256":"1688bbd9eb9a851a22a30caa3448ff1c85e9df2eb843527180a340f20c5eb885","symbol":"xm1_pipeline_image_scan_translate_selection","abi":"void(u32 kind, Address32 output)"},
+    {"entry":"0x00d79bd0","extent":68,"sha256":"5d6bbf6d11b6f3defd866952851e6a561f3fc04ab7005ff97e20377d6629ddfe","symbol":"xm1_pipeline_image_scan_packing","abi":"void(u32 flags, Address32 packing, Address32 numerator, Address32 denominator)"},
+    {"entry":"0x00d79c14","extent":40,"sha256":"7b7dc7eea9bfad55de714962a651c781c92973b17867da0b18ac999057d59590","symbol":"xm1_pipeline_image_scan_channel_layout","abi":"void(u32 flags, Address32 output)"},
+    {"entry":"0x00d79c3c","extent":28,"sha256":"b5b015418a4c06ddfbb240b45da242e827dfa97e32833028639e5d0a3829f299","symbol":"xm1_pipeline_image_scan_frame_mode","abi":"void(u32 flags, Address32 output)"},
+    {"entry":"0x00d79c58","extent":156,"sha256":"85702cff4f1d8cba7a5ecb746532d3c0c1e6d1d635438b5c6c6f4b4302cc094d","symbol":"xm1_pipeline_image_scan_component_kind","abi":"void(u32 mode, i32 selection, Address32 output)"},
+    {"entry":"0x00d79d90","extent":36,"sha256":"e656da9cc645cd1e617a6bfddf66d20960c3543a496d076127777ef9b6c8b1b3","symbol":"xm1_pipeline_image_scan_initialize_pair","abi":"void(Address32 count, Address32 kind)","abi_correction":"Only r0/r1 are consumed. Draft six-argument declaration carries no extra behavior."},
+    {"entry":"0x00d7a1dc","extent":44,"sha256":"790e744fefd52d1c83fb439b65cd67a733868fbd1ec51211831ed5de14e527b0","symbol":"xm1_pipeline_image_scan_zero_one","abi":"i32(i32 value)"},
+    {"entry":"0x00d7a208","extent":44,"sha256":"bbce4cef2da7fa0dee184c8f646938ab4bf8f0752b4c291ff0989164edeba8c7","symbol":"xm1_pipeline_image_scan_one_two","abi":"i32(i32 value)"},
+    {"entry":"0x00d7a26c","extent":52,"sha256":"5103ad4761e7466181573e8334f30853999961db3a7e2a96ef62ba499a66e9ea","symbol":"xm1_pipeline_image_scan_enabled_value","abi":"i32(i32 value, u32 kind)"},
+    {"entry":"0x00d79cf4","extent":156,"sha256":"2583cfc654220ffa38dcb66088a3180b7724d8b63438efbff4e0185954e28dfc","symbol":"xm1_pipeline_image_scan_select_word_table","abi":"void(u32 mode, Address32 output)","layout":"Writes only output+16, not output+0."},
+    {"entry":"0x0069084c","extent":216,"sha256":"abcc8d23668e61e0e773205c1c399148a87b65b348c59f81a58ab50d79662e7a","symbol":"xm1_pipeline_image_scan_word_lookup","abi":"void(u32* first, u32* second, Address32* values, u32 index)","layout":"ROM base 0x821bac, stride 4104, nullable outputs; values points to record+8."}
+  ],
+  "owned_dependencies": [
+    {"entry":"0x00d6d2a0","symbol":"xm1_pipeline_image_scan_select_region","owner":"PipelineProcessing","abi":"void(Address32 request, Address32 workspace)"},
+    {"entry":"0x00d6e564","symbol":"xm1_pipeline_image_scan_measure_region","owner":"PipelineProcessing","abi":"i32(Address32 plane, Address32 region, Address32 table, Address32 levels, u32 mode, Address32 workspace, Address32 scratch)"},
+    {"entry":"0x00d72b7c","symbol":"xm1_pipeline_image_scan_adjust_components","owner":"PipelineProcessing","abi":"i32(Address32 plane, Address32 region, Address32 profile, Address32 levels, Address32 workspace, Address32 fallback, u32 special, Address32 settings, u32 selection, u32 operation, Address32 scratch)"},
+    {"entry":"0x0069f8fc","symbol":"xm1_buffers_configuration_byte","owner":"PipelineBuffers","abi":"u32(ConfigurationKey)"},
+    {"entry":"0x0069ff68","symbol":"xm1_pipeline_image_configuration_signed_byte","owner":"PipelineImageReferences","abi":"i32(ConfigurationKey)"}
+  ],
+  "layouts": {
+    "request": "0x2ac bytes; regions at +4, stride 52; byte count at +0; fallback components at +218,+21a,+21c; diagnostic gate word+2a8; debug base word+28c.",
+    "workspace": "0xcb8 bytes, shared address 0x14687f8; selected region signed half+ c28; valid measured ratios unsigned halves+c14,+c16; components unsigned halves+0,+2,+4.",
+    "context": "Enable WORD+0; component triplet halves+238,+23a,+23c; ten input regions at+4 stride44.",
+    "raw_samples": "Eight bytes at context.word21c copied to request+268. Address word+0 and count half+4 are defined; e544b0 leaves half+6 unspecified. Rust preserves it as MaybeUninit<u16>; no zero initialization or numerical claim for those bits.",
+    "diagnostic": "0xd1c bytes, 0x53544644 header, three256word histograms at118/518/918 and 0x4c414644 trailer atd18; signed scalar halves are sign-extended."
+  },
+  "evidence": [
+    "Pinned source scan_configuration_views.c, scan_component_update.c, scan_value_translation.c, scan_word_selection.c, scan_option_adapters.c, tu_00d79324.c, tu_00d65f94.c and tu_00d71980.c.",
+    "Actual A32 bytes inspected for d6ca88..d6d2a0, d753b8..d75ae8, d79890..d79f28, d7a1dc..d7a87c and69084c..690924. Extent SHA256 values bind the original image bytes.",
+    "d6cc70 uses quotient/remainder r1 from kernel4da6c. Raw alignment advances origin and shrinks dimensions; center offset is 6*floor(remainder/12).",
+    "d7a820 calls actuald7a2a0, not donor address010a8588. d79e38 original ABI has onlyrequest/output, not draft extraargs."
+  ],
+  "residual_law_boundary": [
+    "No hardware seam occurs in scan selection, request construction, region validation, histogram normalization or diagnostic export.",
+    "Divide-by-zero exits through existing kernel endpoint0x43614. No new device arithmetic law is asserted.",
+    "PipelineProcessing owns all numeric sampling/profile kernels. Source integration and their active numerical fixture composition remain parent admission responsibilities.",
+    "The e544b0 raw-source padding is unspecified input. Numeric owner reports A32 halfword-only count reads atd6db40/d6f178; final admission must preserve those bits without asserting a value.",
+    "ScanProcessingScenarios executes real helpers and configuration/ROM reads, with no stock-application call scripts. Empty/rejected-region cases do not establish a successful pixel algorithm."
+  ]
+}

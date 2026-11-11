@@ -1,0 +1,2065 @@
+{
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "owner": "PipelineObjectAllocator / PipelineEncoderTask continuation",
+  "image4Sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+  "image5Sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+  "originalImages": [
+    {
+      "name": "image4",
+      "base": "0x0061c400",
+      "extent_offset": 0,
+      "extent_size": 2631680,
+      "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+      "path": "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin"
+    },
+    {
+      "name": "image5",
+      "base": "0x00bf1a00",
+      "extent_offset": 0,
+      "extent_size": 5185120,
+      "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+      "path": "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin"
+    },
+    {
+      "name": "overlay46",
+      "base": "0x01100000",
+      "extent_offset": 786432,
+      "extent_size": 117920,
+      "sha256": "a9dee59faaec1765d9f3a2dd7f75fd7d423a8b8061599b5d7f6752b6bdd4cf84",
+      "path": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin"
+    },
+    {
+      "name": "kernel0",
+      "base": "0x00040000",
+      "extent_offset": 0,
+      "extent_size": 56032,
+      "sha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882",
+      "path": "private-data/analysis/x-m1-1.50/decode/loader-40000.bin"
+    }
+  ],
+  "routes": [
+    {
+      "address": "0x00665760",
+      "symbol": "xm1_pipeline_image_dma_wait",
+      "abi": "handle: i32 -> i32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x006e2390",
+      "symbol": "xm1_pipeline_image_registry_initialize",
+      "abi": "registry: u32, capacity: u32, entries: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x006e24e0",
+      "symbol": "xm1_pipeline_image_registry_allocate",
+      "abi": "registry: u32, key: i32 -> i32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x006e2588",
+      "symbol": "xm1_pipeline_image_registry_free",
+      "abi": "registry: u32, index: i32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x006e266c",
+      "symbol": "xm1_pipeline_image_registry_get_key",
+      "abi": "registry: u32, index: i32 -> i32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x006e2690",
+      "symbol": "xm1_pipeline_image_registry_get_request",
+      "abi": "registry: u32, index: i32 -> u32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x006e26b8",
+      "symbol": "xm1_pipeline_image_registry_set_request",
+      "abi": "registry: u32, index: i32, request: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x006e2718",
+      "symbol": "xm1_pipeline_image_registry_lookup",
+      "abi": "registry: u32, index: i32 -> u32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x006e274c",
+      "symbol": "xm1_pipeline_image_request_register",
+      "abi": "request: u32 -> i32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x006e27ac",
+      "symbol": "xm1_pipeline_image_request_initialize",
+      "abi": "request: u32, worker: u32, completion_mode: i32, dispatch_kind: i32, table_index: i32, codes: u32, handlers: u32, context: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x006e2808",
+      "symbol": "xm1_pipeline_image_request_unregister",
+      "abi": "request: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x006e2b80",
+      "symbol": "xm1_pipeline_image_request_send",
+      "abi": "request: u32, code: u16, first: u32, second: u32, third: i32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x006e2bf0",
+      "symbol": "xm1_pipeline_image_request_send_reply",
+      "abi": "message: *const RegistryMessage -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x006e2834",
+      "symbol": "xm1_pipeline_image_request_decode",
+      "abi": "message: *const RegistryMessage, codes: u32 -> i32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x006e28ac",
+      "symbol": "xm1_pipeline_image_request_dispatch",
+      "abi": "request: u32, code: i32, handlers: u32 -> i32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x006e2aa0",
+      "symbol": "xm1_pipeline_image_registry_process",
+      "abi": "registry: u32, message: *mut RegistryMessage -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x006e26dc",
+      "symbol": "xm1_pipeline_image_registry_receive",
+      "abi": "worker: u32, message: *mut RegistryMessage -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x006e2ae8",
+      "symbol": "xm1_pipeline_image_registry_worker",
+      "abi": " -> !",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011dab4c",
+      "symbol": "xm1_pipeline_image_metadata_initialize_request",
+      "abi": "request: u32, mode: u32, width: u32, height: u32, kind: i32, input: u32, target: u32, attempts: i32, option: u32, choice: u32, source: u32, destination: u32, limit: u32, stride: u32, controls: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011d28e8",
+      "symbol": "xm1_pipeline_image_setup_descriptors",
+      "abi": "image: u32, source: u32, thumbnail: u32, primary: u32, secondary: u32, scale: u32, order: u32, flags: u32, kind: u32, initialize: i32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011d3ea8",
+      "symbol": "xm1_pipeline_image_initialize_stream",
+      "abi": "image: u32, source: u32, owner: u32, thumbnail: u32, primary: u32, secondary: u32, scale: i32, order: i32, flags: i32, kind: i32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011dbfc0",
+      "symbol": "xm1_pipeline_image_calculate_metadata_limit",
+      "abi": "limits: u32, width: u32, height: u32, quality: i32, slot: i8 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011dc264",
+      "symbol": "xm1_pipeline_image_select_compression_tables",
+      "abi": "kind: i32, width: u32, height: u32, slot: i8, _unused: i32, limits: *mut u32, geometry: *mut u32, parameters: *mut u32 -> i32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011d4938",
+      "symbol": "xm1_pipeline_image_start_request",
+      "abi": "id: u32, image: u32, completion: u32, mode: i32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011d4a20",
+      "symbol": "xm1_pipeline_image_start_compact_request",
+      "abi": "id: u32, image: u32, completion: u32, mode: i32, compact: i32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011d4a04",
+      "symbol": "xm1_pipeline_image_start_secondary_request",
+      "abi": "id: u32, image: u32, completion: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011daa7c",
+      "symbol": "xm1_pipeline_image_metadata_request_halt",
+      "abi": " -> !",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011daa88",
+      "symbol": "xm1_pipeline_image_metadata_request_completed",
+      "abi": " -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011d25a0",
+      "symbol": "xm1_pipeline_image_stream_signal_completion",
+      "abi": "status: i32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011daab8",
+      "symbol": "xm1_pipeline_image_start_compression",
+      "abi": "priority: u32, request: u32, callback: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011d42b4",
+      "symbol": "xm1_pipeline_image_set_stream_active",
+      "abi": "active: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011d268c",
+      "symbol": "xm1_pipeline_image_dispatch_job",
+      "abi": "task: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011d42d4",
+      "symbol": "xm1_pipeline_image_pad_primary",
+      "abi": "image: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011d4728",
+      "symbol": "xm1_pipeline_image_primary_completed",
+      "abi": "task: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011d4620",
+      "symbol": "xm1_pipeline_image_header_completed",
+      "abi": "task: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011d450c",
+      "symbol": "xm1_pipeline_image_secondary_completed",
+      "abi": "task: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011daf44",
+      "symbol": "xm1_pipeline_image_begin_compression",
+      "abi": "event: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011dad8c",
+      "symbol": "xm1_pipeline_image_retry_compression",
+      "abi": "request: u32 -> i32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011dae6c",
+      "symbol": "xm1_pipeline_image_complete_compression",
+      "abi": "request: u32 -> i32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011daeac",
+      "symbol": "xm1_pipeline_image_compression_completed",
+      "abi": "event: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x00d98a80",
+      "symbol": "xm1_pipeline_image_power_scale",
+      "abi": "base: i32, exponent: i32 -> u32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x00d98e14",
+      "symbol": "xm1_pipeline_image_compute_scale",
+      "abi": "numerator: i32, denominator: i32, extent: i32, exponent: i32, offset: i32, enforce_minimum: i32 -> i32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x00d98ea4",
+      "symbol": "xm1_pipeline_image_compute_mode_scale",
+      "abi": "mode: u32, denominator: i32, extent: i32, parameters: u32 -> i32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011dac34",
+      "symbol": "xm1_pipeline_image_metadata_request_value",
+      "abi": "input: u32, parameters: u32, size: i32, quality: i32, index: i32 -> i32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x00d98a18",
+      "symbol": "xm1_pipeline_image_scale_quantization",
+      "abi": "source: u32, destination: u32, first_scale: i32, second_scale: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011dac68",
+      "symbol": "xm1_pipeline_image_prepare_compression_tables",
+      "abi": "channel: u32, quality: i32, option: u32, alternate: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011dace4",
+      "symbol": "xm1_pipeline_image_submit_compression",
+      "abi": "request: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x00d98f14",
+      "symbol": "xm1_pipeline_image_preview_enabled",
+      "abi": " -> u32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x00d98ee4",
+      "symbol": "xm1_pipeline_image_classify_aspect",
+      "abi": "width: u32, height: u32 -> i32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x00d98f58",
+      "symbol": "xm1_pipeline_image_fill_pixel_pairs",
+      "abi": "destination: u32, width: u32, height: u32, pixels: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x00d98f8c",
+      "symbol": "xm1_pipeline_image_scale_preview_pairs",
+      "abi": "source: u32, output: u32, source_width: u32, source_padding: u32, source_height: u16, output_width: u16, output_height: u16, row_count: u16 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x00d99104",
+      "symbol": "xm1_pipeline_image_scale_preview",
+      "abi": "source: u32, output: u32, source_width: u32, source_padding: u32, source_height: u16, output_width: u16, output_height: u16 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x00d99138",
+      "symbol": "xm1_pipeline_image_make_preview",
+      "abi": "source: u32, output: u32, width: u32, padding: u32, height: u16 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011d2640",
+      "symbol": "xm1_pipeline_image_configure_stream_output",
+      "abi": "image: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x0065ac34",
+      "symbol": "xm1_pipeline_image_channel8_invalid",
+      "abi": " -> !",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x0065acec",
+      "symbol": "xm1_pipeline_image_channel8_reset",
+      "abi": " -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x0065ac40",
+      "symbol": "xm1_pipeline_image_channel8_request_resource",
+      "abi": "output: u32 -> i32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x0065ac98",
+      "symbol": "xm1_pipeline_image_channel8_release_resource",
+      "abi": "handle: u32 -> i32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x00d986f0",
+      "symbol": "xm1_pipeline_image_channel8_acquire",
+      "abi": " -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x00d98744",
+      "symbol": "xm1_pipeline_image_channel8_release",
+      "abi": " -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x0065adbc",
+      "symbol": "xm1_pipeline_image_channel8_start",
+      "abi": " -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x00d987f4",
+      "symbol": "xm1_pipeline_image_channel8_finish",
+      "abi": " -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x00d9879c",
+      "symbol": "xm1_pipeline_image_channel8_submit",
+      "abi": "parameters: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x00d994c8",
+      "symbol": "xm1_pipeline_image_channel8_completed",
+      "abi": " -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x00d99368",
+      "symbol": "xm1_pipeline_image_channel8_configure",
+      "abi": "parameters: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x00d9878c",
+      "symbol": "xm1_pipeline_image_metadata_start_channel8",
+      "abi": "parameters: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x0065ae00",
+      "symbol": "xm1_pipeline_image_channel8_publish",
+      "abi": "configuration: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x00665304",
+      "symbol": "xm1_pipeline_image_dma_open",
+      "abi": "kind: u32, output: *mut u32 -> i32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x00665424",
+      "symbol": "xm1_pipeline_image_dma_close",
+      "abi": "handle: u32 -> i32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x00665ac4",
+      "symbol": "xm1_pipeline_image_dma_program",
+      "abi": "handle: u32, program: *const DmaProgram -> i32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x00665540",
+      "symbol": "xm1_pipeline_image_dma_begin",
+      "abi": "handle: u32, completion: *const DmaCompletion -> i32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x00666458",
+      "symbol": "xm1_pipeline_image_dma_aligned_transfer",
+      "abi": "destination: u32, source: u32, blocks: u32, callback: u32 -> i32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x00666690",
+      "symbol": "xm1_pipeline_image_dma_aligned_completed",
+      "abi": " -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011d2620",
+      "symbol": "xm1_pipeline_image_stream_dma_completed",
+      "abi": " -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011d25d0",
+      "symbol": "xm1_pipeline_image_stream_copy_blocks",
+      "abi": "destination: u32, source: u32, size: u32 -> void",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011d2d5c",
+      "symbol": "xm1_pipeline_image_measure_template",
+      "abi": "template: u32 -> i32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x011d3204",
+      "symbol": "xm1_pipeline_image_write_chunked_segments",
+      "abi": "image: u32 -> u32",
+      "classification": "owned_cpu"
+    },
+    {
+      "address": "0x00042634",
+      "symbol": "xm1_encoder_cache",
+      "abi": "void()",
+      "classification": "retained_kernel_abi"
+    },
+    {
+      "address": "0x00042574",
+      "symbol": "xm1_encoder_save_irq",
+      "abi": "u32()",
+      "classification": "retained_kernel_abi"
+    },
+    {
+      "address": "0x0004257c",
+      "symbol": "xm1_encoder_restore_irq",
+      "abi": "void(token:u32)",
+      "classification": "retained_kernel_abi"
+    }
+  ],
+  "sourceExtents": [
+    {
+      "address": "0x00665760",
+      "source_name": "hw_fff020_wait_channel_transfer",
+      "section": "stream-0016025c",
+      "size": 288,
+      "sha256": "145d95b6af4d8abb1828c797a5a7ebb75f8fcc37a47e0d964a5f64c16f808c3a",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/drivers/isp/fff020_channel_initialization.c",
+        "first_line": 133,
+        "last_line": 155,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x006e2390",
+      "source_name": "message_registry_initialize",
+      "section": "stream-0016025c",
+      "size": 80,
+      "sha256": "592ad75c59f3a1f256fe5f3879c8addfa33ec4fb28c0a2de3aea19b20b68034d",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/platform/osal/message_registry.c",
+        "first_line": 6,
+        "last_line": 18,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x006e24e0",
+      "source_name": "FUN_006e24e0",
+      "section": "stream-0016025c",
+      "size": 168,
+      "sha256": "a1e731bdff6ce03a3288ce6553dacedae07299d1fee8a37e6ce4b4f53e33b874",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/platform/osal/message_request_more.c",
+        "first_line": 31,
+        "last_line": 56,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x006e2588",
+      "source_name": "FUN_006e2588",
+      "section": "stream-0016025c",
+      "size": 196,
+      "sha256": "a4836009e01f089c5ec2b4d84af7bf52ad996a7086370474c2a67a6e72c7f332",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/platform/osal/message_registry_more.c",
+        "first_line": 52,
+        "last_line": 79,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x006e266c",
+      "source_name": "message_registry_get_key",
+      "section": "stream-0016025c",
+      "size": 36,
+      "sha256": "9fb70fcb79fc464a422f3ef8557e94554d5f6a8088959e833b65193531487015",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/platform/osal/message_registry.c",
+        "first_line": 29,
+        "last_line": 34,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x006e2690",
+      "source_name": "message_registry_get_request",
+      "section": "stream-0016025c",
+      "size": 40,
+      "sha256": "0582297650d9b9989c1c851ca93483bac29fb9d512454896f7e84b97eeca1fa1",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/platform/osal/message_registry.c",
+        "first_line": 35,
+        "last_line": 40,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x006e26b8",
+      "source_name": "message_registry_set_request",
+      "section": "stream-0016025c",
+      "size": 36,
+      "sha256": "1c7b2f9dd4adff6f97f37944f61c36ebfb0c3c770ac1f590089ca71fd59fb33f",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/platform/osal/message_registry.c",
+        "first_line": 41,
+        "last_line": 44,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x006e2718",
+      "source_name": "message_registry_lookup",
+      "section": "stream-0016025c",
+      "size": 52,
+      "sha256": "c4a8bac95c2dbcdaafe4672e9d9c5bb5395e2a2bb702811ef2c8afa58fb6b028",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/platform/osal/message_request.c",
+        "first_line": 34,
+        "last_line": 39,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x006e274c",
+      "source_name": "FUN_006e274c",
+      "section": "stream-0016025c",
+      "size": 96,
+      "sha256": "ea373f89e55372e866699ff314b2cbcf19e36e9e4cf9d40e1faae775007485ab",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/platform/osal/message_request_more.c",
+        "first_line": 58,
+        "last_line": 68,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x006e27ac",
+      "source_name": "message_request_initialize",
+      "section": "stream-0016025c",
+      "size": 92,
+      "sha256": "c2da4ff33b7134285ebcef803045cd60ec7f4bfd626ff1b543682c2809c2da9d",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/platform/osal/message_request.c",
+        "first_line": 42,
+        "last_line": 48,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x006e2808",
+      "source_name": "message_request_unregister",
+      "section": "stream-0016025c",
+      "size": 44,
+      "sha256": "82d8bc83d08969e83884eb8e02526716679ab0e298205e90de091670cfba70b6",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/platform/osal/message_request.c",
+        "first_line": 49,
+        "last_line": 52,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x006e2b80",
+      "source_name": "FUN_006e2b80",
+      "section": "stream-0016025c",
+      "size": 112,
+      "sha256": "26a222e0bd3edc0a6f28742972d742f2dcb1aa69fc04f3fccd7e98cb9975f3d0",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/platform/osal/message_request_more.c",
+        "first_line": 115,
+        "last_line": 127,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x006e2bf0",
+      "source_name": "FUN_006e2bf0",
+      "section": "stream-0016025c",
+      "size": 108,
+      "sha256": "f172fec21f23b88a7a272ba42205bd44873b368e51e21801588d7842601fca74",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/platform/osal/message_request_more.c",
+        "first_line": 129,
+        "last_line": 140,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x006e2834",
+      "source_name": "FUN_006e2834",
+      "section": "stream-0016025c",
+      "size": 120,
+      "sha256": "b7635bb6dc326a0e8bf4ddcebacfa7e08df5533cf368c563798967559aef3237",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/platform/osal/message_request_more.c",
+        "first_line": 70,
+        "last_line": 80,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x006e28ac",
+      "source_name": "FUN_006e28ac",
+      "section": "stream-0016025c",
+      "size": 500,
+      "sha256": "c1f9a6f46a2cf1b31bf33d04d4e1a03ecb57882c95de92752d6a38401b01f94a",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/platform/osal/message_request_more.c",
+        "first_line": 82,
+        "last_line": 113,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x006e2aa0",
+      "source_name": "message_registry_process",
+      "section": "stream-0016025c",
+      "size": 72,
+      "sha256": "bf360dd434ca5016b904a5e456ddc8ee732d7196629c8b2922a9336474347578",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/platform/osal/message_request.c",
+        "first_line": 57,
+        "last_line": 64,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x006e26dc",
+      "source_name": "message_registry_receive",
+      "section": "stream-0016025c",
+      "size": 60,
+      "sha256": "4d69cf0f97f9f2b7e0a19dfb765b8430c764c1745213a92361ef40103a5a6ba2",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/platform/osal/message_request.c",
+        "first_line": 28,
+        "last_line": 33,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x006e2ae8",
+      "source_name": "message_registry_worker",
+      "section": "stream-0016025c",
+      "size": 104,
+      "sha256": "6cd9c3f7c5b3336f3c950c541645c94f78a41b6ac2eeeebb6e578412afe9bfe2",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/platform/osal/message_registry.c",
+        "first_line": 50,
+        "last_line": 62,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x011dab4c",
+      "source_name": "metadata_initialize_request",
+      "section": "overlay46",
+      "size": 232,
+      "sha256": "8580204cc792def22402a3769ffb20fc03c7abe31b21bf24338ac23ed008f051",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/metadata_compression.c",
+        "first_line": 20,
+        "last_line": 38,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x011d28e8",
+      "source_name": "FUN_011d28e8",
+      "section": "overlay46",
+      "size": 500,
+      "sha256": "75a19a92922cd269c80e89689263ec497d442a6ac75d905b4201ad8b147f1aab",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/image_encoder_rest.c",
+        "first_line": 61,
+        "last_line": 93,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x011d3ea8",
+      "source_name": "FUN_011d3ea8",
+      "section": "overlay46",
+      "size": 104,
+      "sha256": "8ffc80e2fd89c82fe78c70a36fbb8617c618224954f2bc96fa83678c23a32136",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/image_stream_rest.c",
+        "first_line": 117,
+        "last_line": 125,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x011dbfc0",
+      "source_name": "metadata_calculate_limit",
+      "section": "overlay46",
+      "size": 80,
+      "sha256": "c106ec7bfa5fc45c10dad2a7f513ed88b571537c11f94baabf9e8fd55f8bbdef",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/metadata_quality.c",
+        "first_line": 16,
+        "last_line": 24,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x011dc264",
+      "source_name": "FUN_011dc264",
+      "section": "overlay46",
+      "size": 212,
+      "sha256": "89d24be492ac5a1513ada23f62812425c4511718aed09673e46e004700d99efa",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/metadata_quality_rest.c",
+        "first_line": 79,
+        "last_line": 99,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x011d4938",
+      "source_name": "FUN_011d4938",
+      "section": "overlay46",
+      "size": 204,
+      "sha256": "f6bc692cfd5c1dd7f590014d29c8c9cff65fe24561fbb34ca0c7c383cf3d5d60",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/image_requests_rest.c",
+        "first_line": 132,
+        "last_line": 149,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x011d4a20",
+      "source_name": "FUN_011d4a20",
+      "section": "overlay46",
+      "size": 80,
+      "sha256": "2f431e607fd703060c57dd8fa194c95ab899314b7935b50b9b4f0e1c5c70e943",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/image_task_remainder.c",
+        "first_line": 81,
+        "last_line": 91,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x011d4a04",
+      "source_name": "image_start_secondary_request",
+      "section": "overlay46",
+      "size": 28,
+      "sha256": "5781dd812df76057c75665b7e8661e7523a6ac0cd395f08226c60619eba64667",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/image_requests.c",
+        "first_line": 59,
+        "last_line": 64,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x011daa7c",
+      "source_name": "A32_metadata_request_halt",
+      "section": "overlay46",
+      "size": 12,
+      "sha256": "729a23edde9f5d2688837a2fc485ceba8be3ff38bf5af773c02f30fcf6d23a13",
+      "image": "overlay46",
+      "index_admission": "new_original_A32_extent"
+    },
+    {
+      "address": "0x011daa88",
+      "source_name": "FUN_011daa88",
+      "section": "overlay46",
+      "size": 48,
+      "sha256": "7f050a5b61383f19ca7232ccf950a11f19ed153043780462da4ce8f393badf96",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/movie_request_events_rest.c",
+        "first_line": 7,
+        "last_line": 8,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x011d25a0",
+      "source_name": "stream_signal_completion",
+      "section": "overlay46",
+      "size": 48,
+      "sha256": "b2053cf20494702994c685be515e886c85c8299dbd5dbac8c1485f8f30a263db",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/image_stream.c",
+        "first_line": 18,
+        "last_line": 21,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x011daab8",
+      "source_name": "FUN_011daab8",
+      "section": "overlay46",
+      "size": 148,
+      "sha256": "03aefd40f71c5a051e05cd73b3544ab3338f57ffc4c74785c9b3d11248723c6e",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/metadata_requests_rest.c",
+        "first_line": 31,
+        "last_line": 46,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x011d42b4",
+      "source_name": "FUN_011d42b4",
+      "section": "overlay46",
+      "size": 32,
+      "sha256": "d86ae28d1c1e70b313cd7e49ffe6786ba80c4ee767912f3da7ac0fcae114603c",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/movie_storage_write_rest.c",
+        "first_line": 35,
+        "last_line": 38,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x011d268c",
+      "source_name": "FUN_011d268c",
+      "section": "overlay46",
+      "size": 236,
+      "sha256": "6f66f748bc90d7e389e6722ba26828c6dd9a6d9ceacfdffe89d601c14681fb25",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/image_stream_rest.c",
+        "first_line": 72,
+        "last_line": 108,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x011d42d4",
+      "source_name": "image_pad_primary",
+      "section": "overlay46",
+      "size": 120,
+      "sha256": "4e5da4c63bad2638da4ecdcc11a0cfa2a58f1f549449c286bf3f877641696611",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/image_requests.c",
+        "first_line": 23,
+        "last_line": 37,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x011d4728",
+      "source_name": "FUN_011d4728",
+      "section": "overlay46",
+      "size": 268,
+      "sha256": "2b668c5a71187eff99b426baeaabfe4475f17829a6d5f13551db1a8baa6bde65",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/image_requests_rest.c",
+        "first_line": 74,
+        "last_line": 99,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x011d4620",
+      "source_name": "FUN_011d4620",
+      "section": "overlay46",
+      "size": 264,
+      "sha256": "1c318e77a54f13d220cd1e94b315a2149bf0e3ce04aec8fe07fc45a04f755ca2",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/image_task_remainder_exact.c",
+        "first_line": 9,
+        "last_line": 51,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x011d450c",
+      "source_name": "FUN_011d450c",
+      "section": "overlay46",
+      "size": 276,
+      "sha256": "7f12f6ef26934269d9a791c736563ac84835284decc289d2302b1aadb4bf2281",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/image_task_remainder.c",
+        "first_line": 44,
+        "last_line": 77,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x011daf44",
+      "source_name": "metadata_begin_compression",
+      "section": "overlay46",
+      "size": 276,
+      "sha256": "2227b2932fc67776aa5262fcc7c72717999cc082b8f09f8ea4bcae8a61880bf5",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/metadata_compression.c",
+        "first_line": 123,
+        "last_line": 146,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x011dad8c",
+      "source_name": "metadata_retry_compression_result",
+      "section": "overlay46",
+      "size": 224,
+      "sha256": "494d32e0945a04a0c04ccfa30e52adbb70d62be8cb5fe830814a5679f90df703",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/metadata_compression.c",
+        "first_line": 78,
+        "last_line": 114,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x011dae6c",
+      "source_name": "metadata_complete_request",
+      "section": "overlay46",
+      "size": 64,
+      "sha256": "d8e5524df8b7b9238f13aa78b2e3fbc4022304ec0611fad842fa4eff676e40f3",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/metadata_async.c",
+        "first_line": 10,
+        "last_line": 17,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x011daeac",
+      "source_name": "FUN_011daeac",
+      "section": "overlay46",
+      "size": 152,
+      "sha256": "ecd4860f330d26879163ab8e942356925f269defd0aa97f0a520e0ff2b70846f",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/metadata_requests_rest.c",
+        "first_line": 48,
+        "last_line": 73,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x00d98a80",
+      "source_name": "FUN_00d98a80",
+      "section": "stream-002c025c",
+      "size": 916,
+      "sha256": "6f9948c6838960870f7aa6b5d8df489394404b3171c3dd18493fe7a002cae1ac",
+      "image": "image5",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/imaging/pipeline/tu_00d98a80.c",
+        "first_line": 259,
+        "last_line": 351,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x00d98e14",
+      "source_name": "jpeg_compute_scale",
+      "section": "stream-002c025c",
+      "size": 144,
+      "sha256": "7fcc1521e90765a20c09b141816478be86e65bc86bd2fbcd828b302da5e6d088",
+      "image": "image5",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/imaging/pipeline/image_layout.c",
+        "first_line": 20,
+        "last_line": 32,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x00d98ea4",
+      "source_name": "jpeg_compute_mode_scale",
+      "section": "stream-002c025c",
+      "size": 64,
+      "sha256": "327fe4721eb670e39e4ded803a00a276685b94b97757ec16d51f6e5c3261f9c3",
+      "image": "image5",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/imaging/pipeline/image_layout.c",
+        "first_line": 38,
+        "last_line": 42,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x011dac34",
+      "source_name": "movie_request_value",
+      "section": "overlay46",
+      "size": 52,
+      "sha256": "210f6d22535270ab5cf44f01d6ca2c6d34698c95c04ac53b88577c4f336d5fe1",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/movie_request_events.c",
+        "first_line": 13,
+        "last_line": 17,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x00d98a18",
+      "source_name": "jpeg_scale_quantization_table",
+      "section": "stream-002c025c",
+      "size": 104,
+      "sha256": "9c72420a1e93cbbd845bd6a8d553b5442d210757d3a2831c54ec6aa860e78667",
+      "image": "image5",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/native_quantization.c",
+        "first_line": 7,
+        "last_line": 26,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x011dac68",
+      "source_name": "metadata_prepare_tables",
+      "section": "overlay46",
+      "size": 124,
+      "sha256": "547e9b1d6dea2a1876e7bf37527c75752732bc0790750dfca3781c787ed96115",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/metadata_compression.c",
+        "first_line": 40,
+        "last_line": 52,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x011dace4",
+      "source_name": "metadata_submit_compression",
+      "section": "overlay46",
+      "size": 168,
+      "sha256": "50b669302eb1a360540b168e450250935d52a0361630dabc1e307e3c97cbfd37",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/metadata_compression.c",
+        "first_line": 58,
+        "last_line": 69,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x00d98f14",
+      "source_name": "FUN_00d98f14",
+      "section": "stream-002c025c",
+      "size": 68,
+      "sha256": "8965783c8a1451bf6ec77fc03ee7d971d64919fd679bf0549fa56db6b5c3ff78",
+      "image": "image5",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/imaging/pipeline/image_layout_planes.c",
+        "first_line": 26,
+        "last_line": 31,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x00d98ee4",
+      "source_name": "image_classify_aspect",
+      "section": "stream-002c025c",
+      "size": 48,
+      "sha256": "4e5500bb86cb4a0fdf8dcabaac0f28a5c61f5fe025c4ca72cf5d2e8f4f15e94e",
+      "image": "image5",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/imaging/pipeline/image_layout.c",
+        "first_line": 48,
+        "last_line": 57,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x00d98f58",
+      "source_name": "image_fill_pixel_pairs",
+      "section": "stream-002c025c",
+      "size": 52,
+      "sha256": "f7c84c2e06e9edb4f34823da0865aac2ecd7a163288826e4eb0f981e6a77ce37",
+      "image": "image5",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/imaging/pipeline/image_layout.c",
+        "first_line": 62,
+        "last_line": 75,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x00d98f8c",
+      "source_name": "FUN_00d98f8c",
+      "section": "stream-002c025c",
+      "size": 376,
+      "sha256": "0f2d72332acd845c1cbb12e86014e1a8cdffa546f9a95eb3075fb33f2c497f9b",
+      "image": "image5",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/imaging/pipeline/tu_00d98a80.c",
+        "first_line": 353,
+        "last_line": 412,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x00d99104",
+      "source_name": "FUN_00d99104",
+      "section": "stream-002c025c",
+      "size": 52,
+      "sha256": "2a15afd6c2f8d4506c464fd888087d751f050abed4ae16b9ef410072365ef996",
+      "image": "image5",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/imaging/pipeline/image_layout_planes.c",
+        "first_line": 36,
+        "last_line": 43,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x00d99138",
+      "source_name": "FUN_00d99138",
+      "section": "stream-002c025c",
+      "size": 300,
+      "sha256": "0bb69365b9221ca84415f2b77dfaeabf1425a0143adb91154e12b26dc2cacee4",
+      "image": "image5",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/imaging/pipeline/image_layout_planes.c",
+        "first_line": 45,
+        "last_line": 61,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x011d2640",
+      "source_name": "stream_configure_output",
+      "section": "overlay46",
+      "size": 76,
+      "sha256": "087fc3e1578b70fed1ada237c710930390910be4129229dafe156bd0cf5bb87d",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/image_stream.c",
+        "first_line": 33,
+        "last_line": 38,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x0065ac34",
+      "source_name": "FUN_0065ac34",
+      "section": "stream-0016025c",
+      "size": 12,
+      "sha256": "729a23edde9f5d2688837a2fc485ceba8be3ff38bf5af773c02f30fcf6d23a13",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/drivers/isp/s53c_route_registers.c",
+        "first_line": 279,
+        "last_line": 284,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x0065acec",
+      "source_name": "FUN_0065acec",
+      "section": "stream-0016025c",
+      "size": 208,
+      "sha256": "7adcebed4f87ec84ccb427ef2efa6c494ea4494d7fe21526baa65fe5cd9a4c1b",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/drivers/isp/s53c_route_registers.c",
+        "first_line": 286,
+        "last_line": 293,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x0065ac40",
+      "source_name": "xm1_isp_request_resource1d_and_set_options",
+      "section": "stream-0016025c",
+      "size": 88,
+      "sha256": "3f307b994933d3018d0a171e8ad8429f6ca1f9939eedf378ccd0bfc12f16bb7b",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/native_isp_channels/xm1_isp_channel_banks.c",
+        "first_line": 85,
+        "last_line": 92,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x0065ac98",
+      "source_name": "xm1_isp_release_resource1d_and_clear_options",
+      "section": "stream-0016025c",
+      "size": 84,
+      "sha256": "42be376bfc4d8830e899fffba323d07898f336bbd1252e7f6ccd79fc94c53782",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/native_isp_channels/xm1_isp_channel_banks.c",
+        "first_line": 94,
+        "last_line": 102,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x00d986f0",
+      "source_name": "FUN_00d986f0",
+      "section": "stream-002c025c",
+      "size": 84,
+      "sha256": "39fbffd1dfa733c24308eec85587597b60fa3c8711daf92d5427e5f886d1c46e",
+      "image": "image5",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/capture/pipeline/tu_00d986f0.c",
+        "first_line": 112,
+        "last_line": 127,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x00d98744",
+      "source_name": "FUN_00d98744",
+      "section": "stream-002c025c",
+      "size": 72,
+      "sha256": "833399940b5e21542fab1473fd15a3022d6f919f799dc5de0d20a4cdb5bbbd77",
+      "image": "image5",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/capture/pipeline/tu_00d986f0.c",
+        "first_line": 129,
+        "last_line": 144,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x0065adbc",
+      "source_name": "xm1_isp_enable_register_fff62000_bit0",
+      "section": "stream-0016025c",
+      "size": 68,
+      "sha256": "d032cc94b56a47ca0344f00e4fb0c013f76d91084ad5980b52c32818026fed67",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/native_isp_channels/xm1_isp_channel_banks.c",
+        "first_line": 113,
+        "last_line": 118,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x00d987f4",
+      "source_name": "channel8_finish_request",
+      "section": "stream-002c025c",
+      "size": 56,
+      "sha256": "bd7c8fe6fef9ca137f768367eec615061a20a1bf8c568690aaa7c61578003a36",
+      "image": "image5",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/capture/pipeline/async_channel8.c",
+        "first_line": 49,
+        "last_line": 55,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x00d9879c",
+      "source_name": "FUN_00d9879c",
+      "section": "stream-002c025c",
+      "size": 88,
+      "sha256": "d0b861256d5b96c446ac2801e9ecc51db91680733b4519c4429488932bf22099",
+      "image": "image5",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/capture/pipeline/async_channel8_requests.c",
+        "first_line": 25,
+        "last_line": 35,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x00d994c8",
+      "source_name": "channel8_complete",
+      "section": "stream-002c025c",
+      "size": 168,
+      "sha256": "fdfcd5bbaecfde5bc2d3c7331a113e4b68d4f5829adefe143f470b5439663e6a",
+      "image": "image5",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/capture/pipeline/async_channel8.c",
+        "first_line": 22,
+        "last_line": 41,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x00d99368",
+      "source_name": "FUN_00d99368",
+      "section": "stream-002c025c",
+      "size": 352,
+      "sha256": "202ff5726f6a4d5318aeb5baaa715db60af7d90518fed1feaf6c0b0a41870565",
+      "image": "image5",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/capture/pipeline/async_channel8_requests.c",
+        "first_line": 37,
+        "last_line": 80,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x00d9878c",
+      "source_name": "FUN_00d9878c",
+      "section": "stream-002c025c",
+      "size": 16,
+      "sha256": "7d8bb5480739d63c20f265e4019a7f3e32b20f18eeb934927262e1780cdfd7e9",
+      "image": "image5",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/capture/pipeline/tu_00d9878c.c",
+        "first_line": 8,
+        "last_line": 12,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x0065ae00",
+      "source_name": "FUN_0065ae00",
+      "section": "stream-0016025c",
+      "size": 1912,
+      "sha256": "9093e482207283e76ce80678dbce0bdb96256cc2848a9a2265b804e5e70d9302",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/drivers/isp/s53c_route_bodies_2.c",
+        "first_line": 361,
+        "last_line": 441,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x00665304",
+      "source_name": "FUN_00665304",
+      "section": "stream-0016025c",
+      "size": 288,
+      "sha256": "f428b17fa0276e9ff7ebcbdd22eecae3b02a95559538e783f107bc0205f87596",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/drivers/isp/fff020_channel_initialization.c",
+        "first_line": 42,
+        "last_line": 68,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x00665424",
+      "source_name": "FUN_00665424",
+      "section": "stream-0016025c",
+      "size": 284,
+      "sha256": "fa8d8a459c5569e0d446e85f1f4f8a5bd0e8545630305116ee4b33dc89f4752b",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/drivers/isp/fff020_channel_initialization.c",
+        "first_line": 70,
+        "last_line": 92,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x00665ac4",
+      "source_name": "FUN_00665ac4",
+      "section": "stream-0016025c",
+      "size": 760,
+      "sha256": "9bd006a266fa958044dd25dc8d3eadeac6e568695e66251bf1ec4e1c230044f0",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/drivers/isp/fff020_channel_initialization.c",
+        "first_line": 198,
+        "last_line": 246,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x00665540",
+      "source_name": "FUN_00665540",
+      "section": "stream-0016025c",
+      "size": 544,
+      "sha256": "7902058271a3f1bcba84073f042a2c6ab33290c1291919e7979ccdc01226f3a3",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/drivers/isp/fff020_channel_initialization.c",
+        "first_line": 94,
+        "last_line": 131,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x00666458",
+      "source_name": "FUN_00666458",
+      "section": "stream-0016025c",
+      "size": 568,
+      "sha256": "81cdc860afbebafc5cb9bfc662a355cacaeece9e1e884d0a435aaeadfbc650fb",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/drivers/isp/fff020_channel_initialization.c",
+        "first_line": 378,
+        "last_line": 425,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x00666690",
+      "source_name": "FUN_00666690",
+      "section": "stream-0016025c",
+      "size": 124,
+      "sha256": "ce2d34106e52eceb68119324bc93bd4ae39f824c054bd2b27cffb68c6f074cec",
+      "image": "image4",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/drivers/isp/fff020_channel_initialization.c",
+        "first_line": 427,
+        "last_line": 439,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x011d2620",
+      "source_name": "FUN_011d2620",
+      "section": "overlay46",
+      "size": 32,
+      "sha256": "090dfb15d5de12c560588dd9940b1e7541617c836450a3f2e69258f0210d05f9",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/image_stream_rest.c",
+        "first_line": 67,
+        "last_line": 70,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x011d25d0",
+      "source_name": "stream_copy_blocks",
+      "section": "overlay46",
+      "size": 80,
+      "sha256": "8f6f22b985f397f320893d1e6ede7ffe425e68c1b123691fab559aebf74c46f2",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/image_stream.c",
+        "first_line": 23,
+        "last_line": 29,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x011d2d5c",
+      "source_name": "FUN_011d2d5c",
+      "section": "overlay46",
+      "size": 152,
+      "sha256": "93c7fead8addba0a0632dd4d457c621df9e9739d5393d6345047fe9de480ffa2",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/jpeg_segments_rest.c",
+        "first_line": 54,
+        "last_line": 76,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x011d3204",
+      "source_name": "FUN_011d3204",
+      "section": "overlay46",
+      "size": 696,
+      "sha256": "bd670c49edc5ae70e9683a2a9939fe7709b0363b04112d9a78313575e8fd8461",
+      "image": "overlay46",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/app/media/jpeg_segments_rest.c",
+        "first_line": 137,
+        "last_line": 192,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x00042634",
+      "source_name": "dcache_clean_invalidate_range",
+      "section": "kernel0",
+      "size": 8,
+      "sha256": "8f0bd666ba3b42297514abf9c761bdce6b47235c638984ccaafe3e904027fe49",
+      "image": "kernel0",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/kernel0/src/cpu/cache_maintenance.c",
+        "first_line": 69,
+        "last_line": 72,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x00042574",
+      "source_name": "kernel_save_irq_mask",
+      "section": "kernel0",
+      "size": 8,
+      "sha256": "9ecc20d5831032d00dfdc522f17be27fef0593b866d49aac935d2ac351ba0f75",
+      "image": "kernel0",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/kernel0/src/cpu/interrupt_mask.c",
+        "first_line": 22,
+        "last_line": 25,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x0004257c",
+      "source_name": "kernel_restore_irq_mask",
+      "section": "kernel0",
+      "size": 12,
+      "sha256": "1f9712f28333ee9b1365343ce7d924256cacf3512cb01b1c3efc80e441324e6e",
+      "image": "kernel0",
+      "index_admission": "range",
+      "source_definition": {
+        "path": "decomp/firmwares/xm1-150/kernel0/src/cpu/interrupt_mask.c",
+        "first_line": 28,
+        "last_line": 31,
+        "status": "exact"
+      }
+    }
+  ],
+  "layouts": {
+    "registry": {
+      "base": "0x0096e04c",
+      "stride": 12,
+      "readCursor": 2,
+      "writeCursor": 0,
+      "capacity": 4,
+      "entryPointer": 8,
+      "entryStride": 8,
+      "entryKey": 0,
+      "entryRequest": 4
+    },
+    "request": {
+      "size": 32,
+      "worker": 0,
+      "slotSignedHalf": 4,
+      "completionSignedHalf": 6,
+      "dispatchKind": 8,
+      "tableIndex": 12,
+      "messageCodes": 16,
+      "handlerLists": 20,
+      "message": 24,
+      "context": 28
+    },
+    "registryPacket": {
+      "size": 16,
+      "eventUnsignedHalf": 0,
+      "slotByte": 2,
+      "queueByte": 3,
+      "first": 4,
+      "second": 8,
+      "third": 12
+    },
+    "queueMessage": {
+      "size": 12,
+      "eventUnsignedHalf": 0,
+      "senderByte": 2,
+      "destinationByte": 3,
+      "payloadLength": 4,
+      "payloadAddress": 8
+    },
+    "encoderInput": {
+      "size": 44,
+      "width": 0,
+      "height": 8,
+      "sourceAddress": 12,
+      "compressedDestinationAddress": 16,
+      "outputByteLimit": 20,
+      "secondaryHeaderAddress": 24,
+      "limitTable": 28,
+      "geometryTable": 32,
+      "controls": 36,
+      "stride": 40
+    },
+    "metadataRequest": {
+      "mode": 0,
+      "attempts": 4,
+      "index": 8,
+      "kind": 12,
+      "limitTable": 16,
+      "geometryTable": 20,
+      "option": 24,
+      "choice": 28,
+      "history": 32,
+      "historyCount": 16,
+      "historyStride": 8,
+      "channel": 160,
+      "source": 168,
+      "compressedDestination": 172,
+      "byteLimit": 176,
+      "desiredBytes": 180,
+      "producedBytes": 184,
+      "error": 188,
+      "synchronousWarp": 192,
+      "enabled": 196,
+      "lumaTable": 200,
+      "chromaTable": 204,
+      "channelState": 208,
+      "stride": 212,
+      "completion": 216,
+      "controls": 220,
+      "halt": 296
+    },
+    "image": {
+      "request": 0,
+      "callerCompletion": 32,
+      "imageContext": 40,
+      "mode": 44,
+      "primary": 84,
+      "thumbnail": 412,
+      "secondary": 756,
+      "headerDestination": 1056,
+      "secondaryEnabled": 1060,
+      "completionFlags": 1064,
+      "rawMode": "0xf2f4",
+      "compact": "0xf2f0",
+      "rawSelector": "0xf2fc",
+      "rawHeaderFlag": "0xf300",
+      "encoding": "0xf304"
+    },
+    "dmaProgram": {
+      "size": 44,
+      "control": 0,
+      "register34": 4,
+      "register30": 8,
+      "source": 12,
+      "destination": 16,
+      "byteCount": 20,
+      "register0c": 24,
+      "register10": 28,
+      "register14": 32,
+      "link": 36,
+      "priority": 40
+    },
+    "channel8": {
+      "configuration": "0x014c5790",
+      "parametersPointer": "0x014c578c",
+      "resourceHandle": "0x014c56ec",
+      "interruptHandle": "0x014c56e8",
+      "mmioBase": "0xfff62000"
+    },
+    "dma": {
+      "states": "0x00918b98",
+      "kinds": "0x00918bb8",
+      "handles": "0x00918bd8",
+      "interruptHandles": "0x00918bf8",
+      "alignedHandle": "0x00918c24",
+      "alignedCompletion": "0x00918c28",
+      "mmioBase": "0xfff02000"
+    }
+  },
+  "a32Corrections": [
+    "0x665760 is wait, not stop: it polls busy bit0 clear and releases the interrupt before restoring OPEN. Pause/abort stop is0x665880 and is not owned by this extension.",
+    "All indexed source extents above were hashed from the original image bytes and matched the pinned TSV. NONMATCHING drafts were interpreted against A32 instructions before implementation.",
+    "0x11daa7c is a new original 12-byte source admission, not a replacement binding to another function: push fp; mov fp,sp; infinite branch at0x11daa84.",
+    "Image raw selector is0xf2fc and encoding is0xf304. Draft f308/f310 fields do not control these bodies.",
+    "EncoderInput+16 is the compressed-output buffer address, not a byte capacity. +20 is the byte limit; +24 is the secondary-header address rounded up to64.",
+    "0x11d2640 passes source height fromimage+0x2cc and row padding from+0x2d0; the draft reverses these arguments.",
+    "0x11daab8 does not contain the draft channel8_request_busy guard. It initializes the generic request, clears128 history bytes and posts2b05.",
+    "0x11dc264 takes signed8-bit slot. Only slot>1 is rejected; negative values are not silently clamped.",
+    "0x11d4728 continues mode handling after the error callback. Reentry and possible second completion are not suppressed.",
+    "0x65ae00 writes0x100 tofff62084 before the32 big-endian quantization words, then writes the table-enable bit.",
+    "0xd98f8c samples source rows dy,dy,2dy,... and preserves the source pair byte-selection order.",
+    "0x11d28e8 reads address12 for a null primary in raw mode0; the explicit low-address fixture supplies that word.",
+    "0x11d2d5c does not fetch the count field for sentinel, ASCII or unknown element types."
+  ],
+  "producerConsumerLaws": [
+    {
+      "name": "DMA wait",
+      "orderedEffects": [
+        "Resolve the actual driver handle and reject invalid handles with-20.",
+        "Require active state2, otherwise return-11 without hardware writes or IRQ release.",
+        "Read the channel status until busy bit0 clears; pending alone does not block this wait.",
+        "Release a nonzero installed interrupt through the owned WarpEngine body and clear its stored handle.",
+        "Restore channel state1 and return the interrupt-release status."
+      ]
+    },
+    {
+      "name": "owned request registry",
+      "law": "Initialization clears32 request bytes, fills the source fields and allocates a real registry entry. Allocation writes the signed slot and overflow flag. Release preserves the source cursor and hole-scanning rules."
+    },
+    {
+      "name": "request packet delivery",
+      "orderedEffects": [
+        "Read the current sender task through the owned ImagePlanes endpoint.",
+        "Build the actual16-byte packet with u16 event/u8 slot/u8 queue and three32-bit words.",
+        "Execute owned DebugStorage allocation, payload copy, queue send and release/error handling.",
+        "The consumer executes owned receive, registry lookup, code decoding and selected-state callback dispatch."
+      ]
+    },
+    {
+      "name": "owned callback tables",
+      "law": "Encoder initialization uses native immutable code/handler tables and typed owned callbacks, never original ROM application callback addresses. Generic request callers must supply their own owned tables. Model final patches do not assert native table addresses."
+    },
+    {
+      "name": "compact source bypass",
+      "law": "The source-supported compact mode0/mode4 bypass updates the actual state and posts2b10. Normal branches execute preview and compression, not a substituted completion event."
+    },
+    {
+      "name": "channel8 completion",
+      "orderedEffects": [
+        "Read and acknowledge the real hardware status.",
+        "Read processed-byte count only on the source ready branch.",
+        "Write size/error fields and compare the actual output-byte limit.",
+        "Invoke the registered source completion callback, which posts the real2b10 message.",
+        "The message consumer owns warp/channel cleanup, retry history and final caller notification."
+      ]
+    },
+    {
+      "name": "quality and retry",
+      "law": "Quality profile lookup is the JPEG-owned ROM algorithm. Owned polynomial scaling, clamped permutation-table quantization and retry history execute before owned warp/channel programming. Error/attempt fields determine retry versus final completion."
+    },
+    {
+      "name": "DMA channel lifecycle",
+      "orderedEffects": [
+        "Reserve the actual channel semaphore and allocate a driver handle under the owned critical section.",
+        "Write arbitration and transfer registers in source order.",
+        "Register the owned completion callback and start actual DMA after the retained cache service.",
+        "Completion invokes the client callback, clears the global handle and releases IRQ, handle and semaphore state."
+      ]
+    },
+    {
+      "name": "chunk writer",
+      "law": "Template measurement and chunk/padding arithmetic execute owned CPU bodies. Template serialization executes JPEG-owned bodies. Payload transfer uses the owned DMA lifecycle, followed by the actual task notification/wait protocol, not a CPU copy or a scripted application completion."
+    }
+  ],
+  "dependencies": [
+    {
+      "owner": "PipelineOutputJpeg",
+      "commit": "8c7004db",
+      "symbols": [
+        "initialize_quality_tables",
+        "find_quality_profile",
+        "select_raw_buffer",
+        "advance_raw_output",
+        "fill_jpeg_padding",
+        "finish_exif",
+        "relocate_jpeg",
+        "align_jpeg",
+        "write_template"
+      ],
+      "prefix": "xm1_pipeline_image_"
+    },
+    {
+      "owner": "PipelineWarpEngine",
+      "commit": "089840b5",
+      "symbols": [
+        "warp_initialize",
+        "warp_configure",
+        "warp_start",
+        "warp_cancel",
+        "warp_release",
+        "route_request",
+        "route_acquire",
+        "route_release",
+        "interrupt_acquire",
+        "interrupt_release",
+        "driver_allocate",
+        "driver_find",
+        "driver_clear",
+        "diagnostic_event"
+      ],
+      "prefix": "xm1_pipeline_image_"
+    },
+    {
+      "owner": "PipelineImagePlanes",
+      "symbols": [
+        "current_task",
+        "configure_task",
+        "wait_reserved",
+        "signal_reserved",
+        "wait_all",
+        "signal_current_zero",
+        "send_notification"
+      ],
+      "prefix": "xm1_pipeline_image_"
+    },
+    {
+      "owner": "PipelineDebugStorage",
+      "commits": [
+        "855ce67e",
+        "106dffaf",
+        "8381f45f"
+      ],
+      "symbols": [
+        "send_message",
+        "receive_message"
+      ],
+      "prefix": "xm1_pipeline_image_"
+    },
+    {
+      "owner": "PipelineBuffers",
+      "symbols": [
+        "xm1_develop_enter_critical",
+        "xm1_develop_leave_critical",
+        "xm1_buffers_configuration_byte"
+      ]
+    },
+    {
+      "owner": "PipelineObjectAllocator completed diagnostic group",
+      "commit": "d1185c90",
+      "symbols": [
+        "xm1_develop_append_stream_text"
+      ]
+    }
+  ],
+  "retainedSeams": [
+    {
+      "kind": "kernel cache service",
+      "address": "0x00042634",
+      "symbol": "xm1_encoder_cache",
+      "law": "Execute the installed cache maintenance ABI before hardware start."
+    },
+    {
+      "kind": "kernel interrupt mask service",
+      "address": "0x00042574",
+      "symbol": "xm1_encoder_save_irq",
+      "law": "Return the previous interrupt mask token."
+    },
+    {
+      "kind": "kernel interrupt restore service",
+      "address": "0x0004257c",
+      "symbol": "xm1_encoder_restore_irq",
+      "law": "Restore the exact saved mask token."
+    },
+    {
+      "kind": "MMIO device",
+      "address": "0xfff62000",
+      "law": "Channel8 control/status, size and quantization register reads/writes are real device ABI effects. Reset requires hardware acknowledgement and self-clearing control bits."
+    },
+    {
+      "kind": "MMIO device",
+      "address": "0xfff02000",
+      "law": "DMA channel and arbitration registers implement real device transfer/start/status ABI effects; payload completion is not synthesized by the CPU implementation."
+    }
+  ],
+  "scenarios": {
+    "publicationFunction": "encoderTaskPublications",
+    "scenarioFunction": "encoderTaskScenarios",
+    "signature": "ByteString -> (StagePublication -> Address) -> [StageScenario]",
+    "coverage": [
+      "DMA wait invalid handle/inactive state/idle completion/installed interrupt release",
+      "registry allocation/wrap/exhaustion/free",
+      "metadata controls and descriptors",
+      "quality cached/uncached and polynomial values",
+      "real producer packets and compact consumers",
+      "registered header callback and primary error completion",
+      "hardware completion to real queue packet",
+      "channel register packing",
+      "fully initialized DMA program and semaphore reservation",
+      "DMA completion notification",
+      "preview sampling and quantization clamps",
+      "template measurement and receive timeout",
+      "source low-address read premise"
+    ]
+  },
+  "preconditionsAndGaps": [
+    "No build, test, formatter, linter or native execution was run. Parent owns root registration, full caller cutover and cohesive verification.",
+    "No completed hardware-driven compression or DMA transfer qualification is claimed by these fixtures. StageScenario static memory cannot currently express channel8 reset acknowledgement followed by self-clearing control; an ordered hardware timeline law is required.",
+    "0x666458 leaves DMA record words+24,+28,+32,+36,+40 uninitialized. The first three are consumed by0x665ac4 as MMIO register values; link/priority are unused for control0x455400. The owned producer leaves MaybeUninit words unspecified and uses an A32 physical load at the device boundary. Their original physical stack bits are not defined by source and no equality or successful full-transfer fixture is claimed for them.",
+    "0x665540 invalid-handle source path can read MMIO through an undefined channel index. The owned implementation returns the documented invalid-handle status before that undefined read. Ordered equivalence for that undefined-data branch is not admitted.",
+    "Division operands, profile records, quantization permutation tables, source/padding spans and callback tables must satisfy the actual source consumer laws. Unknown or malformed input is not normalized into a successful job.",
+    "Fatal source branches remain non-returning: invalid quality profile/slot, invalid configuration bounds and explicit metadata halt. No missing-law success fallback is installed.",
+    "Generic request registry exhaustion is modeled at allocation/register output. Sending a truncated failed slot to a consumer requires a separate valid registry/consumer premise; no out-of-range callback success is asserted.",
+    "The completed allocator and diagnostic files fromd1185c90 remain unchanged. This continuation introduces only the four authorized EncoderTask files.",
+    "DMA wait0x665760 requires actual hardware to clear busy bit0. Busy-to-idle timeline qualification is not claimed by the static idle fixtures. Pause/abort stop0x665880 remains outside this assignment."
+  ]
+}

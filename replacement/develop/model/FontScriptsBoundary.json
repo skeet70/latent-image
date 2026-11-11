@@ -1,0 +1,131 @@
+{
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "sourceAccess": "Pinned C reading aids were obtained with git show from this commit, not the x70view working tree.",
+  "sourceStatus": "NONMATCHING drafts and exact stream helpers, with original A32 controlling ABI, branches, state layout and effects",
+  "sources": [
+    "decomp/firmwares/xm1-150/app/graphics/fonts/tu_01187034.c",
+    "decomp/firmwares/xm1-150/app/graphics/fonts/tu_0118bda0.c",
+    "decomp/firmwares/xm1-150/app/graphics/fonts/tu_0118dd48.c",
+    "decomp/firmwares/xm1-150/app/graphics/fonts/tu_01180290.c",
+    "decomp/firmwares/xm1-150/app/graphics/fonts/font_stream_helpers.c",
+    "decomp/firmwares/xm1-150/app/graphics/fonts/font_glyph_access.c",
+    "decomp/firmwares/xm1-150/app/graphics/fonts/font_script_classification.c"
+  ],
+  "image": {
+    "kind": "overlay44",
+    "base": "0x01100000",
+    "size": 705952,
+    "sha256": "2dfaa5d4bd025d68e991a329cc1377d5da16de656148dc4027d9a6bc0c349f5c",
+    "path": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin"
+  },
+  "routes": [
+    {"entry":"0x0118cff4","size":300,"sha256":"5d231112589cf2155b50446c646cfe76f999bf18525a48412bb0c6a8ecb2e986","symbol":"xm1_pipeline_image_font_dispatch_script"},
+    {"entry":"0x0119017c","size":304,"sha256":"286ed5b33c3657ba247088d57f4a8cc2c0e0638ea4d67a296e6e0f4bc2e38d19","symbol":"xm1_pipeline_image_font_detect_mode"},
+    {"entry":"0x011902ac","size":1324,"sha256":"1f0ddd0cb7127742a33034d565e277cd94819cd93e0f2834eb01fbf2550743a8","symbol":"xm1_pipeline_image_font_detect_script_run"},
+    {"entry":"0x0118ce2c","size":408,"sha256":"c7b46704e70d7d11378a254cc29a5d850a11f37ce1d9f3e5ff6129dabd5b0b21","symbol":"xm1_pipeline_image_font_select_row"},
+    {"entry":"0x0118af98","size":1420,"sha256":"6d9156d230e7eed2d7593e3f18b65599868ec890ee2b9249ef9d7e76d5d653f9","symbol":"xm1_pipeline_image_font_shape_basic"},
+    {"entry":"0x0118ad24","size":628,"sha256":"f5505011d4a0c468e6e2b30e05e6fb4f5dc06ef3c7fbf8ae31d7dfdea43b04b6","symbol":"xm1_pipeline_image_font_position_forward"},
+    {"entry":"0x01187c08","size":4304,"sha256":"cbbf3c5d73505d008d68056abfb3c9324b553f9772753b026181f7bbd5548a8a","symbol":"xm1_pipeline_image_font_shape_arabic","extentNote":"Includes the immutable joining tables beginning at 0x11887d8."},
+    {"entry":"0x01187494","size":20,"sha256":"88058794ff1387055e6e3be4c52d8a35cab3741be368141e7361a602cbcdcc90","symbol":"xm1_pipeline_image_font_position_arabic"},
+    {"entry":"0x011896cc","size":1948,"sha256":"362cff769c7835b91b9f142b62ab9b29c800765f7ba35a0333f2efa3b65150ba","symbol":"xm1_pipeline_image_font_shape_thai"},
+    {"entry":"0x01189e68","size":3400,"sha256":"96a4f6328f7a6f826881ba7fbb451ae0c4bc8d3348a40569b946098241b798e3","symbol":"xm1_pipeline_image_font_position_thai","extentNote":"Includes the immutable character and transition tables beginning at 0x118a98c."},
+    {"entry":"0x0118bda0","size":1188,"sha256":"c972f25eb9e0656bd04a7e31adcf68ebf4c23144929466b61853fbcb4dae8ecf","symbol":"xm1_pipeline_image_font_shape_hebrew"},
+    {"entry":"0x0118b6e4","size":728,"sha256":"2722c7900d8f997b1d31c757a407345e818a59f339cf07900b21e84d18ddb1e2","symbol":"xm1_pipeline_image_font_position_hebrew"},
+    {"entry":"0x0118caa8","size":40,"sha256":"cf26ec2045719e1c04368f15592b0f849a53769601fee3156aeb47692098756a","symbol":"xm1_pipeline_image_font_pack_count"},
+    {"entry":"0x0118cad0","size":56,"sha256":"f4ba301a95cbb781ed3ddcbba2a58c0ac81d12a7d1261d4e32f9f097953dca31","symbol":"xm1_pipeline_image_font_unpack_count"},
+    {"entry":"0x0118cbe8","size":56,"sha256":"4a6a7a1dcb3c0847cf48fce7d23cd462c7599c237aeb4bc6c05d5b623a8ff6ba","symbol":"xm1_pipeline_image_font_next_u16"},
+    {"entry":"0x0118cfc4","size":48,"sha256":"cf43cb7c88880a0699daade39e4b4f683970dc2292d3e3e4180e3e1cd99ace49","symbol":"xm1_pipeline_image_font_flags_for_mode"},
+    {"entry":"0x0118fba4","size":908,"sha256":"f72145d688123681a1d06003ee41674dd3830374b9ef9d2808abe4905c6288d6","symbol":"xm1_pipeline_image_font_classify_unicode"},
+    {"entry":"0x0118fadc","size":200,"sha256":"8c5c6f45f1049785e8b2206557253358c3290b45f61522bfa1dbc406ebd29ea3","symbol":"xm1_pipeline_image_font_private_character_class"},
+    {"entry":"0x01180428","size":124,"sha256":"b2c7c9391afbf46dcd2b62ee57946c25d524491618d9c0132c48d36a73e89c47","symbol":"xm1_pipeline_image_font_glyph_cell_width"},
+    {"entry":"0x0118d760","size":548,"sha256":"c93d9f5f13c4a44ebc48449e0c495309356f3ff9eb6e8546f81a55d132309476","symbol":"xm1_pipeline_image_font_position_metric_span"},
+    {"entry":"0x0118d6dc","size":132,"sha256":"f9e102603db495fa3957e245f531979c00463f57e47ca5b93a19a4b175839b07","symbol":"xm1_pipeline_image_font_store_main_run"},
+    {"entry":"0x0118d5ec","size":240,"sha256":"91752c3930b8dfc4cb01b87659e9dad68427e97df62b552931f05ad57c7519cb","symbol":"xm1_pipeline_image_font_compose_private_run"},
+    {"entry":"0x0118de64","size":168,"sha256":"4997a84214f8d62ece30c78778a88938ccdc1cd4e0bbeb4a736c0c8c61e85067","symbol":"xm1_pipeline_image_font_mirror_run"},
+    {"entry":"0x0118ff30","size":308,"sha256":"56e198dd5f99cc041840954c23649c94bfb2d92f707ed900ad54263d15634943","symbol":"xm1_pipeline_image_font_mirror_character"},
+    {"entry":"0x0118cb08","size":116,"sha256":"dbeb7d4d023b3d7b96e2f22872004f45b3aa5c5b91d820f5b1aa8845c470af63","symbol":"xm1_pipeline_image_font_find_glyph"},
+    {"entry":"0x011874d0","size":172,"sha256":"f2d9c61b51a247b2c9430d3191b2f88a738aa70b5666e844bf895a492bc4d224","symbol":"xm1_pipeline_image_font_read_run"},
+    {"entry":"0x0118768c","size":680,"sha256":"6f09477ba2d43472d0477be768d75359dd8ad19c8c20975f1f84bceccef1ecb3","symbol":"xm1_pipeline_image_font_find_ligature"},
+    {"entry":"0x01187934","size":724,"sha256":"c22e30a3361c2a72639007ffd10799c0345d84d45f8ec50af6198210b8731888","symbol":"xm1_pipeline_image_font_compose_arabic_character"},
+    {"entry":"0x01188cd8","size":528,"sha256":"6bf8c5cd023803cdee500def1af058c52ddf439b3caaf9e83bc0a0df856d4a43","symbol":"xm1_pipeline_image_font_thai_mark_offsets"},
+    {"entry":"0x01188fc8","size":456,"sha256":"f5ce876035b4bfd68f82cc45b0fae50f6201f36e23dd50edd9ed7c80ae66b4c0","symbol":"xm1_pipeline_image_font_thai_split_character"},
+    {"entry":"0x01189190","size":1340,"sha256":"694ffdaf0d62da3a167741a9de35af4e6759a58ed4eff7654fa8eea8a8ec7bf6","symbol":"xm1_pipeline_image_font_measure_thai_lines"},
+    {"entry":"0x0118baec","size":692,"sha256":"dec24860e88dc80ec0a6928a210f0e45d51af0394e30a2daf0558f2ecaed710d","symbol":"xm1_pipeline_image_font_prepare_hebrew_characters"}
+  ],
+  "extentCorrections": [
+    "The index's 1172-byte 118cff4 range includes unrelated engine setup beginning at 118d120. Only the 300-byte dispatcher is owned here.",
+    "The index's 1424-byte 11902ac range includes the unrelated integer parser beginning at 11907d8. The script-run body ends there.",
+    "The index's 44-byte 118d6dc range falls through into 118d708. The complete store-main-run routine occupies 132 bytes.",
+    "The index's 60-byte 1187494 range contains three separate twenty-byte entry thunks. Only the Arabic position entry is published here.",
+    "The index's 572-byte 1188cd8 range includes the 44-byte prefix of a following store-run entry. The offset algorithm and its literal occupy 528 bytes.",
+    "The Hebrew shape root calls 118baec at 118bdd0. Unreachable presentation-form composer 118c244 is not substituted for this normalization path."
+  ],
+  "scriptTable": {
+    "entry": "0x0118f97c",
+    "rows": [
+      {"script":1,"language":1,"shape":"0x0118af98","position":"0x0118ad24"},
+      {"script":2,"language":5,"shape":"0x01187c08","position":"0x01187494"},
+      {"script":3,"language":6,"shape":"0x011896cc","position":"0x01189e68"},
+      {"script":6,"language":9,"shape":"0x0118bda0","position":"0x0118b6e4"}
+    ],
+    "unmatchedPair": "The original dispatcher selects Basic, including for otherwise recognized script modes without a row.",
+    "phase": "Zero shapes, one positions, and other values return zero without invoking a row."
+  },
+  "layouts": {
+    "PositionedRun": ["start:u16","end:u16","script:u32","language:u32","advance:i32","height:i32","x:i32","y:i32","terminal_x:i32","terminal_y:i32"],
+    "CharacterMap": ["source_character:u16","original_code:u16","composed_index:u16","composed_code:u16","composed_count:u16","glyph_index:u16","glyph_code:u16","glyph_count:u16"],
+    "GlyphPlacement": ["character:u32","glyph_index:u16","packed_count:u16","pen_x:i32","pen_y:i32","x:i32","y:i32","advance:i32","reserved:i32","offset_x:i32","offset_y:i32","clip_kind:u32","clip_left:i32","clip_top:i32","clip_width:i32","clip_height:i32"],
+    "OutlineClip": ["kind:u32","left:i32","top:i32","width:i32","height:i32"],
+    "RasterClip": ["x:i32","top:i32","source_x:i32","source_top:i32","advance:i32","height:i32","enabled:u32","first:OutlineClip","second:OutlineClip"],
+    "outlineSpan": "Offset c2c is the byte length. Offset c30 is the allocated buffer pointer. Each append temporarily carries that pointer in engine.fe8 and copies it back even on error."
+  },
+  "numericAndStateLaws": [
+    "UTF-16 classification truncates the input to sixteen bits. Private character classification uses fixed arithmetic ranges and requires no registry or RAM globals.",
+    "A32 address, width and coordinate operations wrap modulo 2^32. Composed and glyph counters wrap modulo 2^16.",
+    "Count packing adds groups*256 modulo 65536 only when groups exceeds one. Unpacking treats 0x100 as a single-group count of 256; 0x101 becomes count one, group one.",
+    "Script-run scanning stops at absolute character offset fifty, not fifty characters after the supplied start. Neutral lookahead may scan beyond this cap.",
+    "Neutral leading text selects the supplied base direction's default mode. Bracket nesting affects the opposite-direction neutral boundary.",
+    "Row selection publishes cursor mutations from each comparison, including unsuccessful script and language comparisons.",
+    "Arabic pair composition consumes the following UTF-16 unit for the specified hamza and maddah pairs, then uses the original joining-category and state-transition tables.",
+    "Arabic dictionary version other than one disables substitutions and returns warning four after normalization and measurement. Short workspace returns zero before those effects.",
+    "Arabic ligature candidates execute real glyph-advance lookup. Contextual restart retains the accepted source length and searches the alternate joining state.",
+    "Thai sara-am expansion emits nikhahit followed by sara-aa and retains the original two-glyph packed mapping.",
+    "Thai measurement suppresses the advances of table-approved combining glyphs. Positioning retains each glyph's real advance and separately computes its mark origin.",
+    "Thai lower-mark clipping calls real stroke-padding, height, glyph-advance and right-overhang implementations in that order.",
+    "Thai raster clipping initializes all seventeen words. At 11898e0/11898e8 the five-word descriptor copy places top into word nine of the passed structure; the draft C omitted this copy.",
+    "Reachable Hebrew normalization replaces each mark in 0591..05c7 with dotted circle 25cc, excluding 05be, 05c0 and 05c6. It does not invoke the separate presentation-form composer.",
+    "Reverse positioning publishes reversed glyph codes while preserving original character associations. Hebrew marks do not advance the final pen.",
+    "Shape phase two skips measurement. Other phases measure, and render only when bit one is set.",
+    "Rendering uses the original inclusive glyph bounds. Even a zero-character span can select one stale glyph when both stored glyph bounds are zero.",
+    "Outline errors stop the glyph loop after publishing the updated buffer pointer. Bitmap draw return values are ignored by the script rows."
+  ],
+  "retainedEndpoints": [],
+  "retainedResources": [],
+  "ownedTables": [
+    {"entry":"0x011805e0","size":16,"sha256":"1b7b8a95c4fc48c5bac9a7c77c6efdcf6a1674054f50e248076d35ae0b1cf211","owned":"font_core::shaping::tables::MIRROR_PAIRS","role":"Three private open/close halfword pairs and the zero terminator."},
+    {"entry":"0x011887d8","size":256,"sha256":"7152ca401d5d0180a7d8f997034564eb41064041f859b0c4baa4efc688432ed1","owned":"font_core::shaping::tables::ARABIC_CLASSES","role":"Joining class byte of U+0600..U+06FF."},
+    {"entry":"0x011888d8","size":124,"sha256":"f0c6687d61a6ef3492b11f53204c9e73f59857d131dcd92547373aa32d463faa","owned":"font_core::shaping::tables::ARABIC_CATEGORIES","role":"Joining category word of classes 0..30."},
+    {"entry":"0x01188954","size":168,"sha256":"c94bd8fe94d1f7aaa8a6d562b754cf3219de97fc5944683cb18b8458f1cef736","owned":"font_core::shaping::tables::ARABIC_TRANSITIONS","role":"Update and state word pairs for previous states 0..4 and categories 0..3, plus the pair stock loads at index 20 for previous state 4 before a category-4 mark; that pair is the instruction words following the rows."},
+    {"entry":"0x0118a98c","size":224,"sha256":"0be6f1c9ca1c02af60ec32dc7b869c9fbc83bb8dc06fb489dd5adad870313173","owned":"font_core::shaping::tables::THAI_CLASSES","role":"Class flag halfword of U+0E00..U+0E6F."},
+    {"entry":"0x0118aa8c","size":289,"sha256":"a815a0f03cd4e73c65edfd5a1ec25d2a657388fa2ba7d7f1e2533f4426a83d53","owned":"font_core::shaping::tables::THAI_TRANSITIONS","role":"Seventeen-by-seventeen sequence check bytes."}
+  ],
+  "sharedOwnership": {
+    "DevelopTransactionOwnership.PipelineTransforms": "font_fdl::FontEngine supplies real fast metric, glyph-advance, Thai metric, stroke-padding, clipped outline append and clipped bitmap draw implementations. No arbitrary callback thunk is retained here.",
+    "DevelopTransactionOwnership.PipelineMotionSearch": "Owns the real raster loader/VM/flush path. The shared rectangle fixture is FontFdlScenarios.fontRectangleRasterInitial.",
+    "FontBuiltinBackends": "Owns the real BDF text parser, glyph metrics and packed bitmap renderer used by active script cases.",
+    "FontOutlineVm": "Owns the outline VM reached through the shared frontend, not any script-row implementation."
+  },
+  "modelIntegration": {
+    "publications": "FontScriptsScenarios.fontScriptsPublications :: [StagePublication]",
+    "scenarios": "FontScriptsScenarios.fontScriptsScenarios :: ByteString -> (StagePublication -> Address) -> [StageScenario]",
+    "imageArgument": "Authenticated overlay44 bytes based at 0x01100000.",
+    "modules": ["FontFdlScenarios","PipelineModel","Scenarios"],
+    "runtime": "Original cases must also receive the authenticated executable numeric runtime supplied by ImagePixelsScenarios.arithmeticInitial kernel0 image4. No arithmetic event echoes are supplied.",
+    "callbackBinding": "BDF and raster callback slots bind original entries to their semantic owned publications. Script methods call those real owned implementations.",
+    "textFixtures": "Valid authored BDF headers, per-codepoint glyph records, Unicode directory pages and literal A8/50/F8 bitmap rows run through the actual owned parser and renderer. These are explicitly authored fixtures, not claimed vendor font fragments or mocked metric callbacks.",
+    "textExpectations": "Packed bitmap expectations are independent geometric ink sets over nonzero sentinel buffers. They cover Basic, Arabic, Thai, Hebrew and Thai clipping.",
+    "rectangleFixture": "The valid authored FDL RectangleA fixture executes the real loader, raster VM and flush. Its analytic full-rectangle expectation is 1024 bytes of coverage fifteen. It is not relabeled as the stock IconE14d glyph.",
+    "activeCases": ["all four row measurements and normalization", "Arabic real dictionary substitution and contextual restart", "Thai combining widths and sara-am expansion", "Hebrew dotted-circle and mirror controls", "forward/reverse positions in both base directions", "wrapped pen arithmetic", "Thai decomposed placements", "all four packed bitmap render loops", "Thai nonzero clipping", "all four outline error propagation loops", "empty and missing-glyph controls", "original Basic dispatch default", "inclusive empty-span glyph edge"],
+    "qualification": "Source-only assignment. No build, native run, test, formatter or guest replay was performed by this worker. Parent qualification is required after all shared frontend and backend commits land."
+  }
+}

@@ -1,0 +1,82 @@
+{
+  "firmware": "xm1-150",
+  "decomp_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source": "decomp/firmwares/xm1-150/app/graphics/fonts/tu_011a5444.c",
+  "source_lines": [1698, 3206],
+  "overlay": "overlay44",
+  "overlay_source": "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin",
+  "overlay_load_address": 17825792,
+  "overlay_length": 705952,
+  "overlay_sha256": "2dfaa5d4bd025d68e991a329cc1377d5da16de656148dc4027d9a6bc0c349f5c",
+  "owned_functions": [
+    {
+      "address": 18515992,
+      "size": 10232,
+      "sha256": "a7e91c389dda938d6770bae0572cf1eb8b929c926f792a303eeb495eac20b8f0",
+      "symbol": "xm1_pipeline_image_font_raster_flush_scanlines",
+      "abi": "AAPCS A32: r0=VM address; r0=i32 result, zero on ordinary run capacity failure, one on completion",
+      "extent": "0x011a8818 inclusive through 0x011ab010 exclusive; final literal at 0x011ab00c belongs to this extent",
+      "byte_identity": "Read exactly 10232 original image bytes at file offset 690200 and SHA-256 matched the source index. Original A32 disassembly inspected; no execution performed."
+    }
+  ],
+  "publication_module": "FontScanlinesScenarios",
+  "publication_value": "fontScanlinesPublications",
+  "scenario_value": "fontScanlinesScenarios",
+  "native_module": "src/pipeline/font_scanlines.rs",
+  "shared_core": {
+    "module": "src/font_core/scanlines.rs",
+    "entry": "render(Config,&mut impl Storage)->Result<RenderStatus,Storage::Error>",
+    "bitmap_entry": "paint_span(Config,&mut impl BitmapStorage,Row,Span)->Result<(),BitmapStorage::Error>",
+    "storage": "Caller-owned rows, morphology scratch, bitmap bytes, bounds and run consumer. No addresses, allocator or physical VM layout in shared core.",
+    "errors": "Portable storage propagates typed buffer/arithmetic faults. Physical A32 adapter uses Infallible memory operations and the existing arithmetic runtime.",
+    "cutover": "Original A32 export delegates to this shared core. Style, morphology, shear, orientation and pixel math are not duplicated in the adapter.",
+    "portable_qualification": "Source-only. Constructor-to-mask-to-graphics integration and joint verification remain unrun."
+  },
+  "assembly": "FontScanlines_stock.S",
+  "vm_fields": {
+    "context": 8,
+    "clip_x_y": [68, 72],
+    "bitmap_origin_x_y": [76, 80],
+    "width_height": [84, 88],
+    "style": 92,
+    "expansion": 96,
+    "shear": 100,
+    "bitmap": 104,
+    "stride": 108,
+    "shear_axis_rotate_flags": [112, 113],
+    "bounds_min_x_min_y_max_x_max_y": [116, 120, 124, 128],
+    "output_kind": 132,
+    "row_count": 184,
+    "left_right_i16_rows": [188, 12988],
+    "morphology_left_right_i16_rows": [25788, 28988],
+    "first_row": 32844,
+    "run_table": "*(vm+8)+0x83b0"
+  },
+  "cpu_dependencies": [
+    {"address": "0x011a344c", "symbol": "xm1_pipeline_image_font_raster_fill_span", "owner": "PipelineMotionSearch", "abi": "(vm:u32,row:i32,first:i32,last:i32)->void"},
+    {"address": "0x011abdfc", "symbol": "xm1_pipeline_image_font_raster_merge_span", "owner": "PipelineMotionSearch", "abi": "(table:u32,row:i32,first:i32,last:i32)->i32"},
+    {"address": "0x011ac190", "symbol": "xm1_pipeline_image_font_raster_subtract_run", "owner": "PipelineMotionSearch", "abi": "(table:u32,row:i32,first:i32,last:i32)->i32"},
+    {"address": "0x0089aa90", "replacement": "__aeabi_idiv compiler arithmetic runtime", "abi": "(numerator:i32,denominator:i32)->i32", "stock_forwarding": false}
+  ],
+  "kernel_dependencies": [],
+  "device_dependencies": [],
+  "a32_corrections": [
+    "The Ghidra flag8 divisions show a literal zero denominator. Actual ldr r1,[r4,#0x58] establishes height as denominator, including 0x011a96ac..0x011a96b8. Column shear divides by width at 0x011a96f8..0x011a9700.",
+    "Bitmap lookup masks are bytes, not the draft int table reads: 0x80,0x40,0x20,0x10,0x08,0x04,0x02,0x01 at 0x011ab9f4.",
+    "Style2 ignores run insertion failure and returns one. Its unsheared run-output tail calls merge_span(row,0,0). These behaviors are retained, not repaired.",
+    "Style2 row shear inserts into the run table even when output_kind selects bitmap. Column shear is not applied by style2."
+  ],
+  "source_domain_limits": [
+    "Original code does not validate VM pointers, bitmap capacity, row-array bounds, expansion, width or height. Callers must supply accessible original-layout storage.",
+    "A reached division with zero width or height crosses the arithmetic runtime divide-by-zero boundary. No synthetic success or invented quotient is supplied here; compiler runtime and original runtime qualification remain required.",
+    "Ghidra C is NONMATCHING. Original A32, not undefined draft locals or pointer types, determines behavior."
+  ],
+  "scenario_contract": "Independent literal nonzero two-row spans and bitmap bytes for all eight styles, row and column shear, rotation, clipping/origins, zero/partial/exact run capacity, style2 failure suppression, empty input and unknown styles. All application CPU helper calls execute source or owned functions, with no scripted calls or code-pointer table.",
+  "qualification": {
+    "build": "unrun",
+    "tests": "unrun",
+    "format": "unrun",
+    "original_execution": "unrun",
+    "native_execution": "unrun"
+  }
+}

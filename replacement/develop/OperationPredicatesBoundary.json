@@ -1,0 +1,201 @@
+{
+  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "firmware": "X-M1 1.50 image5",
+  "image_base": "0x00bf1a00",
+  "image_sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+  "qualification": "unrun",
+  "aapcs": "(context: *mut u8, group: u32) -> u32; exact original return word, always 0 or 1",
+  "null_predicate": {
+    "source_address": "0x00000000",
+    "variant": "Always"
+  },
+  "table": {
+    "selectors": "0x00ea55e8",
+    "selector_stride": 12,
+    "rule_stride": 20,
+    "predicate_offset": 16,
+    "routing": "Parent decodes immutable typed Predicate values; no runtime source-address dispatch."
+  },
+  "predicates": [
+    {
+      "source_address": "0x00ea256c",
+      "end_exclusive": "0x00ea25bc",
+      "byte_length": 80,
+      "sha256": "3a3d09f1a763badf8377366d4e5f22da962e8d6cb67069d034013ead146cae79",
+      "variant": "FormatSplit",
+      "symbol": "xm1_develop_predicate_format_split"
+    },
+    {
+      "source_address": "0x00ea25bc",
+      "end_exclusive": "0x00ea2628",
+      "byte_length": 108,
+      "sha256": "0b6967ed4807f756d0294aa7f733c27202ae6e45876a37197a04c23346503cac",
+      "variant": "FormatFamily",
+      "symbol": "xm1_develop_predicate_format_family"
+    },
+    {
+      "source_address": "0x00ea2628",
+      "end_exclusive": "0x00ea2664",
+      "byte_length": 60,
+      "sha256": "941081389f6527b3a8c06773b715f57c5630cd554fa956797bf0ea9eb61c2336",
+      "variant": "PrimaryPlaneEnabled",
+      "symbol": "xm1_develop_predicate_primary_plane_enabled"
+    },
+    {
+      "source_address": "0x00ea2664",
+      "end_exclusive": "0x00ea26a0",
+      "byte_length": 60,
+      "sha256": "489fb1a5748c7257c3f2db47288666f826e20308be025a7c01f5abf31b3f960e",
+      "variant": "SecondaryPlaneEnabled",
+      "symbol": "xm1_develop_predicate_secondary_plane_enabled"
+    },
+    {
+      "source_address": "0x00ea26a0",
+      "end_exclusive": "0x00ea2794",
+      "byte_length": 244,
+      "sha256": "82f7d1713360066d13cd37c402d4230db673e05b4cc9f8c010105932af98e06e",
+      "variant": "CaptureOperation",
+      "symbol": "xm1_develop_predicate_capture_operation"
+    },
+    {
+      "source_address": "0x00ea2794",
+      "end_exclusive": "0x00ea2818",
+      "byte_length": 132,
+      "sha256": "50841e7767d49aeebebe9e19ec5f32af5bfa37612a8d16caa39f06e4391bee98",
+      "variant": "ObjectOperation",
+      "symbol": "xm1_develop_predicate_object_operation"
+    },
+    {
+      "source_address": "0x00ea2818",
+      "end_exclusive": "0x00ea2890",
+      "byte_length": 120,
+      "sha256": "ff7790e39e8a3efde2b4bda26bccd3e7877cc0b82ca9f525be34d8dc1efd4b9f",
+      "variant": "AlternateObjectOperation",
+      "symbol": "xm1_develop_predicate_alternate_object_operation"
+    },
+    {
+      "source_address": "0x00ea2890",
+      "end_exclusive": "0x00ea28e8",
+      "byte_length": 88,
+      "sha256": "a83ad79b880dce654bca6d5ea229366fbc05a7d814051c63cfc81d7559e18439",
+      "variant": "HalfwordModeSplit",
+      "symbol": "xm1_develop_predicate_halfword_mode_split"
+    },
+    {
+      "source_address": "0x00ea28e8",
+      "end_exclusive": "0x00ea2900",
+      "byte_length": 24,
+      "sha256": "aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543",
+      "variant": "Never",
+      "symbol": "xm1_develop_predicate_never"
+    },
+    {
+      "source_address": "0x00ea2900",
+      "end_exclusive": "0x00ea2964",
+      "byte_length": 100,
+      "sha256": "57a144745f4ea34a1e41d7600d3da64f25df0f48b48d56e8527f809c6feca4f5",
+      "variant": "ProcessingOperation",
+      "symbol": "xm1_develop_predicate_processing_operation"
+    },
+    {
+      "source_address": "0x00ea2964",
+      "end_exclusive": "0x00ea2990",
+      "byte_length": 44,
+      "sha256": "d355ee40d436734982028887624d18625fc1f1babcaee34b3c4b6e7e3e843480",
+      "variant": "FeatureEnabled",
+      "symbol": "xm1_develop_predicate_feature_enabled"
+    },
+    {
+      "source_address": "0x00ea2990",
+      "end_exclusive": "0x00ea29b8",
+      "byte_length": 40,
+      "sha256": "8030e964556d178da58c85e23b237892f2190e31dea880c75dd3b0fffeb83229",
+      "variant": "FeatureDisabled",
+      "symbol": "xm1_develop_predicate_feature_disabled"
+    },
+    {
+      "source_address": "0x00ea29b8",
+      "end_exclusive": "0x00ea2a1c",
+      "byte_length": 100,
+      "sha256": "192d58b867e4ca25d384b128042269dbba79d2728175b5c22ed1af04a64e8c6c",
+      "variant": "CorrectionDisabled",
+      "symbol": "xm1_develop_predicate_correction_disabled"
+    },
+    {
+      "source_address": "0x00ea2a1c",
+      "end_exclusive": "0x00ea2a88",
+      "byte_length": 108,
+      "sha256": "766d82e9229eb4919e5a16cf678235dc3ef8b45cd834a4f09249c07213de8e3d",
+      "variant": "CorrectionEnabled",
+      "symbol": "xm1_develop_predicate_correction_enabled"
+    },
+    {
+      "source_address": "0x00ea2a88",
+      "end_exclusive": "0x00ea2ab0",
+      "byte_length": 40,
+      "sha256": "9a9f79a09b4befdb3bc349158e47e8e0cda75efb44932438a8d6fd68f441a6eb",
+      "variant": "AlternateFeatureDisabled",
+      "symbol": "xm1_develop_predicate_alternate_feature_disabled"
+    },
+    {
+      "source_address": "0x00ea2ab0",
+      "end_exclusive": "0x00ea2afc",
+      "byte_length": 76,
+      "sha256": "44f904411effc59da6c5c2296bd7d2948e2fc569e069d5caef7b262626c3e5e2",
+      "variant": "GroupModeSplit",
+      "symbol": "xm1_develop_predicate_group_mode_split"
+    },
+    {
+      "source_address": "0x00ea2afc",
+      "end_exclusive": "0x00ea2b4c",
+      "byte_length": 80,
+      "sha256": "ddf6ae07ca028c85ecf3a1f727ada022223637b73a9bc61705d55262c6435a87",
+      "variant": "OutputModeSplit",
+      "symbol": "xm1_develop_predicate_output_mode_split"
+    }
+  ],
+  "read_laws": [
+    "All 17 predicates leave context, frames, pointed objects and caller memory unchanged. No external effects or error callbacks.",
+    "The Never variant performs no reads. Group mismatches avoid all frame reads except CaptureOperation, ObjectOperation, AlternateObjectOperation and ProcessingOperation, which evaluate canonical current operation first.",
+    "Format predicates read frame+0x530 only for matching groups. Plane predicates read frame+0x3228 then pointed+0x110 only for matching groups. HalfwordModeSplit reads exactly unsigned halfword frame+0x1682.",
+    "Operation predicates evaluate canonical e93760/e9371c getter before group filtering and reload context frame afterward. Getter reads context+4 first; kind7 selects frame+0x38; otherwise frame+0x4b4 selects frame+0 for mode29, or frame+4*(context+0x34-11) with wrapping A32 address arithmetic.",
+    "CaptureOperation reads mode578, then short-circuits 4a8/550 or 5a8/4a8/550/4ac/614/61c in original order. ObjectOperation reads 578 then63c then byte19b4; alternate omits63c. ProcessingOperation reads4a8.",
+    "Feature predicates read word2fb8 or2fbc. Correction predicates read frame+3098 then pointed+58; if equal1 read frame+4b4, then5b8 only mode25 or5b4 only mode26.",
+    "GroupModeSplit and OutputModeSplit read63c only for accepted group candidates. Every published predicate result is canonical, including rsbs/movlo zero tests.",
+    "Repeated calls re-read mutable inputs. There is no cached frame or policy result across calls and no CPU FFI boundary inside these predicates."
+  ],
+  "recursive_helpers": [
+    {
+      "address": "0x00e93760",
+      "end_exclusive": "0x00e93770",
+      "byte_length": 16,
+      "sha256": "242644782b9cfab67928c6e1a1ef586f0bce15ea0e829a988d6003edebe24357",
+      "owner": "canonical Framework xm1_develop_current",
+      "closure": "0x00e9371c",
+      "classification": "owned software, not retained hardware"
+    },
+    {
+      "address": "0x00e9371c",
+      "end_exclusive": "0x00e93760",
+      "byte_length": 68,
+      "sha256": "16eabdfaec572419f1d022004c293e3a7028e12e9c0cd9b0d94b9eb459161d81",
+      "owner": "canonical Framework xm1_develop_current",
+      "classification": "owned software, not retained hardware"
+    }
+  ],
+  "source_evidence": {
+    "path": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea1838.c",
+    "definitions": [
+      "FUN_00ea26a0",
+      "FUN_00ea2794",
+      "FUN_00ea2818",
+      "FUN_00ea2900"
+    ],
+    "unpublished_leaves": "Remaining 13 leaf definitions are absent from pinned source index; original image5 A32 extents are authoritative.",
+    "nonmatching": [
+      "0x00ea26a0",
+      "0x00ea2900"
+    ],
+    "precedence": "Original image5 A32, including unsigned wrapping range comparisons, overrides NONMATCHING source."
+  }
+}

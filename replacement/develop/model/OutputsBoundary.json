@@ -1,0 +1,108 @@
+{
+  "family": "outputs",
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "sourceFile": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e9bc38.c",
+  "image": {"base": "0xbf1a00", "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"},
+  "qualification": "source only; no build, native execution, proof, or historical qualification rebinding",
+  "sourceBodies": [
+    {"address":"0xe9c560","size":476,"lines":[481,563],"symbol":"xm1_develop_pipeline_prepare_copy","stage":"PrepareCopy(Channel)","commands":[0,1]},
+    {"address":"0xe9c4ac","size":180,"lines":[453,478],"symbol":"xm1_develop_pipeline_correct_planes","stage":"CorrectPlanes","commands":[2]},
+    {"address":"0xe9c2d8","size":468,"lines":[400,451],"symbol":"xm1_develop_pipeline_read_components","stage":"ReadComponents","commands":[3]},
+    {"address":"0xe9c274","size":100,"lines":[378,397],"symbol":"xm1_develop_pipeline_apply_levels","stage":"ApplyLevels","commands":[4]},
+    {"address":"0xe9c0dc","size":408,"lines":[302,376],"symbol":"xm1_develop_pipeline_finalize_capture","stage":"FinalizeCapture(Channel)","commands":[5,6]},
+    {"address":"0xe9bd88","size":696,"lines":[139,270],"symbol":"xm1_develop_pipeline_calibrate","stage":"Calibrate(ImageDomain,Channel)","commands":[7,8,9,10]},
+    {"address":"0xe9bc38","size":336,"lines":[77,136],"symbol":"xm1_develop_pipeline_prepare_secondary","stage":"PrepareSecondary(Channel)","commands":[11,12]},
+    {"address":"0xe9c040","size":156,"lines":[273,299],"symbol":"xm1_develop_pipeline_merge_auxiliary","stage":"MergeAuxiliary","commands":[13]},
+    {"address":"0xe9d03c","size":552,"lines":[861,954],"symbol":"xm1_develop_pipeline_configure_output_geometry","stage":"ConfigureOutputGeometry(OutputKind)","commands":[42,43,44,45],"arguments":[2,4,1,0]},
+    {"address":"0xe9cde0","size":508,"lines":[791,846],"symbol":"xm1_develop_pipeline_divide_raw","stage":"DivideRaw","commands":[54]},
+    {"address":"0xe9cbd4","size":524,"lines":[732,788],"symbol":"xm1_develop_pipeline_add_raw","stage":"AddRaw","commands":[55]},
+    {"address":"0xe9c9d8","size":508,"lines":[664,729],"symbol":"xm1_develop_pipeline_resize_raw_review","stage":"ResizeRawReview","commands":[76]},
+    {"address":"0xe9d7d8","size":936,"lines":[1177,1282],"symbol":"xm1_develop_pipeline_resize_display","stage":"ResizeDisplay","commands":[77]},
+    {"address":"0xe9d4a4","size":820,"lines":[1080,1174],"symbol":"xm1_develop_pipeline_resize_review","stage":"ResizeReview","commands":[78]},
+    {"address":"0xe9c73c","size":668,"lines":[566,661],"symbol":"xm1_develop_pipeline_resize_thumbnail","stage":"ResizeThumbnail","commands":[79]},
+    {"address":"0xe9ec7c","size":3652,"lines":[1754,2281],"symbol":"xm1_develop_pipeline_select_crop","stage":"SelectCrop","commands":[87]},
+    {"address":"0xe9ffcc","size":552,"lines":[2389,2477],"symbol":"xm1_develop_pipeline_match_points","stage":"MatchPoints","commands":[92]},
+    {"address":"0xea07ec","size":328,"lines":[2606,2659],"symbol":"xm1_develop_pipeline_match_triangles","stage":"MatchTriangles","commands":[93]}
+  ],
+  "localApplicationClosure": [
+    {"address":"0xe9cfdc","size":96,"lines":[848,858],"implementation":"configure_output_geometry","law":"Load indirect frame+3098 word+cc, publish frame+2ff0, then recompute frame and publish frame+276c from original output kind and refreshed frame+2ff0."},
+    {"address":"0xe9d264","size":576,"lines":[957,1077],"implementation":"rotate_review","law":"Grouped 4+3 descriptor loads and stores; orientation groups 2..4,5..7,8..10 select rotations 3,2,1; object close/open order depends on direct-source flag; publish review descriptor after rotation."},
+    {"address":"0xe9e1c4","size":2744,"lines":[1493,1751],"implementation":"publish_motion_debug","classification":"application CSV construction, not storage or hardware","buffer":"0x5210cf60","header":"0xea230c","law":"Snapshot all 22 fields before formatting; output +48 and +4c immediately after +24; +40 is an unsigned byte; read count configuration on each loop condition; increment row index modulo 256."},
+    {"address":"0xe9fac0","size":1292,"lines":[2284,2386],"implementation":"publish_point_debug","classification":"application CSV construction","buffer":"0x437cee00","headers":["0xea23d4","0xea23f8"],"law":"Publish offsetX,offsetY,match_point summary before point rows; refresh indirect matching address for every field and loop condition."},
+    {"address":"0xea01f4","size":1528,"lines":[2480,2603],"implementation":"publish_triangle_debug","classification":"application CSV construction","buffer":"0x52c91980","header":"0xea242c","law":"Signed maximum of two counts; zero values occupy one byte; absent groups occupy four bytes; triangle key occupies eleven bytes when nonzero."},
+    {"address":"0xeb0578","size":136,"sourceFile":"decomp/firmwares/xm1-150/app/imaging/pipeline/processing_dimension_profiles.c","lines":[66,83],"implementation":"outputs_format","status":"exact","law":"Negative signed integer uses unsigned magnitude at destination+1 with width-1; write minus only after nonnegative unsigned formatter return."}
+  ],
+  "constantApplicationLaws": [
+    {"address":"0xe54c6c","sourceFile":"decomp/firmwares/xm1-150/app/capture/reccont/tu_00e52950.c","lines":[1408,1411],"status":"exact","result":0,"effect":"No writes; FinalizeCapture always skips and capture-domain calibration uses debug kinds 16/17."},
+    {"address":"0xe55164","sourceFile":"decomp/firmwares/xm1-150/app/capture/reccont/tu_00e52950.c","lines":[1583,1586],"status":"exact","result":1},
+    {"address":"0xe5517c","sourceFile":"decomp/firmwares/xm1-150/app/capture/reccont/tu_00e52950.c","lines":[1588,1591],"status":"exact","result":1},
+    {"address":"0xe92b28","size":24,"status":"exact and original A32 confirmed","result":0,"effect":"MergeAuxiliary always skips."}
+  ],
+  "ownedFramework": {"plan":"0xe91810","objectLookup":"0xe93558","objectDispatch":"0xe93534","callback":"0xe93664","store":"0xe9390c","transition":"0xe93bdc","begin":"0xe93c34","complete":"0xe93d0c","precondition":"0xe92918"},
+  "sharedCommonDependencies": [
+    {"address":"0xe92b28","adapter":"outputs_output_enabled","ownedSymbol":"xm1_develop_buffer_policy_disabled","abi":"()->u32; original caller context register ignored"},
+    {"address":"0xe92b40","adapter":"outputs_prepare_geometry","ownedSymbol":"xm1_develop_output_matches","abi":"(context,image,mode,kind)->u32"},
+    {"address":"0xe91a48","adapter":"outputs_select_source","ownedSymbol":"xm1_develop_descriptor_list","abi":"(context,imageOut,directOut)->u32; caller ignores return"},
+    {"address":"0xe92d68","adapter":"outputs_open_object","ownedSymbol":"xm1_develop_open_object","abi":"(context,group,kind,enabled)->u32; caller ignores return"},
+    {"address":"0xe92dd4","adapter":"outputs_close_object","ownedSymbol":"xm1_develop_close_object","abi":"(context,group,kind)->u32; caller ignores return"},
+    {"address":"0xe9267c","adapter":"outputs_expand_views","ownedSymbol":"xm1_develop_expand_planes","abi":"(context,input,output,template,u8 count,channel)->void"},
+    {"address":"0x734540","adapter":"outputs_width","ownedSymbol":"xm1_develop_lookup_width","abi":"(profile,aspect)->u32"},
+    {"address":"0x73469c","adapter":"outputs_height","ownedSymbol":"xm1_develop_lookup_height","abi":"(profile,aspect)->u32"}
+  ],
+  "sharedImageFrontendDependencies": [
+    {"address":"0xe5277c","adapter":"outputs_copy_request","classification":"application request constructor","sourceFile":"reccont_capture_stamp.c","lines":[190,206],"status":"exact","downstream":"record_current_process_planes"},
+    {"address":"0xe54c84","adapter":"outputs_calibration_request","classification":"application calibration request construction","sourceFile":"tu_00e52950.c","lines":[1414,1581],"status":"nonmatching"},
+    {"address":"0xe523d4","adapter":"outputs_secondary_request","classification":"application output request construction","sourceFile":"tu_00e50c74.c","lines":[705,744],"status":"nonmatching"},
+    {"address":"0xe544b0","adapter":"outputs_component_request","classification":"application raw component request construction","sourceFile":"tu_00e52950.c","lines":[1170,1258],"status":"nonmatching"},
+    {"address":"0xe54870","adapter":"outputs_level_request","classification":"application profile and level computation","sourceFile":"tu_00e52950.c","lines":[1279,1406],"status":"nonmatching"},
+    {"address":"0xe5716c","adapter":"outputs_correct_request","classification":"application image correction request","sourceFile":"tu_00e563e0.c","lines":[639,662],"status":"nonmatching"},
+    {"address":"0xe53ed4","adapter":"outputs_debug_image","classification":"application configuration-gated debug publication","sourceFile":"reccont_capture_geometry.c","lines":[75,94],"status":"exact"},
+    {"address":"0xe51d5c","adapter":"outputs_output_request","classification":"application output request construction","sourceFile":"tu_00e50c74.c","lines":[659,702],"status":"nonmatching"},
+    {"address":"0xe4fd5c","adapter":"outputs_scale_request","classification":"application scale request and descriptor transformation","sourceFile":"tu_00e4ed00.c","lines":[705,794],"status":"nonmatching"},
+    {"address":"0xe4f950","adapter":"outputs_add_raw_request","classification":"application plane arithmetic request construction","sourceFile":"tu_00e4ed00.c","lines":[566,595],"status":"nonmatching"},
+    {"address":"0xe4f898","adapter":"outputs_divide_raw_request","classification":"application configuration and plane arithmetic request construction","sourceFile":"tu_00e4ed00.c","lines":[540,563],"status":"nonmatching"},
+    {"address":"0xe50010","adapter":"outputs_resize","classification":"application software-scaler request construction and task priority protocol","sourceFile":"reccont_capture_stamp.c","lines":[53,64],"status":"exact"},
+    {"address":"0xe500f0","adapter":"outputs_rotate","classification":"application software-rotation request construction","sourceFile":"reccont_capture_stamp.c","lines":[66,88],"status":"exact"},
+    {"address":"0xe4fa90","adapter":"outputs_copy_rows","classification":"application image row copy","sourceFile":"reccont_capture_completions.c","lines":[73,89],"status":"exact"},
+    {"address":"0xe547e0","adapter":"outputs_store_levels","classification":"application triplet storage","sourceFile":"tu_00e52950.c","lines":[1260,1276],"status":"exact","ownedSymbol":"xm1_pipeline_image_store_triplets"},
+    {"address":"0xe8ef98","adapter":"outputs_prepare_display","classification":"application software image fill","sourceFile":"../frame/tu_00e8e3b0.c","lines":[450,489],"status":"nonmatching"},
+    {"address":"0xe5f104","adapter":"outputs_match_points","classification":"application matching request construction","sourceFile":"tu_00e5c8e0.c","lines":[1147,1234],"status":"nonmatching"},
+    {"address":"0xe5adcc","adapter":"outputs_finish_points","classification":"application point filtering and motion algorithm invocation","sourceFile":"tu_00e5a7a0.c","lines":[295,373],"status":"nonmatching","downstream":["0xdaeba8","0xdaf000"]},
+    {"address":"0xe5ac04","adapter":"outputs_match_triangles","classification":"application triangle algorithm request construction","sourceFile":"tu_00e5a7a0.c","lines":[220,292],"status":"nonmatching","downstream":["0xdae42c"]},
+    {"address":"0xe53d00","adapter":"outputs_write_file","classification":"application filename construction and async storage protocol, not retained storage device","sourceFile":"tu_00e52950.c","downstream":["storage_open_file_async","storage_write_file_async","storage_entry_async","dispatch_wait_current_all","mutex 0x66"]}
+  ],
+  "ownedDiagnostics": [
+    {"address":"0x726658","ownedSymbol":"xm1_develop_append_stream_text","law":"Task truncates to u8; disabled guard at 0x40a5b5ec produces no external calls."},
+    {"address":"0xeb0cbc","ownedSymbol":"xm1_pipeline_image_trace_begin","law":"Forward operation unchanged; disabled guard at 0x4089ebec produces no external calls."},
+    {"address":"0xeb0ccc","ownedSymbol":"xm1_pipeline_image_trace_end","law":"Operation OR 0x10000000; disabled guard at 0x4089ebec produces no external calls."}
+  ],
+  "ownedRuntime": [
+    {"address":"0x723cb8","ownedSymbol":"xm1_pipeline_image_current_task","model":"ImagePlanesScenarios.currentTaskCalls"},
+    {"address":"0x724638","ownedSymbol":"xm1_pipeline_image_signal_current_zero","model":"ImagePlanesScenarios.signalCurrentCalls"},
+    {"address":"0x69f8fc","ownedSymbol":"xm1_buffers_configuration_byte","model":"BuffersScenarios.configurationInitial"},
+    {"address":"0xe44dbc","ownedSymbol":"xm1_develop_object_entry","model":"BuffersScenarios.objectLookupInitial and criticalCalls"},
+    {"address":"0x722218","ownedSymbol":"xm1_pipeline_image_storage_decimal","role":"unsigned decimal formatting"},
+    {"address":"0x722054","ownedSymbol":"debug_storage::copy","role":"byte copy"}
+  ],
+  "retainedServices": [
+    {"address":"0x42188","role":"notification trace sink"},
+    {"address":"0xe4eca8","role":"existing framework stage-active seam"}
+  ],
+  "a32Corrections": [
+    "Raw addition uses zero-extended u16(10*context.half(24)); division uses that truncated product masked with 0xfffe.",
+    "Every manual operation object dispatch sets fourth argument to 1, including call sites whose draft C omits it.",
+    "Display crop uses logical right shift for unsigned horizontal subtraction, not signed arithmetic shift.",
+    "Motion CSV includes pitch and yaw after center-coordinate fields although NONMATCHING C does not emit them.",
+    "Descriptor copies use four loads, four stores, three loads, three stores."
+  ],
+  "missingLaws": [
+    "Shared image frontend ownership must close request constructors before linking; these adapters must not be rebound to their stock application addresses.",
+    "Point and triangle algorithm results and their state writes require real lower algorithm laws, not success-return interception of the request constructors.",
+    "Debug filename creation and async storage callbacks/waits require the owned shared image frontend writer and its native service laws.",
+    "Full active hardware/component, calibration, scaler, matching, rotation and debug-publication scenarios require the shared frontend service fixture laws. Existing outputs scenarios cover native no-work frontends, public stage active bypass, disabled/invalid modes, motion crop boundaries, cancellation and callback frame replacement.",
+    "Outputs_stock.S contains confirmed named-symbol branches to the common and image frontend owners. It contains no stock application address thunks. Source symbols are bound, but downstream image algorithm implementation and active endpoint model admission remain integration prerequisites.",
+    "Outputs scenarios compose real object registry, configuration-memory, current-task and signal CPU laws. No interception remains at e44dbc/69f8fc/723cb8/724638/726658/eb0cbc/eb0ccc. Additional source-native cases compose active trace-ring writes and active text/calendar state effects.",
+    "Inherited Scenarios.beginCalls/completeCalls still describe legacy e93140/e92e30 operation-object and e4eca8 stage-active seams. Final no-stock-CPU admission requires the parent-owned constructor models for those boundaries; Outputs does not claim them as hardware services."
+  ],
+  "historicalReceipt": {"commit":"17afdfa9","scope":"original R12 qualification only","rebound":false}
+}

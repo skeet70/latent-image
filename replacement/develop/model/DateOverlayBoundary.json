@@ -1,0 +1,133 @@
+{
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "qualification": "Source and original A32 inspection. No build, test, formatter, linter or native execution performed.",
+  "images": [
+    {"name":"image4","base":"0x61c400","length":2631680,"sha256":"f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"},
+    {"name":"image5","base":"0xbf1a00","length":5185120,"sha256":"3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"},
+    {"name":"overlay44","base":"0x1100000","plainFileOffset":0,"length":705952,"sha256":"2dfaa5d4bd025d68e991a329cc1377d5da16de656148dc4027d9a6bc0c349f5c"}
+  ],
+  "extents": [
+    {"stockEntry":"0xe51490","size":968,"extentSha256":"96423c21425f886c07980142a7c1874cadb9ca618fcc55dbb4a808dbfc305949","ownedSymbol":"xm1_pipeline_image_transform_output","abi":"u32(frame,plane,alternate,programWord)"},
+    {"stockEntry":"0xe50ea4","size":532,"extentSha256":"e7ace5d5f68e4e7769ac6e0eb0a2340a5aad016e537c2166a71202ddf694f206","ownedSymbol":"xm1_pipeline_image_prepare_text","abi":"u32(request,firstUTF16,secondUTF16,orientation,result)"},
+    {"stockEntry":"0xe510b8","size":984,"extentSha256":"3b0ef4e36224776c4ad1e36ab1be3103074a74a3b1a53604a21e44556f2619e1","ownedSymbol":"xm1_pipeline_image_apply_stamp","abi":"u32(plane,orientation,alternate,aspect,request)"},
+    {"stockEntry":"0xebdd68","size":4,"extentSha256":"02681191bf96faf103465102a1caa4e763d257a7c95b469ce0c84651413c4354","ownedSymbol":"xm1_pipeline_image_stamp_rectangle","abi":"u32(source,destination,packedDimensions,packedHeights,rotation,left,right,top,bottom)"},
+    {"stockEntry":"0xebdd6c","size":224,"extentSha256":"06685c196b0666792053ef0918c53023d06ec22fa9c8cb9ba5b389d2be1153fc","implementation":"Inlined alternate-entry rectangle descriptor body; only entry ebdd68 has ordinary original nine-argument call ABI."},
+    {"stockEntry":"0x6e1884","size":1612,"extentSha256":"1d251b98e45f8417ee1630030997ffdaa3d1c74356e027d07964e12d4084be18","ownedSymbol":"xm1_pipeline_image_stamp_packed","abi":"u32(PackedStamp*)","returnLaw":"Preserves r0 from final cache-write primitive."},
+    {"stockEntry":"0x1163188","size":104,"extentSha256":"702490dcad78476f5025c851b1a72085d21e1cc1bec8be7c0f19e54147f0a263","ownedSymbol":"xm1_pipeline_image_queue_text","abi":"void(TextRequest*)"},
+    {"stockEntry":"0x11631f0","size":340,"extentSha256":"6f430c105526672ca8c3a56b0079afff78a76da629c459cce291c6fca324d990","ownedSymbol":"xm1_pipeline_image_publish_text","abi":"void()"},
+    {"stockEntry":"0x1113a9c","size":304,"extentSha256":"488ce49a9073a688adce28187a4510f75ca6f9d468d1c449b370b2899354147b","ownedSymbol":"xm1_pipeline_image_measure_text","abi":"void(TextRequest*,StampResult*)"},
+    {"stockEntry":"0xe4e568","size":64,"extentSha256":"6067e99f362c1059e44ec939611b74b520bdebb5b39a0839ac6c929c93d219d2","ownedSymbol":"xm1_pipeline_image_date_notify","abi":"void(status,width,height)"},
+    {"stockEntry":"0x723ce8","size":160,"extentSha256":"7983ca8534cbb4802db6c83a8e42c6e94872ca39992ac9c0e306a8fdc23bfe8e","ownedSymbol":"xm1_pipeline_image_date_delay","abi":"i32(ticks)"},
+    {"stockEntry":"0xdb6804","size":216,"extentSha256":"fe3e07112039fedaa299c286239c36c83c000f3c31d5a3fe86a178568ece131d","ownedSymbol":"xm1_pipeline_image_date_post","abi":"void(event,length,data,sequence)"},
+    {"stockEntry":"0xdb6464","size":128,"extentSha256":"165f05fe1a49ec762a677c17d0bbb61673acc5f6673e2f5f81340036ab0e2359","ownedSymbol":"xm1_pipeline_image_date_send","abi":"void(packet)"},
+    {"stockEntry":"0x117e9c4","size":976,"extentSha256":"93b0650d4e8c8da85d11775897551983b45f350066bd42c21e7fa9c3a17c924e","ownedSymbol":"xm1_pipeline_image_font_configure","abi":"u32(config13words*)"},
+    {"stockEntry":"0x117e8e0","size":228,"extentSha256":"25308833c066b29017671894bfb781ba07bcc6325eacbca1306ae473e1973f1d","ownedSymbol":"xm1_pipeline_image_font_metrics","abi":"u32(UTF16*,TextMetrics*)"},
+    {"stockEntry":"0x117e734","size":428,"extentSha256":"b825cdb7cd6fe597b6d4edb1b42cf4c0c99640e0bce3bbcc7fda7f97d967ad8c","ownedSymbol":"xm1_pipeline_image_font_rasterize","abi":"u32(UTF16*,RasterBuffer*,mode)"},
+    {"stockEntry":"0x1180c18","size":1416,"extentSha256":"980530b9fa7451192d75ec06772703f6fb2cec004cdb1ded430e304363d1106e","ownedSymbol":"xm1_pipeline_image_font_set_option","abi":"i32(object,key,value)"},
+    {"stockEntry":"0x118d984","size":860,"extentSha256":"2b6b31429ecb2d7b7b4faf9df5585b2d6a7273fb1440c28dc7c83951f75e0485","ownedSymbol":"xm1_pipeline_image_font_backend_option","abi":"void(handle,key,value)"},
+    {"stockEntry":"0x1180b6c","size":172,"extentSha256":"8ec9ec6ef015e642d0ec164e50c4b60532e0b194d150caef3c00ec0eac973feb","ownedSymbol":"xm1_pipeline_image_font_auto_weight","abi":"void(object,enabled)"},
+    {"stockEntry":"0x1180b0c","size":96,"extentSha256":"a7c3643873c6106d6ed136c385d64c78e03c8e5c97f5d4a9a43f34f7f2e8b494","ownedSymbol":"xm1_pipeline_image_font_spacing","abi":"void(object,enabled)"},
+    {"stockEntry":"0x1180798","size":68,"extentSha256":"23ebac05b7006d1dbf666e2423d73bfbddaf63bd47a6a2d95ee9a5fd2fe7c1c1","ownedSymbol":"xm1_pipeline_image_font_trailing_padding","abi":"void(object,enabled)"},
+    {"stockEntry":"0x11807dc","size":92,"extentSha256":"08566082620b30bbcdfb3b52ba984d06d90c105908db8d69f1f307b70ea29d8f","ownedSymbol":"xm1_pipeline_image_font_leading_padding","abi":"void(object,enabled)"},
+    {"stockEntry":"0x117f948","size":2376,"extentSha256":"7a30199b44b62c67b58626c4b6a90a12672ffa4c150696f9075a0e36c8cd9e03","ownedSymbol":"xm1_pipeline_image_blend_glyph","abi":"i32(mode,x,y,first,second,GlyphBitmap*,GlyphRasterState*)"},
+    {"stockEntry":"0x117f368","size":40,"extentSha256":"52943e54e83672ff7eda915a36032db3328f59cf492eb65141e83b41b006d778","ownedSymbol":"xm1_pipeline_image_font_query","abi":"i32(object,UTF16*,count,rectangle,stride,details)"},
+    {"stockEntry":"0x117e62c","size":48,"extentSha256":"46b7601ee5175b8e3df6c834235a18fea949545bc71c04005c855c648a64302d","ownedSymbol":"xm1_pipeline_image_font_error","abi":"void(message)"},
+    {"stockEntry":"0x632fc0","size":32,"extentSha256":"378ca3d6c0de08dcf137b696d15b9b010f5d4ac8c662ac4e943922575a8f4480","ownedSymbol":"xm1_pipeline_image_ui_font_notify_current_task","abi":"void(text)"},
+    {"stockEntry":"0x6333d0","size":160,"extentSha256":"b71d6f381f674ce82457a9b626827d080445723bfeacabd361e225c885e89446","ownedSymbol":"xm1_pipeline_image_ui_font_notification","abi":"void(snapshot,value)","entryState":"Actual opaque68-byte entry-memory slice from entrySP-84 through entrySP-17."},
+    {"stockEntry":"0x633390","size":64,"extentSha256":"fa63125d86c1d3b68bc1c4c4addcd5d67d0a360f8401e702c19149f1198b7104","ownedSymbol":"xm1_pipeline_image_init_font_notification_source","abi":"void()"},
+    {"stockEntry":"0x72b680","size":28,"extentSha256":"1f0e96d8af0b4fbe93011c611a88b8c420701605930f94f58af9f8bbc77da8b1","ownedSymbol":"xm1_pipeline_image_dispatch_font_notification","abi":"i32(DeviceNotificationPacket*)"},
+    {"stockEntry":"0x72b318","size":140,"extentSha256":"08acde2b028504e48e0f1919e96c1a861442665717f389d59bd58ce9c714c2ea","ownedSymbol":"xm1_pipeline_image_font_notification_history","abi":"i32(DeviceNotificationPacket*)"},
+    {"stockEntry":"0x72b210","size":264,"extentSha256":"a38927e81f809210bf6cad10b3805fc06d7839e9d36a72f38f7cc9d30089dac0","ownedSymbol":"xm1_pipeline_image_font_notification_router","abi":"i32(DeviceNotificationPacket*)"}
+  ],
+  "inlinedQueueExtents": [
+    {"stockEntry":"0xdb6608","size":32,"extentSha256":"3751768e18cdc2056f8f147c42acf4430770be7c2e0bd340575195f8ed406ec0","law":"Read sequence byte14e32bc."},
+    {"stockEntry":"0xdb6628","size":96,"extentSha256":"0f330112313f7f9a485f81181daa57c6423e08e4f00c633ddbcdf83fb1cb7348","law":"Sequence operation1 increments,255 wraps1; operation2 reads; others return0."},
+    {"stockEntry":"0x1111c30","size":20,"extentSha256":"06923057baae437a94c3b2f5904ebc40a3d725722555328069576625b3fe02c8","law":"Empty trace body; omitted."}
+  ],
+  "inlinedRendererExtents": [
+    {"stockEntry":"0x1178c7c","size":100,"extentSha256":"1142226d402b05e3af9447824394e41d483788b720b4ed0af28792e24c3a3d04","law":"Wide UTF16 units below 256 become private-use e100+unit. Other units, including unpaired surrogates, are preserved."},
+    {"stockEntry":"0x1178d54","size":536,"extentSha256":"6b3da9c39aa54f6fd199bcbfa5c3c58c0bb033e621e724f041826621f74b819e","law":"Reachable mode1/2 layout, edge advance, three color words, font configuration and dimensions."},
+    {"stockEntry":"0x1178f6c","size":636,"extentSha256":"7c7d26514a7035b18f8c097312978641382df2efe82ba431bb3317a089a131c8","law":"Caller1113a9c fixes byte text zero, resource id zero, nonnull direct UTF16, mode1/2. Resource-ID and byte-text branches are unreachable from this closure."},
+    {"stockEntry":"0x11791e8","size":340,"extentSha256":"b27151d31fda900bca010fde54b5c0f0f9380cbabc7ca53ef7c6b37a531cb83c","law":"Caller1113a9c fixes mode1/2, three colors, edge1 and supplied destination. Scratch framebuffer mode0 is unreachable."},
+    {"stockEntry":"0x1182f54","size":616,"extentSha256":"5bc4fe0816b0b1a94652346033c14c568a02a6ecc8bae0a16b568924f9144f23","law":"Owned font_query inlines the layout measurement body behind117f368. Both bitmap and outline paths execute the peer-owned CPU preparation helpers."},
+    {"stockEntry":"0x117f358","size":16,"extentSha256":"9338c714e498df800ebbba06d53ad98f8ac44934a1fd7ea236527bc283d2f2ce","law":"Font property setter wrapper inlined into calls of owned1180c18."},
+    {"stockEntry":"0x117e5f0","size":60,"extentSha256":"45733165c8f28871a99c6fa2e68fbb0c91855faf09b3869145f52cbc3da11ca4","law":"UTF16 terminator scan inlined into font metrics and raster roots."},
+    {"stockEntry":"0x721b40","size":108,"extentSha256":"d1668d429d883b613814f6818d975701866c258a674056349afb7bc64145d73f","law":"Font error copies at most29 source bytes and zero-pads through byte28 after a terminator. Remaining error record bytes are retained."}
+  ],
+  "phaseModelData":{"module":"DateOverlayScenarios","export":"dateTextExamples","law":"Independent literal expectations for three date orders, date-only and date-plus-time, leading-zero spaces and signed-byte widening. Parent typed producer/consumer fixtures must compare these against actual observed queued UTF16 bytes."},
+  "fontDescendantHandoff": {
+    "authority":"Explicit parent split from Main",
+    "owner":"DevelopTransactionOwnership.PipelineTransforms",
+    "sourceRoots":["0x11826cc","0x11822ec","0x118e49c","0x11829c8"],
+    "requiredExports":[
+      {"symbol":"xm1_pipeline_image_font_prepare_bitmap","abi":"i32(object,UTF16*,count,flags,outLayout*,buffer,stride,rows,x,y)"},
+      {"symbol":"xm1_pipeline_image_font_prepare_outline","abi":"i32(object,UTF16*,count,flags,outLayout*)"},
+      {"symbol":"xm1_pipeline_image_font_draw","abi":"i32(object,UTF16*,count,mode,x,y,first,second,foreground,background,edge,scratch,state)"},
+      {"symbol":"xm1_pipeline_image_font_copy_memory","abi":"void(destination,source,count)","stockEntry":"0x117f64c"}
+    ],
+    "scope":"Real CPU shaping, outline/bitmap preparation, property-getter engine initialization, FDL parser/VM and draw orchestration. Main reassigned the diagnostic roots and their unowned CPU closure to PipelineDateOverlay. No retained font primitive seam.",
+    "qualification":"Parent must integrate and execute the real consumer and bounded VM. This file does not establish active-date composition."
+  },
+  "diagnosticEntrySnapshot": {
+    "authority":"Main explicitly reassigned font diagnostics after ed64b9c1 and acknowledged the actual entry-relative opaque input law.",
+    "sourceFrame":{"savedRegistersBytes":16,"localBytes":80,"packetHeaderFromEntrySp":-92,"opaqueTailFirstFromEntrySp":-84,"opaqueTailLastFromEntrySp":-17,"nestedCallSpFromEntrySp":-96},
+    "ownedVeneer":{"publicArguments":2,"savedRegistersBytes":8,"reservedBytes":160,"calleeSpFromEntrySp":-168,"captureFirstFromEntrySp":-168,"captureLastFromEntrySp":-101,"savedRegistersFirstFromEntrySp":-8,"savedRegistersLastFromEntrySp":-1,"alignmentBytes":8,"internalHelperArguments":["snapshot","NotificationValue","NotificationOpaqueTail*"]},
+    "captureLaw":"Seventeen raw aligned word copies capture actual entry memory before any write to that input. Capture output is disjoint from input, saved registers and all Rust/callee frames below entrySP-168. The original two-argument public ABI is preserved. No absolute stock stack address or seeded tail is used.",
+    "stackBound":"The entry veneer consumes168 bytes. The complete compiled helper/descendant stack bound is not measured by this source-only change and remains a parent final-artifact obligation.",
+    "opaqueLaw":"NotificationOpaqueTail is68 MaybeUninit bytes. UI production, router copying and the real owned queue payload copy never assume_init or interpret these bytes as initialized Rust values.",
+    "routingLaw":"Cell829a0c initially contains72b318 in pinned image4. Source registration72b6ec installs72b210. The closed History/Queue role accepts only these source addresses and their corresponding owned semantic exports. Other callback states are not admitted.",
+    "snapshotLaw":"Null6333d0 clears only byte95482c and words95484c through954880. Nonnull6333d0 logs and copies92 bytes. Both store only the low task byte at954884.633390 initializes that byte only when it is zero and does not clear the snapshot.",
+    "historyLaw":"With count9134c0 below64, copy only the8-byte header to9121c0+count*76, increment count and return0 under owned critical helpers. The68-byte history slot tail is retained. Full history logs ERR_EVENT_FULL and returns-63.",
+    "routerLaw":"Current task low byte is sender. Loadtest9134f8 exactly1 and event&900 nonzero select category7, otherwise1. Event82e/category1 increments matching9121bc before queueing or traces UPDATE_R and returns0 on mismatch with9134c4. Copy all76 opaque-preserving packet bytes through owned72503c; event91b initializes task source after send. Preserve send return bits.",
+    "standaloneProofScope":"Direct router cases use fully initialized independent76-byte packets and check all payload bytes, error returns, update ordering and task-state effects. History composition consumes only the defined header. UI queue producer cases explicitly assert only the defined8-byte header and state effects.",
+    "consumerLawGap":"The downstream application law for68 opaque UI-produced bytes is not established. FontError-to-UI-to-queue composition is not full-packet equivalence. Standalone actual-entry-snapshot compatibility is distinct from composed producer stack compatibility. No zero fallback, deterministic repair, ignored-tail claim or silent comparison mask is supplied."
+  },
+  "layouts": {
+    "StampRequest":{"size":16,"address":0,"enabled":4,"width":8,"height":10,"first":12,"second":14},
+    "StampResult":{"size":12,"status":0,"first":4,"second":8},
+    "TextRequest":{"size":28,"first_percent":0,"second_percent":4,"metadata":8,"first_text":12,"second_text":16,"address":20,"completion":24},
+    "PackedStamp":{"size":56,"source":0,"destination":4,"source_width":8,"source_height":12,"width":16,"height":20,"source_stride":24,"destination_stride":28,"source_top":32,"source_left":40,"scale":48,"rotation":52},
+    "TextMetrics":{"size":12,"width":0,"height":4,"advance":8},
+    "RasterBuffer":{"size":16,"capacity":0,"address":4,"x":8,"y":12},
+    "GlyphBitmap":{"size":40,"width":0,"height":4,"stride":8,"format":12,"pixel_format":16,"fill":20,"foreground":24,"background":28,"length":32,"coverage":36},
+    "GlyphRasterState":{"size":20,"destination":0,"metrics":4,"passes":8,"x":12,"y":16},
+    "DeviceNotificationHeader":{"size":8,"event":0,"value":4},
+    "DeviceNotificationPacket":{"size":76,"header":0,"opaque_tail":8,"opaque_tail_size":68},
+    "frame":{"aspect":"0x4f0","enabled":"0x614","date_format":"0x618","secondary_enabled":"0x61c","orientation":"0x1604","signed_timestamp_bytes":"0x1684"}
+  },
+  "sharedOwnedDependencies": [
+    {"owner":"PipelineBuffers","symbols":["xm1_buffers_configuration_byte","xm1_develop_enter_critical","xm1_develop_leave_critical"],"law":"Configuration pointer96ca50 plus byte key2db or2dc. Reuse canonical7235d8/7236b0 critical CPU bodies."},
+    {"owner":"PipelineImagePlanes","symbols":["xm1_pipeline_image_current_task","xm1_pipeline_image_configure_task","xm1_pipeline_image_wait_all","xm1_pipeline_image_signal_current_zero","xm1_pipeline_image_send_notification"]},
+    {"owner":"PipelineImageGeometry","symbol":"xm1_pipeline_image_cache_maintenance","law":"42634(0,0)."},
+    {"owner":"PipelinePackedSoftware","symbols":["xm1_pipeline_image_fixed10_sine_degrees","xm1_pipeline_image_fixed10_cosine_degrees","xm1_pipeline_packed_cache_read","xm1_pipeline_packed_cache_write"]},
+    {"owner":"PipelineDebugStorage","symbols":["xm1_pipeline_image_send_message","xm1_pipeline_image_storage_dispatch_error"],"law":"Canonical72503c and723398. Payload copying uses MaybeUninit bytes, retaining opaque source storage; queuePartialCalls published in106dffaf."},
+    {"owner":"PipelineObjectAllocator","symbol":"xm1_develop_append_stream_text","law":"Canonical726658 diagnostic ring formatter and calendar/critical descendants, d1185c90. No duplicated logger."},
+    {"owner":"PipelineProcessing","symbol":"xm1_develop_loadtest_current","law":"Canonical73abec reads9134f8. No duplicated getter."},
+    {"owner":"PropertyEntryOwnership","symbol":"xm1_property_get","law":"Renderer fixed key52,bank0,defaults0. Original switch target61f450 reads96cc85 &63; custom slot cannot affect this branch."}
+  ],
+  "retainedPrimitives": [
+    {"entry":"0x42634","law":"Physical cache-read operation. CPU wrappers are owned."},
+    {"entry":"0x4263c","law":"Physical cache-write operation. Final return bits preserved."},
+    {"entry":"0x41a34","law":"Kernel dispatch-error event9,ticks,status."},
+    {"entry":"0x42188","law":"Kernel trace primitive receives the fixed source UPDATE_R pointer782048 only on the mismatched update-counter branch."},
+    {"interfaceOffset":"0x4c","law":"RTOS delay(ticks) through selected interface."},
+    {"interfaceOffset":"0x11c","law":"RTOS yield_timer(0) for zero ticks."}
+  ],
+  "undefinedDataAndConsumerLaws": [
+    "Active e51490 passes secondUTF16=0. Unless cfg2db=255, e50ea4 reads a halfword at literal address0. This is not an empty optional string. Reads and possible ellipsis writes preserve A32 memory accesses through assembly, not Rust null-pointer volatile access.",
+    "cfg2db255 bypasses both scans. Other values count with an eight-bit counter, then write ellipsis to first/second positions29,30,31 and a zero at32 when over limit.",
+    "Stamp glyph translation only writes recognized entries from fifteen-row table11793a4. Unrecognized units preserve prior destination halfwords. The table has a zero terminator mapping.",
+    "Glyph scratch bank stride is66bytes; admitted strings must fit32 glyphs plus terminator. cfg255 does not establish this for arbitrary caller text; e51490 timestamp has18 UTF16 slots.",
+    "Date event root fixes payload length0. General db6804 packet has only four payload bytes; lengths beyond4 have source stack-overwrite behavior and are not admitted.",
+    "Date formatting reads signed timestamp bytes and rearranges them. It does not validate or synthesize calendar fields.",
+    "Queue submit precedes publishing waiting task155ccc0. Completion ordering requires an actual queued CPU consumer, not an immediate fabricated callback.",
+    "Producer and consumer require typed multi-phase fixtures retaining the actual queued request and text bytes. The next phase executes11631f0 with observed bytes and checks independent glyph, pixel and state outputs. This is not full scheduler or concurrency qualification.",
+    "Unrecognized glyph coverage indices above15 read outside the64-byte palette. No clamp or invented replacement glyph is supplied.",
+    "Font option1180c18 workspace equality is accepted. A32 rejects only requiredBytes > limit, unlike an easy misreading of the NONMATCHING draft.",
+    "Font option keys3/4/5/6 pass the normalized nonzero boolean into auto-weight, spacing and padding helpers. The NONMATCHING draft incorrectly passes zero.",
+    "Glyph palette stores background and foreground in byte-reversed output order, interpolates coverage1..14 with arithmetic shift4, and forces coverage15 to the foreground. Later passes retain destination pixels for coverage0.",
+    "Metrics with empty text return1 without writing the output. Rasterization with empty text returns1 after checking the font handle, without reading the buffer object.",
+    "FDL descendants belong to PipelineTransforms. Font diagnostics and their unowned CPU closure belong here after Main's explicit reassignment. Active consumer execution and cross-phase qualification remain parent integration requirements.",
+    "UI producer queue cases are explicitly header/state laws, not qualification of the68-byte opaque tail. Exact consumer behavior for that tail remains unproven; retained raw observations must not be replaced by fixed bytes or fabricated success."
+  ]
+}

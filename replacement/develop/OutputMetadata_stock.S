@@ -1,0 +1,3 @@
+.syntax unified
+.arm
+.text

@@ -4,7 +4,7 @@ load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 filegroup(
     name = "module",
     srcs = ["src/lib.rs"],
-    visibility = ["//replacement/bank:__pkg__"],
+    visibility = ["//replacement/bank:__pkg__", "//replacement/develop:__pkg__"],
 )
 
 filegroup(

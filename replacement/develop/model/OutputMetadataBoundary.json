@@ -1,0 +1,2246 @@
+{
+  "schema": "xm1-develop-output-metadata-boundary-v1",
+  "sourceCommit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "baseCommit": "279a7b77ea40cf1e13b2216070d8cf2afad58c19",
+  "status": "source-only-unqualified",
+  "historicalReceiptPolicy": "17afdfa9/R12 remains bound to its original scope and is not rebound by this source change",
+  "publications": [
+    {
+      "address": "0x11db098",
+      "symbol": "xm1_pipeline_image_write_exif_header",
+      "extent": {
+        "size": 240,
+        "expectedSha256": "d92f1494753270815bbf30f43ee2559ed32d201c06ef46b507b7e22e9ba2ce85",
+        "observedSha256": "d92f1494753270815bbf30f43ee2559ed32d201c06ef46b507b7e22e9ba2ce85",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/metadata_headers.c",
+        "firstLine": 9,
+        "lastLine": 44,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x11c14f0",
+      "symbol": "xm1_pipeline_image_initialize_exif_writer",
+      "extent": {
+        "size": 132,
+        "expectedSha256": "95a277fb799eaf13126f4c2d834eb6d72bd820416a209806e232fb0041809ba9",
+        "observedSha256": "95a277fb799eaf13126f4c2d834eb6d72bd820416a209806e232fb0041809ba9",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_header_writer.c",
+        "firstLine": 35,
+        "lastLine": 61,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x11c1574",
+      "symbol": "xm1_pipeline_image_write_soi",
+      "extent": {
+        "size": 68,
+        "expectedSha256": "0cbe311ba33c6ed9b60b36f870cfd56e28ce73172ed6e747848230d57709189f",
+        "observedSha256": "0cbe311ba33c6ed9b60b36f870cfd56e28ce73172ed6e747848230d57709189f",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_native_header_markers.c",
+        "firstLine": 7,
+        "lastLine": 13,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x11c15b8",
+      "symbol": "xm1_pipeline_image_write_tiff_header",
+      "extent": {
+        "size": 184,
+        "expectedSha256": "08dc1dd4ff6d989c16fc97c4119c5545094727ba1f1324d3a7948ec757295986",
+        "observedSha256": "08dc1dd4ff6d989c16fc97c4119c5545094727ba1f1324d3a7948ec757295986",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_native_header_markers.c",
+        "firstLine": 15,
+        "lastLine": 31,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x11c170c",
+      "symbol": "xm1_pipeline_image_write_primary_ifd",
+      "extent": {
+        "size": 192,
+        "expectedSha256": "e9911b53247180869b6ee45ed5a5d2d7328791d0dcac539429848d91ba0800bb",
+        "observedSha256": "e9911b53247180869b6ee45ed5a5d2d7328791d0dcac539429848d91ba0800bb",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_header_writer.c",
+        "firstLine": 69,
+        "lastLine": 87,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x11c17cc",
+      "symbol": "xm1_pipeline_image_write_exif_ifd",
+      "extent": {
+        "size": 224,
+        "expectedSha256": "17ed5502ba22c63e3ed2b69e406506c588670d56940e0e273bd3e38939980a9f",
+        "observedSha256": "17ed5502ba22c63e3ed2b69e406506c588670d56940e0e273bd3e38939980a9f",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_header_writer.c",
+        "firstLine": 89,
+        "lastLine": 109,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x11c18ac",
+      "symbol": "xm1_pipeline_image_write_interoperability_ifd",
+      "extent": {
+        "size": 284,
+        "expectedSha256": "2a0ddb1b6bfce49b074a2a38b0f749aaf10b09d27c620290fd8baeb4c5bdde93",
+        "observedSha256": "2a0ddb1b6bfce49b074a2a38b0f749aaf10b09d27c620290fd8baeb4c5bdde93",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_header_writer_rest.c",
+        "firstLine": 35,
+        "lastLine": 69,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x11c19c8",
+      "symbol": "xm1_pipeline_image_write_makernote",
+      "extent": {
+        "size": 360,
+        "expectedSha256": "5990dc4c08723a4a7780ffe9c0d294e9e5cd90d01c960a5f17d7abd55ed3c12a",
+        "observedSha256": "5990dc4c08723a4a7780ffe9c0d294e9e5cd90d01c960a5f17d7abd55ed3c12a",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_marker_parser_more.c",
+        "firstLine": 496,
+        "lastLine": 528,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x11c1b30",
+      "symbol": "xm1_pipeline_image_write_gps_ifd",
+      "extent": {
+        "size": 228,
+        "expectedSha256": "2c928a48de35826ad5b475b595055c40ce44b56ddd9a9c26192eb6b8fde82194",
+        "observedSha256": "2c928a48de35826ad5b475b595055c40ce44b56ddd9a9c26192eb6b8fde82194",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_header_writer.c",
+        "firstLine": 114,
+        "lastLine": 129,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x11c1c14",
+      "symbol": "xm1_pipeline_image_write_thumbnail_ifd",
+      "extent": {
+        "size": 260,
+        "expectedSha256": "dc4dfa5439a60903ad688c8e392b7d85e6b6949ca86485771ca08c455823dfc4",
+        "observedSha256": "dc4dfa5439a60903ad688c8e392b7d85e6b6949ca86485771ca08c455823dfc4",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_header_writer.c",
+        "firstLine": 131,
+        "lastLine": 157,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x11cf6e0",
+      "symbol": "xm1_pipeline_image_write_maker_signature",
+      "extent": {
+        "size": 104,
+        "expectedSha256": "9c3ec43438a3a14f3d4330b2a1da36d77d8c91ff9989d93d77ce7c557beefa82",
+        "observedSha256": "9c3ec43438a3a14f3d4330b2a1da36d77d8c91ff9989d93d77ce7c557beefa82",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_tag_tables.c",
+        "firstLine": 43,
+        "lastLine": 53,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x11cf748",
+      "symbol": "xm1_pipeline_image_write_printim",
+      "extent": {
+        "size": 228,
+        "expectedSha256": "561d24e521e02c39e009fd4cfc17e784d8ae3572c7d6abceb8ff4786e0c4532b",
+        "observedSha256": "561d24e521e02c39e009fd4cfc17e784d8ae3572c7d6abceb8ff4786e0c4532b",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_tag_tables_rest.c",
+        "firstLine": 217,
+        "lastLine": 242,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x11cf854",
+      "symbol": "xm1_pipeline_image_select_ifd_table",
+      "extent": {
+        "size": 180,
+        "expectedSha256": "387208f27e805dcded4a37c8d194abe77938eb4fac5f2d965704b106f482b2e0",
+        "observedSha256": "387208f27e805dcded4a37c8d194abe77938eb4fac5f2d965704b106f482b2e0",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_tag_tables_rest.c",
+        "firstLine": 244,
+        "lastLine": 282,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x11cf908",
+      "symbol": "xm1_pipeline_image_ifd_table_count",
+      "extent": {
+        "size": 136,
+        "expectedSha256": "14a9515c1d59fb435c1cd9b12c7221067392c7fb931150c66e520a0f144c594e",
+        "observedSha256": "14a9515c1d59fb435c1cd9b12c7221067392c7fb931150c66e520a0f144c594e",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_tag_tables.c",
+        "firstLine": 67,
+        "lastLine": 90,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x11cf0dc",
+      "symbol": "xm1_pipeline_image_tiff_value_capacity",
+      "extent": {
+        "size": 752,
+        "expectedSha256": "1a807d5d62631094ee42a10f71bab147861e57ef27465801878ed9a9ba3290ce",
+        "observedSha256": "1a807d5d62631094ee42a10f71bab147861e57ef27465801878ed9a9ba3290ce",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_tag_tables_rest.c",
+        "firstLine": 37,
+        "lastLine": 163,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x11cda48",
+      "symbol": "xm1_pipeline_image_saved_tag_available",
+      "extent": {
+        "size": 1112,
+        "expectedSha256": "af11cf953a4446b0a0686b8ece72a0b58adc3db025cec546bcb2511fe76f2e3a",
+        "observedSha256": "af11cf953a4446b0a0686b8ece72a0b58adc3db025cec546bcb2511fe76f2e3a",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/codec_message_rest_exact.c",
+        "firstLine": 24,
+        "lastLine": 178,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x11cdea0",
+      "symbol": "xm1_pipeline_image_should_write_tag",
+      "extent": {
+        "size": 3608,
+        "expectedSha256": "276fd1fb090a31f64dd22a500461bd720292c27e11d98b5122eafe7efe58da82",
+        "observedSha256": "276fd1fb090a31f64dd22a500461bd720292c27e11d98b5122eafe7efe58da82",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/codec_message_rest_exact.c",
+        "firstLine": 180,
+        "lastLine": 721,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x11c2154",
+      "symbol": "xm1_pipeline_image_transfer_saved_parser",
+      "extent": {
+        "size": 180,
+        "expectedSha256": "7d64d09ccb25f69c26efafc22f27b53c37d9119f01d3945e30064e68a59987c2",
+        "observedSha256": "7d64d09ccb25f69c26efafc22f27b53c37d9119f01d3945e30064e68a59987c2",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_header_writer.c",
+        "firstLine": 200,
+        "lastLine": 219,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x11c35f8",
+      "symbol": "xm1_pipeline_image_saved_directory_slots",
+      "extent": {
+        "size": 128,
+        "expectedSha256": "40eb81961bc9546ebf49ee4159bebf9f67903734d0be54cb0f48fafda8324185",
+        "observedSha256": "40eb81961bc9546ebf49ee4159bebf9f67903734d0be54cb0f48fafda8324185",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/tiff_decode.c",
+        "firstLine": 109,
+        "lastLine": 127,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x11c3678",
+      "symbol": "xm1_pipeline_image_saved_directory_values",
+      "extent": {
+        "size": 128,
+        "expectedSha256": "b056c612d3176d2a88c8b4138bbc240627792392c3bc2fdb701495d90b3c1d6a",
+        "observedSha256": "b056c612d3176d2a88c8b4138bbc240627792392c3bc2fdb701495d90b3c1d6a",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/tiff_decode.c",
+        "firstLine": 129,
+        "lastLine": 147,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x11ceea0",
+      "symbol": "xm1_pipeline_image_get_tiff_value_layout",
+      "extent": {
+        "size": 192,
+        "expectedSha256": "f7ede208d0293b75af791a6de0c125eac20b9eb2e9c6a09411c4993280147e2f",
+        "observedSha256": "f7ede208d0293b75af791a6de0c125eac20b9eb2e9c6a09411c4993280147e2f",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_value_callbacks.c",
+        "firstLine": 26,
+        "lastLine": 47,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x11cf990",
+      "symbol": "xm1_pipeline_image_write_filtered_directory",
+      "extent": {
+        "size": 968,
+        "expectedSha256": "71b19a0d71944a300e9fd86af4c426ce6f3eab65f2bdb280aace7a487e8131d0",
+        "observedSha256": "71b19a0d71944a300e9fd86af4c426ce6f3eab65f2bdb280aace7a487e8131d0",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_tag_tables_rest.c",
+        "firstLine": 284,
+        "lastLine": 348,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x11cfe54",
+      "symbol": "xm1_pipeline_image_write_saved_directory",
+      "extent": {
+        "size": 1456,
+        "expectedSha256": "9e5c0881f6e50ec036bf273cf5c12154f57143af064e258d8d3ac19f504c6afe",
+        "observedSha256": "9e5c0881f6e50ec036bf273cf5c12154f57143af064e258d8d3ac19f504c6afe",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_tag_tables_rest.c",
+        "firstLine": 350,
+        "lastLine": 412,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x11c2208",
+      "symbol": "xm1_pipeline_image_find_directory_tag",
+      "extent": {
+        "size": 608,
+        "expectedSha256": "5ec0e9c7b1fe234745ec9f63931cde0ff7ed7a4c1482c7e5ea6d2c8a07a1ff2c",
+        "observedSha256": "5ec0e9c7b1fe234745ec9f63931cde0ff7ed7a4c1482c7e5ea6d2c8a07a1ff2c",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_tag_query_rest.c",
+        "firstLine": 34,
+        "lastLine": 116,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x11c2490",
+      "symbol": "xm1_pipeline_image_find_primary_directory_tag",
+      "extent": {
+        "size": 40,
+        "expectedSha256": "8862aa600b88cda8f3a43f34bcd0de3e3dfc780915f3af4c649dd7238e849622",
+        "observedSha256": "8862aa600b88cda8f3a43f34bcd0de3e3dfc780915f3af4c649dd7238e849622",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_tag_query.c",
+        "firstLine": 47,
+        "lastLine": 51,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x11c24b8",
+      "symbol": "xm1_pipeline_image_find_saved_tag",
+      "extent": {
+        "size": 268,
+        "expectedSha256": "8e12432950bc0dc8f55efad7aed7d5ea8cc0b21a33a78dad4bf0f56813f011a2",
+        "observedSha256": "8e12432950bc0dc8f55efad7aed7d5ea8cc0b21a33a78dad4bf0f56813f011a2",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_tag_query_rest.c",
+        "firstLine": 118,
+        "lastLine": 143,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x11c25d8",
+      "symbol": "xm1_pipeline_image_find_primary_saved_tag",
+      "extent": {
+        "size": 20,
+        "expectedSha256": "f654ed6bc2f4635c86b7d412aadfbbcee3b651b9e4e7ff7d5f4722429491193b",
+        "observedSha256": "f654ed6bc2f4635c86b7d412aadfbbcee3b651b9e4e7ff7d5f4722429491193b",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_tag_query_rest.c",
+        "firstLine": 145,
+        "lastLine": 148,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xebfd78",
+      "symbol": "xm1_pipeline_image_populate_special_metadata",
+      "extent": {
+        "size": 664,
+        "expectedSha256": "2e7ff542c105da74030163e613c59f2c7c909d77fe75b498e282e8dce5c2e260",
+        "observedSha256": "2e7ff542c105da74030163e613c59f2c7c909d77fe75b498e282e8dce5c2e260",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/record/tu_00ebdd68.c",
+        "firstLine": 1203,
+        "lastLine": 1272,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x734824",
+      "symbol": "xm1_pipeline_image_transform_metadata_rectangle",
+      "extent": {
+        "size": 228,
+        "expectedSha256": "5e6941a3bfa082aff528337655590d59234e6025366ebb5eca698c9e9947018c",
+        "observedSha256": "5e6941a3bfa082aff528337655590d59234e6025366ebb5eca698c9e9947018c",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/settings/tu_00732ba8.c",
+        "firstLine": 918,
+        "lastLine": 950,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x734908",
+      "symbol": "xm1_pipeline_image_transform_metadata_faces",
+      "extent": {
+        "size": 504,
+        "expectedSha256": "c22577c7bd4848cc6851d11b3c9b457ce01acec2d801fa00a61e34826286c473",
+        "observedSha256": "c22577c7bd4848cc6851d11b3c9b457ce01acec2d801fa00a61e34826286c473",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/settings/tu_00732ba8.c",
+        "firstLine": 952,
+        "lastLine": 1016,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0xeaa888",
+      "symbol": "xm1_pipeline_image_metadata_primary_mode",
+      "extent": {
+        "size": 196,
+        "expectedSha256": "82ba47517015d612ec4d326a092ecf54f96fa20776ab8cd6b20e2c3650df9e39",
+        "observedSha256": "82ba47517015d612ec4d326a092ecf54f96fa20776ab8cd6b20e2c3650df9e39",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/record/tu_00eaa494.c",
+        "firstLine": 164,
+        "lastLine": 217,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0xeaa964",
+      "symbol": "xm1_pipeline_image_metadata_secondary_mode",
+      "extent": {
+        "size": 228,
+        "expectedSha256": "6771d4d639402f5081e488a828f56f31e63ca843d0d91755d20b78c8b1e111e4",
+        "observedSha256": "6771d4d639402f5081e488a828f56f31e63ca843d0d91755d20b78c8b1e111e4",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/record/tu_00eaa494.c",
+        "firstLine": 219,
+        "lastLine": 272,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0xeaaa60",
+      "symbol": "xm1_pipeline_image_metadata_color_mode",
+      "extent": {
+        "size": 508,
+        "expectedSha256": "28a26614025ba79ccdd60c5318a2eb8700893088d8a5c3a9ef22b503e3a9814c",
+        "observedSha256": "28a26614025ba79ccdd60c5318a2eb8700893088d8a5c3a9ef22b503e3a9814c",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/record/tu_00eaa494.c",
+        "firstLine": 274,
+        "lastLine": 374,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0xeaac74",
+      "symbol": "xm1_pipeline_image_metadata_processing_mode",
+      "extent": {
+        "size": 380,
+        "expectedSha256": "80e59e0cc02b279b8a17276e668398ade7d9744beac88ee238958167b065f88f",
+        "observedSha256": "80e59e0cc02b279b8a17276e668398ade7d9744beac88ee238958167b065f88f",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/record/tu_00eaa494.c",
+        "firstLine": 376,
+        "lastLine": 449,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0xeaae08",
+      "symbol": "xm1_pipeline_image_metadata_kelvin",
+      "extent": {
+        "size": 428,
+        "expectedSha256": "ae9a6b288e10b9c52c2de280a0ea393813134318d0ba980edf3464e7d7eb4006",
+        "observedSha256": "ae9a6b288e10b9c52c2de280a0ea393813134318d0ba980edf3464e7d7eb4006",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/record/tu_00eaa494.c",
+        "firstLine": 451,
+        "lastLine": 558,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaafb4",
+      "symbol": "xm1_pipeline_image_metadata_tone_scale",
+      "extent": {
+        "size": 80,
+        "expectedSha256": "62b9cc62233a9c682f4309748ffe666fe396975261bd1ccee21e55d8714335c3",
+        "observedSha256": "62b9cc62233a9c682f4309748ffe666fe396975261bd1ccee21e55d8714335c3",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/record/tu_00eaa494.c",
+        "firstLine": 560,
+        "lastLine": 593,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0xeab004",
+      "symbol": "xm1_pipeline_image_metadata_saturation",
+      "extent": {
+        "size": 92,
+        "expectedSha256": "4bf43b947e93a55a1507f614eaba71f7ba40e9f03d0182d2f4e635f639c00b82",
+        "observedSha256": "4bf43b947e93a55a1507f614eaba71f7ba40e9f03d0182d2f4e635f639c00b82",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/record/tu_00eaa494.c",
+        "firstLine": 595,
+        "lastLine": 617,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0xeab060",
+      "symbol": "xm1_pipeline_image_metadata_balance_adjustment",
+      "extent": {
+        "size": 272,
+        "expectedSha256": "8db7dea075d7bcab35fd49b9e28ba6ecde756e224c5578a3a6810cbd4897d871",
+        "observedSha256": "8db7dea075d7bcab35fd49b9e28ba6ecde756e224c5578a3a6810cbd4897d871",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/record/tu_00eaa494.c",
+        "firstLine": 619,
+        "lastLine": 683,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0xeab170",
+      "symbol": "xm1_pipeline_image_metadata_flash_processing",
+      "extent": {
+        "size": 208,
+        "expectedSha256": "0ec5ab8dc91337bf41fd82659b30558a4f8227f6b99f94e089cc96eaeee276c7",
+        "observedSha256": "0ec5ab8dc91337bf41fd82659b30558a4f8227f6b99f94e089cc96eaeee276c7",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/record/tu_00eaa494.c",
+        "firstLine": 685,
+        "lastLine": 728,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0xeab258",
+      "symbol": "xm1_pipeline_image_metadata_processing_profile",
+      "extent": {
+        "size": 260,
+        "expectedSha256": "2c147b4de77de2d861a2918710bf4a35af6ef6fa2b8e8558f9190a390e6c3ee8",
+        "observedSha256": "2c147b4de77de2d861a2918710bf4a35af6ef6fa2b8e8558f9190a390e6c3ee8",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/record/tu_00eaa494.c",
+        "firstLine": 730,
+        "lastLine": 778,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0xea97c8",
+      "symbol": "xm1_pipeline_image_store_maker_exposure_bias",
+      "extent": {
+        "size": 148,
+        "expectedSha256": "a7d449137e125ec83067dd192292647779f15c5cbd0290964692fc7ebfd837ea",
+        "observedSha256": "a7d449137e125ec83067dd192292647779f15c5cbd0290964692fc7ebfd837ea",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea1838.c",
+        "firstLine": 331,
+        "lastLine": 351,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xea985c",
+      "symbol": "xm1_pipeline_image_store_maker_flash_mode",
+      "extent": {
+        "size": 396,
+        "expectedSha256": "a5671a8329ee4856c320ad46e95882bb3b9740733b17830ce505f29736f9373d",
+        "observedSha256": "a5671a8329ee4856c320ad46e95882bb3b9740733b17830ce505f29736f9373d",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 4,
+        "lastLine": 76,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0xea9d9c",
+      "symbol": "xm1_pipeline_image_pack_metadata_rectangle",
+      "extent": {
+        "size": 52,
+        "expectedSha256": "cd5b1cb632b30c2b1a05fa970342ce7e4148fa0cdc386411dfee8dd211c1b6d2",
+        "observedSha256": "cd5b1cb632b30c2b1a05fa970342ce7e4148fa0cdc386411dfee8dd211c1b6d2",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 257,
+        "lastLine": 264,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xea9dd0",
+      "symbol": "xm1_pipeline_image_pack_paired_metadata_rectangle",
+      "extent": {
+        "size": 52,
+        "expectedSha256": "cd5b1cb632b30c2b1a05fa970342ce7e4148fa0cdc386411dfee8dd211c1b6d2",
+        "observedSha256": "cd5b1cb632b30c2b1a05fa970342ce7e4148fa0cdc386411dfee8dd211c1b6d2",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 266,
+        "lastLine": 273,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xea9e04",
+      "symbol": "xm1_pipeline_image_pack_metadata_direction",
+      "extent": {
+        "size": 236,
+        "expectedSha256": "5c5ffe8d50b8c033ea81eda76f9731a5da5f4eae3ba4cb2495e78a81fe2a66ae",
+        "observedSha256": "5c5ffe8d50b8c033ea81eda76f9731a5da5f4eae3ba4cb2495e78a81fe2a66ae",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 275,
+        "lastLine": 334,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0xeab758",
+      "symbol": "xm1_pipeline_image_populate_maker_metadata",
+      "extent": {
+        "size": 13608,
+        "expectedSha256": "3ef5d65f5c863788d507b1fa17718dbc65af8c04f987068beef8887625a10c35",
+        "observedSha256": "3ef5d65f5c863788d507b1fa17718dbc65af8c04f987068beef8887625a10c35",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/record/tu_00eaa494.c",
+        "firstLine": 867,
+        "lastLine": 2475,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0xeaec80",
+      "symbol": "xm1_pipeline_image_populate_output_metadata",
+      "extent": {
+        "size": 5628,
+        "expectedSha256": "2a86d736ecc3b52809bc2d0fcf6e7627b16b1e9f4b32e89dd8a133a15b945d05",
+        "observedSha256": "2a86d736ecc3b52809bc2d0fcf6e7627b16b1e9f4b32e89dd8a133a15b945d05",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/record/tu_00eaa494.c",
+        "firstLine": 2477,
+        "lastLine": 3332,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0xef3434",
+      "symbol": "xm1_pipeline_image_rate_grid_weights",
+      "extent": {
+        "size": 2424,
+        "expectedSha256": "5bf96352669fb453f73b8f889aaa22dce4d1217e8f52589438a7956c279e9848",
+        "observedSha256": "5bf96352669fb453f73b8f889aaa22dce4d1217e8f52589438a7956c279e9848",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/record/rate_grid_weights.c",
+        "firstLine": 8,
+        "lastLine": 319,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x74dbe4",
+      "symbol": "xm1_pipeline_image_profile_alternate_bank",
+      "extent": {
+        "size": 44,
+        "expectedSha256": "b39411ebaacf39118f0b6597c30b068104412d851376815a866e2189bf7c0ae1",
+        "observedSha256": "b39411ebaacf39118f0b6597c30b068104412d851376815a866e2189bf7c0ae1",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/settings/profile_configuration_tables.c",
+        "firstLine": 251,
+        "lastLine": 255,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x74db20",
+      "symbol": "xm1_pipeline_image_profile_value_index",
+      "extent": {
+        "size": 84,
+        "expectedSha256": "6e89a4f9b2e2de10f10a00bdc76a1b09f0ecfef0ce67a86d1b25e8ecca86e1f8",
+        "observedSha256": "6e89a4f9b2e2de10f10a00bdc76a1b09f0ecfef0ce67a86d1b25e8ecca86e1f8",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/settings/tu_00748398.c",
+        "firstLine": 2220,
+        "lastLine": 2236,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x74dc10",
+      "symbol": "xm1_pipeline_image_export_profile_value",
+      "extent": {
+        "size": 104,
+        "expectedSha256": "6d27dbf4c991c875799d907c37c36ad057500fc71e06c48a72c2d1e20b8aec6f",
+        "observedSha256": "6d27dbf4c991c875799d907c37c36ad057500fc71e06c48a72c2d1e20b8aec6f",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/settings/tu_00748398.c",
+        "firstLine": 2250,
+        "lastLine": 2269,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0xef4fc8",
+      "symbol": "xm1_pipeline_image_profile_adjusted_limits",
+      "extent": {
+        "size": 16,
+        "expectedSha256": "79389393a88668759a68c824090aaae6454ec6a86f5c0c4bc43bb3ee11661640",
+        "observedSha256": "79389393a88668759a68c824090aaae6454ec6a86f5c0c4bc43bb3ee11661640",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/settings/profile_value_conversion.c",
+        "firstLine": 54,
+        "lastLine": 54,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x74dc78",
+      "symbol": "xm1_pipeline_image_export_profile_mode",
+      "extent": {
+        "size": 828,
+        "expectedSha256": "650ccfb4db5474f36caa12e0c68e434599c6b9f3673cbc13ec4fc43ffb1bc4a2",
+        "observedSha256": "650ccfb4db5474f36caa12e0c68e434599c6b9f3673cbc13ec4fc43ffb1bc4a2",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/settings/profile_configuration_tables.c",
+        "firstLine": 53,
+        "lastLine": 237,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x722abc",
+      "symbol": "xm1_pipeline_image_build_metadata_spline",
+      "extent": {
+        "size": 1912,
+        "expectedSha256": "f547c4b27ba06f5b07e432ec28b76737088dda9e63d77090dcd420ed8e8be3f6",
+        "observedSha256": "f547c4b27ba06f5b07e432ec28b76737088dda9e63d77090dcd420ed8e8be3f6",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/runtime/tu_00721bdc.c",
+        "firstLine": 409,
+        "lastLine": 523,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x723234",
+      "symbol": "xm1_pipeline_image_evaluate_metadata_spline",
+      "extent": {
+        "size": 204,
+        "expectedSha256": "f3cf7bafa30429e8243309af3b9a00fd04b348aea22e565d2ed1a8284964f2ce",
+        "observedSha256": "f3cf7bafa30429e8243309af3b9a00fd04b348aea22e565d2ed1a8284964f2ce",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/imaging/engine/polynomial_ranges.c",
+        "firstLine": 16,
+        "lastLine": 42,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x7339c4",
+      "symbol": "xm1_pipeline_image_metadata_exposure_value",
+      "extent": {
+        "size": 224,
+        "expectedSha256": "d26d3515adcf2382578e25937c838300ffb15e4691d2089163786fd0f00a23d8",
+        "observedSha256": "d26d3515adcf2382578e25937c838300ffb15e4691d2089163786fd0f00a23d8",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/settings/tu_00732ba8.c",
+        "firstLine": 511,
+        "lastLine": 557,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x733d8c",
+      "symbol": "xm1_pipeline_image_metadata_sensitivity_iso",
+      "extent": {
+        "size": 68,
+        "expectedSha256": "7ef0dd9baeab0c636e0e4b189bee3cd85412a3c36ce48111717916e408abe962",
+        "observedSha256": "7ef0dd9baeab0c636e0e4b189bee3cd85412a3c36ce48111717916e408abe962",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/settings/tu_00732ba8.c",
+        "firstLine": 2159,
+        "lastLine": 2172,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x733ee0",
+      "symbol": "xm1_pipeline_image_metadata_sensitivity_delta",
+      "extent": {
+        "size": 36,
+        "expectedSha256": "9a051ac532e425c49dcf58d855e8033a5adc26c201b889cc440c7e916881d425",
+        "observedSha256": "9a051ac532e425c49dcf58d855e8033a5adc26c201b889cc440c7e916881d425",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/settings/conversion_geometry_helpers.c",
+        "firstLine": 66,
+        "lastLine": 69,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x735b78",
+      "symbol": "xm1_pipeline_image_metadata_sensitivity_parameter",
+      "extent": {
+        "size": 476,
+        "expectedSha256": "380499838f7189a0c747402ce7d8fce71bb425a6dcda45af7975a7f9e5368c61",
+        "observedSha256": "380499838f7189a0c747402ce7d8fce71bb425a6dcda45af7975a7f9e5368c61",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/settings/tu_00732ba8.c",
+        "firstLine": 1257,
+        "lastLine": 1335,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x736fac",
+      "symbol": "xm1_pipeline_image_metadata_sensitivity_base",
+      "extent": {
+        "size": 424,
+        "expectedSha256": "7c6ef68a7ab3bcf3d4446977aa214c3e700186723bc24910479d8d5110301867",
+        "observedSha256": "7c6ef68a7ab3bcf3d4446977aa214c3e700186723bc24910479d8d5110301867",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/settings/tu_00732ba8.c",
+        "firstLine": 2049,
+        "lastLine": 2131,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x733f30",
+      "symbol": "xm1_pipeline_image_metadata_current_sensitivity",
+      "extent": {
+        "size": 16,
+        "expectedSha256": "3438d3135e88202a074928b907a504dce38f342428e967b550bb53e2ffad9df7",
+        "observedSha256": "3438d3135e88202a074928b907a504dce38f342428e967b550bb53e2ffad9df7",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/settings/tu_00732ba8.c",
+        "firstLine": 723,
+        "lastLine": 726,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x733dd0",
+      "symbol": "xm1_pipeline_image_metadata_sensitivity_threshold",
+      "extent": {
+        "size": 84,
+        "expectedSha256": "51fe1beddac62f9034732eb9ef90ca317e85357372899e2c2773716a1e089821",
+        "observedSha256": "51fe1beddac62f9034732eb9ef90ca317e85357372899e2c2773716a1e089821",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/settings/tu_00732ba8.c",
+        "firstLine": 665,
+        "lastLine": 679,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x733f04",
+      "symbol": "xm1_pipeline_image_metadata_apply_sensitivity_delta",
+      "extent": {
+        "size": 44,
+        "expectedSha256": "375932d8f1a48302def1a342cb768fb25bbf4ae03f981a906e21330b8db6f924",
+        "observedSha256": "375932d8f1a48302def1a342cb768fb25bbf4ae03f981a906e21330b8db6f924",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/settings/conversion_geometry_helpers.c",
+        "firstLine": 75,
+        "lastLine": 80,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x7345b4",
+      "symbol": "xm1_pipeline_image_metadata_sensor_width",
+      "extent": {
+        "size": 232,
+        "expectedSha256": "ec873c4b2411cd4fa65c1248b5edb001b3359cb46caddc3707fa3ecd6a36595b",
+        "observedSha256": "ec873c4b2411cd4fa65c1248b5edb001b3359cb46caddc3707fa3ecd6a36595b",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/settings/tu_00732ba8.c",
+        "firstLine": 792,
+        "lastLine": 846,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x734710",
+      "symbol": "xm1_pipeline_image_metadata_sensor_height",
+      "extent": {
+        "size": 276,
+        "expectedSha256": "e90b722ed5dc16a577da1b5cfe7cefc547c584f7814d2c331a6b42228f463d24",
+        "observedSha256": "e90b722ed5dc16a577da1b5cfe7cefc547c584f7814d2c331a6b42228f463d24",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/settings/tu_00732ba8.c",
+        "firstLine": 861,
+        "lastLine": 916,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x11c19c8",
+      "symbol": "xm1_pipeline_image_write_makernote",
+      "extent": {
+        "size": 360,
+        "expectedSha256": "5990dc4c08723a4a7780ffe9c0d294e9e5cd90d01c960a5f17d7abd55ed3c12a",
+        "observedSha256": "5990dc4c08723a4a7780ffe9c0d294e9e5cd90d01c960a5f17d7abd55ed3c12a",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_marker_parser_more.c",
+        "firstLine": 496,
+        "lastLine": 528,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x11c1b30",
+      "symbol": "xm1_pipeline_image_write_gps_ifd",
+      "extent": {
+        "size": 228,
+        "expectedSha256": "2c928a48de35826ad5b475b595055c40ce44b56ddd9a9c26192eb6b8fde82194",
+        "observedSha256": "2c928a48de35826ad5b475b595055c40ce44b56ddd9a9c26192eb6b8fde82194",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_header_writer.c",
+        "firstLine": 114,
+        "lastLine": 129,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xea9d9c",
+      "symbol": "xm1_pipeline_image_pack_metadata_rectangle",
+      "extent": {
+        "size": 52,
+        "expectedSha256": "cd5b1cb632b30c2b1a05fa970342ce7e4148fa0cdc386411dfee8dd211c1b6d2",
+        "observedSha256": "cd5b1cb632b30c2b1a05fa970342ce7e4148fa0cdc386411dfee8dd211c1b6d2",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 257,
+        "lastLine": 264,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xea9dd0",
+      "symbol": "xm1_pipeline_image_pack_paired_metadata_rectangle",
+      "extent": {
+        "size": 52,
+        "expectedSha256": "cd5b1cb632b30c2b1a05fa970342ce7e4148fa0cdc386411dfee8dd211c1b6d2",
+        "observedSha256": "cd5b1cb632b30c2b1a05fa970342ce7e4148fa0cdc386411dfee8dd211c1b6d2",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 266,
+        "lastLine": 273,
+        "status": "exact"
+      }
+    },
+    {"address":"0xebde7c","symbol":"xm1_pipeline_image_populate_raf_metadata","extent":{"size":6148,"expectedSha256":"fd771bc67d497e4bd7ed7cd2c7c38ad6769300db1e132fcef14340c50617d624","observedSha256":"fd771bc67d497e4bd7ed7cd2c7c38ad6769300db1e132fcef14340c50617d624","matches":true},"source":{"file":"decomp/firmwares/xm1-150/app/capture/record/tu_00ebdd68.c","firstLine":77,"lastLine":986,"status":"nonmatching"}},
+    {"address":"0xeb02f8","symbol":"xm1_pipeline_image_select_metadata_balance","extent":{"size":216,"expectedSha256":"22545351b60d759d236a7a03ac9d85d49b24eb2056cca0467c668c3b3e13dcc4","observedSha256":"22545351b60d759d236a7a03ac9d85d49b24eb2056cca0467c668c3b3e13dcc4","matches":true},"source":{"file":"decomp/firmwares/xm1-150/app/capture/record/tu_00eaa494.c","firstLine":3334,"lastLine":3379,"status":"nonmatching"}},
+    {"address":"0x73fce0","symbol":"xm1_pipeline_image_metadata_threshold_band","extent":{"size":128,"expectedSha256":"5fea2494e06ddd6ee9e6d5260800042bbb729b385dce72e719089608c5b7108a","observedSha256":"5fea2494e06ddd6ee9e6d5260800042bbb729b385dce72e719089608c5b7108a","matches":true},"source":{"file":"decomp/firmwares/xm1-150/app/settings/configuration_lookup_cache.c","firstLine":140,"lastLine":155,"status":"exact"}},
+    {"address":"0xe57b5c","symbol":"xm1_pipeline_image_metadata_sensor_band","extent":{"size":72,"expectedSha256":"1afbd6e5e376ebfff845a495672e3309b933382325203119b55a3eeb2389d844","observedSha256":"1afbd6e5e376ebfff845a495672e3309b933382325203119b55a3eeb2389d844","matches":true},"source":{"file":"decomp/firmwares/xm1-150/app/capture/reccont/tu_00e57b5c.c","firstLine":105,"lastLine":127,"status":"nonmatching"}},
+    {"address":"0xe57cb4","symbol":"xm1_pipeline_image_metadata_level_band","extent":{"size":92,"expectedSha256":"37de2e0ab255fe8e0df2b6b4de51dd0092a05be1571b672da14df88f1b327689","observedSha256":"37de2e0ab255fe8e0df2b6b4de51dd0092a05be1571b672da14df88f1b327689","matches":true},"source":{"file":"decomp/firmwares/xm1-150/app/capture/reccont/tu_00e57b5c.c","firstLine":179,"lastLine":202,"status":"nonmatching"}},
+    {"address":"0xe57ba4","symbol":"xm1_pipeline_image_metadata_distortion_enabled","extent":{"size":272,"expectedSha256":"b5396263bec1054073cc8a7570b6af2f0ff41649edfb31eed62cbff4259f4bd5","observedSha256":"b5396263bec1054073cc8a7570b6af2f0ff41649edfb31eed62cbff4259f4bd5","matches":true},"source":{"file":"decomp/firmwares/xm1-150/app/capture/reccont/tu_00e57b5c.c","firstLine":129,"lastLine":177,"status":"nonmatching"}},
+    {"address":"0x73ebcc","symbol":"xm1_pipeline_image_metadata_snapshot_band","extent":{"size":64,"expectedSha256":"9e52d1d7ecd90954c06401bee4fcf4ece975dea8d2f010c792a36b70c975f390","observedSha256":"9e52d1d7ecd90954c06401bee4fcf4ece975dea8d2f010c792a36b70c975f390","matches":true},"source":{"file":"decomp/firmwares/xm1-150/app/platform/boot/tu_0073e25c.c","firstLine":371,"lastLine":387,"status":"nonmatching"}},
+    {"address":"0x73fdb8","symbol":"xm1_pipeline_image_metadata_cached_snapshot_value","extent":{"size":108,"expectedSha256":"5b79e5396cea2e951ca970feb6df6544166492d2abbc2137fe2f7d346f4dd778","observedSha256":"5b79e5396cea2e951ca970feb6df6544166492d2abbc2137fe2f7d346f4dd778","matches":true},"source":{"file":"decomp/firmwares/xm1-150/app/settings/tu_0073ed54.c","firstLine":423,"lastLine":435,"status":"nonmatching"}},
+    {"address":"0x73fe24","symbol":"xm1_pipeline_image_metadata_cached_snapshot_band","extent":{"size":104,"expectedSha256":"37ad061923fd5238371a62bad2848de833806ec087bcea1ee535377d50f97f90","observedSha256":"37ad061923fd5238371a62bad2848de833806ec087bcea1ee535377d50f97f90","matches":true},"source":{"file":"decomp/firmwares/xm1-150/app/settings/tu_0073ed54.c","firstLine":437,"lastLine":448,"status":"nonmatching"}},
+    {"address":"0x73fe8c","symbol":"xm1_pipeline_image_metadata_snapshot_projection","extent":{"size":100,"expectedSha256":"e455943bd02fdcf4282681f88c99806dba6cfb7ad0577799c002a510a486231b","observedSha256":"e455943bd02fdcf4282681f88c99806dba6cfb7ad0577799c002a510a486231b","matches":true},"source":{"file":"decomp/firmwares/xm1-150/app/settings/tu_0073ed54.c","firstLine":450,"lastLine":467,"status":"nonmatching"}},
+    {"address":"0xd5e5a4","symbol":"xm1_pipeline_image_export_metadata_snapshot","extent":{"size":136,"expectedSha256":"181ac83d45b669f2291b9bcb716078b59b75418d56f0755a277097e1b6d13a51","observedSha256":"181ac83d45b669f2291b9bcb716078b59b75418d56f0755a277097e1b6d13a51","matches":true},"source":{"file":"decomp/firmwares/xm1-150/app/connectivity/ptp/vendor/imaging_config/tu_00d5c120.c","firstLine":1188,"lastLine":1218,"status":"nonmatching"}},
+    {"address":"0xe560a0","symbol":"xm1_pipeline_image_prepare_metadata_preview","extent":{"size":44,"expectedSha256":"e895f22e110e5b5beaa2eb87e8fe175d4e437dcc69a17f077eaed0b2bac857a7","observedSha256":"e895f22e110e5b5beaa2eb87e8fe175d4e437dcc69a17f077eaed0b2bac857a7","matches":true},"source":{"file":"decomp/firmwares/xm1-150/app/capture/reccont/reccont_stage_configuration.c","firstLine":71,"lastLine":74,"status":"exact"}},
+    {"address":"0xe57fc8","symbol":"xm1_pipeline_image_populate_sensor_snapshot","extent":{"size":900,"expectedSha256":"232a181578c7780757bc0d8e975e15f09b81af21f0296d7ee87938e1e2d2ada6","observedSha256":"232a181578c7780757bc0d8e975e15f09b81af21f0296d7ee87938e1e2d2ada6","matches":true},"source":{"file":"decomp/firmwares/xm1-150/app/capture/reccont/tu_00e57b5c.c","firstLine":341,"lastLine":480,"status":"nonmatching"}}
+  ],
+  "absorbedHelpers": [
+    {
+      "address": "0x11cecb8",
+      "classification": "absorbed-owned-rom-rule-callback",
+      "extent": {
+        "size": 48,
+        "observedSha256": "7526a86304f99da0ec7b8fbec13d9ec7225b82b527cb58e70f9624256e813e76",
+        "boundaryEvidence": "Original A32 callback entry and following callback entry, artifact8419"
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/codec_message_rest_exact.c",
+        "status": "callback entries confirmed against original A32"
+      }
+    },
+    {
+      "address": "0x11cece8",
+      "classification": "absorbed-owned-rom-rule-callback",
+      "extent": {
+        "size": 48,
+        "observedSha256": "6f51c1a0a99abab68d07467ee40ebea200d2c463d9619cbc7ce92b10f0d1358c",
+        "boundaryEvidence": "Original A32 callback entry and following callback entry, artifact8419"
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/codec_message_rest_exact.c",
+        "status": "callback entries confirmed against original A32"
+      }
+    },
+    {
+      "address": "0x11ced18",
+      "classification": "absorbed-owned-rom-rule-callback",
+      "extent": {
+        "size": 48,
+        "observedSha256": "d9427d07cf9d836b5eaafb59d8e4908c57241cb9154ace49de778b0fb34d4ada",
+        "boundaryEvidence": "Original A32 callback entry and following callback entry, artifact8419"
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/codec_message_rest_exact.c",
+        "status": "callback entries confirmed against original A32"
+      }
+    },
+    {
+      "address": "0x11ced48",
+      "classification": "absorbed-owned-rom-rule-callback",
+      "extent": {
+        "size": 56,
+        "observedSha256": "404a74fbb6560167cec896b4b0392b30f3997a24039535bf39e730b335a1531d",
+        "boundaryEvidence": "Original A32 callback entry and following callback entry, artifact8419"
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/codec_message_rest_exact.c",
+        "status": "callback entries confirmed against original A32"
+      }
+    },
+    {
+      "address": "0x11ced80",
+      "classification": "absorbed-owned-rom-rule-callback",
+      "extent": {
+        "size": 32,
+        "observedSha256": "e362ccab2558b8fdb9f82cc42c44095d14574a8b392be368c894b2ad644f1312",
+        "boundaryEvidence": "Original A32 callback entry and following callback entry, artifact8419"
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/codec_message_rest_exact.c",
+        "status": "callback entries confirmed against original A32"
+      }
+    },
+    {
+      "address": "0x11ceda0",
+      "classification": "absorbed-owned-rom-rule-callback",
+      "extent": {
+        "size": 64,
+        "observedSha256": "02276c0d9e756f0c368b2ae3e2b8a76013f9b646a1f4abf884bd64cd9bc6aeee",
+        "boundaryEvidence": "Original A32 callback entry and following callback entry, artifact8419"
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/codec_message_rest_exact.c",
+        "status": "callback entries confirmed against original A32"
+      }
+    },
+    {
+      "address": "0x11cede0",
+      "classification": "absorbed-owned-rom-rule-callback",
+      "extent": {
+        "size": 48,
+        "observedSha256": "68a6f10fd168e639a3c3f4d07d74b3acd18487b6386dadb174f4c02154ff8d85",
+        "boundaryEvidence": "Original A32 callback entry and following callback entry, artifact8419"
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/codec_message_rest_exact.c",
+        "status": "callback entries confirmed against original A32"
+      }
+    },
+    {
+      "address": "0x11cee10",
+      "classification": "absorbed-owned-rom-rule-callback",
+      "extent": {
+        "size": 60,
+        "observedSha256": "420a190b0665aa3185c3ea3716bb6c08e28168e8be0e4a807f6fb244813eef86",
+        "boundaryEvidence": "Original A32 callback entry and following callback entry, artifact8419"
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/codec_message_rest_exact.c",
+        "status": "callback entries confirmed against original A32"
+      }
+    },
+    {
+      "address": "0x11cee4c",
+      "classification": "absorbed-owned-rom-rule-callback",
+      "extent": {
+        "size": 84,
+        "observedSha256": "6d2fa278427710ce71598a01e23f820c6c26efa62a12708fa336b54cb664028d",
+        "boundaryEvidence": "Original A32 callback entry and following callback entry, artifact8419"
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/codec_message_rest_exact.c",
+        "status": "callback entries confirmed against original A32"
+      }
+    },
+    {
+      "address": "0x11cefa8",
+      "symbol": "FUN_011cefa8",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 72,
+        "expectedSha256": "78dc5aaab24511361270346f75c3150c70e1972ef8d20fbd6d039ce71daf676b",
+        "observedSha256": "78dc5aaab24511361270346f75c3150c70e1972ef8d20fbd6d039ce71daf676b",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_value_callbacks_rest.c",
+        "firstLine": 7,
+        "lastLine": 20,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0x11ceff0",
+      "symbol": "exif_copy_value_7a",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 72,
+        "expectedSha256": "b7b343cfe58077647be58a7de09d1f31ec49941bce1ab7f8c6b6ddb467189c54",
+        "observedSha256": "b7b343cfe58077647be58a7de09d1f31ec49941bce1ab7f8c6b6ddb467189c54",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_value_callbacks.c",
+        "firstLine": 61,
+        "lastLine": 73,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x11cf038",
+      "symbol": "exif_copy_default_text",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 164,
+        "expectedSha256": "b5516f6e870423f3830ed6cb77d3edc8822f0f0c6d46ea9468f394ddaca747e4",
+        "observedSha256": "b5516f6e870423f3830ed6cb77d3edc8822f0f0c6d46ea9468f394ddaca747e4",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/tiff_values.c",
+        "firstLine": 14,
+        "lastLine": 27,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x11cf3cc",
+      "symbol": "exif_copy_camera_id",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 124,
+        "expectedSha256": "1318681d154b6cab05f2a437ed75b75ccfbac2aebd729bb2a24a641238f319f9",
+        "observedSha256": "1318681d154b6cab05f2a437ed75b75ccfbac2aebd729bb2a24a641238f319f9",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/tiff_values.c",
+        "firstLine": 29,
+        "lastLine": 43,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x11cf82c",
+      "symbol": "exif_copy_printim",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 40,
+        "expectedSha256": "b88c279dc9cefaf4ac6c724a71805a3e2f4c0af0a3dfa90413bcf79e1708eb05",
+        "observedSha256": "b88c279dc9cefaf4ac6c724a71805a3e2f4c0af0a3dfa90413bcf79e1708eb05",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_tag_tables.c",
+        "firstLine": 58,
+        "lastLine": 62,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x11cfd58",
+      "symbol": "FUN_011cfd58",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 252,
+        "expectedSha256": "e9e7b7c42afa6ad762386d65ab177af6c4ec5d825f71647e15b0e5e5f0230484",
+        "observedSha256": "e9e7b7c42afa6ad762386d65ab177af6c4ec5d825f71647e15b0e5e5f0230484",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/media/exif_tag_tables_rest_exact.c",
+        "firstLine": 7,
+        "lastLine": 44,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0xeaa478",
+      "symbol": "capture_clear_image_information",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 28,
+        "expectedSha256": "9f481c56054ef5d8b02c826aec6882834cd11e5a1f85ca30a0a241e364790d4a",
+        "observedSha256": "9f481c56054ef5d8b02c826aec6882834cd11e5a1f85ca30a0a241e364790d4a",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/record/capture_metadata.c",
+        "firstLine": 92,
+        "lastLine": 95,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaa494",
+      "symbol": "FUN_00eaa494",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 28,
+        "expectedSha256": "97ef11447da73130dabc71b01bc06149423aa1216ebcc3305837253c6dbc710c",
+        "observedSha256": "97ef11447da73130dabc71b01bc06149423aa1216ebcc3305837253c6dbc710c",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/record/tu_00eaa494.c",
+        "firstLine": 54,
+        "lastLine": 58,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaa4b0",
+      "symbol": "FUN_00eaa4b0",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 200,
+        "expectedSha256": "1551f4877f35c37887ef5e7fc79aac60b2fcac9896650da411eb5f249459dbc7",
+        "observedSha256": "1551f4877f35c37887ef5e7fc79aac60b2fcac9896650da411eb5f249459dbc7",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/record/tu_00eaa494.c",
+        "firstLine": 60,
+        "lastLine": 96,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0xeaa578",
+      "symbol": "FUN_00eaa578",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 68,
+        "expectedSha256": "0edc5800f65d8db3653f95c48193d0b8b1e087741a848111cc89916ff0fe07b3",
+        "observedSha256": "0edc5800f65d8db3653f95c48193d0b8b1e087741a848111cc89916ff0fe07b3",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/record/tu_00eaa494.c",
+        "firstLine": 98,
+        "lastLine": 114,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0xea99e8",
+      "symbol": "FUN_00ea99e8",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 120,
+        "expectedSha256": "659846adf5c70b03abb9bc69a8419e3a748fccd99dc6deba67f41e598039a5ba",
+        "observedSha256": "659846adf5c70b03abb9bc69a8419e3a748fccd99dc6deba67f41e598039a5ba",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 78,
+        "lastLine": 98,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xea9a60",
+      "symbol": "FUN_00ea9a60",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 40,
+        "expectedSha256": "f7f86cf4e462e4752318f74c38f08f37ed599a28fc04e73880477e846457097c",
+        "observedSha256": "f7f86cf4e462e4752318f74c38f08f37ed599a28fc04e73880477e846457097c",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 100,
+        "lastLine": 104,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xea9a88",
+      "symbol": "FUN_00ea9a88",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 196,
+        "expectedSha256": "7947031fdcb7777f3baef6fbafe916194964c5432dd437baf34e5b44ab6e675f",
+        "observedSha256": "7947031fdcb7777f3baef6fbafe916194964c5432dd437baf34e5b44ab6e675f",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 106,
+        "lastLine": 146,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0xea9b4c",
+      "symbol": "FUN_00ea9b4c",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 28,
+        "expectedSha256": "65a5841140884ff3cb39e23c30a9c36d4f119797e888b312e97a2f336204d107",
+        "observedSha256": "65a5841140884ff3cb39e23c30a9c36d4f119797e888b312e97a2f336204d107",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 148,
+        "lastLine": 152,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xea9b68",
+      "symbol": "FUN_00ea9b68",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 56,
+        "expectedSha256": "cd5c7b27d202c8a3f2a94b3eb4892fc3e1f537f95e641a064ab84e3a30ec8b1a",
+        "observedSha256": "cd5c7b27d202c8a3f2a94b3eb4892fc3e1f537f95e641a064ab84e3a30ec8b1a",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 154,
+        "lastLine": 164,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0xea9ba0",
+      "symbol": "FUN_00ea9ba0",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 60,
+        "expectedSha256": "77dd6e3f561d1da688f9b448367a17245e0b124f8b66f0249891619667b8027d",
+        "observedSha256": "77dd6e3f561d1da688f9b448367a17245e0b124f8b66f0249891619667b8027d",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 166,
+        "lastLine": 175,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xea9bdc",
+      "symbol": "FUN_00ea9bdc",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 56,
+        "expectedSha256": "44b12e1e77816d9c32dedab36d6751f8d89f302c9638b716b36b6be8f53a2c36",
+        "observedSha256": "44b12e1e77816d9c32dedab36d6751f8d89f302c9638b716b36b6be8f53a2c36",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 177,
+        "lastLine": 187,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0xea9c14",
+      "symbol": "FUN_00ea9c14",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 28,
+        "expectedSha256": "3b700148c61f35d4182b6c80cb4373bdb14fa51b50e6bf73047ae8b598ebdaeb",
+        "observedSha256": "3b700148c61f35d4182b6c80cb4373bdb14fa51b50e6bf73047ae8b598ebdaeb",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 189,
+        "lastLine": 193,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xea9c30",
+      "symbol": "FUN_00ea9c30",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 300,
+        "expectedSha256": "44c26ae7cb0e84d39bebb15da2755b3c0245869677ca7850ebfa6fc7f360a448",
+        "observedSha256": "44c26ae7cb0e84d39bebb15da2755b3c0245869677ca7850ebfa6fc7f360a448",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 195,
+        "lastLine": 238,
+        "status": "nonmatching"
+      }
+    },
+    {
+      "address": "0xea9d5c",
+      "symbol": "FUN_00ea9d5c",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 64,
+        "expectedSha256": "d1dd4951557b252a5fb52a1df97b10582bc27ca998d77a6589cd6d83bba95004",
+        "observedSha256": "d1dd4951557b252a5fb52a1df97b10582bc27ca998d77a6589cd6d83bba95004",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 240,
+        "lastLine": 255,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaa454",
+      "symbol": "FUN_00eaa454",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 36,
+        "expectedSha256": "23c4d5d2a20edb80641f1faab25202df6a6e6460438c622b894e960ae567b235",
+        "observedSha256": "23c4d5d2a20edb80641f1faab25202df6a6e6460438c622b894e960ae567b235",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00eaa114.c",
+        "firstLine": 175,
+        "lastLine": 179,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xea9ef0",
+      "symbol": "FUN_00ea9ef0",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 32,
+        "expectedSha256": "85307b1a0b4c04b7165a72993016c9c25a6e3a4377658697d1c7fa10cb4fc6a8",
+        "observedSha256": "85307b1a0b4c04b7165a72993016c9c25a6e3a4377658697d1c7fa10cb4fc6a8",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 336,
+        "lastLine": 340,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xea9f10",
+      "symbol": "FUN_00ea9f10",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 32,
+        "expectedSha256": "15e233f7b0dea5c4d86315996a647a914b4c3ab31cbc45d24de0f273c680088a",
+        "observedSha256": "15e233f7b0dea5c4d86315996a647a914b4c3ab31cbc45d24de0f273c680088a",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 342,
+        "lastLine": 346,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xea9f30",
+      "symbol": "FUN_00ea9f30",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 32,
+        "expectedSha256": "0fc3582b02b40adcdabd6ff3254d7edb2834d18221237bb0b33eb3072e676a18",
+        "observedSha256": "0fc3582b02b40adcdabd6ff3254d7edb2834d18221237bb0b33eb3072e676a18",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 348,
+        "lastLine": 352,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xea9f50",
+      "symbol": "FUN_00ea9f50",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 32,
+        "expectedSha256": "54fa7ac0d056d036fd26a9747cebae68a58c188c89b313c40daefbce7d4f947d",
+        "observedSha256": "54fa7ac0d056d036fd26a9747cebae68a58c188c89b313c40daefbce7d4f947d",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 354,
+        "lastLine": 358,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xea9f70",
+      "symbol": "FUN_00ea9f70",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 32,
+        "expectedSha256": "c4cf7097e516c147fee12f9641ba2e4804d86ac73a588b7f644185fe4a1c2cb1",
+        "observedSha256": "c4cf7097e516c147fee12f9641ba2e4804d86ac73a588b7f644185fe4a1c2cb1",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 360,
+        "lastLine": 364,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xea9f90",
+      "symbol": "FUN_00ea9f90",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 32,
+        "expectedSha256": "86070ab4b0a6725316b3712785e51e95ce274c8b9771b281224e5f44c1611613",
+        "observedSha256": "86070ab4b0a6725316b3712785e51e95ce274c8b9771b281224e5f44c1611613",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 366,
+        "lastLine": 370,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xea9fb0",
+      "symbol": "FUN_00ea9fb0",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 32,
+        "expectedSha256": "55d7a2b64eb7a70cdab099b0faa6dc83076a8b2c73f4a082867bac207f1d8a9c",
+        "observedSha256": "55d7a2b64eb7a70cdab099b0faa6dc83076a8b2c73f4a082867bac207f1d8a9c",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 372,
+        "lastLine": 376,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xea9fd0",
+      "symbol": "FUN_00ea9fd0",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 72,
+        "expectedSha256": "c5e7f46458d74bf0d32f1cf451dca87d09b7af57a7b3f8f7d13a1d7130814ba0",
+        "observedSha256": "c5e7f46458d74bf0d32f1cf451dca87d09b7af57a7b3f8f7d13a1d7130814ba0",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 378,
+        "lastLine": 387,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaa018",
+      "symbol": "FUN_00eaa018",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 32,
+        "expectedSha256": "d8b07374f3926fa3ca05ced462dfc2185d21678546de73e004afaf1f490674c9",
+        "observedSha256": "d8b07374f3926fa3ca05ced462dfc2185d21678546de73e004afaf1f490674c9",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 389,
+        "lastLine": 393,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaa038",
+      "symbol": "FUN_00eaa038",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 92,
+        "expectedSha256": "fdb117ae2496c5f4352cb153cebd9709271145be2e7e526da64aa428302f67b6",
+        "observedSha256": "fdb117ae2496c5f4352cb153cebd9709271145be2e7e526da64aa428302f67b6",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 395,
+        "lastLine": 404,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaa094",
+      "symbol": "FUN_00eaa094",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 32,
+        "expectedSha256": "280a46abc95b3a5339e0b83628e30f4837892cb474f2527c680c77a6838ef56f",
+        "observedSha256": "280a46abc95b3a5339e0b83628e30f4837892cb474f2527c680c77a6838ef56f",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 406,
+        "lastLine": 410,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaa0b4",
+      "symbol": "FUN_00eaa0b4",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 32,
+        "expectedSha256": "2c0eed555e8dc90abe3465976904589f2d8192c2349f89ad21b065d26bbb186a",
+        "observedSha256": "2c0eed555e8dc90abe3465976904589f2d8192c2349f89ad21b065d26bbb186a",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 412,
+        "lastLine": 416,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaa0d4",
+      "symbol": "FUN_00eaa0d4",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 32,
+        "expectedSha256": "0d417c75e6b758c8da8648d3a44116993e7b5b6fd03cbae6bfac6c84810c55fa",
+        "observedSha256": "0d417c75e6b758c8da8648d3a44116993e7b5b6fd03cbae6bfac6c84810c55fa",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 418,
+        "lastLine": 422,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaa0f4",
+      "symbol": "FUN_00eaa0f4",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 32,
+        "expectedSha256": "2aa93a536452bff2f1d3920cc431f0024644b41c35a042d382e86e8c5dc6df1d",
+        "observedSha256": "2aa93a536452bff2f1d3920cc431f0024644b41c35a042d382e86e8c5dc6df1d",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00ea985c.c",
+        "firstLine": 424,
+        "lastLine": 428,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaa114",
+      "symbol": "FUN_00eaa114",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 32,
+        "expectedSha256": "1af0ef3cd9c345bf62982f13c5f300916b5d44e68ff1fff31a6a6c07e456e4ee",
+        "observedSha256": "1af0ef3cd9c345bf62982f13c5f300916b5d44e68ff1fff31a6a6c07e456e4ee",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00eaa114.c",
+        "firstLine": 6,
+        "lastLine": 10,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaa134",
+      "symbol": "FUN_00eaa134",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 32,
+        "expectedSha256": "2c0eed555e8dc90abe3465976904589f2d8192c2349f89ad21b065d26bbb186a",
+        "observedSha256": "2c0eed555e8dc90abe3465976904589f2d8192c2349f89ad21b065d26bbb186a",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00eaa114.c",
+        "firstLine": 12,
+        "lastLine": 16,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaa154",
+      "symbol": "FUN_00eaa154",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 32,
+        "expectedSha256": "0d417c75e6b758c8da8648d3a44116993e7b5b6fd03cbae6bfac6c84810c55fa",
+        "observedSha256": "0d417c75e6b758c8da8648d3a44116993e7b5b6fd03cbae6bfac6c84810c55fa",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00eaa114.c",
+        "firstLine": 18,
+        "lastLine": 22,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaa174",
+      "symbol": "FUN_00eaa174",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 32,
+        "expectedSha256": "2aa93a536452bff2f1d3920cc431f0024644b41c35a042d382e86e8c5dc6df1d",
+        "observedSha256": "2aa93a536452bff2f1d3920cc431f0024644b41c35a042d382e86e8c5dc6df1d",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00eaa114.c",
+        "firstLine": 24,
+        "lastLine": 28,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaa194",
+      "symbol": "FUN_00eaa194",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 32,
+        "expectedSha256": "1af0ef3cd9c345bf62982f13c5f300916b5d44e68ff1fff31a6a6c07e456e4ee",
+        "observedSha256": "1af0ef3cd9c345bf62982f13c5f300916b5d44e68ff1fff31a6a6c07e456e4ee",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00eaa114.c",
+        "firstLine": 30,
+        "lastLine": 34,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaa1b4",
+      "symbol": "FUN_00eaa1b4",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 32,
+        "expectedSha256": "db273d3f35a6bacbd5a7c1f6639d3c482cf9e9c96846b67eb365028edba00bf8",
+        "observedSha256": "db273d3f35a6bacbd5a7c1f6639d3c482cf9e9c96846b67eb365028edba00bf8",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00eaa114.c",
+        "firstLine": 36,
+        "lastLine": 40,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaa1d4",
+      "symbol": "FUN_00eaa1d4",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 32,
+        "expectedSha256": "598dcca9bddd9746d41c65693edd0985d3bb24f49a790cc1b22e4da68d13f336",
+        "observedSha256": "598dcca9bddd9746d41c65693edd0985d3bb24f49a790cc1b22e4da68d13f336",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00eaa114.c",
+        "firstLine": 42,
+        "lastLine": 46,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaa1f4",
+      "symbol": "FUN_00eaa1f4",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 92,
+        "expectedSha256": "da1c7e0d4ff060d98c1d61d2226c0dd9ad2a7ba2aff54234c0daf492bbbb2ba7",
+        "observedSha256": "da1c7e0d4ff060d98c1d61d2226c0dd9ad2a7ba2aff54234c0daf492bbbb2ba7",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00eaa114.c",
+        "firstLine": 48,
+        "lastLine": 57,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaa250",
+      "symbol": "FUN_00eaa250",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 32,
+        "expectedSha256": "8d25c180412220286ba6d74a8ecbaa4eebad7f69484882f666241cacb8471a93",
+        "observedSha256": "8d25c180412220286ba6d74a8ecbaa4eebad7f69484882f666241cacb8471a93",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00eaa114.c",
+        "firstLine": 59,
+        "lastLine": 63,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaa270",
+      "symbol": "FUN_00eaa270",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 92,
+        "expectedSha256": "80672f587b5c05fa2928dee654eaf1284d67b324047cb89411a964012362d272",
+        "observedSha256": "80672f587b5c05fa2928dee654eaf1284d67b324047cb89411a964012362d272",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00eaa114.c",
+        "firstLine": 65,
+        "lastLine": 74,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaa2cc",
+      "symbol": "FUN_00eaa2cc",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 32,
+        "expectedSha256": "7de9d7620f777762f3e5db5b3d39ded35d9330ae3bd4b9daaab5a452a717eda4",
+        "observedSha256": "7de9d7620f777762f3e5db5b3d39ded35d9330ae3bd4b9daaab5a452a717eda4",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00eaa114.c",
+        "firstLine": 76,
+        "lastLine": 80,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaa94c",
+      "symbol": "capture_store_primary_mode_code",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 24,
+        "expectedSha256": "72f7fb34fd9dc1b90a56da8f0c884daf1b9817b23ef9be2aac2a1998bcdd14ab",
+        "observedSha256": "72f7fb34fd9dc1b90a56da8f0c884daf1b9817b23ef9be2aac2a1998bcdd14ab",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/record/capture_metadata.c",
+        "firstLine": 99,
+        "lastLine": 102,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaaa48",
+      "symbol": "capture_store_secondary_mode_code",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 24,
+        "expectedSha256": "2775966c00026e6a8c959039f09dc7c1d380a3fd030d00b934104bfc0160d4ef",
+        "observedSha256": "2775966c00026e6a8c959039f09dc7c1d380a3fd030d00b934104bfc0160d4ef",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/record/capture_metadata.c",
+        "firstLine": 104,
+        "lastLine": 107,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaac5c",
+      "symbol": "capture_store_color_code",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 24,
+        "expectedSha256": "4d9f2a64b9eecfeb60e7178c304491981a89d85dc5937bb5489e28e600c6c5ae",
+        "observedSha256": "4d9f2a64b9eecfeb60e7178c304491981a89d85dc5937bb5489e28e600c6c5ae",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/record/capture_metadata.c",
+        "firstLine": 109,
+        "lastLine": 112,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeaadf0",
+      "symbol": "capture_store_processing_code",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 24,
+        "expectedSha256": "efb01036b015f144b0b6019a17f7841182e704394ac694b27964a1caae7c312c",
+        "observedSha256": "efb01036b015f144b0b6019a17f7841182e704394ac694b27964a1caae7c312c",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/record/capture_metadata.c",
+        "firstLine": 114,
+        "lastLine": 117,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeab240",
+      "symbol": "capture_store_processing_flags",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 24,
+        "expectedSha256": "87c148ae363848e1fadb4d3712ec2ef318b42b7c1b003e98283afdc2cb65264b",
+        "observedSha256": "87c148ae363848e1fadb4d3712ec2ef318b42b7c1b003e98283afdc2cb65264b",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/record/capture_metadata.c",
+        "firstLine": 121,
+        "lastLine": 124,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0xeab35c",
+      "symbol": "FUN_00eab35c",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 40,
+        "expectedSha256": "4e47f23408fa1b120b950c9e1279b9908fd08743a0a67399f8ea1028ee5d35b8",
+        "observedSha256": "4e47f23408fa1b120b950c9e1279b9908fd08743a0a67399f8ea1028ee5d35b8",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/capture/record/tu_00eaa494.c",
+        "firstLine": 780,
+        "lastLine": 788,
+        "status": "exact"
+      }
+    },
+    {
+      "address": "0x7270f8",
+      "symbol": "FUN_007270f8",
+      "classification": "absorbed-owned-cpu",
+      "extent": {
+        "size": 76,
+        "expectedSha256": "5e296b6b5f690026fadc920748113c9f9ad53fefd396c18df71496342412a16a",
+        "observedSha256": "5e296b6b5f690026fadc920748113c9f9ad53fefd396c18df71496342412a16a",
+        "matches": true
+      },
+      "source": {
+        "file": "decomp/firmwares/xm1-150/app/platform/diag/tu_00726478.c",
+        "firstLine": 362,
+        "lastLine": 370,
+        "status": "exact"
+      }
+    },
+    {"address":"0x6a8254","classification":"absorbed-owned-live-balance-selector","extent":{"size":88,"expectedSha256":"3a78af78895088739c9370e366254144dee50e69d478fa2086b2b8043ec9ec0c","observedSha256":"3a78af78895088739c9370e366254144dee50e69d478fa2086b2b8043ec9ec0c","matches":true},"source":{"file":"decomp/firmwares/xm1-150/app/settings/tu_006a7974.c","firstLine":344,"lastLine":358,"status":"nonmatching"},"domain":"Only selector0..3, constructed by eb02f8; native invalid-selector diagnostic is unreachable from that constructor"}
+  ],
+  "commandConstructors": [
+    {"entry":"0xe560a0","classification":"owned-CPU-preview-descriptor","callee":"owned e55918","arguments":["capture job","descriptor output","ROM0x1568ffc","operation14","option0"],"owner":"PipelineStripPlanner"},
+    {"entry":"0xe57fc8","classification":"owned-CPU-sensor-snapshot","callees":["owned distortion e57d10","owned geometry e563e0","owned preview e560a0","owned noise e56030"],"globalWorkspaces":["0x1568fac","0x156acd4","0x156973c","0x15699cc","0x1569a74","0x156af00"]},
+    {"entry":"0xebde7c","classification":"owned-CPU-RAF-metadata-and-spline-descriptor","tables":["0xec01c0 record mappings","0xec004c field sizes","0xec00c0 extension TIFF tags","0xec0010 spline knots"],"mirrorPolicy":"Original grouped copies and final-curve mirror omission"}
+  ],
+  "retainedServices": [],
+  "ownedDependencies": [
+    {
+      "owner": "PipelineOutputJpeg",
+      "commit": "8c7004db",
+      "roles": [
+        "TIFF value allocation and typed writing",
+        "capture date and EXIF date population",
+        "orientation",
+        "location",
+        "metadata quality selection and quality table"
+      ]
+    },
+    {
+      "owner": "PipelineBuffers",
+      "roles": [
+        "69f8fc configuration byte",
+        "69fec8 configuration half",
+        "734540 width lookup",
+        "73469c height lookup"
+      ]
+    },
+    {
+      "owner": "PipelineImageOperations",
+      "commit": "f5c6de43",
+      "roles": [
+        "eb1724 processed width",
+        "eb16f4 processed height"
+      ]
+    },
+    {
+      "owner": "PipelineRedEye",
+      "roles": [
+        "734b00 face normalization"
+      ]
+    }
+    ,{"owner":"PipelineImageReferences","roles":["69ff7c signed-half configuration","69ff68 signed-byte configuration"]}
+    ,{"owner":"PipelineProfileCalibration","commit":"532e0766","file":"replacement/develop/src/pipeline/profile_calibration.rs","roles":["6a0010/69fcb8 configuration pointer mapping"],"law":"configuration_pointer(key) returns configuration_base().wrapping_add(key)"}
+    ,{"owner":"PipelineAffineMath","roles":["e57d10 distortion CPU closure"]}
+    ,{"owner":"PipelinePreparation","roles":["e563e0 primary geometry","da0c58 calibration selection"]}
+    ,{"owner":"PipelineStripPlanner","commit":"bb31cc64","roles":["e55918 preview descriptor construction","d77a48 template configuration","d5da2c submission CPU closure"],"modelStatus":"Frozen SensorSettingsScenarios.collectSettingsLaw and SensorRequestsScenarios.noiseTableLawFromMemory compose real settings/template/expansion CPU laws"}
+    ,{"component":"OutputExpansionScenarios","commit":"51acf287","roles":["Full final normalized580-byte descriptor","4704-byte record","cache and scratch effects"],"modelAPI":"expansionEffectsFromImage"}
+    ,{"owner":"PipelineOutputTriplets","commit":"e5378551","roles":["e56030 noise descriptor finalization","e530d8 compression band"]}
+    ,{"owner":"DiagnosticLogging","roles":["723cb8 current task","726658 append stream text"],"callsite":"RAF record-map error before the source nonreturning loop"}
+  ],
+  "nativeCorrections": [
+    "Maker IFD count154, not156",
+    "11cefa8 source offset0x100, not0x104",
+    "Interoperability text stored inline at14e9e08",
+    "Saved parser bank0 state14e9e50/file14e9e58;bank1 state14e9e54/file14e9e4c",
+    "Query packed unaligned reads preserve native little-endian data layout",
+    "733f30 receives r0 selection despite void recovered prototype",
+    "Manual metadata mode predicate excludes0 and1",
+    "Scene append uses metadata count minus1",
+    "Appended rectangles sign extend stored halfwords before normalization",
+    "Profile alternate bank reads69f8fc, not donor9455c0",
+    "69ff7c is signed-half and69ff68 is signed-byte",
+    "e57fc8 noise descriptor count fields use native halfword loads",
+    "RAF first curve uses signed-half samples; second curves use signed-byte samples",
+    "RAF third-curve negative manual selection uses offset(4-selection)*9",
+    "RAF numerator configuration byte advances while its denominator key stays fixed",
+    "RAF exposure average loads1610 before160c",
+    "Source omits copying final extension curve400 into its mirror; only final458 zero is mirrored"
+  ],
+  "invariants": [
+    "Readonly rule callback targets are exhaustively matched to the15 original CPU callbacks; arbitrary callback addresses are outside the source ROM rule-table domain",
+    "Spline count2..20 and descending-knot violations retain nonreturning source behavior",
+    "Spline solver uses original global matrices911b74/9114e4 and right-hand-side911b24",
+    "No heap allocation, no application call into the74 scoped stock bodies or37 already-owned framework/core bodies"
+  ],
+  "missingLaws": [
+    "No compiler, model, native, test, formatter or qualification run performed",
+    "write_exif_header fixtures compare header bytes, IFD counts/chains, maker length, optional GPS direction transitions and literal returned sizes4520/4802/4782; complete serialized-byte coverage and native admission remain open",
+    "Output metadata has a real panorama EXIF/maker/location population fixture; additional capture transitions and quality-table branches remain unadmitted",
+    "Maker metadata fixtures include zero-record panorama and normal/paired-face publication; special-capture, portrait append and window-error admission remain open",
+    "Spline fixtures include zero and nonzero affine solves, evaluation and singular error; NaN and larger nonuniform-grid laws remain open",
+    "RAF and sensor-snapshot fixtures compose frozen noiseTableLawFromMemory with preceding snapshot warm-cache state and no application scripts; native admission remains parent-owned",
+    "RAF record-map failure logs then does not return; the current StageScenario return oracle cannot admit this path",
+    "Native equivalence, shared ABI resolution, target linkage and publication admission remain parent-owned"
+  ],
+  "modelCoverage": {
+    "execution":"Every listed scenario resolves the real owned entry; application Call scripts are absent",
+    "headerSchemaGoldens":{"withoutGps":{"primaryEntries":12,"exifEntries":42,"makerEntries":80,"thumbnailEntries":8,"bytes":4520},"withGps":{"gpsEntries":13,"bytes":4802},"withoutGpsDirection":{"gpsEntries":12,"bytes":4782}},
+    "specialMetadata":"Negative saved selection skips both a rejected directory and a sentinel-valued record, then copies the real nested record through owned TIFF query bodies",
+    "snapshots":"Cold-cache publication, warm-cache retention, out-of-range fallback, nullable projection and all five real configuration projections",
+    "preview":"e560a0 executes real e55918/d79408 settings CPU closure for OrdinarySettings, PreparedSettings and SavedSettings with operation14",
+    "sensorSnapshot":"Full e57fc8 through real preview, template and submission CPU bodies, with preceding configuration-cache publication included in the expansion oracle",
+    "raf":"Full ebde7c with and without mirror pointers: header values, native byte order, reversed configuration bytes, differing exposure numerators, source snapshot publication, rational curves, average and intentionally untouched mirror ranges",
+    "calibration":"Unsigned threshold conversion after the signed-half reader; inclusive quartet thresholds",
+    "whiteBalance":"Native custom high-byte-first configuration order and live triplet source",
+    "spline":"Singular failure after constant publication, zero and nonzero affine coefficients, and affine evaluation"
+  },
+  "modelInput":{"layout":"image4 concatenated with image5","image4Bytes":2631680,"image5Readers":"Drop image4 prefix before SensorSettingsScenarios readers","configurationBase":"0x3000000"},
+  "pendingSourceClosure": []
+}

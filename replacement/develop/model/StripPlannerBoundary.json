@@ -1,0 +1,122 @@
+{
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image4Sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+  "image5Sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+  "qualification": "Source implementation and independent model definitions. No build, native execution, or device pixel-law qualification is claimed.",
+  "addressCorrections": {
+    "buildStripRequest": "0x00da7e18, not 0x00da78b0 (an interior instruction of plan_strips)",
+    "adjustStripPlan": "0x00da7c30, not 0x00da77bc (an interior instruction of plan_strips)",
+    "debug": "0x00e65518 belongs to PipelineCropProcess; 0x00da9398 is finish, not debug"
+  },
+  "exports": [
+    ["0x00da6840","xm1_pipeline_image_geometry_initialize","i32()"],
+    ["0x00da6868","xm1_pipeline_image_geometry_release","i32()"],
+    ["0x00da687c","xm1_pipeline_image_geometry_begin","void()"],
+    ["0x00da68b8","xm1_pipeline_image_geometry_wait","i32()"],
+    ["0x00da6908","xm1_pipeline_image_geometry_margins","void(request34words,margins6words)"],
+    ["0x00da6a6c","xm1_pipeline_image_geometry_dimensions","void(request34words,margins6words,dimensions15words)"],
+    ["0x00da713c","xm1_pipeline_image_geometry_strips","void(request34words,margins6words,dimensions15words,plan13words)"],
+    ["0x00da7c30","xm1_pipeline_image_geometry_adjust","void(request34words,dimensions15words,plan13words,tail13words)"],
+    ["0x00da7e18","xm1_pipeline_image_geometry_build_strip_request","i32(request34words,plan13words,tail13words)"],
+    ["0x00da7e8c","xm1_pipeline_image_geometry_program_paired","void(request34words,dimensions15words,plan13words,PixelColumn)"],
+    ["0x00da810c","xm1_pipeline_image_geometry_program_extended","void(request34words,dimensions15words,plan13words,PixelColumn)"],
+    ["0x00da8380","xm1_pipeline_image_geometry_program_primary","void(request34words,dimensions15words,plan13words,PixelColumn)"],
+    ["0x00da8634","xm1_pipeline_image_geometry_program_secondary","void(request34words,dimensions15words,plan13words,PixelColumn)"],
+    ["0x00da8914","xm1_pipeline_image_geometry_program_simple","void(request34words,dimensions15words,plan13words)"],
+    ["0x00da8b00","xm1_pipeline_image_geometry_program_profile","void(request34words,dimensions15words,plan13words)"],
+    ["0x00da8e50","xm1_pipeline_image_geometry_program_alternate","void(request34words,dimensions15words,plan13words)"],
+    ["0x00da9124","xm1_pipeline_image_geometry_dispatch","i32(request34words,StripSelectionCode)"],
+    ["0x00da9230","xm1_pipeline_image_geometry_irq","void()"],
+    ["0x00da92f0","xm1_pipeline_image_geometry_configure","i32(request34words)"],
+    ["0x00da9370","xm1_pipeline_image_geometry_mode","u32(GeometryKind)"],
+    ["0x00da9398","xm1_pipeline_image_geometry_finish","u32()"]
+  ],
+  "ownedExtents": [
+    ["0x00da6840",40,"31ffad01d54db83cd5ea82721cde02646c514645613c76fd4a84706f60ad9cd5"],
+    ["0x00da6868",20,"3e2b765331736b174e63b52d3b6b33e09f2def143d2c110b01786cbb02f075f0"],
+    ["0x00da687c",60,"4e389bff83f113177a33ec09ad8ed12fbfe793f1d70b2f910fb9583edf986f6a"],
+    ["0x00da68b8",80,"ac6ecaa2bf4f3548a682800cf19c141b949938f10d63a8653555020376bb1cb8"],
+    ["0x00da6908",356,"e2d925d03c649a720811d6dcc2dc059f2ca542c46e4c9ec2d031a2d223ba0ee0"],
+    ["0x00da6a6c",1744,"48890a74dac646056197d975f9a71becb1616df8c08b3ee3d3874229fe654319"],
+    ["0x00da713c",2804,"56a747b74c060e06cb562c409a986dd91d2f18967ad742ed6d9f24467f45ba81"],
+    ["0x00da7c30",488,"341e1bc4007bb66cd23d0fff85883cd5d9c954735f3fced387a213992133ae65"],
+    ["0x00da7e18",116,"59f7ba8dfa56d552bc0f636cea5e5489f2c9f6d38da22cd0dfc9373e11055a8a"],
+    ["0x00da7e8c",640,"69b2ac786346774a396089ec814d51a4cfdf5062fc7690ad961cde4a400dc41b"],
+    ["0x00da810c",628,"187a94e7cdac459e32a2a6c73efbeb7ae9f91a63b84a92e9dbd144def253c289"],
+    ["0x00da8380",692,"c5d74938453814d926e08850faa7957609e8f2026c0a8a754156d76a99dac2be"],
+    ["0x00da8634",736,"865d687ad05cfc4ea19c8b4d6c657426844551de735cf721f7f5b9fe166fcb5c"],
+    ["0x00da8914",492,"aa66e94eed49d33df998a0c7cc4f11e5b6b6445670030ede195e378cfe0a96e4"],
+    ["0x00da8b00",848,"72fa60344aa26d1a9bbdb85a9804cb744d092cc7a8fd59d82c109c9a04ca64bc"],
+    ["0x00da8e50",724,"39b03dfc762e46945dff9c6ed817fb1c8053a0aa78afe6d0718ae5b0004b4f19"],
+    ["0x00da9124",268,"0c2bf64025f99f0ed48641f94f8306575a5511e144106286f1d1df6c1e37859c"],
+    ["0x00da9230",192,"c2b74eb09ebf6fbd515f10a3dd9d1393aeca720180d98f059f9f366281fcfea3"],
+    ["0x00da92f0",128,"91a9741096036f11cbd8ff19ecea84235934f7bcc0c37511734798c5fd2bb0d0"],
+    ["0x00da9370",40,"7d8378a9762d6b3289e598df30c85e521c30e22905f0e49312eae9264dde312c"],
+    ["0x00da9398",48,"78dec8a30a8f8347f3db9a157bb317ae58b2b532aacdf529053a22162fd1d852"]
+  ],
+  "inlinedDriverExtents": [
+    ["0x00666828",228,"06e4994a485b57698d7ca6732811da464e1fa3f6f16af94167997fc5558b8872","initialize: reserved resource, clock ownership, MMIO reset/mask"],
+    ["0x0066690c",96,"c1e366fd838b424fef5d905641a021e8952b0955f612c15a0a7894eb5fa59343","release: clock ownership and reserved resource signal"],
+    ["0x0066696c",104,"a33b2d99a9ef3101858e7c5c4fec0802a70f2b1a8433a3b4998df9f1f462e502","begin: selected engine state, IRQ mask, mode register"],
+    ["0x006695a0",48,"b9caed68c1782c421ae482b10acb1ee954a7ce1caaeec70125c4ecbd6d2429fb","read pending MMIO IRQ bits"],
+    ["0x006695d0",48,"06482d49b0fb5c7357f762cbab0f33ce80ee0aa46d1628d65b64ba33560a55c4","acknowledge pending MMIO IRQ bits"],
+    ["0x00669600",60,"9b4f917808887a50f579c4a522d2075fbbf189bea901b44dcad991849e7c838b","begin: enable completion IRQ"],
+    ["0x006696a8",108,"47cbc4af0294f524c950f76d716a3f6e1c47319dd879d12bf3b65b52fe738089","dispatch: disable completion IRQ"],
+    ["0x00669714",80,"c02e34a3a7215ccf286d82521b41d1f1d9fee8ba5c8a3e87d4f2e089cf56a9dc","finish: return existing mode register with selected engine bits"]
+  ],
+  "deviceSeams": [
+    ["0x00666a0c",680,"670894dad184b3e994142c6391c675d4ad744d0892af0dc30630a18e2793fedb",27,"0x00942d90"],
+    ["0x00666cb4",740,"fa23027371862bc27737e9c9bed65d6ed788a30a23287a691fd938ea1d4dc3ce",26,"0x00942dfc"],
+    ["0x00666f98",400,"de02af045e5fa9d014487dd6a9c89aa48ecd493de4f730b986677f85950b8a72",24,"0x00942e64"],
+    ["0x00667128",880,"d17f3f60a69aea8788af62384d72cf4d0dbbac7da8c913901643d45e057ad30e",28,"0x00942ec4"],
+    ["0x00667498",816,"5557edf3c1ab59642c6c99c4d58c725a779aed0d63252b7c22f1997e8763e385",33,"0x00942f34"],
+    ["0x006677c8",2428,"760064e40f6bc7f152059ff1bc4ad9d6a2e62399997168d120f0e97115191233",66,"0x00942fb8"],
+    ["0x00668144",2192,"4172eb5064c27a506e72f9aeaf5924da6d5a46f30bdf0ae3bcb366bdecb58ec4",52,"0x009430c0"],
+    ["0x006689d4",92,"d4cf8c3b03c5ad5fee9633826eb8737a34f0e9f8aa137f3174d1a93dc7283354","clear bit 0 at fff48000 and wait until the full status word is 1"]
+  ],
+  "deviceSeamScope": "The seven fixed device ABIs retain register packing, register writes and their snapshot copies, including recursive MMIO writers 668a30/668e9c/669168/6692fc. The owned application builds every emitted request and chooses the ABI. They are not pixel algorithms and are not generic arbitrary-address dispatchers. Models validate emitted payloads and snapshot bytes; secondary models additionally bind control/coefficients registers. They do not assert unmodelled device pixel transformations.",
+  "sharedOwnedBindings": {
+    "PipelineWarpEngine": ["xm1_pipeline_image_route_request","xm1_pipeline_image_route_acquire","xm1_pipeline_image_route_release","xm1_pipeline_image_interrupt_acquire","xm1_pipeline_image_interrupt_release"],
+    "PipelineBuffers": ["xm1_develop_enter_critical","xm1_develop_leave_critical"],
+    "PipelineImagePlanes": ["xm1_pipeline_image_wait_reserved","xm1_pipeline_image_signal_reserved"],
+    "PipelineImageOperations": ["image_operation_divide_fault"],
+    "kernelCacheSeam": ["0x00042634","void(address,length); begin passes zero,zero"]
+  },
+  "state": {
+    "geometry": "0x014ce570, 332 bytes",
+    "request": "0x014ce578, 34 words",
+    "margins": "0x014ce600, 6 words",
+    "mainPlan": "0x014ce618, 13 words",
+    "tailPlan": "0x014ce64c, 13 words",
+    "dimensions": "0x014ce680, 15 words",
+    "hardwareOwnership": "0x0096eb9c, 3 words",
+    "modeTable": ["0x00da93c8",440,"96c83d766fc801b3ae346152cb62935bcd3b23516b35c404a1e3f85de208a68b"],
+    "irqSource": [61,68,13,1],
+    "clockRoute": ["0x405",17,8,22,1,1]
+  },
+  "modelCoverage": [
+    "All eleven pinned table kinds: margins, dimensions, strip decisions and recursive build_strip_request",
+    "All seven device payload variants, optional source planes, coefficient/profile parameters and burst codes",
+    "1024-byte strip boundaries, exact partitions, 8/16-byte tails and all powers-of-two tail alignments",
+    "Zero-size dimension construction without treating the later divide trap as successful planning",
+    "Configure, busy IRQ-handle error, begin, registered/unregistered wait, initialization and release through shared owned CPU wrappers",
+    "IRQ acknowledgement, counter increment, one-shot callback extraction, and tail reprogram/begin transition",
+    "Composable kind-7 request law: CPU dimensions/plans and ordered device requests, no invented pixel mutation"
+  ],
+  "negativeModels": {
+    "constructor": "StripPlannerScenarios.failureScenarios",
+    "outcomes": ["unaligned tails spin at da7cb4","zero output width reaches divide-by-zero supervisor trap at 43614","nondividing extended partition spins at da78f0"],
+    "runnerRequirement": "These non-returning cases have explicit source stop addresses and an owned fault symbol. The parent must exercise them with a non-returning native observation contract; StageScenario alone has no termination-outcome field. They are not represented as successful returns."
+  },
+  "sourceReachability": [
+    "The eleven valid table rows have input/output ratios 10,20,40. Ratio-15 planner branches cannot be selected by these rows.",
+    "Extended/profile/alternate parameter pointers and required paired/primary source planes are caller preconditions; nulls preserve the original non-returning guard.",
+    "For the valid table rows the post-rounding input-byte alignment guards are unreachable without undefined arithmetic data; the independently reachable unaligned-tail guard remains modelled.",
+    "The ABI leaves kind indexes outside 0..10 unchecked; this ownership contract does not infer additional table rows."
+  ],
+  "gaps": [
+    {"kind":"undefined-data","source":"0x00da8e50","detail":"The alternate 52-word stack request leaves words 12 and 13 indeterminate. Actual A32 payload base is fp-f4; fp-c4/fp-c0 have no initializing stores. Rust preserves only these words as MaybeUninit. The device snapshot copies them to 9430f0/9430f4. Models intentionally omit their values. Debug/storage consumers cannot claim deterministic values for these bytes."},
+    {"kind":"pixel-device-law","detail":"The source establishes register request construction and IRQ transitions, not the ISP pixel transformation law. No constructor echoes expected image bytes into output planes or reports missing device semantics as successful pixel processing."},
+    {"kind":"integration-proof","detail":"Parent DevelopTransactionOwnership owns module/build/model wiring, fixed-source admissions, non-returning observation integration, and the cohesive final verification. No old17af/R12 evidence is rebound."}
+  ]
+}

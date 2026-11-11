@@ -1,0 +1,178 @@
+{
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image5Sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+  "routes": [
+    {
+      "address": "0xe4525c",
+      "symbol": "xm1_develop_object_operation",
+      "abi": "u32(group:u32)"
+    },
+    {
+      "address": "0xe45330",
+      "symbol": "xm1_develop_object_priority",
+      "abi": "u32(index:u32)"
+    },
+    {
+      "address": "0xe45364",
+      "symbol": "xm1_develop_object_priority_index",
+      "abi": "u32(operation:u32)"
+    },
+    {
+      "address": "0xe453d8",
+      "symbol": "xm1_develop_order_object",
+      "abi": "u32(group:u32,owner:i32,notify:*mut u32)"
+    },
+    {
+      "address": "0xe458ac",
+      "symbol": "xm1_develop_wait_for_object",
+      "abi": "u32(group:u32,owner:i32,ordered:i32)"
+    },
+    {
+      "address": "0xe459e0",
+      "symbol": "xm1_develop_release_object",
+      "abi": "u32(group:u32,slot:i32,size:u32)"
+    },
+    {
+      "address": "0xe45efc",
+      "symbol": "xm1_develop_add_object_waiter",
+      "abi": "void(waiter:*const ObjectWaiter)"
+    },
+    {
+      "address": "0xe45f8c",
+      "symbol": "xm1_develop_remove_object_waiter",
+      "abi": "void(waiter:*const ObjectWaiter)"
+    },
+    {
+      "address": "0xe46018",
+      "symbol": "xm1_develop_notify_object_waiters",
+      "abi": "void()"
+    },
+    {
+      "address": "0xe463f4",
+      "symbol": "xm1_develop_object_range_available",
+      "abi": "u32(plane:*const Plane,except_owner:i32)"
+    },
+    {
+      "address": "0xe465a0",
+      "symbol": "xm1_develop_find_object_range",
+      "abi": "i32(group:u32,owner:i32,size:u32,ascending:u32)"
+    },
+    {
+      "address": "0xe46808",
+      "symbol": "xm1_develop_acquire_object",
+      "abi": "u32(group:u32,kind:u32,owner:i32,inherited:i32,slot:*mut i16,ordered:i32,size:u32)"
+    }
+  ],
+  "sourceExtents": [
+    {
+      "address": "0x00e4525c",
+      "size": 212,
+      "sha256": "3e7e5c2d3d91d9461635212e6d5dbfdefe664ee8fb61e694fcb0aacf8de80193"
+    },
+    {
+      "address": "0x00e45330",
+      "size": 52,
+      "sha256": "4c53c4cf994fb24c38df9076cb67decbb297217bcfe6d71e6f8d8c93f7d7427e"
+    },
+    {
+      "address": "0x00e45364",
+      "size": 116,
+      "sha256": "f3613686e1fccb35968f1eb48dd879cd97bef88787dd11839bda540500d46e46"
+    },
+    {
+      "address": "0x00e453d8",
+      "size": 756,
+      "sha256": "a79d9c27b1ba90db6a5d24c59c2873e3e9eff54632f23a4d8c1244bdc5f61d4d"
+    },
+    {
+      "address": "0x00e458ac",
+      "size": 308,
+      "sha256": "97dd050130aa8edb9edce6b57a5ff2d7c9430c693524bba291e2669ba4977987"
+    },
+    {
+      "address": "0x00e459e0",
+      "size": 460,
+      "sha256": "fcc92f98a89f0546b58f800b51f475416700099d6e59f132f31ebcb4a12249b4"
+    },
+    {
+      "address": "0x00e45efc",
+      "size": 144,
+      "sha256": "ac0d211158de4163d3364e9e317d395fc6b3b210f72def18b0456ae9f090a962"
+    },
+    {
+      "address": "0x00e45f8c",
+      "size": 140,
+      "sha256": "63a20e62c9b29367ae2ea05076fd30ba8602282b59ec6a80c0a1e79bbf9575fc"
+    },
+    {
+      "address": "0x00e46018",
+      "size": 120,
+      "sha256": "3f62a59620bdd075d8edf0815cf73020b661259eb6f4d5aedc7d2d7fa8a70b65"
+    },
+    {
+      "address": "0x00e463f4",
+      "size": 428,
+      "sha256": "dde34f2053da7a6cb0d0cf038249ceeeafb2c843076c9aba8af4e3a414012f18"
+    },
+    {
+      "address": "0x00e465a0",
+      "size": 616,
+      "sha256": "626df717ad2fa39b68f43313f3bd4bfc66d2ac4d2a88df79a6cbc3daa5ccb62f"
+    },
+    {
+      "address": "0x00e46808",
+      "size": 864,
+      "sha256": "0ae59fdf3043f9ea817bb65e92819c8537b3fef32287447c2c0a098f4215fb3e"
+    }
+  ],
+  "layout": {
+    "state": "0x015480d4",
+    "bitmap": "state+8+canonical*26; MSB-first",
+    "referenceCounts": "state+0x978+((shared-1)*201+slot)*2",
+    "priorityQueue": "state+0x1f78; 12-byte entries, signed owner halfword, operation word+4, waiting task word+8; count state+0x28e4",
+    "smallRegistry": "0x0154a9bc, 20 entries of 44 bytes",
+    "largeRegistry": "0x0154a9bc+0x370, 128 entries of 44 bytes",
+    "waiters": "state+0x4258, 15 pairs of group/task words"
+  },
+  "dependencies": [
+    {
+      "owner": "PipelineBuffers",
+      "symbols": [
+        "xm1_develop_object_group",
+        "xm1_develop_canonical_object_group",
+        "xm1_develop_enter_critical",
+        "xm1_develop_leave_critical",
+        "xm1_develop_trace_object_action",
+        "xm1_develop_trace_event"
+      ]
+    },
+    {
+      "owner": "PipelineImagePlanes",
+      "symbols": [
+        "xm1_pipeline_image_wait_reserved",
+        "xm1_pipeline_image_signal_reserved",
+        "xm1_pipeline_image_wait_all",
+        "xm1_pipeline_image_send_notification",
+        "xm1_pipeline_image_signal_current_zero"
+      ]
+    },
+    {
+      "owner": "DiagnosticLogging",
+      "symbols": [
+        "xm1_develop_append_stream_text"
+      ]
+    }
+  ],
+  "endpointLaws": [
+    "Object selection, bitmaps, overlap, reference counting, ordering and waiter lists execute owned CPU code.",
+    "Only actual RTOS dispatch, semaphore, notification and kernel log services remain retained endpoints.",
+    "A failed overlap wait returns its exact error and retains the registered waiter; a successful wait clears its notification then removes the matching waiter before selection reentry.",
+    "Final reference release clears the allocation bitmap before giving the semaphore; a remaining reference only logs release."
+  ],
+  "preconditionsAndGaps": [
+    "Plane unit lengths used as divisors must be nonzero. A32 descriptor zero-divisor behavior is not admitted by these fixtures.",
+    "Signed invalid slot and registry owner values retain original raw ABI behavior; these fixtures admit valid slot indices.",
+    "Diagnostics e4586c/e456cc/e457c0 remain solely PipelineBuffers-owned.",
+    "Parent owns final native proof and integration; no tests or builds run for this transfer."
+  ]
+}

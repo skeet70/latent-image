@@ -1,0 +1,56 @@
+{
+  "base": "279a7b77",
+  "sourceCommit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "images": [
+    {"image": 4, "base": "0x0061c400", "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"},
+    {"image": 5, "base": "0x00bf1a00", "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"}
+  ],
+  "publications": [
+    {"address": "0x00e57d10", "size": 696, "sha256": "36df4bf7ac5c07b1f8b34ba4315d47f24054901ed6effcf0f4480bc201e656ad", "symbol": "xm1_pipeline_image_build_distortion", "abi": "void(stage:*mut u8,configuration:*const ResizeConfiguration80,output:*mut DistortionResult152)"},
+    {"address": "0x00e57cb4", "size": 92, "sha256": "37de2e0ab255fe8e0df2b6b4de51dd0092a05be1571b672da14df88f1b327689", "symbol": "xm1_pipeline_image_distortion_region", "abi": "u32(stage:*mut u8)"},
+    {"address": "0x00da194c", "size": 384, "sha256": "a155557169a4b56bc90f7a4a3f4d3f78550dab7c38288b7b8e6ae4eeddf31684", "symbol": "xm1_pipeline_image_read_distortion_coefficients", "abi": "void(strength:u32,band:u32,region:u32,profile:u32,output:*mut CalibrationCoefficients144)"},
+    {"address": "0x0069fef0", "size": 52, "sha256": "3fde7f63b410115e56dcb34cc35d354e51bf575349a5f5930c7ddf10e21d4136", "symbol": "xm1_pipeline_image_configuration_u24", "abi": "u32(key:u32)"},
+    {"address": "0x006e0250", "size": 300, "sha256": "97cc8e9c66861796ba6ee16c04f69ad0dcaaa2d33d09f4ad58709c8e05f51951", "symbol": "xm1_pipeline_image_choose_supplied_radial_grid", "abi": "u32(coefficients:*const u16x2,gains:*const u32x2,sourceLimits:*const u32x2,center:*const u32x2,limits:*const u32x2,scaling:*const u32x2,scales:*const u16x2,samples:*const u32x31,padding:*const u32x2,format:u32)"},
+    {"address": "0x006dfabc", "size": 748, "sha256": "f9e482727ae93119e5d980ca7249ec736b5a3b22cdbaf35ad9e2f7e7e52ea376", "symbol": "xm1_pipeline_image_project_radial_coordinate", "abi": "i32(x:i32,y:i32,axis:u32,scratch:*const RadialScratch228,samples:*const u32x31,format:u32)"},
+    {"address": "0x006dfe7c", "size": 980, "sha256": "bcdcb445e4b9bf9448f2d9a168b9761bdbb56fbe1fdacf333db628b81325314f", "symbol": "xm1_pipeline_image_validate_radial_grid", "abi": "i32(scratch:*const RadialScratch228,format:u32,grid:u32)"},
+    {"address": "0x006dfda8", "size": 112, "sha256": "e45c634a60251e08657cbdcd630e1110ebe18265ac838b9277eb03bbc28eda9b", "symbol": "xm1_pipeline_image_fixed12_round", "abi": "i32(value:i32,mode:u32)"},
+    {"address": "0x006dfe18", "size": 100, "sha256": "eabd429eeee8d0b7488e92bf3a02c25547e37f7ca1fe79f87e703876f3ca24a2", "symbol": "xm1_pipeline_image_find_signed_bounds", "abi": "void(values:*const i32,output:*mut {maximum:i32,minimum:i32},count:u32)"}
+  ],
+  "ownedDependencies": [
+    {"address": "0x0069f8fc", "symbol": "xm1_buffers_configuration_byte", "owner": "PipelineBuffers", "law": "Read a byte at the configuration pointer stored at 0x0096ca50 plus the wrapping key."},
+    {"address": "0x0069ff7c", "symbol": "xm1_pipeline_image_configuration_signed_half", "owner": "PipelineImageReferences", "law": "Read the little-endian halfword through the owned configuration byte reader and sign-extend. This slice consumes its low halfword."},
+    {"address": "0x00e57b5c", "symbol": "xm1_pipeline_image_distortion_band", "owner": "PipelineImagePlanes", "law": "Select the lens calibration band from stage+0x6c0 and calibration thresholds."}
+  ],
+  "layouts": {
+    "configurationBytes": 80,
+    "configurationFields": {"format": 4, "scaling": 8, "sourceDimensions": 24, "sourceLimits": 32, "destinationDimensions": 56},
+    "resultBytes": 152,
+    "resultFields": {"mode": 0, "gains": 4, "coefficients": 12, "scales": 16, "sourceLimits": 20, "samples": 28},
+    "calibrationBytes": 144,
+    "calibrationFields": {"gains": 0, "coefficients": 12, "samples": 20},
+    "radialScratchBytes": 228,
+    "radialScratchFields": {"padding": 32, "limits": 40, "center": 48, "gains": 56, "scaling": 64, "coefficients": 88, "scales": 92, "sourceLimits": 96, "samples": 104},
+    "stateAddresses": {"coefficients": "0x015705f0", "suppliedSamples": "0x0156892c", "radialScratch": "0x008faaf8", "validationSamples": "0x008fa998"}
+  },
+  "laws": [
+    "Coefficient records contain 31 little-endian 24-bit samples, then four little-endian halfwords at record offsets93,95,97,99. The output gaps4..11 and16..19 remain unchanged.",
+    "Automatic record offset is 101*(15*region+band); profile1 uses0x401200, profile2 uses0x402400, all other profile values use0x400000. Nonzero strength uses0x403600+101*(strength-1). Address arithmetic wraps to32bits.",
+    "The region selector compares signed stage distance at+0x2264 against unsigned low-halfword thresholds at0x3e3a10+4*band and0x3e3a12+4*band; exhausted thresholds return2.",
+    "Register-format shifts use only the low byte and return zero for shifts of32or more. Requested scale4096 becomes4095 only in the supplied-grid scratch, not in the public projection function.",
+    "Projection uses wrapping32-bit preproducts, clamped coordinate magnitudes, signed arithmetic shifts of wrapping64-bit radius squares, a capped radial spline parameter, separately truncated cubic weights/products, wrapping32-bit gain multiplication and a clamped64-bit final distance product.",
+    "Validation copies31samples, finds the signed maximum of10successive knot differences, then generates an extrapolation ramp around sample24. It checks projected bounds for an origin rectangle and a centered rectangle. Format2 rejects grid64 before touching validation sample state.",
+    "Grid selection attempts64,32,16in order and returns zero if all fail. The frontend encodes64as0,32as1, every other result including failure0as2; failure is not converted into a success return value.",
+    "All projection, decoding, bounds, rounding, validation and frontend algorithms execute owned Rust. Distortion_stock.S contains no address-forwarding stubs."
+  ],
+  "sourceEvidence": [
+    "Pinned NONMATCHING tu_00e57b5c.c e57cb4/e57d10 and tu_00d98a80.c da194c compared against their complete original A32 extents.",
+    "Pinned exact image_choose_supplied_radial_grid in image_radial_search_more.c, plus NONMATCHING projection and validation drafts, compared against A32 0x006dfabc..0x006e037c.",
+    "Configuration-u24 byte ordering inspected directly at0x0069fef0..0x0069ff24. All nine function extent hashes matched the fixed pinned index and both complete image hashes matched the report."
+  ],
+  "consumerPremises": [
+    "The configuration byte reader has no source bounds check. Its pointer, calibration key extent and retained stage/scratch addresses must be mapped by the caller; this implementation does not manufacture calibration on missing data.",
+    "Source limits both zero make the original frontend loop forever at0xe57d3c. The owned frontend preserves that non-returning branch; ordinary StageScenario fixtures cover terminating branches only.",
+    "The original mutable calibration and validation globals remain externally observable and require the caller's existing serialization."
+  ],
+  "verification": "Source inspection and image/function hashing only. Builds, tests, native runs, formatters and linters are delegated to the integration owner."
+}

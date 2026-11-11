@@ -1,0 +1,843 @@
+{
+  "family": "processing",
+  "base": "3ed717b0",
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "sourceImageSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+  "bodies": [
+    {
+      "address": "0xe989d0",
+      "size": 276,
+      "sha256": "27918ffe8e07a6dd6d5cb81ab015eebedaab95af23c95d1815da208c829ed943",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 13,
+      "end": 80,
+      "status": "nonmatching",
+      "symbol": "xm1_develop_pipeline_merge_references",
+      "stage": "MergeReferences"
+    },
+    {
+      "address": "0xe98ae4",
+      "size": 408,
+      "sha256": "a35387f27677e63534e94f659bdfe2aa668053036c3e5c9bc797eccf29e93c22",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 83,
+      "end": 155,
+      "status": "nonmatching",
+      "symbol": "xm1_develop_pipeline_append_reference",
+      "stage": "AppendReference"
+    },
+    {
+      "address": "0xe98c7c",
+      "size": 276,
+      "sha256": "bee057dc7b034d51ea46561993d983e0d829f7aa517b829b42509f69b98ba92b",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 158,
+      "end": 212,
+      "status": "nonmatching",
+      "symbol": "xm1_develop_pipeline_filter_reference",
+      "stage": "FilterReference"
+    },
+    {
+      "address": "0xe98d90",
+      "size": 356,
+      "sha256": "f9eec4677ff7e59315aad22cd4d3b149cedf9113539f513d5e3b5957531599e2",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 215,
+      "end": 255,
+      "status": "nonmatching",
+      "symbol": "xm1_develop_pipeline_align_reference",
+      "stage": "AlignReference"
+    },
+    {
+      "address": "0xe98ef4",
+      "size": 316,
+      "sha256": "79ad984b9daa96865158d826629b8f40044ac579e3df4de36a6fc0818c01a1c8",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 258,
+      "end": 297,
+      "status": "nonmatching",
+      "symbol": "xm1_develop_pipeline_apply_alignment",
+      "stage": "ApplyAlignment"
+    },
+    {
+      "address": "0xe99030",
+      "size": 504,
+      "sha256": "6c649112f484df63d049197736931e2bb0ae1b74f47ca5b8284876ce863a6ae2",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 300,
+      "end": 388,
+      "status": "nonmatching",
+      "symbol": "xm1_develop_pipeline_fuse_pyramids",
+      "stage": "FusePyramids"
+    },
+    {
+      "address": "0xe99228",
+      "size": 404,
+      "sha256": "08553d7c184d2d30ddbd22904084a71d359c475f6656b6f1e99a44b37cd462ba",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 391,
+      "end": 477,
+      "status": "nonmatching",
+      "symbol": "xm1_develop_pipeline_filter_pyramid",
+      "stage": "FilterPyramid"
+    },
+    {
+      "address": "0xe993bc",
+      "size": 328,
+      "sha256": "943210666f4077d5dccc263135762fad30a6f80fbbe8f42c02e51f048c9abdc5",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 480,
+      "end": 547,
+      "status": "nonmatching",
+      "symbol": "xm1_develop_pipeline_prepare_pyramid",
+      "stage": "PreparePyramid"
+    },
+    {
+      "address": "0xe99504",
+      "size": 532,
+      "sha256": "1162b3089fa4bc72e22a63f5f448df170cdb7d8a13350b7d5025e42b2fe0b988",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 550,
+      "end": 657,
+      "status": "nonmatching",
+      "symbol": "xm1_develop_pipeline_merge_pyramid",
+      "stage": "MergePyramid"
+    },
+    {
+      "address": "0xe99718",
+      "size": 292,
+      "sha256": "fb4a81af3a0221e72eb40445605b6d559529e747fefe399d4863729f87ad79c5",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 660,
+      "end": 721,
+      "status": "nonmatching",
+      "symbol": "xm1_develop_pipeline_resolve_references",
+      "stage": "ResolveReferences"
+    },
+    {
+      "address": "0xe9983c",
+      "size": 424,
+      "sha256": "bbdc0bdf7d87d3ce46c2148ccf4811d7421b3c68e19c6701b447a192ee46e372",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 724,
+      "end": 813,
+      "status": "nonmatching",
+      "symbol": "xm1_develop_pipeline_build_pyramid",
+      "stage": "BuildPyramid"
+    },
+    {
+      "address": "0xe999e4",
+      "size": 288,
+      "sha256": "67c1839ab5179038c5db57c803176b9297eedf9c6887fa343aee04a2ff1bf67a",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 816,
+      "end": 880,
+      "status": "nonmatching",
+      "symbol": "xm1_develop_pipeline_combine_planes",
+      "stage": "CombinePlanes"
+    },
+    {
+      "address": "0xe99b04",
+      "size": 144,
+      "sha256": "8cf8fe7d843b9eab4dd0190f43b0e1ed5eea5d675e62c99db6c0d38f4a16bcbb",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 882,
+      "end": 904,
+      "status": "exact",
+      "symbol": "xm1_develop_pipeline_configure_references",
+      "stage": "ConfigureReferences"
+    },
+    {
+      "address": "0xe99b94",
+      "size": 440,
+      "sha256": "be7ab8fb4e1c70125cb6f71f15c9329fcc6aa8b2dd03fc3ada0a48ba0edb1af1",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 907,
+      "end": 1005,
+      "status": "nonmatching",
+      "symbol": "xm1_develop_pipeline_convert_reference",
+      "stage": "ConvertReference"
+    },
+    {
+      "address": "0xe99f68",
+      "size": 264,
+      "sha256": "4a90635eca5e5efe586c934c1bce53c122265f639e8233a46e2bba8fa27ae912",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 1103,
+      "end": 1149,
+      "status": "nonmatching",
+      "symbol": "xm1_develop_pipeline_finish_output",
+      "stage": "FinishOutput"
+    },
+    {
+      "address": "0xe9a070",
+      "size": 764,
+      "sha256": "cdb842068291a80822fd2f70105f5b8e041e567bbb858ebedd8f5141692e652c",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 1152,
+      "end": 1312,
+      "status": "nonmatching",
+      "symbol": "xm1_develop_pipeline_resize_output",
+      "stage": "ResizeOutput"
+    },
+    {
+      "address": "0xe9a36c",
+      "size": 712,
+      "sha256": "b3a6cadda76b57de9b6bb134ffc063d1a6191ae5c89a6508b79dfc590adc26cd",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 1315,
+      "end": 1460,
+      "status": "nonmatching",
+      "symbol": "xm1_develop_pipeline_copy_output",
+      "stage": "CopyOutput"
+    },
+    {
+      "address": "0xe9a634",
+      "size": 860,
+      "sha256": "2120dbb07cf84269aee07065e6c835678ac0fd14041a15ebdcafa8916d009688",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 1463,
+      "end": 1635,
+      "status": "nonmatching",
+      "symbol": "xm1_develop_pipeline_prepare_output",
+      "stage": "PrepareOutput"
+    },
+    {
+      "address": "0xe9a990",
+      "size": 164,
+      "sha256": "ee8664c7f7e58ce6fefd99ff4df2a8bd26bafc04d52ed9719ff99a8e6bb49dad",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 1637,
+      "end": 1662,
+      "status": "exact",
+      "symbol": "xm1_develop_pipeline_apply_output",
+      "stage": "ApplyOutput"
+    },
+    {
+      "address": "0xe9aa34",
+      "size": 164,
+      "sha256": "392f7e0e78bb06b5bf7662d2b622b22840ef5465092296346fadf3be8766c5a4",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 1664,
+      "end": 1685,
+      "status": "exact",
+      "symbol": "xm1_develop_pipeline_apply_output_planes",
+      "stage": "ApplyOutputPlanes"
+    },
+    {
+      "address": "0xe9aad8",
+      "size": 364,
+      "sha256": "dbadbd668c41b5156b61710122450dc2be6defeaa44e64d6c61cf14438ed3250",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 1688,
+      "end": 1781,
+      "status": "nonmatching",
+      "symbol": "xm1_develop_pipeline_prepare_output_planes",
+      "stage": "PrepareOutputPlanes"
+    },
+    {
+      "address": "0xe9ac44",
+      "size": 372,
+      "sha256": "32acc8307607ed90eac459e3df6a4a40b91073385ef21b1c3b777fc868b7312e",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 1784,
+      "end": 1864,
+      "status": "nonmatching",
+      "symbol": "xm1_develop_pipeline_resize_preview",
+      "stage": "ResizePreview"
+    },
+    {
+      "address": "0xe9adb8",
+      "size": 528,
+      "sha256": "623b57bee7f2f67f854e9e2cfc2c3f51ed306b9e397f34595399d96e77a846c1",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 1867,
+      "end": 1975,
+      "status": "nonmatching",
+      "symbol": "xm1_develop_pipeline_prepare_preview",
+      "stage": "PreparePreview"
+    },
+    {
+      "address": "0xe9afc8",
+      "size": 928,
+      "sha256": "20d75a4646e396326f63c59d25e7e406e4a8f01a243d6269460c23ee0025ca97",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 1978,
+      "end": 2172,
+      "status": "nonmatching",
+      "symbol": "xm1_develop_pipeline_convert_output",
+      "stage": "ConvertOutput"
+    },
+    {
+      "address": "0xe9b368",
+      "size": 1316,
+      "sha256": "5f0d6aaff7ac1d800030d84cbaa485977283c82b67a54e883e4066c4443e1e43",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 2175,
+      "end": 2431,
+      "status": "nonmatching",
+      "symbol": "xm1_develop_pipeline_process_capture",
+      "stage": "ProcessCapture"
+    },
+    {
+      "address": "0xe9b88c",
+      "size": 632,
+      "sha256": "04aac1b8d748ba4ef5ed7d64300c3ab67b23a54c0edc9069c9a2467900ec8863",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 2434,
+      "end": 2562,
+      "status": "nonmatching",
+      "symbol": "xm1_develop_pipeline_prepare_capture",
+      "stage": "PrepareCapture"
+    },
+    {
+      "address": "0xe9bb04",
+      "size": 308,
+      "sha256": "f437538f341d78f9e1be185108da428374b1261cef7d9256302cb548fb1528ad",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e989d0.c",
+      "start": 2565,
+      "end": 2629,
+      "status": "nonmatching",
+      "symbol": "xm1_develop_pipeline_filter_capture",
+      "stage": "FilterCapture"
+    }
+  ],
+  "commandRoutes": [
+    {
+      "command": "0xe",
+      "stage": "FilterCapture",
+      "arguments": [
+        0
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0xf",
+      "stage": "FilterCapture",
+      "arguments": [
+        1
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x10",
+      "stage": "PrepareCapture",
+      "arguments": [
+        0,
+        0
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x11",
+      "stage": "PrepareCapture",
+      "arguments": [
+        1,
+        0
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x12",
+      "stage": "ProcessCapture",
+      "arguments": [
+        0
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x16",
+      "stage": "ConvertOutput",
+      "arguments": [
+        1
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x17",
+      "stage": "ConvertOutput",
+      "arguments": [
+        0
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x18",
+      "stage": "PreparePreview",
+      "arguments": [],
+      "scratch": null
+    },
+    {
+      "command": "0x19",
+      "stage": "PrepareOutputPlanes",
+      "arguments": [],
+      "scratch": null
+    },
+    {
+      "command": "0x1a",
+      "stage": "ApplyOutputPlanes",
+      "arguments": [],
+      "scratch": null
+    },
+    {
+      "command": "0x1b",
+      "stage": "ApplyOutput",
+      "arguments": [],
+      "scratch": null
+    },
+    {
+      "command": "0x1c",
+      "stage": "PrepareOutput",
+      "arguments": [
+        1,
+        0
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x1d",
+      "stage": "PrepareOutput",
+      "arguments": [
+        0,
+        0
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x1e",
+      "stage": "ResizePreview",
+      "arguments": [],
+      "scratch": "Direct OriginalAAPCS entry snapshots seven opaque incoming words. Normal owned dispatcher route preserves existing frame+0x408..0x423 bytes and does not reproduce private stack layout. Intended ownership repair issue172 is source-only and unqualified."
+    },
+    {
+      "command": "0x1f",
+      "stage": "CopyOutput",
+      "arguments": [
+        0,
+        2
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x20",
+      "stage": "CopyOutput",
+      "arguments": [
+        0,
+        1
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x21",
+      "stage": "CopyOutput",
+      "arguments": [
+        0,
+        0
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x22",
+      "stage": "ResizeOutput",
+      "arguments": [
+        0,
+        1
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x23",
+      "stage": "ResizeOutput",
+      "arguments": [
+        0,
+        0
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x24",
+      "stage": "ResizeOutput",
+      "arguments": [
+        0,
+        2
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x25",
+      "stage": "ResizeOutput",
+      "arguments": [
+        1,
+        1
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x26",
+      "stage": "ResizeOutput",
+      "arguments": [
+        1,
+        0
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x27",
+      "stage": "ResizeOutput",
+      "arguments": [
+        1,
+        2
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x28",
+      "stage": "CopyOutput",
+      "arguments": [
+        2,
+        1
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x29",
+      "stage": "CopyOutput",
+      "arguments": [
+        2,
+        0
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x2e",
+      "stage": "FinishOutput",
+      "arguments": [
+        2
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x2f",
+      "stage": "FinishOutput",
+      "arguments": [
+        4
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x30",
+      "stage": "FinishOutput",
+      "arguments": [
+        1
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x31",
+      "stage": "FinishOutput",
+      "arguments": [
+        0
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x38",
+      "stage": "ConvertReference",
+      "arguments": [
+        0
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x39",
+      "stage": "ConvertReference",
+      "arguments": [
+        2
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x3a",
+      "stage": "ProcessCapture",
+      "arguments": [
+        2
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x3b",
+      "stage": "ConfigureReferences",
+      "arguments": [],
+      "scratch": null
+    },
+    {
+      "command": "0x3c",
+      "stage": "CombinePlanes",
+      "arguments": [],
+      "scratch": null
+    },
+    {
+      "command": "0x3d",
+      "stage": "BuildPyramid",
+      "arguments": [],
+      "scratch": null
+    },
+    {
+      "command": "0x3e",
+      "stage": "ResolveReferences",
+      "arguments": [],
+      "scratch": null
+    },
+    {
+      "command": "0x3f",
+      "stage": "MergePyramid",
+      "arguments": [],
+      "scratch": null
+    },
+    {
+      "command": "0x40",
+      "stage": "PreparePyramid",
+      "arguments": [],
+      "scratch": null
+    },
+    {
+      "command": "0x41",
+      "stage": "FilterPyramid",
+      "arguments": [],
+      "scratch": null
+    },
+    {
+      "command": "0x42",
+      "stage": "FusePyramids",
+      "arguments": [
+        0
+      ],
+      "scratch": null
+    },
+    {
+      "command": "0x43",
+      "stage": "ApplyAlignment",
+      "arguments": [],
+      "scratch": null
+    },
+    {
+      "command": "0x44",
+      "stage": "AlignReference",
+      "arguments": [],
+      "scratch": null
+    },
+    {
+      "command": "0x45",
+      "stage": "FilterReference",
+      "arguments": [],
+      "scratch": null
+    },
+    {
+      "command": "0x46",
+      "stage": "AppendReference",
+      "arguments": [],
+      "scratch": null
+    },
+    {
+      "command": "0x47",
+      "stage": "MergeReferences",
+      "arguments": [],
+      "scratch": null
+    },
+    {
+      "command": "0x64",
+      "stage": "PrepareOutput",
+      "arguments": [
+        0,
+        1
+      ],
+      "scratch": null
+    }
+  ],
+  "sharedOwnedCalls": [
+    {"stockAddress":"0x69f8fc","symbol":"xm1_buffers_configuration_byte","owner":"PipelineBuffers","law":"Read configuration byte through mutable base pointer at 0x96ca50."},
+    {"stockAddress":"0xe44bcc","symbol":"xm1_develop_store_object","owner":"PipelineBuffers"},
+    {"stockAddress":"0xeb0ccc","symbol":"xm1_pipeline_image_trace_end","owner":"PipelineObjectAllocator","law":"Actual trace writer receives operation OR 0x10000000."},
+    {"stockAddress":"0xe93570","symbol":"xm1_develop_remap_object","owner":"PipelineBuffers"},
+    {"stockAddress":"0xe9267c","symbol":"xm1_develop_expand_planes","owner":"PipelineBuffers"},
+    {"stockAddress":"0xe924f4","symbol":"xm1_develop_fill_border","owner":"PipelineBuffers"},
+    {"stockAddress":"0xe92b40","symbol":"xm1_develop_output_matches","owner":"PipelineBuffers"},
+    {"stockAddress":"0xe92c48","symbol":"xm1_develop_conversion_required","owner":"PipelineBuffers"},
+    {"stockAddress":"0xe92d68","symbol":"xm1_develop_open_object","owner":"PipelineBuffers"},
+    {"stockAddress":"0xe8f4a4","symbol":"xm1_develop_geometry","owner":"PipelineBuffers"},
+    {"stockAddress":"0xe90148","symbol":"xm1_develop_dimensions","owner":"PipelineBuffers"},
+    {"stockAddress":"0x734540","symbol":"xm1_develop_lookup_width","owner":"PipelineBuffers"},
+    {"stockAddress":"0x73469c","symbol":"xm1_develop_lookup_height","owner":"PipelineBuffers"},
+    {"stockAddress":"0xe5c8e0","symbol":"xm1_pipeline_image_blend_reference","owner":"PipelineImageReferences"},
+    {"stockAddress":"0xe5daac","symbol":"xm1_pipeline_image_noise_pass","owner":"PipelineImageReferences"},
+    {"stockAddress":"0xe5d8d8","symbol":"xm1_pipeline_image_validate_affine","owner":"PipelineImageReferences"},
+    {"stockAddress":"0xe5d0f8","symbol":"xm1_pipeline_image_estimate_affine","owner":"PipelineImageReferences"},
+    {"stockAddress":"0xe5f104","symbol":"xm1_pipeline_image_motion_secondary","owner":"PipelineImageReferences"},
+    {"stockAddress":"0xe5f45c","symbol":"xm1_pipeline_image_motion_primary","owner":"PipelineImageReferences"},
+    {"stockAddress":"0xe5cb00","symbol":"xm1_pipeline_image_lut_reference","owner":"PipelineImageReferences"},
+    {"stockAddress":"0xe5f768","symbol":"xm1_pipeline_image_reference_filter","owner":"PipelineImageReferences"},
+    {"stockAddress":"0xe5e76c","symbol":"xm1_pipeline_image_reference_curve","owner":"PipelineImageReferences"},
+    {"stockAddress":"0xe53ed4","symbol":"xm1_pipeline_image_publish_debug_file","owner":"PipelineImagePlanes"},
+    {"stockAddress":"0xe5b978","symbol":"xm1_pipeline_image_prepare_affine","owner":"PipelineImagePixels"},
+    {"stockAddress":"0xe59510","symbol":"xm1_pipeline_image_reduce_planes","owner":"PipelineImagePlanes"},
+    {"stockAddress":"0xe590e0","symbol":"xm1_pipeline_image_transform_planes","owner":"PipelineImagePlanes"},
+    {"stockAddress":"0xe58f48","symbol":"xm1_pipeline_image_prepare_border","owner":"PipelineImagePlanes"},
+    {"stockAddress":"0xe4fae8","symbol":"xm1_pipeline_image_resize_capture","owner":"PipelineImagePlanes"},
+    {"stockAddress":"0xe51d00","symbol":"xm1_pipeline_image_configure_output","owner":"PipelineOutputJpeg"},
+    {"stockAddress":"0xe51b9c","symbol":"xm1_pipeline_image_prepare_output_stage","owner":"PipelineOutputJpeg"},
+    {"stockAddress":"0xe50c74","symbol":"xm1_pipeline_image_finish_copy","owner":"PipelineRedEye"},
+    {"stockAddress":"0xe5092c","symbol":"xm1_pipeline_image_start_work","owner":"PipelineRedEye"},
+    {"stockAddress":"0xe50204","symbol":"xm1_pipeline_image_prepare_geometry","owner":"PipelineRedEye"},
+    {"stockAddress":"0xe50010","symbol":"xm1_pipeline_image_resize_software","owner":"PipelineImagePlanes"},
+    {"stockAddress":"0xe531ac","symbol":"xm1_pipeline_image_prepare_triplets","owner":"PipelineOutputTriplets"},
+    {"stockAddress":"0xe53794","symbol":"xm1_pipeline_image_tune_triplets","owner":"PipelineOutputTriplets"},
+    {"stockAddress":"0xe4fd5c","symbol":"xm1_pipeline_image_resize_through_crop","owner":"PipelineImagePlanes"},
+    {"stockAddress":"0xe51ee8","symbol":"xm1_pipeline_image_prepare_output_planes","owner":"PipelineOutputJpeg"},
+    {"stockAddress":"0xe5254c","symbol":"xm1_pipeline_image_prepare_output_mask","owner":"PipelineImagePlanes"},
+    {"stockAddress":"0xe55194","symbol":"xm1_pipeline_image_stage_inactive","owner":"PipelineImagePlanes"},
+    {"stockAddress":"0xe551ac","symbol":"xm1_pipeline_image_configure_planes","owner":"PipelineImagePlanes"}
+  ],
+  "additionalOwnedBodies": [
+    {"stockAddress":"0xe51858","symbol":"xm1_develop_capture_option_selection","source":"decomp/firmwares/xm1-150/app/capture/reccont/reccont_capture_completions.c:109-120","status":"exact"},
+    {"stockAddress":"0x73abec","symbol":"xm1_develop_loadtest_current","source":"decomp/firmwares/xm1-150/app/platform/diag/loadtest_state.c:10-13","status":"exact","a32ConfirmedMutableCell":"0x9134f8"},
+    {"stockAddress":"0x73ac60","symbol":"xm1_develop_loadtest_setting","source":"decomp/firmwares/xm1-150/app/platform/diag/loadtest_state.c:27-30","status":"exact","a32ConfirmedConfigurationKey":"0x80"}
+  ],
+  "retainedAdapters": [
+    {"symbol":"processing_storage_snapshot","address":"0x007101e4","classification":"Storage numbering snapshot dispatch, selector 1. DebugStorage confirms this 41-selector dispatcher is outside its assigned naming closure; full dispatcher ownership or explicit retained-storage admission is required."}
+  ],
+  "originalAbiQuirks": [
+    {
+      "body": "0xe98ef4",
+      "fact": "Passes sixth argument zero to e5d0f8."
+    },
+    {
+      "body": "0xe993bc",
+      "fact": "Passes fourth argument zero to e5f45c, despite omitted C alias argument."
+    },
+    {
+      "body": "0xe98d90",
+      "fact": "Passes fourth transform word to e5d8d8; completion status is one regardless of return."
+    },
+    {
+      "body": "0xe9b88c",
+      "fact": "Passes third public argument as seventh e5254c argument."
+    },
+    {
+      "body": "0xe9ac44",
+      "fact": "Original helper copies seven never-initialized private local words from incoming SP-0x50..-0x38 to frame+0x408 after the successful path, including bypass. Public direct-entry A32 adapter preserves the opaque incoming-byte contract. Normal owned dispatcher omits the seven dead stores, preserves prior destination bytes, and publishes the complete primary descriptor. Primary publication/renderer/copy consumers are e76580/e90628/e8f11c; capture cloning can copy the opaque field. Consumer census and qualification limits are recorded in issue172."
+    },
+    {
+      "body": "0xe9bb04",
+      "fact": "Original A32 e55194 returns zero unconditionally, so the active filtering/copy branch is unreachable without changing an owned helper law. Models must not script a nonzero gate."
+    },
+    {
+      "body": "0xe9a070",
+      "fact": "Mode two does not return."
+    },
+    {
+      "body": "0xe9a36c",
+      "fact": "Mode one does not return."
+    }
+  ],
+  "proof": {
+    "status": "source-only-unexecuted",
+    "acceptance": false,
+    "historicalR12Rebound": false,
+    "forbiddenStockTargets": [
+      "0xe9c560",
+      "0xe9c4ac",
+      "0xe9c2d8",
+      "0xe9c274",
+      "0xe9c0dc",
+      "0xe9bd88",
+      "0xe9bc38",
+      "0xe9c040",
+      "0xe9bb04",
+      "0xe9b88c",
+      "0xe9b368",
+      "0xe93da4",
+      "0xe9afc8",
+      "0xe9adb8",
+      "0xe9aad8",
+      "0xe9aa34",
+      "0xe9a990",
+      "0xe9a634",
+      "0xe9ac44",
+      "0xe9a36c",
+      "0xe9a070",
+      "0xe9d03c",
+      "0xe99f68",
+      "0xe9cde0",
+      "0xe9cbd4",
+      "0xe99b94",
+      "0xe99b04",
+      "0xe999e4",
+      "0xe9983c",
+      "0xe99718",
+      "0xe99504",
+      "0xe993bc",
+      "0xe99228",
+      "0xe99030",
+      "0xe98ef4",
+      "0xe98d90",
+      "0xe98c7c",
+      "0xe98ae4",
+      "0xe989d0",
+      "0xe988dc",
+      "0xe98808",
+      "0xe986a4",
+      "0xe9c9d8",
+      "0xe9d7d8",
+      "0xe9d4a4",
+      "0xe9c73c",
+      "0xe9837c",
+      "0xe97e94",
+      "0xe977c0",
+      "0xe95974",
+      "0xe95738",
+      "0xe9ec7c",
+      "0xe96054",
+      "0xe94f0c",
+      "0xe94dd0",
+      "0xe94bfc",
+      "0xe9ffcc",
+      "0xea07ec",
+      "0xe94a44",
+      "0xe948c0",
+      "0xe94778",
+      "0xe94558",
+      "0xe93f18",
+      "0xe97a88",
+      "0xe97690",
+      "0xe97558",
+      "0xe973f4",
+      "0xe972f4",
+      "0xe96fe4",
+      "0xe96e9c",
+      "0xe96d28",
+      "0xe96bf0",
+      "0xe96a74",
+      "0xe96978"
+    ],
+    "frameworkStockCalls": false,
+    "stageCodePointers": [],
+    "pointerReason": "No processing body stores a code pointer in a mutable cell. Stage resolver is not needed for these data-only plane publications.",
+    "scenarioBoundary": "Source-only, unexecuted caller models cover every command route's processing-disabled and transition-refused paths, reachable source gates, real option-selection bodies, single-reference merging, affine validation and overlap/block rejection, real curve capacity and motion-kind rejection, and a nonzero 64x64 to 272x204 packed-software resize. Actual Buffers object-table fixtures and critical endpoint constructors replace registry interceptions in final call lists. Trace and text execute their genuine disabled laws. No image frontend or packed CPU helper is replaced by a Call script. Shared lifecycle e93140/e92e30/e4eca8 expectations still require central real-endpoint composition; those scripts are not qualification evidence."
+  },
+  "missingDeviceLaw": [
+    "Remaining active/error image-stage witnesses require composable endpoint laws from the actual owned ISP operation, motion-search, affine, strip/warp, crop/process, output-triplet/JPEG and RedEye closures. These are dependency prerequisites, not invented device-success seams.",
+    "Hardware completion, DMA/ISP register behavior and device-produced numerical outputs require real endpoint contracts. CPU lookup, geometry, packed scaling, configuration reads, registry, trace and logging are not device-law exceptions.",
+    "The original e55194 gate returns constant zero. Consequently e9bb04's filtering/copy branch is unreachable with the real source law; a gate-one script would change behavior.",
+    "The original e50010 software-resize helper returns constant one. A caller failure-publication witness cannot be manufactured by scripting that CPU helper to zero.",
+    "The striped-pixel and affine scenarios require the actual kernel0 and image4 arithmetic runtime mappings supplied by the integration root; this module's image5 parameter does not contain those bytes."
+  ],
+  "integration": [
+    "Add processing module, Processing_stock.S, ProcessingScenarios.hs and ProcessingBoundary.json to root build/admission/publication selection.",
+    "Link declared semantic original-ABI exports to the recorded owning slices; the only remaining Processing_stock.S service dispatch is the explicitly pending 7101e4 storage-numbering boundary.",
+    "Include processingHelperPublications for the three additional selection/loadtest bodies.",
+    "Qualify the normal dispatcher intended ownership repair separately from direct-entry opaque-byte parity. Issue172 requires real primary-consumer, preservation, error and reentry controls; no root private-stack emulation or generic RAM mask is permitted.",
+    "Source-backed e55194 constant-zero law prevents active/error filtering witnesses for e9bb04; preserve the gate instead of inventing an active helper result.",
+    "Admit DiagnosticLoggingScenarios and BuffersScenarios constructors. Processing expands former registry requests to actual critical endpoints and disables diagnostic sinks through real source state; central lifecycle constructors must still compose owned e93140/e92e30/e4eca8 bodies before admission.",
+    "Run compiler, native comparisons, mutation controls and independent review only after cohesive integration."
+  ]
+}

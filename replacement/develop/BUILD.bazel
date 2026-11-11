@@ -1,0 +1,144 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "module",
+    srcs = glob(["src/**/*.rs", "src/**/*_stock.S", "*_stock.S"]),
+)
+
+filegroup(
+    name = "portable-font-module",
+    srcs = ["src/font_core.rs"] + glob(["src/font_core/**/*.rs"]),
+)
+
+filegroup(
+    name = "portable-calibration-module",
+    srcs = ["src/calibration_core.rs"] + glob(["src/calibration_core/**/*.rs"]),
+)
+
+genrule(
+    name = "portable-cores-test-binary",
+    srcs = ["src/portable_cores.rs", ":portable-font-module", ":portable-calibration-module"],
+    outs = ["portable-cores-tests-bin"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --crate-name=portable_cores_tests $(location src/portable_cores.rs) -o $@",
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+    executable = True,
+    testonly = True,
+)
+
+sh_test(
+    name = "portable-cores-tests",
+    srcs = [":portable-cores-test-binary"],
+)
+
+# Zero-step low-memory reader of a RAM-push attach checkpoint, built against @lab_fujimod_xm1's SDK.
+sh_binary(
+    name = "checkpoint-low-prefix",
+    srcs = ["@lab_checkpoint_low_prefix//:bin/xm1-checkpoint-low-prefix"],
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "relink-sources",
+    srcs = ["standalone.rs", "develop.ld", ":module"] + glob(["*_stock.S"]),
+)
+
+xm1_rust_staticlib(
+    name = "develop-rust",
+    src = "standalone.rs",
+    crate_name = "xm1_develop",
+    data = [
+        ":module",
+        "//replacement/capture:module",
+        "//replacement/save:module",
+        "//replacement/media_permit:module",
+        "//replacement/media_permit:adapter",
+    ],
+    rustc_flags = ["--cfg", "xm1_freestanding"],
+)
+
+_PROPERTY_CORE = "//replacement/settings_storage:property-core"
+
+xm1_rust_rlib(
+    name = "property-service-component",
+    src = "//replacement/property_service:src/lib.rs",
+    crate_name = "xm1_property_service",
+    rustc_flags = [
+        "-C", "target-feature=+strict-align", "-C", "jump-tables=no",
+        "--extern", "xm1_settings_storage_core=$(location %s)" % _PROPERTY_CORE,
+        "--cfg", "'feature=\"component\"'",
+    ],
+    data = [
+        "//replacement/property_service:src/property_table.rs",
+        "//replacement/property_service:src/storage_boundary.rs",
+        _PROPERTY_CORE,
+    ],
+)
+
+xm1_rust_elf(
+    name = "develop-candidate",
+    rust_staticlib = ":develop-rust",
+    rust_components = [":property-service-component", _PROPERTY_CORE],
+    asm_srcs = glob(["*_stock.S", "src/**/*_stock.S"], exclude = ["RedEyeBackend_stock.S", "src/pipeline/DebugStorage_stock.S"]) + [
+        "//replacement/save:save_stock.S",
+        "//replacement/media_permit:rb_media_permit_stock.S",
+    ],
+    link_script = "develop.ld",
+    entry = "xm1_develop_dispatch",
+    extra_ldflags = ["-Wl,--gc-sections"],
+)
+
+haskell_binary(
+    name = "develop-qualification",
+    main_file = "DevelopQualifyMain.hs",
+    srcs = ["DevelopQualifyMain.hs", "model/Scenarios.hs", "model/DispatcherScenarios.hs", "model/PermitScenarios.hs", "model/SaveScenarios.hs", "model/TransactionScenarios.hs", "model/EntryScenarios.hs", "model/Publications.hs", "model/SourceAdmission.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:native-adapter",
+        "//emulation:native-observation",
+        "//host/firmware:bank-allowlist",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:text",
+    ],
+)
+
+exports_files(["source-admission.json"])
+
+xm1_rust_staticlib(
+    name = "develop-services-rust",
+    src = "model/services.rs",
+    crate_name = "develop_services",
+)
+
+xm1_rust_elf(
+    name = "develop-services",
+    rust_staticlib = ":develop-services-rust",
+    link_script = "model/services.ld",
+    entry = "receive",
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--undefined=copy", "-Wl,--undefined=append", "-Wl,--undefined=decimal", "-Wl,--undefined=fill", "-Wl,--undefined=storage_direct", "-Wl,--undefined=storage_alternate", "-Wl,--undefined=storage_release", "-Wl,--undefined=frame_kind"],
+)
+
+xm1_rust_staticlib(
+    name = "develop-caller-observer-rust",
+    src = "model/caller_observer.rs",
+    crate_name = "develop_caller_observer",
+)
+
+xm1_rust_elf(
+    name = "develop-caller-observer",
+    rust_staticlib = ":develop-caller-observer-rust",
+    link_script = "model/caller_observer.ld",
+    entry = "xm1_develop_proof_caller_callback",
+    extra_ldflags = ["-Wl,--gc-sections"],
+)

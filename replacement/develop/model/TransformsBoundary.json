@@ -1,0 +1,259 @@
+{
+  "family": "transforms",
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "base": "3ed717b0",
+  "sourceEvidence": {
+    "extentBytes": "Inherited 74-of-74 extent SHA confirmation in ownership-contract.json; not a C-behavior claim",
+    "behavior": "Original image5 A32 disassembly inspected for full 0xe96978..0xe989d0 extent; exact C lead for e96978; draft C used only with A32 confirmation",
+    "qualification": "not-run"
+  },
+  "bodies": [
+    {
+      "address": "0xe988dc",
+      "size": 244,
+      "sha256": "4d6d7e0318fe403c686565cd06b2c31ce185e8514a97d05470c0481b5373300d",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e93f18.c",
+      "start": 3169,
+      "end": 3216,
+      "status": "nonmatching",
+      "stage": "CombineBorder",
+      "ownedSymbol": "xm1_develop_pipeline_combine_border"
+    },
+    {
+      "address": "0xe98808",
+      "size": 212,
+      "sha256": "46b2aad728fe1faf1fbbce98f88b688b75a60665a705c29207b4d42a10e9a628",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e93f18.c",
+      "start": 3109,
+      "end": 3166,
+      "status": "nonmatching",
+      "stage": "ReduceBorder",
+      "ownedSymbol": "xm1_develop_pipeline_reduce_border"
+    },
+    {
+      "address": "0xe986a4",
+      "size": 356,
+      "sha256": "dba8152794030ab9b6e5e0786527d1cbadf91603dd09cb965e9dc857b437c450",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e93f18.c",
+      "start": 3013,
+      "end": 3106,
+      "status": "nonmatching",
+      "stage": "TransformBorder(BorderPass::Previous | BorderPass::Current)",
+      "ownedSymbol": "xm1_develop_pipeline_transform_border"
+    },
+    {
+      "address": "0xe9837c",
+      "size": 808,
+      "sha256": "61fa4e69f13a54ba4971f8fbb47b02b97c409ebcb0c9f151f6fd22b5fea45d31",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e93f18.c",
+      "start": 2874,
+      "end": 3010,
+      "status": "nonmatching",
+      "stage": "ReducePreview(CapturePass::Primary | CapturePass::Secondary)",
+      "ownedSymbol": "xm1_develop_pipeline_reduce_preview"
+    },
+    {
+      "address": "0xe97e94",
+      "size": 1256,
+      "sha256": "a3175a7c2e22ef65b3bcf4c5059fae0b9599546635387c77b42c4fd098510c85",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e93f18.c",
+      "start": 2653,
+      "end": 2871,
+      "status": "nonmatching",
+      "stage": "RotateCapture(CapturePass::Primary | CapturePass::Secondary)",
+      "ownedSymbol": "xm1_develop_pipeline_rotate_capture"
+    },
+    {
+      "address": "0xe977c0",
+      "size": 712,
+      "sha256": "a27c33d76dbb8806994219fd2f64c5b07e510ccd911b8b3fb85417e9846e7a6e",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e93f18.c",
+      "start": 2393,
+      "end": 2492,
+      "status": "nonmatching",
+      "stage": "CropCapture",
+      "ownedSymbol": "xm1_develop_pipeline_crop_capture"
+    },
+    {
+      "address": "0xe97a88",
+      "size": 1036,
+      "sha256": "3e87ef5e4274f454f0fe571dfcc607ba2cc7a3e6541db170144ec80c7ebe0f80",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e93f18.c",
+      "start": 2495,
+      "end": 2650,
+      "status": "nonmatching",
+      "stage": "SplitCapture",
+      "ownedSymbol": "xm1_develop_pipeline_split_capture"
+    },
+    {
+      "address": "0xe97690",
+      "size": 304,
+      "sha256": "4e488140931282ffd3be8c99fc054cbfa5b16770ae0782dbaafea4cefedb777f",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e93f18.c",
+      "start": 2334,
+      "end": 2390,
+      "status": "nonmatching",
+      "stage": "BlendCaptures",
+      "ownedSymbol": "xm1_develop_pipeline_blend_captures"
+    },
+    {
+      "address": "0xe97558",
+      "size": 312,
+      "sha256": "09e118b38b9a01fda3930fcba87a05d3055224d0a199fa12b9d4a293cb360895",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e93f18.c",
+      "start": 2259,
+      "end": 2331,
+      "status": "nonmatching",
+      "stage": "FillChroma(ChromaPass::Primary | ChromaPass::Secondary)",
+      "ownedSymbol": "xm1_develop_pipeline_fill_chroma"
+    },
+    {
+      "address": "0xe973f4",
+      "size": 356,
+      "sha256": "fe6f2609fc60a567d95115d6543d71028df63166ef3e389b8c9000be5d24c31b",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e93f18.c",
+      "start": 2175,
+      "end": 2256,
+      "status": "nonmatching",
+      "stage": "SplitComposite",
+      "ownedSymbol": "xm1_develop_pipeline_split_composite"
+    },
+    {
+      "address": "0xe972f4",
+      "size": 256,
+      "sha256": "44dda897c12559a6c1e4d5999e1565d58caa7509b5d073216e30a9a9bce3f6f1",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e93f18.c",
+      "start": 2127,
+      "end": 2172,
+      "status": "nonmatching",
+      "stage": "PrepareComposite",
+      "ownedSymbol": "xm1_develop_pipeline_prepare_composite"
+    },
+    {
+      "address": "0xe96fe4",
+      "size": 784,
+      "sha256": "c6a6916311b277104920b0510eb9634c1765776537e0c9cae0ff3e561623bf03",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e93f18.c",
+      "start": 1971,
+      "end": 2124,
+      "status": "nonmatching",
+      "stage": "SelectComposite",
+      "ownedSymbol": "xm1_develop_pipeline_select_composite"
+    },
+    {
+      "address": "0xe96e9c",
+      "size": 328,
+      "sha256": "29e8b26a822aaf334a03743ae921cd1e168f6d6430310023179bddcc83488213",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e93f18.c",
+      "start": 1887,
+      "end": 1968,
+      "status": "nonmatching",
+      "stage": "PreparePlanes",
+      "ownedSymbol": "xm1_develop_pipeline_prepare_planes"
+    },
+    {
+      "address": "0xe96d28",
+      "size": 372,
+      "sha256": "afe0e3c4f0d6f84a343314cb2e7dcc8b7bf2ea8c7e16daa82db370986493917b",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e93f18.c",
+      "start": 1814,
+      "end": 1884,
+      "status": "nonmatching",
+      "stage": "MergePlanes",
+      "ownedSymbol": "xm1_develop_pipeline_merge_planes"
+    },
+    {
+      "address": "0xe96bf0",
+      "size": 312,
+      "sha256": "671482c061ceb0ed119d0da0a637f5f32405426d03f634abf326bc8c05ccf984",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e93f18.c",
+      "start": 1763,
+      "end": 1811,
+      "status": "nonmatching",
+      "stage": "DifferencePlanes",
+      "ownedSymbol": "xm1_develop_pipeline_difference_planes"
+    },
+    {
+      "address": "0xe96a74",
+      "size": 380,
+      "sha256": "2f9514c21f618c543548c378283e788ba3a4a25f0f37e101012097bb4ca7e2eb",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e93f18.c",
+      "start": 1706,
+      "end": 1760,
+      "status": "nonmatching",
+      "stage": "BlendPlanes",
+      "ownedSymbol": "xm1_develop_pipeline_blend_planes"
+    },
+    {
+      "address": "0xe96978",
+      "size": 252,
+      "sha256": "20d3043c5073f83d1e79a62e9ccf9f92394a01da091d6843470b4c360fa5449c",
+      "file": "decomp/firmwares/xm1-150/app/capture/frame/tu_00e93f18_exact.c",
+      "start": 477,
+      "end": 514,
+      "status": "exact",
+      "stage": "FinishPlanes",
+      "ownedSymbol": "xm1_develop_pipeline_finish_planes"
+    }
+  ],
+  "rootRoutes": {
+    "0x48": "CombineBorder",
+    "0x49": "ReduceBorder",
+    "0x4a": "TransformBorder(BorderPass::Previous)",
+    "0x4b": "TransformBorder(BorderPass::Current)",
+    "0x50": "ReducePreview(CapturePass::Primary)",
+    "0x51": "ReducePreview(CapturePass::Secondary)",
+    "0x52": "RotateCapture(CapturePass::Primary)",
+    "0x53": "RotateCapture(CapturePass::Secondary)",
+    "0x54": "CropCapture",
+    "0x63": "SplitCapture",
+    "0x65": "BlendCaptures",
+    "0x66": "FillChroma(ChromaPass::Primary)",
+    "0x67": "FillChroma(ChromaPass::Secondary)",
+    "0x68": "SplitComposite",
+    "0x69": "PrepareComposite",
+    "0x6a": "SelectComposite",
+    "0x6b": "PreparePlanes",
+    "0x6c": "MergePlanes",
+    "0x6d": "DifferencePlanes",
+    "0x6e": "BlendPlanes",
+    "0x6f": "FinishPlanes"
+  },
+  "ownedFrameworkCalls": [
+    "xm1_develop_plan_lookup",
+    "xm1_develop_begin",
+    "xm1_develop_complete",
+    "xm1_develop_lookup_object",
+    "xm1_develop_store"
+  ],
+  "crossFamilyCalls": [],
+  "typedRetainedServices": [
+    {
+      "address": "0x69f8fc",
+      "symbol": "xm1_transforms_configuration",
+      "type": "ConfigurationKey -> configuration byte",
+      "classification": "configuration service"
+    }
+  ],
+  "applicationIntegration": {
+    "status": "All application bindings route directly to sibling owned symbols. Only configuration remains a stock seam.",
+    "callerAbi": "Rust services module records original-ABI signatures. PipelineBuffers owns split_planes, rotate_copy and orientation; PipelineImageOperations owns plane operation frontends; PipelineImageReferences owns blend_overlapping and noise_reference; PipelineImagePlanes owns copy/rotate/resize/border and debug publication.",
+    "scenarioBoundary": "Descriptor splitting, orientation, rotate-copy, primary RotateCapture and FillChroma execute real owned CPU helpers. Independent models assert patterned rotation pixels, copy-backend IRQ/MMIO completion/failure flow and packed chroma DMA request/pixel effects. Other frontend paths currently retain application-isolation fixture scripts and are not end-to-end acceptance.",
+    "fixtureDependencies": ["BuffersScenarios", "ImagePlanesScenarios", "ImageOperationsScenarios", "CropProcessScenarios"],
+    "remainingModelPrerequisites": ["PipelineImageOperations full e657ac endpoint model requires the da92f0 image_geometry CPU closure", "PipelineImagePlanes full copy/rotate/resize/border and debug endpoint constructors", "PipelineImageReferences blend_overlapping and noise_reference endpoint constructors"],
+    "cutoverOwner": "DevelopTransactionOwnership retains final cross-slice fixture cutover and qualification ownership"
+  },
+  "missingDeviceLaws": [],
+  "behaviorFacts": [
+    "e60cc4 and e6100c call sites consume r3 as output descriptor even where draft C omits the argument.",
+    "Crop stage reads unsigned halfword at frame+0x1680; source draft short is not signed in A32.",
+    "Crop stage preserves an infinite-loop invariant failure when configured minimum exceeds half target width.",
+    "Border combine increments saved+0xcc after publishing output, including processing bypass.",
+    "Preview primary stores output descriptor before invoking reducer; secondary preserves reducer-modified full-frame source.",
+    "Public helpers whose C leads return void still return the original begin/complete value held in r0."
+  ],
+  "codePointerCells": [{"cell": "0x157ba00", "stockEntry": "0xe63e34", "ownedSymbol": "xm1_pipeline_image_dma_complete", "scope": "active FillChroma DMA request only", "resolver": "role-specific proof-bound StagePublication resolver"}],
+  "composedCodePointerCells": {"constructor": "CropProcessScenarios.copyProcessLaw", "scope": "primary RotateCapture completed and failed fixtures", "normalization": "stageCodePointers returned by the source-executing law"},
+  "checksRun": [],
+  "historicalQualification": "17afdfa9/R12 unchanged"
+}

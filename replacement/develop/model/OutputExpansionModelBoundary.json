@@ -1,0 +1,66 @@
+{
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "qualification": "Unrun. No builds, tests, formatting, linting or native execution performed.",
+  "sourceEvidence": {
+    "originalImage4": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+    "originalImage5": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+    "sourceDefinitions": [
+      "app/connectivity/ptp/vendor/imaging_config/tu_00d5c120.c",
+      "app/connectivity/ptp/vendor/imaging_config/tu_00d61308.c",
+      "app/connectivity/ptp/vendor/imaging_config/tu_00d65f94.c",
+      "app/connectivity/ptp/vendor/imaging_config/scan_configuration_flags.c",
+      "app/settings/configuration_lookup_cache.c",
+      "app/settings/tu_0073ed54.c",
+      "app/ui/record/ui_record_playback_service_api.c"
+    ],
+    "originalExtentInventory": "OutputExpansionBoundary.json routes, owned by PipelineOutputTriplets, source commit 57e4ef7c",
+    "independentPairLaw": "OutputExpansionPairLaw.hs and OutputExpansionPairBoundary.json, source commit 193456f1",
+    "a32Precedence": "Original d5d294/d5da2c/d622c0 routing, d60638/d60654 denominator registers, d64800/d64950 producer-defined scratch fields, d655f4 scatter, d613c4 masks, 73ebcc threshold comparison and 73fe8c key stride override NONMATCHING draft forms. Pair arithmetic is derived separately in OutputExpansionPairLaw."
+  },
+  "interface": {
+    "sourceBundle": "image4 <> image5, split at decimal 2631680",
+    "descriptorBytes": 580,
+    "constructorBytes": 572,
+    "recordBytes": 4704,
+    "memory": "ExpansionMemory { expansionMemoryRegions :: [Scenarios.Patch] }. Reads use the newest supplied overlapping initial patch; an unmapped RAM read is an error, never zero.",
+    "phases": ["ResetExpansion", "ExpandDescriptor", "SubmitDescriptor"],
+    "expansionEffects": "CoefficientSources -> (Word32 -> Word8) -> ExpansionMemory -> Address -> ByteString -> Address -> ByteString -> ExpansionPhase -> [Patch]",
+    "expansionEffectsFromImage": "ByteString -> (Word32 -> Word8) -> ExpansionMemory -> Address -> ByteString -> Address -> ByteString -> ExpansionPhase -> [Patch]",
+    "outputExpansionScenarios": "ByteString -> (StagePublication -> Address) -> [StageScenario]",
+    "argumentOrder": "Pure laws take descriptor address and bytes before record address and bytes. Stock submit_descriptor takes (record,descriptor); reset and expand take (descriptor,record). All three return void.",
+    "result": "Full final descriptor and record snapshots plus nonoverlapping final external-memory byte patches. Internal ordered effects propagate descriptor, record, cache and coefficient scratch writes before later builders read them."
+  },
+  "cache": {
+    "base": "0x0095ada0",
+    "bytes": 328,
+    "slotBytes": 8,
+    "profileSlots": [0, 30],
+    "exposureSlots": [31, 40],
+    "flag": "u32 at slot+4",
+    "value": "u8 at slot+0",
+    "hit": "Return the cached byte without reading its ROM key or configuration value.",
+    "miss": "Read the original key and configuration byte; store the byte, then store flag word 1.",
+    "profileOutOfRange": "Values greater than 30 return 64 without reading or writing cache RAM.",
+    "fixtures": "Cold and warm cache bytes are explicit initial patches. The pure law never assumes a cold cache."
+  },
+  "laws": [
+    "Reset clears exactly 0x1260 bytes, updates descriptor13c from nine ordered thresholds, and conditionally remaps descriptor154.",
+    "Submit composes reset and expansion. Expansion preserves untouched caller bytes and performs the source flag scatter, conditional builders, component-mask ORs and final wordd8 publication.",
+    "Descriptor tail23c..242 is not an input to grid selection. The grid builder writes its four halfwords. Other descriptor coefficient and selector mutations remain observable.",
+    "Grid reciprocals are unsigned_div(0x40000+(dimension>>1),dimension), with independently bounded dimensions.",
+    "Unsigned products and differences retain A32 word wrapping at each source truncation point. The first mixed-channel secondary scale uses a wide product; the second wraps at32 bits. Interior interpolation uses the source upper-plus-difference form.",
+    "Template-noise interpolation casts the signed remainder to an A32 word before its wrapping product and unsigned division. Narrow coefficient fields fill their complete high mask when any high source bit is present.",
+    "Pair packets expose only their enabled byte and four physical halfwords. Byte1 is never observed. Canonical coefficient packets are read only at producer-defined fields.",
+    "Canonical OutputCoefficientsScenarios supplies the twelve shared coefficient policies and their descriptor/global effects. The expansion model does not import SensorSettingsScenarios, OutputMetadataScenarios or OutputTripletsScenarios.",
+    "No application CPU calls are scripted. No original software helper is treated as a hardware effect."
+  ],
+  "scenarios": [
+    "Literal reset witnesses cover threshold equality, threshold crossing, all selector remaps and preservation of bytes beyond the clear extent.",
+    "Expand and submit cover all primary modes, individual flags with0/1/2/ffffffff, component masks, active overrides, embedded filter factors, disabled filter factors and all grid-axis boundaries.",
+    "Direct builder scenarios cover filter, profile, matrix, paired-channel, mixed-gain and template policies with original source data and synthetic configuration bytes.",
+    "Template group masks cover neither, first, second and both groups across ordinary and special kinds.",
+    "Literal all64 filter-factor witnesses return4 with a cold cache and24 with explicit warm profile192/exposure128. Cache effects and untouched bytes are observed.",
+    "Literal scalar witnesses cover nonzero bounds, type/mode alternate selection and the authenticated no-effect finish-template body. Independent signed-pair scenarios are exported by OutputExpansionPairLaw."
+  ],
+  "returningDomain": "Original source/table images and caller memory must be available. Arithmetic paths that divide by zero are nonreturning source fault paths, not successful scenarios; this model does not fabricate successful fallback results. Native terminal fault qualification remains unrun."
+}

@@ -1,0 +1,97 @@
+{
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image": {"base": "0x00bf1a00", "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"},
+  "image4": {"base":"0x0061c400","sha256":"f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"},
+  "publications": [
+    {"address":"0x00e650dc","symbol":"xm1_pipeline_image_process_crop","abi":"u32(stage:u32,parameters:*const CropParameters14,input:*const ImagePlane7,output:*mut ImagePlane7)","size":396,"sha256":"5b6f651fcfdfe2fc0db18b47be8bf5599408a9a6a3300f95d01f01974d66ec85"},
+    {"address":"0x00e65268","symbol":"xm1_pipeline_image_scale_configuration","abi":"u32(stage:u32,request:*const ScaleRequest2,input:*const ImagePlane7,output:*mut ImagePlane7)","size":360,"sha256":"a8889bd47d70696b88721516ce97b892ab31d69f782a4ebc2e55c2ab3d5a1591"},
+    {"address":"0x00e653d0","symbol":"xm1_pipeline_image_copy_configuration","abi":"u32(stage:u32,format:*const u32,input:*const ImagePlane7,output:*mut ImagePlane7)","size":328,"sha256":"1ecb3f0b674bef995d5d1100662570504b8c0a26da82d0a6e2a0953447017cf8"},
+    {"address":"0x00e64268","symbol":"xm1_pipeline_image_process_planes","abi":"u32(stage:u32,request:*const ProcessingRequest8,first:*const ImagePlane7,second:*const ImagePlane7,third:*const ImagePlane7,fourth:*const ImagePlane7,fifth:*const ImagePlane7,argument:i32)","size":1824,"sha256":"93ac63ce0e7c57ac44ab2beb8c36167987151a2c5d51794e84bfde341394df3c"},
+    {"address":"0x00e65518","symbol":"xm1_pipeline_image_geometry_debug","abi":"void(stage:u32)","size":660,"sha256":"9173d6c1fb53bbabba70c1b84f254a0ed10e21f4d2f31642d14622c4ef374d4d"},
+    {"address":"0x00e64ffc","symbol":"xm1_pipeline_image_crop_debug","abi":"void(stage:u32)","size":224,"sha256":"fb8ed1f04e747e9668e2788ea11677cfc65b4c5d305bb6987a49f7d0b2ef6a4f"},
+    {"address":"0x00e641a8","symbol":"xm1_pipeline_image_processing_debug","abi":"void(mode:u32,stage:u32)","size":192,"sha256":"369e8877093a1108141836c55a25e6616459e05d1b9943fb9e0318fa25df6852"},
+    {"address":"0x00e63f04","symbol":"xm1_pipeline_image_crop_complete","abi":"void()","size":52,"sha256":"e07084007223139abd7797c64b0ab133176c9f8f4048709fd15f7f6e99c37529"},
+    {"address":"0x00e63ed0","symbol":"xm1_pipeline_image_scale_complete","abi":"void()","size":52,"sha256":"4f858d639a566db639e7fe911b048f944d0f70e528a06627330d53507488ed67"},
+    {"address":"0x00e63e9c","symbol":"xm1_pipeline_image_copy_complete","abi":"void()","size":52,"sha256":"beb67cde9f1e027e2bef41b3c828b47896e42d4666e34f583b1e7af0007acdc6"},
+    {"address":"0x00e63f6c","symbol":"xm1_pipeline_image_processing_complete","abi":"void()","size":52,"sha256":"05edbd6fbeffd007d32b1dc47489263200c157977505041581c49ce311969fe5"},
+    {"address":"0x00e563b0","symbol":"xm1_pipeline_image_saved_request_accept","abi":"u32(stage:u32)","size":24,"sha256":"122b20d4ccac9fb3a634ba673079bb3577f9f68c0aacfb650a20e27cfe3050af"},
+    {"address":"0x00e563c8","symbol":"xm1_pipeline_image_saved_request_unused","abi":"u32(stage:u32)","size":24,"sha256":"aab533f64e7d3f50628f3b74c122bcfaae90f7a06e1282e0e04e4d03d9706543"},
+    {"address":"0x0068d86c","symbol":"xm1_pipeline_image_copy_acquire","abi":"void()","size":140,"sha256":"978f45aea1f8f7e1a51110a9634c0f45a33471bc86a2f29db99c8fd9984b46c8"},
+    {"address":"0x0068d8f8","symbol":"xm1_pipeline_image_copy_device_release","abi":"void()","size":92,"sha256":"0e351325a4f3245bc3c14e82279f48b07924695ac902c8beb10dd2153a15e5e1"},
+    {"address":"0x00da9824","symbol":"xm1_pipeline_image_copy_initialize","abi":"i32()","size":48,"sha256":"4242bc9445015ac441fd81e86dc6ed7d34591d8a23f4acb99087c86a68ea98ab"},
+    {"address":"0x00da9854","symbol":"xm1_pipeline_image_copy_release","abi":"i32()","size":20,"sha256":"645d0000876fe6b740c79fe53091f57e3c9ae6fb84f30fd9b70bae9e96ae7b93"},
+    {"address":"0x00da98f4","symbol":"xm1_pipeline_image_copy_start","abi":"void()","size":32,"sha256":"3e90c6b01093a6a4b3602154cd9bece5c1f5e08cb6a7113b6f22ce9d8ae2ce31"},
+    {"address":"0x00da9914","symbol":"xm1_pipeline_image_copy_publish","abi":"i32(packet:*const CopyPacket6)","size":332,"sha256":"506a37881a0a50d480a3cbbc77485af855d40ccb743ff2a90554f5e2f4e76835"},
+    {"address":"0x0068d9c0","symbol":"xm1_pipeline_image_copy_program","abi":"i32(configuration:*const CopyHardwareConfiguration8)","size":616,"sha256":"a1f1ff4789248b4d4b38ec358241324e65464dedd34d27bc2b9e946b49665fd1"},
+    {"address":"0x00da9774","symbol":"xm1_pipeline_image_copy_interrupt","abi":"void()","size":176,"sha256":"c62dd98bc223c19ab99c37086d56154dd39fc84f921d128fb848518751797737"},
+    {"address":"0x00da9868","symbol":"xm1_pipeline_image_copy_cancel","abi":"void()","size":140,"sha256":"1f91a5724dff30dae89cd8ae966092a526c209d755524c8b5d5e3b693dbe8fe8"},
+    {"address":"0x0068cc48","symbol":"xm1_pipeline_image_scale_acquire","abi":"void()","size":140,"sha256":"378ef2c4d8ce01e2120c2aecc6a5078d9f7273a373f266821776aa5413dac871"},
+    {"address":"0x0068ccd4","symbol":"xm1_pipeline_image_scale_device_release","abi":"void()","size":92,"sha256":"c03a889f8ff8cc9b5569c28d6c0967741bcd2362b2a9d4d6542f5c64818d6472"},
+    {"address":"0x006decf8","symbol":"xm1_pipeline_image_scale_initialize","abi":"i32()","size":44,"sha256":"da95b4f207846fe0bcd6c0fe17e8e46c641934466ca03c535097fd5f9e994d86"},
+    {"address":"0x006ded24","symbol":"xm1_pipeline_image_scale_release","abi":"i32()","size":20,"sha256":"7e58e857fbe89276ae5f610f8286204bd991de3b13e8a215c7ded4b0e6ac37e2"},
+    {"address":"0x006ded38","symbol":"xm1_pipeline_image_scale_cancel","abi":"i32()","size":84,"sha256":"4808eb6b9a3b120c632e5a46797645cf673a65eb3136df8d4d76ac47fd2393a2"},
+    {"address":"0x006ded8c","symbol":"xm1_pipeline_image_scale_start","abi":"void()","size":40,"sha256":"24945032a53b17a6739156510a361029a947880c6776f7d4b57e752a8a87b97e"},
+    {"address":"0x006dedb4","symbol":"xm1_pipeline_image_scale_select_burst","abi":"i32(packet:*const ScalePacket15,burst:*mut [u32;3])","size":196,"sha256":"0a12389886c46555f55d31c945c6941c368e2988d6fd28cc9c28e5a3ca27e12a"},
+    {"address":"0x006dee78","symbol":"xm1_pipeline_image_scale_program","abi":"i32(packet:*const ScalePacket15,burst:*const [u32;3])","size":200,"sha256":"49d5721540516ee190ed8d0a65b5fe204f9331f70d0b46c7c1751fbe58895a98"},
+    {"address":"0x006def40","symbol":"xm1_pipeline_image_scale_publish","abi":"i32(packet:*const ScalePacket15)","size":124,"sha256":"608b262cb1303d356a16b3e29f97c6875968e324f0b900224253f101c50cc8d3"},
+    {"address":"0x006dec40","symbol":"xm1_pipeline_image_scale_interrupt","abi":"void()","size":184,"sha256":"1a1ee4d2b6b7af99219847d1366246b619d939b73136ce8e5784d7e5ba385ea7"},
+    {"address":"0x0068d184","symbol":"xm1_pipeline_image_scale_coefficients","abi":"void(coefficients:*const ScaleCoefficients14)","size":1228,"sha256":"fbae0e19aac9e7c55b5b89114f3b5df530adf570637fbacd4dbf2f3ab6737847"}
+  ],
+  "inlinedSourceExtents":[
+    {"address":"0x0068cd30","size":60,"sha256":"be6b660e803c61fe0c6ed5d722d8bdc9fd333578ab79eea78589009024866284","ownedBy":"scale_initialize/cancel/interrupt"},
+    {"address":"0x0068cd6c","size":80,"sha256":"f7bdf8b7640058b238be8ae2b2222a241130b0083998e74e159aca6b1727687a","ownedBy":"scale_start"},
+    {"address":"0x0068cdbc","size":968,"sha256":"eef33419f6c7f8758e37397d9d83ffdcbd060889de9e98ea9ba03a675a0b1a61","ownedBy":"scale_program"},
+    {"address":"0x0068d650","size":192,"sha256":"4dd36f4ca5e8a3615d2b2f770199de102001abf06989d92207087b4607bd3d3d","ownedBy":"scale_program"},
+    {"address":"0x0068d710","size":48,"sha256":"a8432a82e0a93887df378364614510b31988f689a0cdb72e2c6c3305cb36e167","ownedBy":"scale_interrupt"},
+    {"address":"0x0068d740","size":48,"sha256":"73a8959369907af821d0acf35f95543f8aaa2f0dd7bb977d10ac00fbf88fcbd1","ownedBy":"scale_interrupt"},
+    {"address":"0x0068d7a0","size":48,"sha256":"48355a71f627d4e5ef8f2201a8b90ab628a9e496d6b9ecef22e018e0804b3562","ownedBy":"scale_program/interrupt"},
+    {"address":"0x0068d7d0","size":128,"sha256":"47e9b245eb1b577fe97eb990805116d611a39a919572c81cd527b545a7926de0","ownedBy":"scale_program"},
+    {"address":"0x0068dc28","size":60,"sha256":"9f48b8272b1d1c93cb7b7fe338be44c9850eb98bcac44fe9d10276d838558a41","ownedBy":"copy_start"},
+    {"address":"0x0068dc64","size":48,"sha256":"de093d373bc5550ae2ebbe645f758387366d7f3a7f5e70bf8e5b3275db07734a","ownedBy":"copy_interrupt"},
+    {"address":"0x0068dc94","size":48,"sha256":"60b141284d1b70023c95e5e2dab4a8e434299133fc1ae7a569908b38886db79b","ownedBy":"copy_interrupt"},
+    {"address":"0x0068dcc4","size":108,"sha256":"3a4166ef68689eaf27cdf09471bfe34278bfcf8a8c8aa980f50be4d474c6bd14","ownedBy":"copy_initialize/cancel"},
+    {"address":"0x0068dd60","size":108,"sha256":"9459363abb83bfedc3b61a45f9784c5c434e30e43c8ef0b5cf89bc3038451cd2","ownedBy":"copy_start"},
+    {"address":"0x0068ddcc","size":108,"sha256":"8c5d4c98a918f0f33c990b03ce8ac8fda8aea05ed319fb5e642469f5c3a1a440","ownedBy":"copy_interrupt"}
+  ],
+  "peerOwned": [
+    {"address":"0x00e65cc8","owner":"PipelineImageOperations","symbol":"xm1_pipeline_image_fill_word","abi":"u32(plane:*const ImagePlane7,value:u32)"},
+    {"address":"0x00e64a44","owner":"PipelineImagePlanes","symbol":"xm1_pipeline_image_resize_planes"},
+    {"address":"0x00e65f1c","owner":"PipelineImageOperations","symbol":"xm1_pipeline_image_pad_edges"},
+    {"address":"0x00e6628c","owner":"PipelineImageGeometry"},
+    {"address":"0x00da9398","owner":"PipelineStripPlanner","symbol":"xm1_pipeline_image_geometry_finish"},
+    {"addresses":["0x00da6400","0x00da642c","0x00da6440","0x00da645c","0x00da67ec"],"owner":"PipelineImageGeometry","symbols":["xm1_pipeline_image_crop_initialize","xm1_pipeline_image_crop_release","xm1_pipeline_image_crop_begin","xm1_pipeline_image_crop_wait","xm1_pipeline_image_crop_publish"]}
+  ],
+  "layout": {
+    "ImagePlane7":["mode","address","size","strideBytes","widthBytes","heightLines","flags"],
+    "CropParameters14":["sourceMode","targetMode","transform","strideBytes","enabled","threshold","alternate","red","green","blue","control0","control1","control2","control3"],
+    "ProcessingRequest8":["operation","selection","parameter","coefficients","color","option","auxiliaryPointer","scaleOption"],
+    "cropPacket":"0x0157a100,92 bytes,completion+88",
+    "scalePacket":"0x01575ae8,60 bytes,stack coefficient pointer+48,completion+56",
+    "copyPacket":"0x01575b24,24 bytes,completion+20",
+    "processingPacket":"0x015759f8,240 bytes,completion+236"
+  },
+  "sourceLaws": [
+    "Crop stride must be 32-byte aligned; invalid stride spins before engine initialization.",
+    "Scale copies exactly fourteen coefficient words into lifetime-bound stack storage; input/output byte widths and strides shift right by one.",
+    "Copy checks nonnull planes and eight-byte address alignment, input half-width alignment and height alignment after initialize and packet zeroing; invalid input spins.",
+    "All four orchestrators publish current task before hardware begin, clear it after wait, complete cleanup on both event outcomes, and return one exactly when event bit0x20 is absent.",
+    "Planes clone nullable descriptors into zero-filled locals; packed mode derives from flags0x10000 and0x10, except fifth ignores0x10000 and fourth always uses mode2.",
+    "Planes auxiliary height ratio is third.height/fourth.height, admitted ratios2,4,8,16; zero fourth.height selects0; every other ratio spins.",
+    "Geometry snapshot saturates record index12; timestamp then overlaps counter, and first register overlaps trailer. Crop snapshot saturates index24 and first register overlaps counter. Final counters increment the value present after record writes.",
+    "Snapshot output pointers are reloaded before every register store. Geometry/crop snapshots do not guard a null pointer when enabled; processing snapshot does."
+  ],
+  "unresolvedOwnedDependencies": [
+    {"addresses":["0x00e57758","0x00e561b4","0x00e5639c"],"symbols":["xm1_pipeline_image_prepare_processing","xm1_pipeline_image_setup_processing","xm1_pipeline_image_saved_request_submit"],"owner":"DevelopTransactionOwnership.PipelineStripPlanner","family":"SensorRequests","classification":"Awaiting delegated recursive CPU request/settings implementation and source-executing model law; not a retained seam"},
+    {"addresses":["0x00da27a0","0x00da2910","0x00da285c","0x00da27e8","0x00da46ac","0x00da493c"],"symbols":["xm1_pipeline_image_sensor_initialize","xm1_pipeline_image_sensor_start","xm1_pipeline_image_sensor_wait","xm1_pipeline_image_sensor_release","xm1_pipeline_image_sensor_configure","xm1_pipeline_image_sensor_read_registers"],"owner":"DevelopTransactionOwnership.PipelineStripPlanner","family":"SensorRequests","classification":"Awaiting delegated recursive CPU sensor backend and source-executing model law; not a retained seam"}
+  ],
+  "retainedSeams":[
+    {"address":"0x0068d954","symbol":"xm1_pipeline_image_copy_reset","abi":"void()","size":108,"sha256":"48de81f7e98c1d25af0c966d8d00e2941fca21c3caf0ffa95a953e89247b627c","law":"Genuine MMIO reset/ready handshake: write zero to fff6f000, poll until bit16 is set. Native endpoint completion writes fff6f000=0x10000. Source C unconditional loop is incorrect; actual A32 verified."},
+    {"address":"0x00042634","symbol":"xm1_pipeline_image_copy_cache_flush","abi":"u32(value:u32,option:u32)","law":"Kernel cache-maintenance ABI, invoked with both arguments zero before hardware enable."}
+  ],
+  "consumerLawGaps":[
+    {"address":"0x00e57850","law":"Request preparation unconditionally dereferences request.word6+4, even when processing flags disable the consumer. Geometry requests10/11/12 contain word6=0 and therefore read address4. Active fixture must bind that word to source memory, not suppress the read."},
+    {"address":"0x00e6532c","law":"Scale packet and copied runtime retain a pointer to the wrapper's stack coefficient array after return. Models assert coefficient MMIO results and omit these two dead pointer cells, not their pointed-to CPU algorithm."},
+    {"address":"0x006def88","law":"Actual A32 registers scale interrupt source0x3a, not source0x3b from the NONMATCHING C lead. Shared IRQ table maps source0x3a to line67, priority13, mode1."}
+  ],
+  "qualification":"Source-only work. No build, formatter, linter, native case or test executed. Source-executing crop/copy/scale Completed and Failed models compose owned engine, RTOS and route/IRQ helpers. Copy interrupt/cancel, scale IRQ/burst/signed coefficient programming and invalid copy hardware configurations have independent models. Full pipeline software closure and active planes models await the named SensorRequests owner, DevelopTransactionOwnership.PipelineStripPlanner."
+}

@@ -360,6 +360,19 @@ def _lab_dependencies_impl(_ctx):
         repository = "@lab_nixpkgs",
         build_file_content = 'filegroup(name = "test-harnesses", srcs = glob(["libexec/fujimod-xm1-tests/*"]), visibility = ["//visibility:public"])\nfilegroup(name = "test-manifest", srcs = ["libexec/fujimod-xm1-tests/manifest"], visibility = ["//visibility:public"])',
     )
+    nixpkgs_package(
+        name = "lab_checkpoint_low_prefix",
+        nix_file = "//build-support:checkpoint-low-prefix.nix",
+        nix_file_deps = _FUJIMOD_NIX_DEPS + _FUJIMOD_XM1_CRATE + [
+            "//build-support:fujimod-xm1.nix",
+            "//replacement/develop:tools/checkpoint-low-prefix/Cargo.lock",
+            "//replacement/develop:tools/checkpoint-low-prefix/Cargo.toml",
+            "//replacement/develop:tools/checkpoint-low-prefix/src/main.rs",
+        ],
+        nixopts = _RUST_NIX_BUILD_CAP,
+        repository = "@lab_nixpkgs",
+        build_file_content = 'exports_files(["bin/xm1-checkpoint-low-prefix", "share/xm1-checkpoint-low-prefix/checkpoint-model-id", "share/xm1-checkpoint-low-prefix/sdk-store-path"], visibility = ["//visibility:public"])',
+    )
 
     # The RAM-push relinker's tools; ram-push-toolchain-paths records their
     # store paths.

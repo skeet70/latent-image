@@ -1,0 +1,38 @@
+{
+  "sourceCommit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image": "image5",
+  "imageBase": "0x00bf1a00",
+  "imageSha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+  "publications": [
+    {"address": "0x00d9bddc", "size": 9236, "sha256": "28a0aca2367b76cd9d64508c7e3d8887627a65f1a5480b3b2b55a1063fde77df", "symbol": "xm1_pipeline_image_estimate_transform", "abi": "i32(source:u32,target:u32,offset_x:i32,offset_y:i32,matrix:u32,workspace:u32,options:u32)"},
+    {"address": "0x00d9bb9c", "size": 576, "sha256": "e2e7a3a6650eb0767d1c3754dac21b70c48178f9e93c0e9c8435cc4b193ded6c", "symbol": "xm1_pipeline_image_affine_grid_valid", "abi": "i32(source:u32,target:u32,matrix:u32,workspace:u32,options:u32)"}
+  ],
+  "layout": {
+    "optionsExtent": 45,
+    "workspaceExtent": 27648,
+    "planeBytes": 2048,
+    "planes": ["source_x", "source_y", "target_x", "target_y", "rounded_source_x", "rounded_source_y", "rounded_target_x", "rounded_target_y", "selected_source_x", "selected_source_y", "selected_target_x", "selected_target_y"],
+    "confidenceOffset": 24576,
+    "flagsOffset": 25088,
+    "originalIndexOffset": 25600
+  },
+  "laws": [
+    "Source and target packed coordinates have x in the upper half and y in the lower half, in eighth-pixel units. Only x=65535 marks an absent correspondence.",
+    "Estimation failure stores Q16 identity and returns zero; stationary success stores Q16 identity and returns one. Final grid validation failure returns zero without changing the fitted matrix. With consensus and refinement disabled the matrix remains unchanged.",
+    "Sparse confidence uses signed division truncating toward zero, then stores the low byte of agreeing*127/neighbors-128. Rounded coordinates use wrapping addition of four followed by logical shift by three.",
+    "Triangle coefficients use wrapping 32-bit determinants, signed 64-bit rounded division, Q14 support voting and first-winner ties. Linear output coefficients clamp to [-131071,131071].",
+    "Refinement products wrap to 32 bits before accumulation into unsigned 64-bit sums. Conversion to binary64 precedes non-fused ordered multiply/add/subtract and division. Float-to-signed32 truncates, saturates and maps NaN to zero.",
+    "Grid validation overwrites the first four workspace planes from packed coordinates selected by the low-byte register-shift mask at options+40. Residual absolute values retain signed32 overflow behavior; thresholds are options+41 and +42 multiplied by 65535, not 65536. Empty support accepts.",
+    "Only compiler arithmetic ABI helpers remain external. No application CPU body is forwarded to a stock address."
+  ],
+  "sourceEvidence": [
+    "NONMATCHING estimator source image_affine_estimator.c and layouts image_affine_estimator.h were compared with actual A32 instructions 0xd9bddc..0xd9e1f0.",
+    "NONMATCHING grid validator tu_00d98a80.c was compared with actual A32 instructions 0xd9bb9c..0xd9bddc.",
+    "Signed binary64 conversion law inspected at image4 0x89b5d4..0x89b630. image4 SHA256 f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16."
+  ],
+  "undefinedData": [
+    "Caller must provide sufficient coordinate, matrix, option and workspace extents. The original grid validator does not cap count at 512.",
+    "Zero consensus geometry divisions and zero hypothesis determinant with zero area threshold reach the compiler division ABI. No synthetic missing-law success is supplied."
+  ],
+  "verification": "Source inspection and original image/extent hashing only. Builds, tests and native scenarios not run by this worker."
+}

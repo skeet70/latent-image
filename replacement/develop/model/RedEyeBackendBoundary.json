@@ -1,0 +1,75 @@
+{
+  "sourceCommit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "status": "source-implemented-not-native-qualified",
+  "images": {
+    "image5": {"base": "0x00bf1a00", "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"},
+    "image4": {"base": "0x0061c400", "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"},
+    "kernel0": {"base": "0x00040000", "sha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"}
+  },
+  "task": {
+    "address": "0x01071ca4", "size": 2640,
+    "sha256": "dc04e961e989897a4292f77137270a8eeb26615a29402e10dbb9e473741a667a",
+    "export": "xm1_pipeline_image_redeye_run_task",
+    "abi": "extern C fn() -> !",
+    "derivation": "Complete original A32 body including packet dispatch, prepared faces/groups, detector/history/refinement phases, result collection, mask/pixel application, edit export, callback invocation and return to receive loop. Pinned C has no definition for this body.",
+    "queue": 56,
+    "events": {"0x4800": "detect", "0x4801": "apply"},
+    "detectPayload": "arena:address32,callback:address32",
+    "applyPayload": "callback:address32",
+    "detectCallback": "extern C fn(status:i32,results:address32,times:address32)",
+    "applyCallback": "extern C fn(status:i32,editTimes:address32,edits:address32)",
+    "completionStatus": {"aborted": 0, "completed": 1},
+    "observationBoundary": "The task does not return. A finite observation must stop at an admitted external callback boundary or genuine RTOS receive scheduling boundary. Generic StageScenario returning-function preserved-register assertions cannot establish the task-loop contract. The parent native-proof owner owns that integration; no application helper is intercepted as a completion law."
+  },
+  "workspace": {
+    "base": "0x014dfa90",
+    "source": "0x0000: pixels,spanBefore,height,spanAfter, four u32",
+    "requestedFaces": "0x0010: u8 count plus3 padding, ten records of92bytes",
+    "thumbnail": "0x03ac: four u32",
+    "editBuffers": "0x03bc: twenty56-byte records; count:i32 at relative0x460",
+    "pairs": "0x0820: address,stride,capacity,count, four i32/address32",
+    "observations": "0x0830: address,stride,capacity,count",
+    "image": "0x084c: pixels:address32,height:i32,width:i32",
+    "detector": "0x08ec; candidate list at relative44",
+    "history": "0x0928; staged list at relative40",
+    "samples": "0x0960; sample images at0,12,24,36; histogram at52; sample list at1076",
+    "maskContext": "0x0da4",
+    "preparedFaces": "0x1d90: u8 count,1padding, eighteen-byte records: centerX:i16,centerY:i16,reciprocalWidth:i16,left:i16,top:i16,width:i16,height:i16,tag:u16,kind:u8,orientation:u8",
+    "preparedGroups": "0x1e48: u8 count,3padding, fifty-two-byte records; count:u8 at0; three12byte features at4: attributes:u32,x:i16,y:i16,scale:i16,padding:i16",
+    "results": "0x2054: u8 count,3padding, ten44byte records: sides:u32 and two20byte rectangles each left,top,width,height:i32,tag:u16,padding2",
+    "exportedEdits": "0x2210: u8 count,3padding, twenty56byte records; mask width/height are reversed relative to internal edit record order",
+    "times": "0x2674: five u32 durations",
+    "message": "0x2688: event:u16,sender:u8,destination:u8,size:u32,payload:address32",
+    "command": "0x2694: two words",
+    "aborted": "0x269c: u8; only value1 requests abort",
+    "errors": "0x26a0: wrapping u32"
+  },
+  "internalEditRecord": "56 bytes: gains:i32 at0,4,8; centerXQ4:i32 at12; diameter:i32 at16; centerYQ4:i32 at20; maskExtent:i32 at24; samplingScale:i32 at28; mask:address32 at32; maskHeight:i32 at36; maskWidth:i32 at40; maskFormat:i32 at44; tag:u16 at48; kind:u16 at50; selected:i16 at52; padding:u16 at54",
+  "applicationExports": {
+    "0x010741f4": "prepare_history", "0x010750b8": "configure_pair_filters",
+    "0x01085de8": "prepare_edits", "0x010860a0": "apply_pixels", "0x01086668": "scale_edits",
+    "0x010873e0": "init_buffers", "0x01087460": "prepare_primary_buffer", "0x0108748c": "prepare_secondary_buffer", "0x010874b8": "prepare_stage_buffers", "0x01087540": "prepare_pyramid_buffers",
+    "0x01072978": "reset_records", "0x01072994": "record_at", "0x010729c0": "append_record", "0x01072a08": "compact_records", "0x01072a84": "copy_records",
+    "0x010742a4": "refine_pairs", "0x010746e8": "filter_pair_geometry", "0x01074954": "recover_pair", "0x01074d58": "dark_density", "0x01074f6c": "filter_pair_samples",
+    "0x010734a8": "append_faces", "0x0107374c": "match_faces", "0x01073afc": "complete_pairs", "0x01073608": "deduplicate_pairs", "0x01073e10": "remove_overlapping_pairs", "0x010741c0": "associate_candidates",
+    "0x01071c3c": "report_error", "0x01071c70": "abort_requested", "0x0089aa90": "divide", "0x00723ffc": "spin_delay"
+  },
+  "exportPrefix": "xm1_pipeline_image_redeye_",
+  "registerDependentLaw": "At1086028 the second signed division consumes residual r1 from the preceding89aa90 call. prepare_edits models the actual division algorithm's residual divisor register, including early and power-of-two paths, rather than guessing a second C argument.",
+  "arithmeticFault": "89aa90 division by zero saturates r0 to signed MAX/MIN by numerator sign, or zero; kernel4d978 saturates nonzero unsigned numerator to0xffffffff, or zero. Both reach genuine kernel43614. MIN/-1 wraps to MIN.",
+  "deviceSeam": {"address": "0xfff91000", "layout": "current:u32,reload:u32", "law": "Original723ffc polls this timer and computes10MHz-derived elapsed milliseconds. Short-delay fixtures use reload1 and current0, for which original integer quantization yields target0 without invented timer progress."},
+  "sharedOwners": {
+    "DevelopTransactionOwnership.RedEyeDetector": ["1075d9c detect", "1078f50 search_local", "10754c0 candidate postfilter", "detector/classifier/gradient/trigonometric CPU recursion"],
+    "DevelopTransactionOwnership.PipelineBuffers": ["1085cf0 prepare_edit_mask", "1073404 dispatch_sample", "1083954 chroma_score", "sampling/morphology/components/mask/gain CPU recursion", "configuration-byte and critical-section adapters"],
+    "DevelopTransactionOwnership.PipelineDebugStorage": ["725318 receive_message", "72503c send_message"],
+    "DevelopTransactionOwnership.PipelineObjectAllocator": ["726658 append_stream_text", "72872c trace_operation"],
+    "DevelopTransactionOwnership.PipelineRedEye": ["7257a8 get_ticks", "7257e0 elapsed", "1072794/1072844 producer wrappers", "original completion callbacks"]
+  },
+  "premises": [
+    "Face counts fit the original ten-face workspaces; edit list storage fits twenty records. Original functions do not introduce bounds validation.",
+    "Pixel application receives writable packed Y0,Y1,U,V pairs with the caller-provided row extent and mask allocation. Original code does not clip image coordinates.",
+    "RTOS receive writes a complete message header and payload before returning a valid packet. The task ignores the receive return code as original A32 does.",
+    "Source-backed early returns for invalid pair selection, negative wrapped distances, zero projected pair separation, and geometry overflow remain early returns, not successful detector substitutes.",
+    "Source implementation and model definitions are not native verification evidence. Parent integration must exercise the nonreturning task and complete producer/consumer/callback composition."
+  ]
+}

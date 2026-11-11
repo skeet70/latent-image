@@ -1,0 +1,35 @@
+{
+  "family": "operationObjects",
+  "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image": {"base": "0xbf1a00", "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"},
+  "qualification": "source only; no compiler, native execution, consumer qualification, or historical evidence transfer",
+  "sourceBodies": [
+    {"address":"0xe92d10","size":88,"sha256":"b3a38e1cb681de3a99bb7ca36a361c9f8b6fc5029051ee3cd72f4b5be4dc5bb2","symbol":"xm1_develop_object_rule_class"},
+    {"address":"0xe92e30","size":444,"sha256":"75e60fa075b1d8f928e3d1c06db945d9bcf6b8d5435def4c0cc8cde9ecf2bf43","symbol":"xm1_develop_operation_object_rule"},
+    {"address":"0xe92fec","size":340,"sha256":"8725c099a1be37b8c42a25464a971afcef182c2fefbfcd44010364553c6d37c0","symbol":"xm1_develop_apply_operation_table"},
+    {"address":"0xe93140","size":1012,"sha256":"76edab4115b9bb9bae1550fcde7f20288377ed708e2fce6e564db2dc0831985a","symbol":"xm1_develop_set_operation_objects"},
+    {"address":"0xe4eca8","size":32,"sha256":"26e37cd4b505df2945f44e7034bc681bc8ba5c6fc487dadcc87eadbdab4f2ae2","symbol":"xm1_develop_mark_task_active"},
+    {"address":"0xeb0e48","size":88,"sha256":"aeddaf6ef6e8796332f9d7a56271d57fa4877e82a6c3d5fa9bf53de5c9d6cc3c","symbol":"xm1_develop_bitmap_union"},
+    {"address":"0xeb0ea0","size":56,"sha256":"14caaf67cf033d8377c80b75b45cde3442c08bfd55a546d6cc3562b4b211009c","symbol":"xm1_develop_bitmap_set"}
+  ],
+  "sourceTables": [
+    {"role":"profiles","address":"0xea55e8","size":144,"records":12,"activeProfiles":11,"sha256":"c479d1f142fde909a85278733bab8d13b9594cac4e0ba27b0c5df88ee7ee038c"},
+    {"role":"legacyOperations","address":"0xea3f70","size":2264,"records":113,"terminalOperation":128,"sha256":"427363ba588fa4e153eb78c106d9f0f274bc72743c03b7acb54546389a5952f1"},
+    {"role":"standard","address":"0xea2f1c","size":2000,"rules":99,"sha256":"46a408d24040cb8d0dc4d3e5629f8973787d75fc51c3321b0d74826fb6c2bf9e"},
+    {"role":"variantOne","address":"0xea59c4","size":1620,"rules":80,"sha256":"f060e989ab56b7ee94019cb59affa92867ee149e49223d23e8575ee279905322"},
+    {"role":"variantTwo","address":"0xea4a48","size":1820,"rules":90,"sha256":"4e782cde60416cd0780bc73b79629d529fa175dfdf81024b7a3a900a030e40c1"},
+    {"role":"categoryOne","address":"0xea6018","size":1500,"rules":74,"sha256":"f70fd079971e83eb85cfdb1d4f9f83044316d585423be718a3544773012a8617"},
+    {"role":"categoryTwo","address":"0xea2b80","size":880,"rules":43,"sha256":"d15603cc857b8b014fe07931638b279d57c84d7b76f7e7650afa8d5e5e78e305"},
+    {"role":"categoryThree","address":"0xea39d8","size":1320,"rules":65,"sha256":"6d7d3a271f7d9517f9de68bfda32e16407e16031d4d8a84d5e56f9fac35c38d9"},
+    {"role":"categoryEleven","address":"0xea959c","size":500,"rules":24,"sha256":"538111f8301616f38a22b0a7039719a8ac0e61b64baca6e76b86a4e53f47ca45"}
+  ],
+  "behavior": {
+    "profileSelection":"The first matching category/class profile consumes the operation even when no rule matches. Nonzero category selects wildcard class three.",
+    "tablePhase":"Phase zero opens; every other matched phase closes. Rules retain table order and predicates execute before each effect.",
+    "legacyPhase":"Phase one opens; every other phase closes. The 113 rows have both action flags set. Second group twenty is the absent sentinel.",
+    "fallback":"Fallback executes only when no profile matches. Operation 0x10 conditionally closes kind eleven after kind ten. Operation 0x12 closes group twenty-five after its other effects when capture option is two.",
+    "taskMarker":"Write Active=1 to frame+(currentTask+5)*4 with wrapping A32 address arithmetic."
+  },
+  "sharedCpuDependencies": ["xm1_develop_open_object","xm1_develop_close_object","operation_predicates::Predicate","xm1_develop_capture_option_selection","xm1_pipeline_image_current_task"],
+  "retainedBoundary":"The canonical object allocator and image-interface providers define the external RTOS and storage effects. This manifest does not qualify those consumers."
+}

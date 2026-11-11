@@ -1,0 +1,189 @@
+{
+  "sourceCommit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "image": {
+    "name": "overlay44",
+    "base": "0x01100000",
+    "length": 705952,
+    "sha256": "2dfaa5d4bd025d68e991a329cc1377d5da16de656148dc4027d9a6bc0c349f5c"
+  },
+  "publications": [
+    {
+      "address": "0x119f60c",
+      "length": 56,
+      "sha256": "5b713c4c6750047ff734c191fbaf9d93b23e96ffd19889de49e14cda18ba02e2",
+      "symbol": "xm1_pipeline_image_font_raster_read_byte"
+    },
+    {
+      "address": "0x119f644",
+      "length": 72,
+      "sha256": "936e60cba5e06683440c0f029ca1853d7d0b6541ec132f4292dff3a7073064e8",
+      "symbol": "xm1_pipeline_image_font_raster_read_short"
+    },
+    {
+      "address": "0x119f68c",
+      "length": 192,
+      "sha256": "62a3a06a0528020d5001841eeeb6d4a65ccf66b550b383da6076d1b55b5a1f1c",
+      "symbol": "xm1_pipeline_image_font_raster_read_stream"
+    },
+    {
+      "address": "0x11a05b0",
+      "length": 2548,
+      "sha256": "f7354a4f9b8d4474e009b974915acb3c961ff2d326bb04347f056402682ca223",
+      "symbol": "xm1_pipeline_image_font_render_raster_program"
+    },
+    {
+      "address": "0x11a0fa4",
+      "length": 6232,
+      "sha256": "881afda21568678928917b69aaf0cc1005088533c35b1b6c6218fd3337a3799d",
+      "symbol": "xm1_pipeline_image_font_raster_render_bitmap"
+    },
+    {
+      "address": "0x11a344c",
+      "length": 692,
+      "sha256": "aca43a7f6f7376282f37db4c8de2eb4dee99c9d1227f28ba3840da9cab2fc8b1",
+      "symbol": "xm1_pipeline_image_font_raster_fill_span"
+    },
+    {
+      "address": "0x11a36a8",
+      "length": 44,
+      "sha256": "4b3a1104d057152b481d98f90122e9a3c723d56676b586bd9a5d7803035da6a3",
+      "symbol": "xm1_pipeline_image_font_raster_edge_min"
+    },
+    {
+      "address": "0x11a36d4",
+      "length": 44,
+      "sha256": "50ed9079778427a80bc41393fccd00b2b00b2b27b5bb17af5c4989282be4ddbf",
+      "symbol": "xm1_pipeline_image_font_raster_edge_max"
+    },
+    {
+      "address": "0x11a3c00",
+      "length": 1204,
+      "sha256": "82ba48727add468a5054b26d4850f41391204cd5bdf1147be3847383c4bfbebb",
+      "symbol": "xm1_pipeline_image_font_raster_accumulate_line_edge"
+    },
+    {
+      "address": "0x11a40b4",
+      "length": 5008,
+      "sha256": "5777dd6a6117f04ab735592a2eec25687fbf0b091741207759b6d11e533da03c",
+      "symbol": "xm1_pipeline_image_font_raster_draw_curve"
+    },
+    {
+      "address": "0x11abdfc",
+      "length": 916,
+      "sha256": "e030bf46f3b3a741b02a2aefb09204afaed2953323ee180c32bbf6c2057a538e",
+      "symbol": "xm1_pipeline_image_font_raster_merge_span"
+    },
+    {
+      "address": "0x11ac190",
+      "length": 468,
+      "sha256": "d9b54653fc6d1970a0dc94fe5530a94a17ae6e5f03f71c24d85ab31531641e9d",
+      "symbol": "xm1_pipeline_image_font_raster_subtract_run"
+    },
+    {
+      "address": "0x11ac364",
+      "length": 172,
+      "sha256": "2400b14d7904ae38330889a3d6790dec91aee2fff992c8c904e398d1f504edb5",
+      "symbol": "xm1_pipeline_image_font_raster_run_row_bounds"
+    },
+    {
+      "address": "0x11ac410",
+      "length": 88,
+      "sha256": "d9dab6b86262a527730d283473a2f2cc20c26ee0685e8bc347c441d1c60bad9a",
+      "symbol": "xm1_pipeline_image_font_raster_run_first"
+    },
+    {
+      "address": "0x11ac4b0",
+      "length": 48,
+      "sha256": "e6000ad19b67e0b47e6175c3724c0eaf76fe6d1f2083f986191591fd69602fbf",
+      "symbol": "xm1_pipeline_image_font_raster_run_next"
+    },
+    {
+      "address": "0x11ac4e0",
+      "length": 44,
+      "sha256": "cbd5d87d56f0e1b9164e6091af0fe1e79d6a8191ba6ea58d7b2f939ddacd2b5a",
+      "symbol": "xm1_pipeline_image_font_raster_run_storage_used"
+    },
+    {
+      "address": "0x11ac50c",
+      "length": 140,
+      "sha256": "f1bfc81f640906521ad6d9a28ead6360bdb01818fe6ef8e5152622118491d5ab",
+      "symbol": "xm1_pipeline_image_font_raster_run_table_init"
+    }
+  ],
+  "ownership": {
+    "orchestrators": "FontRasterVm",
+    "executeAndOpcodeHandlers": "DevelopTransactionOwnership.PipelineCropProcess",
+    "configurationGlyphLoadingAndDivision": "DevelopTransactionOwnership.PipelineTransforms"
+  },
+  "portableCore": {
+    "module": "src/font_core/raster.rs",
+    "entry": "render_glyph(&FdlResource, GlyphId, FontConfig, &mut RasterWorkspace, &mut [u8]) -> Result<GlyphMask, FontError>",
+    "algorithms": ["bounded program streams and component recursion", "source-space scale and signed metrics", "line and quadratic edge production", "contour and coordinate production", "run allocation, merge, subtraction and bounds", "underline spans", "Gray4 and Gray8 accumulation", "borrowed mask cropping"],
+    "sharedExecution": "The physical font_raster_vm adapter and portable renderer call the same program, edge, curve, run, underline and coverage implementations. Scanline paint/style algorithms are shared with font_core/scanlines.rs; execute and every opcode handler are shared with font_core/raster_vm.rs.",
+    "dependencies": {
+      "sharedTypesAndConstructor": "PipelineTransforms: 9565a43c, c35fb244, 44b2145d",
+      "boundedFdlResource": "FontOutlineVm: afd40bcb, 85e8db36b67a4b83052a495e2b68c2d566e1b2c2",
+      "bitmapVm": "PipelineCropProcess: 5783674f, ad1b6d5d",
+      "scanlines": "FontScanlineFlush: 08fcae73, ba9e7d28"
+    },
+    "workspace": "Caller-owned fixed storage, borrowed during rendering. MaybeUninit slots are read only after actual row/register/node/curve producers. History survives requests. No heap allocation, implicit zero RAM, normalized-2048 mask path or arbitrary callback dispatcher.",
+    "domain": "Positive effective dimensions 1..400. Actual source reads without an available producer return UninitializedRasterState; bounded storage exhaustion returns InsufficientWorkspace. Zero effective dimensions return InvalidSize. These typed errors are not source-success parity claims.",
+    "curveCapacity": "The physical 80-point stack ends at the run-table header. A subdivision push into point 80 returns a typed capacity error in portable storage; the physical adapter preserves original address effects.",
+    "tests": {
+      "location": "src/font_core/raster.rs",
+      "count": 9,
+      "behavior": ["constructor -> dense FDL directory -> actual VM -> MSB1 mask and signed bearings", "Gray4 full samples", "small Gray8 scalar coverage", "aligned Gray8 packed-15/scalar-16 coverage", "fresh missing-row typed error with untouched outer sentinels", "actual prior glyph producer -> persistent one-pixel request with eight-pixel returned span", "insufficient borrowed pixel storage remains untouched", "actual VM invalid opcode", "raw per-mille advance without outline quantization"],
+      "execution": "Not run by this worker. Parent owns cohesive verification; use sufficient host test-thread stack for the caller-owned workspace."
+    },
+    "qualification": "Source-only until constructor -> actual glyph mask -> Graphics joint gate; no previous proof or native evidence is rebound."
+  },
+  "originalAbi": {
+    "address": "repr(transparent) u32",
+    "context": "repr(transparent) u32",
+    "vm": "repr(transparent) u32",
+    "coordinate": "repr(transparent) i32",
+    "status": "repr(transparent) i32",
+    "pointers": "original A32 pointers; run nodes are three little-endian i16/u16 fields",
+    "componentTransform": "repr(C): two u16 followed by nine i16; 22 bytes"
+  },
+  "models": {
+    "module": "FontRasterVmScenarios",
+    "publications": 17,
+    "scenarios": 44,
+    "constructors": ["fontRasterVmPublications", "fontRasterVmScenarios"],
+    "genuineGlyphFixture": "FontFdlScenarios.fontRasterInitial/fontFixture, StockFontGlyph.IconE14d",
+    "genuineGlyphObservation": "The scenario requires the actual 102-byte FDL program to pass through owned loader, VM, edge builder, span table and Gray4 coverage. It asserts complete program consumption, success and a clear out-of-glyph row. It does not assert an underived IconE14d shape or bounding box.",
+    "analyticFontFixture": "FontFdlScenarios.fontRectangleRasterInitial(FontFixture), RasterFixtureGlyph.RectangleA, rasterFixtureGlyphCode. Valid packed FDL metric directory, ASCII A, half-em advance, FA rectangle bytecode. With the fixture's explicitly zeroed incoming physical workspace, the first 1024 Gray4 bytes are 15 and the inclusive box is 33x32; the consumed program cursor is 0x218. Other code points are absent, not aliases.",
+    "scriptedApplicationCalls": []
+  },
+  "laws": [
+    "All published bodies are owned CPU implementations. No original CPU algorithm is a stock-call seam.",
+    "The two 44-byte edge callbacks are independently admitted extents at 0x011a36a8 and 0x011a36d4; the pinned index does not range them separately. Its 692-byte fill_span extent contains the 604-byte fill body/literal extent and both callbacks.",
+    "The original program leaves its reuse mask undefined when its first ordinary glyph has no directory record but requests reused points. It similarly leaves component transform fields undefined when first modified without an initialized record. These malformed-record cases are outside source-defined parity; Rust does not manufacture zero values.",
+    "Coverage format is the configured closed set 0,1,2 and render style is 0..5. The original indexes static tables outside these sets.",
+    "Gray8 scalar interior coverage uses 16, but aligned four-byte interior chunks use 0x0f0f0f0f. Original bytes 0x011a1678..0x011a1698 determine this alignment-dependent behavior.",
+    "Rotated coverage bounds use x_origin + height - row without the pixel-write column's minus one. The Gray4 rotated rectangle model preserves the resulting nine-column inclusive box for eight written pixel columns.",
+    "Mask rendering still unconditionally reads run_storage_used(context+0x83b0) and overwrites request+28 with that value plus 0x83ec. The incoming run-table storage_size/capacity/used fields must be defined, even though mask rendering does not initialize that table.",
+    "The run merge fast append retains adjacent tail spans. A contained insertion returns without coalescing pre-existing adjacent spans.",
+    "Subtracting a middle interval splits the run without updating the tail index. The original tail state remains observable.",
+    "The program executes owned raster_execute at 0x011ab010. Bitmap rendering executes owned adjust_size/configure/load_glyph. No model may replace these application algorithms with scripted calls.",
+    "The original line-edge remainder branch and inclusive endpoint rules are retained. Context coordinates and buffers satisfy the original caller allocation and clipping bounds.",
+    "The VM scan-row initializer writes pairs and tests height & 2, not height & 1. Fresh one- or five-row requests can read a row without a producer. Portable rendering reports UninitializedRasterState instead of manufacturing a zero edge; prior real row production remains observable.",
+    "The default large-scale basis is !(-256 << shift). At a 128-unit dimension, scale8(65535,128) rounds to 32768, so full-em FF endpoints reach row/column 128. The explicitly zeroed native rectangle fixture supplies the extra incoming row; a fresh portable 32px Gray4 rectangle does not. Generic raw run storage preserves the native extra head alias into tail storage.",
+    "The portable GlyphMask publishes mask geometry and metrics, not original request word 7's uninitialized incoming run-storage requirement. No parity claim transfers that omitted C workspace-byte output."
+  ],
+  "manualAdmissions": [
+    {
+      "address": "0x11a36a8",
+      "length": 44,
+      "sha256": "4b3a1104d057152b481d98f90122e9a3c723d56676b586bd9a5d7803035da6a3",
+      "symbol": "xm1_pipeline_image_font_raster_edge_min"
+    },
+    {
+      "address": "0x11a36d4",
+      "length": 44,
+      "sha256": "50ed9079778427a80bc41393fccd00b2b00b2b27b5bb17af5c4989282be4ddbf",
+      "symbol": "xm1_pipeline_image_font_raster_edge_max"
+    }
+  ]
+}
