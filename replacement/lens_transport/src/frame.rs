@@ -27,7 +27,10 @@ impl CommandWord {
 }
 
 pub const MAX_FRAME_LENGTH: usize = 0x820;
-pub const MAX_PAYLOAD_LENGTH: usize = MAX_FRAME_LENGTH - 4;
+/// Largest payload any frame shape carries: a write frame is a two-byte page, the payload and an
+/// optional checksum byte. The read and response shapes carry a four-byte envelope and reject
+/// larger payloads through `FrameSpan`.
+pub const MAX_PAYLOAD_LENGTH: usize = MAX_FRAME_LENGTH - 2;
 
 pub const fn fallback_command(previous: CommandWord) -> CommandWord {
     CommandWord::new((15 << 6) | ((previous.command_id() as u32) << 16)).with_checksum()
@@ -88,7 +91,6 @@ impl FrameSpan {
         }
     }
     pub const fn wire_len(self) -> usize { self.payload.get() + 4 }
-    pub const fn payload_length(self) -> PayloadLength { self.payload }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ChecksumMode { Disabled, Enabled }
@@ -101,15 +103,18 @@ pub struct OwnedFrame<const N: usize> { bytes: [u8; N], length: usize }
 impl<const N: usize> Default for OwnedFrame<N> { fn default() -> Self { Self::new() } }
 impl<const N: usize> OwnedFrame<N> {
     pub const fn new() -> Self { Self { bytes: [0; N], length: 0 } }
-    pub fn build_write(&mut self, page: PageId, payload: &[u8], checksum: ChecksumMode) -> Result<FrameSpan, FrameError> {
-        let span = FrameSpan::new(PayloadLength::new(payload.len())?, N)?;
+    /// The extent is the two page bytes, the payload and the optional checksum byte.
+    pub fn build_write(&mut self, page: PageId, payload: &[u8], checksum: ChecksumMode) -> Result<PayloadLength, FrameError> {
+        let length = PayloadLength::new(payload.len())?;
+        let extent = 2 + payload.len() + usize::from(checksum == ChecksumMode::Enabled);
+        if extent > N { return Err(FrameError::LengthOverflow); }
         self.bytes[..2].copy_from_slice(&page.0.to_be_bytes());
         self.bytes[2..2 + payload.len()].copy_from_slice(payload);
         if checksum == ChecksumMode::Enabled {
             self.bytes[2 + payload.len()] = byte_checksum(&self.bytes[..2 + payload.len()]);
         }
-        self.length = span.wire_len();
-        Ok(span)
+        self.length = extent;
+        Ok(length)
     }
     pub fn build_read(&mut self, page: PageId, length: PayloadLength, marker: ReadMarker) -> Result<FrameSpan, FrameError> {
         let span = FrameSpan::new(length, N)?;
@@ -327,10 +332,11 @@ mod tests {
     fn page_frame_carries_big_endian_page_and_byte_sum() {
         let mut frame = OwnedFrame::<8>::new();
         frame.build_write(PageId::new(0x1234), &[0xfe, 1], ChecksumMode::Enabled).unwrap();
-        assert_eq!(frame.as_bytes(), &[0x12, 0x34, 0xfe, 1, 0x45, 0]);
-        let response = parse_page_response(frame.as_bytes(), PageId::new(0x1234), PayloadLength::new(2).unwrap(), ChecksumMode::Enabled).unwrap();
-        assert_eq!(response.payload, &[0xfe, 1]);
-        assert_eq!(parse_page_response(frame.as_bytes(), PageId::new(0x1235), PayloadLength::new(2).unwrap(), ChecksumMode::Enabled), Err(FrameError::PageMismatch));
+        assert_eq!(frame.as_bytes(), &[0x12, 0x34, 0xfe, 1, 0x45]);
+        let response = [0x12, 0x34, 0xfe, 1, 0x45, 0];
+        let parsed = parse_page_response(&response, PageId::new(0x1234), PayloadLength::new(2).unwrap(), ChecksumMode::Enabled).unwrap();
+        assert_eq!(parsed.payload, &[0xfe, 1]);
+        assert_eq!(parse_page_response(&response, PageId::new(0x1235), PayloadLength::new(2).unwrap(), ChecksumMode::Enabled), Err(FrameError::PageMismatch));
         assert_eq!(parse_page_response(&[0x12, 0x34, 0xfe, 1, 0x44, 0], PageId::new(0x1234), PayloadLength::new(2).unwrap(), ChecksumMode::Enabled), Err(FrameError::ChecksumMismatch));
     }
 
@@ -360,8 +366,11 @@ mod tests {
 
     #[test]
     fn physical_frame_boundary_and_reset_magic_are_exact() {
-        assert_eq!(PayloadLength::new(2077), Err(FrameError::LengthOverflow));
+        // 0x006bf50c zeroes `length + 4` bytes; 0x006bf5fc writes a two-byte page, the payload and
+        // an optional checksum.
+        assert_eq!(PayloadLength::new(2079), Err(FrameError::LengthOverflow));
         let mut frame = OwnedFrame::<2080>::new();
+        assert_eq!(frame.build_read(PageId::new(0xabcd), PayloadLength::new(2077).unwrap(), ReadMarker::Disabled), Err(FrameError::LengthOverflow));
         frame.build_read(PageId::new(0xabcd), PayloadLength::new(2076).unwrap(), ReadMarker::Enabled).unwrap();
         assert_eq!(frame.as_bytes().len(), 2080);
         assert_eq!(&frame.as_bytes()[..2], &[0xab, 0xcd]);
@@ -384,6 +393,7 @@ mod tests {
         let mut frame = OwnedFrame::<8>::new();
         frame.build_write(PageId::new(0x1234), &[0x77, 0x88, 0x99], ChecksumMode::Disabled).unwrap();
         frame.build_write(PageId::new(0x1234), &[1], ChecksumMode::Disabled).unwrap();
-        assert_eq!(frame.as_bytes(), &[0x12, 0x34, 1, 0x88, 0x99]);
+        assert_eq!(frame.as_bytes(), &[0x12, 0x34, 1]);
+        assert_eq!(&frame.bytes[3..5], &[0x88, 0x99]);
     }
 }

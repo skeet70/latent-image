@@ -13,12 +13,14 @@ genrule(
     tools = ["@lab_xm1_rust//:bin/rustc"],
 )
 
+_STRICT_ALIGN = ["-C", "target-feature=+strict-align"]
+
 xm1_rust_rlib(
     name = "libxm1_lens_transport",
     src = "src/lib.rs",
     crate_name = "xm1_lens_transport",
     data = glob(["src/*.rs"], exclude = ["src/lib.rs"]),
-    rustc_flags = ["--cfg", "'feature=\"firmware-abi\"'"],
+    rustc_flags = _STRICT_ALIGN + ["--cfg", "'feature=\"firmware-abi\"'"],
 )
 
 xm1_rust_staticlib(
@@ -26,7 +28,7 @@ xm1_rust_staticlib(
     src = "src/native_root.rs",
     crate_name = "xm1_lens_transport_root",
     data = [":libxm1_lens_transport"],
-    rustc_flags = ["--extern", "xm1_lens_transport=$(location :libxm1_lens_transport)"],
+    rustc_flags = _STRICT_ALIGN + ["--extern", "xm1_lens_transport=$(location :libxm1_lens_transport)"],
 )
 
 xm1_rust_staticlib(
@@ -34,7 +36,7 @@ xm1_rust_staticlib(
     src = "src/lib.rs",
     crate_name = "xm1_lens_codec",
     data = glob(["src/*.rs"], exclude = ["src/lib.rs"]),
-    rustc_flags = ["--cfg", "'feature=\"native-codec\"'"],
+    rustc_flags = _STRICT_ALIGN + ["--cfg", "'feature=\"native-codec\"'"],
     testonly = True,
 )
 

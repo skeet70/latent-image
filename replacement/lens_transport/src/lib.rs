@@ -217,9 +217,9 @@ impl<B: Backend, C: CompletionSink> Transport<B, C> {
 
     pub fn write_page(&mut self, page: PageId, bytes: &[u8], checksum: ChecksumMode) -> Result<RequestToken, Error<B::Error>> {
         self.admit_page()?;
-        let span = self.frame.build_write(page, bytes, checksum).map_err(Error::Frame)?;
+        let length = self.frame.build_write(page, bytes, checksum).map_err(Error::Frame)?;
         let token = RequestToken(self.generation()?);
-        self.page = Some(PageRequest::Write { token, length: span.payload_length(), marker: match checksum { ChecksumMode::Disabled => ReadMarker::Disabled, ChecksumMode::Enabled => ReadMarker::Enabled } });
+        self.page = Some(PageRequest::Write { token, length, marker: match checksum { ChecksumMode::Disabled => ReadMarker::Disabled, ChecksumMode::Enabled => ReadMarker::Enabled } });
         self.page_delivered = false;
         self.publish_request()?;
         Ok(token)
