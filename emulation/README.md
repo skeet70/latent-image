@@ -64,7 +64,7 @@ The expected-input file records the firmware path/hash, record-2/loader-B/image-
 "$PEER_STAGE_WITNESS" --receipt "$RECEIPT" --argument 0x0069cdf8
 ```
 
-The explicit launch interface below starts a full-system run; it is not preparation. `SDK_DRIVER`, `RUN_DOCUMENT` and `BOOT_ROM` name the selected driver, frozen run document and captured ROM; `PEER_RUN` must be fresh and distinct from the preparation directory. The combined-SDK baseline used an explicitly bound immutable SDK through a resource-only launcher (`E-PEER-COMBINED-NATURAL-RESET-150`). All three launch inputs are required:
+The explicit launch interface below starts a full-system run; it is not preparation. `SDK_DRIVER`, `RUN_DOCUMENT` and `BOOT_ROM` name the selected driver, frozen run document and captured ROM; `PEER_RUN` must be fresh and distinct from the preparation directory. The natural-reset baseline used an explicitly bound immutable SDK (`E-PEER-LIFECYCLE-NATURAL-RESET-150`). All three launch inputs are required:
 
 ```sh
 env XM1_EMULATOR_SLOTS=1 "$PEER_STAGE_WITNESS" \
@@ -117,7 +117,7 @@ SDK374 on public model `3d90035d` passes natural, held-sentinel and delayed-rele
 
 Natural execution qualifies the four core-1 pre-execution boundaries and separate write-attempt/readback attribution. Held sentinel qualifies its own core-0 gate and four completed sentinel loads without handoff; the fourth CMP/branch and final private-stack resample remain unobserved. Delayed release independently qualifies its gate, later veneer acknowledgment, one-entry original-STR completion with immediate physical zero before another CPU entry, and ordered core-1 publication/handoff/loader entry. Aggregate entered counts are not retirement.
 
-The historical SDK97 delayed failure remains a failed pre-gate ROM collision, not delayed-release qualification (`E-PEER-COMBINED-DELAYED-RELEASE-REJECTION-150`); its bounded requirements are subsequently met by SDK374. Exact historical control/resource facts remain in their ledger rows and Git. These observations do not resolve `0x3fff00xx` aliases, execute loader B, own record 2, establish full startup or qualify physical behavior.
+The historical SDK97 delayed failure remains a failed pre-gate ROM collision, not delayed-release qualification (`E-PEER-VENEER-RESET-ROM-LIFECYCLE-SOURCE-150`); its bounded requirements are subsequently met by SDK374. These observations do not resolve `0x3fff00xx` aliases, execute loader B, own record 2, establish full startup or qualify physical behavior.
 
 
 ### Owned record-2 startup witness (schema 3)
