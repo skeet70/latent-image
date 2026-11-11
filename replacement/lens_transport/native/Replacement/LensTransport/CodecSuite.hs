@@ -3,7 +3,7 @@ module Replacement.LensTransport.CodecSuite (runSuite, sourceIdentity) where
 
 import qualified ArmElf as E
 import Control.Monad (forM, forM_, unless)
-import Data.Bits ((.|.), shiftL)
+import Data.Bits ((.&.), (.|.), shiftL)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
@@ -19,7 +19,7 @@ sourceIdentity = "x70view55436fc85c0560dd252b0410af6f2427fe198cd3; image4 base00
 data Operation = Command | ReadFrame | WriteFrame | Ack | Response deriving (Eq, Show)
 data Role = Stock | Owned deriving (Eq, Show)
 data Consumer = Absent | Immediate | Deferred deriving (Eq, Show)
-data Fixture = Fixture { ident :: String, operation :: Operation, input :: Word32, width :: Word32, enabled :: Word32, sequenceNumber :: Word32, recoveryState :: Word32, busyCount :: Word32, queued :: Word32, previousResponse :: Word32, consumer :: Consumer } deriving Show
+data Fixture = Fixture { ident :: String, operation :: Operation, input :: Word32, width :: Word32, enabled :: Word32, sequenceNumber :: Word32, recoveryState :: Word32, busyCount :: Word32, queued :: Word32, previousResponse :: Word32, consumer :: Consumer, machinePrevious :: (Word32, Word32) } deriving Show
 
 extents :: [(Word32, Word32, String)]
 extents =
@@ -39,12 +39,18 @@ fixtures = zipWith (\n f -> f { ident = "codec-" ++ show n ++ "-" ++ ident f }) 
   [ base { ident = "command", operation = Command, input = word, sequenceNumber = seqn, queued = count }
   | word <- [0,1,0xffffffff,0x12345678,0x80008040], seqn <- [0,7], count <- [0,17,18] ] ++
   [ base { ident = operationLabel op, operation = op, input = page, width = size, enabled = flag }
-  | op <- [ReadFrame,WriteFrame], page <- [0,0x1234,0xffff], size <- [0,1,2,31,1024,2076], flag <- [0,1] ] ++
+  | op <- [ReadFrame,WriteFrame], page <- [0,0x1234,0xffff], size <- [0,1,2,3,31,1024,2076], flag <- [0,1] ] ++
+  [ base { ident = operationLabel op, operation = op, input = 0x1234, width = size, enabled = flag }
+  | op <- [ReadFrame,WriteFrame], size <- [0x81d,0x81e,0x81f,0x1000], flag <- [0,1] ] ++
+  [ base { ident = "write-frame-mask", operation = WriteFrame, input = 0x1234, width = 0x10002, enabled = 1 } ] ++
   [ base { ident = operationLabel op, operation = op, input = word, recoveryState = mode, busyCount = busy }
   | op <- [Ack,Response], word <- [0xc33ca55a,0xa55a3cc3,0,1,0x08008054,0x08108064,0x08008040,0x08000400,0x000003d0,0x00000042,0x08018074,0x00400002], mode <- [0,1,2], busy <- [0,2,0xffffffff] ] ++
+  [ base { ident = "response-magic", operation = Response, input = 0xa55a3cc3, recoveryState = mode, machinePrevious = previous }
+  | previous <- [(6,12),(6,0),(5,12),(6,13)], mode <- [0,1,2] ] ++
+  [ base { ident = "ack-magic", operation = Ack, input = 0xa55a3cc3, recoveryState = mode, machinePrevious = (6,12) } | mode <- [0,1,2] ] ++
   [ base { ident = "previous-response-consumer", operation = Ack, input = word, sequenceNumber = seqn, previousResponse = previous, consumer = completion, recoveryState = mode }
   | word <- [0x08008054,0x08108064,0x0f00804c,0x0f10805c], seqn <- [0,7], previous <- [0,0xa55a3cc3,0x12345678], completion <- [Absent,Immediate,Deferred], mode <- [0,1] ]
-  where base = Fixture "" Command 0 0 0 0 0 0 0 0 Absent
+  where base = Fixture "" Command 0 0 0 0 0 0 0 0 Absent (0,0)
 
 operationLabel :: Operation -> String
 operationLabel Command = "command"
@@ -72,6 +78,36 @@ slice bytes address size = B.take (fromIntegral size) (B.drop (fromIntegral (add
 patch :: B.ByteString -> Int -> Word32 -> B.ByteString
 patch bytes offset value = B.take offset bytes <> word32le value <> B.drop (offset+4) bytes
 
+-- The transmit buffer holds 0x820 bytes from 0x4096d000; the receive buffer follows at 0x4096d820.
+-- Stock seeds neither; the patterns below are the caller-owned contents.
+txSeed :: B.ByteString
+txSeed = B.pack [fromIntegral ((index * 37 + 11) `mod` 256) | index <- [0 :: Int .. 0x81f]]
+
+receiveBytes :: Fixture -> B.ByteString
+receiveBytes f = case operation f of
+  -- Only the two parsers read 0x4096d820; the page bodies do not.
+  ReadFrame -> pageRxSeed
+  WriteFrame -> pageRxSeed
+  _ -> B.reverse (word32le (input f)) <> B.replicate (0x820 - 4) 0xa5
+
+pageRxSeed :: B.ByteString
+pageRxSeed = B.pack [fromIntegral ((index * 53 + 7) `mod` 256) | index <- [0 :: Int .. 0x81f]]
+
+-- Both bodies take the payload length from the low half of the argument; 0x006bf5fc masks with 0xffff.
+payloadLength :: Fixture -> Int
+payloadLength f = fromIntegral (width f .&. 0xffff)
+
+-- Bytes of the transmit buffer a frame initialises: stock zeroes `length + 4` for a read at
+-- 0x006bf50c and writes two page bytes, the payload and an optional checksum for a write at 0x006bf5fc.
+extent :: Fixture -> Maybe Int
+extent f = case operation f of
+  ReadFrame -> Just (payloadLength f + 4)
+  WriteFrame -> Just (2 + payloadLength f + fromIntegral (enabled f .&. 1))
+  _ -> Nothing
+
+fits :: Fixture -> Bool
+fits f = maybe True (<= 0x820) (extent f)
+
 -- Critical sections, routing, diagnostics and the transport publication edge are synthetic
 -- external interfaces; every body is a return.
 services :: [(Word32, [Word32])]
@@ -80,7 +116,7 @@ services = [(0x7235d8,[0xe3a00000,0xe12fff1e]),(0x7236b0,[0xe12fff1e]),(0x64982c
 makeCase :: B.ByteString -> E.Elf -> Role -> Fixture -> CaseSpec
 makeCase image elf role f = CaseSpec
   { caseId = ident f, caseProvenance = sourceIdentity
-  , caseExclusion = "Synthetic state, queue, payload, receive bytes and bounded caller callback consumer. The event-3 publication edge at 0x006bf218 is a synthetic return, so no dispatcher body or handler runs. External diagnostics discarded. No physical locking, timing, IRQ, timeout, reset or teardown qualification. Writeframe uninitialized tail remains caller-owned."
+  , caseExclusion = "Synthetic state, queue, payload, receive bytes and bounded caller callback consumer. The event-3 publication edge at 0x006bf218 is a synthetic return, so no dispatcher body or handler runs. External diagnostics discarded. No physical locking, timing, IRQ, timeout, reset or teardown qualification. A frame longer than the 0x820-byte transmit buffer is refused by the owned codec where the stock body at 0x006bf50c and 0x006bf5fc copies past it."
   , caseEntry = guest entry, caseExit = guest stop
   , caseRegions = code ++ external ++ memory
   , caseFunctions = [(guest a,z) | (a,z) <- functions ++ [(a,fromIntegral (4 * length body)) | (a,body) <- services ++ [(0x203000,consumerBody)]]]
@@ -104,9 +140,10 @@ makeCase image elf role f = CaseSpec
     state = foldl (\bytes (offset,value) -> patch bytes offset value) (B.replicate 0xa0 0)
       [(0x1c,3),(0x40,0x0b008000),(0x44,0x40),(0x48,0x40),(0x4c,previousResponse f),(0x50,if consumer f == Absent then 0 else 0x203000),(0x8c,sequenceNumber f),(0x90,sequenceNumber f),(0x94,7),(0x98,busyCount f),(0x9c,recoveryState f)]
     queue = patch (patch (patch (B.replicate 0xac 0xa5) 0xa0 19) 0xa4 3) 0xa8 (queued f)
-    payload = B.pack (take 2076 (cycle [0,255,17,128,90,1,254]))
-    receive = B.reverse (word32le (input f)) <> B.replicate (0x820-4) 0xa5
-    memory = [region "state" 0x95d3c0 ReadWrite state,region "queue" 0x95b254 ReadWrite queue,region "machine" 0x955dd0 ReadWrite (word32le 6 <> B.replicate 12 0),region "tx" 0x4096d000 ReadWrite (B.replicate 0x820 0xa5),region "rx" 0x4096d820 ReadWrite receive,region "payload" 0x210000 ReadOnly payload,region "stack" 0x300000 ReadWrite (patch (B.replicate 0x10000 0xa5) 0x8000 0),region "return" 0x202000 ReadExecute (word32le 0xe7f000f0)]
+    machine = let (four, eight) = machinePrevious f in word32le 6 <> word32le four <> word32le eight <> word32le 0
+    payload = B.pack (take 0x1000 (cycle [0,255,17,128,90,1,254]))
+    receive = receiveBytes f
+    memory = [region "state" 0x95d3c0 ReadWrite state,region "queue" 0x95b254 ReadWrite queue,region "machine" 0x955dd0 ReadWrite machine,region "tx" 0x4096d000 ReadWrite txSeed,region "rx" 0x4096d820 ReadWrite receive,region "payload" 0x210000 ReadOnly payload,region "stack" 0x300000 ReadWrite (patch (B.replicate 0x10000 0xa5) 0x8000 0),region "return" 0x202000 ReadExecute (word32le 0xe7f000f0)]
       ++ [region "consumer-output" 0x204000 ReadWrite (B.replicate 8 0xa5)]
     arguments = case operation f of
       Command -> [(R0,input f)]
@@ -119,15 +156,22 @@ seed r = 0xa5a50000 + fromIntegral (fromEnum r)
 
 compareResult :: Fixture -> NativeObservation -> NativeObservation -> [String]
 compareResult f stock owned =
-  [label ++ " status" | (label,o) <- [("stock",stock),("owned",owned)], nativeStatus o /= Returned] ++
-  ["published bytes" | publication stock /= publication owned] ++
+  [label ++ " status" | (label,o) <- roles, nativeStatus o /= Returned] ++
   ["retained consumer state" | boundaryState stock /= boundaryState owned] ++
   ["caller callback output" | regionBytesOf stock (RegionId "consumer-output") /= regionBytesOf owned (RegionId "consumer-output")] ++
   ["parser result" | parser (operation f), registerValue stock R0 /= registerValue owned R0] ++
   ["parser ABI " ++ registerLabel r | parser (operation f), r <- [R4 .. R11] ++ [Sp], registerValue stock r /= registerValue owned r] ++
-  ["stack guard " ++ label | (label,o) <- [("stock",stock),("owned",owned)], let bytes = regionBytesOf o (RegionId "stack"), B.take 0x4000 bytes /= B.replicate 0x4000 0xa5 || B.drop 0x8004 bytes /= B.replicate 0x7ffc 0xa5]
+  ["stack guard " ++ label | (label,o) <- roles, let bytes = regionBytesOf o (RegionId "stack"), B.take 0x4000 bytes /= B.replicate 0x4000 0xa5 || B.drop 0x8004 bytes /= B.replicate 0x7ffc 0xa5] ++
+  (if fits f
+    then ["published bytes" | publication stock /= publication owned] ++
+      [label ++ " transmit tail" | (label,o) <- roles, Just bytes <- [extent f], B.drop bytes (regionBytesOf o (RegionId "tx")) /= B.drop bytes txSeed]
+    else ["stock transmit did not overflow" | regionBytesOf stock (RegionId "tx") == txSeed] ++
+      ["stock receive did not overflow" | regionBytesOf stock (RegionId "rx") == receiveBytes f] ++
+      ["owned transmit past capacity" | regionBytesOf owned (RegionId "tx") /= txSeed] ++
+      ["owned receive past capacity" | regionBytesOf owned (RegionId "rx") /= receiveBytes f])
   where
-    boundaryState o = B.concat [B.take 4 (B.drop offset (regionBytesOf o (RegionId "state"))) | offset <- [0x78,0x8c,0x90,0x94,0x98,0x9c]]
+    roles = [("stock",stock),("owned",owned)]
+    boundaryState o = B.concat [B.take 4 (B.drop offset (regionBytesOf o (RegionId "state"))) | offset <- 0x40 : stateOffsets]
       <> B.drop 160 (regionBytesOf o (RegionId "queue"))
     publication o = case operation f of
       Command -> B.take 160 (regionBytesOf o (RegionId "queue"))
@@ -135,6 +179,29 @@ compareResult f stock owned =
       WriteFrame -> regionBytesOf o (RegionId "tx")
       Response -> B.take 4 (B.drop 0x40 (regionBytesOf o (RegionId "state")))
       Ack -> B.empty
+
+stateOffsets :: [Int]
+stateOffsets = [0x78,0x8c,0x90,0x94,0x98,0x9c]
+
+-- Every comparison in 'compareResult' has a negative control here that must report a difference.
+controls :: Fixture -> NativeObservation -> NativeObservation -> [String]
+controls f stock owned
+  | fits f =
+      ["status negative control" | null (compareResult f stock { nativeStatus = MemoryGuard } owned)] ++
+      ["publication negative control" | null (compareResult f (publishMutation stock) owned)] ++
+      ["retained state negative control" | offset <- 0x40 : stateOffsets, null (compareResult f (mutateRegion (RegionId "state") offset stock) owned)] ++
+      ["queue cursor negative control" | offset <- [0xa0,0xa4,0xa8], null (compareResult f (mutateRegion (RegionId "queue") offset stock) owned)] ++
+      ["caller callback negative control" | null (compareResult f (mutateRegion (RegionId "consumer-output") 0 stock) owned)] ++
+      ["transmit tail negative control" | Just bytes <- [extent f], bytes <= 0x81c, null (compareResult f stock (mutateRegion (RegionId "tx") bytes owned))]
+  | otherwise =
+      ["refusal negative control" | null (compareResult f stock (mutateRegion (RegionId "tx") 0 owned))] ++
+      ["refusal receive negative control" | null (compareResult f stock (mutateRegion (RegionId "rx") 0 owned))] ++
+      ["transmit overflow negative control" | null (compareResult f (replaceRegion (RegionId "tx") txSeed stock) owned)] ++
+      ["receive overflow negative control" | null (compareResult f (replaceRegion (RegionId "rx") (receiveBytes f) stock) owned)]
+  where
+    publishMutation o
+      | parser (operation f) = o { nativeRegisters = M.insert R0 (registerValue o R0 + 1) (nativeRegisters o) }
+      | otherwise = mutateRegion (RegionId (if operation f == Command then "queue" else "tx")) 0 o
 
 runSuite :: FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO [(String,[String])]
 runSuite runner cache directory imagePath elfPath = do
@@ -154,12 +221,7 @@ runSuite runner cache directory imagePath elfPath = do
       pure (M.fromList [(caseIdText key,value) | (key,value) <- results])
     case observations of
       [stock,owned] -> pure [(ident f,case (M.lookup (ident f) stock,M.lookup (ident f) owned) of
-          (Just a,Just b) -> compareResult f a b ++
-            ["status negative control" | null (compareResult f a a { nativeStatus = MemoryGuard })] ++
-            ["publication negative control" | let changed = if parser (operation f) then a { nativeRegisters = M.insert R0 (registerValue a R0 + 1) (nativeRegisters a) } else mutateRegion (RegionId (if operation f == Command then "queue" else "tx")) 0 a, null (compareResult f a changed)] ++
-            ["retained state negative control" | offset <- [0x78,0x8c,0x90,0x94,0x98,0x9c], null (compareResult f a (mutateRegion (RegionId "state") offset a))] ++
-            ["queue cursor negative control" | offset <- [0xa0,0xa4,0xa8], null (compareResult f a (mutateRegion (RegionId "queue") offset a))] ++
-            ["caller callback negative control" | null (compareResult f a (mutateRegion (RegionId "consumer-output") 0 a))]
+          (Just a,Just b) -> compareResult f a b ++ controls f a b
           _ -> ["missing observation"]) | f <- selected]
       _ -> fail "role count"
   where
@@ -169,3 +231,7 @@ runSuite runner cache directory imagePath elfPath = do
 mutateRegion :: RegionId -> Int -> NativeObservation -> NativeObservation
 mutateRegion target offset observation = observation
   { nativeMemory = [(key,if key == target then patch bytes offset (readWordAt bytes offset + 1) else bytes) | (key,bytes) <- nativeMemory observation] }
+
+replaceRegion :: RegionId -> B.ByteString -> NativeObservation -> NativeObservation
+replaceRegion target replacement observation = observation
+  { nativeMemory = [(key,if key == target then replacement else bytes) | (key,bytes) <- nativeMemory observation] }

@@ -6,6 +6,9 @@ unsafe extern "C" { fn lens_publication_edge(event: u32); }
 unsafe fn load(offset: usize) -> u32 {
     unsafe { core::ptr::read_volatile((0x0095_d3c0 + offset) as *const u32) }
 }
+unsafe fn machine(offset: usize) -> u32 {
+    unsafe { core::ptr::read_volatile((0x0095_5dd0 + offset) as *const u32) }
+}
 unsafe fn store(offset: usize, value: u32) {
     unsafe { core::ptr::write_volatile((0x0095_d3c0 + offset) as *mut u32, value) }
 }
@@ -92,12 +95,15 @@ pub unsafe extern "C" fn lens_codec_ack() -> u32 {
     }
 }
 
+/// Stock accepts the invalid magic only while the machine words at 0x00955dd4 and 0x00955dd8 read
+/// 6 and 12; see 0x006be418-0x006be438.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lens_codec_response() -> u32 {
     unsafe {
         let mode = recovery(load(0x9c));
         let bytes = core::slice::from_raw_parts(0x4096_d820 as *const u8, 4);
-        let result = classify_command(bytes, CommandWord::new(load(0x48)), CommandWord::new(load(0x40)), mode, false).unwrap_or_else(|_| unreachable!());
+        let allow_invalid_magic = machine(4) == 6 && machine(8) == 12;
+        let result = classify_command(bytes, CommandWord::new(load(0x48)), CommandWord::new(load(0x40)), mode, allow_invalid_magic).unwrap_or_else(|_| unreachable!());
         store(0x4c, result.response.raw()); store(0x40, result.acknowledgement.raw()); store(0x9c, recovery_word(result.recovery));
         result.outcome.stock_code(mode)
     }
