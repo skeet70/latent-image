@@ -102,6 +102,7 @@ haskell_library(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         "//emulation:case-sha256",
+        "//emulation:judge-lib",
         "//emulation:native-observation",
         "//emulation:owned-case",
         "//host:base",
@@ -121,6 +122,8 @@ haskell_binary(
     deps = [
         ":actor-suite-lib",
         "//emulation:case-sha256",
+        "//emulation:judge-lib",
+        "//emulation:suite-audit-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

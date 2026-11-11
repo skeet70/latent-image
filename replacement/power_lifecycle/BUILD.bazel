@@ -1,4 +1,4 @@
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf")
 
@@ -156,10 +156,38 @@ haskell_binary(
     ]
 ]
 
+# Every class (a) row of native/Replacement/PowerLifecycle/RecordHelperTable.hs:
+# the owned export of each stock body the suite compares. --gc-sections keeps
+# only these roots and what they call.
 _RECORD_HELPER_COMPARED = [
-    "ef9bc0", "ef9c00", "ef9d18", "ef9dc0", "ef9ddc", "ef9e14", "ef9e4c", "ef9e84",
-    "ef9ea0", "ef9ebc", "ef9ed8", "ef9f10", "ef9f64",
-    "75a440", "75a61c", "f160ac", "f1fd84", "f21a3c",
+    "69f8fc", "69fec8", "69ffe8", "6a7e68", "72daac", "72dafc", "72db7c", "737854", "740888", "740a10",
+    "740a34", "741fa0", "74677c", "747aac", "74a740", "74e68c", "74e7a0", "756788", "7567ec", "756840",
+    "756e90", "75738c", "757510", "757650", "7577e0", "757828", "757878", "7578c8", "757968", "7579b8",
+    "757a74", "757b78", "757bc0", "757c10", "757c60", "757cb0", "757d00", "757da0", "757df0", "757e38",
+    "757e80", "757ec8", "757f18", "757f60", "758068", "7580ec", "758134", "75817c", "7581e8", "758278",
+    "758340", "758940", "7589c0", "758a0c", "758a5c", "758aac", "758afc", "758b4c", "758b9c", "758bec",
+    "758c68", "75a3f0", "75a440", "75a4ac", "75a52c", "75a61c", "75a960", "75ace4", "75ae3c", "75af54",
+    "75c874", "75c8a4", "75d490", "75e6c4", "75e6f0", "76f340", "76f360", "76fb54", "76fc4c", "eb2838",
+    "eb2958", "eb35ec", "ee81bc", "ee96e0", "ee96f4", "ee9ab0", "eea094", "eebb6c", "eebb98", "eebbbc",
+    "eebc08", "eebc30", "eebca4", "eebd8c", "eebe58", "eebe70", "eed9c4", "ef53d0", "ef5768", "ef6790",
+    "ef7820", "ef9bc0", "ef9c00", "ef9d18", "ef9dc0", "ef9ddc", "ef9e14", "ef9e4c", "ef9e84", "ef9ea0",
+    "ef9ebc", "ef9ed8", "ef9f10", "ef9f64", "f14718", "f1473c", "f14760", "f148fc", "f14920", "f14944",
+    "f156d4", "f156e8", "f15708", "f1608c", "f160ac", "f165fc", "f16664", "f17da4", "f17dec", "f17e50",
+    "f17ee0", "f17f04", "f17f14", "f1886c", "f18898", "f1b050", "f1fd84", "f2032c", "f21a3c", "f23314",
+    "f234d8", "f234f8", "f23564", "f23624", "f23648", "f2368c", "f236ac", "f236cc", "f23880", "f238a0",
+    "f238e0", "f23aec", "f23b14", "f23b3c", "f2476c", "f24ba8", "f2519c", "f257e4", "f25860", "f258e0",
+    "f259b8", "f25afc", "f25b3c", "f25b54", "f290a4", "f290b8", "f29240", "f29260", "f29284", "f2a200",
+    "f2ab5c", "f2be34", "f2c0c4", "f2c3c0", "f2c898", "f2c8ac", "f2cb5c", "f2cb90", "f2d094", "f2d0b8",
+    "f2d0e4", "f2d130", "f2d154", "f2d180", "f2d68c", "f2d79c", "f2dcf4", "f2ddd4", "f2ef7c", "f2f440",
+    "f2f460", "f2f480", "f2fb7c", "f2fba4", "f2fc50", "f307f0", "f30808", "f323e4", "f324a0", "f324c4",
+    "f324e8", "f32530", "f32558", "f32580", "f325a8", "f325d0", "f325f4", "f32908", "f363b8", "f363d8",
+    "f3aa94", "f3adbc", "f3b0fc", "f3bf04", "f3bf24", "f3c0bc", "f3c0d0", "f3d3e0", "f3d400", "f3d420",
+    "f3d45c", "f3d490", "f3e32c", "f3e3c8", "f3eaf0", "f3eb3c", "f3ebd4", "f46b44", "f46b5c", "f46b9c",
+    "f46bb0", "f46bc8", "f4929c", "f49fd8", "f4a014", "f4acfc", "f4dd50", "f5eb34", "f5eba0", "f5ecc0",
+    "f692dc", "f77db4", "f77dfc", "f77e68", "f7e364", "fa6590", "fa6c04", "fa7614", "fa7b84", "fa7e8c",
+    "fa7eac", "fa7edc", "fa7ef4", "fa7f40", "fa7fb8", "fa7fd8", "fa7ff8", "fa8018", "fa8038", "fa8058",
+    "fa9320", "fa9488", "fa9588", "faa770", "faa790", "ffde8c", "10029a8", "1004438", "1005044", "103af30",
+    "1050f8c", "1050fa4", "1051fb4", "1051fcc", "105386c", "10538a4",
 ]
 
 xm1_rust_elf(
@@ -173,7 +201,10 @@ xm1_rust_elf(
 
 haskell_library(
     name = "record-helper-suite-lib",
-    srcs = ["native/Replacement/PowerLifecycle/RecordHelperSuite.hs"],
+    srcs = [
+        "native/Replacement/PowerLifecycle/RecordHelperSuite.hs",
+        "native/Replacement/PowerLifecycle/RecordHelperTable.hs",
+    ],
     src_strip_prefix = "native",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
@@ -197,10 +228,19 @@ haskell_binary(
     deps = [
         ":record-helper-suite-lib",
         "//emulation:case-sha256",
+        "//emulation:fujimod-native-paths",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:directory",
         "//host:filepath",
     ],
+)
+
+haskell_test(
+    name = "record-helper-plan-tests",
+    srcs = ["native/PlanTests.hs"],
+    main_file = "native/PlanTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [":record-helper-suite-lib", "//host:base"],
 )
