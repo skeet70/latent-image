@@ -40,6 +40,11 @@
         "negative"
       ]
     },
+    "topic": {
+      "description": "Short kebab-case name of what the record is about. No two records share a topic.",
+      "type": "string",
+      "minLength": 1
+    },
     "claim": {
       "type": "string",
       "minLength": 1
