@@ -18,7 +18,7 @@ xm1_rust_rlib(
     src = "src/lib.rs",
     crate_name = "display_scanout_panel",
     data = core_sources + ["//replacement/calibration_liveview:libcalibration_liveview"],
-    rustc_flags = ["--cfg", "'feature=\"library\"'", "--cfg", "'feature=\"panel\"'", "--extern", "calibration_liveview=$(location //replacement/calibration_liveview:libcalibration_liveview)"],
+    rustc_flags = ["-C", "target-feature=+strict-align", "--cfg", "'feature=\"library\"'", "--cfg", "'feature=\"panel\"'", "--extern", "calibration_liveview=$(location //replacement/calibration_liveview:libcalibration_liveview)"],
 )
 
 xm1_rust_staticlib(
@@ -26,7 +26,7 @@ xm1_rust_staticlib(
     src = "src/lib.rs",
     crate_name = "xm1_display_scanout",
     data = core_sources + ["//replacement/calibration_liveview:libcalibration_liveview"],
-    rustc_flags = ["--extern", "calibration_liveview=$(location //replacement/calibration_liveview:libcalibration_liveview)"],
+    rustc_flags = ["-C", "target-feature=+strict-align", "--extern", "calibration_liveview=$(location //replacement/calibration_liveview:libcalibration_liveview)"],
 )
 
 xm1_rust_elf(
@@ -42,7 +42,7 @@ xm1_rust_staticlib(
     src = "src/lib.rs",
     crate_name = "xm1_display_scanout",
     data = core_sources + ["//replacement/calibration_liveview:libcalibration_liveview"],
-    rustc_flags = ["--cfg", "'feature=\"panel\"'", "--extern", "calibration_liveview=$(location //replacement/calibration_liveview:libcalibration_liveview)"],
+    rustc_flags = ["-C", "target-feature=+strict-align", "--cfg", "'feature=\"panel\"'", "--extern", "calibration_liveview=$(location //replacement/calibration_liveview:libcalibration_liveview)"],
 )
 
 xm1_rust_elf(

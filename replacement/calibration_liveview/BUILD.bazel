@@ -11,7 +11,7 @@ xm1_rust_rlib(
     src = "src/lib.rs",
     crate_name = "calibration_liveview",
     data = ["src/publication.rs"],
-    rustc_flags = ["--cfg", "'feature=\"library\"'"],
+    rustc_flags = ["-C", "target-feature=+strict-align", "--cfg", "'feature=\"library\"'"],
 )
 
 [
