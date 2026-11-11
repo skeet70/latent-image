@@ -133,7 +133,6 @@ pub enum CompletionAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TransportEvent {
-    StatusObserver { flags: u32, result: i32 },
     QueueStatus,
     Disconnect,
 }
@@ -142,7 +141,6 @@ impl TransportEvent {
         match self {
             Self::QueueStatus => Some((0x340e, 0, 0)),
             Self::Disconnect => Some((1, 0x90, 0)),
-            Self::StatusObserver { .. } => None,
         }
     }
 }
@@ -180,7 +178,6 @@ pub struct TransportState {
     stream: bool,
     response: ResponseKind,
     status: [u8; 2],
-    completion_flags: u32,
     pending: bool,
 }
 
@@ -188,7 +185,7 @@ impl TransportState {
     pub const fn new() -> Self {
         Self { suppress_next: false, out_span: None,
             out_progress: 0, out_total: 0, out_start: 0, stream: false,
-            response: ResponseKind::None, status: [0; 2], completion_flags: 0, pending: false }
+            response: ResponseKind::None, status: [0; 2], pending: false }
     }
 
     pub fn setup(&mut self, request_type: u8) -> SetupAction {
@@ -297,14 +294,8 @@ impl TransportState {
     }
 
     pub fn status_interrupt(&mut self, events: &mut impl EventSink) {
-        if self.completion_flags & 16 == 0 {
-            self.completion_flags |= 16;
-            events.emit(TransportEvent::StatusObserver { flags: self.completion_flags, result: 0 });
-        }
         events.emit(TransportEvent::QueueStatus);
     }
-
-    pub fn update_completion_flags(&mut self, flags: u32) { self.completion_flags = flags; }
 
     pub fn mark_pending(&mut self, events: &mut impl EventSink) {
         self.pending = true;

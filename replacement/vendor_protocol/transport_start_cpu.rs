@@ -151,6 +151,53 @@ impl<'a> UsbStart<'a> {
     pub fn session(&self) -> SessionMode { SessionMode(self.memory.word(SESSION)) }
     pub fn clear_active(&mut self) { self.memory.put(CONTROLLER + 0x20, 0); }
 
+    /// The pending word 0xfff5402c/30/34 minus the shadow mask at 0x01469768+0x18.
+    pub fn pending_status(&self, io: &mut impl StartIo) -> crate::transport_pump::UsbStatus {
+        let pending = u64::from(io.start_read16(StartRegister::PendingLow))
+            | (u64::from(io.start_read16(StartRegister::PendingMiddle)) << 16)
+            | (u64::from(io.start_read16(StartRegister::PendingHigh)) << 32);
+        let mask = u64::from(self.memory.half(CONTROLLER + 0x18))
+            | (u64::from(self.memory.half(CONTROLLER + 0x1a)) << 16)
+            | (u64::from(self.memory.half(CONTROLLER + 0x1c)) << 32);
+        crate::transport_pump::UsbStatus::new(pending, mask)
+    }
+    /// 0x00d7d160: the pump returns through 0x00d7d174 when this word is one.
+    pub fn pump_stopping(&self) -> bool { self.memory.word(CONTROLLER + 0x24) == 1 }
+    /// 0x00d7dc58: a zero bit in these halfwords clears its pending bit.
+    pub fn acknowledge(&mut self, io: &mut impl ControllerIo, acknowledge: crate::transport_pump::Acknowledge) {
+        io.write16(Register::OutMaskLow, acknowledge.low);
+        io.write16(Register::OutMaskMiddle, acknowledge.middle);
+        io.write16(Register::OutMaskHigh, acknowledge.high);
+    }
+    /// 0x00d7dc90 restores the interrupt block and the shadow masks only while active.
+    pub fn restore_event_masks(&self, io: &mut impl ControllerIo) {
+        if self.memory.word(CONTROLLER + 0x20) != 1 { return; }
+        io.write32(Register::InterruptReset, self.memory.word(CONTROLLER + 0x10));
+        self.masks(io);
+    }
+    pub fn set_event_mask(&mut self, mask: [u16; 3]) {
+        for (index, value) in mask.iter().enumerate() {
+            self.memory.put_byte(CONTROLLER + 0x18 + index * 2, *value as u8);
+            self.memory.put_byte(CONTROLLER + 0x19 + index * 2, (*value >> 8) as u8);
+        }
+    }
+    /// 0x00d7ae94: clears the control and channel blocks, the interrupt block and the mask.
+    pub fn reset_transfer_state(&mut self) {
+        for offset in [0, 4, 8, 0x3c, 0x40, 0x44, 0x48, 0x4c, 0xa0, 0xa4, 0xa8, 0xac, 0xb0] { self.memory.put(offset, 0); }
+        for offset in [0, 4, 12, 16, 20, 32] { self.memory.put(CONTROL + offset, 0); }
+        self.memory.put_byte(CONTROL + 8, 0);
+        self.memory.put_byte(CONTROL + 9, 0);
+        self.memory.put(CONTROLLER + 0x10, 0x8181_0303);
+        let mut mask = [0xffffu16; 3];
+        for event in crate::transport_pump::UsbEvent::ORDER {
+            let bit = event.bit();
+            if bit == 3 { continue; }
+            let word = match bit { 0..=15 => &mut mask[0], 16..=31 => &mut mask[1], _ => &mut mask[2] };
+            *word &= !(1u16 << (bit % 16));
+        }
+        self.set_event_mask(mask);
+    }
+
     fn masks(&self, io: &mut impl ControllerIo) {
         io.write16(Register::EventClearLow, self.memory.half(CONTROLLER + 0x18));
         io.write16(Register::EventClearMiddle, self.memory.half(CONTROLLER + 0x1a));

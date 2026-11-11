@@ -71,7 +71,6 @@ fn interrupt_programs_clear_registers_and_always_queues_status() {
         Some(Effect::Half(Register::EventClearHigh, 0xffff)),
     ]);
     assert_eq!(events.observed(), &[
-        Some(Effect::Event(TransportEvent::StatusObserver { flags: 16, result: 0 })),
         Some(Effect::Event(TransportEvent::QueueStatus)),
         Some(Effect::Event(TransportEvent::QueueStatus)),
     ]);
@@ -147,14 +146,13 @@ fn whole_cache_clean_visits_selected_geometry_in_set_way_order() {
 }
 
 #[test]
-fn pending_interrupt_publishes_observable_pending_once_per_take() {
+fn pending_interrupt_publishes_one_queue_status_per_take() {
     let mut transport = TransportState::new();
     let mut events = Recorder::new();
     transport.mark_pending(&mut events);
     assert!(transport.take_pending());
     assert!(!transport.take_pending());
     assert_eq!(events.observed(), &[
-        Some(Effect::Event(TransportEvent::StatusObserver { flags: 16, result: 0 })),
         Some(Effect::Event(TransportEvent::QueueStatus)),
     ]);
 }

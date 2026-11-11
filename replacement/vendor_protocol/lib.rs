@@ -73,6 +73,7 @@ pub mod startup_refresh;
 pub mod startup_workers;
 pub mod transport;
 pub mod transport_connection_cpu;
+pub mod transport_pump;
 pub mod transport_start_cpu;
 pub mod updater_peripheral;
 pub mod updater_serial;

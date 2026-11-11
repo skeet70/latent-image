@@ -240,6 +240,39 @@ The actual 616-byte application dispatcher has ten command routes plus the `0x3f
 
 Three transport callback entries have no `function-ranges.json` row at either the contractual pin or reading-aid `c44204c8c1c87e00ed15a7d33572968afadd1b29`: setup `[0xd7ef20,0xd7ef78)` 88 bytes, bulk-OUT source `[0xd7ef78,0xd7efd4)` 92 bytes and bulk-IN source `[0xd7efd4,0xd7f0c0)` 236 bytes. Their extents come from actual A32 leaf control flow: each has only internal branch successors, a converged return epilogue and the next callback immediately afterward. They are actual-stock-byte-inspected, unranged entries, not pinned exact-C reconstructions. A publication cannot claim pinned range-table coverage for them.
 
+### The USB event pump 0x00d7d154
+
+`transport_pump.rs` implements the pump that the queue-36 table selects for opcode `0x340e`: cells `0x00d84174` (state 8) and `0x00d84188` (active vendor) are identical wrappers that call `0x00d7d154`. The function spans `0x00d7d154..0x00d7dd14`.
+
+**Status.** The pump reads the three pending halfwords `0xfff5402c`, `0xfff54030` and `0xfff54034` (`0x00d7d284`, `0x00d7d290`, `0x00d7d29c`) and subtracts the shadow words at `0x01469768+0x18`, `+0x1a` and `+0x1c` (`0x00d7d2cc`). The result is a 48-bit word, not `Commands.usb_status`: that field is bus-speed bit 14 of `0xfff5409c`, sampled by stock `service_usb_status_bit14` (`0x00d7b9ac`). The pump reads bit 14 only in the bit-44 branch, where it copies it into bit 12 of `0xfff55108` (`0x00d7d50c..0x00d7d524`).
+
+**Stop path.** When `0x01469768+0x24` is one (`0x00d7d160..0x00d7d170`), the pump stops and releases both channel handles at `+4` and `+8` (`0x00d7d17c..0x00d7d1a4`), reads back `0xfff54068/6c/70` (`0x00d7d1b4..0x00d7d1cc`), clears shadow bits 2 and 6 (`0x00d7d220..0x00d7d234`), writes the shadow words to `0xfff54040/44/48` (`0x00d7d238..0x00d7d264`), zeroes `+0x24` and returns at `0x00d7d268` without the acknowledge tail. No owned producer sets `+0x24` yet.
+
+**Check order.** Stock tests the bits in this order and returns after the first match:
+
+| Bit | Address | Action |
+| --- | --- | --- |
+| 46 | `0x00d7d2fc` | Clears pending bit 46 in `0xfff5405c`, writes `0x81810303` to `0xfff5512c` and calls `0x00d814f4(0)`. |
+| 44 | `0x00d7d360` | Clears bit 44, calls `service_usb_clear_state` `0x00d7ae94`, stops both channels, writes `0xfff5510c=0`, `0xfff54070&=0xfffc`, `0xfff54004|=0xc`, `0xfff55114=0x101`, delays 1 ms through `0x00723ffc`, pulses `0xfff54080=0xfff`, clears shadow bits 2, 18 and 38, copies `0xfff5409c` bit 14 to `0xfff55108` bit 12 and calls `0x00d81598`. |
+| 31 | `0x00d7d544` | Reads `0xfff54018` and clears bit 31. |
+| 33 | `0x00d7d5a0` | Clears bits 33 and 1. For control direction 1 sets `0xfff54004` bit 2; for control status 2 calls `0x00d7e970(0)` or callback slot +8. |
+| 13 | `0x00d7d674` | Clears bit 13, reads the eight-byte control packet at `0xfff54188`, fills the control block at `0x014697b0`, dispatches callback slot +0 or `0x00d7e910`, applies completion 0 and transmits through `0x00d7cc60`/`0x00d7c92c`. |
+| 0 | `0x00d7d848` | Clears bit 0 and calls `0x00d7cf50`. |
+| 1 | `0x00d7d898` | Clears bit 1 and calls `0x00d7cf50`. |
+| 4 | `0x00d7d8e8` | Clears bit 4 and requests callback slot 3 through `0x00d7c6c8(0,3)`. |
+| 38 | `0x00d7d940` | Clears bit 38; when `0x01469798+0x10` is one, clears it, requests callback slot 2 and clears shadow byte `0x1a` bit 2. |
+| 3 | `0x00d7d9d0` | Clears bit 3, sets shadow byte `0x18` bit 3 and requests callback slot 2. |
+| 2 | `0x00d7da3c` | Clears bit 2; for active `+0x20==1` sets `0xfff54004` bit 3, reads `0xfff54194`, calls callback slot +0xc, applies completion 1, then pulses or transmits and clears `0xfff54004` bit 3. |
+| 18 | `0x00d7db80` | Clears bit 18; when `0x01469798+0x10` is zero and callback slot +0x14 is set, calls it, applies completion 2 and transmits. |
+
+**Acknowledge and tail.** Every non-stop return writes `0xfff54054/58/5c` with all bits one except the handled bits and bit 18, which `0x00d7dc58` always clears. While `0x01469768+0x20` is one, `0x00d7dc90..0x00d7dcec` then restores `0xfff5512c` from `+0x10` and `0xfff54040/44/48` from the shadow words.
+
+**Return to the controller loop.** The pump posts no message. The interrupt prologue `service_usb_reset_event_registers` `0x00d7b250` writes `0xfff5512c=0x81810303` and `0xfff54040/44/48=0xffff`, then calls `scan_set_completion_flag16` `0x00d81480`: when completion-handle bit 16 is clear it sets the bit, calls the installed completion consumer, and in every case posts queue-36 opcode `0x340e`. That cell then calls the pump. `0x00d81480` is the only owner of bit 16; `TransportState` no longer keeps a second copy.
+
+**Owned model.** `transport_pump::UsbStatus` is the masked 48-bit word, `UsbEvent` is the twelve distinguished bits in the table order, and `pump(status, state)` returns `Pumped`: the set events in that order plus the acknowledge words. Stock handles only the first match; the owned pass reports every set bit so one `0x340e` cell drains the word. `TransportPump::read` reads the pending halfwords and shadow, `TransportPump::finish` writes the acknowledge and the active-tail restore. `ControllerRoot::pumped` exposes the last pass. The completion-reset event drives `ControllerRuntime::update_connection_handle(CompletionHandle(0))`; the transfer-reset event clears the owned control/channel aperture and programs `0xfff5510c`, `0xfff54070`, `0xfff54004`, `0xfff55114`, `0xfff54080` and `0xfff55108`.
+
+**Remaining behind traits.** The control-packet and channel events still need the protocol application's callback table at `0x01469768+0x0c` (slots +0, +8, +0xc, +0x14) and the DMA channel producer that fills `+4`/`+8`; the pump records those events and the controller applies only the two reset events. Also unowned: the session channel leases, the battery and print host (`RootHost`), the active file close (`ActiveFileClose`), the IRQ entry and the `xm1_vendor_usb_task` native task entry around the pump, and the producer of the stop flag `0x01469768+0x24`.
+
 ### Intended repairs and comparison scope
 
 - Configuration requests use checked page/offset/span arithmetic and an explicit reply-buffer capacity. Wrapped `offset + length - 1` and writes beyond the prepared reply no longer receive a stock-equality claim.

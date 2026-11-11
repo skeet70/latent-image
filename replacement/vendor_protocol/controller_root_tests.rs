@@ -170,12 +170,6 @@ impl ProtocolApplication for Application {
 }
 
 #[derive(Default)]
-struct Pump { flushes: u32 }
-impl TransportPump for Pump {
-    fn flush(&mut self) -> Result<(), TransportError> { self.flushes += 1; Ok(()) }
-}
-
-#[derive(Default)]
 struct Host { flags: u32, publications: Vec<Publication> }
 impl RootHost for Host {
     fn battery_flags(&mut self) -> u32 { self.flags }
@@ -242,16 +236,15 @@ struct Bench<'b, 'irq> {
     platform: Platform,
     files: Files,
     application: Application,
-    pump: Pump,
     host: Host,
     rtos: &'b RefCell<Rtos>,
     dps: DpsTransport<'b>,
 }
 impl<'b, 'irq> Bench<'b, 'irq> {
-    fn providers<'a>(&mut self) -> RootProviders<'_, 'b, 'irq, 'b, 'a, Interrupts, Device, Counter, Clock, Timers, Platform, Channels, Files, Application, Pump, Host, Rtos> {
+    fn providers<'a>(&mut self) -> RootProviders<'_, 'b, 'irq, 'b, 'a, Interrupts, Device, Counter, Clock, Timers, Platform, Channels, Files, Application, Host, Rtos> {
         RootProviders {
             start: &mut self.start, machine: &self.clock, domain: Domain::A, timers: &mut self.timers, channels: &mut self.channels,
-            platform: &mut self.platform, files: &mut self.files, application: &mut self.application, pump: &mut self.pump,
+            platform: &mut self.platform, files: &mut self.files, application: &mut self.application,
             host: &mut self.host, rtos: self.rtos, tables: tables(),
             identity: Identity { vendor: "FUJIFILM", product: "X-M1", serial: "1" }, dps: &mut self.dps, prepared: None,
         }
@@ -280,7 +273,7 @@ fn with_bench(test: impl FnOnce(&mut ControllerRoot<'_, Idle>, &mut Bench<'_, '_
     let mut bench = Bench {
         start: StartRuntime { io: Device::default(), irq: &mut irq, timer: Counter(9_999_999), handler: Handler::from_static(0x45000) },
         timers: Timers::default(), clock: Clock::new(), channels: Channels::default(), platform: Platform::default(), files: Files::default(),
-        application: Application::default(), pump: Pump::default(), host: Host::default(), rtos: &rtos,
+        application: Application::default(), host: Host::default(), rtos: &rtos,
         dps: DpsTransport::new(&mut objects, &[]),
     };
     let mut request = [0; 512];
@@ -350,7 +343,8 @@ fn service_request_starts_the_transport_binds_its_table_and_closes() {
         bench.post(Queue36Event::TransportStatus, &[]);
         root.runtime.request_close(&mut *bench.rtos.borrow_mut()).unwrap();
         drive(root, bench);
-        assert_eq!(bench.pump.flushes, 1);
+        assert!(root.pumped().is_empty());
+        assert_eq!(bench.start.io.read16(Register::OutMaskMiddle), 0xfffb);
         assert_eq!(root.runtime.controller.state(), ControllerState::Stopped);
         assert_eq!(bench.platform.closed, [Channel::Zero, Channel::One]);
         assert_eq!(bench.timers.released, [RegistryHandle(1), RegistryHandle(2)]);
@@ -588,5 +582,123 @@ fn a_failed_publication_is_reported_and_the_cell_still_completes() {
         assert_eq!(root.runtime.controller.state(), ControllerState::State2);
         assert!(matches!(root.take_fault(), Some(RootError::Kernel(KernelStatus(-9)))));
         assert!(root.take_fault().is_none());
+    });
+}
+
+fn set_pending(bench: &mut Bench<'_, '_>, bit: u8) {
+    let (register, shift) = match bit {
+        0..=15 => (StartRegister::PendingLow, bit),
+        16..=31 => (StartRegister::PendingMiddle, bit - 16),
+        _ => (StartRegister::PendingHigh, bit - 32),
+    };
+    let value = bench.start.io.start_read16(register);
+    bench.start.io.start_write16(register, value | (1u16 << shift));
+}
+
+fn clear_pending(bench: &mut Bench<'_, '_>) {
+    bench.start.io.start_write16(StartRegister::PendingLow, 0);
+    bench.start.io.start_write16(StartRegister::PendingMiddle, 0);
+    bench.start.io.start_write16(StartRegister::PendingHigh, 0);
+}
+
+#[test]
+fn pump_reports_each_distinguished_bit_in_stock_order() {
+    with_bench(|root, bench| {
+        activate(root, bench, 3);
+        for (bit, expected) in [
+            (0u8, UsbEvent::ControlTransferZero), (1, UsbEvent::ControlTransferOne),
+            (2, UsbEvent::ChannelTwoTransfer), (3, UsbEvent::ChannelTwoRequest),
+            (4, UsbEvent::ChannelThree), (13, UsbEvent::ControlPacket),
+            (18, UsbEvent::ChannelOneTransfer), (31, UsbEvent::BusState),
+            (33, UsbEvent::ControlComplete), (38, UsbEvent::ChannelOneComplete),
+            (44, UsbEvent::TransferReset),
+        ] {
+            root.usb.set_event_mask([0, 0, 0]);
+            set_pending(bench, bit);
+            bench.post(Queue36Event::TransportStatus, &[]);
+            drive(root, bench);
+            assert_eq!(root.pumped().events().collect::<Vec<_>>(), [expected], "pending bit {bit}");
+            assert_eq!(root.runtime.controller.state(), ControllerState::ActiveVendor);
+            clear_pending(bench);
+        }
+    });
+}
+
+#[test]
+fn pump_completion_reset_disconnects_the_active_session() {
+    with_bench(|root, bench| {
+        activate(root, bench, 3);
+        bench.take_task7();
+        root.usb.set_event_mask([0, 0, 0]);
+        set_pending(bench, 46);
+        bench.post(Queue36Event::TransportStatus, &[]);
+        drive(root, bench);
+        assert_eq!(root.pumped().events().collect::<Vec<_>>(), [UsbEvent::CompletionReset]);
+        assert_eq!(root.runtime.controller.state(), ControllerState::State2);
+        assert_eq!(bench.start.io.clock.last(), Some(&ClockLevel::Idle));
+        assert_eq!(bench.take_task7(), [(RequestId(0x1714), vec![0; 8])]);
+    });
+}
+
+#[test]
+fn pump_reports_all_set_bits_in_the_stock_check_order() {
+    with_bench(|root, bench| {
+        activate(root, bench, 3);
+        root.usb.set_event_mask([0, 0, 0]);
+        for bit in [46, 44, 31, 33, 13, 0, 1, 4, 38, 3, 2, 18] { set_pending(bench, bit); }
+        bench.post(Queue36Event::TransportStatus, &[]);
+        drive(root, bench);
+        assert_eq!(root.pumped().events().collect::<Vec<_>>(), UsbEvent::ORDER);
+    });
+}
+
+#[test]
+fn pump_acknowledges_every_reported_bit_and_bit_eighteen() {
+    with_bench(|root, bench| {
+        activate(root, bench, 3);
+        root.usb.set_event_mask([0, 0, 0]);
+        set_pending(bench, 46);
+        set_pending(bench, 13);
+        bench.post(Queue36Event::TransportStatus, &[]);
+        drive(root, bench);
+        assert_eq!(bench.start.io.read16(Register::OutMaskLow), 0xdfff);
+        assert_eq!(bench.start.io.read16(Register::OutMaskMiddle), 0xfffb);
+        assert_eq!(bench.start.io.read16(Register::OutMaskHigh), 0xbfff);
+    });
+}
+
+#[test]
+fn pump_ignores_bits_the_shadow_mask_suppresses() {
+    with_bench(|root, bench| {
+        activate(root, bench, 3);
+        set_pending(bench, 3);
+        bench.post(Queue36Event::TransportStatus, &[]);
+        drive(root, bench);
+        assert!(root.pumped().is_empty());
+        assert_eq!(root.runtime.controller.state(), ControllerState::ActiveVendor);
+        assert_eq!(bench.start.io.read16(Register::OutMaskMiddle), 0xfffb);
+    });
+}
+
+#[test]
+fn pump_transfer_reset_reinitializes_the_endpoint_registers() {
+    with_bench(|root, bench| {
+        activate(root, bench, 3);
+        root.usb.set_event_mask([0, 0, 0]);
+        bench.start.io.write16(Register::InMaskHigh, 0xffff);
+        bench.start.io.start_write16(StartRegister::EndpointControl, 1);
+        bench.start.io.write16(Register::BusSpeed, 0x4000);
+        bench.start.io.write32(Register::OutControl, 0x2000);
+        set_pending(bench, 44);
+        bench.post(Queue36Event::TransportStatus, &[]);
+        drive(root, bench);
+        assert_eq!(root.pumped().events().collect::<Vec<_>>(), [UsbEvent::TransferReset]);
+        assert_eq!(bench.start.io.read32(Register::OutStart), 0);
+        assert_eq!(bench.start.io.read16(Register::InMaskHigh), 0xfffc);
+        assert_eq!(bench.start.io.start_read16(StartRegister::EndpointControl), 0xd);
+        assert_eq!(bench.start.io.read32(Register::OutInitialize), 0x101);
+        assert_eq!(bench.start.io.read16(Register::EndpointPulse), 0xfff);
+        assert_eq!(bench.start.io.read32(Register::OutControl), 0x3000);
+        assert_eq!(root.runtime.controller.state(), ControllerState::ActiveVendor);
     });
 }
