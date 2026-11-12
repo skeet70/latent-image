@@ -11,7 +11,7 @@ mod recipe_edit;
 pub(crate) mod storage_boundary;
 use storage::table;
 use property_table::{PROPERTIES, SLOTS, SPECIALS};
-use storage::{Field, SlotField, FieldValue, HeaderField, MirrorSession, PreviousUpdate, HeaderBackend, SettingsConfiguration, SettingsStorage, SlotDefaultsWindow, TailDefaults};
+use storage::{Field, SlotField, FieldValue, HeaderField, MirrorSession, PreviousUpdate, HeaderBackend, SettingsBackend, SettingsConfiguration, SettingsStorage, SlotDefaultsWindow, TailDefaults};
 pub use storage::{ProfileSelection, SettingsBank, WriteValue};
 use table::{BankDefault, BankOffset, Bits, FieldDefault, Hook, HookedField, Kind, ProfileSelector, Save, SlotDefault, SlotIndex, SlotRecord, Source, SpecialField, SpecialIndex, StockDefault, WriteOnlyPair};
 #[cfg(not(test))]
@@ -366,10 +366,18 @@ pub fn write_property<B: HeaderBackend, C: SettingsConfiguration>(storage: &mut 
 
 /// Where a property write's driver reports land when the caller reads none; `ENGINE_TASK` holds `ENGINE_BUSY` for the whole event.
 #[cfg(not(test))]
-struct DiscardedWrite { mirror: PropertyMirrorOutcome, body: storage::BodyOutcome }
+struct DiscardedWrite {
+    mirror: PropertyMirrorOutcome,
+    #[cfg(property_reload)]
+    body: storage::BodyOutcome,
+}
 #[cfg(not(test))]
 impl DiscardedWrite {
-    const EMPTY: Self = Self { mirror: PropertyMirrorOutcome::NONE, body: storage::BodyOutcome::unchanged() };
+    const EMPTY: Self = Self {
+        mirror: PropertyMirrorOutcome::NONE,
+        #[cfg(property_reload)]
+        body: storage::BodyOutcome::unchanged(),
+    };
 }
 #[cfg(not(test))]
 static mut DISCARDED_WRITE: DiscardedWrite = DiscardedWrite::EMPTY;
@@ -380,7 +388,7 @@ const ENGINE_TASK: u8 = 1;
 
 #[cfg(not(test))]
 #[inline(always)]
-fn write_with_report<B: HeaderBackend, C: SettingsConfiguration>(storage: &mut SettingsStorage<'_, B>, configuration: &C, id: PropertyId, value: WriteValue<ValueBits>, bank: SettingsBank, selection: ProfileSelection, report: &mut DiscardedWrite) -> PropertyWriteOutcome {
+fn write_with_report<B: SettingsBackend, C: SettingsConfiguration>(storage: &mut SettingsStorage<'_, B>, configuration: &C, id: PropertyId, value: WriteValue<ValueBits>, bank: SettingsBank, selection: ProfileSelection, report: &mut DiscardedWrite) -> PropertyWriteOutcome {
     #[cfg(property_reload)]
     if bank == SettingsBank::Active {
         storage.refresh_active_body();
@@ -396,14 +404,14 @@ fn write_with_report<B: HeaderBackend, C: SettingsConfiguration>(storage: &mut S
 #[cfg(not(test))]
 #[cold]
 #[inline(never)]
-fn write_with_local_report<B: HeaderBackend, C: SettingsConfiguration>(storage: &mut SettingsStorage<'_, B>, configuration: &C, id: PropertyId, value: WriteValue<ValueBits>, bank: SettingsBank, selection: ProfileSelection) -> PropertyWriteOutcome {
+fn write_with_local_report<B: SettingsBackend, C: SettingsConfiguration>(storage: &mut SettingsStorage<'_, B>, configuration: &C, id: PropertyId, value: WriteValue<ValueBits>, bank: SettingsBank, selection: ProfileSelection) -> PropertyWriteOutcome {
     let mut report = DiscardedWrite::EMPTY;
     write_with_report(storage, configuration, id, value, bank, selection, &mut report)
 }
 
 #[cfg(not(test))]
 #[inline(always)]
-fn write_discarding<B: HeaderBackend, C: SettingsConfiguration>(storage: &mut SettingsStorage<'_, B>, configuration: &C, id: PropertyId, value: WriteValue<ValueBits>, bank: SettingsBank, selection: ProfileSelection) -> PropertyWriteOutcome {
+fn write_discarding<B: SettingsBackend, C: SettingsConfiguration>(storage: &mut SettingsStorage<'_, B>, configuration: &C, id: PropertyId, value: WriteValue<ValueBits>, bank: SettingsBank, selection: ProfileSelection) -> PropertyWriteOutcome {
     let report = unsafe { &mut *core::ptr::addr_of_mut!(DISCARDED_WRITE) };
     write_with_report(storage, configuration, id, value, bank, selection, report)
 }
