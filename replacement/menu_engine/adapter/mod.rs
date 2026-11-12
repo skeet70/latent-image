@@ -20,7 +20,7 @@ core::arch::global_asm!(include_str!("entry.S"), options(raw));
 use core::ptr::{read_volatile, write_volatile};
 
 use crate::menu_engine::block::{
-    self, decode_into, mirror_last_move_word, mirror_word, BlockWords, RecordTable, BLOCK_ADDRESS, BLOCK_LEN,
+    self, decode_into, last_move_writes, mirror_word, BlockWords, RecordTable, BLOCK_ADDRESS, BLOCK_LEN,
     FIRST_DEPTH_SNAPSHOTS, LAST_MOVE_ADDRESS, ROOT_SNAPSHOT, SECOND_DEPTH_SNAPSHOTS, SNAPSHOT_LEN,
 };
 use crate::menu_engine::engine::{
@@ -113,11 +113,12 @@ fn write_state(state: &EngineState) {
             store_word(BLOCK_ADDRESS + offset as u32, value);
         }
     }
-    for index in 0..2 {
-        let value = mirror_last_move_word(state, index);
-        if Live.last_move_word(index) != value {
-            store_word(LAST_MOVE_ADDRESS + 4 * index as u32, value);
-        }
+    let (class, token) = last_move_writes(state, [Live.last_move_word(0), Live.last_move_word(1)]);
+    if let Some(class) = class {
+        store_word(LAST_MOVE_ADDRESS, class);
+    }
+    if let Some(token) = token {
+        store_word(LAST_MOVE_ADDRESS + 4, token);
     }
 }
 
