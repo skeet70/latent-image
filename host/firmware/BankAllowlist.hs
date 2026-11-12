@@ -622,7 +622,7 @@ forgetEscaped :: (Abstract -> Bool) -> State -> State
 forgetEscaped isSaved state = case escaped state of
   Nothing -> state
   Just (lo, _) ->
-    state {slots = M.filterWithKey (\k value -> k < lo || isSaved value) (slots state)}
+    state {slots = M.filterWithKey (\k value -> toInteger k + 4 <= toInteger lo || isSaved value) (slots state)}
 
 -- | A small index read as signed stack-offset deltas: every value, or the two bounds.
 signedOffsets :: Abstract -> Maybe [Int32]

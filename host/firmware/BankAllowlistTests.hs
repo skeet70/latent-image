@@ -191,7 +191,7 @@ main = do
   recheckedReport <- run allowlist rechecked
   check "a reloaded slot with a range check bounds its store index"
     (not (any (\f -> findingAddress f == callerStart + 40) (violations recheckedReport)))
-  -- A bank veneer that calls stock through a register reaches unanalysed code.
+  -- A bank veneer that calls stock through a register.
   let veneer = fst (function "rb_status_record")
       veneerBytes = replaceFunction "rb_status_record"
         [0xe52de004, slotWord 0xe300c000 stockTarget, slotWord 0xe340c000 (stockTarget `shiftR` 16), 0xe12fff3c, 0xe49de004, 0xe12fff1e] clean
@@ -211,6 +211,10 @@ main = do
   savedReport <- run allowlist savedThroughVeneer
   check "a saved return address survives a call that receives a pointer to a local"
     (not (any (\f -> findingAddress f == callerStart + 32) (violations savedReport)))
+  -- `add r0, sp, #1` exposes entry sp-15, inside the rb_last_status word at -16.
+  unalignedReport <- run allowlist (withCall (slotPrefix ++ [0xe28d0001]))
+  check "an exposed byte below a frame word's start forgets that word"
+    (any (\f -> findingAddress f == callerStart + 36) (violations unalignedReport))
   -- The frame word above the escaped local, not only the escaped span, loses
   -- its value: a span rule keeps the word at sp+4 and proves the store.
   let abovePrefix = slotPrefix ++ [0xe58d4004, 0xe1a0000d]
@@ -234,7 +238,7 @@ main = do
     (any (\f -> findingAddress f == writerSite + 12) (violations writerReport))
   -- A tail-call veneer (`bx r12`) is a call to stock like `blx r12`.
   let tailVeneer = replaceFunction "rb_status_record"
-        [0xe52de004, slotWord 0xe300c000 stockTarget, slotWord 0xe340c000 (stockTarget `shiftR` 16), 0xe12fff1c] clean
+        [slotWord 0xe300c000 stockTarget, slotWord 0xe340c000 (stockTarget `shiftR` 16), 0xe12fff1c] clean
   tailReport <- run allowlist (throughVeneer tailVeneer)
   check "a bx r12 veneer reaching stock forgets the caller's escaped local"
     (any (\f -> findingAddress f == callerStart + 36) (violations tailReport))
@@ -242,7 +246,7 @@ main = do
   -- whatever the second one reaches.
   let chainMiddle = fst (function "rb_status_record")
       chainVeneer = replaceFunction "rb_probe_entry"
-        [0xe52de004, slotWord 0xe300c000 stockTarget, slotWord 0xe340c000 (stockTarget `shiftR` 16), 0xe12fff1c] clean
+        [slotWord 0xe300c000 stockTarget, slotWord 0xe340c000 (stockTarget `shiftR` 16), 0xe12fff1c] clean
       chainCallee = replaceFunction "rb_status_record"
         [0xe92d4002, branchLink (chainMiddle + 4) (fst (function "rb_probe_entry")), 0xe8bd4002, 0xe12fff1e] chainVeneer
   chainReport <- run allowlist (throughVeneer chainCallee)

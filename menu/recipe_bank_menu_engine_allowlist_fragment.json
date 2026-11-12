@@ -59,7 +59,7 @@
   {
    "address": "0x00041a34",
    "name": "xm1_kernel_event_log_append",
-   "source": "decode/loader-40000.dis; appends one 16-byte event record (store type 9 at 0x400a0834, the id, the halfword argument, the value with the thread in the high half and the 0x400c0800 tick) at 0x400a0800 + 16 * index, the kernel's RAM log store that transport/README.md read-log reads"
+   "source": "decode/loader-40000.dis; appends one 16-byte record at 0x400a0834 + 16 * index (index halfword 0x400a081e): type 9, the id, the halfword argument, the value's low half with the thread in the high half, the 0x400c0800 tick and the 0xfff91004 - 0xfff91000 counter difference; the kernel's RAM log store that transport/README.md read-log reads"
   },
   {
    "address": "0x007235d8",
@@ -452,7 +452,7 @@
    "through": {
     "argument": "r0"
    },
-   "reason": "writes the 10-byte RequestOutcome it returns through the caller's sret slot; every caller passes its own frame"
+   "reason": "writes the 10-byte RequestOutcome it returns through the caller's sret slot; its one caller, refresh_active_body, forwards its own return slot"
   },
   {
    "function": "_RNvXNtCsjPY53278zkB_10xm1_kernel10slot_tableNtB2_10StockGuestNtB2_5Guest5enter",
