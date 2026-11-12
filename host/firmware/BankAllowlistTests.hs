@@ -364,6 +364,12 @@ main = do
   savedJoinReport <- run allowlist savedJoinBytes
   check "a span store that can reach a slot only one path pushed is refused"
     (any (\f -> findingAddress f == callerStart + 44 && findingReason f == StackStoreOverSaved) (violations savedJoinReport))
+  -- A register saved after sp has moved is a saved slot like the entry push's.
+  let savedAfterMoveBytes = replaceFunction "rb_assert_one"
+        [0xe52de004, 0xe52d4004, 0xe24dd008, 0xe2011001, 0xe78d3181, 0xe28dd008, 0xe49d4004, 0xe49df004] clean
+  savedAfterMoveReport <- run allowlist savedAfterMoveBytes
+  check "a register saved below the entry stack pointer is a saved slot"
+    (any (\f -> findingAddress f == callerStart + 16 && findingReason f == StackStoreOverSaved) (violations savedAfterMoveReport))
   -- The difference of two frame addresses is a scalar, not an address: it does
   -- not expose the frame, so the slot below the exposed operands survives.
   let differenceBytes = replaceFunction "rb_assert_one"

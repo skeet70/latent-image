@@ -690,7 +690,8 @@ data State = State
     holds :: Maybe Cond
   , -- | The stack-pointer offsets this function has taken the address of.
     escaped :: Maybe (Int32, Int32)
-  , -- | The frame offsets the prologue's register save wrote.
+  , -- | The frame offsets a store wrote the entry value of a callee-saved
+    -- register or the entry link register into.
     savedRegisters :: S.Set Int32
   , -- | The frame offsets the entry push wrote lr into.
     savedReturn :: S.Set Int32
@@ -1022,12 +1023,13 @@ execute context function address instruction state = case instruction of
               stored = storeValues (storeSlots s at size values) values
               -- A pre-indexed store of a callee-saved register at the entry
               -- stack pointer writes a prologue slot.
-              saved = case (rn, rt, width, indexing, at, registerValue address s sp) of
+              entrySaved = case (rn, rt, width, indexing, at, registerValue address s sp) of
                 (Reg 13, Reg n, Word, PreIndexed, StackOffset first, StackOffset 0)
                   | n == 14 || n >= 4 && n <= 12 -> S.singleton first
                 _ -> S.empty
+              saved = entrySaved `S.union` savedWords at size values
               savedReturnSlots
-                | rt == lr = saved
+                | rt == lr = entrySaved
                 | otherwise = S.empty
            in storing (storeCheck s rn at size)
                 ( continue
@@ -1056,7 +1058,12 @@ execute context function address instruction state = case instruction of
                 , StackOffset first <- lowest =
                     [(first + 4 * fromIntegral i, r) | (i, r) <- zip [0 :: Int ..] regs]
                 | otherwise = []
-              saved = S.fromList [offset | (offset, r) <- pushed, r >= Reg 4, r <= Reg 12 || r == lr]
+              written = case lowest of
+                StackOffset first -> [(first + 4 * fromIntegral i, v) | (i, v) <- zip [0 :: Int ..] values]
+                _ -> []
+              saved =
+                S.fromList [offset | (offset, r) <- pushed, r >= Reg 4, r <= Reg 12 || r == lr]
+                  `S.union` S.fromList [offset | (offset, v) <- written, savedValue v]
               savedReturnSlots = S.fromList [offset | (offset, r) <- pushed, r == lr]
               updated =
                 (if wb then setRegister rn end stored else stored)
@@ -1220,8 +1227,18 @@ execute context function address instruction state = case instruction of
   -- A frame address a store leaves in memory the callee can reach.
   storeValues s values = s {escaped = foldl markEscaped (escaped s) values}
 
-  -- Whether [lo, end) of the frame overlaps a word the prologue's register
-  -- save wrote.
+  -- The frame offsets a store writes the entry value of a callee-saved
+  -- register or the entry link register into.
+  savedWords at size values = case at of
+    StackOffset o -> S.fromList [o + 4 * fromIntegral i | (i, v) <- zip [0 :: Int ..] (take (fromIntegral (size `div` 4)) values), savedValue v]
+    _ -> S.empty
+  savedValue value = case value of
+    ReturnAddress -> True
+    Derived (Argument (Reg n)) -> n >= 4 && n <= 11
+    _ -> False
+
+  -- Whether [lo, end) of the frame overlaps a word a store saved a
+  -- callee-saved register or the return address in.
   overlapsSaved s lo end = any (\k -> k + 4 > lo && k < end) (S.toList (savedRegisters s))
 
   -- Findings and the number of proven stores (0 or 1).
