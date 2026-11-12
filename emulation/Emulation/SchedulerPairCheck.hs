@@ -239,17 +239,28 @@ pendingOf = withObject "pending" $ \p -> do
 expect :: Refusal -> Bool -> Either Refusal ()
 expect refusal valid = unless valid (Left refusal)
 
-checkDemandPaging :: DemandPaging -> Either Refusal ()
-checkDemandPaging demand = do
+-- | A plan that records neither a derived stop nor a dropped one predates the derivation and
+-- takes the retained trampoline addresses.
+demandStop :: Plan -> Int -> Maybe Word32
+demandStop plan core
+  | planRole plan == Stock = Just fixed
+  | null (planStops plan) && null (planDroppedStops plan) = Just fixed
+  | otherwise = case [address | Stop domain (Address address) FirstEntryStop <- planStops plan, (domain==DomainA) == (core==0)] of
+      [address] -> Just address
+      _ -> Nothing
+ where fixed = if core==0 then 0x43758 else 0xd3758
+
+checkDemandPaging :: Maybe Word32 -> DemandPaging -> Either Refusal ()
+checkDemandPaging stop demand = do
   let before = demandLoad demand
       after = demandAbort demand
       target = demandTarget demand
       validContext context = drop 13 (demandRegisters context) == [demandSp context,demandLr context,demandPc context]
       sameTask a b = demandCore a==demandCore b && demandTask a==demandTask b
       low pc = pc .&. complement 0x40000000
-      loadPc = if demandCore before==0 then 0x43758 else 0xd3758
   expect DemandPagingState (validContext before && validContext after && sameTask before after && demandTask before/=0)
-  expect DemandPagingState (low (demandPc before)==loadPc && demandPc after==0xc && demandCpsr after .&. 0x1f==0x17)
+  expect DemandPagingState (case stop of Just expected -> low (demandPc before)==expected; Nothing -> False)
+  expect DemandPagingState (demandPc after==0xc && demandCpsr after .&. 0x1f==0x17)
   expect DemandPagingState (demandAbortCount demand==demandLoadCount demand+1 && demandInstructions after>demandInstructions before)
   expect DemandPagingState (demandSpsr demand==demandCpsr before && demandSpsr demand .&. 0xff==0x53)
   expect DemandPagingState (demandIfsr demand .&. 0x140f==13 && demandIfar demand==target && demandLr after>=4 && demandLr after-4==target)
@@ -276,12 +287,12 @@ demandWitnesses call =
     (boundaryAddress boundary) (boundaryValue boundary) (boundaryRegisters boundary)
   | Just trace <- [callTrace call], boundary <- traceHistory trace, boundaryKind boundary==PrefetchAbortBoundary]
 
-checkDemandCalls :: Observation -> Either Refusal ()
-checkDemandCalls observation = checkDemandWitnesses (obsDemandPaging observation) (concatMap demandWitnesses (obsCalls observation))
+checkDemandCalls :: Plan -> Observation -> Either Refusal ()
+checkDemandCalls plan observation = checkDemandWitnesses plan (obsDemandPaging observation) (concatMap demandWitnesses (obsCalls observation))
 
-checkDemandWitnesses :: [DemandPaging] -> [DemandWitness] -> Either Refusal ()
-checkDemandWitnesses demands witnessed = do
-  mapM_ checkDemandPaging demands
+checkDemandWitnesses :: Plan -> [DemandPaging] -> [DemandWitness] -> Either Refusal ()
+checkDemandWitnesses plan demands witnessed = do
+  mapM_ (\demand -> checkDemandPaging (demandStop plan (demandCore (demandLoad demand))) demand) demands
   let matches demand witness =
         witnessSemantic witness==DispatchSemantic FirstEntry && witnessCore witness==demandCore (demandLoad demand)
         && witnessTask witness==demandTask (demandLoad demand) && witnessBoundaryTask witness==witnessTask witness
@@ -427,7 +438,7 @@ data CallTotals = CallTotals { hasCompletedClasses :: !Bool, completedCallCount 
 qualify :: B.ByteString -> Plan -> Observation -> Either Refusal Value
 qualify bytes plan observation = do
   qualifyPrefix bytes plan observation
-  checkDemandCalls observation
+  checkDemandCalls plan observation
   let calls = sortOn callFirst (obsCalls observation)
   forM_ calls $ \call -> checkCallEnvelope plan call >> checkCallForIn calls (obsRole observation) call
   let releases = [F.ReleaseWitness (lockTask event) (lockCore event) (lockCall event) (lockAt event) (lockAddress event) (lockValue event)

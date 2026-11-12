@@ -320,6 +320,49 @@ xm1_rust_rlib(
     ],
 )
 
+[
+    xm1_rust_rlib(
+        name = "objects-%s-rlib" % domain,
+        src = "//replacement/rtos_objects:stage/adapter.rs",
+        crate_name = "xm1_rtos_objects_family_adapter",
+        opt_level = "2",
+        data = [
+            "//replacement/rtos_objects:stage/abi.rs",
+            "//replacement/rtos_objects:stage/family.rs",
+            "//replacement/rtos_objects:src/admission.rs",
+            "//replacement/rtos_objects:src/block.rs",
+            "//replacement/rtos_objects:src/create.rs",
+            "//replacement/rtos_objects:src/id.rs",
+            "//replacement/rtos_objects:src/lib.rs",
+            "//replacement/rtos_objects:src/locked.rs",
+            "//replacement/rtos_objects:src/matching.rs",
+            "//replacement/rtos_objects:src/message.rs",
+            "//replacement/rtos_objects:src/order.rs",
+            "//replacement/rtos_objects:src/status.rs",
+            "//replacement/rtos_objects:src/teardown.rs",
+            "//replacement/rtos_objects:src/timeout.rs",
+            "//replacement/rtos_objects:src/wake.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
+        ],
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"stage\"'",
+            "--cfg",
+            "'feature=\"family\"'",
+            "--cfg",
+            "'feature=\"component\"'",
+            "-C",
+            "llvm-args=-enable-machine-outliner=always",
+            "-C",
+            "llvm-args=-machine-outliner-reruns=1",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
 _ARCHIVES = {
     "a": [
         ":platform-root",
@@ -335,6 +378,7 @@ _ARCHIVES = {
         ":global-lock-rlib",
         ":cyclic-a-rlib",
         ":timer-a-rlib",
+        ":objects-a-rlib",
     ],
     "b": [
         ":platform-root",
@@ -350,6 +394,7 @@ _ARCHIVES = {
         ":global-lock-rlib",
         ":cyclic-b-rlib",
         ":timer-b-rlib",
+        ":objects-b-rlib",
     ],
 }
 
@@ -486,6 +531,16 @@ haskell_test(
         "//replacement/startup_artifact:Fixtures.hs",
     ],
     main_file = "stage/Tests.hs",
+    args = [
+        "$(rootpath carriers.json)",
+        "$(rootpath :platform-a.symbols)",
+        "$(rootpath :platform-b.symbols)",
+    ],
+    data = [
+        "carriers.json",
+        ":platform-a.symbols",
+        ":platform-b.symbols",
+    ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":platform-artifact",

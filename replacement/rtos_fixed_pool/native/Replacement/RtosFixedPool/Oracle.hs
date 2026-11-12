@@ -38,12 +38,14 @@ import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR)
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import Data.List (isPrefixOf, sort, nub)
-import Data.Word (Word32, Word8)
+import Data.Word (Word32, Word8, Word64)
 import Emulation.CachedNativeBatch (BatchReuse, cachedObservedBatch)
+import Emulation.Judge (StockEvidence (..), evidenceAt)
 import Emulation.NativeCase (caseIdText)
 import qualified Emulation.NativeObservation as N
 import Emulation.NativeObservation
-  ( KernelObservation (..)
+  ( InstructionCount (..)
+  , KernelObservation (..)
   , NativeObservation (..)
   , Ordered (..)
   , Register (..)
@@ -359,13 +361,17 @@ data Case = Case
   , caseResume :: Bool
   }
 
-data Image = Image {imageBase :: Word32, imageBytes :: B.ByteString, imageSymbols :: [Agg.AggregateSymbol], imagePlacements :: [Agg.SectionPlacement]}
+data Image = Image {imageBase :: Word32, imageBytes :: B.ByteString, imageSymbols :: [Agg.AggregateSymbol], imagePlacements :: [Agg.SectionPlacement], imageCarriers :: [(Word32, Word32)], imageFill :: Word32}
 
 data Run = Run
   { runDomain :: Domain
   , runCases :: [(String, Either String [String])]
   , runMatches :: Int
   , runReuse :: (BatchReuse, BatchReuse)
+  , runControls :: [(String, Bool)]
+  , runStockInstructions :: [(String, Word64)]
+  , runEvidence :: [(String, (Word32, Word32, Int))]
+  , runGuards :: [(String, Either String [String])]
   }
 
 data Page = Page RegionId GuestAddress Int Permission B.ByteString
@@ -741,6 +747,25 @@ cases facts executing =
           , byte (taskAddress facts executing 2 + tfState (factsTask facts)) (stReady (factsStates facts))
           , eq (waitResult facts executing 2) (fromIntegral (-49 :: Int))
           , eq (queueCell facts executing 1) (controlAddress facts executing 1)
+          ])
+      , caseDifference = Just "fixed-pool-delete-stranded-waiter"
+      }
+  , (plain "delete-two-waiters" Delete executing 1
+      (created facts executing 1 0 1 8 poolRegion
+        ++ twoWaiters facts executing 1 executing (waiterSlot, 3) (secondWaiterSlot, 5))
+      0 0 False
+      [ eq (existsCell facts executing 1) 0
+      , byte (taskAddress facts executing waiterSlot + tfState (factsTask facts)) (queuedState facts)
+      , byte (taskAddress facts executing secondWaiterSlot + tfState (factsTask facts)) (queuedState facts)
+      ])
+      { caseOwned = Just (Expectation 0 True
+          [ eq (existsCell facts executing 1) 0
+          , byte (taskAddress facts executing waiterSlot + tfState (factsTask facts)) (stReady (factsStates facts))
+          , byte (taskAddress facts executing secondWaiterSlot + tfState (factsTask facts)) (stReady (factsStates facts))
+          , eq (waitResult facts executing waiterSlot) (fromIntegral (-49 :: Int))
+          , eq (waitResult facts executing secondWaiterSlot) (fromIntegral (-49 :: Int))
+          , eq (queueCell facts executing 1) (controlAddress facts executing 1)
+          , eq (queueCell facts executing 1 + wqPrev (factsWaitQueue facts)) (controlAddress facts executing 1)
           ])
       , caseDifference = Just "fixed-pool-delete-stranded-waiter"
       }
@@ -1180,7 +1205,8 @@ codeBounds domain role owned =
 
 codeBytes :: Domain -> Role -> Image -> Image -> B.ByteString
 codeBytes domain role loader owned
-  | role == OwnedRole, aggregate owned = install (imageBase owned) (imageBytes owned) original
+  | role == OwnedRole, aggregate owned =
+      either error id (Agg.installCarriers base original (imageFill owned) (imageSymbols owned) (imagePlacements owned) (Agg.AggregateImage (imageBase owned) (imageBytes owned)) (imageCarriers owned))
   | otherwise = withTimer (if role == OwnedRole then foldl patch original (ownedSpans domain role owned) else original)
   where
     (base, top) = codeBounds domain role owned
@@ -1590,17 +1616,38 @@ runFamily runner cacheRoot directory facts executing stock owned = do
         | otherwise =
             let installed = codeBytes executing OwnedRole stock owned
                 (base, top) = codeBounds executing OwnedRole owned
-                offset = fromIntegral (imageBase owned - base)
-                size = B.length (imageBytes owned)
+                covered at = any (\(lo, bytes) -> lo <= at && at < lo + bytes) spans
+                spans = [(Agg.symbolAddress s, Agg.symbolSize s) | s <- imageSymbols owned, Agg.symbolSize s > 0]
+                     ++ [(Agg.placementAddress p, Agg.placementBytes p) | p <- imagePlacements owned, Agg.placementBytes p > 0]
+                carrierBytes (address, size) =
+                  [ (off, B.index installed (fromIntegral (address - base) + off), address + fromIntegral off)
+                  | off <- [0 .. fromIntegral size - 1] ]
+                imageByte address = B.index (imageBytes owned) (fromIntegral (address - imageBase owned))
+                fillByte off = B.index (B.pack [fromIntegral (imageFill owned `shiftR` shift) | shift <- [0,8,16,24]]) (off `mod` 4)
                 canonicalBytes = codeBytes executing StockRole stock owned
                 (stockBase, stockTop) = codeBounds executing StockRole owned
                 canonical address =
                   B.index installed (fromIntegral (address - base)) == B.index canonicalBytes (fromIntegral (address - stockBase))
+                outside address = all (\(lo, size) -> address < lo || address >= lo + size) (imageCarriers owned)
+                (low, high) = (max base stockBase, min top stockTop)
              in [("whole-effective-carrier-bytes", Right
-                    ["effective carrier bytes changed" | B.take size (B.drop offset installed) /= imageBytes owned])
+                    (["effective carrier byte changed where a symbol or placement covers it" | extent <- imageCarriers owned
+                     , (_, actual, address) <- carrierBytes extent, covered address, actual /= imageByte address]
+                     ++ ["effective carrier slack byte is not the fill word" | extent <- imageCarriers owned
+                     , (off, actual, address) <- carrierBytes extent, not (covered address), actual /= fillByte off]))
                 , ("canonical-unowned-gap-bytes", Right
                     ["canonical unowned bytes changed" | not (all canonical
-                      [address | address <- [max base stockBase .. min top stockTop - 1]
-                      , address < imageBase owned || address >= imageBase owned + fromIntegral size])])]
-      allResults = results ++ controls ++ refusalResults ++ payloadResults
-  pure (Run executing allResults (length [() | (_, Right []) <- allResults]) (stockReuse, ownedReuse))
+                      [address | address <- [low .. high - 1], outside address])])]
+      controlRows = [(name, result == Right []) | (name, result) <- controls ++ refusalResults]
+      stockInstructions =
+        [ (caseName one, instructionCount (nativeInstructions original))
+        | (one, _) <- stockCases
+        , Just original <- [M.lookup (emittedId executing one) reference]
+        ]
+  evidence <- forM stockCases $ \(one, _) -> do
+    let ident = emittedId executing one
+        entry = entries executing (caseService one)
+        size = maybe 4 id (lookup entry (extents executing))
+    found <- evidenceAt (directory </> "stock" </> (ident ++ ".native-result.json")) entry size
+    pure (caseName one, (entry, size, evidenceTrace found + evidenceProvenance found))
+  pure (Run executing results (length [() | (_, Right []) <- results]) (stockReuse, ownedReuse) controlRows stockInstructions evidence payloadResults)

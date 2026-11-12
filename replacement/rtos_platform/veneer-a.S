@@ -780,3 +780,36 @@ timer_veneer initialize
 timer_veneer insert
 timer_veneer remove
 timer_veneer tick
+
+.macro flag_veneer name
+.section .veneer.family_flag_\name,"ax",%progbits
+.global xm1_platform_veneer_family_flag_\name
+.type xm1_platform_veneer_family_flag_\name,%function
+xm1_platform_veneer_family_flag_\name:
+    b xm1_rtos_objects_family_flag_\name
+.size xm1_platform_veneer_family_flag_\name, .-xm1_platform_veneer_family_flag_\name
+.endm
+
+flag_veneer create
+flag_veneer delete
+flag_veneer set
+flag_veneer set_handler
+flag_veneer clear
+flag_veneer wait
+flag_veneer poll
+flag_veneer timed_wait
+
+.macro helper_veneer name, target
+.section .veneer.\name,"ax",%progbits
+.global xm1_platform_veneer_\name
+.type xm1_platform_veneer_\name,%function
+xm1_platform_veneer_\name:
+    b \target
+.size xm1_platform_veneer_\name, .-xm1_platform_veneer_\name
+.endm
+
+helper_veneer family_release, xm1_rtos_objects_release
+helper_veneer helper_release, xm1_rtos_objects_wait_release
+helper_veneer helper_block, xm1_rtos_objects_wait_block
+helper_veneer helper_block_timed, xm1_rtos_objects_wait_block_timed
+helper_veneer helper_check, xm1_rtos_objects_check

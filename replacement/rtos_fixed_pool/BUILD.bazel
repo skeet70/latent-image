@@ -111,6 +111,7 @@ haskell_library(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         "//emulation:cached-native-batch",
+        "//emulation:judge-lib",
         "//emulation:native-adapter",
         "//emulation:native-observation",
         "//emulation:owned-case",
@@ -133,11 +134,14 @@ haskell_binary(
         ":fixed-pool-b.bin",
         ":fixed-pool-a.symbols",
         ":fixed-pool-b.symbols",
+        "//replacement/rtos_platform:carriers.json",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":family-oracle",
         "//emulation:cached-native-batch",
+        "//emulation:case-sha256",
+        "//emulation:suite-audit-lib",
         "//emulation:fujimod-native-paths",
         "//host:aeson",
         "//host:base",

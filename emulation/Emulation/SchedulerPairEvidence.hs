@@ -117,7 +117,7 @@ earlierSemantic previous candidate@(SemanticFailureDetails first _ _ _ _ _ _) = 
 qualifyEvidence :: B.ByteString -> Plan -> Observation -> CallEvidence -> Either Refusal J.Value
 qualifyEvidence bytes plan observation evidence = do
   qualifyPrefix bytes plan observation
-  checkDemandWitnesses (obsDemandPaging observation) (evidenceDemand evidence)
+  checkDemandWitnesses plan (obsDemandPaging observation) (evidenceDemand evidence)
   case evidenceLimit evidence of
     Just (kind, count, limit) -> Left (BudgetExceeded kind count limit)
     Nothing -> pure ()

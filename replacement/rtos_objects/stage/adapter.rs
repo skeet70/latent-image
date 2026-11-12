@@ -22,7 +22,7 @@ use objects::locked::{ObjectGuard, ObjectLock};
 use objects::wake::{release, DispatchTarget, Release, SchedulerGuard, Selection, Wake};
 use objects::*;
 
-#[cfg(all(target_arch = "arm", not(test)))]
+#[cfg(all(target_arch = "arm", not(test), not(feature = "component")))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
     loop {}
