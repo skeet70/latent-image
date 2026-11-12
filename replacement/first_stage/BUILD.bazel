@@ -4,11 +4,15 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files(["format.rs"])
 
+# The first-record image is 10,268 bytes, SHA-256 7f981088... (E-FIRST-RECORD-FLASH-BOOT-CHECK-150),
+# and its three fault controls are derived from this source. Opted out until the
+# stage is requalified, at the latest in the runner requalification.
 xm1_rust_staticlib(
     name = "first-stage-rust",
     src = "src.rs",
     crate_name = "xm1_first_stage",
     data = ["media.rs", "images.rs", "format.rs", "engine.rs"],
+    strict_align = False,
 )
 
 xm1_rust_elf(
@@ -27,6 +31,7 @@ xm1_rust_staticlib(
     crate_name = "xm1_first_stage",
     data = ["media.rs", "images.rs", "format.rs", "engine.rs"],
     rustc_flags = ["--cfg", "first_stage_fault"],
+    strict_align = False,
 )
 
 xm1_rust_elf(
@@ -47,6 +52,7 @@ xm1_rust_staticlib(
     crate_name = "xm1_first_stage",
     data = ["media.rs", "images.rs", "format.rs", "engine.rs"],
     rustc_flags = ["--cfg", "first_stage_handler_tail_fault"],
+    strict_align = False,
 )
 
 xm1_rust_elf(

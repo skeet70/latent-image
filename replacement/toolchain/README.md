@@ -17,13 +17,16 @@ The `devenv.lock` revision fixes rustc; the facts file fixes the core and compil
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 ```
 
-`xm1_rust_staticlib(name, src, crate_name, edition, opt_level, rustc_flags, data)` compiles one crate root with:
+`xm1_rust_staticlib(name, src, crate_name, edition, opt_level, rustc_flags, data, strict_align)` compiles one crate root with:
 
 ```sh
 rustc --target=armv7r-none-eabi --crate-type=staticlib \
   -C panic=abort -C relocation-model=static -C target-cpu=cortex-r4f \
-  -C codegen-units=1 -C debuginfo=0 -C opt-level=z SRC -o NAME.a
+  -C codegen-units=1 -C debuginfo=0 -C opt-level=z \
+  -C target-feature=+strict-align SRC -o NAME.a
 ```
+
+`xm1_rust_rlib` takes the same flags. `strict_align` defaults to `True`; `strict_align = False` emits `-C target-feature=-strict-align` for an image whose pinned bytes must not move.
 
 `xm1_rust_elf(name, rust_staticlib, c_srcs, asm_srcs, asm_defines, link_script, link_includes, entry, extra_ldflags, link_map)` compiles C with `--target=armv7r-none-eabi -march=armv7-r -marm -mfloat-abi=soft -ffreestanding -nostdlib -fno-builtin -fno-stack-protector -mno-unaligned-access -Oz`, assembles each `.S` with `-D` for every `asm_defines` name, links with LLD and emits four files by default in the caller's package:
 

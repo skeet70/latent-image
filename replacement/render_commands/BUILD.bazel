@@ -32,6 +32,5 @@ xm1_rust_rlib(
     out = "librender_commands.rlib",
     data = [":module"],
     rlib_deps = {"libm": ":libm-arm"},
-    rustc_flags = ["-C", "target-feature=+strict-align"],
     visibility = ["//visibility:public"],
 )

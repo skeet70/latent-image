@@ -12,7 +12,7 @@ _RUST_DATA = glob(["src/*.rs"], exclude = ["src/lib.rs"]) + [
 ]
 
 _ARM_FLAGS = "--target=armv7r-none-eabi -C panic=abort -C relocation-model=static -C target-cpu=cortex-r4f -C codegen-units=1 -C target-feature=+strict-align -C jump-tables=no -C opt-level=z"
-_PROPERTY_FLAGS = ["-C", "target-feature=+strict-align", "-C", "jump-tables=no", "--cfg", "property_embedded_storage", "--cfg", "settings_storage_firmware", "--cfg", "settings_storage_property"]
+_PROPERTY_FLAGS = ["-C", "jump-tables=no", "--cfg", "property_embedded_storage", "--cfg", "settings_storage_firmware", "--cfg", "settings_storage_property"]
 _CORE_DEFECTS = [
     "storage_open_removed", "storage_close_before_set", "storage_bracket_bank1",
     "storage_read_before_open", "storage_pair_before_close", "storage_record_save_at_bank",
@@ -146,7 +146,7 @@ sh_test(
         crate_name = "xm1_settings_storage_custom",
         data = _RUST_DATA + [variant.record, ":area3-validator-arm-rlib"],
         rustc_flags = [
-            "-C", "target-feature=+strict-align", "-C", "jump-tables=no",
+            "-C", "jump-tables=no",
             "--cfg", "settings_storage_library", "--cfg", "settings_custom_native",
             "--cfg", "settings_bank_native", "--cfg", "settings_storage_firmware",
             "--extern", "record_store=$(location " + variant.record + ")",

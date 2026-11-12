@@ -5,7 +5,7 @@ load("//replacement/settings_storage:storage_controls.bzl", "PROPERTY_STORAGE_VA
 package(default_visibility = ["//visibility:public"])
 
 # The native runner refuses unaligned accesses, and admission refuses computed branches.
-_RUSTC_FLAGS = ["-C", "target-feature=+strict-align", "-C", "jump-tables=no", "--extern", "xm1_settings_storage_core=$(location //replacement/settings_storage:property-core)"]
+_RUSTC_FLAGS = ["-C", "jump-tables=no", "--extern", "xm1_settings_storage_core=$(location //replacement/settings_storage:property-core)"]
 
 _RUST_DATA = [
     "src/property_table.rs",
@@ -118,7 +118,7 @@ xm1_rust_elf(
         name = "property-service-rust-defect-" + defect.replace("_", "-"),
         src = "src/lib.rs",
         crate_name = "xm1_property_service",
-        rustc_flags = (["-C", "target-feature=+strict-align", "-C", "jump-tables=no", "--extern", "xm1_settings_storage_core=$(location //replacement/settings_storage:property-core-" + defect.replace("_", "-") + ")", "--cfg", defect] if defect in _CORE_DEFECTS else _RUSTC_FLAGS + ["--cfg", "property_defect_" + defect]),
+        rustc_flags = (["-C", "jump-tables=no", "--extern", "xm1_settings_storage_core=$(location //replacement/settings_storage:property-core-" + defect.replace("_", "-") + ")", "--cfg", defect] if defect in _CORE_DEFECTS else _RUSTC_FLAGS + ["--cfg", "property_defect_" + defect]),
         data = _RUST_DATA + ["//replacement/settings_storage:property-core-" + defect.replace("_", "-") if defect in _CORE_DEFECTS else "//replacement/settings_storage:property-core"],
     )
     for defect in _DEFECTS
@@ -154,7 +154,7 @@ xm1_rust_elf(
         src = "src/lib.rs",
         crate_name = "xm1_property_service",
         rustc_flags = [
-            "-C", "target-feature=+strict-align", "-C", "jump-tables=no",
+            "-C", "jump-tables=no",
             "--extern", "xm1_settings_storage_core=$(location //replacement/settings_storage:property-core-control-" + variant + ")",
             "--cfg", flag,
         ],

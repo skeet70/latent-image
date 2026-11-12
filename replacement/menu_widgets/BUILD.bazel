@@ -12,7 +12,6 @@ xm1_rust_staticlib(
     src = "cases/value_picker.rs",
     data = [":module"],
     rlib_deps = {"render_commands": "//replacement/render_commands:runtime-arm", "libm": "//replacement/render_commands:libm-arm"},
-    rustc_flags = ["-C", "target-feature=+strict-align"],
     opt_level = "2",
     testonly = True,
 )
@@ -31,7 +30,7 @@ xm1_rust_staticlib(
     src = "cases/value_picker.rs",
     data = [":module"],
     rlib_deps = {"render_commands": "//replacement/render_commands:runtime-arm", "libm": "//replacement/render_commands:libm-arm"},
-    rustc_flags = ["-C", "target-feature=+strict-align", "--cfg=picker_recipe_bank"],
+    rustc_flags = ["--cfg=picker_recipe_bank"],
     opt_level = "2",
     testonly = True,
 )
@@ -67,7 +66,7 @@ sh_test(
     src = "cases/value_picker.rs",
     data = [":module"],
     rlib_deps = {"render_commands": "//replacement/render_commands:runtime-arm", "libm": "//replacement/render_commands:libm-arm"},
-    rustc_flags = ["-C", "target-feature=+strict-align", "--cfg=picker_" + control.replace("-", "_")],
+    rustc_flags = ["--cfg=picker_" + control.replace("-", "_")],
     opt_level = "2",
     testonly = True,
 ) for control in ["selected-unstyled", "scroll-ignored", "hidden-drawn", "disabled-offered", "report-offset-wrong"]]
@@ -86,7 +85,6 @@ xm1_rust_staticlib(
     src = "native/tree.rs",
     data = [":module"],
     rlib_deps = {"render_commands": "//replacement/render_commands:runtime-arm", "libm": "//replacement/render_commands:libm-arm"},
-    rustc_flags = ["-C", "target-feature=+strict-align"],
     opt_level = "2",
     testonly = True,
 )
@@ -122,7 +120,7 @@ sh_test(
     src = "native/tree.rs",
     data = [":module"],
     rlib_deps = {"render_commands": "//replacement/render_commands:runtime-arm", "libm": "//replacement/render_commands:libm-arm"},
-    rustc_flags = ["-C", "target-feature=+strict-align", "--cfg=tree_" + control.replace("-", "_")],
+    rustc_flags = ["--cfg=tree_" + control.replace("-", "_")],
     opt_level = "2",
     testonly = True,
 ) for control in ["selected-unstyled", "page-off-by-one", "side-state-wrong"]]
@@ -141,7 +139,7 @@ xm1_rust_staticlib(
     src = "native/pane_drawer.rs",
     data = [":module", "//replacement/render_adapter:module"],
     rlib_deps = {"render_commands": "//replacement/render_commands:runtime-arm", "libm": "//replacement/render_commands:libm-arm"},
-    rustc_flags = ["-C", "target-feature=+strict-align", "--cfg=rb_pane_native"],
+    rustc_flags = ["--cfg=rb_pane_native"],
     opt_level = "2",
     testonly = True,
 )
@@ -160,7 +158,7 @@ xm1_rust_elf(
     src = "native/pane_drawer.rs",
     data = [":module", "//replacement/render_adapter:module"],
     rlib_deps = {"render_commands": "//replacement/render_commands:runtime-arm", "libm": "//replacement/render_commands:libm-arm"},
-    rustc_flags = ["-C", "target-feature=+strict-align", "--cfg=rb_pane_native", "--cfg=" + ("rb_pane_preview_mutant" if control == "preview-label-wrong" else "pane_" + control.replace("-", "_"))],
+    rustc_flags = ["--cfg=rb_pane_native", "--cfg=" + ("rb_pane_preview_mutant" if control == "preview-label-wrong" else "pane_" + control.replace("-", "_"))],
     opt_level = "2",
     testonly = True,
 ) for control in ["selected-unstyled", "page-off-by-one", "scroll-ignored", "hidden-drawn", "preview-label-wrong"]]

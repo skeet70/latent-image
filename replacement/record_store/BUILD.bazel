@@ -3,12 +3,17 @@ load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "h
 
 package(default_visibility = ["//visibility:public"])
 
+# //replacement/record_store_carrier:record-store-image bytes are pinned by
+# E-RECORD-STORE-CUTOVER-PAIR-150 and its nine control images are derived from
+# this archive. All ten opt out until that image is requalified, at the latest
+# in the runner requalification.
 xm1_rust_staticlib(
     name = "record-store-rust-unchecked",
     src = "src/lib.rs",
     data = ["src/guest.rs", "src/lifecycle.rs"],
     crate_name = "xm1_record_store",
     rustc_flags = ["'--cfg=feature=\"guest\"'"],
+    strict_align = False,
     visibility = ["//visibility:private"],
 )
 
@@ -18,6 +23,7 @@ xm1_rust_staticlib(
     data = ["src/guest.rs", "src/lifecycle.rs"],
     crate_name = "xm1_record_store",
     rustc_flags = ["'--cfg=feature=\"guest\"'", "'--cfg=feature=\"control-" + str(control) + "\"'"],
+    strict_align = False,
     visibility = ["//visibility:private"],
 ) for control in range(1, 10)]
 

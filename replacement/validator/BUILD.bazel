@@ -40,12 +40,17 @@ genrule(
     tools = [_RUSTC, _CC],
 )
 
+# area3-arm.bin is 288 bytes, SHA-256 887d0161..., and area3-arm-faulty.bin
+# 57028dcb... (identities-20261028.json, E-AREA3-VALIDATOR-REPLACEMENT-150).
+# Opted out until those images are requalified, at the latest in the runner
+# requalification.
 xm1_rust_staticlib(
     name = "area3-rust",
     src = "validator.rs",
     crate_name = "area3_validator",
     opt_level = "z",
     rustc_flags = ["--cfg", "xm1_freestanding"],
+    strict_align = False,
 )
 
 xm1_rust_staticlib(
@@ -54,6 +59,7 @@ xm1_rust_staticlib(
     crate_name = "area3_validator",
     opt_level = "z",
     rustc_flags = ["--cfg", "xm1_freestanding"],
+    strict_align = False,
 )
 
 xm1_rust_elf(

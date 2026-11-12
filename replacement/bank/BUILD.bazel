@@ -1,9 +1,15 @@
 load("//replacement/toolchain:rust.bzl", "xm1_rust_staticlib")
 
+# The RAM-push review record pins this archive's bytes
+# (`rust_object_replacement_bank` in transport/ram-push-review.json) and
+# //transport:ram-push-link-digests pins its linked images at both reference
+# bases. Opted out until that image is requalified, at the latest in the runner
+# requalification.
 xm1_rust_staticlib(
     name = "bank",
     src = "lib.rs",
     crate_name = "bank",
+    strict_align = False,
     data = [
         "//replacement/capture:module",
         "//replacement/menu_engine:module",

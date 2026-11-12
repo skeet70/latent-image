@@ -21,6 +21,9 @@ _TARGET_FLAGS = [
     "debuginfo=0",
 ]
 
+def _strict_align_flags(strict_align):
+    return ["-C", "target-feature=" + ("+strict-align" if strict_align else "-strict-align")]
+
 _C_FLAGS = [
     "--target=armv7r-none-eabi",
     "-march=armv7-r",
@@ -58,6 +61,7 @@ def xm1_rust_staticlib(
         rustc_flags = [],
         data = [],
         rlib_deps = {},
+        strict_align = True,
         testonly = False,
         visibility = None):
     """Compiles one no_std crate root to a staticlib for armv7r-none-eabi.
@@ -75,7 +79,7 @@ def xm1_rust_staticlib(
             "--crate-type=staticlib",
             "-C",
             "opt-level=%s" % opt_level,
-        ] + _TARGET_FLAGS + rustc_flags + [
+        ] + _TARGET_FLAGS + _strict_align_flags(strict_align) + rustc_flags + [
             "--extern=%s=$(location %s)" % (crate, label)
             for crate, label in rlib_deps.items()
         ] + [
@@ -205,6 +209,7 @@ def xm1_rust_rlib(
         data = [],
         rlib_deps = {},
         out = None,
+        strict_align = True,
         testonly = False,
         visibility = None):
     """Compiles one no_std crate root to an rlib for armv7r-none-eabi.
@@ -224,7 +229,7 @@ def xm1_rust_rlib(
             "--crate-type=rlib",
             "-C",
             "opt-level=%s" % opt_level,
-        ] + _TARGET_FLAGS + rustc_flags + [
+        ] + _TARGET_FLAGS + _strict_align_flags(strict_align) + rustc_flags + [
             "--extern=%s=$(location %s)" % (crate, label)
             for crate, label in rlib_deps.items()
         ] + [
