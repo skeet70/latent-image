@@ -1749,6 +1749,17 @@ sh_binary(
 )
 
 sh_binary(
+    name = "saclac-census",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-saclac-census"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "saclac-census-sites",
+    srcs = ["saclac-census-sites.json"],
+)
+
+sh_binary(
     name = "own-first-pair-observe",
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-own-first-pair"],
     visibility = ["//visibility:public"],
@@ -2334,6 +2345,61 @@ haskell_test(
         "//host:base",
         "//host:bytestring",
         "//host:host-support",
+    ],
+)
+
+haskell_library(
+    name = "census-lib",
+    srcs = ["Emulation/Census.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+    ],
+)
+
+haskell_binary(
+    name = "census",
+    srcs = ["CensusMain.hs"],
+    main_file = "CensusMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":census-lib",
+        ":case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "census-tests",
+    size = "small",
+    srcs = ["CensusTests.hs"],
+    main_file = "CensusTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":census-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:vector",
     ],
 )
 
