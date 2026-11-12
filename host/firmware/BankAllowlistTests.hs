@@ -328,6 +328,15 @@ main = do
   rrxReport <- run allowlist rrxBytes
   check "a rotate-right-extend of an exact pointer is not the pointer"
     (any (\f -> findingAddress f == callerStart + 16 && findingReason f == Unproven StoreAccess (Index (StockAddress 0))) (violations rrxReport))
+  -- RRX in a register-offset address takes the carry, so the store is not the
+  -- base pointer's declared cell.
+  let rrxOffsetBytes = replaceFunction "rb_assert_one"
+        [slotWord 0xe3004000 writableBase, slotWord 0xe3404000 (writableBase `shiftR` 16), 0xe3a01008, 0xe3a03001,
+         0xe7843061, 0xe12fff1e] clean
+  rrxOffsetReport <- run allowlist rrxOffsetBytes
+  check "a rotate-right-extend in a register-offset address is not the index"
+    (any (\f -> findingAddress f == callerStart + 16
+      && findingReason f == Unproven StoreAccess (Index (BankObject "rb_last_status"))) (violations rrxOffsetReport))
   -- The entry push's return slot is exempt only where every incoming path
   -- wrote it. Each path sets the flags before the join so the two states meet.
   let joinProgram =
@@ -339,6 +348,22 @@ main = do
   joinReport <- run allowlist joinBytes
   check "a return address exempt on one path only does not survive the join"
     (any (\f -> findingAddress f == callerStart + 56 && findingReason f == UnboundedBranch) (violations joinReport))
+  -- A call that received a local's address drops the pushed register slots,
+  -- but a span store that can still reach one is refused.
+  let savedSpanBytes = replaceFunction "rb_assert_one"
+        [0xe92d4010, 0xe24dd008, 0xe2004002, 0xe1a0000d, branchLink (callerStart + 16) stockTarget,
+         0xe78d3104, 0xe28dd008, 0xe8bd8010] clean
+  savedSpanReport <- run allowlist savedSpanBytes
+  check "a span store that can reach a pushed register slot is refused"
+    (any (\f -> findingAddress f == callerStart + 20 && findingReason f == StackStoreOverSaved) (violations savedSpanReport))
+  -- A slot only one incoming path pushed is still a saved slot for a span
+  -- store that can reach it after the join.
+  let savedJoinBytes = replaceFunction "rb_assert_one"
+        [0xe3500000, 0x1a000002, 0xe92d4010, 0xe3520000, 0xea000003, 0xe24dd008, 0xe58d4000, 0xe58de004,
+         0xe3530000, 0xe2011001, 0xe24dd008, 0xe78d3181, 0xe28dd008, 0xe8bd8010] clean
+  savedJoinReport <- run allowlist savedJoinBytes
+  check "a span store that can reach a slot only one path pushed is refused"
+    (any (\f -> findingAddress f == callerStart + 44 && findingReason f == StackStoreOverSaved) (violations savedJoinReport))
   -- The difference of two frame addresses is a scalar, not an address: it does
   -- not expose the frame, so the slot below the exposed operands survives.
   let differenceBytes = replaceFunction "rb_assert_one"
@@ -406,6 +431,8 @@ main = do
   let unpredictablePc =
         [ ("LDM writeback", 0xe93f0fff)
         , ("pre-indexed LDR", 0xe5bf0004)
+        , ("pre-indexed LDRH", 0xe1ff00b2)
+        , ("pre-indexed LDRD", 0xe1ef00d8)
         , ("register-shifted MOV Rd", 0xe1a0f110)
         , ("register-shifted ADD Rn", 0xe08f0211)
         , ("register-shifted MOV Rm", 0xe1a0011f)
@@ -413,6 +440,10 @@ main = do
         ]
       admittedUnpredictable = [label | (label, word) <- unpredictablePc, A32.decode frameSetup word /= A32.Rejected Unadmitted]
   check ("the decoder refuses every unpredictable program-counter form; admitted: " ++ show admittedUnpredictable) (null admittedUnpredictable)
+  -- An empty block-transfer register list is UNPREDICTABLE.
+  let emptyBlockList = [("LDM", 0xe8900000), ("STM", 0xe92d0000)]
+      admittedEmptyBlock = [label | (label, word) <- emptyBlockList, A32.decode frameSetup word /= A32.Rejected Unadmitted]
+  check ("the decoder refuses an empty block-transfer register list; admitted: " ++ show admittedEmptyBlock) (null admittedEmptyBlock)
   forM_ [elfLow, elfHigh] $ \path -> do
     bytes <- B.readFile path
     image <- either fail pure (parseElf bytes)
@@ -490,6 +521,9 @@ main = do
   expect "pre-indexed load based on the program counter" (fixture frameSetup 0xe5bf0004)
     [(frameSetup, ForbiddenInstruction Unadmitted)]
   expect "register-shifted data processing with the program counter" (fixture frameSetup 0xe1a0f110)
+    [(frameSetup, ForbiddenInstruction Unadmitted)]
+  -- BLX with the program counter is UNPREDICTABLE.
+  expect "BLX with the program counter" (fixture frameSetup 0xe12fff3f)
     [(frameSetup, ForbiddenInstruction Unadmitted)]
   -- Signed halfword multiplies in place of `mov r11, sp`.
   expect "SMLABB" (fixture frameSetup 0xe1030281) []

@@ -228,7 +228,7 @@ decode address word
                 registers = [Reg n | n <- [0 .. 15], testBit word n]
                 base = reg 16 word
                 writeback = testBit word 21
-             in if base == pc && writeback
+             in if (base == pc && writeback) || null registers
                   then Rejected Unadmitted
                   else
                     if testBit word 20
@@ -274,7 +274,8 @@ decode address word
       | otherwise = ShiftedImmediate (reg 0 word) (shiftType word) (fromIntegral (field 11 7 word))
   miscellaneous
     | word .&. 0x0ffffff0 == 0x012fff10 = BranchExchange cond False (reg 0 word)
-    | word .&. 0x0ffffff0 == 0x012fff30 = BranchExchange cond True (reg 0 word)
+    | word .&. 0x0ffffff0 == 0x012fff30 =
+        if reg 0 word == pc then Rejected Unadmitted else BranchExchange cond True (reg 0 word)
     | word .&. 0x0fff0ff0 == 0x016f0f10 = withoutPcDestination [reg 12 word] (Compute cond [reg 12 word])
     | word .&. 0x0ff000f0 == 0x01200070 = Rejected Breakpoint
     | word .&. 0x0ff000f0 == 0x01600070 = Rejected ExceptionReturn

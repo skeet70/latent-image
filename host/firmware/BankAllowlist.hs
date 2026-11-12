@@ -716,7 +716,7 @@ joinState place a b =
     (if comparison a == comparison b then comparison a else Nothing)
     (if holds a == holds b then holds a else Nothing)
     (escapedSpan (escaped a) (escaped b))
-    (savedRegisters a `S.intersection` savedRegisters b)
+    (savedRegisters a `S.union` savedRegisters b)
     (savedReturn a `S.intersection` savedReturn b)
 
 widenState :: (Word32 -> Location) -> [Word32] -> State -> State -> State
@@ -727,7 +727,7 @@ widenState place thresholds old new =
     (if comparison old == comparison new then comparison old else Nothing)
     (if holds old == holds new then holds old else Nothing)
     (escapedSpan (escaped old) (escaped new))
-    (savedRegisters old `S.intersection` savedRegisters new)
+    (savedRegisters old `S.union` savedRegisters new)
     (savedReturn old `S.intersection` savedReturn new)
 
 -- | The flags of `cmp r, #k` (unsigned conditions valid) or `cmn r, #-k` (only EQ and NE).
@@ -1220,9 +1220,9 @@ execute context function address instruction state = case instruction of
   -- A frame address a store leaves in memory the callee can reach.
   storeValues s values = s {escaped = foldl markEscaped (escaped s) values}
 
-  -- Whether [lo, end) of the frame overlaps a slot the prologue's register
+  -- Whether [lo, end) of the frame overlaps a word the prologue's register
   -- save wrote.
-  overlapsSaved s lo end = any (\(k, _) -> k + 4 > lo && k < end && S.member k (savedRegisters s)) (M.toList (slots s))
+  overlapsSaved s lo end = any (\k -> k + 4 > lo && k < end) (S.toList (savedRegisters s))
 
   -- Findings and the number of proven stores (0 or 1).
   storeCheck :: State -> Reg -> Abstract -> Word32 -> ([Finding], Int)
@@ -1351,8 +1351,8 @@ execute context function address instruction state = case instruction of
     Just [target] -> calleeAt target
     _ -> Nothing
   -- Every call forgets the caller's frame words that hold a byte at or above
-  -- the lowest escaped offset, and every frame word below the stack pointer at
-  -- the call, except the prologue's saved registers and return address.
+  -- the lowest escaped offset, except the entry push's lr slot while it holds
+  -- the entry lr, and every frame word below the stack pointer at the call.
   afterCall callee s =
     let clobbered = foldr (`setRegister` Unknown) s [Reg 1, Reg 2, Reg 3, Reg 12, lr]
         reported = setRegister (Reg 0) (maybe Unknown (Derived . Result) callee) clobbered
