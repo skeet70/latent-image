@@ -226,9 +226,14 @@ decode address word
                   2 -> DecrementBefore
                   _ -> IncrementBefore
                 registers = [Reg n | n <- [0 .. 15], testBit word n]
-             in if testBit word 20
-                  then LoadMultiple cond (reg 16 word) mode (testBit word 21) registers
-                  else StoreMultiple cond (reg 16 word) mode (testBit word 21) registers
+                base = reg 16 word
+                writeback = testBit word 21
+             in if base == pc && writeback
+                  then Rejected Unadmitted
+                  else
+                    if testBit word 20
+                      then LoadMultiple cond base mode writeback registers
+                      else StoreMultiple cond base mode writeback registers
       5 -> Branch cond (testBit word 24) (address + 8 + branchOffset)
       6 -> Rejected (Coprocessor (fromIntegral (field 11 8 word)))
       _
@@ -298,23 +303,25 @@ decode address word
         indexing = transferIndexing
         rt = reg 12 word
         rn = reg 16 word
-     in case (field 6 5 word, load) of
-          _ | indexing == Nothing -> Rejected UnprivilegedTransfer
-          (1, False) -> Store cond Half rt rn offset (unwrap indexing)
-          (1, True) -> Load cond Half False rt rn offset (unwrap indexing)
-          (2, False) | rt == pc || rt == lr -> Rejected Unadmitted
-          (3, False) | rt == pc || rt == lr -> Rejected Unadmitted
-          (2, False) -> Load cond Dual False rt rn offset (unwrap indexing)
-          (2, True) -> Load cond Byte True rt rn offset (unwrap indexing)
-          (3, False) -> Store cond Dual rt rn offset (unwrap indexing)
-          (3, True) -> Load cond Half True rt rn offset (unwrap indexing)
-          _ -> Rejected Unadmitted
+     in case indexing of
+          Nothing -> Rejected UnprivilegedTransfer
+          Just mode
+            | rn == pc && mode /= OffsetOnly -> Rejected Unadmitted
+            | otherwise -> case (field 6 5 word, load) of
+                (1, False) -> Store cond Half rt rn offset mode
+                (1, True) -> Load cond Half False rt rn offset mode
+                (2, False) | rt == pc || rt == lr -> Rejected Unadmitted
+                (3, False) | rt == pc || rt == lr -> Rejected Unadmitted
+                (2, False) -> Load cond Dual False rt rn offset mode
+                (2, True) -> Load cond Byte True rt rn offset mode
+                (3, False) -> Store cond Dual rt rn offset mode
+                (3, True) -> Load cond Half True rt rn offset mode
+                _ -> Rejected Unadmitted
   transferIndexing = case (testBit word 24, testBit word 21) of
     (True, False) -> Just OffsetOnly
     (True, True) -> Just PreIndexed
     (False, False) -> Just PostIndexed
     (False, True) -> Nothing
-  unwrap = maybe OffsetOnly id
   singleTransfer offset =
     case transferIndexing of
       Nothing -> Rejected UnprivilegedTransfer
@@ -322,9 +329,12 @@ decode address word
         let width = if testBit word 22 then Byte else Word
             rt = reg 12 word
             rn = reg 16 word
-         in if testBit word 20
-              then Load cond width False rt rn offset indexing
-              else Store cond width rt rn offset indexing
+         in if rn == pc && indexing /= OffsetOnly
+              then Rejected Unadmitted
+              else
+                if testBit word 20
+                  then Load cond width False rt rn offset indexing
+                  else Store cond width rt rn offset indexing
   group1
     | field 27 20 word == 0x30 = if reg 12 word == pc then Rejected Unadmitted else MoveWide cond (reg 12 word) wide
     | field 27 20 word == 0x34 = if reg 12 word == pc then Rejected Unadmitted else MoveTop cond (reg 12 word) wide
@@ -340,12 +350,20 @@ decode address word
     let op = toEnum (fromIntegral (field 24 21 word))
         setsFlags = testBit word 20
         tests = op `elem` [TST, TEQ, CMP, CMN]
+        -- A register-shifted operand with pc in any register field is
+        -- UNPREDICTABLE.
+        registerShiftedPc = case operand of
+          ShiftedRegister rm _ rs -> pc `elem` [reg 12 word, reg 16 word, rm, rs]
+          _ -> False
      in if tests && not setsFlags
           then Rejected Unadmitted
           else
-            if setsFlags && not tests && reg 12 word == pc
-              then Rejected ExceptionReturn
-              else DataProcessing cond op setsFlags (reg 12 word) (reg 16 word) operand
+            if registerShiftedPc
+              then Rejected Unadmitted
+              else
+                if setsFlags && not tests && reg 12 word == pc
+                  then Rejected ExceptionReturn
+                  else DataProcessing cond op setsFlags (reg 12 word) (reg 16 word) operand
   media
     | word .&. 0x0ff000f0 == 0x07f000f0 = Rejected UndefinedEncoding
     | word .&. 0x0fd0f0f0 == 0x0710f010 = Rejected Divide

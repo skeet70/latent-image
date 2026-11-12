@@ -297,6 +297,65 @@ main = do
   offsetReport <- run allowlist offsetBytes
   check "a frame index added to an exact pointer keeps the frame"
     (any (\f -> findingAddress f == offsetStore && findingReason f == Unproven StoreAccess (Index StackFrame)) (violations offsetReport))
+  -- A push at entry sp allocates locals for the callees that receive their
+  -- address; only the slot the push wrote lr into keeps its value across the
+  -- call.
+  let pushedLocalBytes = replaceFunction "rb_assert_one"
+        [0xe92d401c, slotWord 0xe3004000 writableBase, slotWord 0xe3404000 (writableBase `shiftR` 16), 0xe58d4000,
+         0xe1a0000d, branchLink (callerStart + 20) stockTarget, 0xe59d2000, 0xe3a03001, 0xe5823000, 0xe8bd801c] clean
+  pushedLocalReport <- run allowlist pushedLocalBytes
+  check "a pushed local a call received the address of loses its value"
+    (any (\f -> findingAddress f == callerStart + 32 && findingReason f == Unproven StoreAccess (Index (StockAddress 0))) (violations pushedLocalReport))
+  -- A pushed local a call received the address of is no longer a known 0, so
+  -- the compare cannot prune the path that stores through entry r6.
+  let staleLocalBytes = replaceFunction "rb_assert_one"
+        [0xe92d401c, 0xe3a01000, 0xe58d1000, 0xe1a0000d, branchLink (callerStart + 16) stockTarget,
+         0xe59d1000, 0xe3510000, 0x15863000, 0xe8bd801c] clean
+  staleLocalReport <- run allowlist staleLocalBytes
+  check "a pushed local a call received the address of no longer prunes a path"
+    (any (\f -> findingAddress f == callerStart + 28 && findingReason f == Unproven StoreAccess (Argument (Reg 6))) (violations staleLocalReport))
+  -- A pushed register slot is a local like any other once a callee holds its
+  -- address, even when the push also saved the return address.
+  let pushedRegisterBytes = replaceFunction "rb_assert_one"
+        [0xe92d4f80, 0xe28d0004, branchLink (callerStart + 8) stockTarget,
+         0xe59d2004, 0xe3a03001, 0xe5823000, 0xe8bd8f80] clean
+  pushedRegisterReport <- run allowlist pushedRegisterBytes
+  check "a pushed register slot a call received the address of loses its value"
+    (any (\f -> findingAddress f == callerStart + 20 && findingReason f == Unproven StoreAccess (Index (StockAddress 0))) (violations pushedRegisterReport))
+  -- RRX shifts the carry into bit 31, so an exact pointer does not survive it.
+  let rrxBytes = replaceFunction "rb_assert_one"
+        [slotWord 0xe3004000 writableBase, slotWord 0xe3404000 (writableBase `shiftR` 16), 0xe1a00064, 0xe3a03001, 0xe5803000, 0xe12fff1e] clean
+  rrxReport <- run allowlist rrxBytes
+  check "a rotate-right-extend of an exact pointer is not the pointer"
+    (any (\f -> findingAddress f == callerStart + 16 && findingReason f == Unproven StoreAccess (Index (StockAddress 0))) (violations rrxReport))
+  -- The entry push's return slot is exempt only where every incoming path
+  -- wrote it. Each path sets the flags before the join so the two states meet.
+  let joinProgram =
+        [ 0xe3500000, 0x1a000004, 0xe92d4010, 0xe3520000, 0xea000006, 0xe320f000, 0xe320f000
+        , 0xe24dd008, 0xe58de004, 0xe3530000, 0xe320f000, 0xe320f000, 0xe1a0000d
+        , branchLink (callerStart + 52) stockTarget, 0xe59df004
+        ]
+      joinBytes = replaceFunction "rb_assert_one" joinProgram clean
+  joinReport <- run allowlist joinBytes
+  check "a return address exempt on one path only does not survive the join"
+    (any (\f -> findingAddress f == callerStart + 56 && findingReason f == UnboundedBranch) (violations joinReport))
+  -- The difference of two frame addresses is a scalar, not an address: it does
+  -- not expose the frame, so the slot below the exposed operands survives.
+  let differenceBytes = replaceFunction "rb_assert_one"
+        [0xe92d4010, 0xe24dd010, slotWord 0xe3004000 writableBase, slotWord 0xe3404000 (writableBase `shiftR` 16), 0xe58d4000,
+         0xe28d1008, 0xe28d200c, 0xe0410002, branchLink (callerStart + 32) stockTarget,
+         0xe59d2000, 0xe3a03001, 0xe5823000, 0xe28dd010, 0xe8bd8010] clean
+  differenceReport <- run allowlist differenceBytes
+  check "a frame-minus-frame difference does not expose the frame"
+    (not (any ((== callerStart + 44) . findingAddress) (violations differenceReport)))
+  -- The addressing-mode operand rule: a frame index added to an entry pointer
+  -- is a frame address, so the store is not the pointer's declared root.
+  let pointerPolicy = allowlist {declarations = declarations allowlist ++
+        [Declaration "rb_assert_one" StoreAccess (Argument (Reg 0)) "synthetic store through entry r0"]}
+      pointerBytes = replaceFunction "rb_assert_one" [0xe08d2001, 0xe7803002, 0xe12fff1e] clean
+  pointerReport <- run pointerPolicy pointerBytes
+  check "a frame index added to an entry pointer keeps the frame"
+    (any (\f -> findingAddress f == callerStart + 4 && findingReason f == Unproven StoreAccess (Index StackFrame)) (violations pointerReport))
   -- Each operation that keeps or loses a root after a frame address.
   frameCase "a bitwise operation on a frame address" (slotPrefix ++ [0xe00d0001])
   frameCase "a shift of a frame address" (slotPrefix ++ [0xe1a0008d])
@@ -344,6 +403,16 @@ main = do
         ]
       admitted = [label | (label, word) <- pcDestinations, A32.decode frameSetup word /= A32.Rejected Unadmitted]
   check ("the decoder refuses every program-counter destination; admitted: " ++ show admitted) (null admitted)
+  let unpredictablePc =
+        [ ("LDM writeback", 0xe93f0fff)
+        , ("pre-indexed LDR", 0xe5bf0004)
+        , ("register-shifted MOV Rd", 0xe1a0f110)
+        , ("register-shifted ADD Rn", 0xe08f0211)
+        , ("register-shifted MOV Rm", 0xe1a0011f)
+        , ("register-shifted MOV Rs", 0xe1a00f11)
+        ]
+      admittedUnpredictable = [label | (label, word) <- unpredictablePc, A32.decode frameSetup word /= A32.Rejected Unadmitted]
+  check ("the decoder refuses every unpredictable program-counter form; admitted: " ++ show admittedUnpredictable) (null admittedUnpredictable)
   forM_ [elfLow, elfHigh] $ \path -> do
     bytes <- B.readFile path
     image <- either fail pure (parseElf bytes)
@@ -412,6 +481,15 @@ main = do
   expect "MOVW with PC as destination" (fixture frameSetup 0xe300f000)
     [(frameSetup, ForbiddenInstruction Unadmitted)]
   expect "MOVT with PC as destination" (fixture frameSetup 0xe340f000)
+    [(frameSetup, ForbiddenInstruction Unadmitted)]
+  -- A writeback transfer based on the program counter and a register-shifted
+  -- data-processing form with the program counter in a register field are
+  -- UNPREDICTABLE.
+  expect "LDM writeback based on the program counter" (fixture frameSetup 0xe93f0fff)
+    [(frameSetup, ForbiddenInstruction Unadmitted)]
+  expect "pre-indexed load based on the program counter" (fixture frameSetup 0xe5bf0004)
+    [(frameSetup, ForbiddenInstruction Unadmitted)]
+  expect "register-shifted data processing with the program counter" (fixture frameSetup 0xe1a0f110)
     [(frameSetup, ForbiddenInstruction Unadmitted)]
   -- Signed halfword multiplies in place of `mov r11, sp`.
   expect "SMLABB" (fixture frameSetup 0xe1030281) []

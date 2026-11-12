@@ -627,12 +627,17 @@ markEscaped :: Maybe (Int32, Int32) -> Abstract -> Maybe (Int32, Int32)
 markEscaped span_ value = escapedSpan span_ (stackAddress value)
 
 -- | Drops every local slot holding a byte at or above the lowest escaped
--- offset, except the slots the prologue's register save wrote.
+-- offset, except the slot the entry push wrote lr into while it still holds it.
 forgetEscaped :: State -> State
 forgetEscaped state = case escaped state of
   Nothing -> state
   Just (lo, _) ->
-    state {slots = M.filterWithKey (\k _ -> toInteger k + 4 <= toInteger lo || S.member k (savedSlots state)) (slots state)}
+    state {slots = M.filterWithKey (\k v -> toInteger k + 4 <= toInteger lo || keepsReturn state k v) (slots state)}
+
+-- | Whether a slot is the return address the entry push wrote and nothing has
+-- overwritten since.
+keepsReturn :: State -> Int32 -> Abstract -> Bool
+keepsReturn state offset value = value == ReturnAddress && S.member offset (savedReturn state)
 
 -- | A small index read as signed stack-offset deltas: every value, or the two bounds.
 signedOffsets :: Abstract -> Maybe [Int32]
@@ -686,7 +691,9 @@ data State = State
   , -- | The stack-pointer offsets this function has taken the address of.
     escaped :: Maybe (Int32, Int32)
   , -- | The frame offsets the prologue's register save wrote.
-    savedSlots :: S.Set Int32
+    savedRegisters :: S.Set Int32
+  , -- | The frame offsets the entry push wrote lr into.
+    savedReturn :: S.Set Int32
   }
   deriving (Eq, Show)
 
@@ -699,6 +706,7 @@ entryState =
     Nothing
     Nothing
     S.empty
+    S.empty
 
 joinState :: (Word32 -> Location) -> State -> State -> State
 joinState place a b =
@@ -708,7 +716,8 @@ joinState place a b =
     (if comparison a == comparison b then comparison a else Nothing)
     (if holds a == holds b then holds a else Nothing)
     (escapedSpan (escaped a) (escaped b))
-    (savedSlots a `S.union` savedSlots b)
+    (savedRegisters a `S.intersection` savedRegisters b)
+    (savedReturn a `S.intersection` savedReturn b)
 
 widenState :: (Word32 -> Location) -> [Word32] -> State -> State -> State
 widenState place thresholds old new =
@@ -718,7 +727,8 @@ widenState place thresholds old new =
     (if comparison old == comparison new then comparison old else Nothing)
     (if holds old == holds new then holds old else Nothing)
     (escapedSpan (escaped old) (escaped new))
-    (savedSlots old `S.union` savedSlots new)
+    (savedRegisters old `S.intersection` savedRegisters new)
+    (savedReturn old `S.intersection` savedReturn new)
 
 -- | The flags of `cmp r, #k` (unsigned conditions valid) or `cmn r, #-k` (only EQ and NE).
 data Comparison = Comparison Reg Word32 Bool deriving (Eq, Show)
@@ -795,10 +805,10 @@ offsetFromOrdered context base index = case (base, index) of
   _ -> Unknown
 
 subtractFrom :: Abstract -> Abstract -> Abstract
+subtractFrom (StackOffset o) (StackOffset q) = exact (fromIntegral (o - q))
 subtractFrom base index = frameCarried [base, index] $ case (base, index) of
   (StackOffset o, _) | Just offsets <- signedOffsets index -> stackAt (map (o -) offsets)
   (StackSpan lo hi, _) | Just offsets <- signedOffsets index -> stackAt (map (lo -) offsets ++ map (hi -) offsets)
-  (StackOffset o, StackOffset q) -> exact (fromIntegral (o - q))
   (Derived p, _) | Just _ <- bounds index -> Derived p
   (StackOffset _, _) | scalar index -> Derived (Index StackFrame)
   (StackSpan _ _, _) | scalar index -> Derived (Index StackFrame)
@@ -811,15 +821,16 @@ shiftValue :: Shift -> Int -> Abstract -> Abstract
 shiftValue LSL 0 value = value
 shiftValue shift amount value = frameCarried [value] $ case enumerate value of
   Just xs -> fromSet (S.fromList (map (applyShift shift amount) xs))
-  Nothing
-    | isJust (stackAddress value) -> Derived (Index StackFrame)
-    | otherwise -> case (shift, bounds value) of
-        (LSR, Just (lo, hi)) -> Interval (applyShift LSR amount lo) (applyShift LSR amount hi)
-        (LSR, Nothing) -> Interval 0 (applyShift LSR amount maxBound)
-        (LSL, Just (lo, hi)) | toInteger hi * 2 ^ amount <= 0xffffffff -> Interval (lo `shiftL` amount) (hi `shiftL` amount)
-        _ -> Unknown
+  Nothing -> case (shift, bounds value) of
+    (LSR, Just (lo, hi)) -> Interval (applyShift LSR amount lo) (applyShift LSR amount hi)
+    (LSR, Nothing) -> Interval 0 (applyShift LSR amount maxBound)
+    (LSL, Just (lo, hi)) | toInteger hi * 2 ^ amount <= 0xffffffff -> Interval (lo `shiftL` amount) (hi `shiftL` amount)
+    _ -> Unknown
 
--- | An immediate shift; amount 0 encodes 32 for LSR and ASR and RRX for ROR (taken as unknown by callers' sets).
+-- | An immediate shift; amount 0 encodes 32 for LSR and ASR. ROR by 0 is the
+-- rotate-right-extend, whose carry this analysis does not track, so its
+-- callers take the result as unknown; `shiftValue` keeps the no-rotation for
+-- the byte and halfword extends.
 applyShift :: Shift -> Int -> Word32 -> Word32
 applyShift shift amount value = case shift of
   LSL -> value `shiftL` amount
@@ -851,9 +862,13 @@ dataResult context op a b = frameCarried operands $ case op of
   _ -> Unknown
  where
   -- MVN has no first operand: its Rn field is zero and holds no value.
+  -- ADD, SUB and RSB carry the frame in offsetFrom and subtractFrom.
   operands = case op of
     MOV -> [b]
     MVN -> [b]
+    ADD -> []
+    SUB -> []
+    RSB -> []
     _ -> [a, b]
 
 -- * Transfer
@@ -925,7 +940,9 @@ refine (Cond c) state = case comparison state of
 
 operandValue :: Word32 -> State -> Operand -> Abstract
 operandValue _ _ (Immediate value) = exact value
-operandValue address state (ShiftedImmediate rm shift amount) = frameCarried [value] (shiftValue shift amount value)
+operandValue address state (ShiftedImmediate rm shift amount)
+  | shift == ROR, amount == 0 = frameCarried [value] Unknown
+  | otherwise = frameCarried [value] (shiftValue shift amount value)
  where
   value = registerValue address state rm
 operandValue address state (ShiftedRegister rm shift rs) = frameCarried [value, amount] $ case enumerate amount of
@@ -1009,8 +1026,22 @@ execute context function address instruction state = case instruction of
                 (Reg 13, Reg n, Word, PreIndexed, StackOffset first, StackOffset 0)
                   | n == 14 || n >= 4 && n <= 12 -> S.singleton first
                 _ -> S.empty
+              savedReturnSlots
+                | rt == lr = saved
+                | otherwise = S.empty
            in storing (storeCheck s rn at size)
-                (continue (writeback (stored {savedSlots = savedSlots s `S.union` saved}) rn offset indexing))
+                ( continue
+                    ( writeback
+                        ( stored
+                            { savedRegisters = savedRegisters s `S.union` saved
+                            , savedReturn = savedReturn s `S.union` savedReturnSlots
+                            }
+                        )
+                        rn
+                        offset
+                        indexing
+                    )
+                )
       )
       id
   StoreMultiple cond rn mode wb regs ->
@@ -1020,12 +1051,18 @@ execute context function address instruction state = case instruction of
               values = map (registerValue address s) regs
               stored = storeValues (storeSlots s lowest count values) values
               -- A push at the entry stack pointer writes the prologue's slots.
-              saved
+              pushed
                 | rn == sp, mode == DecrementBefore, wb, registerValue address s sp == StackOffset 0
                 , StackOffset first <- lowest =
-                    S.fromList [first, first + 4 .. first + fromIntegral count - 4]
-                | otherwise = S.empty
-              updated = (if wb then setRegister rn end stored else stored) {savedSlots = savedSlots s `S.union` saved}
+                    [(first + 4 * fromIntegral i, r) | (i, r) <- zip [0 :: Int ..] regs]
+                | otherwise = []
+              saved = S.fromList [offset | (offset, r) <- pushed, r >= Reg 4, r <= Reg 12 || r == lr]
+              savedReturnSlots = S.fromList [offset | (offset, r) <- pushed, r == lr]
+              updated =
+                (if wb then setRegister rn end stored else stored)
+                  { savedRegisters = savedRegisters s `S.union` saved
+                  , savedReturn = savedReturn s `S.union` savedReturnSlots
+                  }
            in storing (storeCheck s rn lowest count) (continue updated)
       )
       id
@@ -1124,7 +1161,10 @@ execute context function address instruction state = case instruction of
       | k >= 0 -> offsetFrom context base (exact (fromIntegral k))
       | otherwise -> subtractFrom base (exact (fromIntegral (negate k)))
     OffsetRegister up rm shift amount ->
-      let index = shiftValue shift amount (registerValue address s rm)
+      let raw = registerValue address s rm
+          index
+            | shift == ROR, amount == 0 = frameCarried [raw] Unknown
+            | otherwise = shiftValue shift amount raw
        in if up then offsetFrom context base index else subtractFrom base index
   writeback s rn offset indexing = case indexing of
     OffsetOnly -> s
@@ -1172,7 +1212,8 @@ execute context function address instruction state = case instruction of
   storeSlots s (StackSpan lo hi) size _
     | hi + fromIntegral size <= 0 && not (overlapsSaved s lo (hi + fromIntegral size)) =
         s {slots = M.filterWithKey (\k _ -> k + 4 <= lo || k >= hi + fromIntegral size) (slots s)}
-  storeSlots s (Derived (Index StackFrame)) _ _ = s {slots = M.filterWithKey (\k _ -> S.member k (savedSlots s)) (slots s)}
+  storeSlots s (Derived (Index StackFrame)) _ _ =
+    s {slots = M.filterWithKey (\k v -> keepsReturn s k v) (slots s)}
   storeSlots s (Derived _) _ _ = forgetEscaped s
   storeSlots s _ _ _ = s
 
@@ -1181,7 +1222,7 @@ execute context function address instruction state = case instruction of
 
   -- Whether [lo, end) of the frame overlaps a slot the prologue's register
   -- save wrote.
-  overlapsSaved s lo end = any (\(k, _) -> k + 4 > lo && k < end && S.member k (savedSlots s)) (M.toList (slots s))
+  overlapsSaved s lo end = any (\(k, _) -> k + 4 > lo && k < end && S.member k (savedRegisters s)) (M.toList (slots s))
 
   -- Findings and the number of proven stores (0 or 1).
   storeCheck :: State -> Reg -> Abstract -> Word32 -> ([Finding], Int)
