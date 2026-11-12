@@ -14,6 +14,7 @@ module Replacement.RtosPlatform.Artifact
   , admit
   , stage
   , restore
+  , installCarrier
   , confineChanges
   , stagedLoader
   , contractValue

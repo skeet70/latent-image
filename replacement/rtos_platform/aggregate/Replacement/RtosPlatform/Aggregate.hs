@@ -7,16 +7,21 @@ module Replacement.RtosPlatform.Aggregate
   , SectionPlacement (..)
   , parseAggregateSymbols
   , parsePlacements
+  , CarrierUnion (..)
+  , parseCarrierUnion
   , installPlacements
   , aggregateImage
   , symbolsWithPrefixes
   , sliceAggregate
   , installAggregate
   , installSymbol
+  , carrierBytes
+  , installCarriers
   ) where
 
 import Control.Monad (foldM)
 import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:))
+import Data.Bits (shiftR)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.Text as T
@@ -61,6 +66,37 @@ parsePlacements :: B.ByteString -> Either String [SectionPlacement]
 parsePlacements bytes = do
   ParsedPlacements placements <- eitherDecodeStrict' bytes
   pure placements
+
+-- | The fill word and the carrier extents of both domains, from the declared carrier union.
+-- A staged loader is the stock loader with each carrier extent replaced by the aggregate
+-- image's bytes where a symbol or placement covers them and by the fill word elsewhere.
+data CarrierUnion = CarrierUnion
+  { carrierFill :: Word32
+  , carrierExtentsA :: [(Word32, Word32)]
+  , carrierExtentsB :: [(Word32, Word32)]
+  }
+  deriving (Eq, Show)
+
+newtype ParsedCarrierUnion = ParsedCarrierUnion CarrierUnion
+
+instance FromJSON ParsedCarrierUnion where
+  parseJSON = withObject "carrier union" $ \o -> do
+    fill <- o .: "fill_word" >>= either fail pure . hexPlacement
+    domains <- o .: "domains"
+    a <- carriersOf domains "a"
+    b <- carriersOf domains "b"
+    pure (ParsedCarrierUnion (CarrierUnion fill a b))
+    where
+      carriersOf value label =
+        withObject "domains" (\domains -> domains .: label >>= withObject "domain" (\one -> one .: "carriers" >>= mapM carrier)) value
+      carrier = withObject "carrier" $ \c ->
+        (,) <$> (c .: "start" >>= either fail pure . hexPlacement)
+            <*> (c .: "end" >>= either fail pure . hexPlacement)
+
+parseCarrierUnion :: B.ByteString -> Either String CarrierUnion
+parseCarrierUnion bytes = do
+  ParsedCarrierUnion union <- eitherDecodeStrict' bytes
+  pure union
 
 hexPlacement :: T.Text -> Either String Word32
 hexPlacement text =
@@ -126,6 +162,37 @@ installAggregate :: Word32 -> B.ByteString -> AggregateImage -> [AggregateSymbol
 installAggregate base current image = foldM install current
   where
     install bytes symbol = installSymbol base bytes image symbol
+
+-- | Bytes a staged loader carries for one extent: linked image bytes where a symbol or a
+-- placement covers the address, the union fill word elsewhere.
+carrierBytes :: Word32 -> [AggregateSymbol] -> [SectionPlacement] -> AggregateImage -> Word32 -> Word32 -> Either String B.ByteString
+carrierBytes fill symbols placements image address size
+  | size == 0 = Right B.empty
+  | otherwise = do
+      bytes <- sliceAggregate image address size
+      let spans =
+            [(symbolAddress s, symbolAddress s + symbolSize s) | s <- symbols, symbolSize s > 0]
+              ++ [(placementAddress p, placementAddress p + placementBytes p) | p <- placements, placementBytes p > 0]
+          covered at = any (\(lo, hi) -> lo <= at && at < hi) spans
+          fillBytes = word32le fill
+      pure (B.pack
+        [ if covered (address + fromIntegral offset)
+            then B.index bytes offset
+            else B.index fillBytes (offset `mod` 4)
+        | offset <- [0 .. fromIntegral size - 1 :: Int]
+        ])
+
+-- | Installs each extent's staged bytes over a base image, leaving bytes outside the
+-- extents unchanged.
+installCarriers :: Word32 -> B.ByteString -> Word32 -> [AggregateSymbol] -> [SectionPlacement] -> AggregateImage -> [(Word32, Word32)] -> Either String B.ByteString
+installCarriers base current fill symbols placements image = foldM install current
+  where
+    install bytes (address, size) = do
+      chunk <- carrierBytes fill symbols placements image address size
+      installAt base bytes address chunk
+
+word32le :: Word32 -> B.ByteString
+word32le value = B.pack [fromIntegral (value `shiftR` shift) | shift <- [0, 8, 16, 24]]
 
 installAt :: Word32 -> B.ByteString -> Word32 -> B.ByteString -> Either String B.ByteString
 installAt base current address bytes

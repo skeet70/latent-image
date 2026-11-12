@@ -93,20 +93,18 @@ pub(crate) fn unlink<M: Machine>(m: &M, task: Task) {
     m.store_word(GuestAddress(next).offset(0x04), prev);
 }
 
-/// The wait-block completion the release stores.
+/// The wait-block completion the release stores. The discriminant is the word the release writes.
+#[repr(i32)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum WaitCompletion {
-    Satisfied,
+    Satisfied = 0,
     /// A forced release or delete; the raw ABI code is -49 and carries no further cause.
-    Released,
+    Released = -49,
 }
 
 impl WaitCompletion {
     pub const fn code(self) -> i32 {
-        match self {
-            Self::Satisfied => 0,
-            Self::Released => -49,
-        }
+        self as i32
     }
 }
 
@@ -115,6 +113,8 @@ pub fn release<M: Release>(m: &M, owner: KernelContext, task: Task) -> Selection
     release_with(m, owner, task, WaitCompletion::Satisfied)
 }
 
+/// The forced release's unlink is A `0x446fc` / B `0xd46bc`, which `0x44744` / `0xd4704` calls;
+/// the satisfied release at `0x44568` / `0xd4528` inlines the timer removal and never unlinks.
 #[cfg_attr(feature = "family", inline(never))]
 pub fn release_with<M: Release>(
     m: &M,
@@ -126,6 +126,11 @@ pub fn release_with<M: Release>(
     let entry = m.load_word(wait);
     if entry != 0 {
         m.remove_timer(owner, GuestAddress(entry));
+    }
+    if completion == WaitCompletion::Released
+        && m.load_byte(task.state()) & TaskState::OBJECT_QUEUED.bits() != 0
+    {
+        unlink(m, task);
     }
     m.store_word(wait, completion.code() as u32);
     release_ready(m, owner, task)

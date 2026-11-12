@@ -128,7 +128,7 @@ fn restore_lifecycle(saved: LifecycleMask) {
 }
 
 /// Stock retry addresses `0x488e8` / `0x4892c`.
-#[inline(never)]
+#[cfg_attr(all(feature = "family", not(feature = "component")), inline(never))]
 fn unmask_i() {
     unsafe { core::arch::asm!("cpsie i", options(nostack)) };
 }
@@ -172,7 +172,9 @@ impl objects::admission::Facts for StageTables {
     }
 }
 
-#[inline(never)]
+/// The standalone stage binds one stock extent per function and keeps this snapshot
+/// separate; the aggregate packs one reserved group and inlines it.
+#[cfg_attr(all(feature = "family", not(feature = "component")), inline(never))]
 fn entry_snapshot(blocking: bool) -> Entry {
     let words = entry_words();
     let handler_context = load(words.handler_context);
