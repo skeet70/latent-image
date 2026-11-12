@@ -9,6 +9,10 @@ module Emulation.EmulatorSlot
   , reexecInSlot
   , pinExecutable
   , insideSlot
+  , admissionInheritanceVariable
+  , GrantPurpose
+  , grantPurpose
+  , admissionGrant
   ) where
 
 import Control.Concurrent (threadDelay)
@@ -21,7 +25,7 @@ import qualified Emulation.HostAdmission as Host
 import Emulation.HostAdmission (MemoryMax (..), MemorySwapMax (..), ResourceClass (Emulator), ScopeName, claimScopeRecord, classConcurrency, configuredMemory, lockOwnerText, memoryMaxBytes, memorySwapMaxBytes, parseScopeName, reserveMemory, userScopeAvailable)
 import qualified FujiAF.RunOutput as Run
 import FujiAF.StorageBudget (checkStorageBudget)
-import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist, getCurrentDirectory, getHomeDirectory, listDirectory, removeFile)
+import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getCurrentDirectory, getHomeDirectory, listDirectory, removeFile)
 import System.Environment (getArgs, getExecutablePath, getProgName, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..), exitWith)
 import System.FilePath ((</>))
@@ -29,8 +33,8 @@ import System.IO (Handle, IOMode (ReadMode, WriteMode), SeekMode (AbsoluteSeek),
 import System.IO.Error (catchIOError, isDoesNotExistError, isPermissionError)
 import System.Info (os)
 import System.Posix.Files (createSymbolicLink, setFileMode)
-import System.Posix.IO (LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd, setLock)
-import System.Posix.Process (executeFile, getProcessID)
+import System.Posix.IO (LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, defaultFileFlags, getLock, openFd, setLock)
+import System.Posix.Process (executeFile, getParentProcessID, getProcessID)
 import System.Posix.Signals (nullSignal, signalProcess)
 import System.Posix.Types (ProcessID)
 import Text.Read (readMaybe)
@@ -54,6 +58,27 @@ slotVariable = "XM1_EMULATOR_SLOT"
 slotsVariable = "XM1_EMULATOR_SLOTS"
 runProgramVariable = "XM1_RUN_PROGRAM"
 
+-- | Set by a slot owner for the one child it spawns: @OWNER_PID:PURPOSE@.
+-- The child runs inside the owner's slot without admitting again only when the
+-- owner is its parent, names the same admission owner, and holds the slot in
+-- @XM1_EMULATOR_SLOT@.
+admissionInheritanceVariable :: String
+admissionInheritanceVariable = "XM1_ADMISSION_INHERIT"
+
+-- | What a granted child is running, for the owner's log.
+newtype GrantPurpose = GrantPurpose String
+
+-- | A purpose is nonempty and holds no @:@, the grant's field separator.
+grantPurpose :: String -> Either String GrantPurpose
+grantPurpose text
+  | null text = Left "an admission grant needs a purpose"
+  | ':' `elem` text = Left "an admission grant purpose cannot contain ':'"
+  | otherwise = Right (GrantPurpose text)
+
+-- | The environment entry a slot owner sets for the one child it grants.
+admissionGrant :: ProcessID -> GrantPurpose -> (String, String)
+admissionGrant owner (GrantPurpose purpose) =
+  (admissionInheritanceVariable, show owner ++ ":" ++ purpose)
 
 resourceClass :: ExecutionClass -> Host.ResourceClass
 resourceClass FullSystem = Emulator
@@ -103,8 +128,9 @@ reexecInSlot policy arguments = do
       unless ((admittedClass >>= readMaybe) == Just (executionClass policy)) $
         ioError (userError "verification class differs from the active admission")
       pid <- getProcessID
-      unless (owner == Just (show pid)) $
-        ioError (userError "refusing nested verification admission")
+      if owner == Just (show pid)
+        then pure ()
+        else acceptInheritedAdmission policy owner
     Nothing -> do
       directory <- slotDirectory
       executable <- getExecutablePath
@@ -132,6 +158,7 @@ reexecInSlot policy arguments = do
           pid <- getProcessID
           setEnv "XM1_ADMISSION_OWNER" (show pid)
           setEnv "XM1_ADMISSION_CLASS" (show (executionClass policy))
+          unsetEnv admissionInheritanceVariable
           executeFile pinned False arguments Nothing
         Nothing -> do
           scoped <- userScopeAvailable
@@ -165,10 +192,105 @@ reexecInSlot policy arguments = do
               pid <- getProcessID
               setEnv "XM1_ADMISSION_OWNER" (show pid)
               setEnv "XM1_ADMISSION_CLASS" (show (executionClass policy))
+              unsetEnv admissionInheritanceVariable
               let MemoryMax memory = memoryMax policy
               hPutStrLn stderr ("No systemd user session: " ++ show (executionClass policy) ++ " slot " ++ show slot ++ " runs without the " ++ memory ++ " memory cap")
               hFlush stderr
               executeFile pinned False arguments Nothing
+
+-- | A child runs inside the slot its parent already holds when the parent's
+-- grant names that parent and the child's purpose, the child's parent is that
+-- owner, the owner holds the slot named by @XM1_EMULATOR_SLOT@, and the child
+-- is in the owner's cgroup. The slot's grant lock admits one such child at a
+-- time. Every other nested process is refused as before.
+acceptInheritedAdmission :: SlotPolicy -> Maybe String -> IO ()
+acceptInheritedAdmission policy ownerText = do
+  grant <- lookupEnv admissionInheritanceVariable
+  case grant of
+    Nothing -> refuseNested
+    Just text -> do
+      let (ownerField, purposeField) = break (== ':') text
+          purpose = drop 1 purposeField
+      ownerPid <- case readMaybe ownerField of
+        Just value -> pure value
+        Nothing -> ioError (userError "inherited admission grant has no owner process")
+      unless (ownerText == Just (show ownerPid)) $
+        ioError (userError "inherited admission grant names another process than the admission owner")
+      case grantPurpose purpose of
+        Left problem -> ioError (userError problem)
+        Right _ -> pure ()
+      parent <- getParentProcessID
+      unless (parent == ownerPid) $
+        ioError (userError "inherited admission grant is not from the parent process")
+      slotValue <- lookupEnv slotVariable
+      slot <- case slotValue >>= readMaybe of
+        Just value -> pure (Slot value)
+        Nothing -> ioError (userError "inherited admission grant has no active slot")
+      directory <- slotDirectory
+      held <- slotHeldBy directory (executionClass policy) slot ownerPid
+      unless held $
+        ioError (userError "inherited admission grant does not name the slot the owner holds")
+      when (os == "linux") $ do
+        same <- sameUnifiedCgroup ownerPid
+        unless same $
+          ioError (userError "inherited admission grant runs outside the owner's cgroup")
+      holdGrant directory (executionClass policy) slot
+      hPutStrLn stderr ("inherited admission: owner=" ++ show ownerPid ++ " purpose=" ++ purpose)
+      hFlush stderr
+ where
+  refuseNested = ioError (userError "refusing nested verification admission")
+
+-- | Whether the named process holds the class slot's record lock.
+slotHeldBy :: FilePath -> ExecutionClass -> Slot -> ProcessID -> IO Bool
+slotHeldBy directory execution slot owner = do
+  let path = slotLockPath directory execution slot
+  present <- doesFileExist path
+  if not present
+    then pure False
+    else do
+      fd <- openFd path ReadWrite defaultFileFlags
+      held <- getLock fd (WriteLock, AbsoluteSeek, 0, 1)
+      closeFd fd
+      pure (fmap fst held == Just owner)
+
+-- | Holds the slot's single grant until this process exits. The descriptor is
+-- not closed: closing it, or exiting, releases the lock.
+holdGrant :: FilePath -> ExecutionClass -> Slot -> IO ()
+holdGrant directory execution slot = do
+  fd <- openFd (grantLockPath directory execution slot) ReadWrite defaultFileFlags {creat = Just 0o600}
+  locked <- try (setLock fd (WriteLock, AbsoluteSeek, 0, 0)) :: IO (Either IOException ())
+  case locked of
+    Right () -> pure ()
+    Left _ -> do
+      closeFd fd
+      ioError (userError "another granted child already runs in this slot")
+
+-- | Whether the process is in the same unified cgroup as this one.
+sameUnifiedCgroup :: ProcessID -> IO Bool
+sameUnifiedCgroup owner = do
+  mine <- unifiedCgroup "/proc/self/cgroup"
+  theirs <- unifiedCgroup ("/proc/" ++ show owner ++ "/cgroup")
+  pure (mine == theirs)
+
+unifiedCgroup :: FilePath -> IO [String]
+unifiedCgroup path = do
+  text <- readFile path
+  pure [drop 3 line | line <- lines text, take 3 line == "0::"]
+
+classPrefix :: ExecutionClass -> String
+classPrefix FullSystem = "full-"
+classPrefix NativeVerification = "native-"
+
+slotLockPath :: FilePath -> ExecutionClass -> Slot -> FilePath
+slotLockPath directory execution slot =
+  directory </> (classPrefix execution ++ slotText slot ++ ".lock")
+
+grantLockPath :: FilePath -> ExecutionClass -> Slot -> FilePath
+grantLockPath directory execution slot =
+  directory </> (classPrefix execution ++ slotText slot ++ ".grant")
+
+slotText :: Slot -> String
+slotText (Slot slot) = show slot
 
 defaultStoragePath :: IO FilePath
 defaultStoragePath = do
@@ -226,9 +348,8 @@ openSlotRun = do
 acquire :: FilePath -> ExecutionClass -> Maybe ScopeName -> IO Slot
 acquire directory execution scope = do
   let maximumSlots = classConcurrency (resourceClass execution)
-      prefix = if execution == FullSystem then "full-" else "native-"
       attempt = do
-        free <- firstFree prefix [1 .. maximumSlots]
+        free <- firstFree [Slot slot | slot <- [1 .. maximumSlots]]
         case free of
           Just slot -> pure slot
           Nothing -> do
@@ -236,19 +357,19 @@ acquire directory execution scope = do
             hFlush stderr
             threadDelay 500_000
             attempt
-      firstFree _ [] = pure Nothing
-      firstFree slotPrefix (slot : rest) = do
-        fd <- openFd (directory </> (slotPrefix ++ show slot ++ ".lock")) ReadWrite defaultFileFlags {creat = Just 0o600}
+      firstFree [] = pure Nothing
+      firstFree (slot : rest) = do
+        fd <- openFd (slotLockPath directory execution slot) ReadWrite defaultFileFlags {creat = Just 0o600}
         locked <- try (setLock fd (WriteLock, AbsoluteSeek, 0, 0)) :: IO (Either IOException ())
         case locked of
           Right () -> do
-            forM_ scope (claimScopeRecord (directory </> (slotPrefix ++ show slot ++ ".scope")))
-            pure (Just (Slot slot))
+            forM_ scope (claimScopeRecord (directory </> (classPrefix execution ++ slotText slot ++ ".scope")))
+            pure (Just slot)
           Left _ -> do
             owner <- lockOwnerText fd
-            hPutStrLn stderr ("host admission: " ++ slotPrefix ++ show slot ++ " " ++ owner)
+            hPutStrLn stderr ("host admission: " ++ classPrefix execution ++ slotText slot ++ " " ++ owner)
             closeFd fd
-            firstFree slotPrefix rest
+            firstFree rest
   attempt
 
 -- | A private copy of the running executable beneath the slot directory, named

@@ -215,6 +215,66 @@ run source builder wrapper = do
   _ <- finish nested
   nestedOk <- expect "a child cannot reuse its parent's admission marker"
     (nestedSlot /= Nothing && "probe-nested-exit ExitFailure 1" `elem` nestedLines)
+  grantChild <- spawn (change "XM1_PROBE_GRANT" "valid" environment)
+  grantChildSeen@(Admission grantChildLines grantChildSlot) <- admission grantChild
+  release grantChild
+  _ <- finish grantChild
+  grantOk <- expect "a child with its parent's grant runs in the parent's slot and cgroup"
+    (grantChildSlot /= Nothing && "probe-grant-exit ExitSuccess True" `elem` grantChildLines
+      && observedText "probe-in-slot " grantChildSeen /= Nothing
+      && observedText "probe-grant-slot " grantChildSeen == observedText "probe-in-slot " grantChildSeen
+      && observedText "probe-grant-unit " grantChildSeen == observedText "probe-unit " grantChildSeen
+      && observedText "probe-grant-memory-max " grantChildSeen == observedText "probe-memory-max " grantChildSeen)
+  grantSecond <- spawn (change "XM1_PROBE_GRANT" "second" environment)
+  Admission grantSecondLines grantSecondSlot <- admission grantSecond
+  release grantSecond
+  _ <- finish grantSecond
+  grantSecondOk <- expect "a second granted child is refused while one runs in the parent's slot"
+    (grantSecondSlot /= Nothing && "probe-second-first True" `elem` grantSecondLines
+      && "probe-second-exit ExitFailure 1 False" `elem` grantSecondLines
+      && "probe-second-error True" `elem` grantSecondLines)
+  grantWrongSlot <- spawn (change "XM1_PROBE_GRANT" "wrong-slot" environment)
+  Admission grantWrongSlotLines grantWrongSlotSlot <- admission grantWrongSlot
+  release grantWrongSlot
+  _ <- finish grantWrongSlot
+  grantWrongSlotOk <- expect "a grant naming a slot the owner does not hold is refused"
+    (grantWrongSlotSlot /= Nothing && "probe-wrong-slot-exit ExitFailure 1 False" `elem` grantWrongSlotLines
+      && "probe-wrong-slot-error True" `elem` grantWrongSlotLines)
+  grantMoved <- spawn (change "XM1_PROBE_GRANT" "moved" environment)
+  Admission grantMovedLines grantMovedSlot <- admission grantMoved
+  release grantMoved
+  _ <- finish grantMoved
+  grantMovedOk <- expect "a granted child moved to another cgroup is refused"
+    (grantMovedSlot /= Nothing && "probe-moved-exit ExitFailure 1 False" `elem` grantMovedLines
+      && "probe-moved-error True" `elem` grantMovedLines)
+  grantNoPurpose <- spawn (change "XM1_PROBE_GRANT" "no-purpose" environment)
+  Admission grantNoPurposeLines grantNoPurposeSlot <- admission grantNoPurpose
+  release grantNoPurpose
+  _ <- finish grantNoPurpose
+  grantNoPurposeOk <- expect "a grant without a purpose is refused"
+    (grantNoPurposeSlot /= Nothing && "probe-no-purpose-exit ExitFailure 1 False" `elem` grantNoPurposeLines
+      && "probe-no-purpose-error True" `elem` grantNoPurposeLines)
+  grantRegrant <- spawn (change "XM1_PROBE_GRANT" "regrant" environment)
+  Admission grantRegrantLines grantRegrantSlot <- admission grantRegrant
+  release grantRegrant
+  _ <- finish grantRegrant
+  grantRegrantOk <- expect "a granted child cannot grant its own child"
+    (grantRegrantSlot /= Nothing && "probe-grant-exit ExitSuccess True" `elem` grantRegrantLines
+      && "probe-regrant-line True" `elem` grantRegrantLines)
+  grantOther <- spawn (change "XM1_PROBE_GRANT" "other" environment)
+  Admission grantOtherLines grantOtherSlot <- admission grantOther
+  release grantOther
+  _ <- finish grantOther
+  grantOtherOk <- expect "a grant naming another process is refused"
+    (grantOtherSlot /= Nothing && "probe-grant-exit ExitFailure 1 False" `elem` grantOtherLines
+      && "probe-grant-error True" `elem` grantOtherLines)
+  grandchild <- spawn (change "XM1_PROBE_GRANT" "grandchild" environment)
+  Admission grandchildLines grandchildSlot <- admission grandchild
+  release grandchild
+  _ <- finish grandchild
+  grandchildOk <- expect "a grandchild cannot use its parent's grant"
+    (grandchildSlot /= Nothing && "probe-grant-exit ExitSuccess True" `elem` grandchildLines
+      && "probe-grandchild-line True" `elem` grandchildLines)
   (nestedBuildCode, _, _) <- readCreateProcessWithExitCode
     (proc builder ["build"]) {env = Just (change "XM1_EMULATOR_SLOT" "1" environment)} ""
   nestedBuildOk <- expect "build admission refuses to wait inside verification" (nestedBuildCode == ExitFailure 2)
@@ -421,7 +481,7 @@ run source builder wrapper = do
   _ <- finish explicitJob
   explicitLabel <- readRunLabel explicitWorkspace
   explicitLabelOk <- expect "XM1_RUN_LABEL overrides the slot's program label" (explicitLabel == Just "explicit-label")
-  pure (and [nativeCliOk, defaultFullOk, overrideCapsOk, fullOk, largeNativeOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, smallOk, nativeLimit, nestedOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, sessionOk, startupOk, migrationLockOk, migrationOk, unknownMigrationOk, programLabelOk, explicitLabelOk])
+  pure (and [nativeCliOk, defaultFullOk, overrideCapsOk, fullOk, largeNativeOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, smallOk, nativeLimit, nestedOk, grantOk, grantSecondOk, grantWrongSlotOk, grantMovedOk, grantNoPurposeOk, grantRegrantOk, grantOtherOk, grandchildOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, sessionOk, startupOk, migrationLockOk, migrationOk, unknownMigrationOk, programLabelOk, explicitLabelOk])
 
 change :: String -> String -> [(String, String)] -> [(String, String)]
 change key value environment = (key, value) : filter ((/= key) . fst) environment
@@ -544,6 +604,6 @@ probeEnvironment home = do
   uid <- getEffectiveUserID
   let runtime = "/run/user/" ++ show uid
       keep key value environment = if any ((== key) . fst) environment then environment else (key, value) : environment
-      dropped = ["HOME", "XM1_EMULATOR_SLOT", "XM1_EMULATOR_MEMORY_MAX", "XM1_EMULATOR_SWAP_MAX", "XM1_NATIVE_MEMORY_MAX", "XM1_NATIVE_SWAP_MAX", "XM1_HOST_BUILD_MEMORY_MAX", "XM1_HOST_BUILD_SWAP_MAX", "XM1_NATIVE_SLOTS", "XM1_HOST_BUILD", "XM1_ADMISSION_SCOPE", "XM1_ADMISSION_OWNER", "XM1_STORAGE_MIN_FREE", "XM1_PROBE_CLASS", "XM1_PROBE_LEGACY", "XM1_PROBE_NESTED", "XM1_PROBE_SURVIVOR", "XM1_PROBE_EXIT", "XM1_PROBE_ALLOCATE_BYTES", "XM1_RUN_DIR", "XM1_RUN_WORK", "XM1_RUN_RESULT", "XM1_RUN_PROGRAM", "XM1_RUN_LABEL", "XM1_TASK_OUTPUT_MAX", "XM1_TASK_MEASURE_SECONDS"]
+      dropped = ["HOME", "XM1_EMULATOR_SLOT", "XM1_EMULATOR_MEMORY_MAX", "XM1_EMULATOR_SWAP_MAX", "XM1_NATIVE_MEMORY_MAX", "XM1_NATIVE_SWAP_MAX", "XM1_HOST_BUILD_MEMORY_MAX", "XM1_HOST_BUILD_SWAP_MAX", "XM1_NATIVE_SLOTS", "XM1_HOST_BUILD", "XM1_ADMISSION_SCOPE", "XM1_ADMISSION_OWNER", "XM1_ADMISSION_CLASS", "XM1_ADMISSION_INHERIT", "XM1_STORAGE_MIN_FREE", "XM1_PROBE_CLASS", "XM1_PROBE_LEGACY", "XM1_PROBE_NESTED", "XM1_PROBE_GRANT", "XM1_PROBE_SURVIVOR", "XM1_PROBE_EXIT", "XM1_PROBE_ALLOCATE_BYTES", "XM1_RUN_DIR", "XM1_RUN_WORK", "XM1_RUN_RESULT", "XM1_RUN_PROGRAM", "XM1_RUN_LABEL", "XM1_TASK_OUTPUT_MAX", "XM1_TASK_MEASURE_SECONDS"]
   pure (("HOME", home) : ("XM1_STORAGE_MIN_FREE", "1") : filter ((`notElem` dropped) . fst)
     (keep "XDG_RUNTIME_DIR" runtime (keep "DBUS_SESSION_BUS_ADDRESS" ("unix:path=" ++ runtime ++ "/bus") inherited)))
