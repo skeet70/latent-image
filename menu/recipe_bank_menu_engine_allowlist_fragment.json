@@ -456,6 +456,132 @@
     "argument": "r0"
    },
    "reason": "calls the per-core block's stock entry word that the kernel boundary table carries"
+  },
+  {
+   "function": "_RINvCsap93jzluDcr_20xm1_property_service10set_hookedINtNtCsdTMjx7m5njD_25xm1_settings_storage_core13native_mirror13NativeBackendNtNtCsjPY53278zkB_10xm1_kernel10slot_table9SlotTableENtNtBT_20native_configuration19NativeConfigurationNtB2_9DiscardedEB2_",
+   "access": "store",
+   "through": {
+    "result": "_RINvMNtCsjw6Ar5Xz5I4_4core6optionINtB3_6OptionQShE14unwrap_or_elseNCNvCsdTMjx7m5njD_25xm1_settings_storage_core8part_mut0ECsap93jzluDcr_20xm1_property_service"
+   },
+   "reason": "the output leaves check the length and the index against it before the store, and the part is inside the storage image the session holds"
+  },
+  {
+   "function": "_RINvCsap93jzluDcr_20xm1_property_service8set_pairINtNtCsdTMjx7m5njD_25xm1_settings_storage_core13native_mirror13NativeBackendNtNtCsjPY53278zkB_10xm1_kernel10slot_table9SlotTableENtB2_9DiscardedEB2_",
+   "access": "store",
+   "through": {
+    "result": "_RINvMNtCsjw6Ar5Xz5I4_4core6optionINtB3_6OptionQShE14unwrap_or_elseNCNvCsdTMjx7m5njD_25xm1_settings_storage_core8part_mut0ECsap93jzluDcr_20xm1_property_service"
+   },
+   "reason": "the output leaves check the length and the index against it before the store, and the part is inside the storage image the session holds"
+  },
+  {
+   "function": "_RNvMs1_CsdTMjx7m5njD_25xm1_settings_storage_coreINtB5_15SettingsStorageINtNtB5_13native_mirror13NativeBackendNtNtCsjPY53278zkB_10xm1_kernel10slot_table9SlotTableEE19refresh_active_bodyCsap93jzluDcr_20xm1_property_service",
+   "access": "store",
+   "through": {
+    "argument": "r0"
+   },
+   "reason": "forwards the session it was lent to read_body, which writes the body part through the output leaves' length and index checks"
+  },
+  {
+   "function": "_RNvMs1_CsdTMjx7m5njD_25xm1_settings_storage_coreINtB5_15SettingsStorageINtNtB5_13native_mirror13NativeBackendNtNtCsjPY53278zkB_10xm1_kernel10slot_table9SlotTableEE19refresh_active_bodyCsap93jzluDcr_20xm1_property_service",
+   "access": "store",
+   "through": {
+    "result": "_RINvMNtCsjw6Ar5Xz5I4_4core6optionINtB3_6OptionQShE14unwrap_or_elseNCNvCsdTMjx7m5njD_25xm1_settings_storage_core8part_mut0ECsap93jzluDcr_20xm1_property_service"
+   },
+   "reason": "forwards the body part it holds to read_body, which writes it through the output leaves' length and index checks"
+  },
+  {
+   "function": "_RNvXsg_NtCsdTMjx7m5njD_25xm1_settings_storage_core6mirrorINtB5_13SharedBackingINtNtB7_13native_mirror12NativeDriverNtNtCsjPY53278zkB_10xm1_kernel10slot_table9SlotTableNtB1h_10FullBackupEENtB5_15SettingsBackend9read_bodyCsap93jzluDcr_20xm1_property_service",
+   "access": "store",
+   "through": {
+    "argument": "r2"
+   },
+   "reason": "writes the body buffer it was handed through the output leaves, which check the length and the index against it"
+  },
+  {
+   "function": "_RNvXNtCsjPY53278zkB_10xm1_kernel10slot_tableNtB2_10StockGuestNtB2_5Guest5enter",
+   "access": "branch",
+   "through": {
+    "argument": "r1"
+   },
+   "reason": "calls the slot's stock entry word the kernel slot table read"
+  },
+  {
+   "function": "_RINvNtCsjPY53278zkB_10xm1_kernel10slot_table10core_indexNtB2_10StockGuestEB4_",
+   "access": "branch",
+   "through": {
+    "deref": {
+     "cell": "0x0096bd20"
+    }
+   },
+   "reason": "calls the core slot word the stock root table holds"
+  },
+  {
+   "function": "_RINvNtCsjPY53278zkB_10xm1_kernel10slot_table6reportNtB2_10StockGuestEB4_",
+   "access": "branch",
+   "through": {
+    "cell": "0x4089ea8c"
+   },
+   "reason": "calls the stock error callback word the table holds"
+  },
+  {
+   "function": "_RNvXs0_NtCsjPY53278zkB_10xm1_kernel10slot_tableNtB5_9SlotTableNtB7_7Backend10in_handler",
+   "access": "branch",
+   "through": {
+    "deref": {
+     "result": "_RINvNtCsjPY53278zkB_10xm1_kernel10slot_table5blockNtB2_10StockGuestEB4_"
+    }
+   },
+   "reason": "calls the handler slot word the stock core block holds"
+  },
+  {
+   "function": "_RNvXs0_NtCsjPY53278zkB_10xm1_kernel10slot_tableNtB5_9SlotTableNtB7_7Backend11irq_restore",
+   "access": "branch",
+   "through": {
+    "deref": {
+     "result": "_RINvNtCsjPY53278zkB_10xm1_kernel10slot_table5blockNtB2_10StockGuestEB4_"
+    }
+   },
+   "reason": "calls the interrupt-restore slot word the stock core block holds"
+  },
+  {
+   "function": "_RNvXs0_NtCsjPY53278zkB_10xm1_kernel10slot_tableNtB5_9SlotTableNtB7_7Backend12current_task",
+   "access": "branch",
+   "through": {
+    "deref": {
+     "result": "_RINvNtCsjPY53278zkB_10xm1_kernel10slot_table5blockNtB2_10StockGuestEB4_"
+    }
+   },
+   "reason": "calls the current-task slot word the stock core block holds"
+  },
+  {
+   "function": "_RNvXs0_NtCsjPY53278zkB_10xm1_kernel10slot_tableNtB5_9SlotTableNtB7_7Backend14semaphore_wait",
+   "access": "branch",
+   "through": {
+    "deref": {
+     "result": "_RINvNtCsjPY53278zkB_10xm1_kernel10slot_table5blockNtB2_10StockGuestEB4_"
+    }
+   },
+   "reason": "calls the semaphore-wait slot word the stock core block holds"
+  },
+  {
+   "function": "_RNvXs0_NtCsjPY53278zkB_10xm1_kernel10slot_tableNtB5_9SlotTableNtB7_7Backend16semaphore_signal",
+   "access": "branch",
+   "through": {
+    "deref": {
+     "result": "_RINvNtCsjPY53278zkB_10xm1_kernel10slot_table5blockNtB2_10StockGuestEB4_"
+    }
+   },
+   "reason": "calls the semaphore-signal slot word the stock core block holds"
+  },
+  {
+   "function": "_RNvXs0_NtCsjPY53278zkB_10xm1_kernel10slot_tableNtB5_9SlotTableNtB7_7Backend8irq_mask",
+   "access": "branch",
+   "through": {
+    "deref": {
+     "result": "_RINvNtCsjPY53278zkB_10xm1_kernel10slot_table5blockNtB2_10StockGuestEB4_"
+    }
+   },
+   "reason": "calls the interrupt-mask slot word the stock core block holds"
   }
  ]
 }
