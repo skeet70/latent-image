@@ -854,15 +854,23 @@ candidateContractValueWith hullRule premises (StagedCandidate staged@(StagedImag
     proof = artifactProof artifact
     names = M.fromList [(entry, name) | FunctionExtent (FunctionName name) entry _ <- artifactFunctions artifact]
     depth address = maybe 0 (\(StackOffset offset) -> negate offset) (M.lookup (GuestAddress address) (proofComposed proof))
-    frameValue (EntryFrame entry@(GuestAddress address) (StackOffset own) calls) = object
+    frameValue (EntryFrame entry@(GuestAddress address) (StackOffset own) calls arguments incoming) = object
       [ "entry" .= address
       , "name" .= M.lookup entry names
       , "own_depth_bytes" .= negate own
       , "max_depth_bytes" .= depth address
+      , "frame_arguments" .=
+          [ object ["slot" .= slotText slot, "bytes" .= bytes]
+          | CallArgument (GuestAddress callee) slot bytes <- arguments, callee == address
+          ]
+      , "incoming_words" .= S.toList incoming
       , "calls" .=
           [ object ["site" .= site, "target" .= target, "sp_offset" .= at, "tail" .= (kind `elem` [TailCall, StockLeafTailCall, CallbackTailCall]), "stock" .= (kind `elem` [StockLeafCall, StockLeafTailCall, StockSiteCall]), "callback" .= (kind `elem` [CallbackCall, CallbackTailCall])]
           | CallEdge (GuestAddress site) (GuestAddress target) (StackOffset at) kind <- calls
           ]
       ]
+    slotText slot = case slot of
+      ArgumentRegister register -> A.regName register :: String
+      ArgumentStackWord offset -> "sp+" ++ show offset
     reasonText reason = case reason of
       HighEntropyData -> "high-entropy-data" :: String
