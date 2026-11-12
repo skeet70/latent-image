@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "tg+PheFvEBWlyeGHssJ3DaTBoVZpnSMEYRS4q+TCE1Q=",
+        "bzlTransitiveDigest": "NGhC/9oQnlC7Kw7cTHVAy5AHjbRwO96dBg5WT+6Wueo=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -657,6 +657,7 @@
                 "@@//emulation:fujimod-xm1/src/startup_tasks.rs": "//emulation:fujimod-xm1/src/startup_tasks.rs",
                 "@@//emulation:fujimod-xm1/src/idle_tasks.rs": "//emulation:fujimod-xm1/src/idle_tasks.rs",
                 "@@//emulation:fujimod-xm1/src/task_constructors.rs": "//emulation:fujimod-xm1/src/task_constructors.rs",
+                "@@//emulation:fujimod-xm1/src/terminal_observer.rs": "//emulation:fujimod-xm1/src/terminal_observer.rs",
                 "@@//emulation:fujimod-xm1/src/task_storage.rs": "//emulation:fujimod-xm1/src/task_storage.rs",
                 "@@//emulation:fujimod-xm1/src/task_storage_check.rs": "//emulation:fujimod-xm1/src/task_storage_check.rs",
                 "@@//emulation:fujimod-xm1/src/task_submission_control.rs": "//emulation:fujimod-xm1/src/task_submission_control.rs",
@@ -855,6 +856,7 @@
                 "@@//emulation:fujimod-xm1/src/startup_tasks.rs": "//emulation:fujimod-xm1/src/startup_tasks.rs",
                 "@@//emulation:fujimod-xm1/src/idle_tasks.rs": "//emulation:fujimod-xm1/src/idle_tasks.rs",
                 "@@//emulation:fujimod-xm1/src/task_constructors.rs": "//emulation:fujimod-xm1/src/task_constructors.rs",
+                "@@//emulation:fujimod-xm1/src/terminal_observer.rs": "//emulation:fujimod-xm1/src/terminal_observer.rs",
                 "@@//emulation:fujimod-xm1/src/task_storage.rs": "//emulation:fujimod-xm1/src/task_storage.rs",
                 "@@//emulation:fujimod-xm1/src/task_storage_check.rs": "//emulation:fujimod-xm1/src/task_storage_check.rs",
                 "@@//emulation:fujimod-xm1/src/task_submission_control.rs": "//emulation:fujimod-xm1/src/task_submission_control.rs",
@@ -1053,6 +1055,7 @@
                 "@@//emulation:fujimod-xm1/src/startup_tasks.rs": "//emulation:fujimod-xm1/src/startup_tasks.rs",
                 "@@//emulation:fujimod-xm1/src/idle_tasks.rs": "//emulation:fujimod-xm1/src/idle_tasks.rs",
                 "@@//emulation:fujimod-xm1/src/task_constructors.rs": "//emulation:fujimod-xm1/src/task_constructors.rs",
+                "@@//emulation:fujimod-xm1/src/terminal_observer.rs": "//emulation:fujimod-xm1/src/terminal_observer.rs",
                 "@@//emulation:fujimod-xm1/src/task_storage.rs": "//emulation:fujimod-xm1/src/task_storage.rs",
                 "@@//emulation:fujimod-xm1/src/task_storage_check.rs": "//emulation:fujimod-xm1/src/task_storage_check.rs",
                 "@@//emulation:fujimod-xm1/src/task_submission_control.rs": "//emulation:fujimod-xm1/src/task_submission_control.rs",
@@ -1254,6 +1257,7 @@
                 "@@//emulation:fujimod-xm1/src/startup_tasks.rs": "//emulation:fujimod-xm1/src/startup_tasks.rs",
                 "@@//emulation:fujimod-xm1/src/idle_tasks.rs": "//emulation:fujimod-xm1/src/idle_tasks.rs",
                 "@@//emulation:fujimod-xm1/src/task_constructors.rs": "//emulation:fujimod-xm1/src/task_constructors.rs",
+                "@@//emulation:fujimod-xm1/src/terminal_observer.rs": "//emulation:fujimod-xm1/src/terminal_observer.rs",
                 "@@//emulation:fujimod-xm1/src/task_storage.rs": "//emulation:fujimod-xm1/src/task_storage.rs",
                 "@@//emulation:fujimod-xm1/src/task_storage_check.rs": "//emulation:fujimod-xm1/src/task_storage_check.rs",
                 "@@//emulation:fujimod-xm1/src/task_submission_control.rs": "//emulation:fujimod-xm1/src/task_submission_control.rs",
@@ -1455,6 +1459,7 @@
                 "@@//emulation:fujimod-xm1/src/startup_tasks.rs": "//emulation:fujimod-xm1/src/startup_tasks.rs",
                 "@@//emulation:fujimod-xm1/src/idle_tasks.rs": "//emulation:fujimod-xm1/src/idle_tasks.rs",
                 "@@//emulation:fujimod-xm1/src/task_constructors.rs": "//emulation:fujimod-xm1/src/task_constructors.rs",
+                "@@//emulation:fujimod-xm1/src/terminal_observer.rs": "//emulation:fujimod-xm1/src/terminal_observer.rs",
                 "@@//emulation:fujimod-xm1/src/task_storage.rs": "//emulation:fujimod-xm1/src/task_storage.rs",
                 "@@//emulation:fujimod-xm1/src/task_storage_check.rs": "//emulation:fujimod-xm1/src/task_storage_check.rs",
                 "@@//emulation:fujimod-xm1/src/task_submission_control.rs": "//emulation:fujimod-xm1/src/task_submission_control.rs",

@@ -103,6 +103,19 @@ xm1_first_stage_handoff_vector:
     mov pc, r2
     .size xm1_first_stage_handoff, . - xm1_first_stage_handoff
 
+    @ Stock 0x1fe0-0x1fec zeroes 0x400a00c4. The artifact contract admits a
+    @ literal-loaded base and a zero-offset store.
+    .section .text
+    .global xm1_first_stage_completion_zero
+    .type xm1_first_stage_completion_zero, %function
+xm1_first_stage_completion_zero:
+    ldr r0, =0x400a00c4
+    mov r1, #0
+    str r1, [r0]
+    bx lr
+    .ltorg
+    .size xm1_first_stage_completion_zero, . - xm1_first_stage_completion_zero
+
     @ Boot-log timestamp: r0 = slot word address. The read and store are the relation's log site;
     @ the linker script places .xm1_log_text after every .text input.
     .section .xm1_log_text, "ax", %progbits
@@ -135,12 +148,13 @@ xm1_first_stage_interleaved_tail_fault:
     .size xm1_first_stage_interleaved_tail_fault, . - xm1_first_stage_interleaved_tail_fault
 #endif
 
-    .section .rodata
+    .section .rodata.xm1_first_stage_contract, "a", %progbits
     .global xm1_first_stage_contract
 xm1_first_stage_contract:
     .word xm1_vector_table_start, xm1_vector_before_reset_end
     .word xm1_vector_after_reset_start, xm1_vector_table_end
-    .word xm1_retained_body_start, xm1_retained_body_end
+    .word xm1_retired_body_start, xm1_retired_body_end
+    .word xm1_config_data_start, xm1_config_data_end
     .word xm1_retained_data_start, xm1_retained_data_end
 
     .section .note.GNU-stack, "", %progbits

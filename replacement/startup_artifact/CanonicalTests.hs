@@ -360,7 +360,6 @@ main = do
         logSites =
           [ logSite "stock-record1-channel0" "retained" 0 (stock 0x40f4), logSite "stock-record1-channel1" "retained" 1 (stock 0x413c)
           , logSite "stock-record2-channel0" "retained" 0 (stock 0x134f4), logSite "stock-record2-channel1" "retained" 1 (stock 0x1353c)
-          , logSite "composed-stock-record1" "composed" 0 (stock 0x40f4)
           , logSite "first-stage-core0" "composed" 0 (owned "first-stage"), logSite "first-stage-core1" "composed" 1 (owned "first-stage")
           , logSite "record2-core0" "composed" 0 (owned "record2-link"), logSite "record2-core1" "composed" 1 (owned "record2-link") ]
         manifest = J.object
@@ -435,7 +434,7 @@ main = do
         && length (allowOf "record2-link") == 28)
     ok "the first stage's writes are premised and enumerated on core 0"
       ([field "basis" writes | writes <- writesOf "first-stage"] == [Just (J.String "premised")]
-        && length (allowOf "first-stage") == 14
+        && length (allowOf "first-stage") == 21
         && all (\(_, core, _, _) -> core == number 0) (allowOf "first-stage"))
     let declaredOf role = case field "guard" contract >>= field "declared" >>= field role of
           Just (J.Array rows) -> [(field "kind" row, field "core" row, field "writer" row) | row <- V.toList rows]
@@ -468,8 +467,7 @@ main = do
         pcOf (_, Just (J.Number read'), Just (J.Number store)) = Just (read', store)
         pcOf _ = Nothing
     ok "every log site resolves to a word load and the store after it in its role's image"
-      (length sites == 9 && all (maybe False (\(read', store) -> store == read' + 4) . pcOf) sites
-        && [pc | site@(Just (J.String "composed-stock-record1"), _, _) <- sites, Just pc <- [pcOf site]] == [(0x40f4, 0x40f8)])
+      (length sites == 8 && all (maybe False (\(read', store) -> store == read' + 4) . pcOf) sites)
 
     -- Record2Link alone stages through the shared image-4 route.
     pairOnly <- either (H.failH . show) pure (composeOf [pair])

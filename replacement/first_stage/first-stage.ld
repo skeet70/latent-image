@@ -1,5 +1,5 @@
-/* Image load offset 0x6000; the retained stock first-record body occupies
-   0x1800-0x5280 and provides these entry symbols. */
+/* Owned code is staged at 0x6000. Fixed-address configuration and workspace
+   are separate from the retired executable body. */
 ENTRY(xm1_first_stage_entry)
 SECTIONS
 {
@@ -10,7 +10,7 @@ SECTIONS
     *(.text*)
     KEEP(*(.xm1_log_text))
   }
-  .rodata : { *(.rodata*) }
+  .rodata : { KEEP(*(.rodata.xm1_first_stage_contract)) *(.rodata*) }
   .data : { *(.data*) }
   .bss : { *(.bss*) *(COMMON) }
   . = ALIGN(4);
@@ -29,14 +29,9 @@ xm1_vector_table_start = 0x0;
 xm1_vector_before_reset_end = 0x20;
 xm1_vector_after_reset_start = 0x24;
 xm1_vector_table_end = 0x40;
-xm1_retained_body_start = 0x1800;
-xm1_retained_body_end = 0x4300;
+xm1_retired_body_start = 0x1800;
+xm1_retired_body_end = 0x4228;
+xm1_config_data_start = 0x4228;
+xm1_config_data_end = 0x4300;
 xm1_retained_data_start = 0x4300;
 xm1_retained_data_end = 0x5280;
-xm1_retained_core_init = 0x25d4;
-xm1_retained_storage_init = 0x2034;
-xm1_retained_skip_scan = 0x2058;
-xm1_retained_segment_table = 0x1dc4;
-xm1_retained_trailer_check = 0x1cc0;
-xm1_retained_stage_images = 0x1d08;
-xm1_retained_storage_fini = 0x2044;

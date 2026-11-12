@@ -202,6 +202,53 @@ haskell_binary(
 )
 
 haskell_library(
+    name = "first-stage-media-reply",
+    srcs = ["FirstStageMediaReply.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
+haskell_test(
+    name = "first-stage-media-reply-tests",
+    srcs = ["FirstStageMediaReplyTests.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-XGHC2021",
+    ],
+    deps = [
+        ":first-stage-media-reply",
+        "//host:base",
+    ],
+)
+
+haskell_binary(
+    name = "first-stage-media-oracle",
+    srcs = ["FirstStageMediaOracle.hs"],
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021", "-threaded"],
+    deps = [
+        ":first-stage-media-reply",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:update-container",
+    ],
+)
+
+haskell_library(
     name = "secondary-stage-contract",
     srcs = ["SecondaryStageContract.hs"],
     ghcopts = [

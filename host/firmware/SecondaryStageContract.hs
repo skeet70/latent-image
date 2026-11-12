@@ -88,4 +88,4 @@ secondaryDeclarations symbols = do
           ++ ["publication " ++ name ++ " " ++ guest address | (name, address) <- publications]
   forM_ (zip ordered (drop 1 ordered)) $ \((_, name, (_, end)), (_, next, (start, _))) ->
     when (end > start) (Left ("forbidden " ++ name ++ " overlaps " ++ next))
-  pure (StageDeclarations [before, after, body, retainedData] [] summary)
+  pure (StageDeclarations [before, after, body, retainedData] [] [] summary)

@@ -13,6 +13,9 @@ let
     sha256 = "06y3dvs9ms4c70r2ia50k77650yrihc09jibqbqrzly23dn42s4m";
   };
   craneLib = (import craneSource { inherit pkgs; }).overrideToolchain fujimod.passthru.toolchain;
+  # `builtins.path` hashes this tree at evaluation, so an edited crate gets a new store path and
+  # the derivation rebuilds. A caller-supplied `sha256` would be skipped while its store path
+  # exists; the recorded identity is the path Nix computes.
   crate = builtins.path {
     path = ../emulation/fujimod-xm1;
     name = "fujimod-xm1-source";
@@ -82,6 +85,7 @@ craneLib.mkCargoDerivation (common // {
   outputs = [ "out" "tests" ];
   cargoArtifacts = deps;
   doInstallCargoArtifacts = false;
+  XM1_CRATE_SOURCE_PATH = "${crate}";
   XM1_CHECKPOINT_MODEL_ID = builtins.hashString "sha256" (builtins.toJSON {
     engine = "${fujimod}";
     owned = "${checkpointModel}";
