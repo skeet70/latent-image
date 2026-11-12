@@ -320,6 +320,7 @@ impl<'a, D: HeaderBackupDriver> SharedBacking<'a, D> {
     }
 
     /// Takes the settings semaphore and lends the report store.
+    #[inline(always)]
     fn enter(&mut self, task: D::Task) -> SettingsHold<'_, 'a, D> {
         let semaphore = self.acquire(task);
         let reports = unsafe { &mut *core::ptr::addr_of_mut!(REPORTS) };
@@ -404,13 +405,13 @@ impl<'a, D: HeaderBackupDriver> SharedBacking<'a, D> {
     pub fn synchronize_into(&mut self, observations: &mut [Option<DriverObservation>; HEADER_BYTES]) {
         let checksum = self.live[..15].iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)).wrapping_neg();
         crate::memory::write_byte(&mut self.live[15], checksum);
-        for (index, (key, observation)) in self.keys.iter().zip(observations.iter_mut()).enumerate() {
+        for index in 0..HEADER_BYTES {
             if crate::memory::read_byte(&*self.live, index) != crate::memory::read_byte(&*self.shadow, index) {
-                let key = *key;
+                let key = self.keys[index];
                 let value = BackupValue(crate::memory::read_byte(&*self.live, index));
                 let status = self.driver.write_backup(key, value, BackupWriteMode::Immediate);
                 crate::memory::write_byte_at(&mut *self.shadow, index, crate::memory::read_byte(&*self.live, index));
-                *observation = Some(DriverObservation { position: HeaderPosition(index as u8), key, value, status });
+                observations[index] = Some(DriverObservation { position: HeaderPosition(index as u8), key, value, status });
             }
         }
     }

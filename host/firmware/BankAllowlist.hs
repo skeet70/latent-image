@@ -170,8 +170,8 @@ parseAllowlist bytes = do
   text (String value) | not (T.null value) = Right (T.unpack value)
   text _ = Left "allowlist: nonempty string required"
   byteCount (Number n)
-    | n >= 1 && n <= 256 && n == fromIntegral (truncate n :: Int) = Right (truncate n)
-  byteCount _ = Left "allowlist: stock store bytes must be an integer from 1 to 256"
+    | n >= 1 && n <= 4096 && n == fromIntegral (truncate n :: Int) = Right (truncate n)
+  byteCount _ = Left "allowlist: stock store bytes must be an integer from 1 to 4096"
   hexWord (String value) = case T.unpack value of
     '0' : 'x' : digits | length digits == 8 && all isHexDigit digits, [(word, "")] <- readHex digits -> Right word
     other -> Left ("allowlist: eight-digit 0x word required, got " ++ other)

@@ -3,7 +3,7 @@
     .text
     .balign 4
 
-    .macro window low, high, next, store
+    .macro window low, high, next, instruction
     movw r12, #:lower16:\low
     movt r12, #:upper16:\low
     cmp r0, r12
@@ -11,24 +11,23 @@
     movw r12, #:lower16:\high
     movt r12, #:upper16:\high
     cmp r0, r12
-    blo \store
+    bhs \next
+    \instruction r1, [r0]
+    bx lr
     .endm
 
     .macro checked_store name, width, instruction
     .global \name
     .type \name, %function
 \name:
-    window 0x0096cc64, (0x0096d1aa - \width + 1), 1f, 5f
+    window 0x0096cc64, (0x0096d1aa - \width + 1), 1f, \instruction
 1:
-    window 0x0089ec00, (0x0089ede0 - \width + 1), 2f, 5f
+    window 0x0089ec00, (0x0089ede0 - \width + 1), 2f, \instruction
 2:
-    window 0x409c281c, (0x409c29b6 - \width + 1), 3f, 5f
+    window 0x409c281c, (0x409c29b6 - \width + 1), 3f, \instruction
 3:
-    window 0x409c29b8, (0x409c29c8 - \width + 1), 4f, 5f
+    window 0x409c29b8, (0x409c29c8 - \width + 1), 4f, \instruction
 4:
-    bx lr
-5:
-    \instruction r1, [r0]
     bx lr
     .size \name, . - \name
     .endm

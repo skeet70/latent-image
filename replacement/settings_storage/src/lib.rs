@@ -33,14 +33,26 @@ pub(crate) fn part(bytes: &[u8], start: usize, length: usize) -> &[u8] {
 pub(crate) fn part_mut(bytes: &mut [u8], start: usize, length: usize) -> &mut [u8] {
     bytes.get_mut(start..start + length).unwrap_or_else(|| contract_violation())
 }
-#[cold]
-#[inline(never)]
-pub(crate) fn contract_violation() -> ! {
-    #[cfg(settings_storage_firmware)]
-    loop { core::hint::spin_loop(); }
-    #[cfg(not(settings_storage_firmware))]
-    panic!("settings-storage buffer contract violated");
+#[cfg(settings_storage_firmware)]
+core::arch::global_asm!(
+    ".section .text.xm1_settings_contract_violation,\"ax\",%progbits",
+    ".balign 4",
+    ".global xm1_settings_contract_violation",
+    ".type xm1_settings_contract_violation,%function",
+    "xm1_settings_contract_violation:",
+    "b xm1_settings_contract_violation",
+    ".size xm1_settings_contract_violation, .-xm1_settings_contract_violation",
+);
+#[cfg(settings_storage_firmware)]
+extern "C" {
+    #[link_name = "xm1_settings_contract_violation"]
+    fn xm1_settings_contract_violation() -> !;
 }
+#[cfg(settings_storage_firmware)]
+#[inline(always)]
+pub(crate) fn contract_violation() -> ! { unsafe { xm1_settings_contract_violation() } }
+#[cfg(not(settings_storage_firmware))]
+pub(crate) fn contract_violation() -> ! { panic!("settings-storage buffer contract violated"); }
 
 pub struct PreviousValues<'a> {
     bytes: *mut [u8; PREVIOUS_WINDOW],
