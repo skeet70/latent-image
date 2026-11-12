@@ -270,9 +270,9 @@ checkerRoot = "bazel-bin"
 trajectoryRoot, runDocument, inputsRoot, tablesPath, planPath, clockPath :: FilePath
 trajectoryRoot = "private-data/scratch/ControllerStrategy/engine225/controlled-rtc/trajectories"
 runDocument = "private-data/scratch/ControllerStrategy/engine225/controlled-rtc/xm1-150.json"
-inputsRoot = "private-data/scratch/ControllerStrategy/engine225/final-2db1e64a/inputs"
+inputsRoot = "private-data/scratch/ControllerStrategy/engine225/final-3dd00/inputs"
 tablesPath = "private-data/scratch/ControllerStrategy/menu-tables.json"
-planPath = "private-data/scratch/ControllerStrategy/menu-engine/bank-plan.json"
+planPath = "private-data/scratch/ControllerStrategy/engine225/final-3dd00/inputs/bank-plan.json"
 clockPath = "emulation/menu-engine-pair-trajectories/clock-exclusions.json"
 
 main :: IO ()

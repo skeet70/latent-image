@@ -153,8 +153,7 @@ impl Guest for StockGuest {
         unsafe { core::ptr::write_volatile(address as *mut u32, value) }
     }
     unsafe fn enter(&self, address: u32, arguments: [u32; 3]) -> u32 {
-        let entry: unsafe extern "C" fn(u32, u32, u32) -> u32 = unsafe { core::mem::transmute(address as usize) };
-        unsafe { entry(arguments[0], arguments[1], arguments[2]) }
+        unsafe { xm1_kernel_enter_slot(address, arguments[0], arguments[1], arguments[2]) }
     }
     unsafe fn console(&self, kind: u32, semaphore: u32, status: i32) {
         unsafe { xm1_kernel_console9(kind, semaphore, status) }
@@ -172,6 +171,15 @@ extern "C" {
     fn xm1_kernel_console9(kind: u32, semaphore: u32, status: i32);
     fn xm1_kernel_critical_enter() -> u32;
     fn xm1_kernel_critical_exit(saved: u32);
+}
+
+/// Enters a slot block's stock function word.
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+#[inline(never)]
+pub unsafe extern "C" fn xm1_kernel_enter_slot(address: u32, first: u32, second: u32, third: u32) -> u32 {
+    let entry: unsafe extern "C" fn(u32, u32, u32) -> u32 = unsafe { core::mem::transmute(address as usize) };
+    unsafe { entry(first, second, third) }
 }
 
 impl crate::sealed::Sealed for SlotTable {}

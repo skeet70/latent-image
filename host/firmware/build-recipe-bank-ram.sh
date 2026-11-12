@@ -198,9 +198,9 @@ fi
 if (( ${#engine_link[@]} )); then
   # The engine's sections, by their Rust paths, move to .menu_engine.* for
   # menu/recipe_bank_ram_engine.ld.
-  engine_section='^\.(text|rodata)\.(rb_menu_engine_|rb_menu_value_|xm1_storage_|.*(11menu_engine(6engine|5block|5state|4tree)|19menu_engine_adapter|10menu_value|18menu_value_adapter|20xm1_property_service|25xm1_settings_storage_core|10xm1_kernel))'
+  engine_section='^\.(text|rodata|data|bss)\.(rb_menu_engine_|rb_menu_value_|xm1_storage_|xm1_property_|SLOT_BYTES|TAIL_BYTES|XM1_KERNEL_BOUNDARY|.*(11menu_engine(6engine|5block|5state|4tree|5frame)|19menu_engine_adapter|10menu_value|18menu_value_adapter|20xm1_property_service|25xm1_settings_storage_core|10xm1_kernel))'
   if [[ ${RB_PUBLICATION_GROUPS:-} == modal75,menu-engine,render ]]; then
-    engine_section='^\.(text|rodata)\.(rb_menu_engine_|rb_render_|xm1_storage_|.*(11menu_engine(6engine|5block|5state|4tree)|19menu_engine_adapter|15render_commands|12menu_widgets|14render_adapter|20xm1_property_service|25xm1_settings_storage_core|10xm1_kernel))'
+    engine_section='^\.(text|rodata|data|bss)\.(rb_menu_engine_|rb_render_|xm1_storage_|xm1_property_|SLOT_BYTES|TAIL_BYTES|XM1_KERNEL_BOUNDARY|.*(11menu_engine(6engine|5block|5state|4tree|5frame)|19menu_engine_adapter|15render_commands|12menu_widgets|14render_adapter|20xm1_property_service|25xm1_settings_storage_core|10xm1_kernel))'
   fi
   declare -A renamed=()
   renames=()
@@ -223,11 +223,15 @@ NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${FREE[@]}" -Oz -Wall -Wextra \
 objects+=("$OUT/ram_push_installer.o")
 NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" -c menu/classic_chrome_ram.S -o "$OUT/classic_chrome_ram.o"
 objects+=("$OUT/classic_chrome_ram.o")
+map_link=()
+if [[ -n ${RB_LINK_MAP:-} ]]; then
+  map_link=(-Wl,--Map="$RB_LINK_MAP")
+fi
 NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${LINK[@]}" "${gc_link[@]}" -Wl,-T,menu/recipe_bank_ram.ld \
   -Wl,--defsym=RAM_PUSH_BASE="$BASE" -Wl,--defsym=RAM_PUSH_BANK_END="$rb_bank_end" \
   -Wl,--defsym=RAM_PUSH_INSTALLER_START="$rb_installer_start" \
   -Wl,--defsym=RAM_PUSH_PUBLICATION_COUNT="$publication_count" "${modal_link[@]}" "${lifecycle_link[@]}" "${engine_link[@]}" "${variant_link[@]}" \
-  -Wl,menu/classic_chrome_ram_stock.ld -Wl,--emit-relocs \
+  -Wl,menu/classic_chrome_ram_stock.ld -Wl,--emit-relocs "${map_link[@]}" \
   "${objects[@]}" -o "$OUT/kernel.elf"
 "$OBJCOPY" -O binary "$OUT/kernel.elf" "$OUT/linked.bin"
 "$OBJCOPY" -j .text -O binary "$OUT/kernel.elf" "$OUT/kernel-text.bin"

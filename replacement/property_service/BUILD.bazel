@@ -129,6 +129,27 @@ xm1_rust_elf(
     extra_ldflags = ["-Wl,--gc-sections"],
 )
 
+# The rlib the image links, in its carrier layout, for the oracle and the judge.
+xm1_rust_staticlib(
+    name = "property-linked-panic",
+    src = "linked-panic.rs",
+    crate_name = "xm1_property_linked_panic",
+)
+
+xm1_rust_elf(
+    name = "property-service-linked-image",
+    rust_staticlib = ":property-linked-panic",
+    rust_components = [
+        ":property-service-arm",
+        "//replacement/settings_storage:property-core-arm",
+        "//replacement/kernel:arm",
+    ],
+    asm_srcs = ["entry-public.S", "storage-boundary.S"],
+    entry = "xm1_public_get",
+    link_script = "property-service-public.ld",
+    extra_ldflags = ["-Wl,--gc-sections"],
+)
+
 [
     xm1_rust_staticlib(
         name = "property-service-rust-defect-" + defect.replace("_", "-"),
@@ -163,6 +184,44 @@ xm1_rust_elf(
         extra_ldflags = ["-Wl,--gc-sections"],
     )
     for defect in _DEFECTS
+]
+
+# The four defects the rlib-linked oracle runs, built from the same rlib configuration.
+_LINKED_DEFECTS = ["storage_open_removed", "storage_close_before_set", "nonzero_means_default", "sentinel_plus_one"]
+
+[
+    xm1_rust_rlib(
+        name = "property-service-linked-rust-defect-" + defect.replace("_", "-"),
+        src = "src/lib.rs",
+        crate_name = "xm1_property_service",
+        out = "linked-defect/%s/libxm1_property_service.rlib" % defect.replace("_", "-"),
+        rustc_flags = ["-C", "jump-tables=no", "--cfg", "property_reload", "--cfg", "property_rlib"] + (
+            ["--cfg", defect] if defect in _CORE_DEFECTS else ["--cfg", "property_defect_" + defect]
+        ),
+        data = _RUST_DATA,
+        rlib_deps = {
+            "xm1_kernel": "//replacement/kernel:arm",
+            "xm1_settings_storage_core": "//replacement/settings_storage:property-core-" + defect.replace("_", "-") if defect in _CORE_DEFECTS else "//replacement/settings_storage:property-core-arm",
+        },
+    )
+    for defect in _LINKED_DEFECTS
+]
+
+[
+    xm1_rust_elf(
+        name = "property-service-linked-defect-" + defect.replace("_", "-"),
+        rust_staticlib = ":property-linked-panic",
+        rust_components = [
+            ":property-service-linked-rust-defect-" + defect.replace("_", "-"),
+            "//replacement/settings_storage:property-core-" + defect.replace("_", "-") if defect in _CORE_DEFECTS else "//replacement/settings_storage:property-core-arm",
+            "//replacement/kernel:arm",
+        ],
+        asm_srcs = ["entry-public.S", "storage-boundary.S"],
+        entry = "xm1_public_get",
+        link_script = "property-service-public.ld",
+        extra_ldflags = ["-Wl,--gc-sections"],
+    )
+    for defect in _LINKED_DEFECTS
 ]
 
 [

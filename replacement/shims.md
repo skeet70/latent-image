@@ -389,6 +389,7 @@ The property classifier, table generator, service and public entries. Its compat
 | `xm1_storage_store8` and `xm1_recipe_edit_get` retained services | trampoline into retained stock | the retained bank/previous-value storage and recipe getter | no | owned settings storage and the recipe getter own those paths | required |
 | `xm1_property_get`/`xm1_property_set` exports | C-ABI bridge between two owned units | develop and power_lifecycle | yes | both callers link the crate directly and both sides compare with stock in one image | required |
 | base-fixed accessors, named default leaves, bank-0 bracket callees and the carrier in retired setter arms (`src/`, `entry*.S`, `property-service*.ld`, `menu/recipe_bank_ram_engine.ld`) | guest-memory layout view | retained bank/previous-value layout and default leaves, and the owned image's link script, which binds `0x6439e0`, the six default leaves and the three backup callbacks | no | owned storage carries the data and defaults | required |
+| The property service carried twice: the stock-visible carrier at `0x62c120` (`property-service-public.ld`) and the `property-service-arm` rlib the owned menu adapters link | veneer or carrier at a stock address | stock callers of `0x62c120` | no | no stock caller enters the `0x62c120` carrier | required |
 
 ## recipe_ui
 
