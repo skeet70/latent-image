@@ -239,7 +239,10 @@ unsafe fn stage_next(core: Core) -> Result<(), BootError> {
     write(CELL_PEER0, 0);
     asm!("dsb sy");
     while read(CELL_PEER1) == PEER_READY {
-        core::hint::spin_loop();
+        // Stock 0x2014 delays 100 `nop`s between reads of the peer cell.
+        for _ in 0..100 {
+            asm!("nop");
+        }
     }
     asm!("dsb sy", "isb sy");
     Ok(())

@@ -300,7 +300,7 @@ pub trait PeripheralBus {
     fn write(&mut self, register: PeripheralRegister, value: u32);
 }
 
-struct VolatilePeripherals;
+pub struct VolatilePeripherals;
 
 impl PeripheralBus for VolatilePeripherals {
     fn read(&mut self, register: PeripheralRegister) -> u32 {
@@ -369,6 +369,108 @@ pub fn initialize_peripherals(bus: &mut impl PeripheralBus) {
 
 pub unsafe fn core_init() {
     initialize_peripherals(&mut VolatilePeripherals);
+}
+
+/// The EXR II channel-0 memory DMA block stock fills the application bss with.
+pub const FILL_BASE: u32 = 0xfff0_2000;
+/// Stock 0x38c0's eight descriptor words, read by the block through the uncached alias.
+const FILL_DESCRIPTOR: u32 = 0x4000_42c0;
+/// Stock 0x3868-0x3870 accepts 1..0x07ffffff words.
+const FILL_MAX_WORDS: u32 = 0x07ff_ffff;
+const FILL_COMPLETE: u32 = 0x40;
+const FILL_ABORT: u32 = 8;
+
+/// A fill length in 4-byte units, as stock 0x2298 hands 0x3844 `[segment+0x10] >> 2`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Words(u32);
+
+impl Words {
+    /// Stock 0x2298's `lsr r1, r1, #2`: a byte length becomes whole words.
+    pub const fn from_bytes(bytes: u32) -> Self {
+        Self(bytes >> 2)
+    }
+
+    /// Stock 0x3928's `lsl r1, r1, #2`: the byte count 0x393c stores at 0xfff02008.
+    const fn bytes(self) -> u32 {
+        self.0 << 2
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+enum FillRegister {
+    Descriptor = 0x00,
+    Destination = 0x04,
+    Bytes = 0x08,
+    Stride0 = 0x0c,
+    Stride1 = 0x10,
+    Stride2 = 0x14,
+    Status = 0x24,
+    Start = 0x28,
+    Mode = 0x2c,
+    Offset0 = 0x30,
+    Offset1 = 0x34,
+}
+
+impl FillRegister {
+    fn register(self) -> PeripheralRegister {
+        PeripheralRegister(FILL_BASE + self as u32)
+    }
+}
+
+/// Stock 0x3860 and 0x3984 return -30 for these and fill on the CPU; the stage has no fallback.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FillError {
+    Destination,
+    Bytes,
+}
+
+/// Stock 0x387c-0x38bc picks the transfer width from the destination alignment and the
+/// word count, then packs it into bits 12-19 of the mode word.
+fn fill_mode(destination: u32, words: Words) -> u32 {
+    let mode = if destination & 31 == 0 && words.0 & 7 == 0 {
+        5
+    } else if destination & 15 == 0 && words.0 & 3 == 0 {
+        4
+    } else if destination & 7 == 0 && words.0 & 1 == 0 {
+        3
+    } else {
+        2
+    };
+    0x0150_0400 | mode << 12 | mode << 16
+}
+
+/// Stock 0x3844 programs and starts a uniform zero fill; `fill_wait` polls its completion.
+pub fn fill_start(bus: &mut impl PeripheralBus, destination: u32, words: Words) -> Result<(), FillError> {
+    if destination == 0 || destination & 3 != 0 {
+        return Err(FillError::Destination);
+    }
+    if words.0 == 0 || words.0 > FILL_MAX_WORDS {
+        return Err(FillError::Bytes);
+    }
+    for word in 0..8 {
+        bus.write(PeripheralRegister(FILL_DESCRIPTOR + word * 4), 0);
+    }
+    bus.write(FillRegister::Mode.register(), fill_mode(destination, words));
+    bus.write(FillRegister::Descriptor.register(), FILL_DESCRIPTOR);
+    bus.write(FillRegister::Destination.register(), destination);
+    bus.write(FillRegister::Bytes.register(), words.bytes());
+    for register in [
+        FillRegister::Stride0, FillRegister::Stride1, FillRegister::Stride2,
+        FillRegister::Offset0, FillRegister::Offset1,
+    ] {
+        bus.write(register.register(), 0);
+    }
+    bus.write(FillRegister::Start.register(), FILL_ABORT);
+    // Stock 0x3964 reads the mode word back: bit 2 of the start word follows bits 4-5.
+    let cleared = bus.read(FillRegister::Mode.register()) & 0x30 == 0;
+    bus.write(FillRegister::Start.register(), if cleared { 5 } else { 1 });
+    Ok(())
+}
+
+/// Stock 0x39b0 polls the completion bit with no timeout and no failure exit.
+pub fn fill_wait(bus: &mut impl PeripheralBus) {
+    while bus.read(FillRegister::Status.register()) & FILL_COMPLETE == 0 {}
 }
 
 #[cfg(test)]
@@ -477,5 +579,82 @@ mod tests {
         assert_eq!(map_block(3, &[1, 2]).unwrap().0, 5);
         assert!(matches!(map_block(1023, &[1]), Err(MediaError::AddressRange)));
         assert!(matches!(map_block(u32::MAX, &[0]), Err(MediaError::AddressRange)));
+    }
+
+    /// Boot 0x38c8-0x397c with the stock image-4 bss `0x89ec00`/`0x352e00`.
+    #[test]
+    fn the_bss_fill_programs_the_memory_dma_block_in_stock_order() {
+        let mut bus = RegisterFile::default();
+        bus.words.insert(PeripheralRegister(FILL_BASE + 0x24), 0x40);
+        fill_start(&mut bus, 0x0089_ec00, Words::from_bytes(0x0035_2e00)).unwrap();
+        fill_wait(&mut bus);
+        let writes: Vec<(u32, u32)> = bus.writes.iter().map(|(register, value)| (register.address(), *value)).collect();
+        assert_eq!(
+            writes,
+            vec![
+                // 0x38c8-0x38e4: the eight value words of the descriptor.
+                (0x4000_42c0, 0), (0x4000_42c4, 0), (0x4000_42c8, 0), (0x4000_42cc, 0),
+                (0x4000_42d0, 0), (0x4000_42d4, 0), (0x4000_42d8, 0), (0x4000_42dc, 0),
+                // 0x3930-0x393c: mode word, descriptor, destination, byte count.
+                (0xfff0_202c, 0x0155_5400),
+                (0xfff0_2000, 0x4000_42c0),
+                (0xfff0_2004, 0x0089_ec00),
+                (0xfff0_2008, 0x0035_2e00),
+                // 0x3944-0x394c: strides, then 0x3950-0x3954: offsets.
+                (0xfff0_200c, 0), (0xfff0_2010, 0), (0xfff0_2014, 0),
+                (0xfff0_2030, 0), (0xfff0_2034, 0),
+                // 0x395c: abort, then 0x397c: start after the mode read-back.
+                (0xfff0_2028, 8),
+                (0xfff0_2028, 5),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_fill_mode_follows_destination_alignment_and_word_count() {
+        assert_eq!(fill_mode(0x0089_ec00, Words::from_bytes(0x0035_2e00)), 0x0155_5400);
+        assert_eq!(fill_mode(0x0089_ec00, Words::from_bytes(0x0035_2e04)), 0x0152_2400);
+        assert_eq!(fill_mode(0x0089_ec00, Words::from_bytes(0x0035_2e08)), 0x0153_3400);
+        assert_eq!(fill_mode(0x0089_ec00, Words::from_bytes(0x0035_2e02)), 0x0155_5400);
+        assert_eq!(fill_mode(0x0089_ec00, Words::from_bytes(0x0035_2e01)), 0x0155_5400);
+        assert_eq!(fill_mode(0x0089_ec10, Words::from_bytes(0x0035_2e00)), 0x0154_4400);
+        assert_eq!(fill_mode(0x0089_ec08, Words::from_bytes(0x0035_2e00)), 0x0153_3400);
+        assert_eq!(fill_mode(0x0089_ec04, Words::from_bytes(0x0035_2e00)), 0x0152_2400);
+        assert_eq!(fill_mode(0x0089_ec0c, Words::from_bytes(0x0035_2e00)), 0x0152_2400);
+    }
+
+    #[test]
+    fn the_fill_refuses_only_the_requests_stock_reports_as_errors() {
+        let mut bus = RegisterFile::default();
+        assert_eq!(fill_start(&mut bus, 0, Words::from_bytes(16)), Err(FillError::Destination));
+        assert_eq!(fill_start(&mut bus, 0x0089_ec02, Words::from_bytes(16)), Err(FillError::Destination));
+        assert_eq!(fill_start(&mut bus, 0x0089_ec00, Words::from_bytes(0)), Err(FillError::Bytes));
+        assert_eq!(fill_start(&mut bus, 0x0089_ec00, Words::from_bytes(1)), Err(FillError::Bytes));
+        assert_eq!(fill_start(&mut bus, 0x0089_ec00, Words::from_bytes(0x2000_0000)), Err(FillError::Bytes));
+        assert!(bus.writes.is_empty());
+        assert!(fill_start(&mut bus, 0x0089_ec00, Words::from_bytes(0x1fff_fffc)).is_ok());
+        assert!(fill_start(&mut bus, 0x0089_ec00, Words::from_bytes(0x0800_0004)).is_ok());
+    }
+
+    struct PollBus {
+        status: Vec<u32>,
+        reads: usize,
+    }
+
+    impl PeripheralBus for PollBus {
+        fn read(&mut self, register: PeripheralRegister) -> u32 {
+            assert_eq!(register.address(), FILL_BASE + 0x24);
+            self.reads += 1;
+            self.status.remove(0)
+        }
+
+        fn write(&mut self, _: PeripheralRegister, _: u32) {}
+    }
+
+    #[test]
+    fn the_fill_wait_returns_only_on_the_completion_bit() {
+        let mut bus = PollBus { status: vec![0, 1, 0x80, 0x40], reads: 0 };
+        fill_wait(&mut bus);
+        assert_eq!(bus.reads, 4);
     }
 }

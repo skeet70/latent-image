@@ -4,7 +4,7 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files(["format.rs"])
 
-# The first-record image is 10,268 bytes, SHA-256 7f981088... (E-FIRST-RECORD-FLASH-BOOT-CHECK-150),
+# The first-record image is 10,672 bytes, SHA-256 a79f7e76... (E-FIRST-RECORD-FLASH-BOOT-CHECK-150),
 # and its three fault controls are derived from this source. Opted out until the
 # stage is requalified, at the latest in the runner requalification.
 xm1_rust_staticlib(

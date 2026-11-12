@@ -36,7 +36,13 @@ pub enum ImageError {
     AddressRange,
     Overlap,
     Engine(EngineError),
-    OutputLength,
+    Fill(media::FillError),
+}
+
+impl From<media::FillError> for ImageError {
+    fn from(error: media::FillError) -> Self {
+        Self::Fill(error)
+    }
 }
 
 impl From<EngineError> for ImageError {
@@ -337,6 +343,12 @@ pub enum StageFailure {
     Failed(ImageError),
 }
 
+impl From<media::FillError> for StageFailure {
+    fn from(error: media::FillError) -> Self {
+        Self::Failed(ImageError::Fill(error))
+    }
+}
+
 /// Stock 0x3ea0's feed: a job per staged unit when no job is deferred (0x3f04-0x3f20), bounded by the feed end.
 fn drive<B: Bus, U: UnitSource>(
     session: &mut Session<B>,
@@ -410,25 +422,52 @@ unsafe fn decompress(segment: Segment, table: RamRange) -> Result<(), ImageError
     let input = core::slice::from_raw_parts(SCRATCH as *const u8, UNIT as usize);
     let header = CompressedHeader::parse(input, segment.stored_length)?;
     let (destination, bss) = application_ranges(segment, header, table)?;
-    if let Some(bss) = bss {
-        let mut cursor = bss.alias();
-        while cursor < (bss.end | 0x4000_0000) {
-            write_volatile(cursor as *mut u32, 0);
-            cursor += 4;
-        }
-    }
-    let session = engine::Session::open(engine::VolatileBus);
     let mut units = MediaUnits { source: segment.source };
-    let produced = match stage_record(session, &mut units, &header, destination.alias()) {
-        Ok(produced) => produced,
+    let decoded = decode_and_hand_off(
+        engine::VolatileBus,
+        &mut units,
+        &header,
+        destination,
+        bss,
+        &mut media::VolatilePeripherals,
+        || read_volatile((HANDOFF_WORD | 0x4000_0000) as *const u32),
+    );
+    match decoded {
+        Ok(_) => Ok(()),
         Err(StageFailure::EngineFault(_)) => halt_in_place(),
-        Err(StageFailure::Failed(error)) => return Err(error),
-    };
-    if produced != header.decoded_length {
-        return Err(ImageError::OutputLength);
+        Err(StageFailure::Failed(error)) => Err(error),
     }
-    handoff_entry(read_volatile((HANDOFF_WORD | 0x4000_0000) as *const u32), destination)?;
-    Ok(())
+}
+
+/// Stock's 0x22a0-0x2318 decode sequence and 0x1dac handoff check. `handoff_word` is the
+/// fixed word stock reads at 0x61c40c.
+fn decode_and_hand_off<B: Bus, U: UnitSource, P: media::PeripheralBus>(
+    bus: B,
+    units: &mut U,
+    header: &CompressedHeader,
+    destination: RamRange,
+    bss: Option<RamRange>,
+    fill: &mut P,
+    handoff_word: impl FnOnce() -> u32,
+) -> Result<u32, StageFailure> {
+    let filling = match bss {
+        Some(bss) => {
+            media::fill_start(fill, bss.start, media::Words::from_bytes(bss.end - bss.start))?;
+            true
+        }
+        None => false,
+    };
+    let session = Session::open(bus);
+    let staged = stage_record(session, units, header, destination.alias());
+    if filling {
+        media::fill_wait(fill);
+    }
+    match staged {
+        Ok(_) => (),
+        Err(StageFailure::EngineFault(status)) => return Err(StageFailure::EngineFault(status)),
+        Err(error) => return Err(error),
+    }
+    handoff_entry(handoff_word(), destination).map_err(StageFailure::Failed)
 }
 
 /// The handoff word names a word inside the decoded image; stock jumps to it unchecked.
@@ -840,6 +879,8 @@ mod tests {
         jobs: Rc<RefCell<Vec<(u32, u32, u32)>>>,
         writes: Rc<RefCell<Vec<(engine::Register, u32)>>>,
         fault: Option<u32>,
+        /// Bytes each job under-reports in the output count.
+        shortfall: u32,
     }
 
     impl Decoder {
@@ -853,7 +894,7 @@ mod tests {
                 .feed(&self.source.borrow()[source..source + length], &mut self.output.borrow_mut()[..])
                 .unwrap();
             let count = (self.stream.produced() - before) as u32;
-            self.registers[engine::EngineRegister::OutputCount as usize / 4] = count;
+            self.registers[engine::EngineRegister::OutputCount as usize / 4] = count - self.shortfall;
             self.jobs.borrow_mut().push((source as u32, length as u32, destination));
             self.registers[engine::EngineRegister::Status as usize / 4] = self.fault.unwrap_or(1);
         }
@@ -899,6 +940,60 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum Event {
+        FillRead(u32),
+        FillWrite(u32),
+        EngineRead(engine::Register),
+        EngineWrite(engine::Register),
+    }
+
+    /// The 0xfff02000 register file, completing immediately and optionally logging to `log`.
+    #[derive(Default)]
+    struct Fill {
+        words: std::collections::BTreeMap<u32, u32>,
+        log: Option<Rc<RefCell<Vec<Event>>>>,
+    }
+
+    impl media::PeripheralBus for Fill {
+        fn read(&mut self, register: media::PeripheralRegister) -> u32 {
+            let address = register.address();
+            if let Some(log) = &self.log {
+                log.borrow_mut().push(Event::FillRead(address));
+            }
+            if address == media::FILL_BASE + 0x24 {
+                0x40
+            } else {
+                self.words.get(&address).copied().unwrap_or(0)
+            }
+        }
+
+        fn write(&mut self, register: media::PeripheralRegister, value: u32) {
+            let address = register.address();
+            if let Some(log) = &self.log {
+                log.borrow_mut().push(Event::FillWrite(address));
+            }
+            self.words.insert(address, value);
+        }
+    }
+
+    struct Logged<B> {
+        bus: B,
+        log: Rc<RefCell<Vec<Event>>>,
+    }
+
+    impl<B: Bus> Bus for Logged<B> {
+        fn read(&mut self, register: engine::Register) -> u32 {
+            self.log.borrow_mut().push(Event::EngineRead(register));
+            self.bus.read(register)
+        }
+
+        fn write(&mut self, register: engine::Register, value: u32) {
+            self.log.borrow_mut().push(Event::EngineWrite(register));
+            self.bus.write(register, value);
+        }
+    }
+
     /// One-byte literal runs over three units: every second input byte is a literal.
     fn spanning_record() -> (Vec<u8>, u32, Vec<u8>) {
         const RECORD_LENGTH: u32 = 0x50000;
@@ -941,6 +1036,7 @@ mod tests {
             jobs: jobs.clone(),
             writes: Rc::new(RefCell::new(Vec::new())),
             fault: None,
+            shortfall: 0,
         };
         let produced = stage_record(Session::open(decoder), &mut units, &header, DESTINATION).unwrap();
         assert_eq!(produced as usize, decoded.len());
@@ -954,6 +1050,93 @@ mod tests {
             ]
         );
         assert_eq!(*output.borrow(), decoded);
+    }
+
+    /// Stock reads the output count at 0x3ce4 only to advance the next destination (0x3c7c); nothing compares the 0x400042e0 total.
+    #[test]
+    fn a_decode_that_reports_a_different_final_count_still_hands_off() {
+        let (record, record_length, decoded) = spanning_record();
+        let header = CompressedHeader { decoded_length: decoded.len() as u32, record_length };
+        let source = Rc::new(RefCell::new(vec![0u8; record_length as usize]));
+        source.borrow_mut()[..UNIT as usize].copy_from_slice(&record[..UNIT as usize]);
+        let jobs = Rc::new(RefCell::new(Vec::new()));
+        let decoder = Decoder {
+            source: source.clone(),
+            output: Rc::new(RefCell::new(vec![0u8; decoded.len()])),
+            stream: Method4::default(),
+            registers: [0; 0x90 / 4],
+            clock: [0; 0x40 / 4],
+            jobs: jobs.clone(),
+            writes: Rc::new(RefCell::new(Vec::new())),
+            fault: None,
+            shortfall: 1,
+        };
+        let mut units = StreamUnits {
+            record,
+            source,
+            staged: Rc::new(RefCell::new(Vec::new())),
+            fail_at: None,
+        };
+        let destination = RamRange::new(0x0061_c400, decoded.len() as u32).unwrap();
+        let bss = Some(RamRange::new(0x0089_ec00, 0x0035_2e00).unwrap());
+        let mut fill = Fill::default();
+        let entry = decode_and_hand_off(
+            decoder, &mut units, &header, destination, bss, &mut fill, || 0x0061_c410,
+        )
+        .unwrap();
+        assert_eq!(entry, 0x0061_c410);
+        assert_eq!(
+            *jobs.borrow(),
+            vec![
+                (0x14, 0x1ffec, DESTINATION),
+                (0x14 + 0x1ffec, 0x20000, DESTINATION + 0xfff5),
+                (0x14 + 0x3ffec, 0x10000, DESTINATION + 0x1fff4),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_bss_fill_starts_before_the_session_and_is_waited_on_after_finish() {
+        let (record, record_length, decoded) = spanning_record();
+        let header = CompressedHeader { decoded_length: decoded.len() as u32, record_length };
+        let source = Rc::new(RefCell::new(vec![0u8; record_length as usize]));
+        source.borrow_mut()[..UNIT as usize].copy_from_slice(&record[..UNIT as usize]);
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let decoder = Logged {
+            bus: Decoder {
+                source: source.clone(),
+                output: Rc::new(RefCell::new(vec![0u8; decoded.len()])),
+                stream: Method4::default(),
+                registers: [0; 0x90 / 4],
+                clock: [0; 0x40 / 4],
+                jobs: Rc::new(RefCell::new(Vec::new())),
+                writes: Rc::new(RefCell::new(Vec::new())),
+                fault: None,
+                shortfall: 0,
+            },
+            log: log.clone(),
+        };
+        let mut units = StreamUnits {
+            record,
+            source,
+            staged: Rc::new(RefCell::new(Vec::new())),
+            fail_at: None,
+        };
+        let destination = RamRange::new(0x0061_c400, decoded.len() as u32).unwrap();
+        let bss = RamRange::new(0x0089_ec00, 0x0035_2e00).unwrap();
+        let mut fill = Fill { words: Default::default(), log: Some(log.clone()) };
+        decode_and_hand_off(
+            decoder, &mut units, &header, destination, Some(bss), &mut fill, || 0x0061_c410,
+        )
+        .unwrap();
+        let events = log.borrow();
+        let engine = |event: &Event| matches!(event, Event::EngineRead(_) | Event::EngineWrite(_));
+        let first_engine = events.iter().position(engine).unwrap();
+        let last_start = events.iter().rposition(|event| *event == Event::FillWrite(media::FILL_BASE + 0x28)).unwrap();
+        let last_engine = events.iter().rposition(engine).unwrap();
+        let first_status = events.iter().position(|event| *event == Event::FillRead(media::FILL_BASE + 0x24)).unwrap();
+        assert!(last_start < first_engine);
+        assert!(last_engine < first_status);
     }
 
     #[test]
@@ -986,6 +1169,7 @@ mod tests {
             jobs: jobs.clone(),
             writes: Rc::new(RefCell::new(Vec::new())),
             fault: None,
+            shortfall: 0,
         };
         let produced = stage_record(Session::open(decoder), &mut units, &header, destination.alias()).unwrap();
         assert_eq!(produced as usize, decoded.len());
@@ -1087,6 +1271,7 @@ mod tests {
             jobs: Rc::new(RefCell::new(Vec::new())),
             writes: Rc::new(RefCell::new(Vec::new())),
             fault: None,
+            shortfall: 0,
         };
         let mut units = StreamUnits {
             record,
@@ -1121,6 +1306,7 @@ mod tests {
             jobs: Rc::new(RefCell::new(Vec::new())),
             writes: writes.clone(),
             fault: Some(0x101),
+            shortfall: 0,
         };
         let mut units = StreamUnits {
             record: Vec::new(),
@@ -1154,6 +1340,7 @@ mod tests {
             jobs: Rc::new(RefCell::new(Vec::new())),
             writes: writes.clone(),
             fault: None,
+            shortfall: 0,
         };
         let mut units = StreamUnits {
             record,
