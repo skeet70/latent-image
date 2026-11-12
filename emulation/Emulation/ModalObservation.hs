@@ -901,9 +901,9 @@ ownedSettingsWriters :: B.ByteString -> Either String [WatchRange]
 ownedSettingsWriters elfBytes = do
   elf <- ELF.parseElf elfBytes
   extents <- fmap catMaybes (forM ownedStorageStoreFunctions (symbolExtent elf))
-  case extents of
+  case sortOn fst extents of
     [] -> Left "modal lifetime requires the owned image's storage store function symbols"
-    _ -> pure [either error id (watchRange (watchAddress low) (watchAddress high)) | (low, high) <- extents]
+    ordered -> pure [either error id (watchRange (watchAddress low) (watchAddress high)) | (low, high) <- ordered]
  where
   symbolExtent elf name = case filter ((== name) . ELF.symbolName) (ELF.elfSymbols elf) of
     [] -> Right Nothing

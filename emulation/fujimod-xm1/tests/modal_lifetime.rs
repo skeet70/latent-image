@@ -213,10 +213,10 @@ fn settings_writer_changes_are_admitted_counted_and_become_the_expected_bytes() 
 fn owned_storage_store_writers_admit_the_stock_live_setting_store() {
     let writers = json!([[OWNED_STORE8, OWNED_STORE8_END], [OWNED_STORE16, OWNED_STORE16_END]]);
     let mut monitor = writer_fixture(writers.clone());
-    write_from(&mut monitor, OWNED_WINDOW_STORE, SETTINGS + 0x66, &[0x20], 0x29).unwrap();
+    write_from(&mut monitor, OWNED_WINDOW_STORE, SETTINGS + 0x66, &[0x5a], 0x29).unwrap();
     assert_eq!(monitor.receipt().admitted_settings_writes, 1);
     let mut monitor = writer_fixture(writers);
-    assert_eq!(write_from(&mut monitor, OWNED_STORE8 - 4, SETTINGS + 0x66, &[0x20], 0x29),
+    assert_eq!(write_from(&mut monitor, OWNED_STORE8 - 4, SETTINGS + 0x66, &[0x5a], 0x29),
         Err(LifetimeFailure::ResourceChanged));
     assert_eq!(monitor.receipt().admitted_settings_writes, 0);
 }

@@ -13,7 +13,7 @@ import Emulation.ModalObservation (SettingsWrite, compareSettingsWrites, complet
 import Emulation.ModalWatchStream (readFinalModalWatch)
 import Emulation.Sha256 (sha256File, sha256Hex)
 import Emulation.WatchObservation (watchRangeBounds)
-import Data.Scientific (toBoundedInteger)
+import Data.Scientific (Scientific, floatingOrInteger)
 import System.Directory (doesPathExist)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (die, exitFailure)
@@ -130,9 +130,14 @@ loadRole scoped directory = do
 parseExtent :: Value -> Either String (Integer, Integer)
 parseExtent (Array entries) = case foldr (:) [] entries of
   [Number low, Number high]
-    | Just low' <- toBoundedInteger low, Just high' <- toBoundedInteger high -> Right (low', high')
+    | Just low' <- whole low, Just high' <- whole high -> Right (low', high')
   _ -> Left "an extent is not two integers"
 parseExtent _ = Left "an extent is not an array"
+
+whole :: Scientific -> Maybe Integer
+whole value = case floatingOrInteger value :: Either Double Integer of
+  Right integer -> Just integer
+  Left _ -> Nothing
 
 parseExtents :: Value -> Either String [(Integer, Integer)]
 parseExtents (Array entries) = traverse parseExtent (foldr (:) [] entries)
@@ -144,7 +149,7 @@ checkWriterIdentity :: Role -> Either String ()
 checkWriterIdentity role
   | roleScoped role = unless (not (null bounds) && all inside bounds)
       (Left "the owned role's settings writers are not extents inside its image")
-  | otherwise = unless (bounds == map watchRangeBounds stockSettingsWriters)
+  | otherwise = unless (bounds == [(toInteger low, toInteger high) | (low, high) <- map watchRangeBounds stockSettingsWriters])
       (Left "the stock role's settings writer is not the stock setter")
  where
   bounds = roleWriterBounds role
