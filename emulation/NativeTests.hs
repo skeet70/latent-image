@@ -356,12 +356,39 @@ recordingLimitRegressions runner=withTemporary "fuji-recording-limit-tests"$ \ro
 
 -- Batches
 
--- A report alone and in a batch differ only in elapsed time, and a wall-budget case also in how
--- far it got before its deadline.
+-- A report alone and in a batch differ only in elapsed time, and a wall-budget case also in
+-- everything the deadline left open: a stop at the wall leaves the machine wherever the host
+-- was, so only the report envelope and the stop reason are comparable between two runs.
 hostIndependent :: Value -> Value
 hostIndependent report=case get report "runner" of
  Null->report
- result->set "runner"(foldr remove result(if get result "status"==s "wall_budget" then ["elapsed_ns","instructions","trace_total","trace"] else ["elapsed_ns"]))report
+ result->set "runner"(foldr remove result(if get result "status"==s "wall_budget" then wallDependent else ["elapsed_ns"]))report
+
+-- The runner fields a wall-budget stop fills from how far it ran before the deadline.
+wallDependent :: [String]
+wallDependent=["elapsed_ns","instructions","trace_total","trace","access_total","accesses","memory_provenance_total","memory_provenance","events","registers","memory","kernel","executed","executed_unobserved"]
+
+-- A wall-budget report compares by its stop reason alone; an instruction-budget report compares
+-- its result, bitmaps included.
+wallStopComparison :: IO ()
+wallStopComparison=do
+ let progress instructions bitmap=obj
+      [("instructions",n instructions),("trace_total",n instructions)
+      ,("trace",arr[obj[("pc",s "0x00008000"),("instruction",s "0xeafffffe")]|_<-[1..min 64 instructions]])
+      ,("access_total",n 0),("accesses",arr[])
+      ,("memory_provenance_total",n 0),("memory_provenance",arr[])
+      ,("events",arr[])
+      ,("registers",obj[("pc",s "0x00008000"),("r0",s(if instructions==0 then "0x00000000" else "0x00000004"))])
+      ,("memory",arr[obj[("address",s "0x00009000"),("bytes",s(if instructions==0 then "00000000" else "44332211"))]])
+      ,("kernel",obj[("tpidrurw",s(if instructions==0 then "0x00000000" else "0x00000001"))])
+      ,("executed",arr[obj[("base",s "0x00008000"),("bytes",s "4"),("executed",s bitmap),("condition_passed",s bitmap),("condition_failed",s "00")]])
+      ,("executed_unobserved",arr[])]
+     report status progress'=obj[("runner",merge progress'[("wire_version",n 1),("status",s status),("unicorn_error",n 0)])]
+     cold=progress 0 "00"
+     warm=progress 7542 "01"
+ ensure(hostIndependent(report "wall_budget" cold)==hostIndependent(report "wall_budget" warm))"a wall-budget report compared how far it ran"
+ ensure(hostIndependent(report "instruction_budget"(progress 3 "07"))/=hostIndependent(report "instruction_budget"(progress 3 "03")))"an instruction-budget report ignored its executed bitmap"
+ ensure(hostIndependent(report "wall_budget" cold)/=hostIndependent(report "instruction_budget" cold))"the stop reason did not compare"
 
 collectBatch :: FilePath -> FilePath -> IO (BatchSummary,[CaseReport])
 collectBatch runner path=do
@@ -1001,6 +1028,7 @@ main=do
  readOnlyRegressions runner
  schemaContract
  batched<-fixtureBatch runner checker
+ wallStopComparison
  isolationBatch runner checker
  batchFailures runner checker
  batchLimits runner
@@ -1092,4 +1120,4 @@ main=do
   result<-jsonRead out
   ensure(not timed && code==ExitFailure 1 && get result "status"==s "invalid_case")"independent wire rejection failed"
  putStrLn(show(length names)++" hand-derived execution fixtures, 29 JSON rejections, 7 privileged-entry rejections, 10 kernel-case rejections, kernel stack-context declaration boundaries, "++show(length bad)++" independent wire rejections, execute-never boundary, stub/output/deadline checks, contract limit boundaries, high region-count boundaries and schema agreement passed")
- putStrLn(show batched++"-case fixture batch, 9 isolation controls, batch failure and framing controls, batch limit boundaries, the owned-case batch API and kernel-case outcomes passed")
+ putStrLn(show batched++"-case fixture batch, the wall-stop report comparison, 9 isolation controls, batch failure and framing controls, batch limit boundaries, the owned-case batch API and kernel-case outcomes passed")
