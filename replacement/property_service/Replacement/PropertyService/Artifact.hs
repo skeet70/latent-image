@@ -30,6 +30,7 @@ module Replacement.PropertyService.Artifact
   , artifactSpecialTable
   , artifactDefaultWindows
   , artifactFunctions
+  , artifactKernelBoundary
   , artifactProof
   , linkedBytes
   , storageStoreName

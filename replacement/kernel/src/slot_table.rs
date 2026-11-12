@@ -198,3 +198,49 @@ impl Kernel<SlotTable> {
     /// The words at 0x96bd20 and 0x96bd24 hold the two kernels' root blocks.
     pub const unsafe fn stock() -> Self { Kernel::new(SlotTable) }
 }
+
+/// The absolute windows this backend reads. The class window starts one entry low because the
+/// class read folds `SEMAPHORE_CLASSES + 4 * (id - 1)` to that base.
+#[cfg(target_arch = "arm")]
+pub(crate) const WINDOWS: [(u32, u32); 4] = [
+    (ROOT_TABLE, ROOT_TABLE + 8),
+    (SEMAPHORE_CLASSES - 4, SEMAPHORE_CLASSES + 4 * (SEMAPHORE_CLASS_LIMIT + 1)),
+    (ERROR_STATUS, ERROR_STATUS + 4),
+    (ERROR_CALLBACK, ERROR_CALLBACK + 4),
+];
+
+/// The declaration the linked image's admission reads.
+#[cfg(target_arch = "arm")]
+#[repr(C)]
+pub struct Boundary {
+    pub magic: u32,
+    pub window_count: u32,
+    pub entry_count: u32,
+    pub windows: [(u32, u32); 4],
+    pub entries: [*const (); 10],
+}
+
+#[cfg(target_arch = "arm")]
+unsafe impl Sync for Boundary {}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+#[used]
+pub static XM1_KERNEL_BOUNDARY: Boundary = Boundary {
+    magic: 0x314e524b,
+    window_count: 4,
+    entry_count: 10,
+    windows: WINDOWS,
+    entries: [
+        block::<StockGuest> as *const (),
+        report::<StockGuest> as *const (),
+        <SlotTable as Backend>::current_task as *const (),
+        <SlotTable as Backend>::in_handler as *const (),
+        <SlotTable as Backend>::irq_mask as *const (),
+        <SlotTable as Backend>::irq_restore as *const (),
+        <SlotTable as Backend>::cores_lock as *const (),
+        <SlotTable as Backend>::cores_unlock as *const (),
+        <SlotTable as Backend>::semaphore_wait as *const (),
+        <SlotTable as Backend>::semaphore_signal as *const (),
+    ],
+};

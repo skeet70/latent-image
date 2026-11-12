@@ -36,6 +36,7 @@ module Replacement.PropertyService.Artifact.Internal
   , artifactSpecialTable
   , artifactDefaultWindows
   , artifactFunctions
+  , artifactKernelBoundary
   , artifactProof
   , linkedBytes
   , storageStoreName
@@ -125,6 +126,7 @@ data LinkedArtifact = LinkedArtifact
   , artifactSlotTable :: GuestAddress
   , artifactSpecialTable :: GuestAddress
   , artifactDefaultWindows :: [(DefaultImage, GuestAddress)]
+  , artifactKernelBoundary :: [GuestAddress]
   , artifactProof :: CodeProof
   , artifactRecipeIdentity :: Maybe RecipePackageIdentity
   }
@@ -281,6 +283,40 @@ kernelBoundaries =
   , ("xm1_kernel_critical_exit", 0x7236b0)
   ]
 
+-- | The lowest stack offset each kernel boundary entry reaches, from its stock body's push.
+kernelBoundaryStack :: [(GuestAddress, StackOffset)]
+kernelBoundaryStack =
+  [ (GuestAddress 0x41a34, StackOffset (-32))
+  , (GuestAddress 0x7235d8, StackOffset (-32))
+  , (GuestAddress 0x7236b0, StackOffset (-24))
+  ]
+
+-- | The table the kernel crate exports as its declared boundary.
+kernelBoundaryName :: String
+kernelBoundaryName = "XM1_KERNEL_BOUNDARY"
+
+kernelBoundaryMagic :: Word32
+kernelBoundaryMagic = 0x314e524b
+
+data KernelBoundary = KernelBoundary
+  { kernelWindows :: [AddressSpan]
+  , kernelEntries :: [GuestAddress]
+  }
+
+readKernelBoundary :: Word32 -> B.ByteString -> F.Symbol -> Either AdmissionError KernelBoundary
+readKernelBoundary start bytes entry = do
+  let address = F.symbolAddress entry
+      word index = U.word32At bytes (fromIntegral (address - start) + 4 * index)
+      windows = fromIntegral (word 1) :: Int
+      entries = fromIntegral (word 2) :: Int
+  unless (address .&. 3 == 0 && word 0 == kernelBoundaryMagic && windows <= 16 && entries <= 32
+    && F.symbolSize entry == fromIntegral (4 * (3 + 2 * windows + entries)))
+    (Left (AdmissionError (GuestAddress address) BoundaryInvalid))
+  pure KernelBoundary
+    { kernelWindows = [AddressSpan (GuestAddress (word (3 + 2 * index))) (GuestAddress (word (4 + 2 * index))) | index <- [0 .. windows - 1]]
+    , kernelEntries = [GuestAddress (word (3 + 2 * windows + index)) | index <- [0 .. entries - 1]]
+    }
+
 always :: A.Cond
 always = A.Cond 14
 
@@ -400,6 +436,8 @@ deriveArtifactUsing shape purpose dependency properties carrier@(Carrier (GuestA
   tableSymbol <- tableNamed propertiesSuffix
   slotSymbol <- tableNamed slotsSuffix
   specialSymbol <- tableNamed specialsSuffix
+  boundarySymbol <- symbol kernelBoundaryName
+  boundary <- either (Left . CodeRejected) Right (readKernelBoundary start bytes boundarySymbol)
   defaultSymbols <- mapM (\(name, size, digest) -> do
     entry <- symbol name
     let address = F.symbolAddress entry
@@ -412,7 +450,7 @@ deriveArtifactUsing shape purpose dependency properties carrier@(Carrier (GuestA
   let functions =
         sortOn functionStart
           [ FunctionExtent (FunctionName (F.symbolName entry)) (GuestAddress (F.symbolAddress entry)) (GuestAddress (F.symbolAddress entry + F.symbolSize entry))
-          | entry <- symbols, F.symbolSize entry > 0, entry `notElem` ([tableSymbol, slotSymbol, specialSymbol] ++ defaultSymbols), kindIs [GlobalText, LocalText] entry
+          | entry <- symbols, F.symbolSize entry > 0, entry `notElem` ([tableSymbol, slotSymbol, specialSymbol, boundarySymbol] ++ defaultSymbols), kindIs [GlobalText, LocalText] entry
           ]
       disjoint = and (zipWith (\(FunctionExtent _ _ a) (FunctionExtent _ b _) -> a <= b) functions (drop 1 functions))
   require (disjoint && all (\(FunctionExtent _ (GuestAddress low) (GuestAddress high)) -> low .&. 3 == 0 && high .&. 3 == 0) functions) ExtentRejected
@@ -466,16 +504,19 @@ deriveArtifactUsing shape purpose dependency properties carrier@(Carrier (GuestA
             ++ [(GuestAddress (F.symbolAddress entry), GuestAddress (F.symbolAddress entry + F.symbolSize entry)) | entry <- defaultSymbols]
             ++ [(low, high) | DataSpan (AddressSpan low high) <- mappings
                 , not (any (\(FunctionExtent _ begin finish) -> begin < high && low < finish) functions)]
+        , layoutDeclaredData = [(GuestAddress (F.symbolAddress boundarySymbol), GuestAddress (F.symbolAddress boundarySymbol + F.symbolSize boundarySymbol))]
+        , layoutBoundaryWindows = kernelWindows boundary
+        , layoutBoundaryEntries = kernelEntries boundary
         , layoutStoreSites = [GuestAddress (address + case width of StorageByte -> 28; StorageHalf -> 48) | (width,address) <- outputAddresses]
             ++ [GuestAddress (statusAddress + 8)] ++ [GuestAddress (address + 132) | (_, address) <- storeAddresses]
-        , layoutStockLeaves = [(GuestAddress address, stockLeafStack) | (_, address) <- stockLeaves]
+        , layoutStockLeaves = [(GuestAddress address, stockLeafStack) | (_, address) <- stockLeaves] ++ kernelBoundaryStack
         , layoutStockSites = [(GuestAddress (address + 8), GuestAddress target, StackOffset (-8)) | (_, address, target) <- mirrorAddresses]
         }
   proof <- either (Left . CodeRejected) Right (admitCodeWithCallbacks callbacks layout bytes)
   forM_ callbacks $ \callback ->
     require (any (\edge -> edgeTarget edge == functionStart callback && edgeKind edge `elem` [CallbackCall, CallbackTailCall])
       (concatMap frameCalls (proofFrames proof))) CallbackRejected
-  pure (LinkedArtifact bytes (identity bytes) (identity symbolBytes) (identity elfBytes) carrier (EntryAddresses (GuestAddress getterEntryAddress) (GuestAddress setterEntryAddress)) functions (GuestAddress tableAddress) (GuestAddress slotAddress) (GuestAddress specialAddress) (zip [SlotDefaultBytes,TailDefaultBytes] [GuestAddress (F.symbolAddress entry) | entry <- defaultSymbols]) proof ((\(RecipeDependency _ packageIdentity) -> packageIdentity) <$> dependency))
+  pure (LinkedArtifact bytes (identity bytes) (identity symbolBytes) (identity elfBytes) carrier (EntryAddresses (GuestAddress getterEntryAddress) (GuestAddress setterEntryAddress)) functions (GuestAddress tableAddress) (GuestAddress slotAddress) (GuestAddress specialAddress) (zip [SlotDefaultBytes,TailDefaultBytes] [GuestAddress (F.symbolAddress entry) | entry <- defaultSymbols]) (kernelEntries boundary) proof ((\(RecipeDependency _ packageIdentity) -> packageIdentity) <$> dependency))
   where
     encodingRejected failure = case failure of
       DelegatedProperty -> TableRejected

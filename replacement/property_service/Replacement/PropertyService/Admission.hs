@@ -54,6 +54,12 @@ data CodeLayout = CodeLayout
   , layoutLiteralPointers :: [PointerSpan]
   , -- | Extents holding no code.
     layoutData :: [(GuestAddress, GuestAddress)]
+  , -- | Extents declared as data without an ELF data mapping.
+    layoutDeclaredData :: [(GuestAddress, GuestAddress)]
+  , -- | Windows only the boundary entries may name.
+    layoutBoundaryWindows :: [AddressSpan]
+  , -- | Functions allowed to name those windows and to call through a slot word.
+    layoutBoundaryEntries :: [GuestAddress]
   , -- | Exact instruction sites admitted by the fixed backing-boundary policy.
     layoutStoreSites :: [GuestAddress]
   , -- | Stock leaf functions any owned function may call, with the lowest stack offset each reaches.
@@ -62,7 +68,7 @@ data CodeLayout = CodeLayout
     layoutStockSites :: [(GuestAddress, GuestAddress, StackOffset)]
   }
 
-data CallKind = Call | TailCall | StockLeafCall | StockLeafTailCall | StockSiteCall | CallbackCall | CallbackTailCall deriving (Eq, Ord, Show)
+data CallKind = Call | TailCall | StockLeafCall | StockLeafTailCall | StockSiteCall | StockSiteTailCall | CallbackCall | CallbackTailCall deriving (Eq, Ord, Show)
 
 data CallEdge = CallEdge
   { edgeSite :: GuestAddress
@@ -110,6 +116,7 @@ data Violation
   | DataExecuted
   | LiteralNotData
   | LayoutInvalid
+  | BoundaryInvalid
   | LiteralPointerOutsideOwned
   deriving (Eq, Show)
 
@@ -171,13 +178,14 @@ nonreturningEntries callbacks layout bytes = close S.empty
             , all (not . returns) (S.toList instructions)
             , all (\edge -> case edgeKind edge of
                 StockLeafTailCall -> False
+                StockSiteTailCall -> False
                 CallbackTailCall -> False
                 TailCall -> let GuestAddress target = edgeTarget edge in S.member target known
                 _ -> True) (frameCalls frame)
             ])
       in if next == known then known else close next
     returns address = case A.decode address (U.word32At bytes (fromIntegral (address - base))) of
-      A.BranchExchange _ False register -> register == A.lr
+      A.BranchExchange _ False _ -> True
       A.LoadMultiple _ _ _ _ registers -> A.pc `elem` registers
       _ -> False
 
@@ -200,12 +208,19 @@ admitCodeWithCallbacks callbacks layout bytes = do
     && all (\(GuestAddress begin, GuestAddress finish) -> begin .&. 3 == 0 && finish .&. 3 == 0 && begin <= finish
       && all (mappedData layout) [begin, begin + 4 .. finish - 4]) (filter (uncurry (/=)) (layoutData layout)))
     (Left (AdmissionError (layoutBase layout) LayoutInvalid))
+  unless (all (\(GuestAddress begin, GuestAddress finish) -> begin .&. 3 == 0 && finish .&. 3 == 0 && begin <= finish)
+      (layoutDeclaredData layout)
+    && all (\(AddressSpan (GuestAddress begin) (GuestAddress finish)) -> begin .&. 3 == 0 && finish .&. 3 == 0 && begin < finish)
+      (layoutBoundaryWindows layout)
+    && all (\(GuestAddress entry) -> any (\(FunctionExtent _ (GuestAddress begin) _) -> begin == entry) (layoutFunctions layout))
+      (layoutBoundaryEntries layout))
+    (Left (AdmissionError (layoutBase layout) BoundaryInvalid))
   let nonreturning = nonreturningEntries callbacks layout bytes
   walked <- mapM (walkFunction callbacks layout bytes nonreturning) (layoutFunctions layout)
   let instructions = S.unions [pcs | (_, pcs, _) <- walked]
       literals = S.unions [lits | (_, _, lits) <- walked]
       GuestAddress base = layoutBase layout
-      inData address = any (\(GuestAddress low, GuestAddress high) -> low <= address && address < high) (layoutData layout)
+      inData address = any (\(GuestAddress low, GuestAddress high) -> low <= address && address < high) (layoutData layout ++ layoutDeclaredData layout)
       required = [address | address <- [base, base + 4 .. base + fromIntegral (B.length bytes) - 4], not (inData address)]
   case [address | address <- required, S.member address instructions == S.member address literals] of
     address : _ -> Left (AdmissionError (GuestAddress address) UnwalkedWord)
@@ -228,6 +243,7 @@ compose frames leaves visiting done entry
               StockLeafCall -> let StackOffset leafLow = leaves M.! target in Just (at + leafLow)
               StockLeafTailCall -> let StackOffset leafLow = leaves M.! target in Just (at + leafLow)
               StockSiteCall -> Nothing
+              StockSiteTailCall -> Nothing
               CallbackCall -> Nothing
               CallbackTailCall -> Nothing
               _ -> let StackOffset calleeLow = done' M.! target in Just (at + calleeLow)
@@ -246,6 +262,14 @@ walkFunction callbacks layout bytes nonreturning (FunctionExtent _ (GuestAddress
     storeSites = S.fromList [site | GuestAddress site <- layoutStoreSites layout]
     leaves = S.fromList [target | (GuestAddress target, _) <- layoutStockLeaves layout]
     stockSites = M.fromList [((site, target), offset) | (GuestAddress site, GuestAddress target, StackOffset offset) <- layoutStockSites layout]
+    boundaryExtents = [(low, high) | FunctionExtent _ (GuestAddress low) (GuestAddress high) <- layoutFunctions layout
+      , GuestAddress low `elem` layoutBoundaryEntries layout]
+    inBoundary address = any (\(low, high) -> low <= address && address < high) boundaryExtents
+    admittedPointer pc address =
+      let value = toInteger (U.word32At bytes (fromIntegral (address - base)))
+      in if any (containsBytes value) (layoutBoundaryWindows layout)
+        then inBoundary pc
+        else any (containsBytes value . pointerBounds) (layoutLiteralPointers layout)
     go seen [] low calls literals =
       Right (EntryFrame (GuestAddress start) (StackOffset low) (S.toList (S.fromList calls)), M.keysSet seen, literals)
     go seen (state : pending) low calls literals =
@@ -347,8 +371,18 @@ walkFunction callbacks layout bytes nonreturning (FunctionExtent _ (GuestAddress
             tailTo kind = do
               returning state
               Right (Outcome (skip []) sp [CallEdge (GuestAddress pc) (GuestAddress target) (StackOffset sp) kind] [])
-        A.BranchExchange _ False register | register == A.lr -> returning state >> terminal
-        A.BranchExchange {} -> Left PcWrite
+        A.BranchExchange _ linked register
+          | register == A.lr -> if linked then Left PcWrite else returning state >> terminal
+          | inBoundary pc -> indirect linked
+          | otherwise -> Left PcWrite
+          where
+            indirect True = do
+              unless (sp `mod` 8 == 0) (Left StackMisaligned)
+              let next = state {statePc = pc + 4, stateLink = if link == LinkLive then LinkLost else link, stateAliases = M.empty}
+              Right (Outcome (skip [next]) sp [CallEdge (GuestAddress pc) (GuestAddress pc) (StackOffset sp) StockSiteCall] [])
+            indirect False = do
+              returning state
+              Right (Outcome (skip []) sp [CallEdge (GuestAddress pc) (GuestAddress pc) (StackOffset sp) StockSiteTailCall] [])
         A.StoreMultiple _ register mode writeback registers
           | register == A.sp && mode == A.DecrementBefore && writeback -> do
               let after = sp - 4 * length registers
@@ -422,6 +456,7 @@ walkFunction callbacks layout bytes nonreturning (FunctionExtent _ (GuestAddress
               clear address (address + widthBytes width)
               advance state
           | S.member pc storeSites && indexing == A.OffsetOnly -> advance state
+          | inBoundary pc -> advance (written [register | indexing /= A.OffsetOnly] state)
           | otherwise -> Left NonStackStore
         A.Load _ width _ destination@(A.Reg number) register offset indexing
           | destination == A.pc || (width == A.Dual && number == 14) -> Left PcWrite
@@ -436,7 +471,7 @@ walkFunction callbacks layout bytes nonreturning (FunctionExtent _ (GuestAddress
                   && literalAddress >= toInteger start && literalAddress + toInteger (widthBytes width) <= toInteger end
                   && address .&. 3 == 0) (Left LiteralOutsideFunction)
                 unless (all (mappedData layout) addresses) (Left LiteralNotData)
-                unless (all (\a -> any (containsBytes (toInteger (U.word32At bytes (fromIntegral (a - base)))) . pointerBounds) (layoutLiteralPointers layout)) addresses) (Left LiteralPointerOutsideOwned)
+                unless (all (admittedPointer pc) addresses) (Left LiteralPointerOutsideOwned)
                 Right (Outcome (skip [(written (loaded destination width) state) {statePc = pc + 4}]) sp [] addresses)
               A.OffsetRegister {} -> Left LiteralOutsideFunction
           | register == A.sp && indexing /= A.OffsetOnly -> case offset of
