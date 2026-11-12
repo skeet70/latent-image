@@ -38,6 +38,7 @@ module Replacement.PropertyService.Artifact
   , storageOutputWords
   , storageStatusWords
   , mirrorBoundaries
+  , kernelBoundaries
   , stagePlacement
   , stageNativePlacement
   , validateLocalImage4

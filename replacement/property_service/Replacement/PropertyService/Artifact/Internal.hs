@@ -44,6 +44,7 @@ module Replacement.PropertyService.Artifact.Internal
   , storageOutputWords
   , storageStatusWords
   , mirrorBoundaries
+  , kernelBoundaries
   , stagePlacement
   , stageNativePlacement
   , validateLocalImage4
@@ -268,12 +269,16 @@ storageStatusWords = [0xe30ecdc4,0xe340c089,0xe58c0000,0xe12fff1e]
 
 mirrorBoundaries :: [(String, String, Word32)]
 mirrorBoundaries =
-  [ ("xm1_storage_context", "xm1_backup_context723cb8", 0x723cb8)
-  , ("xm1_storage_acquire", "xm1_backup_acquire724b68", 0x724b68)
-  , ("xm1_storage_release", "xm1_backup_release724c00", 0x724c00)
-  , ("xm1_storage_diagnostic", "xm1_backup_diagnostic726c74", 0x726c74)
+  [ ("xm1_storage_diagnostic", "xm1_backup_diagnostic726c74", 0x726c74)
   , ("xm1_storage_write", "xm1_backup_write6a59b8", 0x6a59b8)
   , ("xm1_storage_report", "xm1_backup_report633594", 0x633594)
+  ]
+
+kernelBoundaries :: [(String, Word32)]
+kernelBoundaries =
+  [ ("xm1_kernel_console9", 0x41a34)
+  , ("xm1_kernel_critical_enter", 0x7235d8)
+  , ("xm1_kernel_critical_exit", 0x7236b0)
   ]
 
 always :: A.Cond
@@ -360,7 +365,7 @@ deriveArtifactUsing shape purpose dependency properties carrier@(Carrier (GuestA
       && (high <= carrierLow || low >= carrierHigh)) CallbackRejected
     entry <- symbol name
     require (F.symbolAddress entry == low && F.symbolSize entry == 0 && kindIs [AbsoluteSymbol] entry) CallbackRejected
-  require (sortOn fst [(F.symbolName entry, F.symbolAddress entry) | entry <- symbols, kindIs [AbsoluteSymbol] entry] == sortOn fst (stockLeaves ++ [(external, address) | (_, external, address) <- mirrorBoundaries] ++ callbackSymbols)) SymbolRejected
+  require (sortOn fst [(F.symbolName entry, F.symbolAddress entry) | entry <- symbols, kindIs [AbsoluteSymbol] entry] == sortOn fst (stockLeaves ++ kernelBoundaries ++ [(external, address) | (_, external, address) <- mirrorBoundaries] ++ callbackSymbols)) SymbolRejected
   forM_ symbols $ \entry -> unless (kindIs [AbsoluteSymbol] entry) $
     require (kindIs [GlobalText, LocalText, ReadOnlyData] entry && F.symbolAddress entry >= start
       && toInteger (F.symbolAddress entry) + toInteger (F.symbolSize entry) <= toInteger end) ExtentRejected

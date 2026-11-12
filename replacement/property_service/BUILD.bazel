@@ -70,6 +70,7 @@ xm1_rust_staticlib(
     crate_name = "xm1_property_service",
     rustc_flags = _RUSTC_FLAGS,
     data = _RUST_DATA + ["//replacement/settings_storage:property-core"],
+    rlib_deps = {"xm1_kernel": "//replacement/kernel:arm"},
 )
 
 xm1_rust_staticlib(
@@ -78,6 +79,7 @@ xm1_rust_staticlib(
     crate_name = "xm1_property_service",
     rustc_flags = _RUSTC_FLAGS + ["--cfg", "property_recipe_edit"],
     data = _RUST_DATA + ["//replacement/settings_storage:property-core"],
+    rlib_deps = {"xm1_kernel": "//replacement/kernel:arm"},
 )
 
 genrule(
@@ -120,6 +122,7 @@ xm1_rust_elf(
         crate_name = "xm1_property_service",
         rustc_flags = (["-C", "target-feature=+strict-align", "-C", "jump-tables=no", "--extern", "xm1_settings_storage_core=$(location //replacement/settings_storage:property-core-" + defect.replace("_", "-") + ")", "--cfg", defect] if defect in _CORE_DEFECTS else _RUSTC_FLAGS + ["--cfg", "property_defect_" + defect]),
         data = _RUST_DATA + ["//replacement/settings_storage:property-core-" + defect.replace("_", "-") if defect in _CORE_DEFECTS else "//replacement/settings_storage:property-core"],
+        rlib_deps = {"xm1_kernel": "//replacement/kernel:arm"},
     )
     for defect in _DEFECTS
 ]
@@ -159,6 +162,7 @@ xm1_rust_elf(
             "--cfg", flag,
         ],
         data = _RUST_DATA + ["//replacement/settings_storage:property-core-control-" + variant],
+        rlib_deps = {"xm1_kernel": "//replacement/kernel:arm"},
     )
     for variant, flag in PROPERTY_STORAGE_VARIANTS.items()
 ]

@@ -118,14 +118,7 @@ pub trait SettingsBackend: HeaderBackend {
 pub enum RequestDirection { Read, Write }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ExecutionContext { Task, OutsideTask }
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BackupSemaphore { Settings }
-
-impl BackupSemaphore {
-    pub const fn legacy_id(self) -> u32 { 0x25 }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BackupDiagnostic { OutsideTask }
@@ -142,9 +135,10 @@ impl BackupWriteMode {
 }
 
 pub trait HeaderBackupDriver {
-    fn context(&mut self) -> ExecutionContext;
-    fn acquire(&mut self, semaphore: BackupSemaphore);
-    fn release(&mut self, semaphore: BackupSemaphore);
+    type Task;
+    fn task(&mut self) -> Option<Self::Task>;
+    fn acquire(&mut self, task: &Self::Task, semaphore: BackupSemaphore);
+    fn release(&mut self, task: &Self::Task, semaphore: BackupSemaphore);
     fn diagnostic(&mut self, diagnostic: BackupDiagnostic);
     fn admit(&mut self, direction: RequestDirection) -> Result<(), DeviceStatus>;
     fn write_backup(&mut self, key: BackupKey, value: BackupValue, mode: BackupWriteMode) -> DeviceStatus;
@@ -239,15 +233,15 @@ impl<'a, D: HeaderBackupDriver> SharedBacking<'a, D> {
     pub fn auxiliary_mut(&mut self) -> &mut [u8] { &mut self.live[0x128..0x140] }
 
     fn enter(&mut self) {
-        match self.driver.context() {
-            ExecutionContext::Task => self.driver.acquire(BackupSemaphore::Settings),
-            ExecutionContext::OutsideTask => self.driver.diagnostic(BackupDiagnostic::OutsideTask),
+        match self.driver.task() {
+            Some(task) => self.driver.acquire(&task, BackupSemaphore::Settings),
+            None => self.driver.diagnostic(BackupDiagnostic::OutsideTask),
         }
     }
 
     fn leave(&mut self) {
-        if self.driver.context() == ExecutionContext::Task {
-            self.driver.release(BackupSemaphore::Settings);
+        if let Some(task) = self.driver.task() {
+            self.driver.release(&task, BackupSemaphore::Settings);
         }
     }
 

@@ -63,6 +63,8 @@ module Replacement.PropertyService.Oracle
   , forceRun
   , comparedRegisters
   , comparedRegions
+  , callsId
+  , eventsOf
   , FunctionSpan (..)
   , stockFunctions
   , leafSpans
@@ -656,6 +658,16 @@ exitId = RegionId "exit"
 backingId = RegionId "backing"
 callsId = RegionId "calls"
 
+-- | The boundary events the fixture's stubs wrote, in order.
+eventsOf :: B.ByteString -> [H.BoundaryEvent]
+eventsOf bytes =
+  [ H.BoundaryEvent (readWordAt bytes offset) (readWordAt bytes (offset + 4)) (readWordAt bytes (offset + 8)) (readWordAt bytes (offset + 12))
+  | index <- [0 .. count - 1]
+  , let offset = 4 + 16 * index
+  ]
+  where
+    count = min (fromIntegral (readWordAt bytes 0)) ((B.length bytes - 4) `div` 16)
+
 -- | The rw regions whose final bytes and writes the verdict compares; the stack below entry sp is scratch.
 comparedRegions :: [(RegionId, Word32, Int)]
 comparedRegions =
@@ -1059,6 +1071,10 @@ caseSpec image functions fx (CaseLabel label) standing (OracleCase (PropertyId i
         , region (RegionId "header-runtime-code") 0x722054 (0x72b3fc-0x722054) ReadExecute (H.codeWindow image 0x722054 (0x72b3fc-0x722054))
         , region (RegionId "header-reporter") 0x633594 (4 * length (H.callback 0x633594)) ReadExecute (B.concat (map word32le (H.callback 0x633594)))
         , region (RegionId "header-log") H.helperBase (4 * length H.helperWords) ReadExecute (B.concat (map word32le H.helperWords))
+        , region (RegionId "kernel-root") H.kernelRootBase 8 ReadOnly H.kernelRootBytes
+        , region (RegionId "kernel-block") H.kernelBlockBase (B.length H.kernelBlockBytes) ReadOnly H.kernelBlockBytes
+        , region (RegionId "semaphore-classes") H.classBase (B.length H.classBytes) ReadOnly H.classBytes
+        , region (RegionId "kernel-slots") H.slotBase (B.length H.slotCode) ReadExecute H.slotCode
         , region stackId stackBase (fromIntegral (stackPointer - stackBase)) ReadWrite (B.replicate (fromIntegral (stackPointer - stackBase)) 0)
         , region callerFrameId stackPointer (fromIntegral (stackTop - stackPointer)) ReadWrite (B.replicate (fromIntegral (stackTop - stackPointer)) 0)
         , region exitId exitAddress 4 ReadExecute (word32le 0xe12fff1e)

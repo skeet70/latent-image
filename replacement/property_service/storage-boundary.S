@@ -47,9 +47,6 @@
     .size \name, . - \name
     .endm
 
-    retained_call xm1_storage_context, xm1_backup_context723cb8
-    retained_call xm1_storage_acquire, xm1_backup_acquire724b68
-    retained_call xm1_storage_release, xm1_backup_release724c00
     retained_call xm1_storage_diagnostic, xm1_backup_diagnostic726c74
     retained_call xm1_storage_write, xm1_backup_write6a59b8
     retained_call xm1_storage_report, xm1_backup_report633594

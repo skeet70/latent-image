@@ -12,7 +12,7 @@ enum Effect {
 }
 
 struct Driver {
-    context: ExecutionContext,
+    outside_task: bool,
     refusal: Option<DeviceStatus>,
     write_status: DeviceStatus,
     effects: [Option<Effect>; 128],
@@ -21,7 +21,7 @@ struct Driver {
 
 impl Driver {
     fn new() -> Self {
-        Self { context: ExecutionContext::Task, refusal: None, write_status: DeviceStatus(0), effects: [None; 128], count: 0 }
+        Self { outside_task: false, refusal: None, write_status: DeviceStatus(0), effects: [None; 128], count: 0 }
     }
 
     fn push(&mut self, effect: Effect) {
@@ -37,9 +37,10 @@ impl Driver {
 }
 
 impl HeaderBackupDriver for Driver {
-    fn context(&mut self) -> ExecutionContext { self.context }
-    fn acquire(&mut self, semaphore: BackupSemaphore) { self.push(Effect::Acquire(semaphore)); }
-    fn release(&mut self, semaphore: BackupSemaphore) { self.push(Effect::Release(semaphore)); }
+    type Task = ();
+    fn task(&mut self) -> Option<()> { if self.outside_task { None } else { Some(()) } }
+    fn acquire(&mut self, _: &(), semaphore: BackupSemaphore) { self.push(Effect::Acquire(semaphore)); }
+    fn release(&mut self, _: &(), semaphore: BackupSemaphore) { self.push(Effect::Release(semaphore)); }
     fn diagnostic(&mut self, diagnostic: BackupDiagnostic) { self.push(Effect::Diagnostic(diagnostic)); }
     fn admit(&mut self, _: RequestDirection) -> Result<(), DeviceStatus> {
         match self.refusal { Some(status) => Err(status), None => Ok(()) }
@@ -266,7 +267,7 @@ fn rejected_open_and_close_preserve_all_bytes_and_report_mapped_status() {
 #[test]
 fn outside_task_diagnoses_each_operation_without_semaphore_calls() {
     with_backing(|backing| {
-        backing.driver_mut().context = ExecutionContext::OutsideTask;
+        backing.driver_mut().outside_task = true;
         let mut header = [0; HEADER_BYTES];
         backing.read_header(&mut header);
         backing.write_header(&header);

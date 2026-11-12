@@ -15,6 +15,8 @@ use storage::{Field, SlotField, FieldValue, HeaderField, MirrorSession, Previous
 use table::{BankDefault, BankOffset, Bits, FieldDefault, Hook, HookedField, Kind, ProfileSelector, Save, SlotDefault, SlotIndex, SlotRecord, Source, SpecialField, SpecialIndex, StockDefault, WriteOnlyPair};
 #[cfg(not(test))]
 use storage::native_configuration::NativeConfiguration;
+#[cfg(not(test))]
+use xm1_kernel::{Kernel, SlotTable};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PropertyId(u32);
@@ -354,7 +356,8 @@ pub unsafe extern "C" fn xm1_property_get(id: u32, bank: u32, defaults: u32, sel
     if cfg!(storage_defect_wrapped_selector_rejected) && selection == ProfileSelection::WrappedPredecessor { return 0; }
     let defaults = if cfg!(property_defect_nonzero_means_default) { defaults != 0 } else { defaults == 1 };
     let configuration = unsafe { NativeConfiguration::adopt() };
-    unsafe { storage_boundary::with_storage(|storage| {
+    let kernel = unsafe { Kernel::<SlotTable>::stock() };
+    unsafe { storage_boundary::with_storage(&kernel, |storage| {
         #[cfg(storage_defect_handover_reinitialize_all_banks)]
         storage.clear_images();
         get(storage, &configuration, id, bank, if defaults { ReadMode::Default } else { ReadMode::Live }, selection)
@@ -375,7 +378,8 @@ pub unsafe extern "C" fn xm1_property_set(id: u32, value: u32, bank: u32, select
     if cfg!(storage_defect_wrapped_selector_rejected) && selection == ProfileSelection::WrappedPredecessor { return 0; }
     let value = if cfg!(property_defect_sentinel_plus_one) && value == 0x1b000000 { WriteValue::Default } else if cfg!(property_defect_sentinel_plus_one) { WriteValue::Value(ValueBits(value)) } else { WriteValue::from_abi(value) };
     let configuration = unsafe { NativeConfiguration::adopt() };
-    let result = unsafe { storage_boundary::with_storage(|storage| {
+    let kernel = unsafe { Kernel::<SlotTable>::stock() };
+    let result = unsafe { storage_boundary::with_storage(&kernel, |storage| {
         if cfg!(storage_defect_snapshot_entire_bank_per_set) && bank == SettingsBank::Active { storage.capture_active(); }
         let result = set(storage, &configuration, id, value, bank, selection).assignment;
         #[cfg(storage_defect_save_on_bank1)]
