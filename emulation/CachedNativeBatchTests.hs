@@ -771,10 +771,15 @@ cacheRecencyTest root runner = do
   secondEntry <- case [entry | entry <- entries, takeFileName entry /= takeFileName firstEntry] of
     [entry] -> pure entry
     _ -> fail ("second publish did not add one entry: " ++ show entries)
+  secondBytes <- treeBytes secondEntry
   (hit, _) <- withCacheBudget "20G" $
     cachedObservedBatchWithSince (MaintenanceInterval 0) WriteFailedResults cache runner firstPath
   ensure (hit == BatchReused) "recency baseline did not reuse"
-  withCacheBudget (show (firstBytes + thirdBytes + 1)) $ do
+  -- A republished entry is not the same size as its earlier publish: the raw report records
+  -- the case's elapsed time, so the compressed payload moves by a few bytes between runs.
+  -- Only a budget in [first + third, first + third + second) evicts second alone, and that
+  -- interval is as wide as second, so the budget takes its middle.
+  withCacheBudget (show (firstBytes + thirdBytes + secondBytes `div` 2)) $ do
     _ <- cachedObservedBatchWithSince (MaintenanceInterval 0) WriteFailedResults cache runner thirdPath
     firstPresent <- doesDirectoryExist firstEntry
     secondPresent <- doesDirectoryExist secondEntry
