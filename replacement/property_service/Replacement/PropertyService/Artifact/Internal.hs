@@ -675,13 +675,16 @@ stageNativePlacement properties (Image _ _ base original) artifact = do
 -- | Check a locally placed image4: only the carrier and the two root branches may differ.
 validateLocalImage4 :: LinkedArtifact -> B.ByteString -> B.ByteString -> Either ArtifactError ()
 validateLocalImage4 artifact original staged = do
+  let EntryAddresses getter setter = artifactEntries artifact
+      entryStarts = [GuestAddress low | FunctionExtent _ (GuestAddress low) _ <- artifactFunctions artifact]
   require (B.length original == B.length staged && B.length original `mod` 4 == 0
     && artifactCarrier artifact == stage4Carrier
-    && artifactEntries artifact == EntryAddresses (GuestAddress 0x62c120) (GuestAddress 0x62c12c)
+    -- The canonical entry is a 4-byte branch and the public wrapper 12 bytes, so the
+    -- setter starts at the second function the artifact declares.
+    && [getter, setter] == take 2 entryStarts
     && B.length (linkedBytes artifact) <= carrierBytes stage4Carrier
     && B.length (linkedBytes artifact) `mod` 4 == 0) StagingRejected
-  let EntryAddresses getter setter = artifactEntries artifact
-      Carrier (GuestAddress codeLow) _ = artifactCarrier artifact
+  let Carrier (GuestAddress codeLow) _ = artifactCarrier artifact
       word bytes address = U.word32At bytes (fromIntegral (address - 0x61c400))
   forM_ [(getterStockEntry, getter), (setterStockEntry, setter)] $ \(site@(GuestAddress address), target@(GuestAddress destination)) ->
     require (A.decode address (adapterWord site target) == A.Branch always False destination) StagingRejected
