@@ -1,6 +1,6 @@
 use crate::mirror::{
     BackupDiagnostic, BackupDriver, HeaderBackupDriver, HeaderBackend, BackupKey, BackupSemaphore, BackupValue,
-    BackupWriteMode, DeviceStatus, MirrorOutcome, RequestDirection,
+    BackupWriteMode, DeviceStatus, ExportSink, MirrorOutcome, RequestDirection,
     RequestDescriptor, RequestOutcome, RequestStatus, SettingsBackend, SharedBacking, BackingRange, BACKING_BYTES,
     CUSTOM_BYTES, HEADER_BYTES,
 };
@@ -285,7 +285,7 @@ pub unsafe extern "C" fn xm1_storage_close(header: *const u8) -> i32 {
 pub unsafe extern "C" fn xm1_storage_export(buffer: *mut u8, length: u32, offset: u32) -> i32 {
     let destination = unsafe { core::slice::from_raw_parts_mut(buffer, length as usize) };
     let kernel = unsafe { Kernel::<xm1_kernel::SlotTable>::stock() };
-    unsafe { with_backend(&kernel, |backing| backing.export(BackingRange::new(offset, length), destination)) }.legacy_code()
+    unsafe { with_backend(&kernel, |backing| backing.export(BackingRange::new(offset, length), destination, ExportSink::Leaves)) }.legacy_code()
 }
 
 #[cfg(not(settings_storage_header_only))]
