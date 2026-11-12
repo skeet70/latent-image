@@ -18,6 +18,7 @@ import Emulation.Sha256 (Sha256, parseSha256Hex, sha256, sha256File, sha256Hex)
 import FujiAF.Host (failH, get, num, str)
 import FujiAF.JSON (encodeCanonical)
 import FujiAF.StorageBudget (checkStorageBudget)
+import Replacement.ModalRuntime.MemoryCounters (oomEvents, oomKills, peakBytes, readCounter)
 import System.Directory
   ( createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getFileSize
   , listDirectory, makeAbsolute, removeFile, removePathForcibly, renameDirectory, renameFile, setCurrentDirectory )
@@ -561,14 +562,14 @@ sdkPath name text =
 readBoundedScope :: IO ()
 readBoundedScope = do
   directory <- cgroupDirectory
-  limit <- readInteger (directory </> "memory.max")
-  swap <- readInteger (directory </> "memory.swap.max")
+  limit <- readCounter (directory </> "memory.max")
+  swap <- readCounter (directory </> "memory.swap.max")
   unless (limit == memoryMaxBytes) (failH ("memory.max is " ++ show limit))
   unless (swap == 0) (failH ("memory.swap.max is " ++ show swap))
   createDirectoryIfMissing True qualRoot
-  peak <- memPeak directory
-  kills <- memOomKills directory
-  events <- memOomEvents directory
+  peak <- peakBytes directory
+  kills <- oomKills directory
+  events <- oomEvents directory
   writeJson (qualRoot </> "resources-baseline.json") $ object
     [ "memory_max" .= limit
     , "swap_max" .= swap
@@ -586,21 +587,6 @@ cgroupDirectory = do
   case lines text of
     line : _ -> pure ("/sys/fs/cgroup" ++ dropWhile (/= '/') line)
     [] -> failH "cgroup membership is unavailable"
-
-readInteger :: FilePath -> IO Integer
-readInteger path = read <$> trim <$> readFile path
-
-memPeak :: FilePath -> IO Integer
-memPeak directory = readInteger (directory </> "memory.peak")
-
-memOomKills, memOomEvents :: FilePath -> IO Integer
-memOomKills = memoryEvent "oom_kill"
-memOomEvents = memoryEvent "oom"
-
-memoryEvent :: String -> FilePath -> IO Integer
-memoryEvent name directory = do
-  text <- readFile (directory </> "memory.events")
-  pure $ sum [read value | line <- lines text, [key, value] <- [words line], key == name]
 
 runGate :: SourceProvenance -> InputIdentity -> IO RunOutcome
 runGate source inputs = do
@@ -865,12 +851,12 @@ executeRole name role directory = do
   identity <- roleIdentity name role
   writeJson (directory </> "input.json") (roleJson identity)
   cgroup <- cgroupDirectory
-  beforeKills <- memOomKills cgroup
-  beforeEvents <- memOomEvents cgroup
-  beforePeak <- memPeak cgroup
+  beforeKills <- oomKills cgroup
+  beforeEvents <- oomEvents cgroup
+  beforePeak <- peakBytes cgroup
   status <- runViewer name role (directory </> "viewer.log")
-  afterKills <- memOomKills cgroup
-  afterEvents <- memOomEvents cgroup
+  afterKills <- oomKills cgroup
+  afterEvents <- oomEvents cgroup
   let killDelta = afterKills - beforeKills
       eventDelta = afterEvents - beforeEvents
       receipt = directory </> "receipt" </> "e2e-result.json"
@@ -881,7 +867,7 @@ executeRole name role directory = do
     resultDigest <- sha256Hex <$> sha256File receipt
     inputDigest <- sha256Hex <$> sha256File (directory </> "input.json")
     completedAt <- show <$> getProcessID
-    afterPeak <- memPeak cgroup
+    afterPeak <- peakBytes cgroup
     writeJson (directory </> "completion.json") $ object
       [ "identity_sha256" .= inputDigest
       , "result_sha256" .= resultDigest
@@ -932,7 +918,7 @@ executeRole name role directory = do
                   | abnormal = "sigkill-without-oom-kill"
                   | otherwise = "viewer-failed"
             inputDigest <- sha256Hex <$> sha256File (directory </> "input.json")
-            failurePeak <- memPeak cgroup
+            failurePeak <- peakBytes cgroup
             writeJson (directory </> "failure.json") $ object
               [ "identity_sha256" .= inputDigest
               , "exit" .= exitCodeValue status

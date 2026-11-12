@@ -100,6 +100,16 @@ runGrantProbe mode = do
       (code, out) <- spawnGrantChild (Just (show pid ++ ":")) "none" []
       putStrLn ("probe-no-purpose-exit " ++ show code ++ " " ++ show ("probe-in-slot" `isInfixOf` out))
       putStrLn ("probe-no-purpose-error " ++ show ("needs a purpose" `isInfixOf` out))
+    "moved" -> do
+      self <- getExecutablePath
+      environment <- getEnvironment
+      let overrides = [("XM1_ADMISSION_INHERIT", valid), ("XM1_PROBE_GRANT", "none")]
+      (code, out, err) <- readCreateProcessWithExitCode
+        (proc "systemd-run" ["--user", "--scope", "--quiet", "--collect", "--", self])
+        {env = Just (overrides ++ environment)} ""
+      let observed = out ++ err
+      putStrLn ("probe-moved-exit " ++ show code ++ " " ++ show ("probe-in-slot" `isInfixOf` observed))
+      putStrLn ("probe-moved-error " ++ show ("runs outside the owner's cgroup" `isInfixOf` observed))
     "second" -> runSecondGrantedChild valid
     "regrant" -> do
       (code, out) <- spawnGrantChild (Just valid) "spawn-regrant" []

@@ -694,6 +694,31 @@ haskell_test(
     ],
 )
 
+haskell_library(
+    name = "memory-counters",
+    srcs = ["Replacement/ModalRuntime/MemoryCounters.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:base",
+        "//host:filepath",
+    ],
+)
+
+haskell_test(
+    name = "memory-counters-tests",
+    srcs = ["MemoryCountersTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    deps = [
+        ":memory-counters",
+        "//host:base",
+        "//host:directory",
+        "//host:filepath",
+        "//host:unix",
+    ],
+)
+
 haskell_binary(
     name = "menu-engine-qualify-bounded",
     srcs = ["QualifyBoundedMain.hs"],
@@ -701,6 +726,7 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     visibility = ["//visibility:public"],
     deps = [
+        ":memory-counters",
         "//emulation:case-sha256",
         "//emulation:emulator-slot-lib",
         "//emulation:host-admission-lib",

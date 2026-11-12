@@ -240,6 +240,13 @@ run source builder wrapper = do
   grantWrongSlotOk <- expect "a grant naming a slot the owner does not hold is refused"
     (grantWrongSlotSlot /= Nothing && "probe-wrong-slot-exit ExitFailure 1 False" `elem` grantWrongSlotLines
       && "probe-wrong-slot-error True" `elem` grantWrongSlotLines)
+  grantMoved <- spawn (change "XM1_PROBE_GRANT" "moved" environment)
+  Admission grantMovedLines grantMovedSlot <- admission grantMoved
+  release grantMoved
+  _ <- finish grantMoved
+  grantMovedOk <- expect "a granted child moved to another cgroup is refused"
+    (grantMovedSlot /= Nothing && "probe-moved-exit ExitFailure 1 False" `elem` grantMovedLines
+      && "probe-moved-error True" `elem` grantMovedLines)
   grantNoPurpose <- spawn (change "XM1_PROBE_GRANT" "no-purpose" environment)
   Admission grantNoPurposeLines grantNoPurposeSlot <- admission grantNoPurpose
   release grantNoPurpose
@@ -474,7 +481,7 @@ run source builder wrapper = do
   _ <- finish explicitJob
   explicitLabel <- readRunLabel explicitWorkspace
   explicitLabelOk <- expect "XM1_RUN_LABEL overrides the slot's program label" (explicitLabel == Just "explicit-label")
-  pure (and [nativeCliOk, defaultFullOk, overrideCapsOk, fullOk, largeNativeOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, smallOk, nativeLimit, nestedOk, grantOk, grantSecondOk, grantWrongSlotOk, grantNoPurposeOk, grantRegrantOk, grantOtherOk, grandchildOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, sessionOk, startupOk, migrationLockOk, migrationOk, unknownMigrationOk, programLabelOk, explicitLabelOk])
+  pure (and [nativeCliOk, defaultFullOk, overrideCapsOk, fullOk, largeNativeOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, smallOk, nativeLimit, nestedOk, grantOk, grantSecondOk, grantWrongSlotOk, grantMovedOk, grantNoPurposeOk, grantRegrantOk, grantOtherOk, grandchildOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, sessionOk, startupOk, migrationLockOk, migrationOk, unknownMigrationOk, programLabelOk, explicitLabelOk])
 
 change :: String -> String -> [(String, String)] -> [(String, String)]
 change key value environment = (key, value) : filter ((/= key) . fst) environment
