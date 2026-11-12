@@ -12,7 +12,7 @@ import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Char (isDigit)
 import Data.List (isInfixOf, isPrefixOf, isSuffixOf, nub, sort, stripPrefix, tails)
 import Data.Maybe (fromMaybe, listToMaybe)
-import Emulation.EmulatorSlot (SlotCount (..), SlotPolicy (..), admissionInheritanceVariable, insideSlot, reexecInSlot, slotPolicyFromEnvironment)
+import Emulation.EmulatorSlot (SlotCount (..), SlotPolicy (..), admissionGrant, grantPurpose, insideSlot, reexecInSlot, slotPolicyFromEnvironment)
 import qualified Emulation.HostAdmission as Admission
 import Emulation.Sha256 (Sha256, parseSha256Hex, sha256, sha256File, sha256Hex)
 import FujiAF.Host (failH, get, num, str)
@@ -968,11 +968,11 @@ runViewer name role logPath = do
                , "--output", directory </> "runtime"
                , "--receipt-output", directory </> "receipt" ]
   owner <- getProcessID
-  let grant = show owner ++ ":" ++ caseText name ++ "." ++ roleText role
+  purpose <- either failH pure (grantPurpose (caseText name ++ "." ++ roleText role))
   spawn "devenv" (["shell", "--", binRoot </> "xm1-viewer"] ++ common ++ extra) logPath
     [ ("XM1_EMULATOR_SLOTS", "1")
     , ("XM1_EMULATOR_MEMORY_MAX", "2G")
-    , (admissionInheritanceVariable, grant)
+    , admissionGrant owner purpose
     ]
 
 runPairCheck :: CaseId -> IO (Either Failure FilePath)

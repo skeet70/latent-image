@@ -216,11 +216,44 @@ run source builder wrapper = do
   nestedOk <- expect "a child cannot reuse its parent's admission marker"
     (nestedSlot /= Nothing && "probe-nested-exit ExitFailure 1" `elem` nestedLines)
   grantChild <- spawn (change "XM1_PROBE_GRANT" "valid" environment)
-  Admission grantChildLines grantChildSlot <- admission grantChild
+  grantChildSeen@(Admission grantChildLines grantChildSlot) <- admission grantChild
   release grantChild
   _ <- finish grantChild
-  grantOk <- expect "a child with its parent's grant runs inside the parent's slot"
-    (grantChildSlot /= Nothing && "probe-grant-exit ExitSuccess True" `elem` grantChildLines)
+  grantOk <- expect "a child with its parent's grant runs in the parent's slot and cgroup"
+    (grantChildSlot /= Nothing && "probe-grant-exit ExitSuccess True" `elem` grantChildLines
+      && observedText "probe-in-slot " grantChildSeen /= Nothing
+      && observedText "probe-grant-slot " grantChildSeen == observedText "probe-in-slot " grantChildSeen
+      && observedText "probe-grant-unit " grantChildSeen == observedText "probe-unit " grantChildSeen
+      && observedText "probe-grant-memory-max " grantChildSeen == observedText "probe-memory-max " grantChildSeen)
+  grantSecond <- spawn (change "XM1_PROBE_GRANT" "second" environment)
+  Admission grantSecondLines grantSecondSlot <- admission grantSecond
+  release grantSecond
+  _ <- finish grantSecond
+  grantSecondOk <- expect "a second granted child is refused while one runs in the parent's slot"
+    (grantSecondSlot /= Nothing && "probe-second-first True" `elem` grantSecondLines
+      && "probe-second-exit ExitFailure 1 False" `elem` grantSecondLines
+      && "probe-second-error True" `elem` grantSecondLines)
+  grantWrongSlot <- spawn (change "XM1_PROBE_GRANT" "wrong-slot" environment)
+  Admission grantWrongSlotLines grantWrongSlotSlot <- admission grantWrongSlot
+  release grantWrongSlot
+  _ <- finish grantWrongSlot
+  grantWrongSlotOk <- expect "a grant naming a slot the owner does not hold is refused"
+    (grantWrongSlotSlot /= Nothing && "probe-wrong-slot-exit ExitFailure 1 False" `elem` grantWrongSlotLines
+      && "probe-wrong-slot-error True" `elem` grantWrongSlotLines)
+  grantNoPurpose <- spawn (change "XM1_PROBE_GRANT" "no-purpose" environment)
+  Admission grantNoPurposeLines grantNoPurposeSlot <- admission grantNoPurpose
+  release grantNoPurpose
+  _ <- finish grantNoPurpose
+  grantNoPurposeOk <- expect "a grant without a purpose is refused"
+    (grantNoPurposeSlot /= Nothing && "probe-no-purpose-exit ExitFailure 1 False" `elem` grantNoPurposeLines
+      && "probe-no-purpose-error True" `elem` grantNoPurposeLines)
+  grantRegrant <- spawn (change "XM1_PROBE_GRANT" "regrant" environment)
+  Admission grantRegrantLines grantRegrantSlot <- admission grantRegrant
+  release grantRegrant
+  _ <- finish grantRegrant
+  grantRegrantOk <- expect "a granted child cannot grant its own child"
+    (grantRegrantSlot /= Nothing && "probe-grant-exit ExitSuccess True" `elem` grantRegrantLines
+      && "probe-regrant-line True" `elem` grantRegrantLines)
   grantOther <- spawn (change "XM1_PROBE_GRANT" "other" environment)
   Admission grantOtherLines grantOtherSlot <- admission grantOther
   release grantOther
@@ -441,7 +474,7 @@ run source builder wrapper = do
   _ <- finish explicitJob
   explicitLabel <- readRunLabel explicitWorkspace
   explicitLabelOk <- expect "XM1_RUN_LABEL overrides the slot's program label" (explicitLabel == Just "explicit-label")
-  pure (and [nativeCliOk, defaultFullOk, overrideCapsOk, fullOk, largeNativeOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, smallOk, nativeLimit, nestedOk, grantOk, grantOtherOk, grandchildOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, sessionOk, startupOk, migrationLockOk, migrationOk, unknownMigrationOk, programLabelOk, explicitLabelOk])
+  pure (and [nativeCliOk, defaultFullOk, overrideCapsOk, fullOk, largeNativeOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, smallOk, nativeLimit, nestedOk, grantOk, grantSecondOk, grantWrongSlotOk, grantNoPurposeOk, grantRegrantOk, grantOtherOk, grandchildOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, sessionOk, startupOk, migrationLockOk, migrationOk, unknownMigrationOk, programLabelOk, explicitLabelOk])
 
 change :: String -> String -> [(String, String)] -> [(String, String)]
 change key value environment = (key, value) : filter ((/= key) . fst) environment
