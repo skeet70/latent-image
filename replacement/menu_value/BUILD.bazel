@@ -20,6 +20,8 @@ xm1_rust_rlib(
     rustc_flags = [
         "-C",
         "target-feature=+strict-align",
+        "-C",
+        "llvm-args=-min-jump-table-entries=4096",
         "--cfg",
         "rb_menu_value_owned",
     ],
