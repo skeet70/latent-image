@@ -470,14 +470,21 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
     -- A conditional instruction's flags come from the comparison immediately before it, so a
     -- branch target cannot rely on the preceding word.
     branchTargets = S.fromList [target | (_, _, A.Branch _ _ target) <- decoded]
-    offsetRegisters = S.fromList [register | (_, _, A.Store _ _ _ _ (A.OffsetRegister _ register _ _) _) <- decoded]
     compareGuard pc
       | pc - 4 < start || S.member pc branchTargets = Nothing
       | otherwise = case A.decode (pc - 4) (U.word32At bytes (fromIntegral (pc - 4 - base))) of
-          A.DataProcessing (A.Cond 14) operation True source _ (A.Immediate amount)
+          -- CMP and CMN leave Rd at r0; the register the flags describe is Rn.
+          A.DataProcessing (A.Cond 14) operation True _ source (A.Immediate amount)
             | operation == A.CMP -> Just (source, immediate amount)
             | operation == A.CMN -> Just (source, negate (immediate amount))
           _ -> Nothing
+    -- The counters the path key carries: the registers a store offset reads, and the
+    -- registers a comparison guard reads, so a loop counter is not deduplicated away.
+    keyRegisters =
+      S.fromList [register | (_, _, A.Store _ _ _ _ (A.OffsetRegister _ register _ _) _) <- decoded]
+        `S.union` S.fromList [register | (address, word, _) <- decoded
+                               , word `shiftR` 28 < 14
+                               , Just (register, _) <- [compareGuard address]]
     entry = PathState
       { statePc = start
       , stateSp = 0
@@ -501,7 +508,7 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
     go seen (state : pending) low calls literals arguments incoming stored =
       let pc = statePc state
           key = ( stateSp state, stateFp state, stateLink state, stateR11 state, stateAliases state
-                , stateSlots state, M.filterWithKey (\register _ -> S.member register offsetRegisters) (stateCounters state)
+                , stateSlots state, M.filterWithKey (\register _ -> S.member register keyRegisters) (stateCounters state)
                 , stateReserved state )
       in case M.lookup pc seen of
         Just keys | S.member key keys -> go seen pending low calls literals arguments incoming stored
@@ -558,6 +565,8 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
           conditional = word `shiftR` 28 < 14
           condition = A.Cond (word `shiftR` 28)
           guard = compareGuard pc
+          -- The path key carries every comparison guard's counter, so a state refined
+          -- here is the only state at that pc with this counter value.
           restrict selected current = case guard of
             Nothing -> Just current
             Just (register, comparison) -> case M.lookup register (stateCounters current) of
@@ -691,7 +700,7 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
               Right (result [] (skip (if S.member target nonreturning then [] else taken next)) sp
                 [CallEdge (GuestAddress pc) (GuestAddress target) (StackOffset sp) kind] [] passed [])
         A.Branch _ False target
-          | target >= start && target < end -> Right (result [] (skip [state {statePc = target}]) sp [] [] [] [])
+          | target >= start && target < end -> Right (result [] (skip (taken (state {statePc = target}))) sp [] [] [] [])
           | S.member target callable -> tailTo TailCall
           | S.member target leaves -> tailTo StockLeafTailCall
           | S.member target callbackEntries -> tailTo CallbackTailCall
@@ -751,6 +760,9 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
               advance (foldl' (\current (address, register') -> recordSlot address A.Word register' current)
                 state (zip [lowest, lowest + 4 ..] registers))
           | writeback, Just (LocalAlias (StackOffset offset)) <- baseAlias register -> do
+              -- A writeback multiple store with the base in its own list stores an
+              -- unpredictable value for that register.
+              when (register == A.sp || register `elem` registers) (Left NonStackStore)
               let count = 4 * length registers
                   lowest = case mode of
                     A.IncrementAfter -> offset
