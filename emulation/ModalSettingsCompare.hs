@@ -144,7 +144,7 @@ checkWriterIdentity :: Role -> Either String ()
 checkWriterIdentity role
   | roleScoped role = unless (not (null bounds) && all inside bounds)
       (Left "the owned role's settings writers are not extents inside its image")
-  | otherwise = unless (bounds == map watchRangeBounds stockSettingsWriters)
+  | otherwise = unless (bounds == [(toInteger low, toInteger high) | (low, high) <- map watchRangeBounds stockSettingsWriters])
       (Left "the stock role's settings writer is not the stock setter")
  where
   bounds = roleWriterBounds role
