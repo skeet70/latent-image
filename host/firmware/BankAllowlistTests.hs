@@ -167,6 +167,30 @@ main = do
   unknownFrame <- run framePolicy unknownBytes
   check "unknown pointers do not acquire local frame provenance"
     (any (\f -> findingAddress f == unknownCall && findingReason f == UnprovenArgument) (violations unknownFrame))
+  -- A stock call may write through any frame address the caller passed it.
+  let stockTarget = case stockCalls allowlist of
+        (call : _) -> stockCallAddress call
+        [] -> error "the allowlist declares no stock call"
+      writableBase = symbol "rb_last_status"
+      slotWord opcode half = opcode .|. ((half .&. 0xf000) `shiftL` 4) .|. (half .&. 0xfff)
+      slotPrefix = [0xe92d4010, 0xe24dd008, slotWord 0xe3004000 writableBase, slotWord 0xe3404000 (writableBase `shiftR` 16), 0xe58d4000]
+      withCall instructions =
+        let site = callerStart + fromIntegral (length instructions * 4)
+         in replaceFunction "rb_assert_one" (instructions ++ [branchLink site stockTarget] ++ [0xe59d2000, 0xe3a03001, 0xe5823000, 0xe28dd008, 0xe8bd8010]) clean
+      escapedSlot = withCall (slotPrefix ++ [0xe1a0000d])
+      keptSlot = withCall slotPrefix
+      rechecked = replaceFunction "rb_assert_one"
+        (slotPrefix ++ [0xe1a0000d, branchLink (callerStart + 24) stockTarget,
+          0xe59d2000, 0xe3520003, 0x8a000000, 0xe7843102, 0xe28dd008, 0xe8bd8010]) clean
+  escapedReport <- run allowlist escapedSlot
+  check "a slot whose address a stock call received loses its value"
+    (any (\f -> findingAddress f == callerStart + 36) (violations escapedReport))
+  keptReport <- run allowlist keptSlot
+  check "a slot whose address never escaped keeps its value"
+    (not (any (\f -> findingAddress f == callerStart + 32) (violations keptReport)))
+  recheckedReport <- run allowlist rechecked
+  check "a reloaded slot with a range check bounds its store index"
+    (not (any (\f -> findingAddress f == callerStart + 40) (violations recheckedReport)))
   forM_ [elfLow, elfHigh] $ \path -> do
     bytes <- B.readFile path
     image <- either fail pure (parseElf bytes)

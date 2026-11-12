@@ -598,6 +598,32 @@ stackBounds (StackOffset o) = Just (o, o)
 stackBounds (StackSpan lo hi) = Just (lo, hi)
 stackBounds _ = Nothing
 
+-- | The frame offsets an address value can name, or every offset when the
+-- index into the frame is unbounded.
+stackAddress :: Abstract -> Maybe (Int32, Int32)
+stackAddress (StackOffset o) = Just (o, o)
+stackAddress (StackSpan lo hi) = Just (lo, hi)
+stackAddress (Derived (Index StackFrame)) = Just (minBound, maxBound)
+stackAddress _ = Nothing
+
+-- | The union of two escape spans; a span covers every frame offset between
+-- its ends, and `minBound..maxBound` is every slot.
+escapedSpan :: Maybe (Int32, Int32) -> Maybe (Int32, Int32) -> Maybe (Int32, Int32)
+escapedSpan Nothing other = other
+escapedSpan other Nothing = other
+escapedSpan (Just (lo, hi)) (Just (lo', hi')) = Just (min lo lo', max hi hi')
+
+markEscaped :: Maybe (Int32, Int32) -> Abstract -> Maybe (Int32, Int32)
+markEscaped span_ value = escapedSpan span_ (stackAddress value)
+
+-- | Drops every slot a callee this analysis does not follow may write through
+-- an address the caller took.
+forgetEscaped :: State -> State
+forgetEscaped state = case escaped state of
+  Nothing -> state
+  Just (lo, hi) ->
+    state {slots = M.filterWithKey (\k _ -> toInteger k + 4 <= toInteger lo || toInteger k > toInteger hi + 3) (slots state)}
+
 -- | A small index read as signed stack-offset deltas: every value, or the two bounds.
 signedOffsets :: Abstract -> Maybe [Int32]
 signedOffsets value = case (enumerate value, bounds value) of
@@ -645,6 +671,8 @@ data State = State
   , comparison :: Maybe Comparison
   , -- | A condition the current flags are known to satisfy on this path.
     holds :: Maybe Cond
+  , -- | The stack-pointer offsets this function has taken the address of.
+    escaped :: Maybe (Int32, Int32)
   }
   deriving (Eq, Show)
 
@@ -655,6 +683,7 @@ entryState =
     M.empty
     Nothing
     Nothing
+    Nothing
 
 joinState :: (Word32 -> Location) -> State -> State -> State
 joinState place a b =
@@ -663,6 +692,7 @@ joinState place a b =
     (M.intersectionWith (joinValue place) (slots a) (slots b))
     (if comparison a == comparison b then comparison a else Nothing)
     (if holds a == holds b then holds a else Nothing)
+    (escapedSpan (escaped a) (escaped b))
 
 widenState :: (Word32 -> Location) -> [Word32] -> State -> State -> State
 widenState place thresholds old new =
@@ -671,6 +701,7 @@ widenState place thresholds old new =
     (M.intersectionWith (widenValue place thresholds) (slots old) (slots new))
     (if comparison old == comparison new then comparison old else Nothing)
     (if holds old == holds new then holds old else Nothing)
+    (escapedSpan (escaped old) (escaped new))
 
 -- | The flags of `cmp r, #k` (unsigned conditions valid) or `cmn r, #-k` (only EQ and NE).
 data Comparison = Comparison Reg Word32 Bool deriving (Eq, Show)
@@ -820,6 +851,7 @@ setRegister (Reg n) value state =
     , comparison = case comparison state of
         Just (Comparison (Reg compared) _ _) | compared == n -> Nothing
         other -> other
+    , escaped = if n == 13 then escaped state else markEscaped (escaped state) value
     }
 
 -- | Narrows the compared register on a path where `cond` holds after `cmp r, #k`.
@@ -927,7 +959,8 @@ execute context function address instruction state = case instruction of
       ( \s ->
           let at = transferAddress s rn offset indexing
               size = widthBytes width
-              stored = storeSlots s at size [registerValue address s rt, registerValue address s (nextReg rt)]
+              values = [registerValue address s rt, registerValue address s (nextReg rt)]
+              stored = storeValues (storeSlots s at size values) values
            in storing (storeCheck s rn at size) (continue (writeback stored rn offset indexing))
       )
       id
@@ -935,7 +968,8 @@ execute context function address instruction state = case instruction of
     conditional cond
       ( \s ->
           let (lowest, count, end) = block s rn mode regs
-              stored = storeSlots s lowest count (map (registerValue address s) regs)
+              values = map (registerValue address s) regs
+              stored = storeValues (storeSlots s lowest count values) values
               updated = if wb then setRegister rn end stored else stored
            in storing (storeCheck s rn lowest count) (continue updated)
       )
@@ -953,7 +987,7 @@ execute context function address instruction state = case instruction of
           else conditional cond (\s -> continue (load s)) id
   Branch cond link target
     | link, traps target -> conditional cond (\s -> branchCount (targetFindings s True target) (Outcome [] [] 0 0)) id
-    | link -> conditional cond (\s -> branchCount (targetFindings s True target) (continue (afterCall (calleeAt target) s))) id
+    | link -> conditional cond (\s -> branchCount (targetFindings s True target) (continue (afterCall (M.member target (bankFunctions context)) (calleeAt target) s))) id
     | inside target -> branching cond (\s -> Outcome [(target, s)] [] 0 0)
     | otherwise -> branching cond (\s -> branchCount (targetFindings s False target) (Outcome [] [] 0 0))
   BranchExchange cond link rm
@@ -961,7 +995,7 @@ execute context function address instruction state = case instruction of
         conditional cond
           ( \s ->
               let value = registerValue address s rm
-               in (indirectBranch True (Just rm) value s) {outcomeSuccessors = [next (afterCall (calleeOf value) s)]}
+               in (indirectBranch True (Just rm) value s) {outcomeSuccessors = [next (afterCall False (calleeOf value) s)]}
           )
           id
     | otherwise -> branching cond (\s -> indirectBranch False (Just rm) (registerValue address s rm) s)
@@ -1082,6 +1116,9 @@ execute context function address instruction state = case instruction of
     | hi + fromIntegral size <= 0 && not (overlapsSaved s lo (hi + fromIntegral size)) =
         s {slots = M.filterWithKey (\k _ -> k + 4 <= lo || k >= hi + fromIntegral size) (slots s)}
   storeSlots s _ _ _ = s
+
+  -- A frame address a store leaves in memory the callee can reach.
+  storeValues s values = s {escaped = foldl markEscaped (escaped s) values}
 
   -- Whether [lo, end) of the frame holds the return address or a register
   -- this function saved on entry.
@@ -1217,9 +1254,13 @@ execute context function address instruction state = case instruction of
   calleeOf value = case enumerate value of
     Just [target] -> calleeAt target
     _ -> Nothing
-  afterCall callee s =
+  -- A call to a bank function keeps the caller's slots; a stock or register
+  -- call may have written through an address the caller took.
+  afterCall analysed callee s =
     let clobbered = foldr (`setRegister` Unknown) s [Reg 1, Reg 2, Reg 3, Reg 12, lr]
-     in (setRegister (Reg 0) (maybe Unknown (Derived . Result) callee) clobbered) {comparison = Nothing, holds = Nothing}
+        reported = setRegister (Reg 0) (maybe Unknown (Derived . Result) callee) clobbered
+        returned = if analysed then reported else forgetEscaped reported
+     in returned {comparison = Nothing, holds = Nothing}
 
 showProvenance :: Provenance -> String
 showProvenance p = case p of
