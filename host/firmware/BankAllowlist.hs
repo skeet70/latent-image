@@ -616,8 +616,8 @@ escapedSpan (Just (lo, hi)) (Just (lo', hi')) = Just (min lo lo', max hi hi')
 markEscaped :: Maybe (Int32, Int32) -> Abstract -> Maybe (Int32, Int32)
 markEscaped span_ value = escapedSpan span_ (stackAddress value)
 
--- | Drops every local slot at or above the lowest escaped local, except the
--- slots the prologue's register save wrote.
+-- | Drops every local slot holding a byte at or above the lowest escaped
+-- offset, except the slots the prologue's register save wrote.
 forgetEscaped :: (Abstract -> Bool) -> State -> State
 forgetEscaped isSaved state = case escaped state of
   Nothing -> state
@@ -637,7 +637,8 @@ stackAt :: [Int32] -> Abstract
 stackAt [o] = StackOffset o
 stackAt offsets = StackSpan (minimum offsets) (maximum offsets)
 
--- | Joins, then moves a growing interval bound out to the next threshold.
+-- | Joins, then moves a growing interval bound out to the next threshold. A
+-- growing stack offset keeps its frame root.
 widenValue :: (Word32 -> Location) -> [Word32] -> Abstract -> Abstract -> Abstract
 widenValue place thresholds old new
   | joined == old = old
@@ -648,6 +649,7 @@ widenValue place thresholds old new
       Interval
         (if lo' < lo then fromMaybe 0 (listToMaybe (reverse (filter (<= lo') thresholds))) else lo)
         (if hi' > hi then fromMaybe maxBound (listToMaybe (filter (>= hi') thresholds)) else hi)
+  | isJust (stackBounds joined) = Derived (Index StackFrame)
   | otherwise = Unknown
  where
   joined = joinValue place old new
@@ -783,6 +785,9 @@ subtractFrom base index = case (base, index) of
   (StackSpan lo hi, _) | Just offsets <- signedOffsets index -> stackAt (map (lo -) offsets ++ map (hi -) offsets)
   (StackOffset o, StackOffset q) -> exact (fromIntegral (o - q))
   (Derived p, _) | Just _ <- bounds index -> Derived p
+  (StackOffset _, _) | scalar index -> Derived (Index StackFrame)
+  (StackSpan _ _, _) | scalar index -> Derived (Index StackFrame)
+  (Derived p@(Index StackFrame), _) | scalar index -> Derived p
   _ | Just v <- pointwise (-) base index -> v
   _ | Just (lo, hi) <- bounds base, Just [v] <- enumerate index, lo >= v -> Interval (lo - v) (hi - v)
   _ -> Unknown
@@ -791,11 +796,13 @@ shiftValue :: Shift -> Int -> Abstract -> Abstract
 shiftValue LSL 0 value = value
 shiftValue shift amount value = case enumerate value of
   Just xs -> fromSet (S.fromList (map (applyShift shift amount) xs))
-  Nothing -> case (shift, bounds value) of
-    (LSR, Just (lo, hi)) -> Interval (applyShift LSR amount lo) (applyShift LSR amount hi)
-    (LSR, Nothing) -> Interval 0 (applyShift LSR amount maxBound)
-    (LSL, Just (lo, hi)) | toInteger hi * 2 ^ amount <= 0xffffffff -> Interval (lo `shiftL` amount) (hi `shiftL` amount)
-    _ -> Unknown
+  Nothing
+    | isJust (stackAddress value) -> Derived (Index StackFrame)
+    | otherwise -> case (shift, bounds value) of
+        (LSR, Just (lo, hi)) -> Interval (applyShift LSR amount lo) (applyShift LSR amount hi)
+        (LSR, Nothing) -> Interval 0 (applyShift LSR amount maxBound)
+        (LSL, Just (lo, hi)) | toInteger hi * 2 ^ amount <= 0xffffffff -> Interval (lo `shiftL` amount) (hi `shiftL` amount)
+        _ -> Unknown
 
 -- | An immediate shift; amount 0 encodes 32 for LSR and ASR and RRX for ROR (taken as unknown by callers' sets).
 applyShift :: Shift -> Int -> Word32 -> Word32
@@ -808,6 +815,8 @@ applyShift shift amount value = case shift of
   ROR -> if amount == 0 then value else (value `shiftR` amount) .|. (value `shiftL` (32 - amount))
 
 dataResult :: Context -> DataOp -> Abstract -> Abstract -> Abstract
+dataResult _context op a b
+  | op `elem` [MVN, AND, ORR, EOR, BIC], isJust (stackAddress a) || isJust (stackAddress b) = Derived (Index StackFrame)
 dataResult context op a b = case op of
   MOV -> b
   MVN -> fromMaybe Unknown (pointwise (\_ y -> complement y) (exact 0) b)
@@ -931,7 +940,9 @@ execute context function address instruction state = case instruction of
         result s = maybe (factors s) (\ra -> offsetFrom context (registerValue address s ra) (factors s)) accumulator
      in conditional cond (\s -> continue (setRegister rd (result s) s)) id
   MoveTop cond rd value ->
-    let top s = fromMaybe Unknown (pointwise (\low _ -> (low .&. 0xffff) .|. (value `shiftL` 16)) (registerValue address s rd) (exact 0))
+    let top s = case registerValue address s rd of
+          low | isJust (stackAddress low) -> Derived (Index StackFrame)
+          low -> fromMaybe Unknown (pointwise (\x _ -> (x .&. 0xffff) .|. (value `shiftL` 16)) low (exact 0))
      in conditional cond (\s -> continue (setRegister rd (top s) s)) id
   ZeroExtend cond rd rm rotation bits ->
     let extended s = dataResult context AND (shiftValue ROR rotation (registerValue address s rm)) (exact ((1 `shiftL` bits) - 1))
@@ -1103,7 +1114,9 @@ execute context function address instruction state = case instruction of
   derefDepth (Deref p) = 1 + derefDepth p
   derefDepth _ = 0
 
-  -- Stack slots hold whole words; a narrower store forgets the slots it touches.
+  -- Stack slots hold whole words; a narrower store forgets the slots it
+  -- touches. A store through an unbounded frame index, or through a pointer
+  -- that may alias an exposed local, forgets every word it may reach.
   storeSlots :: State -> Abstract -> Word32 -> [Abstract] -> State
   storeSlots s (StackOffset o) size values =
     let end = o + fromIntegral size
@@ -1115,6 +1128,8 @@ execute context function address instruction state = case instruction of
   storeSlots s (StackSpan lo hi) size _
     | hi + fromIntegral size <= 0 && not (overlapsSaved s lo (hi + fromIntegral size)) =
         s {slots = M.filterWithKey (\k _ -> k + 4 <= lo || k >= hi + fromIntegral size) (slots s)}
+  storeSlots s (Derived (Index StackFrame)) _ _ = s {slots = M.filter saved (slots s)}
+  storeSlots s (Derived _) _ _ = forgetEscaped saved s
   storeSlots s _ _ _ = s
 
   -- A frame address a store leaves in memory the callee can reach.
@@ -1254,12 +1269,21 @@ execute context function address instruction state = case instruction of
   calleeOf value = case enumerate value of
     Just [target] -> calleeAt target
     _ -> Nothing
-  -- Every call forgets the caller's frame words at or above the lowest escaped
-  -- offset, except the prologue's saved registers and return address.
+  -- Every call forgets the caller's frame words that hold a byte at or above
+  -- the lowest escaped offset, and every frame word below the stack pointer at
+  -- the call, except the prologue's saved registers and return address.
   afterCall callee s =
     let clobbered = foldr (`setRegister` Unknown) s [Reg 1, Reg 2, Reg 3, Reg 12, lr]
         reported = setRegister (Reg 0) (maybe Unknown (Derived . Result) callee) clobbered
-     in (forgetEscaped saved reported) {comparison = Nothing, holds = Nothing}
+     in (belowCallSp s (forgetEscaped saved reported)) {comparison = Nothing, holds = Nothing}
+
+  -- A callee may write every frame word below the stack pointer it was called with.
+  belowCallSp called subject = case registerValue address called (Reg 13) of
+    StackOffset o -> keepFrom o subject
+    StackSpan _ hi -> keepFrom hi subject
+    _ -> subject {slots = M.empty}
+   where
+    keepFrom lo kept = kept {slots = M.filterWithKey (\k _ -> k >= lo) (slots kept)}
 
 showProvenance :: Provenance -> String
 showProvenance p = case p of

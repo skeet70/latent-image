@@ -213,8 +213,27 @@ main = do
     (not (any (\f -> findingAddress f == callerStart + 32) (violations savedReport)))
   -- `add r0, sp, #1` exposes entry sp-15, inside the rb_last_status word at -16.
   unalignedReport <- run allowlist (withCall (slotPrefix ++ [0xe28d0001]))
-  check "an exposed byte below a frame word's start forgets that word"
+  check "a frame word holding the lowest exposed byte loses its value"
     (any (\f -> findingAddress f == callerStart + 36) (violations unalignedReport))
+  -- `str r4, [sp, #-4]` writes entry sp-12, below the sp the call is made with.
+  let belowSpBytes = replaceFunction "rb_assert_one"
+        [0xe92d4010, slotWord 0xe3004000 writableBase, slotWord 0xe3404000 (writableBase `shiftR` 16), 0xe50d4004,
+          branchLink (callerStart + 16) stockTarget, 0xe51d2004, 0xe3a03001, 0xe5823000, 0xe8bd8010] clean
+  belowSpReport <- run allowlist belowSpBytes
+  check "a frame word below the call's stack pointer loses its value"
+    (any (\f -> findingAddress f == callerStart + 28) (violations belowSpReport))
+  -- `sub r0, sp, r1` keeps the frame root, so the whole frame is exposed.
+  subReport <- run allowlist (withCall (slotPrefix ++ [0xe04d0001]))
+  check "a frame address minus an unknown index exposes the frame"
+    (any (\f -> findingAddress f == callerStart + 36) (violations subReport))
+  -- A declared store through an unbounded frame index may reach any frame word.
+  let frameIndexPolicy = allowlist {declarations = declarations allowlist ++
+        [Declaration "rb_assert_one" StoreAccess (Index StackFrame) "synthetic two-word local array"]}
+      frameIndexBytes = replaceFunction "rb_assert_one"
+        (slotPrefix ++ [0xe78d1100, 0xe59d2000, 0xe3a03001, 0xe5823000, 0xe28dd008, 0xe8bd8010]) clean
+  frameIndexReport <- run frameIndexPolicy frameIndexBytes
+  check "a declared store through an unbounded frame index clears the frame"
+    (any (\f -> findingAddress f == callerStart + 32) (violations frameIndexReport))
   -- The frame word above the escaped local, not only the escaped span, loses
   -- its value: a span rule keeps the word at sp+4 and proves the store.
   let abovePrefix = slotPrefix ++ [0xe58d4004, 0xe1a0000d]
