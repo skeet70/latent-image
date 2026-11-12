@@ -125,6 +125,12 @@ expectRefusal label expected result = case result of
   Left actual -> fail (label ++ ": expected " ++ show expected ++ ", got " ++ show actual)
   Right _ -> fail (label ++ ": admitted")
 
+expectCodeViolation :: String -> Violation -> Either ArtifactError a -> IO ()
+expectCodeViolation label expected result = case result of
+  Left (CodeRejected (AdmissionError _ actual)) | actual == expected -> putStrLn ("refused " ++ label ++ ": " ++ show actual)
+  Left other -> fail (label ++ ": expected " ++ show expected ++ ", got " ++ show other)
+  Right _ -> fail (label ++ ": admitted")
+
 expect :: (Eq a, Show a) => String -> a -> a -> IO ()
 expect label expected actual
   | expected == actual = putStrLn ("checked " ++ label)
@@ -419,6 +425,38 @@ literalPoolTests = do
     { layoutMappings = [ArmSpan (spanAt 0x1000 0x103c), DataSpan (spanAt 0x103c 0x1054)] } code)
   rejected "unsupported trap prevents a nonreturn summary" (admit (changed 0x1038 0xe1200070))
   rejected "non-stack trap store prevents a nonreturn summary" (admit (changed 0x1034 0xe5801000))
+  let boundaryLayout entries = CodeLayout
+        { layoutBase = GuestAddress 0x1000
+        , layoutFunctions = [function "backend" 0x1000 0x1018, function "other" 0x1018 0x1030]
+        , layoutMappings = [ArmSpan (spanAt 0x1000 0x1014), DataSpan (spanAt 0x1014 0x1018), ArmSpan (spanAt 0x1018 0x1030)]
+        , layoutLiteralPointers = []
+        , layoutData = [(GuestAddress 0x1014, GuestAddress 0x1018)]
+        , layoutDeclaredData = []
+        , layoutBoundaryWindows = [spanAt 0x96bd20 0x96bd28]
+        , layoutBoundaryEntries = map GuestAddress entries
+        , layoutStoreSites = []
+        , layoutStockLeaves = []
+        , layoutStockSites = []
+        }
+      boundaryCode = B.concat (map U.putWord32
+        [ 0xe92d4800, 0xe1a0b00d, 0xe59f3004, 0xe12fff33
+        , 0xe8bd8800, 0x0096bd20, 0xe1a00000, 0xe1a00000
+        , 0xe1a00000, 0xe1a00000, 0xe1a00000, 0xe12fff1e
+        ])
+      slotCall = B.concat (map U.putWord32
+        [ 0xe92d4800, 0xe1a0b00d, 0xe3a03000, 0xe12fff33
+        , 0xe8bd8800, 0xe1a00000, 0xe1a00000, 0xe1a00000
+        , 0xe1a00000, 0xe1a00000, 0xe1a00000, 0xe12fff1e
+        ])
+      boundaryAdmit entries = admitCode (boundaryLayout entries)
+  either (fail . ("boundary window refused: " ++) . show) (const (pure ())) (boundaryAdmit [0x1000] boundaryCode)
+  expect "slot root named outside the boundary" (Left (AdmissionError (GuestAddress 0x1008) LiteralPointerOutsideOwned))
+    (() <$ boundaryAdmit [0x1018] boundaryCode)
+  expect "slot root outside its declared window" (Left (AdmissionError (GuestAddress 0x1008) LiteralPointerOutsideOwned))
+    (() <$ boundaryAdmit [0x1000] (putWordAt 0x1000 0x1014 0x0096bd30 boundaryCode))
+  either (fail . ("boundary slot call refused: " ++) . show) (const (pure ())) (boundaryAdmit [0x1000] slotCall)
+  expect "slot call outside the boundary" (Left (AdmissionError (GuestAddress 0x100c) PcWrite))
+    (() <$ boundaryAdmit [0x1018] slotCall)
 
 main :: IO ()
 main = do
@@ -481,6 +519,14 @@ artifactTests arguments = do
       refusedPool "direct branch into the emitted pool" (replaceWord entry (branchWord False entry literal) bytes)
       refusedPool "fallthrough into the emitted pool" (replaceWord (literal - 4) 0xe1a00000 bytes)
       refusedPool "unowned pointer in the emitted pool" (replaceWord literal 0x2000 bytes)
+  case [pool | pool@(_, entry) <- emittedPools, GuestAddress entry `notElem` artifactKernelBoundary artifact] of
+    [] -> fail "no literal pool outside the kernel boundary"
+    (literal, entry) : _ -> do
+      expectCodeViolation "slot root named outside the kernel boundary" LiteralPointerOutsideOwned
+        (admit (replaceWord literal 0x0096bd20 bytes) symbolText)
+      expectRefusal "slot word called outside the kernel boundary"
+        (CodeRejected (AdmissionError (GuestAddress entry) PcWrite))
+        (admit (replaceWord entry 0xe12fff33 bytes) symbolText)
   expectRefusal "missing mandatory ELF evidence" ElfRejected
     (deriveArtifact ProductionArtifact properties testCarrier (ArtifactInput bytes symbolText B.empty))
   expectRefusal "ELF bytes differ from the linked artifact" ElfRejected
