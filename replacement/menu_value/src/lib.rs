@@ -158,6 +158,7 @@ impl ValueTables {
             .map(|index| self.conversions[index].1)
     }
 
+    #[inline]
     pub fn image_size_pair(&self, token: RowToken) -> Option<ImageSizePair> {
         self.image_sizes
             .binary_search_by_key(&token, |(candidate, _)| *candidate)
@@ -170,6 +171,7 @@ impl ValueTables {
     }
 
     /// The transaction a posted `(property, token)` pair selects.
+    #[inline]
     pub fn target(&self, property: PropertyId, token: RowToken) -> ValueTarget {
         match self.image_size {
             Some(rule) if rule.size_property == property => ValueTarget::ImageSize { token },
@@ -200,6 +202,7 @@ pub struct PropertyWrites {
 }
 
 impl PropertyWrites {
+    #[inline]
     pub fn iter(&self) -> impl Iterator<Item = &PropertyWrite> + '_ {
         self.entries.iter().take(self.len).filter_map(Option::as_ref)
     }
@@ -241,6 +244,7 @@ pub struct RetainedEffects {
 }
 
 impl RetainedEffects {
+    #[inline]
     pub fn iter(&self) -> impl Iterator<Item = RetainedEffect> + '_ {
         self.entries.iter().take(self.len).filter_map(|effect| *effect)
     }
@@ -297,6 +301,7 @@ pub fn convert(table: &[ConversionRow], value: u32, mode: ConversionMode, column
     }
 }
 
+#[inline]
 fn column_value(row: &ConversionRow, column: u8, ordinal: u32) -> u32 {
     match column {
         0 => ordinal,
@@ -349,6 +354,7 @@ fn resolve_image_size(tables: &ValueTables, token: RowToken) -> Result<Commit, R
 
 /// The stock 0xf6 arm's change condition: the working size, aspect and third
 /// cells differ from their stored cells.
+#[inline]
 pub fn cells_differ(working: [ChoiceCode; 3], stored: [ChoiceCode; 3]) -> bool {
     working != stored
 }
@@ -363,6 +369,7 @@ fn convert_key(tables: &ValueTables, property: PropertyId, key: u32) -> Result<C
 }
 
 /// Resolves and applies `target` to `settings` in stock order.
+#[inline]
 pub fn commit(tables: &ValueTables, target: ValueTarget, settings: &mut impl Settings) -> Result<Commit, Refusal> {
     let result = resolve(tables, target)?;
     for write in result.writes.iter() {
@@ -381,6 +388,7 @@ pub struct Transaction {
 
 impl Transaction {
     /// Captures the values of the properties `target` can change.
+    #[inline]
     pub fn begin(tables: &ValueTables, target: ValueTarget, settings: &impl Settings) -> Result<Self, Refusal> {
         let entry = match target {
             ValueTarget::Ordinary { property, .. } => {
@@ -414,6 +422,7 @@ impl Transaction {
         self.entry
     }
 
+    #[inline]
     pub fn select(
         &self,
         tables: &ValueTables,
@@ -424,6 +433,7 @@ impl Transaction {
     }
 
     /// Restores only the properties this transaction captured.
+    #[inline]
     pub fn back(&self, settings: &mut impl Settings) -> PropertyWrites {
         for write in self.entry.iter() {
             settings.write(write.property, write.value);
@@ -444,3 +454,15 @@ impl Transaction {
 
 #[cfg(test)]
 mod tests;
+
+/// The adapter's `crate::menu_value` paths resolve to this crate.
+#[cfg(rb_menu_value_owned)]
+pub use crate as menu_value;
+
+/// The guest seam at the stock commit dispatcher.
+#[cfg(rb_menu_value_owned)]
+#[path = "../adapter/mod.rs"]
+pub mod adapter;
+
+#[cfg(rb_menu_value_owned)]
+core::arch::global_asm!(include_str!("../adapter/entry.S"), options(raw));

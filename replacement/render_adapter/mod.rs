@@ -1,3 +1,13 @@
+#![no_std]
+
+extern crate menu_engine;
+extern crate menu_engine_adapter;
+extern crate menu_widgets;
+extern crate render_commands;
+
+#[cfg(target_arch = "arm")]
+core::arch::global_asm!(include_str!("entry.S"), options(raw));
+
 pub(crate) mod class;
 mod picker;
 mod tree;
@@ -77,7 +87,10 @@ pub unsafe extern "C" fn rb_render_tree_apply(registers: &EntryRegisters, stack:
         },
         second_step: stack[0], mode: crate::menu_widgets::tree_list::DrawMode(stack[5]),
     };
-    crate::menu_widgets::tree_list::tree_list(&mut tree::StockServices, args, unsafe { &mut *report });
+    if crate::menu_widgets::tree_list::tree_list(&mut tree::StockServices, args, unsafe { &mut *report }).is_err() {
+        unsafe { write_volatile(&raw mut BUSY, false); }
+        return 0;
+    }
     unsafe { write_volatile(&raw mut BUSY, false); }
     1
 }
@@ -98,9 +111,9 @@ pub unsafe extern "C" fn rb_render_pane_apply(registers: &EntryRegisters, _stack
         caller: ReturnAddress(caller), node: class::PaneNode(node), mode: class::PaneMode(mode),
         depth: class::SnapshotDepth(depth), kind: class::SnapshotKind(kind), origin,
     };
-    let owned = class.owned();
+    let mut owned = class.owned();
     if owned {
-        crate::menu_widgets::pane_drawer::pane_drawer(&mut pane::StockServices, NodeId(node), crate::menu_widgets::pane_drawer::DrawMode(mode));
+        owned = crate::menu_widgets::pane_drawer::pane_drawer(&mut pane::StockServices, NodeId(node), crate::menu_widgets::pane_drawer::DrawMode(mode)).is_ok();
     }
     unsafe { write_volatile(&raw mut BUSY, false); }
     owned as u32

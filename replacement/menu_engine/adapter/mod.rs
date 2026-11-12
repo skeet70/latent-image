@@ -3,10 +3,24 @@
 //! service call writes the in-progress state's changed words to them first, and
 //! the transition's final state is written back before the result returns.
 
+#![no_std]
+
+extern crate menu_engine;
+
+use owned_menu::owned_menu;
+
+#[cfg(rb_menu_value_owned)]
+extern crate menu_value;
+#[cfg(rb_menu_value_owned)]
+use menu_value::adapter as menu_value_adapter;
+
+#[cfg(target_arch = "arm")]
+core::arch::global_asm!(include_str!("entry.S"), options(raw));
+
 use core::ptr::{read_volatile, write_volatile};
 
 use crate::menu_engine::block::{
-    self, decode_into, mirror_last_move_word, mirror_word, BlockWords, RecordTable, BLOCK_ADDRESS, BLOCK_LEN,
+    self, decode_into, last_move_writes, mirror_word, BlockWords, RecordTable, BLOCK_ADDRESS, BLOCK_LEN,
     FIRST_DEPTH_SNAPSHOTS, LAST_MOVE_ADDRESS, ROOT_SNAPSHOT, SECOND_DEPTH_SNAPSHOTS, SNAPSHOT_LEN,
 };
 use crate::menu_engine::engine::{
@@ -26,9 +40,15 @@ use crate::menu_engine::{
 include!(env!("RB_MENU_ENGINE_TREE"));
 include!(env!("RB_MENU_ENGINE_RECORDS"));
 
-#[cfg(rb_render_owned)]
-pub(crate) fn render_node_origin(record_id: NodeId, current: RecordAddress) -> crate::render_adapter::class::NodeOrigin {
-    use crate::render_adapter::class::NodeOrigin;
+/// Which record table a render entry's node belongs to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NodeOrigin {
+    Stock,
+    Package,
+    Unknown,
+}
+
+pub fn render_node_origin(record_id: NodeId, current: RecordAddress) -> NodeOrigin {
     for (node, &address) in TREE.nodes.iter().zip(RECORDS.records) {
         if node.id == record_id && address == current {
             return NodeOrigin::Stock;
@@ -93,14 +113,16 @@ fn write_state(state: &EngineState) {
             store_word(BLOCK_ADDRESS + offset as u32, value);
         }
     }
-    for index in 0..2 {
-        let value = mirror_last_move_word(state, index);
-        if Live.last_move_word(index) != value {
-            store_word(LAST_MOVE_ADDRESS + 4 * index as u32, value);
-        }
+    let (class, token) = last_move_writes(state, [Live.last_move_word(0), Live.last_move_word(1)]);
+    if let Some(class) = class {
+        store_word(LAST_MOVE_ADDRESS, class);
+    }
+    if let Some(token) = token {
+        store_word(LAST_MOVE_ADDRESS + 4, token);
     }
 }
 
+#[inline]
 fn read_state(state: &mut EngineState) {
     if decode_into(&Live, &TREE, &RECORDS, state).is_err() {
         unsafe { rb_menu_engine_guard_failure() }
@@ -129,6 +151,7 @@ fn write_record(address: u32, record: &MenuFrameSnapshot) {
 struct Stock;
 
 impl EngineServices for Stock {
+    #[inline]
     fn perform(&mut self, state: &EngineState, effect: Effect) {
         write_state(state);
         match effect {
@@ -200,6 +223,7 @@ impl EngineServices for Stock {
         result_of(raw)
     }
 
+    #[inline]
     fn seek(&mut self, state: &mut EngineState, call: SeekCall) -> EngineResult {
         write_state(state);
         let raw = unsafe {

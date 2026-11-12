@@ -39,6 +39,7 @@ impl PickerServices for StockServices {
     }
     fn clear_report(&mut self, report: &mut DrawReport) { call!(rb_render_call_7221c8, report,0,68); }
     fn panel_font(&mut self) -> FontId { FontId(unsafe { core::ptr::read_volatile(0x015e46c0 as *const u32) }) }
+    #[inline]
     fn snapshot(&mut self, node: NodeId, selection: SnapshotSelection) -> Snapshot {
         let mut value = Snapshot::default();
         match selection {
@@ -47,6 +48,7 @@ impl PickerServices for StockServices {
         }
         value
     }
+    #[inline]
     fn summary(&mut self, node: NodeId, parent: u32) -> Summary {
         let mut value = Summary::default();
         call!(rb_render_call_bf8f4c,node.0,parent,&mut value); value
@@ -79,7 +81,7 @@ impl PickerServices for StockServices {
     fn bar_style(&mut self)->u32 { call!(rb_render_call_1130e68,0) }
     fn bar_resources(&mut self,style: u32)->[ResourceId;3] {
         let words = unsafe { core::ptr::read_volatile((0x0110ba2cu32.wrapping_add(style.wrapping_mul(12))) as *const [u32;3]) };
-        words.map(ResourceId)
+        [ResourceId(words[0]), ResourceId(words[1]), ResourceId(words[2])]
     }
     fn grid_size(&mut self,label: ResourceId)->[u8;2] {
         let mut value = [0;2]; call!(rb_render_call_111258c,label.0,value.as_mut_ptr()); value

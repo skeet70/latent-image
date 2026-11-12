@@ -14,7 +14,7 @@ core::arch::global_asm!(include_str!("../../render_adapter/entry.S"), options(ra
 
 #[no_mangle]
 pub extern "C" fn owned_pane_drawer(node: u32, mode: u32) {
-    pane_drawer::pane_drawer(&mut services::StockServices, render_commands::NodeId(node), pane_drawer::DrawMode(mode));
+    let _ = pane_drawer::pane_drawer(&mut services::StockServices, render_commands::NodeId(node), pane_drawer::DrawMode(mode));
 }
 
 #[panic_handler]
