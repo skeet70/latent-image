@@ -616,13 +616,13 @@ escapedSpan (Just (lo, hi)) (Just (lo', hi')) = Just (min lo lo', max hi hi')
 markEscaped :: Maybe (Int32, Int32) -> Abstract -> Maybe (Int32, Int32)
 markEscaped span_ value = escapedSpan span_ (stackAddress value)
 
--- | Drops every slot a callee this analysis does not follow may write through
--- an address the caller took.
-forgetEscaped :: State -> State
-forgetEscaped state = case escaped state of
+-- | Drops every local slot at or above the lowest escaped local, except the
+-- slots the prologue's register save wrote.
+forgetEscaped :: (Abstract -> Bool) -> State -> State
+forgetEscaped isSaved state = case escaped state of
   Nothing -> state
-  Just (lo, hi) ->
-    state {slots = M.filterWithKey (\k _ -> toInteger k + 4 <= toInteger lo || toInteger k > toInteger hi + 3) (slots state)}
+  Just (lo, _) ->
+    state {slots = M.filterWithKey (\k value -> k < lo || isSaved value) (slots state)}
 
 -- | A small index read as signed stack-offset deltas: every value, or the two bounds.
 signedOffsets :: Abstract -> Maybe [Int32]
@@ -715,9 +715,31 @@ data Context = Context
   , bankFunctions :: M.Map Word32 Function
   , codeWords :: S.Set Word32
   , namedObjects :: [(Word32, Word32, String)]
+  , -- | Bank function entries whose code can reach a call this analysis does not follow.
+    reachesUnanalysed :: S.Set Word32
   , -- | The (callee entry, argument) pairs being analysed with that argument 0.
     zeroArguments :: [(Word32, Reg)]
   }
+
+-- | The bank functions whose reachable code calls a target this analysis does
+-- not follow, directly or through any chain of bank calls.
+unanalysedCallers :: Elf -> M.Map Word32 Function -> S.Set Word32 -> S.Set Word32
+unanalysedCallers elf functions code = fix S.empty
+ where
+  fix known =
+    let next =
+          S.fromList
+            [ start
+            | (start, (open, callees)) <- M.toList scanned
+            , open || any (\target -> maybe True (const (S.member target known)) (M.lookup target functions)) callees
+            ]
+     in if next == known then known else fix next
+  scanned = M.fromList [(functionStart f, scan f) | f <- M.elems functions]
+  scan f = foldl classify (False, []) [decode a w | a <- [functionStart f, functionStart f + 4 .. functionEnd f - 4], S.member a code, Just w <- [wordAt elf a]]
+  classify (open, callees) instruction = case instruction of
+    Branch _ True target -> (open, target : callees)
+    BranchExchange _ True _ -> (True, callees)
+    _ -> (open, callees)
 
 -- | A bank function, or a run of ARM code that no function symbol covers.
 data Function = Function {functionName :: String, functionStart :: Word32, functionEnd :: Word32}
@@ -987,7 +1009,7 @@ execute context function address instruction state = case instruction of
           else conditional cond (\s -> continue (load s)) id
   Branch cond link target
     | link, traps target -> conditional cond (\s -> branchCount (targetFindings s True target) (Outcome [] [] 0 0)) id
-    | link -> conditional cond (\s -> branchCount (targetFindings s True target) (continue (afterCall (M.member target (bankFunctions context)) (calleeAt target) s))) id
+    | link -> conditional cond (\s -> branchCount (targetFindings s True target) (continue (afterCall (followed target) (calleeAt target) s))) id
     | inside target -> branching cond (\s -> Outcome [(target, s)] [] 0 0)
     | otherwise -> branching cond (\s -> branchCount (targetFindings s False target) (Outcome [] [] 0 0))
   BranchExchange cond link rm
@@ -1251,15 +1273,16 @@ execute context function address instruction state = case instruction of
     through = maybe " through a loaded program counter" ((" through " ++) . regName) register
 
   calleeAt target = Just (maybe (StockFunction target) (BankFunction . functionName) (M.lookup target (bankFunctions context)))
+  -- A direct call whose callee's own code reaches no unanalysed call.
+  followed target = M.member target (bankFunctions context) && S.notMember target (reachesUnanalysed context)
   calleeOf value = case enumerate value of
     Just [target] -> calleeAt target
     _ -> Nothing
-  -- A call to a bank function keeps the caller's slots; a stock or register
-  -- call may have written through an address the caller took.
+  -- Only a call that reaches no unanalysed call keeps the caller's slots.
   afterCall analysed callee s =
     let clobbered = foldr (`setRegister` Unknown) s [Reg 1, Reg 2, Reg 3, Reg 12, lr]
         reported = setRegister (Reg 0) (maybe Unknown (Derived . Result) callee) clobbered
-        returned = if analysed then reported else forgetEscaped reported
+        returned = if analysed then reported else forgetEscaped saved reported
      in returned {comparison = Nothing, holds = Nothing}
 
 showProvenance :: Provenance -> String
@@ -1344,7 +1367,8 @@ checkBank allowlist elf = do
         , symbolSize s > 0
         , symbolValue s >= textStart layout && symbolValue s < imageEnd layout || inText (symbolValue s) || inEngineData (symbolValue s)
         ]
-      context = Context elf layout canonicalAllowlist (M.fromList [(functionStart f, f) | f <- named]) code objects []
+      context = Context elf layout canonicalAllowlist (M.fromList [(functionStart f, f) | f <- named]) code objects
+        (unanalysedCallers elf (M.fromList [(functionStart f, f) | f <- named]) code) []
       overlapping =
         [ Finding (functionStart g) "<layout>" Violation (LayoutProblem FunctionOverlap) ("function " ++ functionName g ++ " overlaps " ++ functionName f)
         | (f, g) <- zip functions (drop 1 functions)

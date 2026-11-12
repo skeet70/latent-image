@@ -191,6 +191,24 @@ main = do
   recheckedReport <- run allowlist rechecked
   check "a reloaded slot with a range check bounds its store index"
     (not (any (\f -> findingAddress f == callerStart + 40) (violations recheckedReport)))
+  -- A bank veneer that calls stock through a register reaches unanalysed code.
+  let veneer = fst (function "rb_status_record")
+      veneerBytes = replaceFunction "rb_status_record"
+        [slotWord 0xe300c000 stockTarget, slotWord 0xe340c000 (stockTarget `shiftR` 16), 0xe12fff3c, 0xe12fff1e] clean
+      throughVeneer callee = replaceFunction "rb_assert_one"
+        (slotPrefix ++ [0xe1a0000d, branchLink (callerStart + 24) veneer,
+          0xe59d2000, 0xe3a03001, 0xe5823000, 0xe28dd008, 0xe8bd8010]) callee
+      savedThroughVeneer = replaceFunction "rb_assert_one"
+        (slotPrefix ++ [0xe1a0000d, branchLink (callerStart + 24) veneer, 0xe28dd008, 0xe8bd8010]) veneerBytes
+  veneerReport <- run allowlist (throughVeneer veneerBytes)
+  check "a slot whose address an owned veneer reaching stock received loses its value"
+    (any (\f -> findingAddress f == callerStart + 36) (violations veneerReport))
+  plainReport <- run allowlist (throughVeneer (replaceFunction "rb_status_record" [0xe1a00000, 0xe12fff1e] clean))
+  check "a call that reaches no unanalysed call keeps the caller's values"
+    (not (any (\f -> findingAddress f == callerStart + 36) (violations plainReport)))
+  savedReport <- run allowlist savedThroughVeneer
+  check "a saved return address survives a call that receives a pointer to a local"
+    (not (any (\f -> findingAddress f == callerStart + 32) (violations savedReport)))
   forM_ [elfLow, elfHigh] $ \path -> do
     bytes <- B.readFile path
     image <- either fail pure (parseElf bytes)
