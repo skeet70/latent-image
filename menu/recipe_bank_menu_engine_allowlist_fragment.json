@@ -458,22 +458,6 @@
    "reason": "calls the per-core block's stock entry word that the kernel boundary table carries"
   },
   {
-   "function": "_RINvCsap93jzluDcr_20xm1_property_service10set_hookedINtNtCsdTMjx7m5njD_25xm1_settings_storage_core13native_mirror13NativeBackendNtNtCsjPY53278zkB_10xm1_kernel10slot_table9SlotTableENtNtBT_20native_configuration19NativeConfigurationNtB2_9DiscardedEB2_",
-   "access": "store",
-   "through": {
-    "result": "_RINvMNtCsjw6Ar5Xz5I4_4core6optionINtB3_6OptionQShE14unwrap_or_elseNCNvCsdTMjx7m5njD_25xm1_settings_storage_core8part_mut0ECsap93jzluDcr_20xm1_property_service"
-   },
-   "reason": "the output leaves check the length and the index against it before the store, and the part is inside the storage image the session holds"
-  },
-  {
-   "function": "_RINvCsap93jzluDcr_20xm1_property_service8set_pairINtNtCsdTMjx7m5njD_25xm1_settings_storage_core13native_mirror13NativeBackendNtNtCsjPY53278zkB_10xm1_kernel10slot_table9SlotTableENtB2_9DiscardedEB2_",
-   "access": "store",
-   "through": {
-    "result": "_RINvMNtCsjw6Ar5Xz5I4_4core6optionINtB3_6OptionQShE14unwrap_or_elseNCNvCsdTMjx7m5njD_25xm1_settings_storage_core8part_mut0ECsap93jzluDcr_20xm1_property_service"
-   },
-   "reason": "the output leaves check the length and the index against it before the store, and the part is inside the storage image the session holds"
-  },
-  {
    "function": "_RNvMs1_CsdTMjx7m5njD_25xm1_settings_storage_coreINtB5_15SettingsStorageINtNtB5_13native_mirror13NativeBackendNtNtCsjPY53278zkB_10xm1_kernel10slot_table9SlotTableEE19refresh_active_bodyCsap93jzluDcr_20xm1_property_service",
    "access": "store",
    "through": {
@@ -582,6 +566,22 @@
     }
    },
    "reason": "calls the interrupt-mask slot word the stock core block holds"
+  },
+  {
+   "function": "_RNvMs0_CsdTMjx7m5njD_25xm1_settings_storage_coreINtB5_15SettingsStorageINtNtB5_13native_mirror13NativeBackendNtNtCsjPY53278zkB_10xm1_kernel10slot_table9SlotTableEE11open_headerCsap93jzluDcr_20xm1_property_service",
+   "access": "store",
+   "through": {
+    "argument": "r0"
+   },
+   "reason": "stores the session it returns into the result slot the caller passes, which every caller keeps on its own frame"
+  },
+  {
+   "function": "_RNvMs0_CsdTMjx7m5njD_25xm1_settings_storage_coreINtB5_15SettingsStorageINtNtB5_13native_mirror13NativeBackendNtNtCsjPY53278zkB_10xm1_kernel10slot_table9SlotTableEE11open_headerCsap93jzluDcr_20xm1_property_service",
+   "access": "store",
+   "through": {
+    "result": "_RINvMNtCsjw6Ar5Xz5I4_4core6optionINtB3_6OptionQShE14unwrap_or_elseNCNvCsdTMjx7m5njD_25xm1_settings_storage_core8part_mut0ECsap93jzluDcr_20xm1_property_service"
+   },
+   "reason": "the read writes the 16 header bytes into the storage image's first 16 bytes through this part; the output helpers check the length and index against it"
   }
  ]
 }

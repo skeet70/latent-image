@@ -401,8 +401,9 @@ impl<'a, D: HeaderBackupDriver> SharedBacking<'a, D> {
         }
     }
 
+    /// Records each header byte this write synchronised, when the caller keeps them.
     #[inline(always)]
-    pub fn synchronize_into(&mut self, observations: &mut [Option<DriverObservation>; HEADER_BYTES]) {
+    fn synchronize_observing(&mut self, mut observations: Option<&mut [Option<DriverObservation>; HEADER_BYTES]>) {
         let checksum = self.live[..15].iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)).wrapping_neg();
         crate::memory::write_byte(&mut self.live[15], checksum);
         for index in 0..HEADER_BYTES {
@@ -411,23 +412,32 @@ impl<'a, D: HeaderBackupDriver> SharedBacking<'a, D> {
                 let value = BackupValue(crate::memory::read_byte(&*self.live, index));
                 let status = self.driver.write_backup(key, value, BackupWriteMode::Immediate);
                 crate::memory::write_byte_at(&mut *self.shadow, index, crate::memory::read_byte(&*self.live, index));
-                observations[index] = Some(DriverObservation { position: HeaderPosition(index as u8), key, value, status });
+                if let Some(observations) = observations.as_mut() {
+                    observations[index] = Some(DriverObservation { position: HeaderPosition(index as u8), key, value, status });
+                }
             }
         }
     }
 
     #[inline(always)]
-    fn import_copy_unheld(&mut self, range: BackingRange, source: &[u8], outcome: &mut BackingWriteOutcome) {
-        outcome.status = BackingStatus::Success;
-        outcome.custom_refreshed = false;
-        for observation in outcome.synchronized.iter_mut() { *observation = None; }
+    pub fn synchronize_into(&mut self, observations: &mut [Option<DriverObservation>; HEADER_BYTES]) {
+        self.synchronize_observing(Some(observations))
+    }
+
+    /// Copies `range` into the live backing, synchronising the header it covers.
+    #[inline(always)]
+    fn import_copy_into(&mut self, range: BackingRange, source: &[u8], mut observations: Option<&mut [Option<DriverObservation>; HEADER_BYTES]>) -> BackingStatus {
+        if let Some(observations) = observations.as_mut() {
+            for observation in observations.iter_mut() { *observation = None; }
+        }
         match self.driver.admit(RequestDirection::Write) {
-            Err(status) => outcome.status = BackingStatus::Refused(status),
+            Err(status) => BackingStatus::Refused(status),
             Ok(()) => match range.projection(source.len()) {
-                Err(status) => outcome.status = status,
+                Err(status) => status,
                 Ok(projection) => {
                     crate::memory::copy_bytes(self.live.get_mut(projection.clone()).unwrap(), source.get(..projection.len()).unwrap());
-                    self.synchronize_into(&mut outcome.synchronized);
+                    self.synchronize_observing(observations);
+                    BackingStatus::Success
                 }
             },
         }
@@ -445,7 +455,8 @@ impl<'a, D: HeaderBackupDriver> SharedBacking<'a, D> {
 impl<D: BackupDriver> SharedBacking<'_, D> {
     #[inline(always)]
     fn import_unheld(&mut self, range: BackingRange, source: &[u8], outcome: &mut BackingWriteOutcome) {
-        self.import_copy_unheld(range, source, outcome);
+        outcome.custom_refreshed = false;
+        outcome.status = self.import_copy_into(range, source, Some(&mut outcome.synchronized));
         if outcome.status == BackingStatus::Success && range.end() > 0x140 {
             let custom: &[u8; CUSTOM_BYTES] = self.live[0x140..0x168].try_into().ok().unwrap();
             self.driver.refresh_custom(custom);
@@ -499,14 +510,15 @@ impl<D: BackupDriver> SharedBacking<'_, D> {
 
     #[inline(always)]
     fn write_body_unheld(&mut self, source: &[u8; BODY_BYTES], report: Option<&mut BodyOutcome>) -> RequestOutcome {
-        let mut outcome = BackingWriteOutcome::ZERO;
-        self.import_unheld(RequestDescriptor::from_abi(BODY_BYTES as u32, 0x10).range(), source, &mut outcome);
-        let request = request_outcome(outcome.status);
-        if let Some(report) = report {
-            report.request = request;
-            report.synchronized = outcome.synchronized;
+        let range = RequestDescriptor::from_abi(BODY_BYTES as u32, 0x10).range();
+        match report {
+            Some(report) => {
+                let request = request_outcome(self.import_copy_into(range, source, Some(&mut report.synchronized)));
+                report.request = request;
+                request
+            }
+            None => request_outcome(self.import_copy_into(range, source, None)),
         }
-        request
     }
 }
 
@@ -533,14 +545,15 @@ impl<D: HeaderBackupDriver> SharedBacking<'_, D> {
 
     #[inline(always)]
     fn write_header_unheld(&mut self, source: &[u8; HEADER_BYTES], report: Option<&mut MirrorOutcome>) -> RequestOutcome {
-        let mut outcome = BackingWriteOutcome::ZERO;
-        self.import_copy_unheld(BackingRange::new(0, HEADER_BYTES as u32), source, &mut outcome);
-        let request = request_outcome(outcome.status);
-        if let Some(report) = report {
-            report.request = request;
-            report.synchronized = outcome.synchronized;
+        let range = BackingRange::new(0, HEADER_BYTES as u32);
+        match report {
+            Some(report) => {
+                let request = request_outcome(self.import_copy_into(range, source, Some(&mut report.synchronized)));
+                report.request = request;
+                request
+            }
+            None => request_outcome(self.import_copy_into(range, source, None)),
         }
-        request
     }
 }
 impl<D: HeaderBackupDriver> HeaderBackend for SharedBacking<'_, D> {

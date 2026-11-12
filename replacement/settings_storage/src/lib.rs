@@ -132,7 +132,7 @@ impl<'a, B> SettingsStorage<'a, B> {
     pub fn backend(&mut self) -> &mut B { &mut self.backend }
 }
 impl<'a, B: HeaderBackend> SettingsStorage<'a, B> {
-    #[inline(always)]
+    #[inline(never)]
     pub fn open_header(&mut self) -> MirrorSession<'_, 'a, B> {
         let opened = self.backend.read_header(part_mut(self.banks, 0, 16).try_into().unwrap_or_else(|_| contract_violation()));
         MirrorSession { storage: self, opened }
