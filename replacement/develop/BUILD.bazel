@@ -61,11 +61,15 @@ filegroup(
     srcs = ["standalone.rs", "develop.ld", ":module"] + glob(["*_stock.S"]),
 )
 
+# develop-candidate.bin is the develop unit's qualified ARM candidate; the
+# native stage qualification runs on these bytes. Opted out until that image is
+# requalified, at the latest in the runner requalification.
 xm1_rust_staticlib(
     name = "develop-rust",
     src = "standalone.rs",
     crate_name = "xm1_develop",
     rlib_deps = {"xm1_callback_core": "//replacement/callback_core:arm"},
+    strict_align = False,
     data = [
         ":module",
         "//replacement/capture:module",
@@ -83,7 +87,7 @@ xm1_rust_rlib(
     src = "//replacement/property_service:src/lib.rs",
     crate_name = "xm1_property_service",
     rustc_flags = [
-        "-C", "target-feature=+strict-align", "-C", "jump-tables=no",
+        "-C", "jump-tables=no",
         "--extern", "xm1_settings_storage_core=$(location %s)" % _PROPERTY_CORE,
         "--cfg", "'feature=\"component\"'",
     ],

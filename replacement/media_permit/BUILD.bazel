@@ -31,6 +31,10 @@ filegroup(
     visibility = ["//replacement/bank:__pkg__", "//replacement/develop:__pkg__"],
 )
 
+# media-permit-candidate.elf's bound function bytes are the media-package
+# binding of E-SAVE-LIFECYCLE-PACKAGE-HOST-150 (lifecycle129/media-package-binding.json).
+# Opted out until the candidate is requalified, at the latest in the runner
+# requalification.
 xm1_rust_staticlib(
     name = "media-permit-lib",
     src = "standalone.rs",
@@ -39,6 +43,7 @@ xm1_rust_staticlib(
         "src/lib.rs",
         "src/stock.rs",
     ],
+    strict_align = False,
 )
 
 xm1_rust_elf(
@@ -67,6 +72,7 @@ xm1_rust_staticlib(
         "--cfg",
         "media_permit_defect",
     ],
+    strict_align = False,
 )
 
 xm1_rust_elf(

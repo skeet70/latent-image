@@ -11,9 +11,12 @@ xm1_rust_rlib(
     src = "src/lib.rs",
     crate_name = "calibration_liveview",
     data = ["src/publication.rs"],
-    rustc_flags = ["-C", "target-feature=+strict-align", "--cfg", "'feature=\"library\"'"],
+    rustc_flags = ["--cfg", "'feature=\"library\"'"],
 )
 
+# The nine standalone calibration-liveview images keep their SHA-256
+# identities (reports/display-render-contracts/scanout.md). Opted out until
+# those images are requalified, at the latest in the runner requalification.
 [
     xm1_rust_staticlib(
         name = "calibration-liveview-rust" + suffix,
@@ -21,6 +24,7 @@ xm1_rust_rlib(
         crate_name = "xm1_calibration_liveview" + suffix.replace("-", "_"),
         data = ["src/publication.rs", "src/abi.rs"],
         rustc_flags = flags,
+        strict_align = False,
     )
     for suffix, flags in [
         ("", []),
