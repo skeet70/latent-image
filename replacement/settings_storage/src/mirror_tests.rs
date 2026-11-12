@@ -65,11 +65,6 @@ fn with_backing(test: impl FnOnce(&mut SharedBacking<'_, Driver>)) {
     test(&mut backing);
 }
 
-fn reports(backing: &mut SharedBacking<'_, Driver>) -> WriteReports {
-    let task = backing.task().expect("task context");
-    *backing.enter(task).reports()
-}
-
 #[test]
 fn header_reads_preserve_bytes_from_aligned_and_unaligned_shadow_windows() {
     #[repr(align(2))]
@@ -428,39 +423,34 @@ fn custom_refresh_observes_the_imported_byte_after_header_driver_writes() {
 }
 
 #[test]
-fn discarded_writes_leave_each_report_in_the_guarded_store() {
+fn discarded_writes_apply_without_keeping_a_report() {
     with_backing(|backing| {
         let mut first = [0x11; HEADER_BYTES];
         first[0] = 0x31;
         backing.write_header_discarding(&first);
-        let first_report = reports(backing);
+        assert_eq!(&backing.live()[..HEADER_BYTES - 1], &first[..HEADER_BYTES - 1]);
+        assert_eq!(&backing.live()[..HEADER_BYTES], backing.shadow());
         let mut second = [0x11; HEADER_BYTES];
         second[0] = 0x52;
         backing.write_header_discarding(&second);
-        let second_report = reports(backing);
-        assert_eq!(first_report.mirror.synchronized[0].expect("first header report").value, BackupValue(0x31));
-        assert_eq!(second_report.mirror.synchronized[0].expect("second header report").value, BackupValue(0x52));
+        assert_eq!(backing.live()[0], 0x52);
         let body = [0x5a; BODY_BYTES];
         backing.write_body_discarding(&body);
-        let body_report = reports(backing);
-        assert_eq!(body_report.body.request, RequestOutcome::success());
-        assert_eq!(body_report.mirror, second_report.mirror);
         assert_eq!(&backing.live()[0x10..0x128], &body);
     });
 }
 
 #[test]
-fn outside_task_writes_leave_the_guarded_store_unchanged() {
+fn outside_task_writes_apply_and_report_the_missing_context() {
     with_backing(|backing| {
         backing.write_header_discarding(&[0x44; HEADER_BYTES]);
-        let stored = reports(backing);
+        assert_eq!(backing.live()[0], 0x44);
         backing.driver_mut().outside_task = true;
         backing.write_header_discarding(&[0x55; HEADER_BYTES]);
         backing.write_body_discarding(&[0x66; BODY_BYTES]);
         backing.driver_mut().outside_task = false;
-        let after = reports(backing);
-        assert_eq!(stored.mirror, after.mirror);
-        assert_eq!(stored.body, after.body);
+        assert_eq!(backing.live()[0], 0x55);
+        assert_eq!(&backing.live()[0x10..0x128], &[0x66; BODY_BYTES]);
         assert_eq!(backing.driver().effects().filter(|effect| matches!(effect, Effect::Diagnostic(BackupDiagnostic::OutsideTask))).count(), 2);
     });
 }

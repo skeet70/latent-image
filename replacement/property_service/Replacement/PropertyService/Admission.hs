@@ -725,6 +725,25 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
               clear lowest (lowest + count)
               advance (foldl' (\current (address, register') -> recordSlot address A.Word register' current)
                 state (zip [lowest, lowest + 4 ..] registers))
+          | writeback, Just (LocalAlias (StackOffset offset)) <- baseAlias register -> do
+              let count = 4 * length registers
+                  lowest = case mode of
+                    A.IncrementAfter -> offset
+                    A.IncrementBefore -> offset + 4
+                    A.DecrementAfter -> offset - count + 4
+                    A.DecrementBefore -> offset - count
+                  after = case mode of
+                    A.IncrementAfter -> offset + count
+                    A.IncrementBefore -> offset + 4
+                    A.DecrementAfter -> offset - count + 4
+                    A.DecrementBefore -> offset - count
+              unless (lowest >= sp && lowest + count <= 0) (Left NonStackStore)
+              clear lowest (lowest + count)
+              let recorded = foldl' (\current (address, register') -> recordSlot address A.Word register' current)
+                    state (zip [lowest, lowest + 4 ..] registers)
+              advance (if sp <= after && after <= 0
+                         then remember register (Just (LocalAlias (StackOffset after))) recorded
+                         else written [register] recorded)
           | otherwise -> Left NonStackStore
         A.LoadMultiple _ register mode writeback registers
           | A.sp `elem` registers -> Left StackUnbounded

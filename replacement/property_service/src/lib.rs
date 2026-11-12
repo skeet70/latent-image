@@ -11,7 +11,9 @@ mod recipe_edit;
 pub(crate) mod storage_boundary;
 use storage::table;
 use property_table::{PROPERTIES, SLOTS, SPECIALS};
-use storage::{Field, SlotField, FieldValue, HeaderField, MirrorSession, PreviousUpdate, HeaderBackend, SettingsBackend, SettingsConfiguration, SettingsStorage, SlotDefaultsWindow, TailDefaults};
+use storage::{Field, SlotField, FieldValue, HeaderField, MirrorSession, PreviousUpdate, HeaderBackend, SettingsConfiguration, SettingsStorage, SlotDefaultsWindow, TailDefaults};
+#[cfg(not(test))]
+use storage::SettingsBackend;
 pub use storage::{ProfileSelection, SettingsBank, WriteValue};
 use table::{BankDefault, BankOffset, Bits, FieldDefault, Hook, HookedField, Kind, ProfileSelector, Save, SlotDefault, SlotIndex, SlotRecord, Source, SpecialField, SpecialIndex, StockDefault, WriteOnlyPair};
 #[cfg(not(test))]
@@ -138,7 +140,7 @@ fn write_stock_default<W: FieldWrites, C: SettingsConfiguration>(writer: &mut W,
     let update = if cfg!(property_defect_drop_second_save) { PreviousUpdate::None } else { target.update };
     writer.write_target(target, ValueBits(value), update);
 }
-#[inline(never)]
+#[inline(always)]
 fn apply_hooked<W: FieldWrites, C: SettingsConfiguration>(writer: &mut W, configuration: &C, field: HookedField, value: WriteValue<ValueBits>, bank: SettingsBank) {
     let target = target(bank, Location::Bank(self::field(field.offset, field.bits)), field.bits, field.save);
     let stored = match (value, field.source) {
@@ -203,11 +205,11 @@ fn get<B, C: SettingsConfiguration>(storage: &SettingsStorage<'_, B>, configurat
 }
 /// What `set` did, without the driver report: the caller decides where that report lives.
 #[derive(Clone, Copy, PartialEq, Eq)]
-struct WriteSummary { assignment: PropertyWriteOutcome, mirrored: bool }
+struct WriteSummary { assignment: PropertyWriteOutcome, #[cfg(test)] mirrored: bool }
 impl WriteSummary {
-    const ASSIGNED: Self = Self { assignment: PropertyWriteOutcome::Assigned, mirrored: false };
-    const UNASSIGNED: Self = Self { assignment: PropertyWriteOutcome::Unassigned, mirrored: false };
-    const MIRRORED: Self = Self { assignment: PropertyWriteOutcome::Assigned, mirrored: true };
+    const ASSIGNED: Self = Self { assignment: PropertyWriteOutcome::Assigned, #[cfg(test)] mirrored: false };
+    const UNASSIGNED: Self = Self { assignment: PropertyWriteOutcome::Unassigned, #[cfg(test)] mirrored: false };
+    const MIRRORED: Self = Self { assignment: PropertyWriteOutcome::Assigned, #[cfg(test)] mirrored: true };
 }
 
 #[inline(always)]
@@ -341,11 +343,13 @@ fn swapped_selection(selection: ProfileSelection) -> ProfileSelection {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PropertyWriteOutcome { Assigned, Unassigned }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PropertyMirrorOutcome {
     pub opened: Option<storage::RequestOutcome>,
     pub closed: storage::MirrorOutcome,
 }
+#[cfg(test)]
 impl PropertyMirrorOutcome {
     const NONE: Self = Self { opened: None, closed: storage::MirrorOutcome::unchanged() };
 }
@@ -355,6 +359,7 @@ trait ReportDestination {
     fn close<B: HeaderBackend>(&mut self, session: MirrorSession<'_, '_, B>);
     fn write_active<B: HeaderBackend>(&mut self, storage: &mut SettingsStorage<'_, B>);
 }
+#[cfg(test)]
 impl ReportDestination for PropertyMirrorOutcome {
     #[inline(always)]
     fn opened(&mut self, outcome: Option<storage::RequestOutcome>) { self.opened = outcome; }
@@ -363,7 +368,7 @@ impl ReportDestination for PropertyMirrorOutcome {
     #[inline(always)]
     fn write_active<B: HeaderBackend>(&mut self, storage: &mut SettingsStorage<'_, B>) { storage.write_active_header_into(&mut self.closed); }
 }
-/// The engine keeps none of a write's driver reports; the storage leaves them in its guarded store.
+/// The device paths keep none of a write's driver reports.
 #[cfg(not(test))]
 struct Discarded;
 #[cfg(not(test))]
@@ -375,6 +380,7 @@ impl ReportDestination for Discarded {
     #[inline(always)]
     fn write_active<B: HeaderBackend>(&mut self, storage: &mut SettingsStorage<'_, B>) { storage.write_active_header_discarding(); }
 }
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PropertyWriteResult {
     pub assignment: PropertyWriteOutcome,
@@ -384,13 +390,14 @@ pub struct PropertyWriteResult {
 pub fn read_property<B, C: SettingsConfiguration>(storage: &SettingsStorage<'_, B>, configuration: &C, id: PropertyId, bank: SettingsBank, mode: ReadMode, selection: ProfileSelection) -> ValueBits {
     ValueBits(get(storage, configuration, id, bank, mode, selection))
 }
+#[cfg(test)]
 pub fn write_property<B: HeaderBackend, C: SettingsConfiguration>(storage: &mut SettingsStorage<'_, B>, configuration: &C, id: PropertyId, value: WriteValue<ValueBits>, bank: SettingsBank, selection: ProfileSelection) -> PropertyWriteResult {
     let mut mirror = PropertyMirrorOutcome::NONE;
     let summary = set(storage, configuration, id, value, bank, selection, &mut mirror);
     PropertyWriteResult { assignment: summary.assignment, mirror: if summary.mirrored { Some(mirror) } else { None } }
 }
 
-/// The engine reads none of a write's driver reports; the storage leaves them in its guarded store.
+/// The device paths keep none of a write's driver reports.
 #[cfg(not(test))]
 #[inline(always)]
 fn write_discarding<B: SettingsBackend, C: SettingsConfiguration>(storage: &mut SettingsStorage<'_, B>, configuration: &C, id: PropertyId, value: WriteValue<ValueBits>, bank: SettingsBank, selection: ProfileSelection) -> PropertyWriteOutcome {
@@ -472,10 +479,9 @@ pub unsafe extern "C" fn xm1_property_set(id: u32, value: u32, bank: u32, select
     let value = if cfg!(property_defect_sentinel_plus_one) && value == 0x1b000000 { WriteValue::Default } else if cfg!(property_defect_sentinel_plus_one) { WriteValue::Value(ValueBits(value)) } else { WriteValue::from_abi(value) };
     let configuration = unsafe { NativeConfiguration::adopt() };
     let kernel = unsafe { Kernel::<SlotTable>::stock() };
-    let mut mirror = PropertyMirrorOutcome::NONE;
     let result = unsafe { storage_boundary::with_storage(&kernel, |storage| {
         if cfg!(storage_defect_snapshot_entire_bank_per_set) && bank == SettingsBank::Active { storage.capture_active(); }
-        let result = set(storage, &configuration, id, value, bank, selection, &mut mirror).assignment;
+        let result = set(storage, &configuration, id, value, bank, selection, &mut Discarded).assignment;
         #[cfg(storage_defect_save_on_bank1)]
         if bank == SettingsBank::Alternate { storage.capture_alternate(); }
         if cfg!(storage_defect_save_after_final_store) && bank == SettingsBank::Active { storage.capture_active(); }
