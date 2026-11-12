@@ -339,13 +339,13 @@ runBatch (BatchGate contract admission measuredPaths checkpoint counter frozen) 
   let execution = maybe (ExecuteBatch runner cache) RejudgeBatch frozen
   (reuse, observed) <- observeBatch execution directory (map (CaseId . caseId) specs)
   ensure (length observed == length specs) (batchPath ++ ": observation count differs from the case count")
-  rows <- forM (zip specs observed) $ \(_, (CaseId label, observation)) -> do
+  rows <- forM (zip specs observed) $ \(spec, (CaseId label, observation)) -> do
     consumed <- consumeReport execution directory (CaseId label)
     let report = consumedValue consumed
         reportPath = directory </> label ++ ".native-result.json"
     writes <- either (\problem -> failH (reportPath ++ ": " ++ problem)) pure (reportWrites report)
     run <- either (\problem -> failH (reportPath ++ ": " ++ problem)) pure (runOf observation writes)
-    let abiRun = projectRun contract run
+    let abiRun = projectRun contract (caseExpectedRegisters spec) run
     forced <- evaluate (forceRun abiRun)
     pure (CaseLabel label, forced, sha256Hex (consumedDigest consumed))
   batchBytes <- B.readFile batchPath

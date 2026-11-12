@@ -681,8 +681,9 @@ contractRegisters :: EntryContract -> [Register]
 contractRegisters CanonicalEntryContract = comparedRegisters
 contractRegisters PublicWrapperEntryContract = R3 : comparedRegisters
 
-projectRun :: EntryContract -> Run -> Run
-projectRun contract run = run {runRegisters = [(register, value) | (register, value) <- runRegisters run, register `elem` contractRegisters contract]}
+projectRun :: EntryContract -> [(Register, Word32)] -> Run -> Run
+projectRun contract claimed run =
+  run {runRegisters = [(register, value) | (register, value) <- runRegisters run, register `elem` contractRegisters contract, register `elem` map fst claimed]}
 
 projectExpectation :: EntryContract -> Expectation -> Expectation
 projectExpectation contract expected = expected {expectedRegisters = [(register, value) | (register, value) <- expectedRegisters expected, register `elem` contractRegisters contract]}
@@ -891,7 +892,11 @@ expectationDifferences expected run =
 -- | A stock run of an owned id against the model's claim under one entry contract.
 modelDifferences :: EntryContract -> Fixture -> Owned -> Operation -> Run -> [Difference]
 modelDifferences contract fx owned operation run =
-  maybe [ModelOutsideFixture] (\expected -> expectationDifferences (projectExpectation contract expected) (projectRun contract run)) (modelExpectation fx owned operation)
+  case modelExpectation fx owned operation of
+    Nothing -> [ModelOutsideFixture]
+    Just expected ->
+      let projected = projectExpectation contract expected
+      in expectationDifferences projected (projectRun contract (expectedRegisters projected) run)
 
 -- | Every compared field of the subject against the reference run of the same case.
 compareRuns :: Run -> Run -> [Difference]
