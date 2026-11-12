@@ -37,8 +37,6 @@ rb_menu_value_size_arm:
 
 RB_MENU_VALUE_CALL rb_menu_value_call_size_cell, 0x00633a0c
 RB_MENU_VALUE_CALL rb_menu_value_call_aspect_cell, 0x00633b0c
-RB_MENU_VALUE_CALL rb_menu_value_call_property_read, 0x0061c93c
-RB_MENU_VALUE_CALL rb_menu_value_call_property_write, 0x0061c91c
 RB_MENU_VALUE_CALL rb_menu_value_call_current_property, 0x0063c51c
 RB_MENU_VALUE_CALL rb_menu_value_call_display_update, 0x00641438
 RB_MENU_VALUE_CALL rb_menu_value_call_change_marker, 0x0063db24

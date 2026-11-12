@@ -43,6 +43,9 @@ _ENGINE_RLIB_DEPS = {
     "render_adapter": "//replacement/render_adapter:arm",
     "render_commands": "//replacement/render_commands:runtime-arm",
     "service": "//replacement/service:arm",
+    "xm1_kernel": "//replacement/kernel:arm",
+    "xm1_property_service": "//replacement/property_service:property-service-arm",
+    "xm1_settings_storage_core": "//replacement/settings_storage:property-core-arm",
 }
 
 _ENGINE_FLAGS = [

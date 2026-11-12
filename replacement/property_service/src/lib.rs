@@ -11,7 +11,8 @@ mod recipe_edit;
 pub(crate) mod storage_boundary;
 use storage::table;
 use property_table::{PROPERTIES, SLOTS, SPECIALS};
-use storage::{Field, SlotField, FieldValue, HeaderField, MirrorSession, PreviousUpdate, ProfileSelection, SettingsBank, HeaderBackend, SettingsConfiguration, SettingsStorage, SlotDefaultsWindow, TailDefaults, WriteValue};
+use storage::{Field, SlotField, FieldValue, HeaderField, MirrorSession, PreviousUpdate, HeaderBackend, SettingsConfiguration, SettingsStorage, SlotDefaultsWindow, TailDefaults};
+pub use storage::{ProfileSelection, SettingsBank, WriteValue};
 use table::{BankDefault, BankOffset, Bits, FieldDefault, Hook, HookedField, Kind, ProfileSelector, Save, SlotDefault, SlotIndex, SlotRecord, Source, SpecialField, SpecialIndex, StockDefault, WriteOnlyPair};
 #[cfg(not(test))]
 use storage::native_configuration::NativeConfiguration;
@@ -340,6 +341,44 @@ pub fn write_property<B: HeaderBackend, C: SettingsConfiguration>(storage: &mut 
     set(storage, configuration, id, value, bank, selection)
 }
 
+/// The wrappers' bodies over the owned service: slot `0x6439e0`, bank-0 body reload and write-back.
+#[cfg(not(test))]
+pub struct Properties {
+    kernel: Kernel<SlotTable>,
+}
+
+#[cfg(not(test))]
+impl Properties {
+    /// # Safety
+    /// The X-M1 settings windows and the retained configuration callbacks must be mapped and exclusively accessible while this value exists.
+    pub unsafe fn stock() -> Self {
+        Self { kernel: unsafe { Kernel::<SlotTable>::stock() } }
+    }
+
+    pub fn read(&self, id: PropertyId, bank: SettingsBank, mode: ReadMode) -> ValueBits {
+        let configuration = unsafe { NativeConfiguration::adopt() };
+        let selection = storage_boundary::current_selection();
+        unsafe { storage_boundary::with_storage(&self.kernel, |storage| read_property(storage, &configuration, id, bank, mode, selection)) }
+    }
+
+    pub fn write(&mut self, id: PropertyId, value: WriteValue<ValueBits>, bank: SettingsBank) -> PropertyWriteResult {
+        let configuration = unsafe { NativeConfiguration::adopt() };
+        let selection = storage_boundary::current_selection();
+        unsafe { storage_boundary::with_storage(&self.kernel, |storage| {
+            #[cfg(property_reload)]
+            if bank == SettingsBank::Active {
+                storage.refresh_active_body();
+            }
+            let result = write_property(storage, &configuration, id, value, bank, selection);
+            #[cfg(property_reload)]
+            if bank == SettingsBank::Active && result.assignment == PropertyWriteOutcome::Assigned {
+                storage.write_active_body();
+            }
+            result
+        }) }
+    }
+}
+
 
 #[cfg(not(test))]
 /// # Safety
@@ -394,7 +433,7 @@ fn rejected_id(raw: u32) -> u32 {
     let index = raw.wrapping_sub(1);
     if cfg!(property_defect_signed_bound) && (index as i32) <= 644 || cfg!(property_defect_upper_bound_plus_one) && index == 645 { 1 } else { 0 }
 }
-#[cfg(all(not(test), not(feature = "component")))]
+#[cfg(all(not(test), not(feature = "component"), not(property_rlib)))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! { loop {} }
 

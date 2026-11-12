@@ -61,6 +61,9 @@ xm1_rust_rlib(
     rlib_deps = {
         "menu_engine": ":arm",
         "owned_menu": "//replacement/owned_menu:arm",
+        "xm1_kernel": "//replacement/kernel:arm",
+        "xm1_property_service": "//replacement/property_service:property-service-arm",
+        "xm1_settings_storage_core": "//replacement/settings_storage:property-core-arm",
     },
     rustc_flags = [
         "-C",
@@ -93,6 +96,9 @@ xm1_rust_rlib(
         "menu_engine": ":arm",
         "menu_value": "//replacement/menu_value:arm-owned",
         "owned_menu": "//replacement/owned_menu:arm",
+        "xm1_kernel": "//replacement/kernel:arm",
+        "xm1_property_service": "//replacement/property_service:property-service-arm",
+        "xm1_settings_storage_core": "//replacement/settings_storage:property-core-arm",
     },
     rustc_flags = [
         "-C",

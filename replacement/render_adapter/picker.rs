@@ -24,7 +24,6 @@ unsafe extern "C" {
     fn rb_render_call_111258c(a0: u32, a1: *mut u8);
     fn rb_render_call_111299c(a0: u32, a1: u32, a2: *mut u8);
     fn rb_render_call_bf96b0() -> u32;
-    fn rb_render_call_61c93c(a0: u32, a1: u32) -> u32;
     fn rb_render_call_1139a68(a0: u32, a1: u32, a2: u32, a3: u32, a4: u32, a5: u32, a6: u32);
     fn rb_render_call_1159168(a0: u32, a1: u32, a2: u32);
 }
@@ -90,7 +89,12 @@ impl PickerServices for StockServices {
         let mut value = [0;2]; call!(rb_render_call_111299c,label.0,0,value.as_mut_ptr()); value
     }
     fn menu_mode(&mut self)->u32 { call!(rb_render_call_bf96b0) }
-    fn setting_help_hidden(&mut self)->bool { call!(rb_render_call_61c93c,0x44,0) != 0 }
+    fn setting_help_hidden(&mut self)->bool {
+        let Some(id) = xm1_property_service::PropertyId::decode(0x44) else { return false };
+        unsafe { xm1_property_service::Properties::stock() }
+            .read(id, xm1_property_service::SettingsBank::Active, xm1_property_service::ReadMode::Live)
+            .get() != 0
+    }
     fn metric_footer(&mut self,last: u8) { call!(rb_render_call_1139a68,5,2,last as u32,25,20,18,1); }
     fn resolution_footer(&mut self,node: NodeId,parent: u32,child: u32) { call!(rb_render_call_1159168,node.0,parent,child); }
 }

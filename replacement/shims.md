@@ -289,7 +289,7 @@ The address-independent menu engine and its stock-state mirror. Its shims are li
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
 | `rb_menu_engine_entry` and the fallback push in `adapter/entry.S`, published at `0xbf95c8` | veneer or carrier at a stock address | the stock stage consumer and `0xbfa234` fallback | no | the owned key layer and stage consumers call the engine directly | required |
-| `rb_menu_engine_call_*` retained services (availability, initial row, kind switch, notify, property write, seek) | trampoline into retained stock | stock menu services | no | the tree and typed settings service answer them | required |
+| `rb_menu_engine_call_*` retained services (availability, initial row, kind switch, notify, seek) | trampoline into retained stock | stock menu services | no | the tree and typed settings service answer them | required |
 | `rb_menu_engine_guard_failure` and `__aeabi_*` in `adapter/entry.S` | retained stock seam in assembly | stock ABI helper routines and the guard path | no | the engine no longer needs the stock ABI helpers | required |
 | block mirror at `0x430` bytes and `0x01467580/84` (`src/state.rs`) | guest-memory layout view | stock readers and writers of the menu block | no | no stock code reads or writes the block | required |
 | `rb_ui_probe_visit` page-entry replay | callback registry for guest words | the installed bank's `rb_bank_page_entry` hook | no | the bank's page-entry work is an owned engine consumer | required |
@@ -302,7 +302,7 @@ The menu value transaction, published at the dispatcher's IMAGE SIZE jump-table 
 | --- | --- | --- | --- | --- | --- |
 | `rb_menu_value_size_arm` in `adapter/entry.S`, placed by `adapter/image.ld` | veneer or carrier at a stock address | the stock dispatcher's jump-table word for property `0xf6` | no | the owned dispatcher calls the transaction directly | required |
 | `rb_menu_value_begin`, `rb_menu_value_size_apply`, `rb_menu_value_retained`, `rb_menu_value_cancel`, `rb_menu_value_confirm` exports in `src/lib.rs` | stock-ABI export | stock stage consumers and controller arms | no | every stage consumer and controller arm is owned | required |
-| `rb_menu_value_call_*` retained services (aspect/size cells, change marker, current property, display update, property read/write, restore aux, snapshot cells/state) | trampoline into retained stock | stock property, cell and display services | no | the typed settings service and owned display own those services | required |
+| `rb_menu_value_call_*` retained services (aspect/size cells, change marker, current property, display update, restore aux, snapshot cells/state) | trampoline into retained stock | stock property, cell and display services | no | the typed settings service and owned display own those services | required |
 | `rb_menu_value_cancel`/`rb_menu_value_confirm` exports | C-ABI bridge between two owned units | modal_runtime | yes | modal dispatch calls the crate directly and both sides compare with stock in one image | required |
 
 ## menu_widgets
@@ -388,7 +388,7 @@ The property classifier, table generator, service and public entries. Its compat
 | `xm1_getter_stub`/`xm1_setter_stub` stock-frame stubs and the shared exits/fallbacks | veneer or carrier at a stock address | the stock prologues, shared exits and out-of-range ids | no | owned entry and dispatch handle every id and frame | required |
 | `xm1_storage_store8` and `xm1_recipe_edit_get` retained services | trampoline into retained stock | the retained bank/previous-value storage and recipe getter | no | owned settings storage and the recipe getter own those paths | required |
 | `xm1_property_get`/`xm1_property_set` exports | C-ABI bridge between two owned units | develop and power_lifecycle | yes | both callers link the crate directly and both sides compare with stock in one image | required |
-| base-fixed accessors, named default leaves, bank-0 bracket callees and the carrier in retired setter arms (`src/`, `entry*.S`, `property-service*.ld`) | guest-memory layout view | retained bank/previous-value layout and default leaves | no | owned storage carries the data and defaults | required |
+| base-fixed accessors, named default leaves, bank-0 bracket callees and the carrier in retired setter arms (`src/`, `entry*.S`, `property-service*.ld`, `menu/recipe_bank_ram_engine.ld`) | guest-memory layout view | retained bank/previous-value layout and default leaves, and the owned image's link script, which binds `0x6439e0`, the six default leaves and the three backup callbacks | no | owned storage carries the data and defaults | required |
 
 ## recipe_ui
 
@@ -427,7 +427,7 @@ The render adapter that presents owned widget drawing at stock draw addresses.
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
 | `rb_render_picker_apply`, `rb_render_tree_apply`, `rb_render_pane_apply` in `mod.rs`, with `entry.S` and `build.sh` placements | stock-ABI export | stock draw callers that enter the adapted widget entries | no | the owned renderer calls the widgets directly | required |
-| `rb_render_call_*` retained services (draw leaves, hooks, menu-table accessors, setting reads) | trampoline into retained stock | the stock draw layer | no | the owned renderer owns the draw layer | required |
+| `rb_render_call_*` retained services (draw leaves, hooks, menu-table accessors) | trampoline into retained stock | the stock draw layer | no | the owned renderer owns the draw layer | required |
 | `rb_render_remainder` in `entry.S` | retained stock seam in assembly | the stock remainder path after an unhandled class | no | every class is owned | required |
 
 ## render_commands

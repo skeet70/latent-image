@@ -336,7 +336,7 @@ propertyEngineOffset layout =
   (runtimeAllocationSize + propertyInstallerExtent layout - runtimeInstallerExtent + 31) .&. 0xffffffe0
 
 propertyMenuEngineRegionExtent :: PropertyPublicationLayout -> Word32
-propertyMenuEngineRegionExtent _ = menuEngineRegionExtentFor modalRenderBankVariant
+propertyMenuEngineRegionExtent _ = 0xffc0
 
 propertyAllocationSize :: PropertyPublicationLayout -> Word32 -> Either String Word32
 propertyAllocationSize layout base = do
@@ -472,7 +472,7 @@ menuEngineRegionStart :: Word32 -> Word32
 menuEngineRegionStart base = base + ((runtimeAllocationSizeFor modalScopedBankVariant + 31) .&. 0xffffffe0)
 
 menuEngineRegionExtent :: Word32
-menuEngineRegionExtent = 0x10000
+menuEngineRegionExtent = 0x20040
 
 menuEngineRegionStartFor :: BankVariant -> Word32 -> Word32
 menuEngineRegionStartFor variant base

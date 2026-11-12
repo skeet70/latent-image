@@ -1,5 +1,5 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
-load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
 load("//replacement/settings_storage:storage_controls.bzl", "PROPERTY_STORAGE_VARIANTS")
 
 package(default_visibility = ["//visibility:public"])
@@ -72,6 +72,19 @@ xm1_rust_staticlib(
     rustc_flags = _RUSTC_FLAGS,
     data = _RUST_DATA + ["//replacement/settings_storage:property-core"],
     rlib_deps = {"xm1_kernel": "//replacement/kernel:arm"},
+)
+
+xm1_rust_rlib(
+    name = "property-service-arm",
+    src = "src/lib.rs",
+    crate_name = "xm1_property_service",
+    out = "arm/libxm1_property_service.rlib",
+    rustc_flags = ["-C", "jump-tables=no", "--cfg", "property_reload", "--cfg", "property_rlib"],
+    data = _RUST_DATA,
+    rlib_deps = {
+        "xm1_kernel": "//replacement/kernel:arm",
+        "xm1_settings_storage_core": "//replacement/settings_storage:property-core-arm",
+    },
 )
 
 xm1_rust_staticlib(

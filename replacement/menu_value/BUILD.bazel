@@ -17,6 +17,11 @@ xm1_rust_rlib(
     env = {
         "RB_MENU_VALUE_TABLE": "$$PWD/$(location //replacement/bank/tables:menu-value-table.rs)",
     },
+    rlib_deps = {
+        "xm1_kernel": "//replacement/kernel:arm",
+        "xm1_property_service": "//replacement/property_service:property-service-arm",
+        "xm1_settings_storage_core": "//replacement/settings_storage:property-core-arm",
+    },
     rustc_flags = [
         "-C",
         "target-feature=+strict-align",

@@ -18,6 +18,9 @@ use menu_value::adapter as menu_value_adapter;
 core::arch::global_asm!(include_str!("entry.S"), options(raw));
 
 use core::ptr::{read_volatile, write_volatile};
+use xm1_property_service::{
+    Properties, PropertyId as ServicePropertyId, SettingsBank, ValueBits, WriteValue,
+};
 
 use crate::menu_engine::block::{
     self, decode_into, last_move_writes, mirror_word, BlockWords, RecordTable, BLOCK_ADDRESS, BLOCK_LEN,
@@ -80,8 +83,6 @@ unsafe extern "C" {
     fn rb_menu_engine_call_kind_switch(kind: u32, node: u32, id: u32, extra: u32) -> u32;
     /// `FUN_00bfad04(kind, node, type, id, seek, target)`.
     fn rb_menu_engine_call_seek(kind: u32, node: u32, node_type: u32, id: u32, seek: u32, target: u32) -> u32;
-    /// `FUN_0061c91c`.
-    fn rb_menu_engine_call_property_write(property: u32, value: u32, flags: u32);
     /// The guard trap, a traced site.
     fn rb_menu_engine_guard_failure() -> !;
     /// The bank's page-entry visit at each `FUN_00bfa800` call site.
@@ -187,9 +188,12 @@ impl EngineServices for Stock {
                 crate::owned_menu::frame::rb_menu_frame_store(NodeId::new(slot.get()));
             }
             Effect::PageEntry => unsafe { rb_ui_probe_visit() },
-            Effect::PropertyWrite { property, value } => unsafe {
-                rb_menu_engine_call_property_write(property.get(), value.get(), 0)
-            },
+            Effect::PropertyWrite { property, value } => {
+                if let Some(id) = ServicePropertyId::decode(property.get()) {
+                    let mut properties = unsafe { Properties::stock() };
+                    properties.write(id, WriteValue::Value(ValueBits::new(value.get())), SettingsBank::Active);
+                }
+            }
         }
     }
 

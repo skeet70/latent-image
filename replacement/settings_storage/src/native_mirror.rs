@@ -138,6 +138,12 @@ impl<B: Backend> HeaderBackend for NativeHeaderBackend<'_, B> {
     }
 }
 
+/// One name for the backend an owned caller adopts.
+#[cfg(not(settings_storage_header_only))]
+pub type NativeStorageBackend<'k, B> = NativeBackend<'k, B>;
+#[cfg(settings_storage_header_only)]
+pub type NativeStorageBackend<'k, B> = NativeHeaderBackend<'k, B>;
+
 #[cfg(not(settings_storage_header_only))]
 pub struct NativeBackend<'k, B: Backend> { kernel: &'k Kernel<B> }
 #[cfg(not(settings_storage_header_only))]

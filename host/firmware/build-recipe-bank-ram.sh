@@ -36,7 +36,7 @@ case "${RB_PUBLICATION_GROUPS:-}" in
     ;;
   modal75,menu-engine)
     builder_mode=(--ram-push-variant modal75,menu-engine)
-    allocation_size=0x2dcc0
+    allocation_size=0x3dd00
     publication_count=225
     activation_count=94
     modal_link=(-Wl,--undefined=rb_modal_entry -Wl,--undefined=rb_menu_engine_entry)
@@ -74,7 +74,7 @@ case "${RB_PUBLICATION_GROUPS:-}" in
     ;;
   modal75,menu-engine,render)
     builder_mode=(--ram-push-variant modal75,menu-engine,render)
-    allocation_size=0x2dcc0
+    allocation_size=0x3dd00
     publication_count=228
     activation_count=97
     modal_link=(-Wl,--undefined=rb_modal_entry -Wl,--undefined=rb_menu_engine_entry
@@ -171,10 +171,14 @@ case "${RB_PUBLICATION_GROUPS:-}" in
     lifecycle_link=(-Wl,--undefined=xm1_save_facade -Wl,--undefined=xm1_save_completion
       -Wl,--undefined=xm1_save_release_completion -Wl,--undefined=rb_media_permit_apply) ;;
 esac
+engine_sources=()
+if (( ${#engine_link[@]} )); then
+  engine_sources=(replacement/property_service/storage-boundary.S)
+fi
 for src in menu/recipe_bank_arm.S menu/recipe_bank_probe.c menu/recipe_bank_hook.c \
   menu/recipe_bank_storage.c menu/recipe_bank_actions.c menu/recipe_bank_edit.c \
   menu/recipe_bank_diagnostic.c replacement/service/rb_service_stock.S \
-  replacement/capture/rb_capture_stock.S "${lifecycle_sources[@]}"; do
+  replacement/capture/rb_capture_stock.S "${engine_sources[@]}" "${lifecycle_sources[@]}"; do
   name="${src##*/}"
   obj="$OUT/${name%.*}.o"
   case "$src" in
@@ -194,9 +198,9 @@ fi
 if (( ${#engine_link[@]} )); then
   # The engine's sections, by their Rust paths, move to .menu_engine.* for
   # menu/recipe_bank_ram_engine.ld.
-  engine_section='^\.(text|rodata)\.(rb_menu_engine_|rb_menu_value_|.*(11menu_engine(6engine|5block|5state|4tree)|19menu_engine_adapter|10menu_value|18menu_value_adapter))'
+  engine_section='^\.(text|rodata)\.(rb_menu_engine_|rb_menu_value_|xm1_storage_|.*(11menu_engine(6engine|5block|5state|4tree)|19menu_engine_adapter|10menu_value|18menu_value_adapter|20xm1_property_service|25xm1_settings_storage_core|10xm1_kernel))'
   if [[ ${RB_PUBLICATION_GROUPS:-} == modal75,menu-engine,render ]]; then
-    engine_section='^\.(text|rodata)\.(rb_menu_engine_|rb_render_|.*(11menu_engine(6engine|5block|5state|4tree)|19menu_engine_adapter|15render_commands|12menu_widgets|14render_adapter))'
+    engine_section='^\.(text|rodata)\.(rb_menu_engine_|rb_render_|xm1_storage_|.*(11menu_engine(6engine|5block|5state|4tree)|19menu_engine_adapter|15render_commands|12menu_widgets|14render_adapter|20xm1_property_service|25xm1_settings_storage_core|10xm1_kernel))'
   fi
   declare -A renamed=()
   renames=()

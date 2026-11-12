@@ -1107,7 +1107,7 @@ fn property_plan_rejects_wrong_variant_extent_delta_and_legacy_table_writes() {
         let mut value = property_request(1);
         match change {
             0 => value["bank_variant"] = json!("standard"),
-            1 => value["runtime"] = json!([INSTALL, INSTALL + 0x2dcc0]),
+            1 => value["runtime"] = json!([INSTALL, INSTALL + 0x3dd00]),
             2 => value["property_delta_words"] = json!(2),
             3 => value["publications"][0]["address"] = json!(0x0061_eac4),
             4 => value["publications"][210]["address"] = json!(0x0062_fbfc),

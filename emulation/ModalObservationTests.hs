@@ -937,7 +937,7 @@ runtimeBindingTests ownedInputs = do
       && get "manifest_sha256" evidence == String (T.pack (Ram.manifestDigest manifest))
   check "runtime-only source is not an installed lifetime request" $
     get "lifetime" evidence == Null && get "context_catalogue" (get "runtime_contract" evidence) == Null
-  let renderRuntime = runtime <> B.replicate (0x2dcc0 - B.length runtime) 0
+  let renderRuntime = runtime <> B.replicate (0x3dd00 - B.length runtime) 0
       render = manifest
         { Ram.runtimeBytes = renderRuntime, Ram.allocationSize = B.length renderRuntime
         , Ram.runtimeDigest = sha256Hex (sha256 renderRuntime)
