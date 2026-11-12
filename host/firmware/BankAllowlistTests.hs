@@ -9,7 +9,7 @@ import qualified A32
 import ArmElf
 import BankAllowlist
 import BankAllowlistComposition (composeBankAllowlist)
-import Control.Monad (forM, forM_, unless)
+import Control.Monad (forM, forM_, unless, when)
 import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
 import Data.List (find)
@@ -113,7 +113,7 @@ main = do
     ] $ \(label, overlappingSymbol) -> do
       refused <- checked allowlist (cleanElf {elfSymbols = overlappingSymbol : aliasSymbols ++ elfSymbols cleanElf})
       check ("partial overlap refuses: " ++ label)
-        (any ((== LayoutProblem) . findingReason) (violations refused))
+        (any (\f -> case findingReason f of LayoutProblem _ -> True; _ -> False) (violations refused))
   let callerStart = fst (function "rb_assert_one")
       callerSize = snd (function "rb_assert_one") - callerStart
       resultWords = [0xe92d4000, branchLink (callerStart + 4) (fst (function "rb_status_record")), 0xe5801000, 0xe8bd8000]
@@ -329,16 +329,17 @@ main = do
   engineBytes <- B.readFile engineElf
   engineImage <- either fail pure (parseElf engineBytes)
   engineLayout <- either fail pure (readLayout engineImage)
-  let engineCodeExtent = maybe (error "the engine ELF has no code extent") id (engineCode engineLayout)
-      engineDataExtent = maybe (error "the engine ELF has no data extent") id (engineData engineLayout)
-      regionEnd = fst engineCodeExtent + menuEngineRegionExtentFor modalEngineBankVariant
+  let EngineExtents codeStart codeEnd dataStart' dataEnd = maybe (error "the engine ELF has no engine region") id (engine engineLayout)
+      engineCodeExtent = (codeStart, codeEnd)
+      engineDataExtent = (dataStart', dataEnd)
+      regionEnd = codeStart + menuEngineRegionExtentFor modalEngineBankVariant
       replaceSection name change elf =
         elf {elfSections = [if sectionName s == name then change s else s | s <- elfSections elf]}
       moveSymbol name value elf =
         elf {elfSymbols = [if symbolName s == name then s {symbolValue = value} else s | s <- elfSymbols elf]}
-      layoutDetails elf = case readLayout elf of
+      layoutRules elf = case readLayout elf of
         Left _ -> []
-        Right layout -> [findingDetail f | f <- layoutFindings elf layout, findingReason f == LayoutProblem]
+        Right layout -> [findingReason f | f <- layoutFindings elf layout, LayoutProblem _ <- [findingReason f]]
   check "the engine data follows the engine code inside the engine region"
     ( fst engineDataExtent >= snd engineCodeExtent
         && snd engineDataExtent <= regionEnd
@@ -349,13 +350,13 @@ main = do
   check "the linked engine layout has no layout findings"
     (null (layoutFindings engineImage engineLayout))
   check "an executable engine data section is refused"
-    ("section .menu_engine_data has the wrong extent or permissions"
-      `elem` layoutDetails (replaceSection ".menu_engine_data" (\s -> s {sectionFlags = sectionFlags s .|. 0x4}) engineImage))
+    (LayoutProblem (SectionExtent ".menu_engine_data")
+      `elem` layoutRules (replaceSection ".menu_engine_data" (\s -> s {sectionFlags = sectionFlags s .|. 0x4}) engineImage))
   check "engine data overlapping the engine code is refused"
-    ("section .menu_engine_data has the wrong extent or permissions"
-      `elem` layoutDetails (replaceSection ".menu_engine_data" (\s -> s {sectionAddress = fst engineCodeExtent}) engineImage))
+    (LayoutProblem EngineRegion
+      `elem` layoutRules (moveSymbol "__rb_menu_engine_data_start" (fst engineCodeExtent) engineImage))
   check "engine data past the engine extent is refused"
-    ("menu engine region differs from the layout" `elem` layoutDetails (moveSymbol "__rb_menu_engine_data_end" (regionEnd + 4) engineImage))
+    (LayoutProblem EngineRegion `elem` layoutRules (moveSymbol "__rb_menu_engine_data_end" (regionEnd + 4) engineImage))
 
   composed <- forM
     [ (allowlistPath, "menu/recipe_bank_allowlist.json")
@@ -382,6 +383,18 @@ main = do
   check "a store into the engine code is still refused"
     (any (\f -> findingAddress f == busyStore
       && findingReason f == StoreOutside (fst engineCodeExtent) (fst engineCodeExtent) BankCode) (violations intoCode))
+  intoEnd <- engineReport (patch engineImage engineBytes busyLiteral (snd engineDataExtent))
+  check "a store at the engine data end is refused"
+    (any (\f -> findingAddress f == busyStore
+      && findingReason f == StoreOutside (snd engineDataExtent) (snd engineDataExtent) AllocationTail) (violations intoEnd))
+  intoLast <- engineReport (patch engineImage engineBytes busyLiteral (snd engineDataExtent - 1))
+  check "a store in the last engine data byte passes"
+    (not (any ((== busyStore) . findingAddress) (violations intoLast)))
+  when (snd engineCodeExtent < fst engineDataExtent) $ do
+    intoGap <- engineReport (patch engineImage engineBytes busyLiteral (snd engineCodeExtent))
+    check "a store in the gap after the engine code is refused"
+      (any (\f -> findingAddress f == busyStore
+        && findingReason f == StoreOutside (snd engineCodeExtent) (snd engineCodeExtent) AllocationTail) (violations intoGap))
 
   -- The command-line checker's exit status: 0 clean, 1 with a violation.
   temporary <- getTemporaryDirectory

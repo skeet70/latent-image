@@ -16,8 +16,10 @@ module BankAllowlist
   , parseAllowlist
   , Finding (..)
   , Reason (..)
+  , LayoutRule (..)
   , Region (..)
   , Layout (..)
+  , EngineExtents (..)
   , readLayout
   , regionOf
   , writable
@@ -192,7 +194,7 @@ data Finding = Finding
 
 -- | What a reported site does.
 data Reason
-  = LayoutProblem
+  = LayoutProblem LayoutRule
   | ForbiddenInstruction Forbidden
   | DeviceLoad
   | -- | First and last byte, and the region the store leaves the bank for.
@@ -302,6 +304,24 @@ renderDeclaration d =
 
 -- * Layout
 
+-- | What a layout finding breaks.
+data LayoutRule
+  = SectionOutsideLayout
+  | SectionNotProgbits
+  | BankCodeStart
+  | EngineRegion
+  | SectionExtent String
+  | BankImageOverlap
+  | GeneratedEnd
+  | GeneratedBundleOverlap
+  | InstallerPlacement
+  | RuntimeExtent
+  | InstallerSectionOutside
+  | WritableExecutableSegment
+  | ThumbCode
+  | FunctionOverlap
+  deriving (Eq, Show)
+
 data Layout = Layout
   { allocationBase :: Word32
   , allocationEnd :: Word32
@@ -313,12 +333,18 @@ data Layout = Layout
   , bankEnd :: Word32
   , installerStart :: Word32
   , runtimeEnd :: Word32
-  , -- | The menu engine region of a modal75,menu-engine package.
-    engineCode :: Maybe (Word32, Word32)
-  , -- | The writable engine data inside that region.
-    engineData :: Maybe (Word32, Word32)
+  , -- | The menu engine code and the writable data that follows it.
+    engine :: Maybe EngineExtents
   , layoutBankVariant :: BankVariant
   }
+
+data EngineExtents = EngineExtents
+  { engineCodeStart :: Word32
+  , engineCodeEnd :: Word32
+  , engineDataStart :: Word32
+  , engineDataEnd :: Word32
+  }
+  deriving (Eq, Show)
 
 data Region
   = AllocationHeader
@@ -374,8 +400,8 @@ stockCode region = case region of
 regionOf :: Layout -> Word32 -> Region
 regionOf layout address
   | address < allocationBase layout || address >= allocationEnd layout = stockRegion address
-  | Just (start, end) <- engineCode layout, start <= address && address < end = BankCode
-  | Just (start, end) <- engineData layout, start <= address && address < end = EngineData
+  | Just region <- engine layout, engineCodeStart region <= address && address < engineCodeEnd region = BankCode
+  | Just region <- engine layout, engineDataStart region <= address && address < engineDataEnd region = EngineData
   | address < textStart layout = AllocationHeader
   | address < textEnd layout = BankCode
   | address >= dataStart layout && address < imageEnd layout = BankData
@@ -409,11 +435,12 @@ readLayout elf = do
     [s] -> Right s
     _ -> Left "layout: exactly one .data section required"
   unless (toInteger base + toInteger allocationSize <= 0xffffffff) (Left "layout: allocation leaves the address space")
-  engine <- if hasPublicationGroup MenuEnginePublication variant
-    then curry Just <$> symbol "__rb_menu_engine_start" <*> symbol "__rb_menu_engine_end"
-    else pure Nothing
-  engineData' <- if hasPublicationGroup MenuEnginePublication variant
-    then curry Just <$> symbol "__rb_menu_engine_data_start" <*> symbol "__rb_menu_engine_data_end"
+  engineRegion <- if hasPublicationGroup MenuEnginePublication variant
+    then Just <$> (EngineExtents
+      <$> symbol "__rb_menu_engine_start"
+      <*> symbol "__rb_menu_engine_end"
+      <*> symbol "__rb_menu_engine_data_start"
+      <*> symbol "__rb_menu_engine_data_end")
     else pure Nothing
   pure
     Layout
@@ -427,8 +454,7 @@ readLayout elf = do
       , bankEnd = end
       , installerStart = installer
       , runtimeEnd = runtime
-      , engineCode = engine
-      , engineData = engineData'
+      , engine = engineRegion
       , layoutBankVariant = variant
       }
  where
@@ -445,59 +471,57 @@ installerSections = [".ram_push.text", ".ram_push.publications", ".ram_push.rend
 
 engineSections :: Layout -> [String]
 engineSections layout
-  | isJust (engineCode layout) = [".menu_engine", ".menu_engine_data"]
+  | isJust (engine layout) = [".menu_engine", ".menu_engine_data"]
   | otherwise = []
 
 layoutFindings :: Elf -> Layout -> [Finding]
 layoutFindings elf layout =
   concat
-    [ [ violation (sectionAddress s) ("allocated section " ++ sectionName s ++ " is outside the bank and installer layout")
+    [ [ violation SectionOutsideLayout (sectionAddress s) ("allocated section " ++ sectionName s ++ " is outside the bank and installer layout")
       | s <- allocated
       , sectionName s `notElem` bankSections ++ installerSections ++ engineSections layout
       ]
-    , [ violation (sectionAddress s) ("section " ++ sectionName s ++ " is not PROGBITS")
+    , [ violation SectionNotProgbits (sectionAddress s) ("section " ++ sectionName s ++ " is not PROGBITS")
       | s <- allocated
       , sectionType s /= 1
       ]
-    , check (textStart layout == runtimeExecutableBase (allocationBase layout)) (textStart layout) "bank code does not start at the allocation's executable offset"
-    , case engineCode layout of
+    , check BankCodeStart (textStart layout == runtimeExecutableBase (allocationBase layout)) (textStart layout) "bank code does not start at the allocation's executable offset"
+    , case engine layout of
         Nothing -> []
-        Just (start, end) -> case engineData layout of
-          Nothing -> [violation start "menu engine data extent is missing"]
-          Just (dataStart', dataEnd) -> concat
-            [ check (start == menuEngineRegionStartFor (layoutBankVariant layout) (allocationBase layout) && start >= runtimeEnd layout
-                && dataStart' >= end
-                && dataEnd <= menuEngineRegionStartFor (layoutBankVariant layout) (allocationBase layout) + menuEngineRegionExtentFor (layoutBankVariant layout) && dataEnd <= allocationEnd layout)
-                start "menu engine region differs from the layout"
-            , sectionCheck ".menu_engine" $ \s ->
-                sectionAddress s == start && sectionAddress s + sectionSize s == end
-                  && sectionExecutable s && not (sectionWritable s)
-            , sectionCheck ".menu_engine_data" $ \s ->
-                sectionAddress s == dataStart' && sectionAddress s + sectionSize s == dataEnd
-                  && sectionWritable s && not (sectionExecutable s)
-            ]
+        Just region -> concat
+          [ check EngineRegion (engineCodeStart region == menuEngineRegionStartFor (layoutBankVariant layout) (allocationBase layout) && engineCodeStart region >= runtimeEnd layout
+              && engineDataStart region >= engineCodeEnd region
+              && engineDataEnd region <= menuEngineRegionStartFor (layoutBankVariant layout) (allocationBase layout) + menuEngineRegionExtentFor (layoutBankVariant layout) && engineDataEnd region <= allocationEnd layout)
+              (engineCodeStart region) "menu engine region differs from the layout"
+          , sectionCheck ".menu_engine" $ \s ->
+              sectionAddress s == engineCodeStart region && sectionAddress s + sectionSize s == engineCodeEnd region
+                && sectionExecutable s && not (sectionWritable s)
+          , sectionCheck ".menu_engine_data" $ \s ->
+              sectionAddress s == engineDataStart region && sectionAddress s + sectionSize s == engineDataEnd region
+                && sectionWritable s && not (sectionExecutable s)
+          ]
     , sectionCheck ".text" $ \s ->
         sectionAddress s == textStart layout && sectionAddress s + sectionSize s == textEnd layout
           && sectionExecutable s && not (sectionWritable s)
     , sectionCheck ".data" $ \s ->
         sectionAddress s >= textEnd layout && sectionAddress s + sectionSize s == imageEnd layout
           && sectionWritable s && not (sectionExecutable s)
-    , check (imageEnd layout <= generatedStart layout) (imageEnd layout) "bank image overlaps generated data"
-    , check (bankEnd layout == runtimeBankEnd (allocationBase layout)) (bankEnd layout) "generated bank data has the wrong writable end"
-    , check (generatedStart layout <= bankEnd layout && bankEnd layout <= installerStart layout) (bankEnd layout) "generated data overlaps the executable bundle"
-    , check (installerStart layout == runtimeInstallerBase (allocationBase layout)) (installerStart layout) "installer has the wrong placement after the executable bundle"
-    , check (runtimeEnd layout <= allocationEnd layout) (runtimeEnd layout) "runtime exceeds the allocation"
-    , [ violation (sectionAddress s) ("installer section " ++ sectionName s ++ " lies outside the installer extent")
+    , check BankImageOverlap (imageEnd layout <= generatedStart layout) (imageEnd layout) "bank image overlaps generated data"
+    , check GeneratedEnd (bankEnd layout == runtimeBankEnd (allocationBase layout)) (bankEnd layout) "generated bank data has the wrong writable end"
+    , check GeneratedBundleOverlap (generatedStart layout <= bankEnd layout && bankEnd layout <= installerStart layout) (bankEnd layout) "generated data overlaps the executable bundle"
+    , check InstallerPlacement (installerStart layout == runtimeInstallerBase (allocationBase layout)) (installerStart layout) "installer has the wrong placement after the executable bundle"
+    , check RuntimeExtent (runtimeEnd layout <= allocationEnd layout) (runtimeEnd layout) "runtime exceeds the allocation"
+    , [ violation InstallerSectionOutside (sectionAddress s) ("installer section " ++ sectionName s ++ " lies outside the installer extent")
       | s <- allocated
       , sectionName s `elem` installerSections
       , sectionAddress s < installerStart layout || sectionAddress s + sectionSize s > runtimeEnd layout
       ]
-    , [ violation (segmentAddress g) "loadable segment is both writable and executable"
+    , [ violation WritableExecutableSegment (segmentAddress g) "loadable segment is both writable and executable"
       | g <- elfSegments elf
       , loadSegment g
       , segmentWritable g && segmentExecutable g
       ]
-    , [ violation (symbolValue s) "Thumb code in the bank"
+    , [ violation ThumbCode (symbolValue s) "Thumb code in the bank"
       | s <- elfSymbols elf
       , symbolName s == "$t"
       , symbolValue s >= textStart layout && symbolValue s < imageEnd layout
@@ -505,11 +529,11 @@ layoutFindings elf layout =
     ]
  where
   allocated = filter sectionAllocated (elfSections elf)
-  violation address = Finding address "<layout>" Violation LayoutProblem
-  check ok address message = [violation address message | not ok]
+  violation rule address = Finding address "<layout>" Violation (LayoutProblem rule)
+  check rule ok address message = [violation rule address message | not ok]
   sectionCheck name predicate = case [s | s <- allocated, sectionName s == name] of
-    [s] -> check (predicate s) (sectionAddress s) ("section " ++ name ++ " has the wrong extent or permissions")
-    _ -> [violation 0 ("exactly one " ++ name ++ " section required")]
+    [s] -> check (SectionExtent name) (predicate s) (sectionAddress s) ("section " ++ name ++ " has the wrong extent or permissions")
+    _ -> [violation (SectionExtent name) 0 ("exactly one " ++ name ++ " section required")]
 
 -- * Abstract values
 
@@ -671,7 +695,7 @@ locate :: Context -> Word32 -> Location
 locate context address = case regionOf (contextLayout context) address of
   GeneratedArea -> GeneratedData
   region
-    | region == BankCode || region == BankData
+    | region == BankCode || region == BankData || region == EngineData
     , Just (_, _, name) <- find (\(start, end, _) -> start <= address && address < end) (namedObjects context) ->
         BankObject name
     | let layout = contextLayout context
@@ -1223,7 +1247,7 @@ checkBank :: Allowlist -> Elf -> Either String Report
 checkBank allowlist elf = do
   layout <- readLayout elf
   let symbols = elfSymbols elf
-      codeRanges = (textStart layout, textEnd layout) : maybe [] pure (engineCode layout)
+      codeRanges = (textStart layout, textEnd layout) : maybe [] (\region -> [(engineCodeStart region, engineCodeEnd region)]) (engine layout)
       inText address = any (\(start, end) -> start <= address && address < end) codeRanges
       rangeEnd address = maybe (textEnd layout) snd (find (\(start, end) -> start <= address && address < end) codeRanges)
       namedSymbols =
@@ -1269,16 +1293,19 @@ checkBank allowlist elf = do
         ]
       functions = sortOn functionStart (named ++ anonymous)
       code = S.fromList [a | f <- functions, a <- [functionStart f, functionStart f + 4 .. functionEnd f - 4], armWord a]
+      inEngineData address = case engine layout of
+        Just region -> engineDataStart region <= address && address < engineDataEnd region
+        Nothing -> False
       objects =
         [ (symbolValue s, symbolValue s + symbolSize s, canonicalName (symbolName s))
         | s <- symbols
         , symbolKind s `elem` [ObjectSymbol, FunctionSymbol]
         , symbolSize s > 0
-        , symbolValue s >= textStart layout && symbolValue s < imageEnd layout || inText (symbolValue s)
+        , symbolValue s >= textStart layout && symbolValue s < imageEnd layout || inText (symbolValue s) || inEngineData (symbolValue s)
         ]
       context = Context elf layout canonicalAllowlist (M.fromList [(functionStart f, f) | f <- named]) code objects []
       overlapping =
-        [ Finding (functionStart g) "<layout>" Violation LayoutProblem ("function " ++ functionName g ++ " overlaps " ++ functionName f)
+        [ Finding (functionStart g) "<layout>" Violation (LayoutProblem FunctionOverlap) ("function " ++ functionName g ++ " overlaps " ++ functionName f)
         | (f, g) <- zip functions (drop 1 functions)
         , functionStart g < functionEnd f
         ]

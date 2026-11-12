@@ -32,7 +32,7 @@ splitMember text =
   let (_, after) = break (== '(') text
       member = takeWhile (/= ')') (drop 1 after)
       tail' = dropWhile (/= ')') after
-      section = takeWhile (/= ')') (drop 2 tail')
+      section = takeWhile (/= ')') (drop 3 tail')
   in (member, section)
 
 crateOf :: String -> String
@@ -42,7 +42,7 @@ crateOf member = case break (== '.') member of
 
 outputOf :: String -> String
 outputOf section
-  | ".menu_engine_data." `isPrefixOf` section = ".data"
+  | ".menu_engine_data." `isPrefixOf` section = ".menu_engine_data"
   | ".menu_engine." `isPrefixOf` section = ".menu_engine"
   | ".text" `isPrefixOf` section = ".text"
   | ".rodata" `isPrefixOf` section = ".text"
@@ -70,7 +70,7 @@ aggregate :: [Row] -> M.Map (String, String) Int
 aggregate = foldl' (\table row -> M.insertWith (+) (rowCrate row, rowSection row) (rowBytes row) table) M.empty
 
 sections :: [String]
-sections = [".menu_engine", ".text", ".data", "other"]
+sections = [".menu_engine", ".menu_engine_data", ".text", ".data", "other"]
 
 renderTable :: String -> M.Map (String, String) Int -> IO ()
 renderTable variant table = do
@@ -82,7 +82,7 @@ renderTable variant table = do
         total = sum (map bytes sections)
     putStrLn (pad 30 crate ++ concatMap (pad 14 . show . bytes) sections ++ pad 14 (show total))
   let bytes section = sum [n | ((_, found), n) <- M.toList table, found == section]
-  putStrLn (pad 30 "total" ++ concatMap (pad 14 . show . bytes) sections ++ pad 14 (show (bytes ".menu_engine" + bytes ".text" + bytes ".data" + bytes "other")))
+  putStrLn (pad 30 "total" ++ concatMap (pad 14 . show . bytes) sections ++ pad 14 (show (sum (map bytes sections))))
 
 pad :: Int -> String -> String
 pad width text = text ++ replicate (max 1 (width - length text)) ' '
@@ -113,7 +113,7 @@ runVariant variant path = do
   let rows = [row | line <- lines contents, Just row <- [parseRow line]]
       table = aggregate rows
       crates = map fst (M.keys table)
-      engineBytes crate = M.findWithDefault 0 (crate, ".menu_engine") table
+      engineBytes crate = M.findWithDefault 0 (crate, ".menu_engine") table + M.findWithDefault 0 (crate, ".menu_engine_data") table
   check (variant ++ ": the link map names input sections") (not (null rows))
   forM_ expectedCrates $ \crate ->
     check (variant ++ ": the link map names crate " ++ crate) (crate `elem` crates)

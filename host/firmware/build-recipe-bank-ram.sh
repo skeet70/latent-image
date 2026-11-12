@@ -208,8 +208,8 @@ if (( ${#engine_link[@]} )); then
       renamed[$section]=1
       case "$section" in
         *.data.*) renames+=(--rename-section "$section=.menu_engine_data$section") ;;
-        # .menu_engine_data is PROGBITS: the install path copies the image
-        # bytes, so its zeros are materialised here rather than by a loader.
+        # PROGBITS: the checker refuses a non-PROGBITS allocated section, and
+        # objcopy -O binary fails the linked.bin extent check on a trailing NOBITS section.
         *.bss.*) renames+=(--rename-section "$section=.menu_engine_data$section,alloc,load,contents,data") ;;
         *) renames+=(--rename-section "$section=.menu_engine$section") ;;
       esac
