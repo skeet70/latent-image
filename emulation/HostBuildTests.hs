@@ -1,9 +1,12 @@
 -- | Host build admission through the real @host-build@ binary.
 module Main (main) where
 
-import Control.Concurrent (threadDelay)
+import Control.Concurrent (forkIO, threadDelay)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, readMVar)
 import Control.Exception (IOException, try)
 import Control.Monad (forM, unless)
+import qualified Data.ByteString as ByteString
+import qualified Data.ByteString.Char8 as ByteString8
 import Data.Char (isDigit)
 import Data.List (elemIndex, isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
@@ -12,7 +15,7 @@ import System.Directory (canonicalizePath, createDirectoryIfMissing, doesFileExi
 import System.Environment (getArgs, getEnvironment, getExecutablePath, lookupEnv)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath (takeDirectory, (</>))
-import System.IO (BufferMode (LineBuffering), IOMode (WriteMode), SeekMode (AbsoluteSeek), hClose, hGetContents, hSetBuffering, openFile, stdout, utf8)
+import System.IO (BufferMode (LineBuffering), IOMode (WriteMode), SeekMode (AbsoluteSeek), hClose, hSetBinaryMode, hSetBuffering, openFile, stdout, utf8)
 import System.Posix.Files (setFileMode)
 import System.Posix.IO (LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd, setLock)
 import System.Posix.Process (getProcessID)
@@ -294,8 +297,8 @@ run binary = do
         let (name, argumentBase) = case testCase of
               OverBoundBase -> ("over", replicate 600 'x')
               CutBaseArgument -> ("cut", replicate 5000 'y')
-              ControlByteBase -> ("control", "/tmp/diagnostic\nbase")
-              NonAsciiBase -> ("unicode", "/tmp/diagnostic-\x00e9")
+              ControlByteBase -> ("control", root </> "diagnostic\nbase")
+              NonAsciiBase -> ("unicode", root </> "diagnostic-\x00e9")
             holderName = name ++ "-holder"
             waiterName = name ++ "-waiter"
             diagnosticPath = root </> (name ++ "-stderr")
@@ -312,9 +315,14 @@ run binary = do
         holderCode <- waitForProcess (invocationProcess externalHolder)
         externalWaiterCode <- waitForProcess (invocationProcess externalWaiter)
         diagnosticText <- invocationStderr externalWaiter
-        expect (name ++ " output base stays unavailable without changing admission")
-          (held && unavailable && holderCode == ExitSuccess && externalWaiterCode == ExitSuccess
-            && not ("command_log=" `isInfixOf` diagnosticText))
+        let observed = held && unavailable && holderCode == ExitSuccess
+              && externalWaiterCode == ExitSuccess && not ("command_log=" `isInfixOf` diagnosticText)
+        unless observed $ putStrLn (unlines
+          [ name ++ ": held=" ++ show held ++ " unavailable=" ++ show unavailable
+              ++ " holder=" ++ show holderCode ++ " waiter=" ++ show externalWaiterCode
+              ++ " command_log=" ++ show ("command_log=" `isInfixOf` diagnosticText)
+          , diagnosticText ])
+        expect (name ++ " output base stays unavailable without changing admission") observed
   boundaries <- mapM unavailableBase [OverBoundBase, CutBaseArgument, ControlByteBase, NonAsciiBase]
   writeFile laneRelease ""
   _ <- waitForProcess (holderProcess reservedLane)
@@ -353,14 +361,21 @@ spawnLoggedArgs binary root environment arguments logPath = do
   invocation <- spawnWith (UseHandle handle) binary root environment arguments
   pure invocation { invocationStderr = hClose handle >> readFile' logPath }
 
+-- | A child's stderr is drained in its own thread: a lazy read whose handle
+-- becomes unreachable is closed by the collector, and the child's next write
+-- then fails with EPIPE.
 spawnWith :: StdStream -> FilePath -> FilePath -> [(String, String)] -> [String] -> IO Invocation
 spawnWith stderrStream binary root environment arguments = do
   (_, _, err, handle) <- createProcess (proc binary arguments)
     { env = Just environment, cwd = Just root, std_err = stderrStream }
   case err of
     Just pipe -> do
-      contents <- hGetContents pipe
-      pure (Invocation handle (length contents `seq` pure contents))
+      captured <- newEmptyMVar
+      _ <- forkIO $ do
+        hSetBinaryMode pipe True
+        contents <- ByteString.hGetContents pipe
+        putMVar captured (ByteString8.unpack contents)
+      pure (Invocation handle (readMVar captured))
     Nothing -> pure (Invocation handle (pure ""))
 
 data Holder = Holder

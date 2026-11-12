@@ -155,6 +155,7 @@ haskell_test(
     tags = ["no-sandbox"],
     deps = [
         "//host:base",
+        "//host:bytestring",
         "//host:directory",
         "//host:filepath",
         "//host:process",
