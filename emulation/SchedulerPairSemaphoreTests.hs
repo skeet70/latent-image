@@ -24,7 +24,7 @@ planBytes :: B.ByteString
 planBytes = "semaphore-plan"
 
 semPlan :: Plan
-semPlan = Plan Owned "dat" entries guards [] [] retainedArmingEntries
+semPlan = Plan Owned "dat" entries guards [] [] retainedArmingEntries [] []
  where
   entries =
     [ Entry DomainA (HelperSemantic Acquire) (Address 0x439d8)

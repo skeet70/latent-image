@@ -1,8 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main (main) where
 
-import Control.Monad (filterM, forM, unless)
-import Data.Aeson (eitherDecodeStrict', object, (.=))
+import Control.Monad (filterM, forM, forM_, unless)
+import Data.Aeson (Value, eitherDecodeStrict', object, (.=))
 import Data.Bits ((.&.), xor)
 import Data.List (isPrefixOf, sortOn)
 import qualified Data.ByteString as B
@@ -10,6 +10,7 @@ import qualified Data.Map.Strict as M
 import Data.Word (Word32, Word8)
 import Data.Maybe (catMaybes, fromMaybe, isJust)
 import Emulation.NativeObservation
+import Emulation.Judge (StockEvidence (..), evidenceAt)
 import qualified Emulation.NativeCase as C
 import Emulation.OwnedCase
 import Emulation.Sha256 (sha256File, sha256Hex)
@@ -17,12 +18,27 @@ import FujiAF.Host (get, s, set, str)
 import FujiAF.StorageBudget (checkStorageBudget)
 import qualified Replacement.RtosPlatform.Aggregate as Agg
 import System.Directory (createDirectoryIfMissing, doesFileExist, removeDirectoryRecursive)
-import System.Environment (getArgs)
+import System.Environment (getArgs, getExecutablePath)
 import System.FilePath ((</>))
 import FujiAF.JSON (encodeCanonical)
 
 data Service = Activate | InterruptActivate | CancelActivation | Wake | InterruptWake | CancelWake deriving (Eq, Show, Enum, Bounded)
 data Row = Row Word32 Word32 Word32 Word8 Word8 Bool Bool Bool Word32 deriving Show
+
+data ServiceReport = ServiceReport
+  { srDomainB :: Bool
+  , srService :: Service
+  , srHolds :: Bool
+  , srReport :: Value
+  , srCaseCount :: Int
+  , srInputs :: Value
+  , srCaseRows :: [Value]
+  , srDifferences :: Int
+  , srVariantControls :: [Value]
+  , srObservationControls :: [Value]
+  , srLoaderDigest :: String
+  , srCandidateDigest :: String
+  }
 
 entry :: Service -> Word32
 entry s = case s of Activate -> 0x44f2c; InterruptActivate -> 0x450f0; CancelActivation -> 0x45270; Wake -> 0x46004; InterruptWake -> 0x46200; CancelWake -> 0x46398
@@ -191,16 +207,20 @@ main = do
       symbolsB = flagValue "--symbols-b" arguments
       placementsA = flagValue "--placements-a" arguments
       placementsB = flagValue "--placements-b" arguments
+      carriersPath = flagValue "--carriers" arguments
       reuseRoot = flagValue "--reuse-root" arguments
   case positional of
     [runner,loaderA,loaderB,binA,binB,work] -> do
       createDirectoryIfMissing True work
+      executableDigest <- sha256Hex <$> (sha256File =<< getExecutablePath)
       reports <- forM [(False,loaderA,binA,symbolsA,placementsA),(True,loaderB,binB,symbolsB,placementsB)] $ \(b,loaderPath,binPath,symbolsPath,placementsPath) -> do
         stock <- B.readFile loaderPath
         owned <- B.readFile binPath
         symbols <- traverse readSymbols symbolsPath
         placements <- traverse readPlacements placementsPath
+        carrierUnion <- traverse readCarriers carriersPath
         unless (isJust symbolsPath == isJust placementsPath) (fail "aggregate symbols and placements must be supplied together")
+        unless (not (isJust symbolsPath) || isJust carriersPath) (fail "aggregate S3b qualification requires --carriers")
         aggregateImage <- traverse (\rows -> either fail pure (Agg.aggregateImage rows owned)) symbols
         loaderDigest <- sha256Hex <$> sha256File loaderPath
         unless (loaderDigest == if b then "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec" else "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882") (fail "loader is not pinned X-M1 1.50")
@@ -208,13 +228,18 @@ main = do
         runnerDigest <- sha256Hex <$> sha256File runner
         symbolDigest <- traverse (fmap sha256Hex . sha256File) symbolsPath
         placementDigest <- traverse (fmap sha256Hex . sha256File) placementsPath
-        B.writeFile (work </> ("inputs-" ++ show b ++ ".json")) (encodeCanonical (object ["loader_sha256" .= loaderDigest, "candidate_sha256" .= candidateDigest, "runner_sha256" .= runnerDigest, "symbols_sha256" .= symbolDigest, "placements_sha256" .= placementDigest]))
+        carrierDigest <- traverse (fmap sha256Hex . sha256File) carriersPath
+        let inputs = object ["domain_b".=b, "loader_sha256".=loaderDigest, "candidate_sha256".=candidateDigest, "runner_sha256".=runnerDigest, "symbols_sha256".=symbolDigest, "placements_sha256".=placementDigest, "carriers_sha256".=carrierDigest]
+        B.writeFile (work </> ("inputs-" ++ show b ++ ".json")) (encodeCanonical inputs)
         let delta=if b then 0x8ffc0 else 0; base=if b then 0xd0000 else 0x40000
             selected = fromMaybe [] symbols
             patch s bytes = poke bytes [(entry s+delta-base,B.take (extent s) (B.drop (fromIntegral (entry s-entry Activate)) owned))]
             candidate = case aggregateImage of
               Nothing -> foldr patch stock [minBound..maxBound]
-              Just image -> poke stock [(Agg.imageBase image - base, Agg.imageBytes image)]
+              Just image ->
+                let union = fromMaybe (error "carrier extents are missing for the S3b aggregate") carrierUnion
+                    extents' = [(lo, hi - lo) | (lo, hi) <- if b then Agg.carrierExtentsB union else Agg.carrierExtentsA union]
+                 in either error id (Agg.installCarriers base stock (Agg.carrierFill union) selected (fromMaybe [] placements) image extents')
             symbolSpans = [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- selected]
             placementSpans = maybe [] (map (\placement -> (Agg.placementAddress placement, Agg.placementBytes placement))) placements
             payloadSpans = maybe [] (\image -> [(Agg.imageBase image, fromIntegral (B.length (Agg.imageBytes image)))]) aggregateImage
@@ -241,7 +266,15 @@ main = do
               labelled=[(role++show i,alter (spec b s row (role++show i) codeSpans functionSpans bytes)) | (role,bytes,codeSpans,functionSpans,alter)<-roles,(i,row)<-zip [0::Int ..] cases]
               dir=work </> (show b++show s)
           (observed, reused) <- runCases runner (fmap (</> (show b ++ show s)) reuseRoot) dir labelled
+          evidence <- forM [0 .. length cases - 1] $ \i -> do
+            let label = "stock" ++ show i
+                batch = "batch-" ++ show (i `div` 4096)
+                handler = entry s + delta
+                size = fromIntegral (extent s)
+            found <- evidenceAt (dir </> batch </> (label ++ ".native-result.json")) handler size
+            pure (label, (handler, size, evidenceTrace found + evidenceProvenance found))
           let at role i=observed M.! (role++show i)
+              evidenceMap = M.fromList evidence
               completed=and [nativeStatus (at "stock" i) == status && M.lookup R0 (nativeRegisters (at "stock" i)) == Just value | (i,row) <- zip [0 :: Int ..] cases, let (status,value)=expected b s row]
               stockSpec i row=spec b s row ("stock"++show i) (stockCodeSpans s) (stockFunctionSpans s) stock
               matches role=length [() | i<-[0..length cases-1],comparable (stockSpec i (cases!!i)) (at "stock" i) (at role i)]
@@ -254,15 +287,60 @@ main = do
                       refuses change = not (comparable fixture reference (change reference))
                    in [refuses (corruptByte "tasks-a" 0x0c), refuses (corruptByte "globals-a" 0), refuses (corruptByte "stack" 0x100), comparable fixture reference (corruptByte "stack" 0 reference)]
               negativeControl = length controls == 4 && and controls
+              controlRows :: [(String, Bool)]
+              controlRows = zip ["task-state", "globals-word", "stack-byte", "stack-base"] controls
+              stockInstructions = [object ["case".=i,"instructions".=instructionCount (nativeInstructions (at "stock" i))] | i<-[0..length cases-1]]
+              caseDifferences i = [role | role <- ["owned","equivalent"], not (comparable (stockSpec i (cases !! i)) (at "stock" i) (at role i))]
+              reportedCases = [i | i <- [0 .. length cases - 1], Just _ <- [M.lookup ("stock" ++ show i) evidenceMap]]
+              caseRows = [ object
+                  [ "id" .= ("stock" ++ show i)
+                  , "case" .= i
+                  , "entry" .= handler
+                  , "extent" .= size
+                  , "stock_instructions_inside" .= inside
+                  , "stock_instructions" .= instructionCount (nativeInstructions (at "stock" i))
+                  , "status" .= show (nativeStatus (at "stock" i))
+                  , "differences" .= caseDifferences i
+                  ]
+                | i <- reportedCases
+                , Just (handler, size, inside) <- [M.lookup ("stock" ++ show i) evidenceMap]
+                ]
+              failures = length [() | i <- reportedCases, not (null (caseDifferences i))]
+              mutantRows = [ object
+                  [ "name" .= ("mutant-" ++ show s)
+                  , "expected" .= ("the service entry replaced by mvn r0,#16; bx lr is reported different" :: String)
+                  , "reported" .= (matches "mutant" < length cases)
+                  , "differences" .= ([] :: [String])
+                  , "diagnostic_differences" .= ([] :: [String])
+                  ] ]
+              observationRows = [object ["name".=name, "reported".=held] | (name,held)<-controlRows]
               holds=completed && matches "owned"==length cases && matches "equivalent"==length cases && matches "mutant"<length cases && negativeControl
           unless holds $ putStrLn (show (b,s,completed,matches "owned",length cases,[(i,nativeStatus (at "stock" i),nativeStatus (at "owned" i)) | i<-[0..length cases-1],not (comparable (stockSpec i (cases!!i)) (at "stock" i) (at "owned" i))]))
           if holds then removeDirectoryRecursive dir else pure ()
-          let report=object ["domain_b".=b,"service".=show s,"cases".=length cases,"reused_observations".=reused,"stock_completed".=completed,"owned_matches".=matches "owned","equivalent_matches".=matches "equivalent","mutant_matches".=matches "mutant","negative_control".=negativeControl,"passed".=holds]
+          let report=object ["domain_b".=b,"service".=show s,"cases".=length cases,"case_rows".=caseRows,"reused_observations".=reused,"stock_completed".=completed,"owned_matches".=matches "owned","equivalent_matches".=matches "equivalent","mutant_matches".=matches "mutant","negative_control".=negativeControl,"controls".=mutantRows,"observation_controls".=observationRows,"negative_controls".=[object ["control".=name,"holds".=held] | (name,held)<-controlRows],"stock_instructions".=stockInstructions,"passed".=holds]
           B.writeFile (work </> (show b++show s++".json")) (encodeCanonical report)
-          pure (holds,report)
+          pure (ServiceReport b s holds report (length cases) inputs caseRows failures mutantRows observationRows loaderDigest candidateDigest)
       let flat=concat reports
-      B.writeFile (work </> "summary.json") (encodeCanonical (object ["passed".=all fst flat,"entries".=map snd flat]))
-      unless (all fst flat) (fail "S3b oracle failed")
+          passed=all srHolds flat
+          families=[object ["domain_b".=srDomainB r,"family".=show (srService r),"cases".=srCaseCount r,"passed".=srHolds r] | r<-flat]
+          inputs=[srInputs r | r<-flat]
+          summary=object ["verdict".=(if passed then "passed" else "failed" :: String),"families".=families,"inputs".=object ["suite_sha256".=executableDigest,"domains".=inputs],"entries".=[srReport r | r<-flat]]
+      B.writeFile (work </> "summary.json") (encodeCanonical summary)
+      forM_ [False,True] $ \b -> do
+        let selected = [r | r <- flat, srDomainB r == b]
+            loader = case selected of (r:_) -> srLoaderDigest r; [] -> ""
+            candidate = case selected of (r:_) -> srCandidateDigest r; [] -> ""
+            judge = object
+              [ "suite" .= (if b then "rtos-scheduler-s3b-b" else "rtos-scheduler-s3b-a" :: String)
+              , "firmware_sha256" .= loader
+              , "owned_sha256" .= candidate
+              , "cases" .= concatMap srCaseRows selected
+              , "controls" .= concatMap srVariantControls selected
+              , "observation_controls" .= concatMap srObservationControls selected
+              , "failures" .= sum (map srDifferences selected)
+              ]
+        B.writeFile (work </> ("judge-report-" ++ (if b then "b" else "a") ++ ".json")) (encodeCanonical judge)
+      unless passed (fail "S3b oracle failed")
     _ -> fail "runner loader-a loader-b owned-a owned-b work"
 
 helperFunctions :: Bool -> [(Word32, Word32)]
@@ -284,6 +362,9 @@ readSymbols path = either fail pure . Agg.parseAggregateSymbols =<< B.readFile p
 readPlacements :: FilePath -> IO [Agg.SectionPlacement]
 readPlacements path = either fail pure . Agg.parsePlacements =<< B.readFile path
 
+readCarriers :: FilePath -> IO Agg.CarrierUnion
+readCarriers path = either fail pure . Agg.parseCarrierUnion =<< B.readFile path
+
 flagValue :: String -> [String] -> Maybe FilePath
 flagValue flag arguments = case dropWhile (/= flag) arguments of
   [] -> Nothing
@@ -291,6 +372,6 @@ flagValue flag arguments = case dropWhile (/= flag) arguments of
   _ : value : _ -> Just value
 
 stripSymbolFlags :: [String] -> [String]
-stripSymbolFlags (flag : _ : rest) | flag `elem` ["--symbols-a", "--symbols-b", "--placements-a", "--placements-b", "--reuse-root"] = stripSymbolFlags rest
+stripSymbolFlags (flag : _ : rest) | flag `elem` ["--symbols-a", "--symbols-b", "--placements-a", "--placements-b", "--carriers", "--reuse-root"] = stripSymbolFlags rest
 stripSymbolFlags (value : rest) = value : stripSymbolFlags rest
 stripSymbolFlags [] = []

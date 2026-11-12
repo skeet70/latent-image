@@ -299,12 +299,12 @@ familyAbsolutes domain = case domain of
 familyPins :: Domain -> (Digest, Digest)
 familyPins domain = case domain of
   DomainA ->
-    ( Digest "78ee718e41956c72a79d67b32d084040b13da0e8906992e8aa39a882534ac11f"
-    , Digest "af5f36f72a68d911287937e115c45ea39968745cf893265d0c8bfa970455e7de"
+    ( Digest "402cd9df96c889b20eaa69e015b9be83ded9b367e25685dc42741df7f83218c4"
+    , Digest "8cb9cf40e639147a283378df363f4d17be3243f67c735234b7bf8c22f5e96540"
     )
   DomainB ->
-    ( Digest "9f3abc5ca6cc6b0de9f365436fb0ffd99729095eac7f0a81e120bf770ccfdac9"
-    , Digest "68c295cc47a417d1a390fb8c224721de7b27691c8f9e872992dc5487be85da5a"
+    ( Digest "102c357a8dcc89505ed96e7569eb7bb80a5ea48664f9df55030403ab225b43a7"
+    , Digest "14b0b8194e2c4e1b9881459f03c1853be0c8f093eba82a81ac9894c0d7bb86b7"
     )
 
 disjointWindows :: Domain -> [(FamilySlot, Extent)] -> Either FamilyError ()

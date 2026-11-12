@@ -38,7 +38,11 @@ const PENDING_LIMIT: usize = 4096;
 const CLASS_LIMIT: usize = 1 << 20;
 const SAMPLE_LIMIT: usize = 64;
 const INSTRUCTION_LIMIT: u64 = 1_500_000_000;
-const WATCH_LIMIT: usize = 4096;
+/// A write-hook window can hold this many rows before `advance_until` drains it.
+const WATCH_LIMIT: usize = 1 << 16;
+/// Instructions between drains inside one advance, so an untraced application loop
+/// cannot overflow the write hook.
+const DRAIN_WINDOW: u64 = 1 << 14;
 
 const INITIAL_MENU: u64 = 80_000_000;
 const SETUP_SETTLE: u64 = 40_000_000;
@@ -142,6 +146,19 @@ impl From<ProbeRegister> for String {
 #[serde(deny_unknown_fields)]
 struct PlanProbe { domain: Domain, address: Hex, kind: ProbeKind, register: ProbeRegister }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum StopKind { FirstEntry }
+
+/// An instruction stop the plan derived from the image.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PlanStop { domain: Domain, address: Hex, kind: StopKind }
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PlanDroppedStop { domain: Domain, name: String, reason: String }
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum Role { Stock, Owned, ControlRestored, ControlSilentNotify, ControlWrongPredicate, ControlWakeNoInsert }
@@ -170,6 +187,10 @@ struct Plan {
     probes: Vec<PlanProbe>,
     guarded: Vec<PlanRange>,
     fills: Vec<Hex>,
+    #[serde(default)]
+    stops: Vec<PlanStop>,
+    #[serde(default)]
+    dropped_stops: Vec<PlanDroppedStop>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -269,7 +290,7 @@ impl Context {
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
-struct TrampolineLoad { context: Context, target: u32, core_instructions: u64 }
+struct TrampolineLoad { context: Context, target: u32, core_instructions: u64, stop: u32 }
 
 #[derive(Serialize)]
 struct DemandService { context: Context, context_word: Read, root: WordValue }
@@ -285,7 +306,7 @@ impl DemandPaging {
         let before = self.load.context;
         let after = self.abort;
         require(before.core == after.core && before.current == after.current, "prefetch abort changed trampoline task")?;
-        require(matches!(before.pc & !ALIAS, 0x43758 | 0xd3758) && after.pc == 0xc && after.mode() == 0x17,
+        require(before.pc & !ALIAS == self.load.stop && after.pc == 0xc && after.mode() == 0x17,
             "prefetch abort is not a trampoline transfer")?;
         require(self.core_instructions == self.load.core_instructions + 1, "prefetch abort did not immediately follow trampoline load")?;
         require(self.spsr == before.cpsr && self.spsr & 0xff == 0x53, "prefetch abort has the wrong trampoline status")?;
@@ -728,9 +749,12 @@ unsafe fn callback_cpu(cpu: &dyn Cpu) -> *const dyn Cpu {
     unsafe { std::mem::transmute::<*const (dyn Cpu + '_), *const dyn Cpu>(cpu as *const dyn Cpu) }
 }
 
+struct Overflow { core: Core, address: u64, size: i32, rows: usize, pc: Option<u32>, task: Option<u32>, sp: Option<u32>,
+    distinct: usize, write_pc: Option<u32>, active: usize, addresses: Vec<u32> }
+
 struct DataCapture {
     cpu: *const dyn Cpu, core: Core, sequence: Rc<Cell<u64>>,
-    active: BTreeSet<u32>, rows: Vec<(u64,CapturedWrite)>, overflow: bool,
+    active: BTreeSet<u32>, rows: Vec<(u64,CapturedWrite)>, overflow: Option<Overflow>,
     failure: Option<String>, cached: Option<(InstructionEntryId,WriteOrigin)>,
     base: Rc<Cell<u64>>, progress: Rc<[Cell<u64>;2]>,
 }
@@ -761,27 +785,58 @@ impl DataCapture {
         self.cached = Some((entry.id,origin));
         Ok(origin)
     }
+
+    fn note_overflow(&mut self, address: u64, size: i32) {
+        if self.overflow.is_some() { return; }
+        let origin = self.origin().ok();
+        let write_pc = {
+            let mut bytes = [0;4];
+            unsafe { &*self.cpu }.read_register(Register::Arm32(arm::Register::R(15)), &mut bytes).ok()
+                .map(|_| u32::from_le_bytes(bytes))
+        };
+        let mut addresses: Vec<u32> = self.rows.iter().map(|(_, row)| row.write.address.0).collect();
+        addresses.sort_unstable();
+        addresses.dedup();
+        let distinct = addresses.len();
+        addresses.truncate(16);
+        self.overflow = Some(Overflow { core: self.core, address, size, rows: self.rows.len(),
+            pc: origin.as_ref().map(|row| row.pc.0), task: origin.as_ref().map(|row| row.task.0),
+            sp: origin.as_ref().map(|row| row.sp.0), distinct, write_pc, active: self.active.len(), addresses });
+    }
+    fn push(&mut self, address: u32, size: u32, value: u32) {
+        if self.rows.len() == WATCH_LIMIT { self.note_overflow(u64::from(address), size as i32); return; }
+        match self.origin() {
+            Ok(origin) => {
+                let sequence = self.sequence.get();
+                self.sequence.set(sequence+1);
+                self.rows.push((sequence,CapturedWrite { write: Written { address: Hex(address), size, value }, origin, order: sequence }));
+            }
+            Err(error) => { self.failure = Some(error); }
+        }
+    }
 }
 
 unsafe fn data_write(_access: Access, address: u64, size: i32, value: i64, data: *mut c_void) {
     // The boxed context outlives its installed CPU hook.
     let context = unsafe { &*data.cast::<RefCell<DataCapture>>() };
     let mut capture = context.borrow_mut();
-    let Ok(address) = u32::try_from(address) else { capture.overflow = true; return; };
-    if !capture.active.contains(&(address & !ALIAS & !3)) { return; }
-    if capture.rows.len() == WATCH_LIMIT || ![1, 2, 4].contains(&size) {
-        capture.overflow = true;
-    } else {
-        let mask = match size { 1 => 0xff, 2 => 0xffff, _ => u32::MAX };
-        match capture.origin() {
-            Ok(origin) => {
-                let sequence = capture.sequence.get();
-                capture.sequence.set(sequence+1);
-                capture.rows.push((sequence,CapturedWrite { write: Written { address: Hex(address), size: size as u32,
-                    value: value as u32 & mask }, origin, order: sequence }));
-            }
-            Err(error) => { capture.failure = Some(error); }
+    let Ok(address) = u32::try_from(address) else {
+        capture.note_overflow(address, size);
+        return;
+    };
+    let watched = |word: u32| capture.active.contains(&(word & !ALIAS & !3));
+    let low = watched(address);
+    let high = size == 8 && watched(address.wrapping_add(4));
+    if !low && !high { return; }
+    match size {
+        1 => capture.push(address, 1, value as u32 & 0xff),
+        2 => capture.push(address, 2, value as u32 & 0xffff),
+        4 => capture.push(address, 4, value as u32),
+        8 => {
+            if low { capture.push(address, 4, value as u32); }
+            if high { capture.push(address.wrapping_add(4), 4, (value as u64 >> 32) as u32); }
         }
+        _ => capture.note_overflow(u64::from(address), size),
     }
 }
 
@@ -1296,6 +1351,16 @@ fn committed(value: Read) -> Result<u32, String> {
     match value { Read::Committed { value } => Ok(value), _ => Err("scheduler state is not committed".into()) }
 }
 
+/// The addresses at which the observer records a scheduler trampoline load. A plan with neither
+/// a derived stop nor a dropped one predates the derivation.
+fn plan_stops(plan: &Plan) -> BTreeSet<u32> {
+    match plan.role {
+        Role::Stock => [0x43758, 0xd3758].into_iter().collect(),
+        _ if plan.stops.is_empty() && plan.dropped_stops.is_empty() => [0x43758, 0xd3758].into_iter().collect(),
+        _ => plan.stops.iter().map(|stop| stop.address.0).collect(),
+    }
+}
+
 fn snapshot(board: &Board, core: Core, tcm: [u32; 2], helper: Helper, args: [u32; 4]) -> Result<Vec<WordValue>, String> {
     let mut addresses = BTreeSet::new();
     let mut add = |base: u32, bytes: u32| -> Result<(), String> {
@@ -1366,6 +1431,7 @@ struct Observer<'p> {
     dispatched: [bool; 2],
     probe_hits: Vec<ProbeHit>,
     trampoline_loads: [Option<TrampolineLoad>; 2],
+    scheduler_stops: BTreeSet<u32>,
     demand_paging: Vec<DemandPaging>,
     demand_services: BTreeMap<(Core, u32), u32>,
     write_batch: Vec<(u64,CapturedWrite)>,
@@ -1449,7 +1515,7 @@ impl Observer<'_> {
             for core in 0..2 {
                 let context = Box::new(RefCell::new(DataCapture { cpu: unsafe { callback_cpu(machine.session.board.cpu(core)?) },
                     core: Core::from_index(core)?, sequence: self.write_sequence.clone(),
-                    active: BTreeSet::new(), rows: Vec::new(), overflow: false, failure: None, cached: None,
+                    active: BTreeSet::new(), rows: Vec::new(), overflow: None, failure: None, cached: None,
                     base: self.clock_base.clone(), progress: self.clock_progress.clone() }));
                 let data = (&*context as *const RefCell<DataCapture>).cast_mut().cast();
                 // The context is retired only after remove_hook.
@@ -1476,7 +1542,12 @@ impl Observer<'_> {
         self.write_batch.clear();
         for (_, _, capture) in &self.data_hooks {
             let mut capture = capture.borrow_mut();
-            require(!capture.overflow, "scheduler write hook overflowed or saw an unsupported width")?;
+            if let Some(overflow) = &capture.overflow {
+                return Err(format!("scheduler write hook overflowed or saw an unsupported width at instruction {} over {}: core {:?} address {:#x} size {} rows {} distinct {} pc {:?} write-pc {:?} task {:?} sp {:?} active {} addresses {:x?}",
+                    machine.instructions(), machine.instructions() - self.clock_base.get(),
+                    overflow.core, overflow.address, overflow.size, overflow.rows, overflow.distinct, overflow.pc,
+                    overflow.write_pc, overflow.task, overflow.sp, overflow.active, overflow.addresses));
+            }
             if let Some(error) = &capture.failure { return Err(error.clone()); }
             self.write_batch.extend(capture.rows.drain(..));
         }
@@ -1797,10 +1868,10 @@ impl Observer<'_> {
                         }
                     }
                 }
-            } else if matches!(low, 0x43758 | 0xd3758) {
+            } else if self.scheduler_stops.contains(&low) {
                 let target = committed(Board { machine, maps: &self.maps }.word(core,tcm,context.registers[2]+8)?)?;
                 self.trampoline_loads[core.index()] = Some(TrampolineLoad { context, target,
-                    core_instructions: machine.session.board.instruction_counts()[core.index()] });
+                    core_instructions: machine.session.board.instruction_counts()[core.index()], stop: low });
             } else if self.trampoline_loads[core.index()].is_some_and(|load| {
                 context.pc & !ALIAS == load.target & !ALIAS && context.current == load.context.current
             }) {
@@ -1908,7 +1979,7 @@ impl Observer<'_> {
         while !reached(machine) {
             machine.traces.hits.clear();
             let before = machine.instructions();
-            let outcome = machine.run_until(end - before, until);
+            let outcome = machine.run_until((end - before).min(DRAIN_WINDOW), until);
             machine.require_running()?;
             require(matches!(outcome, RunOutcome::Stopped | RunOutcome::Completed), "unexpected pair run outcome")?;
             let mut stops = Vec::with_capacity(2);
@@ -1919,10 +1990,13 @@ impl Observer<'_> {
                 stops.push((core, parse_hex(&hit.address)?));
             }
             if stops.is_empty() {
-                require(reached(machine), "run ended early without a pair stop")?;
-            } else {
-                self.stop(machine, &stops)?;
+                if reached(machine) { break; }
+                self.drain_data(machine)?;
+                self.begin_data(machine)?;
+                require(machine.instructions() > before, "pair made no progress")?;
+                continue;
             }
+            self.stop(machine, &stops)?;
             self.check_watch()?;
             require(machine.instructions() > before || !stops.is_empty(), "pair made no progress")?;
         }
@@ -2045,6 +2119,8 @@ struct Report<'a> {
     pc_watches: Vec<&'a PcWatch>,
     probes: &'a [ProbeHit],
     demand_paging: &'a [DemandPaging],
+    scheduler_stops: Vec<Hex>,
+    dropped_stops: &'a [PlanDroppedStop],
 }
 
 fn arguments() -> Result<BTreeMap<String, PathBuf>, String> {
@@ -2100,6 +2176,7 @@ fn drive() -> Result<(), String> {
     machine.session.restore(&restored)?;
     machine.rearm()?;
     require(machine.instructions() == 0, "reset checkpoint is not preexecution")?;
+    let scheduler_stops = plan_stops(&validated.plan);
 
     let mut observer = Observer {
         validated: &validated,
@@ -2123,7 +2200,7 @@ fn drive() -> Result<(), String> {
         bank_counts: [0; 2], pc_watches: BTreeMap::new(),
         dispatched: [false; 2],
         probe_hits: Vec::new(),
-        trampoline_loads: [None; 2], demand_paging: Vec::new(), demand_services: BTreeMap::new(),
+        trampoline_loads: [None; 2], scheduler_stops, demand_paging: Vec::new(), demand_services: BTreeMap::new(),
         write_batch: Vec::with_capacity(WATCH_LIMIT*2), write_sequence: Rc::new(Cell::new(0)),
         lock_events: Vec::new(), clock_base: Rc::new(Cell::new(0)),
         clock_progress: Rc::new([Cell::new(0), Cell::new(0)]),
@@ -2135,9 +2212,9 @@ fn drive() -> Result<(), String> {
         let mut labels = validated.sites.labels();
         for address in PC_WATCHES.into_iter().chain(DISPATCH_LOADS.into_iter().filter(|&address| retained_dispatch_point(&validated.plan,address))).flat_map(spellings) {
             labels.insert(address, "scheduler-pc-watch".into());
-            for point in [0xc,0x43758,0xd3758].into_iter().flat_map(spellings) {
-                labels.insert(point, "scheduler-pc-watch".into());
-            }
+        }
+        for point in [0xc].into_iter().chain(observer.scheduler_stops.iter().copied()).flat_map(spellings) {
+            labels.insert(point, "scheduler-pc-watch".into());
         }
         machine.traces.arm_mutable(&machine.session, labels)?;
         observer.begin_data(&machine)?;
@@ -2263,6 +2340,8 @@ fn drive() -> Result<(), String> {
         pc_watches: observer.pc_watches.values().collect(),
         probes: &observer.probe_hits,
         demand_paging: &observer.demand_paging,
+        scheduler_stops: observer.scheduler_stops.iter().copied().map(Hex).collect(),
+        dropped_stops: &validated.plan.dropped_stops,
     };
     let file = File::create_new(output.join("observation.json")).map_err(|error| error.to_string())?;
     let mut writer = BufWriter::new(file);
@@ -2707,7 +2786,7 @@ mod tests {
         abort.registers[13] = abort.sp;
         abort.registers[14] = abort.lr;
         abort.registers[15] = abort.pc;
-        DemandPaging { load: TrampolineLoad { context, target, core_instructions: 7 }, abort,
+        DemandPaging { load: TrampolineLoad { context, target, core_instructions: 7, stop: 0x43758 }, abort,
             core_instructions: 8, spsr: context.cpsr, ifar: target, ifsr: 13, service: None }
     }
 
@@ -2771,7 +2850,7 @@ mod tests {
         let mut points = board.instruction_points_begin_mutable(0,Vec::new()).unwrap();
         let capture = Box::new(RefCell::new(DataCapture { cpu: unsafe { callback_cpu(board.cpu(0).unwrap()) },
             core: Core::Primary, sequence: Rc::new(Cell::new(0)), active: BTreeSet::from([0x3000,0xfffb30cc & !ALIAS]),
-            rows: Vec::new(), overflow: false, failure: None, cached: None,
+            rows: Vec::new(), overflow: None, failure: None, cached: None,
             base: Rc::new(Cell::new(0)), progress: Rc::new([Cell::new(0),Cell::new(0)]) }));
         let data = (&*capture as *const RefCell<DataCapture>).cast_mut().cast();
         let hook = unsafe { board.cpu(0).unwrap().install_hook(Hook::Memory {
@@ -2790,12 +2869,87 @@ mod tests {
         board.cpu(0).unwrap().remove_hook(hook).unwrap();
         board.instruction_points_end(0,&mut points).unwrap();
         let captured = capture.borrow();
-        assert!(!captured.overflow && captured.failure.is_none(), "{:?}", captured.failure);
+        assert!(captured.overflow.is_none() && captured.failure.is_none(), "{:?}", captured.failure);
         assert_eq!(captured.rows.len(),3);
         let owners: Vec<_> = captured.rows.iter().map(|(_,row)| (row.origin.task.0,row.origin.kernel_context,row.origin.sp.0)).collect();
         assert_eq!(owners,[(0x9000,0,0x5000),(0x9000,1,0x7000),(0xa000,0,0x6000)]);
         assert_eq!(captured.rows.iter().map(|(_,row)| row.write.value).collect::<Vec<_>>(),[0,1,2]);
         assert_eq!(captured.rows.iter().map(|(_,row)| row.write.address.0).collect::<Vec<_>>(),[0x3000,0x3000,0xfffb30cc]);
+    }
+
+    #[test]
+    fn write_hooks_split_a_64_bit_store_and_name_an_unsupported_width() {
+        use fujimod_emulator::board::{bus::{Bus,Mode},factory::{self,Graph,Processor,Ram},memory::BusMapping};
+        use fujimod_emulator_cpu::{ExecutionPolicy,Model,timeline::Ratio};
+        fujimod_emulator_exr2_board::register_board_builder();
+        fujimod_emulator_models::register();
+        let graph = Graph {
+            processors: vec![Processor { model: Model::CortexR5F, rprofile: Some(Default::default()), mprofile: None,
+                released: true, registers: vec![(Register::Pc,0x1000),(Register::Pstate,0x13)] }],
+            ram: vec![Ram { base: 0, size: 0x60000 }], peripherals: vec![], decoders: vec![],
+            dma_mappings: vec![BusMapping::ram(0,0x60000)],
+            mappings: vec![MemoryMap { core: 0, address: 0, physical: 0, size: 0x60000, permissions: 7 },
+                MemoryMap { core: 0, address: 0x40000000, physical: 0, size: 0x60000, permissions: 7 },
+                MemoryMap { core: 0, address: 0xfffb3000, physical: 0x3000, size: 0x1000, permissions: 3 }],
+            instructions_per_tick: Ratio::new(24,1).unwrap(),
+        };
+        let mut board = graph.build(factory::Options { engine: factory::Engine::Unicorn, translation_cache_bytes: 1<<20 },
+            Bus::new(Mode::Strict),None).unwrap();
+        board.set_execution_policy(ExecutionPolicy::Exact).unwrap();
+        board.write_physical(0x1000,&[0xe5810000u32,0xeafffffe].into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>()).unwrap();
+        let mut points = board.instruction_points_begin_mutable(0,Vec::new()).unwrap();
+        let capture = Box::new(RefCell::new(DataCapture { cpu: unsafe { callback_cpu(board.cpu(0).unwrap()) },
+            core: Core::Primary, sequence: Rc::new(Cell::new(0)), active: BTreeSet::from([0x3000,0x3004]),
+            rows: Vec::new(), overflow: None, failure: None, cached: None,
+            base: Rc::new(Cell::new(0)), progress: Rc::new([Cell::new(0),Cell::new(0)]) }));
+        let data = (&*capture as *const RefCell<DataCapture>).cast_mut().cast();
+        board.write_physical(0x54760,&0x9000u32.to_le_bytes()).unwrap();
+        board.write_physical(0x545a4,&0u32.to_le_bytes()).unwrap();
+        for (register,value) in [(arm::Register::R(0),0u64),(arm::Register::R(1),0x3000u64),
+            (arm::Register::R(13),0x5000u64),(arm::Register::R(15),0x1000u64)] {
+            board.write_register(0,Register::Arm32(register),value).unwrap();
+        }
+        board.run_window(1,1,None,None).unwrap();
+        unsafe { data_write(Access::Write, 0x3000, 8, 0x11223344_55667788i64, data) };
+        let captured = capture.borrow();
+        assert!(captured.overflow.is_none() && captured.failure.is_none(), "{:?}", captured.failure);
+        let rows: Vec<_> = captured.rows.iter().map(|(_,row)| (row.write.address.0,row.write.size,row.write.value)).collect();
+        assert_eq!(rows, [(0x3000,4,0x55667788),(0x3004,4,0x11223344)]);
+        drop(captured);
+        unsafe { data_write(Access::Write, 0x3000, 16, 0, data) };
+        let captured = capture.borrow();
+        let overflow = captured.overflow.as_ref().expect("an unsupported width is refused");
+        assert_eq!((overflow.address, overflow.size), (0x3000, 16));
+        board.instruction_points_end(0,&mut points).unwrap();
+    }
+
+    fn plan_with_stops(role: Role, stops: Vec<PlanStop>) -> Plan {
+        Plan { schema: PLAN_SCHEMA, role, dat_sha256: String::new(), domains: Vec::new(), entries: Vec::new(),
+            probes: Vec::new(), guarded: Vec::new(), fills: Vec::new(), stops, dropped_stops: Vec::new() }
+    }
+
+    #[test]
+    fn stock_role_keeps_the_stock_trampoline_stops() {
+        assert_eq!(plan_stops(&plan_with_stops(Role::Stock, Vec::new())), [0x43758, 0xd3758].into_iter().collect());
+    }
+
+    #[test]
+    fn owned_role_arms_only_the_derived_stops() {
+        let stops = vec![PlanStop { domain: Domain::A, address: Hex(0x43e04), kind: StopKind::FirstEntry },
+            PlanStop { domain: Domain::B, address: Hex(0xd3dc0), kind: StopKind::FirstEntry }];
+        assert_eq!(plan_stops(&plan_with_stops(Role::Owned, stops)), [0x43e04, 0xd3dc0].into_iter().collect());
+    }
+
+    #[test]
+    fn a_plan_without_derived_or_dropped_stops_arms_the_fixed_stops() {
+        assert_eq!(plan_stops(&plan_with_stops(Role::Owned, Vec::new())), [0x43758, 0xd3758].into_iter().collect());
+    }
+
+    #[test]
+    fn a_plan_with_a_dropped_stop_arms_none() {
+        let mut plan = plan_with_stops(Role::ControlRestored, Vec::new());
+        plan.dropped_stops = vec![PlanDroppedStop { domain: Domain::A, name: "first-entry".into(), reason: "the owned symbol is not bound".into() }];
+        assert!(plan_stops(&plan).is_empty());
     }
 }
 

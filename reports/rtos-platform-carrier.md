@@ -1,6 +1,6 @@
 # Aggregate RTOS platform carrier
 
-`replacement/rtos_platform` declares stock-extent carriers for S1, S2, S3a, S3b, S3c, S3d, own-first, semaphore, fixed-pool, task records, data queues and global-lock roots and helpers. `carriers.json` records entry veneers, retained callees and emitted demand. Carrier declaration, successful linking, native qualification and live ownership are separate claims.
+`replacement/rtos_platform` declares stock-extent carriers for S1, S2, S3a, S3b, S3c, S3d, own-first, semaphore, fixed-pool, task records, data queues, global-lock roots and helpers, and the event-flag family (eight flag service extents plus five helper extents). `carriers.json` records entry veneers, retained callees, emitted demand and reserved section prefixes. Carrier declaration, successful linking, native qualification and live ownership are separate claims. The current image identities and the event-flag qualification status are in [the platform workflow](../replacement/rtos.md#platform-union-and-images).
 
 ## Earlier admitted baseline
 
@@ -64,7 +64,7 @@ The saved semaphore aggregate timeout reaches `0x44e58` (`blx r3`), calls the `0
 
 S3b's old batch helper removed the complete `stack` observation before a comparator required its incoming-frame bytes. That makes every comparison fail independently of service results. The S3b loader now retains that observation, compares only its declared live incoming range, and keeps every other writable region and ordered device write visible. Controls challenge task state, globals and the incoming frame, and separately check private-stack insensitivity. Its equivalent-input role varies ABI scratch-register inputs rather than patching an address adjacent to a relocated veneer.
 
-Shared S3b dispatch, S3c resolution/locking, lifecycle helpers and blocking queue operations are emitted once in the aggregate where applicable. Standalone fixed-slot scheduler artifacts retain their existing inlining constraint. The queue union remains its eleven owned extents; the retained wait-release helper at A `0x44568` / B `0xd4528` is not carrier supply.
+Shared S3b dispatch, S3c resolution/locking, lifecycle helpers and blocking queue operations are emitted once in the aggregate where applicable. Standalone fixed-slot scheduler artifacts retain their existing inlining constraint. The queue union remains its eleven owned extents; the wait-release helper at A `0x44568` / B `0xd4528` is the event-flag family's `family_release` carrier, not queue supply.
 
 The own-first, S3d, task-record, cyclic and timer oracles accept complete aggregate symbols and placement metadata. Cyclic/timer aggregate mode omits standalone body installation and keeps foreign instrumentation disjoint from owned carriers. Mapping compaction is separate from executable fetch coverage and preserves declared ABI entry boundaries and readonly exclusions under unchanged native limits. Source wiring is not aggregate execution evidence. Current joined build, placement, staging, family qualification and review results must be bound separately before integration.
 

@@ -174,7 +174,7 @@ admissionControls =
   ]
   where
     domain = U.DomainMap R.DomainA (R.GuestAddress 0x1000) 16
-      [U.Entry U.Timer "timer" (R.GuestAddress 0x1000) "body" ".text.body" "xm1_platform_veneer_timer"]
+      [U.Entry U.Timer "timer" (R.GuestAddress 0x1000) "body" ".text.body" "xm1_platform_veneer_timer" False]
       [U.Carrier U.Timer (R.Extent (R.GuestAddress 0x1000) (R.GuestAddress 0x1010))] [] []
     veneer = A.AggregateSymbol "xm1_platform_veneer_timer" 0x1000 4
     packed = A.SectionPlacement 0x1004 8 ".text.body"

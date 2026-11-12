@@ -4363,6 +4363,7 @@ haskell_binary(
         "//host:bytestring",
         "//host:containers",
         "//host:directory",
+        "//host:first-stage",
         "//host:host-support",
         "//replacement/rtos_own_first/stage:own-first-artifact",
         "//replacement/rtos_scheduler/oracle:scheduler-oracle-lib",

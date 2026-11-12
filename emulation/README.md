@@ -2047,6 +2047,8 @@ First-entry, saved-register resume and IRQ-tail calls remain pending across pree
 
 An overlay task's first transfer can take a permission prefetch abort before an instruction point at its virtual entry can fire. Stock task `0x4005ffb4` transfers from `0x43758` to virtual entry `0x1215480` through configuration `0x4005bf24`; its next PC is the prefetch-abort vector `0xc`, then stock handler `0x61c73c`. The observer retains the final trampoline load's full envelope and records the raw abort envelope, SPSR, IFAR, IFSR and both core-local instruction counts. It accepts an attempted first entry only when exactly one instruction retired, SPSR equals the trampoline's SVC/I=0/F=1 status, IFSR is a permission fault, IFAR and LR_abt-4 equal C+8, and r0-r12 and task/core are unchanged. The transfer's banked SP/LR are taken from that immediately preceding load envelope. The checker binds this derived transfer to its raw abort history and requires a later task-context service entry from the same task/core, with its published root word and zero kernel context word. No other exception transition completes a trampoline.
 
+Four plan shapes set the first-entry stop. An aggregate-derived non-stock plan arms the single `ldr pc, [r2, #8]` inside the owned first-entry body (`0x43e04`/`0xd3dc0` in the current aggregate). A non-stock plan derived without an aggregate lists `0x43758`/`0xd3758` itself. A dropped stop refuses the demand proof. A plan with neither falls back to `0x43758`/`0xd3758`.
+
 Each raw prefetch-abort call boundary must match exactly one complete demand-paging proof, and each proof must match exactly one boundary.
 
 The observer counts null-branch visits (`0x436ec`, `0xd36ec`) including startup, image5's direct ring site (`0xec8014`), and IRQ 120 handler entries (`0x40b00`, `0xd0b00`) by core. It refuses a helper entered on the other loader's core and a null-selection branch after the first successful dispatch. The checker judges each completed call against the stock-listing Haskell model, including raw versus boolean requeue results and the distinct A/B notify predicates. It checks queue/bitmap/selected consistency at queue-helper returns, guard coverage, input bindings, accounting and route completion. Cross-run comparison uses route keys and menu states, not call order or instruction interleavings. Its JSON summary reports cross-domain inserts, ringing notifies, bank writes, handler runs and PC-watch counts per core.
@@ -2062,7 +2064,7 @@ The frozen wrong-predicate control replaces B's first four notify words with `e3
 ```sh
 devenv shell -- host-build build --jobs=2 //emulation:scheduler-pair-plan //emulation:scheduler-pair-observe //emulation:scheduler-pair-check //emulation:emulator-slot
 devenv shell -- host-build test --jobs=2 //emulation:scheduler-pair-tests
-devenv shell -- host-build run --jobs=2 //emulation:scheduler-pair-plan -- ROLE DAT EXPECTED_LOADER_A EXPECTED_LOADER_B NEW_PLAN_JSON [ADDITIONAL_REGIONS ...]
+devenv shell -- host-build run --jobs=2 //emulation:scheduler-pair-plan -- ROLE DAT EXPECTED_LOADER_A EXPECTED_LOADER_B NEW_PLAN_JSON [ADDITIONAL_REGIONS ...] [--symbols-a PATH --symbols-b PATH --carriers PATH]
 XM1_EMULATOR_SLOTS=1 devenv shell -- host-build run --jobs=2 //emulation:emulator-slot -- \
   "$PWD/bazel-bin/emulation/scheduler-pair-observe" --plan PLAN_JSON \
   --run "$PWD/emulation/fujimod-xm1/data/xm1-150.json" --update DAT --boot-rom "$ROM" \
@@ -2074,7 +2076,7 @@ bazel-bin/emulation/scheduler-pair-check --observer "$PWD/bazel-bin/emulation/sc
 
 The host checker streams `classes` into checked totals, per-entry summaries and demand-paging witnesses. Notification controls retain the earliest target and preceding failed contracts for the same exact adjudicator; passing contracts are discharged while reading. Duplicate object fields keep their first occurrence, matching Aeson. The comparison forces each role's summary before loading the next role.
 
-`E-RTOS-SCHED-CURRENT-HOST-150` records current staging and offline rechecks of all eight retained roles within 2 GiB and zero swap, with a measured 703,242,240-byte peak. Every role verdict and the route comparison match the frozen qualification. This is a finite-cohort memory result.
+`E-RTOS-SCHED-CURRENT-HOST-150` records a rerun of all eight retained roles from reset with the current plan, observer and checker. The re-derived plans equal the retained ones apart from their stops. Stock, candidate, the three restore controls and the route comparison equal the frozen qualification, and the three semantic-failure controls differ only by the failing-call projection. The checker peaks at 8,937,060 KiB under a 16 GiB cap. This is a finite-cohort memory result.
 
 Pending calls are accepted only within the final settle window and remain unqualified, as in the own-first pair. A semantic refusal identifies the earliest failing completed call class by its entry instruction count. A return observation includes any interrupt between the helper's return and its continuation.
 

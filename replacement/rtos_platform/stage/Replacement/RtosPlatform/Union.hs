@@ -15,6 +15,7 @@ module Replacement.RtosPlatform.Union
   , FitError (..)
   , parseUnion
   , domainMap
+  , groupedRuns
   , resolveEntryTarget
   , runs
   , fit
@@ -22,9 +23,11 @@ module Replacement.RtosPlatform.Union
   , totalDemandBytes
   ) where
 
-import Control.Monad (forM_, unless, when)
-import Data.Aeson (FromJSON (..), withObject, withText, (.:))
+import Control.Monad (forM, forM_, unless, when)
+import Data.Aeson (FromJSON (..), withObject, withText, (.:), (.:?), (.!=))
 import qualified Data.Aeson as J
+import qualified Data.Aeson.Key as Key
+import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Aeson.Types (Parser)
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import qualified Data.ByteString as B
@@ -35,7 +38,7 @@ import Numeric (readHex)
 import Replacement.RtosOwnFirst.Regions (Domain (..), Extent (..), GuestAddress (..), domains, extentBytes, extentContains)
 import qualified Replacement.RtosPlatform.Aggregate as A
 
-data Group = OwnFirst | S1 | S2 | S3a | S3b | S3c | S3d | Semaphore | FixedPool | TaskRecords | DataQueue | GlobalLock | Cyclic | Timer | Shared
+data Group = OwnFirst | S1 | S2 | S3a | S3b | S3c | S3d | Semaphore | FixedPool | TaskRecords | DataQueue | GlobalLock | Cyclic | Timer | EventFlag | Shared
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 groupLabel :: Group -> String
@@ -54,6 +57,7 @@ groupLabel value = case value of
   GlobalLock -> "global-lock"
   Cyclic -> "cyclic"
   Timer -> "timer"
+  EventFlag -> "event-flag"
   Shared -> "shared"
 
 data Entry = Entry
@@ -63,6 +67,7 @@ data Entry = Entry
   , entrySymbol :: String
   , entrySection :: String
   , entryVeneer :: String
+  , entryPinned :: Bool
   }
   deriving (Eq, Show)
 
@@ -86,7 +91,13 @@ data DomainMap = DomainMap
   }
   deriving (Eq, Show)
 
-data Union = Union {unionFill :: Word32, unionA :: DomainMap, unionB :: DomainMap} deriving (Eq, Show)
+data Union = Union
+  { unionFill :: Word32
+  , unionA :: DomainMap
+  , unionB :: DomainMap
+  , unionReserved :: [(Group, [String])]
+  }
+  deriving (Eq, Show)
 
 data UnionError
   = UnionUnparsed String
@@ -97,6 +108,8 @@ data UnionError
   | EntryOutsideCarrier Domain Entry
   | EntryRepeated Domain GuestAddress
   | ExternalOutsideLoader Domain External
+  | RetainedInsideCarrier Domain External
+  | OwnedOutsideEntries Domain External
   deriving (Eq, Show)
 
 data FitError
@@ -129,6 +142,7 @@ instance FromJSON ParsedEntry where
         <*> o .: "symbol"
         <*> o .: "section"
         <*> o .: "veneer"
+        <*> (o .:? "pinned" .!= False)
 
 newtype ParsedCarrier = ParsedCarrier Carrier
 instance FromJSON ParsedCarrier where
@@ -170,7 +184,12 @@ instance FromJSON Union where
     ds <- o .: "domains"
     ParsedDomain a <- ds .: "a"
     ParsedDomain b <- ds .: "b"
-    pure (Union fill a b)
+    reserved <- o .:? "reserved_prefixes" .!= KeyMap.empty
+    reservedGroups <- forM (KeyMap.toList reserved) $ \(key, value) -> do
+      parsed <- group (J.String (Key.toText key))
+      names <- parseJSON value
+      pure (parsed, names)
+    pure (Union fill a b reservedGroups)
 
 parseUnion :: B.ByteString -> Either UnionError Union
 parseUnion bytes = do
@@ -197,6 +216,13 @@ parseUnion bytes = do
         let GuestAddress at = externalAddress e
             GuestAddress base = mapBase dm
         unless (at >= base && at < base + fromIntegral (mapSize dm)) (Left (ExternalOutsideLoader domain e))
+        case externalKind e of
+          RetainedService ->
+            when (any (\c -> extentContains (carrierExtent c) (externalAddress e)) (mapCarriers dm))
+              (Left (RetainedInsideCarrier domain e))
+          OwnedEntry ->
+            unless (any (\entry -> entryAddress entry == externalAddress e) (mapEntries dm))
+              (Left (OwnedOutsideEntries domain e))
   pure union
 
 domainMap :: Union -> Domain -> DomainMap
@@ -204,18 +230,23 @@ domainMap union domain = case domain of
   DomainA -> unionA union
   DomainB -> unionB union
 
--- | The carrier bytes between entry words, in address order.
-runs :: DomainMap -> [Extent]
-runs dm = sortOn extentStart (concatMap split (map carrierExtent (mapCarriers dm)))
+-- | The carrier bytes between entry words, in address order, tagged with the
+-- group of the carrier that produced them.
+groupedRuns :: DomainMap -> [(Group, Extent)]
+groupedRuns dm = sortOn (extentStart . snd) (concatMap split (mapCarriers dm))
   where
     addresses = sortOn id (map entryAddress (mapEntries dm))
-    split (Extent start end) =
-      [Extent a b | (a, b) <- zip starts ends, b > a]
+    split carrier = [(carrierGroup carrier, Extent a b) | (a, b) <- zip starts ends, b > a]
       where
+        Extent start end = carrierExtent carrier
         inside = [p | p <- addresses, start <= p, p < end]
         starts = start : map (offset 4) inside
         ends = inside ++ [end]
         offset n (GuestAddress p) = GuestAddress (p + n)
+
+-- | The carrier bytes between entry words, in address order.
+runs :: DomainMap -> [Extent]
+runs = map snd . groupedRuns
 
 totalRunBytes :: DomainMap -> Int
 totalRunBytes = sum . map extentBytes . runs

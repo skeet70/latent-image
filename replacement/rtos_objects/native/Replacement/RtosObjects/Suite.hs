@@ -1,28 +1,36 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.RtosObjects.Suite
-  ( Image (..), Payload (..), FamilyRun (..), extents, runFamily ) where
+  ( Image (..), AggregatePayload (..), Payload (..), FamilyRun (..), extents, retainedStock, runFamily ) where
 
 import Control.Monad (forM, unless)
-import Data.Bits ((.&.), (.|.), shiftL)
+import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import qualified Data.ByteString as B
 import Data.List (isPrefixOf, nub, sort)
 import qualified Data.Map.Strict as M
-import Data.Word (Word32, Word8)
-import Emulation.CachedNativeBatch (BatchReuse, cachedObservedBatch)
+import Data.Word (Word32, Word8, Word64)
+import Emulation.CachedNativeBatch (BatchReuse, ResultPolicy (..), cachedObservedBatchWith)
+import Emulation.Judge (StockEvidence (..), evidenceAt)
 import Emulation.NativeCase (CaseId (..), caseIdText)
 import qualified Emulation.NativeObservation as N
-import Emulation.NativeObservation (Barrier (..), KernelObservation (..), NativeObservation (..), Ordered (..), RegionId (..), Register (..), RunnerStatus (..), Write (..), WriteValue (..))
-import Emulation.OwnedCase (CaseOutcome (..), CaseSpec (..), KernelCase (..), Permission (..), assemble, caseOutcome, mkRegion, plainLimit, readWordAt, word32le, writeBatch)
+import Emulation.NativeObservation (Barrier (..), InstructionCount (..), KernelObservation (..), NativeObservation (..), Ordered (..), RegionId (..), Register (..), RunnerStatus (..), Write (..), WriteValue (..))
+import Emulation.OwnedCase (CaseOutcome (..), CaseSpec (..), InstructionLimit (..), KernelCase (..), Permission (..), assemble, caseOutcome, mkRegion, mkStackContext, plainLimit, readWordAt, word32le, writeBatch)
 import Replacement.RtosObjects.Layout hiding (record)
 import Replacement.RtosOwnFirst.Regions (Domain (..), GuestAddress (..), domainLabel)
 import qualified Replacement.RtosOwnFirst.Regions as Regions
 import qualified Replacement.RtosPlatform.Aggregate as Agg
-import System.FilePath ((</>))
+import System.FilePath ((</>), takeDirectory)
 
 newtype Slot = Slot Word32 deriving (Eq, Show)
-data Family = SetFlag | Send deriving (Eq, Show)
-data Call = ObjectService Family Domain | OwnerRelease Domain deriving (Eq, Show)
-data Invocation = TaskInvocation | HandlerCallback deriving (Eq, Show)
+data Family = SetFlag | SetHandler | Clear | Wait | Poll | TimedWait | Create | Delete | Send deriving (Eq, Show)
+data Helper = WaitRelease Domain | WaitBlock Domain | WaitBlockTimed Domain | Check Domain deriving (Eq, Show)
+data Direct = Receive Domain | TimedReceive Domain deriving (Eq, Show)
+data Call
+  = ObjectService Family Domain
+  | OwnerRelease Domain
+  | HelperEntry Helper
+  | DirectEntry Direct
+  deriving (Eq, Show)
+data Invocation = TaskInvocation | HandlerCallback | HandlerContext deriving (Eq, Show)
 data Boundary = CallerReturn | TaskArrival deriving (Eq, Show)
 data WakeOutcome = NoWaiter | Unsatisfied Domain | Released Domain deriving (Eq, Show)
 data ObservationRole = StockObservation | OwnedObservation deriving Eq
@@ -40,21 +48,43 @@ data Case = Case
   , caseExpect :: [Expect]
   , caseTimer :: Maybe GuestAddress
   , caseTimerIndex :: Maybe GuestAddress
+  , caseStackArguments :: [Word32]
+  , caseWaker :: Maybe Waker
+  , caseOwnedExpect :: [Expect]
+  , caseStockBudget :: Maybe Word32
   }
 
+-- | The task the blocking wait hands control to: it calls one stock or owned service on the
+-- blocked waiter and then re-enters the dispatcher, which resumes the caller.
+data WakerTarget = WakerSet | WakerTick Int | WakerDelete deriving (Eq, Show)
+data Waker = Waker { wakerTarget :: WakerTarget, wakerArguments :: [(Register, Word32)] }
+
 data Image = Image { imageBase :: Word32, imageBytes :: B.ByteString }
-data Payload = Standalone Image | Aggregate Agg.AggregateImage [Agg.AggregateSymbol] [Agg.SectionPlacement] [Regions.Extent]
+
+data AggregatePayload = AggregatePayload
+  { aggregateImage :: Agg.AggregateImage
+  , aggregateSymbols :: [Agg.AggregateSymbol]
+  , aggregatePlacements :: [Agg.SectionPlacement]
+  , aggregateCarriers :: [Regions.Extent]
+  , aggregateFill :: Word32
+  }
+
+data Payload = Standalone Image | Aggregate AggregatePayload
 
 isAggregate :: Payload -> Bool
-isAggregate (Aggregate _ _ _ _) = True
+isAggregate (Aggregate _) = True
 isAggregate _ = False
 data Page = Page RegionId GuestAddress Int Permission B.ByteString
 
 data FamilyRun = FamilyRun
   { familyDomain :: Domain
   , familyCases :: [(String, Either String [String])]
+  , familyGuards :: [(String, Either String [String])]
   , familyMatches :: Int
   , familyReuse :: (BatchReuse, BatchReuse)
+  , familyControls :: [(String, Bool)]
+  , familyStockInstructions :: [(String, Word64)]
+  , familyEvidence :: [(String, (Word32, Word32, Int))]
   }
 
 wireAddress :: GuestAddress -> N.GuestAddress
@@ -89,6 +119,23 @@ globalLock = 0x400c0804
 timerToken :: GuestAddress
 timerToken = GuestAddress (receiptAddress + 0x40)
 
+-- | The synthetic waker task's own stack, stub window and the two mask words its stub records.
+wakerSlot :: Slot
+wakerSlot = Slot 2
+
+wakerPriority, wakerStack, wakerStubBase, maskAddress, dispatchMaskAddress :: Word32
+wakerPriority = 14
+wakerStack = 0x00970000
+wakerStubBase = 0x00959080
+maskAddress = receiptAddress + 0x10
+dispatchMaskAddress = receiptAddress + 0x14
+
+dispatcherEntry, tickEntry :: Domain -> Word32
+dispatcherEntry DomainA = 0x43640
+dispatcherEntry DomainB = 0xd3640
+tickEntry DomainA = 0x44d8c
+tickEntry DomainB = 0xd4d4c
+
 timerStub :: B.ByteString
 timerStub = assemble [0xe3002000, 0xe3402096, 0xe5820000, 0xe5821004, 0xe3a00000, 0xe12fff1e]
 
@@ -102,11 +149,64 @@ trampoline DomainB = 0xd3728
 resumeEntry DomainA = 0x43668
 resumeEntry DomainB = 0xd3668
 
+-- | The stock extent an entered address belongs to, so a stock-side count is inside its function.
+entryExtent :: Domain -> Word32 -> Word32
+entryExtent domain entry = case [size | (address, size) <- extents domain, address <= entry, entry < address + size] of
+  size : _ -> size
+  [] -> 4
+
 entryAddress :: Domain -> Family -> Word32
-entryAddress DomainA SetFlag = 0x4813c
-entryAddress DomainA Send = 0x4aa44
-entryAddress DomainB SetFlag = 0xd80fc
-entryAddress DomainB Send = 0xdaa04
+entryAddress DomainA family = case family of
+  SetFlag -> 0x4813c
+  SetHandler -> 0x4839c
+  Clear -> 0x485c0
+  Wait -> 0x486f8
+  Poll -> 0x489ac
+  TimedWait -> 0x48b30
+  Create -> 0x4d39c
+  Delete -> 0x4d434
+  Send -> 0x4aa44
+entryAddress DomainB family = case family of
+  SetFlag -> 0xd80fc
+  SetHandler -> 0xd835c
+  Clear -> 0xd8580
+  Wait -> 0xd86b8
+  Poll -> 0xd896c
+  TimedWait -> 0xd8af0
+  Create -> 0xdd360
+  Delete -> 0xdd3f8
+  Send -> 0xdaa04
+
+helperEntry :: Domain -> Helper -> Word32
+helperEntry DomainA helper = case helper of
+  WaitRelease _ -> 0x44744
+  WaitBlock _ -> 0x44800
+  WaitBlockTimed _ -> 0x448e4
+  Check _ -> 0x480cc
+helperEntry DomainB helper = case helper of
+  WaitRelease _ -> 0xd4704
+  WaitBlock _ -> 0xd47c0
+  WaitBlockTimed _ -> 0xd48a4
+  Check _ -> 0xd808c
+
+directEntry :: Domain -> Direct -> Word32
+directEntry DomainA direct = case direct of
+  Receive _ -> 0x4ad48
+  TimedReceive _ -> 0x4b0e4
+directEntry DomainB direct = case direct of
+  Receive _ -> 0xdad08
+  TimedReceive _ -> 0xdb0a4
+
+directDomain :: Direct -> Domain
+directDomain (Receive domain) = domain
+directDomain (TimedReceive domain) = domain
+
+callEntry :: Domain -> Call -> Word32
+callEntry executing call = case call of
+  ObjectService family _ -> entryAddress executing family
+  OwnerRelease _ -> releaseEntry executing
+  HelperEntry helper -> helperEntry executing helper
+  DirectEntry direct -> directEntry executing direct
 
 lockEntries :: Domain -> (Word32, Word32)
 lockEntries DomainA = (0x439d8, 0x43a14)
@@ -122,19 +222,29 @@ extents DomainA =
   , (0x43728, 0x34), (0x4375c, 0x48), (0x437a4, 0x38), (0x437fc, 0x14)
   , (0x439d8, 0x3c), (0x43a14, 0x28), (0x43c48, 0x5c), (0x43ca4, 0x7c)
   , (0x43d20, 0xb0), (0x43dd0, 0x48), (0x43f70, 0x2c), (0x44018, 0x2c)
-  , (0x44044, 0xf0), (0x44134, 0x80), (0x44568, 0xcc), (0x4813c, 0x260), (0x4aa44, 0x304)
+  , (0x44044, 0xf0), (0x44134, 0x80), (0x44568, 0xcc), (0x44744, 0xbc)
+  , (0x44800, 0xe4), (0x448e4, 0xdc), (0x480cc, 0x70), (0x4813c, 0x260)
+  , (0x4839c, 0x224), (0x485c0, 0x138), (0x486f8, 0x2b4), (0x489ac, 0x184)
+  , (0x48b30, 0x308), (0x4aa44, 0x304), (0x4ad48, 0x254), (0x4af9c, 0x148)
+  , (0x4b0e4, 0x2a8), (0x4d39c, 0x98), (0x4d434, 0x68), (0x4d5bc, 0x98)
+  , (0x4d654, 0x70)
   ]
 extents DomainB =
   [ (0xd0b00, 0x24), (0xd3640, 0x28), (0xd3668, 0x20), (0xd3688, 0xa0)
   , (0xd3728, 0x34), (0xd375c, 0x48), (0xd37a4, 0x38), (0xd37fc, 0x14)
   , (0xd398c, 0x3c), (0xd39c8, 0x28), (0xd3c04, 0x5c), (0xd3c60, 0x7c)
   , (0xd3cdc, 0xb0), (0xd3d8c, 0x48), (0xd3f2c, 0x2c), (0xd3fd4, 0x30)
-  , (0xd4004, 0xf0), (0xd40f4, 0x80), (0xd4528, 0xcc), (0xd80fc, 0x260), (0xdaa04, 0x304)
+  , (0xd4004, 0xf0), (0xd40f4, 0x80), (0xd4528, 0xcc), (0xd4704, 0xbc)
+  , (0xd47c0, 0xe4), (0xd48a4, 0xdc), (0xd808c, 0x70), (0xd80fc, 0x260)
+  , (0xd835c, 0x224), (0xd8580, 0x138), (0xd86b8, 0x2b4), (0xd896c, 0x184)
+  , (0xd8af0, 0x308), (0xdaa04, 0x304), (0xdad08, 0x254), (0xdaf5c, 0x148)
+  , (0xdb0a4, 0x2a8), (0xdd360, 0x98), (0xdd3f8, 0x68), (0xdd580, 0x98)
+  , (0xdd618, 0x70)
   ]
 
 retained :: Domain -> [(Word32, Word32)]
-retained DomainA = [(0x480cc, 0x70), (0x4252c, 0x28), (0x433e4, 0x60), (0x43444, 0x60)]
-retained DomainB = [(0xd808c, 0x70), (0xd252c, 0x28), (0xd33e4, 0x60), (0xd3444, 0x60)]
+retained DomainA = [(0x4252c, 0x28), (0x433e4, 0x60), (0x43444, 0x60), (0x42560, 0x68), (0x446fc, 0x48), (0x44c60, 0x48), (0x444e4, 0x84), (0x4da9c, 0x44), (0x44318, 0x1cc), (0x44d8c, 0x1a0)]
+retained DomainB = [(0xd252c, 0x28), (0xd33e4, 0x60), (0xd3444, 0x60), (0xd2560, 0x68), (0xd46bc, 0x48), (0xd4c20, 0x48), (0xd44a4, 0x84), (0xdda5c, 0x44), (0xd42d8, 0x1cc), (0xd4d4c, 0x1a0)]
 
 recordAddress :: Facts -> Domain -> Domain -> Word32
 recordAddress facts executing described = case described of
@@ -148,9 +258,6 @@ definitionAddress facts domain slot = definitionBase + (index * factsTaskSlots f
 taskAt :: Facts -> Domain -> Slot -> Word32
 taskAt facts domain = task facts domain . slotWord
 
-threadValue :: Domain -> Slot -> Word32
-threadValue domain slot = ((if domain == DomainA then 1 else 2) `shiftL` 16) .|. slotWord slot
-
 packedState :: Word8 -> Word32 -> Word32
 packedState state priority = fromIntegral state .|. (priority `shiftL` 8)
 
@@ -159,23 +266,75 @@ poke address value = (GuestAddress address, value)
 
 cases :: Facts -> Domain -> [Case]
 cases facts executing =
-  [ service "set-no-waiter" SetFlag executing NoWaiter CallerReturn [] [Result 0, eq patternCell 1]
-  , service "set-satisfied" SetFlag executing (Released executing) TaskArrival (flagWaiter executing executing 1) [eq reportCell 1, ready executing]
-  , service "set-unsatisfied" SetFlag executing (Unsatisfied executing) CallerReturn (flagWaiter executing executing 2) [Result 0, eq patternCell 1, state executing queued]
-  , service "set-clear-on-match" SetFlag executing (Released executing) TaskArrival (flagWaiter executing executing 1 ++ [poke (flag + factsFlagConfigAttributes facts) (factsFlagClearOnMatch facts)]) [eq patternCell 0, eq reportCell 1]
-  , service "set-waiter-peer" SetFlag executing (Released remote) CallerReturn (flagWaiter remote executing 1)
+  [ service "set-no-waiter" SetFlag executing NoWaiter CallerReturn [(R1, 1)] [] [Result 0, eq patternCell 1]
+  , service "set-satisfied" SetFlag executing (Released executing) TaskArrival [(R1, 1)] (flagWaiter executing executing 1) [eq reportCell 1, ready executing]
+  , service "set-unsatisfied" SetFlag executing (Unsatisfied executing) CallerReturn [(R1, 1)] (flagWaiter executing executing 2) [Result 0, eq patternCell 1, state executing queued]
+  , service "set-clear-on-match" SetFlag executing (Released executing) TaskArrival [(R1, 1)] (flagWaiter executing executing 1 ++ [poke (flag + factsFlagConfigAttributes facts) (factsFlagClearOnMatch facts)]) [eq patternCell 0, eq reportCell 1]
+  , service "set-waiter-peer" SetFlag executing (Released remote) CallerReturn [(R1, 1)] (flagWaiter remote executing 1)
       [Result 0, ready remote, eq (dfSelected remoteWords) remoteTask, Equals (bank remote) 0x01000000, Equals (bank executing) 0]
-  , service "set-object-peer" SetFlag remote (Released executing) TaskArrival (flagWaiter executing remote 1) [ready executing, eq (dfSelected ownWords) localTask, Equals (bank remote) 0, Equals (bank executing) 0]
-  , withTimer (service "set-timer-cancel" SetFlag executing (Released executing) TaskArrival (flagWaiter executing executing 1) [ready executing])
-  , service "send-blocked" Send executing (Released executing) TaskArrival (mailWaiter executing ++ [poke message sentinel]) [eq mailResult message, eq message sentinel]
-  , service "send-empty-fifo" Send executing NoWaiter CallerReturn [poke message sentinel] [Result 0, eq (mailControl + factsMailboxControlHead facts) message, eq (mailControl + factsMailboxControlTail facts) message, eq message 0]
-  , service "send-priority-equal" Send executing NoWaiter CallerReturn
+  , service "set-object-peer" SetFlag remote (Released executing) TaskArrival [(R1, 1)] (flagWaiter executing remote 1) [ready executing, eq (dfSelected ownWords) localTask, Equals (bank remote) 0, Equals (bank executing) 0]
+  , withTimer (service "set-timer-cancel" SetFlag executing (Released executing) TaskArrival [(R1, 1)] (flagWaiter executing executing 1) [ready executing])
+  , serviceWith HandlerContext "set-handler-no-waiter" SetHandler executing NoWaiter CallerReturn [(R1, 4)] [] [Result 0, eq patternCell 4, eq (dfReschedule ownWords) 0]
+  , serviceWith HandlerContext "set-handler-satisfied" SetHandler executing (Released executing) CallerReturn [(R1, 1)] (flagWaiter executing executing 1)
+      [Result 0, eq patternCell 1, eq reportCell 1, ready executing, eq (dfReschedule ownWords) 1]
+  , service "clear-keep" Clear executing NoWaiter CallerReturn [(R1, 0x0f)] [poke patternCell 0xff] [Result 0, eq patternCell 0x0f]
+  , service "clear-none" Clear executing NoWaiter CallerReturn [(R1, 0)] [poke patternCell 0xff] [Result 0, eq patternCell 0]
+  , service "wait-all-match" Wait executing NoWaiter CallerReturn [(R1, 0x11), (R2, 0), (R3, outputCell)]
+      [poke patternCell 0x33] [Result 0, eq outputCell 0x33, eq patternCell 0x33]
+  , service "wait-any-match" Wait executing NoWaiter CallerReturn [(R1, 0x10), (R2, 1), (R3, outputCell)]
+      [poke patternCell 0x33] [Result 0, eq outputCell 0x33]
+  , service "poll-match" Poll executing NoWaiter CallerReturn [(R1, 0x11), (R2, 0), (R3, outputCell)]
+      [poke patternCell 0x33] [Result 0, eq outputCell 0x33]
+  , service "poll-timeout" Poll executing NoWaiter CallerReturn [(R1, 0x44), (R2, 0), (R3, outputCell)]
+      [poke patternCell 0x33] [Result 0xffffffce, eq outputCell 0, eq patternCell 0x33]
+  , service "poll-second-waiter" Poll executing NoWaiter CallerReturn [(R1, 0x11), (R2, 0), (R3, outputCell)]
+      (flagWaiter executing executing 1) [Result 0xffffffe4, eq outputCell 0]
+  , withStack [100] (service "timed-wait-match" TimedWait executing NoWaiter CallerReturn [(R1, 0x11), (R2, 0), (R3, outputCell)]
+      [poke patternCell 0x33] [Result 0, eq outputCell 0x33])
+  , withStack [0] (service "timed-wait-poll" TimedWait executing NoWaiter CallerReturn [(R1, 0x44), (R2, 0), (R3, outputCell)]
+      [poke patternCell 0x33] [Result 0xffffffce, eq outputCell 0, eq patternCell 0x33])
+  , service "wait-blocks" Wait executing NoWaiter TaskArrival [(R1, 0x44), (R2, 0), (R3, outputCell)]
+      [poke patternCell 0x33] blockChecks
+  , withStack [50] (service "timed-wait-arms" TimedWait executing NoWaiter TaskArrival [(R1, 0x44), (R2, 0), (R3, outputCell)]
+      [poke patternCell 0x33] (filter (not . isResultZero) blockChecks ++
+        [ eq (blockWait + factsWaitBlockResult facts) runningTimer
+        , eq runningTimer 1, eq (runningTimer + 4) timeoutCallback, eq (runningTimer + 8) runningTask
+        , eq (dfTimerCount ownWords) 1, eq (dfTimerHeap ownWords + 4) runningTimer
+        ]))
+  , resumed "wait-resume-set" Wait 0 (Waker WakerSet [(R0, flagHandle), (R1, 0x11)])
+      [ eq (blockWait + factsWaitBlockResult facts) 0, eq outputCell 0x11, Result 0 ]
+  , (resumed "timed-wait-resume-tick" TimedWait 5 (Waker (WakerTick 2) [])
+      [ eq (blockWait + factsWaitBlockResult facts) 0xffffffce, eq outputCell 0, Result 0xffffffce
+      , eq (dfTimerCount ownWords) 0 ])
+      { caseOwnedExpect = [eq (dfFlagTimers ownWords) 0] }
+  , (resumed "wait-resume-delete" Wait 0 (Waker WakerDelete [(R0, flagHandle)])
+      [])
+      { caseOwnedExpect =
+          [ eq (blockWait + factsWaitBlockResult facts) 0xffffffcf, eq outputCell 0, Result 0xffffffcf
+          , byte (runningTask + factsTaskState facts) (factsStateReady facts)
+          , eq controlQueue controlQueue, eq (controlQueue + factsWaitQueuePrev facts) controlQueue ]
+      , caseStockBudget = Just 20000
+      }
+  , service "create-fresh" Create executing NoWaiter CallerReturn [(R1, requestPointer)]
+      [poke (flag + factsFlagConfigExists facts) 0, poke requestPointer 0, poke (requestPointer + 4) 0x5a]
+      [Result 0, eq (flag + factsFlagConfigExists facts) 1, eq (flag + factsFlagConfigAttributes facts) 0
+      , eq (flag + factsFlagConfigInitial facts) 0x5a, eq patternCell 0x5a]
+  , service "create-existing" Create executing NoWaiter CallerReturn [(R1, requestPointer)]
+      [poke requestPointer 0, poke (requestPointer + 4) 0x5a]
+      [Result 0xffffffd7, eq (flag + factsFlagConfigExists facts) 1, eq (flag + factsFlagConfigInitial facts) 0]
+  , service "delete-idle" Delete executing NoWaiter CallerReturn [] []
+      [Result 0, eq (flag + factsFlagConfigExists facts) 0, eq (flag + factsFlagConfigAttributes facts) 0
+      , eq (flag + factsFlagConfigInitial facts) 0, eq patternCell 0
+      , eq controlQueue controlQueue, eq (controlQueue + factsWaitQueuePrev facts) controlQueue]
+  , service "send-blocked" Send executing (Released executing) TaskArrival [(R1, message)] (mailWaiter executing ++ [poke message sentinel]) [eq mailResult message, eq message sentinel]
+  , service "send-empty-fifo" Send executing NoWaiter CallerReturn [(R1, message)] [poke message sentinel] [Result 0, eq (mailControl + factsMailboxControlHead facts) message, eq (mailControl + factsMailboxControlTail facts) message, eq message 0]
+  , service "send-priority-equal" Send executing NoWaiter CallerReturn [(R1, message)]
       [ poke (mailbox + factsMailboxConfigAttributes facts) (factsMailboxMessagePriority facts)
       , poke (mailControl + factsMailboxControlHead facts) oldMessage
       , poke (mailControl + factsMailboxControlTail facts) oldMessage
       , poke oldMessage 0, poke (oldMessage + 4) 5, poke message sentinel, poke (message + 4) 5
       ] [Result 0, eq oldMessage message, eq message 0, eq (mailControl + factsMailboxControlTail facts) oldMessage]
-  , service "send-waiter-peer" Send executing (Released remote) CallerReturn (mailWaiter remote) [Result 0, ready remote, eq (mailboxWait facts remote 2 + factsMailboxWaitMessage facts) message, Equals (bank remote) 0x01000000, Equals (bank executing) 0]
+  , service "send-waiter-peer" Send executing (Released remote) CallerReturn [(R1, message)] (mailWaiter remote) [Result 0, ready remote, eq (mailboxWait facts remote 2 + factsMailboxWaitMessage facts) message, Equals (bank remote) 0x01000000, Equals (bank executing) 0]
   , release "release-plain-insert" executing TaskInvocation [] [Result 1, ready executing]
   , release "release-terminate-reset" executing TaskInvocation [poke (localTask + factsTaskTerminatePending facts) 1] [Result 0, state executing (factsStateDormant facts), eq (localTask + factsTaskContextDiscarded facts) 1]
   , release "release-terminate-prepare" executing TaskInvocation
@@ -188,8 +347,46 @@ cases facts executing =
   , release "release-owner-peer" remote TaskInvocation [] [Result 1, ready remote, eq (dfSelected remoteWords) remoteTask]
   , release "release-plain-insert-handler" executing HandlerCallback [] [Result 1, ready executing]
   , withTimer (release "release-timer-handler" executing HandlerCallback [] [Result 1, ready executing])
-  , service "set-satisfied-no-dispatch" SetFlag executing (Released executing) CallerReturn (flagWaiter executing executing 1 ++ noDispatch) [Result 0, ready executing, eq reportCell 1]
-  , service "send-blocked-no-dispatch" Send executing (Released executing) CallerReturn (mailWaiter executing ++ [poke message sentinel] ++ noDispatch) [Result 0, ready executing, eq mailResult message, eq message sentinel]
+  , service "set-satisfied-no-dispatch" SetFlag executing (Released executing) CallerReturn [(R1, 1)] (flagWaiter executing executing 1 ++ noDispatch) [Result 0, ready executing, eq reportCell 1]
+  , service "send-blocked-no-dispatch" Send executing (Released executing) CallerReturn [(R1, message)] (mailWaiter executing ++ [poke message sentinel] ++ noDispatch) [Result 0, ready executing, eq mailResult message, eq message sentinel]
+  , helper "helper-release-queued" (HelperEntry (WaitRelease executing)) CallerReturn [(R1, localTask)] (flagWaiter executing executing 1)
+      [Result 1, eq waitCell 0xffffffcf, ready executing, eq controlQueue controlQueue, eq (controlQueue + factsWaitQueuePrev facts) controlQueue]
+  , helper "helper-release-unqueued" (HelperEntry (WaitRelease executing)) CallerReturn [(R1, localTask)]
+      (flagWaiter executing executing 1 ++ [poke (localTask + factsTaskState facts) (packedState (factsStateWait facts) 3)])
+      [Result 1, eq waitCell 0xffffffcf, ready executing, eq controlQueue localTask, eq (controlQueue + factsWaitQueuePrev facts) localTask]
+  , helper "helper-block" (HelperEntry (WaitBlock executing)) CallerReturn
+      [(R1, controlQueue), (R2, blockWait)] []
+      [ eq (blockWait + factsWaitBlockResult facts) 0, eq (blockWait + factsWaitBlockQueue facts) controlQueue
+      , eq (blockWait + factsWaitBlockOwner facts) ownerWord, eq (runningTask + factsTaskWait facts) blockWait
+      , byte (runningTask + factsTaskState facts) (factsStateWait facts .|. factsStateObjectQueued facts .|. factsStateOwnerLockQueued facts)
+      , eq controlQueue runningTask, eq (controlQueue + factsWaitQueuePrev facts) runningTask
+      , eq (runningTask + factsTaskNext facts) controlQueue, eq (runningTask + factsTaskPrev facts) controlQueue]
+  , withStack [0] (helper "helper-block-timed" (HelperEntry (WaitBlockTimed executing)) CallerReturn
+      [(R1, controlQueue), (R2, blockWait), (R3, mailTimer1)] []
+      [ eq (blockWait + factsWaitBlockResult facts) 0, eq (blockWait + factsWaitBlockQueue facts) controlQueue
+      , eq (blockWait + factsWaitBlockOwner facts) ownerWord, eq (runningTask + factsTaskWait facts) blockWait
+      , eq controlQueue runningTask, eq (dfTimerCount ownWords) 0])
+  , helper "helper-check-match" (HelperEntry (Check executing)) CallerReturn [(R1, 0x11), (R2, 0), (R3, outputCell)]
+      [poke patternCell 0x33] [Result 1, eq outputCell 0x33, eq patternCell 0x33]
+  , helper "helper-check-miss" (HelperEntry (Check executing)) CallerReturn [(R1, 0x44), (R2, 0), (R3, outputCell)]
+      [poke patternCell 0x33] [Result 0, eq outputCell 0, eq patternCell 0x33]
+  , helper "helper-check-clear-on-match" (HelperEntry (Check executing)) CallerReturn [(R1, 0x11), (R2, 1), (R3, outputCell)]
+      [poke patternCell 0x33, poke (flag + factsFlagConfigAttributes facts) (factsFlagClearOnMatch facts)]
+      [Result 1, eq outputCell 0x33, eq patternCell 0]
+  , helper "mailbox-receive-stock" (DirectEntry (Receive executing)) TaskArrival [(R1, outputCell)]
+      [poke (runningDefinition + 0x20) 1]
+      [ eq (mailWait1 + factsWaitBlockResult facts) 0, eq (mailWait1 + factsWaitBlockQueue facts) mailControl
+      , eq (mailWait1 + factsWaitBlockOwner facts) ownerWord, eq (runningTask + factsTaskWait facts) mailWait1
+      , byte (runningTask + factsTaskState facts) (factsStateWait facts .|. factsStateObjectQueued facts .|. factsStateOwnerLockQueued facts)
+      , eq mailControl runningTask, eq (mailControl + factsWaitQueuePrev facts) runningTask
+      , eq outputCell 0, eq (dfSelected ownWords) (taskAt facts executing idleSlot) ]
+  , helper "mailbox-timed-receive-stock" (DirectEntry (TimedReceive executing)) TaskArrival [(R1, outputCell), (R2, 50)]
+      [poke (runningDefinition + 0x20) 1]
+      [ eq (mailWait1 + factsWaitBlockResult facts) mailTimer1, eq (mailWait1 + factsWaitBlockQueue facts) mailControl
+      , eq (mailWait1 + factsWaitBlockOwner facts) ownerWord
+      , byte (runningTask + factsTaskState facts) (factsStateWait facts .|. factsStateObjectQueued facts .|. factsStateOwnerLockQueued facts)
+      , eq mailControl runningTask, eq (dfTimerCount ownWords) 1, eq (mailTimer1 + 4) timeoutCallback
+      , eq (mailTimer1 + 8) runningTask, eq outputCell 0 ]
   ]
   where
     ownWords = domainFacts facts executing
@@ -199,10 +396,20 @@ cases facts executing =
     remoteTask = taskAt facts remote waiterSlot
     flag = flagConfig facts executing 1
     patternCell = flagControl facts executing 1 + factsFlagControlPattern facts
+    controlQueue = flagControl facts executing 1
     reportCell = flagWait facts executing 2 + factsFlagWaitResult facts
     mailbox = mailboxConfig facts executing 1
     mailControl = mailboxControl facts executing 1
     mailResult = mailboxWait facts executing 2 + factsMailboxWaitMessage facts
+    mailWait1 = mailboxWait facts executing 1
+    mailTimer1 = dfMailboxTimers ownWords
+    timeoutCallback = case executing of DomainA -> 0x44318; DomainB -> 0xd42d8
+    runningTask = taskAt facts executing runningSlot
+    runningDefinition = definitionAddress facts executing runningSlot
+    blockWait = flagWait facts executing 1
+    ownerWord = dfId ownWords
+    requestPointer = 0x00957400
+    outputCell = 0x40000008
     message = 0x40000000
     oldMessage = message + 8
     sentinel = 0x5e4d1e00
@@ -212,10 +419,33 @@ cases facts executing =
     byte address value = ByteEquals (GuestAddress address) value
     state owner value = byte (taskAt facts owner waiterSlot + factsTaskState facts) value
     ready owner = state owner (factsStateReady facts)
-    service name family objectDomain outcome boundary words' checks =
-      Case (CaseId name) (ObjectService family objectDomain) TaskInvocation outcome [(R1, if family == SetFlag then 1 else message)] words' boundary checks Nothing Nothing
+    runningTimer = dfFlagTimers ownWords
+    flagHandle = (ownerWord `shiftL` 16) .|. 1
+    isResultZero (Equals (GuestAddress address) 0) = address == blockWait + factsWaitBlockResult facts
+    isResultZero _ = False
+    blockChecks =
+      [ eq (blockWait + factsWaitBlockResult facts) 0, eq (blockWait + factsWaitBlockQueue facts) controlQueue
+      , eq (blockWait + factsWaitBlockOwner facts) ownerWord, eq (runningTask + factsTaskWait facts) blockWait
+      , byte (runningTask + factsTaskState facts) (factsStateWait facts .|. factsStateObjectQueued facts .|. factsStateOwnerLockQueued facts)
+      , eq controlQueue runningTask, eq (controlQueue + factsWaitQueuePrev facts) runningTask
+      , eq (runningTask + factsTaskNext facts) controlQueue, eq (runningTask + factsTaskPrev facts) controlQueue
+      ]
+    resumed name family timeout waker checks =
+      (serviceWith TaskInvocation name family executing NoWaiter CallerReturn
+        [(R1, 0x11), (R2, 0), (R3, outputCell)] [poke patternCell 0] checks)
+        { caseBoundary = CallerReturn
+        , caseWaker = Just waker
+        , caseStackArguments = [timeout]
+        }
+    service = serviceWith TaskInvocation
+    serviceWith invocation name family objectDomain outcome boundary args words' checks =
+      Case (CaseId name) (ObjectService family objectDomain) invocation outcome args words' boundary checks Nothing Nothing [] Nothing [] Nothing
+    helper name call boundary args words' checks =
+      Case (CaseId name) call TaskInvocation (Released executing) args (helperWords call ++ words') boundary checks Nothing Nothing [] Nothing [] Nothing
+    helperWords (HelperEntry _) = [poke (dfSchedulerLock ownWords) 1, poke (dfObjectLock ownWords) 1]
+    helperWords _ = []
     release name owner invocation words' checks =
-      Case (CaseId name) (OwnerRelease owner) invocation (Released owner) [(R1, taskAt facts owner waiterSlot)] (releaseWords owner ++ words') CallerReturn checks Nothing Nothing
+      Case (CaseId name) (OwnerRelease owner) invocation (Released owner) [(R1, taskAt facts owner waiterSlot)] (releaseWords owner ++ words') CallerReturn checks Nothing Nothing [] Nothing [] Nothing
     flagWaiter owner objectDomain wanted =
       let queue = flagControl facts objectDomain 1
           wait = flagWait facts owner 2
@@ -238,6 +468,8 @@ cases facts executing =
           , poke (wait + factsWaitBlockResult facts) 0, poke (wait + factsWaitBlockOwner facts) (recordAddress facts owner owner)
           , poke (dfSchedulerLock words') 1, poke (dfObjectLock words') 1
           ]
+    withStack values one = one { caseStackArguments = values ++ caseStackArguments one }
+    waitCell = flagWait facts executing 2 + factsWaitBlockResult facts
     withTimer one =
       let owner = case caseWake one of Released domain -> domain; _ -> error "timer case has no waiter"
           wait = flagWait facts owner 2
@@ -262,12 +494,13 @@ bindTimer facts _executing payload one
           }
   | otherwise = one
 
-layoutWords :: Facts -> [(GuestAddress, Word32)]
-layoutWords facts =
+layoutWords :: Facts -> Case -> [(GuestAddress, Word32)]
+layoutWords facts one =
   concat [recordPokes block described | block <- domains, described <- domains]
     ++ concatMap taskPokes domains ++ concatMap objectPokes domains ++ concatMap readyPokes domains
   where
     domains = [DomainA, DomainB]
+    waker = case caseWaker one of Just _ -> True; Nothing -> False
     recordPokes block described =
       let record = recordAddress facts block described
           words' = domainFacts facts described
@@ -295,15 +528,17 @@ layoutWords facts =
     taskPokes domain = concat
       [ let address = taskAt facts domain slot
             definition = definitionAddress facts domain slot
-            priority = if slot == runningSlot then 10 else if slot == idleSlot then 15 else if slot == waiterSlot then 3 else slotWord slot `mod` factsPriorities facts
+            isWaker = waker && slot == wakerSlot
+            priority = if slot == runningSlot then 10 else if isWaker then wakerPriority else if slot == idleSlot then 15 else if slot == waiterSlot then 3 else slotWord slot `mod` factsPriorities facts
          in [ poke address address, poke (address + factsTaskPrev facts) address
             , poke (address + factsTaskDefinition facts) definition, poke (address + factsTaskDomain facts) (dfId (domainFacts facts domain))
             , poke (address + factsTaskState facts) (packedState (factsStateDormant facts) priority)
-            , poke (address + factsTaskSavedSp facts) targetStackPointer, poke (address + factsTaskResumePc facts) stopAddress
+            , poke (address + factsTaskSavedSp facts) (if isWaker then wakerStack else targetStackPointer)
+            , poke (address + factsTaskResumePc facts) (if isWaker then wakerStubBase else stopAddress)
             , poke (definition + factsDefinitionPriority facts) priority
             , poke (definition + 4) (0xa5510000 + slotWord slot), poke (definition + 8) stopAddress
             , poke (definition + 0x10) (targetStackPointer - 0x100), poke (definition + 0x14) 0x100
-            , poke (definition + 0x20) (threadValue domain slot)
+            , poke (definition + 0x20) (slotWord slot)
             ]
       | slot <- map Slot [1 .. factsTaskSlots facts]
       ]
@@ -326,7 +561,8 @@ layoutWords facts =
              in [poke headAddress address, poke (headAddress + factsHeadPrev facts) address, poke address headAddress, poke (address + factsTaskPrev facts) headAddress, poke (address + factsTaskState facts) (packedState (factsStateReady facts) priority)]
        in concat [[poke (headAt priority) (headAt priority), poke (headAt priority + factsHeadPrev facts) (headAt priority)] | priority <- [0 .. factsPriorities facts - 1]]
             ++ member runningSlot 10 ++ member idleSlot 15
-            ++ [ poke (dfReadyBitmap words') ((1 `shiftL` 10) .|. (1 `shiftL` 15))
+            ++ concat [member wakerSlot wakerPriority | waker]
+            ++ [ poke (dfReadyBitmap words') ((1 `shiftL` 10) .|. (1 `shiftL` 15) .|. (if waker then 1 `shiftL` fromIntegral wakerPriority else 0))
                , poke (dfRunning words') (taskAt facts domain runningSlot), poke (dfSelected words') (taskAt facts domain runningSlot)
                , poke (dfDispatchEnabled words') 1, poke (dfSchedulerLock words') 0, poke (dfObjectLock words') 0
                , poke (dfCurrentContext words') (recordAddress facts domain domain)
@@ -351,8 +587,14 @@ kernelBounds facts domain = (GuestAddress low, fromIntegral (high - low))
 callerSp :: Case -> Word32
 callerSp one = if caseInvocation one == HandlerCallback then handlerStackPointer else stackPointer
 
-callerBytes :: B.ByteString
-callerBytes = B.concat [word32le (0xca11e500 + value) | value <- [0 .. 15]]
+-- | The caller's own frame, with a fifth argument at its top for the helpers that take one.
+callerBytes :: Case -> B.ByteString
+callerBytes one = B.concat [word32le (word index) | index <- [0 .. 15]]
+  where
+    stack = caseStackArguments one
+    word index
+      | index < length stack = stack !! index
+      | otherwise = 0xca11e500 + fromIntegral index
 
 pages :: Facts -> Case -> [Page]
 pages facts one =
@@ -361,14 +603,16 @@ pages facts one =
   ]
   ++ [ page "definitions" (GuestAddress definitionBase) (fromIntegral (2 * factsTaskSlots facts * definitionStride)) ReadWrite
      , page "messages" (GuestAddress 0x40000000) 16 ReadWrite
+     , page "request" (GuestAddress 0x00957400) 16 ReadWrite
      , page "timer-seam" (GuestAddress receiptAddress) 0x100 ReadWrite
      , page "global-lock" (GuestAddress globalLock) 4 ReadWrite
      , page "stack" (GuestAddress (callerSp one - 0x400)) 0x400 ReadWrite
-     , Page (RegionId "caller-frame") (GuestAddress (callerSp one)) (B.length callerBytes) ReadWrite callerBytes
+     , Page (RegionId "caller-frame") (GuestAddress (callerSp one)) (B.length (callerBytes one)) ReadWrite (callerBytes one)
      , page "target-stack" (GuestAddress (targetStackPointer - 0x100)) 0x100 ReadWrite
      , page "bank-a" (bank DomainA) 4 Device
      , page "bank-b" (bank DomainB) 4 Device
      ]
+     ++ [page "waker-stack" (GuestAddress (wakerStack - 0x400)) 0x400 ReadWrite | case caseWaker one of Just _ -> True; Nothing -> False]
   where page name address size permission = Page (RegionId name) address size permission (B.replicate size 0)
 
 contains :: GuestAddress -> Int -> Page -> Bool
@@ -388,13 +632,17 @@ codeBounds :: Domain -> Payload -> (Word32, Word32)
 codeBounds domain payload =
   let spans = extents domain ++ retained domain ++ case payload of
         Standalone _ -> []
-        Aggregate image _ _ _ -> [(Agg.imageBase image, fromIntegral (B.length (Agg.imageBytes image)))]
+        Aggregate aggregate -> [(Agg.imageBase (aggregateImage aggregate), fromIntegral (B.length (Agg.imageBytes (aggregateImage aggregate))))]
    in (minimum (map fst spans), maximum [address + size | (address, size) <- spans])
 
 codeBytes :: Domain -> ObservationRole -> Image -> Payload -> B.ByteString
 codeBytes domain role loader payload = case payload of
-  Aggregate image _ _ _ | role == OwnedObservation -> install (Agg.imageBase image) (Agg.imageBytes image) original
-  Aggregate _ _ _ _ -> original
+  Aggregate aggregate | role == OwnedObservation ->
+    either error id
+      (Agg.installCarriers base original (aggregateFill aggregate) (aggregateSymbols aggregate)
+        (aggregatePlacements aggregate) (aggregateImage aggregate)
+        [(lo, hi - lo) | Regions.Extent (GuestAddress lo) (GuestAddress hi) <- aggregateCarriers aggregate])
+  Aggregate _ -> original
   Standalone owned -> install (timerEntry domain) timerStub
     (foldl (\current (address, size) -> install address (slice owned address size) current) original (extents domain))
   where
@@ -408,20 +656,33 @@ codeBytes domain role loader payload = case payload of
     original = install low (slice loader low (high - low)) (B.replicate (fromIntegral (top - base)) 0)
     install address bytes current = let offset = fromIntegral (address - base) in B.take offset current <> bytes <> B.drop (offset + B.length bytes) current
 
+-- | Non-carrier extents whose bytes come from the stock loader in the owned role.
+retainedStock :: Domain -> Payload -> [(Word32, Word32)]
+retainedStock domain payload = case payload of
+  Aggregate aggregate ->
+    let allocated = [(lo, hi - lo) | Regions.Extent (GuestAddress lo) (GuestAddress hi) <- aggregateCarriers aggregate]
+        overlaps (lo,size) (at,width) = lo < at + width && at < lo + size
+     in filter (\extent -> not (any (overlaps extent) allocated)) (extents domain ++ retained domain)
+  Standalone _ -> []
+
 functionSpans :: Domain -> ObservationRole -> Payload -> [(Word32, Word32)]
 functionSpans domain role payload = case payload of
-  Aggregate _ symbols placements carriers | role == OwnedObservation ->
-    let allocated = [(lo, hi - lo) | Regions.Extent (GuestAddress lo) (GuestAddress hi) <- carriers]
+  Aggregate aggregate | role == OwnedObservation ->
+    let symbols = aggregateSymbols aggregate
+        placements = aggregatePlacements aggregate
+        allocated = [(lo, hi - lo) | Regions.Extent (GuestAddress lo) (GuestAddress hi) <- aggregateCarriers aggregate]
         overlaps (lo,size) (at,width) = lo < at + width && at < lo + size
         kept = filter (\extent -> not (any (overlaps extent) allocated)) (extents domain ++ retained domain ++ [(releaseEntry domain, 0xcc)])
         sections = [(Agg.placementAddress p, Agg.placementBytes p) | p <- placements, Agg.placementBytes p > 0, Agg.placementSection p == ".text" || ".text." `isPrefixOf` Agg.placementSection p]
         spans = sections ++ [(Agg.symbolAddress s, Agg.symbolSize s) | s <- symbols, Agg.symbolSize s > 0] ++ kept
         cuts = sort (nub (concat [[at, at + size] | (at, size) <- spans]))
      in [(lo, hi - lo) | (lo,hi) <- zip cuts (drop 1 cuts), any (\(at,size) -> at <= lo && hi <= at + size) spans]
-  Aggregate _ _ _ _ ->
+  Aggregate _ ->
     let base = timerEntry domain - 0x1e8
      in extents domain ++ retained domain ++ [(base, 0xc4), (base + 0xc4, 0xdc), (timerEntry domain, 0xe4)]
-  Standalone _ -> extents domain ++ retained domain ++ [(timerEntry domain, fromIntegral (B.length timerStub))]
+  Standalone _ ->
+    let base = timerEntry domain - 0x1e8
+     in extents domain ++ retained domain ++ [(base, 0xc4), (base + 0xc4, 0xdc), (timerEntry domain, fromIntegral (B.length timerStub))]
 
 caseFor :: Facts -> Domain -> ObservationRole -> Image -> Payload -> Case -> CaseSpec
 caseFor facts executing role loader payload one
@@ -429,31 +690,35 @@ caseFor facts executing role loader payload one
   | otherwise = CaseSpec
       { caseId = emittedId executing one
       , caseProvenance = "X-M1 1.50 F2 stock ABI; synthetic task/object state"
-      , caseExclusion = "Private compiler frames are not byte-compared. Dispatch checks selected-task arrival and the live S1 continuation, not the original service or receiver return. Handler callbacks enter SVC, not IRQ mode. Standalone timer receipts prove arguments; aggregate rows execute timer removal."
+      , caseExclusion =
+          "Private compiler frames are not byte-compared. Dispatch checks selected-task arrival and the live S1 continuation, not the original service or receiver return. Handler callbacks enter SVC, not IRQ mode. Standalone timer receipts prove arguments; aggregate rows execute timer removal."
+            ++ case payload of
+              Aggregate _ -> " Extents outside the carrier union execute retained stock loader bytes."
+              Standalone _ -> ""
       , caseEntry = wireAddress (GuestAddress entry)
       , caseExit = wireAddress (GuestAddress exitAddress)
       , caseRegions =
           codeRegions
             ++ [mkRegion ident (wireAddress address) size permission (overlay address background words') | Page ident address size permission background <- dataPages]
-            ++ [mkRegion (RegionId "continuations") (wireAddress (GuestAddress exitAddress)) (fromIntegral (stopAddress - exitAddress + 4)) ReadExecute (B.replicate (fromIntegral (stopAddress - exitAddress + 4)) 0)]
-      , caseFunctions = [(wireAddress (GuestAddress address), size) | (address, size) <- functionSpans executing role payload]
+            ++ [mkRegion (RegionId "continuations") (wireAddress (GuestAddress exitAddress)) (fromIntegral (stopAddress - exitAddress + 4)) ReadExecute (continuationBytes facts executing one)]
+      , caseFunctions =
+          [(wireAddress (GuestAddress address), size) | (address, size) <- functionSpans executing role payload]
+            ++ [(wireAddress (GuestAddress wakerStubBase), stubSize) | Just _ <- [caseWaker one]]
       , caseInitial = initialRegisters facts executing one
-      , caseExpectedStatus = if caseBoundary one == CallerReturn then Returned else StopAddress
-      , caseExpectedRegisters = if caseBoundary one == CallerReturn
-          then (R0, expectedResult one) : [(register, seed register) | register <- [R4 .. R11]] ++ [(Sp, callerSp one)]
-          else [(Pc, stopAddress), (Sp, targetStackPointer)]
-      , caseExpectedMemory = [(RegionId "caller-frame", callerBytes)]
+      , caseExpectedStatus = if caseBudget == Nothing then (if caseBoundary one == CallerReturn then Returned else StopAddress) else InstructionBudget
+      , caseExpectedRegisters = expectedRegisters
+      , caseExpectedMemory = [(RegionId "caller-frame", callerBytes one)]
       , caseIgnoredMemory = []
       , caseCp14Identity = Just (if executing == DomainA then 0x4003 else 0x4004)
-      , caseKernel = Just (KernelCase plainLimit (if caseBoundary one == TaskArrival then Just (wireAddress (GuestAddress stopAddress)) else Nothing) (Just 0x80001234) (Just 0) (Just 0) ignored [])
+      , caseKernel = Just (KernelCase (maybe plainLimit (InstructionLimit . fromIntegral) caseBudget) (if caseBoundary one == TaskArrival then Just (wireAddress (GuestAddress stopAddress)) else Nothing) (Just 0x80001234) (Just 0) (Just 0) ignored stacks)
       }
   where
-    entry = case caseCall one of ObjectService family _ -> entryAddress executing family; OwnerRelease _ -> releaseEntry executing
+    entry = callEntry executing (caseCall one)
     (codeBase, codeTop) = codeBounds executing payload
     installed = codeBytes executing role loader payload
     readonly = case (role, payload) of
-      (OwnedObservation, Aggregate _ _ placements _) ->
-        [(Agg.placementAddress p, Agg.placementAddress p + Agg.placementBytes p) | p <- placements, Agg.placementBytes p > 0, not (Agg.placementSection p == ".text" || ".text." `isPrefixOf` Agg.placementSection p)]
+      (OwnedObservation, Aggregate aggregate) ->
+        [(Agg.placementAddress p, Agg.placementAddress p + Agg.placementBytes p) | p <- aggregatePlacements aggregate, Agg.placementBytes p > 0, not (Agg.placementSection p == ".text" || ".text." `isPrefixOf` Agg.placementSection p)]
       _ -> []
     cuts = sort (nub (codeBase : codeTop : concat [[lo,hi] | (lo,hi) <- readonly]))
     codeRegions =
@@ -462,17 +727,120 @@ caseFor facts executing role loader payload one
         (B.take (fromIntegral (hi-lo)) (B.drop (fromIntegral (lo-codeBase)) installed))
       | (index,(lo,hi)) <- zip [0 :: Int ..] (zip cuts (drop 1 cuts)), hi > lo]
     dataPages = pages facts one
-    words' = layoutWords facts ++ [poke (dfHandlerContext (domainFacts facts executing)) (if caseInvocation one == HandlerCallback then 1 else 0)] ++ caseWords one
+    words' = layoutWords facts one ++ [poke (dfHandlerContext (domainFacts facts executing)) (if caseInvocation one `elem` [HandlerCallback, HandlerContext] then 1 else 0)] ++ caseWords one
     outside = [address | (address, _) <- words', not (any (contains address 4) dataPages)]
-    ignored = if caseBoundary one == CallerReturn then [R1,R2,R3,R12,Lr] else [R0 .. R12] ++ [Lr]
+    caseBudget = case (role, caseStockBudget one) of
+      (StockObservation, Just limit) -> Just limit
+      _ -> Nothing
+    expectedRegisters
+      | caseBudget /= Nothing = [(R0, 0)]
+      | caseBoundary one == CallerReturn =
+          [(R0, value) | Just value <- [expectedResult one]] ++ [(register, seed register) | register <- [R4 .. R11]] ++ [(Sp, callerSp one)]
+      | otherwise = [(Pc, stopAddress), (Sp, targetStackPointer)]
+    ignored
+      | caseBudget /= Nothing = [R0 .. R12] ++ [Lr]
+      | caseBoundary one == CallerReturn = [R1,R2,R3,R12,Lr]
+      | otherwise = [R0 .. R12] ++ [Lr]
+    stacks = case caseWaker one of
+      Nothing -> []
+      Just _ -> map stack [(callerSp one - 0x400, callerSp one), (wakerStack - 0x400, wakerStack)]
+    stack (low, high) = either error id (mkStackContext (N.GuestAddress (fromIntegral low)) (N.GuestAddress (fromIntegral high)))
+
+stubSize :: Word32
+stubSize = 0x80
+
+-- | The caller's continuation window with the waker task's stub, when the case has one.
+continuationBytes :: Facts -> Domain -> Case -> B.ByteString
+continuationBytes facts executing one = case caseWaker one of
+  Nothing -> image
+  Just waker -> installAt wakerStubBase (B.concat (map word32le (stubWords facts executing waker))) image
+  where
+    size = fromIntegral (stopAddress - exitAddress + 4)
+    image = B.replicate size 0
+    installAt address bytes current =
+      let offset = fromIntegral (address - exitAddress)
+       in B.take offset current <> bytes <> B.drop (offset + B.length bytes) current
+
+data StubInstruction = StubWord Word32 | StubBranchLink Word32
+
+-- | The waker runs on its own stack: it records the caller's dispatch CPSR, masks I, calls the
+-- service, restores the driver mask and re-enters the dispatcher, which resumes the caller.
+stubWords :: Facts -> Domain -> Waker -> [Word32]
+stubWords facts executing waker = assembleStub wakerStubBase (prologue ++ arguments ++ calls)
+  where
+    prologue =
+      [ StubWord 0xe10fc000
+      , StubWord (movw 3 (maskAddress .&. 0xffff))
+      , StubWord (movt 3 (maskAddress `shiftR` 16))
+      , StubWord 0xe583c000
+      , StubWord 0xf1080080
+      ]
+        ++ case wakerTarget waker of
+          WakerTick _ ->
+            [ StubWord (movw 3 (handler .&. 0xffff))
+            , StubWord (movt 3 (handler `shiftR` 16))
+            , StubWord 0xe3a00001
+            , StubWord 0xe5830000
+            ]
+          _ -> []
+    handler = dfHandlerContext (domainFacts facts executing)
+    arguments = concatMap argumentWord (wakerArguments waker)
+    argumentWord (register, value) =
+      [ StubWord (movw (registerNumber register) (value .&. 0xffff))
+      , StubWord (movt (registerNumber register) (value `shiftR` 16))
+      ]
+    calls = case wakerTarget waker of
+      WakerTick count -> replicate count (StubBranchLink (tickEntry executing)) ++ handlerTail
+      WakerSet -> [StubBranchLink (entryAddress executing SetFlag)] ++ driverTail
+      WakerDelete -> [StubBranchLink (entryAddress executing Delete)] ++ driverTail
+    handlerTail =
+      [ StubWord (movw 3 (handler .&. 0xffff))
+      , StubWord (movt 3 (handler `shiftR` 16))
+      , StubWord 0xe3a00000
+      , StubWord 0xe5830000
+      ] ++ driverTail
+    driverTail =
+      [ StubWord 0xf10c0080
+      , StubWord 0xe10fc000
+      , StubWord (movw 3 (dispatchMaskAddress .&. 0xffff))
+      , StubWord (movt 3 (dispatchMaskAddress `shiftR` 16))
+      , StubWord 0xe583c000
+      , StubBranchLink (dispatcherEntry executing)
+      , StubWord 0xeafffffe
+      ]
+
+assembleStub :: Word32 -> [StubInstruction] -> [Word32]
+assembleStub base = go base
+  where
+    go _ [] = []
+    go address (StubWord word : rest) = word : go (address + 4) rest
+    go address (StubBranchLink target : rest) =
+      (0xeb000000 .|. (((target - address - 8) `shiftR` 2) .&. 0xffffff)) : go (address + 4) rest
+
+movw :: Word32 -> Word32 -> Word32
+movw register immediate =
+  0xe3000000 .|. ((immediate .&. 0xf000) `shiftL` 4) .|. (register `shiftL` 12) .|. (immediate .&. 0xfff)
+
+movt :: Word32 -> Word32 -> Word32
+movt register immediate =
+  0xe3400000 .|. ((immediate .&. 0xf000) `shiftL` 4) .|. (register `shiftL` 12) .|. (immediate .&. 0xfff)
+
+registerNumber :: Register -> Word32
+registerNumber register = case register of
+  R0 -> 0
+  R1 -> 1
+  R2 -> 2
+  R3 -> 3
+  _ -> error "a waker argument is not in r0-r3"
 
 seed :: Register -> Word32
 seed register = 0xa5a50000 + fromIntegral (fromEnum register)
 
-expectedResult :: Case -> Word32
+expectedResult :: Case -> Maybe Word32
 expectedResult one = case [value | Result value <- caseExpect one] of
-  [value] -> value
-  _ -> error "return case must state one ABI result"
+  [] -> Nothing
+  [value] -> Just value
+  _ -> error "return case states more than one ABI result"
 
 initialRegisters :: Facts -> Domain -> Case -> [(Register, Word32)]
 initialRegisters facts executing one =
@@ -481,6 +849,12 @@ initialRegisters facts executing one =
     value R0 = case caseCall one of
       ObjectService _ owner -> (dfId (domainFacts facts owner) `shiftL` 16) .|. 1
       OwnerRelease owner -> recordAddress facts executing owner
+      HelperEntry helper -> case helper of
+        WaitRelease owner -> recordAddress facts executing owner
+        WaitBlock owner -> dfId (domainFacts facts owner)
+        WaitBlockTimed owner -> dfId (domainFacts facts owner)
+        Check _ -> flagControl facts executing 1
+      DirectEntry direct -> (dfId (domainFacts facts (directDomain direct)) `shiftL` 16) .|. 1
     value register = maybe (seed register) id (lookup register (caseArguments one))
 
 emittedId :: Domain -> Case -> String
@@ -500,26 +874,38 @@ readByte facts one observation address@(GuestAddress raw) = case
 
 compareFamily :: Facts -> Domain -> Payload -> Case -> CaseSpec -> NativeObservation -> NativeObservation -> [String]
 compareFamily facts executing payload one description stock owned =
-  checks StockObservation stock ++ checks OwnedObservation owned ++ memoryDifferences
+  checks StockObservation stock ++ checks OwnedObservation owned ++ roleDifference
   where
     roleName StockObservation = "stock"
     roleName OwnedObservation = "owned"
-    checks role observation = map ((roleName role ++ ": ") ++) (exitChecks observation ++ expectedChecks observation ++ registerChecks observation ++ continuationChecks role observation ++ effectChecks role observation ++ timerIndexErrors facts one role observation)
-    wantedOutcome = if caseBoundary one == CallerReturn then OutcomeReturned else OutcomeStopped (wireAddress (GuestAddress stopAddress))
-    exitChecks observation = ["wrong exit " ++ show (caseOutcome description observation) | caseOutcome description observation /= wantedOutcome]
-    expectedChecks observation = ["missing effect " ++ show expectation | expectation <- caseExpect one, not (holds observation expectation)]
+    checks role observation = map ((roleName role ++ ": ") ++) (exitChecks role observation ++ expectedChecks role observation ++ registerChecks role observation ++ continuationChecks role observation ++ effectChecks role observation ++ timerIndexErrors facts one role observation)
+    budgeted role = case (role, caseStockBudget one) of
+      (StockObservation, Just limit) -> Just limit
+      _ -> Nothing
+    wantedOutcome role observation = case budgeted role of
+      Just limit -> OutcomeNoReturnWithin (InstructionLimit (fromIntegral limit)) (nativeKernel observation >>= observedReserved)
+      Nothing -> if caseBoundary one == CallerReturn then OutcomeReturned else OutcomeStopped (wireAddress (GuestAddress stopAddress))
+    exitChecks role observation = ["wrong exit " ++ show (caseOutcome description observation) | caseOutcome description observation /= wantedOutcome role observation]
+    expectedChecks role observation = ["missing effect " ++ show expectation | expectation <- caseExpect one ++ (if role == OwnedObservation then caseOwnedExpect one else []), not (holds observation expectation)]
     holds observation (Equals address value) = readWord facts one observation address == Just value
     holds observation (ByteEquals address value) = readByte facts one observation address == Just value
     holds observation (Result value) = N.lookupRegister R0 observation == Just value
-    registerChecks observation =
-      ["caller frame changed" | lookup (RegionId "caller-frame") (nativeMemory observation) /= Just callerBytes]
+    registerChecks role observation
+      | budgeted role /= Nothing = ["caller frame changed" | lookup (RegionId "caller-frame") (nativeMemory observation) /= Just (callerBytes one)]
+    registerChecks _ observation =
+      ["caller frame changed" | lookup (RegionId "caller-frame") (nativeMemory observation) /= Just (callerBytes one)]
         ++ ["CPSR control changed" | fmap (.&. 0x1ff) (N.lookupRegister Cpsr observation) /= Just expectedControl]
         ++ if caseBoundary one == CallerReturn
-          then ["caller register " ++ show register ++ " changed" | (register, value) <- [(r, seed r) | r <- [R4 .. R11]] ++ [(Sp, callerSp one)], N.lookupRegister register observation /= Just value]
+          then ["caller register " ++ show register ++ " changed" | (register, value) <- [(r, initial r) | r <- [R4 .. R11]] ++ [(Sp, callerSp one)], N.lookupRegister register observation /= Just value]
           else ["selected-task register " ++ show register ++ " differs" | (register, value) <- [(Sp,targetStackPointer),(Pc,stopAddress)], N.lookupRegister register observation /= Just value]
-            ++ ["selected thread pointer differs" | (nativeKernel observation >>= observedTpidrurw) /= Just (threadValue executing waiterSlot)]
+            ++ ["selected thread pointer differs" | (nativeKernel observation >>= observedTpidrurw) /= selectedThread observation]
             ++ ["selected-task FPEXC differs" | (nativeKernel observation >>= observedFpexc) /= Just 0]
     expectedControl = if caseBoundary one == TaskArrival || caseInvocation one == HandlerCallback then 0x93 else 0x13
+    initial register = maybe (seed register) id (lookup register (caseArguments one))
+    selectedThread observation = do
+      selected <- readWord facts one observation (GuestAddress (dfSelected (domainFacts facts executing)))
+      definition <- readWord facts one observation (GuestAddress (selected + factsTaskDefinition facts))
+      readWord facts one observation (GuestAddress (definition + 0x20))
     continuationChecks role observation
       | caseBoundary one == CallerReturn = []
       | otherwise = case readWord facts one observation (GuestAddress savedSpAddress) of
@@ -531,30 +917,45 @@ compareFamily facts executing payload one description stock owned =
               ++ ["suspended continuation is not in the caller's code" | maybe True (not . inOwnedCode role) (readWord facts one observation (GuestAddress (saved+32)))]
     savedSpAddress = taskAt facts executing runningSlot + factsTaskSavedSp facts
     savedPcAddress = taskAt facts executing runningSlot + factsTaskResumePc facts
-    expectedResume OwnedObservation | Aggregate _ symbols _ _ <- payload =
-      case [Agg.symbolAddress symbol | symbol <- symbols, Agg.symbolName symbol == "xm1_rtos_scheduler_resume", Agg.symbolSize symbol > 0] of
+    expectedResume OwnedObservation | Aggregate aggregate <- payload =
+      case [Agg.symbolAddress symbol | symbol <- aggregateSymbols aggregate, Agg.symbolName symbol == "xm1_rtos_scheduler_resume", Agg.symbolSize symbol > 0] of
         [address] -> Just address
         _ -> Nothing
     expectedResume _ = Just (resumeEntry executing)
     inOwnedCode role address = any (\(base,size) -> base <= address && address < base+size) (functionSpans executing role payload)
-    compared = [ident | Page ident _ _ _ _ <- pages facts one, ident `notElem` map RegionId ["stack","target-stack"]]
+    compared = [ident | Page ident _ _ _ _ <- pages facts one, ident `notElem` map RegionId (["stack","target-stack","waker-stack"] ++ ["timer-seam" | Just _ <- [caseWaker one]])]
     memory observation = M.fromList [(ident, normalizeTimer ident (normalize ident bytes)) | (ident,bytes) <- nativeMemory observation, ident `elem` compared]
     normalize ident bytes
-      | caseBoundary one == TaskArrival && ident == RegionId (if executing == DomainA then "kernel-a" else "kernel-b") =
-          let (GuestAddress base,_) = kernelBounds facts executing
-              offset = fromIntegral (savedSpAddress-base)
-              resumeOffset = fromIntegral (savedPcAddress-base)
+      | caseBoundary one == TaskArrival && ident == region =
+          let offset = offsetOf savedSpAddress
+              resumeOffset = offsetOf savedPcAddress
               withoutSp = B.take offset bytes <> word32le 0 <> B.drop (offset+4) bytes
            in B.take resumeOffset withoutSp <> word32le 0 <> B.drop (resumeOffset+4) withoutSp
+      | Just waker <- caseWaker one, ident == region =
+          -- Declared difference, timer index: see replacement/rtos.md, Declared differences.
+          foldl (\current address -> clear current (offsetOf address)) bytes
+            ([ savedSpAddress, savedPcAddress
+             , taskAt facts executing wakerSlot + factsTaskSavedSp facts
+             , taskAt facts executing wakerSlot + factsTaskResumePc facts
+             ] ++ [dfFlagTimers (domainFacts facts executing) | WakerTick _ <- [wakerTarget waker]])
       | otherwise = bytes
+    region = RegionId (if executing == DomainA then "kernel-a" else "kernel-b")
+    (GuestAddress kernelBase, _) = kernelBounds facts executing
+    offsetOf address = fromIntegral (address - kernelBase)
+    clear bytes offset = B.take offset bytes <> word32le 0 <> B.drop (offset + 4) bytes
     normalizeTimer ident bytes = case caseTimerIndex one of
       Nothing -> bytes
-      Just address -> case [fromIntegral (pointerWord address - pointerWord base) | page@(Page actual base _ _ _) <- pages facts one, ident == actual, contains address 4 page] of
+      Just address -> case [fromIntegral (pointerWord address - pointerWord pageBase) | page@(Page actual pageBase _ _ _) <- pages facts one, ident == actual, contains address 4 page] of
         [offset] -> B.take offset bytes <> word32le 0 <> B.drop (offset+4) bytes
         _ -> bytes
     memoryDifferences =
       ["missing state region " ++ show ident | ident <- compared, M.notMember ident (memory stock) || M.notMember ident (memory owned)]
         ++ ["state region " ++ show ident ++ " differs" | ident <- compared, M.lookup ident (memory stock) /= M.lookup ident (memory owned)]
+    -- A declared difference compares each role with its own expectation; the owned role must then
+    -- differ from the stock expectation, and the two final states are not compared with each other.
+    roleDifference = case caseStockBudget one of
+      Nothing -> memoryDifferences
+      Just _ -> ["the owned role did not differ from the stock expectation" | null (exitChecks StockObservation owned)]
     effectChecks role observation = case nativeKernel observation >>= observedOrder of
       Nothing -> ["ordered provenance is missing or truncated"]
       Just events -> lockChecks events ++ notificationChecks role events ++ timerChecks events
@@ -580,14 +981,21 @@ compareFamily facts executing payload one description stock owned =
       if acquired < released && finalFence == PublishedLock then Just (acquired,released) else Nothing
     lockChecks events = case caseCall one of
       OwnerRelease _ -> []
-      ObjectService _ objectDomain ->
-        let objectLock = GuestAddress (dfObjectLock (domainFacts facts objectDomain))
-            scheduler = case caseWake one of NoWaiter -> Nothing; Unsatisfied owner -> Just owner; Released owner -> Just owner
-            interval = lockInterval events
-         in ["object lock or its release barrier differs" | interval objectLock == Nothing]
-              ++ case scheduler of
+      HelperEntry _ -> []
+      ObjectService family objectDomain
+        | family `elem` [Create, Delete] -> []
+        | otherwise -> objectInterval objectDomain ++ nesting objectDomain
+      DirectEntry direct -> objectInterval (directDomain direct)
+      where
+        objectInterval objectDomain =
+          let objectLock = GuestAddress (dfObjectLock (domainFacts facts objectDomain))
+           in ["object lock or its release barrier differs" | lockInterval events objectLock == Nothing]
+        nesting objectDomain =
+          let objectLock = GuestAddress (dfObjectLock (domainFacts facts objectDomain))
+              scheduler = case caseWake one of NoWaiter -> Nothing; Unsatisfied owner -> Just owner; Released owner -> Just owner
+           in case scheduler of
                 Nothing -> []
-                Just owner -> case (interval objectLock, interval (GuestAddress (dfSchedulerLock (domainFacts facts owner)))) of
+                Just owner -> case (lockInterval events objectLock, lockInterval events (GuestAddress (dfSchedulerLock (domainFacts facts owner)))) of
                   (Just (oa,oz), Just (sa,sz)) | oa < sa && sz < oz -> []
                   _ -> ["waiter scheduler lock is not nested inside the object lock"]
     notificationChecks role events =
@@ -634,12 +1042,18 @@ semanticControls facts domain payload one spec stock owned =
   let check name changed = (caseIdText (caseName one) ++ "-" ++ name,
         Right ["semantic mutation was accepted" | null (compareFamily facts domain payload one spec stock changed)])
       state = taskAt facts domain waiterSlot + factsTaskState facts
-      baseControls =
-        [check "caller-frame-refused" (mutateWord facts one (GuestAddress (callerSp one)) 0 owned),
-         check "device-write-refused" (mutateWord facts one (bank domain) 0xffffffff owned),
-         check "task-state-refused" (mutateWord facts one (GuestAddress state) 0xffffffff owned),
-         check "caller-message-refused" (mutateWord facts one (GuestAddress 0x40000000) 0xffffffff owned)]
-          ++ [check "saved-resume-refused" (mutateWord facts one (GuestAddress (taskAt facts domain runningSlot + factsTaskResumePc facts)) 0 owned) | caseBoundary one == TaskArrival]
+      baseControls
+        | Just _ <- caseStockBudget one =
+            [ check "wait-result-refused" (mutateWord facts one (GuestAddress (flagWait facts domain 1 + factsWaitBlockResult facts)) 0 owned)
+            , check "running-state-refused" (mutateWord facts one (GuestAddress (taskAt facts domain runningSlot + factsTaskState facts)) 0x32 owned)
+            , check "queue-head-refused" (mutateWord facts one (GuestAddress (flagControl facts domain 1)) 0 owned)
+            ]
+        | otherwise =
+            [check "caller-frame-refused" (mutateWord facts one (GuestAddress (callerSp one)) 0xdeadbeef owned),
+             check "device-write-refused" (mutateWord facts one (bank domain) 0xffffffff owned),
+             check "task-state-refused" (mutateWord facts one (GuestAddress state) 0xffffffff owned),
+             check "caller-message-refused" (mutateWord facts one (GuestAddress 0x40000000) 0xffffffff owned)]
+              ++ [check "saved-resume-refused" (mutateWord facts one (GuestAddress (taskAt facts domain runningSlot + factsTaskResumePc facts)) 0 owned) | caseBoundary one == TaskArrival]
    in baseControls ++ case caseTimerIndex one of
       Nothing -> []
       Just address ->
@@ -651,10 +1065,10 @@ semanticControls facts domain payload one spec stock owned =
 
 storageGuards :: Payload -> CaseSpec -> [CaseSpec]
 storageGuards (Standalone _) _ = []
-storageGuards (Aggregate image _ placements _) spec =
+storageGuards (Aggregate aggregate) spec =
   let probeAddress = 0x00957000
-      readonly = [Agg.placementAddress p | p <- placements, Agg.placementBytes p >= 4, not (Agg.placementSection p == ".text" || ".text." `isPrefixOf` Agg.placementSection p)]
-      targets = [("code-write-refused", Agg.imageBase image, False)]
+      readonly = [Agg.placementAddress p | p <- aggregatePlacements aggregate, Agg.placementBytes p >= 4, not (Agg.placementSection p == ".text" || ".text." `isPrefixOf` Agg.placementSection p)]
+      targets = [("code-write-refused", Agg.imageBase (aggregateImage aggregate), False)]
         ++ [(name,address,fetch) | address <- take 1 readonly, (name,fetch) <- [("readonly-write-refused",False),("readonly-fetch-refused",True)]]
       probe (name,address,fetch) =
         let bytes = assemble (if fetch then [0xe12fff11] else [0xe5810000,0xe12fff1e])
@@ -681,8 +1095,8 @@ runFamily runner cacheRoot directory facts executing stock owned = do
       ownedCases = [(one,caseFor facts executing OwnedObservation stock owned one) | one <- selected]
   stockBatch <- writeBatch (directory </> "stock") (map snd stockCases)
   ownedBatch <- writeBatch (directory </> "owned") (map snd ownedCases)
-  (stockReuse, stockRaw) <- cachedObservedBatch cacheRoot runner stockBatch
-  (ownedReuse, ownedRaw) <- cachedObservedBatch cacheRoot runner ownedBatch
+  (stockReuse, stockRaw) <- cachedObservedBatchWith WriteAllResults cacheRoot runner stockBatch
+  (ownedReuse, ownedRaw) <- cachedObservedBatchWith WriteAllResults cacheRoot runner ownedBatch
   let reference = M.fromList [(caseIdText ident,observation) | (ident,observation) <- stockRaw]
       subject = M.fromList [(caseIdText ident,observation) | (ident,observation) <- ownedRaw]
   results <- forM stockCases $ \(one,description) -> do
@@ -696,7 +1110,7 @@ runFamily runner cacheRoot directory facts executing stock owned = do
         [] -> []
   guardResults <- if null guardSpecs then pure [] else do
     guardBatch <- writeBatch (directory </> "storage-guards") guardSpecs
-    (_, observations) <- cachedObservedBatch cacheRoot runner guardBatch
+    (_, observations) <- cachedObservedBatchWith WriteAllResults cacheRoot runner guardBatch
     pure [(caseId spec, case lookup (CaseId (caseId spec)) observations of
       Nothing -> Left "storage guard did not run"
       Just observation -> Right (storageGuardResult spec observation)) | spec <- guardSpecs]
@@ -706,5 +1120,17 @@ runFamily runner cacheRoot directory facts executing stock owned = do
         | (one,description) <- stockCases
         , Just original <- [M.lookup (emittedId executing one) reference]
         , Just replacement <- [M.lookup (emittedId executing one) subject]]
+      controlRows = [(name, result == Right []) | (name, result) <- controls]
+      stockInstructions =
+        [ (caseIdText (caseName one), instructionCount (nativeInstructions original))
+        | (one, _) <- stockCases
+        , Just original <- [M.lookup (emittedId executing one) reference]
+        ]
       allResults = results ++ controls ++ guardResults
-  pure (FamilyRun executing allResults (length [() | (_,Right []) <- allResults]) (stockReuse,ownedReuse))
+  evidence <- forM stockCases $ \(one, _) -> do
+    let ident = emittedId executing one
+        entry = callEntry executing (caseCall one)
+        size = entryExtent executing entry
+    found <- evidenceAt (takeDirectory stockBatch </> (ident ++ ".native-result.json")) entry size
+    pure (caseIdText (caseName one), (entry, size, evidenceTrace found + evidenceProvenance found))
+  pure (FamilyRun executing results guardResults (length [() | (_,Right []) <- allResults]) (stockReuse,ownedReuse) controlRows stockInstructions evidence)

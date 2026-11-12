@@ -3,7 +3,7 @@
  "suites": [
   {
    "name": "rtos-objects-a",
-   "note": "Event-flag/mailbox family stage; 13 family entries: the stage link script declares 14, and family_flag_set_handler is declared as a gap because the suite has no handler-form family case. The suite enters only family_set and family_send (plus the family_release helper outside this table).",
+   "note": "Event-flag/mailbox family stage; the stage link script declares 14 entries. family_flag_set_handler is excluded from this bound set (the suite enters it directly), and the suite enters ten of the remaining thirteen: the seven other flag services and mailbox send, receive and timed receive. family_mailbox_poll, _create and _delete are declared gaps.",
    "bound": {
     "kind": "linker-memory",
     "source": "replacement/rtos_objects/stage/family-a.ld",
@@ -23,12 +23,12 @@
    },
    "gaps": "emulation/suite-audit-cases/rtos-objects-a-gaps.json",
    "cases_source": "replacement/rtos_objects/stage/family-a.ld",
-   "cases_derived_at": "49489f81",
+   "cases_derived_at": "15faddaa",
    "cases_verified": false
   },
   {
    "name": "rtos-objects-b",
-   "note": "Event-flag/mailbox family stage; 13 family entries: the stage link script declares 14, and family_flag_set_handler is declared as a gap because the suite has no handler-form family case. The suite enters only family_set and family_send (plus the family_release helper outside this table).",
+   "note": "Event-flag/mailbox family stage; the stage link script declares 14 entries. family_flag_set_handler is excluded from this bound set (the suite enters it directly), and the suite enters ten of the remaining thirteen: the seven other flag services and mailbox send, receive and timed receive. family_mailbox_poll, _create and _delete are declared gaps.",
    "bound": {
     "kind": "linker-memory",
     "source": "replacement/rtos_objects/stage/family-b.ld",
@@ -48,7 +48,49 @@
    },
    "gaps": "emulation/suite-audit-cases/rtos-objects-b-gaps.json",
    "cases_source": "replacement/rtos_objects/stage/family-b.ld",
-   "cases_derived_at": "49489f81",
+   "cases_derived_at": "15faddaa",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-objects-aggregate-a",
+   "note": "Event-flag family against the linked aggregate platform image; the bound side is the carriers.json event-flag group (13 entries).",
+   "bound": {
+    "kind": "carriers",
+    "source": "replacement/rtos_platform/carriers.json",
+    "domain": "a",
+    "groups": [
+     "event-flag"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-objects-aggregate-a.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-40000.bin",
+    "base": "0x40000",
+    "sha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
+   },
+   "cases_source": "replacement/rtos_objects/native/Replacement/RtosObjects/Suite.hs:cases",
+   "cases_derived_at": "15faddaa",
+   "cases_verified": false
+  },
+  {
+   "name": "rtos-objects-aggregate-b",
+   "note": "Event-flag family against the linked aggregate platform image; the bound side is the carriers.json event-flag group (13 entries).",
+   "bound": {
+    "kind": "carriers",
+    "source": "replacement/rtos_platform/carriers.json",
+    "domain": "b",
+    "groups": [
+     "event-flag"
+    ]
+   },
+   "cases": "emulation/suite-audit-cases/rtos-objects-aggregate-b.json",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/decode/loader-d0000.bin",
+    "base": "0xd0000",
+    "sha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
+   },
+   "cases_source": "replacement/rtos_objects/native/Replacement/RtosObjects/Suite.hs:cases",
+   "cases_derived_at": "15faddaa",
    "cases_verified": false
   },
   {

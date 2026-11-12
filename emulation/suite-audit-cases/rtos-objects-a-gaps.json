@@ -3,7 +3,22 @@
   {
    "entry": "0x0004839c",
    "kind": "missing",
-   "reason": "the suite's Family type has no handler-form case; the stage's family_flag_set_handler entry is the handler-context form of family_flag_set and is not entered"
+   "reason": "the stage's family_flag_set_handler entry is the handler-context form of family_flag_set and is excluded from this bound set; the suite enters it directly"
+  },
+  {
+   "entry": "0x0004af9c",
+   "kind": "missing",
+   "reason": "the suite has no mailbox poll case; the stage binds family_mailbox_poll and no case enters it"
+  },
+  {
+   "entry": "0x0004d5bc",
+   "kind": "missing",
+   "reason": "the suite has no mailbox create case; the stage binds family_mailbox_create and no case enters it"
+  },
+  {
+   "entry": "0x0004d654",
+   "kind": "missing",
+   "reason": "the suite has no mailbox delete case; the stage binds family_mailbox_delete and no case enters it"
   }
  ]
 }

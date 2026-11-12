@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.RtosTimer.RootPackage
   ( RootPackage, joinRootPlatform, packageDat, packageTargets, packageStartupTargets, packagePlatform, packageCarriers, packageContract, j5Manifest
+  , admitFlagRoots, flagRootBindings
   ) where
 
 import Control.Monad (forM, forM_, unless)
@@ -9,6 +10,8 @@ import qualified Data.Aeson.KeyMap as K
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Map.Strict as M
+import Data.Bits ((.|.), shiftL)
+import Data.Word (Word32)
 import qualified Emulation.Sha256 as SHA
 import qualified Replacement.RtosOwnFirst.Regions as R
 import qualified Replacement.RtosPlatform.Aggregate as Aggregate
@@ -56,6 +59,7 @@ joinRootPlatform source composition startupDat observed union linked = do
   unless (verified == observed) (Left "startup decoded targets differ from its admitted composition")
   platformSource <- shown (Platform.canonicalSource startupDat
     (Targets.targetOf observed Startup.LoaderA) (Targets.targetOf observed Startup.LoaderB))
+  admitFlagRoots union observed
   admitted <- shown (Platform.admit union platformSource linked)
   staged <- shown (Platform.stage admitted)
   restored <- shown (Platform.restore admitted (Platform.stagedDat staged))
@@ -86,6 +90,7 @@ packageContract startupContract startupDat package@RootPackage{packagePlatform =
   , "candidate_image4_sha256" .= digest (packageTargets package) Startup.Image4
   , "startup_contract_before_platform_rebinding" .= startupContract
   , "platform_contract" .= Platform.contractValue staged
+  , "event_flag_root_bindings" .= flagRootContract (Platform.admittedUnion (Platform.stagedAdmitted staged))
   , "runtime_executed" .= False
   , "limits" .=
       ([ "Startup attach-state and application contracts describe the pre-platform input; their runtime witnesses must be requalified on the final package."
@@ -95,6 +100,65 @@ packageContract startupContract startupDat package@RootPackage{packagePlatform =
   ]
   where
     digest targets target = SHA.sha256Hex (SHA.sha256 (Targets.targetOf targets target))
+
+data FlagRootBinding = FlagRootBinding
+  { flagRootSlot :: Int
+  , flagRootName :: String
+  , flagRootAddress :: R.GuestAddress
+  }
+
+flagRootBindings :: R.Domain -> [FlagRootBinding]
+flagRootBindings domain =
+  zipWith (\slot (name, address) -> FlagRootBinding slot name (R.GuestAddress address)) [0x80,0x84..0x9c]
+    (zip ["create", "delete", "set", "set_handler", "clear", "wait", "poll", "timed_wait"]
+      (if domain == R.DomainA
+        then [0x4d39c,0x4d434,0x4813c,0x4839c,0x485c0,0x486f8,0x489ac,0x48b30]
+        else [0xdd360,0xdd3f8,0xd80fc,0xd835c,0xd8580,0xd86b8,0xd896c,0xd8af0]))
+
+hasFlagRoots :: Union.Union -> Bool
+hasFlagRoots union = any ((== Union.EventFlag) . Union.entryGroup)
+  (concatMap (Union.mapEntries . Union.domainMap union) R.domains)
+
+admitFlagRoots :: Union.Union -> Targets.TargetBytes -> Either String ()
+admitFlagRoots union targets
+  | not (hasFlagRoots union) = Right ()
+  | otherwise = forM_ R.domains $ \domain -> do
+      let loader = Targets.targetOf targets (if domain == R.DomainA then Startup.LoaderA else Startup.LoaderB)
+          expectedRoot = if domain == R.DomainA then 0x4004dae0 else 0x400ddaa0
+          entries = Union.mapEntries (Union.domainMap union domain)
+      unless (wordAt loader 16 == Just expectedRoot)
+        (Left ("event flag publication root differs for " ++ show domain))
+      forM_ (flagRootBindings domain) $ \binding -> do
+        let name = "family_flag_" ++ flagRootName binding
+            expected = Union.Entry Union.EventFlag name (flagRootAddress binding)
+              ("xm1_rtos_objects_" ++ name) (".text." ++ name) ("xm1_platform_veneer_" ++ name) False
+        unless (filter ((== name) . Union.entryName) entries == [expected])
+          (Left ("event flag root slot lacks its executing-domain family entry: " ++ show (domain, flagRootSlot binding)))
+  where
+    wordAt :: B.ByteString -> Int -> Maybe Word32
+    wordAt bytes offset
+      | offset < 0 || offset + 4 > B.length bytes = Nothing
+      | otherwise = Just (foldr (.|.) 0
+          [fromIntegral (B.index bytes (offset + index)) `shiftL` (index * 8) | index <- [0..3]])
+
+flagRootContract :: Union.Union -> Value
+flagRootContract union
+  | not (hasFlagRoots union) = toJSON ([] :: [Value])
+  | otherwise = toJSON
+      [ object
+          [ "domain" .= (if domain == R.DomainA then "a" else "b" :: String)
+          , "header_root" .= (if domain == R.DomainA then 0x4004dae0 else 0x400ddaa0 :: Word32)
+          , "slot" .= flagRootSlot binding
+          , "target" .= address
+          , "symbol" .= ("xm1_rtos_objects_family_flag_" ++ flagRootName binding)
+          , "binding" .= ("same-address-owned-veneer" :: String)
+          , "publication_source" .= ("x70view 55436fc85c0560dd252b0410af6f2427fe198cd3 kernel{0,1}/src/core/kernel_publication.c; original movw/movt/str slot stores at loader+0x5c0..0x620" :: String)
+          , "startup_publisher" .= (if domain == R.DomainA then "replacement/primary_initializer/src.rs SERVICES[32..39]" else "replacement/interface_initializer/src.rs SERVICES[32..39]" :: String)
+          , "runtime_executed" .= False
+          ]
+      | domain <- R.domains, binding <- flagRootBindings domain
+      , let R.GuestAddress address = flagRootAddress binding
+      ]
 
 j5Manifest :: B.ByteString -> [Startup.Span] -> [FilePath] -> Either String B.ByteString
 j5Manifest guardManifest appCarriers paths = do

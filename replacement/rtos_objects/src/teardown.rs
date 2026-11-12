@@ -43,6 +43,9 @@ fn release_all<M: Wake>(m: &M, queue: WaitQueue) -> bool {
         let owner = m.context(owner_domain);
         let mut scheduler = m.lock_scheduler(owner_domain);
         let changed = (|| {
+            // The loop's next head must not depend on the release's own unlink, which runs only
+            // while the waiter's state byte keeps OBJECT_QUEUED. A second unlink of the same task
+            // is idempotent: unlink leaves the task's own links pointing at its neighbours.
             unlink(m, task);
             match release_with(m, owner, task, WaitCompletion::Released) {
                 Selection::Changed => m.notify(m.record_id(owner)) == DispatchTarget::Local,

@@ -35,7 +35,7 @@ These shims exist only because two owned units meet through a stock-shaped or C-
 | Task submission exports | task_submission → power_lifecycle | `xm1_task_submit` and `xm1_task_release` in `task_submission/src.rs` | Power links the submission crate directly in one image after stock comparison | required |
 | Save facade export | save → develop | `xm1_save_facade` in `save/src/lib.rs` | Develop calls the typed save facade directly in one image after stock comparison | required |
 | Capture boundary exports | capture → develop | `rb_capture_*` exports in `capture/src/lib.rs` and `rb_capture_stock.S` | Develop calls the capture crate directly in one image after stock comparison | required |
-| RTOS family scheduler and timer calls | rtos_scheduler, rtos_timer → rtos_objects, rtos_semaphore, rtos_data_queue, rtos_fixed_pool, rtos_cyclic, rtos_task_records | 37 `kind: owned` externals per domain in `rtos_platform/carriers.json` (scheduler insert/remove/notify/switch, timer insert/remove) | Each family links the scheduler and timer crates directly and the aggregate carries stock comparisons for both sides | required |
+| RTOS family scheduler, timer and flag-helper calls | rtos_scheduler, rtos_timer, rtos_objects → rtos_objects, rtos_semaphore, rtos_data_queue, rtos_fixed_pool, rtos_cyclic, rtos_task_records | 49 `kind: owned` externals per domain in `rtos_platform/carriers.json` (scheduler insert/remove/notify/switch, timer insert/remove, and the event-flag wait helpers the semaphore, fixed-pool and S3b bodies call) | Each family links the scheduler, timer and object crates directly and the aggregate carries stock comparisons for both sides | required |
 
 ## abi
 
@@ -477,7 +477,8 @@ The owned fixed-pool family.
 | --- | --- | --- | --- | --- | --- |
 | `xm1_rtos_fixed_pool_*` exports in `stage/entries.S`, placed by `fp-a.ld`/`fp-b.ld` | stock-ABI export | stock pool callers | no | every pool caller is owned or migrated | required |
 | `xm1_fixed_pool_stock_acquire`, `_release`, `_notify`, `_dispatch` externs | C-ABI bridge between two owned units | rtos_scheduler | yes | the pool crate links the scheduler crate directly and both sides compare with stock in one image | required |
-| `xm1_fixed_pool_stock_mask`, `_restore`, `_save_irq`, `_restore_irq`, `_wait_*`, `_uidivmod` externs | trampoline into retained stock | retained mask/restore, wait and divide helpers | no | the RTOS platform and owned division own those helpers | required |
+| `xm1_fixed_pool_stock_wait_release`, `_wait_cancel`, `_wait_enqueue`, `_wait_enqueue_timed` externs at A `0x44568`/`0x44744`/`0x44800`/`0x448e4` (B `0xd4528`/`0xd4704`/`0xd47c0`/`0xd48a4`) | C-ABI bridge between two owned units | rtos_objects event-flag carriers | yes | the pool crate links the object crate directly and both sides compare with stock in one image | required |
+| `xm1_fixed_pool_stock_mask`, `_restore`, `_save_irq`, `_restore_irq`, `_uidivmod` externs | trampoline into retained stock | retained mask/restore and divide helpers | no | the RTOS platform and owned division own those helpers | required |
 
 ## rtos_global_lock
 
@@ -502,8 +503,10 @@ The owned flag and mailbox family.
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
 | `xm1_rtos_objects_*` exports placed by `family-a.ld`/`family-b.ld` at the stock entries | stock-ABI export | stock flag/mailbox callers | no | every object caller is owned or migrated | required |
+| Thirteen event-flag carrier entries per domain in the aggregate `carriers.json` and `veneer-a.S`/`veneer-b.S`: eight flag services and the `family_release`, `helper_release` (`0x44744`/`0xd4704`), `helper_block`, `helper_block_timed` and `helper_check` bodies | veneer or carrier at a stock address | stock flag callers, and retained stock mailbox send, receive and timed receive that branch into the helper extents | no | every flag caller is owned or migrated | required |
 | `xm1_rtos_scheduler_*` externs (acquire, insert, notify, prepare, release, remove, reset, save) | C-ABI bridge between two owned units | rtos_scheduler | yes | the object crate links the scheduler crate directly and both sides compare with stock in one image | required |
 | `xm1_rtos_objects_stock_insert_timer`/`_remove_timer` externs | C-ABI bridge between two owned units | rtos_timer | yes | the object crate links the timer crate directly and both sides compare with stock in one image | required |
+| `xm1_rtos_objects_stock_timeout` (`0x44318`/`0xd42d8`) | C-ABI bridge between two owned units | the owned scheduler timeout body behind the aggregate veneer | yes | the object crate names the owned timeout callback directly | required |
 
 ## rtos_own_first
 
@@ -516,13 +519,13 @@ The 17 own-first root slots.
 
 ## rtos_platform
 
-The platform aggregate: 113 veneer entries per domain and 57 externals per domain declared in `carriers.json`, with `veneer-a.S`/`veneer-b.S` generated from it.
+The platform aggregate: 126 veneer entries per domain and 60 externals per domain declared in `carriers.json`, with `veneer-a.S`/`veneer-b.S` generated from it.
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
-| 37 `kind: owned` externals per domain in `carriers.json` (scheduler/timer calls into other RTOS family units) | C-ABI bridge between two owned units | rtos_scheduler, rtos_timer and the family units | yes | the aggregate links the family crates directly and both sides compare with stock in one image | required |
-| 20 `kind: retained` externals per domain in `carriers.json` (stock IRQ mask/restore, wait, divide helpers) | trampoline into retained stock | stock IRQ and wait helpers | no | the RTOS platform owns those helpers | required |
-| 113 veneer entries per domain in `veneer-a.S`/`veneer-b.S`, placed by `platform-a.ld`/`platform-b.ld` | veneer or carrier at a stock address | stock callers of the replaced root slots | no | every root-slot caller is owned or migrated | required |
+| 49 `kind: owned` externals per domain in `carriers.json` (scheduler/timer calls into other RTOS family units, plus the event-flag wait helpers) | C-ABI bridge between two owned units | rtos_scheduler, rtos_timer, rtos_objects and the family units | yes | the aggregate links the family crates directly and both sides compare with stock in one image | required |
+| 11 `kind: retained` externals per domain in `carriers.json` (stock IRQ raise/clear, mask/restore, divide helpers) | trampoline into retained stock | stock IRQ, mask/restore and divide helpers | no | the RTOS platform owns those helpers | required |
+| 126 veneer entries per domain in `veneer-a.S`/`veneer-b.S`, placed by `platform-a.ld`/`platform-b.ld` | veneer or carrier at a stock address | stock callers of the replaced root slots | no | every root-slot caller is owned or migrated | required |
 
 ## rtos_scheduler
 
@@ -531,7 +534,7 @@ The owned scheduler groups S1, S2, S3a-S3d.
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
 | S1/S2/S3 stock-ABI exports placed at the stock entry addresses by the `s3*-a.ld`/`s3*-b.ld` and `scheduler-*.ld` scripts | stock-ABI export | stock scheduler, task and exception callers | no | every scheduler caller is owned or migrated | required |
-| `s3a_stock_*`, `s3b_*`, `s3c_*`, `s3d_*` externs marked `kind: owned` in `carriers.json` (insert, remove, notify, switch, timer insert/remove) | C-ABI bridge between two owned units | the scheduler's own S1/timer groups and the RTOS family units | yes | the groups link as Rust items and both sides compare with stock in one image | required |
+| `s3a_stock_*`, `s3b_*`, `s3c_*`, `s3d_*` externs marked `kind: owned` in `carriers.json` (insert, remove, notify, switch, timer insert/remove, and `s3b_release_wait` at `0x44568`/`0xd4528` bound to the event-flag family release carrier) | C-ABI bridge between two owned units | the scheduler's own S1/timer groups, rtos_objects and the RTOS family units | yes | the groups link as Rust items and both sides compare with stock in one image | required |
 | `xm1_rtos_scheduler_stock_raise_irq` and `xm1_rtos_scheduler_stock_raise_irq`-family retained externs | trampoline into retained stock | the stock IRQ raise helper | no | the RTOS platform owns IRQ raising | required |
 
 ## rtos_semaphore
@@ -542,7 +545,8 @@ The owned semaphore family.
 | --- | --- | --- | --- | --- | --- |
 | `xm1_rtos_semaphore_*` exports placed by `sem-a.ld`/`sem-b.ld` at the stock entries | stock-ABI export | stock semaphore callers | no | every semaphore caller is owned or migrated | required |
 | `xm1_semaphore_stock_acquire`, `_release`, `_notify`, `_dispatch` externs | C-ABI bridge between two owned units | rtos_scheduler | yes | the semaphore crate links the scheduler crate directly and both sides compare with stock in one image | required |
-| `xm1_semaphore_stock_mask`, `_restore`, `_wait_*` externs | trampoline into retained stock | retained mask/restore and wait helpers | no | the RTOS platform owns those helpers | required |
+| `xm1_semaphore_stock_wait_release`, `_wait_cancel`, `_wait_enqueue`, `_wait_enqueue_timed` externs at A `0x44568`/`0x44744`/`0x44800`/`0x448e4` (B `0xd4528`/`0xd4704`/`0xd47c0`/`0xd48a4`) | C-ABI bridge between two owned units | rtos_objects event-flag carriers | yes | the semaphore crate links the object crate directly and both sides compare with stock in one image | required |
+| `xm1_semaphore_stock_mask`, `_restore` externs | trampoline into retained stock | retained mask/restore helpers | no | the RTOS platform owns those helpers | required |
 
 ## rtos_task_records
 
