@@ -715,31 +715,9 @@ data Context = Context
   , bankFunctions :: M.Map Word32 Function
   , codeWords :: S.Set Word32
   , namedObjects :: [(Word32, Word32, String)]
-  , -- | Bank function entries whose code can reach a call this analysis does not follow.
-    reachesUnanalysed :: S.Set Word32
   , -- | The (callee entry, argument) pairs being analysed with that argument 0.
     zeroArguments :: [(Word32, Reg)]
   }
-
--- | The bank functions whose reachable code calls a target this analysis does
--- not follow, directly or through any chain of bank calls.
-unanalysedCallers :: Elf -> M.Map Word32 Function -> S.Set Word32 -> S.Set Word32
-unanalysedCallers elf functions code = fix S.empty
- where
-  fix known =
-    let next =
-          S.fromList
-            [ start
-            | (start, (open, callees)) <- M.toList scanned
-            , open || any (\target -> maybe True (const (S.member target known)) (M.lookup target functions)) callees
-            ]
-     in if next == known then known else fix next
-  scanned = M.fromList [(functionStart f, scan f) | f <- M.elems functions]
-  scan f = foldl classify (False, []) [decode a w | a <- [functionStart f, functionStart f + 4 .. functionEnd f - 4], S.member a code, Just w <- [wordAt elf a]]
-  classify (open, callees) instruction = case instruction of
-    Branch _ True target -> (open, target : callees)
-    BranchExchange _ True _ -> (True, callees)
-    _ -> (open, callees)
 
 -- | A bank function, or a run of ARM code that no function symbol covers.
 data Function = Function {functionName :: String, functionStart :: Word32, functionEnd :: Word32}
@@ -1009,7 +987,7 @@ execute context function address instruction state = case instruction of
           else conditional cond (\s -> continue (load s)) id
   Branch cond link target
     | link, traps target -> conditional cond (\s -> branchCount (targetFindings s True target) (Outcome [] [] 0 0)) id
-    | link -> conditional cond (\s -> branchCount (targetFindings s True target) (continue (afterCall (followed target) (calleeAt target) s))) id
+    | link -> conditional cond (\s -> branchCount (targetFindings s True target) (continue (afterCall (calleeAt target) s))) id
     | inside target -> branching cond (\s -> Outcome [(target, s)] [] 0 0)
     | otherwise -> branching cond (\s -> branchCount (targetFindings s False target) (Outcome [] [] 0 0))
   BranchExchange cond link rm
@@ -1017,7 +995,7 @@ execute context function address instruction state = case instruction of
         conditional cond
           ( \s ->
               let value = registerValue address s rm
-               in (indirectBranch True (Just rm) value s) {outcomeSuccessors = [next (afterCall False (calleeOf value) s)]}
+               in (indirectBranch True (Just rm) value s) {outcomeSuccessors = [next (afterCall (calleeOf value) s)]}
           )
           id
     | otherwise -> branching cond (\s -> indirectBranch False (Just rm) (registerValue address s rm) s)
@@ -1273,17 +1251,15 @@ execute context function address instruction state = case instruction of
     through = maybe " through a loaded program counter" ((" through " ++) . regName) register
 
   calleeAt target = Just (maybe (StockFunction target) (BankFunction . functionName) (M.lookup target (bankFunctions context)))
-  -- A direct call whose callee's own code reaches no unanalysed call.
-  followed target = M.member target (bankFunctions context) && S.notMember target (reachesUnanalysed context)
   calleeOf value = case enumerate value of
     Just [target] -> calleeAt target
     _ -> Nothing
-  -- Only a call that reaches no unanalysed call keeps the caller's slots.
-  afterCall analysed callee s =
+  -- Every call forgets the caller's frame words at or above the lowest escaped
+  -- offset, except the prologue's saved registers and return address.
+  afterCall callee s =
     let clobbered = foldr (`setRegister` Unknown) s [Reg 1, Reg 2, Reg 3, Reg 12, lr]
         reported = setRegister (Reg 0) (maybe Unknown (Derived . Result) callee) clobbered
-        returned = if analysed then reported else forgetEscaped saved reported
-     in returned {comparison = Nothing, holds = Nothing}
+     in (forgetEscaped saved reported) {comparison = Nothing, holds = Nothing}
 
 showProvenance :: Provenance -> String
 showProvenance p = case p of
@@ -1367,8 +1343,7 @@ checkBank allowlist elf = do
         , symbolSize s > 0
         , symbolValue s >= textStart layout && symbolValue s < imageEnd layout || inText (symbolValue s) || inEngineData (symbolValue s)
         ]
-      context = Context elf layout canonicalAllowlist (M.fromList [(functionStart f, f) | f <- named]) code objects
-        (unanalysedCallers elf (M.fromList [(functionStart f, f) | f <- named]) code) []
+      context = Context elf layout canonicalAllowlist (M.fromList [(functionStart f, f) | f <- named]) code objects []
       overlapping =
         [ Finding (functionStart g) "<layout>" Violation (LayoutProblem FunctionOverlap) ("function " ++ functionName g ++ " overlaps " ++ functionName f)
         | (f, g) <- zip functions (drop 1 functions)

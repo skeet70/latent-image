@@ -167,6 +167,10 @@ impl<B: Backend> HeaderBackend for NativeBackend<'_, B> {
         NativeHeaderBackend { kernel: self.kernel }.read_header(destination)
     }
     #[inline(always)]
+    fn read_header_window(&mut self, destination: &mut [u8; HEADER_BYTES]) -> RequestOutcome {
+        unsafe { shared_backing(NativeHeaderDriver::new(self.kernel)).read_header_window(destination) }
+    }
+    #[inline(always)]
     fn write_header(&mut self, source: &[u8; HEADER_BYTES]) -> MirrorOutcome {
         NativeHeaderBackend { kernel: self.kernel }.write_header(source)
     }
@@ -184,6 +188,10 @@ impl<B: Backend> SettingsBackend for NativeBackend<'_, B> {
     #[inline(always)]
     fn read_body(&mut self, destination: &mut [u8; crate::mirror::BODY_BYTES]) -> RequestOutcome {
         unsafe { shared_backing(NativeBackupDriver::new(self.kernel)).read_body(destination) }
+    }
+    #[inline(always)]
+    fn read_body_window(&mut self, destination: &mut [u8; crate::mirror::BODY_BYTES]) -> RequestOutcome {
+        unsafe { shared_backing(NativeBackupDriver::new(self.kernel)).read_body_window(destination) }
     }
     #[inline(always)]
     fn write_body(&mut self, source: &[u8; crate::mirror::BODY_BYTES]) -> crate::BodyOutcome {

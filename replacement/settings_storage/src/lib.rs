@@ -134,7 +134,7 @@ impl<'a, B> SettingsStorage<'a, B> {
 impl<'a, B: HeaderBackend> SettingsStorage<'a, B> {
     #[inline(never)]
     pub fn open_header(&mut self) -> MirrorSession<'_, 'a, B> {
-        let opened = self.backend.read_header(part_mut(self.banks, 0, 16).try_into().unwrap_or_else(|_| contract_violation()));
+        let opened = self.backend.read_header_window(part_mut(self.banks, 0, 16).try_into().unwrap_or_else(|_| contract_violation()));
         MirrorSession { storage: self, opened }
     }
     #[inline(always)]
@@ -154,7 +154,7 @@ impl<'a, B: SettingsBackend> SettingsStorage<'a, B> {
         self.restore_active_image();
         self.write_active_body()
     }
-    pub fn refresh_active_body(&mut self) -> RequestOutcome { self.backend.read_body(part_mut(self.banks, 16, 0x118).try_into().unwrap_or_else(|_| contract_violation())) }
+    pub fn refresh_active_body(&mut self) -> RequestOutcome { self.backend.read_body_window(part_mut(self.banks, 16, 0x118).try_into().unwrap_or_else(|_| contract_violation())) }
     pub fn write_active_body(&mut self) -> BodyOutcome { self.backend.write_body(part(self.banks, 16, 0x118).try_into().unwrap_or_else(|_| contract_violation())) }
     pub fn write_active_body_into(&mut self, report: &mut BodyOutcome) {
         self.backend.write_body_into(part(self.banks, 16, 0x118).try_into().unwrap_or_else(|_| contract_violation()), report)

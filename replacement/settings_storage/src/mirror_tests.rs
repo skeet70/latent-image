@@ -110,7 +110,7 @@ fn exports_preserve_projected_bytes_and_caller_guards_for_odd_offsets_and_length
                     let mut output = Output([0xa5; 6]);
                     let mut expected = [0xa5; 6];
                     expected[destination..destination+length].copy_from_slice(&bytes[..length]);
-                    assert_eq!(backing.export(BackingRange::new(offset, length as u32), &mut output.0[destination..destination+length]), BackingStatus::Success);
+                    assert_eq!(backing.export(BackingRange::new(offset, length as u32), &mut output.0[destination..destination+length], ExportSink::Leaves), BackingStatus::Success);
                     assert_eq!(output.0, expected);
                 });
             }
@@ -291,7 +291,7 @@ fn shared_export_assembles_shadow_and_backing_with_explicit_residue() {
         backing.live_mut()[0x140..0x168].fill(0x53);
         backing.live_mut()[0x168..].fill(0x64);
         let mut exported = [0; BACKING_BYTES];
-        assert_eq!(backing.export(BackingRange::new(0, BACKING_BYTES as u32), &mut exported), BackingStatus::Success);
+        assert_eq!(backing.export(BackingRange::new(0, BACKING_BYTES as u32), &mut exported, ExportSink::Leaves), BackingStatus::Success);
         assert_eq!(exported[..16], [0x22; 16]);
         assert_eq!(exported[0x10..0x128], [0x31; BODY_BYTES]);
         assert_eq!(exported[0x128..0x140], [0x42; 24]);
@@ -335,7 +335,7 @@ fn admitted_end_boundaries_control_custom_refresh_even_for_empty_writes() {
             assert_eq!(result.custom_refreshed, end > 0x140 && end <= 0x19a);
             assert_eq!(backing.driver().effects().filter(|effect| matches!(effect, Effect::Refresh(_))).count(), usize::from(end > 0x140 && end <= 0x19a));
             let mut empty = [];
-            assert_eq!(backing.export(BackingRange::new(end, 0), &mut empty), result.status);
+            assert_eq!(backing.export(BackingRange::new(end, 0), &mut empty, ExportSink::Leaves), result.status);
         });
     }
 }
@@ -362,7 +362,7 @@ fn range_admission_wraps_but_unavailable_compatibility_addresses_are_explicit() 
     assert_eq!(range.end(), 0);
     with_backing(|backing| {
         let mut byte = [0x7e];
-        assert_eq!(backing.export(range, &mut byte), BackingStatus::AddressUnavailable);
+        assert_eq!(backing.export(range, &mut byte, ExportSink::Leaves), BackingStatus::AddressUnavailable);
         assert_eq!(byte, [0x7e]);
         assert_eq!(backing.import(range, &[0x8f]).status, BackingStatus::AddressUnavailable);
     });
@@ -393,7 +393,7 @@ fn missing_export_residue_preserves_caller_bytes() {
     assert_eq!(backing.read_header(&mut header), RequestOutcome::success());
     assert_eq!(header, [0x22; HEADER_BYTES]);
     let mut exported = [0x73; BACKING_BYTES];
-    assert_eq!(backing.export(BackingRange::new(0, BACKING_BYTES as u32), &mut exported), BackingStatus::Success);
+    assert_eq!(backing.export(BackingRange::new(0, BACKING_BYTES as u32), &mut exported, ExportSink::Leaves), BackingStatus::Success);
     assert_eq!(exported[..HEADER_BYTES], [0x22; HEADER_BYTES]);
     assert_eq!(exported[HEADER_BYTES..INITIALIZED_EXPORT_BYTES], [0x11; INITIALIZED_EXPORT_BYTES - HEADER_BYTES]);
     assert_eq!(exported[INITIALIZED_EXPORT_BYTES..], [0x73; EXPORT_RESIDUE_BYTES]);
@@ -406,7 +406,7 @@ fn export_crossing_the_initialized_boundary_keeps_unwritten_residue() {
     let identifiers = [BackupKey(1); HEADER_BYTES];
     let mut backing = SharedBacking::without_export_residue(&mut live, &mut shadow, &identifiers, Driver::new());
     let mut exported = [0x5a; 0x80];
-    assert_eq!(backing.export(BackingRange::new(0x100, 0x80), &mut exported), BackingStatus::Success);
+    assert_eq!(backing.export(BackingRange::new(0x100, 0x80), &mut exported, ExportSink::Leaves), BackingStatus::Success);
     assert_eq!(exported[..0x68], [0x11; 0x68]);
     assert_eq!(exported[0x68..], [0x5a; 0x18]);
 }

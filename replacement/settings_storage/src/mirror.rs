@@ -5,6 +5,14 @@ pub const BACKING_BYTES: usize = 0x19a;
 pub const INITIALIZED_EXPORT_BYTES: usize = 0x168;
 pub const EXPORT_RESIDUE_BYTES: usize = BACKING_BYTES - INITIALIZED_EXPORT_BYTES;
 
+/// `Window` writes through the storage window leaves, `Leaves` through the
+/// caller-buffer output leaves.
+#[derive(Clone, Copy)]
+pub enum ExportSink {
+    Leaves,
+    Window,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BackupKey(pub u16);
 
@@ -106,6 +114,11 @@ impl BodyOutcome {
 
 pub trait HeaderBackend {
     fn read_header(&mut self, destination: &mut [u8; HEADER_BYTES]) -> RequestOutcome;
+    /// Reads the header through the storage window leaves.
+    #[inline(always)]
+    fn read_header_window(&mut self, destination: &mut [u8; HEADER_BYTES]) -> RequestOutcome {
+        self.read_header(destination)
+    }
     fn write_header(&mut self, source: &[u8; HEADER_BYTES]) -> MirrorOutcome;
     /// Writes the header and leaves the report in `report`.
     #[inline(always)]
@@ -121,6 +134,11 @@ pub trait HeaderBackend {
 }
 pub trait SettingsBackend: HeaderBackend {
     fn read_body(&mut self, destination: &mut [u8; BODY_BYTES]) -> RequestOutcome;
+    /// Reads the body through the storage window leaves.
+    #[inline(always)]
+    fn read_body_window(&mut self, destination: &mut [u8; BODY_BYTES]) -> RequestOutcome {
+        self.read_body(destination)
+    }
     fn write_body(&mut self, source: &[u8; BODY_BYTES]) -> BodyOutcome;
     fn read_custom(&mut self, destination: &mut [u8; CUSTOM_BYTES]) -> RequestOutcome;
     /// Writes the body and leaves the report in `report`.
@@ -353,15 +371,15 @@ impl<'a, D: HeaderBackupDriver> SharedBacking<'a, D> {
 
     /// Stock leaves the residue uninitialized; without a residue window the caller's bytes stay untouched.
     #[inline(always)]
-    pub fn export(&mut self, range: BackingRange, destination: &mut [u8]) -> BackingStatus {
+    pub fn export(&mut self, range: BackingRange, destination: &mut [u8], sink: ExportSink) -> BackingStatus {
         match self.task() {
-            Some(task) => { let hold = self.acquire(task); hold.backing.export_unheld(range, destination) }
-            None => self.export_unheld(range, destination),
+            Some(task) => { let hold = self.acquire(task); hold.backing.export_unheld(range, destination, sink) }
+            None => self.export_unheld(range, destination, sink),
         }
     }
 
     #[inline(always)]
-    fn export_unheld(&mut self, range: BackingRange, destination: &mut [u8]) -> BackingStatus {
+    fn export_unheld(&mut self, range: BackingRange, destination: &mut [u8], sink: ExportSink) -> BackingStatus {
         match self.driver.admit(RequestDirection::Read) {
             Err(status) => BackingStatus::Refused(status),
             Ok(()) => match range.projection(destination.len()) {
@@ -374,13 +392,19 @@ impl<'a, D: HeaderBackupDriver> SharedBacking<'a, D> {
                         let paired = initialized & !1;
                         while written < paired {
                             let value = self.export_halfword(projection.start + written);
-                            crate::memory::write_output_halfword(destination, written, value);
+                            match sink {
+                                ExportSink::Leaves => crate::memory::write_output_halfword(destination, written, value),
+                                ExportSink::Window => crate::memory::write_halfword(destination, written, value),
+                            }
                             written += 2;
                         }
                     }
                     while written < initialized {
                         let value = self.export_byte(projection.start + written);
-                        crate::memory::write_output_byte(destination, written, value);
+                        match sink {
+                            ExportSink::Leaves => crate::memory::write_output_byte(destination, written, value),
+                            ExportSink::Window => crate::memory::write_byte_at(destination, written, value),
+                        }
                         written += 1;
                     }
                     if projection.end > INITIALIZED_EXPORT_BYTES {
@@ -445,7 +469,12 @@ impl<'a, D: HeaderBackupDriver> SharedBacking<'a, D> {
 
     #[inline(always)]
     pub fn read_request(&mut self, descriptor: RequestDescriptor, destination: &mut [u8]) -> RequestOutcome {
-        let request = request_outcome(self.export(descriptor.range(), destination));
+        self.read_request_with(descriptor, destination, ExportSink::Leaves)
+    }
+
+    #[inline(always)]
+    pub fn read_request_with(&mut self, descriptor: RequestDescriptor, destination: &mut [u8], sink: ExportSink) -> RequestOutcome {
+        let request = request_outcome(self.export(descriptor.range(), destination, sink));
         self.store_request(request);
         request
     }
@@ -562,6 +591,10 @@ impl<D: HeaderBackupDriver> HeaderBackend for SharedBacking<'_, D> {
         self.read_request(RequestDescriptor::from_abi(HEADER_BYTES as u32, 0), destination)
     }
     #[inline(always)]
+    fn read_header_window(&mut self, destination: &mut [u8; HEADER_BYTES]) -> RequestOutcome {
+        self.read_request_with(RequestDescriptor::from_abi(HEADER_BYTES as u32, 0), destination, ExportSink::Window)
+    }
+    #[inline(always)]
     fn write_header(&mut self, source: &[u8; HEADER_BYTES]) -> MirrorOutcome {
         let mut report = MirrorOutcome::unchanged();
         self.write_header_into(source, &mut report);
@@ -579,6 +612,9 @@ impl<D: HeaderBackupDriver> HeaderBackend for SharedBacking<'_, D> {
 impl<D: BackupDriver> SettingsBackend for SharedBacking<'_, D> {
     fn read_body(&mut self, destination: &mut [u8; BODY_BYTES]) -> RequestOutcome {
         self.read_request(RequestDescriptor::from_abi(BODY_BYTES as u32, 0x10), destination)
+    }
+    fn read_body_window(&mut self, destination: &mut [u8; BODY_BYTES]) -> RequestOutcome {
+        self.read_request_with(RequestDescriptor::from_abi(BODY_BYTES as u32, 0x10), destination, ExportSink::Window)
     }
     fn write_body(&mut self, source: &[u8; BODY_BYTES]) -> BodyOutcome {
         let outcome = self.write_request(RequestDescriptor::from_abi(BODY_BYTES as u32, 0x10), source);

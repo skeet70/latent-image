@@ -194,7 +194,7 @@ main = do
   -- A bank veneer that calls stock through a register reaches unanalysed code.
   let veneer = fst (function "rb_status_record")
       veneerBytes = replaceFunction "rb_status_record"
-        [slotWord 0xe300c000 stockTarget, slotWord 0xe340c000 (stockTarget `shiftR` 16), 0xe12fff3c, 0xe12fff1e] clean
+        [0xe52de004, slotWord 0xe300c000 stockTarget, slotWord 0xe340c000 (stockTarget `shiftR` 16), 0xe12fff3c, 0xe49de004, 0xe12fff1e] clean
       throughVeneer callee = replaceFunction "rb_assert_one"
         (slotPrefix ++ [0xe1a0000d, branchLink (callerStart + 24) veneer,
           0xe59d2000, 0xe3a03001, 0xe5823000, 0xe28dd008, 0xe8bd8010]) callee
@@ -203,12 +203,51 @@ main = do
   veneerReport <- run allowlist (throughVeneer veneerBytes)
   check "a slot whose address an owned veneer reaching stock received loses its value"
     (any (\f -> findingAddress f == callerStart + 36) (violations veneerReport))
+  check "a veneer that saves and restores lr has no finding of its own"
+    (not (any (\f -> findingFunction f == "rb_status_record") (violations veneerReport)))
   plainReport <- run allowlist (throughVeneer (replaceFunction "rb_status_record" [0xe1a00000, 0xe12fff1e] clean))
-  check "a call that reaches no unanalysed call keeps the caller's values"
-    (not (any (\f -> findingAddress f == callerStart + 36) (violations plainReport)))
+  check "a bank call that reaches no stock still forgets the caller's escaped local"
+    (any (\f -> findingAddress f == callerStart + 36) (violations plainReport))
   savedReport <- run allowlist savedThroughVeneer
   check "a saved return address survives a call that receives a pointer to a local"
     (not (any (\f -> findingAddress f == callerStart + 32) (violations savedReport)))
+  -- The frame word above the escaped local, not only the escaped span, loses
+  -- its value: a span rule keeps the word at sp+4 and proves the store.
+  let abovePrefix = slotPrefix ++ [0xe58d4004, 0xe1a0000d]
+      aboveSite = callerStart + fromIntegral (length abovePrefix * 4)
+      aboveBytes = replaceFunction "rb_assert_one"
+        (abovePrefix ++ [branchLink aboveSite stockTarget, 0xe59d2004, 0xe3a03001, 0xe5823000, 0xe28dd008, 0xe8bd8010]) clean
+  aboveReport <- run allowlist aboveBytes
+  check "a frame word above the escaped local loses its value after the call"
+    (any (\f -> findingAddress f == aboveSite + 12) (violations aboveReport))
+  -- A bank callee that writes through a frame pointer it was handed, without
+  -- reaching stock, overwrites the caller's slot all the same.
+  let writerCallee = replaceFunction "rb_status_record" [0xe5801000, 0xe12fff1e] clean
+      writerPolicy = allowlist {declarations = declarations allowlist ++
+        [Declaration "rb_status_record" StoreAccess (Argument (Reg 0)) "synthetic callee writes through its argument"]}
+      writerPrefix = slotPrefix ++ [0xe3e01000, 0xe1a0000d]
+      writerSite = callerStart + fromIntegral (length writerPrefix * 4)
+      writerBytes = replaceFunction "rb_assert_one"
+        (writerPrefix ++ [branchLink writerSite indirectCallee, 0xe59d2000, 0xe3a03001, 0xe5823000, 0xe28dd008, 0xe8bd8010]) writerCallee
+  writerReport <- run writerPolicy writerBytes
+  check "a bank callee that writes the frame it was handed loses the caller's slot"
+    (any (\f -> findingAddress f == writerSite + 12) (violations writerReport))
+  -- A tail-call veneer (`bx r12`) is a call to stock like `blx r12`.
+  let tailVeneer = replaceFunction "rb_status_record"
+        [0xe52de004, slotWord 0xe300c000 stockTarget, slotWord 0xe340c000 (stockTarget `shiftR` 16), 0xe12fff1c] clean
+  tailReport <- run allowlist (throughVeneer tailVeneer)
+  check "a bx r12 veneer reaching stock forgets the caller's escaped local"
+    (any (\f -> findingAddress f == callerStart + 36) (violations tailReport))
+  -- Two bank calls in a chain: the caller's slot is gone after the first call
+  -- whatever the second one reaches.
+  let chainMiddle = fst (function "rb_status_record")
+      chainVeneer = replaceFunction "rb_probe_entry"
+        [0xe52de004, slotWord 0xe300c000 stockTarget, slotWord 0xe340c000 (stockTarget `shiftR` 16), 0xe12fff1c] clean
+      chainCallee = replaceFunction "rb_status_record"
+        [0xe92d4002, branchLink (chainMiddle + 4) (fst (function "rb_probe_entry")), 0xe8bd4002, 0xe12fff1e] chainVeneer
+  chainReport <- run allowlist (throughVeneer chainCallee)
+  check "a two-level bank chain reaching stock forgets the caller's escaped local"
+    (any (\f -> findingAddress f == callerStart + 36) (violations chainReport))
   forM_ [elfLow, elfHigh] $ \path -> do
     bytes <- B.readFile path
     image <- either fail pure (parseElf bytes)
