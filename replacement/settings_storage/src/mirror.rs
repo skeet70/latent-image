@@ -107,11 +107,21 @@ impl BodyOutcome {
 pub trait HeaderBackend {
     fn read_header(&mut self, destination: &mut [u8; HEADER_BYTES]) -> RequestOutcome;
     fn write_header(&mut self, source: &[u8; HEADER_BYTES]) -> MirrorOutcome;
+    /// Writes the header and leaves the report in `report`.
+    #[inline(always)]
+    fn write_header_into(&mut self, source: &[u8; HEADER_BYTES], report: &mut MirrorOutcome) {
+        *report = self.write_header(source);
+    }
 }
 pub trait SettingsBackend: HeaderBackend {
     fn read_body(&mut self, destination: &mut [u8; BODY_BYTES]) -> RequestOutcome;
     fn write_body(&mut self, source: &[u8; BODY_BYTES]) -> BodyOutcome;
     fn read_custom(&mut self, destination: &mut [u8; CUSTOM_BYTES]) -> RequestOutcome;
+    /// Writes the body and leaves the report in `report`.
+    #[inline(always)]
+    fn write_body_into(&mut self, source: &[u8; BODY_BYTES], report: &mut BodyOutcome) {
+        *report = self.write_body(source);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -193,6 +203,10 @@ pub struct BackingWriteOutcome {
     pub status: BackingStatus,
     pub synchronized: [Option<DriverObservation>; HEADER_BYTES],
     pub custom_refreshed: bool,
+}
+
+impl BackingWriteOutcome {
+    pub const ZERO: Self = Self { status: BackingStatus::Success, synchronized: [None; HEADER_BYTES], custom_refreshed: false };
 }
 
 pub struct SharedBacking<'a, D> {
@@ -309,10 +323,9 @@ impl<'a, D: HeaderBackupDriver> SharedBacking<'a, D> {
     }
 
     #[inline(always)]
-    pub fn synchronize(&mut self) -> [Option<DriverObservation>; HEADER_BYTES] {
+    pub fn synchronize_into(&mut self, observations: &mut [Option<DriverObservation>; HEADER_BYTES]) {
         let checksum = self.live[..15].iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)).wrapping_neg();
         crate::memory::write_byte(&mut self.live[15], checksum);
-        let mut observations = [None; HEADER_BYTES];
         for (index, (key, observation)) in self.keys.iter().zip(observations.iter_mut()).enumerate() {
             if crate::memory::read_byte(&*self.live, index) != crate::memory::read_byte(&*self.shadow, index) {
                 let key = *key;
@@ -322,23 +335,30 @@ impl<'a, D: HeaderBackupDriver> SharedBacking<'a, D> {
                 *observation = Some(DriverObservation { position: HeaderPosition(index as u8), key, value, status });
             }
         }
-        observations
     }
 
     #[inline(always)]
-    fn import_before_leave(&mut self, range: BackingRange, source: &[u8]) -> BackingWriteOutcome {
+    fn import_before_leave_into(&mut self, range: BackingRange, source: &[u8], outcome: &mut BackingWriteOutcome) {
         self.enter();
-        let mut outcome = BackingWriteOutcome { status: BackingStatus::Success, synchronized: [None; HEADER_BYTES], custom_refreshed: false };
+        outcome.status = BackingStatus::Success;
+        outcome.custom_refreshed = false;
+        for observation in outcome.synchronized.iter_mut() { *observation = None; }
         match self.driver.admit(RequestDirection::Write) {
             Err(status) => outcome.status = BackingStatus::Refused(status),
             Ok(()) => match range.projection(source.len()) {
                 Err(status) => outcome.status = status,
                 Ok(projection) => {
                     crate::memory::copy_bytes(self.live.get_mut(projection.clone()).unwrap(), source.get(..projection.len()).unwrap());
-                    outcome.synchronized = self.synchronize();
+                    self.synchronize_into(&mut outcome.synchronized);
                 }
             },
         }
+    }
+
+    #[inline(always)]
+    fn import_before_leave(&mut self, range: BackingRange, source: &[u8]) -> BackingWriteOutcome {
+        let mut outcome = BackingWriteOutcome::ZERO;
+        self.import_before_leave_into(range, source, &mut outcome);
         outcome
     }
 
@@ -361,24 +381,51 @@ impl<'a, D: HeaderBackupDriver> SharedBacking<'a, D> {
 
 impl<D: BackupDriver> SharedBacking<'_, D> {
     #[inline(always)]
-    pub fn import(&mut self, range: BackingRange, source: &[u8]) -> BackingWriteOutcome {
-        let mut outcome = self.import_before_leave(range, source);
+    pub fn import_into(&mut self, range: BackingRange, source: &[u8], outcome: &mut BackingWriteOutcome) {
+        self.import_before_leave_into(range, source, outcome);
         if outcome.status == BackingStatus::Success && range.end() > 0x140 {
             let custom: &[u8; CUSTOM_BYTES] = self.live[0x140..0x168].try_into().ok().unwrap();
             self.driver.refresh_custom(custom);
             outcome.custom_refreshed = true;
         }
         self.leave();
+    }
+
+    #[inline(always)]
+    pub fn import(&mut self, range: BackingRange, source: &[u8]) -> BackingWriteOutcome {
+        let mut outcome = BackingWriteOutcome::ZERO;
+        self.import_into(range, source, &mut outcome);
         outcome
     }
 
     #[inline(always)]
     pub fn write_request(&mut self, descriptor: RequestDescriptor, source: &[u8]) -> MirrorOutcome {
-        let outcome = self.import(descriptor.range(), source);
+        let mut outcome = BackingWriteOutcome::ZERO;
+        self.import_into(descriptor.range(), source, &mut outcome);
         MirrorOutcome { request: self.report(outcome.status), synchronized: outcome.synchronized }
+    }
+
+    /// Writes the body and leaves the report in `report`.
+    #[inline(always)]
+    pub fn write_body_into(&mut self, source: &[u8; BODY_BYTES], report: &mut BodyOutcome) {
+        let mut outcome = BackingWriteOutcome::ZERO;
+        self.import_into(RequestDescriptor::from_abi(BODY_BYTES as u32, 0x10).range(), source, &mut outcome);
+        report.request = self.report(outcome.status);
+        report.synchronized = outcome.synchronized;
     }
 }
 
+impl<D: HeaderBackupDriver> SharedBacking<'_, D> {
+    /// Writes the header and leaves the report in `report`.
+    #[inline(always)]
+    pub fn write_header_into(&mut self, source: &[u8; HEADER_BYTES], report: &mut MirrorOutcome) {
+        let mut outcome = BackingWriteOutcome::ZERO;
+        self.import_before_leave_into(BackingRange::new(0, HEADER_BYTES as u32), source, &mut outcome);
+        self.leave();
+        report.request = self.report(outcome.status);
+        report.synchronized = outcome.synchronized;
+    }
+}
 impl<D: HeaderBackupDriver> HeaderBackend for SharedBacking<'_, D> {
     #[inline(always)]
     fn read_header(&mut self, destination: &mut [u8; HEADER_BYTES]) -> RequestOutcome {
@@ -389,6 +436,10 @@ impl<D: HeaderBackupDriver> HeaderBackend for SharedBacking<'_, D> {
         let outcome = self.import_before_leave(BackingRange::new(0, HEADER_BYTES as u32), source);
         self.leave();
         MirrorOutcome { request: self.report(outcome.status), synchronized: outcome.synchronized }
+    }
+    #[inline(always)]
+    fn write_header_into(&mut self, source: &[u8; HEADER_BYTES], report: &mut MirrorOutcome) {
+        SharedBacking::write_header_into(self, source, report)
     }
 }
 impl<D: BackupDriver> SettingsBackend for SharedBacking<'_, D> {
@@ -401,6 +452,10 @@ impl<D: BackupDriver> SettingsBackend for SharedBacking<'_, D> {
     }
     fn read_custom(&mut self, destination: &mut [u8; CUSTOM_BYTES]) -> RequestOutcome {
         self.read_request(RequestDescriptor::from_abi(CUSTOM_BYTES as u32, 0x140), destination)
+    }
+    #[inline(always)]
+    fn write_body_into(&mut self, source: &[u8; BODY_BYTES], report: &mut BodyOutcome) {
+        SharedBacking::write_body_into(self, source, report)
     }
 }
 

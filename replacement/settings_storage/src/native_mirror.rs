@@ -136,6 +136,10 @@ impl<B: Backend> HeaderBackend for NativeHeaderBackend<'_, B> {
     fn write_header(&mut self, source: &[u8; HEADER_BYTES]) -> MirrorOutcome {
         unsafe { shared_backing(NativeHeaderDriver::new(self.kernel)).write_header(source) }
     }
+    #[inline(always)]
+    fn write_header_into(&mut self, source: &[u8; HEADER_BYTES], report: &mut MirrorOutcome) {
+        unsafe { shared_backing(NativeHeaderDriver::new(self.kernel)).write_header_into(source, report) }
+    }
 }
 
 /// One name for the backend an owned caller adopts.
@@ -162,6 +166,10 @@ impl<B: Backend> HeaderBackend for NativeBackend<'_, B> {
     fn write_header(&mut self, source: &[u8; HEADER_BYTES]) -> MirrorOutcome {
         NativeHeaderBackend { kernel: self.kernel }.write_header(source)
     }
+    #[inline(always)]
+    fn write_header_into(&mut self, source: &[u8; HEADER_BYTES], report: &mut MirrorOutcome) {
+        NativeHeaderBackend { kernel: self.kernel }.write_header_into(source, report)
+    }
 }
 #[cfg(not(settings_storage_header_only))]
 impl<B: Backend> SettingsBackend for NativeBackend<'_, B> {
@@ -172,6 +180,10 @@ impl<B: Backend> SettingsBackend for NativeBackend<'_, B> {
     #[inline(always)]
     fn write_body(&mut self, source: &[u8; crate::mirror::BODY_BYTES]) -> crate::BodyOutcome {
         unsafe { shared_backing(NativeBackupDriver::new(self.kernel)).write_body(source) }
+    }
+    #[inline(always)]
+    fn write_body_into(&mut self, source: &[u8; crate::mirror::BODY_BYTES], report: &mut crate::BodyOutcome) {
+        unsafe { shared_backing(NativeBackupDriver::new(self.kernel)).write_body_into(source, report) }
     }
     #[inline(always)]
     fn read_custom(&mut self, destination: &mut [u8; CUSTOM_BYTES]) -> RequestOutcome {

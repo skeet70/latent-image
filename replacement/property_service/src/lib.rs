@@ -201,110 +201,134 @@ fn get<B, C: SettingsConfiguration>(storage: &SettingsStorage<'_, B>, configurat
         Some(Kind::Unassigned) | None => 0,
     }
 }
+/// What `set` did, without the driver report: the caller decides where that report lives.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct WriteSummary { assignment: PropertyWriteOutcome, mirrored: bool }
+impl WriteSummary {
+    const ASSIGNED: Self = Self { assignment: PropertyWriteOutcome::Assigned, mirrored: false };
+    const UNASSIGNED: Self = Self { assignment: PropertyWriteOutcome::Unassigned, mirrored: false };
+    const MIRRORED: Self = Self { assignment: PropertyWriteOutcome::Assigned, mirrored: true };
+}
+
 #[inline(always)]
-fn set<B: HeaderBackend, C: SettingsConfiguration>(storage: &mut SettingsStorage<'_, B>, configuration: &C, id: PropertyId, value: WriteValue<ValueBits>, bank: SettingsBank, selection: ProfileSelection) -> PropertyWriteResult {
+fn set<B: HeaderBackend, C: SettingsConfiguration>(storage: &mut SettingsStorage<'_, B>, configuration: &C, id: PropertyId, value: WriteValue<ValueBits>, bank: SettingsBank, selection: ProfileSelection, mirror: &mut PropertyMirrorOutcome) -> WriteSummary {
     match entry(id) {
-        Some(Kind::Field(layout)) => {
-            let value = match value { WriteValue::Default => ValueBits(field_default(layout.default)), WriteValue::Value(value) => value };
-            let target = target(bank, Location::Bank(field(layout.offset, layout.bits)), layout.bits, layout.save);
-            storage.write_target(&target, value, target.update);
-            PropertyWriteResult::assigned(None)
+        Some(Kind::Field(layout)) => set_field(storage, layout, value, bank),
+        Some(Kind::SlotField(layout)) => set_slot(storage, configuration, layout, value, bank, selection),
+        Some(Kind::Special(index)) => set_special(storage, configuration, index, value, bank, mirror),
+        Some(Kind::Unassigned) | None => WriteSummary::UNASSIGNED,
+    }
+}
+
+#[inline(never)]
+fn set_field<B: HeaderBackend>(storage: &mut SettingsStorage<'_, B>, layout: table::Field, value: WriteValue<ValueBits>, bank: SettingsBank) -> WriteSummary {
+    let value = match value { WriteValue::Default => ValueBits(field_default(layout.default)), WriteValue::Value(value) => value };
+    let target = target(bank, Location::Bank(field(layout.offset, layout.bits)), layout.bits, layout.save);
+    storage.write_target(&target, value, target.update);
+    WriteSummary::ASSIGNED
+}
+
+#[inline(never)]
+fn set_slot<B: HeaderBackend, C: SettingsConfiguration>(storage: &mut SettingsStorage<'_, B>, configuration: &C, layout: table::SlotField, value: WriteValue<ValueBits>, bank: SettingsBank, selection: ProfileSelection) -> WriteSummary {
+    let selection = swapped_selection(selection);
+    let Some(record) = slot_record(layout.index) else { return WriteSummary::UNASSIGNED };
+    let descriptor = slot_field(field(layout.offset, layout.bits), record);
+    let target = slot_target(bank, &descriptor, selection, layout.bits, &record);
+    match value {
+        WriteValue::Value(value) => storage.write_target(&target, value, target.update),
+        WriteValue::Default => {
+            let provisional = if selection == ProfileSelection::Current { bank_default(record.bank_default) } else { SlotDefaultsWindow::read(selection, &descriptor).0 };
+            match record.default {
+                SlotDefault::Record => storage.write_target(&target, ValueBits(provisional), target.update),
+                SlotDefault::Stock(stock) => write_stock_default(storage, configuration, &target, provisional, stock),
+            }
         }
-        Some(Kind::SlotField(layout)) => {
-            let selection = swapped_selection(selection);
-            let Some(record) = slot_record(layout.index) else { return PropertyWriteResult::unassigned() };
-            let descriptor = slot_field(field(layout.offset, layout.bits), record);
-            let target = slot_target(bank, &descriptor, selection, layout.bits, &record);
-            match value {
-                WriteValue::Value(value) => storage.write_target(&target, value, target.update),
-                WriteValue::Default => {
-                    let provisional = if selection == ProfileSelection::Current { bank_default(record.bank_default) } else { SlotDefaultsWindow::read(selection, &descriptor).0 };
-                    match record.default {
-                        SlotDefault::Record => storage.write_target(&target, ValueBits(provisional), target.update),
-                        SlotDefault::Stock(stock) => write_stock_default(storage, configuration, &target, provisional, stock),
-                    }
+    }
+    if layout.mirror && !cfg!(storage_defect_e9_record0_mirror_omitted) {
+        let stored = match value { WriteValue::Value(value) => value, WriteValue::Default => SlotDefaultsWindow::read(ProfileSelection::Record0, &descriptor) };
+        let target = slot_target(bank, &descriptor, ProfileSelection::Record0, layout.bits, &record);
+        storage.write_target(&target, stored, target.update);
+    }
+    WriteSummary::ASSIGNED
+}
+
+#[inline(never)]
+fn set_special<B: HeaderBackend, C: SettingsConfiguration>(storage: &mut SettingsStorage<'_, B>, configuration: &C, index: SpecialIndex, value: WriteValue<ValueBits>, bank: SettingsBank, mirror: &mut PropertyMirrorOutcome) -> WriteSummary {
+    match special(index) {
+        Some(SpecialField::Hooked(layout)) => set_hooked(storage, configuration, layout, value, bank, mirror),
+        Some(SpecialField::WriteOnlyPair(pair)) => set_pair(storage, pair, value, bank, mirror),
+        Some(SpecialField::ReadOnly(_)) | None => WriteSummary::UNASSIGNED,
+    }
+}
+
+#[inline(never)]
+fn set_hooked<B: HeaderBackend, C: SettingsConfiguration>(storage: &mut SettingsStorage<'_, B>, configuration: &C, layout: HookedField, value: WriteValue<ValueBits>, bank: SettingsBank, mirror: &mut PropertyMirrorOutcome) -> WriteSummary {
+    let bracket = matches!(layout.hook, Hook::Bank0Bracket) && (bank == SettingsBank::Active || cfg!(storage_bracket_bank1) || cfg!(storage_defect_bracket_bank1));
+    if bracket && !cfg!(storage_open_removed) {
+        #[cfg(any(storage_read_before_open, storage_defect_read_bank_before_refresh))]
+        let stale_field = field(layout.offset, layout.bits);
+        #[cfg(any(storage_read_before_open, storage_defect_read_bank_before_refresh))]
+        let stale = storage.read(bank, stale_field);
+        let mut session = storage.open_header();
+        mirror.opened = Some(session.opened);
+        #[cfg(any(storage_read_before_open, storage_defect_read_bank_before_refresh))]
+        restore_stale_header(&mut session, stale_field, stale);
+        if cfg!(storage_close_before_set) || cfg!(storage_defect_close_before_field_store) {
+            session.close_into(&mut mirror.closed);
+            apply_hooked(storage, configuration, layout, value, bank);
+        } else {
+            apply_hooked(&mut session, configuration, layout, value, SettingsBank::Active);
+            session.close_into(&mut mirror.closed);
+        }
+        WriteSummary::MIRRORED
+    } else {
+        apply_hooked(storage, configuration, layout, value, bank);
+        if bracket {
+            mirror.opened = None;
+            storage.write_active_header_into(&mut mirror.closed);
+            WriteSummary::MIRRORED
+        } else {
+            WriteSummary::ASSIGNED
+        }
+    }
+}
+
+#[inline(never)]
+fn set_pair<B: HeaderBackend>(storage: &mut SettingsStorage<'_, B>, pair: WriteOnlyPair, value: WriteValue<ValueBits>, bank: SettingsBank, mirror: &mut PropertyMirrorOutcome) -> WriteSummary {
+    if bank == SettingsBank::Active || cfg!(storage_bracket_bank1) || cfg!(storage_defect_bracket_bank1) {
+        if cfg!(storage_open_removed) {
+            write_pair(storage, pair, pair.first, value, bank);
+            mirror.opened = None;
+            storage.write_active_header_into(&mut mirror.closed);
+        } else {
+            #[cfg(any(storage_read_before_open, storage_defect_read_bank_before_refresh))]
+            let stale_field = field(pair.first, pair.bits);
+            #[cfg(any(storage_read_before_open, storage_defect_read_bank_before_refresh))]
+            let stale = storage.read(bank, stale_field);
+            let mut session = storage.open_header();
+            mirror.opened = Some(session.opened);
+            #[cfg(any(storage_read_before_open, storage_defect_read_bank_before_refresh))]
+            restore_stale_header(&mut session, stale_field, stale);
+            if cfg!(storage_close_before_set) || cfg!(storage_defect_close_before_field_store) {
+                session.close_into(&mut mirror.closed);
+                write_pair(storage, pair, pair.first, value, bank);
+            } else {
+                write_pair(&mut session, pair, pair.first, value, SettingsBank::Active);
+                #[cfg(any(storage_pair_before_close, storage_defect_pair_close_after_both_writes))]
+                unsafe {
+                    extern "C" { fn xm1_storage_store8(address: *mut u8, value: u32); }
+                    let stored = match value { WriteValue::Default => pair.default, WriteValue::Value(value) => value.0 };
+                    xm1_storage_store8((0x96cc64 + pair.second.0) as *mut u8, stored);
                 }
+                session.close_into(&mut mirror.closed);
             }
-            if layout.mirror && !cfg!(storage_defect_e9_record0_mirror_omitted) {
-                let stored = match value { WriteValue::Value(value) => value, WriteValue::Default => SlotDefaultsWindow::read(ProfileSelection::Record0, &descriptor) };
-                let target = slot_target(bank, &descriptor, ProfileSelection::Record0, layout.bits, &record);
-                storage.write_target(&target, stored, target.update);
-            }
-            PropertyWriteResult::assigned(None)
         }
-        Some(Kind::Special(index)) => match special(index) {
-            Some(SpecialField::Hooked(layout)) => {
-                let bracket = matches!(layout.hook, Hook::Bank0Bracket) && (bank == SettingsBank::Active || cfg!(storage_bracket_bank1) || cfg!(storage_defect_bracket_bank1));
-                let mirror = if bracket && !cfg!(storage_open_removed) {
-                    #[cfg(any(storage_read_before_open, storage_defect_read_bank_before_refresh))]
-                    let stale_field = field(layout.offset, layout.bits);
-                    #[cfg(any(storage_read_before_open, storage_defect_read_bank_before_refresh))]
-                    let stale = storage.read(bank, stale_field);
-                    let mut session = storage.open_header();
-                    let opened = session.opened;
-                    #[cfg(any(storage_read_before_open, storage_defect_read_bank_before_refresh))]
-                    restore_stale_header(&mut session, stale_field, stale);
-                    let closed = if cfg!(storage_close_before_set) || cfg!(storage_defect_close_before_field_store) {
-                        let closed = session.close();
-                        apply_hooked(storage, configuration, layout, value, bank);
-                        closed
-                    } else {
-                        apply_hooked(&mut session, configuration, layout, value, SettingsBank::Active);
-                        session.close()
-                    };
-                    Some(PropertyMirrorOutcome { opened: Some(opened), closed })
-                } else {
-                    apply_hooked(storage, configuration, layout, value, bank);
-                    if bracket {
-                        let closed = storage.write_active_header();
-                        Some(PropertyMirrorOutcome { opened: None, closed })
-                    } else { None }
-                };
-                PropertyWriteResult::assigned(mirror)
-            }
-            Some(SpecialField::WriteOnlyPair(pair)) => {
-                let mirror = if bank == SettingsBank::Active || cfg!(storage_bracket_bank1) || cfg!(storage_defect_bracket_bank1) {
-                    let mirror = if cfg!(storage_open_removed) {
-                        write_pair(storage, pair, pair.first, value, bank);
-                        let closed = storage.write_active_header();
-                        PropertyMirrorOutcome { opened: None, closed }
-                    } else {
-                        #[cfg(any(storage_read_before_open, storage_defect_read_bank_before_refresh))]
-                        let stale_field = field(pair.first, pair.bits);
-                        #[cfg(any(storage_read_before_open, storage_defect_read_bank_before_refresh))]
-                        let stale = storage.read(bank, stale_field);
-                        let mut session = storage.open_header();
-                        let opened = session.opened;
-                        #[cfg(any(storage_read_before_open, storage_defect_read_bank_before_refresh))]
-                        restore_stale_header(&mut session, stale_field, stale);
-                        let closed = if cfg!(storage_close_before_set) || cfg!(storage_defect_close_before_field_store) {
-                            let closed = session.close();
-                            write_pair(storage, pair, pair.first, value, bank);
-                            closed
-                        } else {
-                            write_pair(&mut session, pair, pair.first, value, SettingsBank::Active);
-                            #[cfg(any(storage_pair_before_close, storage_defect_pair_close_after_both_writes))]
-                            unsafe {
-                                extern "C" { fn xm1_storage_store8(address: *mut u8, value: u32); }
-                                let stored = match value { WriteValue::Default => pair.default, WriteValue::Value(value) => value.0 };
-                                xm1_storage_store8((0x96cc64 + pair.second.0) as *mut u8, stored);
-                            }
-                            session.close()
-                        };
-                        PropertyMirrorOutcome { opened: Some(opened), closed }
-                    };
-                    write_pair(storage, pair, pair.second, value, bank);
-                    Some(mirror)
-                } else {
-                    write_pair(storage, pair, pair.first, value, bank);
-                    write_pair(storage, pair, pair.second, value, bank);
-                    None
-                };
-                PropertyWriteResult::assigned(mirror)
-            }
-            Some(SpecialField::ReadOnly(_)) | None => PropertyWriteResult::unassigned(),
-        },
-        Some(Kind::Unassigned) | None => PropertyWriteResult::unassigned(),
+        write_pair(storage, pair, pair.second, value, bank);
+        WriteSummary::MIRRORED
+    } else {
+        write_pair(storage, pair, pair.first, value, bank);
+        write_pair(storage, pair, pair.second, value, bank);
+        WriteSummary::ASSIGNED
     }
 }
 
@@ -322,23 +346,66 @@ pub struct PropertyMirrorOutcome {
     pub opened: Option<storage::RequestOutcome>,
     pub closed: storage::MirrorOutcome,
 }
+impl PropertyMirrorOutcome {
+    const NONE: Self = Self { opened: None, closed: storage::MirrorOutcome::unchanged() };
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PropertyWriteResult {
     pub assignment: PropertyWriteOutcome,
     pub mirror: Option<PropertyMirrorOutcome>,
-}
-impl PropertyWriteResult {
-    #[inline(always)]
-    fn assigned(mirror: Option<PropertyMirrorOutcome>) -> Self { Self { assignment: PropertyWriteOutcome::Assigned, mirror } }
-    #[inline(always)]
-    fn unassigned() -> Self { Self { assignment: PropertyWriteOutcome::Unassigned, mirror: None } }
 }
 
 pub fn read_property<B, C: SettingsConfiguration>(storage: &SettingsStorage<'_, B>, configuration: &C, id: PropertyId, bank: SettingsBank, mode: ReadMode, selection: ProfileSelection) -> ValueBits {
     ValueBits(get(storage, configuration, id, bank, mode, selection))
 }
 pub fn write_property<B: HeaderBackend, C: SettingsConfiguration>(storage: &mut SettingsStorage<'_, B>, configuration: &C, id: PropertyId, value: WriteValue<ValueBits>, bank: SettingsBank, selection: ProfileSelection) -> PropertyWriteResult {
-    set(storage, configuration, id, value, bank, selection)
+    let mut mirror = PropertyMirrorOutcome::NONE;
+    let summary = set(storage, configuration, id, value, bank, selection, &mut mirror);
+    PropertyWriteResult { assignment: summary.assignment, mirror: if summary.mirrored { Some(mirror) } else { None } }
+}
+
+/// Where a property write's driver reports land when the caller reads none; `ENGINE_TASK` holds `ENGINE_BUSY` for the whole event.
+#[cfg(not(test))]
+struct DiscardedWrite { mirror: PropertyMirrorOutcome, body: storage::BodyOutcome }
+#[cfg(not(test))]
+impl DiscardedWrite {
+    const EMPTY: Self = Self { mirror: PropertyMirrorOutcome::NONE, body: storage::BodyOutcome::unchanged() };
+}
+#[cfg(not(test))]
+static mut DISCARDED_WRITE: DiscardedWrite = DiscardedWrite::EMPTY;
+
+/// The task whose stack the engine's budget covers.
+#[cfg(not(test))]
+const ENGINE_TASK: u8 = 1;
+
+#[cfg(not(test))]
+#[inline(always)]
+fn write_with_report<B: HeaderBackend, C: SettingsConfiguration>(storage: &mut SettingsStorage<'_, B>, configuration: &C, id: PropertyId, value: WriteValue<ValueBits>, bank: SettingsBank, selection: ProfileSelection, report: &mut DiscardedWrite) -> PropertyWriteOutcome {
+    #[cfg(property_reload)]
+    if bank == SettingsBank::Active {
+        storage.refresh_active_body();
+    }
+    let summary = set(storage, configuration, id, value, bank, selection, &mut report.mirror);
+    #[cfg(property_reload)]
+    if bank == SettingsBank::Active && summary.assignment == PropertyWriteOutcome::Assigned {
+        storage.write_active_body_into(&mut report.body);
+    }
+    summary.assignment
+}
+
+#[cfg(not(test))]
+#[cold]
+#[inline(never)]
+fn write_with_local_report<B: HeaderBackend, C: SettingsConfiguration>(storage: &mut SettingsStorage<'_, B>, configuration: &C, id: PropertyId, value: WriteValue<ValueBits>, bank: SettingsBank, selection: ProfileSelection) -> PropertyWriteOutcome {
+    let mut report = DiscardedWrite::EMPTY;
+    write_with_report(storage, configuration, id, value, bank, selection, &mut report)
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn write_discarding<B: HeaderBackend, C: SettingsConfiguration>(storage: &mut SettingsStorage<'_, B>, configuration: &C, id: PropertyId, value: WriteValue<ValueBits>, bank: SettingsBank, selection: ProfileSelection) -> PropertyWriteOutcome {
+    let report = unsafe { &mut *core::ptr::addr_of_mut!(DISCARDED_WRITE) };
+    write_with_report(storage, configuration, id, value, bank, selection, report)
 }
 
 /// The wrappers' bodies over the owned service: slot `0x6439e0`, bank-0 body reload and write-back.
@@ -361,21 +428,17 @@ impl Properties {
         unsafe { storage_boundary::with_storage(&self.kernel, |storage| read_property(storage, &configuration, id, bank, mode, selection)) }
     }
 
-    pub fn write(&mut self, id: PropertyId, value: WriteValue<ValueBits>, bank: SettingsBank) -> PropertyWriteResult {
+    pub fn write(&mut self, id: PropertyId, value: WriteValue<ValueBits>, bank: SettingsBank) -> PropertyWriteOutcome {
         let configuration = unsafe { NativeConfiguration::adopt() };
         let selection = storage_boundary::current_selection();
-        unsafe { storage_boundary::with_storage(&self.kernel, |storage| {
-            #[cfg(property_reload)]
-            if bank == SettingsBank::Active {
-                storage.refresh_active_body();
-            }
-            let result = write_property(storage, &configuration, id, value, bank, selection);
-            #[cfg(property_reload)]
-            if bank == SettingsBank::Active && result.assignment == PropertyWriteOutcome::Assigned {
-                storage.write_active_body();
-            }
-            result
-        }) }
+        match self.kernel.task() {
+            Some(task) if task.id().get() == ENGINE_TASK => unsafe {
+                storage_boundary::with_storage(&self.kernel, |storage| write_discarding(storage, &configuration, id, value, bank, selection))
+            },
+            _ => unsafe {
+                storage_boundary::with_storage(&self.kernel, |storage| write_with_local_report(storage, &configuration, id, value, bank, selection))
+            },
+        }
     }
 }
 
@@ -418,9 +481,10 @@ pub unsafe extern "C" fn xm1_property_set(id: u32, value: u32, bank: u32, select
     let value = if cfg!(property_defect_sentinel_plus_one) && value == 0x1b000000 { WriteValue::Default } else if cfg!(property_defect_sentinel_plus_one) { WriteValue::Value(ValueBits(value)) } else { WriteValue::from_abi(value) };
     let configuration = unsafe { NativeConfiguration::adopt() };
     let kernel = unsafe { Kernel::<SlotTable>::stock() };
+    let mut mirror = PropertyMirrorOutcome::NONE;
     let result = unsafe { storage_boundary::with_storage(&kernel, |storage| {
         if cfg!(storage_defect_snapshot_entire_bank_per_set) && bank == SettingsBank::Active { storage.capture_active(); }
-        let result = set(storage, &configuration, id, value, bank, selection).assignment;
+        let result = set(storage, &configuration, id, value, bank, selection, &mut mirror).assignment;
         #[cfg(storage_defect_save_on_bank1)]
         if bank == SettingsBank::Alternate { storage.capture_alternate(); }
         if cfg!(storage_defect_save_after_final_store) && bank == SettingsBank::Active { storage.capture_active(); }

@@ -129,6 +129,9 @@ impl<'a, B: HeaderBackend> SettingsStorage<'a, B> {
     pub fn write_active_header(&mut self) -> MirrorOutcome {
         self.backend.write_header(part(self.banks, 0, 16).try_into().unwrap_or_else(|_| contract_violation()))
     }
+    pub fn write_active_header_into(&mut self, report: &mut MirrorOutcome) {
+        self.backend.write_header_into(part(self.banks, 0, 16).try_into().unwrap_or_else(|_| contract_violation()), report)
+    }
 }
 impl<'a, B: SettingsBackend> SettingsStorage<'a, B> {
     pub fn restore_active_body(&mut self) -> BodyOutcome {
@@ -137,6 +140,9 @@ impl<'a, B: SettingsBackend> SettingsStorage<'a, B> {
     }
     pub fn refresh_active_body(&mut self) -> RequestOutcome { self.backend.read_body(part_mut(self.banks, 16, 0x118).try_into().unwrap_or_else(|_| contract_violation())) }
     pub fn write_active_body(&mut self) -> BodyOutcome { self.backend.write_body(part(self.banks, 16, 0x118).try_into().unwrap_or_else(|_| contract_violation())) }
+    pub fn write_active_body_into(&mut self, report: &mut BodyOutcome) {
+        self.backend.write_body_into(part(self.banks, 16, 0x118).try_into().unwrap_or_else(|_| contract_violation()), report)
+    }
     #[inline(always)]
     pub fn load_images(&mut self) -> ImageLoadOutcome {
         let mut requests = [RequestOutcome::success(); 9];
@@ -228,6 +234,14 @@ impl<B: HeaderBackend> MirrorSession<'_, '_, B> {
         #[cfg(all(not(test), storage_defect_close_appends_area3))]
         unsafe { native_mirror::append_bank_as_record(self.storage.banks.as_ptr()); }
         outcome
+    }
+    #[inline(always)]
+    pub fn close_into(self, report: &mut MirrorOutcome) {
+        self.storage.write_active_header_into(report);
+        #[cfg(all(not(test), storage_defect_checksum_written_into_bank))]
+        memory::write_byte(&mut self.storage.banks[15], unsafe { core::ptr::read_volatile(0x409c282b as *const u8) });
+        #[cfg(all(not(test), storage_defect_close_appends_area3))]
+        unsafe { native_mirror::append_bank_as_record(self.storage.banks.as_ptr()); }
     }
 }
 
