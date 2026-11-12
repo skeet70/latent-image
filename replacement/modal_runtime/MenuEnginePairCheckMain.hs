@@ -9,7 +9,7 @@
 module Main (main) where
 
 import qualified ArmElf as ELF
-import Control.Monad (forM, forM_, unless)
+import Control.Monad (forM, forM_, unless, when)
 import qualified Data.Aeson as J
 import qualified Data.Aeson.Types as J
 import qualified Data.Aeson.KeyMap as KM
@@ -88,8 +88,8 @@ renderEvidence role directory = do
   either fail pure (E.checkOwnedSources roleElf evidence)
   pure evidence
 
-runRetained :: RenderConfig -> MenuTree -> TablesDocument -> TablesDocument -> FilePath -> FilePath -> IO Bool
-runRetained config tree stockTables document stockPath ownedPath = do
+runRetained :: RenderConfig -> Bool -> MenuTree -> TablesDocument -> TablesDocument -> FilePath -> FilePath -> IO Bool
+runRetained config write tree stockTables document stockPath ownedPath = do
   stock <- observations stockPath
   owned <- observations ownedPath
   unless (not (null stock) && not (null owned)) (fail "a role has no e2e observations")
@@ -129,9 +129,10 @@ runRetained config tree stockTables document stockPath ownedPath = do
       Right () -> putStrLn "pair: engine reads and 0x1d posts equal" >> pure True
   stockHits <- sessionHits stockPath >>= either fail pure
   ownedHits <- sessionHits ownedPath >>= either fail pure
-  forM_ [(StockRole,stockPath,stock),(OwnedRole,ownedPath,owned)] $ \(_,path,_) -> do
+  forM_ [(StockRole,stockPath,stock),(OwnedRole,ownedPath,owned)] $ \(_,path,segments) -> do
     value <- B.readFile (path </> "e2e-result.json") >>= either fail pure . J.eitherDecodeStrict'
     either fail pure (J.parseEither (validateRetainedRenderDeclarations config) value)
+    when write (writeRenderReceipt path segments)
   let renderFailure problem = hPutStrLn stderr ("render: " ++ problem) >> pure False
   unless (map readerPhase stock == map readerPhase owned) (fail "render segment phases differ")
   coverage <- checkRenderCoverageReader config stock owned
@@ -221,7 +222,7 @@ countDrawers directory = do
 
 runCheck :: [String] -> IO ()
 runCheck arguments = do
-  (render, tablesPath, planPath, stockPath, ownedPath) <- either fail pure (options arguments)
+  (render, writeReceipt, tablesPath, planPath, stockPath, ownedPath) <- either fail pure (options arguments)
   stockTables <- B.readFile tablesPath >>= either fail pure . (J.eitherDecodeStrict' :: B.ByteString -> Either String TablesDocument)
   plan <- B.readFile planPath >>= either fail pure . J.eitherDecodeStrict'
   overlay <- either (fail . ("package plan: " ++)) pure (parsePackagePlan plan)
@@ -229,7 +230,7 @@ runCheck arguments = do
   let tree = menuTree document
   case render of
     Just (RetainedRender config) -> do
-      ok <- runRetained config tree stockTables document stockPath ownedPath
+      ok <- runRetained config writeReceipt tree stockTables document stockPath ownedPath
       unless ok exitFailure
       exitSuccess
     _ -> pure ()
@@ -335,24 +336,25 @@ runCheck arguments = do
           pure True
   unless (and (valueLifecycle : rendered : paired : results ++ stacks)) exitFailure
 
-options :: [String] -> Either String (Maybe RenderSelection,FilePath,FilePath,FilePath,FilePath)
-options = go Nothing
+options :: [String] -> Either String (Maybe RenderSelection,Bool,FilePath,FilePath,FilePath,FilePath)
+options = go Nothing False
  where
   defaults = RenderConfig [0..18] Nothing 0xa4ce00 DrawsRequired
-  go Nothing ("--render":rest) = go (Just (OwnedRender defaults)) rest
-  go Nothing ("--retained-render":rest) = go (Just (RetainedRender (defaults {renderCoverage = RetainedObservation}))) rest
-  go (Just selection) ("--render-draw-free":rest) = go (Just (mapSelection (\config -> config {renderCoverage = DeclaredDrawFree}) selection)) rest
-  go (Just selection) ("--render-banks":banks:rest) = do
+  go selection _write ("--write-render-receipt":rest) = go selection True rest
+  go Nothing write ("--render":rest) = go (Just (OwnedRender defaults)) write rest
+  go Nothing write ("--retained-render":rest) = go (Just (RetainedRender (defaults {renderCoverage = RetainedObservation}))) write rest
+  go (Just selection) write ("--render-draw-free":rest) = go (Just (mapSelection (\config -> config {renderCoverage = DeclaredDrawFree}) selection)) write rest
+  go (Just selection) write ("--render-banks":banks:rest) = do
     parsed <- J.eitherDecodeStrict' (B.pack (map (fromIntegral . fromEnum) banks))
-    go (Just (mapSelection (\config -> config {renderBanks = parsed}) selection)) rest
-  go (Just selection) ("--render-clock-resource":resource:rest) = case stripPrefix "0x" resource of
-    Just digits | [(value,"")] <- readHex digits -> go (Just (mapSelection (\config -> config {renderClock = Just (ResourceId value)}) selection)) rest
+    go (Just (mapSelection (\config -> config {renderBanks = parsed}) selection)) write rest
+  go (Just selection) write ("--render-clock-resource":resource:rest) = case stripPrefix "0x" resource of
+    Just digits | [(value,"")] <- readHex digits -> go (Just (mapSelection (\config -> config {renderClock = Just (ResourceId value)}) selection)) write rest
     _ -> Left "render clock resource requires a hex word"
-  go (Just selection) ("--render-stack-base":address:rest) = case stripPrefix "0x" address of
-    Just digits | [(value,"")] <- readHex digits -> go (Just (mapSelection (\config -> config {renderStackBase = value}) selection)) rest
+  go (Just selection) write ("--render-stack-base":address:rest) = case stripPrefix "0x" address of
+    Just digits | [(value,"")] <- readHex digits -> go (Just (mapSelection (\config -> config {renderStackBase = value}) selection)) write rest
     _ -> Left "render stack base requires a hex word"
-  go config ["--tables",tables,"--package-plan",plan,"--stock",stock,"--owned",owned] = Right (config,tables,plan,stock,owned)
-  go _ _ = Left "usage: menu-engine-pair-check [--render|--retained-render [--render-draw-free] [--render-banks JSON] [--render-clock-resource 0xID] [--render-stack-base 0xBASE]] --tables TABLES --package-plan PLAN --stock RECEIPT --owned RECEIPT"
+  go selection write ["--tables",tables,"--package-plan",plan,"--stock",stock,"--owned",owned] = Right (selection,write,tables,plan,stock,owned)
+  go _ _ _ = Left "usage: menu-engine-pair-check [--render|--retained-render [--write-render-receipt] [--render-draw-free] [--render-banks JSON] [--render-clock-resource 0xID] [--render-stack-base 0xBASE]] --tables TABLES --package-plan PLAN --stock RECEIPT --owned RECEIPT"
 
 writeRenderReceipt :: FilePath -> [ObservationReader] -> IO ()
 writeRenderReceipt directory segments = do
