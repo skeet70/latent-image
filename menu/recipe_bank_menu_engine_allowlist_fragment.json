@@ -27,11 +27,6 @@
    "source": "replacement/menu_engine/adapter/entry.S; stock FUN_00bfad04 after a nested pop onto a type 5 or 7 node"
   },
   {
-   "address": "0x006a86c4",
-   "name": "xm1_bank_custom_refresh",
-   "source": "replacement/settings_storage/src/native_mirror.rs refresh_custom; stock custom-setting refresh entry, called with the 0x28-byte custom window"
-  },
-  {
    "address": "0x0061d59c",
    "name": "xm1_stock_default_61d59c",
    "source": "replacement/settings_storage/src/native_configuration.rs; stock reader for one settings field's default"
@@ -63,8 +58,8 @@
   },
   {
    "address": "0x00041a34",
-   "name": "xm1_kernel_console9",
-   "source": "menu/recipe_bank_ram_engine.ld; stock console print the slot report uses"
+   "name": "xm1_kernel_event_log_append",
+   "source": "decode/loader-40000.dis; appends one 16-byte event record (store type 9 at 0x400a0834, the id, the halfword argument, the value with the thread in the high half and the 0x400c0800 tick) at 0x400a0800 + 16 * index, the kernel's RAM log store that transport/README.md read-log reads"
   },
   {
    "address": "0x007235d8",
@@ -98,12 +93,6 @@
    "bytes": 8,
    "name": "menu engine last-move pair",
    "source": "replacement/menu_engine/adapter/mod.rs write_state"
-  },
-  {
-   "address": "0x0089edc4",
-   "bytes": 4,
-   "name": "storage status cell",
-   "source": "replacement/property_service/storage-boundary.S xm1_storage_status32"
   },
   {
    "address": "0x40a0f82c",
@@ -426,14 +415,6 @@
    "reason": "writes the SemaphoreHold it returns through the caller's sret pointer"
   },
   {
-   "function": "_RNvXsg_NtCsdTMjx7m5njD_25xm1_settings_storage_core6mirrorINtB5_13SharedBackingINtNtB7_13native_mirror12NativeDriverNtNtCsjPY53278zkB_10xm1_kernel10slot_table9SlotTableNtB1h_10FullBackupEENtB5_15SettingsBackend9read_bodyCsap93jzluDcr_20xm1_property_service",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "writes the body report it returns through the caller's sret pointer"
-  },
-  {
    "function": "xm1_storage_output8",
    "access": "store",
    "through": {
@@ -463,23 +444,15 @@
    "through": {
     "argument": "r0"
    },
-   "reason": "forwards the session it was lent to read_body, which writes the body part through the output leaves' length and index checks"
+   "reason": "forwards its return slot to read_body_window, which writes the 10-byte RequestOutcome there; every caller passes its own frame"
   },
   {
-   "function": "_RNvMs1_CsdTMjx7m5njD_25xm1_settings_storage_coreINtB5_15SettingsStorageINtNtB5_13native_mirror13NativeBackendNtNtCsjPY53278zkB_10xm1_kernel10slot_table9SlotTableEE19refresh_active_bodyCsap93jzluDcr_20xm1_property_service",
+   "function": "_RNvXsg_NtCsdTMjx7m5njD_25xm1_settings_storage_core6mirrorINtB5_13SharedBackingINtNtB7_13native_mirror12NativeDriverNtNtCsjPY53278zkB_10xm1_kernel10slot_table9SlotTableNtB1h_10FullBackupEENtB5_15SettingsBackend16read_body_windowCsap93jzluDcr_20xm1_property_service",
    "access": "store",
    "through": {
-    "result": "_RINvMNtCsjw6Ar5Xz5I4_4core6optionINtB3_6OptionQShE14unwrap_or_elseNCNvCsdTMjx7m5njD_25xm1_settings_storage_core8part_mut0ECsap93jzluDcr_20xm1_property_service"
+    "argument": "r0"
    },
-   "reason": "forwards the body part it holds to read_body, which writes it through the output leaves' length and index checks"
-  },
-  {
-   "function": "_RNvXsg_NtCsdTMjx7m5njD_25xm1_settings_storage_core6mirrorINtB5_13SharedBackingINtNtB7_13native_mirror12NativeDriverNtNtCsjPY53278zkB_10xm1_kernel10slot_table9SlotTableNtB1h_10FullBackupEENtB5_15SettingsBackend9read_bodyCsap93jzluDcr_20xm1_property_service",
-   "access": "store",
-   "through": {
-    "argument": "r2"
-   },
-   "reason": "writes the body buffer it was handed through the output leaves, which check the length and the index against it"
+   "reason": "writes the 10-byte RequestOutcome it returns through the caller's sret slot; every caller passes its own frame"
   },
   {
    "function": "_RNvXNtCsjPY53278zkB_10xm1_kernel10slot_tableNtB2_10StockGuestNtB2_5Guest5enter",
@@ -574,14 +547,6 @@
     "argument": "r0"
    },
    "reason": "stores the session it returns into the result slot the caller passes, which every caller keeps on its own frame"
-  },
-  {
-   "function": "_RNvMs0_CsdTMjx7m5njD_25xm1_settings_storage_coreINtB5_15SettingsStorageINtNtB5_13native_mirror13NativeBackendNtNtCsjPY53278zkB_10xm1_kernel10slot_table9SlotTableEE11open_headerCsap93jzluDcr_20xm1_property_service",
-   "access": "store",
-   "through": {
-    "result": "_RINvMNtCsjw6Ar5Xz5I4_4core6optionINtB3_6OptionQShE14unwrap_or_elseNCNvCsdTMjx7m5njD_25xm1_settings_storage_core8part_mut0ECsap93jzluDcr_20xm1_property_service"
-   },
-   "reason": "the read writes the 16 header bytes into the storage image's first 16 bytes through this part; the output helpers check the length and index against it"
   }
  ]
 }
