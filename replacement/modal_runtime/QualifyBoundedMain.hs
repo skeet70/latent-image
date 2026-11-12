@@ -254,7 +254,7 @@ expectedArchive, expectedRetired, expectedTables, expectedPlan, expectedClock, e
 expectedArchive = sha "45e3da8439d91ceb4ec6424201056822ccbec7efbb5fba5f45328b5100d48435"
 expectedRetired = sha "5b289e1796ff1653abd1d9e50169c71d4e63bb61d65677d36345b442993172f6"
 expectedTables = sha "7fa536b6f4ab72205be57f407ce7224fa0bbc397aca2061ad2fac3e14ba2021d"
-expectedPlan = sha "fcfe3ec56b17f293acede09257ac967cd7f98d32d100ce540e4b17e85c735ceb"
+expectedPlan = sha "b7ee628a84ad930e309bccf74bf69ec8065f22c12ec5b5b059db842bf7bba05a"
 expectedClock = sha "f9ee8573fe6d1c16d872369290d48735172174541215d2dda5ea5d17233012a1"
 expectedRom = sha "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be"
 
@@ -270,9 +270,9 @@ checkerRoot = "bazel-bin"
 trajectoryRoot, runDocument, inputsRoot, tablesPath, planPath, clockPath :: FilePath
 trajectoryRoot = "private-data/scratch/ControllerStrategy/engine225/controlled-rtc/trajectories"
 runDocument = "private-data/scratch/ControllerStrategy/engine225/controlled-rtc/xm1-150.json"
-inputsRoot = "private-data/scratch/ControllerStrategy/engine225/final-769cee2d/inputs"
+inputsRoot = "private-data/scratch/ControllerStrategy/engine225/final-0e6b76fc/inputs"
 tablesPath = "private-data/scratch/ControllerStrategy/menu-tables.json"
-planPath = "private-data/scratch/ControllerStrategy/engine225/final-769cee2d/inputs/bank-plan.json"
+planPath = "private-data/scratch/ControllerStrategy/engine225/final-0e6b76fc/inputs/bank-plan.json"
 clockPath = "emulation/menu-engine-pair-trajectories/clock-exclusions.json"
 
 main :: IO ()
