@@ -175,8 +175,7 @@ observationDiagnosticClass receipt = case observationDisposition receipt of
     | otherwise -> FullDiagnostic (sdkExactMismatches (observationSDK receipt))
 
 observationRun :: ObservationReceipt -> O.Run
-observationRun receipt = raw { O.runRegisters = filter (\(register, _) -> register /= N.R3 || observationClaimsR3 receipt) (O.runRegisters raw) }
-  where raw = observationRawRun receipt
+observationRun receipt = O.projectRun (if observationClaimsR3 receipt then O.PublicWrapperEntryContract else O.CanonicalEntryContract) (observationRawRun receipt)
 
 observationSDKStatus :: ObservationReceipt -> SDKStatus
 observationSDKStatus = sdkStatus . observationSDK

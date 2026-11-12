@@ -424,7 +424,16 @@ main = do
     , check "a read outside the fixture is not modelled" (model slotOwned (Get Bank0 DefaultRead (slot 0x10)) == Nothing)
     , check "ids outside the tables are modelled as unassigned" (modelled OutOfRange == Just OwnedUnassigned && modelled delegated == Nothing)
     , check "set values use the field mask, else 0x7f" (map (setValue owned3 (slot 0)) [SetFieldMax, SetAboveMax] == [7, 8] && map (setValue delegated (slot 0)) [SetFieldMax, SetAboveMax, SetDefaultRequest] == [0x7f, 0x80, 0x1affffff])
-    , check "a model outside the fixture is a model difference" (modelDifferences handFixture slotOwned (Get Bank0 DefaultRead (slot 0x10)) baseRun == [ModelOutsideFixture])
+    , check "a model outside the fixture is a model difference" (modelDifferences CanonicalEntryContract handFixture slotOwned (Get Bank0 DefaultRead (slot 0x10)) baseRun == [ModelOutsideFixture])
+    , check "the canonical entry contract ignores r3 while the public wrapper compares it"
+        (let reference = baseRun {runRegisters = [(R0, 1), (R3, 0xffffffff), (R6, 0xa5a50006), (Sp, 0x9597f0)]}
+             subject = reference {runRegisters = [(R0, 1), (R3, 0), (R6, 0xa5a50006), (Sp, 0x9597f0)]}
+             expected = fmap (projectExpectation CanonicalEntryContract) (modelExpectation handFixture OwnedUnassigned (Set Bank1 (slot 3) SetOne))
+             wrapperExpected = fmap (projectExpectation PublicWrapperEntryContract) (modelExpectation handFixture OwnedUnassigned (Set Bank1 (slot 3) SetOne))
+         in null (compareRuns (projectRun CanonicalEntryContract reference) (projectRun CanonicalEntryContract subject))
+              && compareRuns (projectRun PublicWrapperEntryContract reference) (projectRun PublicWrapperEntryContract subject) == [RegisterDiffers R3 0xffffffff 0]
+              && fmap (lookup R3 . expectedRegisters) expected == Just Nothing
+              && fmap (lookup R3 . expectedRegisters) wrapperExpected == Just (Just 3))
     , check "an identical run has no difference" (null (compareRuns baseRun baseRun))
     , check "a different write value differs" (compareRuns baseRun baseRun {runWrites = Just [WriteEvent 0x96cc64 1 0xac]} == [WritesDiffer])
     , check "a truncated log fails" (compareRuns baseRun baseRun {runWrites = Nothing} == [SubjectTruncated])
