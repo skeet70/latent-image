@@ -247,14 +247,20 @@ storageWindows = [(0x96cc64, 0x96d1aa), (0x89ec00, 0x89ede0), (0x409c281c, 0x409
 
 -- | The checked whole-write windows in storage-boundary.S.
 storageStoreWords :: StorageWidth -> [Word32]
-storageStoreWords width = concat [window index low high | (index, (low, high)) <- zip [0 ..] storageWindows] ++ [0xe12fff1e, store, 0xe12fff1e]
+storageStoreWords width = concat [window index low high | (index, (low, high)) <- zip [0 ..] storageWindows] ++ [0xe12fff1e]
   where
     bytes = case width of StorageByte -> 1; StorageHalf -> 2
-    store = case width of StorageByte -> 0xe5c01000; StorageHalf -> 0xe1c010b0
-    constant address = [0xe300c000 .|. ((address .&. 0xf000) `shiftL` 4) .|. (address .&. 0xfff), 0xe340c000 .|. (((address `shiftR` 16) .&. 0xf000) `shiftL` 4) .|. ((address `shiftR` 16) .&. 0xfff)]
-    branch site target = 0x3a000000 .|. (fromIntegral (target - site - 2 :: Int) .&. 0xffffff)
-    window index low high = constant low ++ [0xe150000c, branch (index * 8 + 3) ((index + 1) * 8)]
-      ++ constant (high - bytes + 1) ++ [0xe150000c, branch (index * 8 + 7) 33]
+    store = case width of StorageByte -> 0xe5c21000; StorageHalf -> 0xe1c210b0
+    constant register address =
+      [ 0xe3000000 .|. (register `shiftL` 12) .|. ((address .&. 0xf000) `shiftL` 4) .|. (address .&. 0xfff)
+      , 0xe3400000 .|. (register `shiftL` 12) .|. (((address `shiftR` 16) .&. 0xf000) `shiftL` 4) .|. ((address `shiftR` 16) .&. 0xfff)
+      ]
+    branch site target = 0x8a000000 .|. (fromIntegral (target - site - 2 :: Int) .&. 0xffffff)
+    window index low high =
+      constant 12 low
+        ++ [0xe040200c]
+        ++ constant 3 (high - 1 - low)
+        ++ [0xe1520003, branch (index * 10 + 6) ((index + 1) * 10), 0xe082200c, store, 0xe12fff1e]
 
 storageOutputName :: StorageWidth -> String
 storageOutputName width = case width of

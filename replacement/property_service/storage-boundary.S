@@ -4,15 +4,17 @@
     .balign 4
 
     .macro window low, high, next, instruction
+    @ `(address - low) <= (high - low)` unsigned: one comparison decides the
+    @ window, so the stored address follows from a single refinement.
     movw r12, #:lower16:\low
     movt r12, #:upper16:\low
-    cmp r0, r12
-    blo \next
-    movw r12, #:lower16:\high
-    movt r12, #:upper16:\high
-    cmp r0, r12
-    bhs \next
-    \instruction r1, [r0]
+    sub r2, r0, r12
+    movw r3, #:lower16:(\high - 1 - \low)
+    movt r3, #:upper16:(\high - 1 - \low)
+    cmp r2, r3
+    bhi \next
+    add r2, r2, r12
+    \instruction r1, [r2]
     bx lr
     .endm
 
