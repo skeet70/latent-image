@@ -681,9 +681,13 @@ contractRegisters :: EntryContract -> [Register]
 contractRegisters CanonicalEntryContract = comparedRegisters
 contractRegisters PublicWrapperEntryContract = R3 : comparedRegisters
 
+-- | The contract registers a run holds. A case that claims no r3 still compares every
+-- other contract register; the wrapper's r3 is compared only when the case claims it.
 projectRun :: EntryContract -> [(Register, Word32)] -> Run -> Run
 projectRun contract claimed run =
-  run {runRegisters = [(register, value) | (register, value) <- runRegisters run, register `elem` contractRegisters contract, register `elem` map fst claimed]}
+  run {runRegisters = [(register, value) | (register, value) <- runRegisters run
+      , register `elem` contractRegisters contract
+      , register /= R3 || register `elem` map fst claimed]}
 
 projectExpectation :: EntryContract -> Expectation -> Expectation
 projectExpectation contract expected = expected {expectedRegisters = [(register, value) | (register, value) <- expectedRegisters expected, register `elem` contractRegisters contract]}

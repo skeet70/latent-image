@@ -435,6 +435,21 @@ main = do
               && compareRuns (projectRun PublicWrapperEntryContract claimed reference) (projectRun PublicWrapperEntryContract claimed subject) == [RegisterDiffers R3 0xffffffff 0]
               && fmap (lookup R3 . expectedRegisters) expected == Just Nothing
               && fmap (lookup R3 . expectedRegisters) wrapperExpected == Just (Just 3))
+    , check "a placeholder claim keeps r4-r11 and sp under the canonical contract"
+        (let registers = [(R0, 1), (R3, 0xffffffff), (R4, 0xa5a50004), (R11, 0xa5a5000b), (Sp, 0x9597f0)]
+             kept claimed subject = map fst (runRegisters (projectRun CanonicalEntryContract claimed subject))
+         in kept (expectedRegisters placeholderExpectation) (baseRun {runRegisters = registers}) == [R0, R4, R11, Sp]
+              && kept (expectedRegisters placeholderExpectation) (baseRun {runRegisters = [(R3, 3)]}) == [])
+    , check "a placeholder claim keeps r4-r11 and sp and drops only the wrapper's unclaimed r3"
+        (let registers = [(R0, 1), (R3, 0xffffffff), (R4, 0xa5a50004), (R11, 0xa5a5000b), (Sp, 0x9597f0)]
+             run = baseRun {runRegisters = registers}
+             kept claimed subject = map fst (runRegisters (projectRun PublicWrapperEntryContract claimed subject))
+         in kept (expectedRegisters placeholderExpectation) run == [R0, R4, R11, Sp]
+              && kept [(R3, 3)] run == [R0, R3, R4, R11, Sp]
+              && compareRuns (projectRun PublicWrapperEntryContract (expectedRegisters placeholderExpectation) run)
+                   (projectRun PublicWrapperEntryContract (expectedRegisters placeholderExpectation)
+                     run {runRegisters = [(R0, 1), (R4, 0xa5a50004), (R11, 0), (Sp, 0x9597f0)]})
+                   == [RegisterDiffers R11 0xa5a5000b 0])
     , check "an identical run has no difference" (null (compareRuns baseRun baseRun))
     , check "a different write value differs" (compareRuns baseRun baseRun {runWrites = Just [WriteEvent 0x96cc64 1 0xac]} == [WritesDiffer])
     , check "a truncated log fails" (compareRuns baseRun baseRun {runWrites = Nothing} == [SubjectTruncated])
