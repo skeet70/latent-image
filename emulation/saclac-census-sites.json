@@ -1,6 +1,7 @@
 {
-  "schema": 1,
+  "schema": 2,
   "task_id": 43,
+  "state_base": "0x0169d4b4",
   "task": "saclac",
   "source": "private-data/scratch/PowerBoundaryCensus/saclac-machines.md sections 0 and 3: the row functions of [0xefcb88, 0xf01b14) and the action table start of each machine",
   "points": [

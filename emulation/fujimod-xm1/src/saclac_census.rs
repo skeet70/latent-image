@@ -7,7 +7,7 @@
 use fujimod_emulator::board::factory::MemoryMap;
 use fujimod_emulator::board::observation::{MemoryWatch, ViewPolicy, WatchKinds, WatchRange};
 use fujimod_xm1::bridge::{read, sha256, write};
-use fujimod_xm1::guest::{GpioKey, RouteKey, ShutterStage};
+use fujimod_xm1::guest::{GpioKey, ModeDialPosition, RouteKey, ShutterStage};
 use fujimod_xm1::machine::{Hold, KeyPulse, MENU_PULSE, Machine, RunOutcome, key_pulse};
 use fujimod_xm1::run::{self, RunDocument, ValidatedUpdate};
 use serde::{Deserialize, Serialize, Serializer};
@@ -16,7 +16,7 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const USAGE: &str = "saclac-census --run RUN --update STOCK_DAT --boot-rom ROM --sites SITES --scenario cold-boot|menu-route|half-press [--steps STEPS] --output NEW_DIR";
+const USAGE: &str = "saclac-census --run RUN --update STOCK_DAT --boot-rom ROM --sites SITES --scenario cold-boot|menu-route|half-press|shoot-without-lens|capture|playback|mode-dial [--steps STEPS] --output NEW_DIR";
 const SITE_LABEL: &str = "saclac-site";
 const SITE_LIMIT: usize = 4096;
 const CONTEXT_LIMIT: usize = 1024;
@@ -38,6 +38,16 @@ const STEP_SETTLE: u64 = 20_000_000;
 const HALF_PRESS_HOLD: u64 = 8_000_000;
 const HALF_PRESS_RELEASE: u64 = 8_000_000;
 const HALF_PRESS_SETTLE: u64 = 8_000_000;
+const FULL_PRESS_HOLD: u64 = 8_000_000;
+const FULL_PRESS_RELEASE: u64 = 8_000_000;
+const PLAY_SETTLE: u64 = 90_000_000;
+const MODE_DIAL_SETTLE: u64 = 90_000_000;
+/// Shooting-menu cursor of SHOOT WITHOUT LENS; the boot opens the menu at cursor 2.
+const LENS_ROW: u32 = 20;
+/// Setting id of SHOOT WITHOUT LENS.
+const LENS_SETTING: u32 = 0xa3;
+/// Cursor of SHOOT WITHOUT LENS ON.
+const LENS_ON_CURSOR: u32 = 0;
 
 fn require(condition: bool, message: &str) -> Result<(), String> {
     if condition { Ok(()) } else { Err(message.into()) }
@@ -78,6 +88,7 @@ struct ActionRange {
 struct Sites {
     schema: u32,
     task_id: u8,
+    state_base: String,
     points: Vec<SitePoint>,
     action_ranges: Vec<ActionRange>,
 }
@@ -97,14 +108,17 @@ struct Range {
 
 struct Plan {
     task_id: u8,
+    state_base: u32,
     points: Vec<Site>,
     ranges: Vec<Range>,
 }
 
 fn load_sites(bytes: &[u8]) -> Result<Plan, String> {
     let sites: Sites = serde_json::from_slice(bytes).map_err(|error| format!("sites: {error}"))?;
-    require(sites.schema == 1, "sites: unsupported schema")?;
+    require(sites.schema == 2, "sites: unsupported schema")?;
     require(sites.task_id > 0, "sites: task id is zero")?;
+    let state_base = parse_hex(&sites.state_base)?;
+    require(state_base % 2 == 0, "sites: the state base is not halfword aligned")?;
     require(sites.points.len() <= SITE_LIMIT, "sites: more points than the engine admits")?;
     let mut points = Vec::with_capacity(sites.points.len());
     let mut addresses = std::collections::BTreeSet::new();
@@ -142,7 +156,7 @@ fn load_sites(bytes: &[u8]) -> Result<Plan, String> {
     for pair in ranges.windows(2) {
         require(pair[0].end <= pair[1].start, "sites: two action ranges overlap")?;
     }
-    Ok(Plan { task_id: sites.task_id, points, ranges })
+    Ok(Plan { task_id: sites.task_id, state_base, points, ranges })
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -172,7 +186,7 @@ impl Key {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum Scenario { ColdBoot, MenuRoute, HalfPress }
+enum Scenario { ColdBoot, MenuRoute, HalfPress, ShootWithoutLens, Capture, Playback, ModeDial }
 
 #[derive(Debug, Deserialize)]
 struct Trajectory { before_unload: Vec<TrajectoryPhase> }
@@ -210,6 +224,18 @@ struct MenuTriple { menu: u32, setting: u32, cursor: u32 }
 #[derive(Clone, Copy, Debug, Serialize)]
 struct Pulse { key: Key, pressed: u64, released: u64, debounced: bool }
 
+/// One shutter, play or dial input, with the row's debounced release.
+#[derive(Clone, Copy, Debug, Serialize)]
+struct PressRow { kind: PressKind, pressed: u64, released: u64, debounced: bool }
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum PressKind { HalfPress, FullPress, Play }
+
+/// The mode-dial position set and the calibrated window it was held at.
+#[derive(Clone, Copy, Debug, Serialize)]
+struct DialRow { position: ModeDialPosition, low: u16, high: u16 }
+
 #[derive(Serialize)]
 struct Milestone {
     phase: String,
@@ -230,9 +256,11 @@ struct EntryContext {
     r1: u32,
     r2: u32,
     r3: u32,
+    /// The acting machine's state halfword at a dispatcher entry.
+    state: Option<u16>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Eq, PartialEq, Serialize)]
 struct Counted<K> { key: K, count: u64 }
 
 fn counted<K: Clone>(map: &BTreeMap<K, u64>) -> Vec<Counted<K>> {
@@ -372,7 +400,26 @@ struct RangeRow {
 struct Dispatcher {
     entries: u64,
     machines: Vec<Counted<u8>>,
+    states: Vec<Counted<(u8, u16)>>,
     rows: Vec<Counted<(u8, u32)>>,
+    transitions: Vec<Counted<(u8, u16, u32)>>,
+}
+
+fn dispatcher_from_contexts(entries: u64, contexts: &BTreeMap<EntryContext, u64>) -> Dispatcher {
+    let mut machines: BTreeMap<u8, u64> = BTreeMap::new();
+    let mut states: BTreeMap<(u8, u16), u64> = BTreeMap::new();
+    let mut rows: BTreeMap<(u8, u32), u64> = BTreeMap::new();
+    let mut transitions: BTreeMap<(u8, u16, u32), u64> = BTreeMap::new();
+    for (context, count) in contexts {
+        let machine = u8::try_from(context.r0).unwrap_or(u8::MAX);
+        *machines.entry(machine).or_default() += count;
+        *rows.entry((machine, context.r1)).or_default() += count;
+        if let Some(state) = context.state {
+            *states.entry((machine, state)).or_default() += count;
+            *transitions.entry((machine, state, context.r1)).or_default() += count;
+        }
+    }
+    Dispatcher { entries, machines: counted(&machines), states: counted(&states), rows: counted(&rows), transitions: counted(&transitions) }
 }
 
 #[derive(Serialize)]
@@ -392,6 +439,8 @@ struct Report<'a> {
     instructions: u64,
     counts: Option<[u64; 2]>,
     milestones: &'a [Milestone],
+    presses: &'a [PressRow],
+    mode_dial: Option<DialRow>,
     points: Vec<PointRow<'a>>,
     dispatcher: Dispatcher,
     queue43: Queue43,
@@ -408,6 +457,8 @@ struct Census<'a> {
     watch: Option<FetchWatch>,
     phase: String,
     milestones: Vec<Milestone>,
+    presses: Vec<PressRow>,
+    mode_dial: Option<DialRow>,
 }
 
 impl<'a> Census<'a> {
@@ -430,22 +481,35 @@ impl<'a> Census<'a> {
         Ok(())
     }
 
-    fn stop(&mut self, stops: &[Stop]) {
+    fn stop(&mut self, machine: &Machine, stops: &[Stop]) -> Result<(), String> {
         for stop in stops {
             let Some(index) = self.point_index(stop.address) else { continue };
             let register = |name: &str| stop.registers.get(name).and_then(|text| parse_hex(text).ok()).unwrap_or(0);
+            let r0 = register("r0");
+            let state = if self.plan.points[index].role == Role::Dispatcher {
+                require(r0 < 37, "dispatcher entry names no machine")?;
+                let address = self.plan.state_base + r0 * 2;
+                let mut bytes = [0u8; 2];
+                machine.session.board.read_physical(u64::from(address), &mut bytes)
+                    .map_err(|error| format!("machine {r0} state: {error}"))?;
+                Some(u16::from_le_bytes(bytes))
+            } else {
+                None
+            };
             let context = EntryContext {
                 core: stop.core,
                 mode: stop.cpsr & 0x1f,
                 lr: parse_hex(&stop.lr).unwrap_or(0),
                 sp: parse_hex(&stop.sp).unwrap_or(0),
-                r0: register("r0"),
+                r0,
                 r1: register("r1"),
                 r2: register("r2"),
                 r3: register("r3"),
+                state,
             };
             self.points[index].enter(context, stop.instructions);
         }
+        Ok(())
     }
 
     fn advance(&mut self, machine: &mut Machine, budget: u64) -> Result<(), String> {
@@ -473,7 +537,7 @@ impl<'a> Census<'a> {
             if stops.is_empty() {
                 require(machine.instructions() >= end, "run ended early without a census stop")?;
             } else {
-                self.stop(&stops);
+                self.stop(machine, &stops)?;
             }
             require(machine.instructions() > before || !stops.is_empty(), "census made no progress")?;
             if self.watch.as_ref().is_some_and(|watch| machine.instructions() - watch.started >= SEGMENT_INSTRUCTIONS) {
@@ -511,21 +575,40 @@ impl<'a> Census<'a> {
         Ok(Pulse { key, pressed, released, debounced })
     }
 
-    /// Holds and releases a GPIO key, advancing through the census so a stop inside the hold is recorded.
-    fn gpio_row(&mut self, machine: &mut Machine, gpio: GpioKey, pulse: KeyPulse) -> Result<(u64, u64, bool), String> {
+    /// Holds a GPIO key down; a stop inside the hold is recorded.
+    fn gpio_down(&mut self, machine: &mut Machine, gpio: GpioKey, hold: Hold) -> Result<u64, String> {
         let node = machine.document.gpio.clone();
         let pressed = machine.instructions();
         machine.session.gpio(&node.0, gpio.port, gpio.pin, gpio.pressed_high)?;
-        self.hold(machine, pulse.hold)?;
+        self.hold(machine, hold)?;
+        Ok(pressed)
+    }
+
+    /// Releases a GPIO key and waits for the firmware-debounced release byte.
+    fn gpio_up(&mut self, machine: &mut Machine, gpio: GpioKey, release: u64) -> Result<(u64, bool), String> {
+        let node = machine.document.gpio.clone();
         machine.session.gpio(&node.0, gpio.port, gpio.pin, !gpio.pressed_high)?;
         let released = machine.instructions();
         let debounced = loop {
             if machine.document.firmware.gpio_released(&machine.session, gpio)? { break true; }
             let spent = machine.instructions() - released;
-            if spent >= pulse.release { break false; }
-            self.advance(machine, (pulse.release - spent).min(RELEASE_POLL))?;
+            if spent >= release { break false; }
+            self.advance(machine, (release - spent).min(RELEASE_POLL))?;
         };
+        Ok((released, debounced))
+    }
+
+    /// Holds and releases a GPIO key, advancing through the census so a stop inside the hold is recorded.
+    fn gpio_row(&mut self, machine: &mut Machine, gpio: GpioKey, pulse: KeyPulse) -> Result<(u64, u64, bool), String> {
+        let pressed = self.gpio_down(machine, gpio, pulse.hold)?;
+        let (released, debounced) = self.gpio_up(machine, gpio, pulse.release)?;
         Ok((pressed, released, debounced))
+    }
+
+    fn press_row(&mut self, machine: &mut Machine, kind: PressKind, gpio: GpioKey, pulse: KeyPulse) -> Result<(), String> {
+        let (pressed, released, debounced) = self.gpio_row(machine, gpio, pulse)?;
+        self.presses.push(PressRow { kind, pressed, released, debounced });
+        Ok(())
     }
 
     fn menu(machine: &Machine) -> Result<Option<MenuTriple>, String> {
@@ -573,11 +656,77 @@ impl<'a> Census<'a> {
         self.endpoint(machine, Some(pulse), MenuTriple { menu: 1, setting: 5, cursor: 2 })
     }
 
+    /// Opens the shooting menu at SHOOT WITHOUT LENS, selects ON, commits and closes it.
+    fn prepare_no_lens(&mut self, machine: &mut Machine) -> Result<(), String> {
+        self.phase = "shoot-without-lens".into();
+        let mut pulse = None;
+        for _ in 2..LENS_ROW {
+            pulse = Some(self.pulse(machine, Key::Down, Key::Down.pulse())?);
+        }
+        let pulse = pulse.ok_or("SHOOT WITHOUT LENS needs a navigation step")?;
+        self.state(machine, pulse, MenuTriple { menu: 1, setting: 5, cursor: LENS_ROW })?;
+        let pulse = self.pulse(machine, Key::Right, Key::Right.pulse())?;
+        self.state(machine, pulse, MenuTriple { menu: 1, setting: LENS_SETTING, cursor: 1 })?;
+        let pulse = self.pulse(machine, Key::Up, Key::Up.pulse())?;
+        self.state(machine, pulse, MenuTriple { menu: 1, setting: LENS_SETTING, cursor: LENS_ON_CURSOR })?;
+        self.pulse(machine, Key::Ok, Key::Ok.pulse())?;
+        self.advance(machine, SETUP_SETTLE)?;
+        self.pulse(machine, Key::Back, Key::Back.pulse())?;
+        self.advance(machine, SETUP_SETTLE)
+    }
+
+    fn half_press(&mut self, machine: &mut Machine) -> Result<(), String> {
+        self.phase = "half-press".into();
+        let pulse = KeyPulse::instructions(HALF_PRESS_HOLD, HALF_PRESS_RELEASE);
+        let gpio = machine.document.firmware.shutter(&machine.session, ShutterStage::Half)?;
+        self.press_row(machine, PressKind::HalfPress, gpio, pulse)?;
+        self.advance(machine, HALF_PRESS_SETTLE)?;
+        self.phase = "half-press-settled".into();
+        self.advance(machine, HALF_PRESS_SETTLE)
+    }
+
+    fn full_press(&mut self, machine: &mut Machine) -> Result<(), String> {
+        self.phase = "full-press".into();
+        let pulse = KeyPulse::instructions(FULL_PRESS_HOLD, FULL_PRESS_RELEASE);
+        let gpio = machine.document.firmware.shutter(&machine.session, ShutterStage::Full)?;
+        self.press_row(machine, PressKind::FullPress, gpio, pulse)?;
+        self.advance(machine, HALF_PRESS_SETTLE)
+    }
+
+    /// S1 held, S2 pressed and released, then S1 released.
+    fn capture(&mut self, machine: &mut Machine) -> Result<(), String> {
+        self.phase = "s1-s2".into();
+        let half = machine.document.firmware.shutter(&machine.session, ShutterStage::Half)?;
+        let full = machine.document.firmware.shutter(&machine.session, ShutterStage::Full)?;
+        let pressed = self.gpio_down(machine, half, Hold::Instructions(HALF_PRESS_HOLD))?;
+        let full_pressed = self.gpio_down(machine, full, Hold::Instructions(FULL_PRESS_HOLD))?;
+        let (full_released, full_debounced) = self.gpio_up(machine, full, FULL_PRESS_RELEASE)?;
+        self.presses.push(PressRow { kind: PressKind::FullPress, pressed: full_pressed, released: full_released, debounced: full_debounced });
+        self.advance(machine, HALF_PRESS_SETTLE)?;
+        let (half_released, half_debounced) = self.gpio_up(machine, half, HALF_PRESS_RELEASE)?;
+        self.presses.push(PressRow { kind: PressKind::HalfPress, pressed, released: half_released, debounced: half_debounced });
+        self.advance(machine, HALF_PRESS_SETTLE)
+    }
+
+    fn playback(&mut self, machine: &mut Machine) -> Result<(), String> {
+        self.phase = "playback".into();
+        let gpio = machine.document.firmware.play(&machine.session)?;
+        self.press_row(machine, PressKind::Play, gpio, MENU_PULSE)?;
+        self.advance(machine, PLAY_SETTLE)
+    }
+
+    fn mode_dial(&mut self, machine: &mut Machine) -> Result<(), String> {
+        self.phase = "mode-dial".into();
+        let window = machine.set_mode_dial(ModeDialPosition::M)?;
+        self.mode_dial = Some(DialRow { position: window.position, low: window.low, high: window.high });
+        self.advance(machine, MODE_DIAL_SETTLE)
+    }
+
     fn scenario(&mut self, machine: &mut Machine, scenario: Scenario, trajectory: Vec<TrajectoryPhase>) -> Result<(), String> {
-        self.boot(machine, scenario == Scenario::ColdBoot)?;
         match scenario {
-            Scenario::ColdBoot => Ok(()),
+            Scenario::ColdBoot => self.boot(machine, true),
             Scenario::MenuRoute => {
+                self.boot(machine, false)?;
                 for phase in trajectory {
                     self.phase = phase.phase.clone();
                     for shape in phase.steps {
@@ -589,13 +738,27 @@ impl<'a> Census<'a> {
                 Ok(())
             }
             Scenario::HalfPress => {
-                self.phase = "half-press".into();
-                let pulse = KeyPulse::instructions(HALF_PRESS_HOLD, HALF_PRESS_RELEASE);
-                let gpio = machine.document.firmware.shutter(&machine.session, ShutterStage::Half)?;
-                self.gpio_row(machine, gpio, pulse)?;
-                self.advance(machine, HALF_PRESS_SETTLE)?;
-                self.phase = "half-press-settled".into();
-                self.advance(machine, HALF_PRESS_SETTLE)
+                self.boot(machine, false)?;
+                self.half_press(machine)
+            }
+            Scenario::ShootWithoutLens => {
+                self.boot(machine, true)?;
+                self.prepare_no_lens(machine)?;
+                self.half_press(machine)?;
+                self.full_press(machine)
+            }
+            Scenario::Capture => {
+                self.boot(machine, true)?;
+                self.prepare_no_lens(machine)?;
+                self.capture(machine)
+            }
+            Scenario::Playback => {
+                self.boot(machine, false)?;
+                self.playback(machine)
+            }
+            Scenario::ModeDial => {
+                self.boot(machine, false)?;
+                self.mode_dial(machine)
             }
         }
     }
@@ -618,15 +781,10 @@ impl<'a> Census<'a> {
 
     fn dispatcher(&self) -> Dispatcher {
         let stats = self.plan.points.iter().position(|point| point.role == Role::Dispatcher).map(|index| &self.points[index]);
-        let Some(stats) = stats else { return Dispatcher { entries: 0, machines: Vec::new(), rows: Vec::new() } };
-        let mut machines: BTreeMap<u8, u64> = BTreeMap::new();
-        let mut rows: BTreeMap<(u8, u32), u64> = BTreeMap::new();
-        for (context, count) in &stats.contexts {
-            let machine = u8::try_from(context.r0).unwrap_or(u8::MAX);
-            *machines.entry(machine).or_default() += count;
-            *rows.entry((machine, context.r1)).or_default() += count;
+        match stats {
+            Some(stats) => dispatcher_from_contexts(stats.entries, &stats.contexts),
+            None => Dispatcher { entries: 0, machines: Vec::new(), states: Vec::new(), rows: Vec::new(), transitions: Vec::new() },
         }
-        Dispatcher { entries: stats.entries, machines: counted(&machines), rows: counted(&rows) }
     }
 
     fn queue43(&self) -> Queue43 {
@@ -667,6 +825,11 @@ fn parse_scenario(text: &str) -> Result<Scenario, String> {
         "cold-boot" => Scenario::ColdBoot,
         "menu-route" => Scenario::MenuRoute,
         "half-press" => Scenario::HalfPress,
+        "shoot-without-lens" => Scenario::ShootWithoutLens,
+        "capture" => Scenario::Capture,
+        "playback" => Scenario::Playback,
+        "mode-dial" => Scenario::ModeDial,
+        "movie" => return Err("movie: the fujimod-xm1 input API declares no movie key".into()),
         _ => return Err(format!("{text}: unknown scenario")),
     })
 }
@@ -719,6 +882,8 @@ fn drive() -> Result<(), String> {
         watch: None,
         phase: String::new(),
         milestones: Vec::new(),
+        presses: Vec::new(),
+        mode_dial: None,
     };
     machine.traces.bound_full_registers(NonZeroUsize::new(2).ok_or("zero hit bound")?);
     machine.traces.stop_labels = [SITE_LABEL.to_owned()].into_iter().collect();
@@ -735,7 +900,7 @@ fn drive() -> Result<(), String> {
     let inputs = [Some(run_binding), Some(dat_binding), Some(rom_binding), Some(sites_binding), trajectory_binding, Some(executable_binding)]
         .into_iter().flatten().collect();
     let report = Report {
-        schema: 1,
+        schema: 2,
         scenario,
         inputs,
         limits: Limits {
@@ -745,6 +910,8 @@ fn drive() -> Result<(), String> {
         instructions: machine.instructions(),
         counts: machine.session.board.instruction_counts().try_into().ok(),
         milestones: &census.milestones,
+        presses: &census.presses,
+        mode_dial: census.mode_dial,
         points: census.point_rows(),
         dispatcher: census.dispatcher(),
         queue43: census.queue43(),
@@ -770,5 +937,90 @@ fn main() -> ExitCode {
             eprintln!("saclac-census: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sites(state_base: Option<&str>, schema: u32) -> Vec<u8> {
+        let mut points = vec![
+            serde_json::json!({"address": "0x00001000", "label": "task-entry", "role": "actor"}),
+            serde_json::json!({"address": "0x00001004", "label": "queue-43-producer", "role": "producer"}),
+            serde_json::json!({"address": "0x00001008", "label": "dispatcher", "role": "dispatcher"}),
+        ];
+        for machine in 0..37u8 {
+            points.push(serde_json::json!({
+                "address": format!("{:#x}", 0x2000 + u32::from(machine) * 4),
+                "label": format!("row-{machine:02}"),
+                "role": "row",
+                "machine": machine,
+            }));
+        }
+        let ranges: Vec<_> = (0..37u8).map(|machine| {
+            let start = 0x10000 + u32::from(machine) * 0x100;
+            serde_json::json!({"machine": machine, "start": format!("{start:#x}"), "end": format!("{:#x}", start + 0x100)})
+        }).collect();
+        let mut document = serde_json::json!({"schema": schema, "task_id": 43, "points": points, "action_ranges": ranges});
+        if let Some(base) = state_base {
+            document["state_base"] = serde_json::json!(base);
+        }
+        serde_json::to_vec(&document).unwrap()
+    }
+
+    #[test]
+    fn sites_declare_a_halfword_state_base() {
+        let plan = load_sites(&sites(Some("0x0169d4b4"), 2)).unwrap();
+        assert_eq!(plan.state_base, 0x0169d4b4);
+        assert_eq!(plan.points.len(), 40);
+        assert_eq!(plan.ranges.len(), 37);
+        assert!(load_sites(&sites(None, 2)).is_err(), "a sites file without a state base is refused");
+        assert!(load_sites(&sites(Some("0x0169d4b5"), 2)).is_err(), "an odd state base is refused");
+        assert!(load_sites(&sites(Some("0x0169d4b4"), 1)).is_err(), "schema 1 is refused");
+    }
+
+    fn context(machine: u32, row: u32, state: Option<u16>) -> EntryContext {
+        EntryContext { core: 0, mode: 0x13, lr: 0, sp: 0, r0: machine, r1: row, r2: 0, r3: 0, state }
+    }
+
+    #[test]
+    fn dispatcher_groups_machine_state_and_row() {
+        let mut contexts = BTreeMap::new();
+        contexts.insert(context(12, 0xab, Some(5)), 2);
+        contexts.insert(context(12, 0xab, Some(6)), 1);
+        contexts.insert(context(8, 0xbc, Some(0)), 4);
+        let dispatcher = dispatcher_from_contexts(7, &contexts);
+        assert_eq!(dispatcher.entries, 7);
+        assert_eq!(dispatcher.machines, vec![Counted { key: 8, count: 4 }, Counted { key: 12, count: 3 }]);
+        assert_eq!(dispatcher.states, vec![
+            Counted { key: (8, 0), count: 4 },
+            Counted { key: (12, 5), count: 2 },
+            Counted { key: (12, 6), count: 1 },
+        ]);
+        assert_eq!(dispatcher.rows, vec![Counted { key: (8, 0xbc), count: 4 }, Counted { key: (12, 0xab), count: 3 }]);
+        assert_eq!(dispatcher.transitions, vec![
+            Counted { key: (8, 0, 0xbc), count: 4 },
+            Counted { key: (12, 5, 0xab), count: 2 },
+            Counted { key: (12, 6, 0xab), count: 1 },
+        ]);
+    }
+
+    #[test]
+    fn scenarios_parse_and_serialize() {
+        for (name, scenario) in [
+            ("cold-boot", Scenario::ColdBoot),
+            ("menu-route", Scenario::MenuRoute),
+            ("half-press", Scenario::HalfPress),
+            ("shoot-without-lens", Scenario::ShootWithoutLens),
+            ("capture", Scenario::Capture),
+            ("playback", Scenario::Playback),
+            ("mode-dial", Scenario::ModeDial),
+        ] {
+            assert_eq!(parse_scenario(name).unwrap(), scenario);
+            assert_eq!(serde_json::to_value(scenario).unwrap(), serde_json::json!(name));
+        }
+        assert!(parse_scenario("movie").unwrap_err().contains("no movie key"));
+        assert!(parse_scenario("still").is_err());
     }
 }
