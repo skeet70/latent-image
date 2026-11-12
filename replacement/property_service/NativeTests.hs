@@ -285,6 +285,17 @@ walkerTests = do
     (walkWithStores [GuestAddress 0x1000] [] [] [0xe5801000, 0xe5801000, 0xe12fff1e])
   refusedBy "multiple store at single-store boundary" 0x1000 NonStackStore
     (walkWithStores [GuestAddress 0x1000] [] [] [0xe8800006, 0xe12fff1e])
+  let storeWords = storageStoreWords StorageByte
+      storeSites = [GuestAddress (0x1000 + offset) | offset <- storageStoreSites StorageByte]
+      displaced = [if index == 33 then storageStoreWord StorageByte else word | (index, word) <- zip [0 :: Int ..] storeWords]
+  expect "checked-store sites follow the four windows" [32, 72, 112, 152] (storageStoreSites StorageByte)
+  case walkWithStores storeSites [] [] storeWords of
+    Right _ -> putStrLn "admitted the checked-store encoding at its derived sites"
+    Left failure -> fail ("checked-store encoding refused: " ++ show failure)
+  refusedBy "the old single store site misses the window stores" 0x1020 NonStackStore
+    (walkWithStores [GuestAddress 0x1084] [] [] storeWords)
+  refusedBy "a store outside the derived window sites" 0x1084 NonStackStore
+    (walkWithStores storeSites [] [] displaced)
   case walk [0xe92d4800, 0xe1a0b00d, 0xe8bd8800] of
     Right _ -> putStrLn "admitted push {r11, lr}; mov r11, sp; pop {r11, pc}"
     Left failure -> fail ("framed return refused: " ++ show failure)

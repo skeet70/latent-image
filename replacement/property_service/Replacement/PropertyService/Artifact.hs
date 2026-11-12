@@ -35,6 +35,8 @@ module Replacement.PropertyService.Artifact
   , linkedBytes
   , storageStoreName
   , storageStoreWords
+  , storageStoreWord
+  , storageStoreSites
   , storageOutputName
   , storageOutputWords
   , storageStatusWords

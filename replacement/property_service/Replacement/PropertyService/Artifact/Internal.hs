@@ -41,6 +41,8 @@ module Replacement.PropertyService.Artifact.Internal
   , linkedBytes
   , storageStoreName
   , storageStoreWords
+  , storageStoreWord
+  , storageStoreSites
   , storageOutputName
   , storageOutputWords
   , storageStatusWords
@@ -251,7 +253,7 @@ storageStoreWords :: StorageWidth -> [Word32]
 storageStoreWords width = concat [window index low high | (index, (low, high)) <- zip [0 ..] storageWindows] ++ [0xe12fff1e]
   where
     bytes = case width of StorageByte -> 1; StorageHalf -> 2
-    store = case width of StorageByte -> 0xe5c21000; StorageHalf -> 0xe1c210b0
+    store = storageStoreWord width
     constant register address =
       [ 0xe3000000 .|. (register `shiftL` 12) .|. ((address .&. 0xf000) `shiftL` 4) .|. (address .&. 0xfff)
       , 0xe3400000 .|. (register `shiftL` 12) .|. (((address `shiftR` 16) .&. 0xf000) `shiftL` 4) .|. ((address `shiftR` 16) .&. 0xfff)
@@ -262,6 +264,16 @@ storageStoreWords width = concat [window index low high | (index, (low, high)) <
         ++ [0xe040200c]
         ++ constant (3 :: Word32) (high - bytes - low)
         ++ [0xe1520003, branch (index * 10 + 6) ((index + 1) * 10), 0xe082200c, store, 0xe12fff1e]
+
+-- | The store opcode of the checked-store encoding, at its one width per window.
+storageStoreWord :: StorageWidth -> Word32
+storageStoreWord StorageByte = 0xe5c21000
+storageStoreWord StorageHalf = 0xe1c210b0
+
+-- | Byte offsets of the store instructions in 'storageStoreWords', one per window.
+storageStoreSites :: StorageWidth -> [Word32]
+storageStoreSites width =
+  [ 4 * fromIntegral index | (index, word) <- zip [0 :: Int ..] (storageStoreWords width), word == storageStoreWord width ]
 
 storageOutputName :: StorageWidth -> String
 storageOutputName width = case width of
@@ -515,7 +527,8 @@ deriveArtifactUsing shape purpose dependency properties carrier@(Carrier (GuestA
         , layoutBoundaryWindows = kernelWindows boundary
         , layoutBoundaryEntries = kernelEntries boundary
         , layoutStoreSites = [GuestAddress (address + case width of StorageByte -> 28; StorageHalf -> 48) | (width,address) <- outputAddresses]
-            ++ [GuestAddress (statusAddress + 8)] ++ [GuestAddress (address + 132) | (_, address) <- storeAddresses]
+            ++ [GuestAddress (statusAddress + 8)]
+            ++ [GuestAddress (address + offset) | (width, address) <- storeAddresses, offset <- storageStoreSites width]
         , layoutStockLeaves = [(GuestAddress address, stockLeafStack) | (_, address) <- stockLeaves] ++ kernelBoundaryStack
         , layoutStockSites = [(GuestAddress (address + 8), GuestAddress target, StackOffset (-8)) | (_, address, target) <- mirrorAddresses]
         }
