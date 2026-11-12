@@ -177,13 +177,15 @@ A trial Embassy executor image. It presents no stock shape; the trial exists to 
 
 ## first_stage
 
-The owned reset entry for the staged first record, entered from the ROM handoff and returning to retained stock services.
+The owned first-record stage, entered at the stock record slot and presenting stock's record layout, media controller, handoff words and loader entry.
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
-| `xm1_first_stage_entry`, `xm1_first_stage_contract`, the handoff vector and the log read/store in `entry.S`/`src.rs` | veneer or carrier at a stock address | the stock ROM handoff at `0x1800` and the retained record-1 callers | no | the ROM handoff and record-1 consumers are owned | required |
-| `xm1_retained_core_init`, `xm1_retained_segment_table`, `xm1_retained_skip_scan`, `xm1_retained_stage_images`, `xm1_retained_storage_init`, `xm1_retained_storage_fini`, `xm1_retained_trailer_check`, `xm1_first_stage_handoff`, `xm1_first_stage_log_timestamp` | trampoline into retained stock | retained core initialization, segment and storage services | no | those services are owned | required |
-| `first-stage.ld` placement and the forbidden-fetch/interleaved-tail fault variants | veneer or carrier at a stock address | stock record-1 consumers and the qualification controls | no | owned startup replaces the record-1 placement | required |
+| `xm1_first_stage_entry`, `xm1_first_stage_contract` and `first-stage.ld` placing the image at `0x6000` in the first record's slot | veneer or carrier at a stock address | the stock boot ROM's mode-4 handoff and the record-1 consumers that enter the slot | no | the boot ROM and every record-1 consumer are owned | required |
+| the 20-byte compressed header, the 36-byte segment entries and 12-byte sub-list header at `0x61c000`, the publication cell and the 32-byte trailer with `0xaaaa` at offset 30 | guest-memory layout view | the stock update container's record 1 and image 4 | no | owned update records replace the stock container layout | required |
+| the NAND controller at `0xfff52000` with 128 KiB units and 512-byte sectors | guest-memory layout view | the stock controller and the boot ROM's mode-4 staging | no | the owned flash layer and its device model replace the stock controller | required |
+| `xm1_first_stage_handoff`, `xm1_first_stage_handoff_vector` and `xm1_first_stage_completion_zero`: the handoff reads stock's `0x4300`/`0x4304` words and jumps, the completion export zeroes stock's completion word, and `xm1_first_stage_stage_images` writes the two handoff words | guest-memory layout view | stock loader A's entry word and the record-2 companion wait | no | loader A and the record-2 companion startup are owned | required |
+| the loader-A entry at `0x40020` and the image-4 argument the stage reads at the fixed `0x61c40c`, image 4's own header word and not the record table, and jumps to | trampoline into retained stock | stock loader A and the application image the stage hands off to | no | the loaders and application are owned and entered by owned code | required |
 
 ## idle_task
 

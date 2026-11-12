@@ -1,7 +1,11 @@
-//! Owned X-M1 first-stage startup control. The stock media/decompression body
-//! and pin table stay at their reviewed addresses.
+//! Owned X-M1 first-record startup and media staging.
 
 #![no_std]
+
+mod format;
+mod media;
+mod images;
+mod engine;
 
 use core::arch::asm;
 use core::ptr::{read_volatile, write_volatile};
@@ -34,12 +38,6 @@ impl Core {
         }
     }
 
-    fn c_abi(self) -> i32 {
-        match self {
-            Core::Zero => 0,
-            Core::One => 1,
-        }
-    }
 
     fn log_channel(self) -> LogChannel {
         match self {
@@ -56,24 +54,12 @@ enum LogChannel {
 }
 
 extern "C" {
-    /// Stock record 1 core-0 peripheral and pin-table init (`0x25d4`).
-    fn xm1_retained_core_init();
-    /// Stock record 1 storage controller init (`0x2034`).
-    fn xm1_retained_storage_init() -> i32;
-    /// Stock record 1 bad-block scan (`0x2058`).
-    fn xm1_retained_skip_scan() -> i32;
-    /// Stock record 1 segment-table read (`0x1dc4`).
-    fn xm1_retained_segment_table();
-    /// Stock record 1 trailer gate (`0x1cc0`).
-    fn xm1_retained_trailer_check() -> i32;
-    /// Stock record 1 loader copy, image-4 decompression and bss fill (`0x1d08`).
-    fn xm1_retained_stage_images(skip: i32, core: i32) -> i32;
-    /// Stock record 1 storage teardown (`0x2044`).
-    fn xm1_retained_storage_fini() -> i32;
     /// Labelled assembly handoff at the final `mov pc`.
     fn xm1_first_stage_handoff() -> !;
     /// Stores the kernel timer counter at `slot` through the labelled `xm1_first_stage_log_read`/`_store` pair.
     fn xm1_first_stage_log_timestamp(slot: *mut u32);
+    /// Zeroes 0x400a00c4 through a literal-loaded base and a zero-offset store.
+    fn xm1_first_stage_completion_zero();
 }
 
 #[panic_handler]
@@ -193,64 +179,83 @@ unsafe fn peer_rendezvous(core: Core) {
     write(LOG_POINTER, LOG_STORE);
     log_event(0x0100_0000, core.log_channel());
     copy_peer_vectors();
+    asm!("dsb sy", options(nostack));
     release_peer();
 }
 
-/// Stock record 1's init-body control sequence (0x1e4c); media and
-/// decompression are retained.
-unsafe fn stage_retained_next(core: Core) {
-    core0_clock(core);
+enum BootError {
+    Media(media::MediaError),
+    Image(images::ImageError),
+    Publication,
+}
 
-    if xm1_retained_storage_init() != 0 {
-        halt();
+/// Record-1 failure GPIO sequence at 0x1de8..0x1e3c.
+unsafe fn fail(error: BootError) -> ! {
+    match error {
+        BootError::Media(_) | BootError::Image(_) | BootError::Publication => {}
     }
+    let mut port = 0xfff8_9018usize;
+    while port != 0xfff8_9418 {
+        write(port as *mut u32, 0);
+        for offset in [0x0c, 0x08, 0x10, 0x14, 0x18] {
+            write((port - offset) as *mut u32, 0xffff_0000);
+        }
+        port += 0x40;
+    }
+    let address = 0xfff8_8084 as *mut u32;
+    write(address, read(address) & !1);
+    loop {
+        core::hint::spin_loop();
+    }
+}
 
-    let mut status = 0i32;
+unsafe fn skip_publication() -> Result<*mut u32, BootError> {
+    let pointer = read(SEGMENT_TABLE_PUBLICATION);
+    let physical = pointer & !0x4000_0000;
+    if pointer & 3 != 0 || physical < 0x0061_c000 || physical > 0x0061_c3f8 {
+        return Err(BootError::Publication);
+    }
+    Ok(pointer as *mut u32)
+}
+
+unsafe fn stage_next(core: Core) -> Result<(), BootError> {
+    core0_clock(core);
+    media::xm1_first_stage_storage_init().map_err(BootError::Media)?;
     if core == Core::Zero {
         log_event(0x0100_0100, LogChannel::Zero);
-        let scan = xm1_retained_skip_scan();
+        let scan = media::scan();
         log_event(0x1100_0100, LogChannel::Zero);
-        if scan != 0 {
-            halt();
-        }
-        xm1_retained_segment_table();
-        let publication = read(SEGMENT_TABLE_PUBLICATION) as *mut u32;
-        write(publication.add(1), read(DATA_SKIP_POINTER));
-        status = xm1_retained_trailer_check();
-        if status != 0 {
-            halt();
-        }
+        scan.map_err(BootError::Media)?;
+        images::segment_table(&mut images::VolatileMedia).map_err(BootError::Image)?;
+        write(skip_publication()?.add(1), read(DATA_SKIP_POINTER));
+        images::xm1_first_stage_trailer_check().map_err(BootError::Image)?;
     } else {
-        let publication = read(SEGMENT_TABLE_PUBLICATION) as *const u32;
-        write(DATA_SKIP_POINTER as *mut u32, read(publication.add(1)));
+        write(DATA_SKIP_POINTER as *mut u32, read(skip_publication()?.add(1)));
     }
-
     log_event(0x1100_0000, core.log_channel());
-    if xm1_retained_stage_images(status, core.c_abi()) != 0 {
-        halt();
-    }
-    let _ = xm1_retained_storage_fini();
-
-    #[cfg(any(first_stage_handler_tail_fault, first_stage_interleaved_tail_fault))]
+    images::xm1_first_stage_stage_images(core == Core::Zero).map_err(BootError::Image)?;
+    media::storage_fini().map_err(BootError::Media)?;
     xm1_first_stage_completion_zero();
-    #[cfg(not(any(first_stage_handler_tail_fault, first_stage_interleaved_tail_fault)))]
-    write(0x400a_00c4 as *mut u32, 0);
     write(CELL_PEER0, 0);
     asm!("dsb sy");
     while read(CELL_PEER1) == PEER_READY {
         core::hint::spin_loop();
     }
+    asm!("dsb sy", "isb sy");
+    Ok(())
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn xm1_first_stage_main() -> ! {
     let core = core_discriminator();
     if core == Core::Zero {
-        xm1_retained_core_init();
+        media::core_init();
     }
     configure_mpu(core);
     peer_rendezvous(core);
-    stage_retained_next(core);
+    if let Err(error) = stage_next(core) {
+        fail(error);
+    }
     #[cfg(first_stage_handler_tail_fault)]
     if core == Core::Zero {
         xm1_first_stage_handler_tail_fault();
@@ -266,14 +271,6 @@ unsafe fn inject_fault() {
 
 #[cfg(not(first_stage_fault))]
 unsafe fn inject_fault() {}
-
-// Completion-zero admission requires a literal-based, zero-offset store.
-#[cfg(any(first_stage_handler_tail_fault, first_stage_interleaved_tail_fault))]
-#[no_mangle]
-#[inline(never)]
-unsafe extern "C" fn xm1_first_stage_completion_zero() {
-    write(0x400a_00c4 as *mut u32, 0);
-}
 
 // Synthetic handler-tail fault: a core-0 write outside the seven-store protocol.
 #[cfg(first_stage_handler_tail_fault)]

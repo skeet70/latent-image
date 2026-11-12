@@ -70,14 +70,14 @@ validPlan image = do
   entry <- either H.failH pure (armEntry 0x6000)
   load <- either H.failH pure (slotOffset 0x6000)
   extent <- either H.failH pure retained
-  either H.failH pure (stagePlan FirstRecord entry load (U.MediaImage image) [extent])
+  either H.failH pure (stagePlan FirstRecord entry load (U.MediaImage image) [extent] [])
 
 invalidPlan :: B.ByteString -> Word32 -> Int -> Either String StagePlan
 invalidPlan image entryValue loadValue = do
   entry <- armEntry entryValue
   load <- slotOffset loadValue
   extent <- retained
-  stagePlan FirstRecord entry load (U.MediaImage image) [extent]
+  stagePlan FirstRecord entry load (U.MediaImage image) [extent] []
 
 secondRecordPlan :: B.ByteString -> Word32 -> Int -> Either String StagePlan
 secondRecordPlan image entryValue loadValue = do
@@ -86,7 +86,7 @@ secondRecordPlan image entryValue loadValue = do
   bodyStart <- slotOffset 0x1800
   bodyEnd <- slotOffset 0x4c80
   body <- retainedExtent bodyStart bodyEnd
-  stagePlan SecondRecord entry load (U.MediaImage image) [body]
+  stagePlan SecondRecord entry load (U.MediaImage image) [body] []
 
 assertTrue :: String -> Bool -> IO ()
 assertTrue label ok = unless ok (H.failH (label ++ ": failed"))
@@ -119,6 +119,26 @@ publication stockValue entryValue = do
   entry <- armEntry entryValue
   loaderEntryPublication (LoaderId 1) 0xd0000 stock entry
 
+
+retirementTests :: B.ByteString -> IO ()
+retirementTests image = do
+  let source = syntheticParts sourcePreTable
+  entry <- either H.failH pure (armEntry 0x6000)
+  load <- either H.failH pure (slotOffset 0x6000)
+  start <- either H.failH pure (slotOffset 0x1800)
+  end <- either H.failH pure (slotOffset 0x4228)
+  retired <- either H.failH pure (retiredExtent start end)
+  plan <- either H.failH pure (stagePlan FirstRecord entry load (U.MediaImage image) [] [retired])
+  staged <- either H.failH pure (replaceRecordSlot plan source)
+  before <- either H.failH pure (firstRecordSlotBytes source)
+  after <- either H.failH pure (firstRecordSlotBytes staged)
+  assertTrue "retired executable bytes absent" (B.take (0x4228 - 0x1800) (B.drop 0x1800 after) == B.replicate (0x4228 - 0x1800) 0)
+  assertTrue "configuration data preserved" (B.take (0x4300 - 0x4228) (B.drop 0x4228 after) == B.take (0x4300 - 0x4228) (B.drop 0x4228 before))
+  resource <- either H.failH pure (retainedExtent start end)
+  assertLeft "retirement conflicts with resource" (stagePlan FirstRecord entry load (U.MediaImage image) [resource] [retired])
+  ownedEnd <- either H.failH pure (slotOffset (0x6000 + B.length image))
+  conflicting <- either H.failH pure (retiredExtent load ownedEnd)
+  assertLeft "retirement conflicts with owned image" (stagePlan FirstRecord entry load (U.MediaImage image) [] [conflicting])
 loaderPatchTests :: B.ByteString -> IO ()
 loaderPatchTests image = do
   let source = withLoaderB (syntheticParts sourcePreTable)
@@ -228,4 +248,5 @@ main = do
   assertLeft "expected extent past slot" (expectedMediaPatch pastEnd expected replacement)
   assertLeft "expected patch short carrier" (replaceExpectedFirstRecord [patch] (parts {U.partPreTable = B.empty}))
   loaderPatchTests image
+  retirementTests image
   putStrLn "first-stage staging tests pass"

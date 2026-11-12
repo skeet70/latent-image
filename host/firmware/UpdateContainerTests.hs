@@ -382,7 +382,7 @@ composedStageTests checked fixture = do
       makePlan record entryAddress loadOffset = do
         entry <- F.armEntry entryAddress
         load <- F.slotOffset loadOffset
-        F.stagePlan record entry load (U.MediaImage image) []
+        F.stagePlan record entry load (U.MediaImage image) [] []
   sourceBytes <- admit (U.rebuildContainer fixture sourceParts)
   original <- admit (Stage.parseOriginalStartupDat sourceBytes)
   let source = Stage.originalStartupParsed original

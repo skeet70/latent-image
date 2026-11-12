@@ -22,12 +22,12 @@ entry basis target start end citation = (\range -> Footprint range basis (Citati
 
 footprint :: [Footprint]
 footprint = mapMaybe (\(basis, target, start, end, citation) -> entry basis target start end citation)
-  [ (RuntimePremise, Record1, 0x0, 0x20, "host/firmware/StartupStageContract.hs:166-197; replacement/first_stage/first-stage.ld:27-28 (retained vector table)")
-  , (RuntimePremise, Record1, 0x24, 0x40, "host/firmware/StartupStageContract.hs:166-197; replacement/first_stage/first-stage.ld:29-30 (retained vector table)")
-  , (RuntimePremise, Record1, 0x1800, 0x4300, "host/firmware/StartupStageContract.hs:166-197; replacement/first_stage/first-stage.ld:31-32,35-41; replacement/first_stage/src.rs:204-232 (retained body callees)")
-  , (RuntimePremise, Record1, 0x4300, 0x5280, "host/firmware/StartupStageContract.hs:166-197; replacement/first_stage/first-stage.ld:33-34; replacement/first_stage/entry.S:86-96 (retained data, handoff target and argument)")
-  , (RuntimePremise, Record2, 0x10000, 0x103e8, "replacement/first_stage/src.rs:164-172 (peer vector copy from record 2)")
-  , (RuntimePremise, Record2, 0x10000, 0x20000, "replacement/first_stage/src.rs:238-242; replacement/secondary_stage/adapter.rs:13-14 (record-2 code clears the peer cell 0x40020004 the first stage waits on)")
+  [ (RuntimePremise, Record1, 0x0, 0x20, "host/firmware/StartupStageContract.hs:166-197; replacement/first_stage/first-stage.ld:28-29 (retained vector table)")
+  , (RuntimePremise, Record1, 0x24, 0x40, "host/firmware/StartupStageContract.hs:166-197; replacement/first_stage/first-stage.ld:30-31 (retained vector table)")
+  , (RuntimePremise, Record1, 0x4228, 0x4300, "host/firmware/StartupStageContract.hs:166-197; replacement/first_stage/first-stage.ld:34-35 (record configuration data retained)")
+  , (RuntimePremise, Record1, 0x4300, 0x5280, "host/firmware/StartupStageContract.hs:166-197; replacement/first_stage/first-stage.ld:36-37; replacement/first_stage/entry.S:82-88 (owned workspace and handoff words)")
+  , (RuntimePremise, Record2, 0x10000, 0x103e8, "replacement/first_stage/src.rs (peer vector copy from record 2)")
+  , (RuntimePremise, Record2, 0x10000, 0x20000, "replacement/first_stage/src.rs; replacement/secondary_stage/adapter.rs (record-2 code clears the peer cell 0x40020004 the first stage waits on)")
   , (RuntimePremise, LoaderA, 0x4000c, 0x40010, "emulation/Emulation/LoaderPrefixWitness.hs:681-683 (loader-A header entry, handoff target)")
   , (RuntimePremise, LoaderA, 0x40020, 0x40100, "emulation/Emulation/LoaderPrefixWitness.hs:142-143,757-760 (kernel vector installer)")
   , (RuntimePremise, LoaderA, 0x427b8, 0x427d4, "emulation/Emulation/LoaderPrefixWitness.hs:142-143,757-760 (kernel vector installer)")
@@ -35,44 +35,53 @@ footprint = mapMaybe (\(basis, target, start, end, citation) -> entry basis targ
 
 premises :: [Premise]
 premises = map Premise
-  [ "the retained stock record-1 body [0x1800,0x4300) stages the loaders and images as stock does once the owned entry has run"
+  [ "the owned record-1 image zero-fills the stock body [0x1800,0x4228), retains the configuration data [0x4228,0x4300), and from its entry at 0x6000 reads the segment table, stages loaders A and B, decodes image 4 through the 0xfff43000 engine, fills the image bss, publishes the handoff words, tears down storage and clears the completion cell"
   , "the second core starts from record 2 and its vector table at 0x10000 after the peer release"
   ]
 
 -- | Every store the owned first-stage code makes on core 0, physical unless
--- TCM. Stores of the retained callees are stock writes. The core-1 arm of
--- @stage_retained_next@ is not admitted: core 1 starts in record 2.
+-- TCM. Core 1 runs the same entry; its stores are not enumerated here.
 writes :: [WriteRange]
 writes =
   [ WriteRange (TcmTarget Core0 InstructionBank) 0 0x2000
   , core0 0x4300 0x5280
   , core0 0x20000 0x20008
   , core0 0x42e4 0x42ec
+  , core0 0xa0000 0xa0040
   , core0 0xa0040 0xa0084
   , core0 0xa00c4 0xa00c8
+  , core0 0xa00c8 0xa00cc
   , core0 0x61c188 0x61c18c
   , core0 0x3fff0000 0x3fff03e8
-  , core0 0xfff88028 0xfff8802c
-  , core0 0xfff88030 0xfff88034
-  , core0 0xfffb408c 0xfffb4090
-  , core0 0xfffb40ac 0xfffb40b0
-  , core0 0xfffb40cc 0xfffb40d0
-  , core0 0xfffb40ec 0xfffb40f0
+  , core0 0x89ec00 0xbf1a00
+  , core0 0xfff43000 0xfff43090
+  , core0 0xfff52000 0xfff528ac
+  , core0 0xfff88010 0xfff88014
+  , core0 0xfff88024 0xfff88034
+  , core0 0xfff88084 0xfff88088
+  , core0 0xfff89000 0xfff893e0
+  , core0 0xfff91000 0xfff9100c
+  , core0 0xfffb2004 0xfffb2018
+  , core0 0xfffb3000 0xfffb3c04
+  , core0 0xfffb4000 0xfffb4c04
   ]
   where
     core0 = WriteRange (CorePhysicalTarget Core0)
 
 writesPremise :: Premise
 writesPremise = Premise $ T.intercalate "; "
-  [ "ATCM [0,0x2000): the stm clear after the declared MCR and every frame on the SVC stack from 0x70000800 (replacement/first_stage/entry.S:34-50,80)"
-  , "[0x4300,0x5280): the strlo clear (entry.S:82-88)"
-  , "peer cells [0x40020000,0x40020008) (src.rs:9-10,191-192,238)"
-  , "log pointer and core-0 index [0x400042e4,0x400042ec) (src.rs:13-15,116,193)"
-  , "core-0 log slots [0x400a0040,0x400a0084): base 0x400a0040 as the first stage stores it and an even index from its canonical 0 (record-1 word 0x42e8) below 0x10 (src.rs:100-118); a retained callee that changed the pointer or index moves an owned log store elsewhere, where it faults unless it lands in another allowed range"
-  , "completion word 0x400a00c4 (src.rs:237)"
-  , "0x61c188 = [0x61c00c] + 4 with [0x61c00c] = 0x61c184 after retained 0x1dc4 loads the segment table (reports/firmware-extraction.md:245; src.rs:217-218)"
-  , "secondary SRAM [0x3fff0000,0x3fff03e8) through the core-0 view 0x7fff0000 (src.rs:164-172)"
-  , "clock registers 0xfff88028 and 0xfff88030 (src.rs:181-188) and release registers 0xfffb408c, 0xfffb40ac, 0xfffb40cc, 0xfffb40ec (src.rs:174-179)"
+  [ "ATCM [0,0x2000): the stm clear after the declared MCR and every frame on the SVC stack from 0x70000800 (replacement/first_stage/entry.S)"
+  , "[0x4300,0x5280): the strlo clear, the skip table and saved controller words, and the handoff target and argument (entry.S; media.rs; images.rs)"
+  , "peer cells [0x40020000,0x40020008) (src.rs peer_rendezvous and stage_next)"
+  , "log pointer and core-0 index [0x400042e4,0x400042ec) (src.rs log_event and peer_rendezvous)"
+  , "core-0 log slots [0xa0040,0xa0084): base 0x400a0040 as the first stage stores it and an even index from its canonical 0 (record-1 word 0x42e8) below 0x10 (src.rs log_event)"
+  , "completion word 0xa00c4 (entry.S xm1_first_stage_completion_zero)"
+  , "0x61c188 = [0x61c00c] + 4 with [0x61c00c] = 0x61c184 after images::segment_table loads the segment table (reports/firmware-extraction.md:245; images.rs segment_table; src.rs stage_next)"
+  , "secondary SRAM [0x3fff0000,0x3fff03e8) through the core-0 view 0x7fff0000 (src.rs copy_peer_vectors)"
+  , "image-4 bss [0x89ec00,0xbf1a00): whole words through the alias before the engine session (images.rs decompress; record-1 segment 4 bss 0x89ec00 length 0x352e00)"
+  , "engine registers [0xfff43000,0xfff43090) and its clock gate 0xfff88010 (engine.rs Session open, submit and close)"
+  , "NAND controller [0xfff52000,0xfff528ac) (media.rs storage_init, scan and read_units)"
+  , "clock words [0xfff88024,0xfff88034), hold control 0xfff88084, pin banks [0xfff89000,0xfff893e0), timer words [0xfff91000,0xfff9100c), controller bank [0xfffb2004,0xfffb2018), interrupt controllers [0xfffb3000,0xfffb3c04) and [0xfffb4000,0xfffb4c04), sample snapshot [0x400a0000,0x400a0040) and 0x400a00c8 (media.rs initialize_peripherals, core_init and fail)"
   ]
 
 -- | Core-0 ATCM at reset in the FujiMod EXR II catalog (catalog/soc/exr2/soc.json:24-27).

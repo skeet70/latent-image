@@ -4,6 +4,7 @@ module FujiAF.FirstStage
   ( ArmEntry
   , SlotOffset
   , RetainedExtent
+  , RetiredExtent
   , BootRecord (..)
   , StagePlan
   , Symbol
@@ -27,6 +28,7 @@ module FujiAF.FirstStage
   , slotOffsetBytes
   , retainedExtent
   , retainedExtentRange
+  , retiredExtent
   , stagePlan
   , planRecord
   , planEntry
@@ -81,11 +83,14 @@ newtype SlotOffset = SlotOffset Int
 data RetainedExtent = RetainedExtent SlotOffset SlotOffset
   deriving (Eq, Show)
 
+data RetiredExtent = RetiredExtent SlotOffset SlotOffset
+  deriving (Eq, Show)
+
 -- | The two boot records the ROM stages from pre-table [0x40000,0x60000).
 data BootRecord = FirstRecord | SecondRecord
   deriving (Eq, Show)
 
-data StagePlan = StagePlan BootRecord ArmEntry SlotOffset MediaImage [RetainedExtent]
+data StagePlan = StagePlan BootRecord ArmEntry SlotOffset MediaImage [RetainedExtent] [RetiredExtent]
   deriving (Eq, Show)
 
 data ComposedStagePlan = ComposedStagePlan StagePlan StagePlan LoaderWordPatch
@@ -174,19 +179,19 @@ replaceExpectedFirstRecord patches parts = do
     | ExpectedMediaPatch offset _ replacement <- patches] parts
 
 planRecord :: StagePlan -> BootRecord
-planRecord (StagePlan record _ _ _ _) = record
+planRecord (StagePlan record _ _ _ _ _) = record
 
 planEntry :: StagePlan -> ArmEntry
-planEntry (StagePlan _ entry _ _ _) = entry
+planEntry (StagePlan _ entry _ _ _ _) = entry
 
 planLoadOffset :: StagePlan -> SlotOffset
-planLoadOffset (StagePlan _ _ load _ _) = load
+planLoadOffset (StagePlan _ _ load _ _ _) = load
 
 planImage :: StagePlan -> MediaImage
-planImage (StagePlan _ _ _ image _) = image
+planImage (StagePlan _ _ _ image _ _) = image
 
 planRetainedExtents :: StagePlan -> [RetainedExtent]
-planRetainedExtents (StagePlan _ _ _ _ retained) = retained
+planRetainedExtents (StagePlan _ _ _ _ retained _) = retained
 
 data Symbol = Symbol Word32 Word32 String
   deriving (Eq, Show)
@@ -291,9 +296,14 @@ retainedExtent start end
 retainedExtentRange :: RetainedExtent -> (Int, Int)
 retainedExtentRange (RetainedExtent start end) = (slotOffsetBytes start, slotOffsetBytes end)
 
-stagePlan :: BootRecord -> ArmEntry -> SlotOffset -> MediaImage -> [RetainedExtent] -> Either String StagePlan
-stagePlan record entry load image retained = do
-  let plan = StagePlan record entry load image retained
+retiredExtent :: SlotOffset -> SlotOffset -> Either String RetiredExtent
+retiredExtent start end
+  | slotOffsetBytes start >= slotOffsetBytes end = Left "retired extent is empty or reversed"
+  | otherwise = Right (RetiredExtent start end)
+
+stagePlan :: BootRecord -> ArmEntry -> SlotOffset -> MediaImage -> [RetainedExtent] -> [RetiredExtent] -> Either String StagePlan
+stagePlan record entry load image retained retired = do
+  let plan = StagePlan record entry load image retained retired
   _ <- planPatches plan
   pure plan
 
@@ -328,15 +338,23 @@ planPatches plan
       if any (overlaps (load, load + B.length image)) retained
         then Left "first-stage image overlaps a retained extent"
         else pure ()
-      pure
+      forM_ retired $ \(start, end) -> do
+        unless (start >= resetVectorWordOffset + 4 && start < end && end <= firstRecordSlotLength)
+          (Left "retired extent is outside the record body")
+        when (any (overlaps (start, end)) ((load, load + B.length image) : retained))
+          (Left "retired extent overlaps owned code or retained bytes")
+      pure $
         [ (resetVectorWordOffset, putMediaWord (armEntryAddress (planEntry plan)))
         , (load, B.map complement image)
-        ]
+        ] ++ [(start, B.replicate (end - start) 0) | (start, end) <- retired]
   where
     image = mediaImageBytes (planImage plan)
     load = slotOffsetBytes (planLoadOffset plan)
     entry = fromIntegral (armEntryAddress (planEntry plan)) - recordGuestBase (planRecord plan)
     retained = map retainedExtentRange (planRetainedExtents plan)
+    retired = case plan of
+      StagePlan _ _ _ _ _ extents ->
+        [(slotOffsetBytes start, slotOffsetBytes end) | RetiredExtent start end <- extents]
 
 overlaps :: (Int, Int) -> (Int, Int) -> Bool
 overlaps (leftStart, leftEnd) (rightStart, rightEnd) =

@@ -1,6 +1,10 @@
 pub const UNIT_BYTES: u32 = 0x20000;
 pub const TABLE_ADDRESS: u32 = 0x0061_c000;
 pub const TABLE_BYTES: usize = 0x400;
+const ENTRY_BYTES: usize = 36;
+const SUB_LIST_HEADER_BYTES: usize = 12;
+const SUB_LIST_ENTRY_BYTES: usize = 24;
+const HEADER_BYTES: usize = 16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImageId {
@@ -97,6 +101,7 @@ pub struct Segment {
 pub struct SegmentTable<'a> {
     bytes: &'a [u8],
     entries: usize,
+    entries_end: usize,
 }
 
 impl<'a> SegmentTable<'a> {
@@ -104,16 +109,37 @@ impl<'a> SegmentTable<'a> {
         let bytes = bytes.get(..TABLE_BYTES).ok_or(FormatError::Truncated)?;
         let entries = table_offset(word(bytes, 0)?, 4)?;
         table_offset(word(bytes, 12)?, 8)?;
-        let table = Self { bytes, entries };
         let mut cursor = entries;
         loop {
             if word(bytes, cursor)? == u32::MAX {
-                return Ok(table);
+                return Ok(Self { bytes, entries, entries_end: cursor + 4 });
             }
-            if cursor.checked_add(36).ok_or(FormatError::InvalidTable)? > TABLE_BYTES {
+            if cursor.checked_add(ENTRY_BYTES).ok_or(FormatError::InvalidTable)? > TABLE_BYTES {
                 return Err(FormatError::InvalidTable);
             }
-            cursor += 36;
+            cursor += ENTRY_BYTES;
+        }
+    }
+
+    /// The table bytes the stage and image 4's loaders read: the header words, the segment
+    /// entries through their terminator, the sub-list at header word 1 and the 8-byte
+    /// publication cell at header word 3.
+    pub fn read_length(&self) -> Result<usize, FormatError> {
+        let header = table_offset(word(self.bytes, 4)?, SUB_LIST_HEADER_BYTES)?;
+        let cell = table_offset(word(self.bytes, 12)?, 8)?;
+        let mut cursor = table_offset(word(self.bytes, header)?, 4)?;
+        loop {
+            if word(self.bytes, cursor)? == u32::MAX {
+                return Ok(self.entries_end
+                    .max(cursor + 4)
+                    .max(header + SUB_LIST_HEADER_BYTES)
+                    .max(cell + 8)
+                    .max(HEADER_BYTES));
+            }
+            if cursor.checked_add(SUB_LIST_ENTRY_BYTES).ok_or(FormatError::InvalidTable)? > TABLE_BYTES {
+                return Err(FormatError::InvalidTable);
+            }
+            cursor += SUB_LIST_ENTRY_BYTES;
         }
     }
 
@@ -149,7 +175,7 @@ impl<'a> SegmentTable<'a> {
                     stored_length: word(self.bytes, cursor + 24)?,
                 });
             }
-            cursor += 36;
+            cursor += ENTRY_BYTES;
         }
     }
 }

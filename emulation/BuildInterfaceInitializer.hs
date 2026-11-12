@@ -37,7 +37,7 @@ stage role sourcePath image symbolBytes outputPath contractPath = do
       start <- F.symbolAddress <$> F.lookupSymbol symbols "__secondary_stage_start"
       entry <- F.symbolAddress <$> F.lookupSymbol symbols "xm1_secondary_entry" >>= F.armEntry
       offset <- F.slotOffset (fromIntegral start - 0x10000)
-      plan <- F.stagePlan F.SecondRecord entry offset (U.MediaImage image) (declaredRetained declared)
+      plan <- F.stagePlan F.SecondRecord entry offset (U.MediaImage image) (declaredRetained declared) (declaredRetired declared)
       replaced <- F.replaceRecordSlot plan parts >>= F.applyLoaderWordPatches (declaredLoaderPatches declared)
       rebuilt <- U.rebuildContainer parsed replaced
       reparsed <- U.parseContainer rebuilt

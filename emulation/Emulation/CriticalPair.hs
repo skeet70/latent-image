@@ -666,7 +666,7 @@ stageStartup (Original reference original image4 bindings) artifact@(LinkedArtif
   start <- at symbols "__secondary_stage_start"
   entry <- at symbols "xm1_secondary_entry" >>= F.armEntry
   offset <- F.slotOffset (fromIntegral start - 0x10000)
-  plan <- F.stagePlan F.SecondRecord entry offset (U.MediaImage image) (declaredRetained declared)
+  plan <- F.stagePlan F.SecondRecord entry offset (U.MediaImage image) (declaredRetained declared) (declaredRetired declared)
   parts <- F.replaceRecordSlot plan (U.parsedParts parsed) >>= F.applyLoaderWordPatches (declaredLoaderPatches declared)
   staged <- U.rebuildContainer parsed parts
   reparsed <- U.parseContainer staged

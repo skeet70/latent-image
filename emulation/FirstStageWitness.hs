@@ -176,9 +176,9 @@ main = do
       H.failH
       pure
       ( do
-          storage <- symbolAddress <$> lookupSymbol symbols "xm1_retained_storage_init"
-          trailer <- symbolAddress <$> lookupSymbol symbols "xm1_retained_trailer_check"
-          stage <- symbolAddress <$> lookupSymbol symbols "xm1_retained_stage_images"
+          storage <- symbolAddress <$> lookupSymbol symbols "xm1_first_stage_storage_init"
+          trailer <- symbolAddress <$> lookupSymbol symbols "xm1_first_stage_trailer_check"
+          stage <- symbolAddress <$> lookupSymbol symbols "xm1_first_stage_stage_images"
           handoff <- symbolAddress <$> lookupSymbol symbols "xm1_first_stage_handoff_vector"
           pure
             Expected

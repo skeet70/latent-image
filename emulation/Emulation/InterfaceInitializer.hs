@@ -482,7 +482,7 @@ deriveContract role reference staged image symbolBytes = do
       start <- at symbols "__secondary_stage_start"
       entry <- at symbols "xm1_secondary_entry" >>= F.armEntry
       offset <- F.slotOffset (fromIntegral start - 0x10000)
-      plan <- F.stagePlan F.SecondRecord entry offset (U.MediaImage image) (declaredRetained declarations')
+      plan <- F.stagePlan F.SecondRecord entry offset (U.MediaImage image) (declaredRetained declarations') (declaredRetired declarations')
       F.verifyStagedRecord plan (declaredLoaderPatches declarations') source parsed
       facts <- P.deriveOwnedFacts image symbolBytes images
       adapter <- at symbols "xm1_interface_initializer_entry"

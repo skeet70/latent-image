@@ -163,31 +163,18 @@ firstStageDeclarations symbols = do
   beforeReset <- offset "xm1_vector_before_reset_end"
   afterReset <- offset "xm1_vector_after_reset_start"
   vectorEnd <- offset "xm1_vector_table_end"
-  bodyStart <- offset "xm1_retained_body_start"
-  bodyEnd <- offset "xm1_retained_body_end"
+  retiredStart <- offset "xm1_retired_body_start"
+  retiredEnd <- offset "xm1_retired_body_end"
+  configStart <- offset "xm1_config_data_start"
+  configEnd <- offset "xm1_config_data_end"
   dataStart <- offset "xm1_retained_data_start"
   dataEnd <- offset "xm1_retained_data_end"
   beforeExtent <- retainedExtent vectorStart beforeReset
   afterExtent <- retainedExtent afterReset vectorEnd
-  bodyExtent <- retainedExtent bodyStart bodyEnd
+  retired <- retiredExtent retiredStart retiredEnd
+  configExtent <- retainedExtent configStart configEnd
   dataExtent <- retainedExtent dataStart dataEnd
-  let bodyRange = (slotOffsetBytes bodyStart, slotOffsetBytes bodyEnd)
-  forM_
-    [ "xm1_retained_core_init"
-    , "xm1_retained_storage_init"
-    , "xm1_retained_skip_scan"
-    , "xm1_retained_segment_table"
-    , "xm1_retained_trailer_check"
-    , "xm1_retained_stage_images"
-    , "xm1_retained_storage_fini"
-    ]
-    $ \name -> do
-      symbol <- lookupSymbol symbols name
-      let address = fromIntegral (symbolAddress symbol)
-      if address < fst bodyRange || address >= snd bodyRange
-        then Left (name ++ " is outside the retained body extent")
-        else pure ()
-  pure (StageDeclarations [beforeExtent, afterExtent, bodyExtent, dataExtent] [] [])
+  pure (StageDeclarations [beforeExtent, afterExtent, configExtent, dataExtent] [retired] [] ["record-1 media CPU software retired; config data retained"])
 
 data OriginalStartupDat = OriginalStartupDat U.Parsed Sha256
 
@@ -378,4 +365,4 @@ linkedPlan kind declarations image symbols = do
       (Left (name symbol ++ " is not an aligned site in the linked startup image"))
   entry <- armEntry (symbolAddress entrySymbol)
   load <- slotOffset (fromIntegral start - recordGuestBase record)
-  stagePlan record entry load image (declaredRetained declarations)
+  stagePlan record entry load image (declaredRetained declarations) (declaredRetired declarations)

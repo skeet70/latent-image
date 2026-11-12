@@ -105,6 +105,10 @@ path = "src/root_compact.rs"
 name = "fujimod-xm1-task-constructors"
 path = "src/task_constructors.rs"
 
+[[bin]]
+name = "fujimod-xm1-terminal-observer"
+path = "src/terminal_observer.rs"
+
 # Compiles the schema-4 loader-prefix observer against an engine carrying
 # build-support/fujimod-scoped-watch.patch.
 [features]

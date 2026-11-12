@@ -21,6 +21,7 @@ import System.IO (hPutStrLn, stderr)
 
 data StageDeclarations = StageDeclarations
   { declaredRetained :: [RetainedExtent]
+  , declaredRetired :: [RetiredExtent]
   , declaredLoaderPatches :: [LoaderWordPatch]
   , declaredSummary :: [String]
   }
@@ -185,7 +186,7 @@ runStage contract = do
   declarations <- either H.failH pure (contractDeclarations contract symbolRows)
   let retained = declaredRetained declarations
       loaderPatches = declaredLoaderPatches declarations
-  plan <- either H.failH pure (stagePlan record entry loadOffset (U.MediaImage image) retained)
+  plan <- either H.failH pure (stagePlan record entry loadOffset (U.MediaImage image) retained (declaredRetired declarations))
   slotted <- either H.failH pure (replaceRecordSlot plan (U.parsedParts parsed))
   patched <- either H.failH pure (applyLoaderWordPatches loaderPatches slotted)
   rebuilt <- either H.failH pure (U.rebuildContainer parsed patched)
