@@ -112,6 +112,12 @@ pub trait HeaderBackend {
     fn write_header_into(&mut self, source: &[u8; HEADER_BYTES], report: &mut MirrorOutcome) {
         *report = self.write_header(source);
     }
+    /// Writes the header and leaves the report in the backend's guarded store.
+    #[inline(always)]
+    fn write_header_discarding(&mut self, source: &[u8; HEADER_BYTES]) {
+        let mut report = MirrorOutcome::unchanged();
+        self.write_header_into(source, &mut report);
+    }
 }
 pub trait SettingsBackend: HeaderBackend {
     fn read_body(&mut self, destination: &mut [u8; BODY_BYTES]) -> RequestOutcome;
@@ -121,6 +127,12 @@ pub trait SettingsBackend: HeaderBackend {
     #[inline(always)]
     fn write_body_into(&mut self, source: &[u8; BODY_BYTES], report: &mut BodyOutcome) {
         *report = self.write_body(source);
+    }
+    /// Writes the body and leaves the report in the backend's guarded store.
+    #[inline(always)]
+    fn write_body_discarding(&mut self, source: &[u8; BODY_BYTES]) {
+        let mut report = BodyOutcome::unchanged();
+        self.write_body_into(source, &mut report);
     }
 }
 
@@ -217,6 +229,54 @@ pub struct SharedBacking<'a, D> {
     driver: D,
 }
 
+/// The reports a write leaves when its caller keeps none. Only a [`SettingsHold`] lends them.
+#[derive(Clone, Copy)]
+pub struct WriteReports {
+    pub mirror: MirrorOutcome,
+    pub body: BodyOutcome,
+}
+
+static mut REPORTS: WriteReports = WriteReports { mirror: MirrorOutcome::unchanged(), body: BodyOutcome::unchanged() };
+
+/// Proof that this task holds the settings semaphore.
+pub struct SemaphoreHold<'a, 'b, D: HeaderBackupDriver> {
+    backing: &'a mut SharedBacking<'b, D>,
+    task: D::Task,
+}
+
+impl<D: HeaderBackupDriver> Drop for SemaphoreHold<'_, '_, D> {
+    fn drop(&mut self) { self.backing.driver.release(&self.task, BackupSemaphore::Settings); }
+}
+
+/// Proof that this task holds the settings semaphore, and the only handle to [`REPORTS`].
+pub struct SettingsHold<'a, 'b, D: HeaderBackupDriver> {
+    semaphore: SemaphoreHold<'a, 'b, D>,
+    reports: &'a mut WriteReports,
+}
+
+impl<'a, D: HeaderBackupDriver> SettingsHold<'a, '_, D> {
+    /// The reports a write leaves when its caller keeps none.
+    pub fn reports(&mut self) -> &mut WriteReports { self.reports }
+
+    #[inline(always)]
+    fn write_header_discarding(&mut self, source: &[u8; HEADER_BYTES]) -> RequestOutcome {
+        self.semaphore.backing.write_header_unheld(source, Some(&mut self.reports.mirror))
+    }
+}
+
+impl<'a, D: BackupDriver> SettingsHold<'a, '_, D> {
+    #[inline(always)]
+    fn write_body_discarding(&mut self, source: &[u8; BODY_BYTES]) -> RequestOutcome {
+        self.semaphore.backing.write_body_unheld(source, Some(&mut self.reports.body))
+    }
+}
+
+#[inline(always)]
+fn request_outcome(underlying: BackingStatus) -> RequestOutcome {
+    let mapped = if underlying == BackingStatus::Success { RequestStatus::Success } else { RequestStatus::Failed };
+    RequestOutcome { underlying, mapped, reported: mapped == RequestStatus::Failed }
+}
+
 impl<'a, D: HeaderBackupDriver> SharedBacking<'a, D> {
     pub fn new(
         live: &'a mut [u8; BACKING_BYTES],
@@ -246,17 +306,30 @@ impl<'a, D: HeaderBackupDriver> SharedBacking<'a, D> {
     pub fn auxiliary(&self) -> &[u8] { &self.live[0x128..0x140] }
     pub fn auxiliary_mut(&mut self) -> &mut [u8] { &mut self.live[0x128..0x140] }
 
-    fn enter(&mut self) {
-        match self.driver.task() {
-            Some(task) => self.driver.acquire(&task, BackupSemaphore::Settings),
-            None => self.driver.diagnostic(BackupDiagnostic::OutsideTask),
-        }
+    /// The task context, or the outside-task diagnostic when there is none.
+    fn task(&mut self) -> Option<D::Task> {
+        let task = self.driver.task();
+        if task.is_none() { self.driver.diagnostic(BackupDiagnostic::OutsideTask); }
+        task
     }
 
-    fn leave(&mut self) {
-        if let Some(task) = self.driver.task() {
-            self.driver.release(&task, BackupSemaphore::Settings);
-        }
+    /// Takes the settings semaphore for `task`.
+    fn acquire(&mut self, task: D::Task) -> SemaphoreHold<'_, 'a, D> {
+        self.driver.acquire(&task, BackupSemaphore::Settings);
+        SemaphoreHold { backing: self, task }
+    }
+
+    /// Takes the settings semaphore and lends the report store.
+    fn enter(&mut self, task: D::Task) -> SettingsHold<'_, 'a, D> {
+        let semaphore = self.acquire(task);
+        let reports = unsafe { &mut *core::ptr::addr_of_mut!(REPORTS) };
+        SettingsHold { semaphore, reports }
+    }
+
+    #[inline(always)]
+    fn store_request(&mut self, request: RequestOutcome) {
+        self.driver.store_request_status(request.mapped);
+        if request.reported { self.driver.report_failure(request.mapped); }
     }
 
     #[inline(always)]
@@ -280,8 +353,15 @@ impl<'a, D: HeaderBackupDriver> SharedBacking<'a, D> {
     /// Stock leaves the residue uninitialized; without a residue window the caller's bytes stay untouched.
     #[inline(always)]
     pub fn export(&mut self, range: BackingRange, destination: &mut [u8]) -> BackingStatus {
-        self.enter();
-        let status = match self.driver.admit(RequestDirection::Read) {
+        match self.task() {
+            Some(task) => { let hold = self.acquire(task); hold.backing.export_unheld(range, destination) }
+            None => self.export_unheld(range, destination),
+        }
+    }
+
+    #[inline(always)]
+    fn export_unheld(&mut self, range: BackingRange, destination: &mut [u8]) -> BackingStatus {
+        match self.driver.admit(RequestDirection::Read) {
             Err(status) => BackingStatus::Refused(status),
             Ok(()) => match range.projection(destination.len()) {
                 Err(status) => status,
@@ -317,9 +397,7 @@ impl<'a, D: HeaderBackupDriver> SharedBacking<'a, D> {
                     BackingStatus::Success
                 }
             },
-        };
-        self.leave();
-        status
+        }
     }
 
     #[inline(always)]
@@ -338,8 +416,7 @@ impl<'a, D: HeaderBackupDriver> SharedBacking<'a, D> {
     }
 
     #[inline(always)]
-    fn import_before_leave_into(&mut self, range: BackingRange, source: &[u8], outcome: &mut BackingWriteOutcome) {
-        self.enter();
+    fn import_copy_unheld(&mut self, range: BackingRange, source: &[u8], outcome: &mut BackingWriteOutcome) {
         outcome.status = BackingStatus::Success;
         outcome.custom_refreshed = false;
         for observation in outcome.synchronized.iter_mut() { *observation = None; }
@@ -356,39 +433,31 @@ impl<'a, D: HeaderBackupDriver> SharedBacking<'a, D> {
     }
 
     #[inline(always)]
-    fn import_before_leave(&mut self, range: BackingRange, source: &[u8]) -> BackingWriteOutcome {
-        let mut outcome = BackingWriteOutcome::ZERO;
-        self.import_before_leave_into(range, source, &mut outcome);
-        outcome
-    }
-
-    #[inline(always)]
-    fn report(&mut self, underlying: BackingStatus) -> RequestOutcome {
-        let mapped = if underlying == BackingStatus::Success { RequestStatus::Success } else { RequestStatus::Failed };
-        self.driver.store_request_status(mapped);
-        let reported = mapped == RequestStatus::Failed;
-        if reported { self.driver.report_failure(mapped); }
-        RequestOutcome { underlying, mapped, reported }
-    }
-
-    #[inline(always)]
     pub fn read_request(&mut self, descriptor: RequestDescriptor, destination: &mut [u8]) -> RequestOutcome {
-        let status = self.export(descriptor.range(), destination);
-        self.report(status)
+        let request = request_outcome(self.export(descriptor.range(), destination));
+        self.store_request(request);
+        request
     }
 
 }
 
 impl<D: BackupDriver> SharedBacking<'_, D> {
     #[inline(always)]
-    pub fn import_into(&mut self, range: BackingRange, source: &[u8], outcome: &mut BackingWriteOutcome) {
-        self.import_before_leave_into(range, source, outcome);
+    fn import_unheld(&mut self, range: BackingRange, source: &[u8], outcome: &mut BackingWriteOutcome) {
+        self.import_copy_unheld(range, source, outcome);
         if outcome.status == BackingStatus::Success && range.end() > 0x140 {
             let custom: &[u8; CUSTOM_BYTES] = self.live[0x140..0x168].try_into().ok().unwrap();
             self.driver.refresh_custom(custom);
             outcome.custom_refreshed = true;
         }
-        self.leave();
+    }
+
+    #[inline(always)]
+    pub fn import_into(&mut self, range: BackingRange, source: &[u8], outcome: &mut BackingWriteOutcome) {
+        match self.task() {
+            Some(task) => { let hold = self.acquire(task); hold.backing.import_unheld(range, source, outcome) }
+            None => self.import_unheld(range, source, outcome),
+        }
     }
 
     #[inline(always)]
@@ -402,16 +471,41 @@ impl<D: BackupDriver> SharedBacking<'_, D> {
     pub fn write_request(&mut self, descriptor: RequestDescriptor, source: &[u8]) -> MirrorOutcome {
         let mut outcome = BackingWriteOutcome::ZERO;
         self.import_into(descriptor.range(), source, &mut outcome);
-        MirrorOutcome { request: self.report(outcome.status), synchronized: outcome.synchronized }
+        let request = request_outcome(outcome.status);
+        self.store_request(request);
+        MirrorOutcome { request, synchronized: outcome.synchronized }
     }
 
     /// Writes the body and leaves the report in `report`.
     #[inline(always)]
     pub fn write_body_into(&mut self, source: &[u8; BODY_BYTES], report: &mut BodyOutcome) {
+        let request = match self.task() {
+            Some(task) => { let hold = self.acquire(task); hold.backing.write_body_unheld(source, Some(report)) }
+            None => self.write_body_unheld(source, Some(report)),
+        };
+        self.store_request(request);
+    }
+
+    /// Writes the body and leaves the report in the guarded store.
+    #[inline(always)]
+    pub fn write_body_discarding(&mut self, source: &[u8; BODY_BYTES]) {
+        let request = match self.task() {
+            Some(task) => { let mut hold = self.enter(task); hold.write_body_discarding(source) }
+            None => self.write_body_unheld(source, None),
+        };
+        self.store_request(request);
+    }
+
+    #[inline(always)]
+    fn write_body_unheld(&mut self, source: &[u8; BODY_BYTES], report: Option<&mut BodyOutcome>) -> RequestOutcome {
         let mut outcome = BackingWriteOutcome::ZERO;
-        self.import_into(RequestDescriptor::from_abi(BODY_BYTES as u32, 0x10).range(), source, &mut outcome);
-        report.request = self.report(outcome.status);
-        report.synchronized = outcome.synchronized;
+        self.import_unheld(RequestDescriptor::from_abi(BODY_BYTES as u32, 0x10).range(), source, &mut outcome);
+        let request = request_outcome(outcome.status);
+        if let Some(report) = report {
+            report.request = request;
+            report.synchronized = outcome.synchronized;
+        }
+        request
     }
 }
 
@@ -419,11 +513,33 @@ impl<D: HeaderBackupDriver> SharedBacking<'_, D> {
     /// Writes the header and leaves the report in `report`.
     #[inline(always)]
     pub fn write_header_into(&mut self, source: &[u8; HEADER_BYTES], report: &mut MirrorOutcome) {
+        let request = match self.task() {
+            Some(task) => { let hold = self.acquire(task); hold.backing.write_header_unheld(source, Some(report)) }
+            None => self.write_header_unheld(source, Some(report)),
+        };
+        self.store_request(request);
+    }
+
+    /// Writes the header and leaves the report in the guarded store.
+    #[inline(always)]
+    pub fn write_header_discarding(&mut self, source: &[u8; HEADER_BYTES]) {
+        let request = match self.task() {
+            Some(task) => { let mut hold = self.enter(task); hold.write_header_discarding(source) }
+            None => self.write_header_unheld(source, None),
+        };
+        self.store_request(request);
+    }
+
+    #[inline(always)]
+    fn write_header_unheld(&mut self, source: &[u8; HEADER_BYTES], report: Option<&mut MirrorOutcome>) -> RequestOutcome {
         let mut outcome = BackingWriteOutcome::ZERO;
-        self.import_before_leave_into(BackingRange::new(0, HEADER_BYTES as u32), source, &mut outcome);
-        self.leave();
-        report.request = self.report(outcome.status);
-        report.synchronized = outcome.synchronized;
+        self.import_copy_unheld(BackingRange::new(0, HEADER_BYTES as u32), source, &mut outcome);
+        let request = request_outcome(outcome.status);
+        if let Some(report) = report {
+            report.request = request;
+            report.synchronized = outcome.synchronized;
+        }
+        request
     }
 }
 impl<D: HeaderBackupDriver> HeaderBackend for SharedBacking<'_, D> {
@@ -433,13 +549,17 @@ impl<D: HeaderBackupDriver> HeaderBackend for SharedBacking<'_, D> {
     }
     #[inline(always)]
     fn write_header(&mut self, source: &[u8; HEADER_BYTES]) -> MirrorOutcome {
-        let outcome = self.import_before_leave(BackingRange::new(0, HEADER_BYTES as u32), source);
-        self.leave();
-        MirrorOutcome { request: self.report(outcome.status), synchronized: outcome.synchronized }
+        let mut report = MirrorOutcome::unchanged();
+        self.write_header_into(source, &mut report);
+        report
     }
     #[inline(always)]
     fn write_header_into(&mut self, source: &[u8; HEADER_BYTES], report: &mut MirrorOutcome) {
         SharedBacking::write_header_into(self, source, report)
+    }
+    #[inline(always)]
+    fn write_header_discarding(&mut self, source: &[u8; HEADER_BYTES]) {
+        SharedBacking::write_header_discarding(self, source)
     }
 }
 impl<D: BackupDriver> SettingsBackend for SharedBacking<'_, D> {
@@ -456,6 +576,10 @@ impl<D: BackupDriver> SettingsBackend for SharedBacking<'_, D> {
     #[inline(always)]
     fn write_body_into(&mut self, source: &[u8; BODY_BYTES], report: &mut BodyOutcome) {
         SharedBacking::write_body_into(self, source, report)
+    }
+    #[inline(always)]
+    fn write_body_discarding(&mut self, source: &[u8; BODY_BYTES]) {
+        SharedBacking::write_body_discarding(self, source)
     }
 }
 
