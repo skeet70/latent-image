@@ -587,6 +587,7 @@ joinValue _ a b | a == b = a
 joinValue _ (Exact a) (Exact b) = fromSet (S.union a b)
 joinValue _ a b | Just (alo, ahi) <- bounds a, Just (blo, bhi) <- bounds b = Interval (min alo blo) (max ahi bhi)
 joinValue _ a b | Just (alo, ahi) <- stackBounds a, Just (blo, bhi) <- stackBounds b = StackSpan (min alo blo) (max ahi bhi)
+joinValue _ a b | isJust (stackAddress a), isJust (stackAddress b) = Derived (Index StackFrame)
 joinValue _ (Exact zero) derived@(Derived _) | zero == S.singleton 0 = derived
 joinValue _ derived@(Derived _) (Exact zero) | zero == S.singleton 0 = derived
 joinValue place (Derived (Index l)) b | Just (lo, _) <- bounds b, place lo == l = Derived (Index l)
@@ -606,6 +607,15 @@ stackAddress (StackSpan lo hi) = Just (lo, hi)
 stackAddress (Derived (Index StackFrame)) = Just (minBound, maxBound)
 stackAddress _ = Nothing
 
+-- | The value an operation produces from its operands. An operand that may be
+-- a frame address (a stack offset or span, or an unbounded index into the
+-- frame) never yields a value that loses the frame: when the result is not
+-- itself a frame address, it is an unbounded index into the frame.
+frameCarried :: [Abstract] -> Abstract -> Abstract
+frameCarried operands result
+  | any (isJust . stackAddress) operands, not (isJust (stackAddress result)) = Derived (Index StackFrame)
+  | otherwise = result
+
 -- | The union of two escape spans; a span covers every frame offset between
 -- its ends, and `minBound..maxBound` is every slot.
 escapedSpan :: Maybe (Int32, Int32) -> Maybe (Int32, Int32) -> Maybe (Int32, Int32)
@@ -618,11 +628,11 @@ markEscaped span_ value = escapedSpan span_ (stackAddress value)
 
 -- | Drops every local slot holding a byte at or above the lowest escaped
 -- offset, except the slots the prologue's register save wrote.
-forgetEscaped :: (Abstract -> Bool) -> State -> State
-forgetEscaped isSaved state = case escaped state of
+forgetEscaped :: State -> State
+forgetEscaped state = case escaped state of
   Nothing -> state
   Just (lo, _) ->
-    state {slots = M.filterWithKey (\k value -> toInteger k + 4 <= toInteger lo || isSaved value) (slots state)}
+    state {slots = M.filterWithKey (\k _ -> toInteger k + 4 <= toInteger lo || S.member k (savedSlots state)) (slots state)}
 
 -- | A small index read as signed stack-offset deltas: every value, or the two bounds.
 signedOffsets :: Abstract -> Maybe [Int32]
@@ -675,6 +685,8 @@ data State = State
     holds :: Maybe Cond
   , -- | The stack-pointer offsets this function has taken the address of.
     escaped :: Maybe (Int32, Int32)
+  , -- | The frame offsets the prologue's register save wrote.
+    savedSlots :: S.Set Int32
   }
   deriving (Eq, Show)
 
@@ -686,6 +698,7 @@ entryState =
     Nothing
     Nothing
     Nothing
+    S.empty
 
 joinState :: (Word32 -> Location) -> State -> State -> State
 joinState place a b =
@@ -695,6 +708,7 @@ joinState place a b =
     (if comparison a == comparison b then comparison a else Nothing)
     (if holds a == holds b then holds a else Nothing)
     (escapedSpan (escaped a) (escaped b))
+    (savedSlots a `S.union` savedSlots b)
 
 widenState :: (Word32 -> Location) -> [Word32] -> State -> State -> State
 widenState place thresholds old new =
@@ -704,6 +718,7 @@ widenState place thresholds old new =
     (if comparison old == comparison new then comparison old else Nothing)
     (if holds old == holds new then holds old else Nothing)
     (escapedSpan (escaped old) (escaped new))
+    (savedSlots old `S.union` savedSlots new)
 
 -- | The flags of `cmp r, #k` (unsigned conditions valid) or `cmn r, #-k` (only EQ and NE).
 data Comparison = Comparison Reg Word32 Bool deriving (Eq, Show)
@@ -755,7 +770,7 @@ readSized context width signed address = case width of
 -- * Value arithmetic
 
 offsetFrom :: Context -> Abstract -> Abstract -> Abstract
-offsetFrom context base index = case offsetFromOrdered context base index of
+offsetFrom context base index = frameCarried [base, index] $ case offsetFromOrdered context base index of
   Unknown -> case offsetFromOrdered context index base of
     derived@(Derived _) -> derived
     _ -> Unknown
@@ -780,7 +795,7 @@ offsetFromOrdered context base index = case (base, index) of
   _ -> Unknown
 
 subtractFrom :: Abstract -> Abstract -> Abstract
-subtractFrom base index = case (base, index) of
+subtractFrom base index = frameCarried [base, index] $ case (base, index) of
   (StackOffset o, _) | Just offsets <- signedOffsets index -> stackAt (map (o -) offsets)
   (StackSpan lo hi, _) | Just offsets <- signedOffsets index -> stackAt (map (lo -) offsets ++ map (hi -) offsets)
   (StackOffset o, StackOffset q) -> exact (fromIntegral (o - q))
@@ -794,7 +809,7 @@ subtractFrom base index = case (base, index) of
 
 shiftValue :: Shift -> Int -> Abstract -> Abstract
 shiftValue LSL 0 value = value
-shiftValue shift amount value = case enumerate value of
+shiftValue shift amount value = frameCarried [value] $ case enumerate value of
   Just xs -> fromSet (S.fromList (map (applyShift shift amount) xs))
   Nothing
     | isJust (stackAddress value) -> Derived (Index StackFrame)
@@ -815,9 +830,7 @@ applyShift shift amount value = case shift of
   ROR -> if amount == 0 then value else (value `shiftR` amount) .|. (value `shiftL` (32 - amount))
 
 dataResult :: Context -> DataOp -> Abstract -> Abstract -> Abstract
-dataResult _context op a b
-  | op `elem` [MVN, AND, ORR, EOR, BIC], isJust (stackAddress a) || isJust (stackAddress b) = Derived (Index StackFrame)
-dataResult context op a b = case op of
+dataResult context op a b = frameCarried operands $ case op of
   MOV -> b
   MVN -> fromMaybe Unknown (pointwise (\_ y -> complement y) (exact 0) b)
   ADD -> offsetFrom context a b
@@ -836,6 +849,12 @@ dataResult context op a b = case op of
     (_, Just (_, ha)) -> Interval 0 ha
     _ -> Unknown
   _ -> Unknown
+ where
+  -- MVN has no first operand: its Rn field is zero and holds no value.
+  operands = case op of
+    MOV -> [b]
+    MVN -> [b]
+    _ -> [a, b]
 
 -- * Transfer
 
@@ -906,11 +925,16 @@ refine (Cond c) state = case comparison state of
 
 operandValue :: Word32 -> State -> Operand -> Abstract
 operandValue _ _ (Immediate value) = exact value
-operandValue address state (ShiftedImmediate rm shift amount) = shiftValue shift amount (registerValue address state rm)
-operandValue address state (ShiftedRegister rm shift rs) = case enumerate (registerValue address state rs) of
-  Just [0] -> registerValue address state rm
-  Just [amount] | amount < 32 -> shiftValue shift (fromIntegral amount) (registerValue address state rm)
+operandValue address state (ShiftedImmediate rm shift amount) = frameCarried [value] (shiftValue shift amount value)
+ where
+  value = registerValue address state rm
+operandValue address state (ShiftedRegister rm shift rs) = frameCarried [value, amount] $ case enumerate amount of
+  Just [0] -> value
+  Just [n] | n < 32 -> shiftValue shift (fromIntegral n) value
   _ -> Unknown
+ where
+  value = registerValue address state rm
+  amount = registerValue address state rs
 
 -- | One instruction: intra-function successors with their states, and the
 -- findings it produces in this state.
@@ -925,21 +949,10 @@ execute context function address instruction state = case instruction of
               (CMN, Just [k]) | rn /= pc -> Just (Comparison rn (negate k) False)
               _ -> Nothing
          in conditional cond (\s -> continue s {comparison = compared s, holds = Nothing}) id
-    | rd == pc ->
-        branching cond $ \s ->
-          let frame = if op `elem` [ADC, SBC, RSC] then frameResult (operands s) else Nothing
-              (value, reached) = case frame of
-                Just derived -> (derived, exposeFrame s)
-                Nothing -> (result s, s)
-           in indirectBranch False Nothing value reached
-    | op `elem` [ADC, SBC, RSC] ->
-        conditional cond
-          (\s -> continue (flags setsFlags (writeUnmodelled (frameResult (operands s)) rd s)))
-          (flags setsFlags)
+    | rd == pc -> branching cond (\s -> indirectBranch False Nothing (result s) s)
     | otherwise -> conditional cond (\s -> continue (flags setsFlags (setRegister rd (result s) s))) (flags setsFlags)
    where
     result s = dataResult context op (registerValue address s rn) (operandValue address s operand)
-    operands s = [registerValue address s rn, operandValue address s operand]
   MoveWide cond rd value -> conditional cond (\s -> continue (setRegister rd (exact value) s)) id
   ReadStatus cond rd -> conditional cond (\s -> continue (setRegister rd Unknown s)) id
   WriteApplicationFlags cond _ -> conditional cond (\s -> continue (flags True s)) id
@@ -949,15 +962,11 @@ execute context function address instruction state = case instruction of
           (_, Just (alo, ahi), Just (blo, bhi)) | toInteger ahi * toInteger bhi <= 0xffffffff -> Interval (alo * blo) (ahi * bhi)
           _ -> Unknown
         operands s = [registerValue address s rn, registerValue address s rm] ++ maybe [] (\ra -> [registerValue address s ra]) accumulator
-        result s = maybe (factors s) (\ra -> offsetFrom context (registerValue address s ra) (factors s)) accumulator
-        write s = case (result s, frameResult (operands s)) of
-          (Unknown, Just frame) -> writeUnmodelled (Just frame) rd s
-          (value, _) -> setRegister rd value s
-     in conditional cond (\s -> continue (write s)) id
+        result s = frameCarried (operands s) (maybe (factors s) (\ra -> offsetFrom context (registerValue address s ra) (factors s)) accumulator)
+     in conditional cond (\s -> continue (setRegister rd (result s) s)) id
   MoveTop cond rd value ->
-    let top s = case registerValue address s rd of
-          low | isJust (stackAddress low) -> Derived (Index StackFrame)
-          low -> fromMaybe Unknown (pointwise (\x _ -> (x .&. 0xffff) .|. (value `shiftL` 16)) low (exact 0))
+    let low s = registerValue address s rd
+        top s = frameCarried [low s] (fromMaybe Unknown (pointwise (\x _ -> (x .&. 0xffff) .|. (value `shiftL` 16)) (low s) (exact 0)))
      in conditional cond (\s -> continue (setRegister rd (top s) s)) id
   ZeroExtend cond rd rm rotation bits ->
     let extended s = dataResult context AND (shiftValue ROR rotation (registerValue address s rm)) (exact ((1 `shiftL` bits) - 1))
@@ -966,8 +975,8 @@ execute context function address instruction state = case instruction of
     conditional cond
       ( \s ->
           let sources = maybe [] computeSources (wordAt (contextElf context) address)
-              frame = frameResult (map (registerValue address s) sources)
-           in continue (foldr (\destination acc -> writeUnmodelled frame destination acc) s defs)
+              value = frameCarried (map (registerValue address s) sources) Unknown
+           in continue (foldr (\destination acc -> setRegister destination value acc) s defs)
       )
       id
   Load cond width signed rt rn offset indexing
@@ -994,7 +1003,14 @@ execute context function address instruction state = case instruction of
               size = widthBytes width
               values = [registerValue address s rt, registerValue address s (nextReg rt)]
               stored = storeValues (storeSlots s at size values) values
-           in storing (storeCheck s rn at size) (continue (writeback stored rn offset indexing))
+              -- A pre-indexed store of a callee-saved register at the entry
+              -- stack pointer writes a prologue slot.
+              saved = case (rn, rt, width, indexing, at, registerValue address s sp) of
+                (Reg 13, Reg n, Word, PreIndexed, StackOffset first, StackOffset 0)
+                  | n == 14 || n >= 4 && n <= 12 -> S.singleton first
+                _ -> S.empty
+           in storing (storeCheck s rn at size)
+                (continue (writeback (stored {savedSlots = savedSlots s `S.union` saved}) rn offset indexing))
       )
       id
   StoreMultiple cond rn mode wb regs ->
@@ -1003,7 +1019,13 @@ execute context function address instruction state = case instruction of
           let (lowest, count, end) = block s rn mode regs
               values = map (registerValue address s) regs
               stored = storeValues (storeSlots s lowest count values) values
-              updated = if wb then setRegister rn end stored else stored
+              -- A push at the entry stack pointer writes the prologue's slots.
+              saved
+                | rn == sp, mode == DecrementBefore, wb, registerValue address s sp == StackOffset 0
+                , StackOffset first <- lowest =
+                    S.fromList [first, first + 4 .. first + fromIntegral count - 4]
+                | otherwise = S.empty
+              updated = (if wb then setRegister rn end stored else stored) {savedSlots = savedSlots s `S.union` saved}
            in storing (storeCheck s rn lowest count) (continue updated)
       )
       id
@@ -1044,18 +1066,6 @@ execute context function address instruction state = case instruction of
   branchCount found outcome = (withFindings found outcome) {outcomeBranches = if null found then 1 else 0}
   inside target = functionStart function <= target && target < functionEnd function
   flags setsFlags s = if setsFlags then s {comparison = Nothing, holds = Nothing} else s
-  -- An instruction whose result the analysis does not model: a frame-derived
-  -- operand makes the result the frame, exposed from its lowest address.
-  frameResult values
-    | any (isJust . stackAddress) values = Just (Derived (Index StackFrame))
-    | otherwise = Nothing
-  -- A result register the analysis does not track cannot hold the frame, so
-  -- the frame stays exposed.
-  writeUnmodelled frame destination s = case frame of
-    Just _ | destination == pc -> exposeFrame s
-    Just value -> setRegister destination value s
-    Nothing -> setRegister destination Unknown s
-  exposeFrame s = s {escaped = escapedSpan (escaped s) (Just (minBound, maxBound))}
   -- A callee that runs only hints up to an unconditional branch to itself does not return.
   traps at = case decode at <$> wordAt (contextElf context) at of
     Just (Hint _) -> traps (at + 4)
@@ -1162,20 +1172,16 @@ execute context function address instruction state = case instruction of
   storeSlots s (StackSpan lo hi) size _
     | hi + fromIntegral size <= 0 && not (overlapsSaved s lo (hi + fromIntegral size)) =
         s {slots = M.filterWithKey (\k _ -> k + 4 <= lo || k >= hi + fromIntegral size) (slots s)}
-  storeSlots s (Derived (Index StackFrame)) _ _ = s {slots = M.filter saved (slots s)}
-  storeSlots s (Derived _) _ _ = forgetEscaped saved s
+  storeSlots s (Derived (Index StackFrame)) _ _ = s {slots = M.filterWithKey (\k _ -> S.member k (savedSlots s)) (slots s)}
+  storeSlots s (Derived _) _ _ = forgetEscaped s
   storeSlots s _ _ _ = s
 
   -- A frame address a store leaves in memory the callee can reach.
   storeValues s values = s {escaped = foldl markEscaped (escaped s) values}
 
-  -- Whether [lo, end) of the frame holds the return address or a register
-  -- this function saved on entry.
-  overlapsSaved s lo end = any (\(k, v) -> k + 4 > lo && k < end && saved v) (M.toList (slots s))
-  saved v = case v of
-    ReturnAddress -> True
-    Derived (Argument (Reg n)) -> n >= 4
-    _ -> False
+  -- Whether [lo, end) of the frame overlaps a slot the prologue's register
+  -- save wrote.
+  overlapsSaved s lo end = any (\(k, _) -> k + 4 > lo && k < end && S.member k (savedSlots s)) (M.toList (slots s))
 
   -- Findings and the number of proven stores (0 or 1).
   storeCheck :: State -> Reg -> Abstract -> Word32 -> ([Finding], Int)
@@ -1309,7 +1315,7 @@ execute context function address instruction state = case instruction of
   afterCall callee s =
     let clobbered = foldr (`setRegister` Unknown) s [Reg 1, Reg 2, Reg 3, Reg 12, lr]
         reported = setRegister (Reg 0) (maybe Unknown (Derived . Result) callee) clobbered
-     in (belowCallSp s (forgetEscaped saved reported)) {comparison = Nothing, holds = Nothing}
+     in (belowCallSp s (forgetEscaped reported)) {comparison = Nothing, holds = Nothing}
 
   -- A callee may write every frame word below the stack pointer it was called with.
   belowCallSp called subject = case registerValue address called (Reg 13) of

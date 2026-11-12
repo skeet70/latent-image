@@ -272,26 +272,78 @@ main = do
   check "a two-level bank chain reaching stock forgets the caller's escaped local"
     (any (\f -> findingAddress f == callerStart + 36) (violations chainReport))
   -- A result the analysis does not model takes the frame from a frame operand:
-  -- `add r1, sp, #4` puts entry sp-4 in r1 while the slot at entry sp-8 holds
+  -- `add r1, sp, #4` puts entry sp-12 in r1 while the slot at entry sp-16 holds
   -- rb_last_status, so exposing the frame forgets that slot at the call.
-  forM_
-    [ ("a multiply", 0xe0000291)
-    , ("an add with carry", 0xe0a10002)
-    , ("a subtract with carry", 0xe0c10002)
-    , ("a reverse subtract with carry", 0xe0e10002)
-    , ("a signed byte extend", 0xe6af0071)
-    ] $ \(label, unmodelled) -> do
-      let prefix = slotPrefix ++ [0xe28d1004, unmodelled]
-          site = callerStart + fromIntegral (length prefix * 4)
-      report <- run allowlist (withCall prefix)
-      check (label ++ " of a frame address exposes the frame")
-        (any (\f -> findingAddress f == site + 12) (violations report))
-  -- `clz pc, r1` writes a result register the analysis does not track.
+  let frameCase label prefix = do
+        let site = callerStart + fromIntegral (length prefix * 4)
+        report <- run allowlist (withCall prefix)
+        check (label ++ " exposes the frame")
+          (any (\f -> findingAddress f == site + 12) (violations report))
+  frameCase "a multiply of a frame address" (slotPrefix ++ [0xe28d1004, 0xe0000291])
+  frameCase "an add with carry of a frame address" (slotPrefix ++ [0xe28d1004, 0xe0a10002])
+  frameCase "a subtract with carry of a frame address" (slotPrefix ++ [0xe28d1004, 0xe0c10002])
+  frameCase "a reverse subtract with carry of a frame address" (slotPrefix ++ [0xe28d1004, 0xe0e10002])
+  frameCase "a signed byte extend of a frame address" (slotPrefix ++ [0xe28d1004, 0xe6af0071])
+  -- An operand the analysis cannot resolve still carries a frame address into
+  -- the result.
+  frameCase "a register-shifted frame address" (slotPrefix ++ [0xe3a01020, 0xe1a0017d])
+  frameCase "a frame address as a reverse subtract's subtrahend" (slotPrefix ++ [0xe28d1004, 0xe0610002])
+  frameCase "a multiply with a frame factor and a scalar accumulator" (slotPrefix ++ [0xe28d1004, 0xe3a02001, 0xe3e03003, 0xe0203291])
+  -- A frame index added to an exact pointer: without the operand rule the
+  -- result keeps only the pointer's root and the frame is lost.
+  let offsetPrefix = [0xe08d2000, 0xe3001000, 0xe3401001, 0xe0810002]
+      offsetStore = callerStart + fromIntegral (length offsetPrefix * 4)
+      offsetBytes = replaceFunction "rb_assert_one" (offsetPrefix ++ [0xe5803000, 0xe12fff1e]) clean
+  offsetReport <- run allowlist offsetBytes
+  check "a frame index added to an exact pointer keeps the frame"
+    (any (\f -> findingAddress f == offsetStore && findingReason f == Unproven StoreAccess (Index StackFrame)) (violations offsetReport))
+  -- Each operation that keeps or loses a root after a frame address.
+  frameCase "a bitwise operation on a frame address" (slotPrefix ++ [0xe00d0001])
+  frameCase "a shift of a frame address" (slotPrefix ++ [0xe1a0008d])
+  frameCase "MOVT of a frame address" (slotPrefix ++ [0xe28d1004, 0xe3401000])
+  frameCase "a zero-extend of a frame address" (slotPrefix ++ [0xe28d1004, 0xe6ef0071])
+  -- A frame pointer widened at a loop head keeps the frame; the store through
+  -- it is an undeclared frame-index store, not an unbounded one.
+  let loopPrefix = slotPrefix ++ [0xe28d4004]
+      loopStore = callerStart + fromIntegral (length loopPrefix * 4) + 4
+      loopBytes = replaceFunction "rb_assert_one"
+        (loopPrefix ++ [0xe2444004, 0xe5843000, 0xe1540000, 0x1afffffb, 0xe12fff1e]) clean
+  loopReport <- run allowlist loopBytes
+  check "a frame pointer widened at a loop head keeps the frame"
+    (any (\f -> findingAddress f == loopStore && findingReason f == Unproven StoreAccess (Index StackFrame)) (violations loopReport))
+  -- A return address in a slot the prologue's push did not write is not a
+  -- saved slot: the call forgets it and the return through it is unbounded.
+  let savedSlotBytes = replaceFunction "rb_assert_one"
+        [0xe92d4010, 0xe24dd008, 0xe58de000, 0xe1a0000d, branchLink (callerStart + 16) stockTarget, 0xe49df008] clean
+  savedSlotReport <- run allowlist savedSlotBytes
+  check "a return address in a non-prologue slot does not survive a call"
+    (any (\f -> findingAddress f == callerStart + 20 && findingReason f == UnboundedBranch) (violations savedSlotReport))
+  -- `clz pc, r1` is an UNPREDICTABLE program-counter destination and is refused.
   let pcPrefix = slotPrefix ++ [0xe28d1004, 0xe16fff11]
-      pcSite = callerStart + fromIntegral (length pcPrefix * 4)
+      pcSite = callerStart + fromIntegral ((length slotPrefix + 1) * 4)
   pcReport <- run allowlist (withCall pcPrefix)
-  check "a compute of a frame address into the program counter exposes the frame"
-    (any (\f -> findingAddress f == pcSite + 12) (violations pcReport))
+  check "a program-counter destination of a compute form is refused"
+    (any (\f -> findingAddress f == pcSite && findingReason f == ForbiddenInstruction Unadmitted) (violations pcReport))
+  -- Every decoded form that writes the program counter is refused.
+  let pcDestinations =
+        [ ("MUL", 0xe00f0291), ("MLA", 0xe02f3291)
+        , ("UMULL RdHi", 0xe08f0291), ("UMULL RdLo", 0xe082f291)
+        , ("UMLAL RdHi", 0xe0af0291), ("UMLAL RdLo", 0xe0a4f291)
+        , ("SMULL RdHi", 0xe0cf0291), ("SMULL RdLo", 0xe0c2f291)
+        , ("SMLAL RdHi", 0xe0ef0291), ("SMLAL RdLo", 0xe0e4f291)
+        , ("UMAAL RdHi", 0xe04f0291), ("UMAAL RdLo", 0xe042f291)
+        , ("MLS", 0xe06f3291), ("CLZ", 0xe16fff11)
+        , ("UXTB", 0xe6eff071), ("UXTH", 0xe6fff071)
+        , ("SXTB", 0xe6aff071), ("SXTH", 0xe6bff071)
+        , ("UXTAB", 0xe6e1f072), ("UXTAH", 0xe6f1f072)
+        , ("SXTAB", 0xe6a1f072), ("SXTAH", 0xe6b1f072)
+        , ("REV", 0xe6bfff31), ("REV16", 0xe6bfffb1), ("RBIT", 0xe6ffff31)
+        , ("SBFX", 0xe7a3f051), ("UBFX", 0xe7e3f051)
+        , ("BFI", 0xe7c3f011), ("BFC", 0xe7c3f01f)
+        , ("LDRD", 0xe1c1e0d0), ("STRD", 0xe1c1e0f0)
+        ]
+      admitted = [label | (label, word) <- pcDestinations, A32.decode frameSetup word /= A32.Rejected Unadmitted]
+  check ("the decoder refuses every program-counter destination; admitted: " ++ show admitted) (null admitted)
   forM_ [elfLow, elfHigh] $ \path -> do
     bytes <- B.readFile path
     image <- either fail pure (parseElf bytes)
