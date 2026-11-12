@@ -249,7 +249,6 @@ storageWindows = [(0x96cc64, 0x96d1aa), (0x89ec00, 0x89ede0), (0x409c281c, 0x409
 storageStoreWords :: StorageWidth -> [Word32]
 storageStoreWords width = concat [window index low high | (index, (low, high)) <- zip [0 ..] storageWindows] ++ [0xe12fff1e]
   where
-    bytes = case width of StorageByte -> 1; StorageHalf -> 2
     store = case width of StorageByte -> 0xe5c21000; StorageHalf -> 0xe1c210b0
     constant register address =
       [ 0xe3000000 .|. (register `shiftL` 12) .|. ((address .&. 0xf000) `shiftL` 4) .|. (address .&. 0xfff)
@@ -257,9 +256,9 @@ storageStoreWords width = concat [window index low high | (index, (low, high)) <
       ]
     branch site target = 0x8a000000 .|. (fromIntegral (target - site - 2 :: Int) .&. 0xffffff)
     window index low high =
-      constant 12 low
+      constant (12 :: Word32) low
         ++ [0xe040200c]
-        ++ constant 3 (high - 1 - low)
+        ++ constant (3 :: Word32) (high - 1 - low)
         ++ [0xe1520003, branch (index * 10 + 6) ((index + 1) * 10), 0xe082200c, store, 0xe12fff1e]
 
 storageOutputName :: StorageWidth -> String
