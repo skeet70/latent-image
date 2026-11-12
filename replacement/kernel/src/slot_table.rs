@@ -225,7 +225,7 @@ pub struct Boundary {
     pub window_count: u32,
     pub entry_count: u32,
     pub windows: [(u32, u32); 4],
-    pub entries: [*const (); 10],
+    pub entries: [*const (); 12],
 }
 
 #[cfg(target_arch = "arm")]
@@ -237,9 +237,10 @@ unsafe impl Sync for Boundary {}
 pub static XM1_KERNEL_BOUNDARY: Boundary = Boundary {
     magic: 0x314e524b,
     window_count: 4,
-    entry_count: 10,
+    entry_count: 12,
     windows: WINDOWS,
     entries: [
+        core_index::<StockGuest> as *const (),
         block::<StockGuest> as *const (),
         report::<StockGuest> as *const (),
         <SlotTable as Backend>::current_task as *const (),
@@ -250,5 +251,6 @@ pub static XM1_KERNEL_BOUNDARY: Boundary = Boundary {
         <SlotTable as Backend>::cores_unlock as *const (),
         <SlotTable as Backend>::semaphore_wait as *const (),
         <SlotTable as Backend>::semaphore_signal as *const (),
+        xm1_kernel_enter_slot as *const (),
     ],
 };

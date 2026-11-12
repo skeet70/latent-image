@@ -854,16 +854,17 @@ candidateContractValueWith hullRule premises (StagedCandidate staged@(StagedImag
     proof = artifactProof artifact
     names = M.fromList [(entry, name) | FunctionExtent (FunctionName name) entry _ <- artifactFunctions artifact]
     depth address = maybe 0 (\(StackOffset offset) -> negate offset) (M.lookup (GuestAddress address) (proofComposed proof))
-    frameValue (EntryFrame entry@(GuestAddress address) (StackOffset own) calls arguments incoming) = object
+    frameValue (EntryFrame entry@(GuestAddress address) (StackOffset own) calls arguments incoming stored) = object
       [ "entry" .= address
       , "name" .= M.lookup entry names
       , "own_depth_bytes" .= negate own
       , "max_depth_bytes" .= depth address
       , "frame_arguments" .=
-          [ object ["slot" .= slotText slot, "bytes" .= bytes]
-          | CallArgument (GuestAddress callee) slot bytes <- arguments, callee == address
+          [ object ["slot" .= slotText slot, "origin" .= fmap slotText origin, "bytes" .= bytes]
+          | CallArgument (GuestAddress callee) slot origin bytes <- arguments, callee == address
           ]
       , "incoming_words" .= S.toList incoming
+      , "stored_slots" .= [slotText slot | slot <- S.toList stored]
       , "calls" .=
           [ object ["site" .= site, "target" .= target, "sp_offset" .= at, "tail" .= (kind `elem` [TailCall, StockLeafTailCall, CallbackTailCall]), "stock" .= (kind `elem` [StockLeafCall, StockLeafTailCall, StockSiteCall]), "callback" .= (kind `elem` [CallbackCall, CallbackTailCall])]
           | CallEdge (GuestAddress site) (GuestAddress target) (StackOffset at) kind <- calls
