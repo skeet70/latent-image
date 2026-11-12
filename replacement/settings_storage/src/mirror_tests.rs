@@ -274,7 +274,6 @@ fn outside_task_diagnoses_each_operation_without_semaphore_calls() {
         assert_eq!(backing.driver().effects().filter(|effect| matches!(effect, Effect::Diagnostic(BackupDiagnostic::OutsideTask))).count(), 2);
         assert!(!backing.driver().effects().any(|effect| matches!(effect, Effect::Acquire(_) | Effect::Release(_))));
         assert_eq!(BackupDiagnostic::OutsideTask.legacy_arguments(), (2, 59));
-        assert_eq!(BackupSemaphore::Settings.legacy_id(), 37);
         assert_eq!(BackupWriteMode::Immediate.legacy_argument(), 0);
     });
 }

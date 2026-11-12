@@ -1053,7 +1053,8 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
     if Compact.compactConsumerAgreement result then exitSuccess else exitFailure
 
   -- Pass 1: stock.
-  (stockBatches, stockRuns) <- runBatches gate cache runner out "stock" [withDerivedFrame stockSupplied [] (stockSpec (fxOf rc) image4 properties (runLabel rc) stockFunctions (runCase rc)) | rc <- runCases]
+  let stockSpecsFor = [withDerivedFrame stockSupplied [] (stockSpec (fxOf rc) image4 properties (runLabel rc) stockFunctions (runCase rc)) | rc <- runCases]
+  (stockBatches, stockRuns) <- runBatches gate cache runner out "stock" stockSpecsFor
   let stockRun rc = lookupRun stockRuns (runLabel rc)
   modelRows <- fmap concat . forM runCases $ \rc -> case modelled (standing (runProperty rc)) of
     Nothing -> pure []
@@ -1168,8 +1169,31 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
         [ object ["site" .= hex site, "count" .= length [() | run <- runs, H.BoundaryEvent found _ _ _ <- eventsOfRun run, found == site]]
         | site <- slotSites
         ]
+      judgeCases =
+        [ object
+            [ "id" .= caseLabelText (runLabel c)
+            , "entry" .= hex (fromIntegral (N.guestAddress (caseEntry spec)) :: Word32)
+            , "extent" .= caseExtent
+            , "stock_instructions_inside" .= runInstructions reference
+            , "differences" .= [differenceKind d ++ ": " ++ differenceDetail d | d <- ds]
+            ]
+        | ((c, ds), spec) <- zip verdicts stockSpecsFor
+        , let entry = fromIntegral (N.guestAddress (caseEntry spec)) :: Word32
+              caseExtent = case [size | (N.GuestAddress start, size) <- caseFunctions spec, fromIntegral start == entry] of
+                size : _ -> size
+                [] -> 0
+              reference = M.findWithDefault (error "missing stock run") (runLabel c) stockRuns
+        ]
       results = object
         [ "schema_version" .= (1 :: Int)
+        , "suite" .= ("property-service" :: String)
+        , "image4_sha256" .= sha256Hex (sha256 image4)
+        , "owned_sha256" .= sha256Hex (sha256 linked)
+        , "cases" .= judgeCases
+        , "comparison_policy" .= object
+            [ "slot_hook_words" .= ("nonzero: both roles enter the fixture's slot stubs at +0x7c and +0x6c" :: String)
+            , "wrapper_error_report" .= ("reproduced: the crate writes the same console record, status word and installed callback as stock's wrappers, so a difference on that path is a comparison difference" :: String)
+            ]
         , "inputs" .= object inputs
         , "qualification_scope" .= (case mode of NativeOnly -> "native-only"; ActualStagedCandidate _ _ -> "staged-candidate" :: String)
         , "dat_retirement_admitted" .= False

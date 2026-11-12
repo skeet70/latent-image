@@ -146,7 +146,7 @@ callerWrite :: WriteEvent
 callerWrite = WriteEvent 0x9597f4 4 0x11223344
 
 baseRun :: Run
-baseRun = Run Returned [(R0, 1), (Sp, 0x9597f0)] [(RegionId "banks", B.pack [0xab])] (Just [WriteEvent 0x96cc64 1 0xab])
+baseRun = Run Returned [(R0, 1), (Sp, 0x9597f0)] [(RegionId "banks", B.pack [0xab])] (Just [WriteEvent 0x96cc64 1 0xab]) 1
 
 -- | A case that enters one function and returns: @push {r4, lr}; pop {r4, pc}@, so its entry path
 -- reaches eight bytes below its entry SP.

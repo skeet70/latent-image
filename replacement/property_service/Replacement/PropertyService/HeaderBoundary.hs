@@ -84,18 +84,23 @@ slotStubWords =
   , (0x164, slotBase + 0x30, constant 0)
   , (0x168, slotBase + 0x40, [0xe12fff1e])
   , (0x7c, slotBase + 0x50, record 0x7c (slotBase + 0x50))
-  , (0x6c, slotBase + 0x60, record 0x6c (slotBase + 0x60))
-  , (0x70, slotBase + 0x70, record 0x70 (slotBase + 0x70))
+  , (0x6c, slotBase + 0x60, recordZeroSecond 0x6c (slotBase + 0x60))
+  , (0x70, slotBase + 0x80, record 0x70 (slotBase + 0x80))
   ]
   where
     constant value = [0xe3a00000 .|. (value .&. 0xff), 0xe12fff1e]
     record site address = mov 12 site ++ [0xe3a02000, branch (address + 12) helperBase]
+    recordZeroSecond site address = mov 12 site ++ [0xe3a01000, 0xe3a02000, branch (address + 16) helperBase]
 
 slotStubs :: [(Word32, Word32)]
 slotStubs = [(offset, address) | (offset, address, _) <- slotStubWords]
 
-slotCode :: B.ByteString
-slotCode = placeWords (B.replicate 0x80 0) slotBase [(address, assemble words') | (_, address, words') <- slotStubWords]
+-- | The slot stubs' code, with the task slot returning @taskWord@.
+slotCode :: Word32 -> B.ByteString
+slotCode taskWord = placeWords (B.replicate 0x90 0) slotBase
+  [(address, assemble (if offset == 0x16c then constant taskWord else words')) | (offset, address, words') <- slotStubWords]
+  where
+    constant value = [0xe3a00000 .|. (value .&. 0xff), 0xe12fff1e]
 
 kernelBlockBytes :: B.ByteString
 kernelBlockBytes = placeWords (B.replicate 0x1628 0) 0 [(offset, word32le address) | (offset, address, _) <- slotStubWords]
@@ -112,4 +117,4 @@ placeWords initial base rows = foldl place initial rows
     place bytes (offset, value) = let at = fromIntegral (offset - base) in B.take at bytes <> value <> B.drop (at + B.length value) bytes
 
 functionSpans :: [(Word32,Word32)]
-functionSpans = [(0x61d944,0x61d994),(0x61d994,0x61d9ec),(0x61d9ec,0x61da3c),(0x61da3c,0x61da8c),(0x6a6ddc,0x6a6e68),(0x6a6e68,0x6a6f3c),(0x6a6f3c,0x6a6fd8),(0x72b3a4,0x72b3d0),(0x72b3d0,0x72b3fc),(0x722054,0x722070),(0x723cb8,0x723cc0)] ++ [(address,address+fromIntegral (length (callback address)*4)) | address <- callbacks] ++ [(address, address + fromIntegral (4 * length words')) | (_, address, words') <- slotStubWords] ++ [(helperBase,helperBase+fromIntegral (length helperWords*4))]
+functionSpans = [(0x61d944,0x61d994),(0x61d994,0x61d9ec),(0x61d9ec,0x61da3c),(0x61da3c,0x61da8c),(0x6a6ddc,0x6a6e68),(0x6a6e68,0x6a6f3c),(0x6a6f3c,0x6a6fd8),(0x72b3a4,0x72b3d0),(0x72b3d0,0x72b3fc),(0x722054,0x722070),(0x723cb8,0x723ce8),(0x724b68,0x724c00),(0x724c00,0x724cb4),(0x724cb4,0x724cbc)] ++ [(address,address+fromIntegral (length (callback address)*4)) | address <- callbacks] ++ [(address, address + fromIntegral (4 * length words')) | (_, address, words') <- slotStubWords] ++ [(helperBase,helperBase+fromIntegral (length helperWords*4))]

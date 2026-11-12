@@ -790,12 +790,13 @@ data Run = Run
   , runRegisters :: ![(Register, Word32)]
   , runMemory :: ![(RegionId, B.ByteString)]
   , runWrites :: !(Maybe [WriteEvent])
+  , runInstructions :: !Int
   }
   deriving (Eq, Show)
 
 forceRun :: Run -> Run
 forceRun run =
-  sum (map snd (runRegisters run)) `seq` sum (map (B.length . snd) (runMemory run)) `seq` maybe () forceEvents (runWrites run) `seq` run
+  runInstructions run `seq` sum (map snd (runRegisters run)) `seq` sum (map (B.length . snd) (runMemory run)) `seq` maybe () forceEvents (runWrites run) `seq` run
   where
     forceEvents = foldr (\event rest -> event `seq` rest) ()
 
@@ -895,7 +896,7 @@ runOf observation writes = do
       unless (map (\(N.Write (N.GuestAddress a) (N.WriteBytes w)) -> (fromIntegral a, fromIntegral w)) logged == [(eventAddress e, eventWidth e) | e <- writes])
         (Left "report writes differ from the parsed provenance")
       Right (Just [event | event <- writes, compared (eventAddress event)])
-  pure (Run (N.nativeStatus observation) registers memory retained)
+  pure (Run (N.nativeStatus observation) registers memory retained (fromIntegral (N.instructionCount (N.nativeInstructions observation))))
   where
     compared address = or [base <= address && address < base + fromIntegral size | (_, base, size) <- comparedRegions]
 
@@ -1074,7 +1075,7 @@ caseSpec image functions fx (CaseLabel label) standing (OracleCase (PropertyId i
         , region (RegionId "kernel-root") H.kernelRootBase 8 ReadOnly H.kernelRootBytes
         , region (RegionId "kernel-block") H.kernelBlockBase (B.length H.kernelBlockBytes) ReadOnly H.kernelBlockBytes
         , region (RegionId "semaphore-classes") H.classBase (B.length H.classBytes) ReadOnly H.classBytes
-        , region (RegionId "kernel-slots") H.slotBase (B.length H.slotCode) ReadExecute H.slotCode
+        , region (RegionId "kernel-slots") H.slotBase (B.length (H.slotCode 1)) ReadExecute (H.slotCode 1)
         , region stackId stackBase (fromIntegral (stackPointer - stackBase)) ReadWrite (B.replicate (fromIntegral (stackPointer - stackBase)) 0)
         , region callerFrameId stackPointer (fromIntegral (stackTop - stackPointer)) ReadWrite (B.replicate (fromIntegral (stackTop - stackPointer)) 0)
         , region exitId exitAddress 4 ReadExecute (word32le 0xe12fff1e)
