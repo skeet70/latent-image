@@ -1,0 +1,432 @@
+{
+  "schema": 1,
+  "task_id": 43,
+  "task": "saclac",
+  "source": "private-data/scratch/PowerBoundaryCensus/saclac-machines.md sections 0 and 3: the row functions of [0xefcb88, 0xf01b14) and the action table start of each machine",
+  "points": [
+    {
+      "address": "0x00f01bc8",
+      "label": "task-entry",
+      "role": "actor"
+    },
+    {
+      "address": "0x00ef9a94",
+      "label": "queue-43-producer",
+      "role": "producer"
+    },
+    {
+      "address": "0x00efca6c",
+      "label": "dispatcher",
+      "role": "dispatcher"
+    },
+    {
+      "address": "0x00efcb88",
+      "label": "row-00",
+      "role": "row",
+      "machine": 0
+    },
+    {
+      "address": "0x00efd2fc",
+      "label": "row-01",
+      "role": "row",
+      "machine": 1
+    },
+    {
+      "address": "0x00efd624",
+      "label": "row-02",
+      "role": "row",
+      "machine": 2
+    },
+    {
+      "address": "0x00efd790",
+      "label": "row-03",
+      "role": "row",
+      "machine": 3
+    },
+    {
+      "address": "0x00efd9e8",
+      "label": "row-04",
+      "role": "row",
+      "machine": 4
+    },
+    {
+      "address": "0x00efdab8",
+      "label": "row-05",
+      "role": "row",
+      "machine": 5
+    },
+    {
+      "address": "0x00efdb60",
+      "label": "row-06",
+      "role": "row",
+      "machine": 6
+    },
+    {
+      "address": "0x00efdca4",
+      "label": "row-07",
+      "role": "row",
+      "machine": 7
+    },
+    {
+      "address": "0x00efddc4",
+      "label": "row-08",
+      "role": "row",
+      "machine": 8
+    },
+    {
+      "address": "0x00efe228",
+      "label": "row-09",
+      "role": "row",
+      "machine": 9
+    },
+    {
+      "address": "0x00efe46c",
+      "label": "row-10",
+      "role": "row",
+      "machine": 10
+    },
+    {
+      "address": "0x00efe584",
+      "label": "row-11",
+      "role": "row",
+      "machine": 11
+    },
+    {
+      "address": "0x00efe95c",
+      "label": "row-12",
+      "role": "row",
+      "machine": 12
+    },
+    {
+      "address": "0x00eff23c",
+      "label": "row-13",
+      "role": "row",
+      "machine": 13
+    },
+    {
+      "address": "0x00eff5b8",
+      "label": "row-14",
+      "role": "row",
+      "machine": 14
+    },
+    {
+      "address": "0x00eff6d0",
+      "label": "row-15",
+      "role": "row",
+      "machine": 15
+    },
+    {
+      "address": "0x00eff778",
+      "label": "row-16",
+      "role": "row",
+      "machine": 16
+    },
+    {
+      "address": "0x00eff898",
+      "label": "row-17",
+      "role": "row",
+      "machine": 17
+    },
+    {
+      "address": "0x00effcfc",
+      "label": "row-18",
+      "role": "row",
+      "machine": 18
+    },
+    {
+      "address": "0x00effe48",
+      "label": "row-19",
+      "role": "row",
+      "machine": 19
+    },
+    {
+      "address": "0x00efff6c",
+      "label": "row-20",
+      "role": "row",
+      "machine": 20
+    },
+    {
+      "address": "0x00efffec",
+      "label": "row-21",
+      "role": "row",
+      "machine": 21
+    },
+    {
+      "address": "0x00f00094",
+      "label": "row-22",
+      "role": "row",
+      "machine": 22
+    },
+    {
+      "address": "0x00f002a8",
+      "label": "row-23",
+      "role": "row",
+      "machine": 23
+    },
+    {
+      "address": "0x00f00444",
+      "label": "row-24",
+      "role": "row",
+      "machine": 24
+    },
+    {
+      "address": "0x00f005b4",
+      "label": "row-25",
+      "role": "row",
+      "machine": 25
+    },
+    {
+      "address": "0x00f0061c",
+      "label": "row-26",
+      "role": "row",
+      "machine": 26
+    },
+    {
+      "address": "0x00f00f14",
+      "label": "row-27",
+      "role": "row",
+      "machine": 27
+    },
+    {
+      "address": "0x00f01084",
+      "label": "row-28",
+      "role": "row",
+      "machine": 28
+    },
+    {
+      "address": "0x00f012bc",
+      "label": "row-29",
+      "role": "row",
+      "machine": 29
+    },
+    {
+      "address": "0x00f013d4",
+      "label": "row-30",
+      "role": "row",
+      "machine": 30
+    },
+    {
+      "address": "0x00f014ec",
+      "label": "row-31",
+      "role": "row",
+      "machine": 31
+    },
+    {
+      "address": "0x00f015e4",
+      "label": "row-32",
+      "role": "row",
+      "machine": 32
+    },
+    {
+      "address": "0x00f0172c",
+      "label": "row-33",
+      "role": "row",
+      "machine": 33
+    },
+    {
+      "address": "0x00f017d4",
+      "label": "row-34",
+      "role": "row",
+      "machine": 34
+    },
+    {
+      "address": "0x00f0194c",
+      "label": "row-35",
+      "role": "row",
+      "machine": 35
+    },
+    {
+      "address": "0x00f01a44",
+      "label": "row-36",
+      "role": "row",
+      "machine": 36
+    }
+  ],
+  "action_ranges": [
+    {
+      "machine": 0,
+      "start": "0x00f01c48",
+      "end": "0x00f02fb4"
+    },
+    {
+      "machine": 1,
+      "start": "0x00f02fb4",
+      "end": "0x00f0347c"
+    },
+    {
+      "machine": 2,
+      "start": "0x00f0347c",
+      "end": "0x00f03584"
+    },
+    {
+      "machine": 3,
+      "start": "0x00f03584",
+      "end": "0x00f03ec0"
+    },
+    {
+      "machine": 4,
+      "start": "0x00f03ec0",
+      "end": "0x00f03ff0"
+    },
+    {
+      "machine": 5,
+      "start": "0x00f03ff0",
+      "end": "0x00f042e8"
+    },
+    {
+      "machine": 6,
+      "start": "0x00f042e8",
+      "end": "0x00f044f4"
+    },
+    {
+      "machine": 7,
+      "start": "0x00f044f4",
+      "end": "0x00f04840"
+    },
+    {
+      "machine": 8,
+      "start": "0x00f04840",
+      "end": "0x00f05d74"
+    },
+    {
+      "machine": 9,
+      "start": "0x00f05d74",
+      "end": "0x00f06108"
+    },
+    {
+      "machine": 10,
+      "start": "0x00f06108",
+      "end": "0x00f06350"
+    },
+    {
+      "machine": 11,
+      "start": "0x00f06350",
+      "end": "0x00f07c6c"
+    },
+    {
+      "machine": 12,
+      "start": "0x00f07c6c",
+      "end": "0x00f0a040"
+    },
+    {
+      "machine": 13,
+      "start": "0x00f0a040",
+      "end": "0x00f0a730"
+    },
+    {
+      "machine": 14,
+      "start": "0x00f0a730",
+      "end": "0x00f0a840"
+    },
+    {
+      "machine": 15,
+      "start": "0x00f0a840",
+      "end": "0x00f0aaa0"
+    },
+    {
+      "machine": 16,
+      "start": "0x00f0aaa0",
+      "end": "0x00f0ae80"
+    },
+    {
+      "machine": 17,
+      "start": "0x00f0ae80",
+      "end": "0x00f0ba44"
+    },
+    {
+      "machine": 18,
+      "start": "0x00f0ba44",
+      "end": "0x00f0bd4c"
+    },
+    {
+      "machine": 19,
+      "start": "0x00f0bd4c",
+      "end": "0x00f0bf38"
+    },
+    {
+      "machine": 20,
+      "start": "0x00f0bf38",
+      "end": "0x00f0c06c"
+    },
+    {
+      "machine": 21,
+      "start": "0x00f0c06c",
+      "end": "0x00f0c0dc"
+    },
+    {
+      "machine": 22,
+      "start": "0x00f0c0dc",
+      "end": "0x00f0c99c"
+    },
+    {
+      "machine": 23,
+      "start": "0x00f0c99c",
+      "end": "0x00f0dd24"
+    },
+    {
+      "machine": 24,
+      "start": "0x00f0dd24",
+      "end": "0x00f0def0"
+    },
+    {
+      "machine": 25,
+      "start": "0x00f0def0",
+      "end": "0x00f0e0f4"
+    },
+    {
+      "machine": 26,
+      "start": "0x00f0e0f4",
+      "end": "0x00f0eb20"
+    },
+    {
+      "machine": 27,
+      "start": "0x00f0eb20",
+      "end": "0x00f0edb8"
+    },
+    {
+      "machine": 28,
+      "start": "0x00f0edb8",
+      "end": "0x00f0f6b0"
+    },
+    {
+      "machine": 29,
+      "start": "0x00f0f6b0",
+      "end": "0x00f0f7a4"
+    },
+    {
+      "machine": 30,
+      "start": "0x00f0f7a4",
+      "end": "0x00f0f8d8"
+    },
+    {
+      "machine": 31,
+      "start": "0x00f0f8d8",
+      "end": "0x00f0fa34"
+    },
+    {
+      "machine": 32,
+      "start": "0x00f0fa34",
+      "end": "0x00f0fc18"
+    },
+    {
+      "machine": 33,
+      "start": "0x00f0fc18",
+      "end": "0x00f0fe78"
+    },
+    {
+      "machine": 34,
+      "start": "0x00f0fe78",
+      "end": "0x00f105a0"
+    },
+    {
+      "machine": 35,
+      "start": "0x00f105a0",
+      "end": "0x00f106c8"
+    },
+    {
+      "machine": 36,
+      "start": "0x00f106c8",
+      "end": "0x00f10808"
+    }
+  ]
+}

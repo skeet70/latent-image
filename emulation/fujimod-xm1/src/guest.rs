@@ -544,8 +544,15 @@ impl FirmwareFacts {
     }
 
     pub fn released(&self, session: &Session, key: RouteKey) -> Result<bool, String> {
-        let binding = self.binding(key)?;
-        let address = self.key_table.base.0 + binding.row * self.key_table.row_bytes + self.key_table.released_offset;
+        self.row_released(session, self.binding(key)?.row)
+    }
+
+    pub fn gpio_released(&self, session: &Session, key: GpioKey) -> Result<bool, String> {
+        self.row_released(session, key.row)
+    }
+
+    fn row_released(&self, session: &Session, row: u64) -> Result<bool, String> {
+        let address = self.key_table.base.0 + row * self.key_table.row_bytes + self.key_table.released_offset;
         Ok(bytes::<1>(session, address)?[0] == 0)
     }
 
