@@ -64,6 +64,8 @@ module Replacement.PropertyService.Oracle
   , forceRun
   , comparedRegisters
   , comparedRegions
+  , callsId
+  , eventsOf
   , FunctionSpan (..)
   , stockFunctions
   , leafSpans
@@ -679,6 +681,16 @@ exitId = RegionId "exit"
 backingId = RegionId "backing"
 callsId = RegionId "calls"
 
+-- | The boundary events the fixture's stubs wrote, in order.
+eventsOf :: B.ByteString -> [H.BoundaryEvent]
+eventsOf bytes =
+  [ H.BoundaryEvent (readWordAt bytes offset) (readWordAt bytes (offset + 4)) (readWordAt bytes (offset + 8)) (readWordAt bytes (offset + 12))
+  | index <- [0 .. count - 1]
+  , let offset = 4 + 16 * index
+  ]
+  where
+    count = min (fromIntegral (readWordAt bytes 0)) ((B.length bytes - 4) `div` 16)
+
 -- | The rw regions whose final bytes and writes the verdict compares; the stack below entry sp is scratch.
 comparedRegions :: [(RegionId, Word32, Int)]
 comparedRegions =
@@ -801,12 +813,13 @@ data Run = Run
   , runRegisters :: ![(Register, Word32)]
   , runMemory :: ![(RegionId, B.ByteString)]
   , runWrites :: !(Maybe [WriteEvent])
+  , runInstructions :: !Int
   }
   deriving (Eq, Show)
 
 forceRun :: Run -> Run
 forceRun run =
-  sum (map snd (runRegisters run)) `seq` sum (map (B.length . snd) (runMemory run)) `seq` maybe () forceEvents (runWrites run) `seq` run
+  runInstructions run `seq` sum (map snd (runRegisters run)) `seq` sum (map (B.length . snd) (runMemory run)) `seq` maybe () forceEvents (runWrites run) `seq` run
   where
     forceEvents = foldr (\event rest -> event `seq` rest) ()
 
@@ -906,7 +919,7 @@ runOf observation writes = do
       unless (map (\(N.Write (N.GuestAddress a) (N.WriteBytes w)) -> (fromIntegral a, fromIntegral w)) logged == [(eventAddress e, eventWidth e) | e <- writes])
         (Left "report writes differ from the parsed provenance")
       Right (Just [event | event <- writes, compared (eventAddress event)])
-  pure (Run (N.nativeStatus observation) registers memory retained)
+  pure (Run (N.nativeStatus observation) registers memory retained (fromIntegral (N.instructionCount (N.nativeInstructions observation))))
   where
     compared address = or [base <= address && address < base + fromIntegral size | (_, base, size) <- comparedRegions]
 
@@ -1082,6 +1095,10 @@ caseSpec image functions fx (CaseLabel label) standing (OracleCase (PropertyId i
         , region (RegionId "header-runtime-code") 0x722054 (0x72b3fc-0x722054) ReadExecute (H.codeWindow image 0x722054 (0x72b3fc-0x722054))
         , region (RegionId "header-reporter") 0x633594 (4 * length (H.callback 0x633594)) ReadExecute (B.concat (map word32le (H.callback 0x633594)))
         , region (RegionId "header-log") H.helperBase (4 * length H.helperWords) ReadExecute (B.concat (map word32le H.helperWords))
+        , region (RegionId "kernel-root") H.kernelRootBase 8 ReadOnly H.kernelRootBytes
+        , region (RegionId "kernel-block") H.kernelBlockBase (B.length H.kernelBlockBytes) ReadOnly H.kernelBlockBytes
+        , region (RegionId "semaphore-classes") H.classBase (B.length H.classBytes) ReadOnly H.classBytes
+        , region (RegionId "kernel-slots") H.slotBase (B.length (H.slotCode 1)) ReadExecute (H.slotCode 1)
         , region stackId stackBase (fromIntegral (stackPointer - stackBase)) ReadWrite (B.replicate (fromIntegral (stackPointer - stackBase)) 0)
         , region callerFrameId stackPointer (fromIntegral (stackTop - stackPointer)) ReadWrite (B.replicate (fromIntegral (stackTop - stackPointer)) 0)
         , region exitId exitAddress 4 ReadExecute (word32le 0xe12fff1e)

@@ -39,6 +39,7 @@ import Replacement.PropertyService.ClassRecord (ownedLabel, reasonLabel, stockLa
 import Replacement.PropertyService.Classify
 import Replacement.PropertyService.Encoding (EncodedEntry (..), EncodedSlot (..), EncodedSpecial (..), SlotIndex (..), SpecialArm (..), TableEntry (..), encodeEntry, encodeSlot, encodeSpecial)
 import Replacement.PropertyService.Frame (FrameDepth (..), caseFrameDepth, withPrivateFrame)
+import qualified Replacement.PropertyService.HeaderBoundary as H
 import Replacement.PropertyService.Oracle
 import qualified Replacement.PropertyService.Compact as Compact
 import qualified Replacement.PropertyService.Placement as P
@@ -1074,7 +1075,8 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
     if Compact.compactConsumerAgreement result then exitSuccess else exitFailure
 
   -- Pass 1: stock.
-  (stockBatches, stockRuns) <- runBatches gate cache runner out "stock" [withDerivedFrame stockSupplied [] (stockSpec (fxOf rc) image4 properties (runLabel rc) stockFunctions (runCase rc)) | rc <- runCases]
+  let stockSpecsFor = [withDerivedFrame stockSupplied [] (stockSpec (fxOf rc) image4 properties (runLabel rc) stockFunctions (runCase rc)) | rc <- runCases]
+  (stockBatches, stockRuns) <- runBatches gate cache runner out "stock" stockSpecsFor
   let stockRun rc = lookupRun stockRuns (runLabel rc)
   modelRows <- fmap concat . forM runCases $ \rc -> case modelled (standing (runProperty rc)) of
     Nothing -> pure []
@@ -1226,6 +1228,14 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
       executedCases = sum [recordCases record | record <- allBatches, not (isJust frozen), recordReuse record == BatchExecuted]
       reusedCases = sum [recordCases record | record <- allBatches, not (isJust frozen), recordReuse record == BatchReused]
       batchValue record = object ["name" .= recordName record, "cases" .= recordCases record, "batch_sha256" .= sha256Hex (recordBatchSha record), "summary_sha256" .= sha256Hex (recordSummarySha record), "reuse" .= (if isJust frozen then "offline-rejudged" else reuseLabel (recordReuse record))]
+      slotSites = [0x1618, 0x16c, 0x148, 0x7c, 0x6c, 0x70 :: Word32]
+      eventsOfRun run = maybe [] eventsOf (lookup callsId (runMemory run))
+      runEvents runs label = maybe [] eventsOfRun (M.lookup label runs)
+      eventJson (H.BoundaryEvent site a b c) = object ["site" .= hex site, "a" .= hex a, "b" .= hex b, "c" .= hex c]
+      slotCounts runs =
+        [ object ["site" .= hex site, "count" .= length [() | run <- runs, H.BoundaryEvent found _ _ _ <- eventsOfRun run, found == site]]
+        | site <- slotSites
+        ]
       results = object
         [ "schema_version" .= (1 :: Int)
         , "suite" .= ("property-service" :: String)
@@ -1234,6 +1244,10 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
         , "owned_path" .= linkedPath
         , "owned_sha256" .= sha256Hex (sha256 linked)
         , "cases" .= caseRows
+        , "comparison_policy" .= object
+            [ "slot_hook_words" .= ("nonzero: both roles enter the fixture's slot stubs at +0x7c and +0x6c" :: String)
+            , "wrapper_error_report" .= ("reproduced: the crate writes the same console record, status word and installed callback as stock's wrappers, so a difference on that path is a comparison difference" :: String)
+            ]
         , "inputs" .= object inputs
         , "qualification_scope" .= (case mode of NativeOnly -> "native-only"; ActualStagedCandidate _ _ -> "staged-candidate" :: String)
         , "dat_retirement_admitted" .= False
@@ -1256,6 +1270,20 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
             , "consumer_scope" .= ("current-source ordered little-endian byte effects only in approved ordinary RAM spans; physical reports unchanged; no interrupt, concurrent, atomic-width equivalence or DAT retirement" :: String)
             ]
         , "batches" .= map batchValue allBatches
+        , "slot_entries" .= object
+            [ "sites" .= slotSites
+            , "stock" .= slotCounts stockAll
+            , "candidate" .= slotCounts candidateAll
+            , "cases" .=
+                [ object
+                    [ "case" .= caseLabelText (runLabel c)
+                    , "property" .= propertyHex (runProperty c)
+                    , "stock" .= map eventJson (runEvents stockRuns (runLabel c))
+                    , "candidate" .= map eventJson (runEvents candidateRuns (runLabel c))
+                    ]
+                | c <- runCases, smokeRun
+                ]
+            ]
         , "wrappers" .= object ["cases" .= length wrappers, "failed" .= length [() | (_, ds) <- wrapperVerdicts, not (null ds)]]
         , "entry_adapters" .= object ["cases" .= length adapterCases, "failed" .= length [() | (_, ds) <- entryVerdicts, not (null ds)]]
         , "case_shape" .= object

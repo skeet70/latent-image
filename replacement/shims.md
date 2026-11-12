@@ -222,6 +222,15 @@ The core-1 interface publication after the loader-B completion wait.
 | --- | --- | --- | --- | --- | --- |
 | `xm1_interface_initializer_entry` and `xm1_interface_initializer_publish` in `entry.S`/`src.rs` | veneer or carrier at a stock address | the stock loader-B completion caller | no | the loader-B caller is owned | required |
 
+## kernel
+
+The kernel crate: typed handles over the image's interface slots, with the per-core slot table as its first backend.
+
+| Shim | Kind | Other side | Owned now | Removal condition | State |
+| --- | --- | --- | --- | --- | --- |
+| `SlotTable` in `src/slot_table.rs` | kernel interface slot | the kernel bodies behind the root blocks at 0x96bd20 and 0x96bd24, the loader-A console writer 0x41a34 and the error-callback word at 0x4089ea8c | partly | every image whose `.symbols` lists an `xm1_kernel` item also lists the kernel family entry for each slot offset in `SlotTable`'s table | required |
+| `CoreLock` in `src/slot_table.rs` | trampoline into retained stock | the stock cross-core critical section at 0x7235d8 and its release 0x7236b0 | partly | no stock caller of 0x7235d8 remains | required |
+
 ## kernel_install
 
 The kernel installer and its cache maintenance.
@@ -600,7 +609,7 @@ The owned settings storage, bank projections, custom record lifecycle and header
 | `xm1_storage_output8`/`_output16`/`_status32` externs | C-ABI bridge between two owned units | property_service | yes | settings links the property service directly and both sides compare with stock in one image | required |
 | `xm1_getter_owned`, `xm1_setter_owned`, `xm1_storage_initialize` exports | C-ABI bridge between two owned units | power_lifecycle | yes | power links the settings crate directly and both sides compare with stock in one image | required |
 | `settings_bank_*` and `settings_custom_*` entries in `bank_entry.S`/`custom_entry.S`, placed by `settings-storage.ld`/`custom-settings.ld` | veneer or carrier at a stock address | stock bank/custom callers | no | every bank/custom caller is owned or migrated | required |
-| 28 retained `xm1_stock_*`, `xm1_bank_*`, `xm1_storage_*` and `settings_custom_*` externs | trampoline into retained stock | stock bank, header, storage and custom-record services | no | owned storage replaces those services | required |
+| 25 retained `xm1_stock_*`, `xm1_bank_*`, `xm1_storage_*` and `settings_custom_*` externs | trampoline into retained stock | stock bank, header, storage and custom-record services | no | owned storage replaces those services | required |
 | header mirror, previous-value snapshot `0x89ec00`, backup memory `0x409c281c` and the 16-byte shadow `0x409c29b8` | guest-memory layout view | retained stock readers and the bank-0 backup contract | no | no stock code reads the mirror or backup | required |
 
 ## startup_dispatch

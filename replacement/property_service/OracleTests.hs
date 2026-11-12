@@ -146,7 +146,7 @@ callerWrite :: WriteEvent
 callerWrite = WriteEvent 0x9597f4 4 0x11223344
 
 baseRun :: Run
-baseRun = Run Returned [(R0, 1), (Sp, 0x9597f0)] [(RegionId "banks", B.pack [0xab])] (Just [WriteEvent 0x96cc64 1 0xab])
+baseRun = Run Returned [(R0, 1), (Sp, 0x9597f0)] [(RegionId "banks", B.pack [0xab])] (Just [WriteEvent 0x96cc64 1 0xab]) 1
 
 -- | A case that enters one function and returns: @push {r4, lr}; pop {r4, pc}@, so its entry path
 -- reaches eight bytes below its entry SP.
@@ -483,7 +483,7 @@ main = do
     , check "the configuration default's byte has bits 5-7 set in a variant" (any (\config -> B.index config 0x138 .&. 0xe0 /= 0) (drop 1 streamConfigs))
     , check "header requests update the mapped status word" (fmap (\bytes -> readWordAt bytes 0x1c4) (expectedRegion "previous" bracketExpected) == Just 0)
     , check "the header backing checksum balances all sixteen bytes" (fmap (B.foldl' (+) (0::Word8) . B.take 16) (expectedRegion "backing" bracketExpected) == Just 0)
-    , check "header requests expose semaphore and byte-driver events" (maybe False (\bytes -> readWordAt bytes 0 >= 4 && readWordAt bytes 4 == 0x724b68 && readWordAt bytes 8 == 0x25) (expectedRegion "calls" bracketExpected))
+    , check "header requests expose semaphore and byte-driver events" (maybe False (\bytes -> readWordAt bytes 0 >= 4 && readWordAt bytes 4 == 0x7c && readWordAt bytes 8 == 0x25) (expectedRegion "calls" bracketExpected))
     , check "the backup window is bank 0's bytes 0-15 complemented" (backupWindow handFixture == B.replicate 16 0xff)
     , check "a bracketed bank-0 set saves and stores the refreshed byte, and the close copies bank 0's bytes after the store"
         (byteIn effectBanks 0xb bracketSet == Just 0xfd && byteIn effectPrevious 0xb bracketSet == Just 0x02
