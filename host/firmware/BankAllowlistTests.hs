@@ -1,18 +1,20 @@
--- | bank-allowlist-tests ALLOWLIST CHECKER ELF_00C20000 ELF_00C21F88
+-- | bank-allowlist-tests ALLOWLIST CHECKER ELF_00C20000 ELF_00C21F88 ENGINE_ELF MODAL_FRAGMENT ENGINE_FRAGMENT
 --
--- The ELFs are //host/firmware:bank-elf-* outputs for the current bank sources.
--- Fixtures replace function words in the 0x00c40000 ELF.
+-- The ELFs are //host/firmware:bank-elf-* and :engine-* outputs for the
+-- current bank sources. Fixtures replace function words in the 0x00c40000 ELF.
 module Main (main) where
 
 import A32 (Forbidden (..), Reg (..))
 import qualified A32
 import ArmElf
 import BankAllowlist
-import Control.Monad (forM_, unless)
+import BankAllowlistComposition (composeBankAllowlist)
+import Control.Monad (forM, forM_, unless)
 import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
 import Data.List (find)
 import Data.Word (Word32)
+import RamPushLayout (menuEngineRegionExtentFor, modalEngineBankVariant)
 import System.Directory (getTemporaryDirectory, removeFile)
 import System.Environment (getArgs)
 import System.Exit (ExitCode (..), exitFailure)
@@ -26,7 +28,7 @@ check label passed = unless passed $ do
 
 main :: IO ()
 main = do
-  [allowlistPath, checker, elfLow, elfHigh] <- getArgs
+  [allowlistPath, checker, elfLow, elfHigh, engineElf, modalFragmentPath, engineFragmentPath] <- getArgs
   allowlistBytes <- B.readFile allowlistPath
   allowlist <- either (fail . ("allowlist: " ++)) pure (parseAllowlist allowlistBytes)
   clean <- B.readFile elfLow
@@ -321,6 +323,65 @@ main = do
   check "a call to hints then a conditional `bne .` falls through" (fallsThrough conditionalSpin)
   forwardBranch <- run allowlist (trapProgram 0xea000000)
   check "a call to hints then a branch to another word falls through" (fallsThrough forwardBranch)
+
+  -- The menu engine variant: its writable statics are a section of their own,
+  -- inside the engine region and outside its code.
+  engineBytes <- B.readFile engineElf
+  engineImage <- either fail pure (parseElf engineBytes)
+  engineLayout <- either fail pure (readLayout engineImage)
+  let engineCodeExtent = maybe (error "the engine ELF has no code extent") id (engineCode engineLayout)
+      engineDataExtent = maybe (error "the engine ELF has no data extent") id (engineData engineLayout)
+      regionEnd = fst engineCodeExtent + menuEngineRegionExtentFor modalEngineBankVariant
+      replaceSection name change elf =
+        elf {elfSections = [if sectionName s == name then change s else s | s <- elfSections elf]}
+      moveSymbol name value elf =
+        elf {elfSymbols = [if symbolName s == name then s {symbolValue = value} else s | s <- elfSymbols elf]}
+      layoutDetails elf = case readLayout elf of
+        Left _ -> []
+        Right layout -> [findingDetail f | f <- layoutFindings elf layout, findingReason f == LayoutProblem]
+  check "the engine data follows the engine code inside the engine region"
+    ( fst engineDataExtent >= snd engineCodeExtent
+        && snd engineDataExtent <= regionEnd
+        && regionOf engineLayout (fst engineDataExtent) == EngineData
+        && writable (regionOf engineLayout (fst engineDataExtent))
+        && not (writable (regionOf engineLayout (fst engineCodeExtent)))
+    )
+  check "the linked engine layout has no layout findings"
+    (null (layoutFindings engineImage engineLayout))
+  check "an executable engine data section is refused"
+    ("section .menu_engine_data has the wrong extent or permissions"
+      `elem` layoutDetails (replaceSection ".menu_engine_data" (\s -> s {sectionFlags = sectionFlags s .|. 0x4}) engineImage))
+  check "engine data overlapping the engine code is refused"
+    ("section .menu_engine_data has the wrong extent or permissions"
+      `elem` layoutDetails (replaceSection ".menu_engine_data" (\s -> s {sectionAddress = fst engineCodeExtent}) engineImage))
+  check "engine data past the engine extent is refused"
+    ("menu engine region differs from the layout" `elem` layoutDetails (moveSymbol "__rb_menu_engine_data_end" (regionEnd + 4) engineImage))
+
+  composed <- forM
+    [ (allowlistPath, "menu/recipe_bank_allowlist.json")
+    , (modalFragmentPath, "menu/recipe_bank_modal_allowlist_fragment.json")
+    , (engineFragmentPath, "menu/recipe_bank_menu_engine_allowlist_fragment.json")
+    ] $ \(path, name) -> do
+      contents <- B.readFile path
+      pure (name, contents)
+  engineAllowlist <- either fail pure
+    (composeBankAllowlist modalEngineBankVariant composed >>= parseAllowlist)
+  let engineFunction name = case [s | s <- elfSymbols engineImage, symbolName s == name, symbolSize s > 0] of
+        (s : _) -> (symbolValue s, symbolValue s + symbolSize s)
+        _ -> error ("no sized symbol " ++ name)
+      engineFirst predicate = case [a | (a, w) <- [(a, w) | a <- [fst (engineFunction "rb_menu_engine_apply"), fst (engineFunction "rb_menu_engine_apply") + 4 .. snd (engineFunction "rb_menu_engine_apply") - 4], Just w <- [wordAt engineImage a]], predicate w] of
+        (a : _) -> a
+        _ -> error "no matching engine word"
+      engineReport bytes = either fail pure (parseElf bytes >>= checkBank engineAllowlist)
+      busyLiteral = engineFirst (\w -> regionOf engineLayout w == EngineData)
+      busyStore = engineFirst (\w -> w .&. 0x0ff00000 == 0x05c00000)
+  intoData <- engineReport (patch engineImage engineBytes busyLiteral (fst engineDataExtent))
+  check "a store into the engine data region passes"
+    (not (any ((== busyStore) . findingAddress) (violations intoData)))
+  intoCode <- engineReport (patch engineImage engineBytes busyLiteral (fst engineCodeExtent))
+  check "a store into the engine code is still refused"
+    (any (\f -> findingAddress f == busyStore
+      && findingReason f == StoreOutside (fst engineCodeExtent) (fst engineCodeExtent) BankCode) (violations intoCode))
 
   -- The command-line checker's exit status: 0 clean, 1 with a violation.
   temporary <- getTemporaryDirectory

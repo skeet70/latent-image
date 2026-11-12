@@ -1711,12 +1711,18 @@ haskell_test(
         "$(location :check-bank-allowlist)",
         "$(location :bank-elf-00c40000)",
         "$(location :bank-elf-00c4fc88)",
+        "$(location :engine-modal75-menu-engine/kernel.elf)",
+        "$(location //menu:recipe_bank_modal_allowlist_fragment.json)",
+        "$(location //menu:recipe_bank_menu_engine_allowlist_fragment.json)",
     ],
     data = [
         ":bank-elf-00c40000",
         ":bank-elf-00c4fc88",
         ":check-bank-allowlist",
+        ":engine-modal75-menu-engine/kernel.elf",
         "//menu:recipe_bank_allowlist.json",
+        "//menu:recipe_bank_menu_engine_allowlist_fragment.json",
+        "//menu:recipe_bank_modal_allowlist_fragment.json",
     ],
     ghcopts = [
         "-Wall",
@@ -1727,6 +1733,9 @@ haskell_test(
     ],
     deps = [
         ":bank-allowlist",
+        ":bank-allowlist-composition",
+        ":ram-push-layout",
+        "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:directory",

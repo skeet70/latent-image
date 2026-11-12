@@ -17,6 +17,11 @@ module BankAllowlist
   , Finding (..)
   , Reason (..)
   , Region (..)
+  , Layout (..)
+  , readLayout
+  , regionOf
+  , writable
+  , layoutFindings
   , Verdict (..)
   , Report (..)
   , allowlistAnalysisIdentity
@@ -310,6 +315,8 @@ data Layout = Layout
   , runtimeEnd :: Word32
   , -- | The menu engine region of a modal75,menu-engine package.
     engineCode :: Maybe (Word32, Word32)
+  , -- | The writable engine data inside that region.
+    engineData :: Maybe (Word32, Word32)
   , layoutBankVariant :: BankVariant
   }
 
@@ -317,6 +324,7 @@ data Region
   = AllocationHeader
   | BankCode
   | BankData
+  | EngineData
   | AllocationGap
   | GeneratedArea
   | ExecutableBundle
@@ -332,6 +340,7 @@ regionName region = case region of
   AllocationHeader -> "the allocation header (installer metadata and flash store image)"
   BankCode -> "bank code"
   BankData -> "bank data"
+  EngineData -> "menu engine data"
   AllocationGap -> "unassigned allocation space"
   GeneratedArea -> "generated bank data"
   ExecutableBundle -> "the relocated executable bundle"
@@ -366,6 +375,7 @@ regionOf :: Layout -> Word32 -> Region
 regionOf layout address
   | address < allocationBase layout || address >= allocationEnd layout = stockRegion address
   | Just (start, end) <- engineCode layout, start <= address && address < end = BankCode
+  | Just (start, end) <- engineData layout, start <= address && address < end = EngineData
   | address < textStart layout = AllocationHeader
   | address < textEnd layout = BankCode
   | address >= dataStart layout && address < imageEnd layout = BankData
@@ -376,7 +386,7 @@ regionOf layout address
   | otherwise = AllocationGap
 
 writable :: Region -> Bool
-writable region = region == BankData || region == GeneratedArea
+writable region = region == BankData || region == EngineData || region == GeneratedArea
 
 readLayout :: Elf -> Either String Layout
 readLayout elf = do
@@ -402,6 +412,9 @@ readLayout elf = do
   engine <- if hasPublicationGroup MenuEnginePublication variant
     then curry Just <$> symbol "__rb_menu_engine_start" <*> symbol "__rb_menu_engine_end"
     else pure Nothing
+  engineData' <- if hasPublicationGroup MenuEnginePublication variant
+    then curry Just <$> symbol "__rb_menu_engine_data_start" <*> symbol "__rb_menu_engine_data_end"
+    else pure Nothing
   pure
     Layout
       { allocationBase = base
@@ -415,6 +428,7 @@ readLayout elf = do
       , installerStart = installer
       , runtimeEnd = runtime
       , engineCode = engine
+      , engineData = engineData'
       , layoutBankVariant = variant
       }
  where
@@ -429,12 +443,17 @@ bankSections, installerSections :: [String]
 bankSections = [".text", ".data"]
 installerSections = [".ram_push.text", ".ram_push.publications", ".ram_push.rendezvous", ".ram_push.mailbox"]
 
+engineSections :: Layout -> [String]
+engineSections layout
+  | isJust (engineCode layout) = [".menu_engine", ".menu_engine_data"]
+  | otherwise = []
+
 layoutFindings :: Elf -> Layout -> [Finding]
 layoutFindings elf layout =
   concat
     [ [ violation (sectionAddress s) ("allocated section " ++ sectionName s ++ " is outside the bank and installer layout")
       | s <- allocated
-      , sectionName s `notElem` bankSections ++ installerSections ++ [".menu_engine" | isJust (engineCode layout)]
+      , sectionName s `notElem` bankSections ++ installerSections ++ engineSections layout
       ]
     , [ violation (sectionAddress s) ("section " ++ sectionName s ++ " is not PROGBITS")
       | s <- allocated
@@ -443,14 +462,20 @@ layoutFindings elf layout =
     , check (textStart layout == runtimeExecutableBase (allocationBase layout)) (textStart layout) "bank code does not start at the allocation's executable offset"
     , case engineCode layout of
         Nothing -> []
-        Just (start, end) -> concat
-          [ check (start == menuEngineRegionStartFor (layoutBankVariant layout) (allocationBase layout) && start >= runtimeEnd layout
-              && end <= menuEngineRegionStartFor (layoutBankVariant layout) (allocationBase layout) + menuEngineRegionExtentFor (layoutBankVariant layout) && end <= allocationEnd layout)
-              start "menu engine region differs from the layout"
-          , sectionCheck ".menu_engine" $ \s ->
-              sectionAddress s == start && sectionAddress s + sectionSize s == end
-                && sectionExecutable s && not (sectionWritable s)
-          ]
+        Just (start, end) -> case engineData layout of
+          Nothing -> [violation start "menu engine data extent is missing"]
+          Just (dataStart', dataEnd) -> concat
+            [ check (start == menuEngineRegionStartFor (layoutBankVariant layout) (allocationBase layout) && start >= runtimeEnd layout
+                && dataStart' >= end
+                && dataEnd <= menuEngineRegionStartFor (layoutBankVariant layout) (allocationBase layout) + menuEngineRegionExtentFor (layoutBankVariant layout) && dataEnd <= allocationEnd layout)
+                start "menu engine region differs from the layout"
+            , sectionCheck ".menu_engine" $ \s ->
+                sectionAddress s == start && sectionAddress s + sectionSize s == end
+                  && sectionExecutable s && not (sectionWritable s)
+            , sectionCheck ".menu_engine_data" $ \s ->
+                sectionAddress s == dataStart' && sectionAddress s + sectionSize s == dataEnd
+                  && sectionWritable s && not (sectionExecutable s)
+            ]
     , sectionCheck ".text" $ \s ->
         sectionAddress s == textStart layout && sectionAddress s + sectionSize s == textEnd layout
           && sectionExecutable s && not (sectionWritable s)

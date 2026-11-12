@@ -196,8 +196,7 @@ if [[ ${RB_PUBLICATION_GROUPS:-} == modal75,menu-engine,menu-value ]]; then
   done
 fi
 if (( ${#engine_link[@]} )); then
-  # The engine's sections, by their Rust paths, move to .menu_engine.* for
-  # menu/recipe_bank_ram_engine.ld.
+  # The engine's sections take the names menu/recipe_bank_ram_engine.ld places.
   engine_section='^\.(text|rodata|data|bss)\.(rb_menu_engine_|rb_menu_value_|xm1_storage_|xm1_property_|SLOT_BYTES|TAIL_BYTES|XM1_KERNEL_BOUNDARY|.*(11menu_engine(6engine|5block|5state|4tree|5frame)|19menu_engine_adapter|10menu_value|18menu_value_adapter|20xm1_property_service|25xm1_settings_storage_core|10xm1_kernel))'
   if [[ ${RB_PUBLICATION_GROUPS:-} == modal75,menu-engine,render ]]; then
     engine_section='^\.(text|rodata|data|bss)\.(rb_menu_engine_|rb_render_|xm1_storage_|xm1_property_|SLOT_BYTES|TAIL_BYTES|XM1_KERNEL_BOUNDARY|.*(11menu_engine(6engine|5block|5state|4tree|5frame)|19menu_engine_adapter|15render_commands|12menu_widgets|14render_adapter|20xm1_property_service|25xm1_settings_storage_core|10xm1_kernel))'
@@ -207,7 +206,13 @@ if (( ${#engine_link[@]} )); then
   while read -r _ section _; do
     if [[ $section =~ $engine_section && -z ${renamed[$section]:-} ]]; then
       renamed[$section]=1
-      renames+=(--rename-section "$section=.menu_engine$section")
+      case "$section" in
+        *.data.*) renames+=(--rename-section "$section=.menu_engine_data$section") ;;
+        # .menu_engine_data is PROGBITS: the install path copies the image
+        # bytes, so its zeros are materialised here rather than by a loader.
+        *.bss.*) renames+=(--rename-section "$section=.menu_engine_data$section,alloc,load,contents,data") ;;
+        *) renames+=(--rename-section "$section=.menu_engine$section") ;;
+      esac
     fi
   done < <("$OBJDUMP" -h "$RB_RUST_ARCHIVE")
   "$OBJCOPY" "${renames[@]}" "$RB_RUST_ARCHIVE" "$OUT/rust-engine.a"

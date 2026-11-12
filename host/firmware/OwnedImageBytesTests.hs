@@ -42,6 +42,7 @@ crateOf member = case break (== '.') member of
 
 outputOf :: String -> String
 outputOf section
+  | ".menu_engine_data." `isPrefixOf` section = ".data"
   | ".menu_engine." `isPrefixOf` section = ".menu_engine"
   | ".text" `isPrefixOf` section = ".text"
   | ".rodata" `isPrefixOf` section = ".text"
