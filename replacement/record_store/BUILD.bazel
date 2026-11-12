@@ -118,6 +118,7 @@ haskell_binary(
         ":execution",
         ":oracle-lib",
         "//emulation:case-sha256",
+        "//emulation:judge-lib",
         "//emulation:native-observation",
         "//emulation:native-adapter",
         "//emulation:owned-case",
@@ -147,6 +148,22 @@ haskell_test(
         "//host:base",
         "//host:bytestring",
         "//host:containers",
+    ],
+)
+
+haskell_test(
+    name = "oracle-case-table-tests",
+    size = "small",
+    srcs = ["CaseTableTests.hs"],
+    main_file = "CaseTableTests.hs",
+    args = ["$(rootpath //emulation:suite-audit-cases/record-store.json)"],
+    data = ["//emulation:suite-audit-cases/record-store.json"],
+    ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    deps = [
+        ":oracle-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
     ],
 )
 

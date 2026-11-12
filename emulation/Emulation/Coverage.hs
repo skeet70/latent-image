@@ -30,6 +30,10 @@ module Emulation.Coverage
   , FunctionCoverage (..)
   , Coverage (..)
   , coverage
+  , CoverageFold
+  , emptyCoverageFold
+  , addCoverageObservation
+  , finishCoverage
   , coverageJson
   , coverageTable
     -- * Instruction classification
@@ -48,11 +52,12 @@ import Data.Maybe (listToMaybe, mapMaybe)
 import Data.Scientific (toBoundedInteger)
 import qualified Data.IntSet as IS
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import qualified Data.Vector as V
 import Data.Word (Word32)
 import Emulation.Sha256 (sha256, sha256Hex)
 import Emulation.SuiteAudit (parseWord32)
-import Numeric (readHex, showHex)
+import Numeric (showHex)
 import Text.Printf (printf)
 
 -- | One declared stock function extent. @extentStock@ is the census digest of
@@ -174,7 +179,7 @@ parseMemoryRow (Object row) = do
   base <- addressField row "address"
   case KM.lookup "bytes" row of
     Just (String text) -> do
-      bytes <- hexBytes (T.unpack text)
+      bytes <- hexBytes text
       pure (Just (base, bytes))
     _ -> pure Nothing
 parseMemoryRow _ = Left "memory row must be an object"
@@ -195,19 +200,25 @@ numberField row key = case KM.lookup (K.fromString key) row of
 
 hexField :: KM.KeyMap Value -> String -> Either String B.ByteString
 hexField row key = case KM.lookup (K.fromString key) row of
-  Just (String text) -> hexBytes (T.unpack text)
+  Just (String text) -> hexBytes text
   _ -> Left ("missing bitmap " ++ key)
 
-hexBytes :: String -> Either String B.ByteString
+hexBytes :: T.Text -> Either String B.ByteString
 hexBytes text
-  | odd (length text) = Left "bitmap has an odd number of hexadecimal digits"
-  | otherwise = B.pack <$> go text
+  | odd (B.length raw) = Left "bitmap has an odd number of hexadecimal digits"
+  | not (B.all isHex raw) = Left "bitmap is not hexadecimal"
+  | otherwise = Right (fst (B.unfoldrN (B.length raw `div` 2) step raw))
   where
-    go [] = Right []
-    go (high : low : rest) = case readHex [high, low] of
-      [(byte, "")] -> (fromIntegral (byte :: Integer) :) <$> go rest
-      _ -> Left "bitmap is not hexadecimal"
-    go _ = Left "bitmap is not hexadecimal"
+    raw = TE.encodeUtf8 text
+    isHex byte =
+      (byte >= 0x30 && byte <= 0x39) || (byte >= 0x61 && byte <= 0x66) || (byte >= 0x41 && byte <= 0x46)
+    step rest
+      | B.null rest = Nothing
+      | otherwise = Just (hexValue (B.head rest) * 16 + hexValue (B.index rest 1), B.drop 2 rest)
+    hexValue byte
+      | byte <= 0x39 = byte - 0x30
+      | byte <= 0x46 = byte - 0x41 + 10
+      | otherwise = byte - 0x61 + 10
 
 getValue :: Value -> String -> Value
 getValue (Object objectValue) key = maybe Null id (KM.lookup (K.fromString key) objectValue)
@@ -256,9 +267,58 @@ data Coverage = Coverage
 -- | Fold every report over the declared extents. @reports@ is ordered as the
 -- caller read it; the result is ordered by extent entry.
 coverage :: [Extent] -> [Observation] -> Coverage
-coverage extents observations = Coverage
-  { coverageFunctions = sortOn functionEntry (map (coverExtent observations) extents)
-  }
+coverage extents observations =
+  finishCoverage (foldl' addCoverageObservation (emptyCoverageFold extents) observations)
+
+-- | The same fold, one report at a time, so a caller that reads reports from
+-- disk does not hold them all.
+newtype CoverageFold = CoverageFold ([Extent], [Aggregate])
+
+emptyCoverageFold :: [Extent] -> CoverageFold
+emptyCoverageFold extents = CoverageFold (extents, map (const emptyAggregate) extents)
+
+addCoverageObservation :: CoverageFold -> Observation -> CoverageFold
+addCoverageObservation (CoverageFold (extents, aggregates)) observation =
+  let aggregates' = forceAll (zipWith addOne extents aggregates)
+   in aggregates' `seq` CoverageFold (extents, aggregates')
+  where
+    addOne extent aggregate = strictAggregate (addObservationToAggregate extent aggregate observation)
+    forceAll [] = []
+    forceAll (aggregate : rest) =
+      let forced = forceAggregate aggregate
+          forcedRest = forceAll rest
+       in forced `seq` forcedRest `seq` (forced : forcedRest)
+
+forceAggregate :: Aggregate -> Aggregate
+forceAggregate aggregate =
+  aggregateDeclared aggregate `seq`
+  aggregateUnobserved aggregate `seq`
+  aggregateForeign aggregate `seq`
+  aggregateExecuted aggregate `seq`
+  aggregatePassed aggregate `seq`
+  aggregateFailed aggregate `seq`
+  aggregateBytes aggregate `seq`
+  aggregate
+
+finishCoverage :: CoverageFold -> Coverage
+finishCoverage (CoverageFold (extents, aggregates)) =
+  Coverage { coverageFunctions = sortOn functionEntry (zipWith finishExtent extents aggregates) }
+
+strictAggregate :: Aggregate -> Aggregate
+strictAggregate aggregate =
+  aggregateDeclared aggregate `seq`
+  aggregateUnobserved aggregate `seq`
+  aggregateForeign aggregate `seq`
+  aggregate
+    { aggregateExecuted = strictSet (aggregateExecuted aggregate)
+    , aggregatePassed = strictSet (aggregatePassed aggregate)
+    , aggregateFailed = strictSet (aggregateFailed aggregate)
+    , aggregateBytes = case aggregateBytes aggregate of
+        Just bytes -> B.length bytes `seq` Just bytes
+        Nothing -> Nothing
+    }
+  where
+    strictSet set = IS.foldl' (\n _ -> n + 1) (0 :: Int) set `seq` set
 
 data Aggregate = Aggregate
   { aggregateDeclared :: Int
@@ -273,10 +333,9 @@ data Aggregate = Aggregate
 emptyAggregate :: Aggregate
 emptyAggregate = Aggregate 0 0 0 IS.empty IS.empty IS.empty Nothing
 
-coverExtent :: [Observation] -> Extent -> FunctionCoverage
-coverExtent observations extent =
-  let aggregate = foldl' add emptyAggregate observations
-      words_ = wordCount (extentBytes extent)
+finishExtent :: Extent -> Aggregate -> FunctionCoverage
+finishExtent extent aggregate =
+  let words_ = wordCount (extentBytes extent)
       stock = aggregateBytes aggregate
       authenticated = case extentStock extent of
         Just digest -> maybe False ((== digest) . sha256Hex . sha256) stock
@@ -302,42 +361,44 @@ coverExtent observations extent =
         , functionBranches = branches
         , functionUnexecuted = unexecuted
         }
-  where
-    add aggregate observation =
-      let entry = extentEntry extent
-          size = extentBytes extent
-          end = toInteger entry + toInteger size
-          contains base bytes = toInteger base <= toInteger entry && end <= toInteger base + toInteger bytes
-          declared = [ row | row <- observationExtents observation
-                      , contains (extentObservationBase row) (extentObservationBytes row) ]
-          unobserved = [ () | (base, bytes) <- observationUnobserved observation, contains base bytes ]
-          accepted = mapMaybe (accept observation) declared
-          foreignCases = length declared - length accepted
-          merge accumulator row =
-            let base = extentObservationBase row
-                offset = fromIntegral ((toInteger entry - toInteger base) `div` 4)
-                width = wordCount (extentObservationBytes row)
-                window bitmap = subBits offset (wordCount size) (bits width bitmap)
-             in accumulator
-                  { aggregateExecuted = IS.union (aggregateExecuted accumulator) (window (extentObservationExecuted row))
-                  , aggregatePassed = IS.union (aggregatePassed accumulator) (window (extentObservationPassed row))
-                  , aggregateFailed = IS.union (aggregateFailed accumulator) (window (extentObservationFailed row))
-                  , aggregateBytes = case aggregateBytes accumulator of
-                      Just bytes -> Just bytes
-                      Nothing -> extentBytesAt observation extent
-                  }
-       in case accepted of
-            [] -> aggregate
-              { aggregateUnobserved = aggregateUnobserved aggregate + length unobserved
-              , aggregateForeign = aggregateForeign aggregate + foreignCases
+
+addObservationToAggregate :: Extent -> Aggregate -> Observation -> Aggregate
+addObservationToAggregate extent aggregate observation =
+  let entry = extentEntry extent
+      size = extentBytes extent
+      end = toInteger entry + toInteger size
+      contains base bytes = toInteger base <= toInteger entry && end <= toInteger base + toInteger bytes
+      declared = [ row | row <- observationExtents observation
+                  , contains (extentObservationBase row) (extentObservationBytes row) ]
+      unobserved = [ () | (base, bytes) <- observationUnobserved observation, contains base bytes ]
+      accepted = mapMaybe (accept observation) declared
+      foreignCases = length declared - length accepted
+      merge accumulator row =
+        let base = extentObservationBase row
+            offset = fromIntegral ((toInteger entry - toInteger base) `div` 4)
+            width = wordCount (extentObservationBytes row)
+            window bitmap = subBits offset (wordCount size) (bits width bitmap)
+         in accumulator
+              { aggregateExecuted = IS.union (aggregateExecuted accumulator) (window (extentObservationExecuted row))
+              , aggregatePassed = IS.union (aggregatePassed accumulator) (window (extentObservationPassed row))
+              , aggregateFailed = IS.union (aggregateFailed accumulator) (window (extentObservationFailed row))
+              , aggregateBytes = case aggregateBytes accumulator of
+                  Just bytes -> Just bytes
+                  Nothing -> extentBytesAt observation extent
               }
-            rows -> foldl' merge aggregate
-              { aggregateDeclared = aggregateDeclared aggregate + length rows
-              , aggregateForeign = aggregateForeign aggregate + foreignCases
-              } rows
-    accept observation row = case extentStock extent of
+   in case accepted of
+        [] -> aggregate
+          { aggregateUnobserved = aggregateUnobserved aggregate + length unobserved
+          , aggregateForeign = aggregateForeign aggregate + foreignCases
+          }
+        rows -> foldl' merge aggregate
+          { aggregateDeclared = aggregateDeclared aggregate + length rows
+          , aggregateForeign = aggregateForeign aggregate + foreignCases
+          } rows
+  where
+    accept reported row = case extentStock extent of
       Nothing -> Just row
-      Just digest -> case extentBytesAt observation extent of
+      Just digest -> case extentBytesAt reported extent of
         Just bytes | sha256Hex (sha256 bytes) == digest -> Just row
         _ -> Nothing
 

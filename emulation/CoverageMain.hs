@@ -5,7 +5,7 @@
 -- stock function extents. Prints a table and optionally writes JSON.
 module Main (main) where
 
-import Control.Monad (forM, unless)
+import Control.Monad (foldM, forM, unless)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Emulation.Coverage
@@ -33,16 +33,20 @@ main = do
     unless exists (failH ("--report is not a file: " ++ path))
     pure [path]
   extents <- either failH pure . parseExtents =<< B.readFile extentsPath
-  observations <- forM (concat files ++ concat directories) $ \path -> do
-    bytes <- B.readFile path
-    either (\problem -> failH (path ++ ": " ++ problem)) pure (parseObservation bytes)
-  let result = coverage extents observations
+  let reportFiles = concat files ++ concat directories
+      addReport folded path = do
+        bytes <- B.readFile path
+        observation <- either (\problem -> failH (path ++ ": " ++ problem)) pure (parseObservation bytes)
+        let folded' = addCoverageObservation folded observation
+        folded' `seq` pure folded'
+  folded <- foldM addReport (emptyCoverageFold extents) reportFiles
+  let result = finishCoverage folded
   putStr (coverageTable result)
   case jsonPath of
     Nothing -> pure ()
     Just path -> BL.writeFile path (coverageJson result)
   hPutStrLn stderr
-    (show (length (coverageFunctions result)) ++ " extents from " ++ show (length observations) ++ " reports")
+    (show (length (coverageFunctions result)) ++ " extents from " ++ show (length reportFiles) ++ " reports")
 
 collect :: FilePath -> IO [FilePath]
 collect directory = do

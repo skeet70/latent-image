@@ -22,9 +22,10 @@ import qualified Data.Set as S
 import Data.String (fromString)
 import Data.Word (Word32)
 import Emulation.CachedNativeBatch (BatchReuse (..), ResultPolicy (WriteAllResults), cachedObservedBatchWith, defaultNativeCacheRoot)
+import Emulation.Judge (StockEvidence (..), evidenceAt)
 import Emulation.NativeObservation (RunnerStatus (Returned), runnerStatusLabel)
 import qualified Emulation.NativeObservation as N
-import Emulation.OwnedCase (CaseId (..), CaseSpec (..), CaseRegion (..), loadObservedBatch, readWordAt, required, writeBatch)
+import Emulation.OwnedCase (CaseId (..), CaseSpec (..), CaseRegion (..), loadObservedBatch, readWordAt, required, word32le, writeBatch)
 import Emulation.Sha256 (Sha256, parseSha256Hex, sha256, sha256File, sha256Hex)
 import qualified EngineStack
 import FujiAF.Host (ensure, failH, get, readRegular, str)
@@ -272,7 +273,7 @@ finishFrozenRun frozen currentNames = do
   ensure (names == currentNames) "source batch order or inventory differs from current cases"
   consumed <- reverse <$> readIORef (frozenConsumed frozen)
   ensure (S.fromList (map FrozenBatchName consumed) == S.fromList names && length consumed == length names) "source observations were not consumed exactly once"
-data BatchGate = BatchGate StorageAdmission (Maybe BatchCheckpoint) (IORef Int) (Maybe FrozenRun)
+data BatchGate = BatchGate StorageAdmission [FilePath] (Maybe BatchCheckpoint) (IORef Int) (Maybe FrozenRun)
 
 batchGate :: [String] -> Maybe FilePath -> FilePath -> IO BatchGate
 batchGate arguments cache out = do
@@ -286,7 +287,7 @@ batchGate arguments cache out = do
     [_] -> failH "--batch-checkpoint needs a positive count"
     _ : value : _ -> Just <$> either failH pure (parseBatchCheckpoint value)
   counter <- newIORef 0
-  pure (BatchGate admission checkpoint counter Nothing)
+  pure (BatchGate admission (out : maybe [] pure cache) checkpoint counter Nothing)
 
 frozenBatch :: FrozenRun -> FilePath -> [CaseId] -> IO [(CaseId, N.NativeObservation)]
 frozenBatch source directory identifiers = do
@@ -330,8 +331,8 @@ observeBatch execution directory identifiers = case execution of
 
 -- | One runner session over at most 'batchLimit' cases in @directory@, its runs keyed by case label.
 runBatch :: BatchGate -> Maybe FilePath -> FilePath -> FilePath -> [CaseSpec] -> IO (BatchRecord, M.Map CaseLabel Run)
-runBatch (BatchGate admission checkpoint counter frozen) cache runner directory specs = do
-  storageCheckpoint BeforeBatch admission cache
+runBatch (BatchGate admission measuredPaths checkpoint counter frozen) cache runner directory specs = do
+  storageCheckpoint BeforeBatch admission measuredPaths
   ensure (length specs <= batchLimit) "batch over the case limit"
   batchPath <- writeBatch directory specs
   let execution = maybe (ExecuteBatch runner cache) RejudgeBatch frozen
@@ -356,7 +357,7 @@ runBatch (BatchGate admission checkpoint counter frozen) cache runner directory 
   B.writeFile (directory </> "summary.json") summary
   record <- evaluate (BatchRecord (takeFileName directory) (length specs) batchDigest (sha256 summary) reuse)
   runs <- evaluate (M.fromList [(label, run) | (label, run, _) <- rows])
-  storageCheckpoint AfterBatch admission cache
+  storageCheckpoint AfterBatch admission measuredPaths
   completed <- atomicModifyIORef' counter (\count -> let next = count + 1 in (next, next))
   when (maybe False (\(BatchCheckpoint limit) -> completed >= limit) checkpoint)
     (failH ("batch checkpoint reached after " ++ show completed ++ " complete chunks; passed=false qualification_status=partial"))
@@ -512,6 +513,12 @@ controlHolds control failed = case controlKind control of
 main :: IO ()
 main = do
   arguments <- getArgs
+  case dropWhile (/= "--emit-case-table") arguments of
+    [] -> pure ()
+    [_] -> failH "--emit-case-table needs a path"
+    _ : path : _ -> do
+      B.writeFile path (encodeCanonical caseTableValue)
+      exitSuccess
   runner <- case dropWhile (/= "--runner") arguments of
     [] -> pure fujimodNativeCase
     [_] -> failH "--runner needs a value"
@@ -537,6 +544,21 @@ defectArguments arguments = case arguments of
   "--defect" : name : binPath : symbolsPath : elfPath : rest -> (name, binPath, symbolsPath, elfPath) : defectArguments rest
   _ : rest -> defectArguments rest
   [] -> []
+
+-- | Wrong variants of the owned image: a name and the one word the mutants
+-- tool changed, applied to the same candidate bytes the base run uses.
+variantArguments :: [String] -> IO [(String, Word32, Word32)]
+variantArguments arguments = case arguments of
+  "--variant" : name : address : mutated : rest -> do
+    site <- hexWord address
+    word <- hexWord mutated
+    ((name, site, word) :) <$> variantArguments rest
+  _ : rest -> variantArguments rest
+  [] -> pure []
+  where
+    hexWord text = case readHex (if take 2 text == "0x" then drop 2 text else text) :: [(Integer, String)] of
+      [(value, "")] -> pure (fromIntegral value :: Word32)
+      _ -> failH ("--variant needs hex addresses, not " ++ text)
 
 -- | The entry shape the runner validates: the canonical branches or the owned public wrappers.
 entryShape :: [String] -> PublicEntryShape
@@ -667,8 +689,8 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
       let currentContract = case evidence of NativeEvidence _ -> Null; StagedEvidence _ _ digest -> String (fromString (sha256Hex digest))
       ensure (contract == currentContract) "source staged contract identity differs"
       pure (Just sourceRun)
-  let BatchGate admission checkpoint counter _ = initialGate
-      gate = BatchGate admission checkpoint counter frozen
+  let BatchGate admission measuredPaths checkpoint counter _ = initialGate
+      gate = BatchGate admission measuredPaths checkpoint counter frozen
   out <- freshOutput outPath
   let P.Carrier (P.GuestAddress carrierStart) (P.GuestAddress carrierEnd) = artifactCarrier artifact
       P.EntryAddresses (P.GuestAddress getterStub) (P.GuestAddress setterEntry) = artifactEntries artifact
@@ -1069,6 +1091,24 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
     reference <- stockRun c
     subject <- lookupRun candidateRuns (runLabel c)
     pure (c, compareRuns reference subject)
+  -- Wrong variants: each applies the mutants tool's one word to the owned image
+  -- and runs the same case plan, so a control row names the variant's site.
+  variantInputs <- variantArguments arguments
+  ensure (not (isJust frozen) || null variantInputs) "--variant cannot rejudge a frozen run"
+  (variantBatches, variantOutcomes) <- fmap unzip . forM variantInputs $ \(name, address, mutated) -> do
+    ensure (address >= carrierStart && address + 4 <= carrierEnd) ("variant " ++ name ++ " is outside the owned carrier")
+    let offset = fromIntegral (address - image4Base)
+    ensure (offset + 4 <= B.length candidate) ("variant " ++ name ++ " is outside the owned image")
+    let image = B.take offset candidate <> word32le mutated <> B.drop (offset + 4) candidate
+    specs <- forM runCases $ \c -> do
+      run <- stockRun c
+      pure (withDerivedFrame ownedSupplied ownedRanges (caseSpec (fixtureImage (artifactDefaultWindows artifact) (fxOf c) image) candidateFunctions (fxOf c) (runLabel c) (standing (runProperty c)) (runCase c) (observedExpectation run)))
+    (batches, runs) <- runBatches gate cache runner out ("variant-" ++ name) specs
+    outcomes <- forM runCases $ \c -> do
+      reference <- stockRun c
+      subject <- lookupRun runs (runLabel c)
+      pure (runLabel c, compareRuns reference subject)
+    pure (batches, (name, outcomes))
   let entryStanding c = standing (oracleProperty (entryOperation c))
       entryExpected c = fromMaybe placeholderExpectation (modelled (entryStanding c) >>= \owned -> modelExpectation fx owned (oracleOperation (entryOperation c)))
   (entryStockBatches, entryStockRuns) <- runBatches gate cache runner out "entry-stock"
@@ -1138,6 +1178,33 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
         && and (map snd admissionControls) && and (map snd entryControlOutcomes)
         && all ((== Returned) . runStatus) (M.elems controlRuns)
 
+  -- Per-case stock evidence for the shared judge: the entry each case entered and
+  -- the instructions the runner reports inside that entry's extent.
+  let caseBatch index = "stock-" ++ (if index < 10 then "0" else "") ++ show index
+      caseOrdinals = M.fromList (zip (map runLabel runCases) [0 :: Int ..])
+      entryExtents = [(spanStart span', spanEnd span' - spanStart span') | span' <- stockFunctions]
+      extentOf entry = fromMaybe 4 (lookup entry entryExtents)
+  caseRows <- forM (zip runCases verdicts) $ \(rc, (_, differences)) -> do
+    let label = runLabel rc
+        spec = stockSpec (fxOf rc) image4 properties label stockFunctions (runCase rc)
+        N.GuestAddress entry = caseEntry spec
+        entryAddress = fromIntegral entry :: Word32
+        extent = extentOf entryAddress
+        ordinal = fromMaybe 0 (M.lookup label caseOrdinals)
+        path = out </> caseBatch (ordinal `div` batchLimit) </> (caseLabelText label ++ ".native-result.json")
+    stockEvidence <- evidenceAt path entryAddress extent
+    pure (object
+      [ "id" .= caseLabelText label
+      , "entry" .= hex entryAddress
+      , "extent" .= extent
+      , "stock_trace_instructions" .= evidenceTrace stockEvidence
+      , "stock_provenance_instructions" .= evidenceProvenance stockEvidence
+      , "stock_instructions_inside" .= (evidenceTrace stockEvidence + evidenceProvenance stockEvidence)
+      , "stock_instructions" .= evidenceInstructions stockEvidence
+      , "stock_status" .= evidenceStatus stockEvidence
+      , "differences" .= [differenceKind difference ++ ": " ++ differenceDetail difference | difference <- differences]
+      ])
+
   -- Results.
   runnerSha <- sha256Hex <$> (canonicalizePath runner >>= sha256File)
   let modelFailures = [(c, ds) | (c, ds) <- modelRows, not (null ds)]
@@ -1153,7 +1220,7 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
       stockAll = M.elems stockRuns
       candidateAll = M.elems candidateRuns
       passed = null modelFailures && null verdictFailures && all (null . snd) entryVerdicts && all (null . snd) wrapperVerdicts && controlsHold
-      allBatches = stockBatches ++ candidateBatches ++ controlBatches ++ entryStockBatches ++ entryCandidateBatches ++ entryControlBatches ++ wrapperStockBatches ++ wrapperCandidateBatches
+      allBatches = stockBatches ++ candidateBatches ++ controlBatches ++ concat variantBatches ++ entryStockBatches ++ entryCandidateBatches ++ entryControlBatches ++ wrapperStockBatches ++ wrapperCandidateBatches
       executedBatches = length [() | record <- allBatches, not (isJust frozen), recordReuse record == BatchExecuted]
       reusedBatches = length [() | record <- allBatches, not (isJust frozen), recordReuse record == BatchReused]
       executedCases = sum [recordCases record | record <- allBatches, not (isJust frozen), recordReuse record == BatchExecuted]
@@ -1161,6 +1228,12 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
       batchValue record = object ["name" .= recordName record, "cases" .= recordCases record, "batch_sha256" .= sha256Hex (recordBatchSha record), "summary_sha256" .= sha256Hex (recordSummarySha record), "reuse" .= (if isJust frozen then "offline-rejudged" else reuseLabel (recordReuse record))]
       results = object
         [ "schema_version" .= (1 :: Int)
+        , "suite" .= ("property-service" :: String)
+        , "image_path" .= image4Path
+        , "image_sha256" .= sha256Hex (sha256 image4)
+        , "owned_path" .= linkedPath
+        , "owned_sha256" .= sha256Hex (sha256 linked)
+        , "cases" .= caseRows
         , "inputs" .= object inputs
         , "qualification_scope" .= (case mode of NativeOnly -> "native-only"; ActualStagedCandidate _ _ -> "staged-candidate" :: String)
         , "dat_retirement_admitted" .= False
@@ -1240,6 +1313,19 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
                 ++ [object ["name" .= problem, "holds" .= False] | problem <- unavailable]
                 ++ [object ["name" .= name, "kind" .= ("admission-refusal" :: String), "holds" .= holds] | (name, holds) <- admissionControls]
                 ++ map fst entryControlOutcomes
+                ++ [ object
+                       [ "name" .= name
+                       , "kind" .= ("wrong-variant" :: String)
+                       , "reported" .= not (null differing)
+                       , "cases" .= length differing
+                       , "failed_cases" .= length failures
+                       , "holds" .= not (null differing)
+                       , "first_differences" .= [object ["case" .= caseLabelText label, "kind" .= differenceKind d, "detail" .= differenceDetail d] | (label, d) <- take 20 failures]
+                       ]
+                   | (name, outcomes) <- variantOutcomes
+                   , let failures = [(label, d) | (label, ds) <- outcomes, d <- ds]
+                         differing = nubOrd [label | (label, _) <- failures]
+                   ]
             )
         , "differences" .= differenceSamples
             ( [("model", runLabel c, d) | (c, ds) <- modelFailures, d <- ds]

@@ -2,6 +2,7 @@ module Main (main) where
 
 import Control.Exception (IOException, bracket, try)
 import Control.Monad (unless)
+import qualified Data.ByteString as B
 import Data.Either (isLeft)
 import Replacement.PropertyService.Qualification
 import System.Directory (createDirectory, createDirectoryIfMissing, createDirectoryLink, getTemporaryDirectory, removeDirectoryRecursive, removeFile, withCurrentDirectory)
@@ -33,6 +34,23 @@ main = do
     rejected (root </> ".." </> "outside" </> "run")
     createDirectoryLink outside (root </> "escape")
     rejected (root </> "escape" </> "run")
+    let runRoot = base </> "run-root"
+        unrelated = runRoot </> "unrelated"
+        runOut = runRoot </> "out"
+        runCache = runRoot </> "cache"
+        runAdmission = StorageAdmission runRoot (StorageLimitBytes (2 * 1024 ^ (3 :: Int) + 1024 * 1024))
+    createDirectoryIfMissing True unrelated
+    createDirectoryIfMissing True runOut
+    createDirectoryIfMissing True runCache
+    B.writeFile (unrelated </> "foreign.bin") (B.replicate (8 * 1024 * 1024) 0)
+    StorageSnapshot (StorageBytes measured) _ _ <- measureRunStorage runAdmission [runOut, runCache]
+    check "the storage checkpoint measures only the run's own directories" (measured == 0)
+    storageCheckpoint BeforeBatch runAdmission [runOut, runCache]
+    B.writeFile (runOut </> "batch.bin") (B.replicate (2 * 1024 * 1024) 0)
+    overLimit <- try (storageCheckpoint BeforeBatch runAdmission [runOut, runCache]) :: IO (Either IOException ())
+    check "the run's own allocation over the limit is refused" (isLeft overLimit)
+    overlapping <- try (measureRunStorage runAdmission [runOut, runOut </> "cache"]) :: IO (Either IOException StorageSnapshot)
+    check "overlapping measured paths are refused" (isLeft overlapping)
     let runfiles = base </> "runfiles"
         workspace = base </> "workspace"
         input = "property-runtime-fixture.bin"

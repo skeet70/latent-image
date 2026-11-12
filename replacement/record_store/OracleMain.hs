@@ -7,13 +7,16 @@ import Control.Exception (evaluate)
 import Control.Monad
 import Data.Aeson (object, (.=))
 import qualified Data.ByteString as B
-import Data.List (isInfixOf, isPrefixOf)
+import Data.List (isInfixOf, isPrefixOf, nub)
 import qualified Data.Map.Strict as M
+import Data.Word (Word32)
+import Emulation.Judge (StockEvidence (..), evidenceAt)
 import Emulation.NativeCase (loadCase)
 import Emulation.NativeObservation
-import Emulation.OwnedCase (caseId, loadObservedBatch, required, writeBatch)
+import Emulation.OwnedCase (CaseSpec (..), caseId, loadObservedBatch, required, word32le, writeBatch)
 import Emulation.Sha256
 import FujiAF.JSON (encodeCanonical)
+import Numeric (readHex)
 import Replacement.RecordStore.Cases
 import Replacement.RecordStore.Execution
 import Replacement.RecordStore.Hardware
@@ -31,6 +34,10 @@ chunks size items = let (first, rest) = splitAt size items in first : chunks siz
 main :: IO ()
 main = do
   args <- getArgs
+  case dropWhile (/= "--emit-case-table") args of
+    [] -> pure ()
+    [_] -> error "--emit-case-table needs a path"
+    _ : path : _ -> B.writeFile path (encodeCanonical caseTableValue) >> exitSuccess
   case optional args "--native-jobs" of
     Nothing -> pure ()
     Just "1" -> pure ()
@@ -82,6 +89,19 @@ main = do
   when (cachedCandidate /= Nothing && candidateInputs == Nothing) (error "--candidate-output requires a candidate")
   cachedInputs <- cachedCaseInputs "stock" cachedStock
   cachedCandidateInputs <- cachedCaseInputs "candidate" cachedCandidate
+  controlCandidates <- forM (controlArguments args) $ \(name, binPath, symbolsPath) -> do
+    bytes <- readBoundedInput candidateLimit binPath
+    functions <- symbolFunctions symbolsPath
+    unless (B.length bytes == 0x1e60) (error ("control " ++ name ++ " span size"))
+    pure (name, bytes, functions)
+  variantCandidates <- forM (variantArguments args) $ \(name, address, mutated) -> do
+    (bytes, functions) <- case candidateInputs of
+      Just inputs -> pure inputs
+      Nothing -> error "--variant requires --candidate and --symbols"
+    let offset = toInteger address - 0x6ac2b4
+    unless (offset >= 0 && offset + 4 <= toInteger (B.length bytes)) (error ("variant " ++ name ++ " is outside the candidate span"))
+    let at = fromIntegral offset
+    pure (name, B.take at bytes <> word32le mutated <> B.drop (at + 4) bytes, functions)
   batches <- forM (zip [0 :: Int ..] (chunks 4 (zip selected specs))) $ \(batchIndex, rows) -> do
     let directory = outputPath </> "stock-" ++ show batchIndex
     batch <- writeBatch directory (map snd rows)
@@ -96,24 +116,39 @@ main = do
       Nothing -> do
         let inputs = (directory, map snd rows) : [(takeDirectory path, candidateSpecs) | (path, candidateSpecs) <- maybe [] pure candidateBatch]
         forM_ inputs $ \(inputDirectory, inputSpecs) -> forM_ inputSpecs $ \spec -> void (loadCase (inputDirectory </> caseId spec ++ ".case.json"))
-        pure []
+        pure ([], [])
       Just executable -> do
         observed <- case cachedStock of
           Nothing -> loadObservedBatch executable batch
           Just _ -> cachedObserved "stock" runnerDigest cachedInputs directory (map snd rows)
+        mapM_ (evaluateObservation . snd) observed
         candidateObserved <- case candidateBatch of
           Nothing -> pure M.empty
           Just (path, candidateSpecs) -> M.fromList <$> case cachedCandidate of
             Nothing -> loadObservedBatch executable path
             Just _ -> cachedObserved "candidate" runnerDigest cachedCandidateInputs (takeDirectory path) candidateSpecs
-        compared <- forM (zip rows observed) $ \((c, _), (ident, observation)) -> do
+        mapM_ (evaluateObservation . snd) (M.toList candidateObserved)
+        compared <- forM (zip rows observed) $ \((c, spec), (ident, observation)) -> do
           let differences = map modelDifferenceJson (modelDifferences c observation)
               candidateDifferences = maybe [] (map roleDifferenceJson . compareRoles observation) (M.lookup ident candidateObserved)
+              caseDifferences = maybe [] (map boundaryLabel . nub . map roleBoundary . compareRoles observation) (M.lookup ident candidateObserved)
+              entry = entryAddress (last (operations c))
+              extent = case [size | (GuestAddress address, size) <- caseFunctions spec, address == fromIntegral entry] of
+                size : _ -> size
+                [] -> 4
+          evidence <- evidenceAt (directory </> caseId spec ++ ".native-result.json") entry extent
           evaluate
             ( force
                 ( object
                     [ "case" .= caseName (name c)
+                    , "entry" .= hexWord32 entry
+                    , "extent" .= extent
+                    , "stock_trace_instructions" .= evidenceTrace evidence
+                    , "stock_provenance_instructions" .= evidenceProvenance evidence
+                    , "stock_instructions_inside" .= (evidenceTrace evidence + evidenceProvenance evidence)
+                    , "stock_instructions" .= evidenceInstructions evidence
                     , "stock_status" .= runnerStatusLabel (nativeStatus observation)
+                    , "differences" .= caseDifferences
                     , "model_differences" .= differences
                     , "candidate_differences" .= candidateDifferences
                     ]
@@ -122,20 +157,63 @@ main = do
                 )
             )
         B.writeFile (outputPath </> "batch-" ++ show batchIndex ++ ".json") (encodeCanonical (object ["results" .= [row | (row, _, _) <- compared]]))
-        pure compared
-  let rows = concat batches
-      modelFailures = length [() | (_, failed, _) <- rows, failed]
-      candidateFailures = length [() | (_, _, failed) <- rows, failed]
+        pure (compared, [(c, spec, observation) | ((c, spec), (_, observation)) <- zip rows observed])
+  let evaluated = concatMap fst batches
+      stockRows = concatMap snd batches
+      rows = [row | (row, _, _) <- evaluated]
+      modelFailures = length [() | (_, failed, _) <- evaluated, failed]
+      candidateFailures = length [() | (_, _, failed) <- evaluated, failed]
       controlMode = "--control" `elem` args
       failures = modelFailures + if controlMode then (if candidateFailures == 0 then 1 else 0) else candidateFailures
-      summary =
+  let stopOnFirstDetection = "--stop-on-first-detection" `elem` args
+      scanControl executable controlName caseSpecs = go 0 [] [] 0
+        where
+          groups = zip (chunks 4 stockRows) (chunks 4 caseSpecs)
+          go index differing differences scanned = case drop index groups of
+            [] -> pure (differing, nub differences, scanned)
+            ((stockChunk, chunk) : _) -> do
+              let directory = outputPath </> "control-" ++ controlName ++ "-" ++ show index
+              path <- writeBatch directory chunk
+              patchStubs directory chunk
+              observed <- loadObservedBatch executable path
+              mapM_ (evaluateObservation . snd) observed
+              let pairs =
+                    [ (caseName (name c), stockObservation, controlObservation)
+                    | ((c, _, stockObservation), (_, controlObservation)) <- zip stockChunk observed
+                    ]
+                  detected = [name | (name, stockObservation, controlObservation) <- pairs, not (null (compareRoles stockObservation controlObservation))]
+                  labels = map boundaryLabel (nub (concat [map roleBoundary (compareRoles s o) | (_, s, o) <- pairs]))
+                  scanned' = scanned + length chunk
+              _ <- evaluate (force detected)
+              _ <- evaluate (force labels)
+              when stopOnFirstDetection (removeDirectoryRecursive directory)
+              if stopOnFirstDetection && not (null detected)
+                then pure (differing ++ detected, nub (differences ++ labels), scanned')
+                else go (index + 1) (differing ++ detected) (differences ++ labels) scanned'
+  controls <- case runner of
+    Nothing -> pure []
+    Just executable -> forM (controlCandidates ++ variantCandidates) $ \(controlName, bytes, functions) -> do
+      let controlSpecs = map (candidateSpec bytes functions) (map (\(_, spec, _) -> spec) stockRows)
+      (differing, differences, scanned) <- scanControl executable controlName controlSpecs
+      pure (object
+        [ "name" .= controlName
+        , "reported" .= not (null differing)
+        , "cases" .= differing
+        , "differences" .= differences
+        , "scanned_cases" .= scanned
+        ])
+  let summary =
         object $
           [ "schema_version" .= (1 :: Int)
+          , "suite" .= ("record-store" :: String)
           , "profile" .= ("native-cortex-r5f" :: String)
           , "image4_sha256" .= sha256Hex (sha256 image)
           , "loader_sha256" .= sha256Hex (sha256 loader)
           , "candidate_sha256" .= fmap (sha256Hex . sha256 . fst) candidateInputs
-          , "cases" .= length selected
+          , "owned_sha256" .= fmap (sha256Hex . sha256 . fst) candidateInputs
+          , "case_count" .= length selected
+          , "cases" .= rows
+          , "controls" .= controls
           , "executed" .= length rows
           , "failed" .= failures
           , "model_failed" .= modelFailures
@@ -143,7 +221,7 @@ main = do
           , "control" .= controlMode
           , "control_detected" .= (controlMode && candidateFailures > 0)
           , "candidate" .= maybe False (const True) candidateInputs
-          , "results" .= [row | (row, _, _) <- rows]
+          , "results" .= rows
           ]
             <> ["runner_sha256" .= fmap sha256Hex runnerDigest]
             <> ["cached_stock_output" .= cachedStock, "cached_candidate_output" .= cachedCandidate]
@@ -152,3 +230,15 @@ main = do
   when (failures > 0) exitFailure
   where
     optional arguments key = case dropWhile (/= key) arguments of _ : value : _ -> Just value; _ -> Nothing
+    controlArguments arguments = case dropWhile (/= "--control-image") arguments of
+      _ : name : binPath : symbolsPath : rest -> (name, binPath, symbolsPath) : controlArguments rest
+      _ -> []
+    variantArguments :: [String] -> [(String, Word32, Word32)]
+    variantArguments arguments = case arguments of
+      "--variant" : name : address : mutated : rest ->
+        (name, hexWord address, hexWord mutated) : variantArguments rest
+      _ : rest -> variantArguments rest
+      [] -> []
+    hexWord text = case readHex (if take 2 text == "0x" then drop 2 text else text) :: [(Integer, String)] of
+      [(value, "")] -> fromIntegral value
+      _ -> error ("--variant needs hex addresses, not " ++ text)

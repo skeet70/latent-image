@@ -1,11 +1,14 @@
 {-# LANGUAGE GHC2021 #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Replacement.RecordStore.Harness where
 
+import Data.Aeson (Value, object, (.=))
 import Data.Bits
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
+import Data.Maybe (listToMaybe)
 import Data.Word
-import Emulation.NativeObservation (GuestAddress(..), RegionId(..), Register(..), RunnerStatus(..))
+import Emulation.NativeObservation (GuestAddress(..), RegionId(..), Register(..), RunnerStatus(..), hexWord32)
 import Emulation.OwnedCase (CaseSpec(..), Permission(..), mkRegion, readWordAt, word32le)
 import qualified Replacement.RecordStore.Arm as A
 import Replacement.RecordStore.Cases
@@ -25,6 +28,46 @@ entryAddress op = case operationBody op of
   Zero -> 0x6ae0fc
   CacheBoundary _ _ _ -> 0x6ae0fc
   On _ _ -> error "selected entry"
+
+-- | The nine export rows of the carrier's link script, in the suite's own
+-- operation order. The extent is the entry veneer the stock role authenticates.
+entryTable :: [Word32]
+entryTable =
+  map entryAddress
+    [ Open
+    , Register Normal
+    , Close
+    , Latest
+    , Append (Seed 0) CallerSource
+    , EraseAll
+    , Collect
+    , ReadAt (BytePosition 0) 16
+    , Zero
+    ]
+
+-- | The static audit's entered side, emitted from this suite's own cases: one
+-- row per entry a case ends in, in the entry table's order. An entry no case
+-- ends in has no row, so the audit reports it rather than a declaration
+-- covering it.
+caseTableValue :: Value
+caseTableValue = object
+  [ "schema" .= (1 :: Int)
+  , "suite" .= ("record-store" :: String)
+  , "source" .= ("Replacement.RecordStore.Harness entryAddress" :: String)
+  , "entries" .=
+      [ object
+          [ "case" .= caseName (name c)
+          , "entry" .= hexWord32 address
+          , "extent" .= (4 :: Int)
+          , "stock" .= ("image" :: String)
+          ]
+      | address <- entryTable
+      , Just c <- [firstCaseEndingAt address]
+      ]
+  ]
+  where
+    firstCaseEndingAt address =
+      listToMaybe [c | c <- caseGrid, entryAddress (last (operations c)) == address]
 
 modelBase :: Word32
 modelBase = 0x510000

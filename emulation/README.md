@@ -707,11 +707,15 @@ session, menu frame, menu value and menu-engine refusal); each names its source
 and the commit it was derived at, and the tool prints `live`,
 `snapshot-tested` or `snapshot-untested` per suite.
 
-The entered side is a checked-in snapshot of each suite's case table
-(`emulation/suite-audit-cases/*.json`), with its source path and derivation
-commit. Nothing fails yet when a snapshot and its source diverge. The per-image
-shim rows and the shared judge are to replace these snapshots; until then a
-snapshot is a declaration, not evidence that the suite still matches it.
+The entered side is the suite's own case table, checked in under
+`emulation/suite-audit-cases/` with its source path and derivation commit. The
+property-service and record-store suites emit theirs (`--emit-case-table PATH`),
+and `//replacement/property_service:property-service-case-table-tests` and
+`//replacement/record_store:oracle-case-table-tests` fail when the tracked table
+and the emission diverge, so the audit prints `snapshot-tested` for both. The
+other suites still carry a snapshot taken by reading their source; nothing fails
+when one of those diverges, so for them a snapshot is a declaration, not
+evidence that the suite still matches it.
 
 `//emulation:suite-audit-tests` covers the rule on synthetic inputs: a suite
 that enters every bound entry passes, one that misses an entry fails and names

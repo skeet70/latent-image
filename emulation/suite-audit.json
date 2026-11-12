@@ -610,9 +610,9 @@
     "base": "0x61c400",
     "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
    },
-   "cases_source": "replacement/property_service/property-service.ld",
+   "cases_source": "replacement/property_service/Replacement/PropertyService/Oracle.hs",
    "cases_derived_at": "49489f81",
-   "cases_verified": false
+   "cases_verified": true
   },
   {
    "name": "record-store",
@@ -627,9 +627,9 @@
     "base": "0x61c400",
     "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
    },
-   "cases_source": "replacement/record_store_carrier/record-store.ld",
+   "cases_source": "replacement/record_store/Replacement/RecordStore/Harness.hs",
    "cases_derived_at": "49489f81",
-   "cases_verified": false
+   "cases_verified": true
   },
   {
    "name": "lens-actor",

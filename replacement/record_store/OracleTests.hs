@@ -65,7 +65,7 @@ sequenceTests = do
       a = B.take 16 (record (geometry Kind0) 10 False)
       b = B.take 16 (record (geometry Kind1) 11 False)
       c = B.take 16 (record (geometry Kind2) 12 False)
-  assert "original generated grid retains 370 identities with recovery and hardware cases" (length caseGrid + length [() | row <- caseGrid, StopAfter _ <- [injection row]] + 5 == 370)
+  assert "original generated grid retains 380 identities with recovery and hardware cases" (length caseGrid + length [() | row <- caseGrid, StopAfter _ <- [injection row]] + 5 == 380)
   assert "multi-kind nofault returns A after B" (snapshot "ab-a-nofault" 3 == a)
   assert "resident A survives failure of its second physical read" (snapshot "ab-a-second-a-fails" 1 == a && snapshot "ab-a-second-a-fails" 2 == b && snapshot "ab-a-second-a-fails" 3 == a && status "ab-a-second-a-fails" 3 == B.replicate 4 0)
   assert "failed fill publishes unchanged slot bytes without retry" (snapshot "first-fill-failure-memoized" 1 == B.replicate 16 0 && snapshot "first-fill-failure-memoized" 2 == B.replicate 16 0)

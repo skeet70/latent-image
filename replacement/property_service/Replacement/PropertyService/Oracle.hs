@@ -1,4 +1,5 @@
 {-# LANGUAGE GHC2021 #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 -- | Native cases of the X-M1 1.50 property getter 0x61e110 and setter 0x624694: the case grid, the
 -- shared fixture, the owned-semantics model, the per-case comparison and the guest-control patches.
@@ -100,10 +101,11 @@ module Replacement.PropertyService.Oracle
   , Wrapper (..)
   , wrapperCaseSpec
   , image4Base
+  , caseTableValue
   ) where
 
 import Control.Monad (foldM, unless)
-import Data.Aeson (Value)
+import Data.Aeson (Value, object, (.=))
 import Data.Bits (complement, shiftL, shiftR, xor, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
@@ -170,6 +172,27 @@ operations =
 
 caseGrid :: [OracleCase]
 caseGrid = [OracleCase identifier operation | identifier <- propertyIds, operation <- operations]
+
+-- | The static audit's entered side, emitted from this suite's own case table:
+-- one row per stock entry the case grid drives, with the extent the stock
+-- evidence is counted over.
+caseTableValue :: Value
+caseTableValue = object
+  [ "schema" .= (1 :: Int)
+  , "suite" .= ("property-service" :: String)
+  , "source" .= ("Replacement.PropertyService.Oracle caseGrid" :: String)
+  , "entries" .=
+      [ object
+          [ "case" .= (name :: String)
+          , "entry" .= ("0x" ++ padHex (spanStart span'))
+          , "extent" .= (spanEnd span' - spanStart span' :: Word32)
+          , "stock" .= ("image" :: String)
+          ]
+      | (name, span') <- [("getter", getterSpan), ("setter", setterSpan)]
+      ]
+  ]
+  where
+    padHex value = let text = showHex value "" in replicate (8 - length text) '0' ++ text
 
 caseLabel :: OracleCase -> CaseLabel
 caseLabel (OracleCase (PropertyId n) operation) = CaseLabel ("p" ++ pad 3 (showHex n "") ++ "-" ++ operationLabel)

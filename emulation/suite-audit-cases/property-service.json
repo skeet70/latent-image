@@ -1,18 +1,18 @@
 {
  "schema": 1,
  "suite": "property-service",
- "source": "derived from the suite's case table",
+ "source": "Replacement.PropertyService.Oracle caseGrid",
  "entries": [
   {
    "case": "getter",
    "entry": "0x0061e110",
-   "extent": 256,
+   "extent": 25872,
    "stock": "image"
   },
   {
    "case": "setter",
    "entry": "0x00624694",
-   "extent": 256,
+   "extent": 49968,
    "stock": "image"
   }
  ]

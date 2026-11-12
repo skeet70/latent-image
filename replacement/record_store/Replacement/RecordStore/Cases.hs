@@ -71,6 +71,8 @@ caseGrid = concatMap families [minBound .. maxBound]
             , run "all-rejected" [(10,True),(11,True)] [(12,True)] [Latest, Latest]
             , run "reject-zero" [(10,True)] [] [Latest]
             , run "start-not-newest" [(10,False)] [(11,False)] [Latest]
+            , OracleCase (CaseName ("kind-" ++ show (fromEnum k) ++ "-open-last")) k (mediumOf g [] []) [Open] MarkerCallback NoFault
+            , OracleCase (CaseName ("kind-" ++ show (fromEnum k) ++ "-close-last")) k (mediumOf g [] []) [Open, Register Normal, Close] MarkerCallback NoFault
             , appendCase "append-room" partial []
             , appendCase "append-rotate" (full 0) []
             , appendCase "append-queried-different" [(0,False)] (full 1)

@@ -2347,6 +2347,11 @@ filegroup(
     srcs = glob(["suite-audit-cases/*.json"]),
 )
 
+exports_files([
+    "suite-audit-cases/property-service.json",
+    "suite-audit-cases/record-store.json",
+])
+
 haskell_library(
     name = "native-observation",
     srcs = ["Emulation/NativeObservation.hs"],

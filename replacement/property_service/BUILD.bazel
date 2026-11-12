@@ -23,6 +23,7 @@ _ORACLE_DRIVER_DEPS = [
     "//emulation:cached-native-batch",
     "//emulation:fujimod-native-paths",
     "//emulation:case-sha256",
+    "//emulation:judge-lib",
     "//emulation:native-adapter",
     "//emulation:native-observation",
     "//emulation:owned-case",
@@ -471,6 +472,7 @@ haskell_test(
     deps = [
         ":qualification",
         "//host:base",
+        "//host:bytestring",
         "//host:directory",
         "//host:filepath",
     ],
@@ -536,6 +538,22 @@ haskell_test(
         "//host/firmware:bank-allowlist",
         "//host/firmware:stock-stack",
         "//replacement/media_permit:property-fields",
+    ],
+)
+
+haskell_test(
+    name = "property-service-case-table-tests",
+    size = "small",
+    srcs = ["CaseTableTests.hs"],
+    main_file = "CaseTableTests.hs",
+    args = ["$(rootpath //emulation:suite-audit-cases/property-service.json)"],
+    data = ["//emulation:suite-audit-cases/property-service.json"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":property-oracle-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
     ],
 )
 

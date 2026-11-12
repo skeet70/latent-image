@@ -27,6 +27,7 @@ module Replacement.PropertyService.Qualification
   , StorageBytes (..)
   , StorageSnapshot (..)
   , measureStorage
+  , measureRunStorage
   , CheckpointPhase (..)
   , BatchCheckpoint (..)
   , parseStorageLimit
@@ -36,7 +37,7 @@ module Replacement.PropertyService.Qualification
   ) where
 
 import Control.Exception (IOException, SomeException, bracketOnError, displayException, finally, mask, try)
-import Control.Monad (forM, unless)
+import Control.Monad (forM, forM_, unless)
 import Data.Aeson (Value (..), eitherDecodeStrict', object, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
@@ -872,7 +873,7 @@ setupJob options = do
           limit <- maybe (failH "--storage-limit-bytes is required") pure (optStorageLimit withPaths)
           let admission = StorageAdmission (optStorageRoot withPaths) limit
           checkStoragePaths admission [out, cache]
-          storageCheckpoint BeforeBatch admission Nothing
+          storageCheckpoint BeforeBatch admission [out, cache]
           createDirectoryIfMissing True out
           createDirectoryIfMissing True cache
           stage <- stageIdentityFor withPaths
@@ -1657,15 +1658,42 @@ checkStoragePaths (StorageAdmission root _) paths = do
           unless (rootComponents `isPrefixOf` components && length components > length rootComponents)
             (failH (path ++ " resolves outside " ++ rootCanonical))
 
-storageCheckpoint :: CheckpointPhase -> StorageAdmission -> Maybe FilePath -> IO ()
-storageCheckpoint phase admission@(StorageAdmission _ (StorageLimitBytes limit)) cache = do
-  StorageSnapshot (StorageBytes used) (StorageBytes available) (StorageBytes cacheUsed) <- measureStorage admission cache
+-- | The batch checkpoint bounds what this run writes, so it measures the run's
+-- own output and cache directories. The admission root only says where they may
+-- live: measuring it would count every other tree under it, which is not the
+-- run's allocation.
+storageCheckpoint :: CheckpointPhase -> StorageAdmission -> [FilePath] -> IO ()
+storageCheckpoint phase admission@(StorageAdmission _ (StorageLimitBytes limit)) paths = do
+  StorageSnapshot (StorageBytes used) (StorageBytes available) _ <- measureRunStorage admission paths
   let gib = 1024 ^ (3 :: Int)
       margin = case phase of BeforeBatch -> 2 * gib; AfterBatch -> 0
-  unless (used + margin <= limit) (failH "storage root allocation exceeds batch admission")
+  unless (used + margin <= limit) (failH "storage run allocation exceeds batch admission")
   unless (available >= 108 * gib) (failH "storage available bytes are below the 100GiB reserve and 8GiB margin")
-  unless (cacheUsed <= used) (failH "storage cache allocation exceeds its containing root")
-  putStrLn ("storage " ++ show phase ++ ": allocated=" ++ show used ++ " available=" ++ show available ++ " limit=" ++ show limit ++ " cache=" ++ show cacheUsed)
+  putStrLn ("storage " ++ show phase ++ ": allocated=" ++ show used ++ " available=" ++ show available ++ " limit=" ++ show limit)
+
+-- | Measure exactly the directories the run writes. They must be disjoint so
+-- their allocated bytes add up without counting a path twice.
+measureRunStorage :: StorageAdmission -> [FilePath] -> IO StorageSnapshot
+measureRunStorage admission@(StorageAdmission root _) paths = do
+  checkStoragePaths admission paths
+  canonical <- mapM canonicalizePath paths
+  forM_ (zip canonical (drop 1 canonical)) $ \(outer, inner) ->
+    unless (not (splitDirectories outer `isPrefixOf` splitDirectories inner)
+      && not (splitDirectories inner `isPrefixOf` splitDirectories outer))
+      (failH ("storage paths overlap: " ++ outer ++ " and " ++ inner))
+  checkStorageBudget root
+  used <- sum <$> mapM allocatedIfPresent paths
+  (code, out, err) <- readProcessWithExitCode "df" ["-B1", "--output=avail", "--", root] ""
+  unless (code == ExitSuccess) (failH ("storage df failed: " ++ err))
+  available <- case lines out of
+    [header, row] | words header == ["Avail"], [digits] <- words row -> either failH pure (decimal digits)
+    _ -> failH "storage df did not return exactly one available-byte count"
+  pure (StorageSnapshot (StorageBytes used) (StorageBytes available) (StorageBytes 0))
+
+allocatedIfPresent :: FilePath -> IO Integer
+allocatedIfPresent path = do
+  present <- doesDirectoryExist path
+  if present then allocated path else pure 0
 
 newtype StorageBytes = StorageBytes Integer deriving (Eq, Ord, Show)
 data StorageSnapshot = StorageSnapshot
