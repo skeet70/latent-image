@@ -17,7 +17,7 @@ xm1_rust_rlib(
     data = ["src/fake.rs", "src/slot_table.rs"],
     crate_name = "xm1_kernel",
     out = "arm/libxm1_kernel.rlib",
-    rustc_flags = ["-C", "target-feature=+strict-align", "-C", "jump-tables=no"],
+    rustc_flags = ["-C", "jump-tables=no"],
 )
 
 genrule(
