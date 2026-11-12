@@ -925,10 +925,21 @@ execute context function address instruction state = case instruction of
               (CMN, Just [k]) | rn /= pc -> Just (Comparison rn (negate k) False)
               _ -> Nothing
          in conditional cond (\s -> continue s {comparison = compared s, holds = Nothing}) id
-    | rd == pc -> branching cond (\s -> indirectBranch False Nothing (result s) s)
+    | rd == pc ->
+        branching cond $ \s ->
+          let frame = if op `elem` [ADC, SBC, RSC] then frameResult (operands s) else Nothing
+              (value, reached) = case frame of
+                Just derived -> (derived, exposeFrame s)
+                Nothing -> (result s, s)
+           in indirectBranch False Nothing value reached
+    | op `elem` [ADC, SBC, RSC] ->
+        conditional cond
+          (\s -> continue (flags setsFlags (writeUnmodelled (frameResult (operands s)) rd s)))
+          (flags setsFlags)
     | otherwise -> conditional cond (\s -> continue (flags setsFlags (setRegister rd (result s) s))) (flags setsFlags)
    where
     result s = dataResult context op (registerValue address s rn) (operandValue address s operand)
+    operands s = [registerValue address s rn, operandValue address s operand]
   MoveWide cond rd value -> conditional cond (\s -> continue (setRegister rd (exact value) s)) id
   ReadStatus cond rd -> conditional cond (\s -> continue (setRegister rd Unknown s)) id
   WriteApplicationFlags cond _ -> conditional cond (\s -> continue (flags True s)) id
@@ -937,8 +948,12 @@ execute context function address instruction state = case instruction of
           (Just v, _, _) -> v
           (_, Just (alo, ahi), Just (blo, bhi)) | toInteger ahi * toInteger bhi <= 0xffffffff -> Interval (alo * blo) (ahi * bhi)
           _ -> Unknown
+        operands s = [registerValue address s rn, registerValue address s rm] ++ maybe [] (\ra -> [registerValue address s ra]) accumulator
         result s = maybe (factors s) (\ra -> offsetFrom context (registerValue address s ra) (factors s)) accumulator
-     in conditional cond (\s -> continue (setRegister rd (result s) s)) id
+        write s = case (result s, frameResult (operands s)) of
+          (Unknown, Just frame) -> writeUnmodelled (Just frame) rd s
+          (value, _) -> setRegister rd value s
+     in conditional cond (\s -> continue (write s)) id
   MoveTop cond rd value ->
     let top s = case registerValue address s rd of
           low | isJust (stackAddress low) -> Derived (Index StackFrame)
@@ -947,7 +962,14 @@ execute context function address instruction state = case instruction of
   ZeroExtend cond rd rm rotation bits ->
     let extended s = dataResult context AND (shiftValue ROR rotation (registerValue address s rm)) (exact ((1 `shiftL` bits) - 1))
      in conditional cond (\s -> continue (setRegister rd (extended s) s)) id
-  Compute cond defs -> conditional cond (\s -> continue (foldr (`setRegister` Unknown) s defs)) id
+  Compute cond defs ->
+    conditional cond
+      ( \s ->
+          let sources = maybe [] computeSources (wordAt (contextElf context) address)
+              frame = frameResult (map (registerValue address s) sources)
+           in continue (foldr (\destination acc -> writeUnmodelled frame destination acc) s defs)
+      )
+      id
   Load cond width signed rt rn offset indexing
     | rt == pc ->
         branching cond $ \s ->
@@ -1022,6 +1044,18 @@ execute context function address instruction state = case instruction of
   branchCount found outcome = (withFindings found outcome) {outcomeBranches = if null found then 1 else 0}
   inside target = functionStart function <= target && target < functionEnd function
   flags setsFlags s = if setsFlags then s {comparison = Nothing, holds = Nothing} else s
+  -- An instruction whose result the analysis does not model: a frame-derived
+  -- operand makes the result the frame, exposed from its lowest address.
+  frameResult values
+    | any (isJust . stackAddress) values = Just (Derived (Index StackFrame))
+    | otherwise = Nothing
+  -- A result register the analysis does not track cannot hold the frame, so
+  -- the frame stays exposed.
+  writeUnmodelled frame destination s = case frame of
+    Just _ | destination == pc -> exposeFrame s
+    Just value -> setRegister destination value s
+    Nothing -> setRegister destination Unknown s
+  exposeFrame s = s {escaped = escapedSpan (escaped s) (Just (minBound, maxBound))}
   -- A callee that runs only hints up to an unconditional branch to itself does not return.
   traps at = case decode at <$> wordAt (contextElf context) at of
     Just (Hint _) -> traps (at + 4)

@@ -19,6 +19,7 @@ module A32
   , StatusWrite (..)
   , SignExtension (..)
   , decode
+  , computeSources
   , statusWrite
   , signExtension
   , BitFieldInsert (..)
@@ -122,7 +123,8 @@ data Instruction
   | ZeroExtend Cond Reg Reg Int Int
   | -- | MUL or MLA: destination, the two factors and the accumulator.
     Multiply Cond Reg Reg Reg (Maybe Reg)
-  | -- | Destinations of an instruction whose result the analysis does not track.
+  | -- | Destinations of an instruction whose result the analysis does not
+    -- track; `computeSources` decodes the registers it reads.
     Compute Cond [Reg]
   | Load Cond Width Bool Reg Reg Offset Indexing
   | Store Cond Width Reg Reg Offset Indexing
@@ -349,3 +351,23 @@ decode address word
     | otherwise = Rejected Unadmitted
    where
     rotation = 8 * fromIntegral (field 11 10 word)
+
+-- | The registers an instruction that `decode` returns as `Compute` reads.
+-- `Compute` carries only its destinations; the checker needs the operands to
+-- know whether one of them derives from the frame.
+computeSources :: Word32 -> [Reg]
+computeSources word
+  | field 7 4 word == 9, field 27 25 word == 0, field 24 24 word == 0 = case (testBit word 23, field 22 21 word) of
+      (True, _) -> [reg 0 word, reg 8 word] ++ [r | r <- [reg 16 word, reg 12 word], testBit word 21]
+      (False, 2) -> [reg 0 word, reg 8 word, reg 16 word, reg 12 word]
+      (False, 3) -> [reg 0 word, reg 8 word, reg 12 word]
+      _ -> [reg 0 word, reg 8 word]
+  | word .&. 0x0fff0ff0 == 0x016f0f10 = [reg 0 word]
+  | field 24 23 word == 2, testBit word 7, field 22 21 word /= 2 =
+      [reg 0 word, reg 8 word]
+        ++ [reg 12 word | field 22 21 word == 0 || (field 22 21 word == 1 && not (testBit word 5))]
+  | word .&. 0x0ff003f0 `elem` [0x06e00070, 0x06f00070, 0x06a00070, 0x06b00070] = [reg 0 word, reg 16 word]
+  | word .&. 0x0fff0ff0 `elem` [0x06bf0f30, 0x06bf0fb0, 0x06ff0f30] = [reg 0 word]
+  | word .&. 0x0fa00070 == 0x07a00050 = [reg 0 word]
+  | word .&. 0x0fe00070 == 0x07c00010 = [reg 12 word] ++ [reg 0 word | field 3 0 word /= 15]
+  | otherwise = []

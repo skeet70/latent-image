@@ -271,6 +271,27 @@ main = do
   chainReport <- run allowlist (throughVeneer chainCallee)
   check "a two-level bank chain reaching stock forgets the caller's escaped local"
     (any (\f -> findingAddress f == callerStart + 36) (violations chainReport))
+  -- A result the analysis does not model takes the frame from a frame operand:
+  -- `add r1, sp, #4` puts entry sp-4 in r1 while the slot at entry sp-8 holds
+  -- rb_last_status, so exposing the frame forgets that slot at the call.
+  forM_
+    [ ("a multiply", 0xe0000291)
+    , ("an add with carry", 0xe0a10002)
+    , ("a subtract with carry", 0xe0c10002)
+    , ("a reverse subtract with carry", 0xe0e10002)
+    , ("a signed byte extend", 0xe6af0071)
+    ] $ \(label, unmodelled) -> do
+      let prefix = slotPrefix ++ [0xe28d1004, unmodelled]
+          site = callerStart + fromIntegral (length prefix * 4)
+      report <- run allowlist (withCall prefix)
+      check (label ++ " of a frame address exposes the frame")
+        (any (\f -> findingAddress f == site + 12) (violations report))
+  -- `clz pc, r1` writes a result register the analysis does not track.
+  let pcPrefix = slotPrefix ++ [0xe28d1004, 0xe16fff11]
+      pcSite = callerStart + fromIntegral (length pcPrefix * 4)
+  pcReport <- run allowlist (withCall pcPrefix)
+  check "a compute of a frame address into the program counter exposes the frame"
+    (any (\f -> findingAddress f == pcSite + 12) (violations pcReport))
   forM_ [elfLow, elfHigh] $ \path -> do
     bytes <- B.readFile path
     image <- either fail pure (parseElf bytes)
