@@ -1,5 +1,5 @@
 # Value-package pair inputs over the controlled-RTC trajectory inventory; run as
-#   jq --arg role stock|owned [--arg route close-pop] -f value.jq TRAJECTORY
+#   jq --arg role stock|owned [--arg route close-pop --arg receipt_source SOURCE] -f value.jq TRAJECTORY
 # Every route declares stock's IMAGE SIZE arm and, in the owned role, the seam that replaces it.
 # With --arg route close-pop, applied to picker-260.ROLE.json, it renders the IMAGE SIZE
 # close-then-pop route on that picker's segment template.
@@ -15,7 +15,7 @@ def close_pop:
   | def segment($name; $steps): $template | .phase = $name | .capture = $name | .steps = $steps;
   .entry = "IMAGE SIZE closed from inside its picker, then a restore elsewhere. OK opens the IMAGE SIZE picker (1,246,0), which enters stock's IMAGE SIZE arm 0x00d51b58 once; a half-press closes the menu from inside it (stage Close (2,1,0x1d), notified to 0x00d5b350 with class 0xf6). OK reopens SHOOTING MENU at row 3, two DOWNs reach row 5, OK opens picker 260, DOWN moves it to row 1 and BACK leaves it with Pop (0xf,1,0x1a), whose notification runs stock's restore. Reopening picker 260 lands on row 0, the restored value. No owned state may survive the IMAGE SIZE picker the half-press closed."
   | .source_bindings += [
-      {"source": "private-data/scratch/MenuValueFix/runs/20261113T174655Z-diag-close-half/result", "expectation": "On plain stock with the qualifier's run document every landing of this route matches, and the half-press inside the IMAGE SIZE picker posts stage (2,1,0x1d) and notifies (2,1,0x1d,0xf6)."},
+      {"source": ($ARGS.named.receipt_source // error("close-pop needs --arg receipt_source")), "expectation": "On plain stock with the qualifier's run document every landing of this route matches, and the half-press inside the IMAGE SIZE picker posts stage (2,1,0x1d) and notifies (2,1,0x1d,0xf6)."},
       {"source": "replacement/menu_engine/adapter/mod.rs", "expectation": "Close and Pop reach stock's 0x00d5b350 notification in the owned role."}
     ]
   | .trace_sites += [["00d5b350", "value-notify", {"lr": true}]]

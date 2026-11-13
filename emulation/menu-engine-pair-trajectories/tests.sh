@@ -71,7 +71,7 @@ if "$jq" -n -L "$D" --arg role stock --arg name fn-instant-af --arg receipt_sour
   --argjson sample '[]' --slurpfile config emulation/menu-oracle-fn-auto-open.json -f "$D/fn-oracle.jq" > /dev/null 2>&1; then exit 1; fi
 for role in stock owned; do
   "$jq" -L "$D" --arg role "$role" --argjson render true -f "$D/picker.jq" emulation/modal75-picker-trajectories/picker-260.json > "$tmp/picker"
-  "$jq" --arg role "$role" --arg route close-pop -f "$D/value.jq" "$tmp/picker" > "$tmp/value"
+  "$jq" --arg role "$role" --arg route close-pop --arg receipt_source synthetic -f "$D/value.jq" "$tmp/picker" > "$tmp/value"
   "$jq" -e --arg role "$role" '
     ([.before_unload[] | [.phase, .steps]] == [
       ["render-baseline", []], ["package-menu-prefix", []],
@@ -82,11 +82,13 @@ for role in stock owned; do
       ["other-cancel", [["back",1,5,5]]], ["other-reopen", [["ok",1,260,0]]],
       ["other-leave", [["back",1,5,5]]], ["close-menu", [["back",1,5,5,{completion:"presented-frame"}]]]]) and
     ([.trace_sites[] | select(.[0] == "00d51b58") | .[1]] == ["stock-value-size-arm"]) and
-    ([.trace_sites[] | select(.[1] == "owned-value-apply")] | length == (if $role == "owned" then 1 else 0 end))
+    ([.trace_sites[] | select(.[1] == "owned-value-apply")] | length == (if $role == "owned" then 1 else 0 end)) and
+    ([.source_bindings[] | select(.source == "synthetic")] | length == 1)
   ' "$tmp/value" > /dev/null
   "$jq" --arg role "$role" -f "$D/value.jq" "$tmp/picker" > "$tmp/sites"
   "$jq" -e --slurpfile picker "$tmp/picker" '.before_unload == $picker[0].before_unload and ([.trace_sites[] | select(.[0] == "00d51b58")] | length == 1)' "$tmp/sites" > /dev/null
   "$jq" -L "$D" --arg role "$role" -f "$D/picker.jq" emulation/modal75-picker-trajectories/picker-15.json > "$tmp/other"
-  if "$jq" --arg role "$role" --arg route close-pop -f "$D/value.jq" "$tmp/other" > /dev/null 2>&1; then exit 1; fi
+  if "$jq" --arg role "$role" --arg route close-pop --arg receipt_source synthetic -f "$D/value.jq" "$tmp/other" > /dev/null 2>&1; then exit 1; fi
+  if "$jq" --arg role "$role" --arg route close-pop -f "$D/value.jq" "$tmp/picker" > /dev/null 2>&1; then exit 1; fi
 done
 printf 'default trajectory bytes and opt-in render captures pass\n'
