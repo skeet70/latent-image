@@ -2,6 +2,7 @@
 //! for one exposure, builds the evaluation and correction requests, and keeps what the shot reads
 //! back.
 
+pub mod adjustment;
 pub mod context;
 pub mod correction;
 pub mod evaluation;
@@ -15,6 +16,8 @@ pub mod tables;
 
 #[cfg(test)]
 pub mod fakes;
+#[cfg(test)]
+mod adjustment_tests;
 #[cfg(test)]
 mod correction_tests;
 #[cfg(test)]

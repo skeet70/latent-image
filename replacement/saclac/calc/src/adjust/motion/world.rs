@@ -107,6 +107,7 @@ impl CaptureProfiles for MotionWorld {
     fn class_offset(&mut self, class: u8) -> i16 { self.world.class_offset(class) }
     fn offset_class(&mut self, profile: u32) -> u8 { self.world.offset_class(profile) }
     fn sensitivity_class(&mut self, profile: u32) -> u8 { self.world.sensitivity_class(profile) }
+    fn sensitivity_class_for(&mut self, value: u32) -> u8 { self.world.sensitivity_class_for(value) }
     fn configured_level(&mut self) -> u16 { self.world.configured_level() }
     fn configured_profile(&mut self, level: i16) -> u32 { self.world.configured_profile(level) }
     fn record_profile(&mut self) -> u32 { self.world.record_profile() }

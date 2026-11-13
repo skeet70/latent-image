@@ -195,6 +195,8 @@ impl CaptureProfiles for World {
     fn class_offset(&mut self, class: u8) -> i16 { self.class_offsets.get(&class).copied().unwrap_or(0) }
     fn offset_class(&mut self, profile: u32) -> u8 { self.offset_classes.get(&profile).copied().unwrap_or(0) }
     fn sensitivity_class(&mut self, profile: u32) -> u8 { self.sensitivity_classes.get(&profile).copied().unwrap_or(0) }
+    /// A class per ten of the value.
+    fn sensitivity_class_for(&mut self, value: u32) -> u8 { (value / 10) as u8 }
     fn configured_level(&mut self) -> u16 { self.configured_level }
     fn configured_profile(&mut self, level: i16) -> u32 { self.configured_profiles.get(&level).copied().unwrap_or(0) }
     fn record_profile(&mut self) -> u32 { 1 }

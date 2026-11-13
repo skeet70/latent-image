@@ -41,6 +41,8 @@ pub trait CaptureProfiles {
     fn offset_class(&mut self, profile: u32) -> u8;
     /// The profile's sensitivity class (0xef5420).
     fn sensitivity_class(&mut self, profile: u32) -> u8;
+    /// The sensitivity class of a sensitivity value (0xef5384).
+    fn sensitivity_class_for(&mut self, value: u32) -> u8;
     /// The level the configured measurement takes (0xeea030's third output).
     fn configured_level(&mut self) -> u16;
     /// The capture profile of the configured measurement (0xeea094).

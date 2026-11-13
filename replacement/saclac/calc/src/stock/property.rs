@@ -74,6 +74,18 @@ pub const fn area_offset(table: OffsetTable, resource: u32) -> Property {
     Property(base + 2 * resource)
 }
 
+/// Two bytes, signed: the lowest level an adjustment step takes (0xf65aa8).
+pub const ADJUSTMENT_STEP_FLOOR: Property = Property(0x60ff);
+/// Two bytes, signed: the level an adjustment step is raised toward (0xf65ab4).
+pub const ADJUSTMENT_RAISE_TARGET: Property = Property(0x60f5);
+/// The largest raise of an adjustment step, in tenths (0xf65ac0).
+pub const ADJUSTMENT_RAISE_LIMIT: Property = Property(0x60f4);
+/// Two bytes, signed, each: the lowest level of an adjustment step's four upper bands, highest
+/// band first (0xf65ad4..0xf65af8).
+pub const ADJUSTMENT_BANDS: [Property; 4] = [Property(0x60f7), Property(0x60f9), Property(0x60fb), Property(0x60fd)];
+/// The sensitivity value of each band and of the levels below the last (0xf65b04..0xf65b34).
+pub const ADJUSTMENT_SENSITIVITIES: [Property; 5] = [Property(0x6101), Property(0x6102), Property(0x6103), Property(0x6104), Property(0x6105)];
+
 /// Five bytes of scene enable bits, scene flag `n` at bit `n % 8` of byte `n / 8` (0xf6f8a8..0xf6fa40).
 pub const fn scene_mask(byte: u8) -> Property { Property(0x64a3 + byte as u32) }
 

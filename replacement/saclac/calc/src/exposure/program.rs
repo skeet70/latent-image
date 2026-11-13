@@ -82,7 +82,7 @@ pub enum FirstChoice {
 
 /// The highest program profile whose sensitivity class is at most `sensitivity`, else the first
 /// (0xf643a4).
-fn profile_at_sensitivity(ports: &mut impl Ports, sensitivity: u8) -> u32 {
+pub(crate) fn profile_at_sensitivity(ports: &mut impl Ports, sensitivity: u8) -> u32 {
     PROGRAM_PROFILES.iter().rev().copied().find(|profile| ports.sensitivity_class(*profile) <= sensitivity).unwrap_or(PROGRAM_PROFILES[0])
 }
 
