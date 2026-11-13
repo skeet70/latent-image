@@ -384,7 +384,11 @@ impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
             height = TRACKING_MAXIMUM;
         }
         height = height.max(row_step);
-        width = width.max(column_step);
+        // Suspected stock defect, kept (0xedfc80..0xedfc88): a width below the column step
+        // becomes the row step.
+        if width < column_step {
+            width = row_step;
+        }
         top = top.max(margin_top);
         left = left.max(margin_left);
         let bottom = margin_top.wrapping_add(crop.height);

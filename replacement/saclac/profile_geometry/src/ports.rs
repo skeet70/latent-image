@@ -339,8 +339,13 @@ pub struct StatisticsRegion(pub u32);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StatisticsBuffer(pub u32);
 
+/// A word address below 0x100, the live exception vector area.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LowAddress(pub u8);
+
 pub trait StatisticsMemory {
     fn statistics_word(&mut self, buffer: StatisticsBuffer, offset: u32) -> u32;
+    fn low_word(&mut self, address: LowAddress) -> u32;
 }
 
 /// A frame dump buffer in stock memory.

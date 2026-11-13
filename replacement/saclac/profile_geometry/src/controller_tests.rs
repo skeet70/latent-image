@@ -170,6 +170,7 @@ impl Retained for Fake {
 
 impl StatisticsMemory for Fake {
     fn statistics_word(&mut self, buffer: StatisticsBuffer, offset: u32) -> u32 { buffer.0 + offset }
+    fn low_word(&mut self, address: LowAddress) -> u32 { 0x1000 + address.0 as u32 }
 }
 
 impl FrameDumps for Fake {
@@ -548,7 +549,7 @@ fn a_measured_summary_fills_its_record_half_and_the_kept_copy() {
     let half = |at: usize| u16::from_le_bytes([record[at], record[at + 1]]);
     assert_eq!((record[0x284], word(0x288), word(0x2a0), word(0x2a8)), (7, 0, 1, 3));
     assert_eq!((word(0x2bc), word(0x2c0), word(0x2c4)), (0x1_d160, 0, 0x1_d260));
-    assert_eq!((half(0x290), half(0x296), half(0x298)), (0xd10e, 0xd1ce, 0xd12e));
+    assert_eq!((half(0x290), half(0x296), half(0x298)), (0x100e, 0x10ce, 0x102e));
     assert_eq!(half(0x2ac), 0xc40);
     assert_eq!(record[COPY_OFFSET..COPY_OFFSET + HALF_BYTES], record[..HALF_BYTES]);
     assert_eq!(record[HALF_BYTES], 0xaa);

@@ -230,7 +230,13 @@ impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
             ScanSide::Secondary => records::SECONDARY_SCAN,
         };
         let mut second = pair[0] as u16;
-        if (3..=4).contains(&slot) && side == ScanSide::Secondary && second == SECONDARY_SLOT_TOP {
+        // Suspected stock defect, kept (0xede4b8): the check compares the word at +0x16, so it
+        // also needs the previous record's +0x18 to be zero.
+        if (3..=4).contains(&slot)
+            && side == ScanSide::Secondary
+            && second == SECONDARY_SLOT_TOP
+            && self.memory.read_u16(out.plus(0x18)) == 0
+        {
             second = SECONDARY_SLOT_TOP_ADJUSTED;
         }
         self.memory.write_u16(out.plus(0x30), pair[1] as u16);

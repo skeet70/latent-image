@@ -5,7 +5,7 @@
 
 use super::{ProfileGeometry, Tables};
 use crate::memory::Memory;
-use crate::ports::{ConfigOffset, Ports, StatisticsBuffer, StatisticsRegion};
+use crate::ports::{ConfigOffset, LowAddress, Ports, StatisticsBuffer, StatisticsRegion};
 use crate::stock::Parameters;
 
 const QUADRANTS: StatisticsRegion = StatisticsRegion(29);
@@ -96,8 +96,9 @@ impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
                 measured.quadrant_averages = Some([own / count, other / count]);
             }
             if let (Some(buffer), Some(areas), true) = (buffer, areas, summarized) {
-                let blocks = self.ports.statistics_offset(BLOCKS);
-                measured.block_means = Some(self.block_means(buffer, blocks, scaled_area(areas.quadrant)));
+                // Stock asks for the blocks' offset and does not use it (0xee0b08).
+                self.ports.statistics_offset(BLOCKS);
+                measured.block_means = Some(self.block_means(scaled_area(areas.quadrant)));
                 let levels = self.ports.statistics_offset(LEVELS);
                 let divisor = areas.minimum[0].wrapping_mul(areas.minimum[1]) / FIXED_MULTIPLIER as u32;
                 let divisor = (divisor as u16).max(1) as u32;
@@ -125,17 +126,19 @@ impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
         (0..4).fold(0u32, |sum, block| sum.wrapping_add(self.ports.statistics_word(buffer, offset + BLOCK_STRIDE * block)))
     }
 
-    /// The means of each block's first and last eight words, each word divided by `count` before
-    /// it is summed. Stock reads the first eight from the region offset as an address and the
-    /// last eight from address 0x20 on (0xee0b70, 0xee0c34); both are read from the buffer here.
-    fn block_means(&mut self, buffer: StatisticsBuffer, offset: u32, count: u16) -> [u16; 8] {
+    /// The means of four blocks' first and last eight words, each word divided by `count`
+    /// before it is summed.
+    ///
+    /// Suspected stock defect, kept (0xee0b38, 0xee0c08): the blocks are the words at addresses
+    /// 0x00..0xfc, which hold the live exception vector area in 1.50, not the statistics buffer.
+    fn block_means(&mut self, count: u16) -> [u16; 8] {
         let count = count.max(1) as u32;
         let mut means = [0; 8];
         for (half, start) in [0u32, 0x20].into_iter().enumerate() {
             for block in 0..4 {
                 let sum = (0..8).fold(0u32, |sum, word| {
-                    let at = offset + start + BLOCK_STRIDE * block + 4 * word;
-                    sum.wrapping_add(self.ports.statistics_word(buffer, at) / count)
+                    let at = LowAddress((start + BLOCK_STRIDE * block + 4 * word) as u8);
+                    sum.wrapping_add(self.ports.low_word(at) / count)
                 });
                 means[half * 4 + block as usize] = (sum >> 3) as u16;
             }
