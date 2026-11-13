@@ -4,6 +4,7 @@
 pub mod area_measurement;
 pub mod calc;
 pub mod calculation;
+pub mod capture_job;
 pub mod capture_results;
 pub mod exposure;
 pub mod lens;
@@ -500,6 +501,8 @@ mod area_measurement_tests;
 mod calc_tests;
 #[cfg(test)]
 mod calculation_tests;
+#[cfg(test)]
+mod capture_job_tests;
 #[cfg(test)]
 mod capture_results_tests;
 #[cfg(test)]
