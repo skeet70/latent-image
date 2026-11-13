@@ -7,7 +7,7 @@ use super::changes::{Mask, Stage, Subscription, Work};
 use super::{Lifecycle, Operation, OperationState, ProfileGeometry, Refusal, Status, Tables};
 use crate::memory::{Block, Location, Memory};
 use crate::ports::{HandlerUnit, PipelineChannel, Ports, Stages};
-use crate::stock::layout::{self, cleared, controller as field, dump, policy};
+use crate::stock::layout::{self, cleared, controller as field, dump, policy, work};
 
 /// The pipeline channel the second, third and indexed operations and the stage releases name.
 const SHARED_CHANNEL: PipelineChannel = PipelineChannel(2);
@@ -324,6 +324,17 @@ impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
         }
         let accepted = self.ports.disable(self.pipeline_channel(), Stages(stages));
         self.clear_mask(Mask::Disable);
+        if accepted { Ok(()) } else { Err(Refusal::PipelineRefused) }
+    }
+
+    /// 0xee4790.
+    pub(crate) fn send_enable(&mut self) -> Status {
+        let stages = self.mask(Mask::Enable);
+        if stages == 0 {
+            return Ok(());
+        }
+        let accepted = self.ports.enable(self.pipeline_channel(), Stages(stages), work::PAYLOADS);
+        self.clear_mask(Mask::Enable);
         if accepted { Ok(()) } else { Err(Refusal::PipelineRefused) }
     }
 

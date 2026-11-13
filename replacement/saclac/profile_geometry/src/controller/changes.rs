@@ -113,9 +113,19 @@ pub enum Hold {
 }
 
 impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
+    pub(crate) fn requested(&self, work: Work) -> bool {
+        let (at, bit) = changes::work(work);
+        self.memory.read_u8(at) & bit != 0
+    }
+
     pub(crate) fn request(&mut self, work: Work) {
         let (at, bit) = changes::work(work);
         self.memory.set_bits_u8(at, bit);
+    }
+
+    pub(crate) fn clear_request(&mut self, work: Work) {
+        let (at, bit) = changes::work(work);
+        self.memory.clear_bits_u8(at, bit);
     }
 
     pub(crate) fn claimed(&self, stage: Stage) -> bool {
@@ -133,6 +143,11 @@ impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
         self.memory.read_u8(at) & bit != 0
     }
 
+    pub(crate) fn held(&self, hold: Hold) -> bool {
+        let (held, released, bit) = changes::hold(hold);
+        self.memory.read_u8(held) & bit != 0 && self.memory.read_u8(released) & bit == 0
+    }
+
     pub(crate) fn subscribed(&self, subscription: Subscription) -> bool {
         self.memory.read_u32(requests::subscription(subscription)) == 1
     }
@@ -146,6 +161,13 @@ impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
     pub(crate) fn add_to_mask(&mut self, mask: Mask, bits: u32) { self.memory.set_bits_u32(work::mask(mask), bits) }
 
     pub(crate) fn clear_mask(&mut self, mask: Mask) { self.memory.write_u32(work::mask(mask), 0) }
+
+    /// Asks the pipeline to enable `stage` and marks it pending.
+    pub(crate) fn enable(&mut self, stage: Stage) {
+        self.add_to_mask(Mask::Enable, stage.pipeline_bit());
+        let (at, bit) = changes::pending(stage);
+        self.memory.set_bits_u8(at, bit);
+    }
 
     /// Asks the pipeline to disable `stage` and clears its pending mark.
     pub(crate) fn finish(&mut self, stage: Stage) {

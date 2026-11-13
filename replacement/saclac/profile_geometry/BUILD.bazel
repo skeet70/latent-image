@@ -4,8 +4,17 @@ package(default_visibility = ["//visibility:public"])
 
 _SOURCES = [
     "src/controller/changes.rs",
+    "src/controller/crop.rs",
     "src/controller/lifecycle.rs",
     "src/controller/mod.rs",
+    "src/controller/operations.rs",
+    "src/controller/payloads.rs",
+    "src/controller/rectangles.rs",
+    "src/controller/refresh.rs",
+    "src/controller/scan.rs",
+    "src/controller/scan_geometry.rs",
+    "src/controller/stages.rs",
+    "src/controller/windows.rs",
     "src/diagnostics.rs",
     "src/memory.rs",
     "src/numeric.rs",

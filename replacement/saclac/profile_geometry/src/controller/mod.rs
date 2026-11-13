@@ -4,7 +4,16 @@
 //! and the parameter refresh that keeps their pipeline configuration current.
 
 pub mod changes;
+pub mod crop;
 pub mod lifecycle;
+pub mod operations;
+pub mod payloads;
+pub mod rectangles;
+pub mod refresh;
+pub mod scan;
+pub mod scan_geometry;
+pub mod stages;
+pub mod windows;
 
 use crate::memory::Memory;
 use crate::numeric::FractionTables;

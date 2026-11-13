@@ -111,6 +111,38 @@ pub mod controller {
     pub const REMAINDER_GEOMETRY: Location = at(Controller, 0xad4);
     pub const INITIALIZED_CLEARED: Location = at(Controller, 0xae4);
     pub const SCAN_OPTION: Location = at(Controller, 0xae8);
+    /// The crop alignment mode the primary operation's starter stores.
+    pub const CROP_MODE: Location = at(Controller, 0xb0);
+
+    /// The crop the primary operation's starter stores, which the refresh aligns in place.
+    pub mod crop {
+        use super::at;
+        use crate::memory::{Block::Controller, Location};
+
+        pub const TOP: Location = at(Controller, 0xbc);
+        pub const LEFT: Location = at(Controller, 0xc0);
+        pub const WIDTH: Location = at(Controller, 0xc4);
+        pub const HEIGHT: Location = at(Controller, 0xc8);
+        /// The colour-pattern phase of the aligned top and left.
+        pub const PHASE: [Location; 2] = [at(Controller, 0xd0), at(Controller, 0xd1)];
+        /// What aligning the top to the magnification removed.
+        pub const TOP_EXCESS: Location = at(Controller, 0xd4);
+        pub const FORMAT: Location = at(Controller, 0xdc);
+        pub const SCALE_MODE: Location = at(Controller, 0xe0);
+    }
+
+    /// The third operation's starter fields each record grid is computed from.
+    pub mod grids {
+        use super::at;
+        use crate::memory::{Block::Controller, Location};
+
+        pub const COMPACT: Location = at(Controller, 0x508);
+        pub const EXTENDED: Location = at(Controller, 0x514);
+        pub const RECORD: Location = at(Controller, 0x558);
+    }
+
+    /// The indexed operation's window: top, height, left and width.
+    pub const INDEXED_PAIR: Location = at(Controller, 0x6c4);
 }
 
 pub mod changes {
@@ -228,12 +260,79 @@ pub mod work {
         })
     }
 
+    /// The geometry records the geometry mask names; the crop record is first.
+    pub const GEOMETRY_RECORDS: Location = at(Work, 0x20);
+    /// Zeroed by a pending-pair reset.
+    pub const PENDING_PAIR: [Location; 2] = [at(Work, 0xb0), at(Work, 0xb2)];
     /// The payloads the enable and apply masks name.
     pub const PAYLOADS: Location = at(Work, 0x370);
+    pub const SECONDARY_PAYLOAD_OFFSET: Location = at(Work, 0x3ae);
+    /// Payload origins the alternate geometry moves by its offset pair, by apply stage.
+    pub const OFFSET_PAYLOADS: [(u32, (Location, Location)); 3] = [
+        (0x20, (at(Work, 0x5c8), at(Work, 0x5ca))),
+        (0x40, (at(Work, 0x3b4), at(Work, 0x3b6))),
+        (0x80, (at(Work, 0x3b8), at(Work, 0x3ba))),
+    ];
+    /// Payload origins the alternate geometry moves by twice its offset pair.
+    pub const DOUBLED_OFFSET_PAYLOADS: [(u32, (Location, Location)); 2] =
+        [(0x100, (at(Work, 0x4a8), at(Work, 0x4ac))), (0x200, (at(Work, 0x538), at(Work, 0x53c)))];
+    /// Set to 1 when the pipeline accepts an apply naming the stage.
+    pub const APPLIED: [(u32, Location); 3] = [(0x80, at(Work, 0x3f4)), (0x20, at(Work, 0x600)), (0x4, at(Work, 0x3a4))];
+    pub const MODE_PAYLOADS: Location = at(Work, 0x3b4);
+    pub const SECOND_MODE_CLEARED: [Location; 2] = [at(Work, 0x3ec), at(Work, 0x3f0)];
+    pub const QUAD_SELECTION: Location = at(Work, 0x3f8);
+    /// Top, left, height and width of the area quad selection.
+    pub const QUAD_AREA: [Location; 4] = [at(Work, 0x3fc), at(Work, 0x3fe), at(Work, 0x400), at(Work, 0x402)];
+    pub const QUAD_AREA_SCALE: Location = at(Work, 0x404);
+    pub const QUAD_AREA_LIMIT: Location = at(Work, 0x408);
     /// The four values the quad selection keeps (0xee6414).
     pub const QUAD_GAINS: [Location; 4] = [at(Work, 0x40a), at(Work, 0x40c), at(Work, 0x40e), at(Work, 0x410)];
+    pub const TERTIARY_PAYLOAD: Location = at(Work, 0x5c4);
+    pub const TERTIARY_CLEARED: [Location; 2] = [at(Work, 0x5fc), at(Work, 0x5f8)];
     /// The adjusted triplet the refresh keeps (0xee13e0, 0xee20a0).
     pub const WHITE_BALANCE: [Location; 3] = [at(Work, 0x648), at(Work, 0x64a), at(Work, 0x64c)];
+    /// 1 after the scan configuration was rebuilt, until the policy stages are restored.
+    pub const SCAN_REBUILT: Location = at(Work, 0x650);
+
+    /// The geometry records each geometry stage sends.
+    pub mod records {
+        use super::at;
+        use crate::memory::{Block::Work, Location};
+
+        pub const PRIMARY_SCAN: Location = at(Work, 0x28);
+        pub const SECONDARY_SCAN: Location = at(Work, 0x60);
+        pub const COMPACT_GRID: Location = at(Work, 0xb4);
+        pub const EXTENDED_GRID: Location = at(Work, 0x114);
+        pub const RECORD_GRID: Location = at(Work, 0x174);
+        /// A plain, a row-banded and a column-banded rectangle.
+        pub const RECTANGLE_SET: Location = at(Work, 0x184);
+        pub const INDEXED_PAIR: Location = at(Work, 0x1a0);
+    }
+
+    /// The scan stages' radial tables: gains, the scan record's count and base, bounds, scales
+    /// and 31 points.
+    pub mod scan_geometry {
+        use super::at;
+        use crate::memory::{Block::Work, Location};
+
+        pub const fn base(secondary: bool) -> Location { at(Work, if secondary { 0x534 } else { 0x4a4 }) }
+    }
+
+    /// The primary and secondary payloads within the payload table.
+    pub mod payloads {
+        use super::at;
+        use crate::memory::{Block::Work, Location};
+
+        pub const PRIMARY_ENTRIES: Location = at(Work, 0x388);
+        pub const PRIMARY_COUNT: Location = at(Work, 0x38c);
+        pub const PRIMARY_OFFSETS: [Location; 2] = [at(Work, 0x38e), at(Work, 0x390)];
+        pub const PRIMARY_UPDATED: Location = at(Work, 0x394);
+        pub const PRIMARY_UPDATE_CLEARED: Location = at(Work, 0x398);
+        pub const PRIMARY_OPTION: Location = at(Work, 0x3a0);
+        pub const SECONDARY_VALUE: Location = at(Work, 0x3a8);
+        pub const SECONDARY_PAIR: [Location; 2] = [at(Work, 0x3ac), at(Work, 0x3ae)];
+        pub const SECONDARY_EXTRA: Location = at(Work, 0x3b0);
+    }
 }
 
 pub mod parameters {
@@ -264,6 +363,7 @@ pub mod parameters {
 
 pub mod status {
     use super::at;
+    use crate::controller::refresh::StatusEffect::{self, Plain, ScanConfiguration};
     use crate::memory::{Block::Status, Location};
 
     pub const AREA: Location = at(Status, 0x0);
@@ -281,6 +381,39 @@ pub mod status {
     pub const RATE: Location = at(Status, 0xa2);
     pub const SCAN_INDEX: Location = at(Status, 0xc0);
     pub const SCAN_LIMIT: Location = at(Status, 0xc4);
+
+    /// The single fields the snapshot refresh copies (0xee1d94..0xee2aa8), in its order.
+    pub const FIELDS: [(u16, u8, StatusEffect); 29] = [
+        (0x0c, 4, Plain),
+        (0x10, 4, ScanConfiguration),
+        (0xc4, 2, Plain),
+        (0x14, 4, ScanConfiguration),
+        (0x18, 4, ScanConfiguration),
+        (0x44, 4, ScanConfiguration),
+        (0x74, 4, ScanConfiguration),
+        (0x48, 4, ScanConfiguration),
+        (0x4c, 4, Plain),
+        (0x50, 4, Plain),
+        (0x5c, 4, ScanConfiguration),
+        (0x60, 4, Plain),
+        (0x64, 4, ScanConfiguration),
+        (0x68, 4, ScanConfiguration),
+        (0x6c, 4, ScanConfiguration),
+        (0x70, 1, ScanConfiguration),
+        (0x78, 2, ScanConfiguration),
+        (0x9c, 4, ScanConfiguration),
+        (0x54, 4, ScanConfiguration),
+        (0xa0, 1, Plain),
+        (0xa2, 2, StatusEffect::Rate),
+        (0xa4, 4, ScanConfiguration),
+        (0xa8, 4, ScanConfiguration),
+        (0xac, 4, ScanConfiguration),
+        (0xb0, 4, ScanConfiguration),
+        (0xbc, 1, ScanConfiguration),
+        (0xb4, 4, ScanConfiguration),
+        (0xb8, 4, ScanConfiguration),
+        (0xc0, 4, Plain),
+    ];
 }
 
 pub mod counters {
@@ -318,6 +451,32 @@ pub mod policy {
     /// The configuration handed to the pipeline; its first word is zero while none is held.
     pub const CONFIGURATION: Location = at(Policy, 0x258);
     pub const CONFIGURATION_BYTES: u16 = 0x1260;
+    /// The stages the scan configuration hands back once rebuilt.
+    pub const RESTORED_STAGES: Location = at(Policy, 0x160);
+    /// The scan slot the last scan record was computed for.
+    pub const SLOT: Location = at(Policy, 0x0);
+    /// The status pair each scan record was computed from, primary then secondary.
+    pub const SCAN_PAIRS: [Location; 2] = [at(Policy, 0x4), at(Policy, 0xc)];
+    pub const LAYOUT: Location = at(Policy, 0x1284);
+    /// Cleared by every scan record.
+    pub const SCAN_CLEARED: Location = at(Policy, 0x14b8);
+    pub const SCAN_CLEARED_HALF: Location = at(Policy, 0x14c0);
+}
+
+pub mod selection {
+    use super::at;
+    use crate::memory::{Block::Selection, Location};
+
+    /// The callbacks the scan configuration copies into its compiled form.
+    pub const BLOCK: Location = at(Selection, 0x0);
+}
+
+pub mod callbacks {
+    use super::at;
+    use crate::memory::{Block::OperationCallbacks, Location};
+
+    /// 1 while operation callbacks are enabled (0xeef1c0).
+    pub const ENABLED: Location = at(OperationCallbacks, 0x0);
 }
 
 pub mod diagnostics {

@@ -67,6 +67,43 @@ pub struct ExpansionRatio {
     pub divisor: u8,
 }
 
+/// A profile's pipeline group (0xed7db0); 14 outside the row table.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PipelineGroup(pub u32);
+
+impl PipelineGroup {
+    /// The group with no mode or tertiary payloads.
+    pub const NONE: Self = Self(14);
+}
+
+/// A profile's quad selection group (0xed7d84); 3 outside the row table.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QuadGroup(pub u32);
+
+impl QuadGroup {
+    /// The group with no quad selection.
+    pub const NONE: Self = Self(3);
+}
+
+/// A profile's row in the image's pipeline table.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProfileRow {
+    /// Selects the rectangle configuration row; 16 and 17 have none (0xed7d64).
+    pub rectangle_row: u32,
+    pub pipeline_group: PipelineGroup,
+    /// 0xed7ddc; 1 outside the table.
+    pub policy: u32,
+    pub quad_group: QuadGroup,
+}
+
+/// The three rectangle configurations a profile's rectangle row selects.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RectangleKind {
+    Plain,
+    Rows,
+    Columns,
+}
+
 pub trait ProfileTables {
     fn entry(&self, profile: ProfileHandle) -> ProfileEntry;
     fn class(&self, class: ClassIndex) -> GeometryClass;
@@ -79,7 +116,29 @@ pub trait ProfileTables {
     /// The configuration offsets of a feature's two triplet scales, zero for none; `row` is
     /// three per feature plus the profile's column.
     fn feature_scale_offsets(&self, row: u32) -> [u32; 2];
+    /// `index` is below 36.
+    fn row(&self, index: u32) -> ProfileRow;
+    /// `index` is below 2.
+    fn aspect_value(&self, index: u8) -> i16;
+    /// The configuration offsets of a rectangle's four values, zero for 1; `row` is below 16.
+    fn rectangle_configuration(&self, kind: RectangleKind, row: u32) -> [u32; 4];
+    /// `slot` is below 10.
+    fn scan_slot(&self, slot: u32) -> ScanSlot;
+    /// A status code and its pipeline code; `index` is below 62.
+    fn record_code(&self, index: u32) -> [u16; 2];
 }
+
+/// A row of the image's scan slot table, which a profile's kind and class select.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ScanSlot {
+    pub margin: u16,
+    pub base: u16,
+    pub divisor: u16,
+    pub height: u16,
+    pub width: u16,
+}
+
+const PROFILE_ROWS: u32 = 36;
 
 const THRESHOLDS: u8 = 22;
 
@@ -183,17 +242,54 @@ impl<T: ProfileTables> Profiles<T> {
     /// 0xef59c0.
     pub fn second_scale(&self, profile: ProfileHandle) -> u8 { self.class_of(profile).second_scale }
 
-    fn first_multiplier(&self, profile: ProfileHandle) -> u32 {
-        let class = self.class_of(profile);
-        match (class.first_flag, class.scale_selection) {
-            (0, 1) => 2,
-            (0, 2) => 4,
-            (0, _) => 1,
-            _ => 2,
+    /// 0xef52b8.
+    pub fn selection_multiplier(&self, profile: ProfileHandle) -> u32 {
+        match self.class_of(profile).scale_selection {
+            1 => 2,
+            2 => 4,
+            _ => 1,
         }
     }
 
-    fn second_multiplier(&self, profile: ProfileHandle) -> u32 { if self.class_of(profile).second_flag != 0 { 2 } else { 1 } }
+    /// 0xef5a8c.
+    pub fn first_multiplier(&self, profile: ProfileHandle) -> u32 {
+        if self.class_of(profile).first_flag != 0 { 2 } else { self.selection_multiplier(profile) }
+    }
+
+    /// 0xef5ca8.
+    pub fn second_multiplier(&self, profile: ProfileHandle) -> u32 {
+        if self.class_of(profile).second_flag != 0 { 2 } else { 1 }
+    }
+
+    pub fn row(&self, profile: ProfileHandle) -> Option<ProfileRow> {
+        (profile.0 < PROFILE_ROWS).then(|| self.tables.row(profile.0))
+    }
+
+    /// 0xed7db0.
+    pub fn pipeline_group(&self, profile: ProfileHandle) -> PipelineGroup {
+        self.row(profile).map_or(PipelineGroup::NONE, |row| row.pipeline_group)
+    }
+
+    /// 0xed7d84.
+    pub fn quad_group(&self, profile: ProfileHandle) -> QuadGroup {
+        self.row(profile).map_or(QuadGroup::NONE, |row| row.quad_group)
+    }
+
+    /// 0xed7ddc.
+    pub fn policy(&self, profile: ProfileHandle) -> u32 { self.row(profile).map_or(1, |row| row.policy) }
+
+    /// The configuration offsets of the profile's `kind` rectangle, or `None` for a profile whose
+    /// rectangles are all ones (0xee7c98).
+    pub fn rectangle_configuration(&self, profile: ProfileHandle, kind: RectangleKind) -> Option<[u32; 4]> {
+        let row = self.row(profile)?.rectangle_row;
+        (row < 16).then(|| self.tables.rectangle_configuration(kind, row))
+    }
+
+    /// 0xef5310.
+    pub fn aspect_value(&self, profile: ProfileHandle) -> i16 {
+        let index = self.aspect_index(profile);
+        self.tables.aspect_value(if index > 1 { 0 } else { index })
+    }
 
     /// 0xef5ab8.
     pub fn scaled_first(&self, profile: ProfileHandle, multiplied: bool) -> u16 {

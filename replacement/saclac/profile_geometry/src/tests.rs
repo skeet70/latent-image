@@ -1,7 +1,7 @@
 use crate::numeric::{self, FloatLog, FractionTables};
 use crate::profile::{
-    is_paired_mode, normalize_selector, ClassIndex, ExpansionRatio, GeometryClass, ProfileEntry, ProfileHandle, ProfileKind,
-    ProfileTables, Profiles, Rectangle, ScalePair,
+    is_paired_mode, normalize_selector, ClassIndex, ExpansionRatio, GeometryClass, PipelineGroup, ProfileEntry, ProfileHandle,
+    ProfileKind, ProfileRow, ProfileTables, Profiles, QuadGroup, Rectangle, RectangleKind, ScalePair, ScanSlot,
 };
 use crate::stock::records::{Parameters, StatusSnapshot};
 use crate::stock::tables::{parse_class, parse_entry, parse_expansion, CLASS_BYTES, ENTRY_BYTES};
@@ -114,6 +114,13 @@ impl ProfileTables for Tables {
     fn expansion(&self) -> ExpansionRatio { ExpansionRatio { numerator: 5, divisor: 9 } }
     fn curve_knot(&self, index: usize) -> i16 { 1000 + 50 * index as i16 }
     fn feature_scale_offsets(&self, _: u32) -> [u32; 2] { [0, 0] }
+    fn row(&self, index: u32) -> ProfileRow {
+        ProfileRow { rectangle_row: index % 16, pipeline_group: PipelineGroup(index), policy: 1, quad_group: QuadGroup(index % 4) }
+    }
+    fn aspect_value(&self, index: u8) -> i16 { [0, 100][index as usize] }
+    fn rectangle_configuration(&self, _: RectangleKind, _: u32) -> [u32; 4] { [0; 4] }
+    fn scan_slot(&self, _: u32) -> ScanSlot { ScanSlot::default() }
+    fn record_code(&self, index: u32) -> [u16; 2] { [index as u16; 2] }
 }
 
 fn entry(class: u32, kind: u8) -> ProfileEntry {
