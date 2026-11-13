@@ -1,69 +1,15 @@
 use xm1_saclac_interface::calc::SharedAddress;
 
 use crate::adjust::motion::exposure::{ExposureInputs, FrameExposure, Program, ProgramKind, ProgramStep, PROGRAM_STEPS};
-use crate::adjust::motion::readings::{FocusRequest, RecordReadings, StepLimits};
-use crate::adjust::motion::world::MotionWorld;
-use crate::exposure::fakes::handle;
+use crate::adjust::motion::readings::{RecordReadings, StepLimits};
+use crate::adjust::motion::world::{blank_readings, MotionWorld};
 use crate::stock::motion::{self as stock};
 use crate::stock::property;
 
 const LENS: u32 = 7;
 const RESULTS: SharedAddress = SharedAddress(0x5000_0000);
 
-fn readings() -> RecordReadings {
-    RecordReadings {
-        record: handle(),
-        measurement_selection: Default::default(),
-        scene: 0,
-        channel: 0,
-        style: 0,
-        at_0043: 0,
-        class: 0,
-        policy: 0,
-        lens: LENS,
-        limit_word: 0,
-        level_step: 0,
-        at_0035: 0,
-        at_0036: 0,
-        at_0038: 0,
-        at_20cc: 0,
-        at_20c8: 0,
-        at_20d0: 0,
-        locked: 0,
-        row_scale: [0; 2],
-        selection_value: 0,
-        at_0164: 0,
-        at_0168: 0,
-        request: FocusRequest::default(),
-        confirmation: [0; 8],
-        area: Default::default(),
-        at_0028: 0,
-        levels: [0; 5],
-        at_00a4: 0,
-        at_00b8: 0,
-        measured_level: 0,
-        load_test: false,
-        at_005f: 0,
-        at_005b: 0,
-        compares_subjects: 0,
-        area_positions: [0; 10],
-        armed: 0,
-        auxiliary: 0,
-        area_words: [0; 2],
-        drive_kind: Default::default(),
-        reference: 0,
-        at_004e: 0,
-        at_003c: 0,
-        priority: 0,
-        at_0039: 0,
-        at_003a: 0,
-        at_003b: 0,
-        designation: [0; 7],
-        at_0194: (0, 0),
-        record_3e: 0,
-        lens_state: 0,
-    }
-}
+fn readings() -> RecordReadings { blank_readings(LENS) }
 
 fn frame(world: &mut MotionWorld, program: &mut Program, level: i16, change: i16) -> FrameExposure {
     let readings = readings();

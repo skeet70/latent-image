@@ -36,7 +36,7 @@ pub struct SpeedStep {
 impl MotionState {
     /// The lens position `frame` frame periods into the run (0xfa30c0).
     pub fn position_at_frame(&self, frame: u32) -> i16 {
-        let time = self.timing.frame_period.wrapping_mul(frame) as i32;
+        let time = self.frame_period().wrapping_mul(frame) as i32;
         self.drive.profile.position_at(time.wrapping_sub(self.drive.start_time))
     }
 
@@ -97,14 +97,14 @@ impl MotionState {
             Some(measured) if measured != 0 => measured,
             _ => in_force.speed,
         };
-        let planning = self.drive.profile.plan(speed, self.drive_kind, ports);
+        let planning = self.drive.profile.plan(speed, self.readings.drive_kind, ports);
         planning.trace(self.drive.start_time, self.section, ports);
         if positions.len() > 2 {
             let last = positions.len() - 1;
             if let Some(moved) = (1..last).find(|&index| positions[index] != positions[0]) {
                 let elapsed = self.drive.profile.time_to(positions[moved]);
                 let frames = moved as u32 + u32::from(self.drive.first_frame);
-                self.drive.start_time = self.timing.frame_period.wrapping_mul(frames).wrapping_sub(elapsed) as i32;
+                self.drive.start_time = self.frame_period().wrapping_mul(frames).wrapping_sub(elapsed) as i32;
             }
         }
         ports.write_u32(trace::drive_planning(self.section, 0), self.drive.start_time as u32);
@@ -170,7 +170,7 @@ impl MotionState {
             return None;
         }
         let distance = (at(end) - at(turn)).unsigned_abs();
-        let duration = self.timing.frame_period.wrapping_mul(span as u32);
+        let duration = self.frame_period().wrapping_mul(span as u32);
         Some(quotient(u64::from(distance) * 1_000_000, u64::from(duration)) as u32)
     }
 }

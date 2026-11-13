@@ -3,10 +3,10 @@ use std::vec::Vec;
 use xm1_saclac_interface::calc::SharedAddress;
 
 use crate::adjust::motion::drive::{DriveKind, DriveMode, DriveProfile, Ramp};
-use crate::adjust::motion::ports::Ticks;
 use crate::adjust::motion::fakes::Bench;
 use crate::adjust::motion::sampling::*;
-use crate::adjust::motion::state::{AreaLayout, Drive, MotionState, SampleSchedule, Timing};
+use crate::adjust::motion::state::{AreaLayout, Drive, MotionState, SampleSchedule};
+use crate::adjust::motion::world::blank_state;
 use crate::stock::motion::{self as trace, MEASURED_RUN_FRAMES, SAMPLE_CORRECTION_BASE, SAMPLE_CORRECTION_BIAS, SAMPLE_CORRECTION_SCALE, TERMINATOR};
 
 const SECTION: SharedAddress = SharedAddress(0x1000_0000);
@@ -26,15 +26,9 @@ fn cruise(start: i16, end: i16) -> DriveProfile {
 }
 
 fn state(profile: DriveProfile, layout: AreaLayout, sampling: SampleSchedule) -> MotionState {
-    MotionState {
-        section: SECTION,
-        results: SharedAddress(0x2000_0000),
-        prepared_at: Ticks(0),
-        drive_kind: DriveKind(7),
-        timing: Timing { frame_period: 10_000 },
-        sampling,
-        drive: Drive { moving: true, profile, layout, ..Drive::default() },
-    }
+    let mut state = blank_state(SECTION, SharedAddress(0x2000_0000), 10_000);
+    state.readings.drive_kind = DriveKind(7);
+    MotionState { sampling, drive: Drive { moving: true, profile, layout, ..Drive::default() }, ..state }
 }
 
 fn corrections() -> Bench {

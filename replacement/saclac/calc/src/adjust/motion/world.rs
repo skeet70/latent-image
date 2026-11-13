@@ -2,17 +2,29 @@
 //! calibration, image 6's exposure services, the capture frames and the level scale, by table.
 
 use std::collections::BTreeMap;
+use std::vec::Vec;
 
 use xm1_saclac_interface::calc::SharedAddress;
 use xm1_saclac_interface::RecordHandle;
 use xm1_saclac_profile_records::Bytes;
 
+use crate::adjust::lens::{BiasTable, LensConfiguration};
+use crate::adjust::metering::MeteringTables;
 use crate::adjust::motion::drive::{DriveKind, DriveMode, DriveSpeed};
-use crate::adjust::motion::ports::{ExposureTimes, GridArea, LensCalibration, LensTables, MeasurementReadings, ProfileGains};
-use crate::adjust::motion::preparation::{CaptureFrames, FrameSize, LensStatus};
-use crate::adjust::motion::readings::{AreaList, SelectionLists, AREA_POSITIONS};
-use crate::adjust::timing::LevelScale;
-use crate::exposure::fakes::{Headers, World};
+use crate::adjust::motion::exposure::{FrameExposure, ProgramStep, PROGRAM_STEPS};
+use crate::adjust::motion::plan::Plan;
+use crate::adjust::motion::ports::{
+    AreaGrid, BoundsQuery, ChannelRates, Clock, ExposureTimes, FrameGeometry, GridArea, LensBounds, LensCalibration, LensTables, Logarithms10, MeasurementReadings,
+    ProfileGains, SearchBounds, SearchFrameRequest, StatisticsFrameRequest, Ticks,
+};
+use crate::adjust::motion::preparation::{CaptureFrames, FrameSize, LensStatus, PreviousFocus};
+use crate::adjust::motion::readings::{AreaList, FocusRequest, RecordReadings, SelectionLists, StepLimits, AREA_POSITIONS};
+use crate::adjust::motion::search::SearchSetup;
+use crate::adjust::motion::state::{Drive, FrameExposures, MotionState, SampleSchedule};
+use crate::adjust::motion::statistics::Statistics;
+use crate::adjust::peak::Logarithms;
+use crate::adjust::timing::{CaptureTiming, LevelScale};
+use crate::exposure::fakes::{handle, Headers, World};
 use crate::exposure::ports::{CaptureProfiles, Lens, ProfileAccess, Properties, Property, StockMemory};
 use crate::profile::Profile;
 
@@ -35,6 +47,18 @@ pub struct MotionWorld {
     pub selection_value: u32,
     pub control_state: u32,
     pub frames: BTreeMap<u32, FrameSize>,
+    /// Bounds by channel for every other query; each query is kept.
+    pub bounds: BTreeMap<u8, SearchBounds>,
+    pub bounds_queries: Vec<BoundsQuery>,
+    pub search_frames: [AreaGrid; 2],
+    pub search_frame_requests: Vec<SearchFrameRequest>,
+    pub statistics_frame: [u32; 2],
+    pub feature_classes: BTreeMap<u32, u8>,
+    pub channel_rates: BTreeMap<(u32, u8), u32>,
+    pub line_periods: BTreeMap<u32, u32>,
+    pub channel_weights: [u16; 3],
+    pub feature_bytes: [u8; 2],
+    pub now: u32,
 }
 
 impl Default for MotionWorld {
@@ -56,6 +80,17 @@ impl Default for MotionWorld {
             selection_value: 0,
             control_state: 0,
             frames: BTreeMap::new(),
+            bounds: BTreeMap::new(),
+            bounds_queries: Vec::new(),
+            search_frames: [AreaGrid::default(); 2],
+            search_frame_requests: Vec::new(),
+            statistics_frame: [0; 2],
+            feature_classes: BTreeMap::new(),
+            channel_rates: BTreeMap::new(),
+            line_periods: BTreeMap::new(),
+            channel_weights: [0; 3],
+            feature_bytes: [0; 2],
+            now: 0,
         }
     }
 }
@@ -64,6 +99,97 @@ impl MotionWorld {
     pub fn property(&mut self, id: Property, value: u32) { self.world.property(id, value) }
 
     pub fn property_word(&mut self, id: Property, value: u16) { self.world.property_word(id, value) }
+}
+
+/// Readings of a record whose every value is zero, for `lens`.
+pub fn blank_readings(lens: u32) -> RecordReadings {
+    RecordReadings {
+        record: handle(),
+        measurement_selection: Default::default(),
+        scene: 0,
+        channel: 0,
+        style: 0,
+        at_0043: 0,
+        class: 0,
+        policy: 0,
+        lens,
+        limit_word: 0,
+        level_step: 0,
+        at_0035: 0,
+        at_0036: 0,
+        at_0038: 0,
+        at_20cc: 0,
+        at_20c8: 0,
+        at_20d0: 0,
+        locked: 0,
+        row_scale: [0; 2],
+        selection_value: 0,
+        at_0164: 0,
+        at_0168: 0,
+        request: FocusRequest::default(),
+        confirmation: [0; 8],
+        area: Default::default(),
+        at_0028: 0,
+        levels: [0; 5],
+        at_00a4: 0,
+        at_00b8: 0,
+        measured_level: 0,
+        load_test: false,
+        at_005f: 0,
+        at_005b: 0,
+        compares_subjects: 0,
+        area_positions: [0; 10],
+        armed: 0,
+        auxiliary: 0,
+        area_words: [0; 2],
+        drive_kind: Default::default(),
+        reference: 0,
+        at_004e: 0,
+        at_003c: 0,
+        priority: 0,
+        at_0039: 0,
+        at_003a: 0,
+        at_003b: 0,
+        designation: [0; 7],
+        at_0194: (0, 0),
+        record_3e: 0,
+        lens_state: 0,
+    }
+}
+
+/// A prepared state of a blank record whose frame exposures last `frame_period`.
+pub fn blank_state(section: SharedAddress, results: SharedAddress, frame_period: u32) -> MotionState {
+    let second = FrameExposure { time: frame_period, ..FrameExposure::default() };
+    MotionState {
+        section,
+        results,
+        prepared_at: Ticks(0),
+        readings: blank_readings(0),
+        limits: StepLimits::default(),
+        search: SearchSetup::default(),
+        areas: AreaList::default(),
+        exposures: FrameExposures { first: FrameExposure::default(), second },
+        program: [ProgramStep::default(); PROGRAM_STEPS],
+        previous: PreviousFocus::default(),
+        bounds: SearchBounds::default(),
+        statistics: Statistics {
+            cell_size: [0; 2],
+            trace: section,
+            rates: [0; 4],
+            channel_scales: [0; 3],
+            channel_weights: [0; 3],
+            exposure_offset: 0,
+            level_bounds: [0; 2],
+            curve_table: Property(0),
+            class: 0,
+            area: GridArea::default(),
+            buffers: [section; 5],
+        },
+        treated_settings: [0; 4],
+        plan: Plan::default(),
+        sampling: SampleSchedule::default(),
+        drive: Drive::default(),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -171,4 +297,63 @@ impl CaptureFrames for MotionWorld {
 impl MeasurementReadings for MotionWorld {
     fn selected_area(&mut self, _record: RecordHandle) -> GridArea { self.selected_area }
     fn selection_value(&mut self, _record: RecordHandle, _lens: u32) -> u32 { self.selection_value }
+}
+
+impl LensConfiguration for MotionWorld {
+    fn channel_value(&mut self, channel: i32) -> u32 { self.world.channel_value(channel) }
+    fn channel_curve(&mut self, channel: i32) -> u32 { self.world.channel_curve(channel) }
+    fn bias(&mut self, resource: i32, table: BiasTable) -> i16 { self.world.bias(resource, table) }
+    fn biased_position(&mut self, resource: i32, table: BiasTable) -> i16 { self.world.biased_position(resource, table) }
+    fn resource_count(&mut self) -> u8 { self.world.resource_count() }
+    fn selection_word(&mut self, channel: i32, flags: u32, offset: i16) -> u32 { self.world.selection_word(channel, flags, offset) }
+    fn remap(&mut self, word: u32, channel: i32, mode: u32) -> i32 { self.world.remap(word, channel, mode) }
+    fn position_limits(&mut self, key: u32) -> [i16; 2] { self.world.position_limits(key) }
+    fn mapped_value(&mut self, key: u32) -> u32 { self.world.mapped_value(key) }
+}
+
+impl LensBounds for MotionWorld {
+    fn search_bounds(&mut self, query: &BoundsQuery) -> SearchBounds {
+        self.bounds_queries.push(*query);
+        self.bounds.get(&query.channel).copied().unwrap_or_default()
+    }
+}
+
+impl Logarithms10 for MotionWorld {
+    fn log10(&mut self, value: f32) -> f32 { value.log10() }
+}
+
+impl FrameGeometry for MotionWorld {
+    fn search_frames(&mut self, request: &SearchFrameRequest) -> [AreaGrid; 2] {
+        self.search_frame_requests.push(*request);
+        self.search_frames
+    }
+    fn statistics_frame(&mut self, _request: &StatisticsFrameRequest) -> [u32; 2] { self.statistics_frame }
+    /// Doubles the value.
+    fn expanded_ratio(&mut self, value: u32) -> u32 { value * 2 }
+    fn feature_class(&mut self, profile: u32) -> u8 { self.feature_classes.get(&profile).copied().unwrap_or(0) }
+}
+
+impl ChannelRates for MotionWorld {
+    fn channel_rate(&mut self, lens: u32, channel: u8) -> u32 { self.channel_rates.get(&(lens, channel)).copied().unwrap_or(0) }
+}
+
+/// The floor of a hundred times the binary logarithm.
+impl Logarithms for MotionWorld {
+    fn centi_log2(&mut self, value: u64) -> Option<u32> { (value != 0).then(|| (100.0 * (value as f64).log2()).floor() as u32) }
+}
+
+impl CaptureTiming for MotionWorld {
+    fn readout_start(&mut self, _source: u32) -> u32 { 0 }
+    fn reference_line(&mut self, _source: u32) -> u16 { 0 }
+    fn line_period(&mut self, source: u32) -> Option<u32> { self.line_periods.get(&source).copied() }
+}
+
+impl MeteringTables for MotionWorld {
+    fn channel_weights(&mut self) -> [u16; 3] { self.channel_weights }
+    fn feature_bytes(&mut self, _profile: u32) -> [u8; 2] { self.feature_bytes }
+}
+
+impl Clock for MotionWorld {
+    fn now(&mut self) -> Ticks { Ticks(self.now) }
+    fn elapsed(&mut self, since: Ticks) -> u32 { self.now.wrapping_sub(since.0) * 10 }
 }

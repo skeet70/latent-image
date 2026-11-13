@@ -3,11 +3,11 @@ use xm1_saclac_profile_records::stock::record::group_00;
 use xm1_saclac_profile_records::stock::shared::group_29;
 use xm1_saclac_profile_records::SharedHeaderByte;
 
-use crate::adjust::motion::drive::DriveKind;
 use crate::adjust::motion::fakes::Bench;
 use crate::adjust::motion::ports::Ticks;
 use crate::adjust::motion::queries::*;
-use crate::adjust::motion::state::{Drive, MotionState, SampleSchedule, Timing};
+use crate::adjust::motion::state::{Drive, MotionState};
+use crate::adjust::motion::world::blank_state;
 use crate::exposure::fakes::{handle, World};
 use crate::stock::motion::{self as trace, PEAK_CHECK, PEAK_THRESHOLD, STEP_SCALE_HIGH, STEP_SCALE_LOW, STEP_SCALE_SELECTOR};
 
@@ -15,15 +15,7 @@ const SECTION: SharedAddress = SharedAddress(0x1000_0000);
 const RESULTS: SharedAddress = SharedAddress(0x2000_0000);
 
 fn state() -> MotionState {
-    MotionState {
-        section: SECTION,
-        results: RESULTS,
-        prepared_at: Ticks(40),
-        drive_kind: DriveKind(0),
-        timing: Timing::default(),
-        sampling: SampleSchedule::default(),
-        drive: Drive { checks_peak: true, ..Drive::default() },
-    }
+    MotionState { prepared_at: Ticks(40), drive: Drive { checks_peak: true, ..Drive::default() }, ..blank_state(SECTION, RESULTS, 0) }
 }
 
 #[test]
