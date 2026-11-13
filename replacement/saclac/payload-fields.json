@@ -7823,6 +7823,240 @@
    "bytes": 0,
    "fields": [],
    "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16161,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16162,
+   "bytes": 4,
+   "fields": [
+    {
+     "name": "callback",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00fea9b8: first argument at r11-8; 0x00fea9c4 posts 4"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16163,
+   "bytes": 4,
+   "fields": [
+    {
+     "name": "callback",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00fea9e0: first argument at r11-8; 0x00fea9ec posts 4"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16168,
+   "bytes": 4,
+   "fields": [
+    {
+     "name": "callback",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00fea50c: first argument at r11-8; 0x00fea518 posts 4"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16169,
+   "bytes": 8,
+   "fields": [
+    {
+     "name": "words",
+     "offset": 0,
+     "bytes": 8,
+     "sources": [
+      "0x00fea530..0x00fea534: first and second arguments at r11-0xc and r11-8; 0x00fea544 posts 8 from r11-12"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16170,
+   "bytes": 8,
+   "fields": [
+    {
+     "name": "words",
+     "offset": 0,
+     "bytes": 8,
+     "sources": [
+      "0x00fea55c..0x00fea560: first and second arguments at r11-0xc and r11-8; 0x00fea570 posts 8 from r11-12"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16173,
+   "bytes": 44,
+   "fields": [
+    {
+     "name": "record",
+     "offset": 0,
+     "bytes": 44,
+     "sources": [
+      "0x00fea604..0x00fea618: 44 bytes copied from the first argument; 0x00f3515c, the only sender, writes its block r11-244..r11-201 whole (0x00f35510..0x00f3555c)"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16175,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16186,
+   "bytes": 40,
+   "fields": [
+    {
+     "name": "words-0",
+     "offset": 0,
+     "bytes": 9,
+     "sources": [
+      "0x00feada4..0x00feadac: first and second arguments at r11-0x2c and r11-0x28, strb third at r11-0x24; 0x00feadf0 posts 40 from r11-44"
+     ]
+    },
+    {
+     "name": "words-12",
+     "offset": 12,
+     "bytes": 28,
+     "sources": [
+      "0x00feadb0..0x00feade0: fourth argument and six stack arguments at r11-0x20..r11-8"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 9,
+     "bytes": 3,
+     "sources": [
+      "0x00fead98..0x00feadf0: no store reaches r11-35..r11-33"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16187,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16197,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 48,
+   "operation": 16395,
+   "bytes": 4,
+   "fields": [
+    {
+     "name": "word",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x0103a0a8: first argument at r11-0x14; 0x0103a0d8 posts 4 from r11-20"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 48,
+   "operation": 16398,
+   "bytes": 32,
+   "fields": [
+    {
+     "name": "record",
+     "offset": 0,
+     "bytes": 28,
+     "sources": [
+      "0x0103a158..0x0103a164: 28 bytes copied from the first argument to r11-56; 0x0103a190 posts 32 from r11-56"
+     ]
+    },
+    {
+     "name": "callback",
+     "offset": 28,
+     "bytes": 4,
+     "sources": [
+      "0x0103a148: second argument at r11-0x1c"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 48,
+   "operation": 16399,
+   "bytes": 4,
+   "fields": [
+    {
+     "name": "callback",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x0103a20c: first argument at r11-0x14; 0x0103a23c posts 4 from r11-20"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 48,
+   "operation": 16451,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
   }
  ],
  "channels": [

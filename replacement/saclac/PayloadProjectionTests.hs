@@ -232,6 +232,11 @@ recoveredLayouts recovered = do
   request 47 0x3f2e 44 ([18,19] ++ [40..43])
   request 47 0x3f44 24 [6,7]
   request 47 0x3f42 136 ([6,7,27,82,83] ++ [93..95])
+  mapM_ (\operation -> request 47 operation 0 []) [0x3f21, 0x3f2f, 0x3f3b, 0x3f45]
+  mapM_ (\operation -> request 47 operation 4 []) [0x3f22, 0x3f23, 0x3f28]
+  mapM_ (\operation -> request 47 operation 8 []) [0x3f29, 0x3f2a]
+  request 47 0x3f2d 44 []
+  request 47 0x3f3a 40 [9,10,11]
   -- lens requests (queue 50)
   mapM_ (\operation -> request 50 operation 12 []) [0x4204, 0x4205, 0x4206, 0x4208]
   request 50 0x4207 24 []
@@ -270,6 +275,10 @@ recoveredLayouts recovered = do
   request 48 0x4012 60 [55]
   request 48 0x402a 20 []
   request 48 0x402e 28 []
+  request 48 0x400b 4 []
+  request 48 0x400e 32 []
+  request 48 0x400f 4 []
+  request 48 0x4043 0 []
 
 -- Two senders of one operation are separated by the word each copies at the
 -- same offset, and a payload matching neither is refused.

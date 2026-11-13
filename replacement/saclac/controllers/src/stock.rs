@@ -461,6 +461,11 @@ pub fn statistics_request(payload: &xm1_saclac_interface::statistics::Statistics
         P::Capture { .. } => &[C::Statistics80],
         P::Selection { .. } => &[C::Statistics7e, C::Statistics7f],
         P::Command24 { .. } => &[C::Statistics82],
+        P::Request0b { .. } | P::Request43 => &[],
+        // The only senders pass 0xf3a8fc (0xf3bef0), which posts 0x6f (0xf3a910), and 0xf3a8d4
+        // (0xf3b180), which posts 0x70 (0xf3a8e8).
+        P::Request0e { .. } => &[C::Statistics6f],
+        P::Request0f { .. } => &[C::Statistics70],
     };
     post_statistics(payload, completions, statistics);
 }
