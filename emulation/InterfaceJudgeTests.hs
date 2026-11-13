@@ -16,6 +16,7 @@ main = do
       stock = run stockDigest True 16 32 12 ["message", "reply"]
       owned = run ownedDigest True 64 96 9 ["message", "reply"]
       wrong = run wrongDigest True 64 96 8 ["message", "wrong-reply"]
+      report :: Value -> Value -> [Value] -> Value -> Value
       report left right controls marker = object
         [ "schema" .= (1 :: Int), "mode" .= ("interface-stream" :: String)
         , "subsystem" .= ("synthetic" :: String), "scenario" .= ("round-trip" :: String)
