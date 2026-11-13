@@ -534,6 +534,8 @@ mod pipeline_tests;
 #[cfg(test)]
 mod round_image_tests;
 #[cfg(test)]
+mod search_record_tests;
+#[cfg(test)]
 mod search_tests;
 #[cfg(test)]
 mod selection_tests;

@@ -58,6 +58,7 @@ xm1_rust_host_test(
         "src/exposure_tests.rs",
         "src/pipeline_tests.rs",
         "src/round_image_tests.rs",
+        "src/search_record_tests.rs",
         "src/search_tests.rs",
         "src/selection_tests.rs",
         "src/shared_tests.rs",
