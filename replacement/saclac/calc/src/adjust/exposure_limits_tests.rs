@@ -4,6 +4,7 @@ use crate::adjust::exposure_limits::*;
 use crate::adjust::fakes::LimitWorld;
 use crate::exposure::program::{PrimaryInputs, PrimaryRange};
 use crate::stock::calculation::Cell;
+use crate::stock::scene_levels;
 
 /// The first parameter set.
 const SET: u32 = 0x6125;
@@ -173,6 +174,8 @@ fn scenes_pinned_to_a_level_band_there_and_take_the_response_limits_at_or_below_
     let mut world = world();
     world.set(0x61e1, 30);
     world.set_word(0x68e8, 400);
+    world.world.property_word(scene_levels::response_limit(false, 1, 2), 59);
+    world.world.property_word(scene_levels::response_limit(false, 1, 0), 62);
     let pinned = Request { level: 80, capture_profile: 5, index: 1, ..unmeasured(24) };
     let read = limits(&mut world, &pinned);
     assert_eq!(read.band, Band { high: 80, low: 80 });

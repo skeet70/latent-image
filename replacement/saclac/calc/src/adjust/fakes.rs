@@ -3,12 +3,13 @@
 use std::collections::BTreeMap;
 use std::vec::Vec;
 
-use crate::adjust::exposure_limits::{CellLevels, ChannelLevels, SceneLevels};
+use crate::adjust::exposure_limits::{CellLevels, ChannelLevels};
 use crate::adjust::focus_profile::LensResources;
 use crate::adjust::lens::{BiasTable, LensConfiguration, LensControl, ReferenceScale};
 use crate::adjust::profile_adjustment::{LensSteps, StepTable};
 use crate::exposure::fakes::World;
-use crate::exposure::ports::{CaptureProfiles, Lens as _, Properties, Property};
+use crate::exposure::ports::{CaptureProfiles, Properties, Property};
+use crate::scene_levels::FeatureClasses;
 use crate::stock::calculation::Cell;
 
 /// Lens services by table; the selection word records its arguments and returns the offset, and
@@ -70,9 +71,9 @@ impl ReferenceScale for Lens {
 
 /// The exposure limits' services over a `World`. A lens limit of `l` tenths reads step `l / 10`;
 /// no limit reads the near or far step given here. The other layers' services are formulas: a
-/// channel's level is 100 per channel less 30 with its class offset, a response limit is ten per
-/// capture profile plus a tenth of the level plus the index, a compensated level is seven per step
-/// plus the reference, and a cell row's level is 100 plus ten per row.
+/// channel's level is 100 per channel less 30 with its class offset, every feature class is 0, a
+/// compensated level is seven per step plus the reference, and a cell row's level is 100 plus ten
+/// per row.
 pub struct LimitWorld {
     pub world: World,
     pub unlimited_near: u32,
@@ -131,9 +132,8 @@ impl ChannelLevels for LimitWorld {
     fn compensated_level(&mut self, step: u32, reference: u32) -> i16 { (7 * step + reference) as i16 }
 }
 
-impl SceneLevels for LimitWorld {
-    fn response_limit(&mut self, capture_profile: u32, level: i16, index: u32) -> i16 { 10 * capture_profile as i16 + level / 10 + index as i16 }
-    fn excess(&mut self, level: i16, placed: i16, step: u32, offset: i16) -> i16 { (level - placed + offset - self.world.base_level(step)).clamp(-200, 200) }
+impl FeatureClasses for LimitWorld {
+    fn feature_class(&mut self, _profile: u32) -> u8 { 0 }
 }
 
 impl CellLevels for LimitWorld {

@@ -6,6 +6,7 @@ use crate::adjust::profile_adjustment::{LensSteps, StepTable};
 use crate::exposure::ports::{Properties, Property};
 use crate::exposure::program::{PrimaryInputs, PrimaryRange};
 use crate::exposure::settings::{self, signed_tenths};
+use crate::scene_levels::{self, FeatureClasses};
 use crate::stock::calculation::Cell;
 use crate::stock::exposure_limits::{self as stock, BandSource, LimitKey, ParameterField, SetSelector};
 
@@ -17,14 +18,6 @@ pub trait ChannelLevels {
     fn compensated_level(&mut self, step: u32, reference: u32) -> i16;
 }
 
-/// The scene layer's response limits.
-pub trait SceneLevels {
-    /// The limit the capture profile's response sets at `level` for limit `index` (0xf5f3c0).
-    fn response_limit(&mut self, capture_profile: u32, level: i16, index: u32) -> i16;
-    /// `level - placed + offset` less the step's base level, within -200..=200 (0xf5f324).
-    fn excess(&mut self, level: i16, placed: i16, step: u32, offset: i16) -> i16;
-}
-
 /// The display layer's grid cell levels.
 pub trait CellLevels {
     /// 0xef7380.
@@ -34,9 +27,9 @@ pub trait CellLevels {
 }
 
 /// Everything the limits read.
-pub trait LimitPorts: Properties + LensSteps + ChannelLevels + SceneLevels + CellLevels {}
+pub trait LimitPorts: Properties + LensSteps + ChannelLevels + FeatureClasses + CellLevels {}
 
-impl<T: Properties + LensSteps + ChannelLevels + SceneLevels + CellLevels> LimitPorts for T {}
+impl<T: Properties + LensSteps + ChannelLevels + FeatureClasses + CellLevels> LimitPorts for T {}
 
 /// Selection flags bit 1 replaces most limit settings with fixed ones.
 const FLAGGED: u16 = 2;
@@ -437,8 +430,8 @@ pub fn limits(ports: &mut impl LimitPorts, request: &Request) -> Limits {
         (limits.margin, limits.limit, limits.floor) = (row, row, row);
     }
     if level_pinned(scene) && request.level <= 100 {
-        let indexed = ports.response_limit(request.capture_profile, request.level, index);
-        let unindexed = ports.response_limit(request.capture_profile, request.level, NO_INDEX);
+        let indexed = scene_levels::response_limit(ports, request.capture_profile, request.level, index);
+        let unindexed = scene_levels::response_limit(ports, request.capture_profile, request.level, NO_INDEX);
         limits.limit = indexed.min(limits.limit);
         limits.margin = limits.limit;
         limits.floor = unindexed.min(limits.floor);

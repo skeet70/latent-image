@@ -4,6 +4,7 @@
 use crate::adjust::exposure_limits::{self, capped, level_pinned, Band, CapRule, LimitPorts, Limits, Request};
 use crate::exposure::ports::{CaptureProfiles, Lens};
 use crate::exposure::settings;
+use crate::scene_levels;
 
 /// Everything choosing a step reads.
 pub trait StepPorts: LimitPorts + Lens + CaptureProfiles {}
@@ -360,7 +361,7 @@ pub fn choose(ports: &mut impl StepPorts, inputs: &StepInputs) -> ChosenStep {
         } else {
             correction.wrapping_add(ports.level_offset(request.capture_profile)).wrapping_add(ports.row_level(request.cell))
         };
-        above |= ports.excess(inputs.mark, placement.level, placement.step, offset) > 0;
+        above |= scene_levels::excess(ports, inputs.mark, placement.level, placement.step, offset) > 0;
     }
     ChosenStep {
         profile,

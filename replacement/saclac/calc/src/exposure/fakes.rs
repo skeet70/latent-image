@@ -10,11 +10,12 @@ use xm1_saclac_profile_records::field::{RecordField, RecordRead, RecordWrite, Sh
 use xm1_saclac_profile_records::stock::layout;
 use xm1_saclac_profile_records::{AccessGroup, Bytes, Grants, Handle, MeasurementSelection, OpenMode, ProfileRecords, RecordImage, Scope, Serial, SharedHeaderByte, Slot, StockEntries, Tag};
 
-use crate::adjust::exposure_limits::{CellLevels, ChannelLevels, SceneLevels};
+use crate::adjust::exposure_limits::{CellLevels, ChannelLevels};
 use crate::adjust::lens::{BiasTable, LensConfiguration};
 use crate::adjust::profile_adjustment::{LensSteps, StepTable};
 use crate::exposure::ports::{CaptureProfiles, ImageReport, InPlace, Lens, Placement, ProfileAccess, ProfileLevels, Properties, Property, StockMemory};
 use crate::profile::Profile;
+use crate::scene_levels::FeatureClasses;
 use crate::stock::calculation::Cell;
 
 const SLOT: u8 = 2;
@@ -294,15 +295,14 @@ impl LensSteps for World {
     fn lens_step(&mut self, step: u32) -> u32 { step }
 }
 
-/// Channel, response and cell levels are all 0.
+/// Channel and cell levels and feature classes are all 0.
 impl ChannelLevels for World {
     fn channel_level(&mut self, _channel: u32, _offset: bool) -> i16 { 0 }
     fn compensated_level(&mut self, _step: u32, _reference: u32) -> i16 { 0 }
 }
 
-impl SceneLevels for World {
-    fn response_limit(&mut self, _capture_profile: u32, _level: i16, _index: u32) -> i16 { 0 }
-    fn excess(&mut self, _level: i16, _placed: i16, _step: u32, _offset: i16) -> i16 { 0 }
+impl FeatureClasses for World {
+    fn feature_class(&mut self, _profile: u32) -> u8 { 0 }
 }
 
 impl CellLevels for World {
