@@ -175,21 +175,21 @@ pub fn last_within(area: &impl Adjustments, row: Row, limit: u32, which: Bounds)
     Step(((low + 1)..=high).rev().find(|&step| u32::from(value(area, Step(step), row)) <= limit).unwrap_or(low))
 }
 
-/// The row's lowest step, or with a limit the first reaching it, under the selected bounds
-/// (0x746e48).
-pub fn lower_step(area: &impl Adjustments, row: Row, limit: Option<u32>) -> Step {
+/// The row's low bound, or with a limit the first step reaching it (0x746cc8 with
+/// `Bounds::Primary`, 0x746e48 with `Bounds::Selected`).
+pub fn lower_step(area: &impl Adjustments, row: Row, limit: Option<u32>, which: Bounds) -> Step {
     match limit {
-        None => Step(bounds(area, row, Bounds::Selected).0),
-        Some(limit) => first_reaching(area, row, limit, Bounds::Selected),
+        None => Step(bounds(area, row, which).0),
+        Some(limit) => first_reaching(area, row, limit, which),
     }
 }
 
-/// The row's highest step, or with a limit the last within it, under the selected bounds
-/// (0x746ffc).
-pub fn upper_step(area: &impl Adjustments, row: Row, limit: Option<u32>) -> Step {
+/// The row's high bound, or with a limit the last step within it (0x746d6c with
+/// `Bounds::Primary`, 0x746ffc with `Bounds::Selected`).
+pub fn upper_step(area: &impl Adjustments, row: Row, limit: Option<u32>, which: Bounds) -> Step {
     match limit {
-        None => Step(bounds(area, row, Bounds::Selected).1),
-        Some(limit) => last_within(area, row, limit, Bounds::Selected),
+        None => Step(bounds(area, row, which).1),
+        Some(limit) => last_within(area, row, limit, which),
     }
 }
 
