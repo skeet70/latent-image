@@ -55,6 +55,20 @@ pub enum AcquisitionControl {
     Stop,
 }
 
+/// The S1 search's entries that carry no queue message. Its samples reach it as the
+/// completions the parent forwards.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SearchControl {
+    Initialize,
+    Begin,
+    /// `Begin` for a record whose lens may be cancelled.
+    BeginCancellable,
+    Cancel,
+    Resume,
+    /// The S1 imaging job reported (completion 0x59).
+    ImagingReported,
+}
+
 
 /// The lens children's entries that carry no queue message; a reissued command or a
 /// re-entered completion is a `ChildEvent::Command` or `ChildEvent::Completed` again.
@@ -95,10 +109,10 @@ pub enum ShotEvent<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ChildRequest<'a, SearchSample> {
+pub enum ChildRequest<'a> {
     Measurement(ChildEvent<'a, MeasurementControl>),
     S1Acquisition(ChildEvent<'a, AcquisitionControl>),
-    S1Search(crate::search::SearchInput<SearchSample>),
+    S1Search(ChildEvent<'a, SearchControl>),
     LensBringUp { message: Message<'a>, record: RecordHandle },
     LensLive(ChildEvent<'a, LensControl>),
     LensS1(ChildEvent<'a, LensControl>),
@@ -111,7 +125,7 @@ pub enum LensEffect {
     LensReaching,
 }
 
-impl<SearchSample> ChildRequest<'_, SearchSample> {
+impl ChildRequest<'_> {
     pub const fn lens_effect(&self) -> LensEffect {
         match self {
             Self::S1Acquisition(_) => LensEffect::MeasurementOnly,
@@ -126,7 +140,5 @@ impl<SearchSample> ChildRequest<'_, SearchSample> {
 }
 
 pub trait Children {
-    type SearchSample;
-
-    fn handle(&mut self, request: ChildRequest<'_, Self::SearchSample>) -> ChildOutcome;
+    fn handle(&mut self, request: ChildRequest<'_>) -> ChildOutcome;
 }

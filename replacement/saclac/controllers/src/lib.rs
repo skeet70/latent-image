@@ -20,6 +20,9 @@ pub mod live_profile;
 mod live_autofocus;
 pub mod live_statistics;
 pub mod live_statistics_profile;
+pub mod s1_statistics;
+#[cfg(test)]
+mod s1_statistics_tests;
 #[cfg(test)]
 mod live_statistics_tests;
 #[cfg(test)]

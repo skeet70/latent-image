@@ -1,5 +1,7 @@
-use crate::children::{AcquisitionControl, ChildEvent, ChildRequest, LensControl, LensEffect, MeasurementControl, ShotControl, ShotEvent, ShotTarget};
-use crate::search::SearchInput;
+use crate::children::{
+    AcquisitionControl, ChildEvent, ChildRequest, LensControl, LensEffect, MeasurementControl, SearchControl, ShotControl, ShotEvent,
+    ShotTarget,
+};
 use xm1_saclac_interface::lens::Setting;
 use xm1_saclac_interface::{stock, Command, CommandKind, Completed, Completion, Message};
 
@@ -8,10 +10,10 @@ fn search_and_lens_reachable_child_requests_are_emulator_only() {
     let parameters = stock::parameters(&[]);
     let record = stock::record_handle_from_a2(0x1234);
     let requests = [
-        ChildRequest::<()>::Measurement(ChildEvent::Control { control: MeasurementControl::Initialize, parameters, record }),
-        ChildRequest::S1Search(SearchInput::Initialize),
-        ChildRequest::S1Search(SearchInput::Begin),
-        ChildRequest::S1Search(SearchInput::Cancel),
+        ChildRequest::Measurement(ChildEvent::Control { control: MeasurementControl::Initialize, parameters, record }),
+        ChildRequest::S1Search(ChildEvent::Control { control: SearchControl::Initialize, parameters, record }),
+        ChildRequest::S1Search(ChildEvent::Control { control: SearchControl::Begin, parameters, record }),
+        ChildRequest::S1Search(ChildEvent::Completed { completed: Completed { completion: Completion::Calculation9d, parameters }, record }),
         ChildRequest::LensBringUp { message: Message::Command(Command { kind: CommandKind::LensBringUp, parameters }), record },
         ChildRequest::LensLive(ChildEvent::Control { control: LensControl::CancelDrive, parameters, record }),
         ChildRequest::LensS1(ChildEvent::Control { control: LensControl::Setting(Setting::Request04), parameters, record }),
@@ -26,7 +28,7 @@ fn search_and_lens_reachable_child_requests_are_emulator_only() {
 
 #[test]
 fn acquisition_without_search_is_not_a_lens_request() {
-    let request = ChildRequest::<()>::S1Acquisition(ChildEvent::Control {
+    let request = ChildRequest::S1Acquisition(ChildEvent::Control {
         control: AcquisitionControl::Initialize,
         parameters: stock::parameters(&[]),
         record: stock::record_handle_from_a2(0x5678),
