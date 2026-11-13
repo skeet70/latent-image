@@ -2,6 +2,7 @@
 //! the work memory shared with calc at 0x5ffb0000, the client's dump frame and the record bytes
 //! the exposure engine parses.
 
+pub mod adjust;
 pub mod dump;
 pub mod property;
 pub mod record;
