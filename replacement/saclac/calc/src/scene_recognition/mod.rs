@@ -3,6 +3,7 @@
 //! votes settle by.
 
 pub mod history;
+pub mod ports;
 
 #[cfg(test)]
 mod state_tests;
@@ -62,6 +63,19 @@ impl Recognition {
     pub const AUTO: Self = Self { scene: Scene::AUTO, flags: SceneFlags::NONE };
 }
 
+/// Which recognition a vote makes: live view's (0xf38110) or the shot's (0xefa3f8).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Mode {
+    Live,
+    Capture,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LevelBounds {
+    pub high: i16,
+    pub low: i16,
+}
+
 /// What the frame query (0xf4f1e8) reads from the record for the scene detectors.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Features {
@@ -92,8 +106,8 @@ pub struct Features {
     pub reference: u32,
     pub state: u32,
     pub selected: u32,
-    /// Lower and upper bounds for record kind 0, then for kind 11 (0xf4bf88).
-    pub bounds: [i16; 4],
+    /// The level bounds of record kind 0, then of kind 11 (0xf4bf88).
+    pub bounds: [LevelBounds; 2],
     pub motion: MotionRecord,
     pub stationary: bool,
     pub index_recorded: bool,
@@ -137,7 +151,7 @@ impl Features {
         reference: 0,
         state: 0,
         selected: 0,
-        bounds: [0; 4],
+        bounds: [LevelBounds { high: 0, low: 0 }; 2],
         motion: ZERO_MOTION,
         stationary: false,
         index_recorded: false,
@@ -325,7 +339,7 @@ pub struct SceneRecognition {
     pub(crate) references: History<KeyRecord>,
     pub(crate) primary_codes: History<Code>,
     pub(crate) secondary_codes: History<Code>,
-    pub(crate) tertiary_codes: History<Code>,
+    pub(crate) changes: History<bool>,
     pub(crate) comparisons: [ComparisonRecord; 5],
 }
 
@@ -362,7 +376,7 @@ impl SceneRecognition {
             references: History::filled(KeyRecord::ZERO),
             primary_codes: History::filled(Code::ZERO),
             secondary_codes: History::filled(Code::ZERO),
-            tertiary_codes: History::filled(Code::ZERO),
+            changes: History::filled(false),
             comparisons: [ComparisonRecord::ZERO; 5],
         }
     }
@@ -396,7 +410,7 @@ impl SceneRecognition {
         self.references = History::empty();
         self.primary_codes = History::empty();
         self.secondary_codes = History::empty();
-        self.tertiary_codes = History::empty();
+        self.changes = History::empty();
         self.comparisons = [ComparisonRecord::ZERO; 5];
         memory.fill(stock::LOG, stock::LOG_BYTES as usize, 0);
     }
@@ -488,8 +502,8 @@ impl SceneRecognition {
     /// The primary codes as they stood after the latest live recording.
     pub const fn secondary_codes(&self) -> &History<Code> { &self.secondary_codes }
 
-    /// The codes the change votes settled on, newest first.
-    pub const fn tertiary_codes(&self) -> &History<Code> { &self.tertiary_codes }
+    /// Whether each of the latest change votes found a change, newest first.
+    pub const fn changes(&self) -> &History<bool> { &self.changes }
 
     pub const fn references(&self) -> &History<KeyRecord> { &self.references }
 

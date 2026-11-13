@@ -71,7 +71,7 @@ fn majority_counts_codes_with_both_flags() {
 #[test]
 fn reset_empties_the_code_lists_and_the_references() {
     let (state, _) = reset();
-    for workspace in [Workspace::PrimaryCodes, Workspace::SecondaryCodes, Workspace::TertiaryCodes, Workspace::LiveTrace] {
+    for workspace in [Workspace::PrimaryCodes, Workspace::SecondaryCodes, Workspace::Changes, Workspace::LiveTrace] {
         let at = if workspace == Workspace::LiveTrace { 0x10 } else { 0 };
         for index in 0..20 {
             assert_eq!(workspace_field(&state, workspace, at + index, Width::Byte), 100, "{workspace:?} {index}");

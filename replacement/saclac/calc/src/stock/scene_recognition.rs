@@ -64,7 +64,7 @@ pub enum Workspace {
     CaptureTrace,
     PrimaryCodes,
     SecondaryCodes,
-    TertiaryCodes,
+    Changes,
     References,
     Stationary,
     Comparisons,
@@ -164,8 +164,9 @@ fn features(bytes: &mut [u8], features: &Features) {
     put_word(bytes, 0x3c, features.reference);
     put_word(bytes, 0x40, features.state);
     put_word(bytes, 0x44, features.selected);
-    for (index, bound) in features.bounds.into_iter().enumerate() {
-        put_half(bytes, 0x48 + 2 * index, bound as u16);
+    for (index, bounds) in features.bounds.into_iter().enumerate() {
+        put_half(bytes, 0x48 + 4 * index, bounds.high as u16);
+        put_half(bytes, 0x4a + 4 * index, bounds.low as u16);
     }
     put(bytes, 0x50, &features.motion.encode());
     put_word(bytes, 0x78, u32::from(features.stationary));
@@ -278,12 +279,15 @@ pub fn workspace_field(state: &SceneRecognition, workspace: Workspace, offset: u
             capture_trace(&mut bytes, state.capture_trace());
             field(&bytes, offset)
         }
-        Workspace::PrimaryCodes | Workspace::SecondaryCodes | Workspace::TertiaryCodes => {
-            let list = match workspace {
-                Workspace::PrimaryCodes => state.primary_codes(),
-                Workspace::SecondaryCodes => state.secondary_codes(),
-                _ => state.tertiary_codes(),
-            };
+        Workspace::Changes => {
+            let mut bytes = [0; HISTORY];
+            for (byte, change) in bytes.iter_mut().zip(state.changes().entries()) {
+                *byte = change.map_or(EMPTY_CODE, u8::from);
+            }
+            field(&bytes, offset)
+        }
+        Workspace::PrimaryCodes | Workspace::SecondaryCodes => {
+            let list = if workspace == Workspace::PrimaryCodes { state.primary_codes() } else { state.secondary_codes() };
             let mut bytes = [0; HISTORY];
             codes(&mut bytes, 0, list);
             field(&bytes, offset)
