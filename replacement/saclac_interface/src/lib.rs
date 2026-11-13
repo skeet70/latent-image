@@ -5,6 +5,7 @@ pub mod exposure;
 pub mod stock;
 pub mod round;
 pub mod calc;
+pub mod imgdc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClientCallback(pub(crate) u32);
@@ -470,3 +471,5 @@ mod tests;
 mod exposure_tests;
 #[cfg(test)]
 mod calc_tests;
+#[cfg(test)]
+mod imgdc_tests;
