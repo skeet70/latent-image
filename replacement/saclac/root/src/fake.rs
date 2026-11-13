@@ -51,6 +51,8 @@ impl Fake {
 
     pub fn byte(&self, address: u32) -> u8 { self.0.borrow().byte(address) }
 
+    pub fn word(&self, address: u32) -> u32 { self.read_u32(address) }
+
     pub fn answer(&self, address: u32, value: u32) { self.0.borrow_mut().answers.entry(address).or_default().push_back(value) }
 
     /// Sets the byte 0x69f8fc answers for `key`.

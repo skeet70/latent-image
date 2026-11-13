@@ -622,7 +622,7 @@ The helpers several saclac modules call (`replacement/saclac/shared`), over the 
 
 ## saclac_root
 
-saclac's composition root (`replacement/saclac/root`): `Services` binds the lens children's, the measurement round's and the shared layer's ports to the merged modules, peer requests to `saclac_peers`' `PeerPorts` (the kernel's `MessageQueue::post`, registered under `kernel`), and what no merged module owns to the rows below, all in `src/stock.rs` or `src/lens.rs` and entered or read through `saclac_shared`'s `Machine`.
+saclac's composition root (`replacement/saclac/root`): `Services` binds the lens children's, the measurement round's, the configuration layer's and the shared layer's ports to the merged modules, peer requests to `saclac_peers`' `PeerPorts` (the kernel's `MessageQueue::post`, registered under `kernel`), and what no merged module owns to the rows below, all in `src/stock.rs`, `src/lens.rs` or `src/lens_com.rs` and entered or read through `saclac_shared`'s `Machine`.
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
@@ -630,6 +630,7 @@ saclac's composition root (`replacement/saclac/root`): `Services` binds the lens
 | lens control's resource index `0x76d9c8`, the configuration lookup selection `0x740b18`, the adjustment configuration's first parameter `0xfa8018` | trampoline into retained stock | lens control, the configuration services, the L5 adjustment configuration | no | lens control, the configuration lookup and the L5 adjustment configuration are owned | required |
 | the drive result words `0x954dbc` (live, stored by `0xf14be4`) and `0x16b750c` (S1, stored by `0xf28e94`) | guest-memory layout view | the retained lens completion callbacks | no | the lens completion callbacks are owned | required |
 | the focus controller's profile-record handle at `0x16be01c`, under which the round invalidates the focus history (`0xf32a48`) | guest-memory layout view | the stock focus controller that opens and stores the handle | no | the focus controller's record handle is owned by the controllers | required |
+| the lens request callback word `0x96bd04`, which config's `LensRequests::store_callback` writes in `src/lens_com.rs` as `0x742a6c` does (`0x742a7c`) before the request goes to `saclac_shared`'s lenscom request | guest-memory layout view | stock memory; no `movw`/`movt` reader of it in images 4 and 5 | no | a reference census of images 4, 5 and 6 shows no retained reader | required |
 
 ## saclac_config
 
@@ -640,7 +641,6 @@ saclac's configuration layers L3, L8 and L11 (`replacement/saclac/config`), over
 | `StockDerivations`: `0x7498e0`, `0x747aac`, `0x749254`, `0x748818`, `0x74888c`, `0x746120`, `0x7461a8`, `0x747408`, `0x747584`, `0x749be4`, `0x7462e8`, `0x74b05c` | trampoline into retained stock | the configuration derivations tasks 3, 50, 104 and others reach, and the curves at `0x40a6c7ec` tasks 1..72 write | no | the settings and configuration services are owned | required |
 | `StockFloatLog`: `0x894778` | trampoline into retained stock | the runtime library | no | an owned logarithm is qualified against it | required |
 | `StockPipelineHardware`: `0xda1b4c`, `0xda1d48` | trampoline into retained stock | the image pipeline driver tasks 11..24 share | no | the image pipeline driver is owned | required |
-| `StockLensRequests`: callback word `0x96bd04`, request `0x6b7750` | trampoline into retained stock | the lenscom request path (`0x6b731c`, owned in `saclac_shared`) | no | the composition root binds it to `saclac_shared`'s lenscom request | required |
 | `StockFaceTracking`: `0x106d02c`, `0x106a2f0` | trampoline into retained stock | face tracking, whose pipeline and history tasks 3 and 55 also write | no | face tracking is owned | required |
 | `StockScanBlocks` (configuration fields `0xdc`..`0x1ea`, applied parts `+0x14c`, request flags and window `+0x3e`, clear through `0x7221c8`) and `StockScanLibrary` (`0xd6415c`..`0xd663e0`, `0xd79178`, `0xd79194`) | guest-memory layout view | the scan library tasks 11..24 share, which reads both blocks | no | the scan library is owned | required |
 | `StockStageBlock`: the region block (`0xda027c`), parameter block (`0xd9f7c0`, `0xd9f828`; the L4 work block `0x1699a08`) and geometry block (`0xd9fd54`; `0x16996b8`) by guest address: part offsets, stage mode words `+0x14`/`+0x30`/`+0x40`/`+0x88`, enable keep/invert/set words, path enable `+0x5c`, second gate `+0x254`, mode level `+0x78` | guest-memory layout view | the L4 profile layer, which writes the blocks in stock memory | no | the L4 caller passes typed parts | required |

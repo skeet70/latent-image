@@ -20,3 +20,5 @@ pub const S1_DRIVE_REPORT: u32 = 0x16b_750c;
 /// The profile-record handle the focus controller holds (0x16be004 + 0x18), under which
 /// 0xf32a48 clears the focus history.
 pub const FOCUS_CONTROLLER_RECORD: u32 = 0x16b_e01c;
+/// The word 0x742a6c stores a lens request's callback in before it requests.
+pub const LENS_REQUEST_CALLBACK: u32 = 0x96_bd04;

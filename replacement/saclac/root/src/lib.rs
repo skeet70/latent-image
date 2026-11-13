@@ -6,6 +6,7 @@
 //! `stock`.
 
 pub mod lens;
+pub mod lens_com;
 pub mod records;
 pub mod services;
 pub mod stock;
@@ -14,6 +15,8 @@ pub use services::Services;
 
 #[cfg(test)]
 mod fake;
+#[cfg(test)]
+mod lens_com_tests;
 #[cfg(test)]
 mod lens_tests;
 #[cfg(test)]
