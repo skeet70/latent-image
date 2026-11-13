@@ -10,6 +10,7 @@ import Numeric (showHex)
 import Replacement.GeneralHeap.Admission
 import Replacement.GeneralHeap.Artifact
 import Replacement.Record5Staging (Record5Refusal (..), Record5Window (..), validateRecord5Confinement)
+import Replacement.FixedImage.Layout (imageBase)
 
 check :: String -> Bool -> IO ()
 check label condition = unless condition (fail label)
@@ -53,6 +54,9 @@ main = do
   check "tag exceeding allocation rejected" (validateStockHeader 12 25 == Left HeaderRejected)
   check "underflowing header rejected" (validateStockHeader 12 1 == Left HeaderRejected)
   (_, arena) <- either (fail . show) pure (decodeGeometry geometry)
+  (_, fixedArena) <- either (fail . show) pure (decodeGeometry (take 3 geometry ++ [imageBase] ++ drop 4 geometry))
+  check "fixed arena admits final aligned stock chunk below its guard" (accepted (boundOwnedAllocation fixedArena (HeapAddress (imageBase - 48)) (AllocationBytes 12)))
+  check "fixed arena refuses next size class across its guard" (not (accepted (boundOwnedAllocation fixedArena (HeapAddress (imageBase - 48)) (AllocationBytes 13))))
   layout <- either (fail . show) pure (boundOwnedAllocation arena (HeapAddress 0xa80010) (AllocationBytes 0x3dc80))
   let header = B.concat (map U.putWord32 [0x584d3148, 0x3dc80, 0x335d30a6, 0x3dc89])
   check "owned allocation prefix is derived from its bounded payload" (allocationHeaderAddress layout == HeapAddress 0xa80000)

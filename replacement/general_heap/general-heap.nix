@@ -1,5 +1,6 @@
 { pkgs ? import ../../build-support/nixpkgs.nix { config = { }; overlays = [ ]; }
 , recipeArena ? false
+, fixedArena ? false
 , hostTests ? false
 }:
 let
@@ -18,6 +19,7 @@ let
   '';
   features = pkgs.lib.concatStringsSep "," (
     pkgs.lib.optional recipeArena "recipe-arena"
+    ++ pkgs.lib.optional fixedArena "fixed-arena"
     ++ pkgs.lib.optional hostTests "host"
   );
 in
@@ -34,6 +36,8 @@ pkgs.stdenv.mkDerivation {
   doCheck = false;
   dontConfigure = true;
   dontFixup = true;
+  XM1_FIXED_HEAP_END_PATH = pkgs.lib.optionalString fixedArena
+    (builtins.toFile "fixed-heap-end.rs" (toString (builtins.fromJSON (builtins.readFile ../fixed_image/layout.json)).imageBase));
   buildPhase = ''
     runHook preBuild
     export HOME="$TMPDIR"

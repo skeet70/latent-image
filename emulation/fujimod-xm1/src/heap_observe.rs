@@ -1,6 +1,8 @@
 mod heap_accesses;
 mod heap_state;
 mod heap_cutover;
+mod heap_placement;
+mod fixed_image_check;
 #[path = "memory_view.rs"]
 mod memory_view;
 
@@ -726,6 +728,8 @@ fn refusal_controls(arguments: &[std::ffi::OsString]) -> Result<(), String> {
 }
 fn drive() -> Result<(), String> {
     let compare_args: Vec<_> = std::env::args_os().skip(1).collect();
+    if let Some(result) = heap_placement::command(&compare_args) { return result; }
+    if let Some(result) = fixed_image_check::command(&compare_args) { return result; }
     if let Some(result) = heap_cutover::command(&compare_args) { return result; }
     if compare_args.first().is_some_and(|argument| argument == "--compare") { return compare(&compare_args); }
     if compare_args.first().is_some_and(|argument| argument == "--refusal-controls") { return refusal_controls(&compare_args); }

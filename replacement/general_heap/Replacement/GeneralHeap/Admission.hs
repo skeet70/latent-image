@@ -18,6 +18,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Word (Word32)
 import qualified FujiAF.UpdateContainer as U
+import Replacement.FixedImage.Layout (imageBase)
 
 data AdmissionError = CarrierRejected | SymbolRejected | InstructionRejected Word32 | StackRejected Word32 | HeaderRejected | FetchRejected | GeometryRejected deriving (Eq, Show)
 data Image = Image4 | Image5 deriving (Eq, Show)
@@ -37,7 +38,7 @@ decodeGeometry :: [Word32] -> Either AdmissionError (BackendGeometry,ArenaLayout
 decodeGeometry [magic,version,base,end,state,pool,guard,first,second,granularity,prefix,alignment,firstBits,secondBits] = do
   unless ([magic,version,base,guard,first,second,granularity,prefix,alignment,firstBits,secondBits]
     == [0x48454150,1,0xa71a00,32,17,16,16,16,8,32,16]
-    && end `elem` [0xbf1a00,0xbe1a00]
+    && end `elem` [0xbf1a00,0xbe1a00,imageBase]
     && state >= 17*16*4 && state < end-base-guard
     && toInteger pool == ((toInteger base + toInteger state + 15) `div` 16)*16
     && pool < end-guard) (Left GeometryRejected)
