@@ -11,21 +11,21 @@ pub enum BridgeMotion {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Request<Drive> {
+pub enum Request<Record, Drive> {
     /// imgdc 0x3f2e; imgdc's bridge answers with completion 0x46.
     Bridge { motion: BridgeMotion, drive: Drive },
     /// imgdc 0x3f2f.
     BridgeStop,
     /// calc 0x3c09 over the frame just taken in; calc answers with completion 0x89.
-    Evaluate,
+    Evaluate(Record),
 }
 
-impl<Drive> Request<Drive> {
+impl<Record, Drive> Request<Record, Drive> {
     pub const fn operation(&self) -> PeerOperation {
         match self {
             Self::Bridge { .. } => PeerOperation::ImgDc(ImgDcOperation::Request2e),
             Self::BridgeStop => PeerOperation::ImgDc(ImgDcOperation::Request2f),
-            Self::Evaluate => PeerOperation::Calc(CalcOperation::Request09),
+            Self::Evaluate(_) => PeerOperation::Calc(CalcOperation::Request09),
         }
     }
 

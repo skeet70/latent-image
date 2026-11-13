@@ -4,7 +4,7 @@
 //! what the search tells the lens bridge.
 
 use super::settings::Setting;
-use super::{Context, FocusStatus, Phase, PinnedStatus, Platform, ScanFrame, TransitionTrace};
+use super::{Context, FocusStatus, LensMove, Phase, PinnedStatus, Platform, ScanFrame, TransitionTrace};
 use xm1_saclac_controllers::search::{Direction, LensPosition, SearchStep, Travel};
 use xm1_saclac_interface::search::{BridgePhase, BridgeStatus};
 
@@ -276,6 +276,9 @@ impl Ring {
         self.entries[slot] = entry;
         self.newest = Some(slot);
     }
+
+    /// The newest entry, or an empty one before the first sample.
+    pub(crate) fn newest_entry(&self) -> RingEntry { self.newest.map_or(RING_ENTRY, |index| self.entries[index]) }
 }
 
 /// What the phase steps leave for the transition's status report.
@@ -298,40 +301,34 @@ impl Transition {
     }
 }
 
+/// What the monitor runs to follow the lens (0xf467cc).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Watch {
+    /// The lens has not moved since the monitor began.
+    Scene,
+    PeakSearch,
+    Return,
+}
+
 /// The scene watch after a suspension (0xf3e32c, 0xf467cc).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Monitor {
     pub active: bool,
-    pub resumed: bool,
-    pub count: u32,
-    /// The phase code the monitor follows: 2 at the start, 14 or 16 while it runs a peak
-    /// search or a return.
-    pub watched: u32,
-    pub previous_watched: u32,
-    pub changes: u32,
-    pub settled: u32,
+    pub watch: Watch,
+    /// A peak search the monitor ran reached its peak; it waits for the lens to move again.
+    pub settled: bool,
+    /// Set by a resumption: the next direction decision returns when the monitor last
+    /// followed the lens with a return.
     pub restart: bool,
-    pub moved: u32,
-    pub mark: u16,
+    pub moved: Option<LensMove>,
+    /// The lens bias at the lens position after the move (0xfaa7f4).
+    pub mark: i16,
 }
 
 impl Monitor {
-    pub(crate) const fn new() -> Self {
-        Self {
-            active: false,
-            resumed: false,
-            count: 0,
-            watched: 0,
-            previous_watched: 0,
-            changes: 0,
-            settled: 0,
-            restart: false,
-            moved: 0,
-            mark: 0,
-        }
-    }
+    pub(crate) const fn new() -> Self { Self { active: false, watch: Watch::Scene, settled: false, restart: false, moved: None, mark: 0 } }
 
-    pub(crate) const fn following_lens(&self) -> bool { matches!(self.watched, 2 | 16) }
+    pub(crate) const fn following_lens(&self) -> bool { matches!(self.watch, Watch::Scene | Watch::Return) }
 }
 
 /// What a range check found (0xf3e280).
@@ -383,6 +380,9 @@ impl Context {
         self.frame.previous_selected = 0;
         self.frame.selected_samples = 0;
         self.frame.pinned_setting = 0;
+        self.frame.scan_flag = 0;
+        self.peak.directed = false;
+        self.focus.contrast = 0;
         self.forget_direction();
     }
 
@@ -513,10 +513,10 @@ impl Context {
     }
 
     fn monitor_kind(&self) -> StageKind {
-        match self.monitor.watched {
-            16 => StageKind::Return,
-            14 => StageKind::PeakSearch,
-            _ => StageKind::Other,
+        match self.monitor.watch {
+            Watch::Return => StageKind::Return,
+            Watch::PeakSearch => StageKind::PeakSearch,
+            Watch::Scene => StageKind::Other,
         }
     }
 
@@ -566,7 +566,7 @@ impl Context {
 
     /// 0xf3c428: keep the next step inside the travel limits.
     pub(crate) fn clamp_step(&mut self, platform: &mut impl Platform) {
-        if (self.phase == Phase::PeakSearch && self.bridge.scanning) || (self.monitor.watched == 14 && self.monitor.active) {
+        if (self.phase == Phase::PeakSearch && self.bridge.scanning) || (self.monitor.watch == Watch::PeakSearch && self.monitor.active) {
             return;
         }
         if self.phase == Phase::Focus && platform.lens_state() != 0 {
@@ -613,10 +613,10 @@ impl Context {
             Phase::Focus => BridgePhase::Focus,
             Phase::FocusDrive => BridgePhase::FocusDrive,
             Phase::Approach => BridgePhase::Approach,
-            Phase::Monitor => match self.monitor.watched {
-                16 => BridgePhase::Return,
-                14 => BridgePhase::PeakSearch,
-                _ => BridgePhase::Monitor,
+            Phase::Monitor => match self.monitor.watch {
+                Watch::Return => BridgePhase::Return,
+                Watch::PeakSearch => BridgePhase::PeakSearch,
+                Watch::Scene => BridgePhase::Monitor,
             },
         }
     }
@@ -655,7 +655,7 @@ impl Context {
         if self.phase != Phase::PeakSearch && !self.monitor.active {
             return false;
         }
-        if self.monitor.watched != 14 && self.monitor.active {
+        if self.monitor.watch != Watch::PeakSearch && self.monitor.active {
             return false;
         }
         self.bridge.scanning && !self.bridge.scan_sampled
@@ -685,13 +685,12 @@ impl Context {
     /// 0xf3e32c: start watching the scene.
     pub(crate) fn begin_monitor(&mut self) {
         self.samples = 0;
-        self.monitor = Monitor { active: true, watched: 2, previous_watched: 2, changes: self.monitor.changes, ..Monitor::new() };
+        self.monitor = Monitor { active: true, ..Monitor::new() };
     }
 
     /// 0xf3e380: search again from where the lens is.
     pub(crate) fn resume(&mut self, platform: &mut impl Platform) {
         self.monitor.active = false;
-        self.monitor.resumed = false;
         self.monitor.restart = true;
         self.samples = 0;
         let position = platform.lens_position();

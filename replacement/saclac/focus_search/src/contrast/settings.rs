@@ -46,7 +46,8 @@ pub enum Setting {
     SelectedFlagRestart,
     /// Direction samples taken before the direction search decides.
     DirectionSamples,
-    /// Motion (in tens) beyond which a direction search returns when `MotionReturns` is 1.
+    /// Motion (in tens) beyond which a direction search returns when `MotionReturns` is 1; also
+    /// the contrast (in tens) below which a focus or return cannot be near its peak.
     MotionReturn,
     MotionReturns,
     /// 1: the direction search decides from the trend counts.
@@ -85,11 +86,13 @@ pub enum Setting {
     DebugDisplay,
     /// Bit 1: each evaluation is written to the focus log.
     FocusLog,
-    /// 0 (or `TrendOverride` 0): the peak phase ends in focus instead of returning.
+    /// 0 (or `TrendOverride` 0): the peak phase ends in focus instead of returning. Also the
+    /// peaks a return passes before it decides.
     PeakReturns,
     /// 0: a drive to focus turns back from its direction when bit 0 of `FocusDriveTurn` is
     /// clear, otherwise when it is set.
     FocusDriveKeeps,
+    /// Also the peaks an approach passes before it decides.
     FocusDriveTurn,
     /// Bit 1: the recent measurements' levels can end a peak search.
     RecentPeak,
@@ -197,6 +200,52 @@ pub enum Setting {
     MotionCeiling,
     /// 1: a motion level above the sample interval stops the direction search.
     MotionHolds,
+    /// Samples a return or approach takes before it decides.
+    ReturnSamples,
+    /// Samples a return or approach takes before its direction follows the contrast.
+    ReturnTrendSamples,
+    /// Nonzero: while the record's scan flag stands, a return follows the ring's focus values.
+    FocusValueTracking,
+    /// 1 or above 2: a selected record's return below `SelectedReturnContrast` (hundreds, a
+    /// halfword) turns on a fall of `SelectedReturnFall` percent.
+    SelectedReturnMode,
+    SelectedReturnContrast,
+    SelectedReturnFall,
+    /// The fall (percent of the previous contrast) that turns a return of an unpaired
+    /// evaluation.
+    ReturnFall,
+    /// Signed halfwords: the focus value change that turns a tracking return, and the rise
+    /// that counts as steep.
+    FocusValueTurn,
+    FocusValueSteep,
+    /// Times a tracking return may pass the extent mark before it turns.
+    ExtentCrossings,
+    /// Turns a tracking return takes before it drives to a mark.
+    TrackedTurns,
+    /// Steep rises above which a tracking return drives to the scan mark.
+    SteepRises,
+    /// 0: a tracking return with no fitted extent peak drives to the extent mark, else to the
+    /// scan mark.
+    ScanMarkFallback,
+    /// Level runs that raise and that clear the record's scan flag.
+    ScanOnSamples,
+    ScanOffSamples,
+    /// Signed bytes: the raw focus value band (in tens) within which the levels count.
+    FocusRawLow,
+    FocusRawHigh,
+    /// Rises that send a return to peak search.
+    ReturnRises,
+    /// Samples a paired return of an unselected record holds at the tens level before it
+    /// searches for the peak.
+    LevelHolds,
+    /// Strikes that end a return.
+    ReturnStrikes,
+    /// A halfword: the fall (in tens) that drives a return to its best position.
+    ReturnFallTens,
+    /// The bias (in tens) below which a monitor follows the lens with a return, for a lens
+    /// moving up and down.
+    MonitorRiseTens,
+    MonitorFallTens,
 }
 
 /// Which trend-sample limit a direction decision uses.

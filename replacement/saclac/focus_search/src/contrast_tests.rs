@@ -123,6 +123,8 @@ impl Platform for Fake {
     fn status_snapshot(&mut self) -> [u32; 2] { [0; 2] }
     fn publish_pinned_status(&mut self, _: PinnedStatus) {}
     fn trace_transition(&mut self, _: TransitionTrace) {}
+    fn lens_move(&mut self) -> Option<crate::contrast::LensMove> { None }
+    fn interpolated_bias(&mut self, _: LensIdentity, _: crate::contrast::LensMove, _: LensPosition) -> i16 { 0 }
 }
 
 const INACTIVE: FocusStatus = FocusStatus { active: 0, mode: 4, position: LensPosition(0), snapshot: [0; 2], flag: 0, stage: 2 };

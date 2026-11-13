@@ -3,6 +3,8 @@
 //! The direction search: which way the lens should move to raise the contrast (0xf429d0,
 //! 0xf41c48 and its helpers).
 
+use super::retrace::Trend;
+use super::sample::Watch;
 use super::settings::{Setting, StepKind, TrendBasis};
 use super::{Context, FitPoint, Phase, Platform};
 use xm1_saclac_controllers::search::LensPosition;
@@ -23,7 +25,7 @@ pub(crate) struct Search {
     pub decision: u8,
     /// The previous and newest reported positions, as raw halfwords.
     pub reported: [u16; 2],
-    pub peak_flags: [u8; 4],
+    pub retrace: Trend,
     /// The way the reported position last moved by more than the jump setting.
     pub trend: i8,
     pub previous_trend: i8,
@@ -55,6 +57,8 @@ pub(crate) struct Search {
     pub fit: u16,
     pub fit_points: [FitPoint; 4],
     pub selected_bytes: [u8; 2],
+    /// Paired returns of an unselected record at the tens level since it last left them.
+    pub level_holds: u8,
 }
 
 impl Search {
@@ -71,7 +75,7 @@ impl Search {
             lens_seen: false,
             decision: 0,
             reported: [0; 2],
-            peak_flags: [0; 4],
+            retrace: Trend::new(),
             trend: 1,
             previous_trend: 1,
             sum: 0,
@@ -99,6 +103,7 @@ impl Search {
             fit: 0,
             fit_points: [FitPoint::EMPTY; 4],
             selected_bytes: [0; 2],
+            level_holds: 0,
         }
     }
 }
@@ -129,6 +134,7 @@ impl Context {
         search.restart_pending = false;
         search.second_channel = false;
         search.selected_bytes = [0; 2];
+        search.level_holds = 0;
         self.tracks = super::tracks::Tracks::new();
     }
 
@@ -144,14 +150,13 @@ impl Context {
 
     /// 0xf41c48.
     fn search_direction(&mut self, platform: &mut impl Platform) -> Phase {
-        let model = platform.setting(Setting::ModelLetter) as u8;
         self.transition.hold_mode = 0;
         self.note_direction_sample();
         self.bridge.lens_mode = platform.lens_mode();
         let step = self.step_size(platform, StepKind::Direction);
         self.step = step.size;
         self.bridge.rate = step.rate;
-        self.scale_direction_step(platform, model);
+        self.scale_direction_step(platform);
         self.follow_reported_position(platform);
         let outcome = self.direction_outcome(platform);
         let chosen = match outcome {
@@ -161,19 +166,16 @@ impl Context {
             Err(phase) => phase,
         };
         self.limit_direction();
-        if platform.setting(Setting::ReversalSteps) == 1 && self.direction != self.previous_direction {
-            let reversal = platform.setting(Setting::ReversalStep) as u16;
-            self.step = reversal.wrapping_mul(self.direction as u16).wrapping_add(self.step);
-        }
+        self.add_reversal_step(platform);
         self.shift_direction_history();
         chosen
     }
 
     /// 0xf41b70.
-    fn note_direction_sample(&mut self) {
+    pub(crate) fn note_direction_sample(&mut self) {
         if self.samples == 1 {
             let search = &mut self.search;
-            search.peak_flags = [0; 4];
+            search.retrace = Trend::new();
             search.contrast = 0;
             search.previous_contrast = 0;
             search.previous_position = LensPosition(0);
@@ -204,7 +206,7 @@ impl Context {
 
     /// The step scaling of 0xf41c48: a lens change scales it for a few samples, a paired
     /// evaluation scales it by its level band, and the travel range bounds it.
-    fn scale_direction_step(&mut self, platform: &mut impl Platform, model: u8) {
+    fn scale_direction_step(&mut self, platform: &mut impl Platform) {
         if self.lens_changed {
             self.search.settle = platform.setting(Setting::DirectionSettle) as u8;
         } else if self.search.settle != 0 {
@@ -213,12 +215,23 @@ impl Context {
         if self.search.settle != 0 {
             self.step = tenths(self.step, platform.setting(Setting::DirectionSettleScale));
             self.values.flag = 0;
-        } else if platform.setting(Setting::PairedEvaluation) == 1 {
-            let own = platform.setting(Setting::ModelScaling);
-            let model_scaled = own == 255 || (own == 0 && matches!(model, b'M' | b'S'));
+        } else {
+            self.scale_step_by_level(platform);
+        }
+        self.bound_step_by_range(platform);
+    }
+
+    /// A paired evaluation scales the step by the level's band.
+    pub(crate) fn scale_step_by_level(&mut self, platform: &mut impl Platform) {
+        if platform.setting(Setting::PairedEvaluation) == 1 {
+            let model_scaled = model_scaled(platform);
             let band = level_band(platform, self.values.level);
             self.step = tenths(self.step, platform.setting(Setting::DirectionScale { band, model_scaled }));
         }
+    }
+
+    /// `DirectionStepDivisor` bounds the step to that part of the travel range.
+    pub(crate) fn bound_step_by_range(&mut self, platform: &mut impl Platform) {
         let divisor = platform.setting(Setting::DirectionStepDivisor);
         if divisor != 0 {
             let range = i32::from(self.limits.high.0) - i32::from(self.limits.low.0);
@@ -226,6 +239,14 @@ impl Context {
             if i32::from(self.step as i16) >= bound {
                 self.step = bound as u16;
             }
+        }
+    }
+
+    /// With `ReversalSteps`, a reversal adds `ReversalStep` in the new direction.
+    pub(crate) fn add_reversal_step(&mut self, platform: &mut impl Platform) {
+        if platform.setting(Setting::ReversalSteps) == 1 && self.direction != self.previous_direction {
+            let reversal = platform.setting(Setting::ReversalStep) as u16;
+            self.step = reversal.wrapping_mul(self.direction as u16).wrapping_add(self.step);
         }
     }
 
@@ -268,10 +289,7 @@ impl Context {
             self.step = 0;
             return Ok(Outcome::Stay);
         }
-        if self.values.flag != 0
-            && platform.setting(Setting::FlagRestart) & 2 != 0
-            && (self.frame.selected == 0 || (self.frame.selected == 1 && platform.setting(Setting::SelectedFlagRestart) == 1))
-        {
+        if self.flag_restarts(platform, 2) {
             self.step = 0;
             self.lens_count = 0;
             self.reverse_and_forget_trend();
@@ -312,7 +330,7 @@ impl Context {
             self.samples = 0;
             return Ok(Outcome::Return);
         }
-        if self.monitor.restart && self.monitor.watched == 16 {
+        if self.monitor.restart && self.monitor.watch == Watch::Return {
             self.samples = 0;
             self.monitor.restart = false;
             return Ok(Outcome::Return);
@@ -567,7 +585,7 @@ impl Context {
     }
 
     /// 0xf3d554: point back into the travel limits.
-    fn limit_direction(&mut self) {
+    pub(crate) fn limit_direction(&mut self) {
         let position = self.positions[0].0;
         if self.limits.low.0 >= position {
             self.direction = 1;
@@ -577,7 +595,7 @@ impl Context {
     }
 
     /// 0xf3d5c4.
-    fn shift_direction_history(&mut self) {
+    pub(crate) fn shift_direction_history(&mut self) {
         self.values.previous_level = self.values.level;
         self.search.previous_change = self.search.change;
         self.search.previous_contrast = self.search.contrast;
@@ -587,6 +605,22 @@ impl Context {
 
 /// The step scaled by `scale` tenths, truncated as stock divides.
 fn tenths(step: u16, scale: u32) -> u16 { ((i32::from(step as i16).wrapping_mul(scale as i32)) / 10) as u16 }
+
+/// The model table scales for any model (`ModelScaling` 255) or for models M and S (0).
+pub(crate) fn model_scaled(platform: &mut impl Platform) -> bool {
+    let own = platform.setting(Setting::ModelScaling);
+    own == 255 || (own == 0 && matches!(platform.setting(Setting::ModelLetter) as u8, b'M' | b'S'))
+}
+
+/// The strikes a sample at `level` carries: its band's weight, one below the tens.
+pub(crate) fn level_strikes(platform: &mut impl Platform, level: u32) -> u32 {
+    match level_band(platform, level) {
+        0 => platform.setting(Setting::StrikeThousands),
+        1 => platform.setting(Setting::StrikeHundreds),
+        2 => platform.setting(Setting::StrikeTens),
+        _ => 1,
+    }
+}
 
 /// Which band of the level ladder `level` falls in, from the top.
 fn level_band(platform: &mut impl Platform, level: u32) -> u8 {

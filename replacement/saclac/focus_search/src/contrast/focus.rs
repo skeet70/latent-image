@@ -4,6 +4,7 @@
 //! search again (0xf400fc with 0xf3fc04, 0xf3f230, 0xf3ee60, 0xf3efbc, 0xf3f7a8, 0xf3c64c and
 //! 0xf400ac).
 
+use super::direction::{level_strikes, model_scaled};
 use super::peak_search::percent_of;
 use super::settings::Setting;
 use super::{Context, LensPosition, Phase, Platform};
@@ -108,15 +109,13 @@ impl Context {
 
     /// 0xf3fc04.
     fn watch_focus(&mut self, platform: &mut impl Platform) -> Phase {
-        let model = platform.setting(Setting::ModelLetter) as u8;
-        let own = platform.setting(Setting::ModelScaling);
-        let selected_limit = if own == 255 || (own == 0 && matches!(model, b'M' | b'S')) {
+        let selected_limit = if model_scaled(platform) {
             platform.setting(Setting::SelectedSamplesScaled)
         } else {
             platform.setting(Setting::SelectedSamples)
         };
         self.focus_position = platform.lens_position();
-        if self.previous_lens != self.lens || self.focus_flag_restarts(platform) {
+        if self.previous_lens != self.lens || self.flag_restarts(platform, 1) {
             self.samples = 0;
             self.search.probed = 0;
             return Phase::Direction;
@@ -163,12 +162,6 @@ impl Context {
             platform.trace_focus(trace);
         }
         next
-    }
-
-    fn focus_flag_restarts(&self, platform: &mut impl Platform) -> bool {
-        self.values.flag != 0
-            && platform.setting(Setting::FlagRestart) & 1 != 0
-            && (self.frame.selected == 0 || (self.frame.selected == 1 && platform.setting(Setting::SelectedFlagRestart) == 1))
     }
 
     /// The focus phase's first sample.
@@ -296,15 +289,7 @@ impl Context {
                 return;
             }
         }
-        let weight = if level >= platform.setting(Setting::LevelThousands).wrapping_mul(1000) {
-            platform.setting(Setting::StrikeThousands)
-        } else if level >= platform.setting(Setting::LevelHundreds).wrapping_mul(100) {
-            platform.setting(Setting::StrikeHundreds)
-        } else if level >= platform.setting(Setting::LevelTens).wrapping_mul(10) {
-            platform.setting(Setting::StrikeTens)
-        } else {
-            1
-        };
+        let weight = level_strikes(platform, level);
         self.focus.strikes = self.focus.strikes.wrapping_add(weight as u8);
     }
 
@@ -336,7 +321,6 @@ impl Context {
     /// 0xf3efbc: the fall and rise percentages and the minimum-step base for the logarithm
     /// of the filtered contrast.
     fn set_focus_thresholds(&mut self, platform: &mut impl Platform, filtered: u32) {
-        let model = platform.setting(Setting::ModelLetter) as u8;
         let log = platform.contrast_log(filtered);
         let fall_from = platform.setting(Setting::FocusFallFrom).wrapping_mul(100);
         let fall_to = platform.setting(Setting::FocusFallTo);
@@ -344,8 +328,7 @@ impl Context {
         let rise_to = platform.setting(Setting::FocusRiseTo);
         let step_from = platform.setting(Setting::FocusStepFrom).wrapping_mul(100);
         let step_to = platform.setting(Setting::FocusStepTo);
-        let own = platform.setting(Setting::ModelScaling);
-        let (fall_high, rise_high) = if own == 255 || (own == 0 && matches!(model, b'M' | b'S')) {
+        let (fall_high, rise_high) = if model_scaled(platform) {
             (platform.setting(Setting::FocusFallScaled), platform.setting(Setting::FocusRiseScaled))
         } else {
             (platform.setting(Setting::FocusFallHigh), platform.setting(Setting::FocusRiseHigh))
