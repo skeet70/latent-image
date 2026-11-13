@@ -7,7 +7,7 @@ use crate::exposure::evaluation::{reference_value, request_row, set_up};
 use crate::exposure::fakes::{placed, Posted, World};
 use crate::exposure::ports::InPlace;
 use crate::exposure::program::*;
-use crate::selection::{RowIndex, RowPhase};
+use crate::selection::{BufferSlot, RowIndex, RowPhase};
 use crate::stock::adjust::CONFIGURED_FACTOR;
 use crate::stock::tables::PROGRAM_PROFILES;
 use crate::stock::{dump, property, shared};
@@ -157,7 +157,8 @@ fn a_row_request_names_the_row_its_measurement_and_its_column_and_marks_it_reque
     assert_eq!((sent.row, sent.measured, sent.statistics), (2, [[2, 1], [6, 5], [4, 3]], [9, 10, 11, 12]));
     assert_eq!((sent.value, sent.next_profile), (204, context.areas[2].next_profile));
     assert_eq!((sent.column_count, sent.column_regions), (12, Some(placed(InPlace::ColumnRegions(2)))));
-    assert_eq!((sent.row_buffer, sent.column_buffer), (Some(shared::row_buffers(2)[0]), Some(shared::column_buffer(2))));
+    let slot = BufferSlot::new(2).unwrap();
+    assert_eq!((sent.row_buffer, sent.column_buffer), (Some(shared::row_buffers(slot)[0]), Some(shared::column_buffer(slot))));
     assert_eq!((sent.level_classes, sent.selection_flags), (Some(shared::level_class(0)), Some(shared::SELECTION_FLAGS)));
     assert_eq!((sent.tolerance_above, sent.floor, sent.frame), (20, -900, Some(FRAME)));
     assert_eq!(context.selection.rows[2].phase, RowPhase::Requested);

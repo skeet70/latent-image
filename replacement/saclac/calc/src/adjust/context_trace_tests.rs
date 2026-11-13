@@ -5,7 +5,7 @@ use xm1_saclac_profile_records::SharedHeaderByte;
 use crate::adjust::context_trace::*;
 use crate::exposure::context::{ExposureContext, ExposureStep, Subject};
 use crate::exposure::fakes::{self, World};
-use crate::selection::RowPhase;
+use crate::selection::{BufferSlot, RowPhase};
 
 const FRAME: SharedAddress = SharedAddress(0x4000_0000);
 const STATISTICS_BLOCK: SharedAddress = SharedAddress(0x4100_0000);
@@ -136,6 +136,9 @@ fn evaluation_context(world: &mut World) -> ExposureContext {
     context.span.first_step = 15;
     context.span.step = -6;
     context.selection.count = 3;
+    for (index, row) in context.selection.rows.iter_mut().enumerate() {
+        row.slot = BufferSlot::new(index as u8);
+    }
     context.selection.rows[0].phase = RowPhase::Applied;
     context.selection.rows[1].phase = RowPhase::Applied;
     context.selection.rows[2].phase = RowPhase::Requested;
