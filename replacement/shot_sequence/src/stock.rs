@@ -5,6 +5,7 @@
 pub mod calculation;
 pub mod calculations;
 pub mod finish;
+pub mod pipeline;
 
 use crate::boundary::{ClientRef, FocusConfirmation, FocusHistory, FocusResult, LensPoint, LensReference, LensSnapshot};
 use crate::ports::{AbortStatus, HalfPressMode, HalfPressNotifications};

@@ -17,6 +17,7 @@ pub mod jobs;
 pub mod lens_return;
 pub mod outcome;
 pub mod pipeline;
+pub mod pipeline_work;
 pub mod ports;
 pub mod preparation;
 pub mod sequence;
@@ -120,3 +121,5 @@ mod capture_control_tests;
 mod finish_work_tests;
 #[cfg(test)]
 mod calculations_work_tests;
+#[cfg(test)]
+mod pipeline_work_tests;
