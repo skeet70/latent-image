@@ -135,6 +135,8 @@ impl<T: Copy> History<T> {
 
     pub const fn entries(&self) -> &[Option<T>; HISTORY] { &self.entries }
 
+    pub(crate) fn map<U: Copy>(&self, mut convert: impl FnMut(T) -> U) -> History<U> { History { entries: self.entries.map(|entry| entry.map(&mut convert)) } }
+
     /// The latest `count` entries, when that many are recorded.
     fn latest(&self, count: usize) -> Option<impl Iterator<Item = T> + '_> {
         self.entries[count - 1].is_some().then(|| self.entries[..count].iter().flatten().copied())

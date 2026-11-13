@@ -2,9 +2,14 @@
 //! view and at capture, the frames it notes to tell when the scene changed, and the histories its
 //! votes settle by.
 
+pub mod detectors;
 pub mod history;
 pub mod ports;
 
+#[cfg(test)]
+mod detector_tests;
+#[cfg(test)]
+mod fakes;
 #[cfg(test)]
 mod state_tests;
 
@@ -236,11 +241,12 @@ impl LensDetectors {
     pub const ZERO: Self = Self { matched: false, match_direction: 0, lens_moved: false, lens_direction: 0, lens_changed: false };
 }
 
-/// Whether the rate filter applied to the group and whether the candidate passed it.
+/// The rate filter's tests that passed: the position test, and the level test that admits the
+/// group.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct FilterOutcome {
-    pub enabled: bool,
-    pub passed: bool,
+    pub position: bool,
+    pub level: bool,
 }
 
 /// The live vote's last decisions as the capture dump reads them.
@@ -274,7 +280,7 @@ impl Trace {
         earlier_filtered: Scene::AUTO,
         selection: Scene::AUTO,
         flags: SceneFlags::NONE,
-        filter: FilterOutcome { enabled: false, passed: false },
+        filter: FilterOutcome { position: false, level: false },
         detectors: LensDetectors::ZERO,
         promoted: Recognition::AUTO,
     };

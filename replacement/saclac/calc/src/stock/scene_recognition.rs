@@ -7,6 +7,7 @@ use xm1_saclac_interface::calc::SharedAddress;
 use crate::adjust::configuration::{History, HISTORY};
 use crate::exposure::ports::Property;
 use crate::scene_recognition::history::{Code, ComparisonRecord, FrameNote, IndexRecord, KeyRecord};
+use crate::scene_recognition::detectors::{CaptureFrame, FrameRecord, LiveFrame};
 use crate::scene_recognition::{CaptureTrace, Evaluation, Features, Grid, LensDetectors, Recognition, Scene, SceneRecognition, Trace};
 
 /// The scenes a history code names, by code modulo 29 (0xf53404).
@@ -51,6 +52,113 @@ pub const fn forced_group(value: u32) -> Option<Scene> {
         _ => None,
     }
 }
+
+/// The frame record the frame query and the change detectors read (shared field group 33 at
+/// +0x7a0, 0x7588e8): the capture measurement's words, then live view's.
+pub fn frame_record(bytes: &[u8; 76]) -> FrameRecord {
+    let half = |at: usize| i16::from_le_bytes([bytes[at], bytes[at + 1]]);
+    let word = |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+    FrameRecord {
+        capture: CaptureFrame {
+            level: half(0x00),
+            primary_level: half(0x02),
+            alternate_level: half(0x04),
+            status: word(0x0c),
+            position: half(0x10),
+            reference: word(0x14),
+            state: word(0x18),
+            selected: word(0x20),
+            difference: word(0x24),
+        },
+        live: LiveFrame {
+            upper_level: half(0x28),
+            lower_level: half(0x2a),
+            primary_level: half(0x2c),
+            alternate_level: half(0x2e),
+            third_level: half(0x30),
+            reference: word(0x38),
+            state: word(0x3c),
+            at_4c: word(0x40),
+            at_3c: word(0x44),
+            position: half(0x48),
+            at_38: half(0x4a),
+        },
+    }
+}
+
+/// Configuration the detectors read (0x69f8fc unless noted).
+pub const DIFFERENCE_TEST: Property = Property(0x75fa);
+pub const BELOW_TEST: Property = Property(0x75fb);
+/// Nonzero: the portrait detector tests the level before the level difference.
+pub const BELOW_FIRST: Property = Property(0x75f9);
+/// Each pair: the value for a record without the record measurement selection, then with it.
+pub const DIFFERENCE_LIMIT: [Property; 2] = [Property(0x75fc), Property(0x75ff)];
+pub const BELOW_LIMIT: [Property; 2] = [Property(0x75fd), Property(0x7600)];
+/// Signed, in tenths (0x69ffe8).
+pub const LANDSCAPE_LEVEL: [Property; 2] = [Property(0x75f0), Property(0x7601)];
+pub const NIGHT_LEVEL: [Property; 2] = [Property(0x75f2), Property(0x7602)];
+pub const CLOSEUP_LEVEL: [Property; 2] = [Property(0x75f7), Property(0x7603)];
+/// Nonzero: the night detector checks the capture status and position, and gates its answer.
+pub const NIGHT_GATED: Property = Property(0x75f5);
+pub const NIGHT_SELECTED: Property = Property(0x75f3);
+pub const NIGHT_LIVE: Property = Property(0x75f4);
+/// Two bytes: the count below which the live gate reads `GATE_BELOW`, else `GATE_ABOVE`.
+pub const GATE_SWITCH: Property = Property(0x75e9);
+pub const GATE_BELOW: Property = Property(0x75ec);
+pub const GATE_ABOVE: Property = Property(0x75eb);
+pub const GRID_WEIGHTING: Property = Property(0x75c3);
+pub const MATCH_THRESHOLD: Property = Property(0x75c4);
+pub const SNAPSHOT_GRID_THRESHOLD: Property = Property(0x7626);
+pub const REFERENCE_THRESHOLD: Property = Property(0x7618);
+pub const SNAPSHOT_REFERENCE_THRESHOLD: Property = Property(0x7677);
+pub const STATIONARY_LIMIT: Property = Property(0x76de);
+/// Nonzero: the stationary decision writes its overlay line.
+pub const OVERLAY: Property = Property(0xeb);
+/// The overlay line's text before the steadiness digits (0xf52c84).
+pub const STATIONARY_TEXT: &[u8] = b"GETSTATIC:";
+pub const TRIPOD: Property = Property(0x76dd);
+pub const SHAKE_REDUCTION: Property = Property(0x78d0);
+/// Read only for a record without the record measurement selection (0xf4acd4, 0xf4ad54, 0xf4a554).
+pub const KEEP_STATIONARY: Property = Property(0x76dc);
+pub const SHAKE_CHECK: Property = Property(0x76da);
+pub const PROMOTION: Property = Property(0x7684);
+/// The landscape promotion's switch: live view's, then the shot's (0xf4a520).
+pub const PROMOTION_SWITCH: [Property; 2] = [Property(0x7683), Property(0x76b0)];
+
+/// Two bytes: the snapshot position detector's threshold for a lens reference (0xf4bf5c).
+pub const fn snapshot_position_threshold(reference: u32) -> Property { Property(0x7627u32.wrapping_add(reference.wrapping_mul(2))) }
+
+/// A cell's weight: its zone's configuration byte (0xf4a7a8).
+pub const fn zone_weight(cell: usize) -> Property { Property(0x64bc + crate::stock::adjust::ZONES[cell] as u32) }
+
+/// The centre four cells, ring 0 of table 0xf568c0.
+pub const CENTRE: [usize; 4] = [119, 120, 135, 136];
+
+/// Whether a scene may be published, for the scenes that have a switch (0xf4a57c).
+pub const fn scene_enable(scene: Scene) -> Option<Property> {
+    Some(Property(match scene.0 {
+        0 => 0x7685,
+        1 => 0x7687,
+        4 => 0x7688,
+        5 => 0x7686,
+        8 => 0x7689,
+        9 => 0x768a,
+        11 => 0x768b,
+        14 => 0x768c,
+        48 => 0x768d,
+        _ => return None,
+    }))
+}
+
+/// The rate filter's switches and level bounds and the reference grid's threshold, by scene
+/// group in `SceneGroup` order (0xf4a848, 0xf4ad7c).
+pub const FILTER_ENABLE: [Property; 6] = [Property(0x7697), Property(0x7699), Property(0x7698), Property(0x769a), Property(0x769b), Property(0x769c)];
+pub const FILTER_POSITION: [Property; 6] = [Property(0x769d), Property(0x769f), Property(0x769e), Property(0x76a0), Property(0x76a1), Property(0x76a2)];
+pub const FILTER_LEVEL: [Property; 6] = [Property(0x76a3), Property(0x76a5), Property(0x76a4), Property(0x76a6), Property(0x76a7), Property(0x76a8)];
+pub const FILTER_LOW: [Property; 6] = [Property(0x76a9), Property(0x76ac), Property(0x76aa), Property(0x76ad), Property(0x76ae), Property(0x76af)];
+/// Only the sunset group has an upper bound.
+pub const FILTER_SUNSET_HIGH: Property = Property(0x76ab);
+pub const GROUP_GRID_THRESHOLD: [Property; 6] = [Property(0x7612), Property(0x7614), Property(0x7613), Property(0x7615), Property(0x7616), Property(0x7617)];
 
 /// The state the capture dump reads, as the library's getters answer it: the saved evaluation
 /// (0xf4dfe8), the saved capture features (0xf4e004), the live and capture traces (0xf4e020,
@@ -223,8 +331,8 @@ fn live_trace(bytes: &mut [u8], trace: &Trace) {
         put_word(bytes, 0x24 + 4 * index, word);
     }
     put_half(bytes, 0x34, trace.flags.0);
-    put_word(bytes, 0x38, u32::from(trace.filter.enabled));
-    put_word(bytes, 0x3c, u32::from(trace.filter.passed));
+    put_word(bytes, 0x38, u32::from(trace.filter.position));
+    put_word(bytes, 0x3c, u32::from(trace.filter.level));
     lens_detectors(bytes, 0x40, &trace.detectors);
     recognition(bytes, 0x54, trace.promoted);
 }

@@ -9,6 +9,9 @@ pub fn level(properties: &mut impl Properties, id: Property) -> i16 { properties
 /// A one-byte value in tenths: the value times ten.
 pub fn tenths(properties: &mut impl Properties, id: Property) -> u16 { (properties.property(id) as u16).wrapping_mul(10) }
 
+/// A one-byte signed value in tenths (0x69ff68, 0x69ffe8).
+pub fn signed_tenths(properties: &mut impl Properties, id: Property) -> i16 { i16::from(properties.property(id) as u8 as i8).wrapping_mul(10) }
+
 /// A two-byte value, low byte first (0x69fec8).
 pub fn word(properties: &mut impl Properties, id: Property) -> u16 {
     let low = properties.property(id);
