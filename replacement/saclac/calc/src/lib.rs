@@ -11,7 +11,9 @@ pub mod finish;
 pub mod geometry;
 pub mod policy;
 pub mod profile;
+pub mod record_policy;
 pub mod requests;
+pub mod scene_levels;
 pub mod scene_recognition;
 pub mod selection;
 pub mod stock;
@@ -29,6 +31,10 @@ mod policy_tests;
 #[cfg(test)]
 mod profile_tests;
 #[cfg(test)]
+mod record_policy_tests;
+#[cfg(test)]
 mod requests_tests;
+#[cfg(test)]
+mod scene_levels_tests;
 #[cfg(test)]
 mod selection_tests;
