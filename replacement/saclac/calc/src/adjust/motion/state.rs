@@ -1,12 +1,11 @@
 //! The motion layer's state: what a run's preparation read and decided, the dump-frame section it
-//! traces into, the area sampling and the planned drive.
+//! traces into, the area sampling and the run's plan.
 
 use xm1_saclac_interface::calc::SharedAddress;
 
-use crate::adjust::motion::drive::DriveProfile;
 use crate::adjust::motion::exposure::{FrameExposure, Program};
-use crate::adjust::motion::plan::Plan;
 use crate::adjust::motion::measured::LevelCheck;
+use crate::adjust::motion::plan::{ContrastThresholds, DepthSettings, Plan};
 use crate::adjust::motion::ports::{SearchBounds, Ticks};
 use crate::adjust::motion::preparation::PreviousFocus;
 use crate::adjust::motion::readings::{AreaList, RecordReadings, StepLimits};
@@ -45,33 +44,6 @@ impl SampleSchedule {
     pub fn secondary(&self) -> &[i32] { &self.secondary[..usize::from(self.secondary_rows).min(SECONDARY_AREAS)] }
 }
 
-/// How the measurement lays out its secondary areas.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum AreaLayout {
-    #[default]
-    Single,
-    /// One sample per secondary row.
-    Listed,
-    /// Every secondary area at the centre primary area's target.
-    Grid,
-    GridAlternate,
-}
-
-/// The drive a measurement run follows.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct Drive {
-    /// The run moves the lens; a still run takes no target corrections.
-    pub moving: bool,
-    pub profile: DriveProfile,
-    pub layout: AreaLayout,
-    /// The run time, from its frame 0, at which the drive starts.
-    pub start_time: i32,
-    /// Frames the run had taken before its recorded positions begin.
-    pub first_frame: u16,
-    /// The exposure level lies in the window where the run checks for the contrast peak.
-    pub checks_peak: bool,
-}
-
 /// The frame exposures a preparation computes: the first corrected to the second's lens step,
 /// the second the run's frames follow.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -102,9 +74,10 @@ pub struct MotionState {
     /// Configuration bytes a treated run samples with; zero for the others.
     pub(crate) treated_settings: [u8; 4],
     pub(crate) plan: Plan,
+    pub(crate) thresholds: ContrastThresholds,
+    pub(crate) depth_settings: DepthSettings,
     pub(crate) sampling: SampleSchedule,
     pub(crate) layout: SampleLayout,
-    pub(crate) drive: Drive,
     pub(crate) level_check: LevelCheck,
 }
 

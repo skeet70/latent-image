@@ -11,6 +11,7 @@ pub mod exposure_limits;
 pub mod finish;
 pub mod lists;
 pub mod motion;
+pub mod plan;
 pub mod profile_adjustment;
 pub mod property;
 pub mod rate_curve;

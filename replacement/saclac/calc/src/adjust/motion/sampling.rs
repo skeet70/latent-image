@@ -2,7 +2,8 @@
 //! positions a run recorded.
 
 use crate::adjust::motion::drive::{quotient, DriveLimits};
-use crate::adjust::motion::state::{AreaLayout, MotionState};
+use crate::adjust::motion::plan::{AreaLayout, Motion};
+use crate::adjust::motion::state::MotionState;
 use crate::exposure::ports::{Properties, StockMemory};
 use crate::stock::motion::{self as trace, MEASURED_RUN_FRAMES, TERMINATOR};
 
@@ -37,16 +38,16 @@ impl MotionState {
     /// The lens position `frame` frame periods into the run (0xfa30c0).
     pub fn position_at_frame(&self, frame: u32) -> i16 {
         let time = self.frame_period().wrapping_mul(frame) as i32;
-        self.drive.profile.position_at(time.wrapping_sub(self.drive.start_time))
+        self.plan.profile.position_at(time.wrapping_sub(self.plan.start_time))
     }
 
     /// How far a target sits from `reference` when its area is exposed `offset` after `time`;
     /// none while the drive stands still.
     fn correction(&self, properties: &mut impl Properties, reference: i16, time: i32, offset: i32) -> i16 {
-        if !self.drive.moving {
+        if self.plan.motion != Motion::Continuous {
             return 0;
         }
-        self.drive.profile.midpoint_correction(properties, reference, time, offset, self.sampling.exposure)
+        self.plan.profile.midpoint_correction(properties, reference, time, offset, self.sampling.exposure)
     }
 
     fn target(&self, properties: &mut impl Properties, position: i16, time: i32, offset: i32) -> i16 {
@@ -56,12 +57,12 @@ impl MotionState {
     /// The area targets around `position`, sampled as frame `frame` of the run, and their trace
     /// in the dump frame (0xfa2e58).
     pub fn targets(&self, ports: &mut (impl Properties + StockMemory), position: i16, frame: u32) -> SampleTargets {
-        let time = if frame == 0 { self.drive.start_time.wrapping_neg() } else { self.drive.profile.time_to(position) as i32 };
+        let time = if frame == 0 { self.plan.start_time.wrapping_neg() } else { self.plan.profile.time_to(position) as i32 };
         let mut targets = SampleTargets::default();
         for (slot, offset) in targets.primary.iter_mut().zip(self.sampling.primary()) {
             *slot = self.target(ports, position, time, *offset);
         }
-        match self.drive.layout {
+        match self.plan.layout {
             AreaLayout::Listed => {
                 let sampled = self.sampling.secondary();
                 for (slot, offset) in targets.secondary.iter_mut().zip(sampled) {
@@ -97,17 +98,17 @@ impl MotionState {
             Some(measured) if measured != 0 => measured,
             _ => in_force.speed,
         };
-        let planning = self.drive.profile.plan(speed, self.readings.drive_kind, ports);
-        planning.trace(self.drive.start_time, self.section, ports);
+        let planning = self.plan.profile.plan(speed, self.readings.drive_kind, ports);
+        planning.trace(self.plan.start_time, self.section, ports);
         if positions.len() > 2 {
             let last = positions.len() - 1;
             if let Some(moved) = (1..last).find(|&index| positions[index] != positions[0]) {
-                let elapsed = self.drive.profile.time_to(positions[moved]);
-                let frames = moved as u32 + u32::from(self.drive.first_frame);
-                self.drive.start_time = self.frame_period().wrapping_mul(frames).wrapping_sub(elapsed) as i32;
+                let elapsed = self.plan.profile.time_to(positions[moved]);
+                let frames = moved as u32 + u32::from(self.plan.first_frame);
+                self.plan.start_time = self.frame_period().wrapping_mul(frames).wrapping_sub(elapsed) as i32;
             }
         }
-        ports.write_u32(trace::drive_planning(self.section, 0), self.drive.start_time as u32);
+        ports.write_u32(trace::drive_planning(self.section, 0), self.plan.start_time as u32);
         let mut traced = 0;
         for step in earlier.iter().chain(core::iter::once(&in_force)) {
             ports.write_u32(trace::schedule_frame(self.section, traced), u32::from(step.frame));

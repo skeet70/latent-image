@@ -9,14 +9,14 @@ use crate::adjust::metering::MeteringTables;
 use crate::adjust::motion::drive::{quotient, DriveSpeed};
 use crate::adjust::motion::exposure::{ExposureInputs, ExposurePorts, FrameExposure, Program, ProgramStep, PROGRAM_STEPS};
 use crate::adjust::motion::measured::LevelCheck;
-use crate::adjust::motion::plan::Plan;
+use crate::adjust::motion::plan::{ContrastThresholds, DepthSettings, Plan};
 use crate::adjust::motion::ports::{BoundsQuery, ChannelRates, Clock, ExposureTimes, LensBounds, MeasurementReadings, SearchBounds};
 use crate::adjust::motion::preparation::{searches_in_full, CaptureFrames, LensStatus, PreviousFocus};
 use crate::adjust::motion::queries;
 use crate::adjust::motion::readings::{AreaList, PreparationInput, RecordReadings, SelectionLists, StepLimits};
 use crate::adjust::motion::search::{ListReadings, SearchMode, SearchPorts, SearchSetup};
 use crate::adjust::motion::layout::SampleLayout;
-use crate::adjust::motion::state::{Drive, FrameExposures, MotionState, SampleSchedule};
+use crate::adjust::motion::state::{FrameExposures, MotionState, SampleSchedule};
 use crate::adjust::motion::statistics::Statistics;
 use crate::adjust::peak::Logarithms;
 use crate::adjust::timing::CaptureTiming;
@@ -291,6 +291,8 @@ impl MotionState {
             areas: area_trace(&readings, &areas, step_two),
         };
         stock::trace_preparation(section, &trace, ports);
+        let mut plan = Plan::default();
+        plan.reset_results();
         let state = Self {
             section,
             results,
@@ -305,10 +307,11 @@ impl MotionState {
             bounds,
             statistics,
             treated_settings,
-            plan: Plan::default(),
+            plan,
+            thresholds: ContrastThresholds::default(),
+            depth_settings: DepthSettings::default(),
             sampling: SampleSchedule::default(),
             layout: SampleLayout::default(),
-            drive: Drive::default(),
             level_check: LevelCheck::default(),
         };
         (state, preparation)
