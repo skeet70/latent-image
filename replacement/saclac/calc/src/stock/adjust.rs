@@ -314,7 +314,7 @@ pub const METERING_START: u32 = 0x0301_0500;
 pub const METERING_END: u32 = 0x1301_0500;
 
 /// Each cell's zone (table 0xf5e220).
-const ZONES: [u8; 256] = [
+pub(crate) const ZONES: [u8; 256] = [
     9, 9, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 9, 9,
     9, 9, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 9, 9,
     8, 8, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 8, 8,

@@ -2,7 +2,8 @@
 
 use crate::exposure::ports::Property;
 
-/// Bit 0 selects the configured measurement level (0xf624f8, 0xf62544).
+/// Bit 0 selects the configured measurement level (0xf624f8, 0xf62544); bit 3 turns the profile
+/// limit flags off (0xf5eae8).
 pub const ADJUSTMENT_FLAGS: Property = Property(0xa8);
 /// Two bytes: the target level outside the adjustment path (0xf624e0).
 pub const TARGET_LEVEL: Property = Property(0x6002);
@@ -32,6 +33,8 @@ pub const CORRECTION_FLAGS: Property = Property(0x65a8);
 /// Copied into the dump frame (0xf6ad00, 0xf6ad18).
 pub const DUMP_FIRST: Property = Property(0x4a07);
 pub const DUMP_SECOND: Property = Property(0x4a08);
+/// Copied into the dump frame by 0xf6c8fc (0xf6d858).
+pub const DUMP_SETTING: Property = Property(0x4a10);
 /// Two bytes: the weight sum at which the adjustment path is not taken (0xf6afd8).
 pub const WEIGHT_LIMIT: Property = Property(0x6490);
 /// Two bytes each: weight thresholds that set the adjustment state (0xf6b214, 0xf6b234).

@@ -72,8 +72,8 @@ impl ReferenceScale for Lens {
 /// The exposure limits' services over a `World`. A lens limit of `l` tenths reads step `l / 10`;
 /// no limit reads the near or far step given here. The other layers' services are formulas: a
 /// channel's level is 100 per channel less 30 with its class offset, every feature class is 0, a
-/// compensated level is seven per step plus the reference, and a cell row's level is 100 plus ten
-/// per row.
+/// compensated level is seven per step plus the reference over ten steps, and a cell row's level
+/// is 100 plus ten per row.
 pub struct LimitWorld {
     pub world: World,
     pub unlimited_near: u32,
@@ -130,6 +130,7 @@ impl LensSteps for LimitWorld {
 impl ChannelLevels for LimitWorld {
     fn channel_level(&mut self, channel: u32, offset: bool) -> i16 { 100 * channel as i16 - if offset { 30 } else { 0 } }
     fn compensated_level(&mut self, step: u32, reference: u32) -> i16 { (7 * step + reference) as i16 }
+    fn steps(&mut self) -> u32 { 10 }
 }
 
 impl FeatureClasses for LimitWorld {

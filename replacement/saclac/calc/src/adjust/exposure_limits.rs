@@ -16,6 +16,8 @@ pub trait ChannelLevels {
     fn channel_level(&mut self, channel: u32, offset: bool) -> i16;
     /// The step's compensated level in the reference lens's row (0x746a80).
     fn compensated_level(&mut self, step: u32, reference: u32) -> i16;
+    /// How many steps the compensated levels cover (0x74677c).
+    fn steps(&mut self) -> u32;
 }
 
 /// The display layer's grid cell levels.

@@ -13,6 +13,7 @@ use xm1_saclac_profile_records::{AccessGroup, Bytes, Grants, Handle, Measurement
 use crate::adjust::exposure_limits::{CellLevels, ChannelLevels};
 use crate::adjust::lens::{BiasTable, LensConfiguration};
 use crate::adjust::profile_adjustment::{LensSteps, StepTable};
+use crate::adjust::profile_mode::DeviceReadiness;
 use crate::exposure::ports::{CaptureProfiles, ImageReport, InPlace, Lens, Placement, ProfileAccess, ProfileLevels, Properties, Property, StockMemory};
 use crate::profile::Profile;
 use crate::scene_levels::FeatureClasses;
@@ -105,6 +106,10 @@ pub struct World {
     /// Standard-table near and far steps by limit.
     pub near_steps: BTreeMap<u16, u32>,
     pub far_steps: BTreeMap<u16, u32>,
+    pub device_ready: bool,
+    /// Compensated levels by step and reference, over `steps` steps.
+    pub compensated_levels: BTreeMap<(u32, u32), i16>,
+    pub steps: u32,
 }
 
 /// Where the test world places the context's in-place blocks.
@@ -147,6 +152,9 @@ impl Default for World {
             grid_steps: BTreeMap::new(),
             near_steps: BTreeMap::new(),
             far_steps: BTreeMap::new(),
+            device_ready: false,
+            compensated_levels: BTreeMap::new(),
+            steps: 0,
         }
     }
 }
@@ -266,6 +274,10 @@ impl ImageReport for World {
     fn fourth_report_word(&mut self) -> u32 { self.fourth_report_word }
 }
 
+impl DeviceReadiness for World {
+    fn device_ready(&mut self) -> bool { self.device_ready }
+}
+
 impl LensConfiguration for World {
     fn channel_value(&mut self, channel: i32) -> u32 { self.lens_configuration.channel_value(channel) }
     fn channel_curve(&mut self, channel: i32) -> u32 { self.lens_configuration.channel_curve(channel) }
@@ -299,7 +311,8 @@ impl LensSteps for World {
 /// Channel and cell levels and feature classes are all 0.
 impl ChannelLevels for World {
     fn channel_level(&mut self, _channel: u32, _offset: bool) -> i16 { 0 }
-    fn compensated_level(&mut self, _step: u32, _reference: u32) -> i16 { 0 }
+    fn compensated_level(&mut self, step: u32, reference: u32) -> i16 { self.compensated_levels.get(&(step, reference)).copied().unwrap_or(0) }
+    fn steps(&mut self) -> u32 { self.steps }
 }
 
 impl FeatureClasses for World {

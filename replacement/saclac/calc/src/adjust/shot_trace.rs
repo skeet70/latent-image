@@ -4,12 +4,16 @@
 
 use xm1_saclac_interface::calc::SharedAddress;
 use xm1_saclac_interface::RecordHandle;
+use xm1_saclac_profile_records::stock::record::group_00;
 use xm1_saclac_profile_records::SharedHeaderByte;
 
+use crate::adjust::exposure_limits::{self, LimitPorts, Request, Selection, NO_INDEX};
 use crate::exposure::context::Levels;
 use crate::exposure::ports::{Lens, ProfileAccess, Properties, StockMemory};
 use crate::exposure::settings;
 use crate::stock::calculation::{self as block, BlockOffset, Cell, Pass};
+use crate::stock::lists;
+use crate::stock::property;
 use crate::stock::shot_dump::{self as dump, SlotLayout};
 
 /// The shot's calculation block: the bound record, the calc 0x3c02 result and the plan words.
@@ -61,7 +65,8 @@ fn plan_kind(block: &mut impl CalculationBlock, entry: u8) -> u8 {
     if block.read_u32(block::ROW_DATA) == 0 { CELL_KIND } else { block.read_u8(block::plan_kind(entry)) }
 }
 
-/// The cell area's two values the selection record carries when a plan was made.
+/// The cell area's two values the selection record carries when a plan was made: its +0xa and
+/// 0xf68d84's sum.
 fn planned_values(block: &mut impl CalculationBlock, pass: Pass, cell: Cell, index: u8) -> [u32; 2] {
     if block.read_u32(block::ROW_DATA) == 0 {
         return [0; 2];
@@ -285,6 +290,108 @@ pub fn trace_second_selection(
     }
 }
 
+/// What the plain selection's trace records beside the block.
+#[derive(Clone, Copy, Debug)]
+pub struct PlainTrace<'a> {
+    pub frame: Option<SharedAddress>,
+    /// How many areas the selection holds.
+    pub count: u32,
+    pub levels: &'a Levels,
+    pub record: RecordHandle,
+    pub lens_reference: u32,
+    /// Leaves the four area grids out.
+    pub skip_grids: bool,
+}
+
+/// The target of the record's unindexed limits for the levels' curve, with no request level.
+fn limit_target(ports: &mut (impl LimitPorts + ProfileAccess), record: RecordHandle, levels: &Levels, lens_reference: u32) -> i16 {
+    let mut profile = ports.profile();
+    let request = Request {
+        selection: Selection {
+            scene: u32::from(profile.header(record, SharedHeaderByte::At31)),
+            flags: profile.read(record, &group_00::AT_002E),
+            alternate: profile.read::<u8, _>(record, &group_00::AT_004B) != 0,
+            variant: profile.read::<u8, _>(record, &group_00::AT_0066) != 0,
+            unmeasured: levels.unmeasured,
+            threshold: Selection::threshold_of(profile.read(record, &group_00::AT_0020)),
+            auxiliary: profile.header(record, SharedHeaderByte::At46) != 0,
+        },
+        class: u32::from(profile.read::<u8, _>(record, &group_00::AT_0032)),
+        reference: lens_reference,
+        policy: levels.policy,
+        armed: profile.header(record, SharedHeaderByte::At63) != 0,
+        choice: u32::from(profile.read::<u8, _>(record, &group_00::AT_003E)),
+        tracking: profile.read(record, &group_00::INTERVAL_TRACKING).0 != 0,
+        bank: 0,
+        cell: Cell::default(),
+        index: NO_INDEX,
+        level: i16::MAX,
+        profile: u32::from(profile.read::<u8, _>(record, &group_00::AT_0044)),
+        fixed_upper: false,
+        capture_profile: levels.curve,
+        minimum: profile.read(record, &group_00::AT_0024),
+    };
+    exposure_limits::limits(ports, &request).target
+}
+
+/// The record of a pass the plain selection does not trace.
+const fn empty_pass() -> [u32; dump::PASS_WORDS] {
+    let mut record = [0; dump::PASS_WORDS];
+    record[19] = CELL_KIND as u32;
+    record
+}
+
+/// Each lens step's compensated level at `lens_reference`, the rest of the words zero.
+fn write_step_levels(ports: &mut (impl StockMemory + LimitPorts), frame: SharedAddress, lens_reference: u32) {
+    let steps = ports.steps();
+    for step in 0..steps {
+        let level = ports.compensated_level(step, lens_reference);
+        write(ports, frame, dump::STEP_LEVELS + 4 * step, i32::from(level) as u32);
+    }
+    for step in steps..dump::STEP_LEVEL_WORDS {
+        write(ports, frame, dump::STEP_LEVELS + 4 * step, 0);
+    }
+}
+
+/// The plain pass's selection with its limit target, the lens steps' compensated levels and,
+/// unless skipped, the plain and grid passes' area grids (0xf6c8fc through 0xf60294).
+pub fn trace_plain_selection(
+    ports: &mut (impl StockMemory + Lens + LimitPorts + ProfileAccess),
+    block: &mut impl CalculationBlock,
+    cells: &mut impl SelectedCells,
+    trace: &PlainTrace,
+) {
+    let Some(frame) = trace.frame else { return };
+    let levels = trace.levels;
+    let target = limit_target(ports, trace.record, levels, trace.lens_reference);
+    write(ports, frame, dump::LIMIT, i32::from(target) as u32);
+    write_levels(ports, frame, levels);
+    write(ports, frame, dump::START, i32::from(levels.start) as u32);
+    write_selections(ports, block, cells, frame, trace.count, Pass::Plain, |cell, index| block::area_half(Pass::Plain, cell, index));
+    write_plan_words(ports, block, frame);
+    for pass in 0..AREAS {
+        write_record(ports, frame, dump::PASSES + dump::PASS_STRIDE * u32::from(pass), &empty_pass());
+    }
+    write_rows(ports, block, cells, frame, Pass::Plain, trace.count);
+    for index in trace.count..u32::from(AREAS) {
+        write_record(ports, frame, dump::ROWS + dump::ROW_STRIDE * index, &[0; 4]);
+    }
+    write_step_levels(ports, frame, trace.lens_reference);
+    write_area_level(ports, block, cells, frame, Pass::Plain, levels);
+    let word = ports.read_u32(lists::CORRECTION_WORD);
+    write(ports, frame, dump::LIST_WORD, word);
+    if !trace.skip_grids {
+        for pass in [Pass::Plain, Pass::Grid(0), Pass::Grid(1), Pass::Grid(2)] {
+            write_grid(ports, block, frame, dump::FIRST, pass);
+        }
+    }
+    let kind = plan_kind(block, 0);
+    let word = block.read_u32(block::pass_word(kind, Pass::Plain, 0));
+    write(ports, frame, dump::PASS_WORD, word);
+    let setting = ports.property(property::DUMP_SETTING);
+    write(ports, frame, dump::SETTING, setting);
+}
+
 /// The selected cell's summary, under the lens levels of `slot` (0xf6d870 for the plain pass,
 /// 0xf6e484 for the mode's pass into the first slot).
 pub fn trace_selected_cell(
@@ -357,35 +464,54 @@ pub fn trace_lens_levels(
     write_record(ports, frame, base, &words);
 }
 
-/// The nine cells' halfwords and rows, and the plain areas of every cell (0xf6e91c into the
-/// repeat slot; 0xf6c8fc into the first).
+/// The plain grid's nine cells' halfwords and rows, then its areas (0xf6e91c into the repeat
+/// slot).
 pub fn trace_area_grid(memory: &mut impl StockMemory, block: &mut impl CalculationBlock, frame: Option<SharedAddress>, slot: TraceSlot) {
     let Some(frame) = frame else { return };
-    let layout = slot.layout();
-    for column in 0..3 {
-        for row in 0..3 {
-            let cell = Cell { column, row };
-            let rows = block::row_cell(Pass::Plain, cell);
-            let halves = [
-                block.read_u16(block::cell_first(cell)),
-                block.read_u16(block::cell_second(cell)),
-                block.read_u16(block::area_half(Pass::Plain, cell, 0)),
-                u16::from(block.read_u8(rows.plus(block::ROW_FLAGS))),
-                block.read_u16(rows.plus(block::ROW_CELL_AT_30)),
-                block.read_u16(rows.plus(block::ROW_CELL_AT_32)),
-                block.read_u16(rows.plus(0x34)),
-                block.read_u16(rows.plus(0x36)),
-                block.read_u32(rows.plus(block::ROW_CELL_WORD)) as u16,
-            ];
-            let at = layout.cells + 0x3c * u32::from(column) + dump::CELL_BYTES * u32::from(row);
-            for (slot, value) in halves.into_iter().enumerate() {
-                memory.write_u16(dump::at(frame, at + 2 * slot as u32), value);
-            }
-            for index in 0..AREAS {
-                let area = block::area(CELL_KIND, Pass::Plain, cell, index);
-                let at = layout.areas + 0x20 * (3 * u32::from(column) + u32::from(row)) + layout.area_index_stride * u32::from(index);
-                write_area_halves(memory, block, frame, at, area, block::plan_value(Pass::Plain, cell, index));
-            }
+    write_grid(memory, block, frame, slot.layout(), Pass::Plain);
+}
+
+const GRID_CELLS: [Cell; 9] = {
+    let mut cells = [Cell { column: 0, row: 0 }; 9];
+    let mut index = 0;
+    while index < 9 {
+        cells[index] = Cell { column: (index / 3) as u8, row: (index % 3) as u8 };
+        index += 1;
+    }
+    cells
+};
+
+/// One pass's nine cells, then their areas; a grid pass's follow the plain grid's in the slot.
+fn write_grid(memory: &mut impl StockMemory, block: &mut impl CalculationBlock, frame: SharedAddress, layout: SlotLayout, pass: Pass) {
+    let grid = match pass {
+        Pass::Plain => 0,
+        Pass::Grid(pass) => 1 + u32::from(pass),
+    };
+    let cells = layout.cells + 9 * dump::CELL_BYTES * grid;
+    let areas = layout.areas + 9 * dump::AREA_BYTES as u32 * grid;
+    for cell in GRID_CELLS {
+        let rows = block::row_cell(pass, cell);
+        let halves = [
+            block.read_u16(block::cell_first(cell)),
+            block.read_u16(block::cell_second(cell)),
+            block.read_u16(block::area_half(pass, cell, 0)),
+            u16::from(block.read_u8(rows.plus(block::ROW_FLAGS))),
+            block.read_u16(rows.plus(block::ROW_CELL_AT_30)),
+            block.read_u16(rows.plus(block::ROW_CELL_AT_32)),
+            block.read_u16(rows.plus(0x34)),
+            block.read_u16(rows.plus(0x36)),
+            block.read_u32(rows.plus(block::ROW_CELL_WORD)) as u16,
+        ];
+        let at = cells + 0x3c * u32::from(cell.column) + dump::CELL_BYTES * u32::from(cell.row);
+        for (slot, value) in halves.into_iter().enumerate() {
+            memory.write_u16(dump::at(frame, at + 2 * slot as u32), value);
+        }
+    }
+    for cell in GRID_CELLS {
+        for index in 0..AREAS {
+            let area = block::area(CELL_KIND, pass, cell, index);
+            let at = areas + 0x20 * (3 * u32::from(cell.column) + u32::from(cell.row)) + layout.area_index_stride * u32::from(index);
+            write_area_halves(memory, block, frame, at, area, block::plan_value(pass, cell, index));
         }
     }
 }

@@ -60,6 +60,8 @@ fn no_frame_no_stores() {
     let mut world = World::default();
     let mut block = Block::default();
     trace_selection(&mut world, &mut block, &mut Cells, None, 3, &Levels::default());
+    let levels = Levels::default();
+    trace_plain_selection(&mut world, &mut block, &mut Cells, &PlainTrace { frame: None, count: 3, levels: &levels, record: fakes::handle(), lens_reference: 0, skip_grids: false });
     trace_selected_cell(&mut world, &mut block, &mut Cells, None, TraceSlot::First, Pass::Plain);
     clear_slot(&mut world, None, TraceSlot::Repeat);
     assert!(world.stores.is_empty());
@@ -182,4 +184,100 @@ fn clearing_a_slot_zeroes_its_levels_cells_and_areas() {
     assert!(cleared.contains(&0xfc40) && cleared.contains(&(0xfc40 + 0x38)));
     assert!(cleared.contains(&(0xeaa4 + 0x20 * 8 + 0x480 * 2 + 0x1c)));
     assert!(world.stores.iter().all(|&(_, _, value)| value == 0));
+}
+
+/// The index in `world.stores` of the first store in `[from, to)` of the frame.
+fn first_store(world: &World, from: u32, to: u32) -> usize {
+    world.stores.iter().position(|&(at, _, _)| (FRAME.0 + from..FRAME.0 + to).contains(&at)).unwrap()
+}
+
+/// The index in `world.stores` of the last store in `[from, to)` of the frame.
+fn last_store(world: &World, from: u32, to: u32) -> usize {
+    world.stores.iter().rposition(|&(at, _, _)| (FRAME.0 + from..FRAME.0 + to).contains(&at)).unwrap()
+}
+
+fn stored_at(world: &World, offset: u32) -> bool { world.stores.iter().any(|&(at, _, _)| at == FRAME.0 + offset) }
+
+#[test]
+fn the_area_grid_writes_its_nine_cells_before_its_areas() {
+    let mut world = World::default();
+    trace_area_grid(&mut world, &mut Block::default(), Some(FRAME), TraceSlot::Repeat);
+    assert!(last_store(&world, 0x111e4, 0x111e4 + 9 * 20) < first_store(&world, 0x11298, 0x11298 + 3 * 0x120));
+}
+
+/// Scene 0's limits with a target of 30: the target offset is -30, under the first parameter
+/// set's target ceiling of 50 and upper level of 200, and lens steps 2 to 9 capped at 200.
+fn limit_world() -> World {
+    let mut world = World::default();
+    for limit in [0, u16::MAX] {
+        world.near_steps.insert(limit, 2);
+        world.far_steps.insert(limit, 9);
+    }
+    world.property(crate::exposure::ports::Property(0x61e1), 0xfd);
+    world.property(crate::exposure::ports::Property(0x6125 + 11), 5);
+    world.property(crate::exposure::ports::Property(0x6125 + 4), 20);
+    world.property(crate::exposure::ports::Property(0x61c9), 20);
+    world
+}
+
+fn plain_trace<'a>(levels: &'a Levels, count: u32, skip_grids: bool) -> PlainTrace<'a> {
+    PlainTrace { frame: Some(FRAME), count, levels, record: fakes::handle(), lens_reference: 0x42, skip_grids }
+}
+
+#[test]
+fn the_plain_trace_records_its_limit_target_levels_and_lens_step_levels() {
+    let mut world = limit_world();
+    world.steps = 3;
+    for (step, level) in [(0, 11), (1, -5), (2, 30)] {
+        world.compensated_levels.insert((step, 0x42), level);
+    }
+    world.put_u16(crate::stock::lists::CORRECTION_WORD, 0x1234);
+    world.property(crate::stock::property::DUMP_SETTING, 9);
+    let levels = Levels { start: 450, measured: 300, ..Levels::default() };
+    trace_plain_selection(&mut world, &mut Block::default(), &mut Cells, &plain_trace(&levels, 1, false));
+    assert_eq!([0xf8bc, 0xf8c0, 0xf8c4].map(|offset| frame_word(&world, offset)), [30, 300, 450]);
+    assert_eq!([0xfcac, 0xfcb0, 0xfcb4].map(|offset| frame_word(&world, offset)), [11, -5i32 as u32, 30]);
+    assert!(stored_at(&world, 0xfcac + 4 * 30) && !stored_at(&world, 0xfcac + 4 * 31));
+    assert_eq!(frame_word(&world, 0xe7d0), 0x1234);
+    assert_eq!(frame_word(&world, 0x116a4), 9);
+    assert_eq!([0, 1, 2].map(|pass| frame_word(&world, 0xfb14 + 100 * pass + 0x4c)), [7; 3]);
+}
+
+#[test]
+fn the_plain_trace_zeroes_the_rows_past_its_count() {
+    let mut world = limit_world();
+    let mut block = Block::default();
+    block.put_u16(4 + 0x5a54 + 0xcc + 2 * 0x44 + 0xe, 0x55);
+    let levels = Levels::default();
+    trace_plain_selection(&mut world, &mut block, &mut Cells, &plain_trace(&levels, 1, true));
+    assert_eq!(frame_word(&world, 0xfc7c), 0x55);
+    assert!((0xfc7c + 0x10..0xfc7c + 0x30).step_by(4).all(|offset| stored_at(&world, offset) && frame_word(&world, offset) == 0));
+}
+
+#[test]
+fn the_plain_trace_follows_the_plain_grid_with_each_grid_pass() {
+    let mut world = limit_world();
+    let mut block = Block::default();
+    block.put(4 + 0x5cb8 + 0x264 + 0xcc * 2, &[6]);
+    block.put_u16(4 + 0x1684 + 0x8dc * 2 + 0xfc + 0x54, 77);
+    let levels = Levels::default();
+    trace_plain_selection(&mut world, &mut block, &mut Cells, &plain_trace(&levels, 3, false));
+    assert_eq!(world.u16_at(SharedAddress(FRAME.0 + 0xe7d4 + 0xb4 * 2 + 0x3c * 2 + 6)), 6);
+    assert_eq!(world.u16_at(SharedAddress(FRAME.0 + 0xeaa4 + 0x120 * 3 + 0x20 + 0x480)), 77);
+    let cells = |grid: u32| (0xe7d4 + 0xb4 * grid, 0xe7d4 + 0xb4 * (grid + 1));
+    let areas = |grid: u32| (0xeaa4 + 0x120 * grid, 0xeaa4 + 0x120 * (grid + 1));
+    let phases: std::vec::Vec<(usize, usize)> =
+        (0..4).flat_map(|grid| [cells(grid), areas(grid)]).map(|(from, to)| (first_store(&world, from, to), last_store(&world, from, to))).collect();
+    assert!(phases.windows(2).all(|pair| pair[0].1 < pair[1].0), "{phases:?}");
+}
+
+#[test]
+fn a_skipped_grid_leaves_the_grids_and_still_records_the_pass_word() {
+    let mut world = limit_world();
+    let mut block = Block::default();
+    block.put_u32(0x6418, 0xabcd);
+    let levels = Levels::default();
+    trace_plain_selection(&mut world, &mut block, &mut Cells, &plain_trace(&levels, 3, true));
+    assert!(!world.stores.iter().any(|&(at, _, _)| (FRAME.0 + 0xe7d4..FRAME.0 + 0xf824).contains(&at)));
+    assert_eq!(frame_word(&world, 0x116a0), 0xabcd);
 }
