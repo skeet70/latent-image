@@ -6,6 +6,7 @@ SOURCES = [
     "src/calculation.rs",
     "src/capture_results.rs",
     "src/exposure.rs",
+    "src/round.rs",
     "src/statistics.rs",
     "src/stock.rs",
     "src/stock/capture_results.rs",
