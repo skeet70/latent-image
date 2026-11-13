@@ -17,6 +17,7 @@ required-features = ["host-replay"]
 default = []
 host = []
 recipe-arena = []
+fixed-arena = []
 host-replay = ["host", "dep:serde", "dep:serde_json", "dep:sha2"]
 
 [dependencies]

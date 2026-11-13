@@ -630,6 +630,15 @@ The owned settings storage, bank projections, custom record lifecycle and header
 | 25 retained `xm1_stock_*`, `xm1_bank_*`, `xm1_storage_*` and `settings_custom_*` externs | trampoline into retained stock | stock bank, header, storage and custom-record services | no | owned storage replaces those services | required |
 | header mirror, previous-value snapshot `0x89ec00`, backup memory `0x409c281c` and the 16-byte shadow `0x409c29b8` | guest-memory layout view | retained stock readers and the bank-0 backup contract | no | no stock code reads the mirror or backup | required |
 
+## fixed_image
+
+The fixed-range test image preserves the retained startup phase call while observing entry and initialized storage.
+
+| Shim | Kind | Other side | Owned now | Removal condition | State |
+| --- | --- | --- | --- | --- | --- |
+| `xm1_fixed_test_entry` in `probe-entry.S`, published at `0x69cdf8` by `ProbeMain.hs` | stock-ABI export | retained startup phase callers | no | the placement probe is replaced by the subsystem image's entries | required |
+| `xm1_fixed_test_resume` at `0x69cdfc`, bound by `ProbeMain.hs` | trampoline into retained stock | the retained startup phase body after its entry push | no | the placement probe is replaced by the subsystem image's entries | required |
+
 ## startup_dispatch
 
 The phase dispatcher.

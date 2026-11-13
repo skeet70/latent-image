@@ -55,6 +55,8 @@ The positive pair tests cold boot, language/start-menu navigation and the shooti
 - Close unknown computed references, metadata readers beyond `payload-4`, external arena writers and address-sensitive clients before a firmware-wide retirement claim.
 - Exercise image-6 Wi-Fi clients, including hostapd and netstack, their 15 resize calls, calloc(1,20), malloc/free lifetimes and alias-pointer handling.
 - Qualify the separate `general-heap-recipe-image` artifact with the recipe ceiling, not only the standard arena image.
+- Qualify `general-heap-fixed-image` at the `0xba0000` ceiling with card-backed capture, saved-image playback and Wi-Fi heap demand. The current fixed-placement scenarios cover only cardless inputs.
+- Check DMA-loaded instruction visibility and later MPU changes on the camera before promoting the fixed-range image.
 - Close interior jumps into retired carriers after sealing, when guards no longer bind a fetch to an entry or pending invocation.
 - Close task-stack headroom: owned malloc reaches 128 bytes below its core-entry SP at the lock call (24 + 64 + 24 + 16), versus stock's 40, an 88-byte increase. `replacement/task_constructors/src.rs` declares 0xc00-byte stacks for tasks 1, 7, 35, 36, 55, 64 and 80; 0x1000 for 2, 3, 4, 43 and 62; 0x1400 for 56. This constructor subset neither attributes every heap caller to a task nor bounds the callers' live frames, retained lock/wait chain or interrupt reserve. The shortfall is a complete heap-calling-task census and each task's worst-case remaining headroom at heap entry, including Wi-Fi tasks. The finite menu pair is not that stack-budget proof.
 

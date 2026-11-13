@@ -80,7 +80,7 @@ fn geometry_words(words: [u32; 14], declared: &Geometry, arena: &Arena) -> Resul
     let wanted = Geometry { first_level_bins: 17, second_level_bins: 16, granularity: 16, stock_prefix_bytes: 16,
         stock_alignment: 8, first_level_bitmap_bits: 32, second_level_bitmap_bits: 16 };
     require(words[0] == 0x48454150 && words[1] == 1 && actual == wanted && *declared == actual, "owned backend size-class geometry differs")?;
-    require(words[2] == HEAP_START && [HEAP_END, 0xbe1a00].contains(&words[3]) && words[6] == 32
+    require(words[2] == HEAP_START && [HEAP_END, 0xbe1a00, fujimod_xm1::fixed_image_layout::IMAGE_BASE].contains(&words[3]) && words[6] == 32
         && words[4] >= 17 * 16 * 4 && words[5] == HEAP_START.checked_add(words[4]).and_then(|end| end.checked_add(15)).map(|end| end & !15).ok_or("charged state overflow")?
         && words[5] & 15 == 0 && words[5] < words[3] - 32
         && (arena.base, arena.end, arena.state_bytes, arena.pool_start, arena.guard_bytes, arena.pool_end)

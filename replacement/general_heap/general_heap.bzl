@@ -5,16 +5,16 @@ _CORE_INPUTS = [
     "//:devenv.lock", "//build-support:nixpkgs.nix", "//replacement/toolchain:xm1-rust.nix",
 ]
 
-def general_heap_subject(name, recipe_arena = False):
+def general_heap_subject(name, recipe_arena = False, fixed_arena = False):
     native.genrule(
         name = name + "-core",
-        srcs = _CORE_INPUTS,
+        srcs = _CORE_INPUTS + (["//replacement/fixed_image:layout.json"] if fixed_arena else []),
         outs = [name + "-core.a"],
         cmd = """
 set -eu
-output=$$(nix-build --no-out-link --max-jobs 1 --cores 2 --arg recipeArena %s $(location general-heap.nix))
+output=$$(nix-build --no-out-link --max-jobs 1 --cores 2 --arg recipeArena %s %s $(location general-heap.nix))
 cp "$$output/lib/libxm1_general_heap.a" "$@"
-""" % ("true" if recipe_arena else "false"),
+""" % ("true" if recipe_arena else "false", "--arg fixedArena true" if fixed_arena else ""),
         local = True,
         tags = ["manual"],
     )

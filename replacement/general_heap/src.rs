@@ -200,10 +200,12 @@ mod target {
     use core::mem::{align_of, size_of};
 
     const ARENA_BASE: usize = 0x00a7_1a00;
-    #[cfg(feature = "recipe-arena")]
+    #[cfg(all(feature = "recipe-arena", not(feature = "fixed-arena")))]
     const ARENA_END: usize = 0x00be_1a00;
-    #[cfg(not(feature = "recipe-arena"))]
+    #[cfg(not(any(feature = "recipe-arena", feature = "fixed-arena")))]
     const ARENA_END: usize = 0x00bf_1a00;
+    #[cfg(feature = "fixed-arena")]
+    const ARENA_END: usize = include!(env!("XM1_FIXED_HEAP_END_PATH"));
     const GUARD_BYTES: usize = 32;
     const ARENA_BYTES: usize = ARENA_END - ARENA_BASE - GUARD_BYTES;
     const STATE_BYTES: usize = size_of::<Heap>();

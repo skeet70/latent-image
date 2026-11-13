@@ -1,0 +1,11 @@
+{
+  "schema": 2,
+  "stock_calls": [
+    {
+      "address": "0x0069cdfc",
+      "name": "xm1_fixed_test_resume",
+      "source": "replacement/shims.md fixed-image probe; continuation after the displaced startup-phase prologue at 0x69cdf8"
+    }
+  ],
+  "stock_regions": []
+}
