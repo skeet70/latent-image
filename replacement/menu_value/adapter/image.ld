@@ -21,7 +21,7 @@ xm1_backup_report633594 = 0x00633594;
 
 SECTIONS {
   . = 0x00a00000;
-  .text : { *(.text*) }
+  .text : { KEEP(*(.text.rb_menu_value_*)) *(.text*) }
   .rodata : { *(.rodata*) *(.menu_engine.rodata*) }
   . = 0x00a80000;
   .data : { *(.data*) *(.bss*) *(.bss.*) }
