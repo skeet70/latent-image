@@ -177,20 +177,40 @@ const fn selected_column(result: u32) -> usize {
     }
 }
 
+/// What chooses a selected measurement's profile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SelectedChoice {
+    pub result: u32,
+    pub window_status: WindowStatus,
+    pub mode: u32,
+    pub banded: bool,
+}
+
+/// A selected measurement's adjustment profile; every selected table entry names one (0xf77c8c
+/// with a nonzero selection).
+pub fn choose_selected(properties: &mut impl Properties, choice: &SelectedChoice) -> AdjustmentProfile {
+    let table = choice_table(properties, choice.window_status);
+    let result = choice.result;
+    let id = if choice.banded {
+        table.selected_banded[selected_banded_column(result)]
+    } else if choice.mode == WIDE_MODE {
+        table.selected_wide[selected_wide_column(result)]
+    } else {
+        table.selected[selected_column(result)]
+    };
+    AdjustmentProfile(id)
+}
+
 /// The measurement's adjustment profile; `None` where the table chooses none and the caller's
 /// profile stands (0xf77c8c).
 pub fn choose(properties: &mut impl Properties, choice: &ProfileChoice) -> Option<AdjustmentProfile> {
+    if choice.selection != MeasurementSelection::Unselected {
+        let selected = SelectedChoice { result: choice.result, window_status: choice.window_status, mode: choice.mode, banded: choice.banded };
+        return Some(choose_selected(properties, &selected));
+    }
     let table = choice_table(properties, choice.window_status);
     let result = choice.result;
-    let id = if choice.selection != MeasurementSelection::Unselected {
-        if choice.banded {
-            table.selected_banded[selected_banded_column(result)]
-        } else if choice.mode == WIDE_MODE {
-            table.selected_wide[selected_wide_column(result)]
-        } else {
-            table.selected[selected_column(result)]
-        }
-    } else if choice.banded {
+    let id = if choice.banded {
         let group = match result {
             13 | 20 => 0,
             2 | 19 | 27 => 1,

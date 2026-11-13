@@ -65,6 +65,21 @@ fn profile_ids_past_the_table_are_refused() {
 }
 
 #[test]
+fn every_selected_measurement_chooses_a_profile_of_the_table() {
+    let mut world = World::default();
+    for alternate in [0, 1] {
+        world.property(Property(0x6c08), alternate);
+        for (status, result, mode, banded) in (0..6).flat_map(|status| (0..40).flat_map(move |result| [0, 46].into_iter().flat_map(move |mode| [false, true].map(|banded| (status, result, mode, banded))))) {
+            let selected = SelectedChoice { result, window_status: WindowStatus(status), mode, banded };
+            let chosen = choose_selected(&mut world, &selected);
+            assert_eq!(AdjustmentProfile::new(chosen.id()), Some(chosen));
+            let choice = ProfileChoice { selection: MeasurementSelection::Record, result, window_status: WindowStatus(status), mode, banded, ..choice() };
+            assert_eq!(choose(&mut world, &choice), Some(chosen));
+        }
+    }
+}
+
+#[test]
 fn the_selection_percent_reads_the_first_selection_of_the_configured_range_set() {
     let mut world = World::default();
     let record = profile(0).record();
