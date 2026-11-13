@@ -30,6 +30,22 @@ pub trait Overlay {
     fn text(&mut self, text: &[u8], column: u8, row: u8, foreground: u8, background: u8);
 }
 
+/// Image 4's lens configuration services the frame query reads.
+pub trait LensServices {
+    /// The word image 4's lens driver keeps at 0x942be8 (0x76f340).
+    fn lens_reference(&mut self) -> u32;
+    /// The lens's primary value in tenths, 0 outside the configured lenses (0x747bf8).
+    fn primary_tenths(&mut self, lens: u32) -> u32;
+    /// The response at `value` for `lens` at `step` (0x7499a0 with a last argument of 1).
+    fn response(&mut self, value: u16, lens: u32, step: u32, reference: u32) -> i32;
+    /// 0xef72d4.
+    fn converted_difference(&mut self, first: u32, second: u32) -> i16;
+    /// The lens's level class (0x747234).
+    fn level_class(&mut self, lens: u32) -> u32;
+    /// The lens's level at `setting` (0x747c40 with a second argument of 0).
+    fn class_level(&mut self, lens: u32, setting: u32) -> i32;
+}
+
 pub trait DetectorPorts: Properties + StockMemory + ProfileAccess + SubjectQuery + Steadiness + Overlay {}
 
 impl<T: Properties + StockMemory + ProfileAccess + SubjectQuery + Steadiness + Overlay> DetectorPorts for T {}

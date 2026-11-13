@@ -3,6 +3,7 @@
 //! votes settle by.
 
 pub mod detectors;
+pub mod frame;
 pub mod history;
 pub mod ports;
 
@@ -10,6 +11,8 @@ pub mod ports;
 mod detector_tests;
 #[cfg(test)]
 mod fakes;
+#[cfg(test)]
+mod frame_tests;
 #[cfg(test)]
 mod state_tests;
 

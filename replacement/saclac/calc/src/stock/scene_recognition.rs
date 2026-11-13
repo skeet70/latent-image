@@ -160,6 +160,61 @@ pub const FILTER_LOW: [Property; 6] = [Property(0x76a9), Property(0x76ac), Prope
 pub const FILTER_SUNSET_HIGH: Property = Property(0x76ab);
 pub const GROUP_GRID_THRESHOLD: [Property; 6] = [Property(0x7612), Property(0x7614), Property(0x7613), Property(0x7615), Property(0x7616), Property(0x7617)];
 
+/// The calibrated level step live view's levels are measured at (0xfa7edc returns 3).
+pub const LIVE_LEVEL_STEP: u8 = 3;
+
+/// Nonzero: the frame query skips the majority's detector; by whether record byte 0x65 is set
+/// (0xf4f584).
+pub const QUERY_SKIP: [Property; 2] = [Property(0x75e7), Property(0x767d)];
+
+/// The frame query's fallback detectors in order, by whether record byte 0x65 is set (0xf4f74c).
+pub const fn fallback_detector(alternate: bool, index: u32) -> Property { Property(if alternate { 0x7678 } else { 0x75e1 } + index) }
+
+pub const FALLBACK_DETECTORS: u32 = 5;
+
+/// The majority's window: live view's, then the shot's (0xf4d7b0).
+pub const MAJORITY_WINDOW: [Property; 2] = [Property(0x75b1), Property(0x75df)];
+
+/// The response curve's two points, value and response in hundreds (0xf4b1ac..0xf4b1e0).
+pub const RESPONSE_LOW: [Property; 2] = [Property(0x75c9), Property(0x75c7)];
+pub const RESPONSE_HIGH: [Property; 2] = [Property(0x75c8), Property(0x75c6)];
+
+/// The lens distance's band limits and factors, its lens spans and minimum (two bytes each, by
+/// lens), and the minimum's scale (0xf4e7a4).
+pub const fn distance_band_limit(band: u32) -> Property { Property(0x760b + band) }
+pub const fn distance_factor(band: u32) -> Property { Property(0x7608 + band) }
+pub const fn distance_spans(lens: u32) -> [Property; 2] { [Property(0x3e_0b40u32.wrapping_add(lens.wrapping_mul(2))), Property(0x3e_0c09u32.wrapping_add(lens.wrapping_mul(2)))] }
+pub const fn distance_minimum(lens: u32) -> Property { Property(0x3e_0572u32.wrapping_add(lens.wrapping_mul(2))) }
+pub const DISTANCE_SCALE: Property = Property(0x75cc);
+
+/// The setting the level bounds read the lens's level at, and each level class's reference in
+/// signed tenths (0xf4bfac, 0xf4bfc0).
+pub const BOUNDS_SETTING: Property = Property(0x75d5);
+pub const fn class_reference(class: u32) -> Property { Property(0x75d6u32.wrapping_add(class)) }
+
+/// One bound's settings: the slope in hundredths, the offset, cap and floor in signed tenths, and
+/// the two-byte margin.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BoundSettings {
+    pub slope: Property,
+    pub offset: Property,
+    pub cap: Property,
+    pub floor: Property,
+    pub margin: Property,
+}
+
+/// The upper and lower bound's settings of record kind 0, then kind 11 (0xf4bfdc..0xf4c11c).
+pub const BOUNDS: [[BoundSettings; 2]; 2] = [
+    [
+        BoundSettings { slope: Property(0x78d9), offset: Property(0x78da), cap: Property(0x78e2), floor: Property(0x78e1), margin: Property(0x78d1) },
+        BoundSettings { slope: Property(0x78db), offset: Property(0x78dc), cap: Property(0x78e4), floor: Property(0x78e3), margin: Property(0x78d5) },
+    ],
+    [
+        BoundSettings { slope: Property(0x78dd), offset: Property(0x78de), cap: Property(0x78e6), floor: Property(0x78e5), margin: Property(0x78d3) },
+        BoundSettings { slope: Property(0x78df), offset: Property(0x78e0), cap: Property(0x78e8), floor: Property(0x78e7), margin: Property(0x78d7) },
+    ],
+];
+
 /// The state the capture dump reads, as the library's getters answer it: the saved evaluation
 /// (0xf4dfe8), the saved capture features (0xf4e004), the live and capture traces (0xf4e020,
 /// 0xf4e03c), the code lists (0xf4d774, 0xf4d8a0, 0xf4dbfc), the reference history (0xf4d94c),
