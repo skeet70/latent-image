@@ -1,5 +1,9 @@
 use crate::*;
 
+pub const fn record_handle_from_a2(word: u32) -> RecordHandle { RecordHandle(word) }
+
+pub const fn record_handle_word(handle: RecordHandle) -> u32 { handle.0 }
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CommandDescriptor {
     pub kind: CommandKind,

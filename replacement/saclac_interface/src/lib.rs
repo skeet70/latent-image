@@ -7,6 +7,9 @@ pub mod stock;
 pub struct ClientCallback(pub(crate) u32);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecordHandle(pub(crate) u32);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ParameterValue(pub u32);
 
 /// Parameters whose meaning remains with the retained consumer.
