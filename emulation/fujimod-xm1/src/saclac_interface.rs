@@ -8,7 +8,7 @@ const PAYLOAD_LIMIT: usize = 4096;
 
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum EntryKind { Callback, ClientReply }
+pub enum EntryKind { Callback, ClientReply, ServiceRequest }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -19,11 +19,28 @@ impl TargetRegister {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PointerIdentity { Transient, Shared }
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum ArgumentDecl { Word, Memory { bytes: usize, identity: PointerIdentity } }
+
+struct BoundaryEntry {
+    address: u32,
+    kind: EntryKind,
+    target: Option<TargetRegister>,
+    arguments: Vec<ArgumentDecl>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Entry {
     address: String,
     kind: EntryKind,
     target: Option<TargetRegister>,
+    #[serde(default)]
+    arguments: Vec<ArgumentDecl>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -37,12 +54,15 @@ pub struct Declaration {
     post: String,
     entries: Vec<Entry>,
     shared: Vec<Shared>,
+    #[serde(default)]
+    callers: Vec<Shared>,
 }
 
 pub struct Plan {
     post: u32,
-    entries: Vec<(u32, EntryKind, Option<TargetRegister>)>,
+    entries: Vec<BoundaryEntry>,
     shared: Vec<(u32, u32)>,
+    callers: Vec<(u32, u32)>,
 }
 
 impl Declaration {
@@ -54,8 +74,13 @@ impl Declaration {
         for entry in self.entries {
             let address = parse_hex(&entry.address)?;
             require(address % 4 == 0 && addresses.insert(address), "interface entry is unaligned or repeated")?;
-            require(matches!((entry.kind, entry.target), (EntryKind::Callback, None) | (EntryKind::ClientReply, Some(_))), "interface reply target register missing or unexpected")?;
-            entries.push((address, entry.kind, entry.target));
+            require(matches!((entry.kind, entry.target), (EntryKind::Callback | EntryKind::ServiceRequest, None) | (EntryKind::ClientReply, Some(_))), "interface reply target register missing or unexpected")?;
+            require(entry.arguments.len() <= 12 && entry.arguments.iter().all(|argument| match argument {
+                ArgumentDecl::Word => true,
+                ArgumentDecl::Memory { bytes, .. } => (1..=PAYLOAD_LIMIT).contains(bytes),
+            }), "interface reply arguments exceed bounds")?;
+            require(matches!(entry.kind, EntryKind::Callback) || !entry.arguments.is_empty(), "interface reply arguments missing")?;
+            entries.push(BoundaryEntry { address, kind: entry.kind, target: entry.target, arguments: entry.arguments });
         }
         let mut shared = Vec::new();
         for span in self.shared {
@@ -65,13 +90,19 @@ impl Declaration {
         }
         shared.sort_unstable();
         require(shared.windows(2).all(|pair| pair[0].1 <= pair[1].0), "interface shared spans overlap")?;
-        Ok(Plan { post, entries, shared })
+        let callers = self.callers.into_iter().map(|span| {
+            let (start, end) = (parse_hex(&span.start)?, parse_hex(&span.end)?);
+            require(start < end, "interface caller span is empty")?;
+            Ok((start, end))
+        }).collect::<Result<Vec<_>, String>>()?;
+        require(callers.len() <= 16 && (!entries.iter().any(|entry| matches!(entry.kind, EntryKind::ServiceRequest)) || !callers.is_empty()), "interface service callers missing or excessive")?;
+        Ok(Plan { post, entries, shared, callers })
     }
 }
 
 impl Plan {
     pub fn sites(&self) -> impl Iterator<Item = u32> + '_ {
-        std::iter::once(self.post).chain(self.entries.iter().map(|entry| entry.0))
+        std::iter::once(self.post).chain(self.entries.iter().map(|entry| entry.address))
     }
 
     pub fn classes(&self) -> impl Iterator<Item = WatchRange> + '_ {
@@ -83,11 +114,19 @@ impl Plan {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum Argument {
+    Word { value: u32 },
+    Memory { address: Option<Address>, bytes: Vec<u8> },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum Event {
     QueueIn { operation: u16, sender: u8, payload: Vec<u8> },
     PeerRequest { queue: u8, operation: u16, payload: Vec<u8> },
     Callback { entry: Address },
-    ClientReply { entry: Address, target: Address, status: u32 },
+    ClientReply { entry: Address, target: Address, arguments: Vec<Argument> },
+    ServiceRequest { entry: Address, arguments: Vec<Argument> },
     Store { address: Address, bytes: Vec<u8> },
 }
 
@@ -122,7 +161,8 @@ impl Stream {
     pub fn entry(&mut self, machine: &Machine, plan: &Plan, stop: &Stop) -> Result<(), String> {
         let register = |name: &str| stop.registers.get(name).ok_or_else(|| "interface register missing".to_owned()).and_then(|text| parse_hex(text));
         let event = if stop.address == plan.post {
-            let descriptor = bytes(machine, stop.core, register("r1")?, 12)?;
+            let mut descriptor = [0; 12];
+            machine.session.board.read_memory(stop.core, u64::from(register("r1")?), &mut descriptor)?;
             let operation = u16::from_le_bytes([descriptor[0], descriptor[1]]);
             let sender = descriptor[2];
             let queue = u8::try_from(register("r0")?).map_err(|_| "interface queue exceeds byte")?;
@@ -131,12 +171,37 @@ impl Stream {
             if queue == 43 { Event::QueueIn { operation, sender, payload } }
             else { Event::PeerRequest { queue, operation, payload } }
         } else {
-            match plan.entries.iter().find(|entry| entry.0 == stop.address) {
-                Some((_, EntryKind::Callback, _)) => Event::Callback { entry: Address(stop.address) },
-                Some((_, EntryKind::ClientReply, Some(target))) => Event::ClientReply {
-                    entry: Address(stop.address), target: Address(register(target.name())?), status: register("r0")?,
+            match plan.entries.iter().find(|entry| entry.address == stop.address) {
+                Some(entry) if matches!(entry.kind, EntryKind::Callback) => Event::Callback { entry: Address(stop.address) },
+                Some(entry) => {
+                    if matches!(entry.kind, EntryKind::ServiceRequest) {
+                        let caller = parse_hex(&stop.lr)?;
+                        if !plan.callers.iter().any(|&(start, end)| start <= caller && caller < end) { return Ok(()); }
+                    }
+                    let arguments = entry.arguments.iter().enumerate().map(|(index, declaration)| {
+                        let word = if index < 4 {
+                            register(["r0", "r1", "r2", "r3"][index])?
+                        } else {
+                            let offset = ((index - 4) * 4) as u32;
+                            let address = parse_hex(&stop.sp)?.checked_add(offset).ok_or("reply stack address overflow")?;
+                            let mut word = [0; 4];
+                            machine.session.board.read_memory(stop.core, u64::from(address), &mut word)?;
+                            u32::from_le_bytes(word)
+                        };
+                        Ok(match declaration {
+                            ArgumentDecl::Word => Argument::Word { value: word },
+                            ArgumentDecl::Memory { bytes: length, identity } => Argument::Memory {
+                                address: match identity { PointerIdentity::Transient => None, PointerIdentity::Shared => Some(Address(word)) },
+                                bytes: bytes(machine, stop.core, word, *length)?,
+                            },
+                        })
+                    }).collect::<Result<Vec<_>, String>>()?;
+                    match entry.kind {
+                        EntryKind::ServiceRequest => Event::ServiceRequest { entry: Address(stop.address), arguments },
+                        EntryKind::ClientReply => Event::ClientReply { entry: Address(stop.address), target: Address(register(entry.target.ok_or("interface reply target register missing")?.name())?), arguments },
+                        EntryKind::Callback => Event::Callback { entry: Address(stop.address) },
+                    }
                 },
-                Some(_) => return Err("interface reply target register missing".into()),
                 None => return Ok(()),
             }
         };
@@ -148,10 +213,13 @@ impl Stream {
         let records = state.get("records").and_then(serde_json::Value::as_array).ok_or("interface watch records missing")?;
         require(self.cursor <= records.len(), "interface watch cursor invalid")?;
         #[derive(Deserialize)]
-        struct Write { source: String, address: u64, size: usize, value: Option<u64>, instructions: Option<u64>, core: Option<usize> }
+        #[serde(rename_all = "kebab-case")]
+        enum Source { CpuFetch, CpuWrite }
+        #[derive(Deserialize)]
+        struct Write { source: Source, address: u64, size: usize, value: Option<u64>, instructions: Option<u64>, core: Option<usize> }
         for record in &records[self.cursor..] {
-            let row: Write = serde_json::from_value(record.clone()).map_err(|error| error.to_string())?;
-            if row.source != "cpu-write" || !plan.shared.iter().any(|&(start, end)| u64::from(start) <= row.address && row.address < u64::from(end)) { continue; }
+            let row = Write::deserialize(record).map_err(|error| error.to_string())?;
+            if !matches!(row.source, Source::CpuWrite) || !plan.shared.iter().any(|&(start, end)| u64::from(start) <= row.address && row.address < u64::from(end)) { continue; }
             require(row.size <= 8, "interface write is wider than its recorded value")?;
             let value = row.value.ok_or("interface write value missing")?;
             let address = u32::try_from(row.address).map_err(|_| "interface write exceeds guest address")?;
@@ -174,7 +242,7 @@ mod tests {
     use super::*;
 
     fn plan() -> Plan {
-        Declaration { post: "0x1000".into(), entries: Vec::new(), shared: vec![Shared { start: "0x2000".into(), end: "0x2010".into() }] }.validate().unwrap()
+        Declaration { post: "0x1000".into(), entries: Vec::new(), shared: vec![Shared { start: "0x2000".into(), end: "0x2010".into() }], callers: Vec::new() }.validate().unwrap()
     }
 
     #[test]

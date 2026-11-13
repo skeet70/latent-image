@@ -37,6 +37,7 @@ module Emulation.Judge
   , ObservationIndex (..)
   , Milestone (..)
   , FirstDifference (..)
+  , milestoneDifference
   , parseReport
   , milestoneDifference
     -- * Verdicts

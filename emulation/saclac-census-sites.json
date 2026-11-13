@@ -441,7 +441,17 @@
   },
   "interface": {
     "post": "0x72503c",
+    "callers": [
+      {"start":"0x00ef8ad0","end":"0x00f473a4"},
+      {"start":"0x00ba0020","end":"0x00be0000"}
+    ],
     "entries": [
+      {"address":"0x00ee8ba0","kind":"service-request","arguments":[{"kind":"word"}]},
+      {"address":"0x00744c48","kind":"service-request","arguments":[{"kind":"word"}]},
+      {"address":"0x00eeccc0","kind":"service-request","arguments":[{"kind":"word"},{"kind":"word"},{"kind":"word"},{"kind":"word"}]},
+      {"address":"0x00f156b4","kind":"callback"},
+      {"address":"0x00f46be0","kind":"callback"},
+      {"address":"0x00f46c00","kind":"callback"},
       {
         "address": "0xf14ae4",
         "kind": "callback"
@@ -869,262 +879,314 @@
       {
         "address": "0xefa208",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefa250",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefa2c4",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"},{"kind":"word"},{"kind":"word"},{"kind":"word"},{"kind":"word"},{"kind":"word"}]
       },
       {
         "address": "0xefa33c",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"},{"kind":"word"},{"kind":"word"},{"kind":"word"},{"kind":"word"},{"kind":"word"}]
       },
       {
         "address": "0xefa3a0",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"},{"kind":"word"},{"kind":"word"},{"kind":"word"}]
       },
       {
         "address": "0xefa3f0",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"},{"kind":"word"}]
       },
       {
         "address": "0xefa8b0",
         "kind": "client-reply",
-        "target": "r12"
+        "target": "r12",
+        "arguments": [{"kind":"word"},{"kind":"word"},{"kind":"word"},{"kind":"word"},{"kind":"word"},{"kind":"word"},{"kind":"word"},{"kind":"word"},{"kind":"word"}]
       },
       {
         "address": "0xefae7c",
         "kind": "client-reply",
-        "target": "r3"
+        "target": "r3",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefaf18",
         "kind": "client-reply",
-        "target": "r3"
+        "target": "r3",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefaf6c",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"},{"kind":"word"}]
       },
       {
         "address": "0xefafb4",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefaffc",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefb044",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefb08c",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefb0f8",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"},{"kind":"word"},{"kind":"word"},{"kind":"word"},{"kind":"word"}]
       },
       {
         "address": "0xefb188",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"},{"kind":"word"},{"kind":"word"},{"kind":"word"},{"kind":"word"}]
       },
       {
         "address": "0xefb1d4",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefb21c",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefb290",
         "kind": "client-reply",
-        "target": "r6"
+        "target": "r6",
+        "arguments": [{"kind":"word"},{"kind":"word"},{"kind":"word"}]
       },
       {
         "address": "0xefb2d8",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefb320",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefb3a0",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"},{"kind":"word"},{"kind":"word"},{"kind":"word"}]
       },
       {
         "address": "0xefb3e8",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefb430",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefb4b0",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"},{"kind":"word"},{"kind":"word"},{"kind":"word"}]
       },
       {
         "address": "0xefb4f8",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefb540",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefb588",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefb5fc",
         "kind": "client-reply",
-        "target": "r4"
+        "target": "r4",
+        "arguments": [{"kind":"word"},{"kind":"word"}]
       },
       {
         "address": "0xefb64c",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"},{"kind":"word"}]
       },
       {
         "address": "0xefb6a4",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"},{"kind":"word"},{"kind":"word"}]
       },
       {
         "address": "0xefb6ec",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefb734",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefb77c",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefb7c4",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefb80c",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefb854",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefb89c",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefb8e4",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefb92c",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefb97c",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"},{"kind":"word"}]
       },
       {
         "address": "0xefb9e4",
         "kind": "client-reply",
-        "target": "r6"
+        "target": "r6",
+        "arguments": [{"kind":"word"},{"kind":"memory","bytes":16,"identity":"transient"}]
       },
       {
         "address": "0xefba3c",
         "kind": "client-reply",
-        "target": "r3"
+        "target": "r3",
+        "arguments": [{"kind":"memory","bytes":16,"identity":"transient"}]
       },
       {
         "address": "0xefba88",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefbad0",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefbb18",
         "kind": "client-reply",
-        "target": "r5"
+        "target": "r5",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefbc2c",
         "kind": "client-reply",
-        "target": "r3"
+        "target": "r3",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefbc5c",
         "kind": "client-reply",
-        "target": "r3"
+        "target": "r3",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefbc98",
         "kind": "client-reply",
-        "target": "r3"
+        "target": "r3",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefbd14",
         "kind": "client-reply",
-        "target": "r3"
+        "target": "r3",
+        "arguments": [{"kind":"word"}]
       },
       {
         "address": "0xefbdfc",
         "kind": "client-reply",
-        "target": "r12"
+        "target": "r12",
+        "arguments": [{"kind":"word"},{"kind":"memory","bytes":4,"identity":"shared"},{"kind":"memory","bytes":4,"identity":"shared"},{"kind":"memory","bytes":8,"identity":"shared"},{"kind":"memory","bytes":8,"identity":"shared"},{"kind":"memory","bytes":8,"identity":"shared"}]
       },
       {
         "address": "0xefbe68",
         "kind": "client-reply",
-        "target": "r12"
+        "target": "r12",
+        "arguments": [{"kind":"word"},{"kind":"word"},{"kind":"memory","bytes":8,"identity":"shared"},{"kind":"memory","bytes":8,"identity":"shared"},{"kind":"memory","bytes":8,"identity":"shared"}]
       }
     ],
     "shared": [

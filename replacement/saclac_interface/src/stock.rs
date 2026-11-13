@@ -645,3 +645,7 @@ pub fn statistics_operation(operation: StatisticsOperation) -> u16 {
         StatisticsOperation::Request43 => 0x4043,
     }
 }
+
+pub const fn flash_operation(operation: FlashOperation) -> u16 {
+    match operation { FlashOperation::Request0d => 0x1a0d, FlashOperation::Request0e => 0x1a0e }
+}

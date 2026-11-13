@@ -81,6 +81,7 @@ _FUJIMOD_NIX_DEPS = [
 
 # Bazel invalidation dependencies for the crate copied by fujimod-xm1.nix.
 _FUJIMOD_XM1_CRATE = [
+    "//replacement/fixed_image:layout.json",
     "//emulation:fujimod-xm1/Cargo.lock",
     "//emulation:fujimod-xm1/Cargo.toml",
     "//emulation:fujimod-xm1/data/xm1-150.json",
@@ -118,6 +119,8 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/heap_cutover_contract.rs",
     "//emulation:fujimod-xm1/src/heap_cutover_guard.rs",
     "//emulation:fujimod-xm1/src/heap_observe.rs",
+    "//emulation:fujimod-xm1/src/heap_placement.rs",
+    "//emulation:fujimod-xm1/src/fixed_image_check.rs",
     "//emulation:fujimod-xm1/src/heap_replay.rs",
     "//emulation:fujimod-xm1/src/heap_replay_check.rs",
     "//emulation:fujimod-xm1/src/heap_replay_contract.rs",

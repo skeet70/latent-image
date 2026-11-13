@@ -6,6 +6,7 @@ package(default_visibility = ["//visibility:public"])
 
 general_heap_subject(name = "general-heap-image")
 general_heap_subject(name = "general-heap-recipe-image", recipe_arena = True)
+general_heap_subject(name = "general-heap-fixed-image", fixed_arena = True)
 general_heap_host_tests(name = "general-heap-host-tests")
 general_heap_host_tests(name = "general-heap-recipe-host-tests", recipe_arena = True)
 heap_bridge_replay(name = "heap-bridge-replay")
@@ -20,6 +21,7 @@ haskell_library(
         "//host:aeson", "//host:base", "//host:bytestring", "//host:containers",
         "//host:first-stage", "//host:update-container", "//host/firmware:bank-allowlist",
         "//replacement/media_permit:stock-inventory", "//replacement/record5_staging:record5-staging",
+        "//replacement/fixed_image:contract",
     ],
 )
 
@@ -41,6 +43,7 @@ haskell_test(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":general-heap-artifact", "//host:base", "//host:bytestring", "//host:update-container",
+        "//replacement/fixed_image:contract",
         "//replacement/record5_staging:record5-staging",
     ],
 )

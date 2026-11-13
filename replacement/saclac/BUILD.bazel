@@ -15,6 +15,7 @@ xm1_rust_rlib(
     name = "saclac",
     src = "src/lib.rs",
     crate_name = "xm1_saclac",
+    out = "arm/libxm1_saclac.rlib",
     rustc_flags = ["-C", "jump-tables=no"],
     data = _SOURCES,
     rlib_deps = _ARM_DEPS,
@@ -36,7 +37,7 @@ xm1_rust_elf(
     asm_srcs = ["entry.S"],
     entry = "xm1_saclac_dispatch_entry",
     link_script = ":saclac.ld",
-    extra_ldflags = ["-Wl,--gc-sections"],
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
 )
 
 # The comparison's deliberately wrong variant: the action entry sees the table base in r3.
@@ -64,7 +65,7 @@ xm1_rust_elf(
     asm_srcs = ["entry.S"],
     entry = "xm1_saclac_driver_entry",
     link_script = ":saclac.ld",
-    extra_ldflags = ["-Wl,--gc-sections"],
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
 )
 
 xm1_rust_elf(
@@ -73,7 +74,7 @@ xm1_rust_elf(
     asm_srcs = ["entry.S"],
     entry = "xm1_saclac_dispatch_entry",
     link_script = ":saclac.ld",
-    extra_ldflags = ["-Wl,--gc-sections"],
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
 )
 
 # The two extents are typed once, in Replacement.Saclac.Artifact; this emits the
@@ -85,6 +86,7 @@ haskell_library(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":saclac-artifact",
+        "//replacement/fixed_image:contract",
         "//host:aeson",
         "//host:base",
     ],
@@ -156,6 +158,14 @@ genrule(
     tools = ["@lab_llvm//:bin/llvm-readelf"],
 )
 
+genrule(
+    name = "saclac-image-wrong-driver-store-sections",
+    srcs = [":saclac-image-wrong-driver-store.elf"],
+    outs = ["saclac-image-wrong-driver-store.sections"],
+    cmd = "$(location @lab_llvm//:bin/llvm-readelf) -S $(location :saclac-image-wrong-driver-store.elf) > $@",
+    tools = ["@lab_llvm//:bin/llvm-readelf"],
+)
+
 haskell_library(
     name = "saclac-artifact",
     srcs = ["Replacement/Saclac/Artifact.hs"],
@@ -171,8 +181,11 @@ haskell_library(
         "//host:containers",
         "//host:first-stage",
         "//host:host-support",
+        "//host:update-container",
         "//host/firmware:bank-allowlist",
         "//replacement/record5_staging:record5-staging",
+        "//replacement/fixed_image:contract",
+        "//replacement/toolchain:stack-proof",
     ],
 )
 
@@ -206,12 +219,14 @@ haskell_test(
     name = "saclac-placement-tests",
     srcs = ["Tests.hs"],
     args = [
+        "$(rootpath :saclac-image.elf)",
         "$(rootpath :saclac-image.bin)",
         "$(rootpath :saclac-image.symbols)",
         "$(rootpath :saclac-image.disasm)",
         "$(rootpath :saclac-image-sections)",
     ],
     data = [
+        ":saclac-image.elf",
         ":saclac-image-sections",
         ":saclac-image.bin",
         ":saclac-image.disasm",
@@ -222,8 +237,10 @@ haskell_test(
         ":saclac-artifact",
         "//host:base",
         "//host:bytestring",
+        "//host:directory",
         "//host:first-stage",
         "//host:host-support",
+        "//host:update-container",
         "//host/firmware:bank-allowlist",
     ],
 )
@@ -243,12 +260,32 @@ haskell_binary(
     ],
 )
 
+haskell_library(
+    name = "payload-projection",
+    srcs = ["Replacement/Saclac/PayloadProjection.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = ["//host:aeson", "//host:base", "//host:bytestring", "//host:text"],
+)
+
+haskell_test(
+    name = "payload-projection-tests",
+    size = "small",
+    srcs = ["PayloadProjectionTests.hs"],
+    args = ["$(location :payload-fields.json)"],
+    data = ["payload-fields.json"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [":payload-projection", "//host:aeson", "//host:base", "//host:bytestring"],
+)
+
 haskell_binary(
     name = "saclac-interface-compare",
     srcs = ["InterfaceCompareMain.hs"],
     main_file = "InterfaceCompareMain.hs",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
+        ":saclac-artifact",
+        ":payload-projection",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

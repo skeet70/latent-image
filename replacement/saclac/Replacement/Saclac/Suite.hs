@@ -734,8 +734,10 @@ checkInputs imagePath elfPath = do
       _ -> fail ("owned entry is missing or moved: " ++ name)
   forM_ (filter (\section -> E.sectionAllocated section && E.sectionSize section > 0) (E.elfSections elf)) $ \section ->
     unless
-      (E.sectionAddress section >= dispatchEntry && E.sectionAddress section + E.sectionSize section <= routerEntry + routerSize)
-      (fail "owned allocated section escapes the two stock extents")
+      (any (\extent -> Artifact.extentContains extent (E.sectionAddress section)
+        && Artifact.extentContains extent (E.sectionAddress section + E.sectionSize section - 1))
+        (Artifact.fixedExtent : Artifact.extents))
+      (fail "owned allocated section escapes declared fixed and veneer regions")
   pure (image, elf)
 
 runRole :: FilePath -> FilePath -> B.ByteString -> E.Elf -> Role -> [Scenario] -> IO [NativeObservation]

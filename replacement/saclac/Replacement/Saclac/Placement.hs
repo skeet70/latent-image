@@ -12,10 +12,11 @@ module Replacement.Saclac.Placement
 import qualified Data.Aeson as J
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
-import Data.List (isPrefixOf, sortOn)
+import Data.List (isPrefixOf)
 import Data.Word (Word32)
 import Numeric (showHex)
 import Replacement.Saclac.Artifact (Entry (..), Extent (..), Retained (..), entries, extentBytes, extents, retainedExternals)
+import qualified Replacement.FixedImage.Layout as Fixed
 
 hexAddress :: Word32 -> String
 hexAddress value = "0x" ++ replicate (8 - length digits) '0' ++ digits
@@ -44,6 +45,7 @@ renderLinkerScript = case (entries, extents) of
          ]
       ++ [ "MEMORY {"
     ]
+      ++ [ "  " ++ Fixed.linkerMemory ]
       ++ [ "  " ++ regionName index ++ " (rx) : ORIGIN = " ++ hexAddress (extentLow extent)
              ++ ", LENGTH = " ++ hexAddress (fromIntegral (extentBytes extent))
          | (index, extent) <- zip [0 :: Int ..] extents
@@ -57,12 +59,13 @@ renderLinkerScript = case (entries, extents) of
         [ [ "  ." ++ sectionOf index ++ " : {"
           , "    KEEP(*(.text." ++ entryVeneer entry ++ "))"
           ]
-            ++ (if index == 1 then ["    *(.text*)", "    *(.rodata*)", "    . = ALIGN(4);"] else [])
             ++ [ "  } > " ++ regionName index ]
-        | (index, entry) <- sortOn (\(index, _) -> index == 1) (zip [0 :: Int ..] entries)
+        | (index, entry) <- zip [0 :: Int ..] entries
         ]
-      ++ [ "  .data : { *(.data*) *(.sdata*) *(.got*) } > " ++ regionName (length extents - 1)
-         , "  .bss : { *(.bss*) *(.sbss*) *(COMMON) } > " ++ regionName (length extents - 1)
+      ++ [ "  .text : { *(.text*) } > OWNED_FIXED"
+         , "  .rodata : { KEEP(*(.rodata.XM1_REQUIRES_LENS_SAFETY_CONTRACT)) *(.rodata*) . = ALIGN(4); } > OWNED_FIXED"
+         , "  .data : { *(.data*) *(.sdata*) *(.got*) . = ALIGN(4); } > OWNED_FIXED"
+         , "  .bss (NOLOAD) : { __fixed_bss_start = .; *(.bss*) *(.sbss*) *(COMMON) . = ALIGN(4); __fixed_bss_end = .; } > OWNED_FIXED"
          , "  /DISCARD/ : {"
          , "    *(.ARM.exidx*)"
          , "    *(.ARM.extab*)"
@@ -84,7 +87,7 @@ renderLinkerScript = case (entries, extents) of
              ++ ", \"" ++ sectionOf index ++ " exceeds its stock extent\")"
          | (index, extent) <- zip [0 :: Int ..] extents
          ]
-      ++ [ "ASSERT(SIZEOF(.data) == 0 && SIZEOF(.bss) == 0, \"saclac has writable statics\")"
+      ++ [ "ASSERT(__fixed_bss_end <= " ++ hexAddress Fixed.imageLimit ++ ", \"fixed owned image exceeds reserved RAM\")"
          , ""
          ]
   _ -> ""
@@ -93,6 +96,7 @@ renderLinkerScript = case (entries, extents) of
 -- reads. The label is the entry's name without its prefix and suffix.
 watchRanges :: [J.Value]
 watchRanges =
+  J.object ["label" J..= ("fixed-body" :: String), "start" J..= hexAddress (Fixed.imageBase + Fixed.headerBytes), "end" J..= hexAddress Fixed.imageLimit] :
   [ J.object
       [ "label" J..= (dropSuffix "_entry" (dropPrefix "xm1_saclac_" (entryVeneer entry)) ++ "-extent")
       , "start" J..= hexAddress (extentLow extent)
