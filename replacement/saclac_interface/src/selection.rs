@@ -151,16 +151,14 @@ pub struct SubjectQuery {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ResultBuffer(pub u32);
 
-/// The auxiliary source the retained result keeps and, in mode 7, an area's replaced reference.
+/// The auxiliary source the retained result keeps and the reference and position it gives an
+/// area that holds no tracked kind (0xf1d5d4 replaces only when its kind argument is 7).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RetainedReference {
     pub source: u32,
-    pub mode: u32,
-    pub pass: ResultPass,
-    pub cell: GridCell,
-    pub index: AreaIndex,
     pub reference: u32,
     pub position: i16,
+    pub untracked: Option<crate::calculation::AreaAt>,
 }
 
 /// Operations on the shot's selection state that the focus round and the controllers make
@@ -192,4 +190,13 @@ pub trait ShotSelection {
     fn retain_reference(&mut self, retained: RetainedReference);
     /// 0xf1fc5c: the saved calculation input moved to `reference`.
     fn reference_request(&mut self, reference: u32) -> ReferenceRequest;
+    /// The calculation block's grid-selected word (+0x6410; 0xf1c930).
+    fn grid_selected(&mut self) -> bool;
+    /// The calculation block's selection mode word (+0x6414; 0xf1c944, 0xf1ed70).
+    fn selection_mode(&mut self) -> u32;
+    /// The plan's tracking word (+0x6568; 0xf1c958).
+    fn tracking(&mut self) -> bool;
+    /// The target word the last finish left (0x16ad738; 0xf367fc) and the halfword the last result
+    /// left (0x16b3d38; 0xf36790).
+    fn retained_targets(&mut self) -> (u32, u16);
 }
