@@ -104,4 +104,6 @@ pub trait Exposure {
     fn gain_offset(&mut self, step: GainStep) -> u32;
     fn exposure_value(&mut self, exposure: [PipelineWord; 2]) -> i16;
     fn timing_offset(&mut self, timing: TimingWord) -> u16;
+    /// The exposure relative to the configured reference.
+    fn relative_exposure(&mut self, exposure: PipelineWord) -> i16;
 }

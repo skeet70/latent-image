@@ -14,7 +14,8 @@ pub enum Effect { Initialize, Enable, Release, Submit, Collect }
 
 pub trait CalculationPorts {
     fn effect(&mut self, calculation: Calculation, effect: Effect);
-    fn source_available(&mut self) -> bool;
+    /// Whether this tick runs the source calculation.
+    fn source_due(&mut self) -> bool;
     fn result_changed(&mut self, calculation: Calculation) -> bool;
 }
 
@@ -44,7 +45,7 @@ impl CalculationJob {
                 Some(Effect::Release)
             }
             (State::Ready, Control::Run) => {
-                if self.calculation == Calculation::Source && !ports.source_available() {
+                if self.calculation == Calculation::Source && !ports.source_due() {
                     return Ok(Outcome::NoWork);
                 }
                 self.state = State::Running;

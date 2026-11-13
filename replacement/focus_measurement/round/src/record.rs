@@ -59,7 +59,7 @@ pub trait Adjustment {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TraceMark { WindowRequest, AuxiliaryRequest }
+pub enum TraceMark { WindowRequest, AuxiliaryRequest, SourceRequest }
 
 pub trait Trace {
     fn trace(&mut self, mark: TraceMark);
@@ -75,6 +75,7 @@ pub enum Request {
     Geometry(MeasurementGeometry),
     Window(crate::window::WindowRequest),
     Auxiliary(crate::auxiliary::AuxiliaryRequest),
+    Source(crate::source::SourceRequest),
 }
 
 pub trait Ports: ProfileRecords + Settings + Pipeline + Exposure + Power + Adjustment + Trace + replies::Effects {

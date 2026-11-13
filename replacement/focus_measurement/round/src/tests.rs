@@ -2,10 +2,10 @@ use crate::jobs::{Calculation, CalculationJob, CalculationPorts, Control, Effect
 use std::vec::Vec;
 
 #[derive(Default)]
-struct Ports { effects: Vec<(Calculation, Effect)>, available: bool, changed: bool }
+struct Ports { effects: Vec<(Calculation, Effect)>, due: bool, changed: bool }
 impl CalculationPorts for Ports {
     fn effect(&mut self, calculation: Calculation, effect: Effect) { self.effects.push((calculation, effect)); }
-    fn source_available(&mut self) -> bool { self.available }
+    fn source_due(&mut self) -> bool { self.due }
     fn result_changed(&mut self, _: Calculation) -> bool { self.changed }
 }
 
@@ -37,13 +37,13 @@ fn repeated_rounds_reuse_the_enabled_job() {
 }
 
 #[test]
-fn unavailable_source_does_not_submit_a_job() {
+fn a_source_tick_that_is_not_due_does_not_submit_a_job() {
     let mut job = CalculationJob::new(Calculation::Source);
     let mut ports = Ports::default();
     job.control(Control::Enable, &mut ports).unwrap();
     assert_eq!(job.control(Control::Run, &mut ports), Ok(Outcome::NoWork));
     assert_eq!(ports.effects.len(), 2);
-    ports.available = true;
+    ports.due = true;
     assert_eq!(job.control(Control::Run, &mut ports), Ok(Outcome::Pending));
 }
 

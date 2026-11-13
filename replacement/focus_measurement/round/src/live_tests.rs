@@ -1,13 +1,13 @@
 use crate::acquisition::{self, Pass};
-use crate::fakes::{Outbound, Ports};
+use crate::fakes::{Outbound, Ports, Published};
 use crate::image::{ChannelCount, ImagePeer, LensReport};
-use crate::jobs::{self, Calculation};
 use crate::lanes::Selection;
 use crate::live::{Effects, Measurement};
 use crate::pipeline::{Statistics, TimingWord};
 use crate::planner::{Cadence, Mode, Work};
-use crate::profile::{FrameInterval, FrameRate, ProfileSelection, WindowPosition, WindowStatus};
+use crate::profile::{FrameInterval, FrameRate, ProfileSelection, RetainedWord, WindowPosition, WindowStatus};
 use crate::record::Request;
+use crate::source::{ProcessingProfile, SegmentSettings, SourceProfile, SourceStrength};
 use crate::window::WindowResult;
 use crate::round::{LaneSignal, LaneStatus};
 use xm1_saclac_controllers::children::{ChildEvent, ChildOutcome, MeasurementControl};
@@ -17,13 +17,12 @@ use std::vec::Vec;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Traffic {
     Search(&'static str),
-    Calculation(Calculation, jobs::Effect),
     Acquisition(acquisition::Effect),
     Image(&'static str),
     Fault,
 }
 
-struct Live { traffic: Vec<Traffic>, source_ready: bool, failed: bool, programmed: Option<TimingWord> }
+struct Live { traffic: Vec<Traffic>, failed: bool, programmed: Option<TimingWord> }
 
 impl Live {
     fn take(&mut self) -> Vec<Traffic> { core::mem::take(&mut self.traffic) }
@@ -31,7 +30,7 @@ impl Live {
 
 type Fake = Ports<Live>;
 
-fn fake(available: Selection) -> Fake { Ports::new(Some(available), Live { traffic: Vec::new(), source_ready: false, failed: false, programmed: None }) }
+fn fake(available: Selection) -> Fake { Ports::new(Some(available), Live { traffic: Vec::new(), failed: false, programmed: None }) }
 
 impl Effects for Fake {
     fn fault(&mut self) { self.extra.traffic.push(Traffic::Fault); }
@@ -46,9 +45,6 @@ impl Effects for Fake {
         self.extra.traffic.push(Traffic::Search(name));
         status
     }
-    fn calculation(&mut self, _: RecordHandle, calculation: Calculation, effect: jobs::Effect) { self.extra.traffic.push(Traffic::Calculation(calculation, effect)); }
-    fn source_available(&mut self, _: RecordHandle) -> bool { self.extra.source_ready }
-    fn result_changed(&mut self, _: RecordHandle, _: Calculation) -> bool { false }
     fn acquisition(&mut self, _: RecordHandle, effect: acquisition::Effect) -> Option<TimingWord> {
         self.extra.traffic.push(Traffic::Acquisition(effect));
         if effect == acquisition::Effect::Initialize { self.extra.programmed } else { None }
@@ -90,10 +86,33 @@ fn initialization_enables_acquisition_and_window_and_initializes_the_other_lanes
         Traffic::Acquisition(acquisition::Effect::Enable),
         Traffic::Search("initialize"),
         Traffic::Image("initialize"),
-        Traffic::Calculation(Calculation::Source, jobs::Effect::Initialize),
     ]);
     assert!(fake.records.in_use.primary);
     assert!(fake.auxiliary.publication.published);
+    assert_eq!((fake.source.published, fake.source.callbacks_enabled), (Some(Published::Withdrawn), Some(false)));
+}
+
+#[test]
+fn a_round_offering_the_source_reads_it_after_the_window_and_publishes_the_average() {
+    let mut measurement = Measurement::new();
+    let mut fake = fake(Selection { source: true, ..ACQUISITION });
+    fake.adjustment.controllers = RetainedWord(1);
+    fake.source.profile = SourceProfile {
+        measures_source: true,
+        processing: ProcessingProfile { selection: ProfileSelection::Record, ..ProcessingProfile::default() },
+        ..SourceProfile::default()
+    };
+    fake.source.settings.segments = [SegmentSettings { ring_length: 1, newest_weight: 0, gain: 128 }; 4];
+    measurement.handle(control(MeasurementControl::Initialize), &mut fake);
+    assert!(matches!(fake.source.published, Some(Published::Fresh { .. })));
+    measurement.handle(completion(Completion::Accessor4b), &mut fake);
+    fake.take();
+    measurement.handle(completion(Completion::Calculation8d), &mut fake);
+    assert!(fake.take().iter().any(|traffic| matches!(traffic, Outbound::Request(Request::Source(_)))));
+    let reading = [7, 0, 0, 0, 0, 0];
+    let completed = Completed { completion: Completion::Calculation9a, parameters: stock::parameters(&reading) };
+    measurement.handle(ChildEvent::Completed { completed, record: record() }, &mut fake);
+    assert!(matches!(fake.source.published, Some(Published::Averaged { strength: SourceStrength(7), .. })));
 }
 
 #[test]

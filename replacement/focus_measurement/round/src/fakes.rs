@@ -5,6 +5,7 @@ use crate::planner::{Cadence, Mode, Work};
 use crate::pipeline::{Exposure, GainStep, HistoryStatistics, Pipeline, PipelineSnapshot, PipelineWord, SnapshotStatus, Statistics, TimingWord};
 use crate::profile::{FrameInterval, FrameRate, GridCell, IntervalHistory, IntervalTracking, Profile, ProfileGeometry, ProfileMode, ProfileRecords, ProfileSelection, PublishedResult, RetainedWord, StatisticsInUse, WindowPosition, WindowRecord, WindowStatus};
 use crate::record::{self, Adjustment, AdjustmentWords, AlternateSearch, Power, Request, Settings, Trace, TraceMark};
+use crate::source::{self, SampleProfile, SourceProfile, SourcePublication, SourceSettings, SourceStrength, Summary, ProcessingRequest};
 use crate::window::{self, WindowResult};
 use xm1_saclac_controllers::replies;
 use xm1_saclac_interface::round::{GeometryCalibration, GeometryPair, RetainedGeometryValue};
@@ -113,6 +114,43 @@ impl Default for AuxiliaryRecords {
     }
 }
 
+/// What the source measurement last published, as its readers see it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Published {
+    Withdrawn,
+    Fresh { summary: Summary, strength: SourceStrength },
+    Averaged { summary: Summary, means: Summary, strength: SourceStrength },
+}
+
+/// The source measurement's helpers and its part of the shared record.
+pub struct SourceRecords {
+    pub profile: SourceProfile,
+    pub sample: SampleProfile,
+    pub settings: SourceSettings,
+    /// What each processing request summarises to, by call; the last repeats.
+    pub summaries: Vec<Summary>,
+    pub requests: Vec<ProcessingRequest>,
+    pub callbacks_enabled: Option<bool>,
+    pub published: Option<Published>,
+    /// The strength the shared record shows; a write that the grant refuses leaves it.
+    pub strength: SourceStrength,
+}
+
+impl Default for SourceRecords {
+    fn default() -> Self {
+        Self {
+            profile: SourceProfile::default(),
+            sample: SampleProfile::default(),
+            settings: SourceSettings::default(),
+            summaries: Vec::new(),
+            requests: Vec::new(),
+            callbacks_enabled: None,
+            published: None,
+            strength: SourceStrength(0),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Outbound {
     Capture(Statistics),
@@ -151,6 +189,9 @@ pub struct Ports<X = ()> {
     pub channel_count: ChannelCount,
     pub lens: LensReport,
     pub auxiliary: AuxiliaryRecords,
+    pub source: SourceRecords,
+    /// The relative exposure of every exposure word.
+    pub relative_exposure: i16,
     pub adjustment: AdjustmentWords,
     pub outbound: Vec<Outbound>,
     pub extra: X,
@@ -180,6 +221,8 @@ impl<X> Ports<X> {
             channel_count: ChannelCount(1),
             lens: LensReport::default(),
             auxiliary: AuxiliaryRecords::default(),
+            source: SourceRecords::default(),
+            relative_exposure: 0,
             adjustment: AdjustmentWords::default(),
             outbound: Vec::new(),
             extra,
@@ -255,6 +298,7 @@ impl<X> Exposure for Ports<X> {
     fn gain_offset(&mut self, step: GainStep) -> u32 { self.gain_offsets[step.0 as usize] }
     fn exposure_value(&mut self, _: [PipelineWord; 2]) -> i16 { self.exposure_value }
     fn timing_offset(&mut self, _: TimingWord) -> u16 { self.timing_offset }
+    fn relative_exposure(&mut self, _: PipelineWord) -> i16 { self.relative_exposure }
 }
 
 impl<X> Power for Ports<X> {
@@ -335,4 +379,27 @@ impl<X> auxiliary::Ports for Ports<X> {
 
 impl<X> Adjustment for Ports<X> {
     fn adjustment_words(&mut self) -> AdjustmentWords { self.adjustment }
+}
+
+impl<X> source::Ports for Ports<X> {
+    fn source_profile(&mut self, _: RecordHandle) -> SourceProfile { self.source.profile }
+    fn sample_profile(&mut self, _: RecordHandle) -> SampleProfile { self.source.sample }
+    fn source_settings(&mut self) -> SourceSettings { self.source.settings }
+    fn processing_summary(&mut self, request: &ProcessingRequest) -> Summary {
+        let index = self.source.requests.len().min(self.source.summaries.len().saturating_sub(1));
+        self.source.requests.push(*request);
+        self.source.summaries.get(index).copied().unwrap_or(Summary::ZERO)
+    }
+    fn enable_processing_callbacks(&mut self, enabled: bool) { self.source.callbacks_enabled = Some(enabled); }
+    fn published_strength(&mut self) -> SourceStrength { self.source.strength }
+    fn publish_source(&mut self, _: RecordHandle, publication: SourcePublication<'_>) {
+        if !self.records.granted { return; }
+        let (published, strength) = match publication {
+            SourcePublication::Withdrawn => (Published::Withdrawn, SourceStrength(0)),
+            SourcePublication::Fresh { summary, strength } => (Published::Fresh { summary: *summary, strength }, strength),
+            SourcePublication::Averaged { summary, means, strength } => (Published::Averaged { summary: *summary, means: *means, strength }, strength),
+        };
+        self.source.published = Some(published);
+        self.source.strength = strength;
+    }
 }

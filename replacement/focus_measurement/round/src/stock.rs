@@ -215,6 +215,35 @@ pub fn auxiliary_payload(request: crate::auxiliary::AuxiliaryRequest, callback: 
     }
 }
 
+/// The source request as calc 0x3c11 carries it. X-M1 1.50: 0xf386e4..0xf38704 store
+/// 0xf4f16c's word, 0x74f124's word, its decade (0xef74e4) and 0x74f5ec's halfword.
+pub fn source_payload(request: crate::source::SourceRequest, callback: xm1_saclac_interface::stock::StockCallbackWord) -> xm1_saclac_interface::calc::CalcPayload {
+    use xm1_saclac_interface::calc::{CalcPayload, SourceRequest};
+    let snapshot = request.snapshot;
+    let profile = request.profile;
+    CalcPayload::Source {
+        request: SourceRequest {
+            profile: profile.words.map(|word| word.0),
+            decade: profile.halfwords[0].0,
+            profile_halfword: profile.halfwords[1].0,
+            level: request.level,
+            reference: snapshot.levels[1],
+            size: snapshot.size.map(|word| word.0),
+            exposure: snapshot.exposure[1].0,
+            mode: snapshot.timing.0,
+            selection: profile_selection_byte(request.selection),
+            extension: request.extension.0,
+        },
+        callback,
+    }
+}
+
+/// X-M1 1.50: 0xf38668 posts completion 0x9a with the six bytes calc returns; 0xf38e20..0xf38e2c
+/// keeps the first as the strength.
+pub fn source_strength(parameters: xm1_saclac_interface::Parameters<'_>) -> crate::source::SourceStrength {
+    crate::source::SourceStrength(parameters.bytes().first().copied().unwrap_or(0))
+}
+
 /// X-M1 1.50: 0xff6b4c copies 0x5c4 bytes of pipeline state to 0x16f496c + slot·0x5c4,
 /// which 0xfea7ac returns. Offsets from the window (0xf3a5a4..0xf3a614), history
 /// (0xf32680..0xf32874) and auxiliary request (0xf37b34..0xf37bf8) builders.
