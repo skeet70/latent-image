@@ -17,6 +17,8 @@ pub struct Property(pub(crate) u32);
 impl Property {
     /// The property holding the high byte of a two-byte value.
     pub(crate) const fn high(self) -> Self { Self(self.0 + 1) }
+    /// The configuration byte's key, which 0x69f8fc reads.
+    pub const fn key(self) -> u32 { self.0 }
 }
 
 pub trait Properties {
