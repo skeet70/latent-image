@@ -1,5 +1,5 @@
 use crate::{
-    modal_guard::{BoundFetch, GuardConfig, GuardReport, InstalledGuard, WatchEvidence},
+    modal_guard::{BoundFetch, GuardConfig, GuardReport, InstalledGuard, InstalledGuardState, WatchEvidence},
     modal_lifetime::{LifetimeMemory, LifetimeReceipt, LifetimeRequest, Word},
     modal_memory::FixedMemory,
     modal_permit::{CodeRange, ControllerId, CoreId, Cpsr, EntryInstruction, Layout, Monitor,
@@ -22,14 +22,14 @@ const MAX_RETURN_SITES: usize = 4096;
 const DEPTH: usize = 32;
 const STOCK_PREHOOK: Guest = Guest(0x00bf_b0a0);
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct LinkedSource {
     start: u32,
     bytes: Vec<u8>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct BeginRequest {
     stock: Vec<u8>,
@@ -356,7 +356,19 @@ pub(crate) struct ModalTrace {
 }
 
 impl ModalTrace {
-    pub(crate) fn new(mut config: Config, session: &Session) -> Result<Self, String> {
+    pub(crate) fn new(config: Config, session: &Session) -> Result<Self, String> {
+        Self::from_config(config, session, None)
+    }
+
+    pub(crate) fn resume(config: Config, session: &Session, saved: InstalledGuardState) -> Result<Self, String> {
+        Self::from_config(config, session, Some(saved))
+    }
+
+    fn from_config(mut config: Config, session: &Session, saved: Option<InstalledGuardState>) -> Result<Self, String> {
+        if saved.is_some() {
+            if config.af_ownership.is_some() || config.guard.is_none() { return Err("installed resume requires the isolated lifetime guard".into()); }
+            if let Some(branch) = config.entry_branch { config.images[0].bytes[..4].copy_from_slice(&branch.0.to_le_bytes()); }
+        }
         if session.board.instruction_counts().len() != 2 {
             return Err("modal observation requires the two X-M1 cores".into());
         }
@@ -380,7 +392,7 @@ impl ModalTrace {
             .map(|plan| crate::af_ownership::Projection::new(plan, session, config.maps.clone())).transpose()?;
         let monitor = Monitor::new(config.layout, config.limit);
         let guard = config.guard.take().map(|guard| InstalledGuard::new(guard, session,
-            &config.maps, config.instruction_sites(), config.layout, af_ownership.as_ref())).transpose()?;
+            &config.maps, config.instruction_sites(), config.layout, af_ownership.as_ref(), saved)).transpose()?;
         if let (Some(guard), Some(projection)) = (&guard, &mut af_ownership) {
             guard.sync_af_retention(projection);
         }
@@ -390,6 +402,18 @@ impl ModalTrace {
             captured_domains: Vec::with_capacity(capacity.min(MAX_OBSERVATIONS as usize)),
             task_entries: Vec::with_capacity(task_capacity.min(MAX_OBSERVATIONS as usize)),
             guard, af_ownership, failure: None, enabled: true })
+    }
+
+    pub(crate) fn pause_installed(&mut self, session: &Session) -> Result<InstalledGuardState, String> {
+        self.check_interval()?;
+        let counts = self.monitor.receipt();
+        if !self.enabled || self.failure.is_some() || counts.owned_handoffs.0 != 0 || counts.active_frames.0 != 0 {
+            return Err("installed checkpoint requires a healthy observer before the first owned modal entry".into());
+        }
+        let saved = self.guard.as_mut().ok_or("installed checkpoint requires a lifetime guard")?
+            .pause_installed(session, &self.config.maps)?;
+        self.enabled = false;
+        Ok(saved)
     }
 
     pub(crate) fn sites(&self) -> impl Iterator<Item = Guest> + '_ {
