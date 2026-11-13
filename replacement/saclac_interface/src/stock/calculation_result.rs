@@ -4,7 +4,7 @@
 //! request names (0x16ad744 for the shot's calculation block 0x16ad740). Offsets are from the
 //! result's start; strides are the ones 0xf1dd84, 0xf18b94, 0xf1ba88 and 0xf1e468 index with.
 
-use crate::calculation::{AreaAt, AreaIndex, AreaResult, AreaRow, CellSummary, FocusSummary, GridCell, ResultPass};
+use crate::calculation::{AreaAt, AreaIndex, AreaResult, AreaRow, AreaTarget, CellSummary, FocusSummary, GridCell, ResultPass, TrackedKind};
 
 pub const BYTES: usize = 0x640c;
 
@@ -33,6 +33,8 @@ const GRID_ROWS: usize = 0x5cb8;
 const ROW_COLUMN_STRIDE: usize = 0xcc;
 const ROW_CELL_STRIDE: usize = 0x44;
 const ROW_WORD: usize = 0x40;
+const PLAIN_TARGETS: usize = 0x938;
+const GRID_TARGETS: usize = 0x3118;
 
 /// Focus-summary sources in the order 0xf1ea18..0xf1ea84 stores them; `true` marks a signed
 /// halfword, `false` a word.
@@ -76,6 +78,13 @@ pub fn plan_value_offset(pass: ResultPass, cell: GridCell, index: AreaIndex) -> 
 pub fn plan_half_offset(pass: ResultPass, cell: GridCell, index: AreaIndex) -> usize {
     let base = pass_index(pass).map_or(PLAIN_PLAN_HALVES, |pass| GRID_PLAN_HALVES + pass * 0x36);
     base + usize::from(cell.column) * 0x12 + usize::from(cell.row) * 6 + usize::from(index.get()) * 2
+}
+
+/// The level target of a tracked kind's area at a cell (0xf1af90: plain 0x16ae07c, grid 0x16b085c).
+pub fn target_offset(kind: TrackedKind, pass: ResultPass, cell: GridCell, index: AreaIndex) -> usize {
+    let kind = usize::from(kind.get());
+    let base = pass_index(pass).map_or(PLAIN_TARGETS + kind * 0xa2, |pass| GRID_TARGETS + kind * 0x1e6 + pass * 0xa2);
+    base + usize::from(cell.column) * 0x36 + usize::from(cell.row) * 0x12 + usize::from(index.get()) * AreaTarget::BYTES
 }
 
 /// A cell's summary (0xf1e84c; grid 0xf19634's copy source).

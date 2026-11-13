@@ -12,6 +12,7 @@ pub mod pipeline;
 pub mod round;
 pub mod round_image;
 pub mod search;
+pub mod selection;
 pub mod shared;
 pub mod statistics;
 pub mod stock;
@@ -534,6 +535,8 @@ mod pipeline_tests;
 mod round_image_tests;
 #[cfg(test)]
 mod search_tests;
+#[cfg(test)]
+mod selection_tests;
 #[cfg(test)]
 mod shared_tests;
 #[cfg(test)]
