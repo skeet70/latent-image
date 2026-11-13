@@ -4,9 +4,12 @@
 pub mod boundary;
 pub mod calculation;
 pub mod capture;
+pub mod capture_boundary;
+pub mod capture_stock;
 pub mod exposure;
 pub mod finish;
 pub mod jobs;
+pub mod lens_return;
 pub mod outcome;
 pub mod pipeline;
 pub mod ports;
@@ -87,3 +90,9 @@ mod preparation_tests;
 mod subjects_tests;
 #[cfg(test)]
 mod summary_tests;
+#[cfg(test)]
+mod capture_fakes;
+#[cfg(test)]
+mod lens_return_tests;
+#[cfg(test)]
+mod capture_stock_tests;
