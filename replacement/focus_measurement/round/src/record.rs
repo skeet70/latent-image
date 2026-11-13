@@ -47,7 +47,7 @@ pub trait Power {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TraceMark { WindowRequest }
+pub enum TraceMark { WindowRequest, AuxiliaryRequest }
 
 pub trait Trace {
     fn trace(&mut self, mark: TraceMark);
@@ -62,6 +62,7 @@ pub enum Request {
     SearchMode(SearchMode),
     Geometry(MeasurementGeometry),
     Window(crate::window::WindowRequest),
+    Auxiliary(crate::auxiliary::AuxiliaryRequest),
 }
 
 pub trait Ports: ProfileRecords + Settings + Pipeline + Exposure + Power + Trace + replies::Effects {

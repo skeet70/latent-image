@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use crate::acquisition::{self, Acquisition, Branch};
+use crate::auxiliary::{self, Auxiliary};
 use crate::image::{self, ImageEffect, ImageJob, ImageOutcome, ImagePeer, ImageRequest, ImageSignal, Interruption, ReplyPorts};
 use crate::history::MeasurementHistory;
 use crate::jobs::{self, Calculation, CalculationJob};
@@ -15,7 +16,7 @@ use xm1_saclac_controllers::children::{ChildEvent, ChildOutcome, MeasurementCont
 use xm1_saclac_interface::{CommandKind, Completed, Completion, RecordHandle};
 
 /// Everything the live measurement asks of the records, its peers and the search slot.
-pub trait Effects: RecordPorts + ReplyPorts + window::Ports {
+pub trait Effects: RecordPorts + ReplyPorts + window::Ports + auxiliary::Ports {
     fn fault(&mut self);
 
     /// The contrast search lane, whose implementation is the AF-candidate slot.
@@ -40,6 +41,7 @@ pub struct Measurement {
     acquisition: Acquisition,
     acquisition_timing: TimingWord,
     auxiliary: CalculationJob,
+    auxiliary_work: Auxiliary,
     window: CalculationJob,
     window_work: Window,
     source: CalculationJob,
@@ -57,6 +59,7 @@ impl Measurement {
             acquisition: Acquisition::new(Branch::Live),
             acquisition_timing: TimingWord(0),
             auxiliary: CalculationJob::new(Calculation::Auxiliary),
+            auxiliary_work: Auxiliary::new(),
             window: CalculationJob::new(Calculation::Window),
             window_work: Window::new(),
             source: CalculationJob::new(Calculation::Source),
@@ -66,8 +69,8 @@ impl Measurement {
     }
 
     pub fn handle(&mut self, event: ChildEvent<'_, MeasurementControl>, effects: &mut impl Effects) -> ChildOutcome {
-        let Self { round, history, acquisition, acquisition_timing, auxiliary, window, window_work, source, image, bookkeeping } = self;
-        let mut lanes = Lanes { history, acquisition, acquisition_timing, auxiliary, window, window_work, source, image, bookkeeping, effects };
+        let Self { round, history, acquisition, acquisition_timing, auxiliary, auxiliary_work, window, window_work, source, image, bookkeeping } = self;
+        let mut lanes = Lanes { history, acquisition, acquisition_timing, auxiliary, auxiliary_work, window, window_work, source, image, bookkeeping, effects };
         round.handle(event, &mut lanes)
     }
 
@@ -79,6 +82,7 @@ struct Lanes<'a, E> {
     acquisition: &'a mut Acquisition,
     acquisition_timing: &'a mut TimingWord,
     auxiliary: &'a mut CalculationJob,
+    auxiliary_work: &'a mut Auxiliary,
     window: &'a mut CalculationJob,
     window_work: &'a mut Window,
     source: &'a mut CalculationJob,
@@ -91,17 +95,24 @@ struct CalculationEffects<'a, 'c, E> {
     record: RecordHandle,
     completed: Option<Completed<'c>>,
     window: &'a mut Window,
+    auxiliary: &'a mut Auxiliary,
     effects: &'a mut E,
 }
 impl<E: Effects> jobs::CalculationPorts for CalculationEffects<'_, '_, E> {
     fn effect(&mut self, calculation: Calculation, effect: jobs::Effect) {
         match calculation {
             Calculation::Window => self.window.effect(effect, self.record, self.completed, &mut *self.effects),
-            Calculation::Auxiliary | Calculation::Source => self.effects.calculation(self.record, calculation, effect),
+            Calculation::Auxiliary => self.auxiliary.effect(effect, self.record, self.completed, &mut *self.effects),
+            Calculation::Source => self.effects.calculation(self.record, calculation, effect),
         }
     }
     fn source_available(&mut self) -> bool { self.effects.source_available(self.record) }
-    fn result_changed(&mut self, calculation: Calculation) -> bool { self.effects.result_changed(self.record, calculation) }
+    fn result_changed(&mut self, calculation: Calculation) -> bool {
+        match calculation {
+            Calculation::Auxiliary => self.auxiliary.changed(),
+            Calculation::Window | Calculation::Source => self.effects.result_changed(self.record, calculation),
+        }
+    }
 }
 
 struct AcquisitionEffects<'a, E> { record: RecordHandle, timing: &'a mut TimingWord, effects: &'a mut E }
@@ -116,7 +127,7 @@ impl<E: Effects> Lanes<'_, E> {
     fn calculation(&mut self, lane: Lane, signal: LaneSignal<'_>, record: RecordHandle) -> LaneStatus {
         let job = match lane { Lane::Auxiliary => &mut *self.auxiliary, Lane::Window => &mut *self.window, _ => &mut *self.source };
         let completed = if let LaneSignal::Completed(completed) = signal { Some(completed) } else { None };
-        let mut ports = CalculationEffects { record, completed, window: &mut *self.window_work, effects: &mut *self.effects };
+        let mut ports = CalculationEffects { record, completed, window: &mut *self.window_work, auxiliary: &mut *self.auxiliary_work, effects: &mut *self.effects };
         let control = match signal {
             LaneSignal::Initialize => jobs::Control::Initialize,
             LaneSignal::Enable => jobs::Control::Enable,

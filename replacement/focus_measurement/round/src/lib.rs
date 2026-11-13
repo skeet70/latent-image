@@ -15,6 +15,7 @@ pub mod profile;
 pub mod record;
 pub mod pipeline;
 pub mod window;
+pub mod auxiliary;
 
 #[cfg(test)]
 extern crate std;
@@ -42,3 +43,5 @@ mod record_tests;
 mod window_tests;
 #[cfg(test)]
 mod history_tests;
+#[cfg(test)]
+mod auxiliary_tests;

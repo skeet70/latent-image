@@ -176,6 +176,44 @@ pub fn window_payload(request: crate::window::WindowRequest, callback: xm1_sacla
     }
 }
 
+/// The auxiliary request as calc1 0x3d02 carries it. X-M1 1.50: 0xf37ad8..0xf37b10 store the
+/// adjustment word (0xfa7928) and profile words 0x74f1ac, 0x74f9a4, 0x74fcec in that order;
+/// `stock::calc1_payload` lays out the rest.
+pub fn auxiliary_payload(request: crate::auxiliary::AuxiliaryRequest, callback: xm1_saclac_interface::stock::StockCallbackWord) -> xm1_saclac_interface::calc::Calc1Payload {
+    use xm1_saclac_interface::calc::{AuxiliaryRequest, AuxiliarySample, Calc1Payload};
+    let snapshot = request.snapshot;
+    let profile = request.profile.profile;
+    let words = |pair: [crate::pipeline::PipelineWord; 2]| pair.map(|word| word.0);
+    Calc1Payload::Auxiliary {
+        request: AuxiliaryRequest {
+            complete: request.complete,
+            pass: request.pass,
+            selection: profile_selection_byte(request.selection),
+            profile: [profile.adjustment, profile.words[3], profile.words[2], profile.words[0]].map(|word| word.0),
+            sample: AuxiliarySample {
+                mode: snapshot.timing.0,
+                gain_step: snapshot.gain_step.0,
+                exposure: words(snapshot.exposure),
+                level: snapshot.levels[0],
+                offset_level: snapshot.offset_level,
+                adjustment: snapshot.adjustment.0,
+                size: words(snapshot.size),
+                origin: words(snapshot.origin),
+                extent: words(snapshot.extent),
+            },
+            reference: request.reference_level,
+            rate: request.rate,
+            level_class: request.level_class.0,
+            window_status: request.window.status.0,
+            window_halfword: request.window.halfword.0,
+            resource_level: request.resource_level as u16,
+            word: request.profile.word.0,
+            halfword: request.profile.halfword.0,
+        },
+        callback,
+    }
+}
+
 /// X-M1 1.50: 0xff6b4c copies 0x5c4 bytes of pipeline state to 0x16f496c + slot·0x5c4,
 /// which 0xfea7ac returns. Offsets from the window (0xf3a5a4..0xf3a614), history
 /// (0xf32680..0xf32874) and auxiliary request (0xf37b34..0xf37bf8) builders.

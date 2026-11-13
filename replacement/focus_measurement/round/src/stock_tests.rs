@@ -138,3 +138,43 @@ fn a_history_entry_lays_out_banks_levels_exposure_and_carried_words() {
     assert_eq!([0x20c, 0x210, 0x214, 0x218, 0x21c, 0x220].map(word), [1, 2, 3, 4, 5, 6]);
     assert_eq!(word(0x224), 0x5145);
 }
+
+#[test]
+fn the_auxiliary_request_carries_its_profile_words_in_record_order_and_its_snapshot() {
+    use crate::auxiliary::{AuxiliaryProfile, AuxiliaryRequest, RequestProfile, ResourceIndex};
+    use crate::pipeline::{GainStep, PipelineSnapshot, PipelineWord, TimingWord};
+    use crate::profile::{ProfileSelection, RetainedHalfword, RetainedWord, WindowRecord, WindowStatus};
+    use crate::stock::auxiliary_payload;
+    use xm1_saclac_interface::calc::Calc1Payload;
+    use xm1_saclac_interface::stock::{calc1_payload, StockCallbackWord};
+    let request = AuxiliaryRequest {
+        complete: true,
+        pass: 3,
+        selection: ProfileSelection::Record,
+        profile: RequestProfile {
+            profile: AuxiliaryProfile { adjustment: RetainedWord(10), words: [20, 21, 22, 23, 24].map(RetainedWord), bytes: [0; 6] },
+            resource: ResourceIndex(0),
+            word: RetainedWord(30),
+            halfword: RetainedHalfword(31),
+        },
+        window: WindowRecord { status: WindowStatus(3), first: RetainedWord(0), halfword: RetainedHalfword(40), second: RetainedWord(0) },
+        snapshot: PipelineSnapshot {
+            timing: TimingWord(50), gain_step: GainStep(51), exposure: [PipelineWord(52), PipelineWord(53)], levels: [54, 55],
+            offset_level: 56, adjustment: PipelineWord(57), size: [PipelineWord(58), PipelineWord(59)],
+            origin: [PipelineWord(60), PipelineWord(61)], extent: [PipelineWord(62), PipelineWord(63)],
+            ..PipelineSnapshot::default()
+        },
+        reference_level: 70,
+        resource_level: -1,
+        level_class: RetainedWord(71),
+        rate: 72,
+    };
+    let payload = auxiliary_payload(request, StockCallbackWord(0xf37854));
+    let Calc1Payload::Auxiliary { request: carried, .. } = payload else { panic!("an auxiliary payload") };
+    assert_eq!((carried.selection, carried.profile), (1, [10, 23, 22, 20]));
+    assert_eq!((carried.sample.mode, carried.sample.level, carried.sample.extent), (50, 54, [62, 63]));
+    assert_eq!((carried.resource_level, carried.window_halfword, carried.word, carried.halfword), (0xffff, 40, 30, 31));
+    let (_, encoded) = calc1_payload(&payload);
+    let bytes = encoded.bytes();
+    assert_eq!((bytes[4], bytes[0x6c], &bytes[0x7c..]), (3, 1, &0xf37854u32.to_le_bytes()[..]));
+}

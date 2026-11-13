@@ -89,11 +89,11 @@ fn initialization_enables_acquisition_and_window_and_initializes_the_other_lanes
         Traffic::Acquisition(acquisition::Effect::Initialize),
         Traffic::Acquisition(acquisition::Effect::Enable),
         Traffic::Search("initialize"),
-        Traffic::Calculation(Calculation::Auxiliary, jobs::Effect::Initialize),
         Traffic::Image("initialize"),
         Traffic::Calculation(Calculation::Source, jobs::Effect::Initialize),
     ]);
     assert!(fake.records.in_use.primary);
+    assert!(fake.auxiliary.publication.published);
 }
 
 #[test]

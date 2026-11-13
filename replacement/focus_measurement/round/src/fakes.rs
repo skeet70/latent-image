@@ -1,8 +1,9 @@
+use crate::auxiliary::{self, AuxiliaryProfile, AuxiliaryPublication, AuxiliaryReading, AuxiliarySettings, Curve, CurveInputs, RequestProfile, ResourceIndex};
 use crate::image::{ChannelCount, LensReport, ReplyPorts};
 use crate::lanes::Selection;
 use crate::planner::{Cadence, Mode, Work};
 use crate::pipeline::{Exposure, GainStep, HistoryStatistics, Pipeline, PipelineSnapshot, PipelineWord, SnapshotStatus, Statistics, TimingWord};
-use crate::profile::{FrameInterval, FrameRate, GridCell, IntervalHistory, IntervalTracking, Profile, ProfileGeometry, ProfileMode, ProfileRecords, ProfileSelection, PublishedResult, StatisticsInUse, WindowPosition, WindowRecord, WindowStatus};
+use crate::profile::{FrameInterval, FrameRate, GridCell, IntervalHistory, IntervalTracking, Profile, ProfileGeometry, ProfileMode, ProfileRecords, ProfileSelection, PublishedResult, RetainedWord, StatisticsInUse, WindowPosition, WindowRecord, WindowStatus};
 use crate::record::{self, AlternateSearch, Power, Request, Settings, Trace, TraceMark};
 use crate::window::{self, WindowResult};
 use xm1_saclac_controllers::replies;
@@ -59,6 +60,56 @@ impl Records {
     }
 }
 
+/// The auxiliary measurement's helpers and its part of the shared record.
+pub struct AuxiliaryRecords {
+    pub reading: Option<AuxiliaryReading>,
+    pub settings: AuxiliarySettings,
+    pub default_levels: [u16; 3],
+    pub continues: bool,
+    pub lens: ResourceIndex,
+    /// A resource's level is its index plus this.
+    pub resource_base: i16,
+    pub follow_limit: u32,
+    /// The rate per pixel of the statistics image.
+    pub rate: u32,
+    pub profile: AuxiliaryProfile,
+    pub request_profile: RequestProfile,
+    pub follow_profile: RetainedWord,
+    pub curve_offset: i16,
+    /// Inputs of every curve asked for, in order.
+    pub curves: Vec<CurveInputs>,
+    pub publication: AuxiliaryPublication,
+    pub value: i16,
+    pub grid_selection: bool,
+    pub grid_refreshes: usize,
+    pub capture_levels: Option<[u16; 3]>,
+}
+
+impl Default for AuxiliaryRecords {
+    fn default() -> Self {
+        Self {
+            reading: None,
+            settings: AuxiliarySettings::default(),
+            default_levels: [0; 3],
+            continues: false,
+            lens: ResourceIndex(0),
+            resource_base: 0,
+            follow_limit: 0,
+            rate: 0,
+            profile: AuxiliaryProfile::default(),
+            request_profile: RequestProfile::default(),
+            follow_profile: RetainedWord(0),
+            curve_offset: 0,
+            curves: Vec::new(),
+            publication: AuxiliaryPublication::default(),
+            value: 0,
+            grid_selection: false,
+            grid_refreshes: 0,
+            capture_levels: None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Outbound {
     Capture(Statistics),
@@ -96,6 +147,7 @@ pub struct Ports<X = ()> {
     pub window_result: Option<WindowResult>,
     pub channel_count: ChannelCount,
     pub lens: LensReport,
+    pub auxiliary: AuxiliaryRecords,
     pub outbound: Vec<Outbound>,
     pub extra: X,
 }
@@ -123,6 +175,7 @@ impl<X> Ports<X> {
             window_result: None,
             channel_count: ChannelCount(1),
             lens: LensReport::default(),
+            auxiliary: AuxiliaryRecords::default(),
             outbound: Vec::new(),
             extra,
         }
@@ -233,4 +286,43 @@ impl<X> record::Ports for Ports<X> {
 impl<X> ReplyPorts for Ports<X> {
     fn channel_count(&mut self) -> ChannelCount { self.channel_count }
     fn lens_report(&mut self) -> LensReport { self.lens }
+}
+
+/// The curve the fake publishes: each average raised by the offset; the word is the lens resource.
+fn fake_curve(inputs: &CurveInputs) -> Curve {
+    Curve { levels: inputs.averages.map(|average| average.wrapping_add(inputs.offset as u16)), word: RetainedWord(inputs.lens.0) }
+}
+
+impl<X> auxiliary::Ports for Ports<X> {
+    fn reading(&mut self, _: Completed<'_>) -> Option<AuxiliaryReading> { self.auxiliary.reading }
+    fn auxiliary_settings(&mut self) -> AuxiliarySettings { self.auxiliary.settings }
+    fn default_levels(&mut self) -> [u16; 3] { self.auxiliary.default_levels }
+    fn curve(&mut self, inputs: &CurveInputs) -> Curve {
+        self.auxiliary.curves.push(*inputs);
+        fake_curve(inputs)
+    }
+    fn lens_resource(&mut self) -> ResourceIndex { self.auxiliary.lens }
+    fn resource_level(&mut self, resource: ResourceIndex) -> i16 { (resource.0 as i16).wrapping_add(self.auxiliary.resource_base) }
+    fn follow_limit(&mut self, _: ProfileSelection, _: RetainedWord, _: TimingWord) -> u32 { self.auxiliary.follow_limit }
+    fn rate(&mut self, size: [PipelineWord; 2]) -> u32 { self.auxiliary.rate.wrapping_mul(size[0].0).wrapping_mul(size[1].0) }
+    fn level_class(&mut self, level: i16, _: ProfileSelection, window: RetainedWord) -> RetainedWord {
+        RetainedWord((level as u32).wrapping_add(window.0))
+    }
+    fn refresh_grid_selection(&mut self, _: RecordHandle) { self.auxiliary.grid_refreshes += 1; }
+    fn auxiliary_continues(&mut self, _: RecordHandle) -> bool { self.auxiliary.continues }
+    fn auxiliary_profile(&mut self, _: RecordHandle) -> AuxiliaryProfile { self.auxiliary.profile }
+    fn request_profile(&mut self, _: RecordHandle) -> RequestProfile { self.auxiliary.request_profile }
+    fn follow_profile(&mut self, _: RecordHandle) -> RetainedWord { self.auxiliary.follow_profile }
+    fn curve_offset(&mut self, _: RecordHandle) -> i16 { self.auxiliary.curve_offset }
+    fn auxiliary_publication(&mut self, _: RecordHandle) -> AuxiliaryPublication { self.auxiliary.publication }
+    fn publish_auxiliary(&mut self, _: RecordHandle, publication: AuxiliaryPublication) {
+        if self.records.granted { self.auxiliary.publication = publication; }
+    }
+    fn store_auxiliary_value(&mut self, _: RecordHandle, value: i16) {
+        if self.records.granted { self.auxiliary.value = value; }
+    }
+    fn grid_selection(&mut self, _: RecordHandle) -> bool { self.auxiliary.grid_selection }
+    fn record_capture_levels(&mut self, _: RecordHandle, levels: [u16; 3]) {
+        if self.records.capture_attached { self.auxiliary.capture_levels = Some(levels); }
+    }
 }
