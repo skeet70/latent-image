@@ -1,0 +1,39 @@
+{-# LANGUAGE OverloadedStrings #-}
+module Main (main) where
+
+import qualified Data.ByteString as B
+import qualified Data.Set as S
+import qualified FujiAF.FirstStage as F
+import qualified FujiAF.Host as H
+import qualified FujiAF.UpdateContainer as U
+import Replacement.Toolchain.Stack
+
+main :: IO ()
+main = do
+  let base = 0x1000
+      words' = [0xe92d4830, 0xe92d500f, 0xeb000001, 0xe8bd500f, 0xe8bd8830, 0xe92d4800, 0xe8bd8800]
+      body = B.concat (map U.putWord32 words')
+      points = S.fromList (map Guest [base, base + 4 .. base + 24])
+  symbols <- either H.failH pure (F.parseSymbols "00001000 00000014 T caller\n00001014 00000008 T callee\n")
+  fitting <- maybe (H.failH "invalid budget") pure (stackBytes 48)
+  short <- maybe (H.failH "invalid budget") pure (stackBytes 47)
+  let image = Image (Guest base) body symbols points
+  either (H.failH . show) pure (check fitting image)
+  H.ensure (check short image == Left (BudgetExceeded (Guest base) fitting)) "consecutive pushes and callee stack were not summed"
+  let recursive = image { imageBytes = B.take 8 body <> U.putWord32 0xebfffffc <> B.drop 12 body }
+  H.ensure (check fitting recursive == Left (RecursiveCall (Guest (base + 8)) (Guest base))) "recursive call was admitted"
+  let unknownFrame = image { imageBytes = U.putWord32 0x192d4830 <> B.drop 4 body }
+  H.ensure (check fitting unknownFrame == Left (FrameNotDerivable (Guest base))) "conditional frame was treated as known"
+  let outside = image { imageInstructions = S.insert (Guest (base + 28)) points }
+  H.ensure (check fitting outside == Left (OutsideImage (Guest (base + 28)))) "missing instruction bytes were admitted"
+  H.ensure (stackBytes (-1) == Nothing) "negative stack allowance was admitted"
+  zero <- maybe (H.failH "invalid zero budget") pure (stackBytes 0)
+  haltSymbols <- either H.failH pure (F.parseSymbols "00001000 00000008 T halt\n")
+  let halt = Image (Guest base) (B.concat (map U.putWord32 [0xe320f003, 0xeafffffd])) haltSymbols (S.fromList [Guest base, Guest (base + 4)])
+  either (H.failH . show) pure (check zero halt)
+  tailSymbols <- either H.failH pure (F.parseSymbols "00001000 00000004 T first\n00001004 00000004 T second\n")
+  let tails = halt { imageBytes = B.concat (map U.putWord32 [0xeaffffff, 0xeafffffd]), imageSymbols = tailSymbols }
+  either (H.failH . show) pure (check zero tails)
+  let tailThenCall = tails { imageBytes = B.concat (map U.putWord32 [0xeaffffff, 0xebfffffd]) }
+  H.ensure (check zero tailThenCall == Left (RecursiveCall (Guest (base + 4)) (Guest base))) "call growth through a tail edge was admitted"
+  putStrLn "stack-proof: consecutive pushes, direct depth, recursion, frame and image-bound controls passed"
