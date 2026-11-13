@@ -11,6 +11,7 @@ pub mod exposure;
 pub mod finish;
 pub mod gains;
 pub mod geometry;
+pub mod lens_checks;
 pub mod library_state;
 pub mod policy;
 pub mod profile;
@@ -33,6 +34,8 @@ mod finish_tests;
 mod gains_tests;
 #[cfg(test)]
 mod geometry_tests;
+#[cfg(test)]
+mod lens_checks_tests;
 #[cfg(test)]
 mod policy_tests;
 #[cfg(test)]
