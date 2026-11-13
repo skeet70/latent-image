@@ -6,7 +6,7 @@ use xm1_saclac_profile_records::stock::shared::{group_27, group_29};
 use xm1_saclac_profile_records::{MeasurementSelection, SharedHeaderByte};
 
 use crate::adjust::motion::exposure::FrameExposure;
-use crate::adjust::motion::ports::{AreaGrid, GridArea, SearchBounds};
+use crate::adjust::motion::ports::{AreaClass, AreaGrid, GridArea, SearchBounds, Tracking};
 use crate::adjust::motion::prepare::Preparation;
 use crate::adjust::motion::preparation::FrameSize;
 use crate::adjust::motion::readings::{AreaList, FocusRequest, ListedArea, PreparationInput};
@@ -251,7 +251,7 @@ fn the_search_frames_take_the_first_listed_area_with_its_class() {
     let mut lists = Lists { areas, ..Lists::default() };
     let (state, _) = prepare_with(&mut world, &mut lists, false);
     assert_eq!(state.search().frames, world.search_frames);
-    assert_eq!(world.search_frame_requests.last().unwrap().area, Some((area, 0)));
+    assert_eq!(world.search_frame_requests.last().unwrap().area, Some(Tracking { area, class: AreaClass::RowsUpward }));
 }
 
 #[test]

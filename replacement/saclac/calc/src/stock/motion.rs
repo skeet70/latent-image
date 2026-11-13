@@ -3,6 +3,7 @@
 
 use xm1_saclac_interface::calc::SharedAddress;
 
+use crate::adjust::motion::ports::{AreaClass, AreaGrid, CropGeometry, GridRequest, SearchBounds};
 use crate::exposure::ports::{Properties, Property, StockMemory};
 
 /// The section starts 0x116cc into the frame and is addressed through its alias with bit 30
@@ -356,6 +357,8 @@ pub struct SceneChannels {
     pub second_channel: bool,
     /// The bit of `ARMED_SCENE_CHANNELS` an armed record of the scene tests.
     pub armed_bit: Option<u32>,
+    /// A channel-0 run starts from channel 0's table position, not the configured start.
+    pub starts_at_channel_position: bool,
 }
 
 const SCENE_CHANNEL_TABLE: [(u8, u8); 58] = [
@@ -364,11 +367,11 @@ const SCENE_CHANNEL_TABLE: [(u8, u8); 58] = [
     (0, 2), (0, 0), (0, 1), (1, 7), (1, 7), (1, 7), (1, 7), (1, 7), (1, 7), (1, 7), (1, 7), (1, 7), (1, 7), (1, 7), (1, 7), (1, 7), (1, 7), (1, 7),
 ];
 
-/// A scene above 57 reads past the table in stock (0xf9e428, 0xf9e4d4); it takes neither the
-/// second channel nor an armed bit.
+/// A scene above 57 reads past the table in stock (0xf9e428, 0xf9e4d4, 0xf99fe8); it takes
+/// neither the second channel, an armed bit nor the channel position start.
 pub const fn scene_channels(scene: u8) -> SceneChannels {
     if scene as usize >= SCENE_CHANNEL_TABLE.len() {
-        return SceneChannels { second_channel: false, armed_bit: None };
+        return SceneChannels { second_channel: false, armed_bit: None, starts_at_channel_position: false };
     }
     let (second_channel, armed) = SCENE_CHANNEL_TABLE[scene as usize];
     let armed_bit = match armed {
@@ -380,7 +383,7 @@ pub const fn scene_channels(scene: u8) -> SceneChannels {
         6 => Some(0x20),
         _ => None,
     };
-    SceneChannels { second_channel: second_channel != 0, armed_bit }
+    SceneChannels { second_channel: second_channel != 0, armed_bit, starts_at_channel_position: armed == 2 }
 }
 
 /// Signed: a record level below ten times this sets the channel's status bit (0xf9e6a0).
@@ -432,12 +435,12 @@ pub const PEAKED_CEILING: [Property; 4] = [Property(0x9246), Property(0x9248), P
 pub const LEVEL_CEILING_BAND: [Property; 4] = [Property(0x923f), Property(0x9241), Property(0x923d), Property(0x923e)];
 
 /// A listed area's class from its kind word (0xf95df0).
-pub const fn area_class(kind: u32) -> u8 {
+pub const fn area_class(kind: u32) -> AreaClass {
     match kind {
-        8..=10 => 3,
-        5..=7 => 0,
-        2..=4 => 2,
-        _ => 1,
+        8..=10 => AreaClass::ColumnsAlternate,
+        5..=7 => AreaClass::RowsUpward,
+        2..=4 => AreaClass::Columns,
+        _ => AreaClass::RowsDownward,
     }
 }
 
@@ -460,6 +463,135 @@ pub const fn exposure_trace(section: SharedAddress, word: u32) -> SharedAddress 
 
 /// Plan header bytes 2 to 5 of a treated run (0xfa4498..0xfa44d0).
 pub const TREATED_PLAN_SETTINGS: [Property; 4] = [Property(0xa48e), Property(0xa48f), Property(0xa48c), Property(0xa4d6)];
+
+/// The sample grid's height and width in percent of the crop (0xf99af0, 0xf99afc).
+pub const SAMPLE_GRID_PERCENT: [Property; 2] = [Property(0x920c), Property(0x920d)];
+/// The sample grid's row and column percent for a program step (0xf99b0c, 0xf99b18).
+pub const fn sample_row_percent(step: u8) -> Property { Property(0x920e + step as u32) }
+pub const fn sample_column_percent(step: u8) -> Property { Property(0x9220 + step as u32) }
+pub const SAMPLE_GRID_BANDS: u8 = 7;
+
+/// A program step's setting the pipeline reads, per program (0xf99bc0..0xf99be4).
+pub const fn program_setting(program: usize, step: u8) -> Property { Property([0x9167, 0x9179, 0x918b][program] + step as u32) }
+pub const PROGRAM_SETTING_LIMIT: u32 = 5;
+
+/// The cases in which a treated run starts at its window position: bit 4 held, bit 2 scene 51,
+/// bit 3 scene 52, bit 1 a listed area with word 0x2c set, bit 5 one with byte 0x26 at 1, bit 0
+/// any other (0xf95e78).
+pub const TREATED_WINDOW_START: Property = Property(0xa490);
+
+/// 0 takes a positive second change off the exposure ratio's level (0xf9a228).
+pub const RATIO_WITHOUT_CHANGE: Property = Property(0x9269);
+/// Tenths: the exposure ratio's ceiling and floor, and the level whose ratio less the second
+/// exposure's word 0xc also caps it (0xf9a310, 0xf9a368, 0xf9a344).
+pub const RATIO_CEILING: Property = Property(0x9268);
+pub const RATIO_FLOOR: Property = Property(0x9267);
+pub const RATIO_LEVEL: Property = Property(0x9266);
+
+/// Each sampled area's exposure start and readout in the section, primary areas first, then the
+/// line offset the readouts count from (0xf99e2c..0xf99ef0).
+pub fn trace_schedule(section: SharedAddress, primary: &[(u32, u32)], secondary: &[(u32, u32)], line_offset: u32, memory: &mut impl StockMemory) {
+    for (start_list, readout_list, entries) in [(0x44580, 0x4459c, primary), (0x445b8, 0x445e0, secondary)] {
+        for (index, &(start, readout)) in (0..).zip(entries) {
+            memory.write_u32(at(section, start_list + 4 * index), start);
+            memory.write_u32(at(section, readout_list + 4 * index), readout);
+        }
+    }
+    memory.write_u32(at(section, 0x4457c), line_offset);
+}
+
+/// What a treated run's window position is computed from.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TreatedWindowTrace {
+    pub amount: u32,
+    pub share: u32,
+    pub rate: u32,
+    pub base_value: u32,
+    pub lens: u32,
+    pub lens_value: u32,
+    pub scaled_rate: u32,
+    pub period: u16,
+    pub position: i16,
+}
+
+/// 0xf997a8..0xf9982c.
+pub fn trace_treated_window(section: SharedAddress, trace: &TreatedWindowTrace, memory: &mut impl StockMemory) {
+    let words = [
+        trace.amount,
+        trace.share,
+        trace.rate,
+        trace.base_value,
+        trace.lens,
+        trace.lens_value,
+        trace.scaled_rate,
+        u32::from(trace.period),
+        i32::from(trace.position) as u32,
+    ];
+    for (index, value) in (0..).zip(words) {
+        memory.write_u32(at(section, 0x469e0 + 4 * index), value);
+    }
+}
+
+/// What the layout traces after its schedule.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LayoutTrace {
+    pub grid: GridRequest,
+    pub sample_grids: [AreaGrid; 2],
+    pub search_grids: [AreaGrid; 2],
+    /// A treated run's crop geometry.
+    pub treated: Option<CropGeometry>,
+    pub bounds: SearchBounds,
+    pub channel_bounds: SearchBounds,
+}
+
+const fn halves(high: u32, low: u32) -> u32 { low | high << 16 }
+
+const fn bound_halves(bounds: SearchBounds) -> u32 { halves(bounds.low as u16 as u32, bounds.high as u16 as u32) }
+
+/// The grid's position, cell size, gaps and counts, each as two halves.
+const fn grid_words(grid: &AreaGrid) -> [u32; 4] {
+    [
+        halves(grid.left, grid.top),
+        halves(grid.cell_width, grid.cell_height),
+        halves(grid.gap_horizontal as u32, grid.gap_vertical as u32),
+        halves(grid.columns as u32, grid.rows as u32),
+    ]
+}
+
+/// 0xf9a3d0..0xf9a670.
+pub fn trace_layout(section: SharedAddress, trace: &LayoutTrace, memory: &mut impl StockMemory) {
+    let mut store = |offset: u32, value: u32| memory.write_u32(at(section, offset), value);
+    let grid = &trace.grid;
+    for (index, value) in (0..).zip([grid.height_percent, grid.width_percent, grid.row_percent, grid.column_percent]) {
+        store(0x44c28 + 4 * index, u32::from(value));
+    }
+    let [first, second] = trace.sample_grids.map(|grid| grid_words(&grid));
+    let [third, fourth] = trace.search_grids.map(|grid| grid_words(&grid));
+    let words = [first[0], first[1], first[2], first[3], second[0], second[1], second[3], third[0], third[1], third[2], third[3], fourth[0], fourth[1], fourth[3]];
+    for (index, value) in (0..).zip(words) {
+        store(0x44c40 + 4 * index, value);
+    }
+    if let Some(CropGeometry { window, crop }) = trace.treated {
+        let tracked = &trace.sample_grids[1];
+        let words = [
+            window.width,
+            window.height,
+            crop.left.wrapping_sub(window.left),
+            crop.top.wrapping_sub(window.top),
+            tracked.left.wrapping_sub(window.left),
+            tracked.top.wrapping_sub(window.top),
+            tracked.cell_width,
+            tracked.cell_height,
+            u32::from(tracked.columns),
+            u32::from(tracked.rows),
+        ];
+        for (index, value) in (0..).zip(words) {
+            store(0x469b4 + 4 * index, value);
+        }
+    }
+    store(0x44bfc, bound_halves(trace.bounds));
+    store(0x44c00, bound_halves(trace.channel_bounds));
+}
 
 /// One listed area as the preparation traces it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

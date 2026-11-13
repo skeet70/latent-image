@@ -14,6 +14,7 @@ use crate::adjust::motion::preparation::{searches_in_full, CaptureFrames, LensSt
 use crate::adjust::motion::queries;
 use crate::adjust::motion::readings::{AreaList, PreparationInput, RecordReadings, SelectionLists, StepLimits};
 use crate::adjust::motion::search::{ListReadings, SearchMode, SearchPorts, SearchSetup};
+use crate::adjust::motion::layout::SampleLayout;
 use crate::adjust::motion::state::{Drive, FrameExposures, MotionState, SampleSchedule};
 use crate::adjust::motion::statistics::Statistics;
 use crate::adjust::peak::Logarithms;
@@ -125,12 +126,9 @@ fn first_change(ports: &mut (impl Properties + ChannelRates + Logarithms), readi
     (change as i16).min(limit).max(0)
 }
 
-/// The second frame's change toward the stored second-channel exposure, in the configured
-/// percent and capped at the configured limit (0xfa417c..0xfa427c).
-fn second_change(ports: &mut (impl Properties + ProfileAccess + Lens), readings: &RecordReadings, level: i16) -> i16 {
-    if !queries::second_channel_available(ports, readings.record) {
-        return 0;
-    }
+/// The record's stored second-channel exposure level: its lens step's level and base level, less
+/// its level step and its three offsets.
+pub(crate) fn stored_second_level(ports: &mut (impl Properties + ProfileAccess + Lens), readings: &RecordReadings) -> i16 {
     let record = readings.record;
     let profile = ports.profile();
     let step: u32 = profile.read_shared(record, &group_27::AT_0708);
@@ -141,8 +139,18 @@ fn second_change(ports: &mut (impl Properties + ProfileAccess + Lens), readings:
     let level_index: u32 = profile.read_shared(record, &group_27::AT_071C);
     let step_level = ports.level(step, readings.lens);
     let index_level = settings::level_step(ports, u8::try_from(level_index).unwrap_or(u8::MAX));
+    step_level.wrapping_add(base).wrapping_sub(index_level).wrapping_sub(third).wrapping_sub(second).wrapping_sub(first)
+}
+
+/// The second frame's change toward the stored second-channel exposure, in the configured
+/// percent and capped at the configured limit (0xfa417c..0xfa427c).
+fn second_change(ports: &mut (impl Properties + ProfileAccess + Lens), readings: &RecordReadings, level: i16) -> i16 {
+    if !queries::second_channel_available(ports, readings.record) {
+        return 0;
+    }
+    let stored = stored_second_level(ports, readings);
     let chosen = level.wrapping_sub(settings::level_step(ports, 2));
-    let change = step_level.wrapping_add(base).wrapping_sub(index_level).wrapping_sub(third).wrapping_sub(second).wrapping_sub(first).wrapping_sub(chosen);
+    let change = stored.wrapping_sub(chosen);
     if change <= 0 {
         return 0;
     }
@@ -195,15 +203,25 @@ fn corrected(ports: &mut impl PreparationPorts, mut first: FrameExposure, second
     first
 }
 
-/// The run's search bounds: channel 1's high bound for a wide run (0xf9863c with 0xf98378).
-pub(crate) fn search_bounds(ports: &mut (impl LensBounds + Properties), readings: &RecordReadings, wide: bool, step: u32) -> SearchBounds {
-    let query = |channel, lens_state| BoundsQuery { lens: readings.lens, scene: readings.scene, channel, class: readings.class, step, reference: readings.reference, held: readings.auxiliary, lens_state };
-    let mut bounds = ports.search_bounds(&query(readings.channel, readings.lens_state));
+fn bounds_query(readings: &RecordReadings, step: u32, channel: u8, lens_state: u32) -> BoundsQuery {
+    BoundsQuery { lens: readings.lens, scene: readings.scene, channel, class: readings.class, step, reference: readings.reference, held: readings.auxiliary, lens_state }
+}
+
+/// The bounds of the run's channel; a masked-scene run on channel 1 or 2 takes the channel
+/// below's low bound (0xf98378).
+pub(crate) fn channel_bounds(ports: &mut impl LensBounds, readings: &RecordReadings, step: u32) -> SearchBounds {
+    let mut bounds = ports.search_bounds(&bounds_query(readings, step, readings.channel, readings.lens_state));
     if readings.scene == stock::MASKED_SCENE && matches!(readings.channel, 1 | 2) {
-        bounds.low = ports.search_bounds(&query(readings.channel - 1, 0)).low;
+        bounds.low = ports.search_bounds(&bounds_query(readings, step, readings.channel - 1, 0)).low;
     }
+    bounds
+}
+
+/// The run's search bounds: channel 1's high bound for a wide run (0xf9863c).
+pub(crate) fn search_bounds(ports: &mut impl LensBounds, readings: &RecordReadings, wide: bool, step: u32) -> SearchBounds {
+    let mut bounds = channel_bounds(ports, readings, step);
     if wide {
-        bounds.high = ports.search_bounds(&query(1, 0)).high;
+        bounds.high = ports.search_bounds(&bounds_query(readings, step, 1, 0)).high;
     }
     bounds
 }
@@ -288,6 +306,7 @@ impl MotionState {
             treated_settings,
             plan: Plan::default(),
             sampling: SampleSchedule::default(),
+            layout: SampleLayout::default(),
             drive: Drive::default(),
         };
         (state, preparation)

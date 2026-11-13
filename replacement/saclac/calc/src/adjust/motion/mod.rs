@@ -5,6 +5,7 @@
 pub mod access;
 pub mod drive;
 pub mod exposure;
+pub mod layout;
 pub mod plan;
 pub mod ports;
 pub mod prepare;
@@ -22,6 +23,8 @@ mod prepare_tests;
 mod drive_tests;
 #[cfg(test)]
 mod exposure_tests;
+#[cfg(test)]
+mod layout_tests;
 #[cfg(test)]
 mod fakes;
 #[cfg(test)]
