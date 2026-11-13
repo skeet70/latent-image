@@ -56,6 +56,13 @@ pub trait ExposureTimes {
     fn exposure_time(&mut self, profile: u32, level: i16, gain: u32) -> u32;
 }
 
+/// Image 6's level of a capture profile at a gain step (0x1006000) and its shortest exposure
+/// (0x1005f60).
+pub trait ProfileGains {
+    fn gain_level(&mut self, profile: u32, gain: u32) -> i16;
+    fn shortest_time(&mut self, profile: u32) -> u32;
+}
+
 /// The selected area of the record's measurement, as column and row of the 7-column grid
 /// (0xf5206c).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

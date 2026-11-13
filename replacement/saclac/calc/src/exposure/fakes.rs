@@ -195,6 +195,8 @@ impl CaptureProfiles for World {
     fn class_offset(&mut self, class: u8) -> i16 { self.class_offsets.get(&class).copied().unwrap_or(0) }
     fn offset_class(&mut self, profile: u32) -> u8 { self.offset_classes.get(&profile).copied().unwrap_or(0) }
     fn sensitivity_class(&mut self, profile: u32) -> u8 { self.sensitivity_classes.get(&profile).copied().unwrap_or(0) }
+    /// A class per ten of the value.
+    fn sensitivity_class_for(&mut self, value: u32) -> u8 { (value / 10) as u8 }
     fn configured_level(&mut self) -> u16 { self.configured_level }
     fn configured_profile(&mut self, level: i16) -> u32 { self.configured_profiles.get(&level).copied().unwrap_or(0) }
     fn record_profile(&mut self) -> u32 { 1 }
@@ -258,6 +260,15 @@ impl LensConfiguration for World {
     fn remap(&mut self, word: u32, channel: i32, mode: u32) -> i32 { self.lens_configuration.remap(word, channel, mode) }
     fn position_limits(&mut self, key: u32) -> [i16; 2] { self.lens_configuration.position_limits(key) }
     fn mapped_value(&mut self, key: u32) -> u32 { self.lens_configuration.mapped_value(key) }
+}
+
+/// The near step is the limit, one more from the lens's table; the far step is the limit plus 1000.
+impl crate::adjust::profile_adjustment::LensSteps for World {
+    fn near_step(&mut self, _reference: u32, limit: u16, table: crate::adjust::profile_adjustment::StepTable) -> u32 {
+        u32::from(limit) + if table == crate::adjust::profile_adjustment::StepTable::Lens { 1 } else { 0 }
+    }
+    fn far_step(&mut self, _reference: u32, limit: u16, _table: crate::adjust::profile_adjustment::StepTable) -> u32 { u32::from(limit) + 1000 }
+    fn lens_step(&mut self, step: u32) -> u32 { step }
 }
 
 /// calc and calc1 as a list of the payloads posted to them.

@@ -15,6 +15,16 @@ impl RowIndex {
     pub const fn get(self) -> usize { self.0 as usize }
 }
 
+/// A set of calc buffers: a row's two (tables 0xf66040, 0xf66060) and its column's (0xf66000).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BufferSlot(u8);
+
+impl BufferSlot {
+    pub const fn new(index: u8) -> Option<Self> { if (index as usize) < ROWS { Some(Self(index)) } else { None } }
+
+    pub const fn get(self) -> usize { self.0 as usize }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum RowPhase {
     #[default]
@@ -40,6 +50,8 @@ pub struct Row {
     pub enabled: bool,
     pub phase: RowPhase,
     pub measurement: RowMeasurement,
+    /// The buffers the row and its column name; a row the preparation did not bind names none.
+    pub slot: Option<BufferSlot>,
 }
 
 /// The subjects an evaluation row covers, read in place by the image task and by calc.

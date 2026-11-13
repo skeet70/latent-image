@@ -1,17 +1,27 @@
 //! The exposure correction calc computes after the evaluation (calc 0x3c01): the request's inputs
-//! from the record and the evaluation (0xf68db8).
+//! from the record and the evaluation (0xf68db8), the tables refreshed before it is requested
+//! (0xf6a330) and the request itself (0xf5ff88).
 
+use xm1_saclac_interface::calc::{CalcPayload, SharedAddress};
 use xm1_saclac_interface::exposure::CorrectionRequest;
+use xm1_saclac_interface::stock::StockCallbackWord;
 use xm1_saclac_profile_records::stock::record::group_00;
 use xm1_saclac_profile_records::{MeasurementSelection, SharedHeaderByte};
 
 use crate::adjust::rate_policy;
 use crate::adjust::scene_settings::{self, SceneSelection};
 use crate::exposure::context::{ExposureContext, SubjectList};
-use crate::exposure::ports::{InPlace, Ports};
+use crate::exposure::evaluation::reference_value;
+use crate::exposure::levels;
+use crate::exposure::ports::{InPlace, Ports, Property};
+use crate::exposure::prepare::treatments;
 use crate::exposure::settings;
+use crate::exposure::tables::CurveRange;
+use crate::policy::raise_all;
+use crate::requests::Peers;
 use crate::stock::property::{self, RateSetting};
-use crate::stock::{lists, shared};
+use crate::stock::shared::{self, CURVE_POINTS, LEVEL_CURVES, SUBJECT_POINTS};
+use crate::stock::lists;
 
 /// Which subject list and summary the correction names; the adjustment path names the snapshot's.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -135,4 +145,156 @@ pub fn request(ports: &mut impl Ports, context: &ExposureContext, source: Subjec
         buffers: shared::CORRECTION_BUFFERS.map(Some),
         frame: binding.frame,
     }
+}
+
+/// The half-press mode whose correction keeps the tables as they are (0xf5ffa0).
+const KEEP_TABLES_MODE: u32 = 7;
+
+fn read_i16(ports: &mut impl Ports, at: SharedAddress) -> i16 { ports.read_u16(at) as i16 }
+
+/// The four level curves, then the four subject rows, point by point.
+fn table_points() -> impl Iterator<Item = SharedAddress> {
+    let curves = (0..LEVEL_CURVES).flat_map(|curve| (0..CURVE_POINTS).map(move |point| shared::level_curve(curve, point)));
+    let subjects = (0..LEVEL_CURVES).flat_map(|row| (0..SUBJECT_POINTS).map(move |point| shared::subject_curve(row, point)));
+    curves.chain(subjects)
+}
+
+/// 0xf5387c over every table.
+fn raise_tables(ports: &mut impl Ports, offset: i16, limit: i16) {
+    if offset == 0 {
+        return;
+    }
+    for at in table_points() {
+        let mut value = read_i16(ports, at);
+        raise_all(core::slice::from_mut(&mut value), offset, i32::from(limit));
+        ports.write_u16(at, value as u16);
+    }
+}
+
+/// A signed configuration byte in tenths.
+fn signed_tenths(ports: &mut impl Ports, id: Property) -> i16 { i16::from(ports.property(id) as u8 as i8).wrapping_mul(10) }
+
+/// Clamps every table to a window around the adjustment level. Each side is the near bound, or
+/// the margin past the level when the weighted count of curve 0's points beyond that bound
+/// exceeds its limit; the configured table range bounds both (0xf6a350..0xf6a6d4).
+fn narrow_to_window(ports: &mut impl Ports, context: &ExposureContext) {
+    let range = CurveRange::read(ports);
+    let margin = settings::level(ports, property::WINDOW_MARGIN).wrapping_mul(10);
+    let near_above = signed_tenths(ports, property::NEAR_ABOVE);
+    let far_above = signed_tenths(ports, property::FAR_ABOVE);
+    let near_below = signed_tenths(ports, property::NEAR_BELOW);
+    let far_below = signed_tenths(ports, property::FAR_BELOW);
+    let weights = [property::NEAR_ABOVE_WEIGHT, property::FAR_ABOVE_WEIGHT, property::NEAR_BELOW_WEIGHT, property::FAR_BELOW_WEIGHT].map(|id| ports.property(id));
+    let fifth = context.snapshot.focus.levels[4];
+    let raised = context.adjustment.level.wrapping_add(fifth as u16);
+    let level = if fifth > 99 { raised.wrapping_sub(100) } else { raised } as i16;
+    let mut counts = [0u32; 4];
+    for point in 0..CURVE_POINTS {
+        let distance = read_i16(ports, shared::level_curve(0, point)).wrapping_sub(level);
+        let band = if near_below <= distance && distance <= near_above {
+            continue;
+        } else if near_above < distance && distance <= far_above {
+            0
+        } else if far_above < distance {
+            1
+        } else if far_below <= distance && distance < near_below {
+            2
+        } else {
+            3
+        };
+        counts[band] += 1;
+    }
+    let weighted = |near: usize| weights[near].wrapping_mul(counts[near]).wrapping_add(weights[near + 1].wrapping_mul(counts[near + 1])) as u16;
+    let upper = if weighted(0) > settings::word(ports, property::SECOND_WEIGHT_LIMIT) { level.wrapping_add(margin).wrapping_add(250) } else { level.wrapping_add(near_above) };
+    let upper = if i32::from(upper) > range.highest { range.highest as i16 } else { upper };
+    let lower = if weighted(2) > settings::word(ports, property::THIRD_WEIGHT_LIMIT) { level.wrapping_sub(900).wrapping_sub(margin) } else { level.wrapping_add(near_below) };
+    let lower = if i32::from(lower) < range.lowest { range.lowest as i16 } else { lower };
+    for at in table_points() {
+        let value = read_i16(ports, at);
+        let narrowed = value.min(upper).max(lower);
+        if narrowed != value {
+            ports.write_u16(at, narrowed as u16);
+        }
+    }
+}
+
+fn save_tables(ports: &mut impl Ports, context: &mut ExposureContext) {
+    let saved = &mut context.saved;
+    for (curve, points) in saved.curves.iter_mut().enumerate() {
+        for (point, value) in points.iter_mut().enumerate() {
+            *value = ports.read_u16(shared::level_curve(curve, point));
+        }
+    }
+    for (row, points) in saved.subjects.iter_mut().enumerate() {
+        for (point, value) in points.iter_mut().enumerate() {
+            *value = ports.read_u16(shared::subject_curve(row, point));
+        }
+    }
+    saved.start = context.levels.start;
+}
+
+fn restore_tables(ports: &mut impl Ports, context: &ExposureContext) {
+    let saved = &context.saved;
+    for (curve, points) in saved.curves.iter().enumerate() {
+        for (point, value) in points.iter().enumerate() {
+            ports.write_u16(shared::level_curve(curve, point), *value);
+        }
+    }
+    for (row, points) in saved.subjects.iter().enumerate() {
+        for (point, value) in points.iter().enumerate() {
+            ports.write_u16(shared::subject_curve(row, point), *value);
+        }
+    }
+}
+
+/// Brings the tables to the correction's start level and, for a record with header byte 0x63,
+/// carries them between primary exposures and the next exposure of another mode, then rebuilds
+/// the treatments and the correction request (0xf6a330).
+pub fn refresh(ports: &mut impl Ports, context: &mut ExposureContext) {
+    let primary = context.binding.exposure_mode.is_primary();
+    if primary {
+        if context.outcome.adjusting && context.snapshot.focus.levels[4] != 0 {
+            narrow_to_window(ports, context);
+        }
+        raise_tables(ports, context.correction.start_above_target as i16, context.correction.reference as i16);
+    }
+    let record = context.binding.record_handle();
+    if ports.profile().header(record, SharedHeaderByte::At63) == 0 {
+        return;
+    }
+    if primary {
+        save_tables(ports, context);
+    } else {
+        restore_tables(ports, context);
+        context.levels = levels::start(ports, record, context.outcome.adjusting);
+        let levels = context.levels;
+        let offset = levels.start.wrapping_sub(context.saved.start);
+        let limit = levels.start.wrapping_add(250).wrapping_sub(levels.target).wrapping_add(reference_value(ports, context));
+        raise_tables(ports, offset, limit);
+    }
+    (context.outcome.treated, context.outcome.first_treatment) = treatments(ports, context);
+    let source = if context.outcome.adjusting && context.binding.subjects.count != 0 { SubjectSource::Snapshot } else { SubjectSource::Bound };
+    let reference = reference_value(ports, context).wrapping_add(250);
+    context.correction = request(ports, context, source, reference);
+}
+
+/// Whether calc was asked for the correction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CorrectionPost {
+    Posted,
+    /// The caller completes the correction without a result.
+    Skipped,
+}
+
+/// Refreshes the tables, then posts calc 0x3c01 or skips it (0xf5ff88).
+pub fn post<P: Peers>(ports: &mut impl Ports, peers: &mut P, context: &mut ExposureContext, callback: StockCallbackWord) -> Result<CorrectionPost, P::Error> {
+    if context.binding.mode != KEEP_TABLES_MODE {
+        refresh(ports, context);
+    }
+    let reused = context.outcome.focus_reused && !context.binding.exposure_mode.uses_adjustment() && ports.property(property::CORRECTION_FLAGS) & 2 == 0;
+    if reused || context.binding.mask & 1 == 0 {
+        return Ok(CorrectionPost::Skipped);
+    }
+    peers.calc(&CalcPayload::Correction { request: context.correction, callback })?;
+    Ok(CorrectionPost::Posted)
 }

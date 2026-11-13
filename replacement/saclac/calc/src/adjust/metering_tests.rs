@@ -1,6 +1,7 @@
 use std::vec::Vec;
 
 use crate::adjust::metering::*;
+use crate::adjust::timing::LevelScale;
 use crate::exposure::fakes::World;
 use crate::stock::adjust as stock;
 
@@ -11,6 +12,10 @@ struct Tables;
 impl MeteringTables for Tables {
     fn channel_weights(&mut self) -> [u16; 3] { [256, 0, 0] }
     fn feature_bytes(&mut self, _profile: u32) -> [u8; 2] { [128, 128] }
+}
+
+impl LevelScale for Tables {
+    fn linear(&mut self, _level: i16) -> u32 { 0 }
     fn log2_difference(&mut self, value: u32, reference: u32) -> i16 { value as i16 - reference as i16 }
 }
 

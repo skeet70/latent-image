@@ -20,6 +20,9 @@ pub trait ChannelPixels {
 /// Rows the adjustment path traces after its statistics block.
 const ADJUSTMENT_ROWS: usize = 7;
 
+/// The buffer address of a row the preparation left unbound: its cleared pointer.
+const UNBOUND_BUFFER: SharedAddress = SharedAddress(0);
+
 fn write(memory: &mut impl StockMemory, frame: SharedAddress, offset: u32, word: u32) { memory.write_u32(at(frame, offset), word); }
 
 const fn signed(half: i16) -> u32 { half as i32 as u32 }
@@ -172,10 +175,10 @@ fn write_rows(ports: &mut (impl StockMemory + ChannelPixels), frame: SharedAddre
         if !row.enabled {
             continue;
         }
-        let [buffer, tail] = shared::row_buffers(index);
+        let [buffer, tail] = row.slot.map_or([UNBOUND_BUFFER; 2], shared::row_buffers);
         copy(ports, at(frame, dump::slot_buffer(slot)), buffer, dump::SLOT_BUFFER_BYTES);
         copy(ports, at(frame, dump::slot_tail(slot)), tail, dump::SLOT_TAIL_BYTES);
-        write_regions(ports, frame, index, slot, &sizes[..count], shared::column_buffer(index));
+        write_regions(ports, frame, index, slot, &sizes[..count], row.slot.map_or(UNBOUND_BUFFER, shared::column_buffer));
         slot += 1;
     }
     for unused in slot..dump::SLOTS {

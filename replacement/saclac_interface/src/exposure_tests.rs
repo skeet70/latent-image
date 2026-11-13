@@ -1,6 +1,6 @@
 use crate::calc::SharedAddress;
 use crate::calc::CalcPayload;
-use crate::exposure::{Correction, CorrectionRequest, EvaluationRequest, MeasuredEntry, ReleaseStatus, StatisticsRequest, CORRECTION_HALVES};
+use crate::exposure::{CalculationInput, Correction, CorrectionRequest, EvaluationRequest, MeasuredEntry, ReleaseStatus, StatisticsRequest, CORRECTION_HALVES};
 use crate::CalcOperation;
 use crate::stock::exposure::*;
 use crate::stock::StockCallbackWord;
@@ -163,4 +163,64 @@ fn correction_request_places_the_block_after_the_callback_and_the_buffers_after_
         assert_eq!(bytes[4 + unwritten], 0, "block byte {unwritten:#x}");
     }
     assert!(bytes[0xb8..].iter().all(|byte| *byte == 0));
+}
+
+#[test]
+fn calculation_input_places_each_value_and_the_constants_calc_reads() {
+    let input = CalculationInput {
+        selection: true,
+        lens_reference: 0x55,
+        target_word: 0x80,
+        target_half: 0x1234,
+        area: [7, 8],
+        target_level: -5,
+        start_level: 300,
+        measured_level: 400,
+        level_profile: 0x6431,
+        unmeasured: true,
+        level_policy: 6,
+        refinement_pass: true,
+        first_treatment: true,
+        metering_level: 250,
+        grid: [1, 4],
+        grid_steps: [0, 3],
+        plan_kind: 2,
+        plan_exposure: [11, 12, 13, 14, 15],
+        measurement_selection: 1,
+        selection_kind: 0x0b,
+        selection_flags: 0x0102,
+        selection_style: 9,
+        selection_auxiliary: 10,
+        record_33: 0x33,
+        record_26: 0x2626,
+        offset: -1,
+        lead: -2,
+        source: 0x44,
+        record_20: -3,
+        record_level: 500,
+        record_24: -4,
+        record_5f: 0x5f,
+        capture_offset: 0xe0,
+        shared_85c: 0x85c,
+        record_lens_reference: 0x66,
+        levels: [1, 2, 3, 4, 5, 6, 7, 8, -9],
+        option: 1,
+        ..CalculationInput::default()
+    };
+    let bytes = calculation_input(&input);
+    let half = |offset: usize| u16::from_le_bytes([bytes[offset], bytes[offset + 1]]);
+    assert_eq!(bytes.len(), CALCULATION_INPUT_BYTES);
+    assert_eq!([word(&bytes, 0), word(&bytes, 4), word(&bytes, 8), word(&bytes, 0x0c), u32::from(half(0x10))], [0, 4, 0x55, 0x80, 0x1234]);
+    assert_eq!(word(&calculation_input(&CalculationInput::default()), 4), 3);
+    assert_eq!([word(&bytes, 0x14), word(&bytes, 0x18)], [7, 8]);
+    assert_eq!([half(0x1c), half(0x1e), half(0x20)], [-5i16 as u16, 300, 400]);
+    assert_eq!([word(&bytes, 0x24), word(&bytes, 0x28), word(&bytes, 0x2c), word(&bytes, 0x30), word(&bytes, 0x34)], [0x6431, 1, 6, 1, 1]);
+    assert_eq!((half(0x38), &bytes[0x3c..0x40], word(&bytes, 0x40)), (250, &[1, 4, 0, 3][..], 2));
+    assert_eq!([half(0x44), half(0x4c)], [11, 15]);
+    assert_eq!([word(&bytes, 0x50), word(&bytes, 0x54), u32::from(half(0x58)), word(&bytes, 0x78), word(&bytes, 0x9c)], [1, 0x0b, 0x0102, 9, 10]);
+    assert_eq!((bytes[0x60], half(0x62)), (0x33, 0x2626));
+    assert_eq!([half(0x80), half(0x82), half(0x88), half(0x90), half(0x92), half(0x94)], [-1i16 as u16, 0, -2i16 as u16, -3i16 as u16, 500, -4i16 as u16]);
+    assert_eq!([word(&bytes, 0x8c), word(&bytes, 0xdc), word(&bytes, 0xe0), word(&bytes, 0xf8), word(&bytes, 0xfc)], [0x44, 0x5f, 0xe0, 0x85c, 0]);
+    assert_eq!([word(&bytes, 0x100), u32::from(half(0x104)), u32::from(half(0x114))], [0x66, 1, -9i16 as u16 as u32]);
+    assert_eq!([word(&bytes, 0x118), word(&bytes, 0x11c), word(&bytes, 0x120), u32::from(half(0x124)), word(&bytes, 0x128)], [0, 1, 4, 0, 1]);
 }

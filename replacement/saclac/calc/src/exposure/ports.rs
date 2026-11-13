@@ -4,6 +4,7 @@ use xm1_saclac_interface::calc::SharedAddress;
 use xm1_saclac_profile_records::{Memory, StockEntries};
 
 use crate::adjust::lens::LensConfiguration;
+use crate::adjust::profile_adjustment::LensSteps;
 use crate::profile::Profile;
 
 /// A camera configuration value the engine reads; the ids are in `crate::stock::property`.
@@ -41,6 +42,8 @@ pub trait CaptureProfiles {
     fn offset_class(&mut self, profile: u32) -> u8;
     /// The profile's sensitivity class (0xef5420).
     fn sensitivity_class(&mut self, profile: u32) -> u8;
+    /// The sensitivity class of a sensitivity value (0xef5384).
+    fn sensitivity_class_for(&mut self, value: u32) -> u8;
     /// The level the configured measurement takes (0xeea030's third output).
     fn configured_level(&mut self) -> u16;
     /// The capture profile of the configured measurement (0xeea094).
@@ -103,6 +106,6 @@ pub trait ImageReport {
 }
 
 /// Everything the engine reaches.
-pub trait Ports: Properties + Lens + LensConfiguration + CaptureProfiles + ProfileLevels + StockMemory + ProfileAccess + Placement + ImageReport {}
+pub trait Ports: Properties + Lens + LensSteps + LensConfiguration + CaptureProfiles + ProfileLevels + StockMemory + ProfileAccess + Placement + ImageReport {}
 
-impl<T: Properties + Lens + LensConfiguration + CaptureProfiles + ProfileLevels + StockMemory + ProfileAccess + Placement + ImageReport> Ports for T {}
+impl<T: Properties + Lens + LensSteps + LensConfiguration + CaptureProfiles + ProfileLevels + StockMemory + ProfileAccess + Placement + ImageReport> Ports for T {}

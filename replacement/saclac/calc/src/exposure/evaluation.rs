@@ -15,7 +15,7 @@ use crate::exposure::ports::{InPlace, Ports};
 use crate::exposure::program::{self, FirstChoice, Limits};
 use crate::exposure::settings;
 use crate::requests::Peers;
-use crate::selection::{Candidate, Column, LevelRange, RowIndex, RowPhase, SelectionBank, ROWS};
+use crate::selection::{BufferSlot, Candidate, Column, LevelRange, Row, RowIndex, RowPhase, SelectionBank, ROWS};
 use crate::stock::{dump, property, shared};
 
 /// The floor every evaluation request starts with (0xf6925c).
@@ -26,7 +26,7 @@ const OFFSET_THREE_FLOOR: i16 = -600;
 const NO_LOWER_VALUE: u16 = 0x8000;
 
 /// The steps `first..=last` as the image task measures them (0xf68b14).
-fn areas(program: &[ExposureStep], span: CandidateSpan, target: i16) -> [EvaluationArea; EVALUATION_AREAS] {
+pub(crate) fn areas(program: &[ExposureStep], span: CandidateSpan, target: i16) -> [EvaluationArea; EVALUATION_AREAS] {
     let mut areas = [EvaluationArea::default(); EVALUATION_AREAS];
     let covered = program.iter().take(usize::from(span.last)).skip(usize::from(span.first).saturating_sub(1));
     for (area, step) in areas.iter_mut().zip(covered) {
@@ -43,7 +43,7 @@ fn areas(program: &[ExposureStep], span: CandidateSpan, target: i16) -> [Evaluat
 }
 
 /// The subject regions a column covers.
-fn column(subjects: &SubjectList) -> Column {
+pub(crate) fn column(subjects: &SubjectList) -> Column {
     let mut column = Column { count: subjects.count, ..Column::default() };
     for (region, subject) in column.regions.iter_mut().zip(subjects.listed()) {
         region.copy_from_slice(&subject.detail[4..12]);
@@ -59,6 +59,7 @@ fn bank(ports: &mut impl Ports, context: &ExposureContext, choice: FirstChoice) 
         first: span.first,
         any_range: choice == FirstChoice::Curve,
         expected: LevelRange { lowest: u8::MAX, highest: 0 },
+        rows: core::array::from_fn(|index| Row { slot: BufferSlot::new(index as u8), ..Row::default() }),
         columns: [column(&context.binding.subjects); ROWS],
         ..SelectionBank::default()
     };
@@ -89,7 +90,7 @@ fn dimensions(ports: &mut impl Ports, record: RecordHandle) -> [u16; 3] {
 }
 
 /// The constants every evaluation request of this exposure carries (0xf69224).
-fn request_constants(ports: &mut impl Ports, record: RecordHandle, context: &ExposureContext) -> EvaluationRequest {
+pub(crate) fn request_constants(ports: &mut impl Ports, record: RecordHandle, context: &ExposureContext) -> EvaluationRequest {
     let tolerance = settings::tolerance(ports);
     EvaluationRequest {
         tolerance_above: tolerance.above,
@@ -164,13 +165,13 @@ fn fill_row(ports: &mut impl Ports, context: &mut ExposureContext, row: RowIndex
     let column_regions = ports.address(InPlace::ColumnRegions(index));
     let bank = &context.selection;
     let candidate = bank.candidates[index];
-    let measurement = bank.rows[index].measurement;
+    let Row { measurement, slot, .. } = bank.rows[index];
     let half = |pair: [u32; 2]| [pair[1] as u16, pair[0] as u16];
     let request = &mut context.evaluation;
     request.row = index as u32;
     request.measured = [half(measurement.pairs[0]), half(measurement.pairs[2]), half(measurement.pairs[1])];
     request.statistics = measurement.statistics.map(|statistic| statistic as u16);
-    request.row_buffer = Some(shared::row_buffers(index)[0]);
+    request.row_buffer = slot.map(|slot| shared::row_buffers(slot)[0]);
     request.rates = rates;
     request.value = candidate.value as u16;
     request.lower_value = lower_value(bank, candidate.level);
@@ -184,10 +185,10 @@ fn fill_row(ports: &mut impl Ports, context: &mut ExposureContext, row: RowIndex
     };
     request.column_count = bank.columns[index].count;
     request.column_regions = Some(column_regions);
-    request.column_buffer = Some(shared::column_buffer(index));
+    request.column_buffer = slot.map(shared::column_buffer);
     request.next_profile = context.areas[index].next_profile;
-    request.level_classes = Some(shared::level_class(0));
-    request.selection_flags = Some(shared::SELECTION_FLAGS);
+    request.level_classes = slot.map(|_| shared::level_class(0));
+    request.selection_flags = slot.map(|_| shared::SELECTION_FLAGS);
 }
 
 /// Posts calc 0x3c00 for `row` and marks the row requested (0xf5fd20).

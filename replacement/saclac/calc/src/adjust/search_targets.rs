@@ -1,13 +1,13 @@
 //! The contrast search's targets and stop tests: its drive target for an amount, the configured
-//! step and threshold readings, the peak tests over its sample series, the position limits and
-//! the bias interpolation between lens resources.
+//! step and threshold readings, the peak tests over its sample series and the bias interpolation
+//! between lens resources.
 
 use xm1_saclac_interface::RecordHandle;
 use xm1_saclac_profile_records::stock::record::group_00;
 use xm1_saclac_profile_records::SharedHeaderByte;
 
 use crate::adjust::focus_profile::LensResources;
-use crate::adjust::lens::{BiasTable, LensConfiguration, LensControl, ReferenceScale};
+use crate::adjust::lens::{BiasTable, LensConfiguration};
 use crate::exposure::ports::{ProfileAccess, Properties};
 use crate::exposure::settings;
 use crate::stock::adjust as stock;
@@ -93,54 +93,6 @@ pub fn fell_from_peak(properties: &mut impl Properties, samples: &[u32]) -> bool
     let length = properties.property(stock::FALL_LENGTH);
     let depth = properties.property(stock::FALL_DEPTH);
     fall(samples).is_some_and(|fall| u32::from(fall.steps) >= length && fall.depth >= depth.wrapping_mul(100))
-}
-
-/// One hundred million over the group's reference scale, a zero scale read as 1 (0xfa9bc0).
-pub fn inverse_reference_scale(scales: &mut impl ReferenceScale, group: u16, entry: u8) -> u32 { 100_000_000 / scales.reference_scale(group, entry).max(1) }
-
-/// Where a drive from the lens's position stops and which way it runs.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DriveLeg {
-    pub position: u16,
-    pub limit: i16,
-    /// 0 toward `second`, 1 toward `first`.
-    pub direction: u32,
-}
-
-/// The leg to `second` plus `margin` in mode 1, else to `first` less `margin` (0xfa9bf0).
-pub fn drive_leg(control: &mut impl LensControl, mode_one: bool, first: i16, second: i16, margin: u16) -> DriveLeg {
-    let position = control.position();
-    if mode_one {
-        DriveLeg { position, limit: second.wrapping_add(margin as i16), direction: 0 }
-    } else {
-        DriveLeg { position, limit: first.wrapping_sub(margin as i16), direction: 1 }
-    }
-}
-
-/// Narrows the limits by `offset` from both ends (0xfaa670).
-pub fn narrow(offset: i16, limits: &mut [i16; 2]) {
-    limits[0] = limits[0].wrapping_add(offset);
-    limits[1] = limits[1].wrapping_sub(offset);
-}
-
-/// Clamps both limits into the lens's position limits, the side the limits run toward widened by
-/// the travel margin (0xfaa6a0).
-pub fn clamp_limits(configuration: &mut impl LensConfiguration, control: &mut impl LensControl, key: u32, limits: &mut [i16; 2]) {
-    let margin = control.travel_margin() as i16;
-    let [mut lower, mut upper] = configuration.position_limits(key);
-    if limits[1] < limits[0] {
-        upper = upper.wrapping_sub(margin);
-    } else {
-        lower = lower.wrapping_add(margin);
-    }
-    for limit in limits.iter_mut() {
-        *limit = (*limit).min(upper).max(lower);
-    }
-}
-
-/// `value` moved by `offset`, unless it is 0 (0xfaa750).
-pub const fn offset_unless_zero(value: u16, offset: u16) -> u16 {
-    if value == 0 { 0 } else { value.wrapping_add(offset) }
 }
 
 /// The record's scene kind and its follow word, bit 0 of the word set while `enabled` (0xfaa7b0).

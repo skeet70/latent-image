@@ -9,6 +9,7 @@ use xm1_saclac_interface::RecordHandle;
 use crate::policy::ExposureMode;
 use crate::selection::SelectionBank;
 use crate::stock::record::UNBOUND;
+use crate::stock::shared::{CURVE_POINTS, LEVEL_CURVES, SUBJECT_POINTS};
 
 pub const SUBJECTS: usize = 10;
 pub const SUBJECT_DETAIL_BYTES: usize = 100;
@@ -214,6 +215,20 @@ pub struct Outcome {
     pub focus_reused: bool,
 }
 
+/// The correction tables a primary exposure of a record with header byte 0x63 leaves for the
+/// next exposure of another mode, and the start level they were raised to (0xf6a7c0..0xf6a88c).
+/// Preparation keeps them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SavedTables {
+    pub curves: [[u16; CURVE_POINTS]; LEVEL_CURVES],
+    pub subjects: [[u16; SUBJECT_POINTS]; LEVEL_CURVES],
+    pub start: i16,
+}
+
+impl Default for SavedTables {
+    fn default() -> Self { Self { curves: [[0; CURVE_POINTS]; LEVEL_CURVES], subjects: [[0; SUBJECT_POINTS]; LEVEL_CURVES], start: 0 } }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ExposureContext {
     pub binding: Binding,
@@ -228,6 +243,7 @@ pub struct ExposureContext {
     pub evaluation: EvaluationRequest,
     pub correction: CorrectionRequest,
     pub adjustment: Adjustment,
+    pub saved: SavedTables,
     pub live: bool,
     pub return_mode: u32,
 }

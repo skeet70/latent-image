@@ -9,15 +9,10 @@ use crate::stock::{property, shared};
 #[derive(Default)]
 struct FixedLimits {
     primary: PrimaryRange,
-    selected_level: i16,
 }
 
 impl Limits for FixedLimits {
     fn primary_range(&mut self, _: &PrimaryInputs) -> PrimaryRange { self.primary }
-    fn selected_program(&mut self, _: &SelectedInputs) -> u32 { 7 }
-    fn selected_lenses(&mut self, _: u32, _: u32) -> (u32, u32) { (1, 1) }
-    fn selected_level(&mut self, _: u32, _: u32) -> i16 { self.selected_level }
-    fn selected_offset(&mut self, _: u32) -> i16 { 0 }
 }
 
 /// Program profile `k` sits at level `100 k` with sensitivity class `k`; the range is 0..300 above
@@ -153,13 +148,16 @@ fn a_positive_program_offset_up_to_the_high_end_appends_no_extended_step() {
 }
 
 #[test]
-fn a_selected_measurement_takes_its_range_from_the_selected_program() {
-    let mut world = world();
-    world.select(MeasurementSelection::Record);
-    world.property_word(property::SELECTED_HIGH_OFFSET, 100);
-    let mut limits = FixedLimits { selected_level: -200, ..limits() };
-    let program = build(&mut world, &mut limits, &context());
-    assert_eq!((program.span.low, program.span.high), (300, 600));
+fn a_selected_measurement_raises_only_its_high_end_by_the_configured_offset() {
+    let span = |offset: u16| {
+        let mut world = world();
+        world.select(MeasurementSelection::Record);
+        world.property_word(property::SELECTED_HIGH_OFFSET, offset);
+        let program = build(&mut world, &mut limits(), &context());
+        (program.span.low, program.span.high)
+    };
+    let (low, high) = span(0);
+    assert_eq!(span(100), (low, high.max(low) + 100));
 }
 
 #[test]

@@ -13,6 +13,22 @@ pub const fn level_step(step: u8) -> Property { Property(0x1900 + 2 * step as u3
 /// Lower and upper bounds of the adjustment tables, in tenths (0xf6aca0, 0xf6acc0).
 pub const TABLE_FLOOR: Property = Property(0x6499);
 pub const TABLE_CEILING: Property = Property(0x649a);
+/// The correction window's margin beyond the adjustment level, in tenths (0xf6a3b8).
+pub const WINDOW_MARGIN: Property = Property(0x649b);
+/// Signed bytes in tenths: the correction window's near and far bounds below and above the
+/// adjustment level (0xf6a3d0..0xf6a430).
+pub const NEAR_BELOW: Property = Property(0x6484);
+pub const FAR_BELOW: Property = Property(0x6485);
+pub const NEAR_ABOVE: Property = Property(0x6486);
+pub const FAR_ABOVE: Property = Property(0x6487);
+/// The weights of curve points beyond the near bound and beyond the far bound, below and above
+/// (0xf6a448..0xf6a470).
+pub const NEAR_BELOW_WEIGHT: Property = Property(0x6492);
+pub const FAR_BELOW_WEIGHT: Property = Property(0x6493);
+pub const NEAR_ABOVE_WEIGHT: Property = Property(0x6494);
+pub const FAR_ABOVE_WEIGHT: Property = Property(0x6495);
+/// Bit 1: the correction is requested even when the focus result is reused (0xf5ffcc).
+pub const CORRECTION_FLAGS: Property = Property(0x65a8);
 /// Copied into the dump frame (0xf6ad00, 0xf6ad18).
 pub const DUMP_FIRST: Property = Property(0x4a07);
 pub const DUMP_SECOND: Property = Property(0x4a08);
@@ -57,6 +73,18 @@ pub const fn area_offset(table: OffsetTable, resource: u32) -> Property {
     };
     Property(base + 2 * resource)
 }
+
+/// Two bytes, signed: the lowest level an adjustment step takes (0xf65aa8).
+pub const ADJUSTMENT_STEP_FLOOR: Property = Property(0x60ff);
+/// Two bytes, signed: the level an adjustment step is raised toward (0xf65ab4).
+pub const ADJUSTMENT_RAISE_TARGET: Property = Property(0x60f5);
+/// The largest raise of an adjustment step, in tenths (0xf65ac0).
+pub const ADJUSTMENT_RAISE_LIMIT: Property = Property(0x60f4);
+/// Two bytes, signed, each: the lowest level of an adjustment step's four upper bands, highest
+/// band first (0xf65ad4..0xf65af8).
+pub const ADJUSTMENT_BANDS: [Property; 4] = [Property(0x60f7), Property(0x60f9), Property(0x60fb), Property(0x60fd)];
+/// The sensitivity value of each band and of the levels below the last (0xf65b04..0xf65b34).
+pub const ADJUSTMENT_SENSITIVITIES: [Property; 5] = [Property(0x6101), Property(0x6102), Property(0x6103), Property(0x6104), Property(0x6105)];
 
 /// Five bytes of scene enable bits, scene flag `n` at bit `n % 8` of byte `n / 8` (0xf6f8a8..0xf6fa40).
 pub const fn scene_mask(byte: u8) -> Property { Property(0x64a3 + byte as u32) }

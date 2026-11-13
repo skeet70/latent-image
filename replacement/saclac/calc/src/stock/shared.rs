@@ -3,6 +3,8 @@
 
 use xm1_saclac_interface::calc::SharedAddress;
 
+use crate::selection::BufferSlot;
+
 pub const LEVEL_CURVES: usize = 4;
 pub const CURVE_POINTS: usize = 256;
 pub const SUBJECT_POINTS: usize = 10;
@@ -33,13 +35,13 @@ pub const fn focus_curve(point: usize) -> SharedAddress { SharedAddress(0x5ffc_0
 
 const SLOT_STRIDE: u32 = 0x1150;
 
-/// A row's two calc buffers and its column's buffer (tables 0xf66040, 0xf66060, 0xf66000).
-pub const fn row_buffers(row: usize) -> [SharedAddress; 2] {
-    let base = 0x5ffb_6120 + SLOT_STRIDE * row as u32;
+/// A slot's two row buffers and its column buffer (tables 0xf66040, 0xf66060, 0xf66000).
+pub const fn row_buffers(slot: BufferSlot) -> [SharedAddress; 2] {
+    let base = 0x5ffb_6120 + SLOT_STRIDE * slot.get() as u32;
     [SharedAddress(base), SharedAddress(base + 0x1000)]
 }
 
-pub const fn column_buffer(row: usize) -> SharedAddress { SharedAddress(0x5ffb_7130 + SLOT_STRIDE * row as u32) }
+pub const fn column_buffer(slot: BufferSlot) -> SharedAddress { SharedAddress(0x5ffb_7130 + SLOT_STRIDE * slot.get() as u32) }
 
 /// The two buffers the correction request names (0xf69004..0xf69018).
 pub const CORRECTION_BUFFERS: [SharedAddress; 2] = [SharedAddress(0x5ffe_be8c), SharedAddress(0x5ffe_bf0c)];
