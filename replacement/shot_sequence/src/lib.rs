@@ -26,6 +26,7 @@ pub mod sequence;
 pub mod secondary_boundary;
 pub mod secondary_job;
 pub mod shared;
+pub mod state;
 pub mod statistics_dump;
 pub mod stock;
 pub mod subjects;
@@ -135,3 +136,5 @@ mod pipeline_work_tests;
 mod calculation_fakes;
 #[cfg(test)]
 mod record_load_tests;
+#[cfg(test)]
+mod state_tests;

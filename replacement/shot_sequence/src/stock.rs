@@ -8,6 +8,7 @@ pub mod calculations;
 pub mod finish;
 pub mod pipeline;
 pub mod record_load;
+pub mod state;
 
 use crate::boundary::{ClientRef, FocusConfirmation, FocusHistory, FocusResult, LensPoint, LensReference, LensSnapshot};
 use crate::capture_boundary::ReferencePair;
