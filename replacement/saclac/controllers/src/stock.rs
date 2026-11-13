@@ -522,3 +522,49 @@ fn configuration_payload(configured: &crate::live_profile::Configured, out: &mut
     out.byte(0xe1, values.rate);
     out.word(0xe4, values.restarts);
 }
+
+/// The live statistics configuration's completion entries, 0xf3a768..0xf3aa40; each posts the
+/// completion it is named for.
+pub const STATISTICS_STARTED: StockCallbackWord = StockCallbackWord(0xf3aa18);
+pub const STATISTICS_STOPPED: StockCallbackWord = StockCallbackWord(0xf3a9f0);
+pub const CAPTURE_CONFIGURED: StockCallbackWord = StockCallbackWord(0xf3a9c8);
+pub const CAPTURE_PROGRESS: StockCallbackWord = StockCallbackWord(0xf3a9a0);
+pub const CAPTURE_RESULTS: StockCallbackWord = StockCallbackWord(0xf3aa40);
+pub const STATISTICS_RELEASED: StockCallbackWord = StockCallbackWord(0xf3a978);
+pub const ADJUSTED: StockCallbackWord = StockCallbackWord(0xf3a950);
+pub const DESCRIPTOR_CHOSEN: StockCallbackWord = StockCallbackWord(0xf3a924);
+pub const PREPARED: StockCallbackWord = StockCallbackWord(0xf3a8ac);
+pub const OUTPUT_CONFIGURED: StockCallbackWord = StockCallbackWord(0xf3a884);
+pub const WINDOW_CONFIGURED: StockCallbackWord = StockCallbackWord(0xf3a85c);
+pub const FORMAT_CONFIGURED: StockCallbackWord = StockCallbackWord(0xf3a834);
+pub const EXPOSURE_CONFIGURED: StockCallbackWord = StockCallbackWord(0xf3a80c);
+pub const CAPTURE_RETUNED: StockCallbackWord = StockCallbackWord(0xf3a7e4);
+pub const SELECTION_TAKEN: StockCallbackWord = StockCallbackWord(0xf3a7bc);
+pub const RESULTS_READY: StockCallbackWord = StockCallbackWord(0xf3a794);
+pub const COMMAND24_DONE: StockCallbackWord = StockCallbackWord(0xf3a768);
+
+/// Encodes one of the live statistics configuration's requests and posts it to the statistics
+/// task. The senders 0x1039638..0x103b040 return their post's status; no caller reads it.
+pub fn statistics_request(payload: &xm1_saclac_interface::statistics::StatisticsPayload, statistics: &mut impl xm1_saclac_interface::Statistics) {
+    use xm1_saclac_interface::statistics::StatisticsPayload as P;
+    use xm1_saclac_interface::{Completion as C, StatisticsRequest};
+    let completions: &[C] = match payload {
+        P::Start { .. } | P::StartSelected { .. } => &[C::Statistics69, C::Statistics7f],
+        P::Configure { .. } => &[C::Statistics6c, C::Statistics78, C::Statistics79, C::Statistics7f],
+        P::Stop { .. } => &[C::Statistics6b],
+        P::Release { .. } => &[C::Statistics6d],
+        P::MeasuredWindow(_) | P::MeasuredSource { .. } | P::Command13 => &[],
+        P::Adjust { .. } => &[C::Statistics6e, C::Statistics76],
+        P::Prepare { .. } => &[C::Statistics77],
+        P::Output { .. } => &[C::Statistics75],
+        P::Window { .. } => &[C::Statistics72],
+        P::Format { .. } => &[C::Statistics71],
+        P::Exposure { .. } => &[C::Statistics73],
+        P::Capture { .. } => &[C::Statistics80],
+        P::Selection { .. } => &[C::Statistics7e, C::Statistics7f],
+        P::Command24 { .. } => &[C::Statistics82],
+    };
+    let (operation, message) = xm1_saclac_interface::stock::statistics::statistics_payload(payload);
+    let request = StatisticsRequest { operation, parameters: xm1_saclac_interface::stock::parameters(message.bytes()), completions };
+    let _ = statistics.request(request);
+}
