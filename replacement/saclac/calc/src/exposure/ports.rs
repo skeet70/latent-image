@@ -49,6 +49,14 @@ pub trait CaptureProfiles {
     fn record_profile(&mut self) -> u32;
 }
 
+/// Image 6's levels per capture profile.
+pub trait ProfileLevels {
+    /// The profile's level (0x1006000's first output with mode 0).
+    fn profile_level(&mut self, profile: u32) -> i16;
+    /// `level` converted for `profile` (0x1005df8).
+    fn converted_level(&mut self, profile: u32, level: i16) -> u16;
+}
+
 /// Stock memory the engine shares with calc, the image task and the client's dump frame. Every
 /// address comes from `crate::stock`.
 pub trait StockMemory {
@@ -70,6 +78,6 @@ pub trait ProfileAccess {
 }
 
 /// Everything the engine reaches.
-pub trait Ports: Properties + Lens + CaptureProfiles + StockMemory + ProfileAccess {}
+pub trait Ports: Properties + Lens + CaptureProfiles + ProfileLevels + StockMemory + ProfileAccess {}
 
-impl<T: Properties + Lens + CaptureProfiles + StockMemory + ProfileAccess> Ports for T {}
+impl<T: Properties + Lens + CaptureProfiles + ProfileLevels + StockMemory + ProfileAccess> Ports for T {}

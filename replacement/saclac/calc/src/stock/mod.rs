@@ -6,3 +6,4 @@ pub mod dump;
 pub mod property;
 pub mod record;
 pub mod shared;
+pub mod tables;

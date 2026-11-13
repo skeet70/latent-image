@@ -10,7 +10,7 @@ use xm1_saclac_profile_records::field::{RecordField, RecordRead, RecordWrite, Sh
 use xm1_saclac_profile_records::stock::layout;
 use xm1_saclac_profile_records::{AccessGroup, Bytes, Grants, Handle, MeasurementSelection, OpenMode, ProfileRecords, RecordImage, Scope, Serial, SharedHeaderByte, Slot, StockEntries, Tag};
 
-use crate::exposure::ports::{CaptureProfiles, Lens, ProfileAccess, Properties, Property, StockMemory};
+use crate::exposure::ports::{CaptureProfiles, Lens, ProfileAccess, ProfileLevels, Properties, Property, StockMemory};
 use crate::profile::Profile;
 
 const SLOT: u8 = 2;
@@ -84,6 +84,9 @@ pub struct World {
     pub sensitivity_classes: BTreeMap<u32, u8>,
     pub configured_level: u16,
     pub configured_profiles: BTreeMap<i16, u32>,
+    pub profile_levels: BTreeMap<u32, i16>,
+    /// Conversions by profile: the level plus the profile's entry, else the level itself.
+    pub conversions: BTreeMap<u32, i16>,
     pub memory: BTreeMap<u32, u8>,
     /// Every store, in order: address, width in bytes, value.
     pub stores: Vec<(u32, u8, u32)>,
@@ -96,6 +99,8 @@ impl Default for World {
         Self {
             records: granted_records(),
             headers: Headers::default(),
+            profile_levels: BTreeMap::new(),
+            conversions: BTreeMap::new(),
             properties: BTreeMap::new(),
             lens_levels: BTreeMap::new(),
             lens_base_levels: BTreeMap::new(),
@@ -175,6 +180,11 @@ impl CaptureProfiles for World {
     fn configured_level(&mut self) -> u16 { self.configured_level }
     fn configured_profile(&mut self, level: i16) -> u32 { self.configured_profiles.get(&level).copied().unwrap_or(0) }
     fn record_profile(&mut self) -> u32 { 1 }
+}
+
+impl ProfileLevels for World {
+    fn profile_level(&mut self, profile: u32) -> i16 { self.profile_levels.get(&profile).copied().unwrap_or(0) }
+    fn converted_level(&mut self, profile: u32, level: i16) -> u16 { level.wrapping_add(self.conversions.get(&profile).copied().unwrap_or(0)) as u16 }
 }
 
 impl StockMemory for World {

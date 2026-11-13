@@ -5,6 +5,7 @@
 pub mod context;
 pub mod levels;
 pub mod ports;
+pub mod program;
 pub mod settings;
 pub mod snapshot;
 pub mod tables;
@@ -13,6 +14,8 @@ pub mod tables;
 pub mod fakes;
 #[cfg(test)]
 mod levels_tests;
+#[cfg(test)]
+mod program_tests;
 #[cfg(test)]
 mod snapshot_tests;
 #[cfg(test)]

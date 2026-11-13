@@ -63,3 +63,25 @@ pub const fn scene_mask(byte: u8) -> Property { Property(0x64a3 + byte as u32) }
 
 /// The focus-result reuse tolerance in tens of level steps (0xf6b924, 0xf6b9a8).
 pub const REUSE_TOLERANCE: Property = Property(0x65a7);
+
+/// Two bytes, signed: the offset the first program step carries (0xf645ac).
+pub const PROGRAM_OFFSET: Property = Property(0x6004);
+/// Two bytes, signed: the highest level a program step takes (0xf645c4).
+pub const PROGRAM_LEVEL_LIMIT: Property = Property(0x600a);
+/// The program's start above its low end, in tenths (0xf645d0).
+pub const START_MARGIN: Property = Property(0x6008);
+/// The largest program step, in tenths (0xf645e4).
+pub const STEP_LIMIT: Property = Property(0x6009);
+/// The program's distance below its high end and the evaluation's upper tolerance, in tenths
+/// (0xf6495c, 0xf6920c).
+pub const UPPER_TOLERANCE: Property = Property(0x639d);
+/// The evaluation's lower tolerance, in tenths (0xf691f4).
+pub const LOWER_TOLERANCE: Property = Property(0x639e);
+/// A pinned start's distance below the snapshot's offset, in tenths (0xf64a2c).
+pub const PINNED_MARGIN: Property = Property(0x60f2);
+/// Two bytes, signed: added to the high end of a selected measurement's program (0xf64864).
+pub const SELECTED_HIGH_OFFSET: Property = Property(0x6c05);
+/// The first step the evaluation spans; 255 chooses it from the focus curve (0xf6587c).
+pub const FIRST_STEP: Property = Property(0x6395);
+/// Two bytes: added to an extended step's value (0xf64518).
+pub const EXTENDED_OFFSET: Property = Property(0x65fd);

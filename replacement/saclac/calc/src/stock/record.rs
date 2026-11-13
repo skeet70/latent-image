@@ -53,6 +53,7 @@ pub fn focus_result(bytes: &[u8; FOCUS_RESULT_BYTES]) -> FocusResult {
         lens: word(bytes, 0x08),
         terms: core::array::from_fn(|index| half(bytes, 0x0c + 2 * index)),
         limit: half(bytes, 0x26) as i16,
+        pinned: word(bytes, 0x28),
         level_tables: address(bytes, 0x2c),
         subject_levels: address(bytes, 0x30),
         level_bias: half(bytes, 0x34) as i16,

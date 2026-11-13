@@ -84,6 +84,8 @@ pub struct FocusResult {
     pub lens: u32,
     pub terms: [u16; 6],
     pub limit: i16,
+    /// Nonzero: the program starts no lower than the snapshot's offset (0xf64a1c).
+    pub pinned: u32,
     pub level_tables: Option<SharedAddress>,
     pub subject_levels: Option<SharedAddress>,
     pub level_bias: i16,
@@ -116,23 +118,73 @@ pub struct Snapshot {
     pub limit_word: u32,
 }
 
-/// The candidate numbers the evaluation spans, 1-based.
+/// What set the program's start level.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum StartBound {
+    /// The configured margin above the low end, or the ceiling.
+    #[default]
+    Margin,
+    Floor,
+    /// The snapshot's offset.
+    Pinned,
+}
+
+impl StartBound {
+    /// The word the dump frame records.
+    pub const fn code(self) -> u32 {
+        match self {
+            Self::Margin => 0,
+            Self::Floor => 1,
+            Self::Pinned => 2,
+        }
+    }
+}
+
+/// The program's level range and its division into steps; `first..=last` are the 1-based steps
+/// the evaluation spans.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CandidateSpan {
     pub first: u8,
     pub last: u8,
-    pub chosen: u32,
+    pub low: i16,
+    pub high: i16,
+    pub start: i16,
+    pub end: i16,
+    pub first_step: i16,
+    pub step: i16,
+    pub bound: StartBound,
 }
 
-/// One statistics area as the image task measures it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ExposureStep {
+    /// 0-based.
+    pub index: u8,
+    pub position: i16,
+    /// What is left of the configured offset after the steps so far.
+    pub offset: i16,
+    /// The level before `converted`.
+    pub level: i16,
+    pub profile: u32,
+    /// The next step's profile.
+    pub next_profile: u32,
+    pub lens_step: u32,
+    /// `level` converted for `profile`.
+    pub converted: u16,
+    pub extended: bool,
+}
+
+pub const PROGRAM_STEPS: usize = 8;
+
+/// One step of the span as the image task measures it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct EvaluationArea {
-    pub first: u32,
-    pub second: u32,
-    pub third: u32,
-    pub size: u16,
+    pub profile: u32,
+    pub next_profile: u32,
+    pub lens_step: u32,
+    pub converted: u16,
+    /// The step's offset above the target level.
     pub level: u16,
-    pub weight: u32,
+    pub extended: bool,
 }
 
 /// The adjustment the second evaluation path settled on.
@@ -150,8 +202,8 @@ pub struct Outcome {
     pub first_treatment: bool,
     /// The adjustment path replaces the evaluation's conclusion.
     pub adjusting: bool,
-    /// Nonzero when the conclusion is exported to the frame.
-    pub export: u32,
+    /// The snapshot's focus result stands for the current record (0xf6b890).
+    pub focus_reused: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -161,6 +213,7 @@ pub struct ExposureContext {
     pub outcome: Outcome,
     pub snapshot: Snapshot,
     pub span: CandidateSpan,
+    pub program: [ExposureStep; PROGRAM_STEPS],
     pub areas: [EvaluationArea; EVALUATION_AREAS],
     pub selection: SelectionBank,
     pub adjustment: Adjustment,
