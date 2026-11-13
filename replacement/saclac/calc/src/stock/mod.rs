@@ -14,6 +14,7 @@ pub mod rate_curve;
 pub mod rate_samples;
 pub mod record;
 pub mod scene;
+pub mod scene_recognition;
 pub mod shared;
 pub mod shot_dump;
 pub mod tables;

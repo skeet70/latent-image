@@ -11,6 +11,7 @@ pub mod geometry;
 pub mod policy;
 pub mod profile;
 pub mod requests;
+pub mod scene_recognition;
 pub mod selection;
 pub mod stock;
 
