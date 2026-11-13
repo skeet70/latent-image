@@ -8,6 +8,7 @@ use crate::adjust::lens::LensConfiguration;
 use crate::adjust::profile_adjustment::LensSteps;
 use crate::profile::Profile;
 use crate::scene_levels::FeatureClasses;
+use crate::selection::RowIndex;
 
 /// A camera configuration value the engine reads; the ids are in `crate::stock::property`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -87,11 +88,14 @@ pub trait ProfileAccess {
     fn profile(&mut self) -> Profile<'_, Self::Records, Self::Entries>;
 }
 
-/// The blocks of the exposure context that calc reads in place.
+/// The blocks of the exposure context that calc and the image task's statistics check reach in
+/// place.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InPlace {
     /// A selection column's subject regions.
-    ColumnRegions(usize),
+    ColumnRegions(RowIndex),
+    /// A row's `selection::RowMeasurement`, which the statistics check fills.
+    RowMeasurement(RowIndex),
     BoundSubjects,
     BoundSummary,
     SnapshotSubjects,

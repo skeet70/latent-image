@@ -110,7 +110,8 @@ pub struct World {
 /// Where the test world places the context's in-place blocks.
 pub fn placed(block: InPlace) -> SharedAddress {
     SharedAddress(match block {
-        InPlace::ColumnRegions(column) => 0x0170_0000 + 0x100 * column as u32,
+        InPlace::ColumnRegions(row) => 0x0170_0000 + 0x100 * row.get() as u32,
+        InPlace::RowMeasurement(row) => 0x0173_0000 + 0x100 * row.get() as u32,
         InPlace::BoundSubjects => 0x0171_0000,
         InPlace::BoundSummary => 0x0171_1000,
         InPlace::SnapshotSubjects => 0x0172_0000,

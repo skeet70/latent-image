@@ -3,10 +3,10 @@ use xm1_saclac_interface::exposure::EvaluationRequest;
 use xm1_saclac_interface::stock::StockCallbackWord;
 
 use crate::exposure::context::ExposureContext;
-use crate::exposure::evaluation::{reference_value, request_row, set_up};
+use crate::exposure::evaluation::{measured_row, reference_value, request_row, set_up};
 use crate::exposure::fakes::{placed, Posted, World};
 use crate::exposure::ports::InPlace;
-use crate::selection::{BufferSlot, RowIndex, RowPhase};
+use crate::selection::{BufferSlot, RowIndex, RowPhase, SelectionBank};
 use crate::stock::adjust::CONFIGURED_FACTOR;
 use crate::stock::exposure_limits::{parameter, ParameterField, PARAMETER_SETS};
 use crate::stock::tables::PROGRAM_PROFILES;
@@ -149,7 +149,7 @@ fn a_row_request_names_the_row_its_measurement_and_its_column_and_marks_it_reque
     let sent = request(&mut world, &mut context, 2);
     assert_eq!((sent.row, sent.measured, sent.statistics), (2, [[2, 1], [6, 5], [4, 3]], [9, 10, 11, 12]));
     assert_eq!((sent.value, sent.next_profile), (204, context.areas[2].next_profile));
-    assert_eq!((sent.column_count, sent.column_regions), (12, Some(placed(InPlace::ColumnRegions(2)))));
+    assert_eq!((sent.column_count, sent.column_regions), (12, Some(placed(InPlace::ColumnRegions(RowIndex::new(2).unwrap())))));
     let slot = BufferSlot::new(2).unwrap();
     assert_eq!((sent.row_buffer, sent.column_buffer), (Some(shared::row_buffers(slot)[0]), Some(shared::column_buffer(slot))));
     assert_eq!((sent.level_classes, sent.selection_flags), (Some(shared::level_class(0)), Some(shared::SELECTION_FLAGS)));
@@ -203,4 +203,22 @@ fn other_rows_point_toward_the_first_applied_row() {
     context.selection.rows[0].phase = RowPhase::Applied;
     assert_eq!(request(&mut world, &mut context, 3).direction, 1);
     assert_eq!(request(&mut world, &mut context, 0).direction, 1);
+}
+
+/// The image task's check reads a row's buffers at row +0 and +4 and its column's at column +4,
+/// and writes the pairs from row +8, the reply at +0x28 and the statistics from +0x2c
+/// (0xf1f09c..0xf1f0f8).
+#[test]
+fn a_measured_row_names_its_buffers_its_column_and_where_the_check_writes() {
+    let (mut world, context) = prepared();
+    let row = RowIndex::new(3).unwrap();
+    let measured = measured_row(&mut world, &context.selection, row);
+    let slot = BufferSlot::new(3).unwrap();
+    assert_eq!((measured.buffers, measured.column_buffer), (Some(shared::row_buffers(slot)), Some(shared::column_buffer(slot))));
+    assert_eq!(measured.regions, placed(InPlace::ColumnRegions(row)));
+    let base = placed(InPlace::RowMeasurement(row)).0;
+    assert_eq!(measured.pairs.map(|at| at.0 - base), [0, 8, 16, 24]);
+    assert_eq!((measured.reply.0 - base, measured.statistics.0 - base), (32, 36));
+    let unbound = measured_row(&mut world, &SelectionBank::default(), row);
+    assert_eq!((unbound.buffers, unbound.column_buffer), (None, None));
 }
