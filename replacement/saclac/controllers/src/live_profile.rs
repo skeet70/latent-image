@@ -8,8 +8,7 @@ use crate::layers::{
     LensControl, MirrorSources, Pipeline, ProfileRecord, RecordChannel, RecordMode, SharedHelpers,
 };
 use crate::live_view::{
-    Application, ChangeCode, Condition, Effect, MotionSetting, Preparation, ReplyStatus, RestoreOptions, StopMode,
-    StopReason, ViewRequest,
+    Application, ChangeCode, Condition, Effect, MotionSetting, Preparation, ReplyStatus, StopReason, ViewRequest,
 };
 use crate::replies::{Replies, ReplyCommand as R, Values};
 use crate::stock;
@@ -55,95 +54,15 @@ impl Mode {
     }
 }
 
-/// What the view configuration carries about the preparation before it.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum Prepared { #[default] None, Gated, Ungated, Refresh, Autofocus }
-
-impl Prepared {
-    pub const fn word(self) -> u32 {
-        match self { Self::None => 0, Self::Gated => 1, Self::Ungated => 2, Self::Refresh => 3, Self::Autofocus => 4 }
-    }
-}
-
-/// The adjustment request's values.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Adjustment { pub selection: u32, pub mode: u32, pub first: u32, pub second: u32 }
-
-/// One of the two identical value groups the view configuration carries.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ValueGroup {
-    pub first: u32,
-    pub second: u16,
-    pub third: u8,
-    pub fourth: u32,
-    pub fifth: u32,
-    pub sixth: u16,
-    /// Already corrected by the image configuration for `fourth`.
-    pub seventh: u16,
-    pub eighth: u16,
-    pub ninth: u32,
-    pub tenth: u16,
-    pub eleventh: u32,
-}
-
-/// The profile layers' values the view configuration request carries unchanged.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ConfigurationValues {
-    pub head: [u32; 3],
-    pub windows: [[u32; 3]; 2],
-    pub block: [u32; 4],
-    pub group: ValueGroup,
-    pub converted: [u16; 2],
-    pub properties: [u16; 4],
-    pub tail: [u32; 3],
-    pub restorable: u8,
-    pub level: u16,
-    pub detail: u8,
-    pub classes: [u8; 2],
-    pub scale: u8,
-    pub capture: u8,
-    pub rate: u8,
-    pub restarts: u32,
-}
+pub use xm1_saclac_interface::imaging::{
+    Adjustment, Configured, ConfigurationValues, Prepared, SelectionClass, ValueGroup, ViewPayload,
+};
 
 /// Reads what the view configuration request carries from the profile layers.
 pub trait ConfigurationSource {
     fn values(&mut self, record: RecordHandle) -> ConfigurationValues;
     /// Takes the profile's pending offset for the view, clearing it.
     fn take_offset(&mut self, record: RecordHandle) -> u16;
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SelectionClass { Unselected, Selected, Flagged }
-
-/// The view configuration request's content.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Configured {
-    pub values: ConfigurationValues,
-    pub selection: u32,
-    pub selection_mode: u32,
-    pub selection_class: SelectionClass,
-    pub refresh: u32,
-    pub offset: u16,
-    pub motion: u8,
-    pub active: u8,
-    pub view_mode: u8,
-    pub direct_start: bool,
-    pub prepared: Prepared,
-}
-
-/// A view request with the values its payload carries.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ViewPayload {
-    Start { value: u32, measured: bool },
-    Restore(RestoreOptions),
-    Refresh { value: u32, motion: MotionSetting },
-    Configure(Configured),
-    Stop(StopMode),
-    Suspend,
-    Resume,
-    Adjust(Adjustment),
-    Window(u32),
 }
 
 /// Everything the leaf operations reach outside the live view.

@@ -81,17 +81,7 @@ impl StatisticsOutcome {
     }
 }
 
-/// The changed-field group of an autofocus or Command22 change, as the view stop's mode
-/// codes it (2 to 5).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ChangeCode(u8);
-
-impl ChangeCode {
-    pub const fn new(code: u8) -> Option<Self> {
-        if 2 <= code && code <= 5 { Some(Self(code)) } else { None }
-    }
-    pub const fn get(self) -> u8 { self.0 }
-}
+pub use xm1_saclac_interface::imaging::{ChangeCode, MotionSetting, RestoreOptions, StopMode};
 
 /// Why the view would stop, as preparation found it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -117,26 +107,6 @@ pub enum Application {
     /// The change needs the view stopped and started again.
     Restart,
 }
-
-/// The secondary profile's options the view restore and stop carry.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct RestoreOptions { pub first: bool, pub second: bool, pub negative: bool }
-
-impl RestoreOptions {
-    const fn any(self) -> bool { self.first || self.second || self.negative }
-
-    fn of(parameters: Parameters<'_>) -> Self {
-        let options = word(parameters, 1);
-        Self { first: options & 1 != 0, second: options & 2 != 0, negative: options & 0x8000_0000 != 0 }
-    }
-}
-
-/// The motion-control setting the view stop samples for later view requests.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct MotionSetting(pub u32);
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum StopMode { Plain, Secondary, SecondaryNegative, Change(ChangeCode) }
 
 /// The image pipeline's live-view requests.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -445,6 +415,11 @@ fn word(parameters: Parameters<'_>, index: usize) -> u32 {
     parameters.bytes().get(start..start + 4).map_or(0, |bytes| u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
 }
 
+fn restore_options(parameters: Parameters<'_>) -> RestoreOptions {
+    let options = word(parameters, 1);
+    RestoreOptions { first: options & 1 != 0, second: options & 2 != 0, negative: options & 0x8000_0000 != 0 }
+}
+
 struct Call<'p, 's, 'i, P> { port: &'p mut P, shared: &'s mut PreparationOverride, signal: Signal<'i>, record: RecordHandle }
 
 impl<'i, P: Port> Call<'_, '_, 'i, P> {
@@ -561,7 +536,7 @@ impl Controller {
                 self.prepare(&mut call);
                 self.ready = Ready { measurement: true, ..Ready::default() };
                 call.apply();
-                self.restore = RestoreOptions::of(self.parameters(&call));
+                self.restore = restore_options(self.parameters(&call));
                 if call.forward_statistics() != StatisticsOutcome::Complete {
                     self.state = S::Stopping;
                     return Outcome::Pending;
@@ -749,7 +724,7 @@ impl Controller {
             }
             (S::Running, E::Secondary) => {
                 call.apply();
-                self.restore = RestoreOptions::of(self.parameters(&call));
+                self.restore = restore_options(self.parameters(&call));
                 if !self.restore.any() && call.condition(Condition::SelectionActive) {
                     return self.statistics_change(&mut call);
                 }
