@@ -7,7 +7,7 @@ use xm1_saclac_interface::{ClientCallback, CommandKind, CompletionStatus};
 
 use crate::commands::*;
 use crate::lens::{LensBounds, LensControl, LensNotices, LensProbe, Notice, ProbeState};
-use crate::settings::Channels;
+use crate::settings::{Channel, Channels};
 
 #[derive(Clone, Debug, PartialEq)]
 enum Event {
@@ -47,7 +47,7 @@ impl Clients for Recorder {
 struct Configured(i32);
 
 impl Channels for Configured {
-    fn is_valid(&self, channel: i32) -> bool { (0..self.0).contains(&channel) }
+    fn is_valid(&self, channel: Channel) -> bool { (0..self.0).contains(&channel.0) }
 }
 
 const CALLBACK: u32 = 0x00c0_ffee;
@@ -58,7 +58,7 @@ fn commands(words: &[(StoredCommand, usize, u32)]) -> (Commands<Memory>, Recorde
     (Commands::new(memory), Recorder(log.clone()), log)
 }
 
-fn reply(status: i32, channel: i32) -> LensDriveReply { LensDriveReply { status: CompletionStatus(status), channel, words: [7, 9] } }
+fn reply(status: i32, channel: i32) -> LensDriveReply { LensDriveReply { status: CompletionStatus(status), channel: Channel(channel), words: [7, 9] } }
 
 #[test]
 fn stored_parameters_are_read_inside_their_block_only() {
@@ -67,6 +67,23 @@ fn stored_parameters_are_read_inside_their_block_only() {
     assert_eq!(commands.word(StoredCommand::LensDrive, 4), Some(0x66));
     assert_eq!(commands.word(StoredCommand::LensDrive, 5), None);
     assert_eq!(commands.word(StoredCommand::Command03, 6), None);
+}
+
+#[test]
+fn each_command_reads_the_words_its_parameter_block_holds() {
+    for (command, words) in [
+        (StoredCommand::Command02, 7),
+        (StoredCommand::Command03, 6),
+        (StoredCommand::HalfPress, 16),
+        (StoredCommand::Autofocus, 40),
+        (StoredCommand::LensDrive, 5),
+        (StoredCommand::Command17, 10),
+    ] {
+        let (commands, ..) = commands(&[]);
+        assert_eq!(command.words(), words, "{command:?}");
+        assert_eq!(commands.word(command, words - 1), Some(0), "{command:?}");
+        assert_eq!(commands.word(command, words), None, "{command:?}");
+    }
 }
 
 #[test]
@@ -94,6 +111,14 @@ fn a_progress_reply_leaves_the_command_pending() {
     let (mut commands, mut clients, log) = commands(&[(StoredCommand::LensDrive, 0, CALLBACK)]);
     commands.reply_lens_drive(reply(5, 0), &Configured(1), &mut clients);
     assert!(matches!(log.borrow().as_slice(), [Event::Entered(CALLBACK, _)]));
+}
+
+#[test]
+fn an_autofocus_progress_reply_leaves_the_command_pending() {
+    let (mut commands, mut clients, log) = commands(&[(StoredCommand::Autofocus, 0, CALLBACK), (StoredCommand::Autofocus, 39, 0xabcd)]);
+    let mut notices = Notices { words: [0; 3], log: log.clone() };
+    commands.reply_autofocus_lens(CompletionStatus(5), &mut Lens { states: [ProbeState::Clear; 3], value: 0x80 }, &mut notices, &mut clients);
+    assert!(matches!(log.borrow().as_slice(), [Event::NoticesCleared, Event::Entered(CALLBACK, _)]));
 }
 
 #[test]

@@ -20,45 +20,6 @@ fn window_limits_keep_the_bits_outside_their_fields() {
     assert_eq!(words, [0x8002_8001, 0xabcd_0003]);
 }
 
-#[derive(Default)]
-struct Snapshot {
-    words: [u32; 2],
-    retained: Vec<(RegisterGroup, u8)>,
-}
-
-impl RegisterSnapshot for Snapshot {
-    type Configuration = u8;
-
-    fn restore(&mut self, _: RegisterGroup) {}
-
-    fn window_limits(&self, configuration: u8) -> WindowLimits { WindowLimits([i16::from(configuration), -1, 9]) }
-
-    fn window_words(&self) -> [u32; 2] { self.words }
-
-    fn set_window_words(&mut self, words: [u32; 2]) { self.words = words }
-
-    fn pack_retained(&mut self, group: RegisterGroup, configuration: u8) { self.retained.push((group, configuration)) }
-}
-
-#[test]
-fn group_two_packs_its_window_limits_into_the_snapshot() {
-    let mut snapshot = Snapshot { words: [0x8000_0000, 0xffff_ffff], ..Snapshot::default() };
-    pack(RegisterGroup::Group2, 5, &mut snapshot);
-    assert_eq!(snapshot.words, [0xffff_0005, 0xffff_8009]);
-    assert!(snapshot.retained.is_empty());
-}
-
-#[test]
-fn every_other_group_packs_with_its_retained_packer() {
-    let others: Vec<_> = RegisterGroup::ALL.into_iter().filter(|group| *group != RegisterGroup::Group2).collect();
-    let mut snapshot = Snapshot::default();
-    for group in &others {
-        pack(*group, 7, &mut snapshot);
-    }
-    assert_eq!(snapshot.retained, others.iter().map(|group| (*group, 7)).collect::<Vec<_>>());
-    assert_eq!(snapshot.words, [0, 0]);
-}
-
 #[test]
 fn groups_are_numbered_in_pipeline_order() {
     let indices: Vec<_> = RegisterGroup::ALL.into_iter().map(RegisterGroup::index).collect();

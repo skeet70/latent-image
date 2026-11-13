@@ -6,118 +6,182 @@ use xm1_saclac_interface::stock::{callback_word, command_code, StockCallbackWord
 use xm1_saclac_interface::{ClientCallback, CommandKind};
 
 use crate::commands::{ClientArguments, Clients, CommandMemory, StoredCommand};
-use crate::display::{Display, DisplayRoute, DisplayStatus, STATUS_BYTES};
-use crate::image_registers::{RegisterGroup, RegisterSnapshot, WindowLimits};
+use crate::display::{Display, DisplayRoute, Outputs};
+use crate::image_registers::{pack_window_limits, RegisterGroup, RegisterSnapshot, WindowLimits};
 use crate::lens::{LensBounds, LensControl, LensNotices, LensProbe, Notice, ProbeState, Rendezvous};
 use crate::lens_com::{LensComClient, RequestNumber};
-use crate::settings::{AdjustmentKey, Adjustments, Aspect, CaptureMode, ChannelRemap, Channels, Conversions, WindowVariant};
+use crate::settings::{
+    halfword, AdjustmentKey, Adjustments, Aspect, CaptureMode, Channel, ChannelRemap, Channels, Conversions,
+    RemapArguments, RemappedWord, WindowVariant,
+};
 
-fn read_u16(address: u32) -> u16 { unsafe { read_volatile(address as usize as *const u16) } }
-
-fn read_u32(address: u32) -> u32 { unsafe { read_volatile(address as usize as *const u32) } }
-
-fn write_u8(address: u32, value: u8) { unsafe { write_volatile(address as usize as *mut u8, value) } }
-
-fn write_u32(address: u32, value: u32) { unsafe { write_volatile(address as usize as *mut u32, value) } }
-
-macro_rules! entry {
-    ($address:expr, fn($($argument:ty),*) $(-> $result:ty)?) => {{
-        let entry: extern "C" fn($($argument),*) $(-> $result)? = unsafe { core::mem::transmute($address as usize as *const ()) };
-        entry
-    }};
+/// The machine the boundary reads, writes and enters.
+pub trait Machine {
+    fn read_u16(&self, address: u32) -> u16;
+    fn read_u32(&self, address: u32) -> u32;
+    fn write_u8(&mut self, address: u32, value: u8);
+    fn write_u32(&mut self, address: u32, value: u32);
+    /// Enters the retained entry at `address` with `arguments` in r0.. and returns r0.
+    fn enter(&self, address: u32, arguments: &[usize]) -> u32;
 }
 
-/// One pending byte per command code (0xef9aec).
-const PENDING_FLAGS: u32 = 0x169_cf24;
+/// The X-M1 1.50 machine.
+pub struct Guest;
 
-pub struct StockCommands;
+impl Machine for Guest {
+    fn read_u16(&self, address: u32) -> u16 { unsafe { read_volatile(address as usize as *const u16) } }
 
-impl CommandMemory for StockCommands {
-    fn word(&self, command: StoredCommand, index: usize) -> u32 {
-        let block = PARAMETER_BLOCKS[usize::from(command_code(command.kind()))].address;
-        read_u32(block + 4 * index as u32)
-    }
+    fn read_u32(&self, address: u32) -> u32 { unsafe { read_volatile(address as usize as *const u32) } }
 
-    fn set_pending(&mut self, command: CommandKind, pending: bool) {
-        write_u8(PENDING_FLAGS + u32::from(command_code(command)), u8::from(pending));
-    }
-}
+    fn write_u8(&mut self, address: u32, value: u8) { unsafe { write_volatile(address as usize as *mut u8, value) } }
 
-pub struct StockClients;
+    fn write_u32(&mut self, address: u32, value: u32) { unsafe { write_volatile(address as usize as *mut u32, value) } }
 
-impl Clients for StockClients {
-    fn enter(&mut self, callback: ClientCallback, arguments: ClientArguments) {
-        let word = callback_word(callback);
-        match arguments {
-            ClientArguments::Status(status) => entry!(word, fn(i32))(status.0),
-            ClientArguments::Reply { status, words: [first, second, third, fourth] } => {
-                entry!(word, fn(i32, u32, u32, u32, u32))(status.0, first, second, third, fourth)
+    fn enter(&self, address: u32, arguments: &[usize]) -> u32 {
+        let entry = address as usize;
+        unsafe {
+            match arguments {
+                [] => core::mem::transmute::<usize, extern "C" fn() -> u32>(entry)(),
+                [a] => core::mem::transmute::<usize, extern "C" fn(u32) -> u32>(entry)(*a as u32),
+                [a, b] => core::mem::transmute::<usize, extern "C" fn(u32, u32) -> u32>(entry)(*a as u32, *b as u32),
+                [a, b, c] => {
+                    core::mem::transmute::<usize, extern "C" fn(u32, u32, u32) -> u32>(entry)(*a as u32, *b as u32, *c as u32)
+                }
+                [a, b, c, d] => core::mem::transmute::<usize, extern "C" fn(u32, u32, u32, u32) -> u32>(entry)(
+                    *a as u32,
+                    *b as u32,
+                    *c as u32,
+                    *d as u32,
+                ),
+                [a, b, c, d, e] => core::mem::transmute::<usize, extern "C" fn(u32, u32, u32, u32, u32) -> u32>(entry)(
+                    *a as u32,
+                    *b as u32,
+                    *c as u32,
+                    *d as u32,
+                    *e as u32,
+                ),
+                [a, b, c, d, e, f] => {
+                    core::mem::transmute::<usize, extern "C" fn(u32, u32, u32, u32, u32, u32) -> u32>(entry)(
+                        *a as u32,
+                        *b as u32,
+                        *c as u32,
+                        *d as u32,
+                        *e as u32,
+                        *f as u32,
+                    )
+                }
+                [a, b, c, d, e, f, g] => {
+                    core::mem::transmute::<usize, extern "C" fn(u32, u32, u32, u32, u32, u32, u32) -> u32>(entry)(
+                        *a as u32,
+                        *b as u32,
+                        *c as u32,
+                        *d as u32,
+                        *e as u32,
+                        *f as u32,
+                        *g as u32,
+                    )
+                }
+                _ => panic!("no retained entry takes {} arguments", arguments.len()),
             }
         }
     }
 }
 
+/// The shared layer's ports over a machine's memory and entries.
+pub struct Stock<M> {
+    machine: M,
+}
+
+impl<M: Machine> Stock<M> {
+    pub const fn new(machine: M) -> Self { Self { machine } }
+}
+
+/// One pending byte per command code (0xef9aec).
+const PENDING_FLAGS: u32 = 0x169_cf24;
+
+impl<M: Machine> CommandMemory for Stock<M> {
+    fn word(&self, command: StoredCommand, index: usize) -> u32 {
+        let block = PARAMETER_BLOCKS[usize::from(command_code(command.kind()))].address;
+        self.machine.read_u32(block + 4 * index as u32)
+    }
+
+    fn set_pending(&mut self, command: CommandKind, pending: bool) {
+        self.machine.write_u8(PENDING_FLAGS + u32::from(command_code(command)), u8::from(pending));
+    }
+}
+
+impl<M: Machine> Clients for Stock<M> {
+    fn enter(&mut self, callback: ClientCallback, arguments: ClientArguments) {
+        let word = callback_word(callback);
+        match arguments {
+            ClientArguments::Status(status) => self.machine.enter(word, &[status.0 as usize]),
+            ClientArguments::Reply { status, words: [first, second, third, fourth] } => {
+                self.machine.enter(word, &[status.0 as usize, first as usize, second as usize, third as usize, fourth as usize])
+            }
+        };
+    }
+}
+
 const LENS_RUNTIME: u32 = 0x94_2ab0;
 const LENS_STEP: u32 = LENS_RUNTIME + 0x98;
+const LENS_PROBES: [u32; 3] = [0x76_d9a8, 0x76_da38, 0x76_dba4];
+const LENS_VALUE: u32 = 0x76_da48;
+const LENS_PREFERS_RELATIVE: u32 = 0x76_b8b4;
+const LENS_ZONE_LIMIT: u32 = 0x77_2f28;
 
-pub struct StockLensControl;
-
-impl LensControl for StockLensControl {
+impl<M: Machine> LensControl for Stock<M> {
     fn probe(&mut self, probe: LensProbe) -> ProbeState {
-        let address: u32 = match probe {
-            LensProbe::First => 0x76_d9a8,
-            LensProbe::Second => 0x76_da38,
-            LensProbe::Third => 0x76_dba4,
+        let address = match probe {
+            LensProbe::First => LENS_PROBES[0],
+            LensProbe::Second => LENS_PROBES[1],
+            LensProbe::Third => LENS_PROBES[2],
         };
-        match entry!(address, fn() -> u32)() {
+        match self.machine.enter(address, &[]) {
             2 => ProbeState::Overridden,
             1 => ProbeState::Reported,
             _ => ProbeState::Clear,
         }
     }
 
-    fn value(&mut self) -> u32 { entry!(0x76_da48u32, fn() -> u32)() }
+    fn value(&mut self) -> u32 { self.machine.enter(LENS_VALUE, &[]) }
 
-    fn step(&mut self) -> u32 { read_u32(LENS_STEP) }
+    fn step(&mut self) -> u32 { self.machine.read_u32(LENS_STEP) }
 
-    /// 0x76dac4 forwards to 0x76b8b4.
-    fn prefers_relative(&mut self) -> bool { entry!(0x76_b8b4u32, fn() -> u32)() != 0 }
+    fn prefers_relative(&mut self) -> bool { self.machine.enter(LENS_PREFERS_RELATIVE, &[]) != 0 }
 
-    fn zone_limit(&mut self, zone: u8) -> i16 { entry!(0x77_2f28u32, fn(u32) -> i32)(u32::from(zone)) as i16 }
+    fn zone_limit(&mut self, zone: u8) -> i16 { self.machine.enter(LENS_ZONE_LIMIT, &[usize::from(zone)]) as i16 }
 }
 
 /// The lens control block other tasks write the notices into.
 const LENS_NOTICES: u32 = 0x95_4dbc;
 
-pub struct StockLensNotices;
-
-impl LensNotices for StockLensNotices {
+impl<M: Machine> LensNotices for Stock<M> {
     fn notice(&self, notice: Notice) -> u32 {
         let offset = match notice {
             Notice::First => 0x4,
             Notice::Second => 0x8,
             Notice::Third => 0xc,
         };
-        read_u32(LENS_NOTICES + offset)
+        self.machine.read_u32(LENS_NOTICES + offset)
     }
 
     fn clear_notices(&mut self) {
         for offset in [0x4, 0x8, 0xc] {
-            write_u32(LENS_NOTICES + offset, 0);
+            self.machine.write_u32(LENS_NOTICES + offset, 0);
         }
     }
 
-    fn notifier_enabled(&self) -> bool { read_u32(LENS_NOTICES + 0x20) != 0 }
+    fn notifier_enabled(&self) -> bool { self.machine.read_u32(LENS_NOTICES + 0x20) != 0 }
 
     fn notifier(&self) -> Option<StockCallbackWord> {
-        Some(read_u32(LENS_NOTICES + 0x1c)).filter(|word| *word != 0).map(StockCallbackWord)
+        Some(self.machine.read_u32(LENS_NOTICES + 0x1c)).filter(|word| *word != 0).map(StockCallbackWord)
     }
 
     /// The notifier takes the address of the detail word followed by the bounds (0xefba28..0xefba3c).
     fn enter_notifier(&mut self, notifier: StockCallbackWord, detail: u32, bounds: LensBounds) {
         let [first, second, third] = bounds.0;
         let record = [detail, first, second, third];
-        entry!(notifier.0, fn(*const [u32; 4]))(&record);
+        self.machine.enter(notifier.0, &[record.as_ptr() as usize]);
     }
 }
 
@@ -125,40 +189,57 @@ impl LensNotices for StockLensNotices {
 /// sets event 2 on it (0xf46be0).
 const SYNCHRONIZING_TASK: u32 = 0x16c_2214;
 const SYNCHRONIZED: StockCallbackWord = StockCallbackWord(0xf4_6be0);
+const CURRENT_TASK: u32 = 0x72_3cb8;
+const WAIT: u32 = 0x72_43a8;
 
-pub struct StockRendezvous;
-
-impl Rendezvous for StockRendezvous {
+impl<M: Machine> Rendezvous for Stock<M> {
     fn arm(&mut self) -> StockCallbackWord {
-        write_u32(SYNCHRONIZING_TASK, entry!(0x72_3cb8u32, fn() -> u32)());
+        let task = self.machine.enter(CURRENT_TASK, &[]);
+        self.machine.write_u32(SYNCHRONIZING_TASK, task);
         SYNCHRONIZED
     }
 
     fn wait(&mut self) {
         let mut flags = 0u32;
-        entry!(0x72_43a8u32, fn(u32, *mut u32, u32) -> i32)(2, &mut flags, u32::MAX);
+        self.machine.enter(WAIT, &[2, &mut flags as *mut u32 as usize, u32::MAX as usize]);
     }
 }
 
-pub struct StockAdjustments;
+const ADJUSTMENT_BYTE: u32 = 0x69_f8fc;
+const LENS_ADJUSTMENT_KEY: AdjustmentKey = AdjustmentKey(0x3e_0243);
+const UNSELECTED_MODES_KEY: u32 = 0x887c;
 
-impl Adjustments for StockAdjustments {
-    fn byte(&self, key: AdjustmentKey) -> u8 { entry!(0x69_f8fcu32, fn(u32) -> u32)(key.0) as u8 }
-}
+impl<M: Machine> Adjustments for Stock<M> {
+    fn byte(&self, key: AdjustmentKey) -> u8 { self.machine.enter(ADJUSTMENT_BYTE, &[key.0 as usize]) as u8 }
 
-pub struct StockChannels;
+    fn lens_adjustment(&self) -> u16 { halfword(self, LENS_ADJUSTMENT_KEY) }
 
-impl Channels for StockChannels {
-    fn is_valid(&self, channel: i32) -> bool { entry!(0x74_a214u32, fn(i32) -> u32)(channel) != 0 }
-}
-
-pub struct StockChannelRemap;
-
-impl ChannelRemap for StockChannelRemap {
-    fn remap(&mut self, [a, b, c, d, e, f, g]: [u32; 7]) -> u32 {
-        entry!(0x74_947cu32, fn(u32, u32, u32, u32, u32, u32, u32) -> u32)(a, b, c, d, e, f, g)
+    fn admits_unselected_mode(&self) -> bool {
+        self.machine.enter(ADJUSTMENT_BYTE, &[UNSELECTED_MODES_KEY as usize]) as u8 != 0
     }
 }
+
+const CHANNELS: u32 = 0x74_a214;
+
+impl<M: Machine> Channels for Stock<M> {
+    fn is_valid(&self, channel: Channel) -> bool { self.machine.enter(CHANNELS, &[channel.0 as usize]) != 0 }
+}
+
+const REMAP: u32 = 0x74_947c;
+
+impl<M: Machine> ChannelRemap for Stock<M> {
+    fn remap(&mut self, arguments: RemapArguments) -> RemappedWord {
+        let [a, b, c, d, e, f, g] = arguments.0;
+        let result = self
+            .machine
+            .enter(REMAP, &[a as usize, b as usize, c as usize, d as usize, e as usize, f as usize, g as usize]);
+        RemappedWord(result as u16)
+    }
+}
+
+const CONVERSION_VARIANT: u32 = 0x73_958c;
+const CONVERSION_VALUE: u32 = 0x73_4540;
+const CONVERSION_ALTERNATE: u32 = 0x73_469c;
 
 const fn aspect_index(aspect: Aspect) -> u32 {
     match aspect {
@@ -169,20 +250,18 @@ const fn aspect_index(aspect: Aspect) -> u32 {
     }
 }
 
-pub struct StockConversions;
-
-impl Conversions for StockConversions {
+impl<M: Machine> Conversions for Stock<M> {
     fn window_variant(&mut self, mode: CaptureMode, aspect: Aspect) -> Option<WindowVariant> {
-        let variant = entry!(0x73_958cu32, fn(u32, u32) -> u32)(u32::from(mode.get()), aspect_index(aspect));
+        let variant = self.machine.enter(CONVERSION_VARIANT, &[usize::from(mode.get()), aspect_index(aspect) as usize]);
         (variant != 0xff).then_some(WindowVariant(variant as u8))
     }
 
     fn value(&mut self, variant: WindowVariant, aspect: Aspect) -> u32 {
-        entry!(0x73_4540u32, fn(u32, u32) -> u32)(u32::from(variant.0), aspect_index(aspect))
+        self.machine.enter(CONVERSION_VALUE, &[usize::from(variant.0), aspect_index(aspect) as usize])
     }
 
     fn alternate(&mut self, variant: WindowVariant, aspect: Aspect) -> u32 {
-        entry!(0x73_469cu32, fn(u32, u32) -> u32)(u32::from(variant.0), aspect_index(aspect))
+        self.machine.enter(CONVERSION_ALTERNATE, &[usize::from(variant.0), aspect_index(aspect) as usize])
     }
 }
 
@@ -226,37 +305,49 @@ const PACKERS: [Option<u32>; 15] = [
     Some(0x69_3aec),
 ];
 
-/// The address of a configuration the pipeline packs.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct StockConfiguration(pub u32);
+/// The register snapshot the retained pipeline passes at 0xda21cc and 0xda2354 (0x14c6b24).
+const SNAPSHOT: u32 = 0x14c_6b24;
+const RESTORE: u32 = 0x6d_eb08;
 
-/// The pipeline's register snapshot at `snapshot` (0x14c6b24 for 0xda21cc and 0xda2354).
-pub struct StockRegisterSnapshot {
-    pub snapshot: u32,
+/// A configuration the retained pipeline hands the register layer (0xda21cc, 0xda2354).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StockConfiguration(u32);
+
+impl StockConfiguration {
+    /// Wraps the pointer the retained pipeline passes at 0xda21cc.
+    pub const fn from_pipeline(address: u32) -> Self { Self(address) }
 }
 
-impl RegisterSnapshot for StockRegisterSnapshot {
+impl<M: Machine> RegisterSnapshot for Stock<M> {
     type Configuration = StockConfiguration;
 
     fn restore(&mut self, group: RegisterGroup) {
         let (descriptors, count) = RESTORE_DESCRIPTORS[group.index()];
-        entry!(0x6d_eb08u32, fn(u32, u32, u32))(self.snapshot, descriptors, count);
+        self.machine.enter(RESTORE, &[SNAPSHOT as usize, descriptors as usize, count as usize]);
     }
 
     fn window_limits(&self, configuration: StockConfiguration) -> WindowLimits {
-        WindowLimits([0x3e, 0x40, 0x42].map(|offset| read_u16(configuration.0 + offset) as i16))
+        WindowLimits([0x3e, 0x40, 0x42].map(|offset| self.machine.read_u16(configuration.0 + offset) as i16))
     }
 
-    fn window_words(&self) -> [u32; 2] { [read_u32(self.snapshot + 0x3c), read_u32(self.snapshot + 0x40)] }
+    fn window_words(&self) -> [u32; 2] {
+        [self.machine.read_u32(SNAPSHOT + 0x3c), self.machine.read_u32(SNAPSHOT + 0x40)]
+    }
 
     fn set_window_words(&mut self, [low, high]: [u32; 2]) {
-        write_u32(self.snapshot + 0x3c, low);
-        write_u32(self.snapshot + 0x40, high);
+        self.machine.write_u32(SNAPSHOT + 0x3c, low);
+        self.machine.write_u32(SNAPSHOT + 0x40, high);
     }
 
-    fn pack_retained(&mut self, group: RegisterGroup, configuration: StockConfiguration) {
-        if let Some(packer) = PACKERS[group.index()] {
-            entry!(packer, fn(u32, u32))(self.snapshot, configuration.0);
+    fn pack(&mut self, group: RegisterGroup, configuration: StockConfiguration) {
+        match PACKERS[group.index()] {
+            Some(packer) => {
+                self.machine.enter(packer, &[SNAPSHOT as usize, configuration.0 as usize]);
+            }
+            None => {
+                let words = pack_window_limits(self.window_limits(configuration), self.window_words());
+                self.set_window_words(words);
+            }
         }
     }
 }
@@ -264,35 +355,53 @@ impl RegisterSnapshot for StockRegisterSnapshot {
 /// The client callback word and request number lenscom's completion 0x6b6f9c reads back.
 const LENS_COM_CLIENT: u32 = 0x8e_1f3c;
 const LENS_COM_COMPLETION: StockCallbackWord = StockCallbackWord(0x6b_6f9c);
+const LENS_COM_UNPOSTED: u32 = 0x6b_92cc;
 
-pub struct StockLensComClient;
-
-impl LensComClient for StockLensComClient {
+impl<M: Machine> LensComClient for Stock<M> {
     fn remember(&mut self, callback: Option<StockCallbackWord>, number: RequestNumber) {
-        write_u32(LENS_COM_CLIENT + 0x8, callback.map_or(0, |callback| callback.0));
-        write_u32(LENS_COM_CLIENT + 0xc, u32::from(number.get()));
+        self.machine.write_u32(LENS_COM_CLIENT + 0x8, callback.map_or(0, |callback| callback.0));
+        self.machine.write_u32(LENS_COM_CLIENT + 0xc, u32::from(number.get()));
     }
 
     fn completion(&self) -> StockCallbackWord { LENS_COM_COMPLETION }
 
-    fn complete(&mut self, callback: StockCallbackWord, number: RequestNumber) { entry!(callback.0, fn(u32))(u32::from(number.get())) }
+    fn complete(&mut self, callback: StockCallbackWord, number: RequestNumber) {
+        self.machine.enter(callback.0, &[u32::from(number.get()) as usize]);
+    }
 
     /// Appends lenscom's failure text with codes 1, 0x27, 0 (0x6bbee8..0x6bbef4).
-    fn report_unposted(&mut self) { entry!(0x6b_92ccu32, fn(u32, u32, u32))(1, 0x27, 0) }
+    fn report_unposted(&mut self) { self.machine.enter(LENS_COM_UNPOSTED, &[1, 0x27, 0]); }
 }
 
-pub struct StockDisplay;
+const DISPLAY_ROUTE: u32 = 0x6c_68c0;
+const DISPLAY_STATUS: u32 = 0x6c_4bec;
+const STATUS_BYTES: usize = 60;
+const STATUS_GATE: usize = 7;
+const STATUS_OUTPUTS: core::ops::Range<usize> = 16..20;
 
-impl Display for StockDisplay {
+impl<M: Machine> Stock<M> {
+    /// The display driver's 60-byte status record (0x6c4c08).
+    fn status(&self) -> [u8; STATUS_BYTES] {
+        let mut status = [0u8; STATUS_BYTES];
+        self.machine.enter(DISPLAY_STATUS, &[status.as_mut_ptr() as usize]);
+        status
+    }
+}
+
+impl<M: Machine> Display for Stock<M> {
     fn route(&self) -> DisplayRoute {
         let mut route = 0u8;
-        entry!(0x6c_68c0u32, fn(*mut u8) -> u32)(&mut route);
+        self.machine.enter(DISPLAY_ROUTE, &[&mut route as *mut u8 as usize]);
         DisplayRoute(route)
     }
 
-    fn status(&self) -> DisplayStatus {
-        let mut status = [0u8; STATUS_BYTES];
-        entry!(0x6c_4becu32, fn(*mut [u8; STATUS_BYTES]) -> u32)(&mut status);
-        DisplayStatus(status)
+    fn gate_open(&self) -> bool { self.status()[STATUS_GATE] != 0 }
+
+    /// Bit k is set when status byte 16 + k is nonzero (0x6c693c..0x6c6960).
+    fn outputs(&self) -> Outputs {
+        let status = self.status();
+        Outputs(status[STATUS_OUTPUTS].iter().enumerate().fold(0, |bits, (bit, byte)| {
+            if *byte != 0 { bits | 1 << bit } else { bits }
+        }))
     }
 }

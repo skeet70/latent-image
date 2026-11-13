@@ -61,7 +61,7 @@ impl LensControl for Zones {
 #[test]
 fn a_lens_value_falls_in_the_first_zone_ending_above_it() {
     for (value, zone) in [(0, 0), (1, 1), (-50, 1), (199, 1), (200, 2), (550, 5), (999, 9), (1000, 10), (i32::MAX, 10)] {
-        assert_eq!(crate::lens::zone(value, &mut Zones), zone, "{value}");
+        assert_eq!(crate::lens::zone(value, &mut Zones).get(), zone, "{value}");
     }
 }
 

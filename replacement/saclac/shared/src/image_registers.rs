@@ -86,16 +86,6 @@ pub trait RegisterSnapshot {
     fn window_limits(&self, configuration: Self::Configuration) -> WindowLimits;
     fn window_words(&self) -> [u32; 2];
     fn set_window_words(&mut self, words: [u32; 2]);
-    /// Packs a group other than group 2 with its stock packer.
-    fn pack_retained(&mut self, group: RegisterGroup, configuration: Self::Configuration);
-}
-
-/// Packs `group`'s fields of `configuration` into the snapshot (0x69408c..0x6942bc).
-pub fn pack<S: RegisterSnapshot>(group: RegisterGroup, configuration: S::Configuration, snapshot: &mut S) {
-    if group == RegisterGroup::Group2 {
-        let words = pack_window_limits(snapshot.window_limits(configuration), snapshot.window_words());
-        snapshot.set_window_words(words);
-    } else {
-        snapshot.pack_retained(group, configuration);
-    }
+    /// Packs `group`'s fields of `configuration` into the snapshot (0x69408c..0x6942bc).
+    fn pack(&mut self, group: RegisterGroup, configuration: Self::Configuration);
 }

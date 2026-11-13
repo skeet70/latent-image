@@ -28,3 +28,5 @@ mod lens_tests;
 mod settings_tests;
 #[cfg(test)]
 mod sort_tests;
+#[cfg(test)]
+mod stock_tests;

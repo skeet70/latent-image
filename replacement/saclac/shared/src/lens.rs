@@ -53,12 +53,22 @@ pub fn notify_bounds(detail: u32, bounds: LensBounds, notices: &mut impl LensNot
     }
 }
 
+/// A lens zone, 0..=10 (0x772ff8).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LensZone(u8);
+
+impl LensZone {
+    pub const fn new(zone: u8) -> Option<Self> { if zone <= 10 { Some(Self(zone)) } else { None } }
+
+    pub const fn get(self) -> u8 { self.0 }
+}
+
 /// The zone a lens value falls in (0x772ff8).
-pub fn zone(value: i32, lens: &mut impl LensControl) -> u8 {
+pub fn zone(value: i32, lens: &mut impl LensControl) -> LensZone {
     if value == 0 {
-        return 0;
+        return LensZone(0);
     }
-    (2..=10).find(|zone| value < i32::from(lens.zone_limit(*zone))).map_or(10, |zone| zone - 1)
+    (2..=10).find(|zone| value < i32::from(lens.zone_limit(*zone))).map_or(LensZone(10), |zone| LensZone(zone - 1))
 }
 
 /// Posts a relative move to lensdc (0x76e1ac). `completions` are the queue-43 completions the

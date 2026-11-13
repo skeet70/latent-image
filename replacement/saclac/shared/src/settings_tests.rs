@@ -5,44 +5,49 @@ use xm1_saclac_interface::RecordHandle;
 
 use crate::settings::*;
 
-struct Area(HashMap<u32, u8>);
-
-impl Adjustments for Area {
-    fn byte(&self, key: AdjustmentKey) -> u8 { self.0.get(&key.0).copied().unwrap_or(0) }
+struct Area {
+    bytes: HashMap<u32, u8>,
+    lens: u16,
+    admitted: bool,
 }
 
-fn area(bytes: &[(u32, u8)]) -> Area { Area(bytes.iter().copied().collect()) }
+impl Adjustments for Area {
+    fn byte(&self, key: AdjustmentKey) -> u8 { self.bytes.get(&key.0).copied().unwrap_or(0) }
+
+    fn lens_adjustment(&self) -> u16 { self.lens }
+
+    fn admits_unselected_mode(&self) -> bool { self.admitted }
+}
+
+fn area(bytes: &[(u32, u8)]) -> Area { Area { bytes: bytes.iter().copied().collect(), lens: 0, admitted: false } }
 
 #[test]
 fn adjustment_bytes_read_signed_and_in_little_endian_pairs() {
-    let area = area(&[(0x10, 0xff), (0x11, 0x7f), (0x3e_0243, 0x34), (0x3e_0244, 0x12)]);
+    let area = area(&[(0x10, 0xff), (0x11, 0x7f)]);
     assert_eq!(signed_byte(&area, AdjustmentKey(0x10)), -1);
     assert_eq!(signed_byte(&area, AdjustmentKey(0x11)), 127);
     assert_eq!(halfword(&area, AdjustmentKey(0x10)), 0x7fff);
-    assert_eq!(halfword(&area, LENS_ADJUSTMENT), 0x1234);
 }
 
-struct Headers { selection: u8, at47: u8 }
+struct Headers { selection: MeasurementSelection, mode: ProfileMode }
 
 impl ProfileHeaders for Headers {
-    fn header(&mut self, _: RecordHandle, byte: HeaderByte) -> u8 {
-        match byte {
-            HeaderByte::MeasurementSelection => self.selection,
-            HeaderByte::At47 => self.at47,
-        }
-    }
+    fn measurement_selection(&mut self, _: RecordHandle) -> MeasurementSelection { self.selection }
+
+    fn mode(&mut self, _: RecordHandle) -> ProfileMode { self.mode }
 }
 
 #[test]
 fn an_unselected_mode_needs_the_adjustment_no_selection_and_modes_four_to_six() {
     let record = record_handle_from_a2(0x0102_0304);
-    let admitted = area(&[(UNSELECTED_MODES.0, 1)]);
+    let admitted = Area { admitted: true, ..area(&[]) };
     for mode in 0..=10 {
         let expected = (4..=6).contains(&mode);
-        assert_eq!(unselected_mode(record, &admitted, &mut Headers { selection: 0, at47: mode }), expected, "{mode}");
+        let mut headers = Headers { selection: MeasurementSelection(0), mode: ProfileMode(mode) };
+        assert_eq!(unselected_mode(record, &admitted, &mut headers), expected, "{mode}");
     }
-    assert!(!unselected_mode(record, &admitted, &mut Headers { selection: 1, at47: 5 }));
-    assert!(!unselected_mode(record, &area(&[]), &mut Headers { selection: 0, at47: 5 }));
+    assert!(!unselected_mode(record, &admitted, &mut Headers { selection: MeasurementSelection(1), mode: ProfileMode(5) }));
+    assert!(!unselected_mode(record, &area(&[]), &mut Headers { selection: MeasurementSelection(0), mode: ProfileMode(5) }));
 }
 
 #[test]
@@ -61,7 +66,7 @@ fn tenths_classes_follow_the_threshold_table() {
         (2560, 6),
         (-320, 36),
     ] {
-        assert_eq!(tenths_class(value), class, "{value}");
+        assert_eq!(tenths_class(value).get(), class, "{value}");
     }
 }
 

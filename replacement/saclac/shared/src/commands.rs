@@ -3,10 +3,11 @@
 //! Queue-43 command parameters after their event, the commands' pending flags and the client
 //! replies more than one module sends.
 
+use xm1_saclac_interface::stock::{command_code, PARAMETER_BLOCKS};
 use xm1_saclac_interface::{ClientCallback, CommandKind, CompletionStatus};
 
 use crate::lens::{LensControl, LensNotices, LensProbe, Notice, ProbeState};
-use crate::settings::Channels;
+use crate::settings::{Channel, Channels};
 
 /// A command whose stored parameters modules read after its event.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -25,15 +26,8 @@ impl StoredCommand {
     }
 
     /// Words in the command's parameter block.
-    pub const fn words(self) -> usize {
-        match self {
-            Self::Command02 => 7,
-            Self::Command03 => 6,
-            Self::HalfPress => 16,
-            Self::Autofocus => 40,
-            Self::LensDrive => 5,
-            Self::Command17 => 10,
-        }
+    pub fn words(self) -> usize {
+        PARAMETER_BLOCKS[usize::from(command_code(self.kind()))].capacity / 4
     }
 }
 
@@ -61,7 +55,7 @@ pub const fn ends_command(status: CompletionStatus) -> bool { status.0 <= 0 || s
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LensDriveReply {
     pub status: CompletionStatus,
-    pub channel: i32,
+    pub channel: Channel,
     pub words: [u32; 2],
 }
 
@@ -102,7 +96,7 @@ impl<M: CommandMemory> Commands<M> {
         if let Some(callback) = callback {
             let third = if channels.is_valid(reply.channel) { client } else { UNCONFIGURED_CHANNEL };
             let [fourth, fifth] = reply.words;
-            clients.enter(callback, ClientArguments::Reply { status: reply.status, words: [reply.channel as u32, third, fourth, fifth] });
+            clients.enter(callback, ClientArguments::Reply { status: reply.status, words: [reply.channel.0 as u32, third, fourth, fifth] });
         }
     }
 

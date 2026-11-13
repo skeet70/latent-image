@@ -11,6 +11,10 @@ pub struct AdjustmentKey(pub u32);
 /// The adjustment area, read a byte at a time (0x69f8fc).
 pub trait Adjustments {
     fn byte(&self, key: AdjustmentKey) -> u8;
+    /// The lens adjustment halfword (0x76da94).
+    fn lens_adjustment(&self) -> u16;
+    /// Whether the adjustment byte at 0x887c admits an unselected profile mode (0xf4733c).
+    fn admits_unselected_mode(&self) -> bool;
 }
 
 pub fn signed_byte(adjustments: &impl Adjustments, key: AdjustmentKey) -> i8 { adjustments.byte(key) as i8 }
@@ -20,35 +24,50 @@ pub fn halfword(adjustments: &impl Adjustments, key: AdjustmentKey) -> u16 {
     u16::from_le_bytes([adjustments.byte(key), adjustments.byte(AdjustmentKey(key.0 + 1))])
 }
 
-/// The lens adjustment halfword 0x76da94 reads.
-pub const LENS_ADJUSTMENT: AdjustmentKey = AdjustmentKey(0x3e_0243);
-
-/// The adjustment byte that admits an unselected profile mode.
-pub const UNSELECTED_MODES: AdjustmentKey = AdjustmentKey(0x887c);
-
+/// The profile record's measurement-selection byte; 0 admits an unselected mode (0xf47368).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum HeaderByte { MeasurementSelection, At47 }
+pub struct MeasurementSelection(pub u8);
+
+impl MeasurementSelection {
+    pub const fn is_unselected(self) -> bool { self.0 == 0 }
+}
+
+/// The profile record's mode byte at +0x47 (0xf47380).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProfileMode(pub u8);
 
 pub trait ProfileHeaders {
-    fn header(&mut self, record: RecordHandle, byte: HeaderByte) -> u8;
+    fn measurement_selection(&mut self, record: RecordHandle) -> MeasurementSelection;
+    fn mode(&mut self, record: RecordHandle) -> ProfileMode;
 }
 
 /// 0xf47330.
 pub fn unselected_mode(record: RecordHandle, adjustments: &impl Adjustments, headers: &mut impl ProfileHeaders) -> bool {
-    let admitted = adjustments.byte(UNSELECTED_MODES) != 0;
-    let selection = headers.header(record, HeaderByte::MeasurementSelection);
-    let mode = headers.header(record, HeaderByte::At47);
-    admitted && selection == 0 && (4..=6).contains(&mode)
+    adjustments.admits_unselected_mode()
+        && headers.measurement_selection(record).is_unselected()
+        && (4..=6).contains(&headers.mode(record).0)
 }
+
+/// A configuration channel a lens-drive reply names (0x74a214).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Channel(pub i32);
 
 /// The configuration's channel count bounds the channels a lens-drive reply names (0x74a214).
 pub trait Channels {
-    fn is_valid(&self, channel: i32) -> bool;
+    fn is_valid(&self, channel: Channel) -> bool;
 }
+
+/// The seven configuration words 0xf47300 forwards to the remap (0x74947c).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RemapArguments(pub [u32; 7]);
+
+/// The remap's halfword result, which its callers store (0xf181bc, 0xf18234, 0xf24154).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RemappedWord(pub u16);
 
 /// The configuration word remap 0xf47300 forwards its seven arguments to (0x74947c).
 pub trait ChannelRemap {
-    fn remap(&mut self, arguments: [u32; 7]) -> u32;
+    fn remap(&mut self, arguments: RemapArguments) -> RemappedWord;
 }
 
 /// The tenths thresholds 0x73fef0 compares against, from 0x8184bc.
@@ -57,14 +76,22 @@ const TENTHS_THRESHOLDS: [u8; 30] = [
     125, 129,
 ];
 
+/// The class of a tenths value, 6..=36 (0x73fef0).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TenthsClass(u8);
+
+impl TenthsClass {
+    pub const fn get(self) -> u8 { self.0 }
+}
+
 /// 0x73fef0.
-pub fn tenths_class(value: i32) -> u8 {
+pub fn tenths_class(value: i32) -> TenthsClass {
     let tenths = (value / 10) as u8;
     if tenths < TENTHS_THRESHOLDS[0] {
-        return 6;
+        return TenthsClass(6);
     }
     let reached = TENTHS_THRESHOLDS[1..].iter().take_while(|threshold| tenths >= **threshold).count();
-    7 + reached as u8
+    TenthsClass(7 + reached as u8)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
