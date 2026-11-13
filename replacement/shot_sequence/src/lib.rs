@@ -4,6 +4,7 @@
 pub mod boundary;
 pub mod calculation;
 pub mod calculation_work;
+pub mod calculations_work;
 pub mod capture;
 pub mod capture_boundary;
 pub mod capture_control;
@@ -19,6 +20,7 @@ pub mod pipeline;
 pub mod ports;
 pub mod preparation;
 pub mod sequence;
+pub mod shared;
 pub mod statistics_dump;
 pub mod stock;
 pub mod subjects;
@@ -116,3 +118,5 @@ mod statistics_dump_tests;
 mod capture_control_tests;
 #[cfg(test)]
 mod finish_work_tests;
+#[cfg(test)]
+mod calculations_work_tests;

@@ -10,6 +10,7 @@ use crate::boundary::{
 use crate::ports::{HalfPressMode, HalfPressNotifications};
 use crate::subjects::{self, Candidates, SubjectServices};
 use crate::summary;
+use crate::lens_return::ReturnPoint;
 use xm1_saclac_interface::RecordHandle;
 
 /// Notification and publication mask of the half-press parameters.
@@ -63,13 +64,6 @@ pub struct LensTrack {
     /// The lens left the reference before the pipeline.
     pub moved: bool,
     pub changed_at_conclusion: bool,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ReturnPoint {
-    pub point: [u8; 24],
-    pub pending: u32,
-    pub armed: u32,
 }
 
 /// The shot state the preparation writes and later steps read.

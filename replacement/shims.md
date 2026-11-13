@@ -229,8 +229,10 @@ The kernel crate: typed handles over the image's interface slots, with the per-c
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
-| `SlotTable` in `src/slot_table.rs` | kernel interface slot | the kernel bodies behind the root blocks at 0x96bd20 and 0x96bd24, the loader-A console writer 0x41a34 and the error-callback word at 0x4089ea8c | partly | every image whose `.symbols` lists an `xm1_kernel` item also lists the kernel family entry for each slot offset in `SlotTable`'s table | required |
+| `SlotTable` in `src/slot_table.rs` and `src/slot_table/messages.rs` | kernel interface slot | the kernel bodies behind the root blocks at 0x96bd20 and 0x96bd24, the loader-A console writer 0x41a34, the error-callback word at 0x4089ea8c, the post hook at 0x4089ea94, task/queue classes and message-pool capacity words | partly | every image whose `.symbols` lists an `xm1_kernel` item also lists the kernel family entry for each slot offset in `SlotTable`'s table | required |
 | `CoreLock` in `src/slot_table.rs` | trampoline into retained stock | the stock cross-core critical section at 0x7235d8 and its release 0x7236b0 | partly | no stock caller of 0x7235d8 remains | required |
+| Object construction and deletion in `src/slot_table/messages.rs` | trampoline into retained stock | queue constructor 0x724cdc and deleter 0x724f08, binary-semaphore allocator 0x7247ac and deleter 0x724974, semaphore poll 0x724ad8 | no | the kernel crate owns queue backing allocation and resource lifetime, and semaphore allocation/deletion/poll, in every linked image | required |
+| Dispatch bracket in `src/slot_table/messages.rs` | trampoline into retained stock | dispatch disable 0x723efc and enable 0x723f7c | no | the kernel crate owns the dispatch wrappers and their error reporting in every linked image | required |
 
 ## kernel_install
 
@@ -579,14 +581,24 @@ The owned timer heap.
 
 ## saclac
 
-The task 43 engine: the owned dispatcher and machine 0's router over stock's 37 machine tables, entered at the two stock extents they retire. No machine is owned yet, so every action is a stock action word.
+The task-43 driver and engine use stock's 37 machine tables. Every machine action remains a stock action word. The three boundary entries are the dispatcher, machine-0 router and task loop.
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
-| the two image-5 extents `[0xefca6c,0xefcb88)` and `[0xefcb88,0xefd2fc)`, 1,164 owned bytes of the 2,192-byte pair, written by `stage-saclac` through record-5 staging, with the entry veneers `xm1_saclac_dispatch_entry` and `xm1_saclac_router_entry` from `entry.S` placed at `0xefca6c` and `0xefcb88` by the linker script generated from `Replacement.Saclac.Artifact.extents` and the remaining bytes the trap word `0xe7f000f0` | veneer or carrier at a stock address | the stock actor at `0xf01bc8`, the 36 stock row functions that call the dispatcher, and the nested row calls from actions | no | every machine owned | required |
+| three four-byte image-5 veneers at `0xefca6c`, `0xefcb88` and `0xf01bc8`, with bodies in the shared fixed image beginning at `0x00ba0020`; unused retired extent bytes carry trap word `0xe7f000f0` | veneer or carrier at a stock address | retained row-function callers, task constructor and nested stock action calls | no | every machine and retained entry caller is owned | required |
 | `StockTables`, `StockPorts` and the guest addresses in `src/stock.rs`, with the four per-machine count arrays `SACLAC_CELL_COUNTS`, `SACLAC_ACTION_COUNTS`, `SACLAC_SECOND_COUNTS` and `SACLAC_ROW_COUNTS` and machine 0's row map `SACLAC_ROW_MAP` exported for the layout check | guest-memory layout view | the cell, action and second tables at `0xf12f70`, `0xf133ec` and `0xf12074`, the state counts at `0xf1158c`, and the two halfword arrays | no | every machine owned | required |
 | the trace entry `0xf46c38` called through the literal word at `0xefcce4`, declared in `Replacement.Saclac.Artifact.retainedExternals` | trampoline into retained stock | the stock trace body at `0xf46c38` | no | the trace recorder is owned | required |
 | stock action words and second-table words entered through `StockCodeWord` with r2 = the machine's table base word and r3 = the entered word, the values stock's dispatcher holds at `0xefcb20` and `0xefcb58` | trampoline into retained stock | the 813 distinct action words the cells reference, all image-5 code addresses, of which 701 are declared function starts and 112 are entries the decomp does not declare; no cell selects a second-table word; no entry reads r2, and 224 save r3 in a store-multiple prologue, the only r3 read the walk finds | no | every machine owned | required |
+| `xm1_saclac_driver_entry` at `0xf01bc8` | stock-ABI export | retained task constructor | no | the task constructor calls owned Rust directly | required |
+| `DriverPorts` receive scratch at `0x169d374` with payload at `0x169d380`, command blocks and command-present flags | guest-memory layout view | stock machine actions and queue-43 producers | no | every machine and all queue-43 producers are owned | required |
+| fault reaction `0xf46c20` | trampoline into retained stock | retained SACLAC fault reporting | no | subsystem fault reporting is owned | required |
+| `XM1_REQUIRES_LENS_SAFETY_CONTRACT`, four bytes with value 1 in the linked fixed body | guest-memory layout view | fixed-image stager derives the emulator-only admission contract from this marker | no | a lens safety contract qualifies the image's lens-reaching effects | required |
+
+## saclac_interface
+
+| Shim | Kind | Other side | Owned now | Removal condition | State |
+| --- | --- | --- | --- | --- | --- |
+| Command, parameter-block and callback descriptors in `src/stock.rs` | guest-memory layout view | retained queue-43 command producers, their 46 shared parameter blocks and 106 completion callbacks | no | queue-43 producers and completion callbacks are owned and no retained consumer reads the parameter blocks | required |
 
 ## shot_sequence
 
@@ -711,21 +723,6 @@ The vendor, wireless, filesystem and device-protocol unit. Most of its externals
 | `vendor_session_initialize`, `vendor_session_control`, `vendor_session_context_size`, `vendor_session_context_alignment`, `xm1_vendor_usb_task`, `xm1_vendor_usb_interrupt` exports | stock-ABI export | stock USB/session callers | no | every USB/session caller is owned or migrated | required |
 | `xm1_wireless_driver_task`, `xm1_wireless_supplicant_task` retained services | trampoline into retained stock | stock wireless driver and supplicant tasks | no | the wireless subsystem is owned | required |
 | filesystem and media-task ABI views (`filesystem_*`, `media_parser`, `metadata_*`) | guest-memory layout view | retained stock filesystem, media and metadata services | no | the owned file service and filesystem are qualified | required |
-
-## saclac_interface
-
-| Shim | Kind | Other side | Owned now | Removal condition | State |
-| --- | --- | --- | --- | --- | --- |
-| Command, parameter-block and callback descriptors in `src/stock.rs` | guest-memory layout view | retained queue-43 command producers, their 46 shared parameter blocks and 106 completion callbacks | no | queue-43 producers and completion callbacks are owned and no retained consumer reads the parameter blocks | required |
-
-## fixed_image
-
-The fixed-range test image preserves the retained startup phase call while observing entry and initialized storage.
-
-| Shim | Kind | Other side | Owned now | Removal condition | State |
-| --- | --- | --- | --- | --- | --- |
-| `xm1_fixed_test_entry` in `probe-entry.S`, published at `0x69cdf8` by `ProbeMain.hs` | stock-ABI export | retained startup phase callers | no | the placement probe is replaced by the subsystem image's entries | required |
-| `xm1_fixed_test_resume` at `0x69cdfc`, bound by `ProbeMain.hs` | trampoline into retained stock | the retained startup phase body after its entry push | no | the placement probe is replaced by the subsystem image's entries | required |
 
 ## Not registered
 

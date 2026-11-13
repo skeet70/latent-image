@@ -1,4 +1,4 @@
-use crate::children::{AcquisitionControl, ChildEvent, ChildRequest, LensControl, LensEffect, MeasurementControl, ShotControl, ShotEvent, ShotTarget};
+use crate::children::{AcquisitionControl, ChildEvent, ChildRequest, LensControl, LensEffect, LensSetting, MeasurementControl, ShotControl, ShotEvent, ShotTarget};
 use crate::search::SearchInput;
 use xm1_saclac_interface::{stock, Command, CommandKind, Completed, Completion, Message};
 
@@ -11,9 +11,9 @@ fn search_and_lens_reachable_child_requests_are_emulator_only() {
         ChildRequest::S1Search(SearchInput::Initialize),
         ChildRequest::S1Search(SearchInput::Begin),
         ChildRequest::S1Search(SearchInput::Cancel),
-        ChildRequest::LensBringUp(Message::Command(Command { kind: CommandKind::LensBringUp, parameters })),
-        ChildRequest::LensLive(ChildEvent::Control { control: LensControl::Initialize, parameters, record }),
-        ChildRequest::LensS1(ChildEvent::Control { control: LensControl::S1Release, parameters, record }),
+        ChildRequest::LensBringUp { message: Message::Command(Command { kind: CommandKind::LensBringUp, parameters }), record },
+        ChildRequest::LensLive(ChildEvent::Control { control: LensControl::CancelDrive, parameters, record }),
+        ChildRequest::LensS1(ChildEvent::Control { control: LensControl::Setting(LensSetting::Request04), parameters, record }),
         ChildRequest::Shot(ShotEvent::Control { control: ShotControl::StartS1, record }),
         ChildRequest::Shot(ShotEvent::Command { target: ShotTarget::Live, command: Command { kind: CommandKind::Command02, parameters }, record }),
         ChildRequest::Shot(ShotEvent::Completed { target: ShotTarget::Capture, completed: Completed { completion: Completion::Image5e, parameters }, record }),
