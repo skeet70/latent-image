@@ -54,8 +54,8 @@ fn measurement_feedback_preserves_update_kind_and_restart_completion() {
 #[test]
 fn adjustment_requests_preserve_the_retained_peer_payload() {
     use crate::adjustment::{DriveAmount, DriveScale, LensPosition, LensRequest, Percentage, Selection};
-    use crate::stock::{adjustment_payload, LensFinishRoute, StockCallbackWord};
-    use xm1_saclac_interface::LensDcOperation;
+    use crate::stock::{adjustment_payload, LensFinishRoute};
+    use xm1_saclac_interface::{stock::StockCallbackWord, LensDcOperation};
 
     let callback = StockCallbackWord(0x12345678);
     for (request, operation, expected) in [
@@ -88,7 +88,8 @@ fn adjustment_requests_preserve_the_retained_peer_payload() {
 #[test]
 fn oversized_adjustment_shifts_produce_zero_without_panicking() {
     use crate::adjustment::{DriveAmount, DriveScale, LensPosition, LensRequest};
-    use crate::stock::{adjustment_payload, LensFinishRoute, StockCallbackWord};
+    use crate::stock::{adjustment_payload, LensFinishRoute};
+    use xm1_saclac_interface::stock::StockCallbackWord;
     let payload = adjustment_payload(LensRequest::Move {
         position: LensPosition(0), amount: DriveAmount(u32::MAX), scale: DriveScale(32),
     }, StockCallbackWord(1), LensFinishRoute::Ordinary).unwrap();
@@ -97,7 +98,8 @@ fn oversized_adjustment_shifts_produce_zero_without_panicking() {
 
 #[test]
 fn record_start_places_defined_fields_and_completion_in_the_peer_packet() {
-    use crate::stock::{record_start_payload, RecordHalfword, RecordMode, RecordSample, RecordStart, RecordWord, StockCallbackWord};
+    use crate::stock::{record_start_payload, RecordHalfword, RecordMode, RecordSample, RecordStart, RecordWord};
+    use xm1_saclac_interface::stock::StockCallbackWord;
     let bytes = record_start_payload(RecordStart {
         channel: RecordWord(8), mode: RecordMode::Second,
         settings: [RecordWord(3), RecordWord(4)],
@@ -118,7 +120,8 @@ fn record_start_places_defined_fields_and_completion_in_the_peer_packet() {
 #[test]
 fn record_update_clamps_position_and_duration_before_serializing() {
     use crate::adjustment::{ExposureDuration, ExposureLimits, ExposureMode, LensPosition};
-    use crate::stock::{record_update_payload, RecordLimits, RecordUpdate, RecordWord, StockCallbackWord};
+    use crate::stock::{record_update_payload, RecordLimits, RecordUpdate, RecordWord};
+    use xm1_saclac_interface::stock::StockCallbackWord;
     let limits = RecordLimits {
         exposure: ExposureLimits { minimum: ExposureDuration(100), maximum: ExposureDuration(1000) },
         minimum_position: LensPosition(-10), maximum_position: LensPosition(20),

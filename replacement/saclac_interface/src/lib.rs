@@ -1,7 +1,9 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+pub mod exposure;
 pub mod stock;
+pub mod round;
 pub mod calc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -292,6 +294,10 @@ pub enum ImgDcOperation {
     Request31,
     Request32,
     Request33,
+    /// 20 bytes from 0xfea7dc (0xfea7f0..0xfea810): the completion word, then four words
+    /// in argument order. The live view's two senders (0xf31548, 0xf315bc) pass completion
+    /// 0xf2f684, which posts 0x63.
+    Request34,
     Request3a,
     Request3b,
     Request42,
@@ -460,5 +466,7 @@ pub const fn lens_effect(operation: PeerOperation) -> LensEffect {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod exposure_tests;
 #[cfg(test)]
 mod calc_tests;

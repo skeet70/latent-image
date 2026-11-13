@@ -1,2560 +1,4219 @@
 {
-  "schema": 1,
-  "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
-  "messages": [
+ "schema": 1,
+ "source_commit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+ "messages": [
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5012,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5013,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5014,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5061,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16172,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 50,
+   "operation": 16896,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 50,
+   "operation": 16897,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5018,
+   "bytes": 4,
+   "fields": [
     {
-      "direction": "outgoing",
-      "queue": 3,
-      "operation": 5012,
-      "bytes": 0,
-      "fields": [],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 3,
-      "operation": 5013,
-      "bytes": 0,
-      "fields": [],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 3,
-      "operation": 5014,
-      "bytes": 0,
-      "fields": [],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 3,
-      "operation": 5061,
-      "bytes": 0,
-      "fields": [],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 47,
-      "operation": 16172,
-      "bytes": 0,
-      "fields": [],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 50,
-      "operation": 16896,
-      "bytes": 0,
-      "fields": [],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 50,
-      "operation": 16897,
-      "bytes": 0,
-      "fields": [],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 3,
-      "operation": 5018,
-      "bytes": 4,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "tu_00defaf4.c: record_send_task_message 0x139a after explicit scalar argument stores"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 10,
-      "operation": 6670,
-      "bytes": 4,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "platform/osal/service_requests.c: initialized unsigned-int payload array for 0x1a0e"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "incoming",
-      "queue": 3,
-      "operation": 15105,
-      "bytes": 4,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "incoming",
-      "queue": 47,
-      "operation": 15167,
-      "bytes": 4,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "incoming",
-      "queue": 47,
-      "operation": 15168,
-      "bytes": 4,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "incoming",
-      "queue": 47,
-      "operation": 15169,
-      "bytes": 4,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "incoming",
-      "queue": 47,
-      "operation": 15170,
-      "bytes": 4,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "incoming",
-      "queue": 47,
-      "operation": 15178,
-      "bytes": 4,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "incoming",
-      "queue": 48,
-      "operation": 15209,
-      "bytes": 4,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "incoming",
-      "queue": 48,
-      "operation": 15211,
-      "bytes": 4,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 3,
-      "operation": 5019,
-      "bytes": 8,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "tu_00defaf4.c: record_send_task_message 0x139b after explicit scalar argument stores"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "tu_00defaf4.c: record_send_task_message 0x139b after explicit scalar argument stores"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 10,
-      "operation": 6669,
-      "bytes": 8,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "platform/osal/service_requests.c: initialized unsigned-int payload array for 0x1a0d"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "platform/osal/service_requests.c: initialized unsigned-int payload array for 0x1a0d"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 47,
-      "operation": 16167,
-      "bytes": 8,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Exact capture_request_wrappers_rest.c capture_send_event_3f2a0x00fea4d0: both int fields assigned; opcode0x3f27 length8"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "Exact capture_request_wrappers_rest.c capture_send_event_3f2a0x00fea4d0: both int fields assigned; opcode0x3f27 length8"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 50,
-      "operation": 16916,
-      "bytes": 8,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "drivers/lens/control/tu_0076f044.c: both words assigned before send_payload_first_result(0x4214,2,words)"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "drivers/lens/control/tu_0076f044.c: both words assigned before send_payload_first_result(0x4214,2,words)"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "incoming",
-      "queue": 50,
-      "operation": 15152,
-      "bytes": 8,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "incoming",
-      "queue": 47,
-      "operation": 15179,
-      "bytes": 8,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "incoming",
-      "queue": 45,
-      "operation": 15239,
-      "bytes": 8,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "incoming",
-      "queue": 45,
-      "operation": 15240,
-      "bytes": 8,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "incoming",
-      "queue": 45,
-      "operation": 15242,
-      "bytes": 8,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "incoming",
-      "queue": 44,
-      "operation": 15245,
-      "bytes": 8,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 3,
-      "operation": 5017,
-      "bytes": 12,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "tu_00defaf4.c: record_send_task_message 0x1399 after explicit scalar argument stores"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "tu_00defaf4.c: record_send_task_message 0x1399 after explicit scalar argument stores"
-          ]
-        },
-        {
-          "name": "word-2",
-          "offset": 8,
-          "bytes": 4,
-          "sources": [
-            "tu_00defaf4.c: record_send_task_message 0x1399 after explicit scalar argument stores"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 47,
-      "operation": 16147,
-      "bytes": 12,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Exact capture_request_wrappers_rest.c capture_send_event_3f14: three explicit int stores; opcode0x3f13 length12"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "Exact capture_request_wrappers_rest.c capture_send_event_3f14: three explicit int stores; opcode0x3f13 length12"
-          ]
-        },
-        {
-          "name": "word-2",
-          "offset": 8,
-          "bytes": 4,
-          "sources": [
-            "Exact capture_request_wrappers_rest.c capture_send_event_3f14: three explicit int stores; opcode0x3f13 length12"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 48,
-      "operation": 16391,
-      "bytes": 12,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "tu_01039638.c operation_send_command_4007: all three argument words assigned before post"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "tu_01039638.c operation_send_command_4007: all three argument words assigned before post"
-          ]
-        },
-        {
-          "name": "word-2",
-          "offset": 8,
-          "bytes": 4,
-          "sources": [
-            "tu_01039638.c operation_send_command_4007: all three argument words assigned before post"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "incoming",
-      "queue": 3,
-      "operation": 15109,
-      "bytes": 12,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-2",
-          "offset": 8,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "incoming",
-      "queue": 3,
-      "operation": 15141,
-      "bytes": 12,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-2",
-          "offset": 8,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 3,
-      "operation": 5029,
-      "bytes": 16,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Exact record_message_wrappers.c record_send_words_13a5: explicit int stores before post"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "Exact record_message_wrappers.c record_send_words_13a5: explicit int stores before post"
-          ]
-        },
-        {
-          "name": "word-2",
-          "offset": 8,
-          "bytes": 4,
-          "sources": [
-            "Exact record_message_wrappers.c record_send_words_13a5: explicit int stores before post"
-          ]
-        },
-        {
-          "name": "word-3",
-          "offset": 12,
-          "bytes": 4,
-          "sources": [
-            "Exact record_message_wrappers.c record_send_words_13a5: explicit int stores before post"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 3,
-      "operation": 5060,
-      "bytes": 16,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "0x00df6ad8: four source words or four initialized fallback words, 16-byte payload"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "0x00df6ad8: four source words or four initialized fallback words, 16-byte payload"
-          ]
-        },
-        {
-          "name": "word-2",
-          "offset": 8,
-          "bytes": 4,
-          "sources": [
-            "0x00df6ad8: four source words or four initialized fallback words, 16-byte payload"
-          ]
-        },
-        {
-          "name": "word-3",
-          "offset": 12,
-          "bytes": 4,
-          "sources": [
-            "0x00df6ad8: four source words or four initialized fallback words, 16-byte payload"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 3,
-      "operation": 5062,
-      "bytes": 16,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "0x00df6b80..0x00df6bac: four source loads, four stack stores, 16-byte payload"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "0x00df6b80..0x00df6bac: four source loads, four stack stores, 16-byte payload"
-          ]
-        },
-        {
-          "name": "word-2",
-          "offset": 8,
-          "bytes": 4,
-          "sources": [
-            "0x00df6b80..0x00df6bac: four source loads, four stack stores, 16-byte payload"
-          ]
-        },
-        {
-          "name": "word-3",
-          "offset": 12,
-          "bytes": 4,
-          "sources": [
-            "0x00df6b80..0x00df6bac: four source loads, four stack stores, 16-byte payload"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 47,
-      "operation": 16150,
-      "bytes": 16,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "tu_00fea36c.c FUN_00fea468: four arguments stored before post0x3f16 length16"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "tu_00fea36c.c FUN_00fea468: four arguments stored before post0x3f16 length16"
-          ]
-        },
-        {
-          "name": "word-2",
-          "offset": 8,
-          "bytes": 4,
-          "sources": [
-            "tu_00fea36c.c FUN_00fea468: four arguments stored before post0x3f16 length16"
-          ]
-        },
-        {
-          "name": "word-3",
-          "offset": 12,
-          "bytes": 4,
-          "sources": [
-            "tu_00fea36c.c FUN_00fea468: four arguments stored before post0x3f16 length16"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 50,
-      "operation": 16899,
-      "bytes": 16,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "drivers/lens/control/lens_control_missed_requests.c: explicit scalar fields before TASK_MESSAGE_PREPARE 0x4203"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "drivers/lens/control/lens_control_missed_requests.c: explicit scalar fields before TASK_MESSAGE_PREPARE 0x4203"
-          ]
-        },
-        {
-          "name": "word-2",
-          "offset": 8,
-          "bytes": 4,
-          "sources": [
-            "drivers/lens/control/lens_control_missed_requests.c: explicit scalar fields before TASK_MESSAGE_PREPARE 0x4203"
-          ]
-        },
-        {
-          "name": "word-3",
-          "offset": 12,
-          "bytes": 4,
-          "sources": [
-            "drivers/lens/control/lens_control_missed_requests.c: explicit scalar fields before TASK_MESSAGE_PREPARE 0x4203"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "incoming",
-      "queue": 50,
-      "operation": 15151,
-      "bytes": 16,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-2",
-          "offset": 8,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-3",
-          "offset": 12,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "incoming",
-      "queue": 50,
-      "operation": 15154,
-      "bytes": 16,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-2",
-          "offset": 8,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-3",
-          "offset": 12,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 3,
-      "operation": 5020,
-      "bytes": 20,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Exact record_message_wrappers.c record_send_words_139c: explicit int stores before post"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "Exact record_message_wrappers.c record_send_words_139c: explicit int stores before post"
-          ]
-        },
-        {
-          "name": "word-2",
-          "offset": 8,
-          "bytes": 4,
-          "sources": [
-            "Exact record_message_wrappers.c record_send_words_139c: explicit int stores before post"
-          ]
-        },
-        {
-          "name": "word-3",
-          "offset": 12,
-          "bytes": 4,
-          "sources": [
-            "Exact record_message_wrappers.c record_send_words_139c: explicit int stores before post"
-          ]
-        },
-        {
-          "name": "word-4",
-          "offset": 16,
-          "bytes": 4,
-          "sources": [
-            "Exact record_message_wrappers.c record_send_words_139c: explicit int stores before post"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 3,
-      "operation": 5021,
-      "bytes": 20,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Exact record_message_wrappers.c record_send_words_139d: explicit int stores before post"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "Exact record_message_wrappers.c record_send_words_139d: explicit int stores before post"
-          ]
-        },
-        {
-          "name": "word-2",
-          "offset": 8,
-          "bytes": 4,
-          "sources": [
-            "Exact record_message_wrappers.c record_send_words_139d: explicit int stores before post"
-          ]
-        },
-        {
-          "name": "word-3",
-          "offset": 12,
-          "bytes": 4,
-          "sources": [
-            "Exact record_message_wrappers.c record_send_words_139d: explicit int stores before post"
-          ]
-        },
-        {
-          "name": "word-4",
-          "offset": 16,
-          "bytes": 4,
-          "sources": [
-            "Exact record_message_wrappers.c record_send_words_139d: explicit int stores before post"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "incoming",
-      "queue": 3,
-      "operation": 15107,
-      "bytes": 24,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-2",
-          "offset": 8,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-3",
-          "offset": 12,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-4",
-          "offset": 16,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-5",
-          "offset": 20,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "incoming",
-      "queue": 3,
-      "operation": 15108,
-      "bytes": 24,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-2",
-          "offset": 8,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-3",
-          "offset": 12,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-4",
-          "offset": 16,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-5",
-          "offset": 20,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 50,
-      "operation": 16898,
-      "bytes": 28,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "drivers/lens/control/lens_control_missed_requests.c: explicit scalar fields before TASK_MESSAGE_PREPARE 0x4202"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "drivers/lens/control/lens_control_missed_requests.c: explicit scalar fields before TASK_MESSAGE_PREPARE 0x4202"
-          ]
-        },
-        {
-          "name": "word-2",
-          "offset": 8,
-          "bytes": 4,
-          "sources": [
-            "drivers/lens/control/lens_control_missed_requests.c: explicit scalar fields before TASK_MESSAGE_PREPARE 0x4202"
-          ]
-        },
-        {
-          "name": "word-3",
-          "offset": 12,
-          "bytes": 4,
-          "sources": [
-            "drivers/lens/control/lens_control_missed_requests.c: explicit scalar fields before TASK_MESSAGE_PREPARE 0x4202"
-          ]
-        },
-        {
-          "name": "word-4",
-          "offset": 16,
-          "bytes": 4,
-          "sources": [
-            "drivers/lens/control/lens_control_missed_requests.c: explicit scalar fields before TASK_MESSAGE_PREPARE 0x4202"
-          ]
-        },
-        {
-          "name": "word-5",
-          "offset": 20,
-          "bytes": 4,
-          "sources": [
-            "drivers/lens/control/lens_control_missed_requests.c: explicit scalar fields before TASK_MESSAGE_PREPARE 0x4202"
-          ]
-        },
-        {
-          "name": "word-6",
-          "offset": 24,
-          "bytes": 4,
-          "sources": [
-            "drivers/lens/control/lens_control_missed_requests.c: explicit scalar fields before TASK_MESSAGE_PREPARE 0x4202"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "incoming",
-      "queue": 3,
-      "operation": 15106,
-      "bytes": 28,
-      "fields": [
-        {
-          "name": "word-0",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-2",
-          "offset": 8,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-3",
-          "offset": 12,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-4",
-          "offset": 16,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-5",
-          "offset": 20,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        },
-        {
-          "name": "word-6",
-          "offset": 24,
-          "bytes": 4,
-          "sources": [
-            "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "incoming",
-      "queue": 3,
-      "operation": 15127,
-      "bytes": 40,
-      "fields": [
-        {
-          "name": "completion",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "0x00ef9510 scalar store"
-          ]
-        },
-        {
-          "name": "argument-1",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "0x00ef9510 scalar store"
-          ]
-        },
-        {
-          "name": "argument-2",
-          "offset": 8,
-          "bytes": 4,
-          "sources": [
-            "0x00ef9510 scalar store"
-          ]
-        },
-        {
-          "name": "selection-record",
-          "offset": 12,
-          "bytes": 28,
-          "sources": [
-            "0x00ef9510 copy0x1c before post0x17 length0x28"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 3,
-      "operation": 5054,
-      "bytes": 44,
-      "fields": [
-        {
-          "name": "start",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "Exact record_send_timing_range0x00def72c: start"
-          ]
-        },
-        {
-          "name": "start-index",
-          "offset": 4,
-          "bytes": 2,
-          "sources": [
-            "Exact record_send_timing_range0x00def72c: short start_index"
-          ]
-        },
-        {
-          "name": "end",
-          "offset": 8,
-          "bytes": 4,
-          "sources": [
-            "Exact record_send_timing_range0x00def72c: end"
-          ]
-        },
-        {
-          "name": "end-index",
-          "offset": 12,
-          "bytes": 2,
-          "sources": [
-            "Exact record_send_timing_range0x00def72c: short end_index"
-          ]
-        },
-        {
-          "name": "values",
-          "offset": 16,
-          "bytes": 16,
-          "sources": [
-            "Exact record_send_timing_range0x00def72c: four int stores"
-          ]
-        },
-        {
-          "name": "limits",
-          "offset": 32,
-          "bytes": 8,
-          "sources": [
-            "Exact record_send_timing_range0x00def72c: four short stores"
-          ]
-        },
-        {
-          "name": "flags",
-          "offset": 40,
-          "bytes": 4,
-          "sources": [
-            "Exact record_send_timing_range0x00def72c: int flags"
-          ]
-        }
-      ],
-      "padding": [
-        {
-          "offset": 6,
-          "bytes": 2,
-          "sources": [
-            "Exact record_message_wrappers.c timing_range_message: short4, int8; field-only constructor leaves gap6..8",
-            "Retained reccont timing range consumes short indices and int values"
-          ]
-        },
-        {
-          "offset": 14,
-          "bytes": 2,
-          "sources": [
-            "Exact record_message_wrappers.c timing_range_message: short12, int16; field-only constructor leaves gap14..16",
-            "Retained reccont timing range consumes short indices and int values"
-          ]
-        }
-      ]
-    },
-    {
-      "direction": "outgoing",
-      "queue": 44,
-      "operation": 15372,
-      "bytes": 80,
-      "fields": [
-        {
-          "name": "parameter-record",
-          "offset": 0,
-          "bytes": 76,
-          "sources": [
-            "0x00f4c6e8: complete supplied record copied; all record bytes retained"
-          ]
-        },
-        {
-          "name": "completion",
-          "offset": 76,
-          "bytes": 4,
-          "sources": [
-            "0x00f4c6e8: callback word after copied record"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 45,
-      "operation": 15618,
-      "bytes": 128,
-      "fields": [
-        {
-          "name": "parameter-record",
-          "offset": 0,
-          "bytes": 124,
-          "sources": [
-            "0x00f4c490: complete supplied record copied; all record bytes retained"
-          ]
-        },
-        {
-          "name": "completion",
-          "offset": 124,
-          "bytes": 4,
-          "sources": [
-            "0x00f4c490: callback word after copied record"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "incoming",
-      "queue": 3,
-      "operation": 15117,
-      "bytes": 160,
-      "fields": [
-        {
-          "name": "completion",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "0x00ef9264 callback store"
-          ]
-        },
-        {
-          "name": "header-record",
-          "offset": 8,
-          "bytes": 144,
-          "sources": [
-            "0x00ef9264 copy0x90 and time adjustment"
-          ]
-        },
-        {
-          "name": "argument-2",
-          "offset": 152,
-          "bytes": 4,
-          "sources": [
-            "0x00ef9264 trailing argument store"
-          ]
-        },
-        {
-          "name": "argument-3",
-          "offset": 156,
-          "bytes": 4,
-          "sources": [
-            "0x00ef9264 trailing argument store"
-          ]
-        }
-      ],
-      "padding": [
-        {
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "0x00ef9264 sender transmits callback then 8-byte-aligned header; interposed word unwritten",
-            "Retained command0x0d block0x0169d128: callback0, header8, trailing values0x98/0x9c"
-          ]
-        }
-      ]
-    },
-    {
-      "direction": "incoming",
-      "queue": 3,
-      "operation": 15104,
-      "bytes": 168,
-      "fields": [
-        {
-          "name": "completion",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "0x00ef8e20"
-          ]
-        },
-        {
-          "name": "source",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "0x00ef8e24"
-          ]
-        },
-        {
-          "name": "header-record",
-          "offset": 8,
-          "bytes": 144,
-          "sources": [
-            "0x00ef8dd0..0x00ef8ddc copy144; 0x00ef8de0..0x00ef8e0c time adjustment"
-          ]
-        },
-        {
-          "name": "mode",
-          "offset": 152,
-          "bytes": 4,
-          "sources": [
-            "0x00ef8e28"
-          ]
-        },
-        {
-          "name": "configuration",
-          "offset": 156,
-          "bytes": 4,
-          "sources": [
-            "0x00ef8e2c..0x00ef8e30"
-          ]
-        },
-        {
-          "name": "resource",
-          "offset": 160,
-          "bytes": 4,
-          "sources": [
-            "0x00ef8e34..0x00ef8e38"
-          ]
-        }
-      ],
-      "padding": [
-        {
-          "offset": 164,
-          "bytes": 4,
-          "sources": [
-            "0x00ef8db4..0x00ef8e48: transmitted stack span[r11-188,r11-20); final store[r11-28,r11-24); last word unwritten",
-            "0x00ef9b18 accessor; 0x00efa1c8 reads callback0; 0x00f14718 configuration reads through0xa0; no tail0xa4 field"
-          ]
-        }
-      ]
-    },
-    {
-      "direction": "outgoing",
-      "queue": 45,
-      "operation": 15616,
-      "bytes": 172,
-      "fields": [
-        {
-          "name": "parameter-record",
-          "offset": 0,
-          "bytes": 168,
-          "sources": [
-            "0x00f4c584: complete supplied record copied; all record bytes retained"
-          ]
-        },
-        {
-          "name": "completion",
-          "offset": 168,
-          "bytes": 4,
-          "sources": [
-            "0x00f4c584: callback word after copied record"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 48,
-      "operation": 16386,
-      "bytes": 208,
-      "fields": [
-        {
-          "name": "setup",
-          "offset": 0,
-          "bytes": 16,
-          "sources": [
-            "0x01039638/start_copy_blocks copy0x10"
-          ]
-        },
-        {
-          "name": "format",
-          "offset": 16,
-          "bytes": 24,
-          "sources": [
-            "0x01039638 copy0x18"
-          ]
-        },
-        {
-          "name": "window",
-          "offset": 40,
-          "bytes": 16,
-          "sources": [
-            "0x01039638 copy0x10"
-          ]
-        },
-        {
-          "name": "output",
-          "offset": 56,
-          "bytes": 16,
-          "sources": [
-            "0x01039638 copy0x10"
-          ]
-        },
-        {
-          "name": "exposure",
-          "offset": 72,
-          "bytes": 56,
-          "sources": [
-            "0x01039638 copy0x38"
-          ]
-        },
-        {
-          "name": "capture",
-          "offset": 128,
-          "bytes": 56,
-          "sources": [
-            "0x01039638 copy0x38"
-          ]
-        },
-        {
-          "name": "optional-words",
-          "offset": 184,
-          "bytes": 12,
-          "sources": [
-            "0x01039638 source copied or three zero words"
-          ]
-        },
-        {
-          "name": "completion",
-          "offset": 196,
-          "bytes": 4,
-          "sources": [
-            "0x01039638 completion store"
-          ]
-        },
-        {
-          "name": "first",
-          "offset": 200,
-          "bytes": 4,
-          "sources": [
-            "0x01039638 argument store"
-          ]
-        },
-        {
-          "name": "second",
-          "offset": 204,
-          "bytes": 4,
-          "sources": [
-            "0x01039638 argument store"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 45,
-      "operation": 15617,
-      "bytes": 232,
-      "fields": [
-        {
-          "name": "parameter-record",
-          "offset": 0,
-          "bytes": 228,
-          "sources": [
-            "0x00f4c620: complete supplied record copied; all record bytes retained"
-          ]
-        },
-        {
-          "name": "completion",
-          "offset": 228,
-          "bytes": 4,
-          "sources": [
-            "0x00f4c620: callback word after copied record"
-          ]
-        }
-      ],
-      "padding": []
-    },
-    {
-      "direction": "outgoing",
-      "queue": 47,
-      "operation": 16166,
-      "bytes": 232,
-      "fields": [
-        {
-          "name": "completion",
-          "offset": 0,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x4",
-          "offset": 4,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x8",
-          "offset": 8,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xc",
-          "offset": 12,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x10",
-          "offset": 16,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x14",
-          "offset": 20,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x18",
-          "offset": 24,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x1c",
-          "offset": 28,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x20",
-          "offset": 32,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x24",
-          "offset": 36,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x28",
-          "offset": 40,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x2c",
-          "offset": 44,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x30",
-          "offset": 48,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x34",
-          "offset": 52,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x38",
-          "offset": 56,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x3c",
-          "offset": 60,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x40",
-          "offset": 64,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x44",
-          "offset": 68,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x48",
-          "offset": 72,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x4c",
-          "offset": 76,
-          "bytes": 2,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x4e",
-          "offset": 78,
-          "bytes": 1,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x50",
-          "offset": 80,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x54",
-          "offset": 84,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x58",
-          "offset": 88,
-          "bytes": 2,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x5a",
-          "offset": 90,
-          "bytes": 2,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x5c",
-          "offset": 92,
-          "bytes": 2,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x60",
-          "offset": 96,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x64",
-          "offset": 100,
-          "bytes": 2,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x68",
-          "offset": 104,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x6c",
-          "offset": 108,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x70",
-          "offset": 112,
-          "bytes": 2,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x72",
-          "offset": 114,
-          "bytes": 1,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x74",
-          "offset": 116,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x78",
-          "offset": 120,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x7c",
-          "offset": 124,
-          "bytes": 2,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x7e",
-          "offset": 126,
-          "bytes": 2,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x80",
-          "offset": 128,
-          "bytes": 2,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x84",
-          "offset": 132,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x88",
-          "offset": 136,
-          "bytes": 2,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x8c",
-          "offset": 140,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x90",
-          "offset": 144,
-          "bytes": 1,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x91",
-          "offset": 145,
-          "bytes": 1,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x92",
-          "offset": 146,
-          "bytes": 2,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x94",
-          "offset": 148,
-          "bytes": 2,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x96",
-          "offset": 150,
-          "bytes": 2,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x98",
-          "offset": 152,
-          "bytes": 2,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x9a",
-          "offset": 154,
-          "bytes": 2,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x9c",
-          "offset": 156,
-          "bytes": 2,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x9e",
-          "offset": 158,
-          "bytes": 1,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0x9f",
-          "offset": 159,
-          "bytes": 1,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xa0",
-          "offset": 160,
-          "bytes": 2,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xa2",
-          "offset": 162,
-          "bytes": 2,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xa4",
-          "offset": 164,
-          "bytes": 2,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xa6",
-          "offset": 166,
-          "bytes": 2,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xa8",
-          "offset": 168,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xac",
-          "offset": 172,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xb0",
-          "offset": 176,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xb4",
-          "offset": 180,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xb8",
-          "offset": 184,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xbc",
-          "offset": 188,
-          "bytes": 1,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xc4",
-          "offset": 196,
-          "bytes": 1,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xc5",
-          "offset": 197,
-          "bytes": 1,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xc8",
-          "offset": 200,
-          "bytes": 1,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xc9",
-          "offset": 201,
-          "bytes": 1,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xca",
-          "offset": 202,
-          "bytes": 1,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xd0",
-          "offset": 208,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xd4",
-          "offset": 212,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xd8",
-          "offset": 216,
-          "bytes": 2,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xda",
-          "offset": 218,
-          "bytes": 1,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xdb",
-          "offset": 219,
-          "bytes": 1,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xdc",
-          "offset": 220,
-          "bytes": 1,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xdd",
-          "offset": 221,
-          "bytes": 1,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xde",
-          "offset": 222,
-          "bytes": 1,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xdf",
-          "offset": 223,
-          "bytes": 1,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xe0",
-          "offset": 224,
-          "bytes": 1,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xe1",
-          "offset": 225,
-          "bytes": 1,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        },
-        {
-          "name": "field-0xe4",
-          "offset": 228,
-          "bytes": 4,
-          "sources": [
-            "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
-            "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
-          ]
-        }
-      ],
-      "padding": [
-        {
-          "offset": 79,
-          "bytes": 1,
-          "sources": [
-            "0x00f311b0 strb at r11-0xa6 defines payload78; 0x00f311bc next word at80; byte79 unwritten",
-            "0x00ff81a8..0x00ff81c0 copies control representation; 0x00ff833c ldrh and 0x00ff834c ldrb decode only value bytes at state0x40..0x42"
-          ]
-        },
-        {
-          "offset": 94,
-          "bytes": 2,
-          "sources": [
-            "0x00f31200 strh at r11-152 defines payload92..94; 0x00f3120c next word at96; bytes94..96 unwritten",
-            "0x00ff81a8..0x00ff81c0 copies representation; 0x00ff8384 reads state0x50 as halfword and 0x00ff8390 reads state0x54, skipping0x52..0x54"
-          ]
-        },
-        {
-          "offset": 102,
-          "bytes": 2,
-          "sources": [
-            "0x00f31218 strh at r11-144 defines payload100..102; 0x00f31228 next word at104",
-            "0x00ff83a0 ldrh reads state0x58; 0x00ff83ac reads state0x5c, skipping0x5a..0x5c"
-          ]
-        },
-        {
-          "offset": 115,
-          "bytes": 1,
-          "sources": [
-            "0x00f3124c strb at r11-0x82 defines payload114; 0x00f31258 next word at116",
-            "0x00ff81c8..0x00ff81e0 copies the secondary control representation; its fields have the same halfword/byte layout as the primary control"
-          ]
-        },
-        {
-          "offset": 130,
-          "bytes": 2,
-          "sources": [
-            "0x00f3129c strh at r11-116 defines payload128..130; 0x00f312a8 next word at132",
-            "Secondary control record: coordinate halfword at128, next int132; representation copy0x00ff81c8..0x00ff81e0"
-          ]
-        },
-        {
-          "offset": 138,
-          "bytes": 2,
-          "sources": [
-            "0x00f312b4 strh at r11-108 defines payload136..138; 0x00f312c4 next word at140",
-            "Secondary control record: bound halfword136, next int140; representation copy0x00ff81c8..0x00ff81e0"
-          ]
-        },
-        {
-          "offset": 189,
-          "bytes": 7,
-          "sources": [
-            "0x00f31064 strb at r11-0x38 defines payload188; 0x00f31074 next byte at196; bytes189..196 unwritten",
-            "0x00ff80e0..0x00ff80e8 copies request+0xc8..0xd4 to state+0x4c4c..0x4c58; 0x00ff82d0 control setup reads state+0x4c4c as byte; state+0x4c50 has no recovered value reader"
-          ]
-        },
-        {
-          "offset": 198,
-          "bytes": 2,
-          "sources": [
-            "0x00f3107c strb at r11-0x2f defines payload197; 0x00f31094 next byte at200",
-            "0x00ff80e0..0x00ff80e8 copies request+0xd0 word to state+0x4c54; 0x00ff82d0 consumers use bytes+0x4c54/+0x4c55 only"
-          ]
-        },
-        {
-          "offset": 203,
-          "bytes": 5,
-          "sources": [
-            "0x00f310b0 strb at r11-0x2a defines payload202; 0x00f30fac next word at208; clamp stores0x00f310bc/0x00f310c8 touch only201/202",
-            "0x00ff80f4..0x00ff8100 loads request+0xd4 and retains low halfword plus byte2 only; request+0xd8..0xdc is not decoded"
-          ]
-        },
-        {
-          "offset": 226,
-          "bytes": 2,
-          "sources": [
-            "0x00f31368 strb at r11-0x13 defines payload225; 0x00f31088 word at228; bytes226..228 unwritten",
-            "0x00ff802c request-field decode uses individual bytes through request+0xec and next word request+0xf0, not request+0xee/+0xef"
-          ]
-        }
-      ]
-    },
-    {
-      "direction": "outgoing",
-      "queue": 47,
-      "operation": 16214,
-      "bytes": 68,
-      "fields": [
-        { "name": "record-parameters", "offset": 0, "bytes": 20, "sources": ["X-M1 1.50 id5 0xefbec0..0xefbee0 initializes record words0..3 and halfwords8..9"] },
-        { "name": "record-source-and-sample", "offset": 24, "bytes": 24, "sources": ["X-M1 1.50 id5 0xefbee4..0xefbf28 initializes source, constants100/16 and the16-byte sample"] },
-        { "name": "completion", "offset": 64, "bytes": 4, "sources": ["X-M1 1.50 id5 0xfeae24 stores callback at payload64 before posting0x3f56 with68 bytes at0xfeae34..0xfeae40"] }
-      ],
-      "padding": [
-        { "offset": 20, "bytes": 4, "sources": ["X-M1 1.50 id5 0xefbedc..0xefbef8: the halfword at record18 is followed by the word at record24; record20..23 has no store"] },
-        { "offset": 48, "bytes": 16, "sources": ["X-M1 1.50 id5 0xefbf28 is the last record store at44;0xefbf4c submits the record;0xfeae2c copies64 bytes"] }
-      ]
-    },
-    {
-      "direction": "outgoing",
-      "queue": 47,
-      "operation": 16215,
-      "bytes": 20,
-      "fields": [
-        { "name": "exposure-and-value", "offset": 0, "bytes": 8, "sources": ["X-M1 1.50 id5 0xfeae5c..0xfeae60 stores duration and value"] },
-        { "name": "position", "offset": 8, "bytes": 2, "sources": ["X-M1 1.50 id5 0xfeae64 stores the position halfword"] },
-        { "name": "auxiliary-and-completion", "offset": 12, "bytes": 8, "sources": ["X-M1 1.50 id5 0xfeae68..0xfeae6c stores auxiliary;0xfeae58 stores callback at16;0xfeae70..0xfeae7c posts0x3f57 with20 bytes"] }
-      ],
-      "padding": [
-        { "offset": 10, "bytes": 2, "sources": ["X-M1 1.50 id5 0xfeae64 halfword at8 is followed by0xfeae6c word at12; bytes10..11 have no store"] }
-      ]
-    },
-    {
-      "direction": "outgoing",
-      "queue": 47,
-      "operation": 16201,
-      "bytes": 176,
-      "fields": [
-        { "name": "completion", "offset": 0, "bytes": 4, "sources": ["X-M1 1.50 id5 0xfeac0c stores r0 at payload0; 0xefc1cc supplies0xefbda4"] },
-        { "name": "auxiliary", "offset": 4, "bytes": 4, "sources": ["X-M1 1.50 id5 0xfeac14 stores r2 at payload4; 0xefc1dc supplies auxiliary callback0xefbbdc in r2"] },
-        { "name": "sample", "offset": 8, "bytes": 4, "sources": ["X-M1 1.50 id5 0xfeac10 stores r1 at payload8; 0xefc1d4 supplies sample callback0xefbd24 in r1"] },
-        { "name": "reserved-header-a", "offset": 12, "bytes": 4, "sources": ["X-M1 1.50 id5 0xfeac18 stores r3 at12; 0xefc1c0..0xefc1c8 leaves r3 zero"] },
-        { "name": "progress", "offset": 16, "bytes": 4, "sources": ["X-M1 1.50 id5 0xfeac1c..0xfeac20 stores the first stacked callback at16"] },
-        { "name": "reserved-header-b", "offset": 20, "bytes": 4, "sources": ["X-M1 1.50 id5 0xfeac24..0xfeac28 stores the second stacked argument at20; 0xefc1c0 supplies zero"] },
-        { "name": "primary-source", "offset": 24, "bytes": 16, "sources": ["X-M1 1.50 id5 0xefc110..0xefc12c copies20 bytes at body0 and20 bytes at body16, overwriting the first source length"] },
-        { "name": "secondary-source", "offset": 40, "bytes": 16, "sources": ["X-M1 1.50 id5 0xefc120..0xefc12c copies second source at body16; channel store0xefc0b0 replaces its last word at body32"] },
-        { "name": "source-channel", "offset": 56, "bytes": 4, "sources": ["X-M1 1.50 id5 0xefc0b0 stores channel at body32"] },
-        { "name": "source-dimensions", "offset": 60, "bytes": 4, "sources": ["X-M1 1.50 id5 0xefc0b8..0xefc0bc stores halfwords at body36/38"] },
-        { "name": "reserved-source", "offset": 64, "bytes": 20, "sources": ["X-M1 1.50 id5 0xefbf80..0xefbf8c zeroes152 bytes; body40..60 remains zero"] },
-        { "name": "policy-dimensions", "offset": 84, "bytes": 4, "sources": ["X-M1 1.50 id5 0xefc004..0xefc00c writes body60/62 via0xef64f4"] },
-        { "name": "reserved-policy", "offset": 88, "bytes": 8, "sources": ["X-M1 1.50 id5 0xefbff4..0xefbff8 zeroes body64/68"] },
-        { "name": "record-kind", "offset": 96, "bytes": 4, "sources": ["X-M1 1.50 id5 0xefbffc..0xefc000 stores2 at body72"] },
-        { "name": "channel", "offset": 100, "bytes": 4, "sources": ["X-M1 1.50 id5 0xefc054 stores body76"] },
-        { "name": "policy", "offset": 104, "bytes": 4, "sources": ["X-M1 1.50 id5 0xefc0c0..0xefc0c4 stores body80"] },
-        { "name": "reserved-before-auxiliary", "offset": 108, "bytes": 8, "sources": ["X-M1 1.50 id5 0xefbf8c initial zero and0xefc0f4 store body88"] },
-        { "name": "auxiliary-value", "offset": 116, "bytes": 4, "sources": ["X-M1 1.50 id5 0xefc0f8..0xefc0fc stores body92"] },
-        { "name": "reserved-after-auxiliary", "offset": 120, "bytes": 8, "sources": ["X-M1 1.50 id5 0xefc100 and0xefc188 zero body96/100"] },
-        { "name": "scale", "offset": 128, "bytes": 4, "sources": ["X-M1 1.50 id5 0xefc168..0xefc174 stores halfwords100 and16 at body104/106"] },
-        { "name": "reserved-before-position", "offset": 132, "bytes": 4, "sources": ["X-M1 1.50 id5 0xefbf8c initial zero and0xefc03c zero at body110"] },
-        { "name": "position", "offset": 136, "bytes": 2, "sources": ["X-M1 1.50 id5 0xefc040 stores body112"] },
-        { "name": "reserved-after-position", "offset": 138, "bytes": 2, "sources": ["X-M1 1.50 id5 0xefc058 stores zero at body114"] },
-        { "name": "converted-dimensions", "offset": 140, "bytes": 10, "sources": ["X-M1 1.50 id5 0xefc05c..0xefc0ac writes width, limited height, excess, combined limited height and combined excess at body116..126"] },
-        { "name": "reserved-before-position-code", "offset": 150, "bytes": 11, "sources": ["X-M1 1.50 id5 0xefbf8c initializes body126..137; explicit zeros0xefc010..0xefc038"] },
-        { "name": "position-code", "offset": 161, "bytes": 1, "sources": ["X-M1 1.50 id5 0xefc050 stores converter output at body137"] },
-        { "name": "source-option", "offset": 162, "bytes": 1, "sources": ["X-M1 1.50 id5 0xefc130..0xefc134 stores low source-option byte at body138"] },
-        { "name": "reserved-option", "offset": 163, "bytes": 1, "sources": ["X-M1 1.50 id5 0xefc178..0xefc17c stores zero at body139"] },
-        { "name": "option", "offset": 164, "bytes": 1, "sources": ["X-M1 1.50 id5 0xefc0c8..0xefc0cc stores body140"] },
-        { "name": "policy-enabled", "offset": 165, "bytes": 1, "sources": ["X-M1 1.50 id5 0xefc104..0xefc10c stores policy result at body141"] },
-        { "name": "multiple-frames", "offset": 166, "bytes": 1, "sources": ["X-M1 1.50 id5 0xefc0d8..0xefc0e8 stores argument>1 at body142"] },
-        { "name": "reserved-mode", "offset": 167, "bytes": 4, "sources": ["X-M1 1.50 id5 0xefbf8c initialization and0xefc0d0..0xefc0d4 zeros at body143/144"] },
-        { "name": "ordinary-mode", "offset": 171, "bytes": 1, "sources": ["X-M1 1.50 id5 0xefbf90..0xefbf9c and0xefc0ec..0xefc0f0 stores mode!=6 at body147"] },
-        { "name": "enabled", "offset": 172, "bytes": 1, "sources": ["X-M1 1.50 id5 0xefc180..0xefc184 stores1 at body148"] },
-        { "name": "reserved-tail", "offset": 173, "bytes": 3, "sources": ["X-M1 1.50 id5 0xefbf8c initialization and0xefc18c zero at body149"] }
-      ],
-      "padding": []
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "tu_00defaf4.c: record_send_task_message 0x139a after explicit scalar argument stores"
+     ]
     }
-  ]
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 10,
+   "operation": 6670,
+   "bytes": 4,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "platform/osal/service_requests.c: initialized unsigned-int payload array for 0x1a0e"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 3,
+   "operation": 15105,
+   "bytes": 4,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 47,
+   "operation": 15167,
+   "bytes": 4,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 47,
+   "operation": 15168,
+   "bytes": 4,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 47,
+   "operation": 15169,
+   "bytes": 4,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 47,
+   "operation": 15170,
+   "bytes": 4,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 47,
+   "operation": 15178,
+   "bytes": 4,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 48,
+   "operation": 15209,
+   "bytes": 4,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 48,
+   "operation": 15211,
+   "bytes": 4,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5019,
+   "bytes": 8,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "tu_00defaf4.c: record_send_task_message 0x139b after explicit scalar argument stores"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "tu_00defaf4.c: record_send_task_message 0x139b after explicit scalar argument stores"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 10,
+   "operation": 6669,
+   "bytes": 8,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "platform/osal/service_requests.c: initialized unsigned-int payload array for 0x1a0d"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "platform/osal/service_requests.c: initialized unsigned-int payload array for 0x1a0d"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16167,
+   "bytes": 8,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Exact capture_request_wrappers_rest.c capture_send_event_3f2a0x00fea4d0: both int fields assigned; opcode0x3f27 length8"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "Exact capture_request_wrappers_rest.c capture_send_event_3f2a0x00fea4d0: both int fields assigned; opcode0x3f27 length8"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 50,
+   "operation": 16916,
+   "bytes": 8,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "drivers/lens/control/tu_0076f044.c: both words assigned before send_payload_first_result(0x4214,2,words)"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "drivers/lens/control/tu_0076f044.c: both words assigned before send_payload_first_result(0x4214,2,words)"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 50,
+   "operation": 15152,
+   "bytes": 8,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 47,
+   "operation": 15179,
+   "bytes": 8,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 45,
+   "operation": 15239,
+   "bytes": 8,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 45,
+   "operation": 15240,
+   "bytes": 8,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 45,
+   "operation": 15242,
+   "bytes": 8,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 44,
+   "operation": 15245,
+   "bytes": 8,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5017,
+   "bytes": 12,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "tu_00defaf4.c: record_send_task_message 0x1399 after explicit scalar argument stores"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "tu_00defaf4.c: record_send_task_message 0x1399 after explicit scalar argument stores"
+     ]
+    },
+    {
+     "name": "word-2",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "tu_00defaf4.c: record_send_task_message 0x1399 after explicit scalar argument stores"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16147,
+   "bytes": 12,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Exact capture_request_wrappers_rest.c capture_send_event_3f14: three explicit int stores; opcode0x3f13 length12"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "Exact capture_request_wrappers_rest.c capture_send_event_3f14: three explicit int stores; opcode0x3f13 length12"
+     ]
+    },
+    {
+     "name": "word-2",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "Exact capture_request_wrappers_rest.c capture_send_event_3f14: three explicit int stores; opcode0x3f13 length12"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 48,
+   "operation": 16391,
+   "bytes": 12,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "tu_01039638.c operation_send_command_4007: all three argument words assigned before post"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "tu_01039638.c operation_send_command_4007: all three argument words assigned before post"
+     ]
+    },
+    {
+     "name": "word-2",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "tu_01039638.c operation_send_command_4007: all three argument words assigned before post"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 3,
+   "operation": 15109,
+   "bytes": 12,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-2",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 3,
+   "operation": 15141,
+   "bytes": 12,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-2",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5029,
+   "bytes": 16,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Exact record_message_wrappers.c record_send_words_13a5: explicit int stores before post"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "Exact record_message_wrappers.c record_send_words_13a5: explicit int stores before post"
+     ]
+    },
+    {
+     "name": "word-2",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "Exact record_message_wrappers.c record_send_words_13a5: explicit int stores before post"
+     ]
+    },
+    {
+     "name": "word-3",
+     "offset": 12,
+     "bytes": 4,
+     "sources": [
+      "Exact record_message_wrappers.c record_send_words_13a5: explicit int stores before post"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5060,
+   "bytes": 16,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00df6ad8: four source words or four initialized fallback words, 16-byte payload"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "0x00df6ad8: four source words or four initialized fallback words, 16-byte payload"
+     ]
+    },
+    {
+     "name": "word-2",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "0x00df6ad8: four source words or four initialized fallback words, 16-byte payload"
+     ]
+    },
+    {
+     "name": "word-3",
+     "offset": 12,
+     "bytes": 4,
+     "sources": [
+      "0x00df6ad8: four source words or four initialized fallback words, 16-byte payload"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5062,
+   "bytes": 16,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00df6b80..0x00df6bac: four source loads, four stack stores, 16-byte payload"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "0x00df6b80..0x00df6bac: four source loads, four stack stores, 16-byte payload"
+     ]
+    },
+    {
+     "name": "word-2",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "0x00df6b80..0x00df6bac: four source loads, four stack stores, 16-byte payload"
+     ]
+    },
+    {
+     "name": "word-3",
+     "offset": 12,
+     "bytes": 4,
+     "sources": [
+      "0x00df6b80..0x00df6bac: four source loads, four stack stores, 16-byte payload"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16150,
+   "bytes": 16,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "tu_00fea36c.c FUN_00fea468: four arguments stored before post0x3f16 length16"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "tu_00fea36c.c FUN_00fea468: four arguments stored before post0x3f16 length16"
+     ]
+    },
+    {
+     "name": "word-2",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "tu_00fea36c.c FUN_00fea468: four arguments stored before post0x3f16 length16"
+     ]
+    },
+    {
+     "name": "word-3",
+     "offset": 12,
+     "bytes": 4,
+     "sources": [
+      "tu_00fea36c.c FUN_00fea468: four arguments stored before post0x3f16 length16"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 50,
+   "operation": 16899,
+   "bytes": 16,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "drivers/lens/control/lens_control_missed_requests.c: explicit scalar fields before TASK_MESSAGE_PREPARE 0x4203"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "drivers/lens/control/lens_control_missed_requests.c: explicit scalar fields before TASK_MESSAGE_PREPARE 0x4203"
+     ]
+    },
+    {
+     "name": "word-2",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "drivers/lens/control/lens_control_missed_requests.c: explicit scalar fields before TASK_MESSAGE_PREPARE 0x4203"
+     ]
+    },
+    {
+     "name": "word-3",
+     "offset": 12,
+     "bytes": 4,
+     "sources": [
+      "drivers/lens/control/lens_control_missed_requests.c: explicit scalar fields before TASK_MESSAGE_PREPARE 0x4203"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 50,
+   "operation": 15151,
+   "bytes": 16,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-2",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-3",
+     "offset": 12,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 50,
+   "operation": 15154,
+   "bytes": 16,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-2",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-3",
+     "offset": 12,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5020,
+   "bytes": 20,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Exact record_message_wrappers.c record_send_words_139c: explicit int stores before post"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "Exact record_message_wrappers.c record_send_words_139c: explicit int stores before post"
+     ]
+    },
+    {
+     "name": "word-2",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "Exact record_message_wrappers.c record_send_words_139c: explicit int stores before post"
+     ]
+    },
+    {
+     "name": "word-3",
+     "offset": 12,
+     "bytes": 4,
+     "sources": [
+      "Exact record_message_wrappers.c record_send_words_139c: explicit int stores before post"
+     ]
+    },
+    {
+     "name": "word-4",
+     "offset": 16,
+     "bytes": 4,
+     "sources": [
+      "Exact record_message_wrappers.c record_send_words_139c: explicit int stores before post"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5021,
+   "bytes": 20,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Exact record_message_wrappers.c record_send_words_139d: explicit int stores before post"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "Exact record_message_wrappers.c record_send_words_139d: explicit int stores before post"
+     ]
+    },
+    {
+     "name": "word-2",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "Exact record_message_wrappers.c record_send_words_139d: explicit int stores before post"
+     ]
+    },
+    {
+     "name": "word-3",
+     "offset": 12,
+     "bytes": 4,
+     "sources": [
+      "Exact record_message_wrappers.c record_send_words_139d: explicit int stores before post"
+     ]
+    },
+    {
+     "name": "word-4",
+     "offset": 16,
+     "bytes": 4,
+     "sources": [
+      "Exact record_message_wrappers.c record_send_words_139d: explicit int stores before post"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 3,
+   "operation": 15107,
+   "bytes": 24,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-2",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-3",
+     "offset": 12,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-4",
+     "offset": 16,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-5",
+     "offset": 20,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 3,
+   "operation": 15108,
+   "bytes": 24,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-2",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-3",
+     "offset": 12,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-4",
+     "offset": 16,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-5",
+     "offset": 20,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 50,
+   "operation": 16898,
+   "bytes": 28,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "drivers/lens/control/lens_control_missed_requests.c: explicit scalar fields before TASK_MESSAGE_PREPARE 0x4202"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "drivers/lens/control/lens_control_missed_requests.c: explicit scalar fields before TASK_MESSAGE_PREPARE 0x4202"
+     ]
+    },
+    {
+     "name": "word-2",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "drivers/lens/control/lens_control_missed_requests.c: explicit scalar fields before TASK_MESSAGE_PREPARE 0x4202"
+     ]
+    },
+    {
+     "name": "word-3",
+     "offset": 12,
+     "bytes": 4,
+     "sources": [
+      "drivers/lens/control/lens_control_missed_requests.c: explicit scalar fields before TASK_MESSAGE_PREPARE 0x4202"
+     ]
+    },
+    {
+     "name": "word-4",
+     "offset": 16,
+     "bytes": 4,
+     "sources": [
+      "drivers/lens/control/lens_control_missed_requests.c: explicit scalar fields before TASK_MESSAGE_PREPARE 0x4202"
+     ]
+    },
+    {
+     "name": "word-5",
+     "offset": 20,
+     "bytes": 4,
+     "sources": [
+      "drivers/lens/control/lens_control_missed_requests.c: explicit scalar fields before TASK_MESSAGE_PREPARE 0x4202"
+     ]
+    },
+    {
+     "name": "word-6",
+     "offset": 24,
+     "bytes": 4,
+     "sources": [
+      "drivers/lens/control/lens_control_missed_requests.c: explicit scalar fields before TASK_MESSAGE_PREPARE 0x4202"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 3,
+   "operation": 15106,
+   "bytes": 28,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-2",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-3",
+     "offset": 12,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-4",
+     "offset": 16,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-5",
+     "offset": 20,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    },
+    {
+     "name": "word-6",
+     "offset": 24,
+     "bytes": 4,
+     "sources": [
+      "Queue descriptor0x0072503c: complete scalar words retained; no bytes excluded"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 3,
+   "operation": 15127,
+   "bytes": 40,
+   "fields": [
+    {
+     "name": "completion",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00ef9510 scalar store"
+     ]
+    },
+    {
+     "name": "argument-1",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "0x00ef9510 scalar store"
+     ]
+    },
+    {
+     "name": "argument-2",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "0x00ef9510 scalar store"
+     ]
+    },
+    {
+     "name": "selection-record",
+     "offset": 12,
+     "bytes": 28,
+     "sources": [
+      "0x00ef9510 copy0x1c before post0x17 length0x28"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5054,
+   "bytes": 44,
+   "fields": [
+    {
+     "name": "start",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "Exact record_send_timing_range0x00def72c: start"
+     ]
+    },
+    {
+     "name": "start-index",
+     "offset": 4,
+     "bytes": 2,
+     "sources": [
+      "Exact record_send_timing_range0x00def72c: short start_index"
+     ]
+    },
+    {
+     "name": "end",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "Exact record_send_timing_range0x00def72c: end"
+     ]
+    },
+    {
+     "name": "end-index",
+     "offset": 12,
+     "bytes": 2,
+     "sources": [
+      "Exact record_send_timing_range0x00def72c: short end_index"
+     ]
+    },
+    {
+     "name": "values",
+     "offset": 16,
+     "bytes": 16,
+     "sources": [
+      "Exact record_send_timing_range0x00def72c: four int stores"
+     ]
+    },
+    {
+     "name": "limits",
+     "offset": 32,
+     "bytes": 8,
+     "sources": [
+      "Exact record_send_timing_range0x00def72c: four short stores"
+     ]
+    },
+    {
+     "name": "flags",
+     "offset": 40,
+     "bytes": 4,
+     "sources": [
+      "Exact record_send_timing_range0x00def72c: int flags"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 6,
+     "bytes": 2,
+     "sources": [
+      "Exact record_message_wrappers.c timing_range_message: short4, int8; field-only constructor leaves gap6..8",
+      "Retained reccont timing range consumes short indices and int values"
+     ]
+    },
+    {
+     "offset": 14,
+     "bytes": 2,
+     "sources": [
+      "Exact record_message_wrappers.c timing_range_message: short12, int16; field-only constructor leaves gap14..16",
+      "Retained reccont timing range consumes short indices and int values"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 44,
+   "operation": 15372,
+   "bytes": 80,
+   "fields": [
+    {
+     "name": "mode-value-and-position",
+     "offset": 0,
+     "bytes": 10,
+     "sources": [
+      "X-M1 1.50 id5 0xf3a584 str at r11-0x58, 0xf3a648 str at r11-0x54 and 0xf3a5fc/0xf3a620 strh at r11-0x50 define request0..9; 0xf4c6e8 copies the 76-byte record from r11-0x58"
+     ]
+    },
+    {
+     "name": "pipeline-word-and-byte",
+     "offset": 12,
+     "bytes": 5,
+     "sources": [
+      "X-M1 1.50 id5 0xf3a60c str at r11-0x4c and 0xf3a614 strb at r11-0x48 define request12..16"
+     ]
+    },
+    {
+     "name": "pipeline-values",
+     "offset": 20,
+     "bytes": 8,
+     "sources": [
+      "X-M1 1.50 id5 0xf3a5a8 str at r11-0x44, 0xf3a5bc strh at r11-0x40 and 0xf3a5d8 strh at r11-0x3e define request20..27"
+     ]
+    },
+    {
+     "name": "record-halfword",
+     "offset": 32,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0xf3a654 strh at r11-0x38 defines request32..33"
+     ]
+    },
+    {
+     "name": "buffer-and-state",
+     "offset": 36,
+     "bytes": 40,
+     "sources": [
+      "X-M1 1.50 id5 word stores at r11-0x34..r11-0x10 between 0xf3a604 and 0xf3a6c8 define request36..75"
+     ]
+    },
+    {
+     "name": "completion",
+     "offset": 76,
+     "bytes": 4,
+     "sources": [
+      "0x00f4c6e8: callback word after copied record"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 10,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0xf3a564..0xf3a73c: request8..9 is a halfword and no store reaches r11-0x4e..r11-0x4d"
+     ]
+    },
+    {
+     "offset": 17,
+     "bytes": 3,
+     "sources": [
+      "X-M1 1.50 id5 0xf3a564..0xf3a73c: request16 is a byte and no store reaches r11-0x47..r11-0x45"
+     ]
+    },
+    {
+     "offset": 28,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0xf3a564..0xf3a73c: no store reaches r11-0x3c..r11-0x39"
+     ]
+    },
+    {
+     "offset": 34,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0xf3a564..0xf3a73c: request32..33 is a halfword and no store reaches r11-0x36..r11-0x35"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 45,
+   "operation": 15618,
+   "bytes": 128,
+   "fields": [
+    {
+     "name": "parameter-record",
+     "offset": 0,
+     "bytes": 124,
+     "sources": [
+      "0x00f4c490: complete supplied record copied; all record bytes retained"
+     ]
+    },
+    {
+     "name": "completion",
+     "offset": 124,
+     "bytes": 4,
+     "sources": [
+      "0x00f4c490: callback word after copied record"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 3,
+   "operation": 15117,
+   "bytes": 160,
+   "fields": [
+    {
+     "name": "completion",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00ef9264 callback store"
+     ]
+    },
+    {
+     "name": "header-record",
+     "offset": 8,
+     "bytes": 144,
+     "sources": [
+      "0x00ef9264 copy0x90 and time adjustment"
+     ]
+    },
+    {
+     "name": "argument-2",
+     "offset": 152,
+     "bytes": 4,
+     "sources": [
+      "0x00ef9264 trailing argument store"
+     ]
+    },
+    {
+     "name": "argument-3",
+     "offset": 156,
+     "bytes": 4,
+     "sources": [
+      "0x00ef9264 trailing argument store"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "0x00ef9264 sender transmits callback then 8-byte-aligned header; interposed word unwritten",
+      "Retained command0x0d block0x0169d128: callback0, header8, trailing values0x98/0x9c"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "incoming",
+   "queue": 3,
+   "operation": 15104,
+   "bytes": 168,
+   "fields": [
+    {
+     "name": "completion",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00ef8e20"
+     ]
+    },
+    {
+     "name": "source",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "0x00ef8e24"
+     ]
+    },
+    {
+     "name": "header-record",
+     "offset": 8,
+     "bytes": 144,
+     "sources": [
+      "0x00ef8dd0..0x00ef8ddc copy144; 0x00ef8de0..0x00ef8e0c time adjustment"
+     ]
+    },
+    {
+     "name": "mode",
+     "offset": 152,
+     "bytes": 4,
+     "sources": [
+      "0x00ef8e28"
+     ]
+    },
+    {
+     "name": "configuration",
+     "offset": 156,
+     "bytes": 4,
+     "sources": [
+      "0x00ef8e2c..0x00ef8e30"
+     ]
+    },
+    {
+     "name": "resource",
+     "offset": 160,
+     "bytes": 4,
+     "sources": [
+      "0x00ef8e34..0x00ef8e38"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 164,
+     "bytes": 4,
+     "sources": [
+      "0x00ef8db4..0x00ef8e48: transmitted stack span[r11-188,r11-20); final store[r11-28,r11-24); last word unwritten",
+      "0x00ef9b18 accessor; 0x00efa1c8 reads callback0; 0x00f14718 configuration reads through0xa0; no tail0xa4 field"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 45,
+   "operation": 15616,
+   "bytes": 172,
+   "fields": [
+    {
+     "name": "parameter-record",
+     "offset": 0,
+     "bytes": 168,
+     "sources": [
+      "0x00f4c584: complete supplied record copied; all record bytes retained"
+     ]
+    },
+    {
+     "name": "completion",
+     "offset": 168,
+     "bytes": 4,
+     "sources": [
+      "0x00f4c584: callback word after copied record"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 48,
+   "operation": 16386,
+   "bytes": 208,
+   "fields": [
+    {
+     "name": "setup",
+     "offset": 0,
+     "bytes": 16,
+     "sources": [
+      "0x01039638/start_copy_blocks copy0x10"
+     ]
+    },
+    {
+     "name": "format-values",
+     "offset": 16,
+     "bytes": 16,
+     "sources": [
+      "0xf3b60c/614 writes format halfwords8/10 and0xf3b620 writes word12; zero branch0xf3b650/658 writes words4/0, nonzero branch0xf3b694 calls dimensions decoder0xdca798"
+     ]
+    },
+    {
+     "name": "format-selector",
+     "offset": 32,
+     "bytes": 4,
+     "sources": [
+      "0xf3b648 writes 0/1 on zero branch; 0xf3b688 writes 8/9 on nonzero branch"
+     ]
+    },
+    {
+     "name": "format-word-5",
+     "offset": 36,
+     "bytes": 4,
+     "sources": [
+      "0xf3b674 defines format word5 on nonzero branch; 0x10324e8 copies it to state+0x44b4, read as a value at 0x1029808,0x102cb64,0x103f404"
+     ],
+     "excluded_when": {
+      "offset": 32,
+      "bytes": 4,
+      "values": [
+       0,
+       1
+      ],
+      "sources": [
+       "0xf3b628..0xf3b65c zero branch returns without writing word5; selector0/1 identifies this branch; stock defect: owned sender must define word5 when sending machine becomes owned"
+      ]
+     }
+    },
+    {
+     "name": "window",
+     "offset": 40,
+     "bytes": 16,
+     "sources": [
+      "0x01039638 copy0x10"
+     ]
+    },
+    {
+     "name": "output",
+     "offset": 56,
+     "bytes": 16,
+     "sources": [
+      "0x01039638 copy0x10"
+     ]
+    },
+    {
+     "name": "exposure",
+     "offset": 72,
+     "bytes": 56,
+     "sources": [
+      "0x01039638 copy0x38"
+     ]
+    },
+    {
+     "name": "capture-words",
+     "offset": 128,
+     "bytes": 20,
+     "sources": [
+      "0xf3b9f8,0xf3ba04,0xf3ba1c,0xf3ba28,0xf3ba34 define capture words0..4"
+     ]
+    },
+    {
+     "name": "capture-options",
+     "offset": 157,
+     "bytes": 5,
+     "sources": [
+      "0xf3ba10,0xf3ba40,0xf3ba4c,0xf3ba58,0xf3ba64 store capture bytes29..33"
+     ]
+    },
+    {
+     "name": "capture-dimensions",
+     "offset": 164,
+     "bytes": 16,
+     "sources": [
+      "0xf3bad8,0xf3baf0,0xf3baf4,0xf3baf8 store capture words9..12"
+     ]
+    },
+    {
+     "name": "capture-policy",
+     "offset": 180,
+     "bytes": 2,
+     "sources": [
+      "0xf3bb04 stores only halfword at capture+52"
+     ]
+    },
+    {
+     "name": "optional-words",
+     "offset": 184,
+     "bytes": 12,
+     "sources": [
+      "0x01039638 source copied or three zero words"
+     ]
+    },
+    {
+     "name": "completion",
+     "offset": 196,
+     "bytes": 4,
+     "sources": [
+      "0x01039638 completion store"
+     ]
+    },
+    {
+     "name": "first",
+     "offset": 200,
+     "bytes": 4,
+     "sources": [
+      "0x01039638 argument store"
+     ]
+    },
+    {
+     "name": "second",
+     "offset": 204,
+     "bytes": 4,
+     "sources": [
+      "0x01039638 argument store"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 148,
+     "bytes": 9,
+     "sources": [
+      "0xf3b9d8..0xf3bb0c writes capture0..19 then29..33; capture20..28 never written"
+     ]
+    },
+    {
+     "offset": 162,
+     "bytes": 2,
+     "sources": [
+      "0xf3ba64 stores capture byte33, next store is word36; bytes34/35 never written"
+     ]
+    },
+    {
+     "offset": 182,
+     "bytes": 2,
+     "sources": [
+      "0xf3bb04 stores capture halfword52 then returns at0xf3bb0c without writing54/55; 0xf3bd8c supplies this record to0x1039638, whose block copy retains these unwritten bytes"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 45,
+   "operation": 15617,
+   "bytes": 232,
+   "fields": [
+    {
+     "name": "parameter-record",
+     "offset": 0,
+     "bytes": 228,
+     "sources": [
+      "0x00f4c620: complete supplied record copied; all record bytes retained"
+     ]
+    },
+    {
+     "name": "completion",
+     "offset": 228,
+     "bytes": 4,
+     "sources": [
+      "0x00f4c620: callback word after copied record"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16166,
+   "bytes": 232,
+   "fields": [
+    {
+     "name": "completion",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x4",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x8",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xc",
+     "offset": 12,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x10",
+     "offset": 16,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x14",
+     "offset": 20,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x18",
+     "offset": 24,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x1c",
+     "offset": 28,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x20",
+     "offset": 32,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x24",
+     "offset": 36,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x28",
+     "offset": 40,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x2c",
+     "offset": 44,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x30",
+     "offset": 48,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x34",
+     "offset": 52,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x38",
+     "offset": 56,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x3c",
+     "offset": 60,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x40",
+     "offset": 64,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x44",
+     "offset": 68,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x48",
+     "offset": 72,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x4c",
+     "offset": 76,
+     "bytes": 2,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x4e",
+     "offset": 78,
+     "bytes": 1,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x50",
+     "offset": 80,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x54",
+     "offset": 84,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x58",
+     "offset": 88,
+     "bytes": 2,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x5a",
+     "offset": 90,
+     "bytes": 2,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x5c",
+     "offset": 92,
+     "bytes": 2,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x60",
+     "offset": 96,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x64",
+     "offset": 100,
+     "bytes": 2,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x68",
+     "offset": 104,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x6c",
+     "offset": 108,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x70",
+     "offset": 112,
+     "bytes": 2,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x72",
+     "offset": 114,
+     "bytes": 1,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x74",
+     "offset": 116,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x78",
+     "offset": 120,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x7c",
+     "offset": 124,
+     "bytes": 2,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x7e",
+     "offset": 126,
+     "bytes": 2,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x80",
+     "offset": 128,
+     "bytes": 2,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x84",
+     "offset": 132,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x88",
+     "offset": 136,
+     "bytes": 2,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x8c",
+     "offset": 140,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x90",
+     "offset": 144,
+     "bytes": 1,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x91",
+     "offset": 145,
+     "bytes": 1,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x92",
+     "offset": 146,
+     "bytes": 2,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x94",
+     "offset": 148,
+     "bytes": 2,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x96",
+     "offset": 150,
+     "bytes": 2,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x98",
+     "offset": 152,
+     "bytes": 2,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x9a",
+     "offset": 154,
+     "bytes": 2,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x9c",
+     "offset": 156,
+     "bytes": 2,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x9e",
+     "offset": 158,
+     "bytes": 1,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0x9f",
+     "offset": 159,
+     "bytes": 1,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xa0",
+     "offset": 160,
+     "bytes": 2,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xa2",
+     "offset": 162,
+     "bytes": 2,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xa4",
+     "offset": 164,
+     "bytes": 2,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xa6",
+     "offset": 166,
+     "bytes": 2,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xa8",
+     "offset": 168,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xac",
+     "offset": 172,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xb0",
+     "offset": 176,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xb4",
+     "offset": 180,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xb8",
+     "offset": 184,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xbc",
+     "offset": 188,
+     "bytes": 1,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xc4",
+     "offset": 196,
+     "bytes": 1,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xc5",
+     "offset": 197,
+     "bytes": 1,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xc8",
+     "offset": 200,
+     "bytes": 1,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xc9",
+     "offset": 201,
+     "bytes": 1,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xca",
+     "offset": 202,
+     "bytes": 1,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xd0",
+     "offset": 208,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xd4",
+     "offset": 212,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xd8",
+     "offset": 216,
+     "bytes": 2,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xda",
+     "offset": 218,
+     "bytes": 1,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xdb",
+     "offset": 219,
+     "bytes": 1,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xdc",
+     "offset": 220,
+     "bytes": 1,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xdd",
+     "offset": 221,
+     "bytes": 1,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xde",
+     "offset": 222,
+     "bytes": 1,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xdf",
+     "offset": 223,
+     "bytes": 1,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xe0",
+     "offset": 224,
+     "bytes": 1,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xe1",
+     "offset": 225,
+     "bytes": 1,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    },
+    {
+     "name": "field-0xe4",
+     "offset": 228,
+     "bytes": 4,
+     "sources": [
+      "0x00fea4a8 callback store; 0x00fea4ac..0x00fea4b4 copies caller record0xe4 bytes from f30f64 frame[r11-0xf0,r11-0xc)",
+      "0x00f30f64..0x00f3153c: field-width stores, payload offset=0xf4 minus caller r11-relative displacement; 0x00ff802c consumer decode"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 79,
+     "bytes": 1,
+     "sources": [
+      "0x00f311b0 strb at r11-0xa6 defines payload78; 0x00f311bc next word at80; byte79 unwritten",
+      "0x00ff81a8..0x00ff81c0 copies control representation; 0x00ff833c ldrh and 0x00ff834c ldrb decode only value bytes at state0x40..0x42"
+     ]
+    },
+    {
+     "offset": 94,
+     "bytes": 2,
+     "sources": [
+      "0x00f31200 strh at r11-152 defines payload92..94; 0x00f3120c next word at96; bytes94..96 unwritten",
+      "0x00ff81a8..0x00ff81c0 copies representation; 0x00ff8384 reads state0x50 as halfword and 0x00ff8390 reads state0x54, skipping0x52..0x54"
+     ]
+    },
+    {
+     "offset": 102,
+     "bytes": 2,
+     "sources": [
+      "0x00f31218 strh at r11-144 defines payload100..102; 0x00f31228 next word at104",
+      "0x00ff83a0 ldrh reads state0x58; 0x00ff83ac reads state0x5c, skipping0x5a..0x5c"
+     ]
+    },
+    {
+     "offset": 115,
+     "bytes": 1,
+     "sources": [
+      "0x00f3124c strb at r11-0x82 defines payload114; 0x00f31258 next word at116",
+      "0x00ff81c8..0x00ff81e0 copies the secondary control representation; its fields have the same halfword/byte layout as the primary control"
+     ]
+    },
+    {
+     "offset": 130,
+     "bytes": 2,
+     "sources": [
+      "0x00f3129c strh at r11-116 defines payload128..130; 0x00f312a8 next word at132",
+      "Secondary control record: coordinate halfword at128, next int132; representation copy0x00ff81c8..0x00ff81e0"
+     ]
+    },
+    {
+     "offset": 138,
+     "bytes": 2,
+     "sources": [
+      "0x00f312b4 strh at r11-108 defines payload136..138; 0x00f312c4 next word at140",
+      "Secondary control record: bound halfword136, next int140; representation copy0x00ff81c8..0x00ff81e0"
+     ]
+    },
+    {
+     "offset": 189,
+     "bytes": 7,
+     "sources": [
+      "0x00f31064 strb at r11-0x38 defines payload188; 0x00f31074 next byte at196; bytes189..196 unwritten",
+      "0x00ff80e0..0x00ff80e8 copies request+0xc8..0xd4 to state+0x4c4c..0x4c58; 0x00ff82d0 control setup reads state+0x4c4c as byte; state+0x4c50 has no recovered value reader"
+     ]
+    },
+    {
+     "offset": 198,
+     "bytes": 2,
+     "sources": [
+      "0x00f3107c strb at r11-0x2f defines payload197; 0x00f31094 next byte at200",
+      "0x00ff80e0..0x00ff80e8 copies request+0xd0 word to state+0x4c54; 0x00ff82d0 consumers use bytes+0x4c54/+0x4c55 only"
+     ]
+    },
+    {
+     "offset": 203,
+     "bytes": 5,
+     "sources": [
+      "0x00f310b0 strb at r11-0x2a defines payload202; 0x00f30fac next word at208; clamp stores0x00f310bc/0x00f310c8 touch only201/202",
+      "0x00ff80f4..0x00ff8100 loads request+0xd4 and retains low halfword plus byte2 only; request+0xd8..0xdc is not decoded"
+     ]
+    },
+    {
+     "offset": 226,
+     "bytes": 2,
+     "sources": [
+      "0x00f31368 strb at r11-0x13 defines payload225; 0x00f31088 word at228; bytes226..228 unwritten",
+      "0x00ff802c request-field decode uses individual bytes through request+0xec and next word request+0xf0, not request+0xee/+0xef"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16214,
+   "bytes": 68,
+   "fields": [
+    {
+     "name": "record-parameters",
+     "offset": 0,
+     "bytes": 20,
+     "sources": [
+      "X-M1 1.50 id5 0xefbec0..0xefbee0 initializes record words0..3 and halfwords8..9"
+     ]
+    },
+    {
+     "name": "record-source-and-sample",
+     "offset": 24,
+     "bytes": 24,
+     "sources": [
+      "X-M1 1.50 id5 0xefbee4..0xefbf28 initializes source, constants100/16 and the16-byte sample"
+     ]
+    },
+    {
+     "name": "completion",
+     "offset": 64,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0xfeae24 stores callback at payload64 before posting0x3f56 with68 bytes at0xfeae34..0xfeae40"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 20,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0xefbedc..0xefbef8: the halfword at record18 is followed by the word at record24; record20..23 has no store"
+     ]
+    },
+    {
+     "offset": 48,
+     "bytes": 16,
+     "sources": [
+      "X-M1 1.50 id5 0xefbf28 is the last record store at44;0xefbf4c submits the record;0xfeae2c copies64 bytes"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16215,
+   "bytes": 20,
+   "fields": [
+    {
+     "name": "exposure-and-value",
+     "offset": 0,
+     "bytes": 8,
+     "sources": [
+      "X-M1 1.50 id5 0xfeae5c..0xfeae60 stores duration and value"
+     ]
+    },
+    {
+     "name": "position",
+     "offset": 8,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0xfeae64 stores the position halfword"
+     ]
+    },
+    {
+     "name": "auxiliary-and-completion",
+     "offset": 12,
+     "bytes": 8,
+     "sources": [
+      "X-M1 1.50 id5 0xfeae68..0xfeae6c stores auxiliary;0xfeae58 stores callback at16;0xfeae70..0xfeae7c posts0x3f57 with20 bytes"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 10,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0xfeae64 halfword at8 is followed by0xfeae6c word at12; bytes10..11 have no store"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16201,
+   "bytes": 176,
+   "fields": [
+    {
+     "name": "completion",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0xfeac0c stores r0 at payload0; 0xefc1cc supplies0xefbda4"
+     ]
+    },
+    {
+     "name": "auxiliary",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0xfeac14 stores r2 at payload4; 0xefc1dc supplies auxiliary callback0xefbbdc in r2"
+     ]
+    },
+    {
+     "name": "sample",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0xfeac10 stores r1 at payload8; 0xefc1d4 supplies sample callback0xefbd24 in r1"
+     ]
+    },
+    {
+     "name": "reserved-header-a",
+     "offset": 12,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0xfeac18 stores r3 at12; 0xefc1c0..0xefc1c8 leaves r3 zero"
+     ]
+    },
+    {
+     "name": "progress",
+     "offset": 16,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0xfeac1c..0xfeac20 stores the first stacked callback at16"
+     ]
+    },
+    {
+     "name": "reserved-header-b",
+     "offset": 20,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0xfeac24..0xfeac28 stores the second stacked argument at20; 0xefc1c0 supplies zero"
+     ]
+    },
+    {
+     "name": "primary-source",
+     "offset": 24,
+     "bytes": 16,
+     "sources": [
+      "X-M1 1.50 id5 0xefc110..0xefc12c copies20 bytes at body0 and20 bytes at body16, overwriting the first source length"
+     ]
+    },
+    {
+     "name": "secondary-source",
+     "offset": 40,
+     "bytes": 16,
+     "sources": [
+      "X-M1 1.50 id5 0xefc120..0xefc12c copies second source at body16; channel store0xefc0b0 replaces its last word at body32"
+     ]
+    },
+    {
+     "name": "source-channel",
+     "offset": 56,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0xefc0b0 stores channel at body32"
+     ]
+    },
+    {
+     "name": "source-dimensions",
+     "offset": 60,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0xefc0b8..0xefc0bc stores halfwords at body36/38"
+     ]
+    },
+    {
+     "name": "reserved-source",
+     "offset": 64,
+     "bytes": 20,
+     "sources": [
+      "X-M1 1.50 id5 0xefbf80..0xefbf8c zeroes152 bytes; body40..60 remains zero"
+     ]
+    },
+    {
+     "name": "policy-dimensions",
+     "offset": 84,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0xefc004..0xefc00c writes body60/62 via0xef64f4"
+     ]
+    },
+    {
+     "name": "reserved-policy",
+     "offset": 88,
+     "bytes": 8,
+     "sources": [
+      "X-M1 1.50 id5 0xefbff4..0xefbff8 zeroes body64/68"
+     ]
+    },
+    {
+     "name": "record-kind",
+     "offset": 96,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0xefbffc..0xefc000 stores2 at body72"
+     ]
+    },
+    {
+     "name": "channel",
+     "offset": 100,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0xefc054 stores body76"
+     ]
+    },
+    {
+     "name": "policy",
+     "offset": 104,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0xefc0c0..0xefc0c4 stores body80"
+     ]
+    },
+    {
+     "name": "reserved-before-auxiliary",
+     "offset": 108,
+     "bytes": 8,
+     "sources": [
+      "X-M1 1.50 id5 0xefbf8c initial zero and0xefc0f4 store body88"
+     ]
+    },
+    {
+     "name": "auxiliary-value",
+     "offset": 116,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0xefc0f8..0xefc0fc stores body92"
+     ]
+    },
+    {
+     "name": "reserved-after-auxiliary",
+     "offset": 120,
+     "bytes": 8,
+     "sources": [
+      "X-M1 1.50 id5 0xefc100 and0xefc188 zero body96/100"
+     ]
+    },
+    {
+     "name": "scale",
+     "offset": 128,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0xefc168..0xefc174 stores halfwords100 and16 at body104/106"
+     ]
+    },
+    {
+     "name": "reserved-before-position",
+     "offset": 132,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0xefbf8c initial zero and0xefc03c zero at body110"
+     ]
+    },
+    {
+     "name": "position",
+     "offset": 136,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0xefc040 stores body112"
+     ]
+    },
+    {
+     "name": "reserved-after-position",
+     "offset": 138,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0xefc058 stores zero at body114"
+     ]
+    },
+    {
+     "name": "converted-dimensions",
+     "offset": 140,
+     "bytes": 10,
+     "sources": [
+      "X-M1 1.50 id5 0xefc05c..0xefc0ac writes width, limited height, excess, combined limited height and combined excess at body116..126"
+     ]
+    },
+    {
+     "name": "reserved-before-position-code",
+     "offset": 150,
+     "bytes": 11,
+     "sources": [
+      "X-M1 1.50 id5 0xefbf8c initializes body126..137; explicit zeros0xefc010..0xefc038"
+     ]
+    },
+    {
+     "name": "position-code",
+     "offset": 161,
+     "bytes": 1,
+     "sources": [
+      "X-M1 1.50 id5 0xefc050 stores converter output at body137"
+     ]
+    },
+    {
+     "name": "source-option",
+     "offset": 162,
+     "bytes": 1,
+     "sources": [
+      "X-M1 1.50 id5 0xefc130..0xefc134 stores low source-option byte at body138"
+     ]
+    },
+    {
+     "name": "reserved-option",
+     "offset": 163,
+     "bytes": 1,
+     "sources": [
+      "X-M1 1.50 id5 0xefc178..0xefc17c stores zero at body139"
+     ]
+    },
+    {
+     "name": "option",
+     "offset": 164,
+     "bytes": 1,
+     "sources": [
+      "X-M1 1.50 id5 0xefc0c8..0xefc0cc stores body140"
+     ]
+    },
+    {
+     "name": "policy-enabled",
+     "offset": 165,
+     "bytes": 1,
+     "sources": [
+      "X-M1 1.50 id5 0xefc104..0xefc10c stores policy result at body141"
+     ]
+    },
+    {
+     "name": "multiple-frames",
+     "offset": 166,
+     "bytes": 1,
+     "sources": [
+      "X-M1 1.50 id5 0xefc0d8..0xefc0e8 stores argument>1 at body142"
+     ]
+    },
+    {
+     "name": "reserved-mode",
+     "offset": 167,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0xefbf8c initialization and0xefc0d0..0xefc0d4 zeros at body143/144"
+     ]
+    },
+    {
+     "name": "ordinary-mode",
+     "offset": 171,
+     "bytes": 1,
+     "sources": [
+      "X-M1 1.50 id5 0xefbf90..0xefbf9c and0xefc0ec..0xefc0f0 stores mode!=6 at body147"
+     ]
+    },
+    {
+     "name": "enabled",
+     "offset": 172,
+     "bytes": 1,
+     "sources": [
+      "X-M1 1.50 id5 0xefc180..0xefc184 stores1 at body148"
+     ]
+    },
+    {
+     "name": "reserved-tail",
+     "offset": 173,
+     "bytes": 3,
+     "sources": [
+      "X-M1 1.50 id5 0xefbf8c initialization and0xefc18c zero at body149"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 44,
+   "operation": 15377,
+   "bytes": 56,
+   "fields": [
+    {
+     "name": "completion",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0xf4c568 stores the callback at r11-0x3c, the start of the 56-byte message 0xf4c574 posts"
+     ]
+    },
+    {
+     "name": "record-words-and-halfwords",
+     "offset": 4,
+     "bytes": 14,
+     "sources": [
+      "X-M1 1.50 id5 0xf4c4f4..0xf4c518 copy record0, record4 and halfwords record8, record10, record12 to message4..17"
+     ]
+    },
+    {
+     "name": "record-word-and-halfword",
+     "offset": 20,
+     "bytes": 6,
+     "sources": [
+      "X-M1 1.50 id5 0xf4c51c..0xf4c528 copy record40 to message20 and halfword record14 to message24"
+     ]
+    },
+    {
+     "name": "record-tail",
+     "offset": 28,
+     "bytes": 28,
+     "sources": [
+      "X-M1 1.50 id5 0xf4c52c..0xf4c560 copy record16..39 and record44 to message28..55"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 18,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0xf4c4d8..0xf4c574: message16 is a halfword and no store reaches r11-0x2a..r11-0x29"
+     ]
+    },
+    {
+     "offset": 26,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0xf4c4d8..0xf4c574: message24 is a halfword and no store reaches r11-0x22..r11-0x21"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "incoming",
+   "queue": 3,
+   "operation": 15110,
+   "bytes": 64,
+   "fields": [
+    {
+     "name": "record",
+     "offset": 0,
+     "bytes": 64,
+     "sources": [
+      "0x00ef8fa0..0x00ef9058: 14 word stores at r11-0x5c..r11-0x28 and stmdb r3={r0,r1} with r3=r11-0x1c writes r11-0x24/-0x20; posts 64 from r11-0x5c"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 3,
+   "operation": 15111,
+   "bytes": 60,
+   "fields": [
+    {
+     "name": "record",
+     "offset": 0,
+     "bytes": 60,
+     "sources": [
+      "0x00ef9064..0x00ef9130: 15 word stores at r11-0x48..r11-0x10; posts 60 from r11-0x48"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 3,
+   "operation": 15115,
+   "bytes": 4,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00ef920c..0x00ef9228: str r0,[r11,#-8]; posts 4 from r11-8"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 44,
+   "operation": 15255,
+   "bytes": 48,
+   "fields": [
+    {
+     "name": "record",
+     "offset": 0,
+     "bytes": 48,
+     "sources": [
+      "0x00f2e710..0x00f2e748: 48 bytes copied from the caller to r11-52; posts 48"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 44,
+   "operation": 15256,
+   "bytes": 4,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00f2e6e4..0x00f2e704: ldr r3,[r0]; str r3,[r11,#-8]; posts 4"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 44,
+   "operation": 15258,
+   "bytes": 6,
+   "fields": [
+    {
+     "name": "record",
+     "offset": 0,
+     "bytes": 6,
+     "sources": [
+      "0x00f2e67c..0x00f2e6a8: 6 bytes copied from r0 to r11-20; posts 6"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 47,
+   "operation": 15193,
+   "bytes": 8,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00f22794: str r0,[r11,#-0xc]"
+     ]
+    },
+    {
+     "name": "byte-4",
+     "offset": 4,
+     "bytes": 1,
+     "sources": [
+      "0x00f22794: strb r1,[r11,#-8]"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 5,
+     "bytes": 3,
+     "sources": [
+      "0x00f22794..0x00f227b4: word store at r11-0xc and byte store at r11-8 leave r11-7..r11-5 unwritten before the 8-byte post from r11-12"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "incoming",
+   "queue": 47,
+   "operation": 15201,
+   "bytes": 36,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00f2ca34: word at r11-0x28"
+     ]
+    },
+    {
+     "name": "byte-4",
+     "offset": 4,
+     "bytes": 1,
+     "sources": [
+      "0x00f2ca34: byte at r11-0x24"
+     ]
+    },
+    {
+     "name": "byte-5",
+     "offset": 5,
+     "bytes": 1,
+     "sources": [
+      "0x00f2ca34: byte at r11-0x23"
+     ]
+    },
+    {
+     "name": "words-28",
+     "offset": 28,
+     "bytes": 8,
+     "sources": [
+      "0x00f2ca34: words at r11-0xc and r11-8"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 6,
+     "bytes": 22,
+     "sources": [
+      "0x00f2ca34..0x00f2ca6c: next store after the byte at r11-0x23 is the word at r11-0xc, so r11-0x22..r11-0xd stay unwritten before the 36-byte post from r11-40"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "incoming",
+   "queue": 47,
+   "operation": 15202,
+   "bytes": 20,
+   "fields": [
+    {
+     "name": "record",
+     "offset": 0,
+     "bytes": 20,
+     "sources": [
+      "0x00f2c990..0x00f2c9b8: word at r11-0x18 and stmdb r12=r11-4 writing r11-20/-16/-12/-8; posts 20 from r11-24"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 48,
+   "operation": 15232,
+   "bytes": 4,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00f3a7e4..0x00f3a800: str r0,[r11,#-8]; posts 4"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 48,
+   "operation": 15235,
+   "bytes": 4,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00f2907c..0x00f29098: str r0,[r11,#-8]; posts 4"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 50,
+   "operation": 15164,
+   "bytes": 8,
+   "fields": [
+    {
+     "name": "halfword-0",
+     "offset": 0,
+     "bytes": 2,
+     "sources": [
+      "0x00f15070: strh r0,[r11,#-12]"
+     ]
+    },
+    {
+     "name": "word-4",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "0x00f15070: str r1,[r11,#-8]"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 2,
+     "bytes": 2,
+     "sources": [
+      "0x00f15070..0x00f15090: halfword at r11-12 and word at r11-8 leave r11-10..r11-9 unwritten before the 8-byte post from r11-12"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5026,
+   "bytes": 32,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00defce8: str r0,[r11,#-0x24]"
+     ]
+    },
+    {
+     "name": "halfword-4",
+     "offset": 4,
+     "bytes": 2,
+     "sources": [
+      "0x00defcf0: strh r0,[r11,#-32]"
+     ]
+    },
+    {
+     "name": "words-8",
+     "offset": 8,
+     "bytes": 24,
+     "sources": [
+      "0x00defcf4..0x00defd14: words at r11-0x1c, r11-0x14, r11-0x10, r11-0xc, r11-0x18 and r11-8; 0x00defd18 posts 32 from r11-36"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 6,
+     "bytes": 2,
+     "sources": [
+      "0x00defcf0..0x00defd18: halfword at r11-32 then word at r11-0x1c leave r11-30..r11-29 unwritten before the 32-byte post"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 44,
+   "operation": 15360,
+   "bytes": 232,
+   "fields": [
+    {
+     "name": "completion",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00f5fd58: str r3,[r11-20,#-0xe8]! sets payload word 0"
+     ]
+    },
+    {
+     "name": "first-record",
+     "offset": 4,
+     "bytes": 100,
+     "sources": [
+      "0x00f5fd64..0x00f5fd70: 100 bytes copied from the caller argument to r11-248"
+     ]
+    },
+    {
+     "name": "second-record",
+     "offset": 104,
+     "bytes": 44,
+     "sources": [
+      "0x00f5fd74..0x00f5fd80: 44 bytes copied from the caller argument to r11-148; 0x00f5fd84 posts 232 from r11-252"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 148,
+     "bytes": 84,
+     "sources": [
+      "0x00f5fd20..0x00f5fd90: no store after the copy at r11-148 before the 232-byte post from r11-252, so r11-104..r11-21 stay unwritten"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 44,
+   "operation": 15361,
+   "bytes": 232,
+   "fields": [
+    {
+     "name": "completion",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00f60000..0x00f60004: str r6,[r11-20,#-0xe8]! sets payload word 0"
+     ]
+    },
+    {
+     "name": "first-record",
+     "offset": 4,
+     "bytes": 168,
+     "sources": [
+      "0x00f60008..0x00f60018: 168 bytes copied from r5+0x1040 to r11-248"
+     ]
+    },
+    {
+     "name": "second-record",
+     "offset": 172,
+     "bytes": 12,
+     "sources": [
+      "0x00f6001c..0x00f6002c: 12 bytes copied from r5+0x1118 to r11-80; 0x00f60030 posts 232 from r11-252"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 184,
+     "bytes": 48,
+     "sources": [
+      "0x00f5ff88..0x00f6003c: no store after the copy at r11-80 before the 232-byte post, so r11-68..r11-21 stay unwritten"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 44,
+   "operation": 15362,
+   "bytes": 232,
+   "fields": [
+    {
+     "name": "words-0",
+     "offset": 0,
+     "bytes": 12,
+     "sources": [
+      "0x00f60208..0x00f60210: str r2,[r11,#-0xec], str r0,[r11,#-0xe8], str r1,[r11,#-0xe4]; 0x00f60214 posts 232 from r11-236"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 12,
+     "bytes": 220,
+     "sources": [
+      "0x00f601fc..0x00f60220: no store after r11-0xe4 before the 232-byte post from r11-236, so r11-224..r11-5 stay unwritten"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 44,
+   "operation": 15374,
+   "bytes": 60,
+   "fields": [
+    {
+     "name": "completion",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00f4d418..0x00f4d41c: str r6,[r11-20,#-0x3c]! sets payload word 0"
+     ]
+    },
+    {
+     "name": "request-record",
+     "offset": 4,
+     "bytes": 22,
+     "sources": [
+      "0x00f4d370..0x00f4d3dc: stores at r11-0x88, r11-0x82, r11-0x84, r11-0x80, r11-0x7c, r11-0x78, r11-0x74, r11-0x70, r11-0x6c, r11-0x68 feed the copy at 0x00f4d420 from r11-136"
+     ]
+    },
+    {
+     "name": "geometry-record",
+     "offset": 28,
+     "bytes": 32,
+     "sources": [
+      "0x00f4d3c0..0x00f4d414: words at r11-0x60, r11-0x5c, r11-0x54 and the two-word copies at r11-0x70/0x68 and r11-0x68/0x64 feed the copy; 0x00f4d430 posts 60 from r11-80"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 26,
+     "bytes": 2,
+     "sources": [
+      "0x00f4d350..0x00f4d43c: halfword at r11-116 is the last store below r11-0x60, so r11-114..r11-113 stay unwritten before the 60-byte post"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 44,
+   "operation": 15376,
+   "bytes": 224,
+   "fields": [
+    {
+     "name": "completion",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00f5203c..0x00f52040: str r8,[r11-28,#-0xe0]! sets payload word 0"
+     ]
+    },
+    {
+     "name": "parameter-record",
+     "offset": 4,
+     "bytes": 220,
+     "sources": [
+      "0x00f52044..0x00f52050: 220 bytes copied from r11-472; 0x00f52054 posts 224 from r11-252"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16154,
+   "bytes": 8,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00fea848: str r5,[r11,#-0x14]"
+     ]
+    },
+    {
+     "name": "record-pointer",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "0x00fea84c: str r4,[r11,#-0x10]; 0x00fea850 posts 8 from r11-20"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16194,
+   "bytes": 136,
+   "fields": [
+    {
+     "name": "record",
+     "offset": 0,
+     "bytes": 124,
+     "sources": [
+      "0x00feaa7c..0x00feaa88: 124 bytes copied from the fourth argument to r11-140"
+     ]
+    },
+    {
+     "name": "words-124",
+     "offset": 124,
+     "bytes": 12,
+     "sources": [
+      "0x00feaa70..0x00feaa78: words at r11-0x10, r11-0xc and r11-8 follow the copy; 0x00feaa8c posts 136 from r11-140"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16195,
+   "bytes": 4,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00feaab0..0x00feaab4: str r0,[r11-4,#-4]!; 0x00feaab8 posts 4 from r11-8"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 48,
+   "operation": 16388,
+   "bytes": 208,
+   "fields": [
+    {
+     "name": "record-0",
+     "offset": 0,
+     "bytes": 184,
+     "sources": [
+      "0x010398f8..0x01039aa4: copies of 16, 24, 16, 16, 56 and 56 bytes from the arguments to r11-256, r11-240, r11-216, r11-200, r11-184 and r11-128"
+     ]
+    },
+    {
+     "name": "record-188",
+     "offset": 188,
+     "bytes": 12,
+     "sources": [
+      "0x010399a8..0x010399b8: 12 bytes copied from r9 to r11-68, or three zero words at r11-68/64/60"
+     ]
+    },
+    {
+     "name": "word-200",
+     "offset": 200,
+     "bytes": 8,
+     "sources": [
+      "0x010398e8 and 0x01039a00: word at r11-0x34 and payload pointer r11-256; 0x010399e0 posts 208 from r11-256"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 184,
+     "bytes": 4,
+     "sources": [
+      "0x010398b0..0x01039b44: the 0x4004 branch copies its 12-byte record to r11-68, so r11-72..r11-69 stay unwritten"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 48,
+   "operation": 16389,
+   "bytes": 148,
+   "fields": [
+    {
+     "name": "record",
+     "offset": 0,
+     "bytes": 144,
+     "sources": [
+      "0x01039b74..0x01039bd4: copies of 56, 16, 16 and 56 bytes from the arguments to r11-180, r11-124, r11-108 and r11-92"
+     ]
+    },
+    {
+     "name": "word-144",
+     "offset": 144,
+     "bytes": 4,
+     "sources": [
+      "0x01039b64: str r3,[r11,#-0x24]; 0x01039be4 posts 148 from r11-180"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 48,
+   "operation": 16428,
+   "bytes": 60,
+   "fields": [
+    {
+     "name": "record",
+     "offset": 0,
+     "bytes": 56,
+     "sources": [
+      "0x0103a3b4..0x0103a3c0: 56 bytes copied from the first argument to r11-84; 0x0103a3c4 posts 60 from r11-84"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 56,
+     "bytes": 4,
+     "sources": [
+      "0x0103a398..0x0103a3ec: no store between the copy at r11-84 and the 60-byte post, so r11-28..r11-25 stay unwritten"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 50,
+   "operation": 16907,
+   "bytes": 28,
+   "fields": [
+    {
+     "name": "completion",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x0076e1e4: str r5,[r11,#-0x30]"
+     ]
+    },
+    {
+     "name": "delta",
+     "offset": 4,
+     "bytes": 2,
+     "sources": [
+      "0x0076e1e8: strh r6,[r11,#-44]"
+     ]
+    },
+    {
+     "name": "reserved",
+     "offset": 6,
+     "bytes": 2,
+     "sources": [
+      "0x0076e1d4: 28-byte zero fill at r11-48 leaves r11-42..r11-41 zero"
+     ]
+    },
+    {
+     "name": "mode-value",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "0x0076e1f8: str r3,[r11,#-0x28]"
+     ]
+    },
+    {
+     "name": "parameters",
+     "offset": 12,
+     "bytes": 16,
+     "sources": [
+      "0x0076e1fc..0x0076e214: words at r11-0x24, r11-0x20, r11-0x1c and r11-0x18; 0x0076e218 posts 28 from r11-48"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 50,
+   "operation": 16915,
+   "bytes": 24,
+   "fields": [
+    {
+     "name": "words",
+     "offset": 0,
+     "bytes": 24,
+     "sources": [
+      "0x0076e6cc..0x0076e6e0: six words at r11-0x34..r11-0x20; 0x0076e6e4 posts 24 from r11-52"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 50,
+   "operation": 16928,
+   "bytes": 12,
+   "fields": [
+    {
+     "name": "words",
+     "offset": 0,
+     "bytes": 12,
+     "sources": [
+      "0x0076f3c0..0x0076f3c8: three words at r11-0x20, r11-0x1c and r11-0x18; 0x0076f3cc posts 12 from r11-32"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 55,
+   "operation": 18179,
+   "bytes": 16,
+   "fields": [
+    {
+     "name": "mode",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x01066338: payload mode word of the 16-byte request"
+     ]
+    },
+    {
+     "name": "values",
+     "offset": 4,
+     "bytes": 12,
+     "sources": [
+      "0x01066338: three request words follow the mode; 0x01066338 posts 16 from r11-20 through 0x01066230"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 44,
+   "operation": 15246,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 44,
+   "operation": 15247,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 44,
+   "operation": 15248,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 47,
+   "operation": 15180,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 47,
+   "operation": 15181,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 47,
+   "operation": 15191,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 47,
+   "operation": 15192,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 48,
+   "operation": 15227,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 48,
+   "operation": 15228,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 50,
+   "operation": 15157,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 50,
+   "operation": 15162,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 4983,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5022,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5023,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5024,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5025,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5028,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16155,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 98,
+   "operation": 29200,
+   "bytes": 48,
+   "fields": [
+    {
+     "name": "completion",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x006bcfd0..0x006bd00c: str r6,[r11,#-0x50]"
+     ]
+    },
+    {
+     "name": "selector",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "0x006bd018..0x006bd058: one zero word filled at r11-76 by 0x007221a0 with r2=1, then bfi inserts 0x24 at bits 6..15, the first argument byte at bits 0..3 of r11-73 and two bits of the first argument at r11-74"
+     ]
+    },
+    {
+     "name": "flag-44",
+     "offset": 44,
+     "bytes": 1,
+     "sources": [
+      "0x006bd010..0x006bd014: strb r2,[r11,#-0x24] stores 1"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 8,
+     "bytes": 36,
+     "sources": [
+      "0x006bd020..0x006bd064: the zero fill covers r11-76..r11-73 only, so r11-72..r11-37 stay unwritten before the 48-byte post from r11-80"
+     ]
+    },
+    {
+     "offset": 45,
+     "bytes": 3,
+     "sources": [
+      "0x006bd05c..0x006bd064: no store after the byte at r11-36 before the 48-byte post, so r11-35..r11-33 stay unwritten"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 98,
+   "operation": 29229,
+   "bytes": 48,
+   "fields": [
+    {
+     "name": "completion",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x006bbe9c: str r5,[r11,#-0x50]"
+     ]
+    },
+    {
+     "name": "selector",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "0x006bbeb0..0x006bbed0: one zero word filled at r11-76 by 0x007221a0 with r2=1, then bfi inserts 0xa9 at bits 6..15 and four bits of the first argument at r11-74"
+     ]
+    },
+    {
+     "name": "flag-44",
+     "offset": 44,
+     "bytes": 1,
+     "sources": [
+      "0x006bbea0..0x006bbea4: strb r2,[r11,#-0x24] stores 1"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 8,
+     "bytes": 36,
+     "sources": [
+      "0x006bbeb0..0x006bbedc: the zero fill covers r11-76..r11-73 only, so r11-72..r11-37 stay unwritten before the 48-byte post from r11-80"
+     ]
+    },
+    {
+     "offset": 45,
+     "bytes": 3,
+     "sources": [
+      "0x006bbed4..0x006bbedc: no store after the byte at r11-36 before the 48-byte post, so r11-35..r11-33 stay unwritten"
+     ]
+    }
+   ]
+  }
+ ],
+ "channels": [
+  {
+   "name": "cyclic-callback",
+   "time_driven": true,
+   "match": {
+    "kind": "callback",
+    "entry": 15922860
+   },
+   "sources": [
+    "every occurrence of the cyclic post in the stock cold-boot receipt is immediately preceded by this callback entry, 82 pairs"
+   ]
+  },
+  {
+   "name": "cyclic-post",
+   "time_driven": true,
+   "match": {
+    "kind": "queue-in",
+    "operation": 15179,
+    "sender": 47
+   },
+   "sources": [
+    "stock cold-boot receipt: queue-in 0x3b4b sender 47 recurs once per cyclic wake, 82 times, each after callback 0xf2f6ac"
+   ]
+  },
+  {
+   "name": "queue43-inbound",
+   "match": {
+    "kind": "queue-in"
+   },
+   "sources": [
+    "X-M1 1.50 id5 0xef9a94..0xef9ae8 stores the operation at descriptor+0, the sender at +2 and queue 43 at +3, then calls 0x72503c"
+   ]
+  },
+  {
+   "name": "peer-3",
+   "match": {
+    "kind": "peer-request",
+    "queue": 3
+   },
+   "sources": [
+    "0x72503c takes the destination queue in r0; destination 3"
+   ]
+  },
+  {
+   "name": "peer-10",
+   "match": {
+    "kind": "peer-request",
+    "queue": 10
+   },
+   "sources": [
+    "0x72503c takes the destination queue in r0; destination 10"
+   ]
+  },
+  {
+   "name": "peer-44",
+   "match": {
+    "kind": "peer-request",
+    "queue": 44
+   },
+   "sources": [
+    "0x72503c takes the destination queue in r0; destination 44"
+   ]
+  },
+  {
+   "name": "peer-45",
+   "match": {
+    "kind": "peer-request",
+    "queue": 45
+   },
+   "sources": [
+    "0x72503c takes the destination queue in r0; destination 45"
+   ]
+  },
+  {
+   "name": "peer-47",
+   "match": {
+    "kind": "peer-request",
+    "queue": 47
+   },
+   "sources": [
+    "0x72503c takes the destination queue in r0; destination 47"
+   ]
+  },
+  {
+   "name": "peer-48",
+   "match": {
+    "kind": "peer-request",
+    "queue": 48
+   },
+   "sources": [
+    "0x72503c takes the destination queue in r0; destination 48"
+   ]
+  },
+  {
+   "name": "peer-50",
+   "match": {
+    "kind": "peer-request",
+    "queue": 50
+   },
+   "sources": [
+    "0x72503c takes the destination queue in r0; destination 50"
+   ]
+  },
+  {
+   "name": "peer-55",
+   "match": {
+    "kind": "peer-request",
+    "queue": 55
+   },
+   "sources": [
+    "0x72503c takes the destination queue in r0; destination 55"
+   ]
+  },
+  {
+   "name": "peer-98",
+   "match": {
+    "kind": "peer-request",
+    "queue": 98
+   },
+   "sources": [
+    "0x72503c takes the destination queue in r0; destination 98"
+   ]
+  },
+  {
+   "name": "callbacks",
+   "match": {
+    "kind": "callback"
+   },
+   "sources": [
+    "a callback event names the entry the driver calls; the entry table is the census sites declaration"
+   ]
+  },
+  {
+   "name": "client-replies",
+   "match": {
+    "kind": "client-reply"
+   },
+   "sources": [
+    "a client reply names the entry and target the driver answers"
+   ]
+  },
+  {
+   "name": "service-requests",
+   "match": {
+    "kind": "service-request"
+   },
+   "sources": [
+    "a service request names the stock entry the driver enters"
+   ]
+  },
+  {
+   "name": "shared-stores",
+   "match": {
+    "kind": "store"
+   },
+   "sources": [
+    "a store is one byte written to a shared stock block"
+   ]
+  }
+ ],
+ "causal_pairs": [
+  {
+   "first": {
+    "kind": "callback",
+    "entry": 15922860
+   },
+   "then": {
+    "kind": "queue-in",
+    "operation": 15179,
+    "sender": 47
+   },
+   "sources": [
+    "report-SaclacInterface6 cold-boot measurement: stock emits callback 0xf2f6ac then queue-in 0x3b4b sender 47 as one pair 82 times, owned 81 with the same gap sequence shifted by one occurrence"
+   ]
+  }
+ ]
 }
