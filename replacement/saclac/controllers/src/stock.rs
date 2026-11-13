@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use crate::statistics::{Changes, Group};
+use xm1_saclac_interface::stock::StockCallbackWord;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RecordFlags {
@@ -116,9 +117,6 @@ pub const fn measurement_update_operation(update: crate::children::MeasurementUp
         MeasurementUpdate::Source => Some(StatisticsOperation::Request41),
     }
 }
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct StockCallbackWord(pub u32);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LensFinishRoute {
