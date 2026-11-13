@@ -84,6 +84,17 @@ fn a_restart_publishes_the_default_levels_and_a_continued_one_keeps_its_averages
 }
 
 #[test]
+fn initialization_rotates_the_adjustment_snapshot_while_the_controllers_adjustment_is_set() {
+    let mut ports = ports();
+    let mut auxiliary = Auxiliary::new();
+    for (controllers, rotations) in [(0, 0), (2, 0), (1, 1)] {
+        ports.adjustment.controllers = RetainedWord(controllers);
+        auxiliary.effect(Effect::Initialize, record(), None, &mut ports);
+        assert_eq!(ports.auxiliary.rotations, rotations);
+    }
+}
+
+#[test]
 fn enabling_keeps_the_auxiliary_statistics_in_use_and_each_first_pass_releases_them() {
     let mut ports = ports();
     ports.records.in_use = StatisticsInUse { primary: true, search: false, auxiliary: false };

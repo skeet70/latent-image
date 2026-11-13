@@ -4,7 +4,7 @@ use crate::lanes::Selection;
 use crate::planner::{Cadence, Mode, Work};
 use crate::pipeline::{Exposure, GainStep, HistoryStatistics, Pipeline, PipelineSnapshot, PipelineWord, SnapshotStatus, Statistics, TimingWord};
 use crate::profile::{FrameInterval, FrameRate, GridCell, IntervalHistory, IntervalTracking, Profile, ProfileGeometry, ProfileMode, ProfileRecords, ProfileSelection, PublishedResult, RetainedWord, StatisticsInUse, WindowPosition, WindowRecord, WindowStatus};
-use crate::record::{self, AlternateSearch, Power, Request, Settings, Trace, TraceMark};
+use crate::record::{self, Adjustment, AdjustmentWords, AlternateSearch, Power, Request, Settings, Trace, TraceMark};
 use crate::window::{self, WindowResult};
 use xm1_saclac_controllers::replies;
 use xm1_saclac_interface::round::{GeometryCalibration, GeometryPair, RetainedGeometryValue};
@@ -46,6 +46,7 @@ impl Records {
                 profile_cadence: false,
                 frame_rate_cadence: false,
                 focus_cell: GridCell::default(),
+                takes_search_adjustment: false,
             },
             geometry: ProfileGeometry {
                 resource: GeometryPair([0; 2]),
@@ -83,6 +84,7 @@ pub struct AuxiliaryRecords {
     pub grid_selection: bool,
     pub grid_refreshes: usize,
     pub capture_levels: Option<[u16; 3]>,
+    pub rotations: usize,
 }
 
 impl Default for AuxiliaryRecords {
@@ -106,6 +108,7 @@ impl Default for AuxiliaryRecords {
             grid_selection: false,
             grid_refreshes: 0,
             capture_levels: None,
+            rotations: 0,
         }
     }
 }
@@ -148,6 +151,7 @@ pub struct Ports<X = ()> {
     pub channel_count: ChannelCount,
     pub lens: LensReport,
     pub auxiliary: AuxiliaryRecords,
+    pub adjustment: AdjustmentWords,
     pub outbound: Vec<Outbound>,
     pub extra: X,
 }
@@ -176,6 +180,7 @@ impl<X> Ports<X> {
             channel_count: ChannelCount(1),
             lens: LensReport::default(),
             auxiliary: AuxiliaryRecords::default(),
+            adjustment: AdjustmentWords::default(),
             outbound: Vec::new(),
             extra,
         }
@@ -325,4 +330,9 @@ impl<X> auxiliary::Ports for Ports<X> {
     fn record_capture_levels(&mut self, _: RecordHandle, levels: [u16; 3]) {
         if self.records.capture_attached { self.auxiliary.capture_levels = Some(levels); }
     }
+    fn rotate_adjustment_snapshot(&mut self, _: RecordHandle) { self.auxiliary.rotations += 1; }
+}
+
+impl<X> Adjustment for Ports<X> {
+    fn adjustment_words(&mut self) -> AdjustmentWords { self.adjustment }
 }

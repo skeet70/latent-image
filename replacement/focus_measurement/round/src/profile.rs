@@ -99,6 +99,8 @@ pub struct Profile {
     pub frame_rate_cadence: bool,
     /// The measurement-grid cell of the profile's focus area.
     pub focus_cell: GridCell,
+    /// The window request carries the search's adjustment word.
+    pub takes_search_adjustment: bool,
 }
 
 /// A cell of the eight-by-eight measurement grid.

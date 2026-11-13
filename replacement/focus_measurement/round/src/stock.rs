@@ -171,6 +171,7 @@ pub fn window_payload(request: crate::window::WindowRequest, callback: xm1_sacla
                 halfword: request.record.halfword.0,
             },
             refresh: request.refresh,
+            adjustment: [request.adjustment.controllers.0, request.adjustment.search.0],
         },
         callback,
     }

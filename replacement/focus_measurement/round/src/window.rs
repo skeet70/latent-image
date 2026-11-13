@@ -5,8 +5,8 @@
 
 use crate::jobs;
 use crate::pipeline::{PipelineSnapshot, Statistics};
-use crate::profile::{ProfileMode, ProfileSelection, StatisticsInUse, WindowPosition, WindowRecord, WindowStatus};
-use crate::record::{Ports as RecordPorts, Request, TraceMark};
+use crate::profile::{ProfileMode, ProfileSelection, RetainedWord, StatisticsInUse, WindowPosition, WindowRecord, WindowStatus};
+use crate::record::{AdjustmentWords, Ports as RecordPorts, Request, TraceMark};
 use xm1_saclac_interface::{Completed, RecordHandle};
 
 /// What calc receives for one window calculation.
@@ -14,7 +14,7 @@ use xm1_saclac_interface::{Completed, RecordHandle};
 pub struct WindowRequest {
     pub selection: ProfileSelection,
     pub mode: ProfileMode,
-    /// The profile selects by record, or has a measurement mode.
+    /// The profile selects by record, has a measurement mode, or takes a search adjustment word of 1.
     pub selected: bool,
     pub snapshot: PipelineSnapshot,
     /// The snapshot's first level, offset by the second and by the exposure value.
@@ -23,6 +23,8 @@ pub struct WindowRequest {
     pub reference: u16,
     pub record: WindowRecord,
     pub refresh: bool,
+    /// The search word is zero unless the profile takes it.
+    pub adjustment: AdjustmentWords,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,6 +74,8 @@ impl Window {
         let level = if snapshot.adjustment.0 == 1 { level.wrapping_sub(100) } else { level };
         let window = ports.window();
         let refresh = ports.take_window_refresh();
+        let words = ports.adjustment_words();
+        let adjustment = AdjustmentWords { search: if profile.takes_search_adjustment { words.search } else { RetainedWord(0) }, ..words };
         if !self.power_held && window.status.holds_power() {
             ports.request_measurement_power(true);
             self.power_held = true;
@@ -80,12 +84,13 @@ impl Window {
         ports.request(Request::Window(WindowRequest {
             selection: profile.selection,
             mode: profile.mode,
-            selected: profile.selection == ProfileSelection::Record || profile.mode.set(),
+            selected: profile.selection == ProfileSelection::Record || profile.mode.set() || adjustment.search == RetainedWord(1),
             snapshot,
             level,
             reference,
             record: window,
             refresh,
+            adjustment,
         }));
     }
 

@@ -86,6 +86,7 @@ fn the_window_request_places_each_field_and_zeroes_the_unwritten_bytes() {
         reference: 0x6162,
         record: WindowRecord { status: WindowStatus(2), first: RetainedWord(0x7172_7374), halfword: RetainedHalfword(0x8182), second: RetainedWord(0x9192_9394) },
         refresh: true,
+        adjustment: crate::record::AdjustmentWords { controllers: RetainedWord(1), search: RetainedWord(0xa1a2) },
     };
     let (_, encoded) = calc_payload(&window_payload(request, StockCallbackWord(0xf3a3f8)));
     let bytes = encoded.bytes();
@@ -95,7 +96,7 @@ fn the_window_request_places_each_field_and_zeroes_the_unwritten_bytes() {
     assert_eq!((word(0), word(4), half(8)), (2, 0x7172_7374, 0x5152));
     assert_eq!((word(12), bytes[16], word(20), half(24), half(26)), (0x0102_0304, 0x55, 0x1112_1314, 0x2122, 0x6162));
     assert_eq!((half(32), word(36), word(40), word(44)), (0x8182, 0x5ffe_c1b4, 4096, 0x4142_4344));
-    assert_eq!((word(48), word(52), word(56), word(60), word(64), word(68), word(72), word(76)), (2, 0x9192_9394, 0, 0, 1, 6, 1, 0xf3a3f8));
+    assert_eq!((word(48), word(52), word(56), word(60), word(64), word(68), word(72), word(76)), (2, 0x9192_9394, 1, 0xa1a2, 1, 6, 1, 0xf3a3f8));
     for padding in [10..12, 17..20, 28..32, 34..36] { assert!(bytes[padding].iter().all(|&byte| byte == 0)); }
 }
 

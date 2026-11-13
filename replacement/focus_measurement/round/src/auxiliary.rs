@@ -134,6 +134,8 @@ pub trait Ports: RecordPorts {
     fn grid_selection(&mut self, record: RecordHandle) -> bool;
     /// Writes `levels` where an attached capture buffer keeps them.
     fn record_capture_levels(&mut self, record: RecordHandle, levels: [u16; 3]);
+    /// Moves the record's adjustment mode snapshot to its latest coordinates.
+    fn rotate_adjustment_snapshot(&mut self, record: RecordHandle);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -217,6 +219,7 @@ impl Auxiliary {
         let lens = ports.lens_resource();
         let curve = ports.curve(&CurveInputs { profile, lens, offset: 0, averages: self.levels() });
         ports.publish_auxiliary(record, self.publication(curve));
+        if ports.adjustment_words().controllers == RetainedWord(1) { ports.rotate_adjustment_snapshot(record); }
     }
 
     fn enable(&mut self, record: RecordHandle, ports: &mut impl Ports) {

@@ -6,7 +6,7 @@
 use crate::history::{HistoryEntry, MeasurementHistory};
 use crate::pipeline::{Exposure, Pipeline, PipelineSnapshot, Statistics};
 use crate::planner::{Cadence, Mode, Work};
-use crate::profile::{FrameRate, IntervalHistory, IntervalTracking, ProfileRecords, ProfileSelection, PublishedResult};
+use crate::profile::{FrameRate, IntervalHistory, IntervalTracking, ProfileRecords, ProfileSelection, PublishedResult, RetainedWord};
 use crate::round::{ParameterClient, RecordEffect, SearchStart};
 use xm1_saclac_controllers::replies;
 use xm1_saclac_interface::round::{GeometryCalibration, MeasurementGeometry};
@@ -46,6 +46,18 @@ pub trait Power {
     fn request_measurement_power(&mut self, held: bool);
 }
 
+/// The adjustment state's words other modules write and the round's requests carry.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AdjustmentWords {
+    /// One while the controllers' adjustment is set.
+    pub controllers: RetainedWord,
+    pub search: RetainedWord,
+}
+
+pub trait Adjustment {
+    fn adjustment_words(&mut self) -> AdjustmentWords;
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TraceMark { WindowRequest, AuxiliaryRequest }
 
@@ -65,7 +77,7 @@ pub enum Request {
     Auxiliary(crate::auxiliary::AuxiliaryRequest),
 }
 
-pub trait Ports: ProfileRecords + Settings + Pipeline + Exposure + Power + Trace + replies::Effects {
+pub trait Ports: ProfileRecords + Settings + Pipeline + Exposure + Power + Adjustment + Trace + replies::Effects {
     fn request(&mut self, request: Request);
 }
 

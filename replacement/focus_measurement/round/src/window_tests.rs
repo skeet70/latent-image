@@ -2,7 +2,7 @@ use crate::fakes::{Outbound, Ports};
 use crate::jobs::Effect;
 use crate::pipeline::{GainStep, PipelineSnapshot, PipelineWord, TimingWord};
 use crate::profile::{ProfileMode, ProfileSelection, RetainedHalfword, RetainedWord, StatisticsInUse, WindowPosition, WindowRecord, WindowStatus};
-use crate::record::{Request, TraceMark};
+use crate::record::{AdjustmentWords, Request, TraceMark};
 use crate::window::{Window, WindowRequest, WindowResult};
 use xm1_saclac_interface::{stock, Completed, Completion, RecordHandle};
 
@@ -63,6 +63,26 @@ fn a_request_carries_the_adjusted_levels_and_the_window_record() {
     assert_eq!(request.level, 500 - 280 - 7 - 100);
     assert!(!request.refresh);
     assert!(request.selected);
+}
+
+#[test]
+fn a_request_carries_the_controllers_word_and_the_search_word_only_for_a_profile_that_takes_it() {
+    let mut ports = ports();
+    ports.adjustment = AdjustmentWords { controllers: RetainedWord(1), search: RetainedWord(1) };
+    Window::new().effect(Effect::Submit, record(), None, &mut ports);
+    let request = submitted(&mut ports);
+    assert_eq!(request.adjustment, AdjustmentWords { controllers: RetainedWord(1), search: RetainedWord(0) });
+    assert!(!request.selected);
+
+    ports.records.profile.takes_search_adjustment = true;
+    Window::new().effect(Effect::Submit, record(), None, &mut ports);
+    let request = submitted(&mut ports);
+    assert_eq!(request.adjustment, ports.adjustment);
+    assert!(request.selected);
+
+    ports.adjustment.search = RetainedWord(2);
+    Window::new().effect(Effect::Submit, record(), None, &mut ports);
+    assert!(!submitted(&mut ports).selected);
 }
 
 #[test]

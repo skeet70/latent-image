@@ -39,7 +39,7 @@ pub struct WindowRequest {
     /// The profile's selection byte.
     pub selection: u8,
     pub mode: u8,
-    /// The profile selects by record, or has a measurement mode.
+    /// The profile selects by record, has a measurement mode, or takes an adjustment word of 1.
     pub selected: bool,
     pub sample: WindowSample,
     /// The sample's level, offset by the reference and the exposure value.
@@ -48,6 +48,8 @@ pub struct WindowRequest {
     pub reference: u16,
     pub window: WindowRecord,
     pub refresh: bool,
+    /// The adjustment state's words the request carries; the second is zero unless the profile takes it.
+    pub adjustment: [u32; 2],
 }
 
 /// One request to calc, with the callback calc enters when it finishes.

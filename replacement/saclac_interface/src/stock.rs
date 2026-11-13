@@ -742,8 +742,8 @@ fn auxiliary(request: calc::AuxiliaryRequest, callback: StockCallbackWord) -> En
 }
 
 /// X-M1 1.50: 0xf3a564..0xf3a73c builds the 76-byte record and 0xf4c6e8 appends the
-/// callback. Bytes 56..63 are planner words +0x48 and +0x44 (0xfa8018, 0xfa9588), which have
-/// no writer.
+/// callback. Bytes 56..63 are adjustment words +0x48 (0xfa8018) and, for a profile whose
+/// 0x74fa2c byte is 6, +0x44 (0xfa9588).
 fn window(request: calc::WindowRequest, callback: StockCallbackWord) -> Encoded {
     let mut message = Encoded::new(80);
     message.word(0, u32::from(request.selection));
@@ -760,6 +760,8 @@ fn window(request: calc::WindowRequest, callback: StockCallbackWord) -> Encoded 
     message.word(44, request.sample.adjustment);
     message.word(48, request.window.status);
     message.word(52, request.window.second);
+    message.word(56, request.adjustment[0]);
+    message.word(60, request.adjustment[1]);
     message.word(64, u32::from(request.refresh));
     message.word(68, u32::from(request.mode));
     message.word(72, u32::from(request.selected));
