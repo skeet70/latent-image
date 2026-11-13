@@ -38,6 +38,12 @@ impl ReferenceRequest {
 
     pub fn reference_copy(&self) -> u32 { self.word(Self::REFERENCE_COPY) }
 
+    /// Names `reference` in both places the calc task reads it.
+    pub fn set_reference(&mut self, reference: u32) {
+        self.put_word(Self::REFERENCE, reference);
+        self.put_word(Self::REFERENCE_COPY, reference);
+    }
+
     pub fn position(&self) -> i16 { self.half(Self::POSITION) }
 
     pub fn area_positions(&self) -> [i16; Self::AREAS] {
@@ -176,6 +182,108 @@ impl AreaResult {
     pub fn set_reference(&mut self, reference: u32, position: i16) {
         self.0[Self::REFERENCE..Self::REFERENCE + 4].copy_from_slice(&reference.to_le_bytes());
         self.0[Self::POSITION..Self::POSITION + 2].copy_from_slice(&position.to_le_bytes());
+    }
+
+    pub fn half(&self, half: AreaHalf) -> i16 {
+        let at = half.offset();
+        i16::from_le_bytes([self.0[at], self.0[at + 1]])
+    }
+
+    pub fn set_half(&mut self, half: AreaHalf, value: i16) {
+        let at = half.offset();
+        self.0[at..at + 2].copy_from_slice(&value.to_le_bytes());
+    }
+
+    pub fn word(&self, word: AreaWord) -> u32 {
+        let at = word.offset();
+        u32::from_le_bytes([self.0[at], self.0[at + 1], self.0[at + 2], self.0[at + 3]])
+    }
+
+    pub fn set_word(&mut self, word: AreaWord, value: u32) {
+        let at = word.offset();
+        self.0[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    /// The four halfwords 0xf1bca8 sums, as a halfword.
+    pub fn total(&self) -> i16 {
+        [AreaHalf::At0c, AreaHalf::At0e, AreaHalf::At10, AreaHalf::At1a].into_iter().fold(0i16, |sum, half| sum.wrapping_add(self.half(half)))
+    }
+}
+
+/// Halfwords of an area the shot's selection grid reads and adjusts, named by offset where the
+/// bytes give them no role.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AreaHalf { Level, At0c, At0e, At10, At12, At14, At18, At1a, At44, At46, At48, At4a, At4e }
+
+impl AreaHalf {
+    const fn offset(self) -> usize {
+        match self {
+            Self::Level => 0x0a,
+            Self::At0c => 0x0c,
+            Self::At0e => 0x0e,
+            Self::At10 => 0x10,
+            Self::At12 => 0x12,
+            Self::At14 => 0x14,
+            Self::At18 => 0x18,
+            Self::At1a => 0x1a,
+            Self::At44 => 0x44,
+            Self::At46 => 0x46,
+            Self::At48 => 0x48,
+            Self::At4a => 0x4a,
+            Self::At4e => 0x4e,
+        }
+    }
+}
+
+/// Words of an area the shot's selection grid reads and writes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AreaWord {
+    Reference,
+    At1c,
+    At20,
+    At24,
+    /// The index of the area's class in the image layer's class table.
+    ClassIndex,
+    At34,
+    /// Nonzero keeps the class search from settling on the area.
+    Occupied,
+}
+
+impl AreaWord {
+    const fn offset(self) -> usize {
+        match self {
+            Self::Reference => 0x04,
+            Self::At1c => 0x1c,
+            Self::At20 => 0x20,
+            Self::At24 => 0x24,
+            Self::ClassIndex => 0x28,
+            Self::At34 => 0x34,
+            Self::Occupied => 0x50,
+        }
+    }
+}
+
+/// The level target the selection grid computes for an area of a tracked kind (six bytes the
+/// grid update writes into the result; 0xf1a75c).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AreaTarget {
+    pub level: i16,
+    pub raise: i16,
+    pub bound: i16,
+}
+
+impl AreaTarget {
+    pub const BYTES: usize = 6;
+
+    pub fn from_bytes(bytes: [u8; Self::BYTES]) -> Self {
+        let half = |at: usize| i16::from_le_bytes([bytes[at], bytes[at + 1]]);
+        Self { level: half(0), raise: half(2), bound: half(4) }
+    }
+
+    pub fn to_bytes(self) -> [u8; Self::BYTES] {
+        let mut bytes = [0; Self::BYTES];
+        for (at, half) in [self.level, self.raise, self.bound].into_iter().enumerate() { bytes[2 * at..2 * at + 2].copy_from_slice(&half.to_le_bytes()); }
+        bytes
     }
 }
 

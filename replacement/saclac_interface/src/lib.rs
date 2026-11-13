@@ -8,6 +8,7 @@ pub mod capture_results;
 pub mod exposure;
 pub mod pipeline;
 pub mod round;
+pub mod selection;
 pub mod statistics;
 pub mod stock;
 pub mod calc;
@@ -488,3 +489,5 @@ mod calc_tests;
 mod pipeline_tests;
 #[cfg(test)]
 mod capture_job_tests;
+#[cfg(test)]
+mod selection_tests;

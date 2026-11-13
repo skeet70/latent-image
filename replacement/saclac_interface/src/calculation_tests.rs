@@ -1,4 +1,4 @@
-use crate::calculation::{AreaAt, AreaIndex, AreaResult, AreaRow, GridCell, GridPass, ReferenceLimits, ReferenceRequest, ResultPass, TrackedKind};
+use crate::calculation::{AreaAt, AreaHalf, AreaIndex, AreaResult, AreaRow, AreaTarget, AreaWord, GridCell, GridPass, ReferenceLimits, ReferenceRequest, ResultPass, TrackedKind};
 use crate::stock::calculation_result as layout;
 
 /// The result's address in the shot's calculation block (0xf1e464).
@@ -94,4 +94,55 @@ fn an_auxiliary_reference_replaces_the_reference_and_position_only() {
     for byte in (0..AreaResult::BYTES).filter(|byte| !(4..10).contains(byte)) {
         assert_eq!(area.bytes()[byte], before.bytes()[byte], "byte {byte}");
     }
+}
+
+#[test]
+fn a_new_reference_is_named_twice_and_moves_nothing_else() {
+    let before = request();
+    let mut after = before;
+    after.set_reference(0xa1b2_c3d4);
+    assert_eq!(after.reference(), 0xa1b2_c3d4);
+    assert_eq!(after.reference_copy(), 0xa1b2_c3d4);
+    assert_eq!(after.position(), before.position());
+    for index in (0..ReferenceRequest::BYTES).filter(|index| !(0x8..0xc).contains(index) && !(0x100..0x104).contains(index)) {
+        assert_eq!(after.bytes()[index], before.bytes()[index], "byte {index:#x}");
+    }
+}
+
+#[test]
+fn an_area_total_sums_four_halfwords_as_a_halfword() {
+    let mut area = AreaResult::default();
+    area.set_half(AreaHalf::At0c, 0x7000);
+    area.set_half(AreaHalf::At0e, 0x2000);
+    area.set_half(AreaHalf::At10, 3);
+    area.set_half(AreaHalf::At1a, -4);
+    area.set_half(AreaHalf::Level, 100);
+    assert_eq!(area.total(), 0x9000u16.wrapping_sub(1) as i16);
+    assert_eq!(&area.bytes()[0x0a..0x0c], &100i16.to_le_bytes());
+    assert_eq!(&area.bytes()[0x1a..0x1c], &(-4i16).to_le_bytes());
+}
+
+#[test]
+fn area_words_keep_their_offsets() {
+    let mut area = AreaResult::default();
+    area.set_word(AreaWord::ClassIndex, 9);
+    area.set_word(AreaWord::Occupied, 1);
+    area.set_word(AreaWord::Reference, 0x55);
+    assert_eq!(&area.bytes()[0x28..0x2c], &9u32.to_le_bytes());
+    assert_eq!(&area.bytes()[0x50..0x54], &1u32.to_le_bytes());
+    assert_eq!(area.reference(), 0x55);
+}
+
+#[test]
+fn targets_sit_where_the_grid_update_writes_them() {
+    let kind = |kind: u8| TrackedKind::new(kind).unwrap();
+    assert_eq!(RESULT + layout::target_offset(kind(0), ResultPass::Plain, cell(0, 0), index(0)), 0x16a_e07c);
+    assert_eq!(RESULT + layout::target_offset(kind(0), grid(0), cell(0, 0), index(0)), 0x16b_085c);
+    let last_plain = layout::target_offset(kind(5), ResultPass::Plain, cell(2, 2), index(2));
+    assert_eq!(RESULT + last_plain + AreaTarget::BYTES, 0x16a_e448);
+    let last_grid = layout::target_offset(kind(5), grid(2), cell(2, 2), index(2));
+    assert_eq!(RESULT + last_grid + AreaTarget::BYTES, 0x16b_13c0);
+    let target = AreaTarget { level: -1, raise: 2, bound: 0x1234 };
+    assert_eq!(AreaTarget::from_bytes(target.to_bytes()), target);
+    assert_eq!(target.to_bytes(), [0xff, 0xff, 2, 0, 0x34, 0x12]);
 }
