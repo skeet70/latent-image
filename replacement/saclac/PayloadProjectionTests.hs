@@ -234,7 +234,7 @@ recoveredLayouts recovered = do
   request 47 0x3f42 136 ([6,7,27,82,83] ++ [93..95])
   mapM_ (\operation -> request 47 operation 0 []) [0x3f21, 0x3f2f, 0x3f3b, 0x3f45]
   mapM_ (\operation -> request 47 operation 4 []) [0x3f22, 0x3f23, 0x3f28]
-  mapM_ (\operation -> request 47 operation 8 []) [0x3f29, 0x3f2a]
+  mapM_ (\operation -> request 47 operation 8 []) [0x3f18, 0x3f29, 0x3f2a]
   request 47 0x3f2d 44 []
   request 47 0x3f3a 40 [9,10,11]
   -- lens requests (queue 50)
