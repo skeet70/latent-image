@@ -255,6 +255,9 @@ impl PrimaryJob {
     /// The statistics record of the last capture that kept one; capture settings start from it.
     pub fn setting_template(&self) -> &StatisticsSetting { &self.setting_template }
 
+    /// The last word of the output the job absorbed; the capture dump writes it.
+    pub fn trailing_output_word(&self) -> u32 { self.output.trailing_word() }
+
     fn reply(&self, status: CaptureStatus, replies: &mut impl CaptureReplies) {
         if let Some(record) = self.record { replies.reply(record, status); }
     }

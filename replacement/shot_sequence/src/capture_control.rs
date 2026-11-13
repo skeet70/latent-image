@@ -10,8 +10,10 @@ use crate::capture_boundary::{
     CapturePlatform, CaptureRecords, CaptureShared, CaptureTrace, FrameTable, LensGeometry, LensSample, RecordField, SettingResult,
     SlotField,
 };
+use crate::capture_dump::{self, DumpBoundary};
 use crate::capture_stock;
 use crate::lens_return::{ReturnPoint, SavedSlots, SAVED_SLOTS};
+use crate::primary_job::PrimaryJob;
 use crate::subjects::Candidates;
 use xm1_saclac_interface::area_measurement::AreaEntry;
 use xm1_saclac_interface::statistics::{SettingOverrides, StatisticsSetting};
@@ -107,6 +109,14 @@ impl CaptureControl {
     pub fn release(&self, boundary: &mut (impl CapturePlatform + CaptureDiagnostics)) {
         boundary.monitor_device_commands(true);
         boundary.trace(CaptureTrace::Released);
+    }
+
+    /// Writes the capture dump into the client's frame when the diagnostics ask for dumps and
+    /// the capture is not reduced.
+    pub fn finalize(&self, parameters: &CaptureParameters, primary: &PrimaryJob, boundary: &mut (impl DumpBoundary + CapturePlatform)) {
+        if !dumps(boundary) || parameters.reduced() { return; }
+        let Some(record) = self.record else { return };
+        capture_dump::write(record, parameters, primary.trailing_output_word(), boundary);
     }
 
     /// Decides the lens return and leaves `point` for it: the lens left the record's fifth

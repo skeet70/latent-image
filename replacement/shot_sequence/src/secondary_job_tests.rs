@@ -151,6 +151,7 @@ impl CaptureClient for World {
     fn slot(&mut self, _slots: ClientRef, _index: u8) -> SlotHandle { SlotHandle(0) }
     fn store_selection_result(&mut self, _selection: ClientRef, _value: u32) {}
     fn store_selection_hook(&mut self, _selection: ClientRef) {}
+    fn output_marker(&mut self, _selection: ClientRef) -> i16 { 0 }
     fn frame_word(&mut self, _frame: Frame, _offset: FrameOffset) -> u32 { 0 }
     fn set_frame_word(&mut self, frame: Frame, offset: FrameOffset, value: u32) {
         assert_eq!(frame, FRAME);
@@ -203,7 +204,7 @@ impl MeasurementProfiles for World {
     fn crop_geometry(&mut self, request: &CropRequest) -> CropGeometry {
         self.crops.get(&(request.selector, request.offset, request.full)).copied().unwrap_or_default()
     }
-    fn flagged_scale_pair(&mut self, _selector: u32) -> [u32; 2] { [4, 8] }
+    fn flagged_scale_pair(&mut self, _selector: u32) -> ScalePair { ScalePair { first: 4, second: 8 } }
     fn profile_extent(&mut self, _selector: u32, inset: bool) -> [u32; 4] { if inset { [1, 2, 3, 4] } else { [7, 9, 0, 0] } }
 }
 

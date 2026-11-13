@@ -6,7 +6,7 @@ use crate::capture_stock;
 use crate::ports::{CalculationsJob, LensMove, PrimaryEffect, PrimaryQuery};
 use crate::primary_boundary::*;
 use crate::primary_job::{CaptureSteps, PrimaryJob};
-use crate::secondary_boundary::{CropGeometry, CropRequest, GeometryRequest, MeasurementCalc, MeasurementProfiles, ProfileGeometry};
+use crate::secondary_boundary::{CropGeometry, CropRequest, GeometryRequest, MeasurementCalc, MeasurementProfiles, ProfileGeometry, ScalePair};
 use crate::secondary_job::SecondaryJob;
 use crate::subjects::SubjectList;
 use crate::tests::record;
@@ -161,6 +161,7 @@ impl CaptureClient for World {
     fn slot(&mut self, _slots: ClientRef, index: u8) -> SlotHandle { self.slots.get(usize::from(index)).copied().unwrap_or(SlotHandle(0)) }
     fn store_selection_result(&mut self, _selection: ClientRef, _value: u32) {}
     fn store_selection_hook(&mut self, _selection: ClientRef) {}
+    fn output_marker(&mut self, _selection: ClientRef) -> i16 { 0 }
     fn frame_word(&mut self, _frame: Frame, _offset: FrameOffset) -> u32 { 0 }
     fn set_frame_word(&mut self, frame: Frame, offset: FrameOffset, value: u32) {
         assert_eq!(frame, FRAME);
@@ -259,7 +260,7 @@ impl MeasurementProfiles for World {
         assert_eq!((request.offset, request.full), (CAPTURE_OFFSET, false));
         self.crops.get(&request.layout[0]).copied().unwrap_or_default()
     }
-    fn flagged_scale_pair(&mut self, _selector: u32) -> [u32; 2] { [0; 2] }
+    fn flagged_scale_pair(&mut self, _selector: u32) -> ScalePair { ScalePair::default() }
     fn profile_extent(&mut self, _selector: u32, inset: bool) -> [u32; 4] {
         assert!(!inset);
         [1, 2, 3, 4]
