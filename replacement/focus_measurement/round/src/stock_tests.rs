@@ -86,7 +86,7 @@ fn the_window_request_places_each_field_and_zeroes_the_unwritten_bytes() {
         reference: 0x6162,
         record: WindowRecord { status: WindowStatus(2), first: RetainedWord(0x7172_7374), halfword: RetainedHalfword(0x8182), second: RetainedWord(0x9192_9394) },
         refresh: true,
-        adjustment: crate::record::AdjustmentWords { controllers: RetainedWord(1), search: RetainedWord(0xa1a2) },
+        adjustment: crate::record::AdjustmentWords { controllers: RetainedWord(1), search: RetainedWord(0xa1a2), ..Default::default() },
     };
     let (_, encoded) = calc_payload(&window_payload(request, StockCallbackWord(0xf3a3f8)));
     let bytes = encoded.bytes();

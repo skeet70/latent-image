@@ -276,7 +276,8 @@ pub fn source_strength(parameters: xm1_saclac_interface::Parameters<'_>) -> crat
 
 /// X-M1 1.50: 0xff6b4c copies 0x5c4 bytes of pipeline state to 0x16f496c + slot·0x5c4,
 /// which 0xfea7ac returns. Offsets from the window (0xf3a5a4..0xf3a614), history
-/// (0xf32680..0xf32874) and auxiliary request (0xf37b34..0xf37bf8) builders.
+/// (0xf32680..0xf32874), auxiliary request (0xf37b34..0xf37bf8) and acquisition request
+/// (0xf35888..0xf35938) builders.
 pub const SNAPSHOT_BYTES: usize = 0x5c4;
 
 pub fn pipeline_snapshot(bytes: &[u8; SNAPSHOT_BYTES]) -> crate::pipeline::PipelineSnapshot {
@@ -287,6 +288,8 @@ pub fn pipeline_snapshot(bytes: &[u8; SNAPSHOT_BYTES]) -> crate::pipeline::Pipel
         status: SnapshotStatus(word(0)),
         timing: TimingWord(word(0xec)),
         flags: bytes[0xf2],
+        code: half(0xf0),
+        reference: half(0x108),
         gain_step: GainStep(word(0xf4)),
         exposure: [PipelineWord(word(0xf8)), PipelineWord(word(0x110))],
         levels: [half(0xfc), half(0xfe)],
@@ -298,6 +301,45 @@ pub fn pipeline_snapshot(bytes: &[u8; SNAPSHOT_BYTES]) -> crate::pipeline::Pipel
         retained: [4, 8, 0xdc, 0xe0, 0x34, 0x38].map(|offset| PipelineWord(word(offset))),
     }
 }
+
+/// X-M1 1.50: 0xfeaadc copies the capture's S1 sample, 0x6c bytes (0xf2431c, 0xf24840, 0xf24dd0).
+pub const S1_SAMPLE_BYTES: usize = 0x6c;
+
+/// X-M1 1.50: offsets from the S1 request builders 0xf243cc..0xf244ac, 0xf24854..0xf24874 and
+/// 0xf24e1c..0xf24e3c. The sample carries no gain step or adjustment.
+pub fn s1_sample(bytes: &[u8; S1_SAMPLE_BYTES]) -> crate::pipeline::PipelineSnapshot {
+    use crate::pipeline::{PipelineSnapshot, PipelineWord, SnapshotStatus, TimingWord};
+    let word = |offset: usize| u32::from_le_bytes([bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]]);
+    let half = |offset: usize| u16::from_le_bytes([bytes[offset], bytes[offset + 1]]);
+    PipelineSnapshot {
+        status: SnapshotStatus(word(0x58)),
+        timing: TimingWord(word(0x18)),
+        flags: bytes[0x5c],
+        code: half(0x4e),
+        reference: half(0x26),
+        exposure: [PipelineWord(word(0x1c)), PipelineWord(word(0x28))],
+        levels: [half(0x20), half(0x22)],
+        offset_level: half(0x24),
+        size: [PipelineWord(word(0)), PipelineWord(word(4))],
+        extent: [PipelineWord(word(8)), PipelineWord(word(0xc))],
+        origin: [PipelineWord(word(0x10)), PipelineWord(word(0x14))],
+        ..PipelineSnapshot::EMPTY
+    }
+}
+
+use crate::acquisition::ports::StatisticsBuffer;
+
+/// X-M1 1.50: the buffer a started acquisition names for all four statistics until calc1
+/// returns its own (0xf33878..0xf3388c).
+pub const UNMEASURED_STATISTICS: StatisticsBuffer = StatisticsBuffer(0x5ffc_0340);
+/// X-M1 1.50: the buffers the release 0xf34c98 fills and names in the acquisition block: the
+/// classes (0xf34ef4), the first of the four offset buffers (0xf35084), the extra statistics
+/// moved from 0x5ffc6340 (0xf350e8) and the copy of the primary statistics at 0x5ffec1b4,
+/// 0x1150 bytes (0xf3510c).
+pub const RELEASE_CLASSES: StatisticsBuffer = StatisticsBuffer(0x5ffb_f930);
+pub const RELEASE_OFFSETS: StatisticsBuffer = StatisticsBuffer(0x5ffb_ece0);
+pub const RELEASE_EXTRA: StatisticsBuffer = StatisticsBuffer(0x5ffb_f4e0);
+pub const RELEASE_COPY: StatisticsBuffer = StatisticsBuffer(0x5ffb_6120);
 
 /// X-M1 1.50: the measurement history ring 0xf32654 writes. The shared record
 /// keeps its position at +0xa4 (0x7567ec/0x756814, grant 16): a started word, the

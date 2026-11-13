@@ -27,6 +27,9 @@ pub struct PipelineSnapshot {
     pub status: SnapshotStatus,
     pub timing: TimingWord,
     pub flags: u8,
+    /// The range code the pipeline runs with `flags`' candidate.
+    pub code: u16,
+    pub reference: u16,
     pub gain_step: GainStep,
     pub exposure: [PipelineWord; 2],
     pub levels: [u16; 2],
@@ -46,6 +49,8 @@ impl PipelineSnapshot {
         status: SnapshotStatus(0),
         timing: TimingWord(0),
         flags: 0,
+        code: 0,
+        reference: 0,
         gain_step: GainStep(0),
         exposure: [PipelineWord(0); 2],
         levels: [0; 2],

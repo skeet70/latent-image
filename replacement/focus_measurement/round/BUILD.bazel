@@ -6,7 +6,7 @@ xm1_rust_rlib(
     name = "round",
     src = "src/lib.rs",
     crate_name = "xm1_focus_measurement_round",
-    data = ["src/jobs.rs", "src/acquisition.rs", "src/children.rs", "src/lanes.rs", "src/history.rs", "src/round.rs", "src/image.rs", "src/live.rs", "src/stock.rs", "src/planner.rs", "src/profile.rs", "src/record.rs", "src/pipeline.rs", "src/window.rs", "src/auxiliary.rs", "src/source.rs"],
+    data = ["src/jobs.rs", "src/acquisition.rs", "src/children.rs", "src/lanes.rs", "src/history.rs", "src/round.rs", "src/image.rs", "src/live.rs", "src/stock.rs", "src/planner.rs", "src/profile.rs", "src/record.rs", "src/pipeline.rs", "src/window.rs", "src/auxiliary.rs", "src/source.rs"] + glob(["src/acquisition/*.rs"]),
     out = "arm/libxm1_focus_measurement_round.rlib",
     rlib_deps = {
         "xm1_saclac_controllers": "//replacement/saclac/controllers:controllers",
@@ -18,7 +18,7 @@ xm1_rust_host_test(
     name = "host-tests",
     src = "src/lib.rs",
     crate_name = "xm1_focus_measurement_round_tests",
-    data = glob(["src/*.rs"], exclude = ["src/lib.rs"]),
+    data = glob(["src/*.rs", "src/acquisition/*.rs"], exclude = ["src/lib.rs"]),
     rlib_deps = {
         "xm1_saclac_controllers": "//replacement/saclac/controllers:host",
         "xm1_saclac_interface": "//replacement/saclac_interface:host",

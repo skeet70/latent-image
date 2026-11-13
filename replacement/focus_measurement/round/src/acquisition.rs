@@ -1,6 +1,17 @@
 #![forbid(unsafe_code)]
 
+//! The acquisition machine shared by the live round and the S1 child, and the work each of its
+//! steps does.
+
+pub mod exposure;
+pub mod live;
+pub mod ports;
+pub mod s1;
+pub mod selection;
+pub mod statistics;
+
 use crate::jobs::{InvalidTransition, Outcome};
+use xm1_saclac_interface::{Completed, RecordHandle};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Branch { Live, S1 }
@@ -27,15 +38,20 @@ pub enum Effect {
     SubmitPrimary(Pass),
     SubmitSecondary,
     CollectPrimary,
-    PublishFocus,
+    /// The live acquisition's secondary collection and selection table.
     CollectSecondary,
-    PublishPrimary,
-    PublishSecondary,
+    /// The S1 acquisition's restore of the shot's saved selection.
     Restore,
+    /// The S1 acquisition's publication of the record's selection.
+    PublishSelection,
+    /// The S1 acquisition's focus table.
+    PublishFocus,
 }
 
-pub trait Ports {
+/// What each machine step does.
+pub trait Work {
     fn effect(&mut self, branch: Branch, effect: Effect);
+    /// Whether the latest secondary collection changed the selection table.
     fn selection_changed(&mut self) -> bool;
 }
 
@@ -51,32 +67,32 @@ pub struct Acquisition {
 impl Acquisition {
     pub const fn new(branch: Branch) -> Self { Self { branch, stage: Stage::Disabled, pass: Pass::First } }
 
-    pub fn control(&mut self, control: Control, ports: &mut impl Ports) -> Result<Outcome, InvalidTransition> {
+    pub fn control(&mut self, control: Control, work: &mut impl Work) -> Result<Outcome, InvalidTransition> {
         match (self.stage, control) {
             (Stage::Disabled, Control::Initialize | Control::Enable) => {
-                ports.effect(self.branch, Effect::Initialize);
+                work.effect(self.branch, Effect::Initialize);
                 self.pass = Pass::First;
                 if self.branch == Branch::S1 || control == Control::Enable {
                     self.stage = Stage::Ready;
                 }
-                if self.branch == Branch::Live && control == Control::Enable { ports.effect(self.branch, Effect::Enable); }
+                if self.branch == Branch::Live && control == Control::Enable { work.effect(self.branch, Effect::Enable); }
                 Ok(Outcome::Complete)
             }
             (Stage::Disabled, Control::Stop) => Ok(Outcome::Complete),
             (Stage::Disabled, Control::Primary | Control::Secondary) => Ok(Outcome::NoWork),
             (Stage::Ready, Control::Stop) => {
-                ports.effect(self.branch, Effect::Release);
+                work.effect(self.branch, Effect::Release);
                 self.stage = Stage::Disabled;
                 Ok(Outcome::Complete)
             }
             (Stage::Ready, Control::Primary) => {
                 let pass = if self.branch == Branch::S1 { self.pass } else { Pass::First };
-                ports.effect(self.branch, Effect::SubmitPrimary(pass));
+                work.effect(self.branch, Effect::SubmitPrimary(pass));
                 self.stage = Stage::Primary(pass);
                 Ok(Outcome::Pending)
             }
             (Stage::Ready, Control::Secondary) if self.branch == Branch::Live => {
-                ports.effect(self.branch, Effect::SubmitSecondary);
+                work.effect(self.branch, Effect::SubmitSecondary);
                 self.stage = Stage::Secondary;
                 Ok(Outcome::Pending)
             }
@@ -93,58 +109,101 @@ impl Acquisition {
         }
     }
 
-    pub fn completed(&mut self, completion: Completion, ports: &mut impl Ports) -> Outcome {
+    pub fn completed(&mut self, completion: Completion, work: &mut impl Work) -> Outcome {
         match (self.stage, completion) {
             (Stage::Primary(pass), Completion::Primary) => {
-                ports.effect(self.branch, Effect::CollectPrimary);
+                work.effect(self.branch, Effect::CollectPrimary);
                 if self.branch == Branch::S1 {
                     self.pass = pass.next();
                     if pass == Pass::Final {
-                        ports.effect(self.branch, Effect::SubmitSecondary);
+                        work.effect(self.branch, Effect::SubmitSecondary);
                         self.stage = Stage::Secondary;
                         return Outcome::Pending;
                     }
-                } else {
-                    ports.effect(self.branch, Effect::PublishPrimary);
                 }
                 self.stage = Stage::Ready;
                 if self.branch == Branch::S1 { Outcome::Pending } else { Outcome::NoWork }
             }
             (Stage::Secondary, Completion::Secondary) => {
-                if self.branch == Branch::S1 {
-                    ports.effect(self.branch, Effect::Restore);
-                    ports.effect(self.branch, Effect::PublishFocus);
-                } else {
-                    ports.effect(self.branch, Effect::CollectSecondary);
-                }
-                ports.effect(self.branch, Effect::PublishSecondary);
                 self.stage = Stage::Ready;
-                if self.branch == Branch::Live && ports.selection_changed() {
-                    Outcome::SelectionUpdated
-                } else if self.branch == Branch::S1 {
-                    Outcome::Pending
-                } else { Outcome::NoWork }
+                if self.branch == Branch::S1 {
+                    work.effect(self.branch, Effect::Restore);
+                    work.effect(self.branch, Effect::PublishSelection);
+                    work.effect(self.branch, Effect::PublishFocus);
+                    return Outcome::Pending;
+                }
+                work.effect(self.branch, Effect::CollectSecondary);
+                if work.selection_changed() { Outcome::SelectionUpdated } else { Outcome::NoWork }
             }
             (Stage::StoppingPrimary, Completion::Primary) => {
-                ports.effect(self.branch, Effect::CollectPrimary);
-                if self.branch == Branch::Live { ports.effect(self.branch, Effect::PublishPrimary); }
-                ports.effect(self.branch, Effect::Release);
+                work.effect(self.branch, Effect::CollectPrimary);
+                work.effect(self.branch, Effect::Release);
                 self.stage = Stage::Disabled;
                 Outcome::Complete
             }
             (Stage::StoppingSecondary, Completion::Secondary) => {
                 if self.branch == Branch::S1 {
-                    ports.effect(self.branch, Effect::Restore);
-                    ports.effect(self.branch, Effect::PublishFocus);
+                    work.effect(self.branch, Effect::Restore);
+                    work.effect(self.branch, Effect::PublishSelection);
                 } else {
-                    ports.effect(self.branch, Effect::CollectSecondary);
-                    ports.effect(self.branch, Effect::PublishSecondary);
+                    work.effect(self.branch, Effect::CollectSecondary);
                 }
-                ports.effect(self.branch, Effect::Release);
+                work.effect(self.branch, Effect::Release);
                 self.stage = Stage::Disabled;
                 Outcome::Complete
             }
             _ => Outcome::Ignored,
         }
     }
+}
+
+/// The live acquisition's steps for one record and, for a collection, the completion it follows.
+pub(crate) struct LiveSteps<'a, 'c, P> {
+    pub record: RecordHandle,
+    pub completed: Option<Completed<'c>>,
+    pub work: &'a mut live::LiveWork,
+    pub ports: &'a mut P,
+}
+
+impl<P: ports::Ports> Work for LiveSteps<'_, '_, P> {
+    fn effect(&mut self, _: Branch, effect: Effect) {
+        let (record, ports) = (self.record, &mut *self.ports);
+        match (effect, self.completed) {
+            (Effect::Initialize, _) => self.work.initialize(record, ports),
+            (Effect::Enable, _) => self.work.enable(record, ports),
+            (Effect::Release, _) => self.work.release(record, ports),
+            (Effect::SubmitPrimary(_), _) => self.work.submit_primary(record, ports),
+            (Effect::SubmitSecondary, _) => self.work.submit_secondary(record, ports),
+            (Effect::CollectPrimary, Some(completed)) => self.work.collect_primary(record, completed, ports),
+            (Effect::CollectSecondary, Some(completed)) => { self.work.collect_secondary(record, completed, ports); }
+            _ => {}
+        }
+    }
+    fn selection_changed(&mut self) -> bool { self.work.changed() }
+}
+
+/// The S1 acquisition's steps for one record and, for a collection, the completion it follows.
+pub(crate) struct S1Steps<'a, 'c, P> {
+    pub record: RecordHandle,
+    pub completed: Option<Completed<'c>>,
+    pub work: &'a mut s1::S1Work,
+    pub ports: &'a mut P,
+}
+
+impl<P: ports::Ports> Work for S1Steps<'_, '_, P> {
+    fn effect(&mut self, _: Branch, effect: Effect) {
+        let (record, ports) = (self.record, &mut *self.ports);
+        match (effect, self.completed) {
+            (Effect::Initialize, _) => self.work.initialize(record, ports),
+            (Effect::Release, _) => self.work.stop(record, ports),
+            (Effect::SubmitPrimary(_), _) => self.work.submit_primary(record, ports),
+            (Effect::SubmitSecondary, _) => self.work.submit_secondary(record, ports),
+            (Effect::CollectPrimary, Some(completed)) => self.work.collect_primary(record, completed, ports),
+            (Effect::Restore, Some(completed)) => self.work.restore(record, completed, ports),
+            (Effect::PublishSelection, Some(completed)) => self.work.publish_selection(record, completed, ports),
+            (Effect::PublishFocus, Some(completed)) => self.work.publish_focus(record, completed, ports),
+            _ => {}
+        }
+    }
+    fn selection_changed(&mut self) -> bool { false }
 }

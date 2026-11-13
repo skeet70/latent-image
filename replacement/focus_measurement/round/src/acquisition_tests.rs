@@ -1,64 +1,67 @@
-use crate::acquisition::{Acquisition, Branch, Completion, Control, Effect, Pass, Ports};
+use crate::acquisition::{Acquisition, Branch, Completion, Control, Effect, Pass, Work};
 use crate::jobs::{InvalidTransition, Outcome};
 use std::vec::Vec;
 
 #[derive(Default)]
-struct Effects { events: Vec<(Branch, Effect)>, changed: bool }
-impl Ports for Effects {
+struct Steps { events: Vec<(Branch, Effect)>, changed: bool }
+impl Work for Steps {
     fn effect(&mut self, branch: Branch, effect: Effect) { self.events.push((branch, effect)); }
     fn selection_changed(&mut self) -> bool { self.changed }
 }
 
 #[test]
-fn s1_acquires_four_primary_passes_before_secondary_and_image_publication() {
+fn s1_acquires_four_primary_passes_before_secondary_and_focus_publication() {
     let mut acquisition = Acquisition::new(Branch::S1);
-    let mut effects = Effects::default();
-    assert_eq!(acquisition.control(Control::Initialize, &mut effects), Ok(Outcome::Complete));
+    let mut steps = Steps::default();
+    assert_eq!(acquisition.control(Control::Initialize, &mut steps), Ok(Outcome::Complete));
     for pass in [Pass::First, Pass::Second, Pass::Third, Pass::Final] {
-        assert_eq!(acquisition.control(Control::Primary, &mut effects), Ok(Outcome::Pending));
-        assert_eq!(effects.events.last(), Some(&(Branch::S1, Effect::SubmitPrimary(pass))));
-        assert_eq!(acquisition.completed(Completion::Primary, &mut effects), Outcome::Pending);
+        assert_eq!(acquisition.control(Control::Primary, &mut steps), Ok(Outcome::Pending));
+        assert_eq!(steps.events.last(), Some(&(Branch::S1, Effect::SubmitPrimary(pass))));
+        assert_eq!(acquisition.completed(Completion::Primary, &mut steps), Outcome::Pending);
     }
-    assert_eq!(effects.events.last(), Some(&(Branch::S1, Effect::SubmitSecondary)));
-    assert_eq!(acquisition.completed(Completion::Secondary, &mut effects), Outcome::Pending);
-    assert_eq!(&effects.events[effects.events.len() - 3..], [(Branch::S1, Effect::Restore), (Branch::S1, Effect::PublishFocus), (Branch::S1, Effect::PublishSecondary)]);
-    assert_eq!(acquisition.control(Control::Primary, &mut effects), Ok(Outcome::Pending));
-    assert_eq!(effects.events.last(), Some(&(Branch::S1, Effect::SubmitPrimary(Pass::First))));
+    assert_eq!(steps.events.last(), Some(&(Branch::S1, Effect::SubmitSecondary)));
+    assert_eq!(acquisition.completed(Completion::Secondary, &mut steps), Outcome::Pending);
+    assert_eq!(&steps.events[steps.events.len() - 3..], [(Branch::S1, Effect::Restore), (Branch::S1, Effect::PublishSelection), (Branch::S1, Effect::PublishFocus)]);
+    assert_eq!(acquisition.control(Control::Primary, &mut steps), Ok(Outcome::Pending));
+    assert_eq!(steps.events.last(), Some(&(Branch::S1, Effect::SubmitPrimary(Pass::First))));
 }
 
 #[test]
-fn s1_stop_drains_the_pending_secondary_without_publishing_a_new_image() {
+fn s1_stop_drains_the_pending_secondary_without_a_focus_table() {
     let mut acquisition = Acquisition::new(Branch::S1);
-    let mut effects = Effects::default();
-    acquisition.control(Control::Initialize, &mut effects).unwrap();
+    let mut steps = Steps::default();
+    acquisition.control(Control::Initialize, &mut steps).unwrap();
     for _ in 0..4 {
-        acquisition.control(Control::Primary, &mut effects).unwrap();
-        acquisition.completed(Completion::Primary, &mut effects);
+        acquisition.control(Control::Primary, &mut steps).unwrap();
+        acquisition.completed(Completion::Primary, &mut steps);
     }
-    assert_eq!(acquisition.control(Control::Stop, &mut effects), Ok(Outcome::Pending));
-    let before = effects.events.len();
-    assert_eq!(acquisition.completed(Completion::Secondary, &mut effects), Outcome::Complete);
-    assert_eq!(&effects.events[before..], [(Branch::S1, Effect::Restore), (Branch::S1, Effect::PublishFocus), (Branch::S1, Effect::Release)]);
+    assert_eq!(acquisition.control(Control::Stop, &mut steps), Ok(Outcome::Pending));
+    let before = steps.events.len();
+    assert_eq!(acquisition.completed(Completion::Secondary, &mut steps), Outcome::Complete);
+    assert_eq!(&steps.events[before..], [(Branch::S1, Effect::Restore), (Branch::S1, Effect::PublishSelection), (Branch::S1, Effect::Release)]);
 }
 
 #[test]
-fn live_acquisition_reports_a_changed_selection_after_secondary_publication() {
+fn live_acquisition_reports_a_changed_selection_after_its_secondary_collection() {
     let mut acquisition = Acquisition::new(Branch::Live);
-    let mut effects = Effects { changed: true, ..Effects::default() };
-    acquisition.control(Control::Enable, &mut effects).unwrap();
-    assert_eq!(acquisition.control(Control::Secondary, &mut effects), Ok(Outcome::Pending));
-    assert_eq!(acquisition.completed(Completion::Secondary, &mut effects), Outcome::SelectionUpdated);
-    assert_eq!(effects.events.last(), Some(&(Branch::Live, Effect::PublishSecondary)));
+    let mut steps = Steps { changed: true, ..Steps::default() };
+    acquisition.control(Control::Enable, &mut steps).unwrap();
+    assert_eq!(acquisition.control(Control::Secondary, &mut steps), Ok(Outcome::Pending));
+    assert_eq!(acquisition.completed(Completion::Secondary, &mut steps), Outcome::SelectionUpdated);
+    assert_eq!(steps.events.last(), Some(&(Branch::Live, Effect::CollectSecondary)));
+    steps.changed = false;
+    acquisition.control(Control::Secondary, &mut steps).unwrap();
+    assert_eq!(acquisition.completed(Completion::Secondary, &mut steps), Outcome::NoWork);
 }
 
 #[test]
 fn mismatched_completions_cannot_release_an_active_primary_job() {
     let mut acquisition = Acquisition::new(Branch::Live);
-    let mut effects = Effects::default();
-    acquisition.control(Control::Enable, &mut effects).unwrap();
-    acquisition.control(Control::Primary, &mut effects).unwrap();
-    let before = effects.events.clone();
-    assert_eq!(acquisition.completed(Completion::Secondary, &mut effects), Outcome::Ignored);
-    assert_eq!(effects.events, before);
-    assert_eq!(acquisition.control(Control::Primary, &mut effects), Err(InvalidTransition));
+    let mut steps = Steps::default();
+    acquisition.control(Control::Enable, &mut steps).unwrap();
+    acquisition.control(Control::Primary, &mut steps).unwrap();
+    let before = steps.events.clone();
+    assert_eq!(acquisition.completed(Completion::Secondary, &mut steps), Outcome::Ignored);
+    assert_eq!(steps.events, before);
+    assert_eq!(acquisition.control(Control::Primary, &mut steps), Err(InvalidTransition));
 }

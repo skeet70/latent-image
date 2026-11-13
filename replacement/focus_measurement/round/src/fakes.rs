@@ -166,6 +166,7 @@ pub enum Outbound {
     Image(ImageLaneRequest),
     Power(bool),
     Trace(TraceMark),
+    Acquisition(AcquisitionTraffic),
 }
 
 /// Record ports over [`Records`], logging what leaves the round; `extra` carries
@@ -203,6 +204,8 @@ pub struct Ports<X = ()> {
     /// The relative exposure of every exposure word.
     pub relative_exposure: i16,
     pub adjustment: AdjustmentWords,
+    pub acquisition: AcquisitionRecords,
+    pub faults: usize,
     pub outbound: Vec<Outbound>,
     pub extra: X,
 }
@@ -237,6 +240,8 @@ impl<X> Ports<X> {
             source: SourceRecords::default(),
             relative_exposure: 0,
             adjustment: AdjustmentWords::default(),
+            acquisition: AcquisitionRecords::default(),
+            faults: 0,
             outbound: Vec::new(),
             extra,
         }
@@ -427,4 +432,232 @@ impl<X> source::Ports for Ports<X> {
         self.source.published = Some(published);
         self.source.strength = strength;
     }
+}
+
+use crate::acquisition::ports::{
+    AcquisitionBlock, AcquisitionSettings, Branch as AcquisitionBranch, ExposurePublication, ExposureRecordUpdate, GridInputs,
+    GridReference, ModeInputs, PositionInputs, PositionSlot, Program, ProgramChoice, ProgramInputs, ProgramTarget,
+    PublishedExposure, Range, RangeInputs, RateNotice, RateRecord, RecordView, Release, SelectionNotice, SelectionPosition,
+    SelectionRecord, SelectionSlot, SettingEcho, ShotContext, StatisticsBuffer, TargetInputs,
+};
+use crate::acquisition::selection::SelectionMemory;
+use xm1_saclac_interface::calc::{AcquisitionGrid, SharedAddress};
+use xm1_saclac_interface::round_acquisition::{
+    AcquisitionRequest, AcquisitionResult, ChangeNotice, FocusTable, PrimaryLevels, RestoredSetting, SavedExposure,
+    SavedSelection, SelectionLevels, SelectionLimits, SelectionRequest, SelectionResult, SelectionSetting, SelectionTable,
+    SelectionWindow, ShotRecordLevels,
+};
+
+/// What the acquisition sends out of the round, as the fake records it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AcquisitionTraffic {
+    Acquisition(AcquisitionBranch, AcquisitionRequest),
+    Selection(AcquisitionBranch, SelectionRequest),
+    Exposure(ExposurePublication),
+    ChangeNotice(ChangeNotice),
+    SelectionTable(SelectionTable),
+    FocusTable(FocusTable),
+    Selected(SelectionNotice),
+    Released(SharedAddress),
+    Statistics,
+}
+
+/// The profile record and layer values the acquisition reads, and what it last wrote back.
+pub struct AcquisitionRecords {
+    pub view: RecordView,
+    pub published: PublishedExposure,
+    pub block: AcquisitionBlock,
+    pub selection: SelectionRecord,
+    pub slot: SelectionSlot,
+    pub memory: SelectionMemory,
+    pub settings: AcquisitionSettings,
+    pub program_kind: u32,
+    pub program: Program,
+    pub range: Range,
+    pub target: ProgramTarget,
+    pub lens: ResourceIndex,
+    pub statistics: [u16; 256],
+    pub acquisition_result: Option<AcquisitionResult>,
+    pub selection_result: Option<SelectionResult>,
+    pub word: u32,
+}
+
+impl Default for AcquisitionRecords {
+    fn default() -> Self {
+        Self {
+            view: RecordView::default(),
+            published: PublishedExposure::default(),
+            block: AcquisitionBlock::default(),
+            selection: SelectionRecord::default(),
+            slot: SelectionSlot::default(),
+            memory: SelectionMemory::new(),
+            settings: AcquisitionSettings::default(),
+            program_kind: 0,
+            program: Program(0),
+            range: Range::default(),
+            target: ProgramTarget::default(),
+            lens: ResourceIndex(0),
+            statistics: [0; 256],
+            acquisition_result: None,
+            selection_result: None,
+            word: 0,
+        }
+    }
+}
+
+impl<X> Ports<X> {
+    fn send(&mut self, traffic: AcquisitionTraffic) { self.outbound.push(Outbound::Acquisition(traffic)); }
+}
+
+impl<X> crate::acquisition::ports::Ports for Ports<X> {
+    fn selection_memory(&mut self) -> &mut SelectionMemory { &mut self.acquisition.memory }
+    fn acquisition_settings(&mut self) -> AcquisitionSettings { AcquisitionSettings { traces: self.traces, ..self.acquisition.settings } }
+    fn record_view(&mut self, _: RecordHandle) -> RecordView { self.acquisition.view }
+    fn published_exposure(&mut self, _: RecordHandle) -> PublishedExposure { self.acquisition.published }
+    fn publish_exposure(&mut self, _: RecordHandle, publication: &ExposurePublication) {
+        let published = &mut self.acquisition.published;
+        published.exposure = publication.exposure;
+        published.level = publication.level;
+        published.second = publication.second;
+        published.correction = publication.correction;
+        published.aspect = publication.aspect;
+        published.reference = publication.reference;
+        published.offset = publication.offset;
+        published.gain_step = publication.gain_step;
+        published.timing = publication.timing;
+        published.code = publication.code;
+        published.selected = publication.selected;
+        published.adjustment = publication.adjustment;
+        published.combined = publication.combined;
+        published.reference_level = publication.reference_level;
+        self.send(AcquisitionTraffic::Exposure(*publication));
+    }
+    fn publish_primary_levels(&mut self, _: RecordHandle, levels: &PrimaryLevels) {
+        self.acquisition.published.primary_levels = [levels.levels[0], levels.levels[1], levels.levels[2], levels.levels[3]];
+    }
+    fn publish_grid(&mut self, _: RecordHandle, _: &AcquisitionGrid) {}
+    fn publish_selection_levels(&mut self, _: RecordHandle, levels: &SelectionLevels) { self.acquisition.published.selection_reference = levels.reference; }
+    fn update_exposure_record(&mut self, _: RecordHandle, _: ExposureRecordUpdate) {}
+    fn store_lens(&mut self, _: RecordHandle, lens: ResourceIndex) { self.acquisition.published.lens = lens; }
+    fn store_reference(&mut self, _: RecordHandle, reference: u16) { self.acquisition.published.reference = reference; }
+    fn store_selection_reference(&mut self, _: RecordHandle, reference: u16) { self.acquisition.published.selection_reference = reference; }
+    fn program_kind(&mut self, _: RecordHandle) -> u32 { self.acquisition.program_kind }
+    fn store_program_kind(&mut self, _: RecordHandle, kind: u32) { self.acquisition.program_kind = kind; }
+    fn stored_program(&mut self, _: RecordHandle) -> Program { self.acquisition.program }
+    fn store_program(&mut self, _: RecordHandle, program: Program) { self.acquisition.program = program; }
+    fn store_program_word(&mut self, _: RecordHandle, word: [u32; 2]) { self.acquisition.view.program_word = word; }
+    fn store_program_choice(&mut self, _: RecordHandle, _: &ProgramChoice) {}
+    fn acquisition_block(&mut self, _: RecordHandle) -> AcquisitionBlock { self.acquisition.block }
+    fn store_acquisition_block(&mut self, _: RecordHandle, block: &AcquisitionBlock) { self.acquisition.block = *block; }
+    fn selection_record(&mut self, _: RecordHandle) -> SelectionRecord { self.acquisition.selection }
+    fn store_selection_record(&mut self, _: RecordHandle, selection: &SelectionRecord) { self.acquisition.selection = *selection; }
+    fn selection_slot(&mut self, _: RecordHandle) -> SelectionSlot { self.acquisition.slot }
+    fn publish_selection_slot(&mut self, _: RecordHandle, slot: &SelectionSlot) { self.acquisition.slot = *slot; }
+    fn store_slot_word(&mut self, _: RecordHandle, word: u32) { self.acquisition.slot.word = word; }
+    fn position_pair(&mut self, _: RecordHandle, _: PositionSlot) -> [u32; 2] { [0; 2] }
+    fn store_position_pair(&mut self, _: RecordHandle, _: PositionSlot, _: [u32; 2]) {}
+    fn store_restore_levels(&mut self, _: RecordHandle, _: u16, _: [u16; 2]) {}
+    fn store_s1_level(&mut self, _: RecordHandle, _: i16) {}
+    fn clear_grid_selection(&mut self, _: RecordHandle) {}
+    fn acquisition_word(&mut self, _: RecordHandle) -> u32 { self.acquisition.word }
+    fn store_acquisition_word(&mut self, _: RecordHandle, word: u32) { self.acquisition.word = word; }
+    fn rate_record(&mut self, _: RecordHandle) -> RateRecord { RateRecord::default() }
+    fn store_rate_selection(&mut self, _: RecordHandle, _: u32) {}
+    fn clear_selection_reuse(&mut self, _: RecordHandle) {}
+    fn clear_controller_reuse(&mut self) {}
+    fn notify_selection(&mut self, _: RecordHandle, notice: &SelectionNotice) { self.send(AcquisitionTraffic::Selected(*notice)); }
+    fn notify_rate(&mut self, _: RecordHandle, _: &RateNotice) {}
+    fn current_lens(&mut self) -> ResourceIndex { self.acquisition.lens }
+    fn lens_word(&mut self, _: RecordHandle, lens: Option<ResourceIndex>) -> u32 { lens.map_or(0xffff, |lens| lens.0) }
+    fn collapse_index(&mut self, exposure: PipelineWord) -> u32 { exposure.0 }
+    fn mapped_value(&mut self, first: u32, second: u32) -> u32 { first ^ second }
+    fn lens_position(&mut self, _: [u32; 2], position: u32) -> u32 { position }
+    fn gain_step_for(&mut self, offset: i32) -> GainStep { GainStep(offset as u32) }
+    fn acquisition_gain_step(&mut self, _: u32) -> GainStep { GainStep(3) }
+    fn kind_decade(&mut self, kind: u32) -> u32 { kind }
+    fn change_positions(&mut self, _: RecordHandle) -> [u32; 2] { [0; 2] }
+    fn select_program(&mut self, inputs: &ProgramInputs) -> Program { Program(inputs.kind) }
+    fn program_adjustment(&mut self, _: Program) -> u32 { 0 }
+    fn program_range_limit(&mut self, _: Program) -> u32 { 0 }
+    fn program_policy(&mut self, _: Program) -> u32 { 0 }
+    fn program_secondary_gate(&mut self, _: Program) -> u32 { 0 }
+    fn program_scale(&mut self, _: Program) -> u32 { 0 }
+    fn program_percent(&mut self, _: Program) -> u16 { 0 }
+    fn program_target(&mut self, _: &TargetInputs) -> ProgramTarget { self.acquisition.target }
+    fn program_range(&mut self, _: &RangeInputs) -> Range { self.acquisition.range }
+    fn program_lower_bound(&mut self, _: Program, _: u32) -> u32 { 0 }
+    fn profile_percent(&mut self, _: Program, _: u16, _: ResourceIndex, _: u32) -> u16 { 0 }
+    fn grid_count(&mut self, _: u32, _: u32, _: u32, _: u32) -> u32 { 0 }
+    fn indexed_configuration(&mut self, _: u32, _: u32, _: u32) -> u8 { 0 }
+    fn level_category(&mut self, _: i16, _: u32, _: u32) -> u32 { 0 }
+    fn selection_limits(&mut self, _: u32, _: u32, _: u32, _: u32) -> SelectionLimits { SelectionLimits::default() }
+    fn fill_grid(&mut self, _: &GridInputs, _: &mut AcquisitionGrid) {}
+    fn snapshot_grid(&mut self, _: Statistics, _: &mut AcquisitionGrid) {}
+    fn adjustment_class(&mut self, _: u32, _: i16) -> u8 { 0 }
+    fn adjustment_option(&mut self) -> u32 { 0 }
+    fn refreshed_position(&mut self) -> u32 { 0 }
+    fn mode_one(&mut self, _: &ModeInputs) -> u32 { 0 }
+    fn both_modes(&mut self, _: &ModeInputs) -> u32 { 0 }
+    fn five_parameter_adjustment(&mut self, _: u32, _: u32, _: u32, _: u32, _: u32) -> u32 { 0 }
+    fn rate_divisor(&mut self, _: u32, _: u32, _: ResourceIndex, _: u16) -> u32 { 0 }
+    fn rate_limit(&mut self, _: u32, _: u32, _: u16) -> u32 { 0 }
+    fn rate_mode(&mut self, _: u32, _: u16, _: u32, _: u32) -> u16 { 0 }
+    fn selection_mode_category(&mut self, _: u32) -> u32 { 0 }
+    fn offset_position(&mut self, level: i16, _: u16, _: u32) -> u16 { level as u16 }
+    fn clamp_selection_difference(&mut self, _: u32, _: ResourceIndex, level: i16, _: u16, _: u32, _: i16) -> i16 { level }
+    fn has_valid_offset(&mut self, _: u32, _: u32, _: i16) -> u32 { 0 }
+    fn allows_unflagged_selection(&mut self, _: u32, _: u16) -> bool { true }
+    fn capture_selection_position(&mut self, _: AcquisitionBranch, _: &PositionInputs) -> SelectionPosition { SelectionPosition::default() }
+    fn copy_rate_grid_source(&mut self, _: StatisticsBuffer) {}
+    fn rate_pair(&mut self, _: RecordHandle, _: SharedAddress, _: u32, _: &mut [u32; 2]) {}
+    fn clear_rate_configuration(&mut self, _: RecordHandle) {}
+    fn rate_flag(&mut self, _: RecordHandle, _: u32) {}
+    fn draw_rate(&mut self, _: SharedAddress, _: u32) {}
+    fn draw_rate_status(&mut self, _: u16, _: u32, _: u32) {}
+    fn rate_position(&mut self, _: RecordHandle) -> (u32, u16) { (0, 0) }
+    fn statistics_buffer(&mut self, _: StatisticsBuffer) -> [u16; 256] { self.acquisition.statistics }
+    fn extra_statistics(&mut self, values: &mut [u16]) { values.fill(0); }
+    fn store_release(&mut self, _: &Release<'_>) { self.send(AcquisitionTraffic::Statistics); }
+    fn set_pipeline_reference(&mut self, _: i16) {}
+    fn prepare_s1_sample(&mut self) {}
+    fn s1_sample(&mut self) -> PipelineSnapshot { self.snapshot }
+    fn post_change_notice(&mut self, notice: &ChangeNotice) { self.send(AcquisitionTraffic::ChangeNotice(*notice)); }
+    fn post_selection_table(&mut self, table: &SelectionTable) { self.send(AcquisitionTraffic::SelectionTable(*table)); }
+    fn post_focus_table(&mut self, table: &FocusTable) { self.send(AcquisitionTraffic::FocusTable(*table)); }
+    fn shot_reference_level(&mut self) -> u16 { 0 }
+    fn shot_selection_word(&mut self) -> u32 { 0 }
+    fn prepare_selection_defaults(&mut self, _: RecordHandle) -> ShotContext { ShotContext::default() }
+    fn restore_selection_setting(&mut self, _: AcquisitionBranch, _: ResourceIndex) {}
+    fn copy_reference_backup(&mut self, _: AcquisitionBranch) {}
+    fn write_saved_settings(&mut self, _: SharedAddress) {}
+    fn copy_selection_to_saved(&mut self, _: SharedAddress) {}
+    fn restore_selection_if_enabled(&mut self, _: RecordHandle, _: u32) {}
+    fn apply_selection_value_change(&mut self) {}
+    fn save_selection(&mut self, _: u32, _: &SavedSelection, _: u32) {}
+    fn selected_grid_reference(&mut self, _: RecordHandle, reference: GridReference) -> GridReference { reference }
+    fn refresh_hardware_state(&mut self) {}
+    fn hardware_ready(&mut self) -> bool { false }
+    fn clock_word(&mut self) -> u32 { 0 }
+    fn store_selection_window(&mut self, _: AcquisitionBranch, _: &SelectionWindow, _: &AcquisitionGrid) {}
+    fn store_selection_setting(&mut self, _: AcquisitionBranch, _: &SelectionSetting) {}
+    fn store_restored_setting(&mut self, _: AcquisitionBranch, _: &RestoredSetting) {}
+    fn setting_echo(&mut self, _: AcquisitionBranch) -> SettingEcho { SettingEcho::default() }
+    fn request_acquisition(&mut self, branch: AcquisitionBranch, request: &AcquisitionRequest, _: &AcquisitionGrid) {
+        self.send(AcquisitionTraffic::Acquisition(branch, *request));
+    }
+    fn request_selection(&mut self, branch: AcquisitionBranch, request: &SelectionRequest) {
+        self.send(AcquisitionTraffic::Selection(branch, *request));
+    }
+    fn acquisition_result(&mut self, _: Completed<'_>) -> Option<AcquisitionResult> { self.acquisition.acquisition_result }
+    fn selection_result(&mut self, _: Completed<'_>) -> Option<SelectionResult> { self.acquisition.selection_result }
+    fn shot_record_levels(&mut self, _: SharedAddress) -> ShotRecordLevels { ShotRecordLevels::default() }
+    fn saved_exposure(&mut self, _: SharedAddress) -> SavedExposure { SavedExposure::default() }
+    fn publish_saved_exposure(&mut self, _: RecordHandle, _: &SavedExposure) {}
+    fn release_result(&mut self, result: SharedAddress, _: Option<(SharedAddress, SharedAddress)>) {
+        self.send(AcquisitionTraffic::Released(result));
+    }
+}
+
+impl<X> crate::children::Ports for Ports<X> {
+    fn fault(&mut self) { self.faults += 1; }
 }

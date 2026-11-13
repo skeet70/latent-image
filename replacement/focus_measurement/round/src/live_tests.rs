@@ -1,5 +1,5 @@
-use crate::acquisition::{self, Pass};
-use crate::fakes::{Outbound, Ports, Published};
+use crate::acquisition::Branch;
+use crate::fakes::{AcquisitionTraffic, Outbound, Ports, Published};
 use crate::image::{ChannelCount, LensReport};
 use crate::lanes::Selection;
 use crate::live::{Effects, Measurement};
@@ -19,11 +19,10 @@ use std::vec::Vec;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Traffic {
     Search(&'static str),
-    Acquisition(acquisition::Effect),
     Fault,
 }
 
-struct Live { traffic: Vec<Traffic>, programmed: Option<TimingWord> }
+struct Live { traffic: Vec<Traffic> }
 
 impl Live {
     fn take(&mut self) -> Vec<Traffic> { core::mem::take(&mut self.traffic) }
@@ -31,7 +30,11 @@ impl Live {
 
 type Fake = Ports<Live>;
 
-fn fake(available: Selection) -> Fake { Ports::new(Some(available), Live { traffic: Vec::new(), programmed: None }) }
+fn fake(available: Selection) -> Fake { Ports::new(Some(available), Live { traffic: Vec::new() }) }
+
+fn acquisition_requests(outbound: &[Outbound]) -> usize {
+    outbound.iter().filter(|traffic| matches!(traffic, Outbound::Acquisition(AcquisitionTraffic::Acquisition(Branch::Live, _)))).count()
+}
 
 impl Effects for Fake {
     fn fault(&mut self) { self.extra.traffic.push(Traffic::Fault); }
@@ -46,11 +49,6 @@ impl Effects for Fake {
         self.extra.traffic.push(Traffic::Search(name));
         status
     }
-    fn acquisition(&mut self, _: RecordHandle, effect: acquisition::Effect) -> Option<TimingWord> {
-        self.extra.traffic.push(Traffic::Acquisition(effect));
-        if effect == acquisition::Effect::Initialize { self.extra.programmed } else { None }
-    }
-    fn selection_changed(&mut self, _: RecordHandle) -> bool { false }
 }
 
 fn record() -> RecordHandle { stock::record_handle_from_a2(0x16c0000) }
@@ -74,12 +72,11 @@ fn initialization_enables_acquisition_and_window_and_initializes_the_other_lanes
     let mut fake = fake(ACQUISITION);
     fake.image_client = Some(StockCallbackWord(0x00e0_1234));
     assert_eq!(measurement.handle(control(MeasurementControl::Initialize), &mut fake), ChildOutcome::Complete);
-    assert_eq!(fake.extra.take(), [
-        Traffic::Acquisition(acquisition::Effect::Initialize),
-        Traffic::Acquisition(acquisition::Effect::Enable),
-        Traffic::Search("initialize"),
-    ]);
-    assert!(fake.take().contains(&Outbound::NotifyImageClient(StockCallbackWord(0x00e0_1234))));
+    assert_eq!(fake.extra.take(), [Traffic::Search("initialize")]);
+    assert_eq!(fake.acquisition.word & 1, 1);
+    let outbound = fake.take();
+    assert!(outbound.contains(&Outbound::NotifyImageClient(StockCallbackWord(0x00e0_1234))));
+    assert!(outbound.iter().any(|traffic| matches!(traffic, Outbound::Acquisition(AcquisitionTraffic::Exposure(_)))));
     assert!(fake.records.in_use.primary && fake.records.in_use.search);
     assert!(fake.auxiliary.publication.published);
     assert_eq!((fake.source.published, fake.source.callbacks_enabled), (Some(Published::Withdrawn), Some(false)));
@@ -115,13 +112,17 @@ fn a_round_submits_window_and_primary_acquisition_and_collects_their_results() {
     measurement.handle(control(MeasurementControl::Initialize), &mut fake);
     fake.extra.take();
     assert_eq!(measurement.handle(completion(Completion::Accessor4b), &mut fake), ChildOutcome::Pending);
-    assert_eq!(fake.extra.take(), [Traffic::Acquisition(acquisition::Effect::SubmitPrimary(Pass::First))]);
-    assert!(fake.take().iter().any(|traffic| matches!(traffic, Outbound::Request(Request::Window(_)))));
+    let outbound = fake.take();
+    assert_eq!(acquisition_requests(&outbound), 1);
+    assert!(outbound.iter().any(|traffic| matches!(traffic, Outbound::Request(Request::Window(_)))));
     fake.window_result = Some(WindowResult { status: WindowStatus(5), position: WindowPosition([1, 2]) });
     assert_eq!(measurement.handle(completion(Completion::Calculation8d), &mut fake), ChildOutcome::Pending);
     assert_eq!((fake.records.window.status, fake.records.window_position), (WindowStatus(5), WindowPosition([1, 2])));
+    let result = xm1_saclac_interface::calc::SharedAddress(0x0169_0000);
+    fake.acquisition.acquisition_result = Some(xm1_saclac_interface::round_acquisition::AcquisitionResult { address: result, ..Default::default() });
     assert_eq!(measurement.handle(completion(Completion::Calculation87), &mut fake), ChildOutcome::Pending);
-    assert_eq!(fake.extra.take(), [Traffic::Acquisition(acquisition::Effect::CollectPrimary), Traffic::Acquisition(acquisition::Effect::PublishPrimary)]);
+    assert!(fake.take().contains(&Outbound::Acquisition(AcquisitionTraffic::Released(result))));
+    assert_eq!(fake.acquisition.block.collected, 1);
 }
 
 #[test]
@@ -130,9 +131,10 @@ fn stopping_a_round_releases_each_enabled_job() {
     let mut fake = fake(ACQUISITION);
     measurement.handle(control(MeasurementControl::Initialize), &mut fake);
     fake.extra.take();
+    fake.take();
     assert_eq!(measurement.handle(control(MeasurementControl::Stop), &mut fake), ChildOutcome::Complete);
-    assert_eq!(fake.extra.take(), [Traffic::Acquisition(acquisition::Effect::Release), Traffic::Search("stop")]);
-    assert!(fake.take().is_empty());
+    assert_eq!(fake.extra.take(), [Traffic::Search("stop")]);
+    assert_eq!(fake.take(), [Outbound::Acquisition(AcquisitionTraffic::Statistics)]);
 }
 
 #[test]
@@ -179,6 +181,7 @@ fn a_measurement_tick_captures_the_statistics_in_use_and_records_the_history() {
     measurement.handle(control(MeasurementControl::Initialize), &mut fake);
     assert!(!fake.records.capture_attached);
     assert!(!measurement.history().started());
+    fake.take();
     measurement.handle(completion(Completion::Accessor4b), &mut fake);
     let traffic = fake.take();
     assert_eq!(traffic[..3], [Outbound::Capture(Statistics::Primary), Outbound::Capture(Statistics::Search), Outbound::Capture(Statistics::History)]);
@@ -217,13 +220,14 @@ fn submits_primary(configure: impl FnOnce(&mut Fake)) -> bool {
     let mut fake = fake(ACQUISITION);
     fake.records.profile.frame_rate_cadence = true;
     fake.frame_rate_threshold = FrameRate(30);
-    fake.extra.programmed = Some(TimingWord(0x55));
+    fake.acquisition.view.start = 1;
+    fake.acquisition.range.timing = TimingWord(0x55);
     fake.set_current_interval(Some(FrameInterval(1_000)));
     configure(&mut fake);
     measurement.handle(control(MeasurementControl::Initialize), &mut fake);
-    fake.extra.take();
+    fake.take();
     measurement.handle(completion(Completion::Accessor4b), &mut fake);
-    fake.extra.take().contains(&Traffic::Acquisition(acquisition::Effect::SubmitPrimary(Pass::First)))
+    acquisition_requests(&fake.take()) == 1
 }
 
 #[test]

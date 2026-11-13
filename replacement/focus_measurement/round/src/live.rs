@@ -1,12 +1,12 @@
 #![forbid(unsafe_code)]
 
-use crate::acquisition::{self, Acquisition, Branch};
+use crate::acquisition::live::LiveWork;
+use crate::acquisition::{self, Acquisition, Branch, LiveSteps};
 use crate::auxiliary::{self, Auxiliary};
 use crate::image::{self, ImageJob, ImageOutcome, ImageRequest, ImageSignal, Interruption};
 use crate::history::MeasurementHistory;
 use crate::jobs::{self, Calculation, CalculationJob};
 use crate::lanes::{Lane, Selection};
-use crate::pipeline::TimingWord;
 use crate::planner::{classify_mode, Cadence, Mode, ModeInputs, SamplingBand, Work};
 use crate::profile::{FrameRate, ProfileSelection};
 use crate::record::{self, Ports as RecordPorts};
@@ -17,14 +17,11 @@ use xm1_saclac_controllers::children::{ChildEvent, ChildOutcome, MeasurementCont
 use xm1_saclac_interface::{CommandKind, Completed, Completion, RecordHandle};
 
 /// Everything the live measurement asks of the records, its peers and the search slot.
-pub trait Effects: RecordPorts + image::Ports + window::Ports + auxiliary::Ports + source::Ports {
+pub trait Effects: RecordPorts + image::Ports + window::Ports + auxiliary::Ports + source::Ports + acquisition::ports::Ports {
     fn fault(&mut self);
 
     /// The contrast search lane, whose implementation is the AF-candidate slot.
     fn search(&mut self, signal: LaneSignal<'_>, record: RecordHandle) -> LaneStatus;
-    /// `Some` when the effect programmed the acquisition's timing.
-    fn acquisition(&mut self, record: RecordHandle, effect: acquisition::Effect) -> Option<TimingWord>;
-    fn selection_changed(&mut self, record: RecordHandle) -> bool;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,7 +32,7 @@ pub struct Measurement {
     round: Round,
     history: MeasurementHistory,
     acquisition: Acquisition,
-    acquisition_timing: TimingWord,
+    acquisition_work: LiveWork,
     auxiliary: CalculationJob,
     auxiliary_work: Auxiliary,
     window: CalculationJob,
@@ -54,7 +51,7 @@ impl Measurement {
             round: Round::new(),
             history: MeasurementHistory::new(),
             acquisition: Acquisition::new(Branch::Live),
-            acquisition_timing: TimingWord(0),
+            acquisition_work: LiveWork::new(),
             auxiliary: CalculationJob::new(Calculation::Auxiliary),
             auxiliary_work: Auxiliary::new(),
             window: CalculationJob::new(Calculation::Window),
@@ -67,8 +64,8 @@ impl Measurement {
     }
 
     pub fn handle(&mut self, event: ChildEvent<'_, MeasurementControl>, effects: &mut impl Effects) -> ChildOutcome {
-        let Self { round, history, acquisition, acquisition_timing, auxiliary, auxiliary_work, window, window_work, source, source_work, image, bookkeeping } = self;
-        let mut lanes = Lanes { history, acquisition, acquisition_timing, auxiliary, auxiliary_work, window, window_work, source, source_work, image, bookkeeping, effects };
+        let Self { round, history, acquisition, acquisition_work, auxiliary, auxiliary_work, window, window_work, source, source_work, image, bookkeeping } = self;
+        let mut lanes = Lanes { history, acquisition, acquisition_work, auxiliary, auxiliary_work, window, window_work, source, source_work, image, bookkeeping, effects };
         round.handle(event, &mut lanes)
     }
 
@@ -78,7 +75,7 @@ impl Measurement {
 struct Lanes<'a, E> {
     history: &'a mut MeasurementHistory,
     acquisition: &'a mut Acquisition,
-    acquisition_timing: &'a mut TimingWord,
+    acquisition_work: &'a mut LiveWork,
     auxiliary: &'a mut CalculationJob,
     auxiliary_work: &'a mut Auxiliary,
     window: &'a mut CalculationJob,
@@ -116,14 +113,6 @@ impl<E: Effects> jobs::CalculationPorts for CalculationEffects<'_, '_, E> {
     }
 }
 
-struct AcquisitionEffects<'a, E> { record: RecordHandle, timing: &'a mut TimingWord, effects: &'a mut E }
-impl<E: Effects> acquisition::Ports for AcquisitionEffects<'_, E> {
-    fn effect(&mut self, _: Branch, effect: acquisition::Effect) {
-        if let Some(timing) = self.effects.acquisition(self.record, effect) { *self.timing = timing; }
-    }
-    fn selection_changed(&mut self) -> bool { self.effects.selection_changed(self.record) }
-}
-
 impl<E: Effects> Lanes<'_, E> {
     fn calculation(&mut self, lane: Lane, signal: LaneSignal<'_>, record: RecordHandle) -> LaneStatus {
         let job = match lane { Lane::Auxiliary => &mut *self.auxiliary, Lane::Window => &mut *self.window, _ => &mut *self.source };
@@ -144,7 +133,8 @@ impl<E: Effects> Lanes<'_, E> {
     }
 
     fn acquisition(&mut self, signal: LaneSignal<'_>, record: RecordHandle) -> LaneStatus {
-        let mut ports = AcquisitionEffects { record, timing: &mut *self.acquisition_timing, effects: &mut *self.effects };
+        let completed = if let LaneSignal::Completed(completed) = signal { Some(completed) } else { None };
+        let mut ports = LiveSteps { record, completed, work: &mut *self.acquisition_work, ports: &mut *self.effects };
         let control = match signal {
             LaneSignal::Initialize => acquisition::Control::Initialize,
             LaneSignal::Enable => acquisition::Control::Enable,
@@ -215,7 +205,7 @@ impl<E: Effects> Lanes<'_, E> {
     fn planned_mode(&mut self, record: RecordHandle) -> Mode {
         let profile = self.effects.profile(record);
         let automatic_sampling = profile.frame_rate_cadence.then(|| {
-            let rate = self.effects.frame_interval(*self.acquisition_timing).map_or(FrameRate(0), |interval| interval.rate());
+            let rate = self.effects.frame_interval(self.acquisition_work.timing()).map_or(FrameRate(0), |interval| interval.rate());
             SamplingBand::of(rate, self.effects.frame_rate_threshold())
         });
         classify_mode(ModeInputs { record_selected: profile.selection == ProfileSelection::Record, profile_selected: profile.profile_cadence, automatic_sampling })

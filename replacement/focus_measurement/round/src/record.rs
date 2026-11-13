@@ -52,6 +52,9 @@ pub struct AdjustmentWords {
     /// One while the controllers' adjustment is set.
     pub controllers: RetainedWord,
     pub search: RetainedWord,
+    pub mode: RetainedWord,
+    /// One while the recording controller holds the selection.
+    pub recording: RetainedWord,
 }
 
 pub trait Adjustment {
@@ -59,7 +62,7 @@ pub trait Adjustment {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TraceMark { WindowRequest, AuxiliaryRequest, SourceRequest }
+pub enum TraceMark { WindowRequest, AuxiliaryRequest, SourceRequest, AcquisitionRequest, SelectionRequest }
 
 pub trait Trace {
     fn trace(&mut self, mark: TraceMark);

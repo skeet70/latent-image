@@ -68,10 +68,10 @@ fn a_request_carries_the_adjusted_levels_and_the_window_record() {
 #[test]
 fn a_request_carries_the_controllers_word_and_the_search_word_only_for_a_profile_that_takes_it() {
     let mut ports = ports();
-    ports.adjustment = AdjustmentWords { controllers: RetainedWord(1), search: RetainedWord(1) };
+    ports.adjustment = AdjustmentWords { controllers: RetainedWord(1), search: RetainedWord(1), ..AdjustmentWords::default() };
     Window::new().effect(Effect::Submit, record(), None, &mut ports);
     let request = submitted(&mut ports);
-    assert_eq!(request.adjustment, AdjustmentWords { controllers: RetainedWord(1), search: RetainedWord(0) });
+    assert_eq!(request.adjustment, AdjustmentWords { controllers: RetainedWord(1), search: RetainedWord(0), ..AdjustmentWords::default() });
     assert!(!request.selected);
 
     ports.records.profile.takes_search_adjustment = true;
