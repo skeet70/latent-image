@@ -52,6 +52,24 @@ pub struct WindowRequest {
     pub adjustment: [u32; 2],
 }
 
+/// Calc 0x3c11: one source reading over the primary statistics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceRequest {
+    /// Profile values calc reads unchanged.
+    pub profile: [u32; 2],
+    pub decade: u16,
+    pub profile_halfword: u16,
+    pub level: u16,
+    /// The sample's second level.
+    pub reference: u16,
+    pub size: [u32; 2],
+    pub exposure: u32,
+    pub mode: u32,
+    /// The profile's selection byte.
+    pub selection: u8,
+    pub extension: u32,
+}
+
 /// One request to calc, with the callback calc enters when it finishes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CalcPayload {
@@ -69,8 +87,8 @@ pub enum CalcPayload {
     Image { record: Record<20>, callback: StockCallbackWord },
     /// 0x3c0c.
     Window { request: WindowRequest, callback: StockCallbackWord },
-    /// 0x3c11 from the source lane's 48-byte record.
-    Source { record: Record<48>, callback: StockCallbackWord },
+    /// 0x3c11.
+    Source { request: SourceRequest, callback: StockCallbackWord },
     /// 0x3c12, with no payload and no callback.
     Release,
 }
