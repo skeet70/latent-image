@@ -419,3 +419,23 @@ pub fn capture_record_payload(
     body[148] = 1;
     bytes
 }
+
+pub const fn measurement_control_code(control: crate::children::MeasurementControl) -> u16 {
+    use crate::children::MeasurementControl;
+    match control {
+        MeasurementControl::Initialize => 0xb7,
+        MeasurementControl::Stop => 0xb8,
+        MeasurementControl::Reconfigure => 0xbb,
+        MeasurementControl::Suspend => 0xb9,
+        MeasurementControl::Resume => 0xba,
+    }
+}
+
+pub const fn adjustment_reply_status(reply: crate::adjustment::Reply) -> xm1_saclac_interface::CompletionStatus {
+    use crate::adjustment::Reply;
+    xm1_saclac_interface::CompletionStatus(match reply {
+        Reply::Success => 0,
+        Reply::Busy => -95,
+        Reply::SelectionOutOfRange => -97,
+    })
+}

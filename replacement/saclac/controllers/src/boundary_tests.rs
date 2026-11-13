@@ -144,3 +144,20 @@ fn synchronous_export_boundary_has_one_entry_for_each_recovered_consumer() {
     assert!(SYNCHRONOUS_EXPORTS.windows(2).all(|entries| entries[0].address.0 < entries[1].address.0));
     assert_eq!(SYNCHRONOUS_EXPORTS.iter().find(|entry| entry.export == SynchronousExport::StartCaptureRecord).unwrap().argument_words, 14);
 }
+
+#[test]
+fn lens_client_replies_keep_the_selection_refusal_distinct_from_busy() {
+    use crate::adjustment::Reply;
+    use xm1_saclac_interface::CompletionStatus;
+    assert_eq!(crate::stock::adjustment_reply_status(Reply::Success), CompletionStatus(0));
+    assert_eq!(crate::stock::adjustment_reply_status(Reply::Busy), CompletionStatus(-95));
+    assert_eq!(crate::stock::adjustment_reply_status(Reply::SelectionOutOfRange), CompletionStatus(-97));
+}
+
+#[test]
+fn measurement_controls_preserve_geometry_suspend_and_resume_codes() {
+    use crate::children::MeasurementControl as C;
+    for (control, code) in [(C::Initialize, 0xb7), (C::Stop, 0xb8), (C::Reconfigure, 0xbb), (C::Suspend, 0xb9), (C::Resume, 0xba)] {
+        assert_eq!(crate::stock::measurement_control_code(control), code);
+    }
+}

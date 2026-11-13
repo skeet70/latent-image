@@ -45,6 +45,10 @@ main = do
       updateBytes = replicate 20 0
   mapM_ (\offset -> check (updateRecord updateBytes == updateRecord (mutate offset updateBytes))) [10,11]
   mapM_ (\offset -> check (updateRecord updateBytes /= updateRecord (mutate offset updateBytes))) ([0..9] ++ [12..19])
+  let captureRecord = projectPayload recovered Outgoing (QueueId 47) (Operation 0x3f49)
+      captureBytes = replicate 176 0
+  mapM_ (\offset -> check (captureRecord captureBytes /= captureRecord (mutate offset captureBytes))) [0..175]
+  check (isLeft (captureRecord (replicate 175 0)))
   putStrLn "payload field projection behavioral tests passed"
   where parse = either fail pure . parseDeclaration . L.toStrict . encode
 

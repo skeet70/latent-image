@@ -122,3 +122,22 @@ fn measurement_geometry_serializes_resource_calibration_and_retained_parameters(
     ]);
     assert_eq!(stock::img_dc_operation(crate::ImgDcOperation::Request2b), 0x3f2b);
 }
+
+#[test]
+fn capture_layout_preserves_callback_and_converted_value_order() {
+    use stock::CaptureRecordField as F;
+    let mut packet = [0; 176];
+    packet[..24].copy_from_slice(&[1,0,0,0,2,0,0,0,3,0,0,0,0,0,0,0,4,0,0,0,0,0,0,0]);
+    packet[140..150].copy_from_slice(&[0x20,3,0xe8,3,0x90,1,0xe8,3,0x90,1]);
+    packet[171..173].copy_from_slice(&[1,1]);
+    assert_eq!(F::Completion.bytes(&packet), &[1,0,0,0]);
+    assert_eq!(F::Auxiliary.bytes(&packet), &[2,0,0,0]);
+    assert_eq!(F::Sample.bytes(&packet), &[3,0,0,0]);
+    assert_eq!(F::Progress.bytes(&packet), &[4,0,0,0]);
+    assert_eq!(F::ReservedHeaderA.bytes(&packet), &[0;4]);
+    assert_eq!(F::ReservedHeaderB.bytes(&packet), &[0;4]);
+    assert_eq!(F::ConvertedDimensions.bytes(&packet), &[0x20,3,0xe8,3,0x90,1,0xe8,3,0x90,1]);
+    assert_eq!(F::OrdinaryMode.bytes(&packet), &[1]);
+    assert_eq!(F::Enabled.bytes(&packet), &[1]);
+    assert_eq!(stock::img_dc_operation(crate::ImgDcOperation::Request49), 0x3f49);
+}

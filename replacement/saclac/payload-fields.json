@@ -2511,6 +2511,50 @@
       "padding": [
         { "offset": 10, "bytes": 2, "sources": ["X-M1 1.50 id5 0xfeae64 halfword at8 is followed by0xfeae6c word at12; bytes10..11 have no store"] }
       ]
+    },
+    {
+      "direction": "outgoing",
+      "queue": 47,
+      "operation": 16201,
+      "bytes": 176,
+      "fields": [
+        { "name": "completion", "offset": 0, "bytes": 4, "sources": ["X-M1 1.50 id5 0xfeac0c stores r0 at payload0; 0xefc1cc supplies0xefbda4"] },
+        { "name": "auxiliary", "offset": 4, "bytes": 4, "sources": ["X-M1 1.50 id5 0xfeac14 stores r2 at payload4; 0xefc1dc supplies auxiliary callback0xefbbdc in r2"] },
+        { "name": "sample", "offset": 8, "bytes": 4, "sources": ["X-M1 1.50 id5 0xfeac10 stores r1 at payload8; 0xefc1d4 supplies sample callback0xefbd24 in r1"] },
+        { "name": "reserved-header-a", "offset": 12, "bytes": 4, "sources": ["X-M1 1.50 id5 0xfeac18 stores r3 at12; 0xefc1c0..0xefc1c8 leaves r3 zero"] },
+        { "name": "progress", "offset": 16, "bytes": 4, "sources": ["X-M1 1.50 id5 0xfeac1c..0xfeac20 stores the first stacked callback at16"] },
+        { "name": "reserved-header-b", "offset": 20, "bytes": 4, "sources": ["X-M1 1.50 id5 0xfeac24..0xfeac28 stores the second stacked argument at20; 0xefc1c0 supplies zero"] },
+        { "name": "primary-source", "offset": 24, "bytes": 16, "sources": ["X-M1 1.50 id5 0xefc110..0xefc12c copies20 bytes at body0 and20 bytes at body16, overwriting the first source length"] },
+        { "name": "secondary-source", "offset": 40, "bytes": 16, "sources": ["X-M1 1.50 id5 0xefc120..0xefc12c copies second source at body16; channel store0xefc0b0 replaces its last word at body32"] },
+        { "name": "source-channel", "offset": 56, "bytes": 4, "sources": ["X-M1 1.50 id5 0xefc0b0 stores channel at body32"] },
+        { "name": "source-dimensions", "offset": 60, "bytes": 4, "sources": ["X-M1 1.50 id5 0xefc0b8..0xefc0bc stores halfwords at body36/38"] },
+        { "name": "reserved-source", "offset": 64, "bytes": 20, "sources": ["X-M1 1.50 id5 0xefbf80..0xefbf8c zeroes152 bytes; body40..60 remains zero"] },
+        { "name": "policy-dimensions", "offset": 84, "bytes": 4, "sources": ["X-M1 1.50 id5 0xefc004..0xefc00c writes body60/62 via0xef64f4"] },
+        { "name": "reserved-policy", "offset": 88, "bytes": 8, "sources": ["X-M1 1.50 id5 0xefbff4..0xefbff8 zeroes body64/68"] },
+        { "name": "record-kind", "offset": 96, "bytes": 4, "sources": ["X-M1 1.50 id5 0xefbffc..0xefc000 stores2 at body72"] },
+        { "name": "channel", "offset": 100, "bytes": 4, "sources": ["X-M1 1.50 id5 0xefc054 stores body76"] },
+        { "name": "policy", "offset": 104, "bytes": 4, "sources": ["X-M1 1.50 id5 0xefc0c0..0xefc0c4 stores body80"] },
+        { "name": "reserved-before-auxiliary", "offset": 108, "bytes": 8, "sources": ["X-M1 1.50 id5 0xefbf8c initial zero and0xefc0f4 store body88"] },
+        { "name": "auxiliary-value", "offset": 116, "bytes": 4, "sources": ["X-M1 1.50 id5 0xefc0f8..0xefc0fc stores body92"] },
+        { "name": "reserved-after-auxiliary", "offset": 120, "bytes": 8, "sources": ["X-M1 1.50 id5 0xefc100 and0xefc188 zero body96/100"] },
+        { "name": "scale", "offset": 128, "bytes": 4, "sources": ["X-M1 1.50 id5 0xefc168..0xefc174 stores halfwords100 and16 at body104/106"] },
+        { "name": "reserved-before-position", "offset": 132, "bytes": 4, "sources": ["X-M1 1.50 id5 0xefbf8c initial zero and0xefc03c zero at body110"] },
+        { "name": "position", "offset": 136, "bytes": 2, "sources": ["X-M1 1.50 id5 0xefc040 stores body112"] },
+        { "name": "reserved-after-position", "offset": 138, "bytes": 2, "sources": ["X-M1 1.50 id5 0xefc058 stores zero at body114"] },
+        { "name": "converted-dimensions", "offset": 140, "bytes": 10, "sources": ["X-M1 1.50 id5 0xefc05c..0xefc0ac writes width, limited height, excess, combined limited height and combined excess at body116..126"] },
+        { "name": "reserved-before-position-code", "offset": 150, "bytes": 11, "sources": ["X-M1 1.50 id5 0xefbf8c initializes body126..137; explicit zeros0xefc010..0xefc038"] },
+        { "name": "position-code", "offset": 161, "bytes": 1, "sources": ["X-M1 1.50 id5 0xefc050 stores converter output at body137"] },
+        { "name": "source-option", "offset": 162, "bytes": 1, "sources": ["X-M1 1.50 id5 0xefc130..0xefc134 stores low source-option byte at body138"] },
+        { "name": "reserved-option", "offset": 163, "bytes": 1, "sources": ["X-M1 1.50 id5 0xefc178..0xefc17c stores zero at body139"] },
+        { "name": "option", "offset": 164, "bytes": 1, "sources": ["X-M1 1.50 id5 0xefc0c8..0xefc0cc stores body140"] },
+        { "name": "policy-enabled", "offset": 165, "bytes": 1, "sources": ["X-M1 1.50 id5 0xefc104..0xefc10c stores policy result at body141"] },
+        { "name": "multiple-frames", "offset": 166, "bytes": 1, "sources": ["X-M1 1.50 id5 0xefc0d8..0xefc0e8 stores argument>1 at body142"] },
+        { "name": "reserved-mode", "offset": 167, "bytes": 4, "sources": ["X-M1 1.50 id5 0xefbf8c initialization and0xefc0d0..0xefc0d4 zeros at body143/144"] },
+        { "name": "ordinary-mode", "offset": 171, "bytes": 1, "sources": ["X-M1 1.50 id5 0xefbf90..0xefbf9c and0xefc0ec..0xefc0f0 stores mode!=6 at body147"] },
+        { "name": "enabled", "offset": 172, "bytes": 1, "sources": ["X-M1 1.50 id5 0xefc180..0xefc184 stores1 at body148"] },
+        { "name": "reserved-tail", "offset": 173, "bytes": 3, "sources": ["X-M1 1.50 id5 0xefbf8c initialization and0xefc18c zero at body149"] }
+      ],
+      "padding": []
     }
   ]
 }

@@ -37,12 +37,8 @@ impl<E: Effects> crate::adjustment::Effects<ClientCallback> for ReservationEffec
         use crate::adjustment::{Effect as LensEffect, Reply};
         match effect {
             LensEffect::Reply { callback, result } => {
-                let status = match result {
-                    Reply::Success => 0,
-                    Reply::Busy => -95,
-                    Reply::SelectionOutOfRange => -94,
-                };
-                self.0.emit(Effect::Reply { callback, status: CompletionStatus(status) });
+                let status = crate::stock::adjustment_reply_status(result);
+                self.0.emit(Effect::Reply { callback, status });
                 if result == Reply::Success { self.0.emit(Effect::Released); }
             }
             LensEffect::Request(_) | LensEffect::PublishQuery { .. } | LensEffect::SelectionRejected => {}
