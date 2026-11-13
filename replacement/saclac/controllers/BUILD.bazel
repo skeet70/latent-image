@@ -7,7 +7,7 @@ xm1_rust_rlib(
     src = "src/lib.rs",
     crate_name = "xm1_saclac_controllers",
     out = "arm/libxm1_saclac_controllers.rlib",
-    data = ["src/lifecycle.rs", "src/adjustment.rs", "src/statistics.rs", "src/stock.rs", "src/replies.rs", "src/children.rs", "src/synchronous.rs", "src/search.rs", "src/records.rs", "src/capture.rs", "src/exports.rs"],
+    data = ["src/lifecycle.rs", "src/adjustment.rs", "src/statistics.rs", "src/stock.rs", "src/replies.rs", "src/children.rs", "src/synchronous.rs", "src/search.rs", "src/records.rs", "src/capture.rs", "src/exports.rs", "src/root.rs"],
     rlib_deps = {"xm1_saclac_interface": "//replacement/saclac_interface:saclac-interface"},
 )
 
@@ -15,7 +15,7 @@ xm1_rust_host_rlib(
     name = "host",
     src = "src/lib.rs",
     crate_name = "xm1_saclac_controllers",
-    data = ["src/lifecycle.rs", "src/adjustment.rs", "src/statistics.rs", "src/stock.rs", "src/replies.rs", "src/children.rs", "src/synchronous.rs", "src/search.rs", "src/records.rs", "src/capture.rs", "src/exports.rs"],
+    data = ["src/lifecycle.rs", "src/adjustment.rs", "src/statistics.rs", "src/stock.rs", "src/replies.rs", "src/children.rs", "src/synchronous.rs", "src/search.rs", "src/records.rs", "src/capture.rs", "src/exports.rs", "src/root.rs"],
     rlib_deps = {"xm1_saclac_interface": "//replacement/saclac_interface:host"},
 )
 

@@ -12,6 +12,9 @@ pub mod search;
 pub mod records;
 pub mod capture;
 pub mod exports;
+pub mod root;
+#[cfg(test)]
+mod root_tests;
 #[cfg(test)]
 mod capture_tests;
 
