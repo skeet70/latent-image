@@ -1,13 +1,18 @@
 module Main (main) where
 
 import BankSourceBoundaryCheck (StockEntry (..), checkStockSource)
+import Control.Exception (IOException, try)
 import Control.Monad (unless)
 import Data.Either (isLeft)
-import RustSourceBoundaryCheck (regressions)
+import RustSourceBoundaryCheck (checkDeclaration, regressions)
+import System.Directory (createDirectoryIfMissing, withCurrentDirectory)
+import System.Environment (getEnv)
+import System.FilePath ((</>))
 
 main :: IO ()
 main = do
   regressions
+  generatedSourceFallback
   let entry = StockEntry 0x00710000
       cases =
         [ ("declared trampoline", checkStockSource [entry] "boundary.S" "RB_TRAMPOLINE entry, 0x00710000" == Right ())
@@ -24,3 +29,19 @@ main = do
         , ("C scalar is not a call", checkStockSource [entry] "boundary.c" "unsigned value = 0x00710004u;" == Right ())
         ]
   mapM_ (\(label, passed) -> unless passed (fail label)) cases
+
+generatedSourceFallback :: IO ()
+generatedSourceFallback = do
+  temporary <- getEnv "TEST_TMPDIR"
+  withCurrentDirectory temporary $ do
+    createDirectoryIfMissing True "replacement/menu_value"
+    createDirectoryIfMissing True "replacement/bank/tables"
+    createDirectoryIfMissing True "bazel-bin/replacement/bank/tables"
+    let manifest = "replacement/menu_value/unsafe-boundary.json"
+        generated = "bazel-bin" </> "replacement/bank/tables/value.rs"
+    writeFile manifest "{\"source_roots\":[\"../bank/tables/value.rs\"],\"boundary_files\":[],\"boundary_items\":[],\"known_exceptions\":[]}"
+    writeFile generated "fn value() {}"
+    checkDeclaration manifest
+    writeFile generated "fn value() { unsafe { call() } }"
+    refused <- try (checkDeclaration manifest) :: IO (Either IOException ())
+    unless (isLeft refused) (fail "generated source unsafe site admitted")
