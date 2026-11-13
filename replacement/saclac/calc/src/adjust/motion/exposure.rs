@@ -184,7 +184,7 @@ impl ExposureInputs<'_> {
         let level_gated = ports.property(stock::PROGRAM_LEVEL_GATE) != 0;
         let limit = tenths(ports, stock::PROGRAM_LEVEL_LIMIT);
         let record = self.readings.record;
-        let mut profile = ports.profile();
+        let profile = ports.profile();
         let status = profile.read_shared(record, &group_27::WINDOW_STATUS).0;
         let windowed = if profile.read_shared(record, &group_27::AT_0738) == 4 { ProgramKind::Odd } else { ProgramKind::Even };
         let variant = profile.read(record, &group_00::AT_0066);
