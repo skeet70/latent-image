@@ -620,6 +620,24 @@ The helpers several saclac modules call (`replacement/saclac/shared`), over the 
 | `Stock<Guest>`'s `Display`: `0x6c68c0`, `0x6c4bec` | trampoline into retained stock | the display driver | no | the display driver is owned | required |
 | the display driver's 60-byte status record: byte 7 gates the outputs on route 2 (`0x6c5df4`) and bytes 16..19 are the output bits (`0x6c693c`, `0x6c6948`, `0x6c6954`, `0x6c6960`) | guest-memory layout view | the display driver's status record | no | the display driver is owned | required |
 
+## saclac_config
+
+saclac's configuration layers L3, L8 and L11 (`replacement/saclac/config`), over the stock derivations, scan library, pipeline hardware and face tracking other tasks share. All rows are in `src/stock.rs`.
+
+| Shim | Kind | Other side | Owned now | Removal condition | State |
+| --- | --- | --- | --- | --- | --- |
+| `StockDerivations`: `0x7498e0`, `0x747aac`, `0x749254`, `0x748818`, `0x74888c`, `0x746120`, `0x7461a8`, `0x747408`, `0x747584`, `0x749be4`, `0x7462e8`, `0x74b05c` | trampoline into retained stock | the configuration derivations tasks 3, 50, 104 and others reach, and the curves at `0x40a6c7ec` tasks 1..72 write | no | the settings and configuration services are owned | required |
+| `StockFloatLog`: `0x894778` | trampoline into retained stock | the runtime library | no | an owned logarithm is qualified against it | required |
+| `StockPipelineHardware`: `0xda1b4c`, `0xda1d48` | trampoline into retained stock | the image pipeline driver tasks 11..24 share | no | the image pipeline driver is owned | required |
+| `StockLensRequests`: callback word `0x96bd04`, request `0x6b7750` | trampoline into retained stock | the lenscom request path (`0x6b731c`, owned in `saclac_shared`) | no | the composition root binds it to `saclac_shared`'s lenscom request | required |
+| `StockFaceTracking`: `0x106d02c`, `0x106a2f0` | trampoline into retained stock | face tracking, whose pipeline and history tasks 3 and 55 also write | no | face tracking is owned | required |
+| `StockScanBlocks` (configuration fields `0xdc`..`0x1ea`, applied parts `+0x14c`, request flags and window `+0x3e`, clear through `0x7221c8`) and `StockScanLibrary` (`0xd6415c`..`0xd663e0`, `0xd79178`, `0xd79194`) | guest-memory layout view | the scan library tasks 11..24 share, which reads both blocks | no | the scan library is owned | required |
+| `StockStageBlock`: the region block (`0xda027c`), parameter block (`0xd9f7c0`, `0xd9f828`; the L4 work block `0x1699a08`) and geometry block (`0xd9fd54`; `0x16996b8`) by guest address: part offsets, stage mode words `+0x14`/`+0x30`/`+0x40`/`+0x88`, enable keep/invert/set words, path enable `+0x5c`, second gate `+0x254`, mode level `+0x78` | guest-memory layout view | the L4 profile layer, which writes the blocks in stock memory | no | the L4 caller passes typed parts | required |
+| `StockCompiledScan` (stage flags `+0`, the scan library's configuration from `+0x101c`: output kind, option bytes `+4`/`+8`) over the scan library entries `0xd64840`, `0xd649e8`, `0xd64850`, `0xd649f8`, `0xd64940`, `0xd64950`, `0xd64e2c`, `0xd6537c` | guest-memory layout view | the scan library tasks 11..24 share, which reads the compiled configuration | no | the scan library is owned | required |
+| `StockStreamSnapshot`: tag and snapshot block (`stream + 0xbd4e4` for `0xd6b460`), register read `0x693dcc`, packer `0x73ed94` over descriptors `0xd6baac`, stream services `0xd6ae18`, `0xd6afe4`, option words `stream + 0xbd668 + 0x370/0x374` | trampoline into retained stock | the stream snapshot `0xd6b3f8` other subsystems' code also writes | no | the stream services are owned | required |
+| `StockDumpDerivations`: `0x7468b8`, `0x74695c`, `0x76f340`, `0x748398` | trampoline into retained stock | the configuration derivations and lens position flags other tasks also reach | no | the settings and configuration services are owned | required |
+| `StockDumpBuffer`: the shot dump buffer's configuration section at `+0xb174c` (tags `ELTS`/`ELAL`, step columns, adjustment words, limits, selection words) | guest-memory layout view | ShotSequence's dump buffer, written to the card by stock code | no | the dump buffer is owned and written by owned code | required |
+
 ## saclac_interface
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |

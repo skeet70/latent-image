@@ -2,9 +2,9 @@
 
 //! X-M1 1.50 bytes of the requests saclac's shared layer posts.
 
-use crate::shared::{LensComCommand, MoveMode, RelativeMove};
+use crate::shared::{ImageProcessorTriplet, LensComCommand, MoveMode, RelativeMove};
 use crate::stock::StockCallbackWord;
-use crate::LensComOperation;
+use crate::{ImageProcessorOperation, LensComOperation};
 
 pub const RELATIVE_MOVE_BYTES: usize = 28;
 
@@ -55,5 +55,26 @@ pub fn lens_com(command: &LensComCommand) -> [u8; LENS_COM_BYTES] {
 pub const fn lens_com_operation(operation: LensComOperation) -> u16 {
     match operation {
         LensComOperation::Request2d => 0x722d,
+    }
+}
+
+pub const IMAGE_PROCESSOR_QUEUE: u8 = 55;
+pub const IMAGE_PROCESSOR_TRIPLET_BYTES: usize = 16;
+
+/// 0x106631c stores the mode at byte 0 (0x1066328) and copies the three words after it
+/// (0x106632c..0x1066334); 0x1066230 posts the 16 bytes with code 0x4703 to queue 55
+/// (0x1066260).
+pub fn image_processor_triplet(request: &ImageProcessorTriplet) -> [u8; IMAGE_PROCESSOR_TRIPLET_BYTES] {
+    let mut bytes = [0; IMAGE_PROCESSOR_TRIPLET_BYTES];
+    bytes[0..4].copy_from_slice(&request.mode.to_le_bytes());
+    for (chunk, word) in bytes[4..].chunks_exact_mut(4).zip(request.values) {
+        chunk.copy_from_slice(&word.to_le_bytes());
+    }
+    bytes
+}
+
+pub const fn image_processor_operation(operation: ImageProcessorOperation) -> u16 {
+    match operation {
+        ImageProcessorOperation::Request03 => 0x4703,
     }
 }
