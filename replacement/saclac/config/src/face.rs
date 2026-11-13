@@ -5,8 +5,8 @@
 //! stay stock; saclac owns the calls and the image processor request.
 
 use xm1_saclac_interface::shared::ImageProcessorTriplet;
-use xm1_saclac_interface::stock::parameters;
 use xm1_saclac_interface::stock::shared::image_processor_triplet;
+use xm1_saclac_interface::stock::{parameters, StockCallbackWord};
 use xm1_saclac_interface::{ImageProcessor, ImageProcessorOperation, ImageProcessorRequest};
 
 /// The pipeline was neither idle nor stopped, so detection was not reset.
@@ -29,10 +29,10 @@ pub trait FaceTracking {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NotPosted;
 
-/// Posts `values` with `mode` to the image processor (0x106631c, which returns -255 for
+/// Posts `values` with `completion` to the image processor (0x106631c, which returns -255 for
 /// `NotPosted`).
-pub fn submit_triplet<P: ImageProcessor>(processor: &mut P, values: [u32; 3], mode: u32) -> Result<(), NotPosted> {
-    let bytes = image_processor_triplet(&ImageProcessorTriplet { mode, values });
+pub fn submit_triplet<P: ImageProcessor>(processor: &mut P, values: [u32; 3], completion: StockCallbackWord) -> Result<(), NotPosted> {
+    let bytes = image_processor_triplet(&ImageProcessorTriplet { completion, values });
     let request = ImageProcessorRequest { operation: ImageProcessorOperation::Request03, parameters: parameters(&bytes) };
     processor.request(request).map_err(|_| NotPosted)
 }

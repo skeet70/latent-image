@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use xm1_saclac_interface::stock::StockCallbackWord;
 use xm1_saclac_interface::{ImageProcessor, ImageProcessorOperation, ImageProcessorRequest};
 use xm1_saclac_shared::image_registers::{RegisterGroup, RegisterSnapshot, WindowLimits};
 
@@ -178,10 +179,11 @@ impl ImageProcessor for Processor {
 }
 
 #[test]
-fn a_triplet_posts_its_mode_and_values() {
+fn a_triplet_posts_its_completion_and_values() {
     let mut processor = Processor(Vec::new(), true);
-    assert_eq!(submit_triplet(&mut processor, [1, 2, 3], 4), Ok(()));
-    assert_eq!(processor.0[0], [4, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0]);
+    let completion = StockCallbackWord(0x00ee_cd04);
+    assert_eq!(submit_triplet(&mut processor, [1, 2, 3], completion), Ok(()));
+    assert_eq!(processor.0[0], [4, 0xcd, 0xee, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0]);
     processor.1 = false;
-    assert_eq!(submit_triplet(&mut processor, [1, 2, 3], 4), Err(NotPosted));
+    assert_eq!(submit_triplet(&mut processor, [1, 2, 3], completion), Err(NotPosted));
 }
