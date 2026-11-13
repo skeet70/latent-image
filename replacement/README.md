@@ -77,6 +77,22 @@ Admission is split between the binary and the source. `saclac-placement-tests` c
 
 The shim rows are in [the register](shims.md#saclac).
 
+<!-- evidence-record E-SACLAC-PLACEMENT-150 -->
+
+E-SACLAC-PLACEMENT-150: The saclac placement stages 1164 owned bytes in 2192 bytes across 2 entries. Candidate DAT 559dcf65d1141add4aa82f68f4b527caf8570e968a5ea1a64b62263d77bbcf63; linked binary 2bd55afa0199f84c08953745e9a0904b8db4272e5e5b1249011ced340eaf59df; image 5 be5568d5df5ab8d68427c832d692fc4b21b96534595c341723eee51ee8619a2e. stock flash boot: passed, 383544246 instructions, frame 0d3adb84da8615ed7fc1831138ad95246df5bc56233173a7cf74211cd13d2a5c. candidate flash boot: passed, 383544158 instructions, frame 0d3adb84da8615ed7fc1831138ad95246df5bc56233173a7cf74211cd13d2a5c. Placement gate passed at 4e07f93f1a37bba917b712a2ad15bb7bf6216e59. cold-boot: equal, trace stock/candidate 2907/2907, machines 17, sequence differences 0, trailing machines 0, trap fetches 0, queue posts {"candidate":370,"stock":371}. half-press: equal, trace stock/candidate 1102/1102, machines 17, sequence differences 0, trailing machines 0, trap fetches 0, queue posts {"candidate":152,"stock":152}. fn: equal, trace stock/candidate 3398/3398, machines 17, sequence differences 0, trailing machines 0, trap fetches 0, queue posts {"candidate":430,"stock":430}. fn-down: equal, trace stock/candidate 4390/4390, machines 17, sequence differences 0, trailing machines 0, trap fetches 0, queue posts {"candidate":550,"stock":550}. fn-auto: equal, trace stock/candidate 6071/6071, machines 17, sequence differences 0, trailing machines 0, trap fetches 0, queue posts {"candidate":753,"stock":753}. 
+
+Scope: Host-only record-5 saclac-placement across 2 boundary entries, 42 placement checks, retained-engine flash boot and the census routes listed above. Action and machine bodies remain stock.
+
+<!-- /evidence-record E-SACLAC-PLACEMENT-150 -->
+
+<!-- evidence-record E-SACLAC-ENGINE-COMPARE-150 -->
+
+E-SACLAC-ENGINE-COMPARE-150: The saclac boundary suite reports 104 cases and 12 deliberately wrong variants for owned ELF de462e1abc5db75acdd04a8bd5c42a476bc6bda499d8198c7bb7afd2ccaf8349. Judge 2 verdict: equal; survivors 1, different cases 0, unmet conditions 0. Execution and control conditions: [{"condition":"stock-instructions-inside-entered-extent","detail":"104 cases name an entered entry with stock instructions inside its extent","met":true},{"condition":"case-for-every-export-row","detail":"2 bound entries each have a case","met":true},{"condition":"detected-wrong-variant","detail":"11 of 12 deliberately wrong owned variants detected","met":true},{"condition":"named-digests","detail":"the report names the firmware and owned image digests","met":true}].
+
+Scope: The dispatcher at 0x00efca6c and machine 0's router at 0x00efcb88 over stock's tables: seeded scenarios stage a machine's row and state, enter the dispatcher or the router, and compare the return word, the recorded trace and action calls, and the two halfword arrays. Every stock action word and the trace entry is a recording stub, so the action bodies are import rows. The owned image replaces exactly those two stock extents.
+
+<!-- /evidence-record E-SACLAC-ENGINE-COMPARE-150 -->
+
 ## Native rewrite qualification
 
 For an applicable native-only increment, run the native SDK and runner suites plus the affected caller's qualification command:

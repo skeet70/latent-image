@@ -8,9 +8,12 @@ sh_test(
         "$(location @lab_jsonschema//:bin/check-jsonschema)",
         "$(location @lab_jq//:bin/jq)",
         "$(location @lab_git//:bin/git)",
+        "$(location //build-support:evidence-record)",
     ],
     data = [
         "//docs:evidence.jsonl",
+        "//build-support:evidence-record",
+        "//docs:evidence-recipes.json",
         "//manifests:initial",
         "//replacement/startup_artifact:qualifications.json",
         "//schemas:all",

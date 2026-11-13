@@ -58,6 +58,8 @@ Agents add one record per new claim as they work. The integration owner curates 
 
 Cite what a claim rests on: a result's verdict or summary with its input and output digests, and one full counterexample for each unresolved failure class. A digest in a record identifies a dump after the dump is gone. Distinguish raw diagnostics from the narrower public behavior a comparator accepts. A record carries a `topic`, and one topic has one record. Paths and hashes in earlier ledger versions identify artifact versions that may no longer exist. Previously tracked public files can be consulted in this repository's Git history; files from the private research archive are not provided here.
 
+Run-derived records use `//build-support:evidence-record` and selectors in `docs/evidence-recipes.json`: `write` regenerates claim and scope templates, figures, run commits, verdicts, elapsed times and artifact digests, plus marked README summaries; `check` refuses drift. Keep only interpretation and unmeasured limits in the recipe's short `notes` field, not hand-transcribed figures. `//tests:research-contracts` checks available worked-example runs; an entirely absent private input set is reported unavailable, not reproduced. See [usage](../build-support/README.md#generated-evidence-records).
+
 ## Output lifecycle
 
 Research output is working state, not a record. [Run output](../build-support/README.md#run-output) and [scratch expiry](../build-support/README.md#scratch-expiry) enforce these rules; none needs a review or an approval.

@@ -91,6 +91,18 @@
         "minLength": 1
       }
     },
+    "generated_by": {
+      "const": "//build-support:evidence-record"
+    },
+    "figures": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["facts", "runs"],
+      "properties": {
+        "facts": {"type": "object"},
+        "runs": {"type": "array", "items": {"type": "object"}}
+      }
+    },
     "camera_state_change": {
       "enum": [
         "none",
