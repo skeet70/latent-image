@@ -13,6 +13,60 @@ const STATE_COUNTS: u32 = 0xf1158c;
 const ROWS: u32 = 0x169d468;
 const STATES: u32 = 0x169d4b4;
 const TRACE: u32 = 0xf46c38;
+const RECEIVE: u32 = 0x169d374;
+const RECEIVE_PAYLOAD: u32 = 0x169d380;
+const COMMAND_FLAGS: u32 = 0x169cf24;
+const FAULT: u32 = 0xf46c20;
+
+struct DriverPorts;
+
+impl crate::driver::Ports for DriverPorts {
+    fn event(&self, operation: u16) -> crate::driver::Event {
+        crate::driver::Event::new(u32::from(operation).wrapping_sub(0x3b00))
+    }
+
+    fn command_capacity(&self, event: crate::driver::Event) -> Option<usize> {
+        xm1_saclac_interface::stock::PARAMETER_BLOCKS.get(event.code() as usize).map(|block| block.capacity)
+    }
+
+    fn stage(&mut self, header: xm1_kernel::Header, payload: &[u8]) {
+        unsafe {
+            core::ptr::write_volatile(RECEIVE as *mut u16, header.operation);
+            core::ptr::write_volatile((RECEIVE + 2) as *mut u8, header.sender);
+            core::ptr::write_volatile((RECEIVE + 3) as *mut u8, header.destination);
+            core::ptr::write_volatile((RECEIVE + 4) as *mut u32, payload.len() as u32);
+            core::ptr::write_volatile((RECEIVE + 8) as *mut u32, RECEIVE_PAYLOAD);
+            core::ptr::copy_nonoverlapping(payload.as_ptr(), RECEIVE_PAYLOAD as *mut u8, payload.len());
+        }
+    }
+
+    fn dispatch(&mut self, event: crate::driver::Event) {
+        if let Some(block) = xm1_saclac_interface::stock::PARAMETER_BLOCKS.get(event.code() as usize) {
+            let length = read_word(RECEIVE + 4) as usize;
+            unsafe {
+                core::ptr::copy_nonoverlapping(RECEIVE_PAYLOAD as *const u8, block.address as *mut u8, length);
+                #[cfg(not(saclac_wrong_driver_store))]
+                core::ptr::write_volatile((COMMAND_FLAGS + event.code()) as *mut u8, 1);
+            }
+        }
+        xm1_saclac_router(event.code(), u32::MAX);
+    }
+
+    fn fault(&mut self) { call3(FAULT, 0, 0, 0); }
+}
+
+#[no_mangle]
+pub extern "C" fn xm1_saclac_driver() -> ! {
+    for machine in 0..37 { write_half(STATES + machine * 2, 0); }
+    let kernel = xm1_kernel::Kernel::new(xm1_kernel::SlotTable);
+    let queue = xm1_kernel::MessageQueue::stock(xm1_kernel::QueueId::new(43).unwrap());
+    loop {
+        if let Some(caller) = kernel.task() {
+            crate::driver::run(queue, &caller, &mut DriverPorts);
+        }
+        call3(FAULT, 0, 0, 0);
+    }
+}
 
 fn read_word(address: u32) -> u32 {
     unsafe { core::ptr::read_volatile(address as *const u32) }
