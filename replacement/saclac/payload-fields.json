@@ -5347,16 +5347,1043 @@
    ]
   },
   {
-   "name": "callbacks",
-   "split": [
-    "entry"
-   ],
+   "name": "callback-0xf156b4",
    "match": {
-    "kind": "callback"
+    "kind": "callback",
+    "entry": 15816372
    },
    "sources": [
-    "a callback event names a stock completion callback entry, entered on the peer task that serves saclac's request; the entry table is the census sites declaration",
-    "each entry is its own source: each peer enters its entry when its own request completes, so capture's stock and owned runs enter every entry's subsequence in the same order and interleave the entries differently at observation 1056"
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf46be0",
+   "match": {
+    "kind": "callback",
+    "entry": 16018400
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf46c00",
+   "match": {
+    "kind": "callback",
+    "entry": 16018432
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf14ae4",
+   "match": {
+    "kind": "callback",
+    "entry": 15813348
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf14b14",
+   "match": {
+    "kind": "callback",
+    "entry": 15813396
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf14b50",
+   "match": {
+    "kind": "callback",
+    "entry": 15813456
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf14b8c",
+   "match": {
+    "kind": "callback",
+    "entry": 15813516
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf14bc8",
+   "match": {
+    "kind": "callback",
+    "entry": 15813576
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf14be4",
+   "match": {
+    "kind": "callback",
+    "entry": 15813604
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf15070",
+   "match": {
+    "kind": "callback",
+    "entry": 15814768
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf1509c",
+   "match": {
+    "kind": "callback",
+    "entry": 15814812
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf150c4",
+   "match": {
+    "kind": "callback",
+    "entry": 15814852
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf150f0",
+   "match": {
+    "kind": "callback",
+    "entry": 15814896
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf17c14",
+   "match": {
+    "kind": "callback",
+    "entry": 15825940
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf17c30",
+   "match": {
+    "kind": "callback",
+    "entry": 15825968
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf17c4c",
+   "match": {
+    "kind": "callback",
+    "entry": 15825996
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf1d154",
+   "match": {
+    "kind": "callback",
+    "entry": 15847764
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf1eddc",
+   "match": {
+    "kind": "callback",
+    "entry": 15855068
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf1ee10",
+   "match": {
+    "kind": "callback",
+    "entry": 15855120
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf1fc08",
+   "match": {
+    "kind": "callback",
+    "entry": 15858696
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf20380",
+   "match": {
+    "kind": "callback",
+    "entry": 15860608
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf203b4",
+   "match": {
+    "kind": "callback",
+    "entry": 15860660
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf20418",
+   "match": {
+    "kind": "callback",
+    "entry": 15860760
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf204fc",
+   "match": {
+    "kind": "callback",
+    "entry": 15860988
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf20518",
+   "match": {
+    "kind": "callback",
+    "entry": 15861016
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf20534",
+   "match": {
+    "kind": "callback",
+    "entry": 15861044
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf20550",
+   "match": {
+    "kind": "callback",
+    "entry": 15861072
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2056c",
+   "match": {
+    "kind": "callback",
+    "entry": 15861100
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf20594",
+   "match": {
+    "kind": "callback",
+    "entry": 15861140
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf205c0",
+   "match": {
+    "kind": "callback",
+    "entry": 15861184
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf205e8",
+   "match": {
+    "kind": "callback",
+    "entry": 15861224
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf226e0",
+   "match": {
+    "kind": "callback",
+    "entry": 15869664
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf22708",
+   "match": {
+    "kind": "callback",
+    "entry": 15869704
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf22730",
+   "match": {
+    "kind": "callback",
+    "entry": 15869744
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2276c",
+   "match": {
+    "kind": "callback",
+    "entry": 15869804
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf22794",
+   "match": {
+    "kind": "callback",
+    "entry": 15869844
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf227c0",
+   "match": {
+    "kind": "callback",
+    "entry": 15869888
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf227dc",
+   "match": {
+    "kind": "callback",
+    "entry": 15869916
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf227f8",
+   "match": {
+    "kind": "callback",
+    "entry": 15869944
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf22928",
+   "match": {
+    "kind": "callback",
+    "entry": 15870248
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf24170",
+   "match": {
+    "kind": "callback",
+    "entry": 15876464
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2418c",
+   "match": {
+    "kind": "callback",
+    "entry": 15876492
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf241a8",
+   "match": {
+    "kind": "callback",
+    "entry": 15876520
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf241d4",
+   "match": {
+    "kind": "callback",
+    "entry": 15876564
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf25728",
+   "match": {
+    "kind": "callback",
+    "entry": 15882024
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf25758",
+   "match": {
+    "kind": "callback",
+    "entry": 15882072
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf28e94",
+   "match": {
+    "kind": "callback",
+    "entry": 15896212
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2903c",
+   "match": {
+    "kind": "callback",
+    "entry": 15896636
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2907c",
+   "match": {
+    "kind": "callback",
+    "entry": 15896700
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2ac70",
+   "match": {
+    "kind": "callback",
+    "entry": 15903856
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2ac98",
+   "match": {
+    "kind": "callback",
+    "entry": 15903896
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2acd0",
+   "match": {
+    "kind": "callback",
+    "entry": 15903952
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2ad08",
+   "match": {
+    "kind": "callback",
+    "entry": 15904008
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2ad34",
+   "match": {
+    "kind": "callback",
+    "entry": 15904052
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2c940",
+   "match": {
+    "kind": "callback",
+    "entry": 15911232
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2c968",
+   "match": {
+    "kind": "callback",
+    "entry": 15911272
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2c990",
+   "match": {
+    "kind": "callback",
+    "entry": 15911312
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2c9c4",
+   "match": {
+    "kind": "callback",
+    "entry": 15911364
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2ca04",
+   "match": {
+    "kind": "callback",
+    "entry": 15911428
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2ca34",
+   "match": {
+    "kind": "callback",
+    "entry": 15911476
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2ca78",
+   "match": {
+    "kind": "callback",
+    "entry": 15911544
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2cad8",
+   "match": {
+    "kind": "callback",
+    "entry": 15911640
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2e67c",
+   "match": {
+    "kind": "callback",
+    "entry": 15918716
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2e6b4",
+   "match": {
+    "kind": "callback",
+    "entry": 15918772
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2e6e4",
+   "match": {
+    "kind": "callback",
+    "entry": 15918820
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2e710",
+   "match": {
+    "kind": "callback",
+    "entry": 15918864
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2ef0c",
+   "match": {
+    "kind": "callback",
+    "entry": 15920908
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2ef34",
+   "match": {
+    "kind": "callback",
+    "entry": 15920948
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2ef5c",
+   "match": {
+    "kind": "callback",
+    "entry": 15920988
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2f65c",
+   "match": {
+    "kind": "callback",
+    "entry": 15922780
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2f684",
+   "match": {
+    "kind": "callback",
+    "entry": 15922820
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2f6d8",
+   "match": {
+    "kind": "callback",
+    "entry": 15922904
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2f700",
+   "match": {
+    "kind": "callback",
+    "entry": 15922944
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2f728",
+   "match": {
+    "kind": "callback",
+    "entry": 15922984
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2f750",
+   "match": {
+    "kind": "callback",
+    "entry": 15923024
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2f778",
+   "match": {
+    "kind": "callback",
+    "entry": 15923064
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2f7a0",
+   "match": {
+    "kind": "callback",
+    "entry": 15923104
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf2f7c8",
+   "match": {
+    "kind": "callback",
+    "entry": 15923144
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf32508",
+   "match": {
+    "kind": "callback",
+    "entry": 15934728
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf38668",
+   "match": {
+    "kind": "callback",
+    "entry": 15959656
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf39b10",
+   "match": {
+    "kind": "callback",
+    "entry": 15964944
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf39b3c",
+   "match": {
+    "kind": "callback",
+    "entry": 15964988
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf39b64",
+   "match": {
+    "kind": "callback",
+    "entry": 15965028
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf3a768",
+   "match": {
+    "kind": "callback",
+    "entry": 15968104
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf3a794",
+   "match": {
+    "kind": "callback",
+    "entry": 15968148
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf3a7bc",
+   "match": {
+    "kind": "callback",
+    "entry": 15968188
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf3a7e4",
+   "match": {
+    "kind": "callback",
+    "entry": 15968228
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf3a80c",
+   "match": {
+    "kind": "callback",
+    "entry": 15968268
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf3a834",
+   "match": {
+    "kind": "callback",
+    "entry": 15968308
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf3a85c",
+   "match": {
+    "kind": "callback",
+    "entry": 15968348
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf3a884",
+   "match": {
+    "kind": "callback",
+    "entry": 15968388
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf3a8ac",
+   "match": {
+    "kind": "callback",
+    "entry": 15968428
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf3a8d4",
+   "match": {
+    "kind": "callback",
+    "entry": 15968468
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf3a8fc",
+   "match": {
+    "kind": "callback",
+    "entry": 15968508
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf3a924",
+   "match": {
+    "kind": "callback",
+    "entry": 15968548
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf3a950",
+   "match": {
+    "kind": "callback",
+    "entry": 15968592
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf3a978",
+   "match": {
+    "kind": "callback",
+    "entry": 15968632
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf3a9a0",
+   "match": {
+    "kind": "callback",
+    "entry": 15968672
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf3a9c8",
+   "match": {
+    "kind": "callback",
+    "entry": 15968712
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf3a9f0",
+   "match": {
+    "kind": "callback",
+    "entry": 15968752
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf3aa18",
+   "match": {
+    "kind": "callback",
+    "entry": 15968792
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf3aa40",
+   "match": {
+    "kind": "callback",
+    "entry": 15968832
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf3c104",
+   "match": {
+    "kind": "callback",
+    "entry": 15974660
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
+   ]
+  },
+  {
+   "name": "callback-0xf3c14c",
+   "match": {
+    "kind": "callback",
+    "entry": 15974732
+   },
+   "sources": [
+    "a completion callback entry the census sites declaration names; a peer enters each entry when the request it serves completes, so each entry is its own source and entries are not ordered against each other"
    ]
   },
   {
