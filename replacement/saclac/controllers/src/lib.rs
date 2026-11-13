@@ -16,8 +16,13 @@ pub mod root;
 pub mod live;
 pub mod s1;
 pub mod live_view;
+pub mod layers;
+pub mod live_profile;
+mod live_autofocus;
 #[cfg(test)]
 mod live_view_tests;
+#[cfg(test)]
+mod live_profile_tests;
 #[cfg(test)]
 mod live_tests;
 #[cfg(test)]

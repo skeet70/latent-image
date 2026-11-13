@@ -70,7 +70,7 @@ fn the_window_request_places_each_field_and_zeroes_the_unwritten_bytes() {
     use crate::profile::{ProfileMode, ProfileSelection, RetainedHalfword, RetainedWord, WindowRecord, WindowStatus};
     use crate::stock::window_payload;
     use crate::window::WindowRequest;
-    use xm1_saclac_interface::calc::PeerCallback;
+    use xm1_saclac_interface::stock::StockCallbackWord;
     use xm1_saclac_interface::stock::calc_payload;
     let request = WindowRequest {
         selection: ProfileSelection::Other(2),
@@ -87,7 +87,7 @@ fn the_window_request_places_each_field_and_zeroes_the_unwritten_bytes() {
         record: WindowRecord { status: WindowStatus(2), first: RetainedWord(0x7172_7374), halfword: RetainedHalfword(0x8182), second: RetainedWord(0x9192_9394) },
         refresh: true,
     };
-    let (_, encoded) = calc_payload(&window_payload(request, PeerCallback(0xf3a3f8)));
+    let (_, encoded) = calc_payload(&window_payload(request, StockCallbackWord(0xf3a3f8)));
     let bytes = encoded.bytes();
     assert_eq!(bytes.len(), 80);
     let word = |offset: usize| u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());

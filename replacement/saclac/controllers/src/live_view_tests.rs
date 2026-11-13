@@ -80,17 +80,17 @@ impl Port for Peers {
         }));
         self.sequence.pop_front().unwrap_or(Outcome::Complete)
     }
-    fn prepare(&mut self, command: Option<K>, _: RecordHandle) -> Preparation {
-        self.seen.push(Seen::Prepare(command));
+    fn prepare(&mut self, command: Option<Command<'_>>, _: RecordHandle) -> Preparation {
+        self.seen.push(Seen::Prepare(command.map(|command| command.kind)));
         self.preparation
     }
-    fn apply(&mut self, command: K, _: RecordHandle) -> Application {
-        self.seen.push(Seen::Apply(command));
+    fn apply(&mut self, command: Command<'_>, _: RecordHandle) -> Application {
+        self.seen.push(Seen::Apply(command.kind));
         self.applications.pop_front().unwrap_or(Application::Applied)
     }
     fn view(&mut self, request: ViewRequest, _: RecordHandle) { self.seen.push(Seen::View(request)) }
     fn effect(&mut self, effect: Effect, _: RecordHandle) { self.seen.push(Seen::Effect(effect)) }
-    fn condition(&mut self, condition: Condition, _: RecordHandle) -> bool {
+    fn condition(&mut self, condition: Condition, _: Option<Command<'_>>, _: RecordHandle) -> bool {
         self.seen.push(Seen::Condition(condition));
         self.true_conditions.contains(&condition)
     }

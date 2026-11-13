@@ -147,7 +147,7 @@ pub const fn profile_selection_byte(selection: crate::profile::ProfileSelection)
 }
 
 /// The window request as calc 0x3c0c carries it; `saclac_interface::stock::calc_payload` lays it out.
-pub fn window_payload(request: crate::window::WindowRequest, callback: xm1_saclac_interface::calc::PeerCallback) -> xm1_saclac_interface::calc::CalcPayload {
+pub fn window_payload(request: crate::window::WindowRequest, callback: xm1_saclac_interface::stock::StockCallbackWord) -> xm1_saclac_interface::calc::CalcPayload {
     use xm1_saclac_interface::calc::{CalcPayload, WindowRecord, WindowRequest, WindowSample};
     let snapshot = request.snapshot;
     CalcPayload::Window {

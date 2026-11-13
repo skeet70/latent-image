@@ -201,11 +201,12 @@ pub trait Port {
     /// The shot module's live sequence.
     fn sequence(&mut self, event: ShotEvent<'_>) -> Outcome;
     /// `None` prepares without a command to reply to.
-    fn prepare(&mut self, command: Option<K>, record: RecordHandle) -> Preparation;
-    fn apply(&mut self, command: K, record: RecordHandle) -> Application;
+    fn prepare(&mut self, command: Option<Command<'_>>, record: RecordHandle) -> Preparation;
+    fn apply(&mut self, command: Command<'_>, record: RecordHandle) -> Application;
     fn view(&mut self, request: ViewRequest, record: RecordHandle);
     fn effect(&mut self, effect: Effect, record: RecordHandle);
-    fn condition(&mut self, condition: Condition, record: RecordHandle) -> bool;
+    /// `command` is the command the live view was entered with, if any.
+    fn condition(&mut self, condition: Condition, command: Option<Command<'_>>, record: RecordHandle) -> bool;
     fn motion_setting(&mut self) -> MotionSetting;
     fn reply(&mut self, command: Option<K>, status: ReplyStatus, record: RecordHandle);
     fn fault(&mut self);
@@ -419,6 +420,7 @@ impl Measured {
         match outcome {
             ChildOutcome::Complete => Self::Complete,
             ChildOutcome::Pending => Self::Pending,
+            ChildOutcome::Inactive => Self::Other(Outcome::Inactive),
             ChildOutcome::Measurement(MeasurementOutcome::Update { update, restart }) => {
                 Self::Update { update, restarted: restart == Restart::Complete }
             }
@@ -445,9 +447,9 @@ fn word(parameters: Parameters<'_>, index: usize) -> u32 {
 
 struct Call<'p, 's, 'i, P> { port: &'p mut P, shared: &'s mut PreparationOverride, signal: Signal<'i>, record: RecordHandle }
 
-impl<P: Port> Call<'_, '_, '_, P> {
-    fn command(&self) -> Option<K> {
-        match self.signal { Signal::Command(command) => Some(command.kind), _ => None }
+impl<'i, P: Port> Call<'_, '_, 'i, P> {
+    fn entered(&self) -> Option<Command<'i>> {
+        match self.signal { Signal::Command(command) => Some(command), _ => None }
     }
     fn parameter(&self, index: usize) -> u32 {
         match self.signal { Signal::Command(command) => word(command.parameters, index), _ => 0 }
@@ -480,14 +482,17 @@ impl<P: Port> Call<'_, '_, '_, P> {
         }
     }
     fn apply(&mut self) -> Application {
-        match self.command() {
+        match self.entered() {
             Some(command) => self.port.apply(command, self.record),
             None => Application::Applied,
         }
     }
     fn view(&mut self, request: ViewRequest) { self.port.view(request, self.record) }
     fn effect(&mut self, effect: Effect) { self.port.effect(effect, self.record) }
-    fn condition(&mut self, condition: Condition) -> bool { self.port.condition(condition, self.record) }
+    fn condition(&mut self, condition: Condition) -> bool {
+        let command = self.entered();
+        self.port.condition(condition, command, self.record)
+    }
     fn fault(&mut self) -> Outcome { self.port.fault(); Outcome::Fault }
 
     fn clear_preparation(&mut self) {
@@ -1094,12 +1099,12 @@ impl Controller {
 
     /// Prepares for the entered command, which the next reply answers.
     fn prepare<P: Port>(&mut self, call: &mut Call<'_, '_, '_, P>) {
-        let command = call.command();
+        let command = call.entered();
         self.prepare_for(command, call);
     }
 
-    fn prepare_for<P: Port>(&mut self, command: Option<K>, call: &mut Call<'_, '_, '_, P>) {
-        self.current = command;
+    fn prepare_for<P: Port>(&mut self, command: Option<Command<'_>>, call: &mut Call<'_, '_, '_, P>) {
+        self.current = command.map(|command| command.kind);
         self.preparation = call.port.prepare(command, call.record);
     }
 
