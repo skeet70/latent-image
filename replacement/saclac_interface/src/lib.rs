@@ -1,0 +1,287 @@
+#![no_std]
+#![forbid(unsafe_code)]
+
+pub mod stock;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClientCallback(pub(crate) u32);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParameterValue(pub u32);
+
+/// Parameters whose meaning remains with the retained consumer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Parameters<'a>(pub(crate) &'a [u8]);
+impl<'a> Parameters<'a> {
+    pub fn bytes(self) -> &'a [u8] { self.0 }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommandKind {
+    Start,
+    Stop,
+    Command02,
+    Command03,
+    LensBringUp,
+    LensStop,
+    HalfPress,
+    Command07,
+    Command08,
+    Command09,
+    Command0a,
+    HalfRelease,
+    Command0c,
+    Autofocus,
+    LensDrive,
+    Cancel,
+    Command10,
+    Command11,
+    Command13,
+    Command14,
+    Command15,
+    Command16,
+    Command17,
+    Prepare,
+    Command1d,
+    Command1e,
+    Command1f,
+    Command20,
+    Command21,
+    Command22,
+    Command23,
+    Command24,
+    Command25,
+    Prepare26,
+    Command27,
+    Command28,
+    Command29,
+    Command2b,
+    Command2c,
+    Command2d,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Command<'a> {
+    pub kind: CommandKind,
+    pub parameters: Parameters<'a>,
+}
+
+/// A completion code is distinct from the stock code word used to deliver it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Completion(pub(crate) u8);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Completed<'a> {
+    pub completion: Completion,
+    pub parameters: Parameters<'a>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Message<'a> { Command(Command<'a>), Completed(Completed<'a>) }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BlockingRequest { LensSynchronize, AdjustmentSynchronize, FileSynchronize }
+
+pub trait Blocking {
+    type Error;
+    fn execute(&mut self, request: BlockingRequest) -> Result<(), Self::Error>;
+}
+
+pub trait ClientReplies {
+    type Error;
+    fn reply(&mut self, callback: ClientCallback, status: CompletionStatus, values: Parameters<'_>) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompletionStatus(pub i32);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LensDcOperation {
+    Request00,
+    Request01,
+    Request02,
+    Request03,
+    Request04,
+    Request05,
+    Request06,
+    Request07,
+    Request08,
+    Request09,
+    Request0b,
+    Request11,
+    Request12,
+    Request13,
+    Request14,
+    Request17,
+    Request1d,
+    Request1e,
+    Request20,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LensDcRequest<'a> {
+    pub operation: LensDcOperation,
+    pub parameters: Parameters<'a>,
+    pub completions: &'a [Completion],
+}
+
+pub trait LensDc {
+    type Error;
+    fn request(&mut self, request: LensDcRequest<'_>) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ImgDcOperation {
+    Request00,
+    Request01,
+    Request13,
+    Request16,
+    Request18,
+    Request1a,
+    Request1b,
+    Request1d,
+    Request1e,
+    Request1f,
+    Request20,
+    Request21,
+    Request22,
+    Request23,
+    Request26,
+    Request27,
+    Request28,
+    Request29,
+    Request2a,
+    Request2b,
+    Request2c,
+    Request2d,
+    Request2e,
+    Request2f,
+    Request30,
+    Request31,
+    Request32,
+    Request33,
+    Request3a,
+    Request3b,
+    Request42,
+    Request43,
+    Request44,
+    Request45,
+    Request46,
+    Request47,
+    Request49,
+    Request4a,
+    Request4e,
+    Request4f,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ImgDcRequest<'a> {
+    pub operation: ImgDcOperation,
+    pub parameters: Parameters<'a>,
+    pub completions: &'a [Completion],
+}
+
+pub trait ImgDc {
+    type Error;
+    fn request(&mut self, request: ImgDcRequest<'_>) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CalcOperation {
+    Request00,
+    Request01,
+    Request02,
+    Request03,
+    Request04,
+    Request05,
+    Request09,
+    Request0a,
+    Request0c,
+    Request0d,
+    Request0e,
+    Request0f,
+    Request10,
+    Request11,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CalcRequest<'a> {
+    pub operation: CalcOperation,
+    pub parameters: Parameters<'a>,
+    pub completions: &'a [Completion],
+}
+
+pub trait Calc {
+    type Error;
+    fn request(&mut self, request: CalcRequest<'_>) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Calc1Operation {
+    Request00,
+    Request01,
+    Request02,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Calc1Request<'a> {
+    pub operation: Calc1Operation,
+    pub parameters: Parameters<'a>,
+    pub completions: &'a [Completion],
+}
+
+pub trait Calc1 {
+    type Error;
+    fn request(&mut self, request: Calc1Request<'_>) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StatisticsOperation {
+    Request00,
+    Request01,
+    Request02,
+    Request03,
+    Request04,
+    Request05,
+    Request06,
+    Request07,
+    Request08,
+    Request09,
+    Request0a,
+    Request0b,
+    Request0c,
+    Request0e,
+    Request0f,
+    Request10,
+    Request11,
+    Request12,
+    Request13,
+    Request14,
+    Request17,
+    Request2a,
+    Request2c,
+    Request2e,
+    Request41,
+    Request43,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StatisticsRequest<'a> {
+    pub operation: StatisticsOperation,
+    pub parameters: Parameters<'a>,
+    pub completions: &'a [Completion],
+}
+
+pub trait Statistics {
+    type Error;
+    fn request(&mut self, request: StatisticsRequest<'_>) -> Result<(), Self::Error>;
+}
+
+pub trait SharedParameters {
+    type Error;
+    fn read(&self, command: CommandKind, output: &mut [u8]) -> Result<usize, Self::Error>;
+    fn write(&mut self, command: CommandKind, values: Parameters<'_>) -> Result<(), Self::Error>;
+}
+
+#[cfg(test)]
+mod tests;

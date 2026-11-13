@@ -1,0 +1,18 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib")
+
+package(default_visibility = ["//visibility:public"])
+
+xm1_rust_rlib(
+    name = "saclac-interface",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac_interface",
+    data = ["src/stock.rs"],
+)
+
+genrule(
+    name = "host-tests",
+    srcs = ["src/lib.rs", "src/stock.rs", "src/tests.rs"],
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+    outs = ["host-tests.passed"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test $(location src/lib.rs) -o $(@D)/host-tests && $(@D)/host-tests && touch $@",
+)

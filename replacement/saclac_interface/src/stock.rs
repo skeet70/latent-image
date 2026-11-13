@@ -1,0 +1,426 @@
+use crate::*;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CommandDescriptor {
+    pub kind: CommandKind,
+    pub code: u8,
+    pub producer: u32,
+    pub payload_bytes: usize,
+}
+
+pub const COMMANDS: [CommandDescriptor; 40] = [
+    CommandDescriptor { kind: CommandKind::Start, code: 0, producer: 0xef8db4, payload_bytes: 168 },
+    CommandDescriptor { kind: CommandKind::Stop, code: 1, producer: 0xef8e54, payload_bytes: 4 },
+    CommandDescriptor { kind: CommandKind::Command02, code: 2, producer: 0xef8e7c, payload_bytes: 28 },
+    CommandDescriptor { kind: CommandKind::Command03, code: 3, producer: 0xef8ed0, payload_bytes: 24 },
+    CommandDescriptor { kind: CommandKind::LensBringUp, code: 4, producer: 0xef8f14, payload_bytes: 24 },
+    CommandDescriptor { kind: CommandKind::LensStop, code: 5, producer: 0xef8f58, payload_bytes: 12 },
+    CommandDescriptor { kind: CommandKind::HalfPress, code: 6, producer: 0xef8fa0, payload_bytes: 64 },
+    CommandDescriptor { kind: CommandKind::Command07, code: 7, producer: 0xef9064, payload_bytes: 60 },
+    CommandDescriptor { kind: CommandKind::Command08, code: 8, producer: 0xef913c, payload_bytes: 40 },
+    CommandDescriptor { kind: CommandKind::Command09, code: 9, producer: 0xef91a0, payload_bytes: 16 },
+    CommandDescriptor { kind: CommandKind::Command0a, code: 10, producer: 0xef91e0, payload_bytes: 8 },
+    CommandDescriptor { kind: CommandKind::HalfRelease, code: 11, producer: 0xef920c, payload_bytes: 4 },
+    CommandDescriptor { kind: CommandKind::Command0c, code: 12, producer: 0xef9234, payload_bytes: 12 },
+    CommandDescriptor { kind: CommandKind::Autofocus, code: 13, producer: 0xef9264, payload_bytes: 160 },
+    CommandDescriptor { kind: CommandKind::LensDrive, code: 14, producer: 0xef9320, payload_bytes: 20 },
+    CommandDescriptor { kind: CommandKind::Cancel, code: 15, producer: 0xef9370, payload_bytes: 8 },
+    CommandDescriptor { kind: CommandKind::Command10, code: 16, producer: 0xef939c, payload_bytes: 8 },
+    CommandDescriptor { kind: CommandKind::Command11, code: 17, producer: 0xef93c4, payload_bytes: 20 },
+    CommandDescriptor { kind: CommandKind::Command13, code: 19, producer: 0xef9404, payload_bytes: 4 },
+    CommandDescriptor { kind: CommandKind::Command14, code: 20, producer: 0xef942c, payload_bytes: 20 },
+    CommandDescriptor { kind: CommandKind::Command15, code: 21, producer: 0xef9468, payload_bytes: 8 },
+    CommandDescriptor { kind: CommandKind::Command16, code: 22, producer: 0xef9494, payload_bytes: 4 },
+    CommandDescriptor { kind: CommandKind::Command17, code: 23, producer: 0xef9510, payload_bytes: 40 },
+    CommandDescriptor { kind: CommandKind::Prepare, code: 26, producer: 0xef955c, payload_bytes: 20 },
+    CommandDescriptor { kind: CommandKind::Command1d, code: 29, producer: 0xef9598, payload_bytes: 12 },
+    CommandDescriptor { kind: CommandKind::Command1e, code: 30, producer: 0xef95c8, payload_bytes: 8 },
+    CommandDescriptor { kind: CommandKind::Command1f, code: 31, producer: 0xef95f8, payload_bytes: 20 },
+    CommandDescriptor { kind: CommandKind::Command20, code: 32, producer: 0xef9650, payload_bytes: 8 },
+    CommandDescriptor { kind: CommandKind::Command21, code: 33, producer: 0xef967c, payload_bytes: 8 },
+    CommandDescriptor { kind: CommandKind::Command22, code: 34, producer: 0xef96a8, payload_bytes: 8 },
+    CommandDescriptor { kind: CommandKind::Command23, code: 35, producer: 0xef96d4, payload_bytes: 12 },
+    CommandDescriptor { kind: CommandKind::Command24, code: 36, producer: 0xef9718, payload_bytes: 20 },
+    CommandDescriptor { kind: CommandKind::Command25, code: 37, producer: 0xef9804, payload_bytes: 12 },
+    CommandDescriptor { kind: CommandKind::Prepare26, code: 38, producer: 0xef9844, payload_bytes: 8 },
+    CommandDescriptor { kind: CommandKind::Command27, code: 39, producer: 0xef9870, payload_bytes: 8 },
+    CommandDescriptor { kind: CommandKind::Command28, code: 40, producer: 0xef98bc, payload_bytes: 4 },
+    CommandDescriptor { kind: CommandKind::Command29, code: 41, producer: 0xef98e4, payload_bytes: 8 },
+    CommandDescriptor { kind: CommandKind::Command2b, code: 43, producer: 0xef9988, payload_bytes: 16 },
+    CommandDescriptor { kind: CommandKind::Command2c, code: 44, producer: 0xef94bc, payload_bytes: 8 },
+    CommandDescriptor { kind: CommandKind::Command2d, code: 45, producer: 0xef94e8, payload_bytes: 4 },
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParameterBlock { pub address: u32, pub capacity: usize }
+
+pub const PARAMETER_BLOCKS: [ParameterBlock; 46] = [
+    ParameterBlock { address: 0x169cf58, capacity: 168 },
+    ParameterBlock { address: 0x169d000, capacity: 4 },
+    ParameterBlock { address: 0x169d004, capacity: 28 },
+    ParameterBlock { address: 0x169d020, capacity: 24 },
+    ParameterBlock { address: 0x169d038, capacity: 24 },
+    ParameterBlock { address: 0x169d050, capacity: 12 },
+    ParameterBlock { address: 0x169d05c, capacity: 64 },
+    ParameterBlock { address: 0x169d09c, capacity: 60 },
+    ParameterBlock { address: 0x169d0d8, capacity: 40 },
+    ParameterBlock { address: 0x169d100, capacity: 16 },
+    ParameterBlock { address: 0x169d110, capacity: 8 },
+    ParameterBlock { address: 0x169d118, capacity: 4 },
+    ParameterBlock { address: 0x169d11c, capacity: 12 },
+    ParameterBlock { address: 0x169d128, capacity: 160 },
+    ParameterBlock { address: 0x169d1c8, capacity: 20 },
+    ParameterBlock { address: 0x169d1dc, capacity: 8 },
+    ParameterBlock { address: 0x169d1e4, capacity: 8 },
+    ParameterBlock { address: 0x169d1ec, capacity: 20 },
+    ParameterBlock { address: 0x169d200, capacity: 8 },
+    ParameterBlock { address: 0x169d208, capacity: 4 },
+    ParameterBlock { address: 0x169d20c, capacity: 20 },
+    ParameterBlock { address: 0x169d220, capacity: 8 },
+    ParameterBlock { address: 0x169d228, capacity: 4 },
+    ParameterBlock { address: 0x169d22c, capacity: 40 },
+    ParameterBlock { address: 0x169d254, capacity: 32 },
+    ParameterBlock { address: 0x169d274, capacity: 4 },
+    ParameterBlock { address: 0x169d278, capacity: 20 },
+    ParameterBlock { address: 0x169d28c, capacity: 8 },
+    ParameterBlock { address: 0x169d294, capacity: 8 },
+    ParameterBlock { address: 0x169d29c, capacity: 12 },
+    ParameterBlock { address: 0x169d2a8, capacity: 8 },
+    ParameterBlock { address: 0x169d2b0, capacity: 20 },
+    ParameterBlock { address: 0x169d2c4, capacity: 8 },
+    ParameterBlock { address: 0x169d2cc, capacity: 8 },
+    ParameterBlock { address: 0x169d2d4, capacity: 8 },
+    ParameterBlock { address: 0x169d2dc, capacity: 12 },
+    ParameterBlock { address: 0x169d2e8, capacity: 20 },
+    ParameterBlock { address: 0x169d2fc, capacity: 12 },
+    ParameterBlock { address: 0x169d308, capacity: 8 },
+    ParameterBlock { address: 0x169d310, capacity: 8 },
+    ParameterBlock { address: 0x169d318, capacity: 4 },
+    ParameterBlock { address: 0x169d31c, capacity: 8 },
+    ParameterBlock { address: 0x169d324, capacity: 44 },
+    ParameterBlock { address: 0x169d350, capacity: 16 },
+    ParameterBlock { address: 0x169d360, capacity: 8 },
+    ParameterBlock { address: 0x169d368, capacity: 8 },
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CallbackDescriptor {
+    pub word: u32,
+    pub posts: &'static [u8],
+    pub payload_bytes: Option<usize>,
+}
+
+pub const CALLBACKS: [CallbackDescriptor; 106] = [
+    CallbackDescriptor { word: 0xf14ae4, posts: &[0x3d], payload_bytes: Some(12) },
+    CallbackDescriptor { word: 0xf14b14, posts: &[0x39], payload_bytes: Some(12) },
+    CallbackDescriptor { word: 0xf14b50, posts: &[0x38], payload_bytes: Some(12) },
+    CallbackDescriptor { word: 0xf14b8c, posts: &[0x36], payload_bytes: Some(12) },
+    CallbackDescriptor { word: 0xf14bc8, posts: &[0x35], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf14be4, posts: &[0x33, 0x34], payload_bytes: Some(16) },
+    CallbackDescriptor { word: 0xf15070, posts: &[0x3c], payload_bytes: Some(8) },
+    CallbackDescriptor { word: 0xf1509c, posts: &[0x40], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf150c4, posts: &[0x30], payload_bytes: Some(8) },
+    CallbackDescriptor { word: 0xf150f0, posts: &[0x31, 0x32, 0x2f], payload_bytes: Some(16) },
+    CallbackDescriptor { word: 0xf17c14, posts: &[0x0, 0xa1], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf17c30, posts: &[0x3a], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf17c4c, posts: &[0x35], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf1d154, posts: &[0x90], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf1eddc, posts: &[0x4d, 0x4c], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf1ee10, posts: &[0x8e], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf1fc08, posts: &[0x8f], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf20380, posts: &[0x91], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf203b4, posts: &[0x93], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf20418, posts: &[0x92], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf204fc, posts: &[0x6b], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf20518, posts: &[0x7a], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf20534, posts: &[0x53], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf20550, posts: &[0x52], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf2056c, posts: &[0x51], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf20594, posts: &[0x50], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf205c0, posts: &[0x4e], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf205e8, posts: &[0x4f], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf226e0, posts: &[0x75], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf22708, posts: &[0x80], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf22730, posts: &[0x7f], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf2276c, posts: &[0x7e], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf22794, posts: &[0x59], payload_bytes: Some(8) },
+    CallbackDescriptor { word: 0xf227c0, posts: &[0x57], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf227dc, posts: &[0x7c], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf227f8, posts: &[0x7b], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf22928, posts: &[0x58], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf24170, posts: &[0x1, 0x37], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf2418c, posts: &[0x35], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf241a8, posts: &[0x9b], payload_bytes: Some(8) },
+    CallbackDescriptor { word: 0xf241d4, posts: &[0x9c], payload_bytes: Some(8) },
+    CallbackDescriptor { word: 0xf25728, posts: &[0x5a], payload_bytes: Some(12) },
+    CallbackDescriptor { word: 0xf25758, posts: &[0x9d], payload_bytes: Some(8) },
+    CallbackDescriptor { word: 0xf28e94, posts: &[0x33, 0x34], payload_bytes: Some(16) },
+    CallbackDescriptor { word: 0xf2903c, posts: &[0x85], payload_bytes: Some(24) },
+    CallbackDescriptor { word: 0xf2907c, posts: &[0x83], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf2ac70, posts: &[0x5d], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf2ac98, posts: &[0x95], payload_bytes: None },
+    CallbackDescriptor { word: 0xf2acd0, posts: &[0x94], payload_bytes: None },
+    CallbackDescriptor { word: 0xf2ad08, posts: &[0x5c], payload_bytes: Some(8) },
+    CallbackDescriptor { word: 0xf2ad34, posts: &[0x5b], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf2c940, posts: &[0x35], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf2c968, posts: &[0x3a], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf2c990, posts: &[0x62], payload_bytes: Some(20) },
+    CallbackDescriptor { word: 0xf2c9c4, posts: &[0x5e], payload_bytes: Some(16) },
+    CallbackDescriptor { word: 0xf2ca04, posts: &[0x64], payload_bytes: Some(8) },
+    CallbackDescriptor { word: 0xf2ca34, posts: &[0x61], payload_bytes: Some(36) },
+    CallbackDescriptor { word: 0xf2ca78, posts: &[0x60, 0x5f, 0x60], payload_bytes: Some(92) },
+    CallbackDescriptor { word: 0xf2cad8, posts: &[0x7d], payload_bytes: Some(24) },
+    CallbackDescriptor { word: 0xf2e67c, posts: &[0x9a], payload_bytes: None },
+    CallbackDescriptor { word: 0xf2e6b4, posts: &[0x99], payload_bytes: Some(12) },
+    CallbackDescriptor { word: 0xf2e6e4, posts: &[0x98], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf2e710, posts: &[0x97], payload_bytes: Some(48) },
+    CallbackDescriptor { word: 0xf2ef0c, posts: &[0x35], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf2ef34, posts: &[0x3a], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf2ef5c, posts: &[0x90], payload_bytes: Some(0) },
+    CallbackDescriptor { word: 0xf2f65c, posts: &[0x65], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf2f684, posts: &[0x63], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf2f6ac, posts: &[0x4b], payload_bytes: Some(8) },
+    CallbackDescriptor { word: 0xf2f6d8, posts: &[0x4a], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf2f700, posts: &[0x44], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf2f728, posts: &[0x43], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf2f750, posts: &[0x42], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf2f778, posts: &[0x41], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf2f7a0, posts: &[0x40], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf2f7c8, posts: &[0x3f], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf32508, posts: &[0x45], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf33520, posts: &[0x88], payload_bytes: Some(8) },
+    CallbackDescriptor { word: 0xf33568, posts: &[0x87], payload_bytes: Some(8) },
+    CallbackDescriptor { word: 0xf37854, posts: &[0x8a], payload_bytes: Some(8) },
+    CallbackDescriptor { word: 0xf38668, posts: &[0x9a], payload_bytes: Some(6) },
+    CallbackDescriptor { word: 0xf39b10, posts: &[0x8b], payload_bytes: Some(8) },
+    CallbackDescriptor { word: 0xf39b3c, posts: &[0x66], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf39b64, posts: &[0x47], payload_bytes: Some(8) },
+    CallbackDescriptor { word: 0xf3a3f8, posts: &[0x8d], payload_bytes: Some(8) },
+    CallbackDescriptor { word: 0xf3a768, posts: &[0x82], payload_bytes: Some(8) },
+    CallbackDescriptor { word: 0xf3a794, posts: &[0x7f], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf3a7bc, posts: &[0x7e], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf3a7e4, posts: &[0x80], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf3a80c, posts: &[0x73], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf3a834, posts: &[0x71], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf3a85c, posts: &[0x72], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf3a884, posts: &[0x75], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf3a8ac, posts: &[0x77], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf3a8d4, posts: &[0x70], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf3a8fc, posts: &[0x6f], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf3a924, posts: &[0x76], payload_bytes: Some(8) },
+    CallbackDescriptor { word: 0xf3a950, posts: &[0x6e], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf3a978, posts: &[0x6d], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf3a9a0, posts: &[0x78], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf3a9c8, posts: &[0x6c], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf3a9f0, posts: &[0x6b], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf3aa18, posts: &[0x69], payload_bytes: Some(4) },
+    CallbackDescriptor { word: 0xf3aa40, posts: &[0x79], payload_bytes: Some(64) },
+    CallbackDescriptor { word: 0xf3c104, posts: &[0x89], payload_bytes: Some(8) },
+    CallbackDescriptor { word: 0xf3c14c, posts: &[0x46], payload_bytes: Some(12) },
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ParseError { UnknownOperation, Oversize, MissingCallback }
+
+pub fn command(code: u8) -> Option<CommandKind> {
+    COMMANDS.iter().find(|entry| entry.code == code).map(|entry| entry.kind)
+}
+
+pub fn command_code(kind: CommandKind) -> u8 {
+    match kind {
+        CommandKind::Start => 0,
+        CommandKind::Stop => 1,
+        CommandKind::Command02 => 2,
+        CommandKind::Command03 => 3,
+        CommandKind::LensBringUp => 4,
+        CommandKind::LensStop => 5,
+        CommandKind::HalfPress => 6,
+        CommandKind::Command07 => 7,
+        CommandKind::Command08 => 8,
+        CommandKind::Command09 => 9,
+        CommandKind::Command0a => 10,
+        CommandKind::HalfRelease => 11,
+        CommandKind::Command0c => 12,
+        CommandKind::Autofocus => 13,
+        CommandKind::LensDrive => 14,
+        CommandKind::Cancel => 15,
+        CommandKind::Command10 => 16,
+        CommandKind::Command11 => 17,
+        CommandKind::Command13 => 19,
+        CommandKind::Command14 => 20,
+        CommandKind::Command15 => 21,
+        CommandKind::Command16 => 22,
+        CommandKind::Command17 => 23,
+        CommandKind::Prepare => 26,
+        CommandKind::Command1d => 29,
+        CommandKind::Command1e => 30,
+        CommandKind::Command1f => 31,
+        CommandKind::Command20 => 32,
+        CommandKind::Command21 => 33,
+        CommandKind::Command22 => 34,
+        CommandKind::Command23 => 35,
+        CommandKind::Command24 => 36,
+        CommandKind::Command25 => 37,
+        CommandKind::Prepare26 => 38,
+        CommandKind::Command27 => 39,
+        CommandKind::Command28 => 40,
+        CommandKind::Command29 => 41,
+        CommandKind::Command2b => 43,
+        CommandKind::Command2c => 44,
+        CommandKind::Command2d => 45,
+    }
+}
+
+pub fn completion(code: u8) -> Option<Completion> {
+    CALLBACKS.iter().any(|entry| entry.posts.contains(&code)).then_some(Completion(code))
+}
+
+pub fn completion_code(completion: Completion) -> u8 { completion.0 }
+
+pub fn parameters(bytes: &[u8]) -> Parameters<'_> { Parameters(bytes) }
+
+pub fn client_callback(parameters: Parameters<'_>) -> Result<ClientCallback, ParseError> {
+    let bytes: [u8; 4] = parameters.0.get(..4).ok_or(ParseError::MissingCallback)?.try_into().map_err(|_| ParseError::MissingCallback)?;
+    Ok(ClientCallback(u32::from_le_bytes(bytes)))
+}
+
+pub fn callback_word(callback: ClientCallback) -> u32 { callback.0 }
+
+pub fn parse(operation: u16, payload: &[u8]) -> Result<Message<'_>, ParseError> {
+    let code = operation.checked_sub(0x3b00).and_then(|code| u8::try_from(code).ok()).ok_or(ParseError::UnknownOperation)?;
+    if let Some(kind) = command(code) {
+        if payload.len() > PARAMETER_BLOCKS[usize::from(code)].capacity { return Err(ParseError::Oversize); }
+        Ok(Message::Command(Command { kind, parameters: Parameters(payload) }))
+    } else if let Some(completion) = completion(code) {
+        Ok(Message::Completed(Completed { completion, parameters: Parameters(payload) }))
+    } else {
+        Err(ParseError::UnknownOperation)
+    }
+}
+
+pub fn lens_dc_operation(operation: LensDcOperation) -> u16 {
+    match operation {
+        LensDcOperation::Request00 => 0x4200,
+        LensDcOperation::Request01 => 0x4201,
+        LensDcOperation::Request02 => 0x4202,
+        LensDcOperation::Request03 => 0x4203,
+        LensDcOperation::Request04 => 0x4204,
+        LensDcOperation::Request05 => 0x4205,
+        LensDcOperation::Request06 => 0x4206,
+        LensDcOperation::Request07 => 0x4207,
+        LensDcOperation::Request08 => 0x4208,
+        LensDcOperation::Request09 => 0x4209,
+        LensDcOperation::Request0b => 0x420b,
+        LensDcOperation::Request11 => 0x4211,
+        LensDcOperation::Request12 => 0x4212,
+        LensDcOperation::Request13 => 0x4213,
+        LensDcOperation::Request14 => 0x4214,
+        LensDcOperation::Request17 => 0x4217,
+        LensDcOperation::Request1d => 0x421d,
+        LensDcOperation::Request1e => 0x421e,
+        LensDcOperation::Request20 => 0x4220,
+    }
+}
+
+pub fn img_dc_operation(operation: ImgDcOperation) -> u16 {
+    match operation {
+        ImgDcOperation::Request00 => 0x3f00,
+        ImgDcOperation::Request01 => 0x3f01,
+        ImgDcOperation::Request13 => 0x3f13,
+        ImgDcOperation::Request16 => 0x3f16,
+        ImgDcOperation::Request18 => 0x3f18,
+        ImgDcOperation::Request1a => 0x3f1a,
+        ImgDcOperation::Request1b => 0x3f1b,
+        ImgDcOperation::Request1d => 0x3f1d,
+        ImgDcOperation::Request1e => 0x3f1e,
+        ImgDcOperation::Request1f => 0x3f1f,
+        ImgDcOperation::Request20 => 0x3f20,
+        ImgDcOperation::Request21 => 0x3f21,
+        ImgDcOperation::Request22 => 0x3f22,
+        ImgDcOperation::Request23 => 0x3f23,
+        ImgDcOperation::Request26 => 0x3f26,
+        ImgDcOperation::Request27 => 0x3f27,
+        ImgDcOperation::Request28 => 0x3f28,
+        ImgDcOperation::Request29 => 0x3f29,
+        ImgDcOperation::Request2a => 0x3f2a,
+        ImgDcOperation::Request2b => 0x3f2b,
+        ImgDcOperation::Request2c => 0x3f2c,
+        ImgDcOperation::Request2d => 0x3f2d,
+        ImgDcOperation::Request2e => 0x3f2e,
+        ImgDcOperation::Request2f => 0x3f2f,
+        ImgDcOperation::Request30 => 0x3f30,
+        ImgDcOperation::Request31 => 0x3f31,
+        ImgDcOperation::Request32 => 0x3f32,
+        ImgDcOperation::Request33 => 0x3f33,
+        ImgDcOperation::Request3a => 0x3f3a,
+        ImgDcOperation::Request3b => 0x3f3b,
+        ImgDcOperation::Request42 => 0x3f42,
+        ImgDcOperation::Request43 => 0x3f43,
+        ImgDcOperation::Request44 => 0x3f44,
+        ImgDcOperation::Request45 => 0x3f45,
+        ImgDcOperation::Request46 => 0x3f46,
+        ImgDcOperation::Request47 => 0x3f47,
+        ImgDcOperation::Request49 => 0x3f49,
+        ImgDcOperation::Request4a => 0x3f4a,
+        ImgDcOperation::Request4e => 0x3f4e,
+        ImgDcOperation::Request4f => 0x3f4f,
+    }
+}
+
+pub fn calc_operation(operation: CalcOperation) -> u16 {
+    match operation {
+        CalcOperation::Request00 => 0x3c00,
+        CalcOperation::Request01 => 0x3c01,
+        CalcOperation::Request02 => 0x3c02,
+        CalcOperation::Request03 => 0x3c03,
+        CalcOperation::Request04 => 0x3c04,
+        CalcOperation::Request05 => 0x3c05,
+        CalcOperation::Request09 => 0x3c09,
+        CalcOperation::Request0a => 0x3c0a,
+        CalcOperation::Request0c => 0x3c0c,
+        CalcOperation::Request0d => 0x3c0d,
+        CalcOperation::Request0e => 0x3c0e,
+        CalcOperation::Request0f => 0x3c0f,
+        CalcOperation::Request10 => 0x3c10,
+        CalcOperation::Request11 => 0x3c11,
+    }
+}
+
+pub fn calc1_operation(operation: Calc1Operation) -> u16 {
+    match operation {
+        Calc1Operation::Request00 => 0x3d00,
+        Calc1Operation::Request01 => 0x3d01,
+        Calc1Operation::Request02 => 0x3d02,
+    }
+}
+
+pub fn statistics_operation(operation: StatisticsOperation) -> u16 {
+    match operation {
+        StatisticsOperation::Request00 => 0x4000,
+        StatisticsOperation::Request01 => 0x4001,
+        StatisticsOperation::Request02 => 0x4002,
+        StatisticsOperation::Request03 => 0x4003,
+        StatisticsOperation::Request04 => 0x4004,
+        StatisticsOperation::Request05 => 0x4005,
+        StatisticsOperation::Request06 => 0x4006,
+        StatisticsOperation::Request07 => 0x4007,
+        StatisticsOperation::Request08 => 0x4008,
+        StatisticsOperation::Request09 => 0x4009,
+        StatisticsOperation::Request0a => 0x400a,
+        StatisticsOperation::Request0b => 0x400b,
+        StatisticsOperation::Request0c => 0x400c,
+        StatisticsOperation::Request0e => 0x400e,
+        StatisticsOperation::Request0f => 0x400f,
+        StatisticsOperation::Request10 => 0x4010,
+        StatisticsOperation::Request11 => 0x4011,
+        StatisticsOperation::Request12 => 0x4012,
+        StatisticsOperation::Request13 => 0x4013,
+        StatisticsOperation::Request14 => 0x4014,
+        StatisticsOperation::Request17 => 0x4017,
+        StatisticsOperation::Request2a => 0x402a,
+        StatisticsOperation::Request2c => 0x402c,
+        StatisticsOperation::Request2e => 0x402e,
+        StatisticsOperation::Request41 => 0x4041,
+        StatisticsOperation::Request43 => 0x4043,
+    }
+}
