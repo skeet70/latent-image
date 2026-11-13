@@ -34,7 +34,7 @@ main = do
   check "equal verdict names the firmware" (verdictFirmware (judge complete) == Just "aaaa")
   check "equal verdict names the owned image" (verdictOwned (judge complete) == Just "bbbb")
   check "equal verdict names the report digest" (verdictReportDigest (judge complete) == "report-digest")
-  check "equal verdict names the judge version" (judgeVersion == "5")
+  check "equal verdict names the judge version" (judgeVersion == "6")
   check "equal verdict lists every condition met" (all conditionMet (verdictConditions (judge complete)))
   check "equal verdict has no unmet condition" (null (verdictUnmet (judge complete)))
 
@@ -102,68 +102,11 @@ main = do
   check "a diagnostic difference is printed" (verdictDiagnostics (judge diagnostic) == ["c1: decoder state"])
   check "a diagnostic difference is not a case difference" (null (verdictDifferentCases (judge diagnostic)))
 
-  -- A declared milestone is its own verdict, apart from equal.
-  let milestoneReport stock owned = do
-        parsed <- either fail pure (parseReport (BC.pack (syntheticReport milestoneKey stock owned)))
-        pure (parsed, judge parsed)
-      milestoneVerdict stock owned = snd <$> milestoneReport stock owned
-      reached = milestoneVerdict "[\"boot\",\"menu\",\"property\"]" "[\"boot\",\"menu\",\"property\",\"record\"]"
-  parsedMilestone <- fst <$> milestoneReport "[\"boot\",\"menu\",\"property\"]" "[\"boot\",\"menu\",\"property\",\"record\"]"
-  check "the parser reads the milestone name and observation"
-    (reportMilestone parsedMilestone == Just (Milestone "machine-7" (ObservationIndex 2)))
-  check "the parser reads both observation sequences"
-    (length (reportStockObservations parsedMilestone) == 3 && length (reportOwnedObservations parsedMilestone) == 4)
-  reachedVerdict <- reached
-  check "both sides reaching the milestone is equal-up-to-milestone"
-    (verdictStatus reachedVerdict == VerdictEqualUpToMilestone)
-  check "the milestone verdict is not equal" (verdictStatus reachedVerdict /= VerdictEqual)
-  check "the milestone verdict names the milestone"
-    (verdictMilestone reachedVerdict == Just (Milestone "machine-7" (ObservationIndex 2)))
-  check "the milestone verdict has no first difference" (verdictFirstDifference reachedVerdict == Nothing)
-
-  stockMisses <- milestoneVerdict "[\"boot\",\"menu\"]" "[\"boot\",\"menu\",\"property\",\"record\"]"
-  check "a stock side that misses the milestone is different"
-    (verdictStatus stockMisses == VerdictDifferent)
-  check "the first difference is the milestone observation"
-    (fmap differenceAt (verdictFirstDifference stockMisses) == Just (ObservationIndex 2))
-  check "stock has no observation at the first difference"
-    (maybe False ((== Nothing) . differenceStock) (verdictFirstDifference stockMisses))
-  check "the verdict names the side that misses the milestone"
-    (any ("stock does not reach milestone machine-7" `isInfix`) (verdictReasons stockMisses))
-
-  ownedMisses <- milestoneVerdict "[\"boot\",\"menu\",\"property\",\"record\"]" "[\"boot\",\"menu\"]"
-  check "an owned side that misses the milestone is different"
-    (verdictStatus ownedMisses == VerdictDifferent)
-  check "the owned side's first difference is the milestone observation"
-    (fmap differenceAt (verdictFirstDifference ownedMisses) == Just (ObservationIndex 2))
-  check "owned has no observation at the first difference"
-    (maybe False ((== Nothing) . differenceOwned) (verdictFirstDifference ownedMisses))
-
-  beforeMilestone <- milestoneVerdict "[\"boot\",\"menu\",\"property\"]" "[\"boot\",\"settings\",\"property\",\"record\"]"
-  check "a difference before the milestone is different"
-    (verdictStatus beforeMilestone == VerdictDifferent)
-  check "the first differing observation is the one before the milestone"
-    (fmap differenceAt (verdictFirstDifference beforeMilestone) == Just (ObservationIndex 1))
-
-  tailNotPrefix <- milestoneVerdict "[\"boot\",\"menu\",\"property\",\"record-a\"]" "[\"boot\",\"menu\",\"property\",\"record-b\"]"
-  check "an owned tail that diverges from the stock tail is different"
-    (verdictStatus tailNotPrefix == VerdictDifferent)
-  check "the first differing observation is the first tail observation"
-    (fmap differenceAt (verdictFirstDifference tailNotPrefix) == Just (ObservationIndex 3))
-
-  longerStockTail <- milestoneVerdict "[\"boot\",\"menu\",\"property\",\"record\",\"extra\"]" "[\"boot\",\"menu\",\"property\",\"record\"]"
-  check "a stock tail longer than the owned tail is different"
-    (verdictStatus longerStockTail == VerdictDifferent)
-  check "the extra stock observation is the first difference"
-    (fmap differenceAt (verdictFirstDifference longerStockTail) == Just (ObservationIndex 4))
-
-  observationsWithoutMilestone <- either fail pure (parseReport (BC.pack (syntheticReport "" "[\"boot\",\"menu\",\"property\"]" "[\"boot\",\"menu\",\"property\",\"record\"]")))
-  check "observations without a milestone cannot get the milestone verdict"
-    (verdictStatus (judge observationsWithoutMilestone) == VerdictEqual)
-  check "a report without a milestone has no milestone field"
-    (reportMilestone observationsWithoutMilestone == Nothing)
-  check "a milestone without an observation is refused"
-    (case parseReport (BC.pack "{\"milestone\":{\"name\":\"machine-7\"}}") of Left _ -> True; Right _ -> False)
+  -- A cutover report declares no milestone: it compares every case.
+  check "a native report carrying a milestone is refused"
+    (case parseReport (BC.pack "{\"milestone\":{\"name\":\"machine-7\",\"observation\":2}}") of Left _ -> True; Right _ -> False)
+  check "a native report with a null milestone is read"
+    (case parseReport (BC.pack "{\"milestone\":null}") of Right _ -> True; Left _ -> False)
 
   -- Only equal exits zero.
   check "equal exits zero" (verdictExitCode VerdictEqual == ExitSuccess)
@@ -211,9 +154,6 @@ report = Report
   , reportCases = []
   , reportControls = []
   , reportDiagnostics = []
-  , reportMilestone = Nothing
-  , reportStockObservations = []
-  , reportOwnedObservations = []
   }
 
 caseRow :: String -> Maybe Word32 -> Maybe Int -> [String] -> [String] -> ReportCase
@@ -234,20 +174,6 @@ control name detected differences diagnostics = ReportControl
   , reportControlDifferences = differences
   , reportControlDiagnostics = diagnostics
   }
-
--- | A complete synthetic report whose only variable parts are the milestone
--- declaration and the two ordered observation sequences.
-syntheticReport :: String -> String -> String -> String
-syntheticReport milestone stock owned =
-  "{\"suite\":\"synthetic\",\"firmware_sha256\":\"aaaa\",\"owned_sha256\":\"bbbb\","
-    ++ milestone
-    ++ "\"stock_observations\":" ++ stock ++ ",\"owned_observations\":" ++ owned ++ ","
-    ++ "\"cases\":[{\"id\":\"c1\",\"entry\":\"0x10\",\"stock_instructions_inside\":3},"
-    ++ "{\"id\":\"c2\",\"entry\":\"0x20\",\"stock_instructions_inside\":5}],"
-    ++ "\"controls\":[{\"name\":\"wrong\",\"reported\":true}]}"
-
-milestoneKey :: String
-milestoneKey = "\"milestone\":{\"name\":\"machine-7\",\"observation\":2},"
 
 unmetNames :: Verdict -> [ConditionName]
 unmetNames verdict = [conditionName condition | condition <- verdictConditions verdict, not (conditionMet condition)]
