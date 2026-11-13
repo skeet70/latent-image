@@ -8,6 +8,7 @@ use xm1_saclac_profile_records::stock::shared::group_22;
 
 use crate::adjust::configuration::ProfileStore;
 use crate::adjust::lens::LensConfiguration;
+use crate::adjust::motion::queries::round_tenths;
 use crate::exposure::ports::{CaptureProfiles, Properties};
 use crate::exposure::settings;
 use crate::stock::adjust as stock;
@@ -46,16 +47,6 @@ impl RateKind {
     }
 }
 
-/// Divides by ten, rounding half away from zero (0x741fa0).
-const fn tenths(value: i32) -> i32 {
-    let quotient = value / 10;
-    match value % 10 {
-        5..=9 => quotient + 1,
-        -9..=-5 => quotient - 1,
-        _ => quotient,
-    }
-}
-
 /// The share of the configured rate an amount takes, the rate it drives the lens at, and that rate
 /// scaled by the configured period.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -81,7 +72,7 @@ pub fn drive_rate(properties: &mut impl Properties, configuration: &mut impl Len
         let steps = u64::from(properties.property(stock::RATE_STEPS) as u8);
         (span / (steps * u64::from(factor))) as i32
     };
-    let scaled = rate.wrapping_mul(tenths(period) as u32) / 10_000;
+    let scaled = rate.wrapping_mul(round_tenths(period) as u32) / 10_000;
     DriveRate { share, rate, scaled }
 }
 
