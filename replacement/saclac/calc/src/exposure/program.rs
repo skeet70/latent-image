@@ -330,10 +330,13 @@ pub fn build(ports: &mut impl Ports, limits: &mut impl Limits, context: &Exposur
         }
         start.wrapping_sub(floor)
     };
-    let room = (i32::from(ceiling) - i32::from(start)).min(i32::from(step_limit.wrapping_mul(7))) as i16;
+    // A positive program offset keeps the last step for the extended step (0xf64b4c..0xf64b5c).
+    let extends = program_offset > 0;
+    let reserved = i16::from(extends);
+    let room = (i32::from(ceiling) - i32::from(start)).min(i32::from(step_limit.wrapping_mul(7 - reserved))) as i16;
     let headroom = high.wrapping_sub(start).wrapping_sub(tolerance);
-    let (end, room) = if room < headroom { (start.wrapping_add(room), room) } else { (high.wrapping_sub(tolerance), headroom) };
-    let (count, step) = steps(room, step_limit);
+    let (end, room, extends) = if room < headroom { (start.wrapping_add(room), room, extends) } else { (high.wrapping_sub(tolerance), headroom, false) };
+    let (steps, step) = steps(room, step_limit, PROGRAM_STEPS as i16 - 1 - reserved);
 
     let builder = Builder { lens_reference, target, base: scene.offset, level_limit, reference_offset, end, far_lens };
     let mut program = [ExposureStep::default(); PROGRAM_STEPS];
@@ -345,10 +348,10 @@ pub fn build(ports: &mut impl Ports, limits: &mut impl Limits, context: &Exposur
         lens_step: near_lens,
         ..ExposureStep::default()
     };
-    for index in 0..usize::from(count) {
+    for index in 0..usize::from(steps) {
         let rise = if index == 0 {
             first_step
-        } else if index + 1 == usize::from(count) {
+        } else if index + 1 == usize::from(steps) {
             let position = (index as i16).wrapping_mul(step).wrapping_add(start);
             if position > end { step.wrapping_add(end).wrapping_sub(position) } else { step }
         } else {
@@ -372,6 +375,18 @@ pub fn build(ports: &mut impl Ports, limits: &mut impl Limits, context: &Exposur
         program[index] = entry;
         previous = entry;
     }
+    let count = if extends {
+        let last = program[usize::from(steps) - 1];
+        program[usize::from(steps)] = ExposureStep {
+            index: last.index + 1,
+            position: last.position.wrapping_add(program_offset),
+            extended: true,
+            ..last
+        };
+        steps + 1
+    } else {
+        steps
+    };
     for entry in &mut program[..usize::from(count)] {
         entry.converted = ports.converted_level(entry.profile, entry.level);
     }
@@ -390,13 +405,14 @@ pub fn build(ports: &mut impl Ports, limits: &mut impl Limits, context: &Exposur
     Program { span, steps: program, choice }
 }
 
-/// The number of steps and the step size that divide `room` into steps of at most `limit`.
-fn steps(room: i16, limit: i16) -> (u8, i16) {
+/// The number of steps and the step size that divide `room` into at most `parts` steps of at most
+/// `limit` after the first.
+fn steps(room: i16, limit: i16, parts: i16) -> (u8, i16) {
     if room <= 0 {
         return (1, 0);
     }
     let mut size = 0;
-    for parts in 1..PROGRAM_STEPS as i16 {
+    for parts in 1..=parts {
         size = (room + parts - 1) / parts;
         if limit >= size {
             return (parts as u8 + 1, size);

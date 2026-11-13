@@ -128,6 +128,31 @@ fn a_step_beyond_the_level_limit_moves_the_lens_toward_the_far_step() {
 }
 
 #[test]
+fn a_positive_program_offset_below_the_ceiling_appends_an_extended_step_one_offset_beyond_the_last() {
+    let mut world = world();
+    world.property_word(property::PROGRAM_LEVEL_LIMIT, 200);
+    let plain = build(&mut world, &mut limits(), &context());
+    assert_eq!((plain.span.last, plain.span.end), (3, 200));
+    assert!(plain.steps.iter().all(|step| !step.extended));
+
+    world.property_word(property::PROGRAM_OFFSET, 30);
+    let program = build(&mut world, &mut limits(), &context());
+    assert_eq!(program.span.last, 4);
+    let [last, extended] = [program.steps[2], program.steps[3]];
+    assert!(extended.extended && !last.extended);
+    assert_eq!((extended.index, extended.position), (3, last.position + 30));
+    assert_eq!((extended.level, extended.profile, extended.lens_step, extended.converted), (last.level, last.profile, last.lens_step, last.converted));
+}
+
+#[test]
+fn a_positive_program_offset_up_to_the_high_end_appends_no_extended_step() {
+    let mut world = world();
+    world.property_word(property::PROGRAM_OFFSET, 30);
+    let program = build(&mut world, &mut limits(), &context());
+    assert!(program.steps[..usize::from(program.span.last)].iter().all(|step| !step.extended));
+}
+
+#[test]
 fn a_selected_measurement_takes_its_range_from_the_selected_program() {
     let mut world = world();
     world.select(MeasurementSelection::Record);
