@@ -96,7 +96,7 @@ impl Platform for Fake {
     fn monitor_step(&mut self, query: MonitorStepQuery) -> u16 { query.step }
     fn request_scan_refresh(&mut self, _: bool) {}
     fn scan_refresh(&mut self) -> bool { false }
-    fn plan_scan(&mut self, query: ScanQuery) -> ScanPlan { ScanPlan { limits: [query.limits.low, query.limits.high], window: [0; 2], lead: 0 } }
+    fn plan_scan(&mut self, query: ScanQuery) -> ScanPlan { ScanPlan { limits: [query.limits.low, query.limits.high], window: [0; 2], lead: 0, rate: query.rate } }
     fn corrected_position(&mut self, _: u16) -> CorrectedPosition { CorrectedPosition { frame: LensPosition(0), drive: LensPosition(0) } }
     fn drive_target(&mut self, _: LensIdentity, _: u16, low: LensPosition, _: LensPosition) -> LensPosition { low }
     fn below_threshold(&mut self, _: u32, _: u32, _: u32, _: u32) -> bool { false }

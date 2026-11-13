@@ -693,6 +693,7 @@ impl Context {
         [self.limits.low, self.limits.high] = plan.limits;
         self.bridge.window = plan.window;
         self.bridge.lead = plan.lead;
+        self.bridge.rate = plan.rate;
     }
 
     fn flag_restarts(&self, platform: &mut impl Platform) -> bool {

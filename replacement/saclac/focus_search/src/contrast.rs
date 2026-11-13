@@ -303,6 +303,8 @@ pub struct ScanPlan {
     pub window: [u16; 2],
     /// How far the lens runs on after a frame.
     pub lead: u16,
+    /// The scan step's rate, which the next bridge request carries.
+    pub rate: u32,
 }
 
 /// A contrast sample and the lens position it was taken at, as the peak fit keeps them.
