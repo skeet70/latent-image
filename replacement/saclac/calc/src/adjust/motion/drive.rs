@@ -4,8 +4,8 @@
 
 use xm1_saclac_interface::calc::SharedAddress;
 
-use crate::exposure::ports::StockMemory;
-use crate::stock::motion as trace;
+use crate::exposure::ports::{Properties, Property, StockMemory};
+use crate::stock::motion::{self as trace, SAMPLE_CORRECTION_BASE, SAMPLE_CORRECTION_BIAS, SAMPLE_CORRECTION_SCALE};
 
 /// The lens's drive kind the limits are read for (0x76f360 at preparation).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -106,6 +106,8 @@ pub(crate) fn quotient(dividend: u64, divisor: u64) -> u64 {
         None => u64::MAX,
     }
 }
+
+fn signed_byte(properties: &mut impl Properties, id: Property) -> i32 { i32::from(properties.property(id) as u8 as i8) }
 
 /// The correctly rounded square root, as the library's `sqrtf` returns it (0xee9c50).
 pub(crate) fn square_root(value: f32) -> f32 {
@@ -235,11 +237,14 @@ impl DriveProfile {
     pub fn distance(&self) -> u16 { (i32::from(self.end) - i32::from(self.start)).unsigned_abs() as u16 }
 
     /// Plans the drive's phases for up to `speed`, keeping its ends and direction (0xf969a8).
-    pub fn plan(&mut self, speed: u32, kind: DriveKind, limits: &mut impl DriveLimits) -> Planning {
+    pub fn plan(&mut self, speed: u32, kind: DriveKind, limits: &mut impl DriveLimits) -> Planning { self.plan_for(speed, kind, DriveMode::MEASUREMENT, limits) }
+
+    /// [`Self::plan`] with the limits read for `mode`.
+    pub fn plan_for(&mut self, speed: u32, kind: DriveKind, mode: DriveMode, limits: &mut impl DriveLimits) -> Planning {
         let distance = self.distance();
-        let first_limit = limits.first_ramp_speed(kind, DriveMode::MEASUREMENT);
-        let first_acceleration = limits.first_ramp_acceleration(kind, DriveMode::MEASUREMENT);
-        let second_acceleration = limits.second_ramp_acceleration(kind, DriveMode::MEASUREMENT);
+        let first_limit = limits.first_ramp_speed(kind, mode);
+        let first_acceleration = limits.first_ramp_acceleration(kind, mode);
+        let second_acceleration = limits.second_ramp_acceleration(kind, mode);
         let mut requested = speed;
         let mut cruise_speed = speed;
         let mut first = RampFit { speed: first_limit.min(requested), ..RampFit::default() };
@@ -286,6 +291,21 @@ impl DriveProfile {
         let travelled = if time <= 0 { 0 } else { self.travelled(time) };
         let offset = if self.reverse { travelled.wrapping_neg() } else { travelled };
         offset.wrapping_add(self.start as u16) as i16
+    }
+
+    /// How far a target sits from `reference` when its area is exposed from `offset` after
+    /// `time` for `span`: the drive's midpoint over the exposure, scaled, biased along the drive
+    /// (0xf96f5c).
+    pub fn midpoint_correction(&self, properties: &mut impl Properties, reference: i16, time: i32, offset: i32, span: i32) -> i16 {
+        let scale = properties.property(SAMPLE_CORRECTION_SCALE) as i32;
+        let bias = signed_byte(properties, SAMPLE_CORRECTION_BIAS);
+        let exposed = offset.wrapping_add(time);
+        let first = i32::from(self.position_at(exposed));
+        let last = i32::from(self.position_at(exposed.wrapping_add(span)));
+        let midpoint = (first + last) / 2 - i32::from(reference);
+        let shift = midpoint.wrapping_mul(scale) / 100;
+        let along = if self.reverse { bias.wrapping_add(shift) } else { shift.wrapping_sub(bias) };
+        signed_byte(properties, SAMPLE_CORRECTION_BASE).wrapping_add(along) as i16
     }
 
     fn travelled(&self, time: i32) -> u16 {
