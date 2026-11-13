@@ -106,3 +106,17 @@ pub enum StatisticsPayload {
     Selection { pending: u32, results: SharedAddress, callbacks: [StockCallbackWord; 2], flagged: bool },
     Command24 { command: Command24, callback: StockCallbackWord },
 }
+
+/// The bytes the statistics task writes at a `Notice`'s results address.
+pub const RESULTS_BYTES: usize = 0x414;
+
+/// The capture's statistics Command09's client receives with status 17.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CaptureReport<'a> {
+    pub ratio: u32,
+    /// Zero when the format has no capture window.
+    pub dimensions: [u32; 2],
+    /// The completion's 64-byte payload.
+    pub completion: &'a [u8],
+    pub results: &'a [u8; RESULTS_BYTES],
+}
