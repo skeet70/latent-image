@@ -17,6 +17,8 @@ pub mod root;
 mod root_tests;
 #[cfg(test)]
 mod capture_tests;
+#[cfg(test)]
+mod export_tests;
 
 #[cfg(test)]
 extern crate std;
