@@ -319,11 +319,25 @@ ramPushSpec extra = ObservationSpec
     , "relinked/runtime.bin", "relinked/ram-push-manifest.json", "relinked/bank-allowlist.json", "relinked/kernel.syms"
     , "alloc/ram-alloc-state.json", "push/ram-push-state.json", "unload/ram-unload-state.json", "screenshots/*.png" ])
 
+-- | Each reference in a segment's result names an observation document this
+-- spec observes. The reference's @path@ is a run location, and its digests
+-- cover the timing fields excluded here. A referenced trace-hit sidecar is
+-- compared by its count.
 flashCandidateSpec :: ObservationSpec
 flashCandidateSpec = ObservationSpec
   [filePattern "e2e-segments.json"]
-  (exclude "e2e-segments.json" "/*/seconds" Timing : e2eResult "segment-*/e2e-result.json")
-  (map filePattern ["e2e-result.json", "screenshots/*.png"])
+  (exclude "e2e-segments.json" "/*/seconds" Timing : e2eResult "segment-*/e2e-result.json"
+    ++ [ exclude "segment-*/e2e-result.json" "/observations/*/path" RunLocation
+       , exclude "segment-*/e2e-result.json" "/observations/*/bytes" Timing
+       , exclude "segment-*/e2e-result.json" "/observations/*/sha256" Timing
+       , exclude "segment-*/e2e-result.json" "/observations/*/trace_hits/path" RunLocation
+       , exclude "segment-*/e2e-result.json" "/observations/*/trace_hits/sha256" Timing
+       , exclude "segment-*/e2e-observation-*.json" "/trace_hits/path" RunLocation
+       , exclude "segment-*/e2e-observation-*.json" "/trace_hits/sha256" Timing
+       , exclude "segment-*/e2e-observation-*.json" "/steps/*/seconds" Timing
+       , exclude "segment-*/e2e-observation-*.json" "/trace_hits/*/instructions" Timing
+       , exclude "segment-*/e2e-observation-*.json" "/classic_chrome_site_entries" Scheduling ])
+  (map filePattern ["e2e-result.json", "e2e-observation-*.json", "screenshots/*.png"])
 
 updaterSpec :: ObservationSpec
 updaterSpec = ObservationSpec
