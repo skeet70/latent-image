@@ -5,7 +5,7 @@
 //! word.
 
 use crate::menu_value::{
-    resolve, ChoiceCode, Commit, PropertyId, RetainedEffect, RowToken, Settings, Transaction, ValueTarget,
+    resolve, ChoiceCode, Commit, PropertyId, RetainedEffect, RowToken, Settings,
 };
 
 use core::ptr::read_volatile;
@@ -70,31 +70,6 @@ impl Settings for Stock {
     }
 }
 
-static mut TRANSACTION: Option<Transaction> = None;
-static mut ENTRY_CELLS: [u32; 3] = [0; 3];
-
-fn transaction() -> &'static mut Option<Transaction> {
-    unsafe { &mut *core::ptr::addr_of_mut!(TRANSACTION) }
-}
-
-fn capture_cells() {
-    unsafe {
-        let cells = &mut *core::ptr::addr_of_mut!(ENTRY_CELLS);
-        cells[0] = read_volatile(SIZE_CELL as *const u32);
-        cells[1] = read_volatile(ASPECT_CELL as *const u32);
-        cells[2] = read_volatile(THIRD_CELL as *const u32);
-    }
-}
-
-fn restore_cells() {
-    unsafe {
-        let cells = *core::ptr::addr_of!(ENTRY_CELLS);
-        core::ptr::write_volatile(SIZE_CELL as *mut u32, cells[0]);
-        core::ptr::write_volatile(ASPECT_CELL as *mut u32, cells[1]);
-        core::ptr::write_volatile(THIRD_CELL as *mut u32, cells[2]);
-    }
-}
-
 fn apply(commit: &Commit, property: PropertyId) {
     let pair = commit.image_size;
     for effect in commit.retained.iter() {
@@ -138,26 +113,6 @@ fn write_all(commit: &Commit) {
 }
 
 #[no_mangle]
-pub extern "C" fn rb_menu_value_begin(property: u32) -> u32 {
-    if transaction().is_some() {
-        return 0;
-    }
-    let property = PropertyId::new(property as u16);
-    let target = TABLES.target(property, RowToken::new(0));
-    if !matches!(target, ValueTarget::ImageSize { .. }) {
-        return 0;
-    }
-    match Transaction::begin(&TABLES, target, &Stock) {
-        Ok(begin) => {
-            *transaction() = Some(begin);
-            capture_cells();
-            1
-        }
-        Err(_) => 0,
-    }
-}
-
-#[no_mangle]
 pub extern "C" fn rb_menu_value_size_apply(property: u32, token: u32) -> u32 {
     #[cfg(rb_menu_value_always_decline)]
     {
@@ -168,60 +123,13 @@ pub extern "C" fn rb_menu_value_size_apply(property: u32, token: u32) -> u32 {
     {
         let property = PropertyId::new(property as u16);
         let token = RowToken::new(token);
-        let state = transaction();
-        match state.as_mut() {
-            Some(session) => match session.select(&TABLES, token, &mut Stock) {
-                Ok(commit) => {
-                    apply(&commit, property);
-                    1
-                }
-                Err(_) => 0,
-            },
-            None => match resolve(&TABLES, TABLES.target(property, token)) {
-                Ok(commit) => {
-                    write_all(&commit);
-                    apply(&commit, property);
-                    1
-                }
-                Err(_) => 0,
-            },
+        match resolve(&TABLES, TABLES.target(property, token)) {
+            Ok(commit) => {
+                write_all(&commit);
+                apply(&commit, property);
+                1
+            }
+            Err(_) => 0,
         }
     }
-}
-
-unsafe extern "C" {
-    fn rb_menu_value_call_snapshot_cells(param: u32);
-    fn rb_menu_value_call_snapshot_state(param: u32);
-    fn rb_menu_value_call_restore_aux(clear: u32, aux: u32);
-}
-
-/// The retained part of `0x637ed0`: mirror and auxiliary snapshots and restore-auxiliary, without the settings copy `0x61c90c`.
-#[no_mangle]
-pub extern "C" fn rb_menu_value_retained(param: u32) {
-    let aux = unsafe {
-        read_volatile(if param == 0 { 0x0063_7f0c } else { 0x0063_7f10 } as *const u32)
-    };
-    unsafe {
-        rb_menu_value_call_snapshot_cells(param);
-        rb_menu_value_call_snapshot_state(param);
-        rb_menu_value_call_restore_aux((param == 0) as u32, aux);
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn rb_menu_value_cancel() -> u32 {
-    match transaction().take() {
-        Some(transaction) => {
-            transaction.back(&mut Stock);
-            restore_cells();
-            1
-        }
-        None => 0,
-    }
-}
-
-#[inline(never)]
-#[no_mangle]
-pub extern "C" fn rb_menu_value_confirm() -> u32 {
-    transaction().take().is_some() as u32
 }

@@ -30,7 +30,6 @@ These shims exist only because two owned units meet through a stock-shaped or C-
 | Calibration exports | calibration_liveview → power_lifecycle | `xm1_calibration_u16` and `xm1_calibration_i16` in `calibration_liveview/src/abi.rs` | Power links the calibration crate directly in one image after stock comparison | required |
 | Shared callback registry | power_lifecycle, develop → callback_core | `CallbackRegistry`, `KernelSlot` and the admitted extents in `callback_core/src/lib.rs`, re-exported with each unit's critical section | Both units link the shared crate and neither keeps a private extents table or kernel-slot reader; both sides have stock comparisons in one image | required |
 | Pipeline image exports | develop → power_lifecycle | `xm1_pipeline_image_current_task`, `xm1_pipeline_image_send_message`, `xm1_pipeline_image_receive_message` in `develop/src` | Power links the develop pipeline directly in one image after stock comparison | required |
-| Menu value transaction exports | menu_value → modal_runtime | `rb_menu_value_cancel` and `rb_menu_value_confirm` in `menu_value/src/lib.rs` | Modal dispatch calls the menu-value crate directly in one image after stock comparison | required |
 | Modal dispatch export | modal_runtime → power_lifecycle | `rb_modal_dispatch` in `modal_runtime/src/lib.rs` | Power links modal dispatch directly in one image after stock comparison | required |
 | Task submission exports | task_submission → power_lifecycle | `xm1_task_submit` and `xm1_task_release` in `task_submission/src.rs` | Power links the submission crate directly in one image after stock comparison | required |
 | Save facade export | save → develop | `xm1_save_facade` in `save/src/lib.rs` | Develop calls the typed save facade directly in one image after stock comparison | required |
@@ -302,9 +301,8 @@ The menu value transaction, published at the dispatcher's IMAGE SIZE jump-table 
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
 | `rb_menu_value_size_arm` in `adapter/entry.S`, placed by `adapter/image.ld` | veneer or carrier at a stock address | the stock dispatcher's jump-table word for property `0xf6` | no | the owned dispatcher calls the transaction directly | required |
-| `rb_menu_value_begin`, `rb_menu_value_size_apply`, `rb_menu_value_retained`, `rb_menu_value_cancel`, `rb_menu_value_confirm` exports in `src/lib.rs` | stock-ABI export | stock stage consumers and controller arms | no | every stage consumer and controller arm is owned | required |
-| `rb_menu_value_call_*` retained services (aspect/size cells, change marker, current property, display update, restore aux, snapshot cells/state) | trampoline into retained stock | stock property, cell and display services | no | the typed settings service and owned display own those services | required |
-| `rb_menu_value_cancel`/`rb_menu_value_confirm` exports | C-ABI bridge between two owned units | modal_runtime | yes | modal dispatch calls the crate directly and both sides compare with stock in one image | required |
+| `rb_menu_value_size_apply` export in `src/lib.rs` | stock-ABI export | the stock dispatcher's IMAGE SIZE jump-table word | no | the owned dispatcher calls the transaction directly | required |
+| `rb_menu_value_call_*` retained services (aspect/size cells, change marker, current property, display update) | trampoline into retained stock | stock property, cell and display services | no | the typed settings service and owned display own those services | required |
 
 ## menu_widgets
 
@@ -323,7 +321,6 @@ Modal dispatch, controller 75 and the cancellation hooks.
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
-| `rb_menu_value_cancel`/`rb_menu_value_confirm` externs | C-ABI bridge between two owned units | menu_value | yes | modal dispatch calls the crate directly and both sides compare with stock in one image | required |
 | `rb_modal_entry` in `src/entry.S`, published at `0xbfb028`, with the stock+4 fallback for every controller other than 75 | veneer or carrier at a stock address | the stock dispatcher and 173 stock controllers | no | the owned dispatcher owns all 174 controllers | required |
 | `rb_modal_dispatch` export | C-ABI bridge between two owned units | power_lifecycle | yes | power links the dispatch crate directly and both sides compare with stock in one image | required |
 | `rb_modal_call_prehook`, `rb_modal_call` and `dispatch.S` callback glue | callback registry for guest words | the retained prehook `0xd0cc68` and stock action/transition callbacks | no | every callback is owned | required |

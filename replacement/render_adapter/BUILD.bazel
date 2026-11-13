@@ -41,7 +41,7 @@ xm1_rust_rlib(
     rlib_deps = {
         "libm": "//replacement/render_commands:libm-arm",
         "menu_engine": "//replacement/menu_engine:arm",
-        "menu_engine_adapter": "//replacement/menu_engine:adapter-value-arm",
+        "menu_engine_adapter": "//replacement/menu_engine:adapter-arm",
         "menu_value": "//replacement/menu_value:arm-owned",
         "menu_widgets": "//replacement/menu_widgets:arm",
         "owned_menu": "//replacement/owned_menu:arm",
