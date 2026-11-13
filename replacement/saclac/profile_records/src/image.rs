@@ -2,7 +2,7 @@
 
 //! A record-shaped value saclac stages before applying it to the selected profile record.
 
-use crate::field::{ChangeBank, ChangeBit, RecordField, Value};
+use crate::field::{ChangeBank, ChangeBit, ChangeSet, RecordField, Value};
 use crate::stock::layout::{self, RECORD_BYTES};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -32,6 +32,15 @@ impl RecordImage {
     }
 
     pub fn changed(&self, change: ChangeBit) -> bool { self.mask(change.bank) & change.mask() != 0 }
+
+    /// Whether `changes`' mask holds exactly its bits, or else the other mask is clear (0x75ace4).
+    pub fn changes_are(&self, changes: ChangeSet) -> bool {
+        let other = match changes.bank {
+            ChangeBank::First => ChangeBank::Second,
+            ChangeBank::Second => ChangeBank::First,
+        };
+        self.mask(changes.bank) == changes.bits || self.mask(other) == 0
+    }
 
     pub fn clear_changes(&mut self) {
         self.set_mask(ChangeBank::First, 0);

@@ -303,3 +303,19 @@ fn derivation_refusals() {
     let to_group_one = Handle { scope: Scope::one(group(1)), ..owner() };
     assert_eq!(to_group_one.derive(None, Access::Read, Tag(0)).map(|handle| handle.scope), Ok(Scope::one(group(1))));
 }
+
+#[test]
+fn a_staged_record_matches_a_change_set_exactly_or_when_the_other_mask_is_clear() {
+    let selection = ChangeSet::of(record::group_00::MEASUREMENT_SELECTION.change().unwrap());
+    let mut staged = RecordImage::default();
+    assert!(staged.changes_are(selection));
+    staged.set(&record::group_00::AT_0069, 1);
+    assert!(!staged.changes_are(selection));
+    staged.set(&record::group_00::MEASUREMENT_SELECTION, 1);
+    assert!(staged.changes_are(selection));
+    staged.set(&record::group_00::AT_0031, 1);
+    assert!(!staged.changes_are(selection));
+    staged.clear_changes();
+    staged.set(&record::group_00::AT_0031, 1);
+    assert!(staged.changes_are(selection));
+}
