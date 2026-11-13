@@ -19,6 +19,7 @@ use crate::adjust::motion::ports::{
     LensBounds, LensCalibration, LensLimits, LensTables, LimitQuery, Logarithms10, MeasurementReadings, ProfileGains, SampleFrameRequest, SearchBounds,
     SearchFrameRequest, StatisticsFrameRequest, Ticks,
 };
+use crate::adjust::motion::measured::LevelCheck;
 use crate::adjust::motion::preparation::{CaptureFrames, FrameSize, LensStatus, PreviousFocus};
 use crate::adjust::motion::readings::{AreaList, FocusRequest, RecordReadings, SelectionLists, StepLimits, AREA_POSITIONS};
 use crate::adjust::motion::search::SearchSetup;
@@ -197,7 +198,7 @@ pub fn blank_state(section: SharedAddress, results: SharedAddress, frame_period:
         limits: StepLimits::default(),
         search: SearchSetup::default(),
         areas: AreaList::default(),
-        exposures: FrameExposures { first: FrameExposure::default(), second },
+        exposures: FrameExposures { first: FrameExposure::default(), second, prepared_second: second },
         program: [ProgramStep::default(); PROGRAM_STEPS],
         previous: PreviousFocus::default(),
         bounds: SearchBounds::default(),
@@ -219,6 +220,7 @@ pub fn blank_state(section: SharedAddress, results: SharedAddress, frame_period:
         sampling: SampleSchedule::default(),
         layout: SampleLayout::default(),
         drive: Drive::default(),
+        level_check: LevelCheck::default(),
     }
 }
 

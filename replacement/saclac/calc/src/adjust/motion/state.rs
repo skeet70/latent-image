@@ -6,6 +6,7 @@ use xm1_saclac_interface::calc::SharedAddress;
 use crate::adjust::motion::drive::DriveProfile;
 use crate::adjust::motion::exposure::{FrameExposure, Program};
 use crate::adjust::motion::plan::Plan;
+use crate::adjust::motion::measured::LevelCheck;
 use crate::adjust::motion::ports::{SearchBounds, Ticks};
 use crate::adjust::motion::preparation::PreviousFocus;
 use crate::adjust::motion::readings::{AreaList, RecordReadings, StepLimits};
@@ -71,12 +72,14 @@ pub struct Drive {
     pub checks_peak: bool,
 }
 
-/// The two frame exposures a preparation computes: the first corrected to the second's lens
-/// step, the second the run's frames follow.
+/// The frame exposures a preparation computes: the first corrected to the second's lens step,
+/// the second the run's frames follow.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct FrameExposures {
     pub first: FrameExposure,
     pub second: FrameExposure,
+    /// The second as the preparation computed it, before measured levels expose the frames again.
+    pub prepared_second: FrameExposure,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -102,6 +105,7 @@ pub struct MotionState {
     pub(crate) sampling: SampleSchedule,
     pub(crate) layout: SampleLayout,
     pub(crate) drive: Drive,
+    pub(crate) level_check: LevelCheck,
 }
 
 impl MotionState {
