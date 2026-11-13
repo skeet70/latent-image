@@ -6,11 +6,11 @@ impl SelectionSettings for Exact {
     fn exact_range(&mut self) -> bool { self.0 }
 }
 
-fn row(enabled: bool, phase: RowPhase) -> Row { Row { enabled, phase } }
+fn row(enabled: bool, phase: RowPhase) -> Row { Row { enabled, phase, ..Row::default() } }
 
 fn bank(levels: &[u8], phases: &[RowPhase]) -> SelectionBank {
     let mut bank = SelectionBank { count: levels.len() as u8, ..SelectionBank::default() };
-    bank.levels[..levels.len()].copy_from_slice(levels);
+    for (candidate, level) in bank.candidates.iter_mut().zip(levels) { candidate.level = *level; }
     for (index, phase) in phases.iter().enumerate() { bank.rows[index] = row(true, *phase); }
     bank
 }

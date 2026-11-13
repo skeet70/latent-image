@@ -1,7 +1,29 @@
 //! The selection bank of an exposure evaluation: up to eight candidate levels, the row each
 //! is evaluated in, and the level range the evaluation expects.
 
+use crate::exposure::context::SUBJECTS;
+
 pub const ROWS: usize = 8;
+
+/// A row of the bank.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RowIndex(u8);
+
+impl RowIndex {
+    pub const fn new(index: u8) -> Option<Self> { if (index as usize) < ROWS { Some(Self(index)) } else { None } }
+
+    pub const fn get(self) -> usize { self.0 as usize }
+}
+
+/// A set of calc buffers: a row's two (tables 0xf66040, 0xf66060) and its column's (0xf66000).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BufferSlot(u8);
+
+impl BufferSlot {
+    pub const fn new(index: u8) -> Option<Self> { if (index as usize) < ROWS { Some(Self(index)) } else { None } }
+
+    pub const fn get(self) -> usize { self.0 as usize }
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum RowPhase {
@@ -13,10 +35,39 @@ pub enum RowPhase {
     Applied,
 }
 
+/// What the image task's statistics check writes into a row through the addresses it is given.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RowMeasurement {
+    pub pairs: [[u32; 2]; 4],
+    /// The check's reply word.
+    pub reply: u32,
+    pub statistics: [u32; 4],
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Row {
     pub enabled: bool,
     pub phase: RowPhase,
+    pub measurement: RowMeasurement,
+    /// The buffers the row and its column name; a row the preparation did not bind names none.
+    pub slot: Option<BufferSlot>,
+}
+
+/// The subjects an evaluation row covers, read in place by the image task and by calc.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Column {
+    pub count: u32,
+    pub regions: [[u8; 8]; SUBJECTS],
+}
+
+/// One candidate level of the span.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Candidate {
+    pub value: i16,
+    pub level: u8,
+    /// 3 and 4 mark a candidate the request gives a fixed offset.
+    pub state: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -42,13 +93,19 @@ pub struct RowUpdate {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SelectionBank {
-    /// The level of each candidate; `count` of them are in use.
-    pub levels: [u8; ROWS],
+    /// `count` of the candidates are in use.
+    pub candidates: [Candidate; ROWS],
     pub count: u8,
+    pub filled: u8,
+    /// The candidate number of the first candidate.
+    pub first: u8,
     pub reference_level: u8,
+    /// The highest level from candidate 1 to the span's last.
+    pub highest_below: u8,
     pub expected: LevelRange,
     pub any_range: bool,
     pub rows: [Row; ROWS],
+    pub columns: [Column; ROWS],
     pub first_limits: RangeLimits,
     pub second_limits: RangeLimits,
 }
@@ -84,12 +141,12 @@ impl SelectionBank {
             return None;
         }
         let mut range = LevelRange { lowest: u8::MAX, highest: 0 };
-        for (index, level) in self.levels.iter().enumerate().take(usize::from(self.count).min(ROWS)) {
+        for (index, candidate) in self.candidates.iter().enumerate().take(usize::from(self.count).min(ROWS)) {
             if index > 0 && self.rows[index].phase != RowPhase::Applied {
                 break;
             }
-            range.lowest = range.lowest.min(*level);
-            range.highest = range.highest.max(*level);
+            range.lowest = range.lowest.min(candidate.level);
+            range.highest = range.highest.max(candidate.level);
         }
         (range.lowest != u8::MAX).then_some(range)
     }
