@@ -116,12 +116,14 @@ impl LensConfiguration for Scenery {
 
 /// Lens positions by lens and step; the reference word must be the scenery's.
 impl LensTables for Scenery {
-    fn channel_position(&mut self, lens: u32, step: u32, reference: u32, _mode: u32) -> i16 {
+    fn channel_positions(&mut self, lens: u32, step: u32, reference: u32, _mode: u32) -> [i16; 2] {
         assert_eq!(reference, self.lens.reference);
-        self.lens.targets.get(&(lens, step)).copied().unwrap_or(0)
+        [self.lens.targets.get(&(lens, step)).copied().unwrap_or(0), 0]
     }
     fn side_adjusted(&mut self, value: i16, _from: u32, _to: u32) -> i16 { value }
     fn table_offset(&mut self, _lens: u32, _step: u32, _delta: i16) -> i32 { 0 }
+    fn channel_start(&mut self, _lens: u32, _channel: u8, _reference: u32) -> i16 { 0 }
+    fn period_position(&mut self, _period: u16, _lens: u32, _step: u32, _reference: u32) -> i32 { 0 }
 }
 
 /// The response is the curve point plus the step.

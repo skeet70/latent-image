@@ -1,7 +1,10 @@
-//! The evaluation prepared when the adjustment path is not taken (0xf69c48), and the evaluation
-//! request calc answers for each row of its bank (calc 0x3c00, 0xf6a0cc).
+//! The evaluation prepared when the adjustment path is not taken (0xf69c48), the evaluation
+//! request calc answers for each row of its bank (calc 0x3c00, 0xf6a0cc), and where the image
+//! task's statistics check measures a row (0xf5fc34).
 
-use xm1_saclac_interface::calc::CalcPayload;
+use core::mem::{offset_of, size_of};
+
+use xm1_saclac_interface::calc::{CalcPayload, SharedAddress};
 use xm1_saclac_interface::exposure::EvaluationRequest;
 use xm1_saclac_interface::stock::StockCallbackWord;
 use xm1_saclac_interface::RecordHandle;
@@ -11,11 +14,11 @@ use crate::adjust::rate_policy;
 use crate::exposure::context::{CandidateSpan, EvaluationArea, ExposureContext, ExposureStep, SubjectList, EVALUATION_AREAS};
 use crate::exposure::correction::{self, SubjectSource};
 use crate::exposure::levels;
-use crate::exposure::ports::{InPlace, Ports};
-use crate::exposure::program::{self, FirstChoice, Limits};
+use crate::exposure::ports::{InPlace, Placement, Ports};
+use crate::exposure::program::{self, FirstChoice};
 use crate::exposure::settings;
 use crate::requests::Peers;
-use crate::selection::{BufferSlot, Candidate, Column, LevelRange, Row, RowIndex, RowPhase, SelectionBank, ROWS};
+use crate::selection::{BufferSlot, Candidate, Column, LevelRange, Row, RowIndex, RowMeasurement, RowPhase, SelectionBank, ROWS};
 use crate::stock::{dump, property, shared};
 
 /// The floor every evaluation request starts with (0xf6925c).
@@ -119,10 +122,10 @@ pub fn reference_value(ports: &mut impl Ports, context: &ExposureContext) -> i16
 }
 
 /// Prepares the evaluation of the bound record.
-pub fn set_up(ports: &mut impl Ports, limits: &mut impl Limits, context: &mut ExposureContext) {
+pub fn set_up(ports: &mut impl Ports, context: &mut ExposureContext) {
     let record = context.binding.record_handle();
     context.levels = levels::start(ports, record, false);
-    let program = program::build(ports, limits, context);
+    let program = program::build(ports, context);
     context.span = program.span;
     context.program = program.steps;
     context.areas = areas(&context.program, context.span, context.levels.target);
@@ -162,7 +165,7 @@ fn direction_from_applied(bank: &SelectionBank, level: u8) -> u32 {
 fn fill_row(ports: &mut impl Ports, context: &mut ExposureContext, row: RowIndex) {
     let index = row.get();
     let rates = rates(ports);
-    let column_regions = ports.address(InPlace::ColumnRegions(index));
+    let column_regions = ports.address(InPlace::ColumnRegions(row));
     let bank = &context.selection;
     let candidate = bank.candidates[index];
     let Row { measurement, slot, .. } = bank.rows[index];
@@ -196,4 +199,31 @@ pub fn request_row<P: Peers>(ports: &mut impl Ports, peers: &mut P, context: &mu
     fill_row(ports, context, row);
     context.selection.mark_requested(row.get());
     peers.calc(&CalcPayload::Evaluation { request: context.evaluation, callback })
+}
+
+/// Where the image task's statistics check of a measured row reads the row's buffers and column
+/// and writes its measurement (0xf5fc34, read by the shot's 0xf1f07c).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MeasuredRow {
+    /// The row's two buffers; none for a row the preparation did not bind.
+    pub buffers: Option<[SharedAddress; 2]>,
+    pub column_buffer: Option<SharedAddress>,
+    pub regions: SharedAddress,
+    pub pairs: [SharedAddress; 4],
+    pub reply: SharedAddress,
+    pub statistics: SharedAddress,
+}
+
+pub fn measured_row(ports: &mut impl Placement, bank: &SelectionBank, row: RowIndex) -> MeasuredRow {
+    let slot = bank.rows[row.get()].slot;
+    let measurement = ports.address(InPlace::RowMeasurement(row));
+    let at = |offset: usize| SharedAddress(measurement.0 + offset as u32);
+    MeasuredRow {
+        buffers: slot.map(shared::row_buffers),
+        column_buffer: slot.map(shared::column_buffer),
+        regions: ports.address(InPlace::ColumnRegions(row)),
+        pairs: core::array::from_fn(|pair| at(offset_of!(RowMeasurement, pairs) + pair * size_of::<[u32; 2]>())),
+        reply: at(offset_of!(RowMeasurement, reply)),
+        statistics: at(offset_of!(RowMeasurement, statistics)),
+    }
 }

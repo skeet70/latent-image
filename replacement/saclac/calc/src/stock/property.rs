@@ -115,6 +115,10 @@ pub const FIRST_STEP: Property = Property(0x6395);
 pub const EXTENDED_OFFSET: Property = Property(0x65fd);
 /// Nonzero: the correction request carries the first subject's drive rate (0xf69058).
 pub const CORRECTION_RATE: Property = Property(0x657d);
+/// An area's limits in tenths: its distance from the metered level, and the signed limit of its
+/// distance from its lens level (0xf69804, 0xf69818).
+pub const METERED_DISTANCE_LIMIT: Property = Property(0x6391);
+pub const LENS_DISTANCE_LIMIT: Property = Property(0x6390);
 
 /// The rate setting the correction request carries (0xf5ecc0).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -200,6 +200,9 @@ fn calculation_input_places_each_value_and_the_constants_calc_reads() {
         record_level: 500,
         record_24: -4,
         record_5f: 0x5f,
+        header_47: 0x47,
+        header_61: 0x61,
+        header_63: 0x63,
         capture_offset: 0xe0,
         shared_85c: 0x85c,
         record_lens_reference: 0x66,
@@ -223,4 +226,5 @@ fn calculation_input_places_each_value_and_the_constants_calc_reads() {
     assert_eq!([word(&bytes, 0x8c), word(&bytes, 0xdc), word(&bytes, 0xe0), word(&bytes, 0xf8), word(&bytes, 0xfc)], [0x44, 0x5f, 0xe0, 0x85c, 0]);
     assert_eq!([word(&bytes, 0x100), u32::from(half(0x104)), u32::from(half(0x114))], [0x66, 1, -9i16 as u16 as u32]);
     assert_eq!([word(&bytes, 0x118), word(&bytes, 0x11c), word(&bytes, 0x120), u32::from(half(0x124)), word(&bytes, 0x128)], [0, 1, 4, 0, 1]);
+    assert_eq!([word(&bytes, 0xa0), word(&bytes, 0xa4), word(&bytes, 0xac)], [0x47, 0x61, 0x63]);
 }

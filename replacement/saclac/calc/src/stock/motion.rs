@@ -3,7 +3,8 @@
 
 use xm1_saclac_interface::calc::SharedAddress;
 
-use crate::exposure::ports::{Property, StockMemory};
+use crate::adjust::motion::ports::{AreaClass, AreaGrid, CropGeometry, GridRequest, SearchBounds};
+use crate::exposure::ports::{Properties, Property, StockMemory};
 
 /// The section starts 0x116cc into the frame and is addressed through its alias with bit 30
 /// clear (0xfa3dd8, 0x740e0c).
@@ -316,3 +317,406 @@ pub const SELECTION_MODE: u32 = 0x1e;
 pub const NO_FULL_SEARCH: Property = Property(0x3e_0009);
 /// The scene kind that never searches in full (0xfa45d8).
 pub const SCENE_WITHOUT_SEARCH: u8 = 24;
+
+/// The image-pipeline buffers the search hands the pipeline at the preparation's output
+/// +0x18, +0x14, +0x1c, +0x20, +0x24 and +0x28 (0xf9e8e4..0xf9e940).
+pub const IMAGE_BUFFERS: [SharedAddress; 6] =
+    [SharedAddress(0x5ffe_be8c), SharedAddress(0x5ffe_c0b4), SharedAddress(0x5ffe_c08c), SharedAddress(0x5ffe_c4b4), SharedAddress(0x5ffe_c6b4), SharedAddress(0x5ffe_c8b4)];
+
+/// The statistics buffers (0xf99a50..0xf99a9c).
+pub const STATISTICS_BUFFERS: [SharedAddress; 5] =
+    [SharedAddress(0x5ffe_e12c), SharedAddress(0x5ffe_e32c), SharedAddress(0x5ffe_e3ac), SharedAddress(0x5ffe_e5ac), SharedAddress(0x5ffe_e7ac)];
+
+/// The section's statistics record (0xf99a3c).
+pub const fn statistics_trace(section: SharedAddress) -> SharedAddress { at(section, 0x46bc8) }
+
+/// Bit 0 makes every search plain and every run single-channel (0xf9e238, 0xf9e3ac).
+pub const PLAIN_SEARCH: Property = Property(0xde);
+/// Under the load test, classes 3 and 6 search plainly when this is set (0xf9680c), else with
+/// their area when 0xa6 is 1.
+pub const LOAD_TEST_PLAIN: Property = Property(0xa7);
+pub const LOAD_TEST_AREA: Property = Property(0xa6);
+/// Bit 1 for channels 1 and 2, bit 0 for channel 0 (0xf9d3b4).
+pub const CHANNEL_SEARCH: Property = Property(0x928e);
+
+/// 0 keeps every run's channel class off (0xf9e334).
+pub const CHANNEL_CLASSES: Property = Property(0x946d);
+/// Lenses above this less one keep to one channel (0xf9e3cc).
+pub const LENS_CHANNEL_LIMIT: Property = Property(0x3e_1213);
+/// The armed scene bits that widen the run to channel 1 (0xf9e484).
+pub const ARMED_SCENE_CHANNELS: Property = Property(0x9474);
+/// Which record traits leave the second channel open (0xf9e4e4).
+pub const SECOND_CHANNEL_MASK: Property = Property(0x9473);
+/// The scene whose second channel needs mask bit 7 (0xf9e584).
+pub const MASKED_SCENE: u8 = 50;
+
+/// A scene's entry in the channel table 0xfa5ec8.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SceneChannels {
+    /// An unarmed record of the scene may take the second channel.
+    pub second_channel: bool,
+    /// The bit of `ARMED_SCENE_CHANNELS` an armed record of the scene tests.
+    pub armed_bit: Option<u32>,
+    /// A channel-0 run starts from channel 0's table position, not the configured start.
+    pub starts_at_channel_position: bool,
+}
+
+const SCENE_CHANNEL_TABLE: [(u8, u8); 58] = [
+    (1, 5), (0, 0), (0, 7), (0, 7), (1, 1), (0, 2), (0, 2), (0, 2), (0, 0), (0, 1), (0, 7), (0, 3), (0, 3), (0, 3), (1, 6), (1, 6), (1, 7), (1, 7), (0, 4), (0, 0),
+    (0, 1), (0, 4), (0, 0), (0, 1), (0, 7), (0, 4), (0, 0), (0, 1), (1, 7), (1, 7), (0, 7), (1, 7), (1, 7), (1, 7), (0, 2), (0, 0), (0, 1), (0, 2), (0, 0), (0, 1),
+    (0, 2), (0, 0), (0, 1), (1, 7), (1, 7), (1, 7), (1, 7), (1, 7), (1, 7), (1, 7), (1, 7), (1, 7), (1, 7), (1, 7), (1, 7), (1, 7), (1, 7), (1, 7),
+];
+
+/// A scene above 57 reads past the table in stock (0xf9e428, 0xf9e4d4, 0xf99fe8); it takes
+/// neither the second channel, an armed bit nor the channel position start.
+pub const fn scene_channels(scene: u8) -> SceneChannels {
+    if scene as usize >= SCENE_CHANNEL_TABLE.len() {
+        return SceneChannels { second_channel: false, armed_bit: None, starts_at_channel_position: false };
+    }
+    let (second_channel, armed) = SCENE_CHANNEL_TABLE[scene as usize];
+    let armed_bit = match armed {
+        0 => Some(2),
+        1 => Some(0x10),
+        2 => Some(4),
+        3 => Some(8),
+        5 => Some(1),
+        6 => Some(0x20),
+        _ => None,
+    };
+    SceneChannels { second_channel: second_channel != 0, armed_bit, starts_at_channel_position: armed == 2 }
+}
+
+/// Signed: a record level below ten times this sets the channel's status bit (0xf9e6a0).
+pub const CHANNEL_LEVEL_LIMIT: Property = Property(0x94bf);
+pub const CHANNEL_STATUS_MASK: Property = Property(0x94be);
+/// The channel bits whose status the pipeline is given (0xf9e790).
+pub const CHANNEL_STATUS_ENABLE: Property = Property(0x4b00);
+pub const FIRST_HELD_SCENE: u8 = 0x33;
+pub const SECOND_HELD_SCENE: u8 = 0x34;
+/// The drive rate a treated run must reach (0xf9e82c).
+pub const RATE_THRESHOLD: Property = Property(0x29e);
+/// The scene whose frame delay is 8 (0xf9e854).
+pub const DELAYED_SCENE: u8 = 28;
+
+/// Whether the run checks its contrast ratio, and the per-mille scale (two bytes) it checks
+/// against (0xf9e944, 0xf9e97c).
+pub const RATIO_CHECK: Property = Property(0x92d5);
+pub const RATIO_CHECK_SCALE: Property = Property(0x92c2);
+/// 1 reads the ratio check's contrast from the alternate tables (0xf9d57c).
+pub const RESULT_TABLES: Property = Property(0x92c5);
+
+/// The results' frame byte (0xf9d578).
+pub const fn results_frame(results: SharedAddress) -> SharedAddress { at(results, 0x8) }
+
+/// The contrast of a cell (grid area times five plus frame), plain or alternate.
+pub const fn result_cell_contrast(results: SharedAddress, cell: u32, alternate: bool) -> SharedAddress {
+    at(results, if alternate { 0x3f4 } else { 0x20 } + 4 * cell)
+}
+
+/// The contrast of a frame over every area, plain or alternate.
+pub const fn result_frame_contrast(results: SharedAddress, frame: u32, alternate: bool) -> SharedAddress {
+    at(results, if alternate { 0x82c } else { 0x7c8 } + 4 * frame)
+}
+
+/// A frame's measured area (two sides), its reference area (two sides) and two signed level
+/// offsets, in the order 0xf9d4bc takes them.
+pub const fn result_ratio_words(results: SharedAddress, frame: u32) -> [SharedAddress; 6] {
+    let base = SharedAddress(results.0 + 4 * frame);
+    [at(base, 0x908), at(base, 0x8f4), at(base, 0x930), at(base, 0x91c), at(base, 0x8cc), at(base, 0x8e0)]
+}
+
+/// The level ceiling of an unclassed or unmeasured run (0xf9e9e4) and the table its contrast is
+/// read from (0xf9ea1c).
+pub const LEVEL_CEILING_DEFAULT: Property = Property(0x923c);
+pub const LEVEL_CEILING_TABLE: Property = Property(0x923b);
+/// Two-byte contrast bounds and the levels at them, after a peak and otherwise (0xf9ea58,
+/// 0xf9ea9c).
+pub const PEAKED_CEILING: [Property; 4] = [Property(0x9246), Property(0x9248), Property(0x9244), Property(0x9245)];
+pub const LEVEL_CEILING_BAND: [Property; 4] = [Property(0x923f), Property(0x9241), Property(0x923d), Property(0x923e)];
+
+/// A listed area's class from its kind word (0xf95df0).
+pub const fn area_class(kind: u32) -> AreaClass {
+    match kind {
+        8..=10 => AreaClass::ColumnsAlternate,
+        5..=7 => AreaClass::RowsUpward,
+        2..=4 => AreaClass::Columns,
+        _ => AreaClass::RowsDownward,
+    }
+}
+
+/// What the search frames are laid out with (0xf9eb8c..0xf9ebc0).
+pub const SEARCH_FRAME_SETTINGS: [Property; 4] = [Property(0x920c), Property(0x920d), Property(0x9232), Property(0x9233)];
+
+/// Which record level each search mode exposes at, two bits per mode (0xfa3f40).
+pub const FRAME_LEVEL_SELECTION: Property = Property(0x95f1);
+/// Two-byte factors of the first frame's change, the scene-28 offset and the limit in tenths
+/// (0xfa4030, 0xfa4118, 0xfa4128).
+pub const CHANGE_FACTORS: [Property; 2] = [Property(0x4b02), Property(0x4b04)];
+pub const CHANGE_SCENE_OFFSET: Property = Property(0x4b0f);
+pub const CHANGE_LIMIT: Property = Property(0x4b08);
+/// The second frame's change in percent and its two-byte limit (0xfa4234, 0xfa425c).
+pub const SECOND_CHANGE_SCALE: Property = Property(0x9261);
+pub const SECOND_CHANGE_LIMIT: Property = Property(0x9262);
+
+/// The second frame exposure's trace (0xfa42b4..0xfa43c4).
+pub const fn exposure_trace(section: SharedAddress, word: u32) -> SharedAddress { at(section, 0x44b04 + 4 * word) }
+
+/// Plan header bytes 2 to 5 of a treated run (0xfa4498..0xfa44d0).
+pub const TREATED_PLAN_SETTINGS: [Property; 4] = [Property(0xa48e), Property(0xa48f), Property(0xa48c), Property(0xa4d6)];
+
+/// The sample grid's height and width in percent of the crop (0xf99af0, 0xf99afc).
+pub const SAMPLE_GRID_PERCENT: [Property; 2] = [Property(0x920c), Property(0x920d)];
+/// The sample grid's row and column percent for a program step (0xf99b0c, 0xf99b18).
+pub const fn sample_row_percent(step: u8) -> Property { Property(0x920e + step as u32) }
+pub const fn sample_column_percent(step: u8) -> Property { Property(0x9220 + step as u32) }
+pub const SAMPLE_GRID_BANDS: u8 = 7;
+
+/// A program step's setting the pipeline reads, per program (0xf99bc0..0xf99be4).
+pub const fn program_setting(program: usize, step: u8) -> Property { Property([0x9167, 0x9179, 0x918b][program] + step as u32) }
+pub const PROGRAM_SETTING_LIMIT: u32 = 5;
+
+/// The cases in which a treated run starts at its window position: bit 4 held, bit 2 scene 51,
+/// bit 3 scene 52, bit 1 a listed area with word 0x2c set, bit 5 one with byte 0x26 at 1, bit 0
+/// any other (0xf95e78).
+pub const TREATED_WINDOW_START: Property = Property(0xa490);
+
+/// 0 takes a positive second change off the exposure ratio's level (0xf9a228).
+pub const RATIO_WITHOUT_CHANGE: Property = Property(0x9269);
+/// Tenths: the exposure ratio's ceiling and floor, and the level whose ratio less the second
+/// exposure's word 0xc also caps it (0xf9a310, 0xf9a368, 0xf9a344).
+pub const RATIO_CEILING: Property = Property(0x9268);
+pub const RATIO_FLOOR: Property = Property(0x9267);
+pub const RATIO_LEVEL: Property = Property(0x9266);
+
+/// Each sampled area's exposure start and readout in the section, primary areas first, then the
+/// line offset the readouts count from (0xf99e2c..0xf99ef0).
+pub fn trace_schedule(section: SharedAddress, primary: &[(u32, u32)], secondary: &[(u32, u32)], line_offset: u32, memory: &mut impl StockMemory) {
+    for (start_list, readout_list, entries) in [(0x44580, 0x4459c, primary), (0x445b8, 0x445e0, secondary)] {
+        for (index, &(start, readout)) in (0..).zip(entries) {
+            memory.write_u32(at(section, start_list + 4 * index), start);
+            memory.write_u32(at(section, readout_list + 4 * index), readout);
+        }
+    }
+    memory.write_u32(at(section, 0x4457c), line_offset);
+}
+
+/// What a treated run's window position is computed from.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TreatedWindowTrace {
+    pub amount: u32,
+    pub share: u32,
+    pub rate: u32,
+    pub base_value: u32,
+    pub lens: u32,
+    pub lens_value: u32,
+    pub scaled_rate: u32,
+    pub period: u16,
+    pub position: i16,
+}
+
+/// 0xf997a8..0xf9982c.
+pub fn trace_treated_window(section: SharedAddress, trace: &TreatedWindowTrace, memory: &mut impl StockMemory) {
+    let words = [
+        trace.amount,
+        trace.share,
+        trace.rate,
+        trace.base_value,
+        trace.lens,
+        trace.lens_value,
+        trace.scaled_rate,
+        u32::from(trace.period),
+        i32::from(trace.position) as u32,
+    ];
+    for (index, value) in (0..).zip(words) {
+        memory.write_u32(at(section, 0x469e0 + 4 * index), value);
+    }
+}
+
+/// What the layout traces after its schedule.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LayoutTrace {
+    pub grid: GridRequest,
+    pub sample_grids: [AreaGrid; 2],
+    pub search_grids: [AreaGrid; 2],
+    /// A treated run's crop geometry.
+    pub treated: Option<CropGeometry>,
+    pub bounds: SearchBounds,
+    pub channel_bounds: SearchBounds,
+}
+
+const fn halves(high: u32, low: u32) -> u32 { low | high << 16 }
+
+const fn bound_halves(bounds: SearchBounds) -> u32 { halves(bounds.low as u16 as u32, bounds.high as u16 as u32) }
+
+/// The grid's position, cell size, gaps and counts, each as two halves.
+const fn grid_words(grid: &AreaGrid) -> [u32; 4] {
+    [
+        halves(grid.left, grid.top),
+        halves(grid.cell_width, grid.cell_height),
+        halves(grid.gap_horizontal as u32, grid.gap_vertical as u32),
+        halves(grid.columns as u32, grid.rows as u32),
+    ]
+}
+
+/// 0xf9a3d0..0xf9a670.
+pub fn trace_layout(section: SharedAddress, trace: &LayoutTrace, memory: &mut impl StockMemory) {
+    let mut store = |offset: u32, value: u32| memory.write_u32(at(section, offset), value);
+    let grid = &trace.grid;
+    for (index, value) in (0..).zip([grid.height_percent, grid.width_percent, grid.row_percent, grid.column_percent]) {
+        store(0x44c28 + 4 * index, u32::from(value));
+    }
+    let [first, second] = trace.sample_grids.map(|grid| grid_words(&grid));
+    let [third, fourth] = trace.search_grids.map(|grid| grid_words(&grid));
+    let words = [first[0], first[1], first[2], first[3], second[0], second[1], second[3], third[0], third[1], third[2], third[3], fourth[0], fourth[1], fourth[3]];
+    for (index, value) in (0..).zip(words) {
+        store(0x44c40 + 4 * index, value);
+    }
+    if let Some(CropGeometry { window, crop }) = trace.treated {
+        let tracked = &trace.sample_grids[1];
+        let words = [
+            window.width,
+            window.height,
+            crop.left.wrapping_sub(window.left),
+            crop.top.wrapping_sub(window.top),
+            tracked.left.wrapping_sub(window.left),
+            tracked.top.wrapping_sub(window.top),
+            tracked.cell_width,
+            tracked.cell_height,
+            u32::from(tracked.columns),
+            u32::from(tracked.rows),
+        ];
+        for (index, value) in (0..).zip(words) {
+            store(0x469b4 + 4 * index, value);
+        }
+    }
+    store(0x44bfc, bound_halves(trace.bounds));
+    store(0x44c00, bound_halves(trace.channel_bounds));
+}
+
+/// One listed area as the preparation traces it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AreaTrace {
+    pub position: i32,
+    pub centre_x: u32,
+    pub centre_y: u32,
+    pub at_22: u16,
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub at_20: u16,
+    pub at_18: u32,
+    pub at_1c: u32,
+}
+
+/// What the preparation traces besides its configuration.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PreparationTrace {
+    /// Confirmation words 1, 2 (its low half, signed) and 7.
+    pub confirmation: [i32; 3],
+    pub record_level: i32,
+    pub snapshot_position: i16,
+    pub reference: u32,
+    pub drive_kind: u32,
+    pub configured_level: i16,
+    pub area_count: u32,
+    pub areas: [AreaTrace; 10],
+}
+
+/// 1 for 1, 3 for 2, else 0 (0xf95ef4).
+const fn mapped_selection(value: u32) -> u32 {
+    match value {
+        1 => 1,
+        2 => 3,
+        _ => 0,
+    }
+}
+
+/// The preparation's last traces, in stock order (0xfa541c..0xfa5be0).
+pub fn trace_preparation<P: Properties + StockMemory>(section: SharedAddress, trace: &PreparationTrace, ports: &mut P) {
+    let byte = |ports: &mut P, id: u32| ports.property(Property(id));
+    let word = |ports: &mut P, id: u32| u32::from(crate::exposure::settings::word(ports, Property(id)));
+    let store = |ports: &mut P, offset: u32, value: u32| ports.write_u32(at(section, offset), value);
+    let value = byte(ports, 0x9232);
+    store(ports, 0x44c38, value);
+    let value = byte(ports, 0x9233);
+    store(ports, 0x44c3c, value);
+    for (offset, value) in [0x45688, 0x4568c, 0x45690].into_iter().zip(trace.confirmation) {
+        store(ports, offset, value as u32);
+    }
+    store(ports, 0x44c14, trace.record_level as u32);
+    store(ports, 0x44c04, i32::from(trace.snapshot_position) as u32);
+    let value = i32::from(byte(ports, 0x9275) as u8 as i8) as u32;
+    store(ports, 0x44b00, value);
+    store(ports, 0x44c08, trace.reference);
+    store(ports, 0x44c0c, trace.drive_kind);
+    for (offset, value) in [(0x44b44, 0), (0x44bf8, 1), (0x44bf4, 0), (0x44bf0, 0)] {
+        store(ports, offset, value);
+    }
+    for pair in 0..6 {
+        let value = byte(ports, 0x96d4 + 2 * pair);
+        store(ports, 0x468a8 + 4 * pair, value);
+        let value = byte(ports, 0x96d5 + 2 * pair);
+        store(ports, 0x468c0 + 4 * pair, value);
+    }
+    for (offset, id) in [(0x468d8, 0x92b8), (0x468dc, 0x92bf), (0x468e0, 0x92c0), (0x468e4, 0x92b9)] {
+        let value = byte(ports, id);
+        store(ports, offset, value);
+    }
+    let value = mapped_selection(byte(ports, 0x92bc));
+    store(ports, 0x468e8, value);
+    let value = mapped_selection(byte(ports, 0x92bb));
+    store(ports, 0x468ec, value);
+    let value = u32::from(byte(ports, 0x92ba) != 0);
+    store(ports, 0x468f0, value);
+    for index in 0..11 {
+        let value = byte(ports, 0x94d2 + index);
+        store(ports, 0x468f4 + 4 * index, value);
+    }
+    store(ports, 0x46920, i32::from(trace.configured_level) as u32);
+    for (offset, id) in [(0x46924, 0x94bf), (0x46928, 0x29e), (0x456a4, 0x2b4), (0x4692c, 0x9293)] {
+        let value = byte(ports, id);
+        store(ports, offset, value);
+    }
+    let value = word(ports, 0x9294);
+    store(ports, 0x46930, value);
+    let value = byte(ports, 0x9276);
+    store(ports, 0x44574, value);
+    for index in 0..4 {
+        let value = byte(ports, 0x961c + index);
+        store(ports, 0x44c18 + 4 * index, (value & 0xf) | (value & 0xf0) << 12);
+    }
+    const SEARCH_SETTINGS: [Option<u32>; 30] = [
+        Some(0xa480), Some(0xa481), Some(0xa482), Some(0xa483), Some(0xa484), Some(0xa485), Some(0xa486), Some(0xa487), Some(0xa488), Some(0xa489),
+        Some(0xa48a), Some(0xa48b), Some(0xa48c), Some(0xa4d6), Some(0xa48d), Some(0xa48e), Some(0xa48f), Some(0xa490), Some(0xa491), None,
+        None, Some(0xa4df), Some(0xa492), Some(0xa493), Some(0xa495), Some(0xa4d4), Some(0xa497), Some(0xa498), Some(0xa499), None,
+    ];
+    for (index, id) in (0..).zip(SEARCH_SETTINGS) {
+        let value = match id {
+            Some(0xa493) => word(ports, 0xa493),
+            Some(id) => byte(ports, id),
+            None => 0,
+        };
+        store(ports, 0x4693c + 4 * index, value);
+    }
+    store(ports, 0x46a08, 0);
+    store(ports, 0x46a0c, trace.area_count);
+    for (index, area) in (0..).zip(&trace.areas) {
+        let words = [
+            area.position as u32,
+            area.centre_x,
+            area.centre_y,
+            u32::from(area.at_22),
+            area.x,
+            area.y,
+            area.width,
+            area.height,
+            u32::from(area.at_20),
+            area.at_18,
+            area.at_1c,
+        ];
+        for (word, value) in (0..).zip(words) {
+            store(ports, 0x46a10 + 0x2c * index + 4 * word, value);
+        }
+    }
+}

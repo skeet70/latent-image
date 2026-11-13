@@ -3,22 +3,16 @@ use xm1_saclac_interface::exposure::EvaluationRequest;
 use xm1_saclac_interface::stock::StockCallbackWord;
 
 use crate::exposure::context::ExposureContext;
-use crate::exposure::evaluation::{reference_value, request_row, set_up};
+use crate::exposure::evaluation::{measured_row, reference_value, request_row, set_up};
 use crate::exposure::fakes::{placed, Posted, World};
 use crate::exposure::ports::InPlace;
-use crate::exposure::program::*;
-use crate::selection::{BufferSlot, RowIndex, RowPhase};
+use crate::selection::{BufferSlot, RowIndex, RowPhase, SelectionBank};
 use crate::stock::adjust::CONFIGURED_FACTOR;
+use crate::stock::exposure_limits::{parameter, ParameterField, PARAMETER_SETS};
 use crate::stock::tables::PROGRAM_PROFILES;
 use crate::stock::{dump, property, shared};
 
 const FRAME: SharedAddress = SharedAddress(0x4000_0000);
-
-struct FixedLimits;
-
-impl Limits for FixedLimits {
-    fn primary_range(&mut self, _: &PrimaryInputs) -> PrimaryRange { PrimaryRange { upper: 300, near_lens: 1, far_lens: 1, ..PrimaryRange::default() } }
-}
 
 /// A target and a configured measurement of 500 over the program of `program_tests`: steps at
 /// 50, 127, 204 and 280.
@@ -28,6 +22,9 @@ fn world() -> World {
         world.profile_levels.insert(*profile, 100 * index as i16);
         world.sensitivity_classes.insert(*profile, index as u8);
     }
+    world.property(parameter(PARAMETER_SETS[0], false, ParameterField::Upper), 30);
+    world.near_steps.insert(0, 1);
+    world.far_steps.insert(0, 1);
     world.property_word(property::PROGRAM_LEVEL_LIMIT, 1000);
     world.property_word(property::TARGET_LEVEL, 500);
     world.property(property::ADJUSTMENT_FLAGS, 1);
@@ -53,7 +50,7 @@ fn context() -> ExposureContext {
 #[test]
 fn the_bank_holds_one_candidate_per_spanned_step_valued_against_the_target() {
     let mut context = context();
-    set_up(&mut world(), &mut FixedLimits, &mut context);
+    set_up(&mut world(), &mut context);
     let bank = context.selection;
     assert_eq!((context.span.first, context.span.last), (1, 4));
     assert_eq!((bank.count, bank.first, bank.filled, bank.any_range, bank.highest_below), (4, 1, 4, false, 3));
@@ -68,7 +65,7 @@ fn a_configured_first_step_leaves_the_steps_before_it_out_of_the_bank() {
     let mut world = world();
     world.property(property::FIRST_STEP, 3);
     let mut context = context();
-    set_up(&mut world, &mut FixedLimits, &mut context);
+    set_up(&mut world, &mut context);
     let bank = context.selection;
     assert_eq!((bank.count, bank.first, bank.filled, bank.highest_below), (2, 3, 2, 3));
     assert_eq!(bank.candidates[..2].iter().map(|candidate| candidate.level).collect::<std::vec::Vec<_>>(), [2, 3]);
@@ -78,7 +75,7 @@ fn a_configured_first_step_leaves_the_steps_before_it_out_of_the_bank() {
 #[test]
 fn every_column_covers_the_listed_subjects_and_keeps_the_bound_count() {
     let mut context = context();
-    set_up(&mut world(), &mut FixedLimits, &mut context);
+    set_up(&mut world(), &mut context);
     for column in context.selection.columns {
         assert_eq!(column.count, 12);
         assert_eq!(column.regions[0], [1; 8]);
@@ -89,7 +86,7 @@ fn every_column_covers_the_listed_subjects_and_keeps_the_bound_count() {
 #[test]
 fn the_requests_carry_the_tolerances_and_the_reference_of_the_highest_candidate() {
     let mut context = context();
-    set_up(&mut world(), &mut FixedLimits, &mut context);
+    set_up(&mut world(), &mut context);
     let evaluation = context.evaluation;
     assert_eq!((evaluation.tolerance_above, evaluation.tolerance_below, evaluation.floor, evaluation.frame), (20, -30, -900, Some(FRAME)));
     let correction = context.correction;
@@ -104,7 +101,7 @@ fn the_frame_records_the_snapshot_and_how_the_start_was_bound() {
     let mut context = context();
     context.snapshot.valid = 7;
     context.snapshot.focus.pinned = 1;
-    set_up(&mut world, &mut FixedLimits, &mut context);
+    set_up(&mut world, &mut context);
     let words = [0, 1, 2].map(|index| world.u32_at(dump::evaluation(FRAME, index)));
     assert_eq!(words, [7, 1, context.span.bound.code()]);
 }
@@ -130,7 +127,7 @@ fn prepared() -> (World, ExposureContext) {
         world.property(id, value);
     }
     let mut context = context();
-    set_up(&mut world, &mut FixedLimits, &mut context);
+    set_up(&mut world, &mut context);
     (world, context)
 }
 
@@ -152,7 +149,7 @@ fn a_row_request_names_the_row_its_measurement_and_its_column_and_marks_it_reque
     let sent = request(&mut world, &mut context, 2);
     assert_eq!((sent.row, sent.measured, sent.statistics), (2, [[2, 1], [6, 5], [4, 3]], [9, 10, 11, 12]));
     assert_eq!((sent.value, sent.next_profile), (204, context.areas[2].next_profile));
-    assert_eq!((sent.column_count, sent.column_regions), (12, Some(placed(InPlace::ColumnRegions(2)))));
+    assert_eq!((sent.column_count, sent.column_regions), (12, Some(placed(InPlace::ColumnRegions(RowIndex::new(2).unwrap())))));
     let slot = BufferSlot::new(2).unwrap();
     assert_eq!((sent.row_buffer, sent.column_buffer), (Some(shared::row_buffers(slot)[0]), Some(shared::column_buffer(slot))));
     assert_eq!((sent.level_classes, sent.selection_flags), (Some(shared::level_class(0)), Some(shared::SELECTION_FLAGS)));
@@ -206,4 +203,22 @@ fn other_rows_point_toward_the_first_applied_row() {
     context.selection.rows[0].phase = RowPhase::Applied;
     assert_eq!(request(&mut world, &mut context, 3).direction, 1);
     assert_eq!(request(&mut world, &mut context, 0).direction, 1);
+}
+
+/// The image task's check reads a row's buffers at row +0 and +4 and its column's at column +4,
+/// and writes the pairs from row +8, the reply at +0x28 and the statistics from +0x2c
+/// (0xf1f09c..0xf1f0f8).
+#[test]
+fn a_measured_row_names_its_buffers_its_column_and_where_the_check_writes() {
+    let (mut world, context) = prepared();
+    let row = RowIndex::new(3).unwrap();
+    let measured = measured_row(&mut world, &context.selection, row);
+    let slot = BufferSlot::new(3).unwrap();
+    assert_eq!((measured.buffers, measured.column_buffer), (Some(shared::row_buffers(slot)), Some(shared::column_buffer(slot))));
+    assert_eq!(measured.regions, placed(InPlace::ColumnRegions(row)));
+    let base = placed(InPlace::RowMeasurement(row)).0;
+    assert_eq!(measured.pairs.map(|at| at.0 - base), [0, 8, 16, 24]);
+    assert_eq!((measured.reply.0 - base, measured.statistics.0 - base), (32, 36));
+    let unbound = measured_row(&mut world, &SelectionBank::default(), row);
+    assert_eq!((unbound.buffers, unbound.column_buffer), (None, None));
 }

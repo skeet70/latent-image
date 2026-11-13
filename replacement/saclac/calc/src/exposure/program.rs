@@ -6,6 +6,7 @@ use xm1_saclac_profile_records::stock::record::group_00;
 use xm1_saclac_profile_records::stock::shared::group_27;
 use xm1_saclac_profile_records::{IntervalTracking, MeasurementSelection, SharedHeaderByte};
 
+use crate::adjust::exposure_limits;
 use crate::adjust::profile_adjustment::{self, LensLimits, SelectedChoice};
 use crate::adjust::result_dispatch;
 use crate::adjust::scene_settings::{self, RangeInputs, SceneRange, SceneSelection};
@@ -44,12 +45,6 @@ pub struct PrimaryRange {
     pub far_lens: u32,
     pub near_lens: u32,
     pub floor: i16,
-}
-
-/// The adjustment layer's range the unselected measurement's program is built from.
-pub trait Limits {
-    /// 0xf72c3c.
-    fn primary_range(&mut self, inputs: &PrimaryInputs) -> PrimaryRange;
 }
 
 /// How the first step was chosen; the evaluation accepts any range only after `Curve`.
@@ -195,7 +190,7 @@ struct Range {
     far_lens: u32,
 }
 
-fn range(ports: &mut impl Ports, limits: &mut impl Limits, context: &ExposureContext, scene: SceneRange) -> Range {
+fn range(ports: &mut impl Ports, context: &ExposureContext, scene: SceneRange) -> Range {
     let binding = &context.binding;
     let record = binding.record_handle();
     let levels = context.levels;
@@ -221,7 +216,7 @@ fn range(ports: &mut impl Ports, limits: &mut impl Limits, context: &ExposureCon
             step_three,
             auxiliary: ports.profile().selection_auxiliary(record, refinement_pass),
         };
-        let primary = limits.primary_range(&inputs);
+        let primary = exposure_limits::primary_range(ports, &inputs);
         let near = ports.base_level(primary.near_lens);
         let far = ports.base_level(primary.far_lens);
         let low = primary.lower.wrapping_sub(scene.below as i16).wrapping_add(near);
@@ -258,7 +253,7 @@ pub struct Program {
     pub choice: FirstChoice,
 }
 
-pub fn build(ports: &mut impl Ports, limits: &mut impl Limits, context: &ExposureContext) -> Program {
+pub fn build(ports: &mut impl Ports, context: &ExposureContext) -> Program {
     let record = context.binding.record_handle();
     let refinement_pass = context.binding.refinement_pass;
     let levels = context.levels;
@@ -281,7 +276,7 @@ pub fn build(ports: &mut impl Ports, limits: &mut impl Limits, context: &Exposur
     let step_limit = settings::level(ports, property::STEP_LIMIT).wrapping_mul(10);
     let target = levels.target;
     let lens_reference = context.binding.lens_reference;
-    let Range { low, high, near_lens, far_lens } = range(ports, limits, context, scene);
+    let Range { low, high, near_lens, far_lens } = range(ports, context, scene);
     let reference_offset = ports.level_offset(PROGRAM_PROFILES[0]);
     let first_profile = profile_at_or_below(ports, scene.offset);
     let tolerance = settings::tenths(ports, property::UPPER_TOLERANCE) as i16;

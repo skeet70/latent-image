@@ -10,9 +10,13 @@ use xm1_saclac_profile_records::field::{RecordField, RecordRead, RecordWrite, Sh
 use xm1_saclac_profile_records::stock::layout;
 use xm1_saclac_profile_records::{AccessGroup, Bytes, Grants, Handle, MeasurementSelection, OpenMode, ProfileRecords, RecordImage, Scope, Serial, SharedHeaderByte, Slot, StockEntries, Tag};
 
+use crate::adjust::exposure_limits::{CellLevels, ChannelLevels};
 use crate::adjust::lens::{BiasTable, LensConfiguration};
+use crate::adjust::profile_adjustment::{LensSteps, StepTable};
 use crate::exposure::ports::{CaptureProfiles, ImageReport, InPlace, Lens, Placement, ProfileAccess, ProfileLevels, Properties, Property, StockMemory};
 use crate::profile::Profile;
+use crate::scene_levels::FeatureClasses;
+use crate::stock::calculation::Cell;
 
 const SLOT: u8 = 2;
 const SERIAL: u16 = 0x31;
@@ -96,12 +100,18 @@ pub struct World {
     pub lens_configuration: crate::adjust::fakes::Lens,
     pub default_dimensions: [u16; 3],
     pub report_word: u32,
+    pub fourth_report_word: u32,
+    pub grid_steps: BTreeMap<u8, [u8; 2]>,
+    /// Standard-table near and far steps by limit.
+    pub near_steps: BTreeMap<u16, u32>,
+    pub far_steps: BTreeMap<u16, u32>,
 }
 
 /// Where the test world places the context's in-place blocks.
 pub fn placed(block: InPlace) -> SharedAddress {
     SharedAddress(match block {
-        InPlace::ColumnRegions(column) => 0x0170_0000 + 0x100 * column as u32,
+        InPlace::ColumnRegions(row) => 0x0170_0000 + 0x100 * row.get() as u32,
+        InPlace::RowMeasurement(row) => 0x0173_0000 + 0x100 * row.get() as u32,
         InPlace::BoundSubjects => 0x0171_0000,
         InPlace::BoundSummary => 0x0171_1000,
         InPlace::SnapshotSubjects => 0x0172_0000,
@@ -133,6 +143,10 @@ impl Default for World {
             lens_configuration: crate::adjust::fakes::Lens::default(),
             default_dimensions: [0; 3],
             report_word: 0,
+            fourth_report_word: 0,
+            grid_steps: BTreeMap::new(),
+            near_steps: BTreeMap::new(),
+            far_steps: BTreeMap::new(),
         }
     }
 }
@@ -201,6 +215,7 @@ impl CaptureProfiles for World {
     fn configured_profile(&mut self, level: i16) -> u32 { self.configured_profiles.get(&level).copied().unwrap_or(0) }
     fn record_profile(&mut self) -> u32 { 1 }
     fn default_dimensions(&mut self) -> [u16; 3] { self.default_dimensions }
+    fn grid_steps(&mut self, layout: u8) -> [u8; 2] { self.grid_steps.get(&layout).copied().unwrap_or_default() }
 }
 
 impl ProfileLevels for World {
@@ -248,6 +263,7 @@ impl Placement for World {
 
 impl ImageReport for World {
     fn second_report_word(&mut self) -> u32 { self.report_word }
+    fn fourth_report_word(&mut self) -> u32 { self.fourth_report_word }
 }
 
 impl LensConfiguration for World {
@@ -262,13 +278,37 @@ impl LensConfiguration for World {
     fn mapped_value(&mut self, key: u32) -> u32 { self.lens_configuration.mapped_value(key) }
 }
 
-/// The near step is the limit, one more from the lens's table; the far step is the limit plus 1000.
-impl crate::adjust::profile_adjustment::LensSteps for World {
-    fn near_step(&mut self, _reference: u32, limit: u16, table: crate::adjust::profile_adjustment::StepTable) -> u32 {
-        u32::from(limit) + if table == crate::adjust::profile_adjustment::StepTable::Lens { 1 } else { 0 }
+/// Standard-table steps come from `near_steps` and `far_steps`; otherwise the near step is the
+/// limit, one more from the lens's table, and the far step is the limit plus 1000.
+impl LensSteps for World {
+    fn near_step(&mut self, _reference: u32, limit: u16, table: StepTable) -> u32 {
+        match self.near_steps.get(&limit) {
+            Some(step) if table == StepTable::Standard => *step,
+            _ => u32::from(limit) + if table == StepTable::Lens { 1 } else { 0 },
+        }
     }
-    fn far_step(&mut self, _reference: u32, limit: u16, _table: crate::adjust::profile_adjustment::StepTable) -> u32 { u32::from(limit) + 1000 }
+    fn far_step(&mut self, _reference: u32, limit: u16, table: StepTable) -> u32 {
+        match self.far_steps.get(&limit) {
+            Some(step) if table == StepTable::Standard => *step,
+            _ => u32::from(limit) + 1000,
+        }
+    }
     fn lens_step(&mut self, step: u32) -> u32 { step }
+}
+
+/// Channel and cell levels and feature classes are all 0.
+impl ChannelLevels for World {
+    fn channel_level(&mut self, _channel: u32, _offset: bool) -> i16 { 0 }
+    fn compensated_level(&mut self, _step: u32, _reference: u32) -> i16 { 0 }
+}
+
+impl FeatureClasses for World {
+    fn feature_class(&mut self, _profile: u32) -> u8 { 0 }
+}
+
+impl CellLevels for World {
+    fn level_class(&mut self, _cell: Cell) -> u32 { 0 }
+    fn row_level(&mut self, _cell: Cell) -> i16 { 0 }
 }
 
 /// calc and calc1 as a list of the payloads posted to them.

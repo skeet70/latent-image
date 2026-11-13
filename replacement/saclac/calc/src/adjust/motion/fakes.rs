@@ -49,13 +49,15 @@ impl Properties for Bench {
     fn property(&mut self, property: Property) -> u32 { self.properties.get(&property.0).copied().unwrap_or(0) }
 }
 
-/// Offsets are ten per step.
+/// Offsets are ten per step; channel starts and period positions are 0.
 impl LensTables for Bench {
-    fn channel_position(&mut self, _lens: u32, _step: u32, _reference: u32, _mode: u32) -> i16 { self.channel_position }
+    fn channel_positions(&mut self, _lens: u32, _step: u32, _reference: u32, _mode: u32) -> [i16; 2] { [self.channel_position, 0] }
     fn side_adjusted(&mut self, value: i16, from: u32, to: u32) -> i16 {
         if (from, to) == (1, 0) { value + self.side_offset } else { value }
     }
     fn table_offset(&mut self, _lens: u32, _step: u32, delta: i16) -> i32 { i32::from(delta) * 10 }
+    fn channel_start(&mut self, _lens: u32, _channel: u8, _reference: u32) -> i16 { 0 }
+    fn period_position(&mut self, _period: u16, _lens: u32, _step: u32, _reference: u32) -> i32 { 0 }
 }
 
 impl Clock for Bench {

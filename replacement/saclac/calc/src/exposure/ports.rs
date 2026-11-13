@@ -3,9 +3,12 @@
 use xm1_saclac_interface::calc::SharedAddress;
 use xm1_saclac_profile_records::{Memory, StockEntries};
 
+use crate::adjust::exposure_limits::{CellLevels, ChannelLevels};
 use crate::adjust::lens::LensConfiguration;
 use crate::adjust::profile_adjustment::LensSteps;
 use crate::profile::Profile;
+use crate::scene_levels::FeatureClasses;
+use crate::selection::RowIndex;
 
 /// A camera configuration value the engine reads; the ids are in `crate::stock::property`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -53,6 +56,8 @@ pub trait CaptureProfiles {
     fn record_profile(&mut self) -> u32;
     /// The selection dimensions of a record that keeps none (0xef3434 with arguments 5 and 0).
     fn default_dimensions(&mut self) -> [u16; 3];
+    /// The column and row steps of selection grid layout `layout` (0xef7570 with mode 0).
+    fn grid_steps(&mut self, layout: u8) -> [u8; 2];
 }
 
 /// Image 6's levels per capture profile.
@@ -83,11 +88,14 @@ pub trait ProfileAccess {
     fn profile(&mut self) -> Profile<'_, Self::Records, Self::Entries>;
 }
 
-/// The blocks of the exposure context that calc reads in place.
+/// The blocks of the exposure context that calc and the image task's statistics check reach in
+/// place.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InPlace {
     /// A selection column's subject regions.
-    ColumnRegions(usize),
+    ColumnRegions(RowIndex),
+    /// A row's `selection::RowMeasurement`, which the statistics check fills.
+    RowMeasurement(RowIndex),
     BoundSubjects,
     BoundSummary,
     SnapshotSubjects,
@@ -103,9 +111,17 @@ pub trait Placement {
 pub trait ImageReport {
     /// The second of the four words 0x740888 reports (+0x38).
     fn second_report_word(&mut self) -> u32;
+    /// The fourth (+0x40).
+    fn fourth_report_word(&mut self) -> u32;
 }
 
 /// Everything the engine reaches.
-pub trait Ports: Properties + Lens + LensSteps + LensConfiguration + CaptureProfiles + ProfileLevels + StockMemory + ProfileAccess + Placement + ImageReport {}
+pub trait Ports:
+    Properties + Lens + LensSteps + LensConfiguration + CaptureProfiles + ProfileLevels + ChannelLevels + FeatureClasses + CellLevels + StockMemory + ProfileAccess + Placement + ImageReport
+{
+}
 
-impl<T: Properties + Lens + LensSteps + LensConfiguration + CaptureProfiles + ProfileLevels + StockMemory + ProfileAccess + Placement + ImageReport> Ports for T {}
+impl<T> Ports for T where
+    T: Properties + Lens + LensSteps + LensConfiguration + CaptureProfiles + ProfileLevels + ChannelLevels + FeatureClasses + CellLevels + StockMemory + ProfileAccess + Placement + ImageReport
+{
+}

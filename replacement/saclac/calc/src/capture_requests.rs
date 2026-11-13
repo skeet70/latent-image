@@ -9,10 +9,11 @@ use xm1_saclac_interface::stock::StockCallbackWord;
 use xm1_saclac_interface::RecordHandle;
 use xm1_saclac_profile_records::stock::record::{group_00, group_01, group_04, group_05, group_07, group_08};
 use xm1_saclac_profile_records::stock::shared::group_27;
-use xm1_saclac_profile_records::{MeasurementSelection, SharedHeaderByte};
+use xm1_saclac_profile_records::SharedHeaderByte;
 
 use crate::adjust::focus_profile::LensResources;
 use crate::exposure::ports::{CaptureProfiles, Lens, ProfileAccess, Properties};
+use crate::profile::selection_code;
 use crate::requests::Peers;
 use crate::stock::capture::{self, RefinedScene, FIRST_ELEMENT};
 
@@ -85,14 +86,6 @@ pub fn capture_offset(ports: &mut (impl ProfileAccess + Properties), record: Rec
     if flags == ADJUSTED_SCENE_FLAGS { chosen.wrapping_add(ports.property(capture::CAPTURE_OFFSET_ADJUSTMENT)) } else { chosen }
 }
 
-fn selection_byte(selection: MeasurementSelection) -> u8 {
-    match selection {
-        MeasurementSelection::Unselected => 0,
-        MeasurementSelection::Record => 1,
-        MeasurementSelection::Other(byte) => byte,
-    }
-}
-
 /// Calc 0x3c0f (0xf4d448).
 pub fn request_first<Q: Peers>(ports: &mut impl CapturePorts, peers: &mut Q, record: RecordHandle, processing: &CaptureProcessing, callback: StockCallbackWord) -> Result<(), Q::Error> {
     let at_0022 = ports.profile().read(record, &group_00::AT_0022);
@@ -145,7 +138,7 @@ pub fn request_fourth<Q: Peers>(
         exposure: processing.lens_reference,
         offset_mode: processing.offset_mode,
         mode: processing.profile,
-        selection: selection_byte(selection),
+        selection: selection_code(selection),
         extension: detail,
     };
     peers.calc(&CalcPayload::Source { request, callback })

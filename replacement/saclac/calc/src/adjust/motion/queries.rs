@@ -39,7 +39,7 @@ pub fn second_channel_available(ports: &mut impl ProfileAccess, record: RecordHa
 /// The table offset of `position` from the lens's channel position at `step`, scaled down
 /// toward the configured low bound by `kind`'s scale, in steps (0xfa3534).
 pub fn step_offset(ports: &mut (impl LensTables + Properties), lens: u32, step: u32, position: i16, side: u32, reference: u32, kind: u32) -> i16 {
-    let base = ports.channel_position(lens, step, reference, 0);
+    let [base, _] = ports.channel_positions(lens, step, reference, 0);
     let base = ports.side_adjusted(base, 1, side);
     let offset = ports.table_offset(lens, step, position.wrapping_sub(base));
     let high = i32::from(settings::word(ports, STEP_SCALE_HIGH));
