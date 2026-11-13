@@ -34,3 +34,5 @@ mod limits_tests;
 mod profile_tests;
 #[cfg(test)]
 mod layer_tests;
+#[cfg(test)]
+mod pipeline_tests;

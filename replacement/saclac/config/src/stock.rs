@@ -5,6 +5,7 @@ use core::ptr::{read_volatile, write_volatile};
 use crate::channel::{Channel, FloatLog};
 use crate::face::{FaceTracking, TrackingBusy};
 use crate::ports::{Derivations, ExportQuery};
+use crate::pipeline::{Bank, Enable, EnableChange, FilterWindow, Grid, Part, Setting, Stage, StageBlock};
 use crate::registers::PipelineHardware;
 use crate::scan::{ScanBlocks, ScanField, ScanLibrary, StockPart};
 use crate::services::LensRequests;
@@ -280,5 +281,105 @@ impl ScanLibrary<StockScanBlocks> for StockScanLibrary {
     fn finish_defaults(&mut self, blocks: &mut StockScanBlocks) {
         entry!(0xd7_9178u32, fn(u32))(blocks.configuration);
         entry!(0xd7_9194u32, fn(u32))(blocks.configuration);
+    }
+}
+
+/// A caller's region (0xda027c), parameter (0xd9f7c0, 0xd9f828) or geometry (0xd9fd54) block,
+/// by guest address.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StockStageBlock(pub u32);
+
+const fn banked(bank: Bank, first: u32, second: u32) -> u32 {
+    match bank {
+        Bank::First => first,
+        Bank::Second => second,
+    }
+}
+
+const fn part_offset(part: Part) -> u32 {
+    match part {
+        Part::ProcessingOrigin => 0x24,
+        Part::ProcessingFormat => 0x2a,
+        Part::InputMode => 0x30,
+        Part::FilterSelectors => 0x0c,
+        Part::InputControl => 0x00,
+        Part::Division => 0x0c,
+        Part::Points => 0x18,
+        Part::Pairs => 0x38,
+        Part::SecondWindow | Part::SecondExtent => 0x44,
+        Part::RotatedTables => 0x54,
+        Part::FirstTables => 0x60,
+        Part::SecondTables => 0x6c,
+        Part::Area => 0x8c,
+        Part::BlockLayout => 0x94,
+        Part::InputRegister3c => 0xf4,
+        Part::TransformOffset(bank) => banked(bank, 0x134, 0x1c4),
+        Part::TransformThirdOffset(bank) => banked(bank, 0x138, 0x1c8),
+        Part::TransformWindow(bank) => banked(bank, 0x140, 0x1d0),
+        Part::TransformTable(bank) => banked(bank, 0x148, 0x1d8),
+        Part::Window => 0x258,
+        Part::Curves => 0x264,
+        Part::InputRegister14 => 0x00,
+        Part::TransformDimensions(bank) => banked(bank, 0x08, 0x40),
+        Part::TransformGeometry(bank) => banked(bank, 0x0c, 0x44),
+        Part::TransformSecondOffset(bank) => banked(bank, 0x14, 0x4c),
+        Part::TransformSecondaryGeometry(bank) => banked(bank, 0x1c, 0x54),
+        Part::TransformReadback(bank) => banked(bank, 0x24, 0x5c),
+        Part::TransformAddress(bank) => banked(bank, 0x34, 0x6c),
+        Part::TransformNibble(bank) => banked(bank, 0x3c, 0x74),
+        Part::InputRegister34 => 0x88,
+        Part::FilterGrid(Grid::Second) => 0x94,
+        Part::FilterSecondBank => 0xa4,
+        Part::FilterGrid(Grid::First) => 0xf4,
+        Part::FilterFirstBank => 0x104,
+        Part::FilterGrid(Grid::Third) => 0x154,
+        Part::FilterWindow(FilterWindow::First) => 0x164,
+        Part::FilterWindow(FilterWindow::Second) => 0x16c,
+        Part::FilterWindow(FilterWindow::Third) => 0x176,
+        Part::FilterWindow(FilterWindow::Fourth) => 0x180,
+        Part::InputRegister28 => 0x190,
+        Part::InputRegister34Alternate => 0x198,
+        Part::Extent => 0x1a0,
+    }
+}
+
+impl StockStageBlock {
+    /// The address the part's stock entry takes; `Part::InputMode`'s entry takes the word there.
+    pub const fn part(self, part: Part) -> u32 { self.0 + part_offset(part) }
+
+    fn word(self, offset: u32) -> u32 { read_u32(self.0 + offset) }
+}
+
+impl StageBlock for StockStageBlock {
+    fn stage_mode(&self, stage: Stage) -> u32 {
+        self.word(match stage {
+            Stage::Stage400 => 0x14,
+            Stage::Stage4 => 0x30,
+            Stage::Stage8 => 0x40,
+            Stage::Stage10 => 0x88,
+        })
+    }
+
+    fn enable_change(&self, enable: Enable) -> EnableChange {
+        let (keep, invert, set, inverts_on) = match enable {
+            Enable::Gate => (0x34, 0x24, 0x28, 1),
+            Enable::Mode => (0x84, 0x7c, 0x80, 0),
+            Enable::Output => (0x290, 0x28c, 0x288, 0),
+        };
+        if self.word(keep) == 1 {
+            EnableChange::Keep
+        } else if self.word(invert) == inverts_on {
+            EnableChange::Invert
+        } else {
+            EnableChange::Set(self.word(set))
+        }
+    }
+
+    fn setting(&self, setting: Setting) -> u32 {
+        match setting {
+            Setting::PathEnable => self.word(0x5c),
+            Setting::SecondGate => self.word(0x254),
+            Setting::ModeLevel => u32::from(read_u8(self.0 + 0x78)),
+        }
     }
 }

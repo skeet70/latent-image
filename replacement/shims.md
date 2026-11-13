@@ -621,6 +621,7 @@ saclac's configuration layers L3, L8 and L11 (`replacement/saclac/config`), over
 | `StockLensRequests`: callback word `0x96bd04`, request `0x6b7750` | trampoline into retained stock | the lenscom request path (`0x6b731c`, owned in `saclac_shared`) | no | the composition root binds it to `saclac_shared`'s lenscom request | required |
 | `StockFaceTracking`: `0x106d02c`, `0x106a2f0` | trampoline into retained stock | face tracking, whose pipeline and history tasks 3 and 55 also write | no | face tracking is owned | required |
 | `StockScanBlocks` (configuration fields `0xdc`..`0x1ea`, applied parts `+0x14c`, request flags and window `+0x3e`, clear through `0x7221c8`) and `StockScanLibrary` (`0xd6415c`..`0xd663e0`, `0xd79178`, `0xd79194`) | guest-memory layout view | the scan library tasks 11..24 share, which reads both blocks | no | the scan library is owned | required |
+| `StockStageBlock`: the region block (`0xda027c`), parameter block (`0xd9f7c0`, `0xd9f828`; the L4 work block `0x1699a08`) and geometry block (`0xd9fd54`; `0x16996b8`) by guest address: part offsets, stage mode words `+0x14`/`+0x30`/`+0x40`/`+0x88`, enable keep/invert/set words, path enable `+0x5c`, second gate `+0x254`, mode level `+0x78` | guest-memory layout view | the L4 profile layer, which writes the blocks in stock memory | no | the L4 caller passes typed parts | required |
 
 ## saclac_interface
 
