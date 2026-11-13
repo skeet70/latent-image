@@ -20,6 +20,8 @@ pub mod outcome;
 pub mod pipeline;
 pub mod ports;
 pub mod preparation;
+pub mod primary_boundary;
+pub mod primary_job;
 pub mod sequence;
 pub mod secondary_boundary;
 pub mod secondary_job;
@@ -127,3 +129,5 @@ mod calculations_work_tests;
 mod absorb_tests;
 #[cfg(test)]
 mod secondary_job_tests;
+#[cfg(test)]
+mod primary_job_tests;

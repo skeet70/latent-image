@@ -71,10 +71,11 @@ pub struct CropRequest {
     pub full: bool,
 }
 
-/// The cropped frame (vertical, horizontal) and the window inside it: left and top offsets, then
-/// its vertical and horizontal size.
+/// The profile's extent corner (left, top), the cropped frame (vertical, horizontal) and the
+/// window inside it: left and top offsets, then its vertical and horizontal size.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CropGeometry {
+    pub origin: [u32; 2],
     pub frame: [u32; 2],
     pub window: [u32; 4],
 }

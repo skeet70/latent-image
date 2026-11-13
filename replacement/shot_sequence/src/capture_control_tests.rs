@@ -16,7 +16,18 @@ const FRAME: Frame = Frame(0x8000_0000);
 fn record() -> RecordHandle { stock::record_handle_from_a2(RECORD) }
 
 fn parameters(options: u32, mode: u32) -> CaptureParameters {
-    CaptureParameters { options: CaptureOptions(options), mode, sources: ClientRef(0x200), profile: ClientRef(0x280), slots: ClientRef(0x300), selection: ClientRef(0x400) }
+    CaptureParameters {
+        options: CaptureOptions(options),
+        mode,
+        sources: ClientRef(0x200),
+        profile: ClientRef(0x280),
+        slots: ClientRef(0x300),
+        selection: ClientRef(0x400),
+        calibration: ClientRef(0),
+        window: ClientRef(0),
+        areas: ClientRef(0),
+        statistics_selector: ClientRef(0),
+    }
 }
 
 fn bound() -> CaptureControl {
@@ -42,11 +53,11 @@ fn the_statistics_setup_carries_the_option_bit() {
 #[test]
 fn a_setting_request_lays_the_command_over_the_last_primary_record() {
     let mut fake = CaptureFake::new();
-    let mut control = bound();
-    control.setting_template = StatisticsSetting::from_bytes([0x5a; StatisticsSetting::BYTES]);
+    let control = bound();
+    let template = StatisticsSetting::from_bytes([0x5a; StatisticsSetting::BYTES]);
     let overrides = SettingOverrides { selector: 1, words: [2, 3, 4, 5, 6], window: [7; 6], option: 8 };
-    control.request_setting(&overrides, &mut fake);
-    let mut expected = control.setting_template;
+    control.request_setting(&template, &overrides, &mut fake);
+    let mut expected = template;
     expected.apply(&overrides);
     assert_eq!(fake.calls, std::vec![Call::StatisticsSetting { setting: expected, completion: Completion::Statistics85 }]);
 }

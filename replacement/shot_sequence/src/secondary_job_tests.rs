@@ -25,6 +25,10 @@ fn parameters() -> CaptureParameters {
         profile: ClientRef(0x200),
         slots: ClientRef(0x300),
         selection: ClientRef(0x400),
+        calibration: ClientRef(0),
+        window: ClientRef(0),
+        areas: ClientRef(0),
+        statistics_selector: ClientRef(0),
     }
 }
 
@@ -440,7 +444,7 @@ fn the_calculation_carries_the_geometry_and_the_scaled_share() {
     let mut world = World::new();
     world.lists[0].push(area_in_row(7));
     world.words.insert(MeasurementWord::FirstList as u8, 0x99);
-    world.crops.insert((8, CAPTURE_OFFSET, false), CropGeometry { frame: [0, 300], window: [0, 0, 0, 600] });
+    world.crops.insert((8, CAPTURE_OFFSET, false), CropGeometry { frame: [0, 300], window: [0, 0, 0, 600], ..CropGeometry::default() });
     let mut job = requested(&mut world);
     deliver(&mut job, Completion::Image5c, &[0, 0, 0, 0, 2, 0, 0, 0]);
     assert!(job.query(SecondaryQuery::Accepted, &mut world));
@@ -460,9 +464,9 @@ fn an_evaluation_enables_the_job_and_places_the_evaluated_area_in_the_record() {
     world.fields.insert(RecordField::PlacesItem as u8, 1);
     world.slot_fields.insert(SlotField::ProfileSelector as u8, 5);
     world.slot_fields.insert(SlotField::Distance as u8, 20);
-    world.crops.insert((8, 0, true), CropGeometry { frame: [400, 600], window: [0; 4] });
-    world.crops.insert((5, 0, false), CropGeometry { frame: [0; 2], window: [10, 20, 200, 300] });
-    world.crops.insert((5, CAPTURE_OFFSET, false), CropGeometry { frame: [0; 2], window: [13, 24, 0, 0] });
+    world.crops.insert((8, 0, true), CropGeometry { frame: [400, 600], window: [0; 4], ..CropGeometry::default() });
+    world.crops.insert((5, 0, false), CropGeometry { frame: [0; 2], window: [10, 20, 200, 300], ..CropGeometry::default() });
+    world.crops.insert((5, CAPTURE_OFFSET, false), CropGeometry { frame: [0; 2], window: [13, 24, 0, 0], ..CropGeometry::default() });
     let mut job = begun(&mut world);
     let payload = evaluation_payload(|payload| {
         put_word(payload, 0, 5);
