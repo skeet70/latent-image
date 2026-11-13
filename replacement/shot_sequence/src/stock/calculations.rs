@@ -5,7 +5,7 @@
 //! processing configuration at +0x10 through the request's pointer; the result copies at
 //! +0xa8..+0xee have no reader and are not kept.
 
-use crate::calculations_work::{BinnedPlanes, ProcessingSelection, SecondJobInput, SecondaryMeasurement, StatisticsPlanes, BINNED, GRID, PLANES};
+use crate::calculations_work::{BinnedPlanes, ProcessingSelection, SecondJobInput, StatisticsPlanes, BINNED, GRID, PLANES};
 use xm1_saclac_interface::stock::record_handle_word;
 
 pub const PROCESSING: u32 = 0x16b_79a8 + 0x10;
@@ -88,31 +88,6 @@ pub fn second_input_bytes(input: &SecondJobInput, processing: u32) -> [u8; SECON
     put(0x48, &[measurement.count]);
     put(0x4c, &measurement.seventh.to_le_bytes());
     bytes
-}
-
-/// The secondary job's context 0x16b751c as 0xf2c210..0xf2c3c0 and 0xf2c878 read it.
-pub const SECONDARY: u32 = 0x16b_751c;
-pub const SECONDARY_BYTES: usize = 0x19c;
-
-pub fn secondary_measurement(context: &[u8; SECONDARY_BYTES]) -> SecondaryMeasurement {
-    let half = |offset: usize| i16::from_le_bytes([context[offset], context[offset + 1]]);
-    let word = |offset: usize| u32::from_le_bytes([context[offset], context[offset + 1], context[offset + 2], context[offset + 3]]);
-    let mut block = [0; 24];
-    block.copy_from_slice(&context[0x16c..0x184]);
-    SecondaryMeasurement {
-        first: half(0x14a),
-        second: half(0x148),
-        base: half(0x158) as u16,
-        refined: word(0x15c) != 0,
-        third: half(0x160),
-        fourth: half(0x166),
-        fifth: half(0x162),
-        sixth: half(0x164),
-        count: context[0x168],
-        block,
-        seventh: half(0x198),
-        marked: context[0x18c] != 0,
-    }
 }
 
 /// Configuration entries: 0x80f2 through 0x69ff68 for the second job's offset unit.

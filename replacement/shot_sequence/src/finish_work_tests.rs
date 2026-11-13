@@ -197,6 +197,7 @@ fn prepared(mode: u32, mask: u32) -> Prepared {
             mode: HalfPressMode(mode),
             option: 0,
             mask: HalfPressMask(mask),
+            plan_option: 0,
             area_count: None,
             area_selection: 0,
             areas: None,

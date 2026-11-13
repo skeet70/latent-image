@@ -38,6 +38,8 @@ pub struct HalfPressParameters {
     pub mode: HalfPressMode,
     pub option: u32,
     pub mask: HalfPressMask,
+    /// The pipeline plan's option word.
+    pub plan_option: u32,
     pub area_count: Option<ClientRef>,
     pub area_selection: u32,
     pub areas: Option<ClientRef>,

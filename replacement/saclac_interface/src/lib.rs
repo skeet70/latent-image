@@ -5,6 +5,7 @@ pub mod area_measurement;
 pub mod calculation;
 pub mod capture_results;
 pub mod exposure;
+pub mod pipeline;
 pub mod round;
 pub mod statistics;
 pub mod stock;
@@ -482,3 +483,5 @@ mod capture_results_tests;
 mod area_measurement_tests;
 #[cfg(test)]
 mod calc_tests;
+#[cfg(test)]
+mod pipeline_tests;
