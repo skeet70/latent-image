@@ -21,6 +21,7 @@ fn write_u32(address: u32, value: u32) { unsafe { write_volatile(address as usiz
 
 pub mod arguments;
 pub mod capture;
+pub mod detection;
 pub mod statistics;
 
 #[cfg(test)]

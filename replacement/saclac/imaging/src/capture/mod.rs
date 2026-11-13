@@ -4,6 +4,7 @@
 //! capture request selects, and the statistics a completed capture leaves.
 
 pub mod configuration;
+pub mod detection;
 pub mod control;
 pub mod gains;
 pub mod pipeline;
@@ -75,3 +76,5 @@ mod requests_tests;
 mod statistics_tests;
 #[cfg(test)]
 mod configuration_tests;
+#[cfg(test)]
+mod detection_tests;
