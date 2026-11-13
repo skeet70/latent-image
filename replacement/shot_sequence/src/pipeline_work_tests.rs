@@ -544,6 +544,19 @@ fn the_configured_outcome_is_published_to_the_record_only_when_the_client_asked(
 }
 
 #[test]
+fn a_published_outcome_has_the_reply_notify_the_lens_when_the_client_asked_for_a_notification() {
+    use crate::state::StateMemory;
+    for (mask, notice) in [(MASK_RELEASED, 1), (1 << 3, 1), (0, 0)] {
+        let (mut work, mut world) = (PipelineWork::new(), World::new());
+        prepare(&mut work, &mut prepared(1, MASK_RELEASED), &mut world);
+        let mut state = crate::state::ShotState::new(crate::state_tests::Memory::default());
+        state.memory().write(crate::stock::state::REQUEST_WORD, &0x42u32.to_le_bytes());
+        work.effect(E::Configure { record: record(), first: true }, &mut prepared(1, mask), &mut state, &mut world);
+        assert_eq!(crate::state_tests::reply_lens_notice(&mut state), notice, "mask {mask:#x}");
+    }
+}
+
+#[test]
 fn a_missed_focus_has_no_position_code() {
     let (mut work, mut world) = (PipelineWork::new(), World::new());
     world.focus = FocusResultOut { status: 2, ..FocusResultOut::default() };

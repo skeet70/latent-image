@@ -30,6 +30,7 @@ struct World {
     selection_mode: u32,
     area_writes: Vec<(&'static str, u8, u32)>,
     saved_mode: Option<u32>,
+    lens_notice: Option<bool>,
     lens_target: Option<(i16, u32, u32)>,
     bounds: Option<[u32; 3]>,
     moves: Vec<Move>,
@@ -57,6 +58,7 @@ impl World {
             selection_mode: 0,
             area_writes: Vec::new(),
             saved_mode: None,
+            lens_notice: None,
             lens_target: None,
             bounds: None,
             moves: Vec::new(),
@@ -166,6 +168,7 @@ struct Block {
     areas: u8,
     selection_mode: u32,
     saved_mode: Option<u32>,
+    lens_notice: Option<bool>,
 }
 
 impl<P> FinishCalculation<P> for Block {
@@ -177,14 +180,16 @@ impl<P> FinishCalculation<P> for Block {
     fn exposure_held(&mut self) -> bool { false }
     fn set_saved_selection_mode(&mut self, mode: u32) { self.saved_mode = Some(mode); }
     fn lens_reference(&mut self) -> LensReference { LensReference(0) }
+    fn set_lens_notice(&mut self, notice: bool) { self.lens_notice = Some(notice); }
     fn load_finish_record(&mut self, _parameters: &HalfPressParameters, _ports: &mut P) {}
 }
 
 fn effect(work: &mut FinishWork, effect: FinishEffect, prepared: &Prepared, pipeline: &Pipeline, world: &mut World) {
-    let mut block = Block { areas: world.calculation_areas, selection_mode: world.selection_mode, saved_mode: world.saved_mode };
+    let mut block = Block { areas: world.calculation_areas, selection_mode: world.selection_mode, saved_mode: world.saved_mode, lens_notice: world.lens_notice };
     work.effect(effect, prepared, pipeline, &mut block, world);
     world.selection_mode = block.selection_mode;
     world.saved_mode = block.saved_mode;
+    world.lens_notice = block.lens_notice;
 }
 
 impl FinishLibrary for World {
@@ -335,6 +340,16 @@ fn a_new_calculation_records_area_selections_modes_and_the_saved_mode() {
     finish(&mut work, &prepared(0, 1 << 1), &pipeline(), &mut world);
     assert_eq!(world.area_writes, [("selection", 0, 0x100 + 100), ("selection", 1, 0x100 + 100), ("mode", 0, 2), ("mode", 1, 2)]);
     assert_eq!(world.saved_mode, Some(2));
+}
+
+#[test]
+fn the_finish_has_the_reply_notify_the_lens_when_the_mask_asks_for_the_relative_notification() {
+    for (mask, notice) in [(1 << 3, true), (1 << 2, false), (0, false)] {
+        let mut work = FinishWork::new();
+        let mut world = World::new();
+        finish(&mut work, &prepared(0, mask), &pipeline(), &mut world);
+        assert_eq!(world.lens_notice, Some(notice), "mask {mask:#x}");
+    }
 }
 
 #[test]

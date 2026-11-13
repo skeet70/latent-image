@@ -60,6 +60,9 @@ impl<M: StateMemory> ShotState<M> {
     /// The shot context's lens reference, lens readings and lens movement flags.
     pub fn shot_word(&mut self, word: ShotWord) -> u32 { self.word(layout::lens_reading(word)) }
 
+    /// 0xf16160.
+    pub fn set_lens_notice(&mut self, notice: bool) { self.set_word(layout::LENS_NOTICE, u32::from(notice)); }
+
     /// Reads and clears the request a mode-7 half press left for the capture's lens return
     /// (0xf17b1c, 0xf2a458).
     pub fn take_return_request(&mut self) -> bool {
@@ -129,6 +132,8 @@ impl<M: StateMemory> LensReadings for ShotState<M> {
         if changed { self.set_word(layout::lens_reading(flag), 1); }
         self.set_word(layout::lens_reading(at), reading);
     }
+
+    fn set_lens_notice(&mut self, notice: bool) { ShotState::set_lens_notice(self, notice); }
 }
 
 impl<M: StateMemory, P: GridLayers + Client + CalculationProfiles> PreparationShot<P> for ShotState<M> {
@@ -249,6 +254,8 @@ impl<M: StateMemory, P: LoadPorts + GridLayers> FinishCalculation<P> for ShotSta
     fn set_saved_selection_mode(&mut self, mode: u32) { self.set_word(layout::SAVED_SELECTION_MODE, mode); }
 
     fn lens_reference(&mut self) -> LensReference { ShotState::lens_reference(self) }
+
+    fn set_lens_notice(&mut self, notice: bool) { ShotState::set_lens_notice(self, notice); }
 
     /// 0xf19634 for the half press.
     fn load_finish_record(&mut self, parameters: &HalfPressParameters, ports: &mut P) {

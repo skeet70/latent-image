@@ -170,3 +170,16 @@ fn the_lens_track_starts_unread_and_marks_a_reading_off_the_bound_reference() {
         assert_eq!(words, [41, 0xff, 0xff, moved, 0], "bound {bound}");
     }
 }
+
+/// The word the half-press reply path reads through 0xf16184 (shot context +0x1ce0).
+pub(crate) fn reply_lens_notice(state: &mut ShotState<Memory>) -> u32 { word_at(state, StateAddress(0x16a_0260)) }
+
+#[test]
+fn the_lens_notice_the_half_press_writes_is_what_the_reply_path_reads() {
+    use crate::preparation::LensReadings;
+    let mut state = state();
+    LensReadings::set_lens_notice(&mut state, true);
+    assert_eq!(reply_lens_notice(&mut state), 1);
+    LensReadings::set_lens_notice(&mut state, false);
+    assert_eq!(reply_lens_notice(&mut state), 0);
+}

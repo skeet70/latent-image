@@ -484,7 +484,7 @@ impl PipelineWork {
             E::RecordLensStatus => record_lens(LensStage::Pipeline, state, boundary),
             E::Prepare(record) => self.prepare(record, prepared.parameters.unwrap_or_default(), state.lens_reference(), boundary),
             E::MarkRestart => boundary.mark_restart(),
-            E::Configure { first, .. } => self.configure(first, prepared, boundary),
+            E::Configure { first, .. } => self.configure(first, prepared, state, boundary),
             E::ClearFrameReady => self.frame = FrameFlags::default(),
             E::MarkFrameReady => self.frame = self.frame.prepared(),
             E::ReleaseFrame => self.release_work(boundary),
@@ -500,7 +500,7 @@ impl PipelineWork {
                 if boundary.record_mode_available(FRAME_RECORD_MODE) { boundary.finish_record_mode(channels); }
             }
             E::ReleaseFrameLocks => boundary.release_second_channel(),
-            E::PrepareFallback => self.prepare_fallback(prepared, boundary),
+            E::PrepareFallback => self.prepare_fallback(prepared, state, boundary),
             E::ConcludeRaw => {
                 boundary.conclude_raw();
                 boundary.trace(PipelineTrace::RawConcluded);
@@ -755,7 +755,7 @@ impl PipelineWork {
         if correction != 0 && direction == 1 { correction.wrapping_neg() } else { correction }
     }
 
-    fn configure(&mut self, first: bool, prepared: &Prepared, boundary: &mut impl PipelineBoundary) {
+    fn configure<M: StateMemory>(&mut self, first: bool, prepared: &Prepared, state: &mut ShotState<M>, boundary: &mut impl PipelineBoundary) {
         let released = first && prepared.parameters.is_some_and(|parameters| parameters.mask.notifications().frame_released);
         let kind = if released { ResultKind::Released } else { ResultKind::Policy };
         let (result, cell) = match self.plan {
@@ -776,10 +776,10 @@ impl PipelineWork {
             positions: [entry, entry, (0, 0), (0, 0)],
             last_position: 1,
         };
-        self.publish(&outcome, prepared, boundary);
+        self.publish(&outcome, prepared, state, boundary);
     }
 
-    fn prepare_fallback(&mut self, prepared: &Prepared, boundary: &mut impl PipelineBoundary) {
+    fn prepare_fallback<M: StateMemory>(&mut self, prepared: &Prepared, state: &mut ShotState<M>, boundary: &mut impl PipelineBoundary) {
         let Some(plan) = self.plan else { return };
         let scan = boundary.scan(plan.scan);
         let subject = boundary.subject(plan.subject);
@@ -815,7 +815,7 @@ impl PipelineWork {
             positions,
             last_position: last,
         };
-        self.publish(&outcome, prepared, boundary);
+        self.publish(&outcome, prepared, state, boundary);
     }
 
     fn fallback_pending(&self, scan: &ScanBlock, boundary: &mut impl PipelineBoundary) -> bool {
@@ -827,7 +827,7 @@ impl PipelineWork {
     }
 
     /// Publishes the outcome into the bound record and keeps its point for the finish.
-    fn publish(&mut self, outcome: &FocusOutcome, prepared: &Prepared, boundary: &mut impl PipelineBoundary) {
+    fn publish<M: StateMemory>(&mut self, outcome: &FocusOutcome, prepared: &Prepared, state: &mut ShotState<M>, boundary: &mut impl PipelineBoundary) {
         self.frame_point = outcome.point;
         let mut adjusted = outcome.point;
         let code = if outcome.status <= LAST_FOUND_STATUS {
@@ -837,6 +837,8 @@ impl PipelineWork {
         } else {
             NO_POSITION_CODE
         };
+        let notifications = prepared.parameters.map(|parameters| parameters.mask.notifications());
+        state.set_lens_notice(outcome.valid && notifications.is_some_and(|notifications| notifications.frame_released || notifications.relative_lens_done));
         let Some(record) = self.bound else { return };
         let mut history = boundary.outcome_history(record);
         layout::record_outcome(&mut history, outcome);

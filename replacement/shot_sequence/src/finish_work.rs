@@ -157,6 +157,8 @@ pub trait FinishCalculation<P: ?Sized> {
     fn set_saved_selection_mode(&mut self, mode: u32);
     /// The lens reference the preparation bound.
     fn lens_reference(&mut self) -> LensReference;
+    /// Whether the half-press reply notifies the lens.
+    fn set_lens_notice(&mut self, notice: bool);
     /// The finish's record load, shared with the lens return.
     fn load_finish_record(&mut self, parameters: &HalfPressParameters, ports: &mut P);
 }
@@ -273,6 +275,8 @@ impl FinishWork {
     }
 
     fn select_areas<P: FinishPorts>(&mut self, prepared: &Prepared, shot: &mut impl FinishCalculation<P>, boundary: &mut P) {
+        // 0xf188e0 also requires the word 0xf21a3c reads to be zero; its only store (0xf20680) writes zero.
+        shot.set_lens_notice(prepared.parameters.is_some_and(|parameters| parameters.mask.notifications().relative_lens_done));
         let (Some(record), Some(parameters)) = (self.record, prepared.parameters) else { return };
         let new_calculation = parameters.mask.0 & NEW_CALCULATION != 0;
         let calculation = shot.calculation_record();

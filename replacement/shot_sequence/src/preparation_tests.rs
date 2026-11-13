@@ -70,6 +70,7 @@ fn a_half_press_snapshots_the_lens_at_its_reference() {
     assert_eq!(fake.snapshot.held, current);
     assert_eq!(fake.context.lens_reference, REFERENCE);
     assert_eq!(fake.context.track, Some(41));
+    assert_eq!(fake.context.lens_notice, Some(false));
     assert_eq!(prepared.pipeline_gate, 2);
     assert!(fake.has(&Event::Hold(true)));
     assert_eq!(fake.context.plans, [(Some(ClientRef(0x100)), false)]);

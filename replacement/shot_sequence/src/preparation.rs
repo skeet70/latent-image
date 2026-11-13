@@ -67,6 +67,8 @@ pub trait LensReadings {
     fn begin_lens_track(&mut self, reading: u32);
     /// `changed` is the lens change latch taken with the reading.
     fn record_lens(&mut self, stage: LensStage, reading: u32, changed: bool);
+    /// Whether the half-press reply notifies the lens.
+    fn set_lens_notice(&mut self, notice: bool);
 }
 
 /// The shot context words a preparation writes; `P` is what building the selection list calls
@@ -137,6 +139,7 @@ impl Prepared {
             boundary.hold(Hold::Preparation, true);
             boundary.select_first_mode();
             shot.bind_lens_reference(parameters.map_or(live_reference, |parameters| parameters.lens_reference));
+            shot.set_lens_notice(false);
             boundary.take_change();
             let reading = boundary.read(LensReading::Reference);
             shot.begin_lens_track(reading);

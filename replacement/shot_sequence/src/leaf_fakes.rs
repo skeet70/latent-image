@@ -97,11 +97,13 @@ pub struct Context {
     pub readings: Vec<(LensStage, u32, bool)>,
     pub plans: Vec<(Option<ClientRef>, bool)>,
     pub carried: Vec<Option<u32>>,
+    pub lens_notice: Option<bool>,
 }
 
 impl LensReadings for Context {
     fn begin_lens_track(&mut self, reading: u32) { self.track = Some(reading); }
     fn record_lens(&mut self, stage: LensStage, reading: u32, changed: bool) { self.readings.push((stage, reading, changed)); }
+    fn set_lens_notice(&mut self, notice: bool) { self.lens_notice = Some(notice); }
 }
 
 impl<P> PreparationShot<P> for Context {

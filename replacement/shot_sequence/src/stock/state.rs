@@ -122,6 +122,9 @@ pub const fn marker(pass: ResultPass, kind: Option<TrackedKind>, index: AreaInde
 pub const SHOT_CONTEXT: StateAddress = at(0x169_e580);
 /// The lens reference the preparation binds (0xf160ac stores, 0xf160d0 reads).
 pub const REQUEST_WORD: StateAddress = SHOT_CONTEXT.offset(0x1cd0);
+/// Nonzero has the half-press reply path 0xefa3f8 send lensdc 0x4220 with its third word 1 (read
+/// at 0xefa588 through 0xf16184).
+pub const LENS_NOTICE: StateAddress = SHOT_CONTEXT.offset(0x1ce0);
 /// The lens readings at preparation, pipeline and conclusion (0xf161f0, 0xf1626c, 0xf162a8): 0xff
 /// until taken.
 pub const fn lens_reading(word: ShotWord) -> StateAddress { SHOT_CONTEXT.offset(crate::capture_stock::shot_word_offset(word) as usize) }
