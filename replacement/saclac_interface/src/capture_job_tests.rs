@@ -37,9 +37,11 @@ fn an_output_is_the_88_bytes_after_the_status() {
     payload[4 + 0x3c] = 3;
     payload[4 + 0x3e] = 2;
     put(&mut payload, 4 + 0x44, &0x1234u16.to_le_bytes());
+    put(&mut payload, 4 + 0x54, &0x89ab_cdefu32.to_le_bytes());
     let output = stock::capture_output(&payload).unwrap();
     assert_eq!((output.profile(), output.outputs(), output.delivered()), (0x55, 3, 2));
     assert_eq!(output.selection().pair, 0x1234);
+    assert_eq!(output.trailing_word(), 0x89ab_cdef);
     assert_eq!(stock::capture_output(&payload[..91]), None);
 }
 
