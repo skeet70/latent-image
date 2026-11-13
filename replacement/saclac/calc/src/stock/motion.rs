@@ -234,3 +234,85 @@ pub const REACH_SHARE: Property = Property(0x925e);
 
 /// The capture profile the motion layer's exposures are timed in.
 pub const SEARCH_PROFILE: u32 = 0x22;
+
+/// The capture profiles of the program's four capture modes (0xfa653c).
+pub const MODE_PROFILES: [u32; 4] = [0x22, 0x21, 0x1f, 0x1e];
+
+/// 1 replaces the exposure program with the configured fixed exposure (0xf971bc).
+pub const FIXED_EXPOSURE: Property = Property(0x9602);
+pub const FIXED_STEP: Property = Property(0x9603);
+/// Two bytes, signed (0xf971d8).
+pub const FIXED_LEVEL: Property = Property(0x9604);
+/// Indexes the level steps 1 to 9 and 0; larger values take step 2 (0xf971e8, 0xfa6408).
+pub const FIXED_GAIN_STEP: Property = Property(0x9606);
+
+/// 1, 2 and 3 force the first, second and third program (0xf97354).
+pub const PROGRAM: Property = Property(0x9000);
+pub const PROGRAM_LEVEL_GATE: Property = Property(0x9002);
+pub const PROGRAM_LEVEL_LIMIT: Property = Property(0x9003);
+
+/// Which program steps add a configured first and second range (0xfa6504).
+pub const PROGRAM_INCREASES: [[bool; 18]; 3] = {
+    const O: bool = false;
+    const I: bool = true;
+    [
+        [O, O, I, O, I, O, I, O, I, O, O, O, I, O, I, O, O, O],
+        [O, O, I, O, I, O, I, O, I, O, O, O, I, O, I, O, O, O],
+        [O, O, I, O, I, O, I, O, I, O, I, O, I, O, I, O, O, O],
+    ]
+};
+
+/// Which program steps take their own floor and gain rather than the next step's (0xfa654c).
+pub const PROGRAM_REFINES: [[bool; 18]; 3] = {
+    const O: bool = false;
+    const I: bool = true;
+    [
+        [I, I, I, I, I, I, I, I, I, I, O, O, I, I, I, I, I, I],
+        [I, I, I, I, I, I, I, I, I, I, O, O, I, I, I, I, I, I],
+        [I; 18],
+    ]
+};
+
+/// Each program step's gain before the exposure times choose one (0xfa642c).
+pub const PROGRAM_GAINS: [[u32; 18]; 3] = [
+    [0; 18],
+    [4, 4, 4, 4, 6, 6, 8, 8, 10, 10, 12, 12, 12, 12, 12, 12, 12, 12],
+    [4, 4, 4, 4, 5, 5, 7, 7, 9, 9, 11, 11, 13, 13, 13, 13, 13, 13],
+];
+
+/// The configured ranges of a program, taken from its last value down as the steps from the
+/// top add them (0xfa63fc, 0xfa6584).
+pub const fn first_range(program: usize, used: u32) -> Property { Property([0x901e, 0x9024, 0x902b][program] - used) }
+pub const fn second_range(program: usize, used: u32) -> Property { Property([0x9032, 0x9038, 0x903f][program] - used) }
+
+/// A program step's capture mode and signed level offset (0xf9771c..0xf9774c).
+pub const fn program_mode(program: usize, step: usize) -> Property { Property([0x919e, 0x91b0, 0x91c2][program] + step as u32) }
+pub const fn program_offset(program: usize, step: usize) -> Property { Property([0x91d5, 0x91e7, 0x91f9][program] + step as u32) }
+
+/// A program step's configured floor; step 0's is the floor every step keeps.
+pub const fn level_floor(step: usize) -> Property { Property(0x9005 + step as u32) }
+/// The last program step's ceiling.
+pub const LEVEL_CEILING: Property = Property(0x9017);
+/// The level of a profile's longest exposure, the gains' lower bound (0xf97aac).
+pub const LONGEST_LEVEL: i16 = 0x69a;
+
+/// 1 counts frames by the exposure's excess over the level, else by the change (0xf98168).
+pub const FRAMES_BY_EXCESS: Property = Property(0x96e9);
+pub const FRAMES_FACTOR: Property = Property(0x9265);
+pub const FRAMES_LIMIT: Property = Property(0x9264);
+
+/// How the previous focus confirmation is reused, 1 to 3 (0xf9c75c).
+pub const PREVIOUS_FOCUS_MODE: Property = Property(0x94b8);
+/// The lowest record level at which a confirmation is admitted, in tenths (0xf9c828).
+pub const PREVIOUS_FOCUS_LEVEL: Property = Property(0x8808);
+/// The record classes that admit a confirmation, for channel 0 and for the others (0xf9c850).
+pub const PREVIOUS_FOCUS_CLASSES: Property = Property(0x94b9);
+pub const PREVIOUS_FOCUS_CHANNEL_CLASSES: Property = Property(0x94b7);
+
+/// The capture mode the selection lists' areas are laid out in (0xf991d4).
+pub const SELECTION_MODE: u32 = 0x1e;
+
+/// 1 starts every run from a result it already has (0xf96298).
+pub const NO_FULL_SEARCH: Property = Property(0x3e_0009);
+/// The scene kind that never searches in full (0xfa45d8).
+pub const SCENE_WITHOUT_SEARCH: u8 = 24;

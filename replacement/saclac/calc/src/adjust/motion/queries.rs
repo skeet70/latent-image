@@ -1,5 +1,6 @@
 //! The motion layer's answers to the measurement pipeline's queries between a run's steps.
 
+use xm1_saclac_interface::calc::SharedAddress;
 use xm1_saclac_interface::RecordHandle;
 use xm1_saclac_profile_records::stock::record::group_00;
 use xm1_saclac_profile_records::stock::shared::group_29;
@@ -55,6 +56,19 @@ pub fn step_offset(ports: &mut (impl LensTables + Properties), lens: u32, step: 
     round_tenths(offset.wrapping_add(reduction)) as i16
 }
 
+/// Whether a measured area's level in `results` has reached the configured peak level; the
+/// threshold is recorded in the results when they hold a measurement (0xf9620c).
+pub(crate) fn level_peaked(ports: &mut (impl Properties + StockMemory), results: SharedAddress) -> bool {
+    if ports.read_u32(trace::results_present(results)) == 0 {
+        return false;
+    }
+    let threshold = u32::from(settings::word(ports, PEAK_THRESHOLD));
+    ports.write_u32(trace::results_threshold(results), threshold);
+    (0..RESULT_AREAS).any(|area| {
+        ports.read_u32(trace::result_measured(results, area)) == 1 && trace::result_levels(results, area).into_iter().any(|level| threshold <= ports.read_u32(level))
+    })
+}
+
 impl MotionState {
     /// Whether the pipeline set its flag in the dump frame (0xf9d3dc).
     pub fn pipeline_flag(&self, memory: &mut impl StockMemory) -> bool { memory.read_u32(trace::pipeline_flag(self.section)) != 0 }
@@ -66,19 +80,8 @@ impl MotionState {
     }
 
     /// Whether a measured area's level has reached the configured peak level, when the run
-    /// checks for it; the threshold is recorded in the results (0xf9ed44, 0xf9620c).
+    /// checks for it (0xf9ed44).
     pub fn peak_reached(&self, ports: &mut (impl Properties + StockMemory)) -> bool {
-        if ports.property(PEAK_CHECK) == 0 || !self.drive.checks_peak {
-            return false;
-        }
-        if ports.read_u32(trace::results_present(self.results)) == 0 {
-            return false;
-        }
-        let threshold = u32::from(settings::word(ports, PEAK_THRESHOLD));
-        ports.write_u32(trace::results_threshold(self.results), threshold);
-        (0..RESULT_AREAS).any(|area| {
-            ports.read_u32(trace::result_measured(self.results, area)) == 1
-                && trace::result_levels(self.results, area).into_iter().any(|level| threshold <= ports.read_u32(level))
-        })
+        ports.property(PEAK_CHECK) != 0 && self.drive.checks_peak && level_peaked(ports, self.results)
     }
 }
