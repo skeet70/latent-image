@@ -4,6 +4,7 @@
 pub mod configuration;
 pub mod focus_profile;
 pub mod focus_reuse;
+pub mod motion;
 pub mod scene_policy;
 pub mod scene_settings;
 pub mod shot_trace;
