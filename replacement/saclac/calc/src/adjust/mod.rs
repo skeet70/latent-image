@@ -3,6 +3,7 @@
 
 pub mod focus_profile;
 pub mod focus_reuse;
+pub mod peak;
 pub mod scene_policy;
 pub mod scene_settings;
 pub mod shot_trace;
@@ -11,6 +12,8 @@ pub mod shot_trace;
 mod focus_profile_tests;
 #[cfg(test)]
 mod focus_reuse_tests;
+#[cfg(test)]
+mod peak_tests;
 #[cfg(test)]
 mod scene_policy_tests;
 #[cfg(test)]
