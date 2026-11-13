@@ -5165,6 +5165,54 @@
    ]
   },
   {
+   "name": "wake-request-44",
+   "time_driven": true,
+   "match": {
+    "kind": "peer-request",
+    "queue": 44,
+    "operation": 15372
+   },
+   "sources": [
+    "stock cold-boot receipt: 0x3c0c to queue 44 follows each wake's 0x3b8d arrival, 78 times; shoot-without-lens, capture and fn carry one more on the owned side and the shorter sequence is a prefix of the longer"
+   ]
+  },
+  {
+   "name": "wake-request-45-3d00",
+   "time_driven": true,
+   "match": {
+    "kind": "peer-request",
+    "queue": 45,
+    "operation": 15616
+   },
+   "sources": [
+    "stock cold-boot receipt: 0x3d00 to queue 45 follows each wake's 0x3b4b arrival, 78 times; shoot-without-lens, capture and fn carry one more on the owned side"
+   ]
+  },
+  {
+   "name": "wake-request-45-3d01",
+   "time_driven": true,
+   "match": {
+    "kind": "peer-request",
+    "queue": 45,
+    "operation": 15617
+   },
+   "sources": [
+    "stock cold-boot receipt: 0x3d01 to queue 45 recurs every fourth wake, 19 times against 78 of 0x3d00"
+   ]
+  },
+  {
+   "name": "wake-request-45-3d02",
+   "time_driven": true,
+   "match": {
+    "kind": "peer-request",
+    "queue": 45,
+    "operation": 15618
+   },
+   "sources": [
+    "stock cold-boot receipt: 0x3d02 to queue 45 follows each wake's 0x3b87 arrival, 78 times"
+   ]
+  },
+  {
    "name": "peer-3",
    "match": {
     "kind": "peer-request",
@@ -5310,7 +5358,7 @@
    "first": {
     "kind": "peer-request",
     "queue": 45,
-    "operation": 15361
+    "operation": 15617
    },
    "then": {
     "kind": "queue-in",
@@ -5325,7 +5373,7 @@
    "first": {
     "kind": "peer-request",
     "queue": 45,
-    "operation": 15362
+    "operation": 15618
    },
    "then": {
     "kind": "queue-in",
