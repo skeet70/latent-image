@@ -7,6 +7,7 @@ use xm1_saclac_interface::RecordHandle;
 
 use crate::policy::ExposureMode;
 use crate::selection::SelectionBank;
+use crate::stock::record::UNBOUND;
 
 pub const SUBJECTS: usize = 10;
 pub const SUBJECT_DETAIL_BYTES: usize = 100;
@@ -54,6 +55,13 @@ pub struct Binding {
     pub summary: [u32; SUMMARY_WORDS],
     /// The half press's refinement pass: profile policies that a suppression flag disables read 0.
     pub refinement_pass: bool,
+}
+
+impl Binding {
+    /// The handle profile reads use; an unbound context reads the selected record.
+    pub fn record_handle(&self) -> RecordHandle { self.record.unwrap_or(UNBOUND) }
+
+    pub fn snapshot_handle(&self) -> RecordHandle { self.snapshot_record.unwrap_or(UNBOUND) }
 }
 
 /// The levels the evaluation starts from.

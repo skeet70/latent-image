@@ -16,8 +16,8 @@ pub const fn end_tag(frame: SharedAddress) -> SharedAddress { SharedAddress(fram
 
 const fn at(frame: SharedAddress, offset: u32) -> SharedAddress { SharedAddress(frame.0 + SECTION + offset) }
 
-/// The words 0xf6acfc clears at each preparation.
-pub const fn cleared(frame: SharedAddress) -> (SharedAddress, usize) { (at(frame, 0xc), 0x1468) }
+/// The tables, levels and weights 0xf6acfc clears at each preparation (section +0x44..+0x14ac).
+pub const fn cleared(frame: SharedAddress) -> (SharedAddress, usize) { (at(frame, 0x44), 0x1468) }
 
 /// The export word 0xf61550 stores.
 pub const fn export(frame: SharedAddress) -> SharedAddress { SharedAddress(frame.0 + 0xfd28) }

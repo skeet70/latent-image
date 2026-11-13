@@ -58,6 +58,8 @@ pub trait StockMemory {
     fn write_u8(&mut self, at: SharedAddress, value: u8);
     fn write_u16(&mut self, at: SharedAddress, value: u16);
     fn write_u32(&mut self, at: SharedAddress, value: u32);
+    /// Sets `bytes` bytes from `at` to `value`, as 0x742154 does.
+    fn fill(&mut self, at: SharedAddress, bytes: usize, value: u8);
 }
 
 /// The profile records as the library reads them.

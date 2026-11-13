@@ -1,3 +1,5 @@
+use xm1_saclac_profile_records::MeasurementSelection;
+
 use crate::adjust::scene_policy::*;
 use crate::exposure::fakes::World;
 use crate::stock::property;
@@ -40,9 +42,9 @@ fn scenes_differ_in_what_they_admit() {
 #[test]
 fn selection_and_arming_replace_the_scene_row() {
     let closed = inputs(6, 1);
-    assert_eq!(both(TreatmentInputs { measurement_selection: 2, ..closed }), (true, true));
+    assert_eq!(both(TreatmentInputs { measurement_selection: MeasurementSelection::Other(2), ..closed }), (true, true));
     assert_eq!(both(TreatmentInputs { callback_armed: 1, class: 0, ..closed }), (true, false));
-    assert_eq!(both(TreatmentInputs { measurement_selection: 1, callback_armed: 1, class: 0, ..closed }), (false, false));
+    assert_eq!(both(TreatmentInputs { measurement_selection: MeasurementSelection::Record, callback_armed: 1, class: 0, ..closed }), (false, false));
 }
 
 #[test]
@@ -80,7 +82,7 @@ fn each_scene_reads_its_own_mask_bit() {
 
 #[test]
 fn a_selected_or_armed_record_reads_its_own_bit() {
-    let selected = SceneMaskInputs { measurement_selection: 1, callback_armed: 1, ..mask_inputs(0) };
+    let selected = SceneMaskInputs { measurement_selection: MeasurementSelection::Record, callback_armed: 1, ..mask_inputs(0) };
     assert!(scene_enabled(&mut mask(1, 0x40), selected));
     assert!(!scene_enabled(&mut mask(0, 1), selected));
     let armed = SceneMaskInputs { callback_armed: 1, ..mask_inputs(0) };

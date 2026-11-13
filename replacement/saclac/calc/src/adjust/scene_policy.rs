@@ -1,6 +1,8 @@
 //! Which subject treatments a scene admits, and whether the scene is enabled in the scene mask
 //! settings.
 
+use xm1_saclac_profile_records::MeasurementSelection;
+
 use crate::exposure::ports::Properties;
 use crate::stock::property;
 
@@ -17,7 +19,7 @@ pub struct TreatmentInputs {
     /// Neither treatment applies without subjects.
     pub subjects: u32,
     /// A record selected for measurement uses the fixed selected row in place of its scene's.
-    pub measurement_selection: u32,
+    pub measurement_selection: MeasurementSelection,
     pub scene: u32,
     pub class: u32,
     /// An armed record uses the fixed armed row in place of its scene's.
@@ -76,7 +78,7 @@ impl TreatmentInputs {
     }
 
     fn row(&self) -> Row {
-        if self.measurement_selection != 0 {
+        if self.measurement_selection != MeasurementSelection::Unselected {
             Row::Standard
         } else if self.callback_armed != 0 {
             Row::Armed
@@ -120,7 +122,7 @@ impl SceneFlag {
 /// What decides whether a record's scene is enabled.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SceneMaskInputs {
-    pub measurement_selection: u32,
+    pub measurement_selection: MeasurementSelection,
     pub scene: u32,
     pub callback_armed: u32,
     /// A treated exposure also needs both treatment settings on and a subject.
@@ -134,7 +136,7 @@ pub fn scene_enabled(properties: &mut impl Properties, inputs: SceneMaskInputs) 
     {
         return false;
     }
-    let SceneFlag(bit) = if inputs.measurement_selection == 1 {
+    let SceneFlag(bit) = if inputs.measurement_selection == MeasurementSelection::Record {
         SceneFlag::SELECTED
     } else if inputs.callback_armed == 1 {
         SceneFlag::ARMED

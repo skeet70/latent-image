@@ -11,6 +11,28 @@ pub const SUBJECT_LIST_BYTES: usize = 4 + SUBJECTS * (4 + SUBJECT_DETAIL_BYTES);
 /// The handle word an unbound context passes: accessors read the selected record for it.
 pub const UNBOUND: RecordHandle = xm1_saclac_interface::stock::record_handle_from_a2(0);
 
+const fn base(address: Option<SharedAddress>) -> u32 {
+    match address {
+        Some(address) => address.0,
+        None => 0,
+    }
+}
+
+/// Point `point` of the four 256-halfword level tables a focus result names (0xf6ae38, 0xf6b354).
+/// An absent table is read at address 0, as stock reads it.
+pub const fn level_table(tables: Option<SharedAddress>, table: usize, point: usize) -> SharedAddress {
+    SharedAddress(base(tables) + 0x200 * table as u32 + 2 * point as u32)
+}
+
+/// Point `point` of the four 10-halfword subject level rows a focus result names (0xf6aefc,
+/// 0xf6b3cc).
+pub const fn subject_level(levels: Option<SharedAddress>, row: usize, point: usize) -> SharedAddress {
+    SharedAddress(base(levels) + 20 * row as u32 + 2 * point as u32)
+}
+
+/// The signed class byte of level point `point` (0xf6aeb0, 0xf6b470).
+pub const fn level_class(classes: Option<SharedAddress>, point: usize) -> SharedAddress { SharedAddress(base(classes) + point as u32) }
+
 fn word(bytes: &[u8], at: usize) -> u32 { u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]) }
 
 fn half(bytes: &[u8], at: usize) -> u16 { u16::from_le_bytes([bytes[at], bytes[at + 1]]) }

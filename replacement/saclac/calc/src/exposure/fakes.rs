@@ -87,6 +87,8 @@ pub struct World {
     pub memory: BTreeMap<u32, u8>,
     /// Every store, in order: address, width in bytes, value.
     pub stores: Vec<(u32, u8, u32)>,
+    /// Every fill, in order: address, bytes, value.
+    pub fills: Vec<(u32, usize, u8)>,
 }
 
 impl Default for World {
@@ -107,6 +109,7 @@ impl Default for World {
             configured_profiles: BTreeMap::new(),
             memory: BTreeMap::new(),
             stores: Vec::new(),
+            fills: Vec::new(),
         }
     }
 }
@@ -129,6 +132,8 @@ impl World {
         self.property(id, u32::from(value as u8));
         self.property(id.high(), u32::from(value >> 8));
     }
+
+    pub fn put_u8(&mut self, at: SharedAddress, value: u8) { self.memory.insert(at.0, value); }
 
     pub fn put_u16(&mut self, at: SharedAddress, value: u16) {
         for (index, byte) in value.to_le_bytes().into_iter().enumerate() {
@@ -190,6 +195,13 @@ impl StockMemory for World {
     fn write_u32(&mut self, at: SharedAddress, value: u32) {
         self.stores.push((at.0, 4, value));
         self.put(at, &value.to_le_bytes());
+    }
+
+    fn fill(&mut self, at: SharedAddress, bytes: usize, value: u8) {
+        self.fills.push((at.0, bytes, value));
+        for offset in 0..bytes as u32 {
+            self.memory.insert(at.0 + offset, value);
+        }
     }
 }
 
