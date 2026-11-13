@@ -1,4 +1,4 @@
-load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_host_rlib", "xm1_rust_host_test", "xm1_rust_rlib")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -9,10 +9,16 @@ xm1_rust_rlib(
     data = ["src/stock.rs"],
 )
 
-genrule(
+xm1_rust_host_rlib(
+    name = "host",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac_interface",
+    data = ["src/stock.rs"],
+)
+
+xm1_rust_host_test(
     name = "host-tests",
-    srcs = ["src/lib.rs", "src/stock.rs", "src/tests.rs"],
-    tools = ["@lab_xm1_rust//:bin/rustc"],
-    outs = ["host-tests.passed"],
-    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test $(location src/lib.rs) -o $(@D)/host-tests && $(@D)/host-tests && touch $@",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac_interface",
+    data = ["src/stock.rs", "src/tests.rs"],
 )
