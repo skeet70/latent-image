@@ -131,7 +131,7 @@ applyProjection declaration receipt = do
   pure receipt { events = concatMap (normalize . observedEvent) rows, timedEvents = rows }
   where
     projectObserved (Observed tick event) = Observed tick <$> case event of
-      QueueIn operation sender bytes -> QueueIn operation sender <$> payloadFields Payload.Incoming 43 operation bytes
+      QueueIn operation sender bytes -> QueueIn operation sender <$> payloadFields Payload.Incoming sender operation bytes
       PeerRequest queue operation bytes -> PeerRequest queue operation <$> payloadFields Payload.Outgoing queue operation bytes
       _ -> pure event
     payloadFields direction queue operation = either H.failH pure . Payload.projectPayload declaration direction (Payload.QueueId queue) (Payload.Operation operation)

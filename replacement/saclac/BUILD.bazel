@@ -272,6 +272,8 @@ haskell_test(
     name = "payload-projection-tests",
     size = "small",
     srcs = ["PayloadProjectionTests.hs"],
+    args = ["$(location :payload-fields.json)"],
+    data = ["payload-fields.json"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [":payload-projection", "//host:aeson", "//host:base", "//host:bytestring"],
 )

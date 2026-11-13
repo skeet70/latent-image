@@ -5,6 +5,8 @@ module Main (main) where
 import Control.Monad (unless)
 import Data.Aeson (Value, encode, object, (.=))
 import qualified Data.ByteString.Lazy as L
+import qualified Data.ByteString as B
+import System.Environment (getArgs)
 import Replacement.Saclac.PayloadProjection
 
 main :: IO ()
@@ -22,6 +24,17 @@ main = do
   check (isLeft (parseDeclaration (L.toStrict (encode (policy [field 0 6] [])))))
   roundTrip <- either fail pure (parseDeclaration (L.toStrict (encode (declarationJson declaration))))
   check (projectPayload roundTrip Outgoing (QueueId 47) (Operation 16166) [1,2,3,4,5] == Right [1,2,5])
+  arguments <- getArgs
+  source <- case arguments of
+    [path] -> B.readFile path
+    _ -> fail "expected payload field declaration path"
+  recovered <- either fail pure (parseDeclaration source)
+  let image bytes = projectPayload recovered Outgoing (QueueId 47) (Operation 0x3f26) bytes
+      zeros = replicate 232 0
+      changed offset = take offset zeros ++ 1 : drop (offset + 1) zeros
+  check (image zeros == image (changed 94))
+  check (image zeros /= image (changed 96))
+  check (isLeft (image (replicate 231 0)))
   putStrLn "payload field projection behavioral tests passed"
   where parse = either fail pure . parseDeclaration . L.toStrict . encode
 
