@@ -4,6 +4,7 @@
 pub mod drive;
 pub mod ports;
 pub mod queries;
+pub mod readings;
 pub mod sampling;
 pub mod state;
 
