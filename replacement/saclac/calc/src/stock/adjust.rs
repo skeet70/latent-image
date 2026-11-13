@@ -121,6 +121,31 @@ pub const fn configured_class(found: u32, kind: u32) -> Property {
     Property(base + kind)
 }
 
+/// The search's minimum step (0xfa7620).
+pub const MINIMUM_STEP: Property = Property(0x8806);
+/// The drive target's factor, base channel and two-byte duration (0xfa7cf8, 0xfa7d04, 0xfa7d48).
+pub const TARGET_FACTOR: Property = Property(0xa491);
+pub const TARGET_BASE_CHANNEL: Property = Property(0xa492);
+pub const TARGET_DURATION: Property = Property(0xa493);
+/// In tens, added to the search's thresholds (0xfa9338, 0xfa939c).
+pub const THRESHOLD_MARGIN: Property = Property(0x8823);
+/// The fall that passes the peak outright (0xfa9390), and in mode 1 (0xfa9384).
+pub const PEAK_LENGTH: Property = Property(0x8831);
+pub const PEAK_LENGTH_MODE_ONE: Property = Property(0x8833);
+/// The fall from the peak, in samples and in hundreds (0xfa9498, 0xfa94a4).
+pub const FALL_LENGTH: Property = Property(0x8832);
+pub const FALL_DEPTH: Property = Property(0x8830);
+
+/// The resource step the bias interpolation spans upward (0xfaa80c) and downward (0xfaa890).
+pub const fn ascending_step(resource: u32) -> Property { Property(0x88f2 + resource) }
+
+pub const fn descending_step(resource: u32) -> Property { Property(0x8919 + resource) }
+
+/// Bit 0 admits scenes to the round's adjustment (0xfab26c).
+pub const SCENE_ADMISSION: Property = Property(0xa7e4);
+/// The extent thresholds by mapped-value band (0xfab454..0xfab47c).
+pub const EXTENT_THRESHOLDS: [Property; 4] = [Property(0x8ba1), Property(0x8ba2), Property(0x8ba3), Property(0x8ba4)];
+
 fn word(bytes: &[u8], at: usize) -> u32 { u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]) }
 
 fn half(bytes: &[u8], at: usize) -> u16 { u16::from_le_bytes([bytes[at], bytes[at + 1]]) }
