@@ -45,6 +45,7 @@ enum Call {
     AreaQuery(u32, AreaQuery),
     Point(u32, u32, StatisticsDestinations),
     Collect(u32, u32, Location),
+    ConfigurationReleased(u32),
 }
 
 /// Calls to the ports `Call` does not record.
@@ -121,7 +122,7 @@ impl Pipeline for Fake {
     fn release(&mut self, channel: PipelineChannel, stages: Stages) { self.calls.push(Call::Release(channel.0, stages.0)) }
     fn settle(&mut self) { self.calls.push(Call::Settle) }
     fn release_capture_hardware(&mut self) { self.calls.push(Call::CaptureReleased) }
-    fn release_configuration_hardware(&mut self) {}
+    fn release_configuration_hardware(&mut self, holder: ConfigurationHolder) { self.calls.push(Call::ConfigurationReleased(holder.0)) }
     fn enable(&mut self, _: PipelineChannel, _: Stages, _: Location) -> bool { true }
     fn disable(&mut self, channel: PipelineChannel, stages: Stages) -> bool {
         self.calls.push(Call::Disable(channel.0, stages.0));
@@ -1156,4 +1157,19 @@ fn a_destination_record_puts_each_stage_where_the_pipeline_reads_it() {
     let all: Vec<(usize, &[u32])> = CHANNEL_REGIONS.into_iter().chain([INDEXED]).collect();
     let record = crate::stock::statistics::destination_record(&destinations(0, &all));
     assert_eq!(record, [0, 0, 3, 0, 11, 12, 13, 21, 29, 7, 2, 37].map(|region| region * 0x1000));
+}
+
+#[test]
+fn dropping_the_scan_claim_releases_the_held_configuration_by_its_first_word() {
+    let mut layer = open(0, 0);
+    layer.start().unwrap();
+    layer.memory.write_u32(field::state(Operation::Indexed), OperationState::RUNNING.0);
+    layer.memory.write_u32(field::state(Operation::Channel), OperationState::RUNNING.0);
+    layer.memory.write_u32(requests::subscription(Subscription::ScanConfiguration), 1);
+    let (at, bit) = changes::SCAN_CLAIM;
+    layer.memory.write_u8(at, bit);
+    layer.memory.write_u32(policy::CONFIGURATION, 0x77);
+    assert_eq!(layer.stop(), Ok(()));
+    assert!(layer.ports().calls.contains(&Call::ConfigurationReleased(0x77)));
+    assert_eq!(layer.memory().read_u32(policy::CONFIGURATION), 0);
 }

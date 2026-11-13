@@ -35,6 +35,11 @@ pub struct PipelineChannel(pub u32);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Stages(pub u32);
 
+/// The first word of the configuration the controller handed the pipeline, which names its
+/// hold; zero while none is held.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConfigurationHolder(pub u32);
+
 pub trait Pipeline {
     /// Stops `stages` on `channel`; false when the pipeline refuses (0xd9f504).
     fn stop(&mut self, channel: PipelineChannel, stages: Stages) -> bool;
@@ -44,8 +49,8 @@ pub trait Pipeline {
     fn settle(&mut self);
     /// 0xd5d27c.
     fn release_capture_hardware(&mut self);
-    /// Releases the configuration the controller handed the pipeline (0xd5d268).
-    fn release_configuration_hardware(&mut self);
+    /// Releases the configuration hold `holder` names (0xd5d268).
+    fn release_configuration_hardware(&mut self, holder: ConfigurationHolder);
     /// Enables `stages` with the payloads at `payloads`; false when refused (0xd9f7c0).
     fn enable(&mut self, channel: PipelineChannel, stages: Stages, payloads: Location) -> bool;
     /// 0xd9f7d8.
