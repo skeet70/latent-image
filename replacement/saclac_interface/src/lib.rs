@@ -4,6 +4,7 @@
 pub mod calc;
 pub mod calculation;
 pub mod exposure;
+pub mod lens;
 pub mod round;
 pub mod statistics;
 pub mod stock;
