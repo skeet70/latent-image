@@ -7,6 +7,7 @@ SOURCES = [
     "src/calculation.rs",
     "src/exposure.rs",
     "src/round.rs",
+    "src/statistics.rs",
     "src/stock.rs",
     "src/stock/calculation_result.rs",
     "src/stock/exposure.rs",
@@ -35,6 +36,7 @@ xm1_rust_host_test(
         "src/calc_tests.rs",
         "src/calculation_tests.rs",
         "src/exposure_tests.rs",
+        "src/statistics_tests.rs",
         "src/tests.rs",
     ],
 )

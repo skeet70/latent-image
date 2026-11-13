@@ -1,11 +1,12 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+pub mod calc;
 pub mod calculation;
 pub mod exposure;
-pub mod stock;
 pub mod round;
-pub mod calc;
+pub mod statistics;
+pub mod stock;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClientCallback(pub(crate) u32);
@@ -468,8 +469,10 @@ pub const fn lens_effect(operation: PeerOperation) -> LensEffect {
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod calc_tests;
+#[cfg(test)]
 mod calculation_tests;
 #[cfg(test)]
 mod exposure_tests;
 #[cfg(test)]
-mod calc_tests;
+mod statistics_tests;
