@@ -27,7 +27,7 @@ fn words(message: &mut Encoded, offset: usize, words: &[u32]) {
 }
 
 fn setup(message: &mut Encoded, offset: usize, setup: &Setup) {
-    let tail = match setup.tail { SetupTail::Default => SETUP_TAIL, SetupTail::Adjustment(word) => word };
+    let tail = match setup.tail { SetupTail::Default => SETUP_TAIL, SetupTail::Adjustment(word) => word, SetupTail::S1 => 1 };
     words(message, offset, &[setup.descriptor, setup.pair[0], setup.pair[1], tail]);
 }
 
@@ -65,7 +65,7 @@ fn capture(message: &mut Encoded, offset: usize, capture: &Capture) {
     message.halfword(offset + 0x34, capture.policy);
 }
 
-fn configuration(length: usize, configuration: &Configuration) -> Encoded {
+fn blocks(length: usize, configuration: &Configuration) -> Encoded {
     let mut message = Encoded::new(length);
     setup(&mut message, SETUP, &configuration.setup);
     format(&mut message, FORMAT, &configuration.format);
@@ -73,35 +73,52 @@ fn configuration(length: usize, configuration: &Configuration) -> Encoded {
     words(&mut message, OUTPUT, &configuration.output);
     exposure(&mut message, EXPOSURE, &configuration.exposure);
     capture(&mut message, CAPTURE, &configuration.capture);
-    let notice = &configuration.notice;
-    words(&mut message, NOTICE, &[notice.pending, notice.results.0, notice.callback.0]);
     message
 }
 
-/// Senders: 0x1039638 (0x4002, 208 bytes), 0x1039c7c (0x4006, 204), 0x1039e48 (0x4008, 248),
-/// 0x1039dd4 (0x4007), 0x103a1a8 (0x4009), 0x103a470 (0x4014), 0x103aff0 (0x4041), 0x103a00c
-/// (0x400a), 0x103a0f0 (0x400c), 0x103a594 (0x4017), 0x103a404 (0x4013), 0x103a2c0 (0x4011),
-/// 0x103a254 (0x4010), 0x103a32c (0x4012), 0x103a398 (0x402c), 0x103a694 (0x402a), 0x103a708
-/// (0x402e). Bytes they leave unwritten are zero.
+fn notice(message: &mut Encoded, offset: usize, notice: &Notice) {
+    words(message, offset, &[notice.pending, notice.results.0, notice.callback.0]);
+}
+
+fn configuration(length: usize, configuration: &Configuration) -> Encoded {
+    let mut message = blocks(length, configuration);
+    notice(&mut message, NOTICE, &configuration.notice);
+    message
+}
+
+/// Senders: 0x1039638 (0x4002, 208 bytes), 0x1039c7c (0x4006, 204), 0x10398b0 (the S1 start:
+/// 0x4004, 208, or 0x4006, 204, when the capture block's selection word is nonzero), 0x1039e48
+/// (0x4008, 248), 0x1039dd4 (0x4007), 0x103a1a8 (0x4009), 0x103a470 (0x4014), 0x103aff0
+/// (0x4041), 0x103a00c (0x400a), 0x103a0f0 (0x400c), 0x103a594 (0x4017), 0x103a404 (0x4013),
+/// 0x103a2c0 (0x4011), 0x103a254 (0x4010), 0x103a32c (0x4012), 0x103a398 (0x402c), 0x103a694
+/// (0x402a), 0x103a708 (0x402e). Bytes they leave unwritten are zero.
 pub fn statistics_payload(payload: &StatisticsPayload) -> (Op, Encoded) {
     use StatisticsPayload as P;
     match payload {
         P::Start { configuration: blocks, feature, callback } => {
             let mut message = configuration(208, blocks);
-            words(&mut message, CONFIGURATION_BYTES, &[callback.0, u32::from(blocks.flagged), *feature]);
+            words(&mut message, CONFIGURATION_BYTES, &[callback.0, blocks.flag, *feature]);
             (Op::Request02, message)
         }
         P::StartSelected { configuration: blocks, callback } => {
             let mut message = configuration(204, blocks);
-            words(&mut message, CONFIGURATION_BYTES, &[u32::from(blocks.flagged), callback.0]);
+            words(&mut message, CONFIGURATION_BYTES, &[blocks.flag, callback.0]);
             (Op::Request06, message)
+        }
+        // 0x1039998..0x10399d0: the flag word precedes the notice.
+        P::S1Start { configuration: start, header, callback } => {
+            let mut message = self::blocks(208, start);
+            message.word(NOTICE, start.flag);
+            notice(&mut message, NOTICE + 4, &start.notice);
+            words(&mut message, NOTICE + 16, &[*header, callback.0]);
+            (Op::Request04, message)
         }
         // 0x1039f3c..0x1039f68 stores each of the three words at 200 only when it is nonzero;
         // 0xf3bc14..0xf3bc28 passes 0, the profile view word and 0. Bytes 212..223 are never written.
         // The statistics task's 0x1034820 reads 184..199 and 224..247 only.
         P::Configure { configuration: blocks, view, command, callbacks } => {
             let mut message = configuration(248, blocks);
-            message.word(CONFIGURATION_BYTES, u32::from(blocks.flagged));
+            message.word(CONFIGURATION_BYTES, blocks.flag);
             message.word(204, *view);
             words(&mut message, 224, &[command.second, command.third, command.fourth]);
             words(&mut message, 236, &[callbacks[0].0, callbacks[1].0, callbacks[2].0]);

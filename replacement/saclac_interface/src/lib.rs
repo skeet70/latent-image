@@ -7,6 +7,7 @@ pub mod lens;
 pub mod round;
 pub mod calc;
 pub mod statistics;
+pub mod imaging;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClientCallback(pub(crate) u32);
@@ -474,3 +475,5 @@ mod exposure_tests;
 mod calc_tests;
 #[cfg(test)]
 mod statistics_tests;
+#[cfg(test)]
+mod imaging_tests;

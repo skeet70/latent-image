@@ -12,6 +12,8 @@ pub enum SetupTail {
     Default,
     /// Command11's fifth parameter word.
     Adjustment(u32),
+    /// The S1 measurement's start carries 1 (0xf2311c).
+    S1,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,8 +76,9 @@ pub struct Configuration {
     pub exposure: Exposure,
     pub capture: Capture,
     pub notice: Notice,
-    /// The profile has a pending selection or an active view.
-    pub flagged: bool,
+    /// The live view's starts carry 1 when the profile has a pending selection or an active
+    /// view; the S1 start carries the profile's view-active byte.
+    pub flag: u32,
 }
 
 /// Command09's parameter words the capture configuration forwards.
@@ -90,6 +93,9 @@ pub struct Command24 { pub second: u32, pub third: u32, pub fourth: u32, pub fif
 pub enum StatisticsPayload {
     Start { configuration: Configuration, feature: u32, callback: StockCallbackWord },
     StartSelected { configuration: Configuration, callback: StockCallbackWord },
+    /// The S1 measurement's start with nothing selected; with a selection the S1 start is
+    /// `StartSelected`.
+    S1Start { configuration: Configuration, header: u32, callback: StockCallbackWord },
     Configure { configuration: Configuration, view: u32, command: CaptureCommand, callbacks: [StockCallbackWord; 3] },
     Stop { pause: bool, shot_idle: bool, callback: StockCallbackWord },
     Release { callback: StockCallbackWord },

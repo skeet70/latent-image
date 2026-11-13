@@ -551,12 +551,13 @@ pub const RESULTS_READY: StockCallbackWord = StockCallbackWord(0xf3a794);
 pub const COMMAND24_DONE: StockCallbackWord = StockCallbackWord(0xf3a768);
 
 /// Encodes one of the live statistics configuration's requests and posts it to the statistics
-/// task. The senders 0x1039638..0x103b040 return their post's status; no caller reads it.
+/// task.
 pub fn statistics_request(payload: &xm1_saclac_interface::statistics::StatisticsPayload, statistics: &mut impl xm1_saclac_interface::Statistics) {
     use xm1_saclac_interface::statistics::StatisticsPayload as P;
-    use xm1_saclac_interface::{Completion as C, StatisticsRequest};
+    use xm1_saclac_interface::Completion as C;
     let completions: &[C] = match payload {
         P::Start { .. } | P::StartSelected { .. } => &[C::Statistics69, C::Statistics7f],
+        P::S1Start { .. } => &[C::Statistics7b, C::Statistics7f],
         P::Configure { .. } => &[C::Statistics6c, C::Statistics78, C::Statistics79, C::Statistics7f],
         P::Stop { .. } => &[C::Statistics6b],
         P::Release { .. } => &[C::Statistics6d],
@@ -571,7 +572,16 @@ pub fn statistics_request(payload: &xm1_saclac_interface::statistics::Statistics
         P::Selection { .. } => &[C::Statistics7e, C::Statistics7f],
         P::Command24 { .. } => &[C::Statistics82],
     };
+    post_statistics(payload, completions, statistics);
+}
+
+/// The senders 0x1039638..0x103b040 return their post's status; no caller reads it.
+pub fn post_statistics(
+    payload: &xm1_saclac_interface::statistics::StatisticsPayload,
+    completions: &[xm1_saclac_interface::Completion],
+    statistics: &mut impl xm1_saclac_interface::Statistics,
+) {
     let (operation, message) = xm1_saclac_interface::stock::statistics::statistics_payload(payload);
-    let request = StatisticsRequest { operation, parameters: xm1_saclac_interface::stock::parameters(message.bytes()), completions };
+    let request = xm1_saclac_interface::StatisticsRequest { operation, parameters: xm1_saclac_interface::stock::parameters(message.bytes()), completions };
     let _ = statistics.request(request);
 }

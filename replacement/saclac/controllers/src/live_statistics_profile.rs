@@ -179,8 +179,8 @@ fn configuration(layers: &mut impl Layers, record: RecordHandle) -> Configuratio
         results: layers.results().address(),
         callback: stock::RESULTS_READY,
     };
-    let flagged = flagged(layers, record);
-    Configuration { setup, format, window, output, exposure, capture, notice, flagged }
+    let flag = u32::from(flagged(layers, record));
+    Configuration { setup, format, window, output, exposure, capture, notice, flag }
 }
 
 fn parameter(layers: &mut impl Layers, command: K, index: usize) -> u32 { layers.parameters().word(command, index) }
