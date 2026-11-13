@@ -49,3 +49,9 @@ Each crate supplies its own `#[panic_handler]`; the macros do not inject one. Th
 ```sh
 devenv shell -- bazel test //replacement/abi:pilot-abi-tests --test_output=all
 ```
+
+## Direct stack proof
+
+`//replacement/toolchain:stack-proof` exposes `Replacement.Toolchain.Stack` for linked A32 artifacts. `Image` binds the flat binary's base, bytes, symbols and instruction addresses; `check` accepts a nonnegative `StackBytes` budget. It derives fixed frames from consecutive prologue pushes and immediate SP decrements, rejects an unrecognized frame and linked-call recursion, and bounds direct-call depth. Tail branches reuse the caller frame, and tail-only cycles do not count as recursion. Tail reuse assumes an ABI-correct epilogue; indirect calls and retained callees need separate boundary budgets.
+
+`//replacement/toolchain:stack-proof-tests` uses synthetic instruction fixtures for two consecutive pushes, caller-plus-callee depth, linked recursion, tail loops, call growth through a tail edge, unknown frames and missing instruction bytes. It has no subsystem tables, entries or firmware input.
