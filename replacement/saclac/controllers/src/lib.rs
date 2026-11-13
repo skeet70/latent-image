@@ -10,6 +10,9 @@ pub mod children;
 pub mod synchronous;
 pub mod search;
 pub mod records;
+pub mod capture;
+#[cfg(test)]
+mod capture_tests;
 
 #[cfg(test)]
 extern crate std;

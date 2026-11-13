@@ -373,3 +373,49 @@ pub fn record_update_payload(input: RecordUpdate, limits: RecordLimits, callback
     bytes[16..].copy_from_slice(&callback.0.to_le_bytes());
     bytes
 }
+
+pub fn capture_record_payload(
+    input: crate::capture::Capture,
+    callbacks: crate::capture::Callbacks,
+    dimensions: crate::capture::Dimensions,
+    encoded_position: u8,
+    height: crate::capture::HeightSplit,
+    total: crate::capture::HeightSplit,
+    enabled: bool,
+) -> [u8; 176] {
+    let mut bytes = [0; 176];
+    for (chunk, word) in bytes[..24].chunks_exact_mut(4).zip([
+        callbacks.completion.0, callbacks.auxiliary.0, callbacks.sample.0,
+        0, callbacks.progress.0, 0,
+    ]) {
+        chunk.copy_from_slice(&word.to_le_bytes());
+    }
+    let body = &mut bytes[24..];
+    for (offset, source) in [(0, input.sources[0]), (16, input.sources[1])] {
+        for (chunk, word) in body[offset..offset + 20].chunks_exact_mut(4).zip([
+            source.identity, source.parameters[0], source.parameters[1], source.parameters[2], source.length,
+        ]) {
+            chunk.copy_from_slice(&word.0.to_le_bytes());
+        }
+    }
+    for (offset, word) in [(32, input.channel.0), (72, 2), (76, input.channel.0),
+        (80, input.policy.0), (92, input.auxiliary.0)] {
+        body[offset..offset + 4].copy_from_slice(&word.to_le_bytes());
+    }
+    for (offset, halfword) in [
+        (36, input.dimensions.width.0), (38, input.dimensions.height.0),
+        (60, dimensions.width.0), (62, dimensions.height.0), (104, 100), (106, 16),
+        (112, input.position.0 as u16), (116, input.dimensions.width.0),
+        (118, height.height.0), (120, height.excess.0), (122, total.height.0), (124, total.excess.0),
+    ] {
+        body[offset..offset + 2].copy_from_slice(&halfword.to_le_bytes());
+    }
+    body[137] = encoded_position;
+    body[138] = input.source_option;
+    body[140] = input.option;
+    body[141] = u8::from(enabled);
+    body[142] = u8::from(input.multiple_frames);
+    body[147] = u8::from(input.mode != crate::capture::CaptureMode::ModeSix);
+    body[148] = 1;
+    bytes
+}
