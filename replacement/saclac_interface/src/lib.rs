@@ -4,6 +4,7 @@
 pub mod calculation;
 pub mod exposure;
 pub mod stock;
+pub mod statistics;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClientCallback(pub(crate) u32);
@@ -464,3 +465,5 @@ mod tests;
 mod exposure_tests;
 #[cfg(test)]
 mod calculation_tests;
+#[cfg(test)]
+mod statistics_tests;
