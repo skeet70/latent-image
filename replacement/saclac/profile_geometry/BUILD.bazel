@@ -6,6 +6,7 @@ _SOURCES = [
     "src/controller/changes.rs",
     "src/controller/crop.rs",
     "src/controller/dumps.rs",
+    "src/controller/frame.rs",
     "src/controller/lifecycle.rs",
     "src/controller/mod.rs",
     "src/controller/operations.rs",

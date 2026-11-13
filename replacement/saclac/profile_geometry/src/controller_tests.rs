@@ -43,6 +43,8 @@ enum Call {
     GeometryStart(GeometryStart),
     GeometryNotified(u32, i32),
     AreaQuery(u32, AreaQuery),
+    Point(u32, u32, StatisticsDestinations),
+    Collect(u32, u32, Location),
 }
 
 /// Calls to the ports `Call` does not record.
@@ -96,6 +98,8 @@ struct Fake {
     /// Each file request's completion status in turn; zero once used up.
     file_statuses: Vec<u32>,
     completion: Option<(FileCompletion, u32, u32)>,
+    /// Collections so far; each writes its count into the top bits of every result halfword.
+    collections: u16,
 }
 
 impl Configuration for Fake {
@@ -132,7 +136,22 @@ impl Pipeline for Fake {
         true
     }
     fn restore_stages(&mut self, _: Location, _: Stages) {}
+    fn point_statistics(&mut self, channel: PipelineChannel, stages: Stages, destinations: &StatisticsDestinations) {
+        self.calls.push(Call::Point(channel.0, stages.0, *destinations));
+    }
+    fn collect_statistics(&mut self, channel: PipelineChannel, stages: Stages, into: Location) {
+        self.calls.push(Call::Collect(channel.0, stages.0, into));
+        self.collections += 1;
+        if let Some(memory) = &self.files {
+            let mut memory = SharedBytes(memory.clone());
+            for offset in (0..RESULT_BYTES).step_by(2) {
+                memory.write_u16(into.plus(offset), self.collections << 12 | offset);
+            }
+        }
+    }
 }
+
+const RESULT_BYTES: u16 = 0x190;
 
 impl StagePayloads for Fake {
     fn mode_payload(&mut self, _: &ModeRequest, _: Location) -> Stages { Stages(0) }
@@ -1011,4 +1030,130 @@ fn an_export_writes_each_kept_record_to_a_file_and_lists_it_in_the_snapshot() {
         (0x510, word(4 | 5 << 16)),
     ]);
     assert_eq!(layer.memory().read_u32(record_mode::STATE), 1);
+}
+
+fn controller(offset: u16) -> Location { Location::new(crate::memory::Block::Controller, offset) }
+
+fn work_at(offset: u16) -> Location { Location::new(crate::memory::Block::Work, offset) }
+
+/// What the fake pipeline's `round`th collection leaves in the result halfword at work `offset`.
+const fn collected(round: u16, offset: u16) -> u32 { (round << 12 | (offset - 0x1c8)) as u32 }
+
+/// Destinations in `buffer` for `stages`, each a stage bit with its regions; the fake's region
+/// offset is the region times 0x1000.
+fn destinations(buffer: u32, stages: &[(usize, &[u32])]) -> StatisticsDestinations {
+    let mut destinations = StatisticsDestinations::default();
+    for &(bit, regions) in stages {
+        for (slot, region) in regions.iter().enumerate() {
+            destinations.0[bit][slot] = StockData(buffer + region * 0x1000);
+        }
+    }
+    destinations
+}
+
+const CHANNEL_REGIONS: [(usize, &[u32]); 6] = [(0, &[3]), (1, &[7]), (2, &[0]), (3, &[2]), (4, &[11, 12]), (5, &[13, 21, 29])];
+
+fn framing() -> ProfileGeometry<SharedBytes, Fake, Tables> {
+    let mut layer = filing(vec![]);
+    layer.memory.write_u32(field::PIPELINE_CHANNEL, 6);
+    layer
+}
+
+#[test]
+fn a_frame_records_its_index_and_clears_the_applied_stages() {
+    let mut layer = framing();
+    layer.memory.write_u32(crate::stock::layout::counters::INDEX, 7);
+    for (_, at) in work::APPLIED {
+        layer.memory.write_u32(at, 1);
+    }
+    layer.handle_frame();
+    assert_eq!(layer.memory().read_u32(crate::stock::layout::counters::FRAME_INDEX), 7);
+    assert_eq!([0x3f4, 0x600, 0x3a4].map(|offset| layer.memory().read_u32(work_at(offset))), [0; 3]);
+    assert_eq!(layer.ports.calls, vec![]);
+}
+
+#[test]
+fn a_channel_frame_moves_the_stages_to_the_other_buffer_and_keeps_the_results_by_bank() {
+    let mut layer = framing();
+    layer.memory.write_u32(field::state(Operation::Channel), OperationState::RUNNING.0);
+    layer.memory.write_u32(controller(0xa98), 1);
+    layer.memory.write_u32(controller(0xa9c), 1);
+    layer.handle_frame();
+    assert_eq!(layer.ports.calls, vec![
+        Call::Point(6, 0x3f, destinations(0x5ffb_3770, &CHANNEL_REGIONS)),
+        Call::Collect(6, 0x3f, work_at(0x1c8)),
+    ]);
+    assert_eq!([0xa98, 0xa9c].map(|offset| layer.memory().read_u32(controller(offset))), [2, 2]);
+    let first = |offset| layer.memory().read_u32(controller(offset));
+    assert_eq!([0x8e4, 0x8e8, 0x8ec, 0x8f0].map(first), [0x2c6, 0x2c0, 0x266, 0x260].map(|at| collected(1, at)));
+    assert_eq!([0x904, 0x908, 0x90c, 0x910].map(first), [0x346, 0x340, 0x326, 0x320].map(|at| collected(1, at)));
+    assert_eq!([0x914, 0x918, 0x95c, 0x960].map(first), [0x2f6, 0x2ce, 0x31a, 0x2f2].map(|at| collected(1, at)));
+    assert_eq!([0x964, 0x968].map(first), [0x296, 0x26e].map(|at| collected(1, at)));
+    assert_eq!(first(0x9bc), 0);
+
+    layer.ports.calls.clear();
+    layer.handle_frame();
+    assert_eq!(layer.ports.calls[0], Call::Point(6, 0x3f, destinations(0x5ffb_0dc0, &CHANNEL_REGIONS)));
+    assert_eq!([0xa98, 0xa9c].map(|offset| layer.memory().read_u32(controller(offset))), [1, 1]);
+    assert_eq!(layer.memory().read_u32(controller(0x9bc)), collected(2, 0x2c6));
+    assert_eq!(layer.memory().read_u32(controller(0x8e4)), collected(1, 0x2c6));
+}
+
+#[test]
+fn a_stopping_channel_operation_still_alternates_its_banks() {
+    let mut layer = framing();
+    layer.memory.write_u32(field::state(Operation::Channel), OperationState::STOPPING.0);
+    layer.memory.write_u32(controller(0xa98), 2);
+    layer.memory.write_u32(controller(0xa9c), 2);
+    layer.handle_frame();
+    assert_eq!(layer.ports.calls[0], Call::Point(6, 0x3f, destinations(0x5ffb_0dc0, &CHANNEL_REGIONS)));
+    assert_eq!(layer.memory().read_u32(controller(0x9bc + 4)), collected(1, 0x2c0));
+}
+
+#[test]
+fn a_cleared_bank_collects_the_results_without_keeping_them() {
+    let mut layer = framing();
+    layer.memory.write_u32(field::state(Operation::Channel), OperationState::RUNNING.0);
+    layer.handle_frame();
+    assert_eq!(layer.ports.calls, vec![
+        Call::Point(6, 0x3f, destinations(0x5ffb_0dc0, &CHANNEL_REGIONS)),
+        Call::Collect(6, 0x3f, work_at(0x1c8)),
+    ]);
+    assert_eq!([0x8e4, 0x9bc].map(|offset| layer.memory().read_u32(controller(offset))), [0, 0]);
+    assert_eq!([0xa98, 0xa9c].map(|offset| layer.memory().read_u32(controller(offset))), [1, 1]);
+}
+
+#[test]
+fn an_indexed_frame_marks_the_operation_and_keeps_its_result_pair() {
+    let mut layer = framing();
+    layer.memory.write_u32(field::state(Operation::Indexed), OperationState::RUNNING.0);
+    layer.memory.write_u32(controller(0x774), 1);
+    layer.memory.write_u32(controller(0x778), 1);
+    layer.handle_frame();
+    assert_eq!(layer.ports.calls, vec![
+        Call::Point(6, 0x40, destinations(0x5ffb_3770, &[(6, &[37])])),
+        Call::Collect(6, 0x40, work_at(0x1c8)),
+    ]);
+    let word = |offset| layer.memory().read_u32(controller(offset));
+    assert_eq!([0x774, 0x778, 0x77c].map(word), [2, 2, 1]);
+    assert_eq!([0x760, 0x764, 0x768].map(word), [collected(1, 0x34e), collected(1, 0x34a), 0]);
+    layer.handle_frame();
+    assert_eq!([0x768, 0x76c].map(|offset| layer.memory().read_u32(controller(offset))), [collected(2, 0x34e), collected(2, 0x34a)]);
+}
+
+#[test]
+fn a_stopping_indexed_operation_is_left_alone() {
+    let mut layer = framing();
+    layer.memory.write_u32(field::state(Operation::Indexed), OperationState::STOPPING.0);
+    layer.handle_frame();
+    assert_eq!(layer.ports.calls, vec![]);
+    assert_eq!(layer.memory().read_u32(controller(0x77c)), 0);
+}
+
+#[test]
+fn a_destination_record_puts_each_stage_where_the_pipeline_reads_it() {
+    const INDEXED: (usize, &[u32]) = (6, &[37]);
+    let all: Vec<(usize, &[u32])> = CHANNEL_REGIONS.into_iter().chain([INDEXED]).collect();
+    let record = crate::stock::statistics::destination_record(&destinations(0, &all));
+    assert_eq!(record, [0, 0, 3, 0, 11, 12, 13, 21, 29, 7, 2, 37].map(|region| region * 0x1000));
 }

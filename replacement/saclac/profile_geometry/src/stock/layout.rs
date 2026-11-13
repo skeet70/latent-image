@@ -45,6 +45,10 @@ pub const fn span_offset(at: Location) -> usize {
 
 const fn at(block: Block, offset: u16) -> Location { Location::new(block, offset) }
 
+/// The two statistics buffers the channel and indexed operations' stages write in turn, bank 1
+/// first; dump regions 12 and 13 cover them.
+pub const STATISTICS_BANKS: [u32; 2] = [0x5ffb_0dc0, 0x5ffb_3770];
+
 /// The geometry service's state and the geometry operation snapshot.
 pub mod geometry {
     use super::at;
@@ -179,6 +183,21 @@ pub mod controller {
 
     /// The indexed operation's window: top, height, left and width.
     pub const INDEXED_PAIR: Location = at(Controller, 0x6c4);
+
+    /// The banks the frame handler alternates: the one an operation's stages write next and
+    /// the one whose results it keeps next, each stored as 1 or 2 by stock and 0 when cleared.
+    pub const CHANNEL_TARGET: Location = at(Controller, 0xa9c);
+    pub const CHANNEL_KEPT: Location = at(Controller, 0xa98);
+    pub const INDEXED_TARGET: Location = at(Controller, 0x778);
+    pub const INDEXED_KEPT: Location = at(Controller, 0x774);
+    /// Set to 1 by each frame that points the indexed operation's stage.
+    pub const INDEXED_POINTED: Location = at(Controller, 0x77c);
+    /// Bank 1's kept channel results; bank 2's follow at `CHANNEL_RESULTS_STRIDE`.
+    pub const CHANNEL_RESULTS: Location = at(Controller, 0x8e4);
+    pub const CHANNEL_RESULTS_STRIDE: u16 = 0xd8;
+    /// Bank 1's kept indexed results, two words; bank 2's follow.
+    pub const INDEXED_RESULTS: Location = at(Controller, 0x760);
+    pub const INDEXED_RESULTS_STRIDE: u16 = 8;
 }
 
 pub mod changes {
@@ -351,6 +370,36 @@ pub mod work {
         pub const INDEXED_PAIR: Location = at(Work, 0x1a0);
     }
 
+    /// The statistics results the pipeline reads for the frame handler, and where a bank keeps
+    /// each, in stock's store order.
+    pub mod results {
+        use super::at;
+        use crate::memory::{Block::Work, Location};
+
+        pub const RECORD: Location = at(Work, 0x1c8);
+        /// Result halfwords a channel bank keeps as words, with their offsets in the bank.
+        pub const CHANNEL_WORDS: [(Location, u16); 12] = [
+            (at(Work, 0x2c0), 0x04),
+            (at(Work, 0x2c6), 0x00),
+            (at(Work, 0x260), 0x0c),
+            (at(Work, 0x266), 0x08),
+            (at(Work, 0x32e), 0x14),
+            (at(Work, 0x332), 0x10),
+            (at(Work, 0x338), 0x1c),
+            (at(Work, 0x33c), 0x18),
+            (at(Work, 0x340), 0x24),
+            (at(Work, 0x346), 0x20),
+            (at(Work, 0x320), 0x2c),
+            (at(Work, 0x326), 0x28),
+        ];
+        /// Tables of twenty 4-byte entries a channel bank keeps as ten word pairs from the bank
+        /// offset: pair `i` holds the second halfword of entry `i + 10`, then that of entry `i`.
+        pub const CHANNEL_TABLES: [(Location, u16); 2] = [(at(Work, 0x2cc), 0x30), (at(Work, 0x26c), 0x80)];
+        pub const TABLE_PAIRS: u16 = 10;
+        /// Result halfwords an indexed bank keeps as words, with their offsets in the bank.
+        pub const INDEXED_WORDS: [(Location, u16); 2] = [(at(Work, 0x34a), 0x4), (at(Work, 0x34e), 0x0)];
+    }
+
     /// The scan stages' radial tables: gains, the scan record's count and base, bounds, scales
     /// and 31 points.
     pub mod scan_geometry {
@@ -465,6 +514,8 @@ pub mod counters {
     /// Non-zero while the tracked index follows the snapshot one step per frame.
     pub const TRACKING: Location = at(Counters, 0x0);
     pub const INDEX: Location = at(Counters, 0x4);
+    /// The index when the last frame began.
+    pub const FRAME_INDEX: Location = at(Counters, 0x8);
 }
 
 pub mod dump {

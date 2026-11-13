@@ -47,6 +47,10 @@ impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
     }
 
     /// 0xee71fc.
+    ///
+    /// Corrected: at 0xee72d0..0xee72dc stock divides the width by the byte at controller +0xd8
+    /// and discards the quotient, so a zero byte traps in the runtime division 0x4d978
+    /// (svc 0x1010). Owned code does not divide and continues. No code reads the quotient.
     fn align_crop(&mut self, mode: u32) {
         let format = self.memory.read_u32(crop::FORMAT);
         let denominator = self.scale_denominator(format, self.memory.read_u32(crop::SCALE_MODE));
