@@ -1,3 +1,5 @@
+use xm1_saclac_interface::pipeline::FormatPayload;
+
 use crate::controller::lifecycle::LifecycleRefusal;
 use crate::controller::{Lifecycle, Operation, OperationState, ProfileGeometry, Refusal};
 use crate::memory::{Bytes, Location, Memory};

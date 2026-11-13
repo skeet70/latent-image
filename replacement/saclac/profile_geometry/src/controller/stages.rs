@@ -3,10 +3,12 @@
 //! The payload stages the refresh keeps current while a starter claims them: the two modes,
 //! the tertiary stage, the quad selection and the format.
 
+use xm1_saclac_interface::pipeline::FormatPayload;
+
 use super::changes::{Hold, Mask, Stage, Subscription, Work};
 use super::{ProfileGeometry, Refusal, Status, Tables};
 use crate::memory::Memory;
-use crate::ports::{ConfigOffset, FormatPayload, ModeRequest, Ports};
+use crate::ports::{ConfigOffset, ModeRequest, Ports};
 use crate::profile::{PipelineGroup, ProfileHandle, QuadGroup, RectangleKind};
 use crate::stock::layout::{changes, controller as field, parameters, work};
 

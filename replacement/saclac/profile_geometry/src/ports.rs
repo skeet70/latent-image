@@ -2,6 +2,8 @@
 
 //! What the layer calls outside itself; saclac's composition root binds each trait.
 
+use xm1_saclac_interface::pipeline::FormatPayload;
+
 use crate::memory::Location;
 use crate::profile::{PipelineGroup, ProfileHandle, QuadGroup, Rectangle};
 
@@ -63,15 +65,6 @@ pub struct ModeRequest {
     pub first: Location,
     pub second: Location,
     pub mode_byte: i8,
-}
-
-/// What the format stage of the pipeline's payload table carries.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FormatPayload {
-    pub first_scale: u16,
-    pub second_scale: u16,
-    pub alignment: [u8; 2],
-    pub remainder_geometry: bool,
 }
 
 /// The sensor window a windowed primary payload covers.
