@@ -33,7 +33,7 @@ pub trait MeasurementCalc {
     fn statistics_key(&mut self, processing: &Processing) -> [i16; 2];
     /// The `index`th of eight scale steps.
     fn scale_step(&mut self, index: u16) -> i16;
-    fn capture_offset(&mut self, record: RecordHandle, distance: u32) -> u32;
+    fn capture_offset(&mut self, record: RecordHandle) -> u32;
     fn curve_within(&mut self, distance: u32, selection: u32, drive: u32, limit: i32) -> bool;
     /// Calc 0x3c0d, completing with `completions` in that order.
     fn request_evaluation(&mut self, record: RecordHandle, processing: &Processing, frames: [u32; 2], geometry: &AreaGeometry, completions: [Completion; 2]);
