@@ -6,6 +6,12 @@ The checked-in Nix build fetches the exact FujiMod commit and submodules in `bui
 
 The retained engine still owns acceptance gates and unqualified browser, flash-candidate, fixed-scene, strict-conversion, diagnostic and fixture workflows. Bulk-read and AF-ring have FujiMod counterparts pending qualification; updater verifier/NAND coverage remains separate. The [decision report](../reports/emulator-runtime-decision.md#retained-capabilities-still-missing-from-the-supported-fujimod-path) records the boundaries. The [R4F translation-admission guard](../build-support/README.md) checks instructions before execution and repeats admission after code invalidation; enabled MPU regions 12-15 remain a post-window refusal.
 
+### Shared checkpoint store
+
+Reusable FujiMod state lives under `private-data/emulator-checkpoints/`. Its guest-state key is the SHA-256 of the canonical JSON value from [`BootIdentity::document`](fujimod-xm1/src/checkpoint.rs), with schema, model, exact run-document bytes, installed DAT, boot ROM, NAND source and contents, card identity and producer procedure. Post-boot producers additionally call `with_emulator_binary` with their actual executable bytes. Procedure identity includes the phase and every producer input not already covered by the guest-state identity. Installed-state producers also bind their owned archives, relocation result, observation policy and installation procedure.
+
+The shared post-boot API uses `post-boot-KEY/session.fujimod` and `post-boot-KEY/post-boot.json`. The record binds the identity, snapshot SHA-256 and saved guest instruction count. A per-key process lock serializes creation; publication is an atomic directory rename. A hit verifies both identity and snapshot digest before restoring. Runs record the returned key, snapshot digest, instruction boundary and hit/miss receipt. Observers attach after restoration; observations of startup itself remain from reset.
+
 ### RAM-push committed NAND lifecycle
 
 Initial sessions use `--adjustment-nand NAND` with an optional `--record-nand NAND` fixture. A power-cycle continuation instead uses `--committed-nand NAND --fresh-boot`, mutually exclusive with both seed flags. Full committed import replaces the NAND before instruction zero; it does not reapply adjustment or record fixtures. The boot and initialized-reset cache identities bind the full committed input digest separately from fixture digests.

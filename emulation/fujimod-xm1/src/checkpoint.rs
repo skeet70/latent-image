@@ -1,4 +1,4 @@
-//! Content-addressed boot state, independent of the observer executable.
+//! Content-addressed guest state at declared execution boundaries.
 use crate::bridge::sha256;
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +27,8 @@ pub struct BootIdentity {
     source_kind: NandSourceKind,
     card_sha256: Option<String>,
     procedure: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    emulator_binary: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -47,7 +49,13 @@ impl BootIdentity {
             source_kind: NandSourceKind::InitialSeeded,
             card_sha256: card_sha256.map(str::to_owned),
             procedure: sha256(procedure),
+            emulator_binary: None,
         }
+    }
+
+    pub fn with_emulator_binary(mut self, executable: &[u8]) -> Self {
+        self.emulator_binary = Some(sha256(executable));
+        self
     }
 
     pub fn with_record_nand(mut self, records: Option<&[u8]>) -> Self {
@@ -135,4 +143,85 @@ pub fn initialized_reset(mut machine: crate::machine::Machine, identity: &BootId
         crate::bridge::save_checkpoint(&mut machine, root, &name, RECORD, &identity.document(), budget)?;
     }
     Ok(InitializedReset { machine, cache })
+}
+
+pub const SHARED_STORE: &str = "private-data/emulator-checkpoints";
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PostBootRecord {
+    pub identity: serde_json::Value,
+    pub snapshot_sha256: String,
+    pub instructions: u64,
+}
+
+#[derive(Serialize)]
+pub struct PostBootReceipt {
+    pub key: CheckpointKey,
+    pub record: PostBootRecord,
+    pub lookup: CacheLookup,
+}
+
+/// The producer runs without scenario observers. The receipt binds the bytes restored.
+pub fn post_boot(
+    machine: &mut crate::machine::Machine,
+    identity: &BootIdentity,
+    root: &std::path::Path,
+    produce: impl FnOnce(&mut crate::machine::Machine) -> Result<(), String>,
+) -> Result<PostBootReceipt, String> {
+    use std::os::fd::AsRawFd;
+    const RECORD: &str = "post-boot.json";
+    if identity.emulator_binary.is_none() {
+        return Err("post-boot checkpoint requires the emulator executable digest".into());
+    }
+    std::fs::create_dir_all(root).map_err(|error| error.to_string())?;
+    let key = identity.key();
+    let name = format!("post-boot-{key}");
+    let lock = std::fs::OpenOptions::new().create(true).truncate(false).write(true)
+        .open(root.join(format!(".{name}.lock"))).map_err(|error| error.to_string())?;
+    // The descriptor owns the lock until this function returns.
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    let directory = root.join(&name);
+    let (record, lookup) = if directory.exists() {
+        let record: PostBootRecord = serde_json::from_slice(&crate::bridge::read(&directory.join(RECORD))?)
+            .map_err(|error| format!("post-boot record: {error}"))?;
+        if record.identity != identity.document() {
+            return Err("post-boot checkpoint identity differs".into());
+        }
+        let bytes = crate::bridge::read(&directory.join(crate::bridge::SNAPSHOT))?;
+        if sha256(&bytes) != record.snapshot_sha256 {
+            return Err("post-boot checkpoint snapshot digest differs".into());
+        }
+        let snapshot = machine.session.import_snapshot(&bytes)?;
+        machine.disarm()?;
+        machine.session.restore(&snapshot)?;
+        machine.rearm()?;
+        if machine.instructions() != record.instructions || record.instructions == 0 {
+            return Err("post-boot checkpoint instruction boundary differs".into());
+        }
+        (record, CacheLookup::Hit)
+    } else {
+        produce(machine)?;
+        machine.require_running()?;
+        if machine.instructions() == 0 {
+            return Err("post-boot producer did not execute the guest".into());
+        }
+        machine.disarm()?;
+        let snapshot = machine.session.checkpoint(None).and_then(|snapshot| snapshot.export());
+        machine.rearm()?;
+        let snapshot = snapshot?;
+        let record = PostBootRecord {
+            identity: identity.document(),
+            snapshot_sha256: sha256(&snapshot),
+            instructions: machine.instructions(),
+        };
+        let partial = root.join(format!(".partial-{name}-{}", std::process::id()));
+        std::fs::create_dir(&partial).map_err(|error| error.to_string())?;
+        crate::bridge::write(&partial.join(crate::bridge::SNAPSHOT), &snapshot)?;
+        crate::bridge::write(&partial.join(RECORD), &serde_json::to_vec_pretty(&record).map_err(|error| error.to_string())?)?;
+        std::fs::rename(partial, directory).map_err(|error| error.to_string())?;
+        (record, CacheLookup::Miss)
+    };
+    Ok(PostBootReceipt { key, record, lookup })
 }
