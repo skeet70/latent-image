@@ -5,8 +5,13 @@
 //! round, client memory named by the command parameters, diagnostic dumps and platform services.
 //! Byte layouts of the values that cross are in `stock`.
 
+use crate::exposure_work::ExposureSetup;
+use crate::ports::{EvaluationIndex, HalfPressMode, Reply};
+use crate::subjects::SubjectList;
 use crate::subjects::Subject;
 use crate::summary::{AreaStatistics, FrameSummary};
+use xm1_saclac_interface::exposure::{Correction, Evaluation, MeasuredEntry, StatisticsRequest, STATISTICS_AREAS_BYTES};
+use xm1_saclac_interface::{Completion, RecordHandle};
 
 /// A client address carried in the command parameters.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -86,6 +91,12 @@ pub enum Setting {
     SubjectQueryA,
     SubjectQueryB,
     DumpArgument,
+    /// Bound into the exposure before the calculation library prepares it.
+    ExposureSource,
+    /// Sent with the statistics measurement.
+    StatisticsOption,
+    /// 1 and 2 select the export the exposure conclusion writes; other values export kind 0.
+    CorrectionExport,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -179,7 +190,7 @@ pub trait Client {
 pub enum Dump { Statistics, Frame, Lens, Numbered }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Trace { Prepare, HalfPressReplied }
+pub enum Trace { Prepare, HalfPressReplied, ExposureBegun, EvaluationRequested, CorrectionRequested, ExposureConcluded }
 
 pub trait Diagnostics {
     fn trace(&mut self, trace: Trace);
@@ -201,4 +212,107 @@ pub trait Platform {
     fn level(&mut self) -> u8;
     fn tick(&mut self) -> u32;
     fn reset_image_progress(&mut self);
+}
+
+/// The selection kind the calculation library derives for a record and half-press mode.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SelectionKind(pub u32);
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ExposureLevels {
+    pub base: i16,
+    pub reference: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CorrectionRequest { Sent, Skipped }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExportKind { Plain, First, Second }
+
+/// The calculation library's exposure tables, which it keeps between calls.
+pub trait ExposureCalculation {
+    fn selection(&mut self, record: RecordHandle, mode: HalfPressMode, refinement_pass: bool) -> SelectionKind;
+    fn selects_primary(&mut self, selection: SelectionKind) -> bool;
+    fn selects_secondary(&mut self, selection: SelectionKind) -> bool;
+    /// Clears the tables and fills them for `setup`, tagging its frame for the calculation task.
+    fn prepare(&mut self, setup: &ExposureSetup);
+    fn calculation_mode(&mut self, record: RecordHandle) -> u32;
+    fn correction_mode(&mut self, record: RecordHandle, refinement_pass: bool) -> u32;
+    fn scaled_statistics(&mut self) -> bool;
+    fn evaluation_areas(&mut self) -> [u8; STATISTICS_AREAS_BYTES];
+    fn evaluation_area_count(&mut self) -> u8;
+    fn evaluated_count(&mut self) -> u8;
+    fn select_measured(&mut self, entry: MeasuredEntry);
+    /// The image task's statistics check of the selected entry, recorded in the entry.
+    fn check_measured(&mut self, entry: MeasuredEntry) -> bool;
+    fn accept_measured(&mut self, entry: MeasuredEntry);
+    fn next_evaluation(&mut self) -> EvaluationIndex;
+    /// Calc 0x3c00, completion 0x8e.
+    fn request_evaluation(&mut self, index: EvaluationIndex);
+    fn absorb_evaluation(&mut self, evaluation: &Evaluation);
+    fn correction_needed(&mut self) -> bool;
+    /// Calc 0x3c01, completion 0x8f, unless the tables leave nothing to correct.
+    fn request_correction(&mut self, setup: &ExposureSetup) -> CorrectionRequest;
+    fn levels(&mut self) -> ExposureLevels;
+    fn alternate(&mut self) -> bool;
+    fn variant(&mut self) -> u32;
+    fn exporting(&mut self) -> bool;
+    fn export(&mut self, frame: Option<Frame>, correction: &Correction, kind: ExportKind);
+    fn clear_selection(&mut self, frame: Option<Frame>, primary: bool);
+    fn finish_primary(&mut self);
+}
+
+/// An entry of the record's exposure table, 0..=24 in the record's order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExposureSlot(pub u8);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExposureOffset { First, Second, Third }
+
+pub const METERING_BYTES: usize = 56;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MeteringBlock(pub [u8; METERING_BYTES]);
+
+/// The image-4 record layer's exposure fields of the bound record.
+pub trait ExposureRecord {
+    fn store_exposure(&mut self, slot: ExposureSlot, value: i32);
+    fn store_offset(&mut self, offset: ExposureOffset, value: i16);
+    fn store_area_exposure(&mut self, index: usize, value: i16);
+    fn metering(&mut self) -> MeteringBlock;
+    fn store_metering(&mut self, block: &MeteringBlock);
+}
+
+pub trait ExposureServices {
+    fn lens_offset(&mut self, lens_reference: LensReference) -> u16;
+    fn calibration_offset(&mut self) -> u16;
+    fn exports_last_correction(&mut self) -> bool;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecorderMode { Exposure }
+
+/// The saclac diagnostic recorder shared with the other saclac modules.
+pub trait Recorder {
+    fn recording(&mut self, mode: RecorderMode) -> bool;
+    fn start_recording(&mut self, mode: RecorderMode);
+    fn record_evaluations(&mut self, count: u8);
+}
+
+pub trait StatisticsPort {
+    /// Imgdc 0x3f1a, completions 0x4d then 0x4c; the port stages `subjects` where the image task
+    /// reads them.
+    fn request_statistics(&mut self, request: &StatisticsRequest, subjects: &SubjectList);
+    /// Imgdc 0x3f1b.
+    fn release_statistics(&mut self);
+}
+
+pub trait Replies {
+    fn reply(&mut self, reply: Reply);
+}
+
+pub trait Completions {
+    /// Enters the completion's callback in task 43 without a result, which posts it to queue 43.
+    fn self_complete(&mut self, completion: Completion);
 }

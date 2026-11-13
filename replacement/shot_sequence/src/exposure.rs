@@ -101,7 +101,7 @@ impl Exposure {
                 Outcome::Pending
             }
             (Statistics, Released) => {
-                if ports.query(Query::Exposure(Q::CountAtMostOne)) && ports.query(Query::Exposure(Q::CorrectionNeeded)) {
+                if ports.query(Query::Exposure(Q::ReleaseStatusAtMostOne)) && ports.query(Query::Exposure(Q::CorrectionNeeded)) {
                     self.state = Correction;
                     let index = ports.next_evaluation();
                     ports.effect(Effect::Exposure(E::RequestEvaluation(index)));
@@ -111,7 +111,7 @@ impl Exposure {
                 }
             }
             (Evaluating, Released) => {
-                self.state = if ports.query(Query::Exposure(Q::CountAtMostOne)) { Correction } else { EvaluatingReleased };
+                self.state = if ports.query(Query::Exposure(Q::ReleaseStatusAtMostOne)) { Correction } else { EvaluatingReleased };
                 Outcome::Pending
             }
             (CorrectionAndRelease, Released) => {

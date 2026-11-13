@@ -32,7 +32,7 @@ impl HalfPressMask {
 }
 
 /// The half-press command parameters as the client wrote them.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct HalfPressParameters {
     pub mode: HalfPressMode,
     pub option: u32,

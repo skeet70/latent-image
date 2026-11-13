@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 
 use xm1_saclac_interface::{
-    lens_effect, BlockingRequest, CalcOperation, CommandKind, Completion, CompletionStatus, ImgDcOperation, LensDcOperation, LensEffect, PeerOperation,
-    RecordHandle, StatisticsOperation,
+    lens_effect, BlockingRequest, CalcOperation, CommandKind, Completed, Completion, CompletionStatus, ImgDcOperation, LensDcOperation, LensEffect,
+    PeerOperation, RecordHandle, StatisticsOperation,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -22,7 +22,7 @@ pub enum FinishKind {
 }
 
 /// Mode word of the half-press command parameters.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct HalfPressMode(pub u32);
 
 impl HalfPressMode {
@@ -82,7 +82,7 @@ pub enum ExposureEffect {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ExposureQuery { CorrectionFirst, StatisticsAccepted, CorrectionNeeded, CountAtMostOne }
+pub enum ExposureQuery { CorrectionFirst, StatisticsAccepted, CorrectionNeeded, ReleaseStatusAtMostOne }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CalculationEffect {
@@ -448,5 +448,7 @@ pub trait Ports {
     fn reply(&mut self, reply: Reply);
     /// Enters the completion's callback in task 43, which posts it to queue 43.
     fn self_complete(&mut self, completion: Completion);
+    /// Takes the result a completion delivers before the step it targets handles it.
+    fn receive(&mut self, completed: Completed<'_>);
     fn fault(&mut self);
 }

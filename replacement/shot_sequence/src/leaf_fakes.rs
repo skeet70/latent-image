@@ -85,6 +85,7 @@ pub struct Fake {
     pub detection: PrimaryDetection,
     pub lists: Vec<SubjectList>,
     pub selection_starts: bool,
+    pub exposure: crate::exposure_fakes::ExposureWorld,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -120,6 +121,7 @@ impl Fake {
             detection: PrimaryDetection::default(),
             lists: Vec::new(),
             selection_starts: true,
+            exposure: crate::exposure_fakes::ExposureWorld::default(),
         }
     }
 

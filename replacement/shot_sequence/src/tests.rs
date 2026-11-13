@@ -3,7 +3,7 @@ use crate::{Outcome, Shot};
 use std::collections::VecDeque;
 use std::vec::Vec;
 use xm1_saclac_controllers::children::{ShotControl, ShotTarget as Target};
-use xm1_saclac_interface::{stock, BlockingRequest, CommandKind, Completion, CompletionStatus, LensEffect, RecordHandle};
+use xm1_saclac_interface::{stock, BlockingRequest, CommandKind, Completed, Completion, CompletionStatus, LensEffect, RecordHandle};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Call {
@@ -11,6 +11,7 @@ pub(crate) enum Call {
     Reply(Reply),
     Blocking(BlockingRequest),
     SelfComplete(Completion),
+    Received(Completion),
     Fault,
 }
 
@@ -64,6 +65,7 @@ impl Ports for Recorder {
     fn blocking(&mut self, request: BlockingRequest) { self.calls.push(Call::Blocking(request)); }
     fn reply(&mut self, reply: Reply) { self.calls.push(Call::Reply(reply)); }
     fn self_complete(&mut self, completion: Completion) { self.calls.push(Call::SelfComplete(completion)); }
+    fn receive(&mut self, completed: Completed<'_>) { self.calls.push(Call::Received(completed.completion)); }
     fn fault(&mut self) { self.calls.push(Call::Fault); }
 }
 
@@ -80,6 +82,21 @@ fn exposure_completes(shot: &mut Shot, target: Target, ports: &mut Recorder) {
     ports.answer(Query::Exposure(ExposureQuery::StatisticsAccepted), true);
     assert_eq!(shot.completed(target, Completion::Image4d, record(), ports), Outcome::Pending);
     assert_eq!(shot.completed(target, Completion::Image4c, record(), ports), Outcome::Pending);
+}
+
+#[test]
+fn a_completion_event_delivers_its_result_before_the_step_handles_it() {
+    use xm1_saclac_controllers::children::ShotEvent;
+    let mut shot = Shot::new();
+    let mut ports = Recorder::new();
+    s1_with_work(&mut ports);
+    shot.control(ShotControl::StartS1, record(), &mut ports);
+    ports.take();
+    ports.answer(Query::Exposure(ExposureQuery::StatisticsAccepted), true);
+    let completed = Completed { completion: Completion::Image4d, parameters: stock::parameters(&[4]) };
+    assert_eq!(shot.handle(ShotEvent::Completed { target: Target::HalfPress, completed, record: record() }, &mut ports), Outcome::Pending);
+    assert_eq!(ports.calls.first(), Some(&Call::Received(Completion::Image4d)));
+    assert!(ports.calls.contains(&Call::Effect(Effect::Exposure(ExposureEffect::AbsorbStatistics))));
 }
 
 #[test]

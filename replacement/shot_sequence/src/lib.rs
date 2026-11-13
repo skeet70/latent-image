@@ -5,6 +5,7 @@ pub mod boundary;
 pub mod calculation;
 pub mod capture;
 pub mod exposure;
+pub mod exposure_work;
 pub mod finish;
 pub mod jobs;
 pub mod outcome;
@@ -40,7 +41,10 @@ impl Shot {
         match event {
             ShotEvent::Control { control, record } => self.control(control, record, ports),
             ShotEvent::Command { target, command, record } => self.command(target, command.kind, record, ports),
-            ShotEvent::Completed { target, completed, record } => self.completed(target, completed.completion, record, ports),
+            ShotEvent::Completed { target, completed, record } => {
+                ports.receive(completed);
+                self.completed(target, completed.completion, record, ports)
+            }
         }
     }
 
@@ -87,3 +91,7 @@ mod preparation_tests;
 mod subjects_tests;
 #[cfg(test)]
 mod summary_tests;
+#[cfg(test)]
+mod exposure_fakes;
+#[cfg(test)]
+mod exposure_work_tests;
