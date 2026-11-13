@@ -76,3 +76,25 @@ fn synchronous_lens_requests_keep_wire_operation_codes() {
         assert_eq!(stock::lens_dc_operation(operation), code);
     }
 }
+
+#[test]
+fn flash_requests_preserve_wire_codes() {
+    use crate::FlashOperation;
+    assert_eq!(stock::flash_operation(FlashOperation::Request0d), 0x1a0d);
+    assert_eq!(stock::flash_operation(FlashOperation::Request0e), 0x1a0e);
+}
+
+#[test]
+fn indirect_lens_drive_and_unclassified_requests_require_the_lens_contract() {
+    use crate::{lens_effect, CalcOperation, ImgDcOperation, LensDcOperation, LensEffect, PeerOperation};
+    assert_eq!(lens_effect(PeerOperation::ImgDc(ImgDcOperation::Request2e)), LensEffect::DriveThroughImageBridge);
+    for request in [
+        PeerOperation::LensDc(LensDcOperation::Request07),
+        PeerOperation::LensDc(LensDcOperation::Request0c),
+        PeerOperation::ImgDc(ImgDcOperation::Request2e),
+        PeerOperation::LensDc(LensDcOperation::Request00),
+    ] {
+        assert!(lens_effect(request).requires_lens_safety_contract());
+    }
+    assert!(!lens_effect(PeerOperation::Calc(CalcOperation::Request0c)).requires_lens_safety_contract());
+}

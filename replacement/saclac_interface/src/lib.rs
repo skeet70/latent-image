@@ -411,5 +411,45 @@ pub trait SharedParameters {
     fn write(&mut self, command: CommandKind, values: Parameters<'_>) -> Result<(), Self::Error>;
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FlashOperation { Request0d, Request0e }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FlashRequest<'a> {
+    pub operation: FlashOperation,
+    pub parameters: Parameters<'a>,
+    pub completions: &'a [Completion],
+}
+
+pub trait Flash {
+    type Error;
+    fn request(&mut self, request: FlashRequest<'_>) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PeerOperation {
+    LensDc(LensDcOperation),
+    ImgDc(ImgDcOperation),
+    Calc(CalcOperation),
+    Calc1(Calc1Operation),
+    Statistics(StatisticsOperation),
+    Flash(FlashOperation),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LensEffect { NoLensDrive, DirectDrive, DriveThroughImageBridge, Unclassified }
+impl LensEffect {
+    pub const fn requires_lens_safety_contract(self) -> bool { !matches!(self, Self::NoLensDrive) }
+}
+
+pub const fn lens_effect(operation: PeerOperation) -> LensEffect {
+    match operation {
+        PeerOperation::LensDc(LensDcOperation::Request07 | LensDcOperation::Request08 | LensDcOperation::Request0c) => LensEffect::DirectDrive,
+        PeerOperation::ImgDc(ImgDcOperation::Request2e) => LensEffect::DriveThroughImageBridge,
+        PeerOperation::Calc(_) | PeerOperation::Calc1(_) | PeerOperation::Statistics(_) => LensEffect::NoLensDrive,
+        PeerOperation::LensDc(_) | PeerOperation::ImgDc(_) | PeerOperation::Flash(_) => LensEffect::Unclassified,
+    }
+}
+
 #[cfg(test)]
 mod tests;
