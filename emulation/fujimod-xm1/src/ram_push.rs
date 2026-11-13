@@ -197,7 +197,8 @@ fn boot_key(arguments: &Arguments, inputs: &Inputs, adjustment: &[u8], records: 
     let identity = BootIdentity::new(
         &inputs.document_bytes, &inputs.update, &inputs.boot_rom, adjustment,
         inputs.card.as_ref().map(|card| card.image.sha256.as_str()), &procedure,
-    ).with_record_nand(records).with_committed_nand(committed);
+    ).with_record_nand(records).with_committed_nand(committed)
+        .with_emulator_binary(&read(&std::env::current_exe().map_err(|error| error.to_string())?)?);
     Ok(BootKey { key: identity.key(), inputs: identity.document() })
 }
 
@@ -1822,6 +1823,7 @@ fn drive() -> Result<(), String> {
                 configuration: hex_field(&record.configuration)?,
             };
             let checkpoint = json!({"key": key.key, "inputs": key.inputs, "directory": attach_directory,
+                "snapshot_sha256": fujimod_xm1::machine_fingerprint::snapshot_digest(&directory.join(SNAPSHOT))?,
                 "key_seconds": key_seconds, "start": StartKind::Installed, "installed": directory,
                 "restore_seconds": restore_started.elapsed().as_secs_f64()});
             (Ff80::new(machine, rendezvous), attachment, checkpoint)
@@ -1839,6 +1841,7 @@ fn drive() -> Result<(), String> {
                 configuration: hex_field(&record.configuration)?,
             };
             let checkpoint = json!({"key": key.key, "inputs": key.inputs, "directory": attach_directory,
+                "snapshot_sha256": fujimod_xm1::machine_fingerprint::snapshot_digest(&attach_directory.join(SNAPSHOT))?,
                 "key_seconds": key_seconds, "start": StartKind::Restored,
                 "restore_seconds": restore_started.elapsed().as_secs_f64()});
             (Ff80::new(machine, rendezvous), attachment, checkpoint)
@@ -1893,6 +1896,7 @@ fn drive() -> Result<(), String> {
                         "configuration": encode_hex(&attachment.configuration)});
                     save_checkpoint(&mut bridge, &root, key.key.as_str(), ATTACH_RECORD, &record)?;
                     json!({"key": key.key, "inputs": key.inputs, "directory": attach_directory,
+                        "snapshot_sha256": fujimod_xm1::machine_fingerprint::snapshot_digest(&attach_directory.join(SNAPSHOT))?,
                         "key_seconds": key_seconds, "start": start,
                         "boot_seconds": boot_seconds, "saved": true, "save_seconds": save_started.elapsed().as_secs_f64()})
                 }
