@@ -646,6 +646,11 @@ const WINDOW_STATISTICS: (u32, u32) = (0x5ffe_c1b4, 4096);
 pub fn calc_payload(payload: &calc::CalcPayload) -> (CalcOperation, Encoded) {
     use calc::CalcPayload as P;
     match *payload {
+        P::Evaluation { request, callback } => {
+            let mut message = Encoded::new(exposure::EVALUATION_REQUEST_BYTES);
+            message.put(0, &exposure::evaluation_request(&request, callback));
+            (CalcOperation::Request00, message)
+        }
         P::Calculation { block, source, callback } => {
             let mut message = Encoded::new(232);
             message.word(0, callback.0);

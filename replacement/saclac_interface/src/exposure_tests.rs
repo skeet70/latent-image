@@ -1,5 +1,7 @@
-use crate::exposure::{Correction, MeasuredEntry, ReleaseStatus, StatisticsRequest, CORRECTION_HALVES};
+use crate::calc::SharedAddress;
+use crate::exposure::{Correction, EvaluationRequest, MeasuredEntry, ReleaseStatus, StatisticsRequest, CORRECTION_HALVES};
 use crate::stock::exposure::*;
+use crate::stock::StockCallbackWord;
 
 fn word(bytes: &[u8], offset: usize) -> u32 { u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) }
 
@@ -59,4 +61,42 @@ fn correction_round_trips_and_an_empty_payload_carries_none() {
     assert_eq!(super::stock::exposure::correction(&correction_payload(&correction)), Some(correction));
     assert_eq!(correction.word(0x30), 0x1234_5678);
     assert_eq!(super::stock::exposure::correction(&[]), None);
+}
+
+#[test]
+fn evaluation_request_places_the_block_after_the_callback_and_the_addresses_after_the_block() {
+    let request = EvaluationRequest {
+        row: 3,
+        measured: [[1, 2], [3, 4], [5, 6]],
+        statistics: [7, 8, 9, 10],
+        row_buffer: Some(SharedAddress(0x5ffb_6120)),
+        rates: [100, 10, 20, 10],
+        after_reference: true,
+        value: 0x1234,
+        lower_value: 0x8000,
+        tolerance_above: 20,
+        tolerance_below: -20,
+        floor: -600,
+        direction: 3,
+        column_count: 2,
+        column_regions: Some(SharedAddress(0x016b_4b00)),
+        column_buffer: Some(SharedAddress(0x5ffb_7130)),
+        dimensions: [11, 12, 13],
+        next_profile: 0x17,
+        level_curves: [Some(SharedAddress(0x5ffb_ece0)); 4],
+        level_classes: Some(SharedAddress(0x5ffb_f530)),
+        frame: None,
+        subject_curves: [Some(SharedAddress(0x5ffb_f4e0)); 4],
+        selection_flags: Some(SharedAddress(0x5ffc_0130)),
+    };
+    let bytes = evaluation_request(&request, StockCallbackWord(0x00f1_ee10));
+    let half = |offset: usize| u16::from_le_bytes([bytes[offset], bytes[offset + 1]]);
+    assert_eq!((word(&bytes, 0), word(&bytes, 4), word(&bytes, 0x14)), (0x00f1_ee10, 3, 0x5ffb_6120));
+    assert_eq!([half(8), half(10), half(12), half(14), half(0x10), half(0x12), half(0x1c), half(0x1e)], [1, 2, 16, 16, 3, 4, 5, 6]);
+    assert_eq!((word(&bytes, 0x20), word(&bytes, 0x2c), word(&bytes, 0x30)), (100, 10, 1));
+    assert_eq!((half(0x34), half(0x36), half(0x3c), half(0x3e)), (0x1234, 0x8000, 250, -600i16 as u16));
+    assert_eq!((word(&bytes, 0x40), half(0x48), word(&bytes, 0x50), word(&bytes, 0x54)), (3, 7, 2, 0x016b_4b00));
+    assert_eq!((half(0x5c), word(&bytes, 0x64)), (11, 0x17));
+    assert_eq!((word(&bytes, 0x68), word(&bytes, 0x78), word(&bytes, 0x7c), word(&bytes, 0x90)), (0x5ffb_ece0, 0x5ffb_f530, 0, 0x5ffc_0130));
+    assert!(bytes[0x94..].iter().all(|byte| *byte == 0));
 }
