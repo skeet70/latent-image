@@ -6,6 +6,7 @@ _SOURCES = [
     "src/numeric.rs",
     "src/profile.rs",
     "src/stock/mod.rs",
+    "src/stock/records.rs",
     "src/stock/tables.rs",
 ]
 
