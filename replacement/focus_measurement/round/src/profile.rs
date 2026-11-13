@@ -24,8 +24,8 @@ pub enum PublishedResult { Acquisition, Search, Auxiliary, Source }
 
 /// How the profile a record selects chooses its measurement. `Other` carries a
 /// value the round only passes on.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ProfileSelection { Unselected, Record, Other(u8) }
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ProfileSelection { #[default] Unselected, Record, Other(u8) }
 
 /// The profile's measurement mode, a value the round tests for six and for zero
 /// and otherwise passes on.
@@ -141,6 +141,10 @@ pub struct WindowRecord {
     pub first: RetainedWord,
     pub halfword: RetainedHalfword,
     pub second: RetainedWord,
+}
+
+impl WindowRecord {
+    pub const EMPTY: Self = Self { status: WindowStatus(0), first: RetainedWord(0), halfword: RetainedHalfword(0), second: RetainedWord(0) };
 }
 
 /// The round's view of the shared measurement record and the profile records.

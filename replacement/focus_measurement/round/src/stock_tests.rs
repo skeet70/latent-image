@@ -68,9 +68,10 @@ fn a_parameter_change_names_its_client_then_the_requested_and_offered_selections
 fn the_window_request_places_each_field_and_zeroes_the_unwritten_bytes() {
     use crate::pipeline::{GainStep, PipelineSnapshot, PipelineWord, TimingWord};
     use crate::profile::{ProfileMode, ProfileSelection, RetainedHalfword, RetainedWord, WindowRecord, WindowStatus};
-    use crate::stock::window_request_payload;
+    use crate::stock::window_payload;
     use crate::window::WindowRequest;
-    use xm1_saclac_controllers::stock::StockCallbackWord;
+    use xm1_saclac_interface::calc::PeerCallback;
+    use xm1_saclac_interface::stock::calc_payload;
     let request = WindowRequest {
         selection: ProfileSelection::Other(2),
         mode: ProfileMode(6),
@@ -86,7 +87,9 @@ fn the_window_request_places_each_field_and_zeroes_the_unwritten_bytes() {
         record: WindowRecord { status: WindowStatus(2), first: RetainedWord(0x7172_7374), halfword: RetainedHalfword(0x8182), second: RetainedWord(0x9192_9394) },
         refresh: true,
     };
-    let bytes = window_request_payload(request, StockCallbackWord(0xf3a3f8));
+    let (_, encoded) = calc_payload(&window_payload(request, PeerCallback(0xf3a3f8)));
+    let bytes = encoded.bytes();
+    assert_eq!(bytes.len(), 80);
     let word = |offset: usize| u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
     let half = |offset: usize| u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap());
     assert_eq!((word(0), word(4), half(8)), (2, 0x7172_7374, 0x5152));
@@ -102,17 +105,19 @@ fn a_snapshot_reads_each_field_at_its_offset() {
     use crate::stock::{pipeline_snapshot, SNAPSHOT_BYTES};
     let mut bytes = [0u8; SNAPSHOT_BYTES];
     let mut put = |offset: usize, value: &[u8]| bytes[offset..offset + value.len()].copy_from_slice(value);
-    for (offset, word) in [(0, 5u32), (4, 0x40), (8, 0x80), (0x34, 0x340), (0x38, 0x380), (0xdc, 0xdc0), (0xe0, 0xe00), (0xec, 0xec0), (0xf4, 0xf40), (0xf8, 0xf80), (0x104, 0x1040), (0x110, 0x1100)] {
+    for (offset, word) in [(0, 5u32), (4, 0x40), (8, 0x80), (0xc, 0xc0), (0x10, 0x100), (0x14, 0x140), (0x18, 0x180), (0x34, 0x340), (0x38, 0x380), (0xdc, 0xdc0), (0xe0, 0xe00), (0xe4, 0xe40), (0xe8, 0xe80), (0xec, 0xec0), (0xf4, 0xf40), (0xf8, 0xf80), (0x104, 0x1040), (0x110, 0x1100)] {
         put(offset, &word.to_le_bytes());
     }
     put(0xf2, &[0x2f]);
     put(0xfc, &0xfc0u16.to_le_bytes());
     put(0xfe, &0xfe0u16.to_le_bytes());
+    put(0x100, &0x1000u16.to_le_bytes());
     let snapshot = pipeline_snapshot(&bytes);
     assert!(snapshot.status == SnapshotStatus(5) && snapshot.status.complete());
     assert_eq!((snapshot.timing, snapshot.flags, snapshot.gain_step), (TimingWord(0xec0), 0x2f, GainStep(0xf40)));
     assert_eq!((snapshot.exposure, snapshot.levels, snapshot.adjustment), ([PipelineWord(0xf80), PipelineWord(0x1100)], [0xfc0, 0xfe0], PipelineWord(0x1040)));
     assert_eq!(snapshot.retained, [0x40, 0x80, 0xdc0, 0xe00, 0x340, 0x380].map(PipelineWord));
+    assert_eq!((snapshot.size, snapshot.origin, snapshot.extent, snapshot.offset_level), ([0xc0, 0x100].map(PipelineWord), [0x140, 0x180].map(PipelineWord), [0xe40, 0xe80].map(PipelineWord), 0x1000));
 }
 
 #[test]

@@ -146,42 +146,39 @@ pub const fn profile_selection_byte(selection: crate::profile::ProfileSelection)
     match selection { ProfileSelection::Unselected => 0, ProfileSelection::Record => 1, ProfileSelection::Other(byte) => byte }
 }
 
-/// X-M1 1.50: 0xff6b4c case 0 captures the primary statistics into 4096 bytes at 0x5ffec1b4.
-const PRIMARY_STATISTICS: (u32, u32) = (0x5ffe_c1b4, 4096);
-
-/// X-M1 1.50: 0xf3a564..0xf3a73c builds the 76-byte window request on the stack
-/// and 0xf4c6e8 posts it with the completion word at byte 76 to calc 0x3c0c.
-/// Bytes 56..63 come from planner words +0x48 and +0x44 (0xfa8018, 0xfa9588),
-/// whose setters 0xfa8000 and 0xfa9578 have no caller, so they are zero.
-/// Unwritten stack bytes 10..11, 17..19, 28..31 and 34..35 are zero here.
-pub fn window_request_payload(request: crate::window::WindowRequest, completion: xm1_saclac_controllers::stock::StockCallbackWord) -> [u8; 80] {
-    let mut bytes = [0; 80];
-    let mut put = |offset: usize, value: &[u8]| bytes[offset..offset + value.len()].copy_from_slice(value);
+/// The window request as calc 0x3c0c carries it; `saclac_interface::stock::calc_payload` lays it out.
+pub fn window_payload(request: crate::window::WindowRequest, callback: xm1_saclac_interface::calc::PeerCallback) -> xm1_saclac_interface::calc::CalcPayload {
+    use xm1_saclac_interface::calc::{CalcPayload, WindowRecord, WindowRequest, WindowSample};
     let snapshot = request.snapshot;
-    put(0, &u32::from(profile_selection_byte(request.selection)).to_le_bytes());
-    put(4, &request.record.first.0.to_le_bytes());
-    put(8, &request.level.to_le_bytes());
-    put(12, &snapshot.timing.0.to_le_bytes());
-    put(16, &[snapshot.flags]);
-    put(20, &snapshot.exposure[0].0.to_le_bytes());
-    put(24, &snapshot.levels[0].to_le_bytes());
-    put(26, &request.reference.to_le_bytes());
-    put(32, &request.record.halfword.0.to_le_bytes());
-    put(36, &PRIMARY_STATISTICS.0.to_le_bytes());
-    put(40, &PRIMARY_STATISTICS.1.to_le_bytes());
-    put(44, &snapshot.adjustment.0.to_le_bytes());
-    put(48, &request.record.status.0.to_le_bytes());
-    put(52, &request.record.second.0.to_le_bytes());
-    put(64, &u32::from(request.refresh).to_le_bytes());
-    put(68, &u32::from(request.mode.0).to_le_bytes());
-    put(72, &u32::from(request.selected).to_le_bytes());
-    put(76, &completion.0.to_le_bytes());
-    bytes
+    CalcPayload::Window {
+        request: WindowRequest {
+            selection: profile_selection_byte(request.selection),
+            mode: request.mode.0,
+            selected: request.selected,
+            sample: WindowSample {
+                mode: snapshot.timing.0,
+                flags: snapshot.flags,
+                exposure: snapshot.exposure[0].0,
+                level: snapshot.levels[0],
+                adjustment: snapshot.adjustment.0,
+            },
+            level: request.level,
+            reference: request.reference,
+            window: WindowRecord {
+                first: request.record.first.0,
+                second: request.record.second.0,
+                status: request.record.status.0,
+                halfword: request.record.halfword.0,
+            },
+            refresh: request.refresh,
+        },
+        callback,
+    }
 }
 
 /// X-M1 1.50: 0xff6b4c copies 0x5c4 bytes of pipeline state to 0x16f496c + slot·0x5c4,
-/// which 0xfea7ac returns. Offsets from the window (0xf3a5a4..0xf3a614) and
-/// history (0xf32680..0xf32874) builders.
+/// which 0xfea7ac returns. Offsets from the window (0xf3a5a4..0xf3a614), history
+/// (0xf32680..0xf32874) and auxiliary request (0xf37b34..0xf37bf8) builders.
 pub const SNAPSHOT_BYTES: usize = 0x5c4;
 
 pub fn pipeline_snapshot(bytes: &[u8; SNAPSHOT_BYTES]) -> crate::pipeline::PipelineSnapshot {
@@ -195,7 +192,11 @@ pub fn pipeline_snapshot(bytes: &[u8; SNAPSHOT_BYTES]) -> crate::pipeline::Pipel
         gain_step: GainStep(word(0xf4)),
         exposure: [PipelineWord(word(0xf8)), PipelineWord(word(0x110))],
         levels: [half(0xfc), half(0xfe)],
+        offset_level: half(0x100),
         adjustment: PipelineWord(word(0x104)),
+        size: [PipelineWord(word(0xc)), PipelineWord(word(0x10))],
+        origin: [PipelineWord(word(0x14)), PipelineWord(word(0x18))],
+        extent: [PipelineWord(word(0xe4)), PipelineWord(word(0xe8))],
         retained: [4, 8, 0xdc, 0xe0, 0x34, 0x38].map(|offset| PipelineWord(word(offset))),
     }
 }

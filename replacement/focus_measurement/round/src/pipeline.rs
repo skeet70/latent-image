@@ -30,10 +30,32 @@ pub struct PipelineSnapshot {
     pub gain_step: GainStep,
     pub exposure: [PipelineWord; 2],
     pub levels: [u16; 2],
+    pub offset_level: u16,
     /// One lowers the window level by 100.
     pub adjustment: PipelineWord,
+    /// Dimensions of the statistics image.
+    pub size: [PipelineWord; 2],
+    pub origin: [PipelineWord; 2],
+    pub extent: [PipelineWord; 2],
     /// Words the measurement history keeps for its readers.
     pub retained: [PipelineWord; 6],
+}
+
+impl PipelineSnapshot {
+    pub const EMPTY: Self = Self {
+        status: SnapshotStatus(0),
+        timing: TimingWord(0),
+        flags: 0,
+        gain_step: GainStep(0),
+        exposure: [PipelineWord(0); 2],
+        levels: [0; 2],
+        offset_level: 0,
+        adjustment: PipelineWord(0),
+        size: [PipelineWord(0); 2],
+        origin: [PipelineWord(0); 2],
+        extent: [PipelineWord(0); 2],
+        retained: [PipelineWord(0); 6],
+    };
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
