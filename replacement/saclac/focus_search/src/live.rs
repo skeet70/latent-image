@@ -8,21 +8,22 @@ use xm1_saclac_controllers::search::{FocusSearch, SearchDecision, SearchInput, S
 use xm1_saclac_interface::search::{BridgeReport, BridgeStatus};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Measurement<Frame, Evaluation> {
-    /// What the intake took in when the evaluation was requested.
-    pub frame: Frame,
+pub struct Measurement<Evaluation> {
     pub evaluation: Evaluation,
-    /// The bridge's report since the previous measurement, when it reported a move.
-    pub report: Option<BridgeReport>,
     pub bridge_busy: bool,
 }
 
 /// What the live search asks of a strategy beyond the slot.
-pub trait LiveStrategy: FocusSearch<Sample = Measurement<Self::Frame, Self::Evaluation>> {
-    type Frame;
+pub trait LiveStrategy: FocusSearch<Sample = Measurement<Self::Evaluation>> {
     type Evaluation;
+    /// What calc evaluates a frame from.
+    type Record;
 
     fn ready(&mut self, context: &Self::Context, bridge_busy: bool) -> bool;
+    /// Takes in the frame to evaluate next (0xf40944).
+    fn take_in(&mut self, context: &mut Self::Context) -> Self::Record;
+    /// The bridge's report of a request, as it arrives while the search runs.
+    fn lens_reported(&mut self, context: &mut Self::Context, report: BridgeReport);
     /// What the bridge is told when the search hands the lens back.
     fn release(&mut self, context: &Self::Context) -> Self::Drive;
     /// Whether a second `Begin` while searching is accepted; stock faults on it except in
@@ -30,12 +31,10 @@ pub trait LiveStrategy: FocusSearch<Sample = Measurement<Self::Frame, Self::Eval
     fn accepts_begin(&self, context: &Self::Context) -> bool;
 }
 
-pub trait Ports<Frame, Drive> {
+pub trait Ports<Record, Drive> {
     /// Stock's fault reaction (0xf46c20).
     fn fault(&mut self);
-    /// Takes in the next frame (0xf40944) and posts its evaluation.
-    fn evaluate(&mut self) -> Frame;
-    fn request(&mut self, request: Request<Drive>);
+    fn request(&mut self, request: Request<Record, Drive>);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -94,32 +93,18 @@ pub struct LiveSearch<S: LiveStrategy> {
     activity: Activity,
     evaluating: bool,
     bridging: bool,
-    frame: Option<S::Frame>,
-    report: Option<BridgeReport>,
 }
 
-impl<S: LiveStrategy> LiveSearch<S>
-where
-    S::Frame: Copy,
-{
+impl<S: LiveStrategy> LiveSearch<S> {
     pub fn new(strategy: S, context: S::Context) -> Self {
-        Self {
-            strategy,
-            context,
-            lane: Lane::Idle,
-            activity: Activity::Idle,
-            evaluating: false,
-            bridging: false,
-            frame: None,
-            report: None,
-        }
+        Self { strategy, context, lane: Lane::Idle, activity: Activity::Idle, evaluating: false, bridging: false }
     }
 
     pub fn context(&self) -> &S::Context {
         &self.context
     }
 
-    pub fn handle(&mut self, event: LaneEvent<S::Evaluation>, ports: &mut impl Ports<S::Frame, S::Drive>) -> LaneStatus {
+    pub fn handle(&mut self, event: LaneEvent<S::Evaluation>, ports: &mut impl Ports<S::Record, S::Drive>) -> LaneStatus {
         match (self.lane, event) {
             (Lane::Idle, LaneEvent::Initialize) => {
                 self.search(LaneEvent::Initialize, ports);
@@ -153,7 +138,7 @@ where
         }
     }
 
-    fn search(&mut self, event: LaneEvent<S::Evaluation>, ports: &mut impl Ports<S::Frame, S::Drive>) -> LaneStatus {
+    fn search(&mut self, event: LaneEvent<S::Evaluation>, ports: &mut impl Ports<S::Record, S::Drive>) -> LaneStatus {
         use Activity as A;
         match (self.activity, event) {
             (_, LaneEvent::Other) => LaneStatus::Unhandled,
@@ -219,7 +204,8 @@ where
             (A::Searching | A::Suspended, LaneEvent::Work) => {
                 if self.strategy.ready(&self.context, self.bridging) {
                     self.evaluating = true;
-                    self.frame = Some(ports.evaluate());
+                    let record = self.strategy.take_in(&mut self.context);
+                    ports.request(Request::Evaluate(record));
                     LaneStatus::Pending
                 } else {
                     LaneStatus::Idle
@@ -228,10 +214,9 @@ where
             (_, LaneEvent::Work) => LaneStatus::Idle,
 
             (A::Searching | A::Suspended, LaneEvent::Evaluated(evaluation)) => {
-                self.evaluating = false;
-                if let Some(frame) = self.frame {
-                    let measurement = Measurement { frame, evaluation, report: self.report.take(), bridge_busy: self.bridging };
-                    self.advance(SearchInput::Sample(measurement), ports);
+                if self.evaluating {
+                    self.evaluating = false;
+                    self.advance(SearchInput::Sample(Measurement { evaluation, bridge_busy: self.bridging }), ports);
                 }
                 LaneStatus::Idle
             }
@@ -267,18 +252,18 @@ where
                         self.release(A::FaultReleasing, ports);
                     }
                 } else {
-                    self.report = Some(report);
+                    self.strategy.lens_reported(&mut self.context, report);
                 }
                 LaneStatus::Idle
             }
             (A::Suspending, LaneEvent::LensReported(report)) => {
                 self.bridging = false;
-                self.report = Some(report);
+                self.strategy.lens_reported(&mut self.context, report);
                 if self.evaluating { LaneStatus::Idle } else { self.suspend(ports) }
             }
             (A::Resuming, LaneEvent::LensReported(report)) => {
                 self.bridging = false;
-                self.report = Some(report);
+                self.strategy.lens_reported(&mut self.context, report);
                 if self.evaluating { LaneStatus::Idle } else { self.resume(ports) }
             }
             (A::FaultReleasing, LaneEvent::LensReported(_)) => {
@@ -311,38 +296,38 @@ where
         self.evaluating || self.bridging
     }
 
-    fn refuse(&mut self, ports: &mut impl Ports<S::Frame, S::Drive>) -> LaneStatus {
+    fn refuse(&mut self, ports: &mut impl Ports<S::Record, S::Drive>) -> LaneStatus {
         ports.fault();
         LaneStatus::Refused
     }
 
-    fn suspend(&mut self, ports: &mut impl Ports<S::Frame, S::Drive>) -> LaneStatus {
+    fn suspend(&mut self, ports: &mut impl Ports<S::Record, S::Drive>) -> LaneStatus {
         self.activity = Activity::Suspended;
         self.advance(SearchInput::Suspend, ports);
         LaneStatus::Complete
     }
 
-    fn resume(&mut self, ports: &mut impl Ports<S::Frame, S::Drive>) -> LaneStatus {
+    fn resume(&mut self, ports: &mut impl Ports<S::Record, S::Drive>) -> LaneStatus {
         self.activity = Activity::Searching;
         self.advance(SearchInput::Resume, ports);
         LaneStatus::Complete
     }
 
-    fn release(&mut self, next: Activity, ports: &mut impl Ports<S::Frame, S::Drive>) {
+    fn release(&mut self, next: Activity, ports: &mut impl Ports<S::Record, S::Drive>) {
         self.activity = next;
         let drive = self.strategy.release(&self.context);
         self.bridge(BridgeMotion::Release, drive, ports);
     }
 
     /// Stock drops a bridge request while another is in flight (0xf3e9cc).
-    fn bridge(&mut self, motion: BridgeMotion, drive: S::Drive, ports: &mut impl Ports<S::Frame, S::Drive>) {
+    fn bridge(&mut self, motion: BridgeMotion, drive: S::Drive, ports: &mut impl Ports<S::Record, S::Drive>) {
         if !self.bridging {
             self.bridging = true;
             ports.request(Request::Bridge { motion, drive });
         }
     }
 
-    fn advance(&mut self, input: SearchInput<S::Sample>, ports: &mut impl Ports<S::Frame, S::Drive>) {
+    fn advance(&mut self, input: SearchInput<S::Sample>, ports: &mut impl Ports<S::Record, S::Drive>) {
         match self.strategy.advance(&mut self.context, input) {
             SearchDecision::Next(SearchStep::Measure) => {}
             SearchDecision::Next(SearchStep::Travel { travel, drive }) => self.bridge(BridgeMotion::Travel(travel), drive, ports),

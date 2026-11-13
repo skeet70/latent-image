@@ -10,10 +10,11 @@ use xm1_saclac_interface::LensEffect;
 enum Seen {
     Initialize,
     Begin,
-    Sample(Measurement<u8, u16>),
+    Sample(Measurement<u16>),
     Suspend,
     Resume,
     Cancel,
+    Reported(BridgeReport),
 }
 
 #[derive(Default)]
@@ -21,11 +22,12 @@ struct Script {
     decisions: VecDeque<SearchDecision<u8>>,
     unready: bool,
     frames_while_moving: bool,
+    frames: u8,
 }
 
 impl FocusSearch for Script {
     type Context = Vec<Seen>;
-    type Sample = Measurement<u8, u16>;
+    type Sample = Measurement<u16>;
     type Drive = u8;
 
     fn advance(&mut self, seen: &mut Vec<Seen>, input: SearchInput<Self::Sample>) -> SearchDecision<u8> {
@@ -47,11 +49,18 @@ impl FocusSearch for Script {
 const RELEASE_DRIVE: u8 = 0xee;
 
 impl LiveStrategy for Script {
-    type Frame = u8;
     type Evaluation = u16;
+    type Record = u8;
 
     fn ready(&mut self, _: &Vec<Seen>, bridge_busy: bool) -> bool {
         !self.unready && (self.frames_while_moving || !bridge_busy)
+    }
+    fn take_in(&mut self, _: &mut Vec<Seen>) -> u8 {
+        self.frames += 1;
+        self.frames
+    }
+    fn lens_reported(&mut self, seen: &mut Vec<Seen>, report: BridgeReport) {
+        seen.push(Seen::Reported(report));
     }
     fn release(&mut self, _: &Vec<Seen>) -> u8 {
         RELEASE_DRIVE
@@ -64,26 +73,19 @@ impl LiveStrategy for Script {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Traffic {
     Fault,
-    Evaluate,
-    Request(Request<u8>),
+    Request(Request<u8, u8>),
 }
 
 #[derive(Default)]
 struct Peers {
     traffic: Vec<Traffic>,
-    frames: u8,
 }
 
 impl Ports<u8, u8> for Peers {
     fn fault(&mut self) {
         self.traffic.push(Traffic::Fault);
     }
-    fn evaluate(&mut self) -> u8 {
-        self.traffic.push(Traffic::Evaluate);
-        self.frames += 1;
-        self.frames
-    }
-    fn request(&mut self, request: Request<u8>) {
+    fn request(&mut self, request: Request<u8, u8>) {
         self.traffic.push(Traffic::Request(request));
     }
 }
@@ -102,8 +104,12 @@ fn report(status: BridgeStatus) -> BridgeReport {
     BridgeReport { status, position: 0, class: LensClass(0) }
 }
 
+fn evaluate(frame: u8) -> Traffic {
+    Traffic::Request(Request::Evaluate(frame))
+}
+
 fn searching(decisions: &[SearchDecision<u8>]) -> (LiveSearch<Script>, Peers) {
-    let script = Script { decisions: decisions.iter().copied().collect(), unready: false, frames_while_moving: true };
+    let script = Script { decisions: decisions.iter().copied().collect(), frames_while_moving: true, ..Script::default() };
     let mut search = LiveSearch::new(script, Vec::new());
     let mut peers = Peers::default();
     assert_eq!(search.handle(LaneEvent::Enable, &mut peers), LaneStatus::Complete);
@@ -137,28 +143,37 @@ fn a_ready_frame_is_evaluated_and_its_decision_moves_the_lens() {
     let (mut search, mut peers) = searching(&[travel(7)]);
     assert_eq!(search.handle(LaneEvent::Work, &mut peers), LaneStatus::Pending);
     assert_eq!(search.handle(LaneEvent::Evaluated(500), &mut peers), LaneStatus::Idle);
-    assert_eq!(
-        peers.traffic,
-        [Traffic::Evaluate, Traffic::Request(Request::Bridge { motion: BridgeMotion::Travel(TRAVEL), drive: 7 })]
-    );
-    assert_eq!(search.context()[1], Seen::Sample(Measurement { frame: 1, evaluation: 500, report: None, bridge_busy: false }));
+    assert_eq!(peers.traffic, [evaluate(1), Traffic::Request(Request::Bridge { motion: BridgeMotion::Travel(TRAVEL), drive: 7 })]);
+    assert_eq!(search.context()[1], Seen::Sample(Measurement { evaluation: 500, bridge_busy: false }));
 }
 
 #[test]
-fn a_moved_report_reaches_the_next_sample_once() {
-    let (mut search, mut peers) = searching(&[SearchDecision::Next(SearchStep::Measure), travel(1)]);
-    assert_eq!(search.handle(LaneEvent::Work, &mut peers), LaneStatus::Pending);
-    assert_eq!(search.handle(LaneEvent::Evaluated(10), &mut peers), LaneStatus::Idle);
+fn a_lens_report_reaches_the_strategy_as_it_arrives() {
+    let (mut search, mut peers) = searching(&[travel(1)]);
+    search.handle(LaneEvent::Work, &mut peers);
+    search.handle(LaneEvent::Evaluated(10), &mut peers);
+    search.handle(LaneEvent::Work, &mut peers);
     assert_eq!(search.handle(LaneEvent::LensReported(moved(-12)), &mut peers), LaneStatus::Idle);
-    assert_eq!(search.handle(LaneEvent::Work, &mut peers), LaneStatus::Pending);
-    assert_eq!(search.handle(LaneEvent::Evaluated(20), &mut peers), LaneStatus::Idle);
-    assert_eq!(search.handle(LaneEvent::Work, &mut peers), LaneStatus::Pending);
-    assert_eq!(search.handle(LaneEvent::Evaluated(30), &mut peers), LaneStatus::Idle);
-    let reports: Vec<_> = search.context().iter().filter_map(|seen| match seen {
-        Seen::Sample(sample) => Some(sample.report),
-        _ => None,
-    }).collect();
-    assert_eq!(reports, [None, Some(moved(-12)), None]);
+    search.handle(LaneEvent::Evaluated(20), &mut peers);
+    assert_eq!(
+        search.context()[1..],
+        [
+            Seen::Sample(Measurement { evaluation: 10, bridge_busy: false }),
+            Seen::Reported(moved(-12)),
+            Seen::Sample(Measurement { evaluation: 20, bridge_busy: false }),
+        ]
+    );
+}
+
+#[test]
+fn a_report_while_resuming_reaches_the_strategy_before_the_resumption() {
+    let (mut search, mut peers) = searching(&[travel(1)]);
+    assert_eq!(search.handle(LaneEvent::Suspend, &mut peers), LaneStatus::Complete);
+    search.handle(LaneEvent::Work, &mut peers);
+    search.handle(LaneEvent::Evaluated(1), &mut peers);
+    assert_eq!(search.handle(LaneEvent::Resume, &mut peers), LaneStatus::Pending);
+    assert_eq!(search.handle(LaneEvent::LensReported(moved(3)), &mut peers), LaneStatus::Complete);
+    assert_eq!(search.context()[3..], [Seen::Cancel, Seen::Reported(moved(3)), Seen::Resume]);
 }
 
 #[test]
@@ -169,6 +184,13 @@ fn frames_wait_while_the_strategy_is_not_ready() {
     assert_eq!(unready.handle(LaneEvent::Work, &mut peers), LaneStatus::Idle);
     assert!(peers.traffic.is_empty());
     assert_eq!(search.handle(LaneEvent::Work, &mut peers), LaneStatus::Pending);
+}
+
+#[test]
+fn an_evaluation_nobody_asked_for_is_not_a_sample() {
+    let (mut search, mut peers) = searching(&[]);
+    assert_eq!(search.handle(LaneEvent::Evaluated(1), &mut peers), LaneStatus::Idle);
+    assert_eq!(search.context(), &[Seen::Begin]);
 }
 
 #[test]
@@ -201,6 +223,7 @@ fn a_deferred_release_is_asked_again() {
     assert_eq!(search.handle(LaneEvent::LensReported(report(BridgeStatus::Other(5))), &mut peers), LaneStatus::Complete);
     let release = Traffic::Request(Request::Bridge { motion: BridgeMotion::Release, drive: RELEASE_DRIVE });
     assert_eq!(peers.traffic, [release, release]);
+    assert_eq!(search.context(), &[Seen::Begin]);
 }
 
 #[test]
@@ -216,10 +239,7 @@ fn stopping_drains_the_evaluation_and_the_move_before_releasing() {
     assert_eq!(search.handle(LaneEvent::Evaluated(2), &mut peers), LaneStatus::Pending);
     assert_eq!(peers.traffic.len(), 1);
     assert_eq!(search.handle(LaneEvent::LensReported(moved(4)), &mut peers), LaneStatus::Pending);
-    assert_eq!(
-        peers.traffic[1..],
-        [Traffic::Request(Request::Bridge { motion: BridgeMotion::Release, drive: RELEASE_DRIVE })]
-    );
+    assert_eq!(peers.traffic[1..], [Traffic::Request(Request::Bridge { motion: BridgeMotion::Release, drive: RELEASE_DRIVE })]);
     assert_eq!(search.handle(LaneEvent::LensReported(moved(4)), &mut peers), LaneStatus::Complete);
 }
 
@@ -265,10 +285,10 @@ fn a_bridge_fault_with_nothing_evaluating_releases_at_once() {
 
 #[test]
 fn the_bridge_requests_need_the_lens_safety_contract() {
-    let travel = Request::Bridge { motion: BridgeMotion::Travel(TRAVEL), drive: () };
-    let release = Request::Bridge { motion: BridgeMotion::Release, drive: () };
+    let travel = Request::<(), ()>::Bridge { motion: BridgeMotion::Travel(TRAVEL), drive: () };
+    let release = Request::<(), ()>::Bridge { motion: BridgeMotion::Release, drive: () };
     assert_eq!(travel.lens_effect(), LensEffect::DriveThroughImageBridge);
     assert_eq!(release.lens_effect(), LensEffect::DriveThroughImageBridge);
-    assert_eq!(Request::<()>::BridgeStop.lens_effect(), LensEffect::DriveThroughImageBridge);
-    assert_eq!(Request::<()>::Evaluate.lens_effect(), LensEffect::NoLensDrive);
+    assert_eq!(Request::<(), ()>::BridgeStop.lens_effect(), LensEffect::DriveThroughImageBridge);
+    assert_eq!(Request::<(), ()>::Evaluate(()).lens_effect(), LensEffect::NoLensDrive);
 }

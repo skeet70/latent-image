@@ -15,3 +15,7 @@ mod contrast_tests;
 mod intake_tests;
 #[cfg(test)]
 mod live_tests;
+#[cfg(test)]
+mod strategy_tests;
+#[cfg(test)]
+mod test_platform;

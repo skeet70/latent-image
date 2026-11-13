@@ -229,7 +229,7 @@ impl Context {
     /// 0xf411b8: one step per evaluation.
     fn stepped_peak_search(&mut self, platform: &mut impl Platform) -> Phase {
         self.bridge.scanning = false;
-        if (!self.monitor.active && self.previous_lens != self.lens) || self.flag_restarts(platform) {
+        if (!self.monitor.active && self.previous_lens != self.lens) || self.flag_restarts(platform, 8) {
             self.halt();
             self.search.probed = 0;
             return Phase::Direction;
@@ -253,7 +253,7 @@ impl Context {
         let step = self.step_size(platform, StepKind::Scan);
         self.bridge.rate = step.rate;
         self.step = if self.monitor.active {
-            platform.monitor_step(MonitorStepQuery { lens: self.lens, moved: self.monitor.moved, step: step.size, mark: self.monitor.mark as i16 })
+            platform.monitor_step(MonitorStepQuery { lens: self.lens, moved: self.monitor.moved, step: step.size, mark: self.monitor.mark })
         } else {
             step.size
         };
@@ -349,7 +349,7 @@ impl Context {
     /// A search that passed a peak holds at its best sample when it also rose; without a
     /// rise it searches on, and a moved watch word or a second channel restarts it.
     fn after_peak(&mut self, platform: &mut impl Platform, scanning: bool) -> Phase {
-        let mut next = if !self.peak.channels.meets(self.peak.rose) {
+        let next = if !self.peak.channels.meets(self.peak.rose) {
             if scanning && !self.monitor.active {
                 self.bridge.scan = ScanState::PassedWithoutRise;
             }
@@ -382,13 +382,6 @@ impl Context {
         if !self.monitor.active {
             self.direction = self.previous_direction.wrapping_neg();
             self.halt();
-        }
-        if self.monitor.resumed {
-            self.monitor.count = 1;
-            if scanning {
-                self.bridge.scan = ScanState::Peaked;
-            }
-            next = Phase::Peak;
         }
         next
     }
@@ -427,7 +420,7 @@ impl Context {
         if !self.monitor.active && self.previous_lens != self.lens {
             return self.restart_scan(ScanState::LensChanged);
         }
-        if self.flag_restarts(platform) {
+        if self.flag_restarts(platform, 8) {
             return self.restart_scan(ScanState::Flagged);
         }
         if self.frame.mark > 0xf7 {
@@ -452,10 +445,6 @@ impl Context {
         }
         self.bridge.scan_sampled = true;
         if !self.frame.corrects_position {
-            if self.monitor.resumed {
-                self.monitor.count = 1;
-                return Phase::Peak;
-            }
             return Phase::PeakSearch;
         }
         if self.frame.previous_selected != self.frame.selected {
@@ -688,18 +677,12 @@ impl Context {
             limits: self.limits,
             frame: self.frame.scan,
             moved: self.monitor.moved,
-            mark: self.monitor.mark as i16,
+            mark: self.monitor.mark,
         });
         [self.limits.low, self.limits.high] = plan.limits;
         self.bridge.window = plan.window;
         self.bridge.lead = plan.lead;
         self.bridge.rate = plan.rate;
-    }
-
-    fn flag_restarts(&self, platform: &mut impl Platform) -> bool {
-        self.values.flag != 0
-            && platform.setting(Setting::FlagRestart) & 8 != 0
-            && (self.frame.selected == 0 || (self.frame.selected == 1 && platform.setting(Setting::SelectedFlagRestart) == 1))
     }
 
     /// The intake's watched word moved from its reference by more than `LevelJumpTens`.
@@ -819,10 +802,10 @@ impl Context {
     pub(crate) fn forget_fit_points(&mut self) { self.search.fit_points = [FitPoint::EMPTY; 4]; }
 
     /// 0xf3e440.
-    fn note_newest(&mut self, contrast: u32, position: i16) { self.search.fit_points[3] = FitPoint { contrast, position }; }
+    pub(crate) fn note_newest(&mut self, contrast: u32, position: i16) { self.search.fit_points[3] = FitPoint { contrast, position }; }
 
     /// 0xf3e468: a new best, with the sample before it, waiting for the one after.
-    fn note_best(&mut self, contrast: u32, position: i16) {
+    pub(crate) fn note_best(&mut self, contrast: u32, position: i16) {
         let points = &mut self.search.fit_points;
         points[0] = points[3];
         points[1] = FitPoint { contrast, position };
@@ -831,7 +814,7 @@ impl Context {
 
     /// 0xf3e4bc: takes the sample after a best; true when the three bracket a peak along a
     /// monotone run of positions.
-    fn fit_window_complete(&mut self, platform: &mut impl Platform, contrast: u32, position: i16) -> bool {
+    pub(crate) fn fit_window_complete(&mut self, platform: &mut impl Platform, contrast: u32, position: i16) -> bool {
         let points = &mut self.search.fit_points;
         if points[2].contrast != u32::MAX || points[1].contrast == u32::MAX {
             return false;
@@ -854,7 +837,7 @@ impl Context {
     }
 
     /// 0xf3e63c.
-    fn fit(&mut self, platform: &mut impl Platform) -> LensPosition {
+    pub(crate) fn fit(&mut self, platform: &mut impl Platform) -> LensPosition {
         let [before, best, after, _] = self.search.fit_points;
         let peak = platform.fit_peak([before, best, after]);
         self.search.fit = peak.0 as u16;

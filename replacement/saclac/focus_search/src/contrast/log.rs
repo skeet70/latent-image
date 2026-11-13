@@ -4,7 +4,7 @@
 //! the newest one (0xf47e00).
 
 use super::peak_search::{percent_of, Channels};
-use super::sample::RingEntry;
+use super::sample::{RingEntry, Watch};
 use super::settings::Setting;
 use super::{Context, Phase, Platform};
 
@@ -100,7 +100,7 @@ impl Context {
 
     fn focus_log(&self, platform: &mut impl Platform) -> FocusLog {
         let newest = self.ring.newest.map(|index| self.ring.entries[index]);
-        let marks = if platform.setting(Setting::TrackMarks) == 0 { [self.tracks.marks[3], self.tracks.marks[4]] } else { [self.tracks.marks[5], self.tracks.marks[6]] };
+        let runs = self.tracks.runs[usize::from(platform.setting(Setting::TrackMarks) != 0)];
         let fit = &self.search.fit_points;
         let entry = FocusLogEntry {
             phase: if self.transition.focus_reported == 1 { 0xff } else { self.phase.code() as u16 },
@@ -120,7 +120,7 @@ impl Context {
             fit_position: fit[2].position,
             fit: self.search.fit,
             lens: self.lens.0.wrapping_add(1) as u32,
-            monitor_mark: i32::from(self.monitor.mark as i16),
+            monitor_mark: i32::from(self.monitor.mark),
             movement: if matches!(self.phase, Phase::Direction | Phase::Focus) { self.motion.movement } else { [0; 2] },
             phase_words: self.phase_words(platform),
             ticks: platform.ticks(),
@@ -128,9 +128,9 @@ impl Context {
             ring_focus_value: newest.map_or(0, |entry| entry.focus_value),
             track_flag: u16::from(self.tracks.flag),
             ring_levels: newest.map_or([0; 2], |entry| entry.area_levels.map(|level| level as u16)),
-            track_marks: marks,
+            track_marks: [runs.on, runs.off],
             scan_flag: u16::from(self.frame.scan_flag),
-            track_index: u16::from(self.tracks.index as u8),
+            track_index: u16::from(self.tracks.path.code()),
             display_word: platform.setting(Setting::FocusDisplay) as u16,
             track_mark: self.tracks.mark,
         };
@@ -145,10 +145,13 @@ impl Context {
                 Some([u32::from(search.lens_seen), u32::from(search.probes), u32::from(search.waits), u32::from(search.probed), u32::from(search.decision)])
             }
             Phase::PeakSearch => Some(self.peak_words(platform, peak_search_code(self.peak.rose, self.peak.passed))),
-            Phase::Monitor if self.monitor.watched == 14 => Some(self.peak_words(platform, monitor_code(self.peak.rose, self.peak.passed))),
+            Phase::Monitor if self.monitor.watch == Watch::PeakSearch => Some(self.peak_words(platform, monitor_code(self.peak.rose, self.peak.passed))),
             Phase::Peak | Phase::FocusDrive => Some([NONE; 5]),
             Phase::Focus => Some([self.focus_class(platform), u32::from(self.focus.count), u32::from(self.focus.strikes), NONE, NONE]),
-            Phase::Approach => Some([self.search.previous_contrast, u32::from(self.search.peak_flags[0]), u32::from(self.search.peak_flags[1]), NONE, NONE]),
+            Phase::Approach => {
+                let trend = &self.search.retrace;
+                Some([self.search.previous_contrast, u32::from(trend.rises), u32::from(trend.peaks), NONE, NONE])
+            }
             Phase::Return | Phase::Monitor => None,
         }
     }
@@ -258,7 +261,7 @@ impl Context {
             Phase::Focus => b"FOCUS",
             Phase::FocusDrive => b"FCS_DRI",
             Phase::Approach => b"REMOVE",
-            Phase::Monitor if self.monitor.watched == 14 => b"PEK_SRH",
+            Phase::Monitor if self.monitor.watch == Watch::PeakSearch => b"PEK_SRH",
             Phase::Monitor => b"WOB",
         }
     }

@@ -61,11 +61,13 @@ pub enum AdjustmentWidth {
     Half,
     /// 0x69ff7c, sign-extended into the setting's word.
     SignedHalf,
+    /// 0x69ff68, sign-extended into the setting's word.
+    SignedByte,
 }
 
 /// The adjustment key behind each setting.
 pub const fn setting_key(setting: Setting) -> (u32, AdjustmentWidth) {
-    use AdjustmentWidth::{Byte, Half, SignedHalf};
+    use AdjustmentWidth::{Byte, Half, SignedByte, SignedHalf};
     let key = match setting {
         Setting::PairedEvaluation => 0x8778,
         Setting::LevelThousands => 0x8782,
@@ -199,6 +201,29 @@ pub const fn setting_key(setting: Setting) -> (u32, AdjustmentWidth) {
         Setting::MotionFloor => 0x87fa,
         Setting::MotionCeiling => 0x87fb,
         Setting::MotionHolds => 0x87f7,
+        Setting::ReturnSamples => 0x87ef,
+        Setting::ReturnTrendSamples => 0x87f0,
+        Setting::FocusValueTracking => 0x8b12,
+        Setting::SelectedReturnMode => 0x8849,
+        Setting::SelectedReturnContrast => return (0x884c, Half),
+        Setting::SelectedReturnFall => 0x884b,
+        Setting::ReturnFall => 0x884a,
+        Setting::FocusValueTurn => return (0x8b17, SignedHalf),
+        Setting::FocusValueSteep => return (0x8b1b, SignedHalf),
+        Setting::ExtentCrossings => 0x8b1a,
+        Setting::TrackedTurns => 0x8b19,
+        Setting::SteepRises => 0x8b1d,
+        Setting::ScanMarkFallback => 0x8b1e,
+        Setting::ScanOnSamples => 0x8b13,
+        Setting::ScanOffSamples => 0x8b14,
+        Setting::FocusRawLow => return (0x8b15, SignedByte),
+        Setting::FocusRawHigh => return (0x8b16, SignedByte),
+        Setting::ReturnRises => 0x883f,
+        Setting::LevelHolds => 0x876c,
+        Setting::ReturnStrikes => 0x8848,
+        Setting::ReturnFallTens => return (0x881c, Half),
+        Setting::MonitorRiseTens => 0x8940,
+        Setting::MonitorFallTens => 0x8941,
     };
     (key, Byte)
 }

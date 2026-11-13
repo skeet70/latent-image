@@ -5,23 +5,35 @@
 use xm1_saclac_controllers::search::LensPosition;
 
 mod accept;
-mod focus;
-mod log;
 mod direction;
+mod dispatch;
+mod focus;
 mod focus_drive;
+mod log;
+mod monitor;
 mod motion;
 mod peak;
 mod peak_search;
+mod retrace;
 mod sample;
 pub mod settings;
 mod step;
 mod tracks;
 
-pub use log::{FocusLog, FocusLogEntry, LoggedSample};
+pub use dispatch::ContrastSearch;
 pub use focus::FocusTrace;
+pub use log::{FocusLog, FocusLogEntry, LoggedSample};
 pub use peak_search::PeakSearchTrace;
 pub use sample::{BridgeDrive, CorrectedPosition, Stage};
 use settings::{Setting, StepKind};
+
+/// How the lens layer reports a lens move the monitor follows (0x76d9ec returns 1 for
+/// `Ascending`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LensMove {
+    Ascending,
+    Descending,
+}
 
 /// The phase the search is in.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -104,7 +116,9 @@ pub struct StageRecord {
 }
 
 pub trait Platform {
+    /// The lens position word (0x76da84).
     fn lens_position(&mut self) -> LensPosition;
+    /// 0x76d9c8.
     fn lens_identity(&mut self) -> LensIdentity;
     /// The lens-table range count (adjustment 0x3e1214); identities at or above it fall back
     /// to table 1.
@@ -231,6 +245,11 @@ pub trait Platform {
     /// reported position (0xf4dd98).
     fn publish_pinned_status(&mut self, status: PinnedStatus);
     fn trace_transition(&mut self, trace: TransitionTrace);
+    /// The lens move the monitor follows once the lens identity changed: `None` unless
+    /// 0x76d9a8 returns 1.
+    fn lens_move(&mut self) -> Option<LensMove>;
+    /// The lens bias at `position` for a lens that moved as `moved` (0xfaa7f4).
+    fn interpolated_bias(&mut self, lens: LensIdentity, moved: LensMove, position: LensPosition) -> i16;
 }
 
 /// What 0xf44f58 asks the lens table.
@@ -265,7 +284,7 @@ pub struct Step {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MonitorStepQuery {
     pub lens: LensIdentity,
-    pub moved: u32,
+    pub moved: Option<LensMove>,
     pub step: u16,
     pub mark: i16,
 }
@@ -281,7 +300,7 @@ pub struct ScanQuery {
     pub rate: u32,
     pub limits: TravelLimits,
     pub frame: ScanFrame,
-    pub moved: u32,
+    pub moved: Option<LensMove>,
     pub mark: i16,
 }
 
@@ -378,8 +397,9 @@ pub struct Context {
     /// The bridge speed of the drive to `focus_position`.
     pub(crate) focus_speed: u32,
     pub(crate) focus_started: bool,
-    /// The record's recent-peak word (+0x48): the recent measurements stayed high; a peak
-    /// search then reads the scan pairs.
+    /// The evaluation record's scan flag (+0x48), which the intake carries into the next
+    /// record: while it stands a peak search reads the scan pairs and a return follows the
+    /// focus values.
     pub(crate) recent_peak: bool,
     pub(crate) corrected: CorrectedPosition,
     /// The settled near word when the peak search last looked.
