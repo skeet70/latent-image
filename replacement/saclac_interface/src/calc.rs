@@ -9,7 +9,7 @@ use crate::exposure::{CorrectionRequest, EvaluationRequest};
 use crate::stock::StockCallbackWord;
 
 /// An address in saclac memory that the peer reads.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SharedAddress(pub u32);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -161,9 +161,13 @@ pub struct AuxiliaryRequest {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Calc1Payload {
     /// 0x3d00. The grid is stored where calc1 reads it before the request is posted.
-    Acquisition { record: Record<168>, callback: StockCallbackWord },
-    /// 0x3d01.
-    Selection { record: Record<228>, callback: StockCallbackWord },
+    Acquisition { request: crate::round_acquisition::AcquisitionRequest, callback: StockCallbackWord },
+    /// 0x3d01, naming the records calc1 reads in `region`.
+    Selection {
+        request: crate::round_acquisition::SelectionRequest,
+        region: crate::stock::round_acquisition::SelectionRegion,
+        callback: StockCallbackWord,
+    },
     /// 0x3d02.
     Auxiliary { request: AuxiliaryRequest, callback: StockCallbackWord },
 }

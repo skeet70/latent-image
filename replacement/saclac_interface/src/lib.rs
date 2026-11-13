@@ -11,6 +11,7 @@ pub mod imaging;
 pub mod lens;
 pub mod pipeline;
 pub mod round;
+pub mod round_acquisition;
 pub mod round_image;
 pub mod search;
 pub mod selection;
