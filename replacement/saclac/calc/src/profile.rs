@@ -29,6 +29,10 @@ impl<'a, M: Memory, E: StockEntries> Profile<'a, M, E> {
         self.records.read_shared(handle, field).unwrap_or_else(|_| T::decode(&[0; 2048][..T::BYTES]))
     }
 
+    /// 0x752714: the halfword when the flag byte is 1, otherwise the word; a refused read reads
+    /// zero.
+    pub fn chosen_word(&self, handle: RecordHandle) -> u32 { self.records.chosen_word(handle).unwrap_or(0) }
+
     pub fn header(&mut self, handle: RecordHandle, byte: SharedHeaderByte) -> u8 { self.entries.header_byte(handle, byte) }
 
     pub fn measurement_selection(&mut self, handle: RecordHandle) -> MeasurementSelection { self.entries.measurement_selection(handle) }

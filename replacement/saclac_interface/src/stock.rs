@@ -1,5 +1,6 @@
 use crate::*;
 
+pub mod area_measurement;
 pub mod exposure;
 
 pub const fn record_handle_from_a2(word: u32) -> RecordHandle { RecordHandle(word) }
@@ -675,7 +676,11 @@ pub fn calc_payload(payload: &calc::CalcPayload) -> (CalcOperation, Encoded) {
         P::Search { record, callback } => (CalcOperation::Request09, callback_first(callback, &record.0)),
         P::Image { record, callback } => (CalcOperation::Request0a, callback_first(callback, &record.0)),
         P::Window { request, callback } => (CalcOperation::Request0c, window(request, callback)),
-        P::Source { record, callback } => (CalcOperation::Request11, source(&record.0, callback)),
+        P::AreaEvaluation { request, callbacks } => (CalcOperation::Request0d, area_evaluation(&request, callbacks)),
+        P::CaptureThird { request, callback } => (CalcOperation::Request0e, capture_third(&request, callback)),
+        P::CaptureFirst { request, callback } => (CalcOperation::Request0f, capture_first(&request, callback)),
+        P::CaptureSecond { request, callback } => (CalcOperation::Request10, capture_second(&request, callback)),
+        P::Source { request, callback } => (CalcOperation::Request11, source(request, callback)),
         P::Release => (CalcOperation::Request12, Encoded::new(0)),
     }
 }
@@ -735,16 +740,204 @@ fn window(request: calc::WindowRequest, callback: StockCallbackWord) -> Encoded 
     message
 }
 
-/// X-M1 1.50: 0xf4c4f4..0xf4c568 moves record word 40 ahead of halfword 14 and record
-/// words 16..39 and 44 after it, leaving message bytes 18..19 and 26..27 unwritten.
-fn source(record: &[u8; 48], callback: StockCallbackWord) -> Encoded {
+/// X-M1 1.50: the statistics buffer the source lane's request names (0xf38730..0xf38738) and the
+/// capture pipeline's, which the capture's requests name (0xf4cc5c, 0xf4d38c, 0xf4d468,
+/// 0xf51de0, 0xf52138).
+const SOURCE_STATISTICS: u32 = 0x5ffe_d304;
+const CAPTURE_STATISTICS: u32 = 0x5ffb_6120;
+/// X-M1 1.50: the capture buffers 0xf4d398..0xf4d3ac name for 0x3c0e and 0xf4cc68 for 0x3c0d.
+const CAPTURE_THIRD_BUFFERS: [u32; 2] = [0x5ffb_7120, 0x5ffb_7130];
+const AREA_EVALUATION_BUFFER: u32 = 0x5ffb_71d0;
+
+/// X-M1 1.50: 0xf386b8 fills the 48-byte record at 0x16c0088 and 0xf4c4f4..0xf4c568 moves
+/// its selection word ahead of the reference and the words after the reference after it,
+/// leaving message bytes 18..19 and 26..27 unwritten. 0xf52120 builds the capture's request in
+/// the same layout at r11-0x44 (0xf52134..0xf521bc), with the processing's offset mode at 44.
+fn source(request: calc::SourceRequest, callback: StockCallbackWord) -> Encoded {
     let mut message = Encoded::new(56);
     message.word(0, callback.0);
-    message.put(4, &record[0..14]);
-    message.put(20, &record[40..44]);
-    message.put(24, &record[14..16]);
-    message.put(28, &record[16..40]);
-    message.put(52, &record[44..48]);
+    message.word(4, match request.statistics {
+        calc::SourceStatistics::Primary => SOURCE_STATISTICS,
+        calc::SourceStatistics::Capture => CAPTURE_STATISTICS,
+    });
+    message.word(8, request.profile[0]);
+    message.halfword(12, request.decade);
+    message.halfword(14, request.profile_halfword);
+    message.halfword(16, request.level);
+    message.word(20, u32::from(request.selection));
+    message.halfword(24, request.reference);
+    message.word(28, request.size[0]);
+    message.word(32, request.size[1]);
+    message.word(36, request.profile[1]);
+    message.word(40, request.exposure);
+    message.word(44, request.offset_mode);
+    message.word(48, request.mode);
+    message.word(52, request.extension);
+    message
+}
+
+/// X-M1 1.50: 0xf4d448 builds 40 bytes at r11-0x60 (0xf4d45c..0xf4d498) behind the callback and
+/// posts 44, leaving bytes 6..7 and 28..43 unwritten.
+fn capture_first(request: &calc::CaptureFirstRequest, callback: StockCallbackWord) -> Encoded {
+    let processing = &request.processing;
+    let mut message = Encoded::new(44);
+    message.word(0, callback.0);
+    message.halfword(4, request.at_0022 as u16);
+    message.word(8, CAPTURE_STATISTICS);
+    message.halfword(12, processing.reference);
+    message.halfword(14, processing.level);
+    message.word(16, processing.extent[0]);
+    message.word(20, processing.extent[1]);
+    message.word(24, processing.profile);
+    message
+}
+
+/// X-M1 1.50: 0xf4d350 builds 56 bytes at r11-0x88 (0xf4d364..0xf4d414) behind the callback and
+/// posts 60, leaving bytes 26..27 unwritten.
+fn capture_third(request: &calc::CaptureThirdRequest, callback: StockCallbackWord) -> Encoded {
+    let processing = &request.processing;
+    let mut message = Encoded::new(60);
+    message.word(0, callback.0);
+    message.word(4, u32::from(request.scene));
+    message.halfword(8, request.scene_flags);
+    message.halfword(10, request.at_0022 as u16);
+    message.word(12, CAPTURE_STATISTICS);
+    message.word(16, CAPTURE_THIRD_BUFFERS[0]);
+    message.word(20, CAPTURE_THIRD_BUFFERS[1]);
+    message.halfword(24, processing.reference);
+    message.word(28, processing.extent[0]);
+    message.word(32, processing.extent[1]);
+    message.word(36, processing.grid[0]);
+    message.word(40, processing.grid[1]);
+    message.word(44, processing.lens_reference);
+    message.word(48, processing.profile);
+    message.halfword(52, request.calibration[0] as u16);
+    message.halfword(54, request.calibration[1] as u16);
+    message.word(56, request.detail);
+    message
+}
+
+/// X-M1 1.50: 0xf51bcc builds 220 bytes at r11-0x1d8 (0xf51be4..0xf52038) behind the callback and
+/// posts 224, leaving bytes 26..27, 38..39, 62..63, 144..151 and 183 unwritten. Its second argument
+/// is 0 from its only caller (0xf2eb9c), so word 4 is 0. 0xf51e04 stores the processing's decade
+/// at 88, which 0xf51ee8 overwrites with record field 0x186.
+fn capture_second(request: &calc::CaptureSecondRequest, callback: StockCallbackWord) -> Encoded {
+    let processing = &request.processing;
+    let measurement = &request.measurement;
+    let mut message = Encoded::new(224);
+    message.word(0, callback.0);
+    message.word(8, u32::from(request.scene));
+    message.word(12, u32::from(request.at_003e));
+    message.word(16, u32::from(request.at_003f));
+    message.word(20, u32::from(request.auxiliary));
+    message.halfword(24, request.at_0022 as u16);
+    message.word(28, u32::from(request.at_0048));
+    message.put(32, &request.at_000e);
+    message.word(40, u32::from(request.at_0045));
+    message.word(44, u32::from(request.at_002a));
+    message.halfword(48, request.scene_flags);
+    message.halfword(50, request.at_00a0 as u16);
+    message.halfword(52, request.at_0092 as u16);
+    message.halfword(54, measurement.first as u16);
+    message.halfword(56, measurement.second as u16);
+    message.halfword(58, request.level_total);
+    message.halfword(60, request.lens_level as u16);
+    message.word(64, request.offsets[0]);
+    message.word(68, request.offsets[1]);
+    message.word(72, processing.offset_mode);
+    message.word(76, request.at_01ec);
+    message.halfword(80, request.at_017a as u16);
+    message.halfword(82, request.at_017c as u16);
+    message.halfword(84, request.at_017e as u16);
+    message.halfword(86, request.at_0180 as u16);
+    message.halfword(88, request.at_0186 as u16);
+    message.halfword(90, processing.companion);
+    message.word(92, request.at_0188);
+    message.word(96, request.capture_offset);
+    message.word(100, request.at_0164);
+    message.word(104, request.at_0168);
+    message.word(108, CAPTURE_STATISTICS);
+    message.halfword(112, processing.reference);
+    message.halfword(114, processing.level);
+    message.word(116, processing.extent[0]);
+    message.word(120, processing.extent[1]);
+    message.word(124, processing.lens_reference);
+    message.word(128, processing.lens);
+    message.word(132, processing.profile);
+    message.word(136, request.at_01f4);
+    message.word(140, u32::from(request.window_measured));
+    message.halfword(152, measurement.base as u16);
+    message.halfword(154, measurement.third as u16);
+    message.halfword(156, measurement.fourth as u16);
+    message.put(158, &measurement.slot);
+    message.halfword(170, measurement.fifth as u16);
+    message.word(172, u32::from(measurement.paired));
+    message.word(176, u32::from(request.profile_kind));
+    message.halfword(180, measurement.sixth as u16);
+    message.put(182, &[measurement.count]);
+    message.put(184, &measurement.block);
+    message.halfword(208, request.at_001a as u16);
+    message.halfword(210, measurement.seventh as u16);
+    message.word(212, u32::from(request.header_63));
+    message.word(216, u32::from(request.scene_class));
+    message.word(220, request.detail);
+    message
+}
+
+/// X-M1 1.50: 0xf4ca60 builds 212 bytes at r11-0x1d4 (0xf4ca7c..0xf4cdf0) behind the two callbacks
+/// and posts 220, leaving bytes 74..75, 182..183 and 215 unwritten. It copies the geometry
+/// block's area pairs and shares for the chosen list's area count, which the secondary job keeps
+/// at three or fewer.
+fn area_evaluation(request: &calc::AreaEvaluationRequest, callbacks: [StockCallbackWord; 2]) -> Encoded {
+    let processing = &request.processing;
+    let block = area_measurement::area_geometry(&request.geometry);
+    let areas = usize::from(request.geometry.count).min(3);
+    let mut message = Encoded::new(220);
+    message.word(0, callbacks[0].0);
+    message.word(4, callbacks[1].0);
+    message.word(8, u32::from(request.scene));
+    message.word(12, u32::from(request.profile_kind));
+    message.word(16, u32::from(request.header_47));
+    message.halfword(20, request.at_001a as u16);
+    message.halfword(22, request.at_0022 as u16);
+    message.word(24, u32::from(request.at_0045));
+    message.word(28, u32::from(request.at_004b));
+    message.word(32, u32::from(request.at_0048));
+    message.word(36, u32::from(request.at_0041));
+    message.put(40, &block[0x198..0x19c]);
+    message.word(44, request.at_01b4);
+    message.halfword(48, request.at_01f2 as u16);
+    message.halfword(50, request.level_total);
+    message.halfword(52, request.at_017c as u16);
+    message.halfword(54, request.at_0186 as u16);
+    message.put(56, &block[0x1a4..0x1a8]);
+    message.word(60, request.at_0170);
+    message.halfword(64, request.at_0174 as u16);
+    message.halfword(66, request.at_0176 as u16);
+    message.word(68, request.at_0188);
+    message.halfword(72, request.at_01f0 as u16);
+    message.word(76, CAPTURE_STATISTICS);
+    message.word(80, AREA_EVALUATION_BUFFER);
+    message.word(84, request.frames[1]);
+    message.halfword(88, request.lens_level as u16);
+    message.halfword(90, processing.reference);
+    message.halfword(92, processing.level);
+    message.halfword(94, request.level_offset as u16);
+    message.word(96, processing.extent[0]);
+    message.word(100, processing.extent[1]);
+    message.put(104, &processing.geometry);
+    message.word(128, processing.lens_reference);
+    message.put(132, &block[0x00..0x08]);
+    message.put(140, &block[0x0a..0x0e]);
+    message.put(144, &block[0x10..0x10 + 8 * areas]);
+    message.put(168, &block[0x28..0x28 + 4 * areas]);
+    message.put(180, &block[0x34..0x36]);
+    message.put(184, &block[0x38..0x40]);
+    message.put(192, &block[0x178..0x188]);
+    message.put(208, &block[0x1a0..0x1a4]);
+    message.halfword(212, request.scene_flags);
+    message.put(214, &[request.lens_temperature as u8]);
+    message.word(216, request.frames[0]);
     message
 }
 
