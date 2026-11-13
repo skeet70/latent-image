@@ -101,7 +101,7 @@ arm = Hit (ValueSite StockValueArm) 0 (0, 0, 0, 0) Nothing Nothing [] Nothing No
 apply = Hit (ValueSite ValueApply) 0 (0xf6, 1, 0, 0) Nothing Nothing [] Nothing Nothing
 
 notify :: Word32 -> Word32 -> Word32 -> Word32 -> Hit
-notify kind node ident class_ = Hit (ValueSite ValueNotify) 0 (kind, node, ident, class_) (Just 0x00bface4) Nothing [] Nothing Nothing
+notify kind landed ident class_ = Hit (ValueSite ValueNotify) 0 (kind, landed, ident, class_) (Just 0x00bface4) Nothing [] Nothing Nothing
 
 withLive :: Word8 -> Observation -> Observation
 withLive byte observation = observation {observationReads = observationReads observation ++ [("live-settings", B.replicate 450 byte)]}
