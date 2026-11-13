@@ -594,6 +594,15 @@ The task-43 driver and engine use stock's 37 machine tables. Every machine actio
 | fault reaction `0xf46c20` | trampoline into retained stock | retained SACLAC fault reporting | no | subsystem fault reporting is owned | required |
 | `XM1_REQUIRES_LENS_SAFETY_CONTRACT`, four bytes with value 1 in the linked fixed body | guest-memory layout view | fixed-image stager derives the emulator-only admission contract from this marker | no | a lens safety contract qualifies the image's lens-reaching effects | required |
 
+## saclac_imaging
+
+saclac's image-4 ISP units RAID0, MVREC and AUTO, and its capture-pipeline helpers (`replacement/saclac/imaging`). The unit registers are hardware; the rows are the stock memory and entries `src/stock.rs` binds.
+
+| Shim | Kind | Other side | Owned now | Removal condition | State |
+| --- | --- | --- | --- | --- | --- |
+| `StockIsp` session records at `0x820f30` (MVREC), `0x820f40` (AUTO) and `0x820f88` (RAID0): holder, last operation, active session (0xffff free), next session | guest-memory layout view | retained stock entries of the same units called from unowned image-5 pipeline configuration (`0xd9e88c`, the L8 callers until owned) | no | no retained code calls a unit's stock entries | required |
+| ISP event log `0x684908` (client, unit, operation, fault) and `0x684948` (holder, requester, unit, operation, fault) | trampoline into retained stock | `hw_log_event` `0x684988`: console stream 0x2b and the five-entry ring at `0x96ca0c` | no | the ISP driver's event log is owned | required |
+
 ## saclac_interface
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |
