@@ -2241,7 +2241,7 @@ haskell_test(
 
 haskell_library(
     name = "judge-lib",
-    srcs = ["Emulation/Judge.hs", "Emulation/InterfaceJudge.hs"],
+    srcs = ["Emulation/Judge.hs", "Emulation/InterfaceJudge.hs", "Emulation/InterfaceStream.hs"],
     ghcopts = [
         "-XGHC2021",
         "-Wall",

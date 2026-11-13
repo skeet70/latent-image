@@ -34,7 +34,7 @@ main = do
   check "equal verdict names the firmware" (verdictFirmware (judge complete) == Just "aaaa")
   check "equal verdict names the owned image" (verdictOwned (judge complete) == Just "bbbb")
   check "equal verdict names the report digest" (verdictReportDigest (judge complete) == "report-digest")
-  check "equal verdict names the judge version" (judgeVersion == "3")
+  check "equal verdict names the judge version" (judgeVersion == "4")
   check "equal verdict lists every condition met" (all conditionMet (verdictConditions (judge complete)))
   check "equal verdict has no unmet condition" (null (verdictUnmet (judge complete)))
 
