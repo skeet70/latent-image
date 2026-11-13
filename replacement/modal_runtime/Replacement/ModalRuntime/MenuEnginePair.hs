@@ -18,8 +18,11 @@ module Replacement.ModalRuntime.MenuEnginePair
   , checkStackReader
   , comparePairReader
   , ValueSite (..)
-  , checkValueLifecycle
-  , checkValueLifecycleReader
+  , ValueEntries (..)
+  , checkValueSeam
+  , checkValueSeamObservations
+  , checkValueSeamReader
+  , requireValueDeclarations
   , RtcByteIndex (..)
   , ClockEvidence (..)
   , checkConstantClockInputs
@@ -43,7 +46,7 @@ module Replacement.ModalRuntime.MenuEnginePair
   ) where
 
 import Control.Exception (evaluate)
-import Control.Monad (foldM, forM, unless, when)
+import Control.Monad (foldM, forM, forM_, unless, when)
 import qualified Data.Attoparsec.ByteString.Char8 as A
 import Data.Aeson ((.:), (.:?))
 import qualified Data.Aeson as J
@@ -461,31 +464,66 @@ comparePair stock owned = do
   unless (posts stock == posts owned)
     (Left ("0x1d posts differ: stock " ++ show (posts stock) ++ ", owned " ++ show (posts owned)))
 
-valueStep :: Bool -> Hit -> Either String Bool
-valueStep applied hit = case hitSite hit of
-  ValueSite StockValueArm -> Left "resident value seam executed the replaced IMAGE SIZE arm"
-  ValueSite ValueApply -> Right True
-  _ -> Right applied
+-- | One segment's entries of stock's IMAGE SIZE arm `0xd51b58` and of the owned apply seam.
+data ValueEntries = ValueEntries
+  { stockArmEntries :: !Int
+  , ownedApplyEntries :: !Int
+  }
+  deriving (Eq, Show)
 
-valueComplete :: Bool -> Either String ()
-valueComplete applied = unless applied (Left "resident value seam never executed its apply entry")
+countValueEntry :: ValueEntries -> Hit -> Either String ValueEntries
+countValueEntry entries hit = Right $ case hitSite hit of
+  ValueSite StockValueArm -> entries {stockArmEntries = stockArmEntries entries + 1}
+  ValueSite ValueApply -> entries {ownedApplyEntries = ownedApplyEntries entries + 1}
+  _ -> entries
 
-checkValueLifecycle :: [Observation] -> Either String ()
-checkValueLifecycle segments = foldM valueStep False
-  [hit | segment <- segments, observationResidency segment == EngineResident, hit <- observationHits segment]
-  >>= valueComplete
+valueEntries :: Observation -> ValueEntries
+valueEntries observation = either (const (ValueEntries 0 0)) id
+  (foldM countValueEntry (ValueEntries 0 0) (observationHits observation))
 
-checkValueLifecycleReader :: [ObservationReader] -> IO (Either String ())
-checkValueLifecycleReader = go False
+-- | The owned seam replaces stock's IMAGE SIZE arm: in each segment the package is resident, the
+-- owned role applies exactly as often as the stock role enters the arm and never enters the arm.
+checkValueSeam :: [(T.Text, ValueEntries)] -> [(T.Text, Residency, ValueEntries)] -> Either String ()
+checkValueSeam stock owned = do
+  unless (map fst stock == [phase | (phase, _, _) <- owned])
+    (Left "the roles' observations have different phases")
+  forM_ (zip stock owned) $ \((phase, stockEntries), (_, residency, ownedEntries)) ->
+    when (residency == EngineResident) $ do
+      unless (stockArmEntries ownedEntries == 0)
+        (Left ("resident value seam executed the replaced IMAGE SIZE arm in " ++ T.unpack phase))
+      unless (ownedApplyEntries ownedEntries == stockArmEntries stockEntries)
+        (Left ("value seam applied " ++ show (ownedApplyEntries ownedEntries) ++ " times where stock entered its IMAGE SIZE arm "
+          ++ show (stockArmEntries stockEntries) ++ " times in " ++ T.unpack phase))
+
+checkValueSeamObservations :: [Observation] -> [Observation] -> Either String ()
+checkValueSeamObservations stock owned = checkValueSeam
+  [(observationPhase observation, valueEntries observation) | observation <- stock]
+  [(observationPhase observation, observationResidency observation, valueEntries observation) | observation <- owned]
+
+checkValueSeamReader :: [ObservationReader] -> [ObservationReader] -> IO (Either String ())
+checkValueSeamReader stock owned = do
+  stockEntries <- mapM entries stock
+  ownedEntries <- mapM entries owned
+  pure $ do
+    counted <- sequence stockEntries
+    countedOwned <- sequence ownedEntries
+    checkValueSeam
+      (zip (map readerPhase stock) counted)
+      (zip3 (map readerPhase owned) (map readerResidency owned) countedOwned)
  where
-  go applied [] = pure (valueComplete applied)
-  go applied (reader : rest)
-    | readerResidency reader == EngineUnloaded = go applied rest
-    | otherwise = do
-        checked <- readerFoldHits reader valueStep applied
-        case checked of
-          Left failure -> pure (Left failure)
-          Right next -> go next rest
+  entries reader = readerFoldHits reader countValueEntry (ValueEntries 0 0)
+
+-- | Both roles declare stock's IMAGE SIZE arm at `0xd51b58` and the owned role declares its apply
+-- seam once, so the seam counts compare declared sites.
+requireValueDeclarations :: Role -> J.Value -> Either String ()
+requireValueDeclarations role = J.parseEither $ J.withObject "e2e result" $ \fields -> do
+  declarations <- fields .: "declared_trace_sites" >>= mapM (J.withObject "trace declaration" $ \declaration ->
+    (,) <$> (declaration .: "label" :: J.Parser T.Text) <*> (declaration .: "address" :: J.Parser T.Text))
+  unless ([address | ("stock-value-size-arm", address) <- declarations] == ["00d51b58"])
+    (fail "the trajectory does not declare stock's IMAGE SIZE arm 0x00d51b58 once")
+  when (role == OwnedRole) $
+    unless (length [() | ("owned-value-apply", _) <- declarations] == 1)
+      (fail "the owned trajectory does not declare its value apply seam once")
 
 checkRoleReader :: MenuTree -> Role -> [ObservationReader] -> IO (Either String RoleSummary)
 checkRoleReader tree role readers = go (Walk M.empty (RoleSummary M.empty 0 0) []) readers

@@ -1,32 +1,7 @@
 load("//build-support:rust_source_boundary.bzl", "rust_source_boundary_test")
 
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
-load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
-
-_SEAM_DATA = [
-    ":value-adapter-sources",
-    ":module",
-    "//replacement/bank/tables:menu-value-table.rs",
-]
-
-_SEAM_ENV = {
-    "RB_MENU_VALUE_TABLE": "$$PWD/$(location //replacement/bank/tables:menu-value-table.rs)",
-}
-
-_SEAM_RLIB_DEPS = {
-    "xm1_kernel": "//replacement/kernel:arm",
-    "xm1_property_service": "//replacement/property_service:property-service-arm",
-    "xm1_settings_storage_core": "//replacement/settings_storage:property-core-arm",
-}
-
-_SEAM_FLAGS = [
-    "-C",
-    "target-feature=+strict-align",
-    "-C",
-    "llvm-args=-min-jump-table-entries=4096",
-    "--cfg",
-    "rb_menu_value_owned",
-]
+load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib")
 
 # The value transaction with its guest seam. The adapter is a module of this
 # crate under rb_menu_value_owned, so the seam and the transaction are one
@@ -36,65 +11,33 @@ xm1_rust_rlib(
     src = "src/lib.rs",
     crate_name = "menu_value",
     out = "libmenu_value_owned.rlib",
-    data = _SEAM_DATA,
-    env = _SEAM_ENV,
-    rlib_deps = _SEAM_RLIB_DEPS,
-    rustc_flags = _SEAM_FLAGS,
+    data = [
+        ":value-adapter-sources",
+        ":module",
+        "//replacement/bank/tables:menu-value-table.rs",
+    ],
+    env = {
+        "RB_MENU_VALUE_TABLE": "$$PWD/$(location //replacement/bank/tables:menu-value-table.rs)",
+    },
+    rlib_deps = {
+        "xm1_kernel": "//replacement/kernel:arm",
+        "xm1_property_service": "//replacement/property_service:property-service-arm",
+        "xm1_settings_storage_core": "//replacement/settings_storage:property-core-arm",
+    },
+    rustc_flags = [
+        "-C",
+        "target-feature=+strict-align",
+        "-C",
+        "llvm-args=-min-jump-table-entries=4096",
+        "--cfg",
+        "rb_menu_value_owned",
+    ],
     visibility = [
         "//replacement/bank:__pkg__",
         "//replacement/menu_engine:__pkg__",
         "//replacement/render_adapter:__pkg__",
     ],
 )
-
-# The seam that declines every selection: the always-decline wrong variant of
-# //emulation:menu-value-cases.
-xm1_rust_rlib(
-    name = "arm-owned-decline",
-    src = "src/lib.rs",
-    crate_name = "menu_value",
-    out = "libmenu_value_decline.rlib",
-    data = _SEAM_DATA,
-    env = _SEAM_ENV,
-    rlib_deps = _SEAM_RLIB_DEPS,
-    rustc_flags = _SEAM_FLAGS + [
-        "--cfg",
-        "rb_menu_value_always_decline",
-    ],
-)
-
-# Standalone seam images for //emulation:menu-value-cases: text from 0xa00000,
-# writable data from 0xa80000.
-[
-    xm1_rust_staticlib(
-        name = image + "-rust",
-        src = "adapter/image.rs",
-        crate_name = "menu_value_image",
-        rlib_deps = dict(
-            _SEAM_RLIB_DEPS,
-            menu_value = rlib,
-        ),
-    )
-    for image, rlib in [
-        ("seam-image", ":arm-owned"),
-        ("seam-decline-image", ":arm-owned-decline"),
-    ]
-]
-
-[
-    xm1_rust_elf(
-        name = image,
-        asm_srcs = ["//replacement/property_service:storage-boundary.S"],
-        entry = "rb_menu_value_size_arm",
-        extra_ldflags = ["-Wl,--gc-sections"],
-        link_script = "adapter/image.ld",
-        rust_staticlib = ":" + image + "-rust",
-    )
-    for image in [
-        "seam-image",
-        "seam-decline-image",
-    ]
-]
 
 filegroup(
     name = "module",

@@ -110,7 +110,7 @@ runRetained config write tree stockTables document stockPath ownedPath = do
   variant <- either fail pure (J.eitherDecodeStrict' manifestBytes >>= J.parseEither validateEngineManifest)
   elf <- B.readFile (ownedPath </> "relinked" </> "kernel.elf") >>= either fail pure . ELF.parseElf
   let size = runtimeAllocationSizeFor variant
-  valueLifecycle <- checkValue variant owned
+  valueSeam <- checkValue variant (stockPath, stock) (ownedPath, owned)
   bound <- either fail pure (S.checkEngineStack S.taskOneBudget elf (\address -> base <= address && address - base < size))
   let margin = S.budgetStockMargin S.taskOneBudget
       required = S.reportEngine bound + S.reportModal bound + margin
@@ -168,7 +168,7 @@ runRetained config write tree stockTables document stockPath ownedPath = do
                           putStrLn ("render: " ++ show (renderCoverage config) ++ " stock-stack=" ++ show stockStack
                             ++ " owned-stack=" ++ show ownedStack ++ " banks=" ++ show banks)
                           pure True
-  pure (and (results ++ stacks ++ [paired, rendered, valueLifecycle]))
+  pure (and (results ++ stacks ++ [paired, rendered, valueSeam]))
  where
   adapterStep () hit = if noRenderAdapter hit then Right () else Left "retained render reached an owned adapter"
 
@@ -177,14 +177,17 @@ noRenderAdapter hit = case hitSite hit of
   OtherSite label -> label `notElem` ["render-tree-adapter","render-picker-adapter","render-pane-adapter"]
   _ -> True
 
-checkValue :: BankVariant -> [ObservationReader] -> IO Bool
-checkValue variant segments
+checkValue :: BankVariant -> (FilePath, [ObservationReader]) -> (FilePath, [ObservationReader]) -> IO Bool
+checkValue variant (stockPath, stock) (ownedPath, owned)
   | variant /= modalValueBankVariant = pure True
   | otherwise = do
-      checked <- checkValueLifecycleReader segments
+      declared <- forM [(StockRole, stockPath), (OwnedRole, ownedPath)] $ \(role, path) -> do
+        value <- B.readFile (path </> "e2e-result.json") >>= either fail pure . J.eitherDecodeStrict'
+        pure (requireValueDeclarations role value)
+      checked <- either (pure . Left) (const (checkValueSeamReader stock owned)) (sequence_ declared)
       case checked of
-        Left failure -> hPutStrLn stderr ("value lifecycle: " ++ failure) >> pure False
-        Right () -> putStrLn "value lifecycle: owned begin, apply, confirm, cancel and handback executed without the replaced stock arm" >> pure True
+        Left failure -> hPutStrLn stderr ("value seam: " ++ failure) >> pure False
+        Right () -> putStrLn "value seam: the owned apply ran wherever stock entered its IMAGE SIZE arm, and the arm never ran while resident" >> pure True
 
 validateEngineManifest :: J.Value -> J.Parser BankVariant
 validateEngineManifest = J.withObject "engine manifest" $ \fields -> do
@@ -264,7 +267,7 @@ runCheck arguments = do
     Nothing -> either fail pure (J.eitherDecodeStrict' manifestBytes >>= J.parseEither validateEngineManifest)
     Just _ -> pure modalRenderBankVariant
   let size = runtimeAllocationSizeFor variant
-  valueLifecycle <- checkValue variant owned
+  valueSeam <- checkValue variant (stockPath, stock) (ownedPath, owned)
   bound <- either fail pure (S.checkEngineStack S.taskOneBudget elf (\address -> base <= address && address - base < size))
   let margin = S.budgetStockMargin S.taskOneBudget
       required = S.reportEngine bound + S.reportModal bound + margin
@@ -334,7 +337,7 @@ runCheck arguments = do
             BL.writeFile (path </> "e2e-render-stack-allocation-check.json") (J.encode (E.allocationVerdictJson verdict) <> "\n")
           BL.writeFile (ownedPath </> "render-banks.json") (J.encode banks <> "\n")
           pure True
-  unless (and (valueLifecycle : rendered : paired : results ++ stacks)) exitFailure
+  unless (and (valueSeam : rendered : paired : results ++ stacks)) exitFailure
 
 options :: [String] -> Either String (Maybe RenderSelection,Bool,FilePath,FilePath,FilePath,FilePath)
 options = go Nothing False

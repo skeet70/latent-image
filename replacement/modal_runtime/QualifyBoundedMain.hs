@@ -249,6 +249,7 @@ pairs =
   , CaseId "picker-15", CaseId "picker-163", CaseId "picker-211", CaseId "picker-214", CaseId "picker-239", CaseId "picker-250", CaseId "picker-26"
   , CaseId "picker-260", CaseId "picker-270", CaseId "picker-271", CaseId "picker-272", CaseId "picker-273", CaseId "picker-297", CaseId "picker-312"
   , CaseId "picker-314", CaseId "picker-320", CaseId "picker-36", CaseId "picker-450", CaseId "picker-488"
+  , CaseId "value-close-pop"
   ]
 
 sha :: String -> Sha256
@@ -262,7 +263,7 @@ expectedAdjustment = sha "baf475358f1b8ec5b619fd4891cd32a1c8225c0d9341e603180311
 
 expectedArchive, expectedRetired, expectedTables, expectedPlan, expectedClock, expectedRom :: Sha256
 expectedArchive = sha "6fab2c4279be4a4bf4f584389b8bbbca9bc17a2e60ecbc123ba7bb06e9fb11dd"
-expectedRetired = sha "5b289e1796ff1653abd1d9e50169c71d4e63bb61d65677d36345b442993172f6"
+expectedRetired = sha "4808a6fe7ffec15ebbff6a2f482e1dad0c55e6565f437390b37d594635479c3b"
 expectedTables = sha "7fa536b6f4ab72205be57f407ce7224fa0bbc397aca2061ad2fac3e14ba2021d"
 expectedPlan = sha "b7ee628a84ad930e309bccf74bf69ec8065f22c12ec5b5b059db842bf7bba05a"
 expectedClock = sha "f9ee8573fe6d1c16d872369290d48735172174541215d2dda5ea5d17233012a1"
@@ -272,15 +273,15 @@ memoryMaxBytes :: Integer
 memoryMaxBytes = 2147483648
 
 qualRoot, binRoot :: FilePath
-qualRoot = "private-data/scratch/QualifierSpeed/qualification3"
+qualRoot = "private-data/scratch/MenuValueFix/qualification"
 binRoot = qualRoot </> "bin"
 checkerRoot :: FilePath
 checkerRoot = "bazel-bin"
 
 trajectoryRoot, runDocument, inputsRoot, tablesPath, planPath, clockPath :: FilePath
-trajectoryRoot = "private-data/scratch/ControllerStrategy/engine225/controlled-rtc/trajectories"
+trajectoryRoot = "private-data/scratch/MenuValueFix/inputs/trajectories"
 runDocument = "private-data/scratch/ControllerStrategy/engine225/controlled-rtc/xm1-150.json"
-inputsRoot = "private-data/scratch/QualifierSpeed/inputs"
+inputsRoot = "private-data/scratch/MenuValueFix/inputs/qualifier"
 tablesPath = "private-data/scratch/ControllerStrategy/menu-tables.json"
 planPath = inputsRoot </> "bank-plan.json"
 clockPath = "emulation/menu-engine-pair-trajectories/clock-exclusions.json"
@@ -530,9 +531,10 @@ verifyInputs = do
     , ("boot ROM", "private-data/analysis/x-m1-1.50/bootrom/bootrom-0x80000000-4000.bin", expectedRom)
     ] $ \(label, path, expected) -> requireDigest label path expected
   files <- sort . filter (".json" `isSuffixOf`) <$> listDirectory trajectoryRoot
-  unless (length files == 134) (failH ("expected 134 trajectories, found " ++ show (length files)))
+  unless (length files == 2 * length pairs)
+    (failH ("expected " ++ show (2 * length pairs) ++ " trajectories, found " ++ show (length files)))
   let names = sort . nub $ map pairName files
-  unless (names == sort pairs) (failH "trajectory pair names differ from the required 67")
+  unless (names == sort pairs) (failH ("trajectory pair names differ from the required " ++ show (length pairs)))
   forM_ pairs $ \name -> forM_ [Stock, Owned] $ \role ->
     unless (trajectoryPath name role `elem` map (trajectoryRoot </>) files)
       (failH ("pair " ++ caseText name ++ " lacks its " ++ roleText role ++ " trajectory"))
@@ -753,7 +755,7 @@ publishHeadroom outcome source inputs = do
         , "first_failure" .= Null
         , "review_packet" .= reviewPath
         , "remaining_scope" .= object
-            [ "full67" .= ("not run" :: String)
+            [ "full_matrix" .= ("not run" :: String)
             , "subsystem_cutover" .= ("not qualified" :: String)
             , "hardware" .= ("not run" :: String)
             ]
@@ -1069,7 +1071,7 @@ runViewer name role directory logPath = do
         Owned -> [ "--ram-push-modal-scoped"
                  , "--modal75-owned-archive", inputsRoot </> "engine.a"
                  , "--modal75-retired", inputsRoot </> "retired.json"
-                 , "--menu-engine-owned" ]
+                 , "--menu-engine-owned", "--menu-value-owned" ]
             ++ [argument | proofPresent && prelinkedPresent, argument <- ["--modal75-prelinked", checkpointRoot </> "prelinked"]]
       common = [ "--workspace", "."
                , "--ram-push-e2e", "--cardless", "--fujimod", "--unreviewed-relink"
@@ -1259,7 +1261,7 @@ publishRecheck source checks = do
         , "roles" .= roles
         , "review_packet" .= (qualRoot </> "review-packet.json")
         , "remaining_scope" .= object
-            [ "full67" .= ("rechecked from frozen receipts" :: String)
+            [ "full_matrix" .= ("rechecked from frozen receipts" :: String)
             , "hardware" .= ("not claimed" :: String)
             ]
         ]
@@ -1350,8 +1352,8 @@ publish matrix source inputs = do
         ]
     , "failed_case" .= failedCase roles checks
     , "remaining_scope" .= object
-        [ "image_size" .= ("responsive wrapping and the RestoreL cancel choice remain screen-specific" :: String)
-        , "full67" .= (if qualified then "claimed by this matrix" else "not claimed" :: String)
+        [ "image_size" .= ("a changed IMAGE SIZE confirmed and then restored elsewhere is not reached: under the run document stock holds token 0x2343 after the change and refuses every later key" :: String)
+        , "full_matrix" .= (if qualified then "claimed by this matrix" else "not claimed" :: String)
         , "hardware" .= ("not claimed" :: String)
         ]
     ]
@@ -1499,7 +1501,7 @@ writeFailurePacket status (Failure predicate detail artifact) = do
         , "resources" .= resourcesValue
         , "failed_case" .= object ["predicate" .= predicateText predicate, "detail" .= detail, "artifact" .= artifact]
         , "predicates" .= [object ["name" .= predicateText predicate, "pass" .= False, "detail" .= detail]]
-        , "remaining_scope" .= object ["full67" .= ("not claimed" :: String)]
+        , "remaining_scope" .= object ["full_matrix" .= ("not claimed" :: String)]
         ]
   writeJson (qualRoot </> "terminal.json") value
   writeJson (qualRoot </> "review-packet.json") $ object

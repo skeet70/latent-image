@@ -114,22 +114,14 @@ fn write_all(commit: &Commit) {
 
 #[no_mangle]
 pub extern "C" fn rb_menu_value_size_apply(property: u32, token: u32) -> u32 {
-    #[cfg(rb_menu_value_always_decline)]
-    {
-        let _ = (property, token);
-        return 0;
-    }
-    #[cfg(not(rb_menu_value_always_decline))]
-    {
-        let property = PropertyId::new(property as u16);
-        let token = RowToken::new(token);
-        match resolve(&TABLES, TABLES.target(property, token)) {
-            Ok(commit) => {
-                write_all(&commit);
-                apply(&commit, property);
-                1
-            }
-            Err(_) => 0,
+    let property = PropertyId::new(property as u16);
+    let token = RowToken::new(token);
+    match resolve(&TABLES, TABLES.target(property, token)) {
+        Ok(commit) => {
+            write_all(&commit);
+            apply(&commit, property);
+            1
         }
+        Err(_) => 0,
     }
 }

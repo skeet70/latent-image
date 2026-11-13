@@ -96,6 +96,10 @@ seek core = Hit Seek core (0xe, 3, 5, 0x1d) (Just 0x00c40100) Nothing [] Nothing
 post :: Word32 -> Hit
 post token = Hit EventPost 0 (0x1d, 0xf6, token, 0xf000) (Just 0xca47f0) Nothing [] Nothing Nothing
 
+arm, apply :: Hit
+arm = Hit (ValueSite StockValueArm) 0 (0, 0, 0, 0) Nothing Nothing [] Nothing Nothing
+apply = Hit (ValueSite ValueApply) 0 (0xf6, 1, 0, 0) Nothing Nothing [] Nothing Nothing
+
 segment :: [(B.ByteString)] -> [Hit] -> Observation
 segment blocks hits = Observation "picker-keys" EngineResident
   ([(label, B.replicate 8 1) | label <- drop 1 engineReads] ++ [("menu-block", block) | block <- blocks]) hits Nothing
@@ -246,18 +250,32 @@ main = do
         , ("a differing block read fails the pair", isLeft (comparePair [segment [B.replicate 0x430 2] []] [segment [B.replicate 0x430 3] []]))
         , ("a differing 0x1d post fails the pair", isLeft (comparePair [segment [B.replicate 0x430 2] [post 1]] [segment [B.replicate 0x430 2] [post 2]]))
         , ("a missing engine read fails the pair", isLeft (comparePair [segment [] []] [segment [] []]))
-        , ("a resident value seam that applies passes",
-            let hits = [Hit (ValueSite ValueApply) 0 (0,0,0,0) Nothing Nothing [] Nothing Nothing]
-             in checkValueLifecycle [segment [] hits] == Right ())
-        , ("a resident value seam that never applies refuses",
-            isLeft (checkValueLifecycle [segment [] []]))
-        , ("stock value fallback while resident refuses even after an owned apply",
-            let sites = [ValueApply, StockValueArm]
-                hits = [Hit (ValueSite site) 0 (0,0,0,0) Nothing Nothing [] Nothing Nothing | site <- sites]
-             in isLeft (checkValueLifecycle [segment [] hits]))
+        , ("an owned apply for each stock arm entry passes",
+            checkValueSeamObservations [segment [] [arm, arm]] [segment [] [apply, apply]] == Right ())
+        , ("a segment where neither role reaches IMAGE SIZE passes",
+            checkValueSeamObservations [segment [] []] [segment [] []] == Right ())
+        , ("an owned role that never applies where stock entered the arm refuses",
+            isLeft (checkValueSeamObservations [segment [] [arm]] [segment [] []]))
+        , ("an owned apply where stock never entered the arm refuses",
+            isLeft (checkValueSeamObservations [segment [] []] [segment [] [apply]]))
+        , ("the counts compare segment by segment",
+            isLeft (checkValueSeamObservations [segment [] [arm], segment [] []] [segment [] [], segment [] [apply]]))
+        , ("the stock arm while resident refuses even after an owned apply",
+            isLeft (checkValueSeamObservations [segment [] [arm]] [segment [] [apply, arm]]))
         , ("stock value code after unload does not violate resident ownership",
-            let hit site = Hit (ValueSite site) 0 (0,0,0,0) Nothing Nothing [] Nothing Nothing
-             in checkValueLifecycle [segment [] [hit ValueApply], unloaded (segment [] [hit StockValueArm])] == Right ())
+            checkValueSeamObservations [segment [] [arm], segment [] [arm]] [segment [] [apply], unloaded (segment [] [arm])] == Right ())
+        , ("roles with different segments refuse",
+            isLeft (checkValueSeamObservations [segment [] []] [segment [] [], segment [] []]))
+        , ("both roles must declare stock's IMAGE SIZE arm and the owned role its apply seam",
+            let declared :: [(T.Text, T.Text)] -> Value
+                declared sites = object ["declared_trace_sites" .= [object ["label" .= label, "address" .= address] | (label, address) <- sites]]
+                armSite = ("stock-value-size-arm", "00d51b58")
+                applySite = ("owned-value-apply", "00a90000")
+             in requireValueDeclarations StockRole (declared [armSite]) == Right ()
+                  && requireValueDeclarations OwnedRole (declared [armSite, applySite]) == Right ()
+                  && isLeft (requireValueDeclarations OwnedRole (declared [armSite]))
+                  && isLeft (requireValueDeclarations StockRole (declared []))
+                  && isLeft (requireValueDeclarations StockRole (declared [("stock-value-size-arm", "00d51b5c")])))
         ]
       failures = [label | (label, passed) <- cases, not passed]
   mapM_ (putStrLn . ("FAIL: " ++)) failures

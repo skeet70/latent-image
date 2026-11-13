@@ -2935,29 +2935,6 @@ haskell_binary(
     ],
 )
 
-haskell_binary(
-    name = "menu-value-cases",
-    srcs = ["MenuValueCases.hs"],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
-    main_file = "MenuValueCases.hs",
-    visibility = ["//visibility:public"],
-    deps = [
-        ":case-sha256",
-        ":coverage-lib",
-        ":native-adapter",
-        ":native-observation",
-        ":owned-case",
-        "//host:aeson",
-        "//host:base",
-        "//host:bytestring",
-        "//host:containers",
-        "//host:filepath",
-        "//host:host-support",
-        "//host:json",
-        "//replacement/property_service:property-oracle-lib",
-    ],
-)
-
 # Recipe-bank kernel behavior cases: builds each case from the pinned blob and
 # model, runs it through the bounded runner and writes results plus findings.
 haskell_binary(
