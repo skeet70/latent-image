@@ -27,7 +27,7 @@ main = do
       complete = report stock owned [control wrong] Null
       judge image value = do
         parsed <- either fail pure (parseInterfaceReport (L.toStrict (encode value)))
-        pure (judgeInterfaceReport image "report-digest" parsed)
+        pure (judgeInterfaceReport image (ReportDigest "report-digest") parsed)
       status value expected = do
         verdict <- judge firmware value
         check (verdictStatus verdict == expected)

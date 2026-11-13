@@ -2,6 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Emulation.InterfaceJudge
   ( InterfaceReport
+  , ReportDigest (..)
   , parseInterfaceReport
   , judgeInterfaceReport
   , interfaceVerdictJson
@@ -23,6 +24,7 @@ newtype Subsystem = Subsystem T.Text deriving (Eq, Show)
 newtype Scenario = Scenario T.Text deriving (Eq, Show)
 newtype Variant = Variant T.Text deriving (Eq, Show)
 newtype Digest = Digest T.Text deriving (Eq, Show)
+newtype ReportDigest = ReportDigest String deriving (Eq, Show)
 newtype GuestAddress = GuestAddress Word32 deriving (Eq, Ord, Show)
 newtype FetchCount = FetchCount Word64 deriving (Eq, Show)
 
@@ -114,8 +116,8 @@ firstDifference = go 0
 digestText :: Digest -> String
 digestText (Digest text) = T.unpack text
 
-judgeInterfaceReport :: Maybe Firmware -> String -> InterfaceReport -> Verdict
-judgeInterfaceReport firmware reportDigest report = base
+judgeInterfaceReport :: Maybe Firmware -> ReportDigest -> InterfaceReport -> Verdict
+judgeInterfaceReport firmware (ReportDigest reportDigest) report = base
   { verdictStatus = status
   , verdictDifferentCases = [scenarioName | status == VerdictDifferent]
   , verdictFirstDifference = if status == VerdictDifferent then difference else Nothing

@@ -80,7 +80,7 @@ interfaceMain arguments = do
   bytes <- readRegular (16 * 1024 * 1024) reportPath
   report <- either failH pure (parseInterfaceReport bytes)
   firmware <- firmwareFor imagePath
-  let verdict = judgeInterfaceReport firmware (sha256Hex (sha256 bytes)) report
+  let verdict = judgeInterfaceReport firmware (ReportDigest (sha256Hex (sha256 bytes))) report
       document = encode (interfaceVerdictJson report verdict)
   case outPath of
     Nothing -> BL.putStr document
