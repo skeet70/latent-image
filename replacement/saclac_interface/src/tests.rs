@@ -131,6 +131,87 @@ fn capture_layout_preserves_callback_and_converted_value_order() {
     assert_eq!(stock::img_dc_operation(crate::ImgDcOperation::Request49), 0x3f49);
 }
 
+fn lens_bytes(payload: crate::lens::LensPayload, code: u16, expected: &[u8]) {
+    let mut bytes = [0xaa; stock::LENS_PAYLOAD_BYTES];
+    let request = stock::lens_dc_request(&payload, &mut bytes);
+    assert_eq!(stock::lens_dc_operation(request.operation), code, "{payload:?}");
+    assert_eq!(request.parameters.bytes(), expected, "{payload:?}");
+}
+
+#[test]
+fn lens_payloads_carry_the_stock_callback_record_and_words() {
+    use crate::lens::{DriveOwner, LensMode, LensPayload as P, PositionStep, ProfileSlotReference, SelectionCode, Setting};
+    use crate::ParameterValue as V;
+    let record = stock::record_handle_from_a2(0x0169_a000);
+    lens_bytes(P::BringUp { parameters: [V(1), V(2), V(3), V(4), V(5)], record }, 0x4202, &[
+        0xf0, 0x50, 0xf1, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 0, 0xa0, 0x69, 1, 4, 0, 0, 0, 5, 0, 0, 0,
+    ]);
+    lens_bytes(P::Stop { parameters: [V(7), V(8)], record }, 0x4203, &[
+        0xc4, 0x50, 0xf1, 0, 7, 0, 0, 0, 8, 0, 0, 0, 0, 0xa0, 0x69, 1,
+    ]);
+    let slot = ProfileSlotReference(0x8100_1234);
+    lens_bytes(P::Setting { setting: Setting::Request04, slot, mode: LensMode(13) }, 0x4204, &[
+        0x50, 0x4b, 0xf1, 0, 0x34, 0x12, 0, 0x81, 13, 0, 0, 0,
+    ]);
+    lens_bytes(P::Setting { setting: Setting::Request05, slot, mode: LensMode(13) }, 0x4205, &[
+        0x8c, 0x4b, 0xf1, 0, 0x34, 0x12, 0, 0x81, 13, 0, 0, 0,
+    ]);
+    lens_bytes(P::Setting { setting: Setting::Request06, slot, mode: LensMode(13) }, 0x4206, &[
+        0x14, 0x4b, 0xf1, 0, 0x34, 0x12, 0, 0x81, 13, 0, 0, 0,
+    ]);
+    lens_bytes(P::Drive { owner: DriveOwner::Live, parameters: [V(1), V(2), V(3), V(4)], slot }, 0x4207, &[
+        0xe4, 0x4b, 0xf1, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 0x34, 0x12, 0, 0x81,
+    ]);
+    lens_bytes(P::Drive { owner: DriveOwner::S1, parameters: [V(1), V(2), V(3), V(4)], slot }, 0x4207, &[
+        0x94, 0x8e, 0xf2, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 0x34, 0x12, 0, 0x81,
+    ]);
+    lens_bytes(P::Finish { value: V(9), record }, 0x4208, &[0, 0, 0, 0, 9, 0, 0, 0, 0, 0xa0, 0x69, 1]);
+    lens_bytes(P::Halt, 0x4209, &[]);
+    lens_bytes(P::Release, 0x4212, &[]);
+    lens_bytes(P::Step(PositionStep(-2)), 0x420b, &[
+        0xc8, 0x4b, 0xf1, 0, 0xfe, 0xff, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0,
+    ]);
+    lens_bytes(P::Select { value: V(6), code: SelectionCode::Configured, record }, 0x4211, &[
+        0xe4, 0x4a, 0xf1, 0, 6, 0, 0, 0, 12, 0, 0, 0, 0, 0xa0, 0x69, 1,
+    ]);
+    lens_bytes(P::Select { value: V(6), code: SelectionCode::Unconfigured, record }, 0x4211, &[
+        0xe4, 0x4a, 0xf1, 0, 6, 0, 0, 0, 11, 0, 0, 0, 0, 0xa0, 0x69, 1,
+    ]);
+}
+
+#[test]
+fn lens_payload_completions_are_the_posts_of_the_callback_it_names() {
+    use crate::lens::{DriveOwner, LensMode, LensPayload as P, PositionStep, ProfileSlotReference, SelectionCode, Setting};
+    use crate::ParameterValue as V;
+    let record = stock::record_handle_from_a2(1);
+    let slot = ProfileSlotReference(0);
+    let payloads = [
+        P::BringUp { parameters: [V(0); 5], record },
+        P::Stop { parameters: [V(0); 2], record },
+        P::Setting { setting: Setting::Request04, slot, mode: LensMode(0) },
+        P::Setting { setting: Setting::Request05, slot, mode: LensMode(0) },
+        P::Setting { setting: Setting::Request06, slot, mode: LensMode(0) },
+        P::Drive { owner: DriveOwner::Live, parameters: [V(0); 4], slot },
+        P::Drive { owner: DriveOwner::S1, parameters: [V(0); 4], slot },
+        P::Finish { value: V(0), record },
+        P::Halt,
+        P::Step(PositionStep(0)),
+        P::Select { value: V(0), code: SelectionCode::Unconfigured, record },
+        P::Release,
+    ];
+    for payload in payloads {
+        let word = stock::lens_callback_word(&payload);
+        let posts = payload.completions();
+        match stock::CALLBACKS.iter().find(|entry| entry.word == word) {
+            Some(entry) => {
+                assert_eq!(posts.len(), entry.posts.len(), "{payload:?}");
+                assert!(posts.iter().all(|completion| entry.posts.contains(&stock::completion_code(*completion))), "{payload:?}");
+            }
+            None => assert!(word == 0 && posts.is_empty(), "{payload:?}"),
+        }
+    }
+}
+
 #[test]
 fn measurement_geometry_serializes_resource_calibration_and_retained_parameters() {
     use crate::round::{GeometryCalibration, GeometryPair, MeasurementGeometry, RetainedGeometryValue};

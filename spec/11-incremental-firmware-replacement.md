@@ -112,6 +112,10 @@ Exercise boundary values, invalid inputs, repeated operations, resource exhausti
 
 The owned saclac driver corrects two accepted defects at the retained queue-43 boundary. A command payload longer than its parameter block reaches an unbounded copy in stock at `0xf01c14..0xf01c28`. The owned driver releases the received block, calls stock's fault reaction `0xf46c20`, and neither copies nor dispatches that message. A failed receive calls the fault reaction in stock at `0xf01bf8..0xf01c04`, then dispatches the stale receive scratch. The owned driver calls the same fault reaction and receives again without copying or dispatching stale data. The command producers, shared block layouts, engine A and stock machines remain retained boundaries. No consumer dependence on either defect has been observed; that is not a claim that malformed messages cannot reach the queue.
 
+#### Lens child corrections, X-M1 1.50
+
+The owned live lens child corrects the refused Command2c reply at the retained queue-50 boundary. When the `0x4211` send is refused, stock's handler `0xf033b4..0xf033f4` calls `0xf15000(-98)`, whose reply entry `0xefb654` takes its third argument from the word at `0x169d388` (`0xf15034..0xf15048`); Command2c's payload is 8 bytes, so that word is left by an earlier message. The owned child replies -98 with a zero third word and prepares no record. The reply entry `0xefb654`, the lensdc sender `0x76ffec` and Command2c's client callback remain retained boundaries, and that callback is the only reader of the third word. A client that reads the third reply word as a value of this command would observe the difference; none has been observed.
+
 ### Mechanical work
 
 Follow the existing [implementation and build policy](../docs/principles.md#implementation-and-build). The new work is a pinned Rust native build interoperating with the established C/Clang infrastructure, not a replacement build system. Qualify `no_std`, `core` and compiler-builtins provenance, panic behavior, linking and the float ABI at each retained boundary; a target name alone does not establish stock ABI compatibility.

@@ -1,6 +1,19 @@
 #![forbid(unsafe_code)]
 
-use xm1_saclac_interface::{ClientCallback, CompletionStatus, Parameters, ReplyTarget};
+use xm1_saclac_interface::{ClientCallback, CommandKind, CompletionStatus, Parameters, ReplyTarget};
+
+/// What a reply hands the client beside its status.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Values<'a> {
+    Words(&'a [u32]),
+    /// A record the client reads through its address.
+    Record(&'a [u8]),
+}
+
+/// The reply composition the controllers' modules answer their clients through.
+pub trait Replies {
+    fn reply(&mut self, command: CommandKind, status: CompletionStatus, values: Values<'_>);
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Reply<'a> {

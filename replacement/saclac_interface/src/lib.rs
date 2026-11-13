@@ -3,8 +3,12 @@
 
 pub mod exposure;
 pub mod stock;
+pub mod lens;
 pub mod round;
 pub mod search;
+pub mod calc;
+pub mod statistics;
+pub mod imaging;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClientCallback(pub(crate) u32);
@@ -342,6 +346,7 @@ pub enum CalcOperation {
     Request0f,
     Request10,
     Request11,
+    Request12,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -476,3 +481,9 @@ mod exposure_tests;
 mod search_tests;
 #[cfg(test)]
 mod search_record_tests;
+#[cfg(test)]
+mod calc_tests;
+#[cfg(test)]
+mod statistics_tests;
+#[cfg(test)]
+mod imaging_tests;

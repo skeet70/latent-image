@@ -138,6 +138,18 @@ fn release_after_statistics_prepares_and_ends_the_branch() {
 }
 
 #[test]
+fn the_progress_other_subsystems_read_follows_the_owed_work() {
+    let mut router = Router::new();
+    assert_eq!(router.waiting(), Waiting::default());
+    let mut peers = Peers::new(&[]);
+    assert_eq!(run(&mut router, &mut peers, command(K::Command07)), Pending);
+    assert_eq!(run(&mut router, &mut peers, command(K::Command09)), Pending);
+    assert_eq!(router.waiting(), Waiting { shot: false, capture: true, bridge: true, release: false });
+    assert_eq!(run(&mut router, &mut peers, Input::Control(RootControl::ReleaseS1)), Pending);
+    assert_eq!(router.waiting(), Waiting { shot: false, capture: true, bridge: true, release: true });
+}
+
+#[test]
 fn release_with_nothing_owed_takes_the_fault_reaction() {
     let mut router = Router::new();
     let mut peers = Peers::new(&[]);
