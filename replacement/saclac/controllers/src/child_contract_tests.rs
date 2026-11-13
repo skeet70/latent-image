@@ -12,7 +12,7 @@ fn search_and_lens_reachable_child_requests_are_emulator_only() {
     let requests = [
         ChildRequest::Measurement(ChildEvent::Control { control: MeasurementControl::Initialize, parameters, record }),
         ChildRequest::S1Search(ChildEvent::Control { control: SearchControl::Initialize, parameters, record }),
-        ChildRequest::S1Search(ChildEvent::Control { control: SearchControl::Begin, parameters, record }),
+        ChildRequest::S1Search(ChildEvent::Control { control: SearchControl::Conclude, parameters, record }),
         ChildRequest::S1Search(ChildEvent::Completed { completed: Completed { completion: Completion::Calculation9d, parameters }, record }),
         ChildRequest::LensBringUp { message: Message::Command(Command { kind: CommandKind::LensBringUp, parameters }), record },
         ChildRequest::LensLive(ChildEvent::Control { control: LensControl::CancelDrive, parameters, record }),

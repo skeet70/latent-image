@@ -272,13 +272,13 @@ impl S1Statistics {
                 Outcome::Pending
             }
             (S::Imaging | S::ImagingRestart, Event::Prepare { .. }) => {
-                self.start_children(call);
+                self.half_press_children(call);
                 call.request(Request::EndImaging);
                 self.state = S::Ending;
                 Outcome::Pending
             }
             (S::Starting | S::StartingRestart | S::Selecting, Event::Prepare { .. }) => {
-                self.start_children(call);
+                self.half_press_children(call);
                 if self.state == S::Selecting {
                     self.results_closed = true;
                 }
@@ -286,7 +286,7 @@ impl S1Statistics {
                 Outcome::Pending
             }
             (S::Running, Event::Prepare { cancellable }) => {
-                let search = if cancellable { SearchControl::BeginCancellable } else { SearchControl::Begin };
+                let search = if cancellable { SearchControl::Conclude } else { SearchControl::Stop };
                 if call.acquire(AcquisitionControl::Start) {
                     self.finished.acquisition = true;
                     if call.search(search) == ChildOutcome::Complete {
@@ -422,11 +422,11 @@ impl S1Statistics {
             }
             (S::Running | S::Retuning, C::Image59) => {
                 call.acquire(AcquisitionControl::Stop);
-                call.search(SearchControl::ImagingReported);
+                call.search(SearchControl::Start);
                 Outcome::Pending
             }
             (S::Measuring, C::Image59) => {
-                call.search(SearchControl::ImagingReported);
+                call.search(SearchControl::Start);
                 Outcome::Pending
             }
             (S::Command1dPausing | S::Answering, C::Image59) => return Handled::Unexpected,
@@ -476,9 +476,9 @@ impl S1Statistics {
         Handled::Outcome(outcome)
     }
 
-    fn start_children<P: Port>(&mut self, call: &mut Call<'_, P>) {
+    fn half_press_children<P: Port>(&mut self, call: &mut Call<'_, P>) {
         call.acquire(AcquisitionControl::Start);
-        call.search(SearchControl::Begin);
+        call.search(SearchControl::Stop);
     }
 
     fn start<P: Port>(&mut self, next: State, call: &mut Call<'_, P>) -> Outcome {

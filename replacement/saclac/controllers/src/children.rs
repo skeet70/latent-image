@@ -60,13 +60,15 @@ pub enum AcquisitionControl {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SearchControl {
     Initialize,
-    Begin,
-    /// `Begin` for a record whose lens may be cancelled.
-    BeginCancellable,
+    /// Sent when the S1 imaging job reports (completion 0x59).
+    Start,
+    /// Sent at the half press.
+    Stop,
+    /// The half press for a record whose lens may be cancelled: the lens goes to the best
+    /// position found.
+    Conclude,
     Cancel,
     Resume,
-    /// The S1 imaging job reported (completion 0x59).
-    ImagingReported,
 }
 
 

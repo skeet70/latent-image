@@ -127,7 +127,7 @@ fn a_half_press_whose_children_finish_at_once_stops_and_ends_the_imaging() {
     assert_eq!(send(&mut statistics, &mut fake, StatisticsEvent::Prepare), Outcome::Pending);
     assert_eq!(fake.take(), [
         Seen::Acquisition(AcquisitionControl::Start),
-        Seen::Search(SearchControl::Begin),
+        Seen::Search(SearchControl::Stop),
         Seen::Request(Request::Stop { pause: false }),
     ]);
     assert!(!statistics.results_open());
@@ -143,7 +143,7 @@ fn a_half_press_stops_once_the_forwarded_results_finish_both_children() {
     let mut fake = Fake::default();
     let mut statistics = running(&mut fake);
     assert_eq!(send(&mut statistics, &mut fake, StatisticsEvent::PrepareCancellable), Outcome::Pending);
-    assert_eq!(fake.take(), [Seen::Acquisition(AcquisitionControl::Start), Seen::Search(SearchControl::BeginCancellable)]);
+    assert_eq!(fake.take(), [Seen::Acquisition(AcquisitionControl::Start), Seen::Search(SearchControl::Conclude)]);
     fake.acquisition.push_back(ChildOutcome::Complete);
     assert_eq!(send(&mut statistics, &mut fake, completed(C::Calculation9b)), Outcome::Pending);
     assert_eq!(fake.take(), [Seen::AcquisitionForward(C::Calculation9b)]);
@@ -199,7 +199,7 @@ fn a_half_press_during_the_selection_closes_the_results() {
     assert_eq!(send(&mut statistics, &mut fake, completed(C::Statistics7e)), Outcome::Pending);
     assert_eq!(fake.take(), [
         Seen::Acquisition(AcquisitionControl::Start),
-        Seen::Search(SearchControl::Begin),
+        Seen::Search(SearchControl::Stop),
         Seen::Request(Request::Stop { pause: false }),
     ]);
 }
@@ -213,7 +213,7 @@ fn a_half_press_before_the_imaging_is_configured_ends_it() {
     assert_eq!(send(&mut statistics, &mut fake, StatisticsEvent::PrepareCancellable), Outcome::Pending);
     assert_eq!(fake.take(), [
         Seen::Acquisition(AcquisitionControl::Start),
-        Seen::Search(SearchControl::Begin),
+        Seen::Search(SearchControl::Stop),
         Seen::Request(Request::EndImaging),
     ]);
     assert_eq!(send(&mut statistics, &mut fake, completed(C::Image57)), Outcome::Pending);
@@ -354,11 +354,11 @@ fn profile_commands_apply_while_the_measurement_is_up() {
 }
 
 #[test]
-fn an_imaging_report_stops_the_acquisition_and_tells_the_search() {
+fn an_imaging_report_stops_the_acquisition_and_starts_the_search() {
     let mut fake = Fake::default();
     let mut statistics = running(&mut fake);
     assert_eq!(send(&mut statistics, &mut fake, completed(C::Image59)), Outcome::Pending);
-    assert_eq!(fake.take(), [Seen::Acquisition(AcquisitionControl::Stop), Seen::Search(SearchControl::ImagingReported)]);
+    assert_eq!(fake.take(), [Seen::Acquisition(AcquisitionControl::Stop), Seen::Search(SearchControl::Start)]);
 }
 
 #[test]
