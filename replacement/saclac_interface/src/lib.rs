@@ -7,6 +7,7 @@ pub mod exposure;
 pub mod round;
 pub mod statistics;
 pub mod stock;
+pub mod calc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClientCallback(pub(crate) u32);
@@ -344,6 +345,7 @@ pub enum CalcOperation {
     Request0f,
     Request10,
     Request11,
+    Request12,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -475,3 +477,5 @@ mod calculation_tests;
 mod statistics_tests;
 #[cfg(test)]
 mod capture_results_tests;
+#[cfg(test)]
+mod calc_tests;

@@ -1,0 +1,89 @@
+#![forbid(unsafe_code)]
+
+//! Payloads of the requests saclac posts to calc (queue 44) and calc1 (queue 45).
+//!
+//! A `Record` is bytes a requester built and the peer reads whole; its fields are the
+//! requester's to type.
+
+use crate::stock::StockCallbackWord;
+
+/// An address in saclac memory that the peer reads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SharedAddress(pub u32);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Record<const BYTES: usize>(pub [u8; BYTES]);
+
+/// The shared record fields the window calculation reports on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WindowRecord {
+    pub first: u32,
+    pub second: u32,
+    pub status: u32,
+    pub halfword: u16,
+}
+
+/// The primary statistics snapshot values the window calculation reads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WindowSample {
+    pub mode: u32,
+    pub flags: u8,
+    pub exposure: u32,
+    pub level: u16,
+    pub adjustment: u32,
+}
+
+/// Calc 0x3c0c: one window calculation over the primary statistics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WindowRequest {
+    /// The profile's selection byte.
+    pub selection: u8,
+    pub mode: u8,
+    /// The profile selects by record, or has a measurement mode.
+    pub selected: bool,
+    pub sample: WindowSample,
+    /// The sample's level, offset by the reference and the exposure value.
+    pub level: u16,
+    /// The sample's second level less the gain offset.
+    pub reference: u16,
+    pub window: WindowRecord,
+    pub refresh: bool,
+}
+
+/// One request to calc, with the callback calc enters when it finishes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CalcPayload {
+    /// 0x3c02: calc reads `block` and `source` in place.
+    Calculation { block: SharedAddress, source: SharedAddress, callback: StockCallbackWord },
+    /// 0x3c03.
+    PipelineFirst { first: Record<60>, second: Record<24>, callback: StockCallbackWord },
+    /// 0x3c04.
+    PipelineSecond { block: Record<64>, callback: StockCallbackWord },
+    /// 0x3c05.
+    PipelineThird { block: Record<116>, callback: StockCallbackWord },
+    /// 0x3c09: completes with 0x9d for the S1 sender and 0x89 for the search.
+    Search { record: Record<120>, callback: StockCallbackWord },
+    /// 0x3c0a.
+    Image { record: Record<20>, callback: StockCallbackWord },
+    /// 0x3c0c.
+    Window { request: WindowRequest, callback: StockCallbackWord },
+    /// 0x3c11 from the source lane's 48-byte record.
+    Source { record: Record<48>, callback: StockCallbackWord },
+    /// 0x3c12, with no payload and no callback.
+    Release,
+}
+
+/// One request to calc1, with the callback calc1 enters when it finishes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Calc1Payload {
+    /// 0x3d00. The grid is stored where calc1 reads it before the request is posted.
+    Acquisition { record: Record<168>, callback: StockCallbackWord },
+    /// 0x3d01.
+    Selection { record: Record<228>, callback: StockCallbackWord },
+    /// 0x3d02.
+    Parameters { record: Record<124>, callback: StockCallbackWord },
+}
+
+/// The block calc1 reads with a 0x3d00 request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AcquisitionGrid(pub [u8; 1236]);
