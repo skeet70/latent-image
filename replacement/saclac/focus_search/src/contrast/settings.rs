@@ -246,6 +246,18 @@ pub enum Setting {
     /// moving up and down.
     MonitorRiseTens,
     MonitorFallTens,
+
+    /// Nonzero: a record with selection 0 and mode 4, 5 or 6 runs the S1 search.
+    S1Search,
+    /// The largest step the S1 climb takes.
+    ClimbStepLimit,
+    /// A halfword: the contrast change (in tens) under which an S1 climb sample counts as still.
+    ClimbStillChange,
+    /// The range (in tens) beyond which the S1 search's calc record marks the range wide.
+    WideRangeTens,
+    /// A halfword: the drop (in tens) from the previous contrast that lets an S1 track that
+    /// turned often enough conclude.
+    ConcludeDropTens,
 }
 
 /// Which trend-sample limit a direction decision uses.
@@ -266,4 +278,8 @@ pub enum StepKind {
     Scan,
     /// The return and the approach.
     Return,
+    /// The S1 search's climb (kind 5), sweep (kind 6) and track (kind 7).
+    Climb,
+    Sweep,
+    Track,
 }

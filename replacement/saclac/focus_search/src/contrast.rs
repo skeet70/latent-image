@@ -24,6 +24,7 @@ pub use dispatch::ContrastSearch;
 pub use focus::FocusTrace;
 pub use log::{FocusLog, FocusLogEntry, LoggedSample};
 pub use peak_search::PeakSearchTrace;
+pub(crate) use peak_search::{percent_of, recent_levels_high};
 pub use sample::{BridgeDrive, CorrectedPosition, Stage};
 use settings::{Setting, StepKind};
 
