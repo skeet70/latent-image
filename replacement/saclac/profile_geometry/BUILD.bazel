@@ -1,0 +1,32 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_host_rlib", "xm1_rust_host_test", "xm1_rust_rlib")
+
+package(default_visibility = ["//visibility:public"])
+
+_SOURCES = [
+    "src/numeric.rs",
+    "src/profile.rs",
+    "src/stock/mod.rs",
+    "src/stock/tables.rs",
+]
+
+xm1_rust_rlib(
+    name = "profile_geometry",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac_profile_geometry",
+    out = "arm/libxm1_saclac_profile_geometry.rlib",
+    data = _SOURCES,
+)
+
+xm1_rust_host_rlib(
+    name = "host",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac_profile_geometry",
+    data = _SOURCES,
+)
+
+xm1_rust_host_test(
+    name = "host-tests",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac_profile_geometry_tests",
+    data = _SOURCES + ["src/tests.rs"],
+)
