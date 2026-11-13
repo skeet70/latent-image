@@ -4,7 +4,9 @@
 //! callbacks deliver. Stock callbacks store the results into shot memory before they post (0xf1eddc,
 //! 0xf1ee10, 0xf1fc08); the owned callbacks carry them as the posted payload instead.
 
-use crate::exposure::{Correction, Evaluation, MeasuredEntry, ReleaseStatus, StatisticsRequest, CORRECTION_HALVES, EVALUATION_BYTES};
+use crate::calc::SharedAddress;
+use crate::exposure::{Correction, Evaluation, EvaluationRequest, MeasuredEntry, ReleaseStatus, StatisticsRequest, CORRECTION_HALVES, EVALUATION_BYTES};
+use crate::stock::StockCallbackWord;
 
 pub const STATISTICS_REQUEST_BYTES: usize = 220;
 
@@ -74,5 +76,59 @@ pub fn correction(payload: &[u8]) -> Option<Correction> {
 pub fn correction_payload(correction: &Correction) -> [u8; CORRECTION_BYTES] {
     let mut bytes = [0; CORRECTION_BYTES];
     for (pair, half) in bytes.chunks_exact_mut(2).zip(correction.0) { pair.copy_from_slice(&half.to_le_bytes()); }
+    bytes
+}
+
+pub const EVALUATION_REQUEST_BYTES: usize = 232;
+
+/// 0xf5fd20 posts calc 0x3c00 with the callback, the 100-byte block at context +0xfe0 from byte 4
+/// and the 44-byte block at +0x1044 from byte 0x68; stock leaves bytes 0x94.. unwritten
+/// (stack). 0xf69224 sets the block's constants and 0xf6a0cc the row's fields.
+pub fn evaluation_request(request: &EvaluationRequest, callback: StockCallbackWord) -> [u8; EVALUATION_REQUEST_BYTES] {
+    let mut bytes = [0; EVALUATION_REQUEST_BYTES];
+    let address = |at: Option<SharedAddress>| at.map_or(0, |at| at.0);
+    {
+        let mut word = |offset: usize, value: u32| bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        word(0, callback.0);
+        word(4, request.row);
+        word(4 + 0x10, address(request.row_buffer));
+        for (index, rate) in request.rates.iter().enumerate() {
+            word(4 + 0x1c + 4 * index, *rate);
+        }
+        word(4 + 0x2c, u32::from(request.after_reference));
+        word(4 + 0x3c, request.direction);
+        word(4 + 0x4c, request.column_count);
+        word(4 + 0x50, address(request.column_regions));
+        word(4 + 0x54, address(request.column_buffer));
+        word(4 + 0x60, request.next_profile);
+        for (index, curve) in request.level_curves.iter().enumerate() {
+            word(0x68 + 4 * index, address(*curve));
+        }
+        word(0x68 + 0x10, address(request.level_classes));
+        word(0x68 + 0x14, address(request.frame));
+        for (index, curve) in request.subject_curves.iter().enumerate() {
+            word(0x68 + 0x18 + 4 * index, address(*curve));
+        }
+        word(0x68 + 0x28, address(request.selection_flags));
+    }
+    let mut half = |offset: usize, value: u16| bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    for (pair, offset) in request.measured.iter().zip([0x04, 0x0c, 0x18]) {
+        half(4 + offset, pair[0]);
+        half(4 + offset + 2, pair[1]);
+    }
+    half(4 + 0x08, 16);
+    half(4 + 0x0a, 16);
+    half(4 + 0x30, request.value);
+    half(4 + 0x32, request.lower_value);
+    half(4 + 0x34, request.tolerance_above as u16);
+    half(4 + 0x36, request.tolerance_below as u16);
+    half(4 + 0x38, 250);
+    half(4 + 0x3a, request.floor as u16);
+    for (index, statistic) in request.statistics.iter().enumerate() {
+        half(4 + 0x44 + 2 * index, *statistic);
+    }
+    for (index, dimension) in request.dimensions.iter().enumerate() {
+        half(4 + 0x58 + 2 * index, *dimension);
+    }
     bytes
 }
