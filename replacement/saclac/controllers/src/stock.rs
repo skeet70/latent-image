@@ -419,3 +419,14 @@ pub fn capture_record_payload(
     body[148] = 1;
     bytes
 }
+
+pub const fn measurement_control_code(control: crate::children::MeasurementControl) -> u16 {
+    use crate::children::MeasurementControl;
+    match control {
+        MeasurementControl::Initialize => 0xb7,
+        MeasurementControl::Stop => 0xb8,
+        MeasurementControl::Reconfigure => 0xb9,
+        MeasurementControl::Suspend => 0xba,
+        MeasurementControl::Resume => 0xbb,
+    }
+}
