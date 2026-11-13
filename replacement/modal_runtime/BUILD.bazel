@@ -760,17 +760,34 @@ haskell_test(
     ],
 )
 
+haskell_library(
+    name = "qualifier-policy",
+    srcs = ["Replacement/ModalRuntime/QualifierPolicy.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = ["//host:aeson", "//host:base"],
+)
+
+haskell_test(
+    name = "qualifier-policy-tests",
+    srcs = ["QualifierPolicyTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-threaded"],
+    deps = [":qualifier-policy", "//emulation:parallel-cases", "//host:aeson", "//host:base"],
+)
+
 haskell_binary(
     name = "menu-engine-qualify-bounded",
     srcs = ["QualifyBoundedMain.hs"],
     main_file = "QualifyBoundedMain.hs",
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
     visibility = ["//visibility:public"],
     deps = [
         ":memory-counters",
+        ":qualifier-policy",
         "//emulation:case-sha256",
         "//emulation:emulator-slot-lib",
         "//emulation:host-admission-lib",
+        "//emulation:parallel-cases",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

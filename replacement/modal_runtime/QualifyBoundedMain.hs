@@ -16,13 +16,16 @@ import Emulation.EmulatorSlot (SlotCount (..), SlotPolicy (..), admissionGrant, 
 import qualified Emulation.HostAdmission as Admission
 import Emulation.Sha256 (Sha256, parseSha256Hex, sha256, sha256File, sha256Hex)
 import FujiAF.Host (failH, get, num, str)
+import GHC.Clock (getMonotonicTimeNSec)
 import FujiAF.JSON (encodeCanonical)
 import FujiAF.StorageBudget (checkStorageBudget)
+import Replacement.ModalRuntime.QualifierPolicy (executionIdentity, installedCheckpointMatches)
+import Emulation.ParallelCases (mapBounded)
 import Replacement.ModalRuntime.MemoryCounters (oomEvents, oomKills, peakBytes, readCounter)
 import System.Directory
   ( createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getFileSize
   , listDirectory, makeAbsolute, removeFile, removePathForcibly, renameDirectory, renameFile, setCurrentDirectory )
-import System.Environment (getArgs, getEnvironment, lookupEnv)
+import System.Environment (getArgs, getEnvironment, getExecutablePath, lookupEnv)
 import System.Exit (ExitCode (..), exitWith)
 import System.FilePath ((</>), takeDirectory, takeFileName)
 import System.IO (IOMode (ReadMode, WriteMode), SeekMode (AbsoluteSeek), hSeek, stderr, withBinaryFile, withFile)
@@ -51,9 +54,10 @@ scopeText :: QualificationScope -> String
 scopeText HeadroomOnly = "headroom-only"
 scopeText FullMatrix = "full-matrix"
 
-slottedArgument :: QualificationScope -> String
-slottedArgument HeadroomOnly = "headroom-slotted"
-slottedArgument FullMatrix = "execute-slotted"
+parseRole :: String -> Maybe Role
+parseRole "stock" = Just Stock
+parseRole "owned" = Just Owned
+parseRole _ = Nothing
 
 data HostBuildVerdict = BuildPassed | BuildFailed | BuildInterrupted | BuildResourceFailure | BuildUnknown
 
@@ -97,6 +101,11 @@ data ToolIdentity = ToolIdentity
   , toolSdkStore :: FilePath
   } deriving (Eq)
 
+data RoleCheckpoint = RoleCheckpoint
+  { checkpointSnapshot :: Sha256
+  , checkpointInstallation :: Sha256
+  } deriving (Eq)
+
 data RoleIdentity = RoleIdentity
   { roleSource :: CommitId
   , roleCase :: CaseId
@@ -104,6 +113,7 @@ data RoleIdentity = RoleIdentity
   , roleTrajectory :: Sha256
   , roleInputs :: InputIdentity
   , roleTools :: ToolIdentity
+  , roleCheckpoint :: Maybe RoleCheckpoint
   } deriving (Eq)
 
 data Completion = Completion
@@ -262,7 +272,7 @@ memoryMaxBytes :: Integer
 memoryMaxBytes = 2147483648
 
 qualRoot, binRoot :: FilePath
-qualRoot = "private-data/scratch/ControllerStrategy/engine225/bounded-qual"
+qualRoot = "private-data/scratch/QualifierSpeed/qualification3"
 binRoot = qualRoot </> "bin"
 checkerRoot :: FilePath
 checkerRoot = "bazel-bin"
@@ -270,9 +280,9 @@ checkerRoot = "bazel-bin"
 trajectoryRoot, runDocument, inputsRoot, tablesPath, planPath, clockPath :: FilePath
 trajectoryRoot = "private-data/scratch/ControllerStrategy/engine225/controlled-rtc/trajectories"
 runDocument = "private-data/scratch/ControllerStrategy/engine225/controlled-rtc/xm1-150.json"
-inputsRoot = "private-data/scratch/ControllerStrategy/engine225/final-bc2fa29d/inputs"
+inputsRoot = "private-data/scratch/QualifierSpeed/inputs"
 tablesPath = "private-data/scratch/ControllerStrategy/menu-tables.json"
-planPath = "private-data/scratch/ControllerStrategy/engine225/final-bc2fa29d/inputs/bank-plan.json"
+planPath = inputsRoot </> "bank-plan.json"
 clockPath = "emulation/menu-engine-pair-trajectories/clock-exclusions.json"
 
 main :: IO ()
@@ -287,9 +297,42 @@ main = do
     ["execute"] -> executeMode FullMatrix
     ["recheck"] -> recheckMode
     ["headroom"] -> executeMode HeadroomOnly
-    ["execute-slotted"] -> slottedMode FullMatrix
-    ["headroom-slotted"] -> slottedMode HeadroomOnly
-    _ -> failH "usage: menu-engine-qualify-bounded plan [headroom]|execute|headroom"
+    ["measure"] -> measureMode
+    ["install-producer"] -> slottedMode ["install-producer"] installCase Owned (qualRoot </> "install-producer")
+    ["role-slotted", name, role] | CaseId name `elem` pairs, Just parsed <- parseRole role -> roleMode (CaseId name) parsed
+    _ -> failH "usage: menu-engine-qualify-bounded plan [headroom]|execute|headroom|measure|recheck"
+
+measureMode :: IO ()
+measureMode = do
+  occupied <- insideSlot
+  when occupied (failH "qualification measurement must start outside an emulator slot")
+  requireCleanSource
+  verifyInputs
+  _ <- boundedSlotPolicy
+  checkStorageBudget qualRoot
+  buildAndTest
+  prepareInstalledCheckpoint
+  started <- getMonotonicTimeNSec
+  measurements <- forM [installCase, CaseId "oracle-close-property"] $ \name -> do
+    forM_ [Stock, Owned] $ \role -> do
+      result <- runRole name role
+      case result of
+        Left failure -> writeFailurePacket "blocked" failure >> failH "measurement role failed"
+        Right _ -> pure ()
+    comparison <- runPairCheck name
+    directory <- case comparison of
+      Left failure -> writeFailurePacket "blocked" failure >> failH "measurement pair failed"
+      Right path -> pure path
+    roles <- forM [Stock, Owned] $ \role -> do
+      completion <- decodeFile (roleDirectory name role </> "completion.json") >>= either failH pure
+      receipt <- decodeFile (roleDirectory name role </> "receipt" </> "e2e-result.json") >>= either failH pure
+      pure (object ["role" .= roleText role, "wall_seconds" .= get completion "wall_seconds", "phases" .= get receipt "phases"])
+    comparisonValue <- decodeFile (directory </> "pair.json") >>= either failH pure
+    pure (object ["case" .= caseText name, "roles" .= roles, "comparison" .= comparisonValue])
+  ended <- getMonotonicTimeNSec
+  writeJson (qualRoot </> "measurement.json") $ object
+    [ "passed" .= True, "pairs" .= measurements
+    , "wall_seconds" .= (fromIntegral (ended - started) / 1e9 :: Double) ]
 
 planMode :: QualificationScope -> IO ()
 planMode scope = do
@@ -319,43 +362,94 @@ executeMode scope = do
   when occupied (failH "qualification preparation must start outside an emulator slot")
   requireCleanSource
   verifyInputs
-  policy <- boundedSlotPolicy
+  _ <- boundedSlotPolicy
   checkStorageBudget qualRoot
   buildAndTest
-  reexecInSlot policy [slottedArgument scope]
-  failH "qualification did not enter a fresh emulator slot"
+  prepareInstalledCheckpoint
+  source <- verifySource
+  outcome <- runGate source inputIdentity
+  case scope of
+    HeadroomOnly -> publishHeadroom outcome source inputIdentity
+    FullMatrix -> runMatrix source inputIdentity >>= \matrix -> publish matrix source inputIdentity
+
+ownedCheckpointRoot :: IO FilePath
+ownedCheckpointRoot = do
+  tools <- toolIdentity
+  let producer = object
+        [ "viewer" .= sha256Hex (toolViewer tools), "sdk" .= sha256Hex (toolSdkRamPush tools)
+        , "run" .= sha256Hex expectedRunDocument, "firmware" .= sha256Hex expectedFirmware
+        , "adjustment" .= sha256Hex expectedAdjustment, "rom" .= sha256Hex expectedRom
+        , "archive" .= sha256Hex expectedArchive, "retired" .= sha256Hex expectedRetired ]
+  pure ("private-data/emulator-checkpoints" </> ("qualifier-install-" ++ sha256Hex (sha256 (encodeCanonical producer))))
+
+ownedProofPath :: IO FilePath
+ownedProofPath = (</> "observed-install.json") <$> ownedCheckpointRoot
+
+installCase :: CaseId
+installCase = CaseId "oracle-close"
+
+prepareInstalledCheckpoint :: IO ()
+prepareInstalledCheckpoint = do
+  proof <- ownedProofPath
+  present <- doesFileExist proof
+  unless present $ do
+    executable <- getExecutablePath
+    status <- spawn executable ["install-producer"] (qualRoot </> "logs" </> "install-producer.log") []
+    saved <- doesFileExist proof
+    unless (status == ExitSuccess && saved) (failH "observed installation producer failed")
 
 boundedSlotPolicy :: IO SlotPolicy
 boundedSlotPolicy = do
   configuredPolicy <- slotPolicyFromEnvironment
   memoryOverride <- lookupEnv "XM1_EMULATOR_MEMORY_MAX"
-  let policy = case memoryOverride of
+  swapOverride <- lookupEnv "XM1_EMULATOR_SWAP_MAX"
+  let boundedMemory = case memoryOverride of
         Nothing -> configuredPolicy { memoryMax = Admission.MemoryMax "2G" }
         Just _ -> configuredPolicy
+      policy = case swapOverride of
+        Nothing -> boundedMemory { memorySwapMax = Admission.MemorySwapMax "0" }
+        Just _ -> boundedMemory
       SlotCount slots = slotCount policy
-  unless (slots == 1 && Admission.memoryMaxBytes (memoryMax policy) == memoryMaxBytes)
-    (failH "qualification requires XM1_EMULATOR_SLOTS=1 and a 2G emulator cap")
+  unless (slots >= 1 && slots <= 3 && Admission.memoryMaxBytes (memoryMax policy) == memoryMaxBytes
+    && Admission.memorySwapMaxBytes (memorySwapMax policy) == 0)
+    (failH "qualification requires 1..3 emulator slots, a 2G emulator cap and zero swap")
   pure policy
 
-slottedMode :: QualificationScope -> IO ()
-slottedMode scope = do
-  pending <- lookupEnv "XM1_ADMISSION_SCOPE"
-  previouslyAdmitted <- insideSlot
-  unless (previouslyAdmitted || pending /= Nothing) (failH "slotted qualification requires pending or active admission")
+roleMode :: CaseId -> Role -> IO ()
+roleMode name role = slottedMode ["role-slotted", caseText name, roleText role] name role (roleDirectory name role)
+
+slottedMode :: [String] -> CaseId -> Role -> FilePath -> IO ()
+slottedMode arguments name role directory = do
   policy <- boundedSlotPolicy
-  reexecInSlot policy [slottedArgument scope]
+  archiveStale directory (caseText name ++ "-" ++ roleText role)
+  createDirectoryIfMissing True directory
+  started <- getMonotonicTimeNSec
+  reexecInSlot policy arguments
+  ended <- getMonotonicTimeNSec
   occupied <- insideSlot
-  unless occupied (failH "slotted qualification requires an emulator slot")
-  readBoundedScope
+  unless occupied (failH "role requires an emulator slot")
+  slot <- admittedSlot
+  writeJson (directory </> "admission.json") $ object
+    [ "slot" .= fmap slotIndex slot
+    , "wait_seconds" .= (fromIntegral (ended - started) / 1e9 :: Double)
+    ]
   requireCleanSource
   verifyInputs
-  source <- verifySource
-  outcome <- runGate source inputIdentity
-  case scope of
-    HeadroomOnly -> publishHeadroom outcome source inputIdentity
-    FullMatrix -> do
-      matrix <- runMatrix source inputIdentity
-      publish matrix source inputIdentity
+  outcome <- executeRole name role directory
+  case outcome of
+    Right _ -> pure ()
+    Left (Failure predicate detail _) -> failH (predicateText predicate ++ ": " ++ detail)
+
+newtype SlotIndex = SlotIndex Int
+
+slotIndex :: SlotIndex -> Int
+slotIndex (SlotIndex value) = value
+
+-- | Set by 'Emulation.EmulatorSlot.reexecInSlot' for the process it admits.
+admittedSlot :: IO (Maybe SlotIndex)
+admittedSlot = do
+  text <- lookupEnv "XM1_EMULATOR_SLOT"
+  pure (SlotIndex <$> (text >>= readMaybe))
 
 verifySource :: IO SourceProvenance
 verifySource = do
@@ -417,7 +511,7 @@ resourcesValue = object
   [ "emulator_memory_max_bytes" .= memoryMaxBytes
   , "emulator_swap_max_bytes" .= (0 :: Integer)
   , "build_memory_max_bytes" .= Admission.memoryMaxBytes (Admission.classMemoryMax Admission.Build)
-  , "emulator_slots" .= (1 :: Int)
+  , "emulator_slots" .= (3 :: Int)
   , "bazel_jobs" .= (2 :: Int)
   , "native_batches" .= (0 :: Int)
   ]
@@ -476,7 +570,10 @@ buildAndTest = do
         , "//emulation:fujimod-paths-module"
         , "//emulation:modal-settings-compare", "//emulation:render-compare"
         , "//replacement/modal_runtime:menu-engine-pair-check"
-        , "//replacement/modal_runtime:menu-engine-tree" ]
+        , "//replacement/modal_runtime:menu-engine-tree"
+        , "//replacement/bank/tables:modal75-table-rs"
+        , "//replacement/bank/tables:menu-tree-rs"
+        , "//replacement/bank/tables:menu-value-rs" ]
       testTargets =
         [ "//emulation:modal-watch-stream-tests", "//emulation:modal-observation-tests"
         , "//emulation:xm1-viewer-tests", "//emulation:ui-trajectory-tests"
@@ -559,21 +656,21 @@ sdkPath name text =
     path : _ -> pure path
     [] -> failH ("generated FujiModPaths.hs lacks " ++ name)
 
-readBoundedScope :: IO ()
-readBoundedScope = do
+readBoundedScope :: FilePath -> IO ()
+readBoundedScope roleRoot = do
   directory <- cgroupDirectory
   limit <- readCounter (directory </> "memory.max")
   swap <- readCounter (directory </> "memory.swap.max")
   unless (limit == memoryMaxBytes) (failH ("memory.max is " ++ show limit))
   unless (swap == 0) (failH ("memory.swap.max is " ++ show swap))
-  createDirectoryIfMissing True qualRoot
+  createDirectoryIfMissing True roleRoot
   peak <- peakBytes directory
   kills <- oomKills directory
   events <- oomEvents directory
-  writeJson (qualRoot </> "resources-baseline.json") $ object
+  writeJson (roleRoot </> "resources-baseline.json") $ object
     [ "memory_max" .= limit
     , "swap_max" .= swap
-    , "emulator_slots" .= (1 :: Int)
+    , "emulator_slots" .= (3 :: Int)
     , "bazel_jobs" .= (2 :: Int)
     , "baseline_peak" .= peak
     , "baseline_oom_kills" .= kills
@@ -697,15 +794,21 @@ runMatrix _source _inputs = do
   executed <- newIORef (0 :: Int)
   reused <- newIORef (0 :: Int)
   comparisons <- newIORef ([] :: [(CaseId, FilePath)])
+  policy <- boundedSlotPolicy
+  let SlotCount slots = slotCount policy
+  installed <- runRole installCase Owned
+  case installed of
+    Left failure -> writeFailurePacket "blocked" failure >> failH "observed installation role failed"
+    Right _ -> pure ()
+  outcomes <- mapBounded slots (uncurry runRole)
+    [(name, role) | name <- pairs, role <- [Stock, Owned], (name, role) /= (installCase, Owned)]
+  forM_ (installed : outcomes) $ \outcome -> case matrixGate outcome of
+    Stop failure -> do
+      writeFailurePacket "blocked" failure
+      failH "matrix role failed"
+    Continue Reused -> modifyIORef' reused (+ 1)
+    Continue Executed -> modifyIORef' executed (+ 1)
   forM_ pairs $ \name -> do
-    forM_ [Stock, Owned] $ \role -> do
-      outcome <- runRole name role
-      case matrixGate outcome of
-        Stop failure -> do
-          writeFailurePacket "blocked" failure
-          failH ("role failed: " ++ caseText name ++ "." ++ roleText role)
-        Continue Reused -> modifyIORef' reused (+ 1)
-        Continue Executed -> modifyIORef' executed (+ 1)
     complete <- roleComplete name Stock
     completeOwned <- roleComplete name Owned
     unless (complete && completeOwned) $ do
@@ -740,8 +843,10 @@ runRole name role = do
   let directory = roleDirectory name role
   complete <- roleComplete name role
   if complete then pure (Right Reused) else do
+    stored <- decodeFile (directory </> "input.json")
+    current <- roleJson <$> roleIdentity name role
     recorded <- doesFileExist (directory </> "completion.json")
-    if recorded
+    if recorded && either (const False) ((== executionJson current) . executionJson) stored
       then pure (Left (Failure (Predicate "completed-observation-admission")
         "recorded completion failed current admission; automatic replay is refused"
         (directory </> "completion.json")))
@@ -749,7 +854,14 @@ runRole name role = do
         terminal <- roleTerminalFailure name role
         case terminal of
           Just failure -> pure (Left failure)
-          Nothing -> executeRole name role directory
+          Nothing -> do
+            executable <- getExecutablePath
+            status <- spawn executable ["role-slotted", caseText name, roleText role]
+              (qualRoot </> "logs" </> (caseText name ++ "." ++ roleText role ++ ".log")) []
+            finished <- roleComplete name role
+            if status == ExitSuccess && finished
+              then pure (Right Executed)
+              else pure (Left (Failure (Predicate "role-completion") "role worker did not complete" directory))
 
 completionHolds :: Value -> Value -> Value -> Sha256 -> Sha256 -> Either String Value -> Bool
 completionHolds current stored completionValue inputDigest resultDigest receiptValue =
@@ -775,9 +887,11 @@ roleComplete name role = do
     inputDigest <- sha256File inputPath
     resultDigest <- sha256File receipt
     receiptValue <- decodeFile receipt
+    observation <- decodeFile (directory </> "receipt" </> "e2e-modal-observation.json")
     pure $ case (stored, completionValue) of
       (Right storedValue, Right completion) ->
         completionHolds (roleJson current) storedValue completion inputDigest resultDigest receiptValue
+          && either (const False) (installedCheckpointMatches (roleJson current)) observation
       _ -> False
 
 strictNum :: Value -> String -> Either String Integer
@@ -846,15 +960,16 @@ roleTerminalFailure name role = do
 
 executeRole :: CaseId -> Role -> FilePath -> IO (Either Failure RunOutcome)
 executeRole name role directory = do
-  archiveStale directory (caseText name ++ "-" ++ roleText role)
-  createDirectoryIfMissing True directory
+  readBoundedScope directory
   identity <- roleIdentity name role
   writeJson (directory </> "input.json") (roleJson identity)
   cgroup <- cgroupDirectory
   beforeKills <- oomKills cgroup
   beforeEvents <- oomEvents cgroup
   beforePeak <- peakBytes cgroup
-  status <- runViewer name role (directory </> "viewer.log")
+  started <- getMonotonicTimeNSec
+  status <- runViewer name role directory (directory </> "viewer.log")
+  ended <- getMonotonicTimeNSec
   afterKills <- oomKills cgroup
   afterEvents <- oomEvents cgroup
   let killDelta = afterKills - beforeKills
@@ -864,6 +979,11 @@ executeRole name role directory = do
   let receiptOk = receiptInputsMatch receiptValue
       receiptProblem = either Just (const Nothing) receiptValue
   if status == ExitSuccess && receiptOk && killDelta == 0 && eventDelta == 0 then do
+    when (role == Owned && name == installCase) $ do
+      checkpointRoot <- ownedCheckpointRoot
+      let prelinked = checkpointRoot </> "prelinked"
+      retained <- doesDirectoryExist prelinked
+      unless retained (copyPath (directory </> "receipt" </> "relinked") prelinked)
     resultDigest <- sha256Hex <$> sha256File receipt
     inputDigest <- sha256Hex <$> sha256File (directory </> "input.json")
     completedAt <- show <$> getProcessID
@@ -871,6 +991,7 @@ executeRole name role directory = do
     writeJson (directory </> "completion.json") $ object
       [ "identity_sha256" .= inputDigest
       , "result_sha256" .= resultDigest
+      , "wall_seconds" .= (fromIntegral (ended - started) / 1e9 :: Double)
       , "exit" .= (0 :: Int)
       , "oom_kill_delta" .= killDelta
       , "oom_event_delta" .= eventDelta
@@ -884,6 +1005,7 @@ executeRole name role directory = do
       ]
     failurePresent <- doesFileExist (directory </> "failure.json")
     when failurePresent (removeFile (directory </> "failure.json"))
+    removePathForcibly (directory </> "runtime")
     pure (Right Executed)
   else do
     let pressure = killDelta > 0 || eventDelta > 0
@@ -935,16 +1057,20 @@ executeRole name role directory = do
               ]
             pure (Left (Failure predicate reason (directory </> "viewer.log")))
 
-runViewer :: CaseId -> Role -> FilePath -> IO ExitCode
-runViewer name role logPath = do
-  let directory = roleDirectory name role
-      progress = runDocument
+runViewer :: CaseId -> Role -> FilePath -> FilePath -> IO ExitCode
+runViewer name role directory logPath = do
+  checkpointRoot <- ownedCheckpointRoot
+  proofPath <- ownedProofPath
+  proofPresent <- doesFileExist proofPath
+  prelinkedPresent <- doesDirectoryExist (checkpointRoot </> "prelinked")
+  let progress = runDocument
       extra = case role of
         Stock -> ["--modal-lifetime-guard"]
         Owned -> [ "--ram-push-modal-scoped"
                  , "--modal75-owned-archive", inputsRoot </> "engine.a"
                  , "--modal75-retired", inputsRoot </> "retired.json"
                  , "--menu-engine-owned" ]
+            ++ [argument | proofPresent && prelinkedPresent, argument <- ["--modal75-prelinked", checkpointRoot </> "prelinked"]]
       common = [ "--workspace", "."
                , "--ram-push-e2e", "--cardless", "--fujimod", "--unreviewed-relink"
                , "--fujimod-run-document", progress
@@ -955,17 +1081,22 @@ runViewer name role logPath = do
                , "--receipt-output", directory </> "receipt" ]
   owner <- getProcessID
   purpose <- either failH pure (grantPurpose (caseText name ++ "." ++ roleText role))
+  let checkpointEnvironment = case role of
+        Stock -> [("XM1_RAM_PUSH_CHECKPOINT_ROOT", "private-data/emulator-checkpoints/ram-push")]
+        Owned -> [("XM1_RAM_PUSH_CHECKPOINT_ROOT", checkpointRoot), ("XM1_MODAL_INSTALL_CHECKPOINT", proofPath)]
   spawn "devenv" (["shell", "--", binRoot </> "xm1-viewer"] ++ common ++ extra) logPath
-    [ ("XM1_EMULATOR_SLOTS", "1")
-    , ("XM1_EMULATOR_MEMORY_MAX", "2G")
-    , admissionGrant owner purpose
-    ]
+    ([ ("XM1_EMULATOR_SLOTS", "3")
+     , ("XM1_EMULATOR_MEMORY_MAX", "2G")
+     , ("XM1_EMULATOR_SWAP_MAX", "0")
+     , admissionGrant owner purpose
+     ] ++ checkpointEnvironment)
 
 runPairCheck :: CaseId -> IO (Either Failure FilePath)
 runPairCheck name = do
   let stock = roleDirectory name Stock </> "receipt"
       owned = roleDirectory name Owned </> "receipt"
   check <- freshDirectory (qualRoot </> "checks") (caseText name)
+  started <- getMonotonicTimeNSec
   pairStatus <- spawn (binRoot </> "menu-engine-pair-check")
     ([ "--retained-render", "--write-render-receipt", "--tables", tablesPath, "--package-plan", planPath
      , "--stock", stock, "--owned", owned ]) (check </> "pair-check.log") []
@@ -978,12 +1109,14 @@ runPairCheck name = do
     ([ stock </> "e2e-result-render.json"
      , owned </> "e2e-result-render.json"
      , check </> "render.json" ] ++ exclusion) (check </> "render.log") []
+  ended <- getMonotonicTimeNSec
   settingsEqual <- jsonEqual (check </> "settings.json")
   renderEqual <- jsonEqual (check </> "render.json")
   let pass = pairStatus == ExitSuccess && settingsStatus == ExitSuccess
              && renderStatus == ExitSuccess && settingsEqual && renderEqual
   writeJson (check </> "pair.json") $ object
     [ "name" .= caseText name
+    , "wall_seconds" .= (fromIntegral (ended - started) / 1e9 :: Double)
     , "pair_status" .= exitCodeValue pairStatus
     , "settings_status" .= exitCodeValue settingsStatus
     , "render_status" .= exitCodeValue renderStatus
@@ -1147,13 +1280,17 @@ publish matrix source inputs = do
   roles <- fmap concat $ forM pairs $ \name -> forM [Stock, Owned] $ \role -> do
     complete <- roleComplete name role
     failed <- roleTerminalFailure name role
+    completion <- decodeFile (roleDirectory name role </> "completion.json")
+    receipt <- decodeFile (roleDirectory name role </> "receipt" </> "e2e-result.json")
     let outcome
           | complete = "complete" :: String
           | Just _ <- failed = "failed"
           | otherwise = "partial"
     pure $ object
       [ "name" .= caseText name, "role" .= roleText role
-      , "outcome" .= outcome, "directory" .= roleDirectory name role ]
+      , "outcome" .= outcome, "directory" .= roleDirectory name role
+      , "completion" .= either (const Null) id completion
+      , "phases" .= either (const Null) (\value -> get value "phases") receipt ]
   checks <- forM (matrixPairs matrix) $ \(name, directory) -> do
     value <- decodeFile (directory </> "pair.json")
     pure $ either
@@ -1248,6 +1385,18 @@ roleIdentity name role = do
   source <- verifySource
   trajectoryDigest <- sha256File (trajectoryPath name role)
   tools <- toolIdentity
+  checkpoint <- case role of
+    Stock -> pure Nothing
+    Owned -> do
+      proof <- ownedProofPath
+      present <- doesFileExist proof
+      if not present then pure Nothing else do
+        value <- decodeFile proof >>= either failH pure
+        unless (get value "saved" == Bool True && get value "observed_install" == Bool True)
+          (failH "owned checkpoint has no successful observed installation")
+        snapshot <- either failH pure (parseSha256Hex (str (get value "snapshot_sha256")))
+        installation <- either failH pure (parseSha256Hex (str (get value "record_sha256")))
+        pure (Just (RoleCheckpoint snapshot installation))
   pure RoleIdentity
     { roleSource = sourceHead source
     , roleCase = name
@@ -1255,6 +1404,7 @@ roleIdentity name role = do
     , roleTrajectory = trajectoryDigest
     , roleInputs = inputIdentity
     , roleTools = tools
+    , roleCheckpoint = checkpoint
     }
 
 roleJson :: RoleIdentity -> Value
@@ -1269,21 +1419,14 @@ roleJson identity = object
       ]
   , "inputs" .= inputJson (roleInputs identity)
   , "tools" .= toolJson (roleTools identity)
+  , "installed_checkpoint" .= fmap (\checkpoint -> object
+      [ "snapshot_sha256" .= sha256Hex (checkpointSnapshot checkpoint)
+      , "installation_sha256" .= sha256Hex (checkpointInstallation checkpoint) ]) (roleCheckpoint identity)
   ]
 
--- | The fields that determine a role's observations: the producing viewer and SDK, the
--- trajectory and the frozen inputs. Checker tools and source bookkeeping stay out, so a
--- checker-only change reuses completed observations and reruns the comparisons.
+-- The viewer also drives allocation, publication, input and observation for stock.
 executionJson :: Value -> Value
-executionJson value = object
-  [ "viewer" .= get tools "viewer"
-  , "sdk_store" .= get tools "sdk_store"
-  , "sdk_driver" .= get tools "sdk_driver"
-  , "sdk_ram_push" .= get tools "sdk_ram_push"
-  , "inputs" .= get value "inputs"
-  , "trajectory" .= get (get value "trajectory") "sha256"
-  ]
- where tools = get value "tools"
+executionJson = executionIdentity
 
 commitText :: CommitId -> String
 commitText (CommitId value) = value
@@ -1418,5 +1561,5 @@ trim = reverse . dropWhile (`elem` (" \n\r\t" :: String)) . reverse
 
 copyPath :: FilePath -> FilePath -> IO ()
 copyPath source destination = do
-  status <- rawSystem "cp" ["-a", source, destination]
+  status <- rawSystem "cp" ["-a", "--reflink=auto", source, destination]
   expectZero ("copy " ++ source) status

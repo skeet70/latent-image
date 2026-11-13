@@ -16,7 +16,7 @@ import Data.Char (isAscii, isAlphaNum)
 import qualified Data.Text as T
 import Data.Word (Word16)
 import System.Directory (canonicalizePath, doesDirectoryExist, doesFileExist, listDirectory, pathIsSymbolicLink)
-import System.Environment (getArgs)
+import System.Environment (getArgs, lookupEnv)
 import System.Exit (exitFailure)
 import System.FilePath ((</>), dropExtension, splitDirectories, takeDirectory, takeFileName)
 import System.IO (hFlush, hPutStrLn, stderr, stdout)
@@ -590,6 +590,7 @@ launch options = do
             Just <$> loadModalOwnedPackage archivePath retiredPath
           _ -> pure Nothing
         prelinked <- traverse (privateDirectoryInput root "--modal75-prelinked") (prelinkedModalOption options)
+        checkpointOverride <- lookupEnv "XM1_RAM_PUSH_CHECKPOINT_ROOT"
         let nandPath = case nand of Just (InstalledNand path) -> path; Nothing -> error "validated NAND missing"
             receiptPath = case receipt of Just (ReceiptDirectory path) -> path; Nothing -> error "validated receipt directory missing"
             Workspace workspacePath = root
@@ -602,7 +603,8 @@ launch options = do
               (RamPush, ClassicChromeIconChoice) -> "emulation/ram-push-cc-icon-e2e-trajectories.json"
               (RamPush, ExperimentChoice (ExperimentName name)) -> "experiments" </> name </> "trajectory.json"
               (FlashCandidate, _) -> "emulation/ui-trajectories.json"
-            checkpointRootPath = resolve root $ case (runtimeOption options, selectedCard) of
+            checkpointRootPath = resolve root $ maybe defaultCheckpointRoot id checkpointOverride
+            defaultCheckpointRoot = case (runtimeOption options, selectedCard) of
               (FujiModChoice, WithCard) -> "private-data/emulator-checkpoints/xm1-ram-push-fujimod"
               (FujiModChoice, WithoutCard) -> "private-data/emulator-checkpoints/xm1-ram-push-fujimod-cardless"
               (RetainedChoice, WithCard) -> "private-data/emulator-checkpoints/xm1-ram-push"

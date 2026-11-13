@@ -1,6 +1,6 @@
 use crate::{
     loader_code::immutable_loader_spans,
-    modal_lifetime::{CodeSiteRole, CurrentState, LifetimeConfig, LifetimeMemory, LifetimeMonitor,
+    modal_lifetime::{CodeSiteRole, CurrentState, InstalledLifetime, LifetimeConfig, LifetimeMemory, LifetimeMonitor,
         LifetimeReceipt, LifetimeRequest, RowProjection, VfpOwnerState, Word},
     modal_memory::FixedMemory,
     modal_permit::{CoreId, Cpsr, Layout},
@@ -13,7 +13,7 @@ use fujimod_emulator::{board::{factory::MemoryMap, observation::{ByteOrder, Core
     MemoryWatch, PassiveFetchAttribution, PassiveRetention, PassiveRetentionStatus, PassiveStopReason, PhysicalInstructionGuard,
     WatchKinds, WatchRange}}, session::Session};
 use fujimod_emulator_cpu::{Register, arm};
-use serde::{Serialize, Serializer, ser::{SerializeMap, SerializeSeq}};
+use serde::{Deserialize, Serialize, Serializer, ser::{SerializeMap, SerializeSeq}};
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 
@@ -128,6 +128,12 @@ impl Serialize for BoundFetch {
     }
 }
 
+#[derive(Serialize, Deserialize)]
+pub(crate) struct InstalledGuardState {
+    lifetime: InstalledLifetime,
+    rows: Vec<serde_json::Value>,
+}
+
 pub(crate) struct InstalledGuard {
     contexts: Vec<SourceImage>,
     lifetime: LifetimeMonitor,
@@ -142,6 +148,7 @@ pub(crate) struct InstalledGuard {
     row_digest: RefCell<RowDigest>,
     af_ranges: Vec<WatchRange>,
     lifetime_rows: usize,
+    prefix: Vec<serde_json::Value>,
 }
 
 /// SHA-256 over each retained row's compact JSON encoding followed by LF, in row order.
@@ -179,7 +186,7 @@ fn merged_ranges(sites: &[Guest]) -> Vec<WatchRange> {
 impl InstalledGuard {
     pub(crate) fn new(config: GuardConfig, session: &Session, maps: &[MemoryMap],
         static_sites: impl Iterator<Item = Guest>, layout: Layout,
-        af: Option<&crate::af_ownership::Projection>) -> Result<Self, String> {
+        af: Option<&crate::af_ownership::Projection>, saved: Option<InstalledGuardState>) -> Result<Self, String> {
         let memory = FixedMemory { session, maps };
         let mut observed = [0; 256];
         for image in &config.contexts {
@@ -202,8 +209,13 @@ impl InstalledGuard {
             vfp_owner(&memory, layout.kernel, u32::from_le_bytes(bytes))
                 .map_err(|failure| format!("modal lazy-VFP owner is neither unowned nor a created task: {failure:?}"))?;
         }
-        let lifetime = LifetimeMonitor::new(config.lifetime, &memory)
-            .map_err(|failure| failure.to_string())?;
+        let (lifetime, prefix) = match saved {
+            Some(saved) => (LifetimeMonitor::resume_installed(config.lifetime, saved.lifetime, &memory)
+                .map_err(|failure| failure.to_string())?, saved.rows),
+            None => (LifetimeMonitor::new(config.lifetime, &memory)
+                .map_err(|failure| failure.to_string())?, Vec::new()),
+        };
+        if prefix.len() > WRITE_LIMIT { return Err("installed observer prefix exceeds its row bound".into()); }
         let mut protected_sites: Vec<_> = static_sites.chain(lifetime.config().code_sites().iter().map(|site| site.pc)).collect();
         protected_sites.sort_unstable();
         protected_sites.dedup();
@@ -258,8 +270,22 @@ impl InstalledGuard {
                 protected_classes, attribution, WRITE_LIMIT, maps.to_vec(),
                 fujimod_emulator::board::observation::ViewPolicy::Fixed)?
         };
+        let mut row_digest = RowDigest::default();
+        row_digest.advance(&prefix)?;
+        let lifetime_rows = prefix.len();
         Ok(Self { contexts: config.contexts, lifetime, watch, write_ranges, fetch_ranges, fetch_classes,
-            protected_sites, row_cursor: 0, physical_failure: None, row_digest: RefCell::default(), af_ranges, lifetime_rows: 0 })
+            protected_sites, row_cursor: 0, physical_failure: None, row_digest: RefCell::new(row_digest), af_ranges, lifetime_rows, prefix })
+    }
+
+    pub(crate) fn pause_installed(&mut self, session: &Session, maps: &[MemoryMap]) -> Result<InstalledGuardState, String> {
+        if !self.af_ranges.is_empty() { return Err("AF observation cannot split its installed lifetime".into()); }
+        self.check(maps, None)?;
+        if !self.healthy() { return Err("installed observer is not healthy".into()); }
+        let lifetime = self.lifetime.installed_checkpoint().map_err(|failure| failure.to_string())?;
+        let mut rows = self.prefix.clone();
+        rows.extend_from_slice(self.watch.records.borrow().rows_since(0)?);
+        session.board.memory_watch_end(&mut self.watch)?;
+        Ok(InstalledGuardState { lifetime, rows })
     }
 
     pub(crate) fn installed(&self) -> bool {
@@ -550,7 +576,7 @@ impl Serialize for WatchEvidence<'_> {
         let mut digest = guard.row_digest.borrow_mut();
         let all = records.rows_since(0).map_err(serde::ser::Error::custom)?;
         let old_rows=digest.rows;
-        let mut index=0;
+        let mut index = guard.prefix.len();
         for row in all {
             if !guard.af_ranges.is_empty() && !guard.protects_row(row).map_err(serde::ser::Error::custom)? {continue;}
             if index>=old_rows {
@@ -566,6 +592,7 @@ impl Serialize for WatchEvidence<'_> {
             impl Serialize for Rows<'_> {
                 fn serialize<T: Serializer>(&self, serializer:T) -> Result<T::Ok,T::Error> {
                     let mut sequence=serializer.serialize_seq(None)?;
+                    for row in &self.guard.prefix { sequence.serialize_element(row)?; }
                     for row in self.rows {
                         if self.guard.af_ranges.is_empty() || self.guard.protects_row(row).map_err(serde::ser::Error::custom)? {
                             sequence.serialize_element(&LifetimeRow(row,!self.guard.af_ranges.is_empty(),self.maps))?;

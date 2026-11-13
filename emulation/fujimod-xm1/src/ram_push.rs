@@ -215,6 +215,22 @@ struct InstallRecord {
     manifest_sha256: String,
     runtime_sha256: String,
     host: Value,
+    #[serde(default)]
+    observation: Option<ObservedInstall>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct ObservedInstall {
+    request: ModalBeginRequest,
+    state: fujimod_xm1::trace::InstalledObservation,
+}
+
+#[derive(Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum InstallObservation {
+    #[default]
+    Unobserved,
+    Split,
 }
 
 #[derive(Deserialize)]
@@ -294,6 +310,7 @@ enum Request {
     RenderStackDiagnosticReport,
     RenderStackDiagnosticEnd,
     ModalObservationBegin(ModalBeginRequest),
+    ModalObservationResume,
     ModalObservationReport,
     ModalObservationEnd,
     AfOwnershipArm,
@@ -326,7 +343,8 @@ enum Request {
     PreservationState,
     MediaState,
     Capture { label: String },
-    SaveInstallCheckpoint { base: String, manifest_sha256: String, runtime_sha256: String, host: Value },
+    SaveInstallCheckpoint { base: String, manifest_sha256: String, runtime_sha256: String, host: Value,
+        #[serde(default)] observation: InstallObservation },
     SnapshotSave { name: SnapshotName },
     SnapshotRestore { name: SnapshotName },
     SnapshotKey { name: SnapshotName, key: PressName },
@@ -354,6 +372,7 @@ enum RequestKind {
     RenderStackDiagnosticReport,
     RenderStackDiagnosticEnd,
     ModalObservationBegin,
+    ModalObservationResume,
     ModalObservationReport,
     ModalObservationEnd,
     AfOwnershipArm,
@@ -405,6 +424,7 @@ impl Request {
             Request::RenderStackDiagnosticReport => RequestKind::RenderStackDiagnosticReport,
             Request::RenderStackDiagnosticEnd => RequestKind::RenderStackDiagnosticEnd,
             Request::ModalObservationBegin(_) => RequestKind::ModalObservationBegin,
+            Request::ModalObservationResume => RequestKind::ModalObservationResume,
             Request::ModalObservationReport => RequestKind::ModalObservationReport,
             Request::ModalObservationEnd => RequestKind::ModalObservationEnd,
             Request::AfOwnershipArm => RequestKind::AfOwnershipArm,
@@ -465,6 +485,7 @@ struct Start {
     #[allow(dead_code)]
     command: StartCommand,
     installed: Option<PathBuf>,
+    expected_snapshot_sha256: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -492,6 +513,8 @@ struct Server {
     snapshots: BTreeMap<SnapshotName, (Vec<u8>, fujimod_xm1::trace::calls::Calls)>,
     nand_template: CommittedImage,
     nand_source: NandSourceKind,
+    modal_request: Option<Vec<u8>>,
+    installed_observation: Option<ObservedInstall>,
 }
 
 /// About 120 MB per held snapshot of the X-M1 run document.
@@ -1111,6 +1134,11 @@ impl Server {
     }
 
     fn admit_request(&self, request: &Request) -> Result<(), String> {
+        if self.installed_observation.is_some() && !matches!(request,
+            Request::List | Request::ReadMemory { .. } | Request::TraceSites { .. }
+            | Request::TraceHits { .. } | Request::ModalObservationResume | Request::Finish) {
+            return Err("installed observation must resume before guest execution or mutation".into());
+        }
         let tail_request = matches!(&request, Request::CaptureObservationHits { .. } | Request::CaptureObservationAck { .. }
             | Request::CaptureObservationState | Request::WatchState | Request::Finish
             | Request::ModalObservationReport | Request::ModalObservationEnd | Request::AfOwnershipEnd | Request::MachineFingerprint
@@ -1138,7 +1166,7 @@ impl Server {
             return Err("active capture refuses this mutating request".into());
         }
         if self.bridge.machine.traces.modal_observation_active()
-            && matches!(&request, Request::SaveInstallCheckpoint { .. }) {
+            && matches!(&request, Request::SaveInstallCheckpoint { observation: InstallObservation::Unobserved, .. }) {
             return Err("active modal observation refuses checkpoint replacement".into());
         }
         if matches!(&request, Request::SaveInstallCheckpoint { .. } | Request::SnapshotSave { .. } | Request::SnapshotRestore { .. } | Request::SnapshotKey { .. })
@@ -1206,6 +1234,7 @@ impl Server {
                 collector.finish(&machine.session)?
             }
             Request::ModalObservationBegin(request) => {
+                self.modal_request = Some(serde_json::to_vec(&request).map_err(|error| error.to_string())?);
                 let machine = &mut self.bridge.machine;
                 let config = request.into_config(machine.session.board.mappings().to_vec())?;
                 if config.owns_memory_watch() && (self.watch.is_some() || self.preservation.is_some()) {
@@ -1214,6 +1243,14 @@ impl Server {
                 machine.traces.begin_modal_observation(&machine.session, config)?;
                 serde_json::to_value(machine.traces.modal_observation_report())
                     .map_err(|failure| format!("modal-observation-begin: {failure}"))?
+            }
+            Request::ModalObservationResume => {
+                let observed = self.installed_observation.take().ok_or("no installed observation awaits resume")?;
+                self.modal_request = Some(serde_json::to_vec(&observed.request).map_err(|error| error.to_string())?);
+                let machine = &mut self.bridge.machine;
+                let config = observed.request.into_config(machine.session.board.mappings().to_vec())?;
+                machine.traces.resume_installed_observation(&machine.session, config, observed.state)?;
+                json!({"resumed": true})
             }
             Request::ModalObservationReport => {
                 let machine = &mut self.bridge.machine;
@@ -1475,19 +1512,36 @@ impl Server {
                 self.screenshots.push(shot.clone());
                 shot
             }
-            Request::SaveInstallCheckpoint { base, manifest_sha256, runtime_sha256, host } => {
+            Request::SaveInstallCheckpoint { base, manifest_sha256, runtime_sha256, host, observation } => {
                 let name = install_name(&self.key.key, &manifest_sha256, &runtime_sha256);
                 let target = self.root.join(&name);
                 if target.is_dir() {
+                    if observation == InstallObservation::Split { return Err("observed install checkpoint already exists".into()); }
                     json!({"directory": target, "saved": false, "existing": true})
                 } else {
                     let started = Instant::now();
+                    self.bridge.release_rendezvous()?;
+                    let observed = if observation == InstallObservation::Split {
+                        let request: ModalBeginRequest = serde_json::from_slice(self.modal_request.as_ref()
+                            .ok_or("observed checkpoint lacks its armed request")?).map_err(|error| error.to_string())?;
+                        let state = self.bridge.machine.traces.pause_installed_observation(&self.bridge.machine.session)?;
+                        Some(ObservedInstall { request, state })
+                    } else { None };
                     let record = json!({"schema": CHECKPOINT_SCHEMA, "key": self.key.key,
                         "pre_attach": self.attachment.pre_attach, "device": encode_hex(&self.attachment.device),
                         "configuration": encode_hex(&self.attachment.configuration), "base": base,
-                        "manifest_sha256": manifest_sha256, "runtime_sha256": runtime_sha256, "host": host});
+                        "manifest_sha256": manifest_sha256, "runtime_sha256": runtime_sha256, "host": host,
+                        "observation": &observed});
                     let target = save_checkpoint(&mut self.bridge, &self.root, &name, INSTALL_RECORD, &record)?;
+                    let snapshot_sha256 = fujimod_xm1::machine_fingerprint::snapshot_digest(&target.join(SNAPSHOT))?;
+                    let record_sha256 = sha256(&read(&target.join(INSTALL_RECORD))?);
+                    if let Some(observed) = observed {
+                        let config = observed.request.into_config(self.bridge.machine.session.board.mappings().to_vec())?;
+                        self.bridge.machine.traces.resume_installed_observation(&self.bridge.machine.session, config, observed.state)?;
+                    }
                     json!({"directory": std::fs::canonicalize(&target).map_err(|e| e.to_string())?, "saved": true,
+                        "snapshot_sha256": snapshot_sha256, "record_sha256": record_sha256,
+                        "observed_install": observation == InstallObservation::Split,
                         "existing": false, "seconds": started.elapsed().as_secs_f64()})
                 }
             }
@@ -1795,7 +1849,10 @@ fn drive() -> Result<(), String> {
         .iter()
         .map(|(directory, record)| {
             json!({"directory": directory, "base": record.base, "manifest_sha256": record.manifest_sha256,
-                "runtime_sha256": record.runtime_sha256, "host": record.host})
+                "runtime_sha256": record.runtime_sha256, "host": record.host,
+                "observed_install": record.observation.is_some(),
+                "snapshot_sha256": fujimod_xm1::machine_fingerprint::snapshot_digest(&directory.join(SNAPSHOT)).ok(),
+                "record_sha256": read(&directory.join(INSTALL_RECORD)).map(|bytes| sha256(&bytes)).ok()})
         })
         .collect();
     let mut options = json!({"ok": true, "event": "start-options", "boot_key": key.key, "installed": listed});
@@ -1809,6 +1866,7 @@ fn drive() -> Result<(), String> {
     let attach_directory = root.join(key.key.as_str());
     let restore_started = Instant::now();
     let mut initialized_template = None;
+    let mut installed_observation = None;
     let (bridge, attachment, checkpoint) = match start.installed {
         Some(_) if observation.is_some() || arguments.af_reset.active() => return Err("reset proofs start from no install checkpoint".into()),
         Some(directory) => {
@@ -1816,7 +1874,12 @@ fn drive() -> Result<(), String> {
                 .into_iter()
                 .find(|(listed, _)| *listed == directory)
                 .ok_or("RAM-push start names no listed install checkpoint")?;
+            let digest = fujimod_xm1::machine_fingerprint::snapshot_digest(&directory.join(SNAPSHOT))?;
+            if record.observation.is_some() && start.expected_snapshot_sha256.as_deref() != Some(digest.as_str()) {
+                return Err("observed install snapshot differs from the named digest".into());
+            }
             let machine = restore(&inputs, &directory)?;
+            installed_observation = record.observation;
             let attachment = Attachment {
                 pre_attach: record.pre_attach,
                 device: hex_field(&record.device)?,
@@ -1926,6 +1989,8 @@ fn drive() -> Result<(), String> {
         snapshots: BTreeMap::new(),
         nand_template,
         nand_source,
+        modal_request: None,
+        installed_observation,
     };
     server.arm_sites(observation.as_ref().map_or(&BTreeMap::new(), ResetObservationSpec::sites), None)?;
     server.serve()
@@ -2183,6 +2248,8 @@ mod tests {
             capture_evidence_error: None, snapshots: BTreeMap::new(),
             nand_template: CommittedImage::parse(&CommittedImage::compose(&[0; 2048], &BTreeMap::new()).unwrap()).unwrap(),
             nand_source: NandSourceKind::InitialSeeded,
+            modal_request: None,
+            installed_observation: None,
         }
     }
 

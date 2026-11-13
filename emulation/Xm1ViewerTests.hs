@@ -10,6 +10,7 @@ import FujiAF.RamPush (payloadPublicationCount)
 import Emulation.EmulatorSlot (pinExecutable)
 import Emulation.LiveSettings (LiveSettingChange (..), liveSettingChange, liveSettings)
 import Emulation.Sha256 (parseSha256Hex, sha256, sha256Hex)
+import EmulatorUsb (InstalledObservationIdentity (..))
 import Data.Aeson (Value (..), object, toJSON, (.=))
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
@@ -27,6 +28,26 @@ import System.IO (IOMode (ReadMode), withBinaryFile)
 check :: String -> Bool -> IO ()
 check label accepted = unless accepted (ioError (userError label))
 
+observedInstallProofs :: IO ()
+observedInstallProofs = do
+  let digest = sha256 "installed snapshot"
+      record = sha256 "observed installation"
+      proof observed saved = object
+        [ "directory" .= ("/checkpoint" :: String), "snapshot_sha256" .= sha256Hex digest
+        , "record_sha256" .= sha256Hex record, "observed_install" .= observed, "saved" .= saved ]
+      rejected = either (const True) (const False)
+  expected <- either (ioError . userError) pure (E2E.parseObservedInstallProof (proof True True))
+  check "matching observed checkpoint is admitted"
+    (E2E.checkObservedInstallProof expected (Just (InstalledObservationIdentity digest record)) == Right ())
+  check "different checkpoint digest refuses restore"
+    (rejected (E2E.checkObservedInstallProof expected (Just (InstalledObservationIdentity (sha256 "wrong snapshot") record))))
+  check "different installation observation refuses restore"
+    (rejected (E2E.checkObservedInstallProof expected (Just (InstalledObservationIdentity digest (sha256 "wrong observation")))))
+  check "missing installation observation refuses restore"
+    (rejected (E2E.checkObservedInstallProof expected Nothing))
+  check "failed installation observation refuses restore" (rejected (E2E.parseObservedInstallProof (proof False True)))
+  check "unsaved installation refuses restore" (rejected (E2E.parseObservedInstallProof (proof True False)))
+
 acceptedOptions :: [String] -> IO Viewer.Options
 acceptedOptions arguments = do
   command <- Viewer.parseCommand arguments
@@ -41,6 +62,7 @@ refuses label arguments = do
 
 main :: IO ()
 main = do
+  observedInstallProofs
   let keeper = ["--property-allocation-keeper", "--cardless", "--fujimod", "--fresh-boot"
         , "--allocation-image4", "image4.bin", "--allocation-contract", "composition.json"]
   held <- acceptedOptions keeper

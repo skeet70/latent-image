@@ -366,6 +366,10 @@ Stored `0xf7 = 1` supplies the initial `ff80` channel on this body. The [bounded
 
 `FujiAF.RamPush.withRelinkedBuildUsing` authenticates the fragments and their emitted composition, then checks `kernel.elf` before returning the build. Camera operations and the reviewed emulator route refuse violations before USB. This is the mechanical payload check named in [AGENTS.md](../AGENTS.md) for content-only revisions of a reviewed RAM payload; subsystem comparisons, the emulator run and the owner's visual check remain separate requirements.
 
+Authenticated relinks use `$XM1_RUN_WORK` for their temporary build directory when running under `run-output`. Compiler response files use that same directory through `TMPDIR`. The relink bracket removes it after the checked products have been retained by the caller.
+
+`stock_stores` entries of 2, 4 or 8 bytes must be aligned to their declared width. The modal flags at `0x00950104` and `0x00950108` are separate four-byte stores.
+
 ### Guarantees
 
 A pass establishes these interface facts within the linked bank and engine image:
