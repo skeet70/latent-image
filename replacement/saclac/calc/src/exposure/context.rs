@@ -3,6 +3,7 @@
 //! modules read back.
 
 use xm1_saclac_interface::calc::SharedAddress;
+use xm1_saclac_interface::exposure::EvaluationRequest;
 use xm1_saclac_interface::RecordHandle;
 
 use crate::policy::ExposureMode;
@@ -90,6 +91,8 @@ pub struct FocusResult {
     pub subject_levels: Option<SharedAddress>,
     pub level_bias: i16,
     pub level_classes: Option<SharedAddress>,
+    /// The statistics block the focus result names (+0x48).
+    pub statistics: Option<SharedAddress>,
     pub weights: [u16; 5],
     pub lens_detail: u32,
     pub levels: [i16; 5],
@@ -192,6 +195,8 @@ pub struct EvaluationArea {
 pub struct Adjustment {
     pub level: u16,
     pub state: u32,
+    /// The adjustment path's code for its state and step count: 0 to 7 (0xf6b7f4).
+    pub code: u8,
 }
 
 /// What the shot's exposure step and its calculation step read back from the engine.
@@ -216,6 +221,8 @@ pub struct ExposureContext {
     pub program: [ExposureStep; PROGRAM_STEPS],
     pub areas: [EvaluationArea; EVALUATION_AREAS],
     pub selection: SelectionBank,
+    /// The last evaluation request built for calc (0x3c00).
+    pub evaluation: EvaluationRequest,
     pub adjustment: Adjustment,
     pub live: bool,
     pub return_mode: u32,

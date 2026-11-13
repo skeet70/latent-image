@@ -1,3 +1,4 @@
+use xm1_saclac_interface::calc::SharedAddress;
 use xm1_saclac_profile_records::stock::shared::{group_14, group_27};
 
 use crate::exposure::fakes::{handle, World};
@@ -47,4 +48,14 @@ fn a_focus_result_taken_at_another_reference_is_invalid_and_stores_nothing() {
     assert_eq!((snapshot.valid, snapshot.extent, snapshot.offset), (0, 0, 0));
     assert_eq!(snapshot.focus.reference, REFERENCE + 1);
     assert!(world.stores.is_empty());
+}
+
+#[test]
+fn the_focus_result_names_its_statistics_block() {
+    let mut bytes = focus_bytes(REFERENCE);
+    bytes[0x48..0x4c].copy_from_slice(&0x5ffe_0000u32.to_le_bytes());
+    let mut named = world(REFERENCE);
+    named.set_shared(&group_14::FOCUS_RESULT, bytes);
+    assert_eq!(snapshot::take(&mut named, handle(), REFERENCE).focus.statistics, Some(SharedAddress(0x5ffe_0000)));
+    assert_eq!(snapshot::take(&mut world(REFERENCE), handle(), REFERENCE).focus.statistics, None);
 }

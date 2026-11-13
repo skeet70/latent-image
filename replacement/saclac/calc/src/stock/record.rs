@@ -58,6 +58,7 @@ pub fn focus_result(bytes: &[u8; FOCUS_RESULT_BYTES]) -> FocusResult {
         subject_levels: address(bytes, 0x30),
         level_bias: half(bytes, 0x34) as i16,
         level_classes: address(bytes, 0x38),
+        statistics: address(bytes, 0x48),
         weights: core::array::from_fn(|index| half(bytes, 0x3c + 2 * index)),
         lens_detail: word(bytes, 0x50),
         levels: core::array::from_fn(|index| half(bytes, 0x54 + 2 * index) as i16),
