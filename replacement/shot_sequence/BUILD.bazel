@@ -3,6 +3,7 @@ load("//replacement/toolchain:rust.bzl", "xm1_rust_host_test", "xm1_rust_rlib")
 package(default_visibility = ["//visibility:public"])
 
 SOURCES = [
+    "src/absorb.rs",
     "src/boundary.rs",
     "src/calculation.rs",
     "src/calculation_work.rs",
@@ -25,6 +26,7 @@ SOURCES = [
     "src/shared.rs",
     "src/statistics_dump.rs",
     "src/stock.rs",
+    "src/stock/absorb.rs",
     "src/stock/calculation.rs",
     "src/stock/calculations.rs",
     "src/stock/finish.rs",
@@ -41,6 +43,7 @@ xm1_rust_rlib(
     data = SOURCES,
     out = "arm/libxm1_shot_sequence.rlib",
     rlib_deps = {
+        "xm1_saclac_calc": "//replacement/saclac/calc:calc",
         "xm1_saclac_controllers": "//replacement/saclac/controllers:controllers",
         "xm1_saclac_interface": "//replacement/saclac_interface:saclac-interface",
     },
@@ -52,6 +55,7 @@ xm1_rust_host_test(
     crate_name = "xm1_shot_sequence_tests",
     data = glob(["src/**/*.rs"], exclude = ["src/lib.rs"]),
     rlib_deps = {
+        "xm1_saclac_calc": "//replacement/saclac/calc:host",
         "xm1_saclac_controllers": "//replacement/saclac/controllers:host",
         "xm1_saclac_interface": "//replacement/saclac_interface:host",
     },

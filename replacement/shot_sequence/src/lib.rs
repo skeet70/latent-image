@@ -1,6 +1,7 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+pub mod absorb;
 pub mod boundary;
 pub mod calculation;
 pub mod calculation_work;
@@ -120,3 +121,5 @@ mod capture_control_tests;
 mod finish_work_tests;
 #[cfg(test)]
 mod calculations_work_tests;
+#[cfg(test)]
+mod absorb_tests;

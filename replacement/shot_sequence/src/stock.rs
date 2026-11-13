@@ -2,6 +2,7 @@
 
 //! X-M1 1.50 boundary values of the shot module.
 
+pub mod absorb;
 pub mod calculation;
 pub mod calculations;
 pub mod finish;
