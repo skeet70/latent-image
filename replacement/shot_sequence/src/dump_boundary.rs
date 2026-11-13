@@ -80,10 +80,9 @@ pub enum ShotWord {
     MovedLate,
 }
 
-/// The shared helpers and the shot context the capture dump reads.
+/// The shared saclac helper the capture dump reads.
 pub trait DumpShared {
     /// The capture window's two words for `mode` at `layout`, when the layout has one for the
     /// mode.
     fn capture_window(&mut self, mode: u32, layout: [u16; 2]) -> Option<[u32; 2]>;
-    fn shot_word(&mut self, word: ShotWord) -> u32;
 }

@@ -1,9 +1,10 @@
 use crate::boundary::{ClientRef, Frame, LensReading};
 use crate::capture_boundary::*;
 use crate::capture_control::CaptureControl;
-use crate::capture_fakes::{Call, CaptureFake};
+use crate::capture_fakes::{Call, CaptureFake, ShotFake};
 use crate::capture_stock;
 use crate::lens_return::{ReturnPoint, SavedSlots};
+use crate::preparation::{HalfPressMask, HalfPressParameters, Prepared};
 use crate::subjects::{Candidates, Subject, SubjectId, SubjectList};
 use std::vec::Vec;
 use xm1_saclac_interface::area_measurement::AreaEntry;
@@ -95,12 +96,13 @@ fn only_a_first_slot_capture_decides_the_lens_return() {
     let untouched = ReturnPoint { saved: Some(SavedSlots::default()), armed: true, pending: true };
     for (requested, count, mode) in [(2, 3, 0), (1, 2, 3), (2, 2, 0)] {
         let mut fake = CaptureFake::new();
+        let mut shot = ShotFake::new();
         slots(&mut fake, requested, count);
-        fake.return_request = true;
+        shot.return_request = true;
         let mut point = untouched;
-        assert!(!bound().needs_lens_return(&parameters(0, mode), &mut point, &mut fake));
+        assert!(!bound().needs_lens_return(&parameters(0, mode), &mut point, &mut shot, &mut fake));
         assert_eq!(point, untouched);
-        assert!(!fake.return_request, "the half-press request is consumed");
+        assert!(!shot.return_request, "the half-press request is consumed");
     }
 }
 
@@ -112,7 +114,7 @@ fn a_lens_off_the_fifth_reference_arms_the_return() {
     fake.pairs[4].reference = 9;
     fake.set_lens(LensReading::Reference, 8);
     let mut point = ReturnPoint { pending: true, ..ReturnPoint::default() };
-    assert!(bound().needs_lens_return(&parameters(0, 0), &mut point, &mut fake));
+    assert!(bound().needs_lens_return(&parameters(0, 0), &mut point, &mut ShotFake::new(), &mut fake));
     assert_eq!(point, ReturnPoint { saved: None, armed: true, pending: false });
 }
 
@@ -120,9 +122,10 @@ fn a_lens_off_the_fifth_reference_arms_the_return() {
 fn a_half_press_request_asks_for_the_return_without_saving_slots() {
     let mut fake = CaptureFake::new();
     slots(&mut fake, 1, 2);
-    fake.return_request = true;
+    let mut shot = ShotFake::new();
+    shot.return_request = true;
     let mut point = ReturnPoint::default();
-    assert!(bound().needs_lens_return(&parameters(0, 0), &mut point, &mut fake));
+    assert!(bound().needs_lens_return(&parameters(0, 0), &mut point, &mut shot, &mut fake));
     assert_eq!(point.saved, None);
 }
 
@@ -132,7 +135,7 @@ fn slots_whose_reference_moves_with_the_lens_are_saved_converted() {
     slots(&mut fake, 1, 2);
     fake.set_lens(LensReading::Reference, 4);
     let mut point = ReturnPoint::default();
-    assert!(bound().needs_lens_return(&parameters(0, 0), &mut point, &mut fake));
+    assert!(bound().needs_lens_return(&parameters(0, 0), &mut point, &mut ShotFake::new(), &mut fake));
     // Converted references are slot + 4; the second slot (0x11) also maps unchanged.
     assert_eq!(point.saved, Some(SavedSlots { references: [0x14, 0x15, 0], offsets: [0x10, 0x11, 0] }));
 }
@@ -144,7 +147,7 @@ fn a_slot_that_maps_differently_drops_the_saved_positions() {
     fake.add_slot(0x51, 1, 0);
     fake.set_lens(LensReading::Reference, 1);
     let mut point = ReturnPoint::default();
-    assert!(bound().needs_lens_return(&parameters(0, 0), &mut point, &mut fake));
+    assert!(bound().needs_lens_return(&parameters(0, 0), &mut point, &mut ShotFake::new(), &mut fake));
     assert_eq!(point.saved, None);
 }
 
@@ -153,34 +156,43 @@ fn unchanged_slots_need_no_return() {
     let mut fake = CaptureFake::new();
     slots(&mut fake, 1, 3);
     let mut point = ReturnPoint { armed: true, ..ReturnPoint::default() };
-    assert!(!bound().needs_lens_return(&parameters(0, 0), &mut point, &mut fake));
+    assert!(!bound().needs_lens_return(&parameters(0, 0), &mut point, &mut ShotFake::new(), &mut fake));
     assert_eq!(point, ReturnPoint::default());
 }
 
 #[test]
 fn the_secondary_job_follows_the_diagnostic_style_or_the_record() {
-    let decide = |setup: &dyn Fn(&mut CaptureFake), mode: u32| {
+    let decide = |setup: &dyn Fn(&mut CaptureFake), enabled: bool, mode: u32| {
         let mut fake = CaptureFake::new();
+        let mut shot = ShotFake::new();
         setup(&mut fake);
-        bound().secondary_job(&parameters(0, mode), &mut fake)
+        shot.secondary.set_enabled(enabled);
+        bound().secondary_job(&parameters(0, mode), &mut shot, &mut fake)
     };
-    assert!(!decide(&|fake| fake.secondary_enabled = true, 3));
+    assert!(!decide(&|_| {}, true, 3));
     for style in 0..9u8 {
         let expected = matches!(style, 1 | 4 | 5 | 6 | 7);
-        assert_eq!(decide(&|fake| { fake.set_adjustment(CaptureAdjustment::Diagnostics, 1); fake.set_adjustment(CaptureAdjustment::SecondaryStyle, style) }, 0), expected, "style {style}");
+        assert_eq!(decide(&|fake| { fake.set_adjustment(CaptureAdjustment::Diagnostics, 1); fake.set_adjustment(CaptureAdjustment::SecondaryStyle, style) }, false, 0), expected, "style {style}");
     }
-    assert!(decide(&|fake| fake.secondary_enabled = true, 0));
-    assert!(!decide(&|fake| { fake.secondary_enabled = true; fake.set(RecordField::SecondaryBlocked, 1) }, 0));
-    assert!(!decide(&|fake| { fake.secondary_enabled = true; fake.set(RecordField::SecondaryMode, 7) }, 0));
-    assert!(!decide(&|_| {}, 0));
+    assert!(decide(&|_| {}, true, 0));
+    assert!(!decide(&|fake| fake.set(RecordField::SecondaryBlocked, 1), true, 0));
+    assert!(!decide(&|fake| fake.set(RecordField::SecondaryMode, 7), true, 0));
+    assert!(!decide(&|_| {}, false, 0));
 }
 
-fn prepared(fake: &mut CaptureFake, parameters: CaptureParameters) -> (CaptureControl, Candidates) {
-    let mut control = bound();
-    let mut candidates = Candidates::default();
-    control.prepare_job(&parameters, &mut candidates, fake);
-    (control, candidates)
+/// A half press that left work for the capture, or none.
+fn half_press(work: bool) -> Prepared {
+    Prepared { parameters: work.then(|| HalfPressParameters { mask: HalfPressMask(1), ..HalfPressParameters::default() }), ..Prepared::default() }
 }
+
+fn prepared_with(fake: &mut CaptureFake, shot: &mut ShotFake, work: bool, parameters: CaptureParameters) -> (CaptureControl, Candidates) {
+    let mut control = bound();
+    let mut prepared = half_press(work);
+    control.prepare_job(&parameters, &mut prepared, shot, fake);
+    (control, prepared.candidates)
+}
+
+fn prepared(fake: &mut CaptureFake, parameters: CaptureParameters) -> (CaptureControl, Candidates) { prepared_with(fake, &mut ShotFake::new(), false, parameters) }
 
 #[test]
 fn a_job_loads_the_profile_and_selects_the_active_slot_as_the_options_ask() {
@@ -232,13 +244,15 @@ fn each_slot_keeps_its_distance_up_to_the_limit_and_steps_the_rest() {
 #[test]
 fn a_job_ends_with_the_hook_the_prepared_mark_and_the_secondary_pending() {
     let mut fake = CaptureFake::new();
+    let mut shot = ShotFake::new();
+    shot.secondary.set_enabled(true);
     slots(&mut fake, 2, 2);
-    let (control, _) = prepared(&mut fake, parameters(0, 3));
+    let (control, _) = prepared_with(&mut fake, &mut shot, false, parameters(0, 3));
     assert!(control.secondary_pending());
     assert!(!control.held());
     let tail: Vec<Call> = fake.calls.iter().rev().take(3).rev().cloned().collect();
     assert_eq!(tail, std::vec![Call::MonitorDeviceCommands(false), Call::SelectionHook(ClientRef(0x400)), Call::SetField(record(), RecordField::JobPrepared, 1)]);
-    assert!(!fake.has(&Call::ResetSecondary), "a reduced capture leaves the secondary state");
+    assert!(shot.secondary.enabled(), "a reduced capture leaves the secondary state");
     assert_eq!(fake.calls.first(), Some(&Call::Trace(CaptureTrace::PrepareJob)));
 }
 
@@ -246,13 +260,14 @@ fn a_job_ends_with_the_hook_the_prepared_mark_and_the_secondary_pending() {
 fn the_record_decides_whether_the_secondary_job_is_enabled() {
     for (first, second, mode, enabled) in [(1, 1, 7, true), (1, 0, 7, false), (1, 1, 0, false)] {
         let mut fake = CaptureFake::new();
+        let mut shot = ShotFake::new();
+        shot.secondary.set_enabled(true);
         slots(&mut fake, 2, 2);
         fake.set_slot(0, SlotField::SecondaryFirst, first);
         fake.set_slot(0, SlotField::SecondarySecond, second);
         fake.set(RecordField::SecondaryMode, mode);
-        prepared(&mut fake, parameters(0, 0));
-        assert_eq!(fake.secondary_enabled, enabled);
-        assert!(fake.has(&Call::ResetSecondary));
+        prepared_with(&mut fake, &mut shot, false, parameters(0, 0));
+        assert_eq!(shot.secondary.enabled(), enabled, "the job's preparation resets the result first");
         assert!(fake.has(&Call::StoreItem(record(), 0, AreaEntry::EMPTY)));
     }
 }
@@ -261,12 +276,13 @@ fn the_record_decides_whether_the_secondary_job_is_enabled() {
 fn the_diagnostic_style_overrides_the_record_decision() {
     for (style, record_style, enabled) in [(3, 7, true), (5, 0, true), (2, 6, false)] {
         let mut fake = CaptureFake::new();
+        let mut shot = ShotFake::new();
         slots(&mut fake, 2, 2);
         fake.set_adjustment(CaptureAdjustment::Diagnostics, 1);
         fake.set_adjustment(CaptureAdjustment::SecondaryStyle, style);
-        prepared(&mut fake, parameters(0, 0));
+        prepared_with(&mut fake, &mut shot, false, parameters(0, 0));
         assert!(fake.has(&Call::SetField(record(), RecordField::SecondaryStyle, record_style)));
-        assert_eq!(fake.secondary_enabled, enabled);
+        assert_eq!(shot.secondary.enabled(), enabled);
     }
 }
 
@@ -275,12 +291,12 @@ fn the_half_press_work_leaves_the_selection_result() {
     for (kind, active, expected) in [(1, 1u32, 4), (1, 0, 2), (5, 0, 5)] {
         let mut fake = CaptureFake::new();
         slots(&mut fake, 1, 1);
-        fake.has_work = true;
+        let work = true;
         fake.set(RecordField::SubjectKind, kind);
         let mut entry = SlotEntry([0; SlotEntry::BYTES]);
         entry.0[0x24..0x28].copy_from_slice(&active.to_le_bytes());
         fake.entries.insert(0, entry);
-        prepared(&mut fake, parameters(0, 0));
+        prepared_with(&mut fake, &mut ShotFake::new(), work, parameters(0, 0));
         assert!(fake.has(&Call::SelectionResult(ClientRef(0x400), expected)), "kind {kind}");
     }
 }
@@ -290,17 +306,17 @@ fn subject(id: u32) -> Subject { Subject { id: SubjectId(id), ..Subject::default
 #[test]
 fn moved_areas_replace_the_capture_candidates_and_republish_them() {
     let mut fake = CaptureFake::new();
+    let mut shot = ShotFake::new();
     slots(&mut fake, 1, 1);
-    fake.has_work = true;
-    fake.subject_refresh = 1;
-    fake.moved_areas = 2;
+    shot.tracks_subjects = true;
+    shot.moved_areas = 2;
     fake.set_adjustment(CaptureAdjustment::Subjects, 1);
     let mut source = SubjectList { count: 1, ..SubjectList::default() };
     source.entries[0] = subject(77);
-    fake.sources[1] = source;
+    shot.sources[1] = source;
     fake.frame = FRAME;
-    let (_, candidates) = prepared(&mut fake, parameters(0, 0));
-    assert!(fake.has(&Call::UpdateCaptureSelection(record())));
+    let (_, candidates) = prepared_with(&mut fake, &mut shot, true, parameters(0, 0));
+    assert!(shot.calls.contains(&Call::UpdateCaptureSelection(record())));
     assert!(fake.has(&Call::ExportSelection(FRAME)));
     let published: Vec<SubjectList> = fake.calls.iter().filter_map(|call| match call { Call::PublishSubjects(_, list) => Some(*list), _ => None }).collect();
     assert_eq!(published.len(), 1);
@@ -311,13 +327,14 @@ fn moved_areas_replace_the_capture_candidates_and_republish_them() {
 #[test]
 fn unmoved_areas_keep_the_candidates() {
     let mut fake = CaptureFake::new();
+    let mut shot = ShotFake::new();
     slots(&mut fake, 1, 1);
-    fake.has_work = true;
-    fake.subject_refresh = 1;
+    shot.tracks_subjects = true;
     fake.set_adjustment(CaptureAdjustment::Subjects, 1);
-    prepared(&mut fake, parameters(0, 0));
-    assert!(fake.calls.iter().any(|call| matches!(call, Call::ClassifySubjects { .. })));
-    assert!(!fake.calls.iter().any(|call| matches!(call, Call::UpdateCaptureSelection(_) | Call::PublishSubjects(..))));
+    prepared_with(&mut fake, &mut shot, true, parameters(0, 0));
+    assert!(shot.calls.iter().any(|call| matches!(call, Call::ClassifySubjects { .. })));
+    assert!(!shot.calls.iter().any(|call| matches!(call, Call::UpdateCaptureSelection(_))));
+    assert!(!fake.calls.iter().any(|call| matches!(call, Call::PublishSubjects(..))));
 }
 
 #[test]
@@ -345,18 +362,19 @@ fn the_selection_map_is_marked_once_and_copied_while_present() {
     fake.set_adjustment(CaptureAdjustment::Subjects, 1);
     fake.set(RecordField::MapPresent, 1);
     let mut control = bound();
-    let mut candidates = Candidates::default();
-    control.prepare_job(&parameters(0, 0), &mut candidates, &mut fake);
-    control.prepare_job(&parameters(0, 0), &mut candidates, &mut fake);
+    let mut shot = ShotFake::new();
+    let mut prepared = half_press(false);
+    control.prepare_job(&parameters(0, 0), &mut prepared, &mut shot, &mut fake);
+    control.prepare_job(&parameters(0, 0), &mut prepared, &mut shot, &mut fake);
     let prepared_areas = fake.calls.iter().filter(|call| matches!(call, Call::PrepareDumpArea(..))).count();
     let copies = fake.calls.iter().filter(|call| matches!(call, Call::CopyTable(_, _, FrameTable::SelectionMap))).count();
     assert_eq!((prepared_areas, copies), (1, 2));
 
     fake.set(RecordField::MapPresent, 0);
-    control.prepare_job(&parameters(0, 0), &mut candidates, &mut fake);
+    control.prepare_job(&parameters(0, 0), &mut prepared, &mut shot, &mut fake);
     assert!(fake.has(&Call::FillFrame(FRAME, capture_stock::MAP_AREA, capture_stock::MAP_AREA_BYTES, 0)));
     fake.set(RecordField::MapPresent, 1);
-    control.prepare_job(&parameters(0, 0), &mut candidates, &mut fake);
+    control.prepare_job(&parameters(0, 0), &mut prepared, &mut shot, &mut fake);
     assert_eq!(fake.calls.iter().filter(|call| matches!(call, Call::PrepareDumpArea(..))).count(), 2, "a cleared map is marked again");
 }
 

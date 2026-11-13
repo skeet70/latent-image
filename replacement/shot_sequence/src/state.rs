@@ -3,8 +3,12 @@
 //! The shot's state where other tasks read it: the calculation block with its selection grid,
 //! the retained and set-aside results, the shot context and the saved calculation input.
 //! `ShotState` reads and writes it through `StateMemory`; `stock::state` places each value.
+//! `ShotState` also holds what only the shot's steps share: the secondary job's result and the
+//! frame dump's tag.
 
 use crate::absorb::{AuxiliaryOutcome, CalculationResults};
+use crate::secondary_job::SecondaryResult;
+use crate::statistics_dump::StatisticsDump;
 use crate::stock::state as layout;
 use xm1_saclac_interface::calculation::{AreaAt, AreaIndex, AreaResult, AreaRow, AreaTarget, CellSummary, FocusSummary, GridCell, GridPass, ReferenceRequest, ResultPass, TrackedKind};
 use xm1_saclac_interface::selection::{CellCode, ClassifyStage, ResultBuffer, SelectionClass, SelectionList, SelectionSlot};
@@ -26,15 +30,23 @@ pub trait StateMemory {
     fn copy(&mut self, to: StateAddress, from: StateAddress, bytes: usize);
 }
 
-/// The shot's state over its memory.
+/// The shot's state.
 pub struct ShotState<M> {
     memory: M,
+    secondary: SecondaryResult,
+    frame_dump: StatisticsDump,
 }
 
 impl<M: StateMemory> ShotState<M> {
-    pub const fn new(memory: M) -> Self { Self { memory } }
+    pub const fn new(memory: M) -> Self { Self { memory, secondary: SecondaryResult::new(), frame_dump: StatisticsDump { armed: false } } }
 
     pub fn memory(&mut self) -> &mut M { &mut self.memory }
+
+    pub fn secondary(&self) -> &SecondaryResult { &self.secondary }
+
+    pub fn secondary_mut(&mut self) -> &mut SecondaryResult { &mut self.secondary }
+
+    pub fn frame_dump(&mut self) -> &mut StatisticsDump { &mut self.frame_dump }
 
     pub(crate) fn bytes<const N: usize>(&mut self, at: StateAddress) -> [u8; N] {
         let mut bytes = [0; N];

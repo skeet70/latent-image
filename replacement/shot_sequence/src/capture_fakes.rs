@@ -1,5 +1,11 @@
 use crate::boundary::{ClientRef, FocusResult, Frame, Lens, LensPoint, LensReading, LensReference};
 use crate::capture_boundary::*;
+use crate::capture_control::ControlShot;
+use crate::capture_dump::DumpShot;
+use crate::dump_boundary::ShotWord;
+use crate::lens_return::ReturnShot;
+use crate::secondary_job::SecondaryResult;
+use crate::statistics_dump::StatisticsDump;
 use crate::subjects::SubjectList;
 use std::collections::BTreeMap;
 use std::vec::Vec;
@@ -32,12 +38,9 @@ pub enum Call {
     StatisticsSetup { enabled: bool, completion: Completion },
     StatisticsSetting { setting: StatisticsSetting, completion: Completion },
     SetReturnActive(bool),
-    RestoreReturnCalculation,
-    InstallReturnCalculation,
-    AbsorbCalculation,
-    LoadReturnRecords,
-    SetSecondaryEnabled(bool),
-    ResetSecondary,
+    RestoreReturnResult,
+    AbsorbReturnResult { pending: bool },
+    LoadReturnRecords { pending: bool },
     ClassifySubjects { kind: u32, source: u32, area: u32 },
     UpdateCaptureSelection(RecordHandle),
     PrepareSetting,
@@ -64,19 +67,10 @@ pub struct CaptureFake {
     pub slot_offsets: BTreeMap<u32, i16>,
     pub entries: BTreeMap<u8, SlotEntry>,
     pub pairs: [ReferencePair; 5],
-    pub template: ReferenceRequest,
-    pub templates_for: Vec<u32>,
-    pub return_request: bool,
-    pub has_work: bool,
-    pub secondary_enabled: bool,
-    pub subject_refresh: u32,
-    pub moved_areas: u8,
-    pub sources: [SubjectList; 2],
     pub focus: FocusResult,
     pub device_status_bit: bool,
     pub split_limit: i16,
     pub device_value: u32,
-    pub dump_armed: bool,
 }
 
 pub fn field_key(field: RecordField) -> u8 { field as u8 }
@@ -98,19 +92,10 @@ impl CaptureFake {
             slot_offsets: BTreeMap::new(),
             entries: BTreeMap::new(),
             pairs: [ReferencePair::default(); 5],
-            template: ReferenceRequest::from_bytes([0; ReferenceRequest::BYTES]),
-            templates_for: Vec::new(),
-            return_request: false,
-            has_work: false,
-            secondary_enabled: false,
-            subject_refresh: 0,
-            moved_areas: 0,
-            sources: [SubjectList::default(); 2],
             focus: FocusResult { reference: LensReference(0), valid: 1, kept: 1, refined: 1, extent: 0, bytes: [0; 132] },
             device_status_bit: false,
             split_limit: i16::MAX,
             device_value: 0,
-            dump_armed: false,
         }
     }
 
@@ -220,46 +205,64 @@ impl CalcLibrary for CaptureFake {
     fn export_joint_tables(&mut self, frame: Frame) { self.calls.push(Call::ExportJointTables(frame)); }
 }
 
-impl ReferenceTemplates for CaptureFake {
-    fn reference_request(&mut self, reference: u32) -> ReferenceRequest {
-        self.templates_for.push(reference);
-        self.template
-    }
-}
-
 impl CapturePeers for CaptureFake {
     fn statistics_setup(&mut self, enabled: bool, completion: Completion) { self.calls.push(Call::StatisticsSetup { enabled, completion }); }
     fn statistics_setting(&mut self, setting: &StatisticsSetting, completion: Completion) { self.calls.push(Call::StatisticsSetting { setting: *setting, completion }); }
 }
 
-impl CaptureShared for CaptureFake {
-    fn active_slot(&mut self, selection: SlotSelection) -> u8 {
-        if (1..=selection.count).contains(&selection.requested) && selection.count <= 3 { selection.requested } else { 1 }
-    }
-    fn set_return_active(&mut self, active: bool) { self.calls.push(Call::SetReturnActive(active)); }
-    fn restore_return_calculation(&mut self) { self.calls.push(Call::RestoreReturnCalculation); }
-    fn install_return_calculation(&mut self) { self.calls.push(Call::InstallReturnCalculation); }
-    fn absorb_calculation(&mut self) { self.calls.push(Call::AbsorbCalculation); }
-    fn load_return_records(&mut self) { self.calls.push(Call::LoadReturnRecords); }
-    fn take_return_request(&mut self) -> bool { core::mem::take(&mut self.return_request) }
-    fn has_work(&mut self) -> bool { self.has_work }
-    fn secondary_enabled(&mut self) -> bool { self.secondary_enabled }
-    fn set_secondary_enabled(&mut self, enabled: bool) {
-        self.secondary_enabled = enabled;
-        self.calls.push(Call::SetSecondaryEnabled(enabled));
-    }
-    fn reset_secondary(&mut self) { self.calls.push(Call::ResetSecondary); }
-    fn calculation_word(&mut self, word: CalculationWord) -> u32 {
-        match word {
-            CalculationWord::SubjectRefresh => self.subject_refresh,
+/// The shot state the capture steps share, as the steps left it.
+pub struct ShotFake {
+    pub calls: Vec<Call>,
+    pub template: ReferenceRequest,
+    pub templates_for: Vec<u32>,
+    pub return_request: bool,
+    pub secondary: SecondaryResult,
+    pub tracks_subjects: bool,
+    pub moved_areas: u8,
+    pub sources: [SubjectList; 2],
+    pub frame_dump: StatisticsDump,
+}
+
+impl ShotFake {
+    pub fn new() -> Self {
+        Self {
+            calls: Vec::new(),
+            template: ReferenceRequest::from_bytes([0; ReferenceRequest::BYTES]),
+            templates_for: Vec::new(),
+            return_request: false,
+            secondary: SecondaryResult::new(),
+            tracks_subjects: false,
+            moved_areas: 0,
+            sources: [SubjectList::default(); 2],
+            frame_dump: StatisticsDump::default(),
         }
     }
+}
+
+impl<P> ControlShot<P> for ShotFake {
+    fn take_return_request(&mut self) -> bool { core::mem::take(&mut self.return_request) }
+    fn secondary(&mut self) -> &mut SecondaryResult { &mut self.secondary }
+    fn tracks_subjects(&mut self) -> bool { self.tracks_subjects }
+    fn classify_subjects(&mut self, _reference: &AreaReference, kind: u32, source: u32, area: u32, _ports: &mut P) { self.calls.push(Call::ClassifySubjects { kind, source, area }); }
     fn moved_areas(&mut self) -> u8 { self.moved_areas }
-    fn classify_subjects(&mut self, _reference: &AreaReference, kind: u32, source: u32, area: u32) { self.calls.push(Call::ClassifySubjects { kind, source, area }); }
-    fn update_capture_selection(&mut self, record: RecordHandle) { self.calls.push(Call::UpdateCaptureSelection(record)); }
-    fn dump_armed(&mut self) -> bool { self.dump_armed }
-    fn set_dump_armed(&mut self, armed: bool) { self.dump_armed = armed; }
+    fn update_capture_selection(&mut self, record: RecordHandle, _ports: &mut P) { self.calls.push(Call::UpdateCaptureSelection(record)); }
     fn subject_source(&mut self, primary: bool) -> SubjectList { self.sources[usize::from(!primary)] }
+    fn frame_dump(&mut self) -> &mut StatisticsDump { &mut self.frame_dump }
+}
+
+impl<P> ReturnShot<P> for ShotFake {
+    fn reference_request(&mut self, reference: u32, _ports: &mut P) -> ReferenceRequest {
+        self.templates_for.push(reference);
+        self.template
+    }
+    fn set_return_active(&mut self, active: bool) { self.calls.push(Call::SetReturnActive(active)); }
+    fn restore_return_result(&mut self) { self.calls.push(Call::RestoreReturnResult); }
+    fn absorb_return_result(&mut self, pending: bool, _ports: &mut P) { self.calls.push(Call::AbsorbReturnResult { pending }); }
+    fn load_return_records(&mut self, pending: bool, _ports: &mut P) { self.calls.push(Call::LoadReturnRecords { pending }); }
+}
+
+impl DumpShot for ShotFake {
+    fn shot_word(&mut self, word: ShotWord) -> u32 { 0x5000 + word as u32 }
 }
 
 impl CapturePlatform for CaptureFake {

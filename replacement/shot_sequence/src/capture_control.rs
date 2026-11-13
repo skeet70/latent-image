@@ -6,15 +6,17 @@
 
 use crate::boundary::{Frame, Lens, LensReading};
 use crate::capture_boundary::{
-    AreaReference, CalcLibrary, CalculationWord, CaptureAdjustment, CaptureClient, CaptureDiagnostics, CaptureParameters, CapturePeers,
-    CapturePlatform, CaptureRecords, CaptureShared, CaptureTrace, FrameTable, LensGeometry, LensSample, RecordField, SettingResult,
-    SlotField,
+    AreaReference, CalcLibrary, CaptureAdjustment, CaptureClient, CaptureDiagnostics, CaptureParameters, CapturePeers, CapturePlatform,
+    CaptureRecords, CaptureTrace, FrameTable, LensGeometry, LensSample, RecordField, SettingResult, SlotField,
 };
-use crate::capture_dump::{self, DumpBoundary};
+use crate::capture_dump::{self, DumpBoundary, DumpShot};
 use crate::capture_stock;
 use crate::lens_return::{ReturnPoint, SavedSlots, SAVED_SLOTS};
+use crate::preparation::Prepared;
 use crate::primary_job::PrimaryJob;
-use crate::subjects::Candidates;
+use crate::secondary_job::SecondaryResult;
+use crate::statistics_dump::StatisticsDump;
+use crate::subjects::{Candidates, SubjectList};
 use xm1_saclac_interface::area_measurement::AreaEntry;
 use xm1_saclac_interface::statistics::{SettingOverrides, StatisticsSetting};
 use xm1_saclac_interface::{Completed, Completion, RecordHandle};
@@ -28,12 +30,31 @@ const UNSET_SECOND_LIMIT: u32 = 0xffff_8000;
 const DEFAULT_SECOND_LIMIT: i32 = -500;
 
 pub trait ControlBoundary:
-    CaptureRecords + CaptureClient + Lens + LensGeometry + CalcLibrary + CapturePeers + CaptureShared + CapturePlatform + CaptureDiagnostics
+    CaptureRecords + CaptureClient + Lens + LensGeometry + CalcLibrary + CapturePeers + CapturePlatform + CaptureDiagnostics
 {
 }
 impl<T> ControlBoundary for T where
-    T: CaptureRecords + CaptureClient + Lens + LensGeometry + CalcLibrary + CapturePeers + CaptureShared + CapturePlatform + CaptureDiagnostics
+    T: CaptureRecords + CaptureClient + Lens + LensGeometry + CalcLibrary + CapturePeers + CapturePlatform + CaptureDiagnostics
 {
+}
+
+/// The shot state the capture controller reads and writes; `P` is what its subject refresh calls
+/// outside the shot.
+pub trait ControlShot<P: ?Sized> {
+    /// Reads and clears the request a half press left for the capture's lens return.
+    fn take_return_request(&mut self) -> bool;
+    fn secondary(&mut self) -> &mut SecondaryResult;
+    /// The calculation tracks subjects, which lets a capture refresh them.
+    fn tracks_subjects(&mut self) -> bool;
+    /// Classifies the record's area references into the capture job's subject bank.
+    fn classify_subjects(&mut self, reference: &AreaReference, kind: u32, source: u32, area: u32, ports: &mut P);
+    /// Areas whose subject kind in the capture job's bank differs from the absorb's.
+    fn moved_areas(&mut self) -> u8;
+    /// Stores the calculation's areas into the record with the capture job's subject kinds.
+    fn update_capture_selection(&mut self, record: RecordHandle, ports: &mut P);
+    /// The subjects the primary (`true`) or the secondary source left for the capture.
+    fn subject_source(&mut self, primary: bool) -> SubjectList;
+    fn frame_dump(&mut self) -> &mut StatisticsDump;
 }
 
 /// The capture controller's own state.
@@ -113,21 +134,21 @@ impl CaptureControl {
 
     /// Writes the capture dump into the client's frame when the diagnostics ask for dumps and
     /// the capture is not reduced.
-    pub fn finalize(&self, parameters: &CaptureParameters, primary: &PrimaryJob, boundary: &mut (impl DumpBoundary + CapturePlatform)) {
+    pub fn finalize(&self, parameters: &CaptureParameters, primary: &PrimaryJob, shot: &mut impl DumpShot, boundary: &mut (impl DumpBoundary + CapturePlatform)) {
         if !dumps(boundary) || parameters.reduced() { return; }
         let Some(record) = self.record else { return };
-        capture_dump::write(record, parameters, primary.trailing_output_word(), boundary);
+        capture_dump::write(record, parameters, primary.trailing_output_word(), shot, boundary);
     }
 
     /// Decides the lens return and leaves `point` for it: the lens left the record's fifth
     /// reference (kind 2), a half press asked for it, or a slot's reference changes at the current
     /// lens reference. Only a capture of the first slot as requested and selected, not reduced,
     /// decides or touches `point`.
-    pub fn needs_lens_return(&self, parameters: &CaptureParameters, point: &mut ReturnPoint, boundary: &mut impl ControlBoundary) -> bool {
-        let requested = boundary.take_return_request();
+    pub fn needs_lens_return<P: ControlBoundary>(&self, parameters: &CaptureParameters, point: &mut ReturnPoint, shot: &mut impl ControlShot<P>, boundary: &mut P) -> bool {
+        let requested = shot.take_return_request();
         let Some(record) = self.record else { return false };
         let selection = boundary.selection(parameters.selection);
-        if boundary.active_slot(selection) != 1 || selection.requested != 1 || parameters.reduced() { return false; }
+        if selection.active() != 1 || selection.requested != 1 || parameters.reduced() { return false; }
         let slots = selection.count.min(SAVED_SLOTS as u8);
 
         let mut saved = SavedSlots::default();
@@ -173,21 +194,21 @@ impl CaptureControl {
         needed
     }
 
-    pub fn secondary_job(&self, parameters: &CaptureParameters, boundary: &mut impl ControlBoundary) -> bool {
+    pub fn secondary_job<P: ControlBoundary>(&self, parameters: &CaptureParameters, shot: &mut impl ControlShot<P>, boundary: &mut P) -> bool {
         if parameters.reduced() { return false; }
         if boundary.adjustment(CaptureAdjustment::Diagnostics) & 1 != 0 {
             return secondary_style_enables(boundary.adjustment(CaptureAdjustment::SecondaryStyle));
         }
         let Some(record) = self.record else { return false };
         if boundary.field(record, RecordField::SecondaryBlocked) == 1 { return false; }
-        boundary.secondary_enabled() && boundary.field(record, RecordField::SecondaryMode) != SECONDARY_MODE
+        shot.secondary().enabled() && boundary.field(record, RecordField::SecondaryMode) != SECONDARY_MODE
     }
 
-    pub fn prepare_job(&mut self, parameters: &CaptureParameters, candidates: &mut Candidates, boundary: &mut impl ControlBoundary) {
+    pub fn prepare_job<P: ControlBoundary>(&mut self, parameters: &CaptureParameters, prepared: &mut Prepared, shot: &mut impl ControlShot<P>, boundary: &mut P) {
         boundary.trace(CaptureTrace::PrepareJob);
         let Some(record) = self.record else { return };
         let selection = boundary.selection(parameters.selection);
-        let active = boundary.active_slot(selection);
+        let active = selection.active();
         let active_handle = boundary.slot(parameters.slots, active.wrapping_sub(1));
         if parameters.options.loads_profile() {
             boundary.load_profile(record, parameters.profile);
@@ -200,10 +221,10 @@ impl CaptureControl {
         if boundary.field(record, RecordField::SlotMode) == 1 && first_active {
             self.refresh_slot_rates(record, selection.count, parameters, boundary);
         }
-        if boundary.has_work() && selection.requested == 1 && !parameters.reduced() {
+        if prepared.has_work() && selection.requested == 1 && !parameters.reduced() {
             let reference = boundary.area_reference(record);
             let frame = boundary.frame(parameters.sources);
-            if self.refresh_subjects(record, &reference, frame, candidates, boundary) {
+            if self.refresh_subjects(record, &reference, frame, &mut prepared.candidates, shot, boundary) {
                 copy_slot_entries(record, selection.count, parameters, boundary);
             }
             let kind = boundary.field(record, RecordField::SubjectKind);
@@ -232,7 +253,7 @@ impl CaptureControl {
         self.held = false;
         self.secondary_pending = true;
         if !parameters.reduced() {
-            self.prepare_secondary(record, parameters, boundary);
+            self.prepare_secondary(record, parameters, shot.secondary(), boundary);
         }
         if parameters.options.defaults_second_limit() && boundary.field(record, RecordField::ReferenceSecondLimit) == UNSET_SECOND_LIMIT {
             boundary.set_slot_field(record, 0, SlotField::SecondLimit, DEFAULT_SECOND_LIMIT as u32);
@@ -247,7 +268,7 @@ impl CaptureControl {
         boundary.monitor_device_commands(false);
         boundary.store_selection_hook(parameters.selection);
         boundary.set_field(record, RecordField::JobPrepared, 1);
-        self.prepare_selection_dump(record, parameters, dumps, boundary);
+        self.prepare_selection_dump(record, parameters, dumps, shot.frame_dump(), boundary);
     }
 
     fn refresh_slot_rates(&self, record: RecordHandle, count: u8, parameters: &CaptureParameters, boundary: &mut impl ControlBoundary) {
@@ -267,28 +288,28 @@ impl CaptureControl {
 
     /// Replaces the capture's candidates when the areas moved since the half press; returns
     /// whether they were replaced.
-    fn refresh_subjects(&self, record: RecordHandle, reference: &AreaReference, frame: Frame, candidates: &mut Candidates, boundary: &mut impl ControlBoundary) -> bool {
-        if boundary.calculation_word(CalculationWord::SubjectRefresh) == 0 { return false; }
+    fn refresh_subjects<P: ControlBoundary>(&self, record: RecordHandle, reference: &AreaReference, frame: Frame, candidates: &mut Candidates, shot: &mut impl ControlShot<P>, boundary: &mut P) -> bool {
+        if !shot.tracks_subjects() { return false; }
         if boundary.adjustment(CaptureAdjustment::Subjects) & 3 == 0 { return false; }
         let kind = boundary.field(record, RecordField::SubjectKind);
         let source = boundary.field(record, RecordField::SubjectSource);
         let area = boundary.field(record, RecordField::SubjectArea);
-        boundary.classify_subjects(reference, kind, source, area);
-        let moved = boundary.moved_areas() != 0;
+        shot.classify_subjects(reference, kind, source, area, boundary);
+        let moved = shot.moved_areas() != 0;
         if !moved && !dumps(boundary) { return false; }
-        boundary.update_capture_selection(record);
+        shot.update_capture_selection(record, boundary);
         boundary.export_selection(frame);
         if !moved { return false; }
         if boundary.field(record, RecordField::SubjectsLocked) != 0 { return true; }
         let primary = boundary.slot_entry(record, 0).primary_subjects();
-        candidates.lists[3] = boundary.subject_source(primary);
+        candidates.lists[3] = shot.subject_source(primary);
         if boundary.field(record, RecordField::KeepsAllSubjects) == 0 { candidates.keep_common(4); }
         boundary.publish_subjects(record, &candidates.lists[3]);
         true
     }
 
-    fn prepare_secondary(&self, record: RecordHandle, parameters: &CaptureParameters, boundary: &mut impl ControlBoundary) {
-        boundary.reset_secondary();
+    fn prepare_secondary(&self, record: RecordHandle, parameters: &CaptureParameters, secondary: &mut SecondaryResult, boundary: &mut impl ControlBoundary) {
+        secondary.reset();
         boundary.set_slot_field(record, 0, SlotField::ItemState, 0);
         boundary.store_item(record, 0, &AreaEntry::EMPTY);
         boundary.set_slot_field(record, 0, SlotField::State, 0);
@@ -299,7 +320,7 @@ impl CaptureControl {
                 || boundary.field(record, RecordField::SecondaryMode) == SECONDARY_MODE
                 || boundary.field(record, RecordField::SecondaryLatch) == 1)
         {
-            boundary.set_secondary_enabled(true);
+            secondary.set_enabled(true);
         }
         if boundary.adjustment(CaptureAdjustment::Diagnostics) & 1 != 0 {
             let style = boundary.adjustment(CaptureAdjustment::SecondaryStyle);
@@ -309,7 +330,7 @@ impl CaptureControl {
                 _ => (6, false),
             };
             boundary.set_field(record, RecordField::SecondaryStyle, record_style);
-            boundary.set_secondary_enabled(enabled);
+            secondary.set_enabled(enabled);
         }
         let value = if boundary.field(record, RecordField::SecondaryLatch) == 1 { boundary.device_value() } else { 0 };
         boundary.set_slot_field(record, 0, SlotField::DeviceValue, value);
@@ -322,14 +343,14 @@ impl CaptureControl {
     }
 
     /// Readies the selection map area of the frame's dump.
-    fn prepare_selection_dump(&self, record: RecordHandle, parameters: &CaptureParameters, dumps: bool, boundary: &mut impl ControlBoundary) {
+    fn prepare_selection_dump(&self, record: RecordHandle, parameters: &CaptureParameters, dumps: bool, dump: &mut StatisticsDump, boundary: &mut impl ControlBoundary) {
         let frame = boundary.frame(parameters.sources);
         let present = boundary.field(record, RecordField::MapPresent) == 1;
         if !dumps { return; }
-        if !boundary.dump_armed() && present {
+        if !dump.armed && present {
             boundary.prepare_dump_area(frame, capture_stock::MAP_AREA);
             self.mark_map(frame, boundary);
-            boundary.set_dump_armed(true);
+            dump.armed = true;
         }
         if boundary.adjustment(CaptureAdjustment::Subjects) == 0 {
             boundary.fill_frame(frame, capture_stock::MAP_TABLE, capture_stock::MAP_TABLE_BYTES, 0);
@@ -339,7 +360,7 @@ impl CaptureControl {
         } else {
             boundary.fill_frame(frame, capture_stock::MAP_AREA, capture_stock::MAP_AREA_BYTES, 0);
             self.mark_map(frame, boundary);
-            boundary.set_dump_armed(false);
+            dump.armed = false;
         }
     }
 

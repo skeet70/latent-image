@@ -75,9 +75,6 @@ pub struct SecondaryJob {
     delivered: Option<Delivered>,
     /// The first pass's processing, then the later passes'.
     processing: [Processing; 2],
-    enabled: bool,
-    key: [i16; 2],
-    evaluation: Evaluation,
     geometry: AreaGeometry,
 }
 
@@ -85,70 +82,21 @@ impl Default for SecondaryJob {
     fn default() -> Self { Self::new() }
 }
 
-/// The band of grid rows the measurement keeps, as frame coordinates.
+/// What the secondary job leaves for the capture controller, the primary job and the calculations
+/// job.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct Band { minimum: Point, maximum: Point }
+pub struct SecondaryResult {
+    enabled: bool,
+    key: [i16; 2],
+    evaluation: Evaluation,
+}
 
-impl SecondaryJob {
-    pub fn new() -> Self {
-        Self {
-            record: None,
-            selection: CaptureSelection::default(),
-            measurements: 0,
-            delivered: None,
-            processing: [Processing::default(); 2],
-            enabled: false,
-            key: [0; 2],
-            evaluation: Evaluation::default(),
-            geometry: AreaGeometry::default(),
-        }
-    }
+impl Default for SecondaryResult {
+    fn default() -> Self { Self::new() }
+}
 
-    pub fn effect(&mut self, effect: SecondaryEffect, parameters: &CaptureParameters, boundary: &mut impl SecondaryBoundary) {
-        match effect {
-            SecondaryEffect::Begin(record) => self.record = Some(record),
-            SecondaryEffect::ResetCount => {
-                self.measurements = 0;
-                self.reset_evaluation();
-            }
-            SecondaryEffect::Configure => {
-                if let Some(record) = self.record { self.selection = boundary.capture_selection(record); }
-            }
-            SecondaryEffect::Request => self.request(parameters, boundary),
-            SecondaryEffect::PrepareFirst => self.key = boundary.statistics_key(&self.processing[0]),
-            SecondaryEffect::PrepareNext => self.prepare_next(boundary),
-            SecondaryEffect::RequestCalculation => self.request_calculation(parameters, boundary),
-            SecondaryEffect::Absorb => self.reset_evaluation(),
-            SecondaryEffect::AbsorbStatistics => self.absorb_statistics(parameters, boundary),
-            SecondaryEffect::AbsorbCalculation => self.absorb_calculation(boundary),
-            SecondaryEffect::AbsorbSecondCalculation => self.absorb_refinement(boundary),
-            SecondaryEffect::RequestTransfer => boundary.transfer(&TransferRequest { transfer: self.evaluation.transfer() }, Completion::Image5d),
-            SecondaryEffect::Release => boundary.release_measurement(),
-        }
-    }
-
-    pub fn query(&mut self, query: SecondaryQuery, boundary: &mut impl SecondaryBoundary) -> bool {
-        match query {
-            SecondaryQuery::Accepted => self.accept(boundary),
-            SecondaryQuery::FirstPass => self.measurements == 1,
-            SecondaryQuery::Alternative => {
-                boundary.adjustment(CaptureAdjustment::Diagnostics) & 1 != 0 && matches!(boundary.adjustment(CaptureAdjustment::SecondaryStyle), 4..=7)
-            }
-            SecondaryQuery::TransferPending => self.evaluation.transfer() != 0,
-        }
-    }
-
-    /// Keeps what the 0x5c, 0x94 and 0x95 completions deliver.
-    pub fn receive(&mut self, completed: Completed<'_>) {
-        let payload = completed.parameters.bytes();
-        let delivered = match completed.completion {
-            Completion::Image5c => payloads::measurement_ready(payload).map(Delivered::Ready),
-            Completion::Calculation94 => payloads::evaluation(payload).map(Delivered::Evaluation),
-            Completion::Calculation95 => payloads::refinement(payload).map(Delivered::Refinement),
-            _ => return,
-        };
-        if delivered.is_some() { self.delivered = delivered; }
-    }
+impl SecondaryResult {
+    pub const fn new() -> Self { Self { enabled: false, key: [0; 2], evaluation: Evaluation([0; Evaluation::BYTES]) } }
 
     /// Set by a nonzero evaluation and an alternative pass; the capture controller sets and reads
     /// it when it prepares a job.
@@ -157,7 +105,7 @@ impl SecondaryJob {
     pub fn set_enabled(&mut self, enabled: bool) { self.enabled = enabled; }
 
     /// Drops the evaluation and the key pair.
-    pub fn reset_evaluation(&mut self) {
+    pub fn reset(&mut self) {
         self.enabled = false;
         self.evaluation = Evaluation::default();
         self.key = [UNSET_KEY; 2];
@@ -183,6 +131,69 @@ impl SecondaryJob {
             marked: evaluation.list_position() != 0,
         }
     }
+}
+
+/// The band of grid rows the measurement keeps, as frame coordinates.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Band { minimum: Point, maximum: Point }
+
+impl SecondaryJob {
+    pub fn new() -> Self {
+        Self {
+            record: None,
+            selection: CaptureSelection::default(),
+            measurements: 0,
+            delivered: None,
+            processing: [Processing::default(); 2],
+            geometry: AreaGeometry::default(),
+        }
+    }
+
+    pub fn effect(&mut self, effect: SecondaryEffect, parameters: &CaptureParameters, result: &mut SecondaryResult, boundary: &mut impl SecondaryBoundary) {
+        match effect {
+            SecondaryEffect::Begin(record) => self.record = Some(record),
+            SecondaryEffect::ResetCount => {
+                self.measurements = 0;
+                result.reset();
+            }
+            SecondaryEffect::Configure => {
+                if let Some(record) = self.record { self.selection = boundary.capture_selection(record); }
+            }
+            SecondaryEffect::Request => self.request(parameters, boundary),
+            SecondaryEffect::PrepareFirst => result.key = boundary.statistics_key(&self.processing[0]),
+            SecondaryEffect::PrepareNext => prepare_next(result, boundary),
+            SecondaryEffect::RequestCalculation => self.request_calculation(parameters, boundary),
+            SecondaryEffect::Absorb => result.reset(),
+            SecondaryEffect::AbsorbStatistics => self.absorb_statistics(parameters, &result.evaluation, boundary),
+            SecondaryEffect::AbsorbCalculation => self.absorb_calculation(result, boundary),
+            SecondaryEffect::AbsorbSecondCalculation => self.absorb_refinement(&mut result.evaluation, boundary),
+            SecondaryEffect::RequestTransfer => boundary.transfer(&TransferRequest { transfer: result.evaluation.transfer() }, Completion::Image5d),
+            SecondaryEffect::Release => boundary.release_measurement(),
+        }
+    }
+
+    pub fn query(&mut self, query: SecondaryQuery, result: &SecondaryResult, boundary: &mut impl SecondaryBoundary) -> bool {
+        match query {
+            SecondaryQuery::Accepted => self.accept(boundary),
+            SecondaryQuery::FirstPass => self.measurements == 1,
+            SecondaryQuery::Alternative => {
+                boundary.adjustment(CaptureAdjustment::Diagnostics) & 1 != 0 && matches!(boundary.adjustment(CaptureAdjustment::SecondaryStyle), 4..=7)
+            }
+            SecondaryQuery::TransferPending => result.evaluation.transfer() != 0,
+        }
+    }
+
+    /// Keeps what the 0x5c, 0x94 and 0x95 completions deliver.
+    pub fn receive(&mut self, completed: Completed<'_>) {
+        let payload = completed.parameters.bytes();
+        let delivered = match completed.completion {
+            Completion::Image5c => payloads::measurement_ready(payload).map(Delivered::Ready),
+            Completion::Calculation94 => payloads::evaluation(payload).map(Delivered::Evaluation),
+            Completion::Calculation95 => payloads::refinement(payload).map(Delivered::Refinement),
+            _ => return,
+        };
+        if delivered.is_some() { self.delivered = delivered; }
+    }
 
     fn accept(&mut self, boundary: &mut impl SecondaryBoundary) -> bool {
         self.measurements = self.measurements.wrapping_add(1);
@@ -193,32 +204,70 @@ impl SecondaryJob {
         };
         boundary.prepare_statistics(source, store, &mut self.processing[index])
     }
+}
 
-    fn prepare_next(&mut self, boundary: &mut impl SecondaryBoundary) {
-        self.enabled = true;
-        let tenfold = |boundary: &mut _, setting| MeasurementSettings::measurement_setting(boundary, setting).wrapping_mul(10);
-        let measured = tenfold(boundary, MeasurementSetting::MeasuredDefault);
-        let transfer = tenfold(boundary, MeasurementSetting::TransferDefault);
-        let limit = tenfold(boundary, MeasurementSetting::PrimaryLimitDefault);
-        let evaluation = &mut self.evaluation;
-        evaluation.set_measured(measured);
-        evaluation.set_primary(0);
-        evaluation.set_transfer(transfer);
-        evaluation.set_base(0);
-        evaluation.set_third(0);
-        evaluation.set_fifth(0);
-        evaluation.set_fourth(0);
-        evaluation.set_primary_limit(limit);
-        evaluation.set_seventh(0);
+fn prepare_next(result: &mut SecondaryResult, boundary: &mut impl SecondaryBoundary) {
+    result.enabled = true;
+    let tenfold = |boundary: &mut _, setting| MeasurementSettings::measurement_setting(boundary, setting).wrapping_mul(10);
+    let measured = tenfold(boundary, MeasurementSetting::MeasuredDefault);
+    let transfer = tenfold(boundary, MeasurementSetting::TransferDefault);
+    let limit = tenfold(boundary, MeasurementSetting::PrimaryLimitDefault);
+    let evaluation = &mut result.evaluation;
+    evaluation.set_measured(measured);
+    evaluation.set_primary(0);
+    evaluation.set_transfer(transfer);
+    evaluation.set_base(0);
+    evaluation.set_third(0);
+    evaluation.set_fifth(0);
+    evaluation.set_fourth(0);
+    evaluation.set_primary_limit(limit);
+    evaluation.set_seventh(0);
+}
+
+fn store_subject_state(record: RecordHandle, evaluation: &Evaluation, records: &mut impl CaptureRecords) {
+    let state = if evaluation.area_mode() == 1 { AREA_STATE } else { PLAIN_STATE };
+    records.set_slot_field(record, 0, SlotField::State, state);
+}
+
+/// The evaluated area moved from the full crop into the first slot's crop window.
+fn evaluated_item(record: RecordHandle, evaluation: &Evaluation, boundary: &mut impl SecondaryBoundary) -> AreaEntry {
+    let words = profile_words(record, boundary);
+    let full = boundary.crop_geometry(&words.crop(CAPTURE_SELECTOR, 0, true));
+    let selector = boundary.slot_field(record, 0, SlotField::ProfileSelector);
+    let window = boundary.crop_geometry(&words.crop(selector, 0, false)).window;
+    let offset = boundary.capture_offset(record);
+    let shifted = boundary.crop_geometry(&words.crop(selector, offset, false)).window;
+
+    let index = evaluation.list_position().saturating_sub(1);
+    let source = match evaluation.list() {
+        Some(EvaluatedList::First) => Some(boundary.area(record, AreaList::First, index)),
+        Some(EvaluatedList::Second) => Some(boundary.area(record, AreaList::Second, index)),
+        None => None,
+    };
+    let mut item = source.unwrap_or(AreaEntry::EMPTY);
+    let from = geometry::Frame { vertical: full.frame[0], horizontal: full.frame[1] };
+    let to = geometry::Frame { vertical: window[2], horizontal: window[3] };
+    if let Some(placement) = geometry::rescale(source.map(|area| region_of(&area).placement), from, to) { set_placement(&mut item, placement); }
+    let moved = [shifted[0].wrapping_sub(window[0]), shifted[1].wrapping_sub(window[1])];
+    let mut rectangle = item.rectangle();
+    let mut centre = item.centre();
+    for axis in 0..2 {
+        rectangle[axis] = rectangle[axis].wrapping_sub(moved[axis]);
+        centre[axis] = centre[axis].wrapping_sub(moved[axis]);
     }
+    item.set_rectangle(rectangle);
+    item.set_centre(centre);
+    item
+}
 
-    fn absorb_statistics(&mut self, parameters: &CaptureParameters, boundary: &mut impl SecondaryBoundary) {
+impl SecondaryJob {
+    fn absorb_statistics(&self, parameters: &CaptureParameters, evaluation: &Evaluation, boundary: &mut impl SecondaryBoundary) {
         let frame = boundary.frame(parameters.sources);
         for (offset, word) in capture_stock::MEASUREMENT_WORDS {
             let value = boundary.measurement_word(word);
             boundary.set_frame_word(frame, offset, value);
         }
-        if let Some(record) = self.record { boundary.set_slot_field(record, 0, SlotField::MeasuredValue, self.evaluation.measured()); }
+        if let Some(record) = self.record { boundary.set_slot_field(record, 0, SlotField::MeasuredValue, evaluation.measured()); }
     }
 
     fn request_calculation(&mut self, parameters: &CaptureParameters, boundary: &mut impl SecondaryBoundary) {
@@ -240,71 +289,36 @@ impl SecondaryJob {
         boundary.request_evaluation(record, &self.processing[0], frames, &self.geometry, [Completion::Calculation94, Completion::Calculation95]);
     }
 
-    fn absorb_calculation(&mut self, boundary: &mut impl SecondaryBoundary) {
-        if let Some(Delivered::Evaluation(evaluation)) = self.delivered { self.evaluation = evaluation; }
-        if self.evaluation.measured() != 0 { self.enabled = true; }
+    fn absorb_calculation(&self, result: &mut SecondaryResult, boundary: &mut impl SecondaryBoundary) {
+        if let Some(Delivered::Evaluation(evaluation)) = self.delivered { result.evaluation = evaluation; }
+        if result.evaluation.measured() != 0 { result.enabled = true; }
         let Some(record) = self.record else { return };
-        self.store_subject_state(record, boundary);
+        let evaluation = &result.evaluation;
+        store_subject_state(record, evaluation, boundary);
         let (item, present) = if boundary.field(record, RecordField::PlacesItem) == 0 {
             (AreaEntry::EMPTY, false)
         } else {
             let list = if boundary.prefers_second_list(record) { AreaList::Second } else { AreaList::First };
             let present = boundary.area_count(record, list) != 0;
-            let item = if self.evaluation.area_mode() == 1 { self.evaluated_item(record, boundary) } else { AreaEntry::EMPTY };
+            let item = if evaluation.area_mode() == 1 { evaluated_item(record, evaluation, boundary) } else { AreaEntry::EMPTY };
             (item, present)
         };
         boundary.set_slot_field(record, 0, SlotField::ItemState, u32::from(present));
         boundary.store_item(record, 0, &item);
         store_slot_geometry(record, boundary);
-        if self.evaluation.stores_limit() {
-            boundary.set_slot_field(record, 0, SlotField::SecondLimit, i32::from(self.evaluation.second_limit()) as u32);
+        if evaluation.stores_limit() {
+            boundary.set_slot_field(record, 0, SlotField::SecondLimit, i32::from(evaluation.second_limit()) as u32);
         }
     }
 
-    /// The evaluated area moved from the full crop into the first slot's crop window.
-    fn evaluated_item(&self, record: RecordHandle, boundary: &mut impl SecondaryBoundary) -> AreaEntry {
-        let words = profile_words(record, boundary);
-        let full = boundary.crop_geometry(&words.crop(CAPTURE_SELECTOR, 0, true));
-        let selector = boundary.slot_field(record, 0, SlotField::ProfileSelector);
-        let window = boundary.crop_geometry(&words.crop(selector, 0, false)).window;
-        let offset = boundary.capture_offset(record);
-        let shifted = boundary.crop_geometry(&words.crop(selector, offset, false)).window;
-
-        let index = self.evaluation.list_position().saturating_sub(1);
-        let source = match self.evaluation.list() {
-            Some(EvaluatedList::First) => Some(boundary.area(record, AreaList::First, index)),
-            Some(EvaluatedList::Second) => Some(boundary.area(record, AreaList::Second, index)),
-            None => None,
-        };
-        let mut item = source.unwrap_or(AreaEntry::EMPTY);
-        let from = geometry::Frame { vertical: full.frame[0], horizontal: full.frame[1] };
-        let to = geometry::Frame { vertical: window[2], horizontal: window[3] };
-        if let Some(placement) = geometry::rescale(source.map(|area| region_of(&area).placement), from, to) { set_placement(&mut item, placement); }
-        let moved = [shifted[0].wrapping_sub(window[0]), shifted[1].wrapping_sub(window[1])];
-        let mut rectangle = item.rectangle();
-        let mut centre = item.centre();
-        for axis in 0..2 {
-            rectangle[axis] = rectangle[axis].wrapping_sub(moved[axis]);
-            centre[axis] = centre[axis].wrapping_sub(moved[axis]);
-        }
-        item.set_rectangle(rectangle);
-        item.set_centre(centre);
-        item
-    }
-
-    fn absorb_refinement(&mut self, boundary: &mut impl SecondaryBoundary) {
+    fn absorb_refinement(&self, evaluation: &mut Evaluation, boundary: &mut impl SecondaryBoundary) {
         let Some(Delivered::Refinement(refinement)) = self.delivered else { return };
-        self.evaluation.set_fifth(refinement.fifth);
-        self.evaluation.set_block(refinement.block);
+        evaluation.set_fifth(refinement.fifth);
+        evaluation.set_block(refinement.block);
         let Some(record) = self.record else { return };
-        self.store_subject_state(record, boundary);
+        store_subject_state(record, evaluation, boundary);
         boundary.set_slot_field(record, 0, SlotField::EvaluationWord, refinement.slot_word);
         boundary.set_slot_field(record, 0, SlotField::EvaluationOffset, i32::from(refinement.slot_offset) as u32);
-    }
-
-    fn store_subject_state(&self, record: RecordHandle, records: &mut impl CaptureRecords) {
-        let state = if self.evaluation.area_mode() == 1 { AREA_STATE } else { PLAIN_STATE };
-        records.set_slot_field(record, 0, SlotField::State, state);
     }
 
     /// Chooses an area list and a band of grid rows around its areas, clips the areas to the band,

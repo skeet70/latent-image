@@ -6,8 +6,8 @@
 
 use crate::boundary::{Lens, LensReading};
 use crate::capture_boundary::{
-    CalcLibrary, CalculationResult, CaptureClient, CaptureDiagnostics, CaptureParameters, CaptureRecords, CaptureShared, CaptureTrace, LensGeometry,
-    LensMoves, MoveProfile, RecordField, ReferenceTemplates, RemapRequest, SlotField,
+    CalcLibrary, CalculationResult, CaptureClient, CaptureDiagnostics, CaptureParameters, CaptureRecords, CaptureTrace, LensGeometry, LensMoves,
+    MoveProfile, RecordField, RemapRequest, SlotField,
 };
 use crate::ports::{LensMove, ReturnEffect, ReturnQuery};
 use xm1_saclac_interface::calculation::{ReferenceLimits, ReferenceRequest};
@@ -37,13 +37,22 @@ pub struct ReturnPoint {
     pub pending: bool,
 }
 
-pub trait ReturnBoundary:
-    CaptureRecords + CaptureClient + Lens + LensGeometry + LensMoves + CalcLibrary + ReferenceTemplates + CaptureShared + CaptureDiagnostics
-{
-}
-impl<T> ReturnBoundary for T where
-    T: CaptureRecords + CaptureClient + Lens + LensGeometry + LensMoves + CalcLibrary + ReferenceTemplates + CaptureShared + CaptureDiagnostics
-{
+pub trait ReturnBoundary: CaptureRecords + CaptureClient + Lens + LensGeometry + LensMoves + CalcLibrary + CaptureDiagnostics {}
+impl<T> ReturnBoundary for T where T: CaptureRecords + CaptureClient + Lens + LensGeometry + LensMoves + CalcLibrary + CaptureDiagnostics {}
+
+/// The shot state the lens return uses; `P` is what its operations call outside the shot.
+pub trait ReturnShot<P: ?Sized> {
+    /// The saved calculation input moved to `reference`.
+    fn reference_request(&mut self, reference: u32, ports: &mut P) -> ReferenceRequest;
+    /// Holds the exposure for the lens return.
+    fn set_return_active(&mut self, active: bool);
+    /// The retained result becomes the lens return's result and the working result.
+    fn restore_return_result(&mut self);
+    /// The lens return's result becomes the working result and is absorbed into the record;
+    /// `pending` while the lens point is still to be reached.
+    fn absorb_return_result(&mut self, pending: bool, ports: &mut P);
+    /// Loads the absorbed result into the record for the lens return's conclusion.
+    fn load_return_records(&mut self, pending: bool, ports: &mut P);
 }
 
 /// The lens return's own state. The calc task reads `request` until the calculation completes.
@@ -66,18 +75,15 @@ impl LensReturn {
         Self { record: None, request: ReferenceRequest::from_bytes([0; ReferenceRequest::BYTES]), lens_state: 0, target: 0, delta: 0, speed: 0 }
     }
 
-    pub fn effect(&mut self, effect: ReturnEffect, parameters: &CaptureParameters, boundary: &mut impl ReturnBoundary) {
+    pub fn effect<P: ReturnBoundary>(&mut self, effect: ReturnEffect, parameters: &CaptureParameters, point: &ReturnPoint, shot: &mut impl ReturnShot<P>, boundary: &mut P) {
         match effect {
             ReturnEffect::Begin(record) => self.record = Some(record),
             ReturnEffect::PrepareRecords => self.publish_capture(parameters, boundary),
-            ReturnEffect::MarkActive(active) => boundary.set_return_active(active),
-            ReturnEffect::PrepareCalculation => boundary.restore_return_calculation(),
-            ReturnEffect::AbsorbCalculation => {
-                boundary.install_return_calculation();
-                boundary.absorb_calculation();
-            }
-            ReturnEffect::ConcludeExposure => boundary.load_return_records(),
-            ReturnEffect::RequestCalculation => self.request_calculation(boundary),
+            ReturnEffect::MarkActive(active) => shot.set_return_active(active),
+            ReturnEffect::PrepareCalculation => shot.restore_return_result(),
+            ReturnEffect::AbsorbCalculation => shot.absorb_return_result(point.pending, boundary),
+            ReturnEffect::ConcludeExposure => shot.load_return_records(point.pending, boundary),
+            ReturnEffect::RequestCalculation => self.request_calculation(shot, boundary),
             ReturnEffect::PrepareMoves => self.copy_slots(parameters, boundary),
             ReturnEffect::PrepareRelative => self.prepare_relative(boundary),
         }
@@ -131,7 +137,7 @@ impl LensReturn {
         false
     }
 
-    fn request_calculation(&mut self, boundary: &mut impl ReturnBoundary) {
+    fn request_calculation<P: ReturnBoundary>(&mut self, shot: &mut impl ReturnShot<P>, boundary: &mut P) {
         let Some(record) = self.record else { return };
         let limits = ReferenceLimits {
             first: boundary.field(record, RecordField::ReferenceFirstLimit) as i16,
@@ -139,7 +145,7 @@ impl LensReturn {
             option: boundary.field(record, RecordField::ReferenceOption),
         };
         let lens = boundary.read(LensReading::Reference);
-        let mut request = boundary.reference_request(lens);
+        let mut request = shot.reference_request(lens, boundary);
         let pair = boundary.reference_pair(record, 4);
         let offset = boundary.reference_offset(lens).wrapping_sub(boundary.reference_offset(pair.reference));
         let converted = boundary.convert(pair.reference, pair.detail, lens);
@@ -152,10 +158,10 @@ impl LensReturn {
 
     /// Copies each slot of the record into the client's slot record when the first slot is the
     /// selected one.
-    fn copy_slots(&self, parameters: &CaptureParameters, boundary: &mut (impl CaptureRecords + CaptureClient + CaptureShared)) {
+    fn copy_slots(&self, parameters: &CaptureParameters, boundary: &mut (impl CaptureRecords + CaptureClient)) {
         let Some(record) = self.record else { return };
         let selection = boundary.selection(parameters.selection);
-        if boundary.active_slot(selection) != 1 { return; }
+        if selection.active() != 1 { return; }
         for slot in selection.indices() {
             let entry = boundary.slot_entry(record, slot);
             let target = boundary.slot(parameters.slots, slot);

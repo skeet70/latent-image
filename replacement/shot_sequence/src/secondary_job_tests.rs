@@ -245,20 +245,34 @@ impl ClipSettings for World {
     fn minimum_visible_percent(&mut self) -> u32 { 0 }
 }
 
-fn begun(world: &mut World) -> SecondaryJob {
-    let mut job = SecondaryJob::new();
+/// The secondary job with the result the shot's state keeps for it.
+struct Job {
+    job: SecondaryJob,
+    result: crate::secondary_job::SecondaryResult,
+}
+
+impl Job {
+    fn effect(&mut self, effect: SecondaryEffect, parameters: &CaptureParameters, world: &mut World) { self.job.effect(effect, parameters, &mut self.result, world); }
+    fn query(&mut self, query: SecondaryQuery, world: &mut World) -> bool { self.job.query(query, &self.result, world) }
+    fn measurement(&self) -> crate::calculations_work::SecondaryMeasurement { self.result.measurement() }
+    fn enabled(&self) -> bool { self.result.enabled() }
+    fn evaluation(&self) -> &xm1_saclac_interface::area_measurement::Evaluation { self.result.evaluation() }
+}
+
+fn begun(world: &mut World) -> Job {
+    let mut job = Job { job: SecondaryJob::new(), result: crate::secondary_job::SecondaryResult::new() };
     for effect in [SecondaryEffect::Begin(record()), SecondaryEffect::ResetCount, SecondaryEffect::Configure] { job.effect(effect, &parameters(), world); }
     job
 }
 
-fn requested(world: &mut World) -> SecondaryJob {
+fn requested(world: &mut World) -> Job {
     let mut job = begun(world);
     job.effect(SecondaryEffect::Request, &parameters(), world);
     job
 }
 
-fn deliver(job: &mut SecondaryJob, completion: Completion, payload: &[u8]) {
-    job.receive(Completed { completion, parameters: stock::parameters(payload) });
+fn deliver(job: &mut Job, completion: Completion, payload: &[u8]) {
+    job.job.receive(Completed { completion, parameters: stock::parameters(payload) });
 }
 
 fn evaluation_payload(edit: impl FnOnce(&mut [u8; 84])) -> [u8; 84] {

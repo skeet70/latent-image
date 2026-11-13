@@ -127,13 +127,8 @@ pub trait CalculationsRecords {
     fn store_fourth(&mut self, record: RecordHandle, result: FourthResult);
 }
 
-/// The secondary job's state the second calc job reads.
-pub trait SecondaryMeasurements {
-    fn secondary_measurement(&mut self) -> SecondaryMeasurement;
-}
-
-pub trait CalculationsBoundary: CaptureCommand + CaptureProcessing + CalculationsLibrary + CalculationsRecords + SecondaryMeasurements {}
-impl<T: CaptureCommand + CaptureProcessing + CalculationsLibrary + CalculationsRecords + SecondaryMeasurements> CalculationsBoundary for T {}
+pub trait CalculationsBoundary: CaptureCommand + CaptureProcessing + CalculationsLibrary + CalculationsRecords {}
+impl<T: CaptureCommand + CaptureProcessing + CalculationsLibrary + CalculationsRecords> CalculationsBoundary for T {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Delivered { Readout(ReadoutPayload), First(FirstResult), Second(SecondResult), Third(ThirdResult), Fourth(FourthResult) }
@@ -177,14 +172,15 @@ impl CalculationsWork {
         self.delivered = delivered;
     }
 
-    pub fn effect(&mut self, effect: CalculationsEffect, boundary: &mut impl CalculationsBoundary) {
+    /// `measurement` is the secondary job's, which the second job's request takes.
+    pub fn effect(&mut self, effect: CalculationsEffect, measurement: SecondaryMeasurement, boundary: &mut impl CalculationsBoundary) {
         match effect {
             CalculationsEffect::Begin(record) => self.record = Some(record),
             CalculationsEffect::Configure => {
                 self.jobs = boundary.jobs();
                 self.detail = if boundary.configuration() & DETAIL_ENABLED != 0 { boundary.detail() } else { 0 };
             }
-            CalculationsEffect::Request(job) => self.request(job, boundary),
+            CalculationsEffect::Request(job) => self.request(job, measurement, boundary),
             CalculationsEffect::Absorb(job) => self.absorb(job, boundary),
         }
     }
@@ -224,12 +220,12 @@ impl CalculationsWork {
         requested != 0
     }
 
-    fn request(&mut self, job: CalculationsJob, boundary: &mut impl CalculationsBoundary) {
+    fn request(&mut self, job: CalculationsJob, measurement: SecondaryMeasurement, boundary: &mut impl CalculationsBoundary) {
         let Some(record) = self.record else { return };
         match job {
             CalculationsJob::First => boundary.request_first(record, &self.processing),
             CalculationsJob::Second => {
-                let input = self.second_input(record, boundary);
+                let input = self.second_input(record, measurement, boundary);
                 boundary.request_second(&input, &self.processing);
             }
             CalculationsJob::Third => boundary.request_third(record, &self.processing, self.detail),
@@ -237,8 +233,7 @@ impl CalculationsWork {
         }
     }
 
-    fn second_input(&self, record: RecordHandle, boundary: &mut impl CalculationsBoundary) -> SecondJobInput {
-        let measurement = boundary.secondary_measurement();
+    fn second_input(&self, record: RecordHandle, measurement: SecondaryMeasurement, boundary: &mut impl CalculationsBoundary) -> SecondJobInput {
         let base = if self.processing.offset_mode() == 1 && !measurement.refined {
             measurement.base.wrapping_add(boundary.offset_unit().wrapping_mul(10)) as i16
         } else {

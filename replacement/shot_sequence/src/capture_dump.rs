@@ -17,6 +17,11 @@ use xm1_saclac_interface::RecordHandle;
 pub trait DumpBoundary: CaptureRecords + CaptureClient + LensGeometry + MeasurementCalc + DumpWorkspaces + DumpSettings + DumpShared {}
 impl<T> DumpBoundary for T where T: CaptureRecords + CaptureClient + LensGeometry + MeasurementCalc + DumpWorkspaces + DumpSettings + DumpShared {}
 
+/// The shot context's lens words the capture dump copies.
+pub trait DumpShot {
+    fn shot_word(&mut self, word: ShotWord) -> u32;
+}
+
 /// How the dump packs adjustment bytes into a word, from the byte at the key onward.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Packing {
@@ -83,10 +88,10 @@ const MAX_ENTRIES: u8 = 20;
 const REMAP_KIND: u32 = 1;
 
 /// `output` is the primary job's last output word.
-pub fn write(record: RecordHandle, parameters: &CaptureParameters, output: u32, boundary: &mut impl DumpBoundary) {
+pub fn write(record: RecordHandle, parameters: &CaptureParameters, output: u32, shot: &mut impl DumpShot, boundary: &mut impl DumpBoundary) {
     let frame = boundary.frame(parameters.sources);
     for entry in capture_stock::CAPTURE_DUMP {
-        write_entry(frame, entry, record, parameters, boundary);
+        write_entry(frame, entry, record, parameters, shot, boundary);
     }
     if boundary.field(record, RecordField::SecondaryMode) != UNTRACED_MODE {
         let (start, end) = capture_stock::TRACE_MARKS;
@@ -102,13 +107,13 @@ pub fn write(record: RecordHandle, parameters: &CaptureParameters, output: u32, 
     boundary.set_frame_word(frame, capture_stock::PIPELINE_END, end);
 }
 
-fn write_entry(frame: Frame, entry: DumpEntry, record: RecordHandle, parameters: &CaptureParameters, boundary: &mut impl DumpBoundary) {
+fn write_entry(frame: Frame, entry: DumpEntry, record: RecordHandle, parameters: &CaptureParameters, shot: &mut impl DumpShot, boundary: &mut impl DumpBoundary) {
     let put = |boundary: &mut _, index: u32, value: u32| {
         CaptureClient::set_frame_word(boundary, frame, FrameOffset(entry.at.0 + 4 * index), value);
     };
     match entry.source {
         DumpSource::Word(word) => {
-            let value = word_value(word, record, parameters, boundary);
+            let value = word_value(word, record, parameters, shot, boundary);
             put(boundary, 0, value);
         }
         DumpSource::Layout => {
@@ -128,7 +133,7 @@ fn write_entry(frame: Frame, entry: DumpEntry, record: RecordHandle, parameters:
     }
 }
 
-fn word_value(word: DumpWord, record: RecordHandle, parameters: &CaptureParameters, boundary: &mut impl DumpBoundary) -> u32 {
+fn word_value(word: DumpWord, record: RecordHandle, parameters: &CaptureParameters, shot: &mut impl DumpShot, boundary: &mut impl DumpBoundary) -> u32 {
     match word {
         DumpWord::Constant(value) => value,
         DumpWord::Zero => 0,
@@ -136,7 +141,7 @@ fn word_value(word: DumpWord, record: RecordHandle, parameters: &CaptureParamete
         DumpWord::FirstSlot(field) => boundary.slot_field(record, 0, field),
         DumpWord::SubjectFlags => subject_flags(record, boundary),
         DumpWord::OutputMarker => i32::from(boundary.output_marker(parameters.selection)) as u32,
-        DumpWord::Shot(word) => boundary.shot_word(word),
+        DumpWord::Shot(word) => shot.shot_word(word),
         DumpWord::CaptureOffset => boundary.capture_offset(record),
         DumpWord::SettingsClass => boundary.settings_class(),
         DumpWord::Adjustment(key, packing) => packed(key, packing, boundary),

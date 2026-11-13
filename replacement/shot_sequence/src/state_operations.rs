@@ -4,24 +4,29 @@
 //! calculation step binds, the finish's words and record load, the shot context words a
 //! preparation writes, and the selection grid the absorb and the record load use.
 
-use crate::absorb::{Absorb, AuxiliaryReference, Origin, SelectionGrid};
+use crate::absorb::{absorb, store_areas, Absorb, AbsorbPorts, AreaTarget, AuxiliaryReference, CalculationResults, Form, Origin, SelectionGrid};
 use crate::boundary::{Client, ClientRef, LensReference, SelectionKind};
 use crate::calculation_work::{CalculationBlock, CalculationContext, CalculationProfiles, ExposureWord, PlanWords};
 use crate::capture_boundary::AreaReference;
+use crate::capture_control::ControlShot;
+use crate::capture_dump::DumpShot;
 use crate::capture_stock::subject_share;
 use crate::classification::classify_subjects;
 use crate::dump_boundary::ShotWord;
 use crate::finish_work::FinishCalculation;
 use crate::grid::{selected_cell, update_grid};
 use crate::grid_boundary::{GridLayers, GridSettings};
+use crate::lens_return::ReturnShot;
 use crate::preparation::{HalfPressParameters, LensReadings, LensStage, PreparationShot};
 use crate::record_load::{load, LoadOrigin, LoadPorts, RecordLoad};
+use crate::secondary_job::SecondaryResult;
 use crate::selection::{areas, record_list, ListSource};
 use crate::selection_operations::{reference_request, retain_reference};
 use crate::state::{ShotState, StateMemory};
+use crate::statistics_dump::StatisticsDump;
 use crate::stock::{self, state as layout};
 use crate::subjects::SubjectList;
-use xm1_saclac_interface::calculation::{AreaIndex, GridCell, ResultPass};
+use xm1_saclac_interface::calculation::{AreaIndex, GridCell, GridPass, ReferenceRequest, ResultPass};
 use xm1_saclac_interface::selection::{ClassifyStage, RetainedReference, SubjectQuery};
 use xm1_saclac_interface::stock::{record_handle_from_a2, record_handle_word};
 use xm1_saclac_interface::RecordHandle;
@@ -262,4 +267,55 @@ impl<M: StateMemory, P: LoadPorts + GridLayers> FinishCalculation<P> for ShotSta
         let input = self.load_input(LoadOrigin::HalfPress(*parameters));
         load(&input, self, ports);
     }
+}
+
+impl<M: StateMemory, P: AbsorbPorts + GridLayers> ControlShot<P> for ShotState<M> {
+    fn take_return_request(&mut self) -> bool { ShotState::take_return_request(self) }
+
+    fn secondary(&mut self) -> &mut SecondaryResult { self.secondary_mut() }
+
+    /// The tracking word 0xf1db30 tests.
+    fn tracks_subjects(&mut self) -> bool { CalculationResults::tracking(self) }
+
+    fn classify_subjects(&mut self, reference: &AreaReference, kind: u32, source: u32, area: u32, ports: &mut P) {
+        SelectionGrid::classify_subjects(self, ClassifyStage::CaptureJob, reference, kind, source, area, ports);
+    }
+
+    fn moved_areas(&mut self) -> u8 { ShotState::moved_areas(self) }
+
+    /// 0xf1d770(record, 3, 0, 1, 0), then with a grid selected 0xf19204 with the same arguments
+    /// over the selection mode's pass.
+    fn update_capture_selection(&mut self, record: RecordHandle, ports: &mut P) {
+        let target = AreaTarget { record, mode: 0, skip_first: false, bank: ClassifyStage::CaptureJob, eligibility: true };
+        store_areas(Form::Short, ResultPass::Plain, target, self, ports);
+        if !self.grid_selected() { return; }
+        if let Some(pass) = GridPass::new(CalculationResults::selection_mode(self)) { store_areas(Form::Short, ResultPass::Grid(pass), target, self, ports); }
+    }
+
+    fn subject_source(&mut self, primary: bool) -> SubjectList { ShotState::subject_source(self, primary) }
+
+    fn frame_dump(&mut self) -> &mut StatisticsDump { ShotState::frame_dump(self) }
+}
+
+impl<M: StateMemory, P: LoadPorts + GridLayers> ReturnShot<P> for ShotState<M> {
+    fn reference_request(&mut self, reference: u32, ports: &mut P) -> ReferenceRequest { reference_request(reference, self, ports) }
+
+    fn set_return_active(&mut self, active: bool) { ShotState::set_return_active(self, active); }
+
+    fn restore_return_result(&mut self) { ShotState::restore_return_result(self); }
+
+    fn absorb_return_result(&mut self, pending: bool, ports: &mut P) {
+        self.install_return_result();
+        let input = self.absorb_input(Origin::Return { pending });
+        absorb(&input, self, ports);
+    }
+
+    fn load_return_records(&mut self, pending: bool, ports: &mut P) {
+        let input = self.load_input(LoadOrigin::Return { pending });
+        load(&input, self, ports);
+    }
+}
+
+impl<M: StateMemory> DumpShot for ShotState<M> {
+    fn shot_word(&mut self, word: ShotWord) -> u32 { ShotState::shot_word(self, word) }
 }

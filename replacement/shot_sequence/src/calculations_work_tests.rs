@@ -92,16 +92,12 @@ impl CalculationsRecords for World {
     fn store_fourth(&mut self, _record: RecordHandle, result: FourthResult) { self.calls.push(Call::StoreFourth(result)); }
 }
 
-impl SecondaryMeasurements for World {
-    fn secondary_measurement(&mut self) -> SecondaryMeasurement { self.measurement }
-}
-
 /// Ports that dispatch the calculations job's effects and queries into `CalculationsWork`.
 struct Wired { work: CalculationsWork, world: World }
 
 impl Ports for Wired {
     fn effect(&mut self, effect: Effect) {
-        if let Effect::Calculations(effect) = effect { self.work.effect(effect, &mut self.world); }
+        if let Effect::Calculations(effect) = effect { self.work.effect(effect, self.world.measurement, &mut self.world); }
     }
     fn query(&mut self, query: Query) -> bool {
         match query {
@@ -192,8 +188,8 @@ fn without_enabled_jobs_the_configuration_takes_no_statistics_and_the_job_comple
 fn the_detail_word_needs_its_configuration_bit_and_the_fourth_job_its_client_target() {
     let mut work = CalculationsWork::new();
     let mut world = World { configuration: 0, fourth_target: false, ..World::new(1 << 8) };
-    work.effect(CalculationsEffect::Begin(record()), &mut world);
-    work.effect(CalculationsEffect::Configure, &mut world);
+    work.effect(CalculationsEffect::Begin(record()), world.measurement, &mut world);
+    work.effect(CalculationsEffect::Configure, world.measurement, &mut world);
     assert!(!work.query(CalculationsQuery::Enabled(CalculationsJob::Fourth), &mut world));
     work.query(CalculationsQuery::Requested, &mut world);
     assert!(matches!(world.calls[1], Call::Configure { detail: 0, .. }));
@@ -206,10 +202,10 @@ fn the_second_job_adds_the_offset_to_an_unrefined_base_when_the_processing_asks(
         let mut world = World::new(1 << 1);
         world.processing.0[0x88..0x8c].copy_from_slice(&(offset_mode as u32).to_le_bytes());
         world.measurement.refined = refined;
-        work.effect(CalculationsEffect::Begin(record()), &mut world);
-        work.effect(CalculationsEffect::Configure, &mut world);
+        work.effect(CalculationsEffect::Begin(record()), world.measurement, &mut world);
+        work.effect(CalculationsEffect::Configure, world.measurement, &mut world);
         work.query(CalculationsQuery::Requested, &mut world);
-        work.effect(CalculationsEffect::Request(CalculationsJob::Second), &mut world);
+        work.effect(CalculationsEffect::Request(CalculationsJob::Second), world.measurement, &mut world);
         let Some(Call::Second(input)) = world.calls.last().cloned() else { panic!("second job requested") };
         assert_eq!(input.base, base, "offset mode {offset_mode} refined {refined}");
     }

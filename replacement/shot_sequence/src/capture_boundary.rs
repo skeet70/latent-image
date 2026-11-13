@@ -1,10 +1,11 @@
 #![forbid(unsafe_code)]
 
 //! What the capture steps' leaf work calls outside them: the capture command's client memory, the
-//! image-4 record layer, lens geometry and lens moves, the calc library, peer requests, the helpers
-//! the shot steps share, platform services and diagnostics. Byte layouts are in `capture_stock`.
+//! image-4 record layer, lens geometry and lens moves, the calc library, peer requests, platform
+//! services and diagnostics. Byte layouts are in `capture_stock`.
 
 use crate::boundary::{ClientRef, FocusResult, Frame};
+use crate::shared::active_slot;
 use crate::subjects::SubjectList;
 use xm1_saclac_interface::area_measurement::AreaEntry;
 use xm1_saclac_interface::calculation::ReferenceRequest;
@@ -74,6 +75,9 @@ pub struct SlotSelection {
 
 impl SlotSelection {
     pub fn indices(self) -> core::ops::Range<u8> { 0..self.count }
+
+    /// The selected slot, 1-based: `requested` when 1 <= requested <= count <= 3, else 1.
+    pub const fn active(self) -> u8 { active_slot(self.requested as u32, self.count as u32) as u8 }
 }
 
 /// Where a capture dump goes inside the client's frame.
@@ -333,55 +337,10 @@ pub trait CalcLibrary {
     fn export_joint_tables(&mut self, frame: Frame);
 }
 
-/// The reference template shared with the other saclac modules.
-pub trait ReferenceTemplates {
-    /// The template shifted to `reference`.
-    fn reference_request(&mut self, reference: u32) -> ReferenceRequest;
-}
-
 /// Peer requests the capture controller sends itself.
 pub trait CapturePeers {
     fn statistics_setup(&mut self, enabled: bool, completion: Completion);
     fn statistics_setting(&mut self, setting: &StatisticsSetting, completion: Completion);
-}
-
-/// Calculation-context words the capture reads.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CalculationWord {
-    /// Nonzero lets a capture refresh the subjects.
-    SubjectRefresh,
-}
-
-/// Helpers the shot steps share and the shot context they keep.
-pub trait CaptureShared {
-    /// The selected slot, 1-based: `requested` when 1 <= requested <= count <= 3, else 1.
-    fn active_slot(&mut self, selection: SlotSelection) -> u8;
-    fn set_return_active(&mut self, active: bool);
-    /// Copies the saved calculation into the lens return's result.
-    fn restore_return_calculation(&mut self);
-    /// Makes the lens return's result the working calculation.
-    fn install_return_calculation(&mut self);
-    fn absorb_calculation(&mut self);
-    fn load_return_records(&mut self);
-    /// Reads and clears the request a half press left for the capture's lens return.
-    fn take_return_request(&mut self) -> bool;
-    /// The half press left work for the capture.
-    fn has_work(&mut self) -> bool;
-    fn secondary_enabled(&mut self) -> bool;
-    fn set_secondary_enabled(&mut self, enabled: bool);
-    /// Clears the secondary job's shared state.
-    fn reset_secondary(&mut self);
-    fn calculation_word(&mut self, word: CalculationWord) -> u32;
-    /// Areas whose selection moved since the half press.
-    fn moved_areas(&mut self) -> u8;
-    fn classify_subjects(&mut self, reference: &AreaReference, kind: u32, source: u32, area: u32);
-    /// Updates the capture's selection from the calculation.
-    fn update_capture_selection(&mut self, record: RecordHandle);
-    /// The selection map stands in the frame's dump.
-    fn dump_armed(&mut self) -> bool;
-    fn set_dump_armed(&mut self, armed: bool);
-    /// The subjects the primary (`true`) or the secondary source left for the capture.
-    fn subject_source(&mut self, primary: bool) -> SubjectList;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

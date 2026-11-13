@@ -7,8 +7,8 @@
 
 use crate::calculations_work::{CaptureCommand, CaptureProcessing, Processing, ProcessingSelection};
 use crate::capture_boundary::{
-    CaptureAdjustment, CaptureClient, CaptureDiagnostics, CaptureParameters, CapturePeers, CapturePlatform, CaptureRecords, CaptureShared,
-    CaptureTrace, LensGeometry, LensMoves, MoveProfile, RecordField, RemapRequest, SettingResult, SlotField, SlotSelection,
+    CaptureAdjustment, CaptureClient, CaptureDiagnostics, CaptureParameters, CapturePeers, CapturePlatform, CaptureRecords, CaptureTrace,
+    LensGeometry, LensMoves, MoveProfile, RecordField, RemapRequest, SettingResult, SlotField, SlotSelection,
 };
 use crate::boundary::{Lens, LensReading};
 use crate::capture_control::CaptureControl;
@@ -19,7 +19,7 @@ use crate::primary_boundary::{
     CaptureProfiles, CaptureReplies, CaptureStatus, DeliveredList, DisplayArea, FactorRequest, GeometryWords, ProfileCalibration,
 };
 use crate::secondary_boundary::{CropGeometry, CropRequest, MeasurementCalc, MeasurementProfiles};
-use crate::secondary_job::SecondaryJob;
+use crate::secondary_job::SecondaryResult;
 use xm1_saclac_interface::capture_job::{
     AreaDelivery, CaptureEnd, CaptureOutput, CaptureRequest, CaptureStart, CaptureStatistics, CaptureWindow, DisplayRequest, SecondaryValues,
     StatisticsFrame, StatisticsProfile, TransferPoint,
@@ -35,7 +35,6 @@ pub trait PrimaryBoundary:
     + CapturePlatform
     + CaptureDiagnostics
     + CapturePeers
-    + CaptureShared
     + Lens
     + LensGeometry
     + LensMoves
@@ -58,7 +57,6 @@ impl<T> PrimaryBoundary for T where
         + CapturePlatform
         + CaptureDiagnostics
         + CapturePeers
-        + CaptureShared
         + Lens
         + LensGeometry
         + LensMoves
@@ -80,7 +78,7 @@ impl<T> PrimaryBoundary for T where
 #[derive(Clone, Copy)]
 pub struct CaptureSteps<'a> {
     pub control: &'a CaptureControl,
-    pub secondary: &'a SecondaryJob,
+    pub secondary: &'a SecondaryResult,
 }
 
 /// Subject source whose relative move goes between the record's slot positions.
@@ -280,7 +278,7 @@ impl PrimaryJob {
     /// with a lens reference, else the lens's own with the record's first slot.
     fn prepare_transfer(&mut self, parameters: &CaptureParameters, boundary: &mut impl PrimaryBoundary) {
         let selection = boundary.selection(parameters.selection);
-        let active = boundary.active_slot(SlotSelection { requested: selection.requested.wrapping_add(1), count: selection.count });
+        let active = SlotSelection { requested: selection.requested.wrapping_add(1), count: selection.count }.active();
         if active > 1 {
             let slot = boundary.slot(parameters.slots, active - 1);
             if slot.0 != 0 {

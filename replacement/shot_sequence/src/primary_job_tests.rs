@@ -7,7 +7,6 @@ use crate::ports::{CalculationsJob, LensMove, PrimaryEffect, PrimaryQuery};
 use crate::primary_boundary::*;
 use crate::primary_job::{CaptureSteps, PrimaryJob};
 use crate::secondary_boundary::{CropGeometry, CropRequest, GeometryRequest, MeasurementCalc, MeasurementProfiles, ProfileGeometry, ScalePair};
-use crate::secondary_job::SecondaryJob;
 use crate::subjects::SubjectList;
 use crate::tests::record;
 use std::collections::BTreeMap;
@@ -197,29 +196,6 @@ impl CapturePeers for World {
     fn statistics_setting(&mut self, setting: &StatisticsSetting, completion: Completion) { self.calls.push(Call::Statistics(*setting, completion)); }
 }
 
-impl CaptureShared for World {
-    fn active_slot(&mut self, selection: SlotSelection) -> u8 {
-        if (1..=selection.count).contains(&selection.requested) && selection.count <= 3 { selection.requested } else { 1 }
-    }
-    fn set_return_active(&mut self, _active: bool) {}
-    fn restore_return_calculation(&mut self) {}
-    fn install_return_calculation(&mut self) {}
-    fn absorb_calculation(&mut self) {}
-    fn load_return_records(&mut self) {}
-    fn take_return_request(&mut self) -> bool { false }
-    fn has_work(&mut self) -> bool { false }
-    fn secondary_enabled(&mut self) -> bool { false }
-    fn set_secondary_enabled(&mut self, _enabled: bool) {}
-    fn reset_secondary(&mut self) {}
-    fn calculation_word(&mut self, _word: CalculationWord) -> u32 { 0 }
-    fn moved_areas(&mut self) -> u8 { 0 }
-    fn classify_subjects(&mut self, _reference: &AreaReference, _kind: u32, _source: u32, _area: u32) {}
-    fn update_capture_selection(&mut self, _record: RecordHandle) {}
-    fn dump_armed(&mut self) -> bool { false }
-    fn set_dump_armed(&mut self, _armed: bool) {}
-    fn subject_source(&mut self, _primary: bool) -> SubjectList { SubjectList::default() }
-}
-
 impl Lens for World {
     fn read(&mut self, reading: LensReading) -> u32 { self.lens.get(&(reading as u8)).copied().unwrap_or(0) }
     fn take_change(&mut self) -> u32 { 0 }
@@ -406,10 +382,10 @@ fn parameters(options: u32) -> CaptureParameters {
     }
 }
 
-struct Steps { control: CaptureControl, secondary: SecondaryJob }
+struct Steps { control: CaptureControl, secondary: crate::secondary_job::SecondaryResult }
 
 impl Steps {
-    fn new() -> Self { Self { control: CaptureControl::new(), secondary: SecondaryJob::new() } }
+    fn new() -> Self { Self { control: CaptureControl::new(), secondary: crate::secondary_job::SecondaryResult::new() } }
     fn view(&self) -> CaptureSteps<'_> { CaptureSteps { control: &self.control, secondary: &self.secondary } }
 }
 

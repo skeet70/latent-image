@@ -90,10 +90,10 @@ impl World {
     fn finalize(&mut self, mode: u32) {
         let mut control = CaptureControl::new();
         control.bind(record());
-        control.finalize(&parameters(mode), &PrimaryJob::new(), self);
+        control.finalize(&parameters(mode), &PrimaryJob::new(), &mut Shot, self);
     }
 
-    fn write(&mut self, output: u32) { capture_dump::write(record(), &parameters(0), output, self); }
+    fn write(&mut self, output: u32) { capture_dump::write(record(), &parameters(0), output, &mut Shot, self); }
 }
 
 fn workspace_value(workspace: Workspace, offset: u32) -> u32 { ((workspace as u32 + 1) << 24) | offset }
@@ -113,6 +113,12 @@ impl DumpShared for World {
         self.window_requests.push((mode, layout));
         self.window
     }
+}
+
+/// Shot words carry their name's index.
+struct Shot;
+
+impl crate::capture_dump::DumpShot for Shot {
     fn shot_word(&mut self, word: ShotWord) -> u32 { 0x5000 + word as u32 }
 }
 
@@ -230,7 +236,7 @@ fn a_finished_capture_dumps_only_when_the_diagnostics_ask_and_the_capture_is_not
     assert!(world.events.is_empty());
 
     let mut world = World::new();
-    CaptureControl::new().finalize(&parameters(0), &PrimaryJob::new(), &mut world);
+    CaptureControl::new().finalize(&parameters(0), &PrimaryJob::new(), &mut Shot, &mut world);
     assert!(world.events.is_empty(), "nothing is dumped before a record is bound");
 
     let mut world = World::new();
