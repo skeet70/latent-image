@@ -33,6 +33,9 @@ import qualified ArmElf as ELF
 import EngineStack (StackReport (..), checkEngineStack, taskOneBudget)
 import qualified RenderStack as Render
 import BankAllowlistComposition (bankAllowlistSourcePaths, composeBankAllowlist)
+import qualified RustSourceBoundaryCheck as SourceBoundary
+import qualified BankSourceBoundaryCheck as SourceBoundary
+import BankAllowlist (parseAllowlist, stockCalls, stockCallAddress)
 
 -- | The four label texts the submenu pages carry, in the order the actions
 -- contract lists them.
@@ -1443,6 +1446,10 @@ emitRamPush extension variant base plan specPath linkedDir rc0Id4Path rc0Id5Path
   allowlistSources <- forM (bankAllowlistSourcePaths variant) $ \path -> (path,) <$> B.readFile path
   composedAllowlist <- either H.failH pure (composeBankAllowlist variant allowlistSources)
   composedAllowlistHash <- H.sha256 composedAllowlist
+  sourceAllowlist <- either H.failH pure (parseAllowlist composedAllowlist)
+  SourceBoundary.regressions
+  mapM_ SourceBoundary.checkDeclaration SourceBoundary.boundaryDeclarations
+  SourceBoundary.checkBankSources (map (SourceBoundary.StockEntry . stockCallAddress) (stockCalls sourceAllowlist))
   B.writeFile (out ++ "/bank-allowlist-input.json") composedAllowlist
   setFileMode (out ++ "/bank-allowlist-input.json") 0o600
   let renderSourcePaths =
@@ -1505,7 +1512,7 @@ emitRamPush extension variant base plan specPath linkedDir rc0Id4Path rc0Id5Path
         , "host/firmware/classic-chrome-liveview-image5.json"
         , "host/firmware/classic-chrome-frames-image5.json"
         , parameterPath
-        ] ++ map fst ccInputsRead ++ bankAllowlistSourcePaths variant
+        ] ++ SourceBoundary.boundaryDeclarations ++ [SourceBoundary.boundarySources] ++ map fst ccInputsRead ++ bankAllowlistSourcePaths variant
           ++ [path | hasPublicationGroup Modal75Publication variant, path <-
             [ "replacement/modal_runtime/src/lib.rs"
             , "replacement/modal_runtime/src/dispatch.S"
@@ -1547,6 +1554,8 @@ emitRamPush extension variant base plan specPath linkedDir rc0Id4Path rc0Id5Path
   individualSourceIdentity <- forM (nub sourcePaths) $ \path -> do
     digest <- H.sha256 =<< B.readFile path
     pure (path, H.s digest)
+  B.writeFile (out ++ "/source-boundary-check.json") (encodeCanonical (H.obj
+    [("result", H.s "pass"), ("source_identity", H.obj individualSourceIdentity)]))
   let bundleSources = hasPublicationGroup RenderPublication variant || hasPublicationGroup MenuValuePublication variant
       (bundledPaths, bundleName, bundleKey) = if hasPublicationGroup RenderPublication variant
         then (renderSourcePaths, "render", "render_sources_sha256")
@@ -1586,8 +1595,8 @@ emitRamPush extension variant base plan specPath linkedDir rc0Id4Path rc0Id5Path
         , ("ram-push-toolchain", H.s ramPushToolchainDigest)
         ]
   when (bundleSources
-    && length sourceIdentity + length rc0Identity + length rustIdentity + length toolIdentity + 1 > 68) $
-    H.failH "ram-push: source_identity exceeds 68 entries"
+    && length sourceIdentity + length rc0Identity + length rustIdentity + length toolIdentity + 1 > 128) $
+    H.failH "ram-push: source_identity exceeds 128 entries"
   installEntry <- linked symbols "ram_push_install"
   rollbackEntry <- linked symbols "ram_push_rollback"
   statusEntry <- linked symbols "ram_push_status"

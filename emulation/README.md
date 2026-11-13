@@ -10,7 +10,7 @@ The retained engine still owns acceptance gates and unqualified browser, flash-c
 
 Reusable FujiMod state lives under `private-data/emulator-checkpoints/`. Its guest-state key is the SHA-256 of the canonical JSON value from [`BootIdentity::document`](fujimod-xm1/src/checkpoint.rs), with schema, model, exact run-document bytes, installed DAT, boot ROM, NAND source and contents, card identity and producer procedure. Post-boot producers additionally call `with_emulator_binary` with their actual executable bytes. Procedure identity includes the phase and every producer input not already covered by the guest-state identity. Installed-state producers also bind their owned archives, relocation result, observation policy and installation procedure.
 
-The shared post-boot API uses `post-boot-KEY/session.fujimod` and `post-boot-KEY/post-boot.json`. The record binds the identity, snapshot SHA-256 and saved guest instruction count. A per-key process lock serializes creation; publication is an atomic directory rename. A hit verifies both identity and snapshot digest before restoring. Runs record the returned key, snapshot digest, instruction boundary and hit/miss receipt. Observers attach after restoration; observations of startup itself remain from reset.
+The shared post-boot API uses `post-boot-KEY/session.fujimod` and `post-boot-KEY/post-boot.json`. The record binds the identity, snapshot SHA-256 and saved guest instruction count. A store-wide process lock serializes creation and eviction; publication syncs files and directories before an atomic directory rename. The [retention rule](checkpoint-runs.md) removes abandoned partial publications and seven-day-old entries superseded only by their executable digest. A hit verifies both identity and snapshot digest before restoring. Runs record the returned key, snapshot digest, instruction boundary and hit/miss receipt. Observers attach after restoration; observations of startup itself remain from reset.
 
 The [full-system starting-state inventory](checkpoint-runs.md) classifies the Bazel run targets and command scripts. Saclac's cold-boot scenario observes startup; its other scenarios share the saved post-setup live-view boundary. Cached route reports omit startup traffic and state their observation boundary explicitly.
 
@@ -769,6 +769,23 @@ The report marks a comparison diagnostic with `diagnostic_differences` on its ca
 A cutover comparison may declare a milestone instead of claiming full equality. The report carries `"milestone": {"name": NAME, "observation": INDEX}` and the ordered `stock_observations` and `owned_observations` arrays; `INDEX` is the zero-based position of the observation that marks the milestone. Both sides must have an observation at that index, the observations through it must be equal, and after it the stock tail must be a prefix of the owned tail. That relation is `equal-up-to-milestone`, reported apart from `equal` and never exiting zero. A side that ends before the milestone, a difference through the milestone, or a stock tail that is not a prefix of the owned tail is `different`, and the verdict names the first differing observation with both sides' values. A report that declares no milestone cannot receive this verdict; a milestone without a name or an observation index is refused.
 
 `//emulation:judge-tests` covers the rule on synthetic reports: a complete report is `equal`, and a report missing a case's stock evidence, missing a case for a bound entry, carrying no detected wrong variant, naming no firmware or naming another firmware gets the matching non-pass verdict with its reason. A diagnostic difference leaves the verdict unchanged. A declared milestone reaches `equal-up-to-milestone`; a side that misses it, a difference before it and a stock tail that is not a prefix each give `different` with the first differing observation, and a report without a milestone keeps the old verdicts.
+
+### Ordered interface streams
+
+Subsystem cutovers use `--mode interface-stream`. This mode reads fetch receipts and ordered boundary events, not per-export cases or suite-audit bindings.
+
+```sh
+devenv shell -- run-output exec --label interface-judge -- \
+  systemd-run --user --scope -p MemoryMax=1G -p MemorySwapMax=0 \
+  bazel-bin/emulation/judge --mode interface-stream \
+  --report STREAM_REPORT.json --image STOCK_FIRMWARE.bin --out VERDICT.json
+```
+
+A schema-1 report sets `mode` to `interface-stream` and names `subsystem`, `scenario`, `retired_extents`, `owned_extents`, `stock`, `owned` and `controls`. Extents are numeric half-open guest ranges with `start` and `end`. Each run carries its `image_sha256`, a `complete` flag, `fetch_receipts` and ordered `events`. A fetch receipt names `start`, `end` and `fetches`; every receipt must fit a declared extent and at least one must have a positive count. A producer sets `complete` only when execution and observation completed without an error. Each control has a `name` and a `run` with the same shape. The supplied firmware digest must match the stock run's image digest.
+
+The judge compares event JSON values in order. With complete stock, owned and control execution receipts and at least one wrong variant whose stream differs from stock, identical streams are `equal`; a differing event or unequal length is `different`, with the first event and both sides retained. Missing execution evidence or no detected control gives `no-verdict`; missing firmware gives `not-run`. Undetected variants are listed as survivors. The optional `milestone` has the same `name` and zero-based `observation` fields and uses the unchanged prefix rule above. A producer inserts the same explicit milestone observation at each side's independently reached boundary.
+
+`//emulation:interface-judge-tests` covers all five verdicts, first-event differences, unequal lengths, unreached milestones, incomplete runs, zero and out-of-range fetch receipts, missing controls, surviving controls and firmware mismatch.
 
 ## Wrong variants
 
@@ -2865,6 +2882,8 @@ devenv shell -- host-build test //emulation:candidate-baseline-tests
 
 The routes below are reported but do not decide the run's result: FujiMod remains comparison-only pending the [runtime decision](../reports/emulator-runtime-decision.md), and the retained counterparts serve its comparisons. A FujiMod RAM-push route runs `xm1-viewer --ram-push-e2e --fujimod` with its retained trajectory file's `NAME.fujimod.json` variant when one exists, and passes when it exits 0 and `//emulation:e2e-observation-compare COUNTERPART ROUTE` reports no difference. The FujiMod toggle route passes on the comparison alone, since `usb-toggle-emu` exits 1 while any scenario blocks. The comparison output is `differences/NAME.compare.txt`. FujiMod refuses `--fixed-scene-frame`. The comparison leaves out capture PNG digests, and the FujiMod volatile, card-backed Classic Chrome and E8 routes matched the pinned gating routes. The cardless counterparts run unpinned; the icon route's converter entries and develop passes compare apart under [the site-entry rule](#trajectory-variants-on-fujimod).
 
+Both toggle counterpart commands pass `--fresh-boot`, replacing each route's checkpoint once per key. Their compared receipts include first-start boot traffic; pre-existing cache contents must not select different observation scopes between engines.
+
 Counterpart routes that require exit 0 reject missing or null producer execution evidence, even when receipts compare equal. `--from-run` reads evidence from `report.json`; `--receipt NAME=DIR` supplies only receipts and never borrows an earlier exit code. Child invocations resolve tools from inherited `RUNFILES_DIR`, falling back to the verifier's adjacent `.runfiles` directory.
 
 The checked-in regression generates nine synthetic E2E and USB-toggle cases through the public verifier CLI and real comparator. It is the public reproduction; the retained before/after fixture is private and is not released.
@@ -2939,7 +2958,7 @@ On 2026-11-05 the `ram-push-volatile`, `ram-push-cc`, `ram-push-cc-icon` and `us
 
 ## Live-RAM calibration
 
-`//emulation:ram-calibration` captures paused low RAM from either existing cardless ff80 bridge and compares it with the owner's Run-3 capture. `capture retained|fujimod DAT NAND PRIVATE_OUTPUT` cold-boots clean firmware with no card, enumerates ff80 and saves `[0,0x05aa0000)` before any RAM allocation or payload. It holds an emulator slot and performs no physical camera or USB I/O.
+`//emulation:ram-calibration` captures paused low RAM from either existing cardless ff80 bridge and compares it with the owner's Run-3 capture. `capture retained|fujimod DAT NAND PRIVATE_OUTPUT` restores the keyed cardless attach checkpoint, or cold-boots clean firmware with no card and saves one, enumerates ff80 and saves `[0,0x05aa0000)` before any RAM allocation or payload. It holds an emulator slot and performs no physical camera or USB I/O.
 
 `compare BODY RETAINED_RAM FUJIMOD_RAM OUTPUT_JSON` reports disjoint region counts, zero/`0xff` populations, differing words, decoded task-stack extents and the narrow Run-3 classification rules. Input dumps must be exactly `0x05aa0000` bytes. `words BODY MODEL BEGIN_HEX END_HEX` emits the differing aligned words in a physical window. `references RAM OUTPUT_JSON` scans the recorder rev-2 span's incoming numerical pointer, A32 B/BL and bounded MOVW/MOVT candidates and records the old hook words; it does not prove arbitrary computed reachability.
 

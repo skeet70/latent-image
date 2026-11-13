@@ -1,3 +1,5 @@
+load("//build-support:rust_source_boundary.bzl", "rust_source_boundary_test")
+
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test", "haskell_toolchain_library")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
@@ -102,7 +104,7 @@ xm1_rust_rlib(
 xm1_rust_elf(
     name = "develop-candidate",
     rust_staticlib = ":develop-rust",
-    rust_components = [":property-service-component", _PROPERTY_CORE],
+    rust_components = [":property-service-component", _PROPERTY_CORE, "//replacement/kernel:arm"],
     asm_srcs = glob(["*_stock.S", "src/**/*_stock.S"], exclude = ["RedEyeBackend_stock.S", "src/pipeline/DebugStorage_stock.S"]) + [
         "//replacement/save:save_stock.S",
         "//replacement/media_permit:rb_media_permit_stock.S",
@@ -198,4 +200,10 @@ xm1_rust_elf(
     link_script = "model/caller_observer.ld",
     entry = "xm1_develop_proof_caller_callback",
     extra_ldflags = ["-Wl,--gc-sections"],
+)
+
+rust_source_boundary_test(
+    name = "font-source-boundary-check",
+    declaration = "unsafe-font-boundary.json",
+    srcs = ["src/font_core.rs"] + glob(["src/font_core/**/*.rs"]),
 )

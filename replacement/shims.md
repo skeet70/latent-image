@@ -150,6 +150,7 @@ The development pipeline, including `font_core` and `calibration_core`. It is th
 | `xm1_save_facade` extern | C-ABI bridge between two owned units | save | yes | develop links the save facade directly and both sides compare with stock in one image | required |
 | `rb_capture_*` externs in `src/pipeline` and `develop/src` | C-ABI bridge between two owned units | capture | yes | develop links the capture crate directly and both sides compare with stock in one image | required |
 | Shared callback registry and kernel-slot reader in `callback_core`, re-exported by `src/pipeline/callbacks.rs` | callback registry for guest words | stock callback words and the kernel interface block | no | every caller uses typed callbacks and the kernel interface is owned | required |
+| `xm1_kernel_console9`, `xm1_kernel_critical_enter` and `xm1_kernel_critical_exit` in `develop.ld` | trampoline into retained stock | loader-A console writer 0x41a34 and cross-core critical pair 0x7235d8/0x7236b0 through the linked property service's kernel backend | no | develop's property service uses owned console and cross-core services | required |
 | 1,610 retained `extern "C"` declarations in `src/` (image conversion, blend, finish, chroma, sensor calibration, configuration, diagnostics, tracing) | trampoline into retained stock | stock develop services and device adapters | no | the develop service, sensor/calibration and device paths are owned | required |
 | 43 `*_stock.S` files (`Buffers_stock.S`, `FontOutlineVm_stock.S`, `RedEye_stock.S`, `WarpEngine_stock.S`, and the rest) | retained stock seam in assembly | stock develop bodies kept for comparison and for callers not yet owned | no | the corresponding owned body is qualified and every caller is migrated | required |
 | `font_core` asset and glyph layout (`src/font_core`, `FontFdl_stock.S`, `FontBuiltin_stock.S`, `FontScripts_stock.S`) | guest-memory layout view | retained stock font resources and text consumers | no | owned assets and every text consumer are owned | required |
@@ -228,10 +229,8 @@ The kernel crate: typed handles over the image's interface slots, with the per-c
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
-| `SlotTable` in `src/slot_table.rs` and `src/slot_table/messages.rs` | kernel interface slot | the kernel bodies behind the root blocks at 0x96bd20 and 0x96bd24, the loader-A console writer 0x41a34, the error-callback word at 0x4089ea8c, the post hook at 0x4089ea94, task/queue classes and message-pool capacity words | partly | every image whose `.symbols` lists an `xm1_kernel` item also lists the kernel family entry for each slot offset in `SlotTable`'s table | required |
+| `SlotTable` in `src/slot_table.rs` | kernel interface slot | the kernel bodies behind the root blocks at 0x96bd20 and 0x96bd24, the loader-A console writer 0x41a34 and the error-callback word at 0x4089ea8c | partly | every image whose `.symbols` lists an `xm1_kernel` item also lists the kernel family entry for each slot offset in `SlotTable`'s table | required |
 | `CoreLock` in `src/slot_table.rs` | trampoline into retained stock | the stock cross-core critical section at 0x7235d8 and its release 0x7236b0 | partly | no stock caller of 0x7235d8 remains | required |
-| Object construction and deletion in `src/slot_table/messages.rs` | trampoline into retained stock | queue constructor 0x724cdc and deleter 0x724f08, binary-semaphore allocator 0x7247ac and deleter 0x724974, semaphore poll 0x724ad8 | no | the kernel crate owns queue backing allocation and resource lifetime, and semaphore allocation/deletion/poll, in every linked image | required |
-| Dispatch bracket in `src/slot_table/messages.rs` | trampoline into retained stock | dispatch disable 0x723efc and enable 0x723f7c | no | the kernel crate owns the dispatch wrappers and their error reporting in every linked image | required |
 
 ## kernel_install
 
@@ -368,6 +367,7 @@ The Power Services leaf crate and the power application crate. The leaf exports 
 | 14 `.S` residue files in `src/` (`native.S`, `record_task43_*`, `capture_profile_*`, `mode_*`, `serial_write_residue.S`, and the rest) | retained stock seam in assembly | stock bodies and register/stack frames the owned code must reproduce | no | the residue is no longer needed for stock callers or ABI parity | required |
 | ~1,200 retained `extern "C"` declarations in `src/` (record bodies, audio, capture profile, serial, timers) | trampoline into retained stock | stock record, audio, capture and device services | no | those services are owned | required |
 | `record-helpers.ld` placement of the helper exports | veneer or carrier at a stock address | stock callers of the record helpers | no | owned callers link directly | required |
+| `xm1_kernel_console9`, `xm1_kernel_critical_enter` and `xm1_kernel_critical_exit` in `native/record-helpers.ld` | trampoline into retained stock | loader-A console writer 0x41a34 and cross-core critical pair 0x7235d8/0x7236b0 through the linked settings core's kernel backend | no | the settings core uses owned console and cross-core services | required |
 | `KernelSlot`-based root service calls in `callback_core` (re-exported by `src/callback_registry.rs`) and the audio modules | kernel interface slot | the stock kernel roots at `0x4004dae0`/`0x400ddaa0` | no | the RTOS platform owns the root services | required |
 | callback registries for guest words in `callback_core` (re-exported by `src/callback_registry.rs`) and the audio modules | callback registry for guest words | stock callers that pass function pointers and context words | no | callers use typed callbacks | required |
 
@@ -579,7 +579,7 @@ The owned timer heap.
 
 ## saclac
 
-The task-43 driver and engine use stock's 37 machine tables. Every machine action remains a stock action word. The three boundary entries are the dispatcher, machine-0 router and task loop.
+The task 43 engine: the owned dispatcher and machine 0's router over stock's 37 machine tables, entered at the two stock extents they retire. No machine is owned yet, so every action is a stock action word.
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
@@ -587,15 +587,6 @@ The task-43 driver and engine use stock's 37 machine tables. Every machine actio
 | `StockTables`, `StockPorts` and the guest addresses in `src/stock.rs`, with the four per-machine count arrays `SACLAC_CELL_COUNTS`, `SACLAC_ACTION_COUNTS`, `SACLAC_SECOND_COUNTS` and `SACLAC_ROW_COUNTS` and machine 0's row map `SACLAC_ROW_MAP` exported for the layout check | guest-memory layout view | the cell, action and second tables at `0xf12f70`, `0xf133ec` and `0xf12074`, the state counts at `0xf1158c`, and the two halfword arrays | no | every machine owned | required |
 | the trace entry `0xf46c38` called through the literal word at `0xefcce4`, declared in `Replacement.Saclac.Artifact.retainedExternals` | trampoline into retained stock | the stock trace body at `0xf46c38` | no | the trace recorder is owned | required |
 | stock action words and second-table words entered through `StockCodeWord` with r2 = the machine's table base word and r3 = the entered word, the values stock's dispatcher holds at `0xefcb20` and `0xefcb58` | trampoline into retained stock | the 813 distinct action words the cells reference, all image-5 code addresses, of which 701 are declared function starts and 112 are entries the decomp does not declare; no cell selects a second-table word; no entry reads r2, and 224 save r3 in a store-multiple prologue, the only r3 read the walk finds | no | every machine owned | required |
-| `xm1_saclac_driver_entry` at `0xf01bc8` | stock-ABI export | retained task constructor | no | the task constructor calls owned Rust directly | required |
-| `DriverPorts` receive scratch at `0x169d374` with payload at `0x169d380`, command blocks and command-present flags | guest-memory layout view | stock machine actions and queue-43 producers | no | every machine and all queue-43 producers are owned | required |
-| fault reaction `0xf46c20` | trampoline into retained stock | retained SACLAC fault reporting | no | subsystem fault reporting is owned | required |
-
-## saclac_interface
-
-| Shim | Kind | Other side | Owned now | Removal condition | State |
-| --- | --- | --- | --- | --- | --- |
-| Command, parameter-block and callback descriptors in `src/stock.rs` | guest-memory layout view | retained queue-43 command producers, their 46 shared parameter blocks and 106 completion callbacks | no | queue-43 producers and completion callbacks are owned and no retained consumer reads the parameter blocks | required |
 
 ## save
 

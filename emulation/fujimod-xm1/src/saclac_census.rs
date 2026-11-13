@@ -17,9 +17,8 @@ use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-mod saclac_interface;
 
-const USAGE: &str = "saclac-census --run RUN --update STOCK_DAT --boot-rom ROM --sites SITES --scenario cold-boot|menu-route|half-press|shoot-without-lens|capture|playback|mode-dial [--steps STEPS] [--checkpoints ROOT] --output NEW_DIR";
+const USAGE: &str = "saclac-census --run RUN --update STOCK_DAT --boot-rom ROM --sites SITES --scenario cold-boot|menu-route|half-press|shoot-without-lens|capture|playback|mode-dial [--steps STEPS] [--checkpoints ROOT] [--start reset|post-boot] --output NEW_DIR";
 const SITE_LABEL: &str = "saclac-site";
 const SITE_LIMIT: usize = 4096;
 const CONTEXT_LIMIT: usize = 1024;
@@ -118,8 +117,6 @@ struct Sites {
     dispatch: Option<DispatchSites>,
     #[serde(default)]
     watch: Vec<WatchDecl>,
-    #[serde(default)]
-    interface: Option<saclac_interface::Declaration>,
 }
 
 struct Site {
@@ -158,7 +155,6 @@ struct Plan {
     ranges: Vec<Range>,
     dispatch: Option<Dispatch>,
     watch: Vec<Watch>,
-    interface: Option<saclac_interface::Plan>,
 }
 
 fn load_sites(bytes: &[u8]) -> Result<Plan, String> {
@@ -235,8 +231,7 @@ fn load_sites(bytes: &[u8]) -> Result<Plan, String> {
         watch.push(Watch { label: declared.label.clone(), start, end });
     }
     watch.sort_by_key(|range| range.start);
-    let interface = sites.interface.map(saclac_interface::Declaration::validate).transpose()?;
-    Ok(Plan { task_id: sites.task_id, state_base, points, ranges, dispatch, watch, interface })
+    Ok(Plan { task_id: sites.task_id, state_base, points, ranges, dispatch, watch })
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -577,7 +572,6 @@ struct Report<'a> {
     action_ranges: Vec<RangeRow>,
     dispatch: Option<DispatchTrace>,
     watch: Vec<WatchRow>,
-    interface: &'a saclac_interface::Stream,
     error: Option<String>,
     machine_failure: Option<String>,
 }
@@ -651,7 +645,6 @@ struct Census<'a> {
     menu_trace: Vec<MenuSample>,
     presses: Vec<PressRow>,
     mode_dial: Option<DialRow>,
-    interface: saclac_interface::Stream,
 }
 
 impl<'a> Census<'a> {
@@ -668,31 +661,18 @@ impl<'a> Census<'a> {
             start: u64::from(range.start),
             end: u64::from(range.end),
             kinds: WatchKinds::CPU_FETCH,
-        })).chain(self.plan.interface.iter().flat_map(|plan| plan.classes())).collect()
+        })).collect()
     }
 
     fn restart_watch(&mut self, machine: &Machine) -> Result<(), String> {
-        self.record_stores()?;
         let watch = self.watch.take().ok_or("action fetch watch is not active")?;
         watch.end(machine, &self.plan.ranges, &self.plan.watch, &mut self.ranges, &mut self.watch_ranges)?;
-        self.interface.restart();
         self.watch = Some(FetchWatch::begin(machine, &self.maps, self.classes())?);
         Ok(())
     }
 
-    fn record_stores(&mut self) -> Result<(), String> {
-        if let (Some(plan), Some(watch)) = (&self.plan.interface, &self.watch) {
-            self.interface.stores(plan, &watch.watch.records.borrow().state())?;
-        }
-        Ok(())
-    }
-
     fn stop(&mut self, machine: &Machine, stops: &[Stop]) -> Result<(), String> {
-        self.record_stores()?;
         for stop in stops {
-            if let Some(plan) = &self.plan.interface {
-                self.interface.entry(machine, plan, stop)?;
-            }
             if let Some(dispatch) = &self.plan.dispatch {
                 if stop.address == dispatch.trace {
                     if self.dispatch.len() >= DISPATCH_LIMIT {
@@ -1066,7 +1046,7 @@ fn arguments() -> Result<BTreeMap<String, PathBuf>, String> {
     while let Some(flag) = arguments.next() {
         let name = flag.to_str().ok_or(USAGE)?.to_owned();
         let value = arguments.next().ok_or(USAGE)?;
-        require(REQUIRED.contains(&name.as_str()) || name == "--steps" || name == "--checkpoints", USAGE)?;
+        require(REQUIRED.contains(&name.as_str()) || name == "--steps" || name == "--checkpoints" || name == "--start", USAGE)?;
         require(paths.insert(name, PathBuf::from(value)).is_none(), USAGE)?;
     }
     for name in REQUIRED {
@@ -1095,10 +1075,22 @@ fn parse_scenario(text: &str) -> Result<Scenario, String> {
     })
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ObservationStart { Reset, PostBoot }
+
 fn drive() -> Result<(), String> {
     let paths = arguments()?;
     let output = paths["--output"].clone();
     let scenario = parse_scenario(paths["--scenario"].to_str().ok_or("scenario is not text")?)?;
+    require(scenario != Scenario::ColdBoot || !paths.contains_key("--checkpoints"), "--checkpoints is not allowed for cold-boot")?;
+    let start = match paths.get("--start").and_then(|path| path.to_str()) {
+        None if scenario == Scenario::ColdBoot => ObservationStart::Reset,
+        None | Some("post-boot") => ObservationStart::PostBoot,
+        Some("reset") => ObservationStart::Reset,
+        Some(_) => return Err("--start must be reset or post-boot".into()),
+    };
+    require(scenario != Scenario::ColdBoot || start == ObservationStart::Reset, "cold-boot requires --start reset")?;
+    require(start != ObservationStart::Reset || !paths.contains_key("--checkpoints"), "--checkpoints is not allowed with --start reset")?;
     let (run_bytes, run_binding) = bound(&paths["--run"])?;
     let (dat, dat_binding) = bound(&paths["--update"])?;
     let (rom, rom_binding) = bound(&paths["--boot-rom"])?;
@@ -1146,14 +1138,15 @@ fn drive() -> Result<(), String> {
         menu_trace: Vec::new(),
         presses: Vec::new(),
         mode_dial: None,
-        interface: saclac_interface::Stream::default(),
     };
-    if scenario != Scenario::ColdBoot {
+    let setup = if start == ObservationStart::PostBoot {
         let root = paths.get("--checkpoints").map(PathBuf::as_path).unwrap_or_else(|| Path::new(SHARED_STORE));
-        checkpoint = Some(post_boot(&mut machine, &boot_identity, root, |machine| census.prepare_boot(machine))?);
-        census.milestones.clear();
-        census.menu_trace.clear();
-    }
+        post_boot(&mut machine, &boot_identity, root, |machine| census.prepare_boot(machine)).map(|receipt| {
+            checkpoint = Some(receipt);
+            census.milestones.clear();
+            census.menu_trace.clear();
+        })
+    } else { Ok(()) };
     let observation_start_instructions = machine.instructions();
     let reused_instructions = checkpoint.as_ref().filter(|receipt| receipt.lookup == fujimod_xm1::checkpoint::CacheLookup::Hit)
         .map_or(0, |receipt| receipt.record.instructions);
@@ -1173,24 +1166,21 @@ fn drive() -> Result<(), String> {
     if let Some(dispatch) = &plan.dispatch {
         sites.insert(dispatch.trace, SITE_LABEL.to_owned());
     }
-    if let Some(interface) = &plan.interface {
-        sites.extend(interface.sites().map(|address| (address, SITE_LABEL.to_owned())));
-    }
     let observed = (|| -> Result<(), String> {
+        setup?;
         machine.traces.arm(&machine.session, sites)?;
         census.watch = Some(FetchWatch::begin(&machine, &census.maps, census.classes())?);
         census.scenario(&mut machine, scenario, phases)
     })();
-    let interface_end = census.record_stores();
     let ended = match census.watch.take() {
         Some(watch) => watch.end(&machine, &plan.ranges, &plan.watch, &mut census.ranges, &mut census.watch_ranges),
         None => Ok(()),
     };
-    let error = observed.err().or(interface_end.err()).or(ended.err());
+    let error = observed.err().or(ended.err());
     let inputs = [Some(run_binding), Some(dat_binding), Some(rom_binding), Some(sites_binding), trajectory_binding, Some(executable_binding)]
         .into_iter().flatten().collect();
     let report = Report {
-        schema: 2,
+        schema: 3,
         scenario,
         checkpoint,
         inputs,
@@ -1229,7 +1219,6 @@ fn drive() -> Result<(), String> {
             addresses: counted(&stats.addresses),
             address_overflow: stats.address_overflow,
         }).collect(),
-        interface: &census.interface,
         error: error.clone(),
         machine_failure: machine.failure.clone(),
     };

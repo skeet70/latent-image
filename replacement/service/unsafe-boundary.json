@@ -1,0 +1,13 @@
+{
+  "source_roots": [
+    "."
+  ],
+  "boundary_files": [
+    {
+      "path": "lib.rs",
+      "reason": "Retained field-row probe call and exported stock ABI."
+    }
+  ],
+  "boundary_items": [],
+  "known_exceptions": []
+}

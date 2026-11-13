@@ -162,7 +162,7 @@ contractValue path4 path5 (StagedImages (CanonicalSource dat source4 source5 sto
     textNames = functionNames symbols symbolBytes
     range image low high = object ["low" .= low,"high" .= high,"image" .= (if image == Image4 then 4 else 5::Int)]
     premises :: [String]
-    premises = ["Unknown interior entries into retired content are excluded; continuous runtime fetch guards check this premise through aliases and later installation."
+    premises = ["Unknown interior entries into retired content remain unclosed; guards reject owned fetches outside admitted code but do not bind every interior fetch to an active heap invocation."
       ,"No unknown metadata reader consumes beyond payload-4; stock boundary tag decodes to an extent within the allocation."
       ,"No retained reader or writer consumes retired bin state repurposed as owned code after the sentinel word."
       ,"The image4 producer initializes the sentinel before first allocation and never resets it with live allocations."

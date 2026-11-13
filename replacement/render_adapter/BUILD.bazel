@@ -1,3 +1,5 @@
+load("//build-support:rust_source_boundary.bzl", "rust_source_boundary_test")
+
 load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib")
 
 exports_files(["class.rs", "build.sh"])
@@ -61,4 +63,10 @@ filegroup(
     name = "module",
     srcs = ["mod.rs", "class.rs", "calls.rs", "picker.rs", "tree.rs", "pane.rs", "entry.S"],
     visibility = ["//visibility:public"],
+)
+
+rust_source_boundary_test(
+    name = "unsafe-boundary-check",
+    declaration = "unsafe-boundary.json",
+    srcs = glob(["*.rs"]),
 )

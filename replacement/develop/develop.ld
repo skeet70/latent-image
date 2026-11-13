@@ -5,6 +5,9 @@ xm1_stock_61d59c = 0x61d59c;
 xm1_stock_61d618 = 0x61d618;
 xm1_stock_61d5f0 = 0x61d5f0;
 xm1_stock_61d65c = 0x61d65c;
+xm1_kernel_console9 = 0x41a34;
+xm1_kernel_critical_enter = 0x7235d8;
+xm1_kernel_critical_exit = 0x7236b0;
 PHDRS { code PT_LOAD FLAGS(5); data PT_LOAD FLAGS(6); }
 SECTIONS
 {

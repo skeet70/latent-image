@@ -20,7 +20,7 @@ import qualified Emulation.ContextCatalogue as Catalogue
 import Emulation.ModalObservation
 import Emulation.ModalWatchStream (readFinalModalWatchFrom)
 import Emulation.WatchObservation
-import EmulatorUsb (BridgeExchange, ModalResponse (..), bridgeModalObservationBegin, bridgeModalObservationReport, bridgeModalObservationEnd, startEmulator, stopEmulator, emulatorWatchStateToFile, emulatorWatchStateRaw, emulatorWatchEnd)
+import EmulatorUsb (BridgeExchange, EmulatorStart (..), ModalResponse (..), bridgeModalObservationBegin, bridgeModalObservationReport, bridgeModalObservationEnd, startEmulator, stopEmulator, emulatorWatchStateToFile, emulatorWatchStateRaw, emulatorWatchEnd)
 import Emulation.Sha256 (sha256, sha256Hex)
 import Emulation.UiTrajectory (checkModalObserverConfiguration, decodeTrajectories)
 import Emulation.RenderStackDiagnostic
@@ -301,7 +301,7 @@ shutdownBridgeFixture status = do
           _ -> exitFailure
   send (object ["ok" .= True, "event" .= ("start-options" :: T.Text), "installed" .= ([] :: [Value])])
   command "start"
-  send (object ["ok" .= True, "event" .= ("ready" :: T.Text), "checkpoint" .= object ["start" .= ("cold" :: T.Text)]])
+  send (object ["ok" .= True, "event" .= ("ready" :: T.Text), "checkpoint" .= object ["start" .= ("cold" :: T.Text), "directory" .= ("." :: T.Text)]])
   command "finish"
   send (object ["ok" .= True])
   exitWith status
@@ -313,12 +313,21 @@ shutdownTests = do
     let argument = case status of
           ExitSuccess -> "--shutdown-fixture-success"
           ExitFailure _ -> "--shutdown-fixture-failure"
-    (emulator, _, ()) <- startEmulator executable "." [argument] (\_ -> pure (Nothing, ()))
-    first <- try (stopEmulator emulator) :: IO (Either IOException ())
-    second <- try (stopEmulator emulator) :: IO (Either IOException ())
-    case status of
-      ExitSuccess -> check "stopping an already stopped bridge succeeds" (not (isLeft first) && not (isLeft second))
-      ExitFailure _ -> check "stopping a failed bridge retains its failure" (isLeft first && isLeft second)
+    temporary <- getTemporaryDirectory
+    bracket (mkdtemp (temporary </> "checkpoint-receipt-")) removePathForcibly $ \directory -> do
+      let manifest = "{\"snapshot\":\"fixture-state\"}"
+      B.writeFile (directory </> "manifest.json") manifest
+      (emulator, started, ()) <- startEmulator executable directory [argument] (\_ -> pure (Nothing, ()))
+      check "start receipt binds the retained snapshot manifest bytes"
+        (get "snapshot_manifest_sha256" (startRecord started) == String (T.pack (sha256Hex (sha256 manifest))))
+      shutdown status emulator
+  where
+    shutdown status emulator = do
+      first <- try (stopEmulator emulator) :: IO (Either IOException ())
+      second <- try (stopEmulator emulator) :: IO (Either IOException ())
+      case status of
+        ExitSuccess -> check "stopping an already stopped bridge succeeds" (not (isLeft first) && not (isLeft second))
+        ExitFailure _ -> check "stopping a failed bridge retains its failure" (isLeft first && isLeft second)
 
 
 data WatchSpoolFixture = ChunkedWatch | TruncatedWatch | MalformedWatch | UnsolicitedWatch

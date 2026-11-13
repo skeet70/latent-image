@@ -1,6 +1,7 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
 load(":storage_controls.bzl", "BANK_STORAGE_CONTROLS", "PROPERTY_STORAGE_CONTROLS", "PROPERTY_STORAGE_VARIANTS", _CUSTOM_ORACLE_DEFECTS = "CUSTOM_ORACLE_DEFECTS", _CUSTOM_VARIANTS = "CUSTOM_STORAGE_VARIANTS")
+load("//build-support:rust_source_boundary.bzl", "rust_source_boundary_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -592,4 +593,10 @@ haskell_test(
         "//host:base",
         "//host:bytestring",
     ],
+)
+
+rust_source_boundary_test(
+    name = "unsafe-boundary-check",
+    declaration = "unsafe-boundary.json",
+    srcs = glob(["src/**/*.rs"]),
 )

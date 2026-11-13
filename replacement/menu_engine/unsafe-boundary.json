@@ -1,0 +1,24 @@
+{
+  "source_roots": [
+    "src",
+    "adapter",
+    "../bank/tables/menu-tree.rs",
+    "../bank/tables/menu-records.rs"
+  ],
+  "boundary_files": [
+    {
+      "path": "adapter/mod.rs",
+      "reason": "Retained engine block, stock service ABI and entry veneer."
+    },
+    {
+      "path": "../bank/tables/menu-tree.rs",
+      "reason": "Generated menu-tree section placement."
+    },
+    {
+      "path": "../bank/tables/menu-records.rs",
+      "reason": "Generated menu-record section placement."
+    }
+  ],
+  "boundary_items": [],
+  "known_exceptions": []
+}

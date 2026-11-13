@@ -82,6 +82,7 @@ instance FromJSON Watch where
 
 data Census = Census
   { censusScenario :: String
+  , censusObservationStart :: Integer
   , censusInstructions :: Integer
   , censusEntries :: Integer
   , censusDispatch :: [Event]
@@ -93,6 +94,7 @@ data Census = Census
 instance FromJSON Census where
   parseJSON = withObject "census" $ \value -> do
     scenario <- value .: "scenario"
+    observationStart <- value .:? "observation_start_instructions" .!= 0
     instructions <- value .: "instructions"
     entries <- withObject "dispatcher" (.: "entries") =<< value .: "dispatcher"
     dispatch <- (value .:? "dispatch" :: T.Parser (Maybe Value)) >>= \case
@@ -101,7 +103,7 @@ instance FromJSON Census where
     queue <- value .: "queue43"
     milestones <- value .: "milestones"
     watch <- fromMaybe [] <$> (value .:? "watch" :: T.Parser (Maybe [Watch]))
-    pure (Census scenario instructions entries dispatch queue milestones watch)
+    pure (Census scenario observationStart instructions entries dispatch queue milestones watch)
 
 data Contract = Contract { contractOwned :: [(Integer, Integer)] } deriving (Eq, Show)
 
@@ -271,6 +273,8 @@ run stockPath candidatePath contractPath outputPath phase = do
       contract <- either failH pure . eitherDecode =<< L.readFile contractPath
       unless (censusScenario stock == censusScenario candidate) $
         failH "the two census reports are for different scenarios"
+      unless (censusObservationStart stock == censusObservationStart candidate) $
+        failH "the two census reports have different observation_start_instructions"
       let fills = fillFetches contract (censusWatch candidate)
           sequenceDifferences = compareSequences (censusDispatch stock) (censusDispatch candidate)
           trailing = trailingMachines (censusDispatch stock) (censusDispatch candidate)

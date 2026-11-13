@@ -1,3 +1,5 @@
+load("//build-support:rust_source_boundary.bzl", "rust_source_boundary_test")
+
 load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib")
 
 filegroup(
@@ -25,4 +27,10 @@ xm1_rust_rlib(
         "//replacement/menu_engine:__pkg__",
         "//replacement/render_adapter:__pkg__",
     ],
+)
+
+rust_source_boundary_test(
+    name = "unsafe-boundary-check",
+    declaration = "unsafe-boundary.json",
+    srcs = glob(["src/**/*.rs"]),
 )

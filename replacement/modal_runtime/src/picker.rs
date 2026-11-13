@@ -148,9 +148,9 @@ const RIGHT_CLASSES: &[u32] = &[5, 0x184, 0x141, 0x167, 0x26, 0x19, 0xed, 0xee, 
 /// 0xf5 (85), 0xed (88, 102), 0xee (95), 0xfe (106).
 const BACK_CLASSES: &[u32] = &[5, 0x167, 0xf5, 0xed, 0xee, 0xfe];
 
-/// `check-bank-allowlist` bounds a jump-table index only after a range
-/// compare; `black_box` hides the discriminant range, so the compare and the
-/// `Decline` arm stay in the code.
+
+
+
 pub fn run(action: PickerAction, node: &PickerNode, services: &mut impl PickerServices) -> Outcome {
     const UP: u8 = PickerAction::Up as u8;
     const DOWN: u8 = PickerAction::Down as u8;

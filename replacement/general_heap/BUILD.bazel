@@ -31,7 +31,7 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":general-heap-artifact", "//emulation:image4-staging-lib", "//host:aeson", "//host:base",
-        "//host:bytestring", "//host:directory", "//host:host-support",
+        "//host:bytestring", "//host:directory", "//host:filepath", "//host:host-support",
     ],
 )
 
@@ -42,5 +42,16 @@ haskell_test(
     deps = [
         ":general-heap-artifact", "//host:base", "//host:bytestring", "//host:update-container",
         "//replacement/record5_staging:record5-staging",
+    ],
+)
+
+haskell_binary(
+    name = "heap-mutant",
+    srcs = ["MutateMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":general-heap-artifact", "//emulation:case-sha256", "//host:aeson", "//host:base",
+        "//host:bytestring", "//host:classic-chrome", "//host:classic-chrome-ram",
+        "//host:first-stage", "//host:update-container",
     ],
 )

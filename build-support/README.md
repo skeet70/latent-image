@@ -78,6 +78,12 @@ Disable OMP's clone-first worktrees with `worktree.clone = false`. Clone-first a
 devenv shell -- host-build test --jobs=2 --local_test_jobs=1 //emulation:native-sdk-tests //emulation:native-runner-tests
 ```
 
+### Rust source boundaries
+
+`rust_source_boundary_test` in `rust_source_boundary.bzl` checks a crate's Rust source without changing compiler inputs. Its `srcs` must include every Rust file under the manifest's `source_roots`; those roots are relative to the declaration and may be directories or individual files. The shared checker strips comments and literals, finds declared item extents, and refuses undeclared `unsafe`, assembly and linkage-attribute tokens before cfg selection.
+
+An `unsafe-boundary.json` declares `source_roots`, `boundary_files`, `boundary_items` and `known_exceptions`. Every boundary or exception row has a nonempty `reason`. File rows name `path`; item rows add `kind` (`fn`, `impl`, `struct` or `macro`) and `name`. Items must identify exactly one definition. Known internal exceptions name `path` and the exact `lines` multiset of remaining unsafe/linkage tokens, repeating a line when it contains multiple tokens. Missing source files, stale items and changed exception sites fail. A declared exception records existing unsafe core code; it is not a boundary classification or compiler-level unsafe prohibition.
+
 ### Scratch expiry
 
 Output under `private-data/scratch/` and `private-data/verify-candidate/` is disposable. The sweep uses one reference time (`--now` for tests, the current time otherwise) and one window of `N` days (`--max-age-days`), and applies these steps in order.
@@ -116,6 +122,20 @@ systemctl --user enable --now latent-image-scratch-expiry.timer
 ```
 
 Inspect `systemctl --user status latent-image-scratch-expiry.timer` for the next run and `journalctl --user -u latent-image-scratch-expiry.service` for the summary or failures. Disable future sweeps with `systemctl --user disable --now latent-image-scratch-expiry.timer`.
+
+### Generated evidence records
+
+`//build-support:evidence-record` writes selected records in `docs/evidence.jsonl` from `docs/evidence-recipes.json`, leaving other records' bytes unchanged. A recipe names its record, cited artifacts, named facts (`path`, a `pointer` array of object keys or zero-based array indices, and optional `operation: "length"`), claim/scope templates using `{{fact_name}}`, and a short `notes` field for interpretation and unmeasured limits. The required `firmware_sha256` fact supplies the record's firmware identity. Values are read from result JSON, never evaluated as commands. Run directories are inferred from cited paths; their `run.json` supplies commit, command, outcome, exit status, timestamps and elapsed seconds, and the newest close supplies `recorded_at`. An existing `result/verdict.json` is also included. Every cited artifact, inferred run metadata file and verdict receives a streaming SHA-256 digest. JSON inputs are limited to 16 MiB.
+
+A text-only test summary can use `operation: "decimal-between"` with exact nonempty `prefix` and `suffix` strings; the prefix must occur once and the intervening value must be a nonnegative integer. This reads placement-check counts from the test's result log rather than transcribing them.
+
+```sh
+devenv shell -- host-build build //build-support:evidence-record
+devenv shell -- run-output exec --label evidence-record -- systemd-run --user --scope -p MemoryMax=1G -p MemorySwapMax=0 bash -c 'uptime; exec bazel-bin/build-support/evidence-record write "$PWD" docs/evidence-recipes.json docs/evidence.jsonl replacement/README.md +RTS -M512M -RTS'
+devenv shell -- host-build test //tests:research-contracts //build-support:evidence-record-tests
+```
+
+The optional final README argument refreshes each recipe's unique `<!-- evidence-record ID -->` / `<!-- /evidence-record ID -->` marker pair with the generated claim and scope. `check` performs the same generation without writing and fails on ledger or README drift, missing files, missing selectors, orphaned generated records/README blocks or duplicate recipe/record/fact names. The schema's `commands` field is regenerated as shell-quoted `run-output exec --label LABEL -- COMMAND...` invocations from the cited runs' original argument arrays. `check-available`, used by research-contracts, reports an entirely missing private artifact set as unavailable; a partially present set must regenerate successfully. Absence is not reproduction. Use strict `check` when accepting a record, and keep selectors and result artifacts together when extending the worked examples. Synthetic tests exercise input and committed-record drift, closed-run provenance, partial absence and README text.
 
 ### Run output
 

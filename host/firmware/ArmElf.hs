@@ -8,6 +8,10 @@ module ArmElf
   , Symbol (..)
   , SymbolKind (..)
   , SymbolSection (..)
+  , AddressRelocation (..)
+  , AddressReferenceKind (..)
+  , addressRelocations
+  , directBranchTarget
   , parseElf
   , sectionWritable
   , sectionExecutable
@@ -20,9 +24,11 @@ module ArmElf
   ) where
 
 import Control.Monad (forM, unless, when)
-import Data.Bits (shiftL, testBit, (.&.), (.|.))
+import Data.Bits (shiftL, shiftR, testBit, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
+import Data.Int (Int32)
+import Data.List (sortOn)
 import Data.Word (Word16, Word32, Word8)
 
 data Elf = Elf
@@ -170,3 +176,82 @@ byteAt elf address =
        ] of
     [section] -> Just (B.index (elfBytes elf) (fromIntegral (sectionOffset section + address - sectionAddress section)))
     _ -> Nothing
+
+data AddressReferenceKind = DataReference | DirectReference deriving (Eq, Show)
+
+data AddressRelocation = AddressRelocation
+  { addressSite :: Word32
+  , addressTarget :: Word32
+  , addressKind :: AddressReferenceKind
+  } deriving (Eq, Show)
+
+-- | Resolved references retained by --emit-relocs, including relocated MOVW/MOVT pairs.
+addressRelocations :: Elf -> Either String [AddressRelocation]
+addressRelocations elf = concat <$> mapM readTable tables
+ where
+  bytes = elfBytes elf
+  tables = [(index, section) | (index, section) <- zip [0 :: Int ..] (elfSections elf), sectionType section `elem` [4, 9]]
+  fileWord :: Int -> Either String Word32
+  fileWord offset = do
+    unless (offset >= 0 && offset + 4 <= B.length bytes) (Left "ELF relocation field outside file")
+    pure (sum [fromIntegral (B.index bytes (offset + index)) `shiftL` (8 * index) | index <- [0 .. 3]])
+  indexed label values index =
+    if toInteger index < toInteger (length values) then pure (values !! fromIntegral index) else Left (label ++ " index outside ELF table")
+  readTable (index, section) = do
+    shoff <- fileWord 0x20
+    let header = fromIntegral shoff + index * 40
+    link <- fileWord (header + 24)
+    info <- fileWord (header + 28)
+    entrySize <- fileWord (header + 36)
+    symbols <- indexed "relocation symbol table" (elfSections elf) link
+    target <- indexed "relocation target section" (elfSections elf) info
+    if not (sectionAllocated target) then pure [] else do
+      unless (sectionType section == 9 && sectionType symbols == 2 && entrySize == 8 && sectionSize section `mod` 8 == 0
+        && sectionType target == 1) (Left "allocated ARM ELF32 REL layout required")
+      records <- forM [0 .. fromIntegral (sectionSize section) `div` 8 - 1] $ \record -> do
+        let offset = fromIntegral (sectionOffset section) + record * 8
+        site <- fileWord offset
+        encoding <- fileWord (offset + 4)
+        unless (site .&. 3 == 0 && sectionAddress target <= site && toInteger site + 4 <= toInteger (sectionAddress target) + toInteger (sectionSize target))
+          (Left "ARM relocation site outside its section or unaligned")
+        symbol <- indexed "relocation symbol" (elfSymbols elf) (encoding `shiftR` 8)
+        unless (symbolSection symbol /= Undefined) (Left "ARM relocation references undefined symbol")
+        content <- maybe (Left "ARM relocation word outside allocated bytes") pure (wordAt elf site)
+        pure (site, encoding .&. 0xff, encoding `shiftR` 8, content)
+      forM [(site, kind, symbol, content) | (site, kind, symbol, content) <- records, kind /= 0] $ \(site, kind, symbol, content) -> do
+        direct <- case kind of
+          1 -> branchTarget site content
+          28 -> branchTarget site content
+          29 -> branchTarget site content
+          _ -> pure 0
+        let immediate word = ((word `shiftR` 4) .&. 0xf000) .|. (word .&. 0xfff)
+            register word = (word `shiftR` 12) .&. 15
+            pair other = sortOn fst [(at, instruction) | (at, code, identity, instruction) <- records
+              , code == other, identity == symbol, register instruction == register content]
+            paired other = case if other == 44 then filter ((> site) . fst) (pair other) else reverse (filter ((< site) . fst) (pair other)) of
+              (_, instruction) : _ -> Right instruction
+              [] -> Left "unpaired ARM address relocation"
+        case kind of
+          2 -> pure (AddressRelocation site content DataReference)
+          3 -> pure (AddressRelocation site (site + content) DataReference)
+          1 -> pure (AddressRelocation site direct DirectReference)
+          28 -> pure (AddressRelocation site direct DirectReference)
+          29 -> pure (AddressRelocation site direct DirectReference)
+          43 -> do
+            upper <- paired 44
+            pure (AddressRelocation site ((immediate upper `shiftL` 16) .|. immediate content) DataReference)
+          44 -> do
+            lower <- paired 43
+            pure (AddressRelocation site ((immediate content `shiftL` 16) .|. immediate lower) DataReference)
+          _ -> Left ("unsupported ARM address relocation: " ++ show kind)
+  branchTarget site content = maybe (Left "ARM branch relocation does not contain a direct branch") Right (directBranchTarget site content)
+
+directBranchTarget :: Word32 -> Word32 -> Maybe Word32
+directBranchTarget address word
+  | word .&. 0x0e000000 /= 0x0a000000 = Nothing
+  | otherwise = Just (if thumb then (target + halfword) .|. 1 else target)
+ where
+  displacement = (fromIntegral ((word .&. 0x00ffffff) `shiftL` 8) :: Int32) `shiftR` 6
+  target = address + 8 + fromIntegral displacement
+  thumb = word `shiftR` 28 == 15
+  halfword = if testBit word 24 then 2 else 0

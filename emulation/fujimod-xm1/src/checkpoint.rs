@@ -177,11 +177,12 @@ pub fn post_boot(
     let key = identity.key();
     let name = format!("post-boot-{key}");
     let lock = std::fs::OpenOptions::new().create(true).truncate(false).write(true)
-        .open(root.join(format!(".{name}.lock"))).map_err(|error| error.to_string())?;
+        .open(root.join(".post-boot.lock")).map_err(|error| error.to_string())?;
     // The descriptor owns the lock until this function returns.
     if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
         return Err(std::io::Error::last_os_error().to_string());
     }
+    evict_superseded(root, identity)?;
     let directory = root.join(&name);
     let (record, lookup) = if directory.exists() {
         let record: PostBootRecord = serde_json::from_slice(&crate::bridge::read(&directory.join(RECORD))?)
@@ -218,12 +219,51 @@ pub fn post_boot(
         };
         let partial = root.join(format!(".partial-{name}-{}", std::process::id()));
         std::fs::create_dir(&partial).map_err(|error| error.to_string())?;
-        crate::bridge::write(&partial.join(crate::bridge::SNAPSHOT), &snapshot)?;
-        crate::bridge::write(&partial.join(RECORD), &serde_json::to_vec_pretty(&record).map_err(|error| error.to_string())?)?;
-        std::fs::rename(partial, directory).map_err(|error| error.to_string())?;
+        let published = (|| -> Result<(), String> {
+            crate::bridge::write(&partial.join(crate::bridge::SNAPSHOT), &snapshot)?;
+            crate::bridge::write(&partial.join(RECORD), &serde_json::to_vec_pretty(&record).map_err(|error| error.to_string())?)?;
+            for path in [partial.join(crate::bridge::SNAPSHOT), partial.join(RECORD), partial.clone()] {
+                std::fs::File::open(path).and_then(|file| file.sync_all()).map_err(|error| error.to_string())?;
+            }
+            std::fs::rename(&partial, &directory).map_err(|error| error.to_string())?;
+            std::fs::File::open(root).and_then(|file| file.sync_all()).map_err(|error| error.to_string())
+        })();
+        if published.is_err() { let _ = std::fs::remove_dir_all(&partial); }
+        published?;
         (record, CacheLookup::Miss)
     };
     Ok(PostBootReceipt { key, record, lookup })
+}
+
+fn evict_superseded(root: &std::path::Path, identity: &BootIdentity) -> Result<(), String> {
+    let current = identity.document();
+    let mut comparable = current.clone();
+    comparable.as_object_mut().expect("boot identity object").remove("emulator_binary");
+    for entry in std::fs::read_dir(root).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !entry.file_type().map_err(|error| error.to_string())?.is_dir() { continue; }
+        if name.starts_with(".partial-post-boot-") {
+            std::fs::remove_dir_all(entry.path()).map_err(|error| error.to_string())?;
+            continue;
+        }
+        if !name.starts_with("post-boot-") { continue; }
+        let record_path = entry.path().join("post-boot.json");
+        let Ok(metadata) = std::fs::metadata(&record_path) else { continue };
+        let old = metadata.modified().ok().and_then(|time| time.elapsed().ok())
+            .is_some_and(|age| age >= std::time::Duration::from_secs(7 * 24 * 60 * 60));
+        if !old { continue; }
+        let Ok(bytes) = std::fs::read(record_path) else { continue };
+        let Ok(mut record) = serde_json::from_slice::<PostBootRecord>(&bytes) else { continue };
+        if record.identity["emulator_binary"] == current["emulator_binary"] { continue; }
+        let Some(fields) = record.identity.as_object_mut() else { continue };
+        fields.remove("emulator_binary");
+        if record.identity == comparable {
+            std::fs::remove_dir_all(entry.path()).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -239,7 +279,8 @@ mod tests {
         let document = RunDocument::parse(RUN).unwrap();
         let update = vec![0xff; document.update_flash_offset + 2048];
         let mut rom = vec![0; document.boot_rom.bytes];
-        rom[..4].copy_from_slice(&0xeaff_fffeu32.to_le_bytes());
+        rom[..4].copy_from_slice(&0xe280_0001u32.to_le_bytes());
+        rom[4..8].copy_from_slice(&0xeaff_fffdu32.to_le_bytes());
         let root = std::env::temp_dir().join(format!("post-boot-cache-{}", std::process::id()));
         std::fs::create_dir(&root).unwrap();
         let make_machine = || {
@@ -256,13 +297,26 @@ mod tests {
             machine.run(4);
             machine.require_running()
         };
-        let first = post_boot(&mut make_machine(), &first_identity, &root, produce).unwrap();
+        let mut produced = make_machine();
+        let first = post_boot(&mut produced, &first_identity, &root, produce).unwrap();
         assert_eq!(first.lookup, CacheLookup::Miss);
         let mut restored = make_machine();
         let second = post_boot(&mut restored, &first_identity, &root, |_| Err("unchanged input executed producer".into())).unwrap();
         assert_eq!(second.lookup, CacheLookup::Hit);
         assert_eq!(first.record, second.record);
         assert_eq!(restored.instructions(), first.record.instructions);
+        assert_eq!(crate::machine_fingerprint::fingerprint(&produced.session).unwrap(),
+            crate::machine_fingerprint::fingerprint(&restored.session).unwrap());
+        let register = fujimod_emulator_cpu::arm::CORE[0];
+        let before = produced.session.board.read_register(0, register).unwrap();
+        produced.run(8);
+        restored.run(8);
+        produced.require_running().unwrap();
+        restored.require_running().unwrap();
+        let after = produced.session.board.read_register(0, register).unwrap();
+        assert!(after > before);
+        assert_eq!(after, restored.session.board.read_register(0, register).unwrap());
+        assert_eq!(produced.session.board.instruction_counts(), restored.session.board.instruction_counts());
         let mut changed_run = RUN.to_vec();
         changed_run.push(b'\n');
         let mut changed_update = update.clone();
@@ -275,6 +329,16 @@ mod tests {
         let snapshot = root.join(format!("post-boot-{}", first.key)).join(crate::bridge::SNAPSHOT);
         crate::bridge::write(&snapshot, b"corrupted checkpoint").unwrap();
         assert!(post_boot(&mut make_machine(), &first_identity, &root, produce).is_err());
+        let abandoned = root.join(".partial-post-boot-abandoned");
+        std::fs::create_dir(&abandoned).unwrap();
+        let first_directory = snapshot.parent().unwrap();
+        std::fs::File::open(first_directory.join("post-boot.json")).unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::UNIX_EPOCH)).unwrap();
+        let latest = identity(RUN, &update, b"emulator-three");
+        post_boot(&mut make_machine(), &latest, &root, produce).unwrap();
+        assert!(!abandoned.exists());
+        assert!(!first_directory.exists());
+        assert!(root.join(format!("post-boot-{}", latest.key())).is_dir());
         std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -14,7 +14,7 @@ import qualified Data.Map.Strict as M
 import Emulation.CachedNativeBatch (defaultNativeCacheRoot)
 import FujiAF.Host (get, runBounded, str, withTemporary)
 import Replacement.PropertyService.Qualification
-import System.Directory (createDirectoryIfMissing, createDirectoryLink, doesFileExist, doesPathExist, makeAbsolute, withCurrentDirectory)
+import System.Directory (canonicalizePath, createDirectoryIfMissing, createDirectoryLink, doesFileExist, doesPathExist, makeAbsolute, withCurrentDirectory)
 import System.Environment (getArgs, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeFileName, (</>))
@@ -166,7 +166,9 @@ pathTests root = do
   check "a symlink that resolves outside the root is refused" (isLeft linkResult)
   let cache = base </> "private-data" </> "cache"
   createDirectoryIfMissing True cache
-  cacheResult <- resolveCacheOutput "--cache" scratch cache (cache </> "native")
+  scratchRoot <- canonicalizePath scratch
+  cacheRoot <- canonicalizePath cache
+  cacheResult <- resolveCacheOutput "--cache" scratchRoot cacheRoot (cache </> "native")
   check "a cache path under private-data/cache/native is accepted" (either (const False) (const True) cacheResult)
 
 driverRefusal :: FilePath -> FilePath -> IO ()

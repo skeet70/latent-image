@@ -6,6 +6,7 @@ import qualified A32 as A
 import qualified ArmElf as E
 import Control.Monad (unless)
 import Data.Aeson (Value, object, (.=))
+import Data.Bits ((.&.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.Word (Word32)
@@ -56,7 +57,16 @@ deriveCloseAppendArtifact purpose source input = do
   owner <- one "close-append ELF function owner" [symbol | symbol <- E.elfSymbols elf,E.symbolKind symbol == E.FunctionSymbol,E.InSection _ <- [E.symbolSection symbol],toInteger (E.symbolValue symbol) <= toInteger site,toInteger site + 4 <= toInteger (E.symbolValue symbol) + toInteger (E.symbolSize symbol)]
   let replacement = InstructionWord (if link then 0xe320f000 else 0xe12fff1e)
   normalizedBytes <- replaceWord binary (ByteOffset (fromIntegral (site-start))) replacement
-  normalizedElf <- replaceWord (P.inputElf input) (ByteOffset (fromIntegral (E.sectionOffset section + site - E.sectionAddress section))) replacement
+  rewrittenElf <- replaceWord (P.inputElf input) (ByteOffset (fromIntegral (E.sectionOffset section + site - E.sectionAddress section))) replacement
+  relocation <- one "close-append edge relocation"
+    [ offset + 4
+    | table <- E.elfSections elf, E.sectionType table == 9
+    , offset <- [fromIntegral (E.sectionOffset table), fromIntegral (E.sectionOffset table) + 8 .. fromIntegral (E.sectionOffset table + E.sectionSize table) - 8]
+    , readWordAt rewrittenElf offset == site
+    , readWordAt rewrittenElf (offset + 4) .&. 0xff `elem` [28, 29]
+    ]
+  normalizedElf <- replaceWord rewrittenElf (ByteOffset relocation)
+    (InstructionWord (readWordAt rewrittenElf relocation .&. 0xffffff00))
   artifact <- either (Left . show) Right (P.deriveArtifact purpose (P.sourceProperties source) carrier
     (P.ArtifactInput normalizedBytes (C.unlines (filter (not . isAlias) rows)) normalizedElf))
   admittedOwner <- one "close-append admitted function owner" [extent | extent@(FunctionExtent _ low high) <- P.artifactFunctions artifact,low <= L.GuestAddress site,L.GuestAddress site < high]

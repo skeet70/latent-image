@@ -76,6 +76,7 @@ data ContentCheck = ContentCheck
   , checkCommit :: CommitId
   , checkDate :: IsoDate
   , checkElfAllowlist :: ArtifactRef
+  , checkSourceBoundary :: ArtifactRef
   , checkEmulatorRun :: ArtifactRef
   , checkOwnerVisual :: String
   } deriving (Eq, Show)
@@ -210,12 +211,13 @@ parseReview value = do
 
 parseCheck :: Value -> Parse ContentCheck
 parseCheck value = do
-  closed "content check" value ["commit","date","elf_allowlist_receipt","emulator_run","id","owner_visual_check"]
+  closed "content check" value ["commit","date","elf_allowlist_receipt","source_boundary_receipt","emulator_run","id","owner_visual_check"]
   ContentCheck
     <$> (CheckId <$> nameField "content check id" (field value "id"))
     <*> commitField "content check commit" (field value "commit")
     <*> dateField "content check date" (field value "date")
     <*> artifact "content check elf_allowlist_receipt" (field value "elf_allowlist_receipt")
+    <*> artifact "content check source_boundary_receipt" (field value "source_boundary_receipt")
     <*> artifact "content check emulator_run" (field value "emulator_run")
     <*> text "content check owner_visual_check" (field value "owner_visual_check")
 
@@ -317,7 +319,7 @@ parseReviewRecord document = do
     _ -> reject "review record kind mismatch"
   reviews <- list "reviews" (field value "reviews") 256 >>= mapM parseReview
   checks <- list "content_checks" (field value "content_checks") 256 >>= mapM parseCheck
-  pinValues <- list "pins" (field value "pins") 68
+  pinValues <- list "pins" (field value "pins") 128
   pins <- forM pinValues parsePin
   contract <- parseContract (field value "publication_contract")
   linked <- list "linked" (field value "linked") 2 >>= mapM parseLinked
@@ -443,6 +445,7 @@ renderReviewRecord record = C.pack (unlines (
       [ ("id", str (unCheckId (checkId check))), ("commit", str (unCommitId (checkCommit check)))
       , ("date", str (unIsoDate (checkDate check)))
       , ("elf_allowlist_receipt", artifactValue (checkElfAllowlist check))
+      , ("source_boundary_receipt", artifactValue (checkSourceBoundary check))
       , ("emulator_run", artifactValue (checkEmulatorRun check))
       , ("owner_visual_check", str (checkOwnerVisual check)) ]
     statusValue status = object $ case status of

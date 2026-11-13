@@ -1,0 +1,13 @@
+{
+  "source_roots": [
+    "src"
+  ],
+  "boundary_files": [
+    {
+      "path": "src/lib.rs",
+      "reason": "Retained develop-step descriptor pointers and event-service ABI."
+    }
+  ],
+  "boundary_items": [],
+  "known_exceptions": []
+}

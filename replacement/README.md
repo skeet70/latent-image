@@ -82,6 +82,34 @@ Admission checks allocated sections, entry veneers, retained table counts, defin
 
 The shim rows are in [the register](shims.md#saclac).
 
+<!-- evidence-record E-SACLAC-PLACEMENT-150 -->
+
+E-SACLAC-PLACEMENT-150: The saclac placement stages 1164 owned bytes in 2192 bytes across 2 entries. Candidate DAT 559dcf65d1141add4aa82f68f4b527caf8570e968a5ea1a64b62263d77bbcf63; linked binary 2bd55afa0199f84c08953745e9a0904b8db4272e5e5b1249011ced340eaf59df; image 5 be5568d5df5ab8d68427c832d692fc4b21b96534595c341723eee51ee8619a2e. stock flash boot: passed, 383544246 instructions, frame 0d3adb84da8615ed7fc1831138ad95246df5bc56233173a7cf74211cd13d2a5c. candidate flash boot: passed, 383544158 instructions, frame 0d3adb84da8615ed7fc1831138ad95246df5bc56233173a7cf74211cd13d2a5c. Placement gate passed at 4e07f93f1a37bba917b712a2ad15bb7bf6216e59. cold-boot: equal, trace stock/candidate 2907/2907, machines 17, sequence differences 0, trailing machines 0, trap fetches 0, queue posts {"candidate":370,"stock":371}. half-press: equal, trace stock/candidate 1102/1102, machines 17, sequence differences 0, trailing machines 0, trap fetches 0, queue posts {"candidate":152,"stock":152}. fn: equal, trace stock/candidate 3398/3398, machines 17, sequence differences 0, trailing machines 0, trap fetches 0, queue posts {"candidate":430,"stock":430}. fn-down: equal, trace stock/candidate 4390/4390, machines 17, sequence differences 0, trailing machines 0, trap fetches 0, queue posts {"candidate":550,"stock":550}. fn-auto: equal, trace stock/candidate 6071/6071, machines 17, sequence differences 0, trailing machines 0, trap fetches 0, queue posts {"candidate":753,"stock":753}. 
+
+Scope: Host-only record-5 saclac-placement across 2 boundary entries, 42 placement checks, retained-engine flash boot and the census routes listed above. Action and machine bodies remain stock.
+
+<!-- /evidence-record E-SACLAC-PLACEMENT-150 -->
+
+<!-- evidence-record E-SACLAC-ENGINE-COMPARE-150 -->
+
+E-SACLAC-ENGINE-COMPARE-150: The saclac boundary suite reports 104 cases and 12 deliberately wrong variants for owned ELF de462e1abc5db75acdd04a8bd5c42a476bc6bda499d8198c7bb7afd2ccaf8349. Judge 2 verdict: equal; survivors 1, different cases 0, unmet conditions 0. Execution and control conditions: [{"condition":"stock-instructions-inside-entered-extent","detail":"104 cases name an entered entry with stock instructions inside its extent","met":true},{"condition":"case-for-every-export-row","detail":"2 bound entries each have a case","met":true},{"condition":"detected-wrong-variant","detail":"11 of 12 deliberately wrong owned variants detected","met":true},{"condition":"named-digests","detail":"the report names the firmware and owned image digests","met":true}].
+
+Scope: The dispatcher at 0x00efca6c and machine 0's router at 0x00efcb88 over stock's tables: seeded scenarios stage a machine's row and state, enter the dispatcher or the router, and compare the return word, the recorded trace and action calls, and the two halfword arrays. Every stock action word and the trace entry is a recording stub, so the action bodies are import rows. The owned image replaces exactly those two stock extents.
+
+<!-- /evidence-record E-SACLAC-ENGINE-COMPARE-150 -->
+
+## General heap
+
+The [cutover report](../reports/general-heap-cutover.md) defines the interface projection, placement, caller-grounded corrections and final-pass queue. The implementation and external RTOS/client shims remain unchanged; the current consumer checks global interface order and an executed wrong binary.
+
+<!-- evidence-record E-GENERAL-HEAP-CUTOVER-NATURAL-PAIR-150 -->
+
+E-GENERAL-HEAP-CUTOVER-NATURAL-PAIR-150: The rebuilt general heap preserves ordered interface traffic and the no-card boot/menu end states on the current emulator. The comparison admits 8529 logical calls across 3 contexts with global order identical=true. Cases per entry in stock/owned order are [{"calloc":0,"free":4039,"malloc":4490,"realloc":0,"trim":0},{"calloc":0,"free":4039,"malloc":4490,"realloc":0,"trim":0}]. Owned allocation failures on cores 0/1 are 0/0. Both roles reach menu endpoints [[69,52,12],[1,5,2]] and the same rendered frame 56c5cd815aa1959d37c03cb9aae21a2c040be50d5c1f292e91835e4d4aecda41. Authenticated stock/owned allocator fetches are 598761/2534811. The staged wrong owned binary executes 2552771 allocator fetches, completes its role-local checks and is detected by the ordered comparator: stock/owned interface calls differ at ordered call 0 (detected=true). The owned DAT 2202d0f8b0cefd692fc9b533c18d8aff2c5bce33e14f1c5a62db612a9a117506 and linked binary 53d714197a9f49ea32e00e8dc5aeefb5c4ba7b8513e795cf0474bf31069d5752 reproduce the existing cutover. The live/peak requested bytes are 113309/115185; the owned live allocation count is 451.
+
+Scope: Whole general-heap artifact behind retained A32 entries on the finite natural no-card cold-boot/menu route, conditional on ["Unknown interior entries into retired content remain unclosed; guards reject owned fetches outside admitted code but do not bind every interior fetch to an active heap invocation.","No unknown metadata reader consumes beyond payload-4; stock boundary tag decodes to an extent within the allocation.","No retained reader or writer consumes retired bin state repurposed as owned code after the sentinel word.","The image4 producer initializes the sentinel before first allocation and never resets it with live allocations.","The charged arena state prefix and pool have no external writer or competing backing consumer; retained backing is not called by owned core.","Retained recursive lock/unlock serialize every mutation and initialization across all admitted task/core contexts.","Compiler and retained callees preserve AAPCS callee-saved registers and declared stack boundaries; emitted metadata is not a full compiler ABI proof.","Stack backing, aliases and retained/interrupt writes exclude live saved words and executing owned carriers.","Image5 stubs are published by record5 installation; no earlier image4 owned path depends on image5 code.","Unchanged graphics/adapters and callback table words forward to the patched stock entries.","Cold boot only; no warm-checkpoint allocator ownership migration is admitted.","Finite host checks do not qualify silicon contention/deadlines or capture, development and storage workloads."]. Compared traffic includes operation, arguments, logical allocation identity, success/failure and errno in global order; pointer addresses and internal allocator state are not equality criteria. Both roles execute their allocator bodies. The RTOS recursive lock and external graphics/service adapters remain registered stock interfaces.
+
+<!-- /evidence-record E-GENERAL-HEAP-CUTOVER-NATURAL-PAIR-150 -->
+
 ## Native rewrite qualification
 
 For an applicable native-only increment, run the native SDK and runner suites plus the affected caller's qualification command:

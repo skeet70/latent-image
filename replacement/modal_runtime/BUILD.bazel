@@ -1,3 +1,5 @@
+load("//build-support:rust_source_boundary.bzl", "rust_source_boundary_test")
+
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib")
@@ -842,4 +844,10 @@ haskell_test(
         "//host:containers",
         "//host:text",
     ],
+)
+
+rust_source_boundary_test(
+    name = "unsafe-boundary-check",
+    declaration = "unsafe-boundary.json",
+    srcs = glob(["src/**/*.rs"]) + ["//replacement/bank/tables:modal75-table.rs"],
 )

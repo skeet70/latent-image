@@ -32,6 +32,7 @@ review identifier verdict = "{\"id\":" ++ quoted identifier ++ ",\"reviewer\":\"
 check :: String
 check = "{\"id\":\"Candidate1\",\"commit\":" ++ quoted laterCommit ++ ",\"date\":\"2026-10-18\""
   ++ ",\"elf_allowlist_receipt\":{\"path\":\"private-data/a.json\",\"sha256\":" ++ quoted (digest '1') ++ "}"
+  ++ ",\"source_boundary_receipt\":{\"path\":\"private-data/s.json\",\"sha256\":" ++ quoted (digest '3') ++ "}"
   ++ ",\"emulator_run\":{\"path\":\"private-data/e.json\",\"sha256\":" ++ quoted (digest '2') ++ "}"
   ++ ",\"owner_visual_check\":\"MAIN.jsonl user 2026-10-18T10:00\"}"
 
@@ -80,8 +81,8 @@ main = do
 
       manyPins count = document [] [] [pin ("menu/source" ++ show index ++ ".c") "workspace" "mechanism" unreviewed | index <- [1 .. count :: Int]] unreviewed
 
-  expect "a combined payload can carry 68 source pins" (case parsed (manyPins 68) of Right _ -> True; Left _ -> False)
-  expect "more than 68 source pins are refused" (isLeft (parsed (manyPins 69)))
+  expect "a combined payload can carry 128 source pins" (case parsed (manyPins 128) of Right _ -> True; Left _ -> False)
+  expect "more than 128 source pins are refused" (isLeft (parsed (manyPins 129)))
   expect "an all-approved record has no verdict findings" (findingsOf approvedRecord == Just [])
   expect "an unreviewed pin is a verdict finding"
     (findingsOf (document [review "R1" "approve"] [] [installerPin (approvedBy "R1"), contentPin unreviewed] (approvedBy "R1"))

@@ -1,3 +1,5 @@
+load("//build-support:rust_source_boundary.bzl", "rust_source_boundary_test")
+
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
@@ -194,3 +196,9 @@ xm1_rust_elf(
     extra_ldflags = ["-Wl,--gc-sections"],
     testonly = True,
 ) for control in ["selected-unstyled", "page-off-by-one", "scroll-ignored", "hidden-drawn", "preview-label-wrong"]]
+
+rust_source_boundary_test(
+    name = "unsafe-boundary-check",
+    declaration = "unsafe-boundary.json",
+    srcs = glob(["src/**/*.rs"]),
+)

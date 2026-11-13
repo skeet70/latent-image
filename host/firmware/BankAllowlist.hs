@@ -1,39 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | The mechanical allowlist check for the bank part of a relinked RAM-push
--- ELF. Its guarantees and limits are stated in transport/README.md
--- ("Bank ELF allowlist").
+-- | Checks layout, definite ELF address references, direct transfers and evidenced stack budgets.
+-- Literal and MOVW/MOVT scalars are not classified as pointers. Owned memory safety rests on the compiler, bounded types, source boundaries and subsystem comparisons.
 module BankAllowlist
-  ( Allowlist (..)
-  , StockCall (..)
-  , StockStore (..)
-  , Declaration (..)
-  , Access (..)
-  , Provenance (..)
-  , Location (..)
-  , AllocationOffset (..)
-  , Callee (..)
-  , parseAllowlist
-  , Finding (..)
-  , Reason (..)
-  , LayoutRule (..)
-  , Region (..)
-  , Layout (..)
-  , EngineExtents (..)
-  , readLayout
-  , regionOf
-  , writable
-  , layoutFindings
-  , Verdict (..)
-  , Report (..)
-  , allowlistAnalysisIdentity
-  , checkBank
-  , checkBankFile
-  , violations
-  , declared
-  , renderFinding
-  , renderDeclaration
-  , reportValue
+  ( Allowlist (..), StockCall (..), StockRegion (..)
+  , parseAllowlist, Finding (..), Reason (..), LayoutRule (..), Region (..)
+  , Layout (..), EngineExtents (..), readLayout, regionOf, writable, layoutFindings
+  , Verdict (..), Report (..), allowlistAnalysisIdentity, checkBank, checkBankFile
+  , violations, declared, renderFinding, reportValue
   ) where
 
 import A32
@@ -43,124 +17,53 @@ import Data.Aeson (FromJSON (..), Value (..), withObject, (.:), (.:?))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Types (Parser)
-import Data.Bits (complement, shiftL, shiftR, testBit, xor, (.&.), (.|.))
+import Data.Bits ((.&.))
 import qualified Data.ByteString as B
-import Data.Char (isDigit, isHexDigit)
-import Data.Int (Int32)
+import Data.Char (isHexDigit)
 import Data.List (find, groupBy, nub, sortOn)
 import qualified Data.Map.Strict as M
-import Data.Maybe (fromMaybe, isJust, listToMaybe)
+import Data.Maybe (isJust)
 import qualified Data.Set as S
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.Word (Word32)
+import qualified EngineStack
+import qualified RenderStack
 import FujiAF.JSON (decodeStrictIntegers)
 import Numeric (readHex, showHex)
-import RamPushLayout (BankVariant, PublicationGroup (MenuEnginePublication), hasPublicationGroup, bankVariantFromIdentity, bankVariantTag, modalRenderBankVariant, modalValueBankVariant, menuEngineRegionExtentFor, menuEngineRegionStartFor, runtimeAllocationSizeFor, runtimeBankEnd, runtimeDataBase, runtimeExecutableBase, runtimeInstallerBase)
-
--- * Allowlist
+import RamPushLayout (BankVariant, PublicationGroup (MenuEnginePublication, RenderPublication), hasPublicationGroup, bankVariantFromIdentity, bankVariantTag, modalRenderBankVariant, modalValueBankVariant, menuEngineRegionExtentFor, menuEngineRegionStartFor, runtimeAllocationSizeFor, runtimeBankEnd, runtimeDataBase, runtimeExecutableBase, runtimeInstallerBase)
 
 data Allowlist = Allowlist
   { stockCalls :: [StockCall]
-  , stockStores :: [StockStore]
-  , declarations :: [Declaration]
+  , stockRegions :: [StockRegion]
   }
 
 data StockCall = StockCall {stockCallAddress :: Word32, stockCallName :: String, stockCallSource :: String}
 
-data StockStore = StockStore {stockStoreAddress :: Word32, stockStoreBytes :: Word32, stockStoreName :: String, stockStoreSource :: String}
-
--- | A store or indirect branch whose address the analysis cannot bound,
--- accepted for one function and one provenance.
-data Declaration = Declaration
-  { declarationFunction :: String
-  , declarationAccess :: Access
-  , declarationThrough :: Provenance
-  , declarationReason :: String
-  }
-
-data Access = StoreAccess | BranchAccess deriving (Eq, Show)
-
--- | Where an unbounded pointer came from; its offset is not part of it.
-data Provenance
-  = Argument Reg
-  | -- | The word at entry sp plus this offset, which this function did not write.
-    CallerFrame Int32
-  | Cell Location
-  | Result Callee
-  | Index Location
-  | Deref Provenance
-  deriving (Eq, Show)
-
-newtype AllocationOffset = AllocationOffset Word32 deriving (Eq, Show)
-
-data Location = BankObject String | GeneratedData | StackFrame | StockAddress Word32 | AllocationCell AllocationOffset
-  deriving (Eq, Show)
-
-data Callee = BankFunction String | StockFunction Word32
-  deriving (Eq, Show)
+data StockRegion = StockRegion {stockRegionAddress :: Word32, stockRegionBytes :: Word32, stockRegionName :: String, stockRegionSource :: String}
 
 parseAllowlist :: B.ByteString -> Either String Allowlist
 parseAllowlist bytes = do
   document <- decodeStrictIntegers bytes
-  closed "allowlist" document ["schema", "stock_calls", "stock_stores", "unproven"]
+  closed "allowlist" document ["schema", "stock_calls", "stock_regions"]
   schema <- member document "schema"
-  unless (schema == Number 1) (Left "allowlist: schema 1 required")
+  unless (schema == Number 2) (Left "allowlist: schema 2 required")
   calls <- list "stock_calls" document >>= mapM parseCall
-  stores <- list "stock_stores" document >>= mapM parseStore
-  unproven <- list "unproven" document >>= mapM parseDeclaration
-  let callAddresses = map stockCallAddress calls
-  unless (length (nub callAddresses) == length callAddresses) (Left "allowlist: duplicate stock call address")
-  pure (Allowlist calls stores unproven)
+  stores <- list "stock_regions" document >>= mapM parseStore
+  unless (length (nub (map stockCallAddress calls)) == length calls) (Left "allowlist: duplicate stock call address")
+  pure (Allowlist calls stores)
  where
   parseCall value = do
     closed "stock call" value ["address", "name", "source"]
     address <- member value "address" >>= hexWord
-    unless (address .&. 3 == 0) (Left ("allowlist: stock call " ++ hex address ++ " is not an ARM-state entry"))
-    unless (address < deviceSpaceStart) (Left ("allowlist: stock call " ++ hex address ++ " is in " ++ regionName DeviceSpace))
+    unless (address .&. 3 == 0) (Left "allowlist: stock entry must be ARM aligned")
     StockCall address <$> (member value "name" >>= text) <*> (member value "source" >>= text)
   parseStore value = do
-    closed "stock store" value ["address", "bytes", "name", "source"]
+    closed "stock region" value ["address", "bytes", "name", "source"]
     address <- member value "address" >>= hexWord
     size <- member value "bytes" >>= byteCount
-    unless (size `notElem` [2, 4, 8] || address .&. (size - 1) == 0) (Left ("allowlist: stock store " ++ hex address ++ " is not aligned to its size"))
-    case (stockRegion address, stockRegion (address + size - 1)) of
-      (StockMemory, StockMemory) -> pure ()
-      (region, _) -> Left ("allowlist: stock store " ++ hex address ++ " lies in " ++ regionName region)
-    StockStore address size <$> (member value "name" >>= text) <*> (member value "source" >>= text)
-  parseDeclaration value = do
-    closed "unproven declaration" value ["access", "function", "reason", "through"]
-    function <- member value "function" >>= text
-    access <- member value "access" >>= text >>= accessOf
-    through <- member value "through" >>= parseProvenance (4 :: Int)
-    Declaration function access through <$> (member value "reason" >>= text)
-  accessOf "store" = Right StoreAccess
-  accessOf "branch" = Right BranchAccess
-  accessOf other = Left ("allowlist: access must be store or branch, got " ++ other)
-  parseProvenance depth value
-    | depth == 0 = Left "allowlist: provenance nesting is too deep"
-    | otherwise = case value of
-        Object object -> case KM.toList object of
-          [("argument", String r)] -> Argument <$> parseReg (T.unpack r)
-          [("caller-frame", Number n)] | n >= 0 && n <= 4096 && n == fromIntegral (truncate n :: Int32) -> Right (CallerFrame (truncate n))
-          [("cell", location)] -> Cell <$> parseLocation location
-          [("index", location)] -> Index <$> parseLocation location
-          [("result", String callee)] -> Right (Result (calleeOf (T.unpack callee)))
-          [("deref", inner)] -> Deref <$> parseProvenance (depth - 1) inner
-          _ -> Left "allowlist: provenance must be one of argument, cell, index, result or deref"
-        _ -> Left "allowlist: provenance must be an object"
-  parseLocation (String location) = case T.unpack location of
-    "generated-data" -> Right GeneratedData
-    "stack-frame" -> Right StackFrame
-    name@('0' : 'x' : _) -> StockAddress <$> hexWord (String (T.pack name))
-    name -> Right (BankObject name)
-  parseLocation value@(Object _) = do
-    closed "allocation location" value ["allocation-offset"]
-    AllocationCell . AllocationOffset <$> (member value "allocation-offset" >>= hexWord)
-  parseLocation _ = Left "allowlist: location must be a name, address or allocation-offset object"
-  calleeOf callee = either (const (BankFunction callee)) StockFunction (hexWord (String (T.pack callee)))
-  parseReg ('r' : digits) | not (null digits) && all isDigit digits && read digits <= (12 :: Int) = Right (Reg (read digits))
-  parseReg other = Left ("allowlist: argument register r0..r12 required, got " ++ other)
+    unless (toInteger address + toInteger size <= 0x100000000) (Left "allowlist: stock region wraps")
+    StockRegion address size <$> (member value "name" >>= text) <*> (member value "source" >>= text)
   member (Object object) key = maybe (Left ("allowlist: missing " ++ key)) Right (KM.lookup (K.fromString key) object)
   member _ key = Left ("allowlist: object required around " ++ key)
   closed label (Object object) keys =
@@ -171,59 +74,31 @@ parseAllowlist bytes = do
     _ -> Left ("allowlist: " ++ key ++ " must be a list")
   text (String value) | not (T.null value) = Right (T.unpack value)
   text _ = Left "allowlist: nonempty string required"
-  byteCount (Number n)
-    | n >= 1 && n <= 4096 && n == fromIntegral (truncate n :: Int) = Right (truncate n)
-  byteCount _ = Left "allowlist: stock store bytes must be an integer from 1 to 4096"
+  byteCount (Number n) | n >= 1 && n <= 0xffffffff && n == fromIntegral (truncate n :: Integer) = Right (truncate n)
+  byteCount _ = Left "allowlist: positive 32-bit region size required"
   hexWord (String value) = case T.unpack value of
     '0' : 'x' : digits | length digits == 8 && all isHexDigit digits, [(word, "")] <- readHex digits -> Right word
-    other -> Left ("allowlist: eight-digit 0x word required, got " ++ other)
+    _ -> Left "allowlist: eight-digit 0x word required"
   hexWord _ = Left "allowlist: hex word string required"
-
--- * Findings
 
 data Verdict = Violation | DeclaredBy String deriving (Eq, Show)
 
 data Finding = Finding
-  { findingAddress :: Word32
-  , findingFunction :: String
-  , findingVerdict :: Verdict
-  , findingReason :: Reason
-  , findingDetail :: String
-  }
-  deriving (Eq, Show)
+  { findingAddress :: Word32, findingFunction :: String, findingVerdict :: Verdict
+  , findingReason :: Reason, findingDetail :: String
+  } deriving (Eq, Show)
 
--- | What a reported site does.
 data Reason
   = LayoutProblem LayoutRule
-  | ForbiddenInstruction Forbidden
-  | DeviceLoad
-  | -- | First and last byte, and the region the store leaves the bank for.
-    StoreOutside Word32 Word32 Region
-  | StackStoreOverSaved
-  | StackStoreBeyondFrame
-  | UnboundedStore
-  | UnboundedBranch
-  | -- | Unbounded and either declared or not.
-    Unproven Access Provenance
-  | UnprovenArgument
-  | TargetMisaligned Word32
-  | TargetNotEntry Word32 Region
   | UndeclaredStockTarget Word32
-  | TargetNotCode Word32
-  | Unreached
-  | UnknownDeclaredFunction
-  | -- | The durable report does not carry the structured reason.
-    ReportReason
+  | ExternalAddress Word32
+  | StackBudgetViolation
+  | ReportReason
   deriving (Eq, Show)
 
 data Report = Report
   { reportFindings :: [Finding]
-  , -- | Declarations no site matched; they pass but widen what a later build may do.
-    reportUnused :: [Declaration]
-  , reportProvenStores :: Int
-  , reportProvenBranches :: Int
-  , reportInstructions :: Int
-  , reportFunctions :: Int
+  , reportProvenBranches :: Int, reportInstructions :: Int, reportFunctions :: Int
   }
 
 violations, declared :: Report -> [Finding]
@@ -231,47 +106,30 @@ violations = filter ((== Violation) . findingVerdict) . reportFindings
 declared = filter ((/= Violation) . findingVerdict) . reportFindings
 
 renderFinding :: Finding -> String
-renderFinding finding =
-  hex (findingAddress finding) ++ " " ++ findingFunction finding ++ ": " ++ findingDetail finding
-    ++ case findingVerdict finding of
-      Violation -> ""
-      DeclaredBy reason -> " [declared: " ++ reason ++ "]"
+renderFinding finding = hex (findingAddress finding) ++ " " ++ findingFunction finding ++ ": " ++ findingDetail finding
+  ++ case findingVerdict finding of Violation -> ""; DeclaredBy reason -> " [declared: " ++ reason ++ "]"
 
 reportValue :: Report -> Value
-reportValue report =
-  Object
-    ( KM.fromList
-        [ ("result", String (if null (violations report) then "pass" else "fail"))
-        , ("functions", count (reportFunctions report))
-        , ("instructions", count (reportInstructions report))
-        , ("proven_stores", count (reportProvenStores report))
-        , ("proven_branches", count (reportProvenBranches report))
-        , ("violations", Array (V.fromList (map item (violations report))))
-        , ("declared", Array (V.fromList (map item (declared report))))
-        , ("unused_declarations", Array (V.fromList [String (T.pack (renderDeclaration d)) | d <- reportUnused report]))
-        ]
-    )
+reportValue report = Object (KM.fromList
+  [ ("result", String (if null (violations report) then "pass" else "fail"))
+  , ("analysis", String (T.pack allowlistAnalysisIdentity))
+  , ("functions", count (reportFunctions report)), ("instructions", count (reportInstructions report))
+  , ("proven_branches", count (reportProvenBranches report))
+  , ("violations", Array (V.fromList (map item (violations report))))
+  , ("declared", Array (V.fromList (map item (declared report))))
+  ])
  where
   count = Number . fromIntegral
-  item finding =
-    Object
-      ( KM.fromList
-          ( [ ("address", String (T.pack (hex (findingAddress finding))))
-            , ("function", String (T.pack (findingFunction finding)))
-            , ("detail", String (T.pack (findingDetail finding)))
-            ]
-              ++ case findingVerdict finding of
-                Violation -> []
-                DeclaredBy reason -> [("reason", String (T.pack reason))]
-          )
-      )
+  item finding = Object (KM.fromList
+    ([ ("address", String (T.pack (hex (findingAddress finding)))), ("function", String (T.pack (findingFunction finding)))
+     , ("detail", String (T.pack (findingDetail finding))) ]
+     ++ case findingVerdict finding of Violation -> []; DeclaredBy reason -> [("reason", String (T.pack reason))]))
 
 hex :: Word32 -> String
 hex value = let digits = showHex value "" in "0x" ++ replicate (8 - length digits) '0' ++ digits
 
--- | Identity of the bank allowlist analysis that produced a durable report.
 allowlistAnalysisIdentity :: String
-allowlistAnalysisIdentity = "bank-allowlist-check-r1"
+allowlistAnalysisIdentity = "bank-interface-check-r3"
 
 instance FromJSON Report where
   parseJSON = withObject "bank allowlist report" $ \fields -> do
@@ -279,28 +137,18 @@ instance FromJSON Report where
     unless (result == "pass" || result == "overridden") (fail "allowlist report result is not pass or overridden")
     functions <- fields .: "functions"
     instructions <- fields .: "instructions"
-    stores <- fields .: "proven_stores"
     branches <- fields .: "proven_branches"
     violationFindings <- fields .: "violations" >>= mapM parseFinding
     declaredFindings <- fields .: "declared" >>= mapM parseFinding
-    unused <- fields .: "unused_declarations" :: Parser [Value]
-    unless (null unused) (fail "prelinked allowlist report carries unused declarations")
-    pure (Report (violationFindings ++ declaredFindings) [] stores branches instructions functions)
+    pure (Report (violationFindings ++ declaredFindings) branches instructions functions)
    where
-    parseFinding = withObject "allowlist finding" $ \finding -> do
-      address <- finding .: "address" >>= parseAddress
-      function <- finding .: "function"
-      detail <- finding .: "detail"
-      reason <- finding .:? "reason"
+    parseFinding = withObject "allowlist finding" $ \fields -> do
+      addressText <- fields .: "address" :: Parser String
+      address <- case readHex (drop 2 addressText) of [(value, "")] -> pure value; _ -> fail "invalid finding address"
+      function <- fields .: "function"
+      detail <- fields .: "detail"
+      reason <- fields .:? "reason"
       pure (Finding address function (maybe Violation DeclaredBy reason) ReportReason detail)
-    parseAddress text = case T.unpack text of
-      '0' : 'x' : digits | length digits == 8, [(value, "")] <- readHex digits -> pure value
-      _ -> fail "allowlist finding address is not eight-digit hex"
-
-renderDeclaration :: Declaration -> String
-renderDeclaration d =
-  declarationFunction d ++ " " ++ (if declarationAccess d == StoreAccess then "store" else "branch") ++ " through "
-    ++ showProvenance (declarationThrough d)
 
 -- * Layout
 
@@ -319,7 +167,6 @@ data LayoutRule
   | InstallerSectionOutside
   | WritableExecutableSegment
   | ThumbCode
-  | FunctionOverlap
   deriving (Eq, Show)
 
 data Layout = Layout
@@ -361,20 +208,6 @@ data Region
   | StockMemory
   deriving (Eq, Show)
 
-regionName :: Region -> String
-regionName region = case region of
-  AllocationHeader -> "the allocation header (installer metadata and flash store image)"
-  BankCode -> "bank code"
-  BankData -> "bank data"
-  EngineData -> "menu engine data"
-  AllocationGap -> "unassigned allocation space"
-  GeneratedArea -> "generated bank data"
-  ExecutableBundle -> "the relocated executable bundle"
-  InstallerArea -> "the RAM-push installer"
-  AllocationTail -> "the allocation past the runtime"
-  StockImage name -> "stock " ++ name ++ " code"
-  DeviceSpace -> "boot ROM or device register space"
-  StockMemory -> "stock RAM"
 
 deviceSpaceStart :: Word32
 deviceSpaceStart = 0x80000000
@@ -391,11 +224,6 @@ stockRegion address
  where
   within start size = start <= address && toInteger address < toInteger start + size
 
-stockCode :: Region -> Bool
-stockCode region = case region of
-  StockImage _ -> True
-  StockMemory -> True
-  _ -> False
 
 regionOf :: Layout -> Word32 -> Region
 regionOf layout address
@@ -490,7 +318,8 @@ layoutFindings elf layout =
         Nothing -> []
         Just region -> concat
           [ check EngineRegion (engineCodeStart region == menuEngineRegionStartFor (layoutBankVariant layout) (allocationBase layout) && engineCodeStart region >= runtimeEnd layout
-              && engineDataStart region >= engineCodeEnd region
+              && engineCodeStart region <= engineCodeEnd region && engineDataStart region >= engineCodeEnd region
+              && engineDataStart region <= engineDataEnd region
               && engineDataEnd region <= menuEngineRegionStartFor (layoutBankVariant layout) (allocationBase layout) + menuEngineRegionExtentFor (layoutBankVariant layout) && engineDataEnd region <= allocationEnd layout)
               (engineCodeStart region) "menu engine region differs from the layout"
           , sectionCheck ".menu_engine" $ \s ->
@@ -506,11 +335,11 @@ layoutFindings elf layout =
     , sectionCheck ".data" $ \s ->
         sectionAddress s >= textEnd layout && sectionAddress s + sectionSize s == imageEnd layout
           && sectionWritable s && not (sectionExecutable s)
-    , check BankImageOverlap (imageEnd layout <= generatedStart layout) (imageEnd layout) "bank image overlaps generated data"
+    , check BankImageOverlap (textStart layout <= textEnd layout && textEnd layout <= dataStart layout && dataStart layout <= imageEnd layout && imageEnd layout <= generatedStart layout) (imageEnd layout) "bank image extents overlap or reverse"
     , check GeneratedEnd (bankEnd layout == runtimeBankEnd (allocationBase layout)) (bankEnd layout) "generated bank data has the wrong writable end"
     , check GeneratedBundleOverlap (generatedStart layout <= bankEnd layout && bankEnd layout <= installerStart layout) (bankEnd layout) "generated data overlaps the executable bundle"
     , check InstallerPlacement (installerStart layout == runtimeInstallerBase (allocationBase layout)) (installerStart layout) "installer has the wrong placement after the executable bundle"
-    , check RuntimeExtent (runtimeEnd layout <= allocationEnd layout) (runtimeEnd layout) "runtime exceeds the allocation"
+    , check RuntimeExtent (installerStart layout <= runtimeEnd layout && runtimeEnd layout <= allocationEnd layout) (runtimeEnd layout) "runtime exceeds or reverses the installer extent"
     , [ violation InstallerSectionOutside (sectionAddress s) ("installer section " ++ sectionName s ++ " lies outside the installer extent")
       | s <- allocated
       , sectionName s `elem` installerSections
@@ -535,1029 +364,66 @@ layoutFindings elf layout =
     [s] -> check (SectionExtent name) (predicate s) (sectionAddress s) ("section " ++ name ++ " has the wrong extent or permissions")
     _ -> [violation (SectionExtent name) 0 ("exactly one " ++ name ++ " section required")]
 
--- * Abstract values
 
-data Abstract
-  = Exact (S.Set Word32)
-  | -- | Unsigned, inclusive.
-    Interval Word32 Word32
-  | StackOffset Int32
-  | -- | Stack-pointer offsets relative to entry, inclusive.
-    StackSpan Int32 Int32
-  | ReturnAddress
-  | Derived Provenance
-  | Unknown
-  deriving (Eq, Show)
-
-exact :: Word32 -> Abstract
-exact = Exact . S.singleton
-
-setCap :: Int
-setCap = 64
-
-fromSet :: S.Set Word32 -> Abstract
-fromSet values
-  | S.null values = Unknown
-  | S.size values <= setCap = Exact values
-  | otherwise = Interval (S.findMin values) (S.findMax values)
-
--- | The words a value can hold, when there are at most `setCap` of them.
-enumerate :: Abstract -> Maybe [Word32]
-enumerate (Exact values) = Just (S.toList values)
-enumerate (Interval lo hi) | toInteger hi - toInteger lo < toInteger setCap = Just [lo .. hi]
-enumerate _ = Nothing
-
-bounds :: Abstract -> Maybe (Word32, Word32)
-bounds (Exact values) = Just (S.findMin values, S.findMax values)
-bounds (Interval lo hi) = Just (lo, hi)
-bounds _ = Nothing
-
-scalar :: Abstract -> Bool
-scalar value = case value of
-  Exact _ -> True
-  Interval _ _ -> True
-  Unknown -> True
-  Derived _ -> True
-  _ -> False
-
--- | `place` names the object an address lies in, so a known address joins
--- an unbounded index from the same object's base.
-joinValue :: (Word32 -> Location) -> Abstract -> Abstract -> Abstract
-joinValue _ a b | a == b = a
-joinValue _ (Exact a) (Exact b) = fromSet (S.union a b)
-joinValue _ a b | Just (alo, ahi) <- bounds a, Just (blo, bhi) <- bounds b = Interval (min alo blo) (max ahi bhi)
-joinValue _ a b | Just (alo, ahi) <- stackBounds a, Just (blo, bhi) <- stackBounds b = StackSpan (min alo blo) (max ahi bhi)
-joinValue _ a b | isJust (stackAddress a), isJust (stackAddress b) = Derived (Index StackFrame)
-joinValue _ (Exact zero) derived@(Derived _) | zero == S.singleton 0 = derived
-joinValue _ derived@(Derived _) (Exact zero) | zero == S.singleton 0 = derived
-joinValue place (Derived (Index l)) b | Just (lo, _) <- bounds b, place lo == l = Derived (Index l)
-joinValue place a (Derived (Index l)) | Just (lo, _) <- bounds a, place lo == l = Derived (Index l)
-joinValue _ _ _ = Unknown
-
-stackBounds :: Abstract -> Maybe (Int32, Int32)
-stackBounds (StackOffset o) = Just (o, o)
-stackBounds (StackSpan lo hi) = Just (lo, hi)
-stackBounds _ = Nothing
-
--- | The frame offsets an address value can name, or every offset when the
--- index into the frame is unbounded.
-stackAddress :: Abstract -> Maybe (Int32, Int32)
-stackAddress (StackOffset o) = Just (o, o)
-stackAddress (StackSpan lo hi) = Just (lo, hi)
-stackAddress (Derived (Index StackFrame)) = Just (minBound, maxBound)
-stackAddress _ = Nothing
-
--- | The value an operation produces from its operands. An operand that may be
--- a frame address (a stack offset or span, or an unbounded index into the
--- frame) never yields a value that loses the frame: when the result is not
--- itself a frame address, it is an unbounded index into the frame.
-frameCarried :: [Abstract] -> Abstract -> Abstract
-frameCarried operands result
-  | any (isJust . stackAddress) operands, not (isJust (stackAddress result)) = Derived (Index StackFrame)
-  | otherwise = result
-
--- | The union of two escape spans; a span covers every frame offset between
--- its ends, and `minBound..maxBound` is every slot.
-escapedSpan :: Maybe (Int32, Int32) -> Maybe (Int32, Int32) -> Maybe (Int32, Int32)
-escapedSpan Nothing other = other
-escapedSpan other Nothing = other
-escapedSpan (Just (lo, hi)) (Just (lo', hi')) = Just (min lo lo', max hi hi')
-
-markEscaped :: Maybe (Int32, Int32) -> Abstract -> Maybe (Int32, Int32)
-markEscaped span_ value = escapedSpan span_ (stackAddress value)
-
--- | Drops every local slot holding a byte at or above the lowest escaped
--- offset, except the slot the entry push wrote lr into while it still holds it.
-forgetEscaped :: State -> State
-forgetEscaped state = case escaped state of
-  Nothing -> state
-  Just (lo, _) ->
-    state {slots = M.filterWithKey (\k v -> toInteger k + 4 <= toInteger lo || keepsReturn state k v) (slots state)}
-
--- | Whether a slot is the return address the entry push wrote and nothing has
--- overwritten since.
-keepsReturn :: State -> Int32 -> Abstract -> Bool
-keepsReturn state offset value = value == ReturnAddress && S.member offset (savedReturn state)
-
--- | A small index read as signed stack-offset deltas: every value, or the two bounds.
-signedOffsets :: Abstract -> Maybe [Int32]
-signedOffsets value = case (enumerate value, bounds value) of
-  (Just xs, _) | all small offsets -> Just offsets where offsets = map fromIntegral xs
-  (_, Just (lo, hi)) | hi < 0x10000 -> Just [fromIntegral lo, fromIntegral hi]
-  _ -> Nothing
- where
-  small o = abs o < 0x10000
-
-stackAt :: [Int32] -> Abstract
-stackAt [o] = StackOffset o
-stackAt offsets = StackSpan (minimum offsets) (maximum offsets)
-
--- | Joins, then moves a growing interval bound out to the next threshold. A
--- growing stack offset keeps its frame root.
-widenValue :: (Word32 -> Location) -> [Word32] -> Abstract -> Abstract -> Abstract
-widenValue place thresholds old new
-  | joined == old = old
-  | Exact _ <- joined = joined
-  | Derived _ <- joined = joined
-  | Just (lo', _) <- bounds joined, lo' >= addressFloor = Derived (Index (place lo'))
-  | Just (lo, hi) <- bounds old, Just (lo', hi') <- bounds joined =
-      Interval
-        (if lo' < lo then fromMaybe 0 (listToMaybe (reverse (filter (<= lo') thresholds))) else lo)
-        (if hi' > hi then fromMaybe maxBound (listToMaybe (filter (>= hi') thresholds)) else hi)
-  | isJust (stackBounds joined) = Derived (Index StackFrame)
-  | otherwise = Unknown
- where
-  joined = joinValue place old new
-
--- | Values from here up are taken as addresses when widened: a growing
--- pointer becomes an unbounded index from its lowest object.
-addressFloor :: Word32
-addressFloor = 0x10000
-
-pointwise :: (Word32 -> Word32 -> Word32) -> Abstract -> Abstract -> Maybe Abstract
-pointwise f a b = do
-  xs <- enumerate a
-  ys <- enumerate b
-  if length xs * length ys > setCap then Nothing else Just (fromSet (S.fromList [f x y | x <- xs, y <- ys]))
-
--- * Abstract state
-
-data State = State
-  { registers :: M.Map Int Abstract
-  , slots :: M.Map Int32 Abstract
-  , comparison :: Maybe Comparison
-  , -- | A condition the current flags are known to satisfy on this path.
-    holds :: Maybe Cond
-  , -- | The stack-pointer offsets this function has taken the address of.
-    escaped :: Maybe (Int32, Int32)
-  , -- | The frame offsets a store wrote the entry value of a callee-saved
-    -- register or the entry link register into.
-    savedRegisters :: S.Set Int32
-  , -- | The frame offsets the entry push wrote lr into.
-    savedReturn :: S.Set Int32
-  }
-  deriving (Eq, Show)
-
-entryState :: State
-entryState =
-  State
-    (M.fromList ([(n, Derived (Argument (Reg n))) | n <- [0 .. 12]] ++ [(13, StackOffset 0), (14, ReturnAddress)]))
-    M.empty
-    Nothing
-    Nothing
-    Nothing
-    S.empty
-    S.empty
-
-joinState :: (Word32 -> Location) -> State -> State -> State
-joinState place a b =
-  State
-    (M.unionWith (joinValue place) (registers a) (registers b))
-    (M.intersectionWith (joinValue place) (slots a) (slots b))
-    (if comparison a == comparison b then comparison a else Nothing)
-    (if holds a == holds b then holds a else Nothing)
-    (escapedSpan (escaped a) (escaped b))
-    (savedRegisters a `S.union` savedRegisters b)
-    (savedReturn a `S.intersection` savedReturn b)
-
-widenState :: (Word32 -> Location) -> [Word32] -> State -> State -> State
-widenState place thresholds old new =
-  State
-    (M.unionWith (widenValue place thresholds) (registers old) (registers new))
-    (M.intersectionWith (widenValue place thresholds) (slots old) (slots new))
-    (if comparison old == comparison new then comparison old else Nothing)
-    (if holds old == holds new then holds old else Nothing)
-    (escapedSpan (escaped old) (escaped new))
-    (savedRegisters old `S.union` savedRegisters new)
-    (savedReturn old `S.intersection` savedReturn new)
-
--- | The flags of `cmp r, #k` (unsigned conditions valid) or `cmn r, #-k` (only EQ and NE).
-data Comparison = Comparison Reg Word32 Bool deriving (Eq, Show)
-
--- * Analysis context
-
-data Context = Context
-  { contextElf :: Elf
-  , contextLayout :: Layout
-  , contextAllowlist :: Allowlist
-  , bankFunctions :: M.Map Word32 Function
-  , codeWords :: S.Set Word32
-  , namedObjects :: [(Word32, Word32, String)]
-  , -- | The (callee entry, argument) pairs being analysed with that argument 0.
-    zeroArguments :: [(Word32, Reg)]
-  }
-
--- | A bank function, or a run of ARM code that no function symbol covers.
+-- | Exact aliases share one function extent.
 data Function = Function {functionName :: String, functionStart :: Word32, functionEnd :: Word32}
 
-locate :: Context -> Word32 -> Location
-locate context address = case regionOf (contextLayout context) address of
-  GeneratedArea -> GeneratedData
-  region
-    | region == BankCode || region == BankData || region == EngineData
-    , Just (_, _, name) <- find (\(start, end, _) -> start <= address && address < end) (namedObjects context) ->
-        BankObject name
-    | let layout = contextLayout context
-    , allocationBase layout <= address && address < allocationEnd layout ->
-        AllocationCell (AllocationOffset (address - allocationBase layout))
-    | otherwise -> StockAddress address
-
-readSized :: Context -> Width -> Bool -> Word32 -> Maybe Word32
-readSized context width signed address = case width of
-  Word -> wordAt elf address
-  Byte -> extend 8 . fromIntegral <$> byteAt elf address
-  Half -> do
-    low <- byteAt elf address
-    high <- byteAt elf (address + 1)
-    pure (extend 16 (fromIntegral low .|. (fromIntegral high `shiftL` 8)))
-  Dual -> Nothing
- where
-  elf = contextElf context
-  extend :: Int -> Word32 -> Word32
-  extend bits value
-    | signed && testBit value (bits - 1) = value .|. complement ((1 `shiftL` bits) - 1)
-    | otherwise = value
-
--- * Value arithmetic
-
-offsetFrom :: Context -> Abstract -> Abstract -> Abstract
-offsetFrom context base index = frameCarried [base, index] $ case offsetFromOrdered context base index of
-  Unknown -> case offsetFromOrdered context index base of
-    derived@(Derived _) -> derived
-    _ -> Unknown
-  precise -> precise
-
-offsetFromOrdered :: Context -> Abstract -> Abstract -> Abstract
-offsetFromOrdered context base index = case (base, index) of
-  (StackOffset o, _) | Just offsets <- signedOffsets index -> stackAt (map (o +) offsets)
-  (StackSpan lo hi, _) | Just offsets <- signedOffsets index -> stackAt (map (lo +) offsets ++ map (hi +) offsets)
-  (StackOffset _, _) | scalar index -> Derived (Index StackFrame)
-  (StackSpan _ _, _) | scalar index -> Derived (Index StackFrame)
-  (_, StackOffset o) | Just offsets <- signedOffsets base -> stackAt (map (o +) offsets)
-  (Derived p, _) | scalar index -> Derived p
-  _ | Just v <- pointwise (+) base index -> v
-  _
-    | Just (blo, bhi) <- bounds base
-    , Just (ilo, ihi) <- bounds index
-    , toInteger bhi + toInteger ihi <= 0xffffffff ->
-        Interval (blo + ilo) (bhi + ihi)
-  (Exact single, _) | S.size single == 1 && scalar index -> Derived (Index (locate context (S.findMin single)))
-  (_, Derived p) | Just (_, hi) <- bounds base, hi < 0x10000 -> Derived p
-  _ -> Unknown
-
-subtractFrom :: Abstract -> Abstract -> Abstract
-subtractFrom (StackOffset o) (StackOffset q) = exact (fromIntegral (o - q))
-subtractFrom base index = frameCarried [base, index] $ case (base, index) of
-  (StackOffset o, _) | Just offsets <- signedOffsets index -> stackAt (map (o -) offsets)
-  (StackSpan lo hi, _) | Just offsets <- signedOffsets index -> stackAt (map (lo -) offsets ++ map (hi -) offsets)
-  (Derived p, _) | Just _ <- bounds index -> Derived p
-  (StackOffset _, _) | scalar index -> Derived (Index StackFrame)
-  (StackSpan _ _, _) | scalar index -> Derived (Index StackFrame)
-  (Derived p@(Index StackFrame), _) | scalar index -> Derived p
-  _ | Just v <- pointwise (-) base index -> v
-  _ | Just (lo, hi) <- bounds base, Just [v] <- enumerate index, lo >= v -> Interval (lo - v) (hi - v)
-  _ -> Unknown
-
-shiftValue :: Shift -> Int -> Abstract -> Abstract
-shiftValue LSL 0 value = value
-shiftValue shift amount value = frameCarried [value] $ case enumerate value of
-  Just xs -> fromSet (S.fromList (map (applyShift shift amount) xs))
-  Nothing -> case (shift, bounds value) of
-    (LSR, Just (lo, hi)) -> Interval (applyShift LSR amount lo) (applyShift LSR amount hi)
-    (LSR, Nothing) -> Interval 0 (applyShift LSR amount maxBound)
-    (LSL, Just (lo, hi)) | toInteger hi * 2 ^ amount <= 0xffffffff -> Interval (lo `shiftL` amount) (hi `shiftL` amount)
-    _ -> Unknown
-
--- | An immediate shift; amount 0 encodes 32 for LSR and ASR. ROR by 0 is the
--- rotate-right-extend, whose carry this analysis does not track, so its
--- callers take the result as unknown; `shiftValue` keeps the no-rotation for
--- the byte and halfword extends.
-applyShift :: Shift -> Int -> Word32 -> Word32
-applyShift shift amount value = case shift of
-  LSL -> value `shiftL` amount
-  LSR -> if amount == 0 then 0 else value `shiftR` amount
-  ASR ->
-    let n = if amount == 0 then 31 else amount
-     in if testBit value 31 then complement (complement value `shiftR` n) else value `shiftR` n
-  ROR -> if amount == 0 then value else (value `shiftR` amount) .|. (value `shiftL` (32 - amount))
-
-dataResult :: Context -> DataOp -> Abstract -> Abstract -> Abstract
-dataResult context op a b = frameCarried operands $ case op of
-  MOV -> b
-  MVN -> fromMaybe Unknown (pointwise (\_ y -> complement y) (exact 0) b)
-  ADD -> offsetFrom context a b
-  SUB -> subtractFrom a b
-  RSB -> subtractFrom b a
-  AND -> case (pointwise (.&.) a b, bounds a, bounds b) of
-    (Just v, _, _) -> v
-    (_, Just (_, ha), Just (_, hb)) -> Interval 0 (min ha hb)
-    (_, _, Just (_, hb)) -> Interval 0 hb
-    (_, Just (_, ha), _) -> Interval 0 ha
-    _ -> Unknown
-  ORR -> fromMaybe Unknown (pointwise (.|.) a b)
-  EOR -> fromMaybe Unknown (pointwise xor a b)
-  BIC -> case (pointwise (\x y -> x .&. complement y) a b, bounds a) of
-    (Just v, _) -> v
-    (_, Just (_, ha)) -> Interval 0 ha
-    _ -> Unknown
-  _ -> Unknown
- where
-  -- MVN has no first operand: its Rn field is zero and holds no value.
-  -- ADD, SUB and RSB carry the frame in offsetFrom and subtractFrom.
-  operands = case op of
-    MOV -> [b]
-    MVN -> [b]
-    ADD -> []
-    SUB -> []
-    RSB -> []
-    _ -> [a, b]
-
--- * Transfer
-
-data Outcome = Outcome
-  { outcomeSuccessors :: [(Word32, State)]
-  , outcomeFindings :: [Finding]
-  , outcomeStores :: Int
-  , outcomeBranches :: Int
-  }
-
-always :: Cond
-always = Cond 14
-
-registerValue :: Word32 -> State -> Reg -> Abstract
-registerValue address _ (Reg 15) = exact (address + 8)
-registerValue _ state (Reg n) = fromMaybe Unknown (M.lookup n (registers state))
-
-setRegister :: Reg -> Abstract -> State -> State
-setRegister (Reg n) value state =
-  state
-    { registers = M.insert n value (registers state)
-    , comparison = case comparison state of
-        Just (Comparison (Reg compared) _ _) | compared == n -> Nothing
-        other -> other
-    , escaped = if n == 13 then escaped state else markEscaped (escaped state) value
-    }
-
--- | Narrows the compared register on a path where `cond` holds after `cmp r, #k`.
--- Nothing when the register's exact values rule out an EQ or NE path.
-refine :: Cond -> State -> Maybe State
-refine (Cond 14) state = Just state
-refine (Cond c) state = case comparison state of
-  Nothing -> Just state
-  Just (Comparison _ _ False) | c > 1 -> Just state
-  Just (Comparison (Reg n) k _)
-    | c <= 1
-    , Just (Exact values) <- M.lookup n (registers state)
-    , if c == 0 then S.notMember k values else values == S.singleton k ->
-        Nothing
-  Just (Comparison (Reg n) k _) ->
-    let current = fromMaybe Unknown (M.lookup n (registers state))
-        nonNegative = maybe False ((<= 0x7fffffff) . snd) (bounds current) && k <= 0x7fffffff
-        narrowed = case c of
-          0 -> Just (exact k)
-          1 -> case current of
-            Exact values | S.size values > 1 -> Just (fromSet (S.delete k values))
-            Interval lo hi | lo == k && lo < hi -> Just (Interval (lo + 1) hi)
-            Interval lo hi | hi == k && lo < hi -> Just (Interval lo (hi - 1))
-            _ -> Nothing
-          2 -> clamp current k maxBound
-          3 -> if k == 0 then Nothing else clamp current 0 (k - 1)
-          8 -> if k == maxBound then Nothing else clamp current (k + 1) maxBound
-          9 -> clamp current 0 k
-          10 | nonNegative -> clamp current k maxBound
-          11 | nonNegative -> if k == 0 then Nothing else clamp current 0 (k - 1)
-          12 | nonNegative -> clamp current (k + 1) maxBound
-          13 | nonNegative -> clamp current 0 k
-          _ -> Nothing
-     in Just (maybe state (\value -> state {registers = M.insert n value (registers state)}) narrowed)
- where
-  clamp current lo hi = case current of
-    Exact values -> let kept = S.filter (\v -> lo <= v && v <= hi) values in if S.null kept then Nothing else Just (Exact kept)
-    Interval a b -> let lo' = max a lo; hi' = min b hi in if lo' <= hi' then Just (Interval lo' hi') else Nothing
-    StackOffset _ -> Nothing
-    StackSpan _ _ -> Nothing
-    ReturnAddress -> Nothing
-    _ -> Just (Interval lo hi)
-
-operandValue :: Word32 -> State -> Operand -> Abstract
-operandValue _ _ (Immediate value) = exact value
-operandValue address state (ShiftedImmediate rm shift amount)
-  | shift == ROR, amount == 0 = frameCarried [value] Unknown
-  | otherwise = frameCarried [value] (shiftValue shift amount value)
- where
-  value = registerValue address state rm
-operandValue address state (ShiftedRegister rm shift rs) = frameCarried [value, amount] $ case enumerate amount of
-  Just [0] -> value
-  Just [n] | n < 32 -> shiftValue shift (fromIntegral n) value
-  _ -> Unknown
- where
-  value = registerValue address state rm
-  amount = registerValue address state rs
-
--- | One instruction: intra-function successors with their states, and the
--- findings it produces in this state.
-execute :: Context -> Function -> Word32 -> Instruction -> State -> Outcome
-execute context function address instruction state = case instruction of
-  Rejected reason -> (continue state) {outcomeFindings = [violation (ForbiddenInstruction reason) (forbiddenReason reason)]}
-  Hint _ -> continue state
-  DataProcessing cond op setsFlags rd rn operand
-    | op `elem` [TST, TEQ, CMP, CMN] ->
-        let compared s = case (op, enumerate (operandValue address s operand)) of
-              (CMP, Just [k]) | rn /= pc -> Just (Comparison rn k True)
-              (CMN, Just [k]) | rn /= pc -> Just (Comparison rn (negate k) False)
-              _ -> Nothing
-         in conditional cond (\s -> continue s {comparison = compared s, holds = Nothing}) id
-    | rd == pc -> branching cond (\s -> indirectBranch False Nothing (result s) s)
-    | otherwise -> conditional cond (\s -> continue (flags setsFlags (setRegister rd (result s) s))) (flags setsFlags)
-   where
-    result s = dataResult context op (registerValue address s rn) (operandValue address s operand)
-  MoveWide cond rd value -> conditional cond (\s -> continue (setRegister rd (exact value) s)) id
-  ReadStatus cond rd -> conditional cond (\s -> continue (setRegister rd Unknown s)) id
-  WriteApplicationFlags cond _ -> conditional cond (\s -> continue (flags True s)) id
-  Multiply cond rd rn rm accumulator ->
-    let factors s = case (pointwise (*) (registerValue address s rn) (registerValue address s rm), bounds (registerValue address s rn), bounds (registerValue address s rm)) of
-          (Just v, _, _) -> v
-          (_, Just (alo, ahi), Just (blo, bhi)) | toInteger ahi * toInteger bhi <= 0xffffffff -> Interval (alo * blo) (ahi * bhi)
-          _ -> Unknown
-        operands s = [registerValue address s rn, registerValue address s rm] ++ maybe [] (\ra -> [registerValue address s ra]) accumulator
-        result s = frameCarried (operands s) (maybe (factors s) (\ra -> offsetFrom context (registerValue address s ra) (factors s)) accumulator)
-     in conditional cond (\s -> continue (setRegister rd (result s) s)) id
-  MoveTop cond rd value ->
-    let low s = registerValue address s rd
-        top s = frameCarried [low s] (fromMaybe Unknown (pointwise (\x _ -> (x .&. 0xffff) .|. (value `shiftL` 16)) (low s) (exact 0)))
-     in conditional cond (\s -> continue (setRegister rd (top s) s)) id
-  ZeroExtend cond rd rm rotation bits ->
-    let extended s = dataResult context AND (shiftValue ROR rotation (registerValue address s rm)) (exact ((1 `shiftL` bits) - 1))
-     in conditional cond (\s -> continue (setRegister rd (extended s) s)) id
-  Compute cond defs ->
-    conditional cond
-      ( \s ->
-          let sources = maybe [] computeSources (wordAt (contextElf context) address)
-              value = frameCarried (map (registerValue address s) sources) Unknown
-           in continue (foldr (\destination acc -> setRegister destination value acc) s defs)
-      )
-      id
-  Load cond width signed rt rn offset indexing
-    | rt == pc ->
-        branching cond $ \s ->
-          let (value, found) = loaded s width signed (transferAddress s rn offset indexing)
-           in withFindings found (indirectBranch False Nothing value (writeback s rn offset indexing))
-    | otherwise ->
-        conditional cond
-          ( \s ->
-              let at = transferAddress s rn offset indexing
-                  (value, found) = loaded s width signed at
-                  after = writeback s rn offset indexing
-                  assigned = case width of
-                    Dual -> setRegister (nextReg rt) (fst (loaded s Word False (offsetFrom context at (exact 4)))) (setRegister rt (fst (loaded s Word False at)) after)
-                    _ -> setRegister rt value after
-               in withFindings found (continue assigned)
-          )
-          id
-  Store cond width rt rn offset indexing ->
-    conditional cond
-      ( \s ->
-          let at = transferAddress s rn offset indexing
-              size = widthBytes width
-              values = [registerValue address s rt, registerValue address s (nextReg rt)]
-              stored = storeValues (storeSlots s at size values) values
-              -- A pre-indexed store of a callee-saved register at the entry
-              -- stack pointer writes a prologue slot.
-              entrySaved = case (rn, rt, width, indexing, at, registerValue address s sp) of
-                (Reg 13, Reg n, Word, PreIndexed, StackOffset first, StackOffset 0)
-                  | n == 14 || n >= 4 && n <= 12 -> S.singleton first
-                _ -> S.empty
-              saved = entrySaved `S.union` savedWords at size values
-              savedReturnSlots
-                | rt == lr = entrySaved
-                | otherwise = S.empty
-           in storing (storeCheck s rn at size)
-                ( continue
-                    ( writeback
-                        ( stored
-                            { savedRegisters = savedRegisters s `S.union` saved
-                            , savedReturn = savedReturn s `S.union` savedReturnSlots
-                            }
-                        )
-                        rn
-                        offset
-                        indexing
-                    )
-                )
-      )
-      id
-  StoreMultiple cond rn mode wb regs ->
-    conditional cond
-      ( \s ->
-          let (lowest, count, end) = block s rn mode regs
-              values = map (registerValue address s) regs
-              stored = storeValues (storeSlots s lowest count values) values
-              -- A push at the entry stack pointer writes the prologue's slots.
-              pushed
-                | rn == sp, mode == DecrementBefore, wb, registerValue address s sp == StackOffset 0
-                , StackOffset first <- lowest =
-                    [(first + 4 * fromIntegral i, r) | (i, r) <- zip [0 :: Int ..] regs]
-                | otherwise = []
-              written = case lowest of
-                StackOffset first -> [(first + 4 * fromIntegral i, v) | (i, v) <- zip [0 :: Int ..] values]
-                _ -> []
-              saved =
-                S.fromList [offset | (offset, r) <- pushed, r >= Reg 4, r <= Reg 12 || r == lr]
-                  `S.union` S.fromList [offset | (offset, v) <- written, savedValue v]
-              savedReturnSlots = S.fromList [offset | (offset, r) <- pushed, r == lr]
-              updated =
-                (if wb then setRegister rn end stored else stored)
-                  { savedRegisters = savedRegisters s `S.union` saved
-                  , savedReturn = savedReturn s `S.union` savedReturnSlots
-                  }
-           in storing (storeCheck s rn lowest count) (continue updated)
-      )
-      id
-  LoadMultiple cond rn mode wb regs ->
-    let values s =
-          let (lowest, _, _) = block s rn mode regs
-           in [(r, fst (loaded s Word False (offsetFrom context lowest (exact (4 * i))))) | (i, r) <- zip [0 ..] regs]
-        load s =
-          let (_, _, end) = block s rn mode regs
-              updated = if wb && rn `notElem` regs then setRegister rn end s else s
-           in foldr (\(r, v) acc -> if r == pc then acc else setRegister r v acc) updated (values s)
-     in if pc `elem` regs
-          then branching cond (\s -> indirectBranch False Nothing (fromMaybe Unknown (lookup pc (values s))) (load s))
-          else conditional cond (\s -> continue (load s)) id
-  Branch cond link target
-    | link, traps target -> conditional cond (\s -> branchCount (targetFindings s True target) (Outcome [] [] 0 0)) id
-    | link -> conditional cond (\s -> branchCount (targetFindings s True target) (continue (afterCall (calleeAt target) s))) id
-    | inside target -> branching cond (\s -> Outcome [(target, s)] [] 0 0)
-    | otherwise -> branching cond (\s -> branchCount (targetFindings s False target) (Outcome [] [] 0 0))
-  BranchExchange cond link rm
-    | link ->
-        conditional cond
-          ( \s ->
-              let value = registerValue address s rm
-               in (indirectBranch True (Just rm) value s) {outcomeSuccessors = [next (afterCall (calleeOf value) s)]}
-          )
-          id
-    | otherwise -> branching cond (\s -> indirectBranch False (Just rm) (registerValue address s rm) s)
- where
-  layout = contextLayout context
-  allowlist = contextAllowlist context
-  name = functionName function
-  violation = Finding address name Violation
-  next s = (address + 4, s)
-  continue s = Outcome [next s] [] 0 0
-  withFindings found outcome = outcome {outcomeFindings = found ++ outcomeFindings outcome}
-  storing (found, provenCount) outcome = (withFindings found outcome) {outcomeStores = provenCount}
-  branchCount found outcome = (withFindings found outcome) {outcomeBranches = if null found then 1 else 0}
-  inside target = functionStart function <= target && target < functionEnd function
-  flags setsFlags s = if setsFlags then s {comparison = Nothing, holds = Nothing} else s
-  -- A callee that runs only hints up to an unconditional branch to itself does not return.
-  traps at = case decode at <$> wordAt (contextElf context) at of
-    Just (Hint _) -> traps (at + 4)
-    Just (Branch condition False to) -> condition == always && to == at
-    _ -> False
-  nextReg (Reg n) = Reg (n + 1)
-  widthBytes :: Width -> Word32
-  widthBytes width = case width of
-    Byte -> 1
-    Half -> 2
-    Word -> 4
-    Dual -> 8
-  block s rn mode regs =
-    let count = fromIntegral (4 * length regs)
-        base = registerValue address s rn
-        lowest = case mode of
-          IncrementAfter -> base
-          IncrementBefore -> offsetFrom context base (exact 4)
-          DecrementAfter -> subtractFrom base (exact (count - 4))
-          DecrementBefore -> subtractFrom base (exact count)
-        end = case mode of
-          IncrementAfter -> offsetFrom context base (exact count)
-          IncrementBefore -> offsetFrom context base (exact count)
-          _ -> subtractFrom base (exact count)
-     in (lowest, count, end)
-
-  -- A conditional instruction runs on the path where its condition holds and
-  -- is skipped on the other; each path carries what it knows about the flags
-  -- until an instruction changes them. A path `refine` rules out is dropped.
-  conditional :: Cond -> (State -> Outcome) -> (State -> State) -> Outcome
-  conditional cond run skip = case known cond of
-    Just True -> run state
-    Just False -> continue (skip state)
-    Nothing ->
-      let failed = [next (skip s) | Just s <- [assume (negateCond cond)]]
-       in case assume cond of
-            Just held -> let taken = run held in taken {outcomeSuccessors = outcomeSuccessors taken ++ failed}
-            Nothing -> Outcome failed [] 0 0
-
-  -- A transfer that leaves the straight line: the fallthrough exists only
-  -- when the condition can fail.
-  branching :: Cond -> (State -> Outcome) -> Outcome
-  branching cond run = conditional cond run id
-
-  known cond
-    | cond == always || holds state == Just cond = Just True
-    | holds state == Just (negateCond cond) = Just False
-    | otherwise = Nothing
-  assume cond = (\s -> s {holds = maybe (Just cond) Just (holds state)}) <$> refine cond state
-
-  transferAddress s rn offset indexing = case indexing of
-    PostIndexed -> registerValue address s rn
-    _ -> applyOffset s (registerValue address s rn) offset
-  applyOffset s base offset = case offset of
-    OffsetImmediate k
-      | k >= 0 -> offsetFrom context base (exact (fromIntegral k))
-      | otherwise -> subtractFrom base (exact (fromIntegral (negate k)))
-    OffsetRegister up rm shift amount ->
-      let raw = registerValue address s rm
-          index
-            | shift == ROR, amount == 0 = frameCarried [raw] Unknown
-            | otherwise = shiftValue shift amount raw
-       in if up then offsetFrom context base index else subtractFrom base index
-  writeback s rn offset indexing = case indexing of
-    OffsetOnly -> s
-    _ -> setRegister rn (applyOffset s (registerValue address s rn) offset) s
-
-  loaded :: State -> Width -> Bool -> Abstract -> (Abstract, [Finding])
-  loaded s width signed at = case at of
-    StackOffset o
-      | width == Word -> (fromMaybe (if o >= 0 then Derived (CallerFrame o) else Unknown) (M.lookup o (slots s)), [])
-      | otherwise -> (narrow, [])
-    StackSpan _ _ -> (narrow, [])
-    Derived p -> (if width == Word then deref p else narrow, [])
-    _ -> case (enumerate at, bounds at) of
-      (_, Just (lo, hi)) | regionOf layout lo == DeviceSpace || regionOf layout hi == DeviceSpace -> (Unknown, [violation DeviceLoad ("load from " ++ hex lo ++ " in " ++ regionName DeviceSpace)])
-      (Just addresses, _)
-        | all ((== BankCode) . regionOf layout) addresses
-        , Just values <- mapM (readSized context width signed) addresses ->
-            (fromSet (S.fromList values), [])
-        | width == Word
-        , (a : rest) <- addresses
-        , all ((== locate context a) . locate context) rest ->
-            (Derived (Cell (locate context a)), [])
-      _ -> (narrow, [])
-   where
-    narrow = case (width, signed) of
-      (Byte, False) -> Interval 0 0xff
-      (Half, False) -> Interval 0 0xffff
-      _ -> Unknown
-  deref p = if derefDepth p >= 3 then Unknown else Derived (Deref p)
-  derefDepth :: Provenance -> Int
-  derefDepth (Deref p) = 1 + derefDepth p
-  derefDepth _ = 0
-
-  -- Stack slots hold whole words; a narrower store forgets the slots it
-  -- touches. A store through an unbounded frame index, or through a pointer
-  -- that may alias an exposed local, forgets every word it may reach.
-  storeSlots :: State -> Abstract -> Word32 -> [Abstract] -> State
-  storeSlots s (StackOffset o) size values =
-    let end = o + fromIntegral size
-        cleared = M.filterWithKey (\k _ -> k + 4 <= o || k >= end) (slots s)
-        written
-          | size `mod` 4 == 0 = M.union (M.fromList (zip [o, o + 4 .. end - 4] values)) cleared
-          | otherwise = cleared
-     in s {slots = written}
-  storeSlots s (StackSpan lo hi) size _
-    | hi + fromIntegral size <= 0 && not (overlapsSaved s lo (hi + fromIntegral size)) =
-        s {slots = M.filterWithKey (\k _ -> k + 4 <= lo || k >= hi + fromIntegral size) (slots s)}
-  storeSlots s (Derived (Index StackFrame)) _ _ =
-    s {slots = M.filterWithKey (\k v -> keepsReturn s k v) (slots s)}
-  storeSlots s (Derived _) _ _ = forgetEscaped s
-  storeSlots s _ _ _ = s
-
-  -- A frame address a store leaves in memory the callee can reach.
-  storeValues s values = s {escaped = foldl markEscaped (escaped s) values}
-
-  -- The frame offsets a store writes the entry value of a callee-saved
-  -- register or the entry link register into.
-  savedWords at size values = case at of
-    StackOffset o -> S.fromList [o + 4 * fromIntegral i | (i, v) <- zip [0 :: Int ..] (take (fromIntegral (size `div` 4)) values), savedValue v]
-    _ -> S.empty
-  savedValue value = case value of
-    ReturnAddress -> True
-    Derived (Argument (Reg n)) -> n >= 4 && n <= 11
-    _ -> False
-
-  -- Whether [lo, end) of the frame overlaps a word a store saved a
-  -- callee-saved register or the return address in.
-  overlapsSaved s lo end = any (\k -> k + 4 > lo && k < end) (S.toList (savedRegisters s))
-
-  -- Findings and the number of proven stores (0 or 1).
-  storeCheck :: State -> Reg -> Abstract -> Word32 -> ([Finding], Int)
-  storeCheck s rn at size = case at of
-    StackOffset o -> frame o o
-    StackSpan lo hi
-      | overlapsSaved s lo (hi + fromIntegral size) -> ([violation StackStoreOverSaved ("store through " ++ regName rn ++ " may overwrite the saved registers or return address (entry sp" ++ showSigned lo ++ ".." ++ showSigned (hi + fromIntegral size - 1) ++ ")")], 0)
-      | otherwise -> frame lo hi
-    Derived p -> (unproven StoreAccess ("store through " ++ regName rn) p, 0)
-    _ -> case (enumerate at, bounds at) of
-      (Just addresses, _) -> collect (concatMap (\a -> storeRange a (a + size - 1)) addresses)
-      (_, Just (lo, hi)) | toInteger hi + toInteger size - 1 <= 0xffffffff -> collect (storeRange lo (hi + size - 1))
-      _ -> ([violation UnboundedStore ("store through " ++ regName rn ++ " to an unbounded address" ++ describe (registerValue address s rn))], 0)
-   where
-    collect found = (found, if null found then 1 else 0)
-    frame lo hi
-      | hi + fromIntegral size <= 0 = ([], 1)
-      | otherwise = ([violation StackStoreBeyondFrame ("store through " ++ regName rn ++ " reaches the caller's frame (entry sp" ++ showSigned lo ++ ".." ++ showSigned (hi + fromIntegral size - 1) ++ ")")], 0)
-    showSigned o = if o < 0 then show o else '+' : show o
-  storeRange lo hi
-    | regionOf layout lo == regionOf layout hi && writable (regionOf layout lo) = []
-    | regionOf layout lo == StockMemory
-    , any (\st -> stockStoreAddress st <= lo && toInteger hi < toInteger (stockStoreAddress st) + toInteger (stockStoreBytes st)) (stockStores allowlist) =
-        []
-    | otherwise =
-        let region = if writable (regionOf layout lo) then regionOf layout hi else regionOf layout lo
-         in [violation (StoreOutside lo hi region) ("store to " ++ hex lo ++ ".." ++ hex hi ++ " in " ++ regionName region ++ (if region == StockMemory then " not declared in stock_stores" else ""))]
-
-  describe value = case value of
-    Derived p -> " (" ++ showProvenance p ++ ")"
-    Interval lo hi -> " (" ++ hex lo ++ ".." ++ hex hi ++ ")"
-    Exact values -> " (" ++ show (S.size values) ++ " values " ++ hex (S.findMin values) ++ ".." ++ hex (S.findMax values) ++ ")"
-    StackOffset _ -> " (stack)"
-    StackSpan _ _ -> " (stack)"
-    _ -> " (no provenance)"
-
-  unproven :: Access -> String -> Provenance -> [Finding]
-  unproven access what p =
-    case find (\d -> declarationFunction d == name && declarationAccess d == access && declarationThrough d == p) (declarations allowlist) of
-      Just d -> [Finding address name (DeclaredBy (declarationReason d)) (Unproven access p) (what ++ " (" ++ showProvenance p ++ ")")]
-      Nothing -> [violation (Unproven access p) (what ++ " (" ++ showProvenance p ++ ") is not bounded and not declared")]
-
-  -- A transfer out of this function to `target`.
-  targetFindings :: State -> Bool -> Word32 -> [Finding]
-  targetFindings s call target
-    | target .&. 3 /= 0 = [violation (TargetMisaligned target) (verb ++ hex target ++ " is not an ARM-state word address")]
-    | M.member target (bankFunctions context) = obligations s target
-    | not (stockCode (regionOf layout target)) = [violation (TargetNotEntry target (regionOf layout target)) (verb ++ hex target ++ " in " ++ regionName (regionOf layout target) ++ " is not a bank function entry")]
-    | any ((== target) . stockCallAddress) (stockCalls allowlist) = []
-    | otherwise = [violation (UndeclaredStockTarget target) (verb ++ "stock " ++ hex target ++ " not declared in stock_calls")]
-   where
-    verb = if call then "call to " else "branch to "
-
-  -- A bank callee declared to store or branch through an argument register,
-  -- or through words loaded from it, puts the same requirement on this
-  -- caller's value of that register.
-  obligations s target = case M.lookup target (bankFunctions context) of
-    Nothing -> []
-    Just callee ->
-      concat
-        [ obligation s (declarationAccess d) callee r depth
-        | d <- declarations allowlist
-        , declarationFunction d == functionName callee
-        , Just (r, depth) <- [argumentRoot (declarationThrough d)]
-        ]
-  obligation s access callee r depth =
-    let value = registerValue address s r
-        what =
-          "passes " ++ regName r ++ " to " ++ functionName callee ++ ", which "
-            ++ (if access == StoreAccess then "stores" else "branches")
-            ++ (if depth == 0 then " through it," else " through a word loaded from it,")
-     in case value of
-          Derived p -> unproven access what (derefs depth p)
-          _
-            | value == exact 0 -> zeroArgument callee r what
-            | depth == 0 && access == StoreAccess && provenPointer value -> []
-            | depth == 0 && access == BranchAccess, Just targets <- enumerate value -> concatMap (targetFindings s True) targets
-            | depth > 0 && stackPointer value -> unproven access what (derefs (depth - 1) (Cell StackFrame))
-            | depth > 0, Just (lo, _) <- bounds value -> unproven access what (derefs (depth - 1) (Cell (locate context lo)))
-            | otherwise -> [violation UnprovenArgument (what ++ " with an unproven value" ++ describe value)]
-  -- A 0 argument passes when the callee, analysed from an entry with that
-  -- argument 0, has no violation besides code that analysis does not reach.
-  zeroArgument callee r what
-    | (functionStart callee, r) `notElem` zeroArguments context
-    , let nested = context {zeroArguments = (functionStart callee, r) : zeroArguments context}
-          (found, _, _, _) = analyse nested (setRegister r (exact 0) entryState) callee
-    , all (\f -> findingVerdict f /= Violation || findingReason f == Unreached) found =
-        []
-    | otherwise = [violation UnprovenArgument (what ++ " with 0, and the callee analysed with that argument 0 has a violation")]
-  stackPointer value = case value of
-    StackOffset _ -> True
-    StackSpan _ _ -> True
-    _ -> False
-  provenPointer value = case value of
-    StackOffset _ -> True
-    StackSpan _ _ -> True
-    _ -> case bounds value of
-      Just (lo, hi) -> writable (regionOf layout lo) && regionOf layout hi == regionOf layout lo
-      Nothing -> False
-  argumentRoot p = case p of
-    Argument r -> Just (r, 0 :: Int)
-    Deref inner -> fmap (fmap (+ 1)) (argumentRoot inner)
-    _ -> Nothing
-  derefs :: Int -> Provenance -> Provenance
-  derefs 0 p = p
-  derefs n p = Deref (derefs (n - 1) p)
-
-  -- A transfer through a computed or loaded value.
-  indirectBranch :: Bool -> Maybe Reg -> Abstract -> State -> Outcome
-  indirectBranch call register value s = case value of
-    ReturnAddress | not call -> Outcome [] [] 0 1
-    Derived p -> Outcome [] (unproven BranchAccess (kind ++ through) p) 0 0
-    _ -> case enumerate value of
-      Just targets ->
-        let local = [t | t <- targets, not call, inside t]
-            remote = [t | t <- targets, call || not (inside t)]
-            stray = [violation (TargetNotCode t) ("branch to " ++ hex t ++ " lands outside the function's code") | t <- local, not (S.member t (codeWords context))]
-         in branchCount (concatMap (targetFindings s call) remote ++ stray) (Outcome [(t, s) | t <- local, S.member t (codeWords context)] [] 0 0)
-      Nothing -> Outcome [] [violation UnboundedBranch (kind ++ through ++ " is not bounded" ++ describe value)] 0 0
-   where
-    kind = if call then "call" else "branch"
-    through = maybe " through a loaded program counter" ((" through " ++) . regName) register
-
-  calleeAt target = Just (maybe (StockFunction target) (BankFunction . functionName) (M.lookup target (bankFunctions context)))
-  calleeOf value = case enumerate value of
-    Just [target] -> calleeAt target
-    _ -> Nothing
-  -- Every call forgets the caller's frame words that hold a byte at or above
-  -- the lowest escaped offset, except the entry push's lr slot while it holds
-  -- the entry lr, and every frame word below the stack pointer at the call.
-  afterCall callee s =
-    let clobbered = foldr (`setRegister` Unknown) s [Reg 1, Reg 2, Reg 3, Reg 12, lr]
-        reported = setRegister (Reg 0) (maybe Unknown (Derived . Result) callee) clobbered
-     in (belowCallSp s (forgetEscaped reported)) {comparison = Nothing, holds = Nothing}
-
-  -- A callee may write every frame word below the stack pointer it was called with.
-  belowCallSp called subject = case registerValue address called (Reg 13) of
-    StackOffset o -> keepFrom o subject
-    StackSpan _ hi -> keepFrom hi subject
-    _ -> subject {slots = M.empty}
-   where
-    keepFrom lo kept = kept {slots = M.filterWithKey (\k _ -> k >= lo) (slots kept)}
-
-showProvenance :: Provenance -> String
-showProvenance p = case p of
-  Argument r -> "entry value of " ++ regName r
-  CallerFrame o -> "word at entry sp+" ++ show o
-  Cell location -> "word loaded from " ++ showLocation location
-  Result callee -> "result of " ++ showCallee callee
-  Index location -> "unbounded index into " ++ showLocation location
-  Deref inner -> "word loaded through " ++ showProvenance inner
- where
-  showLocation location = case location of
-    BankObject object -> object
-    GeneratedData -> "generated data"
-    StackFrame -> "the stack frame"
-    AllocationCell (AllocationOffset offset) -> "allocation+" ++ hex offset
-    StockAddress a -> hex a
-  showCallee callee = case callee of
-    BankFunction function -> function
-    StockFunction a -> hex a
-
--- * Driver
-
--- | Checks the bank part of a relinked RAM-push ELF against the allowlist.
 checkBank :: Allowlist -> Elf -> Either String Report
 checkBank allowlist elf = do
   layout <- readLayout elf
-  let symbols = elfSymbols elf
-      codeRanges = (textStart layout, textEnd layout) : maybe [] (\region -> [(engineCodeStart region, engineCodeEnd region)]) (engine layout)
-      inText address = any (\(start, end) -> start <= address && address < end) codeRanges
-      rangeEnd address = maybe (textEnd layout) snd (find (\(start, end) -> start <= address && address < end) codeRanges)
-      namedSymbols =
-        sortOn (\f -> (functionStart f, functionEnd f, functionName f))
-          [ Function (symbolName s) (symbolValue s) (symbolValue s + symbolSize s)
-          | s <- symbols
-          , symbolKind s == FunctionSymbol
-          , symbolSize s > 0
-          , inText (symbolValue s)
-          ]
-      extent f = (functionStart f, functionEnd f)
-      aliasGroups = groupBy (\f g -> extent f == extent g) namedSymbols
-      -- Exact aliases share one body and the lexicographically first name.
-      named = [representative | representative : _ <- aliasGroups]
-      aliases = M.fromList [(functionName f, functionName representative) | group@(representative : _) <- aliasGroups, f <- group]
-      canonicalName name = M.findWithDefault name name aliases
-      canonicalLocation (BankObject name) = BankObject (canonicalName name)
-      canonicalLocation location = location
-      canonicalProvenance provenance = case provenance of
-        Cell location -> Cell (canonicalLocation location)
-        Index location -> Index (canonicalLocation location)
-        Result (BankFunction name) -> Result (BankFunction (canonicalName name))
-        Deref inner -> Deref (canonicalProvenance inner)
-        _ -> provenance
-      canonicalDeclaration d = d
-        { declarationFunction = canonicalName (declarationFunction d)
-        , declarationThrough = canonicalProvenance (declarationThrough d)
-        }
-      canonicalAllowlist = allowlist {declarations = map canonicalDeclaration (declarations allowlist)}
-      covered a = any (\f -> functionStart f <= a && a < functionEnd f) named
-      mapping = sortOn fst [(symbolValue s, symbolName s) | s <- symbols, symbolName s `elem` ["$a", "$d", "$t"], inText (symbolValue s)]
-      boundaries = S.fromList (map fst mapping ++ map functionStart named ++ map snd codeRanges)
-      armRanges = [(start, min end (rangeEnd start)) | ((start, kind), end) <- zip mapping (map fst (drop 1 mapping) ++ [maxBound]), kind == "$a"]
-      armWord a = any (\(start, end) -> start <= a && a < end) armRanges
-      -- Code an `$a` symbol starts that no function symbol covers (a weak
-      -- definition the linker kept without its symbol).
-      anonymous =
-        [ Function ("<code after " ++ maybe "the bank start" functionName (listToMaybe (reverse (filter ((<= start) . functionStart) named))) ++ ">") start end
-        | (start, kind) <- mapping
-        , kind == "$a"
-        , not (covered start)
-        , let end = fromMaybe (rangeEnd start) (S.lookupGT start boundaries)
-        ]
-      functions = sortOn functionStart (named ++ anonymous)
-      code = S.fromList [a | f <- functions, a <- [functionStart f, functionStart f + 4 .. functionEnd f - 4], armWord a]
-      inEngineData address = case engine layout of
-        Just region -> engineDataStart region <= address && address < engineDataEnd region
-        Nothing -> False
-      objects =
-        [ (symbolValue s, symbolValue s + symbolSize s, canonicalName (symbolName s))
-        | s <- symbols
-        , symbolKind s `elem` [ObjectSymbol, FunctionSymbol]
-        , symbolSize s > 0
-        , symbolValue s >= textStart layout && symbolValue s < imageEnd layout || inText (symbolValue s) || inEngineData (symbolValue s)
-        ]
-      context = Context elf layout canonicalAllowlist (M.fromList [(functionStart f, f) | f <- named]) code objects []
-      overlapping =
-        [ Finding (functionStart g) "<layout>" Violation (LayoutProblem FunctionOverlap) ("function " ++ functionName g ++ " overlaps " ++ functionName f)
-        | (f, g) <- zip functions (drop 1 functions)
-        , functionStart g < functionEnd f
-        ]
-      perFunction = map (analyse context entryState) functions
-      undeclaredNames =
-        [ Finding 0 (declarationFunction d) Violation UnknownDeclaredFunction "unproven declaration names no bank function"
-        | d <- declarations allowlist
-        , declarationFunction d `notElem` map functionName namedSymbols
-        ]
-      stockInAllocation =
-        [ Finding (stockCallAddress c) "<allowlist>" Violation (TargetNotEntry (stockCallAddress c) (regionOf layout (stockCallAddress c))) ("stock call " ++ stockCallName c ++ " lies in " ++ regionName (regionOf layout (stockCallAddress c)))
-        | c <- stockCalls allowlist
-        , not (stockCode (regionOf layout (stockCallAddress c)))
-        ]
-      findings = layoutFindings elf layout ++ overlapping ++ undeclaredNames ++ stockInAllocation ++ concatMap (\(found, _, _, _) -> found) perFunction
-      used original =
-        let d = canonicalDeclaration original
-         in any
-          (\f -> findingFunction f == declarationFunction d && findingVerdict f /= Violation && findingReason f == Unproven (declarationAccess d) (declarationThrough d))
-          findings
-  when (null named) (Left "bank: no function symbols in bank code")
-  pure
-    Report
-      { reportFindings = findings
-      , reportUnused = filter (not . used) (declarations allowlist)
-      , reportProvenStores = sum [n | (_, n, _, _) <- perFunction]
-      , reportProvenBranches = sum [n | (_, _, n, _) <- perFunction]
-      , reportInstructions = sum [n | (_, _, _, n) <- perFunction]
-      , reportFunctions = length functions
-      }
-
--- | Fixpoint over one function's control-flow graph from `entry`, with a state per
--- address and known flag condition, then one findings pass over the final
--- states. An address's store or branch counts as proven when it is proven
--- in every state that reaches it.
-analyse :: Context -> State -> Function -> ([Finding], Int, Int, Int)
-analyse context entry function =
-  ( unreached ++ concatMap (\(found, _, _) -> found) perAddress
-  , sum [n | (_, n, _) <- perAddress]
-  , sum [n | (_, _, n) <- perAddress]
-  , length instructions
-  )
+  let layoutProblems = layoutFindings elf layout
+  relocations <- if null layoutProblems then addressRelocations elf else pure []
+  unless (not (null relocations) || not (null layoutProblems)) (Left "retained ELF address relocations required; relink with --emit-relocs")
+  let ranges = (textStart layout, textEnd layout) : maybe [] (\r -> [(engineCodeStart r, engineCodeEnd r)]) (engine layout)
+      inside address = any (\(lo, hi) -> lo <= address && address < hi) ranges
+      symbols = [s | s <- elfSymbols elf, symbolKind s == FunctionSymbol, symbolSize s > 0, inside (symbolValue s)]
+      groups = groupBy (\a b -> symbolValue a == symbolValue b && symbolSize a == symbolSize b)
+        (sortOn (\s -> (symbolValue s, symbolSize s, symbolName s)) symbols)
+      functions = [Function (symbolName s) (symbolValue s) (symbolValue s + symbolSize s) | s : _ <- groups]
+      mappings = M.fromList [(symbolValue s, take 2 (symbolName s)) | s <- elfSymbols elf, take 2 (symbolName s) `elem` ["$a", "$d", "$t"]]
+      isCode address = isJust (owner address) && maybe False ((== "$a") . snd) (M.lookupLE address mappings)
+      owner address = find (\f -> functionStart f <= address && address < functionEnd f) functions
+      code = [(address, word) | (lo, hi) <- ranges, address <- addresses lo hi, isCode address, Just word <- [wordAt elf address]]
+      belongs target = inside target && isCode target
+      entry target = target `elem` map stockCallAddress (stockCalls allowlist)
+      region target = any (\s -> stockRegionAddress s <= target && toInteger target < toInteger (stockRegionAddress s) + toInteger (stockRegionBytes s)) (stockRegions allowlist)
+      owned target = allocationBase layout <= target && target < allocationEnd layout
+      ownedSite address = any (\section -> sectionName section `elem` bankSections ++ engineSections layout
+        && sectionAddress section <= address && toInteger address + 4 <= toInteger (sectionAddress section) + toInteger (sectionSize section)) (elfSections elf)
+      finding address reason detail verdict = Finding address (maybe "<unowned code>" functionName (owner address)) verdict reason detail
+      external address target
+        | owned target = []
+        | entry target || region target = [finding address (ExternalAddress target) ("declared stock address " ++ hex target) (DeclaredBy "stock entry or region")]
+        | otherwise = [finding address (ExternalAddress target) ("external address " ++ hex target ++ " is not a declared stock entry or region") Violation]
+      transfer address target =
+        [finding address (UndeclaredStockTarget target) ("direct transfer leaves owned code for undeclared entry " ++ hex target) Violation
+        | not (belongs target) && not (entry target)]
+      directSites = S.fromList [addressSite relocation | relocation <- relocations, addressKind relocation == DirectReference]
+      inspect (address, word)
+        | S.member address directSites = []
+        | otherwise = maybe [] (transfer address) (directTarget address word)
+      references = concat
+        [ case addressKind relocation of
+            DataReference -> external (addressSite relocation) (addressTarget relocation)
+            DirectReference -> transfer (addressSite relocation) (addressTarget relocation)
+        | relocation <- relocations
+        , ownedSite (addressSite relocation) ]
+      extents = [Finding (functionStart f) "<layout>" Violation (LayoutProblem (SectionExtent "function")) "function extent leaves owned code"
+        | f <- functions, not (any (\(lo, hi) -> lo <= functionStart f && functionEnd f <= hi) ranges)]
+      stack = case engine layout of
+        Nothing -> []
+        Just _ -> let result = do
+                        _ <- EngineStack.checkEngineStack EngineStack.taskOneBudget elf inside
+                        when (hasPublicationGroup RenderPublication (layoutBankVariant layout)) $ do
+                          _ <- RenderStack.checkRenderStack elf inside
+                          pure ()
+                   in case result of Left problem -> [Finding (textStart layout) "<stack>" Violation StackBudgetViolation problem]; Right () -> []
+      found = layoutProblems ++ extents ++ concatMap inspect code ++ references ++ stack
+  when (null functions) (Left "bank: no function symbols in owned code")
+  pure (Report found
+    (length [() | (address, word) <- code, Just target <- [directTarget address word], belongs target || entry target]) (length code) (length functions))
  where
-  instructions =
-    [ (a, decode a w)
-    | a <- S.toList (codeWords context)
-    , functionStart function <= a
-    , a < functionEnd function
-    , Just w <- [wordAt (contextElf context) a]
-    ]
-  table = M.fromList instructions
-  thresholds =
-    S.toList . S.fromList $
-      [0xff, 0xffff, 0x7fffffff, maxBound]
-        ++ concat [[k - 1, k, k + 1] | (_, DataProcessing _ CMP _ _ _ (Immediate k)) <- instructions, k > 0, k < maxBound]
-  start = (functionStart function, Nothing)
-  states = fixpoint (M.singleton start entry) (M.singleton start (0 :: Int)) [start]
-  fixpoint known _ [] = known
-  fixpoint known visits (key@(a, _) : rest) = case (M.lookup a table, M.lookup key known) of
-    (Just instruction, Just s) ->
-      let (known', visits', queued) = foldl (propagate a) (known, visits, rest) (outcomeSuccessors (execute context function a instruction s))
-       in fixpoint known' visits' queued
-    _ -> fixpoint known visits rest
-  -- Widening applies on back edges only, so loop heads absorb the growth.
-  propagate source (known, visits, queue) (target, s)
-    | M.notMember target table = (known, visits, queue)
-    | otherwise = case M.lookup key known of
-        Nothing -> (M.insert key s known, M.insert key 1 visits, queue ++ [key])
-        Just old ->
-          let count = fromMaybe 0 (M.lookup key visits)
-              joined = joinState (locate context) old s
-              updated = if target <= source && count >= 3 then widenState (locate context) thresholds old joined else joined
-           in if updated == old
-                then (known, visits, queue)
-                else (M.insert key updated known, M.insert key (count + 1) visits, queue ++ [key | key `notElem` queue])
-   where
-    key = (target, holds s)
-  perAddress =
-    [ (nub (concatMap outcomeFindings outcomes), minimum (map outcomeStores outcomes), minimum (map outcomeBranches outcomes))
-    | (a, instruction) <- instructions
-    , let outcomes = [execute context function a instruction s | ((b, _), s) <- M.toList states, b == a]
-    , not (null outcomes)
-    ]
-  reached = S.fromList (map fst (M.keys states))
-  unreached =
-    [ Finding a (functionName function) Violation Unreached "instruction is not reached from the function entry"
-    | (a, instruction) <- instructions
-    , S.notMember a reached
-    , instruction /= Hint always
-    ]
+  addresses lo hi = if hi < lo + 4 then [] else [lo, lo + 4 .. hi - 4]
 
 checkBankFile :: B.ByteString -> B.ByteString -> Either String Report
 checkBankFile allowlistBytes elfBytes = do
