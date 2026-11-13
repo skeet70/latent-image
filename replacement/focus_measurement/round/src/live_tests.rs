@@ -1,6 +1,6 @@
 use crate::acquisition::{self, Pass};
 use crate::fakes::{Outbound, Ports, Published};
-use crate::image::{ChannelCount, ImagePeer, LensReport};
+use crate::image::{ChannelCount, LensReport};
 use crate::lanes::Selection;
 use crate::live::{Effects, Measurement};
 use crate::pipeline::{Statistics, TimingWord};
@@ -11,6 +11,8 @@ use crate::source::{ProcessingProfile, SegmentSettings, SourceProfile, SourceStr
 use crate::window::WindowResult;
 use crate::round::{LaneSignal, LaneStatus};
 use xm1_saclac_controllers::children::{ChildEvent, ChildOutcome, MeasurementControl};
+use xm1_saclac_interface::round_image::{ImageArea, ImageArguments, ImageChannel, ImageLaneRequest};
+use xm1_saclac_interface::stock::StockCallbackWord;
 use xm1_saclac_interface::{stock, Command, CommandKind, Completed, Completion, CompletionStatus, RecordHandle, ReplyTarget};
 use std::vec::Vec;
 
@@ -18,11 +20,10 @@ use std::vec::Vec;
 enum Traffic {
     Search(&'static str),
     Acquisition(acquisition::Effect),
-    Image(&'static str),
     Fault,
 }
 
-struct Live { traffic: Vec<Traffic>, failed: bool, programmed: Option<TimingWord> }
+struct Live { traffic: Vec<Traffic>, programmed: Option<TimingWord> }
 
 impl Live {
     fn take(&mut self) -> Vec<Traffic> { core::mem::take(&mut self.traffic) }
@@ -30,7 +31,7 @@ impl Live {
 
 type Fake = Ports<Live>;
 
-fn fake(available: Selection) -> Fake { Ports::new(Some(available), Live { traffic: Vec::new(), failed: false, programmed: None }) }
+fn fake(available: Selection) -> Fake { Ports::new(Some(available), Live { traffic: Vec::new(), programmed: None }) }
 
 impl Effects for Fake {
     fn fault(&mut self) { self.extra.traffic.push(Traffic::Fault); }
@@ -50,24 +51,15 @@ impl Effects for Fake {
         if effect == acquisition::Effect::Initialize { self.extra.programmed } else { None }
     }
     fn selection_changed(&mut self, _: RecordHandle) -> bool { false }
-    fn image(&mut self, _: RecordHandle, request: ImagePeer<'_>) {
-        self.extra.traffic.push(Traffic::Image(match request {
-            ImagePeer::Initialize => "initialize",
-            ImagePeer::PrepareGeometry => "geometry",
-            ImagePeer::Request { .. } => "request",
-            ImagePeer::Cancel(_) => "cancel",
-            ImagePeer::Stop => "stop",
-        }));
-    }
-    fn image_failed(&mut self, _: Completed<'_>) -> bool { self.extra.failed }
 }
 
 fn record() -> RecordHandle { stock::record_handle_from_a2(0x16c0000) }
 fn control(control: MeasurementControl) -> ChildEvent<'static, MeasurementControl> {
     ChildEvent::Control { control, parameters: stock::parameters(&[]), record: record() }
 }
-fn completion(completion: Completion) -> ChildEvent<'static, MeasurementControl> {
-    ChildEvent::Completed { completed: Completed { completion, parameters: stock::parameters(&[]) }, record: record() }
+fn completion(completion: Completion) -> ChildEvent<'static, MeasurementControl> { finished(completion, &[]) }
+fn finished(completion: Completion, parameters: &[u8]) -> ChildEvent<'_, MeasurementControl> {
+    ChildEvent::Completed { completed: Completed { completion, parameters: stock::parameters(parameters) }, record: record() }
 }
 
 fn command(words: &[u8]) -> ChildEvent<'_, MeasurementControl> {
@@ -80,14 +72,15 @@ const ACQUISITION: Selection = Selection { acquisition: true, search: false, aux
 fn initialization_enables_acquisition_and_window_and_initializes_the_other_lanes() {
     let mut measurement = Measurement::new();
     let mut fake = fake(ACQUISITION);
+    fake.image_client = Some(StockCallbackWord(0x00e0_1234));
     assert_eq!(measurement.handle(control(MeasurementControl::Initialize), &mut fake), ChildOutcome::Complete);
     assert_eq!(fake.extra.take(), [
         Traffic::Acquisition(acquisition::Effect::Initialize),
         Traffic::Acquisition(acquisition::Effect::Enable),
         Traffic::Search("initialize"),
-        Traffic::Image("initialize"),
     ]);
-    assert!(fake.records.in_use.primary);
+    assert!(fake.take().contains(&Outbound::NotifyImageClient(StockCallbackWord(0x00e0_1234))));
+    assert!(fake.records.in_use.primary && fake.records.in_use.search);
     assert!(fake.auxiliary.publication.published);
     assert_eq!((fake.source.published, fake.source.callbacks_enabled), (Some(Published::Withdrawn), Some(false)));
 }
@@ -143,23 +136,26 @@ fn stopping_a_round_releases_each_enabled_job() {
 }
 
 #[test]
-fn an_image_command_replies_through_the_image_lane() {
+fn an_image_command_asks_imgdc_and_replies_with_its_status() {
     let mut measurement = Measurement::new();
     let mut fake = fake(Selection { image: true, ..ACQUISITION });
     fake.channel_count = ChannelCount(8);
     fake.lens = LensReport { first: true, second: false, third: true };
+    fake.image_area = |channel, area| ImageArea([area.0[0] + channel.0 as i16, -1]);
     measurement.handle(control(MeasurementControl::Initialize), &mut fake);
     fake.extra.take();
     fake.take();
-    let image = |channel: u32| -> Vec<u8> { [0xd00, 0, 0, channel, 9].iter().flat_map(|word: &u32| word.to_le_bytes()).collect() };
+    let image = |channel: u32| -> Vec<u8> { [0xd00, 0x11, 0x22, channel, 9].iter().flat_map(|word: &u32| word.to_le_bytes()).collect() };
     let target = ReplyTarget::Command(CommandKind::Command14);
     let callback = stock::optional_callback(0xd00).unwrap();
 
     let words = image(5);
     assert_eq!(measurement.handle(command(&words), &mut fake), ChildOutcome::Pending);
-    assert_eq!(fake.extra.take(), [Traffic::Image("geometry"), Traffic::Image("request")]);
-    fake.extra.failed = true;
-    measurement.handle(completion(Completion::Image47), &mut fake);
+    assert_eq!(fake.take(), [
+        Outbound::PrepareImageArea(ImageChannel(5), ImageArea([0, 0])),
+        Outbound::Image(ImageLaneRequest::Image { arguments: ImageArguments([0x11, 0x22]), area: ImageArea([5, -1]), channel: ImageChannel(5) }),
+    ]);
+    measurement.handle(finished(Completion::Image47, &[1, 0, 0, 0, 0, 0, 0, 0]), &mut fake);
     assert_eq!(fake.take(), [
         Outbound::ClearPending(target),
         Outbound::Reply { target, callback, status: CompletionStatus(-94), values: [5, 9, 6] },
@@ -167,8 +163,8 @@ fn an_image_command_replies_through_the_image_lane() {
 
     let words = image(8);
     measurement.handle(command(&words), &mut fake);
-    fake.extra.failed = false;
-    measurement.handle(completion(Completion::Image47), &mut fake);
+    assert_eq!(fake.take()[1], Outbound::Image(ImageLaneRequest::Image { arguments: ImageArguments([0x11, 0x22]), area: ImageArea([13, -1]), channel: ImageChannel(8) }));
+    measurement.handle(finished(Completion::Image47, &[0; 8]), &mut fake);
     assert_eq!(fake.take(), [
         Outbound::ClearPending(target),
         Outbound::Reply { target, callback, status: CompletionStatus(0), values: [8, 0x80_0000, 6] },
@@ -185,8 +181,8 @@ fn a_measurement_tick_captures_the_statistics_in_use_and_records_the_history() {
     assert!(!measurement.history().started());
     measurement.handle(completion(Completion::Accessor4b), &mut fake);
     let traffic = fake.take();
-    assert_eq!(traffic[..2], [Outbound::Capture(Statistics::Primary), Outbound::Capture(Statistics::History)]);
-    assert!(matches!(traffic[2], Outbound::Request(Request::Window(_))));
+    assert_eq!(traffic[..3], [Outbound::Capture(Statistics::Primary), Outbound::Capture(Statistics::Search), Outbound::Capture(Statistics::History)]);
+    assert!(matches!(traffic[3], Outbound::Request(Request::Window(_))));
     assert!(measurement.history().newest().written());
 }
 

@@ -108,20 +108,50 @@ pub fn parameter_change(parameters: xm1_saclac_interface::Parameters<'_>) -> Par
 /// X-M1 1.50: the image row function caches the channel from word 3 of command
 /// 0x14 (0xefe2fc) and word 2 of command 0x2b (0xefe3ec); the replies at
 /// 0xefb328 and 0xefb438 take the callback from word 0 and the value from word 4
-/// of 0x14 and word 3 of 0x2b.
-pub fn image_client(kind: crate::image::ImageRequest, parameters: xm1_saclac_interface::Parameters<'_>) -> crate::image::ImageClient {
-    use crate::image::{ImageChannel, ImageClient, ImageRequest, ReplyValue};
-    let (channel, value) = match kind { ImageRequest::Image => (12, 16), ImageRequest::Snapshot => (8, 12) };
-    ImageClient {
-        callback: xm1_saclac_interface::stock::optional_callback(word(parameters, 0)),
-        channel: ImageChannel(word(parameters, channel)),
-        value: ReplyValue(word(parameters, value)),
+/// of 0x14 and word 3 of 0x2b. imgdc receives words 1 and 2 of 0x14 (0xf39fa4)
+/// and the signed halfword at byte 4 of 0x2b (0xf3a02c).
+pub fn image_command(kind: crate::image::ImageRequest, parameters: xm1_saclac_interface::Parameters<'_>) -> crate::image::ImageCommand {
+    use crate::image::{ImageClient, ImageCommand, ImageRequest, ImageWork, ReplyValue};
+    use xm1_saclac_interface::round_image::{ImageArguments, ImageChannel, SnapshotArgument};
+    let (channel, value, work) = match kind {
+        ImageRequest::Image => (12, 16, ImageWork::Image(ImageArguments([word(parameters, 4), word(parameters, 8)]))),
+        ImageRequest::Snapshot => (8, 12, ImageWork::Snapshot(SnapshotArgument(word(parameters, 4) as i16))),
+    };
+    ImageCommand {
+        client: ImageClient {
+            callback: xm1_saclac_interface::stock::optional_callback(word(parameters, 0)),
+            channel: ImageChannel(word(parameters, channel)),
+            value: ReplyValue(word(parameters, value)),
+        },
+        work,
     }
 }
 
 /// X-M1 1.50: 0xefb3a8 and 0xefb3f0 enter word 0 of command 0x15 or 0x16.
 pub fn interruption_callback(parameters: xm1_saclac_interface::Parameters<'_>) -> Option<xm1_saclac_interface::ClientCallback> {
     xm1_saclac_interface::stock::optional_callback(word(parameters, 0))
+}
+
+/// X-M1 1.50: 0xf3a084 sends word 1 of command 0x15 with imgdc 0x3f32.
+pub fn cancel_argument(parameters: xm1_saclac_interface::Parameters<'_>) -> xm1_saclac_interface::round_image::CancelArgument {
+    xm1_saclac_interface::round_image::CancelArgument(word(parameters, 4))
+}
+
+/// X-M1 1.50: the halfword 0x69fec8 reads at this key; 0xf39f88, 0xf3a068 and 0xf3a0a0 test
+/// bit 8 before logging an image, cancel or stop request, 0xf3a010 bit 9 before a snapshot.
+pub const IMAGE_LOGGING: SchedulingProperty = SchedulingProperty(232);
+
+pub const fn image_logging(word: u16) -> crate::image::ImageLogging {
+    crate::image::ImageLogging { image: word & 0x100 != 0, snapshot: word & 0x200 != 0 }
+}
+
+/// X-M1 1.50: the lane logs through 0x64744c with this word first and the entry's text second.
+pub const IMAGE_LOG_SOURCE: u32 = 0x00ff_b104;
+
+/// X-M1 1.50: the text 0xf39f48, 0xf39fd0, 0xf3a050 and 0xf3a090 log.
+pub const fn image_log_text(entry: crate::image::ImageLog) -> u32 {
+    use crate::image::ImageLog;
+    match entry { ImageLog::Image => 0x00f3_a268, ImageLog::Snapshot => 0x00f3_a278, ImageLog::Cancel => 0x00f3_a288, ImageLog::Stop => 0x00f3_a29c }
 }
 
 /// X-M1 1.50: 0xefb37c..0xefb38c and 0xefb48c..0xefb49c replace the value of a
@@ -131,7 +161,7 @@ pub const NO_CHANNEL_VALUE: crate::image::ReplyValue = crate::image::ReplyValue(
 /// X-M1 1.50: 0xf3a160..0xf3a1b0 and 0xf3a1b8..0xf3a208 pass the channel, the
 /// value and the lens bits (2 for 0x76d9a8, 1 for 0x76da38, 4 for 0x76dba4) as
 /// the callback's arguments after the status.
-pub fn image_reply_values(channel: crate::image::ImageChannel, value: crate::image::ReplyValue, lens: crate::image::LensReport) -> [u8; 12] {
+pub fn image_reply_values(channel: xm1_saclac_interface::round_image::ImageChannel, value: crate::image::ReplyValue, lens: crate::image::LensReport) -> [u8; 12] {
     let bits = u32::from(lens.first) * 2 + u32::from(lens.second) + u32::from(lens.third) * 4;
     let mut values = [0; 12];
     for (slot, word) in values.chunks_exact_mut(4).zip([channel.0, value.0, bits]) {

@@ -2,7 +2,7 @@
 
 use crate::acquisition::{self, Acquisition, Branch};
 use crate::auxiliary::{self, Auxiliary};
-use crate::image::{self, ImageEffect, ImageJob, ImageOutcome, ImagePeer, ImageRequest, ImageSignal, Interruption, ReplyPorts};
+use crate::image::{self, ImageJob, ImageOutcome, ImageRequest, ImageSignal, Interruption};
 use crate::history::MeasurementHistory;
 use crate::jobs::{self, Calculation, CalculationJob};
 use crate::lanes::{Lane, Selection};
@@ -17,7 +17,7 @@ use xm1_saclac_controllers::children::{ChildEvent, ChildOutcome, MeasurementCont
 use xm1_saclac_interface::{CommandKind, Completed, Completion, RecordHandle};
 
 /// Everything the live measurement asks of the records, its peers and the search slot.
-pub trait Effects: RecordPorts + ReplyPorts + window::Ports + auxiliary::Ports + source::Ports {
+pub trait Effects: RecordPorts + image::Ports + window::Ports + auxiliary::Ports + source::Ports {
     fn fault(&mut self);
 
     /// The contrast search lane, whose implementation is the AF-candidate slot.
@@ -25,8 +25,6 @@ pub trait Effects: RecordPorts + ReplyPorts + window::Ports + auxiliary::Ports +
     /// `Some` when the effect programmed the acquisition's timing.
     fn acquisition(&mut self, record: RecordHandle, effect: acquisition::Effect) -> Option<TimingWord>;
     fn selection_changed(&mut self, record: RecordHandle) -> bool;
-    fn image(&mut self, record: RecordHandle, request: ImagePeer<'_>);
-    fn image_failed(&mut self, completed: Completed<'_>) -> bool;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -172,24 +170,25 @@ impl<E: Effects> Lanes<'_, E> {
             LaneSignal::Stop => ImageSignal::Stop,
             LaneSignal::Work(_) => ImageSignal::Run,
             LaneSignal::Command(command) => match command.kind {
-                CommandKind::Command14 => image_request(ImageRequest::Image, command.parameters),
-                CommandKind::Command2b => image_request(ImageRequest::Snapshot, command.parameters),
-                CommandKind::Command15 => interruption(Interruption::Cancel, command.parameters),
-                CommandKind::Command16 => interruption(Interruption::Stop, command.parameters),
+                CommandKind::Command14 => ImageSignal::Request(crate::stock::image_command(ImageRequest::Image, command.parameters)),
+                CommandKind::Command2b => ImageSignal::Request(crate::stock::image_command(ImageRequest::Snapshot, command.parameters)),
+                CommandKind::Command15 => ImageSignal::Interrupt {
+                    interruption: Interruption::Cancel(crate::stock::cancel_argument(command.parameters)),
+                    callback: crate::stock::interruption_callback(command.parameters),
+                },
+                CommandKind::Command16 => ImageSignal::Interrupt { interruption: Interruption::Stop, callback: crate::stock::interruption_callback(command.parameters) },
                 _ => return LaneStatus::Unhandled,
             },
             LaneSignal::Completed(completed) => match completed.completion {
                 Completion::Calculation8b => ImageSignal::Calculated,
-                Completion::Image47 => ImageSignal::Imaged { kind: ImageRequest::Image, failed: self.effects.image_failed(completed) },
-                _ => ImageSignal::Imaged { kind: ImageRequest::Snapshot, failed: self.effects.image_failed(completed) },
+                completion => ImageSignal::Imaged {
+                    kind: if completion == Completion::Image47 { ImageRequest::Image } else { ImageRequest::Snapshot },
+                    failed: xm1_saclac_interface::stock::round_image::image_failed(completed.parameters.bytes()),
+                },
             },
             LaneSignal::Suspend | LaneSignal::Resume => return LaneStatus::Unhandled,
         };
-        let effects = &mut *self.effects;
-        match self.image.signal(signal, &mut |effect| match effect {
-            ImageEffect::Peer(request) => effects.image(record, request),
-            ImageEffect::Reply(reply) => image::deliver(reply, effects),
-        }) {
+        match self.image.signal(signal, record, &mut *self.effects) {
             ImageOutcome::Ignored => LaneStatus::Refused,
             ImageOutcome::Complete => LaneStatus::Complete,
             ImageOutcome::Pending => LaneStatus::Pending,
@@ -221,14 +220,6 @@ impl<E: Effects> Lanes<'_, E> {
         });
         classify_mode(ModeInputs { record_selected: profile.selection == ProfileSelection::Record, profile_selected: profile.profile_cadence, automatic_sampling })
     }
-}
-
-fn image_request(kind: ImageRequest, parameters: xm1_saclac_interface::Parameters<'_>) -> ImageSignal<'_> {
-    ImageSignal::Request { kind, parameters, client: crate::stock::image_client(kind, parameters) }
-}
-
-fn interruption(interruption: Interruption, parameters: xm1_saclac_interface::Parameters<'_>) -> ImageSignal<'_> {
-    ImageSignal::Interrupt { interruption, parameters, callback: crate::stock::interruption_callback(parameters) }
 }
 
 fn job_status(outcome: jobs::Outcome) -> LaneStatus {
