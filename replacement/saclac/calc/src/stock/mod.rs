@@ -7,6 +7,8 @@ pub mod calculation;
 pub mod dump;
 pub mod motion;
 pub mod property;
+pub mod rate_curve;
+pub mod rate_samples;
 pub mod record;
 pub mod scene;
 pub mod shared;
