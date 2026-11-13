@@ -8,7 +8,9 @@
 -- exactly as before. A report that declares channels under @payload_projection@
 -- groups its events by selector: the first declared channel whose @match@
 -- field set every event field agrees with claims the event. The order between
--- channels is not compared.
+-- channels is not compared. A channel that names @split@ event fields is one
+-- channel per distinct value of those fields, so a source that repeats its
+-- entry once per wake is compared on each entry's own sequence.
 --
 -- Every declared channel's events are compared in order. A channel marked
 -- @time_driven@ is compared occurrence by occurrence; with a milestone the
@@ -27,6 +29,7 @@ module Emulation.InterfaceJudge
   , interfaceVerdictJson
   ) where
 
+import Control.Applicative ((<|>))
 import Control.Monad (foldM, unless)
 import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', withObject, withText, (.:), (.:?), (.!=))
 import qualified Data.Aeson.Key as K
@@ -34,7 +37,7 @@ import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Types as J
 import qualified Data.ByteString as B
 import Data.Char (isHexDigit)
-import Data.List (find, sort)
+import Data.List (find, sort, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (isJust, isNothing)
 import qualified Data.Text as T
@@ -51,11 +54,13 @@ newtype GuestAddress = GuestAddress Word32 deriving (Eq, Ord, Show)
 newtype FetchCount = FetchCount Word64 deriving (Eq, Show)
 
 -- | One declared channel: the events its selector claims, whether timing may
--- change its count, and where the declaration comes from.
+-- change its count, where the declaration comes from, and the event fields
+-- whose values make each value its own channel.
 data Channel = Channel
   { channelName :: ChannelName
   , channelMatch :: Selector
   , channelTimeDriven :: Bool
+  , channelSplit :: [T.Text]
   , channelSources :: [T.Text]
   } deriving (Eq, Show)
 
@@ -109,9 +114,11 @@ instance FromJSON Channel where
     label <- value .: "name"
     match <- value .: "match"
     driven <- value .:? "time_driven" .!= False
+    split <- value .:? "split" .!= []
     sources <- value .: "sources"
     unless (not (null sources)) (fail "channel must cite a source")
-    pure (Channel label match driven sources)
+    unless (all (not . T.null . T.strip) split) (fail "split field name must not be empty")
+    pure (Channel label match driven split sources)
 instance FromJSON Causal where
   parseJSON = withObject "causal pair" $ \value -> do
     first <- value .: "first"
@@ -196,17 +203,32 @@ isMarker :: Value -> Bool
 isMarker (Object row) = KM.keys row == [K.fromText "milestone"]
 isMarker _ = False
 
--- | The channel that claims an event; declaration order is precedence, so a
--- specific channel is declared before the general one it is a part of.
-claim :: [Channel] -> Value -> Maybe Channel
-claim declared value = case filter (\channel -> matchesSelector (channelMatch channel) value) declared of
-  channel : _ -> Just channel
-  [] -> Nothing
+-- | The channel that claims an event and the name it is filed under;
+-- declaration order is precedence, so a specific channel is declared before
+-- the general one it is a part of. A split channel appends the values of its
+-- split fields to its name.
+claim :: [Channel] -> Value -> Maybe (ChannelName, Channel)
+claim declared value = firstJust (map (\channel -> (,) <$> claimedName channel value <*> pure channel) declared)
 
--- | Group a run's events by declared channel, keeping each event's position
--- in the run. An event no channel claims leaves the declaration unable to
--- judge the stream.
-partition :: [Channel] -> StreamRun -> Either String (M.Map ChannelName [(Int, Value)])
+claimedName :: Channel -> Value -> Maybe ChannelName
+claimedName channel value
+  | not (matchesSelector (channelMatch channel) value) = Nothing
+  | null (channelSplit channel) = Just (channelName channel)
+  | otherwise = case value of
+      Object row -> do
+        parts <- traverse (renderField row) (channelSplit channel)
+        pure (ChannelName (T.intercalate "/" (channelNameText (channelName channel) : parts)))
+      _ -> Nothing
+  where
+    renderField row key = case KM.lookup (K.fromText key) row of
+      Just (String text) -> Just text
+      Just (Number number) -> Just (T.pack (show (truncate number :: Integer)))
+      _ -> Nothing
+
+-- | Group a run's events by claimed channel name, keeping each event's
+-- position in the run. An event no channel claims leaves the declaration
+-- unable to judge the stream.
+partition :: [Channel] -> StreamRun -> Either String (M.Map ChannelName (Channel, [(Int, Value)]))
 partition declared run =
   foldM step M.empty (zip [0 :: Int ..] (map observationValue (runEvents run)))
   where
@@ -214,7 +236,25 @@ partition declared run =
       | isMarker value = Right acc
       | otherwise = case claim declared value of
           Nothing -> Left ("event at observation " ++ show index ++ " matches no declared channel")
-          Just channel -> Right (M.insertWith (\new old -> old ++ new) (channelName channel) [(index, value)] acc)
+          Just (label, channel) ->
+            Right (M.insertWith (\(_, new) (_, old) -> (channel, old ++ new)) label (channel, [(index, value)]) acc)
+
+-- | Channel names in comparison order: each declared channel in declaration
+-- order, and its split names by the observation each first appears at, stock
+-- before candidate.
+channelOrder :: [Channel] -> M.Map ChannelName (Channel, [(Int, Value)])
+  -> M.Map ChannelName (Channel, [(Int, Value)]) -> [(ChannelName, Channel)]
+channelOrder declared stock candidate = concatMap own declared
+  where
+    names = sortOn firstAt (M.keys stock ++ filter (`M.notMember` stock) (M.keys candidate))
+    firstAt label = (firstIndex stock label, firstIndex candidate label)
+    firstIndex table label = maybe maxBound (firstObservation . snd) (M.lookup label table)
+    firstObservation ((index, _) : _) = index
+    firstObservation [] = maxBound
+    own channel
+      | null (channelSplit channel) = [(channelName channel, channel)]
+      | otherwise = [(label, channel) | label <- names, declaredAs label == Just (channelName channel)]
+    declaredAs label = fmap (channelName . fst) (M.lookup label stock <|> M.lookup label candidate)
 
 -- | The first differing event of one channel. With a milestone, an ordered
 -- channel is equal through the milestone observation and its stock tail after
@@ -272,12 +312,12 @@ compareChannels :: Maybe Int -> [Channel] -> [Causal] -> StreamRun -> String -> 
 compareChannels boundary channels_ pairs stock candidateLabel candidate = do
   stockTable <- partition channels_ stock
   candidateTable <- partition channels_ candidate
-  let channelDifference channel =
-        compareSequence (channelName channel) boundary (channelTimeDriven channel)
-          (eventsOf stockTable channel) (eventsOf candidateTable channel)
-      eventsOf table channel = M.findWithDefault [] (channelName channel) table
+  let channelDifference (label, channel) =
+        compareSequence label boundary (channelTimeDriven channel)
+          (eventsOf stockTable label) (eventsOf candidateTable label)
+      eventsOf table label = maybe [] snd (M.lookup label table)
       pairDifference side run = firstJust [UncausedEvent <$> causalViolation side pair run | pair <- pairs]
-  pure $ case firstJust (map channelDifference channels_) of
+  pure $ case firstJust (map channelDifference (channelOrder channels_ stockTable candidateTable)) of
     Just difference -> Just difference
     Nothing -> case pairDifference "stock" stock of
       Just difference -> Just difference

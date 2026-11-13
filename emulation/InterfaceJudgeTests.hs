@@ -140,6 +140,36 @@ main = do
     [message 1, press 1, at "phase"]
     [message 2, press 1, at "phase"]) VerdictDifferent
 
+  -- A channel split by entry compares each entry's own sequence: entries may
+  -- interleave differently, and an entry the owned side enters once more is a
+  -- longer sequence, but one entry's own order is compared.
+  let splitChannels = [channelSplitBy "callbacks" (object ["kind" .= ("callback" :: String)]) ["entry"]]
+      splitReport stockEvents ownedEvents controlEvents marker =
+        withChannels splitChannels [] $
+          report (runValues stockDigest 16 32 12 stockEvents)
+            (runValues ownedDigest 64 96 9 ownedEvents)
+            [control "wrong" (runValues wrongDigest 64 96 8 controlEvents)] marker
+  splitInterleaved <- status firmware (splitReport
+    [callbackAt 1 10, callbackAt 2 10, callbackAt 1 20]
+    [callbackAt 2 10, callbackAt 1 10, callbackAt 1 20]
+    [callbackAt 3 10] Null) VerdictEqual
+  check (verdictChannelDifference splitInterleaved == Nothing)
+  (_, splitWithin) <- judgeWith firmware (splitReport
+    [callbackAt 1 10, callbackAt 1 20, callbackAt 2 10]
+    [callbackAt 1 20, callbackAt 1 10, callbackAt 2 10]
+    [callbackAt 3 10] Null) (Just VerdictDifferent)
+  check (fmap differenceChannel (verdictChannelDifference splitWithin) == Just (ChannelName "callbacks/1"))
+  check (fmap differenceOccurrence (verdictChannelDifference splitWithin) == Just (Occurrence 0))
+  splitExtra <- status firmware (splitReport
+    [at "phase", callbackAt 1 10, callbackAt 2 10]
+    [at "phase", callbackAt 1 10, callbackAt 1 20, callbackAt 2 10]
+    [at "phase", callbackAt 3 10] (phaseAt 0)) VerdictEqualUpToMilestone
+  check (verdictChannelDifference splitExtra == Nothing)
+  _ <- status firmware (splitReport
+    [at "phase", callbackAt 1 10, callbackAt 2 10]
+    [at "phase", callbackAt 1 10, callbackAt 2 20]
+    [at "phase", callbackAt 3 10] (phaseAt 0)) VerdictDifferent
+
   -- A milestone a side does not carry is different, never a milestone pass.
   missingOwned <- status firmware (channelReport [] (Just (phaseAt 1))
     [message 1, at "phase", tick 1]
@@ -250,6 +280,14 @@ channel :: String -> Value -> Bool -> Value
 channel label match driven = object
   [ "name" .= label, "match" .= match, "time_driven" .= driven
   , "sources" .= (["test"] :: [String]) ]
+
+channelSplitBy :: String -> Value -> [String] -> Value
+channelSplitBy label match split = object
+  [ "name" .= label, "match" .= match, "split" .= split
+  , "sources" .= (["test"] :: [String]) ]
+
+callbackAt :: Int -> Int -> Value
+callbackAt entry n = object ["kind" .= ("callback" :: String), "entry" .= entry, "n" .= n]
 
 causal :: Value -> Value -> Value
 causal first then_ = object

@@ -5304,11 +5304,15 @@
   },
   {
    "name": "callbacks",
+   "split": [
+    "entry"
+   ],
    "match": {
     "kind": "callback"
    },
    "sources": [
-    "a callback event names the entry the driver calls; the entry table is the census sites declaration"
+    "a callback event names the entry the driver calls; the entry table is the census sites declaration",
+    "each entry is its own source: the driver enters each from its own wake handler, so capture's stock and owned runs enter every entry's subsequence in the same order and interleave the entries differently at observation 1056"
    ]
   },
   {
