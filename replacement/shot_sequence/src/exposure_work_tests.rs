@@ -183,6 +183,7 @@ fn concluded(alternate: bool, live: bool) -> (ExposureWork, Prepared, Fake) {
     fake.exposure.alternate = alternate;
     fake.exposure.calibration = 5;
     fake.exposure.metering = 0x6d;
+    fake.exposure.metering_source = 0x5e;
     let mut work = ExposureWork::default();
     let mut prepared = prepared(0, 3);
     let branch = if live { Branch::Live } else { Branch::HalfPress };
@@ -208,7 +209,9 @@ fn the_conclusion_writes_the_correction_relative_to_lens_and_reference_then_repl
     assert!(fake.exposure.has(&ExposureCall::StoreOffset(ExposureOffset::Third, 237)));
     assert!(fake.exposure.has(&ExposureCall::StoreArea(9, relative(47) as i16)));
     assert_eq!(work.area_values()[0], relative(38) as i16);
-    assert!(fake.exposure.has(&ExposureCall::StoreMetering(MeteringBlock([0x6d; METERING_BYTES]))));
+    let mut metering = [0x5e; METERING_BYTES];
+    metering[56..].fill(0x6d);
+    assert!(fake.exposure.has(&ExposureCall::StoreMetering(MeteringBlock(metering))), "the source replaces all but the block's last eight bytes");
     let reply = ExposureCall::Reply(Reply { command: CommandKind::HalfPress, record: Some(record()), status: CompletionStatus(3) });
     assert_eq!(fake.exposure.calls.iter().filter(|call| **call == reply).count(), 1);
     let last_store = fake.exposure.calls.iter().rposition(|call| matches!(call, ExposureCall::StoreMetering(_))).unwrap();

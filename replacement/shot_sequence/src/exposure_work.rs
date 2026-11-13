@@ -6,7 +6,7 @@
 
 use crate::boundary::{
     Client, Completions, CorrectionRequest, Diagnostics, ExportKind, ExposureCalculation, ExposureOffset, ExposureRecord, ExposureServices,
-    ExposureSlot, Frame,
+    ExposureSlot, Frame, METERING_SOURCE_BYTES,
     LensReference, Recorder, RecorderMode, Records, Replies, SelectionKind, Setting, StatisticsPort, Trace,
 };
 use crate::ports::{Branch, EvaluationIndex, ExposureEffect, ExposureQuery, HalfPressMode, Reply};
@@ -283,7 +283,8 @@ impl ExposureWork {
                 self.area_values[index] = 0;
             }
         }
-        let metering = boundary.metering();
+        let mut metering = boundary.metering();
+        metering.0[..METERING_SOURCE_BYTES].copy_from_slice(&boundary.metering_source());
         boundary.store_metering(&metering);
     }
 }

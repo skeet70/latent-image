@@ -16,6 +16,7 @@ use xm1_saclac_controllers::children::ShotControl;
 use xm1_saclac_interface::CompletionStatus;
 
 pub mod exposure;
+pub mod statistics_dump;
 
 /// Codes retained parents pass to the row functions 0xefdab8 (0xeb, 0xec), 0xeffcfc (0x103)
 /// and 0xf005b4 (0xac).

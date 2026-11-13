@@ -270,7 +270,8 @@ pub struct ExposureSlot(pub u8);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExposureOffset { First, Second, Third }
 
-pub const METERING_BYTES: usize = 56;
+pub const METERING_BYTES: usize = 64;
+pub const METERING_SOURCE_BYTES: usize = 56;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MeteringBlock(pub [u8; METERING_BYTES]);
@@ -281,6 +282,8 @@ pub trait ExposureRecord {
     fn store_offset(&mut self, offset: ExposureOffset, value: i16);
     fn store_area_exposure(&mut self, index: usize, value: i16);
     fn metering(&mut self) -> MeteringBlock;
+    /// The record's metering values that replace the block's first bytes at the conclusion.
+    fn metering_source(&mut self) -> [u8; METERING_SOURCE_BYTES];
     fn store_metering(&mut self, block: &MeteringBlock);
 }
 
