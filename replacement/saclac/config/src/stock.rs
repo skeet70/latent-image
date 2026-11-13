@@ -10,8 +10,8 @@ use crate::face::{FaceTracking, TrackingBusy};
 use crate::ports::{Derivations, ExportQuery};
 use crate::pipeline::{Bank, Enable, EnableChange, FilterWindow, Grid, Part, Setting, Stage, StageBlock};
 use crate::registers::PipelineHardware;
-use crate::scan::{AppliedParts, ScanBlocks, ScanField, ScanLibrary, StockPart};
-use crate::services::LensRequests;
+use crate::scan::AppliedParts;
+use crate::scan::{ScanBlocks, ScanField, ScanLibrary, StockPart};
 
 macro_rules! entry {
     ($address:expr, fn($($argument:ty),*) $(-> $result:ty)?) => {{
@@ -123,17 +123,6 @@ impl PipelineHardware for StockPipelineHardware {
     fn acquire(&mut self, client: u32) -> u32 { entry!(0xda_1b4cu32, fn(u32) -> u32)(client) }
 
     fn release(&mut self, client: u32, grant: u32) { entry!(0xda_1d48u32, fn(u32, u32))(client, grant) }
-}
-
-/// The word 0x742a6c stores the request's callback in.
-const LENS_REQUEST_CALLBACK: u32 = 0x96_bd04;
-
-pub struct StockLensRequests<M = StockMemory>(pub M);
-
-impl<M: GuestMemory> LensRequests for StockLensRequests<M> {
-    fn store_callback(&mut self, callback: u32) { self.0.set_word(LENS_REQUEST_CALLBACK, callback) }
-
-    fn request(&mut self, number: u8, callback: u32) -> u32 { entry!(0x6b_7750u32, fn(u32, u32) -> u32)(u32::from(number), callback) }
 }
 
 /// A caller's block the stock face-tracking command reads or writes, by guest address.
