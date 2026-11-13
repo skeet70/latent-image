@@ -9,6 +9,7 @@ pub mod context_trace;
 pub mod dump;
 pub mod lists;
 pub mod motion;
+pub mod profile_adjustment;
 pub mod property;
 pub mod rate_curve;
 pub mod rate_samples;
