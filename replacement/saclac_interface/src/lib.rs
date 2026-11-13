@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 pub mod stock;
+pub mod calc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClientCallback(pub(crate) u32);
@@ -335,6 +336,7 @@ pub enum CalcOperation {
     Request0f,
     Request10,
     Request11,
+    Request12,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -458,3 +460,5 @@ pub const fn lens_effect(operation: PeerOperation) -> LensEffect {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod calc_tests;
