@@ -16,13 +16,15 @@ import BankAllowlistComposition (bankAllowlistSourcePaths, composeBankAllowlist)
 import Control.Monad (forM, unless)
 import qualified Data.Aeson as J
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
 import Data.Char (isHexDigit)
-import Emulation.Sha256 (Sha256, parseSha256Hex, sha256Hex)
+import Emulation.Sha256 (Sha256, parseSha256Hex, sha256File, sha256Hex)
 import FujiAF.PlanDocument (privateRegular)
 import FujiAF.RamPush
 import FujiAF.SHA256 (sha256)
-import FujiAF.Transport (Clock, UsbApi)
+import FujiAF.Transport (Clock, UsbApi, writePrivateBytes)
 import RamPushLayout (bankVariantTag)
+import System.Environment (getExecutablePath)
 import System.Directory (getCurrentDirectory)
 import System.FilePath ((</>))
 
@@ -37,7 +39,24 @@ withUnreviewedBuildArchive :: FilePath -> Payload -> AllowlistPolicy -> Address 
 withUnreviewedBuildArchive archive payload policy base action = do
   relinker <- runfilesRelinker payload
   rust <- maybe (ioError (userError "the selected payload links no Rust bank archive")) pure (relinkerRust relinker)
-  withRelinkedBuildUsing relinker { relinkerRust = Just rust { rustBankArchive = archive } } policy base action
+  withRelinkedBuildUsing relinker { relinkerRust = Just rust { rustBankArchive = archive } } policy base $ \built -> do
+    case (policy, pinnedAllowlist built, payloadBankVariant payload) of
+      (EnforceAllowlist, AllowlistPassed _, Just variant) -> do
+        let directory = pinnedDirectory built
+            report = BL.toStrict (J.encode (allowlistReceipt (pinnedAllowlist built)))
+        executable <- getExecutablePath >>= sha256File
+        elf <- sha256File (directory </> "kernel.elf")
+        archiveDigest <- sha256File archive
+        input <- sha256File (directory </> "bank-allowlist-input.json")
+        writePrivateBytes (directory </> "bank-allowlist-report.json") report
+        writePrivateBytes (directory </> "bank-allowlist-proof.json") $ BL.toStrict $ J.encode $ J.object
+          [ "analysis" J..= allowlistAnalysisIdentity, "checker_sha256" J..= sha256Hex executable
+          , "bank_variant" J..= bankVariantTag variant, "policy" J..= ("enforce" :: String)
+          , "manifest_sha256" J..= sha256 (pinnedDocument built), "runtime_sha256" J..= sha256 (pinnedRuntime built)
+          , "kernel_elf_sha256" J..= sha256Hex elf, "archive_sha256" J..= sha256Hex archiveDigest
+          , "allowlist_input_sha256" J..= sha256Hex input, "report_sha256" J..= sha256 report ]
+      _ -> pure ()
+    action built
 
 data PrelinkedProof = PrelinkedProof
   { proofAnalysis :: String
