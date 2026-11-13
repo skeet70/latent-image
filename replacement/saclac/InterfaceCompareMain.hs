@@ -146,16 +146,18 @@ projectionInputs receipt = case inputBindings receipt of
   [run, _, rom, sites, trajectory, executable] -> Just [run, rom, sites, trajectory, executable]
   _ -> Nothing
 
+-- | A side's stream, closed by the milestone marker, and the marker's index. @window-end@ closes
+-- a route resumed at the saved post-boot checkpoint after its last event; a census milestone the
+-- side reached closes it at that instruction and drops later events. A side that reaches neither
+-- carries no marker.
 project :: Maybe String -> Receipt -> ([Value], Int)
 project Nothing receipt = (map toJSON (events receipt), length (events receipt))
 project (Just phase) receipt
-  | phase == "post-boot", Just tick <- checkpointAt receipt, tick > 0, tick == observationStart receipt =
-      (marker : map toJSON (events receipt), 0)
+  | phase == "window-end", Just tick <- checkpointAt receipt, tick > 0, tick == observationStart receipt =
+      (map toJSON (events receipt) ++ [marker], length (events receipt))
   | Just tick <- reachedAt =<< find ((== phase) . reachedPhase) (milestones receipt) =
-      let (before, after) = span ((<= tick) . observedInstructions) (timedEvents receipt)
-          left = concatMap (normalize . observedEvent) before
-          right = concatMap (normalize . observedEvent) after
-       in (map toJSON left ++ marker : map toJSON right, length left)
+      let left = concatMap (normalize . observedEvent) (takeWhile ((<= tick) . observedInstructions) (timedEvents receipt))
+       in (map toJSON left ++ [marker], length left)
   | otherwise = (map toJSON (events receipt), length (events receipt))
   where marker = object ["milestone" .= phase]
 
@@ -184,13 +186,25 @@ runValue compatible extents phase receipt = do
     , "events" .= observations
     ])
 
+-- | The two options after the five positional paths, each with its value.
+options :: [String] -> IO (Maybe String, Maybe String)
+options [] = pure (Nothing, Nothing)
+options (key : value : rest) = do
+  (milestoneOption, controlOption) <- options rest
+  case key of
+    "--milestone" -> pure (Just value, controlOption)
+    "--control" -> pure (milestoneOption, Just value)
+    _ -> H.failH ("unknown option " ++ key)
+options _ = H.failH "an option needs a value"
+
 main :: IO ()
 main = do
   arguments <- getArgs
-  (stockPath, candidatePath, controlPath, projectionPath, output, phase) <- case arguments of
-    [stock, candidate, control, fields, output] -> pure (stock, candidate, control, fields, output, Nothing)
-    [stock, candidate, control, fields, output, "--milestone", name] -> pure (stock, candidate, control, fields, output, Just name)
-    _ -> H.failH "usage: saclac-interface-compare STOCK_JSON CANDIDATE_JSON WRONG_JSON FIELDS_JSON OUTPUT_JSON [--milestone PHASE]"
+  (stockPath, candidatePath, controlPath, projectionPath, output) <- case take 5 arguments of
+    [stock, candidate, control, fields, target] -> pure (stock, candidate, control, fields, target)
+    _ -> H.failH "usage: saclac-interface-compare STOCK_JSON CANDIDATE_JSON WRONG_JSON FIELDS_JSON OUTPUT_JSON [--milestone PHASE] [--control NAME]"
+  (phase, controlName) <- options (drop 5 arguments)
+  let variant = maybe "unconditional-command-present-store" id controlName
   declaration <- H.readRegular (1024 * 1024) projectionPath >>= either H.failH pure . Payload.parseDeclaration
   stock <- load stockPath >>= applyProjection declaration
   candidate <- load candidatePath >>= applyProjection declaration
@@ -215,7 +229,7 @@ main = do
     , "owned_extents" .= [spanValue Artifact.fixedExtent]
     , "stock" .= stockRun
     , "owned" .= ownedRun
-    , "controls" .= [object ["name" .= ("unconditional-command-present-store" :: String), "run" .= wrongRun]]
+    , "controls" .= [object ["name" .= variant, "run" .= wrongRun]]
     , "milestone" .= milestone
     , "same_observer_and_scenario_inputs" .= sameInputs
     , "stock_executed_instructions_in_action_extents" .= stockFetches stock

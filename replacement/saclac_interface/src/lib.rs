@@ -1,16 +1,23 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
-pub mod exposure;
-pub mod stock;
-pub mod lens;
-pub mod round;
+pub mod area_measurement;
 pub mod calc;
-pub mod statistics;
+pub mod calculation;
+pub mod capture_job;
+pub mod capture_results;
+pub mod exposure;
 pub mod imaging;
-pub mod shared;
+pub mod lens;
+pub mod pipeline;
+pub mod round;
 pub mod round_acquisition;
 pub mod round_image;
+pub mod search;
+pub mod selection;
+pub mod shared;
+pub mod statistics;
+pub mod stock;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClientCallback(pub(crate) u32);
@@ -497,7 +504,12 @@ impl LensEffect {
 pub const fn lens_effect(operation: PeerOperation) -> LensEffect {
     match operation {
         PeerOperation::LensDc(LensDcOperation::Request07 | LensDcOperation::Request08 | LensDcOperation::Request0c) => LensEffect::DirectDrive,
-        PeerOperation::ImgDc(ImgDcOperation::Request2e) => LensEffect::DriveThroughImageBridge,
+        // 0x3f2e reaches lensdc 0x420c; 0x3f2f in imgdc state 7 reaches lensdc 0x420e (0xff4dac -> 0xff7a98 -> 0x76e450);
+        // 0x3f44 (handler 0xff091c) arms a drive that imgdc's frame event sends as lensdc 0x420c (0xff1048), or sends
+        // lensdc 0x420b itself when it carries no move (0xff04cc -> 0x76e1ac).
+        PeerOperation::ImgDc(ImgDcOperation::Request2e | ImgDcOperation::Request2f | ImgDcOperation::Request44) => {
+            LensEffect::DriveThroughImageBridge
+        }
         PeerOperation::Calc(_) | PeerOperation::Calc1(_) | PeerOperation::Statistics(_) => LensEffect::NoLensDrive,
         PeerOperation::LensDc(_)
         | PeerOperation::ImgDc(_)
@@ -512,14 +524,30 @@ pub const fn lens_effect(operation: PeerOperation) -> LensEffect {
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
-mod exposure_tests;
+mod area_measurement_tests;
 #[cfg(test)]
 mod calc_tests;
 #[cfg(test)]
-mod statistics_tests;
+mod calculation_tests;
+#[cfg(test)]
+mod capture_job_tests;
+#[cfg(test)]
+mod capture_results_tests;
+#[cfg(test)]
+mod exposure_tests;
 #[cfg(test)]
 mod imaging_tests;
 #[cfg(test)]
-mod shared_tests;
+mod pipeline_tests;
 #[cfg(test)]
 mod round_image_tests;
+#[cfg(test)]
+mod search_record_tests;
+#[cfg(test)]
+mod search_tests;
+#[cfg(test)]
+mod selection_tests;
+#[cfg(test)]
+mod shared_tests;
+#[cfg(test)]
+mod statistics_tests;

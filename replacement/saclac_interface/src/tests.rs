@@ -88,6 +88,8 @@ fn flash_requests_preserve_wire_codes() {
 fn indirect_lens_drive_and_unclassified_requests_require_the_lens_contract() {
     use crate::{lens_effect, CalcOperation, ImgDcOperation, LensDcOperation, LensEffect, PeerOperation};
     assert_eq!(lens_effect(PeerOperation::ImgDc(ImgDcOperation::Request2e)), LensEffect::DriveThroughImageBridge);
+    assert_eq!(lens_effect(PeerOperation::ImgDc(ImgDcOperation::Request2f)), LensEffect::DriveThroughImageBridge);
+    assert_eq!(lens_effect(PeerOperation::ImgDc(ImgDcOperation::Request44)), LensEffect::DriveThroughImageBridge);
     for request in [
         PeerOperation::LensDc(LensDcOperation::Request07),
         PeerOperation::LensDc(LensDcOperation::Request0c),
@@ -127,6 +129,24 @@ fn capture_layout_preserves_callback_and_converted_value_order() {
     assert_eq!(F::OrdinaryMode.bytes(&packet), &[1]);
     assert_eq!(F::Enabled.bytes(&packet), &[1]);
     assert_eq!(stock::img_dc_operation(crate::ImgDcOperation::Request49), 0x3f49);
+}
+
+#[test]
+fn measurement_geometry_serializes_resource_calibration_and_retained_parameters() {
+    use crate::round::{GeometryCalibration, GeometryPair, MeasurementGeometry, RetainedGeometryValue};
+    let geometry = MeasurementGeometry {
+        resource: GeometryPair([0x1234, 0x5678]),
+        calibration: GeometryCalibration([0x1122, 0x3344, 0x5566, 0x7788]),
+        converted_profile: RetainedGeometryValue(0x90abcdef),
+        first_parameter: RetainedGeometryValue(0x10203040),
+        second_parameter: RetainedGeometryValue(0x50607080),
+    };
+    assert_eq!(stock::measurement_geometry(geometry), [
+        16, 16, 100, 0, 100, 0, 0, 0, 0, 0, 0x34, 0x12, 0x78, 0x56, 7, 7,
+        0x44, 0x33, 0x22, 0x11, 0x88, 0x77, 0x66, 0x55, 0x34, 0x12, 0x78, 0x56,
+        0xef, 0xcd, 0xab, 0x90, 0x40, 0x30, 0x20, 0x10, 0x80, 0x70, 0x60, 0x50,
+    ]);
+    assert_eq!(stock::img_dc_operation(crate::ImgDcOperation::Request2b), 0x3f2b);
 }
 
 fn lens_bytes(payload: crate::lens::LensPayload, code: u16, expected: &[u8]) {
@@ -211,19 +231,20 @@ fn lens_payload_completions_are_the_posts_of_the_callback_it_names() {
 }
 
 #[test]
-fn measurement_geometry_serializes_resource_calibration_and_retained_parameters() {
-    use crate::round::{GeometryCalibration, GeometryPair, MeasurementGeometry, RetainedGeometryValue};
-    let geometry = MeasurementGeometry {
-        resource: GeometryPair([0x1234, 0x5678]),
-        calibration: GeometryCalibration([0x1122, 0x3344, 0x5566, 0x7788]),
-        converted_profile: RetainedGeometryValue(0x90abcdef),
-        first_parameter: RetainedGeometryValue(0x10203040),
-        second_parameter: RetainedGeometryValue(0x50607080),
-    };
-    assert_eq!(stock::measurement_geometry(geometry), [
-        16, 16, 100, 0, 100, 0, 0, 0, 0, 0, 0x34, 0x12, 0x78, 0x56, 7, 7,
-        0x44, 0x33, 0x22, 0x11, 0x88, 0x77, 0x66, 0x55, 0x34, 0x12, 0x78, 0x56,
-        0xef, 0xcd, 0xab, 0x90, 0x40, 0x30, 0x20, 0x10, 0x80, 0x70, 0x60, 0x50,
-    ]);
-    assert_eq!(stock::img_dc_operation(crate::ImgDcOperation::Request2b), 0x3f2b);
+fn peer_queue_blocks_hold_the_longest_stock_payloads() {
+    use crate::calc::{CalcPayload, SharedAddress};
+    use stock::{peers, shared, StockCallbackWord};
+    let (_, calculation) = stock::calc_payload(&CalcPayload::Calculation {
+        block: SharedAddress(0),
+        source: SharedAddress(0),
+        callback: StockCallbackWord(0),
+    });
+    for (bytes, route) in [
+        (stock::LENS_PAYLOAD_BYTES, peers::LENS_DC),
+        (calculation.bytes().len(), peers::CALC),
+        (shared::LENS_COM_BYTES, peers::LENS_COM),
+        (shared::IMAGE_PROCESSOR_TRIPLET_BYTES, peers::IMAGE_PROCESSOR),
+    ] {
+        assert!(bytes <= route.payload_capacity(), "{route:?}");
+    }
 }

@@ -119,6 +119,7 @@ fn pipeline_first_and_calculation_fill_only_their_leading_fields_of_a_full_block
 #[test]
 fn source_request_places_each_value_around_two_unwritten_halfwords() {
     let request = SourceRequest {
+        statistics: SourceStatistics::Primary,
         profile: [0x0102_0304, 0x0506_0708],
         decade: 0x090a,
         profile_halfword: 0x0b0c,
@@ -126,6 +127,7 @@ fn source_request_places_each_value_around_two_unwritten_halfwords() {
         reference: 0x0f10,
         size: [0x1112_1314, 0x1516_1718],
         exposure: 0x191a_1b1c,
+        offset_mode: 0,
         mode: 0x1d1e_1f20,
         selection: 0x21,
         extension: 0x2223_2425,
@@ -172,4 +174,315 @@ fn release_posts_nothing_under_its_own_code() {
     assert_eq!(operation, CalcOperation::Request12);
     assert!(message.bytes().is_empty());
     assert_eq!(stock::calc_operation(operation), 0x3c12);
+}
+
+/// The message bytes with each `(offset, bytes)` placed and every other byte zero.
+fn placed<const N: usize>(fields: &[(usize, &[u8])]) -> [u8; N] {
+    let mut bytes = [0; N];
+    for (offset, value) in fields { bytes[*offset..*offset + value.len()].copy_from_slice(value); }
+    bytes
+}
+
+fn processing() -> CaptureProcessing {
+    CaptureProcessing {
+        extent: [0x1010_1011, 0x1010_1012],
+        grid: [0x2020_2021, 0x2020_2022],
+        geometry: core::array::from_fn(|index| 0x30 + index as u8),
+        level: 0x4041,
+        reference: 0x4243,
+        decade: 0x4445,
+        companion: 0x4647,
+        setting: 0x5050_5051,
+        profile: 0x5050_5052,
+        lens: 0x5050_5053,
+        lens_reference: 0x5050_5054,
+        offset_mode: 2,
+    }
+}
+
+#[test]
+fn capture_source_request_names_the_capture_statistics_and_carries_the_offset_mode() {
+    let request = SourceRequest {
+        statistics: SourceStatistics::Capture,
+        profile: [1, 2],
+        decade: 3,
+        profile_halfword: 4,
+        level: 5,
+        reference: 6,
+        size: [7, 8],
+        exposure: 9,
+        offset_mode: 2,
+        mode: 10,
+        selection: 1,
+        extension: 11,
+    };
+    let (_, message) = stock::calc_payload(&CalcPayload::Source { request, callback: CALLBACK });
+    assert_eq!(&message.bytes()[4..8], &0x5ffb_6120u32.to_le_bytes());
+    assert_eq!(&message.bytes()[44..48], &2u32.to_le_bytes());
+}
+
+#[test]
+fn capture_first_request_carries_the_record_value_and_the_processing_extent() {
+    let request = CaptureFirstRequest { at_0022: -2, processing: processing() };
+    let (operation, message) = stock::calc_payload(&CalcPayload::CaptureFirst { request, callback: CALLBACK });
+    assert_eq!(stock::calc_operation(operation), 0x3c0f);
+    let expected: [u8; 44] = placed(&[
+        (0, &CALLBACK.0.to_le_bytes()),
+        (4, &(-2i16).to_le_bytes()),
+        (8, &0x5ffb_6120u32.to_le_bytes()),
+        (12, &0x4243u16.to_le_bytes()),
+        (14, &0x4041u16.to_le_bytes()),
+        (16, &0x1010_1011u32.to_le_bytes()),
+        (20, &0x1010_1012u32.to_le_bytes()),
+        (24, &0x5050_5052u32.to_le_bytes()),
+    ]);
+    assert_eq!(message.bytes(), &expected[..]);
+}
+
+#[test]
+fn capture_third_request_names_three_capture_buffers() {
+    let request = CaptureThirdRequest { scene: 9, scene_flags: 3, at_0022: 0x0607, processing: processing(), calibration: [-1000, 250], detail: 0xd0d0_d0d1 };
+    let (operation, message) = stock::calc_payload(&CalcPayload::CaptureThird { request, callback: CALLBACK });
+    assert_eq!(stock::calc_operation(operation), 0x3c0e);
+    let expected: [u8; 60] = placed(&[
+        (0, &CALLBACK.0.to_le_bytes()),
+        (4, &9u32.to_le_bytes()),
+        (8, &3u16.to_le_bytes()),
+        (10, &0x0607u16.to_le_bytes()),
+        (12, &0x5ffb_6120u32.to_le_bytes()),
+        (16, &0x5ffb_7120u32.to_le_bytes()),
+        (20, &0x5ffb_7130u32.to_le_bytes()),
+        (24, &0x4243u16.to_le_bytes()),
+        (28, &0x1010_1011u32.to_le_bytes()),
+        (32, &0x1010_1012u32.to_le_bytes()),
+        (36, &0x2020_2021u32.to_le_bytes()),
+        (40, &0x2020_2022u32.to_le_bytes()),
+        (44, &0x5050_5054u32.to_le_bytes()),
+        (48, &0x5050_5052u32.to_le_bytes()),
+        (52, &(-1000i16).to_le_bytes()),
+        (54, &250i16.to_le_bytes()),
+        (56, &0xd0d0_d0d1u32.to_le_bytes()),
+    ]);
+    assert_eq!(message.bytes(), &expected[..]);
+}
+
+#[test]
+fn capture_second_request_places_record_measurement_and_processing_values() {
+    let measurement = CaptureMeasurement {
+        first: 0x0a01,
+        second: 0x0a02,
+        base: 0x0a03,
+        third: 0x0a04,
+        fourth: 0x0a05,
+        slot: core::array::from_fn(|index| 0x60 + index as u8),
+        fifth: 0x0a06,
+        sixth: 0x0a07,
+        paired: true,
+        count: 3,
+        block: core::array::from_fn(|index| 0x80 + index as u8),
+        seventh: 0x0a08,
+    };
+    let request = CaptureSecondRequest {
+        scene: 5,
+        scene_class: 0,
+        header_63: 1,
+        scene_flags: 2,
+        at_003e: 0x11,
+        at_003f: 0x12,
+        auxiliary: 0x13,
+        at_0048: 0x14,
+        at_0045: 0x15,
+        profile_kind: 0x16,
+        at_0022: 0x0b01,
+        at_000e: [0x21, 0x22, 0x23, 0x24, 0x25, 0x26],
+        at_002a: 0x0b02,
+        at_00a0: 0x0b03,
+        at_0092: 0x0b04,
+        at_001a: 0x0b05,
+        level_total: 0x0b06,
+        lens_level: 0x0b07,
+        offsets: [0x0c0c_0c01, 0x0c0c_0c02],
+        at_01ec: 0x0c0c_0c03,
+        at_017a: 0x0d01,
+        at_017c: 0x0d02,
+        at_017e: 0x0d03,
+        at_0180: 0x0d04,
+        at_0186: 0x0d05,
+        at_0188: 0x0e0e_0e01,
+        capture_offset: 0x0e0e_0e02,
+        at_0164: 0x0e0e_0e03,
+        at_0168: 0x0e0e_0e04,
+        at_01f4: 0x0e0e_0e05,
+        processing: processing(),
+        window_measured: true,
+        measurement,
+        detail: 0x0f0f_0f01,
+    };
+    let (operation, message) = stock::calc_payload(&CalcPayload::CaptureSecond { request, callback: CALLBACK });
+    assert_eq!(stock::calc_operation(operation), 0x3c10);
+    let expected: [u8; 224] = placed(&[
+        (0, &CALLBACK.0.to_le_bytes()),
+        (8, &5u32.to_le_bytes()),
+        (12, &0x11u32.to_le_bytes()),
+        (16, &0x12u32.to_le_bytes()),
+        (20, &0x13u32.to_le_bytes()),
+        (24, &0x0b01u16.to_le_bytes()),
+        (28, &0x14u32.to_le_bytes()),
+        (32, &[0x21, 0x22, 0x23, 0x24, 0x25, 0x26]),
+        (40, &0x15u32.to_le_bytes()),
+        (44, &0x0b02u32.to_le_bytes()),
+        (48, &2u16.to_le_bytes()),
+        (50, &0x0b03u16.to_le_bytes()),
+        (52, &0x0b04u16.to_le_bytes()),
+        (54, &0x0a01u16.to_le_bytes()),
+        (56, &0x0a02u16.to_le_bytes()),
+        (58, &0x0b06u16.to_le_bytes()),
+        (60, &0x0b07u16.to_le_bytes()),
+        (64, &0x0c0c_0c01u32.to_le_bytes()),
+        (68, &0x0c0c_0c02u32.to_le_bytes()),
+        (72, &2u32.to_le_bytes()),
+        (76, &0x0c0c_0c03u32.to_le_bytes()),
+        (80, &0x0d01u16.to_le_bytes()),
+        (82, &0x0d02u16.to_le_bytes()),
+        (84, &0x0d03u16.to_le_bytes()),
+        (86, &0x0d04u16.to_le_bytes()),
+        (88, &0x0d05u16.to_le_bytes()),
+        (90, &0x4647u16.to_le_bytes()),
+        (92, &0x0e0e_0e01u32.to_le_bytes()),
+        (96, &0x0e0e_0e02u32.to_le_bytes()),
+        (100, &0x0e0e_0e03u32.to_le_bytes()),
+        (104, &0x0e0e_0e04u32.to_le_bytes()),
+        (108, &0x5ffb_6120u32.to_le_bytes()),
+        (112, &0x4243u16.to_le_bytes()),
+        (114, &0x4041u16.to_le_bytes()),
+        (116, &0x1010_1011u32.to_le_bytes()),
+        (120, &0x1010_1012u32.to_le_bytes()),
+        (124, &0x5050_5054u32.to_le_bytes()),
+        (128, &0x5050_5053u32.to_le_bytes()),
+        (132, &0x5050_5052u32.to_le_bytes()),
+        (136, &0x0e0e_0e05u32.to_le_bytes()),
+        (140, &1u32.to_le_bytes()),
+        (152, &0x0a03u16.to_le_bytes()),
+        (154, &0x0a04u16.to_le_bytes()),
+        (156, &0x0a05u16.to_le_bytes()),
+        (158, &measurement.slot),
+        (170, &0x0a06u16.to_le_bytes()),
+        (172, &1u32.to_le_bytes()),
+        (176, &0x16u32.to_le_bytes()),
+        (180, &0x0a07u16.to_le_bytes()),
+        (182, &[3]),
+        (184, &measurement.block),
+        (208, &0x0b05u16.to_le_bytes()),
+        (210, &0x0a08u16.to_le_bytes()),
+        (212, &1u32.to_le_bytes()),
+        (216, &0u32.to_le_bytes()),
+        (220, &0x0f0f_0f01u32.to_le_bytes()),
+    ]);
+    assert_eq!(message.bytes(), &expected[..]);
+}
+
+#[test]
+fn area_evaluation_carries_the_pairs_and_shares_of_the_chosen_list_only() {
+    let geometry = AreaGeometry {
+        active: true,
+        list: Some(crate::area_measurement::EvaluatedList::Second),
+        settings: [0x71, 0x72, 0x73],
+        count: 2,
+        shares: [40, 50, 60],
+        scale: 0x7475,
+        list_value: 0x7676_7677,
+        area_count: 1,
+        accepted: [true, false, true],
+        span: 0x7879,
+        shift: -3,
+        record_value: 0x7a7a_7a7b,
+        within_limit: true,
+        slot_rate: 0x7c7c_7c7d,
+        ..AreaGeometry::default()
+    };
+    let request = AreaEvaluationRequest {
+        scene: 0x11,
+        profile_kind: 0x12,
+        header_47: 0x13,
+        at_001a: 0x0b01,
+        at_0022: 0x0b02,
+        at_0045: 0x14,
+        at_004b: 0x15,
+        at_0048: 0x16,
+        at_0041: 0x17,
+        at_01b4: 0x0c0c_0c01,
+        at_01f2: 0x0b03,
+        level_total: 0x0b04,
+        at_017c: 0x0b05,
+        at_0186: 0x0b06,
+        at_0170: 0x0c0c_0c02,
+        at_0174: 0x0b07,
+        at_0176: 0x0b08,
+        at_0188: 0x0c0c_0c03,
+        at_01f0: 0x0b09,
+        frames: [0x0d0d_0d01, 0x0d0d_0d02],
+        lens_level: 0x0b0a,
+        level_offset: -7,
+        processing: processing(),
+        geometry,
+        scene_flags: 1,
+        lens_temperature: -5,
+    };
+    let callbacks = [StockCallbackWord(0x00f2_acd0), StockCallbackWord(0x00f2_ac98)];
+    let (operation, message) = stock::calc_payload(&CalcPayload::AreaEvaluation { request, callbacks });
+    assert_eq!(stock::calc_operation(operation), 0x3c0d);
+    let expected: [u8; 220] = placed(&[
+        (0, &0x00f2_acd0u32.to_le_bytes()),
+        (4, &0x00f2_ac98u32.to_le_bytes()),
+        (8, &0x11u32.to_le_bytes()),
+        (12, &0x12u32.to_le_bytes()),
+        (16, &0x13u32.to_le_bytes()),
+        (20, &0x0b01u16.to_le_bytes()),
+        (22, &0x0b02u16.to_le_bytes()),
+        (24, &0x14u32.to_le_bytes()),
+        (28, &0x15u32.to_le_bytes()),
+        (32, &0x16u32.to_le_bytes()),
+        (36, &0x17u32.to_le_bytes()),
+        (40, &0x7a7a_7a7bu32.to_le_bytes()),
+        (44, &0x0c0c_0c01u32.to_le_bytes()),
+        (48, &0x0b03u16.to_le_bytes()),
+        (50, &0x0b04u16.to_le_bytes()),
+        (52, &0x0b05u16.to_le_bytes()),
+        (54, &0x0b06u16.to_le_bytes()),
+        (56, &0x7c7c_7c7du32.to_le_bytes()),
+        (60, &0x0c0c_0c02u32.to_le_bytes()),
+        (64, &0x0b07u16.to_le_bytes()),
+        (66, &0x0b08u16.to_le_bytes()),
+        (68, &0x0c0c_0c03u32.to_le_bytes()),
+        (72, &0x0b09u16.to_le_bytes()),
+        (76, &0x5ffb_6120u32.to_le_bytes()),
+        (80, &0x5ffb_71d0u32.to_le_bytes()),
+        (84, &0x0d0d_0d02u32.to_le_bytes()),
+        (88, &0x0b0au16.to_le_bytes()),
+        (90, &0x4243u16.to_le_bytes()),
+        (92, &0x4041u16.to_le_bytes()),
+        (94, &(-7i16).to_le_bytes()),
+        (96, &0x1010_1011u32.to_le_bytes()),
+        (100, &0x1010_1012u32.to_le_bytes()),
+        (104, &processing().geometry),
+        (128, &0x5050_5054u32.to_le_bytes()),
+        (132, &2u32.to_le_bytes()),
+        (136, &2u32.to_le_bytes()),
+        (140, &[0x71, 0x72, 0x73, 2]),
+        (144, &[0xff; 8]),
+        (168, &40u32.to_le_bytes()),
+        (172, &50u32.to_le_bytes()),
+        (180, &0x7475u16.to_le_bytes()),
+        (184, &0x7676_7677u32.to_le_bytes()),
+        (188, &1u32.to_le_bytes()),
+        (192, &1u32.to_le_bytes()),
+        (200, &1u32.to_le_bytes()),
+        (204, &0x7879u16.to_le_bytes()),
+        (206, &(-3i16).to_le_bytes()),
+        (208, &1u32.to_le_bytes()),
+        (212, &1u16.to_le_bytes()),
+        (214, &[0xfb]),
+        (216, &0x0d0d_0d01u32.to_le_bytes()),
+    ]);
+    assert_eq!(message.bytes(), &expected[..]);
 }

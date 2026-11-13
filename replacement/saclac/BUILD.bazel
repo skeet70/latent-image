@@ -68,6 +68,33 @@ xm1_rust_elf(
     extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
 )
 
+# The playback control: the cyclic wake 0x3b4b is not routed after 110 dispatches.
+xm1_rust_staticlib(
+    name = "saclac-rust-wrong-driver-playback",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac",
+    rustc_flags = ["-C", "jump-tables=no", "--cfg", "saclac_image", "--cfg", "saclac_wrong_driver_playback"],
+    data = _SOURCES,
+    rlib_deps = _ARM_DEPS,
+)
+
+xm1_rust_elf(
+    name = "saclac-image-wrong-driver-playback",
+    rust_staticlib = ":saclac-rust-wrong-driver-playback",
+    asm_srcs = ["entry.S"],
+    entry = "xm1_saclac_driver_entry",
+    link_script = ":saclac.ld",
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
+)
+
+genrule(
+    name = "saclac-image-wrong-driver-playback-sections",
+    srcs = [":saclac-image-wrong-driver-playback.elf"],
+    outs = ["saclac-image-wrong-driver-playback.sections"],
+    cmd = "$(location @lab_llvm//:bin/llvm-readelf) -S $(location :saclac-image-wrong-driver-playback.elf) > $@",
+    tools = ["@lab_llvm//:bin/llvm-readelf"],
+)
+
 xm1_rust_elf(
     name = "saclac-image-wrong-r3",
     rust_staticlib = ":saclac-rust-wrong-r3",

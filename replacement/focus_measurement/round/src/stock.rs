@@ -248,11 +248,12 @@ pub fn auxiliary_payload(request: crate::auxiliary::AuxiliaryRequest, callback: 
 /// The source request as calc 0x3c11 carries it. X-M1 1.50: 0xf386e4..0xf38704 store
 /// 0xf4f16c's word, 0x74f124's word, its decade (0xef74e4) and 0x74f5ec's halfword.
 pub fn source_payload(request: crate::source::SourceRequest, callback: xm1_saclac_interface::stock::StockCallbackWord) -> xm1_saclac_interface::calc::CalcPayload {
-    use xm1_saclac_interface::calc::{CalcPayload, SourceRequest};
+    use xm1_saclac_interface::calc::{CalcPayload, SourceRequest, SourceStatistics};
     let snapshot = request.snapshot;
     let profile = request.profile;
     CalcPayload::Source {
         request: SourceRequest {
+            statistics: SourceStatistics::Primary,
             profile: profile.words.map(|word| word.0),
             decade: profile.halfwords[0].0,
             profile_halfword: profile.halfwords[1].0,
@@ -260,6 +261,7 @@ pub fn source_payload(request: crate::source::SourceRequest, callback: xm1_sacla
             reference: snapshot.levels[1],
             size: snapshot.size.map(|word| word.0),
             exposure: snapshot.exposure[1].0,
+            offset_mode: 0,
             mode: snapshot.timing.0,
             selection: profile_selection_byte(request.selection),
             extension: request.extension.0,

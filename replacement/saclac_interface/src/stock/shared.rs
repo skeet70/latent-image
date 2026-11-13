@@ -58,7 +58,6 @@ pub const fn lens_com_operation(operation: LensComOperation) -> u16 {
     }
 }
 
-pub const IMAGE_PROCESSOR_QUEUE: u8 = 55;
 pub const IMAGE_PROCESSOR_TRIPLET_BYTES: usize = 16;
 
 /// 0x106631c stores the mode at byte 0 (0x1066328) and copies the three words after it
