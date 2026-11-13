@@ -137,9 +137,8 @@ pub mod group_20 {
 pub mod group_21 {
     use super::*;
 
-    /// The mode of `IMAGE_CALLBACK` (FocusRound).
     /// Read by 0x756ddc; written by 0x756dfc.
-    pub const IMAGE_CALLBACK_MODE: SharedField<u32> = SharedField::grouped(0x178, 21);
+    pub const AT_0178: SharedField<u32> = SharedField::grouped(0x178, 21);
 }
 
 /// Access group 22.
