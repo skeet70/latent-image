@@ -51,8 +51,8 @@ fn a_setting_command_reads_its_words_and_the_client_values_they_name() {
 fn a_setting_result_skips_the_status_word() {
     let mut payload = [0u8; 24];
     for index in 0..6 { put(&mut payload, 4 * index, index as u32 + 10); }
-    assert_eq!(capture_stock::setting_result(&payload), Some(SettingResult([11, 12, 13, 14])));
-    assert_eq!(capture_stock::setting_result(&payload[..19]), None);
+    assert_eq!(capture_stock::setting_result(&payload), Some(SettingResult([11, 12, 13, 14, 15])));
+    assert_eq!(capture_stock::setting_result(&payload[..23]), None);
 }
 
 #[test]

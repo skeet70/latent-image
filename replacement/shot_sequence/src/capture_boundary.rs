@@ -25,6 +25,20 @@ impl CaptureOptions {
     pub const fn selects_slot(self) -> bool { self.0 & 0x1b5 != 0 }
     /// An unset second limit (-0x8000) takes the default for the first slot.
     pub const fn defaults_second_limit(self) -> bool { self.0 & 0x10 != 0 }
+    /// The capture reports its outputs (0x5f, 0x60).
+    pub const fn reports_outputs(self) -> bool { self.0 & 0x01 != 0 }
+    /// The capture's calibration is the calc library's default instead of the client's.
+    pub const fn default_calibration(self) -> bool { self.0 & 0x02 != 0 }
+    /// The primary job's dump area is left without its marks.
+    pub const fn unmarked_dump(self) -> bool { self.0 & 0x10 != 0 }
+    /// The client is told when the display is requested.
+    pub const fn reports_display(self) -> bool { self.0 & 0x20 != 0 }
+    /// The capture's accounting waits for the capture pipeline's statistics.
+    pub const fn waits_for_statistics(self) -> bool { self.0 & 0x80 != 0 }
+    /// The capture reports its readout (0x61).
+    pub const fn reports_readout(self) -> bool { self.0 & 0x19e != 0 }
+    /// The capture delivers its areas (0x64) and the measured frame is displayed.
+    pub const fn displays(self) -> bool { self.0 & 0x200 != 0 }
 }
 
 /// The command-7 parameters as the client wrote them.
@@ -37,6 +51,12 @@ pub struct CaptureParameters {
     pub profile: ClientRef,
     pub slots: ClientRef,
     pub selection: ClientRef,
+    /// The client's calibration block, the statistics window (0 for the whole frame), the
+    /// buffer of delivered areas and the block whose word +4 selects the statistics.
+    pub calibration: ClientRef,
+    pub window: ClientRef,
+    pub areas: ClientRef,
+    pub statistics_selector: ClientRef,
 }
 
 impl CaptureParameters {
@@ -125,6 +145,27 @@ pub enum RecordField {
     /// Nonzero lets the evaluation of the secondary job place the record's first item.
     PlacesItem,
     MeasurementOption,
+    /// Words the capture's statistics record carries.
+    StatisticsWord,
+    StatisticsByte,
+    /// Fields the primary job passes on without reading them, named after the profile-record
+    /// layer's fields.
+    At0035,
+    At0036,
+    At0038,
+    At0039,
+    At003a,
+    At003b,
+    At003e,
+    At0042,
+    At0049,
+    At004a,
+    At004d,
+    At0053,
+    At006c,
+    At20b0,
+    At20b4,
+    At20c8,
 }
 
 /// Per-slot values of the bound record.
@@ -151,6 +192,16 @@ pub enum SlotField {
     MeasuredValue,
     EvaluationWord,
     EvaluationOffset,
+    /// Fields the primary job passes on without reading them, named after the profile-record
+    /// layer's fields.
+    At017a,
+    At0184,
+    At0186,
+    At0188,
+    At0198,
+    At01b8,
+    At0204,
+    At0208,
 }
 
 /// A reference and its detail word, as the record keeps five of them.
@@ -175,7 +226,7 @@ pub struct AreaReference(pub [u32; 10]);
 
 /// The words a setting completion returns and the record keeps.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct SettingResult(pub [u32; 4]);
+pub struct SettingResult(pub [u32; 5]);
 
 /// The image-4 record layer. A refused write is not observed.
 pub trait CaptureRecords {
@@ -224,7 +275,7 @@ pub struct RemapRequest {
 
 /// Which step's move arguments a lens move carries.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MoveProfile { LensReturn, Finish { speed: u32 } }
+pub enum MoveProfile { LensReturn, Capture, Finish { speed: u32 } }
 
 /// Lens moves through the lens service, each completing with `completion`.
 pub trait LensMoves {
@@ -340,7 +391,7 @@ pub trait CapturePlatform {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CaptureTrace { ReturnAbsolute, ReturnRelative, PrepareJob, Released }
+pub enum CaptureTrace { ReturnAbsolute, ReturnRelative, CaptureAbsolute, CaptureRelative, PrepareJob, Released }
 
 pub trait CaptureDiagnostics {
     fn trace(&mut self, trace: CaptureTrace);

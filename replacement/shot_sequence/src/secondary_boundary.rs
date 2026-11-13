@@ -33,7 +33,7 @@ pub trait MeasurementCalc {
     fn statistics_key(&mut self, processing: &Processing) -> [i16; 2];
     /// The `index`th of eight scale steps.
     fn scale_step(&mut self, index: u16) -> i16;
-    fn capture_offset(&mut self, record: RecordHandle, distance: u32) -> u32;
+    fn capture_offset(&mut self, record: RecordHandle) -> u32;
     fn curve_within(&mut self, distance: u32, selection: u32, drive: u32, limit: i32) -> bool;
     /// Calc 0x3c0d, completing with `completions` in that order.
     fn request_evaluation(&mut self, record: RecordHandle, processing: &Processing, frames: [u32; 2], geometry: &AreaGeometry, completions: [Completion; 2]);
@@ -71,10 +71,11 @@ pub struct CropRequest {
     pub full: bool,
 }
 
-/// The cropped frame (vertical, horizontal) and the window inside it: left and top offsets, then
-/// its vertical and horizontal size.
+/// The profile's extent corner (left, top), the cropped frame (vertical, horizontal) and the
+/// window inside it: left and top offsets, then its vertical and horizontal size.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CropGeometry {
+    pub origin: [u32; 2],
     pub frame: [u32; 2],
     pub window: [u32; 4],
 }

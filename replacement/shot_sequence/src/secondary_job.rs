@@ -57,8 +57,6 @@ const GRID_CELLS: u16 = 16;
 /// The first row of the grid's lower half.
 const MIDDLE_ROW: i16 = 8;
 const MAX_SPAN: u16 = 8;
-/// `capture_offset` for no particular distance.
-const ANY_DISTANCE: u32 = 0xffff;
 /// The key pair after a reset.
 const UNSET_KEY: i16 = i16::MIN;
 /// Subject state of the first slot after an evaluation of area mode 1, else `PLAIN_STATE`.
@@ -233,7 +231,7 @@ impl SecondaryJob {
         };
         let reference = boundary.reference_value(0);
         let value = boundary.reference_value(capture_stock::processing_reference_index(&self.processing[0]));
-        let offset = boundary.capture_offset(record, ANY_DISTANCE);
+        let offset = boundary.capture_offset(record);
         let words = profile_words(record, boundary);
         let crop = boundary.crop_geometry(&words.crop(CAPTURE_SELECTOR, offset, false));
         let lens_share = percent(value, reference);
@@ -269,8 +267,7 @@ impl SecondaryJob {
         let full = boundary.crop_geometry(&words.crop(CAPTURE_SELECTOR, 0, true));
         let selector = boundary.slot_field(record, 0, SlotField::ProfileSelector);
         let window = boundary.crop_geometry(&words.crop(selector, 0, false)).window;
-        let distance = boundary.slot_field(record, 0, SlotField::Distance);
-        let offset = boundary.capture_offset(record, distance);
+        let offset = boundary.capture_offset(record);
         let shifted = boundary.crop_geometry(&words.crop(selector, offset, false)).window;
 
         let index = self.evaluation.list_position().saturating_sub(1);
@@ -315,7 +312,6 @@ impl SecondaryJob {
     fn request(&mut self, parameters: &CaptureParameters, boundary: &mut impl SecondaryBoundary) {
         let Some(record) = self.record else { return };
         let words = profile_words(record, boundary);
-        let distance = boundary.slot_field(record, 0, SlotField::Distance);
         let raw_counts = LISTS.map(|list| boundary.area_count(record, list));
         let list_details = LISTS.map(|list| if raw_counts[list as usize] != 0 { boundary.list_detail(record, list) } else { 0 });
         let mut request = MeasurementRequest {
@@ -326,7 +322,7 @@ impl SecondaryJob {
             secondary_option: boundary.field(record, RecordField::SecondaryOption),
             secondary_latch: boundary.field(record, RecordField::SecondaryLatch),
             profile_class: boundary.field(record, RecordField::ProfileClass) as u16,
-            capture_offset: boundary.capture_offset(record, distance),
+            capture_offset: boundary.capture_offset(record),
             frame_words: words.frame_words,
             selection: self.selection,
             slot_offset: boundary.slot_field(record, 0, SlotField::Offset) as i16,
@@ -392,7 +388,7 @@ impl SecondaryJob {
         let chosen = if self.geometry.list == Some(EvaluatedList::Second) { 1 } else { 0 };
         let counts = if chosen == 1 { counts } else { [counts[0], 0] };
         let lens_distance = boundary.lens(FinishLensValue::Distance);
-        let offset = boundary.capture_offset(record, lens_distance);
+        let offset = boundary.capture_offset(record);
         let layout = boundary.profile_geometry(&GeometryRequest {
             selector: CAPTURE_SELECTOR,
             distance: lens_distance,
@@ -456,6 +452,8 @@ impl SecondaryJob {
                 let accepted = geometry::clip_region(&mut region, band.minimum, band.maximum, cell, boundary);
                 if accepted { set_region(&mut measured.areas[list][index], region); }
                 measured.accepted[list][index] = accepted;
+                // Suspected stock defect, kept until the owner decides: 0xf2ba6c and 0xf2bad4 pass
+                // the first area to 0xf4d080 for every index.
                 shares[list][index] = rectangle_of(&measured.areas[list][0]).percent_of(frame).unwrap_or(0);
             }
         }
@@ -633,7 +631,7 @@ fn store_slot_geometry(record: RecordHandle, boundary: &mut impl SecondaryBounda
     let limits = [SlotField::SecondLimit, SlotField::Trim].map(|field| boundary.slot_field(record, 0, field) as i16);
     let reference = boundary.slot_field(record, 0, SlotField::Reference);
     let distance = boundary.slot_field(record, 0, SlotField::Distance);
-    let offset = boundary.capture_offset(record, distance);
+    let offset = boundary.capture_offset(record);
     let request = GeometryRequest { selector: CAPTURE_SELECTOR, limits, reference, distance, offset, frame_words: words.frame_words, layout: words.layout };
     let extent = boundary.profile_extent(CAPTURE_SELECTOR, true);
     let layout = boundary.profile_geometry(&request);

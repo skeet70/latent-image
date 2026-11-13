@@ -23,6 +23,8 @@ SOURCES = [
     "src/pipeline_work.rs",
     "src/ports.rs",
     "src/preparation.rs",
+    "src/primary_boundary.rs",
+    "src/primary_job.rs",
     "src/record_load.rs",
     "src/sequence.rs",
     "src/secondary_boundary.rs",

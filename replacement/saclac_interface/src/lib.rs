@@ -3,6 +3,7 @@
 
 pub mod area_measurement;
 pub mod calculation;
+pub mod capture_job;
 pub mod capture_results;
 pub mod exposure;
 pub mod pipeline;
@@ -485,3 +486,5 @@ mod area_measurement_tests;
 mod calc_tests;
 #[cfg(test)]
 mod pipeline_tests;
+#[cfg(test)]
+mod capture_job_tests;

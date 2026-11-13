@@ -41,8 +41,6 @@ pub struct CaptureControl {
     held: bool,
     secondary_pending: bool,
     setting_result: SettingResult,
-    /// The statistics record of the last primary job; a capture setting starts from it.
-    pub setting_template: StatisticsSetting,
 }
 
 impl Default for CaptureControl {
@@ -55,8 +53,7 @@ impl CaptureControl {
             record: None,
             held: false,
             secondary_pending: false,
-            setting_result: SettingResult([0; 4]),
-            setting_template: StatisticsSetting::from_bytes([0; StatisticsSetting::BYTES]),
+            setting_result: SettingResult([0; 5]),
         }
     }
 
@@ -86,8 +83,9 @@ impl CaptureControl {
 
     pub fn prepare_setting(&self, platform: &mut impl CapturePlatform) { platform.prepare_setting(); }
 
-    pub fn request_setting(&self, overrides: &SettingOverrides, peers: &mut impl CapturePeers) {
-        let mut setting = self.setting_template;
+    /// Lays the setting command over `template`, the primary job's last statistics record.
+    pub fn request_setting(&self, template: &StatisticsSetting, overrides: &SettingOverrides, peers: &mut impl CapturePeers) {
+        let mut setting = *template;
         setting.apply(overrides);
         peers.statistics_setting(&setting, Completion::Statistics85);
     }
