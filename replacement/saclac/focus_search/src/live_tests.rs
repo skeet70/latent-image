@@ -269,6 +269,6 @@ fn the_bridge_requests_need_the_lens_safety_contract() {
     let release = Request::Bridge { motion: BridgeMotion::Release, drive: () };
     assert_eq!(travel.lens_effect(), LensEffect::DriveThroughImageBridge);
     assert_eq!(release.lens_effect(), LensEffect::DriveThroughImageBridge);
-    assert!(Request::<()>::BridgeStop.lens_effect().requires_lens_safety_contract());
+    assert_eq!(Request::<()>::BridgeStop.lens_effect(), LensEffect::DriveThroughImageBridge);
     assert_eq!(Request::<()>::Evaluate.lens_effect(), LensEffect::NoLensDrive);
 }
