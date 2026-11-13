@@ -3,6 +3,7 @@
 //! back.
 
 pub mod adjustment;
+pub mod calculation;
 pub mod context;
 pub mod correction;
 pub mod evaluation;
@@ -16,6 +17,8 @@ pub mod tables;
 
 #[cfg(test)]
 pub mod fakes;
+#[cfg(test)]
+mod calculation_tests;
 #[cfg(test)]
 mod adjustment_tests;
 #[cfg(test)]

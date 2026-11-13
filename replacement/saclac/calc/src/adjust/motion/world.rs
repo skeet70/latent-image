@@ -112,6 +112,7 @@ impl CaptureProfiles for MotionWorld {
     fn configured_profile(&mut self, level: i16) -> u32 { self.world.configured_profile(level) }
     fn record_profile(&mut self) -> u32 { self.world.record_profile() }
     fn default_dimensions(&mut self) -> [u16; 3] { self.world.default_dimensions() }
+    fn grid_steps(&mut self, layout: u8) -> [u8; 2] { self.world.grid_steps(layout) }
 }
 
 impl StockMemory for MotionWorld {

@@ -53,6 +53,8 @@ pub trait CaptureProfiles {
     fn record_profile(&mut self) -> u32;
     /// The selection dimensions of a record that keeps none (0xef3434 with arguments 5 and 0).
     fn default_dimensions(&mut self) -> [u16; 3];
+    /// The column and row steps of selection grid layout `layout` (0xef7570 with mode 0).
+    fn grid_steps(&mut self, layout: u8) -> [u8; 2];
 }
 
 /// Image 6's levels per capture profile.

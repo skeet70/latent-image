@@ -96,6 +96,7 @@ pub struct World {
     pub lens_configuration: crate::adjust::fakes::Lens,
     pub default_dimensions: [u16; 3],
     pub report_word: u32,
+    pub grid_steps: BTreeMap<u8, [u8; 2]>,
 }
 
 /// Where the test world places the context's in-place blocks.
@@ -133,6 +134,7 @@ impl Default for World {
             lens_configuration: crate::adjust::fakes::Lens::default(),
             default_dimensions: [0; 3],
             report_word: 0,
+            grid_steps: BTreeMap::new(),
         }
     }
 }
@@ -201,6 +203,7 @@ impl CaptureProfiles for World {
     fn configured_profile(&mut self, level: i16) -> u32 { self.configured_profiles.get(&level).copied().unwrap_or(0) }
     fn record_profile(&mut self) -> u32 { 1 }
     fn default_dimensions(&mut self) -> [u16; 3] { self.default_dimensions }
+    fn grid_steps(&mut self, layout: u8) -> [u8; 2] { self.grid_steps.get(&layout).copied().unwrap_or_default() }
 }
 
 impl ProfileLevels for World {

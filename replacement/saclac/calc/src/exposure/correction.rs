@@ -6,7 +6,7 @@ use xm1_saclac_interface::calc::{CalcPayload, SharedAddress};
 use xm1_saclac_interface::exposure::CorrectionRequest;
 use xm1_saclac_interface::stock::StockCallbackWord;
 use xm1_saclac_profile_records::stock::record::group_00;
-use xm1_saclac_profile_records::{MeasurementSelection, SharedHeaderByte};
+use xm1_saclac_profile_records::SharedHeaderByte;
 
 use crate::adjust::rate_policy;
 use crate::adjust::scene_settings::{self, SceneSelection};
@@ -18,6 +18,7 @@ use crate::exposure::prepare::treatments;
 use crate::exposure::settings;
 use crate::exposure::tables::CurveRange;
 use crate::policy::raise_all;
+use crate::profile::selection_code;
 use crate::requests::Peers;
 use crate::stock::property::{self, RateSetting};
 use crate::stock::shared::{self, CURVE_POINTS, LEVEL_CURVES, SUBJECT_POINTS};
@@ -28,14 +29,6 @@ use crate::stock::lists;
 pub enum SubjectSource {
     Bound,
     Snapshot,
-}
-
-const fn selection_byte(selection: MeasurementSelection) -> u32 {
-    match selection {
-        MeasurementSelection::Unselected => 0,
-        MeasurementSelection::Record => 1,
-        MeasurementSelection::Other(byte) => byte as u32,
-    }
 }
 
 /// The rate setting a record's selection chooses (0xf5ecc0).
@@ -108,7 +101,7 @@ pub fn request(ports: &mut impl Ports, context: &ExposureContext, source: Subjec
     let image_word = if ports.profile().read::<u8, _>(record, &group_00::AT_0041) == 1 { ports.second_report_word() } else { 0 };
     CorrectionRequest {
         style: if matches!(style_byte, 1 | 2) { u32::from(style_byte) } else { 0 },
-        measurement_selection: selection_byte(selection),
+        measurement_selection: u32::from(selection_code(selection)),
         selection_kind: kind,
         selection_flags: flags,
         record_kind: u32::from(ports.profile().read::<u8, _>(record, &group_00::AT_0034)),

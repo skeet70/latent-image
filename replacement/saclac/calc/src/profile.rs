@@ -8,6 +8,15 @@ use xm1_saclac_profile_records::{MeasurementSelection, Memory, ProfileRecords, S
 /// Kinds for which the refinement pass maps style 1 to 0 and style 3 to 2 (0xf61610).
 const REMAPPED_KINDS: [u32; 7] = [5, 11, 12, 34, 37, 40, 48];
 
+/// The byte stock keeps for a measurement selection.
+pub const fn selection_code(selection: MeasurementSelection) -> u8 {
+    match selection {
+        MeasurementSelection::Unselected => 0,
+        MeasurementSelection::Record => 1,
+        MeasurementSelection::Other(byte) => byte,
+    }
+}
+
 /// The profile records as the library reads them: the typed view and the stock header accessors
 /// other tasks share.
 pub struct Profile<'a, M, E> {
@@ -83,5 +92,16 @@ impl<'a, M: Memory, E: StockEntries> Profile<'a, M, E> {
     /// 0xf616e8.
     pub fn style_option(&mut self, handle: RecordHandle, option: u32) -> u8 {
         if self.selection_style(handle, false) == 7 || option == 1 { 0 } else { 4 }
+    }
+
+    /// Record byte +0x3d, or 1 when it is 0 or the record selects no measurement (0xfaaae8).
+    pub fn grid_layout(&mut self, handle: RecordHandle) -> u8 {
+        if self.measurement_selection(handle) == MeasurementSelection::Unselected {
+            return 1;
+        }
+        match self.read(handle, &group_00::AT_003D) {
+            0 => 1,
+            layout => layout,
+        }
     }
 }

@@ -3,7 +3,7 @@
 //! modules read back.
 
 use xm1_saclac_interface::calc::SharedAddress;
-use xm1_saclac_interface::exposure::{CorrectionRequest, EvaluationRequest};
+use xm1_saclac_interface::exposure::{CalculationInput, CorrectionRequest, EvaluationRequest};
 use xm1_saclac_interface::RecordHandle;
 
 use crate::policy::ExposureMode;
@@ -60,6 +60,8 @@ pub struct Binding {
     pub summary: [u32; SUMMARY_WORDS],
     /// The half press's refinement pass: profile policies that a suppression flag disables read 0.
     pub refinement_pass: bool,
+    /// The live sequence's exposure rather than a half press's.
+    pub live: bool,
 }
 
 impl Binding {
@@ -244,6 +246,7 @@ pub struct ExposureContext {
     pub correction: CorrectionRequest,
     pub adjustment: Adjustment,
     pub saved: SavedTables,
-    pub live: bool,
-    pub return_mode: u32,
+    /// The record's metered level relative to the lens (0xf61c70..0xf61cb8).
+    pub metered_level: i16,
+    pub calculation: CalculationInput,
 }
