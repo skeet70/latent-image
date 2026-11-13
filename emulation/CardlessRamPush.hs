@@ -21,7 +21,7 @@ import FujiAF.JSON (encodeCanonical)
 import qualified FujiAF.Host as H
 import GHC.Clock (getMonotonicTime)
 import System.Directory (canonicalizePath, doesDirectoryExist, getCurrentDirectory)
-import System.Environment (getArgs, lookupEnv)
+import System.Environment (getArgs, getExecutablePath, lookupEnv)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
 import System.IO (BufferMode (LineBuffering), hFlush, hPutStrLn, hSetBuffering, stderr, stdout)
@@ -199,10 +199,12 @@ checkpointKey runtime options = do
   guest <- guestState root (EmbeddedInterpreter home base abi declared) (UnicornLibrary unicorn)
   installed <- sha256File (optionInstalledDat options)
   adjustment <- sha256File (optionAdjustmentNand options)
+  executable <- getExecutablePath >>= sha256File
   pure (routeKey guest CardlessAttach
     ([ ("profile", H.s (optionProfile options))
     , ("installed_dat", H.s (sha256Hex installed))
     , ("adjustment_nand", H.s (sha256Hex adjustment))
+    , ("emulator_binary", H.s (sha256Hex executable))
     , ("ui_conversion_profile", uiConversionValue (optionUiConversion options))
     , ("cold_boot", coldBootValue (cardlessColdBoot options)) ]
     ++ [ ("fixed_scene_frame", Aeson.toJSON frame) | Just (FixedSceneFrame frame) <- [optionFixedSceneFrame options] ]))
@@ -294,11 +296,13 @@ serve started runtime options =
             withPath pathlib directory $ \directoryPath ->
               withRestored commands directoryPath record output $ \board session bridge attachment -> do
                 restoreSeconds <- elapsedSince restoreStarted
+                snapshotDigest <- sha256File (directory </> "manifest.json")
                 let installedField = case start of
                       InstalledCheckpoint -> ["installed" .= directory]
                       AttachCheckpoint -> []
                     checkpoint = Aeson.object
                       ([ "key" .= key, "inputs" .= identity, "directory" .= checkpointDirectory
+                       , "snapshot_manifest_sha256" .= sha256Hex snapshotDigest
                        , "key_seconds" .= keySeconds, "start" .= restoreValue start
                        , "restore_seconds" .= restoreSeconds ] ++ installedField)
                 runServer commands board session output bridge attachment checkpoint checkpointRoot
@@ -344,8 +348,10 @@ serve started runtime options =
                               saveAttachCheckpoint attach key identity attachment session
                                 checkpointRoot (optionFreshBoot options) attachRecord
                               saveSeconds <- elapsedSince saveStarted
+                              snapshotDigest <- sha256File (checkpointDirectory </> "manifest.json")
                               let checkpoint = Aeson.object
                                     [ "key" .= key, "inputs" .= identity, "directory" .= checkpointDirectory
+                                    , "snapshot_manifest_sha256" .= sha256Hex snapshotDigest
                                     , "key_seconds" .= keySeconds, "start" .= freshStart
                                     , "boot_seconds" .= bootSeconds, "saved" .= True
                                     , "save_seconds" .= saveSeconds ]

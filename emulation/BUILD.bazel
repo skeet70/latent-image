@@ -3198,6 +3198,7 @@ haskell_library(
     src_strip_prefix = ".",
     visibility = ["//transport:__pkg__"],
     deps = [
+        ":case-sha256",
         ":key-release-observations",
         ":preservation-observation",
         ":watch-observation",
@@ -3208,6 +3209,8 @@ haskell_library(
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
         "//host:process",
         "//host:text",
         "//replacement/modal_runtime:render-object-provenance-lib",

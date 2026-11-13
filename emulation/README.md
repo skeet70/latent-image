@@ -6,6 +6,16 @@ The checked-in Nix build fetches the exact FujiMod commit and submodules in `bui
 
 The retained engine still owns acceptance gates and unqualified browser, flash-candidate, fixed-scene, strict-conversion, diagnostic and fixture workflows. Bulk-read and AF-ring have FujiMod counterparts pending qualification; updater verifier/NAND coverage remains separate. The [decision report](../reports/emulator-runtime-decision.md#retained-capabilities-still-missing-from-the-supported-fujimod-path) records the boundaries. The [R4F translation-admission guard](../build-support/README.md) checks instructions before execution and repeats admission after code invalidation; enabled MPU regions 12-15 remain a post-window refusal.
 
+### Shared checkpoint store
+
+Reusable FujiMod state lives under `private-data/emulator-checkpoints/`. Its guest-state key is the SHA-256 of the canonical JSON value from [`BootIdentity::document`](fujimod-xm1/src/checkpoint.rs), with schema, model, exact run-document bytes, installed DAT, boot ROM, NAND source and contents, card identity and producer procedure. Post-boot producers additionally call `with_emulator_binary` with their actual executable bytes. Procedure identity includes the phase and every producer input not already covered by the guest-state identity. Installed-state producers also bind their owned archives, relocation result, observation policy and installation procedure.
+
+The shared post-boot API uses `post-boot-KEY/session.fujimod` and `post-boot-KEY/post-boot.json`. The record binds the identity, snapshot SHA-256 and saved guest instruction count. A store-wide process lock serializes creation and eviction; publication syncs files and directories before an atomic directory rename. The [retention rule](checkpoint-runs.md) removes abandoned partial publications and seven-day-old entries superseded only by their executable digest. A hit verifies both identity and snapshot digest before restoring. Runs record the returned key, snapshot digest, instruction boundary and hit/miss receipt. Observers attach after restoration; observations of startup itself remain from reset.
+
+The [full-system starting-state inventory](checkpoint-runs.md) classifies the Bazel run targets and command scripts. Saclac's cold-boot scenario observes startup; its other scenarios share the saved post-setup live-view boundary. Cached route reports omit startup traffic and state their observation boundary explicitly.
+
+Retained-engine snapshots keep their existing `Emulation.CheckpointKey` guest-state identity, including the native library and interpreter bytes. The cardless bridge also binds its executable. Their receipts record `snapshot_manifest_sha256`; the portable snapshot manifest identifies the stored state blobs. FujiMod receipts record `snapshot_sha256` for the exported session bytes.
+
 ### RAM-push committed NAND lifecycle
 
 Initial sessions use `--adjustment-nand NAND` with an optional `--record-nand NAND` fixture. A power-cycle continuation instead uses `--committed-nand NAND --fresh-boot`, mutually exclusive with both seed flags. Full committed import replaces the NAND before instruction zero; it does not reapply adjustment or record fixtures. The boot and initialized-reset cache identities bind the full committed input digest separately from fixture digests.
@@ -2872,6 +2882,8 @@ devenv shell -- host-build test //emulation:candidate-baseline-tests
 
 The routes below are reported but do not decide the run's result: FujiMod remains comparison-only pending the [runtime decision](../reports/emulator-runtime-decision.md), and the retained counterparts serve its comparisons. A FujiMod RAM-push route runs `xm1-viewer --ram-push-e2e --fujimod` with its retained trajectory file's `NAME.fujimod.json` variant when one exists, and passes when it exits 0 and `//emulation:e2e-observation-compare COUNTERPART ROUTE` reports no difference. The FujiMod toggle route passes on the comparison alone, since `usb-toggle-emu` exits 1 while any scenario blocks. The comparison output is `differences/NAME.compare.txt`. FujiMod refuses `--fixed-scene-frame`. The comparison leaves out capture PNG digests, and the FujiMod volatile, card-backed Classic Chrome and E8 routes matched the pinned gating routes. The cardless counterparts run unpinned; the icon route's converter entries and develop passes compare apart under [the site-entry rule](#trajectory-variants-on-fujimod).
 
+Both toggle counterpart commands pass `--fresh-boot`, replacing each route's checkpoint once per key. Their compared receipts include first-start boot traffic; pre-existing cache contents must not select different observation scopes between engines.
+
 Counterpart routes that require exit 0 reject missing or null producer execution evidence, even when receipts compare equal. `--from-run` reads evidence from `report.json`; `--receipt NAME=DIR` supplies only receipts and never borrows an earlier exit code. Child invocations resolve tools from inherited `RUNFILES_DIR`, falling back to the verifier's adjacent `.runfiles` directory.
 
 The checked-in regression generates nine synthetic E2E and USB-toggle cases through the public verifier CLI and real comparator. It is the public reproduction; the retained before/after fixture is private and is not released.
@@ -2946,7 +2958,7 @@ On 2026-11-05 the `ram-push-volatile`, `ram-push-cc`, `ram-push-cc-icon` and `us
 
 ## Live-RAM calibration
 
-`//emulation:ram-calibration` captures paused low RAM from either existing cardless ff80 bridge and compares it with the owner's Run-3 capture. `capture retained|fujimod DAT NAND PRIVATE_OUTPUT` cold-boots clean firmware with no card, enumerates ff80 and saves `[0,0x05aa0000)` before any RAM allocation or payload. It holds an emulator slot and performs no physical camera or USB I/O.
+`//emulation:ram-calibration` captures paused low RAM from either existing cardless ff80 bridge and compares it with the owner's Run-3 capture. `capture retained|fujimod DAT NAND PRIVATE_OUTPUT` restores the keyed cardless attach checkpoint, or cold-boots clean firmware with no card and saves one, enumerates ff80 and saves `[0,0x05aa0000)` before any RAM allocation or payload. It holds an emulator slot and performs no physical camera or USB I/O.
 
 `compare BODY RETAINED_RAM FUJIMOD_RAM OUTPUT_JSON` reports disjoint region counts, zero/`0xff` populations, differing words, decoded task-stack extents and the narrow Run-3 classification rules. Input dumps must be exactly `0x05aa0000` bytes. `words BODY MODEL BEGIN_HEX END_HEX` emits the differing aligned words in a physical window. `references RAM OUTPUT_JSON` scans the recorder rev-2 span's incoming numerical pointer, A32 B/BL and bounded MOVW/MOVT candidates and records the old hook words; it does not prove arbitrary computed reachability.
 

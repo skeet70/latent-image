@@ -85,6 +85,10 @@ cases =
     , null (differences "receipt"
         (normalize toggleIgnored (object ["engine" .= ("retained" :: T.Text), "emulator" .= ("a" :: T.Text), "result" .= ("pass" :: T.Text)]))
         (normalize toggleIgnored (object ["engine" .= ("fujimod" :: T.Text), "emulator" .= ("b" :: T.Text), "result" .= ("pass" :: T.Text)]))) )
+  , ( "toggle receipts leave out each engine's snapshot digest"
+    , null (differences "receipt"
+        (normalize toggleIgnored (object ["snapshot_manifest_sha256" .= ("retained" :: T.Text)]))
+        (normalize toggleIgnored (object ["snapshot_sha256" .= ("fujimod" :: T.Text)]))) )
   , ( "toggle receipts compare results"
     , not (null (differences "receipt"
         (normalize toggleIgnored (object ["result" .= ("pass" :: T.Text)]))

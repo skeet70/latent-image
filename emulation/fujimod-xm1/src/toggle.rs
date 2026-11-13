@@ -121,7 +121,7 @@ fn route_key(arguments: &Arguments, inputs: &Inputs, adjustment: &[u8]) -> Resul
     })).map_err(|error| error.to_string())?;
     let identity = BootIdentity::new(
         &inputs.document_bytes, &inputs.update, &inputs.boot_rom, adjustment, None, &procedure,
-    );
+    ).with_emulator_binary(&read(&std::env::current_exe().map_err(|error| error.to_string())?)?);
     Ok((identity.key(), identity.document()))
 }
 
@@ -448,6 +448,7 @@ impl Server {
                     "instructions": self.bridge.machine.instructions()});
                 let target = bridge::save_checkpoint(&mut self.bridge.machine, &self.root, self.key.as_str(), RECORD, &record, None)?;
                 json!({"directory": std::fs::canonicalize(&target).map_err(|e| e.to_string())?,
+                    "snapshot_sha256": fujimod_xm1::machine_fingerprint::snapshot_digest(&target.join(SNAPSHOT))?,
                     "instructions": self.bridge.machine.instructions()})
             }
             Request::Finish => return Ok(None),
@@ -541,6 +542,7 @@ fn drive() -> Result<(), String> {
         let machine = bridge::restore(&inputs, &directory)?;
         record["start"] = json!(StartKind::Restored);
         record["restore_seconds"] = json!(started.elapsed().as_secs_f64());
+        record["snapshot_sha256"] = json!(fujimod_xm1::machine_fingerprint::snapshot_digest(&directory.join(SNAPSHOT))?);
         machine
     } else {
         let mut machine = inputs.machine()?;

@@ -1166,6 +1166,12 @@ generationChecks tool = withWorkspace $ \root -> do
   seedGenerationReceipt receipt (fixture 1.0)
   (recorded, _, recordErr) <- run "generation-record" ["--record-baseline"]
   check ("a generation fixture records: " ++ recordErr) (recorded == ExitSuccess)
+  checkpointReceipt <- eitherDecode <$> BL.readFile (receipt </> "e2e-result.json")
+  case checkpointReceipt of
+    Right (Object fields) -> jsonFile (receipt </> "e2e-result.json") (Object (KM.insert "emulator_start"
+      (object ["snapshot_manifest_sha256" .= T.replicate 64 "a", "snapshot_sha256" .= T.replicate 64 "b"]) fields))
+    _ -> fail "generation fixture is not an object"
+  expectPass "checkpoint-digest-receipt" []
   rewriteBaseline baselinePath legacyGeneration
   seedGenerationReceipt receipt (fixture 2.0)
   expectPass "generation-accepted"

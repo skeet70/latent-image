@@ -7,6 +7,7 @@
 use fujimod_emulator::board::factory::MemoryMap;
 use fujimod_emulator::board::observation::{MemoryWatch, ViewPolicy, WatchKinds, WatchRange};
 use fujimod_xm1::bridge::{read, sha256, write};
+use fujimod_xm1::checkpoint::{BootIdentity, PostBootReceipt, SHARED_STORE, post_boot};
 use fujimod_xm1::trace::SiteRead;
 use fujimod_xm1::guest::{GpioKey, ModeDialPosition, RouteKey, ShutterStage};
 use fujimod_xm1::machine::{Hold, KeyPulse, MENU_PULSE, Machine, RunOutcome, key_pulse};
@@ -17,7 +18,7 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const USAGE: &str = "saclac-census --run RUN --update STOCK_DAT --boot-rom ROM --sites SITES --scenario cold-boot|menu-route|half-press|shoot-without-lens|capture|playback|mode-dial [--steps STEPS] --output NEW_DIR";
+const USAGE: &str = "saclac-census --run RUN --update STOCK_DAT --boot-rom ROM --sites SITES --scenario cold-boot|menu-route|half-press|shoot-without-lens|capture|playback|mode-dial [--steps STEPS] [--checkpoints ROOT] [--start reset|post-boot] --output NEW_DIR";
 const SITE_LABEL: &str = "saclac-site";
 const SITE_LIMIT: usize = 4096;
 const CONTEXT_LIMIT: usize = 1024;
@@ -554,9 +555,12 @@ struct WatchRow {
 struct Report<'a> {
     schema: u32,
     scenario: Scenario,
+    checkpoint: Option<PostBootReceipt>,
     inputs: Vec<Binding>,
     limits: Limits,
     instructions: u64,
+    observation_start_instructions: u64,
+    executed_instructions: u64,
     counts: Option<[u64; 2]>,
     milestones: &'a [Milestone],
     menu_trace: &'a [MenuSample],
@@ -865,6 +869,13 @@ impl<'a> Census<'a> {
     /// Runs the cold start and the initial setup. With `open_menu`, the MENU press that opens
     /// the shooting menu follows; the key routes start from the live view before it.
     fn boot(&mut self, machine: &mut Machine, open_menu: bool) -> Result<(), String> {
+        if machine.instructions() == 0 {
+            self.prepare_boot(machine)?;
+        }
+        self.open_menu(machine, open_menu)
+    }
+
+    fn prepare_boot(&mut self, machine: &mut Machine) -> Result<(), String> {
         self.phase = "cold-start".into();
         let erased = MenuTriple { menu: 69, setting: 52, cursor: 12 };
         let first = self.advance_to(machine, INITIAL_MENU, erased)?;
@@ -874,9 +885,11 @@ impl<'a> Census<'a> {
             self.pulse(machine, key, KeyPulse::instructions(SETUP_HOLD, SETUP_RELEASE))?;
         }
         self.advance(machine, SETUP_SETTLE)?;
-        if !open_menu {
-            return Ok(());
-        }
+        Ok(())
+    }
+
+    fn open_menu(&mut self, machine: &mut Machine, open_menu: bool) -> Result<(), String> {
+        if !open_menu { return Ok(()); }
         self.phase = "shooting-menu".into();
         let pulse = self.pulse(machine, Key::Menu, KeyPulse::instructions(SETUP_HOLD, SETUP_RELEASE))?;
         let shooting = MenuTriple { menu: 1, setting: 5, cursor: 2 };
@@ -1033,7 +1046,7 @@ fn arguments() -> Result<BTreeMap<String, PathBuf>, String> {
     while let Some(flag) = arguments.next() {
         let name = flag.to_str().ok_or(USAGE)?.to_owned();
         let value = arguments.next().ok_or(USAGE)?;
-        require(REQUIRED.contains(&name.as_str()) || name == "--steps", USAGE)?;
+        require(REQUIRED.contains(&name.as_str()) || name == "--steps" || name == "--checkpoints" || name == "--start", USAGE)?;
         require(paths.insert(name, PathBuf::from(value)).is_none(), USAGE)?;
     }
     for name in REQUIRED {
@@ -1062,10 +1075,22 @@ fn parse_scenario(text: &str) -> Result<Scenario, String> {
     })
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ObservationStart { Reset, PostBoot }
+
 fn drive() -> Result<(), String> {
     let paths = arguments()?;
     let output = paths["--output"].clone();
     let scenario = parse_scenario(paths["--scenario"].to_str().ok_or("scenario is not text")?)?;
+    require(scenario != Scenario::ColdBoot || !paths.contains_key("--checkpoints"), "--checkpoints is not allowed for cold-boot")?;
+    let start = match paths.get("--start").and_then(|path| path.to_str()) {
+        None if scenario == Scenario::ColdBoot => ObservationStart::Reset,
+        None | Some("post-boot") => ObservationStart::PostBoot,
+        Some("reset") => ObservationStart::Reset,
+        Some(_) => return Err("--start must be reset or post-boot".into()),
+    };
+    require(scenario != Scenario::ColdBoot || start == ObservationStart::Reset, "cold-boot requires --start reset")?;
+    require(start != ObservationStart::Reset || !paths.contains_key("--checkpoints"), "--checkpoints is not allowed with --start reset")?;
     let (run_bytes, run_binding) = bound(&paths["--run"])?;
     let (dat, dat_binding) = bound(&paths["--update"])?;
     let (rom, rom_binding) = bound(&paths["--boot-rom"])?;
@@ -1084,7 +1109,10 @@ fn drive() -> Result<(), String> {
     };
     let phases = trajectory.before_unload;
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    let (_, executable_binding) = bound(&executable)?;
+    let (executable_bytes, executable_binding) = bound(&executable)?;
+    let boot_identity = BootIdentity::new(&run_bytes, &dat, &rom, &[], None,
+        b"saclac-post-setup-liveview-v1:80m;up12-ok-ok:8m-8m;settle40m")
+        .with_emulator_binary(&executable_bytes);
     std::fs::create_dir(&output).map_err(|error| format!("{}: {error}", output.display()))?;
 
     fujimod_emulator_exr2_board::register_board_builder();
@@ -1094,13 +1122,7 @@ fn drive() -> Result<(), String> {
     let mut session = run::open(&document, &ValidatedUpdate(dat), &rom)?;
     session.board.set_execution_policy(document.execution_policy.into())?;
     let mut machine = Machine::new(document, session)?;
-    machine.disarm()?;
-    let checkpoint = machine.session.checkpoint(None)?.export()?;
-    write(&output.join("reset.fujimod"), &checkpoint)?;
-    let restored = machine.session.import_snapshot(&checkpoint)?;
-    machine.session.restore(&restored)?;
-    machine.rearm()?;
-    require(machine.instructions() == 0, "reset checkpoint is not preexecution")?;
+    let mut checkpoint = None;
 
     let mut census = Census {
         points: plan.points.iter().map(|_| PointStats::default()).collect(),
@@ -1117,6 +1139,17 @@ fn drive() -> Result<(), String> {
         presses: Vec::new(),
         mode_dial: None,
     };
+    let setup = if start == ObservationStart::PostBoot {
+        let root = paths.get("--checkpoints").map(PathBuf::as_path).unwrap_or_else(|| Path::new(SHARED_STORE));
+        post_boot(&mut machine, &boot_identity, root, |machine| census.prepare_boot(machine)).map(|receipt| {
+            checkpoint = Some(receipt);
+            census.milestones.clear();
+            census.menu_trace.clear();
+        })
+    } else { Ok(()) };
+    let observation_start_instructions = machine.instructions();
+    let reused_instructions = checkpoint.as_ref().filter(|receipt| receipt.lookup == fujimod_xm1::checkpoint::CacheLookup::Hit)
+        .map_or(0, |receipt| receipt.record.instructions);
     machine.traces.bound_full_registers(NonZeroUsize::new(2).ok_or("zero hit bound")?);
     machine.traces.stop_labels = [SITE_LABEL.to_owned()].into_iter().collect();
     if let Some(dispatch) = &plan.dispatch {
@@ -1134,6 +1167,7 @@ fn drive() -> Result<(), String> {
         sites.insert(dispatch.trace, SITE_LABEL.to_owned());
     }
     let observed = (|| -> Result<(), String> {
+        setup?;
         machine.traces.arm(&machine.session, sites)?;
         census.watch = Some(FetchWatch::begin(&machine, &census.maps, census.classes())?);
         census.scenario(&mut machine, scenario, phases)
@@ -1146,14 +1180,17 @@ fn drive() -> Result<(), String> {
     let inputs = [Some(run_binding), Some(dat_binding), Some(rom_binding), Some(sites_binding), trajectory_binding, Some(executable_binding)]
         .into_iter().flatten().collect();
     let report = Report {
-        schema: 2,
+        schema: 3,
         scenario,
+        checkpoint,
         inputs,
         limits: Limits {
             sites: SITE_LIMIT, contexts: CONTEXT_LIMIT, callers: CALLER_LIMIT, addresses: ADDRESS_LIMIT,
             instructions: INSTRUCTION_LIMIT, watch_rows: WATCH_LIMIT, segment_instructions: SEGMENT_INSTRUCTIONS,
         },
         instructions: machine.instructions(),
+        observation_start_instructions,
+        executed_instructions: machine.instructions() - reused_instructions,
         counts: machine.session.board.instruction_counts().try_into().ok(),
         milestones: &census.milestones,
         menu_trace: &census.menu_trace,

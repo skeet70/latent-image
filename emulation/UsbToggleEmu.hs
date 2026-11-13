@@ -403,7 +403,15 @@ startServer env dat nand boot qSample output = do
         CableAtReset _ -> do
           reply <- call srv "run" ["instructions" .= (140000000 :: Int)]
           pure (object ["route" .= ("cable at reset; 140000000 instructions without keys" :: T.Text), "run" .= Object reply])
-      pure (srv, Started key inputs kind bootRecord)
+      boundBoot <- case (boot, bootRecord) of
+        (RouteBoot, Object fields) -> do
+          let (name, digestField) = case envLaunch env of
+                RetainedLaunch {} -> ("manifest.json", "snapshot_manifest_sha256")
+                FujiModLaunch {} -> ("session.fujimod", "snapshot_sha256")
+          digest <- Digest.sha256File (envCheckpoints env </> key </> name)
+          pure (Object (M.insert digestField (String (T.pack (Digest.sha256Hex digest))) fields))
+        _ -> pure bootRecord
+      pure (srv, Started key inputs kind boundBoot)
 
 -- | One step of the first-start route.
 data RouteStep = RunInstructions Int | PulseKey T.Text
