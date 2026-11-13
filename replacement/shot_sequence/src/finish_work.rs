@@ -8,6 +8,7 @@ use crate::boundary::{Client, Frame, LensPoint, LensReference, Records};
 use crate::capture_boundary::{LensMoves, MoveProfile};
 use crate::ports::{FinishEffect, FinishQuery, LensMove};
 use crate::preparation::Prepared;
+use crate::shared::active_slot;
 use crate::stock::finish::with_capture_status;
 use xm1_saclac_interface::RecordHandle;
 
@@ -136,8 +137,8 @@ pub trait FinishLayers: Records + Client {
 /// Values the finish reads from machine 3, the capture command, the frame and the capture pipeline.
 pub trait FinishSources {
     fn target_source(&mut self) -> TargetSource;
-    fn capture_target_counts(&mut self) -> (u8, u8);
-    fn clamp_count(&mut self, count: u8, limit: u8) -> u8;
+    /// The selected capture slot and the slot count of the capture command.
+    fn capture_slots(&mut self) -> (u8, u8);
     fn capture_target(&mut self, index: usize) -> u32;
     fn frame_drive(&mut self, frame: Frame) -> u32;
     fn store_frame_correction(&mut self, frame: Frame, correction: u32);
@@ -416,9 +417,9 @@ impl FinishWork {
         let Some(record) = self.record else { return };
         let source = boundary.target_source();
         self.target = if source.capture {
-            let (count, limit) = boundary.capture_target_counts();
-            let index = usize::from(boundary.clamp_count(count, limit)).saturating_sub(1);
-            boundary.capture_target(index)
+            let (requested, count) = boundary.capture_slots();
+            let slot = active_slot(u32::from(requested), u32::from(count));
+            boundary.capture_target(slot as usize - 1)
         } else if source.lens_control {
             boundary.profile(record, FinishProfile::LensControl)
         } else if source.live {

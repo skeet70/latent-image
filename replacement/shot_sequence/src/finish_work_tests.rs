@@ -154,8 +154,7 @@ impl FinishLayers for World {
 
 impl FinishSources for World {
     fn target_source(&mut self) -> TargetSource { self.source }
-    fn capture_target_counts(&mut self) -> (u8, u8) { (2, 3) }
-    fn clamp_count(&mut self, count: u8, limit: u8) -> u8 { if (1..=limit).contains(&count) { count } else { 1 } }
+    fn capture_slots(&mut self) -> (u8, u8) { (2, 3) }
     fn capture_target(&mut self, index: usize) -> u32 { 0x2000 + index as u32 }
     fn frame_drive(&mut self, _frame: Frame) -> u32 { 0 }
     fn store_frame_correction(&mut self, _frame: Frame, correction: u32) { self.frame_correction = Some(correction); }
