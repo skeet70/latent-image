@@ -835,23 +835,3 @@ impl CaptureRecordField {
         &packet[range]
     }
 }
-
-/// X-M1 1.50: 0xf3292c..0xf329f8 builds this geometry; 0xfea57c..0xfea5b4 sends 40 bytes to imgdc 0x3f2b.
-pub fn measurement_geometry(value: crate::round::MeasurementGeometry) -> [u8; 40] {
-    let mut bytes = [0; 40];
-    bytes[0..2].copy_from_slice(&[16, 16]);
-    bytes[2..4].copy_from_slice(&100u16.to_le_bytes());
-    bytes[4..6].copy_from_slice(&100u16.to_le_bytes());
-    bytes[10..12].copy_from_slice(&value.resource.0[0].to_le_bytes());
-    bytes[12..14].copy_from_slice(&value.resource.0[1].to_le_bytes());
-    bytes[14..16].copy_from_slice(&[7, 7]);
-    for (offset, calibration) in [18, 16, 22, 20].into_iter().zip(value.calibration.0) {
-        bytes[offset..offset + 2].copy_from_slice(&calibration.to_le_bytes());
-    }
-    bytes[24..26].copy_from_slice(&value.resource.0[0].to_le_bytes());
-    bytes[26..28].copy_from_slice(&value.resource.0[1].to_le_bytes());
-    bytes[28..32].copy_from_slice(&value.converted_profile.0.to_le_bytes());
-    bytes[32..36].copy_from_slice(&value.first_parameter.0.to_le_bytes());
-    bytes[36..40].copy_from_slice(&value.second_parameter.0.to_le_bytes());
-    bytes
-}
