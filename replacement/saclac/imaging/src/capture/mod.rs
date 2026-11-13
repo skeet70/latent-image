@@ -5,7 +5,9 @@
 
 pub mod control;
 pub mod gains;
+pub mod pipeline;
 pub mod ports;
+pub mod requests;
 
 /// A capture profile: the index the profile table, the readout pairs and the control reference
 /// table share; X-M1 1.50 declares profiles 0..=35.
@@ -65,3 +67,5 @@ mod fake;
 mod control_tests;
 #[cfg(test)]
 mod gains_tests;
+#[cfg(test)]
+mod requests_tests;

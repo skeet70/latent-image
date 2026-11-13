@@ -596,12 +596,16 @@ The task-43 driver and engine use stock's 37 machine tables. Every machine actio
 
 ## saclac_imaging
 
-saclac's image-4 ISP units RAID0, MVREC and AUTO, and its capture-pipeline helpers (`replacement/saclac/imaging`). The unit registers are hardware; the rows are the stock memory and entries `src/stock.rs` binds.
+saclac's image-4 ISP units RAID0, MVREC and AUTO, and its capture-pipeline layer (`replacement/saclac/imaging`). The unit registers are hardware; the rows are the stock memory and entries `src/stock.rs` and `src/stock/capture.rs` bind.
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
 | `StockIsp` session records at `0x820f30` (MVREC), `0x820f40` (AUTO) and `0x820f88` (RAID0): holder, last operation, active session (0xffff free), next session | guest-memory layout view | retained stock entries of the same units called from unowned image-5 pipeline configuration (`0xd9e88c`, the L8 callers until owned) | no | no retained code calls a unit's stock entries | required |
 | ISP event log `0x684908` (client, unit, operation, fault) and `0x684948` (holder, requester, unit, operation, fault) | trampoline into retained stock | `hw_log_event` `0x684988`: console stream 0x2b and the five-entry ring at `0x96ca0c` | no | the ISP driver's event log is owned | required |
+| `StockCapture` control tables in image 5: readout pairs `0x101e014`, references `0x101de8c` (0x1c bytes), shutter rates `0x10099c8`, decades `0x100a60c`, rate divisors `0x1009988`, scale keys `0x1022f54` | guest-memory layout view | retained stock control code reading the same tables (`0x1006000`, `0x1006360`, `0x1007ce0` and the control band) | no | no retained code reads the tables | required |
+| `StockCapture` control state: configured frame lines at `0x16f8668 + 0x8be`, the sample period `0x1006360` | guest-memory layout view | the control subsystem, which writes that state | no | the control subsystem is owned | required |
+| `StockCapture` services: adjustment byte `0x69f8fc`, profile kind `0xef5448`, rate threshold `0xef5360`, crop `0xef5470`, load test `0x742054`/`0x742064`, logarithm `0x894778`, reference ratio `0x10034b4`, class gains `0xef3434`, custom gains `0xef4fc8`, forced class `0xef4fd8`, temperature offset `0x772f28` | trampoline into retained stock | the stock adjustment, profile, test-interface, runtime and gain services; `0xef5470` and `0xef4fd8` are saclac's profile layer | no | each service is owned, or for the profile layer, bound to its owned part | required |
+| `StockCapture` as `CapturePipeline` and `CaptureResults`: `0xfe90a0`, `0xfe90c0`, `0xff9bb8`, `0xff6f94`, `0xff6fc0`, `0xfef8e8`, `0xfef910`, `0xfef938`, `0xff2c5c`, `0xfec984`, `0xfeda78`..`0xfedaf8`, `0xffcfd0`, `0xffde8c`, `0x10029bc`, `0x1005044`, `0x1028adc`, `0x1054388`, `0x10543ac`, `0x10538a4`, `0x105386c` | trampoline into retained stock | the capture pipeline state the imaging task (47) and capture tasks write (`0x16f08c0`, `0x16f1028`, `0x16f247c`, `0x16f2e50`, `0x16f0f5c`, `0x16f8008`, `0x16f8150`, `0x16f82fc`, `0x16f8f30`), the result state `0x16fec34` and the dispatch and history words at `0x1706a34`/`0x1706a3c` | no | the capture pipeline and result tasks are owned | required |
 
 ## saclac_interface
 
