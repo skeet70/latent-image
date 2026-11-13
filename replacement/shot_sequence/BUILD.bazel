@@ -8,6 +8,7 @@ SOURCES = [
     "src/calculation_work.rs",
     "src/capture.rs",
     "src/capture_boundary.rs",
+    "src/capture_control.rs",
     "src/capture_stock.rs",
     "src/exposure.rs",
     "src/exposure_work.rs",

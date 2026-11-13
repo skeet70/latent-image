@@ -12,7 +12,7 @@ const RECORD: u32 = 0x1000;
 fn record() -> RecordHandle { stock::record_handle_from_a2(RECORD) }
 
 fn parameters() -> CaptureParameters {
-    CaptureParameters { options: CaptureOptions(0), mode: 0, sources: ClientRef(0x200), reference: 0, slots: ClientRef(0x300), selection: ClientRef(0x400) }
+    CaptureParameters { options: CaptureOptions(0), mode: 0, sources: ClientRef(0x200), profile: ClientRef(0), slots: ClientRef(0x300), selection: ClientRef(0x400) }
 }
 
 fn begun(fake: &mut CaptureFake) -> LensReturn {
