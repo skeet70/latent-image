@@ -2,6 +2,7 @@
 
 //! X-M1 1.50 layouts of the record fields the search reads and writes.
 
+use crate::contrast::settings::{Setting, StepKind, TrendBasis};
 use crate::contrast::{FocusStatus, RetainedFocus, StageRecord};
 use xm1_saclac_controllers::search::LensPosition;
 
@@ -48,4 +49,81 @@ pub fn retained_focus(bytes: &[u8; 28]) -> RetainedFocus {
         position: LensPosition(half(bytes, 8) as i16),
         profile: word(bytes, 16),
     }
+}
+
+/// How an adjustment is read: 0x69f8fc for a byte, 0x69fec8 for a halfword.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AdjustmentWidth {
+    Byte,
+    Half,
+}
+
+/// The adjustment key behind each setting.
+pub const fn setting_key(setting: Setting) -> (u32, AdjustmentWidth) {
+    use AdjustmentWidth::{Byte, Half};
+    let key = match setting {
+        Setting::PairedEvaluation => 0x8778,
+        Setting::LevelThousands => 0x8782,
+        Setting::LevelHundreds => 0x8781,
+        Setting::LevelTens => 0x8780,
+        Setting::LevelUnits => 0x877f,
+        Setting::DirectionSecondChannel => 0x8805,
+        Setting::SecondChannel => 0x8804,
+        Setting::StageReport => 0x94ea,
+        Setting::ScanDriveDisabled => 0x87fd,
+        Setting::SlowBridge => 0x3e_0246,
+        Setting::SlowBridgeAlternate => 0x878b,
+        Setting::HoldDrives => 0x8801,
+        Setting::ReturnStepLimit => 0x8838,
+        Setting::ModelLetter => 0x3e_0002,
+        Setting::ModelScaling => 0x3e_2713,
+        Setting::DirectionSettle => 0x8775,
+        Setting::DirectionSettleScale => 0x8783,
+        Setting::DirectionScale { band, model_scaled: true } => 0x8754 - band as u32,
+        Setting::DirectionScale { band, model_scaled: false } => 0x877d - band as u32,
+        Setting::DirectionStepDivisor => 0x8776,
+        Setting::PositionJump => 0x94e1,
+        Setting::FlagRestart => 0x8877,
+        Setting::SelectedFlagRestart => 0x876d,
+        Setting::DirectionSamples => 0x87d3,
+        Setting::MotionReturn => 0x8842,
+        Setting::MotionReturns => 0x8802,
+        Setting::TrendDirection => 0x8818,
+        Setting::ProbeAtOnce => 0x880f,
+        Setting::ProbeSamples => 0x8816,
+        Setting::ProbeContrast => 0x8814,
+        Setting::ProbeDirection => 0x880e,
+        Setting::TrendSamples => 0x8811,
+        Setting::TrendLimit { selected: true, basis: TrendBasis::Settling } => 0x8774,
+        Setting::TrendLimit { selected: true, basis: TrendBasis::StepClass } => 0x8771,
+        Setting::TrendLimit { selected: true, basis: TrendBasis::Plain } => 0x8813,
+        Setting::TrendLimit { selected: false, basis: TrendBasis::Settling } => 0x8773,
+        Setting::TrendLimit { selected: false, basis: TrendBasis::StepClass } => 0x8770,
+        Setting::TrendLimit { selected: false, basis: TrendBasis::Plain } => 0x8812,
+        Setting::HandOffLevel => 0x877e,
+        Setting::StillSamples => 0x881e,
+        Setting::StillChange => return (0x881a, Half),
+        Setting::TrendOverride => 0x8819,
+        Setting::OverrideSamples => 0x8810,
+        Setting::PairedMargin => 0x8788,
+        Setting::EndSteps => 0x8835,
+        Setting::ReversalSteps => 0x878c,
+        Setting::ReversalStep => return (0x3e_0240, Half),
+        Setting::LowContrastStep => 0x87f1,
+        Setting::BaseStep { kind: StepKind::Direction, selected: true } => 0x87e1,
+        Setting::BaseStep { kind: StepKind::Direction, selected: false } => 0x87df,
+        Setting::BaseStep { kind: StepKind::Scan, selected: true } => 0x87ed,
+        Setting::BaseStep { kind: StepKind::Scan, selected: false } => 0x87eb,
+        Setting::BaseStep { kind: StepKind::Return, selected: true } => 0x87e7,
+        Setting::BaseStep { kind: StepKind::Return, selected: false } => 0x87e5,
+        Setting::PeriodShift => 0x87da,
+        Setting::MotionCheck => 0x87f6,
+        Setting::SelectedMotionCheck => 0x876e,
+        Setting::MotionSamples => 0x87f8,
+        Setting::MotionScale => 0x87f9,
+        Setting::MotionFloor => 0x87fa,
+        Setting::MotionCeiling => 0x87fb,
+        Setting::MotionHolds => 0x87f7,
+    };
+    (key, Byte)
 }

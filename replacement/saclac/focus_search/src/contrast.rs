@@ -4,7 +4,17 @@
 
 use xm1_saclac_controllers::search::LensPosition;
 
-/// The phase the search is in (context +0x8); the codes are the ones stock stores.
+mod direction;
+mod motion;
+mod sample;
+pub mod settings;
+mod step;
+mod tracks;
+
+pub use sample::{BridgeDrive, Stage};
+use settings::Setting;
+
+/// The phase the search is in.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Phase {
     Direction,
@@ -14,6 +24,7 @@ pub enum Phase {
     Focus,
     FocusDrive,
     Approach,
+    Monitor,
 }
 
 /// The lens the lens layer reports (0x76d9c8): its table index, or 0 when the index is
@@ -125,6 +136,87 @@ pub trait Platform {
     /// Property 0xe8 bit 4.
     fn tracing(&mut self) -> bool;
     fn trace_begin(&mut self, retained: LensPosition, focus: LensPosition);
+
+    /// A camera adjustment (0x69f8fc, or 0x69fec8 for the halfword ones).
+    fn setting(&mut self, setting: Setting) -> u32;
+    /// 0x76f360.
+    fn lens_mode(&mut self) -> u32;
+    /// 0x76da38 returns 1.
+    fn lens_busy(&mut self) -> bool;
+    /// 0x76dac4 returns 1.
+    fn lens_ready(&mut self) -> bool;
+    /// The record's two levels for its focus area (0x7567ec's area table, +0x204 and +0x206).
+    fn area_levels(&mut self) -> [u16; 2];
+    /// The lens table's correction of a focus value for a lens position, in tenths
+    /// (0x74ab14 less 0x746944 and 0x746a80, rounded by 0x741fa0).
+    fn focus_correction(&mut self, query: CorrectionQuery) -> i16;
+    /// 0x746834.
+    fn parameter_index(&mut self, parameter: u32) -> u32;
+    /// 0xfa8018.
+    fn fine_steps(&mut self) -> bool;
+    /// The profile period 0x1005f60 reports for `class`.
+    fn profile_period(&mut self, class: u32) -> u32;
+    /// The record's profile class (0x757e80).
+    fn record_class(&mut self) -> u32;
+    /// 0x7492ac: the step and its rate the lens table gives for a base step.
+    fn lens_step(&mut self, query: StepQuery) -> (u16, u32);
+    /// The angular-rate sample the lens reports (0x6b74e4), two axes centred on 0x8000.
+    fn angular_rate(&mut self) -> u32;
+    /// Asks the lens for the next angular-rate sample (0x6b7660).
+    fn request_angular_rate(&mut self);
+    /// The record's stage (shared +0x74c, 0x758068).
+    fn stage(&mut self) -> StageRecord;
+    /// Words 0xf8 and 0x110 of the measurement snapshot 0xfea7ac(1) copies.
+    fn status_snapshot(&mut self) -> [u32; 2];
+    /// The pinned record's status fields (0x7588e8, 0x75890c) and the shot's copy of the
+    /// reported position (0xf4dd98).
+    fn publish_pinned_status(&mut self, status: PinnedStatus);
+    fn trace_transition(&mut self, trace: TransitionTrace);
+}
+
+/// What 0xf44f58 asks the lens table.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CorrectionQuery {
+    pub position: LensPosition,
+    pub class: u32,
+    pub lens: LensIdentity,
+    pub parameter: u32,
+    pub flags: u32,
+}
+
+/// What 0xfaab3c asks the lens table for a step.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StepQuery {
+    pub lens: LensIdentity,
+    pub parameter_index: u32,
+    pub base: u16,
+    /// The shifted profile period in hundredths.
+    pub period: u32,
+    pub lens_mode: u32,
+    pub fine: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PinnedStatus {
+    pub level: u32,
+    pub mode: u32,
+    pub position: LensPosition,
+    pub reported: LensPosition,
+}
+
+/// The values a transition traces when tracing is on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TransitionTrace {
+    pub phase: Phase,
+    pub limits: [LensPosition; 2],
+    pub marks: [u16; 2],
+    pub lens: LensPosition,
+    pub position: LensPosition,
+    pub fit: u16,
+    pub level: u32,
+    pub direction: i8,
+    pub speed: u32,
+    pub focus: LensPosition,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -163,6 +255,16 @@ pub struct Context {
     pub(crate) focus_position: LensPosition,
     pub(crate) focus_started: bool,
     pub(crate) pacing: [u32; 3],
+    pub(crate) stage: Stage,
+    pub(crate) values: sample::Values,
+    pub(crate) frame: sample::Frame,
+    pub(crate) bridge: sample::Bridge,
+    pub(crate) ring: sample::Ring,
+    pub(crate) transition: sample::Transition,
+    pub(crate) monitor: sample::Monitor,
+    pub(crate) search: direction::Search,
+    pub(crate) motion: motion::Motion,
+    pub(crate) tracks: tracks::Tracks,
 }
 
 const NO_LIMITS: TravelLimits = TravelLimits {
@@ -198,6 +300,16 @@ impl Context {
             focus_position: LensPosition(0),
             focus_started: false,
             pacing: [0, 1, 1],
+            stage: Stage::Idle,
+            values: sample::Values::new(),
+            frame: sample::Frame::new(),
+            bridge: sample::Bridge::new(),
+            ring: sample::Ring::new(),
+            transition: sample::Transition::new(),
+            monitor: sample::Monitor::new(),
+            search: direction::Search::new(),
+            motion: motion::Motion::new(),
+            tracks: tracks::Tracks::new(),
         }
     }
 
@@ -218,6 +330,7 @@ impl Context {
         let same_lens = self.lens == platform.lens_identity();
         self.lens_changed = !(same_lens && !self.lens_changed);
         self.lens_count = if self.lens_changed { 0 } else { 0xff };
+        self.forget_samples();
         if self.initial == Phase::Focus {
             self.phase = Phase::Focus;
             self.focus_entered = true;

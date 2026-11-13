@@ -1,6 +1,7 @@
+use crate::contrast::settings::Setting;
 use crate::contrast::{
-    travel_limits, Context, FocusOffer, FocusStatus, LensIdentity, LimitKind, LimitQuery, Phase, Platform, RetainedFocus,
-    StageRecord, TableOffset, TravelLimits,
+    travel_limits, Context, CorrectionQuery, FocusOffer, FocusStatus, LensIdentity, LimitKind, LimitQuery, Phase, PinnedStatus, Platform,
+    RetainedFocus, StageRecord, StepQuery, TableOffset, TransitionTrace, TravelLimits,
 };
 use crate::stock;
 use std::vec::Vec;
@@ -82,6 +83,23 @@ impl Platform for Fake {
     fn reset_focus_log(&mut self) { self.effects.push(Effect::ResetLog); }
     fn tracing(&mut self) -> bool { self.tracing }
     fn trace_begin(&mut self, retained: LensPosition, focus: LensPosition) { self.effects.push(Effect::Trace(retained, focus)); }
+    fn setting(&mut self, _: Setting) -> u32 { 0 }
+    fn lens_mode(&mut self) -> u32 { 0 }
+    fn lens_busy(&mut self) -> bool { false }
+    fn lens_ready(&mut self) -> bool { true }
+    fn area_levels(&mut self) -> [u16; 2] { [0; 2] }
+    fn focus_correction(&mut self, _: CorrectionQuery) -> i16 { 0 }
+    fn parameter_index(&mut self, _: u32) -> u32 { 0 }
+    fn fine_steps(&mut self) -> bool { false }
+    fn profile_period(&mut self, _: u32) -> u32 { 0 }
+    fn record_class(&mut self) -> u32 { 0 }
+    fn lens_step(&mut self, query: StepQuery) -> (u16, u32) { (query.base, 0) }
+    fn angular_rate(&mut self) -> u32 { 0 }
+    fn request_angular_rate(&mut self) {}
+    fn stage(&mut self) -> StageRecord { StageRecord::default() }
+    fn status_snapshot(&mut self) -> [u32; 2] { [0; 2] }
+    fn publish_pinned_status(&mut self, _: PinnedStatus) {}
+    fn trace_transition(&mut self, _: TransitionTrace) {}
 }
 
 const INACTIVE: FocusStatus = FocusStatus { active: 0, mode: 4, position: LensPosition(0), snapshot: [0; 2], flag: 0, stage: 2 };
