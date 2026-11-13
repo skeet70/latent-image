@@ -91,6 +91,18 @@ main = do
     (filter (`notElem` s1Padding) [0..171])
   check (isLeft (record (take 168 zeros ++ [0,0,0,0])))
   check (isLeft (record (take 171 zeros)))
+  let command402c = projectPayload recovered Outgoing (QueueId 48) (Operation 0x402c)
+      commandBytes = take 56 (replicate 60 0) ++ [0xe4,0xa7,0xf3,0x00]
+      commandUnwritten = [20..28] ++ [34,35] ++ [54,55]
+  mapM_ (\offset -> check (command402c commandBytes == command402c (mutate offset commandBytes))) commandUnwritten
+  mapM_ (\offset -> check (command402c commandBytes /= command402c (mutate offset commandBytes)))
+    (filter (`notElem` commandUnwritten) [0..59])
+  check (isLeft (command402c (take 56 (replicate 60 0))))
+  let alternateBytes = take 56 (replicate 60 0) ++ [0x08,0x27,0xf2,0x00]
+      alternateUnwritten = [20..28] ++ [30] ++ [33,34,35] ++ [54,55]
+  mapM_ (\offset -> check (command402c alternateBytes == command402c (mutate offset alternateBytes))) alternateUnwritten
+  mapM_ (\offset -> check (command402c alternateBytes /= command402c (mutate offset alternateBytes)))
+    (filter (`notElem` alternateUnwritten) [0..59])
   discriminating
   putStrLn "payload field projection behavioral tests passed"
   where parse = either fail pure . parseDeclaration . L.toStrict . encode

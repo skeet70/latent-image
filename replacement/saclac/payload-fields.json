@@ -4525,23 +4525,163 @@
    "bytes": 60,
    "fields": [
     {
-     "name": "record",
+     "name": "selection-words",
      "offset": 0,
-     "bytes": 56,
+     "bytes": 20,
      "sources": [
-      "0x0103a3b4..0x0103a3c0: 56 bytes copied from the first argument to r11-84; 0x0103a3c4 posts 60 from r11-84"
+      "0x00f3b9f8, 0x00f3ba04, 0x00f3ba1c, 0x00f3ba28 and 0x00f3ba34 store record+0, +4, +8, +0xc and +0x10 from the profile getters; 0x00f3bb28 stores its caller's word at record+0x10"
+     ]
+    },
+    {
+     "name": "bytes-29-33",
+     "offset": 29,
+     "bytes": 5,
+     "sources": [
+      "0x00f3ba10, 0x00f3ba40, 0x00f3ba4c, 0x00f3ba58 and 0x00f3ba64 store single bytes at record+0x1d..0x21"
+     ]
+    },
+    {
+     "name": "record-words",
+     "offset": 36,
+     "bytes": 16,
+     "sources": [
+      "0x00f3baf0, 0x00f3bad8, 0x00f3baf4 and 0x00f3baf8 store record+0x24, +0x28, +0x2c and +0x30 from the selection-ratio computation"
+     ]
+    },
+    {
+     "name": "halfword-52",
+     "offset": 52,
+     "bytes": 2,
+     "sources": [
+      "0x00f3bb04 stores the halfword returned by 0x0074e7a0 at record+52"
+     ]
+    },
+    {
+     "name": "caller-record",
+     "offset": 56,
+     "bytes": 4,
+     "sources": [
+      "0x0103a3a4 stores the second argument at payload+56 before the copy; call site 0x00f3bb30/0x00f3bb34 passes 0x00f3a7e4"
      ]
     }
    ],
    "padding": [
     {
+     "offset": 20,
+     "bytes": 9,
+     "sources": [
+      "0x00f3b9d8..0x00f3bb08 stores record+0..+0x13, +0x1d..+0x21, +0x24..+0x35 and nothing at +0x14..+0x1c, so payload 20..28 keep the caller frame's bytes"
+     ]
+    },
+    {
+     "offset": 34,
+     "bytes": 2,
+     "sources": [
+      "0x00f3b9d8..0x00f3bb08 has no store at record+0x22..+0x23"
+     ]
+    },
+    {
+     "offset": 54,
+     "bytes": 2,
+     "sources": [
+      "0x00f3b9d8..0x00f3bb08 has no store at record+0x36..+0x37; the mode-dial stock receipt carries 241 at payload 54 and the owned receipt 0"
+     ]
+    }
+   ],
+   "discriminator": {
+    "offset": 56,
+    "value": 15968228
+   }
+  },
+  {
+   "direction": "outgoing",
+   "queue": 48,
+   "operation": 16428,
+   "bytes": 60,
+   "fields": [
+    {
+     "name": "selection-words",
+     "offset": 0,
+     "bytes": 20,
+     "sources": [
+      "0x00f235a0, 0x00f235ac, 0x00f235c4, 0x00f235d0 and 0x00f235dc store record+0, +4, +8, +0xc and +0x10 from the profile getters"
+     ]
+    },
+    {
+     "name": "byte-29",
+     "offset": 29,
+     "bytes": 1,
+     "sources": [
+      "0x00f235b8 stores a byte at record+0x1d"
+     ]
+    },
+    {
+     "name": "bytes-31-32",
+     "offset": 31,
+     "bytes": 2,
+     "sources": [
+      "0x00f235e8 and 0x00f235f4 store bytes at record+0x1f and +0x20"
+     ]
+    },
+    {
+     "name": "focus-area-words",
+     "offset": 36,
+     "bytes": 16,
+     "sources": [
+      "0x00f23608 calls 0x00f22814 with record+36; 0x00f22814 stores four words there"
+     ]
+    },
+    {
+     "name": "halfword-52",
+     "offset": 52,
+     "bytes": 2,
+     "sources": [
+      "0x00f23600 stores the halfword returned by 0x0074e7a0 at record+52"
+     ]
+    },
+    {
+     "name": "caller-record",
      "offset": 56,
      "bytes": 4,
      "sources": [
-      "0x0103a398..0x0103a3ec: no store between the copy at r11-84 and the 60-byte post, so r11-28..r11-25 stay unwritten"
+      "0x0103a3a4 stores the second argument at payload+56 before the copy; call site 0x00f23610/0x00f23614 passes 0x00f22708"
      ]
     }
-   ]
+   ],
+   "padding": [
+    {
+     "offset": 20,
+     "bytes": 9,
+     "sources": [
+      "0x00f23584..0x00f23620 stores record+0, +4, +8, +0xc, +0x10, +0x1d, +0x1f, +0x20, +52 and 0x00f22814's +36..+51, so payload 20..28 keep the caller frame's bytes"
+     ]
+    },
+    {
+     "offset": 30,
+     "bytes": 1,
+     "sources": [
+      "0x00f23584..0x00f23620 has no store at record+0x1e"
+     ]
+    },
+    {
+     "offset": 33,
+     "bytes": 3,
+     "sources": [
+      "0x00f23584..0x00f23620 has no store at record+0x21..+0x23"
+     ]
+    },
+    {
+     "offset": 54,
+     "bytes": 2,
+     "sources": [
+      "0x00f23584..0x00f23620 has no store at record+0x36..+0x37"
+     ]
+    }
+   ],
+   "discriminator": {
+    "offset": 56,
+    "value": 15869704
+   }
   },
   {
    "direction": "outgoing",
@@ -4917,12 +5057,111 @@
    ]
   },
   {
-   "name": "queue43-inbound",
+   "name": "wake-post-44",
+   "time_driven": true,
    "match": {
-    "kind": "queue-in"
+    "kind": "queue-in",
+    "operation": 15245,
+    "sender": 44
    },
    "sources": [
-    "X-M1 1.50 id5 0xef9a94..0xef9ae8 stores the operation at descriptor+0, the sender at +2 and queue 43 at +3, then calls 0x72503c"
+    "stock cold-boot receipt: queue-in 0x3b8d sender 44 recurs once per wake after callback 0xf3a3f8, 78 times; shoot-without-lens and capture carry one more on the owned side with one distinct payload across all occurrences, so the count follows elapsed wakes"
+   ]
+  },
+  {
+   "name": "wake-post-45-3b87",
+   "time_driven": true,
+   "match": {
+    "kind": "queue-in",
+    "operation": 15239,
+    "sender": 45
+   },
+   "sources": [
+    "stock cold-boot receipt: queue-in 0x3b87 sender 45 recurs once per wake after callback 0xf33568, 78 times, one distinct payload; the 332/333 and 325/326 counts in shoot-without-lens and capture differ by one"
+   ]
+  },
+  {
+   "name": "wake-post-45-3b88",
+   "time_driven": true,
+   "match": {
+    "kind": "queue-in",
+    "operation": 15240,
+    "sender": 45
+   },
+   "sources": [
+    "stock cold-boot receipt: queue-in 0x3b88 sender 45 recurs every fourth wake, 19 times against 78 of 0x3b87, one distinct payload"
+   ]
+  },
+  {
+   "name": "wake-post-45-3b8a",
+   "time_driven": true,
+   "match": {
+    "kind": "queue-in",
+    "operation": 15242,
+    "sender": 45
+   },
+   "sources": [
+    "stock cold-boot receipt: queue-in 0x3b8a sender 45 recurs once per wake after callback 0xf37854, 78 times, one distinct payload"
+   ]
+  },
+  {
+   "name": "queue-in-3",
+   "match": {
+    "kind": "queue-in",
+    "sender": 3
+   },
+   "sources": [
+    "X-M1 1.50 id5 0xef9a94..0xef9ae8 stores the operation at descriptor+0, the sender at +2 and queue 43 at +3, then calls 0x72503c; reccont's shapes post from its own handlers, 0xef8fa0, 0xef9064, 0xef920c and 0xef9264"
+   ]
+  },
+  {
+   "name": "queue-in-44",
+   "match": {
+    "kind": "queue-in",
+    "sender": 44
+   },
+   "sources": [
+    "queue 44's event-driven replies: 0x3b8e..0x3b9a post from 0xf2e67c, 0xf2e6e4, 0xf2e710 and the 0x3c00..0x3c11 handlers, each after saclac's request to queue 44"
+   ]
+  },
+  {
+   "name": "queue-in-45",
+   "match": {
+    "kind": "queue-in",
+    "sender": 45
+   },
+   "sources": [
+    "queue 45's event-driven replies; the per-wake 0x3b87, 0x3b88 and 0x3b8a are declared above and claimed first"
+   ]
+  },
+  {
+   "name": "queue-in-47",
+   "match": {
+    "kind": "queue-in",
+    "sender": 47
+   },
+   "sources": [
+    "queue 47's event-driven replies; the per-wake 0x3b4b is declared above as cyclic-post and claimed first"
+   ]
+  },
+  {
+   "name": "queue-in-48",
+   "match": {
+    "kind": "queue-in",
+    "sender": 48
+   },
+   "sources": [
+    "queue 48's replies: 0x3b69, 0x3b6b, 0x3b7b, 0x3b7c, 0x3b80 and 0x3b83 each follow saclac's request to queue 48"
+   ]
+  },
+  {
+   "name": "queue-in-50",
+   "match": {
+    "kind": "queue-in",
+    "sender": 50
+   },
+   "sources": [
+    "queue 50's replies: 0x3b2f, 0x3b30, 0x3b32, 0x3b35, 0x3b3a and 0x3b3c each follow saclac's request to queue 50"
    ]
   },
   {
@@ -5065,6 +5304,51 @@
    },
    "sources": [
     "report-SaclacInterface6 cold-boot measurement: stock emits callback 0xf2f6ac then queue-in 0x3b4b sender 47 as one pair 82 times, owned 81 with the same gap sequence shifted by one occurrence"
+   ]
+  },
+  {
+   "first": {
+    "kind": "peer-request",
+    "queue": 45,
+    "operation": 15361
+   },
+   "then": {
+    "kind": "queue-in",
+    "operation": 15240,
+    "sender": 45
+   },
+   "sources": [
+    "every receipt of all nine routes carries as many 0x3b88 arrivals from sender 45 as 0x3d01 requests to queue 45, and every arrival follows a request: 19/19 cold-boot, 4/4 half-press, 82/82 shoot-without-lens, 81/81 capture, 8/8 playback, 10/10 mode-dial, 20/20 fn, 27/27 fn-down, 39/39 fn-auto, stock and owned"
+   ]
+  },
+  {
+   "first": {
+    "kind": "peer-request",
+    "queue": 45,
+    "operation": 15362
+   },
+   "then": {
+    "kind": "queue-in",
+    "operation": 15242,
+    "sender": 45
+   },
+   "sources": [
+    "every 0x3b8a arrival from sender 45 follows an earlier 0x3d02 request to queue 45 in all nine routes on both sides; counts are equal except fn and fn-down, where the owned side carries one more arrival after a request"
+   ]
+  },
+  {
+   "first": {
+    "kind": "peer-request",
+    "queue": 48,
+    "operation": 16428
+   },
+   "then": {
+    "kind": "queue-in",
+    "operation": 15232,
+    "sender": 48
+   },
+   "sources": [
+    "mode-dial stock and owned receipts: the single 0x3b80 arrival from sender 48 follows the single 0x402c request to queue 48"
    ]
   }
  ]

@@ -68,6 +68,34 @@ xm1_rust_elf(
     extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
 )
 
+# Playback records no shared stores, so the store variant survives there; this
+# one drops the routed requests instead.
+xm1_rust_staticlib(
+    name = "saclac-rust-wrong-driver-gate",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac",
+    rustc_flags = ["-C", "jump-tables=no", "--cfg", "saclac_image", "--cfg", "saclac_wrong_driver_gate"],
+    data = _SOURCES,
+    rlib_deps = _ARM_DEPS,
+)
+
+xm1_rust_elf(
+    name = "saclac-image-wrong-driver-gate",
+    rust_staticlib = ":saclac-rust-wrong-driver-gate",
+    asm_srcs = ["entry.S"],
+    entry = "xm1_saclac_driver_entry",
+    link_script = ":saclac.ld",
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
+)
+
+genrule(
+    name = "saclac-image-wrong-driver-gate-sections",
+    srcs = [":saclac-image-wrong-driver-gate.elf"],
+    outs = ["saclac-image-wrong-driver-gate.sections"],
+    cmd = "$(location @lab_llvm//:bin/llvm-readelf) -S $(location :saclac-image-wrong-driver-gate.elf) > $@",
+    tools = ["@lab_llvm//:bin/llvm-readelf"],
+)
+
 xm1_rust_elf(
     name = "saclac-image-wrong-r3",
     rust_staticlib = ":saclac-rust-wrong-r3",

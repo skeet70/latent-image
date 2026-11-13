@@ -184,13 +184,25 @@ runValue compatible extents phase receipt = do
     , "events" .= observations
     ])
 
+-- | The two options after the five positional paths, each with its value.
+options :: [String] -> IO (Maybe String, Maybe String)
+options [] = pure (Nothing, Nothing)
+options (key : value : rest) = do
+  (milestoneOption, controlOption) <- options rest
+  case key of
+    "--milestone" -> pure (Just value, controlOption)
+    "--control" -> pure (milestoneOption, Just value)
+    _ -> H.failH ("unknown option " ++ key)
+options _ = H.failH "an option needs a value"
+
 main :: IO ()
 main = do
   arguments <- getArgs
-  (stockPath, candidatePath, controlPath, projectionPath, output, phase) <- case arguments of
-    [stock, candidate, control, fields, output] -> pure (stock, candidate, control, fields, output, Nothing)
-    [stock, candidate, control, fields, output, "--milestone", name] -> pure (stock, candidate, control, fields, output, Just name)
-    _ -> H.failH "usage: saclac-interface-compare STOCK_JSON CANDIDATE_JSON WRONG_JSON FIELDS_JSON OUTPUT_JSON [--milestone PHASE]"
+  (stockPath, candidatePath, controlPath, projectionPath, output) <- case take 5 arguments of
+    [stock, candidate, control, fields, target] -> pure (stock, candidate, control, fields, target)
+    _ -> H.failH "usage: saclac-interface-compare STOCK_JSON CANDIDATE_JSON WRONG_JSON FIELDS_JSON OUTPUT_JSON [--milestone PHASE] [--control NAME]"
+  (phase, controlName) <- options (drop 5 arguments)
+  let variant = maybe "unconditional-command-present-store" id controlName
   declaration <- H.readRegular (1024 * 1024) projectionPath >>= either H.failH pure . Payload.parseDeclaration
   stock <- load stockPath >>= applyProjection declaration
   candidate <- load candidatePath >>= applyProjection declaration
@@ -215,7 +227,7 @@ main = do
     , "owned_extents" .= [spanValue Artifact.fixedExtent]
     , "stock" .= stockRun
     , "owned" .= ownedRun
-    , "controls" .= [object ["name" .= ("unconditional-command-present-store" :: String), "run" .= wrongRun]]
+    , "controls" .= [object ["name" .= variant, "run" .= wrongRun]]
     , "milestone" .= milestone
     , "same_observer_and_scenario_inputs" .= sameInputs
     , "stock_executed_instructions_in_action_extents" .= stockFetches stock

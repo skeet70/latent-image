@@ -53,7 +53,8 @@ impl crate::driver::Ports for DriverPorts {
         unsafe {
             core::ptr::write_volatile((COMMAND_FLAGS.0 + event.code()) as *mut u8, 1);
         }
-        if let Some(block) = xm1_saclac_interface::stock::PARAMETER_BLOCKS.get(event.code() as usize) {
+        let block = xm1_saclac_interface::stock::PARAMETER_BLOCKS.get(event.code() as usize);
+        if let Some(block) = block {
             let length = read_word(RECEIVE.0 + 4) as usize;
             unsafe {
                 core::ptr::copy_nonoverlapping(RECEIVE_PAYLOAD.0 as *const u8, block.address as *mut u8, length);
@@ -61,7 +62,13 @@ impl crate::driver::Ports for DriverPorts {
                 core::ptr::write_volatile((COMMAND_FLAGS.0 + event.code()) as *mut u8, 1);
             }
         }
+        // The comparison's second deliberately wrong variant.
+        #[cfg(not(saclac_wrong_driver_gate))]
         xm1_saclac_router(event.code(), u32::MAX);
+        #[cfg(saclac_wrong_driver_gate)]
+        if block.is_some() {
+            xm1_saclac_router(event.code(), u32::MAX);
+        }
     }
 
     fn fault(&mut self) { call3(FAULT, 0, 0, 0); }
