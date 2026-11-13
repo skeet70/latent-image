@@ -1,5 +1,5 @@
 use crate::auxiliary::{self, AuxiliaryProfile, AuxiliaryPublication, AuxiliaryReading, AuxiliarySettings, Curve, CurveInputs, RequestProfile, ResourceIndex};
-use crate::image::{ChannelCount, LensReport, ReplyPorts};
+use crate::image::{self, ChannelCount, ImageLog, ImageLogging, LensReport, ReplyPorts};
 use crate::lanes::Selection;
 use crate::planner::{Cadence, Mode, Work};
 use crate::pipeline::{Exposure, GainStep, HistoryStatistics, Pipeline, PipelineSnapshot, PipelineWord, SnapshotStatus, Statistics, TimingWord};
@@ -9,6 +9,8 @@ use crate::source::{self, SampleProfile, SourceProfile, SourcePublication, Sourc
 use crate::window::{self, WindowResult};
 use xm1_saclac_controllers::replies;
 use xm1_saclac_interface::round::{GeometryCalibration, GeometryPair, RetainedGeometryValue};
+use xm1_saclac_interface::round_image::{ImageArea, ImageChannel, ImageLaneRequest};
+use xm1_saclac_interface::stock::StockCallbackWord;
 use xm1_saclac_interface::{ClientCallback, Completed, CompletionStatus, RecordHandle, ReplyTarget};
 use std::vec::Vec;
 
@@ -158,6 +160,10 @@ pub enum Outbound {
     Request(Request),
     ClearPending(ReplyTarget),
     Reply { target: ReplyTarget, callback: ClientCallback, status: CompletionStatus, values: [u32; 3] },
+    NotifyImageClient(StockCallbackWord),
+    PrepareImageArea(ImageChannel, ImageArea),
+    ImageLog(ImageLog),
+    Image(ImageLaneRequest),
     Power(bool),
     Trace(TraceMark),
 }
@@ -188,6 +194,10 @@ pub struct Ports<X = ()> {
     pub window_result: Option<WindowResult>,
     pub channel_count: ChannelCount,
     pub lens: LensReport,
+    pub image_client: Option<StockCallbackWord>,
+    pub image_logging: ImageLogging,
+    /// What the area configuration leaves, from the channel and the previous halfwords.
+    pub image_area: fn(ImageChannel, ImageArea) -> ImageArea,
     pub auxiliary: AuxiliaryRecords,
     pub source: SourceRecords,
     /// The relative exposure of every exposure word.
@@ -220,6 +230,9 @@ impl<X> Ports<X> {
             window_result: None,
             channel_count: ChannelCount(1),
             lens: LensReport::default(),
+            image_client: None,
+            image_logging: ImageLogging::default(),
+            image_area: |_, area| area,
             auxiliary: AuxiliaryRecords::default(),
             source: SourceRecords::default(),
             relative_exposure: 0,
@@ -335,6 +348,18 @@ impl<X> record::Ports for Ports<X> {
 impl<X> ReplyPorts for Ports<X> {
     fn channel_count(&mut self) -> ChannelCount { self.channel_count }
     fn lens_report(&mut self) -> LensReport { self.lens }
+}
+
+impl<X> image::Ports for Ports<X> {
+    fn image_client_callback(&mut self) -> Option<StockCallbackWord> { self.image_client }
+    fn notify_image_client(&mut self, callback: StockCallbackWord) { self.outbound.push(Outbound::NotifyImageClient(callback)); }
+    fn prepare_image_area(&mut self, channel: ImageChannel, area: ImageArea) -> ImageArea {
+        self.outbound.push(Outbound::PrepareImageArea(channel, area));
+        (self.image_area)(channel, area)
+    }
+    fn image_logging(&mut self) -> ImageLogging { self.image_logging }
+    fn log_image(&mut self, entry: ImageLog) { self.outbound.push(Outbound::ImageLog(entry)); }
+    fn request_image(&mut self, request: ImageLaneRequest) { self.outbound.push(Outbound::Image(request)); }
 }
 
 /// The curve the fake publishes: each average raised by the offset; the word is the lens resource.
