@@ -6,6 +6,7 @@ pub mod capture_job;
 pub mod capture_results;
 pub mod exposure;
 pub mod pipeline;
+pub mod round_image;
 pub mod search;
 pub mod shared;
 pub mod statistics;
