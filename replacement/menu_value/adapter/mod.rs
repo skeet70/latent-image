@@ -1,5 +1,5 @@
-//! The owned value transaction at the stock commit dispatcher's IMAGE SIZE
-//! case arm: the jump-table word for property `0xf6` at `0x00d50084` (stock
+//! The owned IMAGE SIZE commit at the stock commit dispatcher's case arm:
+//! the jump-table word for property `0xf6` at `0x00d50084` (stock
 //! `0x00d51b58`) points at `rb_menu_value_size_arm`, which returns to the stock
 //! arm or to the shared tail `0x00d52674`. Every other property keeps its stock
 //! word.
@@ -9,9 +9,7 @@ use crate::menu_value::{
 };
 
 use core::ptr::read_volatile;
-use xm1_property_service::{
-    Properties, PropertyId as ServicePropertyId, ReadMode, SettingsBank, ValueBits, WriteValue,
-};
+use xm1_property_service::{Properties, PropertyId as ServicePropertyId, SettingsBank, ValueBits, WriteValue};
 
 include!(env!("RB_MENU_VALUE_TABLE"));
 
@@ -55,13 +53,6 @@ unsafe extern "C" {
 struct Stock;
 
 impl Settings for Stock {
-    fn read(&self, property: PropertyId) -> ChoiceCode {
-        match ServicePropertyId::decode(property.get() as u32) {
-            Some(id) => ChoiceCode::new(unsafe { Properties::stock() }.read(id, SettingsBank::Active, ReadMode::Live).get()),
-            None => ChoiceCode::new(0),
-        }
-    }
-
     fn write(&mut self, property: PropertyId, value: ChoiceCode) {
         if let Some(id) = ServicePropertyId::decode(property.get() as u32) {
             let mut properties = unsafe { Properties::stock() };
@@ -105,20 +96,16 @@ fn apply(commit: &Commit, property: PropertyId) {
     }
 }
 
-fn write_all(commit: &Commit) {
-    let mut settings = Stock;
-    for write in commit.writes.iter() {
-        settings.write(write.property, write.value);
-    }
-}
-
 #[no_mangle]
 pub extern "C" fn rb_menu_value_size_apply(property: u32, token: u32) -> u32 {
-    let property = PropertyId::new(property as u16);
+    let Ok(property) = u16::try_from(property) else {
+        return 0;
+    };
+    let property = PropertyId::new(property);
     let token = RowToken::new(token);
     match resolve(&TABLES, TABLES.target(property, token)) {
         Ok(commit) => {
-            write_all(&commit);
+            commit.write_to(&mut Stock);
             apply(&commit, property);
             1
         }

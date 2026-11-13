@@ -186,9 +186,6 @@ render tablesSha (Generated conversions pairs) = unlines
        , "    Some(crate::menu_value::ImageSizeRule {"
        , "        size_property: crate::menu_value::PropertyId::new(" ++ hex sizeProperty ++ "),"
        , "        aspect_property: crate::menu_value::PropertyId::new(" ++ hex aspectProperty ++ "),"
-       , "        change_property: crate::menu_value::PropertyId::new(0x161),"
-       , "        change_property_1f: crate::menu_value::PropertyId::new(0x165),"
-       , "        marker_property: crate::menu_value::PropertyId::new(0x1e5),"
        , "    }),"
        , ");"
        ] )

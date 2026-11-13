@@ -1,5 +1,5 @@
-//! The menu value transaction: the row token to settings value commit the
-//! stage consumer posts after the engine accepts an event.
+//! The menu value commit: resolves the row token the stage consumer posts
+//! after the engine accepts an event into settings property writes.
 //!
 //! The IMAGE SIZE property is a composite: its token selects a size/aspect
 //! pair that is converted into the two ordinary properties. Effects the caller
@@ -9,7 +9,6 @@
 
 #![allow(unexpected_cfgs, unused_attributes)]
 #![cfg_attr(not(test), no_std)]
-#![cfg_attr(not(test), allow(dead_code))]
 
 use core::fmt;
 
@@ -123,9 +122,6 @@ pub struct ImageSizePair {
 pub struct ImageSizeRule {
     pub size_property: PropertyId,
     pub aspect_property: PropertyId,
-    pub change_property: PropertyId,
-    pub change_property_1f: PropertyId,
-    pub marker_property: PropertyId,
 }
 
 /// The source-bound conversion and pair tables.
@@ -169,7 +165,7 @@ impl ValueTables {
         self.image_size
     }
 
-    /// The transaction a posted `(property, token)` pair selects.
+    /// The target a posted `(property, token)` pair selects.
     #[inline]
     pub fn target(&self, property: PropertyId, token: RowToken) -> ValueTarget {
         match self.image_size {
@@ -179,7 +175,7 @@ impl ValueTables {
     }
 }
 
-/// The properties a transaction can change.
+/// The properties a commit can change.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ValueTarget {
     Ordinary { property: PropertyId, token: RowToken },
@@ -270,6 +266,14 @@ pub struct Commit {
     pub image_size: Option<ImageSizePair>,
 }
 
+impl Commit {
+    pub fn write_to(&self, settings: &mut impl Settings) {
+        for write in self.writes.iter() {
+            settings.write(write.property, write.value);
+        }
+    }
+}
+
 /// Why a target did not resolve.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Refusal {
@@ -279,9 +283,8 @@ pub enum Refusal {
     MissingImageSizeRule,
 }
 
-/// The settings service the transaction reads and writes.
+/// The settings service a commit writes.
 pub trait Settings {
-    fn read(&self, property: PropertyId) -> ChoiceCode;
     fn write(&mut self, property: PropertyId, value: ChoiceCode);
 }
 
@@ -365,16 +368,6 @@ fn convert_key(tables: &ValueTables, property: PropertyId, key: u32) -> Result<C
         value: key,
         mode: ConversionMode::Effective,
     })
-}
-
-/// Resolves and applies `target` to `settings` in stock order.
-#[inline]
-pub fn commit(tables: &ValueTables, target: ValueTarget, settings: &mut impl Settings) -> Result<Commit, Refusal> {
-    let result = resolve(tables, target)?;
-    for write in result.writes.iter() {
-        settings.write(write.property, write.value);
-    }
-    Ok(result)
 }
 
 #[cfg(test)]

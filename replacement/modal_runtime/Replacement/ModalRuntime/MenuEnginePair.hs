@@ -607,7 +607,7 @@ checkValueSeamReader requirement stock owned = do
       pure (ValueSegment (readerPhase reader) (readerResidency reader) (inCallOrder entries) live)
 
 -- | Both roles declare stock's IMAGE SIZE arm at `0xd51b58` and its notification at `0xd5b350`
--- once, and the owned role declares its apply seam once, so the value checks compare declared sites.
+-- once, and the owned role declares its apply seam once.
 requireValueDeclarations :: Role -> J.Value -> Either String ()
 requireValueDeclarations role = J.parseEither $ J.withObject "e2e result" $ \fields -> do
   declarations <- fields .: "declared_trace_sites" >>= mapM (J.withObject "trace declaration" $ \declaration ->

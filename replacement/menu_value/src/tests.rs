@@ -68,9 +68,6 @@ static TABLES: ValueTables = ValueTables::new(
     Some(ImageSizeRule {
         size_property: SIZE,
         aspect_property: ASPECT,
-        change_property: PropertyId::new(0x161),
-        change_property_1f: PropertyId::new(0x165),
-        marker_property: PropertyId::new(0x1e5),
     }),
 );
 
@@ -95,10 +92,6 @@ impl FakeSettings {
 }
 
 impl Settings for FakeSettings {
-    fn read(&self, property: PropertyId) -> ChoiceCode {
-        ChoiceCode::new(self.value(property.get()))
-    }
-
     fn write(&mut self, property: PropertyId, value: ChoiceCode) {
         self.values.insert(property.get(), value.get());
         self.writes.push((property.get(), value.get()));
@@ -115,6 +108,12 @@ fn retained(commit: &Commit) -> Vec<RetainedEffect> {
 
 fn image_size(token: u32) -> ValueTarget {
     TABLES.target(SIZE, RowToken::new(token))
+}
+
+fn commit(tables: &ValueTables, target: ValueTarget, settings: &mut FakeSettings) -> Result<Commit, Refusal> {
+    let commit = resolve(tables, target)?;
+    commit.write_to(settings);
+    Ok(commit)
 }
 
 #[test]
