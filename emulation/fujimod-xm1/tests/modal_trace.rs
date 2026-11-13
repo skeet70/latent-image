@@ -7,7 +7,7 @@ use fujimod_emulator_cpu::{ExecutionPolicy, Model, Register, arm, timeline::Rati
 use fujimod_emulator_exr2_plan::Resources;
 use fujimod_xm1::{
     machine::{Machine, RunOutcome},
-    modal_permit::{CodeRange, Layout, ObservationLimit, STOCK_END, STOCK_ENTRY},
+    modal_permit::{CodeRange, CoreId, Layout, ObservationLimit, STOCK_END, STOCK_ENTRY},
     modal_trace::{BeginRequest, Config, SourceImage},
     provenance::Guest,
     run::RunDocument,
@@ -543,6 +543,69 @@ fn complete_control_publication_cycle(machine:&mut Machine,core:usize) {
         machine.session.board.write_register(core,arm::CORE[3],0).unwrap();
         execute_lifetime_control_instruction(machine,core,runtime+0x20c);
     }
+}
+
+#[test]
+fn observed_install_checkpoint_preserves_publications_and_complete_watch_evidence() {
+    let InstalledCurrentCase { mut machine, .. } = installed_current_case(CoreId(0), CurrentStoreCase::Valid);
+    let mut request = lifetime_fixture::owned_union_request(false);
+    request["stock"] = serde_json::to_value(synthetic_stock()).unwrap();
+    machine.session.board.write_physical(u64::from(STOCK_ENTRY.0), &synthetic_stock()).unwrap();
+    let config = serde_json::from_value::<BeginRequest>(request).unwrap()
+        .into_config(machine.session.board.mappings().to_vec()).unwrap();
+    machine.traces.begin_modal_observation(&machine.session, config).unwrap();
+    assert!(machine.traces.pause_installed_observation(&machine.session).is_err());
+    machine.session.board.write_register(0, arm::CORE[0], 74).unwrap();
+    machine.session.board.write_register(0, arm::CORE[14], 0x1000).unwrap();
+    machine.session.board.write_register(0, Register::Pc, u64::from(STOCK_ENTRY.0)).unwrap();
+    assert!(matches!(machine.run(4), RunOutcome::Completed));
+    let report = machine.traces.modal_observation_report();
+    assert_eq!(report.counts.fallback_handoffs, 1);
+    assert_eq!(report.counts.active_frames, 0);
+    let runtime = u64::from(lifetime_fixture::RUNTIME);
+    execute_lifetime_control_instruction(&mut machine, 0, runtime + 0x200);
+    for index in 0..223u64 {
+        machine.session.board.write_register(0, arm::CORE[1], 0x0120_0000 + index * 4).unwrap();
+        machine.session.board.write_register(0, arm::CORE[3], index + 1).unwrap();
+        execute_lifetime_control_instruction(&mut machine, 0, runtime + 0x204);
+    }
+    let before = serde_json::to_value(machine.traces.modal_watch_state().unwrap()).unwrap();
+    let saved = machine.traces.pause_installed_observation(&machine.session).unwrap();
+    let encoded = serde_json::to_vec(&saved).unwrap();
+    machine.disarm().unwrap();
+    let snapshot = machine.session.checkpoint(None).unwrap();
+    machine.session.restore(&snapshot).unwrap();
+    machine.rearm().unwrap();
+    let mut request = lifetime_fixture::owned_union_request(false);
+    request["stock"] = serde_json::to_value(synthetic_stock()).unwrap();
+    let config = serde_json::from_value::<BeginRequest>(request).unwrap()
+        .into_config(machine.session.board.mappings().to_vec()).unwrap();
+    let saved = serde_json::from_slice(&encoded).unwrap();
+    machine.traces.resume_installed_observation(&machine.session, config, saved).unwrap();
+    let resumed = serde_json::to_value(machine.traces.modal_watch_state().unwrap()).unwrap();
+    assert_eq!(resumed, before);
+    execute_lifetime_control_instruction(&mut machine, 0, runtime + 0x208);
+    for index in (0..223u64).rev() {
+        machine.session.board.write_register(0, arm::CORE[1], 0x0120_0000 + index * 4).unwrap();
+        machine.session.board.write_register(0, arm::CORE[3], 0).unwrap();
+        execute_lifetime_control_instruction(&mut machine, 0, runtime + 0x20c);
+    }
+    machine.traces.end_modal_observation(&machine.session).unwrap();
+    let report = serde_json::to_value(machine.traces.modal_observation_report()).unwrap();
+    assert_eq!(report["lifetime"]["phase"], "ended");
+    assert_eq!(report["lifetime"]["forward_writes"], 223);
+    assert_eq!(report["lifetime"]["reverse_writes"], 223);
+    assert!(report["failure"].is_null());
+    let watch = serde_json::to_value(machine.traces.modal_watch_state().unwrap()).unwrap();
+    assert!(watch["records"].as_array().unwrap().len() > before["records"].as_array().unwrap().len());
+}
+
+#[test]
+fn failed_installed_observation_cannot_produce_a_checkpoint() {
+    let InstalledCurrentCase { mut machine, config, .. } = installed_current_case(CoreId(0), CurrentStoreCase::Valid);
+    machine.traces.begin_modal_observation(&machine.session, config).unwrap();
+    machine.session.board.write_physical(0x0120_0000, &1u32.to_le_bytes()).unwrap();
+    assert!(machine.traces.pause_installed_observation(&machine.session).is_err());
 }
 
 #[test]
