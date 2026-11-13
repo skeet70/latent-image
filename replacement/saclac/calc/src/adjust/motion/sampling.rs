@@ -3,8 +3,8 @@
 
 use crate::adjust::motion::drive::{quotient, DriveLimits};
 use crate::adjust::motion::state::{AreaLayout, MotionState};
-use crate::exposure::ports::{Properties, Property, StockMemory};
-use crate::stock::motion::{self as trace, MEASURED_RUN_FRAMES, SAMPLE_CORRECTION_BASE, SAMPLE_CORRECTION_BIAS, SAMPLE_CORRECTION_SCALE, TERMINATOR};
+use crate::exposure::ports::{Properties, StockMemory};
+use crate::stock::motion::{self as trace, MEASURED_RUN_FRAMES, TERMINATOR};
 
 pub const PRIMARY_AREAS: usize = 7;
 pub const SECONDARY_AREAS: usize = 10;
@@ -33,8 +33,6 @@ pub struct SpeedStep {
     pub speed: u32,
 }
 
-fn signed_byte(properties: &mut impl Properties, id: Property) -> i32 { i32::from(properties.property(id) as u8 as i8) }
-
 impl MotionState {
     /// The lens position `frame` frame periods into the run (0xfa30c0).
     pub fn position_at_frame(&self, frame: u32) -> i16 {
@@ -42,21 +40,13 @@ impl MotionState {
         self.drive.profile.position_at(time.wrapping_sub(self.drive.start_time))
     }
 
-    /// How far a target sits from `reference` when its area is exposed `offset` after `time`:
-    /// the drive's midpoint over the exposure, scaled, biased along the drive (0xf96f5c).
+    /// How far a target sits from `reference` when its area is exposed `offset` after `time`;
+    /// none while the drive stands still.
     fn correction(&self, properties: &mut impl Properties, reference: i16, time: i32, offset: i32) -> i16 {
         if !self.drive.moving {
             return 0;
         }
-        let scale = properties.property(SAMPLE_CORRECTION_SCALE) as i32;
-        let bias = signed_byte(properties, SAMPLE_CORRECTION_BIAS);
-        let exposed = offset.wrapping_add(time);
-        let first = i32::from(self.drive.profile.position_at(exposed));
-        let last = i32::from(self.drive.profile.position_at(exposed.wrapping_add(self.sampling.exposure)));
-        let midpoint = (first + last) / 2 - i32::from(reference);
-        let shift = midpoint.wrapping_mul(scale) / 100;
-        let along = if self.drive.profile.reverse { bias.wrapping_add(shift) } else { shift.wrapping_sub(bias) };
-        signed_byte(properties, SAMPLE_CORRECTION_BASE).wrapping_add(along) as i16
+        self.drive.profile.midpoint_correction(properties, reference, time, offset, self.sampling.exposure)
     }
 
     fn target(&self, properties: &mut impl Properties, position: i16, time: i32, offset: i32) -> i16 {
