@@ -1,6 +1,7 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+pub mod area_measurement;
 pub mod calc;
 pub mod calculation;
 pub mod capture_results;
@@ -491,6 +492,8 @@ pub const fn lens_effect(operation: PeerOperation) -> LensEffect {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod area_measurement_tests;
 #[cfg(test)]
 mod calc_tests;
 #[cfg(test)]
