@@ -3,6 +3,8 @@
 //! The root's stock boundary: X-M1 1.50 entries and memory the bound modules reach that no merged
 //! module owns. Entries are entered and memory read through the shared layer's `Machine`.
 
+pub mod acquisition;
+
 use xm1_saclac_interface::lens::{LensPayload, SelectionCode, Setting};
 use xm1_saclac_interface::stock::{lens_callback_word, record_handle_word};
 use xm1_saclac_shared::stock::Machine;

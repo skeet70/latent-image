@@ -15,6 +15,16 @@ use crate::settings::{
     WindowVariant,
 };
 
+/// An argument of a retained entry: a word, or the address of a byte of the caller's buffer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Argument {
+    Word(u32),
+    Buffer(usize),
+}
+
+/// The most arguments a retained entry `Guest` enters takes.
+const MOST_ARGUMENTS: usize = 13;
+
 /// The machine the boundary reads, writes and enters.
 pub trait Machine {
     fn read_u16(&self, address: u32) -> u16;
@@ -23,6 +33,18 @@ pub trait Machine {
     fn write_u32(&mut self, address: u32, value: u32);
     /// Enters the retained entry at `address` with `arguments` in r0.. and returns r0.
     fn enter(&self, address: u32, arguments: &[usize]) -> u32;
+    /// Enters the retained entry at `address` with `arguments`, which may read and write `buffer`.
+    fn enter_with(&self, address: u32, arguments: &[Argument], buffer: &mut [u8]) -> u32 {
+        let base = buffer.as_mut_ptr() as usize;
+        let mut words = [0; MOST_ARGUMENTS];
+        for (word, argument) in words.iter_mut().zip(arguments) {
+            *word = match *argument {
+                Argument::Word(value) => value as usize,
+                Argument::Buffer(offset) => base + offset,
+            };
+        }
+        self.enter(address, &words[..arguments.len()])
+    }
 }
 
 /// The X-M1 1.50 machine.
@@ -81,6 +103,20 @@ impl Machine for Guest {
                         *g as u32,
                     )
                 }
+                [a, b, c, d, e, f, g, h] => core::mem::transmute::<usize, extern "C" fn(u32, u32, u32, u32, u32, u32, u32, u32) -> u32>(
+                    entry,
+                )(*a as u32, *b as u32, *c as u32, *d as u32, *e as u32, *f as u32, *g as u32, *h as u32),
+                [a, b, c, d, e, f, g, h, i] => core::mem::transmute::<
+                    usize,
+                    extern "C" fn(u32, u32, u32, u32, u32, u32, u32, u32, u32) -> u32,
+                >(entry)(*a as u32, *b as u32, *c as u32, *d as u32, *e as u32, *f as u32, *g as u32, *h as u32, *i as u32),
+                [a, b, c, d, e, f, g, h, i, j, k, l, m] => core::mem::transmute::<
+                    usize,
+                    extern "C" fn(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) -> u32,
+                >(entry)(
+                    *a as u32, *b as u32, *c as u32, *d as u32, *e as u32, *f as u32, *g as u32, *h as u32, *i as u32, *j as u32,
+                    *k as u32, *l as u32, *m as u32,
+                ),
                 _ => panic!("no retained entry takes {} arguments", arguments.len()),
             }
         }
