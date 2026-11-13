@@ -37,9 +37,10 @@ pub struct LensComCommand {
     pub completion: StockCallbackWord,
 }
 
-/// An image-processor 0x4703 request: a mode and three words (0x106631c).
+/// An image-processor 0x4703 request: a completion and three words (0x106631c).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ImageProcessorTriplet {
-    pub mode: u32,
+    /// The image processor calls it with -255 (0x106cff0..0x106d000).
+    pub completion: StockCallbackWord,
     pub values: [u32; 3],
 }
