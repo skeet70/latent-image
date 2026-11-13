@@ -3,6 +3,7 @@
 
 use xm1_saclac_interface::calc::SharedAddress;
 
+use crate::adjust::motion::measured::MeasuredLevels;
 use crate::adjust::motion::ports::{AreaClass, AreaGrid, CropGeometry, GridRequest, SearchBounds};
 use crate::exposure::ports::{Properties, Property, StockMemory};
 
@@ -719,4 +720,88 @@ pub fn trace_preparation<P: Properties + StockMemory>(section: SharedAddress, tr
             store(ports, 0x46a10 + 0x2c * index + 4 * word, value);
         }
     }
+}
+
+/// The bytes of calc 0x3c03's result, which the pipeline's callback 0xf20380 copies to block
+/// +0x1164.
+pub const MEASURED_LEVELS_BYTES: usize = 20;
+
+/// The halves the level check reads (0xf9cdfc): the record levels at +0xc, +4, +6, +0xe and
+/// +0x10, the curve level at +8 and its curve point at +0xa.
+pub fn measured_levels(result: &[u8; MEASURED_LEVELS_BYTES]) -> MeasuredLevels {
+    let half = |offset: usize| u16::from_le_bytes([result[offset], result[offset + 1]]);
+    MeasuredLevels { levels: [0xc, 4, 6, 0xe, 0x10].map(|offset| half(offset) as i16), curve_level: half(8) as i16, curve_point: half(0xa) }
+}
+
+/// Which record level the level check compares, low nibble for channel 0 and the next byte
+/// otherwise, and the margin its excess must pass (0xf9ce64, 0xf9cf50).
+pub const MEASURED_LEVEL_SELECTION: Property = Property(0x4b0a);
+pub const MEASURED_LEVEL_MARGIN: Property = Property(0x4b0b);
+
+/// 1 when the level check exposed the frames again, else 0 (0xf9cf80, 0xf9d178).
+pub const fn reexposure_flag(section: SharedAddress) -> SharedAddress { at(section, 0x48d38) }
+
+/// 0x10443f4's value, constantly 0, which a re-exposure stores (0xf9d15c).
+pub const fn reexposure_word(section: SharedAddress) -> SharedAddress { at(section, 0x456a0) }
+
+/// A frame exposure as the level check traces it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ExposureSummary {
+    pub at_06: i16,
+    pub lens_step: u32,
+    pub step_level: i16,
+    pub exposure_level: i16,
+    pub first_level: i16,
+    /// 0xf95d14's index of the exposure's profile.
+    pub mode: u32,
+    pub change: i16,
+    pub step: u8,
+}
+
+impl ExposureSummary {
+    const fn words(&self) -> [u32; 8] {
+        [
+            self.at_06 as i32 as u32,
+            self.lens_step,
+            self.step_level as i32 as u32,
+            self.exposure_level as i32 as u32,
+            self.first_level as i32 as u32,
+            self.mode,
+            self.change as i32 as u32,
+            self.step as u32,
+        ]
+    }
+}
+
+/// What the level check traces after its decision.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LevelCheckTrace {
+    /// Record levels 0xa8, 0x94, 0x96 and 0x92 and the record's curve level, each raised by level
+    /// step 2.
+    pub record_levels: [i32; 5],
+    /// The measured levels in the same order.
+    pub measured_levels: [i16; 5],
+    /// The second exposure as the preparation computed it, and the first.
+    pub second: ExposureSummary,
+    pub first: ExposureSummary,
+    pub selection: u32,
+    pub curve_point: u16,
+}
+
+/// 0xf9d18c..0xf9d39c.
+pub fn trace_level_check(section: SharedAddress, trace: &LevelCheckTrace, memory: &mut impl StockMemory) {
+    const LEVEL_ORDER: [usize; 5] = [1, 0, 3, 2, 4];
+    for index in LEVEL_ORDER {
+        memory.write_u32(at(section, [0x48d10, 0x48d08, 0x48d0c, 0x48d14, 0x48d18][index]), trace.record_levels[index] as u32);
+    }
+    for index in LEVEL_ORDER {
+        memory.write_u32(at(section, [0x48d24, 0x48d1c, 0x48d20, 0x48d28, 0x48d2c][index]), i32::from(trace.measured_levels[index]) as u32);
+    }
+    for (base, summary) in [(0x48cc8, &trace.second), (0x48ce8, &trace.first)] {
+        for (word, value) in (0..).zip(summary.words()) {
+            memory.write_u32(at(section, base + 4 * word), value);
+        }
+    }
+    memory.write_u32(at(section, 0x48d30), trace.selection);
+    memory.write_u32(at(section, 0x48d34), u32::from(trace.curve_point));
 }

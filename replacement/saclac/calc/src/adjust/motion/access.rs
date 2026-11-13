@@ -2,6 +2,7 @@
 //! block that stock's preparation hands it.
 
 use crate::adjust::motion::exposure::FrameExposure;
+use crate::adjust::motion::measured::LevelCheck;
 use crate::adjust::motion::plan::Plan;
 use crate::adjust::motion::ports::SearchBounds;
 use crate::adjust::motion::preparation::PreviousFocus;
@@ -29,8 +30,11 @@ impl MotionState {
     /// The frame exposure the run's frames follow (output +0x4).
     pub fn frame_exposure(&self) -> &FrameExposure { &self.exposures.second }
 
-    /// Both frame exposures (output +0x54 and +0x50).
+    /// The first exposure (output +0x54), the frames' and the second as prepared (output +0x50).
     pub fn exposures(&self) -> &FrameExposures { &self.exposures }
+
+    /// What the run made of calc's measured levels.
+    pub fn level_check(&self) -> LevelCheck { self.level_check }
 
     pub fn statistics(&self) -> &Statistics { &self.statistics }
 
