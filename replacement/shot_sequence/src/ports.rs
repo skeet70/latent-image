@@ -150,6 +150,8 @@ pub enum PipelineEffect {
     ClearFrameReady,
     MarkFrameReady,
     ReleaseFrame,
+    /// Follows the frame-released reply.
+    FrameReleased,
     StartFrame,
     PrepareFrame,
     ArmFrame,
@@ -170,7 +172,7 @@ pub enum PipelineEffect {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PipelineQuery {
     FinishOnly,
-    ImageBusy,
+    CaptureIdle,
     SkipLensFinish,
     FrameReady,
     Restarted,

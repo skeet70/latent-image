@@ -74,7 +74,7 @@ pub(crate) fn record() -> RecordHandle { stock::record_handle_from_a2(0x16a_0000
 fn s1_with_work(ports: &mut Recorder) {
     ports.answer(Query::HasWork, true);
     ports.answer(Query::Pipeline(PipelineQuery::FinishOnly), true);
-    ports.answer(Query::Pipeline(PipelineQuery::ImageBusy), true);
+    ports.answer(Query::Pipeline(PipelineQuery::CaptureIdle), true);
 }
 
 /// Statistics accepted once, no evaluation, released: the exposure step completes on 0x4c.
@@ -319,7 +319,7 @@ fn advance_during_the_raw_request_finishes_after_the_raw_completion() {
     let mut shot = Shot::new();
     let mut ports = Recorder::new();
     ports.answer(Query::HasWork, true);
-    ports.answer(Query::Pipeline(PipelineQuery::ImageBusy), true);
+    ports.answer(Query::Pipeline(PipelineQuery::CaptureIdle), true);
     ports.answer(Query::Pipeline(PipelineQuery::FrameReady), true);
     ports.answer(Query::Pipeline(PipelineQuery::NeedsRaw), true);
     shot.control(ShotControl::StartS1, record(), &mut ports);

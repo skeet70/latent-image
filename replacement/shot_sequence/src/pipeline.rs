@@ -78,7 +78,7 @@ impl Pipeline {
         self.record = Some(record);
         ports.effect(Effect::Pipeline(P::Prepare(record)));
         if ports.query(Query::Pipeline(Q::FinishOnly)) {
-            self.stage = if ports.query(Query::Pipeline(Q::ImageBusy)) { Stage::FinishLast } else { Stage::FinishLens };
+            self.stage = if ports.query(Query::Pipeline(Q::CaptureIdle)) { Stage::FinishLast } else { Stage::FinishLens };
             return finish.start(FinishKind::HalfPressLens, record, ports);
         }
         if !ports.query(Query::Pipeline(Q::FrameReady)) {
@@ -124,6 +124,7 @@ impl Pipeline {
         if ports.half_press_notifications().frame_released {
             ports.reply(Reply { command: CommandKind::HalfPress, record: self.record, status: FRAME_RELEASED_STATUS });
         }
+        ports.effect(Effect::Pipeline(P::FrameReleased));
     }
 
     fn output(&mut self, record: RecordHandle, ports: &mut impl Ports) {

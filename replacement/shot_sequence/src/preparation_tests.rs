@@ -11,6 +11,7 @@ fn parameters(mode: u32) -> HalfPressParameters {
         mode: HalfPressMode(mode),
         option: 9,
         mask: HalfPressMask(0b1000),
+        plan_option: 0,
         area_count: Some(ClientRef(0x100)),
         area_selection: 0x55,
         areas: Some(ClientRef(0x200)),

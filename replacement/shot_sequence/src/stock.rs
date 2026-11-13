@@ -64,7 +64,8 @@ fn client(word: u32) -> Option<ClientRef> { (word != 0).then_some(ClientRef(word
 
 pub const HALF_PRESS_BLOCK_BYTES: usize = 64;
 
-/// The command-6 block (0x169d05c), as 0xf16ffc, 0xf15708, 0xf17a4c, 0xf1ee48 and 0xf1f2b0 read it.
+/// The command-6 block (0x169d05c), as 0xf16ffc, 0xf15708, 0xf17a4c, 0xf1ee48, 0xf1f2b0 and 0xf20628
+/// read it.
 pub fn half_press_parameters(block: &[u8]) -> Option<HalfPressParameters> {
     let block = block.get(..HALF_PRESS_BLOCK_BYTES)?;
     let at = |offset| word(block, offset).unwrap_or(0);
@@ -72,6 +73,7 @@ pub fn half_press_parameters(block: &[u8]) -> Option<HalfPressParameters> {
         mode: HalfPressMode(at(0x4)),
         option: at(0xc),
         mask: HalfPressMask(at(0x10)),
+        plan_option: at(0x14),
         area_count: client(at(0x18)),
         area_selection: at(0x1c),
         areas: client(at(0x20)),
