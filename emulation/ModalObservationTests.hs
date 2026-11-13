@@ -20,7 +20,7 @@ import qualified Emulation.ContextCatalogue as Catalogue
 import Emulation.ModalObservation
 import Emulation.ModalWatchStream (readFinalModalWatchFrom)
 import Emulation.WatchObservation
-import EmulatorUsb (BridgeExchange, EmulatorStart (..), ModalResponse (..), bridgeModalObservationBegin, bridgeModalObservationReport, bridgeModalObservationEnd, startEmulator, stopEmulator, emulatorWatchStateToFile, emulatorWatchStateRaw, emulatorWatchEnd)
+import EmulatorUsb (BridgeExchange, EmulatorStart (..), TraceHit (..), TraceHitCursor (..), TraceHitLimit (..), TraceHitPage (..), ModalResponse (..), bridgeModalObservationBegin, bridgeModalObservationReport, bridgeModalObservationEnd, startEmulator, stopEmulator, emulatorTraceHitCount, emulatorTraceHitPage, emulatorWatchStateToFile, emulatorWatchStateRaw, emulatorWatchEnd)
 import Emulation.Sha256 (sha256, sha256Hex)
 import Emulation.UiTrajectory (checkModalObserverConfiguration, decodeTrajectories)
 import Emulation.RenderStackDiagnostic
@@ -284,6 +284,7 @@ main = getArgs >>= \arguments -> case arguments of
   ["--shutdown-fixture-success"] -> shutdownBridgeFixture ExitSuccess
   ["--shutdown-fixture-failure"] -> shutdownBridgeFixture (ExitFailure 7)
   ["--watch-spool-fixture", mode] -> watchSpoolFixture mode
+  ["--trace-page-fixture", mode] -> tracePageFixture (read mode)
   ["--owned-context", loaderA, loaderB, symbolsA, symbolsB] -> do
     inputs <- Catalogue.OwnedUnionCatalogueInputs <$> B.readFile loaderA <*> B.readFile loaderB
       <*> B.readFile symbolsA <*> B.readFile symbolsB
@@ -329,6 +330,39 @@ shutdownTests = do
         ExitSuccess -> check "stopping an already stopped bridge succeeds" (not (isLeft first) && not (isLeft second))
         ExitFailure _ -> check "stopping a failed bridge retains its failure" (isLeft first && isLeft second)
 
+
+data TraceReplyFixture = BoundedTraceReply | SuffixTraceReply | ShortTraceReply deriving (Eq, Show, Read)
+
+tracePageFixture :: TraceReplyFixture -> IO ()
+tracePageFixture mode = do
+  let row index = object ["site" .= ("fixture" :: T.Text), "core" .= (0 :: Int), "instructions" .= index,
+        "registers" .= object [key .= ("0x00000000" :: T.Text) | key <- ["r0", "r1", "r2", "r3"]]]
+      reply indices = fixtureSend (object ["ok" .= True, "count" .= (4 :: Int), "hits" .= map row (indices :: [Int])])
+  fixtureSend (object ["ok" .= True, "event" .= ("start-options" :: T.Text), "installed" .= ([] :: [Value])])
+  fixtureCommand "start"
+  fixtureSend (object ["ok" .= True, "event" .= ("ready" :: T.Text), "checkpoint" .= object ["start" .= ("cold" :: T.Text)]])
+  fixtureCommand "trace-hits"
+  reply (case mode of BoundedTraceReply -> [1]; SuffixTraceReply -> [1..4]; ShortTraceReply -> [1,2])
+  unless (mode == ShortTraceReply) $ do
+    fixtureCommand "trace-hits"
+    reply (case mode of SuffixTraceReply -> [2..4]; _ -> [2])
+  fixtureCommand "finish"
+  fixtureSend (object ["ok" .= True])
+
+tracePageTests :: IO ()
+tracePageTests = do
+  executable <- getExecutablePath
+  forM_ [BoundedTraceReply, SuffixTraceReply, ShortTraceReply] $ \mode -> do
+    (emulator, _, ()) <- startEmulator executable "." ["--trace-page-fixture", show mode] (\_ -> pure (Nothing, ()))
+    count <- try (emulatorTraceHitCount emulator (TraceHitCursor 0)) :: IO (Either IOException Int)
+    case mode of
+      ShortTraceReply -> check "incomplete suffix is refused" (isLeft count)
+      _ -> do
+        check "bounded and retained suffix replies preserve the count" (count == Right 4)
+        page <- emulatorTraceHitPage emulator (TraceHitCursor 1) (TraceHitLimit 1)
+        check "bounded and retained suffix replies expose the requested page"
+          (tracePageCount page == 4 && tracePageCursor page == TraceHitCursor 1 && map traceInstructions (tracePageHits page) == [2])
+    stopEmulator emulator
 
 data WatchSpoolFixture = ChunkedWatch | TruncatedWatch | MalformedWatch | UnsolicitedWatch
   deriving (Eq, Show, Read)
@@ -440,6 +474,7 @@ runTests :: Maybe Catalogue.OwnedUnionCatalogueInputs -> [String] -> IO ()
 runTests ownedInputs arguments = do
   shutdownTests
   watchSpoolTests
+  tracePageTests
   let diagnosticSource = object
         [ "kind" .= String "retained", "start" .= (0x01100000 :: Word32)
         , "path" .= String "retained.bin", "sha256" .= T.replicate 64 "0" ]

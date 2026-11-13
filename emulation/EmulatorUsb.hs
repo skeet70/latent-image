@@ -514,8 +514,7 @@ data TraceHitPage = TraceHitPage
 traceHitPageLimit :: TraceHitLimit
 traceHitPageLimit = TraceHitLimit 16
 
--- | One page of recorded hits from CURSOR, bounded by LIMIT. The page must return exactly the
--- rows the frozen count says exist; a short, empty or shifted page is a refusal, not a skip.
+-- | The retained bridge returns the whole suffix; the SDK returns a bounded page.
 emulatorTraceHitPage :: Emulator -> TraceHitCursor -> TraceHitLimit -> IO TraceHitPage
 emulatorTraceHitPage emulator (TraceHitCursor from) (TraceHitLimit limit) = do
   require (from >= 0) "trace-hits cursor is negative"
@@ -525,12 +524,13 @@ emulatorTraceHitPage emulator (TraceHitCursor from) (TraceHitLimit limit) = do
   require (count >= from) ("trace-hits count " ++ show count ++ " precedes cursor " ++ show from)
   hits <- objectField "hits" fields >>= parseTraceHits
   let expected = min limit (count - from)
-  require (length hits == expected)
-    ("trace-hits page from " ++ show from ++ " returned " ++ show (length hits)
+      returned = length hits
+  require (returned == expected || returned == count - from)
+    ("trace-hits page from " ++ show from ++ " returned " ++ show returned
       ++ " rows, the frozen count requires " ++ show expected)
-  pure (TraceHitPage count (TraceHitCursor from) hits)
+  pure (TraceHitPage count (TraceHitCursor from) (if returned == expected then hits else take limit hits))
 
--- | The recorded count at or after CURSOR without fetching the rows. One hit at most is read.
+-- | The recorded count at or after CURSOR. The retained bridge also returns its full suffix.
 emulatorTraceHitCount :: Emulator -> TraceHitCursor -> IO Int
 emulatorTraceHitCount emulator (TraceHitCursor from) = do
   require (from >= 0) "trace-hits cursor is negative"
@@ -539,7 +539,8 @@ emulatorTraceHitCount emulator (TraceHitCursor from) = do
   require (count >= from) ("trace-hits count " ++ show count ++ " precedes cursor " ++ show from)
   hits <- objectField "hits" fields >>= parseTraceHits
   let expected = if from < count then 1 else 0
-  require (length hits == expected) "trace-hits count query returned an unstable hit page"
+      returned = length hits
+  require (returned == expected || returned == count - from) "trace-hits count query returned an unstable hit page"
   pure count
 
 -- | The hit count so far and the hits recorded from index `start` on. Unbounded; the render route
