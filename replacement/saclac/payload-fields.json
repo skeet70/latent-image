@@ -4223,7 +4223,7 @@
      "offset": 0,
      "bytes": 4,
      "sources": [
-      "0x00f5fd58: str r3,[r11-20,#-0xe8]! sets payload word 0"
+      "0x00f5fd60: str r3,[r11-20,#-0xe8]! sets payload word 0"
      ]
     },
     {
@@ -4272,7 +4272,7 @@
      "offset": 4,
      "bytes": 168,
      "sources": [
-      "0x00f60008..0x00f60018: 168 bytes copied from r5+0x1040 to r11-248"
+      "0x00f60008..0x00f60018: 168 bytes copied from r5+0x1070 to r11-248"
      ]
     },
     {
@@ -4467,6 +4467,14 @@
      ]
     },
     {
+     "name": "word-184",
+     "offset": 184,
+     "bytes": 4,
+     "sources": [
+      "0x01039998..0x0103999c: the stack argument [r11,#0xc] stored at r11-0x48 after the last copy"
+     ]
+    },
+    {
      "name": "record-188",
      "offset": 188,
      "bytes": 12,
@@ -4479,19 +4487,11 @@
      "offset": 200,
      "bytes": 8,
      "sources": [
-      "0x010398e8 and 0x01039a00: word at r11-0x34 and payload pointer r11-256; 0x010399e0 posts 208 from r11-256"
+      "0x010399cc..0x010399d0 and 0x010398e8: the stack arguments [r11,#0x14] and [r11,#0x18] stored at r11-0x38 and r11-0x34; 0x01039a0c posts 208 from r11-256"
      ]
     }
    ],
-   "padding": [
-    {
-     "offset": 184,
-     "bytes": 4,
-     "sources": [
-      "0x010398b0..0x01039b44: the 0x4004 branch copies its 12-byte record to r11-68, so r11-72..r11-69 stay unwritten"
-     ]
-    }
-   ]
+   "padding": []
   },
   {
    "direction": "outgoing",
@@ -4529,7 +4529,7 @@
      "offset": 0,
      "bytes": 20,
      "sources": [
-      "0x00f3b9f8, 0x00f3ba04, 0x00f3ba1c, 0x00f3ba28 and 0x00f3ba34 store record+0, +4, +8, +0xc and +0x10 from the profile getters; 0x00f3bb28 stores its caller's word at record+0x10"
+      "0x00f3b9f8, 0x00f3ba04, 0x00f3ba1c, 0x00f3ba28 and 0x00f3ba34 store record+0, +4, +8, +0xc and +0x10 from the profile getters; at the call site 0x00f3bb38, 0x00f3bb28 replaces record+0x10 with its caller's word"
      ]
     },
     {
@@ -4561,7 +4561,7 @@
      "offset": 56,
      "bytes": 4,
      "sources": [
-      "0x0103a3a4 stores the second argument at payload+56 before the copy; call site 0x00f3bb30/0x00f3bb34 passes 0x00f3a7e4"
+      "0x0103a3a4 stores the second argument at payload+56 before the copy; call sites 0x00f3bb30..0x00f3bb38 and 0x00f3bb5c..0x00f3bb64 pass 0x00f3a7e4"
      ]
     }
    ],
@@ -5303,6 +5303,50 @@
    ]
   },
   {
+   "name": "wake-callback-3b8d",
+   "time_driven": true,
+   "match": {
+    "kind": "callback",
+    "entry": 15967224
+   },
+   "sources": [
+    "0xf3a3f8 posts 0x8d to queue 43 through 0xef9a94 at 0xf3a434; stock cold-boot receipt: 78 entries on sender 44, each immediately followed by queue-in 0x3b8d, so the count follows elapsed wakes"
+   ]
+  },
+  {
+   "name": "wake-callback-3b87",
+   "time_driven": true,
+   "match": {
+    "kind": "callback",
+    "entry": 15938920
+   },
+   "sources": [
+    "0xf33568 posts 0x87 to queue 43 through 0xef9a94 at 0xf335a4; stock cold-boot receipt: 78 entries, each immediately followed by queue-in 0x3b87 sender 45"
+   ]
+  },
+  {
+   "name": "wake-callback-3b88",
+   "time_driven": true,
+   "match": {
+    "kind": "callback",
+    "entry": 15938848
+   },
+   "sources": [
+    "0xf33520 posts 0x88 to queue 43 through 0xef9a94 at 0xf3355c; stock cold-boot receipt: 19 entries, every fourth wake, each immediately followed by queue-in 0x3b88 sender 45"
+   ]
+  },
+  {
+   "name": "wake-callback-3b8a",
+   "time_driven": true,
+   "match": {
+    "kind": "callback",
+    "entry": 15956052
+   },
+   "sources": [
+    "0xf37854 posts 0x8a to queue 43 through 0xef9a94 at 0xf37890; stock cold-boot receipt: 78 entries, each immediately followed by queue-in 0x3b8a sender 45"
+   ]
+  },
+  {
    "name": "callbacks",
    "split": [
     "entry"
@@ -5311,8 +5355,8 @@
     "kind": "callback"
    },
    "sources": [
-    "a callback event names the entry the driver calls; the entry table is the census sites declaration",
-    "each entry is its own source: the driver enters each from its own wake handler, so capture's stock and owned runs enter every entry's subsequence in the same order and interleave the entries differently at observation 1056"
+    "a callback event names a stock completion callback entry, entered on the peer task that serves saclac's request; the entry table is the census sites declaration",
+    "each entry is its own source: each peer enters its entry when its own request completes, so capture's stock and owned runs enter every entry's subsequence in the same order and interleave the entries differently at observation 1056"
    ]
   },
   {

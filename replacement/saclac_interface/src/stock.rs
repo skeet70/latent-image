@@ -42,7 +42,7 @@ pub const COMMANDS: [CommandDescriptor; 40] = [
     CommandDescriptor { kind: CommandKind::Prepare, code: 26, producer: 0xef955c, payload_bytes: 20 },
     CommandDescriptor { kind: CommandKind::Command1d, code: 29, producer: 0xef9598, payload_bytes: 12 },
     CommandDescriptor { kind: CommandKind::Command1e, code: 30, producer: 0xef95c8, payload_bytes: 8 },
-    CommandDescriptor { kind: CommandKind::Command1f, code: 31, producer: 0xef95f8, payload_bytes: 20 },
+    CommandDescriptor { kind: CommandKind::Command1f, code: 31, producer: 0xef95f4, payload_bytes: 20 },
     CommandDescriptor { kind: CommandKind::Command20, code: 32, producer: 0xef9650, payload_bytes: 8 },
     CommandDescriptor { kind: CommandKind::Command21, code: 33, producer: 0xef967c, payload_bytes: 8 },
     CommandDescriptor { kind: CommandKind::Command22, code: 34, producer: 0xef96a8, payload_bytes: 8 },
