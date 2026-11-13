@@ -5,7 +5,7 @@
 use crate::adjust::profile_adjustment::{LensSteps, StepTable};
 use crate::exposure::ports::{Properties, Property};
 use crate::exposure::program::{PrimaryInputs, PrimaryRange};
-use crate::exposure::settings;
+use crate::exposure::settings::{self, signed_tenths};
 use crate::stock::calculation::Cell;
 use crate::stock::exposure_limits::{self as stock, BandSource, LimitKey, ParameterField, SetSelector};
 
@@ -41,7 +41,7 @@ impl<T: Properties + LensSteps + ChannelLevels + SceneLevels + CellLevels> Limit
 /// Selection flags bit 1 replaces most limit settings with fixed ones.
 const FLAGGED: u16 = 2;
 /// The limit index that names no indexed limit.
-const NO_INDEX: u32 = 4;
+pub const NO_INDEX: u32 = 4;
 
 /// Scenes whose band is the request's level, whose limits are uncapped and whose thresholds are
 /// ignored (0xf713bc).
@@ -112,8 +112,6 @@ pub struct LimitQuery {
     /// The least an indexed limit reaches, step 3 of the level table included.
     pub minimum: i16,
 }
-
-fn signed_tenths(ports: &mut impl Properties, id: Property) -> i16 { i16::from(ports.property(id) as u8 as i8).wrapping_mul(10) }
 
 fn byte_tenths(ports: &mut impl Properties, id: Property) -> i16 { settings::level(ports, id).wrapping_mul(10) }
 
