@@ -300,6 +300,8 @@ pub enum ImgDcOperation {
     Request4a,
     Request4e,
     Request4f,
+    Request56,
+    Request57,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
