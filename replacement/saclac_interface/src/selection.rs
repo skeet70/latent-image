@@ -180,8 +180,9 @@ pub trait ShotSelection {
     fn classify_subjects(&mut self, stage: ClassifyStage, share: SubjectShare, query: SubjectQuery);
     /// The kind the classification left for an area in a stage's bank.
     fn subject_kind(&mut self, stage: ClassifyStage, index: AreaIndex) -> Option<TrackedKind>;
-    /// 0xf1cf68.
-    fn update_grid(&mut self, record: RecordHandle, reset: bool, focus: bool, lens_reference: u32);
+    /// 0xf1cf68: a reset takes the saved list back; `keep_gates` leaves the target gates as they
+    /// are (its third argument is 1).
+    fn update_grid(&mut self, record: RecordHandle, reset: bool, keep_gates: bool, lens_reference: u32);
     /// 0xf1d0d8 into the working result.
     fn restore_result(&mut self);
     /// 0xf1d134 from a result buffer.
