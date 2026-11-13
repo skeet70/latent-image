@@ -13,9 +13,11 @@ use crate::adjust::metering::MeteringTables;
 use crate::adjust::motion::drive::{DriveKind, DriveMode, DriveSpeed};
 use crate::adjust::motion::exposure::{FrameExposure, ProgramStep, PROGRAM_STEPS};
 use crate::adjust::motion::plan::Plan;
+use crate::adjust::motion::layout::SampleLayout;
 use crate::adjust::motion::ports::{
-    AreaGrid, BoundsQuery, ChannelRates, Clock, ExposureTimes, FrameGeometry, GridArea, LensBounds, LensCalibration, LensTables, Logarithms10, MeasurementReadings,
-    ProfileGains, SearchBounds, SearchFrameRequest, StatisticsFrameRequest, Ticks,
+    AreaCurves, AreaGrid, BoundsQuery, CaptureFraming, ChannelRates, Clock, CropGeometry, CurveRequest, DefaultCurve, ExposureTimes, FrameGeometry, GridArea,
+    LensBounds, LensCalibration, LensLimits, LensTables, LimitQuery, Logarithms10, MeasurementReadings, ProfileGains, SampleFrameRequest, SearchBounds,
+    SearchFrameRequest, StatisticsFrameRequest, Ticks,
 };
 use crate::adjust::motion::preparation::{CaptureFrames, FrameSize, LensStatus, PreviousFocus};
 use crate::adjust::motion::readings::{AreaList, FocusRequest, RecordReadings, SelectionLists, StepLimits, AREA_POSITIONS};
@@ -59,6 +61,20 @@ pub struct MotionWorld {
     pub channel_weights: [u16; 3],
     pub feature_bytes: [u8; 2],
     pub now: u32,
+    /// Channel 0's table positions by lens step.
+    pub table_positions: BTreeMap<u32, [i16; 2]>,
+    pub channel_starts: BTreeMap<u8, i16>,
+    pub period_positions: BTreeMap<u16, i32>,
+    pub lens_limits: LensLimits,
+    pub limit_queries: Vec<LimitQuery>,
+    pub sample_frames: [AreaGrid; 2],
+    pub sample_frame_requests: Vec<SampleFrameRequest>,
+    pub crop: CropGeometry,
+    pub cell_steps: [u32; 2],
+    pub readout_start: u32,
+    pub reference_line: u16,
+    pub default_curve: DefaultCurve,
+    pub curve_requests: Vec<CurveRequest>,
 }
 
 impl Default for MotionWorld {
@@ -90,6 +106,19 @@ impl Default for MotionWorld {
             line_periods: BTreeMap::new(),
             channel_weights: [0; 3],
             feature_bytes: [0; 2],
+            table_positions: BTreeMap::new(),
+            channel_starts: BTreeMap::new(),
+            period_positions: BTreeMap::new(),
+            lens_limits: LensLimits::default(),
+            limit_queries: Vec::new(),
+            sample_frames: [AreaGrid::default(); 2],
+            sample_frame_requests: Vec::new(),
+            crop: CropGeometry::default(),
+            cell_steps: [1, 1],
+            readout_start: 0,
+            reference_line: 0,
+            default_curve: DefaultCurve::default(),
+            curve_requests: Vec::new(),
             now: 0,
         }
     }
@@ -188,6 +217,7 @@ pub fn blank_state(section: SharedAddress, results: SharedAddress, frame_period:
         treated_settings: [0; 4],
         plan: Plan::default(),
         sampling: SampleSchedule::default(),
+        layout: SampleLayout::default(),
         drive: Drive::default(),
     }
 }
@@ -257,11 +287,13 @@ impl ProfileAccess for MotionWorld {
     fn profile(&mut self) -> Profile<'_, Bytes, Headers> { self.world.profile() }
 }
 
-/// Positions are ten per step of difference.
+/// Positions are ten per step of difference; a period's position is in `period_positions`.
 impl LensTables for MotionWorld {
-    fn channel_position(&mut self, _lens: u32, _step: u32, _reference: u32, _mode: u32) -> i16 { 0 }
+    fn channel_positions(&mut self, _lens: u32, step: u32, _reference: u32, _mode: u32) -> [i16; 2] { self.table_positions.get(&step).copied().unwrap_or_default() }
     fn side_adjusted(&mut self, value: i16, _from: u32, _to: u32) -> i16 { value }
     fn table_offset(&mut self, _lens: u32, _step: u32, delta: i16) -> i32 { i32::from(delta) * 10 }
+    fn channel_start(&mut self, _lens: u32, channel: u8, _reference: u32) -> i16 { self.channel_starts.get(&channel).copied().unwrap_or(0) }
+    fn period_position(&mut self, period: u16, _lens: u32, _step: u32, _reference: u32) -> i32 { self.period_positions.get(&period).copied().unwrap_or(0) }
 }
 
 impl LensCalibration for MotionWorld {
@@ -272,7 +304,10 @@ impl LensCalibration for MotionWorld {
     fn table_entry(&mut self, _lens: u32, _table: Property, _entries: u32) -> u32 { 0 }
     fn lens_state(&mut self) -> u32 { self.lens_state }
     fn drive_kind(&mut self) -> DriveKind { self.drive_kind }
-    fn margin_position(&mut self, _channel: u8, _lens: u32, _step: u32, _reference: u32, _lens_state: u32) -> i16 { 0 }
+    fn lens_limits(&mut self, query: &LimitQuery) -> LensLimits {
+        self.limit_queries.push(*query);
+        self.lens_limits
+    }
 }
 
 impl DriveSpeed for MotionWorld {
@@ -330,9 +365,26 @@ impl FrameGeometry for MotionWorld {
         self.search_frames
     }
     fn statistics_frame(&mut self, _request: &StatisticsFrameRequest) -> [u32; 2] { self.statistics_frame }
+    fn sample_frames(&mut self, request: &SampleFrameRequest) -> [AreaGrid; 2] {
+        self.sample_frame_requests.push(*request);
+        self.sample_frames
+    }
+    fn crop_geometry(&mut self, _framing: &CaptureFraming) -> CropGeometry { self.crop }
+    fn cell_steps(&mut self, _profile: u32) -> [u32; 2] { self.cell_steps }
     /// Doubles the value.
     fn expanded_ratio(&mut self, value: u32) -> u32 { value * 2 }
     fn feature_class(&mut self, profile: u32) -> u8 { self.feature_classes.get(&profile).copied().unwrap_or(0) }
+}
+
+/// The selector adds to the first point and each delta to the next point.
+impl AreaCurves for MotionWorld {
+    fn default_curve(&mut self, request: &CurveRequest) -> DefaultCurve {
+        self.curve_requests.push(*request);
+        self.default_curve
+    }
+    fn with_profile_factors(&mut self, [first, second, third]: [u16; 3], [first_delta, second_delta]: [u8; 2], selector: u8) -> [u16; 3] {
+        [first + u16::from(selector), second + u16::from(first_delta), third + u16::from(second_delta)]
+    }
 }
 
 impl ChannelRates for MotionWorld {
@@ -345,8 +397,8 @@ impl Logarithms for MotionWorld {
 }
 
 impl CaptureTiming for MotionWorld {
-    fn readout_start(&mut self, _source: u32) -> u32 { 0 }
-    fn reference_line(&mut self, _source: u32) -> u16 { 0 }
+    fn readout_start(&mut self, _source: u32) -> u32 { self.readout_start }
+    fn reference_line(&mut self, _source: u32) -> u16 { self.reference_line }
     fn line_period(&mut self, source: u32) -> Option<u32> { self.line_periods.get(&source).copied() }
 }
 

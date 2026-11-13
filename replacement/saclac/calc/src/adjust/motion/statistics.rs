@@ -35,6 +35,17 @@ pub struct Statistics {
     pub buffers: [SharedAddress; 5],
 }
 
+/// The default channel weights, the second and third doubled for a profile above
+/// [`DOUBLED_WEIGHT_CLASS`] (0xf9983c).
+pub(crate) fn profile_weights(ports: &mut (impl FrameGeometry + MeteringTables), profile: u32) -> [u16; 3] {
+    let mut weights = ports.channel_weights();
+    if ports.feature_class(profile) > DOUBLED_WEIGHT_CLASS {
+        weights[1] <<= 1;
+        weights[2] <<= 1;
+    }
+    weights
+}
+
 impl Statistics {
     pub fn set_up(ports: &mut (impl Properties + ProfileAccess + FrameGeometry + MeteringTables), readings: &RecordReadings, first: &FrameExposure, section: SharedAddress) -> Self {
         let [height, width] = ports.statistics_frame(&StatisticsFrameRequest {
@@ -48,11 +59,7 @@ impl Statistics {
         let expanded = ports.expanded_ratio(height.wrapping_mul(width));
         let rate = rate_policy::scaled_by_configured_factor(ports, expanded);
         let [red, blue] = ports.feature_bytes(first.profile);
-        let mut channel_weights = ports.channel_weights();
-        if ports.feature_class(first.profile) > DOUBLED_WEIGHT_CLASS {
-            channel_weights[1] <<= 1;
-            channel_weights[2] <<= 1;
-        }
+        let channel_weights = profile_weights(ports, first.profile);
         let flags: u16 = ports.profile().read(readings.record, &group_00::AT_002E);
         let selection = SceneSelection { measurement_selection: readings.measurement_selection, scene: u32::from(readings.scene), flags };
         let trace = stock::statistics_trace(section);

@@ -50,7 +50,7 @@ fn a_frame_is_read_off_the_drive_from_the_runs_start_time() {
 
 #[test]
 fn a_target_follows_the_drive_over_its_areas_exposure() {
-    let sampling = SampleSchedule::new(2000, &[1000, -3000], &[], 0);
+    let sampling = SampleSchedule::new(2000, &[1000, -3000], &[], 0, 0);
     let motion = state(cruise(0, 1000), AreaLayout::Single, sampling);
     let targets = motion.targets(&mut corrections(), 200, 3);
     // Exposed over 201..203 and 197..199: midpoints 2 and -2 from the position, halved, less
@@ -61,14 +61,14 @@ fn a_target_follows_the_drive_over_its_areas_exposure() {
 
 #[test]
 fn a_reverse_drive_adds_its_bias() {
-    let sampling = SampleSchedule::new(2000, &[1000], &[], 0);
+    let sampling = SampleSchedule::new(2000, &[1000], &[], 0, 0);
     let motion = state(cruise(1000, 0), AreaLayout::Single, sampling);
     assert_eq!(motion.targets(&mut corrections(), 800, 3).primary[0], 800);
 }
 
 #[test]
 fn a_still_run_targets_the_position_itself() {
-    let sampling = SampleSchedule::new(2000, &[1000, -3000, 500], &[], 0);
+    let sampling = SampleSchedule::new(2000, &[1000, -3000, 500], &[], 0, 0);
     let mut motion = state(cruise(0, 1000), AreaLayout::Single, sampling);
     motion.drive.moving = false;
     assert_eq!(motion.targets(&mut corrections(), 200, 3).primary, [200, 200, 200, 0, 0, 0, 0]);
@@ -98,7 +98,7 @@ fn each_sample_traces_its_position_and_drive_time() {
 
 #[test]
 fn listed_secondary_rows_are_sampled_then_repeated_across_the_columns() {
-    let sampling = SampleSchedule::new(2000, &[-3000], &[1000], 3);
+    let sampling = SampleSchedule::new(2000, &[-3000], &[1000], 1, 3);
     let motion = state(cruise(0, 1000), AreaLayout::Listed, sampling);
     let targets = motion.targets(&mut corrections(), 200, 3);
     assert_eq!(targets.secondary, [198, 198, 198, 0, 0, 0, 0, 0, 0, 0]);
@@ -107,7 +107,7 @@ fn listed_secondary_rows_are_sampled_then_repeated_across_the_columns() {
 
 #[test]
 fn a_grid_takes_the_centre_primary_target_in_every_area() {
-    let sampling = SampleSchedule::new(2000, &[0, 1000, -3000], &[0, 0], 3);
+    let sampling = SampleSchedule::new(2000, &[0, 1000, -3000], &[0, 0], 2, 3);
     for layout in [AreaLayout::Grid, AreaLayout::GridAlternate] {
         let motion = state(cruise(0, 1000), layout, sampling);
         assert_eq!(motion.targets(&mut corrections(), 200, 3).secondary, [198, 198, 198, 198, 198, 198, 0, 0, 0, 0]);

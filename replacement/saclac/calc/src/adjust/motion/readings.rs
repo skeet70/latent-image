@@ -7,7 +7,7 @@ use xm1_saclac_profile_records::stock::shared::{group_15, group_18, group_23};
 use xm1_saclac_profile_records::{MeasurementSelection, SharedHeaderByte};
 
 use crate::adjust::motion::drive::{DriveKind, DriveMode, DriveSpeed};
-use crate::adjust::motion::ports::{ExposureTimes, GridArea, LensCalibration, LensTables, MeasurementReadings};
+use crate::adjust::motion::ports::{ExposureTimes, GridArea, LensCalibration, LensTables, LimitQuery, MeasurementReadings};
 use crate::adjust::motion::queries;
 use crate::exposure::levels;
 use crate::exposure::ports::{Lens, ProfileAccess, Properties};
@@ -50,6 +50,12 @@ pub struct ListedArea {
 
 impl Default for ListedArea {
     fn default() -> Self { Self { x: 0, y: 0, height: 0, width: 0, centre_x: 0, centre_y: 0, at_18: 0, at_1c: 0, at_20: 0, at_22: 0, rest: [0; 0x44] } }
+}
+
+impl ListedArea {
+    pub const fn at_26(&self) -> u8 { self.rest[2] }
+
+    pub const fn at_2c(&self) -> u32 { u32::from_le_bytes([self.rest[8], self.rest[9], self.rest[10], self.rest[11]]) }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -366,7 +372,7 @@ impl StepLimits {
         step
     }
 
-    /// The first step whose margin position lies within the configured depth of the lens's
+    /// The first step whose high lens limit lies within the configured depth of the lens's
     /// channel position, capped where the configured share of the level step's depth fits.
     fn reach(ports: &mut (impl Properties + LensCalibration + LensTables), readings: &RecordReadings) -> u32 {
         let lens = readings.lens;
@@ -374,7 +380,8 @@ impl StepLimits {
         while step < ports.steps().wrapping_sub(1) {
             let depth = settings::tenths(ports, stock::REACH_DEPTH) & 0xfffe;
             let limit = ports.depth_positions(lens, step, depth);
-            let position = ports.margin_position(readings.channel, lens, step, readings.reference, readings.lens_state);
+            let query = LimitQuery { channel: readings.channel, lens, step, reference: readings.reference, with_margins: false, lens_state: readings.lens_state };
+            let position = ports.lens_limits(&query).high;
             let offset = queries::step_offset(ports, lens, step, position, 1, readings.reference, 0);
             if i32::from(offset).abs() <= i32::from(limit) {
                 break;

@@ -8,7 +8,7 @@ use xm1_saclac_profile_records::MeasurementSelection;
 
 use crate::adjust::lens::LensConfiguration;
 use crate::adjust::motion::exposure::{negative_scale, positive_scale};
-use crate::adjust::motion::ports::{AreaGrid, BoundsQuery, FrameGeometry, LensBounds, LensCalibration, LensTables, Logarithms10, SearchFrameRequest};
+use crate::adjust::motion::ports::{AreaGrid, BoundsQuery, FrameGeometry, LensBounds, LensCalibration, LensTables, Logarithms10, SearchFrameRequest, Tracking};
 use crate::adjust::motion::queries;
 use crate::adjust::motion::readings::{AreaList, RecordReadings};
 use crate::adjust::rate_policy;
@@ -328,7 +328,7 @@ fn level_ceiling(ports: &mut (impl Properties + StockMemory + Logarithms10), rea
 
 /// 0xf9eb48..0xf9ec5c.
 fn search_frame_request(ports: &mut impl Properties, areas: &AreaList) -> SearchFrameRequest {
-    let area = areas.listed().first().map(|area| (*area, stock::area_class(area.at_1c)));
+    let area = areas.listed().first().map(|area| Tracking { area: *area, class: stock::area_class(area.at_1c) });
     SearchFrameRequest {
         grid: stock::SEARCH_FRAME_SETTINGS.map(|id| ports.property(id) as u16),
         area,

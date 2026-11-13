@@ -7,7 +7,8 @@ use crate::adjust::motion::ports::SearchBounds;
 use crate::adjust::motion::preparation::PreviousFocus;
 use crate::adjust::motion::readings::{AreaList, RecordReadings, StepLimits};
 use crate::adjust::motion::search::{SearchMode, SearchSetup};
-use crate::adjust::motion::state::{FrameExposures, MotionState};
+use crate::adjust::motion::layout::SampleLayout;
+use crate::adjust::motion::state::{FrameExposures, MotionState, SampleSchedule};
 use crate::adjust::motion::statistics::Statistics;
 
 impl MotionState {
@@ -43,4 +44,10 @@ impl MotionState {
 
     /// The plan the pipeline keeps between the plan's calls (output +0x10).
     pub fn plan(&self) -> &Plan { &self.plan }
+
+    /// The sample layout: its grids, crop, positions, curve and exposure ratio.
+    pub fn layout(&self) -> &SampleLayout { &self.layout }
+
+    /// When each sampled area is exposed.
+    pub fn schedule(&self) -> &SampleSchedule { &self.sampling }
 }

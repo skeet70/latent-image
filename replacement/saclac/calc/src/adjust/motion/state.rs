@@ -11,6 +11,7 @@ use crate::adjust::motion::preparation::PreviousFocus;
 use crate::adjust::motion::readings::{AreaList, RecordReadings, StepLimits};
 use crate::adjust::motion::sampling::{PRIMARY_AREAS, SECONDARY_AREAS};
 use crate::adjust::motion::search::SearchSetup;
+use crate::adjust::motion::layout::SampleLayout;
 use crate::adjust::motion::statistics::Statistics;
 
 /// When each area is exposed relative to its frame.
@@ -26,22 +27,21 @@ pub struct SampleSchedule {
 }
 
 impl SampleSchedule {
-    /// One exposure offset per primary area and per secondary row; the secondary areas form a
-    /// grid of `secondary_columns` by the rows.
-    pub fn new(exposure: i32, primary: &[i32], secondary: &[i32], secondary_columns: u8) -> Self {
-        let mut schedule = Self { exposure, secondary_columns, ..Self::default() };
+    /// One exposure offset per primary area and per secondary area, the secondary areas a grid of
+    /// `secondary_columns` by `secondary_rows`; areas past the given offsets start at 0.
+    pub fn new(exposure: i32, primary: &[i32], secondary: &[i32], secondary_rows: u8, secondary_columns: u8) -> Self {
+        let mut schedule = Self { exposure, secondary_rows, secondary_columns, ..Self::default() };
         let primary = &primary[..primary.len().min(PRIMARY_AREAS)];
         let secondary = &secondary[..secondary.len().min(SECONDARY_AREAS)];
         schedule.primary[..primary.len()].copy_from_slice(primary);
         schedule.primary_count = primary.len() as u8;
         schedule.secondary[..secondary.len()].copy_from_slice(secondary);
-        schedule.secondary_rows = secondary.len() as u8;
         schedule
     }
 
     pub fn primary(&self) -> &[i32] { &self.primary[..usize::from(self.primary_count)] }
 
-    pub fn secondary(&self) -> &[i32] { &self.secondary[..usize::from(self.secondary_rows)] }
+    pub fn secondary(&self) -> &[i32] { &self.secondary[..usize::from(self.secondary_rows).min(SECONDARY_AREAS)] }
 }
 
 /// How the measurement lays out its secondary areas.
@@ -100,6 +100,7 @@ pub struct MotionState {
     pub(crate) treated_settings: [u8; 4],
     pub(crate) plan: Plan,
     pub(crate) sampling: SampleSchedule,
+    pub(crate) layout: SampleLayout,
     pub(crate) drive: Drive,
 }
 
