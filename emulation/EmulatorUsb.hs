@@ -4,9 +4,11 @@ module EmulatorUsb
   , BootStart (..)
   , EmulatorStart (..)
   , InstallCheckpoint (..)
+  , InstalledObservationIdentity (..)
   , startEmulator
   , stopEmulator
   , emulatorSaveInstallCheckpoint
+  , emulatorSaveObservedInstallCheckpoint
   , emulatorUsbApi
   , BridgeExchange
   , bridgeUsbApi
@@ -53,6 +55,7 @@ module EmulatorUsb
   , ModalResponse (..)
   , emulatorModalObservationBegin
   , emulatorModalObservationBeginWithAfOwnership
+  , emulatorModalObservationResume
   , emulatorModalObservationReport
   , emulatorModalObservationEnd
   , bridgeModalObservationBegin
@@ -97,11 +100,11 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Emulation.PreservationObservation
 import Emulation.ModalObservation
+import Emulation.Sha256 (Sha256, parseSha256Hex, sha256File, sha256Hex)
 import Emulation.WatchObservation
 import qualified Emulation.CaptureStream as Capture
 import qualified Emulation.SaveLifecycle as Lifecycle
 import qualified Data.ByteString.Lazy as BL
-import Emulation.Sha256 (sha256File, sha256Hex)
 import Data.Bits (shiftL, (.|.))
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
 import Data.Int (Int32)
@@ -156,7 +159,13 @@ data InstallCheckpoint = InstallCheckpoint
   , installRuntimeDigest :: String
   , installProcedureDigest :: Maybe String
   , installHost :: Value
+  , installObservation :: Maybe InstalledObservationIdentity
   }
+
+data InstalledObservationIdentity = InstalledObservationIdentity
+  { installedSnapshotDigest :: Sha256
+  , installedRecordDigest :: Sha256
+  } deriving (Eq)
 
 require :: Bool -> String -> IO ()
 require yes message = unless yes (ioError (userError message))
@@ -291,13 +300,15 @@ bridgeRpc exchange request = do
 -- | Starts the bridge in `directory`, offers its install checkpoints to `choose` and starts from
 -- the chosen one, or else from the attach checkpoint or a cold boot.
 startEmulator :: FilePath -> FilePath -> [String] -> ([InstallCheckpoint] -> IO (Maybe InstallCheckpoint, a)) -> IO (Emulator, EmulatorStart, a)
-startEmulator python directory arguments choose = bracketOnError create stopEmulator $ \emulator -> do
+startEmulator python directory arguments choose = bracketOnError create cleanup $ \emulator -> do
   options <- event emulator "start-options"
   candidates <- objectField "installed" options >>= \value -> case value of
     Array items -> mapM installCheckpoint (foldr (:) [] items)
     _ -> ioError (userError "emulator start options must list install checkpoints")
   (chosen, extra) <- choose candidates
-  send emulator (object ["command" .= String "start", "installed" .= fmap installDirectory chosen])
+  send emulator (object $ ["command" .= String "start", "installed" .= fmap installDirectory chosen]
+    ++ ["expected_snapshot_sha256" .= sha256Hex (installedSnapshotDigest identity)
+       | Just checkpoint <- [chosen], Just identity <- [installObservation checkpoint]])
   fields <- event emulator "ready"
   record <- objectField "checkpoint" fields >>= bindSnapshot
   start <- case record of
@@ -310,6 +321,9 @@ startEmulator python directory arguments choose = bracketOnError create stopEmul
     _ -> ioError (userError "emulator ready response lacks a checkpoint record")
   pure (emulator, EmulatorStart start record, extra)
   where
+    cleanup emulator = do
+      _ <- try (stopEmulator emulator) :: IO (Either IOException ())
+      pure ()
     bindSnapshot record@(Object checkpoint)
       | M.member "snapshot_sha256" checkpoint || M.member "snapshot_manifest_sha256" checkpoint
           || M.lookup "saved" checkpoint == Just (Bool False) = pure record
@@ -350,11 +364,17 @@ startEmulator python directory arguments choose = bracketOnError create stopEmul
       base <- case baseText of
         '0' : 'x' : digits | [(value, "")] <- readHex digits -> pure value
         _ -> ioError (userError ("invalid install checkpoint base: " ++ baseText))
+      observed <- case M.lookup "observed_install" fields of
+        Just (Bool True) -> do
+          let digest key = textField key fields >>= either (ioError . userError) pure . parseSha256Hex
+          Just <$> (InstalledObservationIdentity <$> digest "snapshot_sha256" <*> digest "record_sha256")
+        _ -> pure Nothing
       InstallCheckpoint directoryValue base
         <$> textField "manifest_sha256" fields
         <*> textField "runtime_sha256" fields
         <*> optionalTextField "procedure_sha256" fields
         <*> objectField "host" fields
+        <*> pure observed
     installCheckpoint _ = ioError (userError "install checkpoint must be an object")
 
 -- | Saves the attached machine after INSTALL unless the same build's checkpoint exists; the
@@ -364,6 +384,12 @@ emulatorSaveInstallCheckpoint emulator base manifest runtime procedure host = Ob
   ([ "command" .= String "save-install-checkpoint", "base" .= ("0x" ++ showHex base "")
    , "manifest_sha256" .= manifest, "runtime_sha256" .= runtime, "host" .= host ]
    ++ [ "procedure_sha256" .= value | Just value <- [procedure] ]))
+
+emulatorSaveObservedInstallCheckpoint :: Emulator -> Word32 -> String -> String -> Value -> IO Value
+emulatorSaveObservedInstallCheckpoint emulator base manifest runtime host = Object <$> rpc emulator (object
+  [ "command" .= String "save-install-checkpoint", "base" .= ("0x" ++ showHex base "")
+  , "manifest_sha256" .= manifest, "runtime_sha256" .= runtime, "host" .= host
+  , "observation" .= String "split" ])
 
 -- | A bridge that answered a command with an error has left its command loop; the failed
 -- `finish` is dropped so that error is the one reported.
@@ -739,6 +765,12 @@ data ModalResponse = ModalResponse
 
 emulatorModalObservationBegin :: Emulator -> ModalRequest -> IO ModalResponse
 emulatorModalObservationBegin = bridgeModalObservationBegin . exchangeLine
+
+emulatorModalObservationResume :: Emulator -> IO ()
+emulatorModalObservationResume emulator = do
+  fields <- rpc emulator (object ["command" .= String "modal-observation-resume"])
+  resumed <- objectField "resumed" fields
+  require (resumed == Bool True) "installed modal observation did not resume"
 
 emulatorModalObservationBeginWithAfOwnership :: Emulator -> Value -> ModalRequest -> IO ModalResponse
 emulatorModalObservationBeginWithAfOwnership emulator plan request = do

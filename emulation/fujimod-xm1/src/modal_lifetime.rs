@@ -24,7 +24,7 @@ impl std::error::Error for LifetimeFailure {}
 
 type Result<T, E = LifetimeFailure> = std::result::Result<T, E>;
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum ContextCatalogue { Stock, OwnedUnion }
 
@@ -41,7 +41,7 @@ impl TryFrom<u16> for PropertyDeltaWords {
 
 /// The wire request requires `context_catalogue`: `stock` or `owned_union`.
 /// Property plans supply `property_delta_words`; ordinary plans leave it absent or null.
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct LifetimeRequest {
     runtime: [u32; 2],
@@ -63,23 +63,23 @@ pub struct LifetimeRequest {
     #[serde(default)]
     task33_stack_guard: Option<Task33StackGuardRequest>,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ReloadRequest { call: u32, #[serde(rename = "return")] resume: u32, copy_store: u32, target: [u32; 2] }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ReadonlyRequest { start: u32, bytes: Vec<u8> }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ServiceRequest { entry: SiteRequest, writer: SiteRequest }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct SiteRequest { pc: u32, word: u32 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct PublicationRequest { address: u32, old: u32, new: u32 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Task33StackGuardRequest {
     node: u32, creation: u32, entry: u32, base: u32, size: u32,
@@ -696,6 +696,25 @@ impl Superseded {
     fn clear(&mut self) { self.len = 0; }
 }
 
+#[derive(Serialize, Deserialize)]
+pub(crate) struct InstalledLifetime {
+    settings: Vec<u8>,
+    install_core: usize,
+    checked_resource_writes: u64,
+    checked_identity_writes: u64,
+    checked_scheduler_writes: u64,
+    checked_context_writes: u64,
+    checked_vfp_owner_writes: u64,
+    audited_writes: u64,
+    admitted_settings_writes: u64,
+    admitted_reload_writes: u64,
+    reloads: [Option<SavedReload>; 2],
+    superseded: [Vec<u32>; 2],
+}
+
+#[derive(Serialize, Deserialize)]
+struct SavedReload { index: usize, cursor: u32 }
+
 pub struct LifetimeMonitor {
     config: LifetimeConfig,
     settings: [u8; SETTINGS_BYTES],
@@ -709,6 +728,74 @@ pub struct LifetimeMonitor {
 #[derive(Clone, Copy)]
 struct OpenReload { reload: SettingsReload, cursor: Guest }
 impl LifetimeMonitor {
+    pub(crate) fn installed_checkpoint(&self) -> Result<InstalledLifetime> {
+        self.healthy()?;
+        if self.receipt.phase != LifetimePhase::Installed || self.pending.iter().any(Option::is_some)
+            || self.receipt.reverse_writes != 0 || self.receipt.forward_writes as usize != self.config.publications.len()
+            || self.config.task33_stack_guard.is_some() || self.config.property_delta_words.is_some() {
+            return Err(LifetimeFailure::WrongPhase);
+        }
+        let reloads = self.reloads.map(|open| open.map(|open| SavedReload {
+            index: self.config.settings_reloads.iter().position(|reload| *reload == open.reload).expect("bound reload"),
+            cursor: open.cursor.0,
+        }));
+        Ok(InstalledLifetime {
+            settings: self.settings.to_vec(), install_core: self.receipt.install_core.ok_or(LifetimeFailure::WrongCore)?,
+            checked_resource_writes: self.receipt.checked_resource_writes,
+            checked_identity_writes: self.receipt.checked_identity_writes,
+            checked_scheduler_writes: self.receipt.checked_scheduler_writes,
+            checked_context_writes: self.receipt.checked_context_writes,
+            checked_vfp_owner_writes: self.receipt.checked_vfp_owner_writes,
+            audited_writes: self.receipt.audited_writes,
+            admitted_settings_writes: self.receipt.admitted_settings_writes,
+            admitted_reload_writes: self.receipt.admitted_reload_writes,
+            reloads, superseded: self.superseded.map(|values| values.values[..values.len].to_vec()),
+        })
+    }
+
+    pub(crate) fn resume_installed(config: LifetimeConfig, saved: InstalledLifetime, memory: &impl LifetimeMemory) -> Result<Self> {
+        if saved.install_core >= 2 || saved.settings.len() != SETTINGS_BYTES
+            || saved.superseded.iter().any(|values| values.len() > SUPERSEDED_LIMIT)
+            || config.task33_stack_guard.is_some() || config.property_delta_words.is_some() {
+            return Err(LifetimeFailure::InvalidRequest);
+        }
+        let settings: [u8; SETTINGS_BYTES] = saved.settings.try_into().map_err(|_| LifetimeFailure::InvalidRequest)?;
+        let mut observed = [0; SETTINGS_BYTES];
+        memory.read(Guest(SETTINGS_START), &mut observed)?;
+        if observed != settings { return Err(LifetimeFailure::WrongBefore); }
+        for publication in &config.publications {
+            let mut bytes = [0; 4];
+            memory.read(publication.address, &mut bytes)?;
+            if Word(u32::from_le_bytes(bytes)) != publication.new { return Err(LifetimeFailure::WrongValue); }
+        }
+        let mut reloads = [None; 2];
+        for (target, open) in reloads.iter_mut().zip(saved.reloads) {
+            if let Some(open) = open {
+                let reload = *config.settings_reloads.get(open.index).ok_or(LifetimeFailure::InvalidRequest)?;
+                if open.cursor < reload.target.start().0 || open.cursor > reload.target.end().0 {
+                    return Err(LifetimeFailure::InvalidRequest);
+                }
+                *target = Some(OpenReload { reload, cursor: Guest(open.cursor) });
+            }
+        }
+        let superseded = saved.superseded.map(|values| {
+            let mut saved = Superseded::EMPTY;
+            saved.values[..values.len()].copy_from_slice(&values);
+            saved.len = values.len();
+            saved
+        });
+        let publication_count = config.publications.len();
+        Ok(Self { config, settings, reloads, superseded, pending: [None; 2], receipt: LifetimeReceipt {
+            phase: LifetimePhase::Installed, publication_count, forward_writes: publication_count as u64, reverse_writes: 0,
+            pending_stores: 0, install_core: Some(saved.install_core), rollback_core: None,
+            checked_resource_writes: saved.checked_resource_writes, checked_identity_writes: saved.checked_identity_writes,
+            checked_scheduler_writes: saved.checked_scheduler_writes, checked_context_writes: saved.checked_context_writes,
+            checked_vfp_owner_writes: saved.checked_vfp_owner_writes, audited_writes: saved.audited_writes,
+            admitted_settings_writes: saved.admitted_settings_writes, admitted_reload_writes: saved.admitted_reload_writes,
+            failure: None, task33_stack_guard: None, property_delta_words: None,
+        } })
+    }
+
     pub fn new(config: LifetimeConfig, memory: &impl LifetimeMemory) -> Result<Self> {
         if let Some(guard) = &config.task33_stack_guard { guard.validate(memory)?; }
         let mut resident = [0; 1024];
