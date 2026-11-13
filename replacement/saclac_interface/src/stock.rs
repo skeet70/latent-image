@@ -679,7 +679,7 @@ pub fn calc1_payload(payload: &calc::Calc1Payload) -> (Calc1Operation, Encoded) 
     match *payload {
         P::Acquisition { record, callback } => (Calc1Operation::Request00, callback_last(&record.0, callback)),
         P::Selection { record, callback } => (Calc1Operation::Request01, callback_last(&record.0, callback)),
-        P::Parameters { record, callback } => (Calc1Operation::Request02, callback_last(&record.0, callback)),
+        P::Auxiliary { request, callback } => (Calc1Operation::Request02, auxiliary(request, callback)),
     }
 }
 
@@ -698,6 +698,48 @@ fn callback_last(record: &[u8], callback: StockCallbackWord) -> Encoded {
     let mut message = Encoded::new(record.len() + 4);
     message.put(0, record);
     message.word(record.len(), callback.0);
+    message
+}
+
+/// X-M1 1.50: the auxiliary statistics buffers the 0x3d02 request names (0xf37bcc..0xf37be0).
+const AUXILIARY_BUFFERS: [u32; 2] = [0x5ffe_d304, 0x5ffe_e304];
+
+/// X-M1 1.50: 0xf37ab8 fills the 124-byte record at 0x16bfff0 that 0xf38048 zeroes on pass 1
+/// and whose pass byte it rewrites on passes 2 and 3; 0xf4c490 appends the callback.
+fn auxiliary(request: calc::AuxiliaryRequest, callback: StockCallbackWord) -> Encoded {
+    let sample = request.sample;
+    let mut message = Encoded::new(128);
+    message.word(0x00, u32::from(request.complete));
+    message.put(0x04, &[request.pass]);
+    message.word(0x08, u32::from(request.selection));
+    for (index, word) in request.profile.into_iter().enumerate() { message.word(0x0c + 4 * index, word); }
+    message.word(0x1c, sample.gain_step);
+    message.halfword(0x22, sample.level);
+    message.word(0x24, sample.exposure[0]);
+    message.halfword(0x28, request.reference);
+    message.halfword(0x2a, sample.offset_level);
+    message.word(0x2c, sample.mode);
+    message.word(0x30, sample.exposure[1]);
+    message.word(0x34, sample.size[0]);
+    message.word(0x38, sample.size[1]);
+    message.word(0x3c, sample.extent[0]);
+    message.word(0x40, sample.extent[1]);
+    message.halfword(0x44, 100);
+    message.halfword(0x46, 100);
+    message.halfword(0x48, 256);
+    message.word(0x4c, sample.origin[0]);
+    message.word(0x50, sample.origin[1]);
+    message.word(0x54, request.rate);
+    message.word(0x58, AUXILIARY_BUFFERS[0]);
+    message.word(0x5c, AUXILIARY_BUFFERS[1]);
+    message.word(0x64, request.level_class);
+    message.word(0x68, sample.adjustment);
+    message.word(0x6c, u32::from(matches!(request.window_status, 3 | 4)));
+    message.halfword(0x70, request.resource_level);
+    message.halfword(0x72, request.window_halfword);
+    message.word(0x74, request.word);
+    message.halfword(0x78, request.halfword);
+    message.word(0x7c, callback.0);
     message
 }
 
