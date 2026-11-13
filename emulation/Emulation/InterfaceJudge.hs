@@ -383,7 +383,6 @@ judgeInterfaceReport firmware (ReportDigest reportDigest) report = base
       , verdictDiagnostics = []
       , verdictReasons = []
       , verdictMilestone = milestone report
-      , verdictFirstDifference = Nothing
       , verdictChannelDifference = Nothing
       , verdictCausalViolation = Nothing
       , verdictChannelTolerances = []
