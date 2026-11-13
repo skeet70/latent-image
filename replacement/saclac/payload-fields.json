@@ -3050,6 +3050,994 @@
      ]
     }
    ]
+  },
+  {
+   "direction": "incoming",
+   "queue": 3,
+   "operation": 15110,
+   "bytes": 64,
+   "fields": [
+    {
+     "name": "record",
+     "offset": 0,
+     "bytes": 64,
+     "sources": [
+      "0x00ef8fa0..0x00ef9058: 14 word stores at r11-0x5c..r11-0x28 and stmdb r3={r0,r1} with r3=r11-0x1c writes r11-0x24/-0x20; posts 64 from r11-0x5c"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 3,
+   "operation": 15111,
+   "bytes": 60,
+   "fields": [
+    {
+     "name": "record",
+     "offset": 0,
+     "bytes": 60,
+     "sources": [
+      "0x00ef9064..0x00ef9130: 15 word stores at r11-0x48..r11-0x10; posts 60 from r11-0x48"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 3,
+   "operation": 15115,
+   "bytes": 4,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00ef920c..0x00ef9228: str r0,[r11,#-8]; posts 4 from r11-8"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 44,
+   "operation": 15255,
+   "bytes": 48,
+   "fields": [
+    {
+     "name": "record",
+     "offset": 0,
+     "bytes": 48,
+     "sources": [
+      "0x00f2e710..0x00f2e748: 48 bytes copied from the caller to r11-52; posts 48"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 44,
+   "operation": 15256,
+   "bytes": 4,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00f2e6e4..0x00f2e704: ldr r3,[r0]; str r3,[r11,#-8]; posts 4"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 44,
+   "operation": 15258,
+   "bytes": 6,
+   "fields": [
+    {
+     "name": "record",
+     "offset": 0,
+     "bytes": 6,
+     "sources": [
+      "0x00f2e67c..0x00f2e6a8: 6 bytes copied from r0 to r11-20; posts 6"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 47,
+   "operation": 15193,
+   "bytes": 8,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00f22794: str r0,[r11,#-0xc]"
+     ]
+    },
+    {
+     "name": "byte-4",
+     "offset": 4,
+     "bytes": 1,
+     "sources": [
+      "0x00f22794: strb r1,[r11,#-8]"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 5,
+     "bytes": 3,
+     "sources": [
+      "0x00f22794..0x00f227b4: word store at r11-0xc and byte store at r11-8 leave r11-7..r11-5 unwritten before the 8-byte post from r11-12"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "incoming",
+   "queue": 47,
+   "operation": 15201,
+   "bytes": 36,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00f2ca34: word at r11-0x28"
+     ]
+    },
+    {
+     "name": "byte-4",
+     "offset": 4,
+     "bytes": 1,
+     "sources": [
+      "0x00f2ca34: byte at r11-0x24"
+     ]
+    },
+    {
+     "name": "byte-5",
+     "offset": 5,
+     "bytes": 1,
+     "sources": [
+      "0x00f2ca34: byte at r11-0x23"
+     ]
+    },
+    {
+     "name": "words-28",
+     "offset": 28,
+     "bytes": 8,
+     "sources": [
+      "0x00f2ca34: words at r11-0xc and r11-8"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 6,
+     "bytes": 22,
+     "sources": [
+      "0x00f2ca34..0x00f2ca6c: next store after the byte at r11-0x23 is the word at r11-0xc, so r11-0x22..r11-0xd stay unwritten before the 36-byte post from r11-40"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "incoming",
+   "queue": 47,
+   "operation": 15202,
+   "bytes": 20,
+   "fields": [
+    {
+     "name": "record",
+     "offset": 0,
+     "bytes": 20,
+     "sources": [
+      "0x00f2c990..0x00f2c9b8: word at r11-0x18 and stmdb r12=r11-4 writing r11-20/-16/-12/-8; posts 20 from r11-24"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 48,
+   "operation": 15232,
+   "bytes": 4,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00f3a7e4..0x00f3a800: str r0,[r11,#-8]; posts 4"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 48,
+   "operation": 15235,
+   "bytes": 4,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00f2907c..0x00f29098: str r0,[r11,#-8]; posts 4"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 50,
+   "operation": 15164,
+   "bytes": 8,
+   "fields": [
+    {
+     "name": "halfword-0",
+     "offset": 0,
+     "bytes": 2,
+     "sources": [
+      "0x00f15070: strh r0,[r11,#-12]"
+     ]
+    },
+    {
+     "name": "word-4",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "0x00f15070: str r1,[r11,#-8]"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 2,
+     "bytes": 2,
+     "sources": [
+      "0x00f15070..0x00f15090: halfword at r11-12 and word at r11-8 leave r11-10..r11-9 unwritten before the 8-byte post from r11-12"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5026,
+   "bytes": 32,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00defce8: str r0,[r11,#-0x24]"
+     ]
+    },
+    {
+     "name": "halfword-4",
+     "offset": 4,
+     "bytes": 2,
+     "sources": [
+      "0x00defcf0: strh r0,[r11,#-32]"
+     ]
+    },
+    {
+     "name": "words-8",
+     "offset": 8,
+     "bytes": 24,
+     "sources": [
+      "0x00defcf4..0x00defd14: words at r11-0x1c, r11-0x14, r11-0x10, r11-0xc, r11-0x18 and r11-8; 0x00defd18 posts 32 from r11-36"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 6,
+     "bytes": 2,
+     "sources": [
+      "0x00defcf0..0x00defd18: halfword at r11-32 then word at r11-0x1c leave r11-30..r11-29 unwritten before the 32-byte post"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 44,
+   "operation": 15360,
+   "bytes": 232,
+   "fields": [
+    {
+     "name": "completion",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00f5fd58: str r3,[r11-20,#-0xe8]! sets payload word 0"
+     ]
+    },
+    {
+     "name": "first-record",
+     "offset": 4,
+     "bytes": 100,
+     "sources": [
+      "0x00f5fd64..0x00f5fd70: 100 bytes copied from the caller argument to r11-248"
+     ]
+    },
+    {
+     "name": "second-record",
+     "offset": 104,
+     "bytes": 44,
+     "sources": [
+      "0x00f5fd74..0x00f5fd80: 44 bytes copied from the caller argument to r11-148; 0x00f5fd84 posts 232 from r11-252"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 148,
+     "bytes": 84,
+     "sources": [
+      "0x00f5fd20..0x00f5fd90: no store after the copy at r11-148 before the 232-byte post from r11-252, so r11-104..r11-21 stay unwritten"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 44,
+   "operation": 15361,
+   "bytes": 232,
+   "fields": [
+    {
+     "name": "completion",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00f60000..0x00f60004: str r6,[r11-20,#-0xe8]! sets payload word 0"
+     ]
+    },
+    {
+     "name": "first-record",
+     "offset": 4,
+     "bytes": 168,
+     "sources": [
+      "0x00f60008..0x00f60018: 168 bytes copied from r5+0x1040 to r11-248"
+     ]
+    },
+    {
+     "name": "second-record",
+     "offset": 172,
+     "bytes": 12,
+     "sources": [
+      "0x00f6001c..0x00f6002c: 12 bytes copied from r5+0x1118 to r11-80; 0x00f60030 posts 232 from r11-252"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 184,
+     "bytes": 48,
+     "sources": [
+      "0x00f5ff88..0x00f6003c: no store after the copy at r11-80 before the 232-byte post, so r11-68..r11-21 stay unwritten"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 44,
+   "operation": 15362,
+   "bytes": 232,
+   "fields": [
+    {
+     "name": "words-0",
+     "offset": 0,
+     "bytes": 12,
+     "sources": [
+      "0x00f60208..0x00f60210: str r2,[r11,#-0xec], str r0,[r11,#-0xe8], str r1,[r11,#-0xe4]; 0x00f60214 posts 232 from r11-236"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 12,
+     "bytes": 220,
+     "sources": [
+      "0x00f601fc..0x00f60220: no store after r11-0xe4 before the 232-byte post from r11-236, so r11-224..r11-5 stay unwritten"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 44,
+   "operation": 15374,
+   "bytes": 60,
+   "fields": [
+    {
+     "name": "completion",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00f4d418..0x00f4d41c: str r6,[r11-20,#-0x3c]! sets payload word 0"
+     ]
+    },
+    {
+     "name": "request-record",
+     "offset": 4,
+     "bytes": 22,
+     "sources": [
+      "0x00f4d370..0x00f4d3dc: stores at r11-0x88, r11-0x82, r11-0x84, r11-0x80, r11-0x7c, r11-0x78, r11-0x74, r11-0x70, r11-0x6c, r11-0x68 feed the copy at 0x00f4d420 from r11-136"
+     ]
+    },
+    {
+     "name": "geometry-record",
+     "offset": 28,
+     "bytes": 32,
+     "sources": [
+      "0x00f4d3c0..0x00f4d414: words at r11-0x60, r11-0x5c, r11-0x54 and the two-word copies at r11-0x70/0x68 and r11-0x68/0x64 feed the copy; 0x00f4d430 posts 60 from r11-80"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 26,
+     "bytes": 2,
+     "sources": [
+      "0x00f4d350..0x00f4d43c: halfword at r11-116 is the last store below r11-0x60, so r11-114..r11-113 stay unwritten before the 60-byte post"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 44,
+   "operation": 15376,
+   "bytes": 224,
+   "fields": [
+    {
+     "name": "completion",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00f5203c..0x00f52040: str r8,[r11-28,#-0xe0]! sets payload word 0"
+     ]
+    },
+    {
+     "name": "parameter-record",
+     "offset": 4,
+     "bytes": 220,
+     "sources": [
+      "0x00f52044..0x00f52050: 220 bytes copied from r11-472; 0x00f52054 posts 224 from r11-252"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16154,
+   "bytes": 8,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00fea848: str r5,[r11,#-0x14]"
+     ]
+    },
+    {
+     "name": "record-pointer",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "0x00fea84c: str r4,[r11,#-0x10]; 0x00fea850 posts 8 from r11-20"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16194,
+   "bytes": 136,
+   "fields": [
+    {
+     "name": "record",
+     "offset": 0,
+     "bytes": 124,
+     "sources": [
+      "0x00feaa7c..0x00feaa88: 124 bytes copied from the fourth argument to r11-140"
+     ]
+    },
+    {
+     "name": "words-124",
+     "offset": 124,
+     "bytes": 12,
+     "sources": [
+      "0x00feaa70..0x00feaa78: words at r11-0x10, r11-0xc and r11-8 follow the copy; 0x00feaa8c posts 136 from r11-140"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16195,
+   "bytes": 4,
+   "fields": [
+    {
+     "name": "word-0",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x00feaab0..0x00feaab4: str r0,[r11-4,#-4]!; 0x00feaab8 posts 4 from r11-8"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 48,
+   "operation": 16388,
+   "bytes": 208,
+   "fields": [
+    {
+     "name": "record-0",
+     "offset": 0,
+     "bytes": 184,
+     "sources": [
+      "0x010398f8..0x01039aa4: copies of 16, 24, 16, 16, 56 and 56 bytes from the arguments to r11-256, r11-240, r11-216, r11-200, r11-184 and r11-128"
+     ]
+    },
+    {
+     "name": "record-188",
+     "offset": 188,
+     "bytes": 12,
+     "sources": [
+      "0x010399a8..0x010399b8: 12 bytes copied from r9 to r11-68, or three zero words at r11-68/64/60"
+     ]
+    },
+    {
+     "name": "word-200",
+     "offset": 200,
+     "bytes": 8,
+     "sources": [
+      "0x010398e8 and 0x01039a00: word at r11-0x34 and payload pointer r11-256; 0x010399e0 posts 208 from r11-256"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 184,
+     "bytes": 4,
+     "sources": [
+      "0x010398b0..0x01039b44: the 0x4004 branch copies its 12-byte record to r11-68, so r11-72..r11-69 stay unwritten"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 48,
+   "operation": 16389,
+   "bytes": 148,
+   "fields": [
+    {
+     "name": "record",
+     "offset": 0,
+     "bytes": 144,
+     "sources": [
+      "0x01039b74..0x01039bd4: copies of 56, 16, 16 and 56 bytes from the arguments to r11-180, r11-124, r11-108 and r11-92"
+     ]
+    },
+    {
+     "name": "word-144",
+     "offset": 144,
+     "bytes": 4,
+     "sources": [
+      "0x01039b64: str r3,[r11,#-0x24]; 0x01039be4 posts 148 from r11-180"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 48,
+   "operation": 16428,
+   "bytes": 60,
+   "fields": [
+    {
+     "name": "record",
+     "offset": 0,
+     "bytes": 56,
+     "sources": [
+      "0x0103a3b4..0x0103a3c0: 56 bytes copied from the first argument to r11-84; 0x0103a3c4 posts 60 from r11-84"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 56,
+     "bytes": 4,
+     "sources": [
+      "0x0103a398..0x0103a3ec: no store between the copy at r11-84 and the 60-byte post, so r11-28..r11-25 stay unwritten"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 50,
+   "operation": 16907,
+   "bytes": 28,
+   "fields": [
+    {
+     "name": "completion",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x0076e1e4: str r5,[r11,#-0x30]"
+     ]
+    },
+    {
+     "name": "delta",
+     "offset": 4,
+     "bytes": 2,
+     "sources": [
+      "0x0076e1e8: strh r6,[r11,#-44]"
+     ]
+    },
+    {
+     "name": "reserved",
+     "offset": 6,
+     "bytes": 2,
+     "sources": [
+      "0x0076e1d4: 28-byte zero fill at r11-48 leaves r11-42..r11-41 zero"
+     ]
+    },
+    {
+     "name": "mode-value",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "0x0076e1f8: str r3,[r11,#-0x28]"
+     ]
+    },
+    {
+     "name": "parameters",
+     "offset": 12,
+     "bytes": 16,
+     "sources": [
+      "0x0076e1fc..0x0076e214: words at r11-0x24, r11-0x20, r11-0x1c and r11-0x18; 0x0076e218 posts 28 from r11-48"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 50,
+   "operation": 16915,
+   "bytes": 24,
+   "fields": [
+    {
+     "name": "words",
+     "offset": 0,
+     "bytes": 24,
+     "sources": [
+      "0x0076e6cc..0x0076e6e0: six words at r11-0x34..r11-0x20; 0x0076e6e4 posts 24 from r11-52"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 50,
+   "operation": 16928,
+   "bytes": 12,
+   "fields": [
+    {
+     "name": "words",
+     "offset": 0,
+     "bytes": 12,
+     "sources": [
+      "0x0076f3c0..0x0076f3c8: three words at r11-0x20, r11-0x1c and r11-0x18; 0x0076f3cc posts 12 from r11-32"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 55,
+   "operation": 18179,
+   "bytes": 16,
+   "fields": [
+    {
+     "name": "mode",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x01066338: payload mode word of the 16-byte request"
+     ]
+    },
+    {
+     "name": "values",
+     "offset": 4,
+     "bytes": 12,
+     "sources": [
+      "0x01066338: three request words follow the mode; 0x01066338 posts 16 from r11-20 through 0x01066230"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 44,
+   "operation": 15246,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 44,
+   "operation": 15247,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 44,
+   "operation": 15248,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 47,
+   "operation": 15180,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 47,
+   "operation": 15181,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 47,
+   "operation": 15191,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 47,
+   "operation": 15192,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 48,
+   "operation": 15227,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 48,
+   "operation": 15228,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 50,
+   "operation": 15157,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "incoming",
+   "queue": 50,
+   "operation": 15162,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 4983,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5022,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5023,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5024,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5025,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 3,
+   "operation": 5028,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16155,
+   "bytes": 0,
+   "fields": [],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 98,
+   "operation": 29200,
+   "bytes": 48,
+   "fields": [
+    {
+     "name": "completion",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x006bcfd0..0x006bd00c: str r6,[r11,#-0x50]"
+     ]
+    },
+    {
+     "name": "selector",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "0x006bd018..0x006bd058: one zero word filled at r11-76 by 0x007221a0 with r2=1, then bfi inserts 0x24 at bits 6..15, the first argument byte at bits 0..3 of r11-73 and two bits of the first argument at r11-74"
+     ]
+    },
+    {
+     "name": "flag-44",
+     "offset": 44,
+     "bytes": 1,
+     "sources": [
+      "0x006bd010..0x006bd014: strb r2,[r11,#-0x24] stores 1"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 8,
+     "bytes": 36,
+     "sources": [
+      "0x006bd020..0x006bd064: the zero fill covers r11-76..r11-73 only, so r11-72..r11-37 stay unwritten before the 48-byte post from r11-80"
+     ]
+    },
+    {
+     "offset": 45,
+     "bytes": 3,
+     "sources": [
+      "0x006bd05c..0x006bd064: no store after the byte at r11-36 before the 48-byte post, so r11-35..r11-33 stay unwritten"
+     ]
+    }
+   ]
+  },
+  {
+   "direction": "outgoing",
+   "queue": 98,
+   "operation": 29229,
+   "bytes": 48,
+   "fields": [
+    {
+     "name": "completion",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x006bbe9c: str r5,[r11,#-0x50]"
+     ]
+    },
+    {
+     "name": "selector",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "0x006bbeb0..0x006bbed0: one zero word filled at r11-76 by 0x007221a0 with r2=1, then bfi inserts 0xa9 at bits 6..15 and four bits of the first argument at r11-74"
+     ]
+    },
+    {
+     "name": "flag-44",
+     "offset": 44,
+     "bytes": 1,
+     "sources": [
+      "0x006bbea0..0x006bbea4: strb r2,[r11,#-0x24] stores 1"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 8,
+     "bytes": 36,
+     "sources": [
+      "0x006bbeb0..0x006bbedc: the zero fill covers r11-76..r11-73 only, so r11-72..r11-37 stay unwritten before the 48-byte post from r11-80"
+     ]
+    },
+    {
+     "offset": 45,
+     "bytes": 3,
+     "sources": [
+      "0x006bbed4..0x006bbedc: no store after the byte at r11-36 before the 48-byte post, so r11-35..r11-33 stay unwritten"
+     ]
+    }
+   ]
   }
  ],
  "channels": [
