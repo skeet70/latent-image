@@ -9,9 +9,17 @@
 pub mod adjustment;
 pub mod channel;
 pub mod curve;
+pub mod face;
 pub mod limits;
 pub mod numeric;
+pub mod pipeline;
 pub mod ports;
+pub mod profile;
+pub mod registers;
+pub mod scan;
+pub mod services;
+#[allow(unsafe_code)]
+pub mod stock;
 pub mod table;
 
 #[cfg(test)]
@@ -22,3 +30,7 @@ mod table_tests;
 mod channel_tests;
 #[cfg(test)]
 mod limits_tests;
+#[cfg(test)]
+mod profile_tests;
+#[cfg(test)]
+mod layer_tests;

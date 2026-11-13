@@ -609,6 +609,19 @@ The helpers several saclac modules call (`replacement/saclac/shared`), over the 
 | `StockLensComClient`: client word and request number at `0x8e1f3c`+8/+0xc, completion `0x6b6f9c`, failure report `0x6b92cc` | trampoline into retained stock | lenscom's completion path | no | lenscom requests complete through an owned callback | required |
 | `StockDisplay`: `0x6c68c0`, `0x6c4bec` | trampoline into retained stock | the display driver | no | the display driver is owned | required |
 
+## saclac_config
+
+saclac's configuration layers L3, L8 and L11 (`replacement/saclac/config`), over the stock derivations, scan library, pipeline hardware and face tracking other tasks share. All rows are in `src/stock.rs`.
+
+| Shim | Kind | Other side | Owned now | Removal condition | State |
+| --- | --- | --- | --- | --- | --- |
+| `StockDerivations`: `0x7498e0`, `0x747aac`, `0x749254`, `0x748818`, `0x74888c`, `0x746120`, `0x7461a8`, `0x747408`, `0x747584`, `0x749be4`, `0x7462e8`, `0x74b05c` | trampoline into retained stock | the configuration derivations tasks 3, 50, 104 and others reach, and the curves at `0x40a6c7ec` tasks 1..72 write | no | the settings and configuration services are owned | required |
+| `StockFloatLog`: `0x894778` | trampoline into retained stock | the runtime library | no | an owned logarithm is qualified against it | required |
+| `StockPipelineHardware`: `0xda1b4c`, `0xda1d48` | trampoline into retained stock | the image pipeline driver tasks 11..24 share | no | the image pipeline driver is owned | required |
+| `StockLensRequests`: callback word `0x96bd04`, request `0x6b7750` | trampoline into retained stock | the lenscom request path (`0x6b731c`, owned in `saclac_shared`) | no | the composition root binds it to `saclac_shared`'s lenscom request | required |
+| `StockFaceTracking`: `0x106d02c`, `0x106a2f0` | trampoline into retained stock | face tracking, whose pipeline and history tasks 3 and 55 also write | no | face tracking is owned | required |
+| `StockScanBlocks` (configuration fields `0xdc`..`0x1ea`, applied parts `+0x14c`, request flags and window `+0x3e`, clear through `0x7221c8`) and `StockScanLibrary` (`0xd6415c`..`0xd663e0`, `0xd79178`, `0xd79194`) | guest-memory layout view | the scan library tasks 11..24 share, which reads both blocks | no | the scan library is owned | required |
+
 ## saclac_interface
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |

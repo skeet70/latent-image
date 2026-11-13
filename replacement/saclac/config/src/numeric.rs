@@ -2,12 +2,22 @@
 
 //! Integer conversions the configuration words share.
 
-/// Hundredths to tenths, halves away from zero (0x741fa0, 0xda1900).
+/// Divided by ten, halves away from zero (0x741fa0).
 pub const fn round_tenths(value: i32) -> i32 {
     let quotient = value / 10;
     match value % 10 {
         remainder if remainder > 4 => quotient + 1,
         remainder if remainder < -4 => quotient - 1,
+        _ => quotient,
+    }
+}
+
+/// Divided by ten, halves toward positive infinity (0xda1900).
+pub const fn round_tenths_up(value: i32) -> i32 {
+    let quotient = value / 10;
+    match value % 10 {
+        remainder if remainder > 4 => quotient + 1,
+        remainder if remainder < -5 => quotient - 1,
         _ => quotient,
     }
 }
