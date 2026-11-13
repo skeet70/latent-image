@@ -134,7 +134,34 @@ fn stopping_a_round_releases_each_enabled_job() {
     fake.take();
     assert_eq!(measurement.handle(control(MeasurementControl::Stop), &mut fake), ChildOutcome::Complete);
     assert_eq!(fake.extra.take(), [Traffic::Search("stop")]);
-    assert_eq!(fake.take(), [Outbound::Acquisition(AcquisitionTraffic::Statistics)]);
+    assert_eq!(fake.take(), [Outbound::Acquisition(AcquisitionTraffic::Release)]);
+}
+
+#[test]
+fn a_release_under_a_snapshot_grid_also_moves_the_extra_statistics_and_copies_the_primary_ones() {
+    for snapshot_grid in [false, true] {
+        let mut measurement = Measurement::new();
+        let mut fake = fake(ACQUISITION);
+        fake.acquisition.settings.snapshot_grid = snapshot_grid;
+        fake.acquisition.extra[..4].copy_from_slice(&[10, 20, 30, 40]);
+        measurement.handle(control(MeasurementControl::Initialize), &mut fake);
+        measurement.handle(completion(Completion::Accessor4b), &mut fake);
+        fake.acquisition.acquisition_result = Some(xm1_saclac_interface::round_acquisition::AcquisitionResult {
+            address: xm1_saclac_interface::calc::SharedAddress(0x0169_0000),
+            aspect: 7,
+            correction: 2,
+            count: 0x0001_0003,
+            statistics_valid: true,
+            ..Default::default()
+        });
+        measurement.handle(completion(Completion::Calculation87), &mut fake);
+        measurement.handle(control(MeasurementControl::Stop), &mut fake);
+        let [release] = &fake.acquisition.releases[..] else { panic!("one release") };
+        // Three extra values, from the count's low halfword, each moved by the aspect less the correction.
+        let copy = fake.acquisition.block.copy;
+        assert_eq!(release.snapshot, snapshot_grid.then(|| (std::vec![15, 25, 35], copy)));
+        assert_ne!(copy, crate::acquisition::ports::StatisticsBuffer(0));
+    }
 }
 
 #[test]

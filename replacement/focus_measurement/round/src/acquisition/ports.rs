@@ -437,8 +437,17 @@ pub struct ReleaseSettings {
 pub struct Release<'a> {
     pub classes: &'a [u8; 256],
     pub offsets: &'a [[u16; 256]; 4],
-    /// Present when the configuration copies the extra statistics.
-    pub extra: Option<&'a [u16]>,
+    /// Present when the grid is the primary snapshot's.
+    pub snapshot: Option<SnapshotRelease<'a>>,
+}
+
+/// What a release under a snapshot grid also writes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SnapshotRelease<'a> {
+    /// The extra statistics, moved by the release offset.
+    pub extra: &'a [u16],
+    /// Receives a whole copy of the primary statistics buffers a 0x3d00 request names.
+    pub copy: StatisticsBuffer,
 }
 
 /// The profile records, the layers and the peers the acquisition works through.

@@ -334,8 +334,9 @@ use crate::acquisition::ports::StatisticsBuffer;
 pub const UNMEASURED_STATISTICS: StatisticsBuffer = StatisticsBuffer(0x5ffc_0340);
 /// X-M1 1.50: the buffers the release 0xf34c98 fills and names in the acquisition block: the
 /// classes (0xf34ef4), the first of the four offset buffers (0xf35084), the extra statistics
-/// moved from 0x5ffc6340 (0xf350e8) and the copy of the primary statistics at 0x5ffec1b4,
-/// 0x1150 bytes (0xf3510c).
+/// moved from 0x5ffc6340 (0xf350e8) and the copy, named on every release (0xf3510c..0xf35114)
+/// and filled under configuration 0x4a07 with 0x1150 bytes from 0x5ffec1b4, the buffers a
+/// 0x3d00 request names at +0x5c and +0x60 (0xf350f4..0xf35108).
 pub const RELEASE_CLASSES: StatisticsBuffer = StatisticsBuffer(0x5ffb_f930);
 pub const RELEASE_OFFSETS: StatisticsBuffer = StatisticsBuffer(0x5ffb_ece0);
 pub const RELEASE_EXTRA: StatisticsBuffer = StatisticsBuffer(0x5ffb_f4e0);

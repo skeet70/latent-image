@@ -18,7 +18,7 @@ use xm1_saclac_interface::{Completed, RecordHandle};
 use super::exposure::{self, ExposureSetting, ExposureSummary};
 use super::ports::{
     ExposureRecordUpdate, GridInputs, ModeInputs, PositionSlot, Ports, Program, ProgramChoice, ProgramInputs, Range,
-    RangeInputs, Release, StatisticsBuffer, TargetInputs,
+    RangeInputs, Release, SnapshotRelease, StatisticsBuffer, TargetInputs,
 };
 use super::selection::{self, LensPreset, Publication};
 use super::statistics::{classify, offset_values, release_offset, StatisticsSet, VALUES};
@@ -493,17 +493,17 @@ impl LiveWork {
         }
         block.offsets = crate::stock::RELEASE_OFFSETS;
         let mut extra = [0u16; EXTRA_CAPACITY];
-        let extra = if settings.snapshot_grid {
+        let snapshot = if settings.snapshot_grid {
             let count = usize::from(set.count as u16).min(EXTRA_CAPACITY);
             let values = &mut extra[..count];
             ports.extra_statistics(values);
             for value in values.iter_mut() { *value = value.wrapping_add(offset); }
             block.extra = crate::stock::RELEASE_EXTRA;
-            Some(&extra[..count])
+            Some(SnapshotRelease { extra: &extra[..count], copy: crate::stock::RELEASE_COPY })
         } else {
             None
         };
-        ports.store_release(&Release { classes: &classification.classes, offsets: &offsets, extra });
+        ports.store_release(&Release { classes: &classification.classes, offsets: &offsets, snapshot });
         block.copy = crate::stock::RELEASE_COPY;
         block.release_halfword = view.release_halfword;
         ports.store_acquisition_block(record, &block);

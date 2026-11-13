@@ -459,7 +459,16 @@ pub enum AcquisitionTraffic {
     FocusTable(FocusTable),
     Selected(SelectionNotice),
     Released(SharedAddress),
-    Statistics,
+    /// The release's statistics; their content is in `AcquisitionRecords::releases`.
+    Release,
+}
+
+/// One release's statistics as the port received them.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReleaseRecord {
+    pub classes: [u8; 256],
+    pub offsets: [[u16; 256]; 4],
+    pub snapshot: Option<(Vec<u16>, StatisticsBuffer)>,
 }
 
 /// The profile record and layer values the acquisition reads, and what it last wrote back.
@@ -477,6 +486,9 @@ pub struct AcquisitionRecords {
     pub target: ProgramTarget,
     pub lens: ResourceIndex,
     pub statistics: [u16; 256],
+    /// The extra statistics the release reads, from the first.
+    pub extra: [u16; 600],
+    pub releases: Vec<ReleaseRecord>,
     pub acquisition_result: Option<AcquisitionResult>,
     pub selection_result: Option<SelectionResult>,
     pub word: u32,
@@ -498,6 +510,8 @@ impl Default for AcquisitionRecords {
             target: ProgramTarget::default(),
             lens: ResourceIndex(0),
             statistics: [0; 256],
+            extra: [0; 600],
+            releases: Vec::new(),
             acquisition_result: None,
             selection_result: None,
             word: 0,
@@ -616,8 +630,15 @@ impl<X> crate::acquisition::ports::Ports for Ports<X> {
     fn draw_rate_status(&mut self, _: u16, _: u32, _: u32) {}
     fn rate_position(&mut self, _: RecordHandle) -> (u32, u16) { (0, 0) }
     fn statistics_buffer(&mut self, _: StatisticsBuffer) -> [u16; 256] { self.acquisition.statistics }
-    fn extra_statistics(&mut self, values: &mut [u16]) { values.fill(0); }
-    fn store_release(&mut self, _: &Release<'_>) { self.send(AcquisitionTraffic::Statistics); }
+    fn extra_statistics(&mut self, values: &mut [u16]) { values.copy_from_slice(&self.acquisition.extra[..values.len()]); }
+    fn store_release(&mut self, release: &Release<'_>) {
+        self.acquisition.releases.push(ReleaseRecord {
+            classes: *release.classes,
+            offsets: *release.offsets,
+            snapshot: release.snapshot.map(|snapshot| (snapshot.extra.to_vec(), snapshot.copy)),
+        });
+        self.send(AcquisitionTraffic::Release);
+    }
     fn set_pipeline_reference(&mut self, _: i16) {}
     fn prepare_s1_sample(&mut self) {}
     fn s1_sample(&mut self) -> PipelineSnapshot { self.snapshot }
