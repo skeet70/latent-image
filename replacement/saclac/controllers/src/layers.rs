@@ -4,7 +4,7 @@
 //! bound at saclac's composition root to the part that owns its layer.
 
 use xm1_saclac_interface::stock::StockCallbackWord;
-use xm1_saclac_interface::{CommandKind, RecordHandle};
+use xm1_saclac_interface::{CommandKind, ParameterValue, RecordHandle};
 
 /// A profile-record field the controllers read or write. Its value means what the
 /// record's other readers make of it.
@@ -254,6 +254,16 @@ pub trait ProfileRecord {
     fn notify_selection_owner(&mut self, record: RecordHandle);
 }
 
+/// Rewrites `block`'s `N` words with the words at `cleared` set to zero.
+pub(crate) fn clear_words<const N: usize>(profile: &mut impl ProfileRecord, record: RecordHandle, block: Block, cleared: &[usize]) {
+    let mut words = [0; N];
+    profile.read_block(record, block, &mut words);
+    for &index in cleared {
+        words[index] = 0;
+    }
+    profile.write_block(record, block, &words);
+}
+
 /// What the profile geometry layer gives the live view.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GeometryValue { StartValue, SelectionMode, Adjustment }
@@ -487,6 +497,23 @@ pub trait LensControl {
     fn step(&mut self) -> u32;
     /// The lens channel and the sixteen-bit fraction of the way to the next.
     fn channel(&mut self) -> (u32, u16);
+    /// The last of the three notice words in the lens control block other tasks share.
+    fn third_notice(&mut self) -> u32;
+}
+
+/// A lens drive's progress, which the LensDrive command's client receives with status 18.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriveProgress {
+    /// The configuration channel lens control reports the drive at.
+    pub channel: u32,
+    /// LensDrive's word 4 is other than 1.
+    pub fourth_carried: bool,
+    pub reported: ParameterValue,
+}
+
+/// The LensDrive command's replies, which the shared layer composes.
+pub trait LensDriveReplies {
+    fn report_progress(&mut self, progress: DriveProgress);
 }
 
 /// What the bounds notice asks the configuration curve for, after the level and channel.

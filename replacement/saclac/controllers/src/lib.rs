@@ -13,6 +13,7 @@ pub mod capture;
 pub mod exports;
 pub mod root;
 pub mod live;
+pub mod live_replies;
 pub mod s1;
 pub mod live_view;
 pub mod layers;
@@ -42,6 +43,8 @@ mod live_view_tests;
 mod live_profile_tests;
 #[cfg(test)]
 mod live_tests;
+#[cfg(test)]
+mod live_replies_tests;
 #[cfg(test)]
 mod s1_tests;
 #[cfg(test)]

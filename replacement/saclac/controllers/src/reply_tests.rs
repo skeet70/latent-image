@@ -49,6 +49,7 @@ impl LensControl for Lens {
     fn reference(&mut self) -> u32 { unreachable_lens() }
     fn step(&mut self) -> u32 { unreachable_lens() }
     fn channel(&mut self) -> (u32, u16) { unreachable_lens() }
+    fn third_notice(&mut self) -> u32 { unreachable_lens() }
 }
 
 fn unreachable_lens() -> ! { panic!("a reply reads only the lens probes") }

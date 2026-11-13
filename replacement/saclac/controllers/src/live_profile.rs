@@ -4,15 +4,16 @@
 //! requests, the conditions the controller branches on and the effects it asks for.
 
 use crate::layers::{
-    Block, Change, Configuration, DisplayRecords, Field, Geometry, GeometryCheck, GeometryFlag, GeometryValue, Mirror,
-    Pipeline, ProfileRecord, RecordChannel, RecordMode, SharedHelpers,
+    clear_words, Block, Change, Configuration, DisplayRecords, Field, Geometry, GeometryCheck, GeometryFlag, GeometryValue,
+    Mirror, Pipeline, ProfileRecord, RecordChannel, RecordMode, SharedHelpers,
 };
 use crate::live_view::{
-    Application, ChangeCode, Condition, Effect, MotionSetting, Preparation, RestoreOptions, StopMode, StopReason,
-    ViewRequest,
+    Application, ChangeCode, Condition, Effect, MotionSetting, Preparation, ReplyStatus, RestoreOptions, StopMode,
+    StopReason, ViewRequest,
 };
+use crate::replies::{Replies, ReplyCommand as R, Values};
 use crate::stock;
-use xm1_saclac_interface::{Command, CommandKind as K, ImgDc, Parameters, RecordHandle};
+use xm1_saclac_interface::{Command, CommandKind as K, CompletionStatus, ImgDc, Parameters, RecordHandle};
 
 pub(crate) fn word(parameters: Parameters<'_>, index: usize) -> u32 {
     let start = index * 4;
@@ -156,6 +157,7 @@ pub trait Layers {
     type Pipeline: Pipeline;
     type Source: ConfigurationSource;
     type ImgDc: ImgDc;
+    type Replies: Replies;
 
     fn profile(&mut self) -> &mut Self::Profile;
     fn geometry(&mut self) -> &mut Self::Geometry;
@@ -166,12 +168,19 @@ pub trait Layers {
     fn pipeline(&mut self) -> &mut Self::Pipeline;
     fn source(&mut self) -> &mut Self::Source;
     fn imgdc(&mut self) -> &mut Self::ImgDc;
+    fn replies(&mut self) -> &mut Self::Replies;
 }
 
 /// The words of the suspension block and the one the suspend marks.
 const SUSPENSION_WORDS: usize = 19;
 const SUSPENDED_WORD: usize = 17;
 const SUSPENDED: u32 = 4;
+
+const REJECTED: CompletionStatus = CompletionStatus(21);
+/// The status Command17's reply carries for a rejected selection.
+const SELECTION_REJECTED: CompletionStatus = CompletionStatus(-96);
+/// The status the live view answers Command09 with, whatever its outcome.
+const CAPTURE_ANSWERED: CompletionStatus = CompletionStatus(15);
 
 /// The leaf state the live view's operations keep between entries.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -444,6 +453,51 @@ impl LiveProfile {
         }
     }
 
+    /// Answers the command the live view finished and clears the focus state it leaves stale.
+    /// Stock reads Command17's selection from the live measurement's record; this reads `record`.
+    pub fn reply(&mut self, command: Option<K>, status: ReplyStatus, record: RecordHandle, layers: &mut impl Layers) {
+        let status = match status { ReplyStatus::Accepted => CompletionStatus(0), ReplyStatus::Rejected => REJECTED };
+        let Some(command) = command else { return };
+        let answered = match command {
+            K::Command03 => {
+                clear_focus(record, layers.profile());
+                clear_words::<HISTORY_WORDS>(layers.profile(), record, Block::FocusHistory, &[0, 1]);
+                return;
+            }
+            K::Autofocus => {
+                clear_words::<HISTORY_WORDS>(layers.profile(), record, Block::FocusHistory, &[0]);
+                return;
+            }
+            K::Command09 => return respond(layers, R::Command09, CAPTURE_ANSWERED, &[0]),
+            K::Command0a => return respond(layers, R::Command09, status, &[0]),
+            K::Command17 if status == REJECTED => return respond(layers, R::Command17, SELECTION_REJECTED, &[]),
+            K::Command17 => {
+                if read(layers, record, Field::Command17Selection) == 0 {
+                    // The history is written twice, first with word 0 alone cleared (0xf2fab8).
+                    clear_focus(record, layers.profile());
+                    clear_words::<HISTORY_WORDS>(layers.profile(), record, Block::FocusHistory, &[0]);
+                    clear_words::<HISTORY_WORDS>(layers.profile(), record, Block::FocusHistory, &[0, 1]);
+                }
+                R::Command17
+            }
+            K::Prepare => {
+                let flags = read(layers, record, Field::SelectionFlags);
+                return respond(layers, R::Prepare, status, &[flags]);
+            }
+            K::HalfRelease => R::HalfRelease,
+            K::Command1d => R::Command1d,
+            K::Command1e => R::Command1e,
+            K::Command20 => R::Command20,
+            K::Command21 => R::Command21,
+            K::Command22 => R::Command22,
+            K::Command23 => R::Command23,
+            K::Prepare26 => R::Prepare26,
+            K::Command29 => R::Command29,
+            _ => return,
+        };
+        respond(layers, answered, status, &[]);
+    }
+
     pub fn motion_setting(&mut self, layers: &mut impl Layers) -> MotionSetting {
         MotionSetting(layers.geometry().motion())
     }
@@ -525,6 +579,18 @@ impl LiveProfile {
 }
 
 fn read(layers: &mut impl Layers, record: RecordHandle, field: Field) -> u32 { layers.profile().read(record, field) }
+
+fn respond(layers: &mut impl Layers, command: R, status: CompletionStatus, words: &[u32]) {
+    layers.replies().reply(command, status, Values::Words(words));
+}
+
+const HISTORY_WORDS: usize = 20;
+
+fn clear_focus(record: RecordHandle, profile: &mut impl ProfileRecord) {
+    clear_words::<33>(profile, record, Block::Release, &[1, 24]);
+    clear_words::<8>(profile, record, Block::FocusConfirmation, &[0]);
+    clear_words::<5>(profile, record, Block::MeasuredWindow, &[3]);
+}
 
 fn direct_start(record: RecordHandle, layers: &mut impl Layers) -> bool {
     let mode = read(layers, record, Field::ViewMode);

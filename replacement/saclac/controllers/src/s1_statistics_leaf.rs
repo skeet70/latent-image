@@ -6,8 +6,8 @@
 
 use crate::children::{AcquisitionControl, ChildEvent, ChildOutcome, ChildRequest, Children, SearchControl};
 use crate::layers::{
-    Block, Change, CommandParameters, Field, LensControl, LensProbe, ProfileRecord, RecordChannel, RecordMode, RecordQuery,
-    ResultIndex, Restarting, Results, S1Values, RECORD_QUERY_BYTES,
+    clear_words, Block, Change, CommandParameters, Field, LensControl, LensProbe, ProfileRecord, RecordChannel, RecordMode,
+    RecordQuery, ResultIndex, Restarting, Results, S1Values, RECORD_QUERY_BYTES,
 };
 use crate::live_profile::{apply_preparation, preparation_requested, LiveProfile, SelectionWords};
 use crate::live_view::PreparationOverride;
@@ -125,10 +125,11 @@ impl<L: Layers> Leaf<'_, L> {
         if requested & 8 != 0 { profile.write(record, Field::PendingOutput, 0); }
         self.live.apply_selection(&words, record, self.layers.profile());
         let selection = read(self.layers, record, Field::Command17Selection);
-        if selection & 1 == 0 { clear_word::<33>(self.layers, record, Block::Release, 1); }
-        if selection & 2 == 0 { clear_word::<8>(self.layers, record, Block::FocusConfirmation, 0); }
-        if selection & 4 == 0 { clear_word::<5>(self.layers, record, Block::MeasuredWindow, 3); }
-        if selection == 0 { clear_word::<20>(self.layers, record, Block::FocusHistory, 0); }
+        let profile = self.layers.profile();
+        if selection & 1 == 0 { clear_words::<33>(profile, record, Block::Release, &[1]); }
+        if selection & 2 == 0 { clear_words::<8>(profile, record, Block::FocusConfirmation, &[0]); }
+        if selection & 4 == 0 { clear_words::<5>(profile, record, Block::MeasuredWindow, &[3]); }
+        if selection == 0 { clear_words::<20>(profile, record, Block::FocusHistory, &[0]); }
         respond(self.layers, ReplyCommand::Command17, CompletionStatus(0), &[]);
     }
 
@@ -197,16 +198,10 @@ fn profile_reply(command: ReplyCommand, record: RecordHandle, layers: &mut impl 
     respond(layers, command, CompletionStatus(0), &[descriptor, value, 0, first << 1 | second]);
 }
 
-fn clear_word<const N: usize>(layers: &mut impl Layers, record: RecordHandle, cleared: Block, index: usize) {
-    let mut words: [u32; N] = block(layers, record, cleared);
-    words[index] = 0;
-    layers.profile().write_block(record, cleared, &words);
-}
-
 /// The resume clears the selection options' last word and moves the lens target's position to
 /// the lens.
 fn resume(record: RecordHandle, layers: &mut impl Layers) {
-    clear_word::<7>(layers, record, Block::Options, 6);
+    clear_words::<7>(layers.profile(), record, Block::Options, &[6]);
     let [target]: [u32; 1] = block(layers, record, Block::LensTarget);
     let position = layers.lens().position() & 0xffff;
     layers.profile().write_block(record, Block::LensTarget, &[target & 0xffff_0000 | position]);

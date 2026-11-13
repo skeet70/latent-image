@@ -1,8 +1,11 @@
 use crate::layers::*;
 use crate::live_profile::*;
-use crate::live_view::{Application, Condition, Effect, MotionSetting, RestoreOptions, StopMode, StopReason, ViewRequest};
+use crate::live_view::{Application, Condition, Effect, MotionSetting, ReplyStatus, RestoreOptions, StopMode, StopReason, ViewRequest};
+use crate::replies::{Replies, ReplyCommand as R, Values};
 use std::{vec, vec::Vec};
-use xm1_saclac_interface::{stock, Command, CommandKind as K, Completion as C, ImgDc, ImgDcOperation as Op, ImgDcRequest, RecordHandle};
+use xm1_saclac_interface::{
+    stock, Command, CommandKind as K, Completion as C, CompletionStatus, ImgDc, ImgDcOperation as Op, ImgDcRequest, RecordHandle,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Seen {
@@ -26,6 +29,7 @@ enum Seen {
     ClearCalculations,
     TakeOffset,
     Request(Op, Vec<u8>, Vec<C>),
+    Reply(R, i32, Vec<u32>),
 }
 
 #[derive(Default)]
@@ -139,6 +143,13 @@ impl ImgDc for Fake {
     }
 }
 
+impl Replies for Fake {
+    fn reply(&mut self, command: R, status: CompletionStatus, values: Values<'_>) {
+        let Values::Words(words) = values else { panic!("the live view's replies carry words") };
+        self.seen.push(Seen::Reply(command, status.0, words.to_vec()))
+    }
+}
+
 impl Layers for Fake {
     type Profile = Self;
     type Geometry = Self;
@@ -149,6 +160,7 @@ impl Layers for Fake {
     type Pipeline = Self;
     type Source = Self;
     type ImgDc = Self;
+    type Replies = Self;
     fn profile(&mut self) -> &mut Self { self }
     fn geometry(&mut self) -> &mut Self { self }
     fn configuration(&mut self) -> &mut Self { self }
@@ -158,6 +170,7 @@ impl Layers for Fake {
     fn pipeline(&mut self) -> &mut Self { self }
     fn source(&mut self) -> &mut Self { self }
     fn imgdc(&mut self) -> &mut Self { self }
+    fn replies(&mut self) -> &mut Self { self }
 }
 
 fn record() -> RecordHandle { stock::record_handle_from_a2(0x16a0_0490) }
@@ -491,4 +504,105 @@ fn autofocus_lens_range_change_rewrites_both_lens_slots_when_the_pair_moved() {
     held.blocks.push((Block::Lens(LensSlot::Current), vec![1, 2]));
     LiveProfile::new().apply(entered(&autofocus), record(), &mut held);
     assert!(!held.take().iter().any(|seen| matches!(seen, Seen::Block(Block::Lens(_), _))));
+}
+
+fn replied(command: Option<K>, status: ReplyStatus, fake: &mut Fake) -> Vec<Seen> {
+    LiveProfile::new().reply(command, status, record(), fake);
+    fake.take()
+}
+
+#[test]
+fn finished_commands_are_answered_through_their_own_reply_with_the_outcome() {
+    for (kind, answered) in [
+        (K::HalfRelease, R::HalfRelease),
+        (K::Command1d, R::Command1d),
+        (K::Command1e, R::Command1e),
+        (K::Command20, R::Command20),
+        (K::Command21, R::Command21),
+        (K::Command22, R::Command22),
+        (K::Command23, R::Command23),
+        (K::Prepare26, R::Prepare26),
+        (K::Command29, R::Command29),
+    ] {
+        let mut fake = Fake::default();
+        assert_eq!(replied(Some(kind), ReplyStatus::Accepted, &mut fake), vec![Seen::Reply(answered, 0, vec![])]);
+        assert_eq!(replied(Some(kind), ReplyStatus::Rejected, &mut fake), vec![Seen::Reply(answered, 21, vec![])]);
+    }
+}
+
+#[test]
+fn prepare_is_answered_with_the_selection_flags() {
+    let mut fake = Fake::with(&[(Field::SelectionFlags, 0b101)]);
+    assert_eq!(replied(Some(K::Prepare), ReplyStatus::Accepted, &mut fake), vec![Seen::Reply(R::Prepare, 0, vec![0b101])]);
+}
+
+#[test]
+fn capture_changes_are_answered_through_command09() {
+    let mut fake = Fake::default();
+    for status in [ReplyStatus::Accepted, ReplyStatus::Rejected] {
+        assert_eq!(replied(Some(K::Command09), status, &mut fake), vec![Seen::Reply(R::Command09, 15, vec![0])]);
+    }
+    assert_eq!(replied(Some(K::Command0a), ReplyStatus::Accepted, &mut fake), vec![Seen::Reply(R::Command09, 0, vec![0])]);
+    assert_eq!(replied(Some(K::Command0a), ReplyStatus::Rejected, &mut fake), vec![Seen::Reply(R::Command09, 21, vec![0])]);
+}
+
+fn focus_blocks() -> Fake {
+    let mut fake = Fake::default();
+    fake.blocks = vec![
+        (Block::Release, vec![0x40; 33]),
+        (Block::FocusConfirmation, vec![0x80; 8]),
+        (Block::MeasuredWindow, vec![0x50; 5]),
+        (Block::FocusHistory, vec![0x20; 20]),
+    ];
+    fake
+}
+
+fn cleared(block: Block, length: usize, indices: &[usize], fill: u32) -> Seen {
+    let mut words = vec![fill; length];
+    indices.iter().for_each(|&index| words[index] = 0);
+    Seen::Block(block, words)
+}
+
+fn focus_cleared() -> Vec<Seen> {
+    vec![
+        cleared(Block::Release, 33, &[1, 24], 0x40),
+        cleared(Block::FocusConfirmation, 8, &[0], 0x80),
+        cleared(Block::MeasuredWindow, 5, &[3], 0x50),
+    ]
+}
+
+#[test]
+fn secondary_profile_and_autofocus_clear_focus_state_without_an_answer() {
+    let mut fake = focus_blocks();
+    let mut expected = focus_cleared();
+    expected.push(cleared(Block::FocusHistory, 20, &[0, 1], 0x20));
+    assert_eq!(replied(Some(K::Command03), ReplyStatus::Accepted, &mut fake), expected);
+    assert_eq!(replied(Some(K::Autofocus), ReplyStatus::Accepted, &mut fake), vec![cleared(Block::FocusHistory, 20, &[0], 0x20)]);
+}
+
+#[test]
+fn command17_clears_focus_state_when_nothing_stays_selected() {
+    let mut fake = focus_blocks();
+    let mut expected = focus_cleared();
+    expected.push(cleared(Block::FocusHistory, 20, &[0], 0x20));
+    expected.push(cleared(Block::FocusHistory, 20, &[0, 1], 0x20));
+    expected.push(Seen::Reply(R::Command17, 0, vec![]));
+    assert_eq!(replied(Some(K::Command17), ReplyStatus::Accepted, &mut fake), expected);
+
+    let mut selected = Fake { fields: vec![(Field::Command17Selection, 2)], ..focus_blocks() };
+    assert_eq!(replied(Some(K::Command17), ReplyStatus::Accepted, &mut selected), vec![Seen::Reply(R::Command17, 0, vec![])]);
+}
+
+#[test]
+fn rejected_command17_is_answered_with_its_own_status_and_clears_nothing() {
+    let mut fake = focus_blocks();
+    assert_eq!(replied(Some(K::Command17), ReplyStatus::Rejected, &mut fake), vec![Seen::Reply(R::Command17, -96, vec![])]);
+}
+
+#[test]
+fn commands_the_live_view_does_not_answer_and_no_command_leave_no_trace() {
+    let mut fake = focus_blocks();
+    for command in [None, Some(K::Command02), Some(K::Command11), Some(K::Command1f), Some(K::Command13)] {
+        assert_eq!(replied(command, ReplyStatus::Accepted, &mut fake), vec![]);
+    }
 }

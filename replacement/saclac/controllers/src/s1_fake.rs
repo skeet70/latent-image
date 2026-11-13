@@ -247,6 +247,7 @@ impl LensControl for Fake {
     fn reference(&mut self) -> u32 { REFERENCE }
     fn step(&mut self) -> u32 { STEP }
     fn channel(&mut self) -> (u32, u16) { CHANNEL }
+    fn third_notice(&mut self) -> u32 { panic!("S1 replies carry no lens notice") }
 }
 
 /// Levels are the steps; positions name their level, channel and the query's range or step;
