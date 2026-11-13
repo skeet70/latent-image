@@ -163,11 +163,12 @@ fn a_measurement_tick_captures_the_statistics_in_use_and_records_the_history() {
     fake.records.in_use.primary = true;
     measurement.handle(control(MeasurementControl::Initialize), &mut fake);
     assert!(!fake.records.capture_attached);
-    assert!(fake.records.history_restarted);
+    assert!(!measurement.history().started());
     measurement.handle(completion(Completion::Accessor4b), &mut fake);
     let traffic = fake.take();
-    assert_eq!(traffic[..2], [Outbound::Capture(Statistics::Primary), Outbound::MeasurementHistory]);
+    assert_eq!(traffic[..2], [Outbound::Capture(Statistics::Primary), Outbound::Capture(Statistics::History)]);
     assert!(matches!(traffic[2], Outbound::Request(Request::Window(_))));
+    assert!(measurement.history().newest().written());
 }
 
 #[test]

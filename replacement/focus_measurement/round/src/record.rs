@@ -3,7 +3,8 @@
 //! The round's record effects carried out against the profile records, the
 //! property store, the imaging pipeline and the image peer.
 
-use crate::pipeline::{Exposure, Pipeline, Statistics};
+use crate::history::{HistoryEntry, MeasurementHistory};
+use crate::pipeline::{Exposure, Pipeline, PipelineSnapshot, Statistics};
 use crate::planner::{Cadence, Mode, Work};
 use crate::profile::{FrameRate, IntervalHistory, IntervalTracking, ProfileRecords, ProfileSelection, PublishedResult};
 use crate::round::{ParameterClient, RecordEffect, SearchStart};
@@ -65,19 +66,18 @@ pub enum Request {
 
 pub trait Ports: ProfileRecords + Settings + Pipeline + Exposure + Power + Trace + replies::Effects {
     fn request(&mut self, request: Request);
-    fn record_measurement_history(&mut self, record: RecordHandle);
 }
 
-pub fn apply(effect: RecordEffect, record: RecordHandle, ports: &mut impl Ports) {
+pub fn apply(effect: RecordEffect, record: RecordHandle, history: &mut MeasurementHistory, ports: &mut impl Ports) {
     match effect {
         RecordEffect::ResetSelection => ports.detach_capture_buffer(record),
         RecordEffect::ClearSelection => {
-            ports.restart_measurement_history(record);
+            history.restart(ports.grants_measurement_history(record));
             clear_intervals(record, ports);
         }
         RecordEffect::FinishSelectionClear(client) => finish_selection_clear(client, record, ports),
         RecordEffect::Geometry => geometry(record, ports),
-        RecordEffect::CollectReady => collect(record, ports),
+        RecordEffect::CollectReady => collect(record, history, ports),
         RecordEffect::SelectionHistory => {
             if !ports.keeps_interval_history() { return; }
             match ports.profile(record).interval_tracking {
@@ -135,7 +135,7 @@ fn geometry(record: RecordHandle, ports: &mut impl Ports) {
     }));
 }
 
-fn collect(record: RecordHandle, ports: &mut impl Ports) {
+fn collect(record: RecordHandle, history: &mut MeasurementHistory, ports: &mut impl Ports) {
     let in_use = ports.statistics_in_use();
     if in_use.primary {
         ports.capture(Statistics::Primary);
@@ -143,7 +143,28 @@ fn collect(record: RecordHandle, ports: &mut impl Ports) {
     }
     if in_use.search { ports.capture(Statistics::Search); }
     if in_use.auxiliary { ports.capture(Statistics::Auxiliary); }
-    ports.record_measurement_history(record);
+    record_history(record, history, ports);
+}
+
+fn record_history(record: RecordHandle, history: &mut MeasurementHistory, ports: &mut impl Ports) {
+    ports.capture(Statistics::History);
+    let snapshot = ports.snapshot(Statistics::History);
+    if !snapshot.status.complete() { return; }
+    let cell = ports.profile(record).focus_cell;
+    let statistics = ports.history_statistics(cell);
+    let exposure = history_exposure(&snapshot, ports);
+    let kept = ports.grants_measurement_history(record);
+    history.record(HistoryEntry::new(&snapshot, statistics, exposure), kept);
+}
+
+/// The timing's offset and the acquisition's level, less the window level the snapshot gives.
+fn history_exposure(snapshot: &PipelineSnapshot, ports: &mut impl Ports) -> i16 {
+    let level = ports.acquisition_level() as u16;
+    let exposure = ports.exposure_value(snapshot.exposure) as u16;
+    let gain = ports.gain_offset(snapshot.gain_step) as u16;
+    let timing = ports.timing_offset(snapshot.timing);
+    let [first, second] = snapshot.levels;
+    timing.wrapping_sub(gain).wrapping_add(level).wrapping_sub(first.wrapping_sub(second)).wrapping_sub(exposure) as i16
 }
 
 fn record_interval(record: RecordHandle, ports: &mut impl Ports) {

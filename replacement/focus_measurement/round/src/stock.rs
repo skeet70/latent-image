@@ -161,7 +161,7 @@ pub fn window_request_payload(request: crate::window::WindowRequest, completion:
     put(0, &u32::from(profile_selection_byte(request.selection)).to_le_bytes());
     put(4, &request.record.first.0.to_le_bytes());
     put(8, &request.level.to_le_bytes());
-    put(12, &snapshot.mode.0.to_le_bytes());
+    put(12, &snapshot.timing.0.to_le_bytes());
     put(16, &[snapshot.flags]);
     put(20, &snapshot.exposure[0].0.to_le_bytes());
     put(24, &snapshot.levels[0].to_le_bytes());
@@ -176,5 +176,58 @@ pub fn window_request_payload(request: crate::window::WindowRequest, completion:
     put(68, &u32::from(request.mode.0).to_le_bytes());
     put(72, &u32::from(request.selected).to_le_bytes());
     put(76, &completion.0.to_le_bytes());
+    bytes
+}
+
+/// X-M1 1.50: 0xff6b4c copies 0x5c4 bytes of pipeline state to 0x16f496c + slot·0x5c4,
+/// which 0xfea7ac returns. Offsets from the window (0xf3a5a4..0xf3a614) and
+/// history (0xf32680..0xf32874) builders.
+pub const SNAPSHOT_BYTES: usize = 0x5c4;
+
+pub fn pipeline_snapshot(bytes: &[u8; SNAPSHOT_BYTES]) -> crate::pipeline::PipelineSnapshot {
+    use crate::pipeline::{GainStep, PipelineSnapshot, PipelineWord, SnapshotStatus, TimingWord};
+    let word = |offset: usize| u32::from_le_bytes([bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]]);
+    let half = |offset: usize| u16::from_le_bytes([bytes[offset], bytes[offset + 1]]);
+    PipelineSnapshot {
+        status: SnapshotStatus(word(0)),
+        timing: TimingWord(word(0xec)),
+        flags: bytes[0xf2],
+        gain_step: GainStep(word(0xf4)),
+        exposure: [PipelineWord(word(0xf8)), PipelineWord(word(0x110))],
+        levels: [half(0xfc), half(0xfe)],
+        adjustment: PipelineWord(word(0x104)),
+        retained: [4, 8, 0xdc, 0xe0, 0x34, 0x38].map(|offset| PipelineWord(word(offset))),
+    }
+}
+
+/// X-M1 1.50: the measurement history ring 0xf32654 writes. The shared record
+/// keeps its position at +0xa4 (0x7567ec/0x756814, grant 16): a started word, the
+/// newest slot byte at +4 and the ring address at +8.
+///
+/// Retained readers, by module: FocusSearch machine 34 at 0xf26688, 0xf2706c and
+/// 0xf2821c; FocusSearch machine 23 at 0xf3db20, 0xf43d24 and 0xf47a1c;
+/// ShotSequence machines 5 and 25 at 0xf16b08. They read the newest slot and,
+/// in 0xf2821c and 0xf16b08, the five slots.
+pub const HISTORY_RING: u32 = 0x5ffe_e718;
+pub const HISTORY_ENTRY_BYTES: usize = 552;
+/// 0xf326d4..0xf326e4 clears the started word of six entries; the ring uses five.
+pub const HISTORY_CLEARED_ENTRIES: usize = 6;
+
+/// X-M1 1.50: 0xf32738..0xf32878. Banks come from 0x5ffee414 then 0x5ffee314,
+/// the levels from the half-word banks at 0x5ffee518, the last word from 0x5ffee514.
+pub fn history_entry_bytes(entry: &crate::history::HistoryEntry) -> [u8; HISTORY_ENTRY_BYTES] {
+    let mut bytes = [0; HISTORY_ENTRY_BYTES];
+    let mut put = |offset: usize, value: &[u8]| bytes[offset..offset + value.len()].copy_from_slice(value);
+    let statistics = entry.statistics();
+    put(0, &u32::from(entry.written()).to_le_bytes());
+    for (base, bank) in [(4, &statistics.banks[1]), (0x104, &statistics.banks[0])] {
+        for (cell, value) in bank.iter().enumerate() { put(base + cell * 4, &value.to_le_bytes()); }
+    }
+    put(0x204, &entry.cell_levels()[0].to_le_bytes());
+    put(0x206, &entry.cell_levels()[1].to_le_bytes());
+    put(0x208, &entry.exposure().to_le_bytes());
+    put(0x20a, &entry.reference_level().to_le_bytes());
+    for (index, word) in entry.retained().iter().enumerate() { put(0x20c + index * 4, &word.0.to_le_bytes()); }
+    put(0x224, &statistics.word.0.to_le_bytes());
     bytes
 }

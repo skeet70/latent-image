@@ -6,7 +6,7 @@ xm1_rust_rlib(
     name = "round",
     src = "src/lib.rs",
     crate_name = "xm1_focus_measurement_round",
-    data = ["src/jobs.rs", "src/acquisition.rs", "src/children.rs", "src/lanes.rs", "src/round.rs", "src/image.rs", "src/live.rs", "src/stock.rs", "src/planner.rs", "src/profile.rs", "src/record.rs", "src/pipeline.rs", "src/window.rs"],
+    data = ["src/jobs.rs", "src/acquisition.rs", "src/children.rs", "src/lanes.rs", "src/history.rs", "src/round.rs", "src/image.rs", "src/live.rs", "src/stock.rs", "src/planner.rs", "src/profile.rs", "src/record.rs", "src/pipeline.rs", "src/window.rs"],
     out = "arm/libxm1_focus_measurement_round.rlib",
     rlib_deps = {
         "xm1_saclac_controllers": "//replacement/saclac/controllers:controllers",

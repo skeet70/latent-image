@@ -66,7 +66,7 @@ fn a_parameter_change_names_its_client_then_the_requested_and_offered_selections
 
 #[test]
 fn the_window_request_places_each_field_and_zeroes_the_unwritten_bytes() {
-    use crate::pipeline::{GainStep, PipelineSnapshot, PipelineWord};
+    use crate::pipeline::{GainStep, PipelineSnapshot, PipelineWord, TimingWord};
     use crate::profile::{ProfileMode, ProfileSelection, RetainedHalfword, RetainedWord, WindowRecord, WindowStatus};
     use crate::stock::window_request_payload;
     use crate::window::WindowRequest;
@@ -76,9 +76,10 @@ fn the_window_request_places_each_field_and_zeroes_the_unwritten_bytes() {
         mode: ProfileMode(6),
         selected: true,
         snapshot: PipelineSnapshot {
-            mode: PipelineWord(0x0102_0304), flags: 0x55, gain_step: GainStep(1),
+            timing: TimingWord(0x0102_0304), flags: 0x55, gain_step: GainStep(1),
             exposure: [PipelineWord(0x1112_1314), PipelineWord(0x99)], levels: [0x2122, 0x3132],
             adjustment: PipelineWord(0x4142_4344),
+            ..PipelineSnapshot::default()
         },
         level: 0x5152,
         reference: 0x6162,
@@ -93,4 +94,42 @@ fn the_window_request_places_each_field_and_zeroes_the_unwritten_bytes() {
     assert_eq!((half(32), word(36), word(40), word(44)), (0x8182, 0x5ffe_c1b4, 4096, 0x4142_4344));
     assert_eq!((word(48), word(52), word(56), word(60), word(64), word(68), word(72), word(76)), (2, 0x9192_9394, 0, 0, 1, 6, 1, 0xf3a3f8));
     for padding in [10..12, 17..20, 28..32, 34..36] { assert!(bytes[padding].iter().all(|&byte| byte == 0)); }
+}
+
+#[test]
+fn a_snapshot_reads_each_field_at_its_offset() {
+    use crate::pipeline::{GainStep, PipelineWord, SnapshotStatus, TimingWord};
+    use crate::stock::{pipeline_snapshot, SNAPSHOT_BYTES};
+    let mut bytes = [0u8; SNAPSHOT_BYTES];
+    let mut put = |offset: usize, value: &[u8]| bytes[offset..offset + value.len()].copy_from_slice(value);
+    for (offset, word) in [(0, 5u32), (4, 0x40), (8, 0x80), (0x34, 0x340), (0x38, 0x380), (0xdc, 0xdc0), (0xe0, 0xe00), (0xec, 0xec0), (0xf4, 0xf40), (0xf8, 0xf80), (0x104, 0x1040), (0x110, 0x1100)] {
+        put(offset, &word.to_le_bytes());
+    }
+    put(0xf2, &[0x2f]);
+    put(0xfc, &0xfc0u16.to_le_bytes());
+    put(0xfe, &0xfe0u16.to_le_bytes());
+    let snapshot = pipeline_snapshot(&bytes);
+    assert!(snapshot.status == SnapshotStatus(5) && snapshot.status.complete());
+    assert_eq!((snapshot.timing, snapshot.flags, snapshot.gain_step), (TimingWord(0xec0), 0x2f, GainStep(0xf40)));
+    assert_eq!((snapshot.exposure, snapshot.levels, snapshot.adjustment), ([PipelineWord(0xf80), PipelineWord(0x1100)], [0xfc0, 0xfe0], PipelineWord(0x1040)));
+    assert_eq!(snapshot.retained, [0x40, 0x80, 0xdc0, 0xe00, 0x340, 0x380].map(PipelineWord));
+}
+
+#[test]
+fn a_history_entry_lays_out_banks_levels_exposure_and_carried_words() {
+    use crate::history::HistoryEntry;
+    use crate::pipeline::{HistoryStatistics, PipelineSnapshot, PipelineWord};
+    use crate::stock::{history_entry_bytes, HISTORY_ENTRY_BYTES};
+    let mut statistics = HistoryStatistics { word: PipelineWord(0x5145), cell_levels: [0x204, 0x206], ..HistoryStatistics::default() };
+    statistics.banks[0][1] = 0x3140;
+    statistics.banks[1][63] = 0x4140;
+    let snapshot = PipelineSnapshot { levels: [1, 0x20a], retained: [1, 2, 3, 4, 5, 6].map(PipelineWord), ..PipelineSnapshot::default() };
+    let bytes = history_entry_bytes(&HistoryEntry::new(&snapshot, statistics, -2));
+    assert_eq!(bytes.len(), HISTORY_ENTRY_BYTES);
+    let word = |offset: usize| u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+    let half = |offset: usize| u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap());
+    assert_eq!((word(0), word(4 + 63 * 4), word(0x104 + 4)), (1, 0x4140, 0x3140));
+    assert_eq!((half(0x204), half(0x206), half(0x208), half(0x20a)), (0x204, 0x206, 0xfffe, 0x20a));
+    assert_eq!([0x20c, 0x210, 0x214, 0x218, 0x21c, 0x220].map(word), [1, 2, 3, 4, 5, 6]);
+    assert_eq!(word(0x224), 0x5145);
 }

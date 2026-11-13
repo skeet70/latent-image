@@ -1,6 +1,6 @@
 use crate::fakes::{Outbound, Ports};
 use crate::jobs::Effect;
-use crate::pipeline::{GainStep, PipelineSnapshot, PipelineWord};
+use crate::pipeline::{GainStep, PipelineSnapshot, PipelineWord, TimingWord};
 use crate::profile::{ProfileMode, ProfileSelection, RetainedHalfword, RetainedWord, StatisticsInUse, WindowPosition, WindowRecord, WindowStatus};
 use crate::record::{Request, TraceMark};
 use crate::window::{Window, WindowRequest, WindowResult};
@@ -13,12 +13,13 @@ fn completed() -> Completed<'static> { Completed { completion: Completion::Calcu
 fn ports() -> Ports {
     let mut ports = Ports::new(None, ());
     ports.snapshot = PipelineSnapshot {
-        mode: PipelineWord(3),
+        timing: TimingWord(3),
         flags: 9,
         gain_step: GainStep(2),
         exposure: [PipelineWord(40), PipelineWord(41)],
         levels: [500, 300],
         adjustment: PipelineWord(0),
+        ..PipelineSnapshot::default()
     };
     ports.gain_offsets[2] = 20;
     ports.exposure_value = -7;

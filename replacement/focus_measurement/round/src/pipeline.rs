@@ -2,7 +2,7 @@
 
 //! What the round reads from and asks of the imaging pipeline.
 
-use crate::profile::FrameInterval;
+use crate::profile::{FrameInterval, GridCell};
 
 /// The pipeline's statistics captures, each with the pipeline state saved beside it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -24,13 +24,42 @@ pub struct GainStep(pub u32);
 /// The pipeline state saved with a statistics capture, as far as the round reads it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PipelineSnapshot {
-    pub mode: PipelineWord,
+    pub status: SnapshotStatus,
+    pub timing: TimingWord,
     pub flags: u8,
     pub gain_step: GainStep,
     pub exposure: [PipelineWord; 2],
     pub levels: [u16; 2],
     /// One lowers the window level by 100.
     pub adjustment: PipelineWord,
+    /// Words the measurement history keeps for its readers.
+    pub retained: [PipelineWord; 6],
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SnapshotStatus(pub u32);
+
+impl SnapshotStatus {
+    /// Bits 0 and 2 both set.
+    pub const fn complete(self) -> bool { self.0 & 5 == 5 }
+}
+
+/// The history capture's statistics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HistoryStatistics {
+    /// Per grid cell, in cell order.
+    pub banks: [[u32; 64]; 2],
+    pub word: PipelineWord,
+    /// The two half-word banks at the cell the capture was asked about.
+    pub cell_levels: [u16; 2],
+}
+
+impl HistoryStatistics {
+    pub const EMPTY: Self = Self { banks: [[0; 64]; 2], word: PipelineWord(0), cell_levels: [0; 2] };
+}
+
+impl Default for HistoryStatistics {
+    fn default() -> Self { Self::EMPTY }
 }
 
 pub trait Pipeline {
@@ -44,10 +73,13 @@ pub trait Pipeline {
     fn request_mode_six_statistics(&mut self);
     /// Takes the flag the pipeline raises for the next window request.
     fn take_window_refresh(&mut self) -> bool;
+    /// The statistics of the latest history capture, with the levels at `cell`.
+    fn history_statistics(&mut self, cell: GridCell) -> HistoryStatistics;
 }
 
 /// Exposure conversions the round applies to pipeline values.
 pub trait Exposure {
     fn gain_offset(&mut self, step: GainStep) -> u32;
     fn exposure_value(&mut self, exposure: [PipelineWord; 2]) -> i16;
+    fn timing_offset(&mut self, timing: TimingWord) -> u16;
 }

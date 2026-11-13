@@ -1,14 +1,17 @@
 use crate::fakes::{Outbound, Ports};
+use crate::history::MeasurementHistory;
 use crate::lanes::Selection;
-use crate::profile::{FrameInterval, ProfileMode, IntervalHistory, IntervalTracking, ProfileSelection, PublishedResult, StatisticsInUse};
-use crate::pipeline::Statistics;
-use crate::record::{apply, Request, SearchMode};
+use crate::profile::{FrameInterval, GridCell, ProfileMode, IntervalHistory, IntervalTracking, ProfileSelection, PublishedResult, StatisticsInUse};
+use crate::pipeline::{GainStep, PipelineWord, SnapshotStatus, Statistics, TimingWord};
+use crate::record::{self, Request, SearchMode};
 use crate::round::{ParameterClient, RecordEffect, SearchStart};
 use xm1_saclac_interface::round::{GeometryCalibration, GeometryPair, MeasurementGeometry, RetainedGeometryValue};
 use xm1_saclac_interface::{stock, CommandKind, CompletionStatus, RecordHandle, ReplyTarget};
 use std::vec::Vec;
 
 fn record() -> RecordHandle { stock::record_handle_from_a2(0x16c0000) }
+
+fn apply(effect: RecordEffect, record: RecordHandle, ports: &mut Ports) { record::apply(effect, record, &mut MeasurementHistory::new(), ports) }
 
 const ACQUISITION: Selection = Selection { acquisition: true, search: false, auxiliary: false, image: false, source: false };
 
@@ -29,11 +32,83 @@ fn a_reset_detaches_the_capture_buffer_when_the_record_may_write_it() {
 #[test]
 fn clearing_the_selection_restarts_the_measurement_history_and_forgets_the_intervals() {
     let mut ports = Ports::new(Some(ACQUISITION), ());
+    let mut history = MeasurementHistory::new();
+    record::apply(RecordEffect::CollectReady, record(), &mut history, &mut ports);
+    assert!(history.started());
+    ports.take();
     ports.records.intervals = IntervalHistory::new([FrameInterval(7); IntervalHistory::CAPACITY], 3);
-    apply(RecordEffect::ClearSelection, record(), &mut ports);
-    assert!(ports.records.history_restarted);
+    record::apply(RecordEffect::ClearSelection, record(), &mut history, &mut ports);
+    assert!(!history.started());
     assert!(ports.records.intervals.intervals().is_empty());
     assert!(ports.take().is_empty());
+}
+
+#[test]
+fn a_record_without_the_grant_keeps_the_history_started() {
+    let mut ports = Ports::new(Some(ACQUISITION), ());
+    let mut history = MeasurementHistory::new();
+    record::apply(RecordEffect::CollectReady, record(), &mut history, &mut ports);
+    ports.records.granted = false;
+    record::apply(RecordEffect::ClearSelection, record(), &mut history, &mut ports);
+    assert!(history.started());
+}
+
+#[test]
+fn a_measurement_tick_enters_the_history_capture_with_the_focus_cell_levels() {
+    let mut ports = Ports::new(Some(ACQUISITION), ());
+    ports.records.profile.focus_cell = GridCell { column: 2, row: 5 };
+    ports.cell_levels = std::vec![(GridCell { column: 2, row: 5 }, [700, 650]), (GridCell { column: 3, row: 3 }, [1, 1])];
+    ports.history.banks[0][0] = 0xa0;
+    ports.history.banks[1][63] = 0xb1;
+    ports.history.word = PipelineWord(0x51);
+    ports.snapshot.levels = [400, 380];
+    ports.snapshot.retained = [1, 2, 3, 4, 5, 6].map(PipelineWord);
+    let mut history = MeasurementHistory::new();
+    record::apply(RecordEffect::CollectReady, record(), &mut history, &mut ports);
+    assert_eq!(ports.take(), [Outbound::Capture(Statistics::History)]);
+    let entry = history.newest();
+    assert!(entry.written());
+    assert_eq!(entry.cell_levels(), [700, 650]);
+    assert_eq!((entry.statistics().banks[0][0], entry.statistics().banks[1][63], entry.statistics().word), (0xa0, 0xb1, PipelineWord(0x51)));
+    assert_eq!(entry.reference_level(), 380);
+    assert_eq!(entry.retained(), [1, 2, 3, 4, 5, 6].map(PipelineWord));
+}
+
+#[test]
+fn the_history_exposure_is_the_timing_offset_and_acquisition_level_less_the_window_level() {
+    let mut ports = Ports::new(Some(ACQUISITION), ());
+    ports.timing_offset = 900;
+    ports.records.acquisition_level = -30;
+    ports.snapshot.levels = [400, 380];
+    ports.snapshot.gain_step = GainStep(3);
+    ports.gain_offsets[3] = 25;
+    ports.exposure_value = -7;
+    let mut history = MeasurementHistory::new();
+    record::apply(RecordEffect::CollectReady, record(), &mut history, &mut ports);
+    assert_eq!(history.newest().exposure(), 900 - 25 - 30 - (400 - 380) + 7);
+
+    ports.timing_offset = 0;
+    ports.snapshot.levels = [0, 0x8000];
+    ports.records.acquisition_level = 0;
+    ports.gain_offsets[3] = 0;
+    ports.exposure_value = 0;
+    record::apply(RecordEffect::CollectReady, record(), &mut history, &mut ports);
+    assert_eq!(history.newest().exposure(), i16::MIN);
+}
+
+#[test]
+fn an_incomplete_history_snapshot_leaves_the_history_alone() {
+    let mut ports = Ports::new(Some(ACQUISITION), ());
+    let mut history = MeasurementHistory::new();
+    for status in [0, 1, 4, 0xfffa] {
+        ports.snapshot.status = SnapshotStatus(status);
+        record::apply(RecordEffect::CollectReady, record(), &mut history, &mut ports);
+        assert_eq!(history, MeasurementHistory::new(), "status {status:#x}");
+    }
+    ports.snapshot.status = SnapshotStatus(0xfffd);
+    ports.snapshot.timing = TimingWord(9);
+    record::apply(RecordEffect::CollectReady, record(), &mut history, &mut ports);
+    assert!(history.started());
 }
 
 #[test]
@@ -85,7 +160,7 @@ fn a_measurement_tick_captures_the_statistics_in_use_then_records_the_history() 
     assert_eq!(ports.take(), [
         Outbound::Capture(Statistics::Primary),
         Outbound::Capture(Statistics::Auxiliary),
-        Outbound::MeasurementHistory,
+        Outbound::Capture(Statistics::History),
     ]);
 
     ports.records.in_use = StatisticsInUse { primary: true, search: true, auxiliary: false };
@@ -95,7 +170,7 @@ fn a_measurement_tick_captures_the_statistics_in_use_then_records_the_history() 
         Outbound::Capture(Statistics::Primary),
         Outbound::ModeSixStatistics,
         Outbound::Capture(Statistics::Search),
-        Outbound::MeasurementHistory,
+        Outbound::Capture(Statistics::History),
     ]);
 }
 

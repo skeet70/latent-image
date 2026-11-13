@@ -1,8 +1,8 @@
 use crate::image::{ChannelCount, LensReport, ReplyPorts};
 use crate::lanes::Selection;
 use crate::planner::{Cadence, Mode, Work};
-use crate::pipeline::{Exposure, GainStep, Pipeline, PipelineSnapshot, PipelineWord, Statistics, TimingWord};
-use crate::profile::{FrameInterval, FrameRate, IntervalHistory, IntervalTracking, Profile, ProfileGeometry, ProfileMode, ProfileRecords, ProfileSelection, PublishedResult, StatisticsInUse, WindowPosition, WindowRecord, WindowStatus};
+use crate::pipeline::{Exposure, GainStep, HistoryStatistics, Pipeline, PipelineSnapshot, PipelineWord, SnapshotStatus, Statistics, TimingWord};
+use crate::profile::{FrameInterval, FrameRate, GridCell, IntervalHistory, IntervalTracking, Profile, ProfileGeometry, ProfileMode, ProfileRecords, ProfileSelection, PublishedResult, StatisticsInUse, WindowPosition, WindowRecord, WindowStatus};
 use crate::record::{self, AlternateSearch, Power, Request, Settings, Trace, TraceMark};
 use crate::window::{self, WindowResult};
 use xm1_saclac_controllers::replies;
@@ -17,7 +17,7 @@ pub struct Records {
     pub capture_attached: bool,
     pub invalid: Vec<PublishedResult>,
     pub focus_invalid: bool,
-    pub history_restarted: bool,
+    pub acquisition_level: i16,
     pub intervals: IntervalHistory,
     pub profile: Profile,
     pub geometry: ProfileGeometry,
@@ -35,7 +35,7 @@ impl Records {
             capture_attached: true,
             invalid: Vec::new(),
             focus_invalid: false,
-            history_restarted: false,
+            acquisition_level: 0,
             intervals: IntervalHistory::default(),
             profile: Profile {
                 selection: ProfileSelection::Unselected,
@@ -44,6 +44,7 @@ impl Records {
                 geometry_on_autofocus: false,
                 profile_cadence: false,
                 frame_rate_cadence: false,
+                focus_cell: GridCell::default(),
             },
             geometry: ProfileGeometry {
                 resource: GeometryPair([0; 2]),
@@ -65,7 +66,6 @@ pub enum Outbound {
     Request(Request),
     ClearPending(ReplyTarget),
     Reply { target: ReplyTarget, callback: ClientCallback, status: CompletionStatus, values: [u32; 3] },
-    MeasurementHistory,
     Power(bool),
     Trace(TraceMark),
 }
@@ -85,6 +85,10 @@ pub struct Ports<X = ()> {
     pub frame_rate_threshold: FrameRate,
     pub cadence: fn(Work, Mode) -> Cadence,
     pub snapshot: PipelineSnapshot,
+    pub history: HistoryStatistics,
+    /// Levels the history capture reports per cell; other cells report zero.
+    pub cell_levels: Vec<(GridCell, [u16; 2])>,
+    pub timing_offset: u16,
     pub window_refresh: bool,
     pub gain_offsets: [u32; 11],
     pub exposure_value: i16,
@@ -108,7 +112,10 @@ impl<X> Ports<X> {
             intervals: Vec::new(),
             frame_rate_threshold: FrameRate(0),
             cadence: |_, _| Cadence { first: true, second: true, third: true, fourth: true },
-            snapshot: PipelineSnapshot::default(),
+            snapshot: PipelineSnapshot { status: SnapshotStatus(5), ..PipelineSnapshot::default() },
+            history: HistoryStatistics::default(),
+            cell_levels: Vec::new(),
+            timing_offset: 0,
             window_refresh: false,
             gain_offsets: [0; 11],
             exposure_value: 0,
@@ -144,9 +151,8 @@ impl<X> ProfileRecords for Ports<X> {
         if self.records.granted && !self.records.invalid.contains(&result) { self.records.invalid.push(result); }
     }
     fn invalidate_focus_result(&mut self) { self.records.focus_invalid = true; }
-    fn restart_measurement_history(&mut self, _: RecordHandle) {
-        if self.records.granted { self.records.history_restarted = true; }
-    }
+    fn grants_measurement_history(&mut self, _: RecordHandle) -> bool { self.records.granted }
+    fn acquisition_level(&mut self) -> i16 { self.records.acquisition_level }
     fn interval_history(&mut self) -> IntervalHistory { self.records.intervals }
     fn set_interval_history(&mut self, _: RecordHandle, history: IntervalHistory) {
         if self.records.granted { self.records.intervals = history; }
@@ -181,11 +187,16 @@ impl<X> Pipeline for Ports<X> {
     fn request_mode_six_statistics(&mut self) { self.outbound.push(Outbound::ModeSixStatistics); }
     fn snapshot(&mut self, _: Statistics) -> PipelineSnapshot { self.snapshot }
     fn take_window_refresh(&mut self) -> bool { core::mem::take(&mut self.window_refresh) }
+    fn history_statistics(&mut self, cell: GridCell) -> HistoryStatistics {
+        let cell_levels = self.cell_levels.iter().find(|&&(listed, _)| listed == cell).map_or([0; 2], |&(_, levels)| levels);
+        HistoryStatistics { cell_levels, ..self.history }
+    }
 }
 
 impl<X> Exposure for Ports<X> {
     fn gain_offset(&mut self, step: GainStep) -> u32 { self.gain_offsets[step.0 as usize] }
     fn exposure_value(&mut self, _: [PipelineWord; 2]) -> i16 { self.exposure_value }
+    fn timing_offset(&mut self, _: TimingWord) -> u16 { self.timing_offset }
 }
 
 impl<X> Power for Ports<X> {
@@ -217,7 +228,6 @@ impl<X> replies::Effects for Ports<X> {
 
 impl<X> record::Ports for Ports<X> {
     fn request(&mut self, request: Request) { self.outbound.push(Outbound::Request(request)); }
-    fn record_measurement_history(&mut self, _: RecordHandle) { self.outbound.push(Outbound::MeasurementHistory); }
 }
 
 impl<X> ReplyPorts for Ports<X> {

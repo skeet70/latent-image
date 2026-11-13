@@ -97,7 +97,13 @@ pub struct Profile {
     pub profile_cadence: bool,
     /// The planner takes its cadence by the acquisition's frame rate.
     pub frame_rate_cadence: bool,
+    /// The measurement-grid cell of the profile's focus area.
+    pub focus_cell: GridCell,
 }
+
+/// A cell of the eight-by-eight measurement grid.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct GridCell { pub column: u32, pub row: u32 }
 
 /// The profile's part of the measurement geometry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -152,8 +158,10 @@ pub trait ProfileRecords {
     /// Marks the published focus result invalid, under the record the focus
     /// controller holds.
     fn invalidate_focus_result(&mut self);
-    /// Marks the measurement history empty; the next entry starts it again.
-    fn restart_measurement_history(&mut self, record: RecordHandle);
+    /// Whether `record`'s grant covers the measurement history's position.
+    fn grants_measurement_history(&mut self, record: RecordHandle) -> bool;
+    /// The level the acquisition last published.
+    fn acquisition_level(&mut self) -> i16;
     fn interval_history(&mut self) -> IntervalHistory;
     fn set_interval_history(&mut self, record: RecordHandle, history: IntervalHistory);
     fn profile(&mut self, record: RecordHandle) -> Profile;

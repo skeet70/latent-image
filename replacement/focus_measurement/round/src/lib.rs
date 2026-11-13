@@ -5,6 +5,7 @@ pub mod jobs;
 pub mod acquisition;
 pub mod children;
 pub mod lanes;
+pub mod history;
 pub mod round;
 pub mod image;
 pub mod live;
@@ -39,3 +40,5 @@ mod fakes;
 mod record_tests;
 #[cfg(test)]
 mod window_tests;
+#[cfg(test)]
+mod history_tests;

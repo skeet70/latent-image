@@ -2,6 +2,7 @@
 
 use crate::acquisition::{self, Acquisition, Branch};
 use crate::image::{self, ImageEffect, ImageJob, ImageOutcome, ImagePeer, ImageRequest, ImageSignal, Interruption, ReplyPorts};
+use crate::history::MeasurementHistory;
 use crate::jobs::{self, Calculation, CalculationJob};
 use crate::lanes::{Lane, Selection};
 use crate::pipeline::TimingWord;
@@ -35,6 +36,7 @@ enum Bookkeeping { Disabled, Enabled }
 /// The live measurement child: the round and its lanes.
 pub struct Measurement {
     round: Round,
+    history: MeasurementHistory,
     acquisition: Acquisition,
     acquisition_timing: TimingWord,
     auxiliary: CalculationJob,
@@ -51,6 +53,7 @@ impl Measurement {
     pub const fn new() -> Self {
         Self {
             round: Round::new(),
+            history: MeasurementHistory::new(),
             acquisition: Acquisition::new(Branch::Live),
             acquisition_timing: TimingWord(0),
             auxiliary: CalculationJob::new(Calculation::Auxiliary),
@@ -63,13 +66,16 @@ impl Measurement {
     }
 
     pub fn handle(&mut self, event: ChildEvent<'_, MeasurementControl>, effects: &mut impl Effects) -> ChildOutcome {
-        let Self { round, acquisition, acquisition_timing, auxiliary, window, window_work, source, image, bookkeeping } = self;
-        let mut lanes = Lanes { acquisition, acquisition_timing, auxiliary, window, window_work, source, image, bookkeeping, effects };
+        let Self { round, history, acquisition, acquisition_timing, auxiliary, window, window_work, source, image, bookkeeping } = self;
+        let mut lanes = Lanes { history, acquisition, acquisition_timing, auxiliary, window, window_work, source, image, bookkeeping, effects };
         round.handle(event, &mut lanes)
     }
+
+    pub const fn history(&self) -> &MeasurementHistory { &self.history }
 }
 
 struct Lanes<'a, E> {
+    history: &'a mut MeasurementHistory,
     acquisition: &'a mut Acquisition,
     acquisition_timing: &'a mut TimingWord,
     auxiliary: &'a mut CalculationJob,
@@ -242,6 +248,6 @@ impl<E: Effects> Environment for Lanes<'_, E> {
     fn autofocus_geometry(&mut self, record: RecordHandle) -> bool { self.effects.profile(record).geometry_on_autofocus }
     fn planning_mode(&mut self, record: RecordHandle) -> Mode { self.planned_mode(record) }
     fn cadence(&mut self, work: Work, mode: Mode) -> Cadence { self.effects.cadence(work, mode) }
-    fn record_effect(&mut self, record: RecordHandle, effect: RecordEffect) { record::apply(effect, record, &mut *self.effects) }
+    fn record_effect(&mut self, record: RecordHandle, effect: RecordEffect) { record::apply(effect, record, &mut *self.history, &mut *self.effects) }
     fn fault(&mut self) { self.effects.fault() }
 }
