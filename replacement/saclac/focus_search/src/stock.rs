@@ -1,9 +1,8 @@
 #![forbid(unsafe_code)]
 
-//! X-M1 1.50 layouts at the search's boundary.
+//! X-M1 1.50 layouts of the record fields the search reads and writes.
 
 use crate::contrast::{FocusStatus, RetainedFocus, StageRecord};
-use crate::live::{BridgeReport, BridgeStatus, LensClass};
 use xm1_saclac_controllers::search::LensPosition;
 
 fn word(bytes: &[u8], offset: usize) -> u32 {
@@ -12,19 +11,6 @@ fn word(bytes: &[u8], offset: usize) -> u32 {
 
 fn half(bytes: &[u8], offset: usize) -> u16 {
     u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
-}
-
-/// Completion 0x46's 12 bytes: 0xf3c14c posts the status word, the position halfword at
-/// +4 and the class word at +8.
-pub fn bridge_report(payload: &[u8]) -> Option<BridgeReport> {
-    let payload: &[u8; 12] = payload.get(..12)?.try_into().ok()?;
-    let status = match word(payload, 0) as i32 {
-        0 => BridgeStatus::Moved,
-        21 => BridgeStatus::Deferred,
-        -94 => BridgeStatus::Fault,
-        other => BridgeStatus::Other(other),
-    };
-    Some(BridgeReport { status, position: LensPosition(half(payload, 4) as i16), class: LensClass(word(payload, 8)) })
 }
 
 /// Shared +0x84, 32 bytes; both writers (0xf3c17c, 0xf40300) store 2 at +0x14.

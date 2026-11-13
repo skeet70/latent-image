@@ -1,8 +1,9 @@
-use crate::live::{BridgeReport, BridgeStatus, LaneEvent, LaneStatus, LensClass, LiveSearch, LiveStrategy, Measurement, Ports};
+use crate::live::{LaneEvent, LaneStatus, LiveSearch, LiveStrategy, Measurement, Ports};
 use crate::requests::{BridgeMotion, Request};
 use std::collections::VecDeque;
 use std::vec::Vec;
-use xm1_saclac_controllers::search::{Direction, FocusSearch, LensPosition, SearchDecision, SearchInput, SearchStep, Travel};
+use xm1_saclac_controllers::search::{Direction, FocusSearch, SearchDecision, SearchInput, SearchStep, Travel};
+use xm1_saclac_interface::search::{BridgeReport, BridgeStatus, LensClass};
 use xm1_saclac_interface::LensEffect;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -94,11 +95,11 @@ fn travel(drive: u8) -> SearchDecision<u8> {
 }
 
 fn moved(position: i16) -> BridgeReport {
-    BridgeReport { status: BridgeStatus::Moved, position: LensPosition(position), class: LensClass(1) }
+    BridgeReport { status: BridgeStatus::Moved, position, class: LensClass(1) }
 }
 
 fn report(status: BridgeStatus) -> BridgeReport {
-    BridgeReport { status, position: LensPosition(0), class: LensClass(0) }
+    BridgeReport { status, position: 0, class: LensClass(0) }
 }
 
 fn searching(decisions: &[SearchDecision<u8>]) -> (LiveSearch<Script>, Peers) {

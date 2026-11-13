@@ -190,14 +190,3 @@ fn the_status_and_stage_layouts_are_the_records() {
     let stage = StageRecord { stage: 1, first_pass: 2, words: [3, 4], halves: [5, 6], last: 7 };
     assert_eq!(stock::stage_record(stage), [1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 5, 0, 0, 0, 4, 0, 0, 0, 6, 0, 7, 0]);
 }
-
-#[test]
-fn a_bridge_report_parses_status_position_and_class() {
-    use crate::live::{BridgeReport, BridgeStatus, LensClass};
-    let payload = [0xa2, 0xff, 0xff, 0xff, 0x10, 0x80, 0, 0, 2, 0, 0, 0];
-    assert_eq!(
-        stock::bridge_report(&payload),
-        Some(BridgeReport { status: BridgeStatus::Fault, position: LensPosition(-32752), class: LensClass(2) })
-    );
-    assert_eq!(stock::bridge_report(&payload[..11]), None);
-}

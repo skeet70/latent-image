@@ -4,29 +4,8 @@
 //! lens-bridge request are in flight; both drain before the lane stops, suspends or resumes.
 
 use crate::requests::{BridgeMotion, Request};
-use xm1_saclac_controllers::search::{FocusSearch, LensPosition, SearchDecision, SearchInput, SearchStep, SearchTerminal};
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BridgeStatus {
-    Moved,
-    /// imgdc reports 21 from 0xff91dc; a release answered with it is asked again.
-    Deferred,
-    /// -94.
-    Fault,
-    Other(i32),
-}
-
-/// The lens table class imgdc reads through 0x76dad4.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct LensClass(pub u32);
-
-/// imgdc's answer to a bridge request (completion 0x46).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct BridgeReport {
-    pub status: BridgeStatus,
-    pub position: LensPosition,
-    pub class: LensClass,
-}
+use xm1_saclac_controllers::search::{FocusSearch, SearchDecision, SearchInput, SearchStep, SearchTerminal};
+use xm1_saclac_interface::search::{BridgeReport, BridgeStatus};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Measurement<Frame, Evaluation> {
