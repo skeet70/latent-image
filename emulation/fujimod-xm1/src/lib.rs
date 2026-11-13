@@ -49,6 +49,7 @@ pub mod record_medium;
 pub mod reset_observation;
 pub mod sd_host;
 pub mod startup_sites;
+pub mod stimulus;
 pub mod trace;
 pub mod ui_conversion;
 pub mod witness;

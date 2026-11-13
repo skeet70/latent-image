@@ -1448,4 +1448,43 @@
       {"name":"linked_sha256","path":"private-data/scratch/GeneralHeap/runs/20261113T053100Z-heap-reviewed-staging/result/staging-contract.json","pointer":["linked_sha256"]}
     ]
   }
+  ,{
+    "id": "E-XM1-STIMULUS-TICK-CLOCK-150",
+    "claim": "On the saclac census shoot-without-lens route from each image's post-boot checkpoint, the default instruction clock lands {{control_differing}} of {{control_points}} stimulus points of the time-services image (DAT {{owned_sha256}}) on other board ticks than stock, by up to {{control_max}} ticks. The stock instruction-clock run reproduces the earlier stock receipt's instructions, milestones, presses and dispatcher sequence ({{reference_equal}}). On the board-tick clock with the {{schedule_points}}-point schedule `saclac-census schedule` derives from that stock run, stock lands every point on its scheduled tick in two runs ({{stock_a_on_schedule}}, {{stock_b_on_schedule}}) whose census receipts are byte-identical ({{census_equal}}), and the time-services image lands every point on the same ticks ({{owned_on_schedule}}) while its instruction count since its origin differs from stock's at {{owned_offsets}} points. Both clocks restore the same post-boot checkpoint: stock {{stock_checkpoint}} ({{stock_checkpoint_lookup}} on the board-tick clock), created by the instruction-clock run as {{stock_checkpoint_created}}. Replayed without widening, the time-services image leaves {{raw_undebounced}} key releases undebounced before the next press and ends the DOWN sequence at cursor {{raw_cursor}} instead of {{expected_cursor}}.",
+    "scope": "Emulation of stock X-M1 1.50 and the time-services tip image on the controlled-rtc run document under FujiMod 3d90035d, one route; tick ordinals count board ticks from each image's checkpoint, at board tick {{stock_origin_tick}} for stock and {{owned_origin_tick}} for the time-services image. Not a comparison of time-services interface traffic.",
+    "notes": "The unwidened replay fails because a stock instruction-clock run presses the next key as soon as stock has debounced the last one. Equal ticks do not give equal scanner phase: each image's scanner runs on its own timer history, so a press can still latch one scan interval apart (inferred, not measured here).",
+    "artifacts": [
+      "private-data/scratch/StimulusTicks/runs/20261113T200947Z-board-ticks-shoot-without-lens/result/verdict.json",
+      "private-data/scratch/StimulusTicks/runs/20261113T200947Z-board-ticks-shoot-without-lens/result/stock-ticks-a.json",
+      "private-data/scratch/StimulusTicks/runs/20261113T200947Z-board-ticks-shoot-without-lens/result/stock-ticks-b.json",
+      "private-data/scratch/StimulusTicks/runs/20261113T200947Z-board-ticks-shoot-without-lens/result/owned-ticks.json",
+      "private-data/scratch/StimulusTicks/runs/20261113T200947Z-board-ticks-shoot-without-lens/result/owned-ticks-raw.json",
+      "private-data/scratch/StimulusTicks/runs/20261113T200722Z-instruction-clock-shoot-without-lens/result/stock-instructions.json",
+      "private-data/scratch/StimulusTicks/runs/20261113T200722Z-instruction-clock-shoot-without-lens/result/owned-instructions.json",
+      "private-data/scratch/StimulusTicks/runs/20261113T200722Z-instruction-clock-shoot-without-lens/result/reference-check.json",
+      "private-data/scratch/StimulusTicks/runs/20261113T200722Z-instruction-clock-shoot-without-lens/result/schedule-widened.json"
+    ],
+    "facts": [
+      {"name":"firmware_sha256","path":"private-data/scratch/StimulusTicks/runs/20261113T200947Z-board-ticks-shoot-without-lens/result/stock-ticks-a.json","pointer":["inputs","1","sha256"]},
+      {"name":"owned_sha256","path":"private-data/scratch/StimulusTicks/runs/20261113T200947Z-board-ticks-shoot-without-lens/result/owned-ticks.json","pointer":["inputs","1","sha256"]},
+      {"name":"schedule_points","path":"private-data/scratch/StimulusTicks/runs/20261113T200947Z-board-ticks-shoot-without-lens/result/verdict.json","pointer":["schedule_points"]},
+      {"name":"stock_a_on_schedule","path":"private-data/scratch/StimulusTicks/runs/20261113T200947Z-board-ticks-shoot-without-lens/result/verdict.json","pointer":["stock_a","on_schedule"]},
+      {"name":"stock_b_on_schedule","path":"private-data/scratch/StimulusTicks/runs/20261113T200947Z-board-ticks-shoot-without-lens/result/verdict.json","pointer":["stock_b","on_schedule"]},
+      {"name":"owned_on_schedule","path":"private-data/scratch/StimulusTicks/runs/20261113T200947Z-board-ticks-shoot-without-lens/result/verdict.json","pointer":["owned","on_schedule"]},
+      {"name":"census_equal","path":"private-data/scratch/StimulusTicks/runs/20261113T200947Z-board-ticks-shoot-without-lens/result/verdict.json","pointer":["stock_repeat","census_equal"]},
+      {"name":"owned_offsets","path":"private-data/scratch/StimulusTicks/runs/20261113T200947Z-board-ticks-shoot-without-lens/result/verdict.json","pointer":["owned_points_at_other_instruction_offsets"]},
+      {"name":"control_points","path":"private-data/scratch/StimulusTicks/runs/20261113T200947Z-board-ticks-shoot-without-lens/result/verdict.json","pointer":["control","stock_points"]},
+      {"name":"control_differing","path":"private-data/scratch/StimulusTicks/runs/20261113T200947Z-board-ticks-shoot-without-lens/result/verdict.json","pointer":["control","differing_points"]},
+      {"name":"control_max","path":"private-data/scratch/StimulusTicks/runs/20261113T200947Z-board-ticks-shoot-without-lens/result/verdict.json","pointer":["control","max_difference"]},
+      {"name":"raw_undebounced","path":"private-data/scratch/StimulusTicks/runs/20261113T200947Z-board-ticks-shoot-without-lens/result/verdict.json","pointer":["owned_raw_schedule","undebounced_key_pulses"],"operation":"length"},
+      {"name":"raw_cursor","path":"private-data/scratch/StimulusTicks/runs/20261113T200947Z-board-ticks-shoot-without-lens/result/verdict.json","pointer":["owned_raw_schedule","last_milestone","observed","cursor"]},
+      {"name":"expected_cursor","path":"private-data/scratch/StimulusTicks/runs/20261113T200947Z-board-ticks-shoot-without-lens/result/verdict.json","pointer":["owned_raw_schedule","last_milestone","expected","cursor"]},
+      {"name":"reference_equal","path":"private-data/scratch/StimulusTicks/runs/20261113T200722Z-instruction-clock-shoot-without-lens/result/reference-check.json","pointer":["equal"]},
+      {"name":"stock_origin_tick","path":"private-data/scratch/StimulusTicks/runs/20261113T200947Z-board-ticks-shoot-without-lens/result/stock-ticks-a.json","pointer":["stimuli","origin","board_tick"]},
+      {"name":"owned_origin_tick","path":"private-data/scratch/StimulusTicks/runs/20261113T200947Z-board-ticks-shoot-without-lens/result/owned-ticks.json","pointer":["stimuli","origin","board_tick"]},
+      {"name":"stock_checkpoint","path":"private-data/scratch/StimulusTicks/runs/20261113T200947Z-board-ticks-shoot-without-lens/result/stock-ticks-a.json","pointer":["checkpoint","key"]},
+      {"name":"stock_checkpoint_lookup","path":"private-data/scratch/StimulusTicks/runs/20261113T200947Z-board-ticks-shoot-without-lens/result/stock-ticks-a.json","pointer":["checkpoint","lookup"]},
+      {"name":"stock_checkpoint_created","path":"private-data/scratch/StimulusTicks/runs/20261113T200722Z-instruction-clock-shoot-without-lens/result/stock-instructions.json","pointer":["checkpoint","key"]}
+    ]
+  }
 ]

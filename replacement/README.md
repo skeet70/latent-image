@@ -147,6 +147,18 @@ Scope: Whole general-heap artifact behind retained A32 entries on the finite nat
 
 <!-- /evidence-record E-GENERAL-HEAP-CUTOVER-NATURAL-PAIR-150 -->
 
+## Stimulus clock for stock-against-owned scenarios
+
+Full-system comparisons of a subsystem that changes guest timing fire their scenario stimuli on board ticks ([stimulus clock](../emulation/checkpoint-runs.md#stimulus-clock)).
+
+<!-- evidence-record E-XM1-STIMULUS-TICK-CLOCK-150 -->
+
+E-XM1-STIMULUS-TICK-CLOCK-150: On the saclac census shoot-without-lens route from each image's post-boot checkpoint, the default instruction clock lands 50 of 51 stimulus points of the time-services image (DAT bbd15ed8f5b0abf1eba58fc8f0fab081e33cd9495b1886e935b90315affee140) on other board ticks than stock, by up to 7090026 ticks. The stock instruction-clock run reproduces the earlier stock receipt's instructions, milestones, presses and dispatcher sequence (true). On the board-tick clock with the 51-point schedule `saclac-census schedule` derives from that stock run, stock lands every point on its scheduled tick in two runs (true, true) whose census receipts are byte-identical (true), and the time-services image lands every point on the same ticks (true) while its instruction count since its origin differs from stock's at 50 points. Both clocks restore the same post-boot checkpoint: stock aa3744d2370f9dbb19441858f4ddb0a242280c13ed0788141a2ea9f214ea49f5 (hit on the board-tick clock), created by the instruction-clock run as aa3744d2370f9dbb19441858f4ddb0a242280c13ed0788141a2ea9f214ea49f5. Replayed without widening, the time-services image leaves 4 key releases undebounced before the next press and ends the DOWN sequence at cursor 22 instead of 20.
+
+Scope: Emulation of stock X-M1 1.50 and the time-services tip image on the controlled-rtc run document under FujiMod 3d90035d, one route; tick ordinals count board ticks from each image's checkpoint, at board tick 151610517 for stock and 144317059 for the time-services image. Not a comparison of time-services interface traffic.
+
+<!-- /evidence-record E-XM1-STIMULUS-TICK-CLOCK-150 -->
+
 ## Native rewrite qualification
 
 For an applicable native-only increment, run the native SDK and runner suites plus the affected caller's qualification command:
