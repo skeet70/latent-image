@@ -52,7 +52,7 @@ report_sha=$(sha256sum "$out/bank-allowlist-report.json" | cut -d' ' -f1)
 jq -n --arg checker "$checker_sha" --arg variant "$variant_tag" \
   --arg manifest "$manifest_sha" --arg runtime "$runtime_sha" --arg elf "$elf_sha" \
   --arg archive "$archive_sha" --arg input "$input_sha" --arg report "$report_sha" \
-  '{schema:1,analysis:"bank-allowlist-check-r1",checker_sha256:$checker,bank_variant:$variant,policy:"enforce",manifest_sha256:$manifest,runtime_sha256:$runtime,kernel_elf_sha256:$elf,archive_sha256:$archive,allowlist_input_sha256:$input,report_sha256:$report}' \
+  '{schema:1,analysis:"bank-interface-check-r3",checker_sha256:$checker,bank_variant:$variant,policy:"enforce",manifest_sha256:$manifest,runtime_sha256:$runtime,kernel_elf_sha256:$elf,archive_sha256:$archive,allowlist_input_sha256:$input,report_sha256:$report}' \
   > "$out/bank-allowlist-proof.json"
 bazel-bin/transport/render-manifest-admission-tests "$PWD/$out/ram-push-manifest.json"
 sha256sum "$out/runtime.bin" "$out/kernel.elf" "$out/ram-push-manifest.json"

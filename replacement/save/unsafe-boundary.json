@@ -1,0 +1,32 @@
+{
+  "source_roots": [
+    "src"
+  ],
+  "boundary_files": [
+    {
+      "path": "src/abi.rs",
+      "reason": "Retained save frame, status words, callbacks and task service ABI."
+    }
+  ],
+  "boundary_items": [
+    {
+      "path": "src/contract.rs",
+      "kind": "struct",
+      "name": "SaveCompletion",
+      "reason": "Retained save completion function-pointer ABI."
+    },
+    {
+      "path": "src/contract.rs",
+      "kind": "struct",
+      "name": "ReleaseCompletion",
+      "reason": "Retained release completion function-pointer ABI."
+    },
+    {
+      "path": "src/contract.rs",
+      "kind": "impl",
+      "name": "StatusOut",
+      "reason": "Retained caller status-out pointer and volatile status write."
+    }
+  ],
+  "known_exceptions": []
+}

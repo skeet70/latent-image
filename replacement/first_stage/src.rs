@@ -102,10 +102,6 @@ unsafe fn log_event(value: u32, channel: LogChannel) {
     xm1_first_stage_log_timestamp(base.add(slot as usize));
     write(base.add(slot as usize + 1), value);
     write(index, slot + 2);
-    #[cfg(fixed_image)]
-    if slot + 2 >= limit {
-        return;
-    }
     write(base.add(slot as usize + 2), LOG_END);
 }
 
@@ -193,12 +189,16 @@ enum BootError {
     Media(media::MediaError),
     Image(images::ImageError),
     Publication,
+    #[cfg(fixed_image)]
+    FixedImage(fixed_image::LoadError),
 }
 
 /// Record-1 failure GPIO sequence at 0x1de8..0x1e3c.
 unsafe fn fail(error: BootError) -> ! {
     match error {
         BootError::Media(_) | BootError::Image(_) | BootError::Publication => {}
+        #[cfg(fixed_image)]
+        BootError::FixedImage(_) => {}
     }
     let mut port = 0xfff8_9018usize;
     while port != 0xfff8_9418 {
@@ -242,12 +242,7 @@ unsafe fn stage_next(core: Core) -> Result<(), BootError> {
     images::xm1_first_stage_stage_images(core == Core::Zero).map_err(BootError::Image)?;
     #[cfg(fixed_image)]
     if core == Core::Zero {
-        log_event(0x2100_0000, LogChannel::Zero);
-        if fixed_image::xm1_first_stage_fixed_image_load().is_err() {
-            log_event(0xe100_0000, LogChannel::Zero);
-            fixed_image::xm1_first_stage_fixed_image_halt();
-        }
-        log_event(0x3100_0000, LogChannel::Zero);
+        fixed_image::xm1_first_stage_fixed_image_load().map_err(BootError::FixedImage)?;
     }
     media::storage_fini().map_err(BootError::Media)?;
     xm1_first_stage_completion_zero();
@@ -272,6 +267,10 @@ pub unsafe extern "C" fn xm1_first_stage_main() -> ! {
     configure_mpu(core);
     peer_rendezvous(core);
     if let Err(error) = stage_next(core) {
+        #[cfg(fixed_image)]
+        if let BootError::FixedImage(_) = error {
+            fixed_image::xm1_first_stage_fixed_image_halt(error);
+        }
         fail(error);
     }
     #[cfg(first_stage_handler_tail_fault)]

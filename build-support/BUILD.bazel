@@ -8,6 +8,10 @@ exports_files([
     "nixpkgs.nix",
     "repositories.bzl",
     "rules-haskell-nix.patch",
+    "rust-source-boundary-test.sh",
+    "RustSourceBoundaryCheck.hs",
+    "BankSourceBoundaryCheck.hs",
+    "bank-source-boundaries.json",
 ])
 
 haskell_library(
@@ -388,4 +392,60 @@ haskell_test(
         "//host:process",
         "//host:unix",
     ],
+)
+
+haskell_binary(
+    name = "rust-source-boundary-check",
+    srcs = ["RustSourceBoundaryMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [":rust-source-boundary", "//host:base"],
+)
+
+haskell_library(
+    name = "rust-source-boundary",
+    srcs = ["RustSourceBoundaryCheck.hs", "BankSourceBoundaryCheck.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+    ],
+)
+
+filegroup(
+    name = "bank-source-guard-sources",
+    srcs = [
+        "bank-source-boundaries.json",
+        "//replacement/bank:unsafe-boundary-check-sources",
+        "//replacement/capture:unsafe-boundary-check-sources",
+        "//replacement/service:unsafe-boundary-check-sources",
+        "//replacement/owned_menu:unsafe-boundary-check-sources",
+        "//replacement/modal_runtime:unsafe-boundary-check-sources",
+        "//replacement/recipe_ui:unsafe-boundary-check-sources",
+        "//replacement/menu_engine:unsafe-boundary-check-sources",
+        "//replacement/menu_value:unsafe-boundary-check-sources",
+        "//replacement/render_adapter:unsafe-boundary-check-sources",
+        "//replacement/menu_widgets:unsafe-boundary-check-sources",
+        "//replacement/render_commands:unsafe-boundary-check-sources",
+        "//replacement/save:unsafe-boundary-check-sources",
+        "//replacement/media_permit:unsafe-boundary-check-sources",
+        "//replacement/develop:font-source-boundary-check-sources",
+        "//replacement/property_service:unsafe-boundary-check-sources",
+        "//replacement/settings_storage:unsafe-boundary-check-sources",
+        "//replacement/kernel:unsafe-boundary-check-sources",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+haskell_test(
+    name = "bank-source-boundary-tests",
+    srcs = ["BankSourceBoundaryTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    visibility = ["//visibility:public"],
+    deps = [":rust-source-boundary", "//host:base"],
 )

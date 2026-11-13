@@ -1,0 +1,13 @@
+{
+  "boundary_files": [
+    "menu/recipe_bank_arm.S",
+    "replacement/capture/rb_capture_stock.S",
+    "replacement/service/rb_service_stock.S",
+    "menu/recipe_bank_probe.c",
+    "menu/recipe_bank_hook.c",
+    "menu/recipe_bank_storage.c",
+    "menu/recipe_bank_actions.c",
+    "menu/recipe_bank_edit.c",
+    "menu/recipe_bank_diagnostic.c"
+  ]
+}

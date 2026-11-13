@@ -1,0 +1,24 @@
+{
+  "source_roots": [
+    "src"
+  ],
+  "boundary_files": [],
+  "boundary_items": [],
+  "known_exceptions": [
+    {
+      "path": "src/raster_tests.rs",
+      "lines": [
+        629
+      ],
+      "reason": "Host-only test fixture borrows its static pixel buffers."
+    },
+    {
+      "path": "src/test_buffers.rs",
+      "lines": [
+        11,
+        20
+      ],
+      "reason": "Host-only test buffer ownership uses UnsafeCell and a one-shot token."
+    }
+  ]
+}

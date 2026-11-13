@@ -16,7 +16,7 @@ def property_service_recipe_image(name, recipe_binding, visibility = None, tags 
         entry = "xm1_property_get_entry",
         link_script = "//replacement/property_service:property-service.ld",
         link_includes = [recipe_binding],
-        extra_ldflags = ["-Wl,--gc-sections", "-Wl,-T,$(location %s)" % recipe_binding],
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs", "-Wl,-T,$(location %s)" % recipe_binding],
         tags = tags,
         visibility = visibility,
     )

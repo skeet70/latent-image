@@ -124,7 +124,6 @@ impl Observer {
                 require(self.load_begin.replace(machine.instructions()).is_none(), "fixed record loaded twice")?;
             } else if address == self.symbols.handoff.0 {
                 require(self.load_begin.is_some() && self.handoff.is_none(), "handoff preceded fixed load or repeated")?;
-                require(self.value(machine, Address(0xa007c))? == 0x31000000, "successful load event is absent")?;
                 require(self.value(machine, self.symbols.data)? == 0x13579bdf && self.value(machine, self.symbols.count)? == 0
                     && self.value(machine, self.symbols.failures)? == 0, "data or BSS is not initialized before handoff")?;
                 let branch = self.value(machine, Address(0x69cdf8))?;
@@ -136,7 +135,7 @@ impl Observer {
                 self.first_entry.get_or_insert(machine.instructions());
                 self.entries += 1;
             } else if address == self.symbols.halt.0 {
-                require(self.handoff.is_none() && self.entries == 0 && self.value(machine, Address(0xa007c))? == 0xe1000000,
+                require(self.handoff.is_none() && self.entries == 0,
                     "corrupt record did not stop at the load failure boundary")?;
                 self.halted = true;
                 return Ok(Advance::Halted);

@@ -1,0 +1,27 @@
+{
+  "source_roots": [
+    "src"
+  ],
+  "boundary_files": [],
+  "boundary_items": [
+    {
+      "path": "src/lib.rs",
+      "kind": "fn",
+      "name": "rb_ui_route_page",
+      "reason": "Recipe-page classification exported to retained C callers."
+    },
+    {
+      "path": "src/lib.rs",
+      "kind": "fn",
+      "name": "rb_ui_route_slot",
+      "reason": "Recipe-page classification exported to retained C callers."
+    },
+    {
+      "path": "src/lib.rs",
+      "kind": "fn",
+      "name": "rb_ui_route_item",
+      "reason": "Recipe-page classification exported to retained C callers."
+    }
+  ],
+  "known_exceptions": []
+}

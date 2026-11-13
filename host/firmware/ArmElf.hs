@@ -11,6 +11,7 @@ module ArmElf
   , AddressRelocation (..)
   , AddressReferenceKind (..)
   , addressRelocations
+  , directBranchTarget
   , parseElf
   , sectionWritable
   , sectionExecutable
@@ -218,9 +219,12 @@ addressRelocations elf = concat <$> mapM readTable tables
         content <- maybe (Left "ARM relocation word outside allocated bytes") pure (wordAt elf site)
         pure (site, encoding .&. 0xff, encoding `shiftR` 8, content)
       forM [(site, kind, symbol, content) | (site, kind, symbol, content) <- records, kind /= 0] $ \(site, kind, symbol, content) -> do
-        let direct = site + 8 + fromIntegral ((fromIntegral (content `shiftL` 8) :: Int32) `shiftR` 6)
-              + if content .&. 0xfe000000 == 0xfa000000 then (content `shiftR` 23) .&. 2 else 0
-            immediate word = ((word `shiftR` 4) .&. 0xf000) .|. (word .&. 0xfff)
+        direct <- case kind of
+          1 -> branchTarget site content
+          28 -> branchTarget site content
+          29 -> branchTarget site content
+          _ -> pure 0
+        let immediate word = ((word `shiftR` 4) .&. 0xf000) .|. (word .&. 0xfff)
             register word = (word `shiftR` 12) .&. 15
             pair other = sortOn fst [(at, instruction) | (at, code, identity, instruction) <- records
               , code == other, identity == symbol, register instruction == register content]
@@ -240,3 +244,14 @@ addressRelocations elf = concat <$> mapM readTable tables
             lower <- paired 43
             pure (AddressRelocation site ((immediate content `shiftL` 16) .|. immediate lower) DataReference)
           _ -> Left ("unsupported ARM address relocation: " ++ show kind)
+  branchTarget site content = maybe (Left "ARM branch relocation does not contain a direct branch") Right (directBranchTarget site content)
+
+directBranchTarget :: Word32 -> Word32 -> Maybe Word32
+directBranchTarget address word
+  | word .&. 0x0e000000 /= 0x0a000000 = Nothing
+  | otherwise = Just (if thumb then (target + halfword) .|. 1 else target)
+ where
+  displacement = (fromIntegral ((word .&. 0x00ffffff) `shiftL` 8) :: Int32) `shiftR` 6
+  target = address + 8 + fromIntegral displacement
+  thumb = word `shiftR` 28 == 15
+  halfword = if testBit word 24 then 2 else 0

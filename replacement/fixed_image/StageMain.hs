@@ -47,6 +47,8 @@ main = do
       symbols <- H.readRegular 0x400000 symbolsPath >>= either H.failH pure . F.parseSymbols
       begin <- F.symbolAddress <$> either H.failH pure (F.lookupSymbol symbols "__fixed_bss_start")
       end <- F.symbolAddress <$> either H.failH pure (F.lookupSymbol symbols "__fixed_bss_end")
+      bodyStart <- F.symbolAddress <$> either H.failH pure (F.lookupSymbol symbols "__fixed_body_start")
+      bodyEnd <- F.symbolAddress <$> either H.failH pure (F.lookupSymbol symbols "__fixed_body_end")
       firstSymbols <- H.readRegular 0x400000 firstSymbolsPath >>= either H.failH pure . F.parseSymbols
       buildSymbol <- either H.failH pure (F.lookupSymbol firstSymbols "XM1_FIXED_IMAGE_BUILD_ID")
       let buildOffset = F.firstRecordSlotOffset + fromIntegral (F.symbolAddress buildSymbol)
@@ -55,7 +57,7 @@ main = do
       let Rows requested = rows
           publications = reservationPublications ++ requested
           build = crc32 (body <> B.concat [B.concat (map U.putWord32 [address, old, new]) | Publication _ address old new <- publications])
-      record <- either H.failH pure (makeRecord (BuildId build) (Bss begin end) body)
+      record <- either H.failH pure (makeRecord (BuildId build) (BodyBounds bodyStart bodyEnd) (Bss begin end) body)
       stock <- H.readRegular (64 * 1024 * 1024) source
       parsed <- either H.failH pure (U.parseContainer stock)
       H.ensure (all U.checkPassed (U.checks parsed ++ U.carriedChecks parsed)) "source container checks failed"

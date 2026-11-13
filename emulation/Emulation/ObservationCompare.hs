@@ -33,7 +33,7 @@ e2eIgnored = ["seconds", "instructions", "virtual_ticks", "sp", "path", "frame_n
 -- first settle round its personality predicate accepts, a moment set by guest timing.
 toggleIgnored :: [K.Key]
 toggleIgnored = e2eIgnored ++
-  [ "engine", "emulator", "directory", "image_wide_transfers_covering_extent", "sid", "cells_after_start" ]
+  [ "engine", "emulator", "directory", "snapshot_sha256", "snapshot_manifest_sha256", "image_wide_transfers_covering_extent", "sid", "cells_after_start" ]
 
 data SiteEntry
   = EntryMarker

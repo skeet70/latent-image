@@ -1,6 +1,5 @@
--- | A closed A32 (ARMv7-R, ARM state) decoder for the bank allowlist. It names
--- the instruction forms the bank's clang -Oz output uses and sorts every other
--- word into a forbidden or unadmitted class.
+-- | A32 forms used by the interface and stack analyses. A Rejected form is
+-- outside this decoder's model; the bank interface check does not reject it.
 module A32
   ( Reg (..)
   , Cond (..)
@@ -19,6 +18,7 @@ module A32
   , StatusWrite (..)
   , SignExtension (..)
   , decode
+  , directTarget
   , computeSources
   , statusWrite
   , signExtension
@@ -32,6 +32,7 @@ module A32
   , negateCond
   ) where
 
+import qualified ArmElf
 import Data.Bits (rotateR, shiftL, shiftR, testBit, xor, (.&.), (.|.))
 import Data.Int (Int32)
 import Data.Word (Word32)
@@ -185,6 +186,9 @@ bitFieldInsert word
   msb = field 20 16 word
   lsb = field 11 7 word
   source = if field 3 0 word == 15 then Nothing else Just (reg 0 word)
+
+directTarget :: Word32 -> Word32 -> Maybe Word32
+directTarget = ArmElf.directBranchTarget
 
 field :: Int -> Int -> Word32 -> Word32
 field high low word = (word `shiftR` low) .&. ((1 `shiftL` (high - low + 1)) - 1)

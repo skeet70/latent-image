@@ -371,7 +371,7 @@ buildFixture directory receipt role = do
           ]
         reportBytes = BL.toStrict (J.encode report <> "\n")
         proof = J.object
-          [ "schema" J..= (1 :: Word32), "analysis" J..= ("bank-allowlist-check-r1" :: T.Text)
+          [ "schema" J..= (1 :: Word32), "analysis" J..= ("bank-interface-check-r3" :: T.Text)
           , "checker_sha256" J..= digestBytes checkerBytes, "bank_variant" J..= proofVariant, "policy" J..= ("enforce" :: T.Text)
           , "manifest_sha256" J..= digestBytes manifestBytes, "runtime_sha256" J..= digestBytes (B.pack [18, 19])
           , "kernel_elf_sha256" J..= digestBytes elfBytes, "archive_sha256" J..= archiveSha

@@ -1,0 +1,9 @@
+{
+  "source_roots": ["src"],
+  "boundary_files": [
+    {"path": "src/slot_table.rs", "reason": "Reads stock kernel slots and enters their raw code words, including the retained A32 entry veneer."},
+    {"path": "src/slot_table_tests.rs", "reason": "Fixture implementations of the stock boundary's unsafe mapped-memory and raw-entry operations."}
+  ],
+  "boundary_items": [],
+  "known_exceptions": []
+}

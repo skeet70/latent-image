@@ -1,9 +1,10 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(["layout.json"])
+exports_files(["layout.json", "probe-allowlist.json"])
 
 genrule(
     name = "layout-values",
@@ -52,6 +53,8 @@ xm1_rust_rlib(
 haskell_test(
     name = "tests",
     srcs = ["Tests.hs"],
+    args = ["$(rootpath //replacement/general_heap:general-heap-image.bin)", "$(rootpath //replacement/general_heap:general-heap-fixed-image.bin)"],
+    data = ["//replacement/general_heap:general-heap-image.bin", "//replacement/general_heap:general-heap-fixed-image.bin"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [":contract", "//host:base", "//host:bytestring", "//host:update-container"],
 )
@@ -63,12 +66,21 @@ haskell_binary(
     deps = [":contract", "//host:aeson", "//host:base", "//host:bytestring", "//host:filepath", "//host:first-stage", "//host:host-support", "//host:update-container"],
 )
 
-genrule(
-    name = "heap-end",
-    outs = ["heap-end.rs"],
-    tools = [":fixed-image-layout"],
-    cmd = "$(location :fixed-image-layout) heap-end > $@",
+haskell_binary(
+    name = "check-fixed-image",
+    srcs = ["CheckMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    deps = [":contract", "//host:aeson", "//host:base", "//host:bytestring", "//host:host-support", "//host/firmware:bank-allowlist"],
 )
+
+sh_test(
+    name = "interface-tests",
+    size = "small",
+    srcs = ["interface-test.sh"],
+    args = ["$(rootpath :check-fixed-image)", "$(rootpath probe-allowlist.json)", "$(rootpath :probe-image.elf)", "$(rootpath :probe-image.bin)"],
+    data = [":check-fixed-image", "probe-allowlist.json", ":probe-image.elf", ":probe-image.bin"],
+)
+
 
 haskell_binary(
     name = "fixed-image-probe",
@@ -100,5 +112,5 @@ xm1_rust_elf(
     asm_srcs = ["probe-entry.S"],
     entry = "xm1_fixed_test_entry",
     link_script = ":probe.ld",
-    extra_ldflags = ["-Wl,--gc-sections"],
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
 )

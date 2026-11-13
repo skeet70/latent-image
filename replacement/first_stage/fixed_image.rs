@@ -60,6 +60,6 @@ pub unsafe fn xm1_first_stage_fixed_image_load() -> Result<(), LoadError> {
 
 #[inline(never)]
 #[no_mangle]
-pub fn xm1_first_stage_fixed_image_halt() -> ! {
-    super::halt()
+pub(super) unsafe fn xm1_first_stage_fixed_image_halt(error: super::BootError) -> ! {
+    super::fail(error)
 }

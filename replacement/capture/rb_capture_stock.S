@@ -65,7 +65,7 @@ rb_capture_stock_wait:
     .word 0x007243a8
 .size rb_capture_stock_wait, .-rb_capture_stock_wait
 
-@ Admitted self-loop trap; the bank allowlist refuses permanently undefined words.
+@ Invalid descriptors enter a self-loop trap.
 .global rb_capture_invalid_descriptor
 .type rb_capture_invalid_descriptor, %function
 rb_capture_invalid_descriptor:

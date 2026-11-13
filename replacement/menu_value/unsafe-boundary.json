@@ -1,0 +1,30 @@
+{
+  "source_roots": [
+    "src",
+    "adapter",
+    "../bank/tables/menu-value-table.rs"
+  ],
+  "boundary_files": [
+    {
+      "path": "adapter/mod.rs",
+      "reason": "Retained property cells and commit-dispatch ABI."
+    },
+    {
+      "path": "adapter/image.rs",
+      "reason": "Standalone native value-entry ABI fixture."
+    },
+    {
+      "path": "../bank/tables/menu-value-table.rs",
+      "reason": "Generated conversion-table section placement."
+    }
+  ],
+  "boundary_items": [
+    {
+      "path": "src/lib.rs",
+      "kind": "macro",
+      "name": "global_asm",
+      "reason": "Retained IMAGE SIZE entry veneer."
+    }
+  ],
+  "known_exceptions": []
+}

@@ -1,0 +1,29 @@
+{
+  "source_roots": [
+    "."
+  ],
+  "boundary_files": [
+    {
+      "path": "mod.rs",
+      "reason": "Retained draw-entry registers, caller stack and volatile menu cells."
+    },
+    {
+      "path": "calls.rs",
+      "reason": "Retained drawing service calls."
+    },
+    {
+      "path": "picker.rs",
+      "reason": "Retained picker drawing services and resource pointers."
+    },
+    {
+      "path": "tree.rs",
+      "reason": "Retained tree drawing services and resource pointers."
+    },
+    {
+      "path": "pane.rs",
+      "reason": "Retained pane drawing services and resource pointers."
+    }
+  ],
+  "boundary_items": [],
+  "known_exceptions": []
+}

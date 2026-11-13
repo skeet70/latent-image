@@ -1,552 +1,128 @@
 {
- "schema": 1,
- "stock_calls": [
-  {
-   "address": "0x00bf95cc",
-   "name": "__rb_menu_engine_stock_resume",
-   "source": "replacement/menu_engine/adapter/entry.S; stock engine wrapper after push r3,r4,r11,lr"
-  },
-  {
-   "address": "0x00d588b8",
-   "name": "rb_menu_engine_call_initial_row",
-   "source": "replacement/menu_engine/adapter/entry.S; initial row FUN_00d588b8"
-  },
-  {
-   "address": "0x00d5b350",
-   "name": "rb_menu_engine_call_notify",
-   "source": "replacement/menu_engine/adapter/entry.S; engine notification FUN_00d5b350"
-  },
-  {
-   "address": "0x00bfa234",
-   "name": "rb_menu_engine_call_kind_switch",
-   "source": "replacement/menu_engine/adapter/entry.S; stock kind switch for the nested pop of an empty node"
-  },
-  {
-   "address": "0x00bfad04",
-   "name": "rb_menu_engine_call_seek",
-   "source": "replacement/menu_engine/adapter/entry.S; stock FUN_00bfad04 after a nested pop onto a type 5 or 7 node"
-  },
-  {
-   "address": "0x0061d59c",
-   "name": "xm1_stock_default_61d59c",
-   "source": "replacement/settings_storage/src/native_configuration.rs; stock reader for one settings field's default"
-  },
-  {
-   "address": "0x0061d5f0",
-   "name": "xm1_stock_default_61d5f0",
-   "source": "replacement/settings_storage/src/native_configuration.rs; stock reader for one settings field's default"
-  },
-  {
-   "address": "0x0061d618",
-   "name": "xm1_stock_default_61d618",
-   "source": "replacement/settings_storage/src/native_configuration.rs; stock reader for one settings field's default"
-  },
-  {
-   "address": "0x0061d65c",
-   "name": "xm1_stock_default_61d65c",
-   "source": "replacement/settings_storage/src/native_configuration.rs; stock reader for one settings field's default"
-  },
-  {
-   "address": "0x0061d8a4",
-   "name": "xm1_stock_default_61d8a4",
-   "source": "replacement/settings_storage/src/native_configuration.rs; stock reader for one settings field's default"
-  },
-  {
-   "address": "0x0061df44",
-   "name": "xm1_stock_default_61df44",
-   "source": "replacement/settings_storage/src/native_configuration.rs; stock reader for one settings field's default"
-  },
-  {
-   "address": "0x00041a34",
-   "name": "xm1_kernel_event_log_append",
-   "source": "decode/loader-40000.dis; appends one 16-byte record at 0x400a0834 + 16 * index (index halfword 0x400a081e): type 9, the id, the halfword argument, the value's low half with the thread in the high half, the 0x400c0800 tick and the 0xfff91004 - 0xfff91000 counter difference; the kernel's RAM log store that transport/README.md read-log reads"
-  },
-  {
-   "address": "0x007235d8",
-   "name": "xm1_kernel_critical_enter",
-   "source": "menu/recipe_bank_ram_engine.ld; stock critical-section enter around the slot backend"
-  },
-  {
-   "address": "0x007236b0",
-   "name": "xm1_kernel_critical_exit",
-   "source": "menu/recipe_bank_ram_engine.ld; stock critical-section exit around the slot backend"
-  },
-  {
-   "address": "0x00726c74",
-   "name": "xm1_backup_diagnostic726c74",
-   "source": "menu/recipe_bank_ram_engine.ld; stock backup diagnostic leaf behind xm1_storage_diagnostic"
-  },
-  {
-   "address": "0x006a59b8",
-   "name": "xm1_backup_write6a59b8",
-   "source": "menu/recipe_bank_ram_engine.ld; stock backup write leaf behind xm1_storage_write"
-  },
-  {
-   "address": "0x00633594",
-   "name": "xm1_backup_report633594",
-   "source": "menu/recipe_bank_ram_engine.ld; stock backup report leaf behind xm1_storage_report"
-  }
- ],
- "stock_stores": [
-  {
-   "address": "0x01467580",
-   "bytes": 8,
-   "name": "menu engine last-move pair",
-   "source": "replacement/menu_engine/adapter/mod.rs write_state"
-  },
-  {
-   "address": "0x40a0f82c",
-   "bytes": 4,
-   "name": "slot report status word",
-   "source": "replacement/kernel/src/slot_table.rs report"
-  },
-  {
-   "address": "0x0096cc64",
-   "bytes": 1350,
-   "name": "storage window 1",
-   "source": "replacement/property_service/storage-boundary.S checked_store window"
-  },
-  {
-   "address": "0x0089ec00",
-   "bytes": 480,
-   "name": "storage window 2",
-   "source": "replacement/property_service/storage-boundary.S checked_store window"
-  },
-  {
-   "address": "0x409c281c",
-   "bytes": 410,
-   "name": "storage window 3",
-   "source": "replacement/property_service/storage-boundary.S checked_store window"
-  },
-  {
-   "address": "0x409c29b8",
-   "bytes": 16,
-   "name": "storage window 4",
-   "source": "replacement/property_service/storage-boundary.S checked_store window"
-  }
- ],
- "unproven": [
-  {
-   "function": "_RINvNtCsgtyIIBLFn5s_11menu_engine5block11decode_intoNtCsaQP93BJqsgZ_19menu_engine_adapter4LiveEBQ_",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RINvNtCsgtyIIBLFn5s_11menu_engine5block11decode_intoNtCsaQP93BJqsgZ_19menu_engine_adapter4LiveEBQ_",
-   "access": "store",
-   "through": {
-    "argument": "r1"
-   },
-   "reason": "stores to the EngineState its caller passes in r1 (the Result sret takes r0); every caller passes rb_menu_engine_apply's static ENGINE_STATE and every store is below its 0x438 bytes"
-  },
-  {
-   "function": "_RNvMs3_NtCsgtyIIBLFn5s_11menu_engine5frameNtB5_17MenuFrameSnapshot5words",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE11seek_framedB16_",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE11switch_nodeB16_",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE12check_targetB16_",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE13follow_framedB16_",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE18visible_ordinal_atB16_",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE19open_cursor_ordinalB16_",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE19open_cursor_ordinalB16_",
-   "access": "store",
-   "through": {
-    "argument": "r1"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE4nodeB16_",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE5countB16_",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE5storeB16_",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE6notifyB16_",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE6scrollB16_",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE7currentB16_",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE7ordinalB16_",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE7performB16_",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE7performB16_",
-   "access": "store",
-   "through": {
-    "index": "0x0093eb74"
-   },
-   "reason": "stores the 44-byte snapshot record at the event's slot, as FUN_0061ceac indexes it"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE7performB16_",
-   "access": "store",
-   "through": {
-    "index": "0x009412d4"
-   },
-   "reason": "stores the 44-byte snapshot record at the event's slot, as FUN_0061ceac indexes it"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE8push_popB16_",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE8rememberB16_",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE8snapshotB16_",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE8switchedB16_",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE8token_atB16_",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE9move_rowsB16_",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE9move_tailB16_",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RNvMs6_NtCsgtyIIBLFn5s_11menu_engine6engineINtB5_7MachineNtB5_5StockNtCsaQP93BJqsgZ_19menu_engine_adapter5StockNtB16_11StaticStateE9open_rowsB16_",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "_RNvCsaQP93BJqsgZ_19menu_engine_adapter11write_state",
-   "access": "store",
-   "through": {
-    "index": "0x009571d0"
-   },
-   "reason": "writes the changed words of the 0x430-byte menu block at offsets below 0x430"
-  },
-  {
-   "function": "_RNvCsaQP93BJqsgZ_19menu_engine_adapter10read_state",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "forwards its state argument to decode_into::<Live>; its callers pass rb_menu_engine_apply's static ENGINE_STATE"
-  },
-  {
-   "function": "_RNvXs_CsaQP93BJqsgZ_19menu_engine_adapterNtB4_5StockNtNtCsgtyIIBLFn5s_11menu_engine6engine14EngineServices11kind_switch",
-   "access": "store",
-   "through": {
-    "argument": "r1"
-   },
-   "reason": "forwards its state argument (r1; r0 is the zero-sized self) to read_state; its caller passes rb_menu_engine_apply's static ENGINE_STATE"
-  },
-  {
-   "function": "_RNvXs_NtNtNtCsjw6Ar5Xz5I4_4core4iter8adapters3revINtB4_3RevINtNtNtBa_3ops5range14RangeInclusivemEENtNtNtB8_6traits8iterator8Iterator4nextCsaQP93BJqsgZ_19menu_engine_adapter",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"
-  },
-  {
-   "function": "__aeabi_memclr4",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "copies to or clears the buffer its caller passes"
-  },
-  {
-   "function": "__aeabi_memcpy",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "copies to or clears the buffer its caller passes"
-  },
-  {
-   "function": "_RNvMsa_NtCsdTMjx7m5njD_25xm1_settings_storage_core6mirrorINtB5_13SharedBackingINtNtB7_13native_mirror12NativeDriverNtNtCsjPY53278zkB_10xm1_kernel10slot_table9SlotTableNtB1h_10FullBackupEE7acquireB7_",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "writes the SemaphoreHold it returns through the caller's sret pointer"
-  },
-  {
-   "function": "_RNvMsa_NtCsdTMjx7m5njD_25xm1_settings_storage_core6mirrorINtB5_13SharedBackingINtNtB7_13native_mirror12NativeDriverNtNtCsjPY53278zkB_10xm1_kernel10slot_table9SlotTableNtB1h_10HeaderOnlyEE7acquireCsap93jzluDcr_20xm1_property_service",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "writes the SemaphoreHold it returns through the caller's sret pointer"
-  },
-  {
-   "function": "xm1_storage_output8",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores the caller's byte at r0 after checking the 0x19a-byte length bound and the index against it"
-  },
-  {
-   "function": "xm1_storage_output16",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores the caller's halfword through r0 after checking the length bound, the index and the alignment"
-  },
-  {
-   "function": "xm1_kernel_enter_slot",
-   "access": "branch",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "calls the per-core block's stock entry word that the kernel boundary table carries"
-  },
-  {
-   "function": "_RNvMs1_CsdTMjx7m5njD_25xm1_settings_storage_coreINtB5_15SettingsStorageINtNtB5_13native_mirror13NativeBackendNtNtCsjPY53278zkB_10xm1_kernel10slot_table9SlotTableEE19refresh_active_bodyCsap93jzluDcr_20xm1_property_service",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "forwards its return slot to read_body_window, which writes the 10-byte RequestOutcome there; every caller passes its own frame"
-  },
-  {
-   "function": "_RNvXse_NtCsdTMjx7m5njD_25xm1_settings_storage_core6mirrorINtB5_13SharedBackingINtNtB7_13native_mirror12NativeDriverNtNtCsjPY53278zkB_10xm1_kernel10slot_table9SlotTableNtB1h_10FullBackupEENtB5_15SettingsBackend16read_body_windowCsap93jzluDcr_20xm1_property_service",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "writes the 10-byte RequestOutcome it returns through the caller's sret slot; its one caller, refresh_active_body, forwards its own return slot"
-  },
-  {
-   "function": "_RNvXNtCsjPY53278zkB_10xm1_kernel10slot_tableNtB2_10StockGuestNtB2_5Guest5enter",
-   "access": "branch",
-   "through": {
-    "argument": "r1"
-   },
-   "reason": "calls the slot's stock entry word the kernel slot table read"
-  },
-  {
-   "function": "_RINvNtCsjPY53278zkB_10xm1_kernel10slot_table10core_indexNtB2_10StockGuestEB4_",
-   "access": "branch",
-   "through": {
-    "deref": {
-     "cell": "0x0096bd20"
+  "schema": 2,
+  "stock_calls": [
+    {
+      "address": "0x00bf95cc",
+      "name": "__rb_menu_engine_stock_resume",
+      "source": "replacement/menu_engine/adapter/entry.S; stock engine wrapper after push r3,r4,r11,lr"
+    },
+    {
+      "address": "0x00d588b8",
+      "name": "rb_menu_engine_call_initial_row",
+      "source": "replacement/menu_engine/adapter/entry.S; initial row FUN_00d588b8"
+    },
+    {
+      "address": "0x00d5b350",
+      "name": "rb_menu_engine_call_notify",
+      "source": "replacement/menu_engine/adapter/entry.S; engine notification FUN_00d5b350"
+    },
+    {
+      "address": "0x00bfa234",
+      "name": "rb_menu_engine_call_kind_switch",
+      "source": "replacement/menu_engine/adapter/entry.S; stock kind switch for the nested pop of an empty node"
+    },
+    {
+      "address": "0x00bfad04",
+      "name": "rb_menu_engine_call_seek",
+      "source": "replacement/menu_engine/adapter/entry.S; stock FUN_00bfad04 after a nested pop onto a type 5 or 7 node"
+    },
+    {
+      "address": "0x0061d59c",
+      "name": "xm1_stock_default_61d59c",
+      "source": "replacement/settings_storage/src/native_configuration.rs; stock reader for one settings field's default"
+    },
+    {
+      "address": "0x0061d5f0",
+      "name": "xm1_stock_default_61d5f0",
+      "source": "replacement/settings_storage/src/native_configuration.rs; stock reader for one settings field's default"
+    },
+    {
+      "address": "0x0061d618",
+      "name": "xm1_stock_default_61d618",
+      "source": "replacement/settings_storage/src/native_configuration.rs; stock reader for one settings field's default"
+    },
+    {
+      "address": "0x0061d65c",
+      "name": "xm1_stock_default_61d65c",
+      "source": "replacement/settings_storage/src/native_configuration.rs; stock reader for one settings field's default"
+    },
+    {
+      "address": "0x0061d8a4",
+      "name": "xm1_stock_default_61d8a4",
+      "source": "replacement/settings_storage/src/native_configuration.rs; stock reader for one settings field's default"
+    },
+    {
+      "address": "0x0061df44",
+      "name": "xm1_stock_default_61df44",
+      "source": "replacement/settings_storage/src/native_configuration.rs; stock reader for one settings field's default"
+    },
+    {
+      "address": "0x00041a34",
+      "name": "xm1_kernel_event_log_append",
+      "source": "decode/loader-40000.dis; appends one 16-byte record at 0x400a0834 + 16 * index (index halfword 0x400a081e): type 9, the id, the halfword argument, the value's low half with the thread in the high half, the 0x400c0800 tick and the 0xfff91004 - 0xfff91000 counter difference; the kernel's RAM log store that transport/README.md read-log reads"
+    },
+    {
+      "address": "0x007235d8",
+      "name": "xm1_kernel_critical_enter",
+      "source": "menu/recipe_bank_ram_engine.ld; stock critical-section enter around the slot backend"
+    },
+    {
+      "address": "0x007236b0",
+      "name": "xm1_kernel_critical_exit",
+      "source": "menu/recipe_bank_ram_engine.ld; stock critical-section exit around the slot backend"
+    },
+    {
+      "address": "0x00726c74",
+      "name": "xm1_backup_diagnostic726c74",
+      "source": "menu/recipe_bank_ram_engine.ld; stock backup diagnostic leaf behind xm1_storage_diagnostic"
+    },
+    {
+      "address": "0x006a59b8",
+      "name": "xm1_backup_write6a59b8",
+      "source": "menu/recipe_bank_ram_engine.ld; stock backup write leaf behind xm1_storage_write"
+    },
+    {
+      "address": "0x00633594",
+      "name": "xm1_backup_report633594",
+      "source": "menu/recipe_bank_ram_engine.ld; stock backup report leaf behind xm1_storage_report"
     }
-   },
-   "reason": "calls the core slot word the stock root table holds"
-  },
-  {
-   "function": "_RINvNtCsjPY53278zkB_10xm1_kernel10slot_table6reportNtB2_10StockGuestEB4_",
-   "access": "branch",
-   "through": {
-    "cell": "0x4089ea8c"
-   },
-   "reason": "calls the stock error callback word the table holds"
-  },
-  {
-   "function": "_RNvXs0_NtCsjPY53278zkB_10xm1_kernel10slot_tableNtB5_9SlotTableNtB7_7Backend10in_handler",
-   "access": "branch",
-   "through": {
-    "deref": {
-     "result": "_RINvNtCsjPY53278zkB_10xm1_kernel10slot_table5blockNtB2_10StockGuestEB4_"
+  ],
+  "stock_regions": [
+    {
+      "address": "0x01467580",
+      "bytes": 8,
+      "name": "menu engine last-move pair",
+      "source": "replacement/menu_engine/adapter/mod.rs write_state"
+    },
+    {
+      "address": "0x40a0f82c",
+      "bytes": 4,
+      "name": "slot report status word",
+      "source": "replacement/kernel/src/slot_table.rs report"
+    },
+    {
+      "address": "0x0096cc64",
+      "bytes": 1350,
+      "name": "storage window 1",
+      "source": "replacement/property_service/storage-boundary.S checked_store window"
+    },
+    {
+      "address": "0x0089ec00",
+      "bytes": 480,
+      "name": "storage window 2",
+      "source": "replacement/property_service/storage-boundary.S checked_store window"
+    },
+    {
+      "address": "0x409c281c",
+      "bytes": 410,
+      "name": "storage window 3",
+      "source": "replacement/property_service/storage-boundary.S checked_store window"
+    },
+    {
+      "address": "0x409c29b8",
+      "bytes": 16,
+      "name": "storage window 4",
+      "source": "replacement/property_service/storage-boundary.S checked_store window"
     }
-   },
-   "reason": "calls the handler slot word the stock core block holds"
-  },
-  {
-   "function": "_RNvXs0_NtCsjPY53278zkB_10xm1_kernel10slot_tableNtB5_9SlotTableNtB7_7Backend11irq_restore",
-   "access": "branch",
-   "through": {
-    "deref": {
-     "result": "_RINvNtCsjPY53278zkB_10xm1_kernel10slot_table5blockNtB2_10StockGuestEB4_"
-    }
-   },
-   "reason": "calls the interrupt-restore slot word the stock core block holds"
-  },
-  {
-   "function": "_RNvXs0_NtCsjPY53278zkB_10xm1_kernel10slot_tableNtB5_9SlotTableNtB7_7Backend12current_task",
-   "access": "branch",
-   "through": {
-    "deref": {
-     "result": "_RINvNtCsjPY53278zkB_10xm1_kernel10slot_table5blockNtB2_10StockGuestEB4_"
-    }
-   },
-   "reason": "calls the current-task slot word the stock core block holds"
-  },
-  {
-   "function": "_RNvXs0_NtCsjPY53278zkB_10xm1_kernel10slot_tableNtB5_9SlotTableNtB7_7Backend14semaphore_wait",
-   "access": "branch",
-   "through": {
-    "deref": {
-     "result": "_RINvNtCsjPY53278zkB_10xm1_kernel10slot_table5blockNtB2_10StockGuestEB4_"
-    }
-   },
-   "reason": "calls the semaphore-wait slot word the stock core block holds"
-  },
-  {
-   "function": "_RNvXs0_NtCsjPY53278zkB_10xm1_kernel10slot_tableNtB5_9SlotTableNtB7_7Backend16semaphore_signal",
-   "access": "branch",
-   "through": {
-    "deref": {
-     "result": "_RINvNtCsjPY53278zkB_10xm1_kernel10slot_table5blockNtB2_10StockGuestEB4_"
-    }
-   },
-   "reason": "calls the semaphore-signal slot word the stock core block holds"
-  },
-  {
-   "function": "_RNvXs0_NtCsjPY53278zkB_10xm1_kernel10slot_tableNtB5_9SlotTableNtB7_7Backend8irq_mask",
-   "access": "branch",
-   "through": {
-    "deref": {
-     "result": "_RINvNtCsjPY53278zkB_10xm1_kernel10slot_table5blockNtB2_10StockGuestEB4_"
-    }
-   },
-   "reason": "calls the interrupt-mask slot word the stock core block holds"
-  },
-  {
-   "function": "_RNvMs0_CsdTMjx7m5njD_25xm1_settings_storage_coreINtB5_15SettingsStorageINtNtB5_13native_mirror13NativeBackendNtNtCsjPY53278zkB_10xm1_kernel10slot_table9SlotTableEE11open_headerCsap93jzluDcr_20xm1_property_service",
-   "access": "store",
-   "through": {
-    "argument": "r0"
-   },
-   "reason": "stores the session it returns into the result slot the caller passes, which every caller keeps on its own frame"
-  }
- ]
+  ]
 }

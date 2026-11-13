@@ -4,6 +4,10 @@ This inventory covers executable launchers in `emulation/` and `replacement/`, i
 
 `reset` means instruction-zero initialization followed by actual guest startup. An authenticated zero-instruction snapshot is equivalent for that purpose. `post-boot` means the producer runs startup once for the exact identity, then subsequent runs restore its saved state before attaching scenario observers. Boot and post-boot coverage are recorded separately.
 
+Post-boot census reports use schema 3 and declare `observation_start_instructions`; the comparator refuses unequal observation boundaries. `--start reset` explicitly observes startup for a comparison baseline; non-boot scenarios default to `--start post-boot`. A cold-boot census refuses `--checkpoints` and post-boot starts. Setup failures retain their milestones and failure in `census.json`.
+
+The post-boot store removes abandoned partial publications under its store lock. Publishing syncs the snapshot, record and directories. On lookup it evicts entries at least seven days old when all identity fields except `emulator_binary` match the current request and the executable digest differs. Other firmware/procedure identities are retained. One store lock replaces per-key locks.
+
 ## Bazel run targets
 
 All labels without a package prefix are in `//emulation`. The declarations are in [BUILD.bazel](BUILD.bazel). Each implementation link identifies the launch and its observation contract.
@@ -17,7 +21,7 @@ All labels without a package prefix are in `//emulation`. The declarations are i
 | `xm1-viewer --flash-candidate` | post-boot | Menu, modal, RAM-diff and trajectory observations use the candidate's attach checkpoint, [Xm1RamPushE2E.hs](Xm1RamPushE2E.hs). A flash-boot check is the distinct reset scenario. |
 | `xm1-viewer --warm-checkpoint` | post-boot producer | Saves or restores attach state without a trajectory, [Xm1RamPushE2E.hs](Xm1RamPushE2E.hs). |
 | `xm1-viewer --ff80-rehearsal` | post-boot | Endpoint rehearsal from attach state, [Ff80Rehearsal.hs](Emulation/Ff80Rehearsal.hs). |
-| `cardless-ram-push-bridge` | post-boot | Retained cardless attach checkpoint, [CardlessRamPush.hs](CardlessRamPush.hs). Explicit reset observations and `--fresh-boot` preserve startup. |
+| `cardless-ram-push-bridge` | post-boot | Retained cardless attach checkpoint, [CardlessRamPush.hs](CardlessRamPush.hs). `--fresh-boot` preserves startup. |
 | `xm1-bulk-read-e2e` | post-boot | Endpoint reads and alias comparisons, [Xm1BulkReadE2E.hs](Xm1BulkReadE2E.hs). |
 | `xm1-half-press-e2e` | post-boot | Shooting/menu input consumers, [Xm1HalfPressE2E.hs](Xm1HalfPressE2E.hs). |
 | `xm1-af-ring-e2e` | post-boot | Ordinary half-press and recorder fallback, [Xm1AfRingE2E.hs](Xm1AfRingE2E.hs). |
@@ -49,12 +53,14 @@ All labels without a package prefix are in `//emulation`. The declarations are i
 | `property-pair-observe` | reset | From-reset property allocation/initialization and storage boot observer, [PropertyPairObserverMain.hs](PropertyPairObserverMain.hs), [SettingsStorageObserver.hs](Emulation/SettingsStorageObserver.hs). |
 | `record-store-pair-observe` | reset | Startup record reads and later route traffic, [RecordStorePairObserverMain.hs](RecordStorePairObserverMain.hs). |
 | `record-store-timing-control` | reset | Controlled startup timing and allocation history, [RecordStoreTimingControlMain.hs](RecordStoreTimingControlMain.hs). |
-| `media-route-smoke` | post-boot | Media routes use the keyed card-backed attach boundary, [MediaRouteSmoke.hs](MediaRouteSmoke.hs). Committed-NAND reboot scenarios retain their reset path. |
+| `media-route-smoke` | post-boot | Media routes use the keyed card-backed attach boundary, [MediaRouteSmoke.hs](MediaRouteSmoke.hs). |
 | `verify-candidate` | mixed | Runs the existing candidate matrix, including updater cold boots and post-boot viewer trajectories, [VerifyCandidate.hs](VerifyCandidate.hs). |
 | `critical-pair-witness` | reset | Driver startup witness, [CriticalPairWitness.hs](CriticalPairWitness.hs). |
+| `first-stage-witness` | reset | Driver boot witness, [FirstStageWitness.hs](FirstStageWitness.hs). |
+| `peer-stage-witness` | reset | Driver peer witness, [PeerStageWitness.hs](PeerStageWitness.hs). |
 | `//replacement/modal_runtime:menu-engine-qualify-bounded` | post-boot/post-install | Menu/render cohort, [QualifyBoundedMain.hs](../replacement/modal_runtime/QualifyBoundedMain.hs). Its installation cache is maintained with the shared guest-state identity. |
 
-The raw FujiMod driver [main.rs](fujimod-xm1/src/main.rs) starts from reset for its boot and peer witnesses. The terminal first-stage observer [terminal_observer.rs](fujimod-xm1/src/terminal_observer.rs) also stays from reset. They are binaries exposed through the Nix SDK rather than additional local Bazel run labels. `root-compact`, `fujimod-xm1-record-medium` and `fujimod-xm1-provenance` consume inputs or receipts without executing full-system guest instructions. Bounded native/recovery-bootstrap engines do not cold-boot the full camera system.
+The raw FujiMod driver [main.rs](fujimod-xm1/src/main.rs) starts from reset for its boot and peer witnesses. The terminal first-stage observer [terminal_observer.rs](fujimod-xm1/src/terminal_observer.rs) also stays from reset. `root-compact`, `fujimod-xm1-record-medium` and `fujimod-xm1-provenance` consume inputs or receipts without executing full-system guest instructions. Bounded native/recovery-bootstrap engines do not cold-boot the full camera system.
 
 ## Run scripts
 
@@ -85,3 +91,5 @@ The ten-run total falls from 4,306,960,000 to 2,607,460,000 guest instructions: 
 
 Summed recorded wall times are 169 seconds before and 66 seconds after. Those timestamps include slot waits and shared-host load and have one-second resolution; the instruction reduction is the attributable measurement.
 
+
+Four further stock scenarios each restore the same 283,250,000-instruction boundary and equal newly executed from-reset observations after it: shoot-without-lens (687,910,000 executed), capture (679,660,000), playback (107,530,000) and mode-dial (90,000,000). Their cumulative final counts are 971,160,000, 962,910,000, 390,780,000 and 373,250,000 respectively. All four are cache hits, saving 1,133,000,000 instructions. E-XM1-POSTBOOT-CHECKPOINT-REUSE-150 binds the input, suffix and boot-prefix counter comparisons.
