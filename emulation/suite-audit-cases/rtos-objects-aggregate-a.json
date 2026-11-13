@@ -1,0 +1,103 @@
+{
+ "schema": 1,
+ "suite": "rtos-objects-aggregate-a",
+ "source": "derived from the suite's case table",
+ "entries": [
+  {
+   "case": "set-no-waiter",
+   "entry": "0x0004813c",
+   "extent": 608,
+   "stock": "image"
+  },
+  {
+   "case": "set-handler-no-waiter",
+   "entry": "0x0004839c",
+   "extent": 548,
+   "stock": "image"
+  },
+  {
+   "case": "clear-keep",
+   "entry": "0x000485c0",
+   "extent": 312,
+   "stock": "image"
+  },
+  {
+   "case": "wait-all-match",
+   "entry": "0x000486f8",
+   "extent": 692,
+   "stock": "image"
+  },
+  {
+   "case": "poll-match",
+   "entry": "0x000489ac",
+   "extent": 388,
+   "stock": "image"
+  },
+  {
+   "case": "timed-wait-match",
+   "entry": "0x00048b30",
+   "extent": 776,
+   "stock": "image"
+  },
+  {
+   "case": "create-fresh",
+   "entry": "0x0004d39c",
+   "extent": 152,
+   "stock": "image"
+  },
+  {
+   "case": "delete-idle",
+   "entry": "0x0004d434",
+   "extent": 104,
+   "stock": "image"
+  },
+  {
+   "case": "send-blocked",
+   "entry": "0x0004aa44",
+   "extent": 772,
+   "stock": "image"
+  },
+  {
+   "case": "release-plain-insert",
+   "entry": "0x00044568",
+   "extent": 204,
+   "stock": "image"
+  },
+  {
+   "case": "helper-release-queued",
+   "entry": "0x00044744",
+   "extent": 188,
+   "stock": "image"
+  },
+  {
+   "case": "helper-block",
+   "entry": "0x00044800",
+   "extent": 228,
+   "stock": "image"
+  },
+  {
+   "case": "helper-block-timed",
+   "entry": "0x000448e4",
+   "extent": 220,
+   "stock": "image"
+  },
+  {
+   "case": "helper-check-match",
+   "entry": "0x000480cc",
+   "extent": 112,
+   "stock": "image"
+  },
+  {
+   "case": "mailbox-receive-stock",
+   "entry": "0x0004ad48",
+   "extent": 596,
+   "stock": "image"
+  },
+  {
+   "case": "mailbox-timed-receive-stock",
+   "entry": "0x0004b0e4",
+   "extent": 680,
+   "stock": "image"
+  }
+ ]
+}

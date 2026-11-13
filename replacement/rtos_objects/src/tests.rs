@@ -2039,6 +2039,36 @@ fn delete_flag_releases_a_queued_waiter_with_minus_49() {
 }
 
 #[test]
+fn delete_flag_ends_when_the_waiters_state_lost_object_queued() {
+    let words = Domain::A.words();
+    let slot = FlagSlot::new(3, 120).unwrap();
+    let sim = Sim::new(Domain::A);
+    install(&sim, Domain::A);
+    let id = create_flag_at(&sim, slot, 0, 0);
+    let (task, wait) = queue_flag_waiter(
+        &sim,
+        &words,
+        words.flag_control(slot),
+        TaskSlot::new(7).unwrap(),
+        Domain::A,
+        0x10,
+        0,
+        0,
+    );
+    sim.set_byte(task.state(), 0x22);
+    if delete_flag(&sim, id) == DispatchDecision::Required {
+        let saved = sim.mask_interrupts();
+        sim.dispatch(0);
+        sim.restore_interrupts(saved);
+    }
+    assert_eq!(sim.word(wait.base().result()), 0xffff_ffcf);
+    assert_eq!(sim.word(task.state()) & 0xff, 0x01);
+    let control = words.flag_control(slot);
+    assert_eq!(sim.word(control.queue().next()), control.0 .0);
+    assert_eq!(sim.word(control.queue().prev()), control.0 .0);
+}
+
+#[test]
 fn delete_flag_cancels_the_timed_waiters_timer() {
     let words = Domain::A.words();
     let slot = FlagSlot::new(3, 120).unwrap();
@@ -2159,6 +2189,73 @@ fn delete_releases_a_cross_domain_waiter_in_its_domain() {
     assert_eq!(sim.ready(Domain::B, 5), task.0 .0);
     assert_eq!(sim.ready(Domain::A, 5), 0);
     assert!(sim.doorbell(1));
+}
+
+#[test]
+fn a_forced_release_unlinks_the_queued_waiter_before_the_completion_word() {
+    let words = Domain::A.words();
+    let slot = FlagSlot::new(3, 120).unwrap();
+    let sim = Sim::new(Domain::A);
+    install(&sim, Domain::A);
+    create_flag_at(&sim, slot, 0, 0);
+    let control = words.flag_control(slot);
+    let (task, wait) = queue_flag_waiter(
+        &sim,
+        &words,
+        control,
+        TaskSlot::new(7).unwrap(),
+        Domain::A,
+        0x10,
+        0,
+        0,
+    );
+    assert_eq!(
+        {
+            let saved = sim.mask_interrupts();
+            let selection = crate::wake::release_with(&sim, words.context(Domain::A), task, crate::wake::WaitCompletion::Released);
+            sim.restore_interrupts(saved);
+            selection
+        },
+        Selection::Changed
+    );
+    assert_ne!(sim.last_store_mask() & 0x80, 0);
+    assert_eq!(sim.word(wait.base().result()), 0xffff_ffcf);
+    assert_eq!(sim.word(control.queue().next()), control.0 .0);
+    assert_eq!(sim.word(control.queue().prev()), control.0 .0);
+    assert_eq!(sim.ready(Domain::A, 5), task.0 .0);
+}
+
+#[test]
+fn a_satisfied_release_leaves_a_queued_waiter_linked() {
+    let words = Domain::A.words();
+    let slot = FlagSlot::new(3, 120).unwrap();
+    let sim = Sim::new(Domain::A);
+    install(&sim, Domain::A);
+    create_flag_at(&sim, slot, 0, 0);
+    let control = words.flag_control(slot);
+    let (task, wait) = queue_flag_waiter(
+        &sim,
+        &words,
+        control,
+        TaskSlot::new(7).unwrap(),
+        Domain::A,
+        0x10,
+        0,
+        0,
+    );
+    assert_eq!(
+        {
+            let saved = sim.mask_interrupts();
+            let selection = crate::wake::release_with(&sim, words.context(Domain::A), task, crate::wake::WaitCompletion::Satisfied);
+            sim.restore_interrupts(saved);
+            selection
+        },
+        Selection::Changed
+    );
+    assert_ne!(sim.last_store_mask() & 0x80, 0);
+    assert_eq!(sim.word(wait.base().result()), 0);
+    assert_eq!(sim.word(control.queue().next()), task.0 .0);
+    assert_eq!(sim.word(control.queue().prev()), task.0 .0);
 }
 
 #[test]

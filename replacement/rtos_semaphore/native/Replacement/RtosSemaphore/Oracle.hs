@@ -36,12 +36,14 @@ import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import Data.List (isPrefixOf, sortOn)
 import Data.Maybe (isJust)
-import Data.Word (Word32, Word8)
+import Data.Word (Word32, Word8, Word64)
 import Emulation.CachedNativeBatch (BatchReuse, cachedObservedBatch)
+import Emulation.Judge (StockEvidence (..), evidenceAt)
 import Emulation.NativeCase (caseIdText)
 import qualified Emulation.NativeObservation as N
 import Emulation.NativeObservation
-  ( KernelObservation (..)
+  ( InstructionCount (..)
+  , KernelObservation (..)
   , NativeObservation (..)
   , Ordered (..)
   , Register (..)
@@ -356,7 +358,7 @@ data Case = Case
   , caseTimerIndex :: Maybe TimerIndexCell
   }
 
-data Image = Image {imageBase :: Word32, imageBytes :: B.ByteString, imageSymbols :: [Agg.AggregateSymbol], imagePlacements :: [Agg.SectionPlacement]}
+data Image = Image {imageBase :: Word32, imageBytes :: B.ByteString, imageSymbols :: [Agg.AggregateSymbol], imagePlacements :: [Agg.SectionPlacement], imageCarriers :: [(Word32, Word32)], imageFill :: Word32}
 
 newtype TimerIndexCell = TimerIndexCell GuestAddress
 
@@ -375,6 +377,8 @@ data Run = Run
   , runMatches :: Int
   , runReuse :: (BatchReuse, BatchReuse)
   , runControls :: [(String, Bool)]
+  , runStockInstructions :: [(String, Word64)]
+  , runEvidence :: [(String, (Word32, Word32, Int))]
   }
 
 data Page = Page RegionId GuestAddress Int Permission B.ByteString
@@ -556,6 +560,26 @@ waiterAt facts owner objectSlot objectDomain slot priority =
   , poke (taskAddress facts owner slot + tfPrev (factsTask facts)) (queueCell facts objectDomain objectSlot)
   ]
 
+twoWaiters :: Facts -> Domain -> Word32 -> Domain -> (Word32, Word32) -> (Word32, Word32) -> [(GuestAddress, Word32)]
+twoWaiters facts owner objectSlot objectDomain (first, firstPriority) (second, secondPriority) =
+  [ poke (queueCell facts objectDomain objectSlot) (taskAddress facts owner first)
+  , poke (queueCell facts objectDomain objectSlot + wqPrev (factsWaitQueue facts)) (taskAddress facts owner second)
+  , poke (taskAddress facts owner first + tfState (factsTask facts)) (packedState facts (queuedState facts) firstPriority)
+  , poke (taskAddress facts owner first + tfWait (factsTask facts)) (waitAddress facts owner first)
+  , poke (taskAddress facts owner first + tfNext (factsTask facts)) (taskAddress facts owner second)
+  , poke (taskAddress facts owner first + tfPrev (factsTask facts)) (queueCell facts objectDomain objectSlot)
+  , poke (waitResult facts owner first) 0
+  , poke (waitQueueCell facts owner first) (queueCell facts objectDomain objectSlot)
+  , poke (waitOwner facts owner first) (dfId (domainFacts facts objectDomain))
+  , poke (taskAddress facts owner second + tfState (factsTask facts)) (packedState facts (queuedState facts) secondPriority)
+  , poke (taskAddress facts owner second + tfWait (factsTask facts)) (waitAddress facts owner second)
+  , poke (taskAddress facts owner second + tfNext (factsTask facts)) (queueCell facts objectDomain objectSlot)
+  , poke (taskAddress facts owner second + tfPrev (factsTask facts)) (taskAddress facts owner first)
+  , poke (waitResult facts owner second) 0
+  , poke (waitQueueCell facts owner second) (queueCell facts objectDomain objectSlot)
+  , poke (waitOwner facts owner second) (dfId (domainFacts facts objectDomain))
+  ]
+
 plain :: String -> Service -> Domain -> Word32 -> [(GuestAddress, Word32)] -> Word32 -> Word32 -> Bool -> Word32 -> [Check] -> Case
 plain name service domain slot wordList timeout result arrival selected checks =
   Case name service domain slot Nothing wordList timeout
@@ -605,6 +629,25 @@ cases facts executing =
           , eq (waitResult facts executing 2) (fromIntegral (-49 :: Int))
           , eq (queueCell facts executing 1) (controlAddress facts executing 1)
            ] Nothing Nothing Nothing)
+      , caseDifference = Just "semaphore-delete-releases-waiters"
+      }
+  , (plain "delete-two-waiters" Delete executing 1
+      (created facts executing 1 0 0 1
+        ++ twoWaiters facts executing 1 executing (2, 3) (4, 5))
+      0 0 False 0
+      [ eq (existsCell facts executing 1) 0, eq (countCell facts executing 1) 1
+      , byte (taskAddress facts executing 2 + tfState (factsTask facts)) (queuedState facts)
+      , byte (taskAddress facts executing 4 + tfState (factsTask facts)) (queuedState facts)
+      ])
+      { caseOwned = Just (Expectation 0 True 2
+          [ eq (existsCell facts executing 1) 0, eq (countCell facts executing 1) 1
+          , byte (taskAddress facts executing 2 + tfState (factsTask facts)) (stReady (factsStates facts))
+          , byte (taskAddress facts executing 4 + tfState (factsTask facts)) (stReady (factsStates facts))
+          , eq (waitResult facts executing 2) (fromIntegral (-49 :: Int))
+          , eq (waitResult facts executing 4) (fromIntegral (-49 :: Int))
+          , eq (queueCell facts executing 1) (controlAddress facts executing 1)
+          , eq (queueCell facts executing 1 + wqPrev (factsWaitQueue facts)) (controlAddress facts executing 1)
+          ] Nothing Nothing Nothing)
       , caseDifference = Just "semaphore-delete-releases-waiters"
       }
   , plain "signal-below-max" Signal executing 1 (created facts executing 1 0 0 2) 0 0 False 0
@@ -1026,7 +1069,8 @@ codeBytes contract domain role loader owned extra
     patches = ownedSpans domain role owned
     withSymbols = foldl patch original patches
     withPlacements
-      | role == OwnedRole, aggregate owned = install (imageBase owned) (imageBytes owned) original
+      | role == OwnedRole, aggregate owned =
+          either error id (Agg.installCarriers base original (imageFill owned) (imageSymbols owned) (imagePlacements owned) (Agg.AggregateImage (imageBase owned) (imageBytes owned)) (imageCarriers owned))
       | otherwise = withSymbols
     patch current (address, size) = install address (slice owned address size) current
 
@@ -1478,4 +1522,15 @@ runFamily runner cacheRoot directory facts executing stock owned = do
         , Just original <- [M.lookup (emittedId executing one) reference]
         , Just replacement <- [M.lookup (emittedId executing one) subject]
         ]
-  pure (Run executing results (length [() | (_, Right []) <- results]) (stockReuse, ownedReuse) controls)
+      stockInstructions =
+        [ (caseName one, instructionCount (nativeInstructions original))
+        | (one, _) <- stockCases
+        , Just original <- [M.lookup (emittedId executing one) reference]
+        ]
+  evidence <- forM stockCases $ \(one, _) -> do
+    let ident = emittedId executing one
+        entry = entries executing (caseService one)
+        size = maybe 4 id (lookup entry (extents executing))
+    found <- evidenceAt (directory </> "stock" </> (ident ++ ".native-result.json")) entry size
+    pure (caseName one, (entry, size, evidenceTrace found + evidenceProvenance found))
+  pure (Run executing results (length [() | (_, Right []) <- results]) (stockReuse, ownedReuse) controls stockInstructions evidence)

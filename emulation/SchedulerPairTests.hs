@@ -2,6 +2,8 @@
 module Main (main) where
 
 import Control.Monad (forM_, unless)
+import Data.Bits (shiftR)
+import Data.Word (Word32)
 import qualified Data.Aeson as J
 import qualified Data.Aeson.KeyMap as K
 import qualified Data.ByteString as B
@@ -24,7 +26,7 @@ assert :: String -> Bool -> IO ()
 assert label value = unless value (error label)
 plan :: Plan
 plan = Plan Owned "dat" [Entry DomainA (HelperSemantic Notify) (Address 0x44018),Entry DomainB (HelperSemantic Notify) (Address 0xd3fd4)]
-  [Guard DomainA (Address 0x44018) (Address 0x44044) "a",Guard DomainB (Address 0xd3fd4) (Address 0xd4004) "b"] [] [] retainedArmingEntries
+  [Guard DomainA (Address 0x44018) (Address 0x44044) "a",Guard DomainB (Address 0xd3fd4) (Address 0xd4004) "b"] [] [] retainedArmingEntries [] []
 planBytes :: B.ByteString
 planBytes = "synthetic-plan"
 call :: Call
@@ -470,8 +472,10 @@ main = do
         , \d -> d {demandService=Just (DemandService serviceContext 0 (Address 0x400ddb08) 0x45e54)}
         , \d -> d {demandService=Just (DemandService serviceContext 0 (Address 0x4004db08) 0x45e58)}
         ]
-  assert "permission-fault transfer with subsequent task service qualifies" (checkDemandPaging demand==Right ())
-  forM_ mutations $ \mutate -> assert "unproven permission-fault transfer refuses" (checkDemandPaging (mutate demand)==Left DemandPagingState)
+  assert "permission-fault transfer with subsequent task service qualifies" (checkDemandPaging (Just 0x43758) demand==Right ())
+  forM_ mutations $ \mutate -> assert "unproven permission-fault transfer refuses" (checkDemandPaging (Just 0x43758) (mutate demand)==Left DemandPagingState)
+  assert "a demand load away from the plan's stop refuses" (checkDemandPaging (Just 0x43e04) demand==Left DemandPagingState)
+  assert "a plan without a derived stop refuses every demand" (checkDemandPaging Nothing demand==Left DemandPagingState)
   refuses "unmatched demand-paging receipt" DemandPagingState observation {obsDemandPaging=[demand]}
   let witness proof =
         let loaded=demandLoad proof
@@ -486,9 +490,14 @@ main = do
         demandAbort=abortContext {demandInstructions=31},demandAbortCount=18,
         demandService=Just (DemandService serviceContext {demandInstructions=40} 0 (Address 0x4004db08) 0x45e54)}
       paired=observation {obsCalls=[witness demand,witness later],obsDemandPaging=[demand,later]}
-  assert "each distinct attempted transfer has its own complete proof" (checkDemandCalls paired==Right ())
-  assert "duplicate proof cannot cover another unproved abort" (checkDemandCalls paired
+      demandPlan = plan {planStops=[Stop DomainA (Address 0x43758) FirstEntryStop,Stop DomainB (Address 0xd3758) FirstEntryStop]}
+  assert "each distinct attempted transfer has its own complete proof" (checkDemandCalls demandPlan paired==Right ())
+  assert "duplicate proof cannot cover another unproved abort" (checkDemandCalls demandPlan paired
     {obsDemandPaging=[demand,demand]}==Left DemandPagingState)
+  assert "a legacy owned plan accepts the proof at the retained trampoline stop"
+    (checkDemandCalls plan paired==Right () && demandStop plan 0==Just 0x43758 && demandStop plan 1==Just 0xd3758)
+  assert "a plan that records a dropped stop refuses the proof"
+    (checkDemandCalls plan {planDroppedStops=[DroppedStop DomainA "first-entry" "the owned symbol is not bound"]} paired==Left DemandPagingState)
   let firstCatalog = Catalog 0xe7f000f0 [Entry DomainA (HelperSemantic Notify) (Address 0x42000),Entry DomainB (HelperSemantic Notify) (Address 0xd2000)]
         [Window DomainA (Address 0x42000) (Address 0x42010),Window DomainB (Address 0xd2000) (Address 0xd2010)] []
       secondCatalog = Catalog 0xe7f000f0 [Entry DomainA (DispatchSemantic Save) (Address 0x42100)]
@@ -505,32 +514,87 @@ main = do
             (ServiceSemantic DeliverTaskException,0x41b4,True)]]
       boundaryCatalog = Catalog 0xe7f000f0 boundaryEntries
         [Window d (Address (base d+0x3000)) (Address (base d+0xcbd8)) | d <- [DomainA,DomainB]] []
-      loadersFor role = M.fromList
-        [(d, let size=if d==DomainA then 0xdae0 else 0xdaa0
-                 pc=(if role==Stock then 0x4218 else 0x4204)-(if d==DomainB then 64 else 0)
-             in B.replicate pc 0 <> B.pack [if role==Stock then 0x33 else 0x32,0xff,0x2f,0xe1] <> B.replicate (size-pc-4) 0)
-        | d <- [DomainA,DomainB]]
-  forM_ [Stock,Owned] $ \role -> case derivePlan role B.empty [boundaryCatalog] (loadersFor role) of
+      putWord :: Word32 -> B.ByteString
+      putWord value = B.pack [fromIntegral (value `shiftR` shift) | shift <- [0,8,16,24]]
+      loaderWith domain patches = let size = if domain==DomainA then 0xdae0 else 0xdaa0
+                                      blank = B.replicate size 0
+                                      patch bytes (address,values) = let offset = fromIntegral (address - base domain)
+                                                                   in B.take offset bytes <> B.concat (map putWord values) <> B.drop (offset + 4*length values) bytes
+                                  in foldl patch blank patches
+      stockLoaders = M.fromList [(d, loaderWith d [((base d+0x4218-(if d==DomainB then 64 else 0)),[0xe12fff33])]) | d <- [DomainA,DomainB]]
+      controlLoaders = M.fromList [(d, loaderWith d [((base d+0x4204-(if d==DomainB then 64 else 0)),[0xe12fff33])]) | d <- [DomainA,DomainB]]
+      bodyA = 0x45000
+      bodyB = 0xd5000
+      firstA = 0x46000
+      firstB = 0xd6000
+      callbackBody :: [Word32]
+      callbackBody = [0xe590201c,0xe5901004,0xe1a00004,0xe12fff32,0xe10f0000]
+      firstBody :: [Word32]
+      firstBody = [0xe5912008,0xe5920004,0xe592f008]
+      ownedLoaders = M.fromList
+        [(DomainA, loaderWith DomainA [(bodyA,callbackBody),(firstA,firstBody)])
+        ,(DomainB, loaderWith DomainB [(bodyB,callbackBody),(firstB,firstBody)])]
+      ownedAggregate = Aggregate
+        (M.fromList [(DomainA, M.fromList [("s3c_exception_loop",Body bodyA (fromIntegral (4*length callbackBody))),("xm1_rtos_scheduler_first_entry",Body firstA (fromIntegral (4*length firstBody)))])
+                    ,(DomainB, M.fromList [("s3c_exception_loop",Body bodyB (fromIntegral (4*length callbackBody))),("xm1_rtos_scheduler_first_entry",Body firstB (fromIntegral (4*length firstBody)))])])
+        (M.fromList [((DomainA,0x441b4),"s3c_exception_loop"),((DomainA,0x43728),"xm1_rtos_scheduler_first_entry")
+                    ,((DomainB,0xd4174),"s3c_exception_loop"),((DomainB,0xd3728),"xm1_rtos_scheduler_first_entry")])
+      boundaryWithFirst = boundaryCatalog { catalogEntries = boundaryEntries ++
+        [Entry d (DispatchSemantic FirstEntry) (Address (base d+0x3728)) | d <- [DomainA,DomainB]] }
+      probeIn planned d pc kind register = Probe d (Address pc) kind (Register register) `elem` planProbes planned
+  case derivePlan Stock B.empty [boundaryWithFirst] stockLoaders of
     Left failure -> error failure
     Right planned -> do
-      let probe d pc kind register = Probe d (Address pc) kind (Register register) `elem` planProbes planned
       forM_ [(DomainA,0x40000,0),(DomainB,0xd0000,64)] $ \(d,offset,delta) -> do
-        assert "selected load probe follows the actual role load" (probe d (offset+if role==Stock then 0x36b4 else 0x36ac) SelectedRead 1)
-        assert "IRQ enabled loaded value is captured" (probe d (offset+0x376c) EnabledRead 0)
-        assert "global lock probe follows the completed null window"
-          (probe d (offset+if role==Stock then 0x371c else 0x3708) GlobalLockRead (if role==Stock then 0 else 1))
-        assert "IRQ selected/discarded probes retain role ordering"
-          (if role==Stock then probe d (offset+0x377c) SelectedRead 0 && probe d (offset+0x3788) DiscardedRead 0
-           else probe d (offset+0x3778) DiscardedRead 0 && probe d (offset+0x3788) SelectedRead 0)
-        assert "save discard probe exists only in owned" (probe d (offset+0x3650) DiscardedRead 3 == (role/=Stock))
-        forM_ [(0xca78,0xca4c),(0x5d9c,0x5d60),(0x6b60,0x6b10),(0x74c8,0x749c)] $ \(stock,owned) ->
-          assert "ready recheck retry is observed after unmask" (probe d (offset+(if role==Stock then stock else owned)-delta) Retry 0)
-        let callback=offset+(if role==Stock then 0x4218 else 0x4204)-delta
-        assert "exception callback and return are paired" (probe d callback Callback (if role==Stock then 3 else 2) && probe d (callback+4) CallbackReturn 0)
+        assert "selected load probe follows the stock load" (probeIn planned d (offset+0x36b4) SelectedRead 1)
+        assert "IRQ enabled loaded value is captured" (probeIn planned d (offset+0x376c) EnabledRead 0)
+        assert "stock global lock probe reads committed memory" (probeIn planned d (offset+0x371c) GlobalLockRead 0)
+        assert "stock IRQ selected/discarded probes retain ordering"
+          (probeIn planned d (offset+0x377c) SelectedRead 0 && probeIn planned d (offset+0x3788) DiscardedRead 0)
+        assert "save discard probe is absent in stock" (not (probeIn planned d (offset+0x3650) DiscardedRead 3))
+        forM_ ([(0xca78,0xca4c),(0x5d9c,0x5d60),(0x6b60,0x6b10),(0x74c8,0x749c)] :: [(Word32,Word32)]) $ \(stock,_) ->
+          assert "ready recheck retry is observed after unmask" (probeIn planned d (offset+stock-delta) Retry 0)
+        let callback=offset+0x4218-delta
+        assert "stock exception callback and return are paired" (probeIn planned d callback Callback 3 && probeIn planned d (callback+4) CallbackReturn 0)
       assert "stock select entry follows stock no-save prologue"
-        (all (\entry -> entrySemantic entry/=DispatchSemantic Select || entryAddress entry==Address (base (entryDomain entry)+if role==Stock then 0x36ac else 0x36a4)) (planEntries planned))
-  assert "callback probes refuse changed call instruction"
-    (case derivePlan Owned B.empty [boundaryCatalog] (M.fromList [(DomainA,B.replicate 0xdae0 0),(DomainB,B.replicate 0xdaa0 0)]) of Left _ -> True; Right _ -> False)
+        (all (\entry -> entrySemantic entry/=DispatchSemantic Select || entryAddress entry==Address (base (entryDomain entry)+0x36ac)) (planEntries planned))
+      assert "the stock plan arms no derived stop" (null (planStops planned) && null (planDroppedStops planned))
+  case derivePlanWith ownedAggregate Owned B.empty [boundaryWithFirst] ownedLoaders of
+    Left failure -> error failure
+    Right planned -> do
+      assert "the owned stop is the owned commit instruction"
+        (planStops planned == [Stop DomainA (Address (firstA+8)) FirstEntryStop,Stop DomainB (Address (firstB+8)) FirstEntryStop])
+      assert "the owned stop is not the stock trampoline"
+        (all (\(Stop _ (Address address) _) -> address `notElem` [0x43758,0xd3758]) (planStops planned))
+      forM_ [(DomainA,bodyA,0),(DomainB,bodyB,64)] $ \(d,body,delta) -> do
+        assert "owned exception callback and return follow the body's handler call"
+          (probeIn planned d (body+12) Callback 2 && probeIn planned d (body+16) CallbackReturn 0)
+        assert "owned retry and dispatch probes are unchanged"
+          (probeIn planned d (base d+0x36ac) SelectedRead 1 && probeIn planned d (base d+0xca4c-delta) Retry 0)
+        let inside address = any (\(Guard gd (Address lo) (Address hi) _) -> gd==d && lo<=address && address<hi) (planGuards planned)
+        assert "every owned stop and probe lies inside a guarded extent"
+          (all (\(Stop sd (Address address) _) -> sd/=d || inside address) (planStops planned)
+           && all (\probe -> probeDomain probe/=d || inside (let Address address=probeAddress probe in address)) (planProbes planned))
+      assert "owned plan carries no dropped stop when both symbols are bound" (null (planDroppedStops planned))
+  assert "an unbound owned first-entry symbol drops its stop and lists it"
+    (case derivePlanWith emptyAggregate Owned B.empty [boundaryCatalog { catalogEntries = [Entry d (DispatchSemantic FirstEntry) (Address (base d+0x3728)) | d <- [DomainA,DomainB]] }] ownedLoaders of
+      Left _ -> False
+      Right planned -> null (planStops planned) && map droppedName (planDroppedStops planned) == ["first-entry","first-entry"])
+  assert "callback probes refuse a body without the handler call"
+    (case derivePlanWith ownedAggregate Owned B.empty [boundaryCatalog] stockLoaders of Left _ -> True; Right _ -> False)
+  case derivePlan Restored B.empty [boundaryWithFirst] controlLoaders of
+    Left failure -> error failure
+    Right planned -> do
+      assert "a control plan without an aggregate takes the retained trampoline stop"
+        (planStops planned == [Stop DomainA (Address 0x43758) FirstEntryStop,Stop DomainB (Address 0xd3758) FirstEntryStop]
+         && null (planDroppedStops planned))
+      forM_ [(DomainA,0),(DomainB,64)] $ \(d,delta) ->
+        assert "a control plan without an aggregate probes the s3c callback at its retained offset"
+          (probeIn planned d (base d+0x4204-delta) Callback 3 && probeIn planned d (base d+0x4208-delta) CallbackReturn 0)
+  assert "a stock plan carries no derived stops on the wire"
+    (case planValue plan {planRole=Stock} of J.Object fields -> K.lookup "stops" fields == Nothing && K.lookup "dropped_stops" fields == Nothing; _ -> False)
+  assert "an owned plan carries its derived stops on the wire"
+    (case planValue plan of J.Object fields -> K.lookup "stops" fields /= Nothing && K.lookup "dropped_stops" fields /= Nothing; _ -> False)
   putStrLn "scheduler-pair host tests passed"
 
 wireObservation :: J.Value

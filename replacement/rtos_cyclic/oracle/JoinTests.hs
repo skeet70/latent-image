@@ -22,10 +22,10 @@ main = do
         , Aggregate.SectionPlacement 0x40010 4 ".text.body"
         ]
       domain = Union.DomainMap R.DomainA (R.GuestAddress 0x40000) 32
-        [Union.Entry Union.Cyclic "configure" (R.GuestAddress 0x40008) "entry" ".text.entry" "entry"]
+        [Union.Entry Union.Cyclic "configure" (R.GuestAddress 0x40008) "entry" ".text.entry" "entry" False]
         [Union.Carrier Union.Cyclic (R.Extent (R.GuestAddress 0x40008) (R.GuestAddress 0x40018))]
         [] []
-      union = Union.Union 0xe7f000f0 domain domain
+      union = Union.Union 0xe7f000f0 domain domain []
       staged = B.take 8 stock <> code <> B.pack [0xf0, 0x00, 0xf0, 0xe7] <> B.drop 24 stock
       admit loader = admitPackagedKernel union stock loader image symbols placements
       changed offset byte bytes = B.take offset bytes <> B.singleton byte <> B.drop (offset + 1) bytes
