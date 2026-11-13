@@ -6,7 +6,33 @@ use xm1_saclac_interface::{Command, Completed, Message, Parameters};
 pub enum ChildOutcome {
     Complete,
     Pending,
+    Measurement(MeasurementOutcome),
     Fault,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Restart {
+    Pending,
+    Complete,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MeasurementUpdate {
+    Window,
+    NoPeerRequest,
+    Source,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RetainedRoundStatus {
+    Status03,
+    Status0c,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MeasurementOutcome {
+    Update { update: MeasurementUpdate, restart: Restart },
+    Round(RetainedRoundStatus),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

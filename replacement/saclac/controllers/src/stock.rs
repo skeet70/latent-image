@@ -87,3 +87,32 @@ pub fn write_diagnostic(snapshot: &DiagnosticSnapshot, output: &mut [u8; 128]) {
         chunk.copy_from_slice(&state.0.to_le_bytes());
     }
 }
+
+pub const fn measurement_outcome(word: i32) -> crate::children::ChildOutcome {
+    use crate::children::{ChildOutcome, MeasurementOutcome, MeasurementUpdate, Restart, RetainedRoundStatus};
+    let (update, restart) = match word {
+        0 => return ChildOutcome::Fault,
+        1 => return ChildOutcome::Complete,
+        2 => return ChildOutcome::Pending,
+        3 => return ChildOutcome::Measurement(MeasurementOutcome::Round(RetainedRoundStatus::Status03)),
+        5 => (MeasurementUpdate::Window, Restart::Pending),
+        6 => (MeasurementUpdate::NoPeerRequest, Restart::Pending),
+        7 => (MeasurementUpdate::Source, Restart::Pending),
+        8 => (MeasurementUpdate::Window, Restart::Complete),
+        9 => (MeasurementUpdate::NoPeerRequest, Restart::Complete),
+        10 => (MeasurementUpdate::Source, Restart::Complete),
+        12 => return ChildOutcome::Measurement(MeasurementOutcome::Round(RetainedRoundStatus::Status0c)),
+        _ => return ChildOutcome::Fault,
+    };
+    ChildOutcome::Measurement(MeasurementOutcome::Update { update, restart })
+}
+
+pub const fn measurement_update_operation(update: crate::children::MeasurementUpdate) -> Option<xm1_saclac_interface::StatisticsOperation> {
+    use crate::children::MeasurementUpdate;
+    use xm1_saclac_interface::StatisticsOperation;
+    match update {
+        MeasurementUpdate::Window => Some(StatisticsOperation::Request14),
+        MeasurementUpdate::NoPeerRequest => None,
+        MeasurementUpdate::Source => Some(StatisticsOperation::Request41),
+    }
+}

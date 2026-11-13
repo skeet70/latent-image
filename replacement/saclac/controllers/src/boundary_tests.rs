@@ -30,3 +30,23 @@ fn synchronous_lens_progress_keeps_the_waiting_client() {
         assert_eq!(crate::stock::synchronous_completion(CompletionStatus(status)), Progress);
     }
 }
+
+#[test]
+fn measurement_feedback_preserves_update_kind_and_restart_completion() {
+    use crate::children::{ChildOutcome, MeasurementOutcome, MeasurementUpdate, Restart};
+    use xm1_saclac_interface::StatisticsOperation;
+    for (word, update, restart, operation) in [
+        (5, MeasurementUpdate::Window, Restart::Pending, Some(StatisticsOperation::Request14)),
+        (6, MeasurementUpdate::NoPeerRequest, Restart::Pending, None),
+        (7, MeasurementUpdate::Source, Restart::Pending, Some(StatisticsOperation::Request41)),
+        (8, MeasurementUpdate::Window, Restart::Complete, Some(StatisticsOperation::Request14)),
+        (9, MeasurementUpdate::NoPeerRequest, Restart::Complete, None),
+        (10, MeasurementUpdate::Source, Restart::Complete, Some(StatisticsOperation::Request41)),
+    ] {
+        assert_eq!(crate::stock::measurement_outcome(word), ChildOutcome::Measurement(MeasurementOutcome::Update { update, restart }));
+        assert_eq!(crate::stock::measurement_update_operation(update), operation);
+    }
+    assert_eq!(crate::stock::measurement_outcome(1), ChildOutcome::Complete);
+    assert_eq!(crate::stock::measurement_outcome(2), ChildOutcome::Pending);
+    assert_eq!(crate::stock::measurement_outcome(0), ChildOutcome::Fault);
+}
