@@ -55,6 +55,7 @@ impl crate::driver::Ports for DriverPorts {
     fn fault(&mut self) { call3(FAULT, 0, 0, 0); }
 }
 
+#[cfg(target_arch = "arm")]
 #[no_mangle]
 pub extern "C" fn xm1_saclac_driver() -> ! {
     for machine in 0..37 { write_half(STATES + machine * 2, 0); }

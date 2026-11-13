@@ -59,8 +59,8 @@ data Receipt = Receipt
 instance FromJSON Receipt where
   parseJSON = withObject "census receipt" $ \value -> do
     name <- value .: "scenario"
-    rows <- withObject "interface" (.: "events") =<< value .: "interface"
-    ranges <- value .: "action_ranges"
+    rows <- (withObject "interface" (.: "events") =<< value .: "interface") :: J.Parser [Observed]
+    ranges <- value .: "action_ranges" :: J.Parser [Value]
     fetches <- traverse (withObject "action range" (.: "fetches")) ranges
     Receipt name (concatMap (normalize . (\(Observed event) -> event)) rows) (sum fetches)
       <$> value .:? "error" <*> value .:? "machine_failure"
