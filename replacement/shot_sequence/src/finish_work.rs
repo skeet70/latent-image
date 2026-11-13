@@ -7,7 +7,7 @@
 use crate::boundary::{Client, Frame, LensPoint, LensReference, Records};
 use crate::capture_boundary::{LensMoves, MoveProfile};
 use crate::ports::{FinishEffect, FinishQuery, LensMove};
-use crate::preparation::Prepared;
+use crate::preparation::{HalfPressParameters, Prepared};
 use crate::shared::active_slot;
 use crate::stock::finish::with_capture_status;
 use xm1_saclac_interface::RecordHandle;
@@ -145,8 +145,9 @@ pub trait FinishSources {
     fn capture_status(&mut self) -> u32;
 }
 
-/// Calculation block, exposure context and saved-input words.
-pub trait FinishCalculation {
+/// The calculation block, the exposure context, the saved input and the bound lens reference;
+/// `P` is what the finish's record load calls outside the shot.
+pub trait FinishCalculation<P: ?Sized> {
     fn calculation_record(&mut self) -> RecordHandle;
     fn calculation_areas(&mut self) -> u8;
     fn calculation_selection(&mut self) -> u32;
@@ -154,6 +155,10 @@ pub trait FinishCalculation {
     fn set_selection_mode(&mut self, mode: u32);
     fn exposure_held(&mut self) -> bool;
     fn set_saved_selection_mode(&mut self, mode: u32);
+    /// The lens reference the preparation bound.
+    fn lens_reference(&mut self) -> LensReference;
+    /// The finish's record load, shared with the lens return.
+    fn load_finish_record(&mut self, parameters: &HalfPressParameters, ports: &mut P);
 }
 
 /// Calculation-library functions and the shared helpers the finish calls.
@@ -163,12 +168,11 @@ pub trait FinishLibrary {
     fn mode_selection(&mut self, record: RecordHandle, mode: u32) -> u32;
     fn correction(&mut self, point: &LensPoint, drive: u32, frame_drive: u32) -> u32;
     fn adjust_position(&mut self, adjustment: PositionAdjustment) -> i16;
-    /// The finish's record load, shared with the lens return.
-    fn load_finish_record(&mut self);
 }
 
-pub trait FinishBoundary: FinishLayers + FinishSources + FinishCalculation + FinishLibrary {}
-impl<T: FinishLayers + FinishSources + FinishCalculation + FinishLibrary> FinishBoundary for T {}
+/// What the finish calls outside the shot.
+pub trait FinishPorts: FinishLayers + FinishSources + FinishLibrary {}
+impl<T: FinishLayers + FinishSources + FinishLibrary> FinishPorts for T {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FinishWork {
@@ -190,11 +194,11 @@ impl FinishWork {
 
     pub fn point(&self) -> LensPoint { self.point }
 
-    pub fn effect(&mut self, effect: FinishEffect, prepared: &Prepared, pipeline: &impl FinishPipeline, boundary: &mut impl FinishBoundary) {
+    pub fn effect<P: FinishPorts>(&mut self, effect: FinishEffect, prepared: &Prepared, pipeline: &impl FinishPipeline, shot: &mut impl FinishCalculation<P>, boundary: &mut P) {
         match effect {
             FinishEffect::Begin(record) => self.begin(record, boundary),
             FinishEffect::LoadAdjustment => self.load_point(prepared, pipeline, boundary),
-            FinishEffect::PrepareRecords => self.prepare_records(prepared, boundary),
+            FinishEffect::PrepareRecords => self.prepare_records(prepared, shot, boundary),
             FinishEffect::PrepareLens => self.prepare_lens(prepared, boundary),
             FinishEffect::SelectTarget => self.select_target(boundary),
             FinishEffect::PrepareLiveTarget => self.prepare_live_target(boundary),
@@ -205,14 +209,14 @@ impl FinishWork {
         }
     }
 
-    pub fn query(&self, query: FinishQuery, pipeline: &impl FinishPipeline, boundary: &mut impl FinishBoundary) -> bool {
+    pub fn query(&self, query: FinishQuery, pipeline: &impl FinishPipeline, boundary: &mut impl FinishPorts) -> bool {
         match query {
             FinishQuery::RelativeFirst => pipeline.relative_first() || boundary.lens(FinishLensValue::PrefersRelative) != 0,
         }
     }
 
     /// Starts `FinishRelative` or `FinishAbsolute`; other moves are not the finish's.
-    pub fn lens_move(&self, lens_move: LensMove, prepared: &Prepared, pipeline: &impl FinishPipeline, boundary: &mut (impl FinishBoundary + LensMoves)) {
+    pub fn lens_move(&self, lens_move: LensMove, prepared: &Prepared, pipeline: &impl FinishPipeline, boundary: &mut (impl FinishPorts + LensMoves)) {
         match lens_move {
             LensMove::FinishRelative => {
                 boundary.trace(FinishTrace::RelativeMove);
@@ -231,7 +235,7 @@ impl FinishWork {
     }
 
     /// Binds `record` and records the capture pipeline's status in the lens snapshot.
-    fn begin(&mut self, record: RecordHandle, boundary: &mut impl FinishBoundary) {
+    fn begin(&mut self, record: RecordHandle, boundary: &mut impl FinishPorts) {
         let position = boundary.lens(FinishLensValue::Position) as i16;
         *self = Self { record: Some(record), point: unset_point(position), target: NO_STATE, correction: 0, remembered: self.remembered };
         let status = boundary.capture_status();
@@ -239,7 +243,7 @@ impl FinishWork {
         boundary.store_lens_snapshot(&with_capture_status(snapshot, status == 1));
     }
 
-    fn load_point(&mut self, prepared: &Prepared, pipeline: &impl FinishPipeline, boundary: &mut impl FinishBoundary) {
+    fn load_point(&mut self, prepared: &Prepared, pipeline: &impl FinishPipeline, boundary: &mut impl FinishPorts) {
         let (Some(record), Some(parameters)) = (self.record, prepared.parameters) else { return };
         if parameters.mode.0 == 0 && boundary.profile(record, FinishProfile::Override) == 0 {
             self.point = boundary.lens_snapshot().current;
@@ -263,20 +267,21 @@ impl FinishWork {
 
     /// Writes the calculation's area selections and modes for the point, then loads the finish
     /// record.
-    fn prepare_records(&mut self, prepared: &Prepared, boundary: &mut impl FinishBoundary) {
-        self.select_areas(prepared, boundary);
-        boundary.load_finish_record();
+    fn prepare_records<P: FinishPorts>(&mut self, prepared: &Prepared, shot: &mut impl FinishCalculation<P>, boundary: &mut P) {
+        self.select_areas(prepared, shot, boundary);
+        shot.load_finish_record(&prepared.parameters.unwrap_or_default(), boundary);
     }
 
-    fn select_areas(&mut self, prepared: &Prepared, boundary: &mut impl FinishBoundary) {
+    fn select_areas<P: FinishPorts>(&mut self, prepared: &Prepared, shot: &mut impl FinishCalculation<P>, boundary: &mut P) {
         let (Some(record), Some(parameters)) = (self.record, prepared.parameters) else { return };
         let new_calculation = parameters.mask.0 & NEW_CALCULATION != 0;
-        let calculation = boundary.calculation_record();
+        let calculation = shot.calculation_record();
+        let lens_reference = shot.lens_reference();
         let control = boundary.profile(calculation, FinishProfile::LensControl);
         let state = if self.point.state == NO_STATE { control } else { self.point.state };
-        let selection = boundary.point_selection(&self.point, prepared.lens_reference, state);
+        let selection = boundary.point_selection(&self.point, lens_reference, state);
         if !new_calculation && parameters.mode.0 != 0 { return; }
-        let areas = boundary.calculation_areas();
+        let areas = shot.calculation_areas();
         for index in 0..areas { boundary.store_area_selection(calculation, index, selection); }
         if !new_calculation || parameters.mode.0 == RESUME_MODE { return; }
 
@@ -284,7 +289,7 @@ impl FinishWork {
         if self.needs_position_adjust(prepared, boundary) {
             position = boundary.adjust_position(PositionAdjustment {
                 position,
-                reference: prepared.lens_reference,
+                reference: lens_reference,
                 state,
                 control,
                 first: false,
@@ -294,26 +299,26 @@ impl FinishWork {
             });
         }
         let frame = parameters.frame_slot.and_then(|slot| boundary.frame(slot)).map_or(0, |frame| frame.0);
-        let target = boundary.target_selection(calculation, prepared.lens_reference, position, control, self.point.kind, prepared.lens_control, frame);
-        boundary.set_selection_mode(target);
+        let target = boundary.target_selection(calculation, lens_reference, position, control, self.point.kind, prepared.lens_control, frame);
+        shot.set_selection_mode(target);
         let mode = boundary.mode_selection(calculation, parameters.mode.0);
-        if mode != MODE_UNCHANGED { boundary.set_selection_mode(mode); }
-        if !boundary.exposure_held() {
-            let saved = if boundary.calculation_selection() == 0 {
+        if mode != MODE_UNCHANGED { shot.set_selection_mode(mode); }
+        if !shot.exposure_held() {
+            let saved = if shot.calculation_selection() == 0 {
                 3
             } else {
-                match boundary.selection_mode() {
+                match shot.selection_mode() {
                     mode @ (1 | 2) => mode,
                     _ => 0,
                 }
             };
-            boundary.set_saved_selection_mode(saved);
+            shot.set_saved_selection_mode(saved);
         }
-        let mode = boundary.selection_mode();
+        let mode = shot.selection_mode();
         for index in 0..areas { boundary.store_area_mode(calculation, index, mode); }
     }
 
-    fn needs_position_adjust(&self, prepared: &Prepared, boundary: &mut impl FinishBoundary) -> bool {
+    fn needs_position_adjust(&self, prepared: &Prepared, boundary: &mut impl FinishPorts) -> bool {
         let (Some(record), Some(parameters)) = (self.record, prepared.parameters) else { return false };
         match parameters.mode.0 {
             2 | 7 => {}
@@ -333,7 +338,7 @@ impl FinishWork {
 
     /// Adjusts the point and the record's area positions to the lens, applies a pending lens
     /// correction, clamps the step to a direction and records the held point in the lens snapshot.
-    fn prepare_lens(&mut self, prepared: &Prepared, boundary: &mut impl FinishBoundary) {
+    fn prepare_lens(&mut self, prepared: &Prepared, boundary: &mut impl FinishPorts) {
         let Some(record) = self.record else { return };
         if self.needs_position_adjust(prepared, boundary) {
             let control = boundary.profile(record, FinishProfile::LensControl);
@@ -405,7 +410,7 @@ impl FinishWork {
     }
 
     /// The point's position without the correction, adjusted when the snapshot is marked.
-    fn client_position(&self, marker: u32, boundary: &mut impl FinishBoundary) -> i16 {
+    fn client_position(&self, marker: u32, boundary: &mut impl FinishPorts) -> i16 {
         let position = self.point.position.wrapping_sub(self.correction as i16);
         if marker != 1 { return position; }
         let Some(record) = self.record else { return position };
@@ -413,7 +418,7 @@ impl FinishWork {
         boundary.adjust(position, &self.point, area_flag)
     }
 
-    fn select_target(&mut self, boundary: &mut impl FinishBoundary) {
+    fn select_target(&mut self, boundary: &mut impl FinishPorts) {
         let Some(record) = self.record else { return };
         let source = boundary.target_source();
         self.target = if source.capture {
@@ -430,7 +435,7 @@ impl FinishWork {
     }
 
     /// The live finish drives only the absolute move, to the live target from the current position.
-    fn prepare_live_target(&mut self, boundary: &mut impl FinishBoundary) {
+    fn prepare_live_target(&mut self, boundary: &mut impl FinishPorts) {
         let Some(record) = self.record else { return };
         self.point = unset_point(boundary.lens(FinishLensValue::Position) as i16);
         self.target = boundary.profile(record, FinishProfile::LiveTarget);
@@ -438,7 +443,7 @@ impl FinishWork {
 
     /// What a completed relative move leaves: the lens layer's target in mode 1 and the client's
     /// lens bounds in modes 0, 5 and 6.
-    fn absorb_relative(&mut self, prepared: &Prepared, boundary: &mut impl FinishBoundary) {
+    fn absorb_relative(&mut self, prepared: &Prepared, boundary: &mut impl FinishPorts) {
         let (Some(record), Some(parameters)) = (self.record, prepared.parameters) else { return };
         match parameters.mode.0 {
             1 => {
@@ -487,6 +492,6 @@ impl FinishWork {
     }
 }
 
-fn lens_stopped(boundary: &mut impl FinishBoundary) -> bool {
+fn lens_stopped(boundary: &mut impl FinishPorts) -> bool {
     boundary.lens(FinishLensValue::MotorState) == LENS_STOPPED || boundary.lens(FinishLensValue::FocusState) == LENS_STOPPED
 }

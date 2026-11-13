@@ -101,8 +101,8 @@ pub trait CalculationResults {
     fn result_areas(&mut self) -> u8;
     /// The plan's row-data word is set.
     fn tracking(&mut self) -> bool;
-    /// The plan's subject kind for an area; `UNTRACKED` names none.
-    fn area_kind(&mut self, index: AreaIndex) -> u8;
+    /// The subject kind a stage's bank keeps for an area; `UNTRACKED` names none.
+    fn area_kind(&mut self, bank: ClassifyStage, index: AreaIndex) -> u8;
     fn grid_selected(&mut self) -> bool;
     fn selection_mode(&mut self) -> u32;
     fn result_area(&mut self, at: AreaAt) -> AreaResult;
@@ -128,13 +128,14 @@ pub trait CalculationResults {
     fn adopt_grid_cell(&mut self, pass: GridPass, cell: GridCell);
 }
 
-/// The selection grid the shot keeps beside the calculation block.
-pub trait SelectionGrid {
+/// The selection grid the shot keeps beside the calculation block; `P` is what the grid's
+/// operations call outside the shot.
+pub trait SelectionGrid<P: ?Sized> {
     /// The cell the selection holds for an area of a pass.
     fn cell(&mut self, pass: ResultPass, index: AreaIndex) -> GridCell;
-    fn update_grid(&mut self, record: RecordHandle, reset: bool, keep_gates: bool, lens_reference: LensReference);
-    /// The record's area references classified into the subject banks.
-    fn classify_subjects(&mut self, stage: ClassifyStage, reference: &AreaReference, kind: u32, source: u32, area: u32);
+    fn update_grid(&mut self, record: RecordHandle, reset: bool, keep_gates: bool, lens_reference: LensReference, layers: &mut P);
+    /// The record's area references classified into a stage's subject bank.
+    fn classify_subjects(&mut self, stage: ClassifyStage, reference: &AreaReference, kind: u32, source: u32, area: u32, layers: &mut P);
     /// Copies the working result into the retained result.
     fn retain_result(&mut self);
     /// Copies the retained result into the working result.
@@ -146,6 +147,7 @@ pub trait SelectionGrid {
     fn area_weight(&mut self, index: AreaIndex) -> u32;
     /// The retained targets and their copies in the saved calculation input.
     fn retain_target_half(&mut self, half: u16);
+    fn retain_target_word(&mut self, word: u32);
 }
 
 pub use xm1_saclac_interface::selection::ClassifyStage;
@@ -198,8 +200,13 @@ pub trait AbsorbRecords {
     fn area_references(&mut self, record: RecordHandle) -> AreaReference;
 }
 
-pub trait AbsorbBoundary: CalculationResults + SelectionGrid + AbsorbLibrary + AbsorbDiagnostics + AbsorbRecords + Client {}
-impl<T: CalculationResults + SelectionGrid + AbsorbLibrary + AbsorbDiagnostics + AbsorbRecords + Client> AbsorbBoundary for T {}
+/// What the absorb calls outside the shot.
+pub trait AbsorbPorts: AbsorbLibrary + AbsorbDiagnostics + AbsorbRecords + Client {}
+impl<T: AbsorbLibrary + AbsorbDiagnostics + AbsorbRecords + Client> AbsorbPorts for T {}
+
+/// The calculation block and the selection grid as the absorb uses them.
+pub trait AbsorbShot<P: ?Sized>: CalculationResults + SelectionGrid<P> {}
+impl<P: ?Sized, T: CalculationResults + SelectionGrid<P>> AbsorbShot<P> for T {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Plan {
@@ -213,18 +220,18 @@ struct Plan {
 }
 
 impl Plan {
-    fn of(absorb: &Absorb, boundary: &mut impl AbsorbBoundary) -> Self {
+    fn of(absorb: &Absorb, ports: &mut impl AbsorbPorts) -> Self {
         let plain = |mode, frame, count| Plan { whole: true, mode, frame, count, returning: false, return_pending: false };
         match absorb.origin {
             Origin::Return { pending } => {
-                let frame = boundary.value(absorb.record, RecordField::CaptureFrame);
-                let count = boundary.value(absorb.record, RecordField::CaptureSlotCount) as u8;
+                let frame = ports.value(absorb.record, RecordField::CaptureFrame);
+                let count = ports.value(absorb.record, RecordField::CaptureSlotCount) as u8;
                 Plan { returning: true, return_pending: pending, ..plain(0, (frame != 0).then_some(Frame(frame)), count) }
             }
             Origin::Live => plain(4, None, 1),
             Origin::HalfPress(parameters) => {
-                let frame = parameters.frame_slot.and_then(|slot| boundary.frame(slot));
-                let count = match parameters.area_count.map(|count| boundary.area_count(count)) {
+                let frame = parameters.frame_slot.and_then(|slot| ports.frame(slot));
+                let count = match parameters.area_count.map(|count| ports.area_count(count)) {
                     None | Some(0) => 1,
                     Some(count) => count as u8,
                 };
@@ -241,8 +248,8 @@ impl Plan {
         (reset, keep_gates)
     }
 
-    fn target(&self, record: RecordHandle) -> AreaTarget {
-        AreaTarget { record, mode: self.mode, skip_first: self.returning && self.return_pending }
+    fn target(&self, record: RecordHandle, eligibility: bool) -> AreaTarget {
+        AreaTarget { record, mode: self.mode, skip_first: self.returning && self.return_pending, bank: ClassifyStage::Absorb, eligibility }
     }
 }
 
@@ -256,6 +263,10 @@ pub(crate) struct AreaTarget {
     pub mode: u32,
     /// The lens return still has a lens point pending, so the first area keeps its value.
     pub skip_first: bool,
+    /// The subject bank whose kinds pick each area's tracked kind.
+    pub bank: ClassifyStage,
+    /// A mode-7 first area keeps its own reference while its selection is unchanged.
+    pub eligibility: bool,
 }
 
 pub(crate) const FIRST_AREA: AreaIndex = match AreaIndex::new(0) {
@@ -264,149 +275,151 @@ pub(crate) const FIRST_AREA: AreaIndex = match AreaIndex::new(0) {
 };
 
 /// Absorbs the calculation block's result into the bound record.
-pub fn absorb(absorb: &Absorb, boundary: &mut impl AbsorbBoundary) {
-    let plan = Plan::of(absorb, boundary);
+pub fn absorb<P: AbsorbPorts>(absorb: &Absorb, shot: &mut impl AbsorbShot<P>, ports: &mut P) {
+    let plan = Plan::of(absorb, ports);
     let mode = ExposureMode(absorb.selection.0);
     let half_press = matches!(absorb.origin, Origin::HalfPress(_));
-    let retained_export = boundary.adjustment(AbsorbAdjustment::RetainedExport) & 4 != 0;
+    let retained_export = ports.adjustment(AbsorbAdjustment::RetainedExport) & 4 != 0;
     if half_press {
         if !absorb.repeat {
-            if mode.is_primary() { boundary.clear_channel_diagnostics(plan.frame, true); }
+            if mode.is_primary() { ports.clear_channel_diagnostics(plan.frame, true); }
         } else {
-            if !mode.uses_adjustment() && retained_export { export_retained(absorb, &plan, boundary); }
-            if mode.is_primary() && !retained_export { boundary.clear_channel_diagnostics(plan.frame, false); }
+            if !mode.uses_adjustment() && retained_export { export_retained(absorb, &plan, shot, ports); }
+            if mode.is_primary() && !retained_export { ports.clear_channel_diagnostics(plan.frame, false); }
         }
     }
-    update_grid(absorb, &plan, boundary);
-    let subjects = boundary.adjustment(AbsorbAdjustment::Subjects) & 3 != 0;
-    if boundary.tracking() && subjects {
-        let reference = boundary.area_references(absorb.record);
-        let source = boundary.subject_source(absorb.record, absorb.refinement);
-        let kind = boundary.value(absorb.record, RecordField::SubjectKind);
-        let area = boundary.value(absorb.record, RecordField::SubjectArea);
-        boundary.classify_subjects(ClassifyStage::Absorb, &reference, kind, source, area);
+    update_grid(absorb, &plan, shot, ports);
+    let subjects = ports.adjustment(AbsorbAdjustment::Subjects) & 3 != 0;
+    if shot.tracking() && subjects {
+        let reference = ports.area_references(absorb.record);
+        let source = ports.subject_source(absorb.record, absorb.refinement);
+        let kind = ports.value(absorb.record, RecordField::SubjectKind);
+        let area = ports.value(absorb.record, RecordField::SubjectArea);
+        shot.classify_subjects(ClassifyStage::Absorb, &reference, kind, source, area, ports);
     }
-    if subjects && boundary.adjustment(AbsorbAdjustment::RateStatus) & 1 != 0 {
-        if boundary.value(absorb.exposure_record, RecordField::MapPresent) == 0 {
-            boundary.release_rate_status();
+    if subjects && ports.adjustment(AbsorbAdjustment::RateStatus) & 1 != 0 {
+        if ports.value(absorb.exposure_record, RecordField::MapPresent) == 0 {
+            ports.release_rate_status();
         } else {
-            let reference = boundary.area_references(absorb.record);
-            boundary.draw_rate_status(&reference);
+            let reference = ports.area_references(absorb.record);
+            ports.draw_rate_status(&reference);
         }
     }
 
     let (stored, positioned) = if plan.whole {
-        store_areas(Form::Full, ResultPass::Plain, plan.target(absorb.record), boundary);
-        let half = boundary.retained_half();
-        boundary.retain_target_half(half);
+        let target = plan.target(absorb.record, shot.requires_eligibility());
+        store_areas(Form::Full, ResultPass::Plain, target, shot, ports);
+        let half = shot.retained_half();
+        shot.retain_target_half(half);
         (true, true)
     } else if matches!(plan.mode, 0 | 1) {
-        store_areas(Form::Full, ResultPass::Plain, plan.target(absorb.record), boundary);
+        let target = plan.target(absorb.record, shot.requires_eligibility());
+        store_areas(Form::Full, ResultPass::Plain, target, shot, ports);
         (true, true)
-    } else if boundary.tracking() {
-        store_areas(Form::Short, ResultPass::Plain, plan.target(absorb.record), boundary);
+    } else if shot.tracking() {
+        let target = plan.target(absorb.record, shot.requires_eligibility());
+        store_areas(Form::Short, ResultPass::Plain, target, shot, ports);
         (true, false)
     } else {
         (false, false)
     };
     if positioned {
-        let cell = boundary.cell(ResultPass::Plain, FIRST_AREA);
-        store_cell(absorb.record, cell, boundary);
+        let cell = shot.cell(ResultPass::Plain, FIRST_AREA);
+        store_cell(absorb.record, cell, shot, ports);
     }
     let summarized = matches!(absorb.selection.0, 0 | 1 | 5);
     if summarized {
-        let summary = boundary.focus_summary();
-        let level = boundary.classify_level(summary.classified());
-        boundary.store_focus_summary(absorb.record, &summary, level);
+        let summary = shot.focus_summary();
+        let level = ports.classify_level(summary.classified());
+        ports.store_focus_summary(absorb.record, &summary, level);
     }
-    store_metering(absorb, &plan, boundary);
+    store_metering(absorb, &plan, shot, ports);
 
     if half_press {
         let enabled = absorb.repeat && !mode.uses_adjustment() && !retained_export;
         if stored {
-            boundary.export_result(plan.frame, ResultExport::Policy, enabled);
-            if enabled { boundary.export_result(plan.frame, ResultExport::Compact, true); }
+            ports.export_result(plan.frame, ResultExport::Policy, enabled);
+            if enabled { ports.export_result(plan.frame, ResultExport::Compact, true); }
         }
-        if positioned { boundary.export_result(plan.frame, ResultExport::SelectedChannel, enabled); }
-        if summarized { boundary.export_result(plan.frame, ResultExport::SourceLimits, enabled); }
+        if positioned { ports.export_result(plan.frame, ResultExport::SelectedChannel, enabled); }
+        if summarized { ports.export_result(plan.frame, ResultExport::SourceLimits, enabled); }
     }
 }
 
 /// With the retained result in the block, the grid is updated and the retained result exported.
-fn export_retained(absorb: &Absorb, plan: &Plan, boundary: &mut impl AbsorbBoundary) {
-    boundary.set_working_aside();
-    boundary.restore_result();
-    update_grid(absorb, plan, boundary);
-    boundary.export_result(plan.frame, ResultExport::Compact, true);
-    boundary.export_result(plan.frame, ResultExport::SelectedChannel, true);
-    boundary.export_result(plan.frame, ResultExport::SourceLimits, true);
-    boundary.restore_working();
+fn export_retained<P: AbsorbPorts>(absorb: &Absorb, plan: &Plan, shot: &mut impl AbsorbShot<P>, ports: &mut P) {
+    shot.set_working_aside();
+    shot.restore_result();
+    update_grid(absorb, plan, shot, ports);
+    ports.export_result(plan.frame, ResultExport::Compact, true);
+    ports.export_result(plan.frame, ResultExport::SelectedChannel, true);
+    ports.export_result(plan.frame, ResultExport::SourceLimits, true);
+    shot.restore_working();
 }
 
-fn update_grid(absorb: &Absorb, plan: &Plan, boundary: &mut impl AbsorbBoundary) {
+fn update_grid<P: AbsorbPorts>(absorb: &Absorb, plan: &Plan, shot: &mut impl AbsorbShot<P>, ports: &mut P) {
     let (reset, keep_gates) = plan.grid_update();
-    boundary.update_grid(absorb.exposure_record, reset, keep_gates, absorb.lens_reference);
+    shot.update_grid(absorb.exposure_record, reset, keep_gates, absorb.lens_reference, ports);
 }
 
 fn area_indices(start: u8, count: u8) -> impl Iterator<Item = AreaIndex> { (start..count).map_while(AreaIndex::new) }
 
 /// Stores each area of `pass` into the record, the half press's first area taking the auxiliary
 /// reference in mode 7.
-pub(crate) fn store_areas(form: Form, pass: ResultPass, target: AreaTarget, boundary: &mut impl AbsorbBoundary) {
+pub(crate) fn store_areas<P: AbsorbPorts>(form: Form, pass: ResultPass, target: AreaTarget, shot: &mut impl AbsorbShot<P>, ports: &mut P) {
     let record = target.record;
     let start = u8::from(target.skip_first);
-    let tracking = boundary.tracking();
-    let count = boundary.result_areas();
-    let require = boundary.requires_eligibility();
+    let tracking = shot.tracking();
+    let count = shot.result_areas();
     for index in area_indices(start, count) {
-        let cell = boundary.cell(pass, index);
-        let kind_word = if tracking { boundary.area_kind(index) } else { UNTRACKED };
+        let cell = shot.cell(pass, index);
+        let kind_word = if tracking { shot.area_kind(target.bank, index) } else { UNTRACKED };
         let kind = TrackedKind::new(kind_word);
         if let ResultPass::Grid(grid) = pass {
-            boundary.adopt_grid_area(grid, cell, index, kind);
-            if form == Form::Full { boundary.adopt_grid_tables(grid, cell, index); }
+            shot.adopt_grid_area(grid, cell, index, kind);
+            if form == Form::Full { shot.adopt_grid_tables(grid, cell, index); }
         }
         let at = match kind {
             None => AreaAt::Cell { pass: ResultPass::Plain, cell, index },
             Some(kind) => AreaAt::Tracked { pass: ResultPass::Plain, kind, index },
         };
-        let area = boundary.result_area(at);
-        let auxiliary = auxiliary_reference(record, target.mode, require, area.reference(), index, boundary);
-        if index.get() == 0 { boundary.set_auxiliary(auxiliary.outcome); }
+        let area = shot.result_area(at);
+        let auxiliary = auxiliary_reference(record, target.mode, target.eligibility, area.reference(), index, ports);
+        if index.get() == 0 { shot.set_auxiliary(auxiliary.outcome); }
         if auxiliary.outcome == AuxiliaryOutcome::Replaced {
-            boundary.store_auxiliary(record, index, &auxiliary);
+            ports.store_auxiliary(record, index, &auxiliary);
             let untracked = (kind_word == UNTRACKED).then_some(AreaAt::Cell { pass, cell, index });
-            boundary.retain_auxiliary(&auxiliary, untracked);
+            shot.retain_auxiliary(&auxiliary, untracked);
             continue;
         }
-        let store = AreaStore { area, weight: boundary.area_weight(index), marker: boundary.marker(pass, kind, index) };
-        boundary.store_area(record, index, &store);
+        let store = AreaStore { area, weight: shot.area_weight(index), marker: shot.marker(pass, kind, index) };
+        ports.store_area(record, index, &store);
         if form == Form::Full {
-            let detail = area_detail(pass, cell, index, record, boundary);
-            boundary.store_area_detail(record, index, &detail);
+            let detail = area_detail(pass, cell, index, record, shot, ports);
+            ports.store_area_detail(record, index, &detail);
         }
     }
-    if form == Form::Full && pass == ResultPass::Plain && boundary.grid_selected() {
+    if form == Form::Full && pass == ResultPass::Plain && shot.grid_selected() {
         for index in area_indices(0, count) {
             for grid in GridPass::ALL {
-                let cell = boundary.cell(ResultPass::Grid(grid), index);
-                boundary.evaluate_distances(ResultPass::Grid(grid), cell, index);
+                let cell = shot.cell(ResultPass::Grid(grid), index);
+                ports.evaluate_distances(ResultPass::Grid(grid), cell, index);
             }
         }
     }
-    if target.mode == AUXILIARY_MODE && boundary.auxiliary() != AuxiliaryOutcome::Replaced {
-        boundary.retain_result();
-        boundary.mark_auxiliary_retained();
+    if target.mode == AUXILIARY_MODE && shot.auxiliary() != AuxiliaryOutcome::Replaced {
+        shot.retain_result();
+        shot.mark_auxiliary_retained();
     }
 }
 
 /// The plain pass evaluates the area's distances here; a grid pass carries its own rows.
-fn area_detail(pass: ResultPass, cell: GridCell, index: AreaIndex, record: RecordHandle, boundary: &mut impl AbsorbBoundary) -> AreaDetail {
-    let plan_value = boundary.plan_value(ResultPass::Plain, cell, index);
-    let plan_half = boundary.plan_half(ResultPass::Plain, cell, index);
+fn area_detail(pass: ResultPass, cell: GridCell, index: AreaIndex, record: RecordHandle, shot: &mut impl CalculationResults, ports: &mut impl AbsorbPorts) -> AreaDetail {
+    let plan_value = shot.plan_value(ResultPass::Plain, cell, index);
+    let plan_half = shot.plan_half(ResultPass::Plain, cell, index);
     let plain = pass == ResultPass::Plain;
-    if plain { boundary.evaluate_distances(ResultPass::Plain, cell, index); }
-    let row = boundary.row(ResultPass::Plain, cell, index);
+    if plain { ports.evaluate_distances(ResultPass::Plain, cell, index); }
+    let row = shot.row(ResultPass::Plain, cell, index);
     AreaDetail {
         selection_class: SelectionFlags(plan_value as u8).category(),
         plan_half,
@@ -414,18 +427,18 @@ fn area_detail(pass: ResultPass, cell: GridCell, index: AreaIndex, record: Recor
         plan_bit_five: RowFlags(plan_value).bit_five(),
         distance: row.distance(),
         row_class: RowFlags(u32::from(row.flags())).class(),
-        extended: plain.then(|| boundary.extended_areas(record)),
-        row_word: boundary.row_word(pass, cell),
+        extended: plain.then(|| ports.extended_areas(record)),
+        row_word: shot.row_word(pass, cell),
     }
 }
 
 /// Mode 7 lets the first area take an auxiliary reference when the selection has not changed
 /// and no other reference is available for it.
-fn auxiliary_reference(record: RecordHandle, mode: u32, require: bool, reference: u32, index: AreaIndex, boundary: &mut impl AbsorbBoundary) -> AuxiliaryReference {
+fn auxiliary_reference(record: RecordHandle, mode: u32, require: bool, reference: u32, index: AreaIndex, ports: &mut impl AbsorbPorts) -> AuxiliaryReference {
     if mode != AUXILIARY_MODE || index.get() != 0 { return AuxiliaryReference::default(); }
-    let source = boundary.selection_source(record);
-    let changed = require && boundary.selection_changed(record, source, reference);
-    let (available, target) = boundary.compare_reference(record, source);
+    let source = ports.selection_source(record);
+    let changed = require && ports.selection_changed(record, source, reference);
+    let (available, target) = ports.compare_reference(record, source);
     let outcome = if changed {
         AuxiliaryOutcome::Unchecked
     } else if available || require {
@@ -433,52 +446,52 @@ fn auxiliary_reference(record: RecordHandle, mode: u32, require: bool, reference
     } else {
         AuxiliaryOutcome::Replaced
     };
-    AuxiliaryReference { outcome, source, target, normalized: boundary.compensated(target) }
+    AuxiliaryReference { outcome, source, target, normalized: ports.compensated(target) }
 }
 
 /// Stores the plain summary of `cell` with the first area's weight.
-pub(crate) fn store_cell(record: RecordHandle, cell: GridCell, boundary: &mut impl AbsorbBoundary) {
-    let summary = boundary.cell_summary(ResultPass::Plain, cell);
-    let weight = boundary.area_weight(FIRST_AREA);
-    boundary.store_cell(record, &summary, weight);
+pub(crate) fn store_cell<P: AbsorbPorts>(record: RecordHandle, cell: GridCell, shot: &mut impl AbsorbShot<P>, ports: &mut P) {
+    let summary = shot.cell_summary(ResultPass::Plain, cell);
+    let weight = shot.area_weight(FIRST_AREA);
+    ports.store_cell(record, &summary, weight);
 }
 
-fn store_metering(absorb: &Absorb, plan: &Plan, boundary: &mut impl AbsorbBoundary) {
-    let mut grid_mode = boundary.grid_mode(absorb.record, plan.mode);
-    if plan.mode == AUXILIARY_MODE { grid_mode = boundary.selection_mode(); }
-    let mut block = boundary.metering(absorb.record);
-    let minimum = if !plan.whole || !boundary.grid_selected() {
-        MeteringMinimum { single_pass: true, minimum: record_minimum(absorb, plan.count, boundary) }
+fn store_metering<P: AbsorbPorts>(absorb: &Absorb, plan: &Plan, shot: &mut impl AbsorbShot<P>, ports: &mut P) {
+    let mut grid_mode = ports.grid_mode(absorb.record, plan.mode);
+    if plan.mode == AUXILIARY_MODE { grid_mode = shot.selection_mode(); }
+    let mut block = ports.metering(absorb.record);
+    let minimum = if !plan.whole || !shot.grid_selected() {
+        MeteringMinimum { single_pass: true, minimum: record_minimum(absorb, plan.count, ports) }
     } else {
-        MeteringMinimum { single_pass: grid_mode != ALL_PASSES, minimum: grid_minimum(absorb, grid_mode, boundary) }
+        MeteringMinimum { single_pass: grid_mode != ALL_PASSES, minimum: grid_minimum(absorb, grid_mode, shot, ports) }
     };
     crate::stock::absorb::set_metering_minimum(&mut block, minimum);
-    boundary.store_metering(absorb.record, &block);
+    ports.store_metering(absorb.record, &block);
 }
 
 /// The smallest lens reference of the record's first `count` areas; the configured split
 /// reference, when nothing is below it, and the live sequence take the lower reference instead.
-fn record_minimum(absorb: &Absorb, count: u8, boundary: &mut impl AbsorbBoundary) -> u32 {
-    if absorb.live { return boundary.lower_reference(absorb.lens_reference); }
-    let split = boundary.split_reference();
-    let minimum = (0..count).map(|index| boundary.area_lens_reference(absorb.record, index)).fold(split, u32::min);
-    if minimum == boundary.split_reference() { boundary.lower_reference(absorb.lens_reference) } else { minimum }
+fn record_minimum(absorb: &Absorb, count: u8, ports: &mut impl AbsorbPorts) -> u32 {
+    if absorb.live { return ports.lower_reference(absorb.lens_reference); }
+    let split = ports.split_reference();
+    let minimum = (0..count).map(|index| ports.area_lens_reference(absorb.record, index)).fold(split, u32::min);
+    if minimum == ports.split_reference() { ports.lower_reference(absorb.lens_reference) } else { minimum }
 }
 
 /// As `record_minimum`, over the grid areas of one pass or, for `ALL_PASSES`, of all three.
-fn grid_minimum(absorb: &Absorb, grid_mode: u32, boundary: &mut impl AbsorbBoundary) -> u32 {
-    if absorb.live { return boundary.lower_reference(absorb.lens_reference); }
+fn grid_minimum<P: AbsorbPorts>(absorb: &Absorb, grid_mode: u32, shot: &mut impl AbsorbShot<P>, ports: &mut P) -> u32 {
+    if absorb.live { return ports.lower_reference(absorb.lens_reference); }
     let passes: &[GridPass] = if grid_mode == ALL_PASSES { &GridPass::ALL } else { &[] };
     let single = GridPass::new(grid_mode);
-    let split = boundary.split_reference();
-    let count = boundary.result_areas();
+    let split = ports.split_reference();
+    let count = shot.result_areas();
     let mut minimum = split;
     for &pass in passes.iter().chain(single.iter()) {
         for index in area_indices(0, count) {
-            let cell = boundary.cell(ResultPass::Grid(pass), index);
-            let reference = boundary.result_area(AreaAt::Cell { pass: ResultPass::Grid(pass), cell, index }).reference();
+            let cell = shot.cell(ResultPass::Grid(pass), index);
+            let reference = shot.result_area(AreaAt::Cell { pass: ResultPass::Grid(pass), cell, index }).reference();
             minimum = minimum.min(reference);
         }
     }
-    if minimum == boundary.split_reference() { boundary.lower_reference(absorb.lens_reference) } else { minimum }
+    if minimum == ports.split_reference() { ports.lower_reference(absorb.lens_reference) } else { minimum }
 }

@@ -8,7 +8,8 @@
 use crate::boundary::{Client, Frame, Lens, LensPoint, LensReference};
 use crate::finish_work::{AreaPositions, CorrectionRecord, FinishPipeline};
 use crate::ports::{PipelineEffect as E, PipelinePhase, PipelineQuery as Q, PipelineRequest as R};
-use crate::preparation::{HalfPressParameters, Prepared};
+use crate::preparation::{record_lens, HalfPressParameters, LensStage, Prepared};
+use crate::state::{ShotState, StateMemory};
 use crate::stock::pipeline::{self as layout, ToneWord};
 use xm1_saclac_interface::pipeline::{
     CaptureArea, FrameRequest, GradationCalculation, GradationRequest, RawCalculation, RawCheck, RawFrameRequest, ScanRequest, SelectionRequest,
@@ -376,8 +377,6 @@ pub trait PipelinePlatform {
     fn load_test_register(&mut self, register: u8) -> u8;
     fn set_load_test_register(&mut self, register: u8, value: u8);
     fn trace(&mut self, trace: PipelineTrace);
-    /// The shot context's lens reference.
-    fn bound_lens_reference(&mut self) -> u32;
     fn stamp_pipeline_frame(&mut self, frame: Frame, words: &PipelineFrame);
     fn clear_frame_work(&mut self, frame: Frame);
     fn store_bound_frame(&mut self, frame: Option<Frame>);
@@ -479,11 +478,11 @@ impl PipelineWork {
         }
     }
 
-    pub fn effect(&mut self, effect: E, prepared: &mut Prepared, boundary: &mut impl PipelineBoundary) {
+    pub fn effect<M: StateMemory>(&mut self, effect: E, prepared: &mut Prepared, state: &mut ShotState<M>, boundary: &mut impl PipelineBoundary) {
         match effect {
-            E::BindRecord(record) => self.bind(record, prepared, boundary),
-            E::RecordLensStatus => prepared.record_lens_status(boundary),
-            E::Prepare(record) => self.prepare(record, prepared.parameters.unwrap_or_default(), boundary),
+            E::BindRecord(record) => self.bind(record, prepared, state.lens_reference(), boundary),
+            E::RecordLensStatus => record_lens(LensStage::Pipeline, state, boundary),
+            E::Prepare(record) => self.prepare(record, prepared.parameters.unwrap_or_default(), state.lens_reference(), boundary),
             E::MarkRestart => boundary.mark_restart(),
             E::Configure { first, .. } => self.configure(first, prepared, boundary),
             E::ClearFrameReady => self.frame = FrameFlags::default(),
@@ -543,20 +542,19 @@ impl PipelineWork {
         if let Some(area) = self.work { boundary.store_work(area, store); }
     }
 
-    fn bind(&mut self, record: RecordHandle, prepared: &mut Prepared, boundary: &mut impl PipelineBoundary) {
+    fn bind(&mut self, record: RecordHandle, prepared: &mut Prepared, lens_reference: LensReference, boundary: &mut impl PipelineBoundary) {
         self.bound = Some(record);
         let parameters = prepared.parameters.unwrap_or_default();
         if parameters.mode.0 != FINISH_ONLY_MODE {
             let frame = parameters.frame_slot.and_then(|slot| boundary.frame(slot));
             boundary.store_bound_frame(frame);
             if let Some(frame) = frame {
-                let lens_reference = boundary.bound_lens_reference();
-                boundary.stamp_frame(frame, lens_reference);
+                boundary.stamp_frame(frame, lens_reference.0);
                 let words = PipelineFrame {
                     resource: boundary.resource(record),
                     bank: boundary.resource_bank(record),
                     lens_position: boundary.lens_value(PipelineLens::Position),
-                    lens_reference: boundary.bound_lens_reference(),
+                    lens_reference: lens_reference.0,
                 };
                 boundary.stamp_pipeline_frame(frame, &words);
                 if boundary.resource(record) != 0 || parameters.mode.0 != 0 { boundary.clear_frame_work(frame); }
@@ -565,7 +563,7 @@ impl PipelineWork {
         prepared.pipeline_gate = 0;
     }
 
-    fn prepare(&mut self, record: RecordHandle, parameters: HalfPressParameters, boundary: &mut impl PipelineBoundary) {
+    fn prepare(&mut self, record: RecordHandle, parameters: HalfPressParameters, lens_reference: LensReference, boundary: &mut impl PipelineBoundary) {
         boundary.trace(PipelineTrace::Prepare);
         self.mode = parameters.mode.0;
         if self.mode != FINISH_ONLY_MODE {
@@ -579,7 +577,7 @@ impl PipelineWork {
         }
         let input = PlanInput {
             record,
-            lens_reference: boundary.bound_lens_reference(),
+            lens_reference: lens_reference.0,
             load_test_window: boundary.load_test_setting() == LOAD_TEST_WINDOW,
             area_count: parameters.area_count.map_or(0, |count| count.0),
             option: parameters.plan_option,

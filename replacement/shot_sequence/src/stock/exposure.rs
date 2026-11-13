@@ -1,11 +1,12 @@
 #![forbid(unsafe_code)]
 
 //! X-M1 1.50 layouts the exposure conclusion 0xf1f4ec reads from the calc 0x3c01 correction and
-//! writes into the selection plan (shot context +0x1cec) and the record's exposure table.
+//! writes into the selection list (shot context +0x1cec) and the record's exposure table.
 
-use crate::boundary::{ExposureSlot, SelectionPlan};
+use crate::boundary::ExposureSlot;
 use crate::exposure_callbacks::CallbackTrace;
 use xm1_saclac_interface::exposure::Correction;
+use xm1_saclac_interface::selection::SelectionList;
 
 /// Correction halfwords stored into record slots 0..=12 and 14..=19 (setters 0x750eb0 + 0x98 *
 /// slot), in the order 0xf1f760..0xf1f970 stores them.
@@ -50,11 +51,11 @@ const PLAN_COUNT: usize = 4;
 const PLAN_AREA_ARRAYS: [usize; 4] = [0x8, 0x5c, 0x68, 0x74];
 const PLAN_TAIL: usize = 0x20c;
 
-/// 0xf1f608..0xf1f6cc: a plan whose first word is 0 takes the correction's plan value for each of
-/// its counted areas in four arrays; every plan takes five correction halfwords at +0x20c. Stock
-/// writes past the plan for counts above 104; owned code stops at its end.
-pub fn plan_take_exposure(plan: &mut SelectionPlan, correction: &Correction) {
-    let bytes = &mut plan.0;
+/// 0xf1f608..0xf1f6cc: a list whose first word is 0 takes the correction's plan value for each of
+/// its counted areas in four arrays; every list takes five correction halfwords at +0x20c. Stock
+/// writes past the list for counts above 104; owned code stops at its end.
+pub fn plan_take_exposure(list: &mut SelectionList, correction: &Correction) {
+    let mut bytes = *list.bytes();
     let kind = u32::from_le_bytes([bytes[PLAN_KIND], bytes[PLAN_KIND + 1], bytes[PLAN_KIND + 2], bytes[PLAN_KIND + 3]]);
     let count = usize::from(bytes[PLAN_COUNT]);
     if kind == 0 {
@@ -69,6 +70,7 @@ pub fn plan_take_exposure(plan: &mut SelectionPlan, correction: &Correction) {
         let offset = PLAN_TAIL + 2 * index;
         bytes[offset..offset + 2].copy_from_slice(&correction.half(half).to_le_bytes());
     }
+    *list = SelectionList::from_bytes(bytes);
 }
 
 /// Words the callbacks pass to the trace entry 0x72872c (0xf1ee24, 0xf1fc38).

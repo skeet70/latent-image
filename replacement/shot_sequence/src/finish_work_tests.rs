@@ -161,14 +161,30 @@ impl FinishSources for World {
     fn capture_status(&mut self) -> u32 { self.capture_status }
 }
 
-impl FinishCalculation for World {
+/// The calculation block and saved-input words of one effect, taken from the world and given back.
+struct Block {
+    areas: u8,
+    selection_mode: u32,
+    saved_mode: Option<u32>,
+}
+
+impl<P> FinishCalculation<P> for Block {
     fn calculation_record(&mut self) -> RecordHandle { record() }
-    fn calculation_areas(&mut self) -> u8 { self.calculation_areas }
+    fn calculation_areas(&mut self) -> u8 { self.areas }
     fn calculation_selection(&mut self) -> u32 { 1 }
     fn selection_mode(&mut self) -> u32 { self.selection_mode }
     fn set_selection_mode(&mut self, mode: u32) { self.selection_mode = mode; }
     fn exposure_held(&mut self) -> bool { false }
     fn set_saved_selection_mode(&mut self, mode: u32) { self.saved_mode = Some(mode); }
+    fn lens_reference(&mut self) -> LensReference { LensReference(0) }
+    fn load_finish_record(&mut self, _parameters: &HalfPressParameters, _ports: &mut P) {}
+}
+
+fn effect(work: &mut FinishWork, effect: FinishEffect, prepared: &Prepared, pipeline: &Pipeline, world: &mut World) {
+    let mut block = Block { areas: world.calculation_areas, selection_mode: world.selection_mode, saved_mode: world.saved_mode };
+    work.effect(effect, prepared, pipeline, &mut block, world);
+    world.selection_mode = block.selection_mode;
+    world.saved_mode = block.saved_mode;
 }
 
 impl FinishLibrary for World {
@@ -177,7 +193,6 @@ impl FinishLibrary for World {
     fn mode_selection(&mut self, _record: RecordHandle, _mode: u32) -> u32 { 4 }
     fn correction(&mut self, _point: &LensPoint, _drive: u32, _frame_drive: u32) -> u32 { 25 }
     fn adjust_position(&mut self, adjustment: PositionAdjustment) -> i16 { adjustment.position + 1000 }
-    fn load_finish_record(&mut self) {}
 }
 
 impl LensMoves for World {
@@ -212,8 +227,8 @@ fn prepared(mode: u32, mask: u32) -> Prepared {
 
 /// Runs the half-press finish's preparation effects in order, then both moves.
 fn finish(work: &mut FinishWork, prepared: &Prepared, pipeline: &Pipeline, world: &mut World) {
-    for effect in [FinishEffect::Begin(record()), FinishEffect::LoadAdjustment, FinishEffect::PrepareRecords, FinishEffect::PrepareLens, FinishEffect::SelectTarget] {
-        work.effect(effect, prepared, pipeline, world);
+    for effect_kind in [FinishEffect::Begin(record()), FinishEffect::LoadAdjustment, FinishEffect::PrepareRecords, FinishEffect::PrepareLens, FinishEffect::SelectTarget] {
+        effect(work, effect_kind, prepared, pipeline, world);
     }
     work.lens_move(LensMove::FinishRelative, prepared, pipeline, world);
     work.lens_move(LensMove::FinishAbsolute, prepared, pipeline, world);
@@ -309,7 +324,7 @@ fn a_directed_point_is_clamped_one_step_towards_the_lens() {
 fn the_capture_status_is_marked_in_the_lens_snapshot_at_the_start() {
     let mut work = FinishWork::new();
     let mut world = World { capture_status: 1, ..World::new() };
-    work.effect(FinishEffect::Begin(record()), &prepared(1, 0), &pipeline(), &mut world);
+    effect(&mut work, FinishEffect::Begin(record()), &prepared(1, 0), &pipeline(), &mut world);
     assert_eq!(world.snapshot.tail[0..4], 1u32.to_le_bytes());
 }
 
@@ -339,7 +354,7 @@ fn a_relative_completion_in_mode_one_sets_the_lens_target() {
     let mut world = World::new();
     let prepared = prepared(1, 0);
     finish(&mut work, &prepared, &pipeline(), &mut world);
-    work.effect(FinishEffect::AbsorbRelative, &prepared, &pipeline(), &mut world);
+    effect(&mut work, FinishEffect::AbsorbRelative, &prepared, &pipeline(), &mut world);
     assert_eq!(world.lens_target, Some((1100, 40, 1)));
     assert_eq!(world.bounds, None);
 }
@@ -356,7 +371,7 @@ fn a_relative_completion_in_mode_zero_notifies_the_client_of_the_lens_bounds() {
         let mut work = FinishWork::new();
         let prepared = prepared(0, 0);
         finish(&mut work, &prepared, &pipeline(), &mut world);
-        work.effect(FinishEffect::AbsorbRelative, &prepared, &pipeline(), &mut world);
+        effect(&mut work, FinishEffect::AbsorbRelative, &prepared, &pipeline(), &mut world);
         assert_eq!(world.bounds, bounds);
     }
 }
@@ -366,8 +381,8 @@ fn the_live_finish_drives_to_the_live_target() {
     let mut work = FinishWork::new();
     let mut world = World::new();
     let prepared = Prepared::default();
-    work.effect(FinishEffect::Begin(record()), &prepared, &pipeline(), &mut world);
-    work.effect(FinishEffect::PrepareLiveTarget, &prepared, &pipeline(), &mut world);
+    effect(&mut work, FinishEffect::Begin(record()), &prepared, &pipeline(), &mut world);
+    effect(&mut work, FinishEffect::PrepareLiveTarget, &prepared, &pipeline(), &mut world);
     work.lens_move(LensMove::FinishAbsolute, &prepared, &pipeline(), &mut world);
     assert_eq!(world.moves, [Move::Absolute { target: 0x1001, profile: MoveProfile::Finish { speed: 3 } }]);
 }
@@ -386,8 +401,8 @@ fn the_relative_move_goes_first_when_the_pipeline_asks() {
 fn completion_traces_mark_each_move_done() {
     let mut work = FinishWork::new();
     let mut world = World::new();
-    work.effect(FinishEffect::MarkRelativeDone, &Prepared::default(), &pipeline(), &mut world);
-    work.effect(FinishEffect::MarkAbsoluteDone, &Prepared::default(), &pipeline(), &mut world);
+    effect(&mut work, FinishEffect::MarkRelativeDone, &Prepared::default(), &pipeline(), &mut world);
+    effect(&mut work, FinishEffect::MarkAbsoluteDone, &Prepared::default(), &pipeline(), &mut world);
     assert_eq!(world.traces, [FinishTrace::RelativeDone, FinishTrace::AbsoluteDone]);
 }
 

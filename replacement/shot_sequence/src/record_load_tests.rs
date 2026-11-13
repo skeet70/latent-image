@@ -29,18 +29,22 @@ fn half_press(mode: u32, keep_areas: bool) -> RecordLoad {
 
 fn lens_return(pending: bool) -> RecordLoad { RecordLoad { origin: LoadOrigin::Return { pending }, record: record(), refinement: 0, repeat: false } }
 
-fn run(input: &RecordLoad, world: &mut World) { load(input, world); }
+fn run(input: &RecordLoad, world: &mut World) {
+    let mut block = world.block();
+    load(input, &mut block, world);
+    world.auxiliary = block.auxiliary;
+}
 
 fn first_pair(world: &World) -> ReferencePair { ReferencePair { reference: world.lens_reference, detail: world.stored_area.reference } }
 
 fn kept_reply() -> Event { Event::Reply(Reply { command: CommandKind::HalfPress, record: Some(record()), status: AREAS_KEPT_STATUS }) }
 
 fn client_slots(world: &World) -> Vec<(u32, u8)> {
-    world.events.iter().filter_map(|event| match event { Event::ClientSlot { target, slot } => Some((*target, *slot)), _ => None }).collect()
+    world.events.iter().filter_map(|event| match event { Event::ClientSlot { target, slot } => Some((target, slot)), _ => None }).collect()
 }
 
 fn loaded(world: &World) -> Vec<LoadExport> {
-    world.events.iter().filter_map(|event| match event { Event::Loaded(export, _) => Some(*export), _ => None }).collect()
+    world.events.iter().filter_map(|event| match event { Event::Loaded(export, _) => Some(export), _ => None }).collect()
 }
 
 #[test]
@@ -49,12 +53,12 @@ fn a_half_press_that_keeps_its_areas_points_every_pair_at_the_lens_and_notifies_
     run(&half_press(2, true), &mut world);
     let pair = first_pair(&world);
     assert_eq!(world.pairs(), [(0, pair), (1, pair), (2, pair), (3, pair), (4, pair)]);
-    let snapshot = world.events.iter().find_map(|event| match event { Event::Snapshot(snapshot) => Some(*snapshot), _ => None }).expect("snapshot stored");
+    let snapshot = world.events.iter().find_map(|event| match event { Event::Snapshot(snapshot) => Some(snapshot), _ => None }).expect("snapshot stored");
     assert_eq!(snapshot, layout::with_resume_offset(world.snapshot, world.profile_offset));
     assert!(world.has(&Event::ResumeOffset(world.profile_offset)));
     assert!(world.has(&Event::Starts(AreaStarts { stored: world.stored_area.start, selected: plain_reference(0) as i16 })));
     assert!(world.has(&Event::RetainWord(world.stored_area.reference)));
-    assert_eq!(world.events.last(), Some(&kept_reply()));
+    assert_eq!(world.events.last(), Some(kept_reply()));
     assert!(client_slots(&world).is_empty(), "kept areas reach the client through the notification");
     assert!(loaded(&world).is_empty(), "nothing is loaded without a selected grid");
 }

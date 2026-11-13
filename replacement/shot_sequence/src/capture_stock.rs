@@ -6,17 +6,24 @@ use crate::boundary::ClientRef;
 use crate::calculations_work::Processing;
 use crate::capture_dump::{DumpEntry, DumpSource, DumpWord, Packing};
 use crate::capture_boundary::{
-    CaptureAdjustment, CaptureOptions, CaptureParameters, CaptureTrace, FrameOffset, MoveProfile, RecordField, SettingResult, SlotEntry, SlotField,
+    AreaReference, CaptureAdjustment, CaptureOptions, CaptureParameters, CaptureTrace, FrameOffset, MoveProfile, RecordField, SettingResult, SlotEntry, SlotField,
     SlotSelection,
 };
 use crate::dump_boundary::{AdjustmentKey, FieldWidth, RateGrid, ShotWord, Workspace, WorkspaceField};
 use crate::primary_boundary::{AreaMode, CaptureStatus};
 use crate::secondary_boundary::{AreaList, MeasurementSetting, MeasurementWord, StatisticsStore};
+use xm1_saclac_interface::selection::SubjectShare;
 use xm1_saclac_interface::statistics::SettingOverrides;
 
 fn word(block: &[u8], offset: usize) -> Option<u32> {
     let bytes: [u8; 4] = block.get(offset..offset + 4)?.try_into().ok()?;
     Some(u32::from_le_bytes(bytes))
+}
+
+/// The share the subject classification reads from the record's area references: the mode word
+/// at +0x10 and the percent halfword at +0x14 (0xf1c74c, 0xf1c77c).
+pub fn subject_share(reference: &AreaReference) -> SubjectShare {
+    SubjectShare { mode: reference.0[4], percent: reference.0[5] as u16 }
 }
 
 pub const CAPTURE_BLOCK_BYTES: usize = 60;

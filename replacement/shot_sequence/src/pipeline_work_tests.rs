@@ -273,7 +273,6 @@ impl PipelinePlatform for World {
     fn load_test_register(&mut self, register: u8) -> u8 { self.registers[usize::from(register)] }
     fn set_load_test_register(&mut self, register: u8, value: u8) { self.calls.push(Call::Register(register, value)); }
     fn trace(&mut self, trace: PipelineTrace) { self.calls.push(Call::Trace(trace)); }
-    fn bound_lens_reference(&mut self) -> u32 { 0x42 }
     fn stamp_pipeline_frame(&mut self, _frame: Frame, words: &PipelineFrame) { self.calls.push(Call::PipelineFrame(*words)); }
     fn clear_frame_work(&mut self, frame: Frame) { self.calls.push(Call::ClearFrameWork(frame)); }
     fn store_bound_frame(&mut self, frame: Option<Frame>) { self.calls.push(Call::BoundFrame(frame)); }
@@ -320,9 +319,17 @@ fn prepared(mode: u32, mask: u32) -> Prepared {
     }
 }
 
+/// Runs `effect` with a shot state whose bound lens reference is 0x42.
+fn effect(work: &mut PipelineWork, effect: E, prepared: &mut Prepared, world: &mut World) {
+    use crate::state::StateMemory;
+    let mut state = crate::state::ShotState::new(crate::state_tests::Memory::default());
+    state.memory().write(crate::stock::state::REQUEST_WORD, &0x42u32.to_le_bytes());
+    work.effect(effect, prepared, &mut state, world);
+}
+
 fn prepare(work: &mut PipelineWork, prepared: &mut Prepared, world: &mut World) {
-    work.effect(E::BindRecord(record()), prepared, world);
-    work.effect(E::Prepare(record()), prepared, world);
+    effect(work, E::BindRecord(record()), prepared, world);
+    effect(work, E::Prepare(record()), prepared, world);
 }
 
 fn deliver(work: &mut PipelineWork, world: &mut World, completion: Completion, payload: &[u8]) {
@@ -352,7 +359,7 @@ fn the_bind_stamps_the_frame_names_it_and_closes_the_preparation_gate() {
     let (mut work, mut world) = (PipelineWork::new(), World::new());
     world.lens_position = 0x1234;
     let mut prepared = prepared(0, 0);
-    work.effect(E::BindRecord(record()), &mut prepared, &mut world);
+    effect(&mut work, E::BindRecord(record()), &mut prepared, &mut world);
     assert_eq!(world.take(), [
         Call::BoundFrame(Some(FRAME)),
         Call::Stamp(FRAME),
@@ -362,12 +369,12 @@ fn the_bind_stamps_the_frame_names_it_and_closes_the_preparation_gate() {
     assert_eq!(work.pipeline_record(), Some(record()));
 
     world.resource = 1;
-    work.effect(E::BindRecord(record()), &mut prepared, &mut world);
+    effect(&mut work, E::BindRecord(record()), &mut prepared, &mut world);
     assert!(world.has(&Call::ClearFrameWork(FRAME)));
 
     let mut finish_only = self::prepared(6, 0);
     world.calls.clear();
-    work.effect(E::BindRecord(record()), &mut finish_only, &mut world);
+    effect(&mut work, E::BindRecord(record()), &mut finish_only, &mut world);
     assert!(world.calls.is_empty());
     assert_eq!(finish_only.pipeline_gate, 0);
 }
@@ -377,16 +384,16 @@ fn a_finish_only_half_press_keeps_the_previous_pipeline_state() {
     let (mut work, mut world) = (PipelineWork::new(), World::new());
     let mut planned = prepared(1, MASK_RELEASED);
     prepare(&mut work, &mut planned, &mut world);
-    work.effect(E::SetUploadDone(true), &mut planned, &mut world);
+    effect(&mut work, E::SetUploadDone(true), &mut planned, &mut world);
 
     let mut finish_only = prepared(6, 0);
-    work.effect(E::Prepare(record()), &mut finish_only, &mut world);
+    effect(&mut work, E::Prepare(record()), &mut finish_only, &mut world);
     assert!(work.query(Q::FinishOnly, &mut world));
     assert!(work.upload_done());
     assert!(work.relative_first());
 
     let mut next = prepared(5, 0);
-    work.effect(E::Prepare(record()), &mut next, &mut world);
+    effect(&mut work, E::Prepare(record()), &mut next, &mut world);
     assert!(!work.upload_done());
     assert!(work.query(Q::SkipLensFinish, &mut world));
 }
@@ -397,12 +404,12 @@ fn the_finish_reads_pending_and_done_statistics_and_the_reset_keeps_the_pending_
     let mut prepared = prepared(1, MASK_RELEASED);
     prepare(&mut work, &mut prepared, &mut world);
     assert!(!work.relative_first());
-    work.effect(E::SetStatisticsPending(true), &mut prepared, &mut world);
-    work.effect(E::SetUploadDone(true), &mut prepared, &mut world);
-    work.effect(E::SetFinishDone, &mut prepared, &mut world);
+    effect(&mut work, E::SetStatisticsPending(true), &mut prepared, &mut world);
+    effect(&mut work, E::SetUploadDone(true), &mut prepared, &mut world);
+    effect(&mut work, E::SetFinishDone, &mut prepared, &mut world);
     assert!(work.statistics_pending() && work.upload_done() && work.query(Q::FinishDone, &mut world));
 
-    work.effect(E::Reset, &mut prepared, &mut world);
+    effect(&mut work, E::Reset, &mut prepared, &mut world);
     assert!(world.has(&Call::Converted));
     assert!(work.statistics_pending());
     assert!(!work.upload_done() && !work.query(Q::FinishDone, &mut world) && !work.query(Q::FrameReady, &mut world));
@@ -479,7 +486,7 @@ fn a_gradation_result_reaches_the_threshold_from_the_selected_snapshot_sample() 
     put(&mut world.snapshot.0, 4 + 8 * 2, 500);
     put(&mut world.scan.0, SCAN_SAMPLING, 1);
     put(&mut world.scan.0, SCAN_THRESHOLD, 500);
-    work.effect(E::Request(R::Calc05), &mut prepared, &mut world);
+    effect(&mut work, E::Request(R::Calc05), &mut prepared, &mut world);
     world.take();
     deliver(&mut work, &mut world, Completion::Calculation93, &[1; 96]);
     assert_eq!(world.take(), [Call::Scan(ScanStore::Gradation(GradationCalculation([1; 96]))), Call::Scan(ScanStore::GradationReached)]);
@@ -494,10 +501,10 @@ fn the_released_frame_is_flushed_traced_after_and_later_stores_use_its_other_vie
     let mut prepared = prepared(1, MASK_RELEASED);
     prepare(&mut work, &mut prepared, &mut world);
     world.take();
-    work.effect(E::SetPhase(PipelinePhase::First), &mut prepared, &mut world);
-    work.effect(E::ReleaseFrame, &mut prepared, &mut world);
-    work.effect(E::FrameReleased, &mut prepared, &mut world);
-    work.effect(E::SetPhase(PipelinePhase::Third), &mut prepared, &mut world);
+    effect(&mut work, E::SetPhase(PipelinePhase::First), &mut prepared, &mut world);
+    effect(&mut work, E::ReleaseFrame, &mut prepared, &mut world);
+    effect(&mut work, E::FrameReleased, &mut prepared, &mut world);
+    effect(&mut work, E::SetPhase(PipelinePhase::Third), &mut prepared, &mut world);
     let calls = world.take();
     let released = crate::stock::pipeline::released(work_area());
     assert_eq!(calls, [
@@ -517,7 +524,7 @@ fn the_configured_outcome_is_published_to_the_record_only_when_the_client_asked(
     let mut asked = prepared(1, MASK_RELEASED);
     prepare(&mut work, &mut asked, &mut world);
     world.take();
-    work.effect(E::Configure { record: record(), first: true }, &mut asked, &mut world);
+    effect(&mut work, E::Configure { record: record(), first: true }, &mut asked, &mut world);
     assert_eq!(work.frame_point(), point);
     let calls = world.take();
     let Some(Call::History(history)) = calls.first() else { panic!("history first") };
@@ -532,7 +539,7 @@ fn the_configured_outcome_is_published_to_the_record_only_when_the_client_asked(
     assert_eq!((positions.last, positions.positions[0], positions.positions[1]), (1, 300, 300));
 
     let mut unasked = prepared(1, 0);
-    work.effect(E::Configure { record: record(), first: true }, &mut unasked, &mut world);
+    effect(&mut work, E::Configure { record: record(), first: true }, &mut unasked, &mut world);
     assert!(matches!(world.take()[..], [Call::History(_)]));
 }
 
@@ -542,7 +549,7 @@ fn a_missed_focus_has_no_position_code() {
     world.focus = FocusResultOut { status: 2, ..FocusResultOut::default() };
     let mut asked = prepared(1, MASK_RELEASED);
     prepare(&mut work, &mut asked, &mut world);
-    work.effect(E::Configure { record: record(), first: false }, &mut asked, &mut world);
+    effect(&mut work, E::Configure { record: record(), first: false }, &mut asked, &mut world);
     assert!(world.has(&Call::Outcome(OutcomeValue::PositionCode(0xffff))));
 }
 
@@ -558,10 +565,10 @@ fn the_load_test_window_reports_whether_the_lens_stands_inside() {
     prepare(&mut work, &mut prepared, &mut world);
     let registers = |world: &mut World| world.take().into_iter().filter(|call| matches!(call, Call::Register(..))).collect::<Vec<_>>();
     registers(&mut world);
-    work.effect(E::Configure { record: record(), first: true }, &mut prepared, &mut world);
+    effect(&mut work, E::Configure { record: record(), first: true }, &mut prepared, &mut world);
     assert_eq!(registers(&mut world), [Call::Register(0x88, 0x12), Call::Register(0x89, 0x34), Call::Register(0x8a, 0)]);
     world.lens_position = 0x200;
-    work.effect(E::Configure { record: record(), first: true }, &mut prepared, &mut world);
+    effect(&mut work, E::Configure { record: record(), first: true }, &mut prepared, &mut world);
     assert_eq!(registers(&mut world).last(), Some(&Call::Register(0x8a, 2)));
 }
 
@@ -573,7 +580,7 @@ fn the_fallback_publishes_up_to_three_positions_and_every_area_block() {
     world.scan.0[SCAN_AREA_COUNT] = 4;
     for (index, position) in [10u16, 20, 30, 40].iter().enumerate() { world.scan.0[0x138 + 8 * index..0x13a + 8 * index].copy_from_slice(&position.to_le_bytes()); }
     world.take();
-    work.effect(E::PrepareFallback, &mut prepared, &mut world);
+    effect(&mut work, E::PrepareFallback, &mut prepared, &mut world);
     assert!(world.has(&Call::AreaBlock(AreaSlot::Third, 4)));
     let Some(Call::Positions(positions)) = world.calls.last() else { panic!("positions last") };
     assert_eq!((positions.last, positions.positions), (3, [10, 20, 30, 10]));
@@ -593,20 +600,20 @@ fn the_frame_preparation_installs_the_scan_plan_and_builds_the_scan_request() {
     world.settings.push((PipelineSetting::CorrectionTolerance, 30));
     world.lens_position = 80;
     world.direction = 0;
-    work.effect(E::PrepareFrame, &mut prepared, &mut world);
+    effect(&mut work, E::PrepareFrame, &mut prepared, &mut world);
     assert_eq!(world.scan.0[SCAN_SELECTION..SCAN_SELECTION + 4], 1u32.to_le_bytes());
-    work.effect(E::Request(R::Image1f), &mut prepared, &mut world);
+    effect(&mut work, E::Request(R::Image1f), &mut prepared, &mut world);
     let Some(Call::ScanRequest(request)) = world.calls.last() else { panic!("scan requested") };
     assert_eq!((request.start, request.positions[0], request.selection_word, request.selection_setting), (1, 100, 0xabc, 0));
     assert_eq!(request.correction, 40 + 30);
     world.lens_position = 120;
-    work.effect(E::PrepareFrame, &mut prepared, &mut world);
-    work.effect(E::Request(R::Image1f), &mut prepared, &mut world);
+    effect(&mut work, E::PrepareFrame, &mut prepared, &mut world);
+    effect(&mut work, E::Request(R::Image1f), &mut prepared, &mut world);
     let Some(Call::ScanRequest(request)) = world.calls.last() else { panic!("scan requested") };
     assert_eq!(request.correction, 40 + 30 - 20);
     world.direction = 1;
-    work.effect(E::PrepareFrame, &mut prepared, &mut world);
-    work.effect(E::Request(R::Image1f), &mut prepared, &mut world);
+    effect(&mut work, E::PrepareFrame, &mut prepared, &mut world);
+    effect(&mut work, E::Request(R::Image1f), &mut prepared, &mut world);
     let Some(Call::ScanRequest(request)) = world.calls.last() else { panic!("scan requested") };
     assert_eq!(request.correction, 0);
     assert!(work.query(Q::ToneResultSet, &mut world));
@@ -615,7 +622,7 @@ fn the_frame_preparation_installs_the_scan_plan_and_builds_the_scan_request() {
     prepare(&mut unplanned, &mut self::prepared(1, MASK_RELEASED), &mut world);
     put(&mut world.built.0, 0x8, 3);
     world.take();
-    unplanned.effect(E::PrepareFrame, &mut self::prepared(1, MASK_RELEASED), &mut world);
+    effect(&mut unplanned, E::PrepareFrame, &mut self::prepared(1, MASK_RELEASED), &mut world);
     assert!(!world.has(&Call::Install));
 }
 
@@ -629,15 +636,15 @@ fn the_tone_request_takes_scaled_levels_when_the_scan_starts_and_the_matched_lev
     work.query(Q::ToneSkipped, &mut world);
     put(&mut world.scan.0, 0x38, 0x11);
     world.gated = true;
-    work.effect(E::ArmFrame, &mut prepared, &mut world);
-    work.effect(E::Request(R::Calc04), &mut prepared, &mut world);
+    effect(&mut work, E::ArmFrame, &mut prepared, &mut world);
+    effect(&mut work, E::Request(R::Calc04), &mut prepared, &mut world);
     let Some(Call::Tone(request)) = world.calls.last() else { panic!("tone requested") };
     assert_eq!((request.levels, request.offset, request.window[0]), ([-7; TONE_LEVELS], 0, 0));
 
     put(&mut world.built.0, 0x4, 1);
-    work.effect(E::PrepareFrame, &mut prepared, &mut world);
+    effect(&mut work, E::PrepareFrame, &mut prepared, &mut world);
     world.settings.push((PipelineSetting::ToneOffset, 1));
-    work.effect(E::Request(R::Calc04), &mut prepared, &mut world);
+    effect(&mut work, E::Request(R::Calc04), &mut prepared, &mut world);
     let Some(Call::Tone(request)) = world.calls.last() else { panic!("tone requested") };
     assert_eq!((request.levels[0], request.offset), (1000, (93 * 2 - 7) as u16));
 }
@@ -648,7 +655,7 @@ fn the_gradation_request_narrows_still_channels_and_hands_on_the_samples() {
     let mut prepared = prepared(1, MASK_RELEASED);
     prepare(&mut work, &mut prepared, &mut world);
     put(&mut world.built.0, 0x4, 1);
-    work.effect(E::PrepareFrame, &mut prepared, &mut world);
+    effect(&mut work, E::PrepareFrame, &mut prepared, &mut world);
     put(&mut world.scan.0, SCAN_SAMPLING, 1);
     put(&mut world.subject.0, SUBJECT_SCALE, 10);
     world.settings.push((PipelineSetting::ExposureScale, 0x30));
@@ -658,7 +665,7 @@ fn the_gradation_request_narrows_still_channels_and_hands_on_the_samples() {
     world.channels = 4;
     world.samples = [100, 150, 200, 205, 0, 0, 0, 0];
     world.take();
-    work.effect(E::Request(R::Calc05), &mut prepared, &mut world);
+    effect(&mut work, E::Request(R::Calc05), &mut prepared, &mut world);
     let calls = world.take();
     assert!(calls.contains(&Call::SelectChannel(3)));
     assert!(calls.contains(&Call::Work(work_area(), WorkStore::ChannelWindow { last: 3, count: 4 })));
@@ -676,11 +683,11 @@ fn weighted_statistics_send_their_weights_before_the_request() {
     world.settings.extend([(PipelineSetting::ChannelStatistics, 1), (PipelineSetting::WeightDivisor, 1), (PipelineSetting::Weight(0), 10)]);
     put(&mut world.capture.0, CAPTURE_WEIGHTING, 1);
     put(&mut world.built.0, 0x58, 4 << 8);
-    work.effect(E::PrepareFrame, &mut prepared, &mut world);
-    work.effect(E::StartFrame, &mut prepared, &mut world);
+    effect(&mut work, E::PrepareFrame, &mut prepared, &mut world);
+    effect(&mut work, E::StartFrame, &mut prepared, &mut world);
     assert!(work.query(Q::StatisticsReady, &mut world));
     world.take();
-    work.effect(E::Request(R::Statistics03), &mut prepared, &mut world);
+    effect(&mut work, E::Request(R::Statistics03), &mut prepared, &mut world);
     let calls = world.take();
     let mut weights = [0; STATISTICS_WEIGHTS];
     weights[0] = 20;
@@ -689,10 +696,10 @@ fn weighted_statistics_send_their_weights_before_the_request() {
     let Call::Statistics(setup) = calls[2] else { panic!("statistics requested") };
     assert_eq!((setup.weighted, setup.selection[0], setup.capture.words[3]), (true, 0x33, 0x44));
 
-    work.effect(E::SetToneResult(true), &mut prepared, &mut world);
+    effect(&mut work, E::SetToneResult(true), &mut prepared, &mut world);
     work.statistics_progress(&mut world);
     assert_eq!(world.take(), [Call::Release]);
-    work.effect(E::SetToneResult(false), &mut prepared, &mut world);
+    effect(&mut work, E::SetToneResult(false), &mut prepared, &mut world);
     work.statistics_progress(&mut world);
     assert!(world.take().is_empty());
 }
@@ -708,7 +715,7 @@ fn the_selection_request_follows_a_changed_selection_and_drives_the_lens_after_a
     world.settings.push((PipelineSetting::SelectionOverride, 2));
     world.channels = 2;
     world.take();
-    work.effect(E::Request(R::Image20), &mut prepared, &mut world);
+    effect(&mut work, E::Request(R::Image20), &mut prepared, &mut world);
     let calls = world.take();
     assert_eq!(calls[..2], [
         Call::Work(work_area(), WorkStore::ChannelMarks { channel: 1, marks: [3; 4] }),
@@ -716,7 +723,7 @@ fn the_selection_request_follows_a_changed_selection_and_drives_the_lens_after_a
     ]);
     assert_eq!(calls[2..], [Call::Scan(ScanStore::Selection(1)), Call::Selection(SelectionRequest(0x210))]);
 
-    work.effect(E::Request(R::Image20), &mut prepared, &mut world);
+    effect(&mut work, E::Request(R::Image20), &mut prepared, &mut world);
     assert!(!world.calls.iter().any(|call| matches!(call, Call::Selection(_))));
 
     put(&mut world.scan.0, SCAN_TONE + 4, 0);
@@ -725,11 +732,11 @@ fn the_selection_request_follows_a_changed_selection_and_drives_the_lens_after_a
     put(&mut world.scan.0, SCAN_SELECTION_WORDS + 8, 0x220);
     world.settings.extend([(PipelineSetting::SelectionTable(0), 2 << 2), (PipelineSetting::DrivingDistance, 60)]);
     world.take();
-    work.effect(E::Request(R::Image20), &mut prepared, &mut world);
+    effect(&mut work, E::Request(R::Image20), &mut prepared, &mut world);
     assert!(!world.calls.iter().any(|call| matches!(call, Call::Selection(_))));
     world.settings.retain(|(setting, _)| *setting != PipelineSetting::DrivingDistance);
     world.take();
-    work.effect(E::Request(R::Image20), &mut prepared, &mut world);
+    effect(&mut work, E::Request(R::Image20), &mut prepared, &mut world);
     assert_eq!(world.calls[world.calls.len() - 3..], [Call::Scan(ScanStore::Selection(2)), Call::Selection(SelectionRequest(0x220)), Call::LensDriven]);
 }
 
@@ -759,10 +766,10 @@ fn a_restart_keeps_the_tone_state_only_in_the_keeping_phases() {
     prepare(&mut work, &mut prepared, &mut world);
     assert!(!work.query(Q::ToneRestart, &mut world));
     put(&mut world.built.0, 0x8, 5);
-    work.effect(E::PrepareFrame, &mut prepared, &mut world);
+    effect(&mut work, E::PrepareFrame, &mut prepared, &mut world);
     assert!(work.query(Q::ToneRestart, &mut world));
     assert!(!work.query(Q::Restarted, &mut world));
-    work.effect(E::MarkRestart, &mut prepared, &mut world);
+    effect(&mut work, E::MarkRestart, &mut prepared, &mut world);
     assert!(work.query(Q::Restarted, &mut world));
 }
 
@@ -772,11 +779,11 @@ fn image_requests_carry_the_plan_blocks_and_their_configuration_steps() {
     let mut prepared = prepared(1, MASK_RELEASED);
     prepare(&mut work, &mut prepared, &mut world);
     world.take();
-    work.effect(E::Request(R::Image1d), &mut prepared, &mut world);
-    work.effect(E::Request(R::Image1e), &mut prepared, &mut world);
-    work.effect(E::Request(R::Image21), &mut prepared, &mut world);
-    work.effect(E::Request(R::Image22), &mut prepared, &mut world);
-    work.effect(E::Request(R::Calc03), &mut prepared, &mut world);
+    effect(&mut work, E::Request(R::Image1d), &mut prepared, &mut world);
+    effect(&mut work, E::Request(R::Image1e), &mut prepared, &mut world);
+    effect(&mut work, E::Request(R::Image21), &mut prepared, &mut world);
+    effect(&mut work, E::Request(R::Image22), &mut prepared, &mut world);
+    effect(&mut work, E::Request(R::Calc03), &mut prepared, &mut world);
     let calls = world.take();
     assert_eq!(calls[0], Call::Trace(PipelineTrace::RawRequested));
     assert!(matches!(calls[1], Call::RawFrame(request) if request.image_buffer == 0x500 && request.raw_word == 0x1f0));
@@ -791,8 +798,8 @@ fn the_frame_synchronization_follows_the_profile_record_mode() {
     let mut prepared = prepared(1, MASK_RELEASED);
     world.idle = true;
     assert!(work.query(Q::CaptureIdle, &mut world));
-    work.effect(E::SynchronizeFrame, &mut prepared, &mut world);
-    work.effect(E::ResumeFrame, &mut prepared, &mut world);
+    effect(&mut work, E::SynchronizeFrame, &mut prepared, &mut world);
+    effect(&mut work, E::ResumeFrame, &mut prepared, &mut world);
     assert!(!world.has(&Call::BeginMode));
     assert!(!world.calls.iter().any(|call| matches!(call, Call::FinishMode(_))));
 }

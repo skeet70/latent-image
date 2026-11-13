@@ -1,5 +1,6 @@
 use crate::boundary::*;
-use crate::preparation::FrameHeader;
+use crate::preparation::{FrameHeader, LensReadings, LensStage, PreparationShot};
+use xm1_saclac_interface::RecordHandle;
 use crate::subjects::{PrimaryDetection, Selection, Subject, SubjectList, SubjectQuery, SubjectServices, Summary};
 use crate::summary::{AreaStatistics, FrameSummary};
 use std::collections::BTreeMap;
@@ -24,7 +25,6 @@ pub enum Event {
     Dump(Dump, Frame, u32),
     DumpCalculation,
     ResetImageProgress,
-    Plan { area_count: Option<ClientRef>, live: bool },
     Detect(&'static str, u32),
     Select(u32, u32),
     CloseSelection,
@@ -86,6 +86,29 @@ pub struct Fake {
     pub lists: Vec<SubjectList>,
     pub selection_starts: bool,
     pub exposure: crate::exposure_fakes::ExposureWorld,
+    pub context: Context,
+}
+
+/// The shot context words a preparation writes, as the preparation left them.
+#[derive(Debug, Default)]
+pub struct Context {
+    pub lens_reference: LensReference,
+    pub track: Option<u32>,
+    pub readings: Vec<(LensStage, u32, bool)>,
+    pub plans: Vec<(Option<ClientRef>, bool)>,
+    pub carried: Vec<Option<u32>>,
+}
+
+impl LensReadings for Context {
+    fn begin_lens_track(&mut self, reading: u32) { self.track = Some(reading); }
+    fn record_lens(&mut self, stage: LensStage, reading: u32, changed: bool) { self.readings.push((stage, reading, changed)); }
+}
+
+impl<P> PreparationShot<P> for Context {
+    fn lens_reference(&mut self) -> LensReference { self.lens_reference }
+    fn bind_lens_reference(&mut self, reference: LensReference) { self.lens_reference = reference; }
+    fn prepare_selection(&mut self, _record: RecordHandle, area_count: Option<ClientRef>, live: bool, _ports: &mut P) { self.plans.push((area_count, live)); }
+    fn carry(&mut self, mode: Option<u32>) { self.carried.push(mode); }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -122,6 +145,7 @@ impl Fake {
             lists: Vec::new(),
             selection_starts: true,
             exposure: crate::exposure_fakes::ExposureWorld::default(),
+            context: Context::default(),
         }
     }
 
@@ -173,13 +197,6 @@ impl Lens for Fake {
     fn designated_point(&mut self) -> Option<LensPoint> { self.designated }
     fn target_distance(&mut self, point: LensPoint, control: u32) -> u32 { point.state + control }
     fn target_step(&mut self, point: LensPoint) -> u16 { point.kind as u16 + 1 }
-}
-
-impl Planner for Fake {
-    fn plan_selection(&mut self, area_count: Option<ClientRef>, live: bool) -> SelectionPlan {
-        self.events.push(Event::Plan { area_count, live });
-        SelectionPlan::default()
-    }
 }
 
 impl Client for Fake {

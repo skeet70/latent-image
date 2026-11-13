@@ -162,18 +162,6 @@ pub trait Lens {
     fn target_step(&mut self, point: LensPoint) -> u16;
 }
 
-/// The selection plan the shared area planner writes for a half press or the live sequence.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SelectionPlan(pub [u8; 536]);
-
-impl Default for SelectionPlan {
-    fn default() -> Self { Self([0; 536]) }
-}
-
-pub trait Planner {
-    fn plan_selection(&mut self, area_count: Option<ClientRef>, live: bool) -> SelectionPlan;
-}
-
 /// Client memory the half-press parameters name.
 pub trait Client {
     fn area_count(&mut self, area_count: ClientRef) -> u32;

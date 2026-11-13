@@ -63,7 +63,7 @@ impl<M: StateMemory> CalculationResults for ShotState<M> {
 
     fn tracking(&mut self) -> bool { self.word(layout::TRACKING) != 0 }
 
-    fn area_kind(&mut self, index: AreaIndex) -> u8 { self.byte(layout::subject_kind(ClassifyStage::Absorb, index)) }
+    fn area_kind(&mut self, bank: ClassifyStage, index: AreaIndex) -> u8 { self.byte(layout::subject_kind(bank, index)) }
 
     fn grid_selected(&mut self) -> bool { self.word(layout::GRID_SELECTED) != 0 }
 

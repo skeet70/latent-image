@@ -1,4 +1,6 @@
 //! A calculation block, selection grid and record layer for the absorb and record-load tests.
+//! `World` is the record layer, the calculation library and the client; `Block` is the shot's
+//! block and grid, built from the world's values for one call and logging into the world's `Log`.
 
 use crate::absorb::*;
 use crate::boundary::*;
@@ -8,10 +10,24 @@ use crate::record_load::*;
 use xm1_saclac_interface::stock::StockCallbackWord;
 use crate::preparation::FrameHeader;
 use crate::summary::FrameSummary;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::vec::Vec;
 use xm1_saclac_interface::calculation::{AreaAt, AreaIndex, AreaResult, AreaRow, CellSummary, FocusSummary, GridCell, GridPass, ResultPass, TrackedKind};
 use xm1_saclac_interface::stock::record_handle_from_a2;
 use xm1_saclac_interface::RecordHandle;
+
+/// The world's and the block's events in the order they happened.
+#[derive(Clone, Default)]
+pub(crate) struct Log(Rc<RefCell<Vec<Event>>>);
+
+impl Log {
+    pub fn push(&self, event: Event) { self.0.borrow_mut().push(event); }
+    pub fn iter(&self) -> std::vec::IntoIter<Event> { self.0.borrow().clone().into_iter() }
+    pub fn get(&self, index: usize) -> Option<Event> { self.0.borrow().get(index).cloned() }
+    pub fn first(&self) -> Option<Event> { self.0.borrow().first().cloned() }
+    pub fn last(&self) -> Option<Event> { self.0.borrow().last().cloned() }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Event {
@@ -52,7 +68,7 @@ pub(crate) enum Event {
 }
 
 pub(crate) struct World {
-    pub events: Vec<Event>,
+    pub events: Log,
     pub areas: u8,
     pub tracking: bool,
     pub kinds: [u8; 3],
@@ -85,7 +101,7 @@ pub(crate) struct World {
 impl World {
     pub fn new() -> Self {
         Self {
-            events: Vec::new(),
+            events: Log::default(),
             areas: 3,
             tracking: false,
             kinds: [UNTRACKED; 3],
@@ -117,7 +133,7 @@ impl World {
     }
 
     pub fn area_events(&self) -> Vec<(u8, u32)> {
-        self.events.iter().filter_map(|event| match event { Event::Area(index, store) => Some((*index, store.area.reference())), _ => None }).collect()
+        self.events.iter().filter_map(|event| match event { Event::Area(index, store) => Some((index, store.area.reference())), _ => None }).collect()
     }
 
     pub fn metering(&self) -> Option<(bool, u32)> {
@@ -130,13 +146,40 @@ impl World {
         })
     }
 
-    pub fn has(&self, wanted: &Event) -> bool { self.events.iter().any(|event| event == wanted) }
+    pub fn has(&self, wanted: &Event) -> bool { self.events.iter().any(|event| event == *wanted) }
 
-    pub fn position(&self, wanted: &Event) -> usize { self.events.iter().position(|event| event == wanted).unwrap_or_else(|| panic!("{wanted:?} missing")) }
+    pub fn position(&self, wanted: &Event) -> usize { self.events.iter().position(|event| event == *wanted).unwrap_or_else(|| panic!("{wanted:?} missing")) }
 
     pub fn pairs(&self) -> Vec<(u8, ReferencePair)> {
-        self.events.iter().filter_map(|event| match event { Event::Pair(slot, pair) => Some((*slot, *pair)), _ => None }).collect()
+        self.events.iter().filter_map(|event| match event { Event::Pair(slot, pair) => Some((slot, pair)), _ => None }).collect()
     }
+
+    /// The shot's block and grid as the world's values describe them.
+    pub fn block(&self) -> Block {
+        Block {
+            events: self.events.clone(),
+            areas: self.areas,
+            tracking: self.tracking,
+            kinds: self.kinds,
+            grid_selected: self.grid_selected,
+            selection_mode: self.selection_mode,
+            auxiliary: self.auxiliary,
+            require: self.require,
+            grid_references: self.grid_references,
+        }
+    }
+}
+
+pub(crate) struct Block {
+    events: Log,
+    areas: u8,
+    tracking: bool,
+    kinds: [u8; 3],
+    grid_selected: bool,
+    selection_mode: u32,
+    pub auxiliary: AuxiliaryOutcome,
+    require: bool,
+    grid_references: [u32; 3],
 }
 
 pub(crate) fn pass_code(pass: ResultPass) -> u32 {
@@ -158,10 +201,10 @@ pub(crate) fn plain_reference(index: u8) -> u32 { 100 + u32::from(index) }
 
 pub(crate) fn tracked_reference(kind: u8, index: u8) -> u32 { 200 + 10 * u32::from(kind) + u32::from(index) }
 
-impl CalculationResults for World {
+impl CalculationResults for Block {
     fn result_areas(&mut self) -> u8 { self.areas }
     fn tracking(&mut self) -> bool { self.tracking }
-    fn area_kind(&mut self, index: AreaIndex) -> u8 { self.kinds[usize::from(index.get())] }
+    fn area_kind(&mut self, _bank: ClassifyStage, index: AreaIndex) -> u8 { self.kinds[usize::from(index.get())] }
     fn grid_selected(&mut self) -> bool { self.grid_selected }
     fn selection_mode(&mut self) -> u32 { self.selection_mode }
     fn result_area(&mut self, at: AreaAt) -> AreaResult {
@@ -200,10 +243,10 @@ impl CalculationResults for World {
     fn adopt_grid_cell(&mut self, pass: GridPass, _cell: GridCell) { self.events.push(Event::AdoptCell(pass)); }
 }
 
-impl SelectionGrid for World {
+impl<P> SelectionGrid<P> for Block {
     fn cell(&mut self, pass: ResultPass, index: AreaIndex) -> GridCell { GridCell::new(index.get(), pass_code(pass).min(2) as u8).unwrap() }
-    fn update_grid(&mut self, _record: RecordHandle, reset: bool, keep_gates: bool, _lens_reference: LensReference) { self.events.push(Event::GridUpdate { reset, keep_gates }); }
-    fn classify_subjects(&mut self, stage: ClassifyStage, _reference: &AreaReference, _kind: u32, _source: u32, _area: u32) { self.events.push(Event::Classify(stage)); }
+    fn update_grid(&mut self, _record: RecordHandle, reset: bool, keep_gates: bool, _lens_reference: LensReference, _layers: &mut P) { self.events.push(Event::GridUpdate { reset, keep_gates }); }
+    fn classify_subjects(&mut self, stage: ClassifyStage, _reference: &AreaReference, _kind: u32, _source: u32, _area: u32, _layers: &mut P) { self.events.push(Event::Classify(stage)); }
     fn retain_result(&mut self) { self.events.push(Event::RetainResult); }
     fn restore_result(&mut self) { self.events.push(Event::RestoreResult); }
     fn retain_auxiliary(&mut self, auxiliary: &AuxiliaryReference, untracked: Option<AreaAt>) { self.events.push(Event::RetainAuxiliary(*auxiliary, untracked)); }
@@ -211,6 +254,7 @@ impl SelectionGrid for World {
     fn requires_eligibility(&mut self) -> bool { self.require }
     fn area_weight(&mut self, index: AreaIndex) -> u32 { 30 + u32::from(index.get()) }
     fn retain_target_half(&mut self, half: u16) { self.events.push(Event::RetainHalf(half)); }
+    fn retain_target_word(&mut self, word: u32) { self.events.push(Event::RetainWord(word)); }
 }
 
 impl AbsorbLibrary for World {
@@ -304,7 +348,6 @@ impl LoadRecords for World {
 
 impl LoadEffects for World {
     fn export_loaded(&mut self, frame: Option<Frame>, export: LoadExport) { self.events.push(Event::Loaded(export, frame)); }
-    fn retain_target_word(&mut self, word: u32) { self.events.push(Event::RetainWord(word)); }
     fn call_auxiliary_hook(&mut self, call: &AuxiliaryCall) { self.events.push(Event::HookCall(*call)); }
     fn publish_auxiliary_call(&mut self, call: &AuxiliaryCall) { self.events.push(Event::Published(*call)); }
 }

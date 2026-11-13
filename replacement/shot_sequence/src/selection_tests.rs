@@ -113,7 +113,7 @@ fn a_client_list_takes_the_default_class_and_drops_weights_for_layout_12() {
     let mut layers = Layers { default_class: 3, ..Layers::default() };
     layers.profile.insert(key(CalculationProfile::At0032), 12);
     layers.profile.insert(key(CalculationProfile::At003c), 0x40);
-    let list = record_list(record(), ListSource::Client(&[5, 6]), &mut state(), &mut layers);
+    let list = record_list(record(), ListSource::Client { count: 2, classes: [5, 6, 0] }, &mut state(), &mut layers);
     assert!(list.fixed());
     assert_eq!(list.area_count(), 2);
     assert_eq!(list.class(SelectionSlot::plain(index(1))), SelectionClass(3));

@@ -11,6 +11,7 @@ use crate::boundary::{
 };
 use crate::ports::{Branch, EvaluationIndex, ExposureEffect, ExposureQuery, HalfPressMode, Reply};
 use crate::preparation::{HalfPressMask, Prepared};
+use crate::state::{ShotState, StateMemory};
 use crate::stock::exposure as stock;
 use crate::subjects::SubjectList;
 use xm1_saclac_interface::exposure::{Correction, Evaluation, MeasuredEntry, ReleaseStatus, StatisticsRequest};
@@ -90,10 +91,10 @@ impl ExposureWork {
 
     pub fn set_return_mode(&mut self, mode: u32) { self.return_mode = mode; }
 
-    pub fn effect(&mut self, effect: ExposureEffect, prepared: &mut Prepared, boundary: &mut impl Boundary) {
+    pub fn effect<M: StateMemory>(&mut self, effect: ExposureEffect, prepared: &Prepared, state: &mut ShotState<M>, boundary: &mut impl Boundary) {
         match effect {
-            ExposureEffect::Begin { branch: Branch::HalfPress, record } => self.begin_half_press(record, prepared, boundary),
-            ExposureEffect::Begin { branch: Branch::Live, record } => self.begin_live(record, prepared, boundary),
+            ExposureEffect::Begin { branch: Branch::HalfPress, record } => self.begin_half_press(record, prepared, state.lens_reference(), boundary),
+            ExposureEffect::Begin { branch: Branch::Live, record } => self.begin_live(record, state.lens_reference(), boundary),
             ExposureEffect::RequestEvaluation(index) => {
                 boundary.trace(Trace::EvaluationRequested);
                 boundary.request_evaluation(index);
@@ -104,7 +105,7 @@ impl ExposureWork {
             ExposureEffect::AbsorbStatistics => boundary.select_measured(self.measured),
             ExposureEffect::AbsorbStatisticsResult => boundary.accept_measured(self.checked),
             ExposureEffect::AbsorbCalculation => boundary.absorb_evaluation(&self.evaluation),
-            ExposureEffect::Conclude => self.conclude(prepared, boundary),
+            ExposureEffect::Conclude => self.conclude(state, boundary),
         }
     }
 
@@ -122,7 +123,7 @@ impl ExposureWork {
 
     pub fn next_evaluation(&mut self, boundary: &mut impl Boundary) -> EvaluationIndex { boundary.next_evaluation() }
 
-    fn begin_half_press(&mut self, record: RecordHandle, prepared: &Prepared, boundary: &mut impl Boundary) {
+    fn begin_half_press(&mut self, record: RecordHandle, prepared: &Prepared, lens_reference: LensReference, boundary: &mut impl Boundary) {
         boundary.trace(Trace::ExposureBegun);
         let parameters = prepared.parameters.unwrap_or_default();
         let refinement_pass = prepared.refinement_pass;
@@ -134,7 +135,7 @@ impl ExposureWork {
             mask: parameters.mask,
             mode: parameters.mode,
             selection: boundary.selection(record, parameters.mode, refinement_pass),
-            lens_reference: prepared.lens_reference,
+            lens_reference,
             source: boundary.setting(Setting::ExposureSource),
             option: parameters.option,
             refinement_pass,
@@ -152,7 +153,7 @@ impl ExposureWork {
         }
     }
 
-    fn begin_live(&mut self, record: RecordHandle, prepared: &Prepared, boundary: &mut impl Boundary) {
+    fn begin_live(&mut self, record: RecordHandle, lens_reference: LensReference, boundary: &mut impl Boundary) {
         boundary.trace(Trace::ExposureBegun);
         self.setup = ExposureSetup {
             record: Some(record),
@@ -160,7 +161,7 @@ impl ExposureWork {
             mask: HalfPressMask(1),
             mode: HalfPressMode(4),
             selection: SelectionKind(0),
-            lens_reference: prepared.lens_reference,
+            lens_reference,
             source: 0,
             option: 1,
             refinement_pass: true,
@@ -210,7 +211,7 @@ impl ExposureWork {
         boundary.request_statistics(&request, &self.setup.subjects);
     }
 
-    fn conclude(&mut self, prepared: &mut Prepared, boundary: &mut impl Boundary) {
+    fn conclude<M: StateMemory>(&mut self, state: &mut ShotState<M>, boundary: &mut impl Boundary) {
         if boundary.recording(RecorderMode::Exposure) {
             let evaluated = boundary.evaluated_count();
             if evaluated != 0 { boundary.record_evaluations(evaluated); }
@@ -232,7 +233,9 @@ impl ExposureWork {
             }
         }
         if !boundary.exporting() && boundary.selects_primary(selection) { boundary.clear_selection(frame, true); }
-        stock::plan_take_exposure(&mut prepared.selection_plan, &self.correction);
+        let mut list = state.selection();
+        stock::plan_take_exposure(&mut list, &self.correction);
+        state.set_selection(&list);
         if !self.setup.live && self.setup.mode.0 != 7 && boundary.selects_primary(selection) { boundary.finish_primary(); }
         self.store_record(boundary);
         if let (false, Some(record)) = (self.setup.live, self.setup.record) {

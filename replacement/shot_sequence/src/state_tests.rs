@@ -137,3 +137,36 @@ fn the_auxiliary_outcome_round_trips() {
         assert_eq!(state.auxiliary(), outcome);
     }
 }
+
+fn word_at(state: &mut ShotState<Memory>, at: StateAddress) -> u32 {
+    let mut word = [0; 4];
+    state.memory().read(at, &mut word);
+    u32::from_le_bytes(word)
+}
+
+#[test]
+fn mode_7_carries_the_previous_value_and_others_clear_it() {
+    let mut state = state();
+    state.memory().write(layout::CARRIED, &5u32.to_le_bytes());
+    state.memory().write(layout::AUXILIARY_RETAINED, &3u32.to_le_bytes());
+    state.carry_words(Some(7));
+    let words = |state: &mut ShotState<Memory>| [layout::CARRIED, layout::ELIGIBILITY, layout::AUXILIARY_RETAINED].map(|at| word_at(state, at));
+    assert_eq!(words(&mut state), [0, 5, 3]);
+    state.memory().write(layout::CARRIED, &4u32.to_le_bytes());
+    state.carry_words(Some(5));
+    assert_eq!(words(&mut state), [0, 0, 0]);
+}
+
+#[test]
+fn the_lens_track_starts_unread_and_marks_a_reading_off_the_bound_reference() {
+    use crate::dump_boundary::ShotWord;
+    use crate::preparation::{LensReadings, LensStage};
+    for (bound, moved) in [(40u32, 1), (41, 0)] {
+        let mut state = state();
+        state.memory().write(layout::REQUEST_WORD, &bound.to_le_bytes());
+        state.record_lens(LensStage::Conclusion, 9, true);
+        state.begin_lens_track(41);
+        let words = [ShotWord::StartReference, ShotWord::SecondReference, ShotWord::ThirdReference, ShotWord::Moved, ShotWord::MovedLate].map(|word| state.shot_word(word));
+        assert_eq!(words, [41, 0xff, 0xff, moved, 0], "bound {bound}");
+    }
+}

@@ -28,7 +28,10 @@ fn result_at(reference: LensReference) -> FocusResult {
 
 fn prepared(parameters: Option<HalfPressParameters>, fake: &mut Fake) -> Prepared {
     let mut prepared = Prepared::default();
-    prepared.prepare(parameters, LensReference(77), fake);
+    prepared.bind(crate::tests::record());
+    let mut context = core::mem::take(&mut fake.context);
+    prepared.prepare(parameters, LensReference(77), &mut context, fake);
+    fake.context = context;
     prepared
 }
 
@@ -41,7 +44,8 @@ fn a_mode_6_half_press_leaves_the_lens_and_focus_records_alone() {
     for unexpected in [Event::Hold(true), Event::SelectFirstMode, Event::ClearExposureRecord] {
         assert!(!fake.has(&unexpected), "{unexpected:?}");
     }
-    assert!(!fake.events.iter().any(|event| matches!(event, Event::StoreLensSnapshot(_) | Event::StoreFocusResult(_) | Event::Plan { .. } | Event::Dump(..) | Event::Summary(..))));
+    assert!(!fake.events.iter().any(|event| matches!(event, Event::StoreLensSnapshot(_) | Event::StoreFocusResult(_) | Event::Dump(..) | Event::Summary(..))));
+    assert!(fake.context.plans.is_empty());
     assert!(fake.has(&Event::Announced(Frame(0x8000), FrameHeader { mode: HalfPressMode(6), mask: HalfPressMask(0b1000), option: 9, lens_reference: REFERENCE })));
     let published = fake.published();
     assert!(published.contains(&Published::AreaSelection(0x55)));
@@ -64,11 +68,11 @@ fn a_half_press_snapshots_the_lens_at_its_reference() {
     let current = LensPoint { position: -5, detail: 0, reference: REFERENCE, state: 7, kind: 2 };
     assert_eq!(fake.snapshot.current, current);
     assert_eq!(fake.snapshot.held, current);
-    assert_eq!(prepared.lens.at_preparation, Some(41));
-    assert!(prepared.lens.moved);
+    assert_eq!(fake.context.lens_reference, REFERENCE);
+    assert_eq!(fake.context.track, Some(41));
     assert_eq!(prepared.pipeline_gate, 2);
     assert!(fake.has(&Event::Hold(true)));
-    assert!(fake.has(&Event::Plan { area_count: Some(ClientRef(0x100)), live: false }));
+    assert_eq!(fake.context.plans, [(Some(ClientRef(0x100)), false)]);
 }
 
 #[test]
@@ -115,7 +119,7 @@ fn the_live_branch_prepares_the_lens_without_parameters() {
     fake.frame = Some(Frame(0x8000));
     let prepared = prepared(None, &mut fake);
     assert_eq!(fake.snapshot.current.reference, LensReference(77));
-    assert!(fake.has(&Event::Plan { area_count: None, live: true }));
+    assert_eq!(fake.context.plans, [(None, true)]);
     let published = fake.published();
     assert!(!published.iter().any(|published| matches!(published, Published::AreaSelection(_) | Published::Area { .. } | Published::CaptureFrame(_))));
     assert!(!fake.events.iter().any(|event| matches!(event, Event::Announced(..) | Event::StoreFocusResult(_))));
@@ -186,24 +190,22 @@ fn the_selection_option_0x39_withholds_the_frame() {
 }
 
 #[test]
-fn mode_7_carries_the_previous_value_and_others_clear_it() {
-    let mut prepared = Prepared { carried: 5, carried_mode: 3, ..Prepared::default() };
-    prepared.prepare(Some(parameters(7)), LensReference(0), &mut Fake::new());
-    assert_eq!((prepared.carried, prepared.carried_previous, prepared.carried_mode), (0, 5, 3));
-    prepared.carried = 4;
-    prepared.prepare(Some(parameters(5)), LensReference(0), &mut Fake::new());
-    assert_eq!((prepared.carried, prepared.carried_previous, prepared.carried_mode), (0, 0, 0));
+fn every_preparation_hands_its_mode_to_the_carried_words() {
+    let mut fake = Fake::new();
+    prepared(Some(parameters(7)), &mut fake);
+    prepared(None, &mut fake);
+    assert_eq!(fake.context.carried, [Some(7), None]);
 }
 
 #[test]
 fn the_lens_status_records_the_reading_and_the_change_latch() {
+    use crate::dump_boundary::ShotWord;
     let mut fake = Fake::new();
     fake.change = 1;
     fake.set_lens(LensReading::Reference, 12);
-    let mut prepared = Prepared::default();
-    prepared.record_lens_status(&mut fake);
-    assert_eq!(prepared.lens.at_conclusion, Some(12));
-    assert!(prepared.lens.changed_at_conclusion);
+    let mut state = crate::state::ShotState::new(crate::state_tests::Memory::default());
+    crate::preparation::record_lens(crate::preparation::LensStage::Conclusion, &mut state, &mut fake);
+    assert_eq!((state.shot_word(ShotWord::ThirdReference), state.shot_word(ShotWord::MovedLate)), (12, 1));
     assert_eq!(fake.change, 0);
 }
 

@@ -38,6 +38,7 @@ pub mod selection;
 pub mod selection_operations;
 pub mod shared;
 pub mod state;
+pub mod state_operations;
 pub mod statistics_dump;
 pub mod stock;
 pub mod subjects;

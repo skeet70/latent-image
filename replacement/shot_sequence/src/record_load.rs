@@ -4,7 +4,7 @@
 //! and the record's shared block when a half press finishes and when the capture's lens return
 //! concludes.
 
-use crate::absorb::{store_areas, store_cell, AbsorbAdjustment, AbsorbBoundary, AreaTarget, AuxiliaryOutcome, ClassifyStage, Form, FIRST_AREA};
+use crate::absorb::{store_areas, store_cell, AbsorbAdjustment, AbsorbPorts, AbsorbShot, AreaTarget, AuxiliaryOutcome, ClassifyStage, Form, FIRST_AREA};
 use crate::boundary::{ClientRef, Frame, LensSnapshot, Replies};
 use crate::capture_boundary::{RecordField, ReferencePair, SlotEntry, SlotHandle};
 use crate::ports::Reply;
@@ -138,15 +138,14 @@ pub trait LoadRecords {
 /// What the record load does outside the record.
 pub trait LoadEffects {
     fn export_loaded(&mut self, frame: Option<Frame>, export: LoadExport);
-    /// The retained target word and its copy in the saved calculation input.
-    fn retain_target_word(&mut self, word: u32);
     fn call_auxiliary_hook(&mut self, call: &AuxiliaryCall);
     /// Publishes the hook's call under the interface lock.
     fn publish_auxiliary_call(&mut self, call: &AuxiliaryCall);
 }
 
-pub trait LoadBoundary: AbsorbBoundary + LoadRecords + LoadEffects + Replies {}
-impl<T: AbsorbBoundary + LoadRecords + LoadEffects + Replies> LoadBoundary for T {}
+/// What the record load calls outside the shot.
+pub trait LoadPorts: AbsorbPorts + LoadRecords + LoadEffects + Replies {}
+impl<T: AbsorbPorts + LoadRecords + LoadEffects + Replies> LoadPorts for T {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Plan {
@@ -168,10 +167,10 @@ struct ClientSlots {
 }
 
 impl Plan {
-    fn of(load: &RecordLoad, boundary: &mut impl LoadBoundary) -> Self {
+    fn of(load: &RecordLoad, ports: &mut impl LoadPorts) -> Self {
         match load.origin {
             LoadOrigin::Return { pending } => {
-                let frame = boundary.value(load.record, RecordField::CaptureFrame);
+                let frame = ports.value(load.record, RecordField::CaptureFrame);
                 Plan {
                     mode: 0,
                     frame: (frame != 0).then_some(Frame(frame)),
@@ -183,8 +182,8 @@ impl Plan {
                 }
             }
             LoadOrigin::HalfPress(parameters) => {
-                let frame = parameters.frame_slot.and_then(|slot| boundary.frame(slot));
-                let count = parameters.area_count.map_or(0, |count| boundary.area_count(count));
+                let frame = parameters.frame_slot.and_then(|slot| ports.frame(slot));
+                let count = parameters.area_count.map_or(0, |count| ports.area_count(count));
                 Plan {
                     mode: parameters.mode.0,
                     frame,
@@ -198,106 +197,109 @@ impl Plan {
         }
     }
 
-    fn target(&self, record: RecordHandle) -> AreaTarget { AreaTarget { record, mode: self.mode, skip_first: self.returning && self.pending } }
+    fn target(&self, record: RecordHandle, eligibility: bool) -> AreaTarget {
+        AreaTarget { record, mode: self.mode, skip_first: self.returning && self.pending, bank: ClassifyStage::RecordLoad, eligibility }
+    }
 }
 
 /// Loads the calculation block's result into the bound record and notifies the client.
-pub fn load(load: &RecordLoad, boundary: &mut impl LoadBoundary) {
+pub fn load<P: LoadPorts>(load: &RecordLoad, shot: &mut impl AbsorbShot<P>, ports: &mut P) {
     let record = load.record;
-    let plan = Plan::of(load, boundary);
-    let source = boundary.subject_source(record, load.refinement);
-    let grid = if boundary.grid_selected() { Some(GridPass::new(boundary.selection_mode())) } else { None };
+    let plan = Plan::of(load, ports);
+    let source = ports.subject_source(record, load.refinement);
+    let grid = if shot.grid_selected() { Some(GridPass::new(shot.selection_mode())) } else { None };
     let selected = match grid {
         Some(Some(pass)) => ResultPass::Grid(pass),
         _ => ResultPass::Plain,
     };
-    if !plan.returning && plan.mode == MODE_FIVE { rewrite_mode_five(record, selected, boundary); }
+    if !plan.returning && plan.mode == MODE_FIVE { rewrite_mode_five(record, selected, shot, ports); }
 
     let mut areas_loaded = false;
     if let Some(pass) = grid {
-        if boundary.tracking() && boundary.adjustment(AbsorbAdjustment::Subjects) & 3 != 0 {
-            let reference = boundary.area_references(record);
-            let kind = boundary.value(record, RecordField::SubjectKind);
-            let area = boundary.value(record, RecordField::SubjectArea);
-            boundary.classify_subjects(ClassifyStage::RecordLoad, &reference, kind, source, area);
+        if shot.tracking() && ports.adjustment(AbsorbAdjustment::Subjects) & 3 != 0 {
+            let reference = ports.area_references(record);
+            let kind = ports.value(record, RecordField::SubjectKind);
+            let area = ports.value(record, RecordField::SubjectArea);
+            shot.classify_subjects(ClassifyStage::RecordLoad, &reference, kind, source, area, ports);
         }
         let form = if plan.whole || matches!(plan.mode, 0..=2) {
             Some(Form::Full)
         } else {
-            boundary.tracking().then_some(Form::Short)
+            shot.tracking().then_some(Form::Short)
         };
         if let (Some(form), Some(pass)) = (form, pass) {
-            store_areas(form, ResultPass::Grid(pass), plan.target(record), boundary);
+            let target = plan.target(record, shot.requires_eligibility());
+            store_areas(form, ResultPass::Grid(pass), target, shot, ports);
             areas_loaded = true;
         }
     }
 
-    let stored = boundary.stored_area(record);
-    let first_pair = ReferencePair { reference: boundary.lens_reference(record), detail: stored.reference };
+    let stored = ports.stored_area(record);
+    let first_pair = ReferencePair { reference: ports.lens_reference(record), detail: stored.reference };
     if plan.whole && plan.mode != AUXILIARY_MODE && !plan.returning {
-        store_resume(record, load.repeat, boundary);
-        for slot in PairSlot::ALL { boundary.store_reference_pair(record, slot, first_pair); }
-        if CLIENT_REFERENCE_SOURCES.contains(&source) { boundary.store_reference_pair(record, PairSlot::THIRD, plan.client_reference); }
-        let selected_area = boundary.result_area(AreaAt::Cell { pass: selected, cell: GridCell::default(), index: FIRST_AREA });
+        store_resume(record, load.repeat, ports);
+        for slot in PairSlot::ALL { ports.store_reference_pair(record, slot, first_pair); }
+        if CLIENT_REFERENCE_SOURCES.contains(&source) { ports.store_reference_pair(record, PairSlot::THIRD, plan.client_reference); }
+        let selected_area = shot.result_area(AreaAt::Cell { pass: selected, cell: GridCell::default(), index: FIRST_AREA });
         let starts = AreaStarts { stored: stored.start, selected: layout::area_start(&selected_area) };
-        boundary.store_area_starts(record, starts);
+        ports.store_area_starts(record, starts);
     }
-    if matches!(plan.mode, 0 | 6) && !plan.returning { boundary.store_reference_pair(record, PairSlot::FIRST, first_pair); }
+    if matches!(plan.mode, 0 | 6) && !plan.returning { ports.store_reference_pair(record, PairSlot::FIRST, first_pair); }
 
     let mut cell_loaded = false;
     if let (Some(Some(pass)), true) = (grid, plan.whole || matches!(plan.mode, 0..=2)) {
-        let cell = boundary.cell(ResultPass::Grid(pass), FIRST_AREA);
-        boundary.adopt_grid_cell(pass, cell);
-        store_cell(record, cell, boundary);
+        let cell = shot.cell(ResultPass::Grid(pass), FIRST_AREA);
+        shot.adopt_grid_cell(pass, cell);
+        store_cell(record, cell, shot, ports);
         cell_loaded = true;
     }
-    if areas_loaded { boundary.export_loaded(plan.frame, LoadExport::Areas); }
-    if cell_loaded { boundary.export_loaded(plan.frame, LoadExport::Cell); }
+    if areas_loaded { ports.export_loaded(plan.frame, LoadExport::Areas); }
+    if cell_loaded { ports.export_loaded(plan.frame, LoadExport::Cell); }
 
     if let (false, true, Some(slots)) = (plan.whole, plan.mode <= 2, plan.slots) {
         for slot in (0..slots.count).map_while(|index| u8::try_from(index).ok()) {
-            let entry = boundary.record_slot(record, slot);
-            let target = SlotHandle(boundary.area(slots.list, usize::from(slot)));
-            boundary.store_client_slot(target, &entry);
+            let entry = ports.record_slot(record, slot);
+            let target = SlotHandle(ports.area(slots.list, usize::from(slot)));
+            ports.store_client_slot(target, &entry);
         }
     }
-    boundary.retain_target_word(stored.reference);
+    shot.retain_target_word(stored.reference);
 
     if plan.mode == AUXILIARY_MODE {
-        call_auxiliary(record, stored, boundary);
+        call_auxiliary(record, stored, shot, ports);
     } else if plan.whole && !plan.returning {
-        boundary.reply(Reply { command: CommandKind::HalfPress, record: Some(record), status: AREAS_KEPT_STATUS });
+        ports.reply(Reply { command: CommandKind::HalfPress, record: Some(record), status: AREAS_KEPT_STATUS });
     }
 }
 
-fn rewrite_mode_five(record: RecordHandle, selected: ResultPass, boundary: &mut impl LoadBoundary) {
-    let mut block = boundary.mode_five_block(record);
-    let profile = boundary.mode_five_profile(record);
-    let cell = boundary.cell(selected, FIRST_AREA);
-    let row_word = boundary.row_word(selected, cell);
+fn rewrite_mode_five<P: LoadPorts>(record: RecordHandle, selected: ResultPass, shot: &mut impl AbsorbShot<P>, ports: &mut P) {
+    let mut block = ports.mode_five_block(record);
+    let profile = ports.mode_five_profile(record);
+    let cell = shot.cell(selected, FIRST_AREA);
+    let row_word = shot.row_word(selected, cell);
     layout::set_mode_five(&mut block, ModeFiveValues { profile, row_word });
-    boundary.store_mode_five_block(record, &block);
+    ports.store_mode_five_block(record, &block);
 }
 
 /// The lens snapshot and the record take the resume offset.
-fn store_resume(record: RecordHandle, repeat: bool, boundary: &mut impl LoadBoundary) {
-    let snapshot = boundary.record_lens_snapshot(record);
-    let offset = boundary.resume_offset(record, if repeat { ResumeSource::Stored } else { ResumeSource::Profile });
-    boundary.store_record_lens_snapshot(record, &layout::with_resume_offset(snapshot, offset));
-    boundary.store_resume_offset(record, offset);
+fn store_resume(record: RecordHandle, repeat: bool, ports: &mut impl LoadPorts) {
+    let snapshot = ports.record_lens_snapshot(record);
+    let offset = ports.resume_offset(record, if repeat { ResumeSource::Stored } else { ResumeSource::Profile });
+    ports.store_record_lens_snapshot(record, &layout::with_resume_offset(snapshot, offset));
+    ports.store_resume_offset(record, offset);
 }
 
 /// Mode 7 points the record's reference pairs at the snapshot's calculation word and hands the
 /// first area to the record's auxiliary hook.
-fn call_auxiliary(record: RecordHandle, stored: StoredArea, boundary: &mut impl LoadBoundary) {
-    let snapshot = boundary.record_lens_snapshot(record);
+fn call_auxiliary(record: RecordHandle, stored: StoredArea, shot: &mut impl crate::absorb::CalculationResults, ports: &mut impl LoadPorts) {
+    let snapshot = ports.record_lens_snapshot(record);
     let pair = ReferencePair { reference: crate::stock::calculation::result_word(&snapshot), detail: stored.reference };
-    let auxiliary = boundary.auxiliary();
-    if auxiliary != AuxiliaryOutcome::Replaced { boundary.store_reference_pair(record, PairSlot::FIFTH, pair); }
-    if auxiliary == AuxiliaryOutcome::Unchecked { boundary.store_reference_pair(record, PairSlot::THIRD, pair); }
-    boundary.store_reference_pair(record, PairSlot::SECOND, pair);
-    let Some(hook) = boundary.auxiliary_hook(record) else { return };
+    let auxiliary = shot.auxiliary();
+    if auxiliary != AuxiliaryOutcome::Replaced { ports.store_reference_pair(record, PairSlot::FIFTH, pair); }
+    if auxiliary == AuxiliaryOutcome::Unchecked { ports.store_reference_pair(record, PairSlot::THIRD, pair); }
+    ports.store_reference_pair(record, PairSlot::SECOND, pair);
+    let Some(hook) = ports.auxiliary_hook(record) else { return };
     let call = AuxiliaryCall { hook, area: stored, reference: pair.reference };
-    boundary.call_auxiliary_hook(&call);
-    boundary.publish_auxiliary_call(&call);
+    ports.call_auxiliary_hook(&call);
+    ports.publish_auxiliary_call(&call);
 }

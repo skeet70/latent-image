@@ -31,7 +31,11 @@ fn absorb_from(origin: Origin) -> Absorb {
     }
 }
 
-fn run(input: &Absorb, world: &mut World) { absorb(input, world); }
+fn run(input: &Absorb, world: &mut World) {
+    let mut block = world.block();
+    absorb(input, &mut block, world);
+    world.auxiliary = block.auxiliary;
+}
 
 #[test]
 fn a_published_half_press_stores_every_area_with_its_detail_and_the_cell() {
@@ -40,7 +44,7 @@ fn a_published_half_press_stores_every_area_with_its_detail_and_the_cell() {
     assert_eq!(world.area_events(), [(0, 100), (1, 101), (2, 102)]);
     let Some(Event::Area(_, first)) = world.events.iter().find(|event| matches!(event, Event::Area(0, _))) else { panic!() };
     assert_eq!((first.weight, first.marker), (30, 90));
-    let details: Vec<_> = world.events.iter().filter_map(|event| match event { Event::Detail(index, detail) => Some((*index, *detail)), _ => None }).collect();
+    let details: Vec<_> = world.events.iter().filter_map(|event| match event { Event::Detail(index, detail) => Some((index, detail)), _ => None }).collect();
     assert_eq!(details.len(), 3);
     let (_, detail) = details[1];
     assert_eq!(detail.selection_class, 2, "plan word 0x26 has bit 1 and neither bit 4 nor bit 0");
@@ -113,7 +117,7 @@ fn mode_7_retains_the_result_unless_the_first_area_was_replaced() {
         assert!(!world.events.iter().any(|event| matches!(event, Event::Auxiliary(..))));
         assert_eq!(world.area_events().len(), 3);
         let retained = world.position(&Event::RetainResult);
-        assert_eq!(world.events.get(retained + 1), Some(&Event::MarkAuxiliaryRetained));
+        assert_eq!(world.events.get(retained + 1), Some(Event::MarkAuxiliaryRetained));
     }
     let mut world = World::new();
     run(&half_press(0, false), &mut world);
@@ -162,7 +166,7 @@ fn a_selected_grid_takes_the_minimum_over_the_grid_passes() {
 fn a_selected_grid_has_each_pass_evaluated_after_the_plain_areas() {
     let mut world = World { grid_selected: true, areas: 1, ..World::new() };
     run(&half_press(0, false), &mut world);
-    let evaluations: Vec<_> = world.events.iter().filter(|event| matches!(event, Event::Evaluate(..))).cloned().collect();
+    let evaluations: Vec<_> = world.events.iter().filter(|event| matches!(event, Event::Evaluate(..))).collect();
     let grid = |pass| ResultPass::Grid(GridPass::new(pass).unwrap());
     assert_eq!(evaluations, [Event::Evaluate(ResultPass::Plain, 0), Event::Evaluate(grid(0), 0), Event::Evaluate(grid(1), 0), Event::Evaluate(grid(2), 0)]);
 }
@@ -172,7 +176,7 @@ fn the_grid_update_follows_the_origin() {
     let update = |input: Absorb| {
         let mut world = World::new();
         run(&input, &mut world);
-        world.events.iter().find_map(|event| match event { Event::GridUpdate { reset, keep_gates } => Some((*reset, *keep_gates)), _ => None }).unwrap()
+        world.events.iter().find_map(|event| match event { Event::GridUpdate { reset, keep_gates } => Some((reset, keep_gates)), _ => None }).unwrap()
     };
     assert_eq!(update(half_press(0, false)), (true, true));
     assert_eq!(update(half_press(1, false)), (true, true));
@@ -197,7 +201,7 @@ fn a_repeated_half_press_exports_the_retained_result_between_set_aside_and_resto
         Event::Export(ResultExport::SourceLimits, true),
         Event::RestoreWorking,
     ];
-    assert_eq!(&world.events[aside + 1..aside + 7], &expected);
+    assert_eq!(world.events.iter().skip(aside + 1).take(6).collect::<Vec<_>>(), expected);
     assert!(!world.events.iter().any(|event| matches!(event, Event::ClearChannels(_))));
     assert!(world.has(&Event::Export(ResultExport::Policy, false)));
 }
@@ -206,14 +210,14 @@ fn a_repeated_half_press_exports_the_retained_result_between_set_aside_and_resto
 fn the_working_result_exports_enabled_when_the_retained_one_is_not_exported() {
     let mut world = World::new();
     run(&Absorb { repeat: true, selection: SelectionKind(1), ..half_press(0, false) }, &mut world);
-    assert_eq!(world.events.first(), Some(&Event::ClearChannels(false)));
+    assert_eq!(world.events.first(), Some(Event::ClearChannels(false)));
     for export in [ResultExport::Policy, ResultExport::Compact, ResultExport::SelectedChannel, ResultExport::SourceLimits] {
         assert!(world.has(&Event::Export(export, true)), "{export:?}");
     }
 
     let mut world = World::new();
     run(&Absorb { selection: SelectionKind(4), ..half_press(0, false) }, &mut world);
-    assert_eq!(world.events.first(), Some(&Event::ClearChannels(true)));
+    assert_eq!(world.events.first(), Some(Event::ClearChannels(true)));
     assert!(world.has(&Event::Export(ResultExport::Policy, false)));
     assert!(!world.has(&Event::Export(ResultExport::Compact, false)));
 }

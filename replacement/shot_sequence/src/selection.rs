@@ -13,13 +13,13 @@ use xm1_saclac_interface::RecordHandle;
 
 /// Where a list's classes come from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ListSource<'a> {
+pub enum ListSource {
     /// The live sequence: one area of the record's row limit, or class 1.
     Live,
     /// The record's own defaults.
     Record,
-    /// The classes the half-press client names, one per area.
-    Client(&'a [u32]),
+    /// The half-press client's area count and the classes it names for the first areas.
+    Client { count: u8, classes: [u32; AreaIndex::COUNT as usize] },
 }
 
 /// A layout that numbers its areas' classes instead of taking a default class.
@@ -36,7 +36,7 @@ pub(crate) fn kinds(count: u8) -> impl Iterator<Item = TrackedKind> { (0..count)
 pub(crate) fn passes() -> impl Iterator<Item = ResultPass> { GridPass::ALL.into_iter().map(ResultPass::Grid) }
 
 /// The list a record gives.
-pub fn record_list<M: StateMemory>(record: RecordHandle, source: ListSource<'_>, state: &mut ShotState<M>, layers: &mut impl GridLayers) -> SelectionList {
+pub fn record_list<M: StateMemory>(record: RecordHandle, source: ListSource, state: &mut ShotState<M>, layers: &mut impl GridLayers) -> SelectionList {
     let mut list = SelectionList::default();
     if source == ListSource::Live {
         let class = if layers.profile(record, CalculationProfile::SelectionKind) == 1 { layers.profile(record, CalculationProfile::RowLimit) } else { 1 };
@@ -62,11 +62,10 @@ pub fn record_list<M: StateMemory>(record: RecordHandle, source: ListSource<'_>,
         row_limit: layers.profile(record, CalculationProfile::RowLimit),
     };
     let weight = layers.profile(record, CalculationProfile::At003c);
-    let classes: &[u32] = match source {
-        ListSource::Client(classes) => classes,
-        _ => &[],
+    let (count, classes) = match source {
+        ListSource::Client { count, classes } => (count, classes),
+        _ => (layers.layout_areas(layout), [0; AreaIndex::COUNT as usize]),
     };
-    let count = if defaults { layers.layout_areas(layout) } else { u8::try_from(classes.len()).unwrap_or(u8::MAX) };
     list.set_area_count(count);
     let mut limits = record_limits(record, defaults, state, layers);
     if code != 0 { limits = limits.within(layers.total_class_limits(code)); }
