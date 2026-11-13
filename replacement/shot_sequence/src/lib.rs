@@ -3,6 +3,7 @@
 
 pub mod boundary;
 pub mod calculation;
+pub mod calculation_work;
 pub mod capture;
 pub mod capture_boundary;
 pub mod capture_stock;
@@ -104,3 +105,5 @@ mod capture_fakes;
 mod lens_return_tests;
 #[cfg(test)]
 mod capture_stock_tests;
+#[cfg(test)]
+mod calculation_work_tests;

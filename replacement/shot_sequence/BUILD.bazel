@@ -5,6 +5,7 @@ package(default_visibility = ["//visibility:public"])
 SOURCES = [
     "src/boundary.rs",
     "src/calculation.rs",
+    "src/calculation_work.rs",
     "src/capture.rs",
     "src/capture_boundary.rs",
     "src/capture_stock.rs",
@@ -19,6 +20,7 @@ SOURCES = [
     "src/preparation.rs",
     "src/sequence.rs",
     "src/stock.rs",
+    "src/stock/calculation.rs",
     "src/stock/exposure.rs",
     "src/subjects.rs",
     "src/summary.rs",
