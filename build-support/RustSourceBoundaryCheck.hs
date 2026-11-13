@@ -8,9 +8,9 @@ import qualified Data.ByteString as B
 import Data.Char (isAlphaNum, isSpace)
 import Data.List (isPrefixOf, sort, tails)
 import qualified Data.Set as S
-import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
+import System.Directory (canonicalizePath, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory)
 import System.Environment (getArgs)
-import System.FilePath (takeDirectory, takeExtension, (</>))
+import System.FilePath (makeRelative, takeDirectory, takeExtension, (</>))
 import System.IO (IOMode (ReadMode), hGetContents', hSetEncoding, utf8, withFile)
 
 newtype SourcePath = SourcePath FilePath deriving (Eq, Ord, Show)
@@ -159,7 +159,10 @@ checkDeclaration manifest = do
   unless (all (`S.member` available) declared) (fail (manifest ++ ": boundary declaration names a missing source file"))
   forM_ paths $ \path -> do
     present <- doesFileExist path
-    let input = if present then path else "bazel-bin" </> path
+    input <- if present then pure path else do
+      workspace <- getCurrentDirectory >>= canonicalizePath
+      sourcePath <- canonicalizePath path
+      pure ("bazel-bin" </> makeRelative workspace sourcePath)
     source <- withFile input ReadMode (\handle -> hSetEncoding handle utf8 >> hGetContents' handle)
     let selected = [(kind, name) | BoundaryItem itemPath kind name _ <- items, itemPath == relative path]
         whole = any (\(BoundaryFile file _) -> file == relative path) boundaries

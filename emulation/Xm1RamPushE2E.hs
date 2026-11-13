@@ -1,10 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), E2ESettings (..), ModalOwnedPackage (..), loadModalOwnedPackage, SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankModalEnginePayload, bankModalRenderPayload, bankModalValuePayload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, sessionBridge, warmAttachCheckpoint, KeeperSessionId, keeperSessionId, KeeperState (..), KeeperAction (..), keeperTransition, checkPropertyAllocationSource, runPropertyAllocationKeeper, validateAfResetProof, validateAfResetPair, AfArchiveBinding (..), validateAfArchiveBinding) where
+module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), E2ESettings (..), ModalOwnedPackage (..), loadModalOwnedPackage, SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankModalEnginePayload, bankModalRenderPayload, bankModalValuePayload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, sessionBridge, warmAttachCheckpoint, KeeperSessionId, keeperSessionId, KeeperState (..), KeeperAction (..), keeperTransition, checkPropertyAllocationSource, runPropertyAllocationKeeper, validateAfResetProof, validateAfResetPair, AfArchiveBinding (..), validateAfArchiveBinding, ObservedInstallProof, parseObservedInstallProof, checkObservedInstallProof) where
 
 import Control.Applicative ((<|>))
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, finally, mask, throwIO, try)
 import Control.Monad (forM, forM_, unless, when)
-import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', encode, object, toJSON, withObject, (.:), (.=))
+import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', encode, object, toJSON, withObject, (.:), (.:?), (.=))
 import Data.Aeson.Types (Parser, parseEither)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (find, nub, sort)
@@ -586,7 +586,29 @@ data InstallHost = InstallHost
   , hostInstallMailbox :: Value
   , hostBreakBefore :: String
   , hostBreakAfter :: String
+  , hostModalObservation :: Maybe Value
   }
+
+data ObservedInstallProof = ObservedInstallProof
+  { proofDirectory :: FilePath
+  , proofIdentity :: InstalledObservationIdentity
+  } deriving (Eq)
+
+parseObservedInstallProof :: Value -> Either String ObservedInstallProof
+parseObservedInstallProof = parseEither $ withObject "observed install proof" $ \fields -> do
+  saved <- fields .: "saved"
+  observed <- fields .: "observed_install"
+  unless (saved && observed) (fail "installation was not observed and checkpointed successfully")
+  directory <- fields .: "directory"
+  snapshot <- fields .: "snapshot_sha256" >>= either fail pure . parseSha256Hex
+  record <- fields .: "record_sha256" >>= either fail pure . parseSha256Hex
+  pure (ObservedInstallProof directory (InstalledObservationIdentity snapshot record))
+
+checkObservedInstallProof :: ObservedInstallProof -> Maybe InstalledObservationIdentity -> Either String ()
+checkObservedInstallProof expected identity =
+  unless (identity == Just (proofIdentity expected))
+    (Left "installed checkpoint or observed installation differs from the named proof")
+
 
 instance FromJSON InstallHost where
   parseJSON = withObject "install host" $ \host -> InstallHost
@@ -595,6 +617,7 @@ instance FromJSON InstallHost where
     <*> host .: "install_mailbox"
     <*> host .: "heap_break_before"
     <*> host .: "heap_break_after"
+    <*> host .:? "modal_observation"
 
 installHostValue :: InstallHost -> Value
 installHostValue host = object
@@ -602,7 +625,8 @@ installHostValue host = object
   , "push_state" .= TE.decodeUtf8 (hostPushState host)
   , "install_mailbox" .= hostInstallMailbox host
   , "heap_break_before" .= hostBreakBefore host
-  , "heap_break_after" .= hostBreakAfter host ]
+  , "heap_break_after" .= hostBreakAfter host
+  , "modal_observation" .= hostModalObservation host ]
 
 -- | GIVEN with its card attach key, timed and printed; the cardless and FujiMod bridges key their own.
 keyedSettings :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> IO E2ESettings
@@ -945,6 +969,17 @@ seconds value = showFFloat (Just 1) value " s"
 runSession :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> Plan -> FilePath -> IO ()
 runSession settings python runtime installedMedia adjustmentNand plan e2e = do
   stackDiagnostic <- lookupEnv "XM1_RENDER_STACK_DIAGNOSTIC" >>= traverse readRenderStackDiagnosticConfig
+  splitPath <- lookupEnv "XM1_MODAL_INSTALL_CHECKPOINT"
+  splitProof <- forM splitPath $ \path -> do
+    present <- doesFileExist path
+    if not present then pure Nothing else do
+      bytes <- getFileSize path
+      require (bytes <= 1024 * 1024) "installed checkpoint proof exceeds 1 MiB"
+      value <- B.readFile path >>= either (ioError . userError) pure . eitherDecodeStrict'
+      Just <$> either (ioError . userError) pure (parseObservedInstallProof value)
+  let expectedSplit = joinMaybe splitProof
+      joinMaybe Nothing = Nothing
+      joinMaybe (Just value) = value
   afPlan <- traverse (\path -> do
     bytes <- B.readFile path
     require (B.length bytes <= 1024 * 1024) "AF ownership plan exceeds 1 MiB"
@@ -1039,8 +1074,8 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           then Just <$> B.readFile (pinnedDirectory pinned </> "save-lifecycle-program.json")
           else pure Nothing)
       choose candidates
-        | lifetimeGuarded && planFromInstall plan = ioError (userError "modal lifetime guard refuses installed checkpoint restore")
-        | not (planFromInstall plan) || bootMode settings == FreshBoot = pure (Nothing, Nothing)
+        | lifetimeGuarded && planFromInstall plan && not (isJust splitPath) = ioError (userError "modal lifetime guard refuses installed checkpoint restore")
+        | (not (planFromInstall plan) && not (isJust expectedSplit)) || bootMode settings == FreshBoot = pure (Nothing, Nothing)
         | otherwise = do
             built <- mapM (\base -> (,) base <$> relinkFiles (Address base)) (nub (map installBase candidates))
             let matches =
@@ -1049,7 +1084,11 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
                   , Just relinked <- [lookup (installBase candidate) built]
                   , manifestDigest (relinkedManifest relinked) == installManifestDigest candidate
                   , runtimeDigest (relinkedManifest relinked) == installRuntimeDigest candidate
-                  , installProcedureDigest candidate == procedure ]
+                  , installProcedureDigest candidate == procedure
+                  , not lifetimeGuarded || case expectedSplit of
+                      Just proof -> either (const False) (const True) (checkObservedInstallProof proof (installObservation candidate))
+                      Nothing -> False ]
+            when (isJust expectedSplit) (require (not (null matches)) "named installed checkpoint or its successful install observation is missing")
             pure (case matches of
               (candidate, relinked) : _ -> (Just candidate, Just (candidate, relinked))
               [] -> (Nothing, Nothing))
@@ -1067,10 +1106,14 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
   when scoped $
     require (any (not . null . segmentSteps) (planBefore plan))
       "scoped modal observation requires selected post-install physical-key segments"
-  when lifetimeGuarded $
+  when (lifetimeGuarded && not (isJust splitPath)) $
     either (ioError . userError) pure (checkModalLifetimeRoute
       (if planFromInstall plan then RestoredModalInstall else FreshModalInstall)
       (if planUnload plan then ModalUnloadRequested else ModalUnloadOmitted))
+  when (isJust splitPath) $ do
+    require (lifetimeGuarded && scoped && planUnload plan && not (isJust afPlan) && not (isJust stackDiagnostic)
+      && case emulationRuntime settings of FujiModRuntime _ -> True; _ -> False)
+      "observed install split requires the scoped FujiMod lifetime route with rollback"
   when (isJust afPlan) $ do
     require lifetimeGuarded "AF ownership capture requires the continuous installed modal lifetime guard"
     require (pushMode settings == RamPush && segmentSelection settings == Nothing)
@@ -1127,6 +1170,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           forM_ (relinkedAllowlistProof relinked) (writePrivateBytes (relinkDirectory </> "bank-allowlist-proof.json"))
           forM_ (relinkedLifecycle relinked) (writePrivateBytes (relinkDirectory </> "save-lifecycle-program.json"))
           let allowlist = allowlistReceipt (relinkedAllowlist relinked)
+          forM_ (relinkedAllowlistReport relinked) (writePrivateBytes (relinkDirectory </> "bank-allowlist-report.json"))
           case relinkedAllowlistReport relinked of
             Just bytes -> writePrivateBytes (relinkDirectory </> "bank-allowlist.json") bytes
             Nothing -> writePrivateBytes (relinkDirectory </> "bank-allowlist.json") (BL.toStrict (encode allowlist) <> "\n")
@@ -1269,6 +1313,10 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
     privateDirectory pushDirectory
     (statePath, installMailbox) <- case restoredHost of
       Just host -> do
+        when lifetimeGuarded $ do
+          proof <- maybe (ioError (userError "restored lifetime has no named install proof")) pure expectedSplit
+          observed <- maybe (ioError (userError "installed host lacks its observation")) pure (hostModalObservation host)
+          restoreModalLifetime emulator e2e lifetimeSession proof observed
         let path = pushDirectory </> "ram-push-state.json"
         writePrivateBytes path (hostPushState host)
         pure (path, hostInstallMailbox host)
@@ -1290,13 +1338,22 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
             , "hits" .= [object ["site" .= traceSite hit, "r0" .= hexAddress (traceR0 hit)] | hit <- fetched]
             , "fetched" .= not (null fetched) ])) <> "\n")
           putStrLn ("fetch watch: " ++ show (length fetched) ++ " entries into Classic Chrome sites from attach to install")
-        unless lifetimeGuarded $ do
-          host <- InstallHost <$> B.readFile allocationPath <*> B.readFile statePath
-            <*> pure installMailbox <*> pure breakBefore <*> pure breakAfter
-          saved <- timed "install-checkpoint" (emulatorSaveInstallCheckpoint emulator base
-            (manifestDigest manifest) (runtimeDigest manifest) procedure (installHostValue host))
-          putStrLn ("install checkpoint: " ++ C.unpack (BL.toStrict (encode saved)))
         recordModalLifetimeBoundary lifetimeSession InstallationReadback
+        when (not lifetimeGuarded || isJust splitPath) $ do
+          observation <- if lifetimeGuarded then Just <$> installedModalLifetime lifetimeSession else pure Nothing
+          host <- InstallHost <$> B.readFile allocationPath <*> B.readFile statePath
+            <*> pure installMailbox <*> pure breakBefore <*> pure breakAfter <*> pure observation
+          saved <- timed "install-checkpoint" $ if lifetimeGuarded
+            then emulatorSaveObservedInstallCheckpoint emulator base (manifestDigest manifest) (runtimeDigest manifest) (installHostValue host)
+            else emulatorSaveInstallCheckpoint emulator base (manifestDigest manifest) (runtimeDigest manifest) procedure (installHostValue host)
+          forM_ splitPath $ \path -> do
+            proof <- either (ioError . userError) pure (parseObservedInstallProof saved)
+            modifyIORef' lifetimeSession $ \session -> case session of
+              ModalLifetimeObserving attempt -> ModalLifetimeObserving attempt { lifetimeAttemptSplit = Just (CheckpointProduced, proof) }
+              _ -> session
+            writePrivateBytes path (BL.toStrict (encode saved) <> "\n")
+            writePrivateBytes (e2e </> "e2e-observed-install-checkpoint.json") (BL.toStrict (encode saved) <> "\n")
+          putStrLn ("install checkpoint: " ++ C.unpack (BL.toStrict (encode saved)))
         pure (statePath, installMailbox)
     case lifecycle of
       Nothing -> do
@@ -1559,7 +1616,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
             pure (judgement,
               ["ram_preservation" .= preservationReceipt ranges observation judgement],
               mediaAfterValue)
-        lifetimeReport <- finishModalLifetime emulator e2e lifetimeSession
+        lifetimeReport <- timed "modal-finalize" (finishModalLifetime emulator e2e lifetimeSession)
         observed <- readIORef (runnerObservations runner)
         rendezvousExits <- readIORef (runnerRendezvousExits runner)
         phaseTimes <- readIORef phases
@@ -2567,6 +2624,7 @@ loadModalStock = do
     , "stock_start" .= (0x00bfb028 :: Word32), "stock_bytes" .= (0xfc :: Int)])
 
 data ModalLifetimeBoundary = UploadSynchronized | InstallationReadback | RollbackReadback | AfterUnloadKeys deriving (Eq, Show)
+data SplitOrigin = CheckpointProduced | CheckpointRestored deriving (Eq)
 data ModalLifetimeAttempt = ModalLifetimeAttempt
   { lifetimeAttemptRequest :: ModalRequest
   , lifetimeAttemptSource :: Value
@@ -2576,6 +2634,7 @@ data ModalLifetimeAttempt = ModalLifetimeAttempt
   , lifetimeAttemptOwnsObserver :: Bool
   , lifetimeAttemptBoundaries :: [ModalLifetimeBoundary]
   , lifetimeAttemptProblems :: [String]
+  , lifetimeAttemptSplit :: Maybe (SplitOrigin, ObservedInstallProof)
   }
 data ModalLifetimeSession
   = ModalLifetimeUnconfigured
@@ -2604,6 +2663,54 @@ recordModalLifetimeBoundary session boundary = modifyIORef' session $ \state -> 
     { lifetimeAttemptBoundaries = lifetimeAttemptBoundaries attempt ++ [boundary] }
   _ -> state
 
+installedModalLifetime :: IORef ModalLifetimeSession -> IO Value
+installedModalLifetime session = do
+  state <- readIORef session
+  case state of
+    ModalLifetimeObserving attempt -> either (ioError . userError) pure $ do
+      unless (lifetimeAttemptBoundaries attempt == [UploadSynchronized, InstallationReadback]
+        && lifetimeAttemptOwnsObserver attempt && null (lifetimeAttemptProblems attempt))
+        (Left "installed checkpoint has no healthy complete installation observation")
+      before <- lifetimeAttemptBefore attempt
+      begun <- lifetimeAttemptBegin attempt
+      _ <- modalParsedResponse before
+      _ <- modalParsedResponse begun
+      armed <- lifetimeAttemptArmed attempt
+      pure (object ["before" .= modalRawResponse before, "begin" .= modalRawResponse begun, "armed" .= armed])
+    _ -> ioError (userError "installed checkpoint has no armed lifetime observation")
+
+restoreModalLifetime :: Emulator -> FilePath -> IORef ModalLifetimeSession -> ObservedInstallProof -> Value -> IO ()
+restoreModalLifetime emulator receipt session proof observed = do
+  state <- readIORef session
+  case state of
+    ModalLifetimePrepared request source problems -> do
+      let parsed = parseEither (withObject "installed modal observation" $ \fields ->
+            (,,) <$> fields .: "before" <*> fields .: "begin" <*> fields .: "armed") observed
+      (before, begun, armed) <- either (ioError . userError) pure parsed
+      let response raw = ModalResponse raw (parseModalReport (modalRequestLimit request) raw)
+      either (ioError . userError) pure $ do
+        beforeReport <- modalParsedResponse (response before)
+        unless (not (modalReportEnabled beforeReport)) (Left "installed observation began over another observer")
+        beginReport <- modalParsedResponse (response begun)
+        checkModalBegin request beginReport
+        _ <- checkLifetimeArrayAudit request (Right armed) (Right armed >>= parseFinalModalWatch)
+        pure ()
+      emulatorModalObservationResume emulator
+      resumed <- captureModalResponse (emulatorModalObservationReport emulator (modalRequestLimit request))
+      either (ioError . userError) (const (pure ())) (resumed >>= modalParsedResponse)
+      writeIORef session (ModalLifetimeObserving (ModalLifetimeAttempt request source
+        (Right (response before)) (Right (response begun)) (Right armed) True
+        [UploadSynchronized, InstallationReadback] problems (Just (CheckpointRestored, proof))))
+      writePrivateBytes (receipt </> "e2e-observed-install-checkpoint.json")
+        (BL.toStrict (encode (observedInstallProofJson proof)) <> "\n")
+    _ -> ioError (userError "installed observation resume was not prepared")
+
+observedInstallProofJson :: ObservedInstallProof -> Value
+observedInstallProofJson proof = object
+  [ "directory" .= proofDirectory proof, "saved" .= True, "observed_install" .= True
+  , "snapshot_sha256" .= sha256Hex (installedSnapshotDigest (proofIdentity proof))
+  , "record_sha256" .= sha256Hex (installedRecordDigest (proofIdentity proof)) ]
+
 armModalLifetime :: Emulator -> FilePath -> IORef ModalLifetimeSession -> Maybe Value -> IO ()
 armModalLifetime emulator receipt session afPlan = do
   state <- readIORef session
@@ -2623,7 +2730,7 @@ armModalLifetime emulator receipt session afPlan = do
               _ -> False
             _ -> False
       armed <- if ownsObserver then rawWatch (emulatorWatchStateRaw emulator) else pure (Left "modal observation was not armed")
-      let attempt = ModalLifetimeAttempt request source before begun armed ownsObserver [UploadSynchronized] problem
+      let attempt = ModalLifetimeAttempt request source before begun armed ownsObserver [UploadSynchronized] problem Nothing
       writeIORef session (ModalLifetimeObserving attempt)
       writePrivateBytes (receipt </> "e2e-modal-observation-arm.json")
         (BL.toStrict (encode (object
@@ -2656,7 +2763,7 @@ finishModalLifetime emulator receipt session = do
     ModalLifetimeOffline -> pure Nothing
     ModalLifetimePrepared request source problem ->
       finish (ModalLifetimeAttempt request source (Left "publication callback was not reached")
-        (Left "modal observation was not armed") (Left "modal observation was not armed") False [] problem)
+        (Left "modal observation was not armed") (Left "modal observation was not armed") False [] problem Nothing)
     ModalLifetimeObserving attempt -> finish attempt
  where
   finish attempt = do
@@ -2707,7 +2814,9 @@ finishModalLifetime emulator receipt session = do
           , "start" .= boundaryText UploadSynchronized
           , "end" .= String "after-unload-keys-and-SDK-old-word-verification"
           , "boundaries" .= map boundaryText (lifetimeAttemptBoundaries attempt)
-          , "install_checkpoint_restored" .= False, "install_checkpoint_saved" .= False
+          , "install_checkpoint_restored" .= maybe False ((== CheckpointRestored) . fst) (lifetimeAttemptSplit attempt)
+          , "install_checkpoint_saved" .= maybe False ((== CheckpointProduced) . fst) (lifetimeAttemptSplit attempt)
+          , "install_checkpoint" .= fmap (observedInstallProofJson . snd) (lifetimeAttemptSplit attempt)
           , "whole_installed_lifetime_coverage" .= either (const False) modalLifetimeCoverage checked
           , "physical_fetch_coverage" .= either (const False) modalPhysicalCoverage checked
           , "task_identity_verified" .= either (const False) modalTaskIdentityVerified checked
