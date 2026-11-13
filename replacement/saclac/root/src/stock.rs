@@ -3,6 +3,8 @@
 //! The root's stock boundary: X-M1 1.50 entries and memory the bound modules reach that no merged
 //! module owns. Entries are entered and memory read through the shared layer's `Machine`.
 
+pub mod acquisition;
+
 /// Lens control's resource index (0x76d9c8).
 pub const RESOURCE_INDEX: u32 = 0x76_d9c8;
 /// The configuration lookup selection the bring-up applies the resource index to (0x740b18).
