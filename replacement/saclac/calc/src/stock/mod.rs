@@ -10,6 +10,7 @@ pub mod diagnostics;
 pub mod dump;
 pub mod exposure_limits;
 pub mod finish;
+pub mod gains;
 pub mod lists;
 pub mod motion;
 pub mod profile_adjustment;

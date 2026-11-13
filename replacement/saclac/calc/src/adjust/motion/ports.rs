@@ -265,32 +265,8 @@ pub trait ChannelRates {
     fn channel_rate(&mut self, lens: u32, channel: u8) -> u32;
 }
 
-/// What the area layer's default curve is computed for (0xf4d5bc's request).
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct CurveRequest {
-    pub scene: u8,
-    pub at_0048: u8,
-    pub at_002a: u16,
-    pub channel: u8,
-    pub style: u8,
-    pub at_0036: u8,
-    pub at_000e: [u8; 6],
-    pub lens: u32,
-    pub level: i16,
-    /// The record's stored weights, or the default ones.
-    pub weights: [u16; 3],
-}
-
-/// The default curve's three points and its limit.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct DefaultCurve {
-    pub points: [u16; 3],
-    pub limit: u32,
-}
-
-/// The area layer's default curve (0xf4d5bc) and the profile calibration's factors (0xef43b8).
+/// The profile calibration's factors (0xef43b8).
 pub trait AreaCurves {
-    fn default_curve(&mut self, request: &CurveRequest) -> DefaultCurve;
     /// `points` with the profile factors `selector` and the two deltas applied.
     fn with_profile_factors(&mut self, points: [u16; 3], deltas: [u8; 2], selector: u8) -> [u16; 3];
 }
