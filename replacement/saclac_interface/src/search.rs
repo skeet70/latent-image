@@ -56,3 +56,23 @@ pub struct BridgeReport {
     pub position: i16,
     pub class: LensClass,
 }
+
+/// Calc's result for the search's evaluation job (completion 0x89 points at it).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Evaluation {
+    /// Three filter pairs, each its first and second sum (words 0..6).
+    pub pairs: [[u32; 2]; 3],
+    /// Low halves of words 10 and 11.
+    pub levels: [u16; 2],
+    /// The filter pairs the peak search reads instead (words 12..18).
+    pub scan_pairs: [[u32; 2]; 3],
+    /// Low halves of words 22 and 23.
+    pub scan_levels: [u16; 2],
+    pub reference: u32,
+    /// Word 25.
+    pub settled: u32,
+    /// Word 26.
+    pub flag: u32,
+    /// The halfwords at 0x6c and 0x6e.
+    pub focus_values: [u16; 2],
+}

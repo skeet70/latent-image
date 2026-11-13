@@ -2,7 +2,7 @@
 
 //! X-M1 1.50 bytes of the lens-bridge request and report.
 
-use crate::search::{BridgePhase, BridgeReport, BridgeRequest, BridgeStatus, LensClass};
+use crate::search::{BridgePhase, BridgeReport, BridgeRequest, BridgeStatus, Evaluation, LensClass};
 
 pub const BRIDGE_REQUEST_BYTES: usize = 40;
 
@@ -46,4 +46,23 @@ pub fn bridge_report(payload: &[u8]) -> Option<BridgeReport> {
         other => BridgeStatus::Other(other),
     };
     Some(BridgeReport { status, position: i16::from_le_bytes([payload[4], payload[5]]), class: LensClass(word(8)) })
+}
+
+pub const EVALUATION_BYTES: usize = 112;
+
+/// The result completion 0x89 points at, as 0xf44fec reads it.
+pub fn evaluation(result: &[u8; EVALUATION_BYTES]) -> Evaluation {
+    let word = |index: usize| u32::from_le_bytes([result[4 * index], result[4 * index + 1], result[4 * index + 2], result[4 * index + 3]]);
+    let half = |offset: usize| u16::from_le_bytes([result[offset], result[offset + 1]]);
+    let pairs = |first: usize| [[word(first), word(first + 1)], [word(first + 2), word(first + 3)], [word(first + 4), word(first + 5)]];
+    Evaluation {
+        pairs: pairs(0),
+        levels: [word(10) as u16, word(11) as u16],
+        scan_pairs: pairs(12),
+        scan_levels: [word(22) as u16, word(23) as u16],
+        reference: word(24),
+        settled: word(25),
+        flag: word(26),
+        focus_values: [half(0x6c), half(0x6e)],
+    }
 }
