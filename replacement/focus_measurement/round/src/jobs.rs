@@ -7,7 +7,7 @@ pub enum Calculation { Auxiliary, Window, Source }
 pub enum Control { Initialize, Enable, Stop, Run }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Outcome { Complete, Pending, NoWork, Updated(Calculation), Unhandled }
+pub enum Outcome { Complete, Pending, NoWork, Updated(Calculation), SelectionUpdated, Unhandled }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Effect { Initialize, Enable, Release, Submit, Collect }

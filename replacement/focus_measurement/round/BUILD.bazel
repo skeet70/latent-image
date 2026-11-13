@@ -6,8 +6,12 @@ xm1_rust_rlib(
     name = "round",
     src = "src/lib.rs",
     crate_name = "xm1_focus_measurement_round",
-    data = ["src/jobs.rs"],
+    data = ["src/jobs.rs", "src/acquisition.rs", "src/children.rs"],
     out = "arm/libxm1_focus_measurement_round.rlib",
+    rlib_deps = {
+        "xm1_saclac_controllers": "//replacement/saclac/controllers:controllers",
+        "xm1_saclac_interface": "//replacement/saclac_interface:saclac-interface",
+    },
 )
 
 xm1_rust_host_test(
@@ -15,4 +19,8 @@ xm1_rust_host_test(
     src = "src/lib.rs",
     crate_name = "xm1_focus_measurement_round_tests",
     data = glob(["src/*.rs"], exclude = ["src/lib.rs"]),
+    rlib_deps = {
+        "xm1_saclac_controllers": "//replacement/saclac/controllers:host",
+        "xm1_saclac_interface": "//replacement/saclac_interface:host",
+    },
 )
