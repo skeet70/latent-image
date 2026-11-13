@@ -11,6 +11,7 @@ SOURCES = [
     "src/lens.rs",
     "src/pipeline.rs",
     "src/round.rs",
+    "src/search.rs",
     "src/shared.rs",
     "src/statistics.rs",
     "src/stock.rs",
@@ -19,6 +20,7 @@ SOURCES = [
     "src/stock/capture_results.rs",
     "src/stock/exposure.rs",
     "src/stock/pipeline.rs",
+    "src/stock/search.rs",
     "src/stock/shared.rs",
 ]
 
@@ -48,6 +50,7 @@ xm1_rust_host_test(
         "src/capture_results_tests.rs",
         "src/exposure_tests.rs",
         "src/pipeline_tests.rs",
+        "src/search_tests.rs",
         "src/shared_tests.rs",
         "src/statistics_tests.rs",
         "src/tests.rs",

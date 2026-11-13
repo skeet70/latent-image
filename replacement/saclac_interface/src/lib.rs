@@ -9,6 +9,7 @@ pub mod exposure;
 pub mod lens;
 pub mod pipeline;
 pub mod round;
+pub mod search;
 pub mod shared;
 pub mod statistics;
 pub mod stock;
@@ -504,6 +505,8 @@ mod capture_results_tests;
 mod exposure_tests;
 #[cfg(test)]
 mod pipeline_tests;
+#[cfg(test)]
+mod search_tests;
 #[cfg(test)]
 mod shared_tests;
 #[cfg(test)]
