@@ -1,0 +1,24 @@
+#![cfg_attr(not(test), no_std)]
+#![deny(unsafe_code)]
+
+//! saclac's configuration layers: the image-4 configuration words and limits derived from the
+//! adjustment area (L3), the image-5 scan and image-pipeline configuration (L8) and the
+//! face-tracking entries (L11), which task 43's controllers, measurement round, search, shot
+//! sequence and lens drive share.
+
+pub mod adjustment;
+pub mod channel;
+pub mod curve;
+pub mod limits;
+pub mod numeric;
+pub mod ports;
+pub mod table;
+
+#[cfg(test)]
+mod fake;
+#[cfg(test)]
+mod table_tests;
+#[cfg(test)]
+mod channel_tests;
+#[cfg(test)]
+mod limits_tests;
