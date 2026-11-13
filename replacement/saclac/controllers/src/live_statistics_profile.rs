@@ -313,7 +313,7 @@ fn report_capture(completion: Parameters<'_>, record: RecordHandle, layers: &mut
     let ratio = read(layers, record, Field::FormatRatio);
     let mode = read(layers, record, Field::FormatMode);
     let dimensions = layers.helpers().scale_capture_window(mode, ratio).unwrap_or_default();
-    let report = CaptureReport { ratio, dimensions, completion: completion.bytes(), results: &results };
+    let report = CaptureReport { dimensions, completion: completion.bytes(), results: &results };
     let bytes = xm1_saclac_interface::stock::statistics::capture_report(&report);
     respond(layers, K::Command09, 17, Values::Record(&bytes));
 }

@@ -113,7 +113,6 @@ pub const RESULTS_BYTES: usize = 0x414;
 /// The capture's statistics Command09's client receives with status 17.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CaptureReport<'a> {
-    pub ratio: u32,
     /// Zero when the format has no capture window.
     pub dimensions: [u32; 2],
     /// The completion's 64-byte payload.
