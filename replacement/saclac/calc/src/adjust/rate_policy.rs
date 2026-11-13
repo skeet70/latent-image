@@ -58,18 +58,18 @@ pub struct DriveRate {
 
 /// The drive rate for `amount` on `channel` against channel 0, with the second factor when
 /// `second_factor` (0xfa6934). A zero channel value gives rate 0.
-pub fn drive_rate(properties: &mut impl Properties, configuration: &mut impl LensConfiguration, second_factor: bool, channel: i32, amount: u32) -> DriveRate {
-    let factor = properties.property(if second_factor { stock::RATE_SECOND_FACTOR } else { stock::TARGET_FACTOR });
+pub fn drive_rate(ports: &mut (impl Properties + LensConfiguration), second_factor: bool, channel: i32, amount: u32) -> DriveRate {
+    let factor = ports.property(if second_factor { stock::RATE_SECOND_FACTOR } else { stock::TARGET_FACTOR });
     let share = amount.wrapping_mul(factor) / 100;
-    let value = configuration.channel_value(channel);
-    let base = configuration.channel_value(0);
+    let value = ports.channel_value(channel);
+    let base = ports.channel_value(0);
     let rate = base.wrapping_mul(100).wrapping_mul(share).checked_div(value).unwrap_or(0);
-    let steps = properties.property(stock::RATE_STEPS);
+    let steps = ports.property(stock::RATE_STEPS);
     let period = if factor.wrapping_mul(steps) == 0 {
         10
     } else {
-        let span = u64::from(properties.property(stock::RATE_SPAN)) * 100_000;
-        let steps = u64::from(properties.property(stock::RATE_STEPS) as u8);
+        let span = u64::from(ports.property(stock::RATE_SPAN)) * 100_000;
+        let steps = u64::from(ports.property(stock::RATE_STEPS) as u8);
         (span / (steps * u64::from(factor))) as i32
     };
     let scaled = rate.wrapping_mul(round_tenths(period) as u32) / 10_000;

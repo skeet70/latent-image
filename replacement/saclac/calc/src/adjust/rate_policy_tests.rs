@@ -5,9 +5,10 @@ use xm1_saclac_profile_records::stock::record::group_00;
 use xm1_saclac_profile_records::stock::shared::group_22;
 
 use crate::adjust::fakes::Lens;
+use crate::adjust::lens::{BiasTable, LensConfiguration};
 use crate::adjust::rate_policy::*;
 use crate::exposure::fakes::{handle, World};
-use crate::exposure::ports::Property;
+use crate::exposure::ports::{Properties, Property};
 use crate::stock::adjust as stock;
 
 #[test]
@@ -27,44 +28,66 @@ fn rate_kinds_map_to_codes_one_higher() {
     assert_eq!(kinds, [0, 0, 1, 2, 3, 4, 0]);
 }
 
+/// Settings and lens tables behind one port.
+struct RateWorld {
+    world: World,
+    lens: Lens,
+}
+
+impl Properties for RateWorld {
+    fn property(&mut self, property: Property) -> u32 { Properties::property(&mut self.world, property) }
+}
+
+impl LensConfiguration for RateWorld {
+    fn channel_value(&mut self, channel: i32) -> u32 { self.lens.channel_value(channel) }
+    fn channel_curve(&mut self, channel: i32) -> u32 { self.lens.channel_curve(channel) }
+    fn bias(&mut self, resource: i32, table: BiasTable) -> i16 { self.lens.bias(resource, table) }
+    fn biased_position(&mut self, resource: i32, table: BiasTable) -> i16 { self.lens.biased_position(resource, table) }
+    fn resource_count(&mut self) -> u8 { self.lens.resource_count() }
+    fn selection_word(&mut self, channel: i32, flags: u32, offset: i16) -> u32 { self.lens.selection_word(channel, flags, offset) }
+    fn remap(&mut self, word: u32, channel: i32, mode: u32) -> i32 { self.lens.remap(word, channel, mode) }
+    fn position_limits(&mut self, key: u32) -> [i16; 2] { self.lens.position_limits(key) }
+    fn mapped_value(&mut self, key: u32) -> u32 { self.lens.mapped_value(key) }
+}
+
 /// Factor 50, channel 0 of value 4, channel 2 of value 8, steps 5 and span 3.
-fn rate_world() -> (World, Lens) {
+fn rate_world() -> RateWorld {
     let mut world = World::default();
     world.property(stock::TARGET_FACTOR, 50);
     world.property(stock::RATE_STEPS, 5);
     world.property(stock::RATE_SPAN, 3);
-    (world, Lens { values: [(0, 4), (2, 8)].into(), ..Lens::default() })
+    RateWorld { world, lens: Lens { values: [(0, 4), (2, 8)].into(), ..Lens::default() } }
 }
 
 #[test]
 fn the_drive_rate_scales_the_share_by_the_rounded_period() {
-    let (mut world, mut lens) = rate_world();
+    let mut ports = rate_world();
     let share = 1000 * 50 / 100;
     let rate = 4 * 100 * share / 8;
     let period = (3 * 100_000) / (5 * 50);
     assert_eq!(period, 1200);
-    assert_eq!(drive_rate(&mut world, &mut lens, false, 2, 1000), DriveRate { share, rate, scaled: rate * 120 / 10_000 });
+    assert_eq!(drive_rate(&mut ports, false, 2, 1000), DriveRate { share, rate, scaled: rate * 120 / 10_000 });
 }
 
 #[test]
 fn a_period_ending_in_five_rounds_away_from_zero() {
-    let (mut world, mut lens) = rate_world();
-    world.property(stock::RATE_SPAN, 1);
-    world.property(stock::RATE_STEPS, 8);
-    world.property(stock::TARGET_FACTOR, 100);
+    let mut ports = rate_world();
+    ports.world.property(stock::RATE_SPAN, 1);
+    ports.world.property(stock::RATE_STEPS, 8);
+    ports.world.property(stock::TARGET_FACTOR, 100);
     let rate = 4 * 100 * 1000 / 8;
-    assert_eq!(drive_rate(&mut world, &mut lens, false, 2, 1000).scaled, rate * 13 / 10_000);
+    assert_eq!(drive_rate(&mut ports, false, 2, 1000).scaled, rate * 13 / 10_000);
 }
 
 #[test]
 fn without_steps_the_period_is_ten_and_the_second_factor_applies_when_asked() {
-    let (mut world, mut lens) = rate_world();
-    world.property(stock::RATE_STEPS, 0);
-    world.property(stock::RATE_SECOND_FACTOR, 10);
+    let mut ports = rate_world();
+    ports.world.property(stock::RATE_STEPS, 0);
+    ports.world.property(stock::RATE_SECOND_FACTOR, 10);
     let share = 1000 * 10 / 100;
     let rate = 4 * 100 * share / 8;
-    assert_eq!(drive_rate(&mut world, &mut lens, true, 2, 1000), DriveRate { share, rate, scaled: rate / 10_000 });
-    assert_eq!(drive_rate(&mut world, &mut lens, true, 3, 1000).rate, 0);
+    assert_eq!(drive_rate(&mut ports, true, 2, 1000), DriveRate { share, rate, scaled: rate / 10_000 });
+    assert_eq!(drive_rate(&mut ports, true, 3, 1000).rate, 0);
 }
 
 #[test]
