@@ -15,6 +15,8 @@ use crate::controller::windows::GridRequest;
 use crate::stock::layout::{callbacks, changes, controller as field, diagnostics, display, dump, parameters, policy, requests, work, work::records};
 use crate::controller::scan::ProcessingRequest;
 use crate::services::{DumpKind, ExtendedOperations, LevelPair, OperationConditions, SelectionRequest, SelectionValues, WindowPower};
+use crate::record_mode::RecordChannel;
+use crate::stock::layout::record_mode;
 use crate::controller::statistics::{RecordHalf, StatisticsSummary, Summary, SummaryAreas, SummaryRequest};
 use crate::stock::statistics::{write_summary, COPY_OFFSET, HALF_BYTES, RECORD_BYTES};
 use crate::stock::Parameters;
@@ -912,4 +914,101 @@ fn an_exported_request_fills_the_export_scan_object_and_writes_its_four_parts() 
         Out::Export(scan, ScanExport::Values, 0x6064),
         Out::Export(scan, ScanExport::Curve, 0x6076),
     ]);
+}
+
+fn recording(channels: u8) -> ProfileGeometry<SharedBytes, Fake, Tables> {
+    let mut layer = filing(vec![]);
+    layer.ports.config.push((0x98c0, channels));
+    layer
+}
+
+fn buffer_at(index: u16) -> Location { record_mode::BUFFERS.plus(0x14 * index) }
+
+#[test]
+fn record_mode_lays_out_one_buffer_per_enabled_capture_channel() {
+    let mut layer = recording(0b1001);
+    assert_eq!(layer.initialize_record_mode(), Ok(()));
+    assert_eq!(layer.memory().read_u8(record_mode::BUFFER_COUNT), 3);
+    assert_eq!(layer.memory().read_u32(buffer_at(2).plus(4)), 0x48a6_1000);
+    assert_eq!(layer.memory().read_u32(record_mode::STATE), 1);
+    let mut one = recording(0b0010);
+    assert_eq!(one.initialize_record_mode(), Ok(()));
+    assert_eq!(one.memory().read_u8(record_mode::BUFFER_COUNT), 1);
+    assert_eq!(recording(0).initialize_record_mode(), Err(Refusal::BadArgument));
+    assert!(one.record_mode_available(RecordChannel::SHORT));
+    assert!(!one.record_mode_available(RecordChannel::SINGLE));
+    assert!(!one.record_mode_available(RecordChannel(6)));
+}
+
+#[test]
+fn a_single_record_channel_keeps_the_last_filled_buffer_and_releases_the_rest() {
+    let mut layer = recording(0b1001);
+    layer.initialize_record_mode().unwrap();
+    layer.memory.write_u32(buffer_at(0), 2);
+    let filled = buffer_at(1);
+    layer.memory.write_u32(filled, 2);
+    layer.memory.write_u32(filled.plus(4), 0x1000);
+    layer.memory.write_u16(filled.plus(0xc), 4);
+    layer.memory.write_u16(filled.plus(0xe), 5);
+    layer.memory.write_u16(filled.plus(0x10), 9);
+    assert_eq!(layer.begin_record_mode(RecordChannel::SINGLE), Ok(()));
+    assert_eq!(layer.memory().read_u32(record_mode::FIRST_FREE), 2);
+    assert_eq!(layer.begin_record_mode(RecordChannel::SINGLE), Err(Refusal::RecordState));
+    layer.memory.write_u32(buffer_at(2), 7);
+    assert_eq!(layer.finish_record_mode(0), Ok(()));
+    assert_eq!([0, 1, 2].map(|index| layer.memory().read_u32(buffer_at(index))), [3, 3, 0]);
+    let kept = record_mode::RECORDS[0].0;
+    assert_eq!(layer.memory().read_u32(kept.plus(4)), 0x1000);
+    assert_eq!([0, 8, 0xa, 0x10].map(|offset| layer.memory().read_u16(kept.plus(offset))), [1, 4, 5, 9]);
+    assert_eq!(layer.memory().read_u16(record_mode::KEPT), 1);
+    assert_eq!(layer.finish_record_mode(0), Err(Refusal::RecordState));
+}
+
+#[test]
+fn the_short_channel_drops_records_past_the_limit_and_ends_its_area_after_the_last_kept() {
+    let mut layer = recording(0b0010);
+    layer.initialize_record_mode().unwrap();
+    assert_eq!(layer.begin_record_mode(RecordChannel::SHORT), Ok(()));
+    let (records, _) = record_mode::RECORDS[1];
+    layer.memory.write_u16(record_mode::RECORD_COUNT, 3);
+    for (index, enable) in [5u16, 0, 2].into_iter().enumerate() {
+        let at = records.plus(0x14 * index as u16);
+        layer.memory.write_u16(at, enable);
+        layer.memory.write_u32(at.plus(4), 0x2000 * (index as u32 + 1));
+        layer.memory.write_u16(at.plus(8), 10);
+        layer.memory.write_u16(at.plus(0xa), 3);
+    }
+    assert_eq!(layer.finish_record_mode(3), Ok(()));
+    assert_eq!(layer.memory().read_u16(records), 0);
+    assert_eq!(layer.memory().read_u16(record_mode::KEPT.plus(2)), 1);
+    assert_eq!(layer.memory().read_u32(record_mode::END_ADDRESS), 0x6000 + 60);
+}
+
+#[test]
+fn an_export_writes_each_kept_record_to_a_file_and_lists_it_in_the_snapshot() {
+    let mut layer = recording(0b1001);
+    layer.initialize_record_mode().unwrap();
+    let filled = buffer_at(1);
+    layer.memory.write_u32(filled, 2);
+    layer.memory.write_u32(filled.plus(4), 0x1000);
+    layer.memory.write_u16(filled.plus(0xc), 4);
+    layer.memory.write_u16(filled.plus(0xe), 5);
+    layer.begin_record_mode(RecordChannel::SINGLE).unwrap();
+    layer.finish_record_mode(0).unwrap();
+    layer.ports.out.clear();
+    layer.export_record_snapshot(Some(DumpBuffer(0x4000_0000)));
+    assert!(layer.ports.out.contains(&Out::Write(0x77, 40, 0x1000)));
+    let numbers = crate::stock::layout::address(record_mode::RECORDS[0].0.plus(0xc)) as u32;
+    assert_eq!(layer.ports.out.last(), Some(&Out::Numbers(numbers)));
+    let words: Vec<(u32, Vec<u8>)> = layer.ports.dumped.iter().filter(|(_, _, bytes)| bytes.iter().any(|&byte| byte != 0)).map(|(_, offset, bytes)| (offset - 0xa_5fcc, bytes.clone())).collect();
+    let word = |value: u32| value.to_le_bytes().to_vec();
+    assert_eq!(words, vec![
+        (0x0, b"RATS".to_vec()),
+        (0xa10, b"RAAL".to_vec()),
+        (0x4, word(0b1001)),
+        (0x8, word(1 << 16)),
+        (0x10, word(1 | 2 << 16)),
+        (0x510, word(4 | 5 << 16)),
+    ]);
+    assert_eq!(layer.memory().read_u32(record_mode::STATE), 1);
 }

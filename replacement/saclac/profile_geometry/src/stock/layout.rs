@@ -552,6 +552,63 @@ pub mod callbacks {
     pub const EXPORT_SCAN: Location = at(OperationCallbacks, 0x4);
 }
 
+/// The record mode block 0xef7d68 clears and lays out.
+pub mod record_mode {
+    use super::at;
+    use crate::memory::{Block::RecordMode, Location};
+
+    pub const BYTES: u16 = 0xd28;
+    /// 1 while idle, the channel while recording, 6 while exporting.
+    pub const STATE: Location = at(RecordMode, 0x0);
+    /// The record size the single-record channels store.
+    pub const SINGLE_SIZE: Location = at(RecordMode, 0x4);
+    /// The second and first free buffer a single-record channel found.
+    pub const SECOND_FREE: Location = at(RecordMode, 0x1c);
+    pub const FIRST_FREE: Location = at(RecordMode, 0x20);
+    pub const BUFFER_BYTES: Location = at(RecordMode, 0x24);
+    pub const BUFFER_COUNT: Location = at(RecordMode, 0x28);
+    /// Three 20-byte buffers: a state word, the address, then the width, height and metric
+    /// halfwords at +0xc, +0xe and +0x10.
+    pub const BUFFERS: Location = at(RecordMode, 0x2c);
+    pub const BUFFER_STRIDE: u16 = 0x14;
+    /// The record size the many-record channels store, then 16 bytes they clear.
+    pub const MANY_SIZE: Location = at(RecordMode, 0x68);
+    pub const MANY_CLEARED: (Location, u16) = (at(RecordMode, 0x6c), 0x10);
+    pub const FIRST_FREE_ADDRESS: Location = at(RecordMode, 0x80);
+    /// The number of records a many-record channel holds.
+    pub const RECORD_COUNT: Location = at(RecordMode, 0x84);
+    /// The first and last record index, from configuration bytes 0x98c1 and 0x98c2.
+    pub const RANGE: [Location; 2] = [at(RecordMode, 0x86), at(RecordMode, 0x88)];
+    /// From configuration bytes 0x98c4 and 0x98c3.
+    pub const SETTING_WORD: Location = at(RecordMode, 0x8c);
+    pub const SETTING_BYTE: Location = at(RecordMode, 0x90);
+    pub const START_ADDRESS: Location = at(RecordMode, 0x94);
+    pub const END_ADDRESS: Location = at(RecordMode, 0x98);
+    pub const RECORDING_ADDRESS: Location = at(RecordMode, 0x9c);
+    /// Each channel's 20-byte records: an enable halfword, the address, width and height
+    /// halfwords at +8 and +0xa, directory and file numbers at +0xc and +0xe, a metric at +0x10.
+    pub const RECORD_STRIDE: u16 = 0x14;
+    pub const RECORDS: [(Location, u16); 4] =
+        [(at(RecordMode, 0xa0), 1), (at(RecordMode, 0xb4), 6), (at(RecordMode, 0x12c), 152), (at(RecordMode, 0xd0c), 1)];
+    /// One halfword per channel: how many of its records the last finish kept.
+    pub const KEPT: Location = at(RecordMode, 0xd20);
+
+    /// The snapshot 0xef8934 writes into a frame dump, from this offset.
+    pub mod snapshot {
+        pub const OFFSET: u32 = 0xa_5fcc;
+        pub const BYTES: u32 = 0xa14;
+        pub const HEAD_TAG: (u32, [u8; 4]) = (0x0, *b"RATS");
+        pub const ENABLED: u32 = 0x4;
+        /// Channels 2 and 3, then 4 and 5: the first channel's kept count in the low 12 bits of
+        /// the upper halfword, the second's in the lower halfword.
+        pub const KEPT: [u32; 2] = [0x8, 0xc];
+        /// One word per kept record in each column: the enable halfword under the channel, the
+        /// metric, the width under the height, the file number under the directory number.
+        pub const COLUMNS: [u32; 4] = [0x10, 0x290, 0x510, 0x790];
+        pub const TAIL_TAG: (u32, [u8; 4]) = (0xa10, *b"RAAL");
+    }
+}
+
 pub mod diagnostics {
     use super::at;
     use crate::memory::{Block::Diagnostics, Location};

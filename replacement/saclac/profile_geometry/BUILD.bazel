@@ -24,6 +24,7 @@ _SOURCES = [
     "src/numeric.rs",
     "src/ports.rs",
     "src/profile.rs",
+    "src/record_mode.rs",
     "src/services.rs",
     "src/stock/areas.rs",
     "src/stock/dumps.rs",
