@@ -2,6 +2,7 @@ use crate::*;
 
 pub mod capture_results;
 pub mod exposure;
+pub mod pipeline;
 
 pub const fn record_handle_from_a2(word: u32) -> RecordHandle { RecordHandle(word) }
 
