@@ -785,7 +785,7 @@ publicOpenPremises =
   [ "loads are not confined: owned code may read any address; the native oracle confines reads"
   , "stack depths are bytes below the owned callable entry sp"
   , "public wrappers preserve r4-r11 and the setter's original r3; retained bracket chain depth and register use are not proved"
-  , "the code policy checks sp, r4-r11 and the return address at every exit"
+  , "the code policy checks sp, r11 and the return address at every exit, and proves r4-r10 for an owned callee only when its walk restores them; a stock callee's r4-r10 follow AAPCS unproved"
   , "the reference scan reads image4, image5, plain, loader A and loader B as instructions and words, and image2 and image3 (the FONT_ICON.FDL window extracted from the DAT) as words; it does not cover computed addresses"
   ]
 
