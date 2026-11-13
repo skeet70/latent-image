@@ -13,6 +13,7 @@ import qualified FujiAF.Host as H
 import System.Environment (getArgs)
 import Text.Read (readMaybe)
 import qualified Replacement.Saclac.Artifact as Artifact
+import qualified Replacement.Saclac.PayloadProjection as Payload
 
 newtype Address = Address Word32 deriving (Eq, Show)
 instance FromJSON Address where
@@ -124,6 +125,17 @@ load path = do
   bytes <- H.readRegular (16 * 1024 * 1024) path
   either H.failH pure (eitherDecodeStrict bytes)
 
+applyProjection :: Payload.Declaration -> Receipt -> IO Receipt
+applyProjection declaration receipt = do
+  rows <- traverse projectObserved (timedEvents receipt)
+  pure receipt { events = concatMap (normalize . observedEvent) rows, timedEvents = rows }
+  where
+    projectObserved (Observed tick event) = Observed tick <$> case event of
+      QueueIn operation sender bytes -> QueueIn operation sender <$> project Payload.Incoming 43 operation bytes
+      PeerRequest queue operation bytes -> PeerRequest queue operation <$> project Payload.Outgoing queue operation bytes
+      _ -> pure event
+    project direction queue operation = either H.failH pure . Payload.projectPayload declaration direction (Payload.QueueId queue) (Payload.Operation operation)
+
 healthy :: Receipt -> Bool
 healthy receipt = observationError receipt == Nothing && machineFailure receipt == Nothing
   && not (null (events receipt)) && stockFetches receipt > 0
@@ -175,13 +187,14 @@ runValue compatible extents phase receipt = do
 main :: IO ()
 main = do
   arguments <- getArgs
-  (stockPath, candidatePath, controlPath, output, phase) <- case arguments of
-    [stock, candidate, control, output] -> pure (stock, candidate, control, output, Nothing)
-    [stock, candidate, control, output, "--milestone", name] -> pure (stock, candidate, control, output, Just name)
-    _ -> H.failH "usage: saclac-interface-compare STOCK_JSON CANDIDATE_JSON WRONG_JSON OUTPUT_JSON [--milestone PHASE]"
-  stock <- load stockPath
-  candidate <- load candidatePath
-  control <- load controlPath
+  (stockPath, candidatePath, controlPath, projectionPath, output, phase) <- case arguments of
+    [stock, candidate, control, fields, output] -> pure (stock, candidate, control, fields, output, Nothing)
+    [stock, candidate, control, fields, output, "--milestone", name] -> pure (stock, candidate, control, fields, output, Just name)
+    _ -> H.failH "usage: saclac-interface-compare STOCK_JSON CANDIDATE_JSON WRONG_JSON FIELDS_JSON OUTPUT_JSON [--milestone PHASE]"
+  declaration <- H.readRegular (1024 * 1024) projectionPath >>= either H.failH pure . Payload.parseDeclaration
+  stock <- load stockPath >>= applyProjection declaration
+  candidate <- load candidatePath >>= applyProjection declaration
+  control <- load controlPath >>= applyProjection declaration
   let sameScenario = scenario stock == scenario candidate && scenario stock == scenario control
       sameInputs = case map projectionInputs [stock, candidate, control] of
         [Just left, Just middle, Just right] -> left == middle && left == right
@@ -197,6 +210,7 @@ main = do
     , "mode" .= ("interface-stream" :: String)
     , "subsystem" .= ("saclac" :: String)
     , "scenario" .= scenario stock
+    , "payload_projection" .= Payload.declarationJson declaration
     , "retired_extents" .= map spanValue Artifact.extents
     , "owned_extents" .= [spanValue Artifact.fixedExtent]
     , "stock" .= stockRun

@@ -260,6 +260,22 @@ haskell_binary(
     ],
 )
 
+haskell_library(
+    name = "payload-projection",
+    srcs = ["Replacement/Saclac/PayloadProjection.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = ["//host:aeson", "//host:base", "//host:bytestring", "//host:text"],
+)
+
+haskell_test(
+    name = "payload-projection-tests",
+    size = "small",
+    srcs = ["PayloadProjectionTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [":payload-projection", "//host:aeson", "//host:base", "//host:bytestring"],
+)
+
 haskell_binary(
     name = "saclac-interface-compare",
     srcs = ["InterfaceCompareMain.hs"],
@@ -267,6 +283,7 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":saclac-artifact",
+        ":payload-projection",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
