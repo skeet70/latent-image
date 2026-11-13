@@ -2,19 +2,18 @@
 //! lens.
 
 use crate::adjust::rate_policy::scaled_by_configured_factor;
+use crate::adjust::timing::LevelScale;
 use crate::exposure::ports::{CaptureProfiles, Lens, Properties};
 use crate::stock::adjust as stock;
 
 pub const CELLS: usize = 256;
 
-/// ProfileGeometry's tables and numerics the metering reads.
+/// ProfileGeometry's tables the metering reads.
 pub trait MeteringTables {
     /// The green, red and blue weights 0xef3434 fills for table 5, row 0.
     fn channel_weights(&mut self) -> [u16; 3];
     /// The profile's red and blue scales in 128ths (0xef643c).
     fn feature_bytes(&mut self, profile: u32) -> [u8; 2];
-    /// 0xee99f0.
-    fn log2_difference(&mut self, value: u32, reference: u32) -> i16;
 }
 
 /// Image 4's diagnostic trace points (0x72872c).
@@ -59,7 +58,7 @@ fn luminance([green_weight, red_weight, blue_weight]: [u16; 3], red: u32, green:
 /// The level of the cells' mean luminance and of their zone-weighted mean (0xfaf8a0).
 pub fn metered_levels(
     ports: &mut (impl Properties + Lens + CaptureProfiles),
-    tables: &mut impl MeteringTables,
+    tables: &mut (impl MeteringTables + LevelScale),
     trace: &mut impl DiagnosticTrace,
     sums: &CellSums,
     inputs: &MeteringInputs,

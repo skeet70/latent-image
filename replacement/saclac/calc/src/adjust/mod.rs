@@ -2,6 +2,7 @@
 //! exposure engine decide by.
 
 pub mod configuration;
+pub mod drive_step;
 pub mod focus_profile;
 pub mod focus_reuse;
 pub mod lens;
@@ -12,13 +13,17 @@ pub mod rate_policy;
 pub mod rate_samples;
 pub mod result_dispatch;
 pub mod sample_grid;
+pub mod scan_drive;
 pub mod scene_policy;
 pub mod scene_settings;
 pub mod search_targets;
 pub mod shot_trace;
+pub mod timing;
 
 #[cfg(test)]
 mod configuration_tests;
+#[cfg(test)]
+mod drive_step_tests;
 #[cfg(test)]
 pub(crate) mod fakes;
 #[cfg(test)]
@@ -37,6 +42,8 @@ mod rate_samples_tests;
 mod result_dispatch_tests;
 #[cfg(test)]
 mod sample_grid_tests;
+#[cfg(test)]
+mod scan_drive_tests;
 #[cfg(test)]
 mod scene_policy_tests;
 #[cfg(test)]
