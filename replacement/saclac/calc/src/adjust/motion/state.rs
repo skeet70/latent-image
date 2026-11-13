@@ -4,6 +4,7 @@
 use xm1_saclac_interface::calc::SharedAddress;
 
 use crate::adjust::motion::drive::{DriveKind, DriveProfile};
+use crate::adjust::motion::ports::Ticks;
 use crate::adjust::motion::sampling::{PRIMARY_AREAS, SECONDARY_AREAS};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -66,12 +67,17 @@ pub struct Drive {
     pub start_time: i32,
     /// Frames the run had taken before its recorded positions begin.
     pub first_frame: u16,
+    /// The exposure level lies in the window where the run checks for the contrast peak.
+    pub checks_peak: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MotionState {
     /// The focus section of the client's dump frame.
     pub(crate) section: SharedAddress,
+    /// The contrast results in the client's dump frame.
+    pub(crate) results: SharedAddress,
+    pub(crate) prepared_at: Ticks,
     pub(crate) drive_kind: DriveKind,
     pub(crate) timing: Timing,
     pub(crate) sampling: SampleSchedule,

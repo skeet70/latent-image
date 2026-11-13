@@ -2,7 +2,8 @@ use std::vec::Vec;
 
 use xm1_saclac_interface::calc::SharedAddress;
 
-use crate::adjust::motion::drive::{DriveKind, DriveProfile, Ramp};
+use crate::adjust::motion::drive::{DriveKind, DriveMode, DriveProfile, Ramp};
+use crate::adjust::motion::ports::Ticks;
 use crate::adjust::motion::fakes::Bench;
 use crate::adjust::motion::sampling::*;
 use crate::adjust::motion::state::{AreaLayout, Drive, MotionState, SampleSchedule, Timing};
@@ -27,10 +28,12 @@ fn cruise(start: i16, end: i16) -> DriveProfile {
 fn state(profile: DriveProfile, layout: AreaLayout, sampling: SampleSchedule) -> MotionState {
     MotionState {
         section: SECTION,
+        results: SharedAddress(0x2000_0000),
+        prepared_at: Ticks(0),
         drive_kind: DriveKind(7),
         timing: Timing { frame_period: 10_000 },
         sampling,
-        drive: Drive { moving: true, profile, layout, start_time: 0, first_frame: 0 },
+        drive: Drive { moving: true, profile, layout, ..Drive::default() },
     }
 }
 
@@ -138,7 +141,7 @@ fn a_replanning_drives_at_the_speed_the_run_measured() {
     assert_eq!(motion.drive.profile.second.speed, 600);
     assert_eq!(motion.drive.profile.cruise_duration, 53_333);
     assert_eq!(bench.word(trace::drive_planning(SECTION, 3)), Some(600));
-    assert_eq!(bench.kinds, [DriveKind(7); 3]);
+    assert_eq!(bench.kinds, [(DriveKind(7), DriveMode::MEASUREMENT); 3]);
 }
 
 #[test]

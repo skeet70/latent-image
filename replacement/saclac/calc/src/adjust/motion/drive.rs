@@ -11,15 +11,27 @@ use crate::stock::motion as trace;
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct DriveKind(pub u32);
 
-/// The drive limits image 4 keeps in its configuration; each entry is called for direction 0
-/// and drive step 8.
+/// The direction and drive step a limit is read for; the step selects one of four table columns
+/// (0x748018).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriveMode {
+    pub direction: u32,
+    pub step: u32,
+}
+
+impl DriveMode {
+    /// What the contrast measurement plans its drives for.
+    pub const MEASUREMENT: Self = Self { direction: 0, step: 8 };
+}
+
+/// The drive limits image 4 keeps in its configuration.
 pub trait DriveLimits {
     /// The highest speed the first ramp may reach (0x748090).
-    fn first_ramp_speed(&mut self, kind: DriveKind) -> u32;
+    fn first_ramp_speed(&mut self, kind: DriveKind, mode: DriveMode) -> u32;
     /// 0x748104.
-    fn first_ramp_acceleration(&mut self, kind: DriveKind) -> u32;
+    fn first_ramp_acceleration(&mut self, kind: DriveKind, mode: DriveMode) -> u32;
     /// 0xffff where the configuration sets none (0x7481c4).
-    fn second_ramp_acceleration(&mut self, kind: DriveKind) -> u32;
+    fn second_ramp_acceleration(&mut self, kind: DriveKind, mode: DriveMode) -> u32;
     /// A requested speed below it is driven as one cruise (0x747b24).
     fn slowest_ramped_speed(&mut self) -> u32;
 }
@@ -225,9 +237,9 @@ impl DriveProfile {
     /// Plans the drive's phases for up to `speed`, keeping its ends and direction (0xf969a8).
     pub fn plan(&mut self, speed: u32, kind: DriveKind, limits: &mut impl DriveLimits) -> Planning {
         let distance = self.distance();
-        let first_limit = limits.first_ramp_speed(kind);
-        let first_acceleration = limits.first_ramp_acceleration(kind);
-        let second_acceleration = limits.second_ramp_acceleration(kind);
+        let first_limit = limits.first_ramp_speed(kind, DriveMode::MEASUREMENT);
+        let first_acceleration = limits.first_ramp_acceleration(kind, DriveMode::MEASUREMENT);
+        let second_acceleration = limits.second_ramp_acceleration(kind, DriveMode::MEASUREMENT);
         let mut requested = speed;
         let mut cruise_speed = speed;
         let mut first = RampFit { speed: first_limit.min(requested), ..RampFit::default() };
