@@ -1,5 +1,7 @@
 use crate::*;
 
+pub mod exposure;
+
 pub const fn record_handle_from_a2(word: u32) -> RecordHandle { RecordHandle(word) }
 
 pub const fn record_handle_word(handle: RecordHandle) -> u32 { handle.0 }
