@@ -50,6 +50,33 @@ The stage smoke declares each side's entry call closure rather than every candid
 
 The application crate (root `src/lib.rs`) holds the mode frontends, audio release, capture task 3 and the recording path (the task 43 machines, scan, profiles, statistics and completion callbacks) over a shared guest address space. `:host-tests` runs its host tests and `:arm-core` builds the ARM rlib. It cannot link: the ARM rlib leaves over a thousand `xm1_power_record_helper_*` symbols undefined that no unit provides, 34 sites call a guest word as a function pointer instead of resolving it through the leaf's registry, and the unit's review findings are open. Nothing links either crate into a firmware image, and the event-flag carriers the application needs from the RTOS platform are not in the platform images.
 
+## saclac
+
+[`saclac/`](saclac/) is the task 43 engine: the owned dispatcher at `0xefca6c` and machine 0's router at `0xefcb88` over stock's 37 machine tables, with every action still a stock word. `//replacement/saclac:saclac` is the rlib for the owned image; `//replacement/saclac:saclac-image` links it in place at the two stock extents for the comparison. `//replacement/saclac:host-tests` runs the core's tests, and `//replacement/saclac:saclac-suite RUNNER OUTPUT IMAGE5 OWNED_ELF WRONG_ELF` runs the stock-against-owned comparison, the wrong-r3 image as its control, and writes the report and its verdict.
+
+The two extents are declared once, in `Replacement.Saclac.Artifact.extents`:
+
+- `//replacement/saclac:saclac-extents linker-script` prints the linker script the image links with; `:saclac-extents census-sites SITES OUTPUT` writes a census sites file with its `watch` ranges taken from the same extents.
+- `//replacement/saclac:saclac-extent-refs --listing NAME=PATH ... --output PATH` reports every branch, data word, `movw`/`movt` pair and PC-relative address computation whose target lies inside the extents, and which of them start outside.
+- `//replacement/saclac:saclac-placement-tests LINKED_BIN SYMBOLS DISASM SECTIONS` admits the linked image and runs the refusal controls.
+- `//replacement/saclac:stage-saclac ENCODER REBUILD DECODER SOURCE_DAT IMAGE5 LINKED_BIN SYMBOLS DISASM SECTIONS SCRATCH_DIR OUT_IMAGE5 OUT_DAT OUT_CONTRACT` admits, installs and stages record 5 (13 positional arguments).
+- `//replacement/saclac:saclac-census-compare STOCK_JSON CANDIDATE_JSON CONTRACT_JSON OUTPUT_JSON [MILESTONE_PHASE]` compares two census reports and reports every machine's sequence, the dispatcher-entry identity, the trap fetches and, when both reports carry the named milestone, every machine's sequence up to each side's first sighting of it (default `shooting-menu`).
+
+The census sites file keeps the watch points, the action ranges and the `dispatch` table addresses; the `watch` ranges are generated from the extents by `//replacement/saclac:saclac-census-sites`.
+
+Admission is split between the binary and the source. `saclac-placement-tests` checks from the ELF and the bytes that every owned symbol and allocated section lies inside the two extents, that no section is writable or NOBITS, that the two entry veneers sit at their stock addresses, that the count arrays match the declared table extents, that every literal pool entry names an owned address or a declared external or stock array, that every direct branch targets owned instructions or a declared external, that no store uses a base a code literal loaded, that control never enters a data word, that every function's frame comes from its prologue, that the direct call graph has no cycle and no chain above 1,024 bytes of task 43's 0x1000-byte stack, and that unused extent bytes are the trap word. A register branch or call is admitted only inside the symbol extent of a function compiled from `src/stock.rs`; the placement check does not re-derive the target's provenance from instructions. The source carries that provenance through `StockCodeWord`. Memory safety inside owned code rests on the compiler and the bounded types: the crate root denies `unsafe_code`, `src/engine.rs` and `src/machine0.rs` forbid it, and every index is a bounded type parsed at entry. The comparison suites exercise retained callers' entries and the census watches for fetches in trap-filled retired bytes. `src/stock.rs` is the crate's only module allowed `unsafe`, whose blocks are:
+
+| Block | Invariant |
+| --- | --- |
+| `read_word`, `read_word_indexed`, `read_half` | The address is a declared stock array plus a 4- or 2-byte-scaled `Machine` index, so it is inside that array and aligned for the width. |
+| `write_half` | The address is the rows or states array plus a 2-byte-scaled `Machine` index; these are the only stock-memory writes. |
+| `call3` | The word is the declared trace external `0xf46c38`, a stock function entry with the `(u32, u32, u32) -> i32` signature. |
+| `RawCells::action`, `RawCells::next` | The base is the machine's cell-table word; `CellIndex` is below the declared cell count. |
+| `RawWords::word` | The base is the machine's action or second table word; `WordIndex` is below that table's declared count. |
+| `enter_word` | The word is a nonzero word read from a declared machine table below its count, and stock code words take the four-word signature with the table base in r2 and the word in r3. |
+
+The shim rows are in [the register](shims.md#saclac).
+
 ## Native rewrite qualification
 
 For an applicable native-only increment, run the native SDK and runner suites plus the affected caller's qualification command:

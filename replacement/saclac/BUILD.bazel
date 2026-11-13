@@ -1,0 +1,289 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+_SOURCES = ["src/engine.rs", "src/machine0.rs", "src/stock.rs"]
+
+# The unit's rlib: the engine and machine 0's router, joined into the owned image later.
+xm1_rust_rlib(
+    name = "saclac",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac",
+    rustc_flags = ["-C", "jump-tables=no"],
+    data = _SOURCES,
+)
+
+# The same crate with the image's panic handler, linked for the comparison.
+xm1_rust_staticlib(
+    name = "saclac-rust",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac",
+    rustc_flags = ["-C", "jump-tables=no", "--cfg", "saclac_image"],
+    data = _SOURCES,
+)
+
+xm1_rust_elf(
+    name = "saclac-image",
+    rust_staticlib = ":saclac-rust",
+    asm_srcs = ["entry.S"],
+    entry = "xm1_saclac_dispatch_entry",
+    link_script = ":saclac.ld",
+    extra_ldflags = ["-Wl,--gc-sections"],
+)
+
+# The comparison's deliberately wrong variant: the action entry sees the table base in r3.
+xm1_rust_staticlib(
+    name = "saclac-rust-wrong-r3",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac",
+    rustc_flags = ["-C", "jump-tables=no", "--cfg", "saclac_image", "--cfg", "saclac_wrong_r3"],
+    data = _SOURCES,
+)
+
+xm1_rust_elf(
+    name = "saclac-image-wrong-r3",
+    rust_staticlib = ":saclac-rust-wrong-r3",
+    asm_srcs = ["entry.S"],
+    entry = "xm1_saclac_dispatch_entry",
+    link_script = ":saclac.ld",
+    extra_ldflags = ["-Wl,--gc-sections"],
+)
+
+# The two extents are typed once, in Replacement.Saclac.Artifact; this emits the
+# linker script and the census sites file from them.
+haskell_library(
+    name = "saclac-placement",
+    srcs = ["Replacement/Saclac/Placement.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":saclac-artifact",
+        "//host:aeson",
+        "//host:base",
+    ],
+)
+
+haskell_binary(
+    name = "saclac-extents",
+    srcs = ["ExtentsMain.hs"],
+    main_file = "ExtentsMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":saclac-placement",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+    ],
+)
+
+genrule(
+    name = "saclac-linker-script",
+    outs = ["saclac.ld"],
+    cmd = "$(location :saclac-extents) linker-script > $@",
+    tools = [":saclac-extents"],
+)
+
+genrule(
+    name = "saclac-census-sites",
+    srcs = ["//emulation:saclac-census-sites"],
+    outs = ["saclac-census-sites.json"],
+    cmd = "$(location :saclac-extents) census-sites $(location //emulation:saclac-census-sites) $@",
+    tools = [":saclac-extents"],
+)
+
+haskell_library(
+    name = "saclac-references",
+    srcs = ["Replacement/Saclac/References.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":saclac-artifact",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_binary(
+    name = "saclac-extent-refs",
+    srcs = ["ReferencesMain.hs"],
+    main_file = "ReferencesMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":saclac-references",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+    ],
+)
+
+genrule(
+    name = "saclac-image-sections",
+    srcs = [":saclac-image.elf"],
+    outs = ["saclac-image.sections"],
+    cmd = "$(location @lab_llvm//:bin/llvm-readelf) -S $(location :saclac-image.elf) > $@",
+    tools = ["@lab_llvm//:bin/llvm-readelf"],
+)
+
+haskell_library(
+    name = "saclac-artifact",
+    srcs = ["Replacement/Saclac/Artifact.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:image4-staging-lib",
+        "//emulation:mutation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:first-stage",
+        "//host:host-support",
+        "//host/firmware:bank-allowlist",
+        "//replacement/record5_staging:record5-staging",
+    ],
+)
+
+haskell_binary(
+    name = "stage-saclac",
+    srcs = ["StageMain.hs"],
+    main_file = "StageMain.hs",
+    args = [
+        "$(rootpath //lz:lz-encode)",
+        "$(rootpath //host/firmware:rebuild-update)",
+        "$(rootpath //lz:fflzd)",
+    ],
+    data = [
+        "//host/firmware:rebuild-update",
+        "//lz:fflzd",
+        "//lz:lz-encode",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":saclac-artifact",
+        "//emulation:image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "saclac-placement-tests",
+    srcs = ["Tests.hs"],
+    args = [
+        "$(rootpath :saclac-image.bin)",
+        "$(rootpath :saclac-image.symbols)",
+        "$(rootpath :saclac-image.disasm)",
+        "$(rootpath :saclac-image-sections)",
+    ],
+    data = [
+        ":saclac-image-sections",
+        ":saclac-image.bin",
+        ":saclac-image.disasm",
+        ":saclac-image.symbols",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":saclac-artifact",
+        "//host:base",
+        "//host:bytestring",
+        "//host:first-stage",
+        "//host:host-support",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_binary(
+    name = "saclac-census-compare",
+    srcs = ["CensusCompareMain.hs"],
+    main_file = "CensusCompareMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:host-support",
+        "//host:text",
+    ],
+)
+
+genrule(
+    name = "host-tests",
+    srcs = ["src/lib.rs", "src/tests.rs"] + _SOURCES,
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+    outs = ["host-tests.passed"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test $(location src/lib.rs) -o $(@D)/host-tests && $(@D)/host-tests && touch $@",
+)
+
+haskell_library(
+    name = "suite-lib",
+    srcs = ["Replacement/Saclac/Suite.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:judge-lib",
+        "//emulation:mutation",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//emulation:scenario-generation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host/firmware:bank-allowlist",
+        "//replacement/saclac:saclac-artifact",
+    ],
+)
+
+haskell_binary(
+    name = "saclac-suite",
+    srcs = ["SaclacMain.hs"],
+    main_file = "SaclacMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":suite-lib",
+        "//emulation:case-sha256",
+        "//emulation:judge-lib",
+        "//emulation:suite-audit-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+    ],
+)
+
+filegroup(
+    name = "all",
+    srcs = [
+        ":host-tests",
+        ":saclac",
+        ":saclac-artifact",
+        ":saclac-census-compare",
+        ":saclac-census-sites",
+        ":saclac-extent-refs",
+        ":saclac-extents",
+        ":saclac-image",
+        ":saclac-image-sections",
+        ":saclac-image-wrong-r3",
+        ":saclac-linker-script",
+        ":saclac-placement",
+        ":saclac-references",
+        ":saclac-rust-wrong-r3",
+        ":saclac-suite",
+        ":stage-saclac",
+    ],
+)

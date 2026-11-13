@@ -429,5 +429,14 @@
       "start": "0x00f106c8",
       "end": "0x00f10808"
     }
-  ]
+  ],
+  "dispatch": {
+    "trace": "0x00f46c38",
+    "cell_tables": "0x00f12f70",
+    "action_tables": "0x00f133ec",
+    "state_counts": "0x00f1158c",
+    "rows": "0x0169d468",
+    "states": "0x0169d4b4",
+    "machines": 37
+  }
 }

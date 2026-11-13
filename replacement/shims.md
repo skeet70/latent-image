@@ -565,6 +565,17 @@ The owned timer heap.
 | --- | --- | --- | --- | --- | --- |
 | `xm1_rtos_timer_initialize`, `_insert`, `_remove`, `_tick` exports placed by `timer-a.ld`/`timer-b.ld` at `0x44a50`-family addresses | stock-ABI export | stock timer callers | no | every timer caller is owned or migrated | required |
 
+## saclac
+
+The task 43 engine: the owned dispatcher and machine 0's router over stock's 37 machine tables, entered at the two stock extents they retire. No machine is owned yet, so every action is a stock action word.
+
+| Shim | Kind | Other side | Owned now | Removal condition | State |
+| --- | --- | --- | --- | --- | --- |
+| the two image-5 extents `[0xefca6c,0xefcb88)` and `[0xefcb88,0xefd2fc)`, 1,164 owned bytes of the 2,192-byte pair, written by `stage-saclac` through record-5 staging, with the entry veneers `xm1_saclac_dispatch_entry` and `xm1_saclac_router_entry` from `entry.S` placed at `0xefca6c` and `0xefcb88` by the linker script generated from `Replacement.Saclac.Artifact.extents` and the remaining bytes the trap word `0xe7f000f0` | veneer or carrier at a stock address | the stock actor at `0xf01bc8`, the 36 stock row functions that call the dispatcher, and the nested row calls from actions | no | every machine owned | required |
+| `StockTables`, `StockPorts` and the guest addresses in `src/stock.rs`, with the four per-machine count arrays `SACLAC_CELL_COUNTS`, `SACLAC_ACTION_COUNTS`, `SACLAC_SECOND_COUNTS` and `SACLAC_ROW_COUNTS` and machine 0's row map `SACLAC_ROW_MAP` exported for the layout check | guest-memory layout view | the cell, action and second tables at `0xf12f70`, `0xf133ec` and `0xf12074`, the state counts at `0xf1158c`, and the two halfword arrays | no | every machine owned | required |
+| the trace entry `0xf46c38` called through the literal word at `0xefcce4`, declared in `Replacement.Saclac.Artifact.retainedExternals` | trampoline into retained stock | the stock trace body at `0xf46c38` | no | the trace recorder is owned | required |
+| stock action words and second-table words entered through `StockCodeWord` with r2 = the machine's table base word and r3 = the entered word, the values stock's dispatcher holds at `0xefcb20` and `0xefcb58` | trampoline into retained stock | the 813 distinct action words the cells reference, all image-5 code addresses, of which 701 are declared function starts and 112 are entries the decomp does not declare; no cell selects a second-table word; no entry reads r2, and 224 save r3 in a store-multiple prologue, the only r3 read the walk finds | no | every machine owned | required |
+
 ## save
 
 The save facade and its retained image-5 services.

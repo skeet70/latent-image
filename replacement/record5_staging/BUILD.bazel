@@ -30,6 +30,11 @@ _IMAGES = [
 
 # Canonical inputs come from private-data; SCRATCH_DIR must lie under private-data/scratch/app154:
 # bazel run //replacement/record5_staging:record5-staging-canonical-tests -- CANONICAL_DAT IMAGE4 IMAGE5 SCRATCH_DIR
+filegroup(
+    name = "all",
+    srcs = [":record5-staging"],
+)
+
 haskell_test(
     name = "record5-staging-canonical-tests",
     srcs = ["CanonicalTests.hs"],

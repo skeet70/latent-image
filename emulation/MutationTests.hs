@@ -86,6 +86,18 @@ main = do
   check "a conditional store keeps its condition in the no-op"
     (variantMutated conditional == 0x11a00000)
 
+  -- A call returns: the walk continues past a linked register call and reaches
+  -- the branch and stores after it. An unlinked register branch still ends it.
+  indirectElf <- either fail pure (E.parseElf (syntheticElf 0x1000 indirectWords indirectSymbols))
+  indirectSites <- either fail pure (eligibleSites indirectElf [Extent "indirect" 0x1000 0x1c])
+  check "a linked register call does not end the site walk"
+    (map siteAddress indirectSites == [0x1004, 0x1008, 0x1014])
+  check "the sites after a linked register call keep their kinds"
+    (map siteKind indirectSites == [BranchInverted, StoreDropped, StoreDropped])
+  branchElf <- either fail pure (E.parseElf (syntheticElf 0x1000 [0xe12fff13, 0xe5810000] [SynthSymbol "$a" 0x1000 0]))
+  branchSites <- either fail pure (eligibleSites branchElf [Extent "register-branch" 0x1000 0x8])
+  check "an unlinked register branch still ends the site walk" (null branchSites)
+
   -- The refusal paths.
   thumbElf <- either fail pure (E.parseElf (syntheticElf 0x1000 codeWords (symbols ++ [SynthSymbol "$t" 0x1030 0])))
   case eligibleSites thumbElf extents of
@@ -154,6 +166,21 @@ codeWords =
   , 0xe92d4010, 0xe8a00002, 0xe12fff1e, 0xe5c32001
   , 0xe59f1000, 0xe5801000, 0xe92d4010, 0xe12fff1e
   , 0xe3500000, 0xe5810000, 0xe12fff1e
+  ]
+
+-- 0x1000: blx r3 (a call); 0x1004: beq 0x1014; 0x1008: str r0, [r1];
+-- 0x100c: b 0x1018; 0x1010: str r0, [r1] (skipped by the branch);
+-- 0x1014: strh r0, [r1, #4] (skipped by the branch); 0x1018: bx lr.
+indirectWords :: [Word32]
+indirectWords =
+  [ 0xe12fff33, 0x0a000002, 0xe5810000, 0xea000001
+  , 0xe5810000, 0xe1c100b4, 0xe12fff1e
+  ]
+
+indirectSymbols :: [SynthSymbol]
+indirectSymbols =
+  [ SynthSymbol "$a" 0x1000 0
+  , SynthSymbol "indirect" 0x1000 0x1c
   ]
 
 -- | A minimal little-endian ELF32 executable: a .text section at 0x1000, one

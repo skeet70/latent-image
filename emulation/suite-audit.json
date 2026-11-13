@@ -1037,6 +1037,37 @@
    "cases_source": "emulation/MenuEngineRefusalCases.hs:caseEntry",
    "cases_derived_at": "49489f81",
    "cases_verified": false
+  },
+  {
+   "name": "saclac-engine",
+   "note": "Saclac's dispatcher at 0x00efca6c and machine 0's router at 0x00efcb88 over stock's tables; every stock action word is a recording stub, so the action bodies are import rows.",
+   "image": {
+    "path": "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin",
+    "base": "0xbf1a00",
+    "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
+   },
+   "bound": {
+    "kind": "declared",
+    "source": "Replacement/Saclac/Artifact.hs",
+    "entries": [
+     {
+      "address": "0x00efca6c",
+      "size": "0x0000011c",
+      "name": "xm1_saclac_dispatch_entry"
+     },
+     {
+      "address": "0x00efcb88",
+      "size": "0x00000774",
+      "name": "xm1_saclac_router_entry"
+     }
+    ],
+    "derived_at": "SaclacEngine",
+    "verified": false
+   },
+   "cases": "emulation/suite-audit-cases/saclac-engine.json",
+   "cases_source": "replacement/saclac/Replacement/Saclac/Suite.hs:fixedScenarios",
+   "cases_derived_at": "SaclacEngine",
+   "cases_verified": false
   }
  ]
 }

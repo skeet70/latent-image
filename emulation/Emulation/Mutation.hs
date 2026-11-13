@@ -29,6 +29,7 @@ module Emulation.Mutation
   , MutationError (..)
   , renderMutationError
   , eligibleSites
+  , successors
   , planMutations
   , mutatedWord
   , Variant (..)
@@ -111,7 +112,7 @@ data Site = Site
 -- | Bumped when the site rule or the mutated words change, so a recorded seed
 -- is never read against a different generator.
 mutationVersion :: GeneratorVersion
-mutationVersion = GeneratorVersion "mutants-1"
+mutationVersion = GeneratorVersion "mutants-2"
 
 -- | The corpus bound shared with the scenario generator.
 mutationCountLimit :: Int
@@ -233,13 +234,15 @@ sitesIn elf mappings targets extent = walk [extentStart extent] S.empty []
              in walk (successors address instruction ++ rest) (S.insert address visited) found'
 
 -- | The successor addresses of an instruction the walk may continue into.
--- Anything that writes the PC and is not an ordinary branch ends the walk.
+-- A call returns, so a linked branch or a linked register call continues at the
+-- next instruction; every other PC write ends the walk.
 successors :: Word32 -> A32.Instruction -> [Word32]
 successors address instruction = case instruction of
   A32.Branch (A32.Cond 14) False target -> [target]
   A32.Branch _ False target -> [address + 4, target]
   A32.Branch _ True target -> [address + 4, target]
-  A32.BranchExchange _ _ _ -> []
+  A32.BranchExchange _ True _ -> [address + 4]
+  A32.BranchExchange _ False _ -> []
   A32.LoadMultiple _ _ _ _ registers | A32.pc `elem` registers -> []
   A32.Load _ _ _ register _ _ _ | register == A32.pc -> []
   A32.DataProcessing _ _ _ register _ _ | register == A32.pc -> []

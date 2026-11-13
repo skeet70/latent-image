@@ -1758,6 +1758,7 @@ sh_binary(
 filegroup(
     name = "saclac-census-sites",
     srcs = ["saclac-census-sites.json"],
+    visibility = ["//visibility:public"],
 )
 
 sh_binary(

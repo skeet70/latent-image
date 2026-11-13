@@ -1,0 +1,19 @@
+{
+ "schema": 1,
+ "suite": "saclac-engine",
+ "source": "Replacement.Saclac.Suite fixedScenarios",
+ "entries": [
+  {
+   "case": "reenter-own",
+   "entry": "0x00efca6c",
+   "extent": 284,
+   "stock": "image"
+  },
+  {
+   "case": "router-event",
+   "entry": "0x00efcb88",
+   "extent": 1908,
+   "stock": "image"
+  }
+ ]
+}

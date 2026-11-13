@@ -7,6 +7,7 @@
 use fujimod_emulator::board::factory::MemoryMap;
 use fujimod_emulator::board::observation::{MemoryWatch, ViewPolicy, WatchKinds, WatchRange};
 use fujimod_xm1::bridge::{read, sha256, write};
+use fujimod_xm1::trace::SiteRead;
 use fujimod_xm1::guest::{GpioKey, ModeDialPosition, RouteKey, ShutterStage};
 use fujimod_xm1::machine::{Hold, KeyPulse, MENU_PULSE, Machine, RunOutcome, key_pulse};
 use fujimod_xm1::run::{self, RunDocument, ValidatedUpdate};
@@ -25,6 +26,8 @@ const ADDRESS_LIMIT: usize = 32_768;
 const INSTRUCTION_LIMIT: u64 = 1_500_000_000;
 const WATCH_LIMIT: usize = 1 << 20;
 const SEGMENT_INSTRUCTIONS: u64 = 50_000_000;
+const DISPATCH_LIMIT: usize = 200_000;
+const WATCH_DECL_LIMIT: usize = 16;
 
 const INITIAL_MENU: u64 = 80_000_000;
 const SETUP_SETTLE: u64 = 40_000_000;
@@ -84,6 +87,24 @@ struct ActionRange {
     end: String,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+struct DispatchSites {
+    trace: String,
+    cell_tables: String,
+    action_tables: String,
+    state_counts: String,
+    rows: String,
+    states: String,
+    machines: u8,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct WatchDecl {
+    label: String,
+    start: String,
+    end: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct Sites {
     schema: u32,
@@ -91,6 +112,10 @@ struct Sites {
     state_base: String,
     points: Vec<SitePoint>,
     action_ranges: Vec<ActionRange>,
+    #[serde(default)]
+    dispatch: Option<DispatchSites>,
+    #[serde(default)]
+    watch: Vec<WatchDecl>,
 }
 
 struct Site {
@@ -106,11 +131,29 @@ struct Range {
     end: u32,
 }
 
+struct Dispatch {
+    trace: u32,
+    cell_tables: u32,
+    action_tables: u32,
+    state_counts: u32,
+    rows: u32,
+    states: u32,
+    machines: u8,
+}
+
+struct Watch {
+    label: String,
+    start: u32,
+    end: u32,
+}
+
 struct Plan {
     task_id: u8,
     state_base: u32,
     points: Vec<Site>,
     ranges: Vec<Range>,
+    dispatch: Option<Dispatch>,
+    watch: Vec<Watch>,
 }
 
 fn load_sites(bytes: &[u8]) -> Result<Plan, String> {
@@ -156,7 +199,38 @@ fn load_sites(bytes: &[u8]) -> Result<Plan, String> {
     for pair in ranges.windows(2) {
         require(pair[0].end <= pair[1].start, "sites: two action ranges overlap")?;
     }
-    Ok(Plan { task_id: sites.task_id, state_base, points, ranges })
+    let dispatch = match &sites.dispatch {
+        None => None,
+        Some(declared) => {
+            let dispatch = Dispatch {
+                trace: parse_hex(&declared.trace)?,
+                cell_tables: parse_hex(&declared.cell_tables)?,
+                action_tables: parse_hex(&declared.action_tables)?,
+                state_counts: parse_hex(&declared.state_counts)?,
+                rows: parse_hex(&declared.rows)?,
+                states: parse_hex(&declared.states)?,
+                machines: declared.machines,
+            };
+            require(dispatch.machines > 0 && dispatch.machines <= 37, "sites: dispatch machine count leaves 1..37")?;
+            require(dispatch.trace % 4 == 0 && dispatch.cell_tables % 4 == 0 && dispatch.action_tables % 4 == 0
+                && dispatch.state_counts % 2 == 0 && dispatch.rows % 2 == 0 && dispatch.states % 2 == 0,
+                "sites: a dispatch address is misaligned")?;
+            Some(dispatch)
+        }
+    };
+    require(sites.watch.len() <= WATCH_DECL_LIMIT, "sites: more watch ranges than the engine admits")?;
+    let mut watch = Vec::with_capacity(sites.watch.len());
+    let mut watch_labels = std::collections::BTreeSet::new();
+    for declared in &sites.watch {
+        let (start, end) = (parse_hex(&declared.start)?, parse_hex(&declared.end)?);
+        require(start % 4 == 0 && end % 4 == 0 && start < end, "sites: a watch range is not a nonempty word range")?;
+        require(!declared.label.is_empty() && watch_labels.insert(declared.label.clone()), "sites: two watch ranges share a label")?;
+        require(!ranges.iter().any(|range| start < range.end && range.start < end), "sites: a watch range overlaps an action range")?;
+        require(!watch.iter().any(|range: &Watch| start < range.end && range.start < end), "sites: two watch ranges overlap")?;
+        watch.push(Watch { label: declared.label.clone(), start, end });
+    }
+    watch.sort_by_key(|range| range.start);
+    Ok(Plan { task_id: sites.task_id, state_base, points, ranges, dispatch, watch })
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -222,11 +296,11 @@ impl From<StepShape> for Step {
 struct MenuTriple { menu: u32, setting: u32, cursor: u32 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
-struct Pulse { key: Key, pressed: u64, released: u64, debounced: bool }
+struct Pulse { key: Key, pressed: u64, released: u64, settled: u64, debounced: bool }
 
 /// One shutter, play or dial input, with the row's debounced release.
 #[derive(Clone, Copy, Debug, Serialize)]
-struct PressRow { kind: PressKind, pressed: u64, released: u64, debounced: bool }
+struct PressRow { kind: PressKind, pressed: u64, released: u64, settled: u64, debounced: bool }
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -241,9 +315,19 @@ struct Milestone {
     phase: String,
     pulse: Option<Pulse>,
     expected: MenuTriple,
+    /// The first instruction at which the expected menu was observed while settling.
+    first: Option<u64>,
     reached: Option<u64>,
     observed: Option<MenuTriple>,
     finished: u64,
+}
+
+/// One poll of a settling menu, with both cores' instruction counts.
+#[derive(Clone, Copy, Debug, Serialize)]
+struct MenuSample {
+    instructions: u64,
+    menu: Option<MenuTriple>,
+    counts: Option<[u64; 2]>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -325,6 +409,7 @@ struct Stop {
     address: u32,
     instructions: u64,
     registers: BTreeMap<&'static str, String>,
+    memory: Vec<String>,
     sp: String,
     lr: String,
     cpsr: u32,
@@ -333,13 +418,24 @@ struct Stop {
 #[derive(Clone, Debug, Deserialize)]
 struct FetchRow { source: String, address: u64 }
 
+fn containing(ranges: impl Iterator<Item = (u32, u32)>, address: u32) -> Option<usize> {
+    ranges.enumerate().find(|(_, (start, end))| *start <= address && address < *end).map(|(index, _)| index)
+}
+
 struct FetchWatch { watch: Box<MemoryWatch>, started: u64 }
 impl FetchWatch {
     fn begin(machine: &Machine, maps: &[MemoryMap], classes: Vec<WatchRange>) -> Result<Self, String> {
         let watch = machine.session.board.memory_watch_begin_classified(classes, WATCH_LIMIT, maps.to_vec(), ViewPolicy::Observe)?;
         Ok(Self { watch, started: machine.instructions() })
     }
-    fn end(mut self, machine: &Machine, plan: &[Range], stats: &mut [RangeStats]) -> Result<(), String> {
+    fn end(
+        mut self,
+        machine: &Machine,
+        plan: &[Range],
+        watch: &[Watch],
+        stats: &mut [RangeStats],
+        watch_stats: &mut [RangeStats],
+    ) -> Result<(), String> {
         let state = self.watch.records.borrow().state();
         let ended = machine.session.board.memory_watch_end(&mut self.watch);
         if let Some(violation) = state.get("violation").and_then(serde_json::Value::as_str) {
@@ -352,11 +448,10 @@ impl FetchWatch {
                 continue;
             }
             let address = u32::try_from(row.address).map_err(|_| "fetch row exceeds 32 bits".to_owned())?;
-            let index = plan.partition_point(|range| range.start <= address);
-            if let Some(index) = index.checked_sub(1) {
-                if address < plan[index].end {
-                    stats[index].fetch(address);
-                }
+            if let Some(index) = containing(plan.iter().map(|range| (range.start, range.end)), address) {
+                stats[index].fetch(address);
+            } else if let Some(index) = containing(watch.iter().map(|range| (range.start, range.end)), address) {
+                watch_stats[index].fetch(address);
             }
         }
         ended
@@ -430,6 +525,31 @@ struct Queue43 {
     callers: Vec<Counted<u32>>,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+struct DispatchEvent {
+    machine: u8,
+    state: u16,
+    row: u16,
+    action: Address,
+    instructions: u64,
+}
+
+#[derive(Serialize)]
+struct DispatchTrace {
+    events: Vec<DispatchEvent>,
+    overflow: u64,
+}
+
+#[derive(Serialize)]
+struct WatchRow {
+    label: String,
+    start: Address,
+    end: Address,
+    fetches: u64,
+    addresses: Vec<Counted<u32>>,
+    address_overflow: u64,
+}
+
 #[derive(Serialize)]
 struct Report<'a> {
     schema: u32,
@@ -439,14 +559,72 @@ struct Report<'a> {
     instructions: u64,
     counts: Option<[u64; 2]>,
     milestones: &'a [Milestone],
+    menu_trace: &'a [MenuSample],
     presses: &'a [PressRow],
     mode_dial: Option<DialRow>,
     points: Vec<PointRow<'a>>,
     dispatcher: Dispatcher,
     queue43: Queue43,
     action_ranges: Vec<RangeRow>,
+    dispatch: Option<DispatchTrace>,
+    watch: Vec<WatchRow>,
     error: Option<String>,
     machine_failure: Option<String>,
+}
+
+
+fn decode_hex(text: &str) -> Result<Vec<u8>, String> {
+    require(text.len() % 2 == 0, "a dispatcher site read is not whole bytes")?;
+    (0..text.len() / 2)
+        .map(|index| u8::from_str_radix(&text[index * 2..index * 2 + 2], 16).map_err(|_| "a dispatcher site read is not hexadecimal".to_string()))
+        .collect()
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes([bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]])
+}
+
+/// The dispatcher's inputs and selected action at one entry: the row the router
+/// stored, the state the arrays hold, and the word the cell selects.
+fn dispatch_event(machine: &Machine, dispatch: &Dispatch, stop: &Stop) -> Result<DispatchEvent, String> {
+    let register = |name: &str| stop.registers.get(name).and_then(|text| parse_hex(text).ok()).ok_or("a trace entry lacks a register");
+    let index = register("r0")?;
+    let state = u16::try_from(register("r1")?).map_err(|_| "a trace state exceeds a halfword")?;
+    let row = u16::try_from(register("r2")?).map_err(|_| "a trace row exceeds a halfword")?;
+    require(index < u32::from(dispatch.machines), "a trace machine index leaves the declared tables")?;
+    require(stop.memory.len() == 5, "a trace entry lacks its five site reads")?;
+    let cells = decode_hex(&stop.memory[0])?;
+    let actions = decode_hex(&stop.memory[1])?;
+    let counts = decode_hex(&stop.memory[2])?;
+    let machine_index = usize::try_from(index).map_err(|_| "trace machine index exceeds the host")?;
+    let cell_base = read_u32(&cells, machine_index * 4);
+    let action_base = read_u32(&actions, machine_index * 4);
+    let state_count = read_u16(&counts, machine_index * 2);
+    let action = if cell_base == 0 {
+        0
+    } else {
+        let cell_index = u32::from(state).wrapping_add(u32::from(row).wrapping_mul(u32::from(state_count))) as u16;
+        let mut cell = [0u8; 2];
+        machine.session.board.read_memory(stop.core, u64::from(cell_base) + u64::from(cell_index) * 2, &mut cell)?;
+        if cell[0] == 0 {
+            0
+        } else {
+            let mut word = [0u8; 4];
+            machine.session.board.read_memory(stop.core, u64::from(action_base) + u64::from(cell[0]) * 4, &mut word)?;
+            u32::from_le_bytes(word)
+        }
+    };
+    Ok(DispatchEvent {
+        machine: u8::try_from(index).map_err(|_| "dispatcher machine index exceeds a byte")?,
+        state,
+        row,
+        action: Address(action),
+        instructions: stop.instructions,
+    })
 }
 
 struct Census<'a> {
@@ -454,9 +632,13 @@ struct Census<'a> {
     maps: Vec<MemoryMap>,
     points: Vec<PointStats>,
     ranges: Vec<RangeStats>,
+    watch_ranges: Vec<RangeStats>,
+    dispatch: Vec<DispatchEvent>,
+    dispatch_overflow: u64,
     watch: Option<FetchWatch>,
     phase: String,
     milestones: Vec<Milestone>,
+    menu_trace: Vec<MenuSample>,
     presses: Vec<PressRow>,
     mode_dial: Option<DialRow>,
 }
@@ -471,18 +653,32 @@ impl<'a> Census<'a> {
             start: u64::from(range.start),
             end: u64::from(range.end),
             kinds: WatchKinds::CPU_FETCH,
-        }).collect()
+        }).chain(self.plan.watch.iter().map(|range| WatchRange {
+            start: u64::from(range.start),
+            end: u64::from(range.end),
+            kinds: WatchKinds::CPU_FETCH,
+        })).collect()
     }
 
     fn restart_watch(&mut self, machine: &Machine) -> Result<(), String> {
         let watch = self.watch.take().ok_or("action fetch watch is not active")?;
-        watch.end(machine, &self.plan.ranges, &mut self.ranges)?;
+        watch.end(machine, &self.plan.ranges, &self.plan.watch, &mut self.ranges, &mut self.watch_ranges)?;
         self.watch = Some(FetchWatch::begin(machine, &self.maps, self.classes())?);
         Ok(())
     }
 
     fn stop(&mut self, machine: &Machine, stops: &[Stop]) -> Result<(), String> {
         for stop in stops {
+            if let Some(dispatch) = &self.plan.dispatch {
+                if stop.address == dispatch.trace {
+                    if self.dispatch.len() >= DISPATCH_LIMIT {
+                        self.dispatch_overflow += 1;
+                    } else {
+                        let event = dispatch_event(machine, dispatch, stop)?;
+                        self.dispatch.push(event);
+                    }
+                }
+            }
             let Some(index) = self.point_index(stop.address) else { continue };
             let register = |name: &str| stop.registers.get(name).and_then(|text| parse_hex(text).ok()).unwrap_or(0);
             let r0 = register("r0");
@@ -529,6 +725,7 @@ impl<'a> Census<'a> {
                     address: parse_hex(&hit.address)?,
                     instructions: hit.instructions,
                     registers: hit.registers.clone(),
+                    memory: hit.memory.clone(),
                     sp: hit.sp.clone(),
                     lr: hit.lr.clone(),
                     cpsr: hit.cpsr,
@@ -558,21 +755,21 @@ impl<'a> Census<'a> {
     fn pulse(&mut self, machine: &mut Machine, key: Key, pulse: KeyPulse) -> Result<Pulse, String> {
         let Some(route) = key.route() else {
             let gpio = machine.document.firmware.fn_key(&machine.session)?;
-            let (pressed, released, debounced) = self.gpio_row(machine, gpio, pulse)?;
-            return Ok(Pulse { key, pressed, released, debounced });
+            let (pressed, released, settled, debounced) = self.gpio_row(machine, gpio, pulse)?;
+            return Ok(Pulse { key, pressed, released, settled, debounced });
         };
         let pressed = machine.instructions();
         machine.press(route)?;
         self.hold(machine, pulse.hold)?;
         machine.release_key(route)?;
         let released = machine.instructions();
-        let debounced = loop {
-            if machine.document.firmware.released(&machine.session, route)? { break true; }
+        let (settled, debounced) = loop {
+            if machine.document.firmware.released(&machine.session, route)? { break (machine.instructions(), true); }
             let spent = machine.instructions() - released;
-            if spent >= pulse.release { break false; }
+            if spent >= pulse.release { break (machine.instructions(), false); }
             self.advance(machine, (pulse.release - spent).min(RELEASE_POLL))?;
         };
-        Ok(Pulse { key, pressed, released, debounced })
+        Ok(Pulse { key, pressed, released, settled, debounced })
     }
 
     /// Holds a GPIO key down; a stop inside the hold is recorded.
@@ -585,29 +782,35 @@ impl<'a> Census<'a> {
     }
 
     /// Releases a GPIO key and waits for the firmware-debounced release byte.
-    fn gpio_up(&mut self, machine: &mut Machine, gpio: GpioKey, release: u64) -> Result<(u64, bool), String> {
+    fn gpio_up(&mut self, machine: &mut Machine, gpio: GpioKey, release: u64) -> Result<(u64, u64, bool), String> {
         let node = machine.document.gpio.clone();
         machine.session.gpio(&node.0, gpio.port, gpio.pin, !gpio.pressed_high)?;
         let released = machine.instructions();
-        let debounced = loop {
-            if machine.document.firmware.gpio_released(&machine.session, gpio)? { break true; }
+        let (settled, debounced) = loop {
+            if machine.document.firmware.gpio_released(&machine.session, gpio)? { break (machine.instructions(), true); }
             let spent = machine.instructions() - released;
-            if spent >= release { break false; }
+            if spent >= release { break (machine.instructions(), false); }
             self.advance(machine, (release - spent).min(RELEASE_POLL))?;
         };
-        Ok((released, debounced))
+        Ok((released, settled, debounced))
     }
 
     /// Holds and releases a GPIO key, advancing through the census so a stop inside the hold is recorded.
-    fn gpio_row(&mut self, machine: &mut Machine, gpio: GpioKey, pulse: KeyPulse) -> Result<(u64, u64, bool), String> {
+    fn gpio_row(&mut self, machine: &mut Machine, gpio: GpioKey, pulse: KeyPulse) -> Result<(u64, u64, u64, bool), String> {
         let pressed = self.gpio_down(machine, gpio, pulse.hold)?;
-        let (released, debounced) = self.gpio_up(machine, gpio, pulse.release)?;
-        Ok((pressed, released, debounced))
+        let (released, settled, debounced) = self.gpio_up(machine, gpio, pulse.release)?;
+        Ok((pressed, released, settled, debounced))
     }
 
     fn press_row(&mut self, machine: &mut Machine, kind: PressKind, gpio: GpioKey, pulse: KeyPulse) -> Result<(), String> {
-        let (pressed, released, debounced) = self.gpio_row(machine, gpio, pulse)?;
-        self.presses.push(PressRow { kind, pressed, released, debounced });
+        let (pressed, released, settled, debounced) = self.gpio_row(machine, gpio, pulse)?;
+        self.presses.push(PressRow { kind, pressed, released, settled, debounced });
+        Ok(())
+    }
+
+    fn sample_menu(&mut self, machine: &Machine) -> Result<(), String> {
+        let counts = machine.session.board.instruction_counts().try_into().ok();
+        self.menu_trace.push(MenuSample { instructions: machine.instructions(), menu: Self::menu(machine)?, counts });
         Ok(())
     }
 
@@ -615,16 +818,39 @@ impl<'a> Census<'a> {
         Ok(machine.menu()?.map(|menu| MenuTriple { menu: menu.menu_id, setting: menu.setting_id, cursor: menu.cursor }))
     }
 
-    fn endpoint(&mut self, machine: &Machine, pulse: Option<Pulse>, expected: MenuTriple) -> Result<(), String> {
+    fn endpoint(
+        &mut self,
+        machine: &Machine,
+        pulse: Option<Pulse>,
+        expected: MenuTriple,
+        first: Option<u64>,
+    ) -> Result<(), String> {
         let observed = Self::menu(machine)?;
         let reached = (observed == Some(expected)).then(|| machine.instructions());
-        self.milestones.push(Milestone { phase: self.phase.clone(), pulse, expected, reached, observed, finished: machine.instructions() });
+        self.milestones.push(Milestone { phase: self.phase.clone(), pulse, expected, first, reached, observed, finished: machine.instructions() });
         require(reached.is_some(), "menu endpoint differs")
+    }
+
+    /// Advances `budget` instructions in menu polls, recording the first instruction at
+    /// which the expected menu is observed.
+    fn advance_to(&mut self, machine: &mut Machine, budget: u64, expected: MenuTriple) -> Result<Option<u64>, String> {
+        let mut first = None;
+        let mut spent = 0;
+        while spent < budget {
+            let step = (budget - spent).min(MENU_POLL);
+            self.advance(machine, step)?;
+            spent += step;
+            if first.is_none() && Self::menu(machine)? == Some(expected) {
+                first = Some(machine.instructions());
+            }
+        }
+        Ok(first)
     }
 
     fn state(&mut self, machine: &mut Machine, pulse: Pulse, expected: MenuTriple) -> Result<(), String> {
         let start = machine.instructions();
         let reached = loop {
+            self.sample_menu(machine)?;
             if Self::menu(machine)? == Some(expected) { break Some(machine.instructions()); }
             let spent = machine.instructions() - start;
             if spent >= STEP_STATE_CAP { break None; }
@@ -632,7 +858,7 @@ impl<'a> Census<'a> {
         };
         if reached.is_some() { self.advance(machine, STEP_SETTLE)?; }
         let observed = Self::menu(machine)?;
-        self.milestones.push(Milestone { phase: self.phase.clone(), pulse: Some(pulse), expected, reached, observed, finished: machine.instructions() });
+        self.milestones.push(Milestone { phase: self.phase.clone(), pulse: Some(pulse), expected, first: reached, reached, observed, finished: machine.instructions() });
         require(reached.is_some() && observed == Some(expected), "menu trajectory state differs")
     }
 
@@ -640,8 +866,9 @@ impl<'a> Census<'a> {
     /// the shooting menu follows; the key routes start from the live view before it.
     fn boot(&mut self, machine: &mut Machine, open_menu: bool) -> Result<(), String> {
         self.phase = "cold-start".into();
-        self.advance(machine, INITIAL_MENU)?;
-        self.endpoint(machine, None, MenuTriple { menu: 69, setting: 52, cursor: 12 })?;
+        let erased = MenuTriple { menu: 69, setting: 52, cursor: 12 };
+        let first = self.advance_to(machine, INITIAL_MENU, erased)?;
+        self.endpoint(machine, None, erased, first)?;
         self.phase = "initial-setup".into();
         for key in std::iter::repeat_n(Key::Up, 12).chain([Key::Ok, Key::Ok]) {
             self.pulse(machine, key, KeyPulse::instructions(SETUP_HOLD, SETUP_RELEASE))?;
@@ -652,8 +879,9 @@ impl<'a> Census<'a> {
         }
         self.phase = "shooting-menu".into();
         let pulse = self.pulse(machine, Key::Menu, KeyPulse::instructions(SETUP_HOLD, SETUP_RELEASE))?;
-        self.advance(machine, SHOOTING_SETTLE)?;
-        self.endpoint(machine, Some(pulse), MenuTriple { menu: 1, setting: 5, cursor: 2 })
+        let shooting = MenuTriple { menu: 1, setting: 5, cursor: 2 };
+        let first = self.advance_to(machine, SHOOTING_SETTLE, shooting)?;
+        self.endpoint(machine, Some(pulse), shooting, first)
     }
 
     /// Opens the shooting menu at SHOOT WITHOUT LENS, selects ON, commits and closes it.
@@ -700,11 +928,11 @@ impl<'a> Census<'a> {
         let full = machine.document.firmware.shutter(&machine.session, ShutterStage::Full)?;
         let pressed = self.gpio_down(machine, half, Hold::Instructions(HALF_PRESS_HOLD))?;
         let full_pressed = self.gpio_down(machine, full, Hold::Instructions(FULL_PRESS_HOLD))?;
-        let (full_released, full_debounced) = self.gpio_up(machine, full, FULL_PRESS_RELEASE)?;
-        self.presses.push(PressRow { kind: PressKind::FullPress, pressed: full_pressed, released: full_released, debounced: full_debounced });
+        let (full_released, full_settled, full_debounced) = self.gpio_up(machine, full, FULL_PRESS_RELEASE)?;
+        self.presses.push(PressRow { kind: PressKind::FullPress, pressed: full_pressed, released: full_released, settled: full_settled, debounced: full_debounced });
         self.advance(machine, HALF_PRESS_SETTLE)?;
-        let (half_released, half_debounced) = self.gpio_up(machine, half, HALF_PRESS_RELEASE)?;
-        self.presses.push(PressRow { kind: PressKind::HalfPress, pressed, released: half_released, debounced: half_debounced });
+        let (half_released, half_settled, half_debounced) = self.gpio_up(machine, half, HALF_PRESS_RELEASE)?;
+        self.presses.push(PressRow { kind: PressKind::HalfPress, pressed, released: half_released, settled: half_settled, debounced: half_debounced });
         self.advance(machine, HALF_PRESS_SETTLE)
     }
 
@@ -877,23 +1105,41 @@ fn drive() -> Result<(), String> {
     let mut census = Census {
         points: plan.points.iter().map(|_| PointStats::default()).collect(),
         ranges: plan.ranges.iter().map(|_| RangeStats::default()).collect(),
+        watch_ranges: plan.watch.iter().map(|_| RangeStats::default()).collect(),
+        dispatch: Vec::new(),
+        dispatch_overflow: 0,
         maps,
         plan: &plan,
         watch: None,
         phase: String::new(),
         milestones: Vec::new(),
+        menu_trace: Vec::new(),
         presses: Vec::new(),
         mode_dial: None,
     };
     machine.traces.bound_full_registers(NonZeroUsize::new(2).ok_or("zero hit bound")?);
     machine.traces.stop_labels = [SITE_LABEL.to_owned()].into_iter().collect();
+    if let Some(dispatch) = &plan.dispatch {
+        let machines = u64::from(dispatch.machines);
+        machine.traces.site_reads = BTreeMap::from([(dispatch.trace, vec![
+            SiteRead::Absolute([u64::from(dispatch.cell_tables), machines * 4]),
+            SiteRead::Absolute([u64::from(dispatch.action_tables), machines * 4]),
+            SiteRead::Absolute([u64::from(dispatch.state_counts), machines * 2]),
+            SiteRead::Absolute([u64::from(dispatch.rows), machines * 2]),
+            SiteRead::Absolute([u64::from(dispatch.states), machines * 2]),
+        ])]);
+    }
+    let mut sites: BTreeMap<u32, String> = plan.points.iter().map(|point| (point.address, SITE_LABEL.to_owned())).collect();
+    if let Some(dispatch) = &plan.dispatch {
+        sites.insert(dispatch.trace, SITE_LABEL.to_owned());
+    }
     let observed = (|| -> Result<(), String> {
-        machine.traces.arm(&machine.session, plan.points.iter().map(|point| (point.address, SITE_LABEL.to_owned())).collect())?;
+        machine.traces.arm(&machine.session, sites)?;
         census.watch = Some(FetchWatch::begin(&machine, &census.maps, census.classes())?);
         census.scenario(&mut machine, scenario, phases)
     })();
     let ended = match census.watch.take() {
-        Some(watch) => watch.end(&machine, &plan.ranges, &mut census.ranges),
+        Some(watch) => watch.end(&machine, &plan.ranges, &plan.watch, &mut census.ranges, &mut census.watch_ranges),
         None => Ok(()),
     };
     let error = observed.err().or(ended.err());
@@ -910,6 +1156,7 @@ fn drive() -> Result<(), String> {
         instructions: machine.instructions(),
         counts: machine.session.board.instruction_counts().try_into().ok(),
         milestones: &census.milestones,
+        menu_trace: &census.menu_trace,
         presses: &census.presses,
         mode_dial: census.mode_dial,
         points: census.point_rows(),
@@ -917,6 +1164,18 @@ fn drive() -> Result<(), String> {
         queue43: census.queue43(),
         action_ranges: census.plan.ranges.iter().zip(&census.ranges).map(|(range, stats)| RangeRow {
             machine: range.machine,
+            start: Address(range.start),
+            end: Address(range.end),
+            fetches: stats.fetches,
+            addresses: counted(&stats.addresses),
+            address_overflow: stats.address_overflow,
+        }).collect(),
+        dispatch: census.plan.dispatch.as_ref().map(|_| DispatchTrace {
+            events: census.dispatch.clone(),
+            overflow: census.dispatch_overflow,
+        }),
+        watch: census.plan.watch.iter().zip(&census.watch_ranges).map(|(range, stats)| WatchRow {
+            label: range.label.clone(),
             start: Address(range.start),
             end: Address(range.end),
             fetches: stats.fetches,
