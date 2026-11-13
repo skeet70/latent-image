@@ -655,3 +655,38 @@ pub fn statistics_operation(operation: StatisticsOperation) -> u16 {
 pub const fn flash_operation(operation: FlashOperation) -> u16 {
     match operation { FlashOperation::Request0d => 0x1a0d, FlashOperation::Request0e => 0x1a0e }
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CaptureRecordField {
+    Completion, Auxiliary, Sample, ReservedHeaderA, Progress, ReservedHeaderB,
+    PrimarySource, SecondarySource, SourceChannel, SourceDimensions, ReservedSource,
+    PolicyDimensions, ReservedPolicy, RecordKind, Channel, Policy, ReservedBeforeAuxiliary,
+    AuxiliaryValue, ReservedAfterAuxiliary, Scale, ReservedBeforePosition, Position,
+    ReservedAfterPosition, ConvertedDimensions, ReservedBeforePositionCode, PositionCode,
+    SourceOption, ReservedOption, Option, PolicyEnabled, MultipleFrames, ReservedMode,
+    OrdinaryMode, Enabled, ReservedTail,
+}
+
+impl CaptureRecordField {
+    pub fn bytes(self, packet: &[u8; 176]) -> &[u8] {
+        let range = match self {
+            Self::Completion => 0..4, Self::Auxiliary => 4..8, Self::Sample => 8..12,
+            Self::ReservedHeaderA => 12..16, Self::Progress => 16..20, Self::ReservedHeaderB => 20..24,
+            Self::PrimarySource => 24..40, Self::SecondarySource => 40..56,
+            Self::SourceChannel => 56..60, Self::SourceDimensions => 60..64,
+            Self::ReservedSource => 64..84, Self::PolicyDimensions => 84..88,
+            Self::ReservedPolicy => 88..96, Self::RecordKind => 96..100, Self::Channel => 100..104,
+            Self::Policy => 104..108, Self::ReservedBeforeAuxiliary => 108..116,
+            Self::AuxiliaryValue => 116..120, Self::ReservedAfterAuxiliary => 120..128,
+            Self::Scale => 128..132, Self::ReservedBeforePosition => 132..136,
+            Self::Position => 136..138, Self::ReservedAfterPosition => 138..140,
+            Self::ConvertedDimensions => 140..150, Self::ReservedBeforePositionCode => 150..161,
+            Self::PositionCode => 161..162, Self::SourceOption => 162..163,
+            Self::ReservedOption => 163..164, Self::Option => 164..165,
+            Self::PolicyEnabled => 165..166, Self::MultipleFrames => 166..167,
+            Self::ReservedMode => 167..171, Self::OrdinaryMode => 171..172,
+            Self::Enabled => 172..173, Self::ReservedTail => 173..176,
+        };
+        &packet[range]
+    }
+}
