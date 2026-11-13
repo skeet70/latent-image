@@ -6,9 +6,11 @@
 
 pub mod adjust;
 pub mod capture_requests;
+pub mod diagnostics;
 pub mod exposure;
 pub mod finish;
 pub mod geometry;
+pub mod library_state;
 pub mod policy;
 pub mod profile;
 pub mod record_policy;
@@ -22,6 +24,8 @@ pub mod stock;
 extern crate std;
 #[cfg(test)]
 mod capture_requests_tests;
+#[cfg(test)]
+mod diagnostics_tests;
 #[cfg(test)]
 mod finish_tests;
 #[cfg(test)]
