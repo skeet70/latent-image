@@ -4,22 +4,8 @@
 //! under, with the accessors each one replaces. `AT_` names are offsets whose meaning no caller
 //! has shown yet.
 
-use crate::field::{SharedArray, SharedField, SharedRead, SharedWrite, Unread, Unwritten};
+use crate::field::{SharedArray, SharedField, SharedRead, SharedWrite, Unread};
 use crate::handle::AccessGroup;
-
-/// Read without a gate; no task-43 accessor writes them.
-pub mod read_only {
-    use super::*;
-
-    /// Read by 0x757a08.
-    pub const AT_026C: SharedField<[u8; 1044], SharedRead, Unwritten> = SharedField::new(0x26c, SharedRead::Open, Unwritten);
-
-    /// Read by 0x757a74.
-    pub const AT_0680: SharedField<[u8; 40], SharedRead, Unwritten> = SharedField::new(0x680, SharedRead::Open, Unwritten);
-
-    /// Read by 0x757b0c.
-    pub const AT_06A8: SharedField<[u8; 80], SharedRead, Unwritten> = SharedField::new(0x6a8, SharedRead::Open, Unwritten);
-}
 
 /// Access group 14. The focus result.
 pub mod group_14 {
@@ -281,6 +267,15 @@ pub mod group_27 {
 
     /// Read by 0x7579b8; written by 0x7579dc.
     pub const AT_026A: SharedField<i16> = SharedField::grouped(0x26a, 27);
+
+    /// Read by 0x757a08; written by 0x757a2c.
+    pub const AT_026C: SharedField<[u8; 1044]> = SharedField::grouped(0x26c, 27);
+
+    /// Read by 0x757a74; written by 0x757ab4.
+    pub const AT_0680: SharedField<[u8; 40]> = SharedField::grouped(0x680, 27);
+
+    /// Read by 0x757b0c; written by 0x757b30.
+    pub const AT_06A8: SharedField<[u8; 80]> = SharedField::grouped(0x6a8, 27);
 
     /// Read by 0x758a0c; written by 0x758a30.
     pub const AT_06F8: SharedField<i16> = SharedField::grouped(0x6f8, 27);

@@ -394,6 +394,15 @@ pub mod group_02 {
 
     /// Written by 0x752404.
     pub const AT_0100: RecordField<u32, Unread, RecordWrite> = RecordField::new(0x100, Unread, RecordWrite::Granted(AccessGroup::at(2)), None);
+
+    /// Written by 0x751ec8 from byte 0 of its 64-byte argument.
+    pub const AT_0104: RecordField<u8, Unread, RecordWrite> = RecordField::new(0x104, Unread, RecordWrite::Granted(AccessGroup::at(2)), None);
+
+    /// Written by 0x751f58 from bytes 4..24 of its 64-byte argument.
+    pub const AT_0108: RecordField<[u8; 20], Unread, RecordWrite> = RecordField::new(0x108, Unread, RecordWrite::Granted(AccessGroup::at(2)), None);
+
+    /// Written by 0x751fe8 from bytes 24..64 of its 64-byte argument.
+    pub const AT_011C: RecordField<[u8; 40], Unread, RecordWrite> = RecordField::new(0x11c, Unread, RecordWrite::Granted(AccessGroup::at(2)), None);
 }
 
 /// Access group 3.
