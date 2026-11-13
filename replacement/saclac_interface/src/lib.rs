@@ -68,7 +68,104 @@ pub struct Command<'a> {
 
 /// A completion code is distinct from the stock code word used to deliver it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Completion(pub(crate) u8);
+pub enum Completion {
+    Lens2f,
+    Lens30,
+    Lens31,
+    Lens32,
+    Lens33,
+    Lens34,
+    Lens35,
+    Lens36,
+    Lens37,
+    Lens38,
+    Lens39,
+    Lens3a,
+    Lens3c,
+    Lens3d,
+    Image3f,
+    Image40,
+    Image41,
+    Image42,
+    Image43,
+    Image44,
+    Image45,
+    Image46,
+    Image47,
+    Accessor4a,
+    Accessor4b,
+    Image4c,
+    Image4d,
+    Image4e,
+    Image4f,
+    Image50,
+    Image51,
+    Image52,
+    Image53,
+    Image57,
+    Image58,
+    Image59,
+    Image5a,
+    Image5b,
+    Image5c,
+    Image5d,
+    Image5e,
+    Image5f,
+    Image60,
+    Image61,
+    Image62,
+    Image63,
+    Image64,
+    Image65,
+    Image66,
+    Statistics69,
+    Statistics6b,
+    Statistics6c,
+    Statistics6d,
+    Statistics6e,
+    Statistics6f,
+    Statistics70,
+    Statistics71,
+    Statistics72,
+    Statistics73,
+    Statistics75,
+    Statistics76,
+    Statistics77,
+    Statistics78,
+    Statistics79,
+    Statistics7a,
+    Statistics7b,
+    Statistics7c,
+    Statistics7d,
+    Statistics7e,
+    Statistics7f,
+    Statistics80,
+    Statistics82,
+    Statistics83,
+    Statistics85,
+    Calculation87,
+    Calculation88,
+    Calculation89,
+    Calculation8a,
+    Calculation8b,
+    Calculation8d,
+    Calculation8e,
+    Calculation8f,
+    Calculation90,
+    Calculation91,
+    Calculation92,
+    Calculation93,
+    Calculation94,
+    Calculation95,
+    Calculation97,
+    Calculation98,
+    Calculation99,
+    Calculation9a,
+    Calculation9b,
+    Calculation9c,
+    Calculation9d,
+    Filea1,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Completed<'a> {
@@ -89,11 +186,35 @@ pub trait Blocking {
 
 pub trait ClientReplies {
     type Error;
-    fn reply(&mut self, callback: ClientCallback, status: CompletionStatus, values: Parameters<'_>) -> Result<(), Self::Error>;
+    fn reply(&mut self, target: ReplyTarget, callback: ClientCallback, status: CompletionStatus, values: Parameters<'_>) -> Result<(), Self::Error>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CompletionStatus(pub i32);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClientNotification { Notification12, Notification18, Notification19, Notification1b, Notification1c }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReplyTarget { Command(CommandKind), Notification(ClientNotification) }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GateState { Disabled, Enabled }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LifecycleRequest<'a> {
+    ReserveAccessor,
+    StartRecordingBuffers,
+    StopRecordingBuffers,
+    ResetImageBuffer,
+    AuxiliaryGate(GateState),
+    PublishParameters(Parameters<'a>),
+}
+
+pub trait Lifecycle {
+    type Error;
+    fn request(&mut self, request: LifecycleRequest<'_>) -> Result<(), Self::Error>;
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LensDcOperation {

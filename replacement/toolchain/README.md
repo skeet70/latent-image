@@ -28,6 +28,8 @@ rustc --target=armv7r-none-eabi --crate-type=staticlib \
 
 `xm1_rust_rlib` takes the same flags. `strict_align` defaults to `True`; `strict_align = False` emits `-C target-feature=-strict-align` for an image whose pinned bytes must not move.
 
+`xm1_rust_host_rlib(name, src, crate_name, data, rlib_deps)` and `xm1_rust_host_test` compile portable crates and their tests for the host. `rlib_deps` maps each Rust crate name to its host rlib target; both macros stage those dependencies and provide the compiler flags. `xm1_rust_host_test` exposes a Bazel test target. Host consumers never use an ARM rlib.
+
 `xm1_rust_elf(name, rust_staticlib, c_srcs, asm_srcs, asm_defines, link_script, link_includes, entry, extra_ldflags, link_map)` compiles C with `--target=armv7r-none-eabi -march=armv7-r -marm -mfloat-abi=soft -ffreestanding -nostdlib -fno-builtin -fno-stack-protector -mno-unaligned-access -Oz`, assembles each `.S` with `-D` for every `asm_defines` name, links with LLD and emits four files by default in the caller's package:
 
 - `NAME.elf`
