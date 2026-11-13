@@ -1,6 +1,7 @@
 use crate::requests::{request_acquisition, Peers};
 use std::vec::Vec;
-use xm1_saclac_interface::calc::{AcquisitionGrid, Calc1Payload, CalcPayload, Record};
+use xm1_saclac_interface::calc::{AcquisitionGrid, Calc1Payload, CalcPayload};
+use xm1_saclac_interface::round_acquisition::AcquisitionRequest;
 use xm1_saclac_interface::stock::StockCallbackWord;
 
 #[derive(Debug, PartialEq)]
@@ -21,8 +22,8 @@ fn acquisition_stores_its_grid_before_the_calc1_request() {
     let mut peers = Recorder::default();
     let mut grid = [0; 1236];
     grid[0] = 9;
-    let record = Record([5; 168]);
+    let request = AcquisitionRequest { mode: 5, ..AcquisitionRequest::default() };
     let callback = StockCallbackWord(0x00f3_3568);
-    request_acquisition(&mut peers, &AcquisitionGrid(grid), record, callback).unwrap();
-    assert_eq!(peers.0, [Seen::Grid(9), Seen::Calc1(Calc1Payload::Acquisition { record, callback })]);
+    request_acquisition(&mut peers, &AcquisitionGrid(grid), request, callback).unwrap();
+    assert_eq!(peers.0, [Seen::Grid(9), Seen::Calc1(Calc1Payload::Acquisition { request, callback })]);
 }
