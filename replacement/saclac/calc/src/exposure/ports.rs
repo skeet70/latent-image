@@ -105,6 +105,8 @@ pub trait Placement {
 pub trait ImageReport {
     /// The second of the four words 0x740888 reports (+0x38).
     fn second_report_word(&mut self) -> u32;
+    /// The fourth (+0x40).
+    fn fourth_report_word(&mut self) -> u32;
 }
 
 /// Everything the engine reaches.

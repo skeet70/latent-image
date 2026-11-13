@@ -7,6 +7,7 @@
 pub mod adjust;
 pub mod capture_requests;
 pub mod exposure;
+pub mod finish;
 pub mod geometry;
 pub mod policy;
 pub mod profile;
@@ -19,6 +20,8 @@ pub mod stock;
 extern crate std;
 #[cfg(test)]
 mod capture_requests_tests;
+#[cfg(test)]
+mod finish_tests;
 #[cfg(test)]
 mod geometry_tests;
 #[cfg(test)]

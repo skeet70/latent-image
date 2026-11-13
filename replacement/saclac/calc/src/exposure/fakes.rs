@@ -96,6 +96,7 @@ pub struct World {
     pub lens_configuration: crate::adjust::fakes::Lens,
     pub default_dimensions: [u16; 3],
     pub report_word: u32,
+    pub fourth_report_word: u32,
     pub grid_steps: BTreeMap<u8, [u8; 2]>,
 }
 
@@ -134,6 +135,7 @@ impl Default for World {
             lens_configuration: crate::adjust::fakes::Lens::default(),
             default_dimensions: [0; 3],
             report_word: 0,
+            fourth_report_word: 0,
             grid_steps: BTreeMap::new(),
         }
     }
@@ -251,6 +253,7 @@ impl Placement for World {
 
 impl ImageReport for World {
     fn second_report_word(&mut self) -> u32 { self.report_word }
+    fn fourth_report_word(&mut self) -> u32 { self.fourth_report_word }
 }
 
 impl LensConfiguration for World {
