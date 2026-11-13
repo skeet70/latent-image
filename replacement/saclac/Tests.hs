@@ -2,6 +2,7 @@
 module Main (main) where
 
 import qualified A32 as A
+import qualified ArmElf as ELF
 import Control.Monad (forM_, unless)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
@@ -102,6 +103,22 @@ main = do
         (admit (patch base bin marker 0) symbols disasm sections)
       refused "retired fill differs" (FillDiffers 0xefca70)
         (admitInstalled (patch imageBase installed 0xefca70 0) admitted)
+      parsed <- either H.failH pure (ELF.parseElf elf)
+      references <- either H.failH pure (ELF.addressRelocations parsed)
+      let dataReferences =
+            [(reference, section) | reference <- references, ELF.addressKind reference == ELF.DataReference,
+              section <- ELF.elfSections parsed, not (ELF.sectionExecutable section),
+              ELF.sectionAddress section <= ELF.addressSite reference,
+              ELF.addressSite reference + 4 <= ELF.sectionAddress section + ELF.sectionSize section]
+      case dataReferences of
+        (reference, section) : _ -> do
+          let site = ELF.addressSite reference
+              fileOffset = ELF.sectionOffset section + site - ELF.sectionAddress section
+              target = 0x123454
+              badElf = patch 0 elf fileOffset target
+          refused "undeclared definite reference" (ReferenceOutside site target)
+            (Artifact.admit badElf (patch base bin site target) symbols disasm sections)
+        [] -> H.failH "linked ELF has no data relocation for the refusal control"
       stackTests
       putStrLn ("saclac-placement: fixed body " ++ show (B.length body) ++ " bytes; veneers, layout, publications and stack controls passed")
     _ -> H.failH "usage: saclac-placement-tests LINKED_ELF LINKED_BIN SYMBOLS DISASM SECTIONS"

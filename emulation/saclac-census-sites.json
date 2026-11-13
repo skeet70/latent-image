@@ -441,7 +441,17 @@
   },
   "interface": {
     "post": "0x72503c",
+    "callers": [
+      {"start":"0x00ef8ad0","end":"0x00f473a4"},
+      {"start":"0x00ba0020","end":"0x00be0000"}
+    ],
     "entries": [
+      {"address":"0x00ee8ba0","kind":"service-request","arguments":[{"kind":"word"}]},
+      {"address":"0x00744c48","kind":"service-request","arguments":[{"kind":"word"}]},
+      {"address":"0x00eeccc0","kind":"service-request","arguments":[{"kind":"word"},{"kind":"word"},{"kind":"word"},{"kind":"word"}]},
+      {"address":"0x00f156b4","kind":"callback"},
+      {"address":"0x00f46be0","kind":"callback"},
+      {"address":"0x00f46c00","kind":"callback"},
       {
         "address": "0xf14ae4",
         "kind": "callback"

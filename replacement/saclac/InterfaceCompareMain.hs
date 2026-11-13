@@ -39,6 +39,7 @@ data Event
   | PeerRequest Word8 Word16 [Word8]
   | Callback Address
   | ClientReply Address Address [Argument]
+  | ServiceRequest Address [Argument]
   | Store Address [Word8]
   deriving (Eq, Show)
 instance FromJSON Event where
@@ -49,6 +50,7 @@ instance FromJSON Event where
       "peer-request" -> PeerRequest <$> value .: "queue" <*> value .: "operation" <*> value .: "payload"
       "callback" -> Callback <$> value .: "entry"
       "client-reply" -> ClientReply <$> value .: "entry" <*> value .: "target" <*> value .: "arguments"
+      "service-request" -> ServiceRequest <$> value .: "entry" <*> value .: "arguments"
       "store" -> Store <$> value .: "address" <*> value .: "bytes"
       _ -> fail "unknown interface event"
 instance ToJSON Event where
@@ -57,6 +59,7 @@ instance ToJSON Event where
     PeerRequest queue operation payload -> object ["kind" .= ("peer-request" :: String), "queue" .= queue, "operation" .= operation, "payload" .= payload]
     Callback entry -> object ["kind" .= ("callback" :: String), "entry" .= entry]
     ClientReply entry target arguments -> object ["kind" .= ("client-reply" :: String), "entry" .= entry, "target" .= target, "arguments" .= arguments]
+    ServiceRequest entry arguments -> object ["kind" .= ("service-request" :: String), "entry" .= entry, "arguments" .= arguments]
     Store address bytes -> object ["kind" .= ("store" :: String), "address" .= address, "bytes" .= bytes]
 
 data Observed = Observed { observedInstructions :: Integer, observedEvent :: Event }

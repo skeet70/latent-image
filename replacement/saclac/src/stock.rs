@@ -13,9 +13,12 @@ const STATE_COUNTS: u32 = 0xf1158c;
 const ROWS: u32 = 0x169d468;
 const STATES: u32 = 0x169d4b4;
 const TRACE: u32 = 0xf46c38;
-const RECEIVE: u32 = 0x169d374;
-const RECEIVE_PAYLOAD: u32 = 0x169d380;
-const COMMAND_FLAGS: u32 = 0x169cf24;
+#[derive(Clone, Copy)]
+struct StockAddress(u32);
+
+const RECEIVE: StockAddress = StockAddress(0x169d374);
+const RECEIVE_PAYLOAD: StockAddress = StockAddress(0x169d380);
+const COMMAND_FLAGS: StockAddress = StockAddress(0x169cf24);
 const FAULT: u32 = 0xf46c20;
 
 #[used]
@@ -36,22 +39,22 @@ impl crate::driver::Ports for DriverPorts {
 
     fn stage(&mut self, header: xm1_kernel::Header, payload: &[u8]) {
         unsafe {
-            core::ptr::write_volatile(RECEIVE as *mut u16, header.operation);
-            core::ptr::write_volatile((RECEIVE + 2) as *mut u8, header.sender);
-            core::ptr::write_volatile((RECEIVE + 3) as *mut u8, header.destination);
-            core::ptr::write_volatile((RECEIVE + 4) as *mut u32, payload.len() as u32);
-            core::ptr::write_volatile((RECEIVE + 8) as *mut u32, RECEIVE_PAYLOAD);
-            core::ptr::copy_nonoverlapping(payload.as_ptr(), RECEIVE_PAYLOAD as *mut u8, payload.len());
+            core::ptr::write_volatile(RECEIVE.0 as *mut u16, header.operation);
+            core::ptr::write_volatile((RECEIVE.0 + 2) as *mut u8, header.sender);
+            core::ptr::write_volatile((RECEIVE.0 + 3) as *mut u8, header.destination);
+            core::ptr::write_volatile((RECEIVE.0 + 4) as *mut u32, payload.len() as u32);
+            core::ptr::write_volatile((RECEIVE.0 + 8) as *mut u32, RECEIVE_PAYLOAD.0);
+            core::ptr::copy_nonoverlapping(payload.as_ptr(), RECEIVE_PAYLOAD.0 as *mut u8, payload.len());
         }
     }
 
     fn dispatch(&mut self, event: crate::driver::Event) {
         if let Some(block) = xm1_saclac_interface::stock::PARAMETER_BLOCKS.get(event.code() as usize) {
-            let length = read_word(RECEIVE + 4) as usize;
+            let length = read_word(RECEIVE.0 + 4) as usize;
             unsafe {
-                core::ptr::copy_nonoverlapping(RECEIVE_PAYLOAD as *const u8, block.address as *mut u8, length);
+                core::ptr::copy_nonoverlapping(RECEIVE_PAYLOAD.0 as *const u8, block.address as *mut u8, length);
                 #[cfg(not(saclac_wrong_driver_store))]
-                core::ptr::write_volatile((COMMAND_FLAGS + event.code()) as *mut u8, 1);
+                core::ptr::write_volatile((COMMAND_FLAGS.0 + event.code()) as *mut u8, 1);
             }
         }
         xm1_saclac_router(event.code(), u32::MAX);

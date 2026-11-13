@@ -79,6 +79,17 @@ The census sites file keeps the watch points, the action ranges and the `dispatc
 
 `//emulation:saclac-census` records `interface.events` in execution order: queue-43 submissions with payload bytes, task-43 requests to other queues with payload bytes, retained completion callback entries, client-reply targets and complete declared arguments, and writes to shared parameter blocks. Replies capture stack arguments and pointed records; transient stack pointer addresses are omitted, while shared pointer addresses remain observable. The sites document's `interface` section declares those layouts. Instruction clocks and cores are diagnostic except for selecting a reached scenario milestone. Callback entries do not project their incoming arguments; their posted completion payloads are observed separately. A missing write value, watch overflow or event limit is an observation error. Cold boot starts from reset; other scenarios use the shared post-setup checkpoint.
 
+| Boundary traffic | Ordered projection | Grounding |
+| --- | --- | --- |
+| Queue 43 input | Operation, sender, complete payload | Retained message descriptor at `0x72503c` |
+| Peer queue output | Destination queue, operation, complete payload | Sender 43 at `0x72503c` |
+| Completion callbacks | Entered callback identity, followed by posted completion payload | 106 queue callbacks and three blocking flag callbacks |
+| Client replies | Target, all declared register/stack arguments, pointed bytes | 52 callsites with byte-derived arities; transient pointer identities omitted |
+| File and blocking services | Service entry and all argument words, limited to callers inside saclac | `0xee8ba0` takes its callback in r0; `0x744c48` takes its callback in r0; `0xeeccc0` takes four words, including its callback in r3 |
+| Retained command memory | Address, width-normalized bytes in store order | Command flags, parameter blocks and synchronous reply slots |
+
+The `0x756d4c` accessor is a zero-argument settings getter, not an asynchronous request entry (exact decomp at `55436fc85c0560dd252b0410af6f2427fe198cd3`). The measurement setup at `0xf30f64` ultimately sends its callback-bearing request through imgdc `0xfea49c`; the queue projection observes that payload. Accessor reads remain retained inputs, not outgoing request events.
+
 The interface also has a typed Flash peer for operations `0x1a0d` and `0x1a0e`. `lens_effect` identifies direct drive requests and the imgdc `0x3f2e` bridge to lensdc `0x420c`; calc, calc1 and statistics jobs have no lens-drive effect. Other unclassified peer requests conservatively require lens review. The linked driver retains the four-byte `XM1_REQUIRES_LENS_SAFETY_CONTRACT = 1` marker. Fixed-image staging reads it from the exact linked body and emits `emulator_only` and `lens_safety_contract_required`; camera use waits for the lens safety contract.
 
 Admission checks allocated sections, entry veneers, retained table counts, definite ELF address relocations and direct branches, trap fill and the owned direct-call stack budget. Literal words and unrelocated instruction constants are not classified as addresses. Entries and regions come from `Replacement.Saclac.Artifact` and the linked kernel's boundary metadata. Memory safety inside the core rests on the compiler and bounded types. The driver, engine and router modules forbid unsafe code; `src/stock.rs` contains the retained-memory and stock-call adapters. Their unsafe operations have these invariants:

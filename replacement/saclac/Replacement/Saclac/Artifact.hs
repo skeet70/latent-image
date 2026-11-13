@@ -338,7 +338,8 @@ checkControl admitted instructions dataWords = forM_ (S.toList instructions) $ \
     Left (WalkRefused (address + 4) FallThroughOutsideOwned)
 
 data Admitted = Admitted
-  { admittedBin :: B.ByteString
+  { admittedElf :: B.ByteString
+  , admittedBin :: B.ByteString
   , admittedSymbolsBytes :: B.ByteString
   , admittedDisasm :: B.ByteString
   , admittedSectionsBytes :: B.ByteString
@@ -394,7 +395,7 @@ checkStackArtifact budget bin symbolsBytes disasm sectionsBytes = do
   sections <- parseSections sectionsBytes
   instructions <- instructionAddresses disasm
   require (any (\section -> sectionAllocated section && sectionBytes section > 0) sections) SectionsRejected
-  let artifact = Admitted bin symbolsBytes disasm sectionsBytes sections symbols []
+  let artifact = Admitted B.empty bin symbolsBytes disasm sectionsBytes sections symbols []
       begin = binBase artifact
   forM_ (S.toList instructions) $ \address ->
     require (address >= begin && toInteger address + 4 <= toInteger begin + toInteger (B.length bin))
@@ -427,7 +428,7 @@ admit elfBytes bin symbolsBytes disasm sectionsBytes = do
         Right
         (F.lookupSymbol symbols (ownedArraySymbol array))
       pure (array, F.symbolAddress symbol, F.symbolSize symbol)
-  let admitted = Admitted bin symbolsBytes disasm sectionsBytes sections symbols ownedArrays
+  let admitted = Admitted elfBytes bin symbolsBytes disasm sectionsBytes sections symbols ownedArrays
       ownedWords = S.fromList
         [ address
         | (low, high) <- ownedSpans admitted
@@ -598,6 +599,7 @@ contractValue imagePath datPath staged = object
   , "canonical_dat_sha256" .= digest (stagedCanonicalDat staged)
   , "canonical_image5_sha256" .= digest (stagedCanonicalImage5 staged)
   , "linked_bin_sha256" .= digest (admittedBin admitted)
+  , "linked_elf_sha256" .= digest (admittedElf admitted)
   , "linked_symbols_sha256" .= digest (admittedSymbolsBytes admitted)
   , "linked_disasm_sha256" .= digest (admittedDisasm admitted)
   , "linked_sections_sha256" .= digest (admittedSectionsBytes admitted)
