@@ -3,6 +3,7 @@
 use xm1_saclac_interface::calc::SharedAddress;
 use xm1_saclac_profile_records::{Memory, StockEntries};
 
+use crate::adjust::exposure_limits::{CellLevels, ChannelLevels, SceneLevels};
 use crate::adjust::lens::LensConfiguration;
 use crate::adjust::profile_adjustment::LensSteps;
 use crate::profile::Profile;
@@ -110,6 +111,12 @@ pub trait ImageReport {
 }
 
 /// Everything the engine reaches.
-pub trait Ports: Properties + Lens + LensSteps + LensConfiguration + CaptureProfiles + ProfileLevels + StockMemory + ProfileAccess + Placement + ImageReport {}
+pub trait Ports:
+    Properties + Lens + LensSteps + LensConfiguration + CaptureProfiles + ProfileLevels + ChannelLevels + SceneLevels + CellLevels + StockMemory + ProfileAccess + Placement + ImageReport
+{
+}
 
-impl<T: Properties + Lens + LensSteps + LensConfiguration + CaptureProfiles + ProfileLevels + StockMemory + ProfileAccess + Placement + ImageReport> Ports for T {}
+impl<T> Ports for T where
+    T: Properties + Lens + LensSteps + LensConfiguration + CaptureProfiles + ProfileLevels + ChannelLevels + SceneLevels + CellLevels + StockMemory + ProfileAccess + Placement + ImageReport
+{
+}

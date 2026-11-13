@@ -7,7 +7,6 @@ use crate::adjust::focus_reuse;
 use crate::adjust::scene_policy::{Treatment, TreatmentInputs};
 use crate::exposure::context::{Binding, ExposureContext};
 use crate::exposure::ports::Ports;
-use crate::exposure::program::Limits;
 use crate::exposure::{adjustment, evaluation, snapshot, tables};
 use crate::stock::dump;
 
@@ -32,7 +31,7 @@ pub(crate) fn treatments(ports: &mut impl Ports, context: &ExposureContext) -> (
 
 /// Binds the exposure and, for a primary exposure mode, replaces the last exposure's results.
 /// The program and the saved tables carry over.
-pub fn prepare(ports: &mut impl Ports, limits: &mut impl Limits, context: &mut ExposureContext, binding: Binding) {
+pub fn prepare(ports: &mut impl Ports, context: &mut ExposureContext, binding: Binding) {
     context.binding = binding;
     if !binding.exposure_mode.is_primary() {
         return;
@@ -61,6 +60,6 @@ pub fn prepare(ports: &mut impl Ports, limits: &mut impl Limits, context: &mut E
     if context.outcome.adjusting {
         adjustment::set_up(ports, context);
     } else {
-        evaluation::set_up(ports, limits, context);
+        evaluation::set_up(ports, context);
     }
 }

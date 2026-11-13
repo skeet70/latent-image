@@ -12,7 +12,7 @@ use crate::exposure::context::{CandidateSpan, EvaluationArea, ExposureContext, E
 use crate::exposure::correction::{self, SubjectSource};
 use crate::exposure::levels;
 use crate::exposure::ports::{InPlace, Ports};
-use crate::exposure::program::{self, FirstChoice, Limits};
+use crate::exposure::program::{self, FirstChoice};
 use crate::exposure::settings;
 use crate::requests::Peers;
 use crate::selection::{BufferSlot, Candidate, Column, LevelRange, Row, RowIndex, RowPhase, SelectionBank, ROWS};
@@ -119,10 +119,10 @@ pub fn reference_value(ports: &mut impl Ports, context: &ExposureContext) -> i16
 }
 
 /// Prepares the evaluation of the bound record.
-pub fn set_up(ports: &mut impl Ports, limits: &mut impl Limits, context: &mut ExposureContext) {
+pub fn set_up(ports: &mut impl Ports, context: &mut ExposureContext) {
     let record = context.binding.record_handle();
     context.levels = levels::start(ports, record, false);
-    let program = program::build(ports, limits, context);
+    let program = program::build(ports, context);
     context.span = program.span;
     context.program = program.steps;
     context.areas = areas(&context.program, context.span, context.levels.target);
