@@ -29,7 +29,7 @@ data Exclusion = Exclusion Offset Width [Word32] [Citation] deriving (Eq, Show)
 data Field = Field T.Text Offset Width [Citation] (Maybe Exclusion) deriving (Eq, Show)
 data Padding = Padding Offset Width [Citation] deriving (Eq, Show)
 data Message = Message Direction QueueId Operation PayloadSize [Field] [Padding] deriving (Eq, Show)
-data Declaration = Declaration T.Text [Message] deriving (Eq, Show)
+data Declaration = Declaration T.Text [Message] [Value] [Value] deriving (Eq, Show)
 
 instance FromJSON Direction where
   parseJSON = withText "message direction" $ \text -> case text of
@@ -109,21 +109,24 @@ instance FromJSON Declaration where
     schema <- row .: "schema" :: J.Parser Int
     source <- row .: "source_commit"
     messages <- row .: "messages"
+    channels <- row .:? "channels" .!= []
+    causal <- row .:? "causal_pairs" .!= []
     let key (Message direction queue operation _ _ _) = (direction, queue, operation)
         unique [] = True
         unique (message : rest) = all ((/= key message) . key) rest && unique rest
     unless (schema == 1 && not (T.null source) && unique messages) (fail "invalid or duplicate message projection")
-    pure (Declaration source messages)
+    pure (Declaration source messages channels causal)
 
 parseDeclaration :: B.ByteString -> Either String Declaration
 parseDeclaration = eitherDecodeStrict'
 
 declarationJson :: Declaration -> Value
-declarationJson (Declaration source messages) = object
-  ["schema" .= (1 :: Int), "source_commit" .= source, "messages" .= messages]
+declarationJson (Declaration source messages channels causal) = object
+  ["schema" .= (1 :: Int), "source_commit" .= source, "messages" .= messages
+  , "channels" .= channels, "causal_pairs" .= causal]
 
 projectPayload :: Declaration -> Direction -> QueueId -> Operation -> [Word8] -> Either String [Word8]
-projectPayload (Declaration _ messages) direction queue operation payload = do
+projectPayload (Declaration _ messages _ _) direction queue operation payload = do
   Message _ _ _ (PayloadSize size) fields _ <- maybe (Left "message has no field declaration") Right
     (find (\(Message candidateDirection candidateQueue candidateOperation _ _ _) ->
       candidateDirection == direction && candidateQueue == queue && candidateOperation == operation) messages)
