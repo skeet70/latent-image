@@ -6,6 +6,7 @@
 
 use crate::boundary::{ClientRef, FocusResult, Frame};
 use crate::subjects::SubjectList;
+use xm1_saclac_interface::area_measurement::AreaEntry;
 use xm1_saclac_interface::calculation::ReferenceRequest;
 use xm1_saclac_interface::statistics::StatisticsSetting;
 use xm1_saclac_interface::{Completion, RecordHandle};
@@ -67,6 +68,8 @@ pub enum FrameTable { SelectionMap }
 pub trait CaptureClient {
     /// The frame the source descriptor names.
     fn frame(&mut self, sources: ClientRef) -> Frame;
+    /// The word the source descriptor keeps after the frame.
+    fn frame_detail(&mut self, sources: ClientRef) -> u32;
     fn selection(&mut self, selection: ClientRef) -> SlotSelection;
     fn slot(&mut self, slots: ClientRef, index: u8) -> SlotHandle;
     fn store_selection_result(&mut self, selection: ClientRef, value: u32);
@@ -113,6 +116,15 @@ pub enum RecordField {
     JobPrepared,
     /// 1 puts the selection map into the capture dump.
     MapPresent,
+    /// Two halfwords the profile geometry takes.
+    Layout,
+    SecondaryOption,
+    ProfileClass,
+    FrameFirst,
+    FrameSecond,
+    /// Nonzero lets the evaluation of the secondary job place the record's first item.
+    PlacesItem,
+    MeasurementOption,
 }
 
 /// Per-slot values of the bound record.
@@ -131,6 +143,14 @@ pub enum SlotField {
     DeviceValue,
     SecondLimit,
     ItemState,
+    /// 1 lets the secondary job measure the record's areas.
+    MeasuresAreas,
+    Distance,
+    Trim,
+    ProfileSelector,
+    MeasuredValue,
+    EvaluationWord,
+    EvaluationOffset,
 }
 
 /// A reference and its detail word, as the record keeps five of them.
@@ -152,14 +172,6 @@ impl SlotEntry {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct AreaReference(pub [u32; 10]);
 
-/// A record item; the capture clears the first one.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ItemEntry(pub [u8; ItemEntry::BYTES]);
-
-impl ItemEntry {
-    pub const BYTES: usize = 104;
-    pub const EMPTY: Self = Self([0; Self::BYTES]);
-}
 
 /// The words a setting completion returns and the record keeps.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -182,7 +194,7 @@ pub trait CaptureRecords {
     fn store_focus_result(&mut self, record: RecordHandle, result: &FocusResult);
     fn area_reference(&mut self, record: RecordHandle) -> AreaReference;
     fn store_setting_result(&mut self, record: RecordHandle, result: &SettingResult);
-    fn store_item(&mut self, record: RecordHandle, index: u8, item: &ItemEntry);
+    fn store_item(&mut self, record: RecordHandle, index: u8, item: &AreaEntry);
     fn publish_subjects(&mut self, record: RecordHandle, list: &SubjectList);
 }
 

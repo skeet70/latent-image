@@ -3,6 +3,7 @@ use crate::capture_boundary::*;
 use crate::subjects::SubjectList;
 use std::collections::BTreeMap;
 use std::vec::Vec;
+use xm1_saclac_interface::area_measurement::AreaEntry;
 use xm1_saclac_interface::calculation::ReferenceRequest;
 use xm1_saclac_interface::statistics::StatisticsSetting;
 use xm1_saclac_interface::{Completion, RecordHandle};
@@ -16,7 +17,7 @@ pub enum Call {
     SelectSlot(RecordHandle, SlotHandle),
     StoreFocusResult(RecordHandle, FocusResult),
     StoreSettingResult(RecordHandle, SettingResult),
-    StoreItem(RecordHandle, u8, ItemEntry),
+    StoreItem(RecordHandle, u8, AreaEntry),
     PublishSubjects(RecordHandle, SubjectList),
     SelectionResult(ClientRef, u32),
     SelectionHook(ClientRef),
@@ -141,6 +142,7 @@ impl CaptureFake {
 
 impl CaptureClient for CaptureFake {
     fn frame(&mut self, _sources: ClientRef) -> Frame { self.frame }
+    fn frame_detail(&mut self, _sources: ClientRef) -> u32 { 0 }
     fn selection(&mut self, _selection: ClientRef) -> SlotSelection { self.selection }
     fn slot(&mut self, _slots: ClientRef, index: u8) -> SlotHandle { self.slots.get(usize::from(index)).copied().unwrap_or(SlotHandle(0)) }
     fn store_selection_result(&mut self, selection: ClientRef, value: u32) { self.calls.push(Call::SelectionResult(selection, value)); }
@@ -176,7 +178,7 @@ impl CaptureRecords for CaptureFake {
     }
     fn area_reference(&mut self, _record: RecordHandle) -> AreaReference { AreaReference([7; 10]) }
     fn store_setting_result(&mut self, record: RecordHandle, result: &SettingResult) { self.calls.push(Call::StoreSettingResult(record, *result)); }
-    fn store_item(&mut self, record: RecordHandle, index: u8, item: &ItemEntry) { self.calls.push(Call::StoreItem(record, index, *item)); }
+    fn store_item(&mut self, record: RecordHandle, index: u8, item: &AreaEntry) { self.calls.push(Call::StoreItem(record, index, *item)); }
     fn publish_subjects(&mut self, record: RecordHandle, list: &SubjectList) { self.calls.push(Call::PublishSubjects(record, *list)); }
 }
 

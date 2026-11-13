@@ -7,12 +7,13 @@
 use crate::boundary::{Frame, Lens, LensReading};
 use crate::capture_boundary::{
     AreaReference, CalcLibrary, CalculationWord, CaptureAdjustment, CaptureClient, CaptureDiagnostics, CaptureParameters, CapturePeers,
-    CapturePlatform, CaptureRecords, CaptureShared, CaptureTrace, FrameTable, ItemEntry, LensGeometry, LensSample, RecordField, SettingResult,
+    CapturePlatform, CaptureRecords, CaptureShared, CaptureTrace, FrameTable, LensGeometry, LensSample, RecordField, SettingResult,
     SlotField,
 };
 use crate::capture_stock;
 use crate::lens_return::{ReturnPoint, SavedSlots, SAVED_SLOTS};
 use crate::subjects::Candidates;
+use xm1_saclac_interface::area_measurement::AreaEntry;
 use xm1_saclac_interface::statistics::{SettingOverrides, StatisticsSetting};
 use xm1_saclac_interface::{Completed, Completion, RecordHandle};
 
@@ -281,7 +282,7 @@ impl CaptureControl {
     fn prepare_secondary(&self, record: RecordHandle, parameters: &CaptureParameters, boundary: &mut impl ControlBoundary) {
         boundary.reset_secondary();
         boundary.set_slot_field(record, 0, SlotField::ItemState, 0);
-        boundary.store_item(record, 0, &ItemEntry::EMPTY);
+        boundary.store_item(record, 0, &AreaEntry::EMPTY);
         boundary.set_slot_field(record, 0, SlotField::State, 0);
         if boundary.adjustment(CaptureAdjustment::SlotLock) & 1 != 0 { boundary.set_field(record, RecordField::SlotLock, 1); }
         if boundary.slot_field(record, 0, SlotField::SecondaryFirst) != 0

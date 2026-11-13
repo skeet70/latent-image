@@ -3,10 +3,12 @@
 //! X-M1 1.50 boundary values of the capture steps.
 
 use crate::boundary::ClientRef;
+use crate::calculations_work::Processing;
 use crate::capture_boundary::{
     CaptureAdjustment, CaptureOptions, CaptureParameters, CaptureTrace, FrameOffset, MoveProfile, RecordField, SettingResult, SlotEntry, SlotField,
     SlotSelection,
 };
+use crate::secondary_boundary::{AreaList, MeasurementSetting, MeasurementWord, StatisticsStore};
 use xm1_saclac_interface::statistics::SettingOverrides;
 
 fn word(block: &[u8], offset: usize) -> Option<u32> {
@@ -106,6 +108,13 @@ pub const fn record_field_getter(field: RecordField) -> Option<u32> {
         RecordField::SecondaryLatch => Some(0x74f344),
         RecordField::SecondaryBlocked => Some(0x74f2bc),
         RecordField::MapPresent => Some(0x750474),
+        RecordField::Layout => Some(0x74ec30),
+        RecordField::SecondaryOption => Some(0x74fcec),
+        RecordField::ProfileClass => Some(0x74e7a0),
+        RecordField::FrameFirst => Some(0x7527f8),
+        RecordField::FrameSecond => Some(0x752890),
+        RecordField::PlacesItem => Some(0x74eb20),
+        RecordField::MeasurementOption => Some(0x74f9a4),
         RecordField::CaptureFrame
         | RecordField::CaptureSlotCount
         | RecordField::CaptureSlots
@@ -133,6 +142,14 @@ pub const fn slot_field_getter(field: SlotField) -> Option<u32> {
     match field {
         SlotField::SecondaryFirst => Some(0x753960),
         SlotField::SecondarySecond => Some(0x753a10),
+        SlotField::Reference => Some(0x752a40),
+        SlotField::Offset => Some(0x752af0),
+        SlotField::Rate => Some(0x754040),
+        SlotField::SecondLimit => Some(0x752ba0),
+        SlotField::MeasuresAreas => Some(0x7541a0),
+        SlotField::Distance => Some(0x754300),
+        SlotField::Trim => Some(0x752c50),
+        SlotField::ProfileSelector => Some(0x7535f0),
         _ => None,
     }
 }
@@ -150,7 +167,15 @@ pub const fn slot_field_setter(field: SlotField) -> Option<u32> {
         SlotField::DeviceValue => Some(0x753e88),
         SlotField::SecondLimit => Some(0x752bf8),
         SlotField::ItemState => Some(0x755b58),
-        SlotField::SecondaryFirst | SlotField::SecondarySecond => None,
+        SlotField::MeasuredValue => Some(0x753bc8),
+        SlotField::EvaluationWord => Some(0x753dd8),
+        SlotField::EvaluationOffset => Some(0x753d28),
+        SlotField::SecondaryFirst
+        | SlotField::SecondarySecond
+        | SlotField::MeasuresAreas
+        | SlotField::Distance
+        | SlotField::Trim
+        | SlotField::ProfileSelector => None,
     }
 }
 
@@ -248,3 +273,97 @@ pub const fn trace_word(trace: CaptureTrace) -> u32 {
 
 /// Words of the statistics setup request 0x1039dd4 after the enable flag (0xf2917c..0xf29180).
 pub const STATISTICS_SETUP_SECOND_WORD: u32 = 1;
+
+/// The secondary job's source descriptor word after the frame (0xf2bf20 reads +0x54).
+pub const SOURCE_FRAME_DETAIL: u32 = 0x54;
+
+/// The record's area lists: counts 0x755dac / 0x755f0c, entries 0x755e54 / 0x755fb4 (record,
+/// index; 104 bytes each), detail words 0x75610c / 0x7561ac; 0x75606c prefers the second list.
+pub const fn area_list_entries(list: AreaList) -> [u32; 3] {
+    match list {
+        AreaList::First => [0x755dac, 0x755e54, 0x75610c],
+        AreaList::Second => [0x755f0c, 0x755fb4, 0x7561ac],
+    }
+}
+pub const PREFERS_SECOND_LIST: u32 = 0x75606c;
+/// 16-byte stores into the first slot (record, 0, bytes): profile extent 0x758460, cells 0x758520.
+pub const STORE_SLOT_EXTENT: u32 = 0x758460;
+pub const STORE_SLOT_CELLS: u32 = 0x758520;
+
+/// Configuration the secondary job reads: bytes through 0x69f8fc, `MeasuredDefault` 24 bits
+/// through 0x69fef0, the other defaults halfwords through 0x69fec8.
+pub const fn measurement_setting_id(setting: MeasurementSetting) -> u16 {
+    match setting {
+        MeasurementSetting::Measure => 0x12ff,
+        MeasurementSetting::SecondListAlone => 0x1300,
+        MeasurementSetting::SearchAll => 0x1301,
+        MeasurementSetting::CarriedFirst => 0x1302,
+        MeasurementSetting::CarriedSecond => 0x1303,
+        MeasurementSetting::ShiftLimit => 0x1359,
+        MeasurementSetting::RequiresArea => 0x135a,
+        MeasurementSetting::MeasuredDefault => 0x1390,
+        MeasurementSetting::TransferDefault => 0x1395,
+        MeasurementSetting::PrimaryLimitDefault => 0x1373,
+    }
+}
+
+/// Readers of the capture pipeline's words 0x16f0f5c + 0x94..0xa4.
+pub const fn measurement_word_reader(word: MeasurementWord) -> u32 {
+    match word {
+        MeasurementWord::FirstList => 0xfedab8,
+        MeasurementWord::SecondList => 0xfedad8,
+        MeasurementWord::DumpFirst => 0xfeda78,
+        MeasurementWord::DumpSecond => 0xfeda98,
+        MeasurementWord::DumpThird => 0xfedaf8,
+    }
+}
+
+/// 0xfeaba8 hands the source, the store and the processing to 0xffd04c, which fills both.
+pub const PREPARE_STATISTICS: u32 = 0xfeaba8;
+pub const fn statistics_store(store: StatisticsStore) -> u32 {
+    match store {
+        StatisticsStore::First => 0x5ffb_6120,
+        StatisticsStore::Later => 0x5ffb_71d0,
+    }
+}
+/// Imgdc 0x3f46 through 0xfeab6c (callbacks 0xf2ad34 for 0x5b, 0xf2ad08 for 0x5c), imgdc 0x3f47
+/// through 0xfeabb8 (callback 0xf2ac70 for 0x5d), the release 0xfeabf0.
+pub const MEASURE_AREAS: u32 = 0xfeab6c;
+pub const TRANSFER: u32 = 0xfeabb8;
+pub const RELEASE_MEASUREMENT: u32 = 0xfeabf0;
+
+/// The lens reference table index the first-pass processing keeps at +0x7c (0xf2bf78).
+pub fn processing_reference_index(processing: &Processing) -> i32 { word(&processing.0, 0x7c).unwrap_or(0) as i32 }
+
+/// The capture pipeline's words the secondary job copies into the frame's dump (0xf2c188).
+pub const MEASUREMENT_WORDS: [(FrameOffset, MeasurementWord); 3] = [
+    (FrameOffset(0xa_3238), MeasurementWord::DumpFirst),
+    (FrameOffset(0xa_323c), MeasurementWord::DumpSecond),
+    (FrameOffset(0xa_3240), MeasurementWord::DumpThird),
+];
+
+/// Each area list's part of the frame's dump (0xf2bbcc..0xf2bc98): the count, a pair of words per
+/// area, an accepted word per area, then four words per area.
+const DUMP_LISTS: [u32; 2] = [0xa_30c4, 0xa_311c];
+pub const DUMP_SELECTED: FrameOffset = FrameOffset(0xa_324c);
+
+pub const fn dump_list_count(list: usize) -> FrameOffset { FrameOffset(DUMP_LISTS[list]) }
+
+pub const fn dump_list_pair_word(list: usize, word: u8) -> FrameOffset { FrameOffset(DUMP_LISTS[list] + 4 + 4 * word as u32) }
+
+pub const fn dump_list_accepted(list: usize, index: u8) -> FrameOffset { FrameOffset(DUMP_LISTS[list] + 0x1c + 4 * index as u32) }
+
+pub const fn dump_list_area(list: usize, index: u8, word: usize) -> FrameOffset { FrameOffset(DUMP_LISTS[list] + 0x28 + 16 * index as u32 + 4 * word as u32) }
+
+/// Calc-library entries of `MeasurementCalc`: `capture_selection` 0xf4c958 (record pointer, 12-byte
+/// out), `statistics_key` 0xf4ca3c (processing, two-halfword out), `scale_step` 0xf4ce2c,
+/// `capture_offset` 0xf51b94, `curve_within` 0xf4d2dc, `request_evaluation` 0xf4ca60 (callbacks
+/// 0xf2acd0 for 0x94 and 0xf2ac98 for 0x95; the words record, processing, frame, frame detail; the
+/// geometry block).
+pub const MEASUREMENT_CALC: [u32; 6] = [0xf4c958, 0xf4ca3c, 0xf4ce2c, 0xf51b94, 0xf4d2dc, 0xf4ca60];
+/// Profile-geometry entries of `MeasurementProfiles`: `profile_geometry` 0xeda668 (mode 2, size
+/// halfwords 0x50, 0x50, 0x10), `crop_geometry` 0xef6030, `flagged_scale_pair` 0xef5b5c,
+/// `profile_extent` 0xef5d44.
+pub const MEASUREMENT_PROFILES: [u32; 4] = [0xeda668, 0xef6030, 0xef5b5c, 0xef5d44];
+/// Lens-layer entries of `MeasurementLens` beyond the finish's: `reference_value` 0x747d48.
+pub const REFERENCE_VALUE: u32 = 0x747d48;
