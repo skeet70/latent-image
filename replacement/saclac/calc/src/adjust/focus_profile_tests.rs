@@ -88,8 +88,14 @@ struct Programmed {
 }
 
 impl AreaConfiguration for Programmed {
-    fn configure(&mut self, area: &AreaSetup) { self.plain.push(*area); }
-    fn configure_referenced(&mut self, area: &ReferencedArea) { self.referenced.push(*area); }
+    fn configure(&mut self, area: &AreaSetup) -> [i16; 2] {
+        self.plain.push(*area);
+        area.values.map(|value| value + 10)
+    }
+    fn configure_referenced(&mut self, area: &ReferencedArea) -> [i16; 2] {
+        self.referenced.push(*area);
+        area.area.values.map(|value| value + 20)
+    }
 }
 
 const REQUEST: AreaRequest = AreaRequest { primary: [1, 2], referenced: [3, 4], forced: false, last: 9 };
@@ -111,8 +117,8 @@ fn area_world(armed: bool, kind: u8) -> World {
 
 fn program(mut world: World, resource: Option<u32>, request: AreaRequest) -> (Option<u16>, Programmed) {
     let mut programmed = Programmed::default();
-    let offset = program_area_pair(&mut world, &mut Lens(resource), &mut programmed, handle(), request);
-    (offset, programmed)
+    let pair = program_area_pair(&mut world, &mut Lens(resource), &mut programmed, handle(), request);
+    (pair.map(|pair| pair.offset), programmed)
 }
 
 #[test]
@@ -153,7 +159,8 @@ fn nothing_is_programmed_without_a_lens_resource() {
 fn the_round_area_uses_the_records_scene_kind_with_no_class() {
     let mut programmed = Programmed::default();
     let mut world = area_world(true, 2);
-    program_round_area(&mut world, &mut Lens(None), &mut programmed, handle(), 6, [7, 8]);
+    let left = program_round_area(&mut world, &mut Lens(None), &mut programmed, handle(), 6, [7, 8]);
+    assert_eq!(left, [17, 18]);
     let expected = AreaSetup { resource: 6, scene: 7, kind: 1, class: 0, values: [7, 8], flags: 0xf0, auxiliary: 5, last: 0 };
     assert_eq!(programmed.plain, [expected]);
 }
@@ -173,4 +180,11 @@ fn the_exposure_kind_follows_the_level_band_scene_and_mode() {
     assert_eq!(kind(&mut world, KindInputs { scene: 57, ..base }), 2);
     assert_eq!(kind(&mut world, KindInputs { mode: 3, ..base }), 1);
     assert_eq!(kind(&mut world, KindInputs { fixed: true, level: 15, ..base }), 7);
+}
+
+#[test]
+fn a_programmed_pair_returns_the_halfwords_each_area_leaves() {
+    let mut programmed = Programmed::default();
+    let pair = program_area_pair(&mut area_world(false, 2), &mut Lens(Some(3)), &mut programmed, handle(), REQUEST);
+    assert_eq!(pair.map(|pair| (pair.primary, pair.referenced)), Some(([11, 12], [23, 24])));
 }
