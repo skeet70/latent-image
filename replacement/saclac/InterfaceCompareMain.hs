@@ -146,16 +146,18 @@ projectionInputs receipt = case inputBindings receipt of
   [run, _, rom, sites, trajectory, executable] -> Just [run, rom, sites, trajectory, executable]
   _ -> Nothing
 
+-- | A side's stream, closed by the milestone marker, and the marker's index. @window-end@ closes
+-- a route resumed at the saved post-boot checkpoint after its last event; a census milestone the
+-- side reached closes it at that instruction and drops later events. A side that reaches neither
+-- carries no marker.
 project :: Maybe String -> Receipt -> ([Value], Int)
 project Nothing receipt = (map toJSON (events receipt), length (events receipt))
 project (Just phase) receipt
-  | phase == "post-boot", Just tick <- checkpointAt receipt, tick > 0, tick == observationStart receipt =
-      (marker : map toJSON (events receipt), 0)
+  | phase == "window-end", Just tick <- checkpointAt receipt, tick > 0, tick == observationStart receipt =
+      (map toJSON (events receipt) ++ [marker], length (events receipt))
   | Just tick <- reachedAt =<< find ((== phase) . reachedPhase) (milestones receipt) =
-      let (before, after) = span ((<= tick) . observedInstructions) (timedEvents receipt)
-          left = concatMap (normalize . observedEvent) before
-          right = concatMap (normalize . observedEvent) after
-       in (map toJSON left ++ marker : map toJSON right, length left)
+      let left = concatMap (normalize . observedEvent) (takeWhile ((<= tick) . observedInstructions) (timedEvents receipt))
+       in (map toJSON left ++ [marker], length left)
   | otherwise = (map toJSON (events receipt), length (events receipt))
   where marker = object ["milestone" .= phase]
 
