@@ -1,4 +1,4 @@
-use crate::driver::{self, Event, Ports};
+use crate::driver::{self, Event, PayloadLimit, Ports};
 use std::cell::Cell;
 use std::rc::Rc;
 use xm1_kernel::{fake::{Fake, FakeMessage}, Error, Header, Kernel, MessageQueue, QueueId, TaskId};
@@ -12,7 +12,7 @@ struct Effects {
 }
 impl Ports for Effects {
     fn event(&self, operation: u16) -> Event { Event::new(u32::from(operation)) }
-    fn command_capacity(&self, _: Event) -> Option<usize> { Some(4) }
+    fn command_capacity(&self, _: Event) -> Option<PayloadLimit> { Some(PayloadLimit::new(4)) }
     fn stage(&mut self, _: Header, payload: &[u8]) { self.shared = payload.to_vec(); }
     fn dispatch(&mut self, event: Event) {
         assert!(self.releases.get() > self.delivered.len());

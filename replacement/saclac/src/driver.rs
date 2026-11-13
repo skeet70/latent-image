@@ -9,9 +9,16 @@ impl Event {
     pub const fn code(self) -> u32 { self.0 }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PayloadLimit(usize);
+impl PayloadLimit {
+    pub const fn new(bytes: usize) -> Self { Self(bytes) }
+    pub fn allows(self, payload: &[u8]) -> bool { payload.len() <= self.0 }
+}
+
 pub trait Ports {
     fn event(&self, operation: u16) -> Event;
-    fn command_capacity(&self, event: Event) -> Option<usize>;
+    fn command_capacity(&self, event: Event) -> Option<PayloadLimit>;
     fn stage(&mut self, header: Header, payload: &[u8]);
     fn dispatch(&mut self, event: Event);
     fn fault(&mut self);
@@ -27,7 +34,7 @@ pub fn receive_one<B: Backend>(queue: MessageQueue, caller: &TaskContext<'_, B>,
     };
     let header = received.header();
     let event = ports.event(header.operation);
-    if ports.command_capacity(event).is_some_and(|capacity| received.payload().len() > capacity) {
+    if ports.command_capacity(event).is_some_and(|capacity| !capacity.allows(received.payload())) {
         drop(received);
         ports.fault();
         return;

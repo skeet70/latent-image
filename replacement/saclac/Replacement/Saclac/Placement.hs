@@ -12,10 +12,10 @@ module Replacement.Saclac.Placement
 import qualified Data.Aeson as J
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
-import Data.List (sortOn)
+import Data.List (isPrefixOf, sortOn)
 import Data.Word (Word32)
 import Numeric (showHex)
-import Replacement.Saclac.Artifact (Entry (..), Extent (..), entries, extentBytes, extents)
+import Replacement.Saclac.Artifact (Entry (..), Extent (..), Retained (..), entries, extentBytes, extents, retainedExternals)
 
 hexAddress :: Word32 -> String
 hexAddress value = "0x" ++ replicate (8 - length digits) '0' ++ digits
@@ -32,15 +32,17 @@ sectionOf 0 = "dispatch"
 sectionOf 1 = "router"
 sectionOf _ = "driver"
 
--- | One MEMORY region per declared extent. The two owned sections take the
--- first two regions; every assertion is stated in terms of the same extents.
 renderLinkerScript :: String
 renderLinkerScript = case (entries, extents) of
   (firstEntry : _, _ : _) -> unlines $
     [ "ENTRY(" ++ entryVeneer firstEntry ++ ")"
     , ""
     , "/* Generated from Replacement.Saclac.Artifact.extents. */"
-    , "MEMORY {"
+    ]
+      ++ [ retainedName external ++ " = " ++ hexAddress (retainedAddress external) ++ ";"
+         | external <- retainedExternals, "xm1_kernel_" `isPrefixOf` retainedName external
+         ]
+      ++ [ "MEMORY {"
     ]
       ++ [ "  " ++ regionName index ++ " (rx) : ORIGIN = " ++ hexAddress (extentLow extent)
              ++ ", LENGTH = " ++ hexAddress (fromIntegral (extentBytes extent))

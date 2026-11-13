@@ -120,7 +120,7 @@ impl Stream {
     }
 
     pub fn entry(&mut self, machine: &Machine, plan: &Plan, stop: &Stop) -> Result<(), String> {
-        let register = |name: &str| stop.registers.get(name).ok_or("interface register missing").and_then(|text| parse_hex(text));
+        let register = |name: &str| stop.registers.get(name).ok_or_else(|| "interface register missing".to_owned()).and_then(|text| parse_hex(text));
         let event = if stop.address == plan.post {
             let descriptor = bytes(machine, stop.core, register("r1")?, 12)?;
             let operation = u16::from_le_bytes([descriptor[0], descriptor[1]]);
