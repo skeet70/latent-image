@@ -32,6 +32,7 @@ xm1_rust_host_test(
     crate_name = "xm1_saclac_interface",
     data = SOURCES + [
         "src/exposure_tests.rs",
+        "src/search_record_tests.rs",
         "src/search_tests.rs",
         "src/tests.rs",
     ],

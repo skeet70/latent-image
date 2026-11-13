@@ -470,3 +470,5 @@ mod tests;
 mod exposure_tests;
 #[cfg(test)]
 mod search_tests;
+#[cfg(test)]
+mod search_record_tests;
