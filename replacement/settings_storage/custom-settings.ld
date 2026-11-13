@@ -20,7 +20,6 @@ xm1_backup_diagnostic726c74 = 0x726c74;
 xm1_backup_write6a59b8 = 0x6a59b8;
 xm1_backup_report633594 = 0x633594;
 SECTIONS {
-  .compiler_builtins 0 : { *compiler_builtins*(.text* .rodata* .data* .bss*) }
   .text 0x5d0000 : {
     *custom-settings-rust*.a:*(.text* .rodata*)
     *(.text .text.memcpy .text.memset .text.__aeabi_memset .text.memmove)

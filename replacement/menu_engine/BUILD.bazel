@@ -127,6 +127,21 @@ filegroup(
 )
 
 genrule(
+    name = "adapter-class-host-build",
+    srcs = ["adapter/mod.rs"],
+    outs = ["host/libmenu_engine_adapter.rlib", "host/menu_engine_adapter.rs"],
+    cmd = "$(location //emulation:render-adapter-class-cases) --adapter-interface $(location adapter/mod.rs) $(@D)/host/menu_engine_adapter.rs && $(location @lab_rustc//:bin/rustc) --crate-name=menu_engine_adapter --edition=2021 --crate-type=rlib $(@D)/host/menu_engine_adapter.rs -o $(@D)/host/libmenu_engine_adapter.rlib",
+    tools = ["@lab_rustc//:bin/rustc", "//emulation:render-adapter-class-cases"],
+    visibility = ["//emulation:__pkg__"],
+)
+
+filegroup(
+    name = "adapter-class-host",
+    srcs = ["host/libmenu_engine_adapter.rlib"],
+    visibility = ["//emulation:__pkg__"],
+)
+
+genrule(
     name = "menu-engine-tests-build",
     srcs = [
         ":module",
