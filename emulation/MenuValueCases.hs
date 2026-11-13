@@ -221,6 +221,7 @@ runSpec inputs spec = do
   path <- writeCase (inputOut inputs </> caseId spec) spec
   (_, regions, _, _) <- loadCase path
   (_, report) <- runCase (inputRunner inputs) path
+  B.writeFile (inputOut inputs </> caseId spec </> "native-result.json") (encodeCanonical report)
   exit <- either (fail . renderObservationError) pure (reportRunnerExit report)
   observation <- either (fail . renderObservationError) pure (observeNative exit regions (get report "runner"))
   executed <- either fail pure (parseObservation (BL.toStrict (A.encode report)))
