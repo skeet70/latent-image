@@ -162,3 +162,12 @@ pub(crate) fn admit<I: Isp>(isp: &mut I, unit: Unit, client: Client, operation: 
     isp.note(unit, operation);
     if checks.iter().all(|check| *check) { Ok(()) } else { Err(refuse(isp, unit, client, operation)) }
 }
+
+/// Notes `operation` and logs a resource-id fault when `session` is not the unit's active one;
+/// the operation proceeds either way.
+pub(crate) fn check_session<I: Isp>(isp: &mut I, unit: Unit, client: Client, session: Option<SessionId>, operation: Operation) {
+    isp.note(unit, operation);
+    if isp.record(unit).active != session {
+        isp.log(Event::Refused { client, unit, operation, fault: Fault::ResourceId });
+    }
+}

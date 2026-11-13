@@ -6,7 +6,6 @@ use crate::driver::{admit, Bank, Client, Isp, Operation, Refusal, Register, Unit
 
 const UNIT: Unit = Unit::Mvrec;
 
-const CONTROL: u16 = 0x00;
 const DIMENSIONS: u16 = 0x04;
 const GEOMETRY: u16 = 0x08;
 const GEOMETRY_SECOND: u16 = 0x0c;
@@ -179,12 +178,4 @@ pub fn set_nibble<I: Isp>(isp: &mut I, client: Client, bank: Bank, low: u8, chec
     admit(isp, UNIT, client, Operation(30), &[low <= 15, checked <= 15])?;
     write(isp, bank, NIBBLE, u32::from(low));
     Ok(())
-}
-
-/// Clears the control register's bits 0 and 16, then waits for the bank to set bit 0.
-pub fn stop_and_wait<I: Isp>(isp: &mut I, bank: Bank) {
-    isp.note(UNIT, Operation(36));
-    let control = read(isp, bank, CONTROL) & !(1 << 16 | 1);
-    write(isp, bank, CONTROL, control);
-    while read(isp, bank, CONTROL) & 1 == 0 {}
 }

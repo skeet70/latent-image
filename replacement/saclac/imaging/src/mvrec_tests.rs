@@ -1,5 +1,5 @@
 use crate::driver::{Bank, Client, Event, Fault, Operation, Refusal, Register, Unit};
-use crate::fake::{Effect, FakeIsp};
+use crate::fake::FakeIsp;
 use crate::mvrec::*;
 
 const fn first(offset: u16) -> Register { Register::Mvrec(Bank::First, offset) }
@@ -91,17 +91,4 @@ fn the_nibble_checks_both_values_and_programs_the_low_one() {
     assert_eq!(set_nibble(&mut isp, Client::MV, Bank::First, 7, 15), Ok(()));
     assert_eq!(set_nibble(&mut isp, Client::MV, Bank::First, 7, 16), Err(Refusal::Parameter));
     assert_eq!(isp.writes(), [(first(0xf4), 7)]);
-}
-
-#[test]
-fn stop_clears_both_bits_and_waits_for_the_bank() {
-    let mut isp = FakeIsp::new();
-    isp.preset(first(0), 0x0001_0103);
-    isp.script(first(0), &[0x0001_0103, 0x102, 0x102, 0x103]);
-    stop_and_wait(&mut isp, Bank::First);
-    assert_eq!(isp.take(), [
-        Effect::Note(Unit::Mvrec, Operation(36)),
-        Effect::Read(first(0)), Effect::Write(first(0), 0x102),
-        Effect::Read(first(0)), Effect::Read(first(0)), Effect::Read(first(0)),
-    ]);
 }

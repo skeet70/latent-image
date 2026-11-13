@@ -4,6 +4,7 @@
 //! saclac's imaging layers: the image-4 ISP units task 43 programs (L7) and the capture-pipeline
 //! helpers its modules share (L10).
 
+pub mod auto;
 pub mod driver;
 pub mod mvrec;
 pub mod raid0;
@@ -12,6 +13,8 @@ pub mod stock;
 
 #[cfg(test)]
 mod fake;
+#[cfg(test)]
+mod auto_tests;
 #[cfg(test)]
 mod driver_tests;
 #[cfg(test)]

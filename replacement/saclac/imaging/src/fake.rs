@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::vec::Vec;
 
 use crate::driver::{Client, Event, Isp, Operation, Record, Register, SessionId, Unit};
@@ -16,7 +15,6 @@ pub enum Effect {
 pub struct FakeIsp {
     pub effects: Vec<Effect>,
     registers: Vec<(Register, u32)>,
-    scripted: Vec<(Register, VecDeque<u32>)>,
     records: Vec<(Unit, Record)>,
 }
 
@@ -25,7 +23,7 @@ pub const IDLE: Record = Record { holder: Client::NONE, operation: Operation::RE
 impl FakeIsp {
     pub fn new() -> Self {
         let records = [Unit::Auto, Unit::Raid0, Unit::Mvrec].into_iter().map(|unit| (unit, IDLE)).collect();
-        Self { effects: Vec::new(), registers: Vec::new(), scripted: Vec::new(), records }
+        Self { effects: Vec::new(), registers: Vec::new(), records }
     }
 
     /// Sets a register's value without recording an effect.
@@ -34,11 +32,6 @@ impl FakeIsp {
             Some(slot) => slot.1 = value,
             None => self.registers.push((register, value)),
         }
-    }
-
-    /// Values the next reads of `register` return before it reads its stored value.
-    pub fn script(&mut self, register: Register, values: &[u32]) {
-        self.scripted.push((register, values.iter().copied().collect()));
     }
 
     pub fn value(&self, register: Register) -> Option<u32> {
@@ -73,11 +66,7 @@ impl FakeIsp {
 impl Isp for FakeIsp {
     fn read(&mut self, register: Register) -> u32 {
         self.effects.push(Effect::Read(register));
-        let scripted = self.scripted.iter_mut().find(|(at, values)| *at == register && !values.is_empty());
-        match scripted {
-            Some((_, values)) => values.pop_front().unwrap(),
-            None => self.value(register).unwrap_or(0),
-        }
+        self.value(register).unwrap_or(0)
     }
 
     fn write(&mut self, register: Register, value: u32) {
