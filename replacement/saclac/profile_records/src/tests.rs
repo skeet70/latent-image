@@ -1,10 +1,11 @@
 #![forbid(unsafe_code)]
 
-use xm1_saclac_interface::stock::{record_handle_from_a2, record_handle_word};
+use xm1_saclac_interface::stock::{record_handle_from_a2, record_handle_word, StockCallbackWord};
 use xm1_saclac_interface::RecordHandle;
 
+use crate::memory::{Block, Location, Memory};
 use crate::stock::{record, shared};
-use crate::{Access, AccessGroup, Bytes, ChangeSet, DeriveRefused, Handle, Index, ProfileRecords, RecordImage, Refusal, Scope, Serial, Slot, Tag};
+use crate::{Access, AccessGroup, Bytes, CaptureBuffer, ChangeSet, DeriveRefused, Handle, Index, MeasurementSelection, ProfileRecords, RecordImage, Refusal, Scope, Serial, Slot, StatisticsInUse, Tag, WindowPosition, WindowStatus};
 
 const SLOT: u8 = 3;
 const SERIAL: u16 = 0x2a;
@@ -124,7 +125,7 @@ fn a_restricted_scope_admits_only_its_group() {
 #[test]
 fn a_granted_write_lands_at_its_offset_in_the_slots_record_and_marks_its_change() {
     let mut view = Registry::new(0).open(1, &[0], READ | WRITE).view();
-    assert_eq!(view.write(word_of(owner()), &record::group_00::MEASUREMENT_SELECTION, 1), Ok(()));
+    assert_eq!(view.write(word_of(owner()), &record::group_00::MEASUREMENT_SELECTION, MeasurementSelection::Record), Ok(()));
     let memory = view.into_memory();
     assert_eq!(memory.records[1][0x30], 1);
     assert_eq!(word(&memory.records[1], 0x80), 1);
@@ -150,7 +151,7 @@ fn writes_without_the_grant_are_refused_and_store_nothing() {
     ];
     for (case, registry, handle) in cases {
         let mut view = registry.view();
-        assert_eq!(view.write(handle, &record::group_00::MEASUREMENT_SELECTION, 1), Err(Refusal::NotGranted), "{case}");
+        assert_eq!(view.write(handle, &record::group_00::MEASUREMENT_SELECTION, MeasurementSelection::Record), Err(Refusal::NotGranted), "{case}");
         let memory = view.into_memory();
         assert_eq!(memory.records, [[0; 0x2158]; 2], "{case}");
     }
@@ -169,8 +170,11 @@ fn a_read_gated_list_write_is_never_refused_and_lands_where_a_read_would() {
 fn an_element_write_needs_every_group_it_spans() {
     let element = [0xa5; 168];
     let second = Index::new(1).unwrap();
-    let mut refused = Registry::new(0).open(0, &[5, 6, 7, 8, 9], READ | WRITE).view();
-    assert_eq!(refused.write_element(word_of(owner()), &record::group_05::AT_016C_168, second, element), Err(Refusal::NotGranted));
+    for missing in 5..=10 {
+        let groups: Vec<u8> = (5..=10).filter(|&group| group != missing).collect();
+        let mut refused = Registry::new(0).open(0, &groups, READ | WRITE).view();
+        assert_eq!(refused.write_element(word_of(owner()), &record::group_05::AT_016C_168, second, element), Err(Refusal::NotGranted), "group {missing}");
+    }
 
     let mut granted = Registry::new(0).open(0, &[5, 6, 7, 8, 9, 10], READ | WRITE).view();
     assert_eq!(granted.write_element(word_of(owner()), &record::group_05::AT_016C_168, second, element), Ok(()));
@@ -194,9 +198,10 @@ fn list_entries_are_104_bytes_apart() {
 fn shared_fields_read_openly_and_write_under_their_group() {
     let mut view = Registry::new(0).open(0, &[20], WRITE).view();
     let handle = word_of(owner());
-    assert_eq!(view.write_shared(handle, &shared::group_20::STATISTICS_IN_USE, 3), Ok(()));
-    assert_eq!(view.read_shared(record_handle_from_a2(u32::MAX), &shared::group_20::STATISTICS_IN_USE), Ok(3));
-    assert_eq!(view.write_shared(handle, &shared::group_27::WINDOW_STATUS, 2), Err(Refusal::NotGranted));
+    let in_use = StatisticsInUse { primary: true, search: true, auxiliary: false };
+    assert_eq!(view.write_shared(handle, &shared::group_20::STATISTICS_IN_USE, in_use), Ok(()));
+    assert_eq!(view.read_shared(record_handle_from_a2(u32::MAX), &shared::group_20::STATISTICS_IN_USE), Ok(in_use));
+    assert_eq!(view.write_shared(handle, &shared::group_27::WINDOW_STATUS, WindowStatus(2)), Err(Refusal::NotGranted));
     let memory = view.into_memory();
     assert_eq!(word(&memory.shared, 0x150), 3);
     assert_eq!(word(&memory.shared, 0x734), 0);
@@ -226,7 +231,7 @@ fn shared_array_elements_are_eight_bytes_apart() {
 #[test]
 fn applying_a_staged_record_writes_only_its_changed_fields() {
     let mut staged = RecordImage::default();
-    staged.set(&record::group_00::MEASUREMENT_SELECTION, 1);
+    staged.set(&record::group_00::MEASUREMENT_SELECTION, MeasurementSelection::Record);
     staged.set(&record::group_00::AT_0069, 6);
     let mut registry = Registry::new(0).open(0, &[0], READ | WRITE);
     registry.memory.records[0][0x31] = 0x44;
@@ -241,15 +246,18 @@ fn applying_a_staged_record_writes_only_its_changed_fields() {
     assert_eq!(word(record, 0x88), 1 << 4);
     let selection = record::group_00::MEASUREMENT_SELECTION.change().unwrap();
     let flag = record::group_00::AT_0069.change().unwrap();
+    let unset = record::group_00::AT_0031.change().unwrap();
     assert_eq!(view.has_changes(word_of(owner()), ChangeSet::of(selection)), Ok(true));
     assert_eq!(view.has_changes(word_of(owner()), ChangeSet::of(flag)), Ok(true));
+    assert_eq!(view.has_changes(word_of(owner()), ChangeSet::of(unset)), Ok(false));
+    assert_eq!(view.has_changes(word_of(owner()), ChangeSet::of(selection).with(unset).unwrap()), Ok(false));
     assert_eq!(ChangeSet::of(selection).with(flag), None);
 }
 
 #[test]
 fn applying_without_write_access_clears_the_masks_and_writes_nothing() {
     let mut staged = RecordImage::default();
-    staged.set(&record::group_00::MEASUREMENT_SELECTION, 1);
+    staged.set(&record::group_00::MEASUREMENT_SELECTION, MeasurementSelection::Record);
     let mut registry = Registry::new(0).open(0, &[0], READ);
     registry.memory.records[0][0x80] = 0xff;
     let mut view = registry.view();
@@ -311,7 +319,7 @@ fn a_staged_record_matches_a_change_set_exactly_or_when_the_other_mask_is_clear(
     assert!(staged.changes_are(selection));
     staged.set(&record::group_00::AT_0069, 1);
     assert!(!staged.changes_are(selection));
-    staged.set(&record::group_00::MEASUREMENT_SELECTION, 1);
+    staged.set(&record::group_00::MEASUREMENT_SELECTION, MeasurementSelection::Record);
     assert!(staged.changes_are(selection));
     staged.set(&record::group_00::AT_0031, 1);
     assert!(!staged.changes_are(selection));
@@ -352,4 +360,132 @@ fn the_shared_list_blocks_write_under_group_27() {
     assert_eq!(&memory.shared[0x680..0x6a8], &[2; 40]);
     assert_eq!(&memory.shared[0x6a8..0x6f8], &[3; 80]);
     assert_eq!(memory.shared[0x6f8], 0);
+}
+
+/// `Bytes` that also records each store as (block, offset, width).
+#[derive(Default)]
+struct Recording {
+    bytes: Bytes,
+    stores: Vec<(Block, u16, usize)>,
+}
+
+impl Recording {
+    fn record<T>(&mut self, at: &Location<T>, width: usize) { self.stores.push((at.block(), at.offset(), width)) }
+}
+
+impl Memory for Recording {
+    fn read_u8(&self, at: Location<u8>) -> u8 { self.bytes.read_u8(at) }
+
+    fn read_u16(&self, at: Location<u16>) -> u16 { self.bytes.read_u16(at) }
+
+    fn read_u32(&self, at: Location<u32>) -> u32 { self.bytes.read_u32(at) }
+
+    fn write_u8(&mut self, at: Location<u8>, value: u8) {
+        self.record(&at, 1);
+        self.bytes.write_u8(at, value)
+    }
+
+    fn write_u16(&mut self, at: Location<u16>, value: u16) {
+        self.record(&at, 2);
+        self.bytes.write_u16(at, value)
+    }
+
+    fn write_u32(&mut self, at: Location<u32>, value: u32) {
+        self.record(&at, 4);
+        self.bytes.write_u32(at, value)
+    }
+}
+
+fn recording(registry: Registry) -> ProfileRecords<Recording> { ProfileRecords::new(Recording { bytes: registry.memory, stores: Vec::new() }) }
+
+const FIRST: Block = Block::Record(crate::RecordIndex::First);
+
+#[test]
+fn block_fields_are_stored_in_ascending_widest_aligned_units() {
+    let mut view = recording(Registry::new(0).open(0, &[0, 15], READ | WRITE));
+    let handle = word_of(owner());
+    view.write(handle, &record::group_00::AT_0004, [1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+    view.write(handle, &record::group_00::AT_000E, [9, 10, 11, 12, 13, 14]).unwrap();
+    view.write_shared(handle, &shared::group_15::FOCUS_CONFIRMATION, [0x5a; 32]).unwrap();
+    let memory = view.into_memory();
+    let field_stores: Vec<(Block, u16, usize)> = memory.stores.iter().copied().filter(|&(block, offset, _)| block != FIRST || offset < 0x80).collect();
+    let confirmation = (0..8u16).map(|word| (Block::Shared, 0x84 + 4 * word, 4));
+    let expected: Vec<(Block, u16, usize)> = [(FIRST, 0x4, 4), (FIRST, 0x8, 4), (FIRST, 0xe, 2), (FIRST, 0x10, 4)].into_iter().chain(confirmation).collect();
+    assert_eq!(field_stores, expected);
+    assert_eq!(&memory.bytes.records[0][0x4..0x14], &[1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 9, 10, 11, 12, 13, 14]);
+}
+
+#[test]
+fn applying_a_staged_record_stores_fields_in_the_tracked_order() {
+    let mut staged = RecordImage::default();
+    staged.set(&record::group_00::AT_005A, 1);
+    staged.set(&record::group_00::AT_0071, -1);
+    staged.set(&record::group_00::AT_0000, 0x0102_0304);
+    staged.set(&record::group_00::AT_002E, 0x0506);
+    staged.set(&record::group_00::MEASUREMENT_SELECTION, MeasurementSelection::Record);
+    let mut view = recording(Registry::new(0).open(0, &[0], READ | WRITE));
+    view.apply_changes(word_of(owner()), &staged).unwrap();
+    let field_offsets: Vec<u16> = view.memory().stores.iter().filter(|&&(block, offset, _)| block == FIRST && !(0x80..0x90).contains(&offset)).map(|&(_, offset, _)| offset).collect();
+    assert_eq!(field_offsets, [0x30, 0x2e, 0x0, 0x71, 0x5a]);
+}
+
+#[test]
+fn signed_fields_read_back_negative() {
+    let mut registry = Registry::new(0);
+    registry.memory.records[0][0x1a..0x1c].copy_from_slice(&[0xfe, 0xff]);
+    registry.memory.records[0][0x71] = 0x80;
+    registry.memory.shared[0x1fc..0x1fe].copy_from_slice(&[0x00, 0x80]);
+    let view = registry.view();
+    let handle = word_of(owner());
+    assert_eq!(view.read(handle, &record::group_00::AT_001A), Ok(-2));
+    assert_eq!(view.read(handle, &record::group_00::AT_0071), Ok(-128));
+    assert_eq!(view.read_shared(handle, &shared::group_26::AT_01FC), Ok(i16::MIN));
+}
+
+#[test]
+fn a_write_through_a_slot_naming_no_record_lands_in_the_selected_one() {
+    let mut view = Registry::new(1).open(5, &[0], READ | WRITE).view();
+    assert_eq!(view.write(word_of(owner()), &record::group_00::AT_0069, 3), Ok(()));
+    let memory = view.into_memory();
+    assert_eq!(memory.records[1][0x69], 3);
+    assert_eq!(memory.records[0][0x69], 0);
+}
+
+#[test]
+fn named_fields_store_their_stock_encoding() {
+    let mut view = Registry::new(0).open(0, &[0, 20, 27], READ | WRITE).view();
+    let handle = word_of(owner());
+    view.write_shared(handle, &shared::group_20::STATISTICS_IN_USE, StatisticsInUse { primary: true, search: false, auxiliary: true }).unwrap();
+    view.write_shared(handle, &shared::group_20::CAPTURE_BUFFER, CaptureBuffer::new(0x0123_4560)).unwrap();
+    view.write_shared(handle, &shared::group_20::IMAGE_CALLBACK, StockCallbackWord(0x00f3_2c18)).unwrap();
+    view.write_shared(handle, &shared::group_27::WINDOW_POSITION, WindowPosition([0x0102, 0x0304])).unwrap();
+    view.write(handle, &record::group_00::MEASUREMENT_SELECTION, MeasurementSelection::Other(7)).unwrap();
+    assert_eq!(view.read_shared(handle, &shared::group_20::CAPTURE_BUFFER), Ok(CaptureBuffer::new(0x0123_4560)));
+    let memory = view.into_memory();
+    assert_eq!(word(&memory.shared, 0x150), 0b101);
+    assert_eq!(word(&memory.shared, 0x154), 0x0123_4560);
+    assert_eq!(word(&memory.shared, 0x164), 0x00f3_2c18);
+    assert_eq!(word(&memory.shared, 0x838), 0x0304_0102);
+    assert_eq!(memory.records[0][0x30], 7);
+
+    let mut detached = Registry::new(0).open(0, &[20], WRITE);
+    put_word(&mut detached.memory.shared, 0x154, 0x0123_4560);
+    let mut view = detached.view();
+    view.write_shared(handle, &shared::group_20::CAPTURE_BUFFER, None).unwrap();
+    assert_eq!(view.read_shared(handle, &shared::group_20::CAPTURE_BUFFER), Ok(None));
+    assert_eq!(word(&view.into_memory().shared, 0x154), 0);
+}
+
+#[test]
+fn a_location_outside_its_block_or_misaligned_cannot_be_formed() {
+    let cases: [(&str, fn() -> u16); 4] = [
+        ("word past the shared block", || Location::<u32>::new(Block::Shared, 0x9d4).offset()),
+        ("block running past the registry", || Location::<[u8; 8]>::new(Block::Registry, 0x388).offset()),
+        ("misaligned word", || Location::<u32>::new(FIRST, 0x82).offset()),
+        ("misaligned halfword", || Location::<i16>::new(Block::Shared, 0x1fd).offset()),
+    ];
+    for (case, form) in cases {
+        assert!(std::panic::catch_unwind(form).is_err(), "{case}");
+    }
+    assert_eq!(Location::<u32>::new(Block::Shared, 0x9d0).offset(), 0x9d0);
 }

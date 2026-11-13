@@ -11,6 +11,7 @@ pub mod field;
 pub mod handle;
 pub mod image;
 pub mod memory;
+pub mod values;
 pub mod view;
 #[allow(unsafe_code)]
 pub mod stock;
@@ -20,6 +21,7 @@ pub use field::{ChangeBank, ChangeBit, ChangeSet, Index, RecordArray, RecordFiel
 pub use handle::{Access, AccessGroup, DeriveRefused, Handle, Scope, Serial, Slot, Tag};
 pub use image::RecordImage;
 pub use memory::{Bytes, Location, Memory, RecordIndex};
+pub use values::{CaptureBuffer, IntervalTracking, MeasurementSelection, OfferedMeasurements, StatisticsInUse, WindowPosition, WindowStatus};
 pub use view::{ProfileRecords, Refusal};
 
 #[cfg(test)]

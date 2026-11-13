@@ -8,6 +8,7 @@ _SOURCES = [
     "src/handle.rs",
     "src/image.rs",
     "src/memory.rs",
+    "src/values.rs",
     "src/view.rs",
     "src/stock/mod.rs",
     "src/stock/layout.rs",

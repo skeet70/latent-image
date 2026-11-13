@@ -2,6 +2,9 @@
 
 //! The three stock objects the view reads and writes, and a byte-array stand-in for them.
 
+use core::marker::PhantomData;
+
+use crate::field::Value;
 use crate::stock::layout::{RECORD_BYTES, REGISTRY_BYTES, SHARED_BYTES};
 
 /// One of the two profile records.
@@ -20,26 +23,120 @@ impl RecordIndex {
     }
 }
 
-/// A byte offset into the handle registry, one record or the shared block. The view forms
-/// locations only from catalog offsets and bounded element indices.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Location {
-    Registry(u16),
-    Record(RecordIndex, u16),
-    Shared(u16),
+pub(crate) enum Block {
+    Registry,
+    Record(RecordIndex),
+    Shared,
 }
 
-/// Accesses are naturally sized so another task reading the same field sees the store stock
-/// would make.
+impl Block {
+    const fn bytes(self) -> usize {
+        match self {
+            Block::Registry => REGISTRY_BYTES,
+            Block::Record(_) => RECORD_BYTES,
+            Block::Shared => SHARED_BYTES,
+        }
+    }
+}
+
+/// Where a `T` lies in one block: wholly inside it, at an offset that is a multiple of `T`'s
+/// alignment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Location<T> {
+    block: Block,
+    offset: u16,
+    value: PhantomData<T>,
+}
+
+impl<T: Value> Location<T> {
+    pub(crate) const fn new(block: Block, offset: u16) -> Self {
+        assert!(offset as usize + T::BYTES <= block.bytes(), "location outside its block");
+        assert!(offset as usize % T::ALIGN == 0, "misaligned location");
+        Self { block, offset, value: PhantomData }
+    }
+
+    /// The same place holding a `U` of the same width.
+    pub(crate) const fn retype<U: Value>(self) -> Location<U> { Location::new(self.block, self.offset) }
+}
+
+impl<T> Location<T> {
+    pub(crate) const fn block(&self) -> Block { self.block }
+
+    pub(crate) const fn offset(&self) -> u16 { self.offset }
+}
+
+/// One access of a block copy.
+enum Unit {
+    Byte,
+    Half,
+    Word,
+}
+
+/// The widest access the offset's alignment and the bytes left allow.
+const fn unit(offset: usize, left: usize) -> Unit {
+    if offset % 4 == 0 && left >= 4 {
+        Unit::Word
+    } else if offset % 2 == 0 && left >= 2 {
+        Unit::Half
+    } else {
+        Unit::Byte
+    }
+}
+
+/// Scalar accesses are single loads and stores of their width. Byte blocks are copied in
+/// ascending order, each access the widest `unit` allows.
 pub trait Memory {
-    fn read_u8(&self, at: Location) -> u8;
-    fn read_u16(&self, at: Location) -> u16;
-    fn read_u32(&self, at: Location) -> u32;
-    fn read_bytes(&self, at: Location, into: &mut [u8]);
-    fn write_u8(&mut self, at: Location, value: u8);
-    fn write_u16(&mut self, at: Location, value: u16);
-    fn write_u32(&mut self, at: Location, value: u32);
-    fn write_bytes(&mut self, at: Location, bytes: &[u8]);
+    fn read_u8(&self, at: Location<u8>) -> u8;
+    fn read_u16(&self, at: Location<u16>) -> u16;
+    fn read_u32(&self, at: Location<u32>) -> u32;
+    fn write_u8(&mut self, at: Location<u8>, value: u8);
+    fn write_u16(&mut self, at: Location<u16>, value: u16);
+    fn write_u32(&mut self, at: Location<u32>, value: u32);
+
+    fn read_bytes<const N: usize>(&self, at: Location<[u8; N]>) -> [u8; N] {
+        let mut bytes = [0; N];
+        let mut index = 0;
+        while index < N {
+            let offset = at.offset + index as u16;
+            match unit(offset as usize, N - index) {
+                Unit::Word => {
+                    bytes[index..index + 4].copy_from_slice(&self.read_u32(Location::new(at.block, offset)).to_le_bytes());
+                    index += 4;
+                }
+                Unit::Half => {
+                    bytes[index..index + 2].copy_from_slice(&self.read_u16(Location::new(at.block, offset)).to_le_bytes());
+                    index += 2;
+                }
+                Unit::Byte => {
+                    bytes[index] = self.read_u8(Location::new(at.block, offset));
+                    index += 1;
+                }
+            }
+        }
+        bytes
+    }
+
+    fn write_bytes<const N: usize>(&mut self, at: Location<[u8; N]>, bytes: [u8; N]) {
+        let mut index = 0;
+        while index < N {
+            let offset = at.offset + index as u16;
+            match unit(offset as usize, N - index) {
+                Unit::Word => {
+                    self.write_u32(Location::new(at.block, offset), u32::from_le_bytes([bytes[index], bytes[index + 1], bytes[index + 2], bytes[index + 3]]));
+                    index += 4;
+                }
+                Unit::Half => {
+                    self.write_u16(Location::new(at.block, offset), u16::from_le_bytes([bytes[index], bytes[index + 1]]));
+                    index += 2;
+                }
+                Unit::Byte => {
+                    self.write_u8(Location::new(at.block, offset), bytes[index]);
+                    index += 1;
+                }
+            }
+        }
+    }
 }
 
 /// The registry, both records and the shared block as plain little-endian bytes.
@@ -55,45 +152,35 @@ impl Default for Bytes {
 }
 
 impl Bytes {
-    fn span(&self, at: Location, len: usize) -> &[u8] {
-        match at {
-            Location::Registry(offset) => &self.registry[offset as usize..][..len],
-            Location::Record(record, offset) => &self.records[record.index()][offset as usize..][..len],
-            Location::Shared(offset) => &self.shared[offset as usize..][..len],
-        }
+    fn span<T: Value>(&self, at: Location<T>) -> &[u8] {
+        let block: &[u8] = match at.block {
+            Block::Registry => &self.registry,
+            Block::Record(record) => &self.records[record.index()],
+            Block::Shared => &self.shared,
+        };
+        &block[at.offset as usize..][..T::BYTES]
     }
 
-    fn span_mut(&mut self, at: Location, len: usize) -> &mut [u8] {
-        match at {
-            Location::Registry(offset) => &mut self.registry[offset as usize..][..len],
-            Location::Record(record, offset) => &mut self.records[record.index()][offset as usize..][..len],
-            Location::Shared(offset) => &mut self.shared[offset as usize..][..len],
-        }
+    fn span_mut<T: Value>(&mut self, at: Location<T>) -> &mut [u8] {
+        let block: &mut [u8] = match at.block {
+            Block::Registry => &mut self.registry,
+            Block::Record(record) => &mut self.records[record.index()],
+            Block::Shared => &mut self.shared,
+        };
+        &mut block[at.offset as usize..][..T::BYTES]
     }
 }
 
 impl Memory for Bytes {
-    fn read_u8(&self, at: Location) -> u8 { self.span(at, 1)[0] }
+    fn read_u8(&self, at: Location<u8>) -> u8 { self.span(at)[0] }
 
-    fn read_u16(&self, at: Location) -> u16 {
-        let mut bytes = [0; 2];
-        bytes.copy_from_slice(self.span(at, 2));
-        u16::from_le_bytes(bytes)
-    }
+    fn read_u16(&self, at: Location<u16>) -> u16 { u16::decode(self.span(at)) }
 
-    fn read_u32(&self, at: Location) -> u32 {
-        let mut bytes = [0; 4];
-        bytes.copy_from_slice(self.span(at, 4));
-        u32::from_le_bytes(bytes)
-    }
+    fn read_u32(&self, at: Location<u32>) -> u32 { u32::decode(self.span(at)) }
 
-    fn read_bytes(&self, at: Location, into: &mut [u8]) { into.copy_from_slice(self.span(at, into.len())) }
+    fn write_u8(&mut self, at: Location<u8>, value: u8) { self.span_mut(at)[0] = value }
 
-    fn write_u8(&mut self, at: Location, value: u8) { self.span_mut(at, 1)[0] = value }
+    fn write_u16(&mut self, at: Location<u16>, value: u16) { value.encode(self.span_mut(at)) }
 
-    fn write_u16(&mut self, at: Location, value: u16) { self.span_mut(at, 2).copy_from_slice(&value.to_le_bytes()) }
-
-    fn write_u32(&mut self, at: Location, value: u32) { self.span_mut(at, 4).copy_from_slice(&value.to_le_bytes()) }
-
-    fn write_bytes(&mut self, at: Location, bytes: &[u8]) { self.span_mut(at, bytes.len()).copy_from_slice(bytes) }
+    fn write_u32(&mut self, at: Location<u32>, value: u32) { value.encode(self.span_mut(at)) }
 }
