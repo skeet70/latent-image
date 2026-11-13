@@ -49,6 +49,18 @@ main = do
       captureBytes = replicate 176 0
   mapM_ (\offset -> check (captureRecord captureBytes /= captureRecord (mutate offset captureBytes))) [0..175]
   check (isLeft (captureRecord (replicate 175 0)))
+  let through = projectPayload recovered Outgoing (QueueId 48) (Operation 0x4002)
+      throughBytes = replicate 208 0
+      nonzero = take 32 throughBytes ++ [8] ++ drop 33 throughBytes
+  mapM_ (\offset -> check (through throughBytes == through (mutate offset throughBytes))) ([36..39] ++ [148..156] ++ [162,163,182,183])
+  mapM_ (\offset -> check (through nonzero /= through (mutate offset nonzero))) [36..39]
+  check (through throughBytes /= through nonzero)
+  check (through throughBytes /= through (mutate 180 throughBytes))
+  let half = projectPayload recovered Outgoing (QueueId 44) (Operation 0x3c0c)
+      halfBytes = replicate 80 0
+      holes = [10,11,17,18,19,28,29,30,31,34,35]
+  mapM_ (\offset -> check (half halfBytes == half (mutate offset halfBytes))) holes
+  mapM_ (\offset -> check (half halfBytes /= half (mutate offset halfBytes))) (filter (`notElem` holes) [0..79])
   putStrLn "payload field projection behavioral tests passed"
   where parse = either fail pure . parseDeclaration . L.toStrict . encode
 

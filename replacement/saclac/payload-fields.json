@@ -1401,24 +1401,23 @@
       "operation": 15372,
       "bytes": 80,
       "fields": [
-        {
-          "name": "parameter-record",
-          "offset": 0,
-          "bytes": 76,
-          "sources": [
-            "0x00f4c6e8: complete supplied record copied; all record bytes retained"
-          ]
-        },
-        {
-          "name": "completion",
-          "offset": 76,
-          "bytes": 4,
-          "sources": [
-            "0x00f4c6e8: callback word after copied record"
-          ]
-        }
+        { "name": "mode", "offset": 0, "bytes": 4, "sources": ["X-M1 1.50 id5 0xf3a580..0xf3a584 stores word at r11-88; request base r11-88 at 0xf3a738"] },
+        { "name": "source", "offset": 4, "bytes": 4, "sources": ["0xf3a644..0xf3a648 stores word at r11-84"] },
+        { "name": "coordinate", "offset": 8, "bytes": 2, "sources": ["0xf3a5fc and 0xf3a620 store halfword at r11-80"] },
+        { "name": "configuration", "offset": 12, "bytes": 4, "sources": ["0xf3a608..0xf3a60c stores word at r11-76"] },
+        { "name": "option", "offset": 16, "bytes": 1, "sources": ["0xf3a610..0xf3a614 stores byte at r11-72"] },
+        { "name": "sample", "offset": 20, "bytes": 4, "sources": ["0xf3a5a4..0xf3a5a8 stores word at r11-68"] },
+        { "name": "dimensions", "offset": 24, "bytes": 4, "sources": ["0xf3a5bc and 0xf3a5d8 store halfwords at r11-64 and r11-62"] },
+        { "name": "threshold", "offset": 32, "bytes": 2, "sources": ["0xf3a650..0xf3a654 stores halfword at r11-56"] },
+        { "name": "control-words", "offset": 36, "bytes": 40, "sources": ["0xf3a604,0xf3a628,0xf3a634,0xf3a660,0xf3a66c,0xf3a674,0xf3a688/694,0xf3a6c8,0xf3a6d0 and 0xf3a590 define all ten words from r11-52 through r11-16"] },
+        { "name": "completion", "offset": 76, "bytes": 4, "sources": ["0xf4c6e8 copies 76 bytes and appends callback"] }
       ],
-      "padding": []
+      "padding": [
+        { "offset": 10, "bytes": 2, "sources": ["0xf3a564..0xf3a73c stores only halfword at r11-80, then next word at r11-76; bytes r11-78/-77 never written"] },
+        { "offset": 17, "bytes": 3, "sources": ["0xf3a614 stores only byte r11-72; next word is r11-68; no writes to r11-71..-69"] },
+        { "offset": 28, "bytes": 4, "sources": ["0xf3a564..0xf3a73c never writes r11-60..-57 between dimensions and threshold"] },
+        { "offset": 34, "bytes": 2, "sources": ["0xf3a654 stores only halfword at r11-56; r11-54/-53 never written"] }
+      ]
     },
     {
       "direction": "outgoing",
@@ -1600,14 +1599,9 @@
             "0x01039638/start_copy_blocks copy0x10"
           ]
         },
-        {
-          "name": "format",
-          "offset": 16,
-          "bytes": 24,
-          "sources": [
-            "0x01039638 copy0x18"
-          ]
-        },
+        { "name": "format-values", "offset": 16, "bytes": 16, "sources": ["0xf3b5f0..0xf3b620 initializes first four format words"] },
+        { "name": "format-selector", "offset": 32, "bytes": 4, "sources": ["0xf3b648 writes 0/1 on zero branch; 0xf3b688 writes 8/9 on nonzero branch"] },
+        { "name": "format-word-5", "offset": 36, "bytes": 4, "sources": ["0xf3b674 defines format word5 on nonzero branch; 0x10324e8 copies it to state+0x44b4, read as a value at 0x1029808,0x102cb64,0x103f404"], "excluded_when": { "offset": 32, "bytes": 4, "values": [0,1], "sources": ["0xf3b628..0xf3b65c zero branch returns without writing word5; selector0/1 identifies this branch; stock defect: owned sender must define word5 when sending machine becomes owned"] } },
         {
           "name": "window",
           "offset": 40,
@@ -1632,14 +1626,10 @@
             "0x01039638 copy0x38"
           ]
         },
-        {
-          "name": "capture",
-          "offset": 128,
-          "bytes": 56,
-          "sources": [
-            "0x01039638 copy0x38"
-          ]
-        },
+        { "name": "capture-words", "offset": 128, "bytes": 20, "sources": ["0xf3b9f8,0xf3ba04,0xf3ba1c,0xf3ba28,0xf3ba34 define capture words0..4"] },
+        { "name": "capture-options", "offset": 157, "bytes": 5, "sources": ["0xf3ba10,0xf3ba40,0xf3ba4c,0xf3ba58,0xf3ba64 store capture bytes29..33"] },
+        { "name": "capture-dimensions", "offset": 164, "bytes": 16, "sources": ["0xf3bad8,0xf3baf0,0xf3baf4,0xf3baf8 store capture words9..12"] },
+        { "name": "capture-policy", "offset": 180, "bytes": 2, "sources": ["0xf3bb04 stores only halfword at capture+52"] },
         {
           "name": "optional-words",
           "offset": 184,
@@ -1673,7 +1663,11 @@
           ]
         }
       ],
-      "padding": []
+      "padding": [
+        { "offset": 148, "bytes": 9, "sources": ["0xf3b9d8..0xf3bb0c writes capture0..19 then29..33; capture20..28 never written"] },
+        { "offset": 162, "bytes": 2, "sources": ["0xf3ba64 stores capture byte33, next store is word36; bytes34/35 never written"] },
+        { "offset": 182, "bytes": 2, "sources": ["0xf3bb04 stores capture halfword52 then returns at0xf3bb0c without writing54/55; 0xf3bd8c supplies this record to0x1039638, whose block copy retains these unwritten bytes"] }
+      ]
     },
     {
       "direction": "outgoing",

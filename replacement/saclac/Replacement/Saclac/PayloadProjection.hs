@@ -16,7 +16,7 @@ import qualified Data.ByteString as B
 import qualified Data.Aeson.Types as J
 import Data.List (find, sortOn)
 import qualified Data.Text as T
-import Data.Word (Word8, Word16)
+import Data.Word (Word8, Word16, Word32)
 
 newtype QueueId = QueueId Word8 deriving (Eq, Show)
 newtype Operation = Operation Word16 deriving (Eq, Show)
@@ -25,7 +25,8 @@ newtype Offset = Offset Int deriving (Eq, Show)
 newtype Width = Width Int deriving (Eq, Show)
 newtype Citation = Citation T.Text deriving (Eq, Show)
 data Direction = Incoming | Outgoing deriving (Eq, Show)
-data Field = Field T.Text Offset Width [Citation] deriving (Eq, Show)
+data Exclusion = Exclusion Offset Width [Word32] [Citation] deriving (Eq, Show)
+data Field = Field T.Text Offset Width [Citation] (Maybe Exclusion) deriving (Eq, Show)
 data Padding = Padding Offset Width [Citation] deriving (Eq, Show)
 data Message = Message Direction QueueId Operation PayloadSize [Field] [Padding] deriving (Eq, Show)
 data Declaration = Declaration T.Text [Message] deriving (Eq, Show)
@@ -43,17 +44,31 @@ instance FromJSON Citation where
     unless (not (T.null (T.strip text))) (fail "field citation must not be empty")
     pure (Citation text)
 instance ToJSON Citation where toJSON (Citation text) = toJSON text
+instance FromJSON Exclusion where
+  parseJSON = withObject "conditional field exclusion" $ \row -> do
+    offset <- row .: "offset"
+    width <- row .: "bytes"
+    values <- row .: "values"
+    sources <- row .: "sources"
+    unless (offset >= 0 && width `elem` [1,2,4] && not (null values) && not (null sources)
+      && all (\value -> toInteger value < 256 ^ width) values) (fail "invalid field exclusion")
+    pure (Exclusion (Offset offset) (Width width) values sources)
+instance ToJSON Exclusion where
+  toJSON (Exclusion (Offset offset) (Width width) values sources) = object
+    ["offset" .= offset, "bytes" .= width, "values" .= values, "sources" .= sources]
 instance FromJSON Field where
   parseJSON = withObject "payload field" $ \row -> do
     name <- row .: "name"
     offset <- row .: "offset"
     width <- row .: "bytes"
     sources <- row .: "sources"
+    exclusion <- row .:? "excluded_when"
     unless (not (T.null (T.strip name)) && offset >= 0 && width > 0 && not (null sources)) (fail "invalid payload field")
-    pure (Field name (Offset offset) (Width width) sources)
+    pure (Field name (Offset offset) (Width width) sources exclusion)
 instance ToJSON Field where
-  toJSON (Field name (Offset offset) (Width width) sources) = object
-    ["name" .= name, "offset" .= offset, "bytes" .= width, "sources" .= sources]
+  toJSON (Field name (Offset offset) (Width width) sources exclusion) = object
+    (["name" .= name, "offset" .= offset, "bytes" .= width, "sources" .= sources]
+      ++ maybe [] (\condition -> ["excluded_when" .= condition]) exclusion)
 instance FromJSON Padding where
   parseJSON = withObject "payload padding" $ \row -> do
     offset <- row .: "offset"
@@ -73,14 +88,19 @@ instance FromJSON Message where
     fields <- row .: "fields"
     padding <- row .:? "padding" .!= []
     let spans = sortOn fst
-          ([(offset, width) | Field _ (Offset offset) (Width width) _ <- fields]
+          ([(offset, width) | Field _ (Offset offset) (Width width) _ _ <- fields]
           ++ [(offset, width) | Padding (Offset offset) (Width width) _ <- padding])
         covered = foldl advance (Just 0) spans
         advance (Just next) (offset, width) | next == offset && width <= size - offset = Just (offset + width)
         advance _ _ = Nothing
     unless (size >= 0 && size <= 4096 && covered == Just size) (fail "message fields and padding must partition its payload")
+    let selectorDefined (Field _ _ _ _ Nothing) = True
+        selectorDefined (Field _ _ _ _ (Just (Exclusion (Offset offset) (Width width) _ _))) =
+          any (\(Field _ (Offset start) (Width count) _ condition) ->
+            condition == Nothing && start <= offset && offset + width <= start + count) fields
+    unless (all selectorDefined fields) (fail "conditional selector must be an unconditional field")
     pure (Message direction queue operation (PayloadSize size) (sortOn fieldOffset fields) padding)
-    where fieldOffset (Field _ (Offset offset) _ _) = offset
+    where fieldOffset (Field _ (Offset offset) _ _ _) = offset
 instance ToJSON Message where
   toJSON (Message direction (QueueId queue) (Operation operation) (PayloadSize size) fields padding) = object
     ["direction" .= direction, "queue" .= queue, "operation" .= operation, "bytes" .= size, "fields" .= fields, "padding" .= padding]
@@ -108,4 +128,8 @@ projectPayload (Declaration _ messages) direction queue operation payload = do
     (find (\(Message candidateDirection candidateQueue candidateOperation _ _ _) ->
       candidateDirection == direction && candidateQueue == queue && candidateOperation == operation) messages)
   unless (length payload == size) (Left "message payload length differs from field declaration")
-  pure (concat [take width (drop offset payload) | Field _ (Offset offset) (Width width) _ <- fields])
+  let included Nothing = True
+      included (Just (Exclusion (Offset offset) (Width width) values _)) =
+        let value = sum [fromIntegral byte * 256 ^ index | (index, byte) <- zip [0 :: Int ..] (take width (drop offset payload))]
+        in value `notElem` values
+  pure (concat [take width (drop offset payload) | Field _ (Offset offset) (Width width) _ condition <- fields, included condition])
