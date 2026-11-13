@@ -132,19 +132,23 @@ impl SnapshotComparison {
 
 /// The code most frequent among the latest `window` entries, the newer of equally frequent codes;
 /// AUTO without flags while fewer than `window` are recorded (0xf4d790).
-pub fn majority(entries: &[Option<Code>], window: usize) -> Recognition {
-    let Some(Some(_)) = entries.get(window - 1) else { return Recognition::AUTO };
+pub fn majority(entries: &[Option<Code>], window: usize) -> Recognition { leading(entries, window).map_or(Recognition::AUTO, |(_, code)| code.recognition()) }
+
+/// The majority's code and the newest entry holding it (0xf50914..0xf50994).
+pub(crate) fn leading(entries: &[Option<Code>], window: usize) -> Option<(usize, Code)> {
+    let Some(Some(_)) = entries.get(window - 1) else { return None };
     let mut counts = [0u8; 116];
-    let mut best = Code(0);
-    for code in entries[..window].iter().rev().flatten() {
+    let mut best = (0, Code(0));
+    for (index, code) in entries[..window].iter().enumerate().rev() {
+        let Some(code) = code else { continue };
         let count = &mut counts[usize::from(code.0)];
         *count = count.wrapping_add(1);
         let count = *count;
-        if counts[usize::from(best.0)] <= count {
-            best = *code;
+        if counts[usize::from(best.1 .0)] <= count {
+            best = (index, *code);
         }
     }
-    best.recognition()
+    Some(best)
 }
 
 /// Pushes `entry` in front of `entries`, dropping the oldest.

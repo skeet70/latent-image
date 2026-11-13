@@ -4,7 +4,9 @@ use std::vec::Vec;
 use xm1_saclac_interface::calc::SharedAddress;
 use xm1_saclac_profile_records::Bytes;
 
-use super::ports::{LensServices, Overlay, Steadiness, SubjectQuery, SubjectRequest};
+use super::ports::{LensServices, Overlay, SceneEvents, SceneTrace, Steadiness, SubjectQuery, SubjectRequest};
+use super::{Recognition, Scene, SceneFlags};
+use crate::adjust::configuration::ProfileStore;
 use crate::adjust::lens::{BiasTable, LensConfiguration};
 use crate::adjust::motion::ports::LensTables;
 use crate::adjust::profile_adjustment::{LensSteps, StepTable};
@@ -22,6 +24,34 @@ pub struct Scenery {
     pub steady: bool,
     pub lines: Vec<(Vec<u8>, [u8; 4])>,
     pub lens: LensFake,
+    pub changes: Vec<Recognition>,
+    pub snapshots: u32,
+    pub trace: Vec<TraceLine>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TraceLine {
+    Name(Scene),
+    Flags(SceneFlags),
+    Measurements([i32; 21]),
+}
+
+impl ProfileStore for Scenery {
+    fn records(&mut self) -> &mut xm1_saclac_profile_records::ProfileRecords<Bytes> { &mut self.world.records }
+}
+
+impl SceneEvents for Scenery {
+    fn scene_changed(&mut self, handle: xm1_saclac_interface::RecordHandle, recognition: Recognition) {
+        assert_eq!(handle, crate::exposure::fakes::handle());
+        self.changes.push(recognition);
+    }
+    fn snapshot_adjustments(&mut self) { self.snapshots += 1; }
+}
+
+impl SceneTrace for Scenery {
+    fn scene_name(&mut self, scene: Scene) { self.trace.push(TraceLine::Name(scene)); }
+    fn scene_flags(&mut self, flags: SceneFlags) { self.trace.push(TraceLine::Flags(flags)); }
+    fn measurements(&mut self, values: &[i32; 21]) { self.trace.push(TraceLine::Measurements(*values)); }
 }
 
 impl Properties for Scenery {

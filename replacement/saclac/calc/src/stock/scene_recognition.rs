@@ -215,6 +215,136 @@ pub const BOUNDS: [[BoundSettings; 2]; 2] = [
     ],
 ];
 
+// The vote's configuration (0xf4f838).
+
+/// Nonzero: the shot's vote asks the frame query; zero, it takes the majority.
+pub const CAPTURE_QUERY: Property = Property(0x75e6);
+/// The shot's change detectors by slot, their weights six ids on, and the weight that finds the
+/// frame unchanged.
+pub const CAPTURE_DETECTORS: [Property; 6] = detector_keys(0x76b3);
+pub const CAPTURE_THRESHOLD: Property = Property(0x76bf);
+/// Nonzero: a grid match toward the shifted grid, then a lens move toward the reference, leave the
+/// frame unchanged.
+pub const CAPTURE_MATCH_TOWARD: Property = Property(0x76c0);
+pub const CAPTURE_LENS_TOWARD: Property = Property(0x76c1);
+/// Nonzero: the shot records its recognition and takes the majority.
+pub const CAPTURE_RECORD: Property = Property(0x75e0);
+/// Zero: live view publishes the majority of its frame queries.
+pub const LIVE_VOTE: Property = Property(0x75b0);
+/// Nonzero: a held recognition is released after `HOLD_FRAMES` frames, not by its detectors.
+pub const HOLD_BY_COUNT: Property = Property(0x75b2);
+pub const HOLD_FRAMES: Property = Property(0x75b5);
+pub const REFERENCE_DETECTORS: [Property; 6] = detector_keys(0x75b6);
+pub const REFERENCE_VOTE_THRESHOLD: Property = Property(0x75c2);
+/// The window of change decisions and the changes in it that release a held recognition.
+pub const RELEASE_WINDOW: Property = Property(0x75b3);
+pub const RELEASE_CHANGES: Property = Property(0x75b4);
+/// Nonzero: live view compares each frame with the snapshot.
+pub const SNAPSHOT_VOTE: Property = Property(0x7610);
+pub const SNAPSHOT_DETECTORS: [Property; 6] = detector_keys(0x7619);
+pub const SNAPSHOT_VOTE_THRESHOLD: Property = Property(0x7625);
+/// Nonzero: only a frame unchanged from the snapshot is recognised, and only such a frame is
+/// filtered.
+pub const UNCHANGED_ONLY: Property = Property(0x7611);
+pub const FILTER_UNCHANGED_ONLY: Property = Property(0x768f);
+/// Nonzero: a changed frame keeps a group scene only when the group's switch allows it, by
+/// scene group in `SceneGroup` order.
+pub const GROUP_SWITCHES: Property = Property(0x7690);
+pub const GROUP_SWITCH: [Property; 6] = [Property(0x7691), Property(0x7693), Property(0x7692), Property(0x7694), Property(0x7695), Property(0x7696)];
+/// The scene and flag overrides, 255 for none, live view's and then the shot's, with the bit of
+/// property 0x65a8 that holds their flags (0xf4fd98, 0xf50bc0).
+pub const SCENE_OVERRIDE: [Property; 2] = [Property(0x4a12), Property(0x4a13)];
+pub const FLAG_OVERRIDES: Property = Property(0x65a8);
+pub const FLAG_OVERRIDE_SHIFT: [u32; 2] = [3, 5];
+/// Nonzero: a record with the record measurement selection publishes this kind (0xf4a0e4).
+pub const KIND_OVERRIDE: Property = Property(0x7606);
+/// Bit 7 of property 0xa8 keeps the work-memory log; bit 10 of the two-byte property 0xe8 writes
+/// the trace lines.
+pub const LOG_SWITCH: (Property, u32) = (Property(0xa8), 0x80);
+pub const TRACE_SWITCH: (Property, u16) = (Property(0xe8), 0x400);
+/// The log's last index; the one after it wraps to 0.
+pub const LOG_LAST: u16 = LOG_ENTRIES - 1;
+
+const fn detector_keys(first: u32) -> [Property; 6] { [Property(first), Property(first + 1), Property(first + 2), Property(first + 3), Property(first + 4), Property(first + 5)] }
+
+/// A change detector's weight id: six on from its slot id.
+pub const fn detector_weight(key: Property) -> Property { Property(key.0 + 6) }
+
+/// The scene the configured kind names (0xf4a0e4).
+pub const fn translated_kind(kind: u32) -> Scene {
+    Scene(match kind {
+        2 => 48,
+        3 => 1,
+        4 => 4,
+        5 => 14,
+        6 => 5,
+        7 => 11,
+        _ => 0,
+    })
+}
+
+/// The on-screen text's scene line for each scene, AUTO's for the rest (0xf4e058).
+pub fn scene_label(scene: Scene) -> &'static [u8] {
+    match scene.0 {
+        1 => b"PORTRAIT            ",
+        4 => b"BACKLIGHT           ",
+        5 => b"LANDSCAPE           ",
+        8 => b"LANDSCAPE_PORTRAIT  ",
+        9 => b"LANDSCAPE_BACKLIGHT ",
+        11 => b"NIGHTSCAPE_HAND     ",
+        12 => b"NIGHTSCAPE          ",
+        14 => b"NIGHTSCAPE_PORTRAIT ",
+        15 => b"NIGHT_TRIPOD_POR    ",
+        18 => b"BEACH               ",
+        19 => b"BEACH_PORTRAIT      ",
+        20 => b"BEACH_BACKLIGHT     ",
+        21 => b"SNOW                ",
+        22 => b"SNOW_PORTRAIT       ",
+        23 => b"SNOW_BACKLIGHT      ",
+        25 => b"SUNSET              ",
+        26 => b"SUNSET_PORTRAIT     ",
+        27 => b"SUNSET_BACKLIGHT    ",
+        34 => b"SKY                 ",
+        35 => b"SKY_PORTRAIT        ",
+        36 => b"SKY_BACKLIGHT       ",
+        37 => b"LEAF              ",
+        38 => b"LEAF_PORTRAIT     ",
+        39 => b"LEAF_BACKLIGHT    ",
+        40 => b"SKY_LEAF          ",
+        41 => b"SKY_LEAF_PORTRAIT ",
+        42 => b"SKY_LEAF_BACKLIGHT",
+        48 => b"MACRO               ",
+        _ => b"AUTO                ",
+    }
+}
+
+/// The on-screen text's flag words (0xf52f30, 0xf52f38, 0xf52f40).
+pub const MOVING_TEXT: &[u8] = b"&MOTION";
+pub const SHAKE_REDUCTION_TEXT: &[u8] = b"&ADIS";
+pub const NO_FLAGS_TEXT: &[u8] = b"NO_EXT_SCENE";
+
+/// Where the trace's scene names lie, by scene 1..=57, AUTO's for the rest (0xf50fa0 table).
+pub const fn trace_scene_name(scene: Scene) -> SharedAddress {
+    const NAMES: [u32; 57] = [
+        0xf5_2f58, 0xf5_2f68, 0xf5_2f84, 0xf5_2f90, 0xf5_2fb0, 0xf5_2fc0, 0xf5_2fdc, 0xf5_2ffc, 0xf5_3008, 0xf5_3018, 0xf5_302c, 0xf5_3048, 0xf5_3060, 0xf5_3080, 0xf5_30a0,
+        0xf5_30c4, 0xf5_30d8, 0xf5_30f0, 0xf5_3100, 0xf5_3110, 0xf5_3124, 0xf5_3134, 0xf5_3144, 0xf5_3158, 0xf5_3168, 0xf5_3178, 0xf5_3188, 0xf5_319c, 0xf5_31b0, 0xf5_31c4,
+        0xf5_31d4, 0xf5_31e4, 0xf5_31f4, 0xf5_3204, 0xf5_320c, 0xf5_3218, 0xf5_3228, 0xf5_322c, 0xf5_3238, 0xf5_3248, 0xf5_3250, 0xf5_3260, 0xf5_3274, 0xf5_3294, 0xf5_32a4,
+        0xf5_32b8, 0xf5_32c4, 0xf5_32d4, 0xf5_32e4, 0xf5_32f4, 0xf5_3300, 0xf5_330c, 0xf5_3318, 0xf5_332c, 0xf5_3340, 0xf5_3354, 0xf5_3368,
+    ];
+    SharedAddress(match scene.0 {
+        1..=57 => NAMES[scene.0 as usize - 1],
+        _ => 0xf5_2f50,
+    })
+}
+
+/// The trace's flag words: moving, shake reduction, neither (0xf53378, 0xf52f38, 0xf53380), and
+/// the measurements line's format (0xf53390). The trace writes to log 0xffb104 through 0x64744c.
+pub const TRACE_MOVING: SharedAddress = SharedAddress(0xf5_3378);
+pub const TRACE_SHAKE_REDUCTION: SharedAddress = SharedAddress(0xf5_2f38);
+pub const TRACE_NO_FLAGS: SharedAddress = SharedAddress(0xf5_3380);
+pub const TRACE_MEASUREMENTS: SharedAddress = SharedAddress(0xf5_3390);
+pub const TRACE_LOG: u32 = 0xff_b104;
+
 /// The state the capture dump reads, as the library's getters answer it: the saved evaluation
 /// (0xf4dfe8), the saved capture features (0xf4e004), the live and capture traces (0xf4e020,
 /// 0xf4e03c), the code lists (0xf4d774, 0xf4d8a0, 0xf4dbfc), the reference history (0xf4d94c),
@@ -347,7 +477,7 @@ fn evaluation(bytes: &mut [u8], evaluation: &Evaluation) {
     bytes[0x98] = choices.recorded;
     bytes[0x9c] = choices.held;
     put_word(bytes, 0xa0, u32::from(choices.released));
-    put_word(bytes, 0xa4, u32::from(choices.forced));
+    put_word(bytes, 0xa4, u32::from(choices.unchanged));
     let tally = &choices.tally;
     put(bytes, 0xa8, &tally.detectors);
     put(bytes, 0xae, &tally.weights);
@@ -378,7 +508,7 @@ fn codes(bytes: &mut [u8], at: usize, codes: &History<Code>) {
 }
 
 fn live_trace(bytes: &mut [u8], trace: &Trace) {
-    for (index, word) in [trace.query.0, trace.option, trace.candidate.0, trace.recorded].into_iter().enumerate() {
+    for (index, word) in [trace.query.0, trace.option, trace.candidate.0, u32::from(trace.ready)].into_iter().enumerate() {
         put_word(bytes, 4 * index, word);
     }
     codes(bytes, 0x10, &trace.hints);
@@ -393,7 +523,7 @@ fn live_trace(bytes: &mut [u8], trace: &Trace) {
 }
 
 fn capture_trace(bytes: &mut [u8], trace: &CaptureTrace) {
-    for (index, word) in [trace.query.0, trace.option, trace.candidate.0, trace.recorded].into_iter().enumerate() {
+    for (index, word) in [trace.query.0, trace.option, trace.candidate.0, u32::from(trace.ready)].into_iter().enumerate() {
         put_word(bytes, 4 * index, word);
     }
     lens_detectors(bytes, 0x10, &trace.detectors);

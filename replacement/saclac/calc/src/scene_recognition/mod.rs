@@ -6,6 +6,7 @@ pub mod detectors;
 pub mod frame;
 pub mod history;
 pub mod ports;
+pub mod vote;
 
 #[cfg(test)]
 mod detector_tests;
@@ -15,6 +16,8 @@ mod fakes;
 mod frame_tests;
 #[cfg(test)]
 mod state_tests;
+#[cfg(test)]
+mod vote_tests;
 
 use xm1_saclac_interface::calc::SharedAddress;
 
@@ -191,7 +194,8 @@ pub struct Choices {
     pub recorded: u8,
     pub held: u8,
     pub released: bool,
-    pub forced: bool,
+    /// The snapshot vote last found no change.
+    pub unchanged: bool,
     pub tally: Tally,
 }
 
@@ -204,7 +208,7 @@ impl Choices {
         recorded: 0,
         held: 0,
         released: false,
-        forced: false,
+        unchanged: false,
         tally: Tally::ZERO,
     };
 }
@@ -258,7 +262,8 @@ pub struct Trace {
     pub query: Scene,
     pub option: u32,
     pub candidate: Scene,
-    pub recorded: u32,
+    /// The state's ready mark, which a reset sets.
+    pub ready: bool,
     /// The group hints recorded with each noted frame.
     pub hints: History<Code>,
     pub filtered: Scene,
@@ -276,7 +281,7 @@ impl Trace {
         query: Scene::AUTO,
         option: 0,
         candidate: Scene::AUTO,
-        recorded: 0,
+        ready: false,
         hints: History::filled(Code::ZERO),
         filtered: Scene::AUTO,
         earlier_candidate: Scene::AUTO,
@@ -295,7 +300,7 @@ pub struct CaptureTrace {
     pub query: Scene,
     pub option: u32,
     pub candidate: Scene,
-    pub recorded: u32,
+    pub ready: bool,
     pub detectors: LensDetectors,
     pub group: Scene,
     pub hint: Scene,
@@ -309,7 +314,7 @@ impl CaptureTrace {
         query: Scene::AUTO,
         option: 0,
         candidate: Scene::AUTO,
-        recorded: 0,
+        ready: false,
         detectors: LensDetectors::ZERO,
         group: Scene::AUTO,
         hint: Scene::AUTO,

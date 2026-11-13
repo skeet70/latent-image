@@ -1,5 +1,8 @@
 //! What the recognition reaches outside the library.
 
+use xm1_saclac_interface::RecordHandle;
+
+use super::{Recognition, Scene, SceneFlags};
 use crate::exposure::ports::{ProfileAccess, Properties, StockMemory};
 
 /// The record words the subject query reads (0xf4f18c).
@@ -44,6 +47,26 @@ pub trait LensServices {
     fn level_class(&mut self, lens: u32) -> u32;
     /// The lens's level at `setting` (0x747c40 with a second argument of 0).
     fn class_level(&mut self, lens: u32, setting: u32) -> i32;
+}
+
+/// What the vote reaches outside the library besides the record's fields.
+pub trait SceneEvents {
+    /// Calls the change callback the record's shared word +0x16c holds, when one is set, with
+    /// (scene, flags, 0, 0, 1) (0x756d04, 0xf50cc8).
+    fn scene_changed(&mut self, handle: RecordHandle, recognition: Recognition);
+    /// Copies the adjustment diagnostics into their second slot 0x16c9164 under lock 0xa8
+    /// (0xf50a58..0xf50aa0).
+    fn snapshot_adjustments(&mut self);
+}
+
+/// The camera's debug trace: log 0xffb104 through 0x64744c.
+pub trait SceneTrace {
+    /// The scene's name line.
+    fn scene_name(&mut self, scene: Scene);
+    /// The flags' line: moving, then shake reduction, or neither.
+    fn scene_flags(&mut self, flags: SceneFlags);
+    /// The measurements line, in the format's order.
+    fn measurements(&mut self, values: &[i32; 21]);
 }
 
 pub trait DetectorPorts: Properties + StockMemory + ProfileAccess + SubjectQuery + Steadiness + Overlay {}
