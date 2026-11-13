@@ -622,11 +622,11 @@ The helpers several saclac modules call (`replacement/saclac/shared`), over the 
 
 ## saclac_root
 
-saclac's composition root (`replacement/saclac/root`): `Services` binds the lens children's, the measurement round's and the shared layer's ports to the merged modules, and what no merged module owns to the rows below, all in `src/stock.rs` and entered or read through `saclac_shared`'s `Machine`.
+saclac's composition root (`replacement/saclac/root`): `Services` binds the lens children's, the measurement round's and the shared layer's ports to the merged modules, peer requests to `saclac_peers`' `PeerPorts` (the kernel's `MessageQueue::post`, registered under `kernel`), and what no merged module owns to the rows below, all in `src/stock.rs` or `src/lens.rs` and entered or read through `saclac_shared`'s `Machine`.
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
-| `send_lens`: lens control's queue-50 senders `0x76dbe4` (0x4202), `0x76dc90`, `0x76dd24`, `0x76ddb0`, `0x76de3c`, `0x76dec8` (refuses with 0x81 while `0x76d9a8` reports 1), `0x76df7c`, `0x76e008`, `0x76e1ac`, `0x76ffec`, `0x770080` (0x4212), with the arguments of `0xf14dc8`, `0xf14e38`, `0xf14e6c`, `0xf15148`, `0xf151dc` and the lens children's callback words | trampoline into retained stock | lens control | no | the lens children post through the peer ports (`agent/PeerPorts`, `LensDc::request`) with the `0x76dec8` gate kept in the child | required |
+| `LensControl::send` in `src/lens.rs`: a lens drive (0x4207) is not posted while `0x76d9a8`, entered through `saclac_shared`'s `LensControl::probe`, reports 1, as lens control's retired sender `0x76dec8` refuses with 0x81 then (`0x76def4..0x76df00`); every lens request posts through `LensDc::request` | trampoline into retained stock | lens control's state behind `0x76d9a8` | no | lens control is owned and decides whether a drive is admitted | required |
 | lens control's resource index `0x76d9c8`, the configuration lookup selection `0x740b18`, the adjustment configuration's first parameter `0xfa8018` | trampoline into retained stock | lens control, the configuration services, the L5 adjustment configuration | no | lens control, the configuration lookup and the L5 adjustment configuration are owned | required |
 | the drive result words `0x954dbc` (live, stored by `0xf14be4`) and `0x16b750c` (S1, stored by `0xf28e94`) | guest-memory layout view | the retained lens completion callbacks | no | the lens completion callbacks are owned | required |
 | the focus controller's profile-record handle at `0x16be01c`, under which the round invalidates the focus history (`0xf32a48`) | guest-memory layout view | the stock focus controller that opens and stores the handle | no | the focus controller's record handle is owned by the controllers | required |
@@ -655,6 +655,7 @@ saclac's configuration layers L3, L8 and L11 (`replacement/saclac/config`), over
 | --- | --- | --- | --- | --- | --- |
 | Command, parameter-block and callback descriptors in `src/stock.rs` | guest-memory layout view | retained queue-43 command producers, their 46 shared parameter blocks and 106 completion callbacks | no | queue-43 producers and completion callbacks are owned and no retained consumer reads the parameter blocks | required |
 | `lens::LensPayload` with `lens_callback_word`, `lens_payload` and `lens_dc_request` in `src/stock.rs` | guest-memory layout view | retained lens control's queue-50 requests 0x4202 to 0x4212 (senders `0x76dbe4` to `0x770080`) and the retained lens completion callbacks `0xf14ae4`, `0xf14b14`, `0xf14b50`, `0xf14b8c`, `0xf14bc8`, `0xf14be4`, `0xf150c4`, `0xf150f0` and `0xf28e94` | no | lens control and the lens children's completion callbacks are owned | required |
+| `stock::peers`: each peer's queue (lensdc 50, imgdc 47, calc 44, calc1 45, statistics 48, flash 10, lenscom 98, image processor 55), the sender byte its stock senders write and the block size each queue was created with (`0x724cdc`) | guest-memory layout view | the retained peer tasks and their queues | no | every peer task saclac posts to is owned | required |
 
 ## saclac_profile_records
 

@@ -10,23 +10,26 @@ use xm1_saclac_shared::stock::{Machine, Stock};
 /// The all-ones word, which names no slot; reads of ungated shared fields take it.
 pub(crate) const NO_HANDLE: RecordHandle = record_handle_from_a2(u32::MAX);
 
-/// The stock and owned services the bound modules reach; `machine` serves the rows in `stock`.
-pub struct Services<M, R, E> {
+/// The stock and owned services the bound modules reach; `machine` serves the rows in `stock`
+/// and `peers` posts to saclac's peer queues.
+pub struct Services<M, R, E, P> {
     pub(crate) machine: M,
     pub(crate) stock: Stock<M>,
     pub(crate) commands: Commands<Stock<M>>,
     pub(crate) records: ProfileRecords<R>,
     pub(crate) entries: E,
+    pub(crate) peers: P,
 }
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries> Services<M, R, E> {
-    pub fn new(machine: M, records: R, entries: E) -> Self {
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Services<M, R, E, P> {
+    pub fn new(machine: M, records: R, entries: E, peers: P) -> Self {
         Self {
             stock: Stock::new(machine.clone()),
             commands: Commands::new(Stock::new(machine.clone())),
             machine,
             records: ProfileRecords::new(records),
             entries,
+            peers,
         }
     }
 

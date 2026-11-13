@@ -48,7 +48,7 @@ const fn selection(selection: MeasurementSelection) -> ProfileSelection {
     }
 }
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries> Services<M, R, E> {
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Services<M, R, E, P> {
     /// Zeroes `bytes` of a shared field, read ungated and written under `record`'s grant, as
     /// 0xf32a48 marks a published result invalid.
     fn clear_shared<const N: usize>(&mut self, record: RecordHandle, field: &SharedField<[u8; N], SharedRead, SharedWrite>, bytes: core::ops::Range<usize>) {
@@ -78,7 +78,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries> Services<M, R, E> {
     }
 }
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries> ProfileRecords for Services<M, R, E> {
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P> ProfileRecords for Services<M, R, E, P> {
     fn offered(&mut self) -> Option<Selection> {
         availability(RecordSelection(self.shared(NO_HANDLE, &group_20::OFFERED_MEASUREMENTS).0))
     }
@@ -187,7 +187,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries> ProfileRecords for Services
     }
 }
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries> ProfileHeaders for Services<M, R, E> {
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P> ProfileHeaders for Services<M, R, E, P> {
     fn measurement_selection(&mut self, record: RecordHandle) -> settings::MeasurementSelection {
         settings::MeasurementSelection(match self.entries.measurement_selection(record) {
             MeasurementSelection::Unselected => 0,
