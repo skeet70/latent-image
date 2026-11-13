@@ -102,8 +102,21 @@ main = do
     [message 2, at "phase", tick 1]) VerdictEqualUpToMilestone
   check (verdictMilestone milestoneTimer == Just (Milestone "phase" (ObservationIndex 1)))
   check (verdictChannelDifference milestoneTimer == Nothing)
+  -- Either side can reach the milestone a little earlier, so either side may
+  -- carry the shorter time-driven sequence.
+  milestoneOwnedShort <- status firmware (channelReport [] (Just (phaseAt 1))
+    [message 1, at "phase", tick 1, tick 2]
+    [message 1, at "phase", tick 1]
+    [message 2, at "phase", tick 1]) VerdictEqualUpToMilestone
+  check (verdictChannelDifference milestoneOwnedShort == Nothing)
   _ <- status firmware (channelReport [] Nothing
     [message 1, tick 1] [message 1, tick 1, tick 2] [message 2, tick 1]) VerdictDifferent
+  _ <- status firmware (channelReport [] Nothing
+    [message 1, tick 1, tick 2] [message 1, tick 1] [message 2, tick 1]) VerdictDifferent
+  _ <- status firmware (channelReport [] (Just (phaseAt 1))
+    [message 1, at "phase", tick 1]
+    [message 1, at "phase", tick 2]
+    [message 2, at "phase", tick 1]) VerdictDifferent
 
   -- An ordered channel is equal through the milestone and its stock tail
   -- after it must be a prefix of the owned tail.

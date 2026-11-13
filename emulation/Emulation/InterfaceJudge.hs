@@ -11,14 +11,14 @@
 -- channels is not compared.
 --
 -- Every declared channel's events are compared in order. A channel marked
--- @time_driven@ is compared occurrence by occurrence, and when the report
--- declares a milestone the stock sequence must be a prefix of the owned
--- sequence. An ordered channel with a milestone is compared through the
--- milestone observation, and its stock events after it must be a prefix of
--- the owned events after it. A declared causal pair holds when every event
--- matching @then@ has an earlier event matching @first@. A declared milestone
--- both sides must carry as a @{"milestone": NAME}@ event; a side that does
--- not reach it is different.
+-- @time_driven@ is compared occurrence by occurrence; with a milestone the
+-- shorter sequence must be a prefix of the longer, because either side can
+-- reach the milestone a little earlier. An ordered channel with a milestone
+-- is compared through the milestone observation, and its stock events after
+-- it must be a prefix of the owned events after it. A declared causal pair
+-- holds when every event matching @then@ has an earlier event matching
+-- @first@. A declared milestone both sides must carry as a
+-- @{"milestone": NAME}@ event; a side that does not reach it is different.
 module Emulation.InterfaceJudge
   ( InterfaceReport (..)
   , ReportDigest (..)
@@ -219,12 +219,12 @@ partition declared run =
 -- | The first differing event of one channel. With a milestone, an ordered
 -- channel is equal through the milestone observation and its stock tail after
 -- it must be a prefix of the owned tail; a time-driven channel is compared
--- occurrence by occurrence and its stock sequence must be a prefix of the
--- owned sequence.
+-- occurrence by occurrence and the shorter sequence must be a prefix of the
+-- longer.
 compareSequence :: ChannelName -> Maybe Int -> Bool -> [(Int, Value)] -> [(Int, Value)] -> Maybe StreamDifference
 compareSequence label boundary timeDriven stock owned
   | timeDriven = case boundary of
-      Just _ -> walkPrefix 0 stock owned
+      Just _ -> walkEither 0 stock owned
       Nothing -> walkExact 0 stock owned
   | Just mark <- boundary =
       let (stockPrefix, stockTail) = span ((<= mark) . fst) stock
@@ -247,6 +247,11 @@ compareSequence label boundary timeDriven stock owned
       = Just (DifferingEvent label (Occurrence occurrence) (Just (snd expected)) Nothing)
     walkPrefix occurrence (expected : expecteds) (actual : actuals)
       | snd expected == snd actual = walkPrefix (occurrence + 1) expecteds actuals
+      | otherwise = Just (DifferingEvent label (Occurrence occurrence) (Just (snd expected)) (Just (snd actual)))
+    walkEither _ [] _ = Nothing
+    walkEither _ _ [] = Nothing
+    walkEither occurrence (expected : expecteds) (actual : actuals)
+      | snd expected == snd actual = walkEither (occurrence + 1) expecteds actuals
       | otherwise = Just (DifferingEvent label (Occurrence occurrence) (Just (snd expected)) (Just (snd actual)))
 
 -- | The first event matching @then@ with no earlier event matching @first@.
