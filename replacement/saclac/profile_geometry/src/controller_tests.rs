@@ -7,7 +7,12 @@ use crate::numeric::FractionTables;
 use crate::ports::*;
 use crate::profile::*;
 use crate::controller::changes::{Stage, Subscription};
-use crate::stock::layout::{changes, controller as field, diagnostics, dump, parameters, requests, work};
+use crate::controller::queries::*;
+use crate::controller::windows::GridRequest;
+use crate::stock::layout::{changes, controller as field, diagnostics, dump, parameters, policy, requests, work, work::records};
+use crate::controller::statistics::{RecordHalf, StatisticsSummary, Summary, SummaryAreas, SummaryRequest};
+use crate::stock::statistics::{write_summary, COPY_OFFSET, HALF_BYTES, RECORD_BYTES};
+use crate::stock::Parameters;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Call {
@@ -32,11 +37,18 @@ struct Fake {
     calls: Vec<Call>,
     refuse_stop: bool,
     config: Vec<(u32, u8)>,
+    halfwords: Vec<(u32, u16)>,
+    window: Rectangle,
+    status: u32,
+    dumped: Vec<(u32, u32, Vec<u8>)>,
+    policy_dumps: Vec<PolicyDump>,
 }
 
 impl Configuration for Fake {
     fn byte(&mut self, offset: ConfigOffset) -> u8 { self.config.iter().find(|(at, _)| *at == offset.0).map_or(0, |(_, value)| *value) }
-    fn halfword(&mut self, _: ConfigOffset) -> u16 { 0 }
+    fn halfword(&mut self, offset: ConfigOffset) -> u16 {
+        self.halfwords.iter().find(|(at, _)| *at == offset.0).map_or(0, |(_, value)| *value)
+    }
     fn signed_halfword(&mut self, _: ConfigOffset) -> i16 { 0 }
     fn collapse_index(&mut self, value: u32) -> u32 { value }
     fn transform(&mut self, value: u32, scale: u32) -> u16 { (value * 10 + scale) as u16 }
@@ -75,7 +87,7 @@ impl StagePayloads for Fake {
         true
     }
     fn quad_selection_offset(&mut self, _: PipelineGroup) -> Option<ConfigOffset> { Some(ConfigOffset(0x1de5)) }
-    fn quad_gains(&mut self, _: QuadGroup, _: i16) -> [u16; 4] { [11, 22, 33, 44] }
+    fn quad_gains(&mut self, _: QuadGroup, _: i16, _: bool) -> [u16; 4] { [11, 22, 33, 44] }
     fn quad_area_scale(&mut self, _: u32) -> u32 { 0 }
     fn quad_area_limit(&mut self) -> u16 { 0 }
     fn primary_payload(&mut self, _: PipelineGroup, _: Option<PrimaryWindow>) -> Option<PrimaryPayload> { None }
@@ -144,32 +156,46 @@ impl Retained for Fake {
     fn limit_triplet(&mut self, triplet: [u16; 3]) -> [u16; 3] { triplet }
     fn expanded_rectangle(&mut self, _: ProfileHandle) -> Rectangle { Rectangle::default() }
     fn configured_rectangle(&mut self, _: ProfileHandle) -> Rectangle { Rectangle::default() }
-    fn relative_rectangle(&mut self, _: ProfileHandle, _: bool) -> Rectangle { Rectangle::default() }
+    fn relative_rectangle(&mut self, _: ProfileHandle, _: bool) -> Rectangle { self.window }
     fn encode_thresholds(&mut self, _: i16, _: i16) -> u32 { 0 }
     fn converted_decade(&mut self, _: u32) -> i32 { 0 }
+    fn statistics_offset(&mut self, region: StatisticsRegion) -> u32 { region.0 * 0x1000 }
+}
+
+impl StatisticsMemory for Fake {
+    fn statistics_word(&mut self, buffer: StatisticsBuffer, offset: u32) -> u32 { buffer.0 + offset }
+}
+
+impl FrameDumps for Fake {
+    fn register(&mut self, register: Register) -> u32 { if register.0 == 0xfff8_802c { self.status } else { register.0 & 0xff } }
+    fn write_dump(&mut self, buffer: DumpBuffer, offset: u32, bytes: &[u8]) { self.dumped.push((buffer.0, offset, bytes.to_vec())) }
+    fn dump_policy(&mut self, _: DumpBuffer, dump: PolicyDump, _: Location) { self.policy_dumps.push(dump) }
 }
 
 struct Tables {
     feature: u8,
     kind: u8,
+    class: GeometryClass,
+    slot: ScanSlot,
+    policy: u32,
 }
 
 impl ProfileTables for Tables {
     fn entry(&self, _: ProfileHandle) -> ProfileEntry {
         ProfileEntry { class: ClassIndex(0), kind: ProfileKind(self.kind), flags: 0, threshold_index: 3, feature: self.feature, aspect_index: 0 }
     }
-    fn class(&self, _: ClassIndex) -> GeometryClass { GeometryClass::default() }
+    fn class(&self, _: ClassIndex) -> GeometryClass { self.class }
     fn threshold(&self, index: u8) -> u16 { index as u16 * 5 }
     fn default_pair(&self) -> ScalePair { ScalePair { first: 2, second: 2 } }
     fn expansion(&self) -> ExpansionRatio { ExpansionRatio { numerator: 1, divisor: 1 } }
     fn curve_knot(&self, index: usize) -> i16 { 1000 + 50 * index as i16 }
     fn feature_scale_offsets(&self, _: u32) -> [u32; 2] { [0, 0] }
     fn row(&self, index: u32) -> ProfileRow {
-        ProfileRow { rectangle_row: 16, pipeline_group: PipelineGroup(index), policy: 1, quad_group: QuadGroup(1) }
+        ProfileRow { rectangle_row: 16, pipeline_group: PipelineGroup(index), policy: self.policy, quad_group: QuadGroup(1) }
     }
     fn aspect_value(&self, _: u8) -> i16 { 0 }
     fn rectangle_configuration(&self, _: RectangleKind, _: u32) -> [u32; 4] { [0; 4] }
-    fn scan_slot(&self, _: u32) -> ScanSlot { ScanSlot::default() }
+    fn scan_slot(&self, _: u32) -> ScanSlot { self.slot }
     fn record_code(&self, index: u32) -> [u16; 2] { [index as u16; 2] }
 }
 
@@ -180,7 +206,16 @@ impl FractionTables for Tables {
 
 type Layer = ProfileGeometry<Bytes, Fake, Tables>;
 
-fn layer(feature: u8, kind: u8) -> Layer { ProfileGeometry::new(Bytes::default(), Fake::default(), Profiles::new(Tables { feature, kind })) }
+fn layer(feature: u8, kind: u8) -> Layer {
+    let tables = Tables { feature, kind, class: GeometryClass::default(), slot: ScanSlot::default(), policy: 1 };
+    ProfileGeometry::new(Bytes::default(), Fake::default(), Profiles::new(tables))
+}
+
+/// A layer whose profile class scales by one and whose window is `window`.
+fn framed(window: Rectangle, class: GeometryClass, slot: ScanSlot) -> Layer {
+    let tables = Tables { feature: 0, kind: 0, class: GeometryClass { first_scale: 1, second_scale: 1, ..class }, slot, policy: 1 };
+    ProfileGeometry::new(Bytes::default(), Fake { window, ..Fake::default() }, Profiles::new(tables))
+}
 
 fn open(feature: u8, kind: u8) -> Layer {
     let mut layer = layer(feature, kind);
@@ -345,4 +380,153 @@ fn a_disabled_quad_selection_clears_its_gains_and_disables_the_stage() {
     assert_eq!(layer.apply_parameters(&parameters_for(2)), Ok(()));
     assert_eq!(work::QUAD_GAINS.map(|at| layer.memory.read_u16(at)), [0; 4]);
     assert_eq!(layer.ports.calls, vec![Call::Disable(1, Stage::QuadSelection.pipeline_bit())]);
+}
+
+const WINDOW: Rectangle = Rectangle { top: 0, left: 0, width: 640, height: 480 };
+
+fn framed_parameters() -> Parameters {
+    let mut parameters = Parameters::from_bytes([0; Parameters::BYTES]);
+    parameters.set_format_ratio([3, 4]);
+    parameters
+}
+
+fn tracking(top: u32, direction: TrackDirection) -> ExtendedRequest {
+    let tracking = Tracking { centre: [0, 0], top, left: 150, height: 100, width: 60, direction };
+    ExtendedRequest { grid: GridRequest::default(), tracking: Some(tracking) }
+}
+
+#[test]
+fn a_tracked_window_stacks_down_to_the_crop_and_replaces_the_tracked_record() {
+    let mut layer = framed(WINDOW, GeometryClass::default(), ScanSlot::default());
+    let extended = tracking(150, TrackDirection::Down);
+    let requests = Requests { extended: Some(&extended), ..Requests::default() };
+    let selection = Selection { tracked_windows: true, ..Selection::default() };
+    let report = layer.profile_geometry(&framed_parameters(), selection, &requests);
+    let summary = GridSummary { column_width: 60, row_height: 100, top: 150, left: 150, rows: 3, columns: 1, ..GridSummary::default() };
+    assert_eq!(report.tracked_windows, Some(summary));
+    assert_eq!((report.window, report.crop), ([640, 480], [360, 480]));
+    let sizes = layer.record_sizes(&framed_parameters(), Selection::default(), &requests).tracked_windows;
+    assert_eq!(sizes[..4], [Size { width: 60, height: 100 }, Size { width: 60, height: 100 }, Size { width: 60, height: 100 }, Size { width: 1, height: 1 }]);
+    let starts: Vec<u16> = (0..3).map(|index| layer.memory().read_u16(records::TRACKED_WINDOWS.plus(4 * index))).collect();
+    assert_eq!(starts, [150, 250, 350]);
+}
+
+#[test]
+fn a_tracked_window_stacking_up_starts_above_it() {
+    let mut layer = framed(WINDOW, GeometryClass::default(), ScanSlot::default());
+    let extended = tracking(250, TrackDirection::Up);
+    let requests = Requests { extended: Some(&extended), ..Requests::default() };
+    let selection = Selection { tracked_windows: true, ..Selection::default() };
+    let report = layer.profile_geometry(&framed_parameters(), selection, &requests).tracked_windows.unwrap();
+    assert_eq!((report.top, report.rows, report.columns), (50, 3, 1));
+}
+
+#[test]
+fn fixed_windows_follow_the_window_origin_and_round_down_to_the_scale_pair() {
+    let window = Rectangle { top: 100, left: 200, width: 600, height: 400 };
+    let mut layer = framed(window, GeometryClass::default(), ScanSlot::default());
+    let mut fixed = FixedWindows { count: 2, ..FixedWindows::default() };
+    fixed.windows[0] = FixedWindow { top: 10, left: 20, width: 33, height: 1 };
+    fixed.windows[1] = FixedWindow { top: 0, left: 0, width: 64, height: 65 };
+    fixed.windows[2] = FixedWindow { top: 0, left: 0, width: 64, height: 64 };
+    let requests = Requests { fixed: Some(&fixed), ..Requests::default() };
+    let selection = Selection { fixed_windows: true, ..Selection::default() };
+    let sizes = layer.record_sizes(&framed_parameters(), selection, &requests).fixed_windows;
+    assert_eq!(sizes[..3], [Size { width: 32, height: 2 }, Size { width: 64, height: 64 }, Size { width: 1, height: 1 }]);
+    let at = records::FIXED_WINDOWS;
+    assert_eq!((layer.memory().read_u16(at), layer.memory().read_u16(at.plus(0x28))), (110, 220));
+}
+
+#[test]
+fn only_a_gain_quad_selection_reports_the_adjusted_quad() {
+    let mut layer = layer(0, 0);
+    layer.ports.config.push((0x1de5, 1));
+    assert_eq!(layer.quad_selection_of(ProfileHandle(1)), QuadSelection::Gains);
+    assert_eq!(layer.enabled_quad(0, ProfileHandle(1)), [11, 22, 33, 44]);
+    layer.ports.config.insert(0, (0x1de5, 2));
+    assert_eq!(layer.quad_selection_of(ProfileHandle(1)), QuadSelection::Area);
+    assert_eq!(layer.enabled_quad(0, ProfileHandle(1)), [0; 4]);
+    assert_eq!(layer.adjusted_quad(0, ProfileHandle(40), true), [0; 4]);
+}
+
+#[test]
+fn a_scaled_rectangle_keeps_its_centre() {
+    let rectangle = Rectangle { top: 10, left: 20, width: 1000, height: 500 };
+    assert_eq!(centred_rectangle(rectangle, [5000, 2000]), Rectangle { top: 210, left: 270, width: 500, height: 100 });
+}
+
+#[test]
+fn the_window_scale_is_the_slot_window_over_the_profile_window_and_selects_the_slot() {
+    let class = GeometryClass { limits: [1, 1], ..GeometryClass::default() };
+    let slot = ScanSlot { height: 400, width: 600, divisor: 1000, ..ScanSlot::default() };
+    let mut layer = framed(Rectangle { top: 0, left: 0, width: 800, height: 400 }, class, slot);
+    assert_eq!(layer.window_scale(ProfileHandle(1), [0; 3]), [7500, 15000]);
+    assert_eq!(layer.memory().read_u32(policy::SLOT), 9);
+}
+
+fn word_at(dumped: &[(u32, u32, Vec<u8>)], offset: u32) -> Option<u32> {
+    dumped.iter().find(|(_, at, _)| *at == offset).map(|(_, _, bytes)| u32::from_le_bytes(bytes[..4].try_into().unwrap()))
+}
+
+#[test]
+fn the_pipeline_dump_marks_the_buffer_and_copies_only_the_enabled_bank() {
+    let mut layer = layer(0, 0);
+    layer.ports.status = 0x4;
+    layer.dump_pipeline(Some(DumpBuffer(0x4000_0000)));
+    assert_eq!(layer.ports.policy_dumps, vec![PolicyDump::Pipeline]);
+    let dumped = &layer.ports.dumped;
+    assert_eq!(dumped.len(), 2 + 9 + 31 + 13);
+    assert_eq!(word_at(dumped, 0xb_1520), Some(u32::from_le_bytes(*b"TMTS")));
+    assert_eq!(word_at(dumped, 0xb_1528), Some(0x04));
+    assert_eq!(word_at(dumped, 0xb_15f4), Some(0xf4));
+    assert_eq!(word_at(dumped, 0xb_15f8), None);
+}
+
+#[test]
+fn the_result_dump_adds_each_word_offset_to_the_first_register_of_a_repeated_block() {
+    let mut layer = layer(0, 0);
+    layer.dump_result(Some(DumpBuffer(0x4000_0000)));
+    let dumped = &layer.ports.dumped;
+    assert_eq!(word_at(dumped, 0xd_f284 + 0x374), Some(u32::from_le_bytes(*b"S-R0")));
+    assert_eq!(word_at(dumped, 0xd_f284 + 0x37c), Some(0x04));
+    assert_eq!(word_at(dumped, 0xd_f284 + 0x39c), Some(0x20 + 4));
+    layer.ports.dumped.clear();
+    layer.dump_result(None);
+    assert!(layer.ports.dumped.is_empty());
+}
+
+fn summarizing() -> Layer {
+    let tables = Tables { feature: 0, kind: 0, class: GeometryClass::default(), slot: ScanSlot::default(), policy: 2 };
+    ProfileGeometry::new(Bytes::default(), Fake::default(), Profiles::new(tables))
+}
+
+#[test]
+fn a_level_summary_averages_four_block_words_and_is_capped() {
+    let mut layer = summarizing();
+    layer.ports.halfwords.push((0x258c, 0x3000));
+    let request = SummaryRequest { tag: 7, echoed: [1, 2, 3], measured: false, references: [StatisticsBuffer(0); 2] };
+    let areas = SummaryAreas { level: [8, 2], ..SummaryAreas::default() };
+    let summary = layer.statistics_summary(&parameters_for(1), Some(StatisticsBuffer(0x100)), Some(&areas), &request);
+    assert_eq!(summary, Some(StatisticsSummary { half: RecordHalf::First, summary: Some(Summary::Level(0x3000)) }));
+    layer.ports.halfwords[0].1 = 0xffff;
+    let summary = layer.statistics_summary(&parameters_for(1), Some(StatisticsBuffer(0x100)), Some(&areas), &request);
+    assert_eq!(summary.unwrap().summary, Some(Summary::Level(0x3441)));
+}
+
+#[test]
+fn a_measured_summary_fills_its_record_half_and_the_kept_copy() {
+    let mut layer = summarizing();
+    let request = SummaryRequest { tag: 7, echoed: [1, 2, 3], measured: true, references: [StatisticsBuffer(0x200), StatisticsBuffer(0)] };
+    let areas = SummaryAreas { minimum: [8, 2], level: [0, 0], quadrant: [2, 2] };
+    let summary = layer.statistics_summary(&parameters_for(1), Some(StatisticsBuffer(0x100)), Some(&areas), &request).unwrap();
+    let mut record = [0xaa; RECORD_BYTES];
+    write_summary(&mut record, Some(&summary), true);
+    let word = |at: usize| u32::from_le_bytes(record[at..at + 4].try_into().unwrap());
+    let half = |at: usize| u16::from_le_bytes([record[at], record[at + 1]]);
+    assert_eq!((record[0x284], word(0x288), word(0x2a0), word(0x2a8)), (7, 0, 1, 3));
+    assert_eq!((word(0x2bc), word(0x2c0), word(0x2c4)), (0x1_d160, 0, 0x1_d260));
+    assert_eq!((half(0x290), half(0x296), half(0x298)), (0xd10e, 0xd1ce, 0xd12e));
+    assert_eq!(half(0x2ac), 0xc40);
+    assert_eq!(record[COPY_OFFSET..COPY_OFFSET + HALF_BYTES], record[..HALF_BYTES]);
+    assert_eq!(record[HALF_BYTES], 0xaa);
 }

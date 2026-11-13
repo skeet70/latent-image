@@ -11,6 +11,7 @@ use crate::numeric::runtime_quotient;
 use crate::ports::{ConfigOffset, Ports};
 use crate::profile::{ProfileHandle, Rectangle, RectangleKind};
 use crate::stock::layout::{controller as field, parameters, policy, status, work::records};
+use crate::stock::Parameters;
 
 /// The record kind whose class-one profiles take the fifth scan slot.
 const EXTENDED_RECORD_KIND: u32 = 7;
@@ -28,6 +29,20 @@ const GAIN_REFERENCE: ProfileHandle = ProfileHandle(1);
 pub enum ScanSide {
     Primary,
     Secondary,
+}
+
+/// The parameter fields a profile's crop is computed from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Framing {
+    pub profile: ProfileHandle,
+    pub area: [u32; 3],
+    pub format_ratio: [u16; 2],
+}
+
+impl From<&Parameters> for Framing {
+    fn from(parameters: &Parameters) -> Self {
+        Self { profile: parameters.profile(), area: parameters.area(), format_ratio: parameters.format_ratio() }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -130,11 +145,20 @@ impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
     }
 
     /// The scaled profile pair (0xedbed8).
-    fn scaled_pair(&self, profile: ProfileHandle) -> (u16, u16) {
+    pub(crate) fn scaled_pair(&self, profile: ProfileHandle) -> (u16, u16) {
         (self.profiles.scaled_first(profile, true), self.profiles.scaled_second(profile, true))
     }
 
     fn parameter_area(&self) -> [u32; 3] { core::array::from_fn(|index| self.memory.read_u32(parameters::AREA.plus(index as u16 * 4))) }
+
+    /// The framing of the controller's current parameter record.
+    pub(crate) fn current_framing(&self) -> Framing {
+        Framing {
+            profile: self.current_profile(),
+            area: self.parameter_area(),
+            format_ratio: [parameters::FIRST_DIVISOR, parameters::SECOND_DIVISOR].map(|at| self.memory.read_u16(at)),
+        }
+    }
 
     fn status_area(&self) -> [u32; 3] { core::array::from_fn(|index| self.memory.read_u32(status::AREA.plus(index as u16 * 4))) }
 
@@ -269,26 +293,29 @@ impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
         }
     }
 
-    /// 0xedeba0.
-    fn grid(&mut self, request: Option<GridRequest>) -> Grid {
-        let Some(request) = request else {
-            return Grid::EMPTY;
-        };
-        let profile = self.current_profile();
-        let mut area = self.parameter_area();
-        let level = if request.second_gain != 0 {
-            Some(SECOND_GAIN_LEVEL)
-        } else if request.first_gain != 0 {
-            Some(FIRST_GAIN_LEVEL)
-        } else {
-            None
+    /// The crop of `framing`, its area first bounded at the gain level of the second gain when it
+    /// is set, else of the first (0xedeba0, 0xedfa7c).
+    pub(crate) fn gain_limited_crop(&mut self, framing: &Framing, gains: [u32; 2]) -> CropGeometry {
+        let mut area = framing.area;
+        let level = match gains {
+            [_, second] if second != 0 => Some(SECOND_GAIN_LEVEL),
+            [first, _] if first != 0 => Some(FIRST_GAIN_LEVEL),
+            _ => None,
         };
         if let Some(level) = level {
             let level = self.ports.byte(level);
             self.limit_area(level, &mut area);
         }
-        let divisors = [self.memory.read_u16(parameters::FIRST_DIVISOR), self.memory.read_u16(parameters::SECOND_DIVISOR)];
-        let geometry = self.crop_geometry(&CropInput { profile, area, divisors, relative: true });
+        self.crop_geometry(&CropInput { profile: framing.profile, area, divisors: framing.format_ratio, relative: true })
+    }
+
+    /// 0xedeba0.
+    pub(crate) fn grid(&mut self, framing: &Framing, request: Option<GridRequest>) -> Grid {
+        let Some(request) = request else {
+            return Grid::EMPTY;
+        };
+        let profile = framing.profile;
+        let geometry = self.gain_limited_crop(framing, [request.first_gain, request.second_gain]);
         let window = self.ports.relative_rectangle(profile, true);
         let pair = self.profiles.flagged_scale_pair(profile);
 
@@ -334,7 +361,7 @@ impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
         }
     }
 
-    fn write_grid(&mut self, at: Location, grid: Grid) {
+    pub(crate) fn write_grid(&mut self, at: Location, grid: Grid) {
         self.memory.write_u16(at, grid.top);
         self.memory.write_u8(at.plus(0x2), grid.rows);
         self.memory.write_u16(at.plus(0x4), grid.row_height);
@@ -385,7 +412,8 @@ impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
             return;
         }
         let request = self.subscribed(kind.subscription()).then(|| self.grid_request(kind));
-        let grid = self.grid(request);
+        let framing = self.current_framing();
+        let grid = self.grid(&framing, request);
         self.write_grid(kind.record(), grid);
         self.add_to_mask(Mask::Geometry, kind.stage());
         self.clear_request(kind.work());
@@ -400,7 +428,7 @@ impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
     /// 0xee79e8.
     pub(crate) fn prepare_record_rectangles(&mut self) { self.prepare_grid(GridKind::Record) }
 
-    fn write_band(&mut self, at: Location, band: Band, kind: RectangleKind) {
+    pub(crate) fn write_band(&mut self, at: Location, band: Band, kind: RectangleKind) {
         match kind {
             RectangleKind::Plain => {
                 for (offset, value) in [(0, band.top), (2, band.height), (4, band.left), (6, band.width)] {

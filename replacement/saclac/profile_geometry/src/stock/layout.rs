@@ -302,10 +302,16 @@ pub mod work {
         pub const PRIMARY_SCAN: Location = at(Work, 0x28);
         pub const SECONDARY_SCAN: Location = at(Work, 0x60);
         pub const COMPACT_GRID: Location = at(Work, 0xb4);
+        /// Ten row spans, then ten column spans.
+        pub const FIXED_WINDOWS: Location = at(Work, 0xc4);
         pub const EXTENDED_GRID: Location = at(Work, 0x114);
+        /// As `FIXED_WINDOWS`.
+        pub const TRACKED_WINDOWS: Location = at(Work, 0x124);
         pub const RECORD_GRID: Location = at(Work, 0x174);
         /// A plain, a row-banded and a column-banded rectangle.
         pub const RECTANGLE_SET: Location = at(Work, 0x184);
+        pub const ROW_BANDS: Location = at(Work, 0x18c);
+        pub const COLUMN_BANDS: Location = at(Work, 0x196);
         pub const INDEXED_PAIR: Location = at(Work, 0x1a0);
     }
 
@@ -457,6 +463,8 @@ pub mod policy {
     pub const SLOT: Location = at(Policy, 0x0);
     /// The status pair each scan record was computed from, primary then secondary.
     pub const SCAN_PAIRS: [Location; 2] = [at(Policy, 0x4), at(Policy, 0xc)];
+    /// The part of the block the frame dumps copy.
+    pub const DUMPED: Location = at(Policy, 0x14);
     pub const LAYOUT: Location = at(Policy, 0x1284);
     /// Cleared by every scan record.
     pub const SCAN_CLEARED: Location = at(Policy, 0x14b8);

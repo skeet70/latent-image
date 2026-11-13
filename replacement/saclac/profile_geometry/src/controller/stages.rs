@@ -19,7 +19,6 @@ const QUAD_DISABLE: ConfigOffset = ConfigOffset(0xb2);
 const QUAD_THRESHOLD: ConfigOffset = ConfigOffset(0x63a4);
 const QUAD_BELOW_THRESHOLD: ConfigOffset = ConfigOffset(0x21a0);
 const QUAD_AT_THRESHOLD: ConfigOffset = ConfigOffset(0x21a1);
-const QUAD_LIMIT_OFFSET: ConfigOffset = ConfigOffset(0x1a7b);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum QuadSelection {
@@ -132,8 +131,9 @@ impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
                 } else {
                     match self.quad_selection() {
                         1 => {
-                            let limit = self.quad_limit();
-                            let [first, second, third, fourth] = self.ports.quad_gains(group, limit);
+                            let limit = self.memory.read_i16(parameters::SECONDARY_LIMIT);
+                            let limit = self.adjusted_quad_limit(limit);
+                            let [first, second, third, fourth] = self.ports.quad_gains(group, limit, false);
                             for (at, value) in work::QUAD_GAINS.into_iter().zip([second, first, third, fourth]) {
                                 self.memory.write_u16(at, value);
                             }
@@ -176,16 +176,6 @@ impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
             self.enable(Stage::QuadSelection);
         }
         self.add_to_mask(Mask::Apply, Stage::QuadSelection.pipeline_bit());
-    }
-
-    /// 0xee631c.
-    fn quad_limit(&mut self) -> i16 {
-        let limit = self.memory.read_i16(parameters::SECONDARY_LIMIT);
-        if self.profiles.entry(self.current_profile()).kind.0 > 1 {
-            limit.wrapping_add(self.ports.signed_halfword(QUAD_LIMIT_OFFSET))
-        } else {
-            limit
-        }
     }
 
     /// 0xee5794.

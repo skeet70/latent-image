@@ -34,6 +34,7 @@ pub struct GeometryClass {
     pub left: u16,
     pub crop_height: u16,
     pub crop_width: u16,
+    pub limits: [u16; 2],
     pub first_scale: u8,
     pub second_scale: u8,
     pub first_flag: u8,

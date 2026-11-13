@@ -1,8 +1,10 @@
 //! The stock boundary: image-5 table and state addresses and layouts, and the stock entries
 //! this layer calls.
 
+pub mod dumps;
 pub mod layout;
 pub mod records;
+pub mod statistics;
 pub mod tables;
 
 pub use records::{Parameters, StatusSnapshot};

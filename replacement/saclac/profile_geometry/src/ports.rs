@@ -110,8 +110,8 @@ pub trait StagePayloads {
     /// The configuration byte that selects the quad gains for `group`, if the group has one
     /// (0xdabb38).
     fn quad_selection_offset(&mut self, group: PipelineGroup) -> Option<ConfigOffset>;
-    /// 0xdab6f8.
-    fn quad_gains(&mut self, group: QuadGroup, limit: i16) -> [u16; 4];
+    /// The quad gains at `limit`; `base_only` leaves out the trims (0xdab6f8).
+    fn quad_gains(&mut self, group: QuadGroup, limit: i16, base_only: bool) -> [u16; 4];
     /// 0xda1acc.
     fn quad_area_scale(&mut self, area: u32) -> u32;
     /// 0xda1af8.
@@ -325,6 +325,43 @@ pub trait Retained {
     fn encode_thresholds(&mut self, first: i16, second: i16) -> u32;
     /// 0xef74e4.
     fn converted_decade(&mut self, selection: u32) -> i32;
+    /// The offset of `region` within a statistics buffer (0xedae88).
+    fn statistics_offset(&mut self, region: StatisticsRegion) -> u32;
+}
+
+/// A region of the image pipeline's statistics buffers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StatisticsRegion(pub u32);
+
+/// A statistics buffer the image pipeline filled, in stock memory.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StatisticsBuffer(pub u32);
+
+pub trait StatisticsMemory {
+    fn statistics_word(&mut self, buffer: StatisticsBuffer, offset: u32) -> u32;
+}
+
+/// A frame dump buffer in stock memory.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DumpBuffer(pub u32);
+
+/// A device register the frame dumps read.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Register(pub u32);
+
+/// The two dumps of the policy block the pipeline layer writes into a frame dump.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PolicyDump {
+    /// 0xd6b460.
+    Pipeline,
+    /// 0xd6b3f8.
+    Result,
+}
+
+pub trait FrameDumps {
+    fn register(&mut self, register: Register) -> u32;
+    fn write_dump(&mut self, buffer: DumpBuffer, offset: u32, bytes: &[u8]);
+    fn dump_policy(&mut self, buffer: DumpBuffer, dump: PolicyDump, policy: Location);
 }
 
 pub trait Ports:
@@ -338,6 +375,8 @@ pub trait Ports:
     + ConfiguredRate
     + Retained
     + RadialGeometry
+    + StatisticsMemory
+    + FrameDumps
 {
 }
 
@@ -352,5 +391,7 @@ impl<T> Ports for T where
         + ConfiguredRate
         + Retained
         + RadialGeometry
+        + StatisticsMemory
+        + FrameDumps
 {
 }

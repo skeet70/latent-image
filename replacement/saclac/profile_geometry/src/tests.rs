@@ -263,7 +263,7 @@ fn stock_rows_parse_at_their_offsets() {
     assert_eq!(entry, ProfileEntry { class: ClassIndex(7), kind: ProfileKind(5), flags: 0x4011, threshold_index: 3, feature: 4, aspect_index: 1 });
 
     let mut row = [0u8; CLASS_BYTES];
-    for (offset, value) in [(0x0, 480u16), (0x2, 640), (0xc, 1), (0xe, 2), (0x10, 3), (0x12, 4)] {
+    for (offset, value) in [(0x0, 480u16), (0x2, 640), (0xc, 1), (0xe, 2), (0x10, 3), (0x12, 4), (0x1c, 5), (0x1e, 6)] {
         row[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
     }
     row[0x24..0x2f].copy_from_slice(&[11, 12, 13, 14, 15, 16, 17, 18, 19, 0, 20]);
@@ -275,6 +275,7 @@ fn stock_rows_parse_at_their_offsets() {
         left: 2,
         crop_height: 3,
         crop_width: 4,
+        limits: [5, 6],
         first_scale: 11,
         second_scale: 12,
         first_flag: 13,

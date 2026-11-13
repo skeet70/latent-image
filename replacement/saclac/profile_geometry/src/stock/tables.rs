@@ -49,6 +49,7 @@ pub fn parse_class(bytes: &[u8; CLASS_BYTES]) -> GeometryClass {
         left: u16_at(bytes, 0xe),
         crop_height: u16_at(bytes, 0x10),
         crop_width: u16_at(bytes, 0x12),
+        limits: [u16_at(bytes, 0x1c), u16_at(bytes, 0x1e)],
         first_scale: bytes[0x24],
         second_scale: bytes[0x25],
         first_flag: bytes[0x26],

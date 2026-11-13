@@ -5,12 +5,15 @@
 
 pub mod changes;
 pub mod crop;
+pub mod dumps;
 pub mod lifecycle;
 pub mod operations;
 pub mod payloads;
+pub mod queries;
 pub mod rectangles;
 pub mod refresh;
 pub mod scan;
+pub mod statistics;
 pub mod scan_geometry;
 pub mod stages;
 pub mod windows;
