@@ -81,6 +81,10 @@ impl<C: Copy> Adjustment<C> {
         Self { callback: None, busy: false, selection_rejected: false }
     }
 
+    pub const fn is_busy(&self) -> bool {
+        self.busy
+    }
+
     pub fn begin(&mut self, callback: C, request: LensRequest, effects: &mut impl Effects<C>) {
         if self.busy {
             effects.emit(Effect::Reply { callback, result: Reply::Busy });

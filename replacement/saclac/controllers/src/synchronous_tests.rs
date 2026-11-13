@@ -138,3 +138,50 @@ fn movie_status_preserves_phase_and_maps_busy_at_the_boundary() {
     assert_eq!(crate::stock::readiness_status(movie_status(MoviePhase::Secondary, &mut services)), CompletionStatus(-94));
     assert_eq!(services.traffic, [QueryTraffic::Movie(MoviePhase::Primary), QueryTraffic::Movie(MoviePhase::Secondary)]);
 }
+
+#[derive(Default)]
+struct LensTraffic(Vec<crate::adjustment::Effect<ClientCallback>>);
+impl crate::adjustment::Effects<ClientCallback> for LensTraffic {
+    fn emit(&mut self, effect: crate::adjustment::Effect<ClientCallback>) { self.0.push(effect); }
+}
+
+#[test]
+fn reservations_and_lens_requests_share_the_same_client_slot() {
+    use crate::adjustment::{Completion as LensCompletion, Effect as LensEffect, LensRequest, Reply};
+    let first = callback(1);
+    let second = callback(2);
+    let mut clients = Clients::new();
+    let mut reservations = Traffic::default();
+    let mut lens = LensTraffic::default();
+    clients.reserve(first, &mut reservations);
+    clients.begin_lens(second, LensRequest::Stop, &mut lens);
+    assert_eq!(lens.0, [LensEffect::Reply { callback: second, result: Reply::Busy }]);
+    clients.complete_lens(LensCompletion::Finished, &mut lens);
+    clients.begin_lens(second, LensRequest::Stop, &mut lens);
+    assert_eq!(clients.reserve(first, &mut reservations), Admission::Busy);
+    clients.complete(Completion::Finished, &mut reservations);
+    assert_eq!(lens.0, [
+        LensEffect::Reply { callback: second, result: Reply::Busy },
+        LensEffect::Reply { callback: first, result: Reply::Success },
+        LensEffect::Request(LensRequest::Stop),
+    ]);
+    assert_eq!(reservations.0, [
+        Effect::Occupied,
+        Effect::Reply { callback: first, status: CompletionStatus(-95) },
+        Effect::Reply { callback: second, status: CompletionStatus(0) },
+        Effect::Released,
+    ]);
+}
+
+#[test]
+fn repeated_peer_completion_replies_to_the_retained_client() {
+    let first = callback(1);
+    let mut clients = Clients::new();
+    let mut traffic = Traffic::default();
+    clients.reserve(first, &mut traffic);
+    clients.complete(Completion::Finished, &mut traffic);
+    clients.complete(Completion::Finished, &mut traffic);
+    assert_eq!(traffic.0, [Effect::Occupied,
+        Effect::Reply { callback: first, status: CompletionStatus(0) }, Effect::Released,
+        Effect::Reply { callback: first, status: CompletionStatus(0) }, Effect::Released]);
+}

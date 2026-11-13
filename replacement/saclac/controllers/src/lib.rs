@@ -11,6 +11,7 @@ pub mod synchronous;
 pub mod search;
 pub mod records;
 pub mod capture;
+pub mod exports;
 #[cfg(test)]
 mod capture_tests;
 
