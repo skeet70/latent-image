@@ -52,6 +52,7 @@ pub struct ExposureWorld {
     pub export_last: bool,
     pub recording: bool,
     pub metering: u8,
+    pub metering_source: u8,
 }
 
 impl ExposureWorld {
@@ -107,6 +108,7 @@ impl ExposureRecord for Fake {
     fn store_offset(&mut self, offset: ExposureOffset, value: i16) { self.exposure.calls.push(ExposureCall::StoreOffset(offset, value)); }
     fn store_area_exposure(&mut self, index: usize, value: i16) { self.exposure.calls.push(ExposureCall::StoreArea(index, value)); }
     fn metering(&mut self) -> MeteringBlock { MeteringBlock([self.exposure.metering; METERING_BYTES]) }
+    fn metering_source(&mut self) -> [u8; METERING_SOURCE_BYTES] { [self.exposure.metering_source; METERING_SOURCE_BYTES] }
     fn store_metering(&mut self, block: &MeteringBlock) { self.exposure.calls.push(ExposureCall::StoreMetering(*block)); }
 }
 
