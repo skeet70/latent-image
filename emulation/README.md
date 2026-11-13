@@ -776,12 +776,14 @@ Subsystem cutovers use `--mode interface-stream`. This mode reads fetch receipts
 
 ```sh
 devenv shell -- run-output exec --label interface-judge -- \
-  systemd-run --user --scope -p MemoryMax=1G -p MemorySwapMax=0 \
+  systemd-run --user --scope -p MemoryMax=4G -p MemorySwapMax=0 \
   bazel-bin/emulation/judge --mode interface-stream \
   --report STREAM_REPORT.json --image STOCK_FIRMWARE.bin --out VERDICT.json
 ```
 
 A schema-1 report sets `mode` to `interface-stream` and names `subsystem`, `scenario`, `retired_extents`, `owned_extents`, `stock`, `owned` and `controls`. Extents are numeric half-open guest ranges with `start` and `end`. Each run carries its `image_sha256`, a `complete` flag, `fetch_receipts` and ordered `events`. A fetch receipt names `start`, `end` and `fetches`; every receipt must fit a declared extent and at least one must have a positive count. A producer sets `complete` only when execution and observation completed without an error. Each control has a `name` and a `run` with the same shape. The supplied firmware digest must match the stock run's image digest.
+
+Interface-stream input admission is bounded at 256 MiB. Keep large reports under `$XM1_RUN_WORK`; the verdict and retained result facts still obey the 16 MiB result limit. Native-mode admission is unchanged.
 
 The judge compares event JSON values in order. With complete stock, owned and control execution receipts and at least one wrong variant whose stream differs from stock, identical streams are `equal`; a differing event or unequal length is `different`, with the first event and both sides retained. Missing execution evidence or no detected control gives `no-verdict`; missing firmware gives `not-run`. Undetected variants are listed as survivors. The optional `milestone` has the same `name` and zero-based `observation` fields and uses the unchanged prefix rule above. A producer inserts the same explicit milestone observation at each side's independently reached boundary.
 
