@@ -1,5 +1,5 @@
 use xm1_saclac_profile_records::stock::record::group_00;
-use xm1_saclac_profile_records::SharedHeaderByte;
+use xm1_saclac_profile_records::MeasurementSelection;
 
 use crate::exposure::fakes::{handle, World};
 use crate::exposure::levels;
@@ -43,7 +43,7 @@ fn an_unmeasured_record_starts_from_step_three_and_never_below_the_floor() {
 #[test]
 fn a_record_that_selects_its_own_measurement_measures_at_step_two() {
     let mut world = world();
-    world.header(SharedHeaderByte::MeasurementSelection, 1);
+    world.select(MeasurementSelection::Record);
     world.level_offsets.insert(1, -100);
     let levels = levels::start(&mut world, handle(), false);
     assert_eq!(levels.measured, -50i16 as u16);

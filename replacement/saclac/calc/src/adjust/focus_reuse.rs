@@ -2,7 +2,7 @@
 //! in the client's dump frame.
 
 use xm1_saclac_profile_records::stock::record::group_00;
-use xm1_saclac_profile_records::SharedHeaderByte;
+use xm1_saclac_profile_records::{MeasurementSelection, SharedHeaderByte};
 
 use crate::exposure::context::ExposureContext;
 use crate::exposure::ports::{ProfileAccess, Properties, StockMemory};
@@ -40,7 +40,7 @@ pub fn reuse_focus_result(ports: &mut (impl ProfileAccess + Properties + StockMe
     }
     let current = binding.record.unwrap_or(record::UNBOUND);
     let kind = SelectionKind(u32::from(ports.profile().selection_style(current, false)));
-    let selected = ports.profile().header(current, SharedHeaderByte::MeasurementSelection) == 1;
+    let selected = ports.profile().measurement_selection(current) == MeasurementSelection::Record;
     if kind.qualifies(selected, context.levels.unmeasured, binding.option != 0) {
         return false;
     }

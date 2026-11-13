@@ -5,7 +5,7 @@
 use xm1_saclac_interface::RecordHandle;
 use xm1_saclac_profile_records::stock::record::group_00;
 use xm1_saclac_profile_records::stock::shared::group_27;
-use xm1_saclac_profile_records::SharedHeaderByte;
+use xm1_saclac_profile_records::{MeasurementSelection, SharedHeaderByte};
 
 use crate::exposure::ports::{ProfileAccess, Properties};
 use crate::exposure::settings;
@@ -17,9 +17,7 @@ pub const RECORD_LEVEL_STEP: u8 = 3;
 /// When armed, the shared block carries the scene in place of the record.
 fn armed(ports: &mut impl ProfileAccess, record: RecordHandle) -> bool { ports.profile().header(record, SharedHeaderByte::At63) == 1 }
 
-fn measurement_selection(ports: &mut impl ProfileAccess, record: RecordHandle) -> u8 {
-    ports.profile().header(record, SharedHeaderByte::MeasurementSelection)
-}
+fn measurement_selection(ports: &mut impl ProfileAccess, record: RecordHandle) -> MeasurementSelection { ports.profile().measurement_selection(record) }
 
 fn scene_kind(ports: &mut impl ProfileAccess, record: RecordHandle) -> u32 { u32::from(ports.profile().header(record, SharedHeaderByte::At31)) }
 
@@ -29,7 +27,7 @@ fn shared_scene(ports: &mut impl ProfileAccess, record: RecordHandle) -> u32 { p
 /// is selected, none while it is armed and not selected, else the record's own scene kind.
 pub fn area_scene(ports: &mut impl ProfileAccess, record: RecordHandle) -> u32 {
     if armed(ports, record) {
-        if measurement_selection(ports, record) == 1 { shared_scene(ports, record) } else { 0 }
+        if measurement_selection(ports, record) == MeasurementSelection::Record { shared_scene(ports, record) } else { 0 }
     } else {
         scene_kind(ports, record)
     }
@@ -58,12 +56,12 @@ pub fn follow_word(ports: &mut impl ProfileAccess, record: RecordHandle) -> u16 
 /// sets none.
 pub fn level(ports: &mut (impl ProfileAccess + Properties), record: RecordHandle) -> i16 {
     let own: i16 = ports.profile().read(record, &group_00::AT_0022);
-    if measurement_selection(ports, record) == 1 || own == 0 { settings::level_step(ports, RECORD_LEVEL_STEP) } else { own }
+    if measurement_selection(ports, record) == MeasurementSelection::Record || own == 0 { settings::level_step(ports, RECORD_LEVEL_STEP) } else { own }
 }
 
 /// The record's priority; 1 when the record is selected for nothing or sets none.
 pub fn priority(ports: &mut impl ProfileAccess, record: RecordHandle) -> u8 {
-    if measurement_selection(ports, record) == 0 {
+    if measurement_selection(ports, record) == MeasurementSelection::Unselected {
         return 1;
     }
     match ports.profile().read(record, &group_00::AT_003D) {

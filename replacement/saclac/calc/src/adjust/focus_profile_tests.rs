@@ -2,7 +2,7 @@ use std::vec::Vec;
 
 use xm1_saclac_profile_records::stock::record::group_00;
 use xm1_saclac_profile_records::stock::shared::group_27;
-use xm1_saclac_profile_records::SharedHeaderByte;
+use xm1_saclac_profile_records::{MeasurementSelection, SharedHeaderByte};
 
 use crate::adjust::focus_profile::*;
 use crate::exposure::fakes::{handle, World};
@@ -11,7 +11,11 @@ use crate::stock::property::{self, OffsetTable};
 fn record(armed: bool, selection: u8, scene_kind: u8) -> World {
     let mut world = World::default();
     world.header(SharedHeaderByte::At63, u8::from(armed));
-    world.header(SharedHeaderByte::MeasurementSelection, selection);
+    world.select(match selection {
+        0 => MeasurementSelection::Unselected,
+        1 => MeasurementSelection::Record,
+        other => MeasurementSelection::Other(other),
+    });
     world.header(SharedHeaderByte::At31, scene_kind);
     world.set_shared(&group_27::AT_073C, 0x55);
     world.set_shared(&group_27::AT_0740, 0x77);

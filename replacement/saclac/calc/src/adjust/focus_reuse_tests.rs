@@ -1,6 +1,6 @@
 use xm1_saclac_interface::calc::SharedAddress;
 use xm1_saclac_profile_records::stock::record::group_00;
-use xm1_saclac_profile_records::SharedHeaderByte;
+use xm1_saclac_profile_records::{MeasurementSelection, SharedHeaderByte};
 
 use crate::adjust::focus_reuse::*;
 use crate::exposure::context::ExposureContext;
@@ -94,7 +94,7 @@ fn a_style_that_qualifies_for_a_fresh_evaluation_is_not_reused() {
     let mut world = current();
     world.set(&group_00::AT_003F, 7);
     assert!(!reuse(&mut world, &context));
-    world.header(SharedHeaderByte::MeasurementSelection, 1);
+    world.select(MeasurementSelection::Record);
     assert!(reuse(&mut world, &context));
     assert!(!reuse(&mut current(), &context));
     context.binding.option = 0;

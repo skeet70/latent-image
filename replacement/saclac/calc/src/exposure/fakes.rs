@@ -8,7 +8,7 @@ use xm1_saclac_interface::calc::SharedAddress;
 use xm1_saclac_interface::RecordHandle;
 use xm1_saclac_profile_records::field::{RecordField, RecordRead, RecordWrite, SharedField, SharedRead, SharedWrite, Value};
 use xm1_saclac_profile_records::stock::layout;
-use xm1_saclac_profile_records::{AccessGroup, Bytes, Grants, Handle, OpenMode, ProfileRecords, RecordImage, Scope, Serial, SharedHeaderByte, Slot, StockEntries, Tag};
+use xm1_saclac_profile_records::{AccessGroup, Bytes, Grants, Handle, MeasurementSelection, OpenMode, ProfileRecords, RecordImage, Scope, Serial, SharedHeaderByte, Slot, StockEntries, Tag};
 
 use crate::exposure::ports::{CaptureProfiles, Lens, ProfileAccess, Properties, Property, StockMemory};
 use crate::profile::Profile;
@@ -17,11 +17,13 @@ const SLOT: u8 = 2;
 const SERIAL: u16 = 0x31;
 
 #[derive(Default)]
-pub struct Headers(pub BTreeMap<u8, u8>);
+pub struct Headers {
+    pub bytes: BTreeMap<u8, u8>,
+    pub selection: MeasurementSelection,
+}
 
 fn header_key(byte: SharedHeaderByte) -> u8 {
     match byte {
-        SharedHeaderByte::MeasurementSelection => 0x30,
         SharedHeaderByte::At31 => 0x31,
         SharedHeaderByte::At46 => 0x46,
         SharedHeaderByte::At47 => 0x47,
@@ -31,7 +33,8 @@ fn header_key(byte: SharedHeaderByte) -> u8 {
 }
 
 impl StockEntries for Headers {
-    fn header_byte(&mut self, _handle: RecordHandle, byte: SharedHeaderByte) -> u8 { self.0.get(&header_key(byte)).copied().unwrap_or(0) }
+    fn measurement_selection(&mut self, _handle: RecordHandle) -> MeasurementSelection { self.selection }
+    fn header_byte(&mut self, _handle: RecordHandle, byte: SharedHeaderByte) -> u8 { self.bytes.get(&header_key(byte)).copied().unwrap_or(0) }
     fn lens_designation(&mut self, _handle: RecordHandle) -> [u8; 28] { [0; 28] }
     fn replace_header(&mut self, _handle: RecordHandle, _staged: &RecordImage) {}
     fn open(&mut self, _mode: OpenMode, _grants: Grants) -> RecordHandle { handle() }
@@ -115,7 +118,9 @@ impl World {
         self.records.write_shared(handle(), field, value).unwrap();
     }
 
-    pub fn header(&mut self, byte: SharedHeaderByte, value: u8) { self.headers.0.insert(header_key(byte), value); }
+    pub fn header(&mut self, byte: SharedHeaderByte, value: u8) { self.headers.bytes.insert(header_key(byte), value); }
+
+    pub fn select(&mut self, selection: MeasurementSelection) { self.headers.selection = selection; }
 
     pub fn property(&mut self, id: Property, value: u32) { self.properties.insert(id.0, value); }
 

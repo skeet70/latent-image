@@ -3,7 +3,7 @@
 use xm1_saclac_interface::RecordHandle;
 use xm1_saclac_profile_records::field::{RecordField, RecordRead, SharedField, SharedRead, Value};
 use xm1_saclac_profile_records::stock::record::group_00;
-use xm1_saclac_profile_records::{Memory, ProfileRecords, SharedHeaderByte, StockEntries};
+use xm1_saclac_profile_records::{MeasurementSelection, Memory, ProfileRecords, SharedHeaderByte, StockEntries};
 
 /// Kinds for which the refinement pass maps style 1 to 0 and style 3 to 2 (0xf61610).
 const REMAPPED_KINDS: [u32; 7] = [5, 11, 12, 34, 37, 40, 48];
@@ -30,6 +30,8 @@ impl<'a, M: Memory, E: StockEntries> Profile<'a, M, E> {
     }
 
     pub fn header(&mut self, handle: RecordHandle, byte: SharedHeaderByte) -> u8 { self.entries.header_byte(handle, byte) }
+
+    pub fn measurement_selection(&mut self, handle: RecordHandle) -> MeasurementSelection { self.entries.measurement_selection(handle) }
 
     /// Whether the record withholds its selection policies on a refinement pass.
     fn withheld(&mut self, handle: RecordHandle, refinement_pass: bool) -> bool {
