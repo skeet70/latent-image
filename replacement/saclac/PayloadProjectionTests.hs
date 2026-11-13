@@ -49,6 +49,16 @@ main = do
       captureBytes = replicate 176 0
   mapM_ (\offset -> check (captureRecord captureBytes /= captureRecord (mutate offset captureBytes))) [0..175]
   check (isLeft (captureRecord (replicate 175 0)))
+  let windowRequest = projectPayload recovered Outgoing (QueueId 44) (Operation 0x3c0c)
+      windowBytes = replicate 80 0
+      windowUnwritten = [10,11] ++ [17..19] ++ [28..31] ++ [34,35]
+  mapM_ (\offset -> check (windowRequest windowBytes == windowRequest (mutate offset windowBytes))) windowUnwritten
+  mapM_ (\offset -> check (windowRequest windowBytes /= windowRequest (mutate offset windowBytes))) (filter (`notElem` windowUnwritten) [0..79])
+  let sourceRequest = projectPayload recovered Outgoing (QueueId 44) (Operation 0x3c11)
+      sourceBytes = replicate 56 0
+      sourceUnwritten = [18,19,26,27]
+  mapM_ (\offset -> check (sourceRequest sourceBytes == sourceRequest (mutate offset sourceBytes))) sourceUnwritten
+  mapM_ (\offset -> check (sourceRequest sourceBytes /= sourceRequest (mutate offset sourceBytes))) (filter (`notElem` sourceUnwritten) [0..55])
   let through = projectPayload recovered Outgoing (QueueId 48) (Operation 0x4002)
       throughBytes = replicate 208 0
       nonzero = take 32 throughBytes ++ [8] ++ drop 33 throughBytes

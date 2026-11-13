@@ -1402,75 +1402,43 @@
    "bytes": 80,
    "fields": [
     {
-     "name": "mode",
+     "name": "mode-value-and-position",
      "offset": 0,
-     "bytes": 4,
+     "bytes": 10,
      "sources": [
-      "X-M1 1.50 id5 0xf3a580..0xf3a584 stores word at r11-88; request base r11-88 at 0xf3a738"
+      "X-M1 1.50 id5 0xf3a584 str at r11-0x58, 0xf3a648 str at r11-0x54 and 0xf3a5fc/0xf3a620 strh at r11-0x50 define request0..9; 0xf4c6e8 copies the 76-byte record from r11-0x58"
      ]
     },
     {
-     "name": "source",
-     "offset": 4,
-     "bytes": 4,
-     "sources": [
-      "0xf3a644..0xf3a648 stores word at r11-84"
-     ]
-    },
-    {
-     "name": "coordinate",
-     "offset": 8,
-     "bytes": 2,
-     "sources": [
-      "0xf3a5fc and 0xf3a620 store halfword at r11-80"
-     ]
-    },
-    {
-     "name": "configuration",
+     "name": "pipeline-word-and-byte",
      "offset": 12,
-     "bytes": 4,
+     "bytes": 5,
      "sources": [
-      "0xf3a608..0xf3a60c stores word at r11-76"
+      "X-M1 1.50 id5 0xf3a60c str at r11-0x4c and 0xf3a614 strb at r11-0x48 define request12..16"
      ]
     },
     {
-     "name": "option",
-     "offset": 16,
-     "bytes": 1,
-     "sources": [
-      "0xf3a610..0xf3a614 stores byte at r11-72"
-     ]
-    },
-    {
-     "name": "sample",
+     "name": "pipeline-values",
      "offset": 20,
-     "bytes": 4,
+     "bytes": 8,
      "sources": [
-      "0xf3a5a4..0xf3a5a8 stores word at r11-68"
+      "X-M1 1.50 id5 0xf3a5a8 str at r11-0x44, 0xf3a5bc strh at r11-0x40 and 0xf3a5d8 strh at r11-0x3e define request20..27"
      ]
     },
     {
-     "name": "dimensions",
-     "offset": 24,
-     "bytes": 4,
-     "sources": [
-      "0xf3a5bc and 0xf3a5d8 store halfwords at r11-64 and r11-62"
-     ]
-    },
-    {
-     "name": "threshold",
+     "name": "record-halfword",
      "offset": 32,
      "bytes": 2,
      "sources": [
-      "0xf3a650..0xf3a654 stores halfword at r11-56"
+      "X-M1 1.50 id5 0xf3a654 strh at r11-0x38 defines request32..33"
      ]
     },
     {
-     "name": "control-words",
+     "name": "buffer-and-state",
      "offset": 36,
      "bytes": 40,
      "sources": [
-      "0xf3a604,0xf3a628,0xf3a634,0xf3a660,0xf3a66c,0xf3a674,0xf3a688/694,0xf3a6c8,0xf3a6d0 and 0xf3a590 define all ten words from r11-52 through r11-16"
+      "X-M1 1.50 id5 word stores at r11-0x34..r11-0x10 between 0xf3a604 and 0xf3a6c8 define request36..75"
      ]
     },
     {
@@ -1478,7 +1446,7 @@
      "offset": 76,
      "bytes": 4,
      "sources": [
-      "0xf4c6e8 copies 76 bytes and appends callback"
+      "0x00f4c6e8: callback word after copied record"
      ]
     }
    ],
@@ -1487,28 +1455,28 @@
      "offset": 10,
      "bytes": 2,
      "sources": [
-      "0xf3a564..0xf3a73c stores only halfword at r11-80, then next word at r11-76; bytes r11-78/-77 never written"
+      "X-M1 1.50 id5 0xf3a564..0xf3a73c: request8..9 is a halfword and no store reaches r11-0x4e..r11-0x4d"
      ]
     },
     {
      "offset": 17,
      "bytes": 3,
      "sources": [
-      "0xf3a614 stores only byte r11-72; next word is r11-68; no writes to r11-71..-69"
+      "X-M1 1.50 id5 0xf3a564..0xf3a73c: request16 is a byte and no store reaches r11-0x47..r11-0x45"
      ]
     },
     {
      "offset": 28,
      "bytes": 4,
      "sources": [
-      "0xf3a564..0xf3a73c never writes r11-60..-57 between dimensions and threshold"
+      "X-M1 1.50 id5 0xf3a564..0xf3a73c: no store reaches r11-0x3c..r11-0x39"
      ]
     },
     {
      "offset": 34,
      "bytes": 2,
      "sources": [
-      "0xf3a654 stores only halfword at r11-56; r11-54/-53 never written"
+      "X-M1 1.50 id5 0xf3a564..0xf3a73c: request32..33 is a halfword and no store reaches r11-0x36..r11-0x35"
      ]
     }
    ]
@@ -3026,6 +2994,62 @@
     }
    ],
    "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 44,
+   "operation": 15377,
+   "bytes": 56,
+   "fields": [
+    {
+     "name": "completion",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0xf4c568 stores the callback at r11-0x3c, the start of the 56-byte message 0xf4c574 posts"
+     ]
+    },
+    {
+     "name": "record-words-and-halfwords",
+     "offset": 4,
+     "bytes": 14,
+     "sources": [
+      "X-M1 1.50 id5 0xf4c4f4..0xf4c518 copy record0, record4 and halfwords record8, record10, record12 to message4..17"
+     ]
+    },
+    {
+     "name": "record-word-and-halfword",
+     "offset": 20,
+     "bytes": 6,
+     "sources": [
+      "X-M1 1.50 id5 0xf4c51c..0xf4c528 copy record40 to message20 and halfword record14 to message24"
+     ]
+    },
+    {
+     "name": "record-tail",
+     "offset": 28,
+     "bytes": 28,
+     "sources": [
+      "X-M1 1.50 id5 0xf4c52c..0xf4c560 copy record16..39 and record44 to message28..55"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 18,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0xf4c4d8..0xf4c574: message16 is a halfword and no store reaches r11-0x2a..r11-0x29"
+     ]
+    },
+    {
+     "offset": 26,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0xf4c4d8..0xf4c574: message24 is a halfword and no store reaches r11-0x22..r11-0x21"
+     ]
+    }
+   ]
   }
  ],
  "channels": [
