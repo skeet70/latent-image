@@ -128,3 +128,21 @@ fn capture_layout_preserves_callback_and_converted_value_order() {
     assert_eq!(F::Enabled.bytes(&packet), &[1]);
     assert_eq!(stock::img_dc_operation(crate::ImgDcOperation::Request49), 0x3f49);
 }
+
+#[test]
+fn measurement_geometry_serializes_resource_calibration_and_retained_parameters() {
+    use crate::round::{GeometryCalibration, GeometryPair, MeasurementGeometry, RetainedGeometryValue};
+    let geometry = MeasurementGeometry {
+        resource: GeometryPair([0x1234, 0x5678]),
+        calibration: GeometryCalibration([0x1122, 0x3344, 0x5566, 0x7788]),
+        converted_profile: RetainedGeometryValue(0x90abcdef),
+        first_parameter: RetainedGeometryValue(0x10203040),
+        second_parameter: RetainedGeometryValue(0x50607080),
+    };
+    assert_eq!(stock::measurement_geometry(geometry), [
+        16, 16, 100, 0, 100, 0, 0, 0, 0, 0, 0x34, 0x12, 0x78, 0x56, 7, 7,
+        0x44, 0x33, 0x22, 0x11, 0x88, 0x77, 0x66, 0x55, 0x34, 0x12, 0x78, 0x56,
+        0xef, 0xcd, 0xab, 0x90, 0x40, 0x30, 0x20, 0x10, 0x80, 0x70, 0x60, 0x50,
+    ]);
+    assert_eq!(stock::img_dc_operation(crate::ImgDcOperation::Request2b), 0x3f2b);
+}
