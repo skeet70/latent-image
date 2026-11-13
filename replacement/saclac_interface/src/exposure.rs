@@ -125,6 +125,94 @@ pub struct CorrectionRequest {
     pub frame: Option<SharedAddress>,
 }
 
+/// Record levels +0xa4..+0xb2 a calculation input carries, relative to the lens.
+pub const INPUT_LEVELS: usize = 9;
+
+/// What calc 0x3c02 calculates from; calc reads it in place.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CalculationInput {
+    /// The half press chose a selection.
+    pub selection: bool,
+    pub lens_reference: u32,
+    /// The targets a half press without a new calculation carries over.
+    pub target_word: u32,
+    pub target_half: u16,
+    /// The two client words the half press names.
+    pub area: [u32; 2],
+    /// The exposure's start levels.
+    pub target_level: i16,
+    pub start_level: i16,
+    pub measured_level: u16,
+    pub level_profile: u32,
+    pub unmeasured: bool,
+    pub level_policy: u32,
+    pub refinement_pass: bool,
+    pub first_treatment: bool,
+    /// The record's metered level relative to the lens, plus its two metering offsets.
+    pub metering_level: u16,
+    /// The selection grid's columns and rows, and one less of each.
+    pub grid: [u8; 2],
+    pub grid_steps: [u8; 2],
+    /// The selection plan's kind word and the five correction halfwords it keeps.
+    pub plan_kind: u32,
+    pub plan_exposure: [u16; 5],
+    pub measurement_selection: u32,
+    pub selection_kind: u32,
+    pub selection_flags: u16,
+    pub selection_style: u32,
+    pub selection_auxiliary: u32,
+    /// Record bytes and words by offset.
+    pub record_14: u32,
+    pub record_20: i16,
+    pub record_24: i16,
+    pub record_26: u16,
+    pub record_32: u32,
+    pub record_33: u8,
+    pub record_34: u32,
+    pub record_3d: u32,
+    pub record_3e: u32,
+    pub record_43: u32,
+    pub record_45: u32,
+    pub record_4b: u32,
+    pub record_51: u32,
+    pub record_5b: u32,
+    pub record_5d: u32,
+    pub record_5f: u32,
+    pub record_66: u32,
+    pub record_67: u32,
+    pub record_68: u32,
+    pub record_69: u32,
+    pub record_20b0: u32,
+    pub record_20c8: u32,
+    pub record_20cc: u32,
+    pub record_20d4: u32,
+    pub record_2110: u32,
+    /// Record halfwords +0x1c and +0x1e, which a resumed half press replaces.
+    pub offset: i16,
+    pub lead: i16,
+    /// Record byte +0x44, the exposure source.
+    pub source: u32,
+    /// The level the record measures at.
+    pub record_level: i16,
+    pub header_47: u32,
+    pub header_61: u32,
+    pub header_63: u32,
+    pub interval_tracking: u32,
+    pub capture_offset: u32,
+    pub offered_measurements: u32,
+    pub window_status: u32,
+    /// Shared words +0x738 and +0x85c.
+    pub shared_738: u32,
+    pub shared_85c: u32,
+    pub second_result: u32,
+    /// Record byte +0x3d, or 1 when it is 0 or the record selects no measurement.
+    pub grid_layout: u32,
+    /// The record's own lens reference, which the levels are relative to.
+    pub record_lens_reference: u32,
+    pub levels: [i16; INPUT_LEVELS],
+    pub option: u32,
+}
+
 pub const STATISTICS_AREAS_BYTES: usize = 160;
 
 /// The statistics measurement the exposure asks of the image task (imgdc 0x3f1a, completions
