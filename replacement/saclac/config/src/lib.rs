@@ -42,3 +42,5 @@ mod pipeline_tests;
 mod compiled_tests;
 #[cfg(test)]
 mod dump_tests;
+#[cfg(test)]
+mod stock_tests;
