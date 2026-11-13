@@ -17,8 +17,8 @@ import System.Exit (die)
 script :: String
 script = unlines
   [ "ENTRY(xm1_fixed_test_entry)", "MEMORY {", linkerMemory, "}", "SECTIONS {"
-  , ".text : { KEEP(*(.text.entry)) *(.text*) *(.rodata*) } > OWNED_FIXED"
-  , ".data : { *(.data*) . = ALIGN(4); } > OWNED_FIXED"
+  , ".text : { __fixed_body_start = .; KEEP(*(.text.entry)) *(.text*) *(.rodata*) } > OWNED_FIXED"
+  , ".data : { *(.data*) . = ALIGN(4); __fixed_body_end = .; } > OWNED_FIXED"
   , ".bss (NOLOAD) : { __fixed_bss_start = .; *(.bss*) *(COMMON) . = ALIGN(4); __fixed_bss_end = .; } > OWNED_FIXED"
   , "/DISCARD/ : { *(.ARM.exidx*) *(.ARM.extab*) *(.note*) *(.comment*) }", "}"
   , "xm1_fixed_test_resume = 0x69cdfc;"

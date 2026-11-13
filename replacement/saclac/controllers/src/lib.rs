@@ -13,6 +13,9 @@ pub mod records;
 pub mod capture;
 pub mod exports;
 pub mod root;
+pub mod live;
+#[cfg(test)]
+mod live_tests;
 #[cfg(test)]
 mod root_tests;
 #[cfg(test)]

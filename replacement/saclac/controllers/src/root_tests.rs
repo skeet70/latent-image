@@ -12,6 +12,7 @@ enum Event {
     Lifecycle(Request),
     Child(Branch, Input<'static>, RecordHandle),
     Utility(Utility, RecordHandle),
+    S1LensRoute(RecordHandle),
     Fault,
 }
 
@@ -66,7 +67,7 @@ impl Port for Peers {
     }
     fn utility(&mut self, utility: Utility, record: RecordHandle) { self.events.push(Event::Utility(utility, record)); }
     fn autofocus_admitted(&mut self) -> bool { true }
-    fn s1_lens_route(&mut self, _: RecordHandle) -> bool { self.lens_route }
+    fn s1_lens_route(&mut self, record: RecordHandle) -> bool { self.events.push(Event::S1LensRoute(record)); self.lens_route }
     fn still_record(&mut self, _: RecordHandle) -> bool { self.still }
     fn live_option_allowed(&mut self) -> bool { self.live_option }
     fn fault(&mut self) { self.events.push(Event::Fault); }
@@ -141,6 +142,7 @@ fn pending_half_press_remembers_release_until_s1_finishes() {
     root.handle(completion(), &mut peers);
     assert_eq!(peers.events, [
         Event::Context(Context::Live, Allocation::Reuse), Event::Child(Branch::S1, Input::Control(Control::QueryS1), handle(Context::Live)),
+        Event::S1LensRoute(handle(Context::Live)),
         Event::Context(Context::S1, Allocation::Reuse), Event::Child(Branch::S1, Input::Message(completion()), handle(Context::S1)),
         Event::Release(Context::S1, Generation::Current), Event::Context(Context::Live, Allocation::Reuse),
         Event::Child(Branch::Live, Input::Control(Control::ReleaseS1), handle(Context::Live)),
