@@ -27,32 +27,85 @@ pub enum Admission {
 
 #[derive(Default)]
 pub struct Clients {
-    pending: Option<ClientCallback>,
+    lens: crate::adjustment::Adjustment<ClientCallback>,
+}
+
+struct ReservationEffects<'a, E>(&'a mut E);
+
+impl<E: Effects> crate::adjustment::Effects<ClientCallback> for ReservationEffects<'_, E> {
+    fn emit(&mut self, effect: crate::adjustment::Effect<ClientCallback>) {
+        use crate::adjustment::{Effect as LensEffect, Reply};
+        match effect {
+            LensEffect::Reply { callback, result } => {
+                let status = match result {
+                    Reply::Success => 0,
+                    Reply::Busy => -95,
+                    Reply::SelectionOutOfRange => -94,
+                };
+                self.0.emit(Effect::Reply { callback, status: CompletionStatus(status) });
+                if result == Reply::Success { self.0.emit(Effect::Released); }
+            }
+            LensEffect::Request(_) | LensEffect::PublishQuery { .. } | LensEffect::SelectionRejected => {}
+        }
+    }
 }
 
 impl Clients {
     pub const fn new() -> Self {
-        Self { pending: None }
+        Self { lens: crate::adjustment::Adjustment::new() }
     }
 
     pub fn reserve(&mut self, callback: ClientCallback, effects: &mut impl Effects) -> Admission {
-        if self.pending.is_some() {
-            effects.emit(Effect::Reply { callback, status: CompletionStatus(-95) });
-            return Admission::Busy;
-        }
-        self.pending = Some(callback);
-        effects.emit(Effect::Occupied);
-        Admission::Accepted
+        let admission = if self.lens.is_busy() { Admission::Busy } else { Admission::Accepted };
+        self.lens.begin(callback, crate::adjustment::LensRequest::ReserveOnly, &mut ReservationEffects(effects));
+        if admission == Admission::Accepted { effects.emit(Effect::Occupied); }
+        admission
+    }
+
+    pub fn begin_lens(
+        &mut self,
+        callback: ClientCallback,
+        request: crate::adjustment::LensRequest,
+        effects: &mut impl crate::adjustment::Effects<ClientCallback>,
+    ) {
+        self.lens.begin(callback, request, effects);
+    }
+
+    pub fn configure_lens(
+        &mut self,
+        callback: ClientCallback,
+        selection: crate::adjustment::Selection,
+        limit: crate::adjustment::SelectionLimit,
+        value: crate::adjustment::DriveAmount,
+        effects: &mut impl crate::adjustment::Effects<ClientCallback>,
+    ) {
+        self.lens.configure(callback, selection, limit, value, effects);
+    }
+
+    pub fn configure_default_lens(
+        &mut self,
+        callback: ClientCallback,
+        effects: &mut impl crate::adjustment::Effects<ClientCallback>,
+    ) {
+        self.lens.configure_default(callback, effects);
+    }
+
+    pub const fn selection_rejected(&self) -> bool { self.lens.selection_rejected() }
+
+    pub fn complete_lens(
+        &mut self,
+        completion: crate::adjustment::Completion,
+        effects: &mut impl crate::adjustment::Effects<ClientCallback>,
+    ) {
+        self.lens.complete(completion, effects);
     }
 
     pub fn complete(&mut self, completion: Completion, effects: &mut impl Effects) {
-        if completion == Completion::Finished {
-            if let Some(callback) = self.pending {
-                effects.emit(Effect::Reply { callback, status: CompletionStatus(0) });
-                self.pending = None;
-                effects.emit(Effect::Released);
-            }
-        }
+        let completion = match completion {
+            Completion::Progress => crate::adjustment::Completion::Progress,
+            Completion::Finished => crate::adjustment::Completion::Finished,
+        };
+        self.lens.complete(completion, &mut ReservationEffects(effects));
     }
 }
 

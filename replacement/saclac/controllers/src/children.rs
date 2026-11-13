@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use xm1_saclac_interface::{Command, Completed, Message, Parameters};
+use xm1_saclac_interface::{Command, Completed, Message, Parameters, RecordHandle};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ChildOutcome {
@@ -71,9 +71,9 @@ pub enum ShotControl {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ChildEvent<'a, Control> {
-    Control { control: Control, parameters: Parameters<'a> },
-    Command(Command<'a>),
-    Completed(Completed<'a>),
+    Control { control: Control, parameters: Parameters<'a>, record: RecordHandle },
+    Command { command: Command<'a>, record: RecordHandle },
+    Completed { completed: Completed<'a>, record: RecordHandle },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
