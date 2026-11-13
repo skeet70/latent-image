@@ -311,7 +311,8 @@ impl Root {
     fn s1_lens(&mut self, input: Input<'_>, drive: bool, port: &mut impl Port) -> Outcome {
         let record = port.context(Context::Live, Allocation::Reuse, input);
         let state = port.child(Branch::S1, Input::Control(Control::QueryS1), record);
-        let use_s1 = state == Outcome::Pending && port.s1_lens_route(record);
+        let route = port.s1_lens_route(record);
+        let use_s1 = state == Outcome::Pending && route;
         let (branch, event) = if use_s1 {
             (Branch::S1, if drive { Input::Control(Control::Cancel) } else { input })
         } else if !drive {
@@ -396,7 +397,8 @@ impl Root {
             Mode::S1 => {
                 let record = port.context(Context::Live, Allocation::Reuse, input);
                 let state = port.child(Branch::S1, Input::Control(Control::QueryS1), record);
-                let use_s1 = state == Outcome::Pending && port.s1_lens_route(record);
+                let route = port.s1_lens_route(record);
+                let use_s1 = state == Outcome::Pending && route;
                 let outcome = if use_s1 {
                     port.child(Branch::S1, input, record)
                 } else if live_completion(input) {
