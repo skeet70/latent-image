@@ -94,3 +94,53 @@ fn oversized_adjustment_shifts_produce_zero_without_panicking() {
     }, StockCallbackWord(1), LensFinishRoute::Ordinary).unwrap();
     assert_eq!(&payload.bytes()[8..12], &[0; 4]);
 }
+
+#[test]
+fn record_start_places_defined_fields_and_completion_in_the_peer_packet() {
+    use crate::stock::{record_start_payload, RecordHalfword, RecordMode, RecordSample, RecordStart, RecordWord, StockCallbackWord};
+    let bytes = record_start_payload(RecordStart {
+        channel: RecordWord(8), mode: RecordMode::Second,
+        settings: [RecordWord(3), RecordWord(4)],
+        range: [RecordHalfword(5), RecordHalfword(6)], source: RecordWord(7),
+        sample: RecordSample { leading: RecordWord(9),
+            components: [RecordHalfword(10), RecordHalfword(11), RecordHalfword(12), RecordHalfword(13)],
+            trailing: RecordWord(14) },
+    }, StockCallbackWord(0x12345678));
+    assert_eq!(bytes, [
+        8,0,0,0, 2,0,0,0, 3,0,0,0, 4,0,0,0,
+        5,0,6,0, 0,0,0,0, 7,0,0,0, 100,0,16,0,
+        9,0,0,0, 10,0,11,0, 12,0,13,0, 14,0,0,0,
+        0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+        0x78,0x56,0x34,0x12,
+    ]);
+}
+
+#[test]
+fn record_update_clamps_position_and_duration_before_serializing() {
+    use crate::adjustment::{ExposureDuration, ExposureLimits, ExposureMode, LensPosition};
+    use crate::stock::{record_update_payload, RecordLimits, RecordUpdate, RecordWord, StockCallbackWord};
+    let limits = RecordLimits {
+        exposure: ExposureLimits { minimum: ExposureDuration(100), maximum: ExposureDuration(1000) },
+        minimum_position: LensPosition(-10), maximum_position: LensPosition(20),
+    };
+    let request = RecordUpdate {
+        mode: ExposureMode::Bounded, duration: ExposureDuration(50), value: RecordWord(2),
+        position: LensPosition(-100), auxiliary: RecordWord(6),
+    };
+    assert_eq!(record_update_payload(request, limits, StockCallbackWord(7)), [
+        100,0,0,0, 2,0,0,0, 0xf6,0xff,0,0, 6,0,0,0, 7,0,0,0,
+    ]);
+    let request = RecordUpdate { duration: ExposureDuration(5000), position: LensPosition(100), ..request };
+    assert_eq!(record_update_payload(request, limits, StockCallbackWord(7)), [
+        0xe8,3,0,0, 2,0,0,0, 20,0,0,0, 6,0,0,0, 7,0,0,0,
+    ]);
+}
+
+#[test]
+fn synchronous_export_boundary_has_one_entry_for_each_recovered_consumer() {
+    use crate::stock::{ExportAddress, SynchronousExport, SYNCHRONOUS_EXPORTS};
+    assert_eq!(SYNCHRONOUS_EXPORTS.first().unwrap().address, ExportAddress(0xefbe74));
+    assert_eq!(SYNCHRONOUS_EXPORTS.last().unwrap().address, ExportAddress(0xefca4c));
+    assert!(SYNCHRONOUS_EXPORTS.windows(2).all(|entries| entries[0].address.0 < entries[1].address.0));
+    assert_eq!(SYNCHRONOUS_EXPORTS.iter().find(|entry| entry.export == SynchronousExport::StartCaptureRecord).unwrap().argument_words, 14);
+}

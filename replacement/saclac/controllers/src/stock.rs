@@ -184,3 +184,192 @@ pub fn adjustment_payload(
     }
     Some(LensPayload { operation, bytes, length })
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SynchronousExport {
+    StartRecord,
+    StartCaptureRecord,
+    UpdateRecord,
+    ReserveClient,
+    LensPosition,
+    ReserveClient2,
+    ReserveClient3,
+    ReserveClient4,
+    ReserveClient5,
+    ReserveClient6,
+    ReserveClient7,
+    ReserveClient8,
+    SetLensPosition,
+    MoveLens,
+    SetLensPercentage,
+    StopLens,
+    LensMotion,
+    SynchronizeLens,
+    QueryLens,
+    SetLensValue,
+    ConfigureLens,
+    DefaultLens,
+    ConfigureLensValue,
+    NotifyPrimary,
+    ReleaseParameters,
+    PrimaryImageStatus,
+    SecondaryImageStatus,
+    CaptureValue,
+    NotifySecondary,
+    PrimaryMovieStatus,
+    SecondaryMovieStatus,
+    SelectionRejected,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExportAddress(pub u32);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExportAbi {
+    pub address: ExportAddress,
+    pub export: SynchronousExport,
+    pub argument_words: u8,
+}
+
+pub const SYNCHRONOUS_EXPORTS: [ExportAbi; 32] = {
+    use SynchronousExport::*;
+    [
+        ExportAbi { address: ExportAddress(0xefbe74), export: StartRecord, argument_words: 10 },
+        ExportAbi { address: ExportAddress(0xefbf58), export: StartCaptureRecord, argument_words: 14 },
+        ExportAbi { address: ExportAddress(0xefc1f0), export: UpdateRecord, argument_words: 6 },
+        ExportAbi { address: ExportAddress(0xefc2f8), export: ReserveClient, argument_words: 1 },
+        ExportAbi { address: ExportAddress(0xefc33c), export: LensPosition, argument_words: 0 },
+        ExportAbi { address: ExportAddress(0xefc360), export: ReserveClient2, argument_words: 1 },
+        ExportAbi { address: ExportAddress(0xefc3a4), export: ReserveClient3, argument_words: 1 },
+        ExportAbi { address: ExportAddress(0xefc3e8), export: ReserveClient4, argument_words: 1 },
+        ExportAbi { address: ExportAddress(0xefc42c), export: ReserveClient5, argument_words: 1 },
+        ExportAbi { address: ExportAddress(0xefc470), export: ReserveClient6, argument_words: 1 },
+        ExportAbi { address: ExportAddress(0xefc4b4), export: ReserveClient7, argument_words: 1 },
+        ExportAbi { address: ExportAddress(0xefc4f8), export: ReserveClient8, argument_words: 1 },
+        ExportAbi { address: ExportAddress(0xefc53c), export: SetLensPosition, argument_words: 3 },
+        ExportAbi { address: ExportAddress(0xefc5ac), export: MoveLens, argument_words: 3 },
+        ExportAbi { address: ExportAddress(0xefc640), export: SetLensPercentage, argument_words: 3 },
+        ExportAbi { address: ExportAddress(0xefc6b8), export: StopLens, argument_words: 1 },
+        ExportAbi { address: ExportAddress(0xefc708), export: LensMotion, argument_words: 0 },
+        ExportAbi { address: ExportAddress(0xefc73c), export: SynchronizeLens, argument_words: 1 },
+        ExportAbi { address: ExportAddress(0xefc790), export: QueryLens, argument_words: 1 },
+        ExportAbi { address: ExportAddress(0xefc7e0), export: SetLensValue, argument_words: 2 },
+        ExportAbi { address: ExportAddress(0xefc830), export: ConfigureLens, argument_words: 3 },
+        ExportAbi { address: ExportAddress(0xefc8e8), export: DefaultLens, argument_words: 1 },
+        ExportAbi { address: ExportAddress(0xefc948), export: ConfigureLensValue, argument_words: 2 },
+        ExportAbi { address: ExportAddress(0xefc998), export: NotifyPrimary, argument_words: 1 },
+        ExportAbi { address: ExportAddress(0xefc9b4), export: ReleaseParameters, argument_words: 0 },
+        ExportAbi { address: ExportAddress(0xefc9c8), export: PrimaryImageStatus, argument_words: 0 },
+        ExportAbi { address: ExportAddress(0xefc9d8), export: SecondaryImageStatus, argument_words: 0 },
+        ExportAbi { address: ExportAddress(0xefc9e8), export: CaptureValue, argument_words: 0 },
+        ExportAbi { address: ExportAddress(0xefc9f8), export: NotifySecondary, argument_words: 1 },
+        ExportAbi { address: ExportAddress(0xefca14), export: PrimaryMovieStatus, argument_words: 0 },
+        ExportAbi { address: ExportAddress(0xefca30), export: SecondaryMovieStatus, argument_words: 0 },
+        ExportAbi { address: ExportAddress(0xefca4c), export: SelectionRejected, argument_words: 0 },
+    ]
+};
+
+pub const fn lens_availability(word: u32) -> crate::synchronous::Availability {
+    if word == 2 { crate::synchronous::Availability::Unavailable }
+    else { crate::synchronous::Availability::Available }
+}
+
+pub const fn readiness_status(readiness: crate::synchronous::Readiness) -> xm1_saclac_interface::CompletionStatus {
+    match readiness {
+        crate::synchronous::Readiness::Ready => xm1_saclac_interface::CompletionStatus(0),
+        crate::synchronous::Readiness::Busy => xm1_saclac_interface::CompletionStatus(-94),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecordWord(pub u32);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecordHalfword(pub u16);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecordMode {
+    Default,
+    First,
+    Second,
+}
+
+impl RecordMode {
+    pub const fn from_word(word: u32) -> Self {
+        match word { 1 => Self::First, 2 => Self::Second, _ => Self::Default }
+    }
+    const fn word(self) -> u32 {
+        match self { Self::Default => 0, Self::First => 1, Self::Second => 2 }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecordSample {
+    pub leading: RecordWord,
+    pub components: [RecordHalfword; 4],
+    pub trailing: RecordWord,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecordStart {
+    pub channel: RecordWord,
+    pub mode: RecordMode,
+    pub settings: [RecordWord; 2],
+    pub range: [RecordHalfword; 2],
+    pub source: RecordWord,
+    pub sample: RecordSample,
+}
+
+pub fn record_start_payload(input: RecordStart, callback: StockCallbackWord) -> [u8; 68] {
+    let mut bytes = [0; 68];
+    bytes[0..4].copy_from_slice(&input.channel.0.to_le_bytes());
+    bytes[4..8].copy_from_slice(&input.mode.word().to_le_bytes());
+    bytes[8..12].copy_from_slice(&input.settings[0].0.to_le_bytes());
+    bytes[12..16].copy_from_slice(&input.settings[1].0.to_le_bytes());
+    bytes[16..18].copy_from_slice(&input.range[0].0.to_le_bytes());
+    bytes[18..20].copy_from_slice(&input.range[1].0.to_le_bytes());
+    bytes[24..28].copy_from_slice(&input.source.0.to_le_bytes());
+    bytes[28..30].copy_from_slice(&100_u16.to_le_bytes());
+    bytes[30..32].copy_from_slice(&16_u16.to_le_bytes());
+    bytes[32..36].copy_from_slice(&input.sample.leading.0.to_le_bytes());
+    for (chunk, component) in bytes[36..44].chunks_exact_mut(2).zip(input.sample.components) {
+        chunk.copy_from_slice(&component.0.to_le_bytes());
+    }
+    bytes[44..48].copy_from_slice(&input.sample.trailing.0.to_le_bytes());
+    bytes[64..68].copy_from_slice(&callback.0.to_le_bytes());
+    bytes
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecordUpdate {
+    pub mode: crate::adjustment::ExposureMode,
+    pub duration: crate::adjustment::ExposureDuration,
+    pub value: RecordWord,
+    pub position: crate::adjustment::LensPosition,
+    pub auxiliary: RecordWord,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecordLimits {
+    pub exposure: crate::adjustment::ExposureLimits,
+    pub minimum_position: crate::adjustment::LensPosition,
+    pub maximum_position: crate::adjustment::LensPosition,
+}
+
+pub fn record_update_payload(input: RecordUpdate, limits: RecordLimits, callback: StockCallbackWord) -> [u8; 20] {
+    let position = if input.position.0 < limits.minimum_position.0 {
+        limits.minimum_position
+    } else if input.position.0 > limits.maximum_position.0 {
+        limits.maximum_position
+    } else {
+        input.position
+    };
+    let duration = crate::adjustment::exposure_duration(input.mode, input.duration, limits.exposure);
+    let mut bytes = [0; 20];
+    bytes[..4].copy_from_slice(&duration.0.to_le_bytes());
+    bytes[4..8].copy_from_slice(&input.value.0.to_le_bytes());
+    bytes[8..10].copy_from_slice(&position.0.to_le_bytes());
+    bytes[12..16].copy_from_slice(&input.auxiliary.0.to_le_bytes());
+    bytes[16..].copy_from_slice(&callback.0.to_le_bytes());
+    bytes
+}

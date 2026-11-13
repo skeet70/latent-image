@@ -9,6 +9,7 @@ pub mod replies;
 pub mod children;
 pub mod synchronous;
 pub mod search;
+pub mod records;
 
 #[cfg(test)]
 extern crate std;
@@ -26,3 +27,5 @@ mod synchronous_tests;
 mod boundary_tests;
 #[cfg(test)]
 mod child_contract_tests;
+#[cfg(test)]
+mod record_tests;
