@@ -201,7 +201,7 @@ main = do
     , "owned_extents" .= [spanValue Artifact.fixedExtent]
     , "stock" .= stockRun
     , "owned" .= ownedRun
-    , "controls" .= [object ["name" .= ("wrong-command-present-store" :: String), "run" .= wrongRun]]
+    , "controls" .= [object ["name" .= ("unconditional-command-present-store" :: String), "run" .= wrongRun]]
     , "milestone" .= milestone
     , "same_observer_and_scenario_inputs" .= sameInputs
     , "stock_executed_instructions_in_action_extents" .= stockFetches stock

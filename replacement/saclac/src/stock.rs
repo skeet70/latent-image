@@ -49,6 +49,10 @@ impl crate::driver::Ports for DriverPorts {
     }
 
     fn dispatch(&mut self, event: crate::driver::Event) {
+        #[cfg(saclac_wrong_driver_store)]
+        unsafe {
+            core::ptr::write_volatile((COMMAND_FLAGS.0 + event.code()) as *mut u8, 1);
+        }
         if let Some(block) = xm1_saclac_interface::stock::PARAMETER_BLOCKS.get(event.code() as usize) {
             let length = read_word(RECEIVE.0 + 4) as usize;
             unsafe {
