@@ -67,7 +67,7 @@ impl Stage {
         }
     }
 
-    const fn operation(self) -> Operation {
+    pub(crate) const fn operation(self) -> Operation {
         match self {
             Self::First => Operation(4),
             Self::Second => Operation(5),
@@ -92,7 +92,7 @@ pub fn set_stage<I: Isp>(isp: &mut I, stage: Stage, mode: StageMode) {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Gates { pub first: bool, pub second: bool }
 
-const GATES: Operation = Operation(8);
+pub(crate) const GATES: Operation = Operation(8);
 
 pub fn set_gates<I: Isp>(isp: &mut I, gates: Gates) {
     isp.note(UNIT, GATES);
@@ -113,7 +113,7 @@ pub struct Path { pub source: PathSource, pub enabled: bool }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PathSource { First, Second, Third, Fourth }
 
-const PATH: Operation = Operation(9);
+pub(crate) const PATH: Operation = Operation(9);
 
 pub fn set_path<I: Isp>(isp: &mut I, path: Path) {
     isp.note(UNIT, PATH);
@@ -183,8 +183,10 @@ pub enum DivisionMode { First, Second, Third, Fourth }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Division { pub mode: DivisionMode, pub count: u16 }
 
+pub(crate) const SET_DIVISION: Operation = Operation(0x12);
+
 pub fn set_division<I: Isp>(isp: &mut I, client: Client, division: Division) -> Result<(), Refusal> {
-    admit(isp, UNIT, client, Operation(0x12), &[(1..=15).contains(&division.count)])?;
+    admit(isp, UNIT, client, SET_DIVISION, &[(1..=15).contains(&division.count)])?;
     let mode = match division.mode {
         DivisionMode::First => 0,
         DivisionMode::Second => 1,
@@ -195,8 +197,10 @@ pub fn set_division<I: Isp>(isp: &mut I, client: Client, division: Division) -> 
     Ok(())
 }
 
+pub(crate) const SET_GATE: Operation = Operation(0x14);
+
 pub fn set_gate<I: Isp>(isp: &mut I, enabled: bool) {
-    isp.note(UNIT, Operation(0x14));
+    isp.note(UNIT, SET_GATE);
     write(isp, GATE, u32::from(enabled));
 }
 
@@ -209,7 +213,7 @@ pub fn gate<I: Isp>(isp: &mut I) -> bool {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Shift { pub low: u16, pub high: u16 }
 
-const POINT_LIMIT: usize = 1024;
+pub(crate) const POINT_LIMIT: usize = 1024;
 const EMPTY_POINT: u32 = 0x9fff_1fff;
 const LAST_POINT: u32 = 1 << 31;
 
@@ -219,10 +223,12 @@ fn shifted(entry: u32, shift: Shift) -> u32 {
     high << 16 | entry & 0xc000 | low
 }
 
+pub(crate) const POINTS_LOAD: Operation = Operation(0x16);
+
 /// Loads up to 1024 points (13-bit coordinates in each half, flags at 14..=15) and marks the last
 /// with bit 31; an empty list writes the empty entry to the first two slots.
 pub fn set_points<I: Isp>(isp: &mut I, client: Client, points: &[u32], shift: Shift) -> Result<(), Refusal> {
-    admit(isp, UNIT, client, Operation(0x16), &[points.len() <= POINT_LIMIT])?;
+    admit(isp, UNIT, client, POINTS_LOAD, &[points.len() <= POINT_LIMIT])?;
     if points.is_empty() {
         write(isp, POINTS, EMPTY_POINT);
         write(isp, POINTS + 4, EMPTY_POINT);
@@ -235,13 +241,15 @@ pub fn set_points<I: Isp>(isp: &mut I, client: Client, points: &[u32], shift: Sh
     Ok(())
 }
 
-const PAIR_LIMIT: usize = 16;
+pub(crate) const PAIR_LIMIT: usize = 16;
 const UNUSED: u32 = 0x1fff;
+
+pub(crate) const PAIRS_LOAD: Operation = Operation(0x17);
 
 /// Up to sixteen entries two per register, flags at 14..=15 (low) and 30..=31 (high); slots past
 /// the list read 0x1fff. An empty list writes only the first register.
 pub fn set_pairs<I: Isp>(isp: &mut I, client: Client, entries: &[u32], shift: u16) -> Result<(), Refusal> {
-    admit(isp, UNIT, client, Operation(0x17), &[entries.len() <= PAIR_LIMIT])?;
+    admit(isp, UNIT, client, PAIRS_LOAD, &[entries.len() <= PAIR_LIMIT])?;
     if entries.is_empty() {
         write(isp, PAIRS, UNUSED << 16 | UNUSED);
         return Ok(());
@@ -289,8 +297,10 @@ pub fn set_block<I: Isp>(isp: &mut I, client: Client, block: Block) -> Result<()
     Ok(())
 }
 
+pub(crate) const SET_OUTPUT: Operation = Operation(0x1c);
+
 pub fn set_output<I: Isp>(isp: &mut I, enabled: bool) {
-    isp.note(UNIT, Operation(0x1c));
+    isp.note(UNIT, SET_OUTPUT);
     write(isp, OUTPUT, u32::from(enabled));
 }
 
@@ -341,8 +351,10 @@ pub fn load_curves<I: Isp>(isp: &mut I, curves: [&[u32; 64]; 9]) {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Mode { pub enabled: bool, pub level: u8 }
 
+pub(crate) const SET_MODE: Operation = Operation(0x21);
+
 pub fn set_mode<I: Isp>(isp: &mut I, mode: Mode) {
-    isp.note(UNIT, Operation(0x21));
+    isp.note(UNIT, SET_MODE);
     write(isp, MODE, u32::from(mode.enabled) | (u32::from(mode.level) & 7) << 16);
 }
 

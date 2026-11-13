@@ -1,6 +1,7 @@
 //! The stock boundary: X-M1 1.50 addresses of the ISP units' registers and session records, the
-//! driver's event log entries, the stock words for the unit, fault and refusal codes, and in
-//! `capture` the capture layer's stock tables, state and services.
+//! driver's event log entries, the stock words for the unit, fault and refusal codes, in
+//! `arguments` the stock layouts of the unit entries' arguments, and in `capture` the capture
+//! layer's stock tables, state and services.
 
 use core::ptr::{read_volatile, write_volatile};
 
@@ -17,7 +18,11 @@ fn read_u32(address: u32) -> u32 { unsafe { read_volatile(address as usize as *c
 
 fn write_u32(address: u32, value: u32) { unsafe { write_volatile(address as usize as *mut u32, value) } }
 
+pub mod arguments;
 pub mod capture;
+
+#[cfg(test)]
+mod arguments_tests;
 
 /// `hw_log_event` through its one-client form (client, unit, operation, fault).
 const LOG_REFUSED: u32 = 0x68_4908;

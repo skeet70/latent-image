@@ -37,8 +37,10 @@ pub fn set_dimensions<I: Isp>(isp: &mut I, client: Client, bank: Bank, size: [u1
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Geometry { pub enabled: bool, pub first: u16, pub second: u16 }
 
+pub(crate) const SET_GEOMETRY: Operation = Operation(7);
+
 pub fn set_geometry<I: Isp>(isp: &mut I, bank: Bank, geometry: Geometry) {
-    isp.note(UNIT, Operation(7));
+    isp.note(UNIT, SET_GEOMETRY);
     write(isp, bank, GEOMETRY, u32::from(geometry.enabled) << 31 | u32::from(geometry.first));
     write(isp, bank, GEOMETRY_SECOND, u32::from(geometry.second));
 }
@@ -137,8 +139,10 @@ pub struct Readback {
     pub mode: ReadbackMode,
 }
 
+pub(crate) const SET_READBACK: Operation = Operation(0x15);
+
 pub fn set_readback<I: Isp>(isp: &mut I, client: Client, bank: Bank, readback: Readback) -> Result<(), Refusal> {
-    admit(isp, UNIT, client, Operation(0x15), &[readback.region < 0x100])?;
+    admit(isp, UNIT, client, SET_READBACK, &[readback.region < 0x100])?;
     let source = match readback.source {
         ReadbackSource::First => 0,
         ReadbackSource::Second => 1,

@@ -36,8 +36,10 @@ pub enum Source { First, Second, Third }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Selectors { pub fields: [u8; 4], pub source: Source, pub source_enabled: bool }
 
+pub(crate) const SET_SELECTORS: Operation = Operation(6);
+
 pub fn set_selectors<I: Isp>(isp: &mut I, caller: Caller, selectors: Selectors) {
-    begin(isp, caller, Operation(6));
+    begin(isp, caller, SET_SELECTORS);
     let [first, second, third, fourth] = selectors.fields.map(u32::from);
     let fields = first & 7 | (second & 7) << 3 | (third & 3) << 8 | (fourth & 3) << 12;
     let word = read(isp, SELECTORS) & 0xffff_ccc0 | fields;

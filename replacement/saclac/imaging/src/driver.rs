@@ -157,6 +157,29 @@ pub(crate) fn refuse<I: Isp>(isp: &mut I, unit: Unit, client: Client, operation:
     Refusal::Parameter
 }
 
+/// A stock argument word outside the closed set its operation takes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParameterFault {
+    pub(crate) unit: Unit,
+    pub(crate) operation: Operation,
+}
+
+impl ParameterFault {
+    pub const fn unit(self) -> Unit { self.unit }
+
+    pub const fn operation(self) -> Operation { self.operation }
+}
+
+/// Refuses `fault` as its stock entry refuses a word it does not take. RAID0 and MVREC entries
+/// take no session.
+pub fn refuse_parameter<I: Isp>(isp: &mut I, client: Client, session: Option<SessionId>, fault: ParameterFault) -> Refusal {
+    match fault.unit {
+        Unit::Auto => check_session(isp, fault.unit, client, session, fault.operation),
+        Unit::Raid0 | Unit::Mvrec => isp.note(fault.unit, fault.operation),
+    }
+    refuse(isp, fault.unit, client, fault.operation)
+}
+
 /// Notes `operation` in the record, then refuses unless every check holds.
 pub(crate) fn admit<I: Isp>(isp: &mut I, unit: Unit, client: Client, operation: Operation, checks: &[bool]) -> Result<(), Refusal> {
     isp.note(unit, operation);
