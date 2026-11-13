@@ -66,17 +66,28 @@ fn pipeline_first_and_calculation_fill_only_their_leading_fields_of_a_full_block
 }
 
 #[test]
-fn source_record_moves_its_late_word_ahead_of_halfword_fourteen() {
-    let record = counting::<48>(0);
-    let (operation, message) = stock::calc_payload(&CalcPayload::Source { record, callback: CALLBACK });
+fn source_request_places_each_value_around_two_unwritten_halfwords() {
+    let request = SourceRequest {
+        profile: [0x0102_0304, 0x0506_0708],
+        decade: 0x090a,
+        profile_halfword: 0x0b0c,
+        level: 0x0d0e,
+        reference: 0x0f10,
+        size: [0x1112_1314, 0x1516_1718],
+        exposure: 0x191a_1b1c,
+        mode: 0x1d1e_1f20,
+        selection: 0x21,
+        extension: 0x2223_2425,
+    };
+    let (operation, message) = stock::calc_payload(&CalcPayload::Source { request, callback: CALLBACK });
     assert_eq!(operation, CalcOperation::Request11);
     let mut expected = [0u8; 56];
-    expected[..4].copy_from_slice(&CALLBACK.0.to_le_bytes());
-    expected[4..18].copy_from_slice(&record.0[..14]);
-    expected[20..24].copy_from_slice(&record.0[40..44]);
-    expected[24..26].copy_from_slice(&record.0[14..16]);
-    expected[28..52].copy_from_slice(&record.0[16..40]);
-    expected[52..56].copy_from_slice(&record.0[44..48]);
+    for (offset, word) in [(0, CALLBACK.0), (4, 0x5ffe_d304), (8, 0x0102_0304), (20, 0x21), (28, 0x1112_1314), (32, 0x1516_1718), (36, 0x0506_0708), (40, 0x191a_1b1c), (48, 0x1d1e_1f20), (52, 0x2223_2425)] {
+        expected[offset..offset + 4].copy_from_slice(&u32::to_le_bytes(word));
+    }
+    for (offset, half) in [(12, 0x090au16), (14, 0x0b0c), (16, 0x0d0e), (24, 0x0f10)] {
+        expected[offset..offset + 2].copy_from_slice(&half.to_le_bytes());
+    }
     assert_eq!(message.bytes(), &expected);
 }
 

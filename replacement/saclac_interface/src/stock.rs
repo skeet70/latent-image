@@ -671,7 +671,7 @@ pub fn calc_payload(payload: &calc::CalcPayload) -> (CalcOperation, Encoded) {
         P::Search { record, callback } => (CalcOperation::Request09, callback_first(callback, &record.0)),
         P::Image { record, callback } => (CalcOperation::Request0a, callback_first(callback, &record.0)),
         P::Window { request, callback } => (CalcOperation::Request0c, window(request, callback)),
-        P::Source { record, callback } => (CalcOperation::Request11, source(&record.0, callback)),
+        P::Source { request, callback } => (CalcOperation::Request11, source(request, callback)),
         P::Release => (CalcOperation::Request12, Encoded::new(0)),
     }
 }
@@ -731,16 +731,28 @@ fn window(request: calc::WindowRequest, callback: StockCallbackWord) -> Encoded 
     message
 }
 
-/// X-M1 1.50: 0xf4c4f4..0xf4c568 moves record word 40 ahead of halfword 14 and record
-/// words 16..39 and 44 after it, leaving message bytes 18..19 and 26..27 unwritten.
-fn source(record: &[u8; 48], callback: StockCallbackWord) -> Encoded {
+/// X-M1 1.50: the statistics buffer the source request names (0xf38730..0xf38738).
+const SOURCE_STATISTICS: u32 = 0x5ffe_d304;
+
+/// X-M1 1.50: 0xf386b8 fills the 48-byte record at 0x16c0088 and 0xf4c4f4..0xf4c568 moves
+/// its selection word ahead of the reference and the words after the reference after it,
+/// leaving message bytes 18..19 and 26..27 unwritten.
+fn source(request: calc::SourceRequest, callback: StockCallbackWord) -> Encoded {
     let mut message = Encoded::new(56);
     message.word(0, callback.0);
-    message.put(4, &record[0..14]);
-    message.put(20, &record[40..44]);
-    message.put(24, &record[14..16]);
-    message.put(28, &record[16..40]);
-    message.put(52, &record[44..48]);
+    message.word(4, SOURCE_STATISTICS);
+    message.word(8, request.profile[0]);
+    message.halfword(12, request.decade);
+    message.halfword(14, request.profile_halfword);
+    message.halfword(16, request.level);
+    message.word(20, u32::from(request.selection));
+    message.halfword(24, request.reference);
+    message.word(28, request.size[0]);
+    message.word(32, request.size[1]);
+    message.word(36, request.profile[1]);
+    message.word(40, request.exposure);
+    message.word(48, request.mode);
+    message.word(52, request.extension);
     message
 }
 
