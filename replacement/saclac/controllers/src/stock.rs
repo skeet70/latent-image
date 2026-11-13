@@ -67,3 +67,23 @@ pub const fn synchronous_completion(status: xm1_saclac_interface::CompletionStat
         _ => crate::synchronous::Completion::Progress,
     }
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DiagnosticRow(pub u16);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DiagnosticState(pub u16);
+
+pub struct DiagnosticSnapshot {
+    pub rows: [DiagnosticRow; 32],
+    pub states: [DiagnosticState; 32],
+}
+
+pub fn write_diagnostic(snapshot: &DiagnosticSnapshot, output: &mut [u8; 128]) {
+    for (chunk, row) in output[..64].chunks_exact_mut(2).zip(&snapshot.rows) {
+        chunk.copy_from_slice(&row.0.to_le_bytes());
+    }
+    for (chunk, state) in output[64..].chunks_exact_mut(2).zip(&snapshot.states) {
+        chunk.copy_from_slice(&state.0.to_le_bytes());
+    }
+}

@@ -21,3 +21,5 @@ mod configuration_tests;
 mod reply_tests;
 #[cfg(test)]
 mod synchronous_tests;
+#[cfg(test)]
+mod boundary_tests;
