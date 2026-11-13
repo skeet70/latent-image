@@ -89,6 +89,10 @@ pub struct CaptureCommand { pub second: u32, pub third: u32, pub fourth: u32 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Command24 { pub second: u32, pub third: u32, pub fourth: u32, pub fifth: u32, pub ratio: [u32; 2] }
 
+/// Bytes a requester built and statistics reads whole; its fields are the requester's to type.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Record<const BYTES: usize>(pub [u8; BYTES]);
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StatisticsPayload {
     Start { configuration: Configuration, feature: u32, callback: StockCallbackWord },
@@ -111,6 +115,25 @@ pub enum StatisticsPayload {
     Capture { capture: Capture, callback: StockCallbackWord },
     Selection { pending: u32, results: SharedAddress, callbacks: [StockCallbackWord; 2], flagged: bool },
     Command24 { command: Command24, callback: StockCallbackWord },
+    /// X-M1 1.50: 0x103a09c posts 0x400b with 4 bytes from its argument.
+    Request0b {
+        /// Payload 0, 4 bytes, stored at 0x103a0a8.
+        value: u32,
+    },
+    /// X-M1 1.50: 0x103a13c posts 0x400e with 32 bytes; 0xf3be7c builds the record.
+    Request0e {
+        /// Payload 0..28, copied at 0x103a164.
+        record: Record<28>,
+        /// Payload 28, 4 bytes, stored at 0x103a148.
+        callback: StockCallbackWord,
+    },
+    /// X-M1 1.50: 0x103a200 posts 0x400f with 4 bytes from its argument.
+    Request0f {
+        /// Payload 0, 4 bytes, stored at 0x103a20c.
+        callback: StockCallbackWord,
+    },
+    /// X-M1 1.50: 0x103b064 posts 0x4043 with no bytes when the word at 0x016f3afc is zero.
+    Request43,
 }
 
 /// The bytes the statistics task writes at a `Notice`'s results address.

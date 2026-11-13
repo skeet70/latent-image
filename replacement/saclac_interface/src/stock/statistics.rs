@@ -91,7 +91,8 @@ fn configuration(length: usize, configuration: &Configuration) -> Encoded {
 /// (0x4008, 248), 0x1039dd4 (0x4007), 0x103a1a8 (0x4009), 0x103a470 (0x4014), 0x103aff0
 /// (0x4041), 0x103a00c (0x400a), 0x103a0f0 (0x400c), 0x103a594 (0x4017), 0x103a404 (0x4013),
 /// 0x103a2c0 (0x4011), 0x103a254 (0x4010), 0x103a32c (0x4012), 0x103a398 (0x402c), 0x103a694
-/// (0x402a), 0x103a708 (0x402e). Bytes they leave unwritten are zero.
+/// (0x402a), 0x103a708 (0x402e), 0x103a09c (0x400b), 0x103a13c (0x400e), 0x103a200 (0x400f),
+/// 0x103b064 (0x4043). Bytes they leave unwritten are zero.
 pub fn statistics_payload(payload: &StatisticsPayload) -> (Op, Encoded) {
     use StatisticsPayload as P;
     match payload {
@@ -197,6 +198,23 @@ pub fn statistics_payload(payload: &StatisticsPayload) -> (Op, Encoded) {
             words(&mut message, 0, &[callback.0, command.second, command.third, command.fourth, command.ratio[0], command.ratio[1], command.fifth]);
             (Op::Request2e, message)
         }
+        P::Request0b { value } => {
+            let mut message = Encoded::new(4);
+            message.word(0, *value);
+            (Op::Request0b, message)
+        }
+        P::Request0e { record, callback } => {
+            let mut message = Encoded::new(32);
+            message.put(0, &record.0);
+            message.word(28, callback.0);
+            (Op::Request0e, message)
+        }
+        P::Request0f { callback } => {
+            let mut message = Encoded::new(4);
+            message.word(0, callback.0);
+            (Op::Request0f, message)
+        }
+        P::Request43 => (Op::Request43, Encoded::new(0)),
     }
 }
 
