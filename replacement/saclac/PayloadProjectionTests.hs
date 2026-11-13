@@ -49,6 +49,11 @@ main = do
       captureBytes = replicate 176 0
   mapM_ (\offset -> check (captureRecord captureBytes /= captureRecord (mutate offset captureBytes))) [0..175]
   check (isLeft (captureRecord (replicate 175 0)))
+  let windowRequest = projectPayload recovered Outgoing (QueueId 44) (Operation 0x3c0c)
+      windowBytes = replicate 80 0
+      unwritten = [10,11] ++ [17..19] ++ [28..31] ++ [34,35]
+  mapM_ (\offset -> check (windowRequest windowBytes == windowRequest (mutate offset windowBytes))) unwritten
+  mapM_ (\offset -> check (windowRequest windowBytes /= windowRequest (mutate offset windowBytes))) (filter (`notElem` unwritten) [0..79])
   putStrLn "payload field projection behavioral tests passed"
   where parse = either fail pure . parseDeclaration . L.toStrict . encode
 

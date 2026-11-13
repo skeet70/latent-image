@@ -1402,11 +1402,43 @@
       "bytes": 80,
       "fields": [
         {
-          "name": "parameter-record",
+          "name": "mode-value-and-position",
           "offset": 0,
-          "bytes": 76,
+          "bytes": 10,
           "sources": [
-            "0x00f4c6e8: complete supplied record copied; all record bytes retained"
+            "X-M1 1.50 id5 0xf3a584 str at r11-0x58, 0xf3a648 str at r11-0x54 and 0xf3a5fc/0xf3a620 strh at r11-0x50 define request0..9; 0xf4c6e8 copies the 76-byte record from r11-0x58"
+          ]
+        },
+        {
+          "name": "pipeline-word-and-byte",
+          "offset": 12,
+          "bytes": 5,
+          "sources": [
+            "X-M1 1.50 id5 0xf3a60c str at r11-0x4c and 0xf3a614 strb at r11-0x48 define request12..16"
+          ]
+        },
+        {
+          "name": "pipeline-values",
+          "offset": 20,
+          "bytes": 8,
+          "sources": [
+            "X-M1 1.50 id5 0xf3a5a8 str at r11-0x44, 0xf3a5bc strh at r11-0x40 and 0xf3a5d8 strh at r11-0x3e define request20..27"
+          ]
+        },
+        {
+          "name": "record-halfword",
+          "offset": 32,
+          "bytes": 2,
+          "sources": [
+            "X-M1 1.50 id5 0xf3a654 strh at r11-0x38 defines request32..33"
+          ]
+        },
+        {
+          "name": "buffer-and-state",
+          "offset": 36,
+          "bytes": 40,
+          "sources": [
+            "X-M1 1.50 id5 word stores at r11-0x34..r11-0x10 between 0xf3a604 and 0xf3a6c8 define request36..75"
           ]
         },
         {
@@ -1418,7 +1450,36 @@
           ]
         }
       ],
-      "padding": []
+      "padding": [
+        {
+          "offset": 10,
+          "bytes": 2,
+          "sources": [
+            "X-M1 1.50 id5 0xf3a564..0xf3a73c: request8..9 is a halfword and no store reaches r11-0x4e..r11-0x4d"
+          ]
+        },
+        {
+          "offset": 17,
+          "bytes": 3,
+          "sources": [
+            "X-M1 1.50 id5 0xf3a564..0xf3a73c: request16 is a byte and no store reaches r11-0x47..r11-0x45"
+          ]
+        },
+        {
+          "offset": 28,
+          "bytes": 4,
+          "sources": [
+            "X-M1 1.50 id5 0xf3a564..0xf3a73c: no store reaches r11-0x3c..r11-0x39"
+          ]
+        },
+        {
+          "offset": 34,
+          "bytes": 2,
+          "sources": [
+            "X-M1 1.50 id5 0xf3a564..0xf3a73c: request32..33 is a halfword and no store reaches r11-0x36..r11-0x35"
+          ]
+        }
+      ]
     },
     {
       "direction": "outgoing",
