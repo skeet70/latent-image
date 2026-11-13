@@ -279,6 +279,8 @@ impl<M: GuestMemory> ScanBlocks for StockScanBlocks<M> {
 pub struct StockScanLibrary;
 
 impl ScanLibrary<StockScanBlocks> for StockScanLibrary {
+    type Output = StockScanOutput;
+
     fn apply(&mut self, part: StockPart, blocks: &mut StockScanBlocks) {
         let (configuration, request) = (blocks.configuration, blocks.request);
         let both = |entry: u32| entry!(entry, fn(u32, u32))(configuration, request);
@@ -316,6 +318,27 @@ impl ScanLibrary<StockScanBlocks> for StockScanLibrary {
     fn finish_defaults(&mut self, blocks: &mut StockScanBlocks) {
         entry!(0xd7_9178u32, fn(u32))(blocks.configuration);
         entry!(0xd7_9194u32, fn(u32))(blocks.configuration);
+    }
+
+    fn fill_settings(&mut self, blocks: &StockScanBlocks, output: &mut StockScanOutput) {
+        entry!(0xd6_4840u32, fn(u32, u32))(blocks.configuration, output.0)
+    }
+
+    fn fill_geometry(&mut self, blocks: &StockScanBlocks, output: &mut StockScanOutput) {
+        let (mut first, mut second) = ([0u32; 3], 0u16);
+        entry!(0xd6_49e8u32, fn(u32, u32, u32, u32))(blocks.configuration, address_of(&mut first), output.0, address_of(&mut second));
+    }
+
+    fn nine(&mut self, blocks: &StockScanBlocks) -> Optioned<9> {
+        let mut table = [0u16; 10];
+        entry!(0xd6_4940u32, fn(u32, u32))(address_of(&mut table), blocks.configuration);
+        optioned::<9, 10>(table)
+    }
+
+    fn four(&mut self, blocks: &StockScanBlocks) -> Optioned<4> {
+        let mut table = [0u16; 5];
+        entry!(0xd6_4e2cu32, fn(u32, u32))(address_of(&mut table), blocks.configuration);
+        optioned::<4, 5>(table)
     }
 }
 
@@ -455,15 +478,6 @@ fn raw<const N: usize, const W: usize>(table: Optioned<N>) -> [u16; W] {
 }
 
 impl<M: GuestMemory> CompiledScan for StockCompiledScan<M> {
-    type Block = StockScanOutput;
-
-    fn fill_settings(&mut self, block: &mut StockScanOutput) { entry!(0xd6_4840u32, fn(u32, u32))(self.address, block.0) }
-
-    fn fill_geometry(&mut self, block: &mut StockScanOutput) {
-        let (mut first, mut second) = ([0u32; 3], 0u16);
-        entry!(0xd6_49e8u32, fn(u32, u32, u32, u32))(self.address, address_of(&mut first), block.0, address_of(&mut second));
-    }
-
     fn set_long_table(&mut self, values: &[u16; 22]) {
         let mut values = *values;
         entry!(0xd6_4850u32, fn(u32, u32))(address_of(&mut values), self.library());
@@ -474,21 +488,9 @@ impl<M: GuestMemory> CompiledScan for StockCompiledScan<M> {
         entry!(0xd6_49f8u32, fn(u32, u32, u32, u32))(0, address_of(&mut values), 0, self.library());
     }
 
-    fn nine(&mut self) -> Optioned<9> {
-        let mut table = [0u16; 10];
-        entry!(0xd6_4940u32, fn(u32, u32))(address_of(&mut table), self.address);
-        optioned::<9, 10>(table)
-    }
-
     fn set_nine(&mut self, table: Optioned<9>) {
         let mut table = raw::<9, 10>(table);
         entry!(0xd6_4950u32, fn(u32, u32))(address_of(&mut table), self.library());
-    }
-
-    fn four(&mut self) -> Optioned<4> {
-        let mut table = [0u16; 5];
-        entry!(0xd6_4e2cu32, fn(u32, u32))(address_of(&mut table), self.address);
-        optioned::<4, 5>(table)
     }
 
     fn set_four(&mut self, table: Optioned<4>) {

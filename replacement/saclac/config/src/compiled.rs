@@ -19,23 +19,12 @@ pub struct Optioned<const N: usize> {
 /// The scan library's entries over one compiled configuration, which stay stock with the
 /// library.
 pub trait CompiledScan {
-    /// A caller's block the library fills, in the library's layout.
-    type Block;
-
-    /// 0xd64840.
-    fn fill_settings(&mut self, block: &mut Self::Block);
-    /// 0xd649e8, whose two scratch outputs are dropped.
-    fn fill_geometry(&mut self, block: &mut Self::Block);
     /// 0xd64850.
     fn set_long_table(&mut self, values: &[u16; 22]);
     /// 0xd649f8 with its halfwords alone.
     fn set_wide_table(&mut self, values: &[u16; 28]);
-    /// 0xd64940.
-    fn nine(&mut self) -> Optioned<9>;
     /// 0xd64950.
     fn set_nine(&mut self, table: Optioned<9>);
-    /// 0xd64e2c.
-    fn four(&mut self) -> Optioned<4>;
     /// 0xd6537c.
     fn set_four(&mut self, table: Optioned<4>);
     /// The option bytes the library keeps beside the nine- and four-entry tables.
@@ -44,17 +33,11 @@ pub trait CompiledScan {
     fn set_output_kind(&mut self, kind: u8);
 }
 
-/// 0xd5dfec.
-pub fn nine_values(scan: &mut impl CompiledScan) -> [u16; 9] { scan.nine().values }
-
 /// Replaces the nine-entry table, keeping its option byte (0xd5e05c).
 pub fn store_nine(scan: &mut impl CompiledScan, values: [u16; 9]) {
     let [option, _] = scan.options();
     scan.set_nine(Optioned { option, values });
 }
-
-/// 0xd5e120.
-pub fn four_values(scan: &mut impl CompiledScan) -> [u16; 4] { scan.four().values }
 
 /// Replaces the four-entry table, keeping its option byte (0xd5e168).
 pub fn store_four(scan: &mut impl CompiledScan, values: [u16; 4]) {

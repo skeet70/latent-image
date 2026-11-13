@@ -8,24 +8,17 @@ struct Scan {
 }
 
 impl CompiledScan for Scan {
-    type Block = ();
-    fn fill_settings(&mut self, _: &mut ()) {}
-    fn fill_geometry(&mut self, _: &mut ()) {}
     fn set_long_table(&mut self, _: &[u16; 22]) {}
     fn set_wide_table(&mut self, _: &[u16; 28]) {}
-    fn nine(&mut self) -> Optioned<9> { Optioned { option: 7, values: [1, 2, 3, 4, 5, 6, 7, 8, 9] } }
     fn set_nine(&mut self, table: Optioned<9>) { self.nine = Some(table); }
-    fn four(&mut self) -> Optioned<4> { Optioned { option: 9, values: [4, 3, 2, 1] } }
     fn set_four(&mut self, table: Optioned<4>) { self.four = Some(table); }
     fn options(&self) -> [u8; 2] { [7, 9] }
     fn set_output_kind(&mut self, _: u8) {}
 }
 
 #[test]
-fn reads_give_the_values_and_stores_keep_each_tables_option() {
+fn stores_keep_each_tables_option() {
     let mut scan = Scan::default();
-    assert_eq!(nine_values(&mut scan), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
-    assert_eq!(four_values(&mut scan), [4, 3, 2, 1]);
     store_nine(&mut scan, [9; 9]);
     store_four(&mut scan, [5; 4]);
     assert_eq!(scan.nine, Some(Optioned { option: 7, values: [9; 9] }));

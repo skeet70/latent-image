@@ -1,8 +1,11 @@
 #![forbid(unsafe_code)]
 
 //! The scan configuration saclac builds for the scan library other tasks share (image 5,
-//! 0xd5dfc4..0xd79364): the configuration block's settings and defaults, and the parts applied
-//! from a request block, each marked in the configuration's applied-parts word.
+//! 0xd5dfc4..0xd79364): the configuration block's settings and defaults, the parts applied from
+//! a request block, each marked in the configuration's applied-parts word, and the tables the
+//! library reads back from the configuration.
+
+use crate::compiled::Optioned;
 
 /// A configuration field by its stock offset; their meanings are not yet named by any caller.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -175,13 +178,30 @@ const DEFAULTS: [(ScanField, u32); 54] = [
     (ScanField::Half1ea, 0),
 ];
 
-/// The scan library's entries the configuration parts and defaults call.
+/// The scan library's entries the configuration parts, defaults and reads call.
 pub trait ScanLibrary<B: ScanBlocks> {
+    /// A caller's block the library fills, in the library's layout.
+    type Output;
+
     /// The stock entries of `part`, in order, entered with the configuration and request.
     fn apply(&mut self, part: StockPart, blocks: &mut B);
     /// 0xd79178 then 0xd79194, which finish the defaults.
     fn finish_defaults(&mut self, blocks: &mut B);
+    /// 0xd64840.
+    fn fill_settings(&mut self, blocks: &B, output: &mut Self::Output);
+    /// 0xd649e8, whose two scratch outputs are dropped.
+    fn fill_geometry(&mut self, blocks: &B, output: &mut Self::Output);
+    /// 0xd64940.
+    fn nine(&mut self, blocks: &B) -> Optioned<9>;
+    /// 0xd64e2c.
+    fn four(&mut self, blocks: &B) -> Optioned<4>;
 }
+
+/// 0xd5dfec.
+pub fn nine_values<B: ScanBlocks>(library: &mut impl ScanLibrary<B>, blocks: &B) -> [u16; 9] { library.nine(blocks).values }
+
+/// 0xd5e120.
+pub fn four_values<B: ScanBlocks>(library: &mut impl ScanLibrary<B>, blocks: &B) -> [u16; 4] { library.four(blocks).values }
 
 /// Stores the defaults and lets the library finish them (0xd791b0).
 pub fn set_defaults<B: ScanBlocks>(blocks: &mut B, library: &mut impl ScanLibrary<B>) {

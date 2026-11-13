@@ -4,6 +4,7 @@ use xm1_saclac_interface::stock::StockCallbackWord;
 use xm1_saclac_interface::{ImageProcessor, ImageProcessorOperation, ImageProcessorRequest};
 use xm1_saclac_shared::image_registers::{RegisterGroup, RegisterSnapshot, WindowLimits};
 
+use crate::compiled::Optioned;
 use crate::face::{submit_triplet, NotPosted};
 use crate::registers::*;
 use crate::scan::*;
@@ -36,8 +37,20 @@ impl ScanBlocks for Blocks {
 struct Library(Vec<StockPart>, usize);
 
 impl ScanLibrary<Blocks> for Library {
+    type Output = ();
     fn apply(&mut self, part: StockPart, _: &mut Blocks) { self.0.push(part); }
     fn finish_defaults(&mut self, _: &mut Blocks) { self.1 += 1; }
+    fn fill_settings(&mut self, _: &Blocks, _: &mut ()) {}
+    fn fill_geometry(&mut self, _: &Blocks, _: &mut ()) {}
+    fn nine(&mut self, _: &Blocks) -> Optioned<9> { Optioned { option: 7, values: [1, 2, 3, 4, 5, 6, 7, 8, 9] } }
+    fn four(&mut self, _: &Blocks) -> Optioned<4> { Optioned { option: 9, values: [4, 3, 2, 1] } }
+}
+
+#[test]
+fn table_reads_give_the_values_without_their_option() {
+    let (blocks, mut library) = (Blocks::default(), Library::default());
+    assert_eq!(nine_values(&mut library, &blocks), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    assert_eq!(four_values(&mut library, &blocks), [4, 3, 2, 1]);
 }
 
 #[test]

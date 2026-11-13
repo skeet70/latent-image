@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use xm1_saclac_shared::image_registers::{RegisterGroup, RegisterSnapshot, WindowLimits};
 
-use crate::compiled::{attach, restore};
+use crate::compiled::{attach, restore, Optioned};
 use crate::registers::{PipelineHardware, RESTORE_CLIENT};
 use crate::scan::{apply, Part, ScanBlocks, ScanLibrary, StockPart};
 use crate::stock::{GuestMemory, StockScanBlocks};
@@ -40,12 +40,19 @@ const CONFIGURATION: u32 = 0x0169_9d8c;
 const REQUEST: u32 = CONFIGURATION + 0x1260;
 const COMPILED: u32 = CONFIGURATION + 0x244;
 
-#[derive(Default)]
-struct Library(Vec<StockPart>);
+type Blocks<'m> = StockScanBlocks<&'m Memory>;
 
-impl<'m> ScanLibrary<StockScanBlocks<&'m Memory>> for Library {
-    fn apply(&mut self, part: StockPart, _: &mut StockScanBlocks<&'m Memory>) { self.0.push(part); }
-    fn finish_defaults(&mut self, _: &mut StockScanBlocks<&'m Memory>) {}
+/// A scan library whose entries leave both blocks as they are.
+struct Library;
+
+impl<'m> ScanLibrary<Blocks<'m>> for Library {
+    type Output = ();
+    fn apply(&mut self, _: StockPart, _: &mut Blocks<'m>) {}
+    fn finish_defaults(&mut self, _: &mut Blocks<'m>) {}
+    fn fill_settings(&mut self, _: &Blocks<'m>, _: &mut ()) {}
+    fn fill_geometry(&mut self, _: &Blocks<'m>, _: &mut ()) {}
+    fn nine(&mut self, _: &Blocks<'m>) -> Optioned<9> { Optioned { option: 0, values: [0; 9] } }
+    fn four(&mut self, _: &Blocks<'m>) -> Optioned<4> { Optioned { option: 0, values: [0; 4] } }
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -85,8 +92,8 @@ fn the_register_groups_follow_the_parts_applied_to_the_scan_configuration() {
     // The compile copies configuration word 0xd8 to the compiled scan's first word
     // (0xd5da20..0xd5da24), which 0xd5e1d4 and 0xd5e1f4 load and drop.
     memory.set_word(COMPILED, 1 << 19);
-    let mut blocks = StockScanBlocks { configuration: CONFIGURATION, request: REQUEST, memory: &memory };
-    let mut library = Library::default();
+    let mut blocks: Blocks = StockScanBlocks { configuration: CONFIGURATION, request: REQUEST, memory: &memory };
+    let mut library = Library;
     assert!(apply(Part::Geometry, &mut blocks, &mut library));
     assert!(apply(Part::Second, &mut blocks, &mut library));
     // 0xedd100..0xedd110 passes 0xd5e1d4 the word at configuration + 0x14c.
