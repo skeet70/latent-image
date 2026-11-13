@@ -760,6 +760,23 @@ A cutover comparison may declare a milestone instead of claiming full equality. 
 
 `//emulation:judge-tests` covers the rule on synthetic reports: a complete report is `equal`, and a report missing a case's stock evidence, missing a case for a bound entry, carrying no detected wrong variant, naming no firmware or naming another firmware gets the matching non-pass verdict with its reason. A diagnostic difference leaves the verdict unchanged. A declared milestone reaches `equal-up-to-milestone`; a side that misses it, a difference before it and a stock tail that is not a prefix each give `different` with the first differing observation, and a report without a milestone keeps the old verdicts.
 
+### Ordered interface streams
+
+Subsystem cutovers use `--mode interface-stream`. This mode reads fetch receipts and ordered boundary events, not per-export cases or suite-audit bindings.
+
+```sh
+devenv shell -- run-output exec --label interface-judge -- \
+  systemd-run --user --scope -p MemoryMax=1G -p MemorySwapMax=0 \
+  bazel-bin/emulation/judge --mode interface-stream \
+  --report STREAM_REPORT.json --image STOCK_FIRMWARE.bin --out VERDICT.json
+```
+
+A schema-1 report sets `mode` to `interface-stream` and names `subsystem`, `scenario`, `retired_extents`, `owned_extents`, `stock`, `owned` and `controls`. Extents are numeric half-open guest ranges with `start` and `end`. Each run carries its `image_sha256`, a `complete` flag, `fetch_receipts` and ordered `events`. A fetch receipt names `start`, `end` and `fetches`; every receipt must fit a declared extent and at least one must have a positive count. A producer sets `complete` only when execution and observation completed without an error. Each control has a `name` and a `run` with the same shape. The supplied firmware digest must match the stock run's image digest.
+
+The judge compares event JSON values in order. With complete stock, owned and control execution receipts and at least one wrong variant whose stream differs from stock, identical streams are `equal`; a differing event or unequal length is `different`, with the first event and both sides retained. Missing execution evidence or no detected control gives `no-verdict`; missing firmware gives `not-run`. Undetected variants are listed as survivors. The optional `milestone` has the same `name` and zero-based `observation` fields and uses the unchanged prefix rule above. A producer inserts the same explicit milestone observation at each side's independently reached boundary.
+
+`//emulation:interface-judge-tests` covers all five verdicts, first-event differences, unequal lengths, unreached milestones, incomplete runs, zero and out-of-range fetch receipts, missing controls, surviving controls and firmware mismatch.
+
 ## Wrong variants
 
 `//emulation:mutants` makes wrong variants of an owned ELF. Each differs from

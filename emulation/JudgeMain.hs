@@ -10,9 +10,10 @@ import Data.Aeson (encode)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Emulation.Judge
+import Emulation.InterfaceJudge
 import Emulation.Sha256 (sha256, sha256Hex)
 import Emulation.SuiteAudit
-import FujiAF.Host (failH)
+import FujiAF.Host (failH, readRegular)
 import System.Directory (doesFileExist)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (exitWith)
@@ -22,6 +23,15 @@ import System.IO (hPutStrLn, stderr)
 main :: IO ()
 main = do
   arguments <- getArgs
+  mode <- optional "--mode" arguments
+  case mode of
+    Nothing -> nativeMain arguments
+    Just "native" -> nativeMain arguments
+    Just "interface-stream" -> interfaceMain arguments
+    _ -> failH "--mode must be native or interface-stream"
+
+nativeMain :: [String] -> IO ()
+nativeMain arguments = do
   reportPath <- required "--report" arguments
   imagePath <- required "--image" arguments
   workspace <- lookupEnv "BUILD_WORKSPACE_DIRECTORY"
@@ -41,13 +51,7 @@ main = do
     [] -> failH ("unknown suite " ++ show selectedSuite)
     _ -> failH ("suite " ++ show selectedSuite ++ " is listed twice")
   bound <- either failH pure =<< readBoundEntries root (suiteBound suite)
-  firmware <- do
-    exists <- doesFileExist imagePath
-    if not exists then pure Nothing else do
-      bytes <- try (B.readFile imagePath) :: IO (Either IOException B.ByteString)
-      pure $ case bytes of
-        Left _ -> Nothing
-        Right imageBytes -> Just (Firmware imagePath (sha256Hex (sha256 imageBytes)))
+  firmware <- firmwareFor imagePath
   case (suiteImage suite, firmware) of
     (Just declared, Just supplied) -> case imageSha256 declared of
       Just expected | expected /= firmwareDigest supplied ->
@@ -67,6 +71,31 @@ main = do
     Just path -> BL.writeFile path (encode (verdictJson verdict))
   hPutStrLn stderr (verdictText verdict)
   exitWith (verdictExitCode (verdictStatus verdict))
+
+interfaceMain :: [String] -> IO ()
+interfaceMain arguments = do
+  reportPath <- required "--report" arguments
+  imagePath <- required "--image" arguments
+  outPath <- optional "--out" arguments
+  bytes <- readRegular (16 * 1024 * 1024) reportPath
+  report <- either failH pure (parseInterfaceReport bytes)
+  firmware <- firmwareFor imagePath
+  let verdict = judgeInterfaceReport firmware (ReportDigest (sha256Hex (sha256 bytes))) report
+      document = encode (interfaceVerdictJson report verdict)
+  case outPath of
+    Nothing -> BL.putStr document
+    Just path -> BL.writeFile path document
+  hPutStrLn stderr (verdictText verdict)
+  exitWith (verdictExitCode (verdictStatus verdict))
+
+firmwareFor :: FilePath -> IO (Maybe Firmware)
+firmwareFor path = do
+  exists <- doesFileExist path
+  if not exists then pure Nothing else do
+    bytes <- try (B.readFile path) :: IO (Either IOException B.ByteString)
+    pure $ case bytes of
+      Left _ -> Nothing
+      Right image -> Just (Firmware path (sha256Hex (sha256 image)))
 
 required :: String -> [String] -> IO String
 required flag arguments = case values flag arguments of

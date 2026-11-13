@@ -2241,7 +2241,7 @@ haskell_test(
 
 haskell_library(
     name = "judge-lib",
-    srcs = ["Emulation/Judge.hs"],
+    srcs = ["Emulation/Judge.hs", "Emulation/InterfaceJudge.hs"],
     ghcopts = [
         "-XGHC2021",
         "-Wall",
@@ -2293,6 +2293,19 @@ haskell_test(
         "//host:bytestring",
         "//host:directory",
         "//host:filepath",
+    ],
+)
+
+haskell_test(
+    name = "interface-judge-tests",
+    size = "small",
+    srcs = ["InterfaceJudgeTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":judge-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
     ],
 )
 

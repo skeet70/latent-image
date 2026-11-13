@@ -38,6 +38,7 @@ module Emulation.Judge
   , Milestone (..)
   , FirstDifference (..)
   , parseReport
+  , milestoneDifference
     -- * Verdicts
   , JudgeInput (..)
   , Firmware (..)
@@ -336,6 +337,7 @@ data ConditionName
   | CaseForEveryExport
   | DetectedWrongVariant
   | NamedDigests
+  | InterfaceExecution
   deriving (Eq, Show)
 
 conditionLabel :: ConditionName -> String
@@ -343,6 +345,7 @@ conditionLabel StockInsideEntered = "stock-instructions-inside-entered-extent"
 conditionLabel CaseForEveryExport = "case-for-every-export-row"
 conditionLabel DetectedWrongVariant = "detected-wrong-variant"
 conditionLabel NamedDigests = "named-digests"
+conditionLabel InterfaceExecution = "interface-execution-inside-declared-extents"
 
 data Condition = Condition
   { conditionName :: ConditionName
@@ -382,7 +385,7 @@ data Verdict = Verdict
 
 -- | Bumped when the rule changes; the verdict document names it.
 judgeVersion :: String
-judgeVersion = "2"
+judgeVersion = "3"
 
 judgeReport :: JudgeInput -> Report -> Verdict
 judgeReport input report =
