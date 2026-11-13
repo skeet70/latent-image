@@ -65,6 +65,9 @@ fn word_of(handle: Handle) -> RecordHandle { crate::stock::record_handle(handle)
 const READ: u8 = 1;
 const WRITE: u8 = 2;
 
+/// A byte a writer leaves behind, so an untouched byte is distinguishable from a stored zero.
+const PREFILL: u8 = 0x5a;
+
 #[test]
 fn reads_follow_the_selected_record() {
     for (selected, record) in [(0, 0), (1, 1)] {
@@ -330,28 +333,41 @@ fn a_staged_record_matches_a_change_set_exactly_or_when_the_other_mask_is_clear(
 
 #[test]
 fn the_parameter_record_parts_land_at_their_offsets_under_group_2() {
-    let mut view = Registry::new(0).open(0, &[2], WRITE).view();
+    // A slot granting group 1 only; the three writers gate on group 2.
+    let mut refused = Registry::new(0).open(0, &[1], WRITE).view();
     let handle = word_of(owner());
+    assert_eq!(refused.write(handle, &record::group_02::AT_0104, 0x11), Err(Refusal::NotGranted));
+    assert_eq!(refused.write(handle, &record::group_02::AT_0108, [0x22; 20]), Err(Refusal::NotGranted));
+    assert_eq!(refused.write(handle, &record::group_02::AT_011C, [0x33; 40]), Err(Refusal::NotGranted));
+
+    let mut registry = Registry::new(0).open(0, &[2], WRITE);
+    registry.memory.records[0][0x100..0x148].fill(PREFILL);
+    let mut view = registry.view();
     view.write(handle, &record::group_02::AT_0104, 0x11).unwrap();
     view.write(handle, &record::group_02::AT_0108, [0x22; 20]).unwrap();
     view.write(handle, &record::group_02::AT_011C, [0x33; 40]).unwrap();
     let memory = view.into_memory();
     let record = &memory.records[0];
-    assert_eq!(record[0x103], 0);
+    assert_eq!(record[0x103], PREFILL);
     assert_eq!(record[0x104], 0x11);
-    assert_eq!(&record[0x105..0x108], &[0; 3]);
+    assert_eq!(&record[0x105..0x108], &[PREFILL; 3]);
     assert_eq!(&record[0x108..0x11c], &[0x22; 20]);
     assert_eq!(&record[0x11c..0x144], &[0x33; 40]);
-    assert_eq!(record[0x144], 0);
+    assert_eq!(record[0x144], PREFILL);
+    // 0x75ac1c is the only setter of the change masks at +0x80 and +0x88; these three writers
+    // leave both clear.
+    assert_eq!(&record[0x80..0x90], &[0; 16]);
 }
 
 #[test]
 fn the_shared_list_blocks_write_under_group_27() {
     let mut refused = Registry::new(0).open(0, &[20], WRITE).view();
-    assert_eq!(refused.write_shared(word_of(owner()), &shared::group_27::AT_0680, [5; 40]), Err(Refusal::NotGranted));
+    let handle = word_of(owner());
+    assert_eq!(refused.write_shared(handle, &shared::group_27::AT_026C, [1; 1044]), Err(Refusal::NotGranted));
+    assert_eq!(refused.write_shared(handle, &shared::group_27::AT_0680, [5; 40]), Err(Refusal::NotGranted));
+    assert_eq!(refused.write_shared(handle, &shared::group_27::AT_06A8, [3; 80]), Err(Refusal::NotGranted));
 
     let mut view = Registry::new(0).open(0, &[27], WRITE).view();
-    let handle = word_of(owner());
     view.write_shared(handle, &shared::group_27::AT_026C, [1; 1044]).unwrap();
     view.write_shared(handle, &shared::group_27::AT_0680, [2; 40]).unwrap();
     view.write_shared(handle, &shared::group_27::AT_06A8, [3; 80]).unwrap();
