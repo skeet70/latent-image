@@ -293,23 +293,26 @@ fn parameter_fields_change_only_their_own_bytes() {
     let original: [u8; Parameters::BYTES] = core::array::from_fn(|index| index as u8);
     let mut parameters = Parameters::from_bytes(original);
     assert_eq!(parameters.profile(), ProfileHandle(0x0302_0100));
-    assert_eq!(parameters.at_04(), 0x0504);
-    assert_eq!(parameters.at_44(), 0x44);
+    assert_eq!(parameters.limit(), 0x0504);
+    assert_eq!(parameters.mode_byte(), 0x44);
+    assert_eq!(parameters.area(), [0x1312_1110, 0x1716_1514, 0x1b1a_1918]);
     parameters.set_profile(ProfileHandle(7));
-    parameters.set_at_28(-2);
+    parameters.set_scan_thresholds([-2, 3]);
     let changed: Vec<usize> = (0..Parameters::BYTES).filter(|&index| parameters.bytes()[index] != original[index]).collect();
-    assert_eq!(changed, [0, 1, 2, 3, 0x28, 0x29]);
+    assert_eq!(changed, [0, 1, 2, 3, 0x28, 0x29, 0x2a, 0x2b]);
     assert_eq!(parameters.profile(), ProfileHandle(7));
-    assert_eq!(parameters.at_28(), -2);
+    assert_eq!(parameters.scan_thresholds(), [-2, 3]);
 }
 
 #[test]
 fn snapshot_fields_read_back_what_was_set() {
     let mut snapshot = StatusSnapshot::from_bytes([0; StatusSnapshot::BYTES]);
-    snapshot.set_at_c4(0xbeef);
-    snapshot.set_at_bc(9);
-    snapshot.set_at_90(0x1234_5678);
-    assert_eq!((snapshot.at_c4(), snapshot.at_bc(), snapshot.at_90()), (0xbeef, 9, 0x1234_5678));
+    snapshot.set_scan_limit(0xbeef);
+    snapshot.set_multiple(9);
+    snapshot.set_tracked_index(0x1234_5678);
+    snapshot.set_triplet([1, 2, 0x0304]);
+    assert_eq!((snapshot.scan_limit(), snapshot.multiple(), snapshot.tracked_index()), (0xbeef, 9, 0x1234_5678));
     assert_eq!(snapshot.bytes()[0x90..0x94], [0x78, 0x56, 0x34, 0x12]);
+    assert_eq!(snapshot.bytes()[0x3c..0x42], [1, 0, 2, 0, 4, 3]);
     assert_eq!(snapshot.bytes()[0xc6..], [0, 0]);
 }
