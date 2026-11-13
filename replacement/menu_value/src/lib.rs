@@ -13,9 +13,8 @@
 
 use core::fmt;
 
-/// The IMAGE SIZE composite writes its size and aspect properties and captures
-/// the retained properties on the entry.
-pub const MAX_WRITES: usize = 5;
+/// The IMAGE SIZE composite writes its size and aspect properties.
+pub const MAX_WRITES: usize = 2;
 
 /// The IMAGE SIZE composite's retained effects.
 pub const MAX_RETAINED: usize = 5;
@@ -376,80 +375,6 @@ pub fn commit(tables: &ValueTables, target: ValueTarget, settings: &mut impl Set
         settings.write(write.property, write.value);
     }
     Ok(result)
-}
-
-/// The entry choice captured at open, and the selections committed until the
-/// picker ends.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Transaction {
-    target: ValueTarget,
-    entry: PropertyWrites,
-}
-
-impl Transaction {
-    /// Captures the values of the properties `target` can change.
-    #[inline]
-    pub fn begin(tables: &ValueTables, target: ValueTarget, settings: &impl Settings) -> Result<Self, Refusal> {
-        let entry = match target {
-            ValueTarget::Ordinary { property, .. } => {
-                tables.conversion(property).ok_or(Refusal::MissingTable(property))?;
-                let mut entry = PropertyWrites::default();
-                entry.push(PropertyWrite { property, value: settings.read(property) });
-                entry
-            }
-            ValueTarget::ImageSize { .. } => {
-                let rule = tables.image_size_rule().ok_or(Refusal::MissingImageSizeRule)?;
-                for property in [rule.size_property, rule.aspect_property] {
-                    tables.conversion(property).ok_or(Refusal::MissingTable(property))?;
-                }
-                let mut entry = PropertyWrites::default();
-                for property in [
-                    rule.size_property,
-                    rule.aspect_property,
-                    rule.change_property,
-                    rule.change_property_1f,
-                    rule.marker_property,
-                ] {
-                    entry.push(PropertyWrite { property, value: settings.read(property) });
-                }
-                entry
-            }
-        };
-        Ok(Self { target, entry })
-    }
-
-    pub fn entry(&self) -> PropertyWrites {
-        self.entry
-    }
-
-    #[inline]
-    pub fn select(
-        &self,
-        tables: &ValueTables,
-        token: RowToken,
-        settings: &mut impl Settings,
-    ) -> Result<Commit, Refusal> {
-        commit(tables, self.at(token), settings)
-    }
-
-    /// Restores only the properties this transaction captured.
-    #[inline]
-    pub fn back(&self, settings: &mut impl Settings) -> PropertyWrites {
-        for write in self.entry.iter() {
-            settings.write(write.property, write.value);
-        }
-        self.entry
-    }
-
-    /// No property is written; the committed values stay.
-    pub fn confirm(self) {}
-
-    fn at(&self, token: RowToken) -> ValueTarget {
-        match self.target {
-            ValueTarget::Ordinary { property, .. } => ValueTarget::Ordinary { property, token },
-            ValueTarget::ImageSize { .. } => ValueTarget::ImageSize { token },
-        }
-    }
 }
 
 #[cfg(test)]
