@@ -1,6 +1,7 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+pub mod area_measurement;
 pub mod calculation;
 pub mod capture_results;
 pub mod exposure;
@@ -477,5 +478,7 @@ mod calculation_tests;
 mod statistics_tests;
 #[cfg(test)]
 mod capture_results_tests;
+#[cfg(test)]
+mod area_measurement_tests;
 #[cfg(test)]
 mod calc_tests;

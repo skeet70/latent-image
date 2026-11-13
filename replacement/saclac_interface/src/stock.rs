@@ -1,5 +1,6 @@
 use crate::*;
 
+pub mod area_measurement;
 pub mod capture_results;
 pub mod exposure;
 
