@@ -266,6 +266,27 @@ walkFrames pointer callee = admitCode layout (B.concat (map U.putWord32 (caller 
       , layoutStockSites = []
       }
 
+-- | Admit adjacent functions from 0x1000, each start the previous end.
+walkFunctions :: [Word32] -> [[Word32]] -> Either AdmissionError CodeProof
+walkFunctions entries functions = admitCode layout (B.concat (map U.putWord32 (concat functions)))
+  where
+    offsets = scanl (\address body -> address + 4 * fromIntegral (length body)) 0x1000 functions
+    layout = CodeLayout
+      { layoutBase = GuestAddress 0x1000
+      , layoutFunctions =
+          [ FunctionExtent (FunctionName ("f" ++ show index)) (GuestAddress start) (GuestAddress finish)
+          | (index, (start, finish)) <- zip [0 :: Int ..] (zip offsets (drop 1 offsets)) ]
+      , layoutMappings = [ArmSpan (AddressSpan (GuestAddress 0x1000) (GuestAddress (last offsets)))]
+      , layoutLiteralPointers = []
+      , layoutData = []
+      , layoutDeclaredData = []
+      , layoutBoundaryWindows = []
+      , layoutBoundaryEntries = map GuestAddress entries
+      , layoutStoreSites = []
+      , layoutStockLeaves = []
+      , layoutStockSites = []
+      }
+
 walkerTests :: IO ()
 walkerTests = do
   let refusedBy label site violation outcome = case outcome of
@@ -417,6 +438,59 @@ walkerTests = do
     Left failure -> fail ("owned bracket call refused: " ++ show failure)
   refusedBy "bracket from unlisted site" 0x1000 (CallOutsideOwned (GuestAddress 0x61da3c))
     (walkWith [] bracket [branchWord True 0x1000 0x61da3c, 0xe12fff1e])
+  -- P1-2: the join's two counters reach a store offset.
+  refusedBy "a counter that reaches a store offset is not merged at a join" 0x1034 FrameArgumentExceeded
+    (walkFrames 0xe28d0008
+      [0xe3530000, 0x0a000001, 0xe3a05064, 0xea000000, 0xe3a05000, 0xe1a02005, 0xe7801002, 0xe12fff1e])
+  -- P1-3: STMIB writeback is offset + 4 * count.
+  refusedBy "STMIB writeback lands the base over the saved lr" 0x1010 NonStackStore
+    (walk [0xe92d4800, 0xe24dd018, 0xe1a0300d, 0xe9a30007, 0xe5830010, 0xe28dd018, 0xe8bd8800])
+  -- P1-4: a caller alias forwarded below its object.
+  refusedBy "a frame pointer moved below its object is not forwarded" 0x1028 FrameArgumentExceeded
+    (walkFunctions []
+      [ [0xe92d4800, 0xe1a0b00d, 0xe24dd010, 0xe28d0008, 0xeb000001, 0xe28dd010, 0xe8bd8800]
+      , [0xe92d4800, 0xe1a0b00d, 0xe2400010, 0xeb000000, 0xe8bd8800]
+      , [0xe580100c, 0xe12fff1e] ])
+  -- P2-5: an unsigned guard on a negative immediate.
+  refusedBy "an unsigned guard on a negative immediate keeps its fallthrough" 0x1034 FrameArgumentExceeded
+    (walkFrames 0xe28d0008
+      [0xe3530000, 0x0a000003, 0xe3a02000, 0xe2800040, 0xe35204ff, 0x2a000000, 0xe5801000, 0xe12fff1e])
+  -- P2-6: narrow and dual loads from an incoming word.
+  refusedBy "a byte load from an incoming word is not a caller pointer" 0x1028 NonStackStore
+    (walkFunctions []
+      [ [0xe92d4800, 0xe1a0b00d, 0xe24dd010, 0xe1a0200d, 0xe2822008, 0xe58d2000, 0xeb000001, 0xe28dd010, 0xe8bd8800]
+      , [0xe5dd7000, 0xe5871000, 0xe12fff1e] ])
+  refusedBy "a dual load writes both destinations" 0x1030 NonStackStore
+    (walkFunctions []
+      [ [0xe92d4800, 0xe1a0b00d, 0xe24dd010, 0xe1a0200d, 0xe2822008, 0xe58d2000, 0xe58d2004, 0xeb000001, 0xe28dd010, 0xe8bd8800]
+      , [0xe59d5004, 0xe1cd40d8, 0xe5851000, 0xe12fff1e] ])
+  -- P2-7: a call to an owned callee with no r4-r10 proof.
+  refusedBy "a callee that does not restore r4 drops the caller's alias" 0x1010 NonStackStore
+    (walkFunctions []
+      [ [0xe92d4010, 0xe24dd008, 0xe1a0400d, 0xeb000002, 0xe5840000, 0xe28dd008, 0xe8bd8010]
+      , [0xe3a04000, 0xe12fff1e] ])
+  -- P2-8: a call into a slot entry from outside a boundary extent.
+  refusedBy "a non-boundary call into a slot entry" 0x1004 PcWrite
+    (walkFunctions [0x100c]
+      [ [0xe92d4800, 0xeb000000, 0xe8bd8800]
+      , [0xe12fff10] ])
+  case walkFunctions [0x1000, 0x100c]
+      [ [0xe92d4800, 0xeb000000, 0xe8bd8800]
+      , [0xe12fff10] ] of
+    Right _ -> putStrLn "admitted a boundary entry calling a slot entry"
+    Left failure -> fail ("boundary call into a slot entry refused: " ++ show failure)
+  -- P2-9: an object covering the callee's incoming word.
+  refusedBy "an object covering the callee's incoming word is not passed" 0x1014 FrameArgumentExceeded
+    (walkFunctions []
+      [ [0xe92d4800, 0xe24dd010, 0xe1a0000d, 0xe28d1008, 0xe58d1000, 0xeb000001, 0xe28dd010, 0xe8bd8800]
+      , [0xe5802000, 0xe59d3000, 0xe5832000, 0xe12fff1e] ])
+  -- P3-13: a stride-four counter is an exact value, not an interval.
+  refusedBy "a stride-four counter is checked on its exact crossing iteration" 0x102c FrameArgumentExceeded
+    (walkFrames 0xe28d0008
+      [0xe3a02000, 0xe2822004, 0xe352000c, 0x9afffffc, 0xe7801002, 0xe12fff1e])
+  -- P3-14: a function the probe cannot walk refuses the artifact.
+  refusedBy "a probe walk that cannot bound a store offset refuses the artifact" 0x1000 FrameOffsetUnbounded
+    (walk [0xe7801002, 0xe12fff1e])
 
 literalPoolTests :: IO ()
 literalPoolTests = do
