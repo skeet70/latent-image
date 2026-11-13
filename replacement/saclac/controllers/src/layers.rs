@@ -3,9 +3,9 @@
 //! The stock layers saclac's controllers call outside their own state. Each trait is
 //! bound at saclac's composition root to the part that owns its layer.
 
-use xm1_saclac_interface::RecordHandle;
+use xm1_saclac_interface::{CommandKind, RecordHandle};
 
-/// A profile-record field the live view reads or writes. Its value means what the
+/// A profile-record field the controllers read or write. Its value means what the
 /// record's other readers make of it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Field {
@@ -55,9 +55,76 @@ pub enum Field {
     AutofocusApplied,
     AutofocusRelease,
     LensRange,
+    // The statistics configuration's blocks.
+    Descriptor,
+    DescriptorFirst,
+    DescriptorSecond,
+    FormatRatio,
+    FormatValue,
+    FormatMode,
+    // The output block's second word is `ViewMode`.
+    OutputFirst,
+    OutputThird,
+    OutputFourth,
+    ExposureFirst,
+    ExposureSecond,
+    ExposureThird,
+    /// The exposure block's fifth setting while a selection is set.
+    ExposureSelected,
+    ExposureSixth,
+    ExposureSeventh,
+    ExposureEighth,
+    FactorFirst,
+    FactorSecond,
+    WindowLevel,
+    LensBase,
+    LensIndex,
+    LinearSource,
+    Detail,
+    CaptureFirst,
+    CaptureSecond,
+    CaptureOptionFirst,
+    IntervalTracking,
+    CaptureOptionFourth,
+    CaptureOptionFifth,
+    CapturePolicy,
+    SelectionThird,
+    /// The word the statistics start forwards.
+    StartHeader,
+    CaptureView,
+    /// Written with 4 or 3 at a start, by the parameter feature.
+    StartMode,
+    /// Read at a stop: 3 clears the parameter feature, 4 sets it.
+    StopMode,
+    /// The code word that takes the statistics task's results; zero when none.
+    ResultsCallback,
+    /// The diagnostic buffer's address; zero when none.
+    DiagnosticBuffer,
+    // The S1 statistics snapshot's values.
+    /// The first entry of the capture-window mode table.
+    CaptureWindowMode,
+    SpanMode,
+    SpanSet,
+    Level,
+    Adjusted,
+    LinearLevel,
+    LensWord,
+    Step,
+    StepLimit,
+    StepMode,
+    ExposureWord,
+    ExposureOffset,
+    ViewByte,
+    WindowFirst,
+    WindowSecond,
+    WindowThird,
+    WindowFourth,
+    WindowMode,
+    /// Written 0 at the S1 snapshot and 1 when the S1 results are delivered.
+    ResultsTaken,
 }
 
-/// A profile word block the live view copies whole.
+/// A profile word block the controllers copy whole.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Block {
     Command1f,
@@ -65,6 +132,24 @@ pub enum Block {
     /// The record copy a view suspend marks.
     Suspension,
     Lens(LensSlot),
+    /// Four words: the statistics window block.
+    AuxiliaryWindow,
+    /// Four words.
+    SelectionRange,
+    /// 26 words; words 4 and 5 are spans the profile fixes.
+    Spans,
+    /// Two words.
+    Classes,
+    /// Six bytes in two words.
+    WindowBytes,
+    /// 12 words.
+    ReleaseRange,
+    /// 7 words.
+    Options,
+    /// Two halfwords: the lens target position and its steps.
+    LensTarget,
+    /// 33 words.
+    Release,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -105,6 +190,16 @@ pub enum Change {
     LensRange,
     LensWindow,
     LensValue,
+    // The fields the statistics blocks carry; `Exposure`, `Offset`, `Resource`, `Class`,
+    // `Range`, `SelectionMode`, `SelectionOwner` and `SelectionReset` cover the others.
+    ExposureSecond,
+    ExposureThird,
+    FactorFirst,
+    FactorSecond,
+    Retune,
+    CaptureRatio,
+    CaptureOptionFourth,
+    Detail,
 }
 
 /// The autofocus changes that restart the view, each its own group in the record.
@@ -221,4 +316,98 @@ pub trait SharedHelpers {
 /// The image pipeline's state as the view stop reads it.
 pub trait Pipeline {
     fn stop_queried(&mut self) -> bool;
+}
+
+/// The profile geometry layer's statistics corrections.
+pub trait StatisticsGeometry {
+    /// The measured window after the correction factors `first` and `second` for `class`.
+    fn correct_window(&mut self, window: [u16; 3], first: u32, second: u32, class: u32) -> [u16; 3];
+    fn linearize(&mut self, value: u32) -> u32;
+    fn reset_default_selection(&mut self);
+}
+
+/// The adjustment layer's values the statistics configuration carries.
+pub trait Adjustment {
+    fn mode_position(&mut self, record: RecordHandle) -> u32;
+    fn refresh_dispatch(&mut self, record: RecordHandle) -> u32;
+    fn first_dispatch(&mut self, record: RecordHandle) -> u32;
+}
+
+/// Shared saclac helpers the statistics configuration uses.
+pub trait StatisticsHelpers {
+    /// The capture window's dimensions for `mode` and the format ratio, when the pair has a
+    /// window for that mode.
+    fn scale_capture_window(&mut self, mode: u32, ratio: u32) -> Option<[u32; 2]>;
+    fn selection_ratio(&mut self, record: RecordHandle) -> [u32; 2];
+    fn lens_offset(&mut self, index: u32) -> u32;
+}
+
+/// Which diagnostic exports the configuration enables.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DiagnosticExports { pub row_data: bool, pub debug: bool }
+
+pub trait StatisticsSettings {
+    fn parameter_feature(&mut self) -> bool;
+    fn set_parameter_feature(&mut self, on: bool);
+    fn diagnostic_exports(&mut self) -> DiagnosticExports;
+    fn export_row_data(&mut self, buffer: u32);
+    fn export_debug(&mut self, buffer: u32);
+}
+
+/// The parameter words the client left with its last command.
+pub trait CommandParameters {
+    fn word(&mut self, command: CommandKind, index: usize) -> u32;
+}
+
+/// The profile's shared block, as the statistics configuration reads it.
+pub trait ProfileShared {
+    /// The measured window before correction, with its extent.
+    fn measured_window(&mut self) -> ([u16; 3], u32);
+    fn source(&mut self) -> xm1_saclac_interface::statistics::Source;
+}
+
+/// The buffer the statistics task writes its results into.
+pub trait Results {
+    fn address(&mut self) -> xm1_saclac_interface::calc::SharedAddress;
+    fn read(&mut self, out: &mut [u8; xm1_saclac_interface::statistics::RESULTS_BYTES]);
+    /// Enters `callback` with the results.
+    fn deliver(&mut self, callback: xm1_saclac_interface::ClientCallback);
+}
+
+/// The measurement-window inputs the S1 snapshot hands the calc chain that corrects them.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct WindowInputs {
+    pub scene: u32,
+    pub words: [u32; 5],
+    pub bytes: [u8; 6],
+    pub lens: u32,
+    pub mode: u16,
+    /// `None` when the shared block has no measured window.
+    pub measured: Option<[u16; 3]>,
+    pub factors: [u32; 2],
+    pub class: u32,
+}
+
+/// The corrected measurement window and the extent the calc chain reports.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CorrectedWindow { pub window: [u16; 3], pub extent: u32 }
+
+/// Values the S1 statistics configuration takes from layers beside the profile record.
+pub trait S1Values {
+    /// The profile's descriptor for `value`.
+    fn descriptor(&mut self, record: RecordHandle, value: u32) -> u32;
+    fn lens_value(&mut self) -> u32;
+    fn refresh(&mut self, record: RecordHandle) -> u32;
+    /// The imaging curve from its eleven inputs in stock's argument order.
+    fn curve(&mut self, inputs: [u32; 11]) -> u32;
+    fn stop_curve(&mut self, stop_mode: u32) -> u32;
+    fn unselected_view(&mut self, record: RecordHandle) -> u32;
+    fn span(&mut self, record: RecordHandle) -> u32;
+    fn unselected(&mut self, record: RecordHandle) -> u32;
+    fn corrected_window(&mut self, inputs: &WindowInputs) -> CorrectedWindow;
+    /// The lens target's step count for `position` and two release-range words.
+    fn release_steps(&mut self, position: i16, first: u32, second: u32) -> u16;
+    /// Records the snapshot in the diagnostic trace (operation 0x07000000).
+    fn trace_snapshot(&mut self);
+    fn release_channel(&mut self);
 }

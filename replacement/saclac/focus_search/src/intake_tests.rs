@@ -1,5 +1,5 @@
 use crate::contrast::{LensIdentity, Phase, StageRecord};
-use crate::intake::{take_in, FrameSnapshot, IntakePorts, IntakeRecord, IntakeView, ProgramInputs};
+use crate::intake::{take_in, FrameSnapshot, IntakePorts, IntakeRecord, IntakeView, ProgramInputs, RecordReads, Zone};
 use crate::stock::intake::{frame_snapshot, FRAME_SNAPSHOT_BYTES};
 use std::vec::Vec;
 use xm1_saclac_interface::search::ScanEvaluation;
@@ -27,6 +27,7 @@ impl Fake {
                 extent: [7, 8],
                 timing: 0x99,
                 step: 12,
+                zone: Zone(4),
                 levels: [500, 300],
                 adjustment: 0,
                 level_offset: 40,
@@ -67,16 +68,19 @@ impl Fake {
     }
 }
 
+impl RecordReads for Fake {
+    fn selection_ratio(&mut self) -> [u32; 2] { [11, 22] }
+    fn converted_decade(&mut self) -> u16 { 0x1234 }
+    fn zone_limit(&mut self, zone: Zone) -> i16 { if zone == Zone(4) { self.zone } else { 0 } }
+    fn lens_level(&mut self, _: u32, _: LensIdentity) -> i16 { self.lens_level }
+}
+
 impl IntakePorts for Fake {
     fn frame_snapshot(&mut self) -> FrameSnapshot { self.snapshot }
     fn record(&mut self) -> IntakeRecord { self.record }
     fn imaging_profile_class(&mut self) -> u32 { 0x55 }
-    fn selection_ratio(&mut self) -> [u32; 2] { [11, 22] }
     fn parameter_index(&mut self, parameter: u32) -> u32 { parameter + 1000 }
     fn lens_identity(&mut self) -> LensIdentity { LensIdentity(8) }
-    fn converted_decade(&mut self) -> u16 { 0x1234 }
-    fn zone_limit(&mut self) -> i16 { self.zone }
-    fn lens_level(&mut self, _: u32, _: LensIdentity) -> i16 { self.lens_level }
     fn lens_step(&mut self, kind: u8, lens: LensIdentity) -> u32 { u32::from(kind) * 100 + lens.0 as u32 }
     fn program_level_word(&mut self, kind: u8, far: i16, program_word: u32, source: u32) -> u16 {
         self.level_words.push((kind, far, program_word, source));
@@ -202,6 +206,7 @@ fn the_snapshot_layout_names_the_fields_the_intake_reads() {
     put(0x0dc, &[3, 0, 0, 0, 4, 0, 0, 0]);
     put(0x0fe, &0x0123u16.to_le_bytes());
     put(0x108, &(-7i16).to_le_bytes());
+    put(0x0f4, &6u32.to_le_bytes());
     put(0x110, &2u32.to_le_bytes());
     put(0x570, &1u32.to_le_bytes());
     put(0x584, &9u32.to_le_bytes());
@@ -209,7 +214,7 @@ fn the_snapshot_layout_names_the_fields_the_intake_reads() {
     put(0x592, &[1]);
     let snapshot = frame_snapshot(&bytes);
     assert_eq!((snapshot.status, snapshot.windows[1], snapshot.extent), (5, [1, 2], [3, 4]));
-    assert_eq!((snapshot.levels[1], snapshot.level_offset, snapshot.lens), (0x0123, -7, LensIdentity(2)));
+    assert_eq!((snapshot.levels[1], snapshot.level_offset, snapshot.lens, snapshot.zone), (0x0123, -7, LensIdentity(2), Zone(6)));
     assert_eq!((snapshot.frame_mode, snapshot.pacing[1], snapshot.correction_source, snapshot.corrects_position), (1, 9, -3, 1));
 }
 

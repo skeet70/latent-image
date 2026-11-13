@@ -1,12 +1,12 @@
 #![forbid(unsafe_code)]
 
 use crate::{adjustment, capture, records, stock, synchronous};
-use xm1_saclac_interface::{ClientCallback, CompletionStatus};
+use xm1_saclac_interface::{stock::StockCallbackWord, ClientCallback, CompletionStatus};
 
 pub enum Request<Buffer> {
-    StartRecord { callback: ClientCallback, buffer: Buffer, record: stock::RecordStart, completion: stock::StockCallbackWord },
+    StartRecord { callback: ClientCallback, buffer: Buffer, record: stock::RecordStart, completion: StockCallbackWord },
     StartCapture { callback: ClientCallback, buffers: [Buffer; 2], capture: capture::Capture, completions: capture::Callbacks },
-    UpdateRecord { callback: ClientCallback, record: stock::RecordUpdate, limits: stock::RecordLimits, completion: stock::StockCallbackWord },
+    UpdateRecord { callback: ClientCallback, record: stock::RecordUpdate, limits: stock::RecordLimits, completion: StockCallbackWord },
     Reserve(ClientCallback),
     Lens { callback: ClientCallback, request: adjustment::LensRequest },
     ConfigureLens { callback: ClientCallback, selection: adjustment::Selection, limit: adjustment::SelectionLimit, value: adjustment::DriveAmount },

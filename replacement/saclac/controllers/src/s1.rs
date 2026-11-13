@@ -160,6 +160,8 @@ impl Router {
         Self { state: State::Idle, waiting: Waiting { shot: false, capture: false, bridge: false, release: false }, deferred: 0, lens_stop: false, bridge: Bridge::new() }
     }
 
+    pub const fn waiting(&self) -> Waiting { self.waiting }
+
     pub fn handle(&mut self, input: Input<'_>, record: RecordHandle, port: &mut impl Port) -> Outcome {
         let mut call = Call { port, record };
         let state = self.state;

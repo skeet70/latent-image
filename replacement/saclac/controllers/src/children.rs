@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use xm1_saclac_interface::lens;
 use xm1_saclac_interface::{Command, Completed, Message, Parameters, RecordHandle};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,6 +55,22 @@ pub enum AcquisitionControl {
     Stop,
 }
 
+/// The S1 search's entries that carry no queue message. Its samples reach it as the
+/// completions the parent forwards.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SearchControl {
+    Initialize,
+    /// Sent when the S1 imaging job reports (completion 0x59).
+    Start,
+    /// Sent at the half press.
+    Stop,
+    /// The half press for a record whose lens may be cancelled: the lens goes to the best
+    /// position found.
+    Conclude,
+    Cancel,
+    Resume,
+}
+
 
 /// The lens children's entries that carry no queue message; a reissued command or a
 /// re-entered completion is a `ChildEvent::Command` or `ChildEvent::Completed` again.
@@ -62,14 +79,10 @@ pub enum LensControl {
     PrepareDrive,
     /// The root's cancellation drives the lens.
     CancelDrive,
-    Setting(LensSetting),
+    Setting(lens::Setting),
     /// Steps by the block of notification 0x1b.
     Step,
 }
-
-/// The lens request a lens setting issues.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LensSetting { Request04, Request06, Request05 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShotControl {
@@ -98,10 +111,10 @@ pub enum ShotEvent<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ChildRequest<'a, SearchSample> {
+pub enum ChildRequest<'a> {
     Measurement(ChildEvent<'a, MeasurementControl>),
     S1Acquisition(ChildEvent<'a, AcquisitionControl>),
-    S1Search(crate::search::SearchInput<SearchSample>),
+    S1Search(ChildEvent<'a, SearchControl>),
     LensBringUp { message: Message<'a>, record: RecordHandle },
     LensLive(ChildEvent<'a, LensControl>),
     LensS1(ChildEvent<'a, LensControl>),
@@ -114,7 +127,7 @@ pub enum LensEffect {
     LensReaching,
 }
 
-impl<SearchSample> ChildRequest<'_, SearchSample> {
+impl ChildRequest<'_> {
     pub const fn lens_effect(&self) -> LensEffect {
         match self {
             Self::S1Acquisition(_) => LensEffect::MeasurementOnly,
@@ -129,7 +142,5 @@ impl<SearchSample> ChildRequest<'_, SearchSample> {
 }
 
 pub trait Children {
-    type SearchSample;
-
-    fn handle(&mut self, request: ChildRequest<'_, Self::SearchSample>) -> ChildOutcome;
+    fn handle(&mut self, request: ChildRequest<'_>) -> ChildOutcome;
 }

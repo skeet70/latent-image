@@ -1,65 +1,6 @@
 #![forbid(unsafe_code)]
 
-use crate::statistics::{Changes, Group};
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RecordFlags {
-    selected: u64,
-    permitted: u64,
-}
-
-impl RecordFlags {
-    pub const fn new(selected: u64, permitted: u64) -> Self {
-        Self { selected, permitted }
-    }
-
-    fn selected(self, mask: u64) -> bool {
-        self.selected & mask == mask
-    }
-
-    fn permitted(self, mask: u64) -> bool {
-        self.permitted & mask == mask
-    }
-}
-
-pub fn autofocus_changes(request: RecordFlags, capture: RecordFlags, live: bool) -> Changes {
-    let processing = request.selected(1 << 58)
-        || request.selected(1 << 8)
-        || request.selected(1 << 10)
-        || request.selected(1 << 30)
-        || request.selected(1 << 31)
-        || capture.selected(1 << 11)
-        || capture.permitted(1 << 19);
-    let geometry = request.selected(if live { 1 << 6 } else { 1 << 7 });
-    let measurement = if live {
-        request.selected(1 << 37)
-    } else {
-        request.selected(1 << 38)
-            || request.selected(1 << 1)
-            || capture.selected(1 << 39)
-            || capture.permitted(1)
-            || capture.permitted(1 << 8)
-            || capture.selected(1 << 26)
-    };
-    Changes { processing, geometry, measurement }
-}
-
-pub const fn configuration_operation(group: Group) -> u16 {
-    match group {
-        Group::Processing => 0x4012,
-        Group::Geometry => 0x4010,
-        Group::Measurement => 0x402c,
-    }
-}
-
-pub const fn configuration_completed(wire: u8) -> Option<Group> {
-    match wire {
-        0x73 => Some(Group::Processing),
-        0x71 => Some(Group::Geometry),
-        0x80 => Some(Group::Measurement),
-        _ => None,
-    }
-}
+use xm1_saclac_interface::stock::StockCallbackWord;
 
 pub const fn synchronous_completion(status: xm1_saclac_interface::CompletionStatus) -> crate::synchronous::Completion {
     match status.0 {
@@ -117,8 +58,12 @@ pub const fn measurement_update_operation(update: crate::children::MeasurementUp
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct StockCallbackWord(pub u32);
+/// X-M1 1.50 keeps the S1 progress in bits 0..3 of the byte at 0x169d508, which nothing else
+/// writes; the shot sequence reads capture, bridge and release through 0xf153a0, 0xf15414 and
+/// 0xf154b0 (from 0xf17dbc, 0xf17dcc, 0xf17ddc).
+pub const fn s1_progress(waiting: crate::s1::Waiting) -> u8 {
+    waiting.shot as u8 | (waiting.capture as u8) << 1 | (waiting.bridge as u8) << 2 | (waiting.release as u8) << 3
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LensFinishRoute {
@@ -583,4 +528,85 @@ fn configuration_payload(configured: &crate::live_profile::Configured, out: &mut
     out.byte(0xe0, values.capture);
     out.byte(0xe1, values.rate);
     out.word(0xe4, values.restarts);
+}
+
+/// The live statistics configuration's completion entries, 0xf3a768..0xf3aa40; each posts the
+/// completion it is named for.
+pub const STATISTICS_STARTED: StockCallbackWord = StockCallbackWord(0xf3aa18);
+pub const STATISTICS_STOPPED: StockCallbackWord = StockCallbackWord(0xf3a9f0);
+pub const CAPTURE_CONFIGURED: StockCallbackWord = StockCallbackWord(0xf3a9c8);
+pub const CAPTURE_PROGRESS: StockCallbackWord = StockCallbackWord(0xf3a9a0);
+pub const CAPTURE_RESULTS: StockCallbackWord = StockCallbackWord(0xf3aa40);
+pub const STATISTICS_RELEASED: StockCallbackWord = StockCallbackWord(0xf3a978);
+pub const ADJUSTED: StockCallbackWord = StockCallbackWord(0xf3a950);
+pub const DESCRIPTOR_CHOSEN: StockCallbackWord = StockCallbackWord(0xf3a924);
+pub const PREPARED: StockCallbackWord = StockCallbackWord(0xf3a8ac);
+pub const OUTPUT_CONFIGURED: StockCallbackWord = StockCallbackWord(0xf3a884);
+pub const WINDOW_CONFIGURED: StockCallbackWord = StockCallbackWord(0xf3a85c);
+pub const FORMAT_CONFIGURED: StockCallbackWord = StockCallbackWord(0xf3a834);
+pub const EXPOSURE_CONFIGURED: StockCallbackWord = StockCallbackWord(0xf3a80c);
+pub const CAPTURE_RETUNED: StockCallbackWord = StockCallbackWord(0xf3a7e4);
+pub const SELECTION_TAKEN: StockCallbackWord = StockCallbackWord(0xf3a7bc);
+pub const RESULTS_READY: StockCallbackWord = StockCallbackWord(0xf3a794);
+pub const COMMAND24_DONE: StockCallbackWord = StockCallbackWord(0xf3a768);
+
+/// The S1 statistics configuration's completion entries, 0xf226cc..0xf227f8. 0xf226cc is empty;
+/// 0xf22928 posts 0x58 only while 0x16b5a40+0x6c is clear and 0xf22730 posts 0x7f only while
+/// +0x74 is clear.
+pub const S1_IMAGING_CONFIGURED: StockCallbackWord = StockCallbackWord(0xf227c0);
+pub const S1_IMAGING_ENDED: StockCallbackWord = StockCallbackWord(0xf22928);
+pub const S1_IMAGING_REPORTED: StockCallbackWord = StockCallbackWord(0xf22794);
+pub const S1_IMAGING_RELEASED: StockCallbackWord = StockCallbackWord(0xf226cc);
+pub const S1_STARTED: StockCallbackWord = StockCallbackWord(0xf227f8);
+pub const S1_STOPPED: StockCallbackWord = StockCallbackWord(0xf227dc);
+pub const S1_SELECTED: StockCallbackWord = StockCallbackWord(0xf2276c);
+pub const S1_RESULTS_READY: StockCallbackWord = StockCallbackWord(0xf22730);
+pub const S1_RETUNED: StockCallbackWord = StockCallbackWord(0xf22708);
+pub const S1_OUTPUT_CONFIGURED: StockCallbackWord = StockCallbackWord(0xf226e0);
+
+/// 0xfeaa64 and 0xfeaaa4 return their post's status; machine 17 drops it.
+pub fn post_imaging(
+    payload: &xm1_saclac_interface::imaging::ImagingPayload,
+    completions: &[xm1_saclac_interface::Completion],
+    imgdc: &mut impl xm1_saclac_interface::ImgDc,
+) {
+    let (operation, message) = xm1_saclac_interface::stock::imaging::imaging_payload(payload);
+    let request = xm1_saclac_interface::ImgDcRequest { operation, parameters: xm1_saclac_interface::stock::parameters(message.bytes()), completions };
+    let _ = imgdc.request(request);
+}
+
+/// Encodes one of the live statistics configuration's requests and posts it to the statistics
+/// task.
+pub fn statistics_request(payload: &xm1_saclac_interface::statistics::StatisticsPayload, statistics: &mut impl xm1_saclac_interface::Statistics) {
+    use xm1_saclac_interface::statistics::StatisticsPayload as P;
+    use xm1_saclac_interface::Completion as C;
+    let completions: &[C] = match payload {
+        P::Start { .. } | P::StartSelected { .. } => &[C::Statistics69, C::Statistics7f],
+        P::S1Start { .. } => &[C::Statistics7b, C::Statistics7f],
+        P::Configure { .. } => &[C::Statistics6c, C::Statistics78, C::Statistics79, C::Statistics7f],
+        P::Stop { .. } => &[C::Statistics6b],
+        P::Release { .. } => &[C::Statistics6d],
+        P::MeasuredWindow(_) | P::MeasuredSource { .. } | P::Command13 => &[],
+        P::Adjust { .. } => &[C::Statistics6e, C::Statistics76],
+        P::Prepare { .. } => &[C::Statistics77],
+        P::Output { .. } => &[C::Statistics75],
+        P::Window { .. } => &[C::Statistics72],
+        P::Format { .. } => &[C::Statistics71],
+        P::Exposure { .. } => &[C::Statistics73],
+        P::Capture { .. } => &[C::Statistics80],
+        P::Selection { .. } => &[C::Statistics7e, C::Statistics7f],
+        P::Command24 { .. } => &[C::Statistics82],
+    };
+    post_statistics(payload, completions, statistics);
+}
+
+/// The senders 0x1039638..0x103b040 return their post's status; no caller reads it.
+pub fn post_statistics(
+    payload: &xm1_saclac_interface::statistics::StatisticsPayload,
+    completions: &[xm1_saclac_interface::Completion],
+    statistics: &mut impl xm1_saclac_interface::Statistics,
+) {
+    let (operation, message) = xm1_saclac_interface::stock::statistics::statistics_payload(payload);
+    let request = xm1_saclac_interface::StatisticsRequest { operation, parameters: xm1_saclac_interface::stock::parameters(message.bytes()), completions };
+    let _ = statistics.request(request);
 }

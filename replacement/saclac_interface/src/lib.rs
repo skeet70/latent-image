@@ -3,8 +3,12 @@
 
 pub mod exposure;
 pub mod stock;
+pub mod lens;
 pub mod round;
 pub mod search;
+pub mod calc;
+pub mod statistics;
+pub mod imaging;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClientCallback(pub(crate) u32);
@@ -342,6 +346,7 @@ pub enum CalcOperation {
     Request0f,
     Request10,
     Request11,
+    Request12,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -457,8 +462,12 @@ impl LensEffect {
 pub const fn lens_effect(operation: PeerOperation) -> LensEffect {
     match operation {
         PeerOperation::LensDc(LensDcOperation::Request07 | LensDcOperation::Request08 | LensDcOperation::Request0c) => LensEffect::DirectDrive,
-        // 0x3f2e reaches lensdc 0x420c; 0x3f2f in imgdc state 7 reaches lensdc 0x420e (0xff4dac -> 0xff7a98 -> 0x76e450).
-        PeerOperation::ImgDc(ImgDcOperation::Request2e | ImgDcOperation::Request2f) => LensEffect::DriveThroughImageBridge,
+        // 0x3f2e reaches lensdc 0x420c; 0x3f2f in imgdc state 7 reaches lensdc 0x420e (0xff4dac -> 0xff7a98 -> 0x76e450);
+        // 0x3f44 (handler 0xff091c) arms a drive that imgdc's frame event sends as lensdc 0x420c (0xff1048), or sends
+        // lensdc 0x420b itself when it carries no move (0xff04cc -> 0x76e1ac).
+        PeerOperation::ImgDc(ImgDcOperation::Request2e | ImgDcOperation::Request2f | ImgDcOperation::Request44) => {
+            LensEffect::DriveThroughImageBridge
+        }
         PeerOperation::Calc(_) | PeerOperation::Calc1(_) | PeerOperation::Statistics(_) => LensEffect::NoLensDrive,
         PeerOperation::LensDc(_) | PeerOperation::ImgDc(_) | PeerOperation::Flash(_) => LensEffect::Unclassified,
     }
@@ -472,3 +481,9 @@ mod exposure_tests;
 mod search_tests;
 #[cfg(test)]
 mod search_record_tests;
+#[cfg(test)]
+mod calc_tests;
+#[cfg(test)]
+mod statistics_tests;
+#[cfg(test)]
+mod imaging_tests;

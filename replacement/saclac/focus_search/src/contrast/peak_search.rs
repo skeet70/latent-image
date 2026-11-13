@@ -869,7 +869,7 @@ pub(crate) fn percent_of(value: u32, percent: u32) -> u32 { value.wrapping_mul(p
 
 /// Whether `RecentPeakSamples` of the five newest measurements (an empty one skipped) had a
 /// level at `RecentPeakLevel` or above without one below between them.
-fn recent_levels_high(platform: &mut impl Platform, samples: u8) -> bool {
+pub(crate) fn recent_levels_high(platform: &mut impl Platform, samples: u8) -> bool {
     if platform.setting(Setting::RecentPeak) & 2 == 0 {
         return false;
     }

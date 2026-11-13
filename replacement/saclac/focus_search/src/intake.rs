@@ -16,6 +16,8 @@ pub struct FrameSnapshot {
     pub extent: [u32; 2],
     pub timing: u32,
     pub step: u32,
+    /// The zone whose limit comes off the second level.
+    pub zone: Zone,
     pub levels: [u16; 2],
     pub adjustment: u32,
     pub level_offset: i16,
@@ -82,23 +84,31 @@ pub struct ProgramInputs {
     pub level_word: u16,
 }
 
-pub trait IntakePorts {
+/// A row of the zone table 0x772f28 reads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Zone(pub u32);
+
+/// The record and lens-table reads both searches build their calc records from.
+pub trait RecordReads {
+    /// 0xf5206c.
+    fn selection_ratio(&mut self) -> [u32; 2];
+    /// 0xef74e4.
+    fn converted_decade(&mut self) -> u16;
+    /// 0x772f28.
+    fn zone_limit(&mut self, zone: Zone) -> i16;
+    /// The lens table's level for `step` on `lens` (0x746bf8).
+    fn lens_level(&mut self, step: u32, lens: LensIdentity) -> i16;
+}
+
+pub trait IntakePorts: RecordReads {
     fn frame_snapshot(&mut self) -> FrameSnapshot;
     fn record(&mut self) -> IntakeRecord;
     /// The imaging profile class 0xfea7bc reports.
     fn imaging_profile_class(&mut self) -> u32;
-    /// 0xf5206c.
-    fn selection_ratio(&mut self) -> [u32; 2];
     /// 0x746834.
     fn parameter_index(&mut self, parameter: u32) -> u32;
     /// 0x76d9c8.
     fn lens_identity(&mut self) -> LensIdentity;
-    /// 0xef74e4.
-    fn converted_decade(&mut self) -> u16;
-    /// 0x772f28.
-    fn zone_limit(&mut self) -> i16;
-    /// The lens table's level for `step` on `lens` (0x746bf8).
-    fn lens_level(&mut self, step: u32, lens: LensIdentity) -> i16;
     /// 0xf77ef8.
     fn lens_step(&mut self, kind: u8, lens: LensIdentity) -> u32;
     /// 0xf784f8.
@@ -165,8 +175,8 @@ pub fn take_in(view: IntakeView, ports: &mut impl IntakePorts) -> Intake {
     let record = ports.record();
     let imaging_profile_class = ports.imaging_profile_class();
     let ratio = ports.selection_ratio();
-    let zone = ports.zone_limit();
-    let raised = snapshot.levels[1].wrapping_sub(zone as u16);
+    let limit = ports.zone_limit(snapshot.zone);
+    let raised = snapshot.levels[1].wrapping_sub(limit as u16);
     let lens_level = ports.lens_level(snapshot.step, snapshot.lens);
     let level = snapshot.levels[0].wrapping_sub(raised).wrapping_add(lens_level as u16) as i16;
     let window = if snapshot.frame_mode == 1 { snapshot.windows[1] } else { snapshot.windows[0] };

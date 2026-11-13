@@ -4,6 +4,7 @@
 
 pub mod evaluation;
 pub mod intake;
+pub mod s1;
 
 use crate::contrast::settings::{Setting, TrendBasis};
 use crate::contrast::{FocusStatus, RetainedFocus, StageRecord};
@@ -224,6 +225,11 @@ pub const fn setting_key(setting: Setting) -> (u32, AdjustmentWidth) {
         Setting::ReturnFallTens => return (0x881c, Half),
         Setting::MonitorRiseTens => 0x8940,
         Setting::MonitorFallTens => 0x8941,
+        Setting::S1Search => 0x887c,
+        Setting::ClimbStepLimit => 0x87f3,
+        Setting::ClimbStillChange => return (0x8885, Half),
+        Setting::WideRangeTens => 0x8889,
+        Setting::ConcludeDropTens => return (0x8887, Half),
     };
     (key, Byte)
 }

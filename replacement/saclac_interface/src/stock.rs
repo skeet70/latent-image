@@ -2,6 +2,8 @@ use crate::*;
 
 pub mod exposure;
 pub mod search;
+pub mod statistics;
+pub mod imaging;
 
 pub const fn record_handle_from_a2(word: u32) -> RecordHandle { RecordHandle(word) }
 
@@ -614,7 +616,130 @@ pub fn calc_operation(operation: CalcOperation) -> u16 {
         CalcOperation::Request0f => 0x3c0f,
         CalcOperation::Request10 => 0x3c10,
         CalcOperation::Request11 => 0x3c11,
+        CalcOperation::Request12 => 0x3c12,
     }
+}
+
+/// A stock code word a peer enters when it finishes a request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StockCallbackWord(pub u32);
+
+/// One calc, calc1 or statistics message as the peer receives it. Bytes stock leaves unwritten
+/// are zero.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Encoded { bytes: [u8; 248], length: usize }
+
+impl Encoded {
+    pub fn bytes(&self) -> &[u8] { &self.bytes[..self.length] }
+
+    fn new(length: usize) -> Self { Self { bytes: [0; 248], length } }
+
+    fn put(&mut self, offset: usize, value: &[u8]) { self.bytes[offset..offset + value.len()].copy_from_slice(value); }
+
+    fn word(&mut self, offset: usize, value: u32) { self.put(offset, &value.to_le_bytes()); }
+
+    fn halfword(&mut self, offset: usize, value: u16) { self.put(offset, &value.to_le_bytes()); }
+}
+
+/// X-M1 1.50: the primary statistics buffer the window calculation reads, as 0xf3a564..0xf3a73c names it.
+const WINDOW_STATISTICS: (u32, u32) = (0x5ffe_c1b4, 4096);
+
+/// X-M1 1.50: 0xf601fc (0x3c02), 0xf4c7d0 (0x3c03), 0xf4c82c (0x3c04), 0xf4c8ac (0x3c05),
+/// 0xf4c400 (0x3c09), 0xf4c448 (0x3c0a), 0xf4c6e8 (0x3c0c), 0xf4c4d8 (0x3c11) and 0xf4c88c (0x3c12)
+/// lay out and size each message they post through 0xf49598.
+pub fn calc_payload(payload: &calc::CalcPayload) -> (CalcOperation, Encoded) {
+    use calc::CalcPayload as P;
+    match *payload {
+        P::Calculation { block, source, callback } => {
+            let mut message = Encoded::new(232);
+            message.word(0, callback.0);
+            message.word(4, block.0);
+            message.word(8, source.0);
+            (CalcOperation::Request02, message)
+        }
+        P::PipelineFirst { first, second, callback } => {
+            let mut message = Encoded::new(232);
+            message.word(0, callback.0);
+            message.put(4, &first.0);
+            message.put(64, &second.0);
+            (CalcOperation::Request03, message)
+        }
+        P::PipelineSecond { block, callback } => (CalcOperation::Request04, callback_first(callback, &block.0)),
+        P::PipelineThird { block, callback } => (CalcOperation::Request05, callback_first(callback, &block.0)),
+        P::Search { record, callback } => (CalcOperation::Request09, callback_first(callback, &record.0)),
+        P::Image { record, callback } => (CalcOperation::Request0a, callback_first(callback, &record.0)),
+        P::Window { request, callback } => (CalcOperation::Request0c, window(request, callback)),
+        P::Source { record, callback } => (CalcOperation::Request11, source(&record.0, callback)),
+        P::Release => (CalcOperation::Request12, Encoded::new(0)),
+    }
+}
+
+/// X-M1 1.50: 0xf4c584 (0x3d00), 0xf4c620 (0x3d01) and 0xf4c490 (0x3d02) post the whole
+/// record followed by the callback through 0xf49c18.
+pub fn calc1_payload(payload: &calc::Calc1Payload) -> (Calc1Operation, Encoded) {
+    use calc::Calc1Payload as P;
+    match *payload {
+        P::Acquisition { record, callback } => (Calc1Operation::Request00, callback_last(&record.0, callback)),
+        P::Selection { record, callback } => (Calc1Operation::Request01, callback_last(&record.0, callback)),
+        P::Parameters { record, callback } => (Calc1Operation::Request02, callback_last(&record.0, callback)),
+    }
+}
+
+/// X-M1 1.50: 0xf4c584 copies the 1236-byte grid to 0x16d4280 and cleans the first 1204
+/// bytes from the data cache (0x740e3c) before posting 0x3d00.
+pub const ACQUISITION_GRID: (u32, usize, usize) = (0x016d_4280, 1236, 1204);
+
+fn callback_first(callback: StockCallbackWord, record: &[u8]) -> Encoded {
+    let mut message = Encoded::new(4 + record.len());
+    message.word(0, callback.0);
+    message.put(4, record);
+    message
+}
+
+fn callback_last(record: &[u8], callback: StockCallbackWord) -> Encoded {
+    let mut message = Encoded::new(record.len() + 4);
+    message.put(0, record);
+    message.word(record.len(), callback.0);
+    message
+}
+
+/// X-M1 1.50: 0xf3a564..0xf3a73c builds the 76-byte record and 0xf4c6e8 appends the
+/// callback. Bytes 56..63 are planner words +0x48 and +0x44 (0xfa8018, 0xfa9588), which have
+/// no writer.
+fn window(request: calc::WindowRequest, callback: StockCallbackWord) -> Encoded {
+    let mut message = Encoded::new(80);
+    message.word(0, u32::from(request.selection));
+    message.word(4, request.window.first);
+    message.halfword(8, request.level);
+    message.word(12, request.sample.mode);
+    message.put(16, &[request.sample.flags]);
+    message.word(20, request.sample.exposure);
+    message.halfword(24, request.sample.level);
+    message.halfword(26, request.reference);
+    message.halfword(32, request.window.halfword);
+    message.word(36, WINDOW_STATISTICS.0);
+    message.word(40, WINDOW_STATISTICS.1);
+    message.word(44, request.sample.adjustment);
+    message.word(48, request.window.status);
+    message.word(52, request.window.second);
+    message.word(64, u32::from(request.refresh));
+    message.word(68, u32::from(request.mode));
+    message.word(72, u32::from(request.selected));
+    message.word(76, callback.0);
+    message
+}
+
+/// X-M1 1.50: 0xf4c4f4..0xf4c568 moves record word 40 ahead of halfword 14 and record
+/// words 16..39 and 44 after it, leaving message bytes 18..19 and 26..27 unwritten.
+fn source(record: &[u8; 48], callback: StockCallbackWord) -> Encoded {
+    let mut message = Encoded::new(56);
+    message.word(0, callback.0);
+    message.put(4, &record[0..14]);
+    message.put(20, &record[40..44]);
+    message.put(24, &record[14..16]);
+    message.put(28, &record[16..40]);
+    message.put(52, &record[44..48]);
+    message
 }
 
 pub fn calc1_operation(operation: Calc1Operation) -> u16 {
@@ -693,6 +818,69 @@ impl CaptureRecordField {
         };
         &packet[range]
     }
+}
+
+/// The largest lens payload, 0x4202's and 0x420b's.
+pub const LENS_PAYLOAD_BYTES: usize = 28;
+
+/// The retained callback a lens payload names in its first word; zero for none.
+pub const fn lens_callback_word(payload: &crate::lens::LensPayload) -> u32 {
+    use crate::lens::{DriveOwner, LensPayload as P, Setting};
+    match payload {
+        P::BringUp { .. } => 0xf150f0,
+        P::Stop { .. } => 0xf150c4,
+        P::Setting { setting: Setting::Request04, .. } => 0xf14b50,
+        P::Setting { setting: Setting::Request05, .. } => 0xf14b8c,
+        P::Setting { setting: Setting::Request06, .. } => 0xf14b14,
+        P::Drive { owner: DriveOwner::Live, .. } => 0xf14be4,
+        P::Drive { owner: DriveOwner::S1, .. } => 0xf28e94,
+        P::Step(_) => 0xf14bc8,
+        P::Select { .. } => 0xf14ae4,
+        P::Finish { .. } | P::Halt | P::Release => 0,
+    }
+}
+
+/// Writes a lens payload's wire bytes and returns the posted length. X-M1 1.50 senders:
+/// 0x4202 0x76dbe4 (seven words, built at 0xf15148..0xf151a0); 0x4203 0x76dc90 (four words,
+/// 0xf151dc..0xf15208); 0x4204/0x4205/0x4206 0x76dd24/0x76ddb0/0x76de3c (three words stored at
+/// 0x76dddc..0x76dde4); 0x4207 0x76dec8 (r0..r3 and two stack words, 0x76df04..0x76df20);
+/// 0x4208 0x76df7c (three words, r0 zero at 0xf14e4c and 0xf28fc0); 0x4209 0x76e008 and
+/// 0x4212 0x770080 (no payload); 0x420b 0x76e1ac (callback, halfword step, zero halfword,
+/// mode 0x81a170[0] = 0, then 1, 0, 0, 4 from 0xf14e80..0xf14e9c); 0x4211 0x76ffec (four words,
+/// 0x77001c..0x770028, code 11 or 12 from 0xf14fe8..0xf14ff0).
+pub fn lens_payload(payload: &crate::lens::LensPayload, bytes: &mut [u8; LENS_PAYLOAD_BYTES]) -> usize {
+    use crate::lens::{LensPayload as P, SelectionCode};
+    fn put(bytes: &mut [u8; LENS_PAYLOAD_BYTES], words: &[u32]) -> usize {
+        for (chunk, word) in bytes.chunks_exact_mut(4).zip(words) {
+            chunk.copy_from_slice(&word.to_le_bytes());
+        }
+        words.len() * 4
+    }
+    *bytes = [0; LENS_PAYLOAD_BYTES];
+    let callback = lens_callback_word(payload);
+    match *payload {
+        P::BringUp { parameters: p, record } => put(bytes, &[callback, p[0].0, p[1].0, p[2].0, record.0, p[3].0, p[4].0]),
+        P::Stop { parameters: p, record } => put(bytes, &[callback, p[0].0, p[1].0, record.0]),
+        P::Setting { slot, mode, .. } => put(bytes, &[callback, slot.0, mode.0]),
+        P::Drive { parameters: p, slot, .. } => put(bytes, &[callback, p[0].0, p[1].0, p[2].0, p[3].0, slot.0]),
+        P::Finish { value, record } => put(bytes, &[callback, value.0, record.0]),
+        P::Halt | P::Release => 0,
+        P::Step(step) => {
+            let length = put(bytes, &[callback, 0, 0, 1, 0, 0, 4]);
+            bytes[4..6].copy_from_slice(&step.0.to_le_bytes());
+            length
+        }
+        P::Select { value, code, record } => {
+            let code = match code { SelectionCode::Unconfigured => 11, SelectionCode::Configured => 12 };
+            put(bytes, &[callback, value.0, code, record.0])
+        }
+    }
+}
+
+/// The interface request a lens payload posts, its bytes in `bytes`.
+pub fn lens_dc_request<'a>(payload: &crate::lens::LensPayload, bytes: &'a mut [u8; LENS_PAYLOAD_BYTES]) -> LensDcRequest<'a> {
+    let length = lens_payload(payload, bytes);
+    LensDcRequest { operation: payload.operation(), parameters: Parameters(&bytes[..length]), completions: payload.completions() }
 }
 
 /// X-M1 1.50: 0xf3292c..0xf329f8 builds this geometry; 0xfea57c..0xfea5b4 sends 40 bytes to imgdc 0x3f2b.

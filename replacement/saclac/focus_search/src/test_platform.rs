@@ -1,4 +1,4 @@
-//! A platform for the contrast search's host tests: settings and port answers the test sets,
+//! A platform for the contrast searches' host tests: settings and port answers the test sets,
 //! and the effects the search leaves, in order.
 
 use crate::contrast::settings::{Setting, StepKind};
@@ -7,9 +7,12 @@ use crate::contrast::{
     LimitQuery, MonitorStepQuery, PeakSearchTrace, PinnedStatus, Platform, RetainedFocus, ScanPlan, ScanQuery, StageRecord, Step, StepQuery,
     TableOffset, TransitionTrace,
 };
-use crate::intake::{FrameSnapshot, IntakePorts, IntakeRecord, ProgramInputs};
+use crate::intake::{FrameSnapshot, IntakePorts, IntakeRecord, ProgramInputs, RecordReads, Zone};
+use crate::s1::{S1Ports, S1Record, S1Snapshot};
 use std::vec::Vec;
 use xm1_saclac_controllers::search::LensPosition;
+use xm1_saclac_interface::search::{ResultAddress, S1DriveRequest, SearchRecord};
+use xm1_saclac_interface::stock::search::EVALUATION_BYTES;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Effect {
@@ -30,6 +33,9 @@ pub(crate) enum Effect {
     FocusTrace(FocusTrace),
     Transition(TransitionTrace),
     Bias(LensIdentity, LensMove, LensPosition),
+    Fault,
+    Evaluate(SearchRecord),
+    Drive(S1DriveRequest),
 }
 
 pub(crate) struct Fake {
@@ -56,6 +62,14 @@ pub(crate) struct Fake {
     pub newest_log: FocusLogEntry,
     pub snapshot: FrameSnapshot,
     pub record: IntakeRecord,
+    /// Indexed by zone.
+    pub zone_limits: [i16; 11],
+    pub s1_record: S1Record,
+    pub s1_snapshot: S1Snapshot,
+    pub near: i16,
+    /// The evaluation result calc leaves, and the addresses it was read at.
+    pub result: [u8; EVALUATION_BYTES],
+    pub results_read: Vec<ResultAddress>,
 }
 
 impl Fake {
@@ -87,6 +101,7 @@ impl Fake {
                 extent: [0; 2],
                 timing: 0,
                 step: 0,
+                zone: Zone(0),
                 levels: [0; 2],
                 adjustment: 0,
                 level_offset: 0,
@@ -102,6 +117,12 @@ impl Fake {
                 corrects_position: 0,
             },
             record: IntakeRecord::default(),
+            zone_limits: [0; 11],
+            s1_record: S1Record::default(),
+            s1_snapshot: S1Snapshot { size: [0; 2], lens: LensIdentity(0), windows: [[0; 2]; 2], extent: [0; 2], frame_mode: 0, pinned_setting: 0 },
+            near: 0,
+            result: [0; EVALUATION_BYTES],
+            results_read: Vec::new(),
         }
     }
 
@@ -113,6 +134,11 @@ impl Fake {
 
     pub(crate) fn logs(&self) -> Vec<FocusLogEntry> {
         self.effects.iter().filter_map(|effect| if let Effect::Log(log) = effect { Some(log.entry) } else { None }).collect()
+    }
+
+    /// What the S1 search sent its peers, and its fault reactions.
+    pub(crate) fn traffic(&self) -> Vec<Effect> {
+        self.effects.iter().filter(|effect| matches!(effect, Effect::Fault | Effect::Evaluate(_) | Effect::Drive(_))).cloned().collect()
     }
 }
 
@@ -202,16 +228,19 @@ impl Platform for Fake {
     }
 }
 
+impl RecordReads for Fake {
+    fn selection_ratio(&mut self) -> [u32; 2] { [0; 2] }
+    fn converted_decade(&mut self) -> u16 { 0 }
+    fn zone_limit(&mut self, zone: Zone) -> i16 { self.zone_limits.get(zone.0 as usize).copied().unwrap_or(0) }
+    fn lens_level(&mut self, _: u32, _: LensIdentity) -> i16 { 0 }
+}
+
 impl IntakePorts for Fake {
     fn frame_snapshot(&mut self) -> FrameSnapshot { FrameSnapshot { lens: self.lens, ..self.snapshot } }
     fn record(&mut self) -> IntakeRecord { self.record }
     fn imaging_profile_class(&mut self) -> u32 { 0 }
-    fn selection_ratio(&mut self) -> [u32; 2] { [0; 2] }
     fn parameter_index(&mut self, parameter: u32) -> u32 { parameter }
     fn lens_identity(&mut self) -> LensIdentity { self.lens }
-    fn converted_decade(&mut self) -> u16 { 0 }
-    fn zone_limit(&mut self) -> i16 { 0 }
-    fn lens_level(&mut self, _: u32, _: LensIdentity) -> i16 { 0 }
     fn lens_step(&mut self, _: u8, _: LensIdentity) -> u32 { 0 }
     fn program_level_word(&mut self, _: u8, _: i16, _: u32, _: u32) -> u16 { 0 }
     fn planner_word(&mut self) -> u32 { 0 }
@@ -219,4 +248,19 @@ impl IntakePorts for Fake {
     fn program_level(&mut self, _: u32, _: i16, _: LensIdentity) -> i32 { 0 }
     fn peak_threshold_reached(&mut self) -> bool { false }
     fn scan_thresholds(&mut self) -> [i8; 2] { [0; 2] }
+}
+
+impl S1Ports for Fake {
+    fn fault(&mut self) { self.effects.push(Effect::Fault); }
+    fn evaluate(&mut self, record: SearchRecord) { self.effects.push(Effect::Evaluate(record)); }
+    fn drive(&mut self, request: S1DriveRequest) { self.effects.push(Effect::Drive(request)); }
+    fn evaluation_result(&mut self, address: ResultAddress) -> [u8; EVALUATION_BYTES] {
+        self.results_read.push(address);
+        self.result
+    }
+    fn record(&mut self) -> S1Record { self.s1_record }
+    fn stage_statistics(&mut self) {}
+    fn frame_snapshot(&mut self) -> S1Snapshot { self.s1_snapshot }
+    fn near_position(&mut self) -> i16 { self.near }
+    fn interval_tracking(&mut self) -> u32 { 0 }
 }
