@@ -25,6 +25,7 @@ import System.Directory (canonicalizePath, createDirectory, doesDirectoryExist, 
 import System.Environment (getExecutablePath, lookupEnv)
 import System.FilePath (isAbsolute, replaceExtension, splitDirectories, takeDirectory, takeFileName, (</>))
 import System.IO (BufferMode (LineBuffering), IOMode (WriteMode), hClose, hFlush, hSetBuffering, hIsEOF, hGetChar, stdin, stdout, withFile)
+import System.IO.Error (ioeGetErrorString)
 import System.Posix.Files (setFileMode)
 import System.Posix.Temp (mkdtemp)
 import System.Exit (ExitCode (..))
@@ -2085,7 +2086,11 @@ runSegments runner segments = forM (zip [0 :: Int ..] segments) $ \(index, liste
     Nothing -> pure (beforeCursor, [])
     Just step -> do
       atExit <- emulatorTraceHitCount emulator beforeCursor
-      let leadingSources = if atExit > before then [emulatorTraceHitSource emulator beforeCursor (TraceHitCursor atExit) (TraceHitSnapshot atExit)] else []
+      -- The segment's observation folds this interval after its steps have recorded more hits, so
+      -- it is read now, while the ring's total is the count just taken.
+      leadingSources <- if atExit > before
+        then (: []) <$> freezeTraceHitSource (emulatorTraceHitSource emulator beforeCursor (TraceHitCursor atExit) (TraceHitSnapshot atExit))
+        else pure []
       pressed <- if segmentObserve segment
         then observe emulator (segmentKeyPulse segment) [step]
         else [] <$ (presses emulator (segmentKeyPulse segment) [step] `catch` \(failure :: IOException) ->
@@ -2159,6 +2164,9 @@ runSegments runner segments = forM (zip [0 :: Int ..] segments) $ \(index, liste
       sources = leadingSources ++ trailingSources
       format = TraceHitFormat (runnerLrLabels runner) (runnerSpLabels runner) (runnerTraceLabels runner)
   effects <- foldTraceHitSources sources (\effects hit -> pure (addHitEffect runner effects hit)) emptyEffects
+    `catch` \(failure :: IOException) -> throwIO (userError ("segment " ++ T.unpack (segmentPhase segment) ++ " from hit "
+      ++ show before ++ ", leading " ++ show [(sourceStart source, sourceEnd source) | source <- leadingSources]
+      ++ ": " ++ ioeGetErrorString failure))
   when (segmentObserve segment || not (null (segmentReads segment)) || not (null (effectHookRows effects))
         || not (null (effectCcHits effects)) || effectDeclared effects > 0 || not (null film)) $ do
     provenance <- emulatorRenderObjectProvenance emulator
@@ -2192,6 +2200,8 @@ writeRendezvousExit runner segment step observed atExit afterExit = do
       sources = if afterExit > atExit then [emulatorTraceHitSource emulator (TraceHitCursor atExit) (TraceHitCursor afterExit) (TraceHitSnapshot afterExit)] else []
       format = TraceHitFormat (runnerLrLabels runner) (runnerSpLabels runner) (runnerTraceLabels runner)
   effects <- foldTraceHitSources sources (\effects hit -> pure (addHitEffect runner effects hit)) emptyEffects
+    `catch` \(failure :: IOException) -> throwIO (userError ("rendezvous exit " ++ T.unpack (segmentPhase segment)
+      ++ ": " ++ ioeGetErrorString failure))
   index <- length <$> readIORef (runnerRendezvousExits runner)
   let prefix = object ["phase" .= segmentPhase segment, "key" .= stepKey step, "steps" .= observed]
       suffix = effectsSuffix effects Nothing []
