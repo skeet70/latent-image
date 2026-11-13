@@ -10,7 +10,8 @@ use xm1_saclac_profile_records::field::{RecordField, RecordRead, RecordWrite, Sh
 use xm1_saclac_profile_records::stock::layout;
 use xm1_saclac_profile_records::{AccessGroup, Bytes, Grants, Handle, MeasurementSelection, OpenMode, ProfileRecords, RecordImage, Scope, Serial, SharedHeaderByte, Slot, StockEntries, Tag};
 
-use crate::exposure::ports::{CaptureProfiles, Lens, ProfileAccess, ProfileLevels, Properties, Property, StockMemory};
+use crate::adjust::lens::{BiasTable, LensConfiguration};
+use crate::exposure::ports::{CaptureProfiles, ImageReport, InPlace, Lens, Placement, ProfileAccess, ProfileLevels, Properties, Property, StockMemory};
 use crate::profile::Profile;
 
 const SLOT: u8 = 2;
@@ -92,6 +93,20 @@ pub struct World {
     pub stores: Vec<(u32, u8, u32)>,
     /// Every fill, in order: address, bytes, value.
     pub fills: Vec<(u32, usize, u8)>,
+    pub lens_configuration: crate::adjust::fakes::Lens,
+    pub default_dimensions: [u16; 3],
+    pub report_word: u32,
+}
+
+/// Where the test world places the context's in-place blocks.
+pub fn placed(block: InPlace) -> SharedAddress {
+    SharedAddress(match block {
+        InPlace::ColumnRegions(column) => 0x0170_0000 + 0x100 * column as u32,
+        InPlace::BoundSubjects => 0x0171_0000,
+        InPlace::BoundSummary => 0x0171_1000,
+        InPlace::SnapshotSubjects => 0x0172_0000,
+        InPlace::SnapshotTables => 0x0172_1000,
+    })
 }
 
 impl Default for World {
@@ -115,6 +130,9 @@ impl Default for World {
             memory: BTreeMap::new(),
             stores: Vec::new(),
             fills: Vec::new(),
+            lens_configuration: crate::adjust::fakes::Lens::default(),
+            default_dimensions: [0; 3],
+            report_word: 0,
         }
     }
 }
@@ -180,6 +198,7 @@ impl CaptureProfiles for World {
     fn configured_level(&mut self) -> u16 { self.configured_level }
     fn configured_profile(&mut self, level: i16) -> u32 { self.configured_profiles.get(&level).copied().unwrap_or(0) }
     fn record_profile(&mut self) -> u32 { 1 }
+    fn default_dimensions(&mut self) -> [u16; 3] { self.default_dimensions }
 }
 
 impl ProfileLevels for World {
@@ -219,4 +238,24 @@ impl ProfileAccess for World {
     type Records = Bytes;
     type Entries = Headers;
     fn profile(&mut self) -> Profile<'_, Bytes, Headers> { Profile::new(&self.records, &mut self.headers) }
+}
+
+impl Placement for World {
+    fn address(&mut self, block: InPlace) -> SharedAddress { placed(block) }
+}
+
+impl ImageReport for World {
+    fn second_report_word(&mut self) -> u32 { self.report_word }
+}
+
+impl LensConfiguration for World {
+    fn channel_value(&mut self, channel: i32) -> u32 { self.lens_configuration.channel_value(channel) }
+    fn channel_curve(&mut self, channel: i32) -> u32 { self.lens_configuration.channel_curve(channel) }
+    fn bias(&mut self, resource: i32, table: BiasTable) -> i16 { self.lens_configuration.bias(resource, table) }
+    fn biased_position(&mut self, resource: i32, table: BiasTable) -> i16 { self.lens_configuration.biased_position(resource, table) }
+    fn resource_count(&mut self) -> u8 { self.lens_configuration.resource_count() }
+    fn selection_word(&mut self, channel: i32, flags: u32, offset: i16) -> u32 { self.lens_configuration.selection_word(channel, flags, offset) }
+    fn remap(&mut self, word: u32, channel: i32, mode: u32) -> i32 { self.lens_configuration.remap(word, channel, mode) }
+    fn position_limits(&mut self, key: u32) -> [i16; 2] { self.lens_configuration.position_limits(key) }
+    fn mapped_value(&mut self, key: u32) -> u32 { self.lens_configuration.mapped_value(key) }
 }

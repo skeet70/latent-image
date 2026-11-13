@@ -3,6 +3,7 @@
 use xm1_saclac_interface::calc::SharedAddress;
 use xm1_saclac_profile_records::{Memory, StockEntries};
 
+use crate::adjust::lens::LensConfiguration;
 use crate::profile::Profile;
 
 /// A camera configuration value the engine reads; the ids are in `crate::stock::property`.
@@ -47,6 +48,8 @@ pub trait CaptureProfiles {
     /// The capture profile of the record's exposure settings (0xef6790, which reads none of its
     /// arguments).
     fn record_profile(&mut self) -> u32;
+    /// The selection dimensions of a record that keeps none (0xef3434 with arguments 5 and 0).
+    fn default_dimensions(&mut self) -> [u16; 3];
 }
 
 /// Image 6's levels per capture profile.
@@ -77,7 +80,29 @@ pub trait ProfileAccess {
     fn profile(&mut self) -> Profile<'_, Self::Records, Self::Entries>;
 }
 
-/// Everything the engine reaches.
-pub trait Ports: Properties + Lens + CaptureProfiles + ProfileLevels + StockMemory + ProfileAccess {}
+/// The blocks of the exposure context that calc reads in place.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InPlace {
+    /// A selection column's subject regions.
+    ColumnRegions(usize),
+    BoundSubjects,
+    BoundSummary,
+    SnapshotSubjects,
+    SnapshotTables,
+}
 
-impl<T: Properties + Lens + CaptureProfiles + ProfileLevels + StockMemory + ProfileAccess> Ports for T {}
+/// Where the composition root placed the exposure context.
+pub trait Placement {
+    fn address(&mut self, block: InPlace) -> SharedAddress;
+}
+
+/// Image 4's settings block 0x914db8.
+pub trait ImageReport {
+    /// The second of the four words 0x740888 reports (+0x38).
+    fn second_report_word(&mut self) -> u32;
+}
+
+/// Everything the engine reaches.
+pub trait Ports: Properties + Lens + LensConfiguration + CaptureProfiles + ProfileLevels + StockMemory + ProfileAccess + Placement + ImageReport {}
+
+impl<T: Properties + Lens + LensConfiguration + CaptureProfiles + ProfileLevels + StockMemory + ProfileAccess + Placement + ImageReport> Ports for T {}

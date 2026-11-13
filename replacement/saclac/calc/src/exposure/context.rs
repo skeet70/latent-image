@@ -3,7 +3,7 @@
 //! modules read back.
 
 use xm1_saclac_interface::calc::SharedAddress;
-use xm1_saclac_interface::exposure::EvaluationRequest;
+use xm1_saclac_interface::exposure::{CorrectionRequest, EvaluationRequest};
 use xm1_saclac_interface::RecordHandle;
 
 use crate::policy::ExposureMode;
@@ -15,6 +15,8 @@ pub const SUBJECT_DETAIL_BYTES: usize = 100;
 pub const SUMMARY_WORDS: usize = 10;
 pub const EVALUATION_AREAS: usize = 8;
 
+/// Calc reads subject lists in place in this layout.
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Subject {
     pub id: u32,
@@ -25,6 +27,7 @@ impl Default for Subject {
     fn default() -> Self { Self { id: 0, detail: [0; SUBJECT_DETAIL_BYTES] } }
 }
 
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SubjectList {
     pub count: u32,
@@ -223,6 +226,7 @@ pub struct ExposureContext {
     pub selection: SelectionBank,
     /// The last evaluation request built for calc (0x3c00).
     pub evaluation: EvaluationRequest,
+    pub correction: CorrectionRequest,
     pub adjustment: Adjustment,
     pub live: bool,
     pub return_mode: u32,

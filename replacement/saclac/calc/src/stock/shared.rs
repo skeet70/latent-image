@@ -40,3 +40,6 @@ pub const fn row_buffers(row: usize) -> [SharedAddress; 2] {
 }
 
 pub const fn column_buffer(row: usize) -> SharedAddress { SharedAddress(0x5ffb_7130 + SLOT_STRIDE * row as u32) }
+
+/// The two buffers the correction request names (0xf69004..0xf69018).
+pub const CORRECTION_BUFFERS: [SharedAddress; 2] = [SharedAddress(0x5ffe_be8c), SharedAddress(0x5ffe_bf0c)];

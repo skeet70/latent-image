@@ -85,3 +85,31 @@ pub const SELECTED_HIGH_OFFSET: Property = Property(0x6c05);
 pub const FIRST_STEP: Property = Property(0x6395);
 /// Two bytes: added to an extended step's value (0xf64518).
 pub const EXTENDED_OFFSET: Property = Property(0x65fd);
+/// Nonzero: the correction request carries the first subject's drive rate (0xf69058).
+pub const CORRECTION_RATE: Property = Property(0x657d);
+
+/// The rate setting the correction request carries (0xf5ecc0).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RateSetting {
+    /// Selection style 4, 5 or 7.
+    Styled,
+    /// Selection kinds 11 to 13.
+    Kinds,
+    /// Selection kinds 11 to 13 with flag bit 1.
+    FlaggedKinds,
+    /// Auxiliary byte 2.
+    AuxiliaryTwo,
+    /// Any other nonzero auxiliary byte.
+    Auxiliary,
+    Default,
+}
+
+pub const fn rate_setting(setting: RateSetting) -> Property {
+    match setting {
+        RateSetting::Styled => Property(0x6512),
+        RateSetting::Kinds => Property(0x6513),
+        RateSetting::FlaggedKinds | RateSetting::Default => Property(0x6516),
+        RateSetting::AuxiliaryTwo => Property(0x6511),
+        RateSetting::Auxiliary => Property(0x6515),
+    }
+}
