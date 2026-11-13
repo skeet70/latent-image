@@ -101,6 +101,8 @@ pub enum Field {
     ResultsCallback,
     /// The diagnostic buffer's address; zero when none.
     DiagnosticBuffer,
+    /// The buffer the pipeline's frame dump is copied into; zero when none.
+    PipelineDumpBuffer,
     // The S1 statistics snapshot's values.
     /// The first entry of the capture-window mode table.
     CaptureWindowMode,
@@ -375,7 +377,8 @@ pub trait StatisticsGeometry {
     /// The measured window after the correction factors `first` and `second` for `class`.
     fn correct_window(&mut self, window: [u16; 3], first: u32, second: u32, class: u32) -> [u16; 3];
     fn linearize(&mut self, value: u32) -> u32;
-    fn reset_default_selection(&mut self);
+    /// Copies the pipeline's policy block and device registers into `buffer`; zero names none.
+    fn dump_pipeline(&mut self, buffer: u32);
 }
 
 /// The adjustment layer's values the statistics configuration carries.

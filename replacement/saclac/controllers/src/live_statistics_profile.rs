@@ -309,7 +309,8 @@ fn report_capture(completion: Parameters<'_>, record: RecordHandle, layers: &mut
     let mut results = [0; RESULTS_BYTES];
     layers.results().read(&mut results);
     if word(completion, 15) == 1 {
-        layers.geometry().reset_default_selection();
+        let buffer = read(layers, record, Field::PipelineDumpBuffer);
+        layers.geometry().dump_pipeline(buffer);
     }
     let ratio = read(layers, record, Field::FormatRatio);
     let mode = read(layers, record, Field::FormatMode);

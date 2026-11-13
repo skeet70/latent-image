@@ -127,7 +127,7 @@ impl StatisticsHelpers for Fake {
 impl StatisticsGeometry for Fake {
     fn correct_window(&mut self, window: [u16; 3], _: u32, _: u32, _: u32) -> [u16; 3] { window }
     fn linearize(&mut self, value: u32) -> u32 { value + 1 }
-    fn reset_default_selection(&mut self) {}
+    fn dump_pipeline(&mut self, _: u32) { panic!("S1 makes no pipeline dump") }
 }
 
 impl S1Values for Fake {
