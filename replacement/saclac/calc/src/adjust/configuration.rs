@@ -126,7 +126,7 @@ pub struct History<T> {
 impl<T: Copy> History<T> {
     pub const fn empty() -> Self { Self { entries: [None; HISTORY] } }
 
-    const fn filled(value: T) -> Self { Self { entries: [Some(value); HISTORY] } }
+    pub(crate) const fn filled(value: T) -> Self { Self { entries: [Some(value); HISTORY] } }
 
     pub fn record(&mut self, value: T) {
         self.entries.copy_within(..HISTORY - 1, 1);
