@@ -148,9 +148,10 @@ fn measurement_geometry_serializes_resource_calibration_and_retained_parameters(
     assert_eq!(stock::img_dc_operation(crate::ImgDcOperation::Request2b), 0x3f2b);
 }
 
-fn lens_bytes(payload: crate::lens::LensPayload, expected: &[u8]) {
+fn lens_bytes(payload: crate::lens::LensPayload, code: u16, expected: &[u8]) {
     let mut bytes = [0xaa; stock::LENS_PAYLOAD_BYTES];
     let request = stock::lens_dc_request(&payload, &mut bytes);
+    assert_eq!(stock::lens_dc_operation(request.operation), code, "{payload:?}");
     assert_eq!(request.parameters.bytes(), expected, "{payload:?}");
 }
 
@@ -159,27 +160,39 @@ fn lens_payloads_carry_the_stock_callback_record_and_words() {
     use crate::lens::{DriveOwner, LensMode, LensPayload as P, PositionStep, ProfileSlotReference, SelectionCode, Setting};
     use crate::ParameterValue as V;
     let record = stock::record_handle_from_a2(0x0169_a000);
-    lens_bytes(P::BringUp { parameters: [V(1), V(2), V(3), V(4), V(5)], record }, &[
+    lens_bytes(P::BringUp { parameters: [V(1), V(2), V(3), V(4), V(5)], record }, 0x4202, &[
         0xf0, 0x50, 0xf1, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 0, 0xa0, 0x69, 1, 4, 0, 0, 0, 5, 0, 0, 0,
     ]);
-    lens_bytes(P::Stop { parameters: [V(7), V(8)], record }, &[
+    lens_bytes(P::Stop { parameters: [V(7), V(8)], record }, 0x4203, &[
         0xc4, 0x50, 0xf1, 0, 7, 0, 0, 0, 8, 0, 0, 0, 0, 0xa0, 0x69, 1,
     ]);
     let slot = ProfileSlotReference(0x8100_1234);
-    lens_bytes(P::Setting { setting: Setting::Request06, slot, mode: LensMode(13) }, &[
+    lens_bytes(P::Setting { setting: Setting::Request04, slot, mode: LensMode(13) }, 0x4204, &[
+        0x50, 0x4b, 0xf1, 0, 0x34, 0x12, 0, 0x81, 13, 0, 0, 0,
+    ]);
+    lens_bytes(P::Setting { setting: Setting::Request05, slot, mode: LensMode(13) }, 0x4205, &[
+        0x8c, 0x4b, 0xf1, 0, 0x34, 0x12, 0, 0x81, 13, 0, 0, 0,
+    ]);
+    lens_bytes(P::Setting { setting: Setting::Request06, slot, mode: LensMode(13) }, 0x4206, &[
         0x14, 0x4b, 0xf1, 0, 0x34, 0x12, 0, 0x81, 13, 0, 0, 0,
     ]);
-    lens_bytes(P::Drive { owner: DriveOwner::S1, parameters: [V(1), V(2), V(3), V(4)], slot }, &[
+    lens_bytes(P::Drive { owner: DriveOwner::Live, parameters: [V(1), V(2), V(3), V(4)], slot }, 0x4207, &[
+        0xe4, 0x4b, 0xf1, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 0x34, 0x12, 0, 0x81,
+    ]);
+    lens_bytes(P::Drive { owner: DriveOwner::S1, parameters: [V(1), V(2), V(3), V(4)], slot }, 0x4207, &[
         0x94, 0x8e, 0xf2, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 0x34, 0x12, 0, 0x81,
     ]);
-    lens_bytes(P::Finish { value: V(9), record }, &[0, 0, 0, 0, 9, 0, 0, 0, 0, 0xa0, 0x69, 1]);
-    lens_bytes(P::Halt, &[]);
-    lens_bytes(P::Release, &[]);
-    lens_bytes(P::Step(PositionStep(-2)), &[
+    lens_bytes(P::Finish { value: V(9), record }, 0x4208, &[0, 0, 0, 0, 9, 0, 0, 0, 0, 0xa0, 0x69, 1]);
+    lens_bytes(P::Halt, 0x4209, &[]);
+    lens_bytes(P::Release, 0x4212, &[]);
+    lens_bytes(P::Step(PositionStep(-2)), 0x420b, &[
         0xc8, 0x4b, 0xf1, 0, 0xfe, 0xff, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0,
     ]);
-    lens_bytes(P::Select { value: V(6), code: SelectionCode::Configured, record }, &[
+    lens_bytes(P::Select { value: V(6), code: SelectionCode::Configured, record }, 0x4211, &[
         0xe4, 0x4a, 0xf1, 0, 6, 0, 0, 0, 12, 0, 0, 0, 0, 0xa0, 0x69, 1,
+    ]);
+    lens_bytes(P::Select { value: V(6), code: SelectionCode::Unconfigured, record }, 0x4211, &[
+        0xe4, 0x4a, 0xf1, 0, 6, 0, 0, 0, 11, 0, 0, 0, 0, 0xa0, 0x69, 1,
     ]);
 }
 
