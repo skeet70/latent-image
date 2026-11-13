@@ -1,4 +1,5 @@
 use crate::acquisition::Branch;
+use crate::acquisition::ports::ReleasedResult;
 use crate::fakes::{AcquisitionTraffic, Outbound, Ports, Published};
 use crate::image::{ChannelCount, LensReport};
 use crate::lanes::Selection;
@@ -121,7 +122,7 @@ fn a_round_submits_window_and_primary_acquisition_and_collects_their_results() {
     let result = xm1_saclac_interface::calc::SharedAddress(0x0169_0000);
     fake.acquisition.acquisition_result = Some(xm1_saclac_interface::round_acquisition::AcquisitionResult { address: result, ..Default::default() });
     assert_eq!(measurement.handle(completion(Completion::Calculation87), &mut fake), ChildOutcome::Pending);
-    assert!(fake.take().contains(&Outbound::Acquisition(AcquisitionTraffic::Released(result))));
+    assert!(fake.take().contains(&Outbound::Acquisition(AcquisitionTraffic::Released(ReleasedResult::Acquisition(result)))));
     assert_eq!(fake.acquisition.block.collected, 1);
 }
 
