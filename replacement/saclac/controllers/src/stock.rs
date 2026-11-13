@@ -550,6 +550,31 @@ pub const SELECTION_TAKEN: StockCallbackWord = StockCallbackWord(0xf3a7bc);
 pub const RESULTS_READY: StockCallbackWord = StockCallbackWord(0xf3a794);
 pub const COMMAND24_DONE: StockCallbackWord = StockCallbackWord(0xf3a768);
 
+/// The S1 statistics configuration's completion entries, 0xf226cc..0xf227f8. 0xf226cc is empty;
+/// 0xf22928 posts 0x58 only while 0x16b5a40+0x6c is clear and 0xf22730 posts 0x7f only while
+/// +0x74 is clear.
+pub const S1_IMAGING_CONFIGURED: StockCallbackWord = StockCallbackWord(0xf227c0);
+pub const S1_IMAGING_ENDED: StockCallbackWord = StockCallbackWord(0xf22928);
+pub const S1_IMAGING_REPORTED: StockCallbackWord = StockCallbackWord(0xf22794);
+pub const S1_IMAGING_RELEASED: StockCallbackWord = StockCallbackWord(0xf226cc);
+pub const S1_STARTED: StockCallbackWord = StockCallbackWord(0xf227f8);
+pub const S1_STOPPED: StockCallbackWord = StockCallbackWord(0xf227dc);
+pub const S1_SELECTED: StockCallbackWord = StockCallbackWord(0xf2276c);
+pub const S1_RESULTS_READY: StockCallbackWord = StockCallbackWord(0xf22730);
+pub const S1_RETUNED: StockCallbackWord = StockCallbackWord(0xf22708);
+pub const S1_OUTPUT_CONFIGURED: StockCallbackWord = StockCallbackWord(0xf226e0);
+
+/// 0xfeaa64 and 0xfeaaa4 return their post's status; machine 17 drops it.
+pub fn post_imaging(
+    payload: &xm1_saclac_interface::imaging::ImagingPayload,
+    completions: &[xm1_saclac_interface::Completion],
+    imgdc: &mut impl xm1_saclac_interface::ImgDc,
+) {
+    let (operation, message) = xm1_saclac_interface::stock::imaging::imaging_payload(payload);
+    let request = xm1_saclac_interface::ImgDcRequest { operation, parameters: xm1_saclac_interface::stock::parameters(message.bytes()), completions };
+    let _ = imgdc.request(request);
+}
+
 /// Encodes one of the live statistics configuration's requests and posts it to the statistics
 /// task.
 pub fn statistics_request(payload: &xm1_saclac_interface::statistics::StatisticsPayload, statistics: &mut impl xm1_saclac_interface::Statistics) {

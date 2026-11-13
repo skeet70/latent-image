@@ -100,6 +100,28 @@ pub enum Field {
     ResultsCallback,
     /// The diagnostic buffer's address; zero when none.
     DiagnosticBuffer,
+    // The S1 statistics snapshot's values.
+    /// The first entry of the capture-window mode table.
+    CaptureWindowMode,
+    SpanMode,
+    SpanSet,
+    Level,
+    Adjusted,
+    LinearLevel,
+    LensWord,
+    Step,
+    StepLimit,
+    StepMode,
+    ExposureWord,
+    ExposureOffset,
+    ViewByte,
+    WindowFirst,
+    WindowSecond,
+    WindowThird,
+    WindowFourth,
+    WindowMode,
+    /// Written 0 at the S1 snapshot and 1 when the S1 results are delivered.
+    ResultsTaken,
 }
 
 /// A profile word block the controllers copy whole.
@@ -114,6 +136,20 @@ pub enum Block {
     AuxiliaryWindow,
     /// Four words.
     SelectionRange,
+    /// 26 words; words 4 and 5 are spans the profile fixes.
+    Spans,
+    /// Two words.
+    Classes,
+    /// Six bytes in two words.
+    WindowBytes,
+    /// 12 words.
+    ReleaseRange,
+    /// 7 words.
+    Options,
+    /// Two halfwords: the lens target position and its steps.
+    LensTarget,
+    /// 33 words.
+    Release,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -336,4 +372,42 @@ pub trait Results {
     fn read(&mut self, out: &mut [u8; xm1_saclac_interface::statistics::RESULTS_BYTES]);
     /// Enters `callback` with the results.
     fn deliver(&mut self, callback: xm1_saclac_interface::ClientCallback);
+}
+
+/// The measurement-window inputs the S1 snapshot hands the calc chain that corrects them.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct WindowInputs {
+    pub scene: u32,
+    pub words: [u32; 5],
+    pub bytes: [u8; 6],
+    pub lens: u32,
+    pub mode: u16,
+    /// `None` when the shared block has no measured window.
+    pub measured: Option<[u16; 3]>,
+    pub factors: [u32; 2],
+    pub class: u32,
+}
+
+/// The corrected measurement window and the extent the calc chain reports.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CorrectedWindow { pub window: [u16; 3], pub extent: u32 }
+
+/// Values the S1 statistics configuration takes from layers beside the profile record.
+pub trait S1Values {
+    /// The profile's descriptor for `value`.
+    fn descriptor(&mut self, record: RecordHandle, value: u32) -> u32;
+    fn lens_value(&mut self) -> u32;
+    fn refresh(&mut self, record: RecordHandle) -> u32;
+    /// The imaging curve from its eleven inputs in stock's argument order.
+    fn curve(&mut self, inputs: [u32; 11]) -> u32;
+    fn stop_curve(&mut self, stop_mode: u32) -> u32;
+    fn unselected_view(&mut self, record: RecordHandle) -> u32;
+    fn span(&mut self, record: RecordHandle) -> u32;
+    fn unselected(&mut self, record: RecordHandle) -> u32;
+    fn corrected_window(&mut self, inputs: &WindowInputs) -> CorrectedWindow;
+    /// The lens target's step count for `position` and two release-range words.
+    fn release_steps(&mut self, position: i16, first: u32, second: u32) -> u16;
+    /// Records the snapshot in the diagnostic trace (operation 0x07000000).
+    fn trace_snapshot(&mut self);
+    fn release_channel(&mut self);
 }
