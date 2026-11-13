@@ -5,7 +5,7 @@
 //! 0xf1ee10, 0xf1fc08); the owned callbacks carry them as the posted payload instead.
 
 use crate::calc::SharedAddress;
-use crate::exposure::{Correction, Evaluation, EvaluationRequest, MeasuredEntry, ReleaseStatus, StatisticsRequest, CORRECTION_HALVES, EVALUATION_BYTES};
+use crate::exposure::{Correction, CorrectionRequest, Evaluation, EvaluationRequest, MeasuredEntry, ReleaseStatus, StatisticsRequest, CORRECTION_HALVES, EVALUATION_BYTES};
 use crate::stock::StockCallbackWord;
 
 pub const STATISTICS_REQUEST_BYTES: usize = 220;
@@ -129,6 +129,70 @@ pub fn evaluation_request(request: &EvaluationRequest, callback: StockCallbackWo
     }
     for (index, dimension) in request.dimensions.iter().enumerate() {
         half(4 + 0x58 + 2 * index, *dimension);
+    }
+    bytes
+}
+
+pub const CORRECTION_REQUEST_BYTES: usize = 232;
+const CORRECTION_BLOCK: usize = 4;
+const CORRECTION_TAIL: usize = CORRECTION_BLOCK + 168;
+
+/// 0xf5ff88 posts calc 0x3c01 with the callback, the 168-byte block at context +0x1070 from byte 4
+/// and the 12-byte block at +0x1118 from byte 0xac; stock leaves bytes 0xb8.. unwritten (stack).
+/// 0xf68db8 fills both blocks; it never writes block bytes 0x0e, 0x45..0x48, 0x5e, 0xa6 and 0xa7,
+/// which the preparation 0xf613bc clears.
+pub fn correction_request(request: &CorrectionRequest, callback: StockCallbackWord) -> [u8; CORRECTION_REQUEST_BYTES] {
+    let mut bytes = [0; CORRECTION_REQUEST_BYTES];
+    let address = |at: Option<SharedAddress>| at.map_or(0, |at| at.0);
+    bytes[..4].copy_from_slice(&callback.0.to_le_bytes());
+    let block = &mut bytes[CORRECTION_BLOCK..CORRECTION_TAIL];
+    let mut word = |offset: usize, value: u32| block[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    word(0x00, request.style);
+    word(0x04, request.measurement_selection);
+    word(0x08, request.selection_kind);
+    word(0x10, request.record_kind);
+    word(0x14, request.lens_reference);
+    word(0x18, request.record_44);
+    word(0x1c, request.selection_auxiliary);
+    word(0x20, request.focus_class);
+    word(0x24, request.record_32);
+    word(0x28, request.record_3e);
+    word(0x2c, request.variant);
+    word(0x30, request.image_word);
+    word(0x34, request.rate);
+    for (index, list_word) in request.list_words.iter().enumerate() {
+        word(0x38 + 4 * index, *list_word);
+    }
+    for (index, curve) in request.level_curves.iter().enumerate() {
+        word(0x48 + 4 * index, address(*curve));
+    }
+    word(0x60, request.curve_table);
+    word(0x68, request.ratio[0]);
+    word(0x6c, request.ratio[1]);
+    word(0x70, u32::from(request.second_step));
+    word(0x74, u32::from(request.treated));
+    word(0x78, u32::from(request.first_treatment));
+    word(0x7c, address(request.subjects));
+    word(0x80, address(request.summary));
+    word(0x84, request.list_word);
+    for (index, curve) in request.subject_curves.iter().enumerate() {
+        word(0x88 + 4 * index, address(*curve));
+    }
+    word(0x98, request.header_61);
+    word(0x9c, request.header_47);
+    word(0xa0, u32::from(request.unmeasured));
+    let mut half = |offset: usize, value: u16| block[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    half(0x0c, request.selection_flags);
+    half(0x58, request.start);
+    half(0x5a, request.start_above_target);
+    half(0x5c, request.reference_offset);
+    half(0x64, request.rate_setting);
+    half(0x66, request.reference);
+    half(0xa4, request.record_20 as u16);
+    block[0x44] = request.list_byte;
+    let tail = &mut bytes[CORRECTION_TAIL..CORRECTION_TAIL + 12];
+    for (index, at) in [request.buffers[0], request.buffers[1], request.frame].into_iter().enumerate() {
+        tail[4 * index..4 * index + 4].copy_from_slice(&address(at).to_le_bytes());
     }
     bytes
 }

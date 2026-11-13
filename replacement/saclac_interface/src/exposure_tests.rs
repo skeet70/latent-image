@@ -1,5 +1,7 @@
 use crate::calc::SharedAddress;
-use crate::exposure::{Correction, EvaluationRequest, MeasuredEntry, ReleaseStatus, StatisticsRequest, CORRECTION_HALVES};
+use crate::calc::CalcPayload;
+use crate::exposure::{Correction, CorrectionRequest, EvaluationRequest, MeasuredEntry, ReleaseStatus, StatisticsRequest, CORRECTION_HALVES};
+use crate::CalcOperation;
 use crate::stock::exposure::*;
 use crate::stock::StockCallbackWord;
 
@@ -99,4 +101,66 @@ fn evaluation_request_places_the_block_after_the_callback_and_the_addresses_afte
     assert_eq!((half(0x5c), word(&bytes, 0x64)), (11, 0x17));
     assert_eq!((word(&bytes, 0x68), word(&bytes, 0x78), word(&bytes, 0x7c), word(&bytes, 0x90)), (0x5ffb_ece0, 0x5ffb_f530, 0, 0x5ffc_0130));
     assert!(bytes[0x94..].iter().all(|byte| *byte == 0));
+}
+
+#[test]
+fn correction_request_places_the_block_after_the_callback_and_the_buffers_after_the_block() {
+    let address = |at: u32| Some(SharedAddress(at));
+    let request = CorrectionRequest {
+        style: 2,
+        measurement_selection: 1,
+        selection_kind: 0x0b,
+        selection_flags: 0x1234,
+        record_kind: 6,
+        record_44: 7,
+        focus_class: 8,
+        record_32: 9,
+        record_3e: 10,
+        variant: 11,
+        lens_reference: 0x55,
+        selection_auxiliary: 12,
+        image_word: 0xabcd,
+        rate: 40,
+        list_words: [13, 14, 15],
+        list_byte: 16,
+        list_word: 17,
+        level_curves: [address(0x5ffb_ece0), address(0x5ffb_eee0), address(0x5ffb_f0e0), address(0x5ffb_f2e0)],
+        start: 520,
+        start_above_target: 20,
+        reference_offset: -3i16 as u16,
+        curve_table: 0x6431,
+        rate_setting: 18,
+        reference: 790,
+        ratio: [3, 4],
+        second_step: true,
+        treated: true,
+        first_treatment: false,
+        subjects: address(0x016b_3e1c),
+        summary: address(0x016b_4230),
+        subject_curves: [address(0x5ffb_f4e0), address(0x5ffb_f4f4), address(0x5ffb_f508), address(0x5ffb_f51c)],
+        header_61: 1,
+        header_47: 5,
+        unmeasured: true,
+        record_20: -2,
+        buffers: [address(0x5ffe_be8c), address(0x5ffe_bf0c)],
+        frame: address(0x4000_0000),
+    };
+    let (operation, message) = super::stock::calc_payload(&CalcPayload::Correction { request, callback: StockCallbackWord(0x00f1_fc08) });
+    assert_eq!((operation, message.bytes().len()), (CalcOperation::Request01, CORRECTION_REQUEST_BYTES));
+    let bytes = message.bytes();
+    let block = |offset: usize| word(bytes, 4 + offset);
+    let half = |offset: usize| u16::from_le_bytes([bytes[4 + offset], bytes[5 + offset]]);
+    assert_eq!(word(bytes, 0), 0x00f1_fc08);
+    assert_eq!([block(0), block(4), block(8), u32::from(half(0x0c)), block(0x10), block(0x14), block(0x18), block(0x1c)], [2, 1, 0x0b, 0x1234, 6, 0x55, 7, 12]);
+    assert_eq!([block(0x20), block(0x24), block(0x28), block(0x2c), block(0x30), block(0x34)], [8, 9, 10, 11, 0xabcd, 40]);
+    assert_eq!([block(0x38), block(0x3c), block(0x40), u32::from(bytes[4 + 0x44]), block(0x48), block(0x54)], [13, 14, 15, 16, 0x5ffb_ece0, 0x5ffb_f2e0]);
+    assert_eq!([half(0x58), half(0x5a), half(0x5c), half(0x64), half(0x66)], [520, 20, -3i16 as u16, 18, 790]);
+    assert_eq!([block(0x60), block(0x68), block(0x6c), block(0x70), block(0x74), block(0x78)], [0x6431, 3, 4, 1, 1, 0]);
+    assert_eq!([block(0x7c), block(0x80), block(0x84), block(0x88), block(0x94)], [0x016b_3e1c, 0x016b_4230, 17, 0x5ffb_f4e0, 0x5ffb_f51c]);
+    assert_eq!([block(0x98), block(0x9c), block(0xa0), u32::from(half(0xa4))], [1, 5, 1, -2i16 as u16 as u32]);
+    assert_eq!([word(bytes, 0xac), word(bytes, 0xb0), word(bytes, 0xb4)], [0x5ffe_be8c, 0x5ffe_bf0c, 0x4000_0000]);
+    for unwritten in [0x0e, 0x0f, 0x45, 0x46, 0x47, 0x5e, 0x5f, 0xa6, 0xa7] {
+        assert_eq!(bytes[4 + unwritten], 0, "block byte {unwritten:#x}");
+    }
+    assert!(bytes[0xb8..].iter().all(|byte| *byte == 0));
 }
