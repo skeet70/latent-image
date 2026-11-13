@@ -80,10 +80,10 @@ pub fn setting_overrides(parameters: &SettingParameters, mut read: impl FnMut(Cl
     SettingOverrides { selector: u32::from_le_bytes(selector), words: parameters.words, window, option: option[0] }
 }
 
-/// The 0x85 payload (0xf2903c): the status word, then the words the record keeps (0x7585dc
-/// stores four of them at 0xf2a1e4).
+/// The 0x85 and 0x7d payloads (0xf2903c, 0xf2cad8): the status word, then the five words the
+/// record keeps (0x7585dc copies 20 bytes).
 pub fn setting_result(payload: &[u8]) -> Option<SettingResult> {
-    let mut words = [0; 4];
+    let mut words = [0; 5];
     for (index, slot) in words.iter_mut().enumerate() {
         *slot = word(payload, 4 + 4 * index)?;
     }

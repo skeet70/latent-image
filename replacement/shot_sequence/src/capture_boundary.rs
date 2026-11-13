@@ -175,7 +175,7 @@ pub struct AreaReference(pub [u32; 10]);
 
 /// The words a setting completion returns and the record keeps.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct SettingResult(pub [u32; 4]);
+pub struct SettingResult(pub [u32; 5]);
 
 /// The image-4 record layer. A refused write is not observed.
 pub trait CaptureRecords {

@@ -55,7 +55,7 @@ impl CaptureControl {
             record: None,
             held: false,
             secondary_pending: false,
-            setting_result: SettingResult([0; 4]),
+            setting_result: SettingResult([0; 5]),
             setting_template: StatisticsSetting::from_bytes([0; StatisticsSetting::BYTES]),
         }
     }

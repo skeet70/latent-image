@@ -60,7 +60,7 @@ fn committing_a_setting_stores_what_its_completion_delivered() {
     control.receive(Completed { completion: Completion::Statistics85, parameters: stock::parameters(&payload) });
     control.receive(Completed { completion: Completion::Statistics83, parameters: stock::parameters(&[9; 24]) });
     control.commit_setting(&mut fake);
-    assert_eq!(fake.calls, std::vec![Call::StoreSettingResult(record(), SettingResult([2, 3, 4, 5])), Call::RefreshSetting]);
+    assert_eq!(fake.calls, std::vec![Call::StoreSettingResult(record(), SettingResult([2, 3, 4, 5, 6])), Call::RefreshSetting]);
 }
 
 #[test]
