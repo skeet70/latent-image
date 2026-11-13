@@ -172,6 +172,21 @@ fn selection_and_command24_requests() {
 }
 
 #[test]
+fn capture_report_surrounds_the_dimensions_with_the_completion_and_ends_with_the_results() {
+    use crate::stock::statistics::{capture_report, CAPTURE_REPORT_BYTES};
+    let completion: [u8; 64] = core::array::from_fn(|index| index as u8);
+    let results: [u8; RESULTS_BYTES] = core::array::from_fn(|index| (index % 251) as u8);
+    let bytes = capture_report(&CaptureReport { ratio: 0x0004_0003, dimensions: [640, 480], completion: &completion, results: &results });
+    assert_eq!(bytes.len(), CAPTURE_REPORT_BYTES);
+    assert_eq!((word(&bytes, 0), word(&bytes, 4), word(&bytes, 8)), (0x0004_0003, 640, 480));
+    assert_eq!(&bytes[12..24], &completion[4..16]);
+    assert_eq!((word(&bytes, 24), word(&bytes, 28)), (960, 640));
+    assert_eq!(&bytes[32..36], &completion[16..20]);
+    assert_eq!(&bytes[36..76], &completion[20..60]);
+    assert_eq!(&bytes[76..], &results[..]);
+}
+
+#[test]
 fn overrides_replace_their_fields_and_keep_the_rest_of_the_record() {
     let mut bytes = [0u8; StatisticsSetting::BYTES];
     for (index, byte) in bytes.iter_mut().enumerate() {

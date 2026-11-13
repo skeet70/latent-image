@@ -185,3 +185,24 @@ fn block_then_callback(block: &[u32; 4], callback: crate::stock::StockCallbackWo
     message.word(16, callback.0);
     message
 }
+
+pub const CAPTURE_REPORT_BYTES: usize = 76 + RESULTS_BYTES;
+
+/// The record 0xf3b460..0xf3b55c builds on its stack and passes to Command09's client with status
+/// 17: completion 0x79's payload bytes 4..20 and 20..60 around the format's dimensions, then the
+/// results.
+pub fn capture_report(report: &CaptureReport<'_>) -> [u8; CAPTURE_REPORT_BYTES] {
+    let mut bytes = [0; CAPTURE_REPORT_BYTES];
+    let mut put = |offset: usize, value: &[u8]| bytes[offset..offset + value.len()].copy_from_slice(value);
+    let completion = |range: core::ops::Range<usize>| report.completion.get(range).unwrap_or(&[]);
+    put(0, &report.ratio.to_le_bytes());
+    put(4, &report.dimensions[0].to_le_bytes());
+    put(8, &report.dimensions[1].to_le_bytes());
+    put(12, completion(4..16));
+    put(24, &report.dimensions[1].wrapping_shl(1).to_le_bytes());
+    put(28, &report.dimensions[0].to_le_bytes());
+    put(32, completion(16..20));
+    put(36, completion(20..60));
+    put(76, report.results);
+    bytes
+}
