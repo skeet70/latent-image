@@ -79,7 +79,8 @@ impl Acquisition {
                 Ok(Outcome::Complete)
             }
             (Stage::Disabled, Control::Stop) => Ok(Outcome::Complete),
-            (Stage::Disabled, Control::Primary | Control::Secondary) => Ok(Outcome::NoWork),
+            (Stage::Disabled, Control::Primary | Control::Secondary) if self.branch == Branch::Live => Ok(Outcome::NoWork),
+            (Stage::Disabled, Control::Primary) => Ok(Outcome::Ignored),
             (Stage::Ready, Control::Stop) => {
                 work.effect(self.branch, Effect::Release);
                 self.stage = Stage::Disabled;

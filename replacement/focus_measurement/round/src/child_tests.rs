@@ -38,6 +38,16 @@ fn invalid_initialization_faults_without_submitting_a_job() {
 }
 
 #[test]
+fn a_start_before_initialization_answers_zero_without_work_or_a_fault() {
+    let record = stock::record_handle_from_a2(1);
+    let mut acquisition = S1Acquisition::new();
+    let mut ports = Ports::new(None, ());
+    assert_eq!(acquisition.handle(control(AcquisitionControl::Start, record), &mut ports), ChildOutcome::Fault);
+    assert!(ports.take().is_empty());
+    assert_eq!(ports.faults, 0);
+}
+
+#[test]
 fn unrelated_completion_keeps_the_retained_round_status() {
     let record = stock::record_handle_from_a2(1);
     let mut acquisition = S1Acquisition::new();
