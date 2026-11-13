@@ -38,7 +38,7 @@ fn a_short_drive_ramps_up_and_down_without_cruising() {
     assert_eq!(profile.first, Ramp { speed: 2000, acceleration: 100_000, distance: 20, duration: 20_000 });
     assert_eq!(profile.second, Ramp { speed: 3464, acceleration: 50_000, distance: 80, duration: 29_282 });
     assert_eq!((profile.cruise_distance, profile.cruise_duration), (0, 0));
-    assert_eq!(bench.kinds, [KIND; 3]);
+    assert_eq!(bench.kinds, [(KIND, DriveMode::MEASUREMENT); 3]);
     assert_eq!(profile.position_at(0), 100);
     assert_eq!(profile.position_at(20_000), 120);
     assert_eq!(profile.position_at(total(&profile) as i32), 300);
