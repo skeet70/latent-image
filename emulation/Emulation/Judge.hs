@@ -22,8 +22,13 @@
 -- A cutover report may instead declare a milestone: both sides reach the
 -- observation at the declared index, the observations are equal through it,
 -- and after it the stock tail is a prefix of the owned tail. That relation
--- is the verdict @equal-up-to-milestone@, never @equal@; a report that
--- declares no milestone cannot receive it.
+-- is the verdict @equal-up-to-milestone@, never @equal@.
+--
+-- An interface-stream report may declare channels instead of one observation
+-- sequence. Its verdict then compares each channel's events in order and the
+-- declared causal pairs; the order between channels is not compared. The
+-- first failing channel event is carried in 'verdictChannelDifference' and
+-- the first failing declared pair in 'verdictCausalViolation'.
 module Emulation.Judge
   ( -- * Stock-side evidence
     StockEvidence (..)
@@ -66,6 +71,13 @@ import qualified Data.Set as S
 import qualified Data.Text as T
 import Data.Word (Word32, Word64)
 import Emulation.NativeObservation (parseWord32)
+import Emulation.InterfaceStream
+  ( CausalViolation (..)
+  , ChannelDifference (..)
+  , Selector (..)
+  , channelNameText
+  , occurrenceIndex
+  )
 import Emulation.SuiteAudit (MissingEntry (..), parseAddress, word32Hex)
 import FujiAF.Host (get, list, num, str)
 import System.Exit (ExitCode (..))
@@ -381,11 +393,13 @@ data Verdict = Verdict
   , verdictReasons :: [String]
   , verdictMilestone :: Maybe Milestone
   , verdictFirstDifference :: Maybe FirstDifference
+  , verdictChannelDifference :: Maybe ChannelDifference
+  , verdictCausalViolation :: Maybe CausalViolation
   } deriving (Eq, Show)
 
 -- | Bumped when the rule changes; the verdict document names it.
 judgeVersion :: String
-judgeVersion = "3"
+judgeVersion = "4"
 
 judgeReport :: JudgeInput -> Report -> Verdict
 judgeReport input report =
@@ -444,6 +458,8 @@ judgeReport input report =
       , verdictReasons = []
       , verdictMilestone = Nothing
       , verdictFirstDifference = Nothing
+      , verdictChannelDifference = Nothing
+      , verdictCausalViolation = Nothing
       }
 
 -- | The first observation at which the milestone relation fails, or
@@ -556,6 +572,13 @@ verdictText verdict =
     ++ maybe "" (\milestone -> " milestone " ++ milestoneName milestone
         ++ " at observation " ++ show (observationIndex (milestoneMark milestone))) (verdictMilestone verdict)
     ++ maybe "" (\difference -> " first-difference " ++ differenceText difference) (verdictFirstDifference verdict)
+    ++ maybe "" (\difference -> " channel-difference "
+        ++ T.unpack (channelNameText (differenceChannel difference))
+        ++ " occurrence " ++ show (occurrenceIndex (differenceOccurrence difference))
+        ++ " stock " ++ maybe "absent" valueText (differenceChannelStock difference)
+        ++ " owned " ++ maybe "absent" valueText (differenceChannelOwned difference)) (verdictChannelDifference verdict)
+    ++ maybe "" (\violation -> " causal-violation observation " ++ show (violationObservation violation)
+        ++ ": " ++ violationReason violation) (verdictCausalViolation verdict)
 
 milestoneJson :: Milestone -> Value
 milestoneJson milestone = object
@@ -570,13 +593,35 @@ differenceText difference =
     ++ " owned " ++ maybe "absent" observationText (differenceOwned difference)
 
 observationText :: Observation -> String
-observationText observation = take 200 (BL8.unpack (encode (observationValue observation)))
+observationText observation = valueText (observationValue observation)
+
+valueText :: Value -> String
+valueText value = take 200 (BL8.unpack (encode value))
 
 firstDifferenceJson :: FirstDifference -> Value
 firstDifferenceJson difference = object
   [ ("observation", toJSON (observationIndex (differenceAt difference)))
   , ("stock", maybe Null observationValue (differenceStock difference))
   , ("owned", maybe Null observationValue (differenceOwned difference))
+  ]
+
+selectorJson :: Selector -> Value
+selectorJson (Selector fields) = Object fields
+
+channelDifferenceJson :: ChannelDifference -> Value
+channelDifferenceJson difference = object
+  [ ("channel", toJSON (channelNameText (differenceChannel difference)))
+  , ("occurrence", toJSON (occurrenceIndex (differenceOccurrence difference)))
+  , ("stock", maybe Null id (differenceChannelStock difference))
+  , ("owned", maybe Null id (differenceChannelOwned difference))
+  ]
+
+causalViolationJson :: CausalViolation -> Value
+causalViolationJson violation = object
+  [ ("observation", toJSON (violationObservation violation))
+  , ("first", selectorJson (violationFirst violation))
+  , ("then", selectorJson (violationThen violation))
+  , ("reason", toJSON (violationReason violation))
   ]
 
 verdictJson :: Verdict -> Value
@@ -602,6 +647,8 @@ verdictJson verdict = object
   , ("reasons", toJSON (verdictReasons verdict))
   , ("milestone", maybe Null milestoneJson (verdictMilestone verdict))
   , ("first_difference", maybe Null firstDifferenceJson (verdictFirstDifference verdict))
+  , ("channel_difference", maybe Null channelDifferenceJson (verdictChannelDifference verdict))
+  , ("causal_violation", maybe Null causalViolationJson (verdictCausalViolation verdict))
   ]
 
 -- | Only @equal@ is a pass. A @no-verdict@ and a @not-run@ are never reported
