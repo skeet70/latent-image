@@ -1,8 +1,9 @@
 {-# LANGUAGE GHC2021 #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Channels, selectors and declared orderings of an interface stream, and
--- the two ways the declared stream relation can fail.
+-- | Channels, selectors and declared orderings of an interface stream, the
+-- two ways the declared stream relation can fail, and the tail tolerance each
+-- channel was judged under.
 module Emulation.InterfaceStream
   ( ChannelName (..)
   , Occurrence (..)
@@ -10,6 +11,8 @@ module Emulation.InterfaceStream
   , matchesSelector
   , ChannelDifference (..)
   , CausalViolation (..)
+  , AllowanceBasis (..)
+  , ChannelTolerance (..)
   ) where
 
 import Control.Monad (unless)
@@ -59,10 +62,30 @@ data ChannelDifference = ChannelDifference
   } deriving (Eq, Show)
 
 -- | A declared causal pair a stream does not satisfy: the observation that
--- matches the pair's second selector has no earlier event matching its first.
+-- matches the pair's second selector has no earlier event matching its first
+-- that an earlier second-selector event has not already consumed.
 data CausalViolation = CausalViolation
   { violationObservation :: Int
   , violationFirst :: Selector
   , violationThen :: Selector
   , violationReason :: String
+  } deriving (Eq, Show)
+
+-- | Where a channel's tail allowance comes from.
+data AllowanceBasis
+  = NoMilestone
+  | OrderedDefault
+  | TimeDrivenDefault
+  | DeclaredAllowance T.Text
+  deriving (Eq, Show)
+
+-- | The number of events by which one side of a channel may exceed the other
+-- at the end milestone, why, and each side's count of events on the channel.
+data ChannelTolerance = ChannelTolerance
+  { toleranceChannel :: ChannelName
+  , toleranceTimeDriven :: Bool
+  , toleranceAllowance :: Int
+  , toleranceBasis :: AllowanceBasis
+  , toleranceStockEvents :: Int
+  , toleranceOwnedEvents :: Int
   } deriving (Eq, Show)
