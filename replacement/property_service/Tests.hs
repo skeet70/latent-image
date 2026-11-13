@@ -491,6 +491,54 @@ walkerTests = do
   -- P3-14: a function the probe cannot walk refuses the artifact.
   refusedBy "a probe walk that cannot bound a store offset refuses the artifact" 0x1000 FrameOffsetUnbounded
     (walk [0xe7801002, 0xe12fff1e])
+  -- P1-1: a counter that reaches only a guard is not keyed, so the guard keeps both paths.
+  refusedBy "a counter that reaches a guard is not merged at a join" 0x1048 FrameArgumentExceeded
+    (walkFrames 0xe28d0008
+      [ 0xe3520000, 0x0a00000a, 0xe3530000, 0x0a000001, 0xe3a06001, 0xea000000, 0xe3a06000
+      , 0xe1a01006, 0xe3510000, 0x0a000001, 0xe2800040, 0xe5802000, 0xe12fff1e, 0xe2400040, 0xeafffffa ])
+  -- P2-2: the r4-r10 proof runs over callees, not only over a function's own instructions.
+  refusedBy "a callee one call away that drops r4 drops the caller's alias" 0x1010 NonStackStore
+    (walkFunctions []
+      [ [0xe92d4010, 0xe24dd008, 0xe1a0400d, 0xeb000002, 0xe5840000, 0xe28dd008, 0xe8bd8010]
+      , [0xe92d4800, 0xeb000000, 0xe8bd8800]
+      , [0xe3a04000, 0xe12fff1e] ])
+  refusedBy "a tail callee that drops r4 drops the caller's alias" 0x1010 NonStackStore
+    (walkFunctions []
+      [ [0xe92d4010, 0xe24dd008, 0xe1a0400d, 0xeb000002, 0xe5840000, 0xe28dd008, 0xe8bd8010]
+      , [0xeaffffff]
+      , [0xe3a04000, 0xe12fff1e] ])
+  -- P2-3: a counter is kept only while it is the 32-bit register value.
+  refusedBy "a counter outside 32-bit range refines no guard" 0x103c FrameOffsetUnbounded
+    (walkFrames 0xe28d0008
+      [ 0xe3530000, 0x0a000005, 0xe3a0247f, 0xe282247f, 0xe282247f, 0xe2800040
+      , 0xe352047e, 0x2a000000, 0xe7801002, 0xe12fff1e ])
+  -- P2-4: the same bound ends a counting loop the walk cannot otherwise key away. The
+  -- counter is dropped at the bound, so the store it reaches has no offset proof.
+  refusedBy "an unguarded counting loop reaches a finite proof" 0x1030 FrameOffsetUnbounded
+    (walkFrames 0xe28d0008
+      [0xe3a05000, 0xe2855001, 0xe3530000, 0x1afffffc, 0xe1a02005, 0xe7801002, 0xe12fff1e])
+  -- P2-4: a caller alias past the bound is dropped, so the loop's exits are walked and the
+  -- store they reach has no base proof.
+  refusedBy "a caller-alias pointer loop reaches a finite proof" 0x1028 NonStackStore
+    (walkFrames 0xe28d0008 [0xe2800004, 0xe3500000, 0x1afffffc, 0xe5801000, 0xe12fff1e])
+  -- P2-5: an object that starts inside a stack-argument word covers it.
+  refusedBy "an object starting inside a stack-argument word is not passed" 0x1014 FrameArgumentExceeded
+    (walkFunctions []
+      [ [0xe92d4800, 0xe24dd010, 0xe28d0002, 0xe28d1008, 0xe58d1000, 0xeb000001, 0xe28dd010, 0xe8bd8800]
+      , [0xe1c020b0, 0xe59d3000, 0xe5832000, 0xe12fff1e] ])
+  -- P3-6: rules the earlier tests reach only where the rule makes no difference.
+  refusedBy "STMDA writeback moves the base below the frame it stored" 0x100c NonStackStore
+    (walk [0xe24dd010, 0xe28d0008, 0xe820000e, 0xe5801000, 0xe28dd010, 0xe12fff1e])
+  admitted "a writeback multiple load moves its local alias"
+    [0xe24dd030, 0xe1a0000d, 0xe8b00006, 0xe5803000, 0xe28dd030, 0xe12fff1e]
+  admitted "a writeback multiple load reads above entry sp"
+    [0xe1a0000d, 0xe8b00006, 0xe12fff1e]
+  refused "a writeback multiple load with its base in the list"
+    0x1008 NonStackStore [0xe24dd030, 0xe1a0000d, 0xe8b00003, 0xe12fff1e]
+  refusedBy "an unsigned guard on a negative counter keeps its fallthrough" 0x102c FrameArgumentExceeded
+    (walkFrames 0xe28d0008 [0xe3a02000, 0xe2422001, 0xe3520001, 0x3a000000, 0xe7801002, 0xe12fff1e])
+  refusedBy "a CMN guard keeps its fallthrough" 0x1028 FrameArgumentExceeded
+    (walkFrames 0xe28d0008 [0xe3a02008, 0xe3720000, 0x2a000000, 0xe7801002, 0xe12fff1e])
 
 literalPoolTests :: IO ()
 literalPoolTests = do
