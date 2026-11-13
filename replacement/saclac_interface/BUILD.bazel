@@ -22,6 +22,7 @@ SOURCES = [
     "src/stock/pipeline.rs",
     "src/stock/search.rs",
     "src/stock/shared.rs",
+    "src/stock/statistics.rs",
 ]
 
 xm1_rust_rlib(

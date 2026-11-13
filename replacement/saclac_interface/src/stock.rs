@@ -7,6 +7,7 @@ pub mod exposure;
 pub mod pipeline;
 pub mod search;
 pub mod shared;
+pub mod statistics;
 
 pub const fn record_handle_from_a2(word: u32) -> RecordHandle { RecordHandle(word) }
 
@@ -627,14 +628,15 @@ pub fn calc_operation(operation: CalcOperation) -> u16 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StockCallbackWord(pub u32);
 
-/// One calc or calc1 message as the peer receives it. Bytes stock leaves unwritten are zero.
+/// One calc, calc1 or statistics message as the peer receives it. Bytes stock leaves unwritten
+/// are zero.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Encoded { bytes: [u8; 232], length: usize }
+pub struct Encoded { bytes: [u8; 248], length: usize }
 
 impl Encoded {
     pub fn bytes(&self) -> &[u8] { &self.bytes[..self.length] }
 
-    fn new(length: usize) -> Self { Self { bytes: [0; 232], length } }
+    fn new(length: usize) -> Self { Self { bytes: [0; 248], length } }
 
     fn put(&mut self, offset: usize, value: &[u8]) { self.bytes[offset..offset + value.len()].copy_from_slice(value); }
 
