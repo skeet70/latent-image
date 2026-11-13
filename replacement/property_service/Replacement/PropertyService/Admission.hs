@@ -333,15 +333,17 @@ admitCodeWithCallbacks callbacks layout bytes = do
   (declared, incoming) <- discoverArguments callbacks layout bytes
   let declaredMap = M.fromListWith S.union [(callee, S.singleton slot) | (callee, slot) <- S.toList declared]
       entries = S.fromList [GuestAddress entry | FunctionExtent _ (GuestAddress entry) _ <- layoutFunctions layout]
-      nonreturning = nonreturningEntries callbacks layout bytes (ownPolicy declaredMap incoming entries)
+      -- The summary walk gives no owned callee the r4-r10 preservation.
+      nonreturning = nonreturningEntries callbacks layout bytes (ownPolicy declaredMap incoming S.empty)
       -- A function preserves r4-r10 when its walk leaves them at their entry values, and that
-      -- walk now reads its callees' membership, so the fixed point starts from every function
-      -- and only loses members.
+      -- walk reads its callees' membership. The fixed point starts from every function and
+      -- reconsiders only current members, so the set shrinks monotonically and terminates.
       preserving = closePreserving entries
       closePreserving known =
         let next = S.fromList
               [ GuestAddress entry
               | function@(FunctionExtent _ (GuestAddress entry) _) <- layoutFunctions layout
+              , S.member (GuestAddress entry) known
               , Right (frame, _, _) <- [walkFunction callbacks layout bytes nonreturning (ownPolicy declaredMap incoming known function) function]
               , framePreserved frame
               ]
@@ -613,8 +615,8 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
           conditional = word `shiftR` 28 < 14
           condition = A.Cond (word `shiftR` 28)
           guard = compareGuard pc
-          -- Only a guard on a keyed register can select a path the key does not distinguish,
-          -- so only those guards refine; a guard on any other register keeps both successors.
+          -- A guard on an unkeyed register could choose between states the key merges, so only
+          -- a guard on a keyed register refines; any other guard keeps both successors.
           restrict selected current = case guard of
             Just (register, comparison) | S.member register offsetRegisters ->
               case M.lookup register (stateCounters current) of
@@ -694,7 +696,7 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
           moveSp offset current = current
             { stateSp = offset
             , stateAliases = M.filter (inFrame offset) (stateAliases current)
-            , stateSlots = M.filterWithKey (\address _ -> offset <= address && address <= 0) (stateSlots current)
+            , stateSlots = M.filterWithKey (\address alias -> offset <= address && address <= 0 && inFrame offset alias) (stateSlots current)
             , stateLink = case stateLink current of
                 LinkSaved slot | slot < offset -> LinkLost
                 other -> other
