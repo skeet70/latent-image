@@ -125,7 +125,7 @@ pub trait HeaderBackend {
     fn write_header_into(&mut self, source: &[u8; HEADER_BYTES], report: &mut MirrorOutcome) {
         *report = self.write_header(source);
     }
-    /// Writes the header and leaves the report in the backend's guarded store.
+    /// Writes the header and keeps no report.
     #[inline(always)]
     fn write_header_discarding(&mut self, source: &[u8; HEADER_BYTES]) {
         let mut report = MirrorOutcome::unchanged();
@@ -146,7 +146,7 @@ pub trait SettingsBackend: HeaderBackend {
     fn write_body_into(&mut self, source: &[u8; BODY_BYTES], report: &mut BodyOutcome) {
         *report = self.write_body(source);
     }
-    /// Writes the body and leaves the report in the backend's guarded store.
+    /// Writes the body and keeps no report.
     #[inline(always)]
     fn write_body_discarding(&mut self, source: &[u8; BODY_BYTES]) {
         let mut report = BodyOutcome::unchanged();
@@ -247,15 +247,6 @@ pub struct SharedBacking<'a, D> {
     driver: D,
 }
 
-/// The reports a write leaves when its caller keeps none. Only a [`SettingsHold`] lends them.
-#[derive(Clone, Copy)]
-pub struct WriteReports {
-    pub mirror: MirrorOutcome,
-    pub body: BodyOutcome,
-}
-
-static mut REPORTS: WriteReports = WriteReports { mirror: MirrorOutcome::unchanged(), body: BodyOutcome::unchanged() };
-
 /// Proof that this task holds the settings semaphore.
 pub struct SemaphoreHold<'a, 'b, D: HeaderBackupDriver> {
     backing: &'a mut SharedBacking<'b, D>,
@@ -264,29 +255,6 @@ pub struct SemaphoreHold<'a, 'b, D: HeaderBackupDriver> {
 
 impl<D: HeaderBackupDriver> Drop for SemaphoreHold<'_, '_, D> {
     fn drop(&mut self) { self.backing.driver.release(&self.task, BackupSemaphore::Settings); }
-}
-
-/// Proof that this task holds the settings semaphore, and the only handle to [`REPORTS`].
-pub struct SettingsHold<'a, 'b, D: HeaderBackupDriver> {
-    semaphore: SemaphoreHold<'a, 'b, D>,
-    reports: &'a mut WriteReports,
-}
-
-impl<'a, D: HeaderBackupDriver> SettingsHold<'a, '_, D> {
-    /// The reports a write leaves when its caller keeps none.
-    pub fn reports(&mut self) -> &mut WriteReports { self.reports }
-
-    #[inline(always)]
-    fn write_header_discarding(&mut self, source: &[u8; HEADER_BYTES]) -> RequestOutcome {
-        self.semaphore.backing.write_header_unheld(source, Some(&mut self.reports.mirror))
-    }
-}
-
-impl<'a, D: BackupDriver> SettingsHold<'a, '_, D> {
-    #[inline(always)]
-    fn write_body_discarding(&mut self, source: &[u8; BODY_BYTES]) -> RequestOutcome {
-        self.semaphore.backing.write_body_unheld(source, Some(&mut self.reports.body))
-    }
 }
 
 #[inline(always)]
@@ -335,14 +303,6 @@ impl<'a, D: HeaderBackupDriver> SharedBacking<'a, D> {
     fn acquire(&mut self, task: D::Task) -> SemaphoreHold<'_, 'a, D> {
         self.driver.acquire(&task, BackupSemaphore::Settings);
         SemaphoreHold { backing: self, task }
-    }
-
-    /// Takes the settings semaphore and lends the report store.
-    #[inline(always)]
-    fn enter(&mut self, task: D::Task) -> SettingsHold<'_, 'a, D> {
-        let semaphore = self.acquire(task);
-        let reports = unsafe { &mut *core::ptr::addr_of_mut!(REPORTS) };
-        SettingsHold { semaphore, reports }
     }
 
     #[inline(always)]
@@ -527,11 +487,11 @@ impl<D: BackupDriver> SharedBacking<'_, D> {
         self.store_request(request);
     }
 
-    /// Writes the body and leaves the report in the guarded store.
+    /// Writes the body and keeps no report.
     #[inline(always)]
     pub fn write_body_discarding(&mut self, source: &[u8; BODY_BYTES]) {
         let request = match self.task() {
-            Some(task) => { let mut hold = self.enter(task); hold.write_body_discarding(source) }
+            Some(task) => { let hold = self.acquire(task); hold.backing.write_body_unheld(source, None) }
             None => self.write_body_unheld(source, None),
         };
         self.store_request(request);
@@ -562,11 +522,11 @@ impl<D: HeaderBackupDriver> SharedBacking<'_, D> {
         self.store_request(request);
     }
 
-    /// Writes the header and leaves the report in the guarded store.
+    /// Writes the header and keeps no report.
     #[inline(always)]
     pub fn write_header_discarding(&mut self, source: &[u8; HEADER_BYTES]) {
         let request = match self.task() {
-            Some(task) => { let mut hold = self.enter(task); hold.write_header_discarding(source) }
+            Some(task) => { let hold = self.acquire(task); hold.backing.write_header_unheld(source, None) }
             None => self.write_header_unheld(source, None),
         };
         self.store_request(request);

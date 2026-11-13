@@ -49,6 +49,10 @@ module Replacement.PropertyService.Oracle
   , modelExpectation
   , placeholderExpectation
   , observedExpectation
+  , EntryContract (..)
+  , contractRegisters
+  , projectRun
+  , projectExpectation
   , WriteEvent (..)
   , ApprovedRamHeader (..)
   , WriteProjectionError (..)
@@ -669,6 +673,25 @@ sentinel register = 0xa5a50000 + fromIntegral (fromEnum register)
 comparedRegisters :: [Register]
 comparedRegisters = R0 : calleeSaved ++ [Sp]
 
+-- | The registers an entry's caller can observe. The canonical entry is a branch,
+-- so r3 is caller-saved; the public wrapper saves and restores it.
+data EntryContract = CanonicalEntryContract | PublicWrapperEntryContract deriving (Eq, Ord, Show)
+
+contractRegisters :: EntryContract -> [Register]
+contractRegisters CanonicalEntryContract = comparedRegisters
+contractRegisters PublicWrapperEntryContract = R3 : comparedRegisters
+
+-- | The contract registers a run holds. A case that claims no r3 still compares every
+-- other contract register; the wrapper's r3 is compared only when the case claims it.
+projectRun :: EntryContract -> [(Register, Word32)] -> Run -> Run
+projectRun contract claimed run =
+  run {runRegisters = [(register, value) | (register, value) <- runRegisters run
+      , register `elem` contractRegisters contract
+      , register /= R3 || register `elem` map fst claimed]}
+
+projectExpectation :: EntryContract -> Expectation -> Expectation
+projectExpectation contract expected = expected {expectedRegisters = [(register, value) | (register, value) <- expectedRegisters expected, register `elem` contractRegisters contract]}
+
 banksId, previousId, configId, slotDefaultsId, tailDefaultsId, stackId, callerFrameId, exitId, backingId, callsId :: RegionId
 banksId = RegionId "banks"
 previousId = RegionId "previous"
@@ -870,9 +893,14 @@ expectationDifferences expected run =
        ]
     ++ [MemoryDiffers ident | (ident, bytes) <- expectedMemory expected, lookup ident (runMemory run) /= Just bytes]
 
--- | A stock run of an owned id against the model's claim.
-modelDifferences :: Fixture -> Owned -> Operation -> Run -> [Difference]
-modelDifferences fx owned operation run = maybe [ModelOutsideFixture] (\expected -> expectationDifferences expected run) (modelExpectation fx owned operation)
+-- | A stock run of an owned id against the model's claim under one entry contract.
+modelDifferences :: EntryContract -> Fixture -> Owned -> Operation -> Run -> [Difference]
+modelDifferences contract fx owned operation run =
+  case modelExpectation fx owned operation of
+    Nothing -> [ModelOutsideFixture]
+    Just expected ->
+      let projected = projectExpectation contract expected
+      in expectationDifferences projected (projectRun contract (expectedRegisters projected) run)
 
 -- | Every compared field of the subject against the reference run of the same case.
 compareRuns :: Run -> Run -> [Difference]

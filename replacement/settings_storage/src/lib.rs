@@ -144,7 +144,7 @@ impl<'a, B: HeaderBackend> SettingsStorage<'a, B> {
     pub fn write_active_header_into(&mut self, report: &mut MirrorOutcome) {
         self.backend.write_header_into(part(self.banks, 0, 16).try_into().unwrap_or_else(|_| contract_violation()), report)
     }
-    /// Writes the active header and leaves the report in the backend's guarded store.
+    /// Writes the active header and keeps no report.
     pub fn write_active_header_discarding(&mut self) {
         self.backend.write_header_discarding(part(self.banks, 0, 16).try_into().unwrap_or_else(|_| contract_violation()))
     }
@@ -159,7 +159,7 @@ impl<'a, B: SettingsBackend> SettingsStorage<'a, B> {
     pub fn write_active_body_into(&mut self, report: &mut BodyOutcome) {
         self.backend.write_body_into(part(self.banks, 16, 0x118).try_into().unwrap_or_else(|_| contract_violation()), report)
     }
-    /// Writes the active body and leaves the report in the backend's guarded store.
+    /// Writes the active body and keeps no report.
     pub fn write_active_body_discarding(&mut self) {
         self.backend.write_body_discarding(part(self.banks, 16, 0x118).try_into().unwrap_or_else(|_| contract_violation()))
     }
@@ -263,7 +263,7 @@ impl<B: HeaderBackend> MirrorSession<'_, '_, B> {
         #[cfg(all(not(test), storage_defect_close_appends_area3))]
         unsafe { native_mirror::append_bank_as_record(self.storage.banks.as_ptr()); }
     }
-    /// Closes the header session and leaves the report in the backend's guarded store.
+    /// Closes the header session and keeps no report.
     #[inline(always)]
     pub fn close_discarding(self) {
         self.storage.write_active_header_discarding();

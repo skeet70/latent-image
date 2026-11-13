@@ -241,6 +241,52 @@ walkWithStores stores leaves sites code = admitCode layout (B.concat (map U.putW
 walk :: [Word32] -> Either AdmissionError CodeProof
 walk = walkWith [] []
 
+-- | A caller that passes a pointer into its own frame to an adjacent callee.
+walkFrames :: Word32 -> [Word32] -> Either AdmissionError CodeProof
+walkFrames pointer callee = admitCode layout (B.concat (map U.putWord32 (caller ++ callee)))
+  where
+    caller = [0xe92d4800, 0xe1a0b00d, 0xe24dd010, pointer, branchWord True 0x1010 0x101c, 0xe28dd010, 0xe8bd8800]
+    callerEnd = 0x1000 + 4 * fromIntegral (length caller)
+    calleeEnd = callerEnd + 4 * fromIntegral (length callee)
+    layout = CodeLayout
+      { layoutBase = GuestAddress 0x1000
+      , layoutFunctions =
+          [ FunctionExtent (FunctionName "caller") (GuestAddress 0x1000) (GuestAddress callerEnd)
+          , FunctionExtent (FunctionName "callee") (GuestAddress callerEnd) (GuestAddress calleeEnd) ]
+      , layoutMappings =
+          [ ArmSpan (AddressSpan (GuestAddress 0x1000) (GuestAddress callerEnd))
+          , ArmSpan (AddressSpan (GuestAddress callerEnd) (GuestAddress calleeEnd)) ]
+      , layoutLiteralPointers = []
+      , layoutData = []
+      , layoutDeclaredData = []
+      , layoutBoundaryWindows = []
+      , layoutBoundaryEntries = []
+      , layoutStoreSites = []
+      , layoutStockLeaves = []
+      , layoutStockSites = []
+      }
+
+-- | Admit adjacent functions from 0x1000, each start the previous end.
+walkFunctions :: [Word32] -> [[Word32]] -> Either AdmissionError CodeProof
+walkFunctions entries functions = admitCode layout (B.concat (map U.putWord32 (concat functions)))
+  where
+    offsets = scanl (\address body -> address + 4 * fromIntegral (length body)) 0x1000 functions
+    layout = CodeLayout
+      { layoutBase = GuestAddress 0x1000
+      , layoutFunctions =
+          [ FunctionExtent (FunctionName ("f" ++ show index)) (GuestAddress start) (GuestAddress finish)
+          | (index, (start, finish)) <- zip [0 :: Int ..] (zip offsets (drop 1 offsets)) ]
+      , layoutMappings = [ArmSpan (AddressSpan (GuestAddress 0x1000) (GuestAddress (last offsets)))]
+      , layoutLiteralPointers = []
+      , layoutData = []
+      , layoutDeclaredData = []
+      , layoutBoundaryWindows = []
+      , layoutBoundaryEntries = map GuestAddress entries
+      , layoutStoreSites = []
+      , layoutStockLeaves = []
+      , layoutStockSites = []
+      }
+
 walkerTests :: IO ()
 walkerTests = do
   let refusedBy label site violation outcome = case outcome of
@@ -284,6 +330,19 @@ walkerTests = do
   case walk [0xe92d4800, 0xe1a0b00d, 0xe8bd8800] of
     Right _ -> putStrLn "admitted push {r11, lr}; mov r11, sp; pop {r11, pc}"
     Left failure -> fail ("framed return refused: " ++ show failure)
+  admitted "conditional bx return keeps its fallthrough"
+    [0xe3a00009, 0xe3510000, 0x112fff1e, 0xe3a00001, 0xe12fff1e]
+  admitted "conditional pop return keeps its fallthrough"
+    [0xe92d4800, 0xe3a00009, 0xe3510000, 0x18bd8800, 0xe3a00001, 0xe8bd8800]
+  case walkFrames 0xe28d0008 [0xe5801000, 0xe12fff1e] of
+    Right _ -> putStrLn "admitted a store inside the caller-frame object"
+    Left failure -> fail ("caller-frame store refused: " ++ show failure)
+  refusedBy "caller-frame store past the object" 0x101c FrameArgumentExceeded
+    (walkFrames 0xe28d0008 [0xe5801008, 0xe12fff1e])
+  refusedBy "call site passes a non-frame pointer" 0x1010 FrameArgumentNotFrame
+    (walkFrames 0xe3a00000 [0xe5801000, 0xe12fff1e])
+  refusedBy "register-offset store past the caller-frame bound" 0x1020 FrameArgumentExceeded
+    (walkFrames 0xe28d0008 [0xe3a02008, 0xe7801002, 0xe12fff1e])
   refused "bx r0" 0x1000 PcWrite [0xe12fff10]
   refused "unbalanced pop" 0x1004 StackUnbalanced [0xe92d4010, 0xe8bd8030]
   refused "recursion" 0x1000 Recursion [0xe92d4800, 0xebfffffd, 0xe8bd8800]
@@ -329,15 +388,26 @@ walkerTests = do
     [0xe24dd010,0xe28d300f,0xe1c300b0,0xe28dd010,0xe12fff1e]
   refused "register-indexed alias store has no bounded offset" 0x1008 NonStackStore
     [0xe24dd010,0xe1a0300d,0xe7830004,0xe28dd010,0xe12fff1e]
-  refused "multiple-store writeback is not an admitted alias transfer" 0x1008 NonStackStore
-    [0xe24dd020,0xe28d3004,0xe8a30005,0xe28dd020,0xe12fff1e]
+  forM_ [0xe8a00046, 0xe9a00046, 0xe8200046, 0xe9200046] $ \store ->
+    admitted ("bounded multiple-store writeback updates its local alias " ++ showHex store "")
+      [0xe24dd030, 0xe28d0010, store, 0xe5803000, 0xe28dd030, 0xe12fff1e]
+  refused "multiple-store writeback moves the next store beyond the frame" 0x100c NonStackStore
+    [0xe24dd010, 0xe28d3008, 0xe8a30005, 0xe5830000, 0xe28dd010, 0xe12fff1e]
+  refused "writeback multiple store overlaps saved caller registers" 0x100c NonStackStore
+    [0xe92d4800, 0xe24dd010, 0xe28d3010, 0xe8a30005, 0xe28dd010, 0xe8bd8800]
+  case walk [0xe24dd020, 0xe28d3004, 0xe8a3000d, 0xe28dd020, 0xe12fff1e] of
+    Left _ -> putStrLn "refused writeback with its base in the register list"
+    Right _ -> fail "admitted writeback with its base in the register list"
   forM_ [0x10,0x14] $ \offset ->
     refused ("local alias overlaps saved r11/lr at offset " ++ show offset) 0x100c NonStackStore
       [0xe92d4800,0xe24dd010,0xe28d3000 .|. offset,0xe8830001,0xe28dd010,0xe8bd8800]
-  forM_ [(0xe28d3004,0xe5830000),(0xe28d4004,0xe5840000)] $ \(derive,store) ->
-    refusedBy ("call destroys local alias used by " ++ showHex store "") 0x1014 NonStackStore
-      (walkWith [(leaf,StackOffset (-4))] []
-        [0xe92d4800,0xe1a0b00d,0xe24dd010,derive,branchWord True 0x1010 0x61d59c,store,0xe28dd010,0xe8bd8800])
+  refusedBy "call destroys a caller-saved local alias used by e5830000" 0x1014 NonStackStore
+    (walkWith [(leaf,StackOffset (-4))] []
+      [0xe92d4800,0xe1a0b00d,0xe24dd010,0xe28d3004,branchWord True 0x1010 0x61d59c,0xe5830000,0xe28dd010,0xe8bd8800])
+  case walkWith [(leaf,StackOffset (-4))] []
+      [0xe92d4800,0xe1a0b00d,0xe24dd010,0xe28d4004,branchWord True 0x1010 0x61d59c,0xe5840000,0xe28dd010,0xe8bd8800] of
+    Right _ -> putStrLn "admitted a callee-saved local alias store after a call"
+    Left failure -> fail ("callee-saved local alias after a call refused: " ++ show failure)
   refused "loaded return address" 0x1004 ReturnAddressLost [0xe590e000, 0xe12fff1e]
   refused "store over the saved lr" 0x1004 NonStackStore [0xe92d4800, 0xe58d0004, 0xe8bd8800]
   refused "r11 changed at return" 0x1004 FramePointerLost [0xe1a0b000, 0xe12fff1e]
@@ -368,6 +438,59 @@ walkerTests = do
     Left failure -> fail ("owned bracket call refused: " ++ show failure)
   refusedBy "bracket from unlisted site" 0x1000 (CallOutsideOwned (GuestAddress 0x61da3c))
     (walkWith [] bracket [branchWord True 0x1000 0x61da3c, 0xe12fff1e])
+  -- P1-2: the join's two counters reach a store offset.
+  refusedBy "a counter that reaches a store offset is not merged at a join" 0x1034 FrameArgumentExceeded
+    (walkFrames 0xe28d0008
+      [0xe3530000, 0x0a000001, 0xe3a05064, 0xea000000, 0xe3a05000, 0xe1a02005, 0xe7801002, 0xe12fff1e])
+  -- P1-3: STMIB writeback is offset + 4 * count.
+  refusedBy "STMIB writeback lands the base over the saved lr" 0x1010 NonStackStore
+    (walk [0xe92d4800, 0xe24dd018, 0xe1a0300d, 0xe9a30007, 0xe5830010, 0xe28dd018, 0xe8bd8800])
+  -- P1-4: a caller alias forwarded below its object.
+  refusedBy "a frame pointer moved below its object is not forwarded" 0x1028 FrameArgumentExceeded
+    (walkFunctions []
+      [ [0xe92d4800, 0xe1a0b00d, 0xe24dd010, 0xe28d0008, 0xeb000001, 0xe28dd010, 0xe8bd8800]
+      , [0xe92d4800, 0xe1a0b00d, 0xe2400010, 0xeb000000, 0xe8bd8800]
+      , [0xe580100c, 0xe12fff1e] ])
+  -- P2-5: an unsigned guard on a negative immediate.
+  refusedBy "an unsigned guard on a negative immediate keeps its fallthrough" 0x1034 FrameArgumentExceeded
+    (walkFrames 0xe28d0008
+      [0xe3530000, 0x0a000003, 0xe3a02000, 0xe2800040, 0xe35204ff, 0x2a000000, 0xe5801000, 0xe12fff1e])
+  -- P2-6: narrow and dual loads from an incoming word.
+  refusedBy "a byte load from an incoming word is not a caller pointer" 0x1028 NonStackStore
+    (walkFunctions []
+      [ [0xe92d4800, 0xe1a0b00d, 0xe24dd010, 0xe1a0200d, 0xe2822008, 0xe58d2000, 0xeb000001, 0xe28dd010, 0xe8bd8800]
+      , [0xe5dd7000, 0xe5871000, 0xe12fff1e] ])
+  refusedBy "a dual load writes both destinations" 0x1030 NonStackStore
+    (walkFunctions []
+      [ [0xe92d4800, 0xe1a0b00d, 0xe24dd010, 0xe1a0200d, 0xe2822008, 0xe58d2000, 0xe58d2004, 0xeb000001, 0xe28dd010, 0xe8bd8800]
+      , [0xe59d5004, 0xe1cd40d8, 0xe5851000, 0xe12fff1e] ])
+  -- P2-7: a call to an owned callee with no r4-r10 proof.
+  refusedBy "a callee that does not restore r4 drops the caller's alias" 0x1010 NonStackStore
+    (walkFunctions []
+      [ [0xe92d4010, 0xe24dd008, 0xe1a0400d, 0xeb000002, 0xe5840000, 0xe28dd008, 0xe8bd8010]
+      , [0xe3a04000, 0xe12fff1e] ])
+  -- P2-8: a call into a slot entry from outside a boundary extent.
+  refusedBy "a non-boundary call into a slot entry" 0x1004 PcWrite
+    (walkFunctions [0x100c]
+      [ [0xe92d4800, 0xeb000000, 0xe8bd8800]
+      , [0xe12fff10] ])
+  case walkFunctions [0x1000, 0x100c]
+      [ [0xe92d4800, 0xeb000000, 0xe8bd8800]
+      , [0xe12fff10] ] of
+    Right _ -> putStrLn "admitted a boundary entry calling a slot entry"
+    Left failure -> fail ("boundary call into a slot entry refused: " ++ show failure)
+  -- P2-9: an object covering the callee's incoming word.
+  refusedBy "an object covering the callee's incoming word is not passed" 0x1014 FrameArgumentExceeded
+    (walkFunctions []
+      [ [0xe92d4800, 0xe24dd010, 0xe1a0000d, 0xe28d1008, 0xe58d1000, 0xeb000001, 0xe28dd010, 0xe8bd8800]
+      , [0xe5802000, 0xe59d3000, 0xe5832000, 0xe12fff1e] ])
+  -- P3-13: a stride-four counter is an exact value, not an interval.
+  refusedBy "a stride-four counter is checked on its exact crossing iteration" 0x102c FrameArgumentExceeded
+    (walkFrames 0xe28d0008
+      [0xe3a02000, 0xe2822004, 0xe352000c, 0x9afffffc, 0xe7801002, 0xe12fff1e])
+  -- P3-14: a function the probe cannot walk refuses the artifact.
+  refusedBy "a probe walk that cannot bound a store offset refuses the artifact" 0x1000 FrameOffsetUnbounded
+    (walk [0xe7801002, 0xe12fff1e])
 
 literalPoolTests :: IO ()
 literalPoolTests = do
@@ -594,7 +717,7 @@ artifactTests arguments = do
   expectRefusal "store boundary range check removed" (EncodingRejected (StorageEncoding StorageByte))
     (admit (replaceWord (store8 + 12) 0xe320f000 bytes) symbolText)
   expectRefusal "halfword boundary widened by a byte" (EncodingRejected (StorageEncoding StorageHalf))
-    (admit (replaceWord (store16 + 16) (U.word32At bytes (fromIntegral (store8 + 16 - carrierStartAddress))) bytes) symbolText)
+    (admit (replaceWord (store16 + 12) (U.word32At bytes (fromIntegral (store8 + 12 - carrierStartAddress))) bytes) symbolText)
   expectRefusal "mirror byte driver target changed" (EncodingRejected (MirrorEncoding (FunctionName "xm1_storage_write")))
     (admit (replaceWord (mirrorWrite + 8) (branchWord True (mirrorWrite + 8) 0x6a59bc) bytes) symbolText)
   expectRefusal "mirror boundary called without saving lr" (EncodingRejected (MirrorEncoding (FunctionName "xm1_storage_write")))
@@ -607,7 +730,7 @@ artifactTests arguments = do
     (admit (replaceWord firstCall (branchWord True firstCall 0x61d92c) bytes) symbolText)
   expectRefusal "moved entry" SymbolRejected (admit bytes (moveSymbol "xm1_property_set_entry" (setterStubAddress + 4) symbolText))
   expectRefusal "store outside a boundary" (CodeRejected (AdmissionError (GuestAddress firstCall) NonStackStore))
-    (admit (replaceWord firstCall 0xe5810000 bytes) symbolText)
+    (admit (replaceWord firstCall 0xe5844000 bytes) symbolText)
   expectRefusal "BL to an outside address" (CodeRejected (AdmissionError (GuestAddress firstCall) (CallOutsideOwned (GuestAddress 0x700000))))
     (admit (replaceWord firstCall (branchWord True firstCall 0x700000) bytes) symbolText)
   expectRefusal "caller-output length bound removed" (EncodingRejected (OutputEncoding StorageByte))

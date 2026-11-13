@@ -1282,11 +1282,13 @@ haskell_binary(
         ":emulator-usb",
         ":modal-observation",
         ":modal-watch-stream",
+        ":watch-observation",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:directory",
         "//host:filepath",
+        "//host:scientific",
         "//host:text",
     ],
 )
