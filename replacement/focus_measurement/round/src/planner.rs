@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use crate::scheduling::{Lane, Lanes};
+use crate::lanes::{Lane, Lanes};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Work { PrimaryAcquisition, SecondaryAcquisition, Search, Auxiliary, Image, Window, Source }
@@ -107,9 +107,13 @@ impl Planner {
         match slot { Slot::First => self.first_running = Some(work), Slot::Second => self.second_running = Some(work) }
     }
 
-    pub fn completed(&mut self, work: Work) {
-        if self.first_running == Some(work) { self.first_running = None; }
-        if self.second_running == Some(work) { self.second_running = None; }
+    /// Frees `slot` whatever work it held.
+    pub fn release(&mut self, slot: Slot) {
+        match slot { Slot::First => self.first_running = None, Slot::Second => self.second_running = None }
+    }
+
+    pub const fn busy(&self, slot: Slot) -> bool {
+        match slot { Slot::First => self.first_running.is_some(), Slot::Second => self.second_running.is_some() }
     }
 
     pub fn reset_cycle(&mut self) { self.first_cursor = 0; self.second_cursor = 0; self.phase = Phase::First; }

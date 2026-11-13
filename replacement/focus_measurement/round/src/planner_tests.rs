@@ -1,5 +1,5 @@
+use crate::lanes::{Lane, Lanes};
 use crate::planner::{classify_mode, Cadence, Mode, ModeInputs, Planner, Policy, SamplingBand, Slot, Work};
-use crate::scheduling::{Lanes, Selection};
 
 struct Always;
 impl Policy for Always {
@@ -13,17 +13,17 @@ impl Policy for FirstOnly {
 #[test]
 fn paired_schedule_orders_each_lane_and_joins_before_restarting() {
     let mut planner = Planner::new();
-    let all = Selection { acquisition: true, search: true, auxiliary: true, image: true, source: true }.lanes(true);
+    let all = Lanes::all();
     let plan = planner.next(Mode::Default, all, &mut Always);
     assert_eq!((plan.first, plan.second, plan.primary_considered), (Some(Work::Window), Some(Work::PrimaryAcquisition), true));
     planner.submitted(Slot::First, Work::Window);
     planner.submitted(Slot::Second, Work::PrimaryAcquisition);
     let plan = planner.next(Mode::Default, all, &mut Always);
     assert_eq!((plan.first, plan.second, plan.cycle_complete), (None, None, false));
-    planner.completed(Work::Window);
+    planner.release(Slot::First);
     let plan = planner.next(Mode::Default, all, &mut Always);
     assert_eq!((plan.first, plan.second), (Some(Work::Search), None));
-    planner.completed(Work::PrimaryAcquisition);
+    planner.release(Slot::Second);
     let plan = planner.next(Mode::Default, all, &mut Always);
     assert_eq!((plan.first, plan.second), (Some(Work::Image), Some(Work::Auxiliary)));
     let plan = planner.next(Mode::Default, all, &mut Always);
@@ -35,7 +35,7 @@ fn paired_schedule_orders_each_lane_and_joins_before_restarting() {
 #[test]
 fn secondary_acquisition_runs_on_every_fourth_cycle_even_when_primary_is_filtered() {
     let mut planner = Planner::new();
-    let enabled = Selection { acquisition: true, ..Selection::default() }.lanes(true);
+    let enabled: Lanes = [Lane::Acquisition, Lane::Window].into_iter().collect();
     for (cycle, expected) in [Some(Work::PrimaryAcquisition), None, None, Some(Work::SecondaryAcquisition)].into_iter().enumerate() {
         let plan = planner.next(Mode::Default, enabled, &mut FirstOnly);
         assert_eq!(plan.first, Some(Work::Window));
@@ -60,7 +60,7 @@ fn policy_changes_take_effect_only_at_cycle_boundaries() {
     }
     let mut planner = Planner::new();
     let mut policy = Recorded(std::vec::Vec::new());
-    let enabled = Selection { acquisition: true, search: true, ..Selection::default() }.lanes(true);
+    let enabled: Lanes = [Lane::Acquisition, Lane::Window, Lane::Search].into_iter().collect();
     planner.next(Mode::RecordSelected, enabled, &mut policy);
     planner.next(Mode::ProfileSelected, enabled, &mut policy);
     assert_eq!(policy.0, [Mode::RecordSelected, Mode::RecordSelected]);

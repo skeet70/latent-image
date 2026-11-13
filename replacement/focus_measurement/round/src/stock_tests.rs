@@ -1,21 +1,29 @@
-use crate::stock::{alternate_search, lane_flags, search_allowed, selection, RecordMode, RecordSelection, SearchModeFlags};
+use crate::lanes::Selection;
+use crate::stock::{alternate_search, availability, lane_flags, search_allowed, selection, RecordMode, RecordSelection, SearchModeFlags};
 
 #[test]
 fn acquisition_selection_expands_into_both_acquisition_calculations() {
-    assert_eq!(lane_flags(selection(RecordSelection(1)).lanes(true)), 0x21);
-    assert_eq!(lane_flags(selection(RecordSelection(2)).lanes(true)), 2);
-    assert_eq!(lane_flags(selection(RecordSelection(4)).lanes(true)), 4);
-    assert_eq!(lane_flags(selection(RecordSelection(8)).lanes(true)), 8);
-    assert_eq!(lane_flags(selection(RecordSelection(32)).lanes(true)), 64);
-    assert_eq!(lane_flags(selection(RecordSelection(0xffff_ffd0)).lanes(true)), 0);
+    let lanes = |word| lane_flags(Selection::ALL.shared(selection(RecordSelection(word)), true));
+    assert_eq!(lanes(1), 0x21);
+    assert_eq!(lanes(2), 2);
+    assert_eq!(lanes(4), 4);
+    assert_eq!(lanes(8), 8);
+    assert_eq!(lanes(32), 64);
+    assert_eq!(lanes(0xffff_ffd0), 0);
 }
 
 #[test]
 fn search_property_blocks_only_search_and_image() {
     let all = selection(RecordSelection(47));
-    assert_eq!(lane_flags(all.lanes(search_allowed(0))), 0x6f);
-    assert_eq!(lane_flags(all.lanes(search_allowed(1))), 0x65);
-    assert_eq!(lane_flags(all.lanes(search_allowed(2))), 0x6f);
+    assert_eq!(lane_flags(Selection::ALL.shared(all, search_allowed(0))), 0x6f);
+    assert_eq!(lane_flags(Selection::ALL.shared(all, search_allowed(1))), 0x65);
+    assert_eq!(lane_flags(Selection::ALL.shared(all, search_allowed(2))), 0x6f);
+}
+
+#[test]
+fn only_an_all_zero_selection_word_offers_nothing() {
+    assert_eq!(availability(RecordSelection(0)), None);
+    assert_eq!(availability(RecordSelection(0x10)), Some(Selection::default()));
 }
 
 #[test]

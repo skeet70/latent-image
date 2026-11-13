@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use crate::scheduling::{Lane, Lanes, Selection};
+use crate::lanes::{Lane, Lanes, Selection};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RecordSelection(pub u32);
@@ -20,6 +20,11 @@ pub const fn selection(word: RecordSelection) -> Selection {
         image: word.0 & 8 != 0,
         source: word.0 & 32 != 0,
     }
+}
+
+/// `None` when the whole word is zero, which drains bookkeeping at 0xf3305c..0xf3306c.
+pub const fn availability(word: RecordSelection) -> Option<Selection> {
+    if word.0 == 0 { None } else { Some(selection(word)) }
 }
 
 /// X-M1 1.50: 0xf32f60..0xf32f7c gates search and image with property 0x3e0009.

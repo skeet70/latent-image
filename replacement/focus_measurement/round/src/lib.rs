@@ -4,8 +4,8 @@
 pub mod jobs;
 pub mod acquisition;
 pub mod children;
-pub mod scheduling;
-pub mod measurement;
+pub mod lanes;
+pub mod round;
 pub mod stock;
 pub mod planner;
 
@@ -18,9 +18,7 @@ mod acquisition_tests;
 #[cfg(test)]
 mod child_tests;
 #[cfg(test)]
-mod scheduling_tests;
-#[cfg(test)]
-mod measurement_tests;
+mod round_tests;
 #[cfg(test)]
 mod stock_tests;
 #[cfg(test)]
