@@ -52,6 +52,11 @@ data Exit = Call Word32 | StockCall deriving (Eq, Ord)
 actionCallers :: [String]
 actionCallers = ["rb_modal_call"]
 
+-- | The kernel's slot entry: its callee is the per-core block's stock function word, which the
+-- budget's stock margin covers.
+slotCallers :: [String]
+slotCallers = ["xm1_kernel_enter_slot"]
+
 -- | The reachable instructions of one function from its entry: the frame and the exits. Code
 -- reaches data only after a call that does not return.
 walk :: ELF.Elf -> (Word32 -> Bool) -> (Word32 -> Bool) -> Function -> Either String (Word32, [Exit])
@@ -78,6 +83,7 @@ walk elf inRuntime isData function = go S.empty [functionStart function] 0 []
               | otherwise = StockCall
             exitsThrough register = case constantsIn register of
               Left _ | name `elem` actionCallers -> Right [StockCall]
+              Left _ | name `elem` slotCallers -> Right [StockCall]
               other -> map call <$> other
             -- A register branch's targets: a movw/movt pair or a literal load in the eight
             -- instructions before it, or for r4-r11 every constant the function writes to it.

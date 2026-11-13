@@ -49,6 +49,10 @@ module Replacement.PropertyService.Oracle
   , modelExpectation
   , placeholderExpectation
   , observedExpectation
+  , EntryContract (..)
+  , contractRegisters
+  , projectRun
+  , projectExpectation
   , WriteEvent (..)
   , ApprovedRamHeader (..)
   , WriteProjectionError (..)
@@ -64,6 +68,8 @@ module Replacement.PropertyService.Oracle
   , forceRun
   , comparedRegisters
   , comparedRegions
+  , callsId
+  , eventsOf
   , FunctionSpan (..)
   , stockFunctions
   , leafSpans
@@ -667,6 +673,25 @@ sentinel register = 0xa5a50000 + fromIntegral (fromEnum register)
 comparedRegisters :: [Register]
 comparedRegisters = R0 : calleeSaved ++ [Sp]
 
+-- | The registers an entry's caller can observe. The canonical entry is a branch,
+-- so r3 is caller-saved; the public wrapper saves and restores it.
+data EntryContract = CanonicalEntryContract | PublicWrapperEntryContract deriving (Eq, Ord, Show)
+
+contractRegisters :: EntryContract -> [Register]
+contractRegisters CanonicalEntryContract = comparedRegisters
+contractRegisters PublicWrapperEntryContract = R3 : comparedRegisters
+
+-- | The contract registers a run holds. A case that claims no r3 still compares every
+-- other contract register; the wrapper's r3 is compared only when the case claims it.
+projectRun :: EntryContract -> [(Register, Word32)] -> Run -> Run
+projectRun contract claimed run =
+  run {runRegisters = [(register, value) | (register, value) <- runRegisters run
+      , register `elem` contractRegisters contract
+      , register /= R3 || register `elem` map fst claimed]}
+
+projectExpectation :: EntryContract -> Expectation -> Expectation
+projectExpectation contract expected = expected {expectedRegisters = [(register, value) | (register, value) <- expectedRegisters expected, register `elem` contractRegisters contract]}
+
 banksId, previousId, configId, slotDefaultsId, tailDefaultsId, stackId, callerFrameId, exitId, backingId, callsId :: RegionId
 banksId = RegionId "banks"
 previousId = RegionId "previous"
@@ -678,6 +703,16 @@ callerFrameId = RegionId "caller-frame"
 exitId = RegionId "exit"
 backingId = RegionId "backing"
 callsId = RegionId "calls"
+
+-- | The boundary events the fixture's stubs wrote, in order.
+eventsOf :: B.ByteString -> [H.BoundaryEvent]
+eventsOf bytes =
+  [ H.BoundaryEvent (readWordAt bytes offset) (readWordAt bytes (offset + 4)) (readWordAt bytes (offset + 8)) (readWordAt bytes (offset + 12))
+  | index <- [0 .. count - 1]
+  , let offset = 4 + 16 * index
+  ]
+  where
+    count = min (fromIntegral (readWordAt bytes 0)) ((B.length bytes - 4) `div` 16)
 
 -- | The rw regions whose final bytes and writes the verdict compares; the stack below entry sp is scratch.
 comparedRegions :: [(RegionId, Word32, Int)]
@@ -801,12 +836,13 @@ data Run = Run
   , runRegisters :: ![(Register, Word32)]
   , runMemory :: ![(RegionId, B.ByteString)]
   , runWrites :: !(Maybe [WriteEvent])
+  , runInstructions :: !Int
   }
   deriving (Eq, Show)
 
 forceRun :: Run -> Run
 forceRun run =
-  sum (map snd (runRegisters run)) `seq` sum (map (B.length . snd) (runMemory run)) `seq` maybe () forceEvents (runWrites run) `seq` run
+  runInstructions run `seq` sum (map snd (runRegisters run)) `seq` sum (map (B.length . snd) (runMemory run)) `seq` maybe () forceEvents (runWrites run) `seq` run
   where
     forceEvents = foldr (\event rest -> event `seq` rest) ()
 
@@ -857,9 +893,14 @@ expectationDifferences expected run =
        ]
     ++ [MemoryDiffers ident | (ident, bytes) <- expectedMemory expected, lookup ident (runMemory run) /= Just bytes]
 
--- | A stock run of an owned id against the model's claim.
-modelDifferences :: Fixture -> Owned -> Operation -> Run -> [Difference]
-modelDifferences fx owned operation run = maybe [ModelOutsideFixture] (\expected -> expectationDifferences expected run) (modelExpectation fx owned operation)
+-- | A stock run of an owned id against the model's claim under one entry contract.
+modelDifferences :: EntryContract -> Fixture -> Owned -> Operation -> Run -> [Difference]
+modelDifferences contract fx owned operation run =
+  case modelExpectation fx owned operation of
+    Nothing -> [ModelOutsideFixture]
+    Just expected ->
+      let projected = projectExpectation contract expected
+      in expectationDifferences projected (projectRun contract (expectedRegisters projected) run)
 
 -- | Every compared field of the subject against the reference run of the same case.
 compareRuns :: Run -> Run -> [Difference]
@@ -906,7 +947,7 @@ runOf observation writes = do
       unless (map (\(N.Write (N.GuestAddress a) (N.WriteBytes w)) -> (fromIntegral a, fromIntegral w)) logged == [(eventAddress e, eventWidth e) | e <- writes])
         (Left "report writes differ from the parsed provenance")
       Right (Just [event | event <- writes, compared (eventAddress event)])
-  pure (Run (N.nativeStatus observation) registers memory retained)
+  pure (Run (N.nativeStatus observation) registers memory retained (fromIntegral (N.instructionCount (N.nativeInstructions observation))))
   where
     compared address = or [base <= address && address < base + fromIntegral size | (_, base, size) <- comparedRegions]
 
@@ -1082,6 +1123,10 @@ caseSpec image functions fx (CaseLabel label) standing (OracleCase (PropertyId i
         , region (RegionId "header-runtime-code") 0x722054 (0x72b3fc-0x722054) ReadExecute (H.codeWindow image 0x722054 (0x72b3fc-0x722054))
         , region (RegionId "header-reporter") 0x633594 (4 * length (H.callback 0x633594)) ReadExecute (B.concat (map word32le (H.callback 0x633594)))
         , region (RegionId "header-log") H.helperBase (4 * length H.helperWords) ReadExecute (B.concat (map word32le H.helperWords))
+        , region (RegionId "kernel-root") H.kernelRootBase 8 ReadOnly H.kernelRootBytes
+        , region (RegionId "kernel-block") H.kernelBlockBase (B.length H.kernelBlockBytes) ReadOnly H.kernelBlockBytes
+        , region (RegionId "semaphore-classes") H.classBase (B.length H.classBytes) ReadOnly H.classBytes
+        , region (RegionId "kernel-slots") H.slotBase (B.length (H.slotCode 1)) ReadExecute (H.slotCode 1)
         , region stackId stackBase (fromIntegral (stackPointer - stackBase)) ReadWrite (B.replicate (fromIntegral (stackPointer - stackBase)) 0)
         , region callerFrameId stackPointer (fromIntegral (stackTop - stackPointer)) ReadWrite (B.replicate (fromIntegral (stackTop - stackPointer)) 0)
         , region exitId exitAddress 4 ReadExecute (word32le 0xe12fff1e)

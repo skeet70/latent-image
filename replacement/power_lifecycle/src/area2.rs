@@ -1,4 +1,4 @@
-use crate::mirror::{BackupDiagnostic, BackupSemaphore, ExecutionContext, HeaderBackupDriver, SharedBacking, HEADER_BYTES};
+use crate::mirror::{BackupDiagnostic, BackupSemaphore, HeaderBackupDriver, SharedBacking, HEADER_BYTES};
 use crate::record_store::{self as store, BlockBuffer, Callbacks, Entry, Handle, RecordMedium, Service, Staging};
 
 pub const RECORD_BYTES: usize = 0x200;
@@ -81,7 +81,8 @@ pub(crate) fn prepare<D: HeaderBackupDriver>(working: &mut Area2Record, backing:
     if read_limit >= 999 && read_counter >= 9999 {
         set_counter(backing, CounterField::Limit, 100);
         set_counter(backing, CounterField::Count, 0);
-        let _ = backing.synchronize();
+        let mut observations = [None; HEADER_BYTES];
+        backing.synchronize_into(&mut observations);
     }
     let live = backing.live();
     working.0[0x24..0x26].copy_from_slice(&live[2..4]);
@@ -98,15 +99,17 @@ pub(crate) fn prepare<D: HeaderBackupDriver>(working: &mut Area2Record, backing:
 
 enum CounterField { Count, Limit }
 fn set_counter<D: HeaderBackupDriver>(backing: &mut SharedBacking<'_, D>, field: CounterField, value: u16) {
-    match backing.driver_mut().context() {
-        ExecutionContext::Task => backing.driver_mut().acquire(BackupSemaphore::Settings),
-        ExecutionContext::OutsideTask => backing.driver_mut().diagnostic(BackupDiagnostic::OutsideTask),
+    let task = backing.driver_mut().task();
+    match &task {
+        Some(task) => backing.driver_mut().acquire(task, BackupSemaphore::Settings),
+        None => backing.driver_mut().diagnostic(BackupDiagnostic::OutsideTask),
     }
     let offset = match field { CounterField::Count => 0, CounterField::Limit => 2 };
     backing.live_mut()[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
-    let _ = backing.synchronize();
-    if backing.driver_mut().context() == ExecutionContext::Task {
-        backing.driver_mut().release(BackupSemaphore::Settings);
+    let mut observations = [None; HEADER_BYTES];
+    backing.synchronize_into(&mut observations);
+    if let Some(task) = &task {
+        backing.driver_mut().release(task, BackupSemaphore::Settings);
     }
 }
 

@@ -8,7 +8,7 @@ import qualified Data.Map.Strict as M
 import Data.Word (Word32)
 import Emulation.OwnedCase (Symbol(..), readWordAt)
 import Native (entryNames)
-import Replacement.PropertyService.Artifact (storageStoreName, storageStoreWords, storageOutputName, storageOutputWords, storageStatusWords, mirrorBoundaries)
+import Replacement.PropertyService.Artifact (storageStoreName, storageStoreWords, storageOutputName, storageOutputWords, storageStatusWords, mirrorBoundaries, kernelBoundaries)
 
 newtype SymbolName = SymbolName String deriving (Eq, Show)
 data AdmissionError
@@ -65,3 +65,4 @@ externalSymbols =
   ,("xm1_bank_property_set",0x624694),("xm1_bank_current_selection",0x6439e0),("xm1_bank_short_read",0x72b3a4)
   ,("xm1_bank_custom_refresh",0x6a86c4),("xm1_bank_record_append",0x6ac7d4)]
   ++ [(name,address) | (_,name,address) <- mirrorBoundaries]
+  ++ kernelBoundaries

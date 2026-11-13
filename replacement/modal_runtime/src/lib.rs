@@ -8,6 +8,9 @@
 #[cfg(target_arch = "arm")]
 core::arch::global_asm!(include_str!("dispatch.S"), options(raw));
 
+#[cfg(target_arch = "arm")]
+core::arch::global_asm!(include_str!("entry.S"), options(raw));
+
 const CELL_POINTERS: u32 = 0x00cf_58b8;
 const ACTION_POINTERS: u32 = 0x00cf_e2a8;
 const TRANSITION_POINTERS: u32 = 0x00d0_013c;
@@ -291,14 +294,14 @@ impl picker::PickerServices for ArmPicker {
     fn busy(&mut self) -> bool {
         unsafe { rb_call_modal_query(0x53) != 0 }
     }
-    fn node_id(&mut self) -> crate::menu_engine::frame::NodeId {
-        crate::menu_engine::frame::NodeId::new(unsafe { rb_lifecycle_node() })
+    fn node_id(&mut self) -> menu_engine::frame::NodeId {
+        menu_engine::frame::NodeId::new(unsafe { rb_lifecycle_node() })
     }
     fn class(&mut self) -> picker::ClassId {
         picker::ClassId(unsafe { rb_lifecycle_class() })
     }
-    fn cursor_token(&mut self) -> crate::menu_engine::frame::RowToken {
-        crate::menu_engine::frame::RowToken::new(unsafe { rb_lifecycle_token() })
+    fn cursor_token(&mut self) -> menu_engine::frame::RowToken {
+        menu_engine::frame::RowToken::new(unsafe { rb_lifecycle_token() })
     }
     fn stage_open(&mut self, kind: picker::StageKind, id: picker::StageId) {
         unsafe { rb_call_stage_open(kind.0, id.0) }

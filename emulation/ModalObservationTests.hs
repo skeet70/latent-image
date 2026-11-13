@@ -564,8 +564,27 @@ runTests ownedInputs arguments = do
   observerConfigurationTests
   lifetimeTests
   runtimeBindingTests ownedInputs
+  ownedSettingsWriterTests
   mapM_ legacyReceiptBindingTests arguments
   putStrLn "modal array writer observations passed"
+
+ownedSettingsWriterTests :: IO ()
+ownedSettingsWriterTests = do
+  let text = runtimeTextFixture
+      stores = [("xm1_storage_store8",0x10050,16,1,0x12),("xm1_storage_store16",0x10060,16,1,0x12)]
+      withStores = runtimeElfFixture text (runtimeSymbolsFixture ++ stores)
+      replace name row = runtimeElfFixture text
+        (row : filter (\(existing,_,_,_,_) -> existing /= name) (runtimeSymbolsFixture ++ stores))
+  check "the owned image's storage store functions are its settings writers" $
+    fmap (map watchRangeBounds) (ownedSettingsWriters withStores) == Right [(0x10050,0x10060),(0x10060,0x10070)]
+  check "an image without a storage store function has no settings writers"
+    (isLeft (ownedSettingsWriters (runtimeElfFixture text runtimeSymbolsFixture)))
+  check "a storage store symbol of two bytes refuses"
+    (isLeft (ownedSettingsWriters (replace "xm1_storage_store8" ("xm1_storage_store8",0x10050,2,1,0x12))))
+  check "a storage store outside the executable section refuses"
+    (isLeft (ownedSettingsWriters (replace "xm1_storage_store8" ("xm1_storage_store8",0x10100,16,3,0x12))))
+  check "a storage store object symbol refuses"
+    (isLeft (ownedSettingsWriters (replace "xm1_storage_store8" ("xm1_storage_store8",0x10050,16,1,0x11))))
 
 legacyReceiptBindingTests :: FilePath -> IO ()
 legacyReceiptBindingTests path = do
@@ -575,7 +594,7 @@ legacyReceiptBindingTests path = do
   check ("saved receipt retains legacy engine identity: " ++ path)
     (Ram.manifestBankVariant manifest == Just Layout.modalEngineBankVariant)
   elf <- B.readFile (takeDirectory path </> "kernel.elf")
-  _ <- either error pure (bindModalRuntimeSource manifest elf)
+  _ <- either error pure (bindModalRuntimeSource stockSettingsWriters manifest elf)
   putStrLn ("legacy receipt runtime binding passed: " ++ path)
 
 frameBoundsTests :: IO ()
@@ -896,7 +915,7 @@ runtimeBindingTests ownedInputs = do
       runtime = text <> B.pack [1 .. 16] <> B.replicate (0x1dc98 - 144) 0
       elf = runtimeElfFixture text runtimeSymbolsFixture
       manifest = runtimeManifestFixture runtime
-      bind = bindModalRuntimeSource
+      bind = bindModalRuntimeSource stockSettingsWriters
       symbolsWith name change = [if symbolName == name then change row else row | row@(symbolName,_,_,_,_) <- runtimeSymbolsFixture]
       shortWriter = runtimeElfFixture text (symbolsWith "store_new_words" (\(name,address,_,section,kind) -> (name,address,4,section,kind)))
       shortResident = runtimeElfFixture text (symbolsWith "rb_resident" (\(name,address,_,section,kind) -> (name,address,1020,section,kind)))
@@ -937,7 +956,7 @@ runtimeBindingTests ownedInputs = do
       && get "manifest_sha256" evidence == String (T.pack (Ram.manifestDigest manifest))
   check "runtime-only source is not an installed lifetime request" $
     get "lifetime" evidence == Null && get "context_catalogue" (get "runtime_contract" evidence) == Null
-  let renderRuntime = runtime <> B.replicate (0x2dcc0 - B.length runtime) 0
+  let renderRuntime = runtime <> B.replicate (0x3dd00 - B.length runtime) 0
       render = manifest
         { Ram.runtimeBytes = renderRuntime, Ram.allocationSize = B.length renderRuntime
         , Ram.runtimeDigest = sha256Hex (sha256 renderRuntime)
@@ -971,7 +990,7 @@ runtimeBindingTests ownedInputs = do
       && not (isLeft (bind legacy elf)))
   mapM_ (\(label,description,source) -> check ("runtime source refuses " ++ label) (isLeft (bind description source))) malformed
   check "whole loader pins reject same-size changed source" $
-    isLeft (bindModalLifetimeSource manifest elf (B.replicate 0xdae0 0) (B.replicate 0xdaa0 0))
+    isLeft (bindModalLifetimeSource stockSettingsWriters manifest elf (B.replicate 0xdae0 0) (B.replicate 0xdaa0 0))
   stock <- either error pure (modalStock (B.replicate 252 0))
   base <- either error pure (modalRequest stock Nothing permitLimit)
   let contextRanges =
@@ -1469,8 +1488,8 @@ runtimeBindingTests ownedInputs = do
     (isLeft (compareSettingsWrites stockSequence (sequenceOf [settingsWrite "setter" 0x0096ccca 0x21, settingsWrite "reload" 0x0096ccd2 0xc8])))
   check "a missing owned reload write fails comparison"
     (isLeft (compareSettingsWrites stockSequence (sequenceOf [settingsWrite "setter" 0x0096ccca 0x21])))
-  check "the same store from another writer kind fails comparison"
-    (isLeft (compareSettingsWrites stockSequence (sequenceOf [settingsWrite "setter" 0x0096ccca 0x21, settingsWrite "setter" 0x0096ccd2 0xc9])))
+  check "the same store from another writer kind compares equal"
+    (compareSettingsWrites stockSequence (sequenceOf [settingsWrite "setter" 0x0096ccca 0x21, settingsWrite "setter" 0x0096ccd2 0xc9]) == Right ())
   check "a schema1 settings sequence refuses"
     (isLeft (parseSettingsWrites (object ["schema" .= (1 :: Int), "writes" .= ([] :: [Value])])))
   let withoutSettings = filter (\span_ -> let (low,high) = watchRangeBounds span_ in not (low <= 0x96cc64 && 0x96ce26 <= high)) expectedWrites

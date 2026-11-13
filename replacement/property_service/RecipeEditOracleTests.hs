@@ -48,7 +48,7 @@ main = do
     assert "canonical adjacent id has no effect" (unchanged fx expected)
   assert "adjacent control excludes recipe hosts" (adjacentExpectation neighbors fx (OracleCase (PropertyId 0x267) (Get Bank0 LiveRead (SlotArgument 0))) == Nothing)
   expectedNoop <- required (recipeExpectation fx SessionInactive (RecipeCase Host267 (RecipeSet (SetterValue 0x1affffff) (BankArgument 0) (SlotArgumentRaw 0xffffffff))))
-  let observed writes = Run Returned (expectedRegisters expectedNoop) (expectedMemory expectedNoop) writes
+  let observed writes = Run Returned (expectedRegisters expectedNoop) (expectedMemory expectedNoop) writes 1
   assert "scratch stack writes are allowed" (null (noEffectDifferences expectedNoop (observed (Just [WriteEvent 0x9597ec 4 0]))))
   forM_ [0x96cc64, 0x89ec00, 0x958e00, 0x9597f0] $ \address ->
     assert "same final bytes do not excuse an external write" (WritesDiffer `elem` noEffectDifferences expectedNoop (observed (Just [WriteEvent address 4 0])))

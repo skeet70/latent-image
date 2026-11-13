@@ -61,18 +61,20 @@ def xm1_rust_staticlib(
         rustc_flags = [],
         data = [],
         rlib_deps = {},
+        env = {},
         strict_align = True,
         testonly = False,
         visibility = None):
     """Compiles one no_std crate root to a staticlib for armv7r-none-eabi.
 
     `data` stages additional module files at their package paths; `mod` names in
-    the crate root resolve against them.
+    the crate root resolve against them. `env` sets compile-time variables for
+    `include!` and `env!`.
     """
     if crate_name == None:
         crate_name = name.replace("-", "_")
     cmd = " ".join(
-        [
+        ["%s=%s" % (variable, value) for variable, value in env.items()] + [
             "$(location %s)" % _RUSTC,
             "--crate-name=%s" % crate_name,
             "--edition=%s" % edition,
@@ -208,21 +210,24 @@ def xm1_rust_rlib(
         rustc_flags = [],
         data = [],
         rlib_deps = {},
+        env = {},
         out = None,
         strict_align = True,
         testonly = False,
+        tags = [],
         visibility = None):
     """Compiles one no_std crate root to an rlib for armv7r-none-eabi.
 
     The rlib carries no panic handler unless its root declares one, so a final
-    image can own the single handler.
+    image can own the single handler. `env` sets compile-time variables for
+    `include!` and `env!`.
     """
     if crate_name == None:
         crate_name = name.replace("-", "_")
     if out == None:
         out = name + ".rlib"
     cmd = " ".join(
-        [
+        ["%s=%s" % (variable, value) for variable, value in env.items()] + [
             "$(location %s)" % _RUSTC,
             "--crate-name=%s" % crate_name,
             "--edition=%s" % edition,
@@ -248,6 +253,7 @@ def xm1_rust_rlib(
         cmd = cmd,
         message = "Cross-compiling %s as an rlib" % crate_name,
         testonly = testonly,
+        tags = tags,
         tools = [_RUSTC],
         visibility = visibility,
     )

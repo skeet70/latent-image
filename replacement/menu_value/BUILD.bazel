@@ -1,4 +1,41 @@
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib")
+
+# The value transaction with its guest seam. The adapter is a module of this
+# crate under rb_menu_value_owned, so the seam and the transaction are one
+# subsystem and one rlib.
+xm1_rust_rlib(
+    name = "arm-owned",
+    src = "src/lib.rs",
+    crate_name = "menu_value",
+    out = "libmenu_value_owned.rlib",
+    data = [
+        ":value-adapter-sources",
+        ":module",
+        "//replacement/bank/tables:menu-value-table.rs",
+    ],
+    env = {
+        "RB_MENU_VALUE_TABLE": "$$PWD/$(location //replacement/bank/tables:menu-value-table.rs)",
+    },
+    rlib_deps = {
+        "xm1_kernel": "//replacement/kernel:arm",
+        "xm1_property_service": "//replacement/property_service:property-service-arm",
+        "xm1_settings_storage_core": "//replacement/settings_storage:property-core-arm",
+    },
+    rustc_flags = [
+        "-C",
+        "target-feature=+strict-align",
+        "-C",
+        "llvm-args=-min-jump-table-entries=4096",
+        "--cfg",
+        "rb_menu_value_owned",
+    ],
+    visibility = [
+        "//replacement/bank:__pkg__",
+        "//replacement/menu_engine:__pkg__",
+        "//replacement/render_adapter:__pkg__",
+    ],
+)
 
 filegroup(
     name = "module",

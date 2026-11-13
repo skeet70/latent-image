@@ -148,7 +148,7 @@ main = do
       refused counter "a fall-through into a data word" (WalkRefused 0xefcd3c FallThroughIntoDataWord)
         (admit dataFallThrough symbols disasm sections)
       pcWriteback <- patchAt bin 0xefcbf4 0xe5bf30e4
-      refused counter "a pc-relative load with writeback" (WalkRefused 0xefcbf4 PcRelativeTransferWriteback)
+      refused counter "a pc-relative load with writeback" (WalkRefused 0xefcbf4 (DecoderRejected A.Unadmitted))
         (admit pcWriteback symbols disasm sections)
       literalOutside <- patchAt bin 0xefcb98 0xe51f3400
       refused counter "a pc-relative load outside the image" (WalkRefused 0xefcb98 PcRelativeLiteralOutside)

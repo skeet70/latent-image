@@ -56,7 +56,7 @@ data RecipeEditPackage = RecipeEditPackage
 
 bindRecipeEditPackage :: Ram.RamPushManifest -> B.ByteString -> RecipeEditSources -> Either String RecipeEditPackage
 bindRecipeEditPackage manifest elfBytes sources = do
-  bound <- Modal.bindModalRuntimeSource manifest elfBytes
+  bound <- Modal.bindModalRuntimeSource Modal.stockSettingsWriters manifest elfBytes
   bindRecipeEditSource (Just bound) manifest elfBytes sources
 
 loadRecipeEditPrepublication :: FilePath -> RecipeEditSources -> IO RecipeEditPackage

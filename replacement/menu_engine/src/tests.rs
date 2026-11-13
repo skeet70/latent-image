@@ -1,4 +1,4 @@
-use crate::block::{decode, mirror, DecodeError, RecordAddress, RecordTable, BLOCK_LEN, LAST_MOVE_LEN};
+use crate::block::{decode, last_move_writes, mirror, DecodeError, RecordAddress, RecordTable, BLOCK_LEN, LAST_MOVE_LEN};
 use crate::engine::{
     apply, Effect, EngineResult, EngineServices, KindSwitchCall, MenuEvent, NotOwned, Notify, SeekCall, SnapshotSlot,
     StageEvent, StageExtra, StageId, StageKind, StageNode,
@@ -251,6 +251,16 @@ fn round_trip_restores_every_byte() {
     let decoded = decode(&block, &last_move, &TREE, &RECORDS).expect("decodes");
     assert_eq!(decoded, state);
     assert_eq!(mirror(&decoded, &RECORDS), (block, last_move));
+}
+
+#[test]
+fn last_move_pair_stores_each_word_that_differs() {
+    let mut state = at(PICKER, frame(0, 0, 4, 0), 4, 0);
+    state.last_move = LastMove { class: MenuClass::new(0x104), token: RowToken::new(1) };
+    assert_eq!(last_move_writes(&state, [0x104, 1]), (None, None));
+    assert_eq!(last_move_writes(&state, [0x104, 0]), (None, Some(1)));
+    assert_eq!(last_move_writes(&state, [0, 1]), (Some(0x104), None));
+    assert_eq!(last_move_writes(&state, [0, 0]), (Some(0x104), Some(1)));
 }
 
 #[test]

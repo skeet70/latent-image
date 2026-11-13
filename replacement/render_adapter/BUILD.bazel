@@ -1,4 +1,61 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib")
+
 exports_files(["class.rs", "build.sh"])
+
+xm1_rust_rlib(
+    name = "arm",
+    src = "mod.rs",
+    crate_name = "render_adapter",
+    out = "librender_adapter.rlib",
+    data = [":module"],
+    rlib_deps = {
+        "libm": "//replacement/render_commands:libm-arm",
+        "menu_engine": "//replacement/menu_engine:arm",
+        "menu_engine_adapter": "//replacement/menu_engine:adapter-arm",
+        "menu_widgets": "//replacement/menu_widgets:arm",
+        "owned_menu": "//replacement/owned_menu:arm",
+        "render_commands": "//replacement/render_commands:runtime-arm",
+        "xm1_kernel": "//replacement/kernel:arm",
+        "xm1_property_service": "//replacement/property_service:property-service-arm",
+        "xm1_settings_storage_core": "//replacement/settings_storage:property-core-arm",
+    },
+    rustc_flags = [
+        "-C",
+        "target-feature=+strict-align",
+        "--cfg",
+        "rb_render_owned",
+        "-C",
+        "llvm-args=-min-jump-table-entries=4096",
+    ],
+    visibility = ["//replacement/bank:__pkg__"],
+)
+
+xm1_rust_rlib(
+    name = "arm-value",
+    src = "mod.rs",
+    crate_name = "render_adapter",
+    out = "librender_adapter_value.rlib",
+    data = [":module"],
+    rlib_deps = {
+        "libm": "//replacement/render_commands:libm-arm",
+        "menu_engine": "//replacement/menu_engine:arm",
+        "menu_engine_adapter": "//replacement/menu_engine:adapter-value-arm",
+        "menu_value": "//replacement/menu_value:arm-owned",
+        "menu_widgets": "//replacement/menu_widgets:arm",
+        "owned_menu": "//replacement/owned_menu:arm",
+        "render_commands": "//replacement/render_commands:runtime-arm",
+        "xm1_kernel": "//replacement/kernel:arm",
+        "xm1_property_service": "//replacement/property_service:property-service-arm",
+        "xm1_settings_storage_core": "//replacement/settings_storage:property-core-arm",
+    },
+    rustc_flags = [
+        "-C",
+        "target-feature=+strict-align",
+        "--cfg",
+        "rb_render_owned",
+    ],
+    visibility = ["//replacement/bank:__pkg__"],
+)
 
 filegroup(
     name = "module",

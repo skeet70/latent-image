@@ -146,7 +146,7 @@ callerWrite :: WriteEvent
 callerWrite = WriteEvent 0x9597f4 4 0x11223344
 
 baseRun :: Run
-baseRun = Run Returned [(R0, 1), (Sp, 0x9597f0)] [(RegionId "banks", B.pack [0xab])] (Just [WriteEvent 0x96cc64 1 0xab])
+baseRun = Run Returned [(R0, 1), (Sp, 0x9597f0)] [(RegionId "banks", B.pack [0xab])] (Just [WriteEvent 0x96cc64 1 0xab]) 1
 
 -- | A case that enters one function and returns: @push {r4, lr}; pop {r4, pc}@, so its entry path
 -- reaches eight bytes below its entry SP.
@@ -424,7 +424,32 @@ main = do
     , check "a read outside the fixture is not modelled" (model slotOwned (Get Bank0 DefaultRead (slot 0x10)) == Nothing)
     , check "ids outside the tables are modelled as unassigned" (modelled OutOfRange == Just OwnedUnassigned && modelled delegated == Nothing)
     , check "set values use the field mask, else 0x7f" (map (setValue owned3 (slot 0)) [SetFieldMax, SetAboveMax] == [7, 8] && map (setValue delegated (slot 0)) [SetFieldMax, SetAboveMax, SetDefaultRequest] == [0x7f, 0x80, 0x1affffff])
-    , check "a model outside the fixture is a model difference" (modelDifferences handFixture slotOwned (Get Bank0 DefaultRead (slot 0x10)) baseRun == [ModelOutsideFixture])
+    , check "a model outside the fixture is a model difference" (modelDifferences CanonicalEntryContract handFixture slotOwned (Get Bank0 DefaultRead (slot 0x10)) baseRun == [ModelOutsideFixture])
+    , check "the canonical entry contract ignores r3 while the public wrapper compares it"
+        (let claimed = [(R0, 1), (R3, 0xffffffff), (R6, 0xa5a50006), (Sp, 0x9597f0)]
+             reference = baseRun {runRegisters = claimed}
+             subject = reference {runRegisters = [(R0, 1), (R3, 0), (R6, 0xa5a50006), (Sp, 0x9597f0)]}
+             expected = fmap (projectExpectation CanonicalEntryContract) (modelExpectation handFixture OwnedUnassigned (Set Bank1 (slot 3) SetOne))
+             wrapperExpected = fmap (projectExpectation PublicWrapperEntryContract) (modelExpectation handFixture OwnedUnassigned (Set Bank1 (slot 3) SetOne))
+         in null (compareRuns (projectRun CanonicalEntryContract claimed reference) (projectRun CanonicalEntryContract claimed subject))
+              && compareRuns (projectRun PublicWrapperEntryContract claimed reference) (projectRun PublicWrapperEntryContract claimed subject) == [RegisterDiffers R3 0xffffffff 0]
+              && fmap (lookup R3 . expectedRegisters) expected == Just Nothing
+              && fmap (lookup R3 . expectedRegisters) wrapperExpected == Just (Just 3))
+    , check "a placeholder claim keeps r4-r11 and sp under the canonical contract"
+        (let registers = [(R0, 1), (R3, 0xffffffff), (R4, 0xa5a50004), (R11, 0xa5a5000b), (Sp, 0x9597f0)]
+             kept claimed subject = map fst (runRegisters (projectRun CanonicalEntryContract claimed subject))
+         in kept (expectedRegisters placeholderExpectation) (baseRun {runRegisters = registers}) == [R0, R4, R11, Sp]
+              && kept (expectedRegisters placeholderExpectation) (baseRun {runRegisters = [(R3, 3)]}) == [])
+    , check "a placeholder claim keeps r4-r11 and sp and drops only the wrapper's unclaimed r3"
+        (let registers = [(R0, 1), (R3, 0xffffffff), (R4, 0xa5a50004), (R11, 0xa5a5000b), (Sp, 0x9597f0)]
+             run = baseRun {runRegisters = registers}
+             kept claimed subject = map fst (runRegisters (projectRun PublicWrapperEntryContract claimed subject))
+         in kept (expectedRegisters placeholderExpectation) run == [R0, R4, R11, Sp]
+              && kept [(R3, 3)] run == [R0, R3, R4, R11, Sp]
+              && compareRuns (projectRun PublicWrapperEntryContract (expectedRegisters placeholderExpectation) run)
+                   (projectRun PublicWrapperEntryContract (expectedRegisters placeholderExpectation)
+                     run {runRegisters = [(R0, 1), (R4, 0xa5a50004), (R11, 0), (Sp, 0x9597f0)]})
+                   == [RegisterDiffers R11 0xa5a5000b 0])
     , check "an identical run has no difference" (null (compareRuns baseRun baseRun))
     , check "a different write value differs" (compareRuns baseRun baseRun {runWrites = Just [WriteEvent 0x96cc64 1 0xac]} == [WritesDiffer])
     , check "a truncated log fails" (compareRuns baseRun baseRun {runWrites = Nothing} == [SubjectTruncated])
@@ -483,7 +508,7 @@ main = do
     , check "the configuration default's byte has bits 5-7 set in a variant" (any (\config -> B.index config 0x138 .&. 0xe0 /= 0) (drop 1 streamConfigs))
     , check "header requests update the mapped status word" (fmap (\bytes -> readWordAt bytes 0x1c4) (expectedRegion "previous" bracketExpected) == Just 0)
     , check "the header backing checksum balances all sixteen bytes" (fmap (B.foldl' (+) (0::Word8) . B.take 16) (expectedRegion "backing" bracketExpected) == Just 0)
-    , check "header requests expose semaphore and byte-driver events" (maybe False (\bytes -> readWordAt bytes 0 >= 4 && readWordAt bytes 4 == 0x724b68 && readWordAt bytes 8 == 0x25) (expectedRegion "calls" bracketExpected))
+    , check "header requests expose semaphore and byte-driver events" (maybe False (\bytes -> readWordAt bytes 0 >= 4 && readWordAt bytes 4 == 0x7c && readWordAt bytes 8 == 0x25) (expectedRegion "calls" bracketExpected))
     , check "the backup window is bank 0's bytes 0-15 complemented" (backupWindow handFixture == B.replicate 16 0xff)
     , check "a bracketed bank-0 set saves and stores the refreshed byte, and the close copies bank 0's bytes after the store"
         (byteIn effectBanks 0xb bracketSet == Just 0xfd && byteIn effectPrevious 0xb bracketSet == Just 0x02

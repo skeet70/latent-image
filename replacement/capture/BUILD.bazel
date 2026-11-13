@@ -1,10 +1,25 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
-load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
 
 filegroup(
     name = "module",
     srcs = ["src/lib.rs"],
     visibility = ["//replacement/bank:__pkg__", "//replacement/develop:__pkg__"],
+)
+
+xm1_rust_rlib(
+    name = "arm",
+    src = "src/arm.rs",
+    crate_name = "capture",
+    out = "libcapture.rlib",
+    data = [":module"],
+    rustc_flags = [
+        "-C",
+        "target-feature=+strict-align",
+        "-C",
+        "llvm-args=-min-jump-table-entries=4096",
+    ],
+    visibility = ["//replacement/bank:__pkg__"],
 )
 
 filegroup(

@@ -12,6 +12,7 @@ import Data.Word (Word32)
 import Emulation.NativeCase (Region (..))
 import Emulation.NativeObservation (GuestAddress (..), Register (Sp), RegionId (RegionId), regionBounds)
 import Emulation.OwnedCase (CaseRegion (..), CaseSpec (..), IgnoredMemory (..), IgnoredReason (PrivateFrame), Permission (ReadExecute, ReadWrite))
+import qualified Replacement.PropertyService.HeaderBoundary as H
 import qualified StockStack as S
 
 -- | Bytes below an entry SP that a case's own execution reaches.
@@ -29,10 +30,9 @@ caseFrameDepth ownedRanges supplied spec =
     entry = fromIntegral (guestAddress (caseEntry spec))
     depthBytes (S.StackDepth depth) = depth
 
--- | The stock interface root table. No property case loads a slot from it; one that did would
--- resolve to no target and refuse.
+-- | The stock interface root table and the slot stubs the property cases enter.
 indirect :: S.IndirectTargets
-indirect = S.IndirectTargets 0x96bd20 M.empty M.empty []
+indirect = S.IndirectTargets H.kernelRootBase (M.fromList [(S.SlotOffset offset, [address]) | (offset, address) <- H.slotStubs]) M.empty []
 
 -- | Declares the top @depth@ bytes of the case's writable stack region as its private frame. That
 -- region ends at the entry SP and holds no expected byte.

@@ -1,0 +1,1377 @@
+[
+  {
+    "id": "E-SACLAC-PLACEMENT-150",
+    "claim": "The saclac placement stages {{owned_bytes}} owned bytes in {{extent_bytes}} bytes across {{entry_count}} entries. Candidate DAT {{candidate_dat}}; linked binary {{linked_binary}}; image 5 {{image5}}. stock flash boot: {{stock_boot_verdict}}, {{stock_boot_instructions}} instructions, frame {{stock_boot_frame}}. candidate flash boot: {{candidate_boot_verdict}}, {{candidate_boot_instructions}} instructions, frame {{candidate_boot_frame}}. Placement gate {{gate_verdict}} at {{gate_commit}}. cold-boot: {{cold-boot_verdict}}, trace stock/candidate {{cold-boot_stock_trace}}/{{cold-boot_candidate_trace}}, machines {{cold-boot_machines}}, sequence differences {{cold-boot_sequence_differences}}, trailing machines {{cold-boot_trailing_machines}}, trap fetches {{cold-boot_trap_fetches}}, queue posts {{cold-boot_queue_posts}}. half-press: {{half-press_verdict}}, trace stock/candidate {{half-press_stock_trace}}/{{half-press_candidate_trace}}, machines {{half-press_machines}}, sequence differences {{half-press_sequence_differences}}, trailing machines {{half-press_trailing_machines}}, trap fetches {{half-press_trap_fetches}}, queue posts {{half-press_queue_posts}}. fn: {{fn_verdict}}, trace stock/candidate {{fn_stock_trace}}/{{fn_candidate_trace}}, machines {{fn_machines}}, sequence differences {{fn_sequence_differences}}, trailing machines {{fn_trailing_machines}}, trap fetches {{fn_trap_fetches}}, queue posts {{fn_queue_posts}}. fn-down: {{fn-down_verdict}}, trace stock/candidate {{fn-down_stock_trace}}/{{fn-down_candidate_trace}}, machines {{fn-down_machines}}, sequence differences {{fn-down_sequence_differences}}, trailing machines {{fn-down_trailing_machines}}, trap fetches {{fn-down_trap_fetches}}, queue posts {{fn-down_queue_posts}}. fn-auto: {{fn-auto_verdict}}, trace stock/candidate {{fn-auto_stock_trace}}/{{fn-auto_candidate_trace}}, machines {{fn-auto_machines}}, sequence differences {{fn-auto_sequence_differences}}, trailing machines {{fn-auto_trailing_machines}}, trap fetches {{fn-auto_trap_fetches}}, queue posts {{fn-auto_queue_posts}}. ",
+    "scope": "Host-only record-5 {{piece_kind}} across {{entry_count}} boundary entries, {{placement_checks}} placement checks, retained-engine flash boot and the census routes listed above. Action and machine bodies remain stock.",
+    "notes": "Placement checks interface structure, not computed-target provenance or a memory-safety proof. Unsafe retained-memory and code-word operations remain in src/stock.rs. Census equality is ordered per-machine traffic, not equality of dispatcher veneers or producer counts. Cold-boot queue-post counts straddle an instruction cutoff; a next candidate post is unobserved. Instruction counts are model clocks, not physical latency; no hardware behavior, action-body ownership or full task retirement is qualified.",
+    "artifacts": [
+      "private-data/scratch/SaclacEngine/runs/20261113T030946Z-saclac8-stage/result/contract.json",
+      "private-data/scratch/SaclacEngine/runs/20261113T031025Z-saclac8-flash-stock/result/flash/flash-boot-receipt.json",
+      "private-data/scratch/SaclacEngine/runs/20261113T031116Z-saclac8-flash-candidate/result/flash/flash-boot-receipt.json",
+      "private-data/scratch/SaclacEngine/runs/20261113T031059Z-saclac8-compare-cold-boot/result/cold-boot.json",
+      "private-data/scratch/SaclacEngine/runs/20261113T031134Z-saclac8-compare-half-press/result/half-press.json",
+      "private-data/scratch/SaclacEngine/runs/20261113T031134Z-saclac8-compare-fn/result/fn.json",
+      "private-data/scratch/SaclacEngine/runs/20261113T031223Z-saclac8-compare-fn-down/result/fn-down.json",
+      "private-data/scratch/SaclacEngine/runs/20261113T031248Z-saclac8-compare-fn-auto/result/fn-auto.json",
+      "private-data/scratch/SaclacEngine/runs/20261113T031037Z-saclac8-cold-boot-stock/result/census.json",
+      "private-data/scratch/SaclacEngine/runs/20261113T031037Z-saclac8-cold-boot-candidate/result/census.json",
+      "private-data/scratch/SaclacEngine/runs/20261113T031038Z-saclac8-half-press-stock/result/census.json",
+      "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-half-press-candidate/result/census.json",
+      "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-fn-stock/result/census.json",
+      "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-fn-candidate/result/census.json",
+      "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-down-stock/result/census.json",
+      "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-down-candidate/result/census.json",
+      "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-auto-stock/result/census.json",
+      "private-data/scratch/SaclacEngine/runs/20261113T031138Z-saclac8-fn-auto-candidate/result/census.json",
+      "private-data/scratch/SaclacEngine/inputs/stage8/candidate.DAT",
+      "private-data/scratch/SaclacEngine/inputs/stage8/image5.bin",
+      "private-data/scratch/SaclacEngine/runs/20261113T031450Z-saclac8-final-gate/result/verdict.json",
+      "private-data/scratch/SaclacEngine/runs/20261113T031450Z-saclac8-final-gate/result/saclac-placement-tests-test.log",
+      "private-data/scratch/SaclacEngine/runs/20261113T031450Z-saclac8-final-gate/result/host-build.log"
+    ],
+    "facts": [
+      {
+        "name": "placement_checks",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031450Z-saclac8-final-gate/result/saclac-placement-tests-test.log",
+        "operation": "decimal-between",
+        "prefix": "saclac-placement: ",
+        "suffix": " checks passed"
+      },
+      {
+        "name": "owned_bytes",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T030946Z-saclac8-stage/result/contract.json",
+        "pointer": [
+          "owned_bytes"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "extent_bytes",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T030946Z-saclac8-stage/result/contract.json",
+        "pointer": [
+          "extent_bytes"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "entry_count",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T030946Z-saclac8-stage/result/contract.json",
+        "pointer": [
+          "entries"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "candidate_dat",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T030946Z-saclac8-stage/result/contract.json",
+        "pointer": [
+          "candidate_dat",
+          "sha256"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "linked_binary",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T030946Z-saclac8-stage/result/contract.json",
+        "pointer": [
+          "linked_bin_sha256"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "image5",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T030946Z-saclac8-stage/result/contract.json",
+        "pointer": [
+          "staged_image5",
+          "sha256"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "firmware_sha256",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T030946Z-saclac8-stage/result/contract.json",
+        "pointer": [
+          "canonical_dat_sha256"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "stock_boot_verdict",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031025Z-saclac8-flash-stock/result/flash/flash-boot-receipt.json",
+        "pointer": [
+          "result"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "stock_boot_instructions",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031025Z-saclac8-flash-stock/result/flash/flash-boot-receipt.json",
+        "pointer": [
+          "instructions"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "stock_boot_frame",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031025Z-saclac8-flash-stock/result/flash/flash-boot-receipt.json",
+        "pointer": [
+          "frame_sha256"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "candidate_boot_verdict",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031116Z-saclac8-flash-candidate/result/flash/flash-boot-receipt.json",
+        "pointer": [
+          "result"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "candidate_boot_instructions",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031116Z-saclac8-flash-candidate/result/flash/flash-boot-receipt.json",
+        "pointer": [
+          "instructions"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "candidate_boot_frame",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031116Z-saclac8-flash-candidate/result/flash/flash-boot-receipt.json",
+        "pointer": [
+          "frame_sha256"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "gate_verdict",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031450Z-saclac8-final-gate/result/verdict.json",
+        "pointer": [
+          "verdict"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "gate_commit",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031450Z-saclac8-final-gate/result/verdict.json",
+        "pointer": [
+          "commit"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "cold-boot_verdict",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031059Z-saclac8-compare-cold-boot/result/cold-boot.json",
+        "pointer": [
+          "verdict"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "cold-boot_stock_trace",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031059Z-saclac8-compare-cold-boot/result/cold-boot.json",
+        "pointer": [
+          "dispatcher_entries",
+          "stock_trace_entries"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "cold-boot_candidate_trace",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031059Z-saclac8-compare-cold-boot/result/cold-boot.json",
+        "pointer": [
+          "dispatcher_entries",
+          "candidate_trace_entries"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "cold-boot_machines",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031059Z-saclac8-compare-cold-boot/result/cold-boot.json",
+        "pointer": [
+          "machines"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "cold-boot_sequence_differences",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031059Z-saclac8-compare-cold-boot/result/cold-boot.json",
+        "pointer": [
+          "sequence_differences"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "cold-boot_trailing_machines",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031059Z-saclac8-compare-cold-boot/result/cold-boot.json",
+        "pointer": [
+          "trailing_machines"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "cold-boot_trap_fetches",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031059Z-saclac8-compare-cold-boot/result/cold-boot.json",
+        "pointer": [
+          "trap_fetches"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "cold-boot_queue_posts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031059Z-saclac8-compare-cold-boot/result/cold-boot.json",
+        "pointer": [
+          "queue43_posts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "cold-boot_instructions",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031059Z-saclac8-compare-cold-boot/result/cold-boot.json",
+        "pointer": [
+          "instructions"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "cold-boot_dispatcher_entries",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031059Z-saclac8-compare-cold-boot/result/cold-boot.json",
+        "pointer": [
+          "dispatcher_entries"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "cold_boot_milestone",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031059Z-saclac8-compare-cold-boot/result/cold-boot.json",
+        "pointer": [
+          "milestone"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "half-press_verdict",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031134Z-saclac8-compare-half-press/result/half-press.json",
+        "pointer": [
+          "verdict"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "half-press_stock_trace",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031134Z-saclac8-compare-half-press/result/half-press.json",
+        "pointer": [
+          "dispatcher_entries",
+          "stock_trace_entries"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "half-press_candidate_trace",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031134Z-saclac8-compare-half-press/result/half-press.json",
+        "pointer": [
+          "dispatcher_entries",
+          "candidate_trace_entries"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "half-press_machines",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031134Z-saclac8-compare-half-press/result/half-press.json",
+        "pointer": [
+          "machines"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "half-press_sequence_differences",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031134Z-saclac8-compare-half-press/result/half-press.json",
+        "pointer": [
+          "sequence_differences"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "half-press_trailing_machines",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031134Z-saclac8-compare-half-press/result/half-press.json",
+        "pointer": [
+          "trailing_machines"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "half-press_trap_fetches",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031134Z-saclac8-compare-half-press/result/half-press.json",
+        "pointer": [
+          "trap_fetches"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "half-press_queue_posts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031134Z-saclac8-compare-half-press/result/half-press.json",
+        "pointer": [
+          "queue43_posts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "half-press_instructions",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031134Z-saclac8-compare-half-press/result/half-press.json",
+        "pointer": [
+          "instructions"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "half-press_dispatcher_entries",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031134Z-saclac8-compare-half-press/result/half-press.json",
+        "pointer": [
+          "dispatcher_entries"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn_verdict",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031134Z-saclac8-compare-fn/result/fn.json",
+        "pointer": [
+          "verdict"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn_stock_trace",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031134Z-saclac8-compare-fn/result/fn.json",
+        "pointer": [
+          "dispatcher_entries",
+          "stock_trace_entries"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn_candidate_trace",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031134Z-saclac8-compare-fn/result/fn.json",
+        "pointer": [
+          "dispatcher_entries",
+          "candidate_trace_entries"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn_machines",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031134Z-saclac8-compare-fn/result/fn.json",
+        "pointer": [
+          "machines"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "fn_sequence_differences",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031134Z-saclac8-compare-fn/result/fn.json",
+        "pointer": [
+          "sequence_differences"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "fn_trailing_machines",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031134Z-saclac8-compare-fn/result/fn.json",
+        "pointer": [
+          "trailing_machines"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "fn_trap_fetches",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031134Z-saclac8-compare-fn/result/fn.json",
+        "pointer": [
+          "trap_fetches"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn_queue_posts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031134Z-saclac8-compare-fn/result/fn.json",
+        "pointer": [
+          "queue43_posts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn_instructions",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031134Z-saclac8-compare-fn/result/fn.json",
+        "pointer": [
+          "instructions"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn_dispatcher_entries",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031134Z-saclac8-compare-fn/result/fn.json",
+        "pointer": [
+          "dispatcher_entries"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-down_verdict",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031223Z-saclac8-compare-fn-down/result/fn-down.json",
+        "pointer": [
+          "verdict"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-down_stock_trace",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031223Z-saclac8-compare-fn-down/result/fn-down.json",
+        "pointer": [
+          "dispatcher_entries",
+          "stock_trace_entries"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-down_candidate_trace",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031223Z-saclac8-compare-fn-down/result/fn-down.json",
+        "pointer": [
+          "dispatcher_entries",
+          "candidate_trace_entries"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-down_machines",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031223Z-saclac8-compare-fn-down/result/fn-down.json",
+        "pointer": [
+          "machines"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "fn-down_sequence_differences",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031223Z-saclac8-compare-fn-down/result/fn-down.json",
+        "pointer": [
+          "sequence_differences"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "fn-down_trailing_machines",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031223Z-saclac8-compare-fn-down/result/fn-down.json",
+        "pointer": [
+          "trailing_machines"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "fn-down_trap_fetches",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031223Z-saclac8-compare-fn-down/result/fn-down.json",
+        "pointer": [
+          "trap_fetches"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-down_queue_posts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031223Z-saclac8-compare-fn-down/result/fn-down.json",
+        "pointer": [
+          "queue43_posts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-down_instructions",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031223Z-saclac8-compare-fn-down/result/fn-down.json",
+        "pointer": [
+          "instructions"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-down_dispatcher_entries",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031223Z-saclac8-compare-fn-down/result/fn-down.json",
+        "pointer": [
+          "dispatcher_entries"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-auto_verdict",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031248Z-saclac8-compare-fn-auto/result/fn-auto.json",
+        "pointer": [
+          "verdict"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-auto_stock_trace",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031248Z-saclac8-compare-fn-auto/result/fn-auto.json",
+        "pointer": [
+          "dispatcher_entries",
+          "stock_trace_entries"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-auto_candidate_trace",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031248Z-saclac8-compare-fn-auto/result/fn-auto.json",
+        "pointer": [
+          "dispatcher_entries",
+          "candidate_trace_entries"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-auto_machines",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031248Z-saclac8-compare-fn-auto/result/fn-auto.json",
+        "pointer": [
+          "machines"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "fn-auto_sequence_differences",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031248Z-saclac8-compare-fn-auto/result/fn-auto.json",
+        "pointer": [
+          "sequence_differences"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "fn-auto_trailing_machines",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031248Z-saclac8-compare-fn-auto/result/fn-auto.json",
+        "pointer": [
+          "trailing_machines"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "fn-auto_trap_fetches",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031248Z-saclac8-compare-fn-auto/result/fn-auto.json",
+        "pointer": [
+          "trap_fetches"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-auto_queue_posts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031248Z-saclac8-compare-fn-auto/result/fn-auto.json",
+        "pointer": [
+          "queue43_posts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-auto_instructions",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031248Z-saclac8-compare-fn-auto/result/fn-auto.json",
+        "pointer": [
+          "instructions"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-auto_dispatcher_entries",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031248Z-saclac8-compare-fn-auto/result/fn-auto.json",
+        "pointer": [
+          "dispatcher_entries"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "cold-boot-stock_instructions",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031037Z-saclac8-cold-boot-stock/result/census.json",
+        "pointer": [
+          "instructions"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "cold-boot-stock_counts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031037Z-saclac8-cold-boot-stock/result/census.json",
+        "pointer": [
+          "counts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "cold-boot-stock_milestones",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031037Z-saclac8-cold-boot-stock/result/census.json",
+        "pointer": [
+          "milestones"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "cold-boot-stock_error",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031037Z-saclac8-cold-boot-stock/result/census.json",
+        "pointer": [
+          "error"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "cold-boot-stock_machine_failure",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031037Z-saclac8-cold-boot-stock/result/census.json",
+        "pointer": [
+          "machine_failure"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "cold-boot-stock_dispatch_count",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031037Z-saclac8-cold-boot-stock/result/census.json",
+        "pointer": [
+          "dispatch",
+          "events"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "cold-boot-stock_dispatch_overflow",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031037Z-saclac8-cold-boot-stock/result/census.json",
+        "pointer": [
+          "dispatch",
+          "overflow"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "cold-boot-stock_queue_posts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031037Z-saclac8-cold-boot-stock/result/census.json",
+        "pointer": [
+          "queue43",
+          "posts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "cold-boot-candidate_instructions",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031037Z-saclac8-cold-boot-candidate/result/census.json",
+        "pointer": [
+          "instructions"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "cold-boot-candidate_counts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031037Z-saclac8-cold-boot-candidate/result/census.json",
+        "pointer": [
+          "counts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "cold-boot-candidate_milestones",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031037Z-saclac8-cold-boot-candidate/result/census.json",
+        "pointer": [
+          "milestones"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "cold-boot-candidate_error",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031037Z-saclac8-cold-boot-candidate/result/census.json",
+        "pointer": [
+          "error"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "cold-boot-candidate_machine_failure",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031037Z-saclac8-cold-boot-candidate/result/census.json",
+        "pointer": [
+          "machine_failure"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "cold-boot-candidate_dispatch_count",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031037Z-saclac8-cold-boot-candidate/result/census.json",
+        "pointer": [
+          "dispatch",
+          "events"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "cold-boot-candidate_dispatch_overflow",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031037Z-saclac8-cold-boot-candidate/result/census.json",
+        "pointer": [
+          "dispatch",
+          "overflow"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "cold-boot-candidate_queue_posts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031037Z-saclac8-cold-boot-candidate/result/census.json",
+        "pointer": [
+          "queue43",
+          "posts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "half-press-stock_instructions",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031038Z-saclac8-half-press-stock/result/census.json",
+        "pointer": [
+          "instructions"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "half-press-stock_counts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031038Z-saclac8-half-press-stock/result/census.json",
+        "pointer": [
+          "counts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "half-press-stock_milestones",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031038Z-saclac8-half-press-stock/result/census.json",
+        "pointer": [
+          "milestones"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "half-press-stock_error",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031038Z-saclac8-half-press-stock/result/census.json",
+        "pointer": [
+          "error"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "half-press-stock_machine_failure",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031038Z-saclac8-half-press-stock/result/census.json",
+        "pointer": [
+          "machine_failure"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "half-press-stock_dispatch_count",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031038Z-saclac8-half-press-stock/result/census.json",
+        "pointer": [
+          "dispatch",
+          "events"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "half-press-stock_dispatch_overflow",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031038Z-saclac8-half-press-stock/result/census.json",
+        "pointer": [
+          "dispatch",
+          "overflow"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "half-press-stock_queue_posts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031038Z-saclac8-half-press-stock/result/census.json",
+        "pointer": [
+          "queue43",
+          "posts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "half-press-candidate_instructions",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-half-press-candidate/result/census.json",
+        "pointer": [
+          "instructions"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "half-press-candidate_counts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-half-press-candidate/result/census.json",
+        "pointer": [
+          "counts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "half-press-candidate_milestones",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-half-press-candidate/result/census.json",
+        "pointer": [
+          "milestones"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "half-press-candidate_error",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-half-press-candidate/result/census.json",
+        "pointer": [
+          "error"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "half-press-candidate_machine_failure",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-half-press-candidate/result/census.json",
+        "pointer": [
+          "machine_failure"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "half-press-candidate_dispatch_count",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-half-press-candidate/result/census.json",
+        "pointer": [
+          "dispatch",
+          "events"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "half-press-candidate_dispatch_overflow",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-half-press-candidate/result/census.json",
+        "pointer": [
+          "dispatch",
+          "overflow"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "half-press-candidate_queue_posts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-half-press-candidate/result/census.json",
+        "pointer": [
+          "queue43",
+          "posts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-stock_instructions",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-fn-stock/result/census.json",
+        "pointer": [
+          "instructions"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-stock_counts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-fn-stock/result/census.json",
+        "pointer": [
+          "counts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-stock_milestones",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-fn-stock/result/census.json",
+        "pointer": [
+          "milestones"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-stock_error",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-fn-stock/result/census.json",
+        "pointer": [
+          "error"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-stock_machine_failure",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-fn-stock/result/census.json",
+        "pointer": [
+          "machine_failure"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-stock_dispatch_count",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-fn-stock/result/census.json",
+        "pointer": [
+          "dispatch",
+          "events"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "fn-stock_dispatch_overflow",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-fn-stock/result/census.json",
+        "pointer": [
+          "dispatch",
+          "overflow"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-stock_queue_posts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-fn-stock/result/census.json",
+        "pointer": [
+          "queue43",
+          "posts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-candidate_instructions",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-fn-candidate/result/census.json",
+        "pointer": [
+          "instructions"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-candidate_counts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-fn-candidate/result/census.json",
+        "pointer": [
+          "counts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-candidate_milestones",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-fn-candidate/result/census.json",
+        "pointer": [
+          "milestones"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-candidate_error",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-fn-candidate/result/census.json",
+        "pointer": [
+          "error"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-candidate_machine_failure",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-fn-candidate/result/census.json",
+        "pointer": [
+          "machine_failure"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-candidate_dispatch_count",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-fn-candidate/result/census.json",
+        "pointer": [
+          "dispatch",
+          "events"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "fn-candidate_dispatch_overflow",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-fn-candidate/result/census.json",
+        "pointer": [
+          "dispatch",
+          "overflow"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-candidate_queue_posts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031105Z-saclac8-fn-candidate/result/census.json",
+        "pointer": [
+          "queue43",
+          "posts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-down-stock_instructions",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-down-stock/result/census.json",
+        "pointer": [
+          "instructions"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-down-stock_counts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-down-stock/result/census.json",
+        "pointer": [
+          "counts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-down-stock_milestones",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-down-stock/result/census.json",
+        "pointer": [
+          "milestones"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-down-stock_error",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-down-stock/result/census.json",
+        "pointer": [
+          "error"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-down-stock_machine_failure",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-down-stock/result/census.json",
+        "pointer": [
+          "machine_failure"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-down-stock_dispatch_count",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-down-stock/result/census.json",
+        "pointer": [
+          "dispatch",
+          "events"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "fn-down-stock_dispatch_overflow",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-down-stock/result/census.json",
+        "pointer": [
+          "dispatch",
+          "overflow"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-down-stock_queue_posts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-down-stock/result/census.json",
+        "pointer": [
+          "queue43",
+          "posts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-down-candidate_instructions",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-down-candidate/result/census.json",
+        "pointer": [
+          "instructions"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-down-candidate_counts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-down-candidate/result/census.json",
+        "pointer": [
+          "counts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-down-candidate_milestones",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-down-candidate/result/census.json",
+        "pointer": [
+          "milestones"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-down-candidate_error",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-down-candidate/result/census.json",
+        "pointer": [
+          "error"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-down-candidate_machine_failure",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-down-candidate/result/census.json",
+        "pointer": [
+          "machine_failure"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-down-candidate_dispatch_count",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-down-candidate/result/census.json",
+        "pointer": [
+          "dispatch",
+          "events"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "fn-down-candidate_dispatch_overflow",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-down-candidate/result/census.json",
+        "pointer": [
+          "dispatch",
+          "overflow"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-down-candidate_queue_posts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-down-candidate/result/census.json",
+        "pointer": [
+          "queue43",
+          "posts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-auto-stock_instructions",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-auto-stock/result/census.json",
+        "pointer": [
+          "instructions"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-auto-stock_counts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-auto-stock/result/census.json",
+        "pointer": [
+          "counts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-auto-stock_milestones",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-auto-stock/result/census.json",
+        "pointer": [
+          "milestones"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-auto-stock_error",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-auto-stock/result/census.json",
+        "pointer": [
+          "error"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-auto-stock_machine_failure",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-auto-stock/result/census.json",
+        "pointer": [
+          "machine_failure"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-auto-stock_dispatch_count",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-auto-stock/result/census.json",
+        "pointer": [
+          "dispatch",
+          "events"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "fn-auto-stock_dispatch_overflow",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-auto-stock/result/census.json",
+        "pointer": [
+          "dispatch",
+          "overflow"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-auto-stock_queue_posts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031122Z-saclac8-fn-auto-stock/result/census.json",
+        "pointer": [
+          "queue43",
+          "posts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-auto-candidate_instructions",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031138Z-saclac8-fn-auto-candidate/result/census.json",
+        "pointer": [
+          "instructions"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-auto-candidate_counts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031138Z-saclac8-fn-auto-candidate/result/census.json",
+        "pointer": [
+          "counts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-auto-candidate_milestones",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031138Z-saclac8-fn-auto-candidate/result/census.json",
+        "pointer": [
+          "milestones"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-auto-candidate_error",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031138Z-saclac8-fn-auto-candidate/result/census.json",
+        "pointer": [
+          "error"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-auto-candidate_machine_failure",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031138Z-saclac8-fn-auto-candidate/result/census.json",
+        "pointer": [
+          "machine_failure"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-auto-candidate_dispatch_count",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031138Z-saclac8-fn-auto-candidate/result/census.json",
+        "pointer": [
+          "dispatch",
+          "events"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "fn-auto-candidate_dispatch_overflow",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031138Z-saclac8-fn-auto-candidate/result/census.json",
+        "pointer": [
+          "dispatch",
+          "overflow"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "fn-auto-candidate_queue_posts",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T031138Z-saclac8-fn-auto-candidate/result/census.json",
+        "pointer": [
+          "queue43",
+          "posts"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "piece_kind",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T030946Z-saclac8-stage/result/contract.json",
+        "pointer": [
+          "piece_kind"
+        ],
+        "operation": "value"
+      }
+    ]
+  },
+  {
+    "id": "E-SACLAC-ENGINE-COMPARE-150",
+    "claim": "The saclac boundary suite reports {{case_count}} cases and {{control_count}} deliberately wrong variants for owned ELF {{owned_elf}}. Judge {{judge_version}} verdict: {{judge_verdict}}; survivors {{survivor_count}}, different cases {{different_case_count}}, unmet conditions {{unmet_count}}. Execution and control conditions: {{conditions}}.",
+    "scope": "{{reported_scope}}",
+    "notes": "Stock actions and trace are recording stubs; selected calls and arguments are observed, not action behavior. Stock second-table data do not distinguish the surviving bound-check mutation. Out-of-range second-table refusal is covered only by the host core tests, not this native comparison. Placement checks interface facts; memory safety rests on the compiler and bounded types. No machine is owned and no hardware behavior is qualified.",
+    "artifacts": [
+      "private-data/scratch/SaclacEngine/runs/20261113T030943Z-saclac8-suite/result/saclac-report.json",
+      "private-data/scratch/SaclacEngine/runs/20261113T030943Z-saclac8-suite/result/verdict-judge.json",
+      "private-data/scratch/SaclacEngine/runs/20261113T030943Z-saclac8-suite/result/case-table.json"
+    ],
+    "facts": [
+      {
+        "name": "case_count",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T030943Z-saclac8-suite/result/saclac-report.json",
+        "pointer": [
+          "cases"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "control_count",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T030943Z-saclac8-suite/result/saclac-report.json",
+        "pointer": [
+          "controls"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "owned_elf",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T030943Z-saclac8-suite/result/saclac-report.json",
+        "pointer": [
+          "owned_sha256"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "judge_version",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T030943Z-saclac8-suite/result/verdict-judge.json",
+        "pointer": [
+          "judge_version"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "judge_verdict",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T030943Z-saclac8-suite/result/verdict-judge.json",
+        "pointer": [
+          "verdict"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "survivor_count",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T030943Z-saclac8-suite/result/verdict-judge.json",
+        "pointer": [
+          "survivors"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "different_case_count",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T030943Z-saclac8-suite/result/verdict-judge.json",
+        "pointer": [
+          "different_cases"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "unmet_count",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T030943Z-saclac8-suite/result/verdict-judge.json",
+        "pointer": [
+          "unmet"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "conditions",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T030943Z-saclac8-suite/result/verdict-judge.json",
+        "pointer": [
+          "conditions"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "firmware_sha256",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T030943Z-saclac8-suite/result/saclac-report.json",
+        "pointer": [
+          "firmware_sha256"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "survivors",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T030943Z-saclac8-suite/result/verdict-judge.json",
+        "pointer": [
+          "survivors"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "controls",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T030943Z-saclac8-suite/result/saclac-report.json",
+        "pointer": [
+          "controls"
+        ],
+        "operation": "value"
+      },
+      {
+        "name": "reported_scope",
+        "path": "private-data/scratch/SaclacEngine/runs/20261113T030943Z-saclac8-suite/result/saclac-report.json",
+        "pointer": [
+          "scope"
+        ],
+        "operation": "value"
+      }
+    ]
+  }
+]

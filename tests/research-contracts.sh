@@ -4,6 +4,7 @@ set -euo pipefail
 fuji_af_schema_checker="$1"
 fuji_af_jq="$2"
 fuji_af_git="$3"
+fuji_af_evidence_record="$4"
 
 "$fuji_af_schema_checker" --check-metaschema schemas/*.schema.json
 
@@ -56,6 +57,7 @@ fi
 # or decimal number are camera key names. E-D is the exposure-compensation dial; E-MODEL is a placeholder file name.
 # The runfiles ledger links back to the checkout.
 fuji_af_ledger="$(readlink -f docs/evidence.jsonl)"
+"$fuji_af_evidence_record" check-available "${fuji_af_ledger%/docs/evidence.jsonl}" docs/evidence-recipes.json docs/evidence.jsonl replacement/README.md +RTS -M1G -RTS
 "$fuji_af_git" -C "${fuji_af_ledger%/docs/evidence.jsonl}" grep -I -n -o -P \
   '(?<![A-Za-z0-9_-])E-[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*(?![A-Za-z0-9_]|[-+=.][0-9])' \
   > "$TEST_TMPDIR/citations" || [[ $? -eq 1 ]]

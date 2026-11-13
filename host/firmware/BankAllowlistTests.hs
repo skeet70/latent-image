@@ -1,18 +1,20 @@
--- | bank-allowlist-tests ALLOWLIST CHECKER ELF_00C20000 ELF_00C21F88
+-- | bank-allowlist-tests ALLOWLIST CHECKER ELF_00C20000 ELF_00C21F88 ENGINE_ELF MODAL_FRAGMENT ENGINE_FRAGMENT
 --
--- The ELFs are //host/firmware:bank-elf-* outputs for the current bank sources.
--- Fixtures replace function words in the 0x00c40000 ELF.
+-- The ELFs are //host/firmware:bank-elf-* and :engine-* outputs for the
+-- current bank sources. Fixtures replace function words in the 0x00c40000 ELF.
 module Main (main) where
 
 import A32 (Forbidden (..), Reg (..))
 import qualified A32
 import ArmElf
 import BankAllowlist
-import Control.Monad (forM_, unless)
+import BankAllowlistComposition (composeBankAllowlist)
+import Control.Monad (forM, forM_, unless, when)
 import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
 import Data.List (find)
 import Data.Word (Word32)
+import RamPushLayout (menuEngineRegionExtentFor, modalEngineBankVariant)
 import System.Directory (getTemporaryDirectory, removeFile)
 import System.Environment (getArgs)
 import System.Exit (ExitCode (..), exitFailure)
@@ -26,7 +28,7 @@ check label passed = unless passed $ do
 
 main :: IO ()
 main = do
-  [allowlistPath, checker, elfLow, elfHigh] <- getArgs
+  [allowlistPath, checker, elfLow, elfHigh, engineElf, modalFragmentPath, engineFragmentPath] <- getArgs
   allowlistBytes <- B.readFile allowlistPath
   allowlist <- either (fail . ("allowlist: " ++)) pure (parseAllowlist allowlistBytes)
   clean <- B.readFile elfLow
@@ -111,7 +113,7 @@ main = do
     ] $ \(label, overlappingSymbol) -> do
       refused <- checked allowlist (cleanElf {elfSymbols = overlappingSymbol : aliasSymbols ++ elfSymbols cleanElf})
       check ("partial overlap refuses: " ++ label)
-        (any ((== LayoutProblem) . findingReason) (violations refused))
+        (any (\f -> case findingReason f of LayoutProblem _ -> True; _ -> False) (violations refused))
   let callerStart = fst (function "rb_assert_one")
       callerSize = snd (function "rb_assert_one") - callerStart
       resultWords = [0xe92d4000, branchLink (callerStart + 4) (fst (function "rb_status_record")), 0xe5801000, 0xe8bd8000]
@@ -165,6 +167,289 @@ main = do
   unknownFrame <- run framePolicy unknownBytes
   check "unknown pointers do not acquire local frame provenance"
     (any (\f -> findingAddress f == unknownCall && findingReason f == UnprovenArgument) (violations unknownFrame))
+  -- A stock call may write through any frame address the caller passed it.
+  let stockTarget = case stockCalls allowlist of
+        (call : _) -> stockCallAddress call
+        [] -> error "the allowlist declares no stock call"
+      writableBase = symbol "rb_last_status"
+      slotWord opcode half = opcode .|. ((half .&. 0xf000) `shiftL` 4) .|. (half .&. 0xfff)
+      slotPrefix = [0xe92d4010, 0xe24dd008, slotWord 0xe3004000 writableBase, slotWord 0xe3404000 (writableBase `shiftR` 16), 0xe58d4000]
+      withCall instructions =
+        let site = callerStart + fromIntegral (length instructions * 4)
+         in replaceFunction "rb_assert_one" (instructions ++ [branchLink site stockTarget] ++ [0xe59d2000, 0xe3a03001, 0xe5823000, 0xe28dd008, 0xe8bd8010]) clean
+      escapedSlot = withCall (slotPrefix ++ [0xe1a0000d])
+      keptSlot = withCall slotPrefix
+      rechecked = replaceFunction "rb_assert_one"
+        (slotPrefix ++ [0xe1a0000d, branchLink (callerStart + 24) stockTarget,
+          0xe59d2000, 0xe3520003, 0x8a000000, 0xe7843102, 0xe28dd008, 0xe8bd8010]) clean
+  escapedReport <- run allowlist escapedSlot
+  check "a slot whose address a stock call received loses its value"
+    (any (\f -> findingAddress f == callerStart + 36) (violations escapedReport))
+  keptReport <- run allowlist keptSlot
+  check "a slot whose address never escaped keeps its value"
+    (not (any (\f -> findingAddress f == callerStart + 32) (violations keptReport)))
+  recheckedReport <- run allowlist rechecked
+  check "a reloaded slot with a range check bounds its store index"
+    (not (any (\f -> findingAddress f == callerStart + 40) (violations recheckedReport)))
+  -- A bank veneer that calls stock through a register.
+  let veneer = fst (function "rb_status_record")
+      veneerBytes = replaceFunction "rb_status_record"
+        [0xe52de004, slotWord 0xe300c000 stockTarget, slotWord 0xe340c000 (stockTarget `shiftR` 16), 0xe12fff3c, 0xe49de004, 0xe12fff1e] clean
+      throughVeneer callee = replaceFunction "rb_assert_one"
+        (slotPrefix ++ [0xe1a0000d, branchLink (callerStart + 24) veneer,
+          0xe59d2000, 0xe3a03001, 0xe5823000, 0xe28dd008, 0xe8bd8010]) callee
+      savedThroughVeneer = replaceFunction "rb_assert_one"
+        (slotPrefix ++ [0xe1a0000d, branchLink (callerStart + 24) veneer, 0xe28dd008, 0xe8bd8010]) veneerBytes
+  veneerReport <- run allowlist (throughVeneer veneerBytes)
+  check "a slot whose address an owned veneer reaching stock received loses its value"
+    (any (\f -> findingAddress f == callerStart + 36) (violations veneerReport))
+  check "a veneer that saves and restores lr has no finding of its own"
+    (not (any (\f -> findingFunction f == "rb_status_record") (violations veneerReport)))
+  plainReport <- run allowlist (throughVeneer (replaceFunction "rb_status_record" [0xe1a00000, 0xe12fff1e] clean))
+  check "a bank call that reaches no stock still forgets the caller's escaped local"
+    (any (\f -> findingAddress f == callerStart + 36) (violations plainReport))
+  savedReport <- run allowlist savedThroughVeneer
+  check "a saved return address survives a call that receives a pointer to a local"
+    (not (any (\f -> findingAddress f == callerStart + 32) (violations savedReport)))
+  -- `add r0, sp, #1` exposes entry sp-15, inside the rb_last_status word at -16.
+  unalignedReport <- run allowlist (withCall (slotPrefix ++ [0xe28d0001]))
+  check "a frame word holding the lowest exposed byte loses its value"
+    (any (\f -> findingAddress f == callerStart + 36) (violations unalignedReport))
+  -- `str r4, [sp, #-4]` writes entry sp-12, below the sp the call is made with.
+  let belowSpBytes = replaceFunction "rb_assert_one"
+        [0xe92d4010, slotWord 0xe3004000 writableBase, slotWord 0xe3404000 (writableBase `shiftR` 16), 0xe50d4004,
+          branchLink (callerStart + 16) stockTarget, 0xe51d2004, 0xe3a03001, 0xe5823000, 0xe8bd8010] clean
+  belowSpReport <- run allowlist belowSpBytes
+  check "a frame word below the call's stack pointer loses its value"
+    (any (\f -> findingAddress f == callerStart + 28) (violations belowSpReport))
+  -- `sub r0, sp, r1` keeps the frame root, so the whole frame is exposed.
+  subReport <- run allowlist (withCall (slotPrefix ++ [0xe04d0001]))
+  check "a frame address minus an unknown index exposes the frame"
+    (any (\f -> findingAddress f == callerStart + 36) (violations subReport))
+  -- A declared store through an unbounded frame index may reach any frame word.
+  let frameIndexPolicy = allowlist {declarations = declarations allowlist ++
+        [Declaration "rb_assert_one" StoreAccess (Index StackFrame) "synthetic two-word local array"]}
+      frameIndexBytes = replaceFunction "rb_assert_one"
+        (slotPrefix ++ [0xe78d1100, 0xe59d2000, 0xe3a03001, 0xe5823000, 0xe28dd008, 0xe8bd8010]) clean
+  frameIndexReport <- run frameIndexPolicy frameIndexBytes
+  check "a declared store through an unbounded frame index clears the frame"
+    (any (\f -> findingAddress f == callerStart + 32) (violations frameIndexReport))
+  -- The frame word above the escaped local, not only the escaped span, loses
+  -- its value: a span rule keeps the word at sp+4 and proves the store.
+  let abovePrefix = slotPrefix ++ [0xe58d4004, 0xe1a0000d]
+      aboveSite = callerStart + fromIntegral (length abovePrefix * 4)
+      aboveBytes = replaceFunction "rb_assert_one"
+        (abovePrefix ++ [branchLink aboveSite stockTarget, 0xe59d2004, 0xe3a03001, 0xe5823000, 0xe28dd008, 0xe8bd8010]) clean
+  aboveReport <- run allowlist aboveBytes
+  check "a frame word above the escaped local loses its value after the call"
+    (any (\f -> findingAddress f == aboveSite + 12) (violations aboveReport))
+  -- A bank callee that writes through a frame pointer it was handed, without
+  -- reaching stock, overwrites the caller's slot all the same.
+  let writerCallee = replaceFunction "rb_status_record" [0xe5801000, 0xe12fff1e] clean
+      writerPolicy = allowlist {declarations = declarations allowlist ++
+        [Declaration "rb_status_record" StoreAccess (Argument (Reg 0)) "synthetic callee writes through its argument"]}
+      writerPrefix = slotPrefix ++ [0xe3e01000, 0xe1a0000d]
+      writerSite = callerStart + fromIntegral (length writerPrefix * 4)
+      writerBytes = replaceFunction "rb_assert_one"
+        (writerPrefix ++ [branchLink writerSite indirectCallee, 0xe59d2000, 0xe3a03001, 0xe5823000, 0xe28dd008, 0xe8bd8010]) writerCallee
+  writerReport <- run writerPolicy writerBytes
+  check "a bank callee that writes the frame it was handed loses the caller's slot"
+    (any (\f -> findingAddress f == writerSite + 12) (violations writerReport))
+  -- A tail-call veneer (`bx r12`) is a call to stock like `blx r12`.
+  let tailVeneer = replaceFunction "rb_status_record"
+        [slotWord 0xe300c000 stockTarget, slotWord 0xe340c000 (stockTarget `shiftR` 16), 0xe12fff1c] clean
+  tailReport <- run allowlist (throughVeneer tailVeneer)
+  check "a bx r12 veneer reaching stock forgets the caller's escaped local"
+    (any (\f -> findingAddress f == callerStart + 36) (violations tailReport))
+  -- Two bank calls in a chain: the caller's slot is gone after the first call
+  -- whatever the second one reaches.
+  let chainMiddle = fst (function "rb_status_record")
+      chainVeneer = replaceFunction "rb_probe_entry"
+        [slotWord 0xe300c000 stockTarget, slotWord 0xe340c000 (stockTarget `shiftR` 16), 0xe12fff1c] clean
+      chainCallee = replaceFunction "rb_status_record"
+        [0xe92d4002, branchLink (chainMiddle + 4) (fst (function "rb_probe_entry")), 0xe8bd4002, 0xe12fff1e] chainVeneer
+  chainReport <- run allowlist (throughVeneer chainCallee)
+  check "a two-level bank chain reaching stock forgets the caller's escaped local"
+    (any (\f -> findingAddress f == callerStart + 36) (violations chainReport))
+  -- A result the analysis does not model takes the frame from a frame operand:
+  -- `add r1, sp, #4` puts entry sp-12 in r1 while the slot at entry sp-16 holds
+  -- rb_last_status, so exposing the frame forgets that slot at the call.
+  let frameCase label prefix = do
+        let site = callerStart + fromIntegral (length prefix * 4)
+        report <- run allowlist (withCall prefix)
+        check (label ++ " exposes the frame")
+          (any (\f -> findingAddress f == site + 12) (violations report))
+  frameCase "a multiply of a frame address" (slotPrefix ++ [0xe28d1004, 0xe0000291])
+  frameCase "an add with carry of a frame address" (slotPrefix ++ [0xe28d1004, 0xe0a10002])
+  frameCase "a subtract with carry of a frame address" (slotPrefix ++ [0xe28d1004, 0xe0c10002])
+  frameCase "a reverse subtract with carry of a frame address" (slotPrefix ++ [0xe28d1004, 0xe0e10002])
+  frameCase "a signed byte extend of a frame address" (slotPrefix ++ [0xe28d1004, 0xe6af0071])
+  -- An operand the analysis cannot resolve still carries a frame address into
+  -- the result.
+  frameCase "a register-shifted frame address" (slotPrefix ++ [0xe3a01020, 0xe1a0017d])
+  frameCase "a frame address as a reverse subtract's subtrahend" (slotPrefix ++ [0xe28d1004, 0xe0610002])
+  frameCase "a multiply with a frame factor and a scalar accumulator" (slotPrefix ++ [0xe28d1004, 0xe3a02001, 0xe3e03003, 0xe0203291])
+  -- A frame index added to an exact pointer: without the operand rule the
+  -- result keeps only the pointer's root and the frame is lost.
+  let offsetPrefix = [0xe08d2000, 0xe3001000, 0xe3401001, 0xe0810002]
+      offsetStore = callerStart + fromIntegral (length offsetPrefix * 4)
+      offsetBytes = replaceFunction "rb_assert_one" (offsetPrefix ++ [0xe5803000, 0xe12fff1e]) clean
+  offsetReport <- run allowlist offsetBytes
+  check "a frame index added to an exact pointer keeps the frame"
+    (any (\f -> findingAddress f == offsetStore && findingReason f == Unproven StoreAccess (Index StackFrame)) (violations offsetReport))
+  -- A push at entry sp allocates locals for the callees that receive their
+  -- address; only the slot the push wrote lr into keeps its value across the
+  -- call.
+  let pushedLocalBytes = replaceFunction "rb_assert_one"
+        [0xe92d401c, slotWord 0xe3004000 writableBase, slotWord 0xe3404000 (writableBase `shiftR` 16), 0xe58d4000,
+         0xe1a0000d, branchLink (callerStart + 20) stockTarget, 0xe59d2000, 0xe3a03001, 0xe5823000, 0xe8bd801c] clean
+  pushedLocalReport <- run allowlist pushedLocalBytes
+  check "a pushed local a call received the address of loses its value"
+    (any (\f -> findingAddress f == callerStart + 32 && findingReason f == Unproven StoreAccess (Index (StockAddress 0))) (violations pushedLocalReport))
+  -- A pushed local a call received the address of is no longer a known 0, so
+  -- the compare cannot prune the path that stores through entry r6.
+  let staleLocalBytes = replaceFunction "rb_assert_one"
+        [0xe92d401c, 0xe3a01000, 0xe58d1000, 0xe1a0000d, branchLink (callerStart + 16) stockTarget,
+         0xe59d1000, 0xe3510000, 0x15863000, 0xe8bd801c] clean
+  staleLocalReport <- run allowlist staleLocalBytes
+  check "a pushed local a call received the address of no longer prunes a path"
+    (any (\f -> findingAddress f == callerStart + 28 && findingReason f == Unproven StoreAccess (Argument (Reg 6))) (violations staleLocalReport))
+  -- A pushed register slot is a local like any other once a callee holds its
+  -- address, even when the push also saved the return address.
+  let pushedRegisterBytes = replaceFunction "rb_assert_one"
+        [0xe92d4f80, 0xe28d0004, branchLink (callerStart + 8) stockTarget,
+         0xe59d2004, 0xe3a03001, 0xe5823000, 0xe8bd8f80] clean
+  pushedRegisterReport <- run allowlist pushedRegisterBytes
+  check "a pushed register slot a call received the address of loses its value"
+    (any (\f -> findingAddress f == callerStart + 20 && findingReason f == Unproven StoreAccess (Index (StockAddress 0))) (violations pushedRegisterReport))
+  -- RRX shifts the carry into bit 31, so an exact pointer does not survive it.
+  let rrxBytes = replaceFunction "rb_assert_one"
+        [slotWord 0xe3004000 writableBase, slotWord 0xe3404000 (writableBase `shiftR` 16), 0xe1a00064, 0xe3a03001, 0xe5803000, 0xe12fff1e] clean
+  rrxReport <- run allowlist rrxBytes
+  check "a rotate-right-extend of an exact pointer is not the pointer"
+    (any (\f -> findingAddress f == callerStart + 16 && findingReason f == Unproven StoreAccess (Index (StockAddress 0))) (violations rrxReport))
+  -- RRX in a register-offset address takes the carry, so the store is not the
+  -- base pointer's declared cell.
+  let rrxOffsetBytes = replaceFunction "rb_assert_one"
+        [slotWord 0xe3004000 writableBase, slotWord 0xe3404000 (writableBase `shiftR` 16), 0xe3a01008, 0xe3a03001,
+         0xe7843061, 0xe12fff1e] clean
+  rrxOffsetReport <- run allowlist rrxOffsetBytes
+  check "a rotate-right-extend in a register-offset address is not the index"
+    (any (\f -> findingAddress f == callerStart + 16
+      && findingReason f == Unproven StoreAccess (Index (BankObject "rb_last_status"))) (violations rrxOffsetReport))
+  -- The entry push's return slot is exempt only where every incoming path
+  -- wrote it. Each path sets the flags before the join so the two states meet.
+  let joinProgram =
+        [ 0xe3500000, 0x1a000004, 0xe92d4010, 0xe3520000, 0xea000006, 0xe320f000, 0xe320f000
+        , 0xe24dd008, 0xe58de004, 0xe3530000, 0xe320f000, 0xe320f000, 0xe1a0000d
+        , branchLink (callerStart + 52) stockTarget, 0xe59df004
+        ]
+      joinBytes = replaceFunction "rb_assert_one" joinProgram clean
+  joinReport <- run allowlist joinBytes
+  check "a return address exempt on one path only does not survive the join"
+    (any (\f -> findingAddress f == callerStart + 56 && findingReason f == UnboundedBranch) (violations joinReport))
+  -- A call that received a local's address drops the pushed register slots,
+  -- but a span store that can still reach one is refused.
+  let savedSpanBytes = replaceFunction "rb_assert_one"
+        [0xe92d4010, 0xe24dd008, 0xe2004002, 0xe1a0000d, branchLink (callerStart + 16) stockTarget,
+         0xe78d3104, 0xe28dd008, 0xe8bd8010] clean
+  savedSpanReport <- run allowlist savedSpanBytes
+  check "a span store that can reach a pushed register slot is refused"
+    (any (\f -> findingAddress f == callerStart + 20 && findingReason f == StackStoreOverSaved) (violations savedSpanReport))
+  -- A slot only one incoming path pushed is still a saved slot for a span
+  -- store that can reach it after the join.
+  let savedJoinBytes = replaceFunction "rb_assert_one"
+        [0xe3500000, 0x1a000002, 0xe92d4010, 0xe3520000, 0xea000003, 0xe24dd008, 0xe58d4000, 0xe58de004,
+         0xe3530000, 0xe2011001, 0xe24dd008, 0xe78d3181, 0xe28dd008, 0xe8bd8010] clean
+  savedJoinReport <- run allowlist savedJoinBytes
+  check "a span store that can reach a slot only one path pushed is refused"
+    (any (\f -> findingAddress f == callerStart + 44 && findingReason f == StackStoreOverSaved) (violations savedJoinReport))
+  -- A register saved after sp has moved is a saved slot like the entry push's.
+  let savedAfterMoveBytes = replaceFunction "rb_assert_one"
+        [0xe52de004, 0xe52d4004, 0xe24dd008, 0xe2011001, 0xe78d3181, 0xe28dd008, 0xe49d4004, 0xe49df004] clean
+  savedAfterMoveReport <- run allowlist savedAfterMoveBytes
+  check "a register saved below the entry stack pointer is a saved slot"
+    (any (\f -> findingAddress f == callerStart + 16 && findingReason f == StackStoreOverSaved) (violations savedAfterMoveReport))
+  -- The difference of two frame addresses is a scalar, not an address: it does
+  -- not expose the frame, so the slot below the exposed operands survives.
+  let differenceBytes = replaceFunction "rb_assert_one"
+        [0xe92d4010, 0xe24dd010, slotWord 0xe3004000 writableBase, slotWord 0xe3404000 (writableBase `shiftR` 16), 0xe58d4000,
+         0xe28d1008, 0xe28d200c, 0xe0410002, branchLink (callerStart + 32) stockTarget,
+         0xe59d2000, 0xe3a03001, 0xe5823000, 0xe28dd010, 0xe8bd8010] clean
+  differenceReport <- run allowlist differenceBytes
+  check "a frame-minus-frame difference does not expose the frame"
+    (not (any ((== callerStart + 44) . findingAddress) (violations differenceReport)))
+  -- The addressing-mode operand rule: a frame index added to an entry pointer
+  -- is a frame address, so the store is not the pointer's declared root.
+  let pointerPolicy = allowlist {declarations = declarations allowlist ++
+        [Declaration "rb_assert_one" StoreAccess (Argument (Reg 0)) "synthetic store through entry r0"]}
+      pointerBytes = replaceFunction "rb_assert_one" [0xe08d2001, 0xe7803002, 0xe12fff1e] clean
+  pointerReport <- run pointerPolicy pointerBytes
+  check "a frame index added to an entry pointer keeps the frame"
+    (any (\f -> findingAddress f == callerStart + 4 && findingReason f == Unproven StoreAccess (Index StackFrame)) (violations pointerReport))
+  -- Each operation that keeps or loses a root after a frame address.
+  frameCase "a bitwise operation on a frame address" (slotPrefix ++ [0xe00d0001])
+  frameCase "a shift of a frame address" (slotPrefix ++ [0xe1a0008d])
+  frameCase "MOVT of a frame address" (slotPrefix ++ [0xe28d1004, 0xe3401000])
+  frameCase "a zero-extend of a frame address" (slotPrefix ++ [0xe28d1004, 0xe6ef0071])
+  -- A frame pointer widened at a loop head keeps the frame; the store through
+  -- it is an undeclared frame-index store, not an unbounded one.
+  let loopPrefix = slotPrefix ++ [0xe28d4004]
+      loopStore = callerStart + fromIntegral (length loopPrefix * 4) + 4
+      loopBytes = replaceFunction "rb_assert_one"
+        (loopPrefix ++ [0xe2444004, 0xe5843000, 0xe1540000, 0x1afffffb, 0xe12fff1e]) clean
+  loopReport <- run allowlist loopBytes
+  check "a frame pointer widened at a loop head keeps the frame"
+    (any (\f -> findingAddress f == loopStore && findingReason f == Unproven StoreAccess (Index StackFrame)) (violations loopReport))
+  -- A return address in a slot the prologue's push did not write is not a
+  -- saved slot: the call forgets it and the return through it is unbounded.
+  let savedSlotBytes = replaceFunction "rb_assert_one"
+        [0xe92d4010, 0xe24dd008, 0xe58de000, 0xe1a0000d, branchLink (callerStart + 16) stockTarget, 0xe49df008] clean
+  savedSlotReport <- run allowlist savedSlotBytes
+  check "a return address in a non-prologue slot does not survive a call"
+    (any (\f -> findingAddress f == callerStart + 20 && findingReason f == UnboundedBranch) (violations savedSlotReport))
+  -- `clz pc, r1` is an UNPREDICTABLE program-counter destination and is refused.
+  let pcPrefix = slotPrefix ++ [0xe28d1004, 0xe16fff11]
+      pcSite = callerStart + fromIntegral ((length slotPrefix + 1) * 4)
+  pcReport <- run allowlist (withCall pcPrefix)
+  check "a program-counter destination of a compute form is refused"
+    (any (\f -> findingAddress f == pcSite && findingReason f == ForbiddenInstruction Unadmitted) (violations pcReport))
+  -- Every decoded form that writes the program counter is refused.
+  let pcDestinations =
+        [ ("MUL", 0xe00f0291), ("MLA", 0xe02f3291)
+        , ("UMULL RdHi", 0xe08f0291), ("UMULL RdLo", 0xe082f291)
+        , ("UMLAL RdHi", 0xe0af0291), ("UMLAL RdLo", 0xe0a4f291)
+        , ("SMULL RdHi", 0xe0cf0291), ("SMULL RdLo", 0xe0c2f291)
+        , ("SMLAL RdHi", 0xe0ef0291), ("SMLAL RdLo", 0xe0e4f291)
+        , ("UMAAL RdHi", 0xe04f0291), ("UMAAL RdLo", 0xe042f291)
+        , ("MLS", 0xe06f3291), ("CLZ", 0xe16fff11)
+        , ("UXTB", 0xe6eff071), ("UXTH", 0xe6fff071)
+        , ("SXTB", 0xe6aff071), ("SXTH", 0xe6bff071)
+        , ("UXTAB", 0xe6e1f072), ("UXTAH", 0xe6f1f072)
+        , ("SXTAB", 0xe6a1f072), ("SXTAH", 0xe6b1f072)
+        , ("REV", 0xe6bfff31), ("REV16", 0xe6bfffb1), ("RBIT", 0xe6ffff31)
+        , ("SBFX", 0xe7a3f051), ("UBFX", 0xe7e3f051)
+        , ("BFI", 0xe7c3f011), ("BFC", 0xe7c3f01f)
+        , ("LDRD", 0xe1c1e0d0), ("STRD", 0xe1c1e0f0)
+        ]
+      admitted = [label | (label, word) <- pcDestinations, A32.decode frameSetup word /= A32.Rejected Unadmitted]
+  check ("the decoder refuses every program-counter destination; admitted: " ++ show admitted) (null admitted)
+  let unpredictablePc =
+        [ ("LDM writeback", 0xe93f0fff)
+        , ("pre-indexed LDR", 0xe5bf0004)
+        , ("pre-indexed LDRH", 0xe1ff00b2)
+        , ("pre-indexed LDRD", 0xe1ef00d8)
+        , ("register-shifted MOV Rd", 0xe1a0f110)
+        , ("register-shifted ADD Rn", 0xe08f0211)
+        , ("register-shifted MOV Rm", 0xe1a0011f)
+        , ("register-shifted MOV Rs", 0xe1a00f11)
+        ]
+      admittedUnpredictable = [label | (label, word) <- unpredictablePc, A32.decode frameSetup word /= A32.Rejected Unadmitted]
+  check ("the decoder refuses every unpredictable program-counter form; admitted: " ++ show admittedUnpredictable) (null admittedUnpredictable)
+  -- An empty block-transfer register list is UNPREDICTABLE.
+  let emptyBlockList = [("LDM", 0xe8900000), ("STM", 0xe92d0000)]
+      admittedEmptyBlock = [label | (label, word) <- emptyBlockList, A32.decode frameSetup word /= A32.Rejected Unadmitted]
+  check ("the decoder refuses an empty block-transfer register list; admitted: " ++ show admittedEmptyBlock) (null admittedEmptyBlock)
   forM_ [elfLow, elfHigh] $ \path -> do
     bytes <- B.readFile path
     image <- either fail pure (parseElf bytes)
@@ -233,6 +518,18 @@ main = do
   expect "MOVW with PC as destination" (fixture frameSetup 0xe300f000)
     [(frameSetup, ForbiddenInstruction Unadmitted)]
   expect "MOVT with PC as destination" (fixture frameSetup 0xe340f000)
+    [(frameSetup, ForbiddenInstruction Unadmitted)]
+  -- A writeback transfer based on the program counter and a register-shifted
+  -- data-processing form with the program counter in a register field are
+  -- UNPREDICTABLE.
+  expect "LDM writeback based on the program counter" (fixture frameSetup 0xe93f0fff)
+    [(frameSetup, ForbiddenInstruction Unadmitted)]
+  expect "pre-indexed load based on the program counter" (fixture frameSetup 0xe5bf0004)
+    [(frameSetup, ForbiddenInstruction Unadmitted)]
+  expect "register-shifted data processing with the program counter" (fixture frameSetup 0xe1a0f110)
+    [(frameSetup, ForbiddenInstruction Unadmitted)]
+  -- BLX with the program counter is UNPREDICTABLE.
+  expect "BLX with the program counter" (fixture frameSetup 0xe12fff3f)
     [(frameSetup, ForbiddenInstruction Unadmitted)]
   -- Signed halfword multiplies in place of `mov r11, sp`.
   expect "SMLABB" (fixture frameSetup 0xe1030281) []
@@ -321,6 +618,78 @@ main = do
   check "a call to hints then a conditional `bne .` falls through" (fallsThrough conditionalSpin)
   forwardBranch <- run allowlist (trapProgram 0xea000000)
   check "a call to hints then a branch to another word falls through" (fallsThrough forwardBranch)
+
+  -- The menu engine variant: its writable statics are a section of their own,
+  -- inside the engine region and outside its code.
+  engineBytes <- B.readFile engineElf
+  engineImage <- either fail pure (parseElf engineBytes)
+  engineLayout <- either fail pure (readLayout engineImage)
+  let EngineExtents codeStart codeEnd dataStart' dataEnd = maybe (error "the engine ELF has no engine region") id (engine engineLayout)
+      engineCodeExtent = (codeStart, codeEnd)
+      engineDataExtent = (dataStart', dataEnd)
+      regionEnd = codeStart + menuEngineRegionExtentFor modalEngineBankVariant
+      replaceSection name change elf =
+        elf {elfSections = [if sectionName s == name then change s else s | s <- elfSections elf]}
+      moveSymbol name value elf =
+        elf {elfSymbols = [if symbolName s == name then s {symbolValue = value} else s | s <- elfSymbols elf]}
+      layoutRules elf = case readLayout elf of
+        Left _ -> []
+        Right layout -> [findingReason f | f <- layoutFindings elf layout, LayoutProblem _ <- [findingReason f]]
+  check "the engine data follows the engine code inside the engine region"
+    ( fst engineDataExtent >= snd engineCodeExtent
+        && snd engineDataExtent <= regionEnd
+        && regionOf engineLayout (fst engineDataExtent) == EngineData
+        && writable (regionOf engineLayout (fst engineDataExtent))
+        && not (writable (regionOf engineLayout (fst engineCodeExtent)))
+    )
+  check "the linked engine layout has no layout findings"
+    (null (layoutFindings engineImage engineLayout))
+  check "an executable engine data section is refused"
+    (LayoutProblem (SectionExtent ".menu_engine_data")
+      `elem` layoutRules (replaceSection ".menu_engine_data" (\s -> s {sectionFlags = sectionFlags s .|. 0x4}) engineImage))
+  check "engine data overlapping the engine code is refused"
+    (LayoutProblem EngineRegion
+      `elem` layoutRules (moveSymbol "__rb_menu_engine_data_start" (fst engineCodeExtent) engineImage))
+  check "engine data past the engine extent is refused"
+    (LayoutProblem EngineRegion `elem` layoutRules (moveSymbol "__rb_menu_engine_data_end" (regionEnd + 4) engineImage))
+
+  composed <- forM
+    [ (allowlistPath, "menu/recipe_bank_allowlist.json")
+    , (modalFragmentPath, "menu/recipe_bank_modal_allowlist_fragment.json")
+    , (engineFragmentPath, "menu/recipe_bank_menu_engine_allowlist_fragment.json")
+    ] $ \(path, name) -> do
+      contents <- B.readFile path
+      pure (name, contents)
+  engineAllowlist <- either fail pure
+    (composeBankAllowlist modalEngineBankVariant composed >>= parseAllowlist)
+  let engineFunction name = case [s | s <- elfSymbols engineImage, symbolName s == name, symbolSize s > 0] of
+        (s : _) -> (symbolValue s, symbolValue s + symbolSize s)
+        _ -> error ("no sized symbol " ++ name)
+      engineFirst predicate = case [a | (a, w) <- [(a, w) | a <- [fst (engineFunction "rb_menu_engine_apply"), fst (engineFunction "rb_menu_engine_apply") + 4 .. snd (engineFunction "rb_menu_engine_apply") - 4], Just w <- [wordAt engineImage a]], predicate w] of
+        (a : _) -> a
+        _ -> error "no matching engine word"
+      engineReport bytes = either fail pure (parseElf bytes >>= checkBank engineAllowlist)
+      busyLiteral = engineFirst (\w -> regionOf engineLayout w == EngineData)
+      busyStore = engineFirst (\w -> w .&. 0x0ff00000 == 0x05c00000)
+  intoData <- engineReport (patch engineImage engineBytes busyLiteral (fst engineDataExtent))
+  check "a store into the engine data region passes"
+    (not (any ((== busyStore) . findingAddress) (violations intoData)))
+  intoCode <- engineReport (patch engineImage engineBytes busyLiteral (fst engineCodeExtent))
+  check "a store into the engine code is still refused"
+    (any (\f -> findingAddress f == busyStore
+      && findingReason f == StoreOutside (fst engineCodeExtent) (fst engineCodeExtent) BankCode) (violations intoCode))
+  intoEnd <- engineReport (patch engineImage engineBytes busyLiteral (snd engineDataExtent))
+  check "a store at the engine data end is refused"
+    (any (\f -> findingAddress f == busyStore
+      && findingReason f == StoreOutside (snd engineDataExtent) (snd engineDataExtent) AllocationTail) (violations intoEnd))
+  intoLast <- engineReport (patch engineImage engineBytes busyLiteral (snd engineDataExtent - 1))
+  check "a store in the last engine data byte passes"
+    (not (any ((== busyStore) . findingAddress) (violations intoLast)))
+  when (snd engineCodeExtent < fst engineDataExtent) $ do
+    intoGap <- engineReport (patch engineImage engineBytes busyLiteral (snd engineCodeExtent))
+    check "a store in the gap after the engine code is refused"
+      (any (\f -> findingAddress f == busyStore
+        && findingReason f == StoreOutside (snd engineCodeExtent) (snd engineCodeExtent) AllocationTail) (violations intoGap))
 
   -- The command-line checker's exit status: 0 clean, 1 with a violation.
   temporary <- getTemporaryDirectory

@@ -117,6 +117,20 @@ systemctl --user enable --now latent-image-scratch-expiry.timer
 
 Inspect `systemctl --user status latent-image-scratch-expiry.timer` for the next run and `journalctl --user -u latent-image-scratch-expiry.service` for the summary or failures. Disable future sweeps with `systemctl --user disable --now latent-image-scratch-expiry.timer`.
 
+### Generated evidence records
+
+`//build-support:evidence-record` writes selected records in `docs/evidence.jsonl` from `docs/evidence-recipes.json`, leaving other records' bytes unchanged. A recipe names its record, cited artifacts, named facts (`path`, a `pointer` array of object keys or zero-based array indices, and optional `operation: "length"`), claim/scope templates using `{{fact_name}}`, and a short `notes` field for interpretation and unmeasured limits. The required `firmware_sha256` fact supplies the record's firmware identity. Values are read from result JSON, never evaluated as commands. Run directories are inferred from cited paths; their `run.json` supplies commit, command, outcome, exit status, timestamps and elapsed seconds, and the newest close supplies `recorded_at`. An existing `result/verdict.json` is also included. Every cited artifact, inferred run metadata file and verdict receives a streaming SHA-256 digest. JSON inputs are limited to 16 MiB.
+
+A text-only test summary can use `operation: "decimal-between"` with exact nonempty `prefix` and `suffix` strings; the prefix must occur once and the intervening value must be a nonnegative integer. This reads placement-check counts from the test's result log rather than transcribing them.
+
+```sh
+devenv shell -- host-build build //build-support:evidence-record
+devenv shell -- run-output exec --label evidence-record -- systemd-run --user --scope -p MemoryMax=1G -p MemorySwapMax=0 bash -c 'uptime; exec bazel-bin/build-support/evidence-record write "$PWD" docs/evidence-recipes.json docs/evidence.jsonl replacement/README.md +RTS -M512M -RTS'
+devenv shell -- host-build test //tests:research-contracts //build-support:evidence-record-tests
+```
+
+The optional final README argument refreshes each recipe's unique `<!-- evidence-record ID -->` / `<!-- /evidence-record ID -->` marker pair with the generated claim and scope. `check` performs the same generation without writing and fails on ledger or README drift, missing files, missing selectors, orphaned generated records/README blocks or duplicate recipe/record/fact names. The schema's `commands` field is regenerated as shell-quoted `run-output exec --label LABEL -- COMMAND...` invocations from the cited runs' original argument arrays. `check-available`, used by research-contracts, reports an entirely missing private artifact set as unavailable; a partially present set must regenerate successfully. Absence is not reproduction. Use strict `check` when accepting a record, and keep selectors and result artifacts together when extending the worked examples. Synthetic tests exercise input and committed-record drift, closed-run provenance, partial absence and README text.
+
 ### Run output
 
 Run output goes in `private-data/scratch/NAME/runs/STAMP-LABEL/`, where NAME is the current branch without a leading `agent/` and with any other `/` replaced by `-`, STAMP is UTC `YYYYMMDDTHHMMSSZ` and LABEL matches `[A-Za-z0-9._-]+`. A run directory holds `run.json`, the `lock` its opener holds, `work/` for intermediates and `result/` for the verdict and the facts it rests on, at most 16 MiB.

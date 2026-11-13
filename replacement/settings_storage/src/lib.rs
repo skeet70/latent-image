@@ -33,14 +33,26 @@ pub(crate) fn part(bytes: &[u8], start: usize, length: usize) -> &[u8] {
 pub(crate) fn part_mut(bytes: &mut [u8], start: usize, length: usize) -> &mut [u8] {
     bytes.get_mut(start..start + length).unwrap_or_else(|| contract_violation())
 }
-#[cold]
-#[inline(never)]
-pub(crate) fn contract_violation() -> ! {
-    #[cfg(settings_storage_firmware)]
-    loop { core::hint::spin_loop(); }
-    #[cfg(not(settings_storage_firmware))]
-    panic!("settings-storage buffer contract violated");
+#[cfg(settings_storage_firmware)]
+core::arch::global_asm!(
+    ".section .text.xm1_settings_contract_violation,\"ax\",%progbits",
+    ".balign 4",
+    ".global xm1_settings_contract_violation",
+    ".type xm1_settings_contract_violation,%function",
+    "xm1_settings_contract_violation:",
+    "b xm1_settings_contract_violation",
+    ".size xm1_settings_contract_violation, .-xm1_settings_contract_violation",
+);
+#[cfg(settings_storage_firmware)]
+extern "C" {
+    #[link_name = "xm1_settings_contract_violation"]
+    fn xm1_settings_contract_violation() -> !;
 }
+#[cfg(settings_storage_firmware)]
+#[inline(always)]
+pub(crate) fn contract_violation() -> ! { unsafe { xm1_settings_contract_violation() } }
+#[cfg(not(settings_storage_firmware))]
+pub(crate) fn contract_violation() -> ! { panic!("settings-storage buffer contract violated"); }
 
 pub struct PreviousValues<'a> {
     bytes: *mut [u8; PREVIOUS_WINDOW],
@@ -120,14 +132,21 @@ impl<'a, B> SettingsStorage<'a, B> {
     pub fn backend(&mut self) -> &mut B { &mut self.backend }
 }
 impl<'a, B: HeaderBackend> SettingsStorage<'a, B> {
-    #[inline(always)]
+    #[inline(never)]
     pub fn open_header(&mut self) -> MirrorSession<'_, 'a, B> {
-        let opened = self.backend.read_header(part_mut(self.banks, 0, 16).try_into().unwrap_or_else(|_| contract_violation()));
+        let opened = self.backend.read_header_window(part_mut(self.banks, 0, 16).try_into().unwrap_or_else(|_| contract_violation()));
         MirrorSession { storage: self, opened }
     }
     #[inline(always)]
     pub fn write_active_header(&mut self) -> MirrorOutcome {
         self.backend.write_header(part(self.banks, 0, 16).try_into().unwrap_or_else(|_| contract_violation()))
+    }
+    pub fn write_active_header_into(&mut self, report: &mut MirrorOutcome) {
+        self.backend.write_header_into(part(self.banks, 0, 16).try_into().unwrap_or_else(|_| contract_violation()), report)
+    }
+    /// Writes the active header and keeps no report.
+    pub fn write_active_header_discarding(&mut self) {
+        self.backend.write_header_discarding(part(self.banks, 0, 16).try_into().unwrap_or_else(|_| contract_violation()))
     }
 }
 impl<'a, B: SettingsBackend> SettingsStorage<'a, B> {
@@ -135,8 +154,15 @@ impl<'a, B: SettingsBackend> SettingsStorage<'a, B> {
         self.restore_active_image();
         self.write_active_body()
     }
-    pub fn refresh_active_body(&mut self) -> RequestOutcome { self.backend.read_body(part_mut(self.banks, 16, 0x118).try_into().unwrap_or_else(|_| contract_violation())) }
+    pub fn refresh_active_body(&mut self) -> RequestOutcome { self.backend.read_body_window(part_mut(self.banks, 16, 0x118).try_into().unwrap_or_else(|_| contract_violation())) }
     pub fn write_active_body(&mut self) -> BodyOutcome { self.backend.write_body(part(self.banks, 16, 0x118).try_into().unwrap_or_else(|_| contract_violation())) }
+    pub fn write_active_body_into(&mut self, report: &mut BodyOutcome) {
+        self.backend.write_body_into(part(self.banks, 16, 0x118).try_into().unwrap_or_else(|_| contract_violation()), report)
+    }
+    /// Writes the active body and keeps no report.
+    pub fn write_active_body_discarding(&mut self) {
+        self.backend.write_body_discarding(part(self.banks, 16, 0x118).try_into().unwrap_or_else(|_| contract_violation()))
+    }
     #[inline(always)]
     pub fn load_images(&mut self) -> ImageLoadOutcome {
         let mut requests = [RequestOutcome::success(); 9];
@@ -228,6 +254,23 @@ impl<B: HeaderBackend> MirrorSession<'_, '_, B> {
         #[cfg(all(not(test), storage_defect_close_appends_area3))]
         unsafe { native_mirror::append_bank_as_record(self.storage.banks.as_ptr()); }
         outcome
+    }
+    #[inline(always)]
+    pub fn close_into(self, report: &mut MirrorOutcome) {
+        self.storage.write_active_header_into(report);
+        #[cfg(all(not(test), storage_defect_checksum_written_into_bank))]
+        memory::write_byte(&mut self.storage.banks[15], unsafe { core::ptr::read_volatile(0x409c282b as *const u8) });
+        #[cfg(all(not(test), storage_defect_close_appends_area3))]
+        unsafe { native_mirror::append_bank_as_record(self.storage.banks.as_ptr()); }
+    }
+    /// Closes the header session and keeps no report.
+    #[inline(always)]
+    pub fn close_discarding(self) {
+        self.storage.write_active_header_discarding();
+        #[cfg(all(not(test), storage_defect_checksum_written_into_bank))]
+        memory::write_byte(&mut self.storage.banks[15], unsafe { core::ptr::read_volatile(0x409c282b as *const u8) });
+        #[cfg(all(not(test), storage_defect_close_appends_area3))]
+        unsafe { native_mirror::append_bank_as_record(self.storage.banks.as_ptr()); }
     }
 }
 

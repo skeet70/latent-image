@@ -122,7 +122,7 @@ callback address
   | otherwise = H.callback address
 
 callbacks :: [Word32]
-callbacks = [0x6a59b8,0x724b68,0x724c00,0x726c74,0x633594,0x6a86c4]
+callbacks = [0x6a59b8,0x726c74,0x633594,0x6a86c4]
 
 helperWords :: [Word32]
 helperWords = H.helperWords
@@ -135,14 +135,14 @@ placeCode :: Word32 -> [Word32] -> B.ByteString -> B.ByteString
 placeCode address words' = replace (fromIntegral (address-codeBase)) (assemble words')
 
 chainCode :: TaskContext -> B.ByteString -> B.ByteString
-chainCode context image = foldl (\bytes (at,ws) -> placeCode at ws bytes) raw patches
+chainCode _ image = foldl (\bytes (at,ws) -> placeCode at ws bytes) raw patches
   where
     raw = B.take (fromIntegral (codeEnd-codeBase)) image
-    patches = [(a,callback a) | a <- callbacks] ++ [(0x722054,copyWords),(0x723cb8,[if context == Task then 0xe3a00001 else 0xe3a00000,0xe12fff1e]),(0x6439e0,[0xe3a00001,0xe12fff1e])]
+    patches = [(a,callback a) | a <- callbacks] ++ [(0x722054,copyWords),(0x6439e0,[0xe3a00001,0xe12fff1e])]
 
 chainFunctions :: [(GuestAddress,Word32)]
 chainFunctions = [(GuestAddress (fromIntegral a), b-a) | (a,b) <-
-  [(0x61d8dc,0x61d92c),(0x61d92c,0x61d944),(0x61d944,0x61d994),(0x61d994,0x61d9ec),(0x61d9ec,0x61da3c),(0x61da3c,0x61da8c),(0x61daa8,0x61db04),(0x61db04,0x61db18),(0x61db18,0x61db3c),(0x61db3c,0x61db5c),(0x6309c4,0x630a34),(0x630a34,0x630b14),(0x6439e0,0x6439e8),(0x6a6ddc,0x6a6e68),(0x6a6e68,0x6a6f3c),(0x6a6f3c,0x6a6fd8),(0x72b3a4,0x72b3d0),(0x72b3d0,0x72b3fc),(0x722054,0x722070),(0x723cb8,0x723cc0)] ++ [(a,a+fromIntegral (length (callback a)*4)) | a <- callbacks]] ++ [(GuestAddress (fromIntegral logHelper),fromIntegral (length helperWords*4))]
+  [(0x61d8dc,0x61d92c),(0x61d92c,0x61d944),(0x61d944,0x61d994),(0x61d994,0x61d9ec),(0x61d9ec,0x61da3c),(0x61da3c,0x61da8c),(0x61daa8,0x61db04),(0x61db04,0x61db18),(0x61db18,0x61db3c),(0x61db3c,0x61db5c),(0x6309c4,0x630a34),(0x630a34,0x630b14),(0x6439e0,0x6439e8),(0x6a6ddc,0x6a6e68),(0x6a6e68,0x6a6f3c),(0x6a6f3c,0x6a6fd8),(0x72b3a4,0x72b3d0),(0x72b3d0,0x72b3fc),(0x722054,0x722070),(0x723cb8,0x723ce8),(0x724b68,0x724c00),(0x724c00,0x724cb4),(0x724cb4,0x724cbc)] ++ [(a,a+fromIntegral (length (callback a)*4)) | a <- callbacks]] ++ [(GuestAddress (fromIntegral logHelper),fromIntegral (length helperWords*4))]
 
 region :: String -> Word32 -> Permission -> B.ByteString -> CaseRegion
 region name base permission bytes = mkRegion (RegionId name) (GuestAddress (fromIntegral base)) (B.length bytes) permission bytes
@@ -161,10 +161,11 @@ propertyCase source properties fx context oracleCase owned = base
     expected = maybe (error "field outside admitted fixture") id (P.modelExpectation fx owned (P.oracleOperation oracleCase))
     base = P.caseSpec image P.stockFunctions fx (P.caseLabel oracleCase) standing oracleCase expected
     (effect,mirror,events) = maybe (error "field outside admitted fixture") id (propertyResult (backupKeys source) context fx owned (P.oracleOperation oracleCase))
-    keep r = regionBytesOfId r `notElem` map RegionId ["code","backup","calls","backing","header-mirror-code","header-runtime-code","header-reporter","header-log","slot-defaults","stack","caller-frame"]
+    keep r = regionBytesOfId r `notElem` map RegionId ["code","backup","calls","backing","header-mirror-code","header-runtime-code","header-reporter","header-log","slot-defaults","kernel-slots","stack","caller-frame"]
     initialBacking = replace 0x19c (shadowBytes (initialMirror fx)) (replace 0 (liveBytes (initialMirror fx)) (B.pack [fromIntegral (i*37+19) | i <- [0..0x1ab::Int]]))
     finalBacking = replace 0 (liveBytes mirror) (replace 0x19c (shadowBytes mirror) initialBacking)
-    extra = [region "backing" 0x409c281c ReadWrite initialBacking,region "calls" 0x958000 ReadWrite (B.replicate 0x800 0),region "helper" logHelper ReadExecute (assemble helperWords),region "slot-defaults" 0x7cb7d4 ReadOnly (B.take 8 (B.drop (0x7cb7d4-0x61c400) image) <> P.fixtureSlotDefaults fx),region "stack" 0x959000 ReadWrite (B.replicate 0x800 0)]
+    taskWord = case context of Task -> 1; Interrupt -> 0
+    extra = [region "backing" 0x409c281c ReadWrite initialBacking,region "calls" 0x958000 ReadWrite (B.replicate 0x800 0),region "helper" logHelper ReadExecute (assemble helperWords),region "slot-defaults" 0x7cb7d4 ReadOnly (B.take 8 (B.drop (0x7cb7d4-0x61c400) image) <> P.fixtureSlotDefaults fx),region "kernel-slots" H.slotBase ReadExecute (H.slotCode taskWord),region "stack" 0x959000 ReadWrite (B.replicate 0x800 0)]
 
 deadPrivateFrame :: CaseSpec -> [IgnoredMemory]
 deadPrivateFrame spec
@@ -190,9 +191,9 @@ ownedCase image spec = spec
     original name = case [regionBytes (caseRegion r) | r <- caseRegions spec, regionBytesOfId r == RegionId name] of
       [bytes] -> bytes
       _ -> error ("missing owned case input " ++ name)
-    context = case readWordAt (original "code-runtime") (0x723cb8-0x722054) of
-      0xe3a00001 -> Task
-      0xe3a00000 -> Interrupt
+    context = case readWordAt (original "kernel-slots") 0x10 .&. 0xff of
+      1 -> Task
+      0 -> Interrupt
       _ -> error "invalid prepared task context"
     scope = case [regionBytes (caseRegion r) | r <- caseRegions spec, regionBytesOfId r == RegionId "descriptor"] of
       [bytes] -> let end = (readWordAt bytes 4 .&. 0xffff) + (readWordAt bytes 8 .&. 0xffff) in if end <= 0x168 || end > 0x19a then InitializedPrefix else RetainedResidue

@@ -90,10 +90,10 @@ pub mod frame {
     use core::mem::MaybeUninit;
     use core::ptr::{addr_of_mut, read_volatile, write_volatile};
 
-    pub use crate::menu_engine::frame::{
+    pub use menu_engine::frame::{
         FrameDepth, MenuClass, MenuFrameSnapshot, NodeId, NodeType, PageNumber, RowToken, ScrollTop, VisibleCount,
     };
-    use crate::menu_engine::frame::{
+    use menu_engine::frame::{
         self as shared, FrameCells, FrameNode, RowIndex, RowValues, RowsPerPage, SnapshotSink, SnapshotWord,
         VisibleOrdinal,
     };
@@ -242,6 +242,9 @@ pub mod frame {
     struct Destination(*mut MenuFrameSnapshot);
 
     impl SnapshotSink for Destination {
+        // Inlined into `fill`'s call sites so each store's base is the caller's
+        // destination, the shape the allowlist bounds.
+        #[inline]
         fn store(&mut self, word: SnapshotWord) {
             let dest = self.0;
             unsafe {

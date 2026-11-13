@@ -173,7 +173,6 @@ publicationLinker (PublicationPlan segments _) template = do
       (preamble,after) = C.breakSubstring marker template
       (body,closing) = C.breakSubstring "\n}\n" (B.drop (B.length marker) after)
   unless (not (B.null after) && not (B.null closing) && not (marker `B.isInfixOf` B.drop (B.length marker) after)) (Left "host linker section block is not unique")
-  compiler <- special body ".compiler_builtins "
   dataSection <- special body ".data "
   bss <- special body ".bss "
   discard <- special body "/DISCARD/ "
@@ -183,7 +182,7 @@ publicationLinker (PublicationPlan segments _) template = do
       startName = segmentSymbol (SegmentIndex 0) SegmentStart
       endName = segmentSymbol (SegmentIndex (length segments-1)) SegmentEnd
       markers = ["  __custom_text_start = " ++ startName ++ ";","  __custom_text_end = " ++ endName ++ ";"]
-  pure ("__published_image_start = 0x61d8dc;\n" <> preamble <> marker <> C.unlines (compiler:outputs++map C.pack markers++[dataSection,bss,discard]) <> "}\n" <> B.drop 3 closing)
+  pure ("__published_image_start = 0x61d8dc;\n" <> preamble <> marker <> C.unlines (outputs++map C.pack markers++[dataSection,bss,discard]) <> "}\n" <> B.drop 3 closing)
  where
   special body prefix = case [line | line <- C.lines body,prefix `B.isPrefixOf` C.strip line] of
     [line] -> Right line

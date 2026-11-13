@@ -1,5 +1,5 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
-load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
 load("//replacement/settings_storage:storage_controls.bzl", "PROPERTY_STORAGE_VARIANTS")
 
 package(default_visibility = ["//visibility:public"])
@@ -71,6 +71,20 @@ xm1_rust_staticlib(
     crate_name = "xm1_property_service",
     rustc_flags = _RUSTC_FLAGS,
     data = _RUST_DATA + ["//replacement/settings_storage:property-core"],
+    rlib_deps = {"xm1_kernel": "//replacement/kernel:arm"},
+)
+
+xm1_rust_rlib(
+    name = "property-service-arm",
+    src = "src/lib.rs",
+    crate_name = "xm1_property_service",
+    out = "arm/libxm1_property_service.rlib",
+    rustc_flags = ["-C", "jump-tables=no", "--cfg", "property_reload", "--cfg", "property_rlib"],
+    data = _RUST_DATA,
+    rlib_deps = {
+        "xm1_kernel": "//replacement/kernel:arm",
+        "xm1_settings_storage_core": "//replacement/settings_storage:property-core-arm",
+    },
 )
 
 xm1_rust_staticlib(
@@ -79,6 +93,7 @@ xm1_rust_staticlib(
     crate_name = "xm1_property_service",
     rustc_flags = _RUSTC_FLAGS + ["--cfg", "property_recipe_edit"],
     data = _RUST_DATA + ["//replacement/settings_storage:property-core"],
+    rlib_deps = {"xm1_kernel": "//replacement/kernel:arm"},
 )
 
 genrule(
@@ -114,6 +129,27 @@ xm1_rust_elf(
     extra_ldflags = ["-Wl,--gc-sections"],
 )
 
+# The rlib the image links, in its carrier layout, for the oracle and the judge.
+xm1_rust_staticlib(
+    name = "property-linked-panic",
+    src = "linked-panic.rs",
+    crate_name = "xm1_property_linked_panic",
+)
+
+xm1_rust_elf(
+    name = "property-service-linked-image",
+    rust_staticlib = ":property-linked-panic",
+    rust_components = [
+        ":property-service-arm",
+        "//replacement/settings_storage:property-core-arm",
+        "//replacement/kernel:arm",
+    ],
+    asm_srcs = ["entry-public.S", "storage-boundary.S"],
+    entry = "xm1_public_get",
+    link_script = "property-service-public.ld",
+    extra_ldflags = ["-Wl,--gc-sections"],
+)
+
 [
     xm1_rust_staticlib(
         name = "property-service-rust-defect-" + defect.replace("_", "-"),
@@ -121,6 +157,7 @@ xm1_rust_elf(
         crate_name = "xm1_property_service",
         rustc_flags = (["-C", "jump-tables=no", "--extern", "xm1_settings_storage_core=$(location //replacement/settings_storage:property-core-" + defect.replace("_", "-") + ")", "--cfg", defect] if defect in _CORE_DEFECTS else _RUSTC_FLAGS + ["--cfg", "property_defect_" + defect]),
         data = _RUST_DATA + ["//replacement/settings_storage:property-core-" + defect.replace("_", "-") if defect in _CORE_DEFECTS else "//replacement/settings_storage:property-core"],
+        rlib_deps = {"xm1_kernel": "//replacement/kernel:arm"},
     )
     for defect in _DEFECTS
 ]
@@ -149,6 +186,44 @@ xm1_rust_elf(
     for defect in _DEFECTS
 ]
 
+# The four defects the rlib-linked oracle runs, built from the same rlib configuration.
+_LINKED_DEFECTS = ["storage_open_removed", "storage_close_before_set", "nonzero_means_default", "sentinel_plus_one"]
+
+[
+    xm1_rust_rlib(
+        name = "property-service-linked-rust-defect-" + defect.replace("_", "-"),
+        src = "src/lib.rs",
+        crate_name = "xm1_property_service",
+        out = "linked-defect/%s/libxm1_property_service.rlib" % defect.replace("_", "-"),
+        rustc_flags = ["-C", "jump-tables=no", "--cfg", "property_reload", "--cfg", "property_rlib"] + (
+            ["--cfg", defect] if defect in _CORE_DEFECTS else ["--cfg", "property_defect_" + defect]
+        ),
+        data = _RUST_DATA,
+        rlib_deps = {
+            "xm1_kernel": "//replacement/kernel:arm",
+            "xm1_settings_storage_core": "//replacement/settings_storage:property-core-" + defect.replace("_", "-") if defect in _CORE_DEFECTS else "//replacement/settings_storage:property-core-arm",
+        },
+    )
+    for defect in _LINKED_DEFECTS
+]
+
+[
+    xm1_rust_elf(
+        name = "property-service-linked-defect-" + defect.replace("_", "-"),
+        rust_staticlib = ":property-linked-panic",
+        rust_components = [
+            ":property-service-linked-rust-defect-" + defect.replace("_", "-"),
+            "//replacement/settings_storage:property-core-" + defect.replace("_", "-") if defect in _CORE_DEFECTS else "//replacement/settings_storage:property-core-arm",
+            "//replacement/kernel:arm",
+        ],
+        asm_srcs = ["entry-public.S", "storage-boundary.S"],
+        entry = "xm1_public_get",
+        link_script = "property-service-public.ld",
+        extra_ldflags = ["-Wl,--gc-sections"],
+    )
+    for defect in _LINKED_DEFECTS
+]
+
 [
     xm1_rust_staticlib(
         name = "property-service-storage-rust-" + variant,
@@ -160,6 +235,7 @@ xm1_rust_elf(
             "--cfg", flag,
         ],
         data = _RUST_DATA + ["//replacement/settings_storage:property-core-control-" + variant],
+        rlib_deps = {"xm1_kernel": "//replacement/kernel:arm"},
     )
     for variant, flag in PROPERTY_STORAGE_VARIANTS.items()
 ]

@@ -3,10 +3,27 @@
 //! service call writes the in-progress state's changed words to them first, and
 //! the transition's final state is written back before the result returns.
 
+#![no_std]
+
+extern crate menu_engine;
+
+use owned_menu::owned_menu;
+
+#[cfg(rb_menu_value_owned)]
+extern crate menu_value;
+#[cfg(rb_menu_value_owned)]
+use menu_value::adapter as menu_value_adapter;
+
+#[cfg(target_arch = "arm")]
+core::arch::global_asm!(include_str!("entry.S"), options(raw));
+
 use core::ptr::{read_volatile, write_volatile};
+use xm1_property_service::{
+    Properties, PropertyId as ServicePropertyId, SettingsBank, ValueBits, WriteValue,
+};
 
 use crate::menu_engine::block::{
-    self, decode_into, mirror_last_move_word, mirror_word, BlockWords, RecordTable, BLOCK_ADDRESS, BLOCK_LEN,
+    self, decode_into, last_move_writes, mirror_word, BlockWords, RecordTable, BLOCK_ADDRESS, BLOCK_LEN,
     FIRST_DEPTH_SNAPSHOTS, LAST_MOVE_ADDRESS, ROOT_SNAPSHOT, SECOND_DEPTH_SNAPSHOTS, SNAPSHOT_LEN,
 };
 use crate::menu_engine::engine::{
@@ -26,9 +43,15 @@ use crate::menu_engine::{
 include!(env!("RB_MENU_ENGINE_TREE"));
 include!(env!("RB_MENU_ENGINE_RECORDS"));
 
-#[cfg(rb_render_owned)]
-pub(crate) fn render_node_origin(record_id: NodeId, current: RecordAddress) -> crate::render_adapter::class::NodeOrigin {
-    use crate::render_adapter::class::NodeOrigin;
+/// Which record table a render entry's node belongs to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NodeOrigin {
+    Stock,
+    Package,
+    Unknown,
+}
+
+pub fn render_node_origin(record_id: NodeId, current: RecordAddress) -> NodeOrigin {
     for (node, &address) in TREE.nodes.iter().zip(RECORDS.records) {
         if node.id == record_id && address == current {
             return NodeOrigin::Stock;
@@ -60,8 +83,6 @@ unsafe extern "C" {
     fn rb_menu_engine_call_kind_switch(kind: u32, node: u32, id: u32, extra: u32) -> u32;
     /// `FUN_00bfad04(kind, node, type, id, seek, target)`.
     fn rb_menu_engine_call_seek(kind: u32, node: u32, node_type: u32, id: u32, seek: u32, target: u32) -> u32;
-    /// `FUN_0061c91c`.
-    fn rb_menu_engine_call_property_write(property: u32, value: u32, flags: u32);
     /// The guard trap, a traced site.
     fn rb_menu_engine_guard_failure() -> !;
     /// The bank's page-entry visit at each `FUN_00bfa800` call site.
@@ -93,14 +114,16 @@ fn write_state(state: &EngineState) {
             store_word(BLOCK_ADDRESS + offset as u32, value);
         }
     }
-    for index in 0..2 {
-        let value = mirror_last_move_word(state, index);
-        if Live.last_move_word(index) != value {
-            store_word(LAST_MOVE_ADDRESS + 4 * index as u32, value);
-        }
+    let (class, token) = last_move_writes(state, [Live.last_move_word(0), Live.last_move_word(1)]);
+    if let Some(class) = class {
+        store_word(LAST_MOVE_ADDRESS, class);
+    }
+    if let Some(token) = token {
+        store_word(LAST_MOVE_ADDRESS + 4, token);
     }
 }
 
+#[inline]
 fn read_state(state: &mut EngineState) {
     if decode_into(&Live, &TREE, &RECORDS, state).is_err() {
         unsafe { rb_menu_engine_guard_failure() }
@@ -129,6 +152,7 @@ fn write_record(address: u32, record: &MenuFrameSnapshot) {
 struct Stock;
 
 impl EngineServices for Stock {
+    #[inline]
     fn perform(&mut self, state: &EngineState, effect: Effect) {
         write_state(state);
         match effect {
@@ -164,9 +188,12 @@ impl EngineServices for Stock {
                 crate::owned_menu::frame::rb_menu_frame_store(NodeId::new(slot.get()));
             }
             Effect::PageEntry => unsafe { rb_ui_probe_visit() },
-            Effect::PropertyWrite { property, value } => unsafe {
-                rb_menu_engine_call_property_write(property.get(), value.get(), 0)
-            },
+            Effect::PropertyWrite { property, value } => {
+                if let Some(id) = ServicePropertyId::decode(property.get()) {
+                    let mut properties = unsafe { Properties::stock() };
+                    properties.write(id, WriteValue::Value(ValueBits::new(value.get())), SettingsBank::Active);
+                }
+            }
         }
     }
 
@@ -200,6 +227,7 @@ impl EngineServices for Stock {
         result_of(raw)
     }
 
+    #[inline]
     fn seek(&mut self, state: &mut EngineState, call: SeekCall) -> EngineResult {
         write_state(state);
         let raw = unsafe {

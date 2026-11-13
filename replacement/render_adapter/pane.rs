@@ -42,6 +42,7 @@ macro_rules! stock {
     ($name:ident $(, $argument:expr)* $(,)?) => { unsafe { $name($($argument),*) } };
 }
 impl DrawServices for StockServices {
+    #[inline]
     fn prepare(&mut self, node: NodeId, mode: DrawMode) -> PaneState {
         stock!(rb_render_call_1165aa0, node.0, mode.0);
         unsafe { PaneState {
@@ -92,6 +93,7 @@ impl DrawServices for StockServices {
     fn pixel_box(&mut self, x: i32, y: i32, right: i32, bottom: i32) { stock!(rb_render_call_11130e0, x,y,right as u32,bottom,18,0,255); }
     fn title_suppressed(&mut self) -> bool { stock!(rb_render_call_1135db0) != 0 }
     fn title_resource(&mut self) -> ResourceId { ResourceId(stock!(rb_render_call_113f1e8)) }
+    #[inline]
     fn tab_getters(&mut self) -> [u32; 4] { [stock!(rb_render_call_bf9614), stock!(rb_render_call_bf963c), stock!(rb_render_call_bf9660), stock!(rb_render_call_bf9688)] }
     fn tab_resource(&self, table: TabTable, bank: u32, index: u32, word: u32) -> ResourceId {
         let (base, stride) = match table { TabTable::Short => (0x0116cd34, 6), TabTable::Long => (0x0116ce9c, 15), TabTable::Extra => (0x0116cde8, 15) };

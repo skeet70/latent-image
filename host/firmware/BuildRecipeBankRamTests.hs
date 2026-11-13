@@ -173,8 +173,8 @@ main = do
       && and [bankVariantFromIdentity Nothing count == Right variant | (count, variant) <- zip [223 .. 227] legacyVariants])
   check "render counts and allocation retain the engine region"
     (publicationCountFor render == 228 && publicationActivationCountFor render == 97
-      && runtimeAllocationSizeFor render == 0x2dcc0
-      && menuEngineRegionStartFor render 0 == 0x1dd00 && menuEngineRegionExtentFor render == 0xffc0
+      && runtimeAllocationSizeFor render == 0x3dd00
+      && menuEngineRegionStartFor render 0 == 0x1dd00 && menuEngineRegionExtentFor render == 0x20000
       && all (\base -> runtimeInstallerBase base - base + runtimeInstallerExtentFor render <= menuEngineRegionStartFor render base - base) alignedBases)
   let valueVariant = modalValueBankVariant
       valueAddresses = testAddresses <> [modalHookAddress, menuEngineHookAddress, menuValueHookAddress]
