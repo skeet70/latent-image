@@ -23,6 +23,24 @@ xm1_rust_elf(
 )
 
 xm1_rust_staticlib(
+    name = "first-stage-fixed-rust",
+    src = "src.rs",
+    crate_name = "xm1_first_stage",
+    data = ["media.rs", "images.rs", "format.rs", "engine.rs", "fixed_image.rs"],
+    rustc_flags = ["--cfg", "fixed_image"],
+    rlib_deps = {"xm1_fixed_image_layout": "//replacement/fixed_image:layout"},
+)
+
+xm1_rust_elf(
+    name = "first-stage-fixed-image",
+    asm_srcs = ["entry.S"],
+    entry = "xm1_first_stage_entry",
+    link_script = "first-stage.ld",
+    rust_staticlib = ":first-stage-fixed-rust",
+    extra_ldflags = ["-Wl,--gc-sections"],
+)
+
+xm1_rust_staticlib(
     name = "first-stage-fault-rust",
     testonly = True,
     src = "src.rs",

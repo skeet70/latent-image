@@ -6,6 +6,8 @@ mod format;
 mod media;
 mod images;
 mod engine;
+#[cfg(fixed_image)]
+mod fixed_image;
 
 use core::arch::asm;
 use core::ptr::{read_volatile, write_volatile};
@@ -100,6 +102,10 @@ unsafe fn log_event(value: u32, channel: LogChannel) {
     xm1_first_stage_log_timestamp(base.add(slot as usize));
     write(base.add(slot as usize + 1), value);
     write(index, slot + 2);
+    #[cfg(fixed_image)]
+    if slot + 2 >= limit {
+        return;
+    }
     write(base.add(slot as usize + 2), LOG_END);
 }
 
@@ -234,6 +240,15 @@ unsafe fn stage_next(core: Core) -> Result<(), BootError> {
     }
     log_event(0x1100_0000, core.log_channel());
     images::xm1_first_stage_stage_images(core == Core::Zero).map_err(BootError::Image)?;
+    #[cfg(fixed_image)]
+    if core == Core::Zero {
+        log_event(0x2100_0000, LogChannel::Zero);
+        if fixed_image::xm1_first_stage_fixed_image_load().is_err() {
+            log_event(0xe100_0000, LogChannel::Zero);
+            fixed_image::xm1_first_stage_fixed_image_halt();
+        }
+        log_event(0x3100_0000, LogChannel::Zero);
+    }
     media::storage_fini().map_err(BootError::Media)?;
     xm1_first_stage_completion_zero();
     write(CELL_PEER0, 0);

@@ -36,6 +36,11 @@ main :: IO ()
 main = do
   arguments <- getArgs
   case arguments of
+    ["--ceiling-only", encoder, rebuild, decoder, source, output] -> do
+      work <- getEnv "XM1_RUN_WORK"
+      H.withTemporaryAt work "fixed-ceiling-" $ \temporary -> do
+        patched <- patchImage encoder rebuild decoder temporary ceilingPublications source Image4
+        H.readRegular (64 * 1024 * 1024) patched >>= B.writeFile output
     [encoder, rebuild, decoder, source, bodyPath, symbolsPath, rowsPath, firstSymbolsPath, output] -> do
       body <- H.readRegular 0x40000 bodyPath
       symbols <- H.readRegular 0x400000 symbolsPath >>= either H.failH pure . F.parseSymbols
@@ -46,7 +51,8 @@ main = do
       let buildOffset = F.firstRecordSlotOffset + fromIntegral (F.symbolAddress buildSymbol)
       H.ensure (F.symbolSize buildSymbol == 4 && F.symbolAddress buildSymbol >= 0x6000 && F.symbolAddress buildSymbol < 0x10000) "build id symbol leaves first stage"
       rows <- H.readRegular 0x100000 rowsPath >>= either H.failH pure . eitherDecodeStrict'
-      let Rows publications = rows
+      let Rows requested = rows
+          publications = reservationPublications ++ requested
           build = crc32 (body <> B.concat [B.concat (map U.putWord32 [address, old, new]) | Publication _ address old new <- publications])
       record <- either H.failH pure (makeRecord (BuildId build) (Bss begin end) body)
       stock <- H.readRegular (64 * 1024 * 1024) source
