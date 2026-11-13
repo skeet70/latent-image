@@ -19,6 +19,7 @@ pub mod pipeline;
 pub mod ports;
 pub mod preparation;
 pub mod sequence;
+pub mod shared;
 pub mod statistics_dump;
 pub mod stock;
 pub mod subjects;

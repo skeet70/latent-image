@@ -21,6 +21,7 @@ SOURCES = [
     "src/ports.rs",
     "src/preparation.rs",
     "src/sequence.rs",
+    "src/shared.rs",
     "src/statistics_dump.rs",
     "src/stock.rs",
     "src/stock/calculation.rs",
