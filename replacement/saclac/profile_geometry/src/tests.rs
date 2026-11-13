@@ -112,6 +112,8 @@ impl ProfileTables for Tables {
     }
     fn default_pair(&self) -> ScalePair { self.pair }
     fn expansion(&self) -> ExpansionRatio { ExpansionRatio { numerator: 5, divisor: 9 } }
+    fn curve_knot(&self, index: usize) -> i16 { 1000 + 50 * index as i16 }
+    fn feature_scale_offsets(&self, _: u32) -> [u32; 2] { [0, 0] }
 }
 
 fn entry(class: u32, kind: u8) -> ProfileEntry {

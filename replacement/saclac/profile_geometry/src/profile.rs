@@ -74,6 +74,11 @@ pub trait ProfileTables {
     fn threshold(&self, index: u8) -> u16;
     fn default_pair(&self) -> ScalePair;
     fn expansion(&self) -> ExpansionRatio;
+    /// The limits at which the triplet curves are tabulated, rising; `index` is below 18.
+    fn curve_knot(&self, index: usize) -> i16;
+    /// The configuration offsets of a feature's two triplet scales, zero for none; `row` is
+    /// three per feature plus the profile's column.
+    fn feature_scale_offsets(&self, row: u32) -> [u32; 2];
 }
 
 const THRESHOLDS: u8 = 22;
@@ -85,6 +90,8 @@ pub struct Profiles<T> {
 
 impl<T: ProfileTables> Profiles<T> {
     pub const fn new(tables: T) -> Self { Self { tables } }
+
+    pub fn tables(&self) -> &T { &self.tables }
 
     pub fn entry(&self, profile: ProfileHandle) -> ProfileEntry { self.tables.entry(profile) }
 

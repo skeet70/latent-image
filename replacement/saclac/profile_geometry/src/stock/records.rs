@@ -1,10 +1,9 @@
+#![forbid(unsafe_code)]
+
 //! The controller's parameter record and status snapshot. Each accessor is a field the
 //! controller compares on refresh (0xee1bc0, 0xee2adc).
 
 use crate::profile::ProfileHandle;
-
-pub const PARAMETERS: usize = 0x169953c;
-pub const STATUS_SNAPSHOT: usize = 0x1699584;
 
 fn field<const N: usize>(bytes: &[u8], at: usize) -> [u8; N] { core::array::from_fn(|index| bytes[at + index]) }
 
@@ -108,13 +107,3 @@ record!(StatusSnapshot, 200, {
     at_c0, set_at_c0: u32 = 0xc0;
     at_c4, set_at_c4: u16 = 0xc4;
 });
-
-fn read<const N: usize>(address: usize) -> [u8; N] {
-    core::array::from_fn(|index| unsafe { core::ptr::read_volatile((address + index) as *const u8) })
-}
-
-/// 0xed8af4.
-pub fn current_parameters() -> Parameters { Parameters::from_bytes(read(PARAMETERS)) }
-
-/// 0xed8b10.
-pub fn current_status_snapshot() -> StatusSnapshot { StatusSnapshot::from_bytes(read(STATUS_SNAPSHOT)) }

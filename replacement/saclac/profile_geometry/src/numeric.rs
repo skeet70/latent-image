@@ -89,3 +89,13 @@ pub const fn runtime_quotient(numerator: u64, divisor: u64) -> u64 {
         None => u64::MAX,
     }
 }
+
+/// `value / 10` rounded half away from zero (0x741fa0).
+pub const fn round_tenths(value: i32) -> i32 {
+    let quotient = value / 10;
+    match value % 10 {
+        5..=9 => quotient + 1,
+        -9..=-5 => quotient - 1,
+        _ => quotient,
+    }
+}

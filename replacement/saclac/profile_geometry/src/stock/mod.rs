@@ -1,10 +1,11 @@
 //! The stock boundary: image-5 table and state addresses and layouts, and the stock entries
 //! this layer calls.
 
+pub mod layout;
 pub mod records;
 pub mod tables;
 
-pub use records::{current_parameters, current_status_snapshot, Parameters, StatusSnapshot};
+pub use records::{Parameters, StatusSnapshot};
 pub use tables::StockTables;
 
 use crate::numeric::FloatLog;

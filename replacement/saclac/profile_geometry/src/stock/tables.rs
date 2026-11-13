@@ -12,6 +12,8 @@ const TEMPLATE: usize = 0xef6dd4;
 const DEFAULT_PAIR: usize = 0xef6ddc;
 const FRACTIONS: usize = 0xee9ef4;
 const WIDE_FRACTIONS: usize = 0xee9d60;
+const CURVE_KNOTS: usize = 0xef50c4;
+const FEATURE_SCALES: usize = 0xef70b4;
 
 fn u16_at(bytes: &[u8], at: usize) -> u16 { u16::from_le_bytes([bytes[at], bytes[at + 1]]) }
 
@@ -81,6 +83,13 @@ impl ProfileTables for StockTables {
     }
 
     fn expansion(&self) -> ExpansionRatio { parse_expansion(&read(TEMPLATE)) }
+
+    fn curve_knot(&self, index: usize) -> i16 { i16::from_le_bytes(read(CURVE_KNOTS + index * 2)) }
+
+    fn feature_scale_offsets(&self, row: u32) -> [u32; 2] {
+        let bytes: [u8; 8] = read(FEATURE_SCALES + row as usize * 8);
+        [u32_at(&bytes, 0), u32_at(&bytes, 4)]
+    }
 }
 
 impl FractionTables for StockTables {
