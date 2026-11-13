@@ -6,6 +6,7 @@
 //! request they make can reach a lens drive, so the module runs only in the emulator.
 
 pub mod bring_up;
+pub mod children;
 pub mod live;
 pub mod ports;
 pub mod s1;
@@ -15,6 +16,8 @@ pub mod stock;
 extern crate std;
 #[cfg(test)]
 mod bring_up_tests;
+#[cfg(test)]
+mod children_tests;
 #[cfg(test)]
 mod live_tests;
 #[cfg(test)]

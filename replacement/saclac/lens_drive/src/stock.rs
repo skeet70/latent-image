@@ -7,7 +7,7 @@
 use crate::ports::{DriveDetail, Reply, Status};
 use crate::{bring_up, live, s1, Outcome};
 use xm1_saclac_interface::lens::Setting;
-use xm1_saclac_interface::{stock, ClientNotification, CommandKind, Completed, CompletionStatus, Message, Parameters, ReplyTarget};
+use xm1_saclac_interface::{stock, ClientNotification, CommandKind, Completed, CompletionStatus, Parameters, ReplyTarget};
 
 /// An action's return word: 0 fault, 1 complete, 2 pending, 3 no entry.
 pub const fn outcome_word(outcome: Outcome) -> u32 {
@@ -77,23 +77,6 @@ pub fn bring_up_event(code: u32, parameters: Parameters<'_>) -> bring_up::Event<
         0x05 => Event::Stop,
         0x2f..=0x32 | 0x3f | 0x40 => completed(code, parameters).map_or(Event::Other, Event::Completed),
         _ => Event::Other,
-    }
-}
-
-/// The m1 event for a queue message the live router forwards.
-pub fn live_message(message: Message<'_>) -> live::Event<'_> {
-    match message {
-        Message::Command(command) => match command.kind {
-            CommandKind::Command02 => live::Event::Profile(live::Profile::Primary),
-            CommandKind::Command03 => live::Event::Profile(live::Profile::Secondary),
-            CommandKind::LensDrive => live::Event::Drive(live::DriveOrigin::Command),
-            CommandKind::Cancel => live::Event::Cancel,
-            CommandKind::Command10 => live::Event::Stop,
-            CommandKind::Command2c => live::Event::Select,
-            CommandKind::Command2d => live::Event::Release,
-            _ => live::Event::Other,
-        },
-        Message::Completed(done) => live::Event::Completed(done),
     }
 }
 

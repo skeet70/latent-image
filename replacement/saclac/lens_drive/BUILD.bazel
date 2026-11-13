@@ -2,7 +2,12 @@ load("//replacement/toolchain:rust.bzl", "xm1_rust_host_rlib", "xm1_rust_host_te
 
 package(default_visibility = ["//visibility:public"])
 
-_SOURCES = ["src/bring_up.rs", "src/live.rs", "src/ports.rs", "src/s1.rs", "src/stock.rs"]
+_SOURCES = ["src/bring_up.rs", "src/children.rs", "src/live.rs", "src/ports.rs", "src/s1.rs", "src/stock.rs"]
+
+_HOST_DEPS = {
+    "xm1_saclac_controllers": "//replacement/saclac/controllers:host",
+    "xm1_saclac_interface": "//replacement/saclac_interface:host",
+}
 
 xm1_rust_rlib(
     name = "lens-drive",
@@ -10,7 +15,10 @@ xm1_rust_rlib(
     crate_name = "xm1_saclac_lens_drive",
     out = "arm/libxm1_saclac_lens_drive.rlib",
     data = _SOURCES,
-    rlib_deps = {"xm1_saclac_interface": "//replacement/saclac_interface:saclac-interface"},
+    rlib_deps = {
+        "xm1_saclac_controllers": "//replacement/saclac/controllers:controllers",
+        "xm1_saclac_interface": "//replacement/saclac_interface:saclac-interface",
+    },
 )
 
 xm1_rust_host_rlib(
@@ -18,7 +26,7 @@ xm1_rust_host_rlib(
     src = "src/lib.rs",
     crate_name = "xm1_saclac_lens_drive",
     data = _SOURCES,
-    rlib_deps = {"xm1_saclac_interface": "//replacement/saclac_interface:host"},
+    rlib_deps = _HOST_DEPS,
 )
 
 xm1_rust_host_test(
@@ -26,5 +34,5 @@ xm1_rust_host_test(
     src = "src/lib.rs",
     crate_name = "xm1_saclac_lens_drive_tests",
     data = glob(["src/*.rs"], exclude = ["src/lib.rs"]),
-    rlib_deps = {"xm1_saclac_interface": "//replacement/saclac_interface:host"},
+    rlib_deps = _HOST_DEPS,
 )
