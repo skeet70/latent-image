@@ -18,6 +18,11 @@ const RECEIVE_PAYLOAD: u32 = 0x169d380;
 const COMMAND_FLAGS: u32 = 0x169cf24;
 const FAULT: u32 = 0xf46c20;
 
+#[used]
+#[no_mangle]
+#[link_section = ".rodata.XM1_REQUIRES_LENS_SAFETY_CONTRACT"]
+pub static XM1_REQUIRES_LENS_SAFETY_CONTRACT: u32 = 1;
+
 struct DriverPorts;
 
 impl crate::driver::Ports for DriverPorts {

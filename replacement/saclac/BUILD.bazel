@@ -15,6 +15,7 @@ xm1_rust_rlib(
     name = "saclac",
     src = "src/lib.rs",
     crate_name = "xm1_saclac",
+    out = "arm/libxm1_saclac.rlib",
     rustc_flags = ["-C", "jump-tables=no"],
     data = _SOURCES,
     rlib_deps = _ARM_DEPS,
@@ -85,6 +86,7 @@ haskell_library(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":saclac-artifact",
+        "//replacement/fixed_image:contract",
         "//host:aeson",
         "//host:base",
     ],
@@ -171,8 +173,10 @@ haskell_library(
         "//host:containers",
         "//host:first-stage",
         "//host:host-support",
+        "//host:update-container",
         "//host/firmware:bank-allowlist",
         "//replacement/record5_staging:record5-staging",
+        "//replacement/fixed_image:contract",
     ],
 )
 
@@ -224,6 +228,7 @@ haskell_test(
         "//host:bytestring",
         "//host:first-stage",
         "//host:host-support",
+        "//host:update-container",
         "//host/firmware:bank-allowlist",
     ],
 )
@@ -249,6 +254,7 @@ haskell_binary(
     main_file = "InterfaceCompareMain.hs",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
+        "//emulation:judge-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

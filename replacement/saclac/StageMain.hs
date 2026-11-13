@@ -13,7 +13,7 @@ main :: IO ()
 main = do
   arguments <- getArgs
   case arguments of
-    [encoder, rebuild, decoder, datPath, image5Path, binPath, symbolsPath, disasmPath, sectionsPath, scratchPath, outputImage, outputDat, outputContract] -> do
+    [encoder, rebuild, decoder, datPath, image5Path, binPath, symbolsPath, disasmPath, sectionsPath, scratchPath, outputImage, outputDat, outputContract, outputFixedBody, outputPublications] -> do
       [encoder', rebuild', decoder'] <- mapM canonicalizePath [encoder, rebuild, decoder]
       dat <- H.readRegular (64 * 1024 * 1024) datPath
       image5 <- H.readRegular (16 * 1024 * 1024) image5Path
@@ -24,7 +24,9 @@ main = do
       staged <- stageSaclac (Image4.Tools encoder' rebuild' decoder') scratchPath dat image5 bin symbols disasm sections
       B.writeFile outputImage (stagedImage5 staged)
       B.writeFile outputDat (stagedDat staged)
+      B.writeFile outputFixedBody (stagedFixedBody staged)
+      L.writeFile outputPublications (J.encode (publicationsValue staged))
       image' <- canonicalizePath outputImage
       dat' <- canonicalizePath outputDat
       L.writeFile outputContract (J.encode (contractValue image' dat' staged))
-    _ -> H.failH "usage: stage-saclac ENCODER REBUILD DECODER SOURCE_DAT IMAGE5 LINKED_BIN SYMBOLS DISASM SECTIONS SCRATCH_DIR OUT_IMAGE5 OUT_DAT OUT_CONTRACT"
+    _ -> H.failH "usage: stage-saclac ENCODER REBUILD DECODER SOURCE_DAT IMAGE5 LINKED_BIN SYMBOLS DISASM SECTIONS SCRATCH_DIR OUT_IMAGE5 OUT_ENTRY_DAT OUT_CONTRACT OUT_FIXED_BODY OUT_PUBLICATIONS"
