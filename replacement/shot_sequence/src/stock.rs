@@ -2,6 +2,8 @@
 
 //! X-M1 1.50 boundary values of the shot module.
 
+pub mod calculation;
+
 use crate::boundary::{ClientRef, FocusConfirmation, FocusHistory, FocusResult, LensPoint, LensReference, LensSnapshot};
 use crate::ports::{AbortStatus, HalfPressMode, HalfPressNotifications};
 use crate::preparation::{FrameHeader, HalfPressMask, HalfPressParameters};

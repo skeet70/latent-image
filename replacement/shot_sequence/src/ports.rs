@@ -91,6 +91,8 @@ pub enum CalculationEffect {
     /// Calc 0x3c02, completion 0x90.
     Request,
     RecordSkipped,
+    /// A requested calculation's result reaches the bound record; precedes `Absorb`.
+    RecordResult,
     Absorb,
 }
 

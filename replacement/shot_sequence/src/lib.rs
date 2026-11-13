@@ -3,6 +3,7 @@
 
 pub mod boundary;
 pub mod calculation;
+pub mod calculation_work;
 pub mod capture;
 pub mod exposure;
 pub mod finish;
@@ -87,3 +88,5 @@ mod preparation_tests;
 mod subjects_tests;
 #[cfg(test)]
 mod summary_tests;
+#[cfg(test)]
+mod calculation_work_tests;
