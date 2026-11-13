@@ -588,6 +588,14 @@ The task 43 engine: the owned dispatcher and machine 0's router over stock's 37 
 | the trace entry `0xf46c38` called through the literal word at `0xefcce4`, declared in `Replacement.Saclac.Artifact.retainedExternals` | trampoline into retained stock | the stock trace body at `0xf46c38` | no | the trace recorder is owned | required |
 | stock action words and second-table words entered through `StockCodeWord` with r2 = the machine's table base word and r3 = the entered word, the values stock's dispatcher holds at `0xefcb20` and `0xefcb58` | trampoline into retained stock | the 813 distinct action words the cells reference, all image-5 code addresses, of which 701 are declared function starts and 112 are entries the decomp does not declare; no cell selects a second-table word; no entry reads r2, and 224 save r3 in a store-multiple prologue, the only r3 read the walk finds | no | every machine owned | required |
 
+## shot_sequence
+
+The task 43 half-press and live preparation and capture pipeline behind the saclac child contract. Its steps reach peers, records and replies through one `Ports` trait; it binds no stock symbol.
+
+| Shim | Kind | Other side | Owned now | Removal condition | State |
+| --- | --- | --- | --- | --- | --- |
+| `half_press_mode`, `half_press_notifications` and `abort_status` in `src/stock.rs` | guest-memory layout view | words +4 and +0x10 of the command-6 parameter block written by the retained command function `0xef8fa0`, and the capture status word at `0x169d380` | no | the half-press command producer and the capture status writer are owned | required |
+
 ## save
 
 The save facade and its retained image-5 services.
