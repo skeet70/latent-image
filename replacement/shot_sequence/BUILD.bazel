@@ -3,6 +3,7 @@ load("//replacement/toolchain:rust.bzl", "xm1_rust_host_test", "xm1_rust_rlib")
 package(default_visibility = ["//visibility:public"])
 
 SOURCES = [
+    "src/boundary.rs",
     "src/calculation.rs",
     "src/capture.rs",
     "src/exposure.rs",
@@ -11,8 +12,11 @@ SOURCES = [
     "src/outcome.rs",
     "src/pipeline.rs",
     "src/ports.rs",
+    "src/preparation.rs",
     "src/sequence.rs",
     "src/stock.rs",
+    "src/subjects.rs",
+    "src/summary.rs",
 ]
 
 xm1_rust_rlib(

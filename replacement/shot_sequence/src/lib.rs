@@ -1,6 +1,7 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+pub mod boundary;
 pub mod calculation;
 pub mod capture;
 pub mod exposure;
@@ -9,8 +10,11 @@ pub mod jobs;
 pub mod outcome;
 pub mod pipeline;
 pub mod ports;
+pub mod preparation;
 pub mod sequence;
 pub mod stock;
+pub mod subjects;
+pub mod summary;
 
 pub use outcome::Outcome;
 
@@ -75,3 +79,11 @@ mod tests;
 mod capture_tests;
 #[cfg(test)]
 mod stock_tests;
+#[cfg(test)]
+mod leaf_fakes;
+#[cfg(test)]
+mod preparation_tests;
+#[cfg(test)]
+mod subjects_tests;
+#[cfg(test)]
+mod summary_tests;
