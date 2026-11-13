@@ -4752,6 +4752,39 @@
   {
    "direction": "outgoing",
    "queue": 50,
+   "operation": 16919,
+   "bytes": 8,
+   "fields": [
+    {
+     "name": "completion",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "0x0076f688: str r5,[r11,#-0x28]"
+     ]
+    },
+    {
+     "name": "argument",
+     "offset": 4,
+     "bytes": 1,
+     "sources": [
+      "0x0076f68c: strb r6,[r11,#-0x24]"
+     ]
+    },
+    {
+     "name": "reserved",
+     "offset": 5,
+     "bytes": 3,
+     "sources": [
+      "0x0076f684: the 8-byte zero fill at r11-40 leaves r11-35..r11-33 zero"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 50,
    "operation": 16928,
    "bytes": 12,
    "fields": [
