@@ -85,7 +85,6 @@ RB_RENDER_CALL rb_render_call_1130e68, 0x1130e68, 0
 RB_RENDER_CALL rb_render_call_111258c, 0x111258c, 0
 RB_RENDER_CALL rb_render_call_111299c, 0x111299c, 0
 RB_RENDER_CALL rb_render_call_bf96b0, 0xbf96b0, 0
-RB_RENDER_CALL rb_render_call_61c93c, 0x61c93c, 0
 RB_RENDER_CALL rb_render_call_1139a68, 0x1139a68, 3
 RB_RENDER_CALL rb_render_call_1159168, 0x1159168, 0
 

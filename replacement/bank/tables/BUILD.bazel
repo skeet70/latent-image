@@ -1,0 +1,64 @@
+# Generated Rust tables for the bank image.
+#
+# Each table is a build action over the owner-supplied inputs declared by
+# //replacement/bank:tables.bzl. The adapter rlibs and the image link unit take
+# these outputs as declared inputs; no crate reads a private-data path.
+
+genrule(
+    name = "menu-tree-rs",
+    srcs = [
+        "@bank_image_inputs//:bank-plan.json",
+        "@bank_image_inputs//:menu-tables.json",
+    ],
+    outs = [
+        "menu-labels.rs",
+        "menu-records.rs",
+        "menu-tree.rs",
+    ],
+    cmd = "$(location //replacement/modal_runtime:menu-engine-tree)" +
+          " --tables $(location @bank_image_inputs//:menu-tables.json)" +
+          " --package-plan $(location @bank_image_inputs//:bank-plan.json)" +
+          " --tree-out $(location menu-tree.rs)" +
+          " --records-out $(location menu-records.rs)" +
+          " --labels-out $(location menu-labels.rs)",
+    tools = ["//replacement/modal_runtime:menu-engine-tree"],
+    visibility = ["//visibility:public"],
+)
+
+genrule(
+    name = "menu-value-rs",
+    srcs = [
+        "@bank_image_inputs//:image4.bin",
+        "@bank_image_inputs//:menu-tables.json",
+    ],
+    outs = ["menu-value-table.rs"],
+    cmd = "$(location //replacement/modal_runtime:menu-value-table)" +
+          " --image4 $(location @bank_image_inputs//:image4.bin)" +
+          " --tables $(location @bank_image_inputs//:menu-tables.json)" +
+          " --out $(location menu-value-table.rs)",
+    tools = ["//replacement/modal_runtime:menu-value-table"],
+    visibility = ["//visibility:public"],
+)
+
+genrule(
+    name = "modal75-table-rs",
+    srcs = [
+        "@bank_image_inputs//:controller75-inventory.json",
+        "@bank_image_inputs//:image5.bin",
+        "@bank_image_inputs//:picker-document.json",
+    ],
+    outs = [
+        "modal75-retired.json",
+        "modal75-table.rs",
+        "modal75-vectors.rs",
+    ],
+    cmd = "$(location //replacement/modal_runtime:controller75-table)" +
+          " --out $(location modal75-table.rs)" +
+          " --vectors-out $(location modal75-vectors.rs)" +
+          " --retired-out $(location modal75-retired.json)" +
+          " --inventory $(location @bank_image_inputs//:controller75-inventory.json)" +
+          " --id5 $(location @bank_image_inputs//:image5.bin)" +
+          " --picker $(location @bank_image_inputs//:picker-document.json)",
+    tools = ["//replacement/modal_runtime:controller75-table"],
+    visibility = ["//visibility:public"],
+)

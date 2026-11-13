@@ -16,7 +16,14 @@ module BankAllowlist
   , parseAllowlist
   , Finding (..)
   , Reason (..)
+  , LayoutRule (..)
   , Region (..)
+  , Layout (..)
+  , EngineExtents (..)
+  , readLayout
+  , regionOf
+  , writable
+  , layoutFindings
   , Verdict (..)
   , Report (..)
   , allowlistAnalysisIdentity
@@ -165,8 +172,8 @@ parseAllowlist bytes = do
   text (String value) | not (T.null value) = Right (T.unpack value)
   text _ = Left "allowlist: nonempty string required"
   byteCount (Number n)
-    | n >= 1 && n <= 256 && n == fromIntegral (truncate n :: Int) = Right (truncate n)
-  byteCount _ = Left "allowlist: stock store bytes must be an integer from 1 to 256"
+    | n >= 1 && n <= 4096 && n == fromIntegral (truncate n :: Int) = Right (truncate n)
+  byteCount _ = Left "allowlist: stock store bytes must be an integer from 1 to 4096"
   hexWord (String value) = case T.unpack value of
     '0' : 'x' : digits | length digits == 8 && all isHexDigit digits, [(word, "")] <- readHex digits -> Right word
     other -> Left ("allowlist: eight-digit 0x word required, got " ++ other)
@@ -187,7 +194,7 @@ data Finding = Finding
 
 -- | What a reported site does.
 data Reason
-  = LayoutProblem
+  = LayoutProblem LayoutRule
   | ForbiddenInstruction Forbidden
   | DeviceLoad
   | -- | First and last byte, and the region the store leaves the bank for.
@@ -297,6 +304,24 @@ renderDeclaration d =
 
 -- * Layout
 
+-- | What a layout finding breaks.
+data LayoutRule
+  = SectionOutsideLayout
+  | SectionNotProgbits
+  | BankCodeStart
+  | EngineRegion
+  | SectionExtent String
+  | BankImageOverlap
+  | GeneratedEnd
+  | GeneratedBundleOverlap
+  | InstallerPlacement
+  | RuntimeExtent
+  | InstallerSectionOutside
+  | WritableExecutableSegment
+  | ThumbCode
+  | FunctionOverlap
+  deriving (Eq, Show)
+
 data Layout = Layout
   { allocationBase :: Word32
   , allocationEnd :: Word32
@@ -308,15 +333,24 @@ data Layout = Layout
   , bankEnd :: Word32
   , installerStart :: Word32
   , runtimeEnd :: Word32
-  , -- | The menu engine region of a modal75,menu-engine package.
-    engineCode :: Maybe (Word32, Word32)
+  , -- | The menu engine code and the writable data that follows it.
+    engine :: Maybe EngineExtents
   , layoutBankVariant :: BankVariant
   }
+
+data EngineExtents = EngineExtents
+  { engineCodeStart :: Word32
+  , engineCodeEnd :: Word32
+  , engineDataStart :: Word32
+  , engineDataEnd :: Word32
+  }
+  deriving (Eq, Show)
 
 data Region
   = AllocationHeader
   | BankCode
   | BankData
+  | EngineData
   | AllocationGap
   | GeneratedArea
   | ExecutableBundle
@@ -332,6 +366,7 @@ regionName region = case region of
   AllocationHeader -> "the allocation header (installer metadata and flash store image)"
   BankCode -> "bank code"
   BankData -> "bank data"
+  EngineData -> "menu engine data"
   AllocationGap -> "unassigned allocation space"
   GeneratedArea -> "generated bank data"
   ExecutableBundle -> "the relocated executable bundle"
@@ -365,7 +400,8 @@ stockCode region = case region of
 regionOf :: Layout -> Word32 -> Region
 regionOf layout address
   | address < allocationBase layout || address >= allocationEnd layout = stockRegion address
-  | Just (start, end) <- engineCode layout, start <= address && address < end = BankCode
+  | Just region <- engine layout, engineCodeStart region <= address && address < engineCodeEnd region = BankCode
+  | Just region <- engine layout, engineDataStart region <= address && address < engineDataEnd region = EngineData
   | address < textStart layout = AllocationHeader
   | address < textEnd layout = BankCode
   | address >= dataStart layout && address < imageEnd layout = BankData
@@ -376,7 +412,7 @@ regionOf layout address
   | otherwise = AllocationGap
 
 writable :: Region -> Bool
-writable region = region == BankData || region == GeneratedArea
+writable region = region == BankData || region == EngineData || region == GeneratedArea
 
 readLayout :: Elf -> Either String Layout
 readLayout elf = do
@@ -399,8 +435,12 @@ readLayout elf = do
     [s] -> Right s
     _ -> Left "layout: exactly one .data section required"
   unless (toInteger base + toInteger allocationSize <= 0xffffffff) (Left "layout: allocation leaves the address space")
-  engine <- if hasPublicationGroup MenuEnginePublication variant
-    then curry Just <$> symbol "__rb_menu_engine_start" <*> symbol "__rb_menu_engine_end"
+  engineRegion <- if hasPublicationGroup MenuEnginePublication variant
+    then Just <$> (EngineExtents
+      <$> symbol "__rb_menu_engine_start"
+      <*> symbol "__rb_menu_engine_end"
+      <*> symbol "__rb_menu_engine_data_start"
+      <*> symbol "__rb_menu_engine_data_end")
     else pure Nothing
   pure
     Layout
@@ -414,7 +454,7 @@ readLayout elf = do
       , bankEnd = end
       , installerStart = installer
       , runtimeEnd = runtime
-      , engineCode = engine
+      , engine = engineRegion
       , layoutBankVariant = variant
       }
  where
@@ -429,27 +469,36 @@ bankSections, installerSections :: [String]
 bankSections = [".text", ".data"]
 installerSections = [".ram_push.text", ".ram_push.publications", ".ram_push.rendezvous", ".ram_push.mailbox"]
 
+engineSections :: Layout -> [String]
+engineSections layout
+  | isJust (engine layout) = [".menu_engine", ".menu_engine_data"]
+  | otherwise = []
+
 layoutFindings :: Elf -> Layout -> [Finding]
 layoutFindings elf layout =
   concat
-    [ [ violation (sectionAddress s) ("allocated section " ++ sectionName s ++ " is outside the bank and installer layout")
+    [ [ violation SectionOutsideLayout (sectionAddress s) ("allocated section " ++ sectionName s ++ " is outside the bank and installer layout")
       | s <- allocated
-      , sectionName s `notElem` bankSections ++ installerSections ++ [".menu_engine" | isJust (engineCode layout)]
+      , sectionName s `notElem` bankSections ++ installerSections ++ engineSections layout
       ]
-    , [ violation (sectionAddress s) ("section " ++ sectionName s ++ " is not PROGBITS")
+    , [ violation SectionNotProgbits (sectionAddress s) ("section " ++ sectionName s ++ " is not PROGBITS")
       | s <- allocated
       , sectionType s /= 1
       ]
-    , check (textStart layout == runtimeExecutableBase (allocationBase layout)) (textStart layout) "bank code does not start at the allocation's executable offset"
-    , case engineCode layout of
+    , check BankCodeStart (textStart layout == runtimeExecutableBase (allocationBase layout)) (textStart layout) "bank code does not start at the allocation's executable offset"
+    , case engine layout of
         Nothing -> []
-        Just (start, end) -> concat
-          [ check (start == menuEngineRegionStartFor (layoutBankVariant layout) (allocationBase layout) && start >= runtimeEnd layout
-              && end <= menuEngineRegionStartFor (layoutBankVariant layout) (allocationBase layout) + menuEngineRegionExtentFor (layoutBankVariant layout) && end <= allocationEnd layout)
-              start "menu engine region differs from the layout"
+        Just region -> concat
+          [ check EngineRegion (engineCodeStart region == menuEngineRegionStartFor (layoutBankVariant layout) (allocationBase layout) && engineCodeStart region >= runtimeEnd layout
+              && engineDataStart region >= engineCodeEnd region
+              && engineDataEnd region <= menuEngineRegionStartFor (layoutBankVariant layout) (allocationBase layout) + menuEngineRegionExtentFor (layoutBankVariant layout) && engineDataEnd region <= allocationEnd layout)
+              (engineCodeStart region) "menu engine region differs from the layout"
           , sectionCheck ".menu_engine" $ \s ->
-              sectionAddress s == start && sectionAddress s + sectionSize s == end
+              sectionAddress s == engineCodeStart region && sectionAddress s + sectionSize s == engineCodeEnd region
                 && sectionExecutable s && not (sectionWritable s)
+          , sectionCheck ".menu_engine_data" $ \s ->
+              sectionAddress s == engineDataStart region && sectionAddress s + sectionSize s == engineDataEnd region
+                && sectionWritable s && not (sectionExecutable s)
           ]
     , sectionCheck ".text" $ \s ->
         sectionAddress s == textStart layout && sectionAddress s + sectionSize s == textEnd layout
@@ -457,22 +506,22 @@ layoutFindings elf layout =
     , sectionCheck ".data" $ \s ->
         sectionAddress s >= textEnd layout && sectionAddress s + sectionSize s == imageEnd layout
           && sectionWritable s && not (sectionExecutable s)
-    , check (imageEnd layout <= generatedStart layout) (imageEnd layout) "bank image overlaps generated data"
-    , check (bankEnd layout == runtimeBankEnd (allocationBase layout)) (bankEnd layout) "generated bank data has the wrong writable end"
-    , check (generatedStart layout <= bankEnd layout && bankEnd layout <= installerStart layout) (bankEnd layout) "generated data overlaps the executable bundle"
-    , check (installerStart layout == runtimeInstallerBase (allocationBase layout)) (installerStart layout) "installer has the wrong placement after the executable bundle"
-    , check (runtimeEnd layout <= allocationEnd layout) (runtimeEnd layout) "runtime exceeds the allocation"
-    , [ violation (sectionAddress s) ("installer section " ++ sectionName s ++ " lies outside the installer extent")
+    , check BankImageOverlap (imageEnd layout <= generatedStart layout) (imageEnd layout) "bank image overlaps generated data"
+    , check GeneratedEnd (bankEnd layout == runtimeBankEnd (allocationBase layout)) (bankEnd layout) "generated bank data has the wrong writable end"
+    , check GeneratedBundleOverlap (generatedStart layout <= bankEnd layout && bankEnd layout <= installerStart layout) (bankEnd layout) "generated data overlaps the executable bundle"
+    , check InstallerPlacement (installerStart layout == runtimeInstallerBase (allocationBase layout)) (installerStart layout) "installer has the wrong placement after the executable bundle"
+    , check RuntimeExtent (runtimeEnd layout <= allocationEnd layout) (runtimeEnd layout) "runtime exceeds the allocation"
+    , [ violation InstallerSectionOutside (sectionAddress s) ("installer section " ++ sectionName s ++ " lies outside the installer extent")
       | s <- allocated
       , sectionName s `elem` installerSections
       , sectionAddress s < installerStart layout || sectionAddress s + sectionSize s > runtimeEnd layout
       ]
-    , [ violation (segmentAddress g) "loadable segment is both writable and executable"
+    , [ violation WritableExecutableSegment (segmentAddress g) "loadable segment is both writable and executable"
       | g <- elfSegments elf
       , loadSegment g
       , segmentWritable g && segmentExecutable g
       ]
-    , [ violation (symbolValue s) "Thumb code in the bank"
+    , [ violation ThumbCode (symbolValue s) "Thumb code in the bank"
       | s <- elfSymbols elf
       , symbolName s == "$t"
       , symbolValue s >= textStart layout && symbolValue s < imageEnd layout
@@ -480,11 +529,11 @@ layoutFindings elf layout =
     ]
  where
   allocated = filter sectionAllocated (elfSections elf)
-  violation address = Finding address "<layout>" Violation LayoutProblem
-  check ok address message = [violation address message | not ok]
+  violation rule address = Finding address "<layout>" Violation (LayoutProblem rule)
+  check rule ok address message = [violation rule address message | not ok]
   sectionCheck name predicate = case [s | s <- allocated, sectionName s == name] of
-    [s] -> check (predicate s) (sectionAddress s) ("section " ++ name ++ " has the wrong extent or permissions")
-    _ -> [violation 0 ("exactly one " ++ name ++ " section required")]
+    [s] -> check (SectionExtent name) (predicate s) (sectionAddress s) ("section " ++ name ++ " has the wrong extent or permissions")
+    _ -> [violation (SectionExtent name) 0 ("exactly one " ++ name ++ " section required")]
 
 -- * Abstract values
 
@@ -538,6 +587,7 @@ joinValue _ a b | a == b = a
 joinValue _ (Exact a) (Exact b) = fromSet (S.union a b)
 joinValue _ a b | Just (alo, ahi) <- bounds a, Just (blo, bhi) <- bounds b = Interval (min alo blo) (max ahi bhi)
 joinValue _ a b | Just (alo, ahi) <- stackBounds a, Just (blo, bhi) <- stackBounds b = StackSpan (min alo blo) (max ahi bhi)
+joinValue _ a b | isJust (stackAddress a), isJust (stackAddress b) = Derived (Index StackFrame)
 joinValue _ (Exact zero) derived@(Derived _) | zero == S.singleton 0 = derived
 joinValue _ derived@(Derived _) (Exact zero) | zero == S.singleton 0 = derived
 joinValue place (Derived (Index l)) b | Just (lo, _) <- bounds b, place lo == l = Derived (Index l)
@@ -548,6 +598,46 @@ stackBounds :: Abstract -> Maybe (Int32, Int32)
 stackBounds (StackOffset o) = Just (o, o)
 stackBounds (StackSpan lo hi) = Just (lo, hi)
 stackBounds _ = Nothing
+
+-- | The frame offsets an address value can name, or every offset when the
+-- index into the frame is unbounded.
+stackAddress :: Abstract -> Maybe (Int32, Int32)
+stackAddress (StackOffset o) = Just (o, o)
+stackAddress (StackSpan lo hi) = Just (lo, hi)
+stackAddress (Derived (Index StackFrame)) = Just (minBound, maxBound)
+stackAddress _ = Nothing
+
+-- | The value an operation produces from its operands. An operand that may be
+-- a frame address (a stack offset or span, or an unbounded index into the
+-- frame) never yields a value that loses the frame: when the result is not
+-- itself a frame address, it is an unbounded index into the frame.
+frameCarried :: [Abstract] -> Abstract -> Abstract
+frameCarried operands result
+  | any (isJust . stackAddress) operands, not (isJust (stackAddress result)) = Derived (Index StackFrame)
+  | otherwise = result
+
+-- | The union of two escape spans; a span covers every frame offset between
+-- its ends, and `minBound..maxBound` is every slot.
+escapedSpan :: Maybe (Int32, Int32) -> Maybe (Int32, Int32) -> Maybe (Int32, Int32)
+escapedSpan Nothing other = other
+escapedSpan other Nothing = other
+escapedSpan (Just (lo, hi)) (Just (lo', hi')) = Just (min lo lo', max hi hi')
+
+markEscaped :: Maybe (Int32, Int32) -> Abstract -> Maybe (Int32, Int32)
+markEscaped span_ value = escapedSpan span_ (stackAddress value)
+
+-- | Drops every local slot holding a byte at or above the lowest escaped
+-- offset, except the slot the entry push wrote lr into while it still holds it.
+forgetEscaped :: State -> State
+forgetEscaped state = case escaped state of
+  Nothing -> state
+  Just (lo, _) ->
+    state {slots = M.filterWithKey (\k v -> toInteger k + 4 <= toInteger lo || keepsReturn state k v) (slots state)}
+
+-- | Whether a slot is the return address the entry push wrote and nothing has
+-- overwritten since.
+keepsReturn :: State -> Int32 -> Abstract -> Bool
+keepsReturn state offset value = value == ReturnAddress && S.member offset (savedReturn state)
 
 -- | A small index read as signed stack-offset deltas: every value, or the two bounds.
 signedOffsets :: Abstract -> Maybe [Int32]
@@ -562,7 +652,8 @@ stackAt :: [Int32] -> Abstract
 stackAt [o] = StackOffset o
 stackAt offsets = StackSpan (minimum offsets) (maximum offsets)
 
--- | Joins, then moves a growing interval bound out to the next threshold.
+-- | Joins, then moves a growing interval bound out to the next threshold. A
+-- growing stack offset keeps its frame root.
 widenValue :: (Word32 -> Location) -> [Word32] -> Abstract -> Abstract -> Abstract
 widenValue place thresholds old new
   | joined == old = old
@@ -573,6 +664,7 @@ widenValue place thresholds old new
       Interval
         (if lo' < lo then fromMaybe 0 (listToMaybe (reverse (filter (<= lo') thresholds))) else lo)
         (if hi' > hi then fromMaybe maxBound (listToMaybe (filter (>= hi') thresholds)) else hi)
+  | isJust (stackBounds joined) = Derived (Index StackFrame)
   | otherwise = Unknown
  where
   joined = joinValue place old new
@@ -596,6 +688,13 @@ data State = State
   , comparison :: Maybe Comparison
   , -- | A condition the current flags are known to satisfy on this path.
     holds :: Maybe Cond
+  , -- | The stack-pointer offsets this function has taken the address of.
+    escaped :: Maybe (Int32, Int32)
+  , -- | The frame offsets a store wrote the entry value of a callee-saved
+    -- register or the entry link register into.
+    savedRegisters :: S.Set Int32
+  , -- | The frame offsets the entry push wrote lr into.
+    savedReturn :: S.Set Int32
   }
   deriving (Eq, Show)
 
@@ -606,6 +705,9 @@ entryState =
     M.empty
     Nothing
     Nothing
+    Nothing
+    S.empty
+    S.empty
 
 joinState :: (Word32 -> Location) -> State -> State -> State
 joinState place a b =
@@ -614,6 +716,9 @@ joinState place a b =
     (M.intersectionWith (joinValue place) (slots a) (slots b))
     (if comparison a == comparison b then comparison a else Nothing)
     (if holds a == holds b then holds a else Nothing)
+    (escapedSpan (escaped a) (escaped b))
+    (savedRegisters a `S.union` savedRegisters b)
+    (savedReturn a `S.intersection` savedReturn b)
 
 widenState :: (Word32 -> Location) -> [Word32] -> State -> State -> State
 widenState place thresholds old new =
@@ -622,6 +727,9 @@ widenState place thresholds old new =
     (M.intersectionWith (widenValue place thresholds) (slots old) (slots new))
     (if comparison old == comparison new then comparison old else Nothing)
     (if holds old == holds new then holds old else Nothing)
+    (escapedSpan (escaped old) (escaped new))
+    (savedRegisters old `S.union` savedRegisters new)
+    (savedReturn old `S.intersection` savedReturn new)
 
 -- | The flags of `cmp r, #k` (unsigned conditions valid) or `cmn r, #-k` (only EQ and NE).
 data Comparison = Comparison Reg Word32 Bool deriving (Eq, Show)
@@ -646,7 +754,7 @@ locate :: Context -> Word32 -> Location
 locate context address = case regionOf (contextLayout context) address of
   GeneratedArea -> GeneratedData
   region
-    | region == BankCode || region == BankData
+    | region == BankCode || region == BankData || region == EngineData
     , Just (_, _, name) <- find (\(start, end, _) -> start <= address && address < end) (namedObjects context) ->
         BankObject name
     | let layout = contextLayout context
@@ -673,7 +781,7 @@ readSized context width signed address = case width of
 -- * Value arithmetic
 
 offsetFrom :: Context -> Abstract -> Abstract -> Abstract
-offsetFrom context base index = case offsetFromOrdered context base index of
+offsetFrom context base index = frameCarried [base, index] $ case offsetFromOrdered context base index of
   Unknown -> case offsetFromOrdered context index base of
     derived@(Derived _) -> derived
     _ -> Unknown
@@ -698,18 +806,21 @@ offsetFromOrdered context base index = case (base, index) of
   _ -> Unknown
 
 subtractFrom :: Abstract -> Abstract -> Abstract
-subtractFrom base index = case (base, index) of
+subtractFrom (StackOffset o) (StackOffset q) = exact (fromIntegral (o - q))
+subtractFrom base index = frameCarried [base, index] $ case (base, index) of
   (StackOffset o, _) | Just offsets <- signedOffsets index -> stackAt (map (o -) offsets)
   (StackSpan lo hi, _) | Just offsets <- signedOffsets index -> stackAt (map (lo -) offsets ++ map (hi -) offsets)
-  (StackOffset o, StackOffset q) -> exact (fromIntegral (o - q))
   (Derived p, _) | Just _ <- bounds index -> Derived p
+  (StackOffset _, _) | scalar index -> Derived (Index StackFrame)
+  (StackSpan _ _, _) | scalar index -> Derived (Index StackFrame)
+  (Derived p@(Index StackFrame), _) | scalar index -> Derived p
   _ | Just v <- pointwise (-) base index -> v
   _ | Just (lo, hi) <- bounds base, Just [v] <- enumerate index, lo >= v -> Interval (lo - v) (hi - v)
   _ -> Unknown
 
 shiftValue :: Shift -> Int -> Abstract -> Abstract
 shiftValue LSL 0 value = value
-shiftValue shift amount value = case enumerate value of
+shiftValue shift amount value = frameCarried [value] $ case enumerate value of
   Just xs -> fromSet (S.fromList (map (applyShift shift amount) xs))
   Nothing -> case (shift, bounds value) of
     (LSR, Just (lo, hi)) -> Interval (applyShift LSR amount lo) (applyShift LSR amount hi)
@@ -717,7 +828,10 @@ shiftValue shift amount value = case enumerate value of
     (LSL, Just (lo, hi)) | toInteger hi * 2 ^ amount <= 0xffffffff -> Interval (lo `shiftL` amount) (hi `shiftL` amount)
     _ -> Unknown
 
--- | An immediate shift; amount 0 encodes 32 for LSR and ASR and RRX for ROR (taken as unknown by callers' sets).
+-- | An immediate shift; amount 0 encodes 32 for LSR and ASR. ROR by 0 is the
+-- rotate-right-extend, whose carry this analysis does not track, so its
+-- callers take the result as unknown; `shiftValue` keeps the no-rotation for
+-- the byte and halfword extends.
 applyShift :: Shift -> Int -> Word32 -> Word32
 applyShift shift amount value = case shift of
   LSL -> value `shiftL` amount
@@ -728,7 +842,7 @@ applyShift shift amount value = case shift of
   ROR -> if amount == 0 then value else (value `shiftR` amount) .|. (value `shiftL` (32 - amount))
 
 dataResult :: Context -> DataOp -> Abstract -> Abstract -> Abstract
-dataResult context op a b = case op of
+dataResult context op a b = frameCarried operands $ case op of
   MOV -> b
   MVN -> fromMaybe Unknown (pointwise (\_ y -> complement y) (exact 0) b)
   ADD -> offsetFrom context a b
@@ -747,6 +861,16 @@ dataResult context op a b = case op of
     (_, Just (_, ha)) -> Interval 0 ha
     _ -> Unknown
   _ -> Unknown
+ where
+  -- MVN has no first operand: its Rn field is zero and holds no value.
+  -- ADD, SUB and RSB carry the frame in offsetFrom and subtractFrom.
+  operands = case op of
+    MOV -> [b]
+    MVN -> [b]
+    ADD -> []
+    SUB -> []
+    RSB -> []
+    _ -> [a, b]
 
 -- * Transfer
 
@@ -771,6 +895,7 @@ setRegister (Reg n) value state =
     , comparison = case comparison state of
         Just (Comparison (Reg compared) _ _) | compared == n -> Nothing
         other -> other
+    , escaped = if n == 13 then escaped state else markEscaped (escaped state) value
     }
 
 -- | Narrows the compared register on a path where `cond` holds after `cmp r, #k`.
@@ -816,11 +941,18 @@ refine (Cond c) state = case comparison state of
 
 operandValue :: Word32 -> State -> Operand -> Abstract
 operandValue _ _ (Immediate value) = exact value
-operandValue address state (ShiftedImmediate rm shift amount) = shiftValue shift amount (registerValue address state rm)
-operandValue address state (ShiftedRegister rm shift rs) = case enumerate (registerValue address state rs) of
-  Just [0] -> registerValue address state rm
-  Just [amount] | amount < 32 -> shiftValue shift (fromIntegral amount) (registerValue address state rm)
+operandValue address state (ShiftedImmediate rm shift amount)
+  | shift == ROR, amount == 0 = frameCarried [value] Unknown
+  | otherwise = frameCarried [value] (shiftValue shift amount value)
+ where
+  value = registerValue address state rm
+operandValue address state (ShiftedRegister rm shift rs) = frameCarried [value, amount] $ case enumerate amount of
+  Just [0] -> value
+  Just [n] | n < 32 -> shiftValue shift (fromIntegral n) value
   _ -> Unknown
+ where
+  value = registerValue address state rm
+  amount = registerValue address state rs
 
 -- | One instruction: intra-function successors with their states, and the
 -- findings it produces in this state.
@@ -847,15 +979,24 @@ execute context function address instruction state = case instruction of
           (Just v, _, _) -> v
           (_, Just (alo, ahi), Just (blo, bhi)) | toInteger ahi * toInteger bhi <= 0xffffffff -> Interval (alo * blo) (ahi * bhi)
           _ -> Unknown
-        result s = maybe (factors s) (\ra -> offsetFrom context (registerValue address s ra) (factors s)) accumulator
+        operands s = [registerValue address s rn, registerValue address s rm] ++ maybe [] (\ra -> [registerValue address s ra]) accumulator
+        result s = frameCarried (operands s) (maybe (factors s) (\ra -> offsetFrom context (registerValue address s ra) (factors s)) accumulator)
      in conditional cond (\s -> continue (setRegister rd (result s) s)) id
   MoveTop cond rd value ->
-    let top s = fromMaybe Unknown (pointwise (\low _ -> (low .&. 0xffff) .|. (value `shiftL` 16)) (registerValue address s rd) (exact 0))
+    let low s = registerValue address s rd
+        top s = frameCarried [low s] (fromMaybe Unknown (pointwise (\x _ -> (x .&. 0xffff) .|. (value `shiftL` 16)) (low s) (exact 0)))
      in conditional cond (\s -> continue (setRegister rd (top s) s)) id
   ZeroExtend cond rd rm rotation bits ->
     let extended s = dataResult context AND (shiftValue ROR rotation (registerValue address s rm)) (exact ((1 `shiftL` bits) - 1))
      in conditional cond (\s -> continue (setRegister rd (extended s) s)) id
-  Compute cond defs -> conditional cond (\s -> continue (foldr (`setRegister` Unknown) s defs)) id
+  Compute cond defs ->
+    conditional cond
+      ( \s ->
+          let sources = maybe [] computeSources (wordAt (contextElf context) address)
+              value = frameCarried (map (registerValue address s) sources) Unknown
+           in continue (foldr (\destination acc -> setRegister destination value acc) s defs)
+      )
+      id
   Load cond width signed rt rn offset indexing
     | rt == pc ->
         branching cond $ \s ->
@@ -878,16 +1019,57 @@ execute context function address instruction state = case instruction of
       ( \s ->
           let at = transferAddress s rn offset indexing
               size = widthBytes width
-              stored = storeSlots s at size [registerValue address s rt, registerValue address s (nextReg rt)]
-           in storing (storeCheck s rn at size) (continue (writeback stored rn offset indexing))
+              values = [registerValue address s rt, registerValue address s (nextReg rt)]
+              stored = storeValues (storeSlots s at size values) values
+              -- A pre-indexed store of a callee-saved register at the entry
+              -- stack pointer writes a prologue slot.
+              entrySaved = case (rn, rt, width, indexing, at, registerValue address s sp) of
+                (Reg 13, Reg n, Word, PreIndexed, StackOffset first, StackOffset 0)
+                  | n == 14 || n >= 4 && n <= 12 -> S.singleton first
+                _ -> S.empty
+              saved = entrySaved `S.union` savedWords at size values
+              savedReturnSlots
+                | rt == lr = entrySaved
+                | otherwise = S.empty
+           in storing (storeCheck s rn at size)
+                ( continue
+                    ( writeback
+                        ( stored
+                            { savedRegisters = savedRegisters s `S.union` saved
+                            , savedReturn = savedReturn s `S.union` savedReturnSlots
+                            }
+                        )
+                        rn
+                        offset
+                        indexing
+                    )
+                )
       )
       id
   StoreMultiple cond rn mode wb regs ->
     conditional cond
       ( \s ->
           let (lowest, count, end) = block s rn mode regs
-              stored = storeSlots s lowest count (map (registerValue address s) regs)
-              updated = if wb then setRegister rn end stored else stored
+              values = map (registerValue address s) regs
+              stored = storeValues (storeSlots s lowest count values) values
+              -- A push at the entry stack pointer writes the prologue's slots.
+              pushed
+                | rn == sp, mode == DecrementBefore, wb, registerValue address s sp == StackOffset 0
+                , StackOffset first <- lowest =
+                    [(first + 4 * fromIntegral i, r) | (i, r) <- zip [0 :: Int ..] regs]
+                | otherwise = []
+              written = case lowest of
+                StackOffset first -> [(first + 4 * fromIntegral i, v) | (i, v) <- zip [0 :: Int ..] values]
+                _ -> []
+              saved =
+                S.fromList [offset | (offset, r) <- pushed, r >= Reg 4, r <= Reg 12 || r == lr]
+                  `S.union` S.fromList [offset | (offset, v) <- written, savedValue v]
+              savedReturnSlots = S.fromList [offset | (offset, r) <- pushed, r == lr]
+              updated =
+                (if wb then setRegister rn end stored else stored)
+                  { savedRegisters = savedRegisters s `S.union` saved
+                  , savedReturn = savedReturn s `S.union` savedReturnSlots
+                  }
            in storing (storeCheck s rn lowest count) (continue updated)
       )
       id
@@ -986,7 +1168,10 @@ execute context function address instruction state = case instruction of
       | k >= 0 -> offsetFrom context base (exact (fromIntegral k))
       | otherwise -> subtractFrom base (exact (fromIntegral (negate k)))
     OffsetRegister up rm shift amount ->
-      let index = shiftValue shift amount (registerValue address s rm)
+      let raw = registerValue address s rm
+          index
+            | shift == ROR, amount == 0 = frameCarried [raw] Unknown
+            | otherwise = shiftValue shift amount raw
        in if up then offsetFrom context base index else subtractFrom base index
   writeback s rn offset indexing = case indexing of
     OffsetOnly -> s
@@ -1020,7 +1205,9 @@ execute context function address instruction state = case instruction of
   derefDepth (Deref p) = 1 + derefDepth p
   derefDepth _ = 0
 
-  -- Stack slots hold whole words; a narrower store forgets the slots it touches.
+  -- Stack slots hold whole words; a narrower store forgets the slots it
+  -- touches. A store through an unbounded frame index, or through a pointer
+  -- that may alias an exposed local, forgets every word it may reach.
   storeSlots :: State -> Abstract -> Word32 -> [Abstract] -> State
   storeSlots s (StackOffset o) size values =
     let end = o + fromIntegral size
@@ -1032,15 +1219,27 @@ execute context function address instruction state = case instruction of
   storeSlots s (StackSpan lo hi) size _
     | hi + fromIntegral size <= 0 && not (overlapsSaved s lo (hi + fromIntegral size)) =
         s {slots = M.filterWithKey (\k _ -> k + 4 <= lo || k >= hi + fromIntegral size) (slots s)}
+  storeSlots s (Derived (Index StackFrame)) _ _ =
+    s {slots = M.filterWithKey (\k v -> keepsReturn s k v) (slots s)}
+  storeSlots s (Derived _) _ _ = forgetEscaped s
   storeSlots s _ _ _ = s
 
-  -- Whether [lo, end) of the frame holds the return address or a register
-  -- this function saved on entry.
-  overlapsSaved s lo end = any (\(k, v) -> k + 4 > lo && k < end && saved v) (M.toList (slots s))
-  saved v = case v of
+  -- A frame address a store leaves in memory the callee can reach.
+  storeValues s values = s {escaped = foldl markEscaped (escaped s) values}
+
+  -- The frame offsets a store writes the entry value of a callee-saved
+  -- register or the entry link register into.
+  savedWords at size values = case at of
+    StackOffset o -> S.fromList [o + 4 * fromIntegral i | (i, v) <- zip [0 :: Int ..] (take (fromIntegral (size `div` 4)) values), savedValue v]
+    _ -> S.empty
+  savedValue value = case value of
     ReturnAddress -> True
-    Derived (Argument (Reg n)) -> n >= 4
+    Derived (Argument (Reg n)) -> n >= 4 && n <= 11
     _ -> False
+
+  -- Whether [lo, end) of the frame overlaps a word a store saved a
+  -- callee-saved register or the return address in.
+  overlapsSaved s lo end = any (\k -> k + 4 > lo && k < end) (S.toList (savedRegisters s))
 
   -- Findings and the number of proven stores (0 or 1).
   storeCheck :: State -> Reg -> Abstract -> Word32 -> ([Finding], Int)
@@ -1168,9 +1367,21 @@ execute context function address instruction state = case instruction of
   calleeOf value = case enumerate value of
     Just [target] -> calleeAt target
     _ -> Nothing
+  -- Every call forgets the caller's frame words that hold a byte at or above
+  -- the lowest escaped offset, except the entry push's lr slot while it holds
+  -- the entry lr, and every frame word below the stack pointer at the call.
   afterCall callee s =
     let clobbered = foldr (`setRegister` Unknown) s [Reg 1, Reg 2, Reg 3, Reg 12, lr]
-     in (setRegister (Reg 0) (maybe Unknown (Derived . Result) callee) clobbered) {comparison = Nothing, holds = Nothing}
+        reported = setRegister (Reg 0) (maybe Unknown (Derived . Result) callee) clobbered
+     in (belowCallSp s (forgetEscaped reported)) {comparison = Nothing, holds = Nothing}
+
+  -- A callee may write every frame word below the stack pointer it was called with.
+  belowCallSp called subject = case registerValue address called (Reg 13) of
+    StackOffset o -> keepFrom o subject
+    StackSpan _ hi -> keepFrom hi subject
+    _ -> subject {slots = M.empty}
+   where
+    keepFrom lo kept = kept {slots = M.filterWithKey (\k _ -> k >= lo) (slots kept)}
 
 showProvenance :: Provenance -> String
 showProvenance p = case p of
@@ -1198,7 +1409,7 @@ checkBank :: Allowlist -> Elf -> Either String Report
 checkBank allowlist elf = do
   layout <- readLayout elf
   let symbols = elfSymbols elf
-      codeRanges = (textStart layout, textEnd layout) : maybe [] pure (engineCode layout)
+      codeRanges = (textStart layout, textEnd layout) : maybe [] (\region -> [(engineCodeStart region, engineCodeEnd region)]) (engine layout)
       inText address = any (\(start, end) -> start <= address && address < end) codeRanges
       rangeEnd address = maybe (textEnd layout) snd (find (\(start, end) -> start <= address && address < end) codeRanges)
       namedSymbols =
@@ -1244,16 +1455,19 @@ checkBank allowlist elf = do
         ]
       functions = sortOn functionStart (named ++ anonymous)
       code = S.fromList [a | f <- functions, a <- [functionStart f, functionStart f + 4 .. functionEnd f - 4], armWord a]
+      inEngineData address = case engine layout of
+        Just region -> engineDataStart region <= address && address < engineDataEnd region
+        Nothing -> False
       objects =
         [ (symbolValue s, symbolValue s + symbolSize s, canonicalName (symbolName s))
         | s <- symbols
         , symbolKind s `elem` [ObjectSymbol, FunctionSymbol]
         , symbolSize s > 0
-        , symbolValue s >= textStart layout && symbolValue s < imageEnd layout || inText (symbolValue s)
+        , symbolValue s >= textStart layout && symbolValue s < imageEnd layout || inText (symbolValue s) || inEngineData (symbolValue s)
         ]
       context = Context elf layout canonicalAllowlist (M.fromList [(functionStart f, f) | f <- named]) code objects []
       overlapping =
-        [ Finding (functionStart g) "<layout>" Violation LayoutProblem ("function " ++ functionName g ++ " overlaps " ++ functionName f)
+        [ Finding (functionStart g) "<layout>" Violation (LayoutProblem FunctionOverlap) ("function " ++ functionName g ++ " overlaps " ++ functionName f)
         | (f, g) <- zip functions (drop 1 functions)
         , functionStart g < functionEnd f
         ]

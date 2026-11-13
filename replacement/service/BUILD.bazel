@@ -1,8 +1,24 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib")
 
 filegroup(
     name = "module",
     srcs = ["lib.rs"],
+    visibility = ["//replacement/bank:__pkg__"],
+)
+
+xm1_rust_rlib(
+    name = "arm",
+    src = "arm.rs",
+    crate_name = "service",
+    out = "libservice.rlib",
+    data = [":module"],
+    rustc_flags = [
+        "-C",
+        "target-feature=+strict-align",
+        "-C",
+        "llvm-args=-min-jump-table-entries=4096",
+    ],
     visibility = ["//replacement/bank:__pkg__"],
 )
 

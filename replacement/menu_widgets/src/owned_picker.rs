@@ -260,7 +260,7 @@ pub fn compose_picker_and_publish<'text>(data: &PickerData<'_, 'text>, args: Dra
     if args.mode.snapshot().is_none() { return Ok(None); }
     let mut services = CpuPicker { data, commands: CommandBuffer::new(commands), style: data.initial_style, error: None };
     let mut next_report = *report;
-    value_picker::value_picker(&mut services, args, &mut next_report);
+    value_picker::value_picker(&mut services, args, &mut next_report)?;
     if let Some(error) = services.error { return Err(FrameError::Producer(error)); }
     let batch = queue_panel(actor, assets, services.commands.draw_list())?;
     *report = next_report;

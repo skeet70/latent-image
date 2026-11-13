@@ -1,14 +1,12 @@
 use crate::mirror::{
     BackupDiagnostic, BackupDriver, HeaderBackupDriver, HeaderBackend, BackupKey, BackupSemaphore, BackupValue,
-    BackupWriteMode, DeviceStatus, ExecutionContext, MirrorOutcome, RequestDirection,
+    BackupWriteMode, DeviceStatus, ExportSink, MirrorOutcome, RequestDirection,
     RequestDescriptor, RequestOutcome, RequestStatus, SettingsBackend, SharedBacking, BackingRange, BACKING_BYTES,
     CUSTOM_BYTES, HEADER_BYTES,
 };
+use xm1_kernel::{Backend, Kernel, Semaphore, SemaphoreId, TaskContext, Timeout};
 #[cfg(settings_storage_firmware)]
 extern "C" {
-    fn xm1_storage_context() -> u32;
-    fn xm1_storage_acquire(semaphore: u32, timeout: u32) -> i32;
-    fn xm1_storage_release(semaphore: u32) -> i32;
     fn xm1_storage_diagnostic(class: u32, code: u32) -> i32;
     fn xm1_storage_write(key: u32, value: u32, mode: u32) -> i32;
     fn xm1_storage_report(status: i32);
@@ -25,43 +23,25 @@ const REGISTER_IDENTIFIERS: [BackupKey; HEADER_BYTES] = [
     BackupKey(0x1b), BackupKey(0x1c), BackupKey(0x1d), BackupKey(0x1e),
 ];
 
+const SETTINGS: Semaphore = Semaphore::stock(SemaphoreId::new(0x25).unwrap());
+
 pub(crate) enum FullBackup {}
 enum HeaderOnly {}
-pub(crate) struct NativeDriver<Capability>(core::marker::PhantomData<Capability>);
-impl<Capability> NativeDriver<Capability> {
-    pub(crate) fn new() -> Self { Self(core::marker::PhantomData) }
+pub(crate) struct NativeDriver<'k, B: Backend, Capability> {
+    kernel: &'k Kernel<B>,
+    _capability: core::marker::PhantomData<Capability>,
 }
-pub(crate) type NativeBackupDriver = NativeDriver<FullBackup>;
-type NativeHeaderDriver = NativeDriver<HeaderOnly>;
+impl<'k, B: Backend, Capability> NativeDriver<'k, B, Capability> {
+    pub(crate) fn new(kernel: &'k Kernel<B>) -> Self { Self { kernel, _capability: core::marker::PhantomData } }
+}
+pub(crate) type NativeBackupDriver<'k, B> = NativeDriver<'k, B, FullBackup>;
+type NativeHeaderDriver<'k, B> = NativeDriver<'k, B, HeaderOnly>;
 
-impl<Capability> HeaderBackupDriver for NativeDriver<Capability> {
-    fn context(&mut self) -> ExecutionContext {
-        let task = unsafe {
-            #[cfg(settings_storage_firmware)]
-            { xm1_storage_context() }
-            #[cfg(not(settings_storage_firmware))]
-            { core::mem::transmute::<usize, unsafe extern "C" fn() -> u32>(0x723cb8)() }
-        };
-        if task == 0 { ExecutionContext::OutsideTask } else { ExecutionContext::Task }
-    }
-
-    fn acquire(&mut self, semaphore: BackupSemaphore) {
-        unsafe {
-            #[cfg(settings_storage_firmware)]
-            { xm1_storage_acquire(semaphore.legacy_id(), u32::MAX); }
-            #[cfg(not(settings_storage_firmware))]
-            { core::mem::transmute::<usize, unsafe extern "C" fn(u32, u32) -> i32>(0x724b68)(semaphore.legacy_id(), u32::MAX); }
-        }
-    }
-
-    fn release(&mut self, semaphore: BackupSemaphore) {
-        unsafe {
-            #[cfg(settings_storage_firmware)]
-            { xm1_storage_release(semaphore.legacy_id()); }
-            #[cfg(not(settings_storage_firmware))]
-            { core::mem::transmute::<usize, unsafe extern "C" fn(u32) -> i32>(0x724c00)(semaphore.legacy_id()); }
-        }
-    }
+impl<'k, B: Backend, Capability> HeaderBackupDriver for NativeDriver<'k, B, Capability> {
+    type Task = TaskContext<'k, B>;
+    fn task(&mut self) -> Option<Self::Task> { self.kernel.task() }
+    fn acquire(&mut self, task: &Self::Task, _: BackupSemaphore) { let _ = SETTINGS.wait(task, Timeout::Forever); }
+    fn release(&mut self, task: &Self::Task, _: BackupSemaphore) { let _ = SETTINGS.signal(task); }
 
     fn diagnostic(&mut self, diagnostic: BackupDiagnostic) {
         let (class, code) = diagnostic.legacy_arguments();
@@ -108,7 +88,7 @@ impl<Capability> HeaderBackupDriver for NativeDriver<Capability> {
 }
 
 #[cfg(not(settings_storage_header_only))]
-impl BackupDriver for NativeBackupDriver {
+impl<B: Backend> BackupDriver for NativeBackupDriver<'_, B> {
     fn refresh_custom(&mut self, _: &[u8; CUSTOM_BYTES]) {
         unsafe {
             #[cfg(settings_storage_firmware)]
@@ -128,65 +108,106 @@ unsafe fn shared_backing<'a, D: HeaderBackupDriver>(driver: D) -> SharedBacking<
 
 #[cfg(not(settings_storage_header_only))]
 #[inline(always)]
-pub(crate) unsafe fn with_backend<T>(operation: impl FnOnce(&mut SharedBacking<'_, NativeBackupDriver>) -> T) -> T {
-    let mut backing = unsafe { shared_backing(NativeBackupDriver::new()) };
+pub(crate) unsafe fn with_backend<'k, T, B: Backend>(
+    kernel: &'k Kernel<B>,
+    operation: impl FnOnce(&mut SharedBacking<'_, NativeBackupDriver<'k, B>>) -> T,
+) -> T {
+    let mut backing = unsafe { shared_backing(NativeBackupDriver::new(kernel)) };
     operation(&mut backing)
 }
 
-pub struct NativeHeaderBackend { _exclusive: () }
-impl NativeHeaderBackend {
+pub struct NativeHeaderBackend<'k, B: Backend> { kernel: &'k Kernel<B> }
+impl<'k, B: Backend> NativeHeaderBackend<'k, B> {
     /// # Safety
     /// The backup windows and callbacks must be mapped and exclusively accessible while this backend exists.
-    pub unsafe fn adopt() -> Self { Self { _exclusive: () } }
+    pub unsafe fn adopt(kernel: &'k Kernel<B>) -> Self { Self { kernel } }
 }
-impl HeaderBackend for NativeHeaderBackend {
+impl<B: Backend> HeaderBackend for NativeHeaderBackend<'_, B> {
     #[inline(always)]
     fn read_header(&mut self, destination: &mut [u8; HEADER_BYTES]) -> RequestOutcome {
         #[cfg(storage_defect_mirror_private_copy_diverges)]
         let stale = *destination;
-        let outcome = unsafe { shared_backing(NativeHeaderDriver::new()).read_header(destination) };
+        let outcome = unsafe { shared_backing(NativeHeaderDriver::new(self.kernel)).read_header(destination) };
         #[cfg(storage_defect_mirror_private_copy_diverges)]
         for (index, value) in stale.iter().enumerate() { crate::memory::write_output_byte(destination, index, *value); }
         outcome
     }
     #[inline(always)]
     fn write_header(&mut self, source: &[u8; HEADER_BYTES]) -> MirrorOutcome {
-        unsafe { shared_backing(NativeHeaderDriver::new()).write_header(source) }
+        unsafe { shared_backing(NativeHeaderDriver::new(self.kernel)).write_header(source) }
+    }
+    #[inline(always)]
+    fn write_header_into(&mut self, source: &[u8; HEADER_BYTES], report: &mut MirrorOutcome) {
+        unsafe { shared_backing(NativeHeaderDriver::new(self.kernel)).write_header_into(source, report) }
+    }
+    #[inline(always)]
+    fn write_header_discarding(&mut self, source: &[u8; HEADER_BYTES]) {
+        unsafe { shared_backing(NativeHeaderDriver::new(self.kernel)).write_header_discarding(source) }
     }
 }
 
+/// One name for the backend an owned caller adopts.
 #[cfg(not(settings_storage_header_only))]
-pub struct NativeBackend { _exclusive: () }
+pub type NativeStorageBackend<'k, B> = NativeBackend<'k, B>;
+#[cfg(settings_storage_header_only)]
+pub type NativeStorageBackend<'k, B> = NativeHeaderBackend<'k, B>;
+
 #[cfg(not(settings_storage_header_only))]
-impl NativeBackend {
+pub struct NativeBackend<'k, B: Backend> { kernel: &'k Kernel<B> }
+#[cfg(not(settings_storage_header_only))]
+impl<'k, B: Backend> NativeBackend<'k, B> {
     /// # Safety
     /// The requirements of `NativeHeaderBackend::adopt` apply.
-    pub unsafe fn adopt() -> Self { Self { _exclusive: () } }
+    pub unsafe fn adopt(kernel: &'k Kernel<B>) -> Self { Self { kernel } }
 }
 #[cfg(not(settings_storage_header_only))]
-impl HeaderBackend for NativeBackend {
+impl<B: Backend> HeaderBackend for NativeBackend<'_, B> {
     #[inline(always)]
     fn read_header(&mut self, destination: &mut [u8; HEADER_BYTES]) -> RequestOutcome {
-        NativeHeaderBackend { _exclusive: () }.read_header(destination)
+        NativeHeaderBackend { kernel: self.kernel }.read_header(destination)
+    }
+    #[inline(always)]
+    fn read_header_window(&mut self, destination: &mut [u8; HEADER_BYTES]) -> RequestOutcome {
+        unsafe { shared_backing(NativeHeaderDriver::new(self.kernel)).read_header_window(destination) }
     }
     #[inline(always)]
     fn write_header(&mut self, source: &[u8; HEADER_BYTES]) -> MirrorOutcome {
-        NativeHeaderBackend { _exclusive: () }.write_header(source)
+        NativeHeaderBackend { kernel: self.kernel }.write_header(source)
+    }
+    #[inline(always)]
+    fn write_header_into(&mut self, source: &[u8; HEADER_BYTES], report: &mut MirrorOutcome) {
+        NativeHeaderBackend { kernel: self.kernel }.write_header_into(source, report)
+    }
+    #[inline(always)]
+    fn write_header_discarding(&mut self, source: &[u8; HEADER_BYTES]) {
+        NativeHeaderBackend { kernel: self.kernel }.write_header_discarding(source)
     }
 }
 #[cfg(not(settings_storage_header_only))]
-impl SettingsBackend for NativeBackend {
+impl<B: Backend> SettingsBackend for NativeBackend<'_, B> {
     #[inline(always)]
     fn read_body(&mut self, destination: &mut [u8; crate::mirror::BODY_BYTES]) -> RequestOutcome {
-        unsafe { shared_backing(NativeBackupDriver::new()).read_body(destination) }
+        unsafe { shared_backing(NativeBackupDriver::new(self.kernel)).read_body(destination) }
+    }
+    #[inline(always)]
+    fn read_body_window(&mut self, destination: &mut [u8; crate::mirror::BODY_BYTES]) -> RequestOutcome {
+        unsafe { shared_backing(NativeBackupDriver::new(self.kernel)).read_body_window(destination) }
     }
     #[inline(always)]
     fn write_body(&mut self, source: &[u8; crate::mirror::BODY_BYTES]) -> crate::BodyOutcome {
-        unsafe { shared_backing(NativeBackupDriver::new()).write_body(source) }
+        unsafe { shared_backing(NativeBackupDriver::new(self.kernel)).write_body(source) }
+    }
+    #[inline(always)]
+    fn write_body_into(&mut self, source: &[u8; crate::mirror::BODY_BYTES], report: &mut crate::BodyOutcome) {
+        unsafe { shared_backing(NativeBackupDriver::new(self.kernel)).write_body_into(source, report) }
+    }
+    #[inline(always)]
+    fn write_body_discarding(&mut self, source: &[u8; crate::mirror::BODY_BYTES]) {
+        unsafe { shared_backing(NativeBackupDriver::new(self.kernel)).write_body_discarding(source) }
     }
     #[inline(always)]
     fn read_custom(&mut self, destination: &mut [u8; CUSTOM_BYTES]) -> RequestOutcome {
-        unsafe { shared_backing(NativeBackupDriver::new()).read_custom(destination) }
+        unsafe { shared_backing(NativeBackupDriver::new(self.kernel)).read_custom(destination) }
     }
 }
 
@@ -214,7 +235,8 @@ pub unsafe fn open(header: *mut u8) -> RequestOutcome {
     let header = unsafe { &mut *header.cast::<[u8; HEADER_BYTES]>() };
     #[cfg(storage_defect_mirror_private_copy_diverges)]
     let stale_header = *header;
-    let outcome = unsafe { with_backend(|backing| backing.read_header(header)) };
+    let kernel = unsafe { Kernel::<xm1_kernel::SlotTable>::stock() };
+    let outcome = unsafe { with_backend(&kernel, |backing| backing.read_header(header)) };
     #[cfg(storage_defect_mirror_private_copy_diverges)]
     { *header = stale_header; }
     outcome
@@ -225,7 +247,8 @@ pub unsafe fn open(header: *mut u8) -> RequestOutcome {
 /// The fixed X-M1 backing and callbacks must be mapped. `header` must name 16 readable bytes disjoint from that backing. Access to the backing must be exclusive during this call.
 pub unsafe fn close(header: *const u8) -> MirrorOutcome {
     let header = unsafe { &*header.cast::<[u8; HEADER_BYTES]>() };
-    unsafe { with_backend(|backing| backing.write_header(header)) }
+    let kernel = unsafe { Kernel::<xm1_kernel::SlotTable>::stock() };
+    unsafe { with_backend(&kernel, |backing| backing.write_header(header)) }
 }
 
 #[cfg(not(settings_storage_header_only))]
@@ -261,7 +284,8 @@ pub unsafe extern "C" fn xm1_storage_close(header: *const u8) -> i32 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xm1_storage_export(buffer: *mut u8, length: u32, offset: u32) -> i32 {
     let destination = unsafe { core::slice::from_raw_parts_mut(buffer, length as usize) };
-    unsafe { with_backend(|backing| backing.export(BackingRange::new(offset, length), destination)) }.legacy_code()
+    let kernel = unsafe { Kernel::<xm1_kernel::SlotTable>::stock() };
+    unsafe { with_backend(&kernel, |backing| backing.export(BackingRange::new(offset, length), destination, ExportSink::Leaves)) }.legacy_code()
 }
 
 #[cfg(not(settings_storage_header_only))]
@@ -270,7 +294,8 @@ pub unsafe extern "C" fn xm1_storage_export(buffer: *mut u8, length: u32, offset
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xm1_storage_import(buffer: *const u8, length: u32, offset: u32) -> i32 {
     let source = unsafe { core::slice::from_raw_parts(buffer, length as usize) };
-    unsafe { with_backend(|backing| backing.import(BackingRange::new(offset, length), source)) }.status.legacy_code()
+    let kernel = unsafe { Kernel::<xm1_kernel::SlotTable>::stock() };
+    unsafe { with_backend(&kernel, |backing| backing.import(BackingRange::new(offset, length), source)) }.status.legacy_code()
 }
 
 #[cfg(not(settings_storage_header_only))]

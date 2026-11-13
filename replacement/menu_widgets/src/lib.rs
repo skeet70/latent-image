@@ -1,5 +1,10 @@
 #![no_std]
 
+#[cfg(not(test))]
+extern crate menu_engine;
+#[cfg(not(test))]
+extern crate render_commands;
+
 #[cfg(test)]
 #[path = "../../render_commands/src/lib.rs"]
 pub mod render_commands;

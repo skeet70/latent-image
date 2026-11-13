@@ -9,9 +9,9 @@ xm1_stock_61d618 = 0x61d618;
 xm1_stock_61d5f0 = 0x61d5f0;
 xm1_stock_61d65c = 0x61d65c;
 
-xm1_backup_context723cb8 = 0x723cb8;
-xm1_backup_acquire724b68 = 0x724b68;
-xm1_backup_release724c00 = 0x724c00;
+xm1_kernel_console9 = 0x41a34;
+xm1_kernel_critical_enter = 0x7235d8;
+xm1_kernel_critical_exit = 0x7236b0;
 xm1_backup_diagnostic726c74 = 0x726c74;
 xm1_backup_write6a59b8 = 0x6a59b8;
 xm1_backup_report633594 = 0x633594;

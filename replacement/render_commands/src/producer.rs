@@ -26,6 +26,7 @@ pub enum ProducerError {
     Capacity,
     Geometry,
     Selection,
+    ReportRange,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

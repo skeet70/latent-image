@@ -40,6 +40,9 @@ use_repo(lab, "lab_bash", "lab_cc_toolchains", "lab_checkpoint_low_prefix", "lab
 synthetic_inputs = use_extension("//replacement/rtos_timer:synthetic.bzl", "synthetic_source_inputs")
 use_repo(synthetic_inputs, "candidate_synthetic_inputs")
 
+bank_inputs = use_extension("//replacement/bank:tables.bzl", "bank_image_inputs")
+use_repo(bank_inputs, "bank_image_inputs")
+
 register_toolchains(
     "@lab_cc_toolchains//:all",
     "@lab_ghc_ghc_nixpkgs_toolchain//:toolchain",

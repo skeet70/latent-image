@@ -12,7 +12,7 @@ enum Effect {
 }
 
 struct Driver {
-    context: ExecutionContext,
+    outside_task: bool,
     refusal: Option<DeviceStatus>,
     write_status: DeviceStatus,
     effects: [Option<Effect>; 128],
@@ -21,7 +21,7 @@ struct Driver {
 
 impl Driver {
     fn new() -> Self {
-        Self { context: ExecutionContext::Task, refusal: None, write_status: DeviceStatus(0), effects: [None; 128], count: 0 }
+        Self { outside_task: false, refusal: None, write_status: DeviceStatus(0), effects: [None; 128], count: 0 }
     }
 
     fn push(&mut self, effect: Effect) {
@@ -37,9 +37,10 @@ impl Driver {
 }
 
 impl HeaderBackupDriver for Driver {
-    fn context(&mut self) -> ExecutionContext { self.context }
-    fn acquire(&mut self, semaphore: BackupSemaphore) { self.push(Effect::Acquire(semaphore)); }
-    fn release(&mut self, semaphore: BackupSemaphore) { self.push(Effect::Release(semaphore)); }
+    type Task = ();
+    fn task(&mut self) -> Option<()> { if self.outside_task { None } else { Some(()) } }
+    fn acquire(&mut self, _: &(), semaphore: BackupSemaphore) { self.push(Effect::Acquire(semaphore)); }
+    fn release(&mut self, _: &(), semaphore: BackupSemaphore) { self.push(Effect::Release(semaphore)); }
     fn diagnostic(&mut self, diagnostic: BackupDiagnostic) { self.push(Effect::Diagnostic(diagnostic)); }
     fn admit(&mut self, _: RequestDirection) -> Result<(), DeviceStatus> {
         match self.refusal { Some(status) => Err(status), None => Ok(()) }
@@ -104,7 +105,7 @@ fn exports_preserve_projected_bytes_and_caller_guards_for_odd_offsets_and_length
                     let mut output = Output([0xa5; 6]);
                     let mut expected = [0xa5; 6];
                     expected[destination..destination+length].copy_from_slice(&bytes[..length]);
-                    assert_eq!(backing.export(BackingRange::new(offset, length as u32), &mut output.0[destination..destination+length]), BackingStatus::Success);
+                    assert_eq!(backing.export(BackingRange::new(offset, length as u32), &mut output.0[destination..destination+length], ExportSink::Leaves), BackingStatus::Success);
                     assert_eq!(output.0, expected);
                 });
             }
@@ -266,14 +267,13 @@ fn rejected_open_and_close_preserve_all_bytes_and_report_mapped_status() {
 #[test]
 fn outside_task_diagnoses_each_operation_without_semaphore_calls() {
     with_backing(|backing| {
-        backing.driver_mut().context = ExecutionContext::OutsideTask;
+        backing.driver_mut().outside_task = true;
         let mut header = [0; HEADER_BYTES];
         backing.read_header(&mut header);
         backing.write_header(&header);
         assert_eq!(backing.driver().effects().filter(|effect| matches!(effect, Effect::Diagnostic(BackupDiagnostic::OutsideTask))).count(), 2);
         assert!(!backing.driver().effects().any(|effect| matches!(effect, Effect::Acquire(_) | Effect::Release(_))));
         assert_eq!(BackupDiagnostic::OutsideTask.legacy_arguments(), (2, 59));
-        assert_eq!(BackupSemaphore::Settings.legacy_id(), 37);
         assert_eq!(BackupWriteMode::Immediate.legacy_argument(), 0);
     });
 }
@@ -286,7 +286,7 @@ fn shared_export_assembles_shadow_and_backing_with_explicit_residue() {
         backing.live_mut()[0x140..0x168].fill(0x53);
         backing.live_mut()[0x168..].fill(0x64);
         let mut exported = [0; BACKING_BYTES];
-        assert_eq!(backing.export(BackingRange::new(0, BACKING_BYTES as u32), &mut exported), BackingStatus::Success);
+        assert_eq!(backing.export(BackingRange::new(0, BACKING_BYTES as u32), &mut exported, ExportSink::Leaves), BackingStatus::Success);
         assert_eq!(exported[..16], [0x22; 16]);
         assert_eq!(exported[0x10..0x128], [0x31; BODY_BYTES]);
         assert_eq!(exported[0x128..0x140], [0x42; 24]);
@@ -330,7 +330,7 @@ fn admitted_end_boundaries_control_custom_refresh_even_for_empty_writes() {
             assert_eq!(result.custom_refreshed, end > 0x140 && end <= 0x19a);
             assert_eq!(backing.driver().effects().filter(|effect| matches!(effect, Effect::Refresh(_))).count(), usize::from(end > 0x140 && end <= 0x19a));
             let mut empty = [];
-            assert_eq!(backing.export(BackingRange::new(end, 0), &mut empty), result.status);
+            assert_eq!(backing.export(BackingRange::new(end, 0), &mut empty, ExportSink::Leaves), result.status);
         });
     }
 }
@@ -357,7 +357,7 @@ fn range_admission_wraps_but_unavailable_compatibility_addresses_are_explicit() 
     assert_eq!(range.end(), 0);
     with_backing(|backing| {
         let mut byte = [0x7e];
-        assert_eq!(backing.export(range, &mut byte), BackingStatus::AddressUnavailable);
+        assert_eq!(backing.export(range, &mut byte, ExportSink::Leaves), BackingStatus::AddressUnavailable);
         assert_eq!(byte, [0x7e]);
         assert_eq!(backing.import(range, &[0x8f]).status, BackingStatus::AddressUnavailable);
     });
@@ -388,7 +388,7 @@ fn missing_export_residue_preserves_caller_bytes() {
     assert_eq!(backing.read_header(&mut header), RequestOutcome::success());
     assert_eq!(header, [0x22; HEADER_BYTES]);
     let mut exported = [0x73; BACKING_BYTES];
-    assert_eq!(backing.export(BackingRange::new(0, BACKING_BYTES as u32), &mut exported), BackingStatus::Success);
+    assert_eq!(backing.export(BackingRange::new(0, BACKING_BYTES as u32), &mut exported, ExportSink::Leaves), BackingStatus::Success);
     assert_eq!(exported[..HEADER_BYTES], [0x22; HEADER_BYTES]);
     assert_eq!(exported[HEADER_BYTES..INITIALIZED_EXPORT_BYTES], [0x11; INITIALIZED_EXPORT_BYTES - HEADER_BYTES]);
     assert_eq!(exported[INITIALIZED_EXPORT_BYTES..], [0x73; EXPORT_RESIDUE_BYTES]);
@@ -401,7 +401,7 @@ fn export_crossing_the_initialized_boundary_keeps_unwritten_residue() {
     let identifiers = [BackupKey(1); HEADER_BYTES];
     let mut backing = SharedBacking::without_export_residue(&mut live, &mut shadow, &identifiers, Driver::new());
     let mut exported = [0x5a; 0x80];
-    assert_eq!(backing.export(BackingRange::new(0x100, 0x80), &mut exported), BackingStatus::Success);
+    assert_eq!(backing.export(BackingRange::new(0x100, 0x80), &mut exported, ExportSink::Leaves), BackingStatus::Success);
     assert_eq!(exported[..0x68], [0x11; 0x68]);
     assert_eq!(exported[0x68..], [0x5a; 0x18]);
 }
@@ -419,5 +419,38 @@ fn custom_refresh_observes_the_imported_byte_after_header_driver_writes() {
         assert_eq!(effects.next(), Some(Effect::Release(BackupSemaphore::Settings)));
         assert_eq!(effects.next(), None);
         assert_eq!(backing.driver().effects().filter(|effect| matches!(effect, Effect::Refresh(_))).last(), Some(Effect::Refresh(expected)));
+    });
+}
+
+#[test]
+fn discarded_writes_apply_without_keeping_a_report() {
+    with_backing(|backing| {
+        let mut first = [0x11; HEADER_BYTES];
+        first[0] = 0x31;
+        backing.write_header_discarding(&first);
+        assert_eq!(&backing.live()[..HEADER_BYTES - 1], &first[..HEADER_BYTES - 1]);
+        assert_eq!(&backing.live()[..HEADER_BYTES], backing.shadow());
+        let mut second = [0x11; HEADER_BYTES];
+        second[0] = 0x52;
+        backing.write_header_discarding(&second);
+        assert_eq!(backing.live()[0], 0x52);
+        let body = [0x5a; BODY_BYTES];
+        backing.write_body_discarding(&body);
+        assert_eq!(&backing.live()[0x10..0x128], &body);
+    });
+}
+
+#[test]
+fn outside_task_writes_apply_and_report_the_missing_context() {
+    with_backing(|backing| {
+        backing.write_header_discarding(&[0x44; HEADER_BYTES]);
+        assert_eq!(backing.live()[0], 0x44);
+        backing.driver_mut().outside_task = true;
+        backing.write_header_discarding(&[0x55; HEADER_BYTES]);
+        backing.write_body_discarding(&[0x66; BODY_BYTES]);
+        backing.driver_mut().outside_task = false;
+        assert_eq!(backing.live()[0], 0x55);
+        assert_eq!(&backing.live()[0x10..0x128], &[0x66; BODY_BYTES]);
+        assert_eq!(backing.driver().effects().filter(|effect| matches!(effect, Effect::Diagnostic(BackupDiagnostic::OutsideTask))).count(), 2);
     });
 }

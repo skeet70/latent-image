@@ -49,6 +49,8 @@ module Emulation.ModalObservation
   , ModalLifetimeSource
   , bindModalLifetimeSource
   , bindModalLifetimeSourceForPackage
+  , stockSettingsWriters
+  , ownedSettingsWriters
   , modalLifetimeSourceJson
   , lifetimeModalRequest
   , withRetiredExecution
@@ -90,7 +92,7 @@ import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import Data.List (find, nub, sort, sortOn)
 import qualified Data.Map.Strict as M
-import Data.Maybe (isJust)
+import Data.Maybe (catMaybes, isJust)
 import Data.Scientific (toBoundedInteger)
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -885,6 +887,39 @@ checkTask33StackGuardReceipt binding receipt = unless
 stockPropertySetter :: WatchRange
 stockPropertySetter = either error id (watchRange (watchAddress 0x00624694) (watchAddress 0x006309c4))
 
+-- | The stock image's live-settings writer.
+stockSettingsWriters :: [WatchRange]
+stockSettingsWriters = [stockPropertySetter]
+
+-- | The store functions the owned storage boundary exports.
+ownedStorageStoreFunctions :: [String]
+ownedStorageStoreFunctions = ["xm1_storage_store8", "xm1_storage_store16", "xm1_storage_store32"]
+
+-- | The code the owned image admits to change a live setting: the complete extents
+-- of its storage store functions, from the image's ELF function symbols.
+ownedSettingsWriters :: B.ByteString -> Either String [WatchRange]
+ownedSettingsWriters elfBytes = do
+  elf <- ELF.parseElf elfBytes
+  extents <- fmap catMaybes (forM ownedStorageStoreFunctions (symbolExtent elf))
+  case sortOn fst extents of
+    [] -> Left "modal lifetime requires the owned image's storage store function symbols"
+    ordered -> pure [either error id (watchRange (watchAddress low) (watchAddress high)) | (low, high) <- ordered]
+ where
+  symbolExtent elf name = case filter ((== name) . ELF.symbolName) (ELF.elfSymbols elf) of
+    [] -> Right Nothing
+    [entry] | ELF.symbolKind entry == ELF.FunctionSymbol
+      , ELF.InSection index <- ELF.symbolSection entry
+      , index >= 0, index < length (ELF.elfSections elf)
+      , let section = ELF.elfSections elf !! index
+      , ELF.sectionAllocated section, ELF.sectionExecutable section, not (ELF.sectionWritable section)
+      , let low = ELF.symbolValue entry
+      , let count = ELF.symbolSize entry
+      , count >= 4, low `mod` 4 == 0, count `mod` 4 == 0
+      , ELF.sectionAddress section <= low
+      , toInteger low + toInteger count <= toInteger (ELF.sectionAddress section) + toInteger (ELF.sectionSize section)
+      -> Right (Just (low, low + count))
+    _ -> Left ("modal lifetime requires the owned image's complete ELF function: " ++ name)
+
 -- | A settings-image reload: the call instruction, the instruction the call returns
 -- to, the copy routine's store instruction, and the live-settings bytes it may change.
 -- Between the call and return fetches, the copy stores on the calling core write
@@ -1015,10 +1050,10 @@ modalLifetimeSourceJson source = object
 immutableLoaderSpans :: Word32 -> Word32 -> [(Word32, Word32)]
 immutableLoaderSpans base end = [(fromIntegral low, fromIntegral high) | (low, high) <- loaderSpans (fromIntegral base) (fromIntegral (end - base))]
 
-bindModalLifetimeSource :: Ram.RamPushManifest -> B.ByteString -> B.ByteString -> B.ByteString -> Either String ModalLifetimeSource
-bindModalLifetimeSource manifest elfBytes loaderA loaderB = do
+bindModalLifetimeSource :: [WatchRange] -> Ram.RamPushManifest -> B.ByteString -> B.ByteString -> B.ByteString -> Either String ModalLifetimeSource
+bindModalLifetimeSource writers manifest elfBytes loaderA loaderB = do
   catalogue <- Catalogue.bindStockContextCatalogue loaderA loaderB
-  bound <- bindModalRuntimeSource manifest elfBytes
+  bound <- bindModalRuntimeSource writers manifest elfBytes
   bindLifetimeContext catalogue bound loaderA loaderB
 
 bindModalLifetimeSourceForPackage :: Root.RootPackage -> B.ByteString -> Ram.RamPushManifest -> B.ByteString -> Either String ModalLifetimeSource
@@ -1029,7 +1064,7 @@ bindModalLifetimeSourceForPackage package finalDat manifest elfBytes = do
   forM_ [Startup.LoaderA, Startup.LoaderB] $ \target ->
     unless (M.lookup target actual == Just (expected target))
       (Left "modal lifetime final DAT loaders differ from the admitted root platform package")
-  bound <- bindModalRuntimeSource manifest elfBytes
+  bound <- bindModalRuntimeSource stockSettingsWriters manifest elfBytes
   catalogue <- Catalogue.bindOwnedUnionContextCatalogueForPackage package
   bindLifetimeContext catalogue bound (expected Startup.LoaderA) (expected Startup.LoaderB)
 
@@ -1054,8 +1089,8 @@ modalRuntimeSourceJson (ModalRuntimeSource source) = object
   , "context_binding" .= ("runtime-only-no-loader-catalogue" :: T.Text)
   , "runtime_contract" .= object (lifetimeContractFields source) ]
 
-bindModalRuntimeSource :: Ram.RamPushManifest -> B.ByteString -> Either String ModalRuntimeSource
-bindModalRuntimeSource manifest elfBytes = do
+bindModalRuntimeSource :: [WatchRange] -> Ram.RamPushManifest -> B.ByteString -> Either String ModalRuntimeSource
+bindModalRuntimeSource writers manifest elfBytes = do
   variant <- maybe (Left "modal lifetime requires a typed bank variant") Right (Ram.manifestBankVariant manifest)
   extension <- Ram.manifestPropertyCounts manifest
   propertyPlan <- traverse (propertyCountsFromRuntime . snd) extension
@@ -1143,7 +1178,7 @@ bindModalRuntimeSource manifest elfBytes = do
   validatePropertyPublicationPlan runtimeExtent propertyPlan bindings
   pure (ModalRuntimeSource (ModalLifetimeSource variant Catalogue.StockContextCatalogue
     runtimeExtent residentExtent readonly install rollback bindings [] (Just (sha256 elfBytes)) (Just runtimeDigest)
-    (Just manifestHash) [] [stockPropertySetter] [stockSettingsReload, stockSettingsRestore, stockSettingsHeaderReload]
+    (Just manifestHash) [] writers [stockSettingsReload, stockSettingsRestore, stockSettingsHeaderReload]
     Nothing Nothing RuntimeContextUnbound propertyPlan))
 
 littleWord :: Word32 -> B.ByteString
@@ -1646,10 +1681,12 @@ parseSettingsWrites value = do
     unless (size >= 1 && fromIntegral size == B.length before) (Left "settings write size differs from its before bytes")
     pure (SettingsWrite writer (instructionCount instructions) (watchAddress pc) (watchAddress address) before written))
 
--- | Stock and owned roles must make the same ordered settings stores: writer kind, address, width and value.
+-- | Stock and owned roles must make the same ordered settings stores: address,
+-- width and value. The writer identity that admitted each store is the role's own
+-- image's.
 compareSettingsWrites :: [SettingsWrite] -> [SettingsWrite] -> Either String ()
 compareSettingsWrites stock owned =
-  let key write = (settingsWriter write, settingsAddress write, B.length (settingsBefore write), settingsValue write)
+  let key write = (settingsAddress write, B.length (settingsBefore write), settingsValue write)
   in unless (map key stock == map key owned)
        (Left ("settings write sequences differ: stock " ++ show (length stock) ++ ", owned " ++ show (length owned)))
 

@@ -146,6 +146,7 @@ deriveFrameProof bytes = do
           ordinary destination = require (destination /= A.pc) (UnmodelledPcWrite DataDestination)
           writeback base indexing = require (base /= A.pc || indexing == A.OffsetOnly) (UnmodelledPcWrite WritebackDestination)
       case decoded of
+        A.Rejected _ -> Left UnsupportedInstruction
         A.DataProcessing _ _ _ destination _ _ -> ordinary destination
         A.MoveWide _ destination _ -> ordinary destination
         A.MoveTop _ destination _ -> ordinary destination

@@ -24,7 +24,6 @@ unsafe extern "C" {
     fn rb_render_call_111258c(a0: u32, a1: *mut u8);
     fn rb_render_call_111299c(a0: u32, a1: u32, a2: *mut u8);
     fn rb_render_call_bf96b0() -> u32;
-    fn rb_render_call_61c93c(a0: u32, a1: u32) -> u32;
     fn rb_render_call_1139a68(a0: u32, a1: u32, a2: u32, a3: u32, a4: u32, a5: u32, a6: u32);
     fn rb_render_call_1159168(a0: u32, a1: u32, a2: u32);
 }
@@ -39,6 +38,7 @@ impl PickerServices for StockServices {
     }
     fn clear_report(&mut self, report: &mut DrawReport) { call!(rb_render_call_7221c8, report,0,68); }
     fn panel_font(&mut self) -> FontId { FontId(unsafe { core::ptr::read_volatile(0x015e46c0 as *const u32) }) }
+    #[inline]
     fn snapshot(&mut self, node: NodeId, selection: SnapshotSelection) -> Snapshot {
         let mut value = Snapshot::default();
         match selection {
@@ -47,6 +47,7 @@ impl PickerServices for StockServices {
         }
         value
     }
+    #[inline]
     fn summary(&mut self, node: NodeId, parent: u32) -> Summary {
         let mut value = Summary::default();
         call!(rb_render_call_bf8f4c,node.0,parent,&mut value); value
@@ -79,7 +80,7 @@ impl PickerServices for StockServices {
     fn bar_style(&mut self)->u32 { call!(rb_render_call_1130e68,0) }
     fn bar_resources(&mut self,style: u32)->[ResourceId;3] {
         let words = unsafe { core::ptr::read_volatile((0x0110ba2cu32.wrapping_add(style.wrapping_mul(12))) as *const [u32;3]) };
-        words.map(ResourceId)
+        [ResourceId(words[0]), ResourceId(words[1]), ResourceId(words[2])]
     }
     fn grid_size(&mut self,label: ResourceId)->[u8;2] {
         let mut value = [0;2]; call!(rb_render_call_111258c,label.0,value.as_mut_ptr()); value
@@ -88,7 +89,12 @@ impl PickerServices for StockServices {
         let mut value = [0;2]; call!(rb_render_call_111299c,label.0,0,value.as_mut_ptr()); value
     }
     fn menu_mode(&mut self)->u32 { call!(rb_render_call_bf96b0) }
-    fn setting_help_hidden(&mut self)->bool { call!(rb_render_call_61c93c,0x44,0) != 0 }
+    fn setting_help_hidden(&mut self)->bool {
+        let Some(id) = xm1_property_service::PropertyId::decode(0x44) else { return false };
+        unsafe { xm1_property_service::Properties::stock() }
+            .read(id, xm1_property_service::SettingsBank::Active, xm1_property_service::ReadMode::Live)
+            .get() != 0
+    }
     fn metric_footer(&mut self,last: u8) { call!(rb_render_call_1139a68,5,2,last as u32,25,20,18,1); }
     fn resolution_footer(&mut self,node: NodeId,parent: u32,child: u32) { call!(rb_render_call_1159168,node.0,parent,child); }
 }

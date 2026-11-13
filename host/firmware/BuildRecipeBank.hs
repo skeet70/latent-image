@@ -1184,9 +1184,14 @@ emitRamPush extension variant base plan specPath linkedDir rc0Id4Path rc0Id5Path
     then do
       engineStart <- linked symbols "__rb_menu_engine_start"
       engineEnd <- linked symbols "__rb_menu_engine_end"
+      dataStart <- linked symbols "__rb_menu_engine_data_start"
+      dataEnd <- linked symbols "__rb_menu_engine_data_end"
       resume <- linked symbols "__rb_menu_engine_stock_resume"
       unless (engineStart == engineStartExpected && engineStart >= linkedEnd
-          && engineEnd <= engineStartExpected + engineExtentExpected && resume == 0x00bf95cc) $
+          && engineEnd <= engineStartExpected + engineExtentExpected
+          && dataStart >= engineEnd
+          && dataEnd <= engineStartExpected + engineExtentExpected
+          && resume == 0x00bf95cc) $
         H.failH "ram-push: menu engine region differs from the layout contract"
       elf <- B.readFile (linkedDir ++ "/kernel.elf") >>= either H.failH pure . ELF.parseElf
       let inRuntime address = base <= address && address - base < size
@@ -1200,7 +1205,7 @@ emitRamPush extension variant base plan specPath linkedDir rc0Id4Path rc0Id5Path
           putStrLn ("render " ++ name ++ " stack: " ++ show (Render.entryDepth entry)
             ++ " bytes + stock margin " ++ show (Render.entryStockMargin entry)
             ++ ", headroom " ++ show (Render.entryHeadroom entry))
-      pure engineEnd
+      pure dataEnd
     else do
       when (any ((== "__rb_menu_engine_start") . symbolName) symbols) $
         H.failH "ram-push: unselected menu engine region is linked"
