@@ -7,6 +7,7 @@
 use fujimod_emulator::board::factory::MemoryMap;
 use fujimod_emulator::board::observation::{MemoryWatch, ViewPolicy, WatchKinds, WatchRange};
 use fujimod_xm1::bridge::{read, sha256, write};
+use fujimod_xm1::checkpoint::{BootIdentity, PostBootReceipt, SHARED_STORE, post_boot};
 use fujimod_xm1::trace::SiteRead;
 use fujimod_xm1::guest::{GpioKey, ModeDialPosition, RouteKey, ShutterStage};
 use fujimod_xm1::machine::{Hold, KeyPulse, MENU_PULSE, Machine, RunOutcome, key_pulse};
@@ -554,6 +555,7 @@ struct WatchRow {
 struct Report<'a> {
     schema: u32,
     scenario: Scenario,
+    checkpoint: Option<PostBootReceipt>,
     inputs: Vec<Binding>,
     limits: Limits,
     instructions: u64,
@@ -865,6 +867,13 @@ impl<'a> Census<'a> {
     /// Runs the cold start and the initial setup. With `open_menu`, the MENU press that opens
     /// the shooting menu follows; the key routes start from the live view before it.
     fn boot(&mut self, machine: &mut Machine, open_menu: bool) -> Result<(), String> {
+        if machine.instructions() == 0 {
+            self.prepare_boot(machine)?;
+        }
+        self.open_menu(machine, open_menu)
+    }
+
+    fn prepare_boot(&mut self, machine: &mut Machine) -> Result<(), String> {
         self.phase = "cold-start".into();
         let erased = MenuTriple { menu: 69, setting: 52, cursor: 12 };
         let first = self.advance_to(machine, INITIAL_MENU, erased)?;
@@ -874,9 +883,11 @@ impl<'a> Census<'a> {
             self.pulse(machine, key, KeyPulse::instructions(SETUP_HOLD, SETUP_RELEASE))?;
         }
         self.advance(machine, SETUP_SETTLE)?;
-        if !open_menu {
-            return Ok(());
-        }
+        Ok(())
+    }
+
+    fn open_menu(&mut self, machine: &mut Machine, open_menu: bool) -> Result<(), String> {
+        if !open_menu { return Ok(()); }
         self.phase = "shooting-menu".into();
         let pulse = self.pulse(machine, Key::Menu, KeyPulse::instructions(SETUP_HOLD, SETUP_RELEASE))?;
         let shooting = MenuTriple { menu: 1, setting: 5, cursor: 2 };
@@ -1033,7 +1044,7 @@ fn arguments() -> Result<BTreeMap<String, PathBuf>, String> {
     while let Some(flag) = arguments.next() {
         let name = flag.to_str().ok_or(USAGE)?.to_owned();
         let value = arguments.next().ok_or(USAGE)?;
-        require(REQUIRED.contains(&name.as_str()) || name == "--steps", USAGE)?;
+        require(REQUIRED.contains(&name.as_str()) || name == "--steps" || name == "--checkpoints", USAGE)?;
         require(paths.insert(name, PathBuf::from(value)).is_none(), USAGE)?;
     }
     for name in REQUIRED {
@@ -1084,7 +1095,10 @@ fn drive() -> Result<(), String> {
     };
     let phases = trajectory.before_unload;
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    let (_, executable_binding) = bound(&executable)?;
+    let (executable_bytes, executable_binding) = bound(&executable)?;
+    let boot_identity = BootIdentity::new(&run_bytes, &dat, &rom, &[], None,
+        b"saclac-post-setup-liveview-v1:80m;up12-ok-ok:8m-8m;settle40m")
+        .with_emulator_binary(&executable_bytes);
     std::fs::create_dir(&output).map_err(|error| format!("{}: {error}", output.display()))?;
 
     fujimod_emulator_exr2_board::register_board_builder();
@@ -1094,13 +1108,7 @@ fn drive() -> Result<(), String> {
     let mut session = run::open(&document, &ValidatedUpdate(dat), &rom)?;
     session.board.set_execution_policy(document.execution_policy.into())?;
     let mut machine = Machine::new(document, session)?;
-    machine.disarm()?;
-    let checkpoint = machine.session.checkpoint(None)?.export()?;
-    write(&output.join("reset.fujimod"), &checkpoint)?;
-    let restored = machine.session.import_snapshot(&checkpoint)?;
-    machine.session.restore(&restored)?;
-    machine.rearm()?;
-    require(machine.instructions() == 0, "reset checkpoint is not preexecution")?;
+    let mut checkpoint = None;
 
     let mut census = Census {
         points: plan.points.iter().map(|_| PointStats::default()).collect(),
@@ -1117,6 +1125,12 @@ fn drive() -> Result<(), String> {
         presses: Vec::new(),
         mode_dial: None,
     };
+    if scenario != Scenario::ColdBoot {
+        let root = paths.get("--checkpoints").map(PathBuf::as_path).unwrap_or_else(|| Path::new(SHARED_STORE));
+        checkpoint = Some(post_boot(&mut machine, &boot_identity, root, |machine| census.prepare_boot(machine))?);
+        census.milestones.clear();
+        census.menu_trace.clear();
+    }
     machine.traces.bound_full_registers(NonZeroUsize::new(2).ok_or("zero hit bound")?);
     machine.traces.stop_labels = [SITE_LABEL.to_owned()].into_iter().collect();
     if let Some(dispatch) = &plan.dispatch {
@@ -1148,6 +1162,7 @@ fn drive() -> Result<(), String> {
     let report = Report {
         schema: 2,
         scenario,
+        checkpoint,
         inputs,
         limits: Limits {
             sites: SITE_LIMIT, contexts: CONTEXT_LIMIT, callers: CALLER_LIMIT, addresses: ADDRESS_LIMIT,

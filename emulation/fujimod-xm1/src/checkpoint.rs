@@ -225,3 +225,56 @@ pub fn post_boot(
     };
     Ok(PostBootReceipt { key, record, lookup })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn post_boot_reuses_bytes_and_invalidates_changed_inputs() {
+        use crate::{machine::Machine, run::{self, RunDocument, ValidatedUpdate}};
+        const RUN: &[u8] = include_bytes!("../data/xm1-150.json");
+        fujimod_emulator_exr2_board::register_board_builder();
+        fujimod_emulator_models::register();
+        let document = RunDocument::parse(RUN).unwrap();
+        let update = vec![0xff; document.update_flash_offset + 2048];
+        let mut rom = vec![0; document.boot_rom.bytes];
+        rom[..4].copy_from_slice(&0xeaff_fffeu32.to_le_bytes());
+        let root = std::env::temp_dir().join(format!("post-boot-cache-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        let make_machine = || {
+            let document = RunDocument::parse(RUN).unwrap();
+            let mut session = run::open(&document, &ValidatedUpdate(update.clone()), &rom).unwrap();
+            session.board.set_execution_policy(document.execution_policy.into()).unwrap();
+            Machine::new(document, session).unwrap()
+        };
+        let identity = |run: &[u8], dat: &[u8], executable: &[u8]| {
+            BootIdentity::new(run, dat, &rom, &[], None, b"synthetic-loop-v1").with_emulator_binary(executable)
+        };
+        let first_identity = identity(RUN, &update, b"emulator-one");
+        let produce = |machine: &mut Machine| {
+            machine.run(4);
+            machine.require_running()
+        };
+        let first = post_boot(&mut make_machine(), &first_identity, &root, produce).unwrap();
+        assert_eq!(first.lookup, CacheLookup::Miss);
+        let mut restored = make_machine();
+        let second = post_boot(&mut restored, &first_identity, &root, |_| Err("unchanged input executed producer".into())).unwrap();
+        assert_eq!(second.lookup, CacheLookup::Hit);
+        assert_eq!(first.record, second.record);
+        assert_eq!(restored.instructions(), first.record.instructions);
+        let mut changed_run = RUN.to_vec();
+        changed_run.push(b'\n');
+        let mut changed_update = update.clone();
+        changed_update[0] ^= 1;
+        for changed in [identity(&changed_run, &update, b"emulator-one"), identity(RUN, &changed_update, b"emulator-one"), identity(RUN, &update, b"emulator-two")] {
+            let receipt = post_boot(&mut make_machine(), &changed, &root, produce).unwrap();
+            assert_eq!(receipt.lookup, CacheLookup::Miss);
+            assert_ne!(receipt.key, first.key);
+        }
+        let snapshot = root.join(format!("post-boot-{}", first.key)).join(crate::bridge::SNAPSHOT);
+        crate::bridge::write(&snapshot, b"corrupted checkpoint").unwrap();
+        assert!(post_boot(&mut make_machine(), &first_identity, &root, produce).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
