@@ -3,6 +3,7 @@
 use core::ptr::{read_volatile, write_volatile};
 
 use crate::channel::{Channel, FloatLog};
+use crate::compiled::{CompiledScan, Optioned, StreamSnapshot};
 use crate::face::{FaceTracking, TrackingBusy};
 use crate::ports::{Derivations, ExportQuery};
 use crate::pipeline::{Bank, Enable, EnableChange, FilterWindow, Grid, Part, Setting, Stage, StageBlock};
@@ -382,4 +383,128 @@ impl StageBlock for StockStageBlock {
             Setting::ModeLevel => u32::from(read_u8(self.0 + 0x78)),
         }
     }
+}
+
+fn address_of<T>(value: &mut T) -> u32 { value as *mut T as usize as u32 }
+
+/// A compiled scan configuration by guest address: stage flags at +0 and the scan library's
+/// configuration from +0x101c (output kind, then the option bytes at +4 and +8).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StockCompiledScan(pub u32);
+
+/// A caller's block the scan library fills, by guest address.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StockScanOutput(pub u32);
+
+const LIBRARY_CONFIGURATION: u32 = 0x101c;
+
+impl StockCompiledScan {
+    fn library(self) -> u32 { self.0 + LIBRARY_CONFIGURATION }
+}
+
+/// The library's optioned table: the option byte, then the values from +2.
+fn optioned<const N: usize, const W: usize>(raw: [u16; W]) -> Optioned<N> {
+    Optioned { option: raw[0] as u8, values: core::array::from_fn(|index| raw[index + 1]) }
+}
+
+fn raw<const N: usize, const W: usize>(table: Optioned<N>) -> [u16; W] {
+    core::array::from_fn(|index| if index == 0 { u16::from(table.option) } else { table.values[index - 1] })
+}
+
+impl CompiledScan for StockCompiledScan {
+    type Block = StockScanOutput;
+
+    fn fill_settings(&mut self, block: &mut StockScanOutput) { entry!(0xd6_4840u32, fn(u32, u32))(self.0, block.0) }
+
+    fn fill_geometry(&mut self, block: &mut StockScanOutput) {
+        let (mut first, mut second) = ([0u32; 3], 0u16);
+        entry!(0xd6_49e8u32, fn(u32, u32, u32, u32))(self.0, address_of(&mut first), block.0, address_of(&mut second));
+    }
+
+    fn set_long_table(&mut self, values: &[u16; 22]) {
+        let mut values = *values;
+        entry!(0xd6_4850u32, fn(u32, u32))(address_of(&mut values), self.library());
+    }
+
+    fn set_wide_table(&mut self, values: &[u16; 28]) {
+        let mut values = *values;
+        entry!(0xd6_49f8u32, fn(u32, u32, u32, u32))(0, address_of(&mut values), 0, self.library());
+    }
+
+    fn nine(&mut self) -> Optioned<9> {
+        let mut table = [0u16; 10];
+        entry!(0xd6_4940u32, fn(u32, u32))(address_of(&mut table), self.0);
+        optioned::<9, 10>(table)
+    }
+
+    fn set_nine(&mut self, table: Optioned<9>) {
+        let mut table = raw::<9, 10>(table);
+        entry!(0xd6_4950u32, fn(u32, u32))(address_of(&mut table), self.library());
+    }
+
+    fn four(&mut self) -> Optioned<4> {
+        let mut table = [0u16; 5];
+        entry!(0xd6_4e2cu32, fn(u32, u32))(address_of(&mut table), self.0);
+        optioned::<4, 5>(table)
+    }
+
+    fn set_four(&mut self, table: Optioned<4>) {
+        let mut table = raw::<4, 5>(table);
+        entry!(0xd6_537cu32, fn(u32, u32))(address_of(&mut table), self.library());
+    }
+
+    fn options(&self) -> [u8; 2] { [read_u8(self.library() + 4), read_u8(self.library() + 8)] }
+
+    fn set_output_kind(&mut self, kind: u8) { write_u8(self.library(), kind) }
+
+    fn stage_flags(&self) -> u32 { read_u32(self.0) }
+}
+
+/// The stream a snapshot's options name, by guest address.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StreamSource(pub u32);
+
+/// A stream object and the snapshot block it is written to, by guest address.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StockStreamSnapshot {
+    pub stream: u32,
+    pub snapshot: u32,
+}
+
+const STREAM_OPTIONS: u32 = 0xb_d668;
+
+impl StockStreamSnapshot {
+    /// The stream's own snapshot block, which 0xd6b460 writes.
+    pub const fn of_stream(stream: u32) -> Self { Self { stream, snapshot: stream + 0xb_d4e4 } }
+}
+
+impl StreamSnapshot for StockStreamSnapshot {
+    type Registers = [u32; 96];
+    type Source = StreamSource;
+
+    fn write_tag(&mut self, tag: [u8; 4]) {
+        for (at, byte) in (self.snapshot..).zip(tag) {
+            write_u8(at, byte);
+        }
+    }
+
+    fn read_registers(&mut self) -> [u32; 96] {
+        let mut registers = [0u32; 96];
+        entry!(0x69_3dccu32, fn(u32))(address_of(&mut registers));
+        registers
+    }
+
+    fn pack(&mut self, registers: &[u32; 96]) {
+        let mut registers = *registers;
+        entry!(0x73_ed94u32, fn(u32, u32, u32, u32))(self.snapshot, address_of(&mut registers), 0xd6_baac, 96);
+    }
+
+    fn select(&mut self, source: StreamSource) { entry!(0xd6_ae18u32, fn(u32, u32, u32))(self.stream, 0, source.0) }
+
+    fn set_options(&mut self, options: [u32; 2]) {
+        write_u32(self.stream + STREAM_OPTIONS + 0x370, options[0]);
+        write_u32(self.stream + STREAM_OPTIONS + 0x374, options[1]);
+    }
+
+    fn apply_options(&mut self, source: StreamSource) { entry!(0xd6_afe4u32, fn(u32, u32))(self.stream + STREAM_OPTIONS, source.0) }
 }

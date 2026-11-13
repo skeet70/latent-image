@@ -8,6 +8,7 @@
 
 pub mod adjustment;
 pub mod channel;
+pub mod compiled;
 pub mod curve;
 pub mod face;
 pub mod limits;
@@ -36,3 +37,5 @@ mod profile_tests;
 mod layer_tests;
 #[cfg(test)]
 mod pipeline_tests;
+#[cfg(test)]
+mod compiled_tests;
