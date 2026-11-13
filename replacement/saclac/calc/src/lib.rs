@@ -5,6 +5,7 @@
 //! (queue 45), and the computations its measurement and shot modules share.
 
 pub mod adjust;
+pub mod capture_requests;
 pub mod exposure;
 pub mod geometry;
 pub mod policy;
@@ -15,6 +16,8 @@ pub mod stock;
 
 #[cfg(test)]
 extern crate std;
+#[cfg(test)]
+mod capture_requests_tests;
 #[cfg(test)]
 mod geometry_tests;
 #[cfg(test)]

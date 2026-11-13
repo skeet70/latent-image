@@ -4,6 +4,7 @@
 
 pub mod adjust;
 pub mod calculation;
+pub mod capture;
 pub mod dump;
 pub mod motion;
 pub mod property;
