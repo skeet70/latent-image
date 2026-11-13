@@ -5,6 +5,7 @@ module Main (main) where
 import Data.Aeson
 import qualified Data.Aeson.Types as J
 import qualified Data.ByteString.Lazy as L
+import Data.Char (isHexDigit)
 import Data.List (find, findIndex)
 import qualified Data.Text as Text
 import Data.Word (Word8, Word16, Word32)
@@ -66,12 +67,27 @@ data ReachedMilestone = ReachedMilestone { reachedPhase :: String, reachedAt :: 
 instance FromJSON ReachedMilestone where
   parseJSON = withObject "milestone" $ \value -> ReachedMilestone <$> value .: "phase" <*> value .:? "reached"
 
+newtype Digest = Digest Text.Text deriving (Eq, Show)
+instance FromJSON Digest where
+  parseJSON = withText "SHA-256" $ \text ->
+    if Text.length text == 64 && Text.all isHexDigit text then pure (Digest text) else fail "invalid SHA-256"
+
+newtype Binding = Binding Digest deriving (Eq, Show)
+instance FromJSON Binding where
+  parseJSON = withObject "input binding" $ \value -> Binding <$> value .: "sha256"
+
+data Watch = Watch { watchLabel :: String, watchFetches :: Integer }
+instance FromJSON Watch where
+  parseJSON = withObject "watch" $ \value -> Watch <$> value .: "label" <*> value .: "fetches"
+
 data Receipt = Receipt
   { scenario :: String
   , events :: [Event]
   , timedEvents :: [Observed]
   , milestones :: [ReachedMilestone]
   , stockFetches :: Integer
+  , fixedFetches :: Integer
+  , inputBindings :: [Binding]
   , observationError :: Maybe String
   , machineFailure :: Maybe String
   }
@@ -82,7 +98,10 @@ instance FromJSON Receipt where
     phases <- value .: "milestones"
     ranges <- value .: "action_ranges" :: J.Parser [Value]
     fetches <- traverse (withObject "action range" (.: "fetches")) ranges
+    watches <- value .: "watch" :: J.Parser [Watch]
+    bindings <- value .: "inputs"
     Receipt name (concatMap (normalize . observedEvent) rows) rows phases (sum fetches)
+      (sum [watchFetches row | row <- watches, watchLabel row == "fixed-body"]) bindings
       <$> value .:? "error" <*> value .:? "machine_failure"
 
 normalize :: Event -> [Event]
@@ -103,6 +122,12 @@ firstDifference left right = case findIndex not (zipWith (==) left right) of
   Just index -> Just index
   Nothing | length left /= length right -> Just (min (length left) (length right))
   Nothing -> Nothing
+
+projectionInputs :: Receipt -> Maybe [Binding]
+projectionInputs receipt = case inputBindings receipt of
+  [run, _, rom, sites, executable] -> Just [run, rom, sites, executable]
+  [run, _, rom, sites, trajectory, executable] -> Just [run, rom, sites, trajectory, executable]
+  _ -> Nothing
 
 milestoneResult :: String -> Receipt -> Receipt -> Maybe (Maybe Judge.FirstDifference)
 milestoneResult phase stock candidate = do
@@ -139,7 +164,11 @@ main = do
   let difference = firstDifference (events stock) (events candidate)
       controlDifference = firstDifference (events stock) (events control)
       sameScenario = scenario stock == scenario candidate && scenario stock == scenario control
-      complete = sameScenario && all healthy [stock, candidate, control] && controlDifference /= Nothing
+      sameInputs = case map projectionInputs [stock, candidate, control] of
+        [Just left, Just middle, Just right] -> left == middle && left == right
+        _ -> False
+      ownedExecuted = fixedFetches candidate > 0 && fixedFetches control > 0
+      complete = sameScenario && sameInputs && ownedExecuted && all healthy [stock, candidate, control] && controlDifference /= Nothing
       milestone = phase >>= \name -> milestoneResult name stock candidate
       status
         | not complete = Judge.VerdictNoVerdict
@@ -158,6 +187,9 @@ main = do
     , "scenario" .= scenario stock
     , "same_scenario" .= sameScenario
     , "stock_executed_instructions_in_action_extents" .= stockFetches stock
+    , "candidate_executed_instructions_in_fixed_region" .= fixedFetches candidate
+    , "control_executed_instructions_in_fixed_region" .= fixedFetches control
+    , "same_observer_and_scenario_inputs" .= sameInputs
     , "stock_events" .= length (events stock)
     , "candidate_events" .= length (events candidate)
     , "control_events" .= length (events control)

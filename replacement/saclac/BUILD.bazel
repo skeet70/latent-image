@@ -177,6 +177,7 @@ haskell_library(
         "//host/firmware:bank-allowlist",
         "//replacement/record5_staging:record5-staging",
         "//replacement/fixed_image:contract",
+        "//replacement/toolchain:stack-proof",
     ],
 )
 
@@ -226,6 +227,7 @@ haskell_test(
         ":saclac-artifact",
         "//host:base",
         "//host:bytestring",
+        "//host:directory",
         "//host:first-stage",
         "//host:host-support",
         "//host:update-container",

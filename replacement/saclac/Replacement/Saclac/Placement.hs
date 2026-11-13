@@ -96,6 +96,7 @@ renderLinkerScript = case (entries, extents) of
 -- reads. The label is the entry's name without its prefix and suffix.
 watchRanges :: [J.Value]
 watchRanges =
+  J.object ["label" J..= ("fixed-body" :: String), "start" J..= hexAddress (Fixed.imageBase + Fixed.headerBytes), "end" J..= hexAddress Fixed.imageLimit] :
   [ J.object
       [ "label" J..= (dropSuffix "_entry" (dropPrefix "xm1_saclac_" (entryVeneer entry)) ++ "-extent")
       , "start" J..= hexAddress (extentLow extent)

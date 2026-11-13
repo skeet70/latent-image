@@ -12,6 +12,7 @@ import qualified FujiAF.Host as H
 import qualified FujiAF.UpdateContainer as U
 import Replacement.Saclac.Artifact
 import System.Environment (getArgs)
+import System.Directory (canonicalizePath)
 
 check :: String -> Bool -> IO ()
 check name = flip H.ensure ("saclac-placement: " ++ name)
@@ -41,10 +42,10 @@ main = do
   arguments <- getArgs
   case arguments of
     [binPath, symbolsPath, disasmPath, sectionsPath] -> do
-      bin <- H.readRegular (4 * 1024 * 1024) binPath
-      symbols <- H.readRegular (1024 * 1024) symbolsPath
-      disasm <- H.readRegular (1024 * 1024) disasmPath
-      sections <- H.readRegular (1024 * 1024) sectionsPath
+      bin <- canonicalizePath binPath >>= H.readRegular (4 * 1024 * 1024)
+      symbols <- canonicalizePath symbolsPath >>= H.readRegular (1024 * 1024)
+      disasm <- canonicalizePath disasmPath >>= H.readRegular (1024 * 1024)
+      sections <- canonicalizePath sectionsPath >>= H.readRegular (1024 * 1024)
       admitted <- either (H.failH . show) pure (admit bin symbols disasm sections)
       body <- either (H.failH . show) pure (fixedBody admitted)
       let base = extentLow fixedExtent

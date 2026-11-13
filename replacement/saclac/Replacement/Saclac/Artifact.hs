@@ -38,10 +38,10 @@ module Replacement.Saclac.Artifact
 import qualified A32 as A
 import Control.Monad (foldM, forM, forM_, unless, when)
 import Data.Aeson (Value, object, toJSON, (.=))
+import Data.Bifunctor (first)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.List (sortOn)
-import qualified Data.Map.Strict as M
 import Data.Maybe (catMaybes, listToMaybe, mapMaybe)
 import qualified Data.Set as S
 import Data.Word (Word32)
@@ -53,6 +53,7 @@ import Numeric (readHex)
 import qualified Replacement.Record5Staging as Record5
 import qualified Replacement.FixedImage.Layout as Fixed
 import qualified Replacement.FixedImage.Record as Fixed
+import qualified Replacement.Toolchain.Stack as Stack
 import qualified FujiAF.UpdateContainer as U
 
 data Extent = Extent
@@ -323,27 +324,6 @@ boundarySymbols =
   , "_RINvNtCs5dX5h91vudr_10xm1_saclac6engine8dispatchNtNtB4_5stock11StockTablesNtBM_10StockPortsEB4_"
   ]
 
--- | The set of instructions from a function's entry that set up its frame: the
--- push of lr and any sp or frame-pointer arithmetic that follows it.
-prologueWords :: Admitted -> Word32 -> Word32 -> S.Set Word32
-prologueWords admitted start end = go start True
-  where
-    go address first
-      | address >= end = S.empty
-      | isPrologueInstruction first (A.decode address (wordAt admitted address)) =
-          S.insert address (go (address + 4) False)
-      | otherwise = S.empty
-
-isPrologueInstruction :: Bool -> A.Instruction -> Bool
-isPrologueInstruction first instruction = case instruction of
-  A.StoreMultiple (A.Cond 14) base A.DecrementBefore True registers
-    | first -> base == A.sp && A.lr `elem` registers
-  A.DataProcessing (A.Cond 14) _ _ destination base (A.Immediate _) ->
-    destination == A.sp || base == A.sp
-  A.DataProcessing (A.Cond 14) A.MOV _ destination _ (A.ShiftedImmediate source A.LSL 0) ->
-    destination == A.sp || source == A.sp
-  _ -> False
-
 -- | The registers a function loads from a pc-relative literal whose word names
 -- an owned address.
 codeLiteralRegisters :: Admitted -> S.Set Word32 -> F.Symbol -> S.Set A.Reg
@@ -508,79 +488,10 @@ symbolKinds bytes =
 ownedStackBudget :: Int
 ownedStackBudget = 1024
 
-spWrite :: A.Instruction -> Bool
-spWrite instruction = case instruction of
-  A.DataProcessing _ _ _ destination _ _ -> destination == A.sp
-  A.LoadMultiple _ base _ writeback _ -> base == A.sp && writeback
-  A.StoreMultiple _ base _ writeback _ -> base == A.sp && writeback
-  _ -> False
-
--- | A function's frame bytes from its prologue push and immediate sp decrements.
-functionFrame :: Admitted -> F.Symbol -> Either PlacementError Int
-functionFrame admitted symbol = do
-  let start = F.symbolAddress symbol
-      end = start + F.symbolSize symbol
-      prologue = prologueWords admitted start end
-      pushed = case A.decode start (wordAt admitted start) of
-        A.StoreMultiple (A.Cond 14) base A.DecrementBefore True registers
-          | base == A.sp -> 4 * length registers
-        _ -> 0
-      adjustments = sum
-        [ fromIntegral immediate
-        | address <- S.toList prologue
-        , A.DataProcessing (A.Cond 14) A.SUB False destination base (A.Immediate immediate) <-
-            [A.decode address (wordAt admitted address)]
-        , destination == A.sp
-        , base == A.sp
-        ]
-  if S.null prologue
-    then if any (\address -> spWrite (A.decode address (wordAt admitted address)))
-             [start, start + 4 .. end - 4]
-           then Left (WalkRefused start FrameNotDerivable)
-           else Right 0
-    else Right (pushed + adjustments)
-
-entrySymbol :: Admitted -> S.Set Word32 -> Word32 -> Maybe F.Symbol
-entrySymbol admitted instructions target =
-  listToMaybe
-    [ symbol
-    | symbol <- admittedSymbols admitted
-    , F.symbolSize symbol > 0
-    , F.symbolAddress symbol == target
-    , S.member target instructions
-    ]
-
-data Frame = Frame
-  { frameAddress :: Word32
-  , frameBytes :: Int
-  , frameCallees :: [(Word32, Word32)]
-  }
-
-functionFrames :: Admitted -> S.Set Word32 -> Either PlacementError [Frame]
-functionFrames admitted instructions = forM codeSymbols $ \symbol -> do
-  bytes <- functionFrame admitted symbol
-  let start = F.symbolAddress symbol
-      end = start + F.symbolSize symbol
-      callees =
-        [ (address, target)
-        | address <- [start, start + 4 .. end - 4]
-        , S.member address instructions
-        , A.Branch _ _ target <- [A.decode address (wordAt admitted address)]
-        , Just _ <- [entrySymbol admitted instructions target]
-        ]
-  pure (Frame start bytes callees)
-  where
-    codeSymbols =
-      [ symbol
-      | symbol <- admittedSymbols admitted
-      , F.symbolSize symbol > 0
-      , S.member (F.symbolAddress symbol) instructions
-      ]
-
-newtype StackBudget = StackBudget Int deriving (Eq, Show)
+type StackBudget = Stack.StackBytes
 
 stackBudget :: Int -> Maybe StackBudget
-stackBudget bytes = if bytes > 0 then Just (StackBudget bytes) else Nothing
+stackBudget bytes = if bytes > 0 then Stack.stackBytes bytes else Nothing
 
 checkStackArtifact :: StackBudget -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Either PlacementError ()
 checkStackArtifact budget bin symbolsBytes disasm sectionsBytes = do
@@ -596,30 +507,16 @@ checkStackArtifact budget bin symbolsBytes disasm sectionsBytes = do
   checkStack budget artifact instructions
 
 checkStack :: StackBudget -> Admitted -> S.Set Word32 -> Either PlacementError ()
-checkStack (StackBudget budget) admitted instructions = do
-  frames <- functionFrames admitted instructions
-  let byAddress = M.fromList [(frameAddress frame, frame) | frame <- frames]
-      visit path address = case M.lookup address byAddress of
-        Nothing -> Right ()
-        Just frame ->
-          forM_ (frameCallees frame) $ \(branchAddress, target) ->
-            if target `elem` path
-              then Left (WalkRefused branchAddress (RecursiveCall target))
-              else visit (target : path) target
-      chain path frame
-        | frameAddress frame `elem` path = 0
-        | otherwise =
-            frameBytes frame
-              + maximum
-                (0 :
-                  [ chain (frameAddress frame : path) callee
-                  | (_, target) <- frameCallees frame
-                  , Just callee <- [M.lookup target byAddress]
-                  ])
-  forM_ frames $ \frame -> visit [frameAddress frame] (frameAddress frame)
-  forM_ frames $ \frame ->
-    when (chain [] frame > budget) $
-      Left (WalkRefused (frameAddress frame) (StackBudgetExceeded (chain [] frame)))
+checkStack budget admitted instructions = first failure (Stack.check budget image)
+  where
+    image = Stack.Image (Stack.Guest (binBase admitted)) (admittedBin admitted)
+      (admittedSymbols admitted) (S.map Stack.Guest instructions)
+    failure problem = case problem of
+      Stack.OutsideImage (Stack.Guest address) -> ExtentImageMismatch address 4
+      Stack.InvalidFunction (Stack.Guest address) -> WalkRefused address FrameNotDerivable
+      Stack.FrameNotDerivable (Stack.Guest address) -> WalkRefused address FrameNotDerivable
+      Stack.RecursiveCall (Stack.Guest address) (Stack.Guest target) -> WalkRefused address (RecursiveCall target)
+      Stack.BudgetExceeded (Stack.Guest address) bytes -> WalkRefused address (StackBudgetExceeded (Stack.stackByteCount bytes))
 
 -- | Admit the linked image over the two declared extents.
 admit :: B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Either PlacementError Admitted
@@ -683,7 +580,8 @@ admit bin symbolsBytes disasm sectionsBytes = do
       (TableLengthMismatch "SACLAC_ROW_COUNTS" index (machineRowCount lengths) (wordOf OwnedRowCounts))
   checkLiterals admitted literals
   checkStores admitted instructions
-  checkStack (StackBudget ownedStackBudget) admitted instructions
+  budget <- maybe (Left SectionsRejected) Right (stackBudget ownedStackBudget)
+  checkStack budget admitted instructions
   checkControl admitted instructions dataWords
   pure admitted
 
