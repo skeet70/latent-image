@@ -614,6 +614,10 @@ pub fn calc_operation(operation: CalcOperation) -> u16 {
     }
 }
 
+/// A stock code word a peer enters when it finishes a request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StockCallbackWord(pub u32);
+
 /// One calc or calc1 message as the peer receives it. Bytes stock leaves unwritten are zero.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Encoded { bytes: [u8; 232], length: usize }
@@ -678,14 +682,14 @@ pub fn calc1_payload(payload: &calc::Calc1Payload) -> (Calc1Operation, Encoded) 
 /// bytes from the data cache (0x740e3c) before posting 0x3d00.
 pub const ACQUISITION_GRID: (u32, usize, usize) = (0x016d_4280, 1236, 1204);
 
-fn callback_first(callback: calc::PeerCallback, record: &[u8]) -> Encoded {
+fn callback_first(callback: StockCallbackWord, record: &[u8]) -> Encoded {
     let mut message = Encoded::new(4 + record.len());
     message.word(0, callback.0);
     message.put(4, record);
     message
 }
 
-fn callback_last(record: &[u8], callback: calc::PeerCallback) -> Encoded {
+fn callback_last(record: &[u8], callback: StockCallbackWord) -> Encoded {
     let mut message = Encoded::new(record.len() + 4);
     message.put(0, record);
     message.word(record.len(), callback.0);
@@ -695,7 +699,7 @@ fn callback_last(record: &[u8], callback: calc::PeerCallback) -> Encoded {
 /// X-M1 1.50: 0xf3a564..0xf3a73c builds the 76-byte record and 0xf4c6e8 appends the
 /// callback. Bytes 56..63 are planner words +0x48 and +0x44 (0xfa8018, 0xfa9588), which have
 /// no writer.
-fn window(request: calc::WindowRequest, callback: calc::PeerCallback) -> Encoded {
+fn window(request: calc::WindowRequest, callback: StockCallbackWord) -> Encoded {
     let mut message = Encoded::new(80);
     message.word(0, u32::from(request.selection));
     message.word(4, request.window.first);
@@ -720,7 +724,7 @@ fn window(request: calc::WindowRequest, callback: calc::PeerCallback) -> Encoded
 
 /// X-M1 1.50: 0xf4c4f4..0xf4c568 moves record word 40 ahead of halfword 14 and record
 /// words 16..39 and 44 after it, leaving message bytes 18..19 and 26..27 unwritten.
-fn source(record: &[u8; 48], callback: calc::PeerCallback) -> Encoded {
+fn source(record: &[u8; 48], callback: StockCallbackWord) -> Encoded {
     let mut message = Encoded::new(56);
     message.word(0, callback.0);
     message.put(4, &record[0..14]);

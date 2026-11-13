@@ -1,4 +1,5 @@
 use crate::calc::*;
+use crate::stock::StockCallbackWord;
 use crate::{stock, Calc1Operation, CalcOperation};
 
 fn counting<const N: usize>(first: u8) -> Record<N> {
@@ -7,7 +8,7 @@ fn counting<const N: usize>(first: u8) -> Record<N> {
     Record(bytes)
 }
 
-const CALLBACK: PeerCallback = PeerCallback(0x00f3_c104);
+const CALLBACK: StockCallbackWord = StockCallbackWord(0x00f3_c104);
 
 #[test]
 fn copied_records_follow_the_callback_for_calc() {
@@ -57,7 +58,7 @@ fn pipeline_first_and_calculation_fill_only_their_leading_fields_of_a_full_block
     assert!(message.bytes()[88..].iter().all(|byte| *byte == 0));
 
     let (operation, message) = stock::calc_payload(&CalcPayload::Calculation {
-        block: SharedAddress(0x016b_4f10), source: SharedAddress(0x016b_7000), callback: PeerCallback(0x00f1_d154),
+        block: SharedAddress(0x016b_4f10), source: SharedAddress(0x016b_7000), callback: StockCallbackWord(0x00f1_d154),
     });
     assert_eq!((operation, message.bytes().len()), (CalcOperation::Request02, 232));
     assert_eq!(&message.bytes()[..12], &[0x54, 0xd1, 0xf1, 0, 0x10, 0x4f, 0x6b, 1, 0, 0x70, 0x6b, 1]);
