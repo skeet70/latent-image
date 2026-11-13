@@ -4,6 +4,7 @@
 //! saclac's calculation library: the requests saclac posts to calc (queue 44) and calc1
 //! (queue 45), and the computations its measurement and shot modules share.
 
+pub mod exposure;
 pub mod geometry;
 pub mod policy;
 pub mod requests;

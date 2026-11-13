@@ -1,7 +1,7 @@
 //! Classifications of exposure modes, selection kinds and their flag words.
 
 /// The exposure context's mode word.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ExposureMode(pub u32);
 
 impl ExposureMode {
