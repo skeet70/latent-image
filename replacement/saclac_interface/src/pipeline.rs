@@ -2,7 +2,8 @@
 
 //! What the half-press pipeline asks of its peers (imgdc 0x3f1d, 0x3f1e, 0x3f1f and 0x3f20, calc
 //! 0x3c04 and 0x3c05, statistics 0x03) and what they deliver in the completions 0x4e, 0x50,
-//! 0x51, 0x91, 0x92 and 0x93.
+//! 0x51, 0x91, 0x92 and 0x93; and the format region the DCF profile geometry layer sends the
+//! image pipeline's stage control.
 
 /// Imgdc 0x3f1d's answer (completion 0x4e); zero asks for calc 0x3c03.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -192,4 +193,14 @@ pub struct StatisticsWeights {
     pub extent: [u16; 2],
     pub origin: [u16; 2],
     pub size: [u16; 2],
+}
+
+/// The format stage's region: the profile's two pair scales and its colour-pattern alignment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FormatPayload {
+    pub first_scale: u16,
+    pub second_scale: u16,
+    pub alignment: [u8; 2],
+    /// The alignment comes from the class remainders rather than the profile class.
+    pub remainder_geometry: bool,
 }
