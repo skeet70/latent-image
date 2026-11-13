@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "8NtEriuiuh/nI0WgbdEqTA3yacD+oA+xtH19RUk6FE8=",
+        "bzlTransitiveDigest": "bba+JnlVfKXOTEiIGMJBijdx3UTZtIst6KcYlNtYfwQ=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -648,6 +648,7 @@
                 "@@//emulation:fujimod-xm1/src/root_compact.rs": "//emulation:fujimod-xm1/src/root_compact.rs",
                 "@@//emulation:fujimod-xm1/src/rtos_census.rs": "//emulation:fujimod-xm1/src/rtos_census.rs",
                 "@@//emulation:fujimod-xm1/src/saclac_census.rs": "//emulation:fujimod-xm1/src/saclac_census.rs",
+                "@@//emulation:fujimod-xm1/src/saclac_interface.rs": "//emulation:fujimod-xm1/src/saclac_interface.rs",
                 "@@//emulation:fujimod-xm1/src/scheduler_pair.rs": "//emulation:fujimod-xm1/src/scheduler_pair.rs",
                 "@@//emulation:fujimod-xm1/src/sd_host.rs": "//emulation:fujimod-xm1/src/sd_host.rs",
                 "@@//emulation:fujimod-xm1/src/startup_callers.rs": "//emulation:fujimod-xm1/src/startup_callers.rs",
@@ -851,6 +852,7 @@
                 "@@//emulation:fujimod-xm1/src/root_compact.rs": "//emulation:fujimod-xm1/src/root_compact.rs",
                 "@@//emulation:fujimod-xm1/src/rtos_census.rs": "//emulation:fujimod-xm1/src/rtos_census.rs",
                 "@@//emulation:fujimod-xm1/src/saclac_census.rs": "//emulation:fujimod-xm1/src/saclac_census.rs",
+                "@@//emulation:fujimod-xm1/src/saclac_interface.rs": "//emulation:fujimod-xm1/src/saclac_interface.rs",
                 "@@//emulation:fujimod-xm1/src/scheduler_pair.rs": "//emulation:fujimod-xm1/src/scheduler_pair.rs",
                 "@@//emulation:fujimod-xm1/src/sd_host.rs": "//emulation:fujimod-xm1/src/sd_host.rs",
                 "@@//emulation:fujimod-xm1/src/startup_callers.rs": "//emulation:fujimod-xm1/src/startup_callers.rs",
@@ -1054,6 +1056,7 @@
                 "@@//emulation:fujimod-xm1/src/root_compact.rs": "//emulation:fujimod-xm1/src/root_compact.rs",
                 "@@//emulation:fujimod-xm1/src/rtos_census.rs": "//emulation:fujimod-xm1/src/rtos_census.rs",
                 "@@//emulation:fujimod-xm1/src/saclac_census.rs": "//emulation:fujimod-xm1/src/saclac_census.rs",
+                "@@//emulation:fujimod-xm1/src/saclac_interface.rs": "//emulation:fujimod-xm1/src/saclac_interface.rs",
                 "@@//emulation:fujimod-xm1/src/scheduler_pair.rs": "//emulation:fujimod-xm1/src/scheduler_pair.rs",
                 "@@//emulation:fujimod-xm1/src/sd_host.rs": "//emulation:fujimod-xm1/src/sd_host.rs",
                 "@@//emulation:fujimod-xm1/src/startup_callers.rs": "//emulation:fujimod-xm1/src/startup_callers.rs",
@@ -1260,6 +1263,7 @@
                 "@@//emulation:fujimod-xm1/src/root_compact.rs": "//emulation:fujimod-xm1/src/root_compact.rs",
                 "@@//emulation:fujimod-xm1/src/rtos_census.rs": "//emulation:fujimod-xm1/src/rtos_census.rs",
                 "@@//emulation:fujimod-xm1/src/saclac_census.rs": "//emulation:fujimod-xm1/src/saclac_census.rs",
+                "@@//emulation:fujimod-xm1/src/saclac_interface.rs": "//emulation:fujimod-xm1/src/saclac_interface.rs",
                 "@@//emulation:fujimod-xm1/src/scheduler_pair.rs": "//emulation:fujimod-xm1/src/scheduler_pair.rs",
                 "@@//emulation:fujimod-xm1/src/sd_host.rs": "//emulation:fujimod-xm1/src/sd_host.rs",
                 "@@//emulation:fujimod-xm1/src/startup_callers.rs": "//emulation:fujimod-xm1/src/startup_callers.rs",
@@ -1466,6 +1470,7 @@
                 "@@//emulation:fujimod-xm1/src/root_compact.rs": "//emulation:fujimod-xm1/src/root_compact.rs",
                 "@@//emulation:fujimod-xm1/src/rtos_census.rs": "//emulation:fujimod-xm1/src/rtos_census.rs",
                 "@@//emulation:fujimod-xm1/src/saclac_census.rs": "//emulation:fujimod-xm1/src/saclac_census.rs",
+                "@@//emulation:fujimod-xm1/src/saclac_interface.rs": "//emulation:fujimod-xm1/src/saclac_interface.rs",
                 "@@//emulation:fujimod-xm1/src/scheduler_pair.rs": "//emulation:fujimod-xm1/src/scheduler_pair.rs",
                 "@@//emulation:fujimod-xm1/src/sd_host.rs": "//emulation:fujimod-xm1/src/sd_host.rs",
                 "@@//emulation:fujimod-xm1/src/startup_callers.rs": "//emulation:fujimod-xm1/src/startup_callers.rs",
