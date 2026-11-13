@@ -40,7 +40,7 @@ import qualified Data.Vector as V
 import Data.Word (Word8, Word32)
 import Numeric (readHex, showHex)
 import Text.Read (readMaybe)
-import System.Directory (createDirectory, doesFileExist, getCurrentDirectory, makeAbsolute, removeDirectoryRecursive, removeFile)
+import System.Directory (createDirectory, createDirectoryIfMissing, doesFileExist, getCurrentDirectory, makeAbsolute, removeDirectoryRecursive, removeFile)
 import System.Environment (getExecutablePath, lookupEnv)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>), (<.>), makeRelative, takeDirectory)
@@ -158,6 +158,14 @@ data ReviewedContract = ReviewedContract
 
 data PayloadKind = RecipeBankD3 | RecipeBankModal75 | RecipeBankLifecycle | RecipeBankModalLifecycle | RecipeBankModal75MenuEngine | ClassicChrome | ClassicChromeIcon | UsbToggle | AfRing | Experiment deriving (Eq, Show)
 
+-- | Where 'withReviewedBuildDirectory' creates a payload's build directory.
+data BuildDirectoryParent
+  = RunWorkWhenSet
+    -- ^ the run's work directory when `run-output` set one, else 'payloadBuildRoot'
+  | BuildRootOnly
+    -- ^ 'payloadBuildRoot' even inside a run
+  deriving (Eq, Show)
+
 -- | What a payload kind's relink links, and the allocation, ABI word, counts
 -- and installer start it has.
 data Payload = Payload
@@ -172,6 +180,7 @@ data Payload = Payload
   , payloadRelinkScript :: FilePath
   , payloadRelinkBuilder :: FilePath
   , payloadBuildRoot :: FilePath
+  , payloadBuildParent :: BuildDirectoryParent
   , payloadRelinkInputs :: [(String,FilePath)]
   , payloadBankVariant :: Maybe Layout.BankVariant
   }
@@ -198,6 +207,7 @@ bankD3Payload = Payload
   , payloadRelinkScript = "build-recipe-bank-ram.sh"
   , payloadRelinkBuilder = "build-recipe-bank"
   , payloadBuildRoot = "private-data/analysis/x-m1-1.50/ram-push"
+  , payloadBuildParent = RunWorkWhenSet
   , payloadRelinkInputs =
       [ ("SPEC","private-data/analysis/x-m1-1.50/recipes/bank-spec.json")
       , ("RC0_ID4","private-data/analysis/x-m1-1.50/update/prefix/id4-patched.bin")
@@ -279,6 +289,9 @@ classicChromePayload = Payload
   , payloadRelinkScript = "build-classic-chrome-ram.sh"
   , payloadRelinkBuilder = "build-classic-chrome-ram"
   , payloadBuildRoot = "private-data/analysis/classic-chrome-patch/ram-push"
+  -- build-classic-chrome-ram.sh refuses an output directory outside this one,
+  -- and the Classic Chrome review records pin the script's digest.
+  , payloadBuildParent = BuildRootOnly
   , payloadRelinkInputs =
       [ ("CC_PARAMETERS","private-data/analysis/classic-chrome/candidate.json")
       , ("RC0_ID4","private-data/analysis/x-m1-1.50/update/prefix/id4-patched.bin")
@@ -316,6 +329,7 @@ usbTogglePayload = Payload
   , payloadRelinkScript = "build-usb-toggle-ram.sh"
   , payloadRelinkBuilder = "build-usb-toggle-ram"
   , payloadBuildRoot = "private-data/analysis/usb-toggle/ram-push"
+  , payloadBuildParent = RunWorkWhenSet
   , payloadRelinkInputs = [("RC0_ID5","private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin")]
   , payloadBankVariant = Nothing
   }
@@ -332,6 +346,7 @@ afRingPayload = Payload
   , payloadRelinkScript = "build-af-ring-ram.sh"
   , payloadRelinkBuilder = "build-af-ring-ram"
   , payloadBuildRoot = "private-data/analysis/x-m1-1.50/af-ring/ram-push"
+  , payloadBuildParent = RunWorkWhenSet
   , payloadRelinkInputs = [("RC0_ID5","private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin")]
   , payloadBankVariant = Nothing
   }
@@ -355,6 +370,7 @@ experimentPayload name = Payload
   , payloadRelinkScript = "build-experiment-ram.sh"
   , payloadRelinkBuilder = "build-experiment-ram"
   , payloadBuildRoot = "private-data/analysis/x-m1-1.50/experiments/ram-push"
+  , payloadBuildParent = RunWorkWhenSet
   , payloadRelinkInputs =
       [ ("EXPERIMENT", "experiments" </> name)
       , ("STOCK_ID4", "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin")
@@ -1375,15 +1391,19 @@ writeStateFile directory state = do
 reviewedWorkspace :: IO FilePath
 reviewedWorkspace = lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= maybe getCurrentDirectory pure
 
--- | Passes the workspace root and the build directory relative to it.
+-- | Passes the workspace root and the build directory relative to it. The
+-- directory is removed when the action returns.
 withReviewedBuildDirectory :: Payload -> (FilePath -> FilePath -> IO a) -> IO a
 withReviewedBuildDirectory payload action = do
   root <- reviewedWorkspace >>= makeAbsolute
   bracket (create root) (removeDirectoryRecursive . (root </>)) (action root)
   where
     create root = do
-      work <- lookupEnv "XM1_RUN_WORK"
-      (path,temporaryHandle) <- openTempFile (maybe (root </> payloadBuildRoot payload) id work) ".transport-auth-"
+      parent <- case payloadBuildParent payload of
+        RunWorkWhenSet -> maybe (root </> payloadBuildRoot payload) id <$> lookupEnv "XM1_RUN_WORK"
+        BuildRootOnly -> pure (root </> payloadBuildRoot payload)
+      createDirectoryIfMissing True parent
+      (path,temporaryHandle) <- openTempFile parent ".transport-auth-"
       hClose temporaryHandle
       removeFile path
       createDirectory path
