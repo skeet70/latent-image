@@ -36,13 +36,11 @@ module Replacement.PropertyService.Artifact.Internal
   , artifactSpecialTable
   , artifactDefaultWindows
   , artifactFunctions
-  , artifactKernelBoundary
   , artifactProof
   , linkedBytes
   , storageStoreName
   , storageStoreWords
   , storageStoreWord
-  , storageStoreSites
   , storageOutputName
   , storageOutputWords
   , storageStatusWords
@@ -128,7 +126,6 @@ data LinkedArtifact = LinkedArtifact
   , artifactSlotTable :: GuestAddress
   , artifactSpecialTable :: GuestAddress
   , artifactDefaultWindows :: [(DefaultImage, GuestAddress)]
-  , artifactKernelBoundary :: [GuestAddress]
   , artifactProof :: CodeProof
   , artifactRecipeIdentity :: Maybe RecipePackageIdentity
   }
@@ -270,11 +267,6 @@ storageStoreWord :: StorageWidth -> Word32
 storageStoreWord StorageByte = 0xe5c21000
 storageStoreWord StorageHalf = 0xe1c210b0
 
--- | Byte offsets of the store instructions in 'storageStoreWords', one per window.
-storageStoreSites :: StorageWidth -> [Word32]
-storageStoreSites width =
-  [ 4 * fromIntegral index | (index, word) <- zip [0 :: Int ..] (storageStoreWords width), word == storageStoreWord width ]
-
 storageOutputName :: StorageWidth -> String
 storageOutputName width = case width of
   StorageByte -> "xm1_storage_output8"
@@ -302,7 +294,7 @@ kernelBoundaries =
   , ("xm1_kernel_critical_exit", 0x7236b0)
   ]
 
--- | The lowest stack offset each kernel boundary entry reaches, from its stock body's push.
+-- | Own-frame pushes at retained kernel entries; their callee depths are not proved.
 kernelBoundaryStack :: [(GuestAddress, StackOffset)]
 kernelBoundaryStack =
   [ (GuestAddress 0x41a34, StackOffset (-32))
@@ -317,10 +309,7 @@ kernelBoundaryName = "XM1_KERNEL_BOUNDARY"
 kernelBoundaryMagic :: Word32
 kernelBoundaryMagic = 0x314e524b
 
-data KernelBoundary = KernelBoundary
-  { kernelWindows :: [AddressSpan]
-  , kernelEntries :: [GuestAddress]
-  }
+newtype KernelBoundary = KernelBoundary { kernelWindows :: [AddressSpan] }
 
 readKernelBoundary :: Word32 -> B.ByteString -> F.Symbol -> Either AdmissionError KernelBoundary
 readKernelBoundary start bytes entry = do
@@ -331,10 +320,7 @@ readKernelBoundary start bytes entry = do
   unless (address .&. 3 == 0 && word 0 == kernelBoundaryMagic && windows <= 16 && entries <= 32
     && F.symbolSize entry == fromIntegral (4 * (3 + 2 * windows + entries)))
     (Left (AdmissionError (GuestAddress address) BoundaryInvalid))
-  pure KernelBoundary
-    { kernelWindows = [AddressSpan (GuestAddress (word (3 + 2 * index))) (GuestAddress (word (4 + 2 * index))) | index <- [0 .. windows - 1]]
-    , kernelEntries = [GuestAddress (word (3 + 2 * windows + index)) | index <- [0 .. entries - 1]]
-    }
+  pure (KernelBoundary [AddressSpan (GuestAddress (word (3 + 2 * index))) (GuestAddress (word (4 + 2 * index))) | index <- [0 .. windows - 1]])
 
 always :: A.Cond
 always = A.Cond 14
@@ -377,7 +363,7 @@ setterEntryTarget = "xm1_property_set"
 area3HandleCell :: AddressSpan
 area3HandleCell = AddressSpan (GuestAddress 0x89f86c) (GuestAddress 0x89f874)
 
--- | The only retained pointer span each purpose may add to literal admission.
+-- | Retained regions each purpose may add for relocated data references.
 purposeRetained :: ArtifactPurpose -> [AddressSpan]
 purposeRetained ProductionArtifact = []
 purposeRetained CloseAppendArea3Control = [area3HandleCell]
@@ -510,33 +496,31 @@ deriveArtifactUsing shape purpose dependency properties carrier@(Carrier (GuestA
   require ([EncodedSlot (word address) | address <- take (length slots) [slotAddress, slotAddress + 4 ..]] == slots) SlotTableRejected
   require (F.symbolSize specialSymbol == specialBytes && specialAddress .&. 3 == 0) SpecialTableRejected
   require ([EncodedSpecial (word address) (word (address + 4)) | address <- take (length specials) [specialAddress, specialAddress + 8 ..]] == specials) SpecialTableRejected
-  (mappings, readonly) <- artifactMappings start end functions bytes symbolBytes elfBytes
+  mappings <- artifactMappings start end functions bytes symbolBytes elfBytes
+  elf <- either (const (Left ElfRejected)) Right (ELF.parseElf elfBytes)
+  references <- either (const (Left ElfRejected)) Right (ELF.addressRelocations elf)
+  require (not (null references)) ElfRejected
   let layout = CodeLayout
         { layoutBase = GuestAddress start
         , layoutFunctions = functions
         , layoutMappings = mappings
-        , layoutLiteralPointers = map OwnedReadonly readonly
-            ++ [RetainedStorage retainedSpan | retainedSpan <- purposeRetained purpose]
-            ++ [RetainedStorage (AddressSpan (GuestAddress low) (GuestAddress high)) | (low, high) <- storageWindows]
-            ++ [RetainedConfiguration (AddressSpan (GuestAddress configBase) (GuestAddress (configBase + configBytes)))]
         , layoutData = [(GuestAddress tableAddress, GuestAddress (tableAddress + 2580)), (GuestAddress slotAddress, GuestAddress (slotAddress + slotBytes)), (GuestAddress specialAddress, GuestAddress (specialAddress + specialBytes))]
             ++ [(GuestAddress (F.symbolAddress entry), GuestAddress (F.symbolAddress entry + F.symbolSize entry)) | entry <- defaultSymbols]
             ++ [(low, high) | DataSpan (AddressSpan low high) <- mappings
                 , not (any (\(FunctionExtent _ begin finish) -> begin < high && low < finish) functions)]
-        , layoutDeclaredData = [(GuestAddress (F.symbolAddress boundarySymbol), GuestAddress (F.symbolAddress boundarySymbol + F.symbolSize boundarySymbol))]
         , layoutBoundaryWindows = kernelWindows boundary
-        , layoutBoundaryEntries = kernelEntries boundary
-        , layoutStoreSites = [GuestAddress (address + case width of StorageByte -> 28; StorageHalf -> 48) | (width,address) <- outputAddresses]
-            ++ [GuestAddress (statusAddress + 8)]
-            ++ [GuestAddress (address + offset) | (width, address) <- storeAddresses, offset <- storageStoreSites width]
-        , layoutStockLeaves = [(GuestAddress address, stockLeafStack) | (_, address) <- stockLeaves] ++ kernelBoundaryStack
-        , layoutStockSites = [(GuestAddress (address + 8), GuestAddress target, StackOffset (-8)) | (_, address, target) <- mirrorAddresses]
+            ++ purposeRetained purpose
+            ++ [AddressSpan (GuestAddress low) (GuestAddress high) | (low, high) <- storageWindows]
+            ++ [AddressSpan (GuestAddress configBase) (GuestAddress (configBase + configBytes))]
+        , layoutStockLeaves = [(GuestAddress address, stockLeafStack) | (_, address) <- stockLeaves]
+            ++ kernelBoundaryStack ++ [(GuestAddress target, StackOffset 0) | (_, _, target) <- mirrorAddresses]
+        , layoutReferences = references
         }
   proof <- either (Left . CodeRejected) Right (admitCodeWithCallbacks callbacks layout bytes)
   forM_ callbacks $ \callback ->
     require (any (\edge -> edgeTarget edge == functionStart callback && edgeKind edge `elem` [CallbackCall, CallbackTailCall])
       (concatMap frameCalls (proofFrames proof))) CallbackRejected
-  pure (LinkedArtifact bytes (identity bytes) (identity symbolBytes) (identity elfBytes) carrier (EntryAddresses (GuestAddress getterEntryAddress) (GuestAddress setterEntryAddress)) functions (GuestAddress tableAddress) (GuestAddress slotAddress) (GuestAddress specialAddress) (zip [SlotDefaultBytes,TailDefaultBytes] [GuestAddress (F.symbolAddress entry) | entry <- defaultSymbols]) (kernelEntries boundary) proof ((\(RecipeDependency _ packageIdentity) -> packageIdentity) <$> dependency))
+  pure (LinkedArtifact bytes (identity bytes) (identity symbolBytes) (identity elfBytes) carrier (EntryAddresses (GuestAddress getterEntryAddress) (GuestAddress setterEntryAddress)) functions (GuestAddress tableAddress) (GuestAddress slotAddress) (GuestAddress specialAddress) (zip [SlotDefaultBytes,TailDefaultBytes] [GuestAddress (F.symbolAddress entry) | entry <- defaultSymbols]) proof ((\(RecipeDependency _ packageIdentity) -> packageIdentity) <$> dependency))
   where
     encodingRejected failure = case failure of
       DelegatedProperty -> TableRejected
@@ -545,7 +529,7 @@ deriveArtifactUsing shape purpose dependency properties carrier@(Carrier (GuestA
       SpecialDefaultUnencodable -> SpecialTableRejected
 
 
-artifactMappings :: Word32 -> Word32 -> [FunctionExtent] -> B.ByteString -> B.ByteString -> B.ByteString -> Either ArtifactError ([MappedSpan], [AddressSpan])
+artifactMappings :: Word32 -> Word32 -> [FunctionExtent] -> B.ByteString -> B.ByteString -> B.ByteString -> Either ArtifactError [MappedSpan]
 artifactMappings start end functions bytes symbolBytes elfBytes = do
   elf <- either (const (Left ElfRejected)) Right (ELF.parseElf elfBytes)
   (sectionIndex, section) <- case [(index, item) | (index, item) <- zip [0 ..] (ELF.elfSections elf), ELF.sectionAllocated item] of
@@ -582,8 +566,7 @@ artifactMappings start end functions bytes symbolBytes elfBytes = do
     [] -> Left MappingRejected
   let mappings = [ (if code then ArmSpan else DataSpan) (AddressSpan (GuestAddress low) (GuestAddress high))
         | ((low, code), high) <- zip points (map fst (drop 1 points) ++ [end]) ]
-      readonly = [bounds | DataSpan bounds <- mappings]
-  pure (mappings, readonly)
+  pure mappings
 
 -- | Undefined-instruction fill for the carrier past the linked bytes.
 fillWord :: Word32
@@ -776,7 +759,7 @@ canonicalOpenPremises =
   [ "loads are not confined: owned code may read any address; the native oracle confines reads"
   , "stack depths are bytes below the owned callable entry sp"
   , "the setter owns its 32-byte frame and calls retained brackets at incoming sp minus 32; bracket chain depth and register use are not proved"
-  , "the code policy checks sp, r11 and the return address at every exit; other callee-saved registers follow AAPCS unproved"
+  , "owned memory safety rests on the compiler, bounded types, source boundaries and subsystem comparisons"
   , "the reference scan reads image4, image5, plain, loader A and loader B as instructions and words, and image2 and image3 (the FONT_ICON.FDL window extracted from the DAT) as words; it does not cover computed addresses"
   ]
 
@@ -785,7 +768,7 @@ publicOpenPremises =
   [ "loads are not confined: owned code may read any address; the native oracle confines reads"
   , "stack depths are bytes below the owned callable entry sp"
   , "public wrappers preserve r4-r11 and the setter's original r3; retained bracket chain depth and register use are not proved"
-  , "the code policy checks sp, r11 and the return address at every exit, and proves r4-r10 for an owned callee only when its walk restores them; a stock callee's r4-r10 follow AAPCS unproved"
+  , "owned memory safety rests on the compiler, bounded types, source boundaries and subsystem comparisons"
   , "the reference scan reads image4, image5, plain, loader A and loader B as instructions and words, and image2 and image3 (the FONT_ICON.FDL window extracted from the DAT) as words; it does not cover computed addresses"
   ]
 
@@ -837,9 +820,10 @@ candidateContractValueWith hullRule premises (StagedCandidate staged@(StagedImag
       , "entry_max_depth_bytes" .= object ["getter" .= depth getterAddress, "setter" .= depth setterAddress]
       ]
   , "owned_instruction_count" .= S.size (proofInstructions proof)
-  , "literal_words" .= [address | GuestAddress address <- S.toList (proofLiterals proof)]
-  , "nonreturning_entries" .= [address | GuestAddress address <- S.toList (proofNonreturning proof)]
-  , "literal_pointer_contract" .= ("Each literal word supplies a pointer whose first four bytes lie in ELF-mapped owned readonly data, a fixed storage window or the classified retained configuration window. This does not establish an object size or confine downstream loads." :: String)
+  , "mapped_data_words" .= [address | GuestAddress address <- S.toList (proofLiterals proof)]
+  , "address_relocations" .= [object ["site" .= ELF.addressSite reference, "target" .= ELF.addressTarget reference, "kind" .= show (ELF.addressKind reference)] | reference <- proofReferences proof]
+  , "reference_contract" .= ("ELF address relocations and direct branches name owned bytes or declared stock entries and regions. Unrelocated literals and formed constants, indirect targets and memory safety are outside binary admission. Owned memory safety rests on the compiler, bounded types, source boundaries and subsystem comparisons." :: String)
+  , "stack_scope" .= ("Direct-call composition of static owned frame allocations; assumes allocations do not repeat on a path and no unrecognized dynamic stack adjustment. Stock leaf frames are charged 4 bytes; kernel entries 0x41a34 and 0x7235d8 are charged 32 bytes and 0x7236b0 24 bytes. Mirror stock entries 0x633594, 0x6a59b8 and 0x726c74 are charged zero. Their own frames (48, 16 and 16 bytes), their direct callees and the direct callees of 0x41a34 are not proved by this budget. Callback and indirect-call stack use is not proved." :: String)
   , "staged_image4_sha256" .= identityText (identity (stagedBytes staged))
   , "candidate_dat_sha256" .= Image4.candidateSha256 candidate
   , "candidate_image4_sha256" .= Image4.candidateImage4Sha256 candidate
@@ -857,20 +841,15 @@ candidateContractValueWith hullRule premises (StagedCandidate staged@(StagedImag
     proof = artifactProof artifact
     names = M.fromList [(entry, name) | FunctionExtent (FunctionName name) entry _ <- artifactFunctions artifact]
     depth address = maybe 0 (\(StackOffset offset) -> negate offset) (M.lookup (GuestAddress address) (proofComposed proof))
-    frameValue (EntryFrame entry@(GuestAddress address) (StackOffset own) calls _ incoming stored _) = object
+    frameValue (EntryFrame entry@(GuestAddress address) (StackOffset own) calls) = object
       [ "entry" .= address
       , "name" .= M.lookup entry names
       , "own_depth_bytes" .= negate own
       , "max_depth_bytes" .= depth address
-      , "incoming_words" .= S.toList incoming
-      , "stored_slots" .= [slotText slot | slot <- S.toList stored]
       , "calls" .=
-          [ object ["site" .= site, "target" .= target, "sp_offset" .= at, "tail" .= (kind `elem` [TailCall, StockLeafTailCall, CallbackTailCall]), "stock" .= (kind `elem` [StockLeafCall, StockLeafTailCall, StockSiteCall]), "callback" .= (kind `elem` [CallbackCall, CallbackTailCall])]
+          [ object ["site" .= site, "target" .= target, "sp_offset" .= at, "tail" .= (kind `elem` [TailCall, StockLeafTailCall, CallbackTailCall]), "stock" .= (kind `elem` [StockLeafCall, StockLeafTailCall]), "callback" .= (kind `elem` [CallbackCall, CallbackTailCall])]
           | CallEdge (GuestAddress site) (GuestAddress target) (StackOffset at) kind <- calls
           ]
       ]
-    slotText slot = case slot of
-      ArgumentRegister register -> A.regName register :: String
-      ArgumentStackWord offset -> "sp+" ++ show offset
     reasonText reason = case reason of
       HighEntropyData -> "high-entropy-data" :: String

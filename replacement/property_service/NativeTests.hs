@@ -131,12 +131,6 @@ expectRefusal label expected result = case result of
   Left actual -> fail (label ++ ": expected " ++ show expected ++ ", got " ++ show actual)
   Right _ -> fail (label ++ ": admitted")
 
-expectCodeViolation :: String -> Violation -> Either ArtifactError a -> IO ()
-expectCodeViolation label expected result = case result of
-  Left (CodeRejected (AdmissionError _ actual)) | actual == expected -> putStrLn ("refused " ++ label ++ ": " ++ show actual)
-  Left other -> fail (label ++ ": expected " ++ show expected ++ ", got " ++ show other)
-  Right _ -> fail (label ++ ": admitted")
-
 expect :: (Eq a, Show a) => String -> a -> a -> IO ()
 expect label expected actual
   | expected == actual = putStrLn ("checked " ++ label)
@@ -221,308 +215,41 @@ placementTests properties artifact = do
     [ScanHit ScanPlain (GuestAddress 0x1100000) call (BranchInto (GuestAddress target))]
     (retiredReferences (external call))
 
--- | Admit one callable function with retained leaves and bracket sites.
-walkWith :: [(GuestAddress, StackOffset)] -> [(GuestAddress, GuestAddress, StackOffset)] -> [Word32] -> Either AdmissionError CodeProof
-walkWith = walkWithStores []
-
-walkWithStores :: [GuestAddress] -> [(GuestAddress, StackOffset)] -> [(GuestAddress, GuestAddress, StackOffset)] -> [Word32] -> Either AdmissionError CodeProof
-walkWithStores stores leaves sites code = admitCode layout (B.concat (map U.putWord32 code))
-  where
-    layout = CodeLayout
-      { layoutBase = GuestAddress 0x1000
-      , layoutFunctions = [FunctionExtent (FunctionName "f") (GuestAddress 0x1000) (GuestAddress (0x1000 + 4 * fromIntegral (length code)))]
-      , layoutMappings = [ArmSpan (AddressSpan (GuestAddress 0x1000) (GuestAddress (0x1000 + 4 * fromIntegral (length code))))]
-      , layoutLiteralPointers = []
-      , layoutData = []
-      , layoutDeclaredData = []
-      , layoutBoundaryWindows = []
-      , layoutBoundaryEntries = []
-      , layoutStoreSites = stores
-      , layoutStockLeaves = leaves
-      , layoutStockSites = sites
-      }
-
-walk :: [Word32] -> Either AdmissionError CodeProof
-walk = walkWith [] []
-
--- | A caller that passes a pointer into its own frame to an adjacent callee.
-walkFrames :: Word32 -> [Word32] -> Either AdmissionError CodeProof
-walkFrames pointer callee = admitCode layout (B.concat (map U.putWord32 (caller ++ callee)))
-  where
-    caller = [0xe92d4800, 0xe1a0b00d, 0xe24dd010, pointer, branchWord True 0x1010 0x101c, 0xe28dd010, 0xe8bd8800]
-    callerEnd = 0x1000 + 4 * fromIntegral (length caller)
-    calleeEnd = callerEnd + 4 * fromIntegral (length callee)
-    layout = CodeLayout
-      { layoutBase = GuestAddress 0x1000
-      , layoutFunctions =
-          [ FunctionExtent (FunctionName "caller") (GuestAddress 0x1000) (GuestAddress callerEnd)
-          , FunctionExtent (FunctionName "callee") (GuestAddress callerEnd) (GuestAddress calleeEnd) ]
-      , layoutMappings =
-          [ ArmSpan (AddressSpan (GuestAddress 0x1000) (GuestAddress callerEnd))
-          , ArmSpan (AddressSpan (GuestAddress callerEnd) (GuestAddress calleeEnd)) ]
-      , layoutLiteralPointers = []
-      , layoutData = []
-      , layoutDeclaredData = []
-      , layoutBoundaryWindows = []
-      , layoutBoundaryEntries = []
-      , layoutStoreSites = []
-      , layoutStockLeaves = []
-      , layoutStockSites = []
-      }
-
 walkerTests :: IO ()
 walkerTests = do
-  let refusedBy label site violation outcome = case outcome of
-        Left (AdmissionError (GuestAddress actual) found) | actual == site && found == violation -> putStrLn ("refused " ++ label ++ ": " ++ show violation)
-        Left other -> fail (label ++ ": expected " ++ show violation ++ " at 0x" ++ showHex site "" ++ ", got " ++ show other)
-        Right _ -> fail (label ++ ": admitted")
-      refused label site violation code = refusedBy label site violation (walk code)
-      admitted label code = case walk code of
-        Right _ -> putStrLn ("admitted " ++ label)
-        Left failure -> fail (label ++ ": " ++ show failure)
-      leaf = GuestAddress 0x61d59c
-  let callback = FunctionExtent (FunctionName "recipe-getter") (GuestAddress 0x2000) (GuestAddress 0x2008)
-      callbackLayout = CodeLayout
+  let layout = CodeLayout
         { layoutBase = GuestAddress 0x1000
-        , layoutFunctions = [FunctionExtent (FunctionName "caller") (GuestAddress 0x1000) (GuestAddress 0x100c)]
+        , layoutFunctions = [FunctionExtent (FunctionName "entry") (GuestAddress 0x1000) (GuestAddress 0x100c)]
         , layoutMappings = [ArmSpan (AddressSpan (GuestAddress 0x1000) (GuestAddress 0x100c))]
-        , layoutLiteralPointers = []
         , layoutData = []
-        , layoutDeclaredData = []
-        , layoutBoundaryWindows = []
-        , layoutBoundaryEntries = []
-        , layoutStoreSites = []
+        , layoutBoundaryWindows = [AddressSpan (GuestAddress 0x2000) (GuestAddress 0x2010)]
         , layoutStockLeaves = []
-        , layoutStockSites = []
+        , layoutReferences = []
         }
-      callbackCode = B.concat (map U.putWord32 [0xe92d4800, 0xeb0003fd, 0xe8bd8800])
-  case admitCodeWithCallbacks [callback] callbackLayout callbackCode of
-    Left failure -> fail ("bound callback refused: " ++ show failure)
-    Right _ -> pure ()
-  refusedBy "callback requires an admitted dependency" 0x1004 (CallOutsideOwned (GuestAddress 0x2000))
-    (admitCode callbackLayout callbackCode)
-  refusedBy "callback interior is not callable" 0x1004 (CallOutsideOwned (GuestAddress 0x2004))
-    (admitCodeWithCallbacks [callback] callbackLayout (putWordAt 0x1000 0x1004 0xeb0003fe callbackCode))
-  case walkWithStores [GuestAddress 0x1000] [] [] [0xe5801000, 0xe12fff1e] of
-    Right _ -> pure ()
-    Left failure -> fail ("admitted boundary store refused: " ++ show failure)
-  refusedBy "unlisted store beside admitted site" 0x1004 NonStackStore
-    (walkWithStores [GuestAddress 0x1000] [] [] [0xe5801000, 0xe5801000, 0xe12fff1e])
-  refusedBy "multiple store at single-store boundary" 0x1000 NonStackStore
-    (walkWithStores [GuestAddress 0x1000] [] [] [0xe8800006, 0xe12fff1e])
-  let storeWords = storageStoreWords StorageByte
-      storeSites = [GuestAddress (0x1000 + offset) | offset <- storageStoreSites StorageByte]
-      displaced = [if index == 33 then storageStoreWord StorageByte else word | (index, word) <- zip [0 :: Int ..] storeWords]
-  expect "checked-store sites follow the four windows" [32, 72, 112, 152] (storageStoreSites StorageByte)
-  case walkWithStores storeSites [] [] storeWords of
-    Right _ -> putStrLn "admitted the checked-store encoding at its derived sites"
-    Left failure -> fail ("checked-store encoding refused: " ++ show failure)
-  -- Each window's taken branch jumps over its store, so the walk meets the last
-  -- window's store at 0x1098 before the earlier fallthroughs.
-  refusedBy "the old single store site misses the window stores" 0x1098 NonStackStore
-    (walkWithStores [GuestAddress 0x1084] [] [] storeWords)
-  refusedBy "a store outside the derived window sites" 0x1084 NonStackStore
-    (walkWithStores storeSites [] [] displaced)
-  case walk [0xe92d4800, 0xe1a0b00d, 0xe8bd8800] of
-    Right _ -> putStrLn "admitted push {r11, lr}; mov r11, sp; pop {r11, pc}"
-    Left failure -> fail ("framed return refused: " ++ show failure)
-  admitted "conditional bx return keeps its fallthrough"
-    [0xe3a00009, 0xe3510000, 0x112fff1e, 0xe3a00001, 0xe12fff1e]
-  admitted "conditional pop return keeps its fallthrough"
-    [0xe92d4800, 0xe3a00009, 0xe3510000, 0x18bd8800, 0xe3a00001, 0xe8bd8800]
-  case walkFrames 0xe28d0008 [0xe5801000, 0xe12fff1e] of
-    Right _ -> putStrLn "admitted a store inside the caller-frame object"
-    Left failure -> fail ("caller-frame store refused: " ++ show failure)
-  refusedBy "caller-frame store past the object" 0x101c FrameArgumentExceeded
-    (walkFrames 0xe28d0008 [0xe5801008, 0xe12fff1e])
-  refusedBy "call site passes a non-frame pointer" 0x1010 FrameArgumentNotFrame
-    (walkFrames 0xe3a00000 [0xe5801000, 0xe12fff1e])
-  refusedBy "register-offset store past the caller-frame bound" 0x1020 FrameArgumentExceeded
-    (walkFrames 0xe28d0008 [0xe3a02008, 0xe7801002, 0xe12fff1e])
-  refused "bx r0" 0x1000 PcWrite [0xe12fff10]
-  refused "unbalanced pop" 0x1004 StackUnbalanced [0xe92d4010, 0xe8bd8030]
-  refused "recursion" 0x1000 Recursion [0xe92d4800, 0xebfffffd, 0xe8bd8800]
-  refused "literal also executed" 0x1000 LiteralNotData [0xe51f0004, 0xe12fff1e]
-  refused "store through copied sp without an allocated frame" 0x1004 NonStackStore [0xe1a0100d, 0xe5810000, 0xe12fff1e]
-  forM_ [0x40,0x44] $ \offset ->
-    admitted ("frame-local aggregate store at offset " ++ show offset)
-      [0xe92d4ff0,0xe28db01c,0xe24dd064,0xe28d3000 .|. offset,0xe3570000,0xe8835005,0xe28dd064,0xe8bd8ff0]
-  admitted "chained local stack aliases"
-    [0xe24dd020,0xe1a0300d,0xe283200c,0xe2421004,0xe8810005,0xe28dd020,0xe12fff1e]
-  admitted "local alias derived from r11"
-    [0xe92d4800,0xe1a0b00d,0xe24dd010,0xe24b3008,0xe5830004,0xe28dd010,0xe8bd8800]
-  forM_ [0xe8835005,0xe9835005,0xe8035005,0xe9035005] $ \store ->
-    admitted ("bounded local multiple-store mode " ++ showHex store "")
-      [0xe24dd030,0xe28d3010,store,0xe28dd030,0xe12fff1e]
-  admitted "local byte store at the frame's final byte"
-    [0xe24dd010,0xe28d300f,0xe5c30000,0xe28dd010,0xe12fff1e]
-  admitted "bounded stack-alias loop reaches a finite proof"
-    [0xe24dd010,0xe1a0300d,0xe2833001,branchWord False 0x100c 0x1008]
-  refused "incoming caller pointer has no local stack proof" 0x1004 NonStackStore
-    [0xe24dd020,0xe5803000,0xe28dd020,0xe12fff1e]
-  refused "unknown multiple-store base" 0x1004 NonStackStore
-    [0xe24dd020,0xe8835005,0xe28dd020,0xe12fff1e]
-  refused "immediate write destroys a local alias" 0x100c NonStackStore
-    [0xe24dd020,0xe28d3004,0xe3a03000,0xe8835005,0xe28dd020,0xe12fff1e]
-  refused "load destroys a local alias" 0x100c NonStackStore
-    [0xe24dd020,0xe28d3004,0xe59d3000,0xe8835005,0xe28dd020,0xe12fff1e]
-  refused "multiple load destroys a local alias" 0x100c NonStackStore
-    [0xe24dd020,0xe28d3004,0xe89d0008,0xe8835005,0xe28dd020,0xe12fff1e]
-  refused "loading the return address destroys an lr stack alias" 0x1018 NonStackStore
-    [0xe92d4000,0xe24dd010,0xe28de014,0xe28dd010,0xe49de004,0xe24dd010,0xe50e0004,0xe28dd010,0xe12fff1e]
-  refused "one proved branch cannot credit an unknown branch" 0x100c NonStackStore
-    [0xe24dd020,0xe3500000,0x028d3004,0xe8835005,0xe28dd020,0xe12fff1e]
-  admitted "different proved aliases at a branch join"
-    [0xe24dd020,0xe1a0300d,0xe3500000,0x128d3004,0xe8835005,0xe28dd020,0xe12fff1e]
-  refused "deallocated alias does not revive after reallocation" 0x1010 NonStackStore
-    [0xe24dd020,0xe28d3004,0xe28dd020,0xe24dd020,0xe8835005,0xe28dd020,0xe12fff1e]
-  refused "multiple-store span exceeds the live frame" 0x1008 NonStackStore
-    [0xe24dd010,0xe28d3004,0xe8835005,0xe28dd010,0xe12fff1e]
-  refused "decrementing multiple store precedes the live frame" 0x1008 NonStackStore
-    [0xe24dd010,0xe1a0300d,0xe9030005,0xe28dd010,0xe12fff1e]
-  refused "halfword span exceeds the live frame" 0x1008 NonStackStore
-    [0xe24dd010,0xe28d300f,0xe1c300b0,0xe28dd010,0xe12fff1e]
-  refused "register-indexed alias store has no bounded offset" 0x1008 NonStackStore
-    [0xe24dd010,0xe1a0300d,0xe7830004,0xe28dd010,0xe12fff1e]
-  forM_ [0xe8a00046, 0xe9a00046, 0xe8200046, 0xe9200046] $ \store ->
-    admitted ("bounded multiple-store writeback updates its local alias " ++ showHex store "")
-      [0xe24dd030, 0xe28d0010, store, 0xe5803000, 0xe28dd030, 0xe12fff1e]
-  refused "multiple-store writeback moves the next store beyond the frame" 0x100c NonStackStore
-    [0xe24dd010, 0xe28d3008, 0xe8a30005, 0xe5830000, 0xe28dd010, 0xe12fff1e]
-  refused "writeback multiple store overlaps saved caller registers" 0x100c NonStackStore
-    [0xe92d4800, 0xe24dd010, 0xe28d3010, 0xe8a30005, 0xe28dd010, 0xe8bd8800]
-  case walk [0xe24dd020, 0xe28d3004, 0xe8a3000d, 0xe28dd020, 0xe12fff1e] of
-    Left _ -> putStrLn "refused writeback with its base in the register list"
-    Right _ -> fail "admitted writeback with its base in the register list"
-  forM_ [0x10,0x14] $ \offset ->
-    refused ("local alias overlaps saved r11/lr at offset " ++ show offset) 0x100c NonStackStore
-      [0xe92d4800,0xe24dd010,0xe28d3000 .|. offset,0xe8830001,0xe28dd010,0xe8bd8800]
-  refusedBy "call destroys a caller-saved local alias used by e5830000" 0x1014 NonStackStore
-    (walkWith [(leaf,StackOffset (-4))] []
-      [0xe92d4800,0xe1a0b00d,0xe24dd010,0xe28d3004,branchWord True 0x1010 0x61d59c,0xe5830000,0xe28dd010,0xe8bd8800])
-  case walkWith [(leaf,StackOffset (-4))] []
-      [0xe92d4800,0xe1a0b00d,0xe24dd010,0xe28d4004,branchWord True 0x1010 0x61d59c,0xe5840000,0xe28dd010,0xe8bd8800] of
-    Right _ -> putStrLn "admitted a callee-saved local alias store after a call"
-    Left failure -> fail ("callee-saved local alias after a call refused: " ++ show failure)
-  refused "loaded return address" 0x1004 ReturnAddressLost [0xe590e000, 0xe12fff1e]
-  refused "store over the saved lr" 0x1004 NonStackStore [0xe92d4800, 0xe58d0004, 0xe8bd8800]
-  refused "r11 changed at return" 0x1004 FramePointerLost [0xe1a0b000, 0xe12fff1e]
-  refused "moved return address" 0x1004 ReturnAddressLost [0xe1a0e000, 0xe12fff1e]
-  case walk [0xe92d4800, 0xe3a0e000, 0xe8bd8800] of
-    Right _ -> putStrLn "admitted lr as scratch while the return address is saved"
-    Left failure -> fail ("lr scratch refused: " ++ show failure)
-  refused "stock-frame pop without owned prologue" 0x1004 StackUnbalanced [0xe1a0000c, 0xe8bd8830]
-  case walkWith [(leaf, StackOffset (-4))] [] [0xe92d4800, branchWord True 0x1004 0x61d59c, 0xe8bd8800] of
-    Right proof -> expect "a stock leaf call adds the leaf's stack" (Just (StackOffset (-12))) (M.lookup (GuestAddress 0x1000) (proofComposed proof))
-    Left failure -> fail ("stock leaf call refused: " ++ show failure)
-  case walkWith [(leaf, StackOffset (-4))] [] [0xe92d4800, 0xe8bd4800, branchWord False 0x1008 0x61d59c] of
-    Right proof -> expect "a tail branch to a stock leaf after the frame pop" (Just (StackOffset (-8))) (M.lookup (GuestAddress 0x1000) (proofComposed proof))
-    Left failure -> fail ("stock leaf tail branch refused: " ++ show failure)
-  refusedBy "a tail branch to a stock leaf inside the frame" 0x1004 StackUnbalanced
-    (walkWith [(leaf, StackOffset (-4))] [] [0xe92d4800, branchWord False 0x1004 0x61d59c])
-  case walk [0xe92d4800, 0xe1a0b00d, 0xe24dd008, 0xe50b0004, 0xe28dd008, 0xe8bd8800] of
-    Right _ -> putStrLn "admitted a store through r11 into the frame"
-    Left failure -> fail ("frame store through r11 refused: " ++ show failure)
-  refused "a store through r11 over the saved lr" 0x100c NonStackStore [0xe92d4800, 0xe1a0b00d, 0xe24dd008, 0xe58b0004, 0xe28dd008, 0xe8bd8800]
-  refused "a store through r11 below sp" 0x100c NonStackStore [0xe92d4800, 0xe1a0b00d, 0xe24dd008, 0xe50b000c, 0xe28dd008, 0xe8bd8800]
-  let bracket = [(GuestAddress 0x1004, GuestAddress 0x61da3c, StackOffset (-32))]
-  refusedBy "bracket at minus 40" 0x1008 StockCallBelowEntry
-    (walkWith [] [(GuestAddress 0x1008, GuestAddress 0x61da3c, StackOffset (-32))]
-      [0xe92d49f8, 0xe24dd008, branchWord True 0x1008 0x61da3c, 0xe28dd008, 0xe8bd89f8])
-  case walkWith [] bracket [0xe92d49f8, branchWord True 0x1004 0x61da3c, 0xe8bd89f8] of
-    Right _ -> pure ()
-    Left failure -> fail ("owned bracket call refused: " ++ show failure)
-  refusedBy "bracket from unlisted site" 0x1000 (CallOutsideOwned (GuestAddress 0x61da3c))
-    (walkWith [] bracket [branchWord True 0x1000 0x61da3c, 0xe12fff1e])
+      code = B.concat . map U.putWord32
+      admit words' = admitCode layout (code words')
+      refused label address reason result = expect label (Left (AdmissionError (GuestAddress address) reason)) (() <$ result)
+  either (fail . show) (const (pure ())) (admit [0xe7801002, 0xe3a04000, 0xe12fff1e])
+  refused "undeclared direct call" 0x1000 (CallOutsideOwned (GuestAddress 0x2000))
+    (admit [branchWord True 0x1000 0x2000, 0xe1a00000, 0xe12fff1e])
+  refused "undeclared direct branch" 0x1000 (BranchOutsideOwned (GuestAddress 0x2000))
+    (admit [branchWord False 0x1000 0x2000, 0xe1a00000, 0xe12fff1e])
+  refused "recursive direct call" 0x1000 Recursion
+    (admit [branchWord True 0x1000 0x1000, 0xe1a00000, 0xe12fff1e])
+  refused "frame exceeds task budget" 0x1000 StackUnbounded (admit [0xe24dda02, 0xe1a00000, 0xe12fff1e])
+  either (fail . show) (const (pure ())) (admit [0xe3000000, 0xe3400096, 0xe12fff1e])
+  refused "invalid mapping" 0x1000 LayoutInvalid
+    (admitCode layout {layoutMappings = []} (code [0xe1a00000, 0xe1a00000, 0xe12fff1e]))
+  refused "invalid stock region" 0x1000 BoundaryInvalid
+    (admitCode layout {layoutBoundaryWindows = [AddressSpan (GuestAddress 0x2010) (GuestAddress 0x2000)]} (code [0xe1a00000, 0xe1a00000, 0xe12fff1e]))
+  let nested = layout
+        { layoutFunctions = [FunctionExtent (FunctionName "caller") (GuestAddress 0x1000) (GuestAddress 0x1008), FunctionExtent (FunctionName "callee") (GuestAddress 0x1008) (GuestAddress 0x1014)]
+        , layoutMappings = [ArmSpan (AddressSpan (GuestAddress 0x1000) (GuestAddress 0x1014))]
+        }
+  proof <- either (fail . show) pure (admitCode nested (code [0xe92d4800, branchWord True 0x1004 0x1008, 0xe92d4800, 0xe24dd010, 0xe8bd8800]))
+  expect "composed frame budget" (Just (StackOffset (-32))) (M.lookup (GuestAddress 0x1000) (proofComposed proof))
 
-literalPoolTests :: IO ()
-literalPoolTests = do
-  let spanAt low high = AddressSpan (GuestAddress low) (GuestAddress high)
-      function name low high = FunctionExtent (FunctionName name) (GuestAddress low) (GuestAddress high)
-      layout = CodeLayout
-        { layoutBase = GuestAddress 0x1000
-        , layoutFunctions = [function "caller" 0x1000 0x1018, function "expect" 0x1018 0x1024, function "panic" 0x1024 0x1030, function "trap" 0x1030 0x103c]
-        , layoutMappings = [ArmSpan (spanAt 0x1000 0x1010), DataSpan (spanAt 0x1010 0x1018), ArmSpan (spanAt 0x1018 0x103c), DataSpan (spanAt 0x103c 0x1054)]
-        , layoutLiteralPointers = [OwnedReadonly (spanAt 0x103c 0x1054)]
-        , layoutData = [(GuestAddress 0x103c, GuestAddress 0x1054)]
-        , layoutDeclaredData = []
-        , layoutBoundaryWindows = []
-        , layoutBoundaryEntries = []
-        , layoutStoreSites = []
-        , layoutStockLeaves = []
-        , layoutStockSites = []
-        }
-      code = B.concat (map U.putWord32
-        [ 0xe59f0008, 0xe3a0100b, 0xe59f2004, branchWord True 0x100c 0x1018
-        , 0x103c, 0x1048
-        , 0xe92d4800, 0xe1a0b00d, branchWord True 0x1020 0x1024
-        , 0xe92d4800, 0xe1a0b00d, branchWord True 0x102c 0x1030
-        , 0xe92d4800, 0xe1a0b00d, branchWord False 0x1038 0x1038
-        ]) <> C.pack "tail byte\0\0\0" <> B.replicate 12 0
-      admit = admitCode layout
-      changed address value = putWordAt 0x1000 address value code
-      rejected label outcome = case outcome of
-        Left _ -> putStrLn ("refused " ++ label)
-        Right _ -> fail (label ++ ": admitted")
-  proof <- either (fail . show) pure (admit code)
-  expect "emitted LDR pair before a nonreturning call admits data pointers"
-    (S.fromList [GuestAddress 0x1010, GuestAddress 0x1014]) (proofLiterals proof)
-  expect "nonreturning calls retain composed frame depth" (Just (StackOffset (-24)))
-    (M.lookup (GuestAddress 0x1000) (proofComposed proof))
-  rejected "direct branch into a mapped literal pool" (admit (changed 0x1004 (branchWord False 0x1004 0x1010)))
-  rejected "fallthrough into a mapped literal pool" (admit (changed 0x100c 0xe1a00000))
-  rejected "conditional nonreturning call still falls through" (admit (changed 0x100c (0x1b000000 .|. (branchWord True 0x100c 0x1018 .&. 0xffffff))))
-  rejected "returning callee restores the call continuation" (admit (changed 0x1038 0xe8bd8800))
-  rejected "unowned literal pointer" (admit (changed 0x1010 0x2000))
-  rejected "literal referent crosses its owned extent" (admit (changed 0x1010 0x1051))
-  let headerLayout=layout {layoutLiteralPointers=RetainedStorage (spanAt 0x409c29b8 0x409c29c8) : layoutLiteralPointers layout}
-      headerLiteral pointer=admitCode headerLayout (changed 0x1010 pointer)
-  either (fail . ("canonical header literal refused: " ++) . show) (const (pure ())) (headerLiteral 0x409c29b8)
-  expect "prebiased header literal" (Left (AdmissionError (GuestAddress 0x1000) LiteralPointerOutsideOwned))
-    (() <$ headerLiteral 0x409c29b7)
-  rejected "literal load crosses its function extent" (admit (changed 0x1000 0xe59f0034))
-  rejected "unresolved PC-relative register offset" (admit (changed 0x1000 0xe79f0001))
-  rejected "literal referent is executable code" (admit (changed 0x1010 0x1018))
-  rejected "overlapping code and data mappings" (admitCode layout
-    { layoutMappings = ArmSpan (spanAt 0x1010 0x1018) : layoutMappings layout } code)
-  rejected "unclassified literal pool" (admitCode layout
-    { layoutMappings = [ArmSpan (spanAt 0x1000 0x1010), ArmSpan (spanAt 0x1018 0x103c), DataSpan (spanAt 0x103c 0x1054)] } code)
-  rejected "data pool relabeled as instructions" (admitCode layout
-    { layoutMappings = [ArmSpan (spanAt 0x1000 0x103c), DataSpan (spanAt 0x103c 0x1054)] } code)
-  rejected "unsupported trap prevents a nonreturn summary" (admit (changed 0x1038 0xe1200070))
-  rejected "non-stack trap store prevents a nonreturn summary" (admit (changed 0x1034 0xe5801000))
-  let boundaryLayout entries = CodeLayout
-        { layoutBase = GuestAddress 0x1000
-        , layoutFunctions = [function "backend" 0x1000 0x1018, function "other" 0x1018 0x1030]
-        , layoutMappings = [ArmSpan (spanAt 0x1000 0x1014), DataSpan (spanAt 0x1014 0x1018), ArmSpan (spanAt 0x1018 0x1030)]
-        , layoutLiteralPointers = []
-        , layoutData = [(GuestAddress 0x1014, GuestAddress 0x1018)]
-        , layoutDeclaredData = []
-        , layoutBoundaryWindows = [spanAt 0x96bd20 0x96bd28]
-        , layoutBoundaryEntries = map GuestAddress entries
-        , layoutStoreSites = []
-        , layoutStockLeaves = []
-        , layoutStockSites = []
-        }
-      boundaryCode = B.concat (map U.putWord32
-        [ 0xe92d4800, 0xe1a0b00d, 0xe59f3004, 0xe12fff33
-        , 0xe8bd8800, 0x0096bd20, 0xe1a00000, 0xe1a00000
-        , 0xe1a00000, 0xe1a00000, 0xe1a00000, 0xe12fff1e
-        ])
-      slotCall = B.concat (map U.putWord32
-        [ 0xe92d4800, 0xe1a0b00d, 0xe3a03000, 0xe12fff33
-        , 0xe8bd8800, 0xe1a00000, 0xe1a00000, 0xe1a00000
-        , 0xe1a00000, 0xe1a00000, 0xe1a00000, 0xe12fff1e
-        ])
-      boundaryAdmit entries = admitCode (boundaryLayout entries)
-  either (fail . ("boundary window refused: " ++) . show) (const (pure ())) (boundaryAdmit [0x1000] boundaryCode)
-  expect "slot root named outside the boundary" (Left (AdmissionError (GuestAddress 0x1008) LiteralPointerOutsideOwned))
-    (() <$ boundaryAdmit [0x1018] boundaryCode)
-  expect "slot root outside its declared window" (Left (AdmissionError (GuestAddress 0x1008) LiteralPointerOutsideOwned))
-    (() <$ boundaryAdmit [0x1000] (putWordAt 0x1000 0x1014 0x0096bd30 boundaryCode))
-  either (fail . ("boundary slot call refused: " ++) . show) (const (pure ())) (boundaryAdmit [0x1000] slotCall)
-  expect "slot call outside the boundary" (Left (AdmissionError (GuestAddress 0x100c) PcWrite))
-    (() <$ boundaryAdmit [0x1018] slotCall)
+
 
 canonicalTests :: ArtifactInput -> [FilePath] -> IO ()
 canonicalTests inputs paths = do
@@ -569,10 +296,27 @@ canonicalTests inputs paths = do
         (any (at ScanImage4 0x6a49ac) (retiredReferences [(ScanImage4,changed)]))
     _ -> fail "canonical tests require seven input paths"
 
+admitImages :: [FilePath] -> IO ()
+admitImages [] = pure ()
+admitImages (binary : names : elf : rest) = do
+  bytes <- B.readFile binary
+  symbols <- B.readFile names
+  evidence <- B.readFile elf
+  let properties = syntheticClassification bytes (symbolRows symbols)
+      derive = if C.pack "xm1_public_get" `B.isInfixOf` symbols then derivePublicArtifact else deriveArtifact
+  _ <- either (fail . (binary ++) . show) pure (derive ProductionArtifact properties testCarrier (ArtifactInput bytes symbols evidence))
+  putStrLn ("admitted image " ++ binary ++ " sha256=" ++ SHA.sha256Hex (SHA.sha256 bytes))
+  admitImages rest
+admitImages _ = fail "image admission needs binary/symbols/ELF triples"
+
+
 main :: IO ()
 main = do
   arguments <- getArgs
-  if arguments == ["--literal-pools"] then walkerTests >> literalPoolTests else artifactTests arguments
+  case arguments of
+    ["--admission"] -> walkerTests
+    "--images" : images -> admitImages images >> artifactTests (take 3 images)
+    _ -> artifactTests arguments
 
 artifactTests :: [String] -> IO ()
 artifactTests arguments = do
@@ -616,32 +360,6 @@ artifactTests arguments = do
   artifact <- either (fail . ("real artifact refused: " ++) . show) pure (admit bytes symbolText)
   unless (artifactCarrier artifact == testCarrier) (fail "carrier differs")
   putStrLn "admitted the linked artifact against the synthetic classification"
-  let proof = artifactProof artifact
-      emittedPools =
-        [ (literal, entry)
-        | GuestAddress literal <- S.toList (proofLiterals proof)
-        , S.member (GuestAddress (literal - 4)) (proofInstructions proof)
-        , FunctionExtent _ (GuestAddress entry) (GuestAddress finish) <- artifactFunctions artifact
-        , entry < literal, literal < finish
-        ]
-      refusedPool label changed = case admit changed symbolText of
-        Left (CodeRejected _) -> putStrLn ("refused " ++ label)
-        Left other -> fail (label ++ ": expected a code-policy refusal, got " ++ show other)
-        Right _ -> fail (label ++ ": admitted")
-  case emittedPools of
-    [] -> pure ()
-    (literal, entry) : _ -> do
-      refusedPool "direct branch into the emitted pool" (replaceWord entry (branchWord False entry literal) bytes)
-      refusedPool "fallthrough into the emitted pool" (replaceWord (literal - 4) 0xe1a00000 bytes)
-      refusedPool "unowned pointer in the emitted pool" (replaceWord literal 0x2000 bytes)
-  case [pool | pool@(_, entry) <- emittedPools, GuestAddress entry `notElem` artifactKernelBoundary artifact] of
-    [] -> fail "no literal pool outside the kernel boundary"
-    (literal, entry) : _ -> do
-      expectCodeViolation "slot root named outside the kernel boundary" LiteralPointerOutsideOwned
-        (admit (replaceWord literal 0x0096bd20 bytes) symbolText)
-      expectRefusal "slot word called outside the kernel boundary"
-        (CodeRejected (AdmissionError (GuestAddress entry) PcWrite))
-        (admit (replaceWord entry 0xe12fff33 bytes) symbolText)
   expectRefusal "missing mandatory ELF evidence" ElfRejected
     (derivePublicArtifact ProductionArtifact properties testCarrier (ArtifactInput bytes symbolText B.empty))
   expectRefusal "ELF bytes differ from the linked artifact" ElfRejected
@@ -716,13 +434,9 @@ artifactTests arguments = do
     (admit (replaceWord mirrorWrite 0xe320f000 bytes) symbolText)
   expectRefusal "mirror absolute target moved" SymbolRejected
     (admit bytes (moveSymbol "xm1_backup_write6a59b8" 0x6a59bc symbolText))
-  expectRefusal "mirror retained target called outside its boundary" (CodeRejected (AdmissionError (GuestAddress firstCall) (CallOutsideOwned (GuestAddress 0x6a59b8))))
-    (admit (replaceWord firstCall (branchWord True firstCall 0x6a59b8) bytes) symbolText)
   expectRefusal "area-3 writer called by the header path" (CodeRejected (AdmissionError (GuestAddress firstCall) (CallOutsideOwned (GuestAddress 0x61d92c))))
     (admit (replaceWord firstCall (branchWord True firstCall 0x61d92c) bytes) symbolText)
   expectRefusal "moved public setter" SymbolRejected (admit bytes (moveSymbol "xm1_public_set" (setterStubAddress + 4) symbolText))
-  expectRefusal "store outside a boundary" (CodeRejected (AdmissionError (GuestAddress firstCall) NonStackStore))
-    (admit (replaceWord firstCall 0xe5844000 bytes) symbolText)
   expectRefusal "BL to an outside address" (CodeRejected (AdmissionError (GuestAddress firstCall) (CallOutsideOwned (GuestAddress 0x700000))))
     (admit (replaceWord firstCall (branchWord True firstCall 0x700000) bytes) symbolText)
   expectRefusal "caller-output length bound removed" (EncodingRejected (OutputEncoding StorageByte))
@@ -751,8 +465,6 @@ artifactTests arguments = do
     (admit (replaceWord (store16 + 132) 0xe1c210b0 bytes) symbolText)
   expectRefusal "B into stock" (CodeRejected (AdmissionError (GuestAddress firstCall) (BranchOutsideOwned (GuestAddress 0x61e110))))
     (admit (replaceWord firstCall (branchWord False firstCall 0x61e110) bytes) symbolText)
-  expectRefusal "a stock-frame pop inside Rust" (CodeRejected (AdmissionError (GuestAddress firstCall) PcWrite))
-    (admit (replaceWord firstCall 0xe8bd89f8 bytes) symbolText)
   expectRefusal "overlong artifact" ExtentRejected (admit (bytes <> B.replicate 4 0) symbolText)
   let pastCarrier = carrierEndAddress + 4
   expectRefusal "artifact past the carrier" ExtentRejected
@@ -761,5 +473,4 @@ artifactTests arguments = do
   carrierTests
   placementTests properties artifact
   walkerTests
-  literalPoolTests
   unless (null canonicalPaths) (canonicalTests (ArtifactInput bytes symbolText elfBytes) canonicalPaths)

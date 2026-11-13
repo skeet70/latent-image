@@ -5,7 +5,6 @@ load("//build-support:rust_source_boundary.bzl", "rust_source_boundary_test")
 
 package(default_visibility = ["//visibility:public"])
 
-# The native runner refuses unaligned accesses, and admission refuses computed branches.
 _RUSTC_FLAGS = ["-C", "jump-tables=no", "--extern", "xm1_settings_storage_core=$(location //replacement/settings_storage:property-core)"]
 
 _RUST_DATA = [
@@ -117,7 +116,7 @@ xm1_rust_elf(
     asm_srcs = ["entry.S", "storage-boundary.S"],
     entry = "xm1_property_get_entry",
     link_script = "property-service.ld",
-    extra_ldflags = ["-Wl,--gc-sections"],
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
 )
 
 # The same owned body behind the two public wrappers the stock image calls.
@@ -127,7 +126,7 @@ xm1_rust_elf(
     asm_srcs = ["entry-public.S", "storage-boundary.S"],
     entry = "xm1_public_get",
     link_script = "property-service-public.ld",
-    extra_ldflags = ["-Wl,--gc-sections"],
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
 )
 
 # The rlib the image links, in its carrier layout, for the oracle and the judge.
@@ -148,7 +147,7 @@ xm1_rust_elf(
     asm_srcs = ["entry-public.S", "storage-boundary.S"],
     entry = "xm1_public_get",
     link_script = "property-service-public.ld",
-    extra_ldflags = ["-Wl,--gc-sections"],
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
 )
 
 [
@@ -170,7 +169,7 @@ xm1_rust_elf(
         asm_srcs = ["entry.S", "storage-boundary.S"],
         entry = "xm1_property_get_entry",
         link_script = "property-service.ld",
-        extra_ldflags = ["-Wl,--gc-sections"],
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
     )
     for defect in _DEFECTS
 ]
@@ -182,7 +181,7 @@ xm1_rust_elf(
         asm_srcs = ["entry-public.S", "storage-boundary.S"],
         entry = "xm1_public_get",
         link_script = "property-service-public.ld",
-        extra_ldflags = ["-Wl,--gc-sections"],
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
     )
     for defect in _DEFECTS
 ]
@@ -220,7 +219,7 @@ _LINKED_DEFECTS = ["storage_open_removed", "storage_close_before_set", "nonzero_
         asm_srcs = ["entry-public.S", "storage-boundary.S"],
         entry = "xm1_public_get",
         link_script = "property-service-public.ld",
-        extra_ldflags = ["-Wl,--gc-sections"],
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
     )
     for defect in _LINKED_DEFECTS
 ]
@@ -247,7 +246,7 @@ _LINKED_DEFECTS = ["storage_open_removed", "storage_close_before_set", "nonzero_
         asm_srcs = ["entry.S", "storage-boundary.S"],
         entry = "xm1_property_get_entry",
         link_script = "property-service.ld",
-        extra_ldflags = ["-Wl,--gc-sections"],
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
     )
     for variant in PROPERTY_STORAGE_VARIANTS
 ]
@@ -343,11 +342,18 @@ haskell_test(
     srcs = ["Tests.hs"],
     main_file = "Tests.hs",
     args = [
+        "--images",
         "$(rootpath :property-service-image.bin)",
         "$(rootpath :property-service-image.symbols)",
         "$(rootpath :property-service-image.elf)",
+        "$(rootpath :property-service-public-image.bin)",
+        "$(rootpath :property-service-public-image.symbols)",
+        "$(rootpath :property-service-public-image.elf)",
+        "$(rootpath :property-service-linked-image.bin)",
+        "$(rootpath :property-service-linked-image.symbols)",
+        "$(rootpath :property-service-linked-image.elf)",
     ],
-    data = [":property-service-image.bin", ":property-service-image.symbols", ":property-service-image.elf"],
+    data = [":" + image + extension for image in ["property-service-image", "property-service-public-image", "property-service-linked-image"] for extension in [".bin", ".symbols", ".elf"]],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":classify",
@@ -369,11 +375,18 @@ haskell_test(
     srcs = ["NativeTests.hs"],
     main_file = "NativeTests.hs",
     args = [
+        "--images",
         "$(rootpath :property-service-public-image.bin)",
         "$(rootpath :property-service-public-image.symbols)",
         "$(rootpath :property-service-public-image.elf)",
+        "$(rootpath :property-service-image.bin)",
+        "$(rootpath :property-service-image.symbols)",
+        "$(rootpath :property-service-image.elf)",
+        "$(rootpath :property-service-linked-image.bin)",
+        "$(rootpath :property-service-linked-image.symbols)",
+        "$(rootpath :property-service-linked-image.elf)",
     ],
-    data = [":property-service-public-image.bin", ":property-service-public-image.symbols", ":property-service-public-image.elf"],
+    data = [":" + image + extension for image in ["property-service-image", "property-service-public-image", "property-service-linked-image"] for extension in [".bin", ".symbols", ".elf"]],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":classify",
@@ -391,10 +404,10 @@ haskell_test(
 )
 
 haskell_test(
-    name = "property-service-literal-tests",
+    name = "property-service-admission-tests",
     srcs = ["Tests.hs"],
     main_file = "Tests.hs",
-    args = ["--literal-pools"],
+    args = ["--admission"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":classify",

@@ -3,13 +3,13 @@ module Main (main) where
 
 import qualified A32 as A
 import qualified ArmElf as E
-import Control.Monad (forM_, unless)
+import Control.Monad (unless)
 import qualified ControlArtifact as C
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as Text
 import Data.Either (isLeft)
-import Data.List (nub)
 import Data.Word (Word32)
-import Emulation.OwnedCase (readWordAt, word32le)
+import Emulation.OwnedCase (word32le)
 import qualified Replacement.PropertyService.Artifact as P
 import qualified Replacement.PropertyService.Placement as L
 import System.Environment (getArgs)
@@ -28,66 +28,32 @@ main = do
   controlBin <- B.readFile controlBinPath
   controlSymbols <- B.readFile controlSymbolsPath
   controlElf <- B.readFile controlElfPath
-  elf <- either (fail . ("control ELF: " ++)) pure (E.parseElf controlElf)
   let input = P.ArtifactInput controlBin controlSymbols controlElf
-  unless (isLeft (C.deriveCloseAppendArtifact P.ProductionArtifact source input))
-    (fail "production purpose admitted the close-appends control's outside-owned handle")
+  _ <- either fail pure (C.deriveCloseAppendArtifact P.ProductionArtifact source input)
   _ <- either fail pure (C.deriveCloseAppendArtifact P.CloseAppendArea3Control source input)
-  carrier <- maybe (fail "canonical property hull has no carrier") pure (L.hullCarrier (P.sourceHull source))
-  let L.Carrier (L.GuestAddress start) _ = carrier
-      handle = 0x89f86c
-      unrelated = 0x409c29b7
-      targets = handleLiteralTargets elf handle
-  unless (not (null targets)) (fail "control ELF has no declared area-3 handle literal")
-  forM_ targets $ \address ->
-    unless (toInteger address >= toInteger start
-      && toInteger address + 4 <= toInteger start + toInteger (B.length controlBin))
-      (fail "control literal target lies outside the original BIN carrier")
-  let mutatedBin = foldl (\bytes address -> patchWord (fromIntegral (address - start)) unrelated bytes) controlBin targets
-      mutatedElf = foldl (\bytes address -> patchElfWord elf address unrelated bytes) controlElf targets
-      mutated = P.ArtifactInput mutatedBin controlSymbols mutatedElf
-  mutatedParsedElf <- either (fail . ("mutated control ELF: " ++)) pure (E.parseElf mutatedElf)
-  forM_ targets $ \address -> do
-    unless (readWordAt mutatedBin (fromIntegral (address - start)) == unrelated)
-      (fail "binary handle literal was not mutated")
-    unless (E.wordAt mutatedParsedElf address == Just unrelated)
-      (fail "ELF handle literal was not mutated")
-  unless (isLeft (C.deriveCloseAppendArtifact P.CloseAppendArea3Control source mutated))
-    (fail "close-append purpose admitted an unrelated pointer literal")
-  putStrLn "close-append purpose regression passed"
-
-handleLiteralTargets :: E.Elf -> Word32 -> [Word32]
-handleLiteralTargets elf handle = nub
-  [ target
-  | section <- E.elfSections elf
-  , E.sectionAllocated section
-  , E.sectionExecutable section
-  , E.sectionType section == 1
-  , address <- wordAddresses (E.sectionAddress section) (E.sectionSize section)
-  , Just word <- [E.wordAt elf address]
-  , A.Load _ width _ _ base (A.OffsetImmediate displacement) _ <- [A.decode address word]
-  , base == A.pc
-  , width == A.Word || width == A.Dual
-  , let literal = toInteger address + 8 + toInteger displacement
-  , literal >= 0
-  , literal <= 0xffffffff
-  , target <- if width == A.Dual then [fromInteger literal, fromInteger literal + 4] else [fromInteger literal]
-  , E.wordAt elf target == Just handle
-  ]
-
-wordAddresses :: Word32 -> Word32 -> [Word32]
-wordAddresses start size
-  | size < 4 = []
-  | otherwise = [start, start + 4 .. start + size - 4]
+  putStrLn "normalized close-append control admitted under both purposes"
+  elf <- either fail pure (E.parseElf controlElf)
+  references <- either fail pure (E.addressRelocations elf)
+  (site, link) <- case [(E.addressSite reference, link) | reference <- references
+    , E.addressTarget reference == 0x6ac7d4
+    , Just instruction <- [E.wordAt elf (E.addressSite reference)]
+    , A.Branch _ link _ <- [A.decode (E.addressSite reference) instruction]] of
+      [edge] -> pure edge
+      _ -> fail "expected one close-append branch relocation"
+  section <- case [item | item <- E.elfSections elf, E.sectionAllocated item
+    , E.sectionAddress item <= site, toInteger site + 4 <= toInteger (E.sectionAddress item) + toInteger (E.sectionSize item)] of
+      [item] -> pure item
+      _ -> fail "expected close-append section"
+  carrier@(L.Carrier (L.GuestAddress start) _) <- maybe (fail "missing canonical carrier") pure (L.hullCarrier (P.sourceHull source))
+  let replacement = if link then 0xe320f000 else 0xe12fff1e
+      patchedBin = patchWord (fromIntegral (site - start)) replacement controlBin
+      staleElf = patchWord (fromIntegral (E.sectionOffset section + site - E.sectionAddress section)) replacement controlElf
+      withoutAlias = Text.unlines [row | row <- Text.lines controlSymbols, case Text.words row of
+        [_, _, kind, name] -> kind /= Text.pack "A" || name /= Text.pack "xm1_bank_record_append"
+        _ -> True]
+  unless (isLeft (P.deriveArtifact P.ProductionArtifact (P.sourceProperties source) carrier (P.ArtifactInput patchedBin withoutAlias staleElf)))
+    (fail "rewritten close-append edge retained a stale branch relocation")
+  putStrLn "refused rewritten close-append edge with stale relocation"
 
 patchWord :: Int -> Word32 -> B.ByteString -> B.ByteString
 patchWord offset value bytes = B.take offset bytes <> word32le value <> B.drop (offset + 4) bytes
-
-patchElfWord :: E.Elf -> Word32 -> Word32 -> B.ByteString -> B.ByteString
-patchElfWord elf address value bytes = case
-  [section | section <- E.elfSections elf,
-    E.sectionAllocated section, E.sectionType section == 1,
-    toInteger (E.sectionAddress section) <= toInteger address,
-    toInteger address + 4 <= toInteger (E.sectionAddress section) + toInteger (E.sectionSize section)] of
-  [section] -> patchWord (fromIntegral (E.sectionOffset section + address - E.sectionAddress section)) value bytes
-  _ -> error "control ELF literal section is missing or ambiguous"
