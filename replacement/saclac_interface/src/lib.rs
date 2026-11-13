@@ -5,6 +5,7 @@ pub mod exposure;
 pub mod stock;
 pub mod round;
 pub mod calc;
+pub mod shared;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClientCallback(pub(crate) u32);
@@ -440,6 +441,22 @@ pub trait Flash {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LensComOperation { Request2d }
+
+/// A request to lenscom, queue 0x62.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LensComRequest<'a> {
+    pub operation: LensComOperation,
+    pub parameters: Parameters<'a>,
+    pub completions: &'a [Completion],
+}
+
+pub trait LensCom {
+    type Error;
+    fn request(&mut self, request: LensComRequest<'_>) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PeerOperation {
     LensDc(LensDcOperation),
     ImgDc(ImgDcOperation),
@@ -447,6 +464,7 @@ pub enum PeerOperation {
     Calc1(Calc1Operation),
     Statistics(StatisticsOperation),
     Flash(FlashOperation),
+    LensCom(LensComOperation),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -460,7 +478,9 @@ pub const fn lens_effect(operation: PeerOperation) -> LensEffect {
         PeerOperation::LensDc(LensDcOperation::Request07 | LensDcOperation::Request08 | LensDcOperation::Request0c) => LensEffect::DirectDrive,
         PeerOperation::ImgDc(ImgDcOperation::Request2e) => LensEffect::DriveThroughImageBridge,
         PeerOperation::Calc(_) | PeerOperation::Calc1(_) | PeerOperation::Statistics(_) => LensEffect::NoLensDrive,
-        PeerOperation::LensDc(_) | PeerOperation::ImgDc(_) | PeerOperation::Flash(_) => LensEffect::Unclassified,
+        PeerOperation::LensDc(_) | PeerOperation::ImgDc(_) | PeerOperation::Flash(_) | PeerOperation::LensCom(_) => {
+            LensEffect::Unclassified
+        }
     }
 }
 
@@ -470,3 +490,5 @@ mod tests;
 mod exposure_tests;
 #[cfg(test)]
 mod calc_tests;
+#[cfg(test)]
+mod shared_tests;
