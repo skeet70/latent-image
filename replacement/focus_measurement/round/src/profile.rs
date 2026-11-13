@@ -18,9 +18,14 @@ pub struct StatisticsInUse {
     pub auxiliary: bool,
 }
 
-/// A measurement result the round publishes in the shared measurement record.
+/// A measurement result the shared record publishes that the round does not type; invalidating
+/// one clears its first word.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PublishedResult { Acquisition, Search, Auxiliary, Source }
+pub enum PublishedResult {
+    Search,
+    /// The source publication's flag; its summary, means and strength stay.
+    Source,
+}
 
 /// How the profile a record selects chooses its measurement. `Other` carries a
 /// value the round only passes on.
@@ -159,9 +164,9 @@ pub trait ProfileRecords {
     fn set_statistics_in_use(&mut self, record: RecordHandle, in_use: StatisticsInUse);
     /// Detaches the buffer that receives measurement captures.
     fn detach_capture_buffer(&mut self, record: RecordHandle);
-    /// Marks `result` invalid for its readers.
+    /// Clears the first word of `result`'s record.
     fn invalidate(&mut self, record: RecordHandle, result: PublishedResult);
-    /// Marks the published focus result invalid, under the record the focus
+    /// Clears the first word of the published focus result, under the record the focus
     /// controller holds.
     fn invalidate_focus_result(&mut self);
     /// Whether `record`'s grant covers the measurement history's position.
