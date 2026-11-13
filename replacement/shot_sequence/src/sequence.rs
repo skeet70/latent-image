@@ -114,6 +114,7 @@ impl HalfPress {
         self.step = HalfPressStep::Idle;
         if ports.query(Query::LensStatusPending) { ports.effect(Effect::Sequence(S::RecordLensStatus)); }
         ports.reply(Reply { command: CommandKind::HalfPress, record: self.record, status: CompletionStatus(0) });
+        ports.effect(Effect::Sequence(S::Replied));
         Outcome::Complete
     }
 }

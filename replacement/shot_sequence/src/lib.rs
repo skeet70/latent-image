@@ -17,6 +17,7 @@ pub mod pipeline;
 pub mod ports;
 pub mod preparation;
 pub mod sequence;
+pub mod statistics_dump;
 pub mod stock;
 pub mod subjects;
 pub mod summary;
@@ -107,3 +108,5 @@ mod lens_return_tests;
 mod capture_stock_tests;
 #[cfg(test)]
 mod calculation_work_tests;
+#[cfg(test)]
+mod statistics_dump_tests;

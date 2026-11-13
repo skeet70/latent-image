@@ -62,6 +62,8 @@ pub enum SequenceEffect {
     SetRefinementPass(bool),
     RecordLensStatus,
     ReleaseLiveResources,
+    /// The half press has replied its completion.
+    Replied,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
