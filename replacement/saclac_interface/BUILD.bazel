@@ -15,6 +15,7 @@ SOURCES = [
     "src/stock/area_measurement.rs",
     "src/stock/capture_results.rs",
     "src/stock/exposure.rs",
+    "src/stock/statistics.rs",
 ]
 
 xm1_rust_rlib(

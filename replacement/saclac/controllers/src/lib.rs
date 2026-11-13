@@ -3,7 +3,6 @@
 
 pub mod lifecycle;
 pub mod adjustment;
-pub mod statistics;
 pub mod stock;
 pub mod replies;
 pub mod children;
@@ -19,6 +18,10 @@ pub mod live_view;
 pub mod layers;
 pub mod live_profile;
 mod live_autofocus;
+pub mod live_statistics;
+pub mod live_statistics_profile;
+#[cfg(test)]
+mod live_statistics_tests;
 #[cfg(test)]
 mod live_view_tests;
 #[cfg(test)]
@@ -40,8 +43,6 @@ extern crate std;
 mod tests;
 #[cfg(test)]
 mod adjustment_tests;
-#[cfg(test)]
-mod configuration_tests;
 #[cfg(test)]
 mod reply_tests;
 #[cfg(test)]

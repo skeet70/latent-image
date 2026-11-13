@@ -58,7 +58,7 @@ fn record_completion_and_notification_do_not_release_the_lens_client() {
     let mut peer = Peer::default();
     session.request(Request::Reserve(callback(1)), &mut peer);
     session.request(Request::StartRecord {
-        callback: callback(2), buffer: Buffer(9), completion: s::StockCallbackWord(3),
+        callback: callback(2), buffer: Buffer(9), completion: stock::StockCallbackWord(3),
         record: s::RecordStart {
             channel: s::RecordWord(1), mode: s::RecordMode::Default, settings: [s::RecordWord(0);2],
             range: [s::RecordHalfword(0);2], source: s::RecordWord(0),

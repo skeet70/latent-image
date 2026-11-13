@@ -1,7 +1,8 @@
 #![forbid(unsafe_code)]
 
 use crate::adjustment::LensPosition;
-use crate::stock::{RecordHalfword, RecordWord, StockCallbackWord};
+use crate::stock::{RecordHalfword, RecordWord};
+use xm1_saclac_interface::stock::StockCallbackWord;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CaptureMode { Ordinary, ModeSix }

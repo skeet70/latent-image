@@ -1,4 +1,5 @@
-use crate::{capture::*, stock::{RecordHalfword as H, RecordWord as W, StockCallbackWord as C}};
+use crate::{capture::*, stock::{RecordHalfword as H, RecordWord as W}};
+use xm1_saclac_interface::stock::StockCallbackWord as C;
 use std::vec::Vec;
 
 #[derive(Debug, PartialEq)]
