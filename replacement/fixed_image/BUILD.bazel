@@ -1,0 +1,53 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib")
+
+package(default_visibility = ["//visibility:public"])
+
+haskell_library(
+    name = "contract",
+    srcs = ["Replacement/FixedImage/Layout.hs", "Replacement/FixedImage/Record.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = ["//host:base", "//host:bytestring", "//host:update-container"],
+)
+
+haskell_binary(
+    name = "fixed-image-layout",
+    srcs = ["LayoutMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [":contract", "//host:base"],
+)
+
+genrule(
+    name = "memory-region",
+    outs = ["fixed-memory.ld"],
+    tools = [":fixed-image-layout"],
+    cmd = "$(location :fixed-image-layout) memory > $@",
+)
+
+genrule(
+    name = "rust-layout-source",
+    outs = ["layout.rs"],
+    tools = [":fixed-image-layout"],
+    cmd = "printf '#![no_std]\\n' > $@ && $(location :fixed-image-layout) rust >> $@",
+)
+
+xm1_rust_rlib(
+    name = "layout",
+    src = ":layout.rs",
+    crate_name = "xm1_fixed_image_layout",
+)
+
+haskell_test(
+    name = "tests",
+    srcs = ["Tests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [":contract", "//host:base", "//host:bytestring", "//host:update-container"],
+)
+
+haskell_binary(
+    name = "stage-fixed-image",
+    srcs = ["StageMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    deps = [":contract", "//host:aeson", "//host:base", "//host:bytestring", "//host:filepath", "//host:first-stage", "//host:host-support", "//host:update-container"],
+)
