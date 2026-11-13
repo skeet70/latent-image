@@ -39,7 +39,6 @@ module Emulation.Judge
   , FirstDifference (..)
   , milestoneDifference
   , parseReport
-  , milestoneDifference
     -- * Verdicts
   , JudgeInput (..)
   , Firmware (..)
