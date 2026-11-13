@@ -277,6 +277,8 @@ impl Auxiliary {
         let count = u32::from(self.ring.length) + weight;
         let newest = self.ring.newest();
         let sums = self.ring.sums();
+        // Corrected: X-M1 1.50 divides by a zero count through 0x4d978, which traps (spec/11,
+        // measurement round corrections).
         let means: [u32; 3] = core::array::from_fn(|channel| {
             u32::from(newest[channel]).wrapping_mul(weight).wrapping_add(sums[channel]).checked_div(count).unwrap_or(0)
         });
@@ -332,9 +334,14 @@ impl Auxiliary {
     }
 }
 
-/// Of two channel products, 128 when equal.
+/// Of two channel products, 128 when equal; all ones for a zero divisor under a nonzero
+/// dividend, which no band holds.
 fn ratio(numerator: u32, denominator: u32) -> u32 {
-    (u64::from(numerator) << 7).checked_div(u64::from(denominator)).map_or(0, |ratio| ratio as u32)
+    match (u64::from(numerator) << 7).checked_div(u64::from(denominator)) {
+        Some(ratio) => ratio as u32,
+        None if numerator == 0 => 0,
+        None => u32::MAX,
+    }
 }
 
 fn within(ratio: u32, band: u8) -> bool {
