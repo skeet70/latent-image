@@ -4,6 +4,8 @@ pub mod exposure;
 pub mod statistics;
 pub mod imaging;
 pub mod shared;
+pub mod round_acquisition;
+pub mod round_image;
 
 pub const fn record_handle_from_a2(word: u32) -> RecordHandle { RecordHandle(word) }
 
@@ -669,7 +671,7 @@ pub fn calc_payload(payload: &calc::CalcPayload) -> (CalcOperation, Encoded) {
         P::Search { record, callback } => (CalcOperation::Request09, callback_first(callback, &record.0)),
         P::Image { record, callback } => (CalcOperation::Request0a, callback_first(callback, &record.0)),
         P::Window { request, callback } => (CalcOperation::Request0c, window(request, callback)),
-        P::Source { record, callback } => (CalcOperation::Request11, source(&record.0, callback)),
+        P::Source { request, callback } => (CalcOperation::Request11, source(request, callback)),
         P::Release => (CalcOperation::Request12, Encoded::new(0)),
     }
 }
@@ -679,9 +681,13 @@ pub fn calc_payload(payload: &calc::CalcPayload) -> (CalcOperation, Encoded) {
 pub fn calc1_payload(payload: &calc::Calc1Payload) -> (Calc1Operation, Encoded) {
     use calc::Calc1Payload as P;
     match *payload {
-        P::Acquisition { record, callback } => (Calc1Operation::Request00, callback_last(&record.0, callback)),
-        P::Selection { record, callback } => (Calc1Operation::Request01, callback_last(&record.0, callback)),
-        P::Parameters { record, callback } => (Calc1Operation::Request02, callback_last(&record.0, callback)),
+        P::Acquisition { request, callback } => {
+            (Calc1Operation::Request00, callback_last(&round_acquisition::acquisition_request(&request), callback))
+        }
+        P::Selection { request, region, callback } => {
+            (Calc1Operation::Request01, callback_last(&round_acquisition::selection_request(&request, region), callback))
+        }
+        P::Auxiliary { request, callback } => (Calc1Operation::Request02, auxiliary(request, callback)),
     }
 }
 
@@ -703,9 +709,51 @@ fn callback_last(record: &[u8], callback: StockCallbackWord) -> Encoded {
     message
 }
 
+/// X-M1 1.50: the auxiliary statistics buffers the 0x3d02 request names (0xf37bcc..0xf37be0).
+const AUXILIARY_BUFFERS: [u32; 2] = [0x5ffe_d304, 0x5ffe_e304];
+
+/// X-M1 1.50: 0xf37ab8 fills the 124-byte record at 0x16bfff0 that 0xf38048 zeroes on pass 1
+/// and whose pass byte it rewrites on passes 2 and 3; 0xf4c490 appends the callback.
+fn auxiliary(request: calc::AuxiliaryRequest, callback: StockCallbackWord) -> Encoded {
+    let sample = request.sample;
+    let mut message = Encoded::new(128);
+    message.word(0x00, u32::from(request.complete));
+    message.put(0x04, &[request.pass]);
+    message.word(0x08, u32::from(request.selection));
+    for (index, word) in request.profile.into_iter().enumerate() { message.word(0x0c + 4 * index, word); }
+    message.word(0x1c, sample.gain_step);
+    message.halfword(0x22, sample.level);
+    message.word(0x24, sample.exposure[0]);
+    message.halfword(0x28, request.reference);
+    message.halfword(0x2a, sample.offset_level);
+    message.word(0x2c, sample.mode);
+    message.word(0x30, sample.exposure[1]);
+    message.word(0x34, sample.size[0]);
+    message.word(0x38, sample.size[1]);
+    message.word(0x3c, sample.extent[0]);
+    message.word(0x40, sample.extent[1]);
+    message.halfword(0x44, 100);
+    message.halfword(0x46, 100);
+    message.halfword(0x48, 256);
+    message.word(0x4c, sample.origin[0]);
+    message.word(0x50, sample.origin[1]);
+    message.word(0x54, request.rate);
+    message.word(0x58, AUXILIARY_BUFFERS[0]);
+    message.word(0x5c, AUXILIARY_BUFFERS[1]);
+    message.word(0x64, request.level_class);
+    message.word(0x68, sample.adjustment);
+    message.word(0x6c, u32::from(matches!(request.window_status, 3 | 4)));
+    message.halfword(0x70, request.resource_level);
+    message.halfword(0x72, request.window_halfword);
+    message.word(0x74, request.word);
+    message.halfword(0x78, request.halfword);
+    message.word(0x7c, callback.0);
+    message
+}
+
 /// X-M1 1.50: 0xf3a564..0xf3a73c builds the 76-byte record and 0xf4c6e8 appends the
-/// callback. Bytes 56..63 are planner words +0x48 and +0x44 (0xfa8018, 0xfa9588), which have
-/// no writer.
+/// callback. Bytes 56..63 are adjustment words +0x48 (0xfa8018) and, for a profile whose
+/// 0x74fa2c byte is 6, +0x44 (0xfa9588).
 fn window(request: calc::WindowRequest, callback: StockCallbackWord) -> Encoded {
     let mut message = Encoded::new(80);
     message.word(0, u32::from(request.selection));
@@ -722,6 +770,8 @@ fn window(request: calc::WindowRequest, callback: StockCallbackWord) -> Encoded 
     message.word(44, request.sample.adjustment);
     message.word(48, request.window.status);
     message.word(52, request.window.second);
+    message.word(56, request.adjustment[0]);
+    message.word(60, request.adjustment[1]);
     message.word(64, u32::from(request.refresh));
     message.word(68, u32::from(request.mode));
     message.word(72, u32::from(request.selected));
@@ -729,16 +779,28 @@ fn window(request: calc::WindowRequest, callback: StockCallbackWord) -> Encoded 
     message
 }
 
-/// X-M1 1.50: 0xf4c4f4..0xf4c568 moves record word 40 ahead of halfword 14 and record
-/// words 16..39 and 44 after it, leaving message bytes 18..19 and 26..27 unwritten.
-fn source(record: &[u8; 48], callback: StockCallbackWord) -> Encoded {
+/// X-M1 1.50: the statistics buffer the source request names (0xf38730..0xf38738).
+const SOURCE_STATISTICS: u32 = 0x5ffe_d304;
+
+/// X-M1 1.50: 0xf386b8 fills the 48-byte record at 0x16c0088 and 0xf4c4f4..0xf4c568 moves
+/// its selection word ahead of the reference and the words after the reference after it,
+/// leaving message bytes 18..19 and 26..27 unwritten.
+fn source(request: calc::SourceRequest, callback: StockCallbackWord) -> Encoded {
     let mut message = Encoded::new(56);
     message.word(0, callback.0);
-    message.put(4, &record[0..14]);
-    message.put(20, &record[40..44]);
-    message.put(24, &record[14..16]);
-    message.put(28, &record[16..40]);
-    message.put(52, &record[44..48]);
+    message.word(4, SOURCE_STATISTICS);
+    message.word(8, request.profile[0]);
+    message.halfword(12, request.decade);
+    message.halfword(14, request.profile_halfword);
+    message.halfword(16, request.level);
+    message.word(20, u32::from(request.selection));
+    message.halfword(24, request.reference);
+    message.word(28, request.size[0]);
+    message.word(32, request.size[1]);
+    message.word(36, request.profile[1]);
+    message.word(40, request.exposure);
+    message.word(48, request.mode);
+    message.word(52, request.extension);
     message
 }
 
@@ -783,6 +845,26 @@ pub fn statistics_operation(operation: StatisticsOperation) -> u16 {
 
 pub const fn flash_operation(operation: FlashOperation) -> u16 {
     match operation { FlashOperation::Request0d => 0x1a0d, FlashOperation::Request0e => 0x1a0e }
+}
+
+/// X-M1 1.50: 0xf3292c..0xf329f8 builds this geometry; 0xfea57c..0xfea5b4 sends 40 bytes to imgdc 0x3f2b.
+pub fn measurement_geometry(value: crate::round::MeasurementGeometry) -> [u8; 40] {
+    let mut bytes = [0; 40];
+    bytes[0..2].copy_from_slice(&[16, 16]);
+    bytes[2..4].copy_from_slice(&100u16.to_le_bytes());
+    bytes[4..6].copy_from_slice(&100u16.to_le_bytes());
+    bytes[10..12].copy_from_slice(&value.resource.0[0].to_le_bytes());
+    bytes[12..14].copy_from_slice(&value.resource.0[1].to_le_bytes());
+    bytes[14..16].copy_from_slice(&[7, 7]);
+    for (offset, calibration) in [18, 16, 22, 20].into_iter().zip(value.calibration.0) {
+        bytes[offset..offset + 2].copy_from_slice(&calibration.to_le_bytes());
+    }
+    bytes[24..26].copy_from_slice(&value.resource.0[0].to_le_bytes());
+    bytes[26..28].copy_from_slice(&value.resource.0[1].to_le_bytes());
+    bytes[28..32].copy_from_slice(&value.converted_profile.0.to_le_bytes());
+    bytes[32..36].copy_from_slice(&value.first_parameter.0.to_le_bytes());
+    bytes[36..40].copy_from_slice(&value.second_parameter.0.to_le_bytes());
+    bytes
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -881,24 +963,4 @@ pub fn lens_payload(payload: &crate::lens::LensPayload, bytes: &mut [u8; LENS_PA
 pub fn lens_dc_request<'a>(payload: &crate::lens::LensPayload, bytes: &'a mut [u8; LENS_PAYLOAD_BYTES]) -> LensDcRequest<'a> {
     let length = lens_payload(payload, bytes);
     LensDcRequest { operation: payload.operation(), parameters: Parameters(&bytes[..length]), completions: payload.completions() }
-}
-
-/// X-M1 1.50: 0xf3292c..0xf329f8 builds this geometry; 0xfea57c..0xfea5b4 sends 40 bytes to imgdc 0x3f2b.
-pub fn measurement_geometry(value: crate::round::MeasurementGeometry) -> [u8; 40] {
-    let mut bytes = [0; 40];
-    bytes[0..2].copy_from_slice(&[16, 16]);
-    bytes[2..4].copy_from_slice(&100u16.to_le_bytes());
-    bytes[4..6].copy_from_slice(&100u16.to_le_bytes());
-    bytes[10..12].copy_from_slice(&value.resource.0[0].to_le_bytes());
-    bytes[12..14].copy_from_slice(&value.resource.0[1].to_le_bytes());
-    bytes[14..16].copy_from_slice(&[7, 7]);
-    for (offset, calibration) in [18, 16, 22, 20].into_iter().zip(value.calibration.0) {
-        bytes[offset..offset + 2].copy_from_slice(&calibration.to_le_bytes());
-    }
-    bytes[24..26].copy_from_slice(&value.resource.0[0].to_le_bytes());
-    bytes[26..28].copy_from_slice(&value.resource.0[1].to_le_bytes());
-    bytes[28..32].copy_from_slice(&value.converted_profile.0.to_le_bytes());
-    bytes[32..36].copy_from_slice(&value.first_parameter.0.to_le_bytes());
-    bytes[36..40].copy_from_slice(&value.second_parameter.0.to_le_bytes());
-    bytes
 }

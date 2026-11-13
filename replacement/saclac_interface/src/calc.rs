@@ -8,7 +8,7 @@
 use crate::stock::StockCallbackWord;
 
 /// An address in saclac memory that the peer reads.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SharedAddress(pub u32);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39,7 +39,7 @@ pub struct WindowRequest {
     /// The profile's selection byte.
     pub selection: u8,
     pub mode: u8,
-    /// The profile selects by record, or has a measurement mode.
+    /// The profile selects by record, has a measurement mode, or takes an adjustment word of 1.
     pub selected: bool,
     pub sample: WindowSample,
     /// The sample's level, offset by the reference and the exposure value.
@@ -48,6 +48,26 @@ pub struct WindowRequest {
     pub reference: u16,
     pub window: WindowRecord,
     pub refresh: bool,
+    /// The adjustment state's words the request carries; the second is zero unless the profile takes it.
+    pub adjustment: [u32; 2],
+}
+
+/// Calc 0x3c11: one source reading over the primary statistics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceRequest {
+    /// Profile values calc reads unchanged.
+    pub profile: [u32; 2],
+    pub decade: u16,
+    pub profile_halfword: u16,
+    pub level: u16,
+    /// The sample's second level.
+    pub reference: u16,
+    pub size: [u32; 2],
+    pub exposure: u32,
+    pub mode: u32,
+    /// The profile's selection byte.
+    pub selection: u8,
+    pub extension: u32,
 }
 
 /// One request to calc, with the callback calc enters when it finishes.
@@ -67,21 +87,63 @@ pub enum CalcPayload {
     Image { record: Record<20>, callback: StockCallbackWord },
     /// 0x3c0c.
     Window { request: WindowRequest, callback: StockCallbackWord },
-    /// 0x3c11 from the source lane's 48-byte record.
-    Source { record: Record<48>, callback: StockCallbackWord },
+    /// 0x3c11.
+    Source { request: SourceRequest, callback: StockCallbackWord },
     /// 0x3c12, with no payload and no callback.
     Release,
+}
+
+/// The auxiliary statistics snapshot values a 0x3d02 request carries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuxiliarySample {
+    pub mode: u32,
+    pub gain_step: u32,
+    pub exposure: [u32; 2],
+    pub level: u16,
+    pub offset_level: u16,
+    pub adjustment: u32,
+    pub size: [u32; 2],
+    pub origin: [u32; 2],
+    pub extent: [u32; 2],
+}
+
+/// Calc1 0x3d02: one pass of the auxiliary measurement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuxiliaryRequest {
+    /// The sample is complete.
+    pub complete: bool,
+    /// 1 to 3.
+    pub pass: u8,
+    /// The profile's selection byte.
+    pub selection: u8,
+    /// Profile values calc1 reads unchanged.
+    pub profile: [u32; 4],
+    pub sample: AuxiliarySample,
+    /// The sample's second level less the gain offset.
+    pub reference: u16,
+    /// The configured rate scaled by the sample's dimensions, times four.
+    pub rate: u32,
+    pub level_class: u32,
+    pub window_status: u32,
+    pub window_halfword: u16,
+    pub resource_level: u16,
+    pub word: u32,
+    pub halfword: u16,
 }
 
 /// One request to calc1, with the callback calc1 enters when it finishes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Calc1Payload {
     /// 0x3d00. The grid is stored where calc1 reads it before the request is posted.
-    Acquisition { record: Record<168>, callback: StockCallbackWord },
-    /// 0x3d01.
-    Selection { record: Record<228>, callback: StockCallbackWord },
+    Acquisition { request: crate::round_acquisition::AcquisitionRequest, callback: StockCallbackWord },
+    /// 0x3d01, naming the records calc1 reads in `region`.
+    Selection {
+        request: crate::round_acquisition::SelectionRequest,
+        region: crate::stock::round_acquisition::SelectionRegion,
+        callback: StockCallbackWord,
+    },
     /// 0x3d02.
-    Parameters { record: Record<124>, callback: StockCallbackWord },
+    Auxiliary { request: AuxiliaryRequest, callback: StockCallbackWord },
 }
 
 /// The block calc1 reads with a 0x3d00 request.

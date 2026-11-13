@@ -9,6 +9,8 @@ pub mod calc;
 pub mod statistics;
 pub mod imaging;
 pub mod shared;
+pub mod round_acquisition;
+pub mod round_image;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClientCallback(pub(crate) u32);
@@ -519,3 +521,5 @@ mod statistics_tests;
 mod imaging_tests;
 #[cfg(test)]
 mod shared_tests;
+#[cfg(test)]
+mod round_image_tests;
