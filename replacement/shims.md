@@ -243,6 +243,15 @@ The kernel installer and its cache maintenance.
 | `xm1_kernel_install` and `xm1_kernel_install_entry` in `entry.S`/`src.rs` | veneer or carrier at a stock address | the stock phase entry and installer callers | no | the phase entry and installer callers are owned | required |
 | `xm1_kernel_cache` retained service | trampoline into retained stock | the stock cache-maintenance helper | no | cache maintenance is owned | required |
 
+## saclac/lens_drive
+
+saclac's lens children (machines 1, 2 and 35). Its cores take typed events and leave through port traits; `src/stock.rs` holds the stock codes and entries the retained engine and reply layer still use.
+
+| Shim | Kind | Other side | Owned now | Removal condition | State |
+| --- | --- | --- | --- | --- | --- |
+| `live_event`, `s1_event`, `bring_up_event` and `outcome_word` in `src/stock.rs` | guest-memory layout view | the event codes the row functions `0xefd2fc`, `0xf0194c` and `0xefd624` route from machines 11, 3 and 0, and the action return words 0 to 3 | no | the lens children are entered only through `children::LensChildren` from owned routers linked in the same image | required |
+| `reply_call` and `reply_target` in `src/stock.rs` | trampoline into retained stock | the reply entries `0xefb104`, `0xefb194`, `0xefb1dc`, `0xefb604`, `0xefb654`, `0xefb6ac`, `0xefa348` and `0xefa3a8` | no | the client reply layer is owned and takes `ports::Reply` | required |
+
 ## lens_transport
 
 The lens transport and control actor. Its stock-ABI exports and retained task/queue/IRQ services are the current seam; power leaf calls are already owned on both sides.
@@ -599,6 +608,7 @@ The task-43 driver and engine use stock's 37 machine tables. Every machine actio
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
 | Command, parameter-block and callback descriptors in `src/stock.rs` | guest-memory layout view | retained queue-43 command producers, their 46 shared parameter blocks and 106 completion callbacks | no | queue-43 producers and completion callbacks are owned and no retained consumer reads the parameter blocks | required |
+| `lens::LensPayload` with `lens_callback_word`, `lens_payload` and `lens_dc_request` in `src/stock.rs` | guest-memory layout view | retained lens control's queue-50 requests 0x4202 to 0x4212 (senders `0x76dbe4` to `0x770080`) and the retained lens completion callbacks `0xf14ae4`, `0xf14b14`, `0xf14b50`, `0xf14b8c`, `0xf14bc8`, `0xf14be4`, `0xf150c4`, `0xf150f0` and `0xf28e94` | no | lens control and the lens children's completion callbacks are owned | required |
 
 ## save
 
@@ -715,6 +725,7 @@ The vendor, wireless, filesystem and device-protocol unit. Most of its externals
 | `vendor_session_initialize`, `vendor_session_control`, `vendor_session_context_size`, `vendor_session_context_alignment`, `xm1_vendor_usb_task`, `xm1_vendor_usb_interrupt` exports | stock-ABI export | stock USB/session callers | no | every USB/session caller is owned or migrated | required |
 | `xm1_wireless_driver_task`, `xm1_wireless_supplicant_task` retained services | trampoline into retained stock | stock wireless driver and supplicant tasks | no | the wireless subsystem is owned | required |
 | filesystem and media-task ABI views (`filesystem_*`, `media_parser`, `metadata_*`) | guest-memory layout view | retained stock filesystem, media and metadata services | no | the owned file service and filesystem are qualified | required |
+
 
 ## Not registered
 

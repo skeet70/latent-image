@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use xm1_saclac_interface::lens;
 use xm1_saclac_interface::{Command, Completed, Message, Parameters, RecordHandle};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,14 +63,10 @@ pub enum LensControl {
     PrepareDrive,
     /// The root's cancellation drives the lens.
     CancelDrive,
-    Setting(LensSetting),
+    Setting(lens::Setting),
     /// Steps by the block of notification 0x1b.
     Step,
 }
-
-/// The lens request a lens setting issues.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LensSetting { Request04, Request06, Request05 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShotControl {

@@ -818,6 +818,69 @@ impl CaptureRecordField {
     }
 }
 
+/// The largest lens payload, 0x4202's and 0x420b's.
+pub const LENS_PAYLOAD_BYTES: usize = 28;
+
+/// The retained callback a lens payload names in its first word; zero for none.
+pub const fn lens_callback_word(payload: &crate::lens::LensPayload) -> u32 {
+    use crate::lens::{DriveOwner, LensPayload as P, Setting};
+    match payload {
+        P::BringUp { .. } => 0xf150f0,
+        P::Stop { .. } => 0xf150c4,
+        P::Setting { setting: Setting::Request04, .. } => 0xf14b50,
+        P::Setting { setting: Setting::Request05, .. } => 0xf14b8c,
+        P::Setting { setting: Setting::Request06, .. } => 0xf14b14,
+        P::Drive { owner: DriveOwner::Live, .. } => 0xf14be4,
+        P::Drive { owner: DriveOwner::S1, .. } => 0xf28e94,
+        P::Step(_) => 0xf14bc8,
+        P::Select { .. } => 0xf14ae4,
+        P::Finish { .. } | P::Halt | P::Release => 0,
+    }
+}
+
+/// Writes a lens payload's wire bytes and returns the posted length. X-M1 1.50 senders:
+/// 0x4202 0x76dbe4 (seven words, built at 0xf15148..0xf151a0); 0x4203 0x76dc90 (four words,
+/// 0xf151dc..0xf15208); 0x4204/0x4205/0x4206 0x76dd24/0x76ddb0/0x76de3c (three words stored at
+/// 0x76dddc..0x76dde4); 0x4207 0x76dec8 (r0..r3 and two stack words, 0x76df04..0x76df20);
+/// 0x4208 0x76df7c (three words, r0 zero at 0xf14e4c and 0xf28fc0); 0x4209 0x76e008 and
+/// 0x4212 0x770080 (no payload); 0x420b 0x76e1ac (callback, halfword step, zero halfword,
+/// mode 0x81a170[0] = 0, then 1, 0, 0, 4 from 0xf14e80..0xf14e9c); 0x4211 0x76ffec (four words,
+/// 0x77001c..0x770028, code 11 or 12 from 0xf14fe8..0xf14ff0).
+pub fn lens_payload(payload: &crate::lens::LensPayload, bytes: &mut [u8; LENS_PAYLOAD_BYTES]) -> usize {
+    use crate::lens::{LensPayload as P, SelectionCode};
+    fn put(bytes: &mut [u8; LENS_PAYLOAD_BYTES], words: &[u32]) -> usize {
+        for (chunk, word) in bytes.chunks_exact_mut(4).zip(words) {
+            chunk.copy_from_slice(&word.to_le_bytes());
+        }
+        words.len() * 4
+    }
+    *bytes = [0; LENS_PAYLOAD_BYTES];
+    let callback = lens_callback_word(payload);
+    match *payload {
+        P::BringUp { parameters: p, record } => put(bytes, &[callback, p[0].0, p[1].0, p[2].0, record.0, p[3].0, p[4].0]),
+        P::Stop { parameters: p, record } => put(bytes, &[callback, p[0].0, p[1].0, record.0]),
+        P::Setting { slot, mode, .. } => put(bytes, &[callback, slot.0, mode.0]),
+        P::Drive { parameters: p, slot, .. } => put(bytes, &[callback, p[0].0, p[1].0, p[2].0, p[3].0, slot.0]),
+        P::Finish { value, record } => put(bytes, &[callback, value.0, record.0]),
+        P::Halt | P::Release => 0,
+        P::Step(step) => {
+            let length = put(bytes, &[callback, 0, 0, 1, 0, 0, 4]);
+            bytes[4..6].copy_from_slice(&step.0.to_le_bytes());
+            length
+        }
+        P::Select { value, code, record } => {
+            let code = match code { SelectionCode::Unconfigured => 11, SelectionCode::Configured => 12 };
+            put(bytes, &[callback, value.0, code, record.0])
+        }
+    }
+}
+
+/// The interface request a lens payload posts, its bytes in `bytes`.
+pub fn lens_dc_request<'a>(payload: &crate::lens::LensPayload, bytes: &'a mut [u8; LENS_PAYLOAD_BYTES]) -> LensDcRequest<'a> {
+    let length = lens_payload(payload, bytes);
+    LensDcRequest { operation: payload.operation(), parameters: Parameters(&bytes[..length]), completions: payload.completions() }
+}
+
 /// X-M1 1.50: 0xf3292c..0xf329f8 builds this geometry; 0xfea57c..0xfea5b4 sends 40 bytes to imgdc 0x3f2b.
 pub fn measurement_geometry(value: crate::round::MeasurementGeometry) -> [u8; 40] {
     let mut bytes = [0; 40];
