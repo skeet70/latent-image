@@ -140,6 +140,7 @@ fn window_request_places_each_value_and_the_statistics_buffer() {
         reference: 0x3132,
         window: WindowRecord { first: 0x4142_4344, second: 0x5152_5354, status: 2, halfword: 0x6162 },
         refresh: true,
+        adjustment: [0x7172_7374, 1],
     };
     let (operation, message) = stock::calc_payload(&CalcPayload::Window { request, callback: CALLBACK });
     assert_eq!(operation, CalcOperation::Request0c);
@@ -147,7 +148,7 @@ fn window_request_places_each_value_and_the_statistics_buffer() {
         2, 0, 0, 0, 0x44, 0x43, 0x42, 0x41, 0x22, 0x21, 0, 0, 4, 3, 2, 1,
         0x15, 0, 0, 0, 9, 8, 7, 6, 0x0b, 0x0a, 0x32, 0x31, 0, 0, 0, 0,
         0x62, 0x61, 0, 0, 0xb4, 0xc1, 0xfe, 0x5f, 0, 0x10, 0, 0, 0x14, 0x13, 0x12, 0x11,
-        2, 0, 0, 0, 0x54, 0x53, 0x52, 0x51, 0, 0, 0, 0, 0, 0, 0, 0,
+        2, 0, 0, 0, 0x54, 0x53, 0x52, 0x51, 0x74, 0x73, 0x72, 0x71, 1, 0, 0, 0,
         1, 0, 0, 0, 5, 0, 0, 0, 1, 0, 0, 0, 0x04, 0xc1, 0xf3, 0,
     ][..]);
 }
