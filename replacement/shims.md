@@ -602,11 +602,12 @@ The task-43 driver and engine use stock's 37 machine tables. Every machine actio
 
 ## shot_sequence
 
-The task 43 half-press and live preparation and capture pipeline behind the saclac child contract. Its steps reach peers, records and replies through one `Ports` trait; it binds no stock symbol.
+The task 43 half-press and live preparation and capture pipeline behind the saclac child contract. Its steps reach peers, records and replies through one `Ports` trait and narrow layer traits that its composition root binds; the crate itself links no stock symbol.
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
 | `half_press_mode`, `half_press_notifications` and `abort_status` in `src/stock.rs` | guest-memory layout view | words +4 and +0x10 of the command-6 parameter block written by the retained command function `0xef8fa0`, and the capture status word at `0x169d380` | no | the half-press command producer and the capture status writer are owned | required |
+| `MeasurementProfiles::profile_extent`, bound to `0xef5d44` as `src/capture_stock.rs` names it in `MEASUREMENT_PROFILES` | trampoline into retained stock | the profile geometry's retained `0xef5d44`, which tasks 3 and 7 also reach | no | the profile geometry owns `0xef5d44` and `profile_extent` binds to its Rust function | required |
 
 ## save
 

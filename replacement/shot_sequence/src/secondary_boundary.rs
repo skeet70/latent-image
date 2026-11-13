@@ -80,11 +80,18 @@ pub struct CropGeometry {
     pub window: [u32; 4],
 }
 
+/// The two scale divisors of a profile's class pair.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ScalePair {
+    pub first: u32,
+    pub second: u32,
+}
+
 /// Profile-geometry operations, owned by the profile geometry.
 pub trait MeasurementProfiles {
     fn profile_geometry(&mut self, request: &GeometryRequest) -> ProfileGeometry;
     fn crop_geometry(&mut self, request: &CropRequest) -> CropGeometry;
-    fn flagged_scale_pair(&mut self, selector: u32) -> [u32; 2];
+    fn flagged_scale_pair(&mut self, selector: u32) -> ScalePair;
     fn profile_extent(&mut self, selector: u32, inset: bool) -> [u32; 4];
 }
 

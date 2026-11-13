@@ -13,7 +13,7 @@ use crate::finish_work::FinishLensValue;
 use crate::ports::{SecondaryEffect, SecondaryQuery};
 use crate::secondary_boundary::{
     AreaList, AreaLists, CropRequest, GeometryRequest, MeasurementCalc, MeasurementLens, MeasurementPipeline, MeasurementProfiles, MeasurementSetting,
-    MeasurementSettings, MeasurementWord, ProfileGeometry, StatisticsStore,
+    MeasurementSettings, MeasurementWord, ProfileGeometry, ScalePair, StatisticsStore,
 };
 use xm1_saclac_calc::geometry::{self, ClipSettings, Grid, Placement, Point, Rectangle, Region};
 use xm1_saclac_interface::area_measurement::{
@@ -611,7 +611,7 @@ fn dump(frame: Frame, measured: &Measured, boundary: &mut (impl CaptureClient + 
 
 /// An area as the dump shows it: its corner moved by the profile extent, its sides rounded down
 /// to the scale steps and at least one step.
-fn dumped_area(area: &AreaEntry, step: [u32; 2], extent: [u32; 4]) -> [u32; 4] {
+fn dumped_area(area: &AreaEntry, step: ScalePair, extent: [u32; 4]) -> [u32; 4] {
     let [left, top, height, width] = area.rectangle();
     let rounded = |side: u32, step: u32| {
         let down = side.wrapping_sub(side.checked_rem(step).unwrap_or(0));
@@ -620,8 +620,8 @@ fn dumped_area(area: &AreaEntry, step: [u32; 2], extent: [u32; 4]) -> [u32; 4] {
     [
         u32::from((extent[0] as u16).wrapping_add(left as u16)),
         u32::from((extent[1] as u16).wrapping_add(top as u16)),
-        rounded(width, step[1]),
-        rounded(height, step[0]),
+        rounded(width, step.second),
+        rounded(height, step.first),
     ]
 }
 

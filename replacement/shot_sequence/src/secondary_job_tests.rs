@@ -204,7 +204,7 @@ impl MeasurementProfiles for World {
     fn crop_geometry(&mut self, request: &CropRequest) -> CropGeometry {
         self.crops.get(&(request.selector, request.offset, request.full)).copied().unwrap_or_default()
     }
-    fn flagged_scale_pair(&mut self, _selector: u32) -> [u32; 2] { [4, 8] }
+    fn flagged_scale_pair(&mut self, _selector: u32) -> ScalePair { ScalePair { first: 4, second: 8 } }
     fn profile_extent(&mut self, _selector: u32, inset: bool) -> [u32; 4] { if inset { [1, 2, 3, 4] } else { [7, 9, 0, 0] } }
 }
 

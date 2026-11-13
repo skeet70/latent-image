@@ -429,10 +429,11 @@ pub const fn dump_list_area(list: usize, index: u8, word: usize) -> FrameOffset 
 /// 0xf2acd0 for 0x94 and 0xf2ac98 for 0x95; the words record, processing, frame, frame detail; the
 /// geometry block).
 pub const MEASUREMENT_CALC: [u32; 6] = [0xf4c958, 0xf4ca3c, 0xf4ce2c, 0xf51b94, 0xf4d2dc, 0xf4ca60];
-/// Profile-geometry entries of `MeasurementProfiles`: `profile_geometry` 0xeda668 (mode 2, size
-/// halfwords 0x50, 0x50, 0x10), `crop_geometry` 0xef6030, `flagged_scale_pair` 0xef5b5c,
-/// `profile_extent` 0xef5d44.
-pub const MEASUREMENT_PROFILES: [u32; 4] = [0xeda668, 0xef6030, 0xef5b5c, 0xef5d44];
+/// Stock profile-geometry entries of `MeasurementProfiles`: `profile_geometry` 0xeda668 (mode 2,
+/// size halfwords 0x50, 0x50, 0x10), `crop_geometry` 0xef6030 and `profile_extent` 0xef5d44.
+/// `flagged_scale_pair` is the profile geometry's owned `Profiles::flagged_scale_pair`
+/// (0xef5b5c).
+pub const MEASUREMENT_PROFILES: [u32; 3] = [0xeda668, 0xef6030, 0xef5d44];
 /// Lens-layer entries of `MeasurementLens` beyond the finish's: `reference_value` 0x747d48.
 pub const REFERENCE_VALUE: u32 = 0x747d48;
 

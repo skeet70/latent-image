@@ -6,7 +6,7 @@ use crate::capture_stock;
 use crate::ports::{CalculationsJob, LensMove, PrimaryEffect, PrimaryQuery};
 use crate::primary_boundary::*;
 use crate::primary_job::{CaptureSteps, PrimaryJob};
-use crate::secondary_boundary::{CropGeometry, CropRequest, GeometryRequest, MeasurementCalc, MeasurementProfiles, ProfileGeometry};
+use crate::secondary_boundary::{CropGeometry, CropRequest, GeometryRequest, MeasurementCalc, MeasurementProfiles, ProfileGeometry, ScalePair};
 use crate::secondary_job::SecondaryJob;
 use crate::subjects::SubjectList;
 use crate::tests::record;
@@ -260,7 +260,7 @@ impl MeasurementProfiles for World {
         assert_eq!((request.offset, request.full), (CAPTURE_OFFSET, false));
         self.crops.get(&request.layout[0]).copied().unwrap_or_default()
     }
-    fn flagged_scale_pair(&mut self, _selector: u32) -> [u32; 2] { [0; 2] }
+    fn flagged_scale_pair(&mut self, _selector: u32) -> ScalePair { ScalePair::default() }
     fn profile_extent(&mut self, _selector: u32, inset: bool) -> [u32; 4] {
         assert!(!inset);
         [1, 2, 3, 4]
