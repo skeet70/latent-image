@@ -7,7 +7,11 @@ use crate::memory::{Block, Location};
 
 const SPAN_START: usize = 0x1698a34;
 /// The record-mode block, the last, ends at 0x169cefc.
-pub const SPAN_BYTES: usize = 0x169cefc - SPAN_START;
+const SPAN_END: usize = 0x169cefc;
+const GEOMETRY_SERVICE: usize = 0x4171_7764;
+const GEOMETRY_SERVICE_BYTES: usize = 0xd8;
+/// The contiguous blocks, then the geometry service's state.
+pub const SPAN_BYTES: usize = SPAN_END - SPAN_START + GEOMETRY_SERVICE_BYTES;
 
 pub const fn base(block: Block) -> usize {
     match block {
@@ -26,14 +30,46 @@ pub const fn base(block: Block) -> usize {
         Block::GeometryOperation => 0x169b8f0,
         Block::OperationCallbacks => 0x169b950,
         Block::RecordMode => 0x169c1d4,
+        Block::GeometryService => GEOMETRY_SERVICE,
     }
 }
 
 pub const fn address(at: Location) -> usize { base(at.block) + at.offset as usize }
 
-pub const fn span_offset(at: Location) -> usize { address(at) - SPAN_START }
+pub const fn span_offset(at: Location) -> usize {
+    match at.block {
+        Block::GeometryService => SPAN_END - SPAN_START + at.offset as usize,
+        _ => address(at) - SPAN_START,
+    }
+}
 
 const fn at(block: Block, offset: u16) -> Location { Location::new(block, offset) }
+
+/// The geometry service's state and the geometry operation snapshot.
+pub mod geometry {
+    use super::at;
+    use crate::memory::{Block::GeometryOperation, Block::GeometryService, Location};
+
+    /// Non-zero once the service accepted a start.
+    pub const RUNNING: Location = at(GeometryService, 0x0);
+    /// The bytes a reset clears first.
+    pub const RESET: (Location, u16) = (at(GeometryService, 0x4), 0x44);
+    /// Five 24-byte entries, each with a halfword at `ENTRY_MARKS` set to 0xffff by a reset.
+    pub const ENTRIES: Location = at(GeometryService, 0x48);
+    pub const ENTRY_MARKS: Location = at(GeometryService, 0xc0);
+    pub const RESET_ZERO_WORDS: [Location; 2] = [at(GeometryService, 0xcc), at(GeometryService, 0xd4)];
+    pub const RESET_ZERO_HALVES: [Location; 2] = [at(GeometryService, 0xd0), at(GeometryService, 0xd2)];
+    pub const LIMIT: Location = at(GeometryService, 0x8);
+    /// Width then height in ten-thousandths; the area windows scale by it.
+    pub const WINDOW_SCALE: [Location; 2] = [at(GeometryService, 0x2c), at(GeometryService, 0x30)];
+    pub const UNIT_SCALE: [Location; 2] = [at(GeometryService, 0x38), at(GeometryService, 0x3c)];
+
+    pub const SNAPSHOT: Location = at(GeometryOperation, 0x0);
+    pub const SNAPSHOT_WORDS: usize = 18;
+    /// The configured halfwords a reset takes into the snapshot.
+    pub const SNAPSHOT_CONFIGURED: [(Location, u32); 2] = [(at(GeometryOperation, 0x10), 0xa02a), (at(GeometryOperation, 0x30), 0xa02c)];
+    pub const SELECTION: Location = at(GeometryOperation, 0x48);
+}
 
 /// The byte counts 0xed87b0 clears.
 pub mod cleared {

@@ -24,6 +24,8 @@ pub enum Block {
     GeometryOperation,
     OperationCallbacks,
     RecordMode,
+    /// The geometry service's state, which its stop entry 0xeecd94 also writes.
+    GeometryService,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

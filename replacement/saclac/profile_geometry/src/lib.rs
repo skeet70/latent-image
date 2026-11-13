@@ -6,6 +6,7 @@
 
 pub mod controller;
 pub mod diagnostics;
+pub mod geometry;
 pub mod memory;
 pub mod numeric;
 pub mod ports;

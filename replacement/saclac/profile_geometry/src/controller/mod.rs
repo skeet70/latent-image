@@ -36,6 +36,8 @@ pub enum Refusal {
     WrongState,
     /// The pipeline refused a stop or a configuration.
     PipelineRefused,
+    /// An argument outside what the entry takes.
+    BadArgument,
 }
 
 impl Refusal {
@@ -43,6 +45,7 @@ impl Refusal {
         match self {
             Refusal::AlreadyThere => 0x11,
             Refusal::WrongState => 0x81,
+            Refusal::BadArgument => 0x84,
             Refusal::PipelineRefused => 0x86,
         }
     }

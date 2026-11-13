@@ -13,6 +13,9 @@ use crate::stock::layout::{changes, controller as field, diagnostics, dump, para
 use crate::controller::statistics::{RecordHalf, StatisticsSummary, Summary, SummaryAreas, SummaryRequest};
 use crate::stock::statistics::{write_summary, COPY_OFFSET, HALF_BYTES, RECORD_BYTES};
 use crate::stock::Parameters;
+use crate::geometry::*;
+use crate::stock::areas::TransitionAreas;
+use crate::stock::layout::geometry as service;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Call {
@@ -30,6 +33,9 @@ enum Call {
     Apply(u32, u32),
     Configure(u32, u32),
     Format(u16, u16),
+    GeometryStart(GeometryStart),
+    GeometryNotified(u32, i32),
+    AreaQuery(u32, AreaQuery),
 }
 
 #[derive(Default)]
@@ -170,6 +176,23 @@ impl FrameDumps for Fake {
     fn register(&mut self, register: Register) -> u32 { if register.0 == 0xfff8_802c { self.status } else { register.0 & 0xff } }
     fn write_dump(&mut self, buffer: DumpBuffer, offset: u32, bytes: &[u8]) { self.dumped.push((buffer.0, offset, bytes.to_vec())) }
     fn dump_policy(&mut self, _: DumpBuffer, dump: PolicyDump, _: Location) { self.policy_dumps.push(dump) }
+}
+
+impl GeometryService for Fake {
+    fn start_geometry(&mut self, start: &GeometryStart, _: StockCode) -> bool {
+        self.calls.push(Call::GeometryStart(*start));
+        !self.refuse_stop
+    }
+    fn stop_geometry(&mut self) -> bool { true }
+    fn query_areas(&mut self, code: u32, query: &AreaQuery) -> AreaAnswer {
+        self.calls.push(Call::AreaQuery(code, *query));
+        let mut answer = TransitionAreas::EMPTY;
+        answer.count = 1;
+        answer.areas[0][0x06..0x08].copy_from_slice(&5u16.to_le_bytes());
+        answer.areas[0][0x04..0x06].copy_from_slice(&100u16.to_le_bytes());
+        AreaAnswer::Areas(answer)
+    }
+    fn notify_geometry(&mut self, callback: StockCode, status: i32) { self.calls.push(Call::GeometryNotified(callback.0, status)) }
 }
 
 struct Tables {
@@ -529,4 +552,41 @@ fn a_measured_summary_fills_its_record_half_and_the_kept_copy() {
     assert_eq!(half(0x2ac), 0xc40);
     assert_eq!(record[COPY_OFFSET..COPY_OFFSET + HALF_BYTES], record[..HALF_BYTES]);
     assert_eq!(record[HALF_BYTES], 0xaa);
+}
+
+#[test]
+fn a_running_geometry_service_refuses_a_start_and_tells_the_starter() {
+    let mut layer = layer(0, 0);
+    assert_eq!(layer.start_geometry(0, 1, 52, StockCode(0xf000)), Ok(()));
+    assert_eq!(layer.ports.calls, vec![Call::GeometryStart(GeometryStart { mode: 0, selection: 1, kind: 2 })]);
+    layer.ports.calls.clear();
+    assert_eq!(layer.start_geometry(0, 1, 52, StockCode(0xf000)), Err(Refusal::WrongState));
+    assert_eq!(layer.ports.calls, vec![Call::GeometryNotified(0xf000, -14)]);
+    assert_eq!(layer.reset_geometry(), Ok(()));
+    assert_eq!(layer.memory().read_u32(service::WINDOW_SCALE[0]), 10000);
+}
+
+#[test]
+fn window_areas_query_the_inner_window_and_rescale_each_area() {
+    let mut layer = layer(0, 0);
+    let geometry = WindowGeometry {
+        window: [100, 400],
+        inner: Rectangle { top: 10, left: 20, width: 30, height: 40 },
+        outer: Rectangle { top: 0, left: 0, width: 100, height: 200 },
+    };
+    assert_eq!(layer.window_areas(AreaKind(1), &geometry), Err(Refusal::WrongState));
+    layer.memory.write_u32(service::RUNNING, 1);
+    assert_eq!(layer.window_areas(AreaKind(3), &geometry), Err(Refusal::BadArgument));
+    let mut list = layer.window_areas(AreaKind(1), &geometry).unwrap();
+    let query = AreaQuery { window: [10, 20, 40, 30], extent: [200, 100], ..AreaQuery::default() };
+    assert_eq!(layer.ports.calls, vec![Call::AreaQuery(1, query)]);
+    assert_eq!(list.count, 1);
+    assert_eq!((list.present()[0].origins()[0][0], list.present()[0].extent()), (5, 50));
+}
+
+#[test]
+fn an_inner_rectangle_past_the_outer_one_takes_the_outer_axis() {
+    let outer = Rectangle { top: 10, left: 10, width: 100, height: 100 };
+    let inner = Rectangle { top: 20, left: 0, width: 300, height: 30 };
+    assert_eq!(within(outer, inner), Rectangle { top: 10, left: 0, width: 100, height: 30 });
 }

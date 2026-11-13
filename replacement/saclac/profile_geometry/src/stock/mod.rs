@@ -1,6 +1,7 @@
 //! The stock boundary: image-5 table and state addresses and layouts, and the stock entries
 //! this layer calls.
 
+pub mod areas;
 pub mod dumps;
 pub mod layout;
 pub mod records;

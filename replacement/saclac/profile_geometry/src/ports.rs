@@ -4,8 +4,10 @@
 
 use xm1_saclac_interface::pipeline::FormatPayload;
 
+use crate::geometry::{AreaQuery, GeometryStart};
 use crate::memory::Location;
 use crate::profile::{PipelineGroup, ProfileHandle, QuadGroup, Rectangle};
+use crate::stock::areas::TransitionAreas;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ConfigOffset(pub u32);
@@ -364,6 +366,27 @@ pub trait FrameDumps {
     fn dump_policy(&mut self, buffer: DumpBuffer, dump: PolicyDump, policy: Location);
 }
 
+/// What the geometry service answers to an area query.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AreaAnswer {
+    Areas(TransitionAreas),
+    /// The service has no areas for the query (-11).
+    Empty,
+    Refused,
+}
+
+/// The transition layer's geometry service.
+pub trait GeometryService {
+    /// False when the service refuses (0x106631c).
+    fn start_geometry(&mut self, start: &GeometryStart, callback: StockCode) -> bool;
+    /// False when the service refuses (0x106637c).
+    fn stop_geometry(&mut self) -> bool;
+    /// 0x106638c.
+    fn query_areas(&mut self, code: u32, query: &AreaQuery) -> AreaAnswer;
+    /// Enters `callback` with `status`.
+    fn notify_geometry(&mut self, callback: StockCode, status: i32);
+}
+
 pub trait Ports:
     Configuration
     + Pipeline
@@ -377,6 +400,7 @@ pub trait Ports:
     + RadialGeometry
     + StatisticsMemory
     + FrameDumps
+    + GeometryService
 {
 }
 
@@ -393,5 +417,6 @@ impl<T> Ports for T where
         + RadialGeometry
         + StatisticsMemory
         + FrameDumps
+        + GeometryService
 {
 }
