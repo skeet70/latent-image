@@ -5,6 +5,7 @@ pub mod configuration;
 pub mod focus_profile;
 pub mod focus_reuse;
 pub mod lens;
+pub mod metering;
 pub mod motion;
 pub mod rate_policy;
 pub mod result_dispatch;
@@ -21,6 +22,8 @@ pub(crate) mod fakes;
 mod focus_profile_tests;
 #[cfg(test)]
 mod focus_reuse_tests;
+#[cfg(test)]
+mod metering_tests;
 #[cfg(test)]
 mod rate_policy_tests;
 #[cfg(test)]
