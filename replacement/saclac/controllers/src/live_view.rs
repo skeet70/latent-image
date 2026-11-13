@@ -419,6 +419,7 @@ impl Measured {
         match outcome {
             ChildOutcome::Complete => Self::Complete,
             ChildOutcome::Pending => Self::Pending,
+            ChildOutcome::Inactive => Self::Other(Outcome::Inactive),
             ChildOutcome::Measurement(MeasurementOutcome::Update { update, restart }) => {
                 Self::Update { update, restarted: restart == Restart::Complete }
             }
