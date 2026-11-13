@@ -157,3 +157,20 @@ fn the_round_area_uses_the_records_scene_kind_with_no_class() {
     let expected = AreaSetup { resource: 6, scene: 7, kind: 1, class: 0, values: [7, 8], flags: 0xf0, auxiliary: 5, last: 0 };
     assert_eq!(programmed.plain, [expected]);
 }
+
+#[test]
+fn the_exposure_kind_follows_the_level_band_scene_and_mode() {
+    let mut world = World::default();
+    for (step, level) in (2..=10u8).zip([20u16, 30, 40, 50, 60, 70, 80, 90, 100]) {
+        world.property_word(property::level_step(step), level);
+    }
+    let kind = |world: &mut World, inputs: KindInputs| exposure_kind(world, &inputs);
+    let base = KindInputs { level: 55, proposed: 7, ..KindInputs::default() };
+    assert_eq!(kind(&mut world, base), 7);
+    assert_eq!(kind(&mut world, KindInputs { level: 15, ..base }), 1);
+    assert_eq!(kind(&mut world, KindInputs { level: 95, ..base }), 1);
+    assert_eq!(kind(&mut world, KindInputs { level: 0, ..base }), 7);
+    assert_eq!(kind(&mut world, KindInputs { scene: 57, ..base }), 2);
+    assert_eq!(kind(&mut world, KindInputs { mode: 3, ..base }), 1);
+    assert_eq!(kind(&mut world, KindInputs { fixed: true, level: 15, ..base }), 7);
+}

@@ -273,6 +273,45 @@ pub const CONFIGURATION_WORDS: [(usize, Reading); 161] = {
     ]
 };
 
+/// The metering's diagnostic trace points (0xfaf8b8, 0xfafa80).
+pub const METERING_START: u32 = 0x0301_0500;
+pub const METERING_END: u32 = 0x1301_0500;
+
+/// Each cell's zone (table 0xf5e220).
+const ZONES: [u8; 256] = [
+    9, 9, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 9, 9,
+    9, 9, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 9, 9,
+    8, 8, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 8, 8,
+    8, 8, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 8, 8,
+    3, 3, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 3, 3,
+    3, 3, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 3, 3,
+    3, 3, 2, 2, 1, 1, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3,
+    3, 3, 2, 2, 1, 1, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3,
+    3, 3, 2, 2, 1, 1, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3,
+    3, 3, 2, 2, 1, 1, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3,
+    3, 3, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 3, 3,
+    3, 3, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 3, 3,
+    10, 10, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 10, 10,
+    10, 10, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 10, 10,
+    11, 11, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 11, 11,
+    11, 11, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 11, 11,
+];
+
+/// A cell's weight: the configuration byte of its zone (0x6a0010(0x7c62) at 0xfaf8c4).
+pub const fn zone_weight(cell: usize) -> Property { Property(0x7c62 + ZONES[cell] as u32) }
+
+/// The level from which the excess is taken, in tenths, and the excess step, signed (0xfaf750,
+/// 0xfaf768).
+pub const EXCESS_START: Property = Property(0x1296);
+pub const EXCESS_STEP: Property = Property(0x1295);
+/// The capture profile whose offset the lens level adds (0xfaf7a8).
+pub const LENS_LEVEL_PROFILE: u32 = 8;
+
+/// The lens level's upper and lower bounds in tenths (0xfaf7c0..0xfaf80c).
+pub const fn lens_level_bounds(alternate: bool) -> [Property; 2] {
+    if alternate { [Property(0x1357), Property(0x1358)] } else { [Property(0x1353), Property(0x1352)] }
+}
+
 fn word(bytes: &[u8], at: usize) -> u32 { u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]) }
 
 fn half(bytes: &[u8], at: usize) -> u16 { u16::from_le_bytes([bytes[at], bytes[at + 1]]) }

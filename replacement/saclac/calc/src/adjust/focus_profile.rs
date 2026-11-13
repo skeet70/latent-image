@@ -76,6 +76,44 @@ pub const fn context_category(active: bool, aspect_index: u8) -> u8 {
     if active { 4 } else if aspect_index == 0 { 2 } else { 3 }
 }
 
+/// What decides the exposure kind the shot and the engine take.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct KindInputs {
+    pub level: i16,
+    /// The proposed kind stands as it is.
+    pub fixed: bool,
+    pub scene: u32,
+    pub mode: u32,
+    pub proposed: u32,
+}
+
+/// The level-step band a level falls in: 0 for level 0, else the step below the first of steps 2
+/// to 10 above it, 10 from step 10 up (0x772ff8).
+fn level_band(properties: &mut impl Properties, level: i16) -> u8 {
+    if level == 0 {
+        return 0;
+    }
+    (2..=10).find(|&step| level < settings::level_step(properties, step)).map_or(10, |step| step - 1)
+}
+
+/// 1 for a level in bands 1, 2, 9 or 10, 2 for scene 57, 1 for mode 2 or 3, else the proposed
+/// kind (0xfa67a8).
+pub fn exposure_kind(properties: &mut impl Properties, inputs: &KindInputs) -> u32 {
+    if inputs.fixed {
+        return inputs.proposed;
+    }
+    if matches!(level_band(properties, inputs.level), 1 | 2 | 9 | 10) {
+        return 1;
+    }
+    if inputs.scene == 57 {
+        return 2;
+    }
+    if (2..=3).contains(&inputs.mode) {
+        return 1;
+    }
+    inputs.proposed
+}
+
 /// The lens state the area setup is programmed against.
 pub trait LensResources {
     /// The lens's current resource; `None` while it has no valid one.
