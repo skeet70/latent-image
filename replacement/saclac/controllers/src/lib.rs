@@ -23,6 +23,8 @@ pub mod live_statistics_profile;
 #[cfg(test)]
 mod live_statistics_tests;
 #[cfg(test)]
+mod live_statistics_profile_tests;
+#[cfg(test)]
 mod live_view_tests;
 #[cfg(test)]
 mod live_profile_tests;
