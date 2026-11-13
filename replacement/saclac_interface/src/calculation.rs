@@ -125,6 +125,7 @@ pub struct AreaIndex(u8);
 
 impl AreaIndex {
     pub const COUNT: u8 = 3;
+    pub const FIRST: Self = Self(0);
 
     pub const fn new(index: u8) -> Option<Self> {
         if index < Self::COUNT { Some(Self(index)) } else { None }
