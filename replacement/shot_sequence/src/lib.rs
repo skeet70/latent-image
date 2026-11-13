@@ -11,6 +11,7 @@ pub mod capture_stock;
 pub mod exposure;
 pub mod exposure_work;
 pub mod finish;
+pub mod finish_work;
 pub mod jobs;
 pub mod lens_return;
 pub mod outcome;
@@ -113,3 +114,5 @@ mod calculation_work_tests;
 mod statistics_dump_tests;
 #[cfg(test)]
 mod capture_control_tests;
+#[cfg(test)]
+mod finish_work_tests;

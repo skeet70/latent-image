@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 pub mod calculation;
+pub mod capture_results;
 pub mod exposure;
 pub mod stock;
 pub mod statistics;
@@ -467,3 +468,5 @@ mod exposure_tests;
 mod calculation_tests;
 #[cfg(test)]
 mod statistics_tests;
+#[cfg(test)]
+mod capture_results_tests;
