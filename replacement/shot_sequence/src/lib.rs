@@ -4,6 +4,7 @@
 pub mod boundary;
 pub mod calculation;
 pub mod calculation_work;
+pub mod calculations_work;
 pub mod capture;
 pub mod capture_boundary;
 pub mod capture_stock;
@@ -110,3 +111,5 @@ mod capture_stock_tests;
 mod calculation_work_tests;
 #[cfg(test)]
 mod finish_work_tests;
+#[cfg(test)]
+mod calculations_work_tests;

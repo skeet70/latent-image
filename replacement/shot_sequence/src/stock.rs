@@ -3,6 +3,7 @@
 //! X-M1 1.50 boundary values of the shot module.
 
 pub mod calculation;
+pub mod calculations;
 pub mod finish;
 
 use crate::boundary::{ClientRef, FocusConfirmation, FocusHistory, FocusResult, LensPoint, LensReference, LensSnapshot};
