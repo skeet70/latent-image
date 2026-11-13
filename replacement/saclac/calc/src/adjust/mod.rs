@@ -4,9 +4,11 @@
 pub mod configuration;
 pub mod context_trace;
 pub mod drive_step;
+pub mod exposure_limits;
 pub mod focus_profile;
 pub mod focus_reuse;
 pub mod lens;
+pub mod limit_steps;
 pub mod metering;
 pub mod motion;
 pub mod peak;
@@ -29,11 +31,15 @@ mod context_trace_tests;
 #[cfg(test)]
 mod drive_step_tests;
 #[cfg(test)]
+mod exposure_limits_tests;
+#[cfg(test)]
 pub(crate) mod fakes;
 #[cfg(test)]
 mod focus_profile_tests;
 #[cfg(test)]
 mod focus_reuse_tests;
+#[cfg(test)]
+mod limit_steps_tests;
 #[cfg(test)]
 mod metering_tests;
 #[cfg(test)]
