@@ -25,8 +25,8 @@ impl crate::driver::Ports for DriverPorts {
         crate::driver::Event::new(u32::from(operation).wrapping_sub(0x3b00))
     }
 
-    fn command_capacity(&self, event: crate::driver::Event) -> Option<usize> {
-        xm1_saclac_interface::stock::PARAMETER_BLOCKS.get(event.code() as usize).map(|block| block.capacity)
+    fn command_capacity(&self, event: crate::driver::Event) -> Option<crate::driver::PayloadLimit> {
+        xm1_saclac_interface::stock::PARAMETER_BLOCKS.get(event.code() as usize).map(|block| crate::driver::PayloadLimit::new(block.capacity))
     }
 
     fn stage(&mut self, header: xm1_kernel::Header, payload: &[u8]) {

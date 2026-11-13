@@ -97,7 +97,13 @@ data Retained = Retained
   } deriving (Eq, Show)
 
 retainedExternals :: [Retained]
-retainedExternals = [Retained "trace" 0xf46c38, Retained "fault" 0xf46c20, Retained "kernel-error-console" 0x41a34]
+retainedExternals =
+  [ Retained "trace" 0xf46c38
+  , Retained "fault" 0xf46c20
+  , Retained "xm1_kernel_console9" 0x41a34
+  , Retained "xm1_kernel_critical_enter" 0x7235d8
+  , Retained "xm1_kernel_critical_exit" 0x7236b0
+  ]
 
 externalAddresses :: [Word32]
 externalAddresses = map retainedAddress retainedExternals

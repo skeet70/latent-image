@@ -100,16 +100,15 @@ Redesign targets define intended behavior independently of the candidate and pre
 
 Record each deliberate correction with the firmware-bound trigger, original behavior, intended behavior, remaining retained boundary and signs that a consumer depends on the defect. If such a dependence appears, fix the consumer or recreate the old behavior at a named compatibility shim with a removal condition.
 
-#### Task-43 intake corrections, X-M1 1.50
-
-The owned saclac driver corrects two accepted defects at the retained queue-43 boundary. A command payload longer than its parameter block reaches an unbounded copy in stock at `0xf01c14..0xf01c28`. The owned driver releases the received block, calls stock's fault reaction `0xf46c20`, and neither copies nor dispatches that message. A failed receive calls the fault reaction in stock at `0xf01bf8..0xf01c04`, then dispatches the stale receive scratch. The owned driver calls the same fault reaction and receives again without copying or dispatching stale data. The command producers, shared block layouts, engine A and stock machines remain retained boundaries. No consumer dependence on either defect has been observed; that is not a claim that malformed messages cannot reach the queue.
-
-
 When an original or emulated path hangs but its intended functionality is known, qualify that functionality against the intended contract. An equivalent test may cover shared behavior while the original failure remains tracked; it does not establish that the original screen or path works.
 
 Timing, image-quality and numerical tolerances require their own evidence; instruction counts are not physical latency.
 
 Exercise boundary values, invalid inputs, repeated operations, resource exhaustion, cancellation and relevant completion orderings. Scheduling exploration is bounded and reports the explored domain; it is not a proof over every interleaving. A plausible deliberately incorrect implementation must fail the pilot's oracle. Expectations must not be derived solely from the candidate implementation.
+
+#### Task-43 intake corrections, X-M1 1.50
+
+The owned saclac driver corrects two accepted defects at the retained queue-43 boundary. A command payload longer than its parameter block reaches an unbounded copy in stock at `0xf01c14..0xf01c28`. The owned driver releases the received block, calls stock's fault reaction `0xf46c20`, and neither copies nor dispatches that message. A failed receive calls the fault reaction in stock at `0xf01bf8..0xf01c04`, then dispatches the stale receive scratch. The owned driver calls the same fault reaction and receives again without copying or dispatching stale data. The command producers, shared block layouts, engine A and stock machines remain retained boundaries. No consumer dependence on either defect has been observed; that is not a claim that malformed messages cannot reach the queue.
 
 ### Mechanical work
 

@@ -536,6 +536,7 @@ pub fn lens_dc_operation(operation: LensDcOperation) -> u16 {
         LensDcOperation::Request18 => 0x4218,
         LensDcOperation::Request19 => 0x4219,
         LensDcOperation::Request1a => 0x421a,
+        LensDcOperation::Request1c => 0x421c,
         LensDcOperation::Request1d => 0x421d,
         LensDcOperation::Request1e => 0x421e,
         LensDcOperation::Request20 => 0x4220,

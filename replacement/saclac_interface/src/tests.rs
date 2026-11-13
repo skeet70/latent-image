@@ -71,6 +71,7 @@ fn synchronous_lens_requests_keep_wire_operation_codes() {
         (LensDcOperation::Request18, 0x4218),
         (LensDcOperation::Request19, 0x4219),
         (LensDcOperation::Request1a, 0x421a),
+        (LensDcOperation::Request1c, 0x421c),
     ] {
         assert_eq!(stock::lens_dc_operation(operation), code);
     }
