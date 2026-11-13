@@ -41,7 +41,6 @@ RB_MENU_ENGINE_CALL rb_menu_engine_call_availability, 0x00d52684
 RB_MENU_ENGINE_CALL rb_menu_engine_call_initial_row, 0x00d588b8
 RB_MENU_ENGINE_CALL rb_menu_engine_call_notify, 0x00d5b350
 RB_MENU_ENGINE_CALL rb_menu_engine_call_kind_switch, 0x00bfa234
-RB_MENU_ENGINE_CALL rb_menu_engine_call_property_write, 0x0061c91c
 
 @ Six arguments: r0-r3 and the two stack words the caller passed, copied to
 @ this frame's outgoing area.

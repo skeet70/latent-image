@@ -1282,11 +1282,13 @@ haskell_binary(
         ":emulator-usb",
         ":modal-observation",
         ":modal-watch-stream",
+        ":watch-observation",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:directory",
         "//host:filepath",
+        "//host:scientific",
         "//host:text",
     ],
 )
@@ -4729,7 +4731,7 @@ haskell_binary(
 
 genrule(
     name = "render-adapter-class-test-build",
-    srcs = ["//replacement/render_adapter:class.rs"],
+    srcs = ["//replacement/render_adapter:class.rs", "//replacement/menu_engine:adapter-class-host"],
     outs = [
         "render-adapter-class-cases.json",
         "render-adapter-class-cases.rs",
@@ -4738,8 +4740,8 @@ genrule(
     ],
     cmd = """
       $(location :render-adapter-class-cases) --json $(@D)/render-adapter-class-cases.json --rust $(@D)/render-adapter-class-cases.rs &&
-      $(location @lab_rustc//:bin/rustc) --edition=2021 --crate-name render_adapter_class --crate-type=rlib $(location //replacement/render_adapter:class.rs) -o $(@D)/librender_adapter_class.rlib &&
-      $(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) --extern render_adapter_class=$(@D)/librender_adapter_class.rlib $(@D)/render-adapter-class-cases.rs -o $(@D)/render-adapter-class-tests-bin
+      $(location @lab_rustc//:bin/rustc) --edition=2021 --crate-name render_adapter_class --crate-type=rlib --extern menu_engine_adapter=$(location //replacement/menu_engine:adapter-class-host) $(location //replacement/render_adapter:class.rs) -o $(@D)/librender_adapter_class.rlib &&
+      $(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) --extern render_adapter_class=$(@D)/librender_adapter_class.rlib -L dependency=$$(dirname $(location //replacement/menu_engine:adapter-class-host)) $(@D)/render-adapter-class-cases.rs -o $(@D)/render-adapter-class-tests-bin
     """,
     testonly = True,
     tools = [

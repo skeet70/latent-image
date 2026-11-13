@@ -36,14 +36,18 @@ module Replacement.PropertyService.Artifact.Internal
   , artifactSpecialTable
   , artifactDefaultWindows
   , artifactFunctions
+  , artifactKernelBoundary
   , artifactProof
   , linkedBytes
   , storageStoreName
   , storageStoreWords
+  , storageStoreWord
+  , storageStoreSites
   , storageOutputName
   , storageOutputWords
   , storageStatusWords
   , mirrorBoundaries
+  , kernelBoundaries
   , stagePlacement
   , stageNativePlacement
   , validateLocalImage4
@@ -124,6 +128,7 @@ data LinkedArtifact = LinkedArtifact
   , artifactSlotTable :: GuestAddress
   , artifactSpecialTable :: GuestAddress
   , artifactDefaultWindows :: [(DefaultImage, GuestAddress)]
+  , artifactKernelBoundary :: [GuestAddress]
   , artifactProof :: CodeProof
   , artifactRecipeIdentity :: Maybe RecipePackageIdentity
   }
@@ -242,16 +247,33 @@ storageStoreName width = case width of
 storageWindows :: [(Word32, Word32)]
 storageWindows = [(0x96cc64, 0x96d1aa), (0x89ec00, 0x89ede0), (0x409c281c, 0x409c29b6), (0x409c29b8, 0x409c29c8)]
 
--- | The checked whole-write windows in storage-boundary.S.
+-- | The checked whole-write windows in storage-boundary.S. Each window's last
+-- store starts at @high - width@, the bound the assembler emits.
 storageStoreWords :: StorageWidth -> [Word32]
-storageStoreWords width = concat [window index low high | (index, (low, high)) <- zip [0 ..] storageWindows] ++ [0xe12fff1e, store, 0xe12fff1e]
+storageStoreWords width = concat [window index low high | (index, (low, high)) <- zip [0 ..] storageWindows] ++ [0xe12fff1e]
   where
     bytes = case width of StorageByte -> 1; StorageHalf -> 2
-    store = case width of StorageByte -> 0xe5c01000; StorageHalf -> 0xe1c010b0
-    constant address = [0xe300c000 .|. ((address .&. 0xf000) `shiftL` 4) .|. (address .&. 0xfff), 0xe340c000 .|. (((address `shiftR` 16) .&. 0xf000) `shiftL` 4) .|. ((address `shiftR` 16) .&. 0xfff)]
-    branch site target = 0x3a000000 .|. (fromIntegral (target - site - 2 :: Int) .&. 0xffffff)
-    window index low high = constant low ++ [0xe150000c, branch (index * 8 + 3) ((index + 1) * 8)]
-      ++ constant (high - bytes + 1) ++ [0xe150000c, branch (index * 8 + 7) 33]
+    store = storageStoreWord width
+    constant register address =
+      [ 0xe3000000 .|. (register `shiftL` 12) .|. ((address .&. 0xf000) `shiftL` 4) .|. (address .&. 0xfff)
+      , 0xe3400000 .|. (register `shiftL` 12) .|. (((address `shiftR` 16) .&. 0xf000) `shiftL` 4) .|. ((address `shiftR` 16) .&. 0xfff)
+      ]
+    branch site target = 0x8a000000 .|. (fromIntegral (target - site - 2 :: Int) .&. 0xffffff)
+    window index low high =
+      constant (12 :: Word32) low
+        ++ [0xe040200c]
+        ++ constant (3 :: Word32) (high - bytes - low)
+        ++ [0xe1520003, branch (index * 10 + 6) ((index + 1) * 10), 0xe082200c, store, 0xe12fff1e]
+
+-- | The store opcode of the checked-store encoding, at its one width per window.
+storageStoreWord :: StorageWidth -> Word32
+storageStoreWord StorageByte = 0xe5c21000
+storageStoreWord StorageHalf = 0xe1c210b0
+
+-- | Byte offsets of the store instructions in 'storageStoreWords', one per window.
+storageStoreSites :: StorageWidth -> [Word32]
+storageStoreSites width =
+  [ 4 * fromIntegral index | (index, word) <- zip [0 :: Int ..] (storageStoreWords width), word == storageStoreWord width ]
 
 storageOutputName :: StorageWidth -> String
 storageOutputName width = case width of
@@ -268,13 +290,51 @@ storageStatusWords = [0xe30ecdc4,0xe340c089,0xe58c0000,0xe12fff1e]
 
 mirrorBoundaries :: [(String, String, Word32)]
 mirrorBoundaries =
-  [ ("xm1_storage_context", "xm1_backup_context723cb8", 0x723cb8)
-  , ("xm1_storage_acquire", "xm1_backup_acquire724b68", 0x724b68)
-  , ("xm1_storage_release", "xm1_backup_release724c00", 0x724c00)
-  , ("xm1_storage_diagnostic", "xm1_backup_diagnostic726c74", 0x726c74)
+  [ ("xm1_storage_diagnostic", "xm1_backup_diagnostic726c74", 0x726c74)
   , ("xm1_storage_write", "xm1_backup_write6a59b8", 0x6a59b8)
   , ("xm1_storage_report", "xm1_backup_report633594", 0x633594)
   ]
+
+kernelBoundaries :: [(String, Word32)]
+kernelBoundaries =
+  [ ("xm1_kernel_console9", 0x41a34)
+  , ("xm1_kernel_critical_enter", 0x7235d8)
+  , ("xm1_kernel_critical_exit", 0x7236b0)
+  ]
+
+-- | The lowest stack offset each kernel boundary entry reaches, from its stock body's push.
+kernelBoundaryStack :: [(GuestAddress, StackOffset)]
+kernelBoundaryStack =
+  [ (GuestAddress 0x41a34, StackOffset (-32))
+  , (GuestAddress 0x7235d8, StackOffset (-32))
+  , (GuestAddress 0x7236b0, StackOffset (-24))
+  ]
+
+-- | The table the kernel crate exports as its declared boundary.
+kernelBoundaryName :: String
+kernelBoundaryName = "XM1_KERNEL_BOUNDARY"
+
+kernelBoundaryMagic :: Word32
+kernelBoundaryMagic = 0x314e524b
+
+data KernelBoundary = KernelBoundary
+  { kernelWindows :: [AddressSpan]
+  , kernelEntries :: [GuestAddress]
+  }
+
+readKernelBoundary :: Word32 -> B.ByteString -> F.Symbol -> Either AdmissionError KernelBoundary
+readKernelBoundary start bytes entry = do
+  let address = F.symbolAddress entry
+      word index = U.word32At bytes (fromIntegral (address - start) + 4 * index)
+      windows = fromIntegral (word 1) :: Int
+      entries = fromIntegral (word 2) :: Int
+  unless (address .&. 3 == 0 && word 0 == kernelBoundaryMagic && windows <= 16 && entries <= 32
+    && F.symbolSize entry == fromIntegral (4 * (3 + 2 * windows + entries)))
+    (Left (AdmissionError (GuestAddress address) BoundaryInvalid))
+  pure KernelBoundary
+    { kernelWindows = [AddressSpan (GuestAddress (word (3 + 2 * index))) (GuestAddress (word (4 + 2 * index))) | index <- [0 .. windows - 1]]
+    , kernelEntries = [GuestAddress (word (3 + 2 * windows + index)) | index <- [0 .. entries - 1]]
+    }
 
 always :: A.Cond
 always = A.Cond 14
@@ -360,7 +420,7 @@ deriveArtifactUsing shape purpose dependency properties carrier@(Carrier (GuestA
       && (high <= carrierLow || low >= carrierHigh)) CallbackRejected
     entry <- symbol name
     require (F.symbolAddress entry == low && F.symbolSize entry == 0 && kindIs [AbsoluteSymbol] entry) CallbackRejected
-  require (sortOn fst [(F.symbolName entry, F.symbolAddress entry) | entry <- symbols, kindIs [AbsoluteSymbol] entry] == sortOn fst (stockLeaves ++ [(external, address) | (_, external, address) <- mirrorBoundaries] ++ callbackSymbols)) SymbolRejected
+  require (sortOn fst [(F.symbolName entry, F.symbolAddress entry) | entry <- symbols, kindIs [AbsoluteSymbol] entry] == sortOn fst (stockLeaves ++ kernelBoundaries ++ [(external, address) | (_, external, address) <- mirrorBoundaries] ++ callbackSymbols)) SymbolRejected
   forM_ symbols $ \entry -> unless (kindIs [AbsoluteSymbol] entry) $
     require (kindIs [GlobalText, LocalText, ReadOnlyData] entry && F.symbolAddress entry >= start
       && toInteger (F.symbolAddress entry) + toInteger (F.symbolSize entry) <= toInteger end) ExtentRejected
@@ -395,6 +455,8 @@ deriveArtifactUsing shape purpose dependency properties carrier@(Carrier (GuestA
   tableSymbol <- tableNamed propertiesSuffix
   slotSymbol <- tableNamed slotsSuffix
   specialSymbol <- tableNamed specialsSuffix
+  boundarySymbol <- symbol kernelBoundaryName
+  boundary <- either (Left . CodeRejected) Right (readKernelBoundary start bytes boundarySymbol)
   defaultSymbols <- mapM (\(name, size, digest) -> do
     entry <- symbol name
     let address = F.symbolAddress entry
@@ -407,7 +469,7 @@ deriveArtifactUsing shape purpose dependency properties carrier@(Carrier (GuestA
   let functions =
         sortOn functionStart
           [ FunctionExtent (FunctionName (F.symbolName entry)) (GuestAddress (F.symbolAddress entry)) (GuestAddress (F.symbolAddress entry + F.symbolSize entry))
-          | entry <- symbols, F.symbolSize entry > 0, entry `notElem` ([tableSymbol, slotSymbol, specialSymbol] ++ defaultSymbols), kindIs [GlobalText, LocalText] entry
+          | entry <- symbols, F.symbolSize entry > 0, entry `notElem` ([tableSymbol, slotSymbol, specialSymbol, boundarySymbol] ++ defaultSymbols), kindIs [GlobalText, LocalText] entry
           ]
       disjoint = and (zipWith (\(FunctionExtent _ _ a) (FunctionExtent _ b _) -> a <= b) functions (drop 1 functions))
   require (disjoint && all (\(FunctionExtent _ (GuestAddress low) (GuestAddress high)) -> low .&. 3 == 0 && high .&. 3 == 0) functions) ExtentRejected
@@ -461,16 +523,20 @@ deriveArtifactUsing shape purpose dependency properties carrier@(Carrier (GuestA
             ++ [(GuestAddress (F.symbolAddress entry), GuestAddress (F.symbolAddress entry + F.symbolSize entry)) | entry <- defaultSymbols]
             ++ [(low, high) | DataSpan (AddressSpan low high) <- mappings
                 , not (any (\(FunctionExtent _ begin finish) -> begin < high && low < finish) functions)]
+        , layoutDeclaredData = [(GuestAddress (F.symbolAddress boundarySymbol), GuestAddress (F.symbolAddress boundarySymbol + F.symbolSize boundarySymbol))]
+        , layoutBoundaryWindows = kernelWindows boundary
+        , layoutBoundaryEntries = kernelEntries boundary
         , layoutStoreSites = [GuestAddress (address + case width of StorageByte -> 28; StorageHalf -> 48) | (width,address) <- outputAddresses]
-            ++ [GuestAddress (statusAddress + 8)] ++ [GuestAddress (address + 132) | (_, address) <- storeAddresses]
-        , layoutStockLeaves = [(GuestAddress address, stockLeafStack) | (_, address) <- stockLeaves]
+            ++ [GuestAddress (statusAddress + 8)]
+            ++ [GuestAddress (address + offset) | (width, address) <- storeAddresses, offset <- storageStoreSites width]
+        , layoutStockLeaves = [(GuestAddress address, stockLeafStack) | (_, address) <- stockLeaves] ++ kernelBoundaryStack
         , layoutStockSites = [(GuestAddress (address + 8), GuestAddress target, StackOffset (-8)) | (_, address, target) <- mirrorAddresses]
         }
   proof <- either (Left . CodeRejected) Right (admitCodeWithCallbacks callbacks layout bytes)
   forM_ callbacks $ \callback ->
     require (any (\edge -> edgeTarget edge == functionStart callback && edgeKind edge `elem` [CallbackCall, CallbackTailCall])
       (concatMap frameCalls (proofFrames proof))) CallbackRejected
-  pure (LinkedArtifact bytes (identity bytes) (identity symbolBytes) (identity elfBytes) carrier (EntryAddresses (GuestAddress getterEntryAddress) (GuestAddress setterEntryAddress)) functions (GuestAddress tableAddress) (GuestAddress slotAddress) (GuestAddress specialAddress) (zip [SlotDefaultBytes,TailDefaultBytes] [GuestAddress (F.symbolAddress entry) | entry <- defaultSymbols]) proof ((\(RecipeDependency _ packageIdentity) -> packageIdentity) <$> dependency))
+  pure (LinkedArtifact bytes (identity bytes) (identity symbolBytes) (identity elfBytes) carrier (EntryAddresses (GuestAddress getterEntryAddress) (GuestAddress setterEntryAddress)) functions (GuestAddress tableAddress) (GuestAddress slotAddress) (GuestAddress specialAddress) (zip [SlotDefaultBytes,TailDefaultBytes] [GuestAddress (F.symbolAddress entry) | entry <- defaultSymbols]) (kernelEntries boundary) proof ((\(RecipeDependency _ packageIdentity) -> packageIdentity) <$> dependency))
   where
     encodingRejected failure = case failure of
       DelegatedProperty -> TableRejected
@@ -609,13 +675,16 @@ stageNativePlacement properties (Image _ _ base original) artifact = do
 -- | Check a locally placed image4: only the carrier and the two root branches may differ.
 validateLocalImage4 :: LinkedArtifact -> B.ByteString -> B.ByteString -> Either ArtifactError ()
 validateLocalImage4 artifact original staged = do
+  let EntryAddresses getter setter = artifactEntries artifact
+      entryStarts = [GuestAddress low | FunctionExtent _ (GuestAddress low) _ <- artifactFunctions artifact]
   require (B.length original == B.length staged && B.length original `mod` 4 == 0
     && artifactCarrier artifact == stage4Carrier
-    && artifactEntries artifact == EntryAddresses (GuestAddress 0x62c120) (GuestAddress 0x62c12c)
+    -- The canonical entry is a 4-byte branch and the public wrapper 12 bytes, so the
+    -- setter starts at the second function the artifact declares.
+    && [getter, setter] == take 2 entryStarts
     && B.length (linkedBytes artifact) <= carrierBytes stage4Carrier
     && B.length (linkedBytes artifact) `mod` 4 == 0) StagingRejected
-  let EntryAddresses getter setter = artifactEntries artifact
-      Carrier (GuestAddress codeLow) _ = artifactCarrier artifact
+  let Carrier (GuestAddress codeLow) _ = artifactCarrier artifact
       word bytes address = U.word32At bytes (fromIntegral (address - 0x61c400))
   forM_ [(getterStockEntry, getter), (setterStockEntry, setter)] $ \(site@(GuestAddress address), target@(GuestAddress destination)) ->
     require (A.decode address (adapterWord site target) == A.Branch always False destination) StagingRejected
@@ -716,7 +785,7 @@ publicOpenPremises =
   [ "loads are not confined: owned code may read any address; the native oracle confines reads"
   , "stack depths are bytes below the owned callable entry sp"
   , "public wrappers preserve r4-r11 and the setter's original r3; retained bracket chain depth and register use are not proved"
-  , "the code policy checks sp, r4-r11 and the return address at every exit"
+  , "the code policy checks sp, r11 and the return address at every exit, and proves r4-r10 for an owned callee only when its walk restores them; a stock callee's r4-r10 follow AAPCS unproved"
   , "the reference scan reads image4, image5, plain, loader A and loader B as instructions and words, and image2 and image3 (the FONT_ICON.FDL window extracted from the DAT) as words; it does not cover computed addresses"
   ]
 
@@ -788,15 +857,20 @@ candidateContractValueWith hullRule premises (StagedCandidate staged@(StagedImag
     proof = artifactProof artifact
     names = M.fromList [(entry, name) | FunctionExtent (FunctionName name) entry _ <- artifactFunctions artifact]
     depth address = maybe 0 (\(StackOffset offset) -> negate offset) (M.lookup (GuestAddress address) (proofComposed proof))
-    frameValue (EntryFrame entry@(GuestAddress address) (StackOffset own) calls) = object
+    frameValue (EntryFrame entry@(GuestAddress address) (StackOffset own) calls _ incoming stored _) = object
       [ "entry" .= address
       , "name" .= M.lookup entry names
       , "own_depth_bytes" .= negate own
       , "max_depth_bytes" .= depth address
+      , "incoming_words" .= S.toList incoming
+      , "stored_slots" .= [slotText slot | slot <- S.toList stored]
       , "calls" .=
           [ object ["site" .= site, "target" .= target, "sp_offset" .= at, "tail" .= (kind `elem` [TailCall, StockLeafTailCall, CallbackTailCall]), "stock" .= (kind `elem` [StockLeafCall, StockLeafTailCall, StockSiteCall]), "callback" .= (kind `elem` [CallbackCall, CallbackTailCall])]
           | CallEdge (GuestAddress site) (GuestAddress target) (StackOffset at) kind <- calls
           ]
       ]
+    slotText slot = case slot of
+      ArgumentRegister register -> A.regName register :: String
+      ArgumentStackWord offset -> "sp+" ++ show offset
     reasonText reason = case reason of
       HighEntropyData -> "high-entropy-data" :: String

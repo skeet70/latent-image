@@ -108,9 +108,10 @@ fn extra_configuration_commit_is_visible_through_the_medium() {
 
 struct RetainedRegisters { bytes: [u8;16] }
 impl HeaderBackupDriver for RetainedRegisters {
-    fn context(&mut self)->ExecutionContext { ExecutionContext::Task }
-    fn acquire(&mut self,_:BackupSemaphore) {}
-    fn release(&mut self,_:BackupSemaphore) {}
+    type Task = ();
+    fn task(&mut self)->Option<()> { Some(()) }
+    fn acquire(&mut self,_:&(),_:BackupSemaphore) {}
+    fn release(&mut self,_:&(),_:BackupSemaphore) {}
     fn diagnostic(&mut self,_:BackupDiagnostic) {}
     fn admit(&mut self,_:RequestDirection)->Result<(),DeviceStatus> { Ok(()) }
     fn write_backup(&mut self,key:BackupKey,value:BackupValue,_:BackupWriteMode)->DeviceStatus { self.bytes[key.0 as usize] = value.0; DeviceStatus(0) }

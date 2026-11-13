@@ -77,7 +77,7 @@ fn word(report:&DrawReport,offset:usize)->u32 { u32::from_le_bytes(report.0[offs
 fn second_page_filters_hidden_rows_without_moving_grid_origin() {
     let mut screen=screen(&[0,3,2,0,0,0,0],2,4,6);
     let mut report=DrawReport::zeroed();
-    tree_list(&mut screen,args(),&mut report);
+    tree_list(&mut screen,args(),&mut report).unwrap();
     assert_eq!(screen.resources,[(104,20,72),(214,-20,72),(105,20,120),(215,-20,120),(106,20,168),(216,-20,168)]);
     assert_eq!(screen.selected,[15]);
     assert_eq!(word(&report,0xc),15);
@@ -92,7 +92,7 @@ fn short_page_centers_rows_and_records_previous_selection() {
     screen.capacity=6;
     screen.snapshot.0[5]=21;
     let mut report=DrawReport::zeroed();
-    tree_list(&mut screen,args(),&mut report);
+    tree_list(&mut screen,args(),&mut report).unwrap();
     assert_eq!(screen.resources,[(100,20,168),(210,-20,168),(101,20,216),(211,-20,216)]);
     assert_eq!(report.0[0x1e],2);
     assert_eq!(report.0[0x1d],1);
@@ -104,7 +104,7 @@ fn hook_drawn_rows_do_not_emit_default_resources() {
     let mut screen=screen(&[0,2,0],1,2,3);
     screen.hook_draws=true;
     let mut report=DrawReport::zeroed();
-    tree_list(&mut screen,args(),&mut report);
+    tree_list(&mut screen,args(),&mut report).unwrap();
     assert!(screen.resources.is_empty());
     assert_eq!(screen.selected,[12]);
     assert_eq!(word(&report,0xc),12);
@@ -115,7 +115,7 @@ fn scroll_top_is_reported_but_does_not_scroll_flat_rows() {
     let mut screen=screen(&[0,0,0],1,1,3);
     screen.snapshot.0[10]=2;
     let mut report=DrawReport::zeroed();
-    tree_list(&mut screen,args(),&mut report);
+    tree_list(&mut screen,args(),&mut report).unwrap();
     assert_eq!(screen.resources[0],(100,20,72));
     assert_eq!(word(&report,0x30),2);
     assert_eq!(report.0[0x3e],0);
@@ -124,7 +124,7 @@ fn scroll_top_is_reported_but_does_not_scroll_flat_rows() {
 fn empty_list_preserves_side_state_and_restores_font() {
     let mut screen=screen(&[],1,0,0);
     let mut report=DrawReport::zeroed();
-    tree_list(&mut screen,args(),&mut report);
+    tree_list(&mut screen,args(),&mut report).unwrap();
     assert_eq!(screen.side,SideState {kind:99,alternate_font:false});
     assert_eq!(screen.font,FontId(73));
     assert!(screen.resources.is_empty());
@@ -145,7 +145,7 @@ fn saved_snapshots_select_report_and_rows_without_using_live_state() {
         let mut args=args();
         args.mode=DrawMode(mode);
         let mut report=DrawReport([0xa5;68]);
-        tree_list(&mut screen,args,&mut report);
+        tree_list(&mut screen,args,&mut report).unwrap();
         assert_eq!(word(&report,4),77);
         assert_eq!(word(&report,8),45);
         assert_eq!(word(&report,0xc),12);
@@ -160,7 +160,7 @@ fn saved_snapshots_select_report_and_rows_without_using_live_state() {
 fn tree_reports_parent_page_and_scrolled_nested_selection() {
     let mut screen=tree_screen();
     let mut report=DrawReport([0xa5;68]);
-    tree_list(&mut screen,args(),&mut report);
+    tree_list(&mut screen,args(),&mut report).unwrap();
     assert_eq!(word(&report,0),2);
     assert_eq!(word(&report,8),93);
     assert_eq!(word(&report,0x10),23);
@@ -186,7 +186,7 @@ fn resolved_parent_selection_controls_page_and_preserves_report_fields() {
     let mut screen=tree_screen();
     screen.resolved=Some(Selection {record:700,selection:800,index:3});
     let mut report=DrawReport([0xa5;68]);
-    tree_list(&mut screen,args(),&mut report);
+    tree_list(&mut screen,args(),&mut report).unwrap();
     assert_eq!(word(&report,8),700);
     assert_eq!(word(&report,0x10),800);
     assert_eq!(report.0[0x1f],2);
@@ -203,7 +203,7 @@ fn nested_selected_hook_redraw_and_footer_survive_formatting() {
     screen.hook_draws=true;
     screen.special=13;
     let mut report=DrawReport::zeroed();
-    tree_list(&mut screen,args(),&mut report);
+    tree_list(&mut screen,args(),&mut report).unwrap();
     assert!(screen.resources.is_empty());
     assert_eq!(screen.formats,[true,false]);
     assert_eq!(screen.footers,[(41,13,102)]);
@@ -216,7 +216,7 @@ fn unknown_snapshot_kind_does_not_draw_or_invent_flat_report_fields() {
     let mut screen=tree_screen();
     screen.snapshot.0[0]=9;
     let mut report=DrawReport([0xa5;68]);
-    tree_list(&mut screen,args(),&mut report);
+    tree_list(&mut screen,args(),&mut report).unwrap();
     assert_eq!(word(&report,0),9);
     assert_eq!(word(&report,8),0);
     assert_eq!(word(&report,0x18),0);
@@ -235,7 +235,7 @@ fn node_overrides_select_flat_behavior_from_tree_snapshot() {
         let mut args=args();
         args.node=NodeId(node);
         let mut report=DrawReport::zeroed();
-        tree_list(&mut screen,args,&mut report);
+        tree_list(&mut screen,args,&mut report).unwrap();
         assert_eq!(word(&report,0),1);
         assert_eq!(word(&report,8),parent);
         assert_eq!(word(&report,0x10),selected);

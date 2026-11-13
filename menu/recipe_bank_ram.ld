@@ -19,6 +19,7 @@ SECTIONS {
     *(EXCLUDE_FILE (*ram_push_installer.o) .text.*)
     *(EXCLUDE_FILE (*ram_push_installer.o) .rodata)
     *(EXCLUDE_FILE (*ram_push_installer.o) .rodata.*)
+    . = ALIGN(4);
   }
   __rb_text_end = .;
   .data : {

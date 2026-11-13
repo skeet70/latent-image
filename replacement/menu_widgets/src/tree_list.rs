@@ -1,4 +1,4 @@
-use crate::render_commands::{DrawReport, FontId, NodeId, ResourceId, SideState};
+use crate::render_commands::{producer::ProducerError, DrawReport, FontId, NodeId, ResourceId, SideState};
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -94,7 +94,8 @@ pub trait DrawServices {
 
 fn signed_byte(value: u16) -> i32 { value as u8 as i8 as i32 }
 
-pub fn tree_list<S: DrawServices>(services: &mut S, args: DrawArgs, report: &mut DrawReport) {
+#[inline]
+pub fn tree_list<S: DrawServices>(services: &mut S, args: DrawArgs, report: &mut DrawReport) -> Result<(), ProducerError> {
     let mut snapshot = Snapshot([0; 11]);
     let mut hook = services.initialize_hook();
     let saved_font = services.panel_font();
@@ -104,23 +105,23 @@ pub fn tree_list<S: DrawServices>(services: &mut S, args: DrawArgs, report: &mut
         || (args.node.0 == 0x38 && s[4] == 11 && s[3] == 0x228) { s[0] = 1; }
     let kind = match s[0] { 1 => ListKind::Flat, 2 => ListKind::Tree, _ => ListKind::Unknown };
     services.clear_report(report);
-    report.put_word(0, s[0]);
-    report.put_word(4, s[1]);
+    report.put_word(0, s[0])?;
+    report.put_word(4, s[1])?;
     report.0[0x1d] = 255;
     report.0[0x3d] = 255;
-    report.put_word(0x20, s[3]);
-    report.put_word(0x30, s[10]);
-    report.put_word(0x38, s[5]);
+    report.put_word(0x20, s[3])?;
+    report.put_word(0x30, s[10])?;
+    report.put_word(0x38, s[5])?;
     let mut summary = Summary { rows: 0, reserved: 0, page_capacity: 0, retained: [0; 3] };
     services.summarize(args.node, &mut summary);
     let capacity = summary.page_capacity.max(1);
     let mut selection = Selection::default();
     let mut nested_child = NestedChild { selection: 0, state: 0, data: 0 };
     let (selected_index, page, count) = if kind == ListKind::Flat {
-        report.put_word(8, s[3]);
-        report.put_word(0x10, s[4]);
-        report.put_word(0x14, s[8] as u8 as u32);
-        report.put_word(0x18, capacity);
+        report.put_word(8, s[3])?;
+        report.put_word(0x10, s[4])?;
+        report.put_word(0x14, s[8] as u8 as u32)?;
+        report.put_word(0x18, capacity)?;
         (s[7], s[9], s[8])
     } else if kind == ListKind::Tree {
         let mut count = 0u32;
@@ -130,12 +131,12 @@ pub fn tree_list<S: DrawServices>(services: &mut S, args: DrawArgs, report: &mut
             services.describe(args.node, raw, &mut child);
             if child.state == 3 { hidden = hidden.wrapping_add(1); continue; }
             if services.resolve_selection(args.node, &mut selection) {
-                report.put_word(8, selection.record);
-                report.put_word(0x10, selection.selection);
+                report.put_word(8, selection.record)?;
+                report.put_word(0x10, selection.selection)?;
             } else if child.id == s[3] {
                 selection.index = raw.wrapping_sub(hidden);
-                report.put_word(8, child.record);
-                report.put_word(0x10, child.selection);
+                report.put_word(8, child.record)?;
+                report.put_word(0x10, child.selection)?;
             }
             if child.state != 3 { count = count.wrapping_add(1); }
         }
@@ -162,7 +163,7 @@ pub fn tree_list<S: DrawServices>(services: &mut S, args: DrawArgs, report: &mut
         if page < row_page { break; }
         let selected = visible as u32 == selected_index && !cfg!(tree_selected_unstyled);
         if selected {
-            report.put_word(0xc, child.id);
+            report.put_word(0xc, child.id)?;
             report.0[0x1c] = if row_page > 1 { services.remainder(visible as u32, capacity) as u8 } else { drawn as u8 };
         }
         if child.selection == s[5] { report.0[0x1d] = visible; }
@@ -241,13 +242,13 @@ pub fn tree_list<S: DrawServices>(services: &mut S, args: DrawArgs, report: &mut
     if kind == ListKind::Tree && !matches!(args.mode.0, 2 | 3) {
         let mut nested = Summary { rows: 0, reserved: 0, page_capacity: 0, retained: [0; 3] };
         services.nested_summary(args.node, s[3], &mut nested);
-        report.put_word(0x20, s[3]);
-        report.put_word(0x24, nested.rows);
-        report.put_word(0x28, s[8]);
-        report.put_word(0x2c, nested.page_capacity);
-        report.put_word(0x30, s[10]);
-        report.put_word(0x38, s[5]);
-        report.put_word(0x34, nested_child.selection);
+        report.put_word(0x20, s[3])?;
+        report.put_word(0x24, nested.rows)?;
+        report.put_word(0x28, s[8])?;
+        report.put_word(0x2c, nested.page_capacity)?;
+        report.put_word(0x30, s[10])?;
+        report.put_word(0x38, s[5])?;
+        report.put_word(0x34, nested_child.selection)?;
         let mut second = args.nested.second;
         if s[8] < nested.page_capacity {
             let center = (nested.page_capacity.wrapping_sub(s[8]) >> 1) as u8;
@@ -272,7 +273,7 @@ pub fn tree_list<S: DrawServices>(services: &mut S, args: DrawArgs, report: &mut
                 let selected = nested_child.selection == s[4];
                 if selected {
                     report.0[0x3c] = index;
-                    report.put_word(0x40, nested_child.data);
+                    report.put_word(0x40, nested_child.data)?;
                 }
                 let label = services.nested_label(args.node, s[3], nested_child.selection);
                 descriptor.resource = label;
@@ -314,4 +315,5 @@ pub fn tree_list<S: DrawServices>(services: &mut S, args: DrawArgs, report: &mut
         }
     }
     services.font(saved_font);
+    Ok(())
 }

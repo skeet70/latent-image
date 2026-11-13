@@ -36,11 +36,21 @@ case "${RB_PUBLICATION_GROUPS:-}" in
     ;;
   modal75,menu-engine)
     builder_mode=(--ram-push-variant modal75,menu-engine)
-    allocation_size=0x2dcc0
+    allocation_size=0x3dd00
     publication_count=225
     activation_count=94
     modal_link=(-Wl,--undefined=rb_modal_entry -Wl,--undefined=rb_menu_engine_entry)
     engine_link=(-Wl,-T,menu/recipe_bank_ram_engine.ld)
+    # The rlib archive carries core and compiler_builtins as members; without
+    # collection every section of every extracted member is placed and .text
+    # overlaps the bank's data. The manifest names the three installer entries
+    # and the builder reads the SELECT CUSTOM SETTING arrays and the
+    # develop-wait pair, which no owned relocation reaches.
+    gc_link=(-Wl,--gc-sections -Wl,--undefined=ram_push_install
+      -Wl,--undefined=ram_push_rollback -Wl,--undefined=ram_push_status
+      -Wl,--undefined=rb_select_values -Wl,--undefined=rb_select_labels
+      -Wl,--undefined=rb_capture_develop_wait -Wl,--undefined=cc_ram_data
+      -Wl,--undefined=cc_ram_convert)
     ;;
   modal75,menu-engine,menu-value)
     builder_mode=(--ram-push-variant modal75,menu-engine,menu-value)
@@ -64,13 +74,21 @@ case "${RB_PUBLICATION_GROUPS:-}" in
     ;;
   modal75,menu-engine,render)
     builder_mode=(--ram-push-variant modal75,menu-engine,render)
-    allocation_size=0x2dcc0
+    allocation_size=0x3dd00
     publication_count=228
     activation_count=97
     modal_link=(-Wl,--undefined=rb_modal_entry -Wl,--undefined=rb_menu_engine_entry
       -Wl,--undefined=rb_render_tree_entry -Wl,--undefined=rb_render_picker_entry -Wl,--undefined=rb_render_pane_entry)
     engine_link=(-Wl,-T,menu/recipe_bank_ram_engine.ld)
     variant_link=(-Wl,--defsym=RAM_PUSH_BANK_VARIANT=1)
+    # The manifest names these three entries and the builder reads the SELECT
+    # CUSTOM SETTING arrays and the develop-wait pair; the owned code reaches
+    # none of them by relocation.
+    gc_link=(-Wl,--gc-sections -Wl,--undefined=ram_push_install
+      -Wl,--undefined=ram_push_rollback -Wl,--undefined=ram_push_status
+      -Wl,--undefined=rb_select_values -Wl,--undefined=rb_select_labels
+      -Wl,--undefined=rb_capture_develop_wait -Wl,--undefined=cc_ram_data
+      -Wl,--undefined=cc_ram_convert)
     ;;
   *) printf 'invalid RB_PUBLICATION_GROUPS selection\n' >&2; exit 1 ;;
 esac
@@ -153,10 +171,14 @@ case "${RB_PUBLICATION_GROUPS:-}" in
     lifecycle_link=(-Wl,--undefined=xm1_save_facade -Wl,--undefined=xm1_save_completion
       -Wl,--undefined=xm1_save_release_completion -Wl,--undefined=rb_media_permit_apply) ;;
 esac
+engine_sources=()
+if (( ${#engine_link[@]} )); then
+  engine_sources=(replacement/property_service/storage-boundary.S)
+fi
 for src in menu/recipe_bank_arm.S menu/recipe_bank_probe.c menu/recipe_bank_hook.c \
   menu/recipe_bank_storage.c menu/recipe_bank_actions.c menu/recipe_bank_edit.c \
   menu/recipe_bank_diagnostic.c replacement/service/rb_service_stock.S \
-  replacement/capture/rb_capture_stock.S "${lifecycle_sources[@]}"; do
+  replacement/capture/rb_capture_stock.S "${engine_sources[@]}" "${lifecycle_sources[@]}"; do
   name="${src##*/}"
   obj="$OUT/${name%.*}.o"
   case "$src" in
@@ -174,18 +196,23 @@ if [[ ${RB_PUBLICATION_GROUPS:-} == modal75,menu-engine,menu-value ]]; then
   done
 fi
 if (( ${#engine_link[@]} )); then
-  # The engine's sections, by their Rust paths, move to .menu_engine.* for
-  # menu/recipe_bank_ram_engine.ld.
-  engine_section='^\.(text|rodata)\.(rb_menu_engine_|rb_menu_value_|.*(11menu_engine(6engine|5block|5state|4tree)|19menu_engine_adapter|10menu_value|18menu_value_adapter))'
+  # The engine's sections take the names menu/recipe_bank_ram_engine.ld places.
+  engine_section='^\.(text|rodata|data|bss)\.(rb_menu_engine_|rb_menu_value_|xm1_storage_|xm1_property_|SLOT_BYTES|TAIL_BYTES|XM1_KERNEL_BOUNDARY|.*(11menu_engine(6engine|5block|5state|4tree|5frame)|19menu_engine_adapter|10menu_value|18menu_value_adapter|20xm1_property_service|25xm1_settings_storage_core|10xm1_kernel))'
   if [[ ${RB_PUBLICATION_GROUPS:-} == modal75,menu-engine,render ]]; then
-    engine_section='^\.(text|rodata)\.(rb_menu_engine_|rb_render_|.*(11menu_engine(6engine|5block|5state|4tree)|19menu_engine_adapter|15render_commands|12menu_widgets|14render_adapter))'
+    engine_section='^\.(text|rodata|data|bss)\.(rb_menu_engine_|rb_render_|xm1_storage_|xm1_property_|SLOT_BYTES|TAIL_BYTES|XM1_KERNEL_BOUNDARY|.*(11menu_engine(6engine|5block|5state|4tree|5frame)|19menu_engine_adapter|15render_commands|12menu_widgets|14render_adapter|20xm1_property_service|25xm1_settings_storage_core|10xm1_kernel))'
   fi
   declare -A renamed=()
   renames=()
   while read -r _ section _; do
     if [[ $section =~ $engine_section && -z ${renamed[$section]:-} ]]; then
       renamed[$section]=1
-      renames+=(--rename-section "$section=.menu_engine$section")
+      case "$section" in
+        *.data.*) renames+=(--rename-section "$section=.menu_engine_data$section") ;;
+        # PROGBITS: the checker refuses a non-PROGBITS allocated section, and
+        # objcopy -O binary fails the linked.bin extent check on a trailing NOBITS section.
+        *.bss.*) renames+=(--rename-section "$section=.menu_engine_data$section,alloc,load,contents,data") ;;
+        *) renames+=(--rename-section "$section=.menu_engine$section") ;;
+      esac
     fi
   done < <("$OBJDUMP" -h "$RB_RUST_ARCHIVE")
   "$OBJCOPY" "${renames[@]}" "$RB_RUST_ARCHIVE" "$OUT/rust-engine.a"
@@ -201,11 +228,15 @@ NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${FREE[@]}" -Oz -Wall -Wextra \
 objects+=("$OUT/ram_push_installer.o")
 NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" -c menu/classic_chrome_ram.S -o "$OUT/classic_chrome_ram.o"
 objects+=("$OUT/classic_chrome_ram.o")
+map_link=()
+if [[ -n ${RB_LINK_MAP:-} ]]; then
+  map_link=(-Wl,--Map="$RB_LINK_MAP")
+fi
 NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${LINK[@]}" "${gc_link[@]}" -Wl,-T,menu/recipe_bank_ram.ld \
   -Wl,--defsym=RAM_PUSH_BASE="$BASE" -Wl,--defsym=RAM_PUSH_BANK_END="$rb_bank_end" \
   -Wl,--defsym=RAM_PUSH_INSTALLER_START="$rb_installer_start" \
   -Wl,--defsym=RAM_PUSH_PUBLICATION_COUNT="$publication_count" "${modal_link[@]}" "${lifecycle_link[@]}" "${engine_link[@]}" "${variant_link[@]}" \
-  -Wl,menu/classic_chrome_ram_stock.ld -Wl,--emit-relocs \
+  -Wl,menu/classic_chrome_ram_stock.ld -Wl,--emit-relocs "${map_link[@]}" \
   "${objects[@]}" -o "$OUT/kernel.elf"
 "$OBJCOPY" -O binary "$OUT/kernel.elf" "$OUT/linked.bin"
 "$OBJCOPY" -j .text -O binary "$OUT/kernel.elf" "$OUT/kernel-text.bin"

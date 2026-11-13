@@ -1,5 +1,28 @@
-load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+xm1_rust_rlib(
+    name = "arm",
+    src = "src/lib.rs",
+    crate_name = "menu_widgets",
+    out = "libmenu_widgets.rlib",
+    data = [":module"],
+    rlib_deps = {
+        "libm": "//replacement/render_commands:libm-arm",
+        "menu_engine": "//replacement/menu_engine:arm",
+        "render_commands": "//replacement/render_commands:runtime-arm",
+    },
+    rustc_flags = [
+        "-C",
+        "target-feature=+strict-align",
+        "-C",
+        "llvm-args=-min-jump-table-entries=4096",
+    ],
+    visibility = [
+        "//replacement/bank:__pkg__",
+        "//replacement/render_adapter:__pkg__",
+    ],
+)
 
 filegroup(
     name = "module",

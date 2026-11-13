@@ -30,14 +30,18 @@ module Replacement.PropertyService.Artifact
   , artifactSpecialTable
   , artifactDefaultWindows
   , artifactFunctions
+  , artifactKernelBoundary
   , artifactProof
   , linkedBytes
   , storageStoreName
   , storageStoreWords
+  , storageStoreWord
+  , storageStoreSites
   , storageOutputName
   , storageOutputWords
   , storageStatusWords
   , mirrorBoundaries
+  , kernelBoundaries
   , stagePlacement
   , stageNativePlacement
   , validateLocalImage4

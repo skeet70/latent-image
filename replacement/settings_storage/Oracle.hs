@@ -32,11 +32,11 @@ closeMirror keys incoming old = (MirrorState final final, effects)
     effects = [DriverEffect key value previous | (i,key) <- zip [0..15] keys, let value = B.index final i, let previous = B.index (shadowBytes old) i, value /= previous]
 
 edges :: TaskContext -> [Event]
-edges Task = [Event 0x724b68 0x25 0xffffffff 0, Event 0x724c00 0x25 0 0]
+edges Task = [Event 0x7c 0x25 0xffffffff 0, Event 0x6c 0x25 0 0]
 edges Interrupt = [Event 0x726c74 2 0x3b 0]
 
 requestEdges :: TaskContext -> [Event] -> [Event]
-requestEdges Task middle = [Event 0x724b68 0x25 0xffffffff 0] ++ middle ++ [Event 0x724c00 0x25 0 0]
+requestEdges Task middle = [Event 0x7c 0x25 0xffffffff 0] ++ middle ++ [Event 0x6c 0x25 0 0]
 requestEdges Interrupt middle = Event 0x726c74 2 0x3b 0 : middle
 
 newtype DeferredPairByte = DeferredPairByte Word8

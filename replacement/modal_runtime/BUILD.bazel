@@ -1,5 +1,6 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib")
 
 filegroup(
     name = "module",
@@ -7,11 +8,49 @@ filegroup(
         "src/dispatch.S",
         "src/entry.S",
         "src/lib.rs",
+        "src/modal75.rs",
+        "src/picker.rs",
     ],
     visibility = [
         "//host/firmware:__pkg__",
         "//replacement/bank:__pkg__",
     ],
+)
+
+xm1_rust_rlib(
+    name = "arm",
+    src = "src/arm.rs",
+    crate_name = "modal_runtime",
+    out = "libmodal_runtime.rlib",
+    data = [":module"],
+    rlib_deps = {"menu_engine": "//replacement/menu_engine:arm"},
+    rustc_flags = ["-C", "target-feature=+strict-align"],
+    visibility = ["//replacement/bank:__pkg__"],
+)
+
+# The controller-75 table is a generated build input, not a private-data read.
+xm1_rust_rlib(
+    name = "arm-modal75",
+    src = "src/arm.rs",
+    crate_name = "modal_runtime",
+    out = "libmodal_runtime_modal75.rlib",
+    data = [
+        ":module",
+        "//replacement/bank/tables:modal75-table.rs",
+    ],
+    env = {
+        "RB_MODAL75_TABLE": "$$PWD/$(location //replacement/bank/tables:modal75-table.rs)",
+    },
+    rlib_deps = {"menu_engine": "//replacement/menu_engine:arm"},
+    rustc_flags = [
+        "-C",
+        "target-feature=+strict-align",
+        "--cfg",
+        "rb_modal75_owned",
+        "-C",
+        "llvm-args=-min-jump-table-entries=4096",
+    ],
+    visibility = ["//replacement/bank:__pkg__"],
 )
 
 filegroup(

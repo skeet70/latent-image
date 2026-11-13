@@ -11,6 +11,10 @@ pub enum FrameError {
     Actor(ActorError),
 }
 
+impl From<ProducerError> for FrameError {
+    fn from(error: ProducerError) -> Self { Self::Producer(error) }
+}
+
 pub(super) fn queue_panel(actor: &mut TaskActor, assets: &mut RasterResources<'_, '_, '_>, first: DrawList<'_>) -> Result<OutputBatch, FrameError> {
     actor.queue_render(assets, RenderRequest { composition: RenderComposition { mode: OutputMode::Panel, first, second: None }, waiters: [None; 6] }).map_err(FrameError::Actor)
 }

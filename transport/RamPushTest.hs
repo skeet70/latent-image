@@ -231,16 +231,16 @@ main = do
         [ (bankModal75Payload, modalScopedBankVariant, RecipeBankModal75, 0x1dcb8, 224, "build-recipe-bank-modal-ram.sh", "bank-modal.a")
         , (bankLifecyclePayload, lifecycleBankVariant, RecipeBankLifecycle, 0x1dcd8, 226, "build-recipe-bank-lifecycle-ram.sh", "bank-lifecycle.a")
         , (bankModalLifecyclePayload, modalLifecycleBankVariant, RecipeBankModalLifecycle, 0x1dcf8, 227, "build-recipe-bank-modal-lifecycle-ram.sh", "bank-modal-lifecycle.a")
-        , (bankModalEnginePayload, modalEngineBankVariant, RecipeBankModal75MenuEngine, 0x2dcc0, 225, "build-recipe-bank-modal-engine-ram.sh", "bank-modal.a")
+        , (bankModalEnginePayload, modalEngineBankVariant, RecipeBankModal75MenuEngine, 0x3dd00, 225, "build-recipe-bank-modal-engine-ram.sh", "bank-modal.a")
         , (bankModalValuePayload, modalValueBankVariant, RecipeBankModal75MenuEngine, 0x33d00, 226, "build-recipe-bank-modal-value-ram.sh", "bank-modal.a")
-        , (bankModalRenderPayload, modalRenderBankVariant, RecipeBankModal75MenuEngine, 0x2dcc0, 228, "build-recipe-bank-modal-render-ram.sh", "bank-modal.a") ]
+        , (bankModalRenderPayload, modalRenderBankVariant, RecipeBankModal75MenuEngine, 0x3dd00, 228, "build-recipe-bank-modal-render-ram.sh", "bank-modal.a") ]
   _ <- parse standard
-  let renderRuntime = B.replicate 0x2dcc0 0
+  let renderRuntime = B.replicate 0x3dd00 0
       renderPublications = publications ++
         [Publication index Activation (Address (0x00630000 + 4 * fromIntegral index))
           (WordValue 0xe92d4ff0) (WordValue 0xea000010) Both | index <- [223 .. 227]]
       renderManifest = standard
-        { allocationSize = 0x2dcc0, runtimeBytes = renderRuntime, runtimeDigest = sha256 renderRuntime
+        { allocationSize = 0x3dd00, runtimeBytes = renderRuntime, runtimeDigest = sha256 renderRuntime
         , manifestPublications = renderPublications, manifestBankVariant = Just modalRenderBankVariant }
   renderParsed <- parse renderManifest
   check "render manifest retains explicit identity in the shared engine allocation"
@@ -249,7 +249,7 @@ main = do
     (renderManifest { manifestPublications = take 225 renderPublications })
   refusesManifest "untagged render-sized vector cannot masquerade as modal lifecycle"
     (renderManifest { manifestBankVariant = Just modalLifecycleBankVariant })
-  let renderState = RamPushState (manifestDigest renderParsed) (runtimeDigest renderParsed) (Address base) 0x2dcc0
+  let renderState = RamPushState (manifestDigest renderParsed) (runtimeDigest renderParsed) (Address base) 0x3dd00
         (manifestEntries renderParsed) renderPublications callbackStockWord bootstrapBytes 1 (Just modalRenderBankVariant)
   renderStateDirectory <- pure (root </> "render-state")
   makeDir renderStateDirectory

@@ -9,18 +9,23 @@ import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Text as T
-import Emulation.ModalObservation (SettingsWrite, compareSettingsWrites, completedSettingsWrites, parseRecordedModalBeginRequest, settingsWritesJson)
+import Emulation.ModalObservation (SettingsWrite, compareSettingsWrites, completedSettingsWrites, parseRecordedModalBeginRequest, settingsWritesJson, stockSettingsWriters)
 import Emulation.ModalWatchStream (readFinalModalWatch)
 import Emulation.Sha256 (sha256File, sha256Hex)
+import Emulation.WatchObservation (watchRangeBounds)
+import Data.Scientific (Scientific, floatingOrInteger)
 import System.Directory (doesPathExist)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (die, exitFailure)
 import System.FilePath (isAbsolute, takeFileName, (</>))
 
 data Role = Role
-  { roleDirectory :: FilePath
+  { roleScoped :: Bool
+  , roleDirectory :: FilePath
   , roleWrites :: [SettingsWrite]
   , roleSettingsWriters :: Value
+  , roleWriterBounds :: [(Integer, Integer)]
+  , roleRuntime :: (Integer, Integer)
   , roleSettingsReloads :: Value
   , roleSegments :: Value
   , roleFinalDigest :: String
@@ -40,9 +45,10 @@ main = do
   stock <- loadRole False (resolve stockPath) >>= either (die . ("modal-settings-compare: stock: " ++)) pure
   owned <- loadRole True (resolve ownedPath) >>= either (die . ("modal-settings-compare: owned: " ++)) pure
   let outcome = do
-        unless (roleSettingsWriters stock == roleSettingsWriters owned) (Left "the roles declare different settings writers")
         unless (roleSettingsReloads stock == roleSettingsReloads owned) (Left "the roles declare different settings reloads")
         unless (roleSegments stock == roleSegments owned) (Left "the roles pressed different keys or observed different menu states")
+        checkWriterIdentity stock
+        checkWriterIdentity owned
         compareSettingsWrites (roleWrites stock) (roleWrites owned)
       side role = object
         [ "receipt" .= roleDirectory role, "watch_final_sha256" .= roleFinalDigest role
@@ -88,6 +94,8 @@ loadRole scoped directory = do
         package <- maybe (Right Null) eitherDecodeStrict' packageBytes
         lifetime <- field "lifetime" requestValue
         writers <- field "settings_writers" lifetime
+        writerBounds <- parseExtents writers
+        runtime <- field "runtime" lifetime >>= parseExtent
         reloads <- field "settings_reloads" lifetime
         finalFile <- field "watch_final_file" observation
         finalName <- text "path" finalFile
@@ -106,10 +114,10 @@ loadRole scoped directory = do
           pure (object ["label" .= label, "menu" .= menu]))
         keys <- list "key_log" session >>= traverse (field "key")
         let steps = object ["captures" .= captures, "keys" .= keys]
-        pure (request, writers, reloads, finalName, finalDigest, steps, package)
+        pure (request, writers, writerBounds, runtime, reloads, finalName, finalDigest, steps, package)
   case binding of
     Left problem -> pure (Left problem)
-    Right (request, writers, reloads, finalName, finalDigest, steps, package) -> do
+    Right (request, writers, writerBounds, runtime, reloads, finalName, finalDigest, steps, package) -> do
       let finalPath = directory </> takeFileName (T.unpack finalName)
       digest <- sha256Hex <$> sha256File finalPath
       parsed <- readFinalModalWatch finalPath
@@ -117,4 +125,36 @@ loadRole scoped directory = do
         unless (T.unpack finalDigest == digest) (Left "the final watch file differs from its observation binding")
         final <- parsed
         writes <- completedSettingsWrites request final
-        pure (Role directory writes writers reloads steps digest package)
+        pure (Role scoped directory writes writers writerBounds runtime reloads steps digest package)
+
+parseExtent :: Value -> Either String (Integer, Integer)
+parseExtent (Array entries) = case foldr (:) [] entries of
+  [Number low, Number high]
+    | Just low' <- whole low, Just high' <- whole high -> Right (low', high')
+  _ -> Left "an extent is not two integers"
+parseExtent _ = Left "an extent is not an array"
+
+whole :: Scientific -> Maybe Integer
+whole value = case floatingOrInteger value :: Either Double Integer of
+  Right integer -> Just integer
+  Left _ -> Nothing
+
+parseExtents :: Value -> Either String [(Integer, Integer)]
+parseExtents (Array entries) = traverse parseExtent (foldr (:) [] entries)
+parseExtents _ = Left "settings writers are not a list"
+
+-- | Each role declares the stock setter it executes; the owned role also declares
+-- the storage store extents its image exports.
+checkWriterIdentity :: Role -> Either String ()
+checkWriterIdentity role
+  | roleScoped role = unless (take (length stockBounds) bounds == stockBounds
+      && not (null ownedBounds) && all inside ownedBounds)
+      (Left "the owned role's settings writers are not the stock setter plus extents inside its image")
+  | otherwise = unless (bounds == stockBounds)
+      (Left "the stock role's settings writer is not the stock setter")
+ where
+  bounds = roleWriterBounds role
+  stockBounds = [(toInteger low, toInteger high) | (low, high) <- map watchRangeBounds stockSettingsWriters]
+  ownedBounds = drop (length stockBounds) bounds
+  (runtimeLow, runtimeHigh) = roleRuntime role
+  inside (low, high) = runtimeLow <= low && low < high && high <= runtimeHigh

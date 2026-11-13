@@ -24,9 +24,10 @@ struct Stage([u8; RECORD_BYTES]);
 impl Staging for Stage { fn bytes(&mut self, _: RecordKind) -> &mut [u8] { &mut self.0 } }
 struct Driver { writes: Vec<(BackupKey, BackupValue)>, failed: bool }
 impl HeaderBackupDriver for Driver {
-    fn context(&mut self) -> ExecutionContext { ExecutionContext::Task }
-    fn acquire(&mut self, _: BackupSemaphore) {}
-    fn release(&mut self, _: BackupSemaphore) {}
+    type Task = ();
+    fn task(&mut self) -> Option<()> { Some(()) }
+    fn acquire(&mut self, _: &(), _: BackupSemaphore) {}
+    fn release(&mut self, _: &(), _: BackupSemaphore) {}
     fn diagnostic(&mut self, _: BackupDiagnostic) {}
     fn admit(&mut self, _: RequestDirection) -> Result<(), DeviceStatus> { if self.failed { Err(DeviceStatus(-63)) } else { Ok(()) } }
     fn write_backup(&mut self, key: BackupKey, value: BackupValue, _: BackupWriteMode) -> DeviceStatus { self.writes.push((key, value)); DeviceStatus(if self.failed { -63 } else { 0 }) }

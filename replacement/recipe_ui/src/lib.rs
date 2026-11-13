@@ -4,7 +4,7 @@
 #[cfg(test)]
 extern crate menu_engine;
 
-use crate::menu_engine::frame::RowToken;
+use menu_engine::frame::RowToken;
 
 pub const VERBS_PER_SLOT: u32 = 4;
 pub const BANK_SLOTS: u32 = 7;

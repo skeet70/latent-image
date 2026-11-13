@@ -246,7 +246,7 @@
     {"function":"rb_render_tree_apply","access":"store","through":{"argument":"r3"},"reason":"writes the caller's 0x44-byte DrawReport supplied as argument 3 by the entry seam"},
     {"function":"rb_render_picker_entry","access":"store","through":{"caller-frame":24},"reason":"passes the caller's report pointer at entry SP+24 to the Rust adapter"},
     {"function":"rb_render_tree_entry","access":"store","through":{"caller-frame":24},"reason":"passes the caller's report pointer at entry SP+24 to the Rust adapter"},
-    {"function":"_RNvNtCsg14nhH9qOYj_4bank14render_adapter8classify","access":"store","through":{"argument":"r0"},"reason":"returns EntryClass into the adapter-owned AAPCS result buffer"},
-    {"function":"_RNvXNtNtCsg14nhH9qOYj_4bank14render_adapter6pickerNtB2_13StockServicesNtNtNtB6_12menu_widgets12value_picker14PickerServices5child","access":"store","through":{"argument":"r0"},"reason":"returns the stock child description into the widget-owned AAPCS result buffer"}
+    {"function":"_RNvCsl7RMmmJxUvn_14render_adapter8classify","access":"store","through":{"argument":"r0"},"reason":"returns EntryClass into the adapter-owned AAPCS result buffer"},
+    {"function":"_RNvXNtCsl7RMmmJxUvn_14render_adapter6pickerNtB2_13StockServicesNtNtCsfNQgAWtHHLn_12menu_widgets12value_picker14PickerServices5child","access":"store","through":{"argument":"r0"},"reason":"returns the stock child description into the widget-owned AAPCS result buffer"}
   ]
 }

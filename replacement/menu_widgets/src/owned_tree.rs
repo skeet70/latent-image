@@ -333,7 +333,7 @@ pub fn compose_tree_and_publish<'text>(
 ) -> Result<OutputBatch, FrameError> {
     let mut services = CpuTree { data, commands: CommandBuffer::new(commands), font: data.saved_font, palette: data.ordinary, primary_enabled: data.initial_primary_enabled, error: None };
     let mut next_report = DrawReport::zeroed();
-    tree_list::tree_list(&mut services, args, &mut next_report);
+    tree_list::tree_list(&mut services, args, &mut next_report)?;
     if let Some(error) = services.error { return Err(FrameError::Producer(error)); }
     let batch = queue_panel(actor, assets, services.commands.draw_list())?;
     *report = next_report;

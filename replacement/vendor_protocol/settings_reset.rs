@@ -1,5 +1,5 @@
 use crate::{backend::{BackendError, ConfigImages}, extra_configuration::ExtraConfiguration};
-use xm1_settings_storage_core::{custom::{CustomCommitOutcome, CustomDefaultField, CustomDefaultsConfiguration, CustomRecordBackend, CustomSettingsLifecycle}, mirror::{BackupDiagnostic, BackupSemaphore, DriverObservation, ExecutionContext, HeaderBackupDriver, SharedBacking}};
+use xm1_settings_storage_core::{custom::{CustomCommitOutcome, CustomDefaultField, CustomDefaultsConfiguration, CustomRecordBackend, CustomSettingsLifecycle}, mirror::{BackupDiagnostic, BackupSemaphore, DriverObservation, HeaderBackupDriver, SharedBacking}};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResetMode { Ordinary, OrdinaryAndCustom }
@@ -47,32 +47,36 @@ pub fn reset<D: HeaderBackupDriver>(
     scratch[0xc0..0xe8].fill(0);
     scratch[..2].copy_from_slice(&counters.image.to_le_bytes());
     scratch[2..4].copy_from_slice(&counters.folder.to_le_bytes());
-    match backing.driver_mut().context() {
-        ExecutionContext::Task => backing.driver_mut().acquire(BackupSemaphore::Settings),
-        ExecutionContext::OutsideTask => backing.driver_mut().diagnostic(BackupDiagnostic::OutsideTask),
+    let task = backing.driver_mut().task();
+    match &task {
+        Some(task) => backing.driver_mut().acquire(task, BackupSemaphore::Settings),
+        None => backing.driver_mut().diagnostic(BackupDiagnostic::OutsideTask),
     }
     backing.live_mut()[..0x128].copy_from_slice(scratch);
-    let ordinary = backing.synchronize();
+    let mut ordinary = [None; 16];
+    backing.synchronize_into(&mut ordinary);
     let custom = if mode == ResetMode::OrdinaryAndCustom {
         *custom.live_mut() = CustomDefaultsConfiguration::from_abi(inputs).payload();
         Some(custom.commit(custom_backend))
     } else { None };
     extra.reset_all();
-    if backing.driver_mut().context() == ExecutionContext::Task { backing.driver_mut().release(BackupSemaphore::Settings); }
+    if let Some(task) = &task { backing.driver_mut().release(task, BackupSemaphore::Settings); }
     Ok(ResetOutcome { ordinary, custom })
 }
 
 pub fn reset_counters<D: HeaderBackupDriver>(backing: &mut SharedBacking<'_, D>, area2: &mut [u8; 0x200]) -> [Option<DriverObservation>; 16] {
-    match backing.driver_mut().context() {
-        ExecutionContext::Task => backing.driver_mut().acquire(BackupSemaphore::Settings),
-        ExecutionContext::OutsideTask => backing.driver_mut().diagnostic(BackupDiagnostic::OutsideTask),
+    let task = backing.driver_mut().task();
+    match &task {
+        Some(task) => backing.driver_mut().acquire(task, BackupSemaphore::Settings),
+        None => backing.driver_mut().diagnostic(BackupDiagnostic::OutsideTask),
     }
     let live = backing.live_mut();
     live[0x128..0x140].fill(0);
     live[..2].copy_from_slice(&0u16.to_le_bytes());
     live[2..4].copy_from_slice(&100u16.to_le_bytes());
     live[0x64] = (live[0x64] & 0x7f) | (u8::from(live[0x21] & 63 == 0) << 7);
-    let observations = backing.synchronize();
+    let mut observations = [None; 16];
+    backing.synchronize_into(&mut observations);
     let live = backing.live();
     area2[0x24..0x26].copy_from_slice(&live[2..4]);
     area2[0x26..0x28].copy_from_slice(&live[..2]);
@@ -81,6 +85,6 @@ pub fn reset_counters<D: HeaderBackupDriver>(backing: &mut SharedBacking<'_, D>,
         let target = 4 + index * 8;
         area2[target..target+6].copy_from_slice(&live[source..source+6]);
     }
-    if backing.driver_mut().context() == ExecutionContext::Task { backing.driver_mut().release(BackupSemaphore::Settings); }
+    if let Some(task) = &task { backing.driver_mut().release(task, BackupSemaphore::Settings); }
     observations
 }

@@ -1,8 +1,28 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib")
+
 filegroup(
     name = "module",
     srcs = ["src/lib.rs", "src/lifecycle.rs"],
     visibility = [
         "//replacement/bank:__pkg__",
         "//host/firmware:__pkg__",
+    ],
+)
+
+xm1_rust_rlib(
+    name = "arm",
+    src = "src/arm.rs",
+    crate_name = "owned_menu",
+    out = "libowned_menu.rlib",
+    data = [":module"],
+    rustc_flags = [
+        "-C",
+        "llvm-args=-min-jump-table-entries=4096",
+    ],
+    rlib_deps = {"menu_engine": "//replacement/menu_engine:arm"},
+    visibility = [
+        "//replacement/bank:__pkg__",
+        "//replacement/menu_engine:__pkg__",
+        "//replacement/render_adapter:__pkg__",
     ],
 )

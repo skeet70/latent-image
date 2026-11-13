@@ -27,9 +27,9 @@ hostMap :: [MapRow] -> B.ByteString
 hostMap rows = C.pack ("VMA LMA Size Align Out In Symbol\n" ++ concatMap row rows)
   where row (MapRow address count alignment name) = showHex address " " ++ showHex address " " ++ showHex count " " ++ show alignment ++ " fixture.o:(" ++ name ++ ")\n"
 hostLinker :: B.ByteString
-hostLinker = C.pack ("SECTIONS {\n  .compiler_builtins 0 : { *compiler_builtins*(.text*) }\n  .text 0x5d0000 : { *(.text*) }\n"
+hostLinker = C.pack ("SECTIONS {\n  .text 0x5d0000 : { *(.text*) }\n"
   ++ concat ["  .fixture_" ++ show index ++ " 0x" ++ showHex address "" ++ " : { KEEP(*(.text." ++ entry ++ ")) }\n" | (index,(address,entry,_)) <- zip [0 :: Int ..] entries]
-  ++ "  .data : { *(.data*) }\n  .bss : { *(.bss*) }\n  /DISCARD/ : { *(.ARM.exidx*) }\n}\nASSERT(SIZEOF(.compiler_builtins) == 0, \"compiler builtins\")\n")
+  ++ "  .data : { *(.data*) }\n  .bss : { *(.bss*) }\n  /DISCARD/ : { *(.ARM.exidx*) }\n}\n")
 outputAddresses :: B.ByteString -> [Word32]
 outputAddresses linker = [address | line <- C.lines linker,(_:encoded:":":_) <- [C.words line],Just raw <- [C.stripPrefix "0x" encoded],(address,"") <- readHex (C.unpack raw)]
 bytes :: Word32 -> B.ByteString

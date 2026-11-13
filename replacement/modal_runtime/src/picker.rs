@@ -8,7 +8,7 @@
 
 #![cfg_attr(not(test), allow(dead_code))]
 
-use crate::menu_engine::frame::{NodeId, RowToken};
+use menu_engine::frame::{NodeId, RowToken};
 
 /// Menu node record address, `*0x009571d0` while a menu is open.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

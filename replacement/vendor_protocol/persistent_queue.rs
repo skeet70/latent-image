@@ -1,5 +1,5 @@
 use crate::{backend::{BackendError, ConfigImages, ConfigSpan}, extra_configuration::{CommitOutcome, ConfigurationMedium, ExtraConfiguration}, settings_reset::{self, OrdinaryDefaults, ResetMode, ResetOutcome, SavedCounters}};
-use xm1_settings_storage_core::{custom::{CustomRecordBackend, CustomSettingsLifecycle}, mirror::{BackingRange, BackingStatus, BackingWriteOutcome, BackupDriver, SharedBacking}};
+use xm1_settings_storage_core::{custom::{CustomRecordBackend, CustomSettingsLifecycle}, mirror::{BackingRange, BackingStatus, BackingWriteOutcome, BackupDriver, ExportSink, SharedBacking}};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PersistentQueueEvent { ProfileBytes, CommitExtraConfiguration }
@@ -57,7 +57,7 @@ impl<D: BackupDriver, C: CustomRecordBackend, M: ConfigurationMedium> Persistent
         match action {
             crate::transport::ProfileAction::Read { bank,index } => {
                 let mut value = [0];
-                let status = self.backing.export(BackingRange::new(u32::from(index.offset(bank)),1), &mut value);
+                let status = self.backing.export(BackingRange::new(u32::from(index.offset(bank)),1), &mut value, ExportSink::Leaves);
                 if status == BackingStatus::Success { self.configuration.write(ConfigSpan::new(0x83,1)?, &value)?; }
                 Ok(PersistentQueueOutcome::Read(status))
             }

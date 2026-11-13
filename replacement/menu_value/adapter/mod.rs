@@ -9,6 +9,9 @@ use crate::menu_value::{
 };
 
 use core::ptr::read_volatile;
+use xm1_property_service::{
+    Properties, PropertyId as ServicePropertyId, ReadMode, SettingsBank, ValueBits, WriteValue,
+};
 
 include!(env!("RB_MENU_VALUE_TABLE"));
 
@@ -44,8 +47,6 @@ fn cells_differ() -> bool {
 unsafe extern "C" {
     fn rb_menu_value_call_size_cell(value: u32);
     fn rb_menu_value_call_aspect_cell(value: u32);
-    fn rb_menu_value_call_property_read(property: u32, flags: u32) -> u32;
-    fn rb_menu_value_call_property_write(property: u32, value: u32, flags: u32);
     fn rb_menu_value_call_current_property(kind: u32, reserved: u32, property: u32);
     fn rb_menu_value_call_display_update(family: u32, reserved: u32);
     fn rb_menu_value_call_change_marker(flag: u32);
@@ -55,11 +56,17 @@ struct Stock;
 
 impl Settings for Stock {
     fn read(&self, property: PropertyId) -> ChoiceCode {
-        ChoiceCode::new(unsafe { rb_menu_value_call_property_read(property.get() as u32, 0) })
+        match ServicePropertyId::decode(property.get() as u32) {
+            Some(id) => ChoiceCode::new(unsafe { Properties::stock() }.read(id, SettingsBank::Active, ReadMode::Live).get()),
+            None => ChoiceCode::new(0),
+        }
     }
 
     fn write(&mut self, property: PropertyId, value: ChoiceCode) {
-        unsafe { rb_menu_value_call_property_write(property.get() as u32, value.get(), 0) }
+        if let Some(id) = ServicePropertyId::decode(property.get() as u32) {
+            let mut properties = unsafe { Properties::stock() };
+            properties.write(id, WriteValue::Value(ValueBits::new(value.get())), SettingsBank::Active);
+        }
     }
 }
 

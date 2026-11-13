@@ -33,12 +33,13 @@ import FujiAF.JSON (encodeCanonical)
 import FujiModNativePaths (fujimodNativeCase)
 import Numeric (readHex, showHex)
 import PropertyFields (PropertyId (..))
-import Replacement.PropertyService.Admission (FunctionExtent (..))
+import Replacement.PropertyService.Admission (FunctionExtent (..), FunctionName (..))
 import Replacement.PropertyService.Artifact
 import Replacement.PropertyService.ClassRecord (ownedLabel, reasonLabel, stockLabel)
 import Replacement.PropertyService.Classify
 import Replacement.PropertyService.Encoding (EncodedEntry (..), EncodedSlot (..), EncodedSpecial (..), SlotIndex (..), SpecialArm (..), TableEntry (..), encodeEntry, encodeSlot, encodeSpecial)
 import Replacement.PropertyService.Frame (FrameDepth (..), caseFrameDepth, withPrivateFrame)
+import qualified Replacement.PropertyService.HeaderBoundary as H
 import Replacement.PropertyService.Oracle
 import qualified Replacement.PropertyService.Compact as Compact
 import qualified Replacement.PropertyService.Placement as P
@@ -273,7 +274,7 @@ finishFrozenRun frozen currentNames = do
   ensure (names == currentNames) "source batch order or inventory differs from current cases"
   consumed <- reverse <$> readIORef (frozenConsumed frozen)
   ensure (S.fromList (map FrozenBatchName consumed) == S.fromList names && length consumed == length names) "source observations were not consumed exactly once"
-data BatchGate = BatchGate StorageAdmission [FilePath] (Maybe BatchCheckpoint) (IORef Int) (Maybe FrozenRun)
+data BatchGate = BatchGate EntryContract StorageAdmission [FilePath] (Maybe BatchCheckpoint) (IORef Int) (Maybe FrozenRun)
 
 batchGate :: [String] -> Maybe FilePath -> FilePath -> IO BatchGate
 batchGate arguments cache out = do
@@ -287,7 +288,7 @@ batchGate arguments cache out = do
     [_] -> failH "--batch-checkpoint needs a positive count"
     _ : value : _ -> Just <$> either failH pure (parseBatchCheckpoint value)
   counter <- newIORef 0
-  pure (BatchGate admission (out : maybe [] pure cache) checkpoint counter Nothing)
+  pure (BatchGate (entryContract (entryShape arguments)) admission (out : maybe [] pure cache) checkpoint counter Nothing)
 
 frozenBatch :: FrozenRun -> FilePath -> [CaseId] -> IO [(CaseId, N.NativeObservation)]
 frozenBatch source directory identifiers = do
@@ -331,7 +332,7 @@ observeBatch execution directory identifiers = case execution of
 
 -- | One runner session over at most 'batchLimit' cases in @directory@, its runs keyed by case label.
 runBatch :: BatchGate -> Maybe FilePath -> FilePath -> FilePath -> [CaseSpec] -> IO (BatchRecord, M.Map CaseLabel Run)
-runBatch (BatchGate admission measuredPaths checkpoint counter frozen) cache runner directory specs = do
+runBatch (BatchGate contract admission measuredPaths checkpoint counter frozen) cache runner directory specs = do
   storageCheckpoint BeforeBatch admission measuredPaths
   ensure (length specs <= batchLimit) "batch over the case limit"
   batchPath <- writeBatch directory specs
@@ -344,7 +345,7 @@ runBatch (BatchGate admission measuredPaths checkpoint counter frozen) cache run
         reportPath = directory </> label ++ ".native-result.json"
     writes <- either (\problem -> failH (reportPath ++ ": " ++ problem)) pure (reportWrites report)
     run <- either (\problem -> failH (reportPath ++ ": " ++ problem)) pure (runOf observation writes)
-    let abiRun = if any ((== N.R3) . fst) (caseExpectedRegisters spec) then run else run {runRegisters = filter ((/= N.R3) . fst) (runRegisters run)}
+    let abiRun = projectRun contract (caseExpectedRegisters spec) run
     forced <- evaluate (forceRun abiRun)
     pure (CaseLabel label, forced, sha256Hex (consumedDigest consumed))
   batchBytes <- B.readFile batchPath
@@ -406,9 +407,9 @@ differenceSamples rows = object
   | (kind, samples) <- M.toList (M.fromListWith (++) [(phase ++ ":" ++ differenceKind difference, [(label, difference)]) | (phase, label, difference) <- rows])
   ]
 
-stockSpec :: Fixture -> B.ByteString -> M.Map PropertyId Property -> CaseLabel -> [FunctionSpan] -> OracleCase -> CaseSpec
-stockSpec fx image properties label functions oracleCase =
-  caseSpec image functions fx label standing oracleCase (fromMaybe placeholderExpectation (modelled standing >>= \owned -> modelExpectation fx owned (oracleOperation oracleCase)))
+stockSpec :: EntryContract -> Fixture -> B.ByteString -> M.Map PropertyId Property -> CaseLabel -> [FunctionSpan] -> OracleCase -> CaseSpec
+stockSpec contract fx image properties label functions oracleCase =
+  caseSpec image functions fx label standing oracleCase (projectExpectation contract (fromMaybe placeholderExpectation (modelled standing >>= \owned -> modelExpectation fx owned (oracleOperation oracleCase))))
   where
     standing = standingOf properties (oracleProperty oracleCase)
 
@@ -477,12 +478,12 @@ compactStorageScope admission@(StorageAdmission _ limit) out = do
   ensure (outsideOutput >= 0) "compact output allocation exceeds its containing root"
   pure (CompactStorageScope check finish)
 
-noEffectExpectation :: Operation -> CaseSpec -> Expectation
-noEffectExpectation operation spec = Expectation Returned registers memory
+noEffectExpectation :: EntryContract -> Operation -> CaseSpec -> Expectation
+noEffectExpectation contract operation spec = Expectation Returned registers memory
   where
     registers = (N.R0, 0) :
       [(register, value) | (register, value) <- caseInitial spec, register /= N.R0,
-        register `elem` comparedRegisters || (register == N.R3 && case operation of Set {} -> True; Get {} -> False)]
+        register `elem` contractRegisters contract, register /= N.R3 || case operation of Set {} -> True; Get {} -> False]
     memory =
       [(ident, NC.regionBytes region) | CaseRegion region _ <- caseRegions spec,
         let ident = N.regionIdOf region, ident `elem` [name | (name, _, _) <- comparedRegions]]
@@ -563,6 +564,10 @@ variantArguments arguments = case arguments of
 -- | The entry shape the runner validates: the canonical branches or the owned public wrappers.
 entryShape :: [String] -> PublicEntryShape
 entryShape arguments = if "--public-entries" `elem` arguments then PublicWrapperEntry else CanonicalEntry
+
+entryContract :: PublicEntryShape -> EntryContract
+entryContract CanonicalEntry = CanonicalEntryContract
+entryContract PublicWrapperEntry = PublicWrapperEntryContract
 
 deriveFor :: PublicEntryShape -> ArtifactPurpose -> [Property] -> P.Carrier -> ArtifactInput -> Either ArtifactError LinkedArtifact
 deriveFor shape = case shape of
@@ -689,8 +694,8 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
       let currentContract = case evidence of NativeEvidence _ -> Null; StagedEvidence _ _ digest -> String (fromString (sha256Hex digest))
       ensure (contract == currentContract) "source staged contract identity differs"
       pure (Just sourceRun)
-  let BatchGate admission measuredPaths checkpoint counter _ = initialGate
-      gate = BatchGate admission measuredPaths checkpoint counter frozen
+  let BatchGate contract admission measuredPaths checkpoint counter _ = initialGate
+      gate = BatchGate contract admission measuredPaths checkpoint counter frozen
   out <- freshOutput outPath
   let P.Carrier (P.GuestAddress carrierStart) (P.GuestAddress carrierEnd) = artifactCarrier artifact
       P.EntryAddresses (P.GuestAddress getterStub) (P.GuestAddress setterEntry) = artifactEntries artifact
@@ -975,9 +980,9 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
         wrapperSamples = [(wrapper, OracleCase (PropertyId identifier) (Get Bank0 LiveRead (SlotArgument 0)))
           | wrapper <- [DefaultWrapper, LiveWrapper], identifier <- [0, 646]]
         expectation operation spec = case modelled (standing (oracleProperty operation)) of
-          Just owned -> maybe (failH "compact model reaches outside the fixture") pure (modelExpectation fx owned (oracleOperation operation))
+          Just owned -> maybe (failH "compact model reaches outside the fixture") (pure . projectExpectation contract) (modelExpectation fx owned (oracleOperation operation))
           Nothing -> case standing (oracleProperty operation) of
-            OutOfRange -> pure (noEffectExpectation (oracleOperation operation) spec)
+            OutOfRange -> pure (noEffectExpectation contract (oracleOperation operation) spec)
             Classified {} -> failH "compact measurement cannot omit an independent property model"
         plan family reference owned expected = Compact.PairPlan
           { Compact.planStock = reference, Compact.planOwned = owned, Compact.planModel = Just expected,
@@ -985,7 +990,7 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
             Compact.planRequirement = Compact.MustAgree }
     publicPlans <- forM (boundarySamples ++ familySamples ++ bracketSamples) $ \operation -> do
       let label = caseLabel operation
-          reference = withDerivedFrame stockSupplied [] (stockSpec fx image4 properties label stockFunctions operation)
+          reference = withDerivedFrame stockSupplied [] (stockSpec contract fx image4 properties label stockFunctions operation)
           owned run = withDerivedFrame ownedSupplied ownedRanges (caseSpec (fixtureImage (artifactDefaultWindows artifact) fx candidate) candidateFunctions fx label (standing (oracleProperty operation)) operation (observedExpectation run))
           family = classLabel (standing (oracleProperty operation)) ++ case oracleOperation operation of Get {} -> "-getter"; Set {} -> "-setter"
       expected <- expectation operation reference
@@ -993,7 +998,7 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
     callerPlans <- forM callerSamples $ \entry -> do
       let operation = entryOperation entry
           label = entryLabel entry
-      expected <- expectation operation (stockSpec fx image4 properties label stockFunctions operation)
+      expected <- expectation operation (stockSpec contract fx image4 properties label stockFunctions operation)
       let reference = withDerivedFrame stockSupplied [] (entryCaseSpec image4 stockFunctions fx label (standing (oracleProperty operation)) entry expected)
           owned run = withDerivedFrame ownedSupplied ownedRanges (entryCaseSpec candidate candidateFunctions fx label (standing (oracleProperty operation)) entry (observedExpectation run))
       pure (plan ("caller-" ++ show (fromEnum (entryCallMode entry))) reference owned expected)
@@ -1001,7 +1006,7 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
       let label = prefixedCaseLabel (CaseLabel ("wrapper-" ++ show (fromEnum wrapper))) (caseLabel operation)
           reference = withDerivedFrame stockSupplied [] (wrapperCaseSpec wrapper image4 stockFunctions fx label (standing (oracleProperty operation)) operation)
           owned _ = withDerivedFrame ownedSupplied ownedRanges (wrapperCaseSpec wrapper candidate candidateFunctions fx label (standing (oracleProperty operation)) operation)
-      pure (plan ("wrapper-" ++ show (fromEnum wrapper)) reference owned (noEffectExpectation (oracleOperation operation) reference))
+      pure (plan ("wrapper-" ++ show (fromEnum wrapper)) reference owned (noEffectExpectation contract (oracleOperation operation) reference))
     let plans = publicPlans ++ callerPlans ++ wrapperPlans
     ensure (length plans == 64) "compact measurement requires exactly 128 fresh role observations"
     executable <- getExecutablePath >>= canonicalizePath
@@ -1074,13 +1079,14 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
     if Compact.compactConsumerAgreement result then exitSuccess else exitFailure
 
   -- Pass 1: stock.
-  (stockBatches, stockRuns) <- runBatches gate cache runner out "stock" [withDerivedFrame stockSupplied [] (stockSpec (fxOf rc) image4 properties (runLabel rc) stockFunctions (runCase rc)) | rc <- runCases]
+  let stockSpecsFor = [withDerivedFrame stockSupplied [] (stockSpec contract (fxOf rc) image4 properties (runLabel rc) stockFunctions (runCase rc)) | rc <- runCases]
+  (stockBatches, stockRuns) <- runBatches gate cache runner out "stock" stockSpecsFor
   let stockRun rc = lookupRun stockRuns (runLabel rc)
   modelRows <- fmap concat . forM runCases $ \rc -> case modelled (standing (runProperty rc)) of
     Nothing -> pure []
     Just owned -> do
       run <- stockRun rc
-      pure [(rc, modelDifferences (fxOf rc) owned (oracleOperation (runCase rc)) run)]
+      pure [(rc, modelDifferences contract (fxOf rc) owned (oracleOperation (runCase rc)) run)]
 
   -- Pass 2: candidate against stock.
   candidateSpecs <- forM runCases $ \c -> do
@@ -1110,7 +1116,7 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
       pure (runLabel c, compareRuns reference subject)
     pure (batches, (name, outcomes))
   let entryStanding c = standing (oracleProperty (entryOperation c))
-      entryExpected c = fromMaybe placeholderExpectation (modelled (entryStanding c) >>= \owned -> modelExpectation fx owned (oracleOperation (entryOperation c)))
+      entryExpected c = projectExpectation contract (fromMaybe placeholderExpectation (modelled (entryStanding c) >>= \owned -> modelExpectation fx owned (oracleOperation (entryOperation c))))
   (entryStockBatches, entryStockRuns) <- runBatches gate cache runner out "entry-stock"
     [withDerivedFrame stockSupplied [] (entryCaseSpec image4 stockFunctions fx (entryLabel c) (entryStanding c) c (entryExpected c)) | c <- adapterCases]
   (entryCandidateBatches, entryCandidateRuns) <- runBatches gate cache runner out "entry-candidate"
@@ -1120,7 +1126,7 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
     subject <- lookupRun entryCandidateRuns (entryLabel c)
     pure (c, compareRuns reference subject ++ case modelled (entryStanding c) of
       Nothing -> []
-      Just owned -> modelDifferences fx owned (oracleOperation (entryOperation c)) subject)
+      Just owned -> modelDifferences contract fx owned (oracleOperation (entryOperation c)) subject)
   let wrappers = (if smokeRun then take 2 else id) [(wrapper, OracleCase identifier (Get Bank0 LiveRead (SlotArgument 0))) | wrapper <- [minBound .. maxBound], identifier <- propertyIds, inSubset identifier]
       wrapperLabel wrapper c = prefixedCaseLabel (CaseLabel ("wrapper-" ++ show (fromEnum wrapper))) (caseLabel c)
       wrapperSpecs image functions = [wrapperCaseSpec wrapper image functions fx (wrapperLabel wrapper c) (standing (oracleProperty c)) c | (wrapper, c) <- wrappers]
@@ -1136,11 +1142,27 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
       case M.lookup (DefectName defect) defects of
         Nothing -> failH ("no --defect " ++ defect)
         Just (image, spans, _, windows) -> pure (name, fixtureImage windows fx image, spans)
+  -- A canonical entry is one branch word, so its veneer lives in the carrier fill.
+  propertyBody <- case [start | FunctionExtent (FunctionName name) (P.GuestAddress start) _ <- artifactFunctions artifact, name == "xm1_property_get"] of
+    [start] -> pure start
+    _ -> failH "the artifact has no single xm1_property_get"
   veneerImages <- forM
-    [("id-from-r12", [at getterStub 0xe1a0000c, at (getterStub + 4) (candidateWord (getterStub + 4) - 0x01000000)])
-    ,("clobber-r4-or-r11", [at getterStub 0xe92d4430])] $ \(name, patches) -> do
+    [("id-from-r12", 0xe1a0000c, 0xe1a00000, False)
+    ,("clobber-r4-or-r11", 0xe92d4430, 0xe8bd8830, True)] $ \(name, first, final, link) -> do
+      patches <- case shape of
+        PublicWrapperEntry -> pure ([at getterStub first] ++
+          [at (getterStub + 4) (candidateWord (getterStub + 4) - 0x01000000) | not link])
+        CanonicalEntry -> do
+          let veneer = carrierEnd - 16
+              call = if link then branchLinkWord (veneer + 4) propertyBody else branchWord (veneer + 4) propertyBody
+          ensure (fromIntegral (veneer - carrierStart) >= B.length (linkedBytes artifact)) (name ++ ": veneer does not fit the carrier")
+          pure (at getterStub (branchWord getterStub veneer) :
+            [Patch (veneer + offset) (candidateWord (veneer + offset)) word
+            | (offset, word) <- zip [0, 4 ..] [first, call, final]])
       image <- orFail name (applyPatches patches candidate)
-      pure (name, image, candidateFunctions)
+      pure (name, image, case shape of
+        PublicWrapperEntry -> candidateFunctions
+        CanonicalEntry -> candidateFunctions ++ [FunctionSpan (carrierEnd - 16) (carrierEnd - 4)])
   let controlEntryLabel name c = prefixedCaseLabel (CaseLabel ("ec-" ++ name)) (entryLabel c)
   (entryControlBatches, entryControlRuns) <- runBatches gate cache runner out "entry-controls"
     [entryCaseSpec image spans fx (controlEntryLabel name c) (entryStanding c) c (entryExpected c)
@@ -1186,7 +1208,7 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
       extentOf entry = fromMaybe 4 (lookup entry entryExtents)
   caseRows <- forM (zip runCases verdicts) $ \(rc, (_, differences)) -> do
     let label = runLabel rc
-        spec = stockSpec (fxOf rc) image4 properties label stockFunctions (runCase rc)
+        spec = stockSpec contract (fxOf rc) image4 properties label stockFunctions (runCase rc)
         N.GuestAddress entry = caseEntry spec
         entryAddress = fromIntegral entry :: Word32
         extent = extentOf entryAddress
@@ -1226,6 +1248,14 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
       executedCases = sum [recordCases record | record <- allBatches, not (isJust frozen), recordReuse record == BatchExecuted]
       reusedCases = sum [recordCases record | record <- allBatches, not (isJust frozen), recordReuse record == BatchReused]
       batchValue record = object ["name" .= recordName record, "cases" .= recordCases record, "batch_sha256" .= sha256Hex (recordBatchSha record), "summary_sha256" .= sha256Hex (recordSummarySha record), "reuse" .= (if isJust frozen then "offline-rejudged" else reuseLabel (recordReuse record))]
+      slotSites = [0x1618, 0x16c, 0x148, 0x7c, 0x6c, 0x70 :: Word32]
+      eventsOfRun run = maybe [] eventsOf (lookup callsId (runMemory run))
+      runEvents runs label = maybe [] eventsOfRun (M.lookup label runs)
+      eventJson (H.BoundaryEvent site a b c) = object ["site" .= hex site, "a" .= hex a, "b" .= hex b, "c" .= hex c]
+      slotCounts runs =
+        [ object ["site" .= hex site, "count" .= length [() | run <- runs, H.BoundaryEvent found _ _ _ <- eventsOfRun run, found == site]]
+        | site <- slotSites
+        ]
       results = object
         [ "schema_version" .= (1 :: Int)
         , "suite" .= ("property-service" :: String)
@@ -1234,6 +1264,10 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
         , "owned_path" .= linkedPath
         , "owned_sha256" .= sha256Hex (sha256 linked)
         , "cases" .= caseRows
+        , "comparison_policy" .= object
+            [ "slot_hook_words" .= ("nonzero: both roles enter the fixture's slot stubs at +0x7c and +0x6c" :: String)
+            , "wrapper_error_report" .= ("reproduced: the crate writes the same console record, status word and installed callback as stock's wrappers, so a difference on that path is a comparison difference" :: String)
+            ]
         , "inputs" .= object inputs
         , "qualification_scope" .= (case mode of NativeOnly -> "native-only"; ActualStagedCandidate _ _ -> "staged-candidate" :: String)
         , "dat_retirement_admitted" .= False
@@ -1256,6 +1290,20 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
             , "consumer_scope" .= ("current-source ordered little-endian byte effects only in approved ordinary RAM spans; physical reports unchanged; no interrupt, concurrent, atomic-width equivalence or DAT retirement" :: String)
             ]
         , "batches" .= map batchValue allBatches
+        , "slot_entries" .= object
+            [ "sites" .= slotSites
+            , "stock" .= slotCounts stockAll
+            , "candidate" .= slotCounts candidateAll
+            , "cases" .=
+                [ object
+                    [ "case" .= caseLabelText (runLabel c)
+                    , "property" .= propertyHex (runProperty c)
+                    , "stock" .= map eventJson (runEvents stockRuns (runLabel c))
+                    , "candidate" .= map eventJson (runEvents candidateRuns (runLabel c))
+                    ]
+                | c <- runCases, smokeRun
+                ]
+            ]
         , "wrappers" .= object ["cases" .= length wrappers, "failed" .= length [() | (_, ds) <- wrapperVerdicts, not (null ds)]]
         , "entry_adapters" .= object ["cases" .= length adapterCases, "failed" .= length [() | (_, ds) <- entryVerdicts, not (null ds)]]
         , "case_shape" .= object

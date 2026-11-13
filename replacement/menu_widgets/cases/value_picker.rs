@@ -159,7 +159,7 @@ pub unsafe extern "C" fn rb_value_picker_case(node: u32,x: u32,y: u32,width: i32
     let args = DrawArgs { node: NodeId(node), x: x as u16, y: y as u16, width: width as i16,
         column_step,row_step,style,scrolling: scrolling != 0,hide_help: hide_help as u8,
         mode: DrawMode(mode), label_bound: if cfg!(picker_recipe_bank) { LabelBound::RecipeBank } else { LabelBound::Stock } };
-    value_picker(&mut StockServices,args,unsafe { &mut *report });
+    let _ = value_picker(&mut StockServices,args,unsafe { &mut *report });
 }
 
 #[panic_handler]

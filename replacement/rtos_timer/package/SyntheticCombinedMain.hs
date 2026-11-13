@@ -132,7 +132,7 @@ main = do
       manifest <- Ram.parseRamPushManifest (output </> "synthetic-manifest.json")
         manifestBytes (Combined.combinedRuntimeBytes plan)
       _ <- checked (Bank.bindRecipeEditPackage manifest (Combined.combinedBankElfBytes plan) sources)
-      runtimeSource <- checked (Modal.bindModalRuntimeSource manifest (Combined.combinedBankElfBytes plan))
+      runtimeSource <- checked (Modal.bindModalRuntimeSource Modal.stockSettingsWriters manifest (Combined.combinedBankElfBytes plan))
       sdk <- Sdk.bindCompilerContextSdk sdkPacket
       let sdkInputs = Sdk.compilerContextInputs
       forM_ [ sdkInputs {Sdk.sdkDriverPath = recipeElf}

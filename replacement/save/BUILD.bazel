@@ -1,5 +1,5 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
-load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
 
 _MODULE_SRCS = [
     "src/abi.rs",
@@ -21,6 +21,16 @@ filegroup(
         "//replacement/develop:__pkg__",
         "//menu:__pkg__",
     ],
+)
+
+xm1_rust_rlib(
+    name = "arm",
+    src = "src/arm.rs",
+    crate_name = "save",
+    out = "libsave.rlib",
+    data = [":module"],
+    rustc_flags = ["-C", "target-feature=+strict-align"],
+    visibility = ["//replacement/bank:__pkg__"],
 )
 
 filegroup(

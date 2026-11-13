@@ -86,6 +86,7 @@ xm1_rust_rlib(
     name = "property-service-component",
     src = "//replacement/property_service:src/lib.rs",
     crate_name = "xm1_property_service",
+    rlib_deps = {"xm1_kernel": "//replacement/kernel:arm"},
     rustc_flags = [
         "-C", "jump-tables=no",
         "--extern", "xm1_settings_storage_core=$(location %s)" % _PROPERTY_CORE,
@@ -101,7 +102,7 @@ xm1_rust_rlib(
 xm1_rust_elf(
     name = "develop-candidate",
     rust_staticlib = ":develop-rust",
-    rust_components = [":property-service-component", _PROPERTY_CORE],
+    rust_components = [":property-service-component", _PROPERTY_CORE, "//replacement/kernel:arm"],
     asm_srcs = glob(["*_stock.S", "src/**/*_stock.S"], exclude = ["RedEyeBackend_stock.S", "src/pipeline/DebugStorage_stock.S"]) + [
         "//replacement/save:save_stock.S",
         "//replacement/media_permit:rb_media_permit_stock.S",

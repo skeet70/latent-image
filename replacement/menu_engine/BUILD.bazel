@@ -1,4 +1,5 @@
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib")
 
 filegroup(
     name = "module",
@@ -17,6 +18,102 @@ filegroup(
     ],
 )
 
+xm1_rust_rlib(
+    name = "arm",
+    src = "src/lib.rs",
+    crate_name = "menu_engine",
+    out = "libmenu_engine_arm.rlib",
+    data = [":module"],
+    rustc_flags = [
+        "-C",
+        "target-feature=+strict-align",
+        "-C",
+        "llvm-args=-min-jump-table-entries=4096",
+    ],
+    visibility = [
+        "//replacement/bank:__pkg__",
+        "//replacement/menu_widgets:__pkg__",
+        "//replacement/modal_runtime:__pkg__",
+        "//replacement/render_adapter:__pkg__",
+        "//replacement/owned_menu:__pkg__",
+        "//replacement/recipe_ui:__pkg__",
+    ],
+)
+
+# The guest seam at the stock wrapper. It is a crate root so the image root
+# only declares rlibs; the adapter and the engine remain one subsystem in this
+# package.
+xm1_rust_rlib(
+    name = "adapter-arm",
+    src = "adapter/mod.rs",
+    crate_name = "menu_engine_adapter",
+    out = "libmenu_engine_adapter.rlib",
+    data = [
+        ":adapter-sources",
+        ":module",
+        "//replacement/bank/tables:menu-records.rs",
+        "//replacement/bank/tables:menu-tree.rs",
+    ],
+    env = {
+        "RB_MENU_ENGINE_RECORDS": "$$PWD/$(location //replacement/bank/tables:menu-records.rs)",
+        "RB_MENU_ENGINE_TREE": "$$PWD/$(location //replacement/bank/tables:menu-tree.rs)",
+    },
+    rlib_deps = {
+        "menu_engine": ":arm",
+        "owned_menu": "//replacement/owned_menu:arm",
+        "xm1_kernel": "//replacement/kernel:arm",
+        "xm1_property_service": "//replacement/property_service:property-service-arm",
+        "xm1_settings_storage_core": "//replacement/settings_storage:property-core-arm",
+    },
+    rustc_flags = [
+        "-C",
+        "target-feature=+strict-align",
+        "-C",
+        "llvm-args=-min-jump-table-entries=4096",
+    ],
+    visibility = [
+        "//replacement/bank:__pkg__",
+        "//replacement/render_adapter:__pkg__",
+    ],
+)
+
+xm1_rust_rlib(
+    name = "adapter-value-arm",
+    src = "adapter/mod.rs",
+    crate_name = "menu_engine_adapter",
+    out = "libmenu_engine_adapter_value.rlib",
+    data = [
+        ":adapter-sources",
+        ":module",
+        "//replacement/bank/tables:menu-records.rs",
+        "//replacement/bank/tables:menu-tree.rs",
+    ],
+    env = {
+        "RB_MENU_ENGINE_RECORDS": "$$PWD/$(location //replacement/bank/tables:menu-records.rs)",
+        "RB_MENU_ENGINE_TREE": "$$PWD/$(location //replacement/bank/tables:menu-tree.rs)",
+    },
+    rlib_deps = {
+        "menu_engine": ":arm",
+        "menu_value": "//replacement/menu_value:arm-owned",
+        "owned_menu": "//replacement/owned_menu:arm",
+        "xm1_kernel": "//replacement/kernel:arm",
+        "xm1_property_service": "//replacement/property_service:property-service-arm",
+        "xm1_settings_storage_core": "//replacement/settings_storage:property-core-arm",
+    },
+    rustc_flags = [
+        "-C",
+        "target-feature=+strict-align",
+        "--cfg",
+        "rb_menu_value_owned",
+        "-C",
+        "llvm-args=-min-jump-table-entries=4096",
+    ],
+    visibility = [
+        "//replacement/bank:__pkg__",
+        "//replacement/render_adapter:__pkg__",
+    ],
+)
+
 filegroup(
     name = "adapter-sources",
     srcs = [
@@ -27,6 +124,21 @@ filegroup(
         "//host/firmware:__pkg__",
         "//replacement/bank:__pkg__",
     ],
+)
+
+genrule(
+    name = "adapter-class-host-build",
+    srcs = ["adapter/mod.rs"],
+    outs = ["host/libmenu_engine_adapter.rlib", "host/menu_engine_adapter.rs"],
+    cmd = "$(location //emulation:render-adapter-class-cases) --adapter-interface $(location adapter/mod.rs) $(@D)/host/menu_engine_adapter.rs && $(location @lab_rustc//:bin/rustc) --crate-name=menu_engine_adapter --edition=2021 --crate-type=rlib $(@D)/host/menu_engine_adapter.rs -o $(@D)/host/libmenu_engine_adapter.rlib",
+    tools = ["@lab_rustc//:bin/rustc", "//emulation:render-adapter-class-cases"],
+    visibility = ["//emulation:__pkg__"],
+)
+
+filegroup(
+    name = "adapter-class-host",
+    srcs = ["host/libmenu_engine_adapter.rlib"],
+    visibility = ["//emulation:__pkg__"],
 )
 
 genrule(

@@ -177,15 +177,23 @@ fn transient_resource_change_cannot_be_repaired_by_a_later_store() {
 }
 
 const SETTER: u32 = 0x0062_ff54;
+const OWNED_STORE8: u32 = 0x00a8_7f70;
+const OWNED_STORE8_END: u32 = 0x00a8_8014;
+const OWNED_STORE16: u32 = 0x00a8_8014;
+const OWNED_STORE16_END: u32 = 0x00a8_80b8;
+const OWNED_WINDOW_STORE: u32 = 0x00a8_7f90;
 
-fn settings_fixture() -> LifetimeMonitor {
+fn writer_fixture(writers: Value) -> LifetimeMonitor {
     let mut value = request();
-    value["settings_writers"] = json!([[0x0062_4694, 0x0063_09c4]]);
+    value["settings_writers"] = writers;
     let config = config(value).unwrap();
     let mut memory = Memory::default();
     for (extent, bytes) in config.readonly_images() { memory.store(extent.start().0, bytes); }
     memory.store(SETTINGS, &[0x5a; 450]);
     LifetimeMonitor::new(config, &memory).unwrap()
+}
+fn settings_fixture() -> LifetimeMonitor {
+    writer_fixture(json!([[0x0062_4694, 0x0063_09c4]]))
 }
 fn write_from(monitor: &mut LifetimeMonitor, pc: u32, address: u32, before: &[u8], value: u64) -> Result<(), LifetimeFailure> {
     monitor.observe_write(WriteAttempt::cpu(CoreId(0), Guest(pc), Guest(address), Guest(address), before, value))
@@ -199,6 +207,27 @@ fn settings_writer_changes_are_admitted_counted_and_become_the_expected_bytes() 
     write_from(&mut monitor, 0x1000, SETTINGS + 0x66, &[0x5b], 0x5b).unwrap();
     assert_eq!(monitor.receipt().admitted_settings_writes, 1);
     assert_eq!(write_from(&mut monitor, 0x1000, SETTINGS + 0x66, &[0x5a], 0x5a), Err(LifetimeFailure::ResourceChanged));
+}
+
+#[test]
+fn owned_storage_store_writers_admit_the_stock_live_setting_store() {
+    let writers = json!([[OWNED_STORE8, OWNED_STORE8_END], [OWNED_STORE16, OWNED_STORE16_END]]);
+    let mut monitor = writer_fixture(writers.clone());
+    write_from(&mut monitor, OWNED_WINDOW_STORE, SETTINGS + 0x66, &[0x5a], 0x29).unwrap();
+    assert_eq!(monitor.receipt().admitted_settings_writes, 1);
+    let mut monitor = writer_fixture(writers);
+    assert_eq!(write_from(&mut monitor, OWNED_STORE8 - 4, SETTINGS + 0x66, &[0x5a], 0x29),
+        Err(LifetimeFailure::ResourceChanged));
+    assert_eq!(monitor.receipt().admitted_settings_writes, 0);
+}
+
+#[test]
+fn owned_role_writers_admit_the_stock_setter_and_the_owned_stores() {
+    let writers = json!([[0x0062_4694, 0x0063_09c4], [OWNED_STORE8, OWNED_STORE8_END], [OWNED_STORE16, OWNED_STORE16_END]]);
+    let mut monitor = writer_fixture(writers);
+    write_from(&mut monitor, SETTER, SETTINGS + 0x1a0, &[0x5a], 0).unwrap();
+    write_from(&mut monitor, OWNED_WINDOW_STORE, SETTINGS + 0x66, &[0x5a], 0x29).unwrap();
+    assert_eq!(monitor.receipt().admitted_settings_writes, 2);
 }
 
 #[test]
@@ -1107,7 +1136,7 @@ fn property_plan_rejects_wrong_variant_extent_delta_and_legacy_table_writes() {
         let mut value = property_request(1);
         match change {
             0 => value["bank_variant"] = json!("standard"),
-            1 => value["runtime"] = json!([INSTALL, INSTALL + 0x2dcc0]),
+            1 => value["runtime"] = json!([INSTALL, INSTALL + 0x3dd00]),
             2 => value["property_delta_words"] = json!(2),
             3 => value["publications"][0]["address"] = json!(0x0061_eac4),
             4 => value["publications"][210]["address"] = json!(0x0062_fbfc),

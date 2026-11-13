@@ -550,9 +550,9 @@ fn pane_composition_draws_root_and_chrome_without_stock_services() {
     }];
     let palettes = [PanePalette { nested: false, selected: true, state: 0, palette: fixture_palette(colour), primary_enabled: false }];
     let mut report = DrawReport::zeroed();
-    report.put_word(0, 1);
-    report.put_word(4, 1);
-    report.put_word(12, 42);
+    report.put_word(0, 1).unwrap();
+    report.put_word(4, 1).unwrap();
+    report.put_word(12, 42).unwrap();
     let bitmap_bytes = bitmap_table();
     let regions = [DataRegion { base: DataAddress(0x22a8b4), bytes: &bitmap_bytes }];
     let bitmaps = BitmapCatalog { memory: ResourceMemory::new(&regions).unwrap() };

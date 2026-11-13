@@ -384,4 +384,11 @@ pub fn apply_mirrored_permit(runtime: &mut impl PermitRuntime) -> PermitStatus {
     }
 }
 
+/// The ABI adapter's stock-service module, compiled into the image's crate.
+#[cfg(rb_media_permit_image)]
+pub use crate as media_permit;
+
+#[cfg(rb_media_permit_image)]
+pub mod stock;
+
 

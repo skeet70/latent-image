@@ -178,6 +178,7 @@ pub enum MenuEvent {
 impl MenuEvent {
     /// The page test reads the open node's rows per page; without an open node
     /// a move decodes as a row step.
+    #[inline]
     pub fn decode(raw: StageEvent, tree: &Tree, state: &EngineState) -> Self {
         let node = StageNode::new(raw.node);
         let id = StageId::new(raw.id);
@@ -392,6 +393,7 @@ const PROPERTY_NODE: NodeIndex = match NodeIndex::parse(0x7a) {
 /// Runs `event` on `state` in place. Returns `NotOwned` only before its
 /// first service call, leaving `state` partly changed; the block is then
 /// still what stock last left there.
+#[inline]
 pub fn apply<S: EngineServices, P: DerefMut<Target = EngineState>>(
     tree: &Tree,
     state: P,
@@ -401,6 +403,7 @@ pub fn apply<S: EngineServices, P: DerefMut<Target = EngineState>>(
     apply_with::<Stock, S, P>(tree, state, event, services)
 }
 
+#[inline]
 pub(crate) fn apply_with<R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>>(
     tree: &Tree,
     state: P,
@@ -510,6 +513,7 @@ fn framed(node: &Node) -> bool {
 }
 
 impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine<'a, R, S, P> {
+    #[inline]
     fn run(&mut self, event: MenuEvent) -> Result<EngineResult, NotOwned> {
         if let Some(open) = self.state.node {
             if self.node(open)?.rows.map_or(0, <[Row]>::len) != self.state.total.get() as usize {
@@ -726,11 +730,13 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
         self.perform(Effect::Notify(Notify { kind, node, id, class }));
     }
 
+    #[inline]
     fn availability(&mut self, class: MenuClass, token: RowToken) -> RowState {
         self.called = true;
         self.services.availability(&self.state, class, token)
     }
 
+    #[inline]
     fn initial_row(&mut self, kind: StageKind, node: StageNode, class: MenuClass) -> Option<RowToken> {
         self.called = true;
         self.services.initial_row(&self.state, kind, node, class)
@@ -750,6 +756,7 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
         Ok(VisibleOrdinal::new(self.ordinal(token, OrdinalMode::Visible)?))
     }
 
+    #[inline]
     fn kind_switch(&mut self, call: KindSwitchCall) -> EngineResult {
         self.called = true;
         self.delegated = true;
@@ -994,6 +1001,7 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
     /// `0xbf9c1c`: kinds `0x47` and `0x48` step to the fourth row not hidden,
     /// with wrap; kinds `0x45` and `0x46` move within a group of four visible
     /// ordinals.
+    #[inline]
     fn group_step(&mut self, kind: StageKind) -> Result<bool, NotOwned> {
         let node = self.current()?;
         let total = self.state.total.get();
@@ -1125,6 +1133,7 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
     }
 
     /// Kinds `0x45`..`0x48`: `0xbf9f44` with `0xbf9c1c`.
+    #[inline]
     fn group_move(&mut self, kind: StageKind, node_word: StageNode) -> Result<EngineResult, NotOwned> {
         let old_scroll = self.state.live.scroll;
         let moved = if R::GROUP_ARMS {
@@ -1294,6 +1303,7 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
     /// Kinds 6..`0xb`: pops, pushes and moves through `0xbfab98` and `0xbf9f44`
     /// with notification id 0, after the seek for `0xa` and `0xb`. Every node
     /// the steps can open is checked before the first call.
+    #[inline]
     fn frame_move(&mut self, kind: StageKind, node_word: StageNode, id: StageId, extra: StageExtra) -> Result<EngineResult, NotOwned> {
         Self::stage_index(node_word)?;
         self.check_cursor()?;
@@ -1379,6 +1389,7 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
 
     /// Kind 2: `0xd5b350`, `0xbf9a5c` and `0x009575fc` = 0 for ids
     /// `0x1a`..=`0x1d`, otherwise 0 with no call.
+    #[inline]
     fn close(&mut self, node_word: StageNode, id: StageId) -> Result<EngineResult, NotOwned> {
         let index = Self::stage_index(node_word)?;
         let node = self.current()?;
@@ -1395,6 +1406,7 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
     }
 
     /// Kind `0x13`: `0xbfa800(0x13, node, 0x15)` on the open node.
+    #[inline]
     fn reopen(&mut self, node_word: StageNode) -> Result<EngineResult, NotOwned> {
         let node = self.current()?;
         Self::check_open(node, self.state.live.cursor)?;
@@ -1406,6 +1418,7 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
     }
 
     /// Kind 1.
+    #[inline]
     fn open(&mut self, node_word: StageNode, id: StageId, extra: StageExtra) -> Result<EngineResult, NotOwned> {
         if id.seeks() {
             return Err(NotOwned::EventClass);

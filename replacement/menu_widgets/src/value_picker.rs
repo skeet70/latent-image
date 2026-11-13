@@ -1,4 +1,4 @@
-use crate::render_commands::{DrawReport, FontId, NodeId, ResourceId, RowIndex};
+use crate::render_commands::{producer::ProducerError, DrawReport, FontId, NodeId, ResourceId, RowIndex};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -109,19 +109,20 @@ fn detail_draw(s: &mut impl PickerServices, font: u32, palette: u32, record: &Re
     s.font(FontId(font)); s.grid_palette(palette); s.resource(record);
 }
 
-pub fn value_picker(s: &mut impl PickerServices, args: DrawArgs, report: &mut DrawReport) {
+#[inline]
+pub fn value_picker(s: &mut impl PickerServices, args: DrawArgs, report: &mut DrawReport) -> Result<(), ProducerError> {
     let mut hook = s.empty_hook();
     let saved_font = s.panel_font();
-    let Some(selection) = args.mode.snapshot() else { return; };
+    let Some(selection) = args.mode.snapshot() else { return Ok(()); };
     let snap = s.snapshot(args.node, selection);
     s.clear_report(report);
-    report.put_word(0, snap.kind); report.put_word(4, args.node.0);
+    report.put_word(0, snap.kind)?; report.put_word(4, args.node.0)?;
     report.0[0x3d] = 255;
-    report.put_word(0x20, snap.parent); report.put_word(0x30, snap.scroll_top);
-    report.put_word(0x38, snap.remembered); report.put_word(0x28, snap.rows);
+    report.put_word(0x20, snap.parent)?; report.put_word(0x30, snap.scroll_top)?;
+    report.put_word(0x38, snap.remembered)?; report.put_word(0x28, snap.rows)?;
     let mut summary = s.summary(args.node, snap.parent);
     if summary.capacity == 0 { summary.capacity = 1; }
-    report.put_word(0x2c, if args.node.0 == 0x4c { 3 } else { summary.capacity });
+    report.put_word(0x2c, if args.node.0 == 0x4c { 3 } else { summary.capacity })?;
     let mut x = args.x;
     let mut y = args.y;
     if snap.layout == 4 {
@@ -206,7 +207,7 @@ pub fn value_picker(s: &mut impl PickerServices, args: DrawArgs, report: &mut Dr
                 let position = (ordinal as u32).wrapping_sub(hidden).wrapping_sub(if args.scrolling { 0 } else { summary.capacity.wrapping_mul(snap.page.wrapping_sub(1)) }) as u8;
                 if child.id == snap.remembered { report.0[0x3d] = position; }
                 if selected {
-                    report.put_word(0x34, child.id); report.put_word(0x40, child.auxiliary); report.0[0x3c] = position;
+                    report.put_word(0x34, child.id)?; report.put_word(0x40, child.auxiliary)?; report.0[0x3c] = position;
                     if snap.layout == 4 {
                         if s.hook(&mut hook) == 0 { horizontal_details(s, args, snap, child, y, &mut help_start); }
                     } else { vertical_details(s, args, snap, child, pixel(y, 24)); }
@@ -219,8 +220,10 @@ pub fn value_picker(s: &mut impl PickerServices, args: DrawArgs, report: &mut Dr
         ordinal = ordinal.wrapping_add(1);
     }
     s.font(saved_font);
+    Ok(())
 }
 
+#[inline]
 fn horizontal_details(s: &mut impl PickerServices, args: DrawArgs, snap: Snapshot, child: Child, y: u16, help_start: &mut u32) {
     let heading = s.label(args.node, snap.parent, child.id, LabelField::Heading);
     let detail = s.label(args.node, snap.parent, child.id, LabelField::Detail);

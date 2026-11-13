@@ -1,4 +1,5 @@
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib")
 
 filegroup(
     name = "module",
@@ -7,6 +8,22 @@ filegroup(
         "//replacement/bank:__pkg__",
         "//host/firmware:__pkg__",
     ],
+)
+
+xm1_rust_rlib(
+    name = "arm",
+    src = "src/arm.rs",
+    crate_name = "recipe_ui",
+    out = "librecipe_ui.rlib",
+    data = [":module"],
+    rustc_flags = [
+        "-C",
+        "target-feature=+strict-align",
+        "-C",
+        "llvm-args=-min-jump-table-entries=4096",
+    ],
+    rlib_deps = {"menu_engine": "//replacement/menu_engine:arm"},
+    visibility = ["//replacement/bank:__pkg__"],
 )
 
 genrule(

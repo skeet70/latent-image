@@ -1755,6 +1755,23 @@
         ]
       }
     },
+    "//replacement/bank:tables.bzl%bank_image_inputs": {
+      "general": {
+        "bzlTransitiveDigest": "D6MQDzXnzZ4sis+ymIBnKc+hw1UZUbNlb/ObFz2o7GA=",
+        "usagesDigest": "aV/TzASSLiQcpRJpv4KzzjDs5C/1NXbsF/bByoP6nDk=",
+        "recordedFileInputs": {},
+        "recordedDirentsInputs": {},
+        "envVariables": {},
+        "generatedRepoSpecs": {
+          "bank_image_inputs": {
+            "bzlFile": "@@//replacement/bank:tables.bzl",
+            "ruleClassName": "_bank_image_inputs",
+            "attributes": {}
+          }
+        },
+        "recordedRepoMappingEntries": []
+      }
+    },
     "//replacement/rtos_timer:synthetic.bzl%synthetic_source_inputs": {
       "general": {
         "bzlTransitiveDigest": "JyUrJcMJfpbaI5eTUORQeX2Iis7ox95cQEqaK5xUhoo=",

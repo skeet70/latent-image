@@ -2,6 +2,7 @@ use crate::{BankExchange, HeaderBackend, PreviousValues, SettingsBackend, Settin
 use crate::mirror::{HeaderBackupDriver, RequestStatus, BODY_BYTES, CUSTOM_BYTES, HEADER_BYTES};
 use crate::native_configuration::NativeConfiguration;
 use crate::native_mirror::{AbiRequestDescriptor, NativeBackend, NativeBackupDriver};
+use xm1_kernel::{Kernel, SlotTable};
 
 #[repr(u32)]
 enum SetterAssignment { Unassigned = 0, Assigned = 1 }
@@ -14,10 +15,11 @@ extern "C" {
 }
 
 #[inline(always)]
-unsafe fn with_storage<T>(operation: impl FnOnce(&mut SettingsStorage<'_, NativeBackend>) -> T) -> T {
+unsafe fn with_storage<T>(operation: impl FnOnce(&mut SettingsStorage<'_, NativeBackend<'_, SlotTable>>) -> T) -> T {
+    let kernel = unsafe { Kernel::<SlotTable>::stock() };
     let banks = unsafe { &mut *(0x96cc64 as *mut [u8; BANK_WINDOW]) };
     let previous = PreviousValues::adopt(unsafe { &mut *(0x89ec00 as *mut [u8; PREVIOUS_WINDOW]) });
-    let mut storage = SettingsStorage::adopt(banks, previous, unsafe { NativeBackend::adopt() });
+    let mut storage = SettingsStorage::adopt(banks, previous, unsafe { NativeBackend::adopt(&kernel) });
     operation(&mut storage)
 }
 
@@ -94,7 +96,8 @@ pub unsafe extern "C" fn xm1_storage_apply(id: u32, value: u32, bank: u32) -> u3
 /// The requirements of `NativeBackend::adopt` apply. `buffer` must cover a writable body disjoint from the backup windows.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_storage_read_body(buffer: *mut u8) -> i32 {
-    let mut backend = unsafe { NativeBackend::adopt() };
+    let kernel = unsafe { Kernel::<SlotTable>::stock() };
+    let mut backend = unsafe { NativeBackend::adopt(&kernel) };
     backend.read_body(unsafe { &mut *buffer.cast::<[u8; BODY_BYTES]>() }).mapped.legacy_code()
 }
 
@@ -102,7 +105,8 @@ pub unsafe extern "C" fn xm1_storage_read_body(buffer: *mut u8) -> i32 {
 /// The requirements of `NativeBackend::adopt` apply. `buffer` must cover a readable body disjoint from the backup windows.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_storage_write_body(buffer: *const u8) -> i32 {
-    let mut backend = unsafe { NativeBackend::adopt() };
+    let kernel = unsafe { Kernel::<SlotTable>::stock() };
+    let mut backend = unsafe { NativeBackend::adopt(&kernel) };
     backend.write_body(unsafe { &*buffer.cast::<[u8; BODY_BYTES]>() }).request.mapped.legacy_code()
 }
 
@@ -117,7 +121,8 @@ pub unsafe extern "C" fn xm1_storage_write_active_body() -> i32 {
 /// The requirements of `NativeBackend::adopt` apply. `buffer` must cover a writable header disjoint from the backup windows.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_storage_read_header(buffer: *mut u8) -> i32 {
-    let mut backend = unsafe { NativeBackend::adopt() };
+    let kernel = unsafe { Kernel::<SlotTable>::stock() };
+    let mut backend = unsafe { NativeBackend::adopt(&kernel) };
     backend.read_header(unsafe { &mut *buffer.cast::<[u8; HEADER_BYTES]>() }).mapped.legacy_code()
 }
 
@@ -125,7 +130,8 @@ pub unsafe extern "C" fn xm1_storage_read_header(buffer: *mut u8) -> i32 {
 /// The requirements of `NativeBackend::adopt` apply. `buffer` must cover a readable header disjoint from the backup windows.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_storage_write_header(buffer: *const u8) -> i32 {
-    let mut backend = unsafe { NativeBackend::adopt() };
+    let kernel = unsafe { Kernel::<SlotTable>::stock() };
+    let mut backend = unsafe { NativeBackend::adopt(&kernel) };
     backend.write_header(unsafe { &*buffer.cast::<[u8; HEADER_BYTES]>() }).request.mapped.legacy_code()
 }
 
@@ -135,7 +141,8 @@ pub unsafe extern "C" fn xm1_storage_write_header(buffer: *const u8) -> i32 {
 pub unsafe extern "C" fn xm1_storage_read_custom(buffer: *mut u8, index: u32) -> i32 {
     let request = AbiRequestDescriptor { buffer: buffer as u32, length: CUSTOM_BYTES as u32, offset: index.wrapping_mul(CUSTOM_BYTES as u32).wrapping_add(0x140) };
     let mapped = match unsafe { xm1_bank_short_read(&request) } { ShortRequestStatus::Success => RequestStatus::Success, ShortRequestStatus::Failed => RequestStatus::Failed };
-    let mut driver = NativeBackupDriver::new();
+    let kernel = unsafe { Kernel::<SlotTable>::stock() };
+    let mut driver = NativeBackupDriver::new(&kernel);
     driver.store_request_status(mapped);
     if mapped == RequestStatus::Failed { driver.report_failure(mapped); }
     mapped.legacy_code()

@@ -250,7 +250,7 @@ main = do
     assert ("second close unchanged " ++ show index) (snd (closeMirror keys (changed index) final) == [])
   let (_,lastOnly) = closeMirror keys zero (MirrorState zero (replace 15 (B.singleton 1) zero))
   assert "last shadow byte is compared" (lastOnly == [DriverEffect (BackupKey 30) 0 1])
-  assert "task locks each request independently" (requestEdges Task [] ++ requestEdges Task [] == [Event 0x724b68 0x25 0xffffffff 0,Event 0x724c00 0x25 0 0,Event 0x724b68 0x25 0xffffffff 0,Event 0x724c00 0x25 0 0])
+  assert "task locks each request independently" (requestEdges Task [] ++ requestEdges Task [] == [Event 0x7c 0x25 0xffffffff 0,Event 0x6c 0x25 0 0,Event 0x7c 0x25 0xffffffff 0,Event 0x6c 0x25 0 0])
   assert "interrupt request emits diagnostic" (requestEdges Interrupt [] == [Event 0x726c74 2 59 0])
   let image = B.replicate 0x200000 0
       offset address = fromIntegral (address-0x5c0000)

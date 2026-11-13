@@ -1,5 +1,5 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
-load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
 load(":storage_controls.bzl", "BANK_STORAGE_CONTROLS", "PROPERTY_STORAGE_CONTROLS", "PROPERTY_STORAGE_VARIANTS", _CUSTOM_ORACLE_DEFECTS = "CUSTOM_ORACLE_DEFECTS", _CUSTOM_VARIANTS = "CUSTOM_STORAGE_VARIANTS")
 
 package(default_visibility = ["//visibility:public"])
@@ -23,20 +23,30 @@ _CORE_DEFECTS = [
 [
     genrule(
         name = "property-core" + ("-" + defect.replace("_", "-") if defect else ""),
-        srcs = ["src/lib.rs"] + _RUST_DATA,
+        srcs = ["src/lib.rs", "//replacement/kernel:arm"] + _RUST_DATA,
         outs = [(defect + "/" if defect else "") + "libxm1_settings_storage_core.rlib"],
-        cmd = "$(location @lab_xm1_rust//:bin/rustc) --crate-name=xm1_settings_storage_core --edition=2021 --crate-type=rlib " + _ARM_FLAGS + " --cfg settings_storage_library --cfg settings_storage_firmware --cfg settings_storage_property --cfg settings_storage_header_only " + ("--cfg " + defect + " " if defect else "") + "$(location src/lib.rs) -o $@",
+        cmd = "$(location @lab_xm1_rust//:bin/rustc) --crate-name=xm1_settings_storage_core --edition=2021 --crate-type=rlib " + _ARM_FLAGS + " --cfg settings_storage_library --cfg settings_storage_firmware --cfg settings_storage_property " + ("--cfg " + defect + " " if defect else "") + "--extern xm1_kernel=$(location //replacement/kernel:arm) $(location src/lib.rs) -o $@",
         tools = ["@lab_xm1_rust//:bin/rustc"],
     )
     for defect in [""] + _CORE_DEFECTS
 ]
 
+xm1_rust_rlib(
+    name = "property-core-arm",
+    src = "src/lib.rs",
+    crate_name = "xm1_settings_storage_core",
+    out = "arm/libxm1_settings_storage_core.rlib",
+    rustc_flags = ["-C", "jump-tables=no", "--cfg", "settings_storage_library", "--cfg", "settings_storage_firmware", "--cfg", "settings_storage_property"],
+    data = _RUST_DATA,
+    rlib_deps = {"xm1_kernel": "//replacement/kernel:arm"},
+)
+
 [
     genrule(
         name = "property-core-control-" + variant,
-        srcs = ["src/lib.rs"] + _RUST_DATA,
+        srcs = ["src/lib.rs", "//replacement/kernel:arm"] + _RUST_DATA,
         outs = ["control-" + variant + "/libxm1_settings_storage_core.rlib"],
-        cmd = "$(location @lab_xm1_rust//:bin/rustc) --crate-name=xm1_settings_storage_core --edition=2021 --crate-type=rlib " + _ARM_FLAGS + " --cfg settings_storage_library --cfg settings_storage_firmware --cfg settings_storage_property --cfg settings_storage_header_only --cfg " + flag + " $(location src/lib.rs) -o $@",
+        cmd = "$(location @lab_xm1_rust//:bin/rustc) --crate-name=xm1_settings_storage_core --edition=2021 --crate-type=rlib " + _ARM_FLAGS + " --cfg settings_storage_library --cfg settings_storage_firmware --cfg settings_storage_property --cfg " + flag + " --extern xm1_kernel=$(location //replacement/kernel:arm) $(location src/lib.rs) -o $@",
         tools = ["@lab_xm1_rust//:bin/rustc"],
     )
     for variant, flag in PROPERTY_STORAGE_VARIANTS.items()
@@ -84,7 +94,7 @@ genrule(
     name = "property-core-host",
     srcs = ["src/lib.rs"] + _RUST_DATA,
     outs = ["host/libxm1_settings_storage_core.rlib"],
-    cmd = "$(location @lab_xm1_rust//:bin/rustc) --crate-name=xm1_settings_storage_core --edition=2021 --crate-type=rlib --cfg settings_storage_library --cfg settings_storage_property --cfg settings_storage_header_only $(location src/lib.rs) -o $@",
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --crate-name=xm1_settings_storage_core --edition=2021 --crate-type=rlib --cfg settings_storage_library --cfg settings_storage_property $(location src/lib.rs) -o $@",
     tools = ["@lab_xm1_rust//:bin/rustc"],
 )
 
@@ -94,6 +104,7 @@ xm1_rust_staticlib(
     crate_name = "xm1_settings_storage",
     data = _RUST_DATA,
     rustc_flags = _PROPERTY_FLAGS,
+    rlib_deps = {"xm1_kernel": "//replacement/kernel:arm"},
 )
 xm1_rust_elf(
     name = "settings-storage-image",
@@ -152,6 +163,7 @@ sh_test(
             "--extern", "record_store=$(location " + variant.record + ")",
             "--extern", "area3_validator=$(location :area3-validator-arm-rlib)",
         ] + (["--cfg", variant.flag] if variant.flag else []),
+        rlib_deps = {"xm1_kernel": "//replacement/kernel:arm"},
     )
     for variant in _CUSTOM_VARIANTS
 ]

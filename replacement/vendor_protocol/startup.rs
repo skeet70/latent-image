@@ -1,6 +1,6 @@
 use crate::backend::{BackendError, ConfigImages};
 use crate::startup_projection::{StartupProjection, StartupProjectionError};
-use xm1_settings_storage_core::mirror::{BackingRange, BackingStatus, HeaderBackupDriver, SharedBacking, BACKING_BYTES};
+use xm1_settings_storage_core::mirror::{BackingRange, BackingStatus, ExportSink, HeaderBackupDriver, SharedBacking, BACKING_BYTES};
 
 pub const WORKSPACE_BYTES: usize = 0x2740000;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -47,7 +47,7 @@ impl<'a> ServiceStartup<'a> {
         let registration = ProviderRegistration { providers: [Provider::ConfigurationWrite,Provider::ConfigurationRead,Provider::ConfigurationBounds,Provider::Payload], capacity: ConfigurationCapacity(0x420000) };
         self.providers = Some(registration);
         self.workspace[..WORKSPACE_BYTES].fill(0xff);
-        let status = backing.export(BackingRange::new(0,BACKING_BYTES as u32),export);
+        let status = backing.export(BackingRange::new(0,BACKING_BYTES as u32),export,ExportSink::Leaves);
         match status {
             BackingStatus::Success => {},
             BackingStatus::Refused(status) => return Err(BackendError::Medium(status.0).into()),

@@ -5,6 +5,7 @@ module Main where
 import Data.Aeson (Value, object, (.=))
 import Data.Aeson.Types (Pair)
 import qualified Data.ByteString as B
+import Data.List (isPrefixOf)
 import Data.Word (Word32)
 import qualified Emulation.ValuePickerCases as Picker
 import FujiAF.JSON (encodeCanonical)
@@ -147,10 +148,25 @@ paneJSON entry = object ["id" .= name,"function" .= ("Pane"::String),"caller_ret
  where
   CaseName name=paneName entry; ReturnAddress caller_=paneCaller entry; NodeId node_=paneNode entry
   DrawMode mode_=paneMode entry; SnapshotDepth depth_=paneDepth entry; SnapshotKind kind_=paneKind entry
+
+adapterInterface :: String -> Either String String
+adapterInterface source = extract (lines source)
+  where
+    extract (derive:header:remaining)
+      | header == "pub enum NodeOrigin {", "#[derive(" `isPrefixOf` derive =
+          case break (== "}") remaining of
+            (variants, "}":_) -> Right (unlines (derive:header:variants ++ ["}"]))
+            _ -> Left "unterminated adapter NodeOrigin"
+    extract (_:remaining) = extract remaining
+    extract [] = Left "adapter NodeOrigin declaration absent"
+
 main :: IO ()
 main = do
   args<-getArgs
   case args of
+    ["--adapter-interface",source,output] -> do
+      interface <- either fail pure . adapterInterface =<< readFile source
+      writeFile output interface
     ["--json",json,"--rust",rust] -> do
       B.writeFile json (encodeCanonical (object
         [ "schema_version" .= (2::Int), "native_model_cases" .= length modelEntries
@@ -161,4 +177,4 @@ main = do
         ]))
       writeFile rust ("use render_adapter_class::{DrawFunction, NodeOrigin, ReturnAddress, EntryClass, PaneEntryClass, PaneNode, PaneMode, SnapshotDepth, SnapshotKind};\n"++concat (zipWith rustTest [0..] boundaryEntries)++concat (zipWith paneRustTest [0..] paneEntries))
       putStrLn (show (length modelEntries)++" native model inputs, "++show (length boundaryEntries)++" installation boundary entries, "++show (length paneEntries)++" pane entries")
-    _ -> fail "usage: render-adapter-class-cases --json OUTPUT.json --rust OUTPUT.rs"
+    _ -> fail "usage: render-adapter-class-cases --json OUTPUT.json --rust OUTPUT.rs | --adapter-interface SOURCE.rs OUTPUT.rs"

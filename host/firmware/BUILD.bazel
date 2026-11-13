@@ -1711,12 +1711,18 @@ haskell_test(
         "$(location :check-bank-allowlist)",
         "$(location :bank-elf-00c40000)",
         "$(location :bank-elf-00c4fc88)",
+        "$(location :engine-modal75-menu-engine/kernel.elf)",
+        "$(location //menu:recipe_bank_modal_allowlist_fragment.json)",
+        "$(location //menu:recipe_bank_menu_engine_allowlist_fragment.json)",
     ],
     data = [
         ":bank-elf-00c40000",
         ":bank-elf-00c4fc88",
         ":check-bank-allowlist",
+        ":engine-modal75-menu-engine/kernel.elf",
         "//menu:recipe_bank_allowlist.json",
+        "//menu:recipe_bank_menu_engine_allowlist_fragment.json",
+        "//menu:recipe_bank_modal_allowlist_fragment.json",
     ],
     ghcopts = [
         "-Wall",
@@ -1727,6 +1733,9 @@ haskell_test(
     ],
     deps = [
         ":bank-allowlist",
+        ":bank-allowlist-composition",
+        ":ram-push-layout",
+        "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:directory",
@@ -2015,6 +2024,73 @@ genrule(
     ("", "//replacement/bank:bank", "//replacement/bank:relink-sources"),
     ("modal75", "//replacement/bank:bank-modal", "//replacement/bank:modal-relink-sources"),
 ]]
+
+# Each owned engine variant linked at the exercised reference base, with the
+# link map //host/firmware:owned-image-bytes reads.
+[genrule(
+    name = "engine-elf-" + tag,
+    srcs = [
+        "build-recipe-bank-ram.sh",
+        "//menu:ram-push-relink-sources",
+        "//replacement/bank:modal-engine-relink-sources",
+        "//menu:recipe_bank_ram_engine.ld",
+        "//replacement/property_service:storage-boundary.S",
+        archive,
+    ],
+    outs = [
+        "engine-" + tag + "/kernel.elf",
+        "engine-" + tag + "/kernel.map",
+    ],
+    cmd = " && ".join([
+        "here=$$PWD",
+        "root=$$(mktemp -d)",
+        "out=private-data/analysis/x-m1-1.50/ram-push/engine-elf/" + tag,
+        "mkdir -p $$root/$$out",
+        "for source in $(locations //menu:ram-push-relink-sources) $(locations //replacement/bank:modal-engine-relink-sources) $(location //menu:recipe_bank_ram_engine.ld) $(location //replacement/property_service:storage-boundary.S); do mkdir -p $$root/$$(dirname $$source) && ln -s $$here/$$source $$root/$$source; done",
+        "cd $$root",
+        " ".join([
+            "RAM_PUSH_BUILDER=true",
+            "RB_PUBLICATION_GROUPS=" + groups,
+            "RB_LINK_MAP=$$out/kernel.map",
+            "RAM_PUSH_CLANG=$$here/$(location @lab_clang//:bin/clang)",
+            "RAM_PUSH_LD_LLD=$$here/$(location @lab_lld//:bin/ld.lld)",
+            "RAM_PUSH_OBJCOPY=$$here/$(location @lab_llvm//:bin/llvm-objcopy)",
+            "RAM_PUSH_NM=$$here/$(location @lab_llvm//:bin/llvm-nm)",
+            "RAM_PUSH_OBJDUMP=$$here/$(location @lab_llvm//:bin/llvm-objdump)",
+            "SPEC=unused RC0_ID4=unused RC0_ID5=unused RC0_PLAIN=unused",
+            "RB_RUST_ARCHIVE=$$here/$(location " + archive + ")",
+            "$$here/$(location @lab_bash//:bin/bash) $$here/$(location build-recipe-bank-ram.sh) 0xa81be0 $$out > /dev/null",
+        ]),
+        "mkdir -p $$here/$(RULEDIR)/engine-" + tag + " && cp $$out/kernel.elf $$out/kernel.map $$here/$(RULEDIR)/engine-" + tag + "/",
+        "rm -rf $$root",
+    ]),
+    tools = [
+        "@lab_bash//:bin/bash",
+        "@lab_clang//:bin/clang",
+        "@lab_lld//:bin/ld.lld",
+        "@lab_llvm//:bin/llvm-nm",
+        "@lab_llvm//:bin/llvm-objcopy",
+        "@lab_llvm//:bin/llvm-objdump",
+    ],
+) for tag, groups, archive in [
+    ("modal75-menu-engine", "modal75,menu-engine", "//replacement/bank:bank-modal75-engine"),
+    ("modal75-menu-engine-render", "modal75,menu-engine,render", "//replacement/bank:bank-modal75-engine-render"),
+]]
+
+haskell_test(
+    name = "owned-image-bytes-tests",
+    srcs = ["OwnedImageBytesTests.hs"],
+    args = [
+        "$(location :engine-modal75-menu-engine/kernel.map)",
+        "$(location :engine-modal75-menu-engine-render/kernel.map)",
+    ],
+    data = [
+        ":engine-modal75-menu-engine/kernel.map",
+        ":engine-modal75-menu-engine-render/kernel.map",
+    ],
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021"],
+    deps = ["//host:base", "//host:containers"],
+)
 
 # Each payload's flat linked image at its reference bases, which
 # //transport:ram-push-*-link-digests compare with the review records.

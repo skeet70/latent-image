@@ -1,5 +1,5 @@
 use crate::area2::{self, Area2Record, FirmwareVersion, SaveSelector};
-use crate::mirror::{BACKING_BYTES, BackupDiagnostic, BackupKey, BackupSemaphore, BackupValue, BackupWriteMode, DeviceStatus, ExecutionContext, HEADER_BYTES, HeaderBackupDriver, RequestDirection, RequestStatus, SharedBacking};
+use crate::mirror::{BACKING_BYTES, BackupDiagnostic, BackupKey, BackupSemaphore, BackupValue, BackupWriteMode, DeviceStatus, HEADER_BYTES, HeaderBackupDriver, RequestDirection, RequestStatus, SharedBacking};
 
 #[repr(C)]
 struct RecordWrapper { _opaque: [u8; 0] }
@@ -16,14 +16,17 @@ extern "C" {
 
 struct NativeBackupDriver;
 impl HeaderBackupDriver for NativeBackupDriver {
-    fn context(&mut self) -> ExecutionContext {
-        if unsafe { xm1_power_current_task() } == 0 { ExecutionContext::OutsideTask } else { ExecutionContext::Task }
+    type Task = ();
+    fn task(&mut self) -> Option<()> {
+        if unsafe { xm1_power_current_task() } == 0 { None } else { Some(()) }
     }
-    fn acquire(&mut self, semaphore: BackupSemaphore) {
-        unsafe { let _ = xm1_power_semaphore_wait(semaphore.legacy_id() as i32, -1); }
+    fn acquire(&mut self, _: &(), semaphore: BackupSemaphore) {
+        let id = match semaphore { BackupSemaphore::Settings => 0x25 };
+        unsafe { let _ = xm1_power_semaphore_wait(id, -1); }
     }
-    fn release(&mut self, semaphore: BackupSemaphore) {
-        unsafe { let _ = xm1_power_semaphore_signal(semaphore.legacy_id() as i32); }
+    fn release(&mut self, _: &(), semaphore: BackupSemaphore) {
+        let id = match semaphore { BackupSemaphore::Settings => 0x25 };
+        unsafe { let _ = xm1_power_semaphore_signal(id); }
     }
     fn diagnostic(&mut self, diagnostic: BackupDiagnostic) {
         let (class, code) = diagnostic.legacy_arguments();

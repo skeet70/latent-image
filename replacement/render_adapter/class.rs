@@ -4,8 +4,7 @@ pub enum DrawFunction { Tree, Picker }
 pub enum SnapshotSource { Live, SavedSlot1, SavedSlot2, Skipped }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ListKind { Flat, Tree }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum NodeOrigin { Stock, Package, Unknown }
+pub use menu_engine_adapter::NodeOrigin;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ReturnAddress(pub u32);
 
