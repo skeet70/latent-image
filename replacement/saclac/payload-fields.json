@@ -2616,6 +2616,22 @@
         { "name": "reserved-tail", "offset": 173, "bytes": 3, "sources": ["X-M1 1.50 id5 0xefbf8c initialization and0xefc18c zero at body149"] }
       ],
       "padding": []
+    },
+    {
+      "direction": "outgoing",
+      "queue": 44,
+      "operation": 15377,
+      "bytes": 56,
+      "fields": [
+        { "name": "completion", "offset": 0, "bytes": 4, "sources": ["X-M1 1.50 id5 0xf4c568 stores the callback at r11-0x3c, the start of the 56-byte message 0xf4c574 posts"] },
+        { "name": "record-words-and-halfwords", "offset": 4, "bytes": 14, "sources": ["X-M1 1.50 id5 0xf4c4f4..0xf4c518 copy record0, record4 and halfwords record8, record10, record12 to message4..17"] },
+        { "name": "record-word-and-halfword", "offset": 20, "bytes": 6, "sources": ["X-M1 1.50 id5 0xf4c51c..0xf4c528 copy record40 to message20 and halfword record14 to message24"] },
+        { "name": "record-tail", "offset": 28, "bytes": 28, "sources": ["X-M1 1.50 id5 0xf4c52c..0xf4c560 copy record16..39 and record44 to message28..55"] }
+      ],
+      "padding": [
+        { "offset": 18, "bytes": 2, "sources": ["X-M1 1.50 id5 0xf4c4d8..0xf4c574: message16 is a halfword and no store reaches r11-0x2a..r11-0x29"] },
+        { "offset": 26, "bytes": 2, "sources": ["X-M1 1.50 id5 0xf4c4d8..0xf4c574: message24 is a halfword and no store reaches r11-0x22..r11-0x21"] }
+      ]
     }
   ]
 }

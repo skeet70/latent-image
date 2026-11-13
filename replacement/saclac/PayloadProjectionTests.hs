@@ -54,6 +54,11 @@ main = do
       unwritten = [10,11] ++ [17..19] ++ [28..31] ++ [34,35]
   mapM_ (\offset -> check (windowRequest windowBytes == windowRequest (mutate offset windowBytes))) unwritten
   mapM_ (\offset -> check (windowRequest windowBytes /= windowRequest (mutate offset windowBytes))) (filter (`notElem` unwritten) [0..79])
+  let sourceRequest = projectPayload recovered Outgoing (QueueId 44) (Operation 0x3c11)
+      sourceBytes = replicate 56 0
+      sourceUnwritten = [18,19,26,27]
+  mapM_ (\offset -> check (sourceRequest sourceBytes == sourceRequest (mutate offset sourceBytes))) sourceUnwritten
+  mapM_ (\offset -> check (sourceRequest sourceBytes /= sourceRequest (mutate offset sourceBytes))) (filter (`notElem` sourceUnwritten) [0..55])
   putStrLn "payload field projection behavioral tests passed"
   where parse = either fail pure . parseDeclaration . L.toStrict . encode
 
