@@ -1,12 +1,16 @@
-use xm1_saclac_interface::calc::SharedAddress;
+use xm1_saclac_interface::calc::{CalcPayload, SharedAddress};
+use xm1_saclac_interface::exposure::EvaluationRequest;
+use xm1_saclac_interface::stock::StockCallbackWord;
 
 use crate::exposure::context::ExposureContext;
-use crate::exposure::evaluation::{reference_value, set_up};
-use crate::exposure::fakes::{placed, World};
+use crate::exposure::evaluation::{reference_value, request_row, set_up};
+use crate::exposure::fakes::{placed, Posted, World};
 use crate::exposure::ports::InPlace;
 use crate::exposure::program::*;
+use crate::selection::{RowIndex, RowPhase};
+use crate::stock::adjust::CONFIGURED_FACTOR;
 use crate::stock::tables::PROGRAM_PROFILES;
-use crate::stock::{dump, property};
+use crate::stock::{dump, property, shared};
 
 const FRAME: SharedAddress = SharedAddress(0x4000_0000);
 
@@ -120,4 +124,89 @@ fn on_the_adjustment_path_the_reference_is_the_snapshot_lens_level_under_the_lev
     context.snapshot.focus.lens_detail = 9;
     context.binding.lens_reference = 0x55;
     assert_eq!(reference_value(&mut world, &context), 30 + 1000 - 10);
+}
+
+const CALLBACK: StockCallbackWord = StockCallbackWord(0x00f1_ee10);
+
+fn prepared() -> (World, ExposureContext) {
+    let mut world = world();
+    for (id, value) in CONFIGURED_FACTOR.into_iter().zip([0, 0, 25]) {
+        world.property(id, value);
+    }
+    let mut context = context();
+    set_up(&mut world, &mut FixedLimits, &mut context);
+    (world, context)
+}
+
+fn request(world: &mut World, context: &mut ExposureContext, row: u8) -> EvaluationRequest {
+    let mut posted = Posted::default();
+    request_row(world, &mut posted, context, RowIndex::new(row).unwrap(), CALLBACK).unwrap();
+    match posted.calc[..] {
+        [CalcPayload::Evaluation { request, callback }] if callback == CALLBACK => request,
+        _ => panic!("one evaluation request with the callback: {:?}", posted.calc),
+    }
+}
+
+#[test]
+fn a_row_request_names_the_row_its_measurement_and_its_column_and_marks_it_requested() {
+    let (mut world, mut context) = prepared();
+    let measurement = &mut context.selection.rows[2].measurement;
+    measurement.pairs = [[0x1_0001, 0x2_0002], [3, 4], [5, 6], [7, 8]];
+    measurement.statistics = [9, 10, 11, 0x1_000c];
+    let sent = request(&mut world, &mut context, 2);
+    assert_eq!((sent.row, sent.measured, sent.statistics), (2, [[2, 1], [6, 5], [4, 3]], [9, 10, 11, 12]));
+    assert_eq!((sent.value, sent.next_profile), (204, context.areas[2].next_profile));
+    assert_eq!((sent.column_count, sent.column_regions), (12, Some(placed(InPlace::ColumnRegions(2)))));
+    assert_eq!((sent.row_buffer, sent.column_buffer), (Some(shared::row_buffers(2)[0]), Some(shared::column_buffer(2))));
+    assert_eq!((sent.level_classes, sent.selection_flags), (Some(shared::level_class(0)), Some(shared::SELECTION_FLAGS)));
+    assert_eq!((sent.tolerance_above, sent.floor, sent.frame), (20, -900, Some(FRAME)));
+    assert_eq!(context.selection.rows[2].phase, RowPhase::Requested);
+    assert_eq!(context.evaluation, sent);
+}
+
+#[test]
+fn the_rates_are_the_configured_factor_and_its_tenths() {
+    let (mut world, mut context) = prepared();
+    assert_eq!(request(&mut world, &mut context, 0).rates, [25, 2, 4, 2]);
+}
+
+#[test]
+fn the_lower_value_is_the_candidate_one_level_below_the_row() {
+    let (mut world, mut context) = prepared();
+    assert_eq!(request(&mut world, &mut context, 2).lower_value, 127);
+    assert_eq!(request(&mut world, &mut context, 0).lower_value, 0x8000);
+}
+
+#[test]
+fn the_row_after_the_reference_level_is_marked_unless_any_range_is_accepted() {
+    let (mut world, mut context) = prepared();
+    context.selection.reference_level = 1;
+    assert!(request(&mut world, &mut context, 2).after_reference);
+    assert!(!request(&mut world, &mut context, 1).after_reference);
+    context.selection.any_range = true;
+    assert!(!request(&mut world, &mut context, 2).after_reference);
+}
+
+#[test]
+fn a_row_of_fixed_offset_carries_its_state_and_raises_the_floor_for_later_rows() {
+    let (mut world, mut context) = prepared();
+    context.selection.candidates[1].state = 4;
+    context.selection.candidates[2].state = 3;
+    let fourth = request(&mut world, &mut context, 1);
+    assert_eq!((fourth.direction, fourth.floor), (4, -900));
+    let third = request(&mut world, &mut context, 2);
+    assert_eq!((third.direction, third.floor), (3, -600));
+    assert_eq!(request(&mut world, &mut context, 3).floor, -600);
+}
+
+#[test]
+fn other_rows_point_toward_the_first_applied_row() {
+    let (mut world, mut context) = prepared();
+    assert_eq!(request(&mut world, &mut context, 1).direction, 0);
+    context.selection.rows[2].phase = RowPhase::Applied;
+    assert_eq!(request(&mut world, &mut context, 1).direction, 2);
+    assert_eq!(request(&mut world, &mut context, 3).direction, 1);
+    context.selection.rows[0].phase = RowPhase::Applied;
+    assert_eq!(request(&mut world, &mut context, 3).direction, 1);
+    assert_eq!(request(&mut world, &mut context, 0).direction, 1);
 }

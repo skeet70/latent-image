@@ -259,3 +259,19 @@ impl LensConfiguration for World {
     fn position_limits(&mut self, key: u32) -> [i16; 2] { self.lens_configuration.position_limits(key) }
     fn mapped_value(&mut self, key: u32) -> u32 { self.lens_configuration.mapped_value(key) }
 }
+
+/// calc and calc1 as a list of the payloads posted to them.
+#[derive(Default)]
+pub struct Posted {
+    pub calc: Vec<xm1_saclac_interface::calc::CalcPayload>,
+}
+
+impl crate::requests::Peers for Posted {
+    type Error = ();
+    fn calc(&mut self, payload: &xm1_saclac_interface::calc::CalcPayload) -> Result<(), ()> {
+        self.calc.push(*payload);
+        Ok(())
+    }
+    fn calc1(&mut self, _payload: &xm1_saclac_interface::calc::Calc1Payload) -> Result<(), ()> { Ok(()) }
+    fn store_acquisition_grid(&mut self, _grid: &xm1_saclac_interface::calc::AcquisitionGrid) {}
+}

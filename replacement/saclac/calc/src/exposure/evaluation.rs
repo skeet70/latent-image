@@ -1,20 +1,29 @@
-//! The evaluation prepared when the adjustment path is not taken (0xf69c48).
+//! The evaluation prepared when the adjustment path is not taken (0xf69c48), and the evaluation
+//! request calc answers for each row of its bank (calc 0x3c00, 0xf6a0cc).
 
+use xm1_saclac_interface::calc::CalcPayload;
 use xm1_saclac_interface::exposure::EvaluationRequest;
+use xm1_saclac_interface::stock::StockCallbackWord;
 use xm1_saclac_interface::RecordHandle;
 use xm1_saclac_profile_records::stock::shared::group_22;
 
+use crate::adjust::rate_policy;
 use crate::exposure::context::{CandidateSpan, EvaluationArea, ExposureContext, ExposureStep, SubjectList, EVALUATION_AREAS};
 use crate::exposure::correction::{self, SubjectSource};
 use crate::exposure::levels;
-use crate::exposure::ports::Ports;
+use crate::exposure::ports::{InPlace, Ports};
 use crate::exposure::program::{self, FirstChoice, Limits};
 use crate::exposure::settings;
-use crate::selection::{Candidate, Column, LevelRange, SelectionBank, ROWS};
+use crate::requests::Peers;
+use crate::selection::{Candidate, Column, LevelRange, RowIndex, RowPhase, SelectionBank, ROWS};
 use crate::stock::{dump, property, shared};
 
 /// The floor every evaluation request starts with (0xf6925c).
 const REQUEST_FLOOR: i16 = -900;
+/// The floor of a row of fixed offset 3 (0xf6a274).
+const OFFSET_THREE_FLOOR: i16 = -600;
+/// `lower_value` when no candidate is one level below the row's (0xf6a1e0).
+const NO_LOWER_VALUE: u16 = 0x8000;
 
 /// The steps `first..=last` as the image task measures them (0xf68b14).
 fn areas(program: &[ExposureStep], span: CandidateSpan, target: i16) -> [EvaluationArea; EVALUATION_AREAS] {
@@ -125,4 +134,65 @@ pub fn set_up(ports: &mut impl Ports, limits: &mut impl Limits, context: &mut Ex
         ports.write_u32(dump::evaluation(frame, 1), context.snapshot.focus.pinned);
         ports.write_u32(dump::evaluation(frame, 2), context.span.bound.code());
     }
+}
+
+/// Calc's rate words for a row (0xf5eb34 with both factors 1).
+fn rates(ports: &mut impl Ports) -> [u32; 4] {
+    let rate = rate_policy::scaled_by_configured_factor(ports, 1);
+    let tenth = rate / 10;
+    [rate, tenth, tenth * 2, tenth]
+}
+
+/// The value of the last candidate one level below `level`.
+fn lower_value(bank: &SelectionBank, level: u8) -> u16 {
+    let count = usize::from(bank.count).min(ROWS);
+    let below = level.checked_sub(1);
+    bank.candidates[..count].iter().rev().find(|candidate| Some(candidate.level) == below).map_or(NO_LOWER_VALUE, |candidate| candidate.value as u16)
+}
+
+/// 2 when the first applied row's level is above `level`, else 1; 0 when no row is applied.
+fn direction_from_applied(bank: &SelectionBank, level: u8) -> u32 {
+    let count = usize::from(bank.count).min(ROWS);
+    let applied = bank.rows[..count].iter().position(|row| row.phase == RowPhase::Applied);
+    applied.map_or(0, |index| if bank.candidates[index].level > level { 2 } else { 1 })
+}
+
+/// Fills the request's row fields from the bank (0xf6a0cc).
+fn fill_row(ports: &mut impl Ports, context: &mut ExposureContext, row: RowIndex) {
+    let index = row.get();
+    let rates = rates(ports);
+    let column_regions = ports.address(InPlace::ColumnRegions(index));
+    let bank = &context.selection;
+    let candidate = bank.candidates[index];
+    let measurement = bank.rows[index].measurement;
+    let half = |pair: [u32; 2]| [pair[1] as u16, pair[0] as u16];
+    let request = &mut context.evaluation;
+    request.row = index as u32;
+    request.measured = [half(measurement.pairs[0]), half(measurement.pairs[2]), half(measurement.pairs[1])];
+    request.statistics = measurement.statistics.map(|statistic| statistic as u16);
+    request.row_buffer = Some(shared::row_buffers(index)[0]);
+    request.rates = rates;
+    request.value = candidate.value as u16;
+    request.lower_value = lower_value(bank, candidate.level);
+    request.after_reference = !bank.any_range && u16::from(candidate.level) == u16::from(bank.reference_level) + 1;
+    request.direction = match candidate.state {
+        state @ (3 | 4) => {
+            request.floor = if state == 3 { OFFSET_THREE_FLOOR } else { REQUEST_FLOOR };
+            state
+        }
+        _ => direction_from_applied(bank, candidate.level),
+    };
+    request.column_count = bank.columns[index].count;
+    request.column_regions = Some(column_regions);
+    request.column_buffer = Some(shared::column_buffer(index));
+    request.next_profile = context.areas[index].next_profile;
+    request.level_classes = Some(shared::level_class(0));
+    request.selection_flags = Some(shared::SELECTION_FLAGS);
+}
+
+/// Posts calc 0x3c00 for `row` and marks the row requested (0xf5fd20).
+pub fn request_row<P: Peers>(ports: &mut impl Ports, peers: &mut P, context: &mut ExposureContext, row: RowIndex, callback: StockCallbackWord) -> Result<(), P::Error> {
+    fill_row(ports, context, row);
+    context.selection.mark_requested(row.get());
+    peers.calc(&CalcPayload::Evaluation { request: context.evaluation, callback })
 }

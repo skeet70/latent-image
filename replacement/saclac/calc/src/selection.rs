@@ -5,6 +5,16 @@ use crate::exposure::context::SUBJECTS;
 
 pub const ROWS: usize = 8;
 
+/// A row of the bank.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RowIndex(u8);
+
+impl RowIndex {
+    pub const fn new(index: u8) -> Option<Self> { if (index as usize) < ROWS { Some(Self(index)) } else { None } }
+
+    pub const fn get(self) -> usize { self.0 as usize }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum RowPhase {
     #[default]
