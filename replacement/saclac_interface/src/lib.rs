@@ -3,6 +3,7 @@
 
 pub mod area_measurement;
 pub mod calculation;
+pub mod capture_job;
 pub mod capture_results;
 pub mod exposure;
 pub mod round;
@@ -482,3 +483,5 @@ mod capture_results_tests;
 mod area_measurement_tests;
 #[cfg(test)]
 mod calc_tests;
+#[cfg(test)]
+mod capture_job_tests;
