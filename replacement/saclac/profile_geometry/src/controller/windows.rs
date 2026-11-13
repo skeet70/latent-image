@@ -255,13 +255,13 @@ impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
 
     /// Bounds the area's first value by the reference profile's window at `level` percent
     /// below full (0xef65cc).
-    fn limit_area(&mut self, level: u8, area: &mut [u32; 3]) {
+    pub fn limit_area(&mut self, level: u32, area: &mut [u32; 3]) {
         if area[2] == 0 {
             return;
         }
         let window = self.ports.relative_rectangle(GAIN_REFERENCE, true);
         let scale = self.profiles.scaled_first(GAIN_REFERENCE, true) as u32;
-        let bound = scale.wrapping_mul(100u32.wrapping_sub(level as u32).wrapping_mul(window.height)) / 100u32.wrapping_mul(area[2]);
+        let bound = scale.wrapping_mul(100u32.wrapping_sub(level).wrapping_mul(window.height)) / 100u32.wrapping_mul(area[2]);
         if bound < area[0] {
             area[0] = bound;
         }
@@ -310,7 +310,7 @@ impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
         };
         if let Some(level) = level {
             let level = self.ports.byte(level);
-            self.limit_area(level, &mut area);
+            self.limit_area(level.into(), &mut area);
         }
         self.crop_geometry(&CropInput { profile: framing.profile, area, divisors: framing.format_ratio, relative: true })
     }

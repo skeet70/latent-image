@@ -11,6 +11,7 @@ pub mod memory;
 pub mod numeric;
 pub mod ports;
 pub mod profile;
+pub mod services;
 #[allow(unsafe_code)]
 pub mod stock;
 

@@ -16,6 +16,14 @@ pub trait FloatLog {
     fn ln(&mut self, value: f32) -> f32;
 }
 
+/// The runtime's single-precision square root (0x894df0).
+pub trait FloatRoot {
+    fn sqrt(&mut self, value: f32) -> f32;
+}
+
+/// 0xee9c50.
+pub fn square_root(root: &mut impl FloatRoot, value: f32) -> f32 { root.sqrt(value) }
+
 /// log2 of `value` in hundredths (0xee98a0), or `None` for zero (status 0x84).
 pub fn centi_log2(tables: &impl FractionTables, value: u32) -> Option<u16> {
     if value == 0 {

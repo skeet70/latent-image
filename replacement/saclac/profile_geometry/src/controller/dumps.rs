@@ -15,7 +15,7 @@ impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
         let Some(buffer) = buffer else {
             return;
         };
-        self.ports.dump_policy(buffer, PolicyDump::Pipeline, policy::DUMPED);
+        self.ports.dump_policy(buffer, PolicyDump::Pipeline, policy::SCAN);
         for (offset, mark) in pipeline::MARKS {
             self.ports.write_dump(buffer, offset, &mark);
         }
@@ -38,7 +38,7 @@ impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
         let Some(buffer) = buffer else {
             return;
         };
-        self.ports.dump_policy(buffer, PolicyDump::Result, policy::DUMPED);
+        self.ports.dump_policy(buffer, PolicyDump::Result, policy::SCAN);
         let (offset, mark) = result::MARK;
         self.ports.write_dump(buffer, offset, &mark);
         let [first_run, second_run] = &result::RUNS;

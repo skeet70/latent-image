@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use xm1_saclac_interface::pipeline::FormatPayload;
 
 use crate::controller::lifecycle::LifecycleRefusal;
@@ -9,7 +12,9 @@ use crate::profile::*;
 use crate::controller::changes::{Stage, Subscription};
 use crate::controller::queries::*;
 use crate::controller::windows::GridRequest;
-use crate::stock::layout::{changes, controller as field, diagnostics, dump, parameters, policy, requests, work, work::records};
+use crate::stock::layout::{callbacks, changes, controller as field, diagnostics, display, dump, parameters, policy, requests, work, work::records};
+use crate::controller::scan::ProcessingRequest;
+use crate::services::{DumpKind, ExtendedOperations, LevelPair, OperationConditions, SelectionRequest, SelectionValues, WindowPower};
 use crate::controller::statistics::{RecordHalf, StatisticsSummary, Summary, SummaryAreas, SummaryRequest};
 use crate::stock::statistics::{write_summary, COPY_OFFSET, HALF_BYTES, RECORD_BYTES};
 use crate::stock::Parameters;
@@ -38,6 +43,40 @@ enum Call {
     AreaQuery(u32, AreaQuery),
 }
 
+/// Calls to the ports `Call` does not record.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum Out {
+    ClearScan(Location),
+    DefaultScan(Location),
+    ChannelCode(u32),
+    Export(Location, ScanExport, u32),
+    Route(u32, u32),
+    Wait(u32),
+    Task(u32, u32),
+    Display(&'static str),
+    FileName(Location),
+    Copy(Location, Location),
+    Append(Location, &'static [u8]),
+    Open(Location),
+    Write(u32, u32, u32),
+    Close(u32),
+    Finish(u32),
+    Numbers(u32),
+}
+
+/// Stock memory the fake storage service's completions write while the layer waits.
+#[derive(Clone, Default)]
+struct SharedBytes(Rc<RefCell<Bytes>>);
+
+impl Memory for SharedBytes {
+    fn read_u8(&self, at: Location) -> u8 { self.0.borrow().read_u8(at) }
+    fn read_u16(&self, at: Location) -> u16 { self.0.borrow().read_u16(at) }
+    fn read_u32(&self, at: Location) -> u32 { self.0.borrow().read_u32(at) }
+    fn write_u8(&mut self, at: Location, value: u8) { self.0.borrow_mut().write_u8(at, value) }
+    fn write_u16(&mut self, at: Location, value: u16) { self.0.borrow_mut().write_u16(at, value) }
+    fn write_u32(&mut self, at: Location, value: u32) { self.0.borrow_mut().write_u32(at, value) }
+}
+
 #[derive(Default)]
 struct Fake {
     calls: Vec<Call>,
@@ -48,6 +87,13 @@ struct Fake {
     status: u32,
     dumped: Vec<(u32, u32, Vec<u8>)>,
     policy_dumps: Vec<PolicyDump>,
+    settings: Vec<(Location, ScanSetting)>,
+    out: Vec<Out>,
+    display_refuses: Option<&'static str>,
+    files: Option<Rc<RefCell<Bytes>>>,
+    /// Each file request's completion status in turn; zero once used up.
+    file_statuses: Vec<u32>,
+    completion: Option<(FileCompletion, u32, u32)>,
 }
 
 impl Configuration for Fake {
@@ -58,6 +104,7 @@ impl Configuration for Fake {
     fn signed_halfword(&mut self, _: ConfigOffset) -> i16 { 0 }
     fn collapse_index(&mut self, value: u32) -> u32 { value }
     fn transform(&mut self, value: u32, scale: u32) -> u16 { (value * 10 + scale) as u16 }
+    fn split_index(&mut self) -> u8 { 4 }
 }
 
 impl Pipeline for Fake {
@@ -102,7 +149,14 @@ impl StagePayloads for Fake {
 }
 
 impl ScanConfiguration for Fake {
-    fn set(&mut self, _: ScanSetting) {}
+    fn set(&mut self, scan: Location, setting: ScanSetting) { self.settings.push((scan, setting)) }
+    fn clear_scan(&mut self, scan: Location) { self.out.push(Out::ClearScan(scan)) }
+    fn default_scan(&mut self, scan: Location) { self.out.push(Out::DefaultScan(scan)) }
+    fn channel_code(&mut self, channel: u32, codes: &'static [u16; 10]) -> u16 {
+        self.out.push(Out::ChannelCode(channel));
+        codes[channel.min(9) as usize] + 100
+    }
+    fn export_scan(&mut self, scan: Location, part: ScanExport, out: StockData) { self.out.push(Out::Export(scan, part, out.0)) }
     fn compile_scan_configuration(&mut self, _: u8) {}
     fn apply_selection(&mut self, _: Location, _: Location) {}
     fn attach_scan_configuration(&mut self, _: Location, _: Stages) {}
@@ -166,6 +220,11 @@ impl Retained for Fake {
     fn encode_thresholds(&mut self, _: i16, _: i16) -> u32 { 0 }
     fn converted_decade(&mut self, _: u32) -> i32 { 0 }
     fn statistics_offset(&mut self, region: StatisticsRegion) -> u32 { region.0 * 0x1000 }
+    fn selection_limit(&mut self) -> u32 { 7 }
+    fn profile_factors(&mut self, selection: u32) -> [u16; 2] { [selection as u16, 2 * selection as u16] }
+    fn calibration_factors(&mut self, first: u32, second: u32) -> [u16; 3] { [first as u16, second as u16, 0x400] }
+    fn configured_decade(&mut self, offset: u8) -> i16 { 10 * offset as i16 }
+    fn decode_level(&mut self, encoded: u32) -> u8 { encoded as u8 + 1 }
 }
 
 impl StatisticsMemory for Fake {
@@ -173,10 +232,94 @@ impl StatisticsMemory for Fake {
     fn low_word(&mut self, address: LowAddress) -> u32 { 0x1000 + address.0 as u32 }
 }
 
-impl FrameDumps for Fake {
+impl DeviceRegisters for Fake {
     fn register(&mut self, register: Register) -> u32 { if register.0 == 0xfff8_802c { self.status } else { register.0 & 0xff } }
+}
+
+impl FrameDumps for Fake {
     fn write_dump(&mut self, buffer: DumpBuffer, offset: u32, bytes: &[u8]) { self.dumped.push((buffer.0, offset, bytes.to_vec())) }
     fn dump_policy(&mut self, _: DumpBuffer, dump: PolicyDump, _: Location) { self.policy_dumps.push(dump) }
+}
+
+impl OutputRoutes for Fake {
+    fn set_requested_level(&mut self, route: u32, level: u32) -> i32 {
+        self.out.push(Out::Route(route, level));
+        0
+    }
+}
+
+impl Interface for Fake {
+    fn read_adc_byte(&mut self, channel: u32) -> AdcReading { AdcReading { status: 0, value: channel as u8 * 3 } }
+    fn wait_ticks(&mut self, ticks: u32) {
+        self.out.push(Out::Wait(ticks));
+        if let (Some(memory), Some(completion)) = (&self.files, self.completion.take()) {
+            let mut memory = SharedBytes(memory.clone());
+            match completion {
+                (FileCompletion::Opened, status, handle) => crate::services::file_opened(&mut memory, status, handle),
+                (FileCompletion::Done, status, _) => crate::services::file_done(&mut memory, status),
+            }
+        }
+    }
+    fn configure_task(&mut self, task: u32, priority: u32) -> i32 {
+        self.out.push(Out::Task(task, priority));
+        0
+    }
+}
+
+impl PeakService for Fake {
+    fn read_selection(&mut self) {}
+    fn notify_return(&mut self) {}
+    fn state(&mut self) -> u32 { self.status }
+}
+
+impl LensValues for Fake {
+    fn lens_value(&mut self, index: u32) -> i16 { 100 - index as i16 }
+}
+
+impl ProfileResources for Fake {
+    fn resource_byte(&mut self, record: u32) -> u8 { record as u8 }
+}
+
+impl Fake {
+    fn display(&mut self, call: &'static str) -> bool {
+        self.out.push(Out::Display(call));
+        self.display_refuses != Some(call)
+    }
+
+    fn file_request(&mut self, completion: FileCompletion, request: Out) {
+        self.out.push(request);
+        let status = if self.file_statuses.is_empty() { 0 } else { self.file_statuses.remove(0) };
+        self.completion = Some((completion, status, 0x77));
+    }
+}
+
+impl DisplayDriver for Fake {
+    fn write_selected_quad(&mut self, _: u32, _: Location) -> bool { self.display("quad") }
+    fn write_selected_channel(&mut self, _: u32, _: Location) -> bool { self.display("channel") }
+    fn apply_scale_layout(&mut self, _: Location) -> bool { self.display("layout") }
+    fn graphic_service(&mut self, _: u32) -> bool { self.display("graphic") }
+    fn update_configuration_bits(&mut self, _: u32) -> bool { self.display("bits") }
+    fn forward_selection(&mut self, _: Location) -> bool { self.display("forward") }
+    fn apply_selected(&mut self, _: u32) -> bool { self.display("selected") }
+    fn set_selected_colour(&mut self, _: u32) { self.display("colour"); }
+    fn forward_selected_value(&mut self, _: u32) -> bool { self.display("value") }
+    fn on_selected_event(&mut self, _: StockCode) -> bool { self.display("event") }
+}
+
+impl DumpFiles for Fake {
+    fn next_file_name(&mut self, name: Location) { self.out.push(Out::FileName(name)) }
+    fn copy_text(&mut self, to: Location, from: Location) { self.out.push(Out::Copy(to, from)) }
+    fn append_text(&mut self, to: Location, text: &'static [u8]) { self.out.push(Out::Append(to, text)) }
+    fn open_file(&mut self, completion: FileCompletion, path: Location) -> u32 {
+        self.file_request(completion, Out::Open(path));
+        0x99
+    }
+    fn write_file(&mut self, completion: FileCompletion, handle: u32, length: u32, data: StockData) {
+        self.file_request(completion, Out::Write(handle, length, data.0))
+    }
+    fn close_file(&mut self, completion: FileCompletion, handle: u32) { self.file_request(completion, Out::Close(handle)) }
+    fn finish_file(&mut self, completion: FileCompletion, handle: u32) { self.file_request(completion, Out::Finish(handle)) }
+    fn read_file_numbers(&mut self, numbers: StockData) { self.out.push(Out::Numbers(numbers.0)) }
 }
 
 impl GeometryService for Fake {
@@ -199,6 +342,7 @@ impl GeometryService for Fake {
 struct Tables {
     feature: u8,
     kind: u8,
+    flags: u16,
     class: GeometryClass,
     slot: ScanSlot,
     policy: u32,
@@ -206,7 +350,7 @@ struct Tables {
 
 impl ProfileTables for Tables {
     fn entry(&self, _: ProfileHandle) -> ProfileEntry {
-        ProfileEntry { class: ClassIndex(0), kind: ProfileKind(self.kind), flags: 0, threshold_index: 3, feature: self.feature, aspect_index: 0 }
+        ProfileEntry { class: ClassIndex(0), kind: ProfileKind(self.kind), flags: self.flags, threshold_index: 3, feature: self.feature, aspect_index: 0 }
     }
     fn class(&self, _: ClassIndex) -> GeometryClass { self.class }
     fn threshold(&self, index: u8) -> u16 { index as u16 * 5 }
@@ -231,13 +375,13 @@ impl FractionTables for Tables {
 type Layer = ProfileGeometry<Bytes, Fake, Tables>;
 
 fn layer(feature: u8, kind: u8) -> Layer {
-    let tables = Tables { feature, kind, class: GeometryClass::default(), slot: ScanSlot::default(), policy: 1 };
+    let tables = Tables { feature, kind, flags: 0, class: GeometryClass::default(), slot: ScanSlot::default(), policy: 1 };
     ProfileGeometry::new(Bytes::default(), Fake::default(), Profiles::new(tables))
 }
 
 /// A layer whose profile class scales by one and whose window is `window`.
 fn framed(window: Rectangle, class: GeometryClass, slot: ScanSlot) -> Layer {
-    let tables = Tables { feature: 0, kind: 0, class: GeometryClass { first_scale: 1, second_scale: 1, ..class }, slot, policy: 1 };
+    let tables = Tables { feature: 0, kind: 0, flags: 0, class: GeometryClass { first_scale: 1, second_scale: 1, ..class }, slot, policy: 1 };
     ProfileGeometry::new(Bytes::default(), Fake { window, ..Fake::default() }, Profiles::new(tables))
 }
 
@@ -520,7 +664,7 @@ fn the_result_dump_adds_each_word_offset_to_the_first_register_of_a_repeated_blo
 }
 
 fn summarizing() -> Layer {
-    let tables = Tables { feature: 0, kind: 0, class: GeometryClass::default(), slot: ScanSlot::default(), policy: 2 };
+    let tables = Tables { feature: 0, kind: 0, flags: 0, class: GeometryClass::default(), slot: ScanSlot::default(), policy: 2 };
     ProfileGeometry::new(Bytes::default(), Fake::default(), Profiles::new(tables))
 }
 
@@ -590,4 +734,182 @@ fn an_inner_rectangle_past_the_outer_one_takes_the_outer_axis() {
     let outer = Rectangle { top: 10, left: 10, width: 100, height: 100 };
     let inner = Rectangle { top: 20, left: 0, width: 300, height: 30 };
     assert_eq!(within(outer, inner), Rectangle { top: 10, left: 0, width: 100, height: 30 });
+}
+
+fn filing(statuses: Vec<u32>) -> ProfileGeometry<SharedBytes, Fake, Tables> {
+    let memory = SharedBytes::default();
+    let fake = Fake { files: Some(memory.0.clone()), file_statuses: statuses, ..Fake::default() };
+    let tables = Tables { feature: 0, kind: 0, flags: 0, class: GeometryClass::default(), slot: ScanSlot::default(), policy: 1 };
+    ProfileGeometry::new(memory, fake, Profiles::new(tables))
+}
+
+#[test]
+fn a_dump_names_opens_writes_and_closes_its_file_then_reports_its_numbers() {
+    let mut layer = filing(vec![]);
+    assert_eq!(layer.write_dump(DumpKind::from_code(3), Some(StockData(0x4000)), 0x200, Some(StockData(0x5000))), Ok(()));
+    assert_eq!(layer.ports.out, vec![
+        Out::FileName(dump::FILE_NAME),
+        Out::Copy(dump::FILE_PATH, dump::FILE_NAME),
+        Out::Append(dump::FILE_PATH, b".tma\0"),
+        Out::Open(dump::FILE_PATH),
+        Out::Wait(3),
+        Out::Write(0x77, 0x200, 0x4000),
+        Out::Wait(3),
+        Out::Close(0x77),
+        Out::Wait(3),
+        Out::Numbers(0x5000),
+    ]);
+}
+
+#[test]
+fn a_failed_dump_write_finishes_the_file_instead_of_closing_it() {
+    let mut layer = filing(vec![0, 9]);
+    assert_eq!(layer.write_dump(DumpKind::from_code(1), Some(StockData(0x4000)), 4, None), Ok(()));
+    assert_eq!(layer.ports.out[2], Out::Append(dump::FILE_PATH, b".bin\0"));
+    assert_eq!(layer.ports.out[7..], [Out::Finish(0x77), Out::Wait(3)]);
+}
+
+#[test]
+fn a_dump_without_data_is_refused_before_any_request() {
+    let mut layer = filing(vec![]);
+    assert_eq!(layer.write_dump(DumpKind::Raw, None, 4, None), Err(Refusal::BadArgument));
+    assert!(layer.ports.out.is_empty());
+}
+
+#[test]
+fn the_display_configuration_applies_each_pending_part_and_clears_it() {
+    let mut layer = layer(0, 0);
+    layer.memory.write_u32(display::PENDING, 0x55);
+    assert_eq!(layer.apply_display_configuration(StockCode(0xf00)), Ok(()));
+    let calls: Vec<Out> =
+        ["quad", "channel", "layout", "graphic", "bits", "forward", "selected", "colour", "value", "event"].into_iter().map(Out::Display).collect();
+    assert_eq!(layer.ports.out, calls);
+    assert_eq!(layer.memory().read_u32(display::PENDING), 0);
+}
+
+#[test]
+fn a_refused_display_part_stays_pending_and_stops_the_rest() {
+    let mut layer = layer(0, 0);
+    layer.memory.write_u32(display::PENDING, 0x55);
+    layer.ports.display_refuses = Some("selected");
+    assert_eq!(layer.apply_display_configuration(StockCode(0xf00)), Err(Refusal::WrongState));
+    assert_eq!(layer.ports.out.last(), Some(&Out::Display("selected")));
+    assert_eq!(layer.memory().read_u32(display::PENDING), 0x51);
+    layer.memory.write_u32(display::PENDING, 0);
+    layer.ports.out.clear();
+    assert_eq!(layer.apply_display_configuration(StockCode(0xf00)), Err(Refusal::WrongState));
+    assert!(layer.ports.out.is_empty());
+}
+
+#[test]
+fn the_configured_operation_needs_the_profile_flag_an_enabling_request_and_an_open_mode() {
+    let tables = Tables { feature: 0, kind: 0, flags: 1 << 14, class: GeometryClass::default(), slot: ScanSlot::default(), policy: 1 };
+    let mut flagged = ProfileGeometry::new(Bytes::default(), Fake::default(), Profiles::new(tables));
+    let base = OperationConditions {
+        requested: 1,
+        alternate: 0,
+        held: 0,
+        vetoes: [0; 3],
+        mode: 0,
+        profile: ProfileHandle(0),
+        busy: 0,
+        stage: 0,
+    };
+    assert!(flagged.configured_operation(&base));
+    assert!(flagged.configured_operation(&OperationConditions { requested: 0, alternate: 1, ..base }));
+    assert!(!flagged.configured_operation(&OperationConditions { held: 2, ..base }));
+    assert!(!flagged.configured_operation(&OperationConditions { mode: 3, ..base }));
+    assert!(!flagged.configured_operation(&OperationConditions { vetoes: [0, 1, 0], ..base }));
+    assert!(!flagged.configured_operation(&OperationConditions { stage: 3, ..base }));
+    assert!(!layer(0, 0).configured_operation(&base));
+}
+
+#[test]
+fn profile_factors_scale_the_second_and_third_values_in_twentieth_powers_of_two() {
+    let mut layer = layer(0, 0);
+    assert_eq!(layer.apply_profile_factors([7, 1000, 2000], 0x8000, 0x4000, 3), [7, 93, 187]);
+}
+
+#[test]
+fn level_pairs_follow_their_kind() {
+    let mut layer = layer(0, 0);
+    assert_eq!(layer.level_pair(1, 3), LevelPair([4, 0]));
+    assert_eq!(layer.level_pair(2, 4), LevelPair::PRIMARY);
+    assert_eq!(layer.level_pair(2, 3), LevelPair::SECONDARY);
+    assert_eq!(layer.level_pair(0, 2), LevelPair([0, 3]));
+    assert_eq!([LevelPair([0, 3]).class(), LevelPair([4, 0]).class(), LevelPair::PRIMARY.class()], [0, 1, 2]);
+    assert_eq!([LevelPair([0, 0]), LevelPair([1, 0]), LevelPair([2, 0])].map(LevelPair::first_complement), [1, 0, 0]);
+    assert_eq!(layer.record_decade(LevelPair([2, 5])), 50);
+}
+
+#[test]
+fn selection_values_answer_only_what_is_asked_and_zero_a_selection_past_the_split() {
+    let mut layer = layer(0, 0);
+    layer.ports.config.push((0xad, 3));
+    let all = SelectionRequest { selection: true, offset: true, level: true };
+    assert_eq!(layer.selection_values(all), SelectionValues { selection: Some(3), offset: Some(0), level: Some(93) });
+    layer.ports.config[0].1 = 4;
+    assert_eq!(layer.selection_values(SelectionRequest { selection: true, ..SelectionRequest::default() }).selection, Some(0));
+    assert_eq!(layer.selection_values(SelectionRequest::default()), SelectionValues::default());
+}
+
+#[test]
+fn service_requests_name_their_route_tasks_and_register() {
+    let mut layer = layer(0, 0);
+    assert_eq!(layer.set_window_power(WindowPower::Held), 0);
+    layer.configure_extended_operations(ExtendedOperations::Primary);
+    assert_eq!(layer.ports.out, vec![Out::Route(13, 8), Out::Task(50, 3), Out::Task(43, 4), Out::Task(47, 4), Out::Task(48, 4), Out::Task(44, 5)]);
+    assert!(layer.device_status());
+    assert_eq!(layer.read_adc_channel5(), AdcReading { status: 0, value: 15 });
+    layer.ports.status = 3;
+    assert!(layer.peak_active());
+    layer.ports.status = 1;
+    assert!(!layer.peak_active());
+}
+
+#[test]
+fn an_exported_request_fills_the_export_scan_object_and_writes_its_four_parts() {
+    let mut layer = layer(0, 0);
+    let request = ProcessingRequest {
+        option: 1,
+        output_mode: 0,
+        dimensions: [720, 1280],
+        format: 13,
+        selection: 9,
+        code: 0,
+        geometry_kind: 4,
+        geometry_enabled: 1,
+        query_mode: 2,
+        record_kinds: [0, 9],
+        processing_level: 3,
+        profile: ProfileHandle(0),
+        record_kind: 0,
+        limit: 0x123,
+        rate_companion: 9,
+        toggle: 2,
+        option_flags: 0,
+        byte70: 0x70,
+        channel: 0,
+    };
+    layer.export_processing_request(&request, StockData(0x6000));
+    let scan = callbacks::EXPORT_SCAN;
+    let settings: Vec<ScanSetting> = layer.ports.settings.iter().map(|&(at, setting)| {
+        assert_eq!(at, scan);
+        setting
+    }).collect();
+    use ScanSetting::*;
+    assert_eq!(settings, vec![
+        OutputMode(0), ProcessingOption(5), GeometryKind(5), RecordProcessing(7), Dimensions(1), QueryKind(1), Format(0), Code(0),
+        QueryMode(4), PrimaryRecordKind(4), SecondaryRecordKind(2), GeometryEnabled(1), FormatCompanion(0), Limit(0x123),
+        RateCompanion(9), Toggle(1), Byte70(0x70), ProcessingLevel(12), ChannelCode(101),
+    ]);
+    assert_eq!(layer.ports.out, vec![
+        Out::ClearScan(scan),
+        Out::DefaultScan(scan),
+        Out::ChannelCode(1),
+        Out::Export(scan, ScanExport::Settings, 0x6000),
+        Out::Export(scan, ScanExport::Geometry, 0x6038),
+        Out::Export(scan, ScanExport::Values, 0x6064),
+        Out::Export(scan, ScanExport::Curve, 0x6076),
+    ]);
 }

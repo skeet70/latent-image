@@ -23,6 +23,8 @@ pub trait Configuration {
     fn collapse_index(&mut self, value: u32) -> u32;
     /// 0x7468b8.
     fn transform(&mut self, value: u32, scale: u32) -> u16;
+    /// 0x74677c.
+    fn split_index(&mut self) -> u8;
 }
 
 /// An image pipeline channel the controller's requests name.
@@ -198,12 +200,47 @@ pub enum ScanSetting {
     WhiteBalance([u16; 3]),
     /// 0xd78fb8.
     OutputLevel(u32),
+    /// 0xd7868c.
+    ChannelCode(u32),
 }
 
-/// The pipeline layer's scan configuration object, which the controller fills, compiles and
-/// attaches.
+/// The four parts of a scan object a caller's export buffer takes, in their stock order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScanExport {
+    /// 0xd5e0d4.
+    Settings,
+    /// 0xd5dfc4.
+    Geometry,
+    /// 0xd5dfec.
+    Values,
+    /// 0xd5e120.
+    Curve,
+}
+
+impl ScanExport {
+    pub const ALL: [ScanExport; 4] = [ScanExport::Settings, ScanExport::Geometry, ScanExport::Values, ScanExport::Curve];
+
+    /// The part's offset in the export buffer.
+    pub const fn offset(self) -> u32 {
+        match self {
+            ScanExport::Settings => 0,
+            ScanExport::Geometry => 56,
+            ScanExport::Values => 100,
+            ScanExport::Curve => 118,
+        }
+    }
+}
+
+/// The pipeline layer's scan objects, which the controller fills, compiles and attaches.
 pub trait ScanConfiguration {
-    fn set(&mut self, setting: ScanSetting);
+    fn set(&mut self, scan: Location, setting: ScanSetting);
+    /// Zeroes the scan object (0xd77abc).
+    fn clear_scan(&mut self, scan: Location);
+    /// 0xd791b0.
+    fn default_scan(&mut self, scan: Location);
+    /// `codes` at the index of the first channel threshold at or above `channel` (0xd5dce8).
+    fn channel_code(&mut self, channel: u32, codes: &'static [u16; 10]) -> u16;
+    fn export_scan(&mut self, scan: Location, part: ScanExport, out: StockData);
     /// The compile entries 0xd5e208 to 0xd5e538 in their stock order; `output_kind` goes to
     /// 0xd5e240.
     fn compile_scan_configuration(&mut self, output_kind: u8);
@@ -329,6 +366,126 @@ pub trait Retained {
     fn converted_decade(&mut self, selection: u32) -> i32;
     /// The offset of `region` within a statistics buffer (0xedae88).
     fn statistics_offset(&mut self, region: StatisticsRegion) -> u32;
+    /// 0xeea014.
+    fn selection_limit(&mut self) -> u32;
+    /// The two factors of a profile factor selection (0xef4274).
+    fn profile_factors(&mut self, selection: u32) -> [u16; 2];
+    /// Two calibration factors and the rounding the products add (0xef3f04).
+    fn calibration_factors(&mut self, first: u32, second: u32) -> [u16; 3];
+    /// Ten times the configured value at `offset` (0xef74ac).
+    fn configured_decade(&mut self, offset: u8) -> i16;
+    /// The level an encoded level byte stands for (0xef73e4).
+    fn decode_level(&mut self, encoded: u32) -> u8;
+}
+
+/// A stock data address a caller hands through the layer, such as its output buffer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StockData(pub u32);
+
+impl StockData {
+    pub const fn plus(self, bytes: u32) -> Self { Self(self.0.wrapping_add(bytes)) }
+}
+
+/// 0x64982c.
+pub trait OutputRoutes {
+    /// The route's status, zero when it takes `level`.
+    fn set_requested_level(&mut self, route: u32, level: u32) -> i32;
+}
+
+/// An ADC byte read: the interface's status, and the byte, which is zero unless the status is.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AdcReading {
+    pub status: u32,
+    pub value: u8,
+}
+
+/// The OS interface entries the layer calls.
+pub trait Interface {
+    /// 0x741ee0.
+    fn read_adc_byte(&mut self, channel: u32) -> AdcReading;
+    /// Sleeps the calling task (0x743ce4).
+    fn wait_ticks(&mut self, ticks: u32);
+    /// Sets a task's priority; the dispatcher's status (0x723a14).
+    fn configure_task(&mut self, task: u32, priority: u32) -> i32;
+}
+
+pub trait DeviceRegisters {
+    fn register(&mut self, register: Register) -> u32;
+}
+
+/// The peak-rate service 0x6b7820, 0x6b7830 and 0x6b7840 front.
+pub trait PeakService {
+    /// 0x6b7830.
+    fn read_selection(&mut self);
+    /// 0x6b7840.
+    fn notify_return(&mut self);
+    /// The service's state word (0x6b7820).
+    fn state(&mut self) -> u32;
+}
+
+/// The lens control's configured values by index (0x772f28).
+pub trait LensValues {
+    fn lens_value(&mut self, index: u32) -> i16;
+}
+
+/// The settings layer's profile resource records.
+pub trait ProfileResources {
+    /// 0x750474.
+    fn resource_byte(&mut self, record: u32) -> u8;
+}
+
+/// The display driver's selected-output services; false when the driver refuses.
+pub trait DisplayDriver {
+    /// 0x6cfed0.
+    fn write_selected_quad(&mut self, channel: u32, values: Location) -> bool;
+    /// 0x6cfe14.
+    fn write_selected_channel(&mut self, channel: u32, value: Location) -> bool;
+    /// 0x6d0000.
+    fn apply_scale_layout(&mut self, layout: Location) -> bool;
+    /// 0x6d1b24.
+    fn graphic_service(&mut self, value: u32) -> bool;
+    /// 0x6cffbc.
+    fn update_configuration_bits(&mut self, value: u32) -> bool;
+    /// 0x6d0244.
+    fn forward_selection(&mut self, value: Location) -> bool;
+    /// 0x6d1520.
+    fn apply_selected(&mut self, value: u32) -> bool;
+    /// 0x6d0ee4.
+    fn set_selected_colour(&mut self, rgb: u32);
+    /// 0x6d01bc.
+    fn forward_selected_value(&mut self, value: u32) -> bool;
+    /// Has the driver enter `callback` on its next selected-output event (0x6cfcf4).
+    fn on_selected_event(&mut self, callback: StockCode) -> bool;
+}
+
+/// The layer's own entries the storage service enters when a dump file request completes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FileCompletion {
+    /// Takes the status and the file's handle.
+    Opened,
+    /// Takes the status.
+    Done,
+}
+
+/// The storage service's file entries.
+pub trait DumpFiles {
+    /// Writes the next numbered file name into `name` (0x70fbfc with zero arguments).
+    fn next_file_name(&mut self, name: Location);
+    /// 0x742250.
+    fn copy_text(&mut self, to: Location, from: Location);
+    /// Appends `text`, which ends in a zero byte (0x742260).
+    fn append_text(&mut self, to: Location, text: &'static [u8]);
+    /// Opens the file at `path` for writing; what the request entry returns (0x71c648 with
+    /// count 1).
+    fn open_file(&mut self, completion: FileCompletion, path: Location) -> u32;
+    /// 0x71c75c.
+    fn write_file(&mut self, completion: FileCompletion, handle: u32, length: u32, data: StockData);
+    /// 0x71c7bc with two zero words.
+    fn close_file(&mut self, completion: FileCompletion, handle: u32);
+    /// 0x71c938.
+    fn finish_file(&mut self, completion: FileCompletion, handle: u32);
+    /// Stores the current directory and file numbers as halfwords at `numbers` (0x70fb68).
+    fn read_file_numbers(&mut self, numbers: StockData);
 }
 
 /// A region of the image pipeline's statistics buffers.
@@ -352,7 +509,7 @@ pub trait StatisticsMemory {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DumpBuffer(pub u32);
 
-/// A device register the frame dumps read.
+/// A device register.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Register(pub u32);
 
@@ -366,7 +523,6 @@ pub enum PolicyDump {
 }
 
 pub trait FrameDumps {
-    fn register(&mut self, register: Register) -> u32;
     fn write_dump(&mut self, buffer: DumpBuffer, offset: u32, bytes: &[u8]);
     fn dump_policy(&mut self, buffer: DumpBuffer, dump: PolicyDump, policy: Location);
 }
@@ -404,8 +560,16 @@ pub trait Ports:
     + Retained
     + RadialGeometry
     + StatisticsMemory
+    + DeviceRegisters
     + FrameDumps
     + GeometryService
+    + OutputRoutes
+    + Interface
+    + PeakService
+    + LensValues
+    + ProfileResources
+    + DisplayDriver
+    + DumpFiles
 {
 }
 
@@ -421,7 +585,15 @@ impl<T> Ports for T where
         + Retained
         + RadialGeometry
         + StatisticsMemory
+        + DeviceRegisters
         + FrameDumps
         + GeometryService
+        + OutputRoutes
+        + Interface
+        + PeakService
+        + LensValues
+        + ProfileResources
+        + DisplayDriver
+        + DumpFiles
 {
 }

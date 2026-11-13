@@ -26,7 +26,7 @@ pub const fn base(block: Block) -> usize {
         Block::Policy => 0x1699d78,
         Block::Dump => 0x169b284,
         Block::Diagnostics => 0x169b400,
-        Block::Display => 0x169b458,
+        Block::Display => 0x169b44c,
         Block::GeometryOperation => 0x169b8f0,
         Block::OperationCallbacks => 0x169b950,
         Block::RecordMode => 0x169c1d4,
@@ -484,6 +484,33 @@ pub mod dump {
     ];
     pub const REGIONS: [(u32, u32); 2] = [(12, 0x5ffb0dc0), (13, 0x5ffb3770)];
     pub const REGION_BYTES: u32 = 0x29b0;
+    /// The next numbered file name the storage service writes.
+    pub const FILE_NAME: Location = at(Dump, 0x20);
+    /// The file name with the dump kind's extension.
+    pub const FILE_PATH: Location = at(Dump, 0xdc);
+    /// The open file's handle and the last request's status, which the completions store.
+    pub const FILE_HANDLE: Location = at(Dump, 0x114);
+    pub const FILE_STATUS: Location = at(Dump, 0x118);
+    /// Non-zero while a file request is outstanding.
+    pub const FILE_PENDING: Location = at(Dump, 0x11c);
+}
+
+/// The display configuration a stock setter leaves pending for 0xeeb5b4.
+pub mod display {
+    use super::at;
+    use crate::memory::{Block::Display, Location};
+
+    pub const SELECTION: Location = at(Display, 0x0);
+    /// The parts still to apply, one bit each.
+    pub const PENDING: Location = at(Display, 0xc);
+    pub const GRAPHIC: Location = at(Display, 0x10);
+    pub const CHANNEL: Location = at(Display, 0x14);
+    pub const SELECTED: Location = at(Display, 0x1c);
+    pub const COLOUR: Location = at(Display, 0x2c);
+    pub const SELECTED_VALUE: Location = at(Display, 0x34);
+    pub const QUAD: Location = at(Display, 0x38);
+    pub const SCALE_LAYOUT: Location = at(Display, 0x40);
+    pub const CONFIGURATION_BITS: Location = at(Display, 0x58);
 }
 
 pub mod policy {
@@ -499,8 +526,8 @@ pub mod policy {
     pub const SLOT: Location = at(Policy, 0x0);
     /// The status pair each scan record was computed from, primary then secondary.
     pub const SCAN_PAIRS: [Location; 2] = [at(Policy, 0x4), at(Policy, 0xc)];
-    /// The part of the block the frame dumps copy.
-    pub const DUMPED: Location = at(Policy, 0x14);
+    /// The scan object 0xedccd8 fills, which the frame dumps copy.
+    pub const SCAN: Location = at(Policy, 0x14);
     pub const LAYOUT: Location = at(Policy, 0x1284);
     /// Cleared by every scan record.
     pub const SCAN_CLEARED: Location = at(Policy, 0x14b8);
@@ -521,6 +548,8 @@ pub mod callbacks {
 
     /// 1 while operation callbacks are enabled (0xeef1c0).
     pub const ENABLED: Location = at(OperationCallbacks, 0x0);
+    /// The scan object an exported processing request fills (0xeef3f0).
+    pub const EXPORT_SCAN: Location = at(OperationCallbacks, 0x4);
 }
 
 pub mod diagnostics {
