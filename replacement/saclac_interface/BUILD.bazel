@@ -25,6 +25,7 @@ SOURCES = [
     "src/stock/capture_results.rs",
     "src/stock/exposure.rs",
     "src/stock/imaging.rs",
+    "src/stock/peers.rs",
     "src/stock/pipeline.rs",
     "src/stock/round_image.rs",
     "src/stock/search.rs",
