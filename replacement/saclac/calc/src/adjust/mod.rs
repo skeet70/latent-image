@@ -10,6 +10,7 @@ pub mod lens;
 pub mod metering;
 pub mod motion;
 pub mod peak;
+pub mod profile_adjustment;
 pub mod rate_policy;
 pub mod rate_samples;
 pub mod result_dispatch;
@@ -37,6 +38,8 @@ mod focus_reuse_tests;
 mod metering_tests;
 #[cfg(test)]
 mod peak_tests;
+#[cfg(test)]
+mod profile_adjustment_tests;
 #[cfg(test)]
 mod rate_policy_tests;
 #[cfg(test)]
