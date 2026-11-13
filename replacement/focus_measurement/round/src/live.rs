@@ -5,20 +5,14 @@ use crate::image::{ImageEffect, ImageJob, ImageOutcome, ImageRequest, ImageSigna
 use crate::jobs::{self, Calculation, CalculationJob};
 use crate::lanes::{Lane, Selection};
 use crate::planner::{Cadence, Mode, Work};
+use crate::record::{self, Ports as RecordPorts};
 use crate::round::{Environment, LaneSignal, LaneStatus, RecordEffect, Round};
 use xm1_saclac_controllers::children::{ChildEvent, ChildOutcome, MeasurementControl, MeasurementUpdate};
 use xm1_saclac_interface::{CommandKind, Completed, Completion, RecordHandle};
 
-/// Everything the live measurement asks of the record, its peers and the search slot.
-pub trait Effects {
-    fn available(&mut self, record: RecordHandle) -> Option<Selection>;
-    fn requested_changes(&mut self) -> (Selection, Selection);
-    fn search_permitted(&mut self) -> bool;
-    fn alternate_search(&mut self, record: RecordHandle) -> bool;
-    fn autofocus_geometry(&mut self, record: RecordHandle) -> bool;
+/// Everything the live measurement asks of the records, its peers and the search slot.
+pub trait Effects: RecordPorts {
     fn planning_mode(&mut self, record: RecordHandle) -> Mode;
-    fn cadence(&mut self, work: Work, mode: Mode) -> Cadence;
-    fn record_effect(&mut self, record: RecordHandle, effect: RecordEffect);
     fn fault(&mut self);
 
     /// The contrast search lane, whose implementation is the AF-candidate slot.
@@ -205,13 +199,15 @@ impl<E: Effects> Environment for Lanes<'_, E> {
             Lane::Bookkeeping => self.bookkeeping(signal),
         }
     }
-    fn available(&mut self, record: RecordHandle) -> Option<Selection> { self.effects.available(record) }
-    fn requested_changes(&mut self) -> (Selection, Selection) { self.effects.requested_changes() }
+    fn available(&mut self, _: RecordHandle) -> Option<Selection> { self.effects.offered() }
     fn search_permitted(&mut self) -> bool { self.effects.search_permitted() }
-    fn alternate_search(&mut self, record: RecordHandle) -> bool { self.effects.alternate_search(record) }
-    fn autofocus_geometry(&mut self, record: RecordHandle) -> bool { self.effects.autofocus_geometry(record) }
+    fn alternate_search(&mut self, record: RecordHandle) -> bool {
+        let rule = self.effects.alternate_search();
+        rule.applies(self.effects.profile(record).selection)
+    }
+    fn autofocus_geometry(&mut self, record: RecordHandle) -> bool { self.effects.profile(record).geometry_on_autofocus }
     fn planning_mode(&mut self, record: RecordHandle) -> Mode { self.effects.planning_mode(record) }
     fn cadence(&mut self, work: Work, mode: Mode) -> Cadence { self.effects.cadence(work, mode) }
-    fn record_effect(&mut self, record: RecordHandle, effect: RecordEffect) { self.effects.record_effect(record, effect) }
+    fn record_effect(&mut self, record: RecordHandle, effect: RecordEffect) { record::apply(effect, record, &mut *self.effects) }
     fn fault(&mut self) { self.effects.fault() }
 }

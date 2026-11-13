@@ -1,5 +1,5 @@
 use crate::lanes::Selection;
-use crate::stock::{alternate_search, availability, lane_flags, search_allowed, selection, RecordMode, RecordSelection, SearchModeFlags};
+use crate::stock::{alternate_search_rule, availability, lane_flags, profile_selection, search_allowed, selection, ProfileSelectionByte, RecordSelection, SearchModeFlags};
 
 #[test]
 fn acquisition_selection_expands_into_both_acquisition_calculations() {
@@ -27,13 +27,13 @@ fn only_an_all_zero_selection_word_offers_nothing() {
 }
 
 #[test]
-fn alternate_search_obeys_property_precedence_and_record_modes() {
-    for (flags, mode, expected) in [
+fn alternate_search_obeys_property_precedence_and_profile_selection() {
+    for (flags, byte, expected) in [
         (0, 0, false), (8, 2, true), (2, 1, true), (2, 0, false),
         (4, 0, true), (4, 1, false), (4, 2, false),
         (6, 0, false), (6, 1, true), (10, 0, false), (12, 1, false),
     ] {
-        assert_eq!(alternate_search(SearchModeFlags(flags), RecordMode(mode)), expected);
+        assert_eq!(alternate_search_rule(SearchModeFlags(flags)).applies(profile_selection(ProfileSelectionByte(byte))), expected);
     }
 }
 
@@ -49,4 +49,17 @@ fn cadence_properties_use_mode_specific_keys_and_share_auxiliary_source_policy()
     assert_eq!(cadence_property(Work::Window, Mode::Default), None);
     assert_eq!(cadence_property(Work::SecondaryAcquisition, Mode::Default), None);
     assert_eq!(cadence_property(Work::Search, Mode::Paused), None);
+}
+
+#[test]
+fn a_parameter_change_names_its_client_then_the_requested_and_offered_selections() {
+    use crate::round::ParameterClient;
+    use crate::stock::parameter_change;
+    let block: std::vec::Vec<u8> = [0xf0a0u32, 0x21, 0x01].iter().flat_map(|word| word.to_le_bytes()).collect();
+    let change = parameter_change(xm1_saclac_interface::stock::parameters(&block));
+    assert_eq!(change.client, ParameterClient(xm1_saclac_interface::stock::optional_callback(0xf0a0)));
+    assert_eq!(change.requested, Selection { acquisition: true, source: true, ..Selection::default() });
+    assert_eq!(change.offered, Selection { acquisition: true, ..Selection::default() });
+    let short = parameter_change(xm1_saclac_interface::stock::parameters(&block[..4]));
+    assert_eq!((short.requested, short.offered), (Selection::default(), Selection::default()));
 }

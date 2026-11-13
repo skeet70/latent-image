@@ -8,8 +8,9 @@ pub struct RecordSelection(pub u32);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SearchModeFlags(pub u32);
 
+/// The profile byte 0x74e5c0 returns.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RecordMode(pub u32);
+pub struct ProfileSelectionByte(pub u8);
 
 /// X-M1 1.50: 0xf32e88..0xf32ef8 and 0xf32f80..0xf33008.
 pub const fn selection(word: RecordSelection) -> Selection {
@@ -30,11 +31,20 @@ pub const fn availability(word: RecordSelection) -> Option<Selection> {
 /// X-M1 1.50: 0xf32f60..0xf32f7c gates search and image with property 0x3e0009.
 pub const fn search_allowed(property: u32) -> bool { property != 1 }
 
-/// X-M1 1.50: 0xf330e4..0xf33138 consumes property 0x88ef and the retained record mode.
-pub const fn alternate_search(flags: SearchModeFlags, mode: RecordMode) -> bool {
-    if flags.0 & 2 != 0 { mode.0 == 1 }
-    else if flags.0 & 4 != 0 { mode.0 == 0 }
-    else { flags.0 & 8 != 0 }
+/// X-M1 1.50: 0xf330e4..0xf33138 tests bits 1, 2 and 3 of property 0x88ef in that order.
+pub const fn alternate_search_rule(flags: SearchModeFlags) -> crate::record::AlternateSearch {
+    use crate::record::AlternateSearch;
+    if flags.0 & 2 != 0 { AlternateSearch::WithRecordSelection }
+    else if flags.0 & 4 != 0 { AlternateSearch::WithoutSelection }
+    else if flags.0 & 8 != 0 { AlternateSearch::Always }
+    else { AlternateSearch::Never }
+}
+
+/// X-M1 1.50: profile byte 0x30 (0x74e5c0 → 0x75b054); its readers in the round
+/// compare it with 0 and 1 only.
+pub const fn profile_selection(byte: ProfileSelectionByte) -> crate::profile::ProfileSelection {
+    use crate::profile::ProfileSelection;
+    match byte.0 { 0 => ProfileSelection::Unselected, 1 => ProfileSelection::Record, _ => ProfileSelection::Other }
 }
 
 /// X-M1 1.50: 0xf04840..0xf0499c and 0xf32530..0xf325cc use this lane encoding.
@@ -72,6 +82,24 @@ pub const fn cadence(word: u32) -> crate::planner::Cadence {
 
 fn word(parameters: xm1_saclac_interface::Parameters<'_>, offset: usize) -> u32 {
     parameters.bytes().get(offset..offset + 4).map_or(0, |bytes| u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+/// A parameter change (command 0x17).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParameterChange {
+    pub client: crate::round::ParameterClient,
+    pub requested: Selection,
+    pub offered: Selection,
+}
+
+/// X-M1 1.50: 0xf3300c reads words 1 and 2 of the 0x17 parameter block (0xef9dc0
+/// returns 0x169d22c); 0xefb4b8 enters word 0 with the status.
+pub fn parameter_change(parameters: xm1_saclac_interface::Parameters<'_>) -> ParameterChange {
+    ParameterChange {
+        client: crate::round::ParameterClient(xm1_saclac_interface::stock::optional_callback(word(parameters, 0))),
+        requested: selection(RecordSelection(word(parameters, 4))),
+        offered: selection(RecordSelection(word(parameters, 8))),
+    }
 }
 
 /// X-M1 1.50: the image row function caches the channel from word 3 of command

@@ -1,6 +1,6 @@
 use crate::lanes::{Lane, Selection};
 use crate::planner::{Cadence, Mode, Work};
-use crate::round::{Environment, LaneSignal, LaneStatus, RecordEffect, Round};
+use crate::round::{Environment, LaneSignal, LaneStatus, ParameterClient, RecordEffect, Round, SearchStart};
 use xm1_saclac_controllers::children::{ChildEvent, ChildOutcome, MeasurementControl, MeasurementOutcome, MeasurementUpdate, Restart, RetainedRoundStatus};
 use xm1_saclac_interface::{stock, Command, CommandKind, Completed, Completion, RecordHandle};
 use std::vec::Vec;
@@ -15,13 +15,12 @@ struct Env {
     traffic: Vec<Traffic>,
     answers: Vec<(Lane, Kind, LaneStatus)>,
     available: Option<Selection>,
-    requested: (Selection, Selection),
     alternate: bool,
 }
 
 impl Env {
     fn offering(available: Option<Selection>) -> Self {
-        Self { traffic: Vec::new(), answers: Vec::new(), available, requested: (Selection::default(), Selection::default()), alternate: false }
+        Self { traffic: Vec::new(), answers: Vec::new(), available, alternate: false }
     }
     fn answer(&mut self, lane: Lane, kind: Kind, status: LaneStatus) { self.answers.push((lane, kind, status)); }
     fn take(&mut self) -> Vec<Traffic> { core::mem::take(&mut self.traffic) }
@@ -53,7 +52,6 @@ impl Environment for Env {
         }
     }
     fn available(&mut self, _: RecordHandle) -> Option<Selection> { self.available }
-    fn requested_changes(&mut self) -> (Selection, Selection) { self.requested }
     fn search_permitted(&mut self) -> bool { true }
     fn alternate_search(&mut self, _: RecordHandle) -> bool { self.alternate }
     fn autofocus_geometry(&mut self, _: RecordHandle) -> bool { true }
@@ -72,6 +70,11 @@ fn command(kind: CommandKind) -> ChildEvent<'static, MeasurementControl> {
 }
 fn completion(completion: Completion) -> ChildEvent<'static, MeasurementControl> {
     ChildEvent::Completed { completed: Completed { completion, parameters: stock::parameters(&[]) }, record: record() }
+}
+/// Command 0x17's block: client, requested selection word, offered selection word.
+fn parameter_change(words: [u32; 3]) -> Vec<u8> { words.iter().flat_map(|word| word.to_le_bytes()).collect() }
+fn changing(bytes: &[u8]) -> ChildEvent<'_, MeasurementControl> {
+    ChildEvent::Command { command: Command { kind: CommandKind::Command17, parameters: stock::parameters(bytes) }, record: record() }
 }
 
 const ACQUISITION: Selection = Selection { acquisition: true, search: false, auxiliary: false, image: false, source: false };
@@ -214,8 +217,8 @@ fn a_parameter_change_waits_for_the_round_then_restarts_with_the_update() {
     round.handle(completion(Completion::Accessor4b), &mut env);
     env.take();
 
-    env.requested = (Selection { source: true, ..Selection::default() }, Selection::default());
-    assert_eq!(round.handle(command(CommandKind::Command17), &mut env), ChildOutcome::Pending);
+    let change = parameter_change([0xf0a0, 32, 0]);
+    assert_eq!(round.handle(changing(&change), &mut env), ChildOutcome::Pending);
     assert!(env.take().is_empty());
 
     assert_eq!(round.handle(completion(Completion::Calculation8d), &mut env), ChildOutcome::Pending);
@@ -230,27 +233,27 @@ fn a_parameter_change_waits_for_the_round_then_restarts_with_the_update() {
     assert_eq!(&tail[tail.len() - 3..], [
         Traffic::Effect(RecordEffect::ResetSelection),
         Traffic::Signal(Lane::Source, Kind::Stop),
-        Traffic::Effect(RecordEffect::FinishSelectionClear),
+        Traffic::Effect(RecordEffect::FinishSelectionClear(ParameterClient(stock::optional_callback(0xf0a0)))),
     ]);
 }
 
 #[test]
 fn a_parameter_change_that_enables_search_announces_the_search_mode() {
     let (mut round, mut env) = armed(ACQUISITION);
-    let search = Selection { search: true, ..Selection::default() };
-    env.requested = (search, search);
-    assert_eq!(round.handle(command(CommandKind::Command17), &mut env), ChildOutcome::Pending);
-    assert_eq!(env.take(), [Traffic::Effect(RecordEffect::SearchMode(Lane::Search))]);
+    let change = parameter_change([0, 2, 2]);
+    assert_eq!(round.handle(changing(&change), &mut env), ChildOutcome::Pending);
+    assert_eq!(env.take(), [Traffic::Effect(RecordEffect::SearchMode(SearchStart::Search))]);
 }
 
 #[test]
 fn a_parameter_change_with_nothing_to_change_completes_the_pending_clear() {
     let (mut round, mut env) = armed(ACQUISITION);
-    assert_eq!(round.handle(command(CommandKind::Command17), &mut env), ChildOutcome::Complete);
-    assert_eq!(env.take(), [Traffic::Effect(RecordEffect::FinishSelectionClear)]);
+    assert_eq!(round.handle(changing(&parameter_change([0, 0, 0])), &mut env), ChildOutcome::Complete);
+    assert_eq!(env.take(), [Traffic::Effect(RecordEffect::FinishSelectionClear(ParameterClient(None)))]);
     let mut dormant = Round::new();
-    assert_eq!(dormant.handle(command(CommandKind::Command17), &mut env), ChildOutcome::Complete);
-    assert_eq!(env.take(), [Traffic::Effect(RecordEffect::FinishSelectionClear)]);
+    let change = parameter_change([0xf0a0, 1, 1]);
+    assert_eq!(dormant.handle(changing(&change), &mut env), ChildOutcome::Complete);
+    assert_eq!(env.take(), [Traffic::Effect(RecordEffect::FinishSelectionClear(ParameterClient(stock::optional_callback(0xf0a0))))]);
 }
 
 #[test]

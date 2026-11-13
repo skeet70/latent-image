@@ -3,7 +3,7 @@
 use crate::lanes::{Lane, Lanes, Selection, ORDER};
 use crate::planner::{Cadence, Mode, Planner, Policy, Slot, Work};
 use xm1_saclac_controllers::children::{ChildEvent, ChildOutcome, MeasurementControl, MeasurementOutcome, MeasurementUpdate, Restart, RetainedRoundStatus};
-use xm1_saclac_interface::{Command, CommandKind, Completed, Completion, RecordHandle};
+use xm1_saclac_interface::{ClientCallback, Command, CommandKind, Completed, Completion, Parameters, RecordHandle};
 
 /// A lane child's answer to the round.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -21,16 +21,25 @@ pub enum LaneSignal<'a> {
     Completed(Completed<'a>),
 }
 
+/// The lane whose enabling announces the search mode.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SearchStart { Search, Image }
+
+/// The client of the latest parameter change, answered when its selection
+/// clear finishes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParameterClient(pub Option<ClientCallback>);
+
 /// Effects on the measurement record and its peers, in the order the round requests them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RecordEffect {
     ResetSelection,
     ClearSelection,
-    FinishSelectionClear,
+    FinishSelectionClear(ParameterClient),
     Geometry,
     CollectReady,
     SelectionHistory,
-    SearchMode(Lane),
+    SearchMode(SearchStart),
     Planned { primary_considered: bool },
 }
 
@@ -38,8 +47,6 @@ pub trait Environment {
     fn signal(&mut self, lane: Lane, signal: LaneSignal<'_>, record: RecordHandle) -> LaneStatus;
     /// `None` when the record offers no selection at all.
     fn available(&mut self, record: RecordHandle) -> Option<Selection>;
-    /// The requested and offered selections of the latest parameter change.
-    fn requested_changes(&mut self) -> (Selection, Selection);
     fn search_permitted(&mut self) -> bool;
     fn alternate_search(&mut self, record: RecordHandle) -> bool;
     fn autofocus_geometry(&mut self, record: RecordHandle) -> bool;
@@ -62,7 +69,7 @@ pub struct Round {
     enabling: Lanes,
     draining: Lanes,
     search_allowed: bool,
-    clear_pending: bool,
+    pending_clear: Option<ParameterClient>,
     planner: Planner,
 }
 
@@ -82,7 +89,7 @@ impl Round {
             enabling: Lanes::empty(),
             draining: Lanes::empty(),
             search_allowed: false,
-            clear_pending: false,
+            pending_clear: None,
             planner: Planner::new(),
         }
     }
@@ -126,7 +133,7 @@ impl Round {
                 Phase::Armed | Phase::Running => outcome(self.fan_forward(command, record, env)),
                 _ => fault(env),
             },
-            CommandKind::Command17 => self.parameters_changed(record, env),
+            CommandKind::Command17 => self.parameters_changed(command.parameters, record, env),
             CommandKind::Autofocus => {
                 if self.phase == Phase::Stopping { return fault(env); }
                 if env.autofocus_geometry(record) { env.record_effect(record, RecordEffect::Geometry); }
@@ -173,31 +180,32 @@ impl Round {
         }
     }
 
-    fn parameters_changed(&mut self, record: RecordHandle, env: &mut impl Environment) -> ChildOutcome {
+    fn parameters_changed(&mut self, parameters: Parameters<'_>, record: RecordHandle, env: &mut impl Environment) -> ChildOutcome {
+        let change = crate::stock::parameter_change(parameters);
         match self.phase {
             Phase::Stopping => fault(env),
             Phase::Dormant => {
-                self.clear_pending = true;
+                self.pending_clear = Some(change.client);
                 self.finish_selection_clear(record, env);
                 ChildOutcome::Complete
             }
             Phase::Idle => {
-                self.clear_pending = true;
+                self.pending_clear = Some(change.client);
                 let status = self.start(record, env);
                 if status == LaneStatus::Complete { self.finish_selection_clear(record, env); }
                 outcome(status)
             }
             Phase::Armed | Phase::Running => {
-                self.clear_pending = true;
+                self.pending_clear = Some(change.client);
                 self.search_allowed = false;
-                if self.fan_detect_changes(record, env) != LaneStatus::Idle {
+                if self.fan_detect_changes(change.requested, change.offered, record, env) != LaneStatus::Idle {
                     self.finish_selection_clear(record, env);
                     return ChildOutcome::Complete;
                 }
                 if self.enabling.contains(Lane::Search) {
-                    env.record_effect(record, RecordEffect::SearchMode(Lane::Search));
+                    env.record_effect(record, RecordEffect::SearchMode(SearchStart::Search));
                 } else if self.enabling.contains(Lane::Image) {
-                    env.record_effect(record, RecordEffect::SearchMode(Lane::Image));
+                    env.record_effect(record, RecordEffect::SearchMode(SearchStart::Image));
                 }
                 ChildOutcome::Pending
             }
@@ -294,8 +302,7 @@ impl Round {
     }
 
     fn finish_selection_clear(&mut self, record: RecordHandle, env: &mut impl Environment) {
-        if self.clear_pending { env.record_effect(record, RecordEffect::FinishSelectionClear); }
-        self.clear_pending = false;
+        if let Some(client) = self.pending_clear.take() { env.record_effect(record, RecordEffect::FinishSelectionClear(client)); }
     }
 
     fn fan_initialize(&mut self, record: RecordHandle, env: &mut impl Environment) -> LaneStatus {
@@ -371,9 +378,8 @@ impl Round {
         env.signal(Lane::Search, signal, record)
     }
 
-    fn fan_detect_changes(&mut self, record: RecordHandle, env: &mut impl Environment) -> LaneStatus {
+    fn fan_detect_changes(&mut self, requested: Selection, offered: Selection, record: RecordHandle, env: &mut impl Environment) -> LaneStatus {
         if self.fan != Fan::Ready { env.fault(); return LaneStatus::Refused; }
-        let (requested, offered) = env.requested_changes();
         let permitted = env.search_permitted();
         let enable = requested.shared(offered, permitted).difference(self.selected);
         let mut drain = requested.missing(offered);
