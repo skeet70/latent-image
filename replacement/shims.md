@@ -603,6 +603,23 @@ The task-43 driver and engine use stock's 37 machine tables. Every machine actio
 | fault reaction `0xf46c20` | trampoline into retained stock | retained SACLAC fault reporting | no | subsystem fault reporting is owned | required |
 | `XM1_REQUIRES_LENS_SAFETY_CONTRACT`, four bytes with value 1 in the linked fixed body | guest-memory layout view | fixed-image stager derives the emulator-only admission contract from this marker | no | a lens safety contract qualifies the image's lens-reaching effects | required |
 
+## saclac_shared
+
+The helpers several saclac modules call (`replacement/saclac/shared`), over the stock services and memory other tasks own. All rows are in `src/stock.rs`.
+
+| Shim | Kind | Other side | Owned now | Removal condition | State |
+| --- | --- | --- | --- | --- | --- |
+| `Stock<Guest>`'s `CommandMemory`: parameter-block words through the interface's block table and the pending bytes at `0x169cf24` | guest-memory layout view | retained queue-43 producers and stock machine actions that read the blocks and flags | no | queue-43 producers and every machine are owned | required |
+| `Stock<Guest>`'s `Clients`: client callback words entered with the status, or the status and four words | trampoline into retained stock | client callbacks stored in the command blocks by other tasks | no | every queue-43 client is owned | required |
+| `Stock<Guest>`'s `LensControl` (`0x76d9a8`, `0x76da38`, `0x76dba4`, `0x76da48`, `0x76b8b4`, `0x772f28`, runtime word `0x942ab0`+0x98) and `LensNotices` (block `0x954dbc`: notices +4/+8/+0xc, notifier +0x1c, enable +0x20; notifier entered with a four-word record) | trampoline into retained stock | lens control and the tasks that write the notice block (104, 59) | no | lens control is owned | required |
+| `Stock<Guest>`'s `Rendezvous`: current task `0x723cb8` stored at `0x16c2214`, wait `0x7243a8` on event 2, wake callback `0xf46be0` | trampoline into retained stock | the kernel and saclac's own retained wake callback | no | the driver supplies a kernel-backed rendezvous with an owned wake entry | required |
+| `Stock<Guest>`'s `Adjustments` (`0x69f8fc`, with the lens adjustment halfword at `0x3e0243` and the unselected-mode byte at `0x887c`), `Channels` (`0x74a214`), `ChannelRemap` (`0x74947c`), `Conversions` (`0x73958c`, `0x734540`, `0x73469c`) | trampoline into retained stock | the settings and conversion services | no | the settings services are owned | required |
+| `Stock<Guest>`'s `RegisterSnapshot`: `0x6deb08` over the descriptor tables `0x82158c`..`0x821808`, the fourteen retained packers `0x6913a8`..`0x693aec` | trampoline into retained stock | the image register driver | no | the image pipeline's register layer is owned | required |
+| the register snapshot at `0x14c6b24` and a pipeline configuration: snapshot words at +0x3c and +0x40, read and written at `0x691f00` and `0x691f0c`, and configuration halfwords at +0x3e, +0x40 and +0x42, read at `0x691e40` and `0x691e4c` | guest-memory layout view | the image pipeline's register snapshot and configuration records | no | the image pipeline's register layer is owned | required |
+| `Stock<Guest>`'s `LensComClient`: client word and request number at `0x8e1f3c`+8/+0xc, completion `0x6b6f9c`, failure report `0x6b92cc` | trampoline into retained stock | lenscom's completion path | no | lenscom requests complete through an owned callback | required |
+| `Stock<Guest>`'s `Display`: `0x6c68c0`, `0x6c4bec` | trampoline into retained stock | the display driver | no | the display driver is owned | required |
+| the display driver's 60-byte status record: byte 7 gates the outputs on route 2 (`0x6c5df4`) and bytes 16..19 are the output bits (`0x6c693c`, `0x6c6948`, `0x6c6954`, `0x6c6960`) | guest-memory layout view | the display driver's status record | no | the display driver is owned | required |
+
 ## saclac_interface
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |
