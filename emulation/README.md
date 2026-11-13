@@ -754,19 +754,11 @@ the image:
 4. the report names the firmware digest and the owned image digest, and the
    firmware digest is the supplied image.
 
-The report marks a comparison diagnostic with `diagnostic_differences` on its
-case or control row; the verdict lists those and they do not change it. Any
-unmet condition gives `no-verdict` with the conditions listed; otherwise a case
-difference gives `different` with the cases. Only `equal` exits zero;
-`different` exits 1, `no-verdict` 2 and `not-run` 3. The verdict document names
-the suite, the judge's version, the report digest, the firmware digest and the
-owned image digest, and lists the conditions, survivors and diagnostics.
+The report marks a comparison diagnostic with `diagnostic_differences` on its case or control row; the verdict lists those and they do not change it. Any unmet condition gives `no-verdict` with the conditions listed; otherwise a case difference gives `different` with the cases. Only `equal` exits zero; `equal-up-to-milestone` exits 4, `different` 1, `no-verdict` 2 and `not-run` 3. The verdict document names the suite, the judge's version, the report digest, the firmware digest and the owned image digest, and lists the conditions, survivors, diagnostics, the declared milestone and the first difference.
 
-`//emulation:judge-tests` covers the rule on synthetic reports: a complete
-report is `equal`, and a report missing a case's stock evidence, missing a case
-for a bound entry, carrying no detected wrong variant, naming no firmware or
-naming another firmware gets the matching non-pass verdict with its reason. A
-diagnostic difference leaves the verdict unchanged.
+A cutover comparison may declare a milestone instead of claiming full equality. The report carries `"milestone": {"name": NAME, "observation": INDEX}` and the ordered `stock_observations` and `owned_observations` arrays; `INDEX` is the zero-based position of the observation that marks the milestone. Both sides must have an observation at that index, the observations through it must be equal, and after it the stock tail must be a prefix of the owned tail. That relation is `equal-up-to-milestone`, reported apart from `equal` and never exiting zero. A side that ends before the milestone, a difference through the milestone, or a stock tail that is not a prefix of the owned tail is `different`, and the verdict names the first differing observation with both sides' values. A report that declares no milestone cannot receive this verdict; a milestone without a name or an observation index is refused.
+
+`//emulation:judge-tests` covers the rule on synthetic reports: a complete report is `equal`, and a report missing a case's stock evidence, missing a case for a bound entry, carrying no detected wrong variant, naming no firmware or naming another firmware gets the matching non-pass verdict with its reason. A diagnostic difference leaves the verdict unchanged. A declared milestone reaches `equal-up-to-milestone`; a side that misses it, a difference before it and a stock tail that is not a prefix each give `different` with the first differing observation, and a report without a milestone keeps the old verdicts.
 
 ## Wrong variants
 

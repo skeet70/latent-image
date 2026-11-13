@@ -18,6 +18,12 @@
 -- verdict. Without the firmware the comparison is @not-run@; a report that
 -- does not name the firmware is @no-verdict@, as is one that fails any other
 -- condition. Only a complete report whose cases all agree is @equal@.
+--
+-- A cutover report may instead declare a milestone: both sides reach the
+-- observation at the declared index, the observations are equal through it,
+-- and after it the stock tail is a prefix of the owned tail. That relation
+-- is the verdict @equal-up-to-milestone@, never @equal@; a report that
+-- declares no milestone cannot receive it.
 module Emulation.Judge
   ( -- * Stock-side evidence
     StockEvidence (..)
@@ -27,6 +33,10 @@ module Emulation.Judge
   , Report (..)
   , ReportCase (..)
   , ReportControl (..)
+  , Observation (..)
+  , ObservationIndex (..)
+  , Milestone (..)
+  , FirstDifference (..)
   , parseReport
     -- * Verdicts
   , JudgeInput (..)
@@ -43,10 +53,11 @@ module Emulation.Judge
   , verdictExitCode
   ) where
 
-import Data.Aeson (Value (..), eitherDecodeStrict', object, toJSON)
+import Data.Aeson (Value (..), eitherDecodeStrict', encode, object, toJSON)
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy.Char8 as BL8
 import Data.List (intercalate, nub, sortOn)
 import Data.Maybe (catMaybes, fromMaybe, listToMaybe, mapMaybe)
 import Data.Scientific (toBoundedInteger)
@@ -119,6 +130,29 @@ data ReportControl = ReportControl
   , reportControlDiagnostics :: [String]
   } deriving (Eq, Show)
 
+-- | One ordered observation of a cutover comparison. Two observations are
+-- equal when their JSON values are equal.
+newtype Observation = Observation { observationValue :: Value }
+  deriving (Eq, Show)
+
+-- | Zero-based position of an observation in a comparison's ordered sequence.
+newtype ObservationIndex = ObservationIndex { observationIndex :: Int }
+  deriving (Eq, Show)
+
+-- | A cutover milestone: its name and the observation that marks it.
+data Milestone = Milestone
+  { milestoneName :: String
+  , milestoneMark :: ObservationIndex
+  } deriving (Eq, Show)
+
+-- | The first observation at which the milestone relation fails. A side that
+-- has no observation at that index is @Nothing@.
+data FirstDifference = FirstDifference
+  { differenceAt :: ObservationIndex
+  , differenceStock :: Maybe Observation
+  , differenceOwned :: Maybe Observation
+  } deriving (Eq, Show)
+
 data Report = Report
   { reportSuite :: Maybe String
   , reportImageDigests :: [String]
@@ -126,6 +160,9 @@ data Report = Report
   , reportCases :: [ReportCase]
   , reportControls :: [ReportControl]
   , reportDiagnostics :: [String]
+  , reportMilestone :: Maybe Milestone
+  , reportStockObservations :: [Observation]
+  , reportOwnedObservations :: [Observation]
   } deriving (Eq, Show)
 
 -- | Parse a comparison report. Field names follow the reports the suites
@@ -134,14 +171,18 @@ data Report = Report
 -- @differences@ and its @diagnostic_differences@; a control names @name@ and
 -- carries @reported@ (or @detected@); the report names its image digests as
 -- @firmware_sha256@, @image_sha256@, @image4_sha256@, @image5_sha256@,
--- @stock_id4_sha256@ or @stock_id5_sha256@, and @owned_sha256@. Missing fields are
--- kept as missing so the verdict can name the unmet condition; a row that is
--- not an object is refused.
+-- @stock_id4_sha256@ or @stock_id5_sha256@, and @owned_sha256@. A cutover
+-- report declares @milestone@ as @{"name": NAME, "observation": INDEX}@ and
+-- its ordered @stock_observations@ and @owned_observations@. Missing fields
+-- are kept as missing so the verdict can name the unmet condition; a row that
+-- is not an object, and a milestone that is not a named observation index,
+-- are refused.
 parseReport :: B.ByteString -> Either String Report
 parseReport bytes = do
   value <- eitherDecodeStrict' bytes
   case value of
-    Object root ->
+    Object root -> do
+      milestone <- parseMilestone root
       let rows = list (get value "cases") ++ list (get value "replies")
           caseRows = mapMaybe parseCaseRow (zip [0 :: Int ..] rows)
           controlsValue = KM.lookup "controls" root
@@ -169,8 +210,35 @@ parseReport bytes = do
                 , reportCases = caseRows
                 , reportControls = controlRows
                 , reportDiagnostics = []
+                , reportMilestone = milestone
+                , reportStockObservations = parseObservations root "stock_observations"
+                , reportOwnedObservations = parseObservations root "owned_observations"
                 }
     _ -> Left "comparison report must be a JSON object"
+
+parseObservations :: KM.KeyMap Value -> String -> [Observation]
+parseObservations root key = map Observation (list (get (Object root) key))
+
+-- | A milestone is declared by name and the index of the observation that
+-- marks it. A report that carries one must declare both.
+parseMilestone :: KM.KeyMap Value -> Either String (Maybe Milestone)
+parseMilestone root = case KM.lookup "milestone" root of
+  Nothing -> Right Nothing
+  Just Null -> Right Nothing
+  Just (Object milestone) -> do
+    name <- case KM.lookup "name" milestone of
+      Just (String text) -> Right (T.unpack text)
+      _ -> Left "comparison report milestone has no name"
+    mark <- case KM.lookup "observation" milestone of
+      Just (Number number) -> maybe (Left badIndex) Right (toBoundedInteger number)
+      Just (String text) -> case reads (T.unpack text) of
+        [(index, "")] -> Right index
+        _ -> Left badIndex
+      _ -> Left badIndex
+    if mark < 0 then Left badIndex else Right (Just (Milestone name (ObservationIndex mark)))
+  Just _ -> Left "comparison report milestone is not an object"
+  where
+    badIndex = "comparison report milestone has no observation index"
 
 parseCaseRow :: (Int, Value) -> Maybe ReportCase
 parseCaseRow (_, String name) = Just ReportCase
@@ -255,7 +323,12 @@ stringsField row key = [T.unpack text | String text <- list (get (Object row) ke
 
 -- Verdicts ----------------------------------------------------------------
 
-data VerdictStatus = VerdictEqual | VerdictDifferent | VerdictNoVerdict | VerdictNotRun
+data VerdictStatus
+  = VerdictEqual
+  | VerdictEqualUpToMilestone
+  | VerdictDifferent
+  | VerdictNoVerdict
+  | VerdictNotRun
   deriving (Eq, Show)
 
 data ConditionName
@@ -303,11 +376,13 @@ data Verdict = Verdict
   , verdictSurvivors :: [String]
   , verdictDiagnostics :: [String]
   , verdictReasons :: [String]
+  , verdictMilestone :: Maybe Milestone
+  , verdictFirstDifference :: Maybe FirstDifference
   } deriving (Eq, Show)
 
 -- | Bumped when the rule changes; the verdict document names it.
 judgeVersion :: String
-judgeVersion = "1"
+judgeVersion = "2"
 
 judgeReport :: JudgeInput -> Report -> Verdict
 judgeReport input report =
@@ -318,8 +393,24 @@ judgeReport input report =
       }
     Just _ ->
       if not (null unmet) then base { verdictStatus = VerdictNoVerdict }
-        else if not (null differing) then base { verdictStatus = VerdictDifferent, verdictDifferentCases = differing }
-        else base { verdictStatus = VerdictEqual }
+        else case reportMilestone report of
+          Just milestone ->
+            case milestoneDifference milestone (reportStockObservations report) (reportOwnedObservations report) of
+              Nothing -> base
+                { verdictStatus = VerdictEqualUpToMilestone
+                , verdictMilestone = Just milestone
+                , verdictDifferentCases = []
+                }
+              Just difference -> base
+                { verdictStatus = VerdictDifferent
+                , verdictMilestone = Just milestone
+                , verdictFirstDifference = Just difference
+                , verdictDifferentCases = []
+                , verdictReasons = milestoneMisses milestone (reportStockObservations report) (reportOwnedObservations report)
+                }
+          Nothing ->
+            if not (null differing) then base { verdictStatus = VerdictDifferent, verdictDifferentCases = differing }
+              else base { verdictStatus = VerdictEqual }
   where
     reportOwned = reportOwnedDigest report
     conditions =
@@ -348,7 +439,43 @@ judgeReport input report =
       , verdictSurvivors = survivors
       , verdictDiagnostics = diagnostics
       , verdictReasons = []
+      , verdictMilestone = Nothing
+      , verdictFirstDifference = Nothing
       }
+
+-- | The first observation at which the milestone relation fails, or
+-- @Nothing@ when both sides reach the milestone, the observations are equal
+-- through it, and the stock tail is a prefix of the owned tail.
+milestoneDifference :: Milestone -> [Observation] -> [Observation] -> Maybe FirstDifference
+milestoneDifference (Milestone _ (ObservationIndex mark)) stock owned = go 0 stock owned
+  where
+    go index (stockObservation : stockRest) (ownedObservation : ownedRest)
+      | stockObservation /= ownedObservation =
+          Just (FirstDifference (ObservationIndex index) (Just stockObservation) (Just ownedObservation))
+      | index == mark = tailDifference (index + 1) stockRest ownedRest
+      | otherwise = go (index + 1) stockRest ownedRest
+    go index [] (ownedObservation : _) =
+      Just (FirstDifference (ObservationIndex index) Nothing (Just ownedObservation))
+    go index (stockObservation : _) [] =
+      Just (FirstDifference (ObservationIndex index) (Just stockObservation) Nothing)
+    go _ [] [] =
+      Just (FirstDifference (ObservationIndex mark) Nothing Nothing)
+
+    tailDifference index (stockObservation : stockRest) (ownedObservation : ownedRest)
+      | stockObservation /= ownedObservation =
+          Just (FirstDifference (ObservationIndex index) (Just stockObservation) (Just ownedObservation))
+      | otherwise = tailDifference (index + 1) stockRest ownedRest
+    tailDifference _ [] _ = Nothing
+    tailDifference index (stockObservation : _) [] =
+      Just (FirstDifference (ObservationIndex index) (Just stockObservation) Nothing)
+
+-- | The sides that do not reach the milestone observation.
+milestoneMisses :: Milestone -> [Observation] -> [Observation] -> [String]
+milestoneMisses (Milestone name (ObservationIndex mark)) stock owned =
+  [ side ++ " does not reach milestone " ++ name ++ " at observation " ++ show mark
+  | (side, observations) <- [("stock", stock), ("owned", owned)]
+  , length observations <= mark
+  ]
 
 stockCondition :: Report -> Condition
 stockCondition report
@@ -405,6 +532,7 @@ digestCondition firmware named reportOwned =
 
 verdictStatusLabel :: VerdictStatus -> String
 verdictStatusLabel VerdictEqual = "equal"
+verdictStatusLabel VerdictEqualUpToMilestone = "equal-up-to-milestone"
 verdictStatusLabel VerdictDifferent = "different"
 verdictStatusLabel VerdictNoVerdict = "no-verdict"
 verdictStatusLabel VerdictNotRun = "not-run"
@@ -422,6 +550,31 @@ verdictText verdict =
     ++ (if null (verdictSurvivors verdict) then "" else " survivors: " ++ intercalate ", " (verdictSurvivors verdict))
     ++ (if null (verdictDiagnostics verdict) then "" else " diagnostics: " ++ intercalate ", " (verdictDiagnostics verdict))
     ++ (if null (verdictReasons verdict) then "" else " reasons: " ++ intercalate "; " (verdictReasons verdict))
+    ++ maybe "" (\milestone -> " milestone " ++ milestoneName milestone
+        ++ " at observation " ++ show (observationIndex (milestoneMark milestone))) (verdictMilestone verdict)
+    ++ maybe "" (\difference -> " first-difference " ++ differenceText difference) (verdictFirstDifference verdict)
+
+milestoneJson :: Milestone -> Value
+milestoneJson milestone = object
+  [ ("name", toJSON (milestoneName milestone))
+  , ("observation", toJSON (observationIndex (milestoneMark milestone)))
+  ]
+
+differenceText :: FirstDifference -> String
+differenceText difference =
+  show (observationIndex (differenceAt difference))
+    ++ " stock " ++ maybe "absent" observationText (differenceStock difference)
+    ++ " owned " ++ maybe "absent" observationText (differenceOwned difference)
+
+observationText :: Observation -> String
+observationText observation = take 200 (BL8.unpack (encode (observationValue observation)))
+
+firstDifferenceJson :: FirstDifference -> Value
+firstDifferenceJson difference = object
+  [ ("observation", toJSON (observationIndex (differenceAt difference)))
+  , ("stock", maybe Null observationValue (differenceStock difference))
+  , ("owned", maybe Null observationValue (differenceOwned difference))
+  ]
 
 verdictJson :: Verdict -> Value
 verdictJson verdict = object
@@ -444,12 +597,16 @@ verdictJson verdict = object
   , ("survivors", toJSON (verdictSurvivors verdict))
   , ("diagnostics", toJSON (verdictDiagnostics verdict))
   , ("reasons", toJSON (verdictReasons verdict))
+  , ("milestone", maybe Null milestoneJson (verdictMilestone verdict))
+  , ("first_difference", maybe Null firstDifferenceJson (verdictFirstDifference verdict))
   ]
 
 -- | Only @equal@ is a pass. A @no-verdict@ and a @not-run@ are never reported
--- or exit-coded as one.
+-- or exit-coded as one; @equal-up-to-milestone@ has its own code so a caller
+-- cannot mistake it for @equal@.
 verdictExitCode :: VerdictStatus -> ExitCode
 verdictExitCode VerdictEqual = ExitSuccess
 verdictExitCode VerdictDifferent = ExitFailure 1
 verdictExitCode VerdictNoVerdict = ExitFailure 2
 verdictExitCode VerdictNotRun = ExitFailure 3
+verdictExitCode VerdictEqualUpToMilestone = ExitFailure 4
