@@ -518,6 +518,18 @@ walkerTests = do
     (walkFunctions []
       [ [0xe92d4800, 0xe24dd010, 0xe1a0000d, 0xe58d000c, 0xe28dd008, 0xe59d0004, 0xeb000001, 0xe28dd008, 0xe8bd8800]
       , [0xe92d4800, 0xe5801004, 0xe8bd8800] ])
+  -- A copy of r11 taken after sp rose above the frame pointer names no object.
+  refusedBy "a frame pointer copied from r11 below sp is not a frame argument" 0x1014 FrameArgumentNotFrame
+    (walkFunctions []
+      [ [0xe92d4800, 0xe24dd010, 0xe1a0b00d, 0xe28dd008, 0xe1a0000b, 0xeb000001, 0xe28dd008, 0xe8bd8800]
+      , [0xe92d4800, 0xe5801004, 0xe8bd8800] ])
+  -- A call through a slot word may reach any function, so the summary that decides whether a
+  -- call returns keeps no r4-r10 value across it.
+  refusedBy "a slot-word call keeps no r4 across it in the summary" 0x1020 NonStackStore
+    (walkFunctions [0x102c, 0x104c]
+      [ [0xe3510000, 0x1a000010, 0xe92d4800, 0xe24dd008, 0xe1a0000d, 0xe3520000, 0x0a000000, 0xeb000002, 0xe5801000, 0xe28dd008, 0xe8bd8800]
+      , [0xe92d4010, 0xe3a04000, 0xe7801004, 0xe12fff33, 0xe3540000, 0x0a000000, 0xe8bd8010, 0xeafffffe]
+      , [0xe12fff13] ])
   -- P2-3: a counter is kept only while it is the 32-bit register value.
   refusedBy "a counter outside 32-bit range refines no guard" 0x1030 FrameOffsetUnbounded
     (walkFrames 0xe28d0008

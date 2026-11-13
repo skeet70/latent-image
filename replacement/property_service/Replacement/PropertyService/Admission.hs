@@ -641,8 +641,8 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
           localAddress (LocalAlias (StackOffset offset)) amount = Just (offset + fromIntegral amount)
           localAddress _ _ = Nothing
           affine operation source operand = case (operation, operand) of
-            -- A register MOV ignores Rn; its source is Rm.
-            (A.MOV, A.ShiftedImmediate moved A.LSL 0) -> baseAlias moved
+            -- A register MOV ignores Rn; its source is Rm, bounded like an ADD or SUB.
+            (A.MOV, A.ShiftedImmediate moved A.LSL 0) -> shift 0 =<< baseAlias moved
             (A.ADD, A.Immediate amount) -> shift (immediate amount) =<< baseAlias source
             (A.SUB, A.Immediate amount) -> shift (negate (immediate amount)) =<< baseAlias source
             _ -> Nothing
@@ -683,7 +683,7 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
           -- the preserving set; otherwise the call drops the aliases, counters and entry values
           -- those registers hold. A stock leaf, stock site or callback callee keeps r4-r10
           -- under the AAPCS alone, which is the assumption stateR11 and stateLink already make,
-          -- and a slot-word call keeps them only outside a strict walk.
+          -- and a slot-word callee's target is unknown, so every walk drops them there.
           afterCall proven current = current
             { stateAliases = foldr M.delete (stateAliases current) (callerSaved ++ if proven then [] else calleeSaved)
             , stateCounters = foldr M.delete (stateCounters current) (callerSaved ++ if proven then [] else calleeSaved)
@@ -803,7 +803,7 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
           where
             indirect True = do
               unless (sp `mod` 8 == 0) (Left StackMisaligned)
-              let next = afterCall (not (policyStrict policy)) state {statePc = pc + 4, stateLink = if link == LinkLive then LinkLost else link}
+              let next = afterCall False state {statePc = pc + 4, stateLink = if link == LinkLive then LinkLost else link}
               Right (result [] (skip (taken next)) sp [CallEdge (GuestAddress pc) (GuestAddress pc) (StackOffset sp) StockSiteCall] [] [] [])
             indirect False = do
               preserved <- returning state
