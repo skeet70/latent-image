@@ -22,6 +22,11 @@ pub use task_context::{TaskCapture, TaskContext};
 #[path = "trace_calls.rs"]
 pub mod calls;
 
+#[derive(Serialize, Deserialize)]
+pub struct InstalledObservation {
+    state: crate::modal_guard::InstalledGuardState,
+}
+
 /// One entry into an armed site, before its instruction executes.
 #[derive(Clone, Debug, Serialize)]
 pub struct Hit {
@@ -1218,6 +1223,21 @@ impl TraceSites {
             return Err(failure);
         }
         observed
+    }
+
+    pub fn pause_installed_observation(&mut self, session: &Session) -> Result<InstalledObservation, String> {
+        self.collect(session, InstructionCount::from_board(session)?)?;
+        let state = self.modal_observation.as_mut().ok_or("installed observer is absent")?.pause_installed(session)?;
+        self.rearm_points(session, PointScope::User)?;
+        Ok(InstalledObservation { state })
+    }
+
+    pub fn resume_installed_observation(&mut self, session: &Session, config: ModalConfig, saved: InstalledObservation) -> Result<(), String> {
+        if self.modal_observation_active() || self.capture_observation_active() || self.stack_scope.is_some() {
+            return Err("installed observer resume requires exclusive observation ownership".into());
+        }
+        self.modal_observation = Some(ModalTrace::resume(config, session, saved.state)?);
+        self.rearm_points(session, PointScope::UserAndModal)
     }
 
     pub fn end_modal_observation(&mut self, session: &Session) -> Result<(), String> {

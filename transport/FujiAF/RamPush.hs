@@ -1382,7 +1382,8 @@ withReviewedBuildDirectory payload action = do
   bracket (create root) (removeDirectoryRecursive . (root </>)) (action root)
   where
     create root = do
-      (path,temporaryHandle) <- openTempFile (root </> payloadBuildRoot payload) ".transport-auth-"
+      work <- lookupEnv "XM1_RUN_WORK"
+      (path,temporaryHandle) <- openTempFile (maybe (root </> payloadBuildRoot payload) id work) ".transport-auth-"
       hClose temporaryHandle
       removeFile path
       createDirectory path
@@ -1522,6 +1523,7 @@ withRelinkedBuildUsing relinker policy base action = withReviewedBuildDirectory 
   let tools = relinkerToolchain relinker
       environment =
         [ ("PATH",toolCoreutilsBin tools)
+        , ("TMPDIR",root </> directory)
         , ("RAM_PUSH_BUILDER",relinkerBuilder relinker)
         , ("RAM_PUSH_CLANG",toolClang tools)
         , ("RAM_PUSH_LD_LLD",toolLdLld tools)
