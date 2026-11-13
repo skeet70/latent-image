@@ -2,6 +2,7 @@
 //! exposure engine decide by.
 
 pub mod configuration;
+pub mod context_trace;
 pub mod focus_profile;
 pub mod focus_reuse;
 pub mod lens;
@@ -19,6 +20,8 @@ pub mod shot_trace;
 
 #[cfg(test)]
 mod configuration_tests;
+#[cfg(test)]
+mod context_trace_tests;
 #[cfg(test)]
 pub(crate) mod fakes;
 #[cfg(test)]
