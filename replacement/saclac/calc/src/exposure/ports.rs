@@ -60,9 +60,14 @@ pub trait StockMemory {
     fn write_u32(&mut self, at: SharedAddress, value: u32);
 }
 
-/// Everything the engine reaches.
-pub trait Ports: Properties + Lens + CaptureProfiles + StockMemory {
+/// The profile records as the library reads them.
+pub trait ProfileAccess {
     type Records: Memory;
     type Entries: StockEntries;
     fn profile(&mut self) -> Profile<'_, Self::Records, Self::Entries>;
 }
+
+/// Everything the engine reaches.
+pub trait Ports: Properties + Lens + CaptureProfiles + StockMemory + ProfileAccess {}
+
+impl<T: Properties + Lens + CaptureProfiles + StockMemory + ProfileAccess> Ports for T {}
