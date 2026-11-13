@@ -161,6 +161,7 @@ impl CaptureClient for World {
     fn slot(&mut self, _slots: ClientRef, index: u8) -> SlotHandle { self.slots.get(usize::from(index)).copied().unwrap_or(SlotHandle(0)) }
     fn store_selection_result(&mut self, _selection: ClientRef, _value: u32) {}
     fn store_selection_hook(&mut self, _selection: ClientRef) {}
+    fn output_marker(&mut self, _selection: ClientRef) -> i16 { 0 }
     fn frame_word(&mut self, _frame: Frame, _offset: FrameOffset) -> u32 { 0 }
     fn set_frame_word(&mut self, frame: Frame, offset: FrameOffset, value: u32) {
         assert_eq!(frame, FRAME);

@@ -147,6 +147,7 @@ impl CaptureClient for CaptureFake {
     fn slot(&mut self, _slots: ClientRef, index: u8) -> SlotHandle { self.slots.get(usize::from(index)).copied().unwrap_or(SlotHandle(0)) }
     fn store_selection_result(&mut self, selection: ClientRef, value: u32) { self.calls.push(Call::SelectionResult(selection, value)); }
     fn store_selection_hook(&mut self, selection: ClientRef) { self.calls.push(Call::SelectionHook(selection)); }
+    fn output_marker(&mut self, _selection: ClientRef) -> i16 { 0 }
     fn frame_word(&mut self, _frame: Frame, offset: FrameOffset) -> u32 { self.frame_words.get(&offset.0).copied().unwrap_or(0) }
     fn set_frame_word(&mut self, frame: Frame, offset: FrameOffset, value: u32) {
         self.frame_words.insert(offset.0, value);

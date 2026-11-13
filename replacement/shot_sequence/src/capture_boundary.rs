@@ -80,9 +80,14 @@ impl SlotSelection {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FrameOffset(pub u32);
 
-/// A constant table the firmware copies into a dump.
+/// Memory outside the capture steps the firmware copies into a dump.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FrameTable { SelectionMap }
+pub enum FrameTable {
+    /// The selection map's constant table.
+    SelectionMap,
+    /// The capture pipeline's control work storage.
+    PipelineWork,
+}
 
 /// Client memory the command-7 parameters name.
 pub trait CaptureClient {
@@ -95,6 +100,8 @@ pub trait CaptureClient {
     fn store_selection_result(&mut self, selection: ClientRef, value: u32);
     /// Gives the selection the completion hook the capture leaves for it.
     fn store_selection_hook(&mut self, selection: ClientRef);
+    /// The output marker the primary job stored in the selection.
+    fn output_marker(&mut self, selection: ClientRef) -> i16;
     fn frame_word(&mut self, frame: Frame, offset: FrameOffset) -> u32;
     fn set_frame_word(&mut self, frame: Frame, offset: FrameOffset, value: u32);
     fn fill_frame(&mut self, frame: Frame, offset: FrameOffset, bytes: u32, value: u8);
@@ -148,24 +155,43 @@ pub enum RecordField {
     /// Words the capture's statistics record carries.
     StatisticsWord,
     StatisticsByte,
-    /// Fields the primary job passes on without reading them, named after the profile-record
-    /// layer's fields.
+    /// The value the calc library's capture offset starts from.
+    IndexedSelection,
+    /// Fields the primary job and the capture dump pass on without reading them, named after
+    /// the profile-record layer's fields.
+    At0014,
+    At001a,
+    At0022,
+    At0026,
+    /// Subject flags; the capture dump replaces bit 0.
+    At002e,
+    At0033,
     At0035,
     At0036,
+    At0037,
     At0038,
     At0039,
     At003a,
     At003b,
+    At003c,
+    At003d,
     At003e,
     At0042,
+    At0043,
+    At0045,
+    At0047,
     At0049,
     At004a,
+    At004b,
     At004d,
     At0053,
+    At005b,
     At006c,
     At20b0,
     At20b4,
     At20c8,
+    At20cc,
+    At20d4,
 }
 
 /// Per-slot values of the bound record.
@@ -192,9 +218,10 @@ pub enum SlotField {
     MeasuredValue,
     EvaluationWord,
     EvaluationOffset,
-    /// Fields the primary job passes on without reading them, named after the profile-record
-    /// layer's fields.
+    /// Fields the primary job and the capture dump pass on without reading them, named after
+    /// the profile-record layer's fields.
     At017a,
+    At0182,
     At0184,
     At0186,
     At0188,

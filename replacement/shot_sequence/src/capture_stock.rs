@@ -4,10 +4,12 @@
 
 use crate::boundary::ClientRef;
 use crate::calculations_work::Processing;
+use crate::capture_dump::{DumpEntry, DumpSource, DumpWord, Packing};
 use crate::capture_boundary::{
     CaptureAdjustment, CaptureOptions, CaptureParameters, CaptureTrace, FrameOffset, MoveProfile, RecordField, SettingResult, SlotEntry, SlotField,
     SlotSelection,
 };
+use crate::dump_boundary::{AdjustmentKey, FieldWidth, RateGrid, ShotWord, Workspace, WorkspaceField};
 use crate::primary_boundary::{AreaMode, CaptureStatus};
 use crate::secondary_boundary::{AreaList, MeasurementSetting, MeasurementWord, StatisticsStore};
 use xm1_saclac_interface::statistics::SettingOverrides;
@@ -124,22 +126,39 @@ pub const fn record_field_getter(field: RecordField) -> Option<u32> {
         RecordField::MeasurementOption => Some(0x74f9a4),
         RecordField::StatisticsWord => Some(0x75a200),
         RecordField::StatisticsByte => Some(0x759140),
+        RecordField::IndexedSelection => Some(0x752714),
+        RecordField::At0014 => Some(0x74f674),
+        RecordField::At001a => Some(0x74f454),
+        RecordField::At0022 => Some(0x74f894),
+        RecordField::At0026 => Some(0x74e900),
+        RecordField::At002e => Some(0x74e718),
+        RecordField::At0033 => Some(0x74e878),
         RecordField::At0035 => Some(0x74ece4),
         RecordField::At0036 => Some(0x74ed6c),
+        RecordField::At0037 => Some(0x74edf4),
         RecordField::At0038 => Some(0x74ee7c),
         RecordField::At0039 => Some(0x74ef04),
         RecordField::At003a => Some(0x74ef8c),
         RecordField::At003b => Some(0x74f014),
+        RecordField::At003c => Some(0x74f09c),
+        RecordField::At003d => Some(0x74f124),
         RecordField::At003e => Some(0x74f1f0),
         RecordField::At0042 => Some(0x74f3cc),
+        RecordField::At0043 => Some(0x74f564),
+        RecordField::At0045 => Some(0x750034),
+        RecordField::At0047 => Some(0x74fa2c),
         RecordField::At0049 => Some(0x74fdfc),
         RecordField::At004a => Some(0x74fe84),
+        RecordField::At004b => Some(0x7500bc),
         RecordField::At004d => Some(0x7501cc),
         RecordField::At0053 => Some(0x7507a4),
+        RecordField::At005b => Some(0x74ea10),
         RecordField::At006c => Some(0x750d54),
         RecordField::At20b0 => Some(0x754d9c),
         RecordField::At20b4 => Some(0x754e3c),
         RecordField::At20c8 => Some(0x754f8c),
+        RecordField::At20cc => Some(0x75502c),
+        RecordField::At20d4 => Some(0x75516c),
         RecordField::CaptureFrame
         | RecordField::CaptureSlotCount
         | RecordField::CaptureSlots
@@ -176,12 +195,13 @@ pub const fn slot_field_getter(field: SlotField) -> Option<u32> {
         SlotField::Trim => Some(0x752c50),
         SlotField::ProfileSelector => Some(0x7535f0),
         SlotField::Residual => Some(0x752db0),
-        SlotField::Step => Some(0x752e60),
         SlotField::At017a => Some(0x752d00),
+        SlotField::At0182 => Some(0x753540),
         SlotField::At0184 => Some(0x7531d0),
         SlotField::At0186 => Some(0x753120),
         SlotField::At0188 => Some(0x753330),
         SlotField::At0198 => Some(0x753280),
+        SlotField::At0204 => Some(0x7543b0),
         SlotField::At0208 => Some(0x754460),
         _ => None,
     }
@@ -214,6 +234,7 @@ pub const fn slot_field_setter(field: SlotField) -> Option<u32> {
         | SlotField::MeasuresAreas
         | SlotField::ProfileSelector
         | SlotField::At017a
+        | SlotField::At0182
         | SlotField::At0188
         | SlotField::At0198
         | SlotField::At0208 => None,
@@ -257,7 +278,10 @@ impl SlotEntry {
     pub fn set_step(&mut self, value: i16) { put_entry_half(self, 0x30, value); }
     pub fn rate_active(&self) -> u32 { word(&self.0, 0x24).unwrap_or(0) }
     pub fn rate_profile(&self) -> u32 { word(&self.0, 0x28).unwrap_or(0) }
-    pub fn primary_subjects(&self) -> bool { word(&self.0, 0xa0) == Some(1) }
+    /// The capture dump's capture-window mode when the record's subjects are not locked
+    /// (0xf297e0).
+    pub fn subject_mode(&self) -> u32 { word(&self.0, 0xa0).unwrap_or(0) }
+    pub fn primary_subjects(&self) -> bool { self.subject_mode() == 1 }
 }
 
 /// Bytes the adjustment reads 0x69f8fc take.
@@ -486,3 +510,259 @@ pub const fn area_mode(mode: AreaMode) -> u32 {
         AreaMode::Third => 6,
     }
 }
+
+const fn field(offset: u32, width: FieldWidth) -> WorkspaceField { WorkspaceField { offset, width } }
+const fn at_byte(offset: u32) -> WorkspaceField { field(offset, FieldWidth::Byte) }
+const fn at_half(offset: u32) -> WorkspaceField { field(offset, FieldWidth::Half) }
+const fn at_signed(offset: u32) -> WorkspaceField { field(offset, FieldWidth::SignedHalf) }
+const fn at_word(offset: u32) -> WorkspaceField { field(offset, FieldWidth::Word) }
+
+/// The rate grids' lens position, reference and state, which the dump remaps (0xf298a4..0xf298d4).
+pub const GRID_POSITION: WorkspaceField = at_signed(0x30);
+pub const GRID_REFERENCE: WorkspaceField = at_word(0x3c);
+pub const GRID_STATE: WorkspaceField = at_word(0x40);
+
+/// The calc library's accessor of each workspace, which answers its address.
+pub const fn workspace_entry(workspace: Workspace) -> u32 {
+    match workspace {
+        Workspace::PrimaryGrid => 0xf4dfe8,
+        Workspace::SecondaryGrid => 0xf4e004,
+        Workspace::GridParameters => 0xf4e020,
+        Workspace::GridLimits => 0xf4e03c,
+        Workspace::PrimaryKeyDefaults => 0xf4d774,
+        Workspace::SecondaryKeyDefaults => 0xf4d8a0,
+        Workspace::TertiaryKeyDefaults => 0xf4dbfc,
+        Workspace::KeyReferences => 0xf4d94c,
+        Workspace::KeyIndexes => 0xf4dc34,
+        Workspace::ScaledInputs => 0xf4de88,
+    }
+}
+
+/// The shot context's words (0x169e580) 0xf160d0, 0xf160f4, 0xf16118, 0xf1613c, 0xf161a8 and
+/// 0xf161cc read.
+pub const fn shot_word_offset(word: ShotWord) -> u32 {
+    match word {
+        ShotWord::RequestedReference => 0x1cd0,
+        ShotWord::StartReference => 0x1cd4,
+        ShotWord::SecondReference => 0x1cd8,
+        ShotWord::ThirdReference => 0x1cdc,
+        ShotWord::Moved => 0x1ce4,
+        ShotWord::MovedLate => 0x1ce8,
+    }
+}
+
+/// Configuration and shared entries of the dump: adjustment bytes 0x69f8fc, the settings class
+/// 0x746054, the configuration export 0x748928 (frame, distance), the capture window 0xdca798
+/// (out, mode, layout; it writes out[0] and out[1] only when it answers 1). 0xee96e0 and
+/// 0xee96f4, which the dump calls with the frame, and 0x1004438, which it calls for the four
+/// words at +0xcc, are empty in 1.50.
+pub const DUMP_ENTRIES: [u32; 4] = [0x69f8fc, 0x746054, 0x748928, 0xdca798];
+/// The selection's signed halfword the primary job's output marker goes to (0xf2d288).
+pub const OUTPUT_MARKER: u32 = 8;
+
+/// The marks 0xf2a09c..0xf2a0cc puts at both ends of the secondary job's trace area and the
+/// primary job's last output word between them (0xf2d6dc).
+pub const TRACE_MARKS: (u32, u32) = (0x5354_4344, 0x4c41_4344);
+pub const TRACE_OUTPUT: FrameOffset = FrameOffset(0xa_567c);
+pub const TRACE_END: FrameOffset = FrameOffset(0xa_5adc);
+
+/// The capture pipeline's work storage (0x1005044), copied whole between two marks
+/// (0xf2a0dc..0xf2a110).
+pub const PIPELINE_DUMP: FrameOffset = FrameOffset(0xb_1afc);
+pub const PIPELINE_WORK: FrameOffset = FrameOffset(0xb_1b00);
+pub const PIPELINE_WORK_BYTES: u32 = 0x51e0;
+pub const PIPELINE_END: FrameOffset = FrameOffset(0xb_6ce0);
+pub const PIPELINE_MARKS: (u32, u32) = (0x5354_5447, 0x4c41_5447);
+pub const PIPELINE_WORK_ENTRY: u32 = 0x1005044;
+
+const fn entry(at: u32, source: DumpSource) -> DumpEntry { DumpEntry { at: FrameOffset(at), source } }
+const fn one(at: u32, word: DumpWord) -> DumpEntry { entry(at, DumpSource::Word(word)) }
+const fn constant(at: u32, value: u32) -> DumpEntry { one(at, DumpWord::Constant(value)) }
+const fn zero(at: u32) -> DumpEntry { one(at, DumpWord::Zero) }
+const fn record(at: u32, field: RecordField) -> DumpEntry { one(at, DumpWord::Record(field)) }
+const fn slot(at: u32, field: SlotField) -> DumpEntry { one(at, DumpWord::FirstSlot(field)) }
+const fn shot(at: u32, word: ShotWord) -> DumpEntry { one(at, DumpWord::Shot(word)) }
+const fn adjustment(at: u32, key: u32, packing: Packing) -> DumpEntry { one(at, DumpWord::Adjustment(AdjustmentKey(key), packing)) }
+const fn count(at: u32, key: u32) -> DumpEntry { one(at, DumpWord::EntryCount(AdjustmentKey(key))) }
+const fn copy(at: u32, workspace: Workspace, field: WorkspaceField) -> DumpEntry { one(at, DumpWord::Workspace(workspace, field)) }
+const fn run(at: u32, workspace: Workspace, field: WorkspaceField, stride: u32, count: u32) -> DumpEntry {
+    entry(at, DumpSource::Run { workspace, field, stride, count })
+}
+
+const PRIMARY: Workspace = Workspace::PrimaryGrid;
+const SECONDARY: Workspace = Workspace::SecondaryGrid;
+const PARAMETERS: Workspace = Workspace::GridParameters;
+const LIMITS: Workspace = Workspace::GridLimits;
+const SCALED: Workspace = Workspace::ScaledInputs;
+const INDEXES: Workspace = Workspace::KeyIndexes;
+/// Bytes between the scaled inputs' blocks.
+const SCALED_STRIDE: u32 = 0x450;
+/// Entries of the key lists.
+const KEYS: u32 = 20;
+
+/// The dump's frame words +0..+0x1e00 in the order 0xf29318..0xf2a07c stores them; the words
+/// +0xe4..+0xf0 are left as they are.
+pub const CAPTURE_DUMP: [DumpEntry; 161] = [
+    constant(0x000, 0x5354_434d),
+    record(0x004, RecordField::SubjectSource),
+    one(0x008, DumpWord::SubjectFlags),
+    record(0x00c, RecordField::At005b),
+    record(0x010, RecordField::At20d4),
+    record(0x014, RecordField::At20cc),
+    record(0x018, RecordField::At20b0),
+    entry(0x01c, DumpSource::Layout),
+    record(0x02c, RecordField::At0022),
+    record(0x030, RecordField::At0045),
+    record(0x034, RecordField::SecondaryMode),
+    record(0x038, RecordField::At001a),
+    record(0x03c, RecordField::At0043),
+    record(0x040, RecordField::At0014),
+    record(0x044, RecordField::ReferenceSecondLimit),
+    record(0x048, RecordField::ReferenceOption),
+    record(0x04c, RecordField::ReferenceFirstLimit),
+    record(0x050, RecordField::SecondaryOption),
+    record(0x054, RecordField::At0037),
+    record(0x058, RecordField::At0036),
+    record(0x05c, RecordField::At0047),
+    record(0x060, RecordField::MeasurementOption),
+    record(0x064, RecordField::ResourceKind),
+    record(0x068, RecordField::At0033),
+    record(0x06c, RecordField::At0026),
+    slot(0x070, SlotField::At0182),
+    zero(0x074),
+    slot(0x078, SlotField::Reference),
+    one(0x07c, DumpWord::OutputMarker),
+    shot(0x080, ShotWord::RequestedReference),
+    shot(0x084, ShotWord::StartReference),
+    shot(0x088, ShotWord::SecondReference),
+    shot(0x08c, ShotWord::ThirdReference),
+    slot(0x090, SlotField::Distance),
+    shot(0x0a0, ShotWord::Moved),
+    shot(0x0a4, ShotWord::MovedLate),
+    slot(0x0a8, SlotField::At0204),
+    record(0x094, RecordField::IndexedSelection),
+    // 0xf51b50, whose answer is 0xf4f16c's, the record's indexed selection.
+    record(0x098, RecordField::IndexedSelection),
+    one(0x09c, DumpWord::CaptureOffset),
+    adjustment(0x0ac, 0x204, Packing::Pair),
+    adjustment(0x0b0, 0x1e8, Packing::Pair),
+    adjustment(0x0b4, 0x1ea, Packing::Spread),
+    adjustment(0x0b8, 0x1ec, Packing::Quad),
+    adjustment(0x0bc, 0x1f0, Packing::Quad),
+    adjustment(0x0c0, 0x1f4, Packing::Quad),
+    adjustment(0x0c4, 0x1f8, Packing::Quad),
+    zero(0x0c8),
+    zero(0x0cc),
+    zero(0x0d0),
+    zero(0x0d4),
+    zero(0x0d8),
+    record(0x0dc, RecordField::At0039),
+    record(0x0e0, RecordField::At0038),
+    record(0x0f4, RecordField::At004b),
+    record(0x0f8, RecordField::PlacesItem),
+    record(0x0fc, RecordField::At003d),
+    record(0x100, RecordField::At003c),
+    record(0x108, RecordField::SubjectKind),
+    one(0x10c, DumpWord::SettingsClass),
+    entry(0x024, DumpSource::CaptureWindow),
+    record(0x104, RecordField::SubjectsLocked),
+    constant(0x110, 0x4c41_434d),
+    constant(0x114, 0x5354_5352),
+    record(0x118, RecordField::SubjectArea),
+    adjustment(0x11c, 0x75b0, Packing::Byte),
+    adjustment(0x120, 0x75f9, Packing::Byte),
+    copy(0x124, PRIMARY, at_word(0x00)),
+    copy(0x128, PRIMARY, at_half(0x04)),
+    run(0x12c, PRIMARY, at_byte(0x06), 1, 5),
+    copy(0x140, PRIMARY, at_signed(0x1c)),
+    copy(0x144, PRIMARY, at_word(0x28)),
+    copy(0x148, PRIMARY, GRID_POSITION),
+    run(0x14c, PRIMARY, at_signed(0x34), 2, 2),
+    one(0x154, DumpWord::GridRemap(RateGrid::Primary)),
+    zero(0x158),
+    one(0x15c, DumpWord::GridNextReference(RateGrid::Primary)),
+    run(0x160, PRIMARY, at_signed(0x16), 2, 2),
+    run(0x168, PRIMARY, at_signed(0x48), 2, 4),
+    copy(0x178, SECONDARY, at_word(0x00)),
+    copy(0x17c, SECONDARY, at_half(0x04)),
+    run(0x180, SECONDARY, at_byte(0x06), 1, 5),
+    copy(0x194, SECONDARY, at_signed(0x1c)),
+    copy(0x198, SECONDARY, at_word(0x2c)),
+    copy(0x19c, SECONDARY, GRID_POSITION),
+    run(0x1a0, SECONDARY, at_signed(0x34), 2, 2),
+    one(0x1a8, DumpWord::GridRemap(RateGrid::Secondary)),
+    zero(0x1ac),
+    one(0x1b0, DumpWord::GridNextReference(RateGrid::Secondary)),
+    run(0x1b4, SECONDARY, at_signed(0x16), 2, 2),
+    run(0x1bc, SECONDARY, at_signed(0x48), 2, 4),
+    copy(0x1cc, SECONDARY, at_word(0x44)),
+    copy(0x1d0, PRIMARY, at_word(0x80)),
+    copy(0x1d4, PRIMARY, at_half(0x84)),
+    count(0x1d8, 0x75b1),
+    constant(0x1dc, KEYS),
+    run(0x1e0, Workspace::PrimaryKeyDefaults, at_byte(0), 1, KEYS),
+    copy(0x230, PRIMARY, at_word(0x90)),
+    adjustment(0x234, 0x75b2, Packing::Byte),
+    adjustment(0x238, 0x75b5, Packing::Byte),
+    copy(0x23c, PRIMARY, at_word(0x88)),
+    copy(0x240, PRIMARY, at_half(0x8c)),
+    count(0x244, 0x75b1),
+    constant(0x248, KEYS),
+    run(0x24c, Workspace::KeyReferences, at_byte(0), 0x214, KEYS),
+    adjustment(0x29c, 0x75b4, Packing::Byte),
+    adjustment(0x2a0, 0x75b3, Packing::Byte),
+    constant(0x2a4, KEYS),
+    run(0x2a8, Workspace::TertiaryKeyDefaults, at_byte(0), 1, KEYS),
+    run(0x2f8, PRIMARY, at_byte(0xa8), 1, 12),
+    run(0x328, PRIMARY, at_word(0xb4), 4, 6),
+    copy(0x340, PRIMARY, at_byte(0xcc)),
+    adjustment(0x344, 0x75c2, Packing::Byte),
+    copy(0x348, PRIMARY, at_word(0xd0)),
+    adjustment(0x34c, 0x75c3, Packing::Byte),
+    adjustment(0x350, 0x75c4, Packing::Tenfold),
+    copy(0x354, PRIMARY, at_signed(0x4ec)),
+    run(0x358, PRIMARY, at_signed(0xd6), 2, 256),
+    run(0x758, SCALED, at_signed(0x218), 2, 256),
+    run(0xb58, SCALED, at_signed(0x218 + SCALED_STRIDE), 2, 256),
+    run(0xf58, SCALED, at_signed(0x218 + 2 * SCALED_STRIDE), 2, 256),
+    run(0x1358, SCALED, at_signed(0x218 + 3 * SCALED_STRIDE), 2, 256),
+    run(0x1758, SCALED, at_signed(0x218 + 4 * SCALED_STRIDE), 2, 256),
+    zero(0x1b58),
+    copy(0x1b5c, PRIMARY, at_half(0x4f4)),
+    copy(0x1b60, PRIMARY, at_signed(0x2d6)),
+    run(0x1b64, SCALED, at_signed(0x41e), SCALED_STRIDE, 5),
+    copy(0x1b78, PRIMARY, at_word(0x2d8)),
+    run(0x1b7c, SCALED, at_word(0x424), SCALED_STRIDE, 5),
+    copy(0x1b90, PRIMARY, at_word(0x2e0)),
+    run(0x1b94, SCALED, at_word(0x428), SCALED_STRIDE, 5),
+    run(0x1ba8, INDEXES, at_word(0x04), 0x24, KEYS),
+    run(0x1bf8, INDEXES, at_byte(0x08), 0x24, KEYS),
+    copy(0x1c48, PRIMARY, at_word(0x2e4)),
+    run(0x1c4c, INDEXES, at_word(0x00), 0x24, KEYS),
+    adjustment(0x1c9c, 0x76de, Packing::Byte),
+    adjustment(0x1ca0, 0x1_8ba8, Packing::Byte),
+    run(0x1ca4, PRIMARY, at_word(0x50c), 4, 3),
+    copy(0x1cb0, PRIMARY, at_half(0x518)),
+    copy(0x1cb4, PRIMARY, at_word(0x51c)),
+    adjustment(0x1cb8, 0x1_8ba9, Packing::Half),
+    copy(0x1cbc, SECONDARY, at_word(0x80)),
+    copy(0x1cc0, SECONDARY, at_half(0x84)),
+    adjustment(0x1cc4, 0x75e0, Packing::Byte),
+    count(0x1cc8, 0x75df),
+    constant(0x1ccc, KEYS),
+    run(0x1cd0, Workspace::SecondaryKeyDefaults, at_byte(0), 1, KEYS),
+    run(0x1d20, PARAMETERS, at_word(0x00), 4, 3),
+    copy(0x1d2c, PRIMARY, at_word(0xa4)),
+    copy(0x1d30, PARAMETERS, at_word(0x0c)),
+    run(0x1d34, PARAMETERS, at_byte(0x10), 1, KEYS),
+    run(0x1d84, PARAMETERS, at_word(0x24), 4, 4),
+    copy(0x1d94, PARAMETERS, at_half(0x34)),
+    run(0x1da0, PARAMETERS, at_word(0x38), 4, 7),
+    copy(0x1d98, PARAMETERS, at_word(0x54)),
+    copy(0x1d9c, PARAMETERS, at_half(0x58)),
+    run(0x1dbc, LIMITS, at_word(0x00), 4, 13),
+    copy(0x1df0, LIMITS, at_half(0x34)),
+    copy(0x1df4, LIMITS, at_word(0x38)),
+    copy(0x1df8, LIMITS, at_half(0x3c)),
+    constant(0x1dfc, 0x4c41_5352),
+];

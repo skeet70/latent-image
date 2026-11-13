@@ -9,7 +9,9 @@ pub mod calculations_work;
 pub mod capture;
 pub mod capture_boundary;
 pub mod capture_control;
+pub mod capture_dump;
 pub mod capture_stock;
+pub mod dump_boundary;
 pub mod exposure;
 pub mod exposure_work;
 pub mod finish;
@@ -142,3 +144,5 @@ mod record_load_tests;
 mod state_tests;
 #[cfg(test)]
 mod primary_job_tests;
+#[cfg(test)]
+mod capture_dump_tests;
