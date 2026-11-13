@@ -43,6 +43,7 @@ import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.Host (get)
 import FujiAF.JSON (encodeCanonical)
 import Numeric (showHex)
+import qualified Replacement.PropertyService.HeaderBoundary as H
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
@@ -83,7 +84,7 @@ ownedTextBytes :: Int
 ownedTextBytes = fromIntegral (ownedStateBase - ownedBase)
 
 exitAddress, stackBase, stackTop :: Word32
-exitAddress = 0x00958000
+exitAddress = 0x00958c00
 stackBase = 0x00959000
 stackTop = 0x00959ff0
 
@@ -313,9 +314,10 @@ pairSpec inputs seam label pair = CaseSpec
       , mkRegion (RegionId "stack") (at stackBase) 0x1000 ReadWrite (B.replicate 0x1000 0x5a)
       , mkRegion (RegionId "exit") (at exitAddress) 4 ReadExecute (assemble [0xe12fff1e])
       ]
+        ++ kernelRegions
         ++ maybe [] seamRegions seam
   , caseFunctions =
-      (at pairCarrier, fromIntegral (B.length carrier)) : dispatcherFunctions
+      (at pairCarrier, fromIntegral (B.length carrier)) : dispatcherFunctions ++ kernelFunctions
         ++ [ (at ownedBase, fromIntegral ownedTextBytes) | Just _ <- [seam] ]
   , caseInitial = [(register, initial register) | register <- [R0, R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, R12, Sp, Lr, Cpsr]]
   , caseExpectedStatus = Returned
@@ -372,7 +374,7 @@ pairDifferences :: Pair -> Run -> Run -> [String]
 pairDifferences pair stock subject =
   [ "status " ++ runnerStatusLabel (status subject) | status subject /= Returned ]
     ++ if status subject /= Returned then [] else
-      regionDifferences ["cells", "settings"] stock subject
+      regionDifferences ["cells", "settings", "kernel-calls"] stock subject
         ++ [ "r0 differs" | registerValue (runObservation stock) R0 /= registerValue (runObservation subject) R0 ]
         ++ [ "sp differs" | registerValue (runObservation stock) Sp /= registerValue (runObservation subject) Sp ]
         ++ [ "display arguments differ from the mode's" | pairDisplayArguments subject /= pairExpectedDisplay pair ]
@@ -512,8 +514,8 @@ lifecycleCohort image4 = [confirmedThenRestore, closedThenPopElsewhere]
 
 lifecycleCarrierAt, scratchBase, scratchCells :: Word32
 lifecycleCarrierAt = 0x00c2d920
-scratchBase = 0x0095b000
-scratchCells = 0x0095b400
+scratchBase = 0x0095d000
+scratchCells = 0x0095d400
 
 loadReg :: Word32 -> Word32 -> [Word32]
 loadReg register value = [movw register (value .&. 0xffff), movt register (value `shiftR` 16)]
@@ -595,7 +597,7 @@ lifecycleSpec inputs seam routing label lifecycle = CaseSpec
   , caseExit = at exitAddress
   , caseRegions = regions
   , caseFunctions =
-      (at lifecycleCarrierAt, fromIntegral (B.length carrier)) : lifecycleFunctions
+      (at lifecycleCarrierAt, fromIntegral (B.length carrier)) : lifecycleFunctions ++ kernelFunctions
         ++ [ (at ownedBase, fromIntegral ownedTextBytes) | Just _ <- [seam] ]
   , caseInitial = [(register, initial register) | register <- [R0, R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, R12, Sp, Lr, Cpsr]]
   , caseExpectedStatus = Returned
@@ -642,12 +644,13 @@ lifecycleSpec inputs seam routing label lifecycle = CaseSpec
     , mkRegion (RegionId "exit") (at exitAddress) 4 ReadExecute (assemble [0xe12fff1e])
     , mkRegion (RegionId "scratch") (at scratchBase) 0x1000 ReadWrite (B.replicate 0x1000 0)
     ]
+      ++ kernelRegions
       ++ maybe [] seamRegions seam
 
 -- | The writable stock state both roles share. The owned role's own state and
 -- the stack are not compared.
 lifecycleRegions :: [String]
-lifecycleRegions = ["cells", "mirror", "mode-cells", "settings", "scratch"]
+lifecycleRegions = ["cells", "mirror", "mode-cells", "settings", "scratch", "kernel-calls"]
 
 lifecycleDifferences :: Lifecycle -> Run -> Run -> [String]
 lifecycleDifferences lifecycle stock subject
@@ -702,6 +705,24 @@ runLifecycleControl inputs name image routing lifecycle stock = do
   pure (lifecycleId lifecycle, lifecycleDifferences lifecycle stock subject)
 
 -- Shared case parts --------------------------------------------------------
+
+-- | The property service's kernel boundary, as the property oracle maps it:
+-- the slot-table root, block and stubs, with semaphore traffic recorded in
+-- @kernel-calls@. Both roles map it; only the owned property service enters it.
+kernelRegions :: [CaseRegion]
+kernelRegions =
+  [ mkRegion (RegionId "kernel-root") (at H.kernelRootBase) 8 ReadOnly H.kernelRootBytes
+  , mkRegion (RegionId "kernel-block") (at H.kernelBlockBase) (B.length H.kernelBlockBytes) ReadOnly H.kernelBlockBytes
+  , mkRegion (RegionId "semaphore-classes") (at H.classBase) (B.length H.classBytes) ReadOnly H.classBytes
+  , mkRegion (RegionId "kernel-slots") (at H.slotBase) (B.length (H.slotCode 1)) ReadExecute (H.slotCode 1)
+  , mkRegion (RegionId "kernel-log") (at H.helperBase) (4 * length H.helperWords) ReadExecute (assemble H.helperWords)
+  , mkRegion (RegionId "kernel-calls") (at H.callsBase) H.callsBytes ReadWrite (B.replicate H.callsBytes 0)
+  ]
+
+kernelFunctions :: [(GuestAddress, Word32)]
+kernelFunctions =
+  [ (at address, fromIntegral (4 * length words_)) | (_, address, words_) <- H.slotStubWords ]
+    ++ [ (at H.helperBase, fromIntegral (4 * length H.helperWords)) ]
 
 seamRegions :: SeamImage -> [CaseRegion]
 seamRegions image =
