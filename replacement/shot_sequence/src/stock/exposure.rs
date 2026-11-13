@@ -4,6 +4,7 @@
 //! writes into the selection plan (shot context +0x1cec) and the record's exposure table.
 
 use crate::boundary::{ExposureSlot, SelectionPlan};
+use crate::exposure_callbacks::CallbackTrace;
 use xm1_saclac_interface::exposure::Correction;
 
 /// Correction halfwords stored into record slots 0..=12 and 14..=19 (setters 0x750eb0 + 0x98 *
@@ -67,5 +68,13 @@ pub fn plan_take_exposure(plan: &mut SelectionPlan, correction: &Correction) {
     for (index, half) in PLAN_HALVES.into_iter().enumerate() {
         let offset = PLAN_TAIL + 2 * index;
         bytes[offset..offset + 2].copy_from_slice(&correction.half(half).to_le_bytes());
+    }
+}
+
+/// Words the callbacks pass to the trace entry 0x72872c (0xf1ee24, 0xf1fc38).
+pub const fn callback_trace_word(trace: CallbackTrace) -> u32 {
+    match trace {
+        CallbackTrace::EvaluationDelivered => 0x1201_0500,
+        CallbackTrace::CorrectionDelivered => 0x1201_0300,
     }
 }

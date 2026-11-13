@@ -16,6 +16,7 @@ SOURCES = [
     "src/classification.rs",
     "src/dump_boundary.rs",
     "src/exposure.rs",
+    "src/exposure_callbacks.rs",
     "src/exposure_work.rs",
     "src/finish.rs",
     "src/finish_work.rs",

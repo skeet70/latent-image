@@ -14,6 +14,7 @@ pub mod capture_stock;
 pub mod classification;
 pub mod dump_boundary;
 pub mod exposure;
+pub mod exposure_callbacks;
 pub mod exposure_work;
 pub mod finish;
 pub mod finish_work;
@@ -162,3 +163,5 @@ mod grid_tests;
 mod classification_tests;
 #[cfg(test)]
 mod selection_operations_tests;
+#[cfg(test)]
+mod exposure_callbacks_tests;
