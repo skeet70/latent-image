@@ -1,196 +1,186 @@
 use std::collections::BTreeMap;
-use std::vec::Vec;
 
-use crate::adjust::configuration::{Configuration, ControllerFlag};
+use crate::adjust::configuration::Configuration;
+use crate::adjust::fakes::Lens;
+use crate::adjust::lens::{BiasTable, LensConfiguration, LensControl, LensSteps, ReferenceScale, Step, StepRequest};
 use crate::adjust::motion::drive::{DriveKind, DriveLimits, DriveMode};
-use crate::adjust::motion::sampling::SampleTargets;
 use crate::adjust::scan_drive::*;
 use crate::adjust::timing::{CaptureTiming, LevelScale};
-use crate::exposure::ports::{Properties, Property};
+use crate::exposure::fakes::{handle, World};
+use crate::exposure::ports::{ProfileAccess, Properties, Property};
+use crate::profile::Profile;
 
-const KIND: DriveKind = DriveKind(5);
 const LEVEL: i16 = 500;
-const SOURCE: u32 = 9;
+const SPAN: i32 = 100_000;
 
-/// Drives without ramps, so the lens moves at the requested speed throughout; the midpoint
-/// correction is unscaled and unbiased.
+/// Drives without ramps at the lens table's rate of 1000 steps a second; the midpoint correction
+/// is unscaled and unbiased; a 100 ms exposure at `LEVEL`, six lines from the reference line to the
+/// readout start.
 struct Bench {
-    properties: BTreeMap<u32, u32>,
-    linear: BTreeMap<i16, u32>,
-    reference_line: u16,
-    readout_start: u32,
+    world: World,
+    lens: Lens,
     line_period: Option<u32>,
-    limits: Vec<(DriveKind, DriveMode)>,
 }
 
 impl Properties for Bench {
-    fn property(&mut self, property: Property) -> u32 { self.properties.get(&property.0).copied().unwrap_or(0) }
+    fn property(&mut self, property: Property) -> u32 { Properties::property(&mut self.world, property) }
+}
+
+impl ProfileAccess for Bench {
+    type Records = <World as ProfileAccess>::Records;
+    type Entries = <World as ProfileAccess>::Entries;
+    fn profile(&mut self) -> Profile<'_, Self::Records, Self::Entries> { self.world.profile() }
+}
+
+impl LensSteps for Bench {
+    fn step(&mut self, request: StepRequest) -> Step { Step { size: request.base, rate: 1000 } }
+    fn travel_distance(&mut self, _resource: u32, _index: u32, travel: i16) -> u16 { travel as u16 }
+}
+
+impl ReferenceScale for Bench {
+    fn reference_scale(&mut self, group: u16, entry: u8) -> u32 { self.lens.reference_scale(group, entry) }
+}
+
+impl LensControl for Bench {
+    fn position(&mut self) -> u16 { self.lens.position }
+    fn travel_margin(&mut self) -> u16 { self.lens.margin }
+}
+
+impl LensConfiguration for Bench {
+    fn channel_value(&mut self, channel: i32) -> u32 { self.lens.channel_value(channel) }
+    fn channel_curve(&mut self, channel: i32) -> u32 { self.lens.channel_curve(channel) }
+    fn bias(&mut self, resource: i32, table: BiasTable) -> i16 { self.lens.bias(resource, table) }
+    fn biased_position(&mut self, resource: i32, table: BiasTable) -> i16 { self.lens.biased_position(resource, table) }
+    fn resource_count(&mut self) -> u8 { self.lens.resource_count() }
+    fn selection_word(&mut self, channel: i32, flags: u32, offset: i16) -> u32 { self.lens.selection_word(channel, flags, offset) }
+    fn remap(&mut self, word: u32, channel: i32, mode: u32) -> i32 { self.lens.remap(word, channel, mode) }
+    fn position_limits(&mut self, key: u32) -> [i16; 2] { self.lens.position_limits(key) }
+    fn mapped_value(&mut self, key: u32) -> u32 { self.lens.mapped_value(key) }
 }
 
 impl CaptureTiming for Bench {
-    fn readout_start(&mut self, source: u32) -> u32 {
-        assert_eq!(source, SOURCE);
-        self.readout_start
-    }
-    fn reference_line(&mut self, source: u32) -> u16 {
-        assert_eq!(source, SOURCE);
-        self.reference_line
-    }
-    fn line_period(&mut self, source: u32) -> Option<u32> {
-        assert_eq!(source, SOURCE);
-        self.line_period
-    }
+    fn readout_start(&mut self, _source: u32) -> u32 { 4 }
+    fn reference_line(&mut self, _source: u32) -> u16 { 10 }
+    fn line_period(&mut self, _source: u32) -> Option<u32> { self.line_period }
 }
 
 impl LevelScale for Bench {
-    fn linear(&mut self, level: i16) -> u32 { self.linear.get(&level).copied().unwrap_or(0) }
+    fn linear(&mut self, level: i16) -> u32 { BTreeMap::from([(LEVEL, 1000)]).get(&level).copied().unwrap_or(0) }
     fn log2_difference(&mut self, _value: u32, _reference: u32) -> i16 { 0 }
 }
 
 impl DriveLimits for Bench {
-    fn first_ramp_speed(&mut self, kind: DriveKind, mode: DriveMode) -> u32 {
-        self.limits.push((kind, mode));
-        0
-    }
+    fn first_ramp_speed(&mut self, _kind: DriveKind, _mode: DriveMode) -> u32 { 0 }
     fn first_ramp_acceleration(&mut self, _kind: DriveKind, _mode: DriveMode) -> u32 { 0 }
     fn second_ramp_acceleration(&mut self, _kind: DriveKind, _mode: DriveMode) -> u32 { 0 }
     fn slowest_ramped_speed(&mut self) -> u32 { 0 }
 }
 
-/// A 100 ms exposure at `LEVEL`, six lines from the reference line to the readout start and
-/// 100 µs lines.
+/// 100 µs lines, a 40 ms frame interval (scale entry 50 × 50), the lens at 0 within -2000..=2000,
+/// and a 5 ms drive delay.
 fn bench() -> Bench {
-    Bench {
-        properties: [(0x9276, 100)].into(),
-        linear: [(LEVEL, 1000), (LEVEL + 100, 2000)].into(),
-        reference_line: 10,
-        readout_start: 4,
-        line_period: Some(100),
-        limits: Vec::new(),
-    }
+    let mut world = World::default();
+    world.property(Property(0x9276), 100);
+    world.property(Property(0x9281), 50);
+    Bench { world, lens: Lens { limits: [-2000, 2000], ..Lens::default() }, line_period: Some(100) }
 }
 
-/// Exposed for 100 lines from line 50, 20 lines apart: areas centred on lines 106, 226 and 346
-/// after the lag.
-const AREAS: AreaTiming = AreaTiming { exposure: 100, start: 50, gap: 20, rows: 0, count: 3 };
+/// Exposed for 100 lines from line 50, 20 lines apart: areas centred on lines 106, 226, 346 and
+/// 466 after the lag.
+const AREAS: AreaTiming = AreaTiming { exposure: 100, start: 50, gap: 20, rows: 0, count: 4 };
 
-const SPAN: i32 = 100_000;
+fn offset(line: i32, period: i32) -> i32 { line * period - SPAN }
 
-/// Each area's exposure start relative to its frame's.
-fn offsets(period: i32) -> [i32; 3] { [106, 226, 346].map(|line| line * period - SPAN) }
-
-/// From 0 to 1000 at 1000 steps a second, starting 5 ms into the scan.
-fn planned(bench: &mut Bench, areas: SampleAreas) -> ScanDrive {
-    let mut drive = ScanDrive::default();
-    drive.set_timing(SampleTiming { level: LEVEL, source: SOURCE, areas });
-    drive.plan(bench, &Configuration::default(), ScanLeg { start: 0, end: 1000, reverse: false, start_time: 5000 }, 1000, KIND);
-    drive
-}
-
-/// The drive's position `time` after it starts.
+/// The drive's position `time` after it starts, at one step a millisecond from 0.
 fn at(time: i32) -> i16 { (time / 1000) as i16 }
 
 /// The position halfway through an exposure from `start`.
 fn midpoint(start: i32) -> i16 { (at(start) + at(start + SPAN)) / 2 }
 
-#[test]
-fn the_drive_runs_along_the_leg_and_reads_its_limits_for_the_search_mode() {
-    let mut bench = bench();
-    let drive = planned(&mut bench, SampleAreas::Primary(AREAS));
-    assert_eq!(bench.limits, [(KIND, DriveMode { direction: 0, step: 9 })]);
-    assert_eq!(drive.position_at_frame(3, 40_000), at(3 * 40_000 - 5000));
-    assert_eq!(drive.position_at_frame(0, 40_000), 0);
-    assert_eq!(drive.position_at_frame(100, 40_000), 1000);
-    let mut configuration = Configuration::default();
-    configuration.set_controller_flag(ControllerFlag::First, true);
-    let mut drive = drive;
-    drive.plan(&mut bench, &configuration, ScanLeg { start: 1000, end: 0, reverse: true, start_time: 0 }, 1000, KIND);
-    assert_eq!(bench.limits[1], (KIND, DriveMode { direction: 1, step: 10 }));
-    assert_eq!(drive.position_at_frame(1, 250_000), 750);
+fn query(limits: [i16; 2], toward_second: bool) -> ScanQuery {
+    let frame = ScanFrame { index: 1, level: LEVEL, resource: 2, scale_group: 50, scale_entry: 50 };
+    ScanQuery { frame, monitor: None, contrast: 0, drive_kind: DriveKind(3), toward_second, limits }
+}
+
+fn planned(bench: &mut Bench, areas: SampleAreas, limits: [i16; 2]) -> (ScanDrive, ScanPlan) {
+    let mut drive = ScanDrive::default();
+    drive.set_timing(SampleTiming { level: 0, source: 7, areas });
+    let plan = drive.plan_scan(bench, &Configuration::default(), handle(), query(limits, true));
+    (drive, plan)
 }
 
 #[test]
-fn a_frame_inside_the_drive_targets_each_primary_area_at_the_drives_midpoint_over_its_exposure() {
+fn the_travel_runs_to_halfway_through_the_latest_area_and_widens_the_limits_and_the_drive() {
     let mut bench = bench();
-    let drive = planned(&mut bench, SampleAreas::Primary(AREAS));
-    let targets = drive.sample_targets(&mut bench, 300, 99, 40_000);
-    let time = 300_000;
-    let mut expected = SampleTargets::default();
-    for (slot, offset) in expected.primary.iter_mut().zip(offsets(100)) {
-        *slot = midpoint(time + offset);
-    }
-    assert_eq!(targets, expected);
+    bench.line_period = Some(1000);
+    let (_, plan) = planned(&mut bench, SampleAreas::Primary(AREAS), [0, 600]);
+    let latest = offset(466, 1000);
+    let travel = (latest / 1000 + (latest + SPAN) / 1000) / 2;
+    assert_eq!(plan.travel, travel as u16);
+    let reach = travel as i16;
+    assert_eq!(plan.limits, [-reach, 600 + reach]);
+    assert_eq!((plan.window, plan.reverse), ([0, 600 + 2 * reach], false));
 }
 
 #[test]
-fn a_frame_at_the_drives_start_is_dated_by_its_frame_count() {
+fn a_travel_ending_before_the_frame_starts_or_without_areas_is_zero() {
     let mut bench = bench();
-    let drive = planned(&mut bench, SampleAreas::Primary(AREAS));
-    let targets = drive.sample_targets(&mut bench, 0, 3, 40_000);
-    let time = 3 * 40_000 - 5000;
-    assert_eq!(targets.primary[..3], offsets(100).map(|offset| midpoint(time + offset)));
+    assert_eq!(planned(&mut bench, SampleAreas::Primary(AREAS), [0, 600]).1.travel, 0);
+    bench.line_period = Some(1000);
+    assert_eq!(planned(&mut bench, SampleAreas::Primary(AreaTiming { count: 0, ..AREAS }), [0, 600]).1.travel, 0);
 }
 
 #[test]
-fn the_secondary_layout_targets_its_areas_and_fills_its_remaining_slots_with_the_first() {
+fn the_window_is_clamped_with_the_margin_on_its_starting_side() {
     let mut bench = bench();
-    let areas = AreaTiming { rows: 4, count: 2, ..AREAS };
-    let drive = planned(&mut bench, SampleAreas::from_layout(1, AreaTiming::default(), areas));
-    let targets = drive.sample_targets(&mut bench, 300, 0, 0);
-    let [first, second, _] = offsets(100).map(|offset| midpoint(300_000 + offset));
-    assert_eq!(targets.primary, [0; 7]);
-    assert_eq!(targets.secondary, [first, second, first, first, 0, 0, 0, 0, 0, 0]);
+    bench.lens = Lens { limits: [20, 500], margin: 10, position: 0, ..Lens::default() };
+    let (_, plan) = planned(&mut bench, SampleAreas::Primary(AREAS), [0, 600]);
+    assert_eq!(plan.window, [30, 500]);
+    bench.lens.position = 300;
+    let mut drive = ScanDrive::default();
+    let plan = drive.plan_scan(&mut bench, &Configuration::default(), handle(), query([0, 600], false));
+    assert_eq!((plan.window, plan.reverse), ([300, 20], true));
 }
 
 #[test]
-fn any_other_layout_word_samples_the_primary_areas() {
-    for layout in [0, 2] {
-        assert_eq!(SampleAreas::from_layout(layout, AREAS, AreaTiming::default()), SampleAreas::Primary(AREAS));
-    }
+fn a_frame_inside_the_drive_reads_the_centre_primary_areas_target() {
+    let mut bench = bench();
+    let (drive, _) = planned(&mut bench, SampleAreas::Primary(AREAS), [0, 600]);
+    let time = 8 * 40_000 - 5000;
+    let corrected = drive.corrected_position(&mut bench, 8);
+    assert_eq!(corrected, CorrectedPosition { target: midpoint(time + offset(466, 100)), position: at(time) });
+}
+
+#[test]
+fn the_secondary_layout_reads_its_first_areas_target() {
+    let mut bench = bench();
+    let areas = SampleAreas::from_layout(1, AreaTiming::default(), AreaTiming { rows: 4, count: 2, ..AREAS });
+    let (drive, _) = planned(&mut bench, areas, [0, 600]);
+    let time = 8 * 40_000 - 5000;
+    assert_eq!(drive.corrected_position(&mut bench, 8).target, midpoint(time + offset(106, 100)));
+    assert_eq!(SampleAreas::from_layout(2, AREAS, AreaTiming::default()), SampleAreas::Primary(AREAS));
+}
+
+#[test]
+fn a_frame_count_past_a_byte_keeps_the_drive_moving() {
+    let mut bench = bench();
+    bench.lens.limits = [-30_000, 30_000];
+    let (drive, _) = planned(&mut bench, SampleAreas::Primary(AREAS), [0, 20_000]);
+    assert_eq!(drive.corrected_position(&mut bench, 300).position, at(300 * 40_000 - 5000));
+}
+
+#[test]
+fn without_a_line_period_the_areas_are_exposed_at_the_frame_start() {
+    let mut bench = bench();
+    bench.line_period = None;
+    let (drive, _) = planned(&mut bench, SampleAreas::Primary(AREAS), [0, 600]);
+    let time = 8 * 40_000 - 5000;
+    assert_eq!(drive.corrected_position(&mut bench, 8).target, midpoint(time - SPAN));
 }
 
 #[test]
 fn area_counts_beyond_the_slots_are_sampled_up_to_the_slots() {
     let mut bench = bench();
-    let drive = planned(&mut bench, SampleAreas::Primary(AreaTiming { count: 9, ..AREAS }));
-    let targets = drive.sample_targets(&mut bench, 300, 0, 0);
-    assert!(targets.primary.iter().all(|&target| target != 0));
-    let drive = planned(&mut bench, SampleAreas::Secondary(AreaTiming { count: 12, rows: 12, ..AREAS }));
-    let targets = drive.sample_targets(&mut bench, 300, 0, 0);
-    assert!(targets.secondary.iter().all(|&target| target != 0));
-}
-
-#[test]
-fn the_travel_runs_to_halfway_through_the_latest_exposed_area_and_takes_the_new_level() {
-    let mut bench = bench();
-    bench.line_period = Some(1000);
-    let mut drive = planned(&mut bench, SampleAreas::Primary(AREAS));
-    let latest = offsets(1000)[2];
-    assert_eq!(drive.exposure_travel(&mut bench, LEVEL, 1000), ((latest / 1000 + (latest + SPAN) / 1000) / 2) as u16);
-    let travel = drive.exposure_travel(&mut bench, LEVEL + 100, 1000);
-    let latest = 346_000 - SPAN / 2;
-    assert_eq!(travel, ((latest / 1000 + (latest + SPAN / 2) / 1000) / 2) as u16);
-    assert_eq!(drive.timing().level, LEVEL + 100);
-}
-
-#[test]
-fn a_travel_that_ends_before_the_frame_starts_is_zero_and_so_is_one_without_areas() {
-    let mut bench = bench();
-    let mut drive = planned(&mut bench, SampleAreas::Primary(AREAS));
-    assert_eq!(drive.exposure_travel(&mut bench, LEVEL, 1000), 0);
-    bench.line_period = Some(1000);
-    drive.set_timing(SampleTiming { level: LEVEL, source: SOURCE, areas: SampleAreas::Primary(AreaTiming { count: 0, ..AREAS }) });
-    assert_eq!(drive.exposure_travel(&mut bench, LEVEL, 1000), 0);
-}
-
-#[test]
-fn without_a_line_period_or_a_linear_level_the_areas_are_exposed_at_the_frame_start_or_for_no_time() {
-    let mut bench = bench();
-    bench.line_period = None;
-    let drive = planned(&mut bench, SampleAreas::Primary(AREAS));
-    assert_eq!(drive.sample_targets(&mut bench, 300, 0, 0).primary[..3], [midpoint(300_000 - SPAN); 3]);
-    bench.line_period = Some(100);
-    bench.linear.clear();
-    let targets = drive.sample_targets(&mut bench, 300, 0, 0);
-    assert_eq!(targets.primary[..3], [106, 226, 346].map(|line| at(300_000 + line * 100)));
+    let (drive, _) = planned(&mut bench, SampleAreas::Secondary(AreaTiming { count: 12, rows: 12, ..AREAS }), [0, 600]);
+    assert_eq!(drive.corrected_position(&mut bench, 8).target, midpoint(8 * 40_000 - 5000 + offset(106, 100)));
 }
