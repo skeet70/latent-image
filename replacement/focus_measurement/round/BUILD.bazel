@@ -6,7 +6,7 @@ xm1_rust_rlib(
     name = "round",
     src = "src/lib.rs",
     crate_name = "xm1_focus_measurement_round",
-    data = ["src/jobs.rs", "src/acquisition.rs", "src/children.rs"],
+    data = ["src/jobs.rs", "src/acquisition.rs", "src/children.rs", "src/scheduling.rs"],
     out = "arm/libxm1_focus_measurement_round.rlib",
     rlib_deps = {
         "xm1_saclac_controllers": "//replacement/saclac/controllers:controllers",
