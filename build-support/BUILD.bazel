@@ -447,5 +447,5 @@ haskell_test(
     srcs = ["BankSourceBoundaryTests.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
     visibility = ["//visibility:public"],
-    deps = [":rust-source-boundary", "//host:base"],
+    deps = [":rust-source-boundary", "//host:base", "//host:directory", "//host:filepath"],
 )
