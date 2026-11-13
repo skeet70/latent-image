@@ -76,6 +76,17 @@ pub enum ChildEvent<'a, Control> {
     Completed { completed: Completed<'a>, record: RecordHandle },
 }
 
+/// The shot entry a parent routes a command or completion to; a control selects its own.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShotTarget { HalfPress, Capture, Live }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShotEvent<'a> {
+    Control { control: ShotControl, record: RecordHandle },
+    Command { target: ShotTarget, command: Command<'a>, record: RecordHandle },
+    Completed { target: ShotTarget, completed: Completed<'a>, record: RecordHandle },
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ChildRequest<'a, SearchSample> {
     Measurement(ChildEvent<'a, MeasurementControl>),
@@ -84,7 +95,7 @@ pub enum ChildRequest<'a, SearchSample> {
     LensBringUp(Message<'a>),
     LensLive(ChildEvent<'a, LensControl>),
     LensS1(ChildEvent<'a, LensControl>),
-    Shot(ChildEvent<'a, ShotControl>),
+    Shot(ShotEvent<'a>),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
