@@ -191,6 +191,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/root_compact.rs",
     "//emulation:fujimod-xm1/src/rtos_census.rs",
     "//emulation:fujimod-xm1/src/saclac_census.rs",
+    "//emulation:fujimod-xm1/src/saclac_interface.rs",
     "//emulation:fujimod-xm1/src/scheduler_pair.rs",
     "//emulation:fujimod-xm1/src/sd_host.rs",
     "//emulation:fujimod-xm1/src/startup_callers.rs",
