@@ -21,6 +21,15 @@ const RECEIVE_PAYLOAD: StockAddress = StockAddress(0x169d380);
 const COMMAND_FLAGS: StockAddress = StockAddress(0x169cf24);
 const FAULT: u32 = 0xf46c20;
 
+/// The cyclic wake post 0x3b4b.
+#[cfg(saclac_wrong_driver_playback)]
+const CYCLIC_WAKE: u32 = 0x4b;
+/// Above the 81 receives the boot leaves and below the playback window's 143.
+#[cfg(saclac_wrong_driver_playback)]
+const PLAYBACK_AFTER: u32 = 110;
+#[cfg(saclac_wrong_driver_playback)]
+static mut RECEIVED: u32 = 0;
+
 #[used]
 #[no_mangle]
 #[link_section = ".rodata.XM1_REQUIRES_LENS_SAFETY_CONTRACT"]
@@ -62,13 +71,18 @@ impl crate::driver::Ports for DriverPorts {
                 core::ptr::write_volatile((COMMAND_FLAGS.0 + event.code()) as *mut u8, 1);
             }
         }
-        // The comparison's second deliberately wrong variant.
-        #[cfg(not(saclac_wrong_driver_gate))]
-        xm1_saclac_router(event.code(), u32::MAX);
-        #[cfg(saclac_wrong_driver_gate)]
-        if block.is_some() {
-            xm1_saclac_router(event.code(), u32::MAX);
+        // The playback control: the cyclic wake is not routed after PLAYBACK_AFTER dispatches.
+        #[cfg(saclac_wrong_driver_playback)]
+        {
+            let received = unsafe {
+                RECEIVED = RECEIVED.wrapping_add(1);
+                RECEIVED
+            };
+            if received > PLAYBACK_AFTER && event.code() == CYCLIC_WAKE {
+                return;
+            }
         }
+        xm1_saclac_router(event.code(), u32::MAX);
     }
 
     fn fault(&mut self) { call3(FAULT, 0, 0, 0); }
