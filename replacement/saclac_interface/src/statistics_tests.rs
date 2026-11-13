@@ -40,7 +40,7 @@ fn configuration() -> Configuration {
         exposure: exposure(),
         capture: capture(),
         notice: Notice { pending: 0x41, results: SharedAddress(0x016c_0728), callback: Cb(0x00f3_a794) },
-        flagged: true,
+        flag: 1,
     }
 }
 
@@ -81,9 +81,25 @@ fn selected_start_places_the_flag_before_its_completion() {
 }
 
 #[test]
+fn s1_start_places_its_flag_before_the_notice_and_ends_with_header_and_completion() {
+    let configuration = Configuration {
+        setup: Setup { descriptor: 0x1, pair: [0x2, 0x3], tail: SetupTail::S1 },
+        flag: 7,
+        ..configuration()
+    };
+    let (operation, message) = statistics_payload(&StatisticsPayload::S1Start { configuration, header: 0x51, callback: Cb(0x00f2_27f8) });
+    let bytes = message.bytes();
+    assert_eq!((operation, bytes.len()), (Op::Request04, 208));
+    assert_eq!(word(bytes, 12), 1);
+    assert_eq!((word(bytes, 128), word(bytes, 176)), (0x301, 0x309));
+    assert_eq!((word(bytes, 184), word(bytes, 188), word(bytes, 192), word(bytes, 196)), (7, 0x41, 0x016c_0728, 0x00f3_a794));
+    assert_eq!((word(bytes, 200), word(bytes, 204)), (0x51, 0x00f2_27f8));
+}
+
+#[test]
 fn capture_configuration_carries_the_view_word_command09_and_three_completions() {
     let (operation, message) = statistics_payload(&StatisticsPayload::Configure {
-        configuration: Configuration { flagged: false, ..configuration() },
+        configuration: Configuration { flag: 0, ..configuration() },
         view: 0x77,
         command: CaptureCommand { second: 0x81, third: 0x82, fourth: 0x83 },
         callbacks: [Cb(0x00f3_a9c8), Cb(0x00f3_a9a0), Cb(0x00f3_aa40)],

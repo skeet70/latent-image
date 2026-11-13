@@ -7,6 +7,7 @@ pub mod calculation;
 pub mod capture_job;
 pub mod capture_results;
 pub mod exposure;
+pub mod imaging;
 pub mod lens;
 pub mod pipeline;
 pub mod round;
@@ -529,6 +530,8 @@ mod capture_job_tests;
 mod capture_results_tests;
 #[cfg(test)]
 mod exposure_tests;
+#[cfg(test)]
+mod imaging_tests;
 #[cfg(test)]
 mod pipeline_tests;
 #[cfg(test)]

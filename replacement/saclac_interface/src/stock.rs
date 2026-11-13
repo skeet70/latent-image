@@ -5,6 +5,7 @@ pub mod calculation_result;
 pub mod capture_job;
 pub mod capture_results;
 pub mod exposure;
+pub mod imaging;
 pub mod pipeline;
 pub mod round_image;
 pub mod search;
