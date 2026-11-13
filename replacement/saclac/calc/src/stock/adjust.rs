@@ -146,6 +146,133 @@ pub const SCENE_ADMISSION: Property = Property(0xa7e4);
 /// The extent thresholds by mapped-value band (0xfab454..0xfab47c).
 pub const EXTENT_THRESHOLDS: [Property; 4] = [Property(0x8ba1), Property(0x8ba2), Property(0x8ba3), Property(0x8ba4)];
 
+/// The 24-bit factor's high, middle and low bytes (0xfa659c..0xfa65b4).
+pub const CONFIGURED_FACTOR: [Property; 3] = [Property(0x6399), Property(0x6398), Property(0x6397)];
+/// The drive rate's second factor, its step count and its span (0xfa6958, 0xfa69cc, 0xfa69e4).
+pub const RATE_SECOND_FACTOR: Property = Property(0xa4df);
+pub const RATE_STEPS: Property = Property(0xa49b);
+pub const RATE_SPAN: Property = Property(0xa49c);
+
+/// Table 0xfaaed8: eight policies per group.
+pub const fn policy_setting(policy: u8, second_group: bool) -> Property { Property(0x63a8 + 8 * second_group as u32 + policy as u32) }
+
+/// Tables 0xfab050, 0xfab1f0, 0xfab0b0 and 0xfaafd0: a byte and two settings in tenths per policy.
+pub const fn rate_settings(policy: u8, alternate: bool, kind_two: bool) -> [Property; 3] {
+    let (byte, tenths) = match (alternate, kind_two) {
+        (false, false) => (0x63fc, 0x63ba),
+        (false, true) => (0x6404, 0x63ca),
+        (true, false) => (0x640d, 0x63db),
+        (true, true) => (0x6415, 0x63eb),
+    };
+    let policy = policy as u32;
+    [Property(byte + policy), Property(tenths + 1 + 2 * policy), Property(tenths + 2 * policy)]
+}
+
+/// Read with every policy's settings (0xfa7b70).
+pub const RATE_BASE: Property = Property(0x63b8);
+
+/// The policy flag for selector 1, by the round's mode (0xfa8098..0xfa80ec).
+pub const fn policy_flag_by_mode(mode: u32) -> Property {
+    match mode {
+        5 => Property(0x82bd),
+        6 => Property(0x82bf),
+        7 => Property(0x82ba),
+        _ => Property(0x82be),
+    }
+}
+
+/// The policy flag by sensitivity class (table 0xfaaf18, 22 entries; the rest name none).
+pub const fn policy_flag_by_class(class: u8) -> Option<Property> {
+    match class {
+        2 => Some(Property(0x82b8)),
+        4 => Some(Property(0x82b9)),
+        8 => Some(Property(0x82ba)),
+        9 => Some(Property(0x82bb)),
+        10 | 11 => Some(Property(0x82bc)),
+        _ => None,
+    }
+}
+
+/// The primary scale settings (table 0xfac390, eight entries).
+pub const fn primary_scale(index: u8) -> Option<Property> {
+    if index < 8 { Some(Property(0x133f + index as u32)) } else { None }
+}
+
+/// How 0xfa89fc reads one configuration word.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Reading {
+    /// 0x69f8fc.
+    Byte(Property),
+    /// 0x69fec8.
+    Word(Property),
+    /// 0x69ff7c.
+    SignedWord(Property),
+    /// 0x69ff68.
+    SignedByte(Property),
+    Zero,
+}
+
+/// The configuration words 0xfa89fc stores at +4 of the shot's block, word index first, in its
+/// store order.
+pub const CONFIGURATION_WORDS: [(usize, Reading); 161] = {
+    use Reading::*;
+    [
+    (0, Byte(Property(0x520e))), (1, Byte(Property(0x520f))), (2, Word(Property(0x5210))),
+    (3, Word(Property(0x5212))), (4, Byte(Property(0x5214))), (5, Byte(Property(0x5215))),
+    (6, Word(Property(0x5216))), (7, Word(Property(0x5218))), (8, Byte(Property(0x5201))),
+    (9, Word(Property(0x5202))), (10, Word(Property(0x5204))), (11, Byte(Property(0x5206))),
+    (12, Byte(Property(0x1609a))), (13, Byte(Property(0x1609b))), (14, Byte(Property(0x1609c))),
+    (15, Word(Property(0x521a))), (16, Byte(Property(0x521c))), (17, Byte(Property(0x521d))),
+    (18, Byte(Property(0x1609d))), (19, Byte(Property(0x1609e))), (20, Byte(Property(0x521e))),
+    (21, Byte(Property(0x521f))), (22, Byte(Property(0x5220))), (23, Byte(Property(0x5221))),
+    (24, Byte(Property(0x5222))), (25, Byte(Property(0x5223))), (26, Byte(Property(0x5224))),
+    (27, Word(Property(0x5225))), (28, Byte(Property(0x5227))), (29, Byte(Property(0x5228))),
+    (30, Byte(Property(0x5229))), (31, Word(Property(0x522a))), (32, Word(Property(0x522c))),
+    (33, Byte(Property(0x522e))), (34, Word(Property(0x522f))), (35, Byte(Property(0x5231))),
+    (36, Byte(Property(0x5232))), (37, Byte(Property(0x5233))), (38, Byte(Property(0x5234))),
+    (39, Byte(Property(0x5235))), (40, Word(Property(0x5236))), (41, Byte(Property(0x5238))),
+    (42, Word(Property(0x5239))), (43, Byte(Property(0x523b))), (44, Byte(Property(0x523c))),
+    (45, Byte(Property(0x523d))), (46, Byte(Property(0x523e))), (47, Byte(Property(0x523f))),
+    (48, Byte(Property(0x5240))), (49, Byte(Property(0x5241))), (50, Byte(Property(0x5242))),
+    (51, Byte(Property(0x5243))), (52, Byte(Property(0x5244))), (53, Byte(Property(0x5245))),
+    (54, Byte(Property(0x5246))), (55, Byte(Property(0x5247))), (56, Byte(Property(0x5251))),
+    (58, Byte(Property(0x5252))), (57, Byte(Property(0x5253))), (59, Byte(Property(0x5254))),
+    (60, Byte(Property(0x5255))), (61, Byte(Property(0x5256))), (62, Byte(Property(0x5257))),
+    (63, Byte(Property(0x525d))), (64, Word(Property(0x525e))), (65, Word(Property(0x5260))),
+    (66, Word(Property(0x5262))), (67, Word(Property(0x5264))), (70, Word(Property(0x5268))),
+    (72, Byte(Property(0x526a))), (74, Byte(Property(0x526b))), (76, Byte(Property(0x526c))),
+    (78, Byte(Property(0x526d))), (80, Byte(Property(0x526e))), (82, Byte(Property(0x5284))),
+    (83, Byte(Property(0x5285))), (84, Byte(Property(0x5286))), (85, Byte(Property(0x5287))),
+    (86, Byte(Property(0x5288))), (87, Byte(Property(0x5289))), (88, Byte(Property(0x528c))),
+    (89, Byte(Property(0x528d))), (90, Byte(Property(0x528e))), (91, Byte(Property(0x528f))),
+    (92, Byte(Property(0x5296))), (93, Byte(Property(0x5297))), (94, Byte(Property(0x5298))),
+    (95, Byte(Property(0x5299))), (96, Byte(Property(0x529a))), (97, Byte(Property(0x529b))),
+    (98, Byte(Property(0x529c))), (99, Byte(Property(0x529d))), (100, Byte(Property(0x529e))),
+    (101, Byte(Property(0x529f))), (102, Byte(Property(0x52a0))), (103, Byte(Property(0x52a1))),
+    (104, Byte(Property(0x52a2))), (105, Byte(Property(0x1609f))), (107, Byte(Property(0x160a0))),
+    (109, Byte(Property(0x160a1))), (111, Byte(Property(0x160a2))), (113, Byte(Property(0x160a3))),
+    (115, Byte(Property(0x160a4))), (117, Byte(Property(0x52af))), (118, Byte(Property(0x52b0))),
+    (119, Byte(Property(0x52b1))), (120, Byte(Property(0x52b2))), (121, Byte(Property(0x52b3))),
+    (122, Byte(Property(0x52b4))), (123, Byte(Property(0x160a7))), (124, Byte(Property(0x160a8))),
+    (125, Byte(Property(0x52ca))), (126, Byte(Property(0x52cb))), (127, Byte(Property(0x5258))),
+    (146, Byte(Property(0x52eb))), (147, SignedWord(Property(0x52ec))), (148, SignedByte(Property(0x52ee))),
+    (149, Byte(Property(0x52ef))), (150, Zero), (151, Byte(Property(0x52f0))), (152, Zero),
+    (153, Byte(Property(0x52f1))), (154, Zero), (155, Byte(Property(0x52f2))), (156, Zero),
+    (157, Byte(Property(0x52f3))), (158, Zero), (159, Byte(Property(0x5259))), (160, Byte(Property(0x525a))),
+    (68, Byte(Property(0x5266))), (69, Byte(Property(0x5267))), (71, Word(Property(0x526f))),
+    (73, Byte(Property(0x5271))), (75, Byte(Property(0x5272))), (77, Byte(Property(0x5273))),
+    (79, Byte(Property(0x5274))), (81, Byte(Property(0x5275))), (106, Byte(Property(0x52a9))),
+    (108, Byte(Property(0x52aa))), (110, Byte(Property(0x160a5))), (112, Byte(Property(0x160a6))),
+    (114, Byte(Property(0x52ad))), (116, Byte(Property(0x52ae))), (128, Byte(Property(0x52d9))),
+    (129, Byte(Property(0x52da))), (130, Byte(Property(0x52db))), (131, Byte(Property(0x52dc))),
+    (132, Byte(Property(0x52dd))), (133, Byte(Property(0x52de))), (134, Byte(Property(0x52df))),
+    (135, Byte(Property(0x52e0))), (136, Byte(Property(0x52e1))), (137, Byte(Property(0x52e2))),
+    (138, Byte(Property(0x52e3))), (139, Byte(Property(0x52e4))), (140, Byte(Property(0x52e5))),
+    (141, Byte(Property(0x52e6))), (142, Byte(Property(0x52e7))), (143, Byte(Property(0x52e8))),
+    (144, Byte(Property(0x52e9))), (145, Byte(Property(0x52ea))),
+    ]
+};
+
 fn word(bytes: &[u8], at: usize) -> u32 { u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]) }
 
 fn half(bytes: &[u8], at: usize) -> u16 { u16::from_le_bytes([bytes[at], bytes[at + 1]]) }
