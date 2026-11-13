@@ -1,4 +1,3 @@
-use xm1_saclac_interface::RecordHandle;
 use xm1_saclac_profile_records::MeasurementSelection;
 
 use crate::exposure::context::{CandidateSpan, ExposureContext, StartBound};
@@ -15,7 +14,6 @@ struct FixedLimits {
 
 impl Limits for FixedLimits {
     fn primary_range(&mut self, _: &PrimaryInputs) -> PrimaryRange { self.primary }
-    fn second_result(&mut self, _: RecordHandle) -> u32 { 3 }
     fn selected_program(&mut self, _: &SelectedInputs) -> u32 { 7 }
     fn selected_lenses(&mut self, _: u32, _: u32) -> (u32, u32) { (1, 1) }
     fn selected_level(&mut self, _: u32, _: u32) -> i16 { self.selected_level }

@@ -2,11 +2,11 @@
 //! most eight steps with the capture profile and lens step of each, and the first step the
 //! evaluation spans.
 
-use xm1_saclac_interface::RecordHandle;
 use xm1_saclac_profile_records::stock::record::{group_00, group_13};
 use xm1_saclac_profile_records::stock::shared::group_27;
 use xm1_saclac_profile_records::{IntervalTracking, MeasurementSelection, SharedHeaderByte, WindowStatus};
 
+use crate::adjust::result_dispatch::{self, ResultKind};
 use crate::adjust::scene_settings::{self, RangeInputs, SceneRange, SceneSelection};
 use crate::exposure::context::{CandidateSpan, ExposureContext, ExposureStep, StartBound, PROGRAM_STEPS};
 use crate::exposure::ports::Ports;
@@ -49,7 +49,7 @@ pub struct PrimaryRange {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SelectedInputs {
     pub measurement_selection: MeasurementSelection,
-    pub second_result: u32,
+    pub second_result: ResultKind,
     pub window_status: WindowStatus,
     pub kind: u32,
     pub record_20b0: u32,
@@ -59,8 +59,6 @@ pub struct SelectedInputs {
 pub trait Limits {
     /// 0xf72c3c.
     fn primary_range(&mut self, inputs: &PrimaryInputs) -> PrimaryRange;
-    /// The record's second result code (0xfaaddc).
-    fn second_result(&mut self, record: RecordHandle) -> u32;
     /// 0xf77c8c.
     fn selected_program(&mut self, inputs: &SelectedInputs) -> u32;
     /// The near and far lens steps of a selected program (0xf7809c).
@@ -255,7 +253,7 @@ fn range(ports: &mut impl Ports, limits: &mut impl Limits, context: &ExposureCon
     } else {
         let inputs = SelectedInputs {
             measurement_selection: selection,
-            second_result: limits.second_result(record),
+            second_result: result_dispatch::second_result(ports, record),
             window_status: ports.profile().read_shared(record, &group_27::WINDOW_STATUS),
             kind,
             record_20b0: ports.profile().read(record, &group_13::AT_20B0_4),
