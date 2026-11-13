@@ -18,7 +18,11 @@ module Replacement.ModalRuntime.MenuEnginePair
   , checkStackReader
   , comparePairReader
   , ValueSite (..)
+  , Notification (..)
   , ValueEntries (..)
+  , ValueSegment (..)
+  , ArmRequirement (..)
+  , ValueReport (..)
   , checkValueSeam
   , checkValueSeamObservations
   , checkValueSeamReader
@@ -46,7 +50,7 @@ module Replacement.ModalRuntime.MenuEnginePair
   ) where
 
 import Control.Exception (evaluate)
-import Control.Monad (foldM, forM, forM_, unless, when)
+import Control.Monad (foldM, forM, unless, when)
 import qualified Data.Attoparsec.ByteString.Char8 as A
 import Data.Aeson ((.:), (.:?))
 import qualified Data.Aeson as J
@@ -72,7 +76,7 @@ data Role = StockRole | OwnedRole deriving (Eq, Show)
 -- label is 'OtherSite'.
 data RtcByteIndex = RtcByte0 | RtcByte1 | RtcByte2 | RtcByte3 deriving (Eq, Ord, Show)
 
-data ValueSite = ValueApply | StockValueArm
+data ValueSite = ValueApply | StockValueArm | ValueNotify
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 data Site = StageEntry | KindSwitch | Seek | EventPost | GuardTrap | CalendarSample | RtcCounterByte RtcByteIndex | ValueSite ValueSite | OtherSite T.Text
@@ -92,6 +96,7 @@ parseSite label = case label of
   "rtc-counter-byte-3" -> RtcCounterByte RtcByte3
   "owned-value-apply" -> ValueSite ValueApply
   "stock-value-size-arm" -> ValueSite StockValueArm
+  "value-notify" -> ValueSite ValueNotify
   other -> OtherSite other
 
 -- | One recorded trace hit: site, core, r0-r3, lr, sp and the site's reads at entry.
@@ -464,63 +469,153 @@ comparePair stock owned = do
   unless (posts stock == posts owned)
     (Left ("0x1d posts differ: stock " ++ show (posts stock) ++ ", owned " ++ show (posts owned)))
 
--- | One segment's entries of stock's IMAGE SIZE arm `0xd51b58` and of the owned apply seam.
+-- | One call of stock's menu notification `0xd5b350` as r0 to r3: kind, landed node, event id and
+-- class.
+data Notification = Notification !Word32 !Word32 !Word32 !Word32
+  deriving (Eq, Show)
+
+-- | One segment's entries of stock's IMAGE SIZE arm `0xd51b58` and of the owned apply seam, and its
+-- `0xd5b350` notifications.
 data ValueEntries = ValueEntries
   { stockArmEntries :: !Int
   , ownedApplyEntries :: !Int
+  , notifications :: ![Notification]
   }
   deriving (Eq, Show)
 
+noEntries :: ValueEntries
+noEntries = ValueEntries 0 0 []
+
+-- | Notifications collect newest first; 'inCallOrder' turns a finished segment's into call order.
 countValueEntry :: ValueEntries -> Hit -> Either String ValueEntries
 countValueEntry entries hit = Right $ case hitSite hit of
   ValueSite StockValueArm -> entries {stockArmEntries = stockArmEntries entries + 1}
   ValueSite ValueApply -> entries {ownedApplyEntries = ownedApplyEntries entries + 1}
+  ValueSite ValueNotify ->
+    let (kind, node, ident, class_) = hitRegisters hit
+     in entries {notifications = Notification kind node ident class_ : notifications entries}
   _ -> entries
 
-valueEntries :: Observation -> ValueEntries
-valueEntries observation = either (const (ValueEntries 0 0)) id
-  (foldM countValueEntry (ValueEntries 0 0) (observationHits observation))
+inCallOrder :: ValueEntries -> ValueEntries
+inCallOrder entries = entries {notifications = reverse (notifications entries)}
 
--- | The owned seam replaces stock's IMAGE SIZE arm: in each segment the package is resident, the
--- owned role applies exactly as often as the stock role enters the arm and never enters the arm.
-checkValueSeam :: [(T.Text, ValueEntries)] -> [(T.Text, Residency, ValueEntries)] -> Either String ()
-checkValueSeam stock owned = do
-  unless (map fst stock == [phase | (phase, _, _) <- owned])
+-- | One segment as the value checks read it: its entries and the `live-settings` read at its end,
+-- if the segment has one.
+data ValueSegment = ValueSegment
+  { valuePhase :: !T.Text
+  , valueResidency :: !Residency
+  , valueEntries :: !ValueEntries
+  , valueLiveSettings :: !(Maybe B.ByteString)
+  }
+  deriving (Eq, Show)
+
+-- | Whether the route must enter stock's IMAGE SIZE arm in a resident segment.
+data ArmRequirement = ArmOptional | ArmRequired deriving (Eq, Show)
+
+-- | What the value checks compared over a route: stock arm entries in resident segments, each
+-- matched by one owned apply, and the phases they fell in; `0xd5b350` calls, the same in both
+-- roles; and segments whose live-settings reads both roles made.
+data ValueReport = ValueReport
+  { residentArmEntries :: !Int
+  , armPhases :: ![T.Text]
+  , notificationCalls :: !Int
+  , liveSettingsSegments :: !Int
+  , valueSegments :: !Int
+  }
+  deriving (Eq, Show)
+
+liveSettingsOf :: T.Text -> [(T.Text, B.ByteString)] -> Either String (Maybe B.ByteString)
+liveSettingsOf phase segmentReads = case [bytes | (name, bytes) <- segmentReads, name == "live-settings"] of
+  [] -> Right Nothing
+  [bytes] -> Right (Just bytes)
+  _ -> Left ("read live-settings is repeated in " ++ T.unpack phase)
+
+-- | The owned seam replaces stock's IMAGE SIZE arm and hands every notification to stock. In each
+-- segment the package is resident, the owned role applies exactly as often as the stock role enters
+-- the arm and never enters the arm. In every segment both roles make the same `0xd5b350` calls in
+-- the same order, and either both read the same live settings at its end or neither reads them.
+-- With 'ArmRequired' the stock role enters the arm in at least one resident segment. A failure
+-- lists every failing rule and segment, one per line.
+checkValueSeam :: ArmRequirement -> [ValueSegment] -> [ValueSegment] -> Either String ValueReport
+checkValueSeam requirement stock owned = do
+  unless (map valuePhase stock == map valuePhase owned)
     (Left "the roles' observations have different phases")
-  forM_ (zip stock owned) $ \((phase, stockEntries), (_, residency, ownedEntries)) ->
-    when (residency == EngineResident) $ do
-      unless (stockArmEntries ownedEntries == 0)
-        (Left ("resident value seam executed the replaced IMAGE SIZE arm in " ++ T.unpack phase))
-      unless (ownedApplyEntries ownedEntries == stockArmEntries stockEntries)
-        (Left ("value seam applied " ++ show (ownedApplyEntries ownedEntries) ++ " times where stock entered its IMAGE SIZE arm "
-          ++ show (stockArmEntries stockEntries) ++ " times in " ++ T.unpack phase))
-
-checkValueSeamObservations :: [Observation] -> [Observation] -> Either String ()
-checkValueSeamObservations stock owned = checkValueSeam
-  [(observationPhase observation, valueEntries observation) | observation <- stock]
-  [(observationPhase observation, observationResidency observation, valueEntries observation) | observation <- owned]
-
-checkValueSeamReader :: [ObservationReader] -> [ObservationReader] -> IO (Either String ())
-checkValueSeamReader stock owned = do
-  stockEntries <- mapM entries stock
-  ownedEntries <- mapM entries owned
-  pure $ do
-    counted <- sequence stockEntries
-    countedOwned <- sequence ownedEntries
-    checkValueSeam
-      (zip (map readerPhase stock) counted)
-      (zip3 (map readerPhase owned) (map readerResidency owned) countedOwned)
+  let segments = zip stock owned
+      resident = [left | (left, right) <- segments, valueResidency right == EngineResident]
+      armEntries = sum (map (stockArmEntries . valueEntries) resident)
+      required =
+        [ "IMAGE SIZE arm: the route requires stock's arm 0xd51b58 in a resident segment and stock entered it in none"
+        | requirement == ArmRequired, armEntries == 0 ]
+      failures = concatMap segmentFailures segments ++ required
+  unless (null failures) (Left (unlines failures))
+  pure ValueReport
+    { residentArmEntries = armEntries
+    , armPhases = [valuePhase left | left <- resident, stockArmEntries (valueEntries left) > 0]
+    , notificationCalls = sum [length (notifications (valueEntries left)) | left <- stock]
+    , liveSettingsSegments = length [() | (ValueSegment {valueLiveSettings = Just _}, _) <- segments]
+    , valueSegments = length segments
+    }
  where
-  entries reader = readerFoldHits reader countValueEntry (ValueEntries 0 0)
+  segmentFailures (left, right) =
+    let phase = T.unpack (valuePhase left)
+        stockEntries = valueEntries left
+        ownedEntries = valueEntries right
+        resident = valueResidency right == EngineResident
+     in [ "IMAGE SIZE arm: the resident value seam executed the replaced arm in " ++ phase
+        | resident, stockArmEntries ownedEntries /= 0 ]
+        ++ [ "IMAGE SIZE arm: the owned role applied " ++ show (ownedApplyEntries ownedEntries)
+               ++ " times where stock entered its arm " ++ show (stockArmEntries stockEntries) ++ " times in " ++ phase
+           | resident, ownedApplyEntries ownedEntries /= stockArmEntries stockEntries ]
+        ++ [ "0xd5b350 notifications: in " ++ phase ++ " stock made " ++ show (notifications stockEntries)
+               ++ ", owned " ++ show (notifications ownedEntries)
+           | notifications stockEntries /= notifications ownedEntries ]
+        ++ liveFailures phase (valueLiveSettings left) (valueLiveSettings right)
+  liveFailures phase (Just a) (Just b)
+    | a /= b = ["live settings: the roles' reads differ at the end of " ++ phase ++ firstDifference a b]
+  liveFailures phase (Just _) Nothing = ["live settings: only the stock role reads them in " ++ phase]
+  liveFailures phase Nothing (Just _) = ["live settings: only the owned role reads them in " ++ phase]
+  liveFailures _ _ _ = []
+  firstDifference a b = case [offset | offset <- [0 .. min (B.length a) (B.length b) - 1], B.index a offset /= B.index b offset] of
+    offset : _ -> ", first at byte " ++ show offset ++ ": stock " ++ show (B.index a offset) ++ ", owned " ++ show (B.index b offset)
+    [] -> " in length"
 
--- | Both roles declare stock's IMAGE SIZE arm at `0xd51b58` and the owned role declares its apply
--- seam once, so the seam counts compare declared sites.
+checkValueSeamObservations :: ArmRequirement -> [Observation] -> [Observation] -> Either String ValueReport
+checkValueSeamObservations requirement stock owned = do
+  left <- mapM segmentOf stock
+  right <- mapM segmentOf owned
+  checkValueSeam requirement left right
+ where
+  segmentOf observation = do
+    entries <- foldM countValueEntry noEntries (observationHits observation)
+    live <- liveSettingsOf (observationPhase observation) (observationReads observation)
+    pure (ValueSegment (observationPhase observation) (observationResidency observation) (inCallOrder entries) live)
+
+checkValueSeamReader :: ArmRequirement -> [ObservationReader] -> [ObservationReader] -> IO (Either String ValueReport)
+checkValueSeamReader requirement stock owned = do
+  left <- mapM segmentOf stock
+  right <- mapM segmentOf owned
+  pure $ do
+    stockSegments <- sequence left
+    ownedSegments <- sequence right
+    checkValueSeam requirement stockSegments ownedSegments
+ where
+  segmentOf reader = do
+    folded <- readerFoldHits reader countValueEntry noEntries
+    pure $ do
+      entries <- folded
+      live <- liveSettingsOf (readerPhase reader) (readerReads reader)
+      pure (ValueSegment (readerPhase reader) (readerResidency reader) (inCallOrder entries) live)
+
+-- | Both roles declare stock's IMAGE SIZE arm at `0xd51b58` and its notification at `0xd5b350`
+-- once, and the owned role declares its apply seam once, so the value checks compare declared sites.
 requireValueDeclarations :: Role -> J.Value -> Either String ()
 requireValueDeclarations role = J.parseEither $ J.withObject "e2e result" $ \fields -> do
   declarations <- fields .: "declared_trace_sites" >>= mapM (J.withObject "trace declaration" $ \declaration ->
     (,) <$> (declaration .: "label" :: J.Parser T.Text) <*> (declaration .: "address" :: J.Parser T.Text))
   unless ([address | ("stock-value-size-arm", address) <- declarations] == ["00d51b58"])
     (fail "the trajectory does not declare stock's IMAGE SIZE arm 0x00d51b58 once")
+  unless ([address | ("value-notify", address) <- declarations] == ["00d5b350"])
+    (fail "the trajectory does not declare stock's notification 0x00d5b350 once")
   when (role == OwnedRole) $
     unless (length [() | ("owned-value-apply", _) <- declarations] == 1)
       (fail "the owned trajectory does not declare its value apply seam once")

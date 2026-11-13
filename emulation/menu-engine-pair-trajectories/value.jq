@@ -1,9 +1,10 @@
 # Value-package pair inputs over the controlled-RTC trajectory inventory; run as
 #   jq --arg role stock|owned [--arg route close-pop --arg receipt_source SOURCE] -f value.jq TRAJECTORY
-# Every route declares stock's IMAGE SIZE arm and, in the owned role, the seam that replaces it.
-# With --arg route close-pop, applied to picker-260.ROLE.json, it renders the IMAGE SIZE
-# close-then-pop route on that picker's segment template.
-def value_sites($role): [["00d51b58", "stock-value-size-arm"]]
+# Every route declares stock's IMAGE SIZE arm and stock's menu notification 0x00d5b350 and, in the
+# owned role, the seam that replaces the arm. With --arg route close-pop, applied to
+# picker-260.ROLE.json, it renders the IMAGE SIZE close-then-pop route on that picker's segment
+# template.
+def value_sites($role): [["00d51b58", "stock-value-size-arm"], ["00d5b350", "value-notify", {"lr": true}]]
   + (if $role == "owned" then [["runtime:rb_menu_value_size_apply", "owned-value-apply"]]
      elif $role == "stock" then [] else error("role must be stock or owned") end);
 def close_pop:
@@ -18,7 +19,6 @@ def close_pop:
       {"source": ($ARGS.named.receipt_source // error("close-pop needs --arg receipt_source")), "expectation": "On plain stock with the qualifier's run document every landing of this route matches, and the half-press inside the IMAGE SIZE picker posts stage (2,1,0x1d) and notifies (2,1,0x1d,0xf6)."},
       {"source": "replacement/menu_engine/adapter/mod.rs", "expectation": "Close and Pop reach stock's 0x00d5b350 notification in the owned role."}
     ]
-  | .trace_sites += [["00d5b350", "value-notify", {"lr": true}]]
   | .before_unload = $segments[0:$route] + [
       ($template | .steps = [["ok",1,5,2],["down",1,5,3]]),
       segment("value-open"; [["ok",1,246,0]]),

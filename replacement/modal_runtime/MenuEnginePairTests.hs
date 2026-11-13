@@ -8,10 +8,10 @@ import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson.Types (parseEither)
 import qualified Data.ByteString as B
 import Data.Bits (shiftR)
-import Data.Either (isLeft)
+import Data.Either (isLeft, isRight)
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
-import Data.Word (Word32)
+import Data.Word (Word8, Word32)
 import Replacement.ModalRuntime.MenuEngineClass
 import Replacement.ModalRuntime.MenuEnginePair
 import Replacement.ModalRuntime.MenuEngineTree
@@ -99,6 +99,18 @@ post token = Hit EventPost 0 (0x1d, 0xf6, token, 0xf000) (Just 0xca47f0) Nothing
 arm, apply :: Hit
 arm = Hit (ValueSite StockValueArm) 0 (0, 0, 0, 0) Nothing Nothing [] Nothing Nothing
 apply = Hit (ValueSite ValueApply) 0 (0xf6, 1, 0, 0) Nothing Nothing [] Nothing Nothing
+
+-- | A call of stock's notification with kind, landed node, event id and class.
+notify :: Word32 -> Word32 -> Word32 -> Word32 -> Hit
+notify kind node ident class_ = Hit (ValueSite ValueNotify) 0 (kind, node, ident, class_) (Just 0x00bface4) Nothing [] Nothing Nothing
+
+-- | The segment with a live-settings read of `byte` repeated.
+withLive :: Word8 -> Observation -> Observation
+withLive byte observation = observation {observationReads = observationReads observation ++ [("live-settings", B.replicate 450 byte)]}
+
+valueCheck, requiredCheck :: [Observation] -> [Observation] -> Either String ValueReport
+valueCheck = checkValueSeamObservations ArmOptional
+requiredCheck = checkValueSeamObservations ArmRequired
 
 segment :: [(B.ByteString)] -> [Hit] -> Observation
 segment blocks hits = Observation "picker-keys" EngineResident
@@ -251,31 +263,70 @@ main = do
         , ("a differing 0x1d post fails the pair", isLeft (comparePair [segment [B.replicate 0x430 2] [post 1]] [segment [B.replicate 0x430 2] [post 2]]))
         , ("a missing engine read fails the pair", isLeft (comparePair [segment [] []] [segment [] []]))
         , ("an owned apply for each stock arm entry passes",
-            checkValueSeamObservations [segment [] [arm, arm]] [segment [] [apply, apply]] == Right ())
+            fmap residentArmEntries (valueCheck [segment [] [arm, arm]] [segment [] [apply, apply]]) == Right 2)
         , ("a segment where neither role reaches IMAGE SIZE passes",
-            checkValueSeamObservations [segment [] []] [segment [] []] == Right ())
+            fmap residentArmEntries (valueCheck [segment [] []] [segment [] []]) == Right 0)
         , ("an owned role that never applies where stock entered the arm refuses",
-            isLeft (checkValueSeamObservations [segment [] [arm]] [segment [] []]))
+            isLeft (valueCheck [segment [] [arm]] [segment [] []]))
         , ("an owned apply where stock never entered the arm refuses",
-            isLeft (checkValueSeamObservations [segment [] []] [segment [] [apply]]))
+            isLeft (valueCheck [segment [] []] [segment [] [apply]]))
         , ("the counts compare segment by segment",
-            isLeft (checkValueSeamObservations [segment [] [arm], segment [] []] [segment [] [], segment [] [apply]]))
+            isLeft (valueCheck [segment [] [arm], segment [] []] [segment [] [], segment [] [apply]]))
         , ("the stock arm while resident refuses even after an owned apply",
-            isLeft (checkValueSeamObservations [segment [] [arm]] [segment [] [apply, arm]]))
+            isLeft (valueCheck [segment [] [arm]] [segment [] [apply, arm]]))
         , ("stock value code after unload does not violate resident ownership",
-            checkValueSeamObservations [segment [] [arm], segment [] [arm]] [segment [] [apply], unloaded (segment [] [arm])] == Right ())
+            fmap residentArmEntries (valueCheck [segment [] [arm], segment [] [arm]] [segment [] [apply], unloaded (segment [] [arm])]) == Right 1)
         , ("roles with different segments refuse",
-            isLeft (checkValueSeamObservations [segment [] []] [segment [] [], segment [] []]))
-        , ("both roles must declare stock's IMAGE SIZE arm and the owned role its apply seam",
+            isLeft (valueCheck [segment [] []] [segment [] [], segment [] []]))
+        , ("a route that requires the arm passes with a resident arm entry matched by an apply",
+            fmap residentArmEntries (requiredCheck [segment [] [], segment [] [arm]] [segment [] [], segment [] [apply]]) == Right 1)
+        , ("a route that requires the arm refuses when neither role reaches IMAGE SIZE",
+            isLeft (requiredCheck [segment [] []] [segment [] []]))
+        , ("a route that requires the arm refuses when stock enters it only after unload",
+            isLeft (requiredCheck [segment [] [], segment [] [arm]] [segment [] [], unloaded (segment [] [arm])]))
+        , ("equal notifications in call order pass and are counted",
+            fmap notificationCalls (valueCheck [segment [] [notify 2 1 0x1d 0xf6, notify 0xf 1 0x1a 0x104]]
+              [segment [] [notify 2 1 0x1d 0xf6, notify 0xf 1 0x1a 0x104]]) == Right 2)
+        , ("an owned role that leaves out a notification refuses",
+            isLeft (valueCheck [segment [] [notify 2 1 0x1d 0xf6, notify 0xf 1 0x1a 0x104]] [segment [] [notify 2 1 0x1d 0xf6]]))
+        , ("notifications in another order refuse",
+            isLeft (valueCheck [segment [] [notify 2 1 0x1d 0xf6, notify 0xf 1 0x1a 0x104]]
+              [segment [] [notify 0xf 1 0x1a 0x104, notify 2 1 0x1d 0xf6]]))
+        , ("a notification with another class refuses",
+            isLeft (valueCheck [segment [] [notify 0xf 1 0x1a 0x104]] [segment [] [notify 0xf 1 0x1a 0xf6]]))
+        , ("notifications compare segment by segment",
+            isLeft (valueCheck [segment [] [notify 0xf 1 0x1a 0x104], segment [] []] [segment [] [], segment [] [notify 0xf 1 0x1a 0x104]]))
+        , ("notifications compare after unload too",
+            isLeft (valueCheck [unloaded (segment [] [notify 0xf 1 0x1a 0x104])] [unloaded (segment [] [])]))
+        , ("equal live settings pass and are counted",
+            fmap liveSettingsSegments (valueCheck [withLive 1 (segment [] []), segment [] []] [withLive 1 (segment [] []), segment [] []]) == Right 1)
+        , ("live settings that differ at a segment's end refuse",
+            isLeft (valueCheck [withLive 1 (segment [] [])] [withLive 2 (segment [] [])]))
+        , ("live settings read by one role only refuse",
+            isLeft (valueCheck [withLive 1 (segment [] [])] [segment [] []]) && isLeft (valueCheck [segment [] []] [withLive 1 (segment [] [])]))
+        , ("a repeated live-settings read refuses",
+            isLeft (valueCheck [withLive 1 (withLive 1 (segment [] []))] [withLive 1 (withLive 1 (segment [] []))]))
+        , ("a failure names every failing rule",
+            case valueCheck [withLive 1 (segment [] [notify 0xf 1 0x1a 0x104])] [withLive 2 (segment [] [])] of
+              Left failure -> any ("0xd5b350 notifications:" `T.isPrefixOf`) (T.lines (T.pack failure))
+                && any ("live settings:" `T.isPrefixOf`) (T.lines (T.pack failure))
+              Right _ -> False)
+        , ("a passing check is a report, not a refusal",
+            isRight (valueCheck [withLive 1 (segment [] [arm, notify 4 1 0x1d 0xf6])] [withLive 1 (segment [] [apply, notify 4 1 0x1d 0xf6])]))
+        , ("both roles must declare stock's IMAGE SIZE arm and notification and the owned role its apply seam",
             let declared :: [(T.Text, T.Text)] -> Value
                 declared sites = object ["declared_trace_sites" .= [object ["label" .= label, "address" .= address] | (label, address) <- sites]]
                 armSite = ("stock-value-size-arm", "00d51b58")
+                notifySite = ("value-notify", "00d5b350")
                 applySite = ("owned-value-apply", "00a90000")
-             in requireValueDeclarations StockRole (declared [armSite]) == Right ()
-                  && requireValueDeclarations OwnedRole (declared [armSite, applySite]) == Right ()
-                  && isLeft (requireValueDeclarations OwnedRole (declared [armSite]))
+             in requireValueDeclarations StockRole (declared [armSite, notifySite]) == Right ()
+                  && requireValueDeclarations OwnedRole (declared [armSite, notifySite, applySite]) == Right ()
+                  && isLeft (requireValueDeclarations OwnedRole (declared [armSite, notifySite]))
+                  && isLeft (requireValueDeclarations StockRole (declared [armSite]))
+                  && isLeft (requireValueDeclarations OwnedRole (declared [armSite, applySite]))
+                  && isLeft (requireValueDeclarations StockRole (declared [armSite, ("value-notify", "00d5b354")]))
                   && isLeft (requireValueDeclarations StockRole (declared []))
-                  && isLeft (requireValueDeclarations StockRole (declared [("stock-value-size-arm", "00d51b5c")])))
+                  && isLeft (requireValueDeclarations StockRole (declared [("stock-value-size-arm", "00d51b5c"), notifySite])))
         ]
       failures = [label | (label, passed) <- cases, not passed]
   mapM_ (putStrLn . ("FAIL: " ++)) failures

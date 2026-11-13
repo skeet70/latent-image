@@ -252,6 +252,10 @@ pairs =
   , CaseId "value-close-pop"
   ]
 
+-- | The routes whose stock role must enter the IMAGE SIZE arm while the package is resident.
+valueArmArguments :: CaseId -> [String]
+valueArmArguments name = ["--value-arm-required" | name == CaseId "value-close-pop"]
+
 sha :: String -> Sha256
 sha = either error id . parseSha256Hex
 
@@ -1101,7 +1105,7 @@ runPairCheck name = do
   started <- getMonotonicTimeNSec
   pairStatus <- spawn (binRoot </> "menu-engine-pair-check")
     ([ "--retained-render", "--write-render-receipt", "--tables", tablesPath, "--package-plan", planPath
-     , "--stock", stock, "--owned", owned ]) (check </> "pair-check.log") []
+     , "--stock", stock, "--owned", owned ] ++ valueArmArguments name) (check </> "pair-check.log") []
   settingsStatus <- spawn (binRoot </> "modal-settings-compare")
     [stock, owned, check </> "settings.json"] (check </> "settings.log") []
   let exclusion
@@ -1191,7 +1195,7 @@ runPairCheckCurrent name = do
   mirrorReceipt (roleDirectory name Owned </> "receipt") owned
   pairStatus <- spawn (checkerRoot </> "replacement/modal_runtime/menu-engine-pair-check")
     ([ "--retained-render", "--tables", tablesPath, "--package-plan", planPath
-     , "--stock", stock, "--owned", owned ]) (check </> "pair-check.log") []
+     , "--stock", stock, "--owned", owned ] ++ valueArmArguments name) (check </> "pair-check.log") []
   settingsStatus <- spawn (checkerRoot </> "emulation/modal-settings-compare")
     [stock, owned, check </> "settings.json"] (check </> "settings.log") []
   let exclusion
@@ -1352,7 +1356,7 @@ publish matrix source inputs = do
         ]
     , "failed_case" .= failedCase roles checks
     , "remaining_scope" .= object
-        [ "image_size" .= ("a changed IMAGE SIZE confirmed and then restored elsewhere is not reached: under the run document stock holds token 0x2343 after the change and refuses every later key" :: String)
+        [ "image_size" .= ("token 0 over equal values is the only IMAGE SIZE apply reached; a changed IMAGE SIZE apply and a changed value confirmed and then restored elsewhere are final-pass: under the run document stock refuses the half-press after DOWN inside the IMAGE SIZE picker, and LEFT, OK, BACK and MENU after the change" :: String)
         , "full_matrix" .= (if qualified then "claimed by this matrix" else "not claimed" :: String)
         , "hardware" .= ("not claimed" :: String)
         ]
