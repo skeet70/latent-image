@@ -83,7 +83,7 @@ Aligned allocation, standalone usable-size, mallinfo/mallopt/statistics entries 
 
 Stock allocator entry-body/literal extents total 4,336 bytes, plus 352 bytes of actual move/clear helpers,84 backing-helper bytes and 172 shared lock/unlock bytes. External allocator state is 1,092 bytes; break cursor 4 and recursive owner/depth 8 are separate. The original envelope is `[0xa71a00,0xbf1a00)` /1.5 MiB, with 32-byte guard; the recipe carve lowers the ceiling to `0xbe1a00`, losing 64 KiB. State includes bins at `0x89d4f8`, boundary tags at payload-4, top/remainder/free links, break and lock owner/depth. [Source: Heap survey lines 22,55-67,260-268; E-STOCK-HEAP-SURVEY-150.]
 
-Direct `rlsf` 0.2.3 is selected, not installed. Its measured comparison image is 4,224 text bytes and 5,392 whole-image bytes, including adapters/diagnostics/BSS but **excluding a production stock compatibility bridge**. Its external comparison state is 1,148 bytes. Provision pool/bin configuration before timed operations, establish owned layout/alignment provenance for pointer-only stock free/resize, and establish a task-aware cross-core external lock. Rust must use `GlobalAlloc`/`Allocator` directly over the same backend, not call through stock compatibility. [Source: Heap survey lines 107-118,234-241,260-276; Inventory §8.14 lines 1292-1296; #148.]
+The production cutover uses direct `rlsf` 0.2.3 behind pointer-only stock compatibility and Rust `GlobalAlloc`/`Allocator` front ends over the same backend. Owned prefix metadata carries pointer-only free/resize provenance; charged arena-prefix state is initialized on first use under the retained task-aware recursive RTOS lock. The [cutover report](general-heap-cutover.md) owns placement and the precise interface projection. E-GENERAL-HEAP-CUTOVER-ARTIFACT-150 covers the artifact and host tests; E-GENERAL-HEAP-CUTOVER-NATURAL-PAIR-150 covers the current finite natural pair and executed wrong-binary control.
 
 Other #127 runtime-rank9 families must remain separate:
 
@@ -96,7 +96,7 @@ Other #127 runtime-rank9 families must remain separate:
 
 ### 3. Pieces to fold in
 
-#147 is a defect contract, not implementation: nonnull resize of `[0x7ffffff5,0xffffffff]` returns null/errno12 but leaks recursive depth; replacement must reject before locking and unlock every return. #148 supplies family/ABI/backing recovery, a complete finite no-card trace, direct rlsf selection and admitted ARM replay. No production heap implementation or stock bridge is qualified. #143/#142 belong to different reservation/synchronization families. [Source: Inventory §8.14; E-STOCK-HEAP-RESIZE-LOCK-150; E-STOCK-HEAP-NATURAL-TRACE-150; E-STOCK-HEAP-REPLAY-150; #147/#148.]
+#147 identifies nonnull resize of `[0x7ffffff5,0xffffffff]` returning null/errno12 while leaking recursive depth. The owned allocator rejects before locking. #148 supplies family/ABI/backing recovery, the finite no-card trace and allocator selection; the production bridge is now implemented and conditionally qualified through its retained interface. The [caller-grounded correction table](general-heap-cutover.md#declared-corrections-and-caller-evidence) records checked calloc, resize and trim differences. #143/#142 remain different reservation/synchronization families.
 
 ### 4. Dependencies and unknowns
 
@@ -110,7 +110,7 @@ Heap locking depends on kernel task identity/semaphore services and valid unmask
 
 ### 6. Size, order and blockers
 
-**[INFERENCE]** Best ready large-unit candidate: approximately 4.3 KiB recovered stock allocator code, with a measured 4.2 KiB rlsf comparison implementation and a still-unmeasured production bridge. Implement this before the full RTOS cutover, using one explicit lock boundary, then migrate that backend when the RTOS lands. Blocking facts are complete entry/client/header-reader closure, pointer-only layout provenance, checked calloc/resize contracts, representative failures and concurrent locking. Rank9 pools are not prerequisites for replacing this general heap and should not expand its scope silently. [Grounding: #127 runtime ranks8-9; Heap survey lines 260-276; #148.]
+The first whole-heap cutover is implemented before full RTOS ownership, retaining one explicit RTOS lock boundary and external graphics/service adapters. Current qualification is the finite no-card boot/menu scenario, not complete caller/header-reader closure, cross-core contention or capture/playback. The [final-pass queue](general-heap-cutover.md#final-pass-queue) lists the remaining scenarios and closure obligations. Reservation, file-handle and SQLite pools remain separate ownership units.
 
 ## C. One startup artifact, reset through application readiness
 

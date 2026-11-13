@@ -53,3 +53,15 @@ private-data/scratch/SaclacEngine/runs/20261113T031248Z-saclac8-compare-fn-auto/
 private-data/scratch/SaclacEngine/runs/20261113T031248Z-saclac8-compare-fn-auto/run.json
 private-data/scratch/SaclacEngine/runs/20261113T031450Z-saclac8-final-gate/result
 private-data/scratch/SaclacEngine/runs/20261113T031450Z-saclac8-final-gate/run.json
+private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result
+private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/run.json
+private-data/scratch/GeneralHeap/runs/20261113T053152Z-heap-reviewed-stock-boot/result
+private-data/scratch/GeneralHeap/runs/20261113T053152Z-heap-reviewed-stock-boot/run.json
+private-data/scratch/GeneralHeap/runs/20261113T053155Z-heap-reviewed-owned-boot/result
+private-data/scratch/GeneralHeap/runs/20261113T053155Z-heap-reviewed-owned-boot/run.json
+private-data/scratch/GeneralHeap/runs/20261113T053158Z-heap-traffic-mutant-owned-boot/result
+private-data/scratch/GeneralHeap/runs/20261113T053158Z-heap-traffic-mutant-owned-boot/run.json
+private-data/scratch/GeneralHeap/runs/20261113T053201Z-heap-traffic-mutant-stock-boot/result
+private-data/scratch/GeneralHeap/runs/20261113T053201Z-heap-traffic-mutant-stock-boot/run.json
+private-data/scratch/GeneralHeap/runs/20261113T053100Z-heap-reviewed-staging/result
+private-data/scratch/GeneralHeap/runs/20261113T053100Z-heap-reviewed-staging/run.json

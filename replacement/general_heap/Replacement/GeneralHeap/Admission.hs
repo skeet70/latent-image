@@ -92,9 +92,9 @@ redesignValue item = object ["id" .= redesignId item,"stock" .= stock,"owned" .=
         ,"a realloc request above 0x7ffffff4; stock returns with lock depth one higher than at entry")
       ZeroRequestMinimumAllocation ->
         ("zero-byte malloc takes the minimum 16-byte chunk (12 usable bytes, tag 0x11); realloc(p, 0) at 0x89da80..0x89dad0 rounds the request to 16, does not free and returns p, splitting the chunk only when more than 15 bytes are left over, so a 16..31-byte chunk comes back unshrunk"
-        ,"zero-byte malloc returns the same 12-byte usable extent and tag from rlsf behind a 16-byte owned prefix; realloc(p, 0) returns a live 12-byte allocation that rlsf may move"
+        ,"zero-byte malloc returns the same 12-byte usable extent and tag from rlsf behind a 16-byte owned prefix; realloc(p, 0) shrinks in place and returns p with rlsf 0.2.3"
         ,"the stock tag and usable extent stay readable at payload-4 for retained header readers"
-        ,"a realloc(p, 0) caller relying on the result equalling p, or a zero-byte call whose success or usable extent differs")
+        ,"a zero-byte call whose success or contracted usable extent differs")
       TrimReturnsZero ->
         ("trim may release page-rounded top backing through 0x72b110 and returns 1 when it does"
         ,"trim takes and releases the lock and returns 0 without releasing backing"

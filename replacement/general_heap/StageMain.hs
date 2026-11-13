@@ -8,6 +8,7 @@ import qualified FujiAF.Host as H
 import Replacement.GeneralHeap.Artifact
 import System.Directory (canonicalizePath)
 import System.Environment (getArgs)
+import System.FilePath (makeRelative, takeDirectory)
 
 main :: IO ()
 main = do
@@ -28,5 +29,6 @@ main = do
       B.writeFile outputDat (candidateBytes candidate)
       absolute4 <- canonicalizePath output4
       absolute5 <- canonicalizePath output5
-      L.writeFile outputContract (J.encode (contractValue absolute4 absolute5 staged candidate))
+      contractDirectory <- canonicalizePath (takeDirectory outputContract)
+      L.writeFile outputContract (J.encode (contractValue (makeRelative contractDirectory absolute4) (makeRelative contractDirectory absolute5) staged candidate))
     _ -> H.failH "usage: stage-general-heap ENCODER REBUILD DECODER SOURCE_DAT IMAGE4 IMAGE5 LINKED_BIN SYMBOLS SCRATCH_DIR OUT_IMAGE4 OUT_IMAGE5 OUT_DAT OUT_CONTRACT"

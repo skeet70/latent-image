@@ -100,6 +100,8 @@ Redesign targets define intended behavior independently of the candidate and pre
 
 Record each deliberate correction with the firmware-bound trigger, original behavior, intended behavior, remaining retained boundary and signs that a consumer depends on the defect. If such a dependence appears, fix the consumer or recreate the old behavior at a named compatibility shim with a removal condition.
 
+The [general-heap correction table](../reports/general-heap-cutover.md#declared-corrections-and-caller-evidence) applies this form to checked calloc multiplication, oversized resize locking, capacity rejection before locking, invalid-pointer refusal and fixed-pool trim. Zero-size resize preserves the pointer with the selected backend. Caller evidence is bounded to the X-M1 1.50 image-4/5/6 direct-call census and named graphics/Wi-Fi clients; unresolved computed callers remain final-pass obligations.
+
 When an original or emulated path hangs but its intended functionality is known, qualify that functionality against the intended contract. An equivalent test may cover shared behavior while the original failure remains tracked; it does not establish that the original screen or path works.
 
 Timing, image-quality and numerical tolerances require their own evidence; instruction counts are not physical latency.

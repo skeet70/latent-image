@@ -5,10 +5,31 @@ use heap_state::{Classification, FreeKind};
 #[serde(rename_all = "kebab-case")]
 enum Fault { WrongSizeClass, UnbalancedLock, HeaderCorruption, StockBodyFetch }
 
-/// `allocation` is the creating context and its per-context creation ordinal, so identities survive cross-context reordering.
+#[derive(Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "operation", rename_all = "kebab-case")]
+enum Request {
+    Malloc { bytes: u32 },
+    Free,
+    Realloc { bytes: u32 },
+    Calloc { count: u32, element_bytes: u32 },
+    Trim { pad: u32 },
+}
+
+impl Request {
+    fn bytes(self) -> u64 {
+        match self {
+            Self::Malloc { bytes } | Self::Realloc { bytes } => u64::from(bytes),
+            Self::Calloc { count, element_bytes } => u64::from(count) * u64::from(element_bytes),
+            Self::Trim { pad } => u64::from(pad),
+            Self::Free => 0,
+        }
+    }
+}
+
+/// Allocation identities are the creating context and its creation ordinal.
 #[derive(Deserialize, Eq, PartialEq, Serialize)]
 struct InterfaceCall {
-    operation: Operation, context: ContextKey, request: u64, allocation: Option<(ContextKey, u64)>,
+    operation: Operation, context: ContextKey, request: Request, allocation: Option<(ContextKey, u64)>,
     succeeded: Option<bool>, errno_before: Option<u32>, errno_after: Option<u32>,
 }
 
@@ -33,6 +54,9 @@ pub(super) fn observe(recorder: &mut Recorder, raw: &RawBoundary, role: Role) ->
         let summary = recorder.summary();
         let frame = summary.pending.iter().find(|frame| frame.entry.context == snapshot.context
             && frame.entry.registers[14] == snapshot.pc.0 && frame.entry.registers[13] == snapshot.registers[13]).ok_or("return has no invocation")?;
+        if matches!(frame.operation, Operation::Malloc | Operation::Calloc | Operation::Realloc) && snapshot.registers[0] == 0 {
+            require(snapshot.errno == Some(12), "allocation failure did not report errno 12")?;
+        }
         if matches!(frame.operation, Operation::Malloc | Operation::Free | Operation::Realloc | Operation::Calloc | Operation::Trim)
             && (snapshot.owner, snapshot.depth) != (frame.entry.owner, frame.entry.depth) {
             let resize = frame.operation == Operation::Realloc && frame.entry.registers[1] != 0 && frame.entry.registers[2] > MAX_STOCK_REQUEST;
@@ -102,9 +126,12 @@ fn interfaces(events: &[heap_state::Event]) -> Result<Vec<InterfaceCall>, String
             if !logical(event.classification) && !(*operation == Operation::Trim && roots.contains(invocation)) { continue; }
             if matches!(event.classification, Classification::Free { free_kind: FreeKind::Null, .. }) && !roots.contains(invocation) { continue; }
             let request = match operation {
-                Operation::Malloc => u64::from(entry.registers[1]), Operation::Realloc => u64::from(entry.registers[2]),
-                Operation::Calloc => u64::from(entry.registers[1]) * u64::from(entry.registers[2]),
-                Operation::Trim => u64::from(entry.registers[1]), _ => 0,
+                Operation::Malloc => Request::Malloc { bytes: entry.registers[1] },
+                Operation::Realloc => Request::Realloc { bytes: entry.registers[2] },
+                Operation::Calloc => Request::Calloc { count: entry.registers[1], element_bytes: entry.registers[2] },
+                Operation::Trim => Request::Trim { pad: entry.registers[1] },
+                Operation::Free => Request::Free,
+                _ => return Err("logical call has no heap request contract".into()),
             };
             let pointer = event.snapshot.registers[0];
             let allocation = match operation {
@@ -262,6 +289,15 @@ fn by_context(calls: &[InterfaceCall]) -> BTreeMap<ContextKey, Vec<&InterfaceCal
     grouped
 }
 
+#[derive(Serialize)]
+struct EntryCases { malloc: usize, free: usize, realloc: usize, calloc: usize, trim: usize }
+
+fn entry_cases(calls: &[InterfaceCall]) -> EntryCases {
+    let count = |operation| calls.iter().filter(|call| call.operation == operation).count();
+    EntryCases { malloc: count(Operation::Malloc), free: count(Operation::Free), realloc: count(Operation::Realloc),
+        calloc: count(Operation::Calloc), trim: count(Operation::Trim) }
+}
+
 const MAX_STOCK_REQUEST: u32 = 0x7fff_fff4;
 
 /// The approved redesign a differing stock/owned call falls under.
@@ -269,23 +305,18 @@ fn redesign(stock: &InterfaceCall, owned: &InterfaceCall) -> Option<contract::Re
     if stock.operation != owned.operation || stock.request != owned.request { return None; }
     match stock.operation {
         Operation::Trim => Some(contract::Redesign::TrimReturnsZero),
-        Operation::Calloc if stock.request > u64::from(u32::MAX) => Some(contract::Redesign::CheckedCallocProduct),
-        Operation::Realloc if stock.request > u64::from(MAX_STOCK_REQUEST) => Some(contract::Redesign::OversizedResizeRejectedBeforeLock),
-        Operation::Malloc | Operation::Calloc | Operation::Realloc if stock.request == 0 => Some(contract::Redesign::ZeroRequestMinimumAllocation),
+        Operation::Calloc if stock.request.bytes() > u64::from(u32::MAX) => Some(contract::Redesign::CheckedCallocProduct),
+        Operation::Realloc if stock.request.bytes() > u64::from(MAX_STOCK_REQUEST) => Some(contract::Redesign::OversizedResizeRejectedBeforeLock),
+        Operation::Malloc | Operation::Calloc | Operation::Realloc if stock.request.bytes() == 0 => Some(contract::Redesign::ZeroRequestMinimumAllocation),
         _ => None,
     }
 }
 
 fn first_difference(stock: &[InterfaceCall], owned: &[InterfaceCall]) -> Option<String> {
-    let (stock, owned) = (by_context(stock), by_context(owned));
-    let contexts: BTreeSet<_> = stock.keys().chain(owned.keys()).copied().collect();
-    contexts.into_iter().find_map(|context| {
-        let (left, right) = (stock.get(&context).map_or(&[][..], Vec::as_slice), owned.get(&context).map_or(&[][..], Vec::as_slice));
-        let index = (0..left.len().max(right.len())).find(|index| left.get(*index) != right.get(*index))?;
-        let named = left.get(index).zip(right.get(index)).and_then(|(left, right)| redesign(left, right));
-        Some(format!("stock/owned interface calls differ for {context:?} at call {index}{}",
-            named.map_or(String::new(), |item| format!(" (approved redesign {item:?})"))))
-    })
+    let index = (0..stock.len().max(owned.len())).find(|index| stock.get(*index) != owned.get(*index))?;
+    let named = stock.get(index).zip(owned.get(index)).and_then(|(left, right)| redesign(left, right));
+    Some(format!("stock/owned interface calls differ at ordered call {index}{}",
+        named.map_or(String::new(), |item| format!(" (declared correction {item:?})"))))
 }
 
 pub(super) fn pair(inputs: &Inputs, directory: &Path, output: &Path) -> Result<(), String> {
@@ -293,15 +324,18 @@ pub(super) fn pair(inputs: &Inputs, directory: &Path, output: &Path) -> Result<(
     let owned = consume(inputs, &directory.join("owned"), Role::Owned, None)?;
     if let Some(difference) = first_difference(&stock.calls, &owned.calls) { return Err(difference); }
     require(stock.receipt.menus == owned.receipt.menus, "stock/owned natural menu outcomes differ")?;
+    require(stock.receipt.frame == owned.receipt.frame, "stock/owned rendered frame outcomes differ")?;
     let global_order_identical = stock.calls == owned.calls;
     #[derive(Serialize)]
     struct Comparison<'a> {
         schema: u32, admitted: bool, qualification: &'static str, calls: usize, contexts: usize, global_order_identical: bool,
         stock: NaturalReceipt, owned: NaturalReceipt, observable_realloc_checks: [usize; 2],
+        cases_per_entry: [EntryCases; 2],
         conditional_premises: &'a [String], limitations: [&'static str; 5],
     }
     let comparison = Comparison { schema: 1, admitted: true, qualification: "conditional-natural-no-card-menu-only", calls: stock.calls.len(),
         contexts: by_context(&stock.calls).len(), global_order_identical,
+        cases_per_entry: [entry_cases(&stock.calls), entry_cases(&owned.calls)],
         stock: stock.receipt, owned: owned.receipt, observable_realloc_checks: [stock.payload_checks, owned.payload_checks], conditional_premises: &inputs.contract.premises,
         limitations: [
             "Payload evidence is allocator-origin write confinement for other live requested payloads, plus exact realloc/calloc byte samples only when those calls occur.",
@@ -327,4 +361,51 @@ pub(super) fn controls(inputs: &Inputs, directory: &Path, output: &Path) -> Resu
     }
     OpenOptions::new().create_new(true).write(true).open(output)
         .and_then(|mut file| file.write_all(&serde_json::to_vec_pretty(&refusals).map_err(std::io::Error::other)?)).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn call(task: u32, request: Request) -> InterfaceCall {
+        let operation = match request {
+            Request::Malloc { .. } => Operation::Malloc,
+            Request::Free => Operation::Free,
+            Request::Realloc { .. } => Operation::Realloc,
+            Request::Calloc { .. } => Operation::Calloc,
+            Request::Trim { .. } => Operation::Trim,
+        };
+        InterfaceCall {
+            operation,
+            context: ContextKey { domain: Core(0), task: heap_state::TaskId(task), task_record: Address(task * 56), mode: 0x1f, exception_depth: 0 },
+            request, allocation: None, succeeded: Some(true), errno_before: Some(69), errno_after: Some(69),
+        }
+    }
+
+    #[test]
+    fn reordering_independent_task_calls_is_a_difference() {
+        let stock = [call(33, Request::Malloc { bytes: 4 }), call(72, Request::Malloc { bytes: 8 })];
+        let owned = [call(72, Request::Malloc { bytes: 8 }), call(33, Request::Malloc { bytes: 4 })];
+        assert!(first_difference(&stock, &stock).is_none());
+        assert!(first_difference(&stock, &owned).is_some());
+    }
+
+    #[test]
+    fn calloc_arguments_are_not_collapsed_to_their_product() {
+        let stock = [call(33, Request::Calloc { count: 4, element_bytes: 33 })];
+        let owned = [call(33, Request::Calloc { count: 33, element_bytes: 4 })];
+        assert!(first_difference(&stock, &owned).is_some());
+    }
+
+    #[test]
+    fn missing_call_failure_and_errno_changes_are_differences() {
+        let stock = [call(33, Request::Malloc { bytes: 0 })];
+        assert!(first_difference(&stock, &[]).is_some());
+        let mut owned = [call(33, Request::Malloc { bytes: 0 })];
+        owned[0].succeeded = Some(false);
+        assert!(first_difference(&stock, &owned).is_some());
+        owned[0].succeeded = Some(true);
+        owned[0].errno_after = Some(12);
+        assert!(first_difference(&stock, &owned).is_some());
+    }
 }
