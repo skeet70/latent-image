@@ -249,7 +249,7 @@ saclac's lens children (machines 1, 2 and 35). Its cores take typed events and l
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
-| `live_event`, `s1_event`, `bring_up_event` and `outcome_word` in `src/stock.rs` | guest-memory layout view | the event codes the row functions `0xefd2fc`, `0xf0194c` and `0xefd624` route from machines 11, 4 and 0, and the action return words 0 to 3 | no | the lens children are entered only through `children::LensChildren` from owned routers linked in the same image | required |
+| `live_event`, `s1_event`, `bring_up_event` and `outcome_word` in `src/stock.rs` | guest-memory layout view | the event codes the row functions `0xefd2fc`, `0xf0194c` and `0xefd624` route from machines 11, 3 and 0, and the action return words 0 to 3 | no | the lens children are entered only through `children::LensChildren` from owned routers linked in the same image | required |
 | `reply_call` and `reply_target` in `src/stock.rs` | trampoline into retained stock | the reply entries `0xefb104`, `0xefb194`, `0xefb1dc`, `0xefb604`, `0xefb654`, `0xefb6ac`, `0xefa348` and `0xefa3a8` | no | the client reply layer is owned and takes `ports::Reply` | required |
 
 ## lens_transport

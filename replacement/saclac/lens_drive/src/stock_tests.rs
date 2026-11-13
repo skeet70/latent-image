@@ -1,7 +1,9 @@
-use crate::ports::{DriveDetail, DriveReply, LensFlags, Reply, Status};
+use crate::ports::{DriveDetail, DriveFourth, DrivePolicy, DriveReply, Probe, Probes, Reply, Status};
 use crate::{bring_up, live, s1, stock, Outcome};
 use xm1_saclac_interface::lens::Setting;
 use xm1_saclac_interface::{stock as interface, ClientNotification, CommandKind, Completion as C, ParameterValue as V, ReplyTarget};
+
+const CLEAR: Probes = Probes { bit0: Probe::Clear, bit1: Probe::Clear, bit2: Probe::Clear };
 
 #[test]
 fn the_live_row_codes_route_to_their_events() {
@@ -58,16 +60,20 @@ fn outcomes_and_statuses_keep_their_stock_words() {
 
 #[test]
 fn each_reply_reaches_its_entry_with_the_stock_argument_order() {
-    let drive = Reply::Drive(DriveReply { status: Status::Refused, value: V(5), fourth_not_one: true, detail: DriveDetail::Lens(LensFlags(6)) });
+    let probes = Probes { bit1: Probe::Forced, bit2: Probe::Forced, ..CLEAR };
+    let reply = DriveReply { status: Status::Refused, value: V(5), fourth: DriveFourth::Carried(V(14)), detail: DriveDetail::Lens(probes) };
+    let drive = Reply::Drive(reply);
     let call = stock::reply_call(&drive);
     assert_eq!((call.entry, call.arguments, call.count), (0xefb104, [0xffff_ff9e, 5, 1, 6], 4));
     assert_eq!(stock::reply_target(&drive), ReplyTarget::Command(CommandKind::LensDrive));
-    let select = Reply::Select { status: Status::Done, lens: LensFlags(2), value: V(9) };
+    let corrected = Reply::Drive(DriveReply { fourth: DriveFourth::One, ..reply });
+    assert_eq!(stock::reply_call(&corrected).arguments[2], 0);
+    let select = Reply::Select { status: Status::Done, probes, value: V(9) };
     let call = stock::reply_call(&select);
-    assert_eq!((call.entry, call.arguments, call.count), (0xefb654, [0, 2, 9, 0], 3));
-    let step = Reply::Step { status: Status::Done, lens: LensFlags(1) };
+    assert_eq!((call.entry, call.arguments, call.count), (0xefb654, [0, 6, 9, 0], 3));
+    let step = Reply::Step { status: Status::Done, probes: Probes { bit0: Probe::Forced, ..CLEAR } };
     assert_eq!(stock::reply_target(&step), ReplyTarget::Notification(ClientNotification::Notification1b));
-    assert_eq!(stock::reply_call(&step).entry, 0xefb604);
+    assert_eq!((stock::reply_call(&step).entry, stock::reply_call(&step).arguments[1]), (0xefb604, 1));
     let bring_up = Reply::BringUp { status: Status::Lens(3), values: [V(1), V(2), V(4)] };
     assert_eq!(stock::reply_call(&bring_up).arguments, [3, 1, 2, 4]);
     for (reply, entry, target) in [
@@ -78,5 +84,44 @@ fn each_reply_reaches_its_entry_with_the_stock_argument_order() {
     ] {
         assert_eq!(stock::reply_call(&reply).entry, entry);
         assert_eq!(stock::reply_target(&reply), ReplyTarget::Command(target));
+    }
+}
+
+#[test]
+fn the_reply_flag_word_ors_the_forced_probes() {
+    for (bit0, bit1, bit2, word) in [
+        (Probe::Clear, Probe::Clear, Probe::Clear, 0),
+        (Probe::Forced, Probe::Clear, Probe::Clear, 1),
+        (Probe::Clear, Probe::Forced, Probe::Clear, 2),
+        (Probe::Clear, Probe::Clear, Probe::Forced, 4),
+        (Probe::Forced, Probe::Forced, Probe::Clear, 3),
+        (Probe::Forced, Probe::Clear, Probe::Forced, 5),
+        (Probe::Clear, Probe::Forced, Probe::Forced, 6),
+        (Probe::Forced, Probe::Forced, Probe::Forced, 7),
+        (Probe::Set, Probe::Set, Probe::Set, 0),
+    ] {
+        assert_eq!(stock::reply_flags(Probes { bit0, bit1, bit2 }), word, "{bit0:?} {bit1:?} {bit2:?}");
+    }
+}
+
+#[test]
+fn the_step_reply_flag_word_assigns_bit_zero_over_bit_one() {
+    let both = Probes { bit0: Probe::Forced, bit1: Probe::Forced, ..CLEAR };
+    assert_eq!(stock::step_reply_flags(both), 1);
+    assert_eq!(stock::reply_flags(both), 3);
+    assert_eq!(stock::step_reply_flags(Probes { bit2: Probe::Forced, ..CLEAR }), 4);
+    assert_eq!(stock::step_reply_flags(CLEAR), 0);
+}
+
+#[test]
+fn the_drive_policy_reads_configuration_byte_0x88ef() {
+    for (byte, policy) in [
+        (0, DrivePolicy { always: false, resource_one: false, resource_zero: false }),
+        (8, DrivePolicy { always: true, resource_one: false, resource_zero: false }),
+        (2, DrivePolicy { always: false, resource_one: true, resource_zero: false }),
+        (4, DrivePolicy { always: false, resource_one: false, resource_zero: true }),
+        (0xe, DrivePolicy { always: true, resource_one: true, resource_zero: true }),
+    ] {
+        assert_eq!(stock::drive_policy(byte), policy, "{byte:#x}");
     }
 }

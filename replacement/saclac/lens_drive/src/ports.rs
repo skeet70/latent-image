@@ -60,18 +60,42 @@ pub enum Status {
     Lens(i32),
 }
 
-/// The reply-flag word: bit 0, 1 and 2 for each forced probe.
+/// The LensDrive command's words 1 to 4.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct LensFlags(pub u8);
+pub struct DriveWords {
+    pub value: ParameterValue,
+    pub second: ParameterValue,
+    /// The word the root's cancellation replaces.
+    pub third: ParameterValue,
+    pub fourth: DriveFourth,
+}
+
+/// LensDrive's fourth word: one, or the word the command carried.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DriveFourth { One, Carried(ParameterValue) }
+
+impl DriveWords {
+    pub const fn with_fourth(self, fourth: DriveFourth) -> Self {
+        Self { fourth, ..self }
+    }
+
+    pub const fn parameters(self) -> [ParameterValue; 4] {
+        let fourth = match self.fourth {
+            DriveFourth::One => ParameterValue(1),
+            DriveFourth::Carried(value) => value,
+        };
+        [self.value, self.second, self.third, fourth]
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DriveDetail { Lens(LensFlags), Reported(ParameterValue) }
+pub enum DriveDetail { Lens(Probes), Reported(ParameterValue) }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DriveReply {
     pub status: Status,
     pub value: ParameterValue,
-    pub fourth_not_one: bool,
+    pub fourth: DriveFourth,
     pub detail: DriveDetail,
 }
 
@@ -84,9 +108,9 @@ pub enum Reply {
     /// To Command10's client.
     Stop(Status),
     /// To notification 0x1b's client.
-    Step { status: Status, lens: LensFlags },
+    Step { status: Status, probes: Probes },
     /// To Command2c's client.
-    Select { status: Status, lens: LensFlags, value: ParameterValue },
+    Select { status: Status, probes: Probes, value: ParameterValue },
     /// To Command2d's client.
     Release(Status),
     /// To the LensBringUp command's client.
@@ -105,7 +129,7 @@ pub enum ModeSource { Primary, Secondary, Autofocus }
 /// The command parameter blocks intake fills; word 0 of each holds the client callback.
 pub trait CommandBlocks {
     /// LensDrive's words 1..4.
-    fn drive(&mut self) -> [ParameterValue; 4];
+    fn drive(&mut self) -> DriveWords;
     /// Replaces LensDrive's word 3.
     fn set_drive_third(&mut self, value: ParameterValue);
     /// Cancel's word 1.
@@ -136,10 +160,16 @@ pub trait Records {
     fn prepare_selection(&mut self, record: RecordHandle);
 }
 
-/// Configuration byte 0x88ef: bit 3 always corrects a drive, bit 1 when the record's
-/// resource byte is 1, bit 2 when it is 0.
+/// Configuration byte 0x88ef's drive-correction flags, read by `stock::drive_policy`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DrivePolicy(pub u8);
+pub struct DrivePolicy {
+    /// Bit 3: every drive is corrected.
+    pub always: bool,
+    /// Bit 1: a drive is corrected when the record's resource byte is 1.
+    pub resource_one: bool,
+    /// Bit 2: a drive is corrected when the record's resource byte is 0.
+    pub resource_zero: bool,
+}
 
 pub trait Configuration {
     fn drive_policy(&mut self) -> DrivePolicy;

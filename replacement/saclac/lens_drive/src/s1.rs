@@ -4,9 +4,9 @@
 //! cancellation, stop and reports.
 
 use crate::ports::{CommandBlocks, DriveDetail, DriveReply, DriveResults, Faults, LensControl, LensRequest, Records, Replies, Reply, Status};
-use crate::{flags, parameter_word, Outcome};
+use crate::{parameter_word, Outcome};
 use xm1_saclac_interface::lens::{DriveOwner, LensPayload};
-use xm1_saclac_interface::{Completed, Completion, ParameterValue, RecordHandle};
+use xm1_saclac_interface::{Completed, Completion, RecordHandle};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Event<'a> {
@@ -43,7 +43,7 @@ impl S1Lens {
             (_, Event::Completed(done)) if !matches!(done.completion, Completion::Lens33 | Completion::Lens34) => Outcome::Inactive,
             (State::Idle, Event::CancelDrive) => {
                 let slot = ports.profile_slot(record);
-                let parameters = ports.drive();
+                let parameters = ports.drive().parameters();
                 let payload = LensPayload::Drive { owner: DriveOwner::S1, parameters, slot };
                 if ports.send(LensRequest::new(payload)).is_ok() {
                     self.state = State::Driving;
@@ -82,11 +82,11 @@ impl S1Lens {
                 Outcome::Complete
             }
             (State::Driving, Event::Completed(done)) => {
-                let fourth_not_one = ports.drive()[3] != ParameterValue(1);
+                let words = ports.drive();
                 ports.reply(Reply::Drive(DriveReply {
                     status: Status::Progress,
                     value: parameter_word(done.parameters, 1),
-                    fourth_not_one,
+                    fourth: words.fourth,
                     detail: DriveDetail::Reported(parameter_word(done.parameters, 3)),
                 }));
                 Outcome::Pending
@@ -100,8 +100,10 @@ impl S1Lens {
 }
 
 fn reported(status: Status, ports: &mut impl Ports) -> DriveReply {
-    let value = ports.s1_report();
-    let fourth_not_one = ports.drive()[3] != ParameterValue(1);
-    let lens = flags(ports.probes());
-    DriveReply { status, value, fourth_not_one, detail: DriveDetail::Lens(lens) }
+    DriveReply {
+        status,
+        value: ports.s1_report(),
+        fourth: ports.drive().fourth,
+        detail: DriveDetail::Lens(ports.probes()),
+    }
 }

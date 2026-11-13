@@ -4,7 +4,7 @@
 //! (m1 0xefd2fc, m35 0xf0194c, m2 0xefd624), the words their actions return, and the reply
 //! entries and argument words each reply reaches.
 
-use crate::ports::{DriveDetail, Reply, Status};
+use crate::ports::{DriveDetail, DriveFourth, DrivePolicy, Probe, Probes, Reply, Status};
 use crate::{bring_up, live, s1, Outcome};
 use xm1_saclac_interface::lens::Setting;
 use xm1_saclac_interface::{stock, ClientNotification, CommandKind, Completed, CompletionStatus, Parameters, ReplyTarget};
@@ -33,6 +33,31 @@ pub const fn status(status: Status) -> CompletionStatus {
 fn completed(code: u32, parameters: Parameters<'_>) -> Option<Completed<'_>> {
     let code = u8::try_from(code).ok()?;
     stock::completion(code).map(|completion| Completed { completion, parameters })
+}
+
+/// Configuration byte 0x88ef's drive-correction bits: 0xf0310c tests bit 3, 0xf0311c bit 1 and
+/// 0xf0313c bit 2.
+pub const fn drive_policy(byte: u8) -> DrivePolicy {
+    DrivePolicy { always: byte & 8 != 0, resource_one: byte & 2 != 0, resource_zero: byte & 4 != 0 }
+}
+
+/// The reply flag word. 0xf14ecc, 0xf14f2c, 0xf15000 and 0xf28f4c OR bit 1, bit 0 and bit 2
+/// for the forced probes 0x76d9a8, 0x76da38 and 0x76dba4.
+pub const fn reply_flags(probes: Probes) -> u8 {
+    let mut bits = 0;
+    if matches!(probes.bit1, Probe::Forced) { bits |= 2; }
+    if matches!(probes.bit0, Probe::Forced) { bits |= 1; }
+    if matches!(probes.bit2, Probe::Forced) { bits |= 4; }
+    bits
+}
+
+/// The step reply's flag word: 0xf14fa0 assigns bit 0 where the other replies OR it, so a forced
+/// bit-0 probe clears bit 1.
+pub const fn step_reply_flags(probes: Probes) -> u8 {
+    let mut bits = if matches!(probes.bit1, Probe::Forced) { 2 } else { 0 };
+    if matches!(probes.bit0, Probe::Forced) { bits = 1; }
+    if matches!(probes.bit2, Probe::Forced) { bits |= 4; }
+    bits
 }
 
 /// m1's event for a code `0xefd2fc` routes; `parameters` is the received payload.
@@ -106,15 +131,19 @@ pub fn reply_call(reply: &Reply) -> ReplyCall {
     let (entry, arguments, count) = match *reply {
         Reply::Drive(drive) => {
             let detail = match drive.detail {
-                DriveDetail::Lens(lens) => u32::from(lens.0),
+                DriveDetail::Lens(probes) => u32::from(reply_flags(probes)),
                 DriveDetail::Reported(value) => value.0,
             };
-            (0xefb104, [word(drive.status), drive.value.0, u32::from(drive.fourth_not_one), detail], 4)
+            let fourth = match drive.fourth {
+                DriveFourth::One => 0,
+                DriveFourth::Carried(_) => 1,
+            };
+            (0xefb104, [word(drive.status), drive.value.0, fourth, detail], 4)
         }
         Reply::Cancel(value) => (0xefb194, [word(value), 0, 0, 0], 1),
         Reply::Stop(value) => (0xefb1dc, [word(value), 0, 0, 0], 1),
-        Reply::Step { status: value, lens } => (0xefb604, [word(value), u32::from(lens.0), 0, 0], 2),
-        Reply::Select { status: value, lens, value: selected } => (0xefb654, [word(value), u32::from(lens.0), selected.0, 0], 3),
+        Reply::Step { status: value, probes } => (0xefb604, [word(value), u32::from(step_reply_flags(probes)), 0, 0], 2),
+        Reply::Select { status: value, probes, value: selected } => (0xefb654, [word(value), u32::from(reply_flags(probes)), selected.0, 0], 3),
         Reply::Release(value) => (0xefb6ac, [word(value), 0, 0, 0], 1),
         Reply::BringUp { status: value, values } => (0xefa348, [word(value), values[0].0, values[1].0, values[2].0], 4),
         Reply::LensStop { status: value, value: stopped } => (0xefa3a8, [word(value), stopped.0, 0, 0], 2),

@@ -3,8 +3,7 @@
 //! The lens children behind the controllers' child contract.
 
 use crate::{bring_up, live, s1, Outcome};
-use xm1_saclac_controllers::children::{ChildEvent, ChildOutcome, LensControl, LensSetting};
-use xm1_saclac_interface::lens::Setting;
+use xm1_saclac_controllers::children::{ChildEvent, ChildOutcome, LensControl};
 use xm1_saclac_interface::{CommandKind, Message, RecordHandle};
 
 #[derive(Default)]
@@ -65,9 +64,7 @@ const fn live_control(control: LensControl) -> live::Event<'static> {
     match control {
         LensControl::PrepareDrive => live::Event::PrepareDrive,
         LensControl::CancelDrive => live::Event::Drive(live::DriveOrigin::Cancel),
-        LensControl::Setting(LensSetting::Request04) => live::Event::Setting(Setting::Request04),
-        LensControl::Setting(LensSetting::Request06) => live::Event::Setting(Setting::Request06),
-        LensControl::Setting(LensSetting::Request05) => live::Event::Setting(Setting::Request05),
+        LensControl::Setting(setting) => live::Event::Setting(setting),
         LensControl::Step => live::Event::Step,
     }
 }

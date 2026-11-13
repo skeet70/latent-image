@@ -1,5 +1,5 @@
 use crate::live::{DriveOrigin, Event, LiveLens, Profile};
-use crate::ports::{DriveDetail, DriveReply, DrivePolicy, LensFlags, Probe, Reply, ResourceSelection, Status};
+use crate::ports::{DriveDetail, DriveFourth, DriveReply, DrivePolicy, Probe, Probes, Reply, ResourceSelection, Status};
 use crate::test_ports::{completed, record, Fake, Seen, AUTOFOCUS_MODE, PRIMARY_MODE, SECONDARY_MODE};
 use crate::Outcome::{self, Complete, Fault, Inactive, Pending};
 use std::vec;
@@ -18,8 +18,12 @@ fn drive_sent(ports: &Fake, parameters: [V; 4]) -> Seen {
     Seen::Send(LensPayload::Drive { owner: DriveOwner::Live, parameters, slot: ports.slot })
 }
 
+fn policy(always: bool, resource_one: bool, resource_zero: bool) -> DrivePolicy {
+    DrivePolicy { always, resource_one, resource_zero }
+}
+
 fn correcting() -> Fake {
-    Fake { policy: DrivePolicy(8), shared_bit: true, ..Fake::default() }
+    Fake { policy: policy(true, false, false), shared_bit: true, ..Fake::default() }
 }
 
 #[test]
@@ -86,32 +90,33 @@ fn a_refused_setting_faults_without_the_fault_reaction_and_keeps_the_state() {
 
 #[test]
 fn a_corrected_drive_forces_word_four_and_reports_the_first_word() {
+    let probes = Probes { bit0: Probe::Forced, bit1: Probe::Set, bit2: Probe::Forced };
     let mut lens = LiveLens::new();
-    let mut ports = Fake { probes: crate::ports::Probes { bit0: Probe::Forced, bit1: Probe::Set, bit2: Probe::Forced }, ..correcting() };
+    let mut ports = Fake { probes, ..correcting() };
     assert_eq!(run(&mut lens, &mut ports, Event::Drive(DriveOrigin::Command)), Pending);
     assert_eq!(ports.take(), vec![drive_sent(&ports, [V(11), V(12), V(13), V(1)])]);
     assert_eq!(run(&mut lens, &mut ports, done(C::Lens34)), Complete);
     assert_eq!(ports.take(), vec![Seen::Reply(Reply::Drive(DriveReply {
-        status: Status::Done, value: V(11), fourth_not_one: false, detail: DriveDetail::Lens(LensFlags(5)),
+        status: Status::Done, value: V(11), fourth: DriveFourth::One, detail: DriveDetail::Lens(probes),
     }))]);
 }
 
 #[test]
 fn the_correction_needs_the_policy_and_the_shared_bit() {
     for (policy, resource, shared_bit, corrected) in [
-        (8, ResourceSelection::Other, true, true),
-        (2, ResourceSelection::One, true, true),
-        (2, ResourceSelection::Zero, true, false),
-        (4, ResourceSelection::Zero, true, true),
-        (4, ResourceSelection::One, true, false),
-        (8, ResourceSelection::Other, false, false),
-        (0, ResourceSelection::One, true, false),
+        (policy(true, false, false), ResourceSelection::Other, true, true),
+        (policy(false, true, false), ResourceSelection::One, true, true),
+        (policy(false, true, false), ResourceSelection::Zero, true, false),
+        (policy(false, false, true), ResourceSelection::Zero, true, true),
+        (policy(false, false, true), ResourceSelection::One, true, false),
+        (policy(true, false, false), ResourceSelection::Other, false, false),
+        (policy(false, false, false), ResourceSelection::One, true, false),
     ] {
         let mut lens = LiveLens::new();
-        let mut ports = Fake { policy: DrivePolicy(policy), resource, shared_bit, ..Fake::default() };
+        let mut ports = Fake { policy, resource, shared_bit, ..Fake::default() };
         run(&mut lens, &mut ports, Event::Drive(DriveOrigin::Command));
         let fourth = if corrected { V(1) } else { V(14) };
-        assert_eq!(ports.take(), vec![drive_sent(&ports, [V(11), V(12), V(13), fourth])], "{policy} {resource:?} {shared_bit}");
+        assert_eq!(ports.take(), vec![drive_sent(&ports, [V(11), V(12), V(13), fourth])], "{policy:?} {resource:?} {shared_bit}");
     }
 }
 
@@ -121,28 +126,32 @@ fn a_drive_on_cancellation_keeps_word_four_and_its_end_follows_the_policy() {
     let mut ports = correcting();
     assert_eq!(run(&mut lens, &mut ports, Event::Drive(DriveOrigin::Cancel)), Pending);
     assert_eq!(ports.take(), vec![drive_sent(&ports, [V(11), V(12), V(13), V(14)])]);
-    ports.policy = DrivePolicy(0);
+    ports.policy = policy(false, false, false);
     assert_eq!(run(&mut lens, &mut ports, done(C::Lens37)), Complete);
     assert_eq!(ports.take(), vec![Seen::Reply(Reply::Drive(DriveReply {
-        status: Status::Done, value: V(0x954), fourth_not_one: true, detail: DriveDetail::Lens(LensFlags(0)),
+        status: Status::Done, value: V(0x954), fourth: DriveFourth::Carried(V(14)), detail: DriveDetail::Lens(ports.probes),
     }))]);
 }
 
 #[test]
 fn a_refused_drive_replies_and_stays_idle() {
     let mut lens = LiveLens::new();
-    let mut ports = Fake { refuse: true, drive: [V(11), V(12), V(13), V(1)], ..Fake::default() };
+    let mut ports = Fake {
+        refuse: true,
+        drive: crate::ports::DriveWords { fourth: DriveFourth::One, ..Fake::default().drive },
+        ..Fake::default()
+    };
     assert_eq!(run(&mut lens, &mut ports, Event::Drive(DriveOrigin::Command)), Fault);
     assert_eq!(ports.take(), vec![
         drive_sent(&ports, [V(11), V(12), V(13), V(1)]),
         Seen::Reply(Reply::Drive(DriveReply {
-            status: Status::Refused, value: V(0x954), fourth_not_one: false, detail: DriveDetail::Lens(LensFlags(0)),
+            status: Status::Refused, value: V(0x954), fourth: DriveFourth::One, detail: DriveDetail::Lens(ports.probes),
         })),
     ]);
     let mut ports = Fake { refuse: true, ..correcting() };
     assert_eq!(run(&mut lens, &mut ports, Event::Drive(DriveOrigin::Command)), Fault);
     assert_eq!(ports.take()[1], Seen::Reply(Reply::Drive(DriveReply {
-        status: Status::Refused, value: V(11), fourth_not_one: false, detail: DriveDetail::Lens(LensFlags(0)),
+        status: Status::Refused, value: V(11), fourth: DriveFourth::One, detail: DriveDetail::Lens(ports.probes),
     })));
     ports.refuse = false;
     assert_eq!(run(&mut lens, &mut ports, Event::PrepareDrive), Pending);
@@ -155,6 +164,7 @@ fn a_cancel_while_prepared_becomes_the_drives_third_word() {
     assert_eq!(run(&mut lens, &mut ports, Event::PrepareDrive), Pending);
     assert_eq!(run(&mut lens, &mut ports, Event::Cancel), Pending);
     assert_eq!(ports.take(), vec![Seen::SetDriveThird(V(0x77)), Seen::Reply(Reply::Cancel(Status::Accepted))]);
+    assert_eq!(run(&mut lens, &mut ports, Event::Stop), Complete);
     assert_eq!(run(&mut lens, &mut ports, Event::Stop), Complete);
     assert_eq!(ports.take(), vec![]);
     assert_eq!(run(&mut lens, &mut ports, Event::Drive(DriveOrigin::Command)), Pending);
@@ -197,39 +207,42 @@ fn cancel_and_stop_with_nothing_running_complete_as_unneeded() {
 }
 
 #[test]
-fn a_step_reply_assigns_bit_zero_over_bit_one() {
-    let probes = crate::ports::Probes { bit0: Probe::Forced, bit1: Probe::Forced, bit2: Probe::Forced };
+fn a_step_reply_carries_the_probes_it_read() {
+    let probes = Probes { bit0: Probe::Forced, bit1: Probe::Forced, bit2: Probe::Forced };
     let mut lens = LiveLens::new();
     let mut ports = Fake { probes, ..Fake::default() };
     assert_eq!(run(&mut lens, &mut ports, Event::Step), Pending);
     assert_eq!(run(&mut lens, &mut ports, done(C::Lens35)), Complete);
     assert_eq!(ports.take(), vec![
         Seen::Send(LensPayload::Step(ports.step)),
-        Seen::Reply(Reply::Step { status: Status::Done, lens: LensFlags(5) }),
+        Seen::Reply(Reply::Step { status: Status::Done, probes }),
     ]);
     ports.refuse = true;
     assert_eq!(run(&mut lens, &mut ports, Event::Step), Fault);
-    assert_eq!(ports.take()[1], Seen::Reply(Reply::Step { status: Status::Refused, lens: LensFlags(5) }));
+    assert_eq!(ports.take()[1], Seen::Reply(Reply::Step { status: Status::Refused, probes }));
     ports.refuse = false;
     run(&mut lens, &mut ports, Event::Drive(DriveOrigin::Command));
     run(&mut lens, &mut ports, done(C::Lens34));
-    assert!(matches!(ports.take()[1], Seen::Reply(Reply::Drive(DriveReply { detail: DriveDetail::Lens(LensFlags(7)), .. }))));
+    assert!(matches!(ports.take()[1], Seen::Reply(Reply::Drive(DriveReply { detail: DriveDetail::Lens(read), .. })) if read == probes));
 }
 
 #[test]
 fn a_selection_prepares_the_record_after_its_request_and_releases() {
+    let probes = Probes { bit0: Probe::Clear, bit1: Probe::Forced, bit2: Probe::Clear };
     let mut lens = LiveLens::new();
-    let mut ports = Fake { configured: true, probes: crate::ports::Probes { bit0: Probe::Clear, bit1: Probe::Forced, bit2: Probe::Clear }, ..Fake::default() };
+    let mut ports = Fake { configured: true, probes, ..Fake::default() };
     assert_eq!(run(&mut lens, &mut ports, Event::Select), Pending);
     assert_eq!(run(&mut lens, &mut ports, Event::Release), Pending);
     let payload = [0, 0, 0, 0, 1, 0, 0, 0, 0x2d, 0x3d, 0, 0];
     assert_eq!(run(&mut lens, &mut ports, Event::Completed(completed(C::Lens3d, &payload))), Complete);
+    assert_eq!(run(&mut lens, &mut ports, Event::Release), Complete);
     assert_eq!(ports.take(), vec![
         Seen::Send(LensPayload::Select { value: V(0x2c2c), code: SelectionCode::Configured, record: record() }),
         Seen::PrepareSelection(record()),
         Seen::Send(LensPayload::Release),
         Seen::Reply(Reply::Release(Status::Accepted)),
-        Seen::Reply(Reply::Select { status: Status::Done, lens: LensFlags(2), value: V(0x3d2d) }),
+        Seen::Reply(Reply::Select { status: Status::Done, probes, value: V(0x3d2d) }),
+        Seen::Reply(Reply::Release(Status::Unneeded)),
     ]);
 }
 
@@ -240,7 +253,7 @@ fn a_refused_selection_replies_without_preparing_the_record() {
     assert_eq!(run(&mut lens, &mut ports, Event::Select), Fault);
     assert_eq!(ports.take(), vec![
         Seen::Send(LensPayload::Select { value: V(0x2c2c), code: SelectionCode::Unconfigured, record: record() }),
-        Seen::Reply(Reply::Select { status: Status::Refused, lens: LensFlags(0), value: V(0) }),
+        Seen::Reply(Reply::Select { status: Status::Refused, probes: ports.probes, value: V(0) }),
     ]);
     ports.refuse = false;
     assert_eq!(run(&mut lens, &mut ports, Event::Select), Pending);

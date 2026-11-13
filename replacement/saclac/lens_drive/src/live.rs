@@ -4,10 +4,10 @@
 //! position steps and selections while live processing runs.
 
 use crate::ports::{
-    CommandBlocks, Configuration, DriveDetail, DriveReply, DriveResults, Faults, LensControl, LensRequest, ModeSource,
-    Records, Replies, Reply, ResourceSelection, Status,
+    CommandBlocks, Configuration, DriveDetail, DriveFourth, DriveReply, DriveResults, DriveWords, Faults, LensControl,
+    LensRequest, ModeSource, Records, Replies, Reply, ResourceSelection, Status,
 };
-use crate::{flags, parameter_word, step_flags, Outcome};
+use crate::{parameter_word, Outcome};
 use xm1_saclac_interface::lens::{DriveOwner, LensPayload, SelectionCode, Setting};
 use xm1_saclac_interface::{Completed, Completion, ParameterValue, RecordHandle};
 
@@ -166,10 +166,11 @@ impl LiveLens {
                 pending_if(sent)
             }
             (State::Driving, Event::Completed(done)) if matches!(done.completion, Completion::Lens34 | Completion::Lens37) => {
+                let words = ports.drive();
                 let reply = if corrects(record, ports) {
-                    corrected_reply(Status::Done, ports)
+                    corrected_reply(Status::Done, words.with_fourth(DriveFourth::One), ports)
                 } else {
-                    recorded_reply(Status::Done, ports)
+                    recorded_reply(Status::Done, words, ports)
                 };
                 ports.reply(Reply::Drive(reply));
                 self.finish()
@@ -180,14 +181,14 @@ impl LiveLens {
                     self.state = State::Stepping;
                     Outcome::Pending
                 } else {
-                    let lens = step_flags(ports.probes());
-                    ports.reply(Reply::Step { status: Status::Refused, lens });
+                    let probes = ports.probes();
+                    ports.reply(Reply::Step { status: Status::Refused, probes });
                     Outcome::Fault
                 }
             }
             (State::Stepping, Event::Completed(done)) if done.completion == Completion::Lens35 => {
-                let lens = step_flags(ports.probes());
-                ports.reply(Reply::Step { status: Status::Done, lens });
+                let probes = ports.probes();
+                ports.reply(Reply::Step { status: Status::Done, probes });
                 self.finish()
             }
             (State::Idle, Event::Select) => {
@@ -198,14 +199,15 @@ impl LiveLens {
                     ports.prepare_selection(record);
                     Outcome::Pending
                 } else {
-                    let lens = flags(ports.probes());
-                    ports.reply(Reply::Select { status: Status::Refused, lens, value: ParameterValue(0) });
+                    let probes = ports.probes();
+                    ports.reply(Reply::Select { status: Status::Refused, probes, value: ParameterValue(0) });
                     Outcome::Fault
                 }
             }
             (State::Selecting, Event::Completed(done)) if done.completion == Completion::Lens3d => {
-                let lens = flags(ports.probes());
-                ports.reply(Reply::Select { status: Status::Done, lens, value: parameter_word(done.parameters, 2) });
+                let probes = ports.probes();
+                let value = parameter_word(done.parameters, 2);
+                ports.reply(Reply::Select { status: Status::Done, probes, value });
                 self.finish()
             }
             (State::Idle, Event::Release) => {
@@ -248,16 +250,14 @@ impl LiveLens {
     fn drive(&mut self, origin: DriveOrigin, record: RecordHandle, ports: &mut impl Ports) -> Outcome {
         let corrected = origin == DriveOrigin::Command && corrects(record, ports);
         let slot = ports.profile_slot(record);
-        let mut parameters = ports.drive();
-        if corrected {
-            parameters[3] = ParameterValue(1);
-        }
-        let payload = LensPayload::Drive { owner: DriveOwner::Live, parameters, slot };
+        let words = ports.drive();
+        let sent = if corrected { words.with_fourth(DriveFourth::One) } else { words };
+        let payload = LensPayload::Drive { owner: DriveOwner::Live, parameters: sent.parameters(), slot };
         if ports.send(LensRequest::new(payload)).is_ok() {
             self.state = State::Driving;
             return Outcome::Pending;
         }
-        let reply = if corrected { corrected_reply(Status::Refused, ports) } else { recorded_reply(Status::Refused, ports) };
+        let reply = if corrected { corrected_reply(Status::Refused, sent, ports) } else { recorded_reply(Status::Refused, words, ports) };
         ports.reply(Reply::Drive(reply));
         Outcome::Fault
     }
@@ -278,25 +278,20 @@ const fn pending_if(sent: Result<(), crate::ports::Refused>) -> Outcome {
 /// Whether a drive's fourth word is forced to 1, and its end reported with the command's first
 /// word.
 fn corrects(record: RecordHandle, ports: &mut impl Ports) -> bool {
-    let policy = ports.drive_policy().0;
-    let applies = policy & 8 != 0
+    let policy = ports.drive_policy();
+    let applies = policy.always
         || match ports.resource_selection(record) {
-            ResourceSelection::One => policy & 2 != 0,
-            ResourceSelection::Zero => policy & 4 != 0,
+            ResourceSelection::One => policy.resource_one,
+            ResourceSelection::Zero => policy.resource_zero,
             ResourceSelection::Other => false,
         };
     applies && ports.shared_drive_bit()
 }
 
-fn corrected_reply(status: Status, ports: &mut impl Ports) -> DriveReply {
-    let value = ports.drive()[0];
-    let lens = flags(ports.probes());
-    DriveReply { status, value, fourth_not_one: false, detail: DriveDetail::Lens(lens) }
+fn corrected_reply(status: Status, words: DriveWords, ports: &mut impl Ports) -> DriveReply {
+    DriveReply { status, value: words.value, fourth: words.fourth, detail: DriveDetail::Lens(ports.probes()) }
 }
 
-fn recorded_reply(status: Status, ports: &mut impl Ports) -> DriveReply {
-    let value = ports.live_result();
-    let fourth_not_one = ports.drive()[3] != ParameterValue(1);
-    let lens = flags(ports.probes());
-    DriveReply { status, value, fourth_not_one, detail: DriveDetail::Lens(lens) }
+fn recorded_reply(status: Status, words: DriveWords, ports: &mut impl Ports) -> DriveReply {
+    DriveReply { status, value: ports.live_result(), fourth: words.fourth, detail: DriveDetail::Lens(ports.probes()) }
 }

@@ -1,6 +1,6 @@
 use crate::ports::{
-    CommandBlocks, Configuration, DrivePolicy, DriveResults, Faults, LensControl, LensRequest, ModeSource, Probe, Probes,
-    Records, Refused, Replies, Reply, ResourceIndex, ResourceSelection,
+    CommandBlocks, Configuration, DriveFourth, DrivePolicy, DriveResults, DriveWords, Faults, LensControl, LensRequest,
+    ModeSource, Probe, Probes, Records, Refused, Replies, Reply, ResourceIndex, ResourceSelection,
 };
 use std::vec::Vec;
 use xm1_saclac_interface::lens::{LensMode, LensPayload, PositionStep, ProfileSlotReference};
@@ -21,7 +21,7 @@ pub struct Fake {
     pub effects_require_contract: bool,
     pub refuse: bool,
     pub probes: Probes,
-    pub drive: [ParameterValue; 4],
+    pub drive: DriveWords,
     pub cancel: ParameterValue,
     pub step: PositionStep,
     pub selection: ParameterValue,
@@ -44,7 +44,12 @@ impl Default for Fake {
             effects_require_contract: true,
             refuse: false,
             probes: Probes { bit0: Probe::Clear, bit1: Probe::Clear, bit2: Probe::Clear },
-            drive: [ParameterValue(11), ParameterValue(12), ParameterValue(13), ParameterValue(14)],
+            drive: DriveWords {
+                value: ParameterValue(11),
+                second: ParameterValue(12),
+                third: ParameterValue(13),
+                fourth: DriveFourth::Carried(ParameterValue(14)),
+            },
             cancel: ParameterValue(0x77),
             step: PositionStep(-3),
             selection: ParameterValue(0x2c2c),
@@ -53,7 +58,7 @@ impl Default for Fake {
             slot: ProfileSlotReference(0x8100_0042),
             resource: ResourceSelection::Other,
             shared_bit: false,
-            policy: DrivePolicy(0),
+            policy: DrivePolicy { always: false, resource_one: false, resource_zero: false },
             configured: false,
             index: ResourceIndex(2),
             live_result: ParameterValue(0x954),
@@ -91,9 +96,9 @@ impl Replies for Fake {
 }
 
 impl CommandBlocks for Fake {
-    fn drive(&mut self) -> [ParameterValue; 4] { self.drive }
+    fn drive(&mut self) -> DriveWords { self.drive }
     fn set_drive_third(&mut self, value: ParameterValue) {
-        self.drive[2] = value;
+        self.drive.third = value;
         self.seen.push(Seen::SetDriveThird(value));
     }
     fn cancel(&mut self) -> ParameterValue { self.cancel }

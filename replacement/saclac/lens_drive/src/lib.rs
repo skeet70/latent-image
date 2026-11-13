@@ -27,7 +27,6 @@ mod stock_tests;
 #[cfg(test)]
 mod test_ports;
 
-use ports::{LensFlags, Probe, Probes};
 use xm1_saclac_interface::{ParameterValue, Parameters};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -37,23 +36,6 @@ pub enum Outcome {
     /// The child has no entry for the event.
     Inactive,
     Fault,
-}
-
-fn flags(probes: Probes) -> LensFlags {
-    let mut bits = 0;
-    if probes.bit1 == Probe::Forced { bits |= 2; }
-    if probes.bit0 == Probe::Forced { bits |= 1; }
-    if probes.bit2 == Probe::Forced { bits |= 4; }
-    LensFlags(bits)
-}
-
-/// The step replies' flags: X-M1 1.50 0xf14fa0 assigns bit 0 where the other replies OR it,
-/// so a forced bit-0 probe clears bit 1.
-fn step_flags(probes: Probes) -> LensFlags {
-    let mut bits = if probes.bit1 == Probe::Forced { 2 } else { 0 };
-    if probes.bit0 == Probe::Forced { bits = 1; }
-    if probes.bit2 == Probe::Forced { bits |= 4; }
-    LensFlags(bits)
 }
 
 /// A completion's payload word; zero past the payload's end.
