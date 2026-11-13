@@ -42,6 +42,7 @@ import Emulation.OwnedCase
 import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.Host (get)
 import FujiAF.JSON (encodeCanonical)
+import Numeric (showHex)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
@@ -277,11 +278,12 @@ pairCohort =
        , Pair 12 0x2c (0, 0, 1) 0x00c2d924 False
        ]
 
+-- | A native case id: at most 64 characters with the role suffix.
 pairName :: Pair -> String
 pairName pair =
   let (size, aspect, third) = pairStored pair
-  in "pair-token" ++ show (pairToken pair) ++ "-mode" ++ hexWord32 (pairMode pair)
-       ++ "-stored" ++ concatMap show [size, aspect, third] ++ "-caller" ++ hexWord32 (pairCaller pair)
+  in "pair-t" ++ show (pairToken pair) ++ "-m" ++ showHex (pairMode pair) ""
+       ++ "-s" ++ concatMap show [size, aspect, third] ++ "-c" ++ showHex (pairCaller pair) ""
 
 -- | The owned role, or the stock role when no seam image is given. An owned
 -- role traps the stock arm when the token is offered, so a declining seam
