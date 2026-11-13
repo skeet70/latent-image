@@ -2,11 +2,22 @@
 //! view and at capture, the frames it notes to tell when the scene changed, and the histories its
 //! votes settle by.
 
+pub mod detectors;
+pub mod frame;
 pub mod history;
 pub mod ports;
+pub mod vote;
 
 #[cfg(test)]
+mod detector_tests;
+#[cfg(test)]
+mod fakes;
+#[cfg(test)]
+mod frame_tests;
+#[cfg(test)]
 mod state_tests;
+#[cfg(test)]
+mod vote_tests;
 
 use xm1_saclac_interface::calc::SharedAddress;
 
@@ -183,7 +194,8 @@ pub struct Choices {
     pub recorded: u8,
     pub held: u8,
     pub released: bool,
-    pub forced: bool,
+    /// The snapshot vote last found no change.
+    pub unchanged: bool,
     pub tally: Tally,
 }
 
@@ -196,7 +208,7 @@ impl Choices {
         recorded: 0,
         held: 0,
         released: false,
-        forced: false,
+        unchanged: false,
         tally: Tally::ZERO,
     };
 }
@@ -236,11 +248,12 @@ impl LensDetectors {
     pub const ZERO: Self = Self { matched: false, match_direction: 0, lens_moved: false, lens_direction: 0, lens_changed: false };
 }
 
-/// Whether the rate filter applied to the group and whether the candidate passed it.
+/// The rate filter's tests that passed: the position test, and the level test that admits the
+/// group.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct FilterOutcome {
-    pub enabled: bool,
-    pub passed: bool,
+    pub position: bool,
+    pub level: bool,
 }
 
 /// The live vote's last decisions as the capture dump reads them.
@@ -249,7 +262,8 @@ pub struct Trace {
     pub query: Scene,
     pub option: u32,
     pub candidate: Scene,
-    pub recorded: u32,
+    /// The state's ready mark, which a reset sets.
+    pub ready: bool,
     /// The group hints recorded with each noted frame.
     pub hints: History<Code>,
     pub filtered: Scene,
@@ -267,14 +281,14 @@ impl Trace {
         query: Scene::AUTO,
         option: 0,
         candidate: Scene::AUTO,
-        recorded: 0,
+        ready: false,
         hints: History::filled(Code::ZERO),
         filtered: Scene::AUTO,
         earlier_candidate: Scene::AUTO,
         earlier_filtered: Scene::AUTO,
         selection: Scene::AUTO,
         flags: SceneFlags::NONE,
-        filter: FilterOutcome { enabled: false, passed: false },
+        filter: FilterOutcome { position: false, level: false },
         detectors: LensDetectors::ZERO,
         promoted: Recognition::AUTO,
     };
@@ -286,7 +300,7 @@ pub struct CaptureTrace {
     pub query: Scene,
     pub option: u32,
     pub candidate: Scene,
-    pub recorded: u32,
+    pub ready: bool,
     pub detectors: LensDetectors,
     pub group: Scene,
     pub hint: Scene,
@@ -300,7 +314,7 @@ impl CaptureTrace {
         query: Scene::AUTO,
         option: 0,
         candidate: Scene::AUTO,
-        recorded: 0,
+        ready: false,
         detectors: LensDetectors::ZERO,
         group: Scene::AUTO,
         hint: Scene::AUTO,

@@ -2,7 +2,8 @@
 
 use xm1_saclac_interface::calc::SharedAddress;
 
-use super::{Grid, Recognition, Scene, SceneFlags, CELLS};
+use super::{read_grid, Grid, Recognition, Scene, SceneFlags, SceneRecognition, CELLS};
+use crate::exposure::ports::StockMemory;
 use crate::stock::scene_recognition::CODED_SCENES;
 
 /// A recognition as the history lists hold it: an index into the 29 coded scenes plus 29 times
@@ -131,19 +132,23 @@ impl SnapshotComparison {
 
 /// The code most frequent among the latest `window` entries, the newer of equally frequent codes;
 /// AUTO without flags while fewer than `window` are recorded (0xf4d790).
-pub fn majority(entries: &[Option<Code>], window: usize) -> Recognition {
-    let Some(Some(_)) = entries.get(window - 1) else { return Recognition::AUTO };
+pub fn majority(entries: &[Option<Code>], window: usize) -> Recognition { leading(entries, window).map_or(Recognition::AUTO, |(_, code)| code.recognition()) }
+
+/// The majority's code and the newest entry holding it (0xf50914..0xf50994).
+pub(crate) fn leading(entries: &[Option<Code>], window: usize) -> Option<(usize, Code)> {
+    let Some(Some(_)) = entries.get(window - 1) else { return None };
     let mut counts = [0u8; 116];
-    let mut best = Code(0);
-    for code in entries[..window].iter().rev().flatten() {
+    let mut best = (0, Code(0));
+    for (index, code) in entries[..window].iter().enumerate().rev() {
+        let Some(code) = code else { continue };
         let count = &mut counts[usize::from(code.0)];
         *count = count.wrapping_add(1);
         let count = *count;
-        if counts[usize::from(best.0)] <= count {
-            best = *code;
+        if counts[usize::from(best.1 .0)] <= count {
+            best = (index, *code);
         }
     }
-    best.recognition()
+    Some(best)
 }
 
 /// Pushes `entry` in front of `entries`, dropping the oldest.
@@ -151,4 +156,41 @@ pub fn push_front<T: Copy>(entries: &mut [T], entry: T) {
     let last = entries.len() - 1;
     entries.copy_within(..last, 1);
     entries[0] = entry;
+}
+
+impl SceneRecognition {
+    /// Records `recognition` in the primary codes and copies them to the secondary codes
+    /// (0xf4d8bc).
+    pub(crate) fn record_code(&mut self, recognition: Recognition) {
+        let code = Code::of(recognition);
+        if code.recordable() {
+            self.primary_codes.record(code);
+        }
+        self.secondary_codes = self.primary_codes;
+    }
+
+    /// Notes the frame as a reference with `recognition`, makes the primary codes the reference
+    /// codes, and records the group hint (0xf4d968). Without a source the note's grid is zero.
+    pub(crate) fn note_reference(&mut self, memory: &mut impl StockMemory, recognition: Recognition) {
+        let code = Code::of(recognition);
+        if code.recordable() {
+            let comparison = &self.evaluation.against_reference;
+            let features = &self.evaluation.features;
+            let grid = comparison.source.map_or([0; CELLS], |source| read_grid(memory, source));
+            let note = FrameNote {
+                grid,
+                position: comparison.position,
+                subject: features.subjects != 0,
+                reference: features.reference,
+                motion: comparison.motion,
+                stationary: comparison.stationary.stationary,
+            };
+            self.references.record(KeyRecord { code, note });
+        }
+        self.primary_codes = self.references.map(|record| record.code);
+        self.live_trace.hints.record(Code::of(Recognition { scene: self.group_hint, flags: SceneFlags::NONE }));
+    }
+
+    /// 0xf4dea4.
+    pub(crate) fn push_comparison(&mut self) { push_front(&mut self.comparisons, self.evaluation.against_reference); }
 }
