@@ -1,17 +1,17 @@
-//! The motion layer's state: the dump-frame section it traces into, the lens's drive kind, the
-//! frame timing, the area sampling and the planned drive.
+//! The motion layer's state: what a run's preparation read and decided, the dump-frame section it
+//! traces into, the area sampling and the planned drive.
 
 use xm1_saclac_interface::calc::SharedAddress;
 
-use crate::adjust::motion::drive::{DriveKind, DriveProfile};
-use crate::adjust::motion::ports::Ticks;
+use crate::adjust::motion::drive::DriveProfile;
+use crate::adjust::motion::exposure::{FrameExposure, Program};
+use crate::adjust::motion::plan::Plan;
+use crate::adjust::motion::ports::{SearchBounds, Ticks};
+use crate::adjust::motion::preparation::PreviousFocus;
+use crate::adjust::motion::readings::{AreaList, RecordReadings, StepLimits};
 use crate::adjust::motion::sampling::{PRIMARY_AREAS, SECONDARY_AREAS};
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct Timing {
-    /// Microseconds per frame.
-    pub frame_period: u32,
-}
+use crate::adjust::motion::search::SearchSetup;
+use crate::adjust::motion::statistics::Statistics;
 
 /// When each area is exposed relative to its frame.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -71,15 +71,39 @@ pub struct Drive {
     pub checks_peak: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// The two frame exposures a preparation computes: the first corrected to the second's lens
+/// step, the second the run's frames follow.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct FrameExposures {
+    pub first: FrameExposure,
+    pub second: FrameExposure,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MotionState {
     /// The focus section of the client's dump frame.
     pub(crate) section: SharedAddress,
     /// The contrast results in the client's dump frame.
     pub(crate) results: SharedAddress,
     pub(crate) prepared_at: Ticks,
-    pub(crate) drive_kind: DriveKind,
-    pub(crate) timing: Timing,
+    pub(crate) readings: RecordReadings,
+    pub(crate) limits: StepLimits,
+    pub(crate) search: SearchSetup,
+    /// The listed areas in the search profile's frame; a treated run's in its second exposure's.
+    pub(crate) areas: AreaList,
+    pub(crate) exposures: FrameExposures,
+    pub(crate) program: Program,
+    pub(crate) previous: PreviousFocus,
+    pub(crate) bounds: SearchBounds,
+    pub(crate) statistics: Statistics,
+    /// Configuration bytes a treated run samples with; zero for the others.
+    pub(crate) treated_settings: [u8; 4],
+    pub(crate) plan: Plan,
     pub(crate) sampling: SampleSchedule,
     pub(crate) drive: Drive,
+}
+
+impl MotionState {
+    /// Microseconds per frame.
+    pub fn frame_period(&self) -> u32 { self.exposures.second.time }
 }

@@ -116,12 +116,12 @@ pub struct ExposureInputs<'a> {
 fn tenths(properties: &mut impl Properties, id: Property) -> i16 { settings::tenths(properties, id) as i16 }
 
 /// Ten times the linear factor of `-value` when it is negative, else 10 (0xf97100).
-fn negative_scale(scale: &mut impl LevelScale, value: i16) -> u16 {
+pub(crate) fn negative_scale(scale: &mut impl LevelScale, value: i16) -> u16 {
     if value >= 0 { 10 } else { (scale.linear(value.wrapping_neg()) / 10) as u16 }
 }
 
 /// Ten times the linear factor of `value` when it is not negative, else 10 (0xf97138).
-fn positive_scale(scale: &mut impl LevelScale, value: i16) -> u16 {
+pub(crate) fn positive_scale(scale: &mut impl LevelScale, value: i16) -> u16 {
     if value < 0 { 10 } else { (scale.linear(value) / 10) as u16 }
 }
 

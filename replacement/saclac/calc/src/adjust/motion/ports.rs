@@ -78,3 +78,83 @@ pub trait MeasurementReadings {
     /// The indexed selection value for `lens` (0xf51b50).
     fn selection_value(&mut self, record: RecordHandle, lens: u32) -> u32;
 }
+
+/// What image 4's lens bounds are read for (0x74c568 with its fixed arguments 0, 1, 0 and 1).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct BoundsQuery {
+    pub lens: u32,
+    pub scene: u8,
+    pub channel: u8,
+    pub class: u8,
+    pub step: u32,
+    pub reference: u32,
+    pub held: u8,
+    pub lens_state: u32,
+}
+
+/// The lens positions a search may drive between.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SearchBounds {
+    pub low: i16,
+    pub high: i16,
+}
+
+pub trait LensBounds {
+    fn search_bounds(&mut self, query: &BoundsQuery) -> SearchBounds;
+}
+
+/// The library's common logarithm (0xee996c).
+pub trait Logarithms10 {
+    fn log10(&mut self, value: f32) -> f32;
+}
+
+/// A grid of equal cells the geometry layer lays over a capture frame.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AreaGrid {
+    pub cell_height: u32,
+    pub cell_width: u32,
+    pub left: u32,
+    pub top: u32,
+    pub gap_horizontal: u16,
+    pub gap_vertical: u16,
+    pub columns: u8,
+    pub rows: u8,
+    pub at_16: [u8; 2],
+}
+
+/// The search profile's frame grids: the configured column and row counts and two configured
+/// sizes, and the first listed area with its class.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SearchFrameRequest {
+    pub grid: [u16; 4],
+    pub area: Option<(crate::adjust::motion::readings::ListedArea, u8)>,
+}
+
+/// The capture parameters a frame's statistics area is laid out for.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct StatisticsFrameRequest {
+    pub profile: u32,
+    pub lens: u32,
+    pub row_scale: [u16; 2],
+    pub selection_value: u32,
+    pub at_0164: u32,
+    pub at_0168: u32,
+}
+
+/// ProfileGeometry's frame layouts (0xeda668) and profile tables.
+pub trait FrameGeometry {
+    /// The two grids of the search profile's frame (0xeda668 with flags 0x81).
+    fn search_frames(&mut self, request: &SearchFrameRequest) -> [AreaGrid; 2];
+    /// The height and width of the statistics area at 100 percent with 16-pixel cells
+    /// (0xeda668 with flags 2).
+    fn statistics_frame(&mut self, request: &StatisticsFrameRequest) -> [u32; 2];
+    /// `value` scaled by the profile template's expansion ratio (0xef5658).
+    fn expanded_ratio(&mut self, value: u32) -> u32;
+    /// The profile's feature class (0xef53d0).
+    fn feature_class(&mut self, profile: u32) -> u8;
+}
+
+/// Image 4's rate of a lens channel, in events per second (0x749e40).
+pub trait ChannelRates {
+    fn channel_rate(&mut self, lens: u32, channel: u8) -> u32;
+}
