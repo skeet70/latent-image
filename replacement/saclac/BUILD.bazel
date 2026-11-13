@@ -158,6 +158,14 @@ genrule(
     tools = ["@lab_llvm//:bin/llvm-readelf"],
 )
 
+genrule(
+    name = "saclac-image-wrong-driver-store-sections",
+    srcs = [":saclac-image-wrong-driver-store.elf"],
+    outs = ["saclac-image-wrong-driver-store.sections"],
+    cmd = "$(location @lab_llvm//:bin/llvm-readelf) -S $(location :saclac-image-wrong-driver-store.elf) > $@",
+    tools = ["@lab_llvm//:bin/llvm-readelf"],
+)
+
 haskell_library(
     name = "saclac-artifact",
     srcs = ["Replacement/Saclac/Artifact.hs"],
@@ -258,7 +266,7 @@ haskell_binary(
     main_file = "InterfaceCompareMain.hs",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
-        "//emulation:judge-lib",
+        ":saclac-artifact",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

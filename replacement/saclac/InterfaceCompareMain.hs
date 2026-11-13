@@ -6,14 +6,13 @@ import Data.Aeson
 import qualified Data.Aeson.Types as J
 import qualified Data.ByteString.Lazy as L
 import Data.Char (isHexDigit)
-import Data.List (find, findIndex)
+import Data.List (find)
 import qualified Data.Text as Text
 import Data.Word (Word8, Word16, Word32)
-import qualified Emulation.Judge as Judge
 import qualified FujiAF.Host as H
 import System.Environment (getArgs)
-import System.Exit (exitWith)
 import Text.Read (readMaybe)
+import qualified Replacement.Saclac.Artifact as Artifact
 
 newtype Address = Address Word32 deriving (Eq, Show)
 instance FromJSON Address where
@@ -79,9 +78,13 @@ newtype Binding = Binding Digest deriving (Eq, Show)
 instance FromJSON Binding where
   parseJSON = withObject "input binding" $ \value -> Binding <$> value .: "sha256"
 
-data Watch = Watch { watchLabel :: String, watchFetches :: Integer }
+data Watch = Watch
+  { watchStart :: Address
+  , watchEnd :: Address
+  , watchFetches :: Integer
+  }
 instance FromJSON Watch where
-  parseJSON = withObject "watch" $ \value -> Watch <$> value .: "label" <*> value .: "fetches"
+  parseJSON = withObject "watch" $ \value -> Watch <$> value .: "start" <*> value .: "end" <*> value .: "fetches"
 
 data Receipt = Receipt
   { scenario :: String
@@ -89,7 +92,9 @@ data Receipt = Receipt
   , timedEvents :: [Observed]
   , milestones :: [ReachedMilestone]
   , stockFetches :: Integer
-  , fixedFetches :: Integer
+  , watches :: [Watch]
+  , observationStart :: Integer
+  , checkpointAt :: Maybe Integer
   , inputBindings :: [Binding]
   , observationError :: Maybe String
   , machineFailure :: Maybe String
@@ -103,9 +108,12 @@ instance FromJSON Receipt where
     fetches <- traverse (withObject "action range" (.: "fetches")) ranges
     watches <- value .: "watch" :: J.Parser [Watch]
     bindings <- value .: "inputs"
+    start <- value .: "observation_start_instructions"
+    checkpoint <- value .:? "checkpoint"
+    checkpointTick <- traverse (withObject "checkpoint" $ \row ->
+      withObject "checkpoint record" (.: "instructions") =<< row .: "record") checkpoint
     Receipt name (concatMap (normalize . observedEvent) rows) rows phases (sum fetches)
-      (sum [watchFetches row | row <- watches, watchLabel row == "fixed-body"]) bindings
-      <$> value .:? "error" <*> value .:? "machine_failure"
+      watches start checkpointTick bindings <$> value .:? "error" <*> value .:? "machine_failure"
 
 normalize :: Event -> [Event]
 normalize (Store (Address address) bytes) = zipWith (\offset byte -> Store (Address (address + offset)) [byte]) [0..] bytes
@@ -120,39 +128,49 @@ healthy :: Receipt -> Bool
 healthy receipt = observationError receipt == Nothing && machineFailure receipt == Nothing
   && not (null (events receipt)) && stockFetches receipt > 0
 
-firstDifference :: [Event] -> [Event] -> Maybe Int
-firstDifference left right = case findIndex not (zipWith (==) left right) of
-  Just index -> Just index
-  Nothing | length left /= length right -> Just (min (length left) (length right))
-  Nothing -> Nothing
-
 projectionInputs :: Receipt -> Maybe [Binding]
 projectionInputs receipt = case inputBindings receipt of
   [run, _, rom, sites, executable] -> Just [run, rom, sites, executable]
   [run, _, rom, sites, trajectory, executable] -> Just [run, rom, sites, trajectory, executable]
   _ -> Nothing
 
-milestoneResult :: String -> Receipt -> Receipt -> Maybe (Maybe Judge.FirstDifference)
-milestoneResult phase stock candidate = do
-  stockTick <- reachedAt =<< find ((== phase) . reachedPhase) (milestones stock)
-  candidateTick <- reachedAt =<< find ((== phase) . reachedPhase) (milestones candidate)
-  let project tick receipt =
-        let (before, after) = span ((<= tick) . observedInstructions) (timedEvents receipt)
-            left = concatMap (normalize . observedEvent) before
-            right = concatMap (normalize . observedEvent) after
-            marker = Judge.Observation (object ["milestone" .= phase])
-         in (Judge.ObservationIndex (length left), map (Judge.Observation . toJSON) left ++ [marker] ++ map (Judge.Observation . toJSON) right)
-      (mark, stockObservations) = project stockTick stock
-      (_, candidateObservations) = project candidateTick candidate
-  pure (Judge.milestoneDifference (Judge.Milestone phase mark) stockObservations candidateObservations)
+project :: Maybe String -> Receipt -> ([Value], Int)
+project Nothing receipt = (map toJSON (events receipt), length (events receipt))
+project (Just phase) receipt
+  | phase == "post-boot", Just tick <- checkpointAt receipt, tick > 0, tick == observationStart receipt =
+      (marker : map toJSON (events receipt), 0)
+  | Just tick <- reachedAt =<< find ((== phase) . reachedPhase) (milestones receipt) =
+      let (before, after) = span ((<= tick) . observedInstructions) (timedEvents receipt)
+          left = concatMap (normalize . observedEvent) before
+          right = concatMap (normalize . observedEvent) after
+       in (map toJSON left ++ marker : map toJSON right, length left)
+  | otherwise = (map toJSON (events receipt), length (events receipt))
+  where marker = object ["milestone" .= phase]
 
-statusLabel :: Judge.VerdictStatus -> String
-statusLabel status = case status of
-  Judge.VerdictEqual -> "equal"
-  Judge.VerdictEqualUpToMilestone -> "equal-up-to-milestone"
-  Judge.VerdictDifferent -> "different"
-  Judge.VerdictNoVerdict -> "no-verdict"
-  Judge.VerdictNotRun -> "not-run"
+spanValue :: Artifact.Extent -> Value
+spanValue extent = object ["start" .= Artifact.extentLow extent, "end" .= Artifact.extentHigh extent]
+
+fetchReceipts :: [Artifact.Extent] -> Receipt -> [Value]
+fetchReceipts extents receipt =
+  [ object ["start" .= low, "end" .= high, "fetches" .= watchFetches row]
+  | row <- watches receipt
+  , let Address low = watchStart row
+        Address high = watchEnd row
+  , any (\extent -> Artifact.extentLow extent == low && Artifact.extentHigh extent == high) extents
+  ]
+
+runValue :: Bool -> [Artifact.Extent] -> Maybe String -> Receipt -> IO Value
+runValue compatible extents phase receipt = do
+  digest <- case inputBindings receipt of
+    _ : Binding (Digest image) : _ -> pure image
+    _ -> H.failH "census receipt has no firmware binding"
+  let (observations, _) = project phase receipt
+  pure (object
+    [ "image_sha256" .= digest
+    , "complete" .= (compatible && healthy receipt)
+    , "fetch_receipts" .= fetchReceipts extents receipt
+    , "events" .= observations
+    ])
 
 main :: IO ()
 main = do
@@ -164,47 +182,28 @@ main = do
   stock <- load stockPath
   candidate <- load candidatePath
   control <- load controlPath
-  let difference = firstDifference (events stock) (events candidate)
-      controlDifference = firstDifference (events stock) (events control)
-      sameScenario = scenario stock == scenario candidate && scenario stock == scenario control
+  let sameScenario = scenario stock == scenario candidate && scenario stock == scenario control
       sameInputs = case map projectionInputs [stock, candidate, control] of
         [Just left, Just middle, Just right] -> left == middle && left == right
         _ -> False
-      ownedExecuted = fixedFetches candidate > 0 && fixedFetches control > 0
-      complete = sameScenario && sameInputs && ownedExecuted && all healthy [stock, candidate, control] && controlDifference /= Nothing
-      milestone = phase >>= \name -> milestoneResult name stock candidate
-      status
-        | not complete = Judge.VerdictNoVerdict
-        | Just _ <- phase = case milestone of
-            Just Nothing -> Judge.VerdictEqualUpToMilestone
-            _ -> Judge.VerdictDifferent
-        | difference == Nothing = Judge.VerdictEqual
-        | otherwise = Judge.VerdictDifferent
-      milestoneDifferenceIndex = case milestone of
-        Just (Just first) -> Just (Judge.observationIndex (Judge.differenceAt first))
-        _ -> Nothing
-      at receipt index = take 1 (drop index (events receipt))
+      compatible = sameScenario && sameInputs
+      (_, mark) = project phase stock
+      milestone = fmap (\name -> object ["name" .= name, "observation" .= mark]) phase
+  stockRun <- runValue compatible Artifact.extents phase stock
+  ownedRun <- runValue compatible [Artifact.fixedExtent] phase candidate
+  wrongRun <- runValue compatible [Artifact.fixedExtent] phase control
   L.writeFile output (encode (object
     [ "schema" .= (1 :: Int)
-    , "verdict" .= statusLabel status
+    , "mode" .= ("interface-stream" :: String)
+    , "subsystem" .= ("saclac" :: String)
     , "scenario" .= scenario stock
-    , "same_scenario" .= sameScenario
-    , "stock_executed_instructions_in_action_extents" .= stockFetches stock
-    , "candidate_executed_instructions_in_fixed_region" .= fixedFetches candidate
-    , "control_executed_instructions_in_fixed_region" .= fixedFetches control
+    , "retired_extents" .= map spanValue Artifact.extents
+    , "owned_extents" .= [spanValue Artifact.fixedExtent]
+    , "stock" .= stockRun
+    , "owned" .= ownedRun
+    , "controls" .= [object ["name" .= ("wrong-command-present-store" :: String), "run" .= wrongRun]]
+    , "milestone" .= milestone
     , "same_observer_and_scenario_inputs" .= sameInputs
-    , "stock_events" .= length (events stock)
-    , "candidate_events" .= length (events candidate)
-    , "control_events" .= length (events control)
-    , "complete" .= complete
-    , "first_difference" .= difference
-    , "stock_at_difference" .= maybe [] (at stock) difference
-    , "candidate_at_difference" .= maybe [] (at candidate) difference
-    , "wrong_variant_detected" .= (controlDifference /= Nothing)
-    , "control_first_difference" .= controlDifference
-    , "milestone" .= phase
-    , "milestone_first_difference" .= milestoneDifferenceIndex
-    , "judge_version" .= Judge.judgeVersion
+    , "stock_executed_instructions_in_action_extents" .= stockFetches stock
     , "normalization" .= ("instruction clocks and cores omitted; each store expanded into ascending-address bytes without reordering events; transient reply pointer addresses omitted and contents retained" :: String)
     ]))
-  exitWith (Judge.verdictExitCode status)
