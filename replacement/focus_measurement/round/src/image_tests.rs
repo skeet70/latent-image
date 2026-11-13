@@ -194,3 +194,10 @@ fn a_reply_rejects_a_negative_or_unknown_channel_and_reports_the_lens_queries() 
         assert_eq!(ports.take()[2..], reply(CommandKind::Command2b, 0x500, 0, [channel, value, 1]));
     }
 }
+
+#[test]
+fn the_logging_setting_logs_image_requests_on_bit_eight_and_snapshots_on_bit_nine() {
+    assert_eq!(crate::stock::image_logging(0x0100), ImageLogging { image: true, snapshot: false });
+    assert_eq!(crate::stock::image_logging(0x0200), ImageLogging { image: false, snapshot: true });
+    assert_eq!(crate::stock::image_logging(0xfcff), ImageLogging::default());
+}

@@ -137,6 +137,23 @@ pub fn cancel_argument(parameters: xm1_saclac_interface::Parameters<'_>) -> xm1_
     xm1_saclac_interface::round_image::CancelArgument(word(parameters, 4))
 }
 
+/// X-M1 1.50: the halfword 0x69fec8 reads at this key; 0xf39f88, 0xf3a068 and 0xf3a0a0 test
+/// bit 8 before logging an image, cancel or stop request, 0xf3a010 bit 9 before a snapshot.
+pub const IMAGE_LOGGING: SchedulingProperty = SchedulingProperty(232);
+
+pub const fn image_logging(word: u16) -> crate::image::ImageLogging {
+    crate::image::ImageLogging { image: word & 0x100 != 0, snapshot: word & 0x200 != 0 }
+}
+
+/// X-M1 1.50: the lane logs through 0x64744c with this word first and the entry's text second.
+pub const IMAGE_LOG_SOURCE: u32 = 0x00ff_b104;
+
+/// X-M1 1.50: the text 0xf39f48, 0xf39fd0, 0xf3a050 and 0xf3a090 log.
+pub const fn image_log_text(entry: crate::image::ImageLog) -> u32 {
+    use crate::image::ImageLog;
+    match entry { ImageLog::Image => 0x00f3_a268, ImageLog::Snapshot => 0x00f3_a278, ImageLog::Cancel => 0x00f3_a288, ImageLog::Stop => 0x00f3_a29c }
+}
+
 /// X-M1 1.50: 0xefb37c..0xefb38c and 0xefb48c..0xefb49c replace the value of a
 /// reply whose channel 0x74a214 rejects with 0x74a740(128, 0).
 pub const NO_CHANNEL_VALUE: crate::image::ReplyValue = crate::image::ReplyValue(128 << 16);
