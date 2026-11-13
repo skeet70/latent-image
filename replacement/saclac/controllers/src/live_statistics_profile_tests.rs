@@ -3,7 +3,7 @@ use crate::layers::*;
 use crate::live_statistics::LiveStatistics;
 use crate::live_statistics_profile::{Layers, Leaf};
 use crate::live_view::{Signal, StatisticsCall, StatisticsControl as Ctl, StatisticsOutcome as O};
-use crate::replies::{Replies, Values};
+use crate::replies::{Replies, ReplyCommand, Values};
 use std::{vec, vec::Vec};
 use xm1_saclac_interface::calc::SharedAddress;
 use xm1_saclac_interface::statistics::{Source, RESULTS_BYTES};
@@ -21,7 +21,7 @@ enum Seen {
     RowData(u32),
     Debug(u32),
     Delivered(u32),
-    ResetSelection,
+    PipelineDump(u32),
     Fault,
     /// A profile operation the configuration never makes.
     Unexpected(&'static str),
@@ -95,7 +95,7 @@ impl ProfileShared for Fake {
 impl StatisticsGeometry for Fake {
     fn correct_window(&mut self, window: [u16; 3], _: u32, _: u32, _: u32) -> [u16; 3] { window }
     fn linearize(&mut self, value: u32) -> u32 { value }
-    fn reset_default_selection(&mut self) { self.seen.push(Seen::ResetSelection) }
+    fn dump_pipeline(&mut self, buffer: u32) { self.seen.push(Seen::PipelineDump(buffer)) }
 }
 
 impl Adjustment for Fake {
@@ -133,12 +133,12 @@ impl Results for Fake {
 }
 
 impl Replies for Fake {
-    fn reply(&mut self, command: K, status: CompletionStatus, values: Values<'_>) {
+    fn reply(&mut self, command: ReplyCommand, status: CompletionStatus, values: Values<'_>) {
         let bytes = match values {
             Values::Words(words) => words.iter().flat_map(|word| word.to_le_bytes()).collect(),
             Values::Record(bytes) => bytes.to_vec(),
         };
-        self.seen.push(Seen::Reply(command, status.0, bytes));
+        self.seen.push(Seen::Reply(command.kind(), status.0, bytes));
     }
 }
 
@@ -323,7 +323,7 @@ fn a_stop_reports_the_shot_state_and_restores_the_parameter_feature_the_profile_
 
 #[test]
 fn the_capture_results_reach_command09s_client_as_one_record() {
-    let mut fake = profile(&[(Field::FormatMode, 5)]);
+    let mut fake = profile(&[(Field::FormatMode, 5), (Field::PipelineDumpBuffer, 0x0170_0000)]);
     let mut statistics = LiveStatistics::new();
     control(&mut statistics, &mut fake, Ctl::Capture);
     fake.take();
@@ -331,7 +331,7 @@ fn the_capture_results_reach_command09s_client_as_one_record() {
     payload[60..64].copy_from_slice(&1u32.to_le_bytes());
     assert_eq!(completed(&mut statistics, &mut fake, C::Statistics79, &payload), O::Pending);
     let seen = fake.take();
-    assert_eq!(seen[0], Seen::ResetSelection);
+    assert_eq!(seen[0], Seen::PipelineDump(0x0170_0000));
     let Seen::Reply(K::Command09, 17, record) = &seen[1] else { panic!("no capture report: {seen:?}") };
     assert_eq!(record.len(), 64 + RESULTS_BYTES);
     assert_eq!(&record[..12], &payload[4..16]);
@@ -342,7 +342,7 @@ fn the_capture_results_reach_command09s_client_as_one_record() {
 }
 
 #[test]
-fn capture_results_without_a_capture_window_or_selection_reset_carry_zero_dimensions() {
+fn capture_results_without_a_capture_window_or_pipeline_dump_carry_zero_dimensions() {
     let mut fake = profile(&[]);
     fake.capture_windows = false;
     let mut statistics = captured(&mut fake);

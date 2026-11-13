@@ -33,6 +33,7 @@ SOURCES = [
     "src/stock/search.rs",
     "src/stock/shared.rs",
     "src/stock/statistics.rs",
+    "src/stock/pipeline.rs",
 ]
 
 xm1_rust_rlib(
@@ -69,6 +70,7 @@ xm1_rust_host_test(
         "src/selection_tests.rs",
         "src/shared_tests.rs",
         "src/statistics_tests.rs",
+        "src/pipeline_tests.rs",
         "src/tests.rs",
     ],
 )

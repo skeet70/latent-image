@@ -3,7 +3,9 @@
 //! The stock layers saclac's controllers call outside their own state. Each trait is
 //! bound at saclac's composition root to the part that owns its layer.
 
-use xm1_saclac_interface::{CommandKind, RecordHandle};
+use xm1_saclac_interface::stock::StockCallbackWord;
+use xm1_saclac_interface::{CommandKind, ParameterValue, RecordHandle};
+use xm1_saclac_profile_geometry::stock::{Parameters, StatusSnapshot};
 
 /// A profile-record field the controllers read or write. Its value means what the
 /// record's other readers make of it.
@@ -100,6 +102,8 @@ pub enum Field {
     ResultsCallback,
     /// The diagnostic buffer's address; zero when none.
     DiagnosticBuffer,
+    /// The buffer the pipeline's frame dump is copied into; zero when none.
+    PipelineDumpBuffer,
     // The S1 statistics snapshot's values.
     /// The first entry of the capture-window mode table.
     CaptureWindowMode,
@@ -122,6 +126,26 @@ pub enum Field {
     WindowMode,
     /// Written 0 at the S1 snapshot and 1 when the S1 results are delivered.
     ResultsTaken,
+    /// The count of the S1 results' records.
+    ResultsCount,
+    /// The time the S1 results were taken.
+    ResultsTime,
+    /// Byte 41 of the selection record; zero lets any result replace the selection.
+    SelectionTracked,
+    /// Word 0 of the lens designation.
+    LensDesignation,
+    /// 1 converts the lens target through the remap.
+    LensConversion,
+    /// The lens reference the target remap starts from.
+    LensReference,
+    // The display mirrors' sources, each named for the display record field it fills.
+    DisplayMode,
+    DisplayModeFirst,
+    DisplayModeSecond,
+    DisplayModeByte,
+    DisplayScanIndex,
+    DisplayStatusByte,
+    DisplayOutput,
 }
 
 /// A profile word block the controllers copy whole.
@@ -150,10 +174,31 @@ pub enum Block {
     LensTarget,
     /// 33 words.
     Release,
+    /// 8 words.
+    FocusConfirmation,
+    /// 20 words.
+    FocusHistory,
+    /// 5 words: the measured window.
+    MeasuredWindow,
+    /// 26 words: one of the ten S1 result records.
+    ResultRecord(ResultIndex),
 }
 
+/// One of the profile's five lens pairs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LensSlot { Current, Next }
+pub enum LensSlot { Reported, Current, Next }
+
+/// The index of one of the ten S1 result records.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResultIndex(u8);
+
+impl ResultIndex {
+    pub const COUNT: usize = 10;
+
+    pub const fn new(index: u8) -> Option<Self> { if (index as usize) < Self::COUNT { Some(Self(index)) } else { None } }
+
+    pub const fn get(self) -> u8 { self.0 }
+}
 
 /// A group of profile fields the last parameter change may have touched, named for
 /// what the live view does when it was touched.
@@ -220,9 +265,19 @@ pub trait ProfileRecord {
     fn notify_selection_owner(&mut self, record: RecordHandle);
 }
 
+/// Rewrites `block`'s `N` words with the words at `cleared` set to zero.
+pub(crate) fn clear_words<const N: usize>(profile: &mut impl ProfileRecord, record: RecordHandle, block: Block, cleared: &[usize]) {
+    let mut words = [0; N];
+    profile.read_block(record, block, &mut words);
+    for &index in cleared {
+        words[index] = 0;
+    }
+    profile.write_block(record, block, &words);
+}
+
 /// What the profile geometry layer gives the live view.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GeometryValue { StartValue, SelectionMode, Adjustment }
+pub enum GeometryValue { StartValue, SelectionMode, Adjustment, ScanSelection, Format }
 
 /// The command whose parameters a geometry check compares with the configured view.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -259,16 +314,6 @@ pub trait Configuration {
     fn combine_lens_pair(&mut self, first: u32, second: u32, third: u32) -> u32;
 }
 
-/// The display-record mirror of the profile a live-view step refreshes.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Mirror {
-    Primary,
-    Configured,
-    Autofocus(AutofocusMirror),
-    Range,
-    Output,
-}
-
 /// The groups an autofocus change copies into the display record.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct AutofocusMirror {
@@ -291,16 +336,36 @@ impl AutofocusMirror {
     }
 }
 
-/// The profile geometry layer's display parameters and status, and its record mode.
+/// The profile geometry layer's display parameters and status, which the live view copies out,
+/// changes and hands back.
 pub trait DisplayRecords {
     fn reset(&mut self);
-    /// Copies the profile into the display parameters and status the mirror names.
-    fn mirror(&mut self, record: RecordHandle, mirror: Mirror);
-    /// True when the record mode was already initialized.
-    fn initialize_record_mode(&mut self) -> bool;
-    fn record_mode_available(&mut self) -> bool;
-    fn begin_record_mode(&mut self);
-    fn finish_record_mode(&mut self);
+    fn parameters(&mut self) -> Parameters;
+    fn status(&mut self) -> StatusSnapshot;
+    fn apply_parameters(&mut self, parameters: &Parameters);
+    fn apply_status(&mut self, status: &StatusSnapshot);
+}
+
+/// What the display mirrors take from layers beside the profile record.
+pub trait MirrorSources {
+    /// The capture window for `mode` and the format ratio, when the pair has one.
+    fn capture_window(&mut self, mode: u32, ratio: u32) -> Option<[u32; 2]>;
+    /// A profile index as the display parameters store it.
+    fn collapse_index(&mut self, index: u32) -> u32;
+    fn linearize(&mut self, value: u32) -> u32;
+}
+
+/// The channel a measurement holds the display record mode on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecordChannel { LiveView, S1 }
+
+/// The profile geometry layer's display record mode.
+pub trait RecordMode {
+    /// Initializes the record mode again; false when every channel is disabled.
+    fn initialize(&mut self) -> bool;
+    fn available(&mut self, channel: RecordChannel) -> bool;
+    fn begin(&mut self, channel: RecordChannel);
+    fn finish(&mut self);
 }
 
 /// saclac's own helpers the live view shares with other saclac modules.
@@ -323,7 +388,8 @@ pub trait StatisticsGeometry {
     /// The measured window after the correction factors `first` and `second` for `class`.
     fn correct_window(&mut self, window: [u16; 3], first: u32, second: u32, class: u32) -> [u16; 3];
     fn linearize(&mut self, value: u32) -> u32;
-    fn reset_default_selection(&mut self);
+    /// Copies the pipeline's policy block and device registers into `buffer`; zero names none.
+    fn dump_pipeline(&mut self, buffer: u32);
 }
 
 /// The adjustment layer's values the statistics configuration carries.
@@ -394,8 +460,8 @@ pub struct CorrectedWindow { pub window: [u16; 3], pub extent: u32 }
 
 /// Values the S1 statistics configuration takes from layers beside the profile record.
 pub trait S1Values {
-    /// The profile's descriptor for `value`.
-    fn descriptor(&mut self, record: RecordHandle, value: u32) -> u32;
+    /// The profile's descriptor with the capture policy's offset (0xf51b94).
+    fn descriptor(&mut self, record: RecordHandle) -> u32;
     fn lens_value(&mut self) -> u32;
     fn refresh(&mut self, record: RecordHandle) -> u32;
     /// The imaging curve from its eleven inputs in stock's argument order.
@@ -403,6 +469,7 @@ pub trait S1Values {
     fn stop_curve(&mut self, stop_mode: u32) -> u32;
     fn unselected_view(&mut self, record: RecordHandle) -> u32;
     fn span(&mut self, record: RecordHandle) -> u32;
+    /// 1 in the unselected profile mode (0xf47330).
     fn unselected(&mut self, record: RecordHandle) -> u32;
     fn corrected_window(&mut self, inputs: &WindowInputs) -> CorrectedWindow;
     /// The lens target's step count for `position` and two release-range words.
@@ -410,4 +477,85 @@ pub trait S1Values {
     /// Records the snapshot in the diagnostic trace (operation 0x07000000).
     fn trace_snapshot(&mut self);
     fn release_channel(&mut self);
+    /// The lens pair the autofocus change computes from the search state.
+    fn searched_lens_pair(&mut self, record: RecordHandle) -> u32;
+    /// Whether the results' record query reads the extended bank (property 0x1307).
+    fn extended_results(&mut self) -> bool;
+    /// Queries the result records into `out`: a count word and ten 104-byte records.
+    fn query_records(&mut self, query: &RecordQuery, out: &mut [u8; RECORD_QUERY_BYTES]);
+    fn ticks(&mut self) -> u32;
+    /// Whether the profile geometry admits Command17's requested selection against the offered.
+    fn admits_selection(&mut self, requested: u32, offered: u32) -> bool;
 }
+
+/// The bytes the result record query writes.
+pub const RECORD_QUERY_BYTES: usize = 4 + 104 * ResultIndex::COUNT;
+
+/// The S1 results' record query.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecordQuery { pub bank: u32, pub mode: u32, pub descriptor: u32, pub pair: [u32; 2], pub ratio: u32 }
+
+/// The lens control's probes, in the order the replies read them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LensProbe { First, Second, Third }
+
+/// The lens control state the controllers read.
+pub trait LensControl {
+    fn overridden(&mut self, probe: LensProbe) -> bool;
+    /// The lens value the profile replies carry.
+    fn value(&mut self) -> u32;
+    fn position(&mut self) -> u32;
+    /// The mode-table index lens moves and curve queries name.
+    fn mode_index(&mut self) -> u32;
+    fn reference(&mut self) -> u32;
+    fn step(&mut self) -> u32;
+    /// The lens channel and the sixteen-bit fraction of the way to the next.
+    fn channel(&mut self) -> (u32, u16);
+    /// The last of the three notice words in the lens control block other tasks share.
+    fn third_notice(&mut self) -> u32;
+    /// The lens's configuration channel; zero when it is not a configured channel.
+    fn configured_channel(&mut self) -> u32;
+}
+
+/// A lens drive's progress, which the LensDrive command's client receives with status 18.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriveProgress {
+    /// The configuration channel lens control reports the drive at.
+    pub channel: u32,
+    /// LensDrive's word 4 is other than 1.
+    pub fourth_carried: bool,
+    pub reported: ParameterValue,
+}
+
+/// The LensDrive command's replies, which the shared layer composes.
+pub trait LensDriveReplies {
+    fn report_progress(&mut self, progress: DriveProgress);
+}
+
+/// What the bounds notice asks the configuration curve for, after the level and channel.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CurveQuery { pub range: u32, pub reference: u32, pub mode_index: u32, pub step: u32 }
+
+/// The configuration table's lens curve and values.
+pub trait LensCurve {
+    /// The curve level `steps` reach from `base`.
+    fn level(&mut self, steps: u16, base: u32, reference: u32, mode_index: u32) -> i16;
+    /// Whether curve positions are read between lens channels (0x746018).
+    fn interpolates(&mut self) -> bool;
+    /// The centre, lower and upper curve positions of `level` on `channel`.
+    fn positions(&mut self, level: i16, channel: u32, query: CurveQuery) -> [u32; 3];
+    /// `positions` between `channel` and the next, `fraction` of the way across; `None` while
+    /// the table is disabled.
+    fn interpolated_positions(&mut self, level: i16, channel: u32, fraction: u16, query: CurveQuery) -> Option<[u32; 3]>;
+    /// The table value a lens pair maps to, second word first (0x746864).
+    fn mapped_value(&mut self, second: u32, first: u32) -> u32;
+    fn combine_lens_pair(&mut self, first: u32, second: u32, third: u32) -> u32;
+}
+
+/// A lens target the remap converts (0xf47300).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RemapRequest { pub position: i16, pub reference: u32, pub target: u32, pub convert: bool, pub mode_index: u32 }
+
+/// A relative lens move (lensdc 0x420b).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LensMove { pub callback: StockCallbackWord, pub steps: i16, pub mode_index: u32, pub words: [u32; 4] }

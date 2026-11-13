@@ -385,149 +385,12 @@ pub const fn adjustment_reply_status(reply: crate::adjustment::Reply) -> xm1_sac
     })
 }
 
-/// The live view's completion entries; `view_request` names the completion each posts.
-const VIEW_STARTED: StockCallbackWord = StockCallbackWord(0xf2f7c8);
-const VIEW_RESTORED: StockCallbackWord = StockCallbackWord(0xf2f7a0);
-const VIEW_CONFIGURED: StockCallbackWord = StockCallbackWord(0xf2f778);
-const VIEW_ACCESSOR: StockCallbackWord = StockCallbackWord(0xf2f6d8);
-const VIEW_ACCESSOR_VALUE: StockCallbackWord = StockCallbackWord(0xf2f6ac);
-const VIEW_STOPPED: StockCallbackWord = StockCallbackWord(0xf2f750);
-const VIEW_SUSPENDED: StockCallbackWord = StockCallbackWord(0xf2f728);
-const VIEW_RESUMED: StockCallbackWord = StockCallbackWord(0xf2f700);
-const VIEW_ADJUSTED: StockCallbackWord = StockCallbackWord(0xf2f684);
-const VIEW_WINDOWED: StockCallbackWord = StockCallbackWord(0xf2f65c);
-
-/// The view configuration's largest payload, 0x3f26's.
-const VIEW_PAYLOAD_BYTES: usize = 232;
-
-struct Payload { bytes: [u8; VIEW_PAYLOAD_BYTES] }
-
-impl Payload {
-    fn word(&mut self, offset: usize, value: u32) { self.bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes()); }
-    fn half(&mut self, offset: usize, value: u16) { self.bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes()); }
-    fn byte(&mut self, offset: usize, value: u8) { self.bytes[offset] = value; }
-    fn words(&mut self, offset: usize, values: &[u32]) {
-        for (index, value) in values.iter().enumerate() { self.word(offset + index * 4, *value); }
-    }
-}
-
-pub const fn restore_word(options: crate::live_view::RestoreOptions) -> u32 {
-    (options.first as u32) | ((options.second as u32) << 1) | ((options.negative as u32) << 31)
-}
-
-pub const fn stop_word(mode: crate::live_view::StopMode) -> u32 {
-    use crate::live_view::StopMode;
-    match mode {
-        StopMode::Plain => 0,
-        StopMode::Secondary => 1,
-        StopMode::SecondaryNegative => 6,
-        StopMode::Change(code) => code.get() as u32,
-    }
-}
-
-/// Lays out one of the live view's image requests and sends it. Senders 0xfea438..0xfea820
-/// and 0xfead6c drop the send's result.
-pub fn view_request(payload: crate::live_profile::ViewPayload, imgdc: &mut impl xm1_saclac_interface::ImgDc) {
-    use crate::live_profile::ViewPayload;
-    use xm1_saclac_interface::{Completion as C, ImgDcOperation as Op, ImgDcRequest};
-    let mut out = Payload { bytes: [0; VIEW_PAYLOAD_BYTES] };
-    let (operation, length, completions): (Op, usize, &[C]) = match payload {
-        ViewPayload::Start { value, measured } => {
-            out.words(0, &[VIEW_STARTED.0, value, u32::from(measured)]);
-            (Op::Request13, 12, &[C::Image3f])
-        }
-        ViewPayload::Restore(options) => {
-            out.words(0, &[VIEW_RESTORED.0, 0, 0, restore_word(options)]);
-            (Op::Request16, 16, &[C::Image40])
-        }
-        ViewPayload::Refresh { value, motion } => {
-            out.words(0, &[VIEW_RESTORED.0, value, motion.0, 3]);
-            (Op::Request16, 16, &[C::Image40])
-        }
-        ViewPayload::Configure(configured) => {
-            configuration_payload(&configured, &mut out);
-            (Op::Request26, VIEW_PAYLOAD_BYTES, &[C::Image41, C::Accessor4a, C::Accessor4b])
-        }
-        ViewPayload::Stop(mode) => {
-            out.words(0, &[VIEW_STOPPED.0, stop_word(mode)]);
-            (Op::Request27, 8, &[C::Image42])
-        }
-        ViewPayload::Suspend => {
-            out.word(0, VIEW_SUSPENDED.0);
-            (Op::Request28, 4, &[C::Image43])
-        }
-        ViewPayload::Resume => {
-            out.words(0, &[VIEW_RESUMED.0, 0]);
-            (Op::Request29, 8, &[C::Image44])
-        }
-        ViewPayload::Adjust(adjustment) => {
-            out.words(0, &[VIEW_ADJUSTED.0, adjustment.selection, adjustment.mode, adjustment.first, adjustment.second]);
-            (Op::Request34, 20, &[C::Image63])
-        }
-        ViewPayload::Window(window) => {
-            out.words(0, &[VIEW_WINDOWED.0, window]);
-            (Op::Request18, 8, &[C::Image65])
-        }
-    };
-    let request = ImgDcRequest { operation, parameters: xm1_saclac_interface::stock::parameters(&out.bytes[..length]), completions };
+/// Sends one of the live view's image requests. Senders 0xfea438..0xfea820 and 0xfead6c drop
+/// the send's result.
+pub fn view_request(payload: xm1_saclac_interface::imaging::ViewPayload, imgdc: &mut impl xm1_saclac_interface::ImgDc) {
+    let (operation, message, completions) = xm1_saclac_interface::stock::imaging::view_payload(&payload);
+    let request = xm1_saclac_interface::ImgDcRequest { operation, parameters: xm1_saclac_interface::stock::parameters(message.bytes()), completions };
     let _ = imgdc.request(request);
-}
-
-/// 0x3f26's layout from 0xf30f64..0xf31540 (payload offset = 0xf4 minus the frame
-/// offset below r11); the bytes it leaves unwritten stay zero here.
-fn configuration_payload(configured: &crate::live_profile::Configured, out: &mut Payload) {
-    use crate::live_profile::SelectionClass;
-    let values = &configured.values;
-    out.words(0, &[VIEW_CONFIGURED.0, VIEW_ACCESSOR.0, VIEW_ACCESSOR_VALUE.0, values.head[0], configured.selection, values.head[1], values.head[2]]);
-    out.words(0x1c, &values.windows[0]);
-    out.words(0x28, &values.windows[1]);
-    out.words(0x34, &values.block);
-    out.word(0x44, match configured.selection_class {
-        SelectionClass::Flagged => 4,
-        SelectionClass::Unselected => 2,
-        SelectionClass::Selected => 3,
-    });
-    for base in [0x48, 0x6c] {
-        let group = &values.group;
-        out.word(base, group.first);
-        out.half(base + 4, group.second);
-        out.byte(base + 6, group.third);
-        out.word(base + 8, group.fourth);
-        out.word(base + 0xc, group.fifth);
-        out.half(base + 0x10, group.sixth);
-        out.half(base + 0x12, group.seventh);
-        out.half(base + 0x14, group.eighth);
-        out.word(base + 0x18, group.ninth);
-        out.half(base + 0x1c, group.tenth);
-        out.word(base + 0x20, group.eleventh);
-    }
-    out.byte(0x90, 16);
-    out.byte(0x91, 16);
-    out.half(0x92, 100);
-    out.half(0x94, 100);
-    out.half(0x9a, values.converted[0]);
-    out.half(0x9c, values.converted[1]);
-    out.byte(0x9e, 7);
-    out.byte(0x9f, 7);
-    for (offset, property) in [0xa2, 0xa0, 0xa6, 0xa4].into_iter().zip(values.properties) { out.half(offset, property); }
-    out.half(0xa8, values.converted[0]);
-    out.half(0xaa, values.converted[1]);
-    out.words(0xac, &[values.tail[0], configured.selection_mode, values.tail[1], values.tail[2]]);
-    out.byte(0xbc, values.restorable);
-    out.half(0xc4, values.level);
-    out.byte(0xc8, values.detail);
-    out.byte(0xc9, values.classes[0]);
-    out.byte(0xca, values.classes[1]);
-    out.words(0xd0, &[configured.prepared.word(), configured.refresh]);
-    out.half(0xd8, configured.offset);
-    out.byte(0xda, configured.motion);
-    out.byte(0xdb, values.scale);
-    out.byte(0xdc, configured.active);
-    out.byte(0xdd, configured.view_mode);
-    out.byte(0xdf, u8::from(configured.direct_start));
-    out.byte(0xe0, values.capture);
-    out.byte(0xe1, values.rate);
-    out.word(0xe4, values.restarts);
 }
 
 /// The live statistics configuration's completion entries, 0xf3a768..0xf3aa40; each posts the
@@ -563,6 +426,8 @@ pub const S1_SELECTED: StockCallbackWord = StockCallbackWord(0xf2276c);
 pub const S1_RESULTS_READY: StockCallbackWord = StockCallbackWord(0xf22730);
 pub const S1_RETUNED: StockCallbackWord = StockCallbackWord(0xf22708);
 pub const S1_OUTPUT_CONFIGURED: StockCallbackWord = StockCallbackWord(0xf226e0);
+/// Posts 0x35 (0xf2418c).
+pub const S1_LENS_MOVED: StockCallbackWord = StockCallbackWord(0xf2418c);
 
 /// 0xfeaa64 and 0xfeaaa4 return their post's status; machine 17 drops it.
 pub fn post_imaging(

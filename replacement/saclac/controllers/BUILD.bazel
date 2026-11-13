@@ -7,16 +7,22 @@ xm1_rust_rlib(
     src = "src/lib.rs",
     crate_name = "xm1_saclac_controllers",
     out = "arm/libxm1_saclac_controllers.rlib",
-    data = ["src/lifecycle.rs", "src/adjustment.rs", "src/stock.rs", "src/replies.rs", "src/children.rs", "src/synchronous.rs", "src/search.rs", "src/records.rs", "src/capture.rs", "src/exports.rs", "src/root.rs", "src/live.rs", "src/s1.rs", "src/live_view.rs", "src/layers.rs", "src/live_profile.rs", "src/live_autofocus.rs", "src/live_statistics.rs", "src/live_statistics_profile.rs", "src/s1_statistics.rs", "src/s1_statistics_profile.rs"],
-    rlib_deps = {"xm1_saclac_interface": "//replacement/saclac_interface:saclac-interface"},
+    data = ["src/lifecycle.rs", "src/adjustment.rs", "src/stock.rs", "src/replies.rs", "src/children.rs", "src/synchronous.rs", "src/search.rs", "src/records.rs", "src/capture.rs", "src/exports.rs", "src/root.rs", "src/live.rs", "src/live_replies.rs", "src/s1.rs", "src/live_view.rs", "src/layers.rs", "src/live_profile.rs", "src/live_mirror.rs", "src/live_autofocus.rs", "src/live_statistics.rs", "src/live_statistics_profile.rs", "src/s1_statistics.rs", "src/s1_statistics_profile.rs", "src/s1_statistics_leaf.rs", "src/s1_autofocus.rs"],
+    rlib_deps = {
+        "xm1_saclac_interface": "//replacement/saclac_interface:saclac-interface",
+        "xm1_saclac_profile_geometry": "//replacement/saclac/profile_geometry:profile_geometry",
+    },
 )
 
 xm1_rust_host_rlib(
     name = "host",
     src = "src/lib.rs",
     crate_name = "xm1_saclac_controllers",
-    data = ["src/lifecycle.rs", "src/adjustment.rs", "src/stock.rs", "src/replies.rs", "src/children.rs", "src/synchronous.rs", "src/search.rs", "src/records.rs", "src/capture.rs", "src/exports.rs", "src/root.rs", "src/live.rs", "src/s1.rs", "src/live_view.rs", "src/layers.rs", "src/live_profile.rs", "src/live_autofocus.rs", "src/live_statistics.rs", "src/live_statistics_profile.rs", "src/s1_statistics.rs", "src/s1_statistics_profile.rs"],
-    rlib_deps = {"xm1_saclac_interface": "//replacement/saclac_interface:host"},
+    data = ["src/lifecycle.rs", "src/adjustment.rs", "src/stock.rs", "src/replies.rs", "src/children.rs", "src/synchronous.rs", "src/search.rs", "src/records.rs", "src/capture.rs", "src/exports.rs", "src/root.rs", "src/live.rs", "src/live_replies.rs", "src/s1.rs", "src/live_view.rs", "src/layers.rs", "src/live_profile.rs", "src/live_mirror.rs", "src/live_autofocus.rs", "src/live_statistics.rs", "src/live_statistics_profile.rs", "src/s1_statistics.rs", "src/s1_statistics_profile.rs", "src/s1_statistics_leaf.rs", "src/s1_autofocus.rs"],
+    rlib_deps = {
+        "xm1_saclac_interface": "//replacement/saclac_interface:host",
+        "xm1_saclac_profile_geometry": "//replacement/saclac/profile_geometry:host",
+    },
 )
 
 
@@ -25,6 +31,9 @@ xm1_rust_host_test(
     src = "src/lib.rs",
     crate_name = "xm1_saclac_controllers_tests",
     data = glob(["src/*.rs"], exclude = ["src/lib.rs"]),
-    rlib_deps = {"xm1_saclac_interface": "//replacement/saclac_interface:host"},
+    rlib_deps = {
+        "xm1_saclac_interface": "//replacement/saclac_interface:host",
+        "xm1_saclac_profile_geometry": "//replacement/saclac/profile_geometry:host",
+    },
 )
 

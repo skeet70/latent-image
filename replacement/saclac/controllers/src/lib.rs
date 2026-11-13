@@ -13,15 +13,23 @@ pub mod capture;
 pub mod exports;
 pub mod root;
 pub mod live;
+pub mod live_replies;
 pub mod s1;
 pub mod live_view;
 pub mod layers;
 pub mod live_profile;
+mod live_mirror;
 mod live_autofocus;
 pub mod live_statistics;
 pub mod live_statistics_profile;
 pub mod s1_statistics;
 pub mod s1_statistics_profile;
+pub mod s1_statistics_leaf;
+mod s1_autofocus;
+#[cfg(test)]
+mod s1_fake;
+#[cfg(test)]
+mod s1_statistics_leaf_tests;
 #[cfg(test)]
 mod s1_statistics_tests;
 #[cfg(test)]
@@ -36,6 +44,8 @@ mod live_view_tests;
 mod live_profile_tests;
 #[cfg(test)]
 mod live_tests;
+#[cfg(test)]
+mod live_replies_tests;
 #[cfg(test)]
 mod s1_tests;
 #[cfg(test)]

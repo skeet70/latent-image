@@ -7,7 +7,7 @@ use crate::profile::{FrameInterval, FrameRate, GridCell, IntervalHistory, Interv
 use crate::record::{self, Adjustment, AdjustmentWords, AlternateSearch, Power, Request, Settings, Trace, TraceMark};
 use crate::source::{self, SampleProfile, SourceProfile, SourcePublication, SourceSettings, SourceStrength, Summary, ProcessingRequest};
 use crate::window::{self, WindowResult};
-use xm1_saclac_controllers::replies;
+use crate::replies;
 use xm1_saclac_interface::round::{GeometryCalibration, GeometryPair, RetainedGeometryValue};
 use xm1_saclac_interface::round_image::{ImageArea, ImageChannel, ImageLaneRequest};
 use xm1_saclac_interface::stock::StockCallbackWord;

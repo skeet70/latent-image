@@ -13,6 +13,7 @@ pub mod stock;
 pub mod planner;
 pub mod profile;
 pub mod record;
+pub mod replies;
 pub mod pipeline;
 pub mod window;
 pub mod auxiliary;

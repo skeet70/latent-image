@@ -1,8 +1,12 @@
 use crate::layers::*;
 use crate::live_profile::*;
-use crate::live_view::{Application, Condition, Effect, MotionSetting, RestoreOptions, StopMode, StopReason, ViewRequest};
+use crate::live_view::{Application, Condition, Effect, MotionSetting, ReplyStatus, RestoreOptions, StopMode, StopReason, ViewRequest};
+use crate::replies::{Replies, ReplyCommand as R, Values};
 use std::{vec, vec::Vec};
-use xm1_saclac_interface::{stock, Command, CommandKind as K, Completion as C, ImgDc, ImgDcOperation as Op, ImgDcRequest, RecordHandle};
+use xm1_saclac_interface::{
+    stock, Command, CommandKind as K, Completion as C, CompletionStatus, ImgDc, ImgDcOperation as Op, ImgDcRequest, RecordHandle,
+};
+use xm1_saclac_profile_geometry::stock::{Parameters, StatusSnapshot};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Seen {
@@ -18,7 +22,8 @@ enum Seen {
     Claim,
     Publish(Publication),
     DisplayReset,
-    Mirror(Mirror),
+    ApplyParameters(Parameters),
+    ApplyStatus(StatusSnapshot),
     Convert,
     BeginRecordMode,
     EndRecordMode,
@@ -26,6 +31,7 @@ enum Seen {
     ClearCalculations,
     TakeOffset,
     Request(Op, Vec<u8>, Vec<C>),
+    Reply(R, i32, Vec<u32>),
 }
 
 #[derive(Default)]
@@ -37,7 +43,7 @@ struct Fake {
     refuse: bool,
     alternate: bool,
     lens_follows: bool,
-    record_mode_initialized: bool,
+    record_mode_disabled: bool,
     record_mode_available: bool,
     values: ConfigurationValues,
     seen: Vec<Seen>,
@@ -78,7 +84,13 @@ impl ProfileRecord for Fake {
 
 impl Geometry for Fake {
     fn value(&mut self, _: RecordHandle, value: GeometryValue) -> u32 {
-        match value { GeometryValue::StartValue => 0x51, GeometryValue::SelectionMode => 0x40, GeometryValue::Adjustment => 0x77 }
+        match value {
+            GeometryValue::StartValue => 0x51,
+            GeometryValue::SelectionMode => 0x40,
+            GeometryValue::Adjustment => 0x77,
+            GeometryValue::ScanSelection => 0x5c,
+            GeometryValue::Format => 0x5f,
+        }
     }
     fn motion(&mut self) -> u32 { 9 }
     fn outgrown(&mut self, _: RecordHandle, check: GeometryCheck) -> bool { self.outgrown.contains(&check) }
@@ -99,11 +111,41 @@ impl Configuration for Fake {
 
 impl DisplayRecords for Fake {
     fn reset(&mut self) { self.seen.push(Seen::DisplayReset) }
-    fn mirror(&mut self, _: RecordHandle, mirror: Mirror) { self.seen.push(Seen::Mirror(mirror)) }
-    fn initialize_record_mode(&mut self) -> bool { self.record_mode_initialized }
-    fn record_mode_available(&mut self) -> bool { self.record_mode_available }
-    fn begin_record_mode(&mut self) { self.seen.push(Seen::BeginRecordMode) }
-    fn finish_record_mode(&mut self) { self.seen.push(Seen::EndRecordMode) }
+    fn parameters(&mut self) -> Parameters { Parameters::from_bytes([0; Parameters::BYTES]) }
+    fn status(&mut self) -> StatusSnapshot { StatusSnapshot::from_bytes([0; StatusSnapshot::BYTES]) }
+    fn apply_parameters(&mut self, parameters: &Parameters) { self.seen.push(Seen::ApplyParameters(*parameters)) }
+    fn apply_status(&mut self, status: &StatusSnapshot) { self.seen.push(Seen::ApplyStatus(*status)) }
+}
+
+impl LensControl for Fake {
+    fn overridden(&mut self, _: LensProbe) -> bool { panic!("the live view reads no lens probe") }
+    fn value(&mut self) -> u32 { panic!("the live view reads no lens value") }
+    fn position(&mut self) -> u32 { 0x1234 }
+    fn mode_index(&mut self) -> u32 { panic!("the live view reads no mode index") }
+    fn reference(&mut self) -> u32 { panic!("the live view reads no lens reference") }
+    fn step(&mut self) -> u32 { panic!("the live view reads no lens step") }
+    fn channel(&mut self) -> (u32, u16) { panic!("the live view reads no lens channel fraction") }
+    fn third_notice(&mut self) -> u32 { panic!("the live view reads no lens notice") }
+    fn configured_channel(&mut self) -> u32 { 0x11 }
+}
+
+impl MirrorSources for Fake {
+    fn capture_window(&mut self, mode: u32, ratio: u32) -> Option<[u32; 2]> { (mode != 0).then_some([mode, ratio]) }
+    fn collapse_index(&mut self, index: u32) -> u32 { index + 1 }
+    fn linearize(&mut self, value: u32) -> u32 { value.wrapping_add(2) }
+}
+
+impl RecordMode for Fake {
+    fn initialize(&mut self) -> bool { !self.record_mode_disabled }
+    fn available(&mut self, channel: RecordChannel) -> bool {
+        assert_eq!(channel, RecordChannel::LiveView);
+        self.record_mode_available
+    }
+    fn begin(&mut self, channel: RecordChannel) {
+        assert_eq!(channel, RecordChannel::LiveView);
+        self.seen.push(Seen::BeginRecordMode)
+    }
+    fn finish(&mut self) { self.seen.push(Seen::EndRecordMode) }
 }
 
 impl SharedHelpers for Fake {
@@ -130,23 +172,38 @@ impl ImgDc for Fake {
     }
 }
 
+impl Replies for Fake {
+    fn reply(&mut self, command: R, status: CompletionStatus, values: Values<'_>) {
+        let Values::Words(words) = values else { panic!("the live view's replies carry words") };
+        self.seen.push(Seen::Reply(command, status.0, words.to_vec()))
+    }
+}
+
 impl Layers for Fake {
     type Profile = Self;
     type Geometry = Self;
     type Configuration = Self;
     type Display = Self;
+    type RecordMode = Self;
     type Helpers = Self;
     type Pipeline = Self;
     type Source = Self;
     type ImgDc = Self;
+    type Replies = Self;
+    type Lens = Self;
+    type Sources = Self;
     fn profile(&mut self) -> &mut Self { self }
     fn geometry(&mut self) -> &mut Self { self }
     fn configuration(&mut self) -> &mut Self { self }
     fn display(&mut self) -> &mut Self { self }
+    fn record_mode(&mut self) -> &mut Self { self }
     fn helpers(&mut self) -> &mut Self { self }
     fn pipeline(&mut self) -> &mut Self { self }
     fn source(&mut self) -> &mut Self { self }
     fn imgdc(&mut self) -> &mut Self { self }
+    fn replies(&mut self) -> &mut Self { self }
+    fn lens(&mut self) -> &mut Self { self }
+    fn mirror_sources(&mut self) -> &mut Self { self }
 }
 
 fn record() -> RecordHandle { stock::record_handle_from_a2(0x16a0_0490) }
@@ -281,7 +338,8 @@ fn configuration_lays_out_the_profile_values_and_the_preparation_it_follows() {
     assert_eq!((bytes[0xda], bytes[0xdc], bytes[0xdd], bytes[0xdf]), (9, 1, 3, 0));
     assert_eq!(payload[0xe4 / 4], 0x99);
     assert!(fake.seen.contains(&Seen::Flag(GeometryFlag::Configuring, true)));
-    assert!(fake.seen.contains(&Seen::Mirror(Mirror::Configured)));
+    let applied: Vec<_> = fake.seen.iter().filter(|seen| matches!(seen, Seen::ApplyParameters(_) | Seen::ApplyStatus(_))).collect();
+    assert_eq!(applied.len(), 2, "the configuration mirrors both display records");
 }
 
 #[test]
@@ -374,7 +432,9 @@ fn primary_and_secondary_profiles_replace_the_selection_and_record_which_applied
     let mut live = LiveProfile::new();
     let mut fake = Fake::default();
     live.apply(entered(&command(K::Command02, &[0, 0, 0xffff_ffff])), record(), &mut fake);
-    assert_eq!(fake.take(), vec![Seen::ClearSelection, Seen::Mirror(Mirror::Primary)]);
+    let seen = fake.take();
+    assert_eq!(seen[0], Seen::ClearSelection);
+    assert!(matches!(seen[1..], [Seen::ApplyParameters(_), Seen::ApplyStatus(_)]));
     assert!(live.condition(Condition::PrimaryApplied, None, record(), &mut fake));
     live.apply(entered(&command(K::Command03, &[0, 0, 0, 9])), record(), &mut fake);
     assert_eq!(fake.take(), vec![Seen::ClearSelection, Seen::Descriptor(9)]);
@@ -401,11 +461,14 @@ fn direct_start_is_refused_only_in_the_locked_third_view_mode() {
 }
 
 #[test]
-fn record_mode_begins_only_when_idle_and_its_channel_is_ready() {
+fn record_mode_begins_only_when_it_initializes_and_its_channel_is_available() {
     let mut live = LiveProfile::new();
-    let mut busy = Fake { record_mode_initialized: true, record_mode_available: true, ..Fake::default() };
-    live.effect(Effect::BeginRecordMode, record(), &mut busy);
-    assert!(busy.take().is_empty());
+    let mut disabled = Fake { record_mode_disabled: true, record_mode_available: true, ..Fake::default() };
+    live.effect(Effect::BeginRecordMode, record(), &mut disabled);
+    assert!(disabled.take().is_empty());
+    let mut unavailable = Fake::default();
+    live.effect(Effect::BeginRecordMode, record(), &mut unavailable);
+    assert!(unavailable.take().is_empty());
     let mut idle = Fake { record_mode_available: true, ..Fake::default() };
     live.effect(Effect::BeginRecordMode, record(), &mut idle);
     live.effect(Effect::FinishRecordMode, record(), &mut idle);
@@ -447,7 +510,7 @@ fn autofocus_change_that_outgrows_the_view_restarts_it_without_mirroring() {
     let autofocus = command(K::Autofocus, &[]);
     assert_eq!(LiveProfile::new().apply(entered(&autofocus), record(), &mut fake), Application::Restart);
     let seen = fake.take();
-    assert!(!seen.iter().any(|seen| matches!(seen, Seen::Mirror(_))));
+    assert!(!seen.iter().any(|seen| matches!(seen, Seen::ApplyParameters(_) | Seen::ApplyStatus(_))));
     assert!(seen.contains(&Seen::Publish(Publication::Window)));
 }
 
@@ -457,8 +520,10 @@ fn autofocus_change_kept_running_mirrors_and_publishes_what_changed() {
     let autofocus = command(K::Autofocus, &[]);
     assert_eq!(LiveProfile::new().apply(entered(&autofocus), record(), &mut fake), Application::Applied);
     let seen = fake.take();
-    let mirrored = AutofocusMirror { selection_mode: true, shift: true, ..AutofocusMirror::default() };
-    assert!(seen.contains(&Seen::Mirror(Mirror::Autofocus(mirrored))));
+    let [Seen::ApplyStatus(status)] = seen.iter().filter(|seen| matches!(seen, Seen::ApplyParameters(_) | Seen::ApplyStatus(_))).cloned().collect::<Vec<_>>()[..] else {
+        panic!("one status mirror: {seen:?}")
+    };
+    assert_eq!((status.processing_option(), status.format(), status.query_mode()), (0x40, 0x5f, 0));
     let published: Vec<_> = seen.iter().filter_map(|seen| match seen { Seen::Publish(p) => Some(*p), _ => None }).collect();
     assert_eq!(published, vec![Publication::SelectionMode, Publication::Position, Publication::Range]);
     assert!(seen.contains(&Seen::Write(Field::AutofocusRelease, 0)));
@@ -480,4 +545,169 @@ fn autofocus_lens_range_change_rewrites_both_lens_slots_when_the_pair_moved() {
     held.blocks.push((Block::Lens(LensSlot::Current), vec![1, 2]));
     LiveProfile::new().apply(entered(&autofocus), record(), &mut held);
     assert!(!held.take().iter().any(|seen| matches!(seen, Seen::Block(Block::Lens(_), _))));
+}
+
+fn replied(command: Option<K>, status: ReplyStatus, fake: &mut Fake) -> Vec<Seen> {
+    LiveProfile::new().reply(command, status, record(), fake);
+    fake.take()
+}
+
+#[test]
+fn finished_commands_are_answered_through_their_own_reply_with_the_outcome() {
+    for (kind, answered) in [
+        (K::HalfRelease, R::HalfRelease),
+        (K::Command1d, R::Command1d),
+        (K::Command1e, R::Command1e),
+        (K::Command20, R::Command20),
+        (K::Command21, R::Command21),
+        (K::Command22, R::Command22),
+        (K::Command23, R::Command23),
+        (K::Prepare26, R::Prepare26),
+        (K::Command29, R::Command29),
+    ] {
+        let mut fake = Fake::default();
+        assert_eq!(replied(Some(kind), ReplyStatus::Accepted, &mut fake), vec![Seen::Reply(answered, 0, vec![])]);
+        assert_eq!(replied(Some(kind), ReplyStatus::Rejected, &mut fake), vec![Seen::Reply(answered, 21, vec![])]);
+    }
+}
+
+#[test]
+fn prepare_is_answered_with_the_selection_flags() {
+    let mut fake = Fake::with(&[(Field::SelectionFlags, 0b101)]);
+    assert_eq!(replied(Some(K::Prepare), ReplyStatus::Accepted, &mut fake), vec![Seen::Reply(R::Prepare, 0, vec![0b101])]);
+}
+
+#[test]
+fn capture_changes_are_answered_through_command09() {
+    let mut fake = Fake::default();
+    for status in [ReplyStatus::Accepted, ReplyStatus::Rejected] {
+        assert_eq!(replied(Some(K::Command09), status, &mut fake), vec![Seen::Reply(R::Command09, 15, vec![0])]);
+    }
+    assert_eq!(replied(Some(K::Command0a), ReplyStatus::Accepted, &mut fake), vec![Seen::Reply(R::Command09, 0, vec![0])]);
+    assert_eq!(replied(Some(K::Command0a), ReplyStatus::Rejected, &mut fake), vec![Seen::Reply(R::Command09, 21, vec![0])]);
+}
+
+fn focus_blocks() -> Fake {
+    let mut fake = Fake::default();
+    fake.blocks = vec![
+        (Block::Release, vec![0x40; 33]),
+        (Block::FocusConfirmation, vec![0x80; 8]),
+        (Block::MeasuredWindow, vec![0x50; 5]),
+        (Block::FocusHistory, vec![0x20; 20]),
+    ];
+    fake
+}
+
+fn cleared(block: Block, length: usize, indices: &[usize], fill: u32) -> Seen {
+    let mut words = vec![fill; length];
+    indices.iter().for_each(|&index| words[index] = 0);
+    Seen::Block(block, words)
+}
+
+fn focus_cleared() -> Vec<Seen> {
+    vec![
+        cleared(Block::Release, 33, &[1, 24], 0x40),
+        cleared(Block::FocusConfirmation, 8, &[0], 0x80),
+        cleared(Block::MeasuredWindow, 5, &[3], 0x50),
+    ]
+}
+
+#[test]
+fn secondary_profile_and_autofocus_clear_focus_state_without_an_answer() {
+    let mut fake = focus_blocks();
+    let mut expected = focus_cleared();
+    expected.push(cleared(Block::FocusHistory, 20, &[0, 1], 0x20));
+    assert_eq!(replied(Some(K::Command03), ReplyStatus::Accepted, &mut fake), expected);
+    assert_eq!(replied(Some(K::Autofocus), ReplyStatus::Accepted, &mut fake), vec![cleared(Block::FocusHistory, 20, &[0], 0x20)]);
+}
+
+#[test]
+fn command17_clears_focus_state_when_nothing_stays_selected() {
+    let mut fake = focus_blocks();
+    let mut expected = focus_cleared();
+    expected.push(cleared(Block::FocusHistory, 20, &[0], 0x20));
+    expected.push(cleared(Block::FocusHistory, 20, &[0, 1], 0x20));
+    expected.push(Seen::Reply(R::Command17, 0, vec![]));
+    assert_eq!(replied(Some(K::Command17), ReplyStatus::Accepted, &mut fake), expected);
+
+    let mut selected = Fake { fields: vec![(Field::Command17Selection, 2)], ..focus_blocks() };
+    assert_eq!(replied(Some(K::Command17), ReplyStatus::Accepted, &mut selected), vec![Seen::Reply(R::Command17, 0, vec![])]);
+}
+
+#[test]
+fn rejected_command17_is_answered_with_its_own_status_and_clears_nothing() {
+    let mut fake = focus_blocks();
+    assert_eq!(replied(Some(K::Command17), ReplyStatus::Rejected, &mut fake), vec![Seen::Reply(R::Command17, -96, vec![])]);
+}
+
+#[test]
+fn commands_the_live_view_does_not_answer_and_no_command_leave_no_trace() {
+    let mut fake = focus_blocks();
+    for command in [None, Some(K::Command02), Some(K::Command11), Some(K::Command1f), Some(K::Command13)] {
+        assert_eq!(replied(command, ReplyStatus::Accepted, &mut fake), vec![]);
+    }
+}
+
+fn applied(seen: &[Seen]) -> (Option<Parameters>, Option<StatusSnapshot>) {
+    let parameters = seen.iter().find_map(|seen| match seen { Seen::ApplyParameters(parameters) => Some(*parameters), _ => None });
+    let status = seen.iter().find_map(|seen| match seen { Seen::ApplyStatus(status) => Some(*status), _ => None });
+    (parameters, status)
+}
+
+#[test]
+fn the_primary_profile_is_mirrored_into_both_display_records() {
+    let mut fake = Fake::with(&[
+        (Field::FormatRatio, 0x0003_0004),
+        (Field::Selection, 1),
+        (Field::ExposureFirst, 0x21),
+        (Field::ExposureSecond, 0x22),
+        (Field::FormatMode, 6),
+        (Field::ExposureSixth, 0x26),
+        (Field::ExposureSeventh, 0x27),
+        (Field::ExposureEighth, 0x28),
+        (Field::DisplayStatusByte, 0x1a0),
+        (Field::DisplayMode, 0x38),
+        (Field::DisplayModeFirst, 0x3c),
+        (Field::DisplayModeSecond, 0x40),
+        (Field::DisplayModeByte, 0xff),
+        (Field::DisplayScanIndex, 0xc0),
+    ]);
+    let mut live = LiveProfile::new();
+    live.apply(entered(&command(K::Command02, &[0, 0, 0xffff_ffff])), record(), &mut fake);
+    let (Some(parameters), Some(status)) = applied(&fake.seen) else { panic!("{:?}", fake.seen) };
+    assert_eq!(parameters.format_ratio(), [4, 3]);
+    assert_eq!((parameters.mode(), parameters.mode_first(), parameters.mode_second(), parameters.mode_byte()), (0x38, 0x3c, 0x40, -1));
+    assert_eq!((status.output_mode(), status.processing_option(), status.geometry_enabled(), status.geometry_kind()), (1, 0x40, 0x21, 0x22));
+    assert_eq!(status.dimensions(), [6, 0x0003_0004]);
+    assert_eq!((status.scan_selection(), status.query_mode(), status.format(), status.record_kinds()), (0x5c, 0x26, 0x5f, [0x27, 0x28]));
+    assert_eq!((status.at_a0(), status.scan_index()), (0xa0, 0xc0));
+}
+
+#[test]
+fn the_view_configuration_is_mirrored_with_the_lens_and_the_profile() {
+    let mut fake = Fake::with(&[(Field::DisplayOutput, 0x2c), (Field::Command1dRestarts, 0xb0), (Field::PreparationRestorable, 1)]);
+    fake.values.group = ValueGroup { first: 0x100, fifth: 7, sixth: 0xfffe, seventh: 5, eighth: 0xffff, ..ValueGroup::default() };
+    fake.values.restorable = 1;
+    fake.values.level = 0x0130;
+    fake.values.windows = [[1, 2, 3], [4, 5, 6]];
+    fake.values.converted = [0x10, 0x20];
+    LiveProfile::new().view(ViewRequest::Configure(MotionSetting(0)), record(), &mut fake);
+    let (Some(parameters), Some(status)) = applied(&fake.seen) else { panic!("{:?}", fake.seen) };
+    assert_eq!((parameters.profile_word(), parameters.limit(), parameters.secondary_limit()), (0x130, -2, 5));
+    assert_eq!((parameters.index(), parameters.index_scale(), parameters.mode_shift()), (8, 0x11, 0x1234));
+    assert_eq!((parameters.area(), parameters.format_ratio(), parameters.quad_mode(), parameters.output()), ([1, 2, 3], [0x10, 0x20], 1, 0x2c));
+    assert_eq!((status.area(), status.processing_option(), status.rate()), ([4, 5, 6], 0x40, 1));
+    assert_eq!(status.dimensions(), [0, 0], "no capture window in format mode 0");
+    assert_eq!((status.first_of(), status.multiple()), (0xb0, 1));
+}
+
+#[test]
+fn range_and_output_changes_mirror_one_record_each() {
+    let autofocus = command(K::Autofocus, &[]);
+    let mut range = Fake { changes: vec![Change::Range], ..Fake::with(&[(Field::CaptureSecond, 0x7c)]) };
+    LiveProfile::new().apply(entered(&autofocus), record(), &mut range);
+    assert!(matches!(applied(&range.seen), (None, Some(status)) if status.range() == 0x7c));
+    let mut output = Fake { changes: vec![Change::Output], ..Fake::with(&[(Field::DisplayOutput, 0x2c)]) };
+    LiveProfile::new().apply(entered(&autofocus), record(), &mut output);
+    assert!(matches!(applied(&output.seen), (Some(parameters), None) if parameters.output() == 0x2c));
 }

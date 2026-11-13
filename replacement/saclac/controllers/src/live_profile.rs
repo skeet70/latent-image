@@ -4,19 +4,44 @@
 //! requests, the conditions the controller branches on and the effects it asks for.
 
 use crate::layers::{
-    Block, Change, Configuration, DisplayRecords, Field, Geometry, GeometryCheck, GeometryFlag, GeometryValue, Mirror,
-    Pipeline, ProfileRecord, SharedHelpers,
+    clear_words, Block, Change, Configuration, DisplayRecords, Field, Geometry, GeometryCheck, GeometryFlag, GeometryValue,
+    LensControl, MirrorSources, Pipeline, ProfileRecord, RecordChannel, RecordMode, SharedHelpers,
 };
 use crate::live_view::{
-    Application, ChangeCode, Condition, Effect, MotionSetting, Preparation, RestoreOptions, StopMode, StopReason,
-    ViewRequest,
+    Application, ChangeCode, Condition, Effect, MotionSetting, Preparation, ReplyStatus, StopReason, ViewRequest,
 };
+use crate::replies::{Replies, ReplyCommand as R, Values};
 use crate::stock;
-use xm1_saclac_interface::{Command, CommandKind as K, ImgDc, Parameters, RecordHandle};
+use xm1_saclac_interface::{Command, CommandKind as K, CompletionStatus, ImgDc, Parameters, RecordHandle};
 
 pub(crate) fn word(parameters: Parameters<'_>, index: usize) -> u32 {
     let start = index * 4;
     parameters.bytes().get(start..start + 4).map_or(0, |bytes| u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+/// Command17's ten parameter words: word 1 masks the selection bits word 2 sets.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SelectionWords(pub [u32; 10]);
+
+impl SelectionWords {
+    pub fn of(parameters: Parameters<'_>) -> Self { Self(core::array::from_fn(|index| word(parameters, index))) }
+}
+
+/// Sets the profile's preparation enables and, for each enabled bit, the preparation flag
+/// `values` gives it. The S1 statistics configuration applies them too.
+pub fn apply_preparation(enables: u32, values: u32, record: RecordHandle, profile: &mut impl ProfileRecord) {
+    let enabled = profile.read(record, Field::SelectionEnables);
+    let flags = (0..4).map(|bit| 1 << bit).filter(|bit| enables & bit != 0).fold(enabled, |flags, bit| {
+        if values & bit != 0 { flags | bit } else { flags & !bit }
+    });
+    profile.write(record, Field::SelectionEnables, enables);
+    profile.write(record, Field::SelectionFlags, flags);
+}
+
+/// Whether the profile's preparation is enabled and flagged.
+pub fn preparation_requested(record: RecordHandle, profile: &mut impl ProfileRecord) -> bool {
+    let flags = profile.read(record, Field::SelectionFlags);
+    profile.read(record, Field::SelectionEnables) & 1 != 0 && flags & 1 != 0
 }
 
 /// A preparation mode a command leaves in the profile.
@@ -29,56 +54,9 @@ impl Mode {
     }
 }
 
-/// What the view configuration carries about the preparation before it.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum Prepared { #[default] None, Gated, Ungated, Refresh, Autofocus }
-
-impl Prepared {
-    pub const fn word(self) -> u32 {
-        match self { Self::None => 0, Self::Gated => 1, Self::Ungated => 2, Self::Refresh => 3, Self::Autofocus => 4 }
-    }
-}
-
-/// The adjustment request's values.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Adjustment { pub selection: u32, pub mode: u32, pub first: u32, pub second: u32 }
-
-/// One of the two identical value groups the view configuration carries.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ValueGroup {
-    pub first: u32,
-    pub second: u16,
-    pub third: u8,
-    pub fourth: u32,
-    pub fifth: u32,
-    pub sixth: u16,
-    /// Already corrected by the image configuration for `fourth`.
-    pub seventh: u16,
-    pub eighth: u16,
-    pub ninth: u32,
-    pub tenth: u16,
-    pub eleventh: u32,
-}
-
-/// The profile layers' values the view configuration request carries unchanged.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ConfigurationValues {
-    pub head: [u32; 3],
-    pub windows: [[u32; 3]; 2],
-    pub block: [u32; 4],
-    pub group: ValueGroup,
-    pub converted: [u16; 2],
-    pub properties: [u16; 4],
-    pub tail: [u32; 3],
-    pub restorable: u8,
-    pub level: u16,
-    pub detail: u8,
-    pub classes: [u8; 2],
-    pub scale: u8,
-    pub capture: u8,
-    pub rate: u8,
-    pub restarts: u32,
-}
+pub use xm1_saclac_interface::imaging::{
+    Adjustment, Configured, ConfigurationValues, Prepared, SelectionClass, ValueGroup, ViewPayload,
+};
 
 /// Reads what the view configuration request carries from the profile layers.
 pub trait ConfigurationSource {
@@ -87,64 +65,45 @@ pub trait ConfigurationSource {
     fn take_offset(&mut self, record: RecordHandle) -> u16;
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SelectionClass { Unselected, Selected, Flagged }
-
-/// The view configuration request's content.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Configured {
-    pub values: ConfigurationValues,
-    pub selection: u32,
-    pub selection_mode: u32,
-    pub selection_class: SelectionClass,
-    pub refresh: u32,
-    pub offset: u16,
-    pub motion: u8,
-    pub active: u8,
-    pub view_mode: u8,
-    pub direct_start: bool,
-    pub prepared: Prepared,
-}
-
-/// A view request with the values its payload carries.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ViewPayload {
-    Start { value: u32, measured: bool },
-    Restore(RestoreOptions),
-    Refresh { value: u32, motion: MotionSetting },
-    Configure(Configured),
-    Stop(StopMode),
-    Suspend,
-    Resume,
-    Adjust(Adjustment),
-    Window(u32),
-}
-
 /// Everything the leaf operations reach outside the live view.
 pub trait Layers {
     type Profile: ProfileRecord;
     type Geometry: Geometry;
     type Configuration: Configuration;
     type Display: DisplayRecords;
+    type RecordMode: RecordMode;
     type Helpers: SharedHelpers;
     type Pipeline: Pipeline;
     type Source: ConfigurationSource;
     type ImgDc: ImgDc;
+    type Replies: Replies;
+    type Lens: LensControl;
+    type Sources: MirrorSources;
 
     fn profile(&mut self) -> &mut Self::Profile;
     fn geometry(&mut self) -> &mut Self::Geometry;
     fn configuration(&mut self) -> &mut Self::Configuration;
     fn display(&mut self) -> &mut Self::Display;
+    fn record_mode(&mut self) -> &mut Self::RecordMode;
     fn helpers(&mut self) -> &mut Self::Helpers;
     fn pipeline(&mut self) -> &mut Self::Pipeline;
     fn source(&mut self) -> &mut Self::Source;
     fn imgdc(&mut self) -> &mut Self::ImgDc;
+    fn replies(&mut self) -> &mut Self::Replies;
+    fn lens(&mut self) -> &mut Self::Lens;
+    fn mirror_sources(&mut self) -> &mut Self::Sources;
 }
 
 /// The words of the suspension block and the one the suspend marks.
 const SUSPENSION_WORDS: usize = 19;
 const SUSPENDED_WORD: usize = 17;
 const SUSPENDED: u32 = 4;
+
+const REJECTED: CompletionStatus = CompletionStatus(21);
+/// The status Command17's reply carries for a rejected selection.
+const SELECTION_REJECTED: CompletionStatus = CompletionStatus(-96);
+/// The status the live view answers Command09 with, whatever its outcome.
+const CAPTURE_ANSWERED: CompletionStatus = CompletionStatus(15);
 
 /// The leaf state the live view's operations keep between entries.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -253,8 +212,7 @@ impl LiveProfile {
             K::Command02 => {
                 self.primary_applied = true;
                 select(record, word(parameters, 2), layers);
-                layers.display().mirror(record, Mirror::Primary);
-                self.selection_mode = layers.geometry().value(record, GeometryValue::SelectionMode);
+                self.selection_mode = crate::live_mirror::primary(record, layers);
                 Application::Applied
             }
             K::Command03 => {
@@ -272,18 +230,12 @@ impl LiveProfile {
             K::Command17 => {
                 let (requested, offered) = (word(parameters, 1), word(parameters, 2));
                 if !layers.geometry().admits(requested, offered) { return Application::Refused; }
-                self.apply_selection(parameters, record, layers);
+                self.apply_selection(&SelectionWords::of(parameters), record, layers.profile());
                 let outgrown = requested == 2 && layers.geometry().outgrown(record, GeometryCheck::Command17);
                 restart_if(outgrown || !direct_start(record, layers))
             }
             K::Prepare => {
-                let (enables, values) = (word(parameters, 1), word(parameters, 2));
-                let enabled = read(layers, record, Field::SelectionEnables);
-                let flags = (0..4).map(|bit| 1 << bit).filter(|bit| enables & bit != 0).fold(enabled, |flags, bit| {
-                    if values & bit != 0 { flags | bit } else { flags & !bit }
-                });
-                layers.profile().write(record, Field::SelectionEnables, enables);
-                layers.profile().write(record, Field::SelectionFlags, flags);
+                apply_preparation(word(parameters, 1), word(parameters, 2), record, layers.profile());
                 layers.profile().write(record, Field::PrepareFirst, word(parameters, 3));
                 layers.profile().write(record, Field::PrepareSecond, word(parameters, 4));
                 Application::Applied
@@ -325,10 +277,10 @@ impl LiveProfile {
     }
 
     /// Copies Command17's selection words into the profile and records whether any
-    /// selection bit is left set.
-    fn apply_selection(&mut self, parameters: Parameters<'_>, record: RecordHandle, layers: &mut impl Layers) {
-        let (mask, values) = (word(parameters, 1), word(parameters, 2));
-        let mut flags = read(layers, record, Field::Command17Selection);
+    /// selection bit is left set. The S1 statistics configuration applies them too.
+    pub fn apply_selection(&mut self, words: &SelectionWords, record: RecordHandle, profile: &mut impl ProfileRecord) {
+        let [_, mask, values, ..] = words.0;
+        let mut flags = profile.read(record, Field::Command17Selection);
         for (bit, field, index) in [
             (1, Some(Field::Command17First), 3),
             (2, Some(Field::Command17Second), 4),
@@ -340,13 +292,13 @@ impl LiveProfile {
             let set = values & bit != 0;
             flags = if set { flags | bit } else { flags & !bit };
             if let Some(field) = field {
-                layers.profile().write(record, field, if set { word(parameters, index) } else { 0 });
+                profile.write(record, field, if set { words.0[index] } else { 0 });
             }
         }
-        layers.profile().write(record, Field::Command17Fifth, word(parameters, 8));
-        layers.profile().write(record, Field::Command17Sixth, word(parameters, 9));
+        profile.write(record, Field::Command17Fifth, words.0[8]);
+        profile.write(record, Field::Command17Sixth, words.0[9]);
         self.selection_active = flags != 0;
-        layers.profile().write(record, Field::Command17Selection, flags);
+        profile.write(record, Field::Command17Selection, flags);
     }
 
     pub(crate) fn set_selection_mode(&mut self, mode: u32) { self.selection_mode = mode; }
@@ -388,10 +340,7 @@ impl LiveProfile {
                 let requested_three = command.is_some_and(|command| word(command.parameters, 1) == 3);
                 mode_three == requested_three
             }
-            Condition::PreparationRequested => {
-                let flags = read(layers, record, Field::SelectionFlags);
-                read(layers, record, Field::SelectionEnables) & 1 != 0 && flags & 1 != 0
-            }
+            Condition::PreparationRequested => preparation_requested(record, layers.profile()),
             Condition::PreparationRestorable => read(layers, record, Field::PreparationRestorable) == 0,
             Condition::StatisticsRetune => read(layers, record, Field::StatisticsRetune) == 1,
             Condition::PrimaryApplied => self.primary_applied,
@@ -408,20 +357,67 @@ impl LiveProfile {
                 layers.profile().write(record, Field::AdjustmentTarget, adjustment);
             }
             Effect::BeginRecordMode => {
-                if !layers.display().initialize_record_mode() && layers.display().record_mode_available() {
-                    layers.display().begin_record_mode();
+                let mode = layers.record_mode();
+                if mode.initialize() && mode.available(RecordChannel::LiveView) {
+                    mode.begin(RecordChannel::LiveView);
                 }
             }
             Effect::FinishRecordMode => {
-                if layers.display().record_mode_available() { layers.display().finish_record_mode(); }
+                let mode = layers.record_mode();
+                if mode.available(RecordChannel::LiveView) { mode.finish(); }
             }
-            Effect::QueryRecordMode => { layers.display().initialize_record_mode(); }
+            Effect::QueryRecordMode => { layers.record_mode().initialize(); }
             Effect::StatisticsPreparation(on) => {
                 let flags = read(layers, record, Field::SelectionFlags);
                 layers.profile().write(record, Field::SelectionFlags, if on { flags | 1 } else { flags & !1 });
             }
             Effect::SelectionTaken => layers.profile().write(record, Field::SelectionTaken, 1),
         }
+    }
+
+    /// Answers the command the live view finished and clears the focus state it leaves stale.
+    /// Stock reads Command17's selection from the live measurement's record; this reads `record`.
+    pub fn reply(&mut self, command: Option<K>, status: ReplyStatus, record: RecordHandle, layers: &mut impl Layers) {
+        let status = match status { ReplyStatus::Accepted => CompletionStatus(0), ReplyStatus::Rejected => REJECTED };
+        let Some(command) = command else { return };
+        let answered = match command {
+            K::Command03 => {
+                clear_focus(record, layers.profile());
+                clear_words::<HISTORY_WORDS>(layers.profile(), record, Block::FocusHistory, &[0, 1]);
+                return;
+            }
+            K::Autofocus => {
+                clear_words::<HISTORY_WORDS>(layers.profile(), record, Block::FocusHistory, &[0]);
+                return;
+            }
+            K::Command09 => return respond(layers, R::Command09, CAPTURE_ANSWERED, &[0]),
+            K::Command0a => return respond(layers, R::Command09, status, &[0]),
+            K::Command17 if status == REJECTED => return respond(layers, R::Command17, SELECTION_REJECTED, &[]),
+            K::Command17 => {
+                if read(layers, record, Field::Command17Selection) == 0 {
+                    // The history is written twice, first with word 0 alone cleared (0xf2fab8).
+                    clear_focus(record, layers.profile());
+                    clear_words::<HISTORY_WORDS>(layers.profile(), record, Block::FocusHistory, &[0]);
+                    clear_words::<HISTORY_WORDS>(layers.profile(), record, Block::FocusHistory, &[0, 1]);
+                }
+                R::Command17
+            }
+            K::Prepare => {
+                let flags = read(layers, record, Field::SelectionFlags);
+                return respond(layers, R::Prepare, status, &[flags]);
+            }
+            K::HalfRelease => R::HalfRelease,
+            K::Command1d => R::Command1d,
+            K::Command1e => R::Command1e,
+            K::Command20 => R::Command20,
+            K::Command21 => R::Command21,
+            K::Command22 => R::Command22,
+            K::Command23 => R::Command23,
+            K::Prepare26 => R::Prepare26,
+            K::Command29 => R::Command29,
+            _ => return,
+        };
+        respond(layers, answered, status, &[]);
     }
 
     pub fn motion_setting(&mut self, layers: &mut impl Layers) -> MotionSetting {
@@ -495,16 +491,29 @@ impl LiveProfile {
             SelectionClass::Selected
         };
         let offset = layers.source().take_offset(record);
-        layers.display().mirror(record, Mirror::Configured);
-        self.selection_mode = selection_mode;
-        Configured {
+        let configured = Configured {
             values, selection, selection_mode, selection_class, refresh, offset, motion, active, view_mode, direct_start,
             prepared: self.prepared,
-        }
+        };
+        crate::live_mirror::configured(&configured, record, layers);
+        self.selection_mode = selection_mode;
+        configured
     }
 }
 
 fn read(layers: &mut impl Layers, record: RecordHandle, field: Field) -> u32 { layers.profile().read(record, field) }
+
+fn respond(layers: &mut impl Layers, command: R, status: CompletionStatus, words: &[u32]) {
+    layers.replies().reply(command, status, Values::Words(words));
+}
+
+const HISTORY_WORDS: usize = 20;
+
+fn clear_focus(record: RecordHandle, profile: &mut impl ProfileRecord) {
+    clear_words::<33>(profile, record, Block::Release, &[1, 24]);
+    clear_words::<8>(profile, record, Block::FocusConfirmation, &[0]);
+    clear_words::<5>(profile, record, Block::MeasuredWindow, &[3]);
+}
 
 fn direct_start(record: RecordHandle, layers: &mut impl Layers) -> bool {
     let mode = read(layers, record, Field::ViewMode);
