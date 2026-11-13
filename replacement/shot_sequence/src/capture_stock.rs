@@ -67,17 +67,20 @@ pub const SLOT_REFERENCE: u32 = 0x75c874;
 pub const SLOT_OFFSET: u32 = 0x75c8a4;
 
 /// The words after the callback and target of the lens service's absolute move 0x76e654
-/// (0xf2f2e8..0xf2f304).
+/// (0xf2f2e8..0xf2f304, the finish's 0xf17d7c..0xf17d94).
 pub const fn absolute_move_arguments(profile: MoveProfile) -> [u32; 4] {
     match profile {
         MoveProfile::LensReturn => [1, 1, 0, 4],
+        MoveProfile::Finish { speed } => [1, 1, 0, speed],
     }
 }
 
-/// The words after the callback, delta and speed of the relative move 0x76e1ac (0xf2f3d0..0xf2f3f0).
+/// The words after the callback, delta and speed of the relative move 0x76e1ac (0xf2f3d0..0xf2f3f0,
+/// the finish's 0xf1856c..0xf1858c).
 pub const fn relative_move_arguments(profile: MoveProfile) -> [u32; 4] {
     match profile {
         MoveProfile::LensReturn => [1, 0, 5, 4],
+        MoveProfile::Finish { speed } => [1, 0, speed, 4],
     }
 }
 

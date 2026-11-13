@@ -125,7 +125,7 @@ pub struct RemapRequest {
 
 /// Which step's move arguments a lens move carries.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MoveProfile { LensReturn }
+pub enum MoveProfile { LensReturn, Finish { speed: u32 } }
 
 /// Lens moves through the lens service, each completing with `completion`.
 pub trait LensMoves {
