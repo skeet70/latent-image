@@ -1374,4 +1374,43 @@
       }
     ]
   }
+  ,{
+    "id": "E-GENERAL-HEAP-CUTOVER-NATURAL-PAIR-150",
+    "claim": "The rebuilt general heap preserves ordered interface traffic and the no-card boot/menu end states on the current emulator. The comparison admits {{calls}} logical calls across {{contexts}} contexts with global order identical={{global_order}}. Cases per entry in stock/owned order are {{entry_cases}}. Owned allocation failures on cores 0/1 are {{failures0}}/{{failures1}}. Both roles reach menu endpoints {{menus}} and the same rendered frame {{frame}}. Authenticated stock/owned allocator fetches are {{stock_fetches}}/{{owned_fetches}}. The staged wrong owned binary executes {{mutant_fetches}} allocator fetches, completes its role-local checks and is detected by the ordered comparator: {{mutant_error}} (detected={{mutant_detected}}). The owned DAT {{candidate_sha256}} and linked binary {{linked_sha256}} reproduce the existing cutover. The live/peak requested bytes are {{requested_live}}/{{requested_peak}}; the owned live allocation count is {{live_allocations}}.",
+    "scope": "Whole general-heap artifact behind retained A32 entries on the finite natural no-card cold-boot/menu route, conditional on {{premises}}. Compared traffic includes operation, arguments, logical allocation identity, success/failure and errno in global order; pointer addresses and internal allocator state are not equality criteria. Both roles execute their allocator bodies. The RTOS recursive lock and external graphics/service adapters remain registered stock interfaces.",
+    "notes": "Unreached calloc/realloc/trim, Wi-Fi clients, recipe-ceiling artifact, capacity-rejection lock timing, invalid-pointer liveness and complete task-stack headroom remain in the report's final-pass queue. Interior jumps remain unclosed: guards do not bind every carrier fetch to an entry or active invocation after sealing. The wrong binary stores errno 12 on successful malloc; both roles pass their local checks before ordered comparison. Journals retain address/size/PC, not arbitrary store values. Unknown metadata readers and competing backing users remain unresolved. No capture/playback, cross-core contention, physical timing or hardware acceptance is claimed.",
+    "artifacts": [
+      "private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json",
+      "private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/mutant-comparison.json",
+      "private-data/scratch/GeneralHeap/runs/20261113T053152Z-heap-reviewed-stock-boot/result/natural-receipt.json",
+      "private-data/scratch/GeneralHeap/runs/20261113T053155Z-heap-reviewed-owned-boot/result/natural-receipt.json",
+      "private-data/scratch/GeneralHeap/runs/20261113T053158Z-heap-traffic-mutant-owned-boot/result/natural-receipt.json",
+      "private-data/scratch/GeneralHeap/runs/20261113T053201Z-heap-traffic-mutant-stock-boot/result/natural-receipt.json",
+      "private-data/scratch/GeneralHeap/runs/20261113T053100Z-heap-reviewed-staging/result/mutation.json",
+      "private-data/scratch/GeneralHeap/runs/20261113T053155Z-heap-reviewed-owned-boot/result/summary.json",
+      "private-data/scratch/GeneralHeap/runs/20261113T053100Z-heap-reviewed-staging/result/staging-contract.json"
+    ],
+    "facts": [
+      {"name":"firmware_sha256","path":"private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json","pointer":["stock","update_sha256"]},
+      {"name":"calls","path":"private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json","pointer":["calls"]},
+      {"name":"contexts","path":"private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json","pointer":["contexts"]},
+      {"name":"global_order","path":"private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json","pointer":["global_order_identical"]},
+      {"name":"entry_cases","path":"private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json","pointer":["cases_per_entry"]},
+      {"name":"menus","path":"private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json","pointer":["stock","menus"]},
+      {"name":"frame","path":"private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json","pointer":["stock","frame"]},
+      {"name":"stock_fetches","path":"private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json","pointer":["stock","fetches_checked"]},
+      {"name":"owned_fetches","path":"private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json","pointer":["owned","fetches_checked"]},
+      {"name":"premises","path":"private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json","pointer":["conditional_premises"]},
+      {"name":"mutant_fetches","path":"private-data/scratch/GeneralHeap/runs/20261113T053158Z-heap-traffic-mutant-owned-boot/result/natural-receipt.json","pointer":["fetches_checked"]},
+      {"name":"mutant_error","path":"private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/mutant-comparison.json","pointer":["error"]},
+      {"name":"mutant_detected","path":"private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/mutant-comparison.json","pointer":["detected"]},
+      {"name":"failures0","path":"private-data/scratch/GeneralHeap/runs/20261113T053155Z-heap-reviewed-owned-boot/result/summary.json","pointer":["per_core","0","mix","failed_calls"]},
+      {"name":"failures1","path":"private-data/scratch/GeneralHeap/runs/20261113T053155Z-heap-reviewed-owned-boot/result/summary.json","pointer":["per_core","1","mix","failed_calls"]},
+      {"name":"requested_live","path":"private-data/scratch/GeneralHeap/runs/20261113T053155Z-heap-reviewed-owned-boot/result/summary.json","pointer":["requested_live"]},
+      {"name":"requested_peak","path":"private-data/scratch/GeneralHeap/runs/20261113T053155Z-heap-reviewed-owned-boot/result/summary.json","pointer":["requested_peak"]},
+      {"name":"live_allocations","path":"private-data/scratch/GeneralHeap/runs/20261113T053155Z-heap-reviewed-owned-boot/result/summary.json","pointer":["live_allocations"],"operation":"length"},
+      {"name":"candidate_sha256","path":"private-data/scratch/GeneralHeap/runs/20261113T053100Z-heap-reviewed-staging/result/staging-contract.json","pointer":["candidate_dat_sha256"]},
+      {"name":"linked_sha256","path":"private-data/scratch/GeneralHeap/runs/20261113T053100Z-heap-reviewed-staging/result/staging-contract.json","pointer":["linked_sha256"]}
+    ]
+  }
 ]

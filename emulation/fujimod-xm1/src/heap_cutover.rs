@@ -7,7 +7,7 @@ mod guard;
 mod check;
 use guard::Role;
 
-const HELP: &str = "heap-observe --cutover-run|--cutover-check|--cutover-controls CONTRACT STOCK_DAT CANDIDATE_DAT ANALYSIS RUN ROM OUTPUT [REPORT_JSON]";
+const HELP: &str = "heap-observe --cutover-run|--cutover-stock|--cutover-owned|--cutover-check|--cutover-controls CONTRACT STOCK_DAT CANDIDATE_DAT ANALYSIS RUN ROM OUTPUT [REPORT_JSON]";
 const JOURNAL_LIMIT: u64 = 256 * 1024 * 1024;
 /// The owned journal records every owned allocator fetch; it exceeded 1 GiB decoded after 44,593 of the route's 51,221 stock boundaries.
 const CUTOVER_ACCESS_LIMITS: AccessLimits = match (heap_accesses::ByteLimit::new(4 * 1024 * 1024 * 1024), ACCESS_LIMITS) {
@@ -268,12 +268,18 @@ fn execute(inputs: &Inputs, role: Role, output: &Path) -> Result<(), String> {
 
 pub(super) fn command(arguments: &[std::ffi::OsString]) -> Option<Result<(), String>> {
     let name = arguments.first()?.to_str()?;
-    if !["--cutover-run", "--cutover-check", "--cutover-controls"].contains(&name) { return None; }
+    if !["--cutover-run", "--cutover-stock", "--cutover-owned", "--cutover-check", "--cutover-controls"].contains(&name) { return None; }
     Some((|| {
-        require(arguments.len() == if name == "--cutover-run" { 8 } else { 9 }, HELP)?;
+        let running = matches!(name, "--cutover-run" | "--cutover-stock" | "--cutover-owned");
+        require(arguments.len() == if running { 8 } else { 9 }, HELP)?;
         let inputs = load(arguments)?;
         let output = Path::new(&arguments[7]);
         match name {
+            "--cutover-stock" | "--cutover-owned" => {
+                fujimod_emulator_exr2_board::register_board_builder();
+                fujimod_emulator_models::register();
+                execute(&inputs, if name == "--cutover-stock" { Role::Stock } else { Role::Owned }, output)
+            }
             "--cutover-run" => {
                 std::fs::create_dir(output).map_err(|error| error.to_string())?;
                 fujimod_emulator_exr2_board::register_board_builder();

@@ -63,6 +63,10 @@ devenv shell -- host-build run //replacement/general_heap:stage-general-heap -- 
 
 The scratch directory must already exist under `private-data/scratch/`. The stager checks canonical inputs, carried-stream decode and outside-byte preservation. [Shared record-5 staging](record5_staging/) is reused by the heap, application pump and composed stager; its manual `:record5-staging-canonical-tests` takes `CANONICAL_DAT IMAGE4 IMAGE5 SCRATCH_DIR`. Host admission is not natural-run or silicon qualification.
 
+The [current cutover design](../reports/general-heap-cutover.md) states the comparison projection and caller-grounded corrections. `:heap-mutant LINKED_BIN SYMBOLS OUT_BIN RECEIPT_JSON` creates a deliberately wrong owned binary: malloc enters a trampoline in the unused trim body, stores errno 12 through its context, then resumes malloc after its displaced prologue. Stage that binary through the same stager and run stock and owned roles against its contract. Both roles must complete their local checks, then `--cutover-check` must report different ordered interface traffic. The receipt binds the original/mutant digests and the branch site/target.
+
+`heap-observe --cutover-stock` and `--cutover-owned` take `CONTRACT STOCK_DAT CANDIDATE_DAT ANALYSIS RUN ROM OUTPUT` and execute one cold-boot role each. Use a separate emulator slot for each role, then run `--cutover-check CONTRACT STOCK_DAT CANDIDATE_DAT ANALYSIS RUN ROM PAIR_DIRECTORY REPORT_JSON` outside the slot. `PAIR_DIRECTORY` contains the `stock` and `owned` role directories. The consumer requires identical global logical-call order, separate calloc arguments and matching final frames; it does not require matching allocation addresses.
+
 ## Component stagers
 
 Bazel supplies `ENCODER REBUILD DECODER` for these CLI targets. All source arguments are canonical inputs; `LINKED_BIN SYMBOLS` name the actual emitted artifact. Unless a command creates its own output directory, create an existing named scratch directory first and use fresh output paths.

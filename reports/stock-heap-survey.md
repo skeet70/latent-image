@@ -68,19 +68,19 @@ A second boundary-tag family in plain/image 6 is a distinct SQLite memsys3-style
 
 ## Caller census and metadata dependencies
 
-The census counts direct A32 instruction sites targeting each listed entry in canonical image-4/image-5 listings. Boot stages A/B, loaders A/B, image 2 and the plain/image-6 listing have no direct reference to these targets in the inspected listing domain. Overlapping `filmsim`, `update` and `update-review` copies are not additional callers. Data accidentally decoding as branch instructions, Thumb, aliases, arithmetic construction and copied/runtime-published pointers prevent treating a textual census as a retirement proof.
+The census counts direct A32 instruction sites targeting each listed entry in canonical image-4/image-5/image-6 listings. Boot stages A/B, loaders A/B and image 2 have no direct reference to these targets in the inspected listing domain. Overlapping `filmsim`, `update` and `update-review` copies are not additional callers. Data accidentally decoding as branch instructions, Thumb, aliases, arithmetic construction and copied/runtime-published pointers prevent treating a textual census as a retirement proof.
 
-| Target | Image 4 | Image 5 |
-| --- | ---: | ---: |
-| `0x0089cda4` | 10 | 0 |
-| `0x0089cdc4` | 43 | 0 |
-| `0x0089da3c` | 2 | 0 |
-| `0x0089cde4` | 3 | 5 |
-| `0x0089da64` | 1 | 1 |
-| `0x0089e560` | 4 | 1 |
-| `0x00bf1c1c` | 0 | 0 |
-| `0x00bf1c44` | 0 | 3 |
-| `0x0089e464` | 1 | 0 |
+| Target | Image 4 | Image 5 | Image 6 |
+| --- | ---: | ---: | ---: |
+| `0x0089cda4` | 10 | 0 | 92 |
+| `0x0089cdc4` | 43 | 0 | 486 |
+| `0x0089da3c` | 2 | 0 | 15 |
+| `0x0089cde4` | 3 | 5 | 0 |
+| `0x0089da64` | 1 | 1 | 0 |
+| `0x0089e560` | 4 | 1 | 0 |
+| `0x00bf1c1c` | 0 | 0 | 1 |
+| `0x00bf1c44` | 0 | 3 | 0 |
+| `0x0089e464` | 1 | 0 | 0 |
 
 Image-4 allocation wrapper callers: `0x006dbf40`, `0x0072a7d8`, `0x00890f00`, `0x00891238`, `0x008913a4`, `0x008914f4`, `0x008916b8`, `0x008916f4`, `0x00891900`, `0x008919f8`.
 
@@ -89,6 +89,10 @@ Image-4 free wrapper callers: `0x006d9550`, `0x006d9bd4`, `0x006d9f58`, `0x006da
 Image-4 resize wrapper callers are `0x00890ee0` and `0x008917a4`. Its allocation core callers are `0x0089cdb4`, `0x0089dd50`, `0x0089ddc4`; resize core caller `0x0089da54`; free core callers `0x0089cdd4`, `0x0089d4cc`, `0x0089dc64`, `0x0089ddb0`; trim caller `0x0089e770`. These include internal allocator calls and wrapper forwarding, not independent clients.
 
 Image-5 allocation core callers are `0x00bf1c4c`, `0x00bf54dc`, `0x00bf5f6c`, `0x00bf6dd0`, `0x00bf887c`; resize caller `0x00bf6004`; free caller `0x00bf6018`; calloc core callers `0x00bf1c34`, `0x00bf395c`, `0x00bf398c`.
+
+Image-6 resize-wrapper sites in `decode/img6.dis`: `0x13201a8`, `0x13204bc`, `0x1320658`, `0x13213a8`, `0x1324378`, `0x13263fc`, `0x1326464`, `0x135bc18`, `0x1388af4`, `0x13b8700`, `0x13d5fd0`, `0x13dabb0`, `0x13db24c`, `0x13db3b8`, `0x13db4cc`. All store the returned pointer and test only null, taking an error path on null, sometimes freeing the old block. No old/new-pointer comparison or lock-state read was found in the following caller code. The pinned exact-C `hostapd_register_probereq_cb` (`app/third_party/hostap/src/ap/ap_utils.c:30`) is the `0x1388af4` site and grows its callback array with `(n+1)*8`. Other sizes are caller arithmetic, including `(n+1)*4`, length plus extra, a+b+120 and length+n/2. The image-6 calloc-wrapper site `0x1404e9c` passes `(1,20)` (argument loads at `0x1404e94/0x1404e98`), stores/tests only null and cannot overflow. Its pinned decomp is `FUN_01404e84` in `app/connectivity/netstack/tu_01401a94.c:1014`.
+
+Image-6 also has 92 malloc-wrapper sites from `0x131e010` through `0x14017dc`, and 486 free-wrapper sites beginning at `0x131e0e0`. The counts and exact site lists are retained in `private-data/scratch/GeneralHeap/runs/20261113T052024Z-heap-image6-census/result/census.txt`. These Wi-Fi/hostapd/netstack clients remain a full-system scenario and pointer-flow final-pass item, not covered by the no-card menu route.
 
 The calloc body is a confirmed allocator-internals reader outside image 4: it reads `payload-4` and clears the usable extent. Retaining it over a different allocator's metadata can clear beyond the allocation. A cutover must replace this core and wrapper together with the allocation/free/resize closure, not only the public image-4 wrappers. No standalone stock usable-size call was identified. Other negative-offset loads are not automatically chunk readers; complete allocation-pointer flow and address-sensitive consumer closure remain open.
 
@@ -289,9 +293,8 @@ Placement and initialization must account for phase0's conditional clear `[0x89e
 
 ### Natural stock/owned pair
 
-E-GENERAL-HEAP-CUTOVER-ARTIFACT-150 binds the staged `970acb8c` candidate: rlsf behind the stock entry ABI in five retired carriers (5,372 bytes), with 12/12 host tests at each arena size, and its production stock bridge replays the 8,529-call tape on the host. One stock and one owned cold-boot no-card route then run on SDK `ad2dadd2` (E-GENERAL-HEAP-CUTOVER-NATURAL-PAIR-150). Both complete 450,000,000 instructions with menus `[69,52,12]` then `[1,5,2]` and the same final frame. The consumer compares all 8,529 logical calls in three contexts with identical global order. Both roles end with 451 live allocations and 113,309 requested bytes; owned usable live/peak bytes are 114,988/116,816 against stock's 115,052/116,880. The owned role fetches only admitted owned PCs in the carriers, writes the sentinel once and never advances the retained backing break. The stock role reproduces the `0fffa83` events and summary byte for byte. All four journal controls refuse at their intended checks.
+The [current cutover report](general-heap-cutover.md) owns placement, the exact interface projection, caller-grounded corrections and the final-pass queue. E-GENERAL-HEAP-CUTOVER-ARTIFACT-150 remains the artifact/build record. E-GENERAL-HEAP-CUTOVER-NATURAL-PAIR-150 binds the cold-boot/menu pair, whose comparator requires global logical-call order and equal rendered endpoint frames, and an actual wrong owned binary that completes guest execution and role-local checks before the ordered comparator detects its errno traffic. [Generated figures and scope](../replacement/README.md#general-heap) come from those run results.
 
-Two earlier attempts refused and were fixed before this pair. At `eb505a7e`, halfword carrier shadows exceeded the SDK's 4,096 instruction points per core and both roles refused before any guest instruction. At `45808e9b`, stock completed and owned refused at the shared 1 GiB decoded watch bound, because the owned journal records every owned allocator fetch (1.25 GB decoded for the full route). The route makes 381 zero-byte mallocs from task 33 in both roles, each returning a non-null 12-byte allocation, so the malloc half of `zero-request-minimum-allocation` is exercised here and on the bridge-replay tape. It has no calloc, realloc or trim call, so `realloc(p, 0)`, `checked-calloc-product`, `oversized-resize-rejected-before-lock` and `trim-returns-zero` are not exercised. The pair qualifies no capture, development or storage workload, cross-core contention or silicon timing.
 
 ## Reproduction and evidence anchors
 
