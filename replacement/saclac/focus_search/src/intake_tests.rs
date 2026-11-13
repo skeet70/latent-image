@@ -209,3 +209,25 @@ fn the_snapshot_layout_names_the_fields_the_intake_reads() {
     assert_eq!((snapshot.levels[1], snapshot.level_offset, snapshot.lens), (0x0123, -7, LensIdentity(2)));
     assert_eq!((snapshot.frame_mode, snapshot.pacing[1], snapshot.correction_source, snapshot.corrects_position), (1, 9, -3, 1));
 }
+
+#[test]
+fn an_evaluation_completion_reads_the_result_at_the_address_it_names() {
+    use crate::stock::evaluation::evaluated;
+    use xm1_saclac_interface::search::ResultAddress;
+    use xm1_saclac_interface::stock::search::EVALUATION_BYTES;
+    let payload = [0, 0, 0, 0, 0x40, 0x0f, 0x6c, 0x01];
+    let mut asked = Vec::new();
+    let evaluation = evaluated(&payload, |address| {
+        asked.push(address);
+        let mut result = [0u8; EVALUATION_BYTES];
+        result[0x60..0x64].copy_from_slice(&7u32.to_le_bytes());
+        result
+    });
+    assert_eq!(asked, [ResultAddress(0x016c_0f40)]);
+    assert_eq!(evaluation.map(|evaluation| evaluation.reference), Some(7));
+    assert_eq!(evaluated(&payload[..4], |address| {
+        asked.push(address);
+        [0; EVALUATION_BYTES]
+    }), None);
+    assert_eq!(asked.len(), 1);
+}

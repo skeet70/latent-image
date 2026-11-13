@@ -2,6 +2,7 @@
 
 //! X-M1 1.50 layouts of the record fields the search reads and writes.
 
+pub mod evaluation;
 pub mod intake;
 
 use crate::contrast::settings::{Setting, StepKind, TrendBasis};
