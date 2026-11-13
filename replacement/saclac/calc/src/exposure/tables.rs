@@ -18,13 +18,13 @@ use crate::stock::{dump, record, shared};
 /// The range every curve point is clamped to: the configured floor less 90 steps and the
 /// configured ceiling plus 25, both in tenths.
 #[derive(Clone, Copy, Debug)]
-struct CurveRange {
-    lowest: i32,
-    highest: i32,
+pub(crate) struct CurveRange {
+    pub(crate) lowest: i32,
+    pub(crate) highest: i32,
 }
 
 impl CurveRange {
-    fn read(ports: &mut impl Ports) -> Self {
+    pub(crate) fn read(ports: &mut impl Ports) -> Self {
         let floor = settings::level(ports, property::TABLE_FLOOR).wrapping_mul(10);
         let ceiling = settings::level(ports, property::TABLE_CEILING).wrapping_mul(10);
         Self { lowest: i32::from(floor) - 900, highest: i32::from(ceiling) + 250 }

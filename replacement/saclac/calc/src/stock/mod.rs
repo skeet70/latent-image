@@ -4,9 +4,14 @@
 
 pub mod adjust;
 pub mod calculation;
+pub mod capture;
+pub mod context_trace;
 pub mod dump;
+pub mod lists;
 pub mod motion;
 pub mod property;
+pub mod rate_curve;
+pub mod rate_samples;
 pub mod record;
 pub mod scene;
 pub mod shared;

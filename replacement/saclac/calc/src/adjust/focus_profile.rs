@@ -76,6 +76,44 @@ pub const fn context_category(active: bool, aspect_index: u8) -> u8 {
     if active { 4 } else if aspect_index == 0 { 2 } else { 3 }
 }
 
+/// What decides the exposure kind the shot and the engine take.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct KindInputs {
+    pub level: i16,
+    /// The proposed kind stands as it is.
+    pub fixed: bool,
+    pub scene: u32,
+    pub mode: u32,
+    pub proposed: u32,
+}
+
+/// The level-step band a level falls in: 0 for level 0, else the step below the first of steps 2
+/// to 10 above it, 10 from step 10 up (0x772ff8).
+fn level_band(properties: &mut impl Properties, level: i16) -> u8 {
+    if level == 0 {
+        return 0;
+    }
+    (2..=10).find(|&step| level < settings::level_step(properties, step)).map_or(10, |step| step - 1)
+}
+
+/// 1 for a level in bands 1, 2, 9 or 10, 2 for scene 57, 1 for mode 2 or 3, else the proposed
+/// kind (0xfa67a8).
+pub fn exposure_kind(properties: &mut impl Properties, inputs: &KindInputs) -> u32 {
+    if inputs.fixed {
+        return inputs.proposed;
+    }
+    if matches!(level_band(properties, inputs.level), 1 | 2 | 9 | 10) {
+        return 1;
+    }
+    if inputs.scene == 57 {
+        return 2;
+    }
+    if (2..=3).contains(&inputs.mode) {
+        return 1;
+    }
+    inputs.proposed
+}
+
 /// The lens state the area setup is programmed against.
 pub trait LensResources {
     /// The lens's current resource; `None` while it has no valid one.
@@ -93,7 +131,8 @@ pub struct AreaSetup {
     pub kind: u8,
     /// 6 when the record's own kind applies, else 0.
     pub class: u8,
-    pub values: [u32; 2],
+    /// The caller's two halfwords, which the configuration reads and rewrites.
+    pub values: [i16; 2],
     pub flags: u32,
     pub auxiliary: u8,
     pub last: u32,
@@ -106,16 +145,17 @@ pub struct ReferencedArea {
     pub reference: u32,
 }
 
+/// Each call returns the two halfwords it leaves in place of `values` (0x74bd64, 0x74c568).
 pub trait AreaConfiguration {
-    fn configure(&mut self, area: &AreaSetup);
-    fn configure_referenced(&mut self, area: &ReferencedArea);
+    fn configure(&mut self, area: &AreaSetup) -> [i16; 2];
+    fn configure_referenced(&mut self, area: &ReferencedArea) -> [i16; 2];
 }
 
 /// What the search or the round asks of a programmed area pair.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AreaRequest {
-    pub primary: [u32; 2],
-    pub referenced: [u32; 2],
+    pub primary: [i16; 2],
+    pub referenced: [i16; 2],
     /// Programs the areas without the record's kind.
     pub forced: bool,
     pub last: u32,
@@ -126,15 +166,23 @@ fn effective_kind(ports: &mut impl Properties, kind: u8, resource: u32) -> u8 {
     if kind == 2 && resource as i32 >= ports.property(property::AREA_RESOURCES) as i32 { 1 } else { kind }
 }
 
-/// Programs the area pair for the lens's current resource and returns the area's output offset;
-/// `None`, programming nothing, while the lens has no valid resource.
+/// What programming an area pair leaves: the area's output offset and both areas' halfwords.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProgrammedPair {
+    pub offset: u16,
+    pub primary: [i16; 2],
+    pub referenced: [i16; 2],
+}
+
+/// Programs the area pair for the lens's current resource; `None`, programming nothing, while the
+/// lens has no valid resource.
 pub fn program_area_pair(
     ports: &mut (impl ProfileAccess + Properties),
     lens: &mut impl LensResources,
     configuration: &mut impl AreaConfiguration,
     record: RecordHandle,
     request: AreaRequest,
-) -> Option<u16> {
+) -> Option<ProgrammedPair> {
     let record_kind = ports.profile().header(record, SharedHeaderByte::At46);
     let scene = area_scene(ports, record);
     let reference = lens.reference();
@@ -145,8 +193,8 @@ pub fn program_area_pair(
     let auxiliary = ports.profile().header(record, SharedHeaderByte::At61);
     let (kind_used, class) = if armed(ports, record) || request.forced { (0, 0) } else { (kind, 6) };
     let area = |values| AreaSetup { resource, scene, kind: kind_used, class, values, flags, auxiliary, last: request.last };
-    configuration.configure(&area(request.primary));
-    configuration.configure_referenced(&ReferencedArea { area: area(request.referenced), reference });
+    let primary = configuration.configure(&area(request.primary));
+    let referenced = configuration.configure_referenced(&ReferencedArea { area: area(request.referenced), reference });
     let table = if armed(ports, record) {
         OffsetTable::Standard
     } else {
@@ -157,22 +205,23 @@ pub fn program_area_pair(
         }
     };
     let offset = settings::word(ports, property::area_offset(table, resource));
-    Some(offset.wrapping_add(bias as u16))
+    Some(ProgrammedPair { offset: offset.wrapping_add(bias as u16), primary, referenced })
 }
 
-/// Programs the round's primary area for `resource` with the record's own kind and scene kind.
+/// Programs the round's primary area for `resource` with the record's own kind and scene kind,
+/// returning the halfwords it leaves.
 pub fn program_round_area(
     ports: &mut (impl ProfileAccess + Properties),
     lens: &mut impl LensResources,
     configuration: &mut impl AreaConfiguration,
     record: RecordHandle,
     resource: u32,
-    values: [u32; 2],
-) {
+    values: [i16; 2],
+) -> [i16; 2] {
     let record_kind = ports.profile().header(record, SharedHeaderByte::At46);
     let scene = scene_kind(ports, record);
     let flags = lens.flags();
     let auxiliary = ports.profile().header(record, SharedHeaderByte::At61);
     let kind = effective_kind(ports, record_kind, resource);
-    configuration.configure(&AreaSetup { resource, scene, kind, class: 0, values, flags, auxiliary, last: 0 });
+    configuration.configure(&AreaSetup { resource, scene, kind, class: 0, values, flags, auxiliary, last: 0 })
 }

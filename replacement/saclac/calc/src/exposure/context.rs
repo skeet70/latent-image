@@ -3,17 +3,21 @@
 //! modules read back.
 
 use xm1_saclac_interface::calc::SharedAddress;
+use xm1_saclac_interface::exposure::{CorrectionRequest, EvaluationRequest};
 use xm1_saclac_interface::RecordHandle;
 
 use crate::policy::ExposureMode;
 use crate::selection::SelectionBank;
 use crate::stock::record::UNBOUND;
+use crate::stock::shared::{CURVE_POINTS, LEVEL_CURVES, SUBJECT_POINTS};
 
 pub const SUBJECTS: usize = 10;
 pub const SUBJECT_DETAIL_BYTES: usize = 100;
 pub const SUMMARY_WORDS: usize = 10;
 pub const EVALUATION_AREAS: usize = 8;
 
+/// Calc reads subject lists in place in this layout.
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Subject {
     pub id: u32,
@@ -24,6 +28,7 @@ impl Default for Subject {
     fn default() -> Self { Self { id: 0, detail: [0; SUBJECT_DETAIL_BYTES] } }
 }
 
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SubjectList {
     pub count: u32,
@@ -90,6 +95,8 @@ pub struct FocusResult {
     pub subject_levels: Option<SharedAddress>,
     pub level_bias: i16,
     pub level_classes: Option<SharedAddress>,
+    /// The statistics block the focus result names (+0x48).
+    pub statistics: Option<SharedAddress>,
     pub weights: [u16; 5],
     pub lens_detail: u32,
     pub levels: [i16; 5],
@@ -192,6 +199,8 @@ pub struct EvaluationArea {
 pub struct Adjustment {
     pub level: u16,
     pub state: u32,
+    /// The adjustment path's code for its state and step count: 0 to 7 (0xf6b7f4).
+    pub code: u8,
 }
 
 /// What the shot's exposure step and its calculation step read back from the engine.
@@ -206,6 +215,20 @@ pub struct Outcome {
     pub focus_reused: bool,
 }
 
+/// The correction tables a primary exposure of a record with header byte 0x63 leaves for the
+/// next exposure of another mode, and the start level they were raised to (0xf6a7c0..0xf6a88c).
+/// Preparation keeps them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SavedTables {
+    pub curves: [[u16; CURVE_POINTS]; LEVEL_CURVES],
+    pub subjects: [[u16; SUBJECT_POINTS]; LEVEL_CURVES],
+    pub start: i16,
+}
+
+impl Default for SavedTables {
+    fn default() -> Self { Self { curves: [[0; CURVE_POINTS]; LEVEL_CURVES], subjects: [[0; SUBJECT_POINTS]; LEVEL_CURVES], start: 0 } }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ExposureContext {
     pub binding: Binding,
@@ -216,7 +239,11 @@ pub struct ExposureContext {
     pub program: [ExposureStep; PROGRAM_STEPS],
     pub areas: [EvaluationArea; EVALUATION_AREAS],
     pub selection: SelectionBank,
+    /// The last evaluation request built for calc (0x3c00).
+    pub evaluation: EvaluationRequest,
+    pub correction: CorrectionRequest,
     pub adjustment: Adjustment,
+    pub saved: SavedTables,
     pub live: bool,
     pub return_mode: u32,
 }

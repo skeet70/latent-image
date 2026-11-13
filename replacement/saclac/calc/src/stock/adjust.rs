@@ -5,6 +5,7 @@
 use xm1_saclac_interface::calc::SharedAddress;
 
 use crate::adjust::configuration::{Centroid, IntervalList, MotionClass, MotionDiagnostics, MotionRecord, MotionSource};
+use crate::adjust::drive_step::StepKind;
 use crate::exposure::ports::Property;
 
 const SHARED_BLOCK: u32 = 0x016d_8708;
@@ -146,6 +147,37 @@ pub const SCENE_ADMISSION: Property = Property(0xa7e4);
 /// The extent thresholds by mapped-value band (0xfab454..0xfab47c).
 pub const EXTENT_THRESHOLDS: [Property; 4] = [Property(0x8ba1), Property(0x8ba2), Property(0x8ba3), Property(0x8ba4)];
 
+/// In tens: the contrast below which the scan and the continuous peak search take the
+/// low-contrast step (0xfaab74, 0xfaaba8, 0xfaa9b4).
+pub const PROBE_CONTRAST: Property = Property(0x8814);
+/// The low-contrast step in tens (0xfaab88); the scan step reads the second for a measurement
+/// the record selects (0xfaa9cc).
+pub const LOW_CONTRAST_STEP: Property = Property(0x87f1);
+pub const SELECTED_LOW_CONTRAST_STEP: Property = Property(0x87f2);
+/// The shift the frame interval takes before the lens table reads its step rate (0xfaac18).
+pub const STEP_PERIOD_SHIFT: Property = Property(0x87da);
+
+/// The base step in tens for a step kind, the second of each pair for a measurement the record
+/// selects (0xfab390, jump table 0xfab3ac).
+pub const fn base_step(kind: StepKind, selected: bool) -> Property {
+    let pair = match kind {
+        StepKind::Direction => [0x87df, 0x87e1],
+        StepKind::Scan => [0x87eb, 0x87ed],
+        StepKind::Return | StepKind::MonitoredScan => [0x87e5, 0x87e7],
+        StepKind::ContinuousStart => [0x8882; 2],
+        StepKind::ContinuousPeak => [0x8884; 2],
+        StepKind::ContinuousTrack => [0x8883; 2],
+    };
+    Property(pair[selected as usize])
+}
+
+/// The monitored step's scale in hundredths for a lens resource, by whether the lens has moved
+/// (0xfaa93c..0xfaa944).
+pub const fn monitor_scale(moved: bool, resource: u32) -> Property {
+    let table: u32 = if moved { 0x8942 } else { 0x8969 };
+    Property(table.wrapping_add(resource))
+}
+
 /// The 24-bit factor's high, middle and low bytes (0xfa659c..0xfa65b4).
 pub const CONFIGURED_FACTOR: [Property; 3] = [Property(0x6399), Property(0x6398), Property(0x6397)];
 /// The drive rate's second factor, its step count and its span (0xfa6958, 0xfa69cc, 0xfa69e4).
@@ -272,6 +304,45 @@ pub const CONFIGURATION_WORDS: [(usize, Reading); 161] = {
     (144, Byte(Property(0x52e9))), (145, Byte(Property(0x52ea))),
     ]
 };
+
+/// The metering's diagnostic trace points (0xfaf8b8, 0xfafa80).
+pub const METERING_START: u32 = 0x0301_0500;
+pub const METERING_END: u32 = 0x1301_0500;
+
+/// Each cell's zone (table 0xf5e220).
+const ZONES: [u8; 256] = [
+    9, 9, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 9, 9,
+    9, 9, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 9, 9,
+    8, 8, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 8, 8,
+    8, 8, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 8, 8,
+    3, 3, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 3, 3,
+    3, 3, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 3, 3,
+    3, 3, 2, 2, 1, 1, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3,
+    3, 3, 2, 2, 1, 1, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3,
+    3, 3, 2, 2, 1, 1, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3,
+    3, 3, 2, 2, 1, 1, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3,
+    3, 3, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 3, 3,
+    3, 3, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 3, 3,
+    10, 10, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 10, 10,
+    10, 10, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 10, 10,
+    11, 11, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 11, 11,
+    11, 11, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 11, 11,
+];
+
+/// A cell's weight: the configuration byte of its zone (0x6a0010(0x7c62) at 0xfaf8c4).
+pub const fn zone_weight(cell: usize) -> Property { Property(0x7c62 + ZONES[cell] as u32) }
+
+/// The level from which the excess is taken, in tenths, and the excess step, signed (0xfaf750,
+/// 0xfaf768).
+pub const EXCESS_START: Property = Property(0x1296);
+pub const EXCESS_STEP: Property = Property(0x1295);
+/// The capture profile whose offset the lens level adds (0xfaf7a8).
+pub const LENS_LEVEL_PROFILE: u32 = 8;
+
+/// The lens level's upper and lower bounds in tenths (0xfaf7c0..0xfaf80c).
+pub const fn lens_level_bounds(alternate: bool) -> [Property; 2] {
+    if alternate { [Property(0x1357), Property(0x1358)] } else { [Property(0x1353), Property(0x1352)] }
+}
 
 fn word(bytes: &[u8], at: usize) -> u32 { u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]) }
 

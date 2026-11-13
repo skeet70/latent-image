@@ -13,6 +13,22 @@ pub const fn level_step(step: u8) -> Property { Property(0x1900 + 2 * step as u3
 /// Lower and upper bounds of the adjustment tables, in tenths (0xf6aca0, 0xf6acc0).
 pub const TABLE_FLOOR: Property = Property(0x6499);
 pub const TABLE_CEILING: Property = Property(0x649a);
+/// The correction window's margin beyond the adjustment level, in tenths (0xf6a3b8).
+pub const WINDOW_MARGIN: Property = Property(0x649b);
+/// Signed bytes in tenths: the correction window's near and far bounds below and above the
+/// adjustment level (0xf6a3d0..0xf6a430).
+pub const NEAR_BELOW: Property = Property(0x6484);
+pub const FAR_BELOW: Property = Property(0x6485);
+pub const NEAR_ABOVE: Property = Property(0x6486);
+pub const FAR_ABOVE: Property = Property(0x6487);
+/// The weights of curve points beyond the near bound and beyond the far bound, below and above
+/// (0xf6a448..0xf6a470).
+pub const NEAR_BELOW_WEIGHT: Property = Property(0x6492);
+pub const FAR_BELOW_WEIGHT: Property = Property(0x6493);
+pub const NEAR_ABOVE_WEIGHT: Property = Property(0x6494);
+pub const FAR_ABOVE_WEIGHT: Property = Property(0x6495);
+/// Bit 1: the correction is requested even when the focus result is reused (0xf5ffcc).
+pub const CORRECTION_FLAGS: Property = Property(0x65a8);
 /// Copied into the dump frame (0xf6ad00, 0xf6ad18).
 pub const DUMP_FIRST: Property = Property(0x4a07);
 pub const DUMP_SECOND: Property = Property(0x4a08);
@@ -85,3 +101,31 @@ pub const SELECTED_HIGH_OFFSET: Property = Property(0x6c05);
 pub const FIRST_STEP: Property = Property(0x6395);
 /// Two bytes: added to an extended step's value (0xf64518).
 pub const EXTENDED_OFFSET: Property = Property(0x65fd);
+/// Nonzero: the correction request carries the first subject's drive rate (0xf69058).
+pub const CORRECTION_RATE: Property = Property(0x657d);
+
+/// The rate setting the correction request carries (0xf5ecc0).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RateSetting {
+    /// Selection style 4, 5 or 7.
+    Styled,
+    /// Selection kinds 11 to 13.
+    Kinds,
+    /// Selection kinds 11 to 13 with flag bit 1.
+    FlaggedKinds,
+    /// Auxiliary byte 2.
+    AuxiliaryTwo,
+    /// Any other nonzero auxiliary byte.
+    Auxiliary,
+    Default,
+}
+
+pub const fn rate_setting(setting: RateSetting) -> Property {
+    match setting {
+        RateSetting::Styled => Property(0x6512),
+        RateSetting::Kinds => Property(0x6513),
+        RateSetting::FlaggedKinds | RateSetting::Default => Property(0x6516),
+        RateSetting::AuxiliaryTwo => Property(0x6511),
+        RateSetting::Auxiliary => Property(0x6515),
+    }
+}

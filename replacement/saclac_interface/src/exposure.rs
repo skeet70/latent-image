@@ -74,6 +74,57 @@ impl Correction {
     pub const fn word(&self, index: usize) -> u32 { self.0[index] as u32 | (self.0[index + 1] as u32) << 16 }
 }
 
+/// What calc corrects the exposure from (calc 0x3c01).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CorrectionRequest {
+    /// Record byte +0x43 when it is 1 or 2, else 0.
+    pub style: u32,
+    pub measurement_selection: u32,
+    pub selection_kind: u32,
+    pub selection_flags: u16,
+    /// Record bytes +0x34, +0x44, +0x4b, +0x32, +0x3e and +0x66.
+    pub record_kind: u32,
+    pub record_44: u32,
+    pub focus_class: u32,
+    pub record_32: u32,
+    pub record_3e: u32,
+    pub variant: u32,
+    pub lens_reference: u32,
+    pub selection_auxiliary: u32,
+    /// Image 4's reported word when record byte +0x41 is 1, else 0.
+    pub image_word: u32,
+    /// 10000 over the subject's drive rate, 1 when there is no first treatment or no rate.
+    pub rate: u32,
+    /// Words of task 43's selection lists.
+    pub list_words: [u32; 3],
+    pub list_byte: u8,
+    pub list_word: u32,
+    pub level_curves: [Option<SharedAddress>; 4],
+    pub start: u16,
+    pub start_above_target: u16,
+    pub reference_offset: u16,
+    /// The configuration value calc reads the scene's curves from.
+    pub curve_table: u32,
+    pub rate_setting: u16,
+    /// The evaluation's reference value plus 250, raised by `start_above_target`.
+    pub reference: u16,
+    pub ratio: [u32; 2],
+    /// The measured level is in step 2 of the level table.
+    pub second_step: bool,
+    pub treated: bool,
+    pub first_treatment: bool,
+    pub subjects: Option<SharedAddress>,
+    pub summary: Option<SharedAddress>,
+    pub subject_curves: [Option<SharedAddress>; 4],
+    /// Header bytes 0x61 and 0x47.
+    pub header_61: u32,
+    pub header_47: u32,
+    pub unmeasured: bool,
+    pub record_20: i16,
+    pub buffers: [Option<SharedAddress>; 2],
+    pub frame: Option<SharedAddress>,
+}
+
 pub const STATISTICS_AREAS_BYTES: usize = 160;
 
 /// The statistics measurement the exposure asks of the image task (imgdc 0x3f1a, completions
