@@ -25,4 +25,7 @@ impl Area {
 
 impl Adjustments for Area {
     fn byte(&self, key: AdjustmentKey) -> u8 { self.0.get(&key.0).copied().unwrap_or(0) }
+    // The configuration layer reads neither.
+    fn lens_adjustment(&self) -> u16 { 0 }
+    fn admits_unselected_mode(&self) -> bool { false }
 }

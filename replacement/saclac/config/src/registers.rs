@@ -3,7 +3,7 @@
 //! Packing a configuration into the pipeline's register snapshot and restoring the hardware from
 //! it, by the groups a flag word selects (0xda21cc, 0xda2354).
 
-use xm1_saclac_shared::image_registers::{pack, RegisterGroup, RegisterSnapshot};
+use xm1_saclac_shared::image_registers::{RegisterGroup, RegisterSnapshot};
 
 /// Group 0 when any of bits 17..=30 is set, group `n` (1..=14) for bit `16 + n`.
 pub fn groups(flags: u32) -> impl Iterator<Item = RegisterGroup> {
@@ -16,7 +16,7 @@ pub fn groups(flags: u32) -> impl Iterator<Item = RegisterGroup> {
 /// 0xda21cc.
 pub fn pack_groups<S: RegisterSnapshot>(flags: u32, configuration: S::Configuration, snapshot: &mut S) {
     for group in groups(flags) {
-        pack(group, configuration, snapshot);
+        snapshot.pack(group, configuration);
     }
 }
 

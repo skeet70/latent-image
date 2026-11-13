@@ -1,4 +1,4 @@
-use xm1_saclac_shared::image_registers::{RegisterGroup, RegisterSnapshot, WindowLimits};
+use xm1_saclac_shared::image_registers::{pack_window_limits, RegisterGroup, RegisterSnapshot, WindowLimits};
 
 use crate::compiled::*;
 use crate::registers::{PipelineHardware, RESTORE_CLIENT};
@@ -45,7 +45,12 @@ impl RegisterSnapshot for Snapshot {
     fn window_limits(&self, _: ()) -> WindowLimits { WindowLimits([1, 2, 3]) }
     fn window_words(&self) -> [u32; 2] { [0, 0] }
     fn set_window_words(&mut self, _: [u32; 2]) { self.0.push(('w', 2)); }
-    fn pack_retained(&mut self, group: RegisterGroup, _: ()) { self.0.push(('p', group.index())); }
+    fn pack(&mut self, group: RegisterGroup, configuration: ()) {
+        match group {
+            RegisterGroup::Group2 => self.set_window_words(pack_window_limits(self.window_limits(configuration), self.window_words())),
+            _ => self.0.push(('p', group.index())),
+        }
+    }
 }
 
 #[derive(Default)]
