@@ -6,6 +6,8 @@ use xm1_saclac_interface::{Command, Completed, Message, Parameters, RecordHandle
 pub enum ChildOutcome {
     Complete,
     Pending,
+    /// The child had no handling for the event.
+    Inactive,
     Measurement(MeasurementOutcome),
     Search(crate::search::SearchDecision),
     Fault,
@@ -53,13 +55,21 @@ pub enum AcquisitionControl {
 }
 
 
+/// The lens children's entries that carry no queue message; a reissued command or a
+/// re-entered completion is a `ChildEvent::Command` or `ChildEvent::Completed` again.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LensControl {
-    Initialize,
-    Synchronize,
-    Finish,
-    S1Release,
+    PrepareDrive,
+    /// The root's cancellation drives the lens.
+    CancelDrive,
+    Setting(LensSetting),
+    /// Steps by the block of notification 0x1b.
+    Step,
 }
+
+/// The lens request a lens setting issues.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LensSetting { Request04, Request06, Request05 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShotControl {
@@ -92,7 +102,7 @@ pub enum ChildRequest<'a, SearchSample> {
     Measurement(ChildEvent<'a, MeasurementControl>),
     S1Acquisition(ChildEvent<'a, AcquisitionControl>),
     S1Search(crate::search::SearchInput<SearchSample>),
-    LensBringUp(Message<'a>),
+    LensBringUp { message: Message<'a>, record: RecordHandle },
     LensLive(ChildEvent<'a, LensControl>),
     LensS1(ChildEvent<'a, LensControl>),
     Shot(ShotEvent<'a>),
@@ -110,7 +120,7 @@ impl<SearchSample> ChildRequest<'_, SearchSample> {
             Self::S1Acquisition(_) => LensEffect::MeasurementOnly,
             Self::Measurement(_)
             | Self::S1Search(_)
-            | Self::LensBringUp(_)
+            | Self::LensBringUp { .. }
             | Self::LensLive(_)
             | Self::LensS1(_)
             | Self::Shot(_) => LensEffect::LensReaching,
