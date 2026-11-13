@@ -42,3 +42,23 @@ fn absent_client_still_releases_a_finished_command() {
     deliver(Reply { target, callback: None, status: CompletionStatus(0), values: stock::parameters(&[]) }, &mut output);
     assert_eq!(output.0, std::vec![(true, target, None, std::vec![])]);
 }
+
+#[test]
+fn preparation_notice_uses_subscription_instead_of_command_callback() {
+    struct Callbacks(Vec<xm1_saclac_interface::ClientCallback>);
+    impl Effects for Callbacks {
+        fn emit(&mut self, effect: Effect<'_>) {
+            if let Effect::Deliver { callback, .. } = effect { self.0.push(callback); }
+        }
+    }
+    let command = stock::optional_callback(1);
+    let subscriber = stock::optional_callback(2);
+    let mut output = Callbacks(Vec::new());
+    crate::replies::prepare(command, crate::replies::PreparationNotice::Requested(subscriber), CompletionStatus(19), stock::parameters(&[]), &mut output);
+    assert_eq!(output.0, [subscriber.unwrap()]);
+    output.0.clear();
+    crate::replies::prepare(command, crate::replies::PreparationNotice::Suppressed, CompletionStatus(19), stock::parameters(&[]), &mut output);
+    assert!(output.0.is_empty());
+    crate::replies::prepare(command, crate::replies::PreparationNotice::Requested(subscriber), CompletionStatus(0), stock::parameters(&[]), &mut output);
+    assert_eq!(output.0, [command.unwrap()]);
+}

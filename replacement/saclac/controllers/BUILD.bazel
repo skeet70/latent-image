@@ -6,7 +6,7 @@ xm1_rust_rlib(
     name = "controllers",
     src = "src/lib.rs",
     crate_name = "xm1_saclac_controllers",
-    data = ["src/lifecycle.rs", "src/adjustment.rs", "src/statistics.rs", "src/stock.rs", "src/replies.rs", "src/children.rs"],
+    data = ["src/lifecycle.rs", "src/adjustment.rs", "src/statistics.rs", "src/stock.rs", "src/replies.rs", "src/children.rs", "src/synchronous.rs"],
     rlib_deps = {"xm1_saclac_interface": "//replacement/saclac_interface:saclac-interface"},
 )
 

@@ -60,3 +60,10 @@ pub const fn configuration_completed(wire: u8) -> Option<Group> {
         _ => None,
     }
 }
+
+pub const fn synchronous_completion(status: xm1_saclac_interface::CompletionStatus) -> crate::synchronous::Completion {
+    match status.0 {
+        0 | 2 => crate::synchronous::Completion::Finished,
+        _ => crate::synchronous::Completion::Progress,
+    }
+}

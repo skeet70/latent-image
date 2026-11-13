@@ -2,7 +2,6 @@
 
 use xm1_saclac_interface::{ClientCallback, CompletionStatus, Parameters, ReplyTarget};
 
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Reply<'a> {
     pub target: ReplyTarget,
@@ -38,4 +37,33 @@ pub fn deliver(reply: Reply<'_>, effects: &mut impl Effects) {
             values: reply.values,
         });
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PreparationNotice {
+    Suppressed,
+    Requested(Option<ClientCallback>),
+}
+
+pub fn prepare(
+    command_callback: Option<ClientCallback>,
+    notice: PreparationNotice,
+    status: CompletionStatus,
+    values: Parameters<'_>,
+    effects: &mut impl Effects,
+) {
+    let callback = if status == CompletionStatus(19) {
+        match notice {
+            PreparationNotice::Suppressed => None,
+            PreparationNotice::Requested(callback) => callback,
+        }
+    } else {
+        command_callback
+    };
+    deliver(Reply {
+        target: ReplyTarget::Command(xm1_saclac_interface::CommandKind::Prepare),
+        callback,
+        status,
+        values,
+    }, effects);
 }

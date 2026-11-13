@@ -7,6 +7,7 @@ pub mod statistics;
 pub mod stock;
 pub mod replies;
 pub mod children;
+pub mod synchronous;
 
 #[cfg(test)]
 extern crate std;
@@ -18,3 +19,5 @@ mod adjustment_tests;
 mod configuration_tests;
 #[cfg(test)]
 mod reply_tests;
+#[cfg(test)]
+mod synchronous_tests;
