@@ -3,8 +3,11 @@
 //! the exposure engine parses.
 
 pub mod adjust;
+pub mod calculation;
 pub mod dump;
 pub mod property;
 pub mod record;
+pub mod scene;
 pub mod shared;
+pub mod shot_dump;
 pub mod tables;
