@@ -3,6 +3,8 @@
 module Main (main) where
 
 import Control.Monad (unless)
+import Data.IORef (IORef, atomicModifyIORef', newIORef)
+import System.IO.Unsafe (unsafePerformIO)
 import Data.Aeson (Value, encode, object, (.=))
 import qualified Data.ByteString.Lazy as L
 import qualified Data.ByteString as B
@@ -77,8 +79,65 @@ main = do
       holes = [10,11,17,18,19,28,29,30,31,34,35]
   mapM_ (\offset -> check (half halfBytes == half (mutate offset halfBytes))) holes
   mapM_ (\offset -> check (half halfBytes /= half (mutate offset halfBytes))) (filter (`notElem` holes) [0..79])
+  let record = projectPayload recovered Outgoing (QueueId 45) (Operation 0x3d00)
+      liveRecord = take 168 zeros ++ [0x68,0x35,0xf3,0x00]
+      s1Record = take 168 zeros ++ [0xa8,0x41,0xf2,0x00]
+      s1Padding = [4,5,6,7] ++ [30,31] ++ [38,39] ++ [54,55] ++ [109] ++ [114,115]
+  check (fmap length (record liveRecord) == Right 172)
+  check (fmap length (record s1Record) == Right 159)
+  mapM_ (\offset -> check (record liveRecord /= record (mutate offset liveRecord))) [0..171]
+  mapM_ (\offset -> check (record s1Record == record (mutate offset s1Record))) s1Padding
+  mapM_ (\offset -> check (record s1Record /= record (mutate offset s1Record)))
+    (filter (`notElem` s1Padding) [0..171])
+  check (isLeft (record (take 168 zeros ++ [0,0,0,0])))
+  check (isLeft (record (take 171 zeros)))
+  discriminating
   putStrLn "payload field projection behavioral tests passed"
   where parse = either fail pure . parseDeclaration . L.toStrict . encode
+
+-- Two senders of one operation are separated by the word each copies at the
+-- same offset, and a payload matching neither is refused.
+discriminating :: IO ()
+discriminating = do
+  declaration <- parse (twoSenders
+    [ sender 0 0x01020304 [field 0 4, field 4 1] [padding 5 3]
+    , sender 0 0x01020305 [field 0 4] [padding 4 4] ])
+  let project = projectPayload declaration Outgoing (QueueId 47) (Operation 16166)
+  check (project [4,3,2,1,9,0,0,0] == Right [4,3,2,1,9])
+  check (project [5,3,2,1,9,0,0,0] == Right [5,3,2,1])
+  check (isLeft (project [6,3,2,1,9,0,0,0]))
+  check (isLeft (project [4,3,2,1,9,0,0]))
+  check (isLeft (project [4,3,2,1,9,0,0,0,0]))
+  roundTrip <- either fail pure (parseDeclaration (L.toStrict (encode (declarationJson declaration))))
+  check (projectPayload roundTrip Outgoing (QueueId 47) (Operation 16166) [5,3,2,1,9,0,0,0] == Right [5,3,2,1])
+  check (isLeft (parseDeclaration (L.toStrict (encode (twoSenders
+    [sender 0 0x01020304 [field 0 4] [padding 4 4], sender 0 0x01020304 [field 0 4] [padding 4 4]])))))
+  check (isLeft (parseDeclaration (L.toStrict (encode (twoSenders
+    [sender 0 0x01020304 [field 0 4] [padding 4 4], plain [field 0 4] [padding 4 4]])))))
+  check (isLeft (parseDeclaration (L.toStrict (encode (twoSenders
+    [sender 5 0x01020304 [field 0 4] [padding 4 4]])))))
+  check (isLeft (parseDeclaration (L.toStrict (encode (twoSenders
+    [sender 7 0x01020304 [field 0 4] [padding 4 4]])))))
+  where parse = either fail pure . parseDeclaration . L.toStrict . encode
+
+twoSenders :: [Value] -> Value
+twoSenders entries = object
+  [ "schema" .= (1 :: Int), "source_commit" .= ("synthetic-fixture" :: String)
+  , "messages" .= entries
+  ]
+
+sender :: Int -> Int -> [Value] -> [Value] -> Value
+sender discriminatorOffset value fields paddingRows = object
+  [ "direction" .= ("outgoing" :: String), "queue" .= (47 :: Int), "operation" .= (16166 :: Int)
+  , "bytes" .= (8 :: Int), "fields" .= fields, "padding" .= paddingRows
+  , "discriminator" .= object ["offset" .= discriminatorOffset, "value" .= value]
+  ]
+
+plain :: [Value] -> [Value] -> Value
+plain fields paddingRows = object
+  [ "direction" .= ("outgoing" :: String), "queue" .= (47 :: Int), "operation" .= (16166 :: Int)
+  , "bytes" .= (8 :: Int), "fields" .= fields, "padding" .= paddingRows
+  ]
 
 policy :: [Value] -> [Value] -> Value
 policy fields paddingRows = object
@@ -100,4 +159,10 @@ isLeft (Left _) = True
 isLeft (Right _) = False
 
 check :: Bool -> IO ()
-check yes = unless yes (fail "payload projection behavior differs")
+check yes = do
+  index <- atomicModifyIORef' checkIndex (\value -> (value + 1, value))
+  unless yes (fail ("payload projection behavior differs at check " ++ show index))
+
+{-# NOINLINE checkIndex #-}
+checkIndex :: IORef Int
+checkIndex = unsafePerformIO (newIORef 0)

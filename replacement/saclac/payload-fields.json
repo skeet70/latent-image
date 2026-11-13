@@ -1629,11 +1629,406 @@
    "bytes": 172,
    "fields": [
     {
-     "name": "parameter-record",
+     "name": "field-0x00",
      "offset": 0,
-     "bytes": 168,
+     "bytes": 4,
      "sources": [
-      "0x00f4c584: complete supplied record copied; all record bytes retained"
+      "X-M1 1.50 id5 0x00f357c0 stores 0x00..0x03 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x04",
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f357cc stores 0x04..0x05 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f3579c stores no byte at 0x06..0x07 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x08",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f357d8 stores 0x08..0x0b of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x0c",
+     "offset": 12,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f35b28 stores 0x0c..0x0f of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x10",
+     "offset": 16,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f3589c stores 0x10..0x13 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x14",
+     "offset": 20,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f35810 stores 0x14..0x17 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x18",
+     "offset": 24,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f35a04 stores 0x18..0x1b of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x1c",
+     "offset": 28,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f357f0 stores 0x1c..0x1d of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f3579c stores no byte at 0x1e..0x1f of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x20",
+     "offset": 32,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f357e4 stores 0x20..0x23 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x24",
+     "offset": 36,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f35914 stores 0x24..0x25 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f35960 stores 0x24..0x25 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f3579c stores no byte at 0x26..0x27 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x28",
+     "offset": 40,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f358a4 stores 0x28..0x2b of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x2c",
+     "offset": 44,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f358ac stores 0x2c..0x2d of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x2e",
+     "offset": 46,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f358c4 stores 0x2e..0x2f of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x30",
+     "offset": 48,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f35924 stores 0x30..0x33 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x34",
+     "offset": 52,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f35938 stores 0x34..0x35 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f3579c stores no byte at 0x36..0x37 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x38",
+     "offset": 56,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f35978 stores 0x38..0x3b of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x3c",
+     "offset": 60,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f35980 stores 0x3c..0x3f of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x40",
+     "offset": 64,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f35988 stores 0x40..0x43 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x44",
+     "offset": 68,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f35990 stores 0x44..0x47 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x48",
+     "offset": 72,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f35998 stores 0x48..0x4b of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x4c",
+     "offset": 76,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f359a0 stores 0x4c..0x4f of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x50",
+     "offset": 80,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f359a8 stores 0x50..0x51 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x52",
+     "offset": 82,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f359ac stores 0x52..0x53 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x54",
+     "offset": 84,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f359b4 stores 0x54..0x55 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x56",
+     "offset": 86,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f359b8 stores 0x56..0x57 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x58",
+     "offset": 88,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f359bc stores 0x58..0x59 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x5a",
+     "offset": 90,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f359c4 stores 0x5a..0x5b of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x5c",
+     "offset": 92,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f359e0 stores 0x5c..0x5f of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x60",
+     "offset": 96,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f359ec stores 0x60..0x63 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x64",
+     "offset": 100,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f359cc stores 0x64..0x67 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x68",
+     "offset": 104,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f359d4 stores 0x68..0x6b of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x6c",
+     "offset": 108,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f35a18 stores 0x6c of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f3579c stores no byte at 0x6d of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x6e",
+     "offset": 110,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f357fc stores 0x6e..0x6f of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x70",
+     "offset": 112,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f35804 stores 0x70..0x71 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f3579c stores no byte at 0x72..0x73 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x74",
+     "offset": 116,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f358b4 stores 0x74..0x77 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x78",
+     "offset": 120,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f35a2c stores 0x78..0x7b of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x7c",
+     "offset": 124,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f3591c stores 0x7c..0x7f of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x80",
+     "offset": 128,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f35944 stores 0x80..0x81 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x82",
+     "offset": 130,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f35a94 stores 0x82..0x83 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x84",
+     "offset": 132,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f358e0 stores 0x84..0x85 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x86",
+     "offset": 134,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f358d0 stores 0x86..0x87 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x88",
+     "offset": 136,
+     "bytes": 20,
+     "sources": [
+      "X-M1 1.50 id5 0x00f35838..0x00f3584c stores 0x88..0x9b of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0x9c",
+     "offset": 156,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f35858 stores 0x9c..0x9f of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
+     ]
+    },
+    {
+     "name": "field-0xa0",
+     "offset": 160,
+     "bytes": 8,
+     "sources": [
+      "X-M1 1.50 id5 0x00f35868..0x00f35870 stores 0xa0..0xa7 of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
      ]
     },
     {
@@ -1641,11 +2036,468 @@
      "offset": 168,
      "bytes": 4,
      "sources": [
-      "0x00f4c584: callback word after copied record"
+      "X-M1 1.50 id5 0x00f4c5ac stores 0xa8..0xab of 0x016bfb88",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from 0x016bfb88 and stores callback 0x00f33568 at 168"
      ]
     }
    ],
-   "padding": []
+   "padding": [],
+   "discriminator": {
+    "offset": 168,
+    "value": 15938920
+   }
+  },
+  {
+   "direction": "outgoing",
+   "queue": 45,
+   "operation": 15616,
+   "bytes": 172,
+   "fields": [
+    {
+     "name": "field-0x00",
+     "offset": 0,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f24330 stores 0x00..0x03 of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x08",
+     "offset": 8,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f2433c stores 0x08..0x0b of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x0c",
+     "offset": 12,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f2454c stores 0x0c..0x0f of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x10",
+     "offset": 16,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f243e0 stores 0x10..0x13 of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x14",
+     "offset": 20,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f24374 stores 0x14..0x17 of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x18",
+     "offset": 24,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f24508 stores 0x18..0x1b of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x1c",
+     "offset": 28,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f24354 stores 0x1c..0x1d of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x20",
+     "offset": 32,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f24348 stores 0x20..0x23 of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x24",
+     "offset": 36,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f24458 stores 0x24..0x25 of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x28",
+     "offset": 40,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f243e8 stores 0x28..0x2b of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x2c",
+     "offset": 44,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f243f0 stores 0x2c..0x2d of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x2e",
+     "offset": 46,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f24410 stores 0x2e..0x2f of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x30",
+     "offset": 48,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f24468 stores 0x30..0x33 of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x34",
+     "offset": 52,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f24470 stores 0x34..0x35 of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x38",
+     "offset": 56,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f24484 stores 0x38..0x3b of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x3c",
+     "offset": 60,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f2448c stores 0x3c..0x3f of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x40",
+     "offset": 64,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f24494 stores 0x40..0x43 of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x44",
+     "offset": 68,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f2449c stores 0x44..0x47 of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x48",
+     "offset": 72,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f244a4 stores 0x48..0x4b of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x4c",
+     "offset": 76,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f244ac stores 0x4c..0x4f of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x50",
+     "offset": 80,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f244b4 stores 0x50..0x51 of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x52",
+     "offset": 82,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f244b8 stores 0x52..0x53 of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x54",
+     "offset": 84,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f244c0 stores 0x54..0x55 of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x56",
+     "offset": 86,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f244c4 stores 0x56..0x57 of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x58",
+     "offset": 88,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f244c8 stores 0x58..0x59 of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x5a",
+     "offset": 90,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f244d0 stores 0x5a..0x5b of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x5c",
+     "offset": 92,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f244ec stores 0x5c..0x5f of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x60",
+     "offset": 96,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f244f8 stores 0x60..0x63 of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x64",
+     "offset": 100,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f244d8 stores 0x64..0x67 of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x68",
+     "offset": 104,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f244e0 stores 0x68..0x6b of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x6c",
+     "offset": 108,
+     "bytes": 1,
+     "sources": [
+      "X-M1 1.50 id5 0x00f2451c stores 0x6c of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x6e",
+     "offset": 110,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f24360 stores 0x6e..0x6f of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x70",
+     "offset": 112,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f24368 stores 0x70..0x71 of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x74",
+     "offset": 116,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f24400 stores 0x74..0x77 of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x78",
+     "offset": 120,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f24530 stores 0x78..0x7b of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x7c",
+     "offset": 124,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f24460 stores 0x7c..0x7f of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x80",
+     "offset": 128,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f2447c stores 0x80..0x81 of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x82",
+     "offset": 130,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f2453c stores 0x82..0x83 of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x84",
+     "offset": 132,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f24428 stores 0x84..0x85 of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x86",
+     "offset": 134,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0x00f24418 stores 0x86..0x87 of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x88",
+     "offset": 136,
+     "bytes": 20,
+     "sources": [
+      "X-M1 1.50 id5 0x00f24390..0x00f243a4 stores 0x88..0x9b of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0x9c",
+     "offset": 156,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f243b0 stores 0x9c..0x9f of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "field-0xa0",
+     "offset": 160,
+     "bytes": 8,
+     "sources": [
+      "X-M1 1.50 id5 0x00f243c0..0x00f243c8 stores 0xa0..0xa7 of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    },
+    {
+     "name": "completion",
+     "offset": 168,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0x00f4c5ac stores 0xa8..0xab of the 168-byte frame at r11-276",
+      "X-M1 1.50 id5 0x00f4c584 copies 168 bytes from r11-276 and stores callback 0x00f241a8 at 168"
+     ]
+    }
+   ],
+   "padding": [
+    {
+     "offset": 4,
+     "bytes": 4,
+     "sources": [
+      "X-M1 1.50 id5 0xf242ec stores no byte at 0x04..0x07 of the frame at r11-276"
+     ]
+    },
+    {
+     "offset": 30,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0xf242ec stores no byte at 0x1e..0x1f of the frame at r11-276"
+     ]
+    },
+    {
+     "offset": 38,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0xf242ec stores no byte at 0x26..0x27 of the frame at r11-276"
+     ]
+    },
+    {
+     "offset": 54,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0xf242ec stores no byte at 0x36..0x37 of the frame at r11-276"
+     ]
+    },
+    {
+     "offset": 109,
+     "bytes": 1,
+     "sources": [
+      "X-M1 1.50 id5 0xf242ec stores no byte at 0x6d of the frame at r11-276"
+     ]
+    },
+    {
+     "offset": 114,
+     "bytes": 2,
+     "sources": [
+      "X-M1 1.50 id5 0xf242ec stores no byte at 0x72..0x73 of the frame at r11-276"
+     ]
+    }
+   ],
+   "discriminator": {
+    "offset": 168,
+    "value": 15876520
+   }
   },
   {
    "direction": "outgoing",
