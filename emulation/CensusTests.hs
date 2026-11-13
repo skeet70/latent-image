@@ -45,6 +45,10 @@ main = do
         , Function 0x00007010 0x10 "indexed-target-b" ""
         , Function 0x00007200 0x10 "indexed-target-c" ""
         , Function 0x00009000 0x10 "loop-task-entry" ""
+        , Function 0x00009300 0x04 "by-value-struct-entry" ""
+        , Function 0x00009304 0x10 "by-value-struct-save" ""
+        , Function 0x00009400 0x04 "leaf-prefix-entry" ""
+        , Function 0x00009404 0x10 "leaf-prefix-save" ""
         , Function 0x00f01bc8 0x04 "task-43-actor" ""
         ]
       listingBytes = syntheticListing functions
@@ -85,6 +89,25 @@ main = do
   check "a code word is reached" (S.member 0x1200 (reachFrom census [0x1000]))
   check "a table target is reached" (S.member 0x1300 (reachFrom census [0x1500]))
   check "a nested table target is reached" (S.member 0x1400 (reachFrom census [0x1b00]))
+
+  -- A sub sp, sp, #N followed by a push that saves the link register is one
+  -- function: its declared 4-byte extent ends at the push.
+  check "a by-value struct prologue is one function"
+    (case M.lookup 0x9300 (censusFunctions census) of
+      Just function -> functionSize function == 20 && M.notMember 0x9304 (censusFunctions census)
+      Nothing -> False)
+  check "the joined function reaches the call after the push" (S.member 0x1200 (reachFrom census [0x9300]))
+  joined <- case M.lookup 0x9300 (censusFunctions census) of
+    Just function -> pure function
+    Nothing -> fail "the census dropped the by-value struct entry"
+  joinedDigest <- either fail pure (extentDigest [listing] joined)
+  let joinedWords = [subImm 13 13 16, push 0x4830, addImm 11 13 12, bl 0x930c 0x1200, bx]
+  check "the joined extent digest covers the body after the push"
+    (joinedDigest == sha256Hex (sha256 (B.pack (concatMap wordBytes joinedWords))))
+  check "a push without the link register starts its own function"
+    (case (M.lookup 0x9400 (censusFunctions census), M.lookup 0x9404 (censusFunctions census)) of
+      (Just entry, Just save) -> functionSize entry == 4 && functionSize save == 16
+      _ -> False)
 
   check "an immediate task descriptor is a root" (hasRoot census (TaskRoot 43) 0xf01bc8)
   check "a creator call site is a root" (hasRoot census (TaskRoot 7) 0x1300)
@@ -286,6 +309,17 @@ code =
   , (0x8100, 10), (0x8104, 0x7000), (0x8108, 5)
   , (0x810c, 11), (0x8110, 0x7000), (0x8114, 5)
   , (0x8118, 12), (0x811c, 0x7000), (0x8120, 5)
+  , (0x9000, bx)
+  , (0x9300, subImm 13 13 16)
+  , (0x9304, push 0x4830)
+  , (0x9308, addImm 11 13 12)
+  , (0x930c, bl 0x930c 0x1200)
+  , (0x9310, bx)
+  , (0x9400, subImm 13 13 8)
+  , (0x9404, push 0x0030)
+  , (0x9408, movImm 0 1)
+  , (0x940c, bl 0x940c 0x1200)
+  , (0x9410, bx)
   , (0xf01bc8, bx)
   ]
 
@@ -294,6 +328,9 @@ bl site target = 0xeb000000 .|. (((target - site - 8) `shiftR` 2) .&. 0xffffff)
 
 bx :: Word32
 bx = 0xe12fff1e
+
+push :: Word32 -> Word32
+push registers = 0xe92d0000 .|. registers
 
 movReg :: Word32 -> Word32 -> Word32
 movReg destination source = 0xe1a00000 .|. (destination `shiftL` 12) .|. source
