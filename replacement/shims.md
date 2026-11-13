@@ -296,13 +296,14 @@ The address-independent menu engine and its stock-state mirror. Its shims are li
 
 ## menu_value
 
-The menu value transaction, published at the dispatcher's IMAGE SIZE jump-table word.
+The IMAGE SIZE commit, published at the dispatcher's IMAGE SIZE jump-table word.
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
-| `rb_menu_value_size_arm` in `adapter/entry.S`, published by the value package (`modal75,menu-engine,menu-value`) at the jump-table word `0x00d50084` | veneer or carrier at a stock address | the stock dispatcher's jump-table word for property `0xf6` | no | the owned dispatcher calls the transaction directly | required |
+| `rb_menu_value_size_arm` in `adapter/entry.S`, published by the value package (`modal75,menu-engine,menu-value`) at the jump-table word `0x00d50084` | veneer or carrier at a stock address | the stock dispatcher's jump-table word for property `0xf6` | no | the owned dispatcher calls the commit directly | required |
 | `__rb_menu_value_stock_arm` (`0x00d51b58`) and `__rb_menu_value_shared_tail` (`0x00d52674`) bound in `menu/recipe_bank_ram_engine.ld` | trampoline into retained stock | the stock IMAGE SIZE arm for refused targets and the dispatcher's shared tail | no | the owned dispatcher owns every `0xf6` caller's continuation | required |
-| `rb_menu_value_size_apply` export in `src/lib.rs` | stock-ABI export | the stock dispatcher's IMAGE SIZE jump-table word | no | the owned dispatcher calls the transaction directly | required |
+| `rb_menu_value_size_apply` in `adapter/mod.rs`, called by the `rb_menu_value_size_arm` veneer with the dispatcher's property and row token | stock-ABI export | the veneer's register handoff from the stock dispatcher (property in `r6`, token in `r5`) | no | the owned dispatcher calls the commit directly | required |
+| read-only view of the stock cells `0x00956838` (live mode), `0x00956888`/`0x00956890`/`0x00956898` (working size, third and aspect) and `0x00956c70`/`0x00956c78`/`0x00956c80` (their stored copies) in `adapter/mod.rs` | guest-memory layout view | the stock IMAGE SIZE cells the retained display and change-marker effects depend on | no | the typed settings service owns those cells | required |
 | `rb_menu_value_call_*` retained services (aspect/size cells, change marker, current property, display update) | trampoline into retained stock | stock property, cell and display services | no | the typed settings service and owned display own those services | required |
 
 ## menu_widgets
