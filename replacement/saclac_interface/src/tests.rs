@@ -229,3 +229,22 @@ fn lens_payload_completions_are_the_posts_of_the_callback_it_names() {
         }
     }
 }
+
+#[test]
+fn peer_queue_blocks_hold_the_longest_stock_payloads() {
+    use crate::calc::{CalcPayload, SharedAddress};
+    use stock::{peers, shared, StockCallbackWord};
+    let (_, calculation) = stock::calc_payload(&CalcPayload::Calculation {
+        block: SharedAddress(0),
+        source: SharedAddress(0),
+        callback: StockCallbackWord(0),
+    });
+    for (bytes, route) in [
+        (stock::LENS_PAYLOAD_BYTES, peers::LENS_DC),
+        (calculation.bytes().len(), peers::CALC),
+        (shared::LENS_COM_BYTES, peers::LENS_COM),
+        (shared::IMAGE_PROCESSOR_TRIPLET_BYTES, peers::IMAGE_PROCESSOR),
+    ] {
+        assert!(bytes <= route.payload_capacity(), "{route:?}");
+    }
+}
