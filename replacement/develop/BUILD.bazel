@@ -102,7 +102,7 @@ xm1_rust_rlib(
 xm1_rust_elf(
     name = "develop-candidate",
     rust_staticlib = ":develop-rust",
-    rust_components = [":property-service-component", _PROPERTY_CORE],
+    rust_components = [":property-service-component", _PROPERTY_CORE, "//replacement/kernel:arm"],
     asm_srcs = glob(["*_stock.S", "src/**/*_stock.S"], exclude = ["RedEyeBackend_stock.S", "src/pipeline/DebugStorage_stock.S"]) + [
         "//replacement/save:save_stock.S",
         "//replacement/media_permit:rb_media_permit_stock.S",

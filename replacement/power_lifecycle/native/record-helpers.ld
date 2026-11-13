@@ -1,3 +1,6 @@
+xm1_kernel_console9 = 0x41a34;
+xm1_kernel_critical_enter = 0x7235d8;
+xm1_kernel_critical_exit = 0x7236b0;
 ENTRY(xm1_power_record_helper_ef9bc0)
 SECTIONS
 {

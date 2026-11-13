@@ -10,6 +10,45 @@ exports_files([
     "rules-haskell-nix.patch",
 ])
 
+haskell_library(
+    name = "evidence-record-lib",
+    srcs = ["EvidenceRecord.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:cryptohash-sha256",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+        "//host:time",
+        "//host:vector",
+    ],
+)
+
+haskell_binary(
+    name = "evidence-record",
+    srcs = ["EvidenceRecordMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-rtsopts"],
+    visibility = ["//visibility:public"],
+    deps = [":evidence-record-lib", "//host:base"],
+)
+
+haskell_test(
+    name = "evidence-record-tests",
+    srcs = ["EvidenceRecordTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    deps = [
+        ":evidence-record-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+    ],
+)
+
 platform(
     name = "host",
     constraint_values = ["@rules_nixpkgs_core//constraints:support_nix"],
