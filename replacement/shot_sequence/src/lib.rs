@@ -21,6 +21,8 @@ pub mod pipeline;
 pub mod ports;
 pub mod preparation;
 pub mod sequence;
+pub mod secondary_boundary;
+pub mod secondary_job;
 pub mod shared;
 pub mod statistics_dump;
 pub mod stock;
@@ -123,3 +125,5 @@ mod finish_work_tests;
 mod calculations_work_tests;
 #[cfg(test)]
 mod absorb_tests;
+#[cfg(test)]
+mod secondary_job_tests;

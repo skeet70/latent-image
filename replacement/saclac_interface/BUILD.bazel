@@ -3,6 +3,7 @@ load("//replacement/toolchain:rust.bzl", "xm1_rust_host_rlib", "xm1_rust_host_te
 package(default_visibility = ["//visibility:public"])
 
 SOURCES = [
+    "src/area_measurement.rs",
     "src/calc.rs",
     "src/calculation.rs",
     "src/capture_results.rs",
@@ -11,6 +12,7 @@ SOURCES = [
     "src/statistics.rs",
     "src/stock.rs",
     "src/stock/calculation_result.rs",
+    "src/stock/area_measurement.rs",
     "src/stock/capture_results.rs",
     "src/stock/exposure.rs",
 ]
@@ -35,6 +37,7 @@ xm1_rust_host_test(
     src = "src/lib.rs",
     crate_name = "xm1_saclac_interface",
     data = SOURCES + [
+        "src/area_measurement_tests.rs",
         "src/calc_tests.rs",
         "src/calculation_tests.rs",
         "src/capture_results_tests.rs",

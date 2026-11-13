@@ -6,6 +6,7 @@ use crate::capture_stock;
 use crate::lens_return::{ReturnPoint, SavedSlots};
 use crate::subjects::{Candidates, Subject, SubjectId, SubjectList};
 use std::vec::Vec;
+use xm1_saclac_interface::area_measurement::AreaEntry;
 use xm1_saclac_interface::statistics::{SettingOverrides, StatisticsSetting};
 use xm1_saclac_interface::{stock, Completed, Completion, RecordHandle};
 
@@ -241,7 +242,7 @@ fn the_record_decides_whether_the_secondary_job_is_enabled() {
         prepared(&mut fake, parameters(0, 0));
         assert_eq!(fake.secondary_enabled, enabled);
         assert!(fake.has(&Call::ResetSecondary));
-        assert!(fake.has(&Call::StoreItem(record(), 0, ItemEntry::EMPTY)));
+        assert!(fake.has(&Call::StoreItem(record(), 0, AreaEntry::EMPTY)));
     }
 }
 
