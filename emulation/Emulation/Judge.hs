@@ -27,8 +27,9 @@
 -- An interface-stream report may declare channels instead of one observation
 -- sequence. Its verdict then compares each channel's events in order and the
 -- declared causal pairs; the order between channels is not compared. The
--- first failing channel event is carried in 'verdictChannelDifference' and
--- the first failing declared pair in 'verdictCausalViolation'.
+-- first failing channel event is carried in 'verdictChannelDifference', the
+-- first failing declared pair in 'verdictCausalViolation' and each channel's
+-- tail allowance in 'verdictChannelTolerances'.
 module Emulation.Judge
   ( -- * Stock-side evidence
     StockEvidence (..)
@@ -72,8 +73,10 @@ import qualified Data.Text as T
 import Data.Word (Word32, Word64)
 import Emulation.NativeObservation (parseWord32)
 import Emulation.InterfaceStream
-  ( CausalViolation (..)
+  ( AllowanceBasis (..)
+  , CausalViolation (..)
   , ChannelDifference (..)
+  , ChannelTolerance (..)
   , Selector (..)
   , channelNameText
   , occurrenceIndex
@@ -395,11 +398,12 @@ data Verdict = Verdict
   , verdictFirstDifference :: Maybe FirstDifference
   , verdictChannelDifference :: Maybe ChannelDifference
   , verdictCausalViolation :: Maybe CausalViolation
+  , verdictChannelTolerances :: [ChannelTolerance]
   } deriving (Eq, Show)
 
 -- | Bumped when the rule changes; the verdict document names it.
 judgeVersion :: String
-judgeVersion = "4"
+judgeVersion = "5"
 
 judgeReport :: JudgeInput -> Report -> Verdict
 judgeReport input report =
@@ -460,6 +464,7 @@ judgeReport input report =
       , verdictFirstDifference = Nothing
       , verdictChannelDifference = Nothing
       , verdictCausalViolation = Nothing
+      , verdictChannelTolerances = []
       }
 
 -- | The first observation at which the milestone relation fails, or
@@ -579,6 +584,20 @@ verdictText verdict =
         ++ " owned " ++ maybe "absent" valueText (differenceChannelOwned difference)) (verdictChannelDifference verdict)
     ++ maybe "" (\violation -> " causal-violation observation " ++ show (violationObservation violation)
         ++ ": " ++ violationReason violation) (verdictCausalViolation verdict)
+    ++ tailsText (verdictChannelTolerances verdict)
+
+-- | The channels whose two sides differ in length, with the allowance each
+-- was judged under.
+tailsText :: [ChannelTolerance] -> String
+tailsText tolerances = case
+    [ T.unpack (channelNameText (toleranceChannel tolerance))
+        ++ " stock " ++ show (toleranceStockEvents tolerance)
+        ++ " owned " ++ show (toleranceOwnedEvents tolerance)
+        ++ " allowance " ++ show (toleranceAllowance tolerance)
+    | tolerance <- tolerances
+    , toleranceStockEvents tolerance /= toleranceOwnedEvents tolerance ] of
+  [] -> ""
+  tails -> " tails: " ++ intercalate ", " tails
 
 milestoneJson :: Milestone -> Value
 milestoneJson milestone = object
@@ -624,6 +643,26 @@ causalViolationJson violation = object
   , ("reason", toJSON (violationReason violation))
   ]
 
+allowanceBasisLabel :: AllowanceBasis -> String
+allowanceBasisLabel NoMilestone = "no-milestone"
+allowanceBasisLabel OrderedDefault = "ordered-default"
+allowanceBasisLabel TimeDrivenDefault = "time-driven-default"
+allowanceBasisLabel (DeclaredAllowance _) = "declared"
+
+channelToleranceJson :: ChannelTolerance -> Value
+channelToleranceJson tolerance = object
+  [ ("channel", toJSON (channelNameText (toleranceChannel tolerance)))
+  , ("time_driven", toJSON (toleranceTimeDriven tolerance))
+  , ("tail_allowance", toJSON (toleranceAllowance tolerance))
+  , ("allowance_basis", toJSON (allowanceBasisLabel (toleranceBasis tolerance)))
+  , ("allowance_reason", case toleranceBasis tolerance of
+      DeclaredAllowance reason -> toJSON reason
+      _ -> Null)
+  , ("stock_events", toJSON (toleranceStockEvents tolerance))
+  , ("owned_events", toJSON (toleranceOwnedEvents tolerance))
+  , ("tail_used", toJSON (abs (toleranceStockEvents tolerance - toleranceOwnedEvents tolerance)))
+  ]
+
 verdictJson :: Verdict -> Value
 verdictJson verdict = object
   [ ("schema", Number 1)
@@ -649,6 +688,7 @@ verdictJson verdict = object
   , ("first_difference", maybe Null firstDifferenceJson (verdictFirstDifference verdict))
   , ("channel_difference", maybe Null channelDifferenceJson (verdictChannelDifference verdict))
   , ("causal_violation", maybe Null causalViolationJson (verdictCausalViolation verdict))
+  , ("channel_tolerances", toJSON (map channelToleranceJson (verdictChannelTolerances verdict)))
   ]
 
 -- | Only @equal@ is a pass. A @no-verdict@ and a @not-run@ are never reported

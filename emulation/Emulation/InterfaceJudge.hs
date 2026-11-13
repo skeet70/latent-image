@@ -2,23 +2,24 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The interface-stream relation: independent channels compared in order,
--- declared causal pairs, and the existing milestone relation.
+-- counted causal pairs, and the end-milestone tail rule.
 --
--- A report without channel declarations is compared as one ordered stream,
--- exactly as before. A report that declares channels under @payload_projection@
--- groups its events by selector: the first declared channel whose @match@
--- field set every event field agrees with claims the event. The order between
--- channels is not compared.
+-- A report that declares channels under @payload_projection@ groups its
+-- events by selector: the first declared channel whose @match@ field set
+-- every event field agrees with claims the event. A report without channel
+-- declarations has one ordered channel, @stream@, holding every event. The
+-- order between channels is not compared, and a @{"milestone": NAME}@ marker
+-- is not a channel event.
 --
--- Every declared channel's events are compared in order. A channel marked
--- @time_driven@ is compared occurrence by occurrence; with a milestone the
--- shorter sequence must be a prefix of the longer, because either side can
--- reach the milestone a little earlier. An ordered channel with a milestone
--- is compared through the milestone observation, and its stock events after
--- it must be a prefix of the owned events after it. A declared causal pair
--- holds when every event matching @then@ has an earlier event matching
--- @first@. A declared milestone both sides must carry as a
--- @{"milestone": NAME}@ event; a side that does not reach it is different.
+-- Without a milestone every channel must be equal. A declared milestone ends
+-- the compared stream: each side is cut at its own marker and carries no
+-- event after it, so a start marker cannot be declared as one. At the
+-- milestone the shorter sequence of a channel must be a prefix of the longer,
+-- and the longer may carry at most the channel's tail allowance more events:
+-- the declared one, else 1 for a time-driven channel and 0 for an ordered
+-- one. A side that does not reach the milestone is different. A declared
+-- causal pair is counted: each event matching @then@ consumes one earlier
+-- unconsumed event matching @first@.
 module Emulation.InterfaceJudge
   ( InterfaceReport (..)
   , ReportDigest (..)
@@ -27,6 +28,7 @@ module Emulation.InterfaceJudge
   , interfaceVerdictJson
   ) where
 
+import Control.Applicative ((<|>))
 import Control.Monad (foldM, unless)
 import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', withObject, withText, (.:), (.:?), (.!=))
 import qualified Data.Aeson.Key as K
@@ -50,17 +52,26 @@ newtype ReportDigest = ReportDigest String deriving (Eq, Show)
 newtype GuestAddress = GuestAddress Word32 deriving (Eq, Ord, Show)
 newtype FetchCount = FetchCount Word64 deriving (Eq, Show)
 
+-- | A declared bound on one channel's tail at the end milestone and the
+-- report's reason for it.
+data TailAllowance = TailAllowance
+  { allowanceOccurrences :: Int
+  , allowanceReason :: T.Text
+  } deriving (Eq, Show)
+
 -- | One declared channel: the events its selector claims, whether timing may
--- change its count, and where the declaration comes from.
+-- change its count, its declared tail allowance, and where the declaration
+-- comes from.
 data Channel = Channel
   { channelName :: ChannelName
   , channelMatch :: Selector
   , channelTimeDriven :: Bool
+  , channelTailAllowance :: Maybe TailAllowance
   , channelSources :: [T.Text]
   } deriving (Eq, Show)
 
--- | One declared ordering: every event matching @then@ needs an earlier event
--- matching @first@.
+-- | One declared ordering: every event matching @then@ needs its own earlier
+-- event matching @first@.
 data Causal = Causal
   { causalFirst :: Selector
   , causalThen :: Selector
@@ -96,6 +107,13 @@ data StreamDifference
   | UncausedEvent CausalViolation
   deriving (Eq, Show)
 
+-- | A candidate run judged against the stock run: the first failure of the
+-- relation, and the tolerance each channel was judged under.
+data Comparison = Comparison
+  { comparisonDifference :: Maybe StreamDifference
+  , comparisonTolerances :: [ChannelTolerance]
+  }
+
 name :: String -> (T.Text -> a) -> Value -> J.Parser a
 name label make = withText label $ \text -> do
   unless (not (T.null (T.strip text))) (fail (label ++ " must not be empty"))
@@ -104,14 +122,22 @@ name label make = withText label $ \text -> do
 instance FromJSON Subsystem where parseJSON = name "subsystem" Subsystem
 instance FromJSON Scenario where parseJSON = name "scenario" Scenario
 instance FromJSON Variant where parseJSON = name "variant" Variant
+instance FromJSON TailAllowance where
+  parseJSON = withObject "tail allowance" $ \value -> do
+    occurrences <- value .: "occurrences"
+    reason <- value .: "reason"
+    unless (occurrences >= 0) (fail "tail allowance must not be negative")
+    unless (not (T.null (T.strip reason))) (fail "tail allowance must give a reason")
+    pure (TailAllowance occurrences reason)
 instance FromJSON Channel where
   parseJSON = withObject "channel" $ \value -> do
     label <- value .: "name"
     match <- value .: "match"
     driven <- value .:? "time_driven" .!= False
+    allowance <- value .:? "tail_allowance"
     sources <- value .: "sources"
     unless (not (null sources)) (fail "channel must cite a source")
-    pure (Channel label match driven sources)
+    pure (Channel label match driven allowance sources)
 instance FromJSON Causal where
   parseJSON = withObject "causal pair" $ \value -> do
     first <- value .: "first"
@@ -171,16 +197,6 @@ executed extents run = runComplete run && any positive (runFetches run)
     positive (FetchReceipt _ (FetchCount count)) = count > 0
     admitted (FetchReceipt (Span start end) _) = any (\(Span low high) -> low <= start && end <= high) extents
 
-firstDifference :: [Observation] -> [Observation] -> Maybe FirstDifference
-firstDifference = go 0
-  where
-    go _ [] [] = Nothing
-    go index (left : lefts) (right : rights)
-      | left == right = go (index + 1) lefts rights
-    go index left right = Just (FirstDifference (ObservationIndex index) (first left) (first right))
-    first [] = Nothing
-    first (value : _) = Just value
-
 digestText :: Digest -> String
 digestText (Digest text) = T.unpack text
 
@@ -196,107 +212,115 @@ isMarker :: Value -> Bool
 isMarker (Object row) = KM.keys row == [K.fromText "milestone"]
 isMarker _ = False
 
+isMilestoneMarker :: Milestone -> Value -> Bool
+isMilestoneMarker (Milestone label _) value = isMarker value && markerName value == Just (T.pack label)
+
+reached :: Milestone -> StreamRun -> Bool
+reached marker run = any (isMilestoneMarker marker . observationValue) (runEvents run)
+
+-- | The one channel of a report that declares none.
+wholeStream :: Channel
+wholeStream = Channel (ChannelName "stream") (Selector KM.empty) False Nothing []
+
+judgedChannels :: [Channel] -> [Channel]
+judgedChannels [] = [wholeStream]
+judgedChannels declared = declared
+
 -- | The channel that claims an event; declaration order is precedence, so a
 -- specific channel is declared before the general one it is a part of.
 claim :: [Channel] -> Value -> Maybe Channel
-claim declared value = case filter (\channel -> matchesSelector (channelMatch channel) value) declared of
-  channel : _ -> Just channel
-  [] -> Nothing
+claim [] _ = Just wholeStream
+claim declared value = find (\channel -> matchesSelector (channelMatch channel) value) declared
 
--- | Group a run's events by declared channel, keeping each event's position
--- in the run. An event no channel claims leaves the declaration unable to
--- judge the stream.
-partition :: [Channel] -> StreamRun -> Either String (M.Map ChannelName [(Int, Value)])
-partition declared run =
-  foldM step M.empty (zip [0 :: Int ..] (map observationValue (runEvents run)))
+-- | One side's events grouped by channel, in order. An event no channel
+-- claims, or one after the side's milestone marker, leaves the declaration
+-- unable to judge the stream.
+partition :: String -> Maybe Milestone -> [Channel] -> StreamRun -> Either String (M.Map ChannelName [Value])
+partition side end declared run =
+  M.map reverse . fst <$> foldM step (M.empty, Nothing) (zip [0 :: Int ..] (map observationValue (runEvents run)))
   where
-    step acc (index, value)
-      | isMarker value = Right acc
+    step (table, ended) (index, value)
+      | isMarker value = Right (table, ended <|> (if any (`isMilestoneMarker` value) end then Just index else Nothing))
+      | Just mark <- ended = Left (side ++ "'s observation " ++ show index ++ " follows its milestone marker at observation "
+          ++ show mark ++ "; a milestone ends the compared stream")
       | otherwise = case claim declared value of
-          Nothing -> Left ("event at observation " ++ show index ++ " matches no declared channel")
-          Just channel -> Right (M.insertWith (\new old -> old ++ new) (channelName channel) [(index, value)] acc)
+          Nothing -> Left (side ++ "'s observation " ++ show index ++ " matches no declared channel")
+          Just channel -> Right (M.insertWith (++) (channelName channel) [value] table, ended)
 
--- | The first differing event of one channel. With a milestone, an ordered
--- channel is equal through the milestone observation and its stock tail after
--- it must be a prefix of the owned tail; a time-driven channel is compared
--- occurrence by occurrence and the shorter sequence must be a prefix of the
--- longer.
-compareSequence :: ChannelName -> Maybe Int -> Bool -> [(Int, Value)] -> [(Int, Value)] -> Maybe StreamDifference
-compareSequence label boundary timeDriven stock owned
-  | timeDriven = case boundary of
-      Just _ -> walkEither 0 stock owned
-      Nothing -> walkExact 0 stock owned
-  | Just mark <- boundary =
-      let (stockPrefix, stockTail) = span ((<= mark) . fst) stock
-          (ownedPrefix, ownedTail) = span ((<= mark) . fst) owned
-       in case walkExact 0 stockPrefix ownedPrefix of
-            Just difference -> Just difference
-            Nothing -> walkPrefix (length stockPrefix) stockTail ownedTail
-  | otherwise = walkExact 0 stock owned
+-- | The number of events one side of a channel may carry beyond the other at
+-- the report's milestone, and where that number comes from.
+allowanceOf :: Maybe Milestone -> Channel -> (Int, AllowanceBasis)
+allowanceOf Nothing _ = (0, NoMilestone)
+allowanceOf (Just _) channel = case channelTailAllowance channel of
+  Just (TailAllowance occurrences reason) -> (occurrences, DeclaredAllowance reason)
+  Nothing
+    | channelTimeDriven channel -> (1, TimeDrivenDefault)
+    | otherwise -> (0, OrderedDefault)
+
+-- | The first event of one channel the allowance does not admit: the shorter
+-- sequence must be a prefix of the longer, which may carry at most
+-- @allowance@ more events. Past the shorter sequence, the event named is the
+-- first beyond the allowance.
+tailDifference :: ChannelName -> Int -> [Value] -> [Value] -> Maybe StreamDifference
+tailDifference label allowance = go 0
   where
-    walkExact _ [] [] = Nothing
-    walkExact occurrence (expected : _) []
-      = Just (DifferingEvent label (Occurrence occurrence) (Just (snd expected)) Nothing)
-    walkExact occurrence [] (actual : _)
-      = Just (DifferingEvent label (Occurrence occurrence) Nothing (Just (snd actual)))
-    walkExact occurrence (expected : expecteds) (actual : actuals)
-      | snd expected == snd actual = walkExact (occurrence + 1) expecteds actuals
-      | otherwise = Just (DifferingEvent label (Occurrence occurrence) (Just (snd expected)) (Just (snd actual)))
-    walkPrefix _ [] _ = Nothing
-    walkPrefix occurrence (expected : _) []
-      = Just (DifferingEvent label (Occurrence occurrence) (Just (snd expected)) Nothing)
-    walkPrefix occurrence (expected : expecteds) (actual : actuals)
-      | snd expected == snd actual = walkPrefix (occurrence + 1) expecteds actuals
-      | otherwise = Just (DifferingEvent label (Occurrence occurrence) (Just (snd expected)) (Just (snd actual)))
-    walkEither _ [] _ = Nothing
-    walkEither _ _ [] = Nothing
-    walkEither occurrence (expected : expecteds) (actual : actuals)
-      | snd expected == snd actual = walkEither (occurrence + 1) expecteds actuals
-      | otherwise = Just (DifferingEvent label (Occurrence occurrence) (Just (snd expected)) (Just (snd actual)))
+    go occurrence (expected : expecteds) (actual : actuals)
+      | expected == actual = go (occurrence + 1) expecteds actuals
+      | otherwise = Just (DifferingEvent label (Occurrence occurrence) (Just expected) (Just actual))
+    go occurrence expecteds actuals = case (drop allowance expecteds, drop allowance actuals) of
+      (extra : _, _) -> Just (DifferingEvent label (Occurrence (occurrence + allowance)) (Just extra) Nothing)
+      (_, extra : _) -> Just (DifferingEvent label (Occurrence (occurrence + allowance)) Nothing (Just extra))
+      ([], []) -> Nothing
 
--- | The first event matching @then@ with no earlier event matching @first@.
+-- | The first event matching @then@ without an earlier, not yet consumed
+-- event matching @first@. An event matching both selectors needs an earlier
+-- @first@ event before it adds one.
 causalViolation :: String -> Causal -> StreamRun -> Maybe CausalViolation
 causalViolation side (Causal first then_ _) run =
-  case [index | (index, value) <- indexed, matchesSelector then_ value, maybe True (>= index) earliest] of
-    [] -> Nothing
-    (index : _) -> Just (CausalViolation index first then_
-      (side ++ "'s observation " ++ show index ++ " matches no earlier event for the declared pair"))
+  go (0 :: Int) (zip [0 :: Int ..] (map observationValue (runEvents run)))
   where
-    indexed = zip [0 :: Int ..] (map observationValue (runEvents run))
-    earliest = fmap fst (find (matchesSelector first . snd) indexed)
+    go _ [] = Nothing
+    go unmatched ((index, value) : rest)
+      | effect && unmatched == 0 = Just (CausalViolation index first then_
+          (side ++ "'s observation " ++ show index ++ " matches no earlier unmatched event for the declared pair"))
+      | otherwise = go (unmatched - fromEnum effect + fromEnum (matchesSelector first value)) rest
+      where effect = matchesSelector then_ value
 
--- | The first failure of the declared relation between a stock stream and a
--- candidate stream, or why the declaration cannot judge the streams.
-compareChannels :: Maybe Int -> [Channel] -> [Causal] -> StreamRun -> String -> StreamRun
-  -> Either String (Maybe StreamDifference)
-compareChannels boundary channels_ pairs stock candidateLabel candidate = do
-  stockTable <- partition channels_ stock
-  candidateTable <- partition channels_ candidate
-  let channelDifference channel =
-        compareSequence (channelName channel) boundary (channelTimeDriven channel)
-          (eventsOf stockTable channel) (eventsOf candidateTable channel)
-      eventsOf table channel = M.findWithDefault [] (channelName channel) table
-      pairDifference side run = firstJust [UncausedEvent <$> causalViolation side pair run | pair <- pairs]
-  pure $ case firstJust (map channelDifference channels_) of
-    Just difference -> Just difference
-    Nothing -> case pairDifference "stock" stock of
-      Just difference -> Just difference
-      Nothing -> pairDifference candidateLabel candidate
+-- | Judge a candidate run against the stock run under the report's
+-- declarations, or say why the declarations cannot judge them.
+compareRuns :: InterfaceReport -> String -> StreamRun -> Either String Comparison
+compareRuns report candidateLabel candidate = do
+  stockTable <- partition "stock" end declared stock
+  candidateTable <- partition candidateLabel end declared candidate
+  let judged channel =
+        let (allowance, basis) = allowanceOf end channel
+            stockEvents = M.findWithDefault [] (channelName channel) stockTable
+            candidateEvents = M.findWithDefault [] (channelName channel) candidateTable
+         in ( tailDifference (channelName channel) allowance stockEvents candidateEvents
+            , ChannelTolerance (channelName channel) (channelTimeDriven channel) allowance basis
+                (length stockEvents) (length candidateEvents) )
+      results = map judged (judgedChannels declared)
+      pairDifference side run = firstJust [UncausedEvent <$> causalViolation side pair run | pair <- causalPairs report]
+  pure Comparison
+    { comparisonDifference = firstJust (map fst results)
+        <|> pairDifference "stock" stock <|> pairDifference candidateLabel candidate
+    , comparisonTolerances = map snd results
+    }
+  where
+    end = milestone report
+    declared = channels report
+    stock = stockRun report
 
 firstJust :: [Maybe a] -> Maybe a
 firstJust = foldr (\candidate rest -> maybe rest Just candidate) Nothing
-
-reached :: Milestone -> StreamRun -> Bool
-reached (Milestone label _) run =
-  any (\observation -> markerName (observationValue observation) == Just (T.pack label)) (runEvents run)
 
 judgeInterfaceReport :: Maybe Firmware -> ReportDigest -> InterfaceReport -> Verdict
 judgeInterfaceReport firmware (ReportDigest reportDigest) report = base
   { verdictStatus = status
   , verdictDifferentCases = [scenarioName | status == VerdictDifferent]
-  , verdictFirstDifference = if status == VerdictDifferent && not channelMode then wholeDifference else Nothing
   , verdictChannelDifference = channelFailure
   , verdictCausalViolation = causalFailure
+  , verdictChannelTolerances = either (const []) comparisonTolerances compared
   , verdictReasons = reasons
   }
   where
@@ -305,19 +329,9 @@ judgeInterfaceReport firmware (ReportDigest reportDigest) report = base
     scenarioName = T.unpack scenarioText
     stock = stockRun report
     owned = ownedRun report
-    channelMode = not (null (channels report))
-    boundary = case milestone report of
-      Just (Milestone _ (ObservationIndex mark)) -> Just mark
-      Nothing -> Nothing
-    wholeDifference = case milestone report of
-      Just marker -> milestoneDifference marker (runEvents stock) (runEvents owned)
-      Nothing -> firstDifference (runEvents stock) (runEvents owned)
-    comparedChannels
-      | channelMode = compareChannels boundary (channels report) (causalPairs report) stock "owned" owned
-      | otherwise = Right Nothing
-    streamDifference = either (const Nothing) id comparedChannels
-    channelReasons = either (: []) (const []) comparedChannels
-    anyDifference = if channelMode then isJust streamDifference else isJust wholeDifference
+    compared = compareRuns report "owned" owned
+    streamDifference = either (const Nothing) comparisonDifference compared
+    channelReasons = either (: []) (const []) compared
     channelFailure = case streamDifference of
       Just (DifferingEvent label occurrence left right) ->
         Just (ChannelDifference label occurrence left right)
@@ -326,19 +340,16 @@ judgeInterfaceReport firmware (ReportDigest reportDigest) report = base
       Just (UncausedEvent violation) -> Just violation
       _ -> Nothing
     missingMilestone = case milestone report of
-      Just marker | channelMode ->
+      Just marker ->
         [ side ++ " does not reach milestone " ++ milestoneName marker
         | (side, run) <- [("stock", stock), ("owned", owned)]
         , not (reached marker run)
         ]
-      _ -> []
+      Nothing -> []
     controlEvidence = all (\(WrongRun _ run) -> executed (ownedExtents report) run) (wrongRuns report)
-    detected (WrongRun _ run)
-      | channelMode = either (const False) (not . isNothing) $
-          compareChannels boundary (channels report) (causalPairs report) stock "control" run
-      | otherwise = not (isNothing (case milestone report of
-          Just marker -> milestoneDifference marker (runEvents stock) (runEvents run)
-          Nothing -> firstDifference (runEvents stock) (runEvents run)))
+    detected (WrongRun _ run) =
+      not (all (`reached` run) (milestone report))
+        || either (const False) (isJust . comparisonDifference) (compareRuns report "control" run)
     controls = wrongRuns report
     survivors = sort [T.unpack label | wrong@(WrongRun (Variant label) _) <- controls, not (detected wrong)]
     evidence = executed (retiredExtents report) stock && executed (ownedExtents report) owned && controlEvidence
@@ -356,7 +367,7 @@ judgeInterfaceReport firmware (ReportDigest reportDigest) report = base
       | not (null unmet) = VerdictNoVerdict
       | not (null channelReasons) = VerdictNoVerdict
       | not (null missingMilestone) = VerdictDifferent
-      | anyDifference = VerdictDifferent
+      | isJust streamDifference = VerdictDifferent
       | isNothing (milestone report) = VerdictEqual
       | otherwise = VerdictEqualUpToMilestone
     base = Verdict
@@ -375,6 +386,7 @@ judgeInterfaceReport firmware (ReportDigest reportDigest) report = base
       , verdictFirstDifference = Nothing
       , verdictChannelDifference = Nothing
       , verdictCausalViolation = Nothing
+      , verdictChannelTolerances = []
       }
 
 interfaceVerdictJson :: InterfaceReport -> Verdict -> Value
