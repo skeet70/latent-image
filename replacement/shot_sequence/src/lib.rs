@@ -6,6 +6,7 @@ pub mod calculation;
 pub mod calculation_work;
 pub mod capture;
 pub mod capture_boundary;
+pub mod capture_control;
 pub mod capture_stock;
 pub mod exposure;
 pub mod exposure_work;
@@ -110,3 +111,5 @@ mod capture_stock_tests;
 mod calculation_work_tests;
 #[cfg(test)]
 mod statistics_dump_tests;
+#[cfg(test)]
+mod capture_control_tests;
