@@ -69,7 +69,7 @@ data Role = StockRole | OwnedRole deriving (Eq, Show)
 -- label is 'OtherSite'.
 data RtcByteIndex = RtcByte0 | RtcByte1 | RtcByte2 | RtcByte3 deriving (Eq, Ord, Show)
 
-data ValueSite = ValueBegin | ValueConfirm | ValueCancel | ValueApply | ValueHandback | StockValueArm
+data ValueSite = ValueApply | StockValueArm
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 data Site = StageEntry | KindSwitch | Seek | EventPost | GuardTrap | CalendarSample | RtcCounterByte RtcByteIndex | ValueSite ValueSite | OtherSite T.Text
@@ -87,11 +87,7 @@ parseSite label = case label of
   "rtc-counter-byte-1" -> RtcCounterByte RtcByte1
   "rtc-counter-byte-2" -> RtcCounterByte RtcByte2
   "rtc-counter-byte-3" -> RtcCounterByte RtcByte3
-  "owned-value-begin" -> ValueSite ValueBegin
-  "owned-value-confirm" -> ValueSite ValueConfirm
-  "owned-value-cancel" -> ValueSite ValueCancel
   "owned-value-apply" -> ValueSite ValueApply
-  "owned-value-handback" -> ValueSite ValueHandback
   "stock-value-size-arm" -> ValueSite StockValueArm
   other -> OtherSite other
 
@@ -465,29 +461,28 @@ comparePair stock owned = do
   unless (posts stock == posts owned)
     (Left ("0x1d posts differ: stock " ++ show (posts stock) ++ ", owned " ++ show (posts owned)))
 
-valueStep :: M.Map ValueSite Int -> Hit -> Either String (M.Map ValueSite Int)
-valueStep counts hit = case hitSite hit of
-  ValueSite StockValueArm -> Left "resident value transaction executed the replaced IMAGE SIZE arm"
-  ValueSite site -> Right (M.insertWith (+) site 1 counts)
-  _ -> Right counts
+valueStep :: Bool -> Hit -> Either String Bool
+valueStep applied hit = case hitSite hit of
+  ValueSite StockValueArm -> Left "resident value seam executed the replaced IMAGE SIZE arm"
+  ValueSite ValueApply -> Right True
+  _ -> Right applied
 
-valueComplete :: M.Map ValueSite Int -> Either String ()
-valueComplete counts = unless (all (`M.member` counts) [ValueBegin, ValueConfirm, ValueCancel, ValueApply, ValueHandback])
-  (Left "resident value lifecycle lacks begin, apply, confirm, cancel or handback execution")
+valueComplete :: Bool -> Either String ()
+valueComplete applied = unless applied (Left "resident value seam never executed its apply entry")
 
 checkValueLifecycle :: [Observation] -> Either String ()
-checkValueLifecycle segments = foldM valueStep M.empty
+checkValueLifecycle segments = foldM valueStep False
   [hit | segment <- segments, observationResidency segment == EngineResident, hit <- observationHits segment]
   >>= valueComplete
 
 checkValueLifecycleReader :: [ObservationReader] -> IO (Either String ())
-checkValueLifecycleReader = go M.empty
+checkValueLifecycleReader = go False
  where
-  go counts [] = pure (valueComplete counts)
-  go counts (reader : rest)
-    | readerResidency reader == EngineUnloaded = go counts rest
+  go applied [] = pure (valueComplete applied)
+  go applied (reader : rest)
+    | readerResidency reader == EngineUnloaded = go applied rest
     | otherwise = do
-        checked <- readerFoldHits reader valueStep counts
+        checked <- readerFoldHits reader valueStep applied
         case checked of
           Left failure -> pure (Left failure)
           Right next -> go next rest

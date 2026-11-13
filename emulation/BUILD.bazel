@@ -2938,10 +2938,12 @@ haskell_binary(
 haskell_binary(
     name = "menu-value-cases",
     srcs = ["MenuValueCases.hs"],
-    ghcopts = ["-XGHC2021", "-Wall", "-O2", "-threaded"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
     main_file = "MenuValueCases.hs",
     visibility = ["//visibility:public"],
     deps = [
+        ":case-sha256",
+        ":coverage-lib",
         ":native-adapter",
         ":native-observation",
         ":owned-case",
@@ -2951,6 +2953,7 @@ haskell_binary(
         "//host:containers",
         "//host:filepath",
         "//host:host-support",
+        "//host:json",
     ],
 )
 

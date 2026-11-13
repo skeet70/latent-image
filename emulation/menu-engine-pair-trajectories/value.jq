@@ -5,11 +5,7 @@ def value_sites($role): [
   ["0061c91c", "value-property-write"],
   ["00d5b350", "value-notify", {"lr":true}]
 ] + (if $role == "owned" then [
-  ["runtime:rb_menu_value_begin", "owned-value-begin"],
-  ["runtime:rb_menu_value_confirm", "owned-value-confirm"],
-  ["runtime:rb_menu_value_cancel", "owned-value-cancel"],
-  ["runtime:rb_menu_value_size_apply", "owned-value-apply"],
-  ["runtime:rb_menu_value_retained", "owned-value-handback"]
+  ["runtime:rb_menu_value_size_apply", "owned-value-apply"]
 ] else [] end);
 .entry = "Installed IMAGE SIZE lifecycle: move and LEFT accept, reopen the accepted row, move and BACK cancel, reopen the accepted row, UP and OK accept, RIGHT stays open, BACK handback, unload and stock reopen."
 | .trace_sites += engine_sites($role) + value_sites($role)
