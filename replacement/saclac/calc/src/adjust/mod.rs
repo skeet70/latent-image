@@ -13,6 +13,7 @@ pub mod metering;
 pub mod motion;
 pub mod peak;
 pub mod profile_adjustment;
+pub mod profile_mode;
 pub mod rate_policy;
 pub mod rate_samples;
 pub mod result_dispatch;
@@ -46,6 +47,8 @@ mod metering_tests;
 mod peak_tests;
 #[cfg(test)]
 mod profile_adjustment_tests;
+#[cfg(test)]
+mod profile_mode_tests;
 #[cfg(test)]
 mod rate_policy_tests;
 #[cfg(test)]

@@ -13,6 +13,7 @@ use xm1_saclac_profile_records::{AccessGroup, Bytes, Grants, Handle, Measurement
 use crate::adjust::exposure_limits::{CellLevels, ChannelLevels};
 use crate::adjust::lens::{BiasTable, LensConfiguration};
 use crate::adjust::profile_adjustment::{LensSteps, StepTable};
+use crate::adjust::profile_mode::DeviceReadiness;
 use crate::exposure::ports::{CaptureProfiles, ImageReport, InPlace, Lens, Placement, ProfileAccess, ProfileLevels, Properties, Property, StockMemory};
 use crate::profile::Profile;
 use crate::scene_levels::FeatureClasses;
@@ -105,6 +106,7 @@ pub struct World {
     /// Standard-table near and far steps by limit.
     pub near_steps: BTreeMap<u16, u32>,
     pub far_steps: BTreeMap<u16, u32>,
+    pub device_ready: bool,
 }
 
 /// Where the test world places the context's in-place blocks.
@@ -147,6 +149,7 @@ impl Default for World {
             grid_steps: BTreeMap::new(),
             near_steps: BTreeMap::new(),
             far_steps: BTreeMap::new(),
+            device_ready: false,
         }
     }
 }
@@ -264,6 +267,10 @@ impl Placement for World {
 impl ImageReport for World {
     fn second_report_word(&mut self) -> u32 { self.report_word }
     fn fourth_report_word(&mut self) -> u32 { self.fourth_report_word }
+}
+
+impl DeviceReadiness for World {
+    fn device_ready(&mut self) -> bool { self.device_ready }
 }
 
 impl LensConfiguration for World {

@@ -2,7 +2,8 @@
 
 use crate::exposure::ports::Property;
 
-/// Bit 0 selects the configured measurement level (0xf624f8, 0xf62544).
+/// Bit 0 selects the configured measurement level (0xf624f8, 0xf62544); bit 3 turns the profile
+/// limit flags off (0xf5eae8).
 pub const ADJUSTMENT_FLAGS: Property = Property(0xa8);
 /// Two bytes: the target level outside the adjustment path (0xf624e0).
 pub const TARGET_LEVEL: Property = Property(0x6002);
