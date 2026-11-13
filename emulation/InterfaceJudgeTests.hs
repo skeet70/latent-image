@@ -42,6 +42,7 @@ main = do
   let marker = object ["name" .= ("message-received" :: String), "observation" .= (0 :: Int)]
   milestoneVerdict <- status (report stock (run ownedDigest True 64 96 9 ["message", "reply", "extra"]) [control wrong] marker) VerdictEqualUpToMilestone
   check (verdictMilestone milestoneVerdict == Just (Milestone "message-received" (ObservationIndex 0)))
+  _ <- status (report stock owned [control (run wrongDigest True 64 96 8 ["message", "reply", "extra"])] marker) VerdictNoVerdict
   _ <- status (report stock (run ownedDigest True 64 96 9 ["different", "reply"]) [control wrong] marker) VerdictDifferent
   _ <- status (report stock (run ownedDigest True 64 96 9 []) [control wrong] marker) VerdictDifferent
   _ <- status (report (run stockDigest True 16 32 0 ["message", "reply"]) owned [control wrong] Null) VerdictNoVerdict

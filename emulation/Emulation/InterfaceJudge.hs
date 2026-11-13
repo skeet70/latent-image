@@ -127,7 +127,9 @@ judgeInterfaceReport firmware reportDigest report = base
     stock = stockRun report
     owned = ownedRun report
     controlEvidence = all (\(WrongRun _ run) -> executed (ownedExtents report) run) (wrongRuns report)
-    detected (WrongRun _ run) = not (isNothing (firstDifference (runEvents stock) (runEvents run)))
+    detected (WrongRun _ run) = not (isNothing (case milestone report of
+      Just marker -> milestoneDifference marker (runEvents stock) (runEvents run)
+      Nothing -> firstDifference (runEvents stock) (runEvents run)))
     controls = wrongRuns report
     survivors = sort [T.unpack label | wrong@(WrongRun (Variant label) _) <- controls, not (detected wrong)]
     evidence = executed (retiredExtents report) stock && executed (ownedExtents report) owned && controlEvidence
