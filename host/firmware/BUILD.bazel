@@ -569,6 +569,7 @@ haskell_binary(
         ":bank-allowlist-composition",
         ":ram-push-layout",
         ":ram-push-toolchain",
+        "//build-support:rust-source-boundary",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -1704,7 +1705,7 @@ haskell_test(
 )
 
 haskell_test(
-    name = "bank-allowlist-tests",
+    name = "bank-allowlist-binary-tests",
     srcs = ["BankAllowlistTests.hs"],
     args = [
         "$(location //menu:recipe_bank_allowlist.json)",
@@ -1740,6 +1741,34 @@ haskell_test(
         "//host:bytestring",
         "//host:directory",
         "//host:process",
+    ],
+)
+
+test_suite(
+    name = "bank-allowlist-tests",
+    tests = [
+        "//build-support:bank-source-boundary-tests",
+        ":bank-allowlist-binary-tests",
+        ":bank-allowlist-composition-tests",
+        ":engine-stack-tests",
+        ":render-stack-tests",
+        "//replacement/bank:unsafe-boundary-check",
+        "//replacement/capture:unsafe-boundary-check",
+        "//replacement/service:unsafe-boundary-check",
+        "//replacement/owned_menu:unsafe-boundary-check",
+        "//replacement/modal_runtime:unsafe-boundary-check",
+        "//replacement/recipe_ui:unsafe-boundary-check",
+        "//replacement/menu_engine:unsafe-boundary-check",
+        "//replacement/menu_value:unsafe-boundary-check",
+        "//replacement/render_adapter:unsafe-boundary-check",
+        "//replacement/menu_widgets:unsafe-boundary-check",
+        "//replacement/render_commands:unsafe-boundary-check",
+        "//replacement/save:unsafe-boundary-check",
+        "//replacement/media_permit:unsafe-boundary-check",
+        "//replacement/develop:font-source-boundary-check",
+        "//replacement/property_service:unsafe-boundary-check",
+        "//replacement/settings_storage:unsafe-boundary-check",
+        "//replacement/kernel:unsafe-boundary-check",
     ],
 )
 
@@ -1780,6 +1809,7 @@ filegroup(
         "A32.hs",
         "BankAllowlist.hs",
         "EngineStack.hs",
+        "RenderStack.hs",
         "StackWalk.hs",
         "BankAllowlistComposition.hs",
         "ArmElf.hs",
@@ -1793,6 +1823,8 @@ filegroup(
         "//host:FujiAF/RecipeBank.hs",
         "//host:FujiAF/RecipeBankFields.hs",
         "//host:FujiAF/UpdateContainer.hs",
+        "//build-support:RustSourceBoundaryCheck.hs",
+        "//build-support:BankSourceBoundaryCheck.hs",
     ],
 )
 

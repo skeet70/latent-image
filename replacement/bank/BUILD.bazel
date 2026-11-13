@@ -1,3 +1,5 @@
+load("//build-support:rust_source_boundary.bzl", "rust_source_boundary_test")
+
 load("//replacement/toolchain:rust.bzl", "xm1_rust_staticlib")
 
 _RLIB_DEPS = {
@@ -185,6 +187,7 @@ filegroup(
     name = "relink-sources",
     srcs = [
         "lib.rs",
+        "//build-support:bank-source-guard-sources",
         "//replacement/capture:relink-sources",
         "//replacement/menu_engine:module",
         "//replacement/menu_value:module",
@@ -261,4 +264,10 @@ filegroup(
         "//host/firmware:__pkg__",
         "//transport:__pkg__",
     ],
+)
+
+rust_source_boundary_test(
+    name = "unsafe-boundary-check",
+    declaration = "unsafe-boundary.json",
+    srcs = glob(["*.rs"]),
 )

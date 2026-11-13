@@ -1,0 +1,13 @@
+{
+  "source_roots": [
+    "src"
+  ],
+  "boundary_files": [
+    {
+      "path": "src/stock.rs",
+      "reason": "Retained media frame services, mirrored message and volatile stock cells."
+    }
+  ],
+  "boundary_items": [],
+  "known_exceptions": []
+}

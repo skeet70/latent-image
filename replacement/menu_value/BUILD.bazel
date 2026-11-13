@@ -1,3 +1,5 @@
+load("//build-support:rust_source_boundary.bzl", "rust_source_boundary_test")
+
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib")
 
@@ -95,4 +97,10 @@ genrule(
     cmd = "$(location @lab_rustc//:bin/rustc) --crate-name=menu_value --edition=2021 --crate-type=rlib $(location src/lib.rs) -o $@",
     tools = ["@lab_rustc//:bin/rustc"],
     visibility = ["//replacement/modal_runtime:__pkg__"],
+)
+
+rust_source_boundary_test(
+    name = "unsafe-boundary-check",
+    declaration = "unsafe-boundary.json",
+    srcs = glob(["src/**/*.rs", "adapter/**/*.rs"]) + ["//replacement/bank/tables:menu-value-table.rs"],
 )

@@ -1,0 +1,17 @@
+{
+  "source_roots": [
+    "src"
+  ],
+  "boundary_files": [
+    {
+      "path": "src/lib.rs",
+      "reason": "Retained menu-frame layouts, volatile stock cells and exported entry ABI."
+    },
+    {
+      "path": "src/lifecycle.rs",
+      "reason": "Retained menu lifecycle state cells and stock service calls."
+    }
+  ],
+  "boundary_items": [],
+  "known_exceptions": []
+}

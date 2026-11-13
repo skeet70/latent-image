@@ -611,7 +611,7 @@ readRamPushManifest path = do
 parseSourceIdentity :: Value -> IO [(String, String)]
 parseSourceIdentity (Object object) = do
   require (not (M.null object)) "source_identity must be nonempty"
-  require (M.size object <= 68) "source_identity exceeds 68 entries"
+  require (M.size object <= 128) "source_identity exceeds 128 entries"
   forM (M.toList object) $ \(key, item) -> do
     hash <- text item 64
     let name = K.toString key

@@ -1,0 +1,14 @@
+{
+  "source_roots": [
+    "src"
+  ],
+  "boundary_files": [],
+  "boundary_items": [],
+  "known_exceptions": [
+    {
+      "path": "src/tree_list_tests.rs",
+      "lines": [252, 256],
+      "reason": "Host fixture initializes and writes retained summary storage through raw pointers."
+    }
+  ]
+}

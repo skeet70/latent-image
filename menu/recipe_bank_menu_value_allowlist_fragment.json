@@ -1,72 +1,75 @@
 {
-  "schema": 1,
+  "schema": 2,
   "stock_calls": [
-    {"address":"0x00d51b58","name":"__rb_menu_value_stock_arm","source":"replacement/menu_value/adapter/entry.S; stock IMAGE SIZE arm after the dispatcher's jump-table word"},
-    {"address":"0x00d52674","name":"__rb_menu_value_shared_tail","source":"replacement/menu_value/adapter/entry.S; dispatcher shared tail"},
-    {"address":"0x00633a0c","name":"rb_menu_value_call_size_cell","source":"replacement/menu_value/adapter/entry.S; working size cell"},
-    {"address":"0x00633b0c","name":"rb_menu_value_call_aspect_cell","source":"replacement/menu_value/adapter/entry.S; working aspect cell"},
-    {"address":"0x0063c51c","name":"rb_menu_value_call_current_property","source":"replacement/menu_value/adapter/entry.S; current-property marker"},
-    {"address":"0x00641438","name":"rb_menu_value_call_display_update","source":"replacement/menu_value/adapter/entry.S; display update"},
-    {"address":"0x0063db24","name":"rb_menu_value_call_change_marker","source":"replacement/menu_value/adapter/entry.S; size-family change marker"},
-    {"address":"0x00637e5c","name":"rb_menu_value_call_snapshot_cells","source":"replacement/menu_value/adapter/entry.S; input snapshot selection"},
-    {"address":"0x0063220c","name":"rb_menu_value_call_snapshot_state","source":"replacement/menu_value/adapter/entry.S; system snapshot exchange"},
-    {"address":"0x0063647c","name":"rb_menu_value_call_restore_aux","source":"replacement/menu_value/adapter/entry.S; setting-flag copy"}
+    {
+      "address": "0x00d51b58",
+      "name": "__rb_menu_value_stock_arm",
+      "source": "replacement/menu_value/adapter/entry.S; stock IMAGE SIZE arm after the dispatcher's jump-table word"
+    },
+    {
+      "address": "0x00d52674",
+      "name": "__rb_menu_value_shared_tail",
+      "source": "replacement/menu_value/adapter/entry.S; dispatcher shared tail"
+    },
+    {
+      "address": "0x00633a0c",
+      "name": "rb_menu_value_call_size_cell",
+      "source": "replacement/menu_value/adapter/entry.S; working size cell"
+    },
+    {
+      "address": "0x00633b0c",
+      "name": "rb_menu_value_call_aspect_cell",
+      "source": "replacement/menu_value/adapter/entry.S; working aspect cell"
+    },
+    {
+      "address": "0x0063c51c",
+      "name": "rb_menu_value_call_current_property",
+      "source": "replacement/menu_value/adapter/entry.S; current-property marker"
+    },
+    {
+      "address": "0x00641438",
+      "name": "rb_menu_value_call_display_update",
+      "source": "replacement/menu_value/adapter/entry.S; display update"
+    },
+    {
+      "address": "0x0063db24",
+      "name": "rb_menu_value_call_change_marker",
+      "source": "replacement/menu_value/adapter/entry.S; size-family change marker"
+    },
+    {
+      "address": "0x00637e5c",
+      "name": "rb_menu_value_call_snapshot_cells",
+      "source": "replacement/menu_value/adapter/entry.S; input snapshot selection"
+    },
+    {
+      "address": "0x0063220c",
+      "name": "rb_menu_value_call_snapshot_state",
+      "source": "replacement/menu_value/adapter/entry.S; system snapshot exchange"
+    },
+    {
+      "address": "0x0063647c",
+      "name": "rb_menu_value_call_restore_aux",
+      "source": "replacement/menu_value/adapter/entry.S; setting-flag copy"
+    }
   ],
-  "stock_stores": [
-    {"address":"0x00956888","bytes":4,"name":"menu value working size cell","source":"replacement/menu_value/adapter/mod.rs restore_cells"},
-    {"address":"0x00956898","bytes":4,"name":"menu value working aspect cell","source":"replacement/menu_value/adapter/mod.rs restore_cells"},
-    {"address":"0x00956890","bytes":4,"name":"menu value working third cell","source":"replacement/menu_value/adapter/mod.rs restore_cells"}
-  ],
-  "unproven": [
-    {"function":"_RINvMs2_NtNtCsjw6Ar5Xz5I4_4core3fmt8buildersNtB6_10DebugTuple10field_withNCNvB2_5field0EBa_","access":"store","through":{"cell":"stack-frame"},"reason":"Rust 1.98.1 core/src/fmt/builders.rs:347-351 creates local PadAdapter, slot and PadAdapterState; writer.write_str changes only that local state's on_newline byte; relink3/kernel.disasm 0xa84550-0xa84590 initializes the state pointer at sp+8 to sp+15, and 0xa845b0 passes the local adapter at sp to PadAdapter::write_str"},
-    {"function":"_RINvMs2_NtNtCsjw6Ar5Xz5I4_4core3fmt8buildersNtB6_10DebugTuple10field_withNCNvB2_5field0EBa_","access":"branch","through":{"deref":{"cell":"stack-frame"}},"reason":"Rust 1.98.1 core/src/fmt/builders.rs:347-351 creates the local PadAdapter for the tuple field; its write_str calls only the borrowed Formatter buffer's fmt::Write::write_str; relink3/kernel.disasm 0xa84578-0xa84580 copies that buffer and vtable into the local adapter at sp, passed to PadAdapter::write_str at 0xa845b0"},
-    {"function":"_RNvMsa_NtCsjw6Ar5Xz5I4_4core3fmtNtB5_9Formatter25debug_tuple_field1_finish","access":"branch","through":{"deref":{"deref":{"cell":"stack-frame"}}},"reason":"Rust 1.98.1 core/src/fmt/mod.rs:2616-2619 and fmt/builders.rs:296-301,329-360: debug_tuple_field1_finish constructs one local DebugTuple borrowing self; field writes punctuation only through self.buf's fmt::Write::write_str; relink3/kernel.disasm 0xa84bb4 stores self at sp+8, and 0xa84bc4-0xa84bc8 passes the local builder at sp+4 to field_with"},
-    {"function":"_RNvMsa_NtCsjw6Ar5Xz5I4_4core3fmtNtB5_9Formatter25debug_tuple_field1_finish","access":"branch","through":{"deref":{"caller-frame":0}},"reason":"Rust 1.98.1 core/src/fmt/mod.rs:2616-2619 and fmt/builders.rs:329-330: debug_tuple_field1_finish passes its sole supplied dyn Debug value to field's |f| value.fmt(f) closure; relink3/kernel.disasm 0xa84ba8 loads that value's vtable from entry sp+0 for field_with at 0xa84bc8, whose only indirect field target is its +12 Debug::fmt slot"},
-    {"function":"_RNvMsa_NtCsjw6Ar5Xz5I4_4core3fmtNtB5_9Formatter25debug_tuple_field1_finish","access":"store","through":{"result":"_RINvMs2_NtNtCsjw6Ar5Xz5I4_4core3fmt8buildersNtB6_10DebugTuple10field_withNCNvB2_5field0EBa_"},"reason":"Rust 1.98.1 core/src/fmt/builders.rs:338-360: DebugTuple::field_with returns the same &mut Self, not a new pointer; fmt/mod.rs:2616-2619 finishes the local builder; relink3/kernel.disasm 0xa845c4 returns its saved self in r0, consumed by DebugTuple::finish at 0xa84bcc, which changes only the local result byte"},
-    {"function":"_RNvMsa_NtCsjw6Ar5Xz5I4_4core3fmtNtB5_9Formatter25debug_tuple_field1_finish","access":"branch","through":{"deref":{"deref":{"deref":{"result":"_RINvMs2_NtNtCsjw6Ar5Xz5I4_4core3fmt8buildersNtB6_10DebugTuple10field_withNCNvB2_5field0EBa_"}}}},"reason":"Rust 1.98.1 core/src/fmt/builders.rs:338-360,431-440: field_with returns the same local DebugTuple, and finish emits only closing punctuation through its borrowed Formatter buffer's fmt::Write::write_str; relink3/kernel.disasm 0xa845c4 returns self and 0xa84bcc passes it to finish"},
-    {"function":"_RNvMsa_NtNtNtCsjw6Ar5Xz5I4_4core3fmt3num3impm4__fmt","access":"store","through":{"argument":"r1"},"reason":"Rust 1.98.1 core/src/fmt/num.rs:183-187,190-252: u32::_fmt delegates to _fmt_inner and returns its initialized suffix, writing at most ten digits to the supplied buffer; relink3/kernel.disasm 0xa8500c preserves the incoming r1 destination for _fmt_inner; the Display caller allocates ten bytes at 0xa85a88-0xa85a90"},
-    {"function":"_RNvXNtNtCsjw6Ar5Xz5I4_4core3str4iterNtB2_5CharsNtNtNtNtB6_4iter6traits8iterator8Iterator4next","access":"store","through":{"argument":"r0"},"reason":"Rust 1.98.1 core/src/str/iter.rs:38-42: Chars::next delegates to next_code_point(&mut self.iter), advancing only its borrowed slice iterator cursor by at most four UTF-8 bytes; relink3/kernel.disasm 0xa85688 passes self unchanged in r0"},
-    {"function":"_RNvXs1i_NtCsjw6Ar5Xz5I4_4core3fmtReNtB6_7Display3fmtB8_","access":"branch","through":{"deref":{"deref":{"argument":"r1"}}},"reason":"Rust 1.98.1 core/src/fmt/mod.rs:2867-2882,2964-2968: Display for &str forwards to str::fmt and Formatter::pad, which emits only the supplied string or its character-boundary prefix through Formatter.buf's fmt::Write::write_str; relink3/kernel.disasm 0xa859a0-0xa859b0 passes the Formatter from r1 to pad"},
-    {"function":"_RNvXs6_NtNtCsjw6Ar5Xz5I4_4core3num5errorNtB5_15TryFromIntErrorNtNtB9_3fmt5Debug3fmt","access":"branch","through":{"deref":{"deref":{"argument":"r1"}}},"reason":"Rust 1.98.1 core/src/num/error.rs:9-10 derives TryFromIntError Debug; fmt/mod.rs:2616-2619 emits the tuple name and its one IntErrorKind field through the supplied Formatter buffer's fmt::Write::write_str; relink3/kernel.disasm 0xa85a28-0xa85a48 passes the incoming Formatter and the local field reference to debug_tuple_field1_finish"},
-    {"function":"_RNvXs8_NtNtNtCsjw6Ar5Xz5I4_4core3fmt3num3impmNtB9_7Display3fmt","access":"store","through":{"argument":"r1"},"reason":"Rust 1.98.1 core/src/fmt/num.rs:134-144: u32 Display formats into a ten-byte local buffer then calls Formatter::pad_integral; fmt/mod.rs:1863-1869 changes only Formatter.options for zero padding; relink3/kernel.disasm 0xa85a84 saves the Formatter in r1 and 0xa85aa8 passes it to pad_integral"},
-    {"function":"_RNvXs8_NtNtNtCsjw6Ar5Xz5I4_4core3fmt3num3impmNtB9_7Display3fmt","access":"branch","through":{"deref":{"deref":{"argument":"r1"}}},"reason":"Rust 1.98.1 core/src/fmt/num.rs:134-144: u32 Display emits its at-most-ten digit local string through Formatter::pad_integral, whose callbacks are Formatter.buf's fmt::Write::write_str/write_char with u16-width padding; relink3/kernel.disasm 0xa85aa8 passes the incoming Formatter from r1"},
-    {"function":"_RNvXs_NvNtNtNtNtCsjw6Ar5Xz5I4_4core4iter6traits8iterator8Iterator10advance_byNtNtNtBe_3str4iter11CharIndicesNtB4_13SpecAdvanceBy15spec_advance_byBe_","access":"store","through":{"argument":"r0"},"reason":"Rust 1.98.1 core/src/iter/traits/iterator.rs:310-343 and str/iter.rs:182-192: CharIndices advance_by consumes at most n characters by next, modifying only the caller's iterator cursor and front_offset; relink3/kernel.disasm 0xa85acc-0xa85ae4 preserves self for each next call and decrements the remaining count"},
-    {"function":"_RNvYNtNtNtCsjw6Ar5Xz5I4_4core3fmt8builders10PadAdapterNtB6_5Write9write_fmtB8_","access":"store","through":{"deref":{"argument":"r0"}},"reason":"Rust 1.98.1 core/src/fmt/mod.rs:232-243 specializes Write::write_fmt for PadAdapter, forwarding known strings to its write_str; fmt/builders.rs:31-38 changes only PadAdapterState.on_newline through self.state; relink3/kernel.disasm 0xa85b28-0xa85b38 preserves the original adapter for that call"},
-    {"function":"_RNvYNtNtNtCsjw6Ar5Xz5I4_4core3fmt8builders10PadAdapterNtB6_5Write9write_fmtB8_","access":"branch","through":{"deref":{"deref":{"argument":"r0"}}},"reason":"Rust 1.98.1 core/src/fmt/mod.rs:232-243 and fmt/builders.rs:31-38: PadAdapter::write_fmt's known-string path uses write_str, whose only callbacks are its borrowed buffer's fmt::Write::write_str for input pieces and four-space indentation; relink3/kernel.disasm 0xa85b38 forwards the incoming adapter"},
-    {"function":"_RNvYNtNtNtCsjw6Ar5Xz5I4_4core3fmt8builders10PadAdapterNtB6_5Write9write_fmtB8_","access":"branch","through":{"cell":{"allocation-offset":"0x00005128"}},"reason":"Rust 1.98.1 core/src/fmt/mod.rs:232-243: PadAdapter::write_fmt passes self as dyn Write to fmt::write; the rlib kernel loads the owned vtable pointer at 0xa859a8 from the literal at 0xa859c4, and the vtable at allocation+0x5128 has ELF words drop=0,size=12,align=4,write_str=0xa855ec,write_char=0xa85584,write_fmt=0xa85964"},
-    {"function":"_RNvYNtNtNtCsjw6Ar5Xz5I4_4core3fmt8builders10PadAdapterNtB6_5Write9write_fmtB8_","access":"branch","through":{"deref":{"argument":"r2"}},"reason":"Rust 1.98.1 core/src/fmt/mod.rs:232-243,1683-1688,1733-1736 and fmt/rt.rs:143-155: PadAdapter::write_fmt forwards the compiler-created Arguments to fmt::write, invoking only each argument's typed formatter callback with its value and a local Formatter; relink3/kernel.disasm 0xa85b08,0xa85b48,0xa85b54 preserves the incoming argument-array pointer from r2"},
-    {"function":"_RNvMs8_NtNtNtCsjw6Ar5Xz5I4_4core5array4iter10iter_innerINtB5_15PolymorphicIterSINtNtNtBb_3mem12maybe_uninit11MaybeUninitNtCsgK9QfObD0Sh_10menu_value10PropertyIdEE4nextB1W_","access":"store","through":{"argument":"r0"},"reason":"Rust 1.98.1 core/src/array/iter/iter_inner.rs:35-59,204-220: PolymorphicIter<PropertyId>::next advances only self.alive.start through IndexRange::next and reads one initialized property; replacement/menu_value/src/lib.rs Transaction::begin constructs the bounded two/five-property arrays; the iterator passes only self to IndexRange::next"},
-    {"function":"_RNvXs_NtNtCsjw6Ar5Xz5I4_4core3ops11index_rangeNtB4_10IndexRangeNtNtNtNtB8_4iter6traits8iterator8Iterator4next","access":"store","through":{"argument":"r0"},"reason":"Pinned rustc 1.98.1 (48a229cea), core SHA-256 1280983b85cb9bf44577775635204ec609d75ff9e9eacb9aab378d2f9efa9844, source /nix/store/yf16anm07g3b8khg74ni8s37l6b5hzp5-rust-lib-src/core; core/src/ops/index_range.rs:58-64,130-136: IndexRange::next increments only self.start after checking nonempty; relink2/kernel.disasm 0xa82b10 stores the first word of the caller's two-word iterator"},
-    {"function":"_RINvMNtCsjw6Ar5Xz5I4_4core5sliceSh8align_tojEB5_","access":"store","through":{"argument":"r0"},"reason":"Rust 1.98.1 core/src/slice/mod.rs:4506-4539: [u8]::align_to::<usize> returns three slice descriptors without modifying their data; relink2/kernel.disasm 0xa8449c-0xa844a4 writes only the 24-byte AAPCS result at r0"},
-    {"function":"_RNvMNtCsjw6Ar5Xz5I4_4core5sliceSh8split_atB4_","access":"store","through":{"argument":"r0"},"reason":"Rust 1.98.1 core/src/slice/mod.rs:1955-1959,2041-2056: [u8]::split_at checks mid <= len and returns two slice descriptors; relink2/kernel.disasm 0xa846dc-0xa846e4 writes only the 16-byte AAPCS result at r0, not the slice data"},
-    {"function":"_RINvNtNtCsjw6Ar5Xz5I4_4core3str11validations15next_code_pointINtNtNtB6_5slice4iter4IterhEEB6_","access":"store","through":{"argument":"r0"},"reason":"Rust 1.98.1 core/src/str/validations.rs:35-68: next_code_point<slice::Iter<u8>> advances the caller's byte iterator by one UTF-8 code point; relink2/kernel.disasm 0xa84604-0xa84654 updates only its cursor word, consuming at most four bytes"},
-    {"function":"_RNvMNtNtCsjw6Ar5Xz5I4_4core4char7methodsc11encode_utf8","access":"store","through":{"argument":"r1"},"reason":"Rust 1.98.1 core/src/char/methods.rs:730-732,2480-2496: char::encode_utf8 checks destination length and writes only the character's one to four UTF-8 bytes to dst; relink2/kernel.disasm 0xa847b4-0xa84838 stores through the destination in r1"},
-    {"function":"_RNvXs3_NtNtCsjw6Ar5Xz5I4_4core3str4iterNtB5_11CharIndicesNtNtNtNtB9_4iter6traits8iterator8Iterator4next","access":"store","through":{"argument":"r0"},"reason":"Rust 1.98.1 core/src/str/iter.rs:182-192: CharIndices::next updates its front_offset by the bytes consumed by Chars::next; relink2/kernel.disasm 0xa859f0 writes only self+8"},
-    {"function":"_RINvMs2_NtNtCsjw6Ar5Xz5I4_4core3fmt8buildersNtB6_10DebugTuple10field_withNCNvB2_5field0EBa_","access":"store","through":{"argument":"r0"},"reason":"Rust 1.98.1 core/src/fmt/builders.rs:329-360: DebugTuple::field's field_with closure updates only self.fields and self.result; relink2/kernel.disasm 0xa845bc,0xa845c0 stores those fields at self+0 and self+8"},
-    {"function":"_RINvMs2_NtNtCsjw6Ar5Xz5I4_4core3fmt8buildersNtB6_10DebugTuple10field_withNCNvB2_5field0EBa_","access":"branch","through":{"deref":{"deref":{"deref":{"argument":"r0"}}}},"reason":"Rust 1.98.1 core/src/fmt/builders.rs:338-355: DebugTuple::field_with writes tuple punctuation through self.fmt.buf's fmt::Write::write_str; relink2/kernel.disasm 0xa8450c,0xa84544 loads the Formatter buffer vtable's +12 write_str slot"},
-    {"function":"_RINvMs2_NtNtCsjw6Ar5Xz5I4_4core3fmt8buildersNtB6_10DebugTuple10field_withNCNvB2_5field0EBa_","access":"branch","through":{"deref":{"argument":"r2"}},"reason":"Rust 1.98.1 core/src/fmt/builders.rs:329-330,350,355: the exact DebugTuple::field closure calls value.fmt on its supplied dyn Debug field, using either the original Formatter or a local PadAdapter; relink2/kernel.disasm 0xa84524,0xa84590 loads only the incoming Debug vtable's +12 fmt slot"},
-    {"function":"_RNvMs2_NtNtCsjw6Ar5Xz5I4_4core3fmt8buildersNtB5_10DebugTuple6finish","access":"store","through":{"argument":"r0"},"reason":"Rust 1.98.1 core/src/fmt/builders.rs:431-440: DebugTuple::finish updates only self.result; relink2/kernel.disasm 0xa848d4 writes the result byte at self+8"},
-    {"function":"_RNvMs2_NtNtCsjw6Ar5Xz5I4_4core3fmt8buildersNtB5_10DebugTuple6finish","access":"branch","through":{"deref":{"deref":{"deref":{"argument":"r0"}}}},"reason":"Rust 1.98.1 core/src/fmt/builders.rs:431-440: DebugTuple::finish emits comma and closing parenthesis through self.fmt.buf's fmt::Write::write_str; relink2/kernel.disasm 0xa848a0,0xa848cc dispatches its +12 vtable slot"},
-    {"function":"_RNvMs9_NtCsjw6Ar5Xz5I4_4core3fmtNtB5_11PostPadding5write","access":"branch","through":{"deref":{"deref":{"argument":"r2"}}},"reason":"Rust 1.98.1 core/src/fmt/mod.rs:1755-1759: PostPadding::write calls Formatter.buf's fmt::Write::write_char at most self.padding (u16) times; relink2/kernel.disasm 0xa84928 dispatches the +16 vtable slot of the Formatter supplied in r2"},
-    {"function":"_RNvMsa_NtCsjw6Ar5Xz5I4_4core3fmtNtB5_9Formatter12pad_integral","access":"store","through":{"argument":"r0"},"reason":"Rust 1.98.1 core/src/fmt/mod.rs:1826-1877: Formatter::pad_integral temporarily replaces and restores only self.options for zero padding; relink2/kernel.disasm 0xa84af4,0xa84b70 writes Formatter option words at self+8"},
-    {"function":"_RNvMsa_NtCsjw6Ar5Xz5I4_4core3fmtNtB5_9Formatter12pad_integral","access":"branch","through":{"deref":{"deref":{"argument":"r0"}}},"reason":"Rust 1.98.1 core/src/fmt/mod.rs:1856-1876: Formatter::pad_integral emits the supplied digit slice through self.buf's fmt::Write::write_str, with padding bounded by u16 width; relink2/kernel.disasm 0xa84a5c,0xa84ab8,0xa84b3c dispatches its +12 vtable slot"},
-    {"function":"_RNvMsa_NtCsjw6Ar5Xz5I4_4core3fmtNtB5_9Formatter25debug_tuple_field1_finish","access":"branch","through":{"deref":{"deref":{"argument":"r0"}}},"reason":"Rust 1.98.1 core/src/fmt/mod.rs:2616-2619 and fmt/builders.rs:296-301: debug_tuple_field1_finish emits the supplied tuple name through Formatter.buf's fmt::Write::write_str before its one field; relink2/kernel.disasm 0xa84b9c dispatches its +12 vtable slot"},
-    {"function":"_RNvMsa_NtCsjw6Ar5Xz5I4_4core3fmtNtB5_9Formatter3pad","access":"branch","through":{"deref":{"deref":{"argument":"r0"}}},"reason":"Rust 1.98.1 core/src/fmt/mod.rs:1910-1945: Formatter::pad emits only the supplied string or its character-boundary prefix through self.buf's fmt::Write::write_str; relink2/kernel.disasm 0xa84c80,0xa84cb0 dispatches its +12 vtable slot"},
-    {"function":"_RNvMsa_NtCsjw6Ar5Xz5I4_4core3fmtNtB5_9Formatter7padding","access":"branch","through":{"deref":{"deref":{"argument":"r0"}}},"reason":"Rust 1.98.1 core/src/fmt/mod.rs:1952-1970: Formatter::padding calls self.buf's fmt::Write::write_char at most the u16 padding argument times and returns the remaining PostPadding; relink2/kernel.disasm 0xa84d40 dispatches its +16 vtable slot"},
-    {"function":"_RNvMsa_NtNtNtCsjw6Ar5Xz5I4_4core3fmt3num3impm10__fmt_inner","access":"store","through":{"argument":"r1"},"reason":"Rust 1.98.1 core/src/fmt/num.rs:190-252: u32::_fmt_inner fills a suffix of the supplied MaybeUninit<u8> buffer with at most ten decimal digits; the internal caller supplies MAX_DEC_N capacity; relink2/kernel.disasm 0xa84e48-0xa84f64 writes only through that buffer in r1"},
-    {"function":"_RNvNtCsjw6Ar5Xz5I4_4core3fmt5write","access":"branch","through":{"deref":{"argument":"r1"}},"reason":"Rust 1.98.1 core/src/fmt/mod.rs:1631-1739: fmt::write emits compiler-created Arguments literal pieces through output's fmt::Write::write_str; relink2/kernel.disasm 0xa85098,0xa8518c dispatches only the output vtable's +12 slot supplied in r1"},
-    {"function":"_RNvNtCsjw6Ar5Xz5I4_4core3fmt5write","access":"branch","through":{"deref":{"argument":"r3"}},"reason":"Rust 1.98.1 core/src/fmt/mod.rs:1683-1688,1733-1736 and fmt/rt.rs Argument::fmt: fmt::write invokes each compiler-created Arguments formatting callback with its value and a local Formatter; relink2/kernel.disasm 0xa85154 loads the argument formatter function, not a caller-selected raw address"},
-    {"function":"_RNvNvMsa_NtCsjw6Ar5Xz5I4_4core3fmtNtB7_9Formatter12pad_integral12write_prefix","access":"branch","through":{"deref":{"deref":{"argument":"r0"}}},"reason":"Rust 1.98.1 core/src/fmt/mod.rs:1847-1851: pad_integral::write_prefix invokes Formatter.buf's fmt::Write::write_char for the optional sign and write_str for the optional prefix; relink2/kernel.disasm 0xa85590,0xa855c0 dispatches only those +16/+12 vtable slots"},
-    {"function":"_RNvXs0_NtNtCsjw6Ar5Xz5I4_4core3fmt8buildersNtB5_10PadAdapterNtB7_5Write10write_char","access":"store","through":{"deref":{"argument":"r0"}},"reason":"Rust 1.98.1 core/src/fmt/builders.rs:5-11,44-49: PadAdapter::write_char changes only its borrowed PadAdapterState.on_newline boolean; relink2/kernel.disasm 0xa85768 writes one byte through the state pointer in self"},
-    {"function":"_RNvXs0_NtNtCsjw6Ar5Xz5I4_4core3fmt8buildersNtB5_10PadAdapterNtB7_5Write10write_char","access":"branch","through":{"deref":{"deref":{"argument":"r0"}}},"reason":"Rust 1.98.1 core/src/fmt/builders.rs:44-49: PadAdapter::write_char delegates optional four-space indentation to buf.write_str and the supplied character to buf.write_char; relink2/kernel.disasm 0xa85744,0xa85778 dispatches the borrowed fmt::Write buffer's +12/+16 slots"},
-    {"function":"_RNvXs0_NtNtCsjw6Ar5Xz5I4_4core3fmt8buildersNtB5_10PadAdapterNtB7_5Write9write_str","access":"store","through":{"deref":{"argument":"r0"}},"reason":"Rust 1.98.1 core/src/fmt/builders.rs:5-11,31-38: PadAdapter::write_str changes only its borrowed PadAdapterState.on_newline boolean for each newline-delimited piece; relink2/kernel.disasm 0xa85904 writes one byte through self's state pointer"},
-    {"function":"_RNvXs0_NtNtCsjw6Ar5Xz5I4_4core3fmt8buildersNtB5_10PadAdapterNtB7_5Write9write_str","access":"branch","through":{"deref":{"deref":{"argument":"r0"}}},"reason":"Rust 1.98.1 core/src/fmt/builders.rs:31-38: PadAdapter::write_str delegates each input newline-delimited piece and optional four-space indentation to its borrowed buf's fmt::Write::write_str; relink2/kernel.disasm 0xa858e4,0xa8591c dispatches only its +12 vtable slot"},
-    {"function":"_RNvXs1g_NtCsjw6Ar5Xz5I4_4core3fmtRDNtB6_5DebugEL_Bx_3fmtB8_","access":"branch","through":{"deref":{"deref":{"argument":"r0"}}},"reason":"Rust 1.98.1 core/src/fmt/mod.rs:2867-2882 fmt_refs!(Debug): Debug for &dyn Debug forwards to the referenced value's Debug::fmt; relink2/kernel.disasm 0xa85954 tail-calls only its +12 Debug vtable slot"},
-    {"function":"_RNvXs1g_NtCsjw6Ar5Xz5I4_4core3fmtRNtNtNtB8_3num5error12IntErrorKindNtB6_5Debug3fmtB8_","access":"branch","through":{"deref":{"deref":{"argument":"r1"}}},"reason":"Rust 1.98.1 core/src/num/error.rs:91-129 derives IntErrorKind Debug, forwarded by fmt/mod.rs:2867-2882: emits only the enum variant name through the supplied Formatter.buf's fmt::Write::write_str; relink2/kernel.disasm 0xa85988 dispatches its +12 vtable slot"},
-    {"function":"_RNvMs1_CsgK9QfObD0Sh_10menu_valueNtB5_14PropertyWrites4push","access":"store","through":{"argument":"r0"},"reason":"replacement/menu_value/src/lib.rs PropertyWrites::push and Transaction::begin: push writes one of five entries and len in its borrowed PropertyWrites; all constructors push at most five entries; push guards len <= 4 and stores only within the 64-byte self"},
-    {"function":"_RNvCsgK9QfObD0Sh_10menu_value11convert_key","access":"store","through":{"argument":"r0"},"reason":"replacement/menu_value/src/lib.rs convert_key: returns Result<ChoiceCode,Refusal> without writing tables; the function writes only its eight-byte AAPCS result buffer in r0"},
-    {"function":"_RNvCsgK9QfObD0Sh_10menu_value7resolve","access":"store","through":{"argument":"r0"},"reason":"replacement/menu_value/src/lib.rs resolve and its two helpers: resolve returns Result<Commit,Refusal>, with at most two property writes and five retained effects and no settings writes; it stores only in its 88-byte AAPCS result, including the two 64-byte PropertyWrites copies via __aeabi_memcpy8"},
-    {"function":"_RNvXs0_NtNtNtCsjw6Ar5Xz5I4_4core4iter8adapters10filter_mapINtB5_9FilterMapINtNtB7_4take4TakeINtNtNtBb_5slice4iter4IterINtNtBb_6option6OptionNtCsgK9QfObD0Sh_10menu_value13PropertyWriteEEENvMB1V_B1S_6as_refENtNtNtB9_6traits8iterator8Iterator4nextB2g_","access":"store","through":{"argument":"r0"},"reason":"replacement/menu_value/src/lib.rs PropertyWrites::iter supplies Option::as_ref as the filter_map callback; Rust 1.98.1 core/src/iter/adapters/filter_map.rs:63-65 and take.rs:36-42 mutate the local iterator only; the adapter updates its 12-byte cursor/count state, traversing at most five entries without mutating PropertyWrites"},
-    {"function":"_RNvXs0_NtNtNtCsjw6Ar5Xz5I4_4core4iter8adapters10filter_mapINtB5_9FilterMapINtNtB7_4take4TakeINtNtNtBb_5slice4iter4IterINtNtBb_6option6OptionNtCsgK9QfObD0Sh_10menu_value14RetainedEffectEEENCNvMs2_B2g_NtB2g_15RetainedEffects4iter0ENtNtNtB9_6traits8iterator8Iterator4nextB2g_","access":"store","through":{"argument":"r0"},"reason":"replacement/menu_value/src/lib.rs RetainedEffects::iter supplies |effect| *effect as the filter_map callback; Rust 1.98.1 core/src/iter/adapters/filter_map.rs:63-65 and take.rs:36-42 mutate the local iterator only; the adapter updates its 12-byte cursor/count state, traversing at most five entries without mutating RetainedEffects"}
+  "stock_regions": [
+    {
+      "address": "0x00956888",
+      "bytes": 4,
+      "name": "menu value working size cell",
+      "source": "replacement/menu_value/adapter/mod.rs restore_cells"
+    },
+    {
+      "address": "0x00956898",
+      "bytes": 4,
+      "name": "menu value working aspect cell",
+      "source": "replacement/menu_value/adapter/mod.rs restore_cells"
+    },
+    {
+      "address": "0x00956890",
+      "bytes": 4,
+      "name": "menu value working third cell",
+      "source": "replacement/menu_value/adapter/mod.rs restore_cells"
+    }
   ]
 }

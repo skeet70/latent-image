@@ -1,3 +1,5 @@
+load("//build-support:rust_source_boundary.bzl", "rust_source_boundary_test")
+
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib")
 
@@ -41,4 +43,10 @@ sh_test(
     srcs = ["//emulation:recovery-task-state-tests.sh"],
     args = ["$(location :route-tests-build)"],
     data = [":route-tests-build"],
+)
+
+rust_source_boundary_test(
+    name = "unsafe-boundary-check",
+    declaration = "unsafe-boundary.json",
+    srcs = glob(["src/**/*.rs"]),
 )

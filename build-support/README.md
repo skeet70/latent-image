@@ -78,6 +78,12 @@ Disable OMP's clone-first worktrees with `worktree.clone = false`. Clone-first a
 devenv shell -- host-build test --jobs=2 --local_test_jobs=1 //emulation:native-sdk-tests //emulation:native-runner-tests
 ```
 
+### Rust source boundaries
+
+`rust_source_boundary_test` in `rust_source_boundary.bzl` checks a crate's Rust source without changing compiler inputs. Its `srcs` must include every Rust file under the manifest's `source_roots`; those roots are relative to the declaration and may be directories or individual files. The shared checker strips comments and literals, finds declared item extents, and refuses undeclared `unsafe`, assembly and linkage-attribute tokens before cfg selection.
+
+An `unsafe-boundary.json` declares `source_roots`, `boundary_files`, `boundary_items` and `known_exceptions`. Every boundary or exception row has a nonempty `reason`. File rows name `path`; item rows add `kind` (`fn`, `impl`, `struct` or `macro`) and `name`. Items must identify exactly one definition. Known internal exceptions name `path` and the exact `lines` multiset of remaining unsafe/linkage tokens, repeating a line when it contains multiple tokens. Missing source files, stale items and changed exception sites fail. A declared exception records existing unsafe core code; it is not a boundary classification or compiler-level unsafe prohibition.
+
 ### Scratch expiry
 
 Output under `private-data/scratch/` and `private-data/verify-candidate/` is disposable. The sweep uses one reference time (`--now` for tests, the current time otherwise) and one window of `N` days (`--max-age-days`), and applies these steps in order.

@@ -1,0 +1,14 @@
+{
+  "source_roots": [
+    "src",
+    "../bank/tables/modal75-table.rs"
+  ],
+  "boundary_files": [
+    {
+      "path": "src/lib.rs",
+      "reason": "Retained modal table words, dispatcher assembly and stock action ABI."
+    }
+  ],
+  "boundary_items": [],
+  "known_exceptions": []
+}

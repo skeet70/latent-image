@@ -242,8 +242,8 @@ pub mod frame {
     struct Destination(*mut MenuFrameSnapshot);
 
     impl SnapshotSink for Destination {
-        // Inlined into `fill`'s call sites so each store's base is the caller's
-        // destination, the shape the allowlist bounds.
+
+
         #[inline]
         fn store(&mut self, word: SnapshotWord) {
             let dest = self.0;

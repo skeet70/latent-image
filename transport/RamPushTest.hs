@@ -269,13 +269,13 @@ main = do
   makeDir valueStateDirectory
   valueStatePath <- writeStateFile valueStateDirectory valueState
   readRamPushState valueStatePath >>= check "value state preserves the identity needed by unload" . (== valueState)
-  let fullIdentity = [("synthetic-source-" ++ show index, replicate 64 'a') | index <- [1..68 :: Int]]
+  let fullIdentity = [("synthetic-source-" ++ show index, replicate 64 'a') | index <- [1..128 :: Int]]
   fullIdentityManifest <- parse (standard { sourceIdentity = fullIdentity })
-  check "manifest accepts the complete 68-entry source identity"
-    (length (sourceIdentity fullIdentityManifest) == 68)
+  check "manifest accepts the complete 128-entry source identity"
+    (length (sourceIdentity fullIdentityManifest) == 128)
   tooMany <- try (parse (standard { sourceIdentity = ("synthetic-extra", replicate 64 'a') : fullIdentity })) :: IO (Either SomeException RamPushManifest)
-  check "69 source identities report the count bound"
-    (case tooMany of Left failure -> "source_identity exceeds 68 entries" `isInfixOf` show failure; Right _ -> False)
+  check "129 source identities report the count bound"
+    (case tooMany of Left failure -> "source_identity exceeds 128 entries" `isInfixOf` show failure; Right _ -> False)
   emptyIdentity <- try (parse (standard {sourceIdentity = []})) :: IO (Either SomeException RamPushManifest)
   check "empty source identity reports emptiness"
     (case emptyIdentity of Left failure -> "source_identity must be nonempty" `isInfixOf` show failure; Right _ -> False)

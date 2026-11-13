@@ -1,5 +1,4 @@
-@ FUN_00d52684(field, row); the bank ELF allowlist resolves the target from
-@ the constant this sequence builds.
+@ FUN_00d52684(field, row).
 .syntax unified
 .arm
 .section .text,"ax",%progbits

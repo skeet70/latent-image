@@ -1,29 +1,100 @@
 {
-  "schema": 1,
+  "schema": 2,
   "stock_calls": [
-    {"address":"0x0073abec","name":"rb_save_service_present","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_service_present"},
-    {"address":"0x0073ac60","name":"rb_save_service_profile","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_service_profile"},
-    {"address":"0x0069f8fc","name":"rb_save_service_byte","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_service_byte"},
-    {"address":"0x00e4e0b4","name":"rb_save_prepare_metadata","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_prepare_metadata"},
-    {"address":"0x011d5850","name":"rb_save_extent_preset","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_extent_preset"},
-    {"address":"0x011d5934","name":"rb_save_extent_name","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_extent_name"},
-    {"address":"0x011d591c","name":"rb_save_extent_copy","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_extent_copy"},
-    {"address":"0x007101e4","name":"rb_save_sample_cached_state","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_sample_cached_state"},
-    {"address":"0x011d5600","name":"rb_save_storage_direct","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_storage_direct; retained storage callback registration"},
-    {"address":"0x011d5688","name":"rb_save_storage_kind_three","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_storage_kind_three; retained kind-three storage callback registration"},
-    {"address":"0x011d5714","name":"rb_save_register_release","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_register_release; retained release callback registration"},
-    {"address":"0x00723cb8","name":"rb_save_current_task","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_current_task"},
-    {"address":"0x007243a8","name":"rb_save_wait","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_wait"},
-    {"address":"0x00724558","name":"rb_save_signal","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_signal"},
-    {"address":"0x006fae80","name":"rb_save_stage","source":"replacement/save/save_stock.S SAVE_TAIL rb_save_stage"}
+    {
+      "address": "0x0073abec",
+      "name": "rb_save_service_present",
+      "source": "replacement/save/save_stock.S SAVE_TAIL rb_save_service_present"
+    },
+    {
+      "address": "0x0073ac60",
+      "name": "rb_save_service_profile",
+      "source": "replacement/save/save_stock.S SAVE_TAIL rb_save_service_profile"
+    },
+    {
+      "address": "0x0069f8fc",
+      "name": "rb_save_service_byte",
+      "source": "replacement/save/save_stock.S SAVE_TAIL rb_save_service_byte"
+    },
+    {
+      "address": "0x00e4e0b4",
+      "name": "rb_save_prepare_metadata",
+      "source": "replacement/save/save_stock.S SAVE_TAIL rb_save_prepare_metadata"
+    },
+    {
+      "address": "0x011d5850",
+      "name": "rb_save_extent_preset",
+      "source": "replacement/save/save_stock.S SAVE_TAIL rb_save_extent_preset"
+    },
+    {
+      "address": "0x011d5934",
+      "name": "rb_save_extent_name",
+      "source": "replacement/save/save_stock.S SAVE_TAIL rb_save_extent_name"
+    },
+    {
+      "address": "0x011d591c",
+      "name": "rb_save_extent_copy",
+      "source": "replacement/save/save_stock.S SAVE_TAIL rb_save_extent_copy"
+    },
+    {
+      "address": "0x007101e4",
+      "name": "rb_save_sample_cached_state",
+      "source": "replacement/save/save_stock.S SAVE_TAIL rb_save_sample_cached_state"
+    },
+    {
+      "address": "0x011d5600",
+      "name": "rb_save_storage_direct",
+      "source": "replacement/save/save_stock.S SAVE_TAIL rb_save_storage_direct; retained storage callback registration"
+    },
+    {
+      "address": "0x011d5688",
+      "name": "rb_save_storage_kind_three",
+      "source": "replacement/save/save_stock.S SAVE_TAIL rb_save_storage_kind_three; retained kind-three storage callback registration"
+    },
+    {
+      "address": "0x011d5714",
+      "name": "rb_save_register_release",
+      "source": "replacement/save/save_stock.S SAVE_TAIL rb_save_register_release; retained release callback registration"
+    },
+    {
+      "address": "0x00723cb8",
+      "name": "rb_save_current_task",
+      "source": "replacement/save/save_stock.S SAVE_TAIL rb_save_current_task"
+    },
+    {
+      "address": "0x007243a8",
+      "name": "rb_save_wait",
+      "source": "replacement/save/save_stock.S SAVE_TAIL rb_save_wait"
+    },
+    {
+      "address": "0x00724558",
+      "name": "rb_save_signal",
+      "source": "replacement/save/save_stock.S SAVE_TAIL rb_save_signal"
+    },
+    {
+      "address": "0x006fae80",
+      "name": "rb_save_stage",
+      "source": "replacement/save/save_stock.S SAVE_TAIL rb_save_stage"
+    }
   ],
-  "stock_stores": [
-    {"address":"0x0154d970","bytes":4,"name":"save completion status","source":"replacement/save/src/abi.rs xm1_save_completion"},
-    {"address":"0x0155ccb8","bytes":4,"name":"save phase-one task","source":"replacement/save/src/abi.rs TaskService::set_save_task"},
-    {"address":"0x0155ccbc","bytes":4,"name":"save phase-two task","source":"replacement/save/src/abi.rs TaskService::set_save_task"}
-  ],
-  "unproven": [
-    {"function":"xm1_save_facade","access":"store","through":{"argument":"r0"},"reason":"writes descriptor bank 0, 1 or 2 at frame+0x27d0+bank*0x150: save mode at +4 and zero at +0x148; caller frame catalogue identity, selected count, backing ownership and allocation liveness remain prerequisites"},
-    {"function":"xm1_save_facade","access":"store","through":{"argument":"r2"},"reason":"writes one i32 to nonnull status_out; caller ownership of the output cell remains a prerequisite"}
+  "stock_regions": [
+    {
+      "address": "0x0154d970",
+      "bytes": 4,
+      "name": "save completion status",
+      "source": "replacement/save/src/abi.rs xm1_save_completion"
+    },
+    {
+      "address": "0x0155ccb8",
+      "bytes": 4,
+      "name": "save phase-one task",
+      "source": "replacement/save/src/abi.rs TaskService::set_save_task"
+    },
+    {
+      "address": "0x0155ccbc",
+      "bytes": 4,
+      "name": "save phase-two task",
+      "source": "replacement/save/src/abi.rs TaskService::set_save_task"
+    }
   ]
 }

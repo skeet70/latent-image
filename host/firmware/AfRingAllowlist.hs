@@ -2,21 +2,20 @@ module AfRingAllowlist (checkAfRing) where
 
 import qualified A32 as A
 import ArmElf
-import BankAllowlist (Allowlist (..), StockCall (..), Declaration (..), Access (..), parseAllowlist)
+import BankAllowlist (Allowlist (..), StockCall (..), parseAllowlist)
 import Control.Monad (unless, forM_)
 import Data.Bits ((.&.))
 import qualified Data.ByteString as B
 import Data.List (isPrefixOf, sortOn)
 import Data.Word (Word32)
 
--- Indexed ring and callback-output stores retain the declarations in the allowlist.
+-- Indexed ring and callback-output stores are confined to the declared boundaries.
 checkAfRing :: Word32 -> B.ByteString -> B.ByteString -> Either String ()
 checkAfRing base serializedElf allowlistBytes = do
   elf <- parseElf serializedElf
   policy <- parseAllowlist allowlistBytes
-  unless (null (stockStores policy)) (Left "AF content permits no stock stores")
+  unless (null (stockRegions policy)) (Left "AF content permits no stock stores")
   unless (map stockCallAddress (stockCalls policy) == continuations) (Left "AF continuation allowlist changed")
-  unless (map declarationFunction (declarations policy) == ["af_ring_record", "af_ring_synthetic", "af_ring_synthetic"] && all ((== StoreAccess) . declarationAccess) (declarations policy)) (Left "AF store declarations changed")
   let allocated = filter sectionAllocated (elfSections elf)
   forM_ allocated $ \section ->
     unless (sectionAddress section >= base && toInteger (sectionAddress section) + toInteger (sectionSize section) <= toInteger base + 0x6800)

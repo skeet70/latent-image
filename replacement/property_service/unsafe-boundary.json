@@ -1,0 +1,15 @@
+{
+  "source_roots": ["src", "linked-panic.rs"],
+  "boundary_files": [
+    {"path": "src/storage_boundary.rs", "reason": "Adopts retained settings windows and calls the stock profile selector."},
+    {"path": "src/recipe_edit.rs", "reason": "Calls the separately published recipe producer through its retained ABI."}
+  ],
+  "boundary_items": [
+    {"path": "src/lib.rs", "kind": "impl", "name": "Properties", "reason": "Adopts the running stock kernel and settings/configuration windows at the public wrapper boundary."},
+    {"path": "src/lib.rs", "kind": "fn", "name": "xm1_property_get", "reason": "Getter ABI entry adopts the retained settings and configuration services."},
+    {"path": "src/lib.rs", "kind": "fn", "name": "xm1_property_set", "reason": "Setter ABI entry adopts the retained settings and configuration services."}
+  ],
+  "known_exceptions": [
+    {"path": "src/lib.rs", "lines": [320], "reason": "The pair-before-close defect control writes the retained bank directly from core logic; moving it requires a byte-changing qualification."}
+  ]
+}

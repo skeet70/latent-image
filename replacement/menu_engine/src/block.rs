@@ -167,7 +167,7 @@ pub fn decode_into<B: BlockWords>(
             Some(records.node(address).ok_or(DecodeError::UnknownRecord(address))?)
         }
     };
-    // `black_box` keeps each store's bound check, which `check-bank-allowlist` needs to prove the store.
+
     for row in 0..ROW_STATES {
         let raw = block.block_word(ROW_STATE_WORDS + 4 * row);
         let parsed = RowState::parse(raw).ok_or(DecodeError::RowState { row, raw })?;

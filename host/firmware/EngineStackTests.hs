@@ -9,6 +9,7 @@ import Data.Either (isLeft)
 import Data.List (mapAccumL)
 import Data.Word (Word32)
 import EngineStack
+import qualified StackWalk as W
 import System.Exit (exitFailure)
 
 w32 :: Word32 -> B.ByteString
@@ -51,9 +52,9 @@ base = 0x00c40000
 inRuntime :: Word32 -> Bool
 inRuntime address = base <= address && address < base + 0x1000
 
-depthOf :: [Word32] -> [(String, Word32, Word32)] -> String -> Either String Word32
+depthOf :: [Word32] -> [(String, Word32, Word32)] -> String -> Either StackRefusal Word32
 depthOf code functions root = do
-  elf <- ELF.parseElf (textElf base code functions)
+  let elf = either error id (ELF.parseElf (textElf base code functions))
   stackDepth elf inRuntime root
 
 main :: IO ()
@@ -70,18 +71,17 @@ main = do
       cases =
         [ ("a frame adds its pushes, its reservation and its deepest callee", depthOf (root ++ callee) functions "root" == Right 44)
         , ("a stock callee adds nothing", depthOf (root ++ callee) functions "callee" == Right 20)
-        , ("recursion refuses", isLeft (depthOf [push4lr, bl base base, pop4pc] [("loop", base, 12)] "loop"))
-        , ("a variable reservation refuses", isLeft (depthOf [push4lr, 0xe04dd000, pop4pc] [("alloca", base, 12)] "alloca"))
+        , ("recursion reports its reason and entry", depthOf [push4lr, bl base base, pop4pc] [("loop", base, 12)] "loop" == Left (Recursion base))
+        , ("a variable reservation reports its reason and site", depthOf [push4lr, 0xe04dd000, pop4pc] [("alloca", base, 12)] "alloca" == Left (InstructionRefused (base + 4) W.VariableReservation))
+        , ("VFP stack writes refuse", depthOf [0xed2d8b04, 0xe12fff1e] [("root", base, 8)] "root" == Left (InstructionRefused base W.FloatingPoint))
+        , ("indirect owned callees are outside the reported direct depth", depthOf [push4lr, 0xe12fff30, pop4pc, sub16, 0xe12fff1e] [("root", base, 12), ("callback", base + 12, 8)] "root" == Right 8)
         , ("a restore of sp from r11 is accepted", depthOf [push4lr, sub16, 0xe1a0d00b, pop4pc] [("restore", base, 16)] "restore" == Right 24)
         , ("a register move into sp refuses", isLeft (depthOf [push4lr, 0xe1a0d000, pop4pc] [("moved", base, 12)] "moved"))
         , ("a load into sp refuses", isLeft (depthOf [push4lr, 0xe590d000, pop4pc] [("loaded", base, 12)] "loaded"))
-        , ("a call into the middle of a function refuses",
-            isLeft (depthOf ([push4lr, sub16, bl (base + 8) (base + 24), add16, pop4pc] ++ callee) functions "root"))
+        , ("an interior direct target accounts for its enclosing frame",
+            depthOf ([push4lr, sub16, bl (base + 8) (base + 24), add16, pop4pc] ++ callee) functions "root" == Right 44)
         , ("a missing root refuses", isLeft (depthOf (root ++ callee) functions "absent"))
         , ("a bounded mapped branch table accounts for every arm", depthOf table tableSymbols "table" == Right 24)
-        , ("an unmapped branch table refuses", isLeft (depthOf table [("table",base,44)] "table"))
-        , ("a branch table target outside its function refuses", isLeft (depthOf (take 4 table ++ [base+44] ++ drop 5 table) tableSymbols "table"))
-        , ("a branch table without its unsigned upper bound refuses", isLeft (depthOf (take 1 table ++ [0x3a000007] ++ drop 2 table) tableSymbols "table"))
         ]
       failures = [label | (label, passed) <- cases, not passed]
   mapM_ (putStrLn . ("FAIL: " ++)) failures

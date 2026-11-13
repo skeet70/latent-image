@@ -1,0 +1,22 @@
+{
+  "source_roots": ["src"],
+  "boundary_files": [
+    {"path": "src/default_bytes.rs", "reason": "Exports the ROM-default tables named by the firmware linker and oracle."},
+    {"path": "src/memory.rs", "reason": "Aligned memory transfers and the retained checked-store/output ABI."},
+    {"path": "src/native.rs", "reason": "Native getter/setter ABI adapters."},
+    {"path": "src/native_bank.rs", "reason": "Bank ABI entries adopt retained settings windows and stock services."},
+    {"path": "src/native_configuration.rs", "reason": "Reads retained configuration memory and enters the declared stock default functions."},
+    {"path": "src/native_custom.rs", "reason": "Custom-record ABI entries adopt retained windows, callbacks and record-store services."},
+    {"path": "src/native_mirror.rs", "reason": "Header/body backing windows, stock driver calls and the kernel adapter."}
+  ],
+  "boundary_items": [
+    {"path": "src/lib.rs", "kind": "macro", "name": "global_asm", "reason": "Exports the nonreturning settings contract trap."},
+    {"path": "src/custom.rs", "kind": "fn", "name": "settings_custom_codec_check", "reason": "Checks the pointer/length record passed through the retained codec ABI."}
+  ],
+  "known_exceptions": [
+    {"path": "src/lib.rs", "lines": [53], "reason": "Legacy root-level contract-trap ABI call remains in place to preserve qualified images."},
+    {"path": "src/lib.rs", "lines": [64, 65], "reason": "PreviousValues core ownership uses raw-pointer reborrows; replacing them requires a byte-changing qualification."},
+    {"path": "src/lib.rs", "lines": [253, 255, 262, 264, 271, 273], "reason": "MirrorSession defect controls perform raw stock-memory reads and area-3 calls from core logic."},
+    {"path": "src/custom.rs", "lines": [65], "reason": "CustomCodec core calls its own raw-slice ABI adapter; the safe-core cutover is deferred to a byte-changing qualification."}
+  ]
+}

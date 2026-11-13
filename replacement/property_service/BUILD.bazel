@@ -1,6 +1,7 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
 load("//replacement/settings_storage:storage_controls.bzl", "PROPERTY_STORAGE_VARIANTS")
+load("//build-support:rust_source_boundary.bzl", "rust_source_boundary_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -896,4 +897,10 @@ haskell_library(
         "//host/firmware:bank-allowlist",
         "//replacement/rtos_timer:bank-package",
     ],
+)
+
+rust_source_boundary_test(
+    name = "unsafe-boundary-check",
+    declaration = "unsafe-boundary.json",
+    srcs = glob(["src/**/*.rs"]) + ["linked-panic.rs"],
 )

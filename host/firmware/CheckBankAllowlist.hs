@@ -22,11 +22,10 @@ main = do
   elfBytes <- H.readRegularWith (pure ()) False (4 * 1024 * 1024) elfPath
   report <- either (\problem -> hPutStrLn stderr problem >> exitWith (ExitFailure 2)) pure (checkBankFile allowlistBytes elfBytes)
   mapM_ (putStrLn . ("declared  " ++) . renderFinding) (declared report)
-  mapM_ (putStrLn . ("unused    " ++) . renderDeclaration) (reportUnused report)
   mapM_ (putStrLn . ("VIOLATION " ++) . renderFinding) (violations report)
   putStrLn
     ( show (length (violations report)) ++ " violations, " ++ show (length (declared report)) ++ " declared sites, "
-        ++ show (reportProvenStores report) ++ " proven stores, " ++ show (reportProvenBranches report) ++ " proven branches, "
+        ++ show (reportProvenBranches report) ++ " checked direct transfers, "
         ++ show (reportInstructions report) ++ " instructions in " ++ show (reportFunctions report) ++ " functions"
     )
   mapM_ (\path -> B.writeFile path (encodeCanonical (reportValue report) <> B.singleton 10)) reportPath
