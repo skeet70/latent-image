@@ -31,7 +31,9 @@ fn setup(message: &mut Encoded, offset: usize, setup: &Setup) {
     words(message, offset, &[setup.descriptor, setup.pair[0], setup.pair[1], tail]);
 }
 
-/// 0xf3b5f0..0xf3b698.
+/// 0xf3b5f0..0xf3b698; with nothing selected the mode word (+20) is never written. The statistics
+/// task's readers of its copy (0x16fec34+0x44b4, e.g. 0x1029808, 0x102cb64, 0x103f404) act only
+/// on 4, 6, 7, 8, 9 and 10, so zero takes each one's general branch.
 fn format(message: &mut Encoded, offset: usize, format: &Format) {
     words(message, offset, &format.dimensions);
     message.halfword(offset + 8, format.ratio[0]);
@@ -39,7 +41,7 @@ fn format(message: &mut Encoded, offset: usize, format: &Format) {
     words(message, offset + 12, &[format.value, format.class, format.mode]);
 }
 
-/// 0xf3b7a0..0xf3b92c; byte 55 is never written.
+/// 0xf3b7a0..0xf3b92c; byte 55 is never written. It lands at 0x16fec34+0x4523, which nothing reads.
 fn exposure(message: &mut Encoded, offset: usize, exposure: &Exposure) {
     words(message, offset, &exposure.settings);
     message.word(offset + 0x20, exposure.window.extent);
@@ -53,7 +55,9 @@ fn exposure(message: &mut Encoded, offset: usize, exposure: &Exposure) {
     message.put(offset + 0x34, &[exposure.source.byte, exposure.class, exposure.detail]);
 }
 
-/// 0xf3b9d8..0xf3bb0c; bytes 20..28, 34..35 and 54..55 are never written.
+/// 0xf3b9d8..0xf3bb0c; bytes 20..28, 34..35 and 54..55 are never written. Nothing in the
+/// statistics task reads 34..35 or 54..55; it keeps 20..28 at 0x16fec34+0x453c..0x4544, which its
+/// init (0x10287c8) zeroes and the 0x4006/0x4008 receivers (0x10344f0, 0x1034820) zero or keep.
 fn capture(message: &mut Encoded, offset: usize, capture: &Capture) {
     words(message, offset, &[capture.position, capture.selection, capture.settings[0], capture.settings[1], capture.retune]);
     message.put(offset + 0x1d, &capture.options);
@@ -94,6 +98,7 @@ pub fn statistics_payload(payload: &StatisticsPayload) -> (Op, Encoded) {
         }
         // 0x1039f3c..0x1039f68 stores each of the three words at 200 only when it is nonzero;
         // 0xf3bc14..0xf3bc28 passes 0, the profile view word and 0. Bytes 212..223 are never written.
+        // The statistics task's 0x1034820 reads 184..199 and 224..247 only.
         P::Configure { configuration: blocks, view, command, callbacks } => {
             let mut message = configuration(248, blocks);
             message.word(CONFIGURATION_BYTES, u32::from(blocks.flagged));
@@ -121,14 +126,13 @@ pub fn statistics_payload(payload: &StatisticsPayload) -> (Op, Encoded) {
             message.word(8, window.extent);
             (Op::Request14, message)
         }
-        // 0x103affc..0x103b008 stores nothing when the source word is zero.
+        // 0x103affc..0x103b008 stores nothing when the source word is zero, and 0x102d6c8 still
+        // takes the word (0xed8bac), the byte (0x16fec34+0x4520) and the position (+0x4528).
         P::MeasuredSource { source, position } => {
             let mut message = Encoded::new(12);
-            if source.word != 0 {
-                message.word(0, source.word);
-                message.put(4, &[source.byte]);
-                message.word(8, *position);
-            }
+            message.word(0, source.word);
+            message.put(4, &[source.byte]);
+            message.word(8, *position);
             (Op::Request41, message)
         }
         P::Adjust { setup: block, callbacks } => {
@@ -186,23 +190,21 @@ fn block_then_callback(block: &[u32; 4], callback: crate::stock::StockCallbackWo
     message
 }
 
-pub const CAPTURE_REPORT_BYTES: usize = 76 + RESULTS_BYTES;
+pub const CAPTURE_REPORT_BYTES: usize = 64 + RESULTS_BYTES;
 
-/// The record 0xf3b460..0xf3b55c builds on its stack and passes to Command09's client with status
-/// 17: completion 0x79's payload bytes 4..20 and 20..60 around the format's dimensions, then the
-/// results.
+/// The record 0xf3b460..0xf3b55c passes to Command09's client with status 17 (its frame at
+/// -0x460): completion 0x79's payload bytes 4..16, 16..20 and 20..60 around the capture window's
+/// dimensions, then the results. The client 0xe6c578 reads words 0..5, bytes 24..64 and the
+/// results. Where 0xdca798 writes no dimensions stock leaves stack there; the owned record has zero.
 pub fn capture_report(report: &CaptureReport<'_>) -> [u8; CAPTURE_REPORT_BYTES] {
     let mut bytes = [0; CAPTURE_REPORT_BYTES];
     let mut put = |offset: usize, value: &[u8]| bytes[offset..offset + value.len()].copy_from_slice(value);
     let completion = |range: core::ops::Range<usize>| report.completion.get(range).unwrap_or(&[]);
-    put(0, &report.ratio.to_le_bytes());
-    put(4, &report.dimensions[0].to_le_bytes());
-    put(8, &report.dimensions[1].to_le_bytes());
-    put(12, completion(4..16));
-    put(24, &report.dimensions[1].wrapping_shl(1).to_le_bytes());
-    put(28, &report.dimensions[0].to_le_bytes());
-    put(32, completion(16..20));
-    put(36, completion(20..60));
-    put(76, report.results);
+    put(0, completion(4..16));
+    put(12, &report.dimensions[1].wrapping_shl(1).to_le_bytes());
+    put(16, &report.dimensions[0].to_le_bytes());
+    put(20, completion(16..20));
+    put(24, completion(20..60));
+    put(64, report.results);
     bytes
 }
