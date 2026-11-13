@@ -68,3 +68,20 @@ The raw FujiMod driver [main.rs](fujimod-xm1/src/main.rs) starts from reset for 
 | `emulation/xm1-upstream/tools/probe_setup_menus.py` | supplied post-boot snapshot | [Probe command](xm1-upstream/tools/probe_setup_menus.py), requires `--snapshot`. |
 
 Other shell scripts under `replacement/` build, relink or execute host/native tests; the full-system replacement cohort is the Haskell qualifier above. Private `run-saclac-census.sh` wrappers invoke the public census target; their scenario determines whether boot is observed. The measured cohort has five routes per firmware: cold boot, half press, Fn, Fn down and Fn auto-open. Cold boot remains a reset run on both sides.
+
+## Measured census saving
+
+E-XM1-POSTBOOT-CHECKPOINT-REUSE-150 records five routes on each of the stock and unchanged saclac candidate firmware: cold boot, half press, Fn, Fn down and Fn auto-open. Both cold-boot runs remain from reset. The first half-press run per firmware creates one checkpoint at 283,250,000 instructions; each following menu route restores it.
+
+| Route, per side | Previous executed instructions | Current executed instructions | Cache |
+| --- | ---: | ---: | --- |
+| Cold boot | 383,750,000 | 383,750,000 | Not used |
+| Half press | 309,750,000 | 309,750,000 | Created |
+| Fn | 435,120,000 | 151,870,000 | Hit |
+| Fn down | 474,650,000 | 191,400,000 | Hit |
+| Fn auto-open | 550,210,000 | 266,960,000 | Hit |
+
+The ten-run total falls from 4,306,960,000 to 2,607,460,000 guest instructions: 1,699,500,000 saved, or 39.46%, including both checkpoint creations. The saved checkpoint is reused by six runs. All ten match their last recorded counterparts' input digests, final cumulative instruction counts, menu milestones and ordered dispatcher-event suffixes after the declared observation boundary. These are checkpoint-equivalence measurements, not a new stock-versus-owned subsystem qualification.
+
+Summed recorded wall times are 169 seconds before and 66 seconds after. Those timestamps include slot waits and shared-host load and have one-second resolution; the instruction reduction is the attributable measurement.
+
