@@ -6,6 +6,16 @@ const END: u32 = 0x00bf1a00;
 const BREAK: u32 = 0x00829a08;
 const STEP: u64 = 8_000_000;
 
+pub(super) fn boot_fill_once(writes: &mut [(u64, u64)]) -> bool {
+    writes.sort_unstable();
+    let mut cursor = u64::from(BASE);
+    writes.iter().all(|&(low, high)| {
+        let contiguous = low == cursor && low < high;
+        cursor = high;
+        contiguous
+    }) && cursor == u64::from(END)
+}
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Scenario { Prepare, Capture, Playback, ResetWatch }
 
@@ -195,11 +205,7 @@ fn drive(arguments: &[std::ffi::OsString]) -> Result<(), String> {
         }
         Ok(())
     })();
-    observer.boot_writes.sort_unstable();
-    let mut fill_cursor = u64::from(BASE);
-    let mut fill_exactly_once = true;
-    for &(low, high) in &observer.boot_writes { if low != fill_cursor { fill_exactly_once = false; } fill_cursor = fill_cursor.max(high); }
-    fill_exactly_once &= fill_cursor == u64::from(END);
+    let fill_exactly_once = boot_fill_once(&mut observer.boot_writes);
     let complete = result.is_ok() && (resume || fill_exactly_once);
     write(&output.join("placement.json"), &serde_json::to_vec_pretty(&serde_json::json!({
         "status": if complete { "passed" } else { "failed" }, "error": result.err(), "scenario": arguments[1].to_string_lossy(),

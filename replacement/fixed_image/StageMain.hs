@@ -127,5 +127,5 @@ patchImage encoder rebuild decoder temporary rows source image
         _ -> do
           let window = case image of Image4 -> "0x160000"; _ -> "0x2e0000"
           run encoder [window, patchedPath, encodedPath]
-          run rebuild ["replace-record" ++ suffix, source, encodedPath, patchedPath, output]
+          run rebuild ["replace-record" ++ suffix, "--decoder", decoder, source, encodedPath, patchedPath, output]
       pure output

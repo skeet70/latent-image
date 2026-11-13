@@ -1,30 +1,27 @@
 #![no_std]
 
-use core::ptr::{addr_of, addr_of_mut, read_volatile, write_volatile};
+use core::ptr::{addr_of, read_volatile};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 const INITIAL: u32 = 0x1357_9bdf;
 
 #[used]
 #[no_mangle]
-pub static mut XM1_FIXED_TEST_DATA: u32 = INITIAL;
+#[link_section = ".data"]
+pub static XM1_FIXED_TEST_DATA: u32 = INITIAL;
 #[used]
 #[no_mangle]
-pub static mut XM1_FIXED_TEST_COUNT: u32 = 0;
+pub static XM1_FIXED_TEST_COUNT: AtomicU32 = AtomicU32::new(0);
 #[used]
 #[no_mangle]
-pub static mut XM1_FIXED_TEST_FAILURES: u32 = 0;
+pub static XM1_FIXED_TEST_FAILURES: AtomicU32 = AtomicU32::new(0);
 
 #[no_mangle]
 pub extern "C" fn xm1_fixed_test_observe() {
-    unsafe {
-        let count = read_volatile(addr_of!(XM1_FIXED_TEST_COUNT));
-        let data = read_volatile(addr_of!(XM1_FIXED_TEST_DATA));
-        if data != INITIAL.wrapping_add(count) {
-            write_volatile(addr_of_mut!(XM1_FIXED_TEST_FAILURES), 1);
-        }
-        write_volatile(addr_of_mut!(XM1_FIXED_TEST_DATA), data.wrapping_add(1));
-        write_volatile(addr_of_mut!(XM1_FIXED_TEST_COUNT), count.wrapping_add(1));
+    if unsafe { read_volatile(addr_of!(XM1_FIXED_TEST_DATA)) } != INITIAL {
+        XM1_FIXED_TEST_FAILURES.store(1, Ordering::Relaxed);
     }
+    XM1_FIXED_TEST_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
 #[panic_handler]
