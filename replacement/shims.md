@@ -300,7 +300,8 @@ The menu value transaction, published at the dispatcher's IMAGE SIZE jump-table 
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
-| `rb_menu_value_size_arm` in `adapter/entry.S`, placed by `adapter/image.ld` | veneer or carrier at a stock address | the stock dispatcher's jump-table word for property `0xf6` | no | the owned dispatcher calls the transaction directly | required |
+| `rb_menu_value_size_arm` in `adapter/entry.S`, published by the value package (`modal75,menu-engine,menu-value`) at the jump-table word `0x00d50084` | veneer or carrier at a stock address | the stock dispatcher's jump-table word for property `0xf6` | no | the owned dispatcher calls the transaction directly | required |
+| `__rb_menu_value_stock_arm` (`0x00d51b58`) and `__rb_menu_value_shared_tail` (`0x00d52674`) bound in `menu/recipe_bank_ram_engine.ld` | trampoline into retained stock | the stock IMAGE SIZE arm for refused targets and the dispatcher's shared tail | no | the owned dispatcher owns every `0xf6` caller's continuation | required |
 | `rb_menu_value_size_apply` export in `src/lib.rs` | stock-ABI export | the stock dispatcher's IMAGE SIZE jump-table word | no | the owned dispatcher calls the transaction directly | required |
 | `rb_menu_value_call_*` retained services (aspect/size cells, change marker, current property, display update) | trampoline into retained stock | stock property, cell and display services | no | the typed settings service and owned display own those services | required |
 
