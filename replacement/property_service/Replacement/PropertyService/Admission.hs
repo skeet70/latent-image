@@ -681,9 +681,9 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
           -- A callee may change r0-r3, r12 and lr, and it may write the caller's frame through
           -- a pointer the call site passed it. An owned callee keeps r4-r10 only when it is in
           -- the preserving set; otherwise the call drops the aliases, counters and entry values
-          -- those registers hold. A stock leaf, stock site or callback callee keeps r4-r10
-          -- under the AAPCS alone, which is the assumption stateR11 and stateLink already make,
-          -- and a slot-word callee's target is unknown, so every walk drops them there.
+          -- those registers hold. A stock leaf, stock site, callback or slot-word callee keeps
+          -- r4-r10 under the AAPCS alone, which is the assumption stateR11 and stateLink already
+          -- make; a linked slot-word call drops them in every walk.
           afterCall proven current = current
             { stateAliases = foldr M.delete (stateAliases current) (callerSaved ++ if proven then [] else calleeSaved)
             , stateCounters = foldr M.delete (stateCounters current) (callerSaved ++ if proven then [] else calleeSaved)
