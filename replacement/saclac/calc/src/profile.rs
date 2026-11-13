@@ -33,6 +33,9 @@ impl<'a, M: Memory, E: StockEntries> Profile<'a, M, E> {
 
     pub fn measurement_selection(&mut self, handle: RecordHandle) -> MeasurementSelection { self.entries.measurement_selection(handle) }
 
+    /// The lens designation beside the records (0x758c68).
+    pub fn lens_designation(&mut self, handle: RecordHandle) -> [u8; 28] { self.entries.lens_designation(handle) }
+
     /// Whether the record withholds its selection policies on a refinement pass.
     fn withheld(&mut self, handle: RecordHandle, refinement_pass: bool) -> bool {
         refinement_pass && self.header(handle, SharedHeaderByte::At63) != 0
