@@ -14,6 +14,8 @@ pub enum Service {
     AuxiliaryGate,
     Statistics,
     RecordingBuffers,
+    Tracking,
+    MotionDetection,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -82,6 +84,8 @@ impl Lifecycle {
                 effects.emit(Request::Start(Service::Calculation));
                 effects.emit(Request::Start(Service::AuxiliaryGate));
                 effects.emit(Request::Start(Service::Statistics));
+                effects.emit(Request::Start(Service::Tracking));
+                effects.emit(Request::Start(Service::MotionDetection));
                 effects.emit(Request::PublishParameters);
                 effects.emit(Request::ReplyStarted);
                 if previous == Mode::Stopped && startup == Startup::ResumeLive {
@@ -99,6 +103,8 @@ impl Lifecycle {
                     Service::AuxiliaryGate,
                     Service::Statistics,
                     Service::Lens,
+                    Service::Tracking,
+                    Service::MotionDetection,
                     Service::RecordingBuffers,
                 ] {
                     effects.emit(Request::Stop(service));

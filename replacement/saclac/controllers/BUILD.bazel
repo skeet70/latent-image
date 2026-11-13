@@ -1,5 +1,4 @@
-load("@rules_shell//shell:sh_test.bzl", "sh_test")
-load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib", "xm1_rust_host_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -7,22 +6,15 @@ xm1_rust_rlib(
     name = "controllers",
     src = "src/lib.rs",
     crate_name = "xm1_saclac_controllers",
-    data = ["src/lifecycle.rs", "src/adjustment.rs", "src/statistics.rs", "src/stock.rs"],
+    data = ["src/lifecycle.rs", "src/adjustment.rs", "src/statistics.rs", "src/stock.rs", "src/replies.rs"],
+    rlib_deps = {"xm1_saclac_interface": "//replacement/saclac_interface:saclac-interface"},
 )
 
-genrule(
-    name = "host-tests-build",
-    srcs = glob(["src/*.rs"]),
-    tools = ["@lab_xm1_rust//:bin/rustc", "@lab_clang//:bin/clang"],
-    outs = ["host-tests-bin"],
-    executable = True,
-    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
-)
-
-sh_test(
+xm1_rust_host_test(
     name = "host-tests",
-    size = "small",
-    srcs = ["host-test.sh"],
-    args = ["$(location :host-tests-build)"],
-    data = [":host-tests-build"],
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac_controllers_tests",
+    data = glob(["src/*.rs"], exclude = ["src/lib.rs"]),
+    rlib_deps = {"xm1_saclac_interface": "//replacement/saclac_interface:host"},
 )
+

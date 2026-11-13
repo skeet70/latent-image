@@ -23,6 +23,8 @@ fn normal_start_publishes_parameters_before_reply() {
         Request::Start(Service::Calculation),
         Request::Start(Service::AuxiliaryGate),
         Request::Start(Service::Statistics),
+        Request::Start(Service::Tracking),
+        Request::Start(Service::MotionDetection),
         Request::PublishParameters,
         Request::ReplyStarted,
     ]);
@@ -41,6 +43,8 @@ fn resume_start_does_not_restart_lens_service() {
         Request::Start(Service::Calculation),
         Request::Start(Service::AuxiliaryGate),
         Request::Start(Service::Statistics),
+        Request::Start(Service::Tracking),
+        Request::Start(Service::MotionDetection),
         Request::PublishParameters,
         Request::ReplyStarted,
     ]);
@@ -59,6 +63,8 @@ fn stop_finishes_peers_before_reply_and_allows_restart() {
         Request::Stop(Service::AuxiliaryGate),
         Request::Stop(Service::Statistics),
         Request::Stop(Service::Lens),
+        Request::Stop(Service::Tracking),
+        Request::Stop(Service::MotionDetection),
         Request::Stop(Service::RecordingBuffers),
         Request::ReplyStopped,
     ]);
