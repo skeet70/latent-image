@@ -589,7 +589,9 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
           Nothing -> Left FrameArgumentNotFrame
           Just alias -> unless (frameAlias alias) (Left FrameArgumentNotFrame)
       let passed = [ (slot, alias) | slot <- outgoingSlots current, Just alias <- [argumentValue current slot], frameAlias alias ]
-      -- A pointer moved below the object it came from no longer names that object.
+      -- A pointer moved below the object it came from no longer names that object. Only the
+      -- admitted walk refuses it: the probe cannot tell a frame pointer from an ordinary value,
+      -- and walking it further can only add declared slots, which this refusal then covers.
       when (policyStrict policy) $ forM_ passed $ \(_, alias) -> case alias of
         CallerAlias _ offset -> when (offset < 0) (Left FrameArgumentExceeded)
         LocalAlias _ -> pure ()
