@@ -580,6 +580,7 @@ pub fn img_dc_operation(operation: ImgDcOperation) -> u16 {
         ImgDcOperation::Request31 => 0x3f31,
         ImgDcOperation::Request32 => 0x3f32,
         ImgDcOperation::Request33 => 0x3f33,
+        ImgDcOperation::Request34 => 0x3f34,
         ImgDcOperation::Request3a => 0x3f3a,
         ImgDcOperation::Request3b => 0x3f3b,
         ImgDcOperation::Request42 => 0x3f42,
