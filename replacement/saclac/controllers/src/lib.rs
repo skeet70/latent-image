@@ -22,6 +22,12 @@ pub mod live_statistics;
 pub mod live_statistics_profile;
 pub mod s1_statistics;
 pub mod s1_statistics_profile;
+pub mod s1_statistics_leaf;
+mod s1_autofocus;
+#[cfg(test)]
+mod s1_fake;
+#[cfg(test)]
+mod s1_statistics_leaf_tests;
 #[cfg(test)]
 mod s1_statistics_tests;
 #[cfg(test)]

@@ -1,143 +1,11 @@
-use crate::layers::*;
+use crate::layers::{Block, Field};
+use crate::s1_fake::{record, Fake, Seen, DESCRIPTOR};
 use crate::s1_statistics::Request;
-use crate::s1_statistics_profile::{request, take, Layers, Taken};
-use std::{vec, vec::Vec};
-use xm1_saclac_interface::calc::SharedAddress;
-use xm1_saclac_interface::statistics::Source;
-use xm1_saclac_interface::{stock, Completion as C, ImgDc, ImgDcOperation, ImgDcRequest, RecordHandle, Statistics, StatisticsOperation as Op, StatisticsRequest};
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum Seen {
-    Write(Field, u32),
-    Block(Block, Vec<u32>),
-    Statistics(Op, Vec<u8>, Vec<C>),
-    Imaging(ImgDcOperation, Vec<u8>, Vec<C>),
-    LensOption,
-}
-
-#[derive(Default)]
-struct Fake {
-    fields: Vec<(Field, u32)>,
-    live: Vec<(Field, u32)>,
-    blocks: Vec<(Block, Vec<u32>)>,
-    seen: Vec<Seen>,
-}
-
-fn record() -> RecordHandle { stock::record_handle_from_a2(0x17) }
-fn live_record() -> RecordHandle { stock::record_handle_from_a2(0x26) }
-
-impl Fake {
-    fn with(fields: &[(Field, u32)]) -> Self { Self { fields: fields.to_vec(), ..Self::default() } }
-    fn take_seen(&mut self) -> Vec<Seen> { core::mem::take(&mut self.seen) }
-    fn statistics(&mut self) -> (Op, Vec<u8>, Vec<C>) {
-        match self.take_seen().pop() {
-            Some(Seen::Statistics(op, bytes, completions)) => (op, bytes, completions),
-            other => panic!("expected a statistics post, saw {other:?}"),
-        }
-    }
-}
+use crate::s1_statistics_profile::{request, take, Taken};
+use std::vec;
+use xm1_saclac_interface::{Completion as C, ImgDcOperation, StatisticsOperation as Op};
 
 fn word(bytes: &[u8], offset: usize) -> u32 { u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) }
-
-impl ProfileRecord for Fake {
-    fn read(&mut self, record: RecordHandle, field: Field) -> u32 {
-        let fields = if record == live_record() { &self.live } else { &self.fields };
-        fields.iter().find(|(known, _)| *known == field).map_or(0, |(_, value)| *value)
-    }
-    fn write(&mut self, _: RecordHandle, field: Field, value: u32) { self.seen.push(Seen::Write(field, value)) }
-    fn changed(&mut self, _: RecordHandle, _: Change) -> bool { false }
-    fn read_block(&mut self, _: RecordHandle, block: Block, out: &mut [u32]) {
-        if let Some((_, words)) = self.blocks.iter().find(|(known, _)| *known == block) {
-            out.copy_from_slice(&words[..out.len()]);
-        }
-    }
-    fn write_block(&mut self, _: RecordHandle, block: Block, words: &[u32]) { self.seen.push(Seen::Block(block, words.to_vec())) }
-    fn clear_selection(&mut self, _: RecordHandle) {}
-    fn select_descriptor(&mut self, _: RecordHandle, _: u32) {}
-    fn set_descriptor_pair(&mut self, _: RecordHandle, _: u32, _: u32) {}
-    fn notify_selection_owner(&mut self, _: RecordHandle) {}
-}
-
-impl ProfileShared for Fake {
-    fn measured_window(&mut self) -> ([u16; 3], u32) { ([1, 2, 3], 4) }
-    fn source(&mut self) -> Source { Source { word: 0x5150, byte: 0x51 } }
-}
-
-impl StatisticsHelpers for Fake {
-    fn scale_capture_window(&mut self, mode: u32, _: u32) -> Option<[u32; 2]> { (mode != 0).then_some([0x100 + mode, 0x200 + mode]) }
-    fn selection_ratio(&mut self, _: RecordHandle) -> [u32; 2] { [4, 5] }
-    fn lens_offset(&mut self, _: u32) -> u32 { 0 }
-}
-
-impl StatisticsGeometry for Fake {
-    fn correct_window(&mut self, window: [u16; 3], _: u32, _: u32, _: u32) -> [u16; 3] { window }
-    fn linearize(&mut self, value: u32) -> u32 { value + 1 }
-    fn reset_default_selection(&mut self) {}
-}
-
-impl S1Values for Fake {
-    fn descriptor(&mut self, _: RecordHandle, value: u32) -> u32 { 0xd000 + (value & 0xfff) }
-    fn lens_value(&mut self) -> u32 { 0x42 }
-    fn refresh(&mut self, _: RecordHandle) -> u32 { 0x78 }
-    fn curve(&mut self, inputs: [u32; 11]) -> u32 { inputs.iter().sum() }
-    fn stop_curve(&mut self, stop_mode: u32) -> u32 { 0xc000 + stop_mode }
-    fn unselected_view(&mut self, _: RecordHandle) -> u32 { 0xb4 }
-    fn span(&mut self, _: RecordHandle) -> u32 { 0xd8 }
-    fn unselected(&mut self, _: RecordHandle) -> u32 { 0xe8 }
-    fn corrected_window(&mut self, inputs: &WindowInputs) -> CorrectedWindow {
-        let window = inputs.measured.unwrap_or_default();
-        CorrectedWindow { window: [window[0] + 10, window[1] + 10, window[2] + 10], extent: 0x54 }
-    }
-    fn release_steps(&mut self, position: i16, first: u32, second: u32) -> u16 { position as u16 + first as u16 + second as u16 }
-    fn trace_snapshot(&mut self) {}
-    fn release_channel(&mut self) {}
-}
-
-impl Results for Fake {
-    fn address(&mut self) -> SharedAddress { SharedAddress(0x016b_5b30) }
-    fn read(&mut self, _: &mut [u8; xm1_saclac_interface::statistics::RESULTS_BYTES]) {}
-    fn deliver(&mut self, _: xm1_saclac_interface::ClientCallback) {}
-}
-
-impl Statistics for Fake {
-    type Error = ();
-    fn request(&mut self, request: StatisticsRequest<'_>) -> Result<(), ()> {
-        self.seen.push(Seen::Statistics(request.operation, request.parameters.bytes().to_vec(), request.completions.to_vec()));
-        Ok(())
-    }
-}
-
-impl ImgDc for Fake {
-    type Error = ();
-    fn request(&mut self, request: ImgDcRequest<'_>) -> Result<(), ()> {
-        self.seen.push(Seen::Imaging(request.operation, request.parameters.bytes().to_vec(), request.completions.to_vec()));
-        Ok(())
-    }
-}
-
-impl Layers for Fake {
-    type Profile = Self;
-    type Shared = Self;
-    type Helpers = Self;
-    type Geometry = Self;
-    type Values = Self;
-    type Results = Self;
-    type Statistics = Self;
-    type Imaging = Self;
-    fn profile(&mut self) -> &mut Self { self }
-    fn shared(&mut self) -> &mut Self { self }
-    fn helpers(&mut self) -> &mut Self { self }
-    fn geometry(&mut self) -> &mut Self { self }
-    fn values(&mut self) -> &mut Self { self }
-    fn results(&mut self) -> &mut Self { self }
-    fn statistics(&mut self) -> &mut Self { self }
-    fn imaging(&mut self) -> &mut Self { self }
-    fn live_statistics_record(&mut self) -> RecordHandle { live_record() }
-    fn lens_option(&mut self, record: RecordHandle) {
-        assert_eq!(record, self::record());
-        self.seen.push(Seen::LensOption);
-    }
-}
 
 fn taken(fake: &mut Fake) -> Taken {
     let taken = take(record(), fake);
@@ -168,7 +36,7 @@ fn the_imaging_job_carries_the_snapshot_with_its_step_and_classes_adjusted() {
     assert_eq!(&bytes[0..2], &[0xfe, 0xff]);
     assert_eq!((word(bytes, 8), word(bytes, 16), word(bytes, 20)), (0x98, 1, 20), "a step of 12 becomes 20 without the view byte");
     assert_eq!(word(bytes, 28), 0xc003);
-    assert_eq!((word(bytes, 44), word(bytes, 56)), (0xd042, 0xdfff));
+    assert_eq!((word(bytes, 44), word(bytes, 56)), (DESCRIPTOR, DESCRIPTOR), "the descriptor's lens argument is unused (0xf4f16c, 0x752714)");
     assert_eq!((word(bytes, 68), word(bytes, 72), word(bytes, 84)), (0x20, 0x24, 2));
     assert_eq!((word(bytes, 96), word(bytes, 100), word(bytes, 104), word(bytes, 120)), (6, 4, 0x0280_01e0, 0x08));
     assert_eq!(&bytes[124..128], &0x00f2_27c0u32.to_le_bytes());

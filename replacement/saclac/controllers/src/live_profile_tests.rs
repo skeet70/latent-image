@@ -100,10 +100,19 @@ impl Configuration for Fake {
 impl DisplayRecords for Fake {
     fn reset(&mut self) { self.seen.push(Seen::DisplayReset) }
     fn mirror(&mut self, _: RecordHandle, mirror: Mirror) { self.seen.push(Seen::Mirror(mirror)) }
-    fn initialize_record_mode(&mut self) -> bool { self.record_mode_initialized }
-    fn record_mode_available(&mut self) -> bool { self.record_mode_available }
-    fn begin_record_mode(&mut self) { self.seen.push(Seen::BeginRecordMode) }
-    fn finish_record_mode(&mut self) { self.seen.push(Seen::EndRecordMode) }
+}
+
+impl RecordMode for Fake {
+    fn initialize(&mut self) -> bool { self.record_mode_initialized }
+    fn available(&mut self, channel: RecordChannel) -> bool {
+        assert_eq!(channel, RecordChannel::LiveView);
+        self.record_mode_available
+    }
+    fn begin(&mut self, channel: RecordChannel) {
+        assert_eq!(channel, RecordChannel::LiveView);
+        self.seen.push(Seen::BeginRecordMode)
+    }
+    fn finish(&mut self) { self.seen.push(Seen::EndRecordMode) }
 }
 
 impl SharedHelpers for Fake {
@@ -135,6 +144,7 @@ impl Layers for Fake {
     type Geometry = Self;
     type Configuration = Self;
     type Display = Self;
+    type RecordMode = Self;
     type Helpers = Self;
     type Pipeline = Self;
     type Source = Self;
@@ -143,6 +153,7 @@ impl Layers for Fake {
     fn geometry(&mut self) -> &mut Self { self }
     fn configuration(&mut self) -> &mut Self { self }
     fn display(&mut self) -> &mut Self { self }
+    fn record_mode(&mut self) -> &mut Self { self }
     fn helpers(&mut self) -> &mut Self { self }
     fn pipeline(&mut self) -> &mut Self { self }
     fn source(&mut self) -> &mut Self { self }

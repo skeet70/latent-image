@@ -3,7 +3,12 @@
 //! The S1 statistics configuration's profile values: what it takes at the S1 begin and the
 //! imaging and statistics requests it builds from them.
 
-use crate::layers::{Block, CorrectedWindow, Field, ProfileRecord, ProfileShared, Results, S1Values, StatisticsGeometry, StatisticsHelpers, WindowInputs};
+use crate::children::Children;
+use crate::layers::{
+    Block, CommandParameters, CorrectedWindow, Field, LensControl, LensCurve, LensMove, ProfileRecord, ProfileShared,
+    RecordMode, RemapRequest, Results, S1Values, StatisticsGeometry, StatisticsHelpers, WindowInputs,
+};
+use crate::replies::Replies;
 use crate::s1_statistics::Request;
 use crate::stock;
 use xm1_saclac_interface::imaging::{ImagingPayload, S1Job};
@@ -12,6 +17,7 @@ use xm1_saclac_interface::statistics::{
 };
 use xm1_saclac_interface::{Completion as C, ImgDc, RecordHandle, Statistics};
 
+/// Everything the S1 statistics configuration's leaf reaches outside its own state.
 pub trait Layers {
     type Profile: ProfileRecord;
     type Shared: ProfileShared;
@@ -21,6 +27,12 @@ pub trait Layers {
     type Results: Results;
     type Statistics: Statistics;
     type Imaging: ImgDc;
+    type Children: Children;
+    type RecordMode: RecordMode;
+    type Replies: Replies;
+    type Parameters: CommandParameters;
+    type Lens: LensControl;
+    type Curve: LensCurve;
 
     fn profile(&mut self) -> &mut Self::Profile;
     fn shared(&mut self) -> &mut Self::Shared;
@@ -30,11 +42,28 @@ pub trait Layers {
     fn results(&mut self) -> &mut Self::Results;
     fn statistics(&mut self) -> &mut Self::Statistics;
     fn imaging(&mut self) -> &mut Self::Imaging;
+    fn children(&mut self) -> &mut Self::Children;
+    fn record_mode(&mut self) -> &mut Self::RecordMode;
+    fn replies(&mut self) -> &mut Self::Replies;
+    fn parameters(&mut self) -> &mut Self::Parameters;
+    fn lens(&mut self) -> &mut Self::Lens;
+    fn curve(&mut self) -> &mut Self::Curve;
     /// The live statistics configuration's record; the S1 start header, capture geometry and
     /// output block are read from it.
     fn live_statistics_record(&mut self) -> RecordHandle;
     /// Command27's lens option.
     fn lens_option(&mut self, record: RecordHandle);
+    /// Replies to the autofocus command with the lens state (0xf46c4c).
+    fn reply_autofocus_lens(&mut self);
+    /// Enters the lens bounds notifier with `detail` and the curve positions (0xefb9f0).
+    fn notify_bounds(&mut self, detail: u32, bounds: [u32; 3]);
+    /// Tells the measurement round the selection value changed (0xf251c4).
+    fn mark_selection_changed(&mut self);
+    fn remap_lens_target(&mut self, request: RemapRequest) -> u16;
+    /// Posts a relative lens move whose completion is 0x35.
+    fn move_lens(&mut self, request: LensMove);
+    /// The fault reaction (0xf46c20).
+    fn fault(&mut self);
 }
 
 /// The values taken at the S1 begin that later requests carry.
@@ -55,9 +84,9 @@ impl Taken {
     pub const fn view_active(&self) -> bool { self.job.view_active != 0 }
 }
 
-fn read(layers: &mut impl Layers, record: RecordHandle, field: Field) -> u32 { layers.profile().read(record, field) }
+pub(crate) fn read(layers: &mut impl Layers, record: RecordHandle, field: Field) -> u32 { layers.profile().read(record, field) }
 
-fn block<const N: usize>(layers: &mut impl Layers, record: RecordHandle, block: Block) -> [u32; N] {
+pub(crate) fn block<const N: usize>(layers: &mut impl Layers, record: RecordHandle, block: Block) -> [u32; N] {
     let mut words = [0; N];
     layers.profile().read_block(record, block, &mut words);
     words
@@ -80,10 +109,10 @@ pub fn take(record: RecordHandle, layers: &mut impl Layers) -> Taken {
     let format_mode = read(layers, record, F::FormatMode);
     let capture_window = layers.helpers().scale_capture_window(format_mode, ratio).unwrap_or_default();
     let window: [u32; 4] = block(layers, record, Block::AuxiliaryWindow);
-    let lens = layers.values().lens_value();
     let pair = [read(layers, record, F::DescriptorFirst), read(layers, record, F::DescriptorSecond)];
-    let descriptors = [layers.values().descriptor(record, lens), pair[0], pair[1]];
-    let setup = [layers.values().descriptor(record, 0xffff), pair[0], pair[1]];
+    let descriptor = layers.values().descriptor(record);
+    let descriptors = [descriptor, pair[0], pair[1]];
+    let setup = descriptors;
     let view_active = read(layers, record, F::ViewActive);
     let refresh = layers.values().refresh(record);
     let exposure_word = read(layers, record, F::ExposureWord);

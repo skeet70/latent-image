@@ -8,7 +8,7 @@ use crate::layers::{
     StatisticsHelpers, StatisticsSettings,
 };
 use crate::live_statistics::{Answered, CaptureWord, Condition, Groups, Owed, Port, Reply, Request};
-use crate::replies::{Replies, Values};
+use crate::replies::{Replies, ReplyCommand, Values};
 use crate::stock;
 use xm1_saclac_interface::statistics::{
     Capture, CaptureCommand, CaptureReport, Command24, Configuration, Exposure, Format, MeasuredWindow, Notice, Setup,
@@ -260,46 +260,47 @@ fn post(payload: &xm1_saclac_interface::statistics::StatisticsPayload, layers: &
     stock::statistics_request(payload, layers.statistics());
 }
 
-fn respond(layers: &mut impl Layers, command: K, status: i32, values: Values<'_>) {
+fn respond(layers: &mut impl Layers, command: ReplyCommand, status: i32, values: Values<'_>) {
     layers.replies().reply(command, CompletionStatus(status), values);
 }
 
-fn answered(answered: Answered) -> K {
+fn answered(answered: Answered) -> ReplyCommand {
     match answered {
-        Answered::Command0a => K::Command0a,
-        Answered::Command13 => K::Command13,
+        Answered::Command0a => ReplyCommand::Command0a,
+        Answered::Command13 => ReplyCommand::Command13,
     }
 }
 
 fn answer(reply: Reply<'_>, record: RecordHandle, layers: &mut impl Layers) {
+    use ReplyCommand as R;
     match reply {
-        Reply::Finished(Owed::Command0a) => respond(layers, K::Command09, 0, Values::Words(&[0])),
+        Reply::Finished(Owed::Command0a) => respond(layers, R::Command09, 0, Values::Words(&[0])),
         Reply::Finished(Owed::Command11) | Reply::Descriptor { selected: false } => {
             let descriptor = read(layers, record, Field::Descriptor);
-            respond(layers, K::Command11, 0, Values::Words(&[descriptor]));
+            respond(layers, R::Command11, 0, Values::Words(&[descriptor]));
         }
         Reply::Descriptor { selected: true } => {
             let descriptor = read(layers, record, Field::Descriptor);
-            respond(layers, K::Command11, 18, Values::Words(&[descriptor]));
+            respond(layers, R::Command11, 18, Values::Words(&[descriptor]));
         }
         Reply::Finished(Owed::Release) => export_diagnostics(record, layers),
-        Reply::Finished(Owed::Command1d) => respond(layers, K::Command1d, 0, Values::Words(&[])),
-        Reply::Finished(Owed::Command1e) => respond(layers, K::Command1e, 0, Values::Words(&[])),
-        Reply::Finished(Owed::Command1f) => respond(layers, K::Command1f, 0, Values::Words(&[])),
-        Reply::Finished(Owed::Command20) => respond(layers, K::Command20, 0, Values::Words(&[])),
-        Reply::Finished(Owed::Command21) => respond(layers, K::Command21, 0, Values::Words(&[])),
-        Reply::Finished(Owed::Command22) => respond(layers, K::Command22, 0, Values::Words(&[])),
+        Reply::Finished(Owed::Command1d) => respond(layers, R::Command1d, 0, Values::Words(&[])),
+        Reply::Finished(Owed::Command1e) => respond(layers, R::Command1e, 0, Values::Words(&[])),
+        Reply::Finished(Owed::Command1f) => respond(layers, R::Command1f, 0, Values::Words(&[])),
+        Reply::Finished(Owed::Command20) => respond(layers, R::Command20, 0, Values::Words(&[])),
+        Reply::Finished(Owed::Command21) => respond(layers, R::Command21, 0, Values::Words(&[])),
+        Reply::Finished(Owed::Command22) => respond(layers, R::Command22, 0, Values::Words(&[])),
         Reply::Accepted(command) => respond(layers, answered(command), 20, Values::Words(&[])),
         Reply::Refused(command) => respond(layers, answered(command), 21, Values::Words(&[])),
         Reply::Prepared => {
             let flags = read(layers, record, Field::SelectionFlags);
-            respond(layers, K::Prepare, 19, Values::Words(&[flags]));
+            respond(layers, R::Prepare, 19, Values::Words(&[flags]));
         }
-        Reply::CaptureConfigured => respond(layers, K::Command09, 16, Values::Words(&[0])),
+        Reply::CaptureConfigured => respond(layers, R::Command09, 16, Values::Words(&[0])),
         Reply::CaptureResults(completion) => report_capture(completion, record, layers),
         Reply::Command24 { refused, completion } => {
             let status = if refused { -94 } else { word(completion, 0) as i32 };
-            respond(layers, K::Command24, status, Values::Words(&[word(completion, 1)]));
+            respond(layers, R::Command24, status, Values::Words(&[word(completion, 1)]));
         }
     }
 }
@@ -315,7 +316,7 @@ fn report_capture(completion: Parameters<'_>, record: RecordHandle, layers: &mut
     let dimensions = layers.helpers().scale_capture_window(mode, ratio).unwrap_or_default();
     let report = CaptureReport { dimensions, completion: completion.bytes(), results: &results };
     let bytes = xm1_saclac_interface::stock::statistics::capture_report(&report);
-    respond(layers, K::Command09, 17, Values::Record(&bytes));
+    respond(layers, ReplyCommand::Command09, 17, Values::Record(&bytes));
 }
 
 fn export_diagnostics(record: RecordHandle, layers: &mut impl Layers) {

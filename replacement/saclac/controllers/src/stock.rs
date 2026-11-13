@@ -563,6 +563,8 @@ pub const S1_SELECTED: StockCallbackWord = StockCallbackWord(0xf2276c);
 pub const S1_RESULTS_READY: StockCallbackWord = StockCallbackWord(0xf22730);
 pub const S1_RETUNED: StockCallbackWord = StockCallbackWord(0xf22708);
 pub const S1_OUTPUT_CONFIGURED: StockCallbackWord = StockCallbackWord(0xf226e0);
+/// Posts 0x35 (0xf2418c).
+pub const S1_LENS_MOVED: StockCallbackWord = StockCallbackWord(0xf2418c);
 
 /// 0xfeaa64 and 0xfeaaa4 return their post's status; machine 17 drops it.
 pub fn post_imaging(

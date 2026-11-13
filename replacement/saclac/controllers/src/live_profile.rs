@@ -5,7 +5,7 @@
 
 use crate::layers::{
     Block, Change, Configuration, DisplayRecords, Field, Geometry, GeometryCheck, GeometryFlag, GeometryValue, Mirror,
-    Pipeline, ProfileRecord, SharedHelpers,
+    Pipeline, ProfileRecord, RecordChannel, RecordMode, SharedHelpers,
 };
 use crate::live_view::{
     Application, ChangeCode, Condition, Effect, MotionSetting, Preparation, RestoreOptions, StopMode, StopReason,
@@ -17,6 +17,31 @@ use xm1_saclac_interface::{Command, CommandKind as K, ImgDc, Parameters, RecordH
 pub(crate) fn word(parameters: Parameters<'_>, index: usize) -> u32 {
     let start = index * 4;
     parameters.bytes().get(start..start + 4).map_or(0, |bytes| u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+/// Command17's ten parameter words: word 1 masks the selection bits word 2 sets.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SelectionWords(pub [u32; 10]);
+
+impl SelectionWords {
+    pub fn of(parameters: Parameters<'_>) -> Self { Self(core::array::from_fn(|index| word(parameters, index))) }
+}
+
+/// Sets the profile's preparation enables and, for each enabled bit, the preparation flag
+/// `values` gives it. The S1 statistics configuration applies them too.
+pub fn apply_preparation(enables: u32, values: u32, record: RecordHandle, profile: &mut impl ProfileRecord) {
+    let enabled = profile.read(record, Field::SelectionEnables);
+    let flags = (0..4).map(|bit| 1 << bit).filter(|bit| enables & bit != 0).fold(enabled, |flags, bit| {
+        if values & bit != 0 { flags | bit } else { flags & !bit }
+    });
+    profile.write(record, Field::SelectionEnables, enables);
+    profile.write(record, Field::SelectionFlags, flags);
+}
+
+/// Whether the profile's preparation is enabled and flagged.
+pub fn preparation_requested(record: RecordHandle, profile: &mut impl ProfileRecord) -> bool {
+    let flags = profile.read(record, Field::SelectionFlags);
+    profile.read(record, Field::SelectionEnables) & 1 != 0 && flags & 1 != 0
 }
 
 /// A preparation mode a command leaves in the profile.
@@ -126,6 +151,7 @@ pub trait Layers {
     type Geometry: Geometry;
     type Configuration: Configuration;
     type Display: DisplayRecords;
+    type RecordMode: RecordMode;
     type Helpers: SharedHelpers;
     type Pipeline: Pipeline;
     type Source: ConfigurationSource;
@@ -135,6 +161,7 @@ pub trait Layers {
     fn geometry(&mut self) -> &mut Self::Geometry;
     fn configuration(&mut self) -> &mut Self::Configuration;
     fn display(&mut self) -> &mut Self::Display;
+    fn record_mode(&mut self) -> &mut Self::RecordMode;
     fn helpers(&mut self) -> &mut Self::Helpers;
     fn pipeline(&mut self) -> &mut Self::Pipeline;
     fn source(&mut self) -> &mut Self::Source;
@@ -272,18 +299,12 @@ impl LiveProfile {
             K::Command17 => {
                 let (requested, offered) = (word(parameters, 1), word(parameters, 2));
                 if !layers.geometry().admits(requested, offered) { return Application::Refused; }
-                self.apply_selection(parameters, record, layers);
+                self.apply_selection(&SelectionWords::of(parameters), record, layers.profile());
                 let outgrown = requested == 2 && layers.geometry().outgrown(record, GeometryCheck::Command17);
                 restart_if(outgrown || !direct_start(record, layers))
             }
             K::Prepare => {
-                let (enables, values) = (word(parameters, 1), word(parameters, 2));
-                let enabled = read(layers, record, Field::SelectionEnables);
-                let flags = (0..4).map(|bit| 1 << bit).filter(|bit| enables & bit != 0).fold(enabled, |flags, bit| {
-                    if values & bit != 0 { flags | bit } else { flags & !bit }
-                });
-                layers.profile().write(record, Field::SelectionEnables, enables);
-                layers.profile().write(record, Field::SelectionFlags, flags);
+                apply_preparation(word(parameters, 1), word(parameters, 2), record, layers.profile());
                 layers.profile().write(record, Field::PrepareFirst, word(parameters, 3));
                 layers.profile().write(record, Field::PrepareSecond, word(parameters, 4));
                 Application::Applied
@@ -325,10 +346,10 @@ impl LiveProfile {
     }
 
     /// Copies Command17's selection words into the profile and records whether any
-    /// selection bit is left set.
-    fn apply_selection(&mut self, parameters: Parameters<'_>, record: RecordHandle, layers: &mut impl Layers) {
-        let (mask, values) = (word(parameters, 1), word(parameters, 2));
-        let mut flags = read(layers, record, Field::Command17Selection);
+    /// selection bit is left set. The S1 statistics configuration applies them too.
+    pub fn apply_selection(&mut self, words: &SelectionWords, record: RecordHandle, profile: &mut impl ProfileRecord) {
+        let [_, mask, values, ..] = words.0;
+        let mut flags = profile.read(record, Field::Command17Selection);
         for (bit, field, index) in [
             (1, Some(Field::Command17First), 3),
             (2, Some(Field::Command17Second), 4),
@@ -340,13 +361,13 @@ impl LiveProfile {
             let set = values & bit != 0;
             flags = if set { flags | bit } else { flags & !bit };
             if let Some(field) = field {
-                layers.profile().write(record, field, if set { word(parameters, index) } else { 0 });
+                profile.write(record, field, if set { words.0[index] } else { 0 });
             }
         }
-        layers.profile().write(record, Field::Command17Fifth, word(parameters, 8));
-        layers.profile().write(record, Field::Command17Sixth, word(parameters, 9));
+        profile.write(record, Field::Command17Fifth, words.0[8]);
+        profile.write(record, Field::Command17Sixth, words.0[9]);
         self.selection_active = flags != 0;
-        layers.profile().write(record, Field::Command17Selection, flags);
+        profile.write(record, Field::Command17Selection, flags);
     }
 
     pub(crate) fn set_selection_mode(&mut self, mode: u32) { self.selection_mode = mode; }
@@ -388,10 +409,7 @@ impl LiveProfile {
                 let requested_three = command.is_some_and(|command| word(command.parameters, 1) == 3);
                 mode_three == requested_three
             }
-            Condition::PreparationRequested => {
-                let flags = read(layers, record, Field::SelectionFlags);
-                read(layers, record, Field::SelectionEnables) & 1 != 0 && flags & 1 != 0
-            }
+            Condition::PreparationRequested => preparation_requested(record, layers.profile()),
             Condition::PreparationRestorable => read(layers, record, Field::PreparationRestorable) == 0,
             Condition::StatisticsRetune => read(layers, record, Field::StatisticsRetune) == 1,
             Condition::PrimaryApplied => self.primary_applied,
@@ -408,14 +426,16 @@ impl LiveProfile {
                 layers.profile().write(record, Field::AdjustmentTarget, adjustment);
             }
             Effect::BeginRecordMode => {
-                if !layers.display().initialize_record_mode() && layers.display().record_mode_available() {
-                    layers.display().begin_record_mode();
+                let mode = layers.record_mode();
+                if !mode.initialize() && mode.available(RecordChannel::LiveView) {
+                    mode.begin(RecordChannel::LiveView);
                 }
             }
             Effect::FinishRecordMode => {
-                if layers.display().record_mode_available() { layers.display().finish_record_mode(); }
+                let mode = layers.record_mode();
+                if mode.available(RecordChannel::LiveView) { mode.finish(); }
             }
-            Effect::QueryRecordMode => { layers.display().initialize_record_mode(); }
+            Effect::QueryRecordMode => { layers.record_mode().initialize(); }
             Effect::StatisticsPreparation(on) => {
                 let flags = read(layers, record, Field::SelectionFlags);
                 layers.profile().write(record, Field::SelectionFlags, if on { flags | 1 } else { flags & !1 });

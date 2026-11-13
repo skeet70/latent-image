@@ -3,7 +3,7 @@ use crate::layers::*;
 use crate::live_statistics::LiveStatistics;
 use crate::live_statistics_profile::{Layers, Leaf};
 use crate::live_view::{Signal, StatisticsCall, StatisticsControl as Ctl, StatisticsOutcome as O};
-use crate::replies::{Replies, Values};
+use crate::replies::{Replies, ReplyCommand, Values};
 use std::{vec, vec::Vec};
 use xm1_saclac_interface::calc::SharedAddress;
 use xm1_saclac_interface::statistics::{Source, RESULTS_BYTES};
@@ -133,12 +133,12 @@ impl Results for Fake {
 }
 
 impl Replies for Fake {
-    fn reply(&mut self, command: K, status: CompletionStatus, values: Values<'_>) {
+    fn reply(&mut self, command: ReplyCommand, status: CompletionStatus, values: Values<'_>) {
         let bytes = match values {
             Values::Words(words) => words.iter().flat_map(|word| word.to_le_bytes()).collect(),
             Values::Record(bytes) => bytes.to_vec(),
         };
-        self.seen.push(Seen::Reply(command, status.0, bytes));
+        self.seen.push(Seen::Reply(command.kind(), status.0, bytes));
     }
 }
 
