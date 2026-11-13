@@ -43,7 +43,7 @@ fn finishing_a_selection_clear_answers_the_client_and_invalidates_what_is_no_lon
     let target = ReplyTarget::Command(CommandKind::Command17);
     assert_eq!(ports.take(), [
         Outbound::ClearPending(target),
-        Outbound::Reply { target, callback: client.unwrap(), status: CompletionStatus(0) },
+        Outbound::Reply { target, callback: client.unwrap(), status: CompletionStatus(0), values: [0; 3] },
     ]);
     assert_eq!(ports.records.invalid, [PublishedResult::Search, PublishedResult::Source]);
     assert!(!ports.records.focus_invalid);

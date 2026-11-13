@@ -1,6 +1,6 @@
 use crate::acquisition::{self, Pass};
 use crate::fakes::{Outbound, Ports};
-use crate::image::{ImageChannel, ImageEffect, ImageRequest, ReplyValue};
+use crate::image::{ChannelCount, ImagePeer, LensReport};
 use crate::jobs::{self, Calculation};
 use crate::lanes::Selection;
 use crate::live::{Effects, Measurement};
@@ -17,7 +17,6 @@ enum Traffic {
     Calculation(Calculation, jobs::Effect),
     Acquisition(acquisition::Effect),
     Image(&'static str),
-    Finished { kind: ImageRequest, failed: bool, channel: ImageChannel, value: ReplyValue },
     Fault,
 }
 
@@ -50,16 +49,14 @@ impl Effects for Fake {
     fn result_changed(&mut self, _: RecordHandle, _: Calculation) -> bool { false }
     fn acquisition(&mut self, _: RecordHandle, effect: acquisition::Effect) { self.extra.traffic.push(Traffic::Acquisition(effect)); }
     fn selection_changed(&mut self, _: RecordHandle) -> bool { false }
-    fn image(&mut self, _: RecordHandle, effect: ImageEffect<'_>) {
-        self.extra.traffic.push(match effect {
-            ImageEffect::Initialize => Traffic::Image("initialize"),
-            ImageEffect::PrepareGeometry => Traffic::Image("geometry"),
-            ImageEffect::Request { .. } => Traffic::Image("request"),
-            ImageEffect::Cancel(_) => Traffic::Image("cancel"),
-            ImageEffect::Stop => Traffic::Image("stop"),
-            ImageEffect::Interrupted { .. } => Traffic::Image("interrupted"),
-            ImageEffect::Finished { kind, failed, channel, value, .. } => Traffic::Finished { kind, failed, channel, value },
-        });
+    fn image(&mut self, _: RecordHandle, request: ImagePeer<'_>) {
+        self.extra.traffic.push(Traffic::Image(match request {
+            ImagePeer::Initialize => "initialize",
+            ImagePeer::PrepareGeometry => "geometry",
+            ImagePeer::Request { .. } => "request",
+            ImagePeer::Cancel(_) => "cancel",
+            ImagePeer::Stop => "stop",
+        }));
     }
     fn image_failed(&mut self, _: Completed<'_>) -> bool { self.extra.failed }
 }
@@ -70,6 +67,10 @@ fn control(control: MeasurementControl) -> ChildEvent<'static, MeasurementContro
 }
 fn completion(completion: Completion) -> ChildEvent<'static, MeasurementControl> {
     ChildEvent::Completed { completed: Completed { completion, parameters: stock::parameters(&[]) }, record: record() }
+}
+
+fn command(words: &[u8]) -> ChildEvent<'_, MeasurementControl> {
+    ChildEvent::Command { command: Command { kind: CommandKind::Command14, parameters: stock::parameters(words) }, record: record() }
 }
 
 const ACQUISITION: Selection = Selection { acquisition: true, search: false, auxiliary: false, image: false, source: false };
@@ -126,17 +127,33 @@ fn stopping_a_round_releases_each_enabled_job() {
 fn an_image_command_replies_through_the_image_lane() {
     let mut measurement = Measurement::new();
     let mut fake = fake(Selection { image: true, ..ACQUISITION });
+    fake.channel_count = ChannelCount(8);
+    fake.lens = LensReport { first: true, second: false, third: true };
     measurement.handle(control(MeasurementControl::Initialize), &mut fake);
     fake.extra.take();
-    let mut words = [0u8; 20];
-    words[12..16].copy_from_slice(&5u32.to_le_bytes());
-    words[16..20].copy_from_slice(&9u32.to_le_bytes());
-    let image = ChildEvent::Command { command: Command { kind: CommandKind::Command14, parameters: stock::parameters(&words) }, record: record() };
-    assert_eq!(measurement.handle(image, &mut fake), ChildOutcome::Pending);
+    fake.take();
+    let image = |channel: u32| -> Vec<u8> { [0xd00, 0, 0, channel, 9].iter().flat_map(|word: &u32| word.to_le_bytes()).collect() };
+    let target = ReplyTarget::Command(CommandKind::Command14);
+    let callback = stock::optional_callback(0xd00).unwrap();
+
+    let words = image(5);
+    assert_eq!(measurement.handle(command(&words), &mut fake), ChildOutcome::Pending);
     assert_eq!(fake.extra.take(), [Traffic::Image("geometry"), Traffic::Image("request")]);
     fake.extra.failed = true;
     measurement.handle(completion(Completion::Image47), &mut fake);
-    assert_eq!(fake.extra.take(), [Traffic::Finished { kind: ImageRequest::Image, failed: true, channel: ImageChannel(5), value: ReplyValue(9) }]);
+    assert_eq!(fake.take(), [
+        Outbound::ClearPending(target),
+        Outbound::Reply { target, callback, status: CompletionStatus(-94), values: [5, 9, 6] },
+    ]);
+
+    let words = image(8);
+    measurement.handle(command(&words), &mut fake);
+    fake.extra.failed = false;
+    measurement.handle(completion(Completion::Image47), &mut fake);
+    assert_eq!(fake.take(), [
+        Outbound::ClearPending(target),
+        Outbound::Reply { target, callback, status: CompletionStatus(0), values: [8, 0x80_0000, 6] },
+    ]);
 }
 
 #[test]
@@ -163,6 +180,6 @@ fn a_parameter_change_with_nothing_to_change_answers_its_client() {
     let target = ReplyTarget::Command(CommandKind::Command17);
     assert_eq!(fake.take(), [
         Outbound::ClearPending(target),
-        Outbound::Reply { target, callback: stock::optional_callback(0xf0a0).unwrap(), status: CompletionStatus(0) },
+        Outbound::Reply { target, callback: stock::optional_callback(0xf0a0).unwrap(), status: CompletionStatus(0), values: [0; 3] },
     ]);
 }

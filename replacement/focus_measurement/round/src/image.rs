@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
-use xm1_saclac_interface::{ClientCallback, Parameters};
+use xm1_saclac_controllers::replies;
+use xm1_saclac_interface::{ClientCallback, CommandKind, CompletionStatus, Parameters, ReplyTarget};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImageRequest { Image, Snapshot }
@@ -27,16 +28,25 @@ pub enum Interruption { Cancel, Stop }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InterruptionAnswer { Interrupted, NothingPending }
 
+/// What the image lane asks of the image peer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ImageEffect<'a> {
+pub enum ImagePeer<'a> {
     Initialize,
     PrepareGeometry,
     Request { kind: ImageRequest, parameters: Parameters<'a> },
     Cancel(Parameters<'a>),
     Stop,
+}
+
+/// What the image lane answers its clients.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ImageReply {
     Interrupted { interruption: Interruption, callback: Option<ClientCallback>, answer: InterruptionAnswer },
     Finished { kind: ImageRequest, failed: bool, callback: Option<ClientCallback>, channel: ImageChannel, value: ReplyValue },
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ImageEffect<'a> { Peer(ImagePeer<'a>), Reply(ImageReply) }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImageSignal<'a> {
@@ -79,47 +89,47 @@ impl ImageJob {
             *self.client(kind) = Some(client);
         }
         match (self.phase, signal) {
-            (Phase::Disabled, ImageSignal::Initialize) => { effect(ImageEffect::Initialize); ImageOutcome::Complete }
+            (Phase::Disabled, ImageSignal::Initialize) => { effect(ImageEffect::Peer(ImagePeer::Initialize)); ImageOutcome::Complete }
             (Phase::Disabled, ImageSignal::Enable) => {
-                effect(ImageEffect::Initialize);
+                effect(ImageEffect::Peer(ImagePeer::Initialize));
                 self.phase = Phase::Ready;
                 ImageOutcome::Complete
             }
             (Phase::Disabled, ImageSignal::Stop) => ImageOutcome::Complete,
             (Phase::Ready, ImageSignal::Stop) => { self.phase = Phase::Disabled; ImageOutcome::Complete }
             (Phase::Imaging, ImageSignal::Stop) => {
-                effect(ImageEffect::Stop);
+                effect(ImageEffect::Peer(ImagePeer::Stop));
                 self.phase = Phase::Stopping;
                 ImageOutcome::Pending
             }
             (Phase::Disabled | Phase::Ready | Phase::Imaging, ImageSignal::Run) => ImageOutcome::Idle,
             (Phase::Ready, ImageSignal::Request { kind, parameters, .. }) => {
-                effect(ImageEffect::PrepareGeometry);
+                effect(ImageEffect::Peer(ImagePeer::PrepareGeometry));
                 self.image_pending = true;
-                effect(ImageEffect::Request { kind, parameters });
+                effect(ImageEffect::Peer(ImagePeer::Request { kind, parameters }));
                 self.phase = Phase::Imaging;
                 ImageOutcome::Pending
             }
             (Phase::Ready, ImageSignal::Interrupt { interruption, callback, .. }) => {
-                effect(ImageEffect::Interrupted { interruption, callback, answer: InterruptionAnswer::NothingPending });
+                effect(ImageEffect::Reply(ImageReply::Interrupted { interruption, callback, answer: InterruptionAnswer::NothingPending }));
                 ImageOutcome::Complete
             }
             (Phase::Imaging, ImageSignal::Interrupt { interruption, parameters, callback }) => {
-                effect(match interruption { Interruption::Cancel => ImageEffect::Cancel(parameters), Interruption::Stop => ImageEffect::Stop });
-                effect(ImageEffect::Interrupted { interruption, callback, answer: InterruptionAnswer::Interrupted });
+                effect(ImageEffect::Peer(match interruption { Interruption::Cancel => ImagePeer::Cancel(parameters), Interruption::Stop => ImagePeer::Stop }));
+                effect(ImageEffect::Reply(ImageReply::Interrupted { interruption, callback, answer: InterruptionAnswer::Interrupted }));
                 ImageOutcome::Pending
             }
             (Phase::Imaging, ImageSignal::Imaged { kind, failed }) => {
                 self.image_pending = false;
                 self.phase = Phase::Ready;
                 let client = *self.client(kind);
-                effect(ImageEffect::Finished {
+                effect(ImageEffect::Reply(ImageReply::Finished {
                     kind,
                     failed,
                     callback: client.and_then(|client| client.callback),
                     channel: self.channel,
                     value: client.map_or(ReplyValue(0), |client| client.value),
-                });
+                }));
                 ImageOutcome::Complete
             }
             (Phase::Stopping, ImageSignal::Imaged { kind: ImageRequest::Image, .. }) => {
@@ -141,5 +151,48 @@ impl ImageJob {
 
     fn client(&mut self, kind: ImageRequest) -> &mut Option<ImageClient> {
         match kind { ImageRequest::Image => &mut self.image, ImageRequest::Snapshot => &mut self.snapshot }
+    }
+}
+
+/// Lens-control queries an image reply reports; each is set when its query answers 2.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LensReport { pub first: bool, pub second: bool, pub third: bool }
+
+/// How many image channels a reply may name.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ChannelCount(pub u8);
+
+impl ImageChannel {
+    /// The channel word is read as signed.
+    pub const fn within(self, count: ChannelCount) -> bool {
+        let channel = self.0 as i32;
+        channel >= 0 && channel < count.0 as i32
+    }
+}
+
+pub trait ReplyPorts: replies::Effects {
+    fn channel_count(&mut self) -> ChannelCount;
+    fn lens_report(&mut self) -> LensReport;
+}
+
+pub fn deliver(reply: ImageReply, ports: &mut impl ReplyPorts) {
+    match reply {
+        ImageReply::Interrupted { interruption, callback, answer } => replies::deliver(replies::Reply {
+            target: ReplyTarget::Command(match interruption { Interruption::Cancel => CommandKind::Command15, Interruption::Stop => CommandKind::Command16 }),
+            callback,
+            status: CompletionStatus(match answer { InterruptionAnswer::Interrupted => 20, InterruptionAnswer::NothingPending => 21 }),
+            values: xm1_saclac_interface::stock::parameters(&[]),
+        }, ports),
+        ImageReply::Finished { kind, failed, callback, channel, value } => {
+            let lens = ports.lens_report();
+            let value = if channel.within(ports.channel_count()) { value } else { crate::stock::NO_CHANNEL_VALUE };
+            let values = crate::stock::image_reply_values(channel, value, lens);
+            replies::deliver(replies::Reply {
+                target: ReplyTarget::Command(match kind { ImageRequest::Image => CommandKind::Command14, ImageRequest::Snapshot => CommandKind::Command2b }),
+                callback,
+                status: CompletionStatus(if failed { -94 } else { 0 }),
+                values: xm1_saclac_interface::stock::parameters(&values),
+            }, ports);
+        }
     }
 }

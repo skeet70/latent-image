@@ -120,3 +120,19 @@ pub fn image_client(kind: crate::image::ImageRequest, parameters: xm1_saclac_int
 pub fn interruption_callback(parameters: xm1_saclac_interface::Parameters<'_>) -> Option<xm1_saclac_interface::ClientCallback> {
     xm1_saclac_interface::stock::optional_callback(word(parameters, 0))
 }
+
+/// X-M1 1.50: 0xefb37c..0xefb38c and 0xefb48c..0xefb49c replace the value of a
+/// reply whose channel 0x74a214 rejects with 0x74a740(128, 0).
+pub const NO_CHANNEL_VALUE: crate::image::ReplyValue = crate::image::ReplyValue(128 << 16);
+
+/// X-M1 1.50: 0xf3a160..0xf3a1b0 and 0xf3a1b8..0xf3a208 pass the channel, the
+/// value and the lens bits (2 for 0x76d9a8, 1 for 0x76da38, 4 for 0x76dba4) as
+/// the callback's arguments after the status.
+pub fn image_reply_values(channel: crate::image::ImageChannel, value: crate::image::ReplyValue, lens: crate::image::LensReport) -> [u8; 12] {
+    let bits = u32::from(lens.first) * 2 + u32::from(lens.second) + u32::from(lens.third) * 4;
+    let mut values = [0; 12];
+    for (slot, word) in values.chunks_exact_mut(4).zip([channel.0, value.0, bits]) {
+        slot.copy_from_slice(&word.to_le_bytes());
+    }
+    values
+}

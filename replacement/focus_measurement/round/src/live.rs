@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use crate::acquisition::{self, Acquisition, Branch};
-use crate::image::{ImageEffect, ImageJob, ImageOutcome, ImageRequest, ImageSignal, Interruption};
+use crate::image::{self, ImageEffect, ImageJob, ImageOutcome, ImagePeer, ImageRequest, ImageSignal, Interruption, ReplyPorts};
 use crate::jobs::{self, Calculation, CalculationJob};
 use crate::lanes::{Lane, Selection};
 use crate::planner::{Cadence, Mode, Work};
@@ -11,7 +11,7 @@ use xm1_saclac_controllers::children::{ChildEvent, ChildOutcome, MeasurementCont
 use xm1_saclac_interface::{CommandKind, Completed, Completion, RecordHandle};
 
 /// Everything the live measurement asks of the records, its peers and the search slot.
-pub trait Effects: RecordPorts {
+pub trait Effects: RecordPorts + ReplyPorts {
     fn planning_mode(&mut self, record: RecordHandle) -> Mode;
     fn fault(&mut self);
 
@@ -22,7 +22,7 @@ pub trait Effects: RecordPorts {
     fn result_changed(&mut self, record: RecordHandle, calculation: Calculation) -> bool;
     fn acquisition(&mut self, record: RecordHandle, effect: acquisition::Effect);
     fn selection_changed(&mut self, record: RecordHandle) -> bool;
-    fn image(&mut self, record: RecordHandle, effect: ImageEffect<'_>);
+    fn image(&mut self, record: RecordHandle, request: ImagePeer<'_>);
     fn image_failed(&mut self, completed: Completed<'_>) -> bool;
 }
 
@@ -144,7 +144,10 @@ impl<E: Effects> Lanes<'_, E> {
             LaneSignal::Suspend | LaneSignal::Resume => return LaneStatus::Unhandled,
         };
         let effects = &mut *self.effects;
-        match self.image.signal(signal, &mut |effect| effects.image(record, effect)) {
+        match self.image.signal(signal, &mut |effect| match effect {
+            ImageEffect::Peer(request) => effects.image(record, request),
+            ImageEffect::Reply(reply) => image::deliver(reply, effects),
+        }) {
             ImageOutcome::Ignored => LaneStatus::Refused,
             ImageOutcome::Complete => LaneStatus::Complete,
             ImageOutcome::Pending => LaneStatus::Pending,

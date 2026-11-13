@@ -1,3 +1,4 @@
+use crate::image::{ChannelCount, LensReport, ReplyPorts};
 use crate::lanes::Selection;
 use crate::planner::{Cadence, Mode, Work};
 use crate::profile::{FrameInterval, IntervalHistory, IntervalTracking, Profile, ProfileGeometry, ProfileRecords, ProfileSelection, PublishedResult, StatisticsInUse};
@@ -55,7 +56,7 @@ pub enum Outbound {
     ModeSixStatistics,
     Request(Request),
     ClearPending(ReplyTarget),
-    Reply { target: ReplyTarget, callback: ClientCallback, status: CompletionStatus },
+    Reply { target: ReplyTarget, callback: ClientCallback, status: CompletionStatus, values: [u32; 3] },
     MeasurementHistory,
 }
 
@@ -68,6 +69,8 @@ pub struct Ports<X = ()> {
     pub interval_history: bool,
     pub calibration: GeometryCalibration,
     pub frame_interval: Option<FrameInterval>,
+    pub channel_count: ChannelCount,
+    pub lens: LensReport,
     pub outbound: Vec<Outbound>,
     pub extra: X,
 }
@@ -81,6 +84,8 @@ impl<X> Ports<X> {
             interval_history: false,
             calibration: GeometryCalibration([0; 4]),
             frame_interval: None,
+            channel_count: ChannelCount(1),
+            lens: LensReport::default(),
             outbound: Vec::new(),
             extra,
         }
@@ -128,7 +133,13 @@ impl<X> replies::Effects for Ports<X> {
     fn emit(&mut self, effect: replies::Effect<'_>) {
         self.outbound.push(match effect {
             replies::Effect::ClearPending(target) => Outbound::ClearPending(target),
-            replies::Effect::Deliver { target, callback, status, .. } => Outbound::Reply { target, callback, status },
+            replies::Effect::Deliver { target, callback, status, values } => {
+                let mut words = [0; 3];
+                for (word, bytes) in words.iter_mut().zip(values.bytes().chunks_exact(4)) {
+                    *word = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                }
+                Outbound::Reply { target, callback, status, values: words }
+            }
         });
     }
 }
@@ -136,4 +147,9 @@ impl<X> replies::Effects for Ports<X> {
 impl<X> record::Ports for Ports<X> {
     fn request(&mut self, request: Request) { self.outbound.push(Outbound::Request(request)); }
     fn record_measurement_history(&mut self, _: RecordHandle) { self.outbound.push(Outbound::MeasurementHistory); }
+}
+
+impl<X> ReplyPorts for Ports<X> {
+    fn channel_count(&mut self) -> ChannelCount { self.channel_count }
+    fn lens_report(&mut self) -> LensReport { self.lens }
 }
