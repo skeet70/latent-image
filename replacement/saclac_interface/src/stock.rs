@@ -1,6 +1,7 @@
 use crate::*;
 
 pub mod exposure;
+pub mod round_acquisition;
 pub mod round_image;
 
 pub const fn record_handle_from_a2(word: u32) -> RecordHandle { RecordHandle(word) }
@@ -676,8 +677,12 @@ pub fn calc_payload(payload: &calc::CalcPayload) -> (CalcOperation, Encoded) {
 pub fn calc1_payload(payload: &calc::Calc1Payload) -> (Calc1Operation, Encoded) {
     use calc::Calc1Payload as P;
     match *payload {
-        P::Acquisition { record, callback } => (Calc1Operation::Request00, callback_last(&record.0, callback)),
-        P::Selection { record, callback } => (Calc1Operation::Request01, callback_last(&record.0, callback)),
+        P::Acquisition { request, callback } => {
+            (Calc1Operation::Request00, callback_last(&round_acquisition::acquisition_request(&request), callback))
+        }
+        P::Selection { request, region, callback } => {
+            (Calc1Operation::Request01, callback_last(&round_acquisition::selection_request(&request, region), callback))
+        }
         P::Auxiliary { request, callback } => (Calc1Operation::Request02, auxiliary(request, callback)),
     }
 }

@@ -5,6 +5,7 @@ pub mod exposure;
 pub mod stock;
 pub mod round;
 pub mod calc;
+pub mod round_acquisition;
 pub mod round_image;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
