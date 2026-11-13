@@ -457,7 +457,8 @@ impl LensEffect {
 pub const fn lens_effect(operation: PeerOperation) -> LensEffect {
     match operation {
         PeerOperation::LensDc(LensDcOperation::Request07 | LensDcOperation::Request08 | LensDcOperation::Request0c) => LensEffect::DirectDrive,
-        PeerOperation::ImgDc(ImgDcOperation::Request2e) => LensEffect::DriveThroughImageBridge,
+        // 0x3f2e reaches lensdc 0x420c; 0x3f2f in imgdc state 7 reaches lensdc 0x420e (0xff4dac -> 0xff7a98 -> 0x76e450).
+        PeerOperation::ImgDc(ImgDcOperation::Request2e | ImgDcOperation::Request2f) => LensEffect::DriveThroughImageBridge,
         PeerOperation::Calc(_) | PeerOperation::Calc1(_) | PeerOperation::Statistics(_) => LensEffect::NoLensDrive,
         PeerOperation::LensDc(_) | PeerOperation::ImgDc(_) | PeerOperation::Flash(_) => LensEffect::Unclassified,
     }
