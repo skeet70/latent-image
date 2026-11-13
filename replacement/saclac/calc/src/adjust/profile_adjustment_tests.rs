@@ -5,12 +5,6 @@ use crate::exposure::fakes::World;
 use crate::exposure::ports::Property;
 use crate::stock::profile_adjustment as table;
 
-impl LensSteps for World {
-    fn near_step(&mut self, _reference: u32, limit: u16, table: StepTable) -> u32 { u32::from(limit) + if table == StepTable::Lens { 1 } else { 0 } }
-    fn far_step(&mut self, _reference: u32, limit: u16, _table: StepTable) -> u32 { u32::from(limit) + 1000 }
-    fn lens_step(&mut self, step: u32) -> u32 { step }
-}
-
 impl StepRatios for World {
     fn step_ratio(&mut self, code: u16, selector: u8) -> u32 { u32::from(code) + 100 * u32::from(selector) }
 }

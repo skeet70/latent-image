@@ -2,11 +2,12 @@
 //! most eight steps with the capture profile and lens step of each, and the first step the
 //! evaluation spans.
 
-use xm1_saclac_profile_records::stock::record::{group_00, group_13};
+use xm1_saclac_profile_records::stock::record::group_00;
 use xm1_saclac_profile_records::stock::shared::group_27;
-use xm1_saclac_profile_records::{IntervalTracking, MeasurementSelection, SharedHeaderByte, WindowStatus};
+use xm1_saclac_profile_records::{IntervalTracking, MeasurementSelection, SharedHeaderByte};
 
-use crate::adjust::result_dispatch::{self, ResultKind};
+use crate::adjust::profile_adjustment::{self, LensLimits, SelectedChoice};
+use crate::adjust::result_dispatch;
 use crate::adjust::scene_settings::{self, RangeInputs, SceneRange, SceneSelection};
 use crate::exposure::context::{CandidateSpan, ExposureContext, ExposureStep, StartBound, PROGRAM_STEPS};
 use crate::exposure::ports::Ports;
@@ -45,28 +46,10 @@ pub struct PrimaryRange {
     pub floor: i16,
 }
 
-/// What a selected measurement's program reads (0xf77c8c).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SelectedInputs {
-    pub measurement_selection: MeasurementSelection,
-    pub second_result: ResultKind,
-    pub window_status: WindowStatus,
-    pub kind: u32,
-    pub record_20b0: u32,
-}
-
-/// The adjustment layer's ranges the program is built from.
+/// The adjustment layer's range the unselected measurement's program is built from.
 pub trait Limits {
     /// 0xf72c3c.
     fn primary_range(&mut self, inputs: &PrimaryInputs) -> PrimaryRange;
-    /// 0xf77c8c.
-    fn selected_program(&mut self, inputs: &SelectedInputs) -> u32;
-    /// The near and far lens steps of a selected program (0xf7809c).
-    fn selected_lenses(&mut self, program: u32, lens_reference: u32) -> (u32, u32);
-    /// 0xf78d24 with its second argument 0.
-    fn selected_level(&mut self, program: u32, lens_reference: u32) -> i16;
-    /// 0xf79140.
-    fn selected_offset(&mut self, program: u32) -> i16;
 }
 
 /// How the first step was chosen; the evaluation accepts any range only after `Curve`.
@@ -251,17 +234,16 @@ fn range(ports: &mut impl Ports, limits: &mut impl Limits, context: &ExposureCon
         };
         Range { low, high: high.max(low), near_lens: primary.near_lens, far_lens: primary.far_lens }
     } else {
-        let inputs = SelectedInputs {
-            measurement_selection: selection,
-            second_result: result_dispatch::second_result(ports, record),
+        let choice = SelectedChoice {
+            result: result_dispatch::second_result(ports, record).code(),
             window_status: ports.profile().read_shared(record, &group_27::WINDOW_STATUS),
-            kind,
-            record_20b0: ports.profile().read(record, &group_13::AT_20B0_4),
+            mode: kind,
+            banded: false,
         };
-        let program = limits.selected_program(&inputs);
-        let (near_lens, far_lens) = limits.selected_lenses(program, binding.lens_reference);
-        let offset = limits.selected_offset(program);
-        let low = limits.selected_level(program, binding.lens_reference).wrapping_sub(scene.below as i16);
+        let profile = profile_adjustment::choose_selected(ports, &choice);
+        let LensLimits { near: near_lens, far: far_lens } = profile_adjustment::lens_limits(ports, profile, binding.lens_reference);
+        let low = profile_adjustment::selected_level(ports, profile, 0, binding.lens_reference).wrapping_sub(scene.below as i16);
+        let offset = profile_adjustment::selection_percent(ports, profile);
         let far = ports.level(far_lens, binding.lens_reference);
         let high = (scene.above as i16).wrapping_add(far).wrapping_add(settings::signed_word(ports, property::SELECTED_HIGH_OFFSET));
         let low = low.wrapping_sub(step_three.wrapping_add(offset)).wrapping_add(500);

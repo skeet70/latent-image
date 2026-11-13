@@ -262,6 +262,15 @@ impl LensConfiguration for World {
     fn mapped_value(&mut self, key: u32) -> u32 { self.lens_configuration.mapped_value(key) }
 }
 
+/// The near step is the limit, one more from the lens's table; the far step is the limit plus 1000.
+impl crate::adjust::profile_adjustment::LensSteps for World {
+    fn near_step(&mut self, _reference: u32, limit: u16, table: crate::adjust::profile_adjustment::StepTable) -> u32 {
+        u32::from(limit) + if table == crate::adjust::profile_adjustment::StepTable::Lens { 1 } else { 0 }
+    }
+    fn far_step(&mut self, _reference: u32, limit: u16, _table: crate::adjust::profile_adjustment::StepTable) -> u32 { u32::from(limit) + 1000 }
+    fn lens_step(&mut self, step: u32) -> u32 { step }
+}
+
 /// calc and calc1 as a list of the payloads posted to them.
 #[derive(Default)]
 pub struct Posted {

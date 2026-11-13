@@ -18,10 +18,6 @@ struct FixedLimits;
 
 impl Limits for FixedLimits {
     fn primary_range(&mut self, _: &PrimaryInputs) -> PrimaryRange { PrimaryRange { upper: 300, near_lens: 1, far_lens: 1, ..PrimaryRange::default() } }
-    fn selected_program(&mut self, _: &SelectedInputs) -> u32 { 0 }
-    fn selected_lenses(&mut self, _: u32, _: u32) -> (u32, u32) { (1, 1) }
-    fn selected_level(&mut self, _: u32, _: u32) -> i16 { 0 }
-    fn selected_offset(&mut self, _: u32) -> i16 { 0 }
 }
 
 /// A target and a configured measurement of 500 over the program of `program_tests`: steps at

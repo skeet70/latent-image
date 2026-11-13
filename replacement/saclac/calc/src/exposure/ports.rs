@@ -4,6 +4,7 @@ use xm1_saclac_interface::calc::SharedAddress;
 use xm1_saclac_profile_records::{Memory, StockEntries};
 
 use crate::adjust::lens::LensConfiguration;
+use crate::adjust::profile_adjustment::LensSteps;
 use crate::profile::Profile;
 
 /// A camera configuration value the engine reads; the ids are in `crate::stock::property`.
@@ -105,6 +106,6 @@ pub trait ImageReport {
 }
 
 /// Everything the engine reaches.
-pub trait Ports: Properties + Lens + LensConfiguration + CaptureProfiles + ProfileLevels + StockMemory + ProfileAccess + Placement + ImageReport {}
+pub trait Ports: Properties + Lens + LensSteps + LensConfiguration + CaptureProfiles + ProfileLevels + StockMemory + ProfileAccess + Placement + ImageReport {}
 
-impl<T: Properties + Lens + LensConfiguration + CaptureProfiles + ProfileLevels + StockMemory + ProfileAccess + Placement + ImageReport> Ports for T {}
+impl<T: Properties + Lens + LensSteps + LensConfiguration + CaptureProfiles + ProfileLevels + StockMemory + ProfileAccess + Placement + ImageReport> Ports for T {}
