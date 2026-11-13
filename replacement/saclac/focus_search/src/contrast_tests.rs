@@ -1,7 +1,8 @@
 use crate::contrast::settings::Setting;
 use crate::contrast::{
-    travel_limits, Context, CorrectionQuery, FocusOffer, FocusStatus, LensIdentity, LimitKind, LimitQuery, Phase, PinnedStatus, Platform,
-    RetainedFocus, StageRecord, StepQuery, TableOffset, TransitionTrace, TravelLimits,
+    travel_limits, Context, CorrectedPosition, CorrectionQuery, FitPoint, FocusLog, FocusLogEntry, FocusOffer, FocusStatus, LensIdentity, LimitKind,
+    LimitQuery, MonitorStepQuery, PeakSearchTrace, Phase, PinnedStatus, Platform, RetainedFocus, ScanPlan, ScanQuery, StageRecord, Step,
+    StepQuery, TableOffset, TransitionTrace, TravelLimits,
 };
 use crate::stock;
 use std::vec::Vec;
@@ -89,11 +90,33 @@ impl Platform for Fake {
     fn lens_ready(&mut self) -> bool { true }
     fn area_levels(&mut self) -> [u16; 2] { [0; 2] }
     fn focus_correction(&mut self, _: CorrectionQuery) -> i16 { 0 }
-    fn parameter_index(&mut self, _: u32) -> u32 { 0 }
-    fn fine_steps(&mut self) -> bool { false }
     fn profile_period(&mut self, _: u32) -> u32 { 0 }
     fn record_class(&mut self) -> u32 { 0 }
-    fn lens_step(&mut self, query: StepQuery) -> (u16, u32) { (query.base, 0) }
+    fn step(&mut self, _: StepQuery) -> Step { Step { size: 0, rate: 0 } }
+    fn monitor_step(&mut self, query: MonitorStepQuery) -> u16 { query.step }
+    fn request_scan_refresh(&mut self, _: bool) {}
+    fn scan_refresh(&mut self) -> bool { false }
+    fn plan_scan(&mut self, query: ScanQuery) -> ScanPlan { ScanPlan { limits: [query.limits.low, query.limits.high], window: [0; 2], lead: 0, rate: query.rate } }
+    fn corrected_position(&mut self, _: u16) -> CorrectedPosition { CorrectedPosition { frame: LensPosition(0), drive: LensPosition(0) } }
+    fn drive_target(&mut self, _: LensIdentity, _: u16, low: LensPosition, _: LensPosition) -> LensPosition { low }
+    fn below_threshold(&mut self, _: u32, _: u32, _: u32, _: u32) -> bool { false }
+    fn passed_peak(&mut self, _: &[u32], _: u32, _: bool) -> (bool, Option<u32>) { (false, None) }
+    fn fell_from_peak(&mut self, _: &[u32]) -> bool { false }
+    fn contrast_log(&mut self, _: u32) -> u32 { 0 }
+    fn fit_peak(&mut self, points: [FitPoint; 3]) -> LensPosition { LensPosition(points[1].position) }
+    fn measurement_history(&mut self) -> Option<[Option<[u16; 2]>; 5]> { None }
+    fn profile_focus(&mut self) -> i16 { 0 }
+    fn detailed_tracing(&mut self) -> bool { false }
+    fn trace_peak_search(&mut self, _: PeakSearchTrace) {}
+    fn focus_tracing(&mut self) -> bool { false }
+    fn trace_focus(&mut self, _: crate::contrast::FocusTrace) {}
+    fn minimum_step(&mut self, minimum: u32) -> u32 { minimum }
+    fn profile_mode(&mut self) -> u32 { 0 }
+    fn parameter_label(&mut self, _: u32) -> u16 { 0 }
+    fn ticks(&mut self) -> u32 { 0 }
+    fn append_focus_log(&mut self, _: &FocusLog) {}
+    fn newest_focus_log(&mut self) -> FocusLogEntry { FocusLogEntry::default() }
+    fn show_debug_text(&mut self, _: &[u8], _: u8, _: u8) {}
     fn angular_rate(&mut self) -> u32 { 0 }
     fn request_angular_rate(&mut self) {}
     fn stage(&mut self) -> StageRecord { StageRecord::default() }

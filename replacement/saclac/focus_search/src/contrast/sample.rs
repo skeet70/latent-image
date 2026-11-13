@@ -4,7 +4,7 @@
 //! what the search tells the lens bridge.
 
 use super::settings::Setting;
-use super::{Context, FocusStatus, Phase, PinnedStatus, Platform, TransitionTrace};
+use super::{Context, FocusStatus, Phase, PinnedStatus, Platform, ScanFrame, TransitionTrace};
 use xm1_saclac_controllers::search::{Direction, LensPosition, SearchStep, Travel};
 use xm1_saclac_interface::search::{BridgePhase, BridgeStatus};
 
@@ -109,19 +109,26 @@ pub(crate) struct Frame {
     pub parameter: u32,
     pub status_flag: u32,
     pub profile_class: u32,
+    /// The frame's lens position is taken from the scan drive while the refresh stands.
     pub corrects_position: bool,
     pub correction_source: i16,
-    pub corrected_position: LensPosition,
     pub correction_class: u32,
     /// The record word the debug display checks (0x74fa2c).
     pub record_mode: u32,
-    /// The record word +0x48: the peak search reads the scan pairs.
-    pub scan_channels: bool,
-    pub pinned_offset: u16,
+    /// The drive amount of a selected record.
     pub pinned_setting: u16,
     pub mark: u16,
     /// The intake record's word +0xc (0xfaab18).
     pub step_class: u32,
+    /// The settled near word; a peak search restarts when it moves.
+    pub watch: i16,
+    /// A scanning peak search may run.
+    pub scan_allowed: bool,
+    pub scan: ScanFrame,
+    /// The measurement snapshot's two level halfwords.
+    pub levels: [u16; 2],
+    /// The intake's copy of the recent-peak word.
+    pub scan_flag: u8,
 }
 
 impl Frame {
@@ -136,16 +143,27 @@ impl Frame {
             profile_class: 0,
             corrects_position: false,
             correction_source: 0,
-            corrected_position: LensPosition(0),
             correction_class: 0,
             record_mode: 0,
-            scan_channels: false,
-            pinned_offset: 0,
             pinned_setting: 0,
             mark: 0,
             step_class: 0,
+            watch: 0,
+            scan_allowed: false,
+            scan: ScanFrame { parameter_index: 0, stage_halves: [0; 2], current_lens: 0, stage_last: 0 },
+            levels: [0; 2],
+            scan_flag: 0,
         }
     }
+}
+
+/// The positions the scan drive gave the evaluated frame (0xf3edcc).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CorrectedPosition {
+    /// Where the frame was taken.
+    pub frame: LensPosition,
+    /// Where the drive was then.
+    pub drive: LensPosition,
 }
 
 /// What the next bridge request carries.
@@ -153,15 +171,16 @@ impl Frame {
 pub(crate) struct Bridge {
     pub speed: u32,
     pub window: [u16; 2],
-    pub scan_mark: u16,
+    /// How far a scan runs on after a frame.
+    pub lead: u16,
     pub lens_mode: u32,
     pub rate: u32,
     /// A peak search that evaluates while the lens moves.
     pub scanning: bool,
-    pub scan_state: u32,
-    /// Set when a transition enters peak search and the scan drive is not disabled.
-    pub scan_drive: bool,
-    pub scan_moved: u8,
+    pub scan: ScanState,
+    /// Set by each scanning sample after the one that planned the drive; while clear, a
+    /// scanning peak search asks nothing of the bridge.
+    pub scan_sampled: bool,
     /// The status of the bridge's newest report, until a direction search clears it.
     pub last_report: BridgeStatus,
 }
@@ -171,14 +190,51 @@ impl Bridge {
         Self {
             speed: 0,
             window: [0; 2],
-            scan_mark: 0,
+            lead: 0,
             lens_mode: 0,
             rate: 0,
             scanning: false,
-            scan_state: 0,
-            scan_drive: false,
-            scan_moved: 0,
+            scan: ScanState::Running,
+            scan_sampled: false,
             last_report: BridgeStatus::Moved,
+        }
+    }
+}
+
+/// Why a scanning peak search last kept or stopped its drive; the trace reports the code.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ScanState {
+    Running,
+    PassedWithoutRise,
+    Turned,
+    SelectionChanged,
+    FrameLate,
+    Peaked,
+    Bounded,
+    LevelJumped,
+    RecentPeak,
+    LensChanged,
+    Stopped,
+    Flagged,
+    SecondChannel,
+}
+
+impl ScanState {
+    pub(crate) const fn code(self) -> u32 {
+        match self {
+            Self::Running => 0,
+            Self::PassedWithoutRise => 1,
+            Self::Turned => 2,
+            Self::SelectionChanged => 3,
+            Self::FrameLate => 4,
+            Self::Peaked => 5,
+            Self::Bounded => 6,
+            Self::LevelJumped => 7,
+            Self::RecentPeak => 8,
+            Self::LensChanged => 9,
+            Self::Stopped => 10,
+            Self::Flagged => 11,
+            Self::SecondChannel => 12,
         }
     }
 }
@@ -348,7 +404,7 @@ impl Context {
 
     /// 0xf43d94: choose the channel the phase steps read, then ring the sample.
     pub(crate) fn choose_channel(&mut self, platform: &mut impl Platform) {
-        let [first, second] = if self.frame.scan_channels && self.phase == Phase::PeakSearch {
+        let [first, second] = if self.recent_peak && self.phase == Phase::PeakSearch {
             [self.values.scan_pairs[0], self.values.scan_pairs[1]]
         } else {
             [[self.values.combined[0], self.values.seconds[0]], [self.values.combined[1], self.values.seconds[1]]]
@@ -428,7 +484,7 @@ impl Context {
             });
         }
         self.phase = next;
-        self.bridge.scan_drive = kind == StageKind::PeakSearch && platform.setting(Setting::ScanDriveDisabled) != 1;
+        platform.request_scan_refresh(kind == StageKind::PeakSearch);
         let mut record = platform.stage();
         record.stage = kind.code();
         if kind != StageKind::PeakSearch {
@@ -443,7 +499,7 @@ impl Context {
             platform.trace_transition(TransitionTrace {
                 phase: next,
                 limits: [self.limits.low, self.limits.high],
-                marks: [self.frame.mark, self.bridge.scan_mark],
+                marks: [self.frame.mark, self.bridge.lead],
                 lens,
                 position: self.positions[2],
                 fit: self.search.fit,
@@ -592,7 +648,7 @@ impl Context {
     }
 
     /// 0xf3eaf0: a scanning peak search whose drive has not settled.
-    pub(crate) fn scan_in_motion(&self) -> bool { self.bridge.scanning && !matches!(self.bridge.scan_state, 0 | 2) }
+    pub(crate) fn scan_in_motion(&self) -> bool { self.bridge.scanning && !matches!(self.bridge.scan, ScanState::Running | ScanState::Turned) }
 
     /// 0xf3eb3c: a scanning peak search (or the monitor's) that needs no further request.
     pub(crate) fn scan_continues(&self) -> bool {
@@ -602,13 +658,13 @@ impl Context {
         if self.monitor.watched != 14 && self.monitor.active {
             return false;
         }
-        self.bridge.scanning && self.bridge.scan_moved != 1
+        self.bridge.scanning && !self.bridge.scan_sampled
     }
 
     /// 0xf3ec34: stop the scan drive.
-    pub(crate) fn stop_scan(&mut self) {
-        self.bridge.scan_drive = false;
-        self.bridge.scan_state = 10;
+    pub(crate) fn stop_scan(&mut self, platform: &mut impl Platform) {
+        platform.request_scan_refresh(false);
+        self.bridge.scan = ScanState::Stopped;
     }
 
     /// 0xf3ebd4.
