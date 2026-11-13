@@ -12,6 +12,8 @@ Reusable FujiMod state lives under `private-data/emulator-checkpoints/`. Its gue
 
 The shared post-boot API uses `post-boot-KEY/session.fujimod` and `post-boot-KEY/post-boot.json`. The record binds the identity, snapshot SHA-256 and saved guest instruction count. A per-key process lock serializes creation; publication is an atomic directory rename. A hit verifies both identity and snapshot digest before restoring. Runs record the returned key, snapshot digest, instruction boundary and hit/miss receipt. Observers attach after restoration; observations of startup itself remain from reset.
 
+The [full-system starting-state inventory](checkpoint-runs.md) classifies the Bazel run targets and command scripts. Saclac's cold-boot scenario observes startup; its other scenarios share the saved post-setup live-view boundary. Cached route reports omit startup traffic and state their observation boundary explicitly.
+
 ### RAM-push committed NAND lifecycle
 
 Initial sessions use `--adjustment-nand NAND` with an optional `--record-nand NAND` fixture. A power-cycle continuation instead uses `--committed-nand NAND --fresh-boot`, mutually exclusive with both seed flags. Full committed import replaces the NAND before instruction zero; it does not reapply adjustment or record fixtures. The boot and initialized-reset cache identities bind the full committed input digest separately from fixture digests.

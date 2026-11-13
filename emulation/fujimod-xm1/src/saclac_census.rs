@@ -18,7 +18,7 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const USAGE: &str = "saclac-census --run RUN --update STOCK_DAT --boot-rom ROM --sites SITES --scenario cold-boot|menu-route|half-press|shoot-without-lens|capture|playback|mode-dial [--steps STEPS] --output NEW_DIR";
+const USAGE: &str = "saclac-census --run RUN --update STOCK_DAT --boot-rom ROM --sites SITES --scenario cold-boot|menu-route|half-press|shoot-without-lens|capture|playback|mode-dial [--steps STEPS] [--checkpoints ROOT] --output NEW_DIR";
 const SITE_LABEL: &str = "saclac-site";
 const SITE_LIMIT: usize = 4096;
 const CONTEXT_LIMIT: usize = 1024;
@@ -559,6 +559,8 @@ struct Report<'a> {
     inputs: Vec<Binding>,
     limits: Limits,
     instructions: u64,
+    observation_start_instructions: u64,
+    executed_instructions: u64,
     counts: Option<[u64; 2]>,
     milestones: &'a [Milestone],
     menu_trace: &'a [MenuSample],
@@ -1131,6 +1133,9 @@ fn drive() -> Result<(), String> {
         census.milestones.clear();
         census.menu_trace.clear();
     }
+    let observation_start_instructions = machine.instructions();
+    let reused_instructions = checkpoint.as_ref().filter(|receipt| receipt.lookup == fujimod_xm1::checkpoint::CacheLookup::Hit)
+        .map_or(0, |receipt| receipt.record.instructions);
     machine.traces.bound_full_registers(NonZeroUsize::new(2).ok_or("zero hit bound")?);
     machine.traces.stop_labels = [SITE_LABEL.to_owned()].into_iter().collect();
     if let Some(dispatch) = &plan.dispatch {
@@ -1169,6 +1174,8 @@ fn drive() -> Result<(), String> {
             instructions: INSTRUCTION_LIMIT, watch_rows: WATCH_LIMIT, segment_instructions: SEGMENT_INSTRUCTIONS,
         },
         instructions: machine.instructions(),
+        observation_start_instructions,
+        executed_instructions: machine.instructions() - reused_instructions,
         counts: machine.session.board.instruction_counts().try_into().ok(),
         milestones: &census.milestones,
         menu_trace: &census.menu_trace,

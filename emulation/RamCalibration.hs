@@ -235,8 +235,8 @@ capture engine datSupplied nandSupplied output = do
       let bridge = (binary ++ ".runfiles") </> "_main/emulation/cardless-ram-push-bridge"
       pure (bridge, stagedDirectory staged,
         ["--profile", "firmware/x-m1/1.50/emulator-rec.json", "--installed-dat", stagedFirmwarePath,
-         "--adjustment-nand", nand, "--output", directory </> "bridge", "--ram-push-checkpoints", directory </> "checkpoints",
-         "--ui-conversion-profile", "declared-ui-cpu-fallback", "--fresh-boot"])
+         "--adjustment-nand", nand, "--output", directory </> "bridge", "--ram-push-checkpoints", resolve root "private-data/emulator-checkpoints/xm1-ram-push-cardless",
+         "--ui-conversion-profile", "declared-ui-cpu-fallback"])
   bracket (startEmulator executable working arguments (\_ -> pure (Nothing, ()))) (\(emulator, _, _) -> stopEmulator emulator) $ \(emulator, start, ()) -> do
     frame <- emulatorCapture emulator "post-ff80"
     withBinaryFile (directory </> "ram-00000000-05aa0000.bin") WriteMode $ \handle ->
