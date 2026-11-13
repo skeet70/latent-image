@@ -89,6 +89,7 @@ fn indirect_lens_drive_and_unclassified_requests_require_the_lens_contract() {
     use crate::{lens_effect, CalcOperation, ImgDcOperation, LensDcOperation, LensEffect, PeerOperation};
     assert_eq!(lens_effect(PeerOperation::ImgDc(ImgDcOperation::Request2e)), LensEffect::DriveThroughImageBridge);
     assert_eq!(lens_effect(PeerOperation::ImgDc(ImgDcOperation::Request2f)), LensEffect::DriveThroughImageBridge);
+    assert_eq!(lens_effect(PeerOperation::ImgDc(ImgDcOperation::Request44)), LensEffect::DriveThroughImageBridge);
     for request in [
         PeerOperation::LensDc(LensDcOperation::Request07),
         PeerOperation::LensDc(LensDcOperation::Request0c),
