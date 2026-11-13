@@ -18,6 +18,7 @@ pub mod s1;
 pub mod live_view;
 pub mod layers;
 pub mod live_profile;
+mod live_mirror;
 mod live_autofocus;
 pub mod live_statistics;
 pub mod live_statistics_profile;

@@ -48,6 +48,7 @@ impl LensControl for Fake {
     fn step(&mut self) -> u32 { panic!("the router's replies read no lens step") }
     fn channel(&mut self) -> (u32, u16) { panic!("the router's replies read no lens channel") }
     fn third_notice(&mut self) -> u32 { NOTICE }
+    fn configured_channel(&mut self) -> u32 { panic!("the router's replies read no configured channel") }
 }
 
 impl CommandParameters for Fake {

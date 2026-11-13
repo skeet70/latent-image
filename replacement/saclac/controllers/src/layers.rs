@@ -5,6 +5,7 @@
 
 use xm1_saclac_interface::stock::StockCallbackWord;
 use xm1_saclac_interface::{CommandKind, ParameterValue, RecordHandle};
+use xm1_saclac_profile_geometry::stock::{Parameters, StatusSnapshot};
 
 /// A profile-record field the controllers read or write. Its value means what the
 /// record's other readers make of it.
@@ -137,6 +138,14 @@ pub enum Field {
     LensConversion,
     /// The lens reference the target remap starts from.
     LensReference,
+    // The display mirrors' sources, each named for the display record field it fills.
+    DisplayMode,
+    DisplayModeFirst,
+    DisplayModeSecond,
+    DisplayModeByte,
+    DisplayScanIndex,
+    DisplayStatusByte,
+    DisplayOutput,
 }
 
 /// A profile word block the controllers copy whole.
@@ -268,7 +277,7 @@ pub(crate) fn clear_words<const N: usize>(profile: &mut impl ProfileRecord, reco
 
 /// What the profile geometry layer gives the live view.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GeometryValue { StartValue, SelectionMode, Adjustment }
+pub enum GeometryValue { StartValue, SelectionMode, Adjustment, ScanSelection, Format }
 
 /// The command whose parameters a geometry check compares with the configured view.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -305,16 +314,6 @@ pub trait Configuration {
     fn combine_lens_pair(&mut self, first: u32, second: u32, third: u32) -> u32;
 }
 
-/// The display-record mirror of the profile a live-view step refreshes.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Mirror {
-    Primary,
-    Configured,
-    Autofocus(AutofocusMirror),
-    Range,
-    Output,
-}
-
 /// The groups an autofocus change copies into the display record.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct AutofocusMirror {
@@ -337,11 +336,23 @@ impl AutofocusMirror {
     }
 }
 
-/// The profile geometry layer's display parameters and status.
+/// The profile geometry layer's display parameters and status, which the live view copies out,
+/// changes and hands back.
 pub trait DisplayRecords {
     fn reset(&mut self);
-    /// Copies the profile into the display parameters and status the mirror names.
-    fn mirror(&mut self, record: RecordHandle, mirror: Mirror);
+    fn parameters(&mut self) -> Parameters;
+    fn status(&mut self) -> StatusSnapshot;
+    fn apply_parameters(&mut self, parameters: &Parameters);
+    fn apply_status(&mut self, status: &StatusSnapshot);
+}
+
+/// What the display mirrors take from layers beside the profile record.
+pub trait MirrorSources {
+    /// The capture window for `mode` and the format ratio, when the pair has one.
+    fn capture_window(&mut self, mode: u32, ratio: u32) -> Option<[u32; 2]>;
+    /// A profile index as the display parameters store it.
+    fn collapse_index(&mut self, index: u32) -> u32;
+    fn linearize(&mut self, value: u32) -> u32;
 }
 
 /// The channel a measurement holds the display record mode on.
@@ -502,6 +513,8 @@ pub trait LensControl {
     fn channel(&mut self) -> (u32, u16);
     /// The last of the three notice words in the lens control block other tasks share.
     fn third_notice(&mut self) -> u32;
+    /// The lens's configuration channel; zero when it is not a configured channel.
+    fn configured_channel(&mut self) -> u32;
 }
 
 /// A lens drive's progress, which the LensDrive command's client receives with status 18.

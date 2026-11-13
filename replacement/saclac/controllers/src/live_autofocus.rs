@@ -4,8 +4,8 @@
 //! running view must restart, and refreshing what the change touched.
 
 use crate::layers::{
-    AutofocusMirror, Block, Change, Configuration, DisplayRecords, Field, Geometry, GeometryCheck, GeometryValue,
-    LensSlot, Mirror, ProfileRecord, Publication, Restarting, SharedHelpers,
+    AutofocusMirror, Block, Change, Configuration, Field, Geometry, GeometryCheck, LensSlot, ProfileRecord, Publication,
+    Restarting, SharedHelpers,
 };
 use crate::live_profile::{Layers, LiveProfile};
 use crate::live_view::Application;
@@ -141,9 +141,6 @@ fn decide(changes: &Changes, property: bool, restore: bool, record: RecordHandle
 
 fn mirror(state: &mut LiveProfile, changes: &Changes, record: RecordHandle, layers: &mut impl Layers) {
     let unselected = read(layers, record, Field::Selection) == 0;
-    if changes.selection_mode {
-        state.set_selection_mode(layers.geometry().value(record, GeometryValue::SelectionMode));
-    }
     let mirror = AutofocusMirror {
         selection_mode: changes.selection_mode,
         resource: changes.resource,
@@ -155,14 +152,14 @@ fn mirror(state: &mut LiveProfile, changes: &Changes, record: RecordHandle, laye
         exposure: changes.exposure,
         geometry: changes.view_geometry,
     };
-    if mirror.any() {
-        layers.display().mirror(record, Mirror::Autofocus(mirror));
+    if let Some(mode) = crate::live_mirror::autofocus(mirror, record, layers) {
+        state.set_selection_mode(mode);
     }
 }
 
 fn refresh(changes: &Changes, parameters: Parameters<'_>, record: RecordHandle, layers: &mut impl Layers) {
-    if changes.range { layers.display().mirror(record, Mirror::Range); }
-    if changes.output { layers.display().mirror(record, Mirror::Output); }
+    if changes.range { crate::live_mirror::range(record, layers); }
+    if changes.output { crate::live_mirror::output(record, layers); }
     if changes.lens { layers.configuration().publish(record, Publication::Mode); }
     if changes.selection_mode {
         for publication in [Publication::SelectionMode, Publication::Position, Publication::Range] {

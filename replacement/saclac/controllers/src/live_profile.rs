@@ -5,7 +5,7 @@
 
 use crate::layers::{
     clear_words, Block, Change, Configuration, DisplayRecords, Field, Geometry, GeometryCheck, GeometryFlag, GeometryValue,
-    Mirror, Pipeline, ProfileRecord, RecordChannel, RecordMode, SharedHelpers,
+    LensControl, MirrorSources, Pipeline, ProfileRecord, RecordChannel, RecordMode, SharedHelpers,
 };
 use crate::live_view::{
     Application, ChangeCode, Condition, Effect, MotionSetting, Preparation, ReplyStatus, RestoreOptions, StopMode,
@@ -158,6 +158,8 @@ pub trait Layers {
     type Source: ConfigurationSource;
     type ImgDc: ImgDc;
     type Replies: Replies;
+    type Lens: LensControl;
+    type Sources: MirrorSources;
 
     fn profile(&mut self) -> &mut Self::Profile;
     fn geometry(&mut self) -> &mut Self::Geometry;
@@ -169,6 +171,8 @@ pub trait Layers {
     fn source(&mut self) -> &mut Self::Source;
     fn imgdc(&mut self) -> &mut Self::ImgDc;
     fn replies(&mut self) -> &mut Self::Replies;
+    fn lens(&mut self) -> &mut Self::Lens;
+    fn mirror_sources(&mut self) -> &mut Self::Sources;
 }
 
 /// The words of the suspension block and the one the suspend marks.
@@ -289,8 +293,7 @@ impl LiveProfile {
             K::Command02 => {
                 self.primary_applied = true;
                 select(record, word(parameters, 2), layers);
-                layers.display().mirror(record, Mirror::Primary);
-                self.selection_mode = layers.geometry().value(record, GeometryValue::SelectionMode);
+                self.selection_mode = crate::live_mirror::primary(record, layers);
                 Application::Applied
             }
             K::Command03 => {
@@ -569,12 +572,13 @@ impl LiveProfile {
             SelectionClass::Selected
         };
         let offset = layers.source().take_offset(record);
-        layers.display().mirror(record, Mirror::Configured);
-        self.selection_mode = selection_mode;
-        Configured {
+        let configured = Configured {
             values, selection, selection_mode, selection_class, refresh, offset, motion, active, view_mode, direct_start,
             prepared: self.prepared,
-        }
+        };
+        crate::live_mirror::configured(&configured, record, layers);
+        self.selection_mode = selection_mode;
+        configured
     }
 }
 
