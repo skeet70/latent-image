@@ -4,6 +4,7 @@
 pub mod focus_profile;
 pub mod focus_reuse;
 pub mod scene_policy;
+pub mod scene_settings;
 
 #[cfg(test)]
 mod focus_profile_tests;
@@ -11,3 +12,5 @@ mod focus_profile_tests;
 mod focus_reuse_tests;
 #[cfg(test)]
 mod scene_policy_tests;
+#[cfg(test)]
+mod scene_settings_tests;

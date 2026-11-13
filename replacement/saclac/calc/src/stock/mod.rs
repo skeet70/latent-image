@@ -5,4 +5,5 @@
 pub mod dump;
 pub mod property;
 pub mod record;
+pub mod scene;
 pub mod shared;
