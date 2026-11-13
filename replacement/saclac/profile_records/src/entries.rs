@@ -6,12 +6,11 @@
 use xm1_saclac_interface::RecordHandle;
 
 use crate::image::RecordImage;
+use crate::values::MeasurementSelection;
 
 /// Header bytes whose only reader is a stock accessor other tasks share.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SharedHeaderByte {
-    /// 0 none, 1 the record (FocusRound `ProfileSelection`).
-    MeasurementSelection,
     At31,
     At46,
     At47,
@@ -38,8 +37,10 @@ pub enum Grants {
 
 pub trait StockEntries {
     /// Read under group 0 with the view's record selection.
+    fn measurement_selection(&mut self, handle: RecordHandle) -> MeasurementSelection;
+    /// Read under group 0 with the view's record selection.
     fn header_byte(&mut self, handle: RecordHandle, byte: SharedHeaderByte) -> u8;
-    /// Read without a gate.
+    /// The bytes of `stock::shared::group_36::AT_0840`, read without a gate.
     fn lens_designation(&mut self, handle: RecordHandle) -> [u8; 28];
     /// Copies `staged`'s header into the handle's record and clears that record's change masks,
     /// when the handle may write group 0.

@@ -5,6 +5,7 @@
 
 use crate::field::{ChangeBank, ChangeBit, RecordArray, RecordField, RecordRead, RecordWrite, Unread, Unwritten};
 use crate::handle::AccessGroup;
+use crate::values::{IntervalTracking, MeasurementSelection};
 
 /// Access group 0. The change-tracked header the staged record is applied to field by field, and the record
 /// words around it.
@@ -62,9 +63,9 @@ pub mod group_00 {
     /// Read by 0x74e718; written by 0x74e75c.
     pub const AT_002E: RecordField<u16> = RecordField::grouped(0x2e, 0, Some(ChangeBit::new(ChangeBank::Second, 15)));
 
-    /// 0 none, 1 the record (FocusRound `ProfileSelection`).
+    /// FocusRound `ProfileSelection`.
     /// Written by 0x74e604.
-    pub const MEASUREMENT_SELECTION: RecordField<u8, Unread, RecordWrite> = RecordField::new(0x30, Unread, RecordWrite::Granted(AccessGroup::at(0)), Some(ChangeBit::new(ChangeBank::First, 0)));
+    pub const MEASUREMENT_SELECTION: RecordField<MeasurementSelection, Unread, RecordWrite> = RecordField::new(0x30, Unread, RecordWrite::Granted(AccessGroup::at(0)), Some(ChangeBit::new(ChangeBank::First, 0)));
 
     /// Written by 0x74e6d4.
     pub const AT_0031: RecordField<u8, Unread, RecordWrite> = RecordField::new(0x31, Unread, RecordWrite::Granted(AccessGroup::at(0)), Some(ChangeBit::new(ChangeBank::First, 1)));
@@ -213,9 +214,9 @@ pub mod group_00 {
     /// Written by 0x74fca8.
     pub const AT_0061: RecordField<u8, Unread, RecordWrite> = RecordField::new(0x61, Unread, RecordWrite::Granted(AccessGroup::at(0)), Some(ChangeBit::new(ChangeBank::First, 42)));
 
-    /// What the profile does with the frame-interval history (FocusRound `IntervalTracking`).
+    /// FocusRound `IntervalTracking`.
     /// Read by 0x750474; written by 0x7504b8.
-    pub const INTERVAL_TRACKING: RecordField<u8> = RecordField::grouped(0x62, 0, Some(ChangeBit::new(ChangeBank::Second, 0)));
+    pub const INTERVAL_TRACKING: RecordField<IntervalTracking> = RecordField::grouped(0x62, 0, Some(ChangeBit::new(ChangeBank::Second, 0)));
 
     /// Written by 0x750430.
     pub const AT_0063: RecordField<u8, Unread, RecordWrite> = RecordField::new(0x63, Unread, RecordWrite::Granted(AccessGroup::at(0)), Some(ChangeBit::new(ChangeBank::First, 39)));
@@ -803,11 +804,13 @@ pub enum Tracked {
     Bytes4(RecordField<[u8; 4], Unread, RecordWrite>),
     Bytes6(RecordField<[u8; 6], Unread, RecordWrite>),
     Bytes8(RecordField<[u8; 8], Unread, RecordWrite>),
+    Selection(RecordField<MeasurementSelection, Unread, RecordWrite>),
+    IntervalTracking(RecordField<IntervalTracking, Unread, RecordWrite>),
 }
 
 /// Every change-tracked field, in the order 0x759250 tests its bit and writes it.
-pub const CHANGE_TRACKED: [Tracked; 84] = [
-    Tracked::U8(group_00::MEASUREMENT_SELECTION.writer()),
+pub static CHANGE_TRACKED: [Tracked; 84] = [
+    Tracked::Selection(group_00::MEASUREMENT_SELECTION.writer()),
     Tracked::U8(group_00::AT_0031.writer()),
     Tracked::U16(group_00::AT_002E.writer()),
     Tracked::U8(group_00::AT_0032.writer()),
@@ -877,7 +880,7 @@ pub const CHANGE_TRACKED: [Tracked; 84] = [
     Tracked::U16(group_00::AT_002C.writer()),
     Tracked::U8(group_00::AT_0068.writer()),
     Tracked::U8(group_00::AT_006B.writer()),
-    Tracked::U8(group_00::INTERVAL_TRACKING.writer()),
+    Tracked::IntervalTracking(group_00::INTERVAL_TRACKING.writer()),
     Tracked::U8(group_00::AT_006A.writer()),
     Tracked::U8(group_00::AT_006C.writer()),
     Tracked::U8(group_00::AT_006D.writer()),

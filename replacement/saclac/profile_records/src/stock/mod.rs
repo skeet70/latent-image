@@ -9,13 +9,17 @@ use xm1_saclac_interface::stock::{record_handle_from_a2, record_handle_word};
 use xm1_saclac_interface::RecordHandle;
 
 use crate::entries::{Grants, OpenMode, SharedHeaderByte, StockEntries};
+use crate::field::Value;
 use crate::handle::{Handle, Scope, Serial, Slot, Tag};
 use crate::image::RecordImage;
-use crate::memory::{Location, Memory};
+use crate::memory::{Block, Location, Memory};
+use crate::values::MeasurementSelection;
 
 const REGISTRY: usize = 0x915d38;
 const RECORDS: usize = 0x96ebd0;
 const SHARED: usize = 0x91904c;
+
+const _: () = assert!(REGISTRY % 4 == 0 && RECORDS % 4 == 0 && layout::RECORD_BYTES % 4 == 0 && SHARED % 4 == 0);
 
 /// The 43 grant bytes saclac opens its slots with (0xf14a50).
 const SACLAC_GRANTS: usize = 0x81aa6c;
@@ -49,43 +53,30 @@ pub fn record_handle(handle: Handle) -> RecordHandle {
     record_handle_from_a2(word)
 }
 
-const fn address(at: Location) -> usize {
-    match at {
-        Location::Registry(offset) => REGISTRY + offset as usize,
-        Location::Record(record, offset) => RECORDS + layout::RECORD_BYTES * record.index() + offset as usize,
-        Location::Shared(offset) => SHARED + offset as usize,
-    }
+const fn address<T: Value>(at: Location<T>) -> usize {
+    let base = match at.block() {
+        Block::Registry => REGISTRY,
+        Block::Record(record) => RECORDS + layout::RECORD_BYTES * record.index(),
+        Block::Shared => SHARED,
+    };
+    base + at.offset() as usize
 }
 
 /// The stock objects, which other tasks access concurrently; every access is volatile.
 pub struct StockMemory;
 
 impl Memory for StockMemory {
-    fn read_u8(&self, at: Location) -> u8 { unsafe { core::ptr::read_volatile(address(at) as *const u8) } }
+    fn read_u8(&self, at: Location<u8>) -> u8 { unsafe { core::ptr::read_volatile(address(at) as *const u8) } }
 
-    fn read_u16(&self, at: Location) -> u16 { unsafe { core::ptr::read_volatile(address(at) as *const u16) } }
+    fn read_u16(&self, at: Location<u16>) -> u16 { unsafe { core::ptr::read_volatile(address(at) as *const u16) } }
 
-    fn read_u32(&self, at: Location) -> u32 { unsafe { core::ptr::read_volatile(address(at) as *const u32) } }
+    fn read_u32(&self, at: Location<u32>) -> u32 { unsafe { core::ptr::read_volatile(address(at) as *const u32) } }
 
-    fn read_bytes(&self, at: Location, into: &mut [u8]) {
-        let base = address(at) as *const u8;
-        for (index, byte) in into.iter_mut().enumerate() {
-            *byte = unsafe { core::ptr::read_volatile(base.add(index)) };
-        }
-    }
+    fn write_u8(&mut self, at: Location<u8>, value: u8) { unsafe { core::ptr::write_volatile(address(at) as *mut u8, value) } }
 
-    fn write_u8(&mut self, at: Location, value: u8) { unsafe { core::ptr::write_volatile(address(at) as *mut u8, value) } }
+    fn write_u16(&mut self, at: Location<u16>, value: u16) { unsafe { core::ptr::write_volatile(address(at) as *mut u16, value) } }
 
-    fn write_u16(&mut self, at: Location, value: u16) { unsafe { core::ptr::write_volatile(address(at) as *mut u16, value) } }
-
-    fn write_u32(&mut self, at: Location, value: u32) { unsafe { core::ptr::write_volatile(address(at) as *mut u32, value) } }
-
-    fn write_bytes(&mut self, at: Location, bytes: &[u8]) {
-        let base = address(at) as *mut u8;
-        for (index, byte) in bytes.iter().enumerate() {
-            unsafe { core::ptr::write_volatile(base.add(index), *byte) };
-        }
-    }
+    fn write_u32(&mut self, at: Location<u32>, value: u32) { unsafe { core::ptr::write_volatile(address(at) as *mut u32, value) } }
 }
 
 /// The stock entries, entered at their X-M1 1.50 addresses.
@@ -93,7 +84,6 @@ pub struct Stock;
 
 const fn header_byte_entry(byte: SharedHeaderByte) -> usize {
     match byte {
-        SharedHeaderByte::MeasurementSelection => 0x74e5c0,
         SharedHeaderByte::At31 => 0x74e648,
         SharedHeaderByte::At46 => 0x74f9a4,
         SharedHeaderByte::At47 => 0x74fa2c,
@@ -101,6 +91,8 @@ const fn header_byte_entry(byte: SharedHeaderByte) -> usize {
         SharedHeaderByte::At63 => 0x7503ec,
     }
 }
+
+const MEASUREMENT_SELECTION: usize = 0x74e5c0;
 
 const LENS_DESIGNATION: usize = 0x758c68;
 const REPLACE_HEADER: usize = 0x74e074;
@@ -124,21 +116,29 @@ const fn grant_table(grants: Grants) -> usize {
 }
 
 impl StockEntries for Stock {
+    fn measurement_selection(&mut self, handle: RecordHandle) -> MeasurementSelection {
+        let entry: extern "C" fn(u32) -> u32 = unsafe { core::mem::transmute(MEASUREMENT_SELECTION as *const ()) };
+        MeasurementSelection::from_byte(entry(record_handle_word(handle)) as u8)
+    }
+
     fn header_byte(&mut self, handle: RecordHandle, byte: SharedHeaderByte) -> u8 {
         let entry: extern "C" fn(u32) -> u32 = unsafe { core::mem::transmute(header_byte_entry(byte) as *const ()) };
         entry(record_handle_word(handle)) as u8
     }
 
     fn lens_designation(&mut self, handle: RecordHandle) -> [u8; 28] {
-        let entry: extern "C" fn(u32, *mut [u8; 28]) = unsafe { core::mem::transmute(LENS_DESIGNATION as *const ()) };
-        let mut designation = [0; 28];
+        /// 0x758c68 stores it with `stm`.
+        #[repr(C, align(4))]
+        struct Designation([u8; 28]);
+        let entry: extern "C" fn(u32, *mut Designation) = unsafe { core::mem::transmute(LENS_DESIGNATION as *const ()) };
+        let mut designation = Designation([0; 28]);
         entry(record_handle_word(handle), &mut designation);
-        designation
+        designation.0
     }
 
     fn replace_header(&mut self, handle: RecordHandle, staged: &RecordImage) {
-        let entry: extern "C" fn(u32, *const [u8; layout::RECORD_BYTES]) = unsafe { core::mem::transmute(REPLACE_HEADER as *const ()) };
-        entry(record_handle_word(handle), staged.bytes());
+        let entry: extern "C" fn(u32, *const RecordImage) = unsafe { core::mem::transmute(REPLACE_HEADER as *const ()) };
+        entry(record_handle_word(handle), staged);
     }
 
     fn open(&mut self, mode: OpenMode, grants: Grants) -> RecordHandle {

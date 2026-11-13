@@ -4,8 +4,11 @@
 //! under, with the accessors each one replaces. `AT_` names are offsets whose meaning no caller
 //! has shown yet.
 
+use xm1_saclac_interface::stock::StockCallbackWord;
+
 use crate::field::{SharedArray, SharedField, SharedRead, SharedWrite, Unread};
 use crate::handle::AccessGroup;
+use crate::values::{CaptureBuffer, OfferedMeasurements, StatisticsInUse, WindowPosition, WindowStatus};
 
 /// Access group 14. The focus result.
 pub mod group_14 {
@@ -72,9 +75,9 @@ pub mod group_19 {
 pub mod group_20 {
     use super::*;
 
-    /// The measurement kinds offered; 0 offers none (FocusRound `offered`).
+    /// FocusRound `offered`.
     /// Read by 0x7569a4; written by 0x7569c4.
-    pub const OFFERED_MEASUREMENTS: SharedField<u32> = SharedField::grouped(0x13c, 20);
+    pub const OFFERED_MEASUREMENTS: SharedField<OfferedMeasurements> = SharedField::grouped(0x13c, 20);
 
     /// Read by 0x7569ec; written by 0x756a0c.
     pub const AT_0140: SharedField<u32> = SharedField::grouped(0x140, 20);
@@ -88,13 +91,13 @@ pub mod group_20 {
     /// Read by 0x756ac4; written by 0x756ae4.
     pub const AT_014C: SharedField<u32> = SharedField::grouped(0x14c, 20);
 
-    /// FocusRound `StatisticsInUse`: bit 0 window, bit 1 image job.
+    /// FocusRound `StatisticsInUse`.
     /// Read by 0x756b0c; written by 0x756b2c.
-    pub const STATISTICS_IN_USE: SharedField<u32> = SharedField::grouped(0x150, 20);
+    pub const STATISTICS_IN_USE: SharedField<StatisticsInUse> = SharedField::grouped(0x150, 20);
 
-    /// The buffer measurement captures go to; the round clears it on reset.
+    /// The round detaches it on reset.
     /// Read by 0x756b54; written by 0x756b74.
-    pub const CAPTURE_BUFFER: SharedField<u32> = SharedField::grouped(0x154, 20);
+    pub const CAPTURE_BUFFER: SharedField<Option<CaptureBuffer>> = SharedField::grouped(0x154, 20);
 
     /// Read by 0x756b9c; written by 0x756bbc.
     pub const AT_0158: SharedField<u32> = SharedField::grouped(0x158, 20);
@@ -107,7 +110,7 @@ pub mod group_20 {
 
     /// The image job's record callback (FocusRound).
     /// Read by 0x756c74; written by 0x756c94.
-    pub const IMAGE_CALLBACK: SharedField<u32> = SharedField::grouped(0x164, 20);
+    pub const IMAGE_CALLBACK: SharedField<StockCallbackWord> = SharedField::grouped(0x164, 20);
 
     /// Read by 0x756d04; written by 0x756d24.
     pub const AT_016C: SharedField<u32> = SharedField::grouped(0x16c, 20);
@@ -343,9 +346,9 @@ pub mod group_27 {
     /// Written by 0x757fc8.
     pub const AT_0730: SharedField<u32, Unread, SharedWrite> = SharedField::new(0x730, Unread, SharedWrite::Granted(AccessGroup::at(27)));
 
-    /// The latest window calculation status (FocusRound `WindowStatus`).
+    /// FocusRound `WindowStatus`.
     /// Read by 0x7580ec; written by 0x75810c.
-    pub const WINDOW_STATUS: SharedField<u32> = SharedField::grouped(0x734, 27);
+    pub const WINDOW_STATUS: SharedField<WindowStatus> = SharedField::grouped(0x734, 27);
 
     /// Read by 0x758134; written by 0x758154.
     pub const AT_0738: SharedField<u32> = SharedField::grouped(0x738, 27);
@@ -368,9 +371,9 @@ pub mod group_27 {
     /// Read by 0x7582c0; written by 0x758300.
     pub const AT_07EC: SharedField<[u8; 40]> = SharedField::grouped(0x7ec, 27);
 
-    /// FocusRound `WindowPosition`, two halfwords.
+    /// FocusRound `WindowPosition`.
     /// Read by 0x75817c; written by 0x7581b4.
-    pub const WINDOW_POSITION: SharedField<u32> = SharedField::grouped(0x838, 27);
+    pub const WINDOW_POSITION: SharedField<WindowPosition> = SharedField::grouped(0x838, 27);
 }
 
 /// Access group 29.
@@ -409,7 +412,7 @@ pub mod group_35 {
 pub mod group_36 {
     use super::*;
 
-    /// Written by 0x758c34.
+    /// Written by 0x758c34; read through `StockEntries::lens_designation` (0x758c68).
     pub const AT_0840: SharedField<[u8; 28], Unread, SharedWrite> = SharedField::new(0x840, Unread, SharedWrite::Granted(AccessGroup::at(36)));
 }
 

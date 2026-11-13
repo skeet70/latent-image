@@ -7,7 +7,7 @@ use xm1_saclac_interface::RecordHandle;
 use crate::field::{ChangeBank, ChangeBit, ChangeSet, Index, RecordArray, RecordField, RecordRead, RecordWrite, SharedArray, SharedField, SharedRead, SharedWrite, Unread, Value};
 use crate::handle::{AccessGroup, Handle};
 use crate::image::RecordImage;
-use crate::memory::{Location, Memory, RecordIndex};
+use crate::memory::{Block, Location, Memory, RecordIndex};
 use crate::stock::{self, layout, record};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -31,7 +31,7 @@ impl<M: Memory> ProfileRecords<M> {
 
     /// The record every handle without its own grant reads.
     pub fn selected(&self) -> Result<RecordIndex, Refusal> {
-        let word = self.memory.read_u32(Location::Registry(layout::SELECTED));
+        let word = self.memory.read_u32(Location::new(Block::Registry, layout::SELECTED));
         match word {
             0 => Ok(RecordIndex::First),
             1 => Ok(RecordIndex::Second),
@@ -41,7 +41,7 @@ impl<M: Memory> ProfileRecords<M> {
 
     /// The handle's own record, or the selected one when its slot names neither.
     fn slot_record(&self, handle: Handle) -> Result<RecordIndex, Refusal> {
-        match self.memory.read_u32(Location::Registry(layout::slot_record(handle.slot))) {
+        match self.memory.read_u32(Location::new(Block::Registry, layout::slot_record(handle.slot))) {
             0 => Ok(RecordIndex::First),
             1 => Ok(RecordIndex::Second),
             _ => self.selected(),
@@ -49,11 +49,11 @@ impl<M: Memory> ProfileRecords<M> {
     }
 
     fn is_open(&self, handle: Handle) -> bool {
-        self.memory.read_u32(Location::Registry(layout::slot_serial(handle.slot))) == u32::from(handle.serial.get())
+        self.memory.read_u32(Location::new(Block::Registry, layout::slot_serial(handle.slot))) == u32::from(handle.serial.get())
     }
 
     fn grant(&self, handle: Handle, group: AccessGroup) -> u8 {
-        self.memory.read_u8(Location::Registry(layout::slot_grant(handle.slot, group)))
+        self.memory.read_u8(Location::new(Block::Registry, layout::slot_grant(handle.slot, group)))
     }
 
     pub fn may_read(&self, handle: RecordHandle, group: AccessGroup) -> bool {
@@ -93,13 +93,13 @@ impl<M: Memory> ProfileRecords<M> {
 
     pub fn read<T: Value, W>(&self, handle: RecordHandle, field: &RecordField<T, RecordRead, W>) -> Result<T, Refusal> {
         let record = self.read_record(handle, field.read.0)?;
-        Ok(T::load(&self.memory, Location::Record(record, field.offset)))
+        Ok(T::load(&self.memory, Location::new(Block::Record(record), field.offset)))
     }
 
     /// Stores the value, then sets the field's change bit in the same record.
     pub fn write<T: Value, R>(&mut self, handle: RecordHandle, field: &RecordField<T, R, RecordWrite>, value: T) -> Result<(), Refusal> {
         let record = self.write_record(handle, field.write)?;
-        value.store(&mut self.memory, Location::Record(record, field.offset));
+        value.store(&mut self.memory, Location::new(Block::Record(record), field.offset));
         if let Some(change) = field.change {
             self.mark_changed(record, change);
         }
@@ -117,7 +117,7 @@ impl<M: Memory> ProfileRecords<M> {
     pub fn read_shared<T: Value, W>(&self, handle: RecordHandle, field: &SharedField<T, SharedRead, W>) -> Result<T, Refusal> {
         match field.read {
             SharedRead::Requires(group) if !self.may_write(handle, group) => Err(Refusal::NotGranted),
-            _ => Ok(T::load(&self.memory, Location::Shared(field.offset))),
+            _ => Ok(T::load(&self.memory, Location::new(Block::Shared, field.offset))),
         }
     }
 
@@ -125,7 +125,7 @@ impl<M: Memory> ProfileRecords<M> {
         match field.write {
             SharedWrite::Granted(group) if !self.may_write(handle, group) => Err(Refusal::NotGranted),
             _ => {
-                value.store(&mut self.memory, Location::Shared(field.offset));
+                value.store(&mut self.memory, Location::new(Block::Shared, field.offset));
                 Ok(())
             }
         }
@@ -141,15 +141,15 @@ impl<M: Memory> ProfileRecords<M> {
 
     fn change_mask(&self, record: RecordIndex, bank: ChangeBank) -> u64 {
         let at = layout::change_mask(bank);
-        let low = self.memory.read_u32(Location::Record(record, at));
-        let high = self.memory.read_u32(Location::Record(record, at + 4));
+        let low = self.memory.read_u32(Location::new(Block::Record(record), at));
+        let high = self.memory.read_u32(Location::new(Block::Record(record), at + 4));
         u64::from(high) << 32 | u64::from(low)
     }
 
     fn store_change_mask(&mut self, record: RecordIndex, bank: ChangeBank, mask: u64) {
         let at = layout::change_mask(bank);
-        self.memory.write_u32(Location::Record(record, at), mask as u32);
-        self.memory.write_u32(Location::Record(record, at + 4), (mask >> 32) as u32);
+        self.memory.write_u32(Location::new(Block::Record(record), at), mask as u32);
+        self.memory.write_u32(Location::new(Block::Record(record), at + 4), (mask >> 32) as u32);
     }
 
     fn mark_changed(&mut self, record: RecordIndex, change: ChangeBit) {
@@ -170,16 +170,18 @@ impl<M: Memory> ProfileRecords<M> {
         let record = self.read_record(handle, layout::HEADER_GROUP)?;
         self.store_change_mask(record, ChangeBank::First, 0);
         self.store_change_mask(record, ChangeBank::Second, 0);
-        for tracked in record::CHANGE_TRACKED {
+        for tracked in &record::CHANGE_TRACKED {
             let applied = match tracked {
-                record::Tracked::U8(field) => self.apply(handle, staged, &field),
-                record::Tracked::U16(field) => self.apply(handle, staged, &field),
-                record::Tracked::I8(field) => self.apply(handle, staged, &field),
-                record::Tracked::I16(field) => self.apply(handle, staged, &field),
-                record::Tracked::U32(field) => self.apply(handle, staged, &field),
-                record::Tracked::Bytes4(field) => self.apply(handle, staged, &field),
-                record::Tracked::Bytes6(field) => self.apply(handle, staged, &field),
-                record::Tracked::Bytes8(field) => self.apply(handle, staged, &field),
+                record::Tracked::U8(field) => self.apply(handle, staged, field),
+                record::Tracked::U16(field) => self.apply(handle, staged, field),
+                record::Tracked::I8(field) => self.apply(handle, staged, field),
+                record::Tracked::I16(field) => self.apply(handle, staged, field),
+                record::Tracked::U32(field) => self.apply(handle, staged, field),
+                record::Tracked::Bytes4(field) => self.apply(handle, staged, field),
+                record::Tracked::Bytes6(field) => self.apply(handle, staged, field),
+                record::Tracked::Bytes8(field) => self.apply(handle, staged, field),
+                record::Tracked::Selection(field) => self.apply(handle, staged, field),
+                record::Tracked::IntervalTracking(field) => self.apply(handle, staged, field),
             };
             match applied {
                 Err(Refusal::NotGranted) | Ok(()) => {}

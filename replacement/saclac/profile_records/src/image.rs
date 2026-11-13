@@ -6,6 +6,7 @@ use crate::field::{ChangeBank, ChangeBit, ChangeSet, RecordField, Value};
 use crate::stock::layout::{self, RECORD_BYTES};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[repr(C, align(4))]
 pub struct RecordImage {
     bytes: [u8; RECORD_BYTES],
 }
