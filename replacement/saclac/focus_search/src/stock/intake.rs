@@ -4,7 +4,7 @@
 
 use super::{half, word};
 use crate::contrast::LensIdentity;
-use crate::intake::FrameSnapshot;
+use crate::intake::{FrameSnapshot, Zone};
 
 /// The bytes 0xfea7ac(1) copies into the intake's frame (0xff6f94).
 pub const FRAME_SNAPSHOT_BYTES: usize = 0x5c4;
@@ -19,6 +19,7 @@ pub fn frame_snapshot(bytes: &[u8; FRAME_SNAPSHOT_BYTES]) -> FrameSnapshot {
         extent: pair(0x0dc),
         timing: word(bytes, 0x0ec),
         step: word(bytes, 0x0f8),
+        zone: Zone(word(bytes, 0x0f4)),
         levels: [half(bytes, 0x0fc), half(bytes, 0x0fe)],
         adjustment: word(bytes, 0x104),
         level_offset: half(bytes, 0x108) as i16,
