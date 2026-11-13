@@ -60,7 +60,6 @@ SECTIONS {
   /DISCARD/ : { *(.ARM.exidx*) *(.ARM.extab*) *(.eh_frame*) *(.ARM.attributes) *(.note*) *(.comment*) *(.debug*) *(.llvm_addrsig) }
 }
 ASSERT(SIZEOF(.data) == 0 && SIZEOF(.bss) == 0, "custom settings has writable statics")
-ASSERT(SIZEOF(.compiler_builtins) == 0, "custom settings links compiler-builtins")
 ASSERT(SIZEOF(.text) <= 0x10000, "custom settings carrier overflow")
 ASSERT(settings_custom_prepare_entry == 0x6a8484, "custom prepare moved")
 ASSERT(settings_custom_check_entry == 0x6a84d4, "custom check moved")

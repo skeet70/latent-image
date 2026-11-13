@@ -6,6 +6,8 @@
 
 [`property_service/`](property_service/) provides the classifier, table generator, Rust service, artifact admission, stager and native oracle. The [build declarations](property_service/BUILD.bazel) name its artifacts and controls. Generated encoding is defined by the [classification/generation code](property_service/Replacement/PropertyService/), not a second hand-maintained property table here.
 
+Custom-settings images may link memory intrinsics from the pinned compiler-builtins archive. Their linker still rejects unresolved symbols, writable statics and a text carrier larger than 64 KiB.
+
 ### Optional recipe producer source
 
 The current-base source port adds `RecipeArtifact`, `RecipeEditNative`, `RecipeEditOracle` and `property_service/recipe.bzl`. The canonical property image remains the default build entry. Recipe builds retain the current Settings core, public getter/setter entries, ROM defaults, storage boundaries, header model and defect controls. Only recipe host ids `0x267..0x26f` bypass ordinary field dispatch: getters pass host-minus-one to the package getter and return its stored code unchanged; setters return zero without changing storage.
