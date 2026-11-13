@@ -4,8 +4,9 @@
 //! enabling and disabling stages, resetting a transform bank, and programming a caller's region,
 //! parameter and geometry blocks into the units.
 //!
-//! Stock programs some groups without holding their unit: flag 0x400 of 0xd9ea08 and 0xd9f828
-//! (processing), flags 0x2000 (processing) and 0x4000 (input) of 0xd9fd54. Here they hold it.
+//! Suspected stock defect, kept: flag 0x400 of 0xd9ea08 and 0xd9f828 programs the processing
+//! unit, and flags 0x2000 and 0x4000 of 0xd9fd54 the processing and input units, without holding
+//! them (unit masks 0xfc at 0xd9ea50 and 0xd9f874, 0xb at 0xd9fd88).
 
 /// The pipeline units a stage operation holds while it programs them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -220,64 +221,72 @@ pub trait ImageStages {
     fn load_transform_table(&mut self, session: &Self::Session, table: &[u32; 31], bank: Bank) -> i32;
     /// 0x66049c.
     fn reset_input_unit(&mut self) -> i32;
+    /// The record stock passes for `unit` when the operation does not hold it: `handle` as the
+    /// client word and a session word the unit's operations do not read (0x685298, 0x68634c,
+    /// 0x686084, 0x660084).
+    fn unheld(&self, unit: Unit, handle: u32) -> Self::Session;
 }
 
-/// The units an operation holds, released in the order they were taken.
-struct Held<S: ImageStages, const N: usize> {
-    sessions: [Option<(Unit, S::Session)>; N],
+struct Record<S: ImageStages> {
+    session: S::Session,
+    held: bool,
 }
 
-impl<S: ImageStages, const N: usize> Held<S, N> {
-    /// Takes each unit whose mask meets `flags`, in order.
-    fn take(stages: &mut S, handle: u32, flags: u32, units: [(Unit, u32); N]) -> Self {
-        Self { sessions: units.map(|(unit, mask)| (flags & mask != 0).then(|| (unit, stages.acquire(unit, handle).1))) }
+impl<S: ImageStages> Record<S> {
+    fn take(stages: &mut S, unit: Unit, handle: u32, held: bool) -> Self {
+        let session = if held { stages.acquire(unit, handle).1 } else { stages.unheld(unit, handle) };
+        Self { session, held }
     }
+}
 
-    fn get(&self, unit: Unit) -> Option<&S::Session> {
-        self.sessions.iter().flatten().find(|(held, _)| *held == unit).map(|(_, session)| session)
-    }
+/// Takes each unit's record, holding the units whose mask meets `flags`, in order.
+fn records<S: ImageStages, const N: usize>(stages: &mut S, handle: u32, flags: u32, units: [(Unit, u32); N]) -> [Record<S>; N] {
+    units.map(|(unit, mask)| Record::take(stages, unit, handle, flags & mask != 0))
+}
 
-    /// The last release's status, 0 when nothing is held: the status stock's operations return.
-    fn release(self, stages: &mut S) -> i32 {
-        self.sessions.into_iter().flatten().fold(0, |_, (_, session)| stages.release(session))
-    }
+/// Releases the held units in order; the last release's status, or `None` when none was held.
+fn release<S: ImageStages, const N: usize>(stages: &mut S, records: [Record<S>; N]) -> Option<i32> {
+    records.into_iter().filter(|record| record.held).fold(None, |_, record| Some(stages.release(record.session)))
 }
 
 /// The units stage control and the parameter write hold, by the flags that need each.
-const SHARED_UNITS: [(Unit, u32); 3] = [(Unit::Input, 0x3), (Unit::Transform, 0x300), (Unit::Processing, 0x4fc)];
+const SHARED_UNITS: [(Unit, u32); 3] = [(Unit::Input, 0x3), (Unit::Transform, 0x300), (Unit::Processing, 0xfc)];
 
 /// Enables or disables the stages `flags` selects: input enable (bit 0), stage modes (0x400, 4,
 /// 8, 0x10), the first gate (0x20) and the path source bits (0x40, 0x80). Enabling sets each
 /// stage's mode to 2 where the block asks for 2, else 1, and sets the source bit; disabling sets
-/// mode 0 and toggles the source bit as stock does (0xd9ea08). Returns the last release's status.
+/// mode 0 and toggles the source bit as stock does (0xd9ea08). Returns the last release's status,
+/// with no unit held the unheld stage write's (0xd9eaa4), else 0.
 pub fn enable_stages<S: ImageStages>(stages: &mut S, handle: u32, flags: u32, enabled: bool, block: Option<&S::Block>) -> i32 {
-    let held = Held::take(stages, handle, flags, SHARED_UNITS);
-    if let (true, Some(input)) = (flags & 1 != 0, held.get(Unit::Input)) {
-        stages.enable_input(input, enabled);
+    let [input, transform, processing] = records(stages, handle, flags, SHARED_UNITS);
+    if flags & 1 != 0 {
+        stages.enable_input(&input.session, enabled);
     }
-    if let Some(processing) = held.get(Unit::Processing) {
-        for (mask, stage) in [(0x400, Stage::Stage400), (0x4, Stage::Stage4), (0x8, Stage::Stage8), (0x10, Stage::Stage10)] {
-            if flags & mask != 0 {
-                let mode = match block {
-                    Some(block) if enabled => if block.stage_mode(stage) == 2 { 2 } else { 1 },
-                    _ => 0,
-                };
-                stages.set_stage(processing, stage, mode);
-            }
-        }
-        if flags & 0x20 != 0 {
-            let (_, [_, second]) = stages.gates(processing);
-            stages.set_gates(processing, [u32::from(enabled), second]);
-        }
-        for (mask, bit) in [(0x40, 1), (0x80, 2)] {
-            if flags & mask != 0 {
-                let (_, [source, path_enabled]) = stages.path(processing);
-                let source = if enabled { source | bit } else { source ^ bit };
-                stages.set_path(processing, [source, path_enabled]);
+    let mut unheld = None;
+    for (mask, stage) in [(0x400, Stage::Stage400), (0x4, Stage::Stage4), (0x8, Stage::Stage8), (0x10, Stage::Stage10)] {
+        if flags & mask != 0 {
+            let mode = match block {
+                Some(block) if enabled => if block.stage_mode(stage) == 2 { 2 } else { 1 },
+                _ => 0,
+            };
+            let status = stages.set_stage(&processing.session, stage, mode);
+            if !processing.held {
+                unheld = Some(status);
             }
         }
     }
-    held.release(stages)
+    if flags & 0x20 != 0 {
+        let (_, [_, second]) = stages.gates(&processing.session);
+        stages.set_gates(&processing.session, [u32::from(enabled), second]);
+    }
+    for (mask, bit) in [(0x40, 1), (0x80, 2)] {
+        if flags & mask != 0 {
+            let (_, [source, path_enabled]) = stages.path(&processing.session);
+            let source = if enabled { source | bit } else { source ^ bit };
+            stages.set_path(&processing.session, [source, path_enabled]);
+        }
+    }
+    release(stages, [input, transform, processing]).or(unheld).unwrap_or(0)
 }
 
 /// 0xd9f7c0.
@@ -338,82 +347,73 @@ fn change_switch<S: ImageStages>(stages: &mut S, session: &S::Session, switch: S
 }
 
 /// Programs the parameter block's groups `flags` selects into the units running them
-/// (0xd9f828). Returns the last release's status.
+/// (0xd9f828). Returns the last release's status, with no unit held the unheld division write's
+/// (0xd9f8b0..0xd9f8b4), else 0.
 pub fn apply_parameters<S: ImageStages>(stages: &mut S, handle: u32, flags: u32, block: &S::Block) -> i32 {
-    let held = Held::take(stages, handle, flags, SHARED_UNITS);
+    let [input, transform, processing] = records(stages, handle, flags, SHARED_UNITS);
     let on = |mask: u32| flags & mask != 0;
-    let (input, transform, processing) = (held.get(Unit::Input), held.get(Unit::Transform), held.get(Unit::Processing));
-    if let (true, Some(input)) = (on(1), input) {
-        stages.program(input, block, Part::InputControl);
+    let (input_session, transform_session, processing_session) = (&input.session, &transform.session, &processing.session);
+    if on(1) {
+        stages.program(input_session, block, Part::InputControl);
     }
-    if let Some(processing) = processing {
-        if on(0x400) {
-            stages.program(processing, block, Part::Division);
-        }
-        if on(4) {
-            stages.program(processing, block, Part::Points);
-            change_switch(stages, processing, Switch::Gate, block.enable_change(Enable::Gate));
-        }
-        if on(8) {
-            stages.program(processing, block, Part::Pairs);
-        }
-        if on(0x40) {
-            stages.program(processing, block, Part::SecondWindow);
-            stages.program(processing, block, Part::RotatedTables);
-        }
-        if on(0x80) {
-            for part in [Part::SecondExtent, Part::FirstTables, Part::SecondTables] {
-                stages.program(processing, block, part);
-            }
-            let (_, mode) = stages.mode(processing);
-            let (_, [source, _]) = stages.path(processing);
-            stages.set_path(processing, [source, block.setting(Setting::PathEnable)]);
-            let mode = ModeWords {
-                enabled: block.enable_change(Enable::Mode).applied_to(mode.enabled),
-                level: block.setting(Setting::ModeLevel) as u8,
-            };
-            stages.set_mode(processing, mode);
-        }
-        if on(0x10) {
-            stages.program(processing, block, Part::Area);
-            stages.program(processing, block, Part::BlockLayout);
-        }
+    let division = on(0x400).then(|| stages.program(processing_session, block, Part::Division));
+    if on(4) {
+        stages.program(processing_session, block, Part::Points);
+        change_switch(stages, processing_session, Switch::Gate, block.enable_change(Enable::Gate));
     }
-    if let (true, Some(input)) = (on(2), input) {
-        stages.program(input, block, Part::InputRegister3c);
+    if on(8) {
+        stages.program(processing_session, block, Part::Pairs);
     }
-    if let Some(transform) = transform {
-        for (mask, bank) in [(0x100, Bank::First), (0x200, Bank::Second)] {
-            if on(mask) {
-                for part in [Part::TransformOffset(bank), Part::TransformThirdOffset(bank), Part::TransformWindow(bank), Part::TransformTable(bank)] {
-                    stages.program(transform, block, part);
-                }
+    if on(0x40) {
+        stages.program(processing_session, block, Part::SecondWindow);
+        stages.program(processing_session, block, Part::RotatedTables);
+    }
+    if on(0x80) {
+        for part in [Part::SecondExtent, Part::FirstTables, Part::SecondTables] {
+            stages.program(processing_session, block, part);
+        }
+        let (_, mode) = stages.mode(processing_session);
+        let (_, [source, _]) = stages.path(processing_session);
+        stages.set_path(processing_session, [source, block.setting(Setting::PathEnable)]);
+        let mode = ModeWords {
+            enabled: block.enable_change(Enable::Mode).applied_to(mode.enabled),
+            level: block.setting(Setting::ModeLevel) as u8,
+        };
+        stages.set_mode(processing_session, mode);
+    }
+    if on(0x10) {
+        stages.program(processing_session, block, Part::Area);
+        stages.program(processing_session, block, Part::BlockLayout);
+    }
+    if on(2) {
+        stages.program(input_session, block, Part::InputRegister3c);
+    }
+    for (mask, bank) in [(0x100, Bank::First), (0x200, Bank::Second)] {
+        if on(mask) {
+            for part in [Part::TransformOffset(bank), Part::TransformThirdOffset(bank), Part::TransformWindow(bank), Part::TransformTable(bank)] {
+                stages.program(transform_session, block, part);
             }
         }
     }
-    if let (true, Some(processing)) = (on(0x20), processing) {
-        stages.program(processing, block, Part::Window);
-        stages.program(processing, block, Part::Curves);
-        let (_, [first, _]) = stages.gates(processing);
-        stages.set_gates(processing, [first, block.setting(Setting::SecondGate)]);
-        change_switch(stages, processing, Switch::Output, block.enable_change(Enable::Output));
+    if on(0x20) {
+        stages.program(processing_session, block, Part::Window);
+        stages.program(processing_session, block, Part::Curves);
+        let (_, [first, _]) = stages.gates(processing_session);
+        stages.set_gates(processing_session, [first, block.setting(Setting::SecondGate)]);
+        change_switch(stages, processing_session, Switch::Output, block.enable_change(Enable::Output));
     }
-    held.release(stages)
+    release(stages, [input, transform, processing]).or(division).unwrap_or(0)
 }
 
 /// Programs the geometry block's groups `flags` selects (0xd9fd54). Returns the last release's
-/// status.
+/// status, with no unit held the last unheld write's (0xd9ff90, 0xd9ffa4), else 0.
 pub fn configure_geometry<S: ImageStages>(stages: &mut S, handle: u32, flags: u32, block: &S::Block) -> i32 {
-    let units = [(Unit::Filter, 0x7f0), (Unit::Input, 0x400b), (Unit::Transform, 0x1800), (Unit::Processing, 0x2000)];
-    let held = Held::take(stages, handle, flags, units);
-    let program = |stages: &mut S, unit: Unit, mask: u32, parts: &[Part]| {
-        if let (true, Some(session)) = (flags & mask != 0, held.get(unit)) {
-            for part in parts {
-                stages.program(session, block, *part);
-            }
-        }
+    let units = [(Unit::Filter, 0x7f0), (Unit::Input, 0xb), (Unit::Transform, 0x1800), (Unit::Processing, 0)];
+    let [filter, input, transform, processing] = records(stages, handle, flags, units);
+    let program = |stages: &mut S, record: &Record<S>, mask: u32, parts: &[Part]| {
+        (flags & mask != 0).then(|| parts.iter().fold(0, |_, part| stages.program(&record.session, block, *part)))
     };
-    program(stages, Unit::Input, 1, &[Part::InputRegister14]);
+    program(stages, &input, 1, &[Part::InputRegister14]);
     for (mask, bank) in [(0x800, Bank::First), (0x1000, Bank::Second)] {
         let parts = [
             Part::TransformDimensions(bank),
@@ -424,19 +424,19 @@ pub fn configure_geometry<S: ImageStages>(stages: &mut S, handle: u32, flags: u3
             Part::TransformAddress(bank),
             Part::TransformNibble(bank),
         ];
-        program(stages, Unit::Transform, mask, &parts);
+        program(stages, &transform, mask, &parts);
     }
-    program(stages, Unit::Input, 2, &[Part::InputRegister34]);
-    program(stages, Unit::Filter, 0x10, &[Part::FilterGrid(Grid::Second)]);
-    program(stages, Unit::Filter, 0x20, &[Part::FilterSecondBank]);
-    program(stages, Unit::Filter, 0x40, &[Part::FilterGrid(Grid::First)]);
-    program(stages, Unit::Filter, 0x80, &[Part::FilterFirstBank]);
-    program(stages, Unit::Filter, 0x100, &[Part::FilterGrid(Grid::Third)]);
+    program(stages, &input, 2, &[Part::InputRegister34]);
+    program(stages, &filter, 0x10, &[Part::FilterGrid(Grid::Second)]);
+    program(stages, &filter, 0x20, &[Part::FilterSecondBank]);
+    program(stages, &filter, 0x40, &[Part::FilterGrid(Grid::First)]);
+    program(stages, &filter, 0x80, &[Part::FilterFirstBank]);
+    program(stages, &filter, 0x100, &[Part::FilterGrid(Grid::Third)]);
     let windows = [FilterWindow::First, FilterWindow::Second, FilterWindow::Third].map(Part::FilterWindow);
-    program(stages, Unit::Filter, 0x200, &windows);
-    program(stages, Unit::Filter, 0x400, &[Part::FilterWindow(FilterWindow::Fourth)]);
-    program(stages, Unit::Input, 8, &[Part::InputRegister28]);
-    program(stages, Unit::Input, 0x4000, &[Part::InputRegister34Alternate]);
-    program(stages, Unit::Processing, 0x2000, &[Part::Extent]);
-    held.release(stages)
+    program(stages, &filter, 0x200, &windows);
+    program(stages, &filter, 0x400, &[Part::FilterWindow(FilterWindow::Fourth)]);
+    program(stages, &input, 8, &[Part::InputRegister28]);
+    let alternate = program(stages, &input, 0x4000, &[Part::InputRegister34Alternate]);
+    let extent = program(stages, &processing, 0x2000, &[Part::Extent]);
+    release(stages, [filter, input, transform, processing]).or(extent).or(alternate).unwrap_or(0)
 }
