@@ -25,6 +25,8 @@ mod evaluation_tests;
 #[cfg(test)]
 mod levels_tests;
 #[cfg(test)]
+mod prepare_tests;
+#[cfg(test)]
 mod program_tests;
 #[cfg(test)]
 mod snapshot_tests;
