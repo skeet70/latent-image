@@ -1599,7 +1599,7 @@
             "0x01039638/start_copy_blocks copy0x10"
           ]
         },
-        { "name": "format-values", "offset": 16, "bytes": 16, "sources": ["0xf3b5f0..0xf3b620 initializes first four format words"] },
+        { "name": "format-values", "offset": 16, "bytes": 16, "sources": ["0xf3b60c/614 writes format halfwords8/10 and0xf3b620 writes word12; zero branch0xf3b650/658 writes words4/0, nonzero branch0xf3b694 calls dimensions decoder0xdca798"] },
         { "name": "format-selector", "offset": 32, "bytes": 4, "sources": ["0xf3b648 writes 0/1 on zero branch; 0xf3b688 writes 8/9 on nonzero branch"] },
         { "name": "format-word-5", "offset": 36, "bytes": 4, "sources": ["0xf3b674 defines format word5 on nonzero branch; 0x10324e8 copies it to state+0x44b4, read as a value at 0x1029808,0x102cb64,0x103f404"], "excluded_when": { "offset": 32, "bytes": 4, "values": [0,1], "sources": ["0xf3b628..0xf3b65c zero branch returns without writing word5; selector0/1 identifies this branch; stock defect: owned sender must define word5 when sending machine becomes owned"] } },
         {

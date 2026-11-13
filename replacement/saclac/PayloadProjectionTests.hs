@@ -52,10 +52,16 @@ main = do
   let through = projectPayload recovered Outgoing (QueueId 48) (Operation 0x4002)
       throughBytes = replicate 208 0
       nonzero = take 32 throughBytes ++ [8] ++ drop 33 throughBytes
+      zeroAlternate = take 32 throughBytes ++ [1] ++ drop 33 throughBytes
+      nonzeroAlternate = take 32 throughBytes ++ [9] ++ drop 33 throughBytes
   mapM_ (\offset -> check (through throughBytes == through (mutate offset throughBytes))) ([36..39] ++ [148..156] ++ [162,163,182,183])
   mapM_ (\offset -> check (through nonzero /= through (mutate offset nonzero))) [36..39]
   check (through throughBytes /= through nonzero)
   check (through throughBytes /= through (mutate 180 throughBytes))
+  check (through zeroAlternate == through (mutate 36 zeroAlternate))
+  check (through nonzeroAlternate /= through (mutate 36 nonzeroAlternate))
+  recoveredRoundTrip <- either fail pure (parseDeclaration (L.toStrict (encode (declarationJson recovered))))
+  check (projectPayload recoveredRoundTrip Outgoing (QueueId 48) (Operation 0x4002) (mutate 36 nonzero) == through (mutate 36 nonzero))
   let half = projectPayload recovered Outgoing (QueueId 44) (Operation 0x3c0c)
       halfBytes = replicate 80 0
       holes = [10,11,17,18,19,28,29,30,31,34,35]
