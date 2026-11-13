@@ -713,9 +713,10 @@ data Census = Census
 
 -- | Build the graph. @functions@ must already carry their image assignment.
 buildCensus :: EdgeSelection -> [Listing] -> [Function] -> Census
-buildCensus selection listings functions =
-  let starts = M.fromList [(functionEntry function, ()) | function <- functions]
-      wordsByImage = M.fromList [(listingName listing, listingWords listing) | listing <- listings]
+buildCensus selection listings declaredFunctions =
+  let wordsByImage = M.fromList [(listingName listing, listingWords listing) | listing <- listings]
+      functions = joinSplitPrologues wordsByImage declaredFunctions
+      starts = M.fromList [(functionEntry function, ()) | function <- functions]
       wordMapFor function = M.findWithDefault M.empty (functionImage function) wordsByImage
       literalSets = M.fromList
         [ (functionEntry function, S.fromList (literalTargets (envFor function) function))
@@ -821,6 +822,43 @@ instructionsIn wordsByAddress function =
   let (_, found, above) = M.splitLookup (functionEntry function) wordsByAddress
       fromEntry = maybe [] (\word -> [(functionEntry function, word)]) found ++ M.toAscList above
    in takeWhile (\(address, _) -> address < functionEntry function + functionSize function) fromEntry
+
+-- | The function table starts a function at the @push@ that saves the link
+-- register, so @sub sp, sp, #N@ before one is declared as its own function.
+joinSplitPrologues :: M.Map String (M.Map Word32 Word32) -> [Function] -> [Function]
+joinSplitPrologues wordsByImage = go . sortOn functionEntry
+  where
+    go (function : next : rest)
+      | Just joined <- join function next = go (joined : rest)
+    go (function : rest) = function : go rest
+    go [] = []
+
+    join function next
+      | functionSize function /= 4 = Nothing
+      | functionImage function /= functionImage next = Nothing
+      | functionEntry function + 4 /= functionEntry next = Nothing
+      | Just word <- wordAt function (functionEntry function)
+      , DataOperation Sub 13 13 (Immediate _) <- decodeWord (functionEntry function) word
+      , Just registers <- wordAt next (functionEntry next) >>= pushedRegisters
+      , testBit registers 14
+      = Just function { functionSize = functionSize next + 4 }
+      | otherwise = Nothing
+
+    wordAt function address = M.lookup address (M.findWithDefault M.empty (functionImage function) wordsByImage)
+
+-- | The register list of a @push@ (@stmdb sp!@), which the single-word decode
+-- reads as 'Other': a pre-indexed, writeback block store to sp.
+pushedRegisters :: Word32 -> Maybe Word32
+pushedRegisters word
+  | word `shiftR` 28 == 14
+  , (word `shiftR` 25) .&. 0x7 == 0x4
+  , testBit word 24
+  , not (testBit word 23)
+  , testBit word 21
+  , not (testBit word 20)
+  , (word `shiftR` 16) .&. 0xf == 13
+  = Just (word .&. 0xffff)
+  | otherwise = Nothing
 
 -- | Addresses a function loads through @pc@: its literal pools.
 literalTargets :: Env -> Function -> [Word32]
