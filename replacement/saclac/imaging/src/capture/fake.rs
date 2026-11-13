@@ -1,7 +1,8 @@
 use std::vec::Vec;
 
 use super::gains::{GainClass, GainSources, Gains};
-use super::ports::{Adjustments, ControlState, ControlTables, LoadTest, LoadTestSetting, Profiles, Reference, ReferenceIndex, Runtime};
+use super::ports::{Adjustments, ControlState, ControlTables, LoadTest, LoadTestSetting, PixelGeometry, Profiles, Reference, ReferenceIndex, Runtime};
+use super::statistics::ChannelPixels;
 use super::{AdjustmentKey, ProfileHandle, ProfileKind, Rectangle};
 
 /// One profile with one reference record; the shutter-rate table is the exact power of two and
@@ -23,6 +24,12 @@ pub struct FakeCapture {
     pub forced: GainClass,
     pub temperature_offset: u16,
     pub gain_calls: Vec<GainClass>,
+    pub shared_divisors: [u32; 2],
+    pub scale_divisors: [u32; 2],
+    /// The first three channels' shares of a region's pixels, over `pixel_divisor`.
+    pub pixel_shares: [u32; 3],
+    pub pixel_divisor: u32,
+    pub aspect: i32,
 }
 
 impl FakeCapture {
@@ -44,6 +51,11 @@ impl FakeCapture {
             forced: GainClass(0),
             temperature_offset: 0,
             gain_calls: Vec::new(),
+            shared_divisors: [2, 2],
+            scale_divisors: [8, 8],
+            pixel_shares: [1, 1, 1],
+            pixel_divisor: 4,
+            aspect: 0,
         }
     }
 
@@ -112,4 +124,18 @@ impl GainSources for FakeCapture {
     fn forced_class(&mut self, _: u8) -> GainClass { self.forced }
 
     fn temperature_offset(&mut self) -> u16 { self.temperature_offset }
+}
+
+impl PixelGeometry for FakeCapture {
+    fn shared_divisors(&mut self) -> [u32; 2] { self.shared_divisors }
+
+    fn scale_divisors(&mut self, _: ProfileHandle) -> [u32; 2] { self.scale_divisors }
+
+    fn channel_pixels(&mut self, pixels: u32) -> ChannelPixels {
+        let share = |share: u32| share * pixels / self.pixel_divisor;
+        let [first, second, third] = self.pixel_shares.map(share);
+        ChannelPixels { channels: [first, second, third, second], total: 4 * second }
+    }
+
+    fn aspect(&mut self, _: ProfileHandle) -> i32 { self.aspect }
 }

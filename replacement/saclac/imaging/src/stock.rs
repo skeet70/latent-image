@@ -1,7 +1,8 @@
 //! The stock boundary: X-M1 1.50 addresses of the ISP units' registers and session records, the
 //! driver's event log entries, the stock words for the unit, fault and refusal codes, in
-//! `arguments` the stock layouts of the unit entries' arguments, and in `capture` the capture
-//! layer's stock tables, state and services.
+//! `arguments` the stock layouts of the unit entries' arguments, in `capture` the capture layer's
+//! stock tables, state and services, and in `statistics` the capture statistics' buffers and
+//! layouts.
 
 use core::ptr::{read_volatile, write_volatile};
 
@@ -20,6 +21,7 @@ fn write_u32(address: u32, value: u32) { unsafe { write_volatile(address as usiz
 
 pub mod arguments;
 pub mod capture;
+pub mod statistics;
 
 #[cfg(test)]
 mod arguments_tests;

@@ -88,8 +88,6 @@ pub trait CapturePipeline {
     fn processing_word(&mut self, word: ProcessingWord) -> u32;
     /// The statistics of the last completed capture of `kind`, if it was that kind (0xffcfd0).
     fn completed_statistics(&mut self, kind: u8) -> Option<CompletedStatistics>;
-    /// The status word the buffer configuration step leaves (0xffde8c).
-    fn configuration_status(&mut self) -> u32;
     /// Applies the completion request's descriptor to the profile layer (0x10029bc).
     fn apply_completion_descriptor(&mut self);
     /// 0x1005044.

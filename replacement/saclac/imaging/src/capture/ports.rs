@@ -3,6 +3,7 @@
 //! What the capture-pipeline layer reads outside itself. Each trait is bound at saclac's
 //! composition root to the layer or stock service that owns it.
 
+use super::statistics::ChannelPixels;
 use super::{AdjustmentKey, ProfileHandle, ProfileKind, Rectangle};
 
 /// The adjustment area, a byte at a time (0x69f8fc).
@@ -79,4 +80,16 @@ pub trait Runtime {
     fn log(&self, value: f32) -> f32;
     /// 0x10034b4's quotient for `value`, `None` where it refuses.
     fn reference_ratio(&mut self, value: u32) -> Option<u32>;
+}
+
+/// The profile layer's pixel geometry.
+pub trait PixelGeometry {
+    /// The scale divisors every class shares (0xef5768).
+    fn shared_divisors(&mut self) -> [u32; 2];
+    /// The profile's scale divisors (0xef5b5c).
+    fn scale_divisors(&mut self, profile: ProfileHandle) -> [u32; 2];
+    /// 0xef56cc.
+    fn channel_pixels(&mut self, pixels: u32) -> ChannelPixels;
+    /// 0xef5310.
+    fn aspect(&mut self, profile: ProfileHandle) -> i32;
 }

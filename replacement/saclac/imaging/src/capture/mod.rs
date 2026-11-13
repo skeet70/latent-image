@@ -1,17 +1,19 @@
 #![forbid(unsafe_code)]
 
-//! saclac's capture-pipeline layer (L10): the readout timing of capture profiles and the gains a
-//! capture request selects.
+//! saclac's capture-pipeline layer (L10): the readout timing of capture profiles, the gains a
+//! capture request selects, and the statistics a completed capture leaves.
 
+pub mod configuration;
 pub mod control;
 pub mod gains;
 pub mod pipeline;
 pub mod ports;
 pub mod requests;
+pub mod statistics;
 
 /// A capture profile: the index the profile table, the readout pairs and the control reference
 /// table share; X-M1 1.50 declares profiles 0..=35.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ProfileHandle(pub u32);
 
 /// A profile's readout kind, as the control layer treats it.
@@ -69,3 +71,7 @@ mod control_tests;
 mod gains_tests;
 #[cfg(test)]
 mod requests_tests;
+#[cfg(test)]
+mod statistics_tests;
+#[cfg(test)]
+mod configuration_tests;

@@ -10,8 +10,9 @@ use crate::capture::pipeline::{
     SampleMeasurements, SavedSnapshot, StockBlock, STATISTICS_BLOCK_BYTES, STATISTICS_PARAMETER_BYTES,
 };
 use crate::capture::ports::{
-    Adjustments, ControlState, ControlTables, LoadTest, LoadTestSetting, Profiles, Reference, ReferenceIndex, Runtime,
+    Adjustments, ControlState, ControlTables, LoadTest, LoadTestSetting, PixelGeometry, Profiles, Reference, ReferenceIndex, Runtime,
 };
+use crate::capture::statistics::ChannelPixels;
 use crate::capture::{AdjustmentKey, ProfileHandle, ProfileKind, Rectangle};
 
 fn read_u16(address: u32) -> u16 { unsafe { read_volatile(address as usize as *const u16) } }
@@ -130,6 +131,29 @@ impl GainSources for StockCapture {
     fn temperature_offset(&mut self) -> u16 { entry!(0x77_2f28, fn(u32) -> u16)(3) }
 }
 
+impl PixelGeometry for StockCapture {
+    fn shared_divisors(&mut self) -> [u32; 2] {
+        let mut pair = [0u32; 2];
+        entry!(0xef_5768, fn(*mut u32))(pair.as_mut_ptr());
+        pair
+    }
+
+    fn scale_divisors(&mut self, profile: ProfileHandle) -> [u32; 2] {
+        let mut pair = [0u32; 2];
+        entry!(0xef_5b5c, fn(u32, *mut u32))(profile.0, pair.as_mut_ptr());
+        pair
+    }
+
+    fn channel_pixels(&mut self, pixels: u32) -> ChannelPixels {
+        let mut words = [0u32; 5];
+        entry!(0xef_56cc, fn(*mut u32, u32))(words.as_mut_ptr(), pixels);
+        let [first, second, third, fourth, total] = words;
+        ChannelPixels { channels: [first, second, third, fourth], total }
+    }
+
+    fn aspect(&mut self, profile: ProfileHandle) -> i32 { entry!(0xef_5310, fn(u32) -> i32)(profile.0) }
+}
+
 const fn processing_word_reader(word: ProcessingWord) -> u32 {
     match word {
         ProcessingWord::FirstList => 0xfe_dab8,
@@ -189,8 +213,6 @@ impl CapturePipeline for StockCapture {
         );
         (found != 0).then_some(statistics)
     }
-
-    fn configuration_status(&mut self) -> u32 { entry!(0xff_de8c, fn() -> u32)() }
 
     fn apply_completion_descriptor(&mut self) { entry!(0x100_29bc, fn())() }
 
