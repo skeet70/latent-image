@@ -695,6 +695,21 @@ The vendor, wireless, filesystem and device-protocol unit. Most of its externals
 | `xm1_wireless_driver_task`, `xm1_wireless_supplicant_task` retained services | trampoline into retained stock | stock wireless driver and supplicant tasks | no | the wireless subsystem is owned | required |
 | filesystem and media-task ABI views (`filesystem_*`, `media_parser`, `metadata_*`) | guest-memory layout view | retained stock filesystem, media and metadata services | no | the owned file service and filesystem are qualified | required |
 
+## saclac_interface
+
+| Shim | Kind | Other side | Owned now | Removal condition | State |
+| --- | --- | --- | --- | --- | --- |
+| Command, parameter-block and callback descriptors in `src/stock.rs` | guest-memory layout view | retained queue-43 command producers, their 46 shared parameter blocks and 106 completion callbacks | no | queue-43 producers and completion callbacks are owned and no retained consumer reads the parameter blocks | required |
+
+## fixed_image
+
+The fixed-range test image preserves the retained startup phase call while observing entry and initialized storage.
+
+| Shim | Kind | Other side | Owned now | Removal condition | State |
+| --- | --- | --- | --- | --- | --- |
+| `xm1_fixed_test_entry` in `probe-entry.S`, published at `0x69cdf8` by `ProbeMain.hs` | stock-ABI export | retained startup phase callers | no | the placement probe is replaced by the subsystem image's entries | required |
+| `xm1_fixed_test_resume` at `0x69cdfc`, bound by `ProbeMain.hs` | trampoline into retained stock | the retained startup phase body after its entry push | no | the placement probe is replaced by the subsystem image's entries | required |
+
 ## Not registered
 
 `replacement/rtos_layout` and `replacement/rtos_reservation` contain Rust but no firmware artifact target; they are shared host views, not units. `replacement/toolchain` contains build rules only. `replacement/record5_staging`, `startup_artifact`, `startup_composition` and `startup_consumers` contain no Rust or assembly sources; they are host orchestration.

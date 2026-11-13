@@ -116,3 +116,71 @@ pub const fn measurement_update_operation(update: crate::children::MeasurementUp
         MeasurementUpdate::Source => Some(StatisticsOperation::Request41),
     }
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StockCallbackWord(pub u32);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LensFinishRoute {
+    Ordinary,
+    Alternate,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LensPayload {
+    pub operation: xm1_saclac_interface::LensDcOperation,
+    bytes: [u8; 32],
+    length: usize,
+}
+
+impl LensPayload {
+    pub fn bytes(&self) -> &[u8] { &self.bytes[..self.length] }
+}
+
+pub fn adjustment_payload(
+    request: crate::adjustment::LensRequest,
+    callback: StockCallbackWord,
+    finish_route: LensFinishRoute,
+) -> Option<LensPayload> {
+    use crate::adjustment::LensRequest;
+    use xm1_saclac_interface::LensDcOperation;
+
+    let mut bytes = [0; 32];
+    let (operation, words, length) = match request {
+        LensRequest::ReserveOnly => return None,
+        LensRequest::Move { position, amount, scale } => {
+            let amount = if scale.0 < 32 { amount.0 << scale.0 } else { 0 };
+            (LensDcOperation::Request1c,
+                [callback.0, 0, amount, u32::from(position.0 as u16), 2, 1, 0, 13], 32)
+        }
+        LensRequest::SetPosition { position, amount } =>
+            (LensDcOperation::Request1c,
+                [callback.0, 1, amount.0, u32::from(position.0 as u16), 2, 1, 0, 13], 32),
+        LensRequest::SetPercentage { position, percent } =>
+            (LensDcOperation::Request1c,
+                [callback.0, 2, u32::from(percent.get()), u32::from(position.0 as u16), 2, 1, 0, 13], 32),
+        LensRequest::Stop =>
+            (LensDcOperation::Request15, [callback.0, 3, 0, 0, 0, 0, 0, 0], 12),
+        LensRequest::Synchronize =>
+            (LensDcOperation::Request17, [callback.0, 0, 0, 0, 0, 0, 0, 0], 8),
+        LensRequest::Query =>
+            (LensDcOperation::Request18, [callback.0, 0, 0, 0, 0, 0, 0, 0], 4),
+        LensRequest::Configure { selection, value } => {
+            let operation = match finish_route {
+                LensFinishRoute::Ordinary => LensDcOperation::Request13,
+                LensFinishRoute::Alternate => LensDcOperation::Request1d,
+            };
+            (operation, [callback.0, selection.0, value.0, 1, 0, 10, 0, 0], 24)
+        }
+        LensRequest::ConfigureDefault =>
+            (LensDcOperation::Request16, [callback.0, 3, 0, 255, 0, 0, 0, 0], 16),
+        LensRequest::SetValue(value) =>
+            (LensDcOperation::Request19, [callback.0, value.0, 0, 0, 0, 0, 0, 0], 8),
+        LensRequest::ConfigureValue(value) =>
+            (LensDcOperation::Request1a, [callback.0, value.0, 0, 0, 0, 0, 0, 0], 8),
+    };
+    for (chunk, word) in bytes.chunks_exact_mut(4).zip(words) {
+        chunk.copy_from_slice(&word.to_le_bytes());
+    }
+    Some(LensPayload { operation, bytes, length })
+}

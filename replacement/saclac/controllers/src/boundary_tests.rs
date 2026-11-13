@@ -50,3 +50,47 @@ fn measurement_feedback_preserves_update_kind_and_restart_completion() {
     assert_eq!(crate::stock::measurement_outcome(2), ChildOutcome::Pending);
     assert_eq!(crate::stock::measurement_outcome(0), ChildOutcome::Fault);
 }
+
+#[test]
+fn adjustment_requests_preserve_the_retained_peer_payload() {
+    use crate::adjustment::{DriveAmount, DriveScale, LensPosition, LensRequest, Percentage, Selection};
+    use crate::stock::{adjustment_payload, LensFinishRoute, StockCallbackWord};
+    use xm1_saclac_interface::LensDcOperation;
+
+    let callback = StockCallbackWord(0x12345678);
+    for (request, operation, expected) in [
+        (LensRequest::Stop, LensDcOperation::Request15, &[0x12345678, 3, 0][..]),
+        (LensRequest::Synchronize, LensDcOperation::Request17, &[0x12345678, 0][..]),
+        (LensRequest::Query, LensDcOperation::Request18, &[0x12345678][..]),
+        (LensRequest::ConfigureDefault, LensDcOperation::Request16, &[0x12345678, 3, 0, 255][..]),
+        (LensRequest::SetValue(DriveAmount(45)), LensDcOperation::Request19, &[0x12345678, 45][..]),
+        (LensRequest::ConfigureValue(DriveAmount(67)), LensDcOperation::Request1a, &[0x12345678, 67][..]),
+        (LensRequest::Configure { selection: Selection(2), value: DriveAmount(7) },
+            LensDcOperation::Request13, &[0x12345678, 2, 7, 1, 0, 10][..]),
+        (LensRequest::Move { position: LensPosition(-2), amount: DriveAmount(3), scale: DriveScale(2) },
+            LensDcOperation::Request1c, &[0x12345678, 0, 12, 65534, 2, 1, 0, 13][..]),
+        (LensRequest::SetPosition { position: LensPosition(9), amount: DriveAmount(8) },
+            LensDcOperation::Request1c, &[0x12345678, 1, 8, 9, 2, 1, 0, 13][..]),
+        (LensRequest::SetPercentage { position: LensPosition(9), percent: Percentage::saturating(250) },
+            LensDcOperation::Request1c, &[0x12345678, 2, 100, 9, 2, 1, 0, 13][..]),
+    ] {
+        let payload = adjustment_payload(request, callback, LensFinishRoute::Ordinary).unwrap();
+        assert_eq!(payload.operation, operation);
+        let expected_bytes: std::vec::Vec<_> = expected.iter().flat_map(|word: &u32| word.to_le_bytes()).collect();
+        assert_eq!(payload.bytes(), expected_bytes);
+    }
+    let alternate = adjustment_payload(LensRequest::Configure { selection: Selection(2), value: DriveAmount(7) }, callback, LensFinishRoute::Alternate).unwrap();
+    assert_eq!(alternate.operation, LensDcOperation::Request1d);
+    assert_eq!(alternate.bytes(), &[0x78, 0x56, 0x34, 0x12, 2, 0, 0, 0, 7, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0]);
+    assert!(adjustment_payload(LensRequest::ReserveOnly, callback, LensFinishRoute::Ordinary).is_none());
+}
+
+#[test]
+fn oversized_adjustment_shifts_produce_zero_without_panicking() {
+    use crate::adjustment::{DriveAmount, DriveScale, LensPosition, LensRequest};
+    use crate::stock::{adjustment_payload, LensFinishRoute, StockCallbackWord};
+    let payload = adjustment_payload(LensRequest::Move {
+        position: LensPosition(0), amount: DriveAmount(u32::MAX), scale: DriveScale(32),
+    }, StockCallbackWord(1), LensFinishRoute::Ordinary).unwrap();
+    assert_eq!(&payload.bytes()[8..12], &[0; 4]);
+}

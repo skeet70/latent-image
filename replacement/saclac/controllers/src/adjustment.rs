@@ -22,6 +22,7 @@ pub enum LensRequest {
     Query,
     Configure { selection: Selection, value: DriveAmount },
     ConfigureDefault,
+    SetValue(DriveAmount),
     ConfigureValue(DriveAmount),
 }
 
