@@ -17,8 +17,8 @@ use crate::lens::{
 };
 use crate::lens_com::{LensComClient, RequestNumber};
 use crate::settings::{
-    AdjustmentKey, Adjustments, Aspect, CaptureMode, Channel, ChannelRemap, Channels, Conversions, RemapArguments,
-    RemappedWord, WindowVariant,
+    AdjustmentKey, Adjustments, Aspect, CaptureMode, ChannelRemap, Conversions, RemapArguments, RemappedWord,
+    WindowVariant,
 };
 use crate::stock::{Machine, Stock, StockConfiguration};
 
@@ -153,17 +153,39 @@ fn parameter_words_are_read_from_the_interface_block_table() {
     for command in [
         StoredCommand::Command02,
         StoredCommand::Command03,
+        StoredCommand::LensBringUp,
+        StoredCommand::LensStop,
         StoredCommand::HalfPress,
         StoredCommand::Autofocus,
         StoredCommand::LensDrive,
+        StoredCommand::Cancel,
         StoredCommand::Command17,
+        StoredCommand::Step,
+        StoredCommand::Command2c,
     ] {
-        let block = PARAMETER_BLOCKS[usize::from(command_code(command.kind()))];
+        let block = PARAMETER_BLOCKS[usize::from(command.code())];
         let words = block.capacity / 4;
         let last = block.address + 4 * (words as u32 - 1);
         fake.set_word(last, 0x5a5a_1234);
         assert_eq!(CommandMemory::word(&stock, command, words - 1), 0x5a5a_1234, "{command:?}");
         assert!(fake.calls().contains(&Call::Read32(last)), "{command:?}");
+    }
+}
+
+/// 0xef9cc4, 0xef9ce0, 0xef9b50 and 0xef9ca8 return these blocks; 0x1b's and 0x2c's follow the table.
+#[test]
+fn the_lens_blocks_are_the_ones_their_getters_return() {
+    for (command, address) in [
+        (StoredCommand::LensDrive, 0x169_d1c8),
+        (StoredCommand::Cancel, 0x169_d1dc),
+        (StoredCommand::Command02, 0x169_d004),
+        (StoredCommand::Autofocus, 0x169_d128),
+        (StoredCommand::Step, 0x169_d28c),
+        (StoredCommand::Command2c, 0x169_d360),
+    ] {
+        let (fake, mut stock) = stock();
+        CommandMemory::set_word(&mut stock, command, 1, 0x1234);
+        assert_eq!(fake.calls(), [Call::Write32(address + 4, 0x1234)], "{command:?}");
     }
 }
 
@@ -282,14 +304,6 @@ fn adjustment_reads_enter_the_byte_entry_with_the_key() {
     fake.answer(0x69_f8fc, 1);
     assert!(Adjustments::admits_unselected_mode(&stock));
     assert_eq!(fake.calls(), [Call::Enter(0x69_f8fc, vec![0x887c])]);
-}
-
-#[test]
-fn channels_enter_the_configuration_count() {
-    let (fake, stock) = stock();
-    fake.answer(0x74_a214, 1);
-    assert!(Channels::is_valid(&stock, Channel(3)));
-    assert_eq!(fake.calls(), [Call::Enter(0x74_a214, vec![3])]);
 }
 
 #[test]

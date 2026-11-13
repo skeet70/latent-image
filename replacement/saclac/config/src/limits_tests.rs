@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::channel::Channel;
+use xm1_saclac_shared::settings::Channel;
 use crate::fake::Area;
 use crate::limits::*;
 use crate::ports::{Derivations, ExportQuery, RangeQuery};

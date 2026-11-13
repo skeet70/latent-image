@@ -1,4 +1,5 @@
-use crate::channel::Channel;
+use xm1_saclac_shared::settings::Channel;
+
 use crate::dump::*;
 use crate::fake::Area;
 use crate::ports::{Derivations, ExportQuery};

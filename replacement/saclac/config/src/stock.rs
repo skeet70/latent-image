@@ -2,7 +2,9 @@
 
 use core::ptr::{read_volatile, write_volatile};
 
-use crate::channel::{Channel, FloatLog};
+use xm1_saclac_shared::settings::Channel;
+
+use crate::numeric::FloatLog;
 use crate::compiled::{CompiledScan, Optioned, StreamSnapshot};
 use crate::dump::{ConfigurationDump, DumpDerivations};
 use crate::table::{Row, Step};

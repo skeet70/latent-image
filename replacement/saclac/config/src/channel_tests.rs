@@ -1,6 +1,9 @@
+use xm1_saclac_shared::settings::{Channel, Channels};
+
 use crate::channel::*;
 use crate::curve::curve_value;
 use crate::fake::Area;
+use crate::numeric::FloatLog;
 
 #[test]
 fn the_channel_count_is_the_adjustment_byte_between_one_and_one_hundred() {
@@ -19,6 +22,15 @@ fn channels_outside_the_count_have_no_base_and_no_packed_value() {
     assert_eq!(packed(&area, Channel(2)), 0xffff);
     assert!(is_valid(&area, Channel(1)));
     assert!(!is_valid(&area, Channel(2)));
+}
+
+#[test]
+fn the_shared_layer_sees_the_channels_below_the_configured_count() {
+    let area = Area::default().with(0x3e0f80, 3);
+    let channels = ConfiguredChannels(&area);
+    assert!(channels.is_valid(Channel(2)));
+    assert!(!channels.is_valid(Channel(3)));
+    assert!(!channels.is_valid(Channel(-1)));
 }
 
 #[test]

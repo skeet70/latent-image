@@ -2,8 +2,10 @@
 
 //! Per-channel adjustment words and the classes the channel level reads.
 
+use xm1_saclac_shared::settings::{Channel, Channels};
+
 use crate::adjustment::{byte, half, signed_byte, triple, Adjustments};
-use crate::numeric::{divide, divide_unsigned, round_tenths};
+use crate::numeric::{divide, divide_unsigned, round_tenths, FloatLog};
 
 const COUNT: u32 = 0x3e0f80;
 const BASES: u32 = 0x3e21fd;
@@ -18,10 +20,6 @@ const BIAS_SCALE: u32 = 0x3e2640;
 const FIRST_CLASS_BOUNDS: [u32; 3] = [0x3e1ab1, 0x3e1ab2, 0x3e1ab3];
 const SECOND_CLASS_BOUNDS: [u32; 3] = [0x3e1ab5, 0x3e1ab7, 0x3e1ab9];
 const CLASS_OFFSETS: u32 = 0x3e1aa0;
-
-/// A channel number as callers pass it; negative and too large channels read as absent.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Channel(pub i32);
 
 /// The bias kind that reads the alternate bias words.
 pub const ALTERNATE_BIAS: u32 = 254;
@@ -40,6 +38,13 @@ fn index(area: &impl Adjustments, channel: Channel) -> Option<u32> {
 
 /// Whether the channel is below the configured count (0x74a214).
 pub fn is_valid(area: &impl Adjustments, channel: Channel) -> bool { index(area, channel).is_some() }
+
+/// The configured channels of an adjustment area, as the shared layer's lens-drive reply asks.
+pub struct ConfiguredChannels<'a, A>(pub &'a A);
+
+impl<A: Adjustments> Channels for ConfiguredChannels<'_, A> {
+    fn is_valid(&self, channel: Channel) -> bool { is_valid(self.0, channel) }
+}
 
 /// The channel's base halfword times ten, 0 for an absent channel (0x747bf8).
 pub fn base(area: &impl Adjustments, channel: Channel) -> u32 {
@@ -108,11 +113,6 @@ pub fn value_class(area: &impl Adjustments, value: u32) -> u32 {
         value if value > bounds[2] => 3,
         _ => 2,
     }
-}
-
-/// The runtime's logarithm (0x894778).
-pub trait FloatLog {
-    fn ln(&mut self, value: f32) -> f32;
 }
 
 /// The channel's level: one hundred times log2 of its base over 100, truncated, less the class

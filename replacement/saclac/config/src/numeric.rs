@@ -1,6 +1,11 @@
 #![forbid(unsafe_code)]
 
-//! Integer conversions the configuration words share.
+//! Integer conversions the configuration words share, and the runtime's logarithm.
+
+/// The runtime's single-precision natural logarithm (0x894778).
+pub trait FloatLog {
+    fn ln(&mut self, value: f32) -> f32;
+}
 
 /// Divided by ten, halves away from zero (0x741fa0).
 pub const fn round_tenths(value: i32) -> i32 {

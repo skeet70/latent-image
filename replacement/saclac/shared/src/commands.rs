@@ -3,38 +3,45 @@
 //! Queue-43 command parameters after their event, the commands' pending flags and the client
 //! replies more than one module sends.
 
-use xm1_saclac_interface::stock::{command_code, PARAMETER_BLOCKS};
-use xm1_saclac_interface::{ClientCallback, CommandKind, CompletionStatus};
+use xm1_saclac_interface::stock::{reply_target_code, PARAMETER_BLOCKS};
+use xm1_saclac_interface::{ClientCallback, ClientNotification, CommandKind, CompletionStatus, ReplyTarget};
 
 use crate::lens::{LensControl, LensNotices, LensProbe, Notice, ProbeState};
 use crate::settings::{Channel, Channels};
 
-/// A command whose stored parameters modules read after its event.
+/// A queue-43 message whose stored parameters modules read after its event.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum StoredCommand { Command02, Command03, HalfPress, Autofocus, LensDrive, Command17 }
+pub enum StoredCommand { Command02, Command03, LensBringUp, LensStop, HalfPress, Autofocus, LensDrive, Cancel, Command17, Step, Command2c }
 
 impl StoredCommand {
-    pub const fn kind(self) -> CommandKind {
-        match self {
+    const fn target(self) -> ReplyTarget {
+        ReplyTarget::Command(match self {
             Self::Command02 => CommandKind::Command02,
             Self::Command03 => CommandKind::Command03,
+            Self::LensBringUp => CommandKind::LensBringUp,
+            Self::LensStop => CommandKind::LensStop,
             Self::HalfPress => CommandKind::HalfPress,
             Self::Autofocus => CommandKind::Autofocus,
             Self::LensDrive => CommandKind::LensDrive,
+            Self::Cancel => CommandKind::Cancel,
             Self::Command17 => CommandKind::Command17,
-        }
+            Self::Command2c => CommandKind::Command2c,
+            Self::Step => return ReplyTarget::Notification(ClientNotification::Notification1b),
+        })
     }
 
-    /// Words in the command's parameter block.
-    pub fn words(self) -> usize {
-        PARAMETER_BLOCKS[usize::from(command_code(self.kind()))].capacity / 4
-    }
+    /// The message code whose parameter block holds the words.
+    pub fn code(self) -> u8 { reply_target_code(self.target()) }
+
+    /// Words in the message's parameter block.
+    pub fn words(self) -> usize { PARAMETER_BLOCKS[usize::from(self.code())].capacity / 4 }
 }
 
 /// The parameter blocks and pending flags of queue-43 commands. `index` is below the command's
 /// `words`.
 pub trait CommandMemory {
     fn word(&self, command: StoredCommand, index: usize) -> u32;
+    fn set_word(&mut self, command: StoredCommand, index: usize, value: u32);
     fn set_pending(&mut self, command: CommandKind, pending: bool);
 }
 
@@ -76,15 +83,24 @@ impl<M: CommandMemory> Commands<M> {
         (index < command.words()).then(|| self.memory.word(command, index))
     }
 
+    /// Stores `value` when `index` is inside the block; `false` when it is not.
+    pub fn set_word(&mut self, command: StoredCommand, index: usize, value: u32) -> bool {
+        let inside = index < command.words();
+        if inside {
+            self.memory.set_word(command, index, value);
+        }
+        inside
+    }
+
     pub fn set_pending(&mut self, command: CommandKind, pending: bool) { self.memory.set_pending(command, pending) }
 
     fn callback(&self, command: StoredCommand) -> Option<ClientCallback> {
         xm1_saclac_interface::stock::optional_callback(self.memory.word(command, 0))
     }
 
-    fn finish(&mut self, command: StoredCommand, status: CompletionStatus) {
+    fn finish(&mut self, command: CommandKind, status: CompletionStatus) {
         if ends_command(status) {
-            self.memory.set_pending(command.kind(), false);
+            self.memory.set_pending(command, false);
         }
     }
 
@@ -92,7 +108,7 @@ impl<M: CommandMemory> Commands<M> {
     pub fn reply_lens_drive(&mut self, reply: LensDriveReply, channels: &impl Channels, clients: &mut impl Clients) {
         let callback = self.callback(StoredCommand::LensDrive);
         let client = self.memory.word(StoredCommand::LensDrive, 2);
-        self.finish(StoredCommand::LensDrive, reply.status);
+        self.finish(CommandKind::LensDrive, reply.status);
         if let Some(callback) = callback {
             let third = if channels.is_valid(reply.channel) { client } else { UNCONFIGURED_CHANNEL };
             let [fourth, fifth] = reply.words;
@@ -103,7 +119,7 @@ impl<M: CommandMemory> Commands<M> {
     /// Replies to command 0x17 with its status (0xefb4b8).
     pub fn reply_command17(&mut self, status: CompletionStatus, clients: &mut impl Clients) {
         let callback = self.callback(StoredCommand::Command17);
-        self.finish(StoredCommand::Command17, status);
+        self.finish(CommandKind::Command17, status);
         if let Some(callback) = callback {
             clients.enter(callback, ClientArguments::Status(status));
         }
@@ -128,7 +144,7 @@ impl<M: CommandMemory> Commands<M> {
 
         let callback = self.callback(StoredCommand::Autofocus);
         let client = self.memory.word(StoredCommand::Autofocus, 39);
-        self.finish(StoredCommand::Autofocus, status);
+        self.finish(CommandKind::Autofocus, status);
         if let Some(callback) = callback {
             clients.enter(callback, ClientArguments::Reply { status, words: [value, client, u32::from(noticed), probes] });
         }

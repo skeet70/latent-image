@@ -11,8 +11,8 @@ use crate::image_registers::{pack_window_limits, RegisterGroup, RegisterSnapshot
 use crate::lens::{LensBounds, LensControl, LensNotices, LensProbe, Notice, ProbeState, Rendezvous};
 use crate::lens_com::{LensComClient, RequestNumber};
 use crate::settings::{
-    halfword, AdjustmentKey, Adjustments, Aspect, CaptureMode, Channel, ChannelRemap, Channels, Conversions,
-    RemapArguments, RemappedWord, WindowVariant,
+    halfword, AdjustmentKey, Adjustments, Aspect, CaptureMode, ChannelRemap, Conversions, RemapArguments, RemappedWord,
+    WindowVariant,
 };
 
 /// The machine the boundary reads, writes and enters.
@@ -99,10 +99,17 @@ impl<M: Machine> Stock<M> {
 /// One pending byte per command code (0xef9aec).
 const PENDING_FLAGS: u32 = 0x169_cf24;
 
+impl<M: Machine> Stock<M> {
+    fn block_address(command: StoredCommand, index: usize) -> u32 {
+        PARAMETER_BLOCKS[usize::from(command.code())].address + 4 * index as u32
+    }
+}
+
 impl<M: Machine> CommandMemory for Stock<M> {
-    fn word(&self, command: StoredCommand, index: usize) -> u32 {
-        let block = PARAMETER_BLOCKS[usize::from(command_code(command.kind()))].address;
-        self.machine.read_u32(block + 4 * index as u32)
+    fn word(&self, command: StoredCommand, index: usize) -> u32 { self.machine.read_u32(Self::block_address(command, index)) }
+
+    fn set_word(&mut self, command: StoredCommand, index: usize, value: u32) {
+        self.machine.write_u32(Self::block_address(command, index), value);
     }
 
     fn set_pending(&mut self, command: CommandKind, pending: bool) {
@@ -217,12 +224,6 @@ impl<M: Machine> Adjustments for Stock<M> {
     fn admits_unselected_mode(&self) -> bool {
         self.machine.enter(ADJUSTMENT_BYTE, &[UNSELECTED_MODES_KEY as usize]) as u8 != 0
     }
-}
-
-const CHANNELS: u32 = 0x74_a214;
-
-impl<M: Machine> Channels for Stock<M> {
-    fn is_valid(&self, channel: Channel) -> bool { self.machine.enter(CHANNELS, &[channel.0 as usize]) != 0 }
 }
 
 const REMAP: u32 = 0x74_947c;

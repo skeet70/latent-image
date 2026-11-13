@@ -3,7 +3,7 @@
 //! Stock configuration derivations other tasks also reach. They stay stock behind the boundary;
 //! the composition root binds this trait to their entries.
 
-use crate::channel::Channel;
+use xm1_saclac_shared::settings::Channel;
 
 /// 0x7498e0's arguments after the channel.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -3,8 +3,9 @@
 //! The configuration section of a shot's dump (0x748928): a channel's step table and the
 //! adjustment words, limits and selection words the shot was configured with.
 
+use xm1_saclac_shared::settings::Channel;
+
 use crate::adjustment::{byte, half, signed_half, Adjustments};
-use crate::channel::Channel;
 use crate::limits::{limit, shifted_floor, shifted_second_floor, Kind, Limit, Side};
 use crate::ports::Derivations;
 use crate::table::{bank_size, rounded_word, value, Row, Step};

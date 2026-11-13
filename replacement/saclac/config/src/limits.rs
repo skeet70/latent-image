@@ -2,8 +2,10 @@
 
 //! Limits read from the adjustment area by mode, and the curve positions derived from a level.
 
+use xm1_saclac_shared::settings::Channel;
+
 use crate::adjustment::{byte, half, signed_half, word, Adjustments};
-use crate::channel::{self, Channel};
+use crate::channel;
 use crate::numeric::{divide, divide_unsigned};
 use crate::ports::{Derivations, ExportQuery, RangeQuery};
 use crate::table::{self, Row, Step};

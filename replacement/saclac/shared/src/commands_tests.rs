@@ -33,6 +33,8 @@ impl Memory {
 impl CommandMemory for Memory {
     fn word(&self, command: StoredCommand, index: usize) -> u32 { self.words.get(&(command, index)).copied().unwrap_or(0) }
 
+    fn set_word(&mut self, command: StoredCommand, index: usize, value: u32) { self.words.insert((command, index), value); }
+
     fn set_pending(&mut self, command: CommandKind, pending: bool) { self.log.borrow_mut().push(Event::Pending(command, pending)) }
 }
 
@@ -70,14 +72,28 @@ fn stored_parameters_are_read_inside_their_block_only() {
 }
 
 #[test]
+fn stored_parameters_are_written_inside_their_block_only() {
+    let (mut commands, ..) = commands(&[]);
+    assert!(commands.set_word(StoredCommand::LensDrive, 3, 0x77));
+    assert!(!commands.set_word(StoredCommand::Cancel, 2, 0x88));
+    assert_eq!(commands.word(StoredCommand::LensDrive, 3), Some(0x77));
+    assert_eq!(commands.memory().words.get(&(StoredCommand::Cancel, 2)), None);
+}
+
+#[test]
 fn each_command_reads_the_words_its_parameter_block_holds() {
     for (command, words) in [
         (StoredCommand::Command02, 7),
         (StoredCommand::Command03, 6),
+        (StoredCommand::LensBringUp, 6),
+        (StoredCommand::LensStop, 3),
         (StoredCommand::HalfPress, 16),
         (StoredCommand::Autofocus, 40),
         (StoredCommand::LensDrive, 5),
+        (StoredCommand::Cancel, 2),
         (StoredCommand::Command17, 10),
+        (StoredCommand::Step, 2),
+        (StoredCommand::Command2c, 2),
     ] {
         let (commands, ..) = commands(&[]);
         assert_eq!(command.words(), words, "{command:?}");
