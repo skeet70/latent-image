@@ -5,8 +5,10 @@ package(default_visibility = ["//visibility:public"])
 SOURCES = [
     "src/exposure.rs",
     "src/round.rs",
+    "src/search.rs",
     "src/stock.rs",
     "src/stock/exposure.rs",
+    "src/stock/search.rs",
 ]
 
 xm1_rust_rlib(
@@ -30,6 +32,7 @@ xm1_rust_host_test(
     crate_name = "xm1_saclac_interface",
     data = SOURCES + [
         "src/exposure_tests.rs",
+        "src/search_tests.rs",
         "src/tests.rs",
     ],
 )
