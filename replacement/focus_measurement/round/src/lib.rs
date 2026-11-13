@@ -12,6 +12,8 @@ pub mod stock;
 pub mod planner;
 pub mod profile;
 pub mod record;
+pub mod pipeline;
+pub mod window;
 
 #[cfg(test)]
 extern crate std;
@@ -35,3 +37,5 @@ mod live_tests;
 mod fakes;
 #[cfg(test)]
 mod record_tests;
+#[cfg(test)]
+mod window_tests;

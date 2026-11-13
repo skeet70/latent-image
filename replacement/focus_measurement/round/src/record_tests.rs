@@ -1,7 +1,8 @@
 use crate::fakes::{Outbound, Ports};
 use crate::lanes::Selection;
-use crate::profile::{FrameInterval, IntervalHistory, IntervalTracking, ProfileSelection, PublishedResult, StatisticsInUse};
-use crate::record::{apply, Request, SearchMode, Statistics};
+use crate::profile::{FrameInterval, ProfileMode, IntervalHistory, IntervalTracking, ProfileSelection, PublishedResult, StatisticsInUse};
+use crate::pipeline::Statistics;
+use crate::record::{apply, Request, SearchMode};
 use crate::round::{ParameterClient, RecordEffect, SearchStart};
 use xm1_saclac_interface::round::{GeometryCalibration, GeometryPair, MeasurementGeometry, RetainedGeometryValue};
 use xm1_saclac_interface::{stock, CommandKind, CompletionStatus, RecordHandle, ReplyTarget};
@@ -88,7 +89,7 @@ fn a_measurement_tick_captures_the_statistics_in_use_then_records_the_history() 
     ]);
 
     ports.records.in_use = StatisticsInUse { primary: true, search: true, auxiliary: false };
-    ports.records.profile.mode_six = true;
+    ports.records.profile.mode = ProfileMode(6);
     apply(RecordEffect::CollectReady, record(), &mut ports);
     assert_eq!(ports.take(), [
         Outbound::Capture(Statistics::Primary),
@@ -102,7 +103,7 @@ fn a_measurement_tick_captures_the_statistics_in_use_then_records_the_history() 
 fn the_mode_six_request_follows_the_primary_statistics_only() {
     let mut ports = Ports::new(Some(ACQUISITION), ());
     ports.records.in_use = StatisticsInUse { primary: false, search: true, auxiliary: false };
-    ports.records.profile.mode_six = true;
+    ports.records.profile.mode = ProfileMode(6);
     apply(RecordEffect::CollectReady, record(), &mut ports);
     assert!(!ports.take().contains(&Outbound::ModeSixStatistics));
 }
@@ -161,7 +162,7 @@ fn a_plan_that_considered_primary_acquisition_updates_the_interval_history() {
 fn the_search_mode_names_the_lane_and_whether_the_profile_selects() {
     let mut ports = Ports::new(Some(ACQUISITION), ());
     apply(RecordEffect::SearchMode(SearchStart::Search), record(), &mut ports);
-    ports.records.profile.selection = ProfileSelection::Other;
+    ports.records.profile.selection = ProfileSelection::Other(2);
     apply(RecordEffect::SearchMode(SearchStart::Search), record(), &mut ports);
     apply(RecordEffect::SearchMode(SearchStart::Image), record(), &mut ports);
     assert_eq!(ports.take(), [

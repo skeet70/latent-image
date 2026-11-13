@@ -5,7 +5,10 @@ use crate::jobs::{self, Calculation};
 use crate::lanes::Selection;
 use crate::live::{Effects, Measurement};
 use crate::planner::Mode;
-use crate::record::Statistics;
+use crate::pipeline::Statistics;
+use crate::profile::{WindowPosition, WindowStatus};
+use crate::record::Request;
+use crate::window::WindowResult;
 use crate::round::{LaneSignal, LaneStatus};
 use xm1_saclac_controllers::children::{ChildEvent, ChildOutcome, MeasurementControl};
 use xm1_saclac_interface::{stock, Command, CommandKind, Completed, Completion, CompletionStatus, RecordHandle, ReplyTarget};
@@ -86,10 +89,9 @@ fn initialization_enables_acquisition_and_window_and_initializes_the_other_lanes
         Traffic::Search("initialize"),
         Traffic::Calculation(Calculation::Auxiliary, jobs::Effect::Initialize),
         Traffic::Image("initialize"),
-        Traffic::Calculation(Calculation::Window, jobs::Effect::Initialize),
-        Traffic::Calculation(Calculation::Window, jobs::Effect::Enable),
         Traffic::Calculation(Calculation::Source, jobs::Effect::Initialize),
     ]);
+    assert!(fake.records.in_use.primary);
 }
 
 #[test]
@@ -99,12 +101,11 @@ fn a_round_submits_window_and_primary_acquisition_and_collects_their_results() {
     measurement.handle(control(MeasurementControl::Initialize), &mut fake);
     fake.extra.take();
     assert_eq!(measurement.handle(completion(Completion::Accessor4b), &mut fake), ChildOutcome::Pending);
-    assert_eq!(fake.extra.take(), [
-        Traffic::Calculation(Calculation::Window, jobs::Effect::Submit),
-        Traffic::Acquisition(acquisition::Effect::SubmitPrimary(Pass::First)),
-    ]);
+    assert_eq!(fake.extra.take(), [Traffic::Acquisition(acquisition::Effect::SubmitPrimary(Pass::First))]);
+    assert!(fake.take().iter().any(|traffic| matches!(traffic, Outbound::Request(Request::Window(_)))));
+    fake.window_result = Some(WindowResult { status: WindowStatus(5), position: WindowPosition([1, 2]) });
     assert_eq!(measurement.handle(completion(Completion::Calculation8d), &mut fake), ChildOutcome::Pending);
-    assert_eq!(fake.extra.take(), [Traffic::Calculation(Calculation::Window, jobs::Effect::Collect)]);
+    assert_eq!((fake.records.window.status, fake.records.window_position), (WindowStatus(5), WindowPosition([1, 2])));
     assert_eq!(measurement.handle(completion(Completion::Calculation87), &mut fake), ChildOutcome::Pending);
     assert_eq!(fake.extra.take(), [Traffic::Acquisition(acquisition::Effect::CollectPrimary), Traffic::Acquisition(acquisition::Effect::PublishPrimary)]);
 }
@@ -116,11 +117,8 @@ fn stopping_a_round_releases_each_enabled_job() {
     measurement.handle(control(MeasurementControl::Initialize), &mut fake);
     fake.extra.take();
     assert_eq!(measurement.handle(control(MeasurementControl::Stop), &mut fake), ChildOutcome::Complete);
-    assert_eq!(fake.extra.take(), [
-        Traffic::Acquisition(acquisition::Effect::Release),
-        Traffic::Search("stop"),
-        Traffic::Calculation(Calculation::Window, jobs::Effect::Release),
-    ]);
+    assert_eq!(fake.extra.take(), [Traffic::Acquisition(acquisition::Effect::Release), Traffic::Search("stop")]);
+    assert!(fake.take().is_empty());
 }
 
 #[test]
@@ -165,7 +163,9 @@ fn a_measurement_tick_captures_the_statistics_in_use_and_records_the_history() {
     assert!(!fake.records.capture_attached);
     assert!(fake.records.history_restarted);
     measurement.handle(completion(Completion::Accessor4b), &mut fake);
-    assert_eq!(fake.take(), [Outbound::Capture(Statistics::Primary), Outbound::MeasurementHistory]);
+    let traffic = fake.take();
+    assert_eq!(traffic[..2], [Outbound::Capture(Statistics::Primary), Outbound::MeasurementHistory]);
+    assert!(matches!(traffic[2], Outbound::Request(Request::Window(_))));
 }
 
 #[test]

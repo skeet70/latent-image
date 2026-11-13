@@ -22,9 +22,20 @@ pub struct StatisticsInUse {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PublishedResult { Acquisition, Search, Auxiliary, Source }
 
-/// How the profile a record selects chooses its measurement.
+/// How the profile a record selects chooses its measurement. `Other` carries a
+/// value the round only passes on.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ProfileSelection { Unselected, Record, Other }
+pub enum ProfileSelection { Unselected, Record, Other(u8) }
+
+/// The profile's measurement mode, a value the round tests for six and for zero
+/// and otherwise passes on.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ProfileMode(pub u8);
+
+impl ProfileMode {
+    pub const fn six(self) -> bool { self.0 == 6 }
+    pub const fn set(self) -> bool { self.0 != 0 }
+}
 
 /// What the selected profile does with the frame-interval history when a
 /// measurement tick or plan asks for it.
@@ -67,8 +78,7 @@ impl IntervalHistory {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Profile {
     pub selection: ProfileSelection,
-    /// The profile's measurement mode is six.
-    pub mode_six: bool,
+    pub mode: ProfileMode,
     pub interval_tracking: IntervalTracking,
     /// An autofocus command refreshes the measurement geometry.
     pub geometry_on_autofocus: bool,
@@ -83,6 +93,35 @@ pub struct ProfileGeometry {
     pub second_parameter: RetainedGeometryValue,
 }
 
+/// A value the shared record holds for a retained consumer, which alone gives it meaning.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RetainedWord(pub u32);
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RetainedHalfword(pub u16);
+
+/// The status of the latest window calculation.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct WindowStatus(pub u32);
+
+impl WindowStatus {
+    /// Statuses 1 and 2 keep the measurement power requested.
+    pub const fn holds_power(self) -> bool { matches!(self.0, 1 | 2) }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct WindowPosition(pub [u16; 2]);
+
+/// The window calculation's part of the shared record; the window request
+/// carries `first`, `halfword` and `second` to calc unchanged.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct WindowRecord {
+    pub status: WindowStatus,
+    pub first: RetainedWord,
+    pub halfword: RetainedHalfword,
+    pub second: RetainedWord,
+}
+
 /// The round's view of the shared measurement record and the profile records.
 /// A write names the record whose grant covers it; a record without that grant
 /// leaves the shared record unchanged.
@@ -90,6 +129,7 @@ pub trait ProfileRecords {
     /// The measurement kinds the shared record offers; `None` when it offers none.
     fn offered(&mut self) -> Option<Selection>;
     fn statistics_in_use(&mut self) -> StatisticsInUse;
+    fn set_statistics_in_use(&mut self, record: RecordHandle, in_use: StatisticsInUse);
     /// Detaches the buffer that receives measurement captures.
     fn detach_capture_buffer(&mut self, record: RecordHandle);
     /// Marks `result` invalid for its readers.
@@ -103,4 +143,7 @@ pub trait ProfileRecords {
     fn set_interval_history(&mut self, record: RecordHandle, history: IntervalHistory);
     fn profile(&mut self, record: RecordHandle) -> Profile;
     fn geometry(&mut self, record: RecordHandle) -> ProfileGeometry;
+    fn window(&mut self) -> WindowRecord;
+    fn store_window_status(&mut self, record: RecordHandle, status: WindowStatus);
+    fn store_window_position(&mut self, record: RecordHandle, position: WindowPosition);
 }

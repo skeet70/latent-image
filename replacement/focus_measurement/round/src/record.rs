@@ -3,8 +3,9 @@
 //! The round's record effects carried out against the profile records, the
 //! property store, the imaging pipeline and the image peer.
 
+use crate::pipeline::{Exposure, Pipeline, Statistics};
 use crate::planner::{Cadence, Mode, Work};
-use crate::profile::{FrameInterval, IntervalHistory, IntervalTracking, ProfileRecords, ProfileSelection, PublishedResult};
+use crate::profile::{IntervalHistory, IntervalTracking, ProfileRecords, ProfileSelection, PublishedResult};
 use crate::round::{ParameterClient, RecordEffect, SearchStart};
 use xm1_saclac_controllers::replies;
 use xm1_saclac_interface::round::{GeometryCalibration, MeasurementGeometry};
@@ -33,17 +34,20 @@ pub trait Settings {
     /// Whether the round keeps the frame-interval history at all.
     fn keeps_interval_history(&mut self) -> bool;
     fn geometry_calibration(&mut self) -> GeometryCalibration;
+    /// Whether measurement requests leave trace marks.
+    fn traces_measurement(&mut self) -> bool;
+}
+
+/// Requests or releases the power the window calculation needs.
+pub trait Power {
+    fn request_measurement_power(&mut self, held: bool);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Statistics { Primary, Search, Auxiliary }
+pub enum TraceMark { WindowRequest }
 
-pub trait Pipeline {
-    fn capture(&mut self, statistics: Statistics);
-    /// `None` when the pipeline's current timing has no known interval.
-    fn frame_interval(&mut self) -> Option<FrameInterval>;
-    /// Requests the mode-six statistics unless a request is outstanding.
-    fn request_mode_six_statistics(&mut self);
+pub trait Trace {
+    fn trace(&mut self, mark: TraceMark);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,9 +58,10 @@ pub enum Request {
     /// Answered by the image peer with completion 0x45.
     SearchMode(SearchMode),
     Geometry(MeasurementGeometry),
+    Window(crate::window::WindowRequest),
 }
 
-pub trait Ports: ProfileRecords + Settings + Pipeline + replies::Effects {
+pub trait Ports: ProfileRecords + Settings + Pipeline + Exposure + Power + Trace + replies::Effects {
     fn request(&mut self, request: Request);
     fn record_measurement_history(&mut self, record: RecordHandle);
 }
@@ -132,7 +137,7 @@ fn collect(record: RecordHandle, ports: &mut impl Ports) {
     let in_use = ports.statistics_in_use();
     if in_use.primary {
         ports.capture(Statistics::Primary);
-        if ports.profile(record).mode_six { ports.request_mode_six_statistics(); }
+        if ports.profile(record).mode.six() { ports.request_mode_six_statistics(); }
     }
     if in_use.search { ports.capture(Statistics::Search); }
     if in_use.auxiliary { ports.capture(Statistics::Auxiliary); }

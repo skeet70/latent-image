@@ -44,7 +44,7 @@ pub const fn alternate_search_rule(flags: SearchModeFlags) -> crate::record::Alt
 /// compare it with 0 and 1 only.
 pub const fn profile_selection(byte: ProfileSelectionByte) -> crate::profile::ProfileSelection {
     use crate::profile::ProfileSelection;
-    match byte.0 { 0 => ProfileSelection::Unselected, 1 => ProfileSelection::Record, _ => ProfileSelection::Other }
+    match byte.0 { 0 => ProfileSelection::Unselected, 1 => ProfileSelection::Record, other => ProfileSelection::Other(other) }
 }
 
 /// X-M1 1.50: 0xf04840..0xf0499c and 0xf32530..0xf325cc use this lane encoding.
@@ -135,4 +135,43 @@ pub fn image_reply_values(channel: crate::image::ImageChannel, value: crate::ima
         slot.copy_from_slice(&word.to_le_bytes());
     }
     values
+}
+
+/// X-M1 1.50: the raw profile byte 0x74e5c0 returns.
+pub const fn profile_selection_byte(selection: crate::profile::ProfileSelection) -> u8 {
+    use crate::profile::ProfileSelection;
+    match selection { ProfileSelection::Unselected => 0, ProfileSelection::Record => 1, ProfileSelection::Other(byte) => byte }
+}
+
+/// X-M1 1.50: 0xff6b4c case 0 captures the primary statistics into 4096 bytes at 0x5ffec1b4.
+const PRIMARY_STATISTICS: (u32, u32) = (0x5ffe_c1b4, 4096);
+
+/// X-M1 1.50: 0xf3a564..0xf3a73c builds the 76-byte window request on the stack
+/// and 0xf4c6e8 posts it with the completion word at byte 76 to calc 0x3c0c.
+/// Bytes 56..63 come from planner words +0x48 and +0x44 (0xfa8018, 0xfa9588),
+/// whose setters 0xfa8000 and 0xfa9578 have no caller, so they are zero.
+/// Unwritten stack bytes 10..11, 17..19, 28..31 and 34..35 are zero here.
+pub fn window_request_payload(request: crate::window::WindowRequest, completion: xm1_saclac_controllers::stock::StockCallbackWord) -> [u8; 80] {
+    let mut bytes = [0; 80];
+    let mut put = |offset: usize, value: &[u8]| bytes[offset..offset + value.len()].copy_from_slice(value);
+    let snapshot = request.snapshot;
+    put(0, &u32::from(profile_selection_byte(request.selection)).to_le_bytes());
+    put(4, &request.record.first.0.to_le_bytes());
+    put(8, &request.level.to_le_bytes());
+    put(12, &snapshot.mode.0.to_le_bytes());
+    put(16, &[snapshot.flags]);
+    put(20, &snapshot.exposure[0].0.to_le_bytes());
+    put(24, &snapshot.levels[0].to_le_bytes());
+    put(26, &request.reference.to_le_bytes());
+    put(32, &request.record.halfword.0.to_le_bytes());
+    put(36, &PRIMARY_STATISTICS.0.to_le_bytes());
+    put(40, &PRIMARY_STATISTICS.1.to_le_bytes());
+    put(44, &snapshot.adjustment.0.to_le_bytes());
+    put(48, &request.record.status.0.to_le_bytes());
+    put(52, &request.record.second.0.to_le_bytes());
+    put(64, &u32::from(request.refresh).to_le_bytes());
+    put(68, &u32::from(request.mode.0).to_le_bytes());
+    put(72, &u32::from(request.selected).to_le_bytes());
+    put(76, &completion.0.to_le_bytes());
+    bytes
 }

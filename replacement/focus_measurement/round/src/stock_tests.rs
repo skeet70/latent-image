@@ -63,3 +63,34 @@ fn a_parameter_change_names_its_client_then_the_requested_and_offered_selections
     let short = parameter_change(xm1_saclac_interface::stock::parameters(&block[..4]));
     assert_eq!((short.requested, short.offered), (Selection::default(), Selection::default()));
 }
+
+#[test]
+fn the_window_request_places_each_field_and_zeroes_the_unwritten_bytes() {
+    use crate::pipeline::{GainStep, PipelineSnapshot, PipelineWord};
+    use crate::profile::{ProfileMode, ProfileSelection, RetainedHalfword, RetainedWord, WindowRecord, WindowStatus};
+    use crate::stock::window_request_payload;
+    use crate::window::WindowRequest;
+    use xm1_saclac_controllers::stock::StockCallbackWord;
+    let request = WindowRequest {
+        selection: ProfileSelection::Other(2),
+        mode: ProfileMode(6),
+        selected: true,
+        snapshot: PipelineSnapshot {
+            mode: PipelineWord(0x0102_0304), flags: 0x55, gain_step: GainStep(1),
+            exposure: [PipelineWord(0x1112_1314), PipelineWord(0x99)], levels: [0x2122, 0x3132],
+            adjustment: PipelineWord(0x4142_4344),
+        },
+        level: 0x5152,
+        reference: 0x6162,
+        record: WindowRecord { status: WindowStatus(2), first: RetainedWord(0x7172_7374), halfword: RetainedHalfword(0x8182), second: RetainedWord(0x9192_9394) },
+        refresh: true,
+    };
+    let bytes = window_request_payload(request, StockCallbackWord(0xf3a3f8));
+    let word = |offset: usize| u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+    let half = |offset: usize| u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap());
+    assert_eq!((word(0), word(4), half(8)), (2, 0x7172_7374, 0x5152));
+    assert_eq!((word(12), bytes[16], word(20), half(24), half(26)), (0x0102_0304, 0x55, 0x1112_1314, 0x2122, 0x6162));
+    assert_eq!((half(32), word(36), word(40), word(44)), (0x8182, 0x5ffe_c1b4, 4096, 0x4142_4344));
+    assert_eq!((word(48), word(52), word(56), word(60), word(64), word(68), word(72), word(76)), (2, 0x9192_9394, 0, 0, 1, 6, 1, 0xf3a3f8));
+    for padding in [10..12, 17..20, 28..32, 34..36] { assert!(bytes[padding].iter().all(|&byte| byte == 0)); }
+}
