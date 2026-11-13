@@ -68,6 +68,8 @@ impl CaptureOutput {
             words: [self.word(0x48), self.word(0x4c), self.word(0x50)],
         }
     }
+    /// The output's last word; only the capture dump reads it.
+    pub fn trailing_word(&self) -> u32 { self.word(0x54) }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
