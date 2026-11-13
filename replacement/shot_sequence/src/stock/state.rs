@@ -6,7 +6,7 @@ use crate::absorb::AuxiliaryOutcome;
 use crate::grid_boundary::GridSetting;
 use crate::state::StateAddress;
 use xm1_saclac_interface::calculation::{AreaAt, AreaIndex, FocusSummary, GridCell, ResultPass, TrackedKind};
-use xm1_saclac_interface::selection::{ClassifyStage, SelectionList, SelectionSlot};
+use xm1_saclac_interface::selection::{ClassifyStage, ResultBuffer, SelectionList, SelectionSlot};
 use xm1_saclac_interface::stock::calculation_result as result;
 
 const fn at(address: u32) -> StateAddress { StateAddress(address) }
@@ -21,6 +21,10 @@ pub const RETAINED_RESULT: StateAddress = at(super::calculation::RETAINED_RESULT
 pub const ASIDE_RESULT: StateAddress = at(0x16a_6b94);
 /// The retained result's auxiliary source word (0xf1d5e8).
 pub const RETAINED_SOURCE: StateAddress = RETAINED_RESULT.offset(0x63e8);
+
+/// Another task's calc 0x3c02 result buffer, which 0xf1d134 copies over the retained result
+/// (0xf25630 passes one of the focus round's).
+pub const fn result_buffer(buffer: ResultBuffer) -> StateAddress { at(buffer.0) }
 
 pub const AREA_COUNT: StateAddress = RESULT.offset(result::AREA_COUNT);
 pub const RETAINED_HALF: StateAddress = RESULT.offset(result::RETAINED_HALF);

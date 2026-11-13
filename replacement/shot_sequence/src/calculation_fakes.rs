@@ -23,7 +23,7 @@ pub(crate) enum Event {
     Metering(MeteringBlock),
     Export(ResultExport, bool),
     ClearChannels(bool),
-    GridUpdate { reset: bool, focus: bool },
+    GridUpdate { reset: bool, keep_gates: bool },
     Classify(ClassifyStage),
     RetainResult,
     RestoreResult,
@@ -202,7 +202,7 @@ impl CalculationResults for World {
 
 impl SelectionGrid for World {
     fn cell(&mut self, pass: ResultPass, index: AreaIndex) -> GridCell { GridCell::new(index.get(), pass_code(pass).min(2) as u8).unwrap() }
-    fn update_grid(&mut self, _record: RecordHandle, reset: bool, focus: bool, _lens_reference: LensReference) { self.events.push(Event::GridUpdate { reset, focus }); }
+    fn update_grid(&mut self, _record: RecordHandle, reset: bool, keep_gates: bool, _lens_reference: LensReference) { self.events.push(Event::GridUpdate { reset, keep_gates }); }
     fn classify_subjects(&mut self, stage: ClassifyStage, _reference: &AreaReference, _kind: u32, _source: u32, _area: u32) { self.events.push(Event::Classify(stage)); }
     fn retain_result(&mut self) { self.events.push(Event::RetainResult); }
     fn restore_result(&mut self) { self.events.push(Event::RestoreResult); }

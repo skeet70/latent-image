@@ -4,6 +4,7 @@
 //! selection functions, the image layers' class and cell codes, and the configuration.
 
 use crate::calculation_work::CalculationProfile;
+use xm1_saclac_interface::calculation::{ResultPass, TrackedKind};
 use xm1_saclac_interface::selection::{CellCode, SelectionClass, SubjectQuery};
 use xm1_saclac_interface::RecordHandle;
 
@@ -41,16 +42,16 @@ pub struct LimitInputs {
 }
 
 /// The values the calculation library computes a tracked kind's target level from (0xf60eb4).
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LevelQuery {
     pub mode: u32,
     pub flags: u16,
     pub at004b: u32,
     pub at0066: u32,
-    pub pass: u32,
+    pub pass: ResultPass,
     pub at0045: u32,
     pub adjustment_option: u32,
-    pub kind: u32,
+    pub kind: TrackedKind,
     pub at003e: u32,
     pub at0024: i16,
 }
@@ -96,10 +97,10 @@ pub struct DefaultQuery {
 }
 
 /// The values the calculation library blends a focus reference from (0xf4d700).
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BlendQuery {
     pub mode: u32,
-    pub pass: u32,
+    pub pass: ResultPass,
     pub at0045: u32,
     pub adjustment_option: u32,
     pub at003e: u32,

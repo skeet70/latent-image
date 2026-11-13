@@ -172,7 +172,7 @@ fn the_grid_update_follows_the_origin() {
     let update = |input: Absorb| {
         let mut world = World::new();
         run(&input, &mut world);
-        world.events.iter().find_map(|event| match event { Event::GridUpdate { reset, focus } => Some((*reset, *focus)), _ => None }).unwrap()
+        world.events.iter().find_map(|event| match event { Event::GridUpdate { reset, keep_gates } => Some((*reset, *keep_gates)), _ => None }).unwrap()
     };
     assert_eq!(update(half_press(0, false)), (true, true));
     assert_eq!(update(half_press(1, false)), (true, true));
@@ -191,7 +191,7 @@ fn a_repeated_half_press_exports_the_retained_result_between_set_aside_and_resto
     let aside = world.position(&Event::SetAside);
     let expected = [
         Event::RestoreResult,
-        Event::GridUpdate { reset: true, focus: true },
+        Event::GridUpdate { reset: true, keep_gates: true },
         Event::Export(ResultExport::Compact, true),
         Event::Export(ResultExport::SelectedChannel, true),
         Event::Export(ResultExport::SourceLimits, true),

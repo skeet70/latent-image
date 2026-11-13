@@ -11,12 +11,15 @@ pub mod capture_boundary;
 pub mod capture_control;
 pub mod capture_dump;
 pub mod capture_stock;
+pub mod classification;
 pub mod dump_boundary;
 pub mod exposure;
 pub mod exposure_work;
 pub mod finish;
 pub mod finish_work;
+pub mod grid;
 pub mod grid_boundary;
+pub mod grid_refresh;
 pub mod jobs;
 pub mod lens_return;
 pub mod outcome;
@@ -31,6 +34,7 @@ pub mod sequence;
 pub mod secondary_boundary;
 pub mod secondary_job;
 pub mod selection;
+pub mod selection_operations;
 pub mod shared;
 pub mod state;
 pub mod statistics_dump;
@@ -150,3 +154,11 @@ mod primary_job_tests;
 mod selection_tests;
 #[cfg(test)]
 mod capture_dump_tests;
+#[cfg(test)]
+mod grid_fakes;
+#[cfg(test)]
+mod grid_tests;
+#[cfg(test)]
+mod classification_tests;
+#[cfg(test)]
+mod selection_operations_tests;

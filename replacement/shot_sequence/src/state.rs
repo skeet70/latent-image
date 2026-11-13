@@ -7,7 +7,7 @@
 use crate::absorb::{AuxiliaryOutcome, CalculationResults};
 use crate::stock::state as layout;
 use xm1_saclac_interface::calculation::{AreaAt, AreaIndex, AreaResult, AreaRow, AreaTarget, CellSummary, FocusSummary, GridCell, GridPass, ReferenceRequest, ResultPass, TrackedKind};
-use xm1_saclac_interface::selection::{CellCode, ClassifyStage, SelectionClass, SelectionList, SelectionSlot};
+use xm1_saclac_interface::selection::{CellCode, ClassifyStage, ResultBuffer, SelectionClass, SelectionList, SelectionSlot};
 
 /// A location of shot state; only `stock::state` makes one.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -245,19 +245,26 @@ impl<M: StateMemory> ShotState<M> {
 
     pub fn set_subject_mode(&mut self, stage: ClassifyStage, mode: u32) { self.set_word(layout::subject_mode(stage), mode); }
 
-    /// Copies a result buffer of another task over the retained result.
-    pub fn retain_result_from(&mut self, from: StateAddress) { self.memory.copy(layout::RETAINED_RESULT, from, layout::RESULT_BYTES); }
+    /// Copies another task's result buffer over the retained result.
+    pub fn retain_result_from(&mut self, from: ResultBuffer) { self.memory.copy(layout::RETAINED_RESULT, layout::result_buffer(from), layout::RESULT_BYTES); }
 
     pub fn retained_source(&mut self) -> u32 { self.word(layout::RETAINED_SOURCE) }
 
     pub fn set_retained_source(&mut self, source: u32) { self.set_word(layout::RETAINED_SOURCE, source); }
 
     /// Replaces an area's reference and position in the retained result.
-    pub fn set_retained_reference(&mut self, pass: ResultPass, cell: GridCell, index: AreaIndex, reference: u32, position: i16) {
-        let at = layout::retained_area(AreaAt::Cell { pass, cell, index });
+    pub fn set_retained_reference(&mut self, at: AreaAt, reference: u32, position: i16) {
+        let at = layout::retained_area(at);
         let mut area = AreaResult::from_bytes(self.bytes(at));
         area.set_reference(reference, position);
         self.memory.write(at, area.bytes());
+    }
+
+    /// The target word the last finish left and the halfword the last result left.
+    pub fn retained_targets(&mut self) -> (u32, u16) {
+        let [word, _] = layout::RETAINED_TARGET_WORD;
+        let [half, _] = layout::RETAINED_TARGET_HALF;
+        (self.word(word), self.half(half))
     }
 
     pub fn retained_area(&mut self, at: AreaAt) -> AreaResult { AreaResult::from_bytes(self.bytes(layout::retained_area(at))) }

@@ -132,7 +132,7 @@ pub trait CalculationResults {
 pub trait SelectionGrid {
     /// The cell the selection holds for an area of a pass.
     fn cell(&mut self, pass: ResultPass, index: AreaIndex) -> GridCell;
-    fn update_grid(&mut self, record: RecordHandle, reset: bool, focus: bool, lens_reference: LensReference);
+    fn update_grid(&mut self, record: RecordHandle, reset: bool, keep_gates: bool, lens_reference: LensReference);
     /// The record's area references classified into the subject banks.
     fn classify_subjects(&mut self, stage: ClassifyStage, reference: &AreaReference, kind: u32, source: u32, area: u32);
     /// Copies the working result into the retained result.
@@ -233,12 +233,12 @@ impl Plan {
         }
     }
 
-    /// Whether the grid update resets the grid and whether it refreshes its focus references.
+    /// Whether the grid update resets the grid and whether it keeps its target gates.
     fn grid_update(&self) -> (bool, bool) {
         let narrow = !self.whole && matches!(self.mode, 0..=2);
         let reset = self.mode == AUXILIARY_MODE || self.returning || narrow;
-        let focus = self.returning || (!self.whole && matches!(self.mode, 0 | 1));
-        (reset, focus)
+        let keep_gates = self.returning || (!self.whole && matches!(self.mode, 0 | 1));
+        (reset, keep_gates)
     }
 
     fn target(&self, record: RecordHandle) -> AreaTarget {
@@ -344,8 +344,8 @@ fn export_retained(absorb: &Absorb, plan: &Plan, boundary: &mut impl AbsorbBound
 }
 
 fn update_grid(absorb: &Absorb, plan: &Plan, boundary: &mut impl AbsorbBoundary) {
-    let (reset, focus) = plan.grid_update();
-    boundary.update_grid(absorb.exposure_record, reset, focus, absorb.lens_reference);
+    let (reset, keep_gates) = plan.grid_update();
+    boundary.update_grid(absorb.exposure_record, reset, keep_gates, absorb.lens_reference);
 }
 
 fn area_indices(start: u8, count: u8) -> impl Iterator<Item = AreaIndex> { (start..count).map_while(AreaIndex::new) }
