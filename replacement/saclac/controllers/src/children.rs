@@ -7,6 +7,7 @@ pub enum ChildOutcome {
     Complete,
     Pending,
     Measurement(MeasurementOutcome),
+    Search(crate::search::SearchDecision),
     Fault,
 }
 
@@ -51,15 +52,6 @@ pub enum AcquisitionControl {
     Stop,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SearchControl {
-    Initialize,
-    Start,
-    Stop,
-    Prepare,
-    Evaluate,
-    Cancel,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LensControl {
@@ -85,16 +77,38 @@ pub enum ChildEvent<'a, Control> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ChildRequest<'a> {
+pub enum ChildRequest<'a, SearchSample> {
     Measurement(ChildEvent<'a, MeasurementControl>),
     S1Acquisition(ChildEvent<'a, AcquisitionControl>),
-    S1Search(ChildEvent<'a, SearchControl>),
+    S1Search(crate::search::SearchInput<SearchSample>),
     LensBringUp(Message<'a>),
     LensLive(ChildEvent<'a, LensControl>),
     LensS1(ChildEvent<'a, LensControl>),
     Shot(ChildEvent<'a, ShotControl>),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LensEffect {
+    MeasurementOnly,
+    LensReaching,
+}
+
+impl<SearchSample> ChildRequest<'_, SearchSample> {
+    pub const fn lens_effect(&self) -> LensEffect {
+        match self {
+            Self::S1Acquisition(_) => LensEffect::MeasurementOnly,
+            Self::Measurement(_)
+            | Self::S1Search(_)
+            | Self::LensBringUp(_)
+            | Self::LensLive(_)
+            | Self::LensS1(_)
+            | Self::Shot(_) => LensEffect::LensReaching,
+        }
+    }
+}
+
 pub trait Children {
-    fn handle(&mut self, request: ChildRequest<'_>) -> ChildOutcome;
+    type SearchSample;
+
+    fn handle(&mut self, request: ChildRequest<'_, Self::SearchSample>) -> ChildOutcome;
 }

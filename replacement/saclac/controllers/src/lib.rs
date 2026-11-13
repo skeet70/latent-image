@@ -8,6 +8,7 @@ pub mod stock;
 pub mod replies;
 pub mod children;
 pub mod synchronous;
+pub mod search;
 
 #[cfg(test)]
 extern crate std;
@@ -23,3 +24,5 @@ mod reply_tests;
 mod synchronous_tests;
 #[cfg(test)]
 mod boundary_tests;
+#[cfg(test)]
+mod child_contract_tests;
