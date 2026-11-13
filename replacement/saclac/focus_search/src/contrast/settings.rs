@@ -75,9 +75,72 @@ pub enum Setting {
     /// 1: a direction reversal adds `ReversalStep` (a halfword).
     ReversalSteps,
     ReversalStep,
-    LowContrastStep,
-    BaseStep { kind: StepKind, selected: bool },
-    PeriodShift,
+    /// Nonzero: the lens table corrects the focus value.
+    FocusCorrection,
+    /// Selected samples below which a selected record's level is the hold level.
+    SelectedLevelSamples,
+    /// The drive amount a pinned record takes.
+    PinnedAmount,
+    /// 1: the debug display shows each evaluation.
+    DebugDisplay,
+    /// Bit 1: each evaluation is written to the focus log.
+    FocusLog,
+    /// 0 (or `TrendOverride` 0): the peak phase ends in focus instead of returning.
+    PeakReturns,
+    /// 0: a drive to focus turns back from its direction when bit 0 of `FocusDriveTurn` is
+    /// clear, otherwise when it is set.
+    FocusDriveKeeps,
+    FocusDriveTurn,
+    /// Bit 1: the recent measurements' levels can end a peak search.
+    RecentPeak,
+    RecentPeakSamples,
+    /// A halfword.
+    RecentPeakLevel,
+    /// 1: a peak search reads both channel sums.
+    PeakBothChannels,
+    /// 1: a change of the intake's focus words beyond `LevelJumpTens` restarts the search.
+    LevelJump,
+    LevelJumpTens,
+    /// The step a peak search takes back inside its travel limits.
+    EndStep,
+    /// The margin (in tens) a peak must clear its channel's lowest contrast by to hold there.
+    HoldMargin,
+    /// The level drop (percent) that marks a rise.
+    LevelDrop,
+    /// The rise threshold in percent at and below the low logarithm, at and above the high
+    /// one, and the two logarithms in hundreds.
+    RiseHigh,
+    RiseLow,
+    RiseFrom,
+    RiseTo,
+    FallHigh,
+    FallLow,
+    FallFrom,
+    FallTo,
+    /// The combined contrast (in tens) below which the reference series can end a peak search.
+    FallLevel,
+    /// Consecutive focus-value moves that end a scanning peak search after a rise.
+    ScanTurns,
+    /// Consecutive focus-value moves that end it without one.
+    ScanStalls,
+    /// Nonzero: three samples around a new best are fitted.
+    FitPeak,
+    /// 0 logs track marks 3 and 4, else 5 and 6.
+    TrackMarks,
+    /// A word the focus log carries.
+    FocusDisplay,
+    /// Evaluations between debug display refreshes.
+    DebugRate,
+    /// Rows the debug display shows, one bit each.
+    DebugRowsFirst,
+    DebugRowsSecond,
+    DebugRowsThird,
+    /// The change of a focus contrast from the peak (percent of the peak plus tens) that
+    /// the focus log classifies.
+    FocusChangePercent,
+    FocusChangeTens,
+    FocusLowTens,
+    FocusLevelTens,
     MotionCheck,
     SelectedMotionCheck,
     MotionSamples,

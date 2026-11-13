@@ -4,15 +4,23 @@
 
 use xm1_saclac_controllers::search::LensPosition;
 
+mod accept;
+mod focus;
+mod log;
 mod direction;
+mod focus_drive;
 mod motion;
+mod peak;
+mod peak_search;
 mod sample;
 pub mod settings;
 mod step;
 mod tracks;
 
-pub use sample::{BridgeDrive, Stage};
-use settings::Setting;
+pub use log::{FocusLog, FocusLogEntry, LoggedSample};
+pub use peak_search::PeakSearchTrace;
+pub use sample::{BridgeDrive, CorrectedPosition, Stage};
+use settings::{Setting, StepKind};
 
 /// The phase the search is in.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -148,18 +156,61 @@ pub trait Platform {
     /// The record's two levels for its focus area (0x7567ec's area table, +0x204 and +0x206).
     fn area_levels(&mut self) -> [u16; 2];
     /// The lens table's correction of a focus value for a lens position, in tenths
-    /// (0x74ab14 less 0x746944 and 0x746a80, rounded by 0x741fa0).
+    /// (0x74ab14 with the lens word 0x76f340, less 0x746944 and 0x746a80, rounded by
+    /// 0x741fa0).
     fn focus_correction(&mut self, query: CorrectionQuery) -> i16;
-    /// 0x746834.
-    fn parameter_index(&mut self, parameter: u32) -> u32;
-    /// 0xfa8018.
-    fn fine_steps(&mut self) -> bool;
     /// The profile period 0x1005f60 reports for `class`.
     fn profile_period(&mut self, class: u32) -> u32;
     /// The record's profile class (0x757e80).
     fn record_class(&mut self) -> u32;
-    /// 0x7492ac: the step and its rate the lens table gives for a base step.
-    fn lens_step(&mut self, query: StepQuery) -> (u16, u32);
+    /// The lens step a phase moves by and the rate the bridge is told with it (0xfaab3c with
+    /// its base step 0xfab390).
+    fn step(&mut self, query: StepQuery) -> Step;
+    /// A monitor's step scaled by how far the scene moved (0xfaa928).
+    fn monitor_step(&mut self, query: MonitorStepQuery) -> u16;
+    /// Asks the calc planner to refresh the scan drive, or withdraws the request (0xfa9554).
+    fn request_scan_refresh(&mut self, requested: bool);
+    /// Whether the scan-drive refresh stands (0xfa9588).
+    fn scan_refresh(&mut self) -> bool;
+    /// Plans a scanning peak search's drive (0xf3ec50's calls into the calc planner, whose
+    /// plan stays with the planner).
+    fn plan_scan(&mut self, query: ScanQuery) -> ScanPlan;
+    /// Where the planned scan drive had the frame and the lens when the evaluated frame was
+    /// taken (0xf3edcc).
+    fn corrected_position(&mut self, frame_mark: u16) -> CorrectedPosition;
+    /// The drive target for `amount` within `low..=high` (0xfa7ce0).
+    fn drive_target(&mut self, lens: LensIdentity, amount: u16, low: LensPosition, high: LensPosition) -> LensPosition;
+    /// Whether `low` plus `percent` of `high` and the configured margin stays below `value`
+    /// (0xfa9320).
+    fn below_threshold(&mut self, value: u32, high: u32, low: u32, percent: u32) -> bool;
+    /// Whether `series` has passed its peak, and the peak it fell from (0xfa936c).
+    fn passed_peak(&mut self, series: &[u32], percent: u32, recent_peak: bool) -> (bool, Option<u32>);
+    /// Whether `series` fell from its peak far enough (0xfa9488).
+    fn fell_from_peak(&mut self, series: &[u32]) -> bool;
+    /// The library's scaled logarithm of a contrast (0xee9928).
+    fn contrast_log(&mut self, value: u32) -> u32;
+    /// The position where the parabola through three samples peaks (0xf8e9e4 over the curve
+    /// 0xf3e63c builds).
+    fn fit_peak(&mut self, points: [FitPoint; 3]) -> LensPosition;
+    /// The five newest measurements' area levels, newest first, `None` for an empty entry;
+    /// `None` while the measurement history is not kept (0x7567ec).
+    fn measurement_history(&mut self) -> Option<[Option<[u16; 2]>; 5]>;
+    /// The record's focus word (0x757470).
+    fn profile_focus(&mut self) -> i16;
+    /// Property 0xe8 bit 5, which with bit 4 traces each peak search step.
+    fn detailed_tracing(&mut self) -> bool;
+    fn trace_peak_search(&mut self, trace: PeakSearchTrace);
+    /// The lens table's label of the intake's parameter (0x7469a0 of the parameter modulo
+    /// 0x74677c).
+    fn parameter_label(&mut self, parameter: u32) -> u16;
+    /// The dispatch tick count (0x7257a8).
+    fn ticks(&mut self) -> u32;
+    /// Writes `log` at the focus log's next slot and advances it (0xf47598's stores).
+    fn append_focus_log(&mut self, log: &FocusLog);
+    /// The entry in the slot before the focus log's next one.
+    fn newest_focus_log(&mut self) -> FocusLogEntry;
+    /// Shows `text` on the overlay's debug view at `column` and `row` (0x1110918).
+    fn show_debug_text(&mut self, text: &[u8], column: u8, row: u8);
     /// The angular-rate sample the lens reports (0x6b74e4), two axes centred on 0x8000.
     fn angular_rate(&mut self) -> u32;
     /// Asks the lens for the next angular-rate sample (0x6b7660).
@@ -181,19 +232,80 @@ pub struct CorrectionQuery {
     pub class: u32,
     pub lens: LensIdentity,
     pub parameter: u32,
-    pub flags: u32,
 }
 
-/// What 0xfaab3c asks the lens table for a step.
+/// What a step is asked for (0xfaab3c's arguments after the record).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StepQuery {
-    pub lens: LensIdentity,
-    pub parameter_index: u32,
-    pub base: u16,
-    /// The shifted profile period in hundredths.
-    pub period: u32,
+    pub kind: StepKind,
+    /// The intake's parameter word.
+    pub parameter: u32,
+    /// The channel contrast the phase reads; a low one takes the low-contrast base step.
+    pub contrast: u32,
+    /// The profile class the intake took from the capture pipeline.
+    pub profile_class: u32,
     pub lens_mode: u32,
-    pub fine: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Step {
+    pub size: u16,
+    pub rate: u32,
+}
+
+/// What 0xfaa928 scales a monitor's step by.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MonitorStepQuery {
+    pub lens: LensIdentity,
+    pub moved: u32,
+    pub step: u16,
+    pub mark: i16,
+}
+
+/// What a scanning peak search plans its drive from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScanQuery {
+    /// The monitor runs the scan.
+    pub watching: bool,
+    pub contrast: u32,
+    pub lens_mode: u32,
+    pub direction: i8,
+    pub rate: u32,
+    pub limits: TravelLimits,
+    pub frame: ScanFrame,
+    pub moved: u32,
+    pub mark: i16,
+}
+
+/// The intake's words a scan plan reads.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ScanFrame {
+    pub parameter_index: u32,
+    pub stage_halves: [u16; 2],
+    pub current_lens: u32,
+    pub stage_last: u8,
+}
+
+/// What a scan plan gives the search.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScanPlan {
+    /// The travel limits narrowed by the scan's run-up.
+    pub limits: [LensPosition; 2],
+    /// The drive's start and end the bridge is told.
+    pub window: [u16; 2],
+    /// How far the lens runs on after a frame.
+    pub lead: u16,
+}
+
+/// A contrast sample and the lens position it was taken at, as the peak fit keeps them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FitPoint {
+    pub contrast: u32,
+    pub position: i16,
+}
+
+impl FitPoint {
+    pub(crate) const EMPTY: Self = Self { contrast: u32::MAX, position: 0x7fff };
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -253,7 +365,17 @@ pub struct Context {
     pub(crate) reported_class: u32,
     pub(crate) focus_entered: bool,
     pub(crate) focus_position: LensPosition,
+    /// The bridge speed of the drive to `focus_position`.
+    pub(crate) focus_speed: u32,
     pub(crate) focus_started: bool,
+    /// The record's recent-peak word (+0x48): the recent measurements stayed high; a peak
+    /// search then reads the scan pairs.
+    pub(crate) recent_peak: bool,
+    pub(crate) corrected: CorrectedPosition,
+    /// The settled near word when the peak search last looked.
+    pub(crate) watch_reference: i16,
+    pub(crate) focus: focus::Focus,
+    pub(crate) display: log::DebugDisplay,
     pub(crate) pacing: [u32; 3],
     pub(crate) stage: Stage,
     pub(crate) values: sample::Values,
@@ -263,6 +385,7 @@ pub struct Context {
     pub(crate) transition: sample::Transition,
     pub(crate) monitor: sample::Monitor,
     pub(crate) search: direction::Search,
+    pub(crate) peak: peak_search::PeakSearch,
     pub(crate) motion: motion::Motion,
     pub(crate) tracks: tracks::Tracks,
 }
@@ -298,7 +421,13 @@ impl Context {
             reported_class: 2,
             focus_entered: false,
             focus_position: LensPosition(0),
+            focus_speed: 0,
             focus_started: false,
+            recent_peak: false,
+            corrected: CorrectedPosition { frame: LensPosition(0), drive: LensPosition(0) },
+            watch_reference: 0,
+            focus: focus::Focus::new(),
+            display: log::DebugDisplay::new(),
             pacing: [0, 1, 1],
             stage: Stage::Idle,
             values: sample::Values::new(),
@@ -308,6 +437,7 @@ impl Context {
             transition: sample::Transition::new(),
             monitor: sample::Monitor::new(),
             search: direction::Search::new(),
+            peak: peak_search::PeakSearch::new(),
             motion: motion::Motion::new(),
             tracks: tracks::Tracks::new(),
         }

@@ -4,20 +4,9 @@
 //! 0xf41c48 and its helpers).
 
 use super::settings::{Setting, StepKind, TrendBasis};
-use super::{Context, Phase, Platform};
+use super::{Context, FitPoint, Phase, Platform};
 use xm1_saclac_controllers::search::LensPosition;
 use xm1_saclac_interface::search::BridgeStatus;
-
-/// A point the peak fit keeps: a contrast and the position it was taken at.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct FitPoint {
-    pub contrast: u32,
-    pub position: i16,
-}
-
-impl FitPoint {
-    pub(crate) const EMPTY: Self = Self { contrast: u32::MAX, position: 0x7fff };
-}
 
 /// What the direction search and the peak search entry keep between samples.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,7 +43,8 @@ pub(crate) struct Search {
     pub settle_armed: u8,
     pub peak_start: LensPosition,
     pub peak_marks: [u8; 2],
-    pub stale: u32,
+    /// The channel's highest contrast when a peak search ended.
+    pub peak_contrast: u32,
     pub focus_motion: u32,
     pub focus_marks: [u16; 2],
     pub focus_bytes: [u8; 2],
@@ -100,7 +90,7 @@ impl Search {
             settle_armed: 0,
             peak_start: LensPosition(0),
             peak_marks: [0; 2],
-            stale: 0,
+            peak_contrast: 0,
             focus_motion: 0,
             focus_marks: [0; 2],
             focus_bytes: [0; 2],
@@ -158,9 +148,9 @@ impl Context {
         self.transition.hold_mode = 0;
         self.note_direction_sample();
         self.bridge.lens_mode = platform.lens_mode();
-        let (step, rate) = self.step_size(platform, StepKind::Direction);
-        self.step = step;
-        self.bridge.rate = rate;
+        let step = self.step_size(platform, StepKind::Direction);
+        self.step = step.size;
+        self.bridge.rate = step.rate;
         self.scale_direction_step(platform, model);
         self.follow_reported_position(platform);
         let outcome = self.direction_outcome(platform);
@@ -202,7 +192,7 @@ impl Context {
             search.rising = 0;
             search.falling = 0;
             search.still = 0;
-            search.stale = 0;
+            search.peak_contrast = 0;
             search.fit_points = [FitPoint::EMPTY; 4];
             self.forget_tracks();
         }
@@ -441,8 +431,8 @@ impl Context {
     /// 0xf3c9f4: decide from the trend counts.
     fn decide_direction(&mut self, platform: &mut impl Platform) -> Outcome {
         self.search.decision = 4;
-        let (end_step, rate) = self.step_size(platform, StepKind::Scan);
-        self.bridge.rate = rate;
+        let end_step = self.step_size(platform, StepKind::Scan);
+        self.bridge.rate = end_step.rate;
         if self.search.settle != 0 {
             let samples = platform.setting(Setting::TrendSamples);
             if u32::from(self.search.rising) >= samples {
@@ -465,8 +455,8 @@ impl Context {
         if platform.setting(Setting::PairedEvaluation) == 1 {
             if u32::from(self.search.probes) >= limit || decided {
                 self.direction_from_counts();
-                let outcome = if self.ends_in_return(platform, end_step) {
-                    self.search.stale = 0;
+                let outcome = if self.ends_in_return(platform, end_step.size) {
+                    self.search.peak_contrast = 0;
                     Outcome::Return
                 } else {
                     self.enter_probe();
@@ -492,7 +482,7 @@ impl Context {
                 self.enter_probe();
                 Outcome::Probe
             } else {
-                self.search.stale = 0;
+                self.search.peak_contrast = 0;
                 Outcome::Return
             };
             self.forget_counts();
@@ -503,7 +493,7 @@ impl Context {
         if decided {
             self.direction_from_counts();
             let outcome = if changed == [true, true] && platform.setting(Setting::TrendOverride) == 1 {
-                self.search.stale = 0;
+                self.search.peak_contrast = 0;
                 Outcome::Return
             } else {
                 self.enter_probe();
