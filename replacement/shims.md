@@ -594,6 +594,21 @@ The task-43 driver and engine use stock's 37 machine tables. Every machine actio
 | fault reaction `0xf46c20` | trampoline into retained stock | retained SACLAC fault reporting | no | subsystem fault reporting is owned | required |
 | `XM1_REQUIRES_LENS_SAFETY_CONTRACT`, four bytes with value 1 in the linked fixed body | guest-memory layout view | fixed-image stager derives the emulator-only admission contract from this marker | no | a lens safety contract qualifies the image's lens-reaching effects | required |
 
+## saclac_shared
+
+The helpers several saclac modules call (`replacement/saclac/shared`), over the stock services and memory other tasks own. All rows are in `src/stock.rs`.
+
+| Shim | Kind | Other side | Owned now | Removal condition | State |
+| --- | --- | --- | --- | --- | --- |
+| `StockCommands`: parameter-block words through the interface's block table and the pending bytes at `0x169cf24` | guest-memory layout view | retained queue-43 producers and stock machine actions that read the blocks and flags | no | queue-43 producers and every machine are owned | required |
+| `StockClients`: client callback words entered with the status, or the status and four words | trampoline into retained stock | client callbacks stored in the command blocks by other tasks | no | every queue-43 client is owned | required |
+| `StockLensControl` (`0x76d9a8`, `0x76da38`, `0x76dba4`, `0x76da48`, `0x76b8b4`, `0x772f28`, runtime word `0x942ab0`+0x98) and `StockLensNotices` (block `0x954dbc`: notices +4/+8/+0xc, notifier +0x1c, enable +0x20; notifier entered with a four-word record) | trampoline into retained stock | lens control and the tasks that write the notice block (104, 59) | no | lens control is owned | required |
+| `StockRendezvous`: current task `0x723cb8` stored at `0x16c2214`, wait `0x7243a8` on event 2, wake callback `0xf46be0` | trampoline into retained stock | the kernel and saclac's own retained wake callback | no | the driver supplies a kernel-backed rendezvous with an owned wake entry | required |
+| `StockAdjustments` (`0x69f8fc`), `StockChannels` (`0x74a214`), `StockChannelRemap` (`0x74947c`), `StockConversions` (`0x73958c`, `0x734540`, `0x73469c`) | trampoline into retained stock | the settings and conversion services | no | the settings services are owned | required |
+| `StockRegisterSnapshot`: `0x6deb08` over the descriptor tables `0x82158c`..`0x821808`, the fourteen retained packers `0x6913a8`..`0x693aec` | trampoline into retained stock | the image register driver | no | the image pipeline's register layer is owned | required |
+| `StockLensComClient`: client word and request number at `0x8e1f3c`+8/+0xc, completion `0x6b6f9c`, failure report `0x6b92cc` | trampoline into retained stock | lenscom's completion path | no | lenscom requests complete through an owned callback | required |
+| `StockDisplay`: `0x6c68c0`, `0x6c4bec` | trampoline into retained stock | the display driver | no | the display driver is owned | required |
+
 ## saclac_interface
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |
