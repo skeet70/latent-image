@@ -10,7 +10,8 @@ import Data.Word (Word32)
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.Host as H
 import qualified FujiAF.UpdateContainer as U
-import Replacement.Saclac.Artifact
+import Replacement.Saclac.Artifact hiding (admit)
+import qualified Replacement.Saclac.Artifact as Artifact
 import System.Environment (getArgs)
 import System.Directory (canonicalizePath)
 
@@ -41,7 +42,9 @@ main :: IO ()
 main = do
   arguments <- getArgs
   case arguments of
-    [binPath, symbolsPath, disasmPath, sectionsPath] -> do
+    [elfPath, binPath, symbolsPath, disasmPath, sectionsPath] -> do
+      elf <- canonicalizePath elfPath >>= H.readRegular (4 * 1024 * 1024)
+      let admit = Artifact.admit elf
       bin <- canonicalizePath binPath >>= H.readRegular (4 * 1024 * 1024)
       symbols <- canonicalizePath symbolsPath >>= H.readRegular (1024 * 1024)
       disasm <- canonicalizePath disasmPath >>= H.readRegular (1024 * 1024)
@@ -101,7 +104,7 @@ main = do
         (admitInstalled (patch imageBase installed 0xefca70 0) admitted)
       stackTests
       putStrLn ("saclac-placement: fixed body " ++ show (B.length body) ++ " bytes; veneers, layout, publications and stack controls passed")
-    _ -> H.failH "usage: saclac-placement-tests LINKED_BIN SYMBOLS DISASM SECTIONS"
+    _ -> H.failH "usage: saclac-placement-tests LINKED_ELF LINKED_BIN SYMBOLS DISASM SECTIONS"
 
 stackTests :: IO ()
 stackTests = do

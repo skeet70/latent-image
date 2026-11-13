@@ -37,7 +37,7 @@ xm1_rust_elf(
     asm_srcs = ["entry.S"],
     entry = "xm1_saclac_dispatch_entry",
     link_script = ":saclac.ld",
-    extra_ldflags = ["-Wl,--gc-sections"],
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
 )
 
 # The comparison's deliberately wrong variant: the action entry sees the table base in r3.
@@ -65,7 +65,7 @@ xm1_rust_elf(
     asm_srcs = ["entry.S"],
     entry = "xm1_saclac_driver_entry",
     link_script = ":saclac.ld",
-    extra_ldflags = ["-Wl,--gc-sections"],
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
 )
 
 xm1_rust_elf(
@@ -74,7 +74,7 @@ xm1_rust_elf(
     asm_srcs = ["entry.S"],
     entry = "xm1_saclac_dispatch_entry",
     link_script = ":saclac.ld",
-    extra_ldflags = ["-Wl,--gc-sections"],
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
 )
 
 # The two extents are typed once, in Replacement.Saclac.Artifact; this emits the
@@ -211,12 +211,14 @@ haskell_test(
     name = "saclac-placement-tests",
     srcs = ["Tests.hs"],
     args = [
+        "$(rootpath :saclac-image.elf)",
         "$(rootpath :saclac-image.bin)",
         "$(rootpath :saclac-image.symbols)",
         "$(rootpath :saclac-image.disasm)",
         "$(rootpath :saclac-image-sections)",
     ],
     data = [
+        ":saclac-image.elf",
         ":saclac-image-sections",
         ":saclac-image.bin",
         ":saclac-image.disasm",
