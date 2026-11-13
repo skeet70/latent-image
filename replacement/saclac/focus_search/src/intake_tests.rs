@@ -36,6 +36,7 @@ impl Fake {
                 pinned_setting: 0,
                 pinned: 0,
                 pacing: [0; 2],
+                mark: 0x0f8,
                 correction_source: 0,
                 correction_class: 0,
                 corrects_position: 0,
@@ -69,6 +70,7 @@ impl Fake {
 impl IntakePorts for Fake {
     fn frame_snapshot(&mut self) -> FrameSnapshot { self.snapshot }
     fn record(&mut self) -> IntakeRecord { self.record }
+    fn imaging_profile_class(&mut self) -> u32 { 0x55 }
     fn selection_ratio(&mut self) -> [u32; 2] { [11, 22] }
     fn parameter_index(&mut self, parameter: u32) -> u32 { parameter + 1000 }
     fn lens_identity(&mut self) -> LensIdentity { LensIdentity(8) }
@@ -113,7 +115,8 @@ fn the_record_carries_the_snapshot_record_and_level_the_intake_took_in() {
     assert_eq!(intake.frame.settled_near, Some(100));
     assert_eq!((intake.frame.lens, intake.frame.current_lens), (LensIdentity(3), LensIdentity(8)));
     assert_eq!((intake.frame.parameter_index, intake.frame.stage_first_pass, intake.frame.stage_last), (1033, 1, 9));
-    assert_eq!(intake.frame.level, 300);
+    assert_eq!(intake.frame.levels, [500, 300]);
+    assert_eq!((intake.frame.mark, intake.frame.imaging_profile_class), (0x0f8, 0x55));
 }
 
 #[test]

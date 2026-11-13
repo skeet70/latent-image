@@ -28,6 +28,7 @@ pub fn frame_snapshot(bytes: &[u8; FRAME_SNAPSHOT_BYTES]) -> FrameSnapshot {
         pinned_setting: half(bytes, 0x578),
         pinned: word(bytes, 0x57c),
         pacing: pair(0x580),
+        mark: half(bytes, 0x588),
         correction_source: half(bytes, 0x58a) as i16,
         correction_class: word(bytes, 0x58c),
         corrects_position: bytes[0x592],

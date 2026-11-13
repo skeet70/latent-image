@@ -26,6 +26,7 @@ pub struct FrameSnapshot {
     pub pinned_setting: u16,
     pub pinned: u32,
     pub pacing: [u32; 2],
+    pub mark: u16,
     pub correction_source: i16,
     pub correction_class: u32,
     pub corrects_position: u8,
@@ -84,6 +85,8 @@ pub struct ProgramInputs {
 pub trait IntakePorts {
     fn frame_snapshot(&mut self) -> FrameSnapshot;
     fn record(&mut self) -> IntakeRecord;
+    /// The imaging profile class 0xfea7bc reports.
+    fn imaging_profile_class(&mut self) -> u32;
     /// 0xf5206c.
     fn selection_ratio(&mut self) -> [u32; 2];
     /// 0x746834.
@@ -132,9 +135,10 @@ pub struct IntakeFrame {
     /// The near end of the evaluated range, when the snapshot was settled.
     pub settled_near: Option<i16>,
     pub step: u32,
-    pub level: i16,
+    pub levels: [u16; 2],
     pub stage_first_pass: u8,
     pub stage_last: u8,
+    pub stage_halves: [u16; 2],
     pub parameter_index: u32,
     /// The lens the lens layer reports at intake.
     pub current_lens: LensIdentity,
@@ -142,6 +146,8 @@ pub struct IntakeFrame {
     pub pinned: u32,
     pub pinned_setting: u16,
     pub pacing: [u32; 2],
+    pub mark: u16,
+    pub imaging_profile_class: u32,
     pub correction_source: i16,
     pub correction_class: u32,
     pub corrects_position: u8,
@@ -157,6 +163,7 @@ pub struct Intake {
 pub fn take_in(view: IntakeView, ports: &mut impl IntakePorts) -> Intake {
     let snapshot = ports.frame_snapshot();
     let record = ports.record();
+    let imaging_profile_class = ports.imaging_profile_class();
     let ratio = ports.selection_ratio();
     let zone = ports.zone_limit();
     let raised = snapshot.levels[1].wrapping_sub(zone as u16);
@@ -201,15 +208,18 @@ pub fn take_in(view: IntakeView, ports: &mut impl IntakePorts) -> Intake {
             frame_mode: snapshot.frame_mode,
             settled_near: settled.then_some(range[0]),
             step: snapshot.step,
-            level: snapshot.levels[1] as i16,
+            levels: snapshot.levels,
             stage_first_pass: record.stage.first_pass,
             stage_last: record.stage.last,
+            stage_halves: record.stage.halves,
             parameter_index,
             current_lens,
             selected: snapshot.selected,
             pinned: snapshot.pinned,
             pinned_setting: snapshot.pinned_setting,
             pacing: snapshot.pacing,
+            mark: snapshot.mark,
+            imaging_profile_class,
             correction_source: snapshot.correction_source,
             correction_class: snapshot.correction_class,
             corrects_position: snapshot.corrects_position,
