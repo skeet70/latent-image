@@ -1,12 +1,13 @@
 #![forbid(unsafe_code)]
 
-//! The lens children's ports: lens control's senders and probes, the replies through the shared
-//! layer's parameter blocks, the profile-record view and the configuration.
+//! The lens children's ports: lensdc posts through the peer port, lens control's probes, the
+//! replies through the shared layer's parameter blocks, the profile-record view and the
+//! configuration.
 
 use xm1_saclac_config::channel::ConfiguredChannels;
-use xm1_saclac_interface::lens::{LensMode, PositionStep, ProfileSlotReference};
-use xm1_saclac_interface::stock::record_handle_word;
-use xm1_saclac_interface::{CompletionStatus, ParameterValue, RecordHandle};
+use xm1_saclac_interface::lens::{LensMode, LensPayload, PositionStep, ProfileSlotReference};
+use xm1_saclac_interface::stock::{lens_dc_request, record_handle_word, LENS_PAYLOAD_BYTES};
+use xm1_saclac_interface::{CompletionStatus, LensDc, ParameterValue, RecordHandle};
 use xm1_saclac_lens_drive::ports::{
     CommandBlocks, Configuration, DriveFourth, DrivePolicy, DriveResults, DriveWords, Faults, LensControl, LensRequest,
     ModeSource, Probe, Probes, Records, Refused, Replies, Reply, ResourceIndex, ResourceSelection,
@@ -36,12 +37,15 @@ const fn probe(state: ProbeState) -> Probe {
     }
 }
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries> LensControl for Services<M, R, E> {
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P: LensDc> LensControl for Services<M, R, E, P> {
+    /// A drive is not posted while 0x76d9a8 reports 1, as 0x76dec8 refuses then (0x76def4..0x76df00).
     fn send(&mut self, request: LensRequest) -> Result<(), Refused> {
-        match stock::send_lens(&self.machine, &request.payload()) {
-            0 => Ok(()),
-            _ => Err(Refused),
+        let payload = request.payload();
+        if matches!(payload, LensPayload::Drive { .. }) && self.stock.probe(LensProbe::First) == ProbeState::Reported {
+            return Err(Refused);
         }
+        let mut bytes = [0; LENS_PAYLOAD_BYTES];
+        self.peers.request(lens_dc_request(&payload, &mut bytes)).map_err(|_| Refused)
     }
 
     /// In 0xf14ecc's order: 0x76d9a8, 0x76da38, 0x76dba4.
@@ -55,7 +59,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries> LensControl for Services<M,
     fn resource_index(&mut self) -> ResourceIndex { ResourceIndex(self.machine.enter(stock::RESOURCE_INDEX, &[])) }
 }
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries> Replies for Services<M, R, E> {
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Replies for Services<M, R, E, P> {
     fn reply(&mut self, reply: Reply) {
         let call = reply_call(&reply);
         let [status, first, second, third] = call.arguments;
@@ -83,13 +87,13 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries> Replies for Services<M, R, 
     }
 }
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries> Services<M, R, E> {
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Services<M, R, E, P> {
     fn block(&self, command: StoredCommand, index: usize) -> ParameterValue {
         ParameterValue(self.commands.memory().word(command, index))
     }
 }
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries> CommandBlocks for Services<M, R, E> {
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P> CommandBlocks for Services<M, R, E, P> {
     fn drive(&mut self) -> DriveWords {
         let word = |index| self.block(StoredCommand::LensDrive, index);
         DriveWords { value: word(1), second: word(2), third: word(3), fourth: DriveFourth::Carried(word(4)) }
@@ -117,7 +121,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries> CommandBlocks for Services<
     fn lens_stop(&mut self) -> [ParameterValue; 2] { [1, 2].map(|index| self.block(StoredCommand::LensStop, index)) }
 }
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries> Records for Services<M, R, E> {
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Records for Services<M, R, E, P> {
     /// 0x75a7c4(record, 63, 3, tag): all-ones for a record that is no handle or may not derive.
     fn profile_slot(&mut self, record: RecordHandle) -> ProfileSlotReference {
         let derived = xm1_saclac_profile_records::stock::handle(record)
@@ -145,7 +149,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries> Records for Services<M, R, 
     }
 }
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries> Configuration for Services<M, R, E> {
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Configuration for Services<M, R, E, P> {
     fn drive_policy(&mut self) -> DrivePolicy { drive_policy(self.stock.byte(DRIVE_POLICY)) }
 
     fn adjustment_configured(&mut self) -> bool { self.machine.enter(stock::ADJUSTMENT_FIRST_PARAMETER, &[]) != 0 }
@@ -153,12 +157,12 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries> Configuration for Services<
     fn select_lookup(&mut self, index: ResourceIndex) { self.machine.enter(stock::SELECT_LOOKUP, &[index.0 as usize]); }
 }
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries> DriveResults for Services<M, R, E> {
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P> DriveResults for Services<M, R, E, P> {
     fn live_result(&mut self) -> ParameterValue { ParameterValue(self.machine.read_u32(stock::LIVE_DRIVE_RESULT)) }
 
     fn s1_report(&mut self) -> ParameterValue { ParameterValue(self.machine.read_u32(stock::S1_DRIVE_REPORT)) }
 }
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries> Faults for Services<M, R, E> {
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Faults for Services<M, R, E, P> {
     fn fault(&mut self) { self.machine.enter(stock::FAULT, &[]); }
 }

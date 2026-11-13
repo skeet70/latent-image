@@ -1,10 +1,12 @@
-//! A stock machine with byte memory that records each entry it is asked to enter, and the
-//! profile-record entries other tasks share.
+//! A stock machine with byte memory that records each entry it is asked to enter, the
+//! profile-record entries other tasks share, and peer ports over the kernel's fake.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
+use xm1_kernel::fake::{Call, Fake as KernelFake};
+use xm1_kernel::{Form, Kernel, TaskContext, TaskId};
 use xm1_saclac_interface::stock::record_handle_from_a2;
 use xm1_saclac_interface::RecordHandle;
 use xm1_saclac_profile_records::stock::layout::{slot_grant, slot_record, slot_serial, GRANT_READ, GRANT_WRITE};
@@ -13,6 +15,7 @@ use xm1_saclac_profile_records::{
     AccessGroup, Bytes, Grants, Handle, MeasurementSelection, OpenMode, RecordImage, Scope, Serial, SharedHeaderByte, Slot,
     StockEntries, Tag,
 };
+use xm1_saclac_peers::{EmulatorOnly, PeerPorts};
 use xm1_saclac_shared::stock::Machine;
 
 use crate::Services;
@@ -109,11 +112,43 @@ impl StockEntries for Entries {
     fn initialize(&mut self) {}
 }
 
-pub type Root = Services<Fake, Bytes, Entries>;
+pub type Root<P = ()> = Services<Fake, Bytes, Entries, P>;
 
-pub fn root(bytes: Bytes, entries: Entries) -> (Fake, Root) {
+/// The root with no peer ports, for bindings that post nothing.
+pub fn root(bytes: Bytes, entries: Entries) -> (Fake, Root) { root_with((), bytes, entries) }
+
+pub fn root_with<P>(peers: P, bytes: Bytes, entries: Entries) -> (Fake, Root<P>) {
     let fake = Fake::default();
-    (fake.clone(), Services::new(fake, bytes, entries))
+    (fake.clone(), Services::new(fake, bytes, entries, peers))
+}
+
+static LENS_SAFETY_MARKER: u32 = 1;
+
+/// The peer ports a task-43 context posts through, lens-reaching requests included.
+pub type Peers<'c, 'k> = PeerPorts<'c, TaskContext<'k, KernelFake>, EmulatorOnly>;
+
+/// A kernel whose running task is saclac's, task 43.
+pub fn saclac_kernel() -> Kernel<KernelFake> { Kernel::new(KernelFake::with_task(TaskId::new(43).unwrap())) }
+
+pub fn peers<'c, 'k>(cx: &'c TaskContext<'k, KernelFake>) -> Peers<'c, 'k> {
+    PeerPorts::new(cx, EmulatorOnly::new(&LENS_SAFETY_MARKER).unwrap())
+}
+
+/// Each post as (queue, operation, payload), asserting the task form, sender 43 and the queue as
+/// destination.
+pub fn posts(kernel: &Kernel<KernelFake>) -> Vec<(u8, u16, Vec<u8>)> {
+    kernel
+        .backend()
+        .calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            Call::Post { id, form, header, payload } => {
+                assert_eq!((form, header.sender, header.destination), (Form::Task, 43, id.get()), "{header:?}");
+                Some((id.get(), header.operation, payload))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Opens slot 0 on the first record with read and write grants for `groups`, and returns its
