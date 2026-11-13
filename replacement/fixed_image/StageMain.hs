@@ -12,7 +12,7 @@ import qualified FujiAF.Host as H
 import qualified FujiAF.UpdateContainer as U
 import Replacement.FixedImage.Layout
 import Replacement.FixedImage.Record
-import System.Environment (getArgs, getEnv)
+import System.Environment (getArgs, getEnv, setEnv)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>))
 
@@ -35,9 +35,10 @@ run tool arguments = do
 main :: IO ()
 main = do
   arguments <- getArgs
+  work <- getEnv "XM1_RUN_WORK"
+  setEnv "TMPDIR" work
   case arguments of
     ["--ceiling-only", encoder, rebuild, decoder, source, output] -> do
-      work <- getEnv "XM1_RUN_WORK"
       H.withTemporaryAt work "fixed-ceiling-" $ \temporary -> do
         patched <- patchImage encoder rebuild decoder temporary ceilingPublications source Image4
         H.readRegular (64 * 1024 * 1024) patched >>= B.writeFile output
@@ -58,7 +59,6 @@ main = do
       stock <- H.readRegular (64 * 1024 * 1024) source
       parsed <- either H.failH pure (U.parseContainer stock)
       H.ensure (all U.checkPassed (U.checks parsed ++ U.carriedChecks parsed)) "source container checks failed"
-      work <- getEnv "XM1_RUN_WORK"
       H.withTemporaryAt work "fixed-image-stage-" $ \temporary -> do
         let binding = U.partPreTable (U.parsedParts parsed)
         H.ensure (U.mediaWordAt binding buildOffset == 0xfeed1170) "first-stage build-id preimage differs"
