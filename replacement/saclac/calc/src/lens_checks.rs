@@ -3,9 +3,12 @@
 use xm1_saclac_interface::RecordHandle;
 use xm1_saclac_profile_records::stock::shared::{group_14, group_26, group_27};
 
-use crate::adjust::motion::ports::{LensCalibration, LimitQuery};
+use crate::adjust::motion::ports::{LensCalibration, LensTables, LimitQuery};
 use crate::adjust::timing::LevelScale;
-use crate::exposure::ports::{Lens, ProfileAccess};
+use crate::exposure::ports::{Lens, ProfileAccess, Properties};
+use crate::scene_recognition::frame;
+use crate::scene_recognition::ports::LensServices;
+use crate::stock::lens_checks as stock;
 use crate::stock::record;
 
 /// Image 4's lens control task.
@@ -47,4 +50,67 @@ pub fn level_rise(ports: &mut (impl ProfileAccess + Lens + LensControl + LevelSc
         return NO_RISE;
     }
     ports.linear(current.wrapping_sub(focused) as i16)
+}
+
+/// A lens position and the side it was taken on.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LensPoint {
+    pub position: i16,
+    pub side: u32,
+}
+
+/// Where a lens point lies on the span from the lens's target to its far table position.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PointZone {
+    BeyondFar,
+    /// Beyond fifteen sixteenths of the span.
+    BeyondSpan,
+    /// Beyond the sixteenth of the span nearest the lens's response.
+    BeyondResponse,
+    Within,
+}
+
+impl PointZone {
+    pub const fn code(self) -> u32 {
+        match self {
+            Self::BeyondFar => 1,
+            Self::BeyondSpan => 2,
+            Self::BeyondResponse => 3,
+            Self::Within => 4,
+        }
+    }
+}
+
+/// The side 0xf4e620 moves a point's position to before placing it.
+const PLACED_SIDE: u32 = 1;
+
+/// The zone of `point` for `lens` at `step`, or the configured zone while the override is set
+/// (0xf4e620).
+pub fn point_zone(ports: &mut (impl Properties + LensTables + LensServices), point: &LensPoint, lens: u32, step: u32) -> PointZone {
+    if ports.property(stock::ZONE_OVERRIDE) == 1 {
+        return match ports.property(stock::OVERRIDDEN_ZONE) {
+            0 => PointZone::Within,
+            1 => PointZone::BeyondSpan,
+            _ => PointZone::BeyondFar,
+        };
+    }
+    let target = frame::target(ports, lens, step);
+    let reference = ports.lens_reference();
+    let far = ports.channel_positions(lens, step, reference, 0)[1];
+    let span = i32::from(far) - i32::from(target);
+    let sixteenths = |count: i32| count.wrapping_mul(span) / 16;
+    let response = frame::response(ports, lens, step);
+    let distance = |count: i32| sixteenths(count).wrapping_sub(response).wrapping_abs() as u16;
+    let nearest = (1..16).fold(0, |nearest, count| if distance(count) < distance(nearest) { count } else { nearest });
+    let at = |count: i32| target.wrapping_add(sixteenths(count) as i16);
+    let position = ports.side_adjusted(point.position, point.side, PLACED_SIDE);
+    if position > far {
+        PointZone::BeyondFar
+    } else if at(15) < position {
+        PointZone::BeyondSpan
+    } else if at(nearest) < position {
+        PointZone::BeyondResponse
+    } else {
+        PointZone::Within
+    }
 }

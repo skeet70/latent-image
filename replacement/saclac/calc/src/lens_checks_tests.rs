@@ -4,12 +4,14 @@ use xm1_saclac_profile_records::stock::shared::{group_14, group_26, group_27};
 use xm1_saclac_profile_records::Bytes;
 
 use crate::adjust::motion::drive::DriveKind;
-use crate::adjust::motion::ports::{LensCalibration, LensLimits, LimitQuery};
+use crate::adjust::motion::ports::{LensCalibration, LensLimits, LensTables, LimitQuery};
 use crate::adjust::timing::LevelScale;
 use crate::exposure::fakes::{handle, Headers, World};
-use crate::exposure::ports::{Lens, ProfileAccess, Property};
+use crate::exposure::ports::{Lens, ProfileAccess, Properties, Property};
 use crate::lens_checks::*;
 use crate::profile::Profile;
+use crate::scene_recognition::ports::LensServices;
+use crate::stock::lens_checks::{OVERRIDDEN_ZONE, ZONE_OVERRIDE};
 use crate::stock::record::FOCUS_RESULT_BYTES;
 
 #[derive(Default)]
@@ -121,4 +123,85 @@ fn a_level_not_above_the_focus_results_has_not_risen() {
 #[test]
 fn an_invalid_focus_result_has_no_rise() {
     assert_eq!(level_rise(&mut risen(400, 0), handle()), NO_RISE);
+}
+
+const LENS: u32 = 6;
+const STEP: u32 = 2;
+const LENS_REFERENCE: u32 = 0x51;
+const SIDE: u32 = 3;
+
+/// The lens targets 100 and its far table position is 260, so a sixteenth of the span is 10.
+#[derive(Default)]
+struct Span {
+    world: World,
+    response: i32,
+    side_shift: i16,
+    position_queries: Vec<[u32; 4]>,
+    side_queries: Vec<(i16, u32, u32)>,
+}
+
+impl Properties for Span {
+    fn property(&mut self, property: Property) -> u32 { Properties::property(&mut self.world, property) }
+}
+
+impl LensTables for Span {
+    fn channel_positions(&mut self, lens: u32, step: u32, reference: u32, mode: u32) -> [i16; 2] {
+        self.position_queries.push([lens, step, reference, mode]);
+        [100, 260]
+    }
+    fn side_adjusted(&mut self, value: i16, from: u32, to: u32) -> i16 {
+        self.side_queries.push((value, from, to));
+        value + self.side_shift
+    }
+    fn table_offset(&mut self, _lens: u32, _step: u32, _delta: i16) -> i32 { 0 }
+    fn channel_start(&mut self, _lens: u32, _channel: u8, _reference: u32) -> i16 { 0 }
+    fn period_position(&mut self, _period: u16, _lens: u32, _step: u32, _reference: u32) -> i32 { 0 }
+}
+
+/// Every lens's response is `response`.
+impl LensServices for Span {
+    fn lens_reference(&mut self) -> u32 { LENS_REFERENCE }
+    fn primary_tenths(&mut self, _lens: u32) -> u32 { 0 }
+    fn response(&mut self, _value: u16, _lens: u32, _step: u32, _reference: u32) -> i32 { self.response }
+    fn converted_difference(&mut self, _first: u32, _second: u32) -> i16 { 0 }
+    fn level_class(&mut self, _lens: u32) -> u32 { 0 }
+    fn class_level(&mut self, _lens: u32, _setting: u32) -> i32 { 0 }
+}
+
+fn zone(span: &mut Span, position: i16) -> PointZone { point_zone(span, &LensPoint { position, side: SIDE }, LENS, STEP) }
+
+#[test]
+fn a_point_is_placed_against_the_far_position_the_span_and_the_sixteenth_nearest_the_response() {
+    let mut span = Span { response: 47, ..Span::default() };
+    let zones = [261, 260, 250, 151, 150].map(|position| zone(&mut span, position));
+    assert_eq!(zones, [PointZone::BeyondFar, PointZone::BeyondSpan, PointZone::BeyondResponse, PointZone::BeyondResponse, PointZone::Within]);
+    assert_eq!(zones.map(PointZone::code), [1, 2, 3, 3, 4]);
+    assert!(span.position_queries.iter().all(|&query| query == [LENS, STEP, LENS_REFERENCE, 0]));
+    assert_eq!(span.side_queries[0], (261, SIDE, 1));
+}
+
+#[test]
+fn of_two_sixteenths_equally_near_the_response_the_lower_is_taken() {
+    let mut span = Span { response: 45, ..Span::default() };
+    assert_eq!(zone(&mut span, 145), PointZone::BeyondResponse);
+    span.response = 46;
+    assert_eq!(zone(&mut span, 145), PointZone::Within);
+}
+
+#[test]
+fn a_point_is_placed_on_the_side_it_is_moved_to() {
+    let mut span = Span { side_shift: 20, ..Span::default() };
+    assert_eq!(zone(&mut span, 245), PointZone::BeyondFar);
+}
+
+#[test]
+fn the_override_names_the_zone_without_reading_the_lens() {
+    let mut span = Span::default();
+    span.world.property(ZONE_OVERRIDE, 1);
+    let zones = [0, 1, 7].map(|configured| {
+        span.world.property(OVERRIDDEN_ZONE, configured);
+        zone(&mut span, 0)
+    });
+    assert_eq!(zones, [PointZone::Within, PointZone::BeyondSpan, PointZone::BeyondFar]);
+    assert!(span.position_queries.is_empty() && span.side_queries.is_empty());
 }
