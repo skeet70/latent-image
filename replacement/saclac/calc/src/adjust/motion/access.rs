@@ -2,7 +2,7 @@
 //! block that stock's preparation hands it.
 
 use crate::adjust::motion::exposure::FrameExposure;
-use crate::adjust::motion::plan::Plan;
+use crate::adjust::motion::plan::{ContrastThresholds, DepthSettings, Plan};
 use crate::adjust::motion::ports::SearchBounds;
 use crate::adjust::motion::preparation::PreviousFocus;
 use crate::adjust::motion::readings::{AreaList, RecordReadings, StepLimits};
@@ -42,8 +42,14 @@ impl MotionState {
     /// The listed areas the run measures.
     pub fn areas(&self) -> &AreaList { &self.areas }
 
-    /// The plan the pipeline keeps between the plan's calls (output +0x10).
+    /// The plan the pipeline installed for the current pass (output +0x10).
     pub fn plan(&self) -> &Plan { &self.plan }
+
+    /// The contrast thresholds the plan computed (block +0x498).
+    pub fn thresholds(&self) -> &ContrastThresholds { &self.thresholds }
+
+    /// The settings the plan's frame depth chose (block +0x96c).
+    pub fn depth_settings(&self) -> DepthSettings { self.depth_settings }
 
     /// The sample layout: its grids, crop, positions, curve and exposure ratio.
     pub fn layout(&self) -> &SampleLayout { &self.layout }

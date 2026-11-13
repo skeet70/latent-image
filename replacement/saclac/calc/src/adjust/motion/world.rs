@@ -12,7 +12,7 @@ use crate::adjust::lens::{BiasTable, LensConfiguration};
 use crate::adjust::metering::MeteringTables;
 use crate::adjust::motion::drive::{DriveKind, DriveMode, DriveSpeed};
 use crate::adjust::motion::exposure::{FrameExposure, ProgramStep, PROGRAM_STEPS};
-use crate::adjust::motion::plan::Plan;
+use crate::adjust::motion::plan::{ContrastThresholds, DepthSettings, Plan};
 use crate::adjust::motion::layout::SampleLayout;
 use crate::adjust::motion::ports::{
     AreaCurves, AreaGrid, BoundsQuery, CaptureFraming, ChannelRates, Clock, CropGeometry, CurveRequest, DefaultCurve, ExposureTimes, FrameGeometry, GridArea,
@@ -22,7 +22,7 @@ use crate::adjust::motion::ports::{
 use crate::adjust::motion::preparation::{CaptureFrames, FrameSize, LensStatus, PreviousFocus};
 use crate::adjust::motion::readings::{AreaList, FocusRequest, RecordReadings, SelectionLists, StepLimits, AREA_POSITIONS};
 use crate::adjust::motion::search::SearchSetup;
-use crate::adjust::motion::state::{Drive, FrameExposures, MotionState, SampleSchedule};
+use crate::adjust::motion::state::{FrameExposures, MotionState, SampleSchedule};
 use crate::adjust::motion::statistics::Statistics;
 use crate::adjust::peak::Logarithms;
 use crate::adjust::timing::{CaptureTiming, LevelScale};
@@ -216,9 +216,10 @@ pub fn blank_state(section: SharedAddress, results: SharedAddress, frame_period:
         },
         treated_settings: [0; 4],
         plan: Plan::default(),
+        thresholds: ContrastThresholds::default(),
+        depth_settings: DepthSettings::default(),
         sampling: SampleSchedule::default(),
         layout: SampleLayout::default(),
-        drive: Drive::default(),
     }
 }
 
