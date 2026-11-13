@@ -37,3 +37,26 @@ fn no_producer_codes_are_not_invented() {
         assert_eq!(stock::parse(0x3b00 + code, &[]), Err(stock::ParseError::UnknownOperation));
     }
 }
+
+#[test]
+fn optional_callbacks_preserve_only_present_words() {
+    assert_eq!(stock::optional_callback(0), None);
+    assert_eq!(stock::callback_word(stock::optional_callback(0xdefa30).unwrap()), 0xdefa30);
+}
+
+#[test]
+fn notifications_keep_their_command_block_identity() {
+    use crate::{ClientNotification, ReplyTarget};
+    for (notification, code) in [
+        (ClientNotification::Notification12, 0x12),
+        (ClientNotification::Notification18, 0x18),
+        (ClientNotification::Notification19, 0x19),
+        (ClientNotification::Notification1b, 0x1b),
+        (ClientNotification::Notification1c, 0x1c),
+    ] {
+        assert_eq!(stock::reply_target_code(ReplyTarget::Notification(notification)), code);
+    }
+    for command in stock::COMMANDS {
+        assert_eq!(stock::reply_target_code(ReplyTarget::Command(command.kind)), command.code);
+    }
+}
