@@ -6,6 +6,7 @@ pub mod calculation;
 pub mod capture_results;
 pub mod exposure;
 pub mod lens;
+pub mod pipeline;
 pub mod round;
 pub mod statistics;
 pub mod stock;
@@ -478,5 +479,7 @@ mod calculation_tests;
 mod capture_results_tests;
 #[cfg(test)]
 mod exposure_tests;
+#[cfg(test)]
+mod pipeline_tests;
 #[cfg(test)]
 mod statistics_tests;
