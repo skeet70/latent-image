@@ -10,10 +10,20 @@ const PAYLOAD_LIMIT: usize = 4096;
 #[serde(rename_all = "kebab-case")]
 pub enum EntryKind { Callback, ClientReply }
 
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TargetRegister { R3, R4, R5, R6, R12 }
+impl TargetRegister {
+    fn name(self) -> &'static str {
+        match self { Self::R3 => "r3", Self::R4 => "r4", Self::R5 => "r5", Self::R6 => "r6", Self::R12 => "r12" }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Entry {
     address: String,
     kind: EntryKind,
+    target: Option<TargetRegister>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -31,7 +41,7 @@ pub struct Declaration {
 
 pub struct Plan {
     post: u32,
-    entries: Vec<(u32, EntryKind)>,
+    entries: Vec<(u32, EntryKind, Option<TargetRegister>)>,
     shared: Vec<(u32, u32)>,
 }
 
@@ -44,7 +54,8 @@ impl Declaration {
         for entry in self.entries {
             let address = parse_hex(&entry.address)?;
             require(address % 4 == 0 && addresses.insert(address), "interface entry is unaligned or repeated")?;
-            entries.push((address, entry.kind));
+            require(matches!((entry.kind, entry.target), (EntryKind::Callback, None) | (EntryKind::ClientReply, Some(_))), "interface reply target register missing or unexpected")?;
+            entries.push((address, entry.kind, entry.target));
         }
         let mut shared = Vec::new();
         for span in self.shared {
@@ -76,7 +87,7 @@ pub enum Event {
     QueueIn { operation: u16, sender: u8, payload: Vec<u8> },
     PeerRequest { queue: u8, operation: u16, payload: Vec<u8> },
     Callback { entry: Address },
-    ClientReply { entry: Address },
+    ClientReply { entry: Address, target: Address, status: u32 },
     Store { address: Address, bytes: Vec<u8> },
 }
 
@@ -109,8 +120,8 @@ impl Stream {
     }
 
     pub fn entry(&mut self, machine: &Machine, plan: &Plan, stop: &Stop) -> Result<(), String> {
+        let register = |name: &str| stop.registers.get(name).ok_or("interface register missing").and_then(|text| parse_hex(text));
         let event = if stop.address == plan.post {
-            let register = |name: &str| stop.registers.get(name).ok_or("interface register missing").and_then(|text| parse_hex(text));
             let descriptor = bytes(machine, stop.core, register("r1")?, 12)?;
             let operation = u16::from_le_bytes([descriptor[0], descriptor[1]]);
             let sender = descriptor[2];
@@ -120,9 +131,12 @@ impl Stream {
             if queue == 43 { Event::QueueIn { operation, sender, payload } }
             else { Event::PeerRequest { queue, operation, payload } }
         } else {
-            match plan.entries.iter().find(|entry| entry.0 == stop.address).map(|entry| entry.1) {
-                Some(EntryKind::Callback) => Event::Callback { entry: Address(stop.address) },
-                Some(EntryKind::ClientReply) => Event::ClientReply { entry: Address(stop.address) },
+            match plan.entries.iter().find(|entry| entry.0 == stop.address) {
+                Some((_, EntryKind::Callback, _)) => Event::Callback { entry: Address(stop.address) },
+                Some((_, EntryKind::ClientReply, Some(target))) => Event::ClientReply {
+                    entry: Address(stop.address), target: Address(register(target.name())?), status: register("r0")?,
+                },
+                Some(_) => return Err("interface reply target register missing".into()),
                 None => return Ok(()),
             }
         };

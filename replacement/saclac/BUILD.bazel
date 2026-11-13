@@ -1,9 +1,14 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
-load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_host_test", "xm1_rust_rlib", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
 
-_SOURCES = ["src/engine.rs", "src/machine0.rs", "src/stock.rs"]
+_SOURCES = ["src/driver.rs", "src/engine.rs", "src/machine0.rs", "src/stock.rs"]
+
+_ARM_DEPS = {
+    "xm1_kernel": "//replacement/kernel:arm",
+    "xm1_saclac_interface": "//replacement/saclac_interface:saclac-interface",
+}
 
 # The unit's rlib: the engine and machine 0's router, joined into the owned image later.
 xm1_rust_rlib(
@@ -12,6 +17,7 @@ xm1_rust_rlib(
     crate_name = "xm1_saclac",
     rustc_flags = ["-C", "jump-tables=no"],
     data = _SOURCES,
+    rlib_deps = _ARM_DEPS,
 )
 
 # The same crate with the image's panic handler, linked for the comparison.
@@ -21,6 +27,7 @@ xm1_rust_staticlib(
     crate_name = "xm1_saclac",
     rustc_flags = ["-C", "jump-tables=no", "--cfg", "saclac_image"],
     data = _SOURCES,
+    rlib_deps = _ARM_DEPS,
 )
 
 xm1_rust_elf(
@@ -39,6 +46,25 @@ xm1_rust_staticlib(
     crate_name = "xm1_saclac",
     rustc_flags = ["-C", "jump-tables=no", "--cfg", "saclac_image", "--cfg", "saclac_wrong_r3"],
     data = _SOURCES,
+    rlib_deps = _ARM_DEPS,
+)
+
+xm1_rust_staticlib(
+    name = "saclac-rust-wrong-driver-store",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac",
+    rustc_flags = ["-C", "jump-tables=no", "--cfg", "saclac_image", "--cfg", "saclac_wrong_driver_store"],
+    data = _SOURCES,
+    rlib_deps = _ARM_DEPS,
+)
+
+xm1_rust_elf(
+    name = "saclac-image-wrong-driver-store",
+    rust_staticlib = ":saclac-rust-wrong-driver-store",
+    asm_srcs = ["entry.S"],
+    entry = "xm1_saclac_driver_entry",
+    link_script = ":saclac.ld",
+    extra_ldflags = ["-Wl,--gc-sections"],
 )
 
 xm1_rust_elf(
@@ -217,12 +243,29 @@ haskell_binary(
     ],
 )
 
-genrule(
+haskell_binary(
+    name = "saclac-interface-compare",
+    srcs = ["InterfaceCompareMain.hs"],
+    main_file = "InterfaceCompareMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+        "//host:text",
+    ],
+)
+
+xm1_rust_host_test(
     name = "host-tests",
-    srcs = ["src/lib.rs", "src/tests.rs"] + _SOURCES,
-    tools = ["@lab_xm1_rust//:bin/rustc"],
-    outs = ["host-tests.passed"],
-    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test $(location src/lib.rs) -o $(@D)/host-tests && $(@D)/host-tests && touch $@",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac",
+    data = ["src/tests.rs", "src/driver_tests.rs"] + _SOURCES,
+    rlib_deps = {
+        "xm1_kernel": "//replacement/kernel:host",
+        "xm1_saclac_interface": "//replacement/saclac_interface:host",
+    },
 )
 
 haskell_library(

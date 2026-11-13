@@ -66,9 +66,8 @@ data Extent = Extent
   , extentHigh :: Word32
   } deriving (Eq, Show)
 
--- | The dispatcher's extent and machine 0's router extent, in address order.
 extents :: [Extent]
-extents = [Extent 0xefca6c 0xefcb88, Extent 0xefcb88 0xefd2fc]
+extents = [Extent 0xefca6c 0xefcb88, Extent 0xefcb88 0xefd2fc, Extent 0xf01bc8 0xf01c48]
 
 extentBytes :: Extent -> Int
 extentBytes (Extent low high) = fromIntegral (high - low)
@@ -88,6 +87,7 @@ entries :: [Entry]
 entries =
   [ Entry 0xefca6c "xm1_saclac_dispatch_entry" "xm1_saclac_dispatch"
   , Entry 0xefcb88 "xm1_saclac_router_entry" "xm1_saclac_router"
+  , Entry 0xf01bc8 "xm1_saclac_driver_entry" "xm1_saclac_driver"
   ]
 
 -- | A stock word the owned image reaches outside its extents.
@@ -96,10 +96,8 @@ data Retained = Retained
   , retainedAddress :: Word32
   } deriving (Eq, Show)
 
--- | Code entries the owned image calls: the dispatcher's trace call. The shim
--- register lists it as the saclac trace row.
 retainedExternals :: [Retained]
-retainedExternals = [Retained "trace" 0xf46c38]
+retainedExternals = [Retained "trace" 0xf46c38, Retained "fault" 0xf46c20, Retained "kernel-error-console" 0x41a34]
 
 externalAddresses :: [Word32]
 externalAddresses = map retainedAddress retainedExternals
@@ -317,6 +315,7 @@ boundarySymbols :: [String]
 boundarySymbols =
   [ "xm1_saclac_dispatch"
   , "xm1_saclac_router"
+  , "xm1_saclac_driver"
   , "_RINvNtCs5dX5h91vudr_10xm1_saclac6engine8dispatchNtNtB4_5stock11StockTablesNtBM_10StockPortsEB4_"
   ]
 

@@ -60,3 +60,18 @@ fn notifications_keep_their_command_block_identity() {
         assert_eq!(stock::reply_target_code(ReplyTarget::Command(command.kind)), command.code);
     }
 }
+
+#[test]
+fn synchronous_lens_requests_keep_wire_operation_codes() {
+    use crate::LensDcOperation;
+    for (operation, code) in [
+        (LensDcOperation::Request0c, 0x420c),
+        (LensDcOperation::Request15, 0x4215),
+        (LensDcOperation::Request16, 0x4216),
+        (LensDcOperation::Request18, 0x4218),
+        (LensDcOperation::Request19, 0x4219),
+        (LensDcOperation::Request1a, 0x421a),
+    ] {
+        assert_eq!(stock::lens_dc_operation(operation), code);
+    }
+}

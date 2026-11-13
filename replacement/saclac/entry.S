@@ -16,3 +16,11 @@ xm1_saclac_dispatch_entry:
 xm1_saclac_router_entry:
     b xm1_saclac_router
     .size xm1_saclac_router_entry, . - xm1_saclac_router_entry
+
+    .section .text.xm1_saclac_driver_entry,"ax",%progbits
+    .global xm1_saclac_driver_entry
+    .type xm1_saclac_driver_entry,%function
+    .p2align 2
+xm1_saclac_driver_entry:
+    b xm1_saclac_driver
+    .size xm1_saclac_driver_entry, . - xm1_saclac_driver_entry

@@ -12,6 +12,7 @@ module Replacement.Saclac.Placement
 import qualified Data.Aeson as J
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
+import Data.List (sortOn)
 import Data.Word (Word32)
 import Numeric (showHex)
 import Replacement.Saclac.Artifact (Entry (..), Extent (..), entries, extentBytes, extents)
@@ -28,7 +29,8 @@ regionName index = "EXTENT" ++ show index
 
 sectionOf :: Int -> String
 sectionOf 0 = "dispatch"
-sectionOf _ = "router"
+sectionOf 1 = "router"
+sectionOf _ = "driver"
 
 -- | One MEMORY region per declared extent. The two owned sections take the
 -- first two regions; every assertion is stated in terms of the same extents.
@@ -53,9 +55,9 @@ renderLinkerScript = case (entries, extents) of
         [ [ "  ." ++ sectionOf index ++ " : {"
           , "    KEEP(*(.text." ++ entryVeneer entry ++ "))"
           ]
-            ++ (if index == 0 then [] else ["    *(.text*)", "    *(.rodata*)", "    . = ALIGN(4);"])
+            ++ (if index == 1 then ["    *(.text*)", "    *(.rodata*)", "    . = ALIGN(4);"] else [])
             ++ [ "  } > " ++ regionName index ]
-        | (index, entry) <- zip [0 :: Int ..] entries
+        | (index, entry) <- sortOn (\(index, _) -> index == 1) (zip [0 :: Int ..] entries)
         ]
       ++ [ "  .data : { *(.data*) *(.sdata*) *(.got*) } > " ++ regionName (length extents - 1)
          , "  .bss : { *(.bss*) *(.sbss*) *(COMMON) } > " ++ regionName (length extents - 1)
