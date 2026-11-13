@@ -463,4 +463,5 @@ pub const fn lens_effect(operation: PeerOperation) -> LensEffect {
 mod tests;
 #[cfg(test)]
 mod calculation_tests;
+#[cfg(test)]
 mod exposure_tests;
