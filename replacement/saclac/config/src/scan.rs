@@ -1,74 +1,11 @@
 #![forbid(unsafe_code)]
 
 //! The scan configuration saclac builds for the scan library other tasks share (image 5,
-//! 0xd5dfc4..0xd79364): the configuration block's settings and defaults, the parts applied from
-//! a request block, each marked in the configuration's applied-parts word, and the tables the
+//! 0xd5dfc4..0xd79364): the parts applied from a request block, each marked in the
+//! configuration's applied-parts word, the window the window part copies, and the tables the
 //! library reads back from the configuration.
 
 use crate::compiled::Optioned;
-
-/// A configuration field by its stock offset; their meanings are not yet named by any caller.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ScanField {
-    WordDc,
-    WordE0,
-    WordE4,
-    WordE8,
-    WordEc,
-    WordF0,
-    WordF4,
-    WordF8,
-    WordFc,
-    Word100,
-    Word104,
-    Word108,
-    Word10c,
-    Word110,
-    Word114,
-    Half118,
-    Byte11a,
-    Byte11b,
-    Word11c,
-    Word124,
-    Word128,
-    Word13c,
-    Word140,
-    Word144,
-    Word148,
-    Word160,
-    Word164,
-    Half168,
-    Half16a,
-    Byte16c,
-    Word17c,
-    Word180,
-    Word184,
-    Word188,
-    Word18c,
-    Byte190,
-    Word194,
-    Half1a0,
-    Byte1a2,
-    Half1a4,
-    Word1a8,
-    Byte1ac,
-    Byte1ad,
-    Byte1ae,
-    Byte1af,
-    Word1b4,
-    Word1bc,
-    Half1c8,
-    Half1ca,
-    Half1cc,
-    Word1d0,
-    Word1d4,
-    Word1d8,
-    Word1dc,
-    Word1e0,
-    Word1e4,
-    Half1e8,
-    Half1ea,
-}
 
 /// The configuration's applied-parts word, a bit from 16 up for each part applied.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -77,106 +14,24 @@ pub struct AppliedParts(pub u32);
 /// The configuration and request blocks of one scan, in the layout the scan library reads.
 pub trait ScanBlocks {
     fn clear_configuration(&mut self);
-    fn set(&mut self, field: ScanField, value: u32);
-    fn configuration(&self, field: ScanField) -> u32;
     /// Request byte `index` of the part enables.
     fn request_flag(&self, index: u8) -> u8;
     fn applied_parts(&self) -> AppliedParts;
     fn mark_applied(&mut self, parts: AppliedParts);
     /// 0xd5e1b8, which 0xedc61c enters on the applied-parts word after restoring the groups.
     fn clear_applied_parts(&mut self);
+    /// The window limits the window part copies into the request (configuration +0x1c8..+0x1cc).
+    fn configured_window(&self) -> [u16; 3];
+    fn set_configured_window(&mut self, limits: [u16; 3]);
     /// The request's window limits (bytes 0x3e, 0x40, 0x42).
     fn set_request_window(&mut self, limits: [u16; 3]);
 }
 
-/// 0xd78400.
-pub fn set_ec(blocks: &mut impl ScanBlocks, value: u32) { blocks.set(ScanField::WordEc, value) }
-
-/// Values above 7 become 8 (0xd784ac).
-pub fn set_140(blocks: &mut impl ScanBlocks, value: u32) { blocks.set(ScanField::Word140, value.min(8)) }
-
-/// 0xd784cc.
-pub fn set_144(blocks: &mut impl ScanBlocks, enabled: bool) { blocks.set(ScanField::Word144, u32::from(enabled)) }
-
-/// 0xd78674.
-pub fn set_11a(blocks: &mut impl ScanBlocks, value: u8) { blocks.set(ScanField::Byte11a, u32::from(value)) }
-
-/// Values above 8 become 9 (0xd7868c).
-pub fn set_13c(blocks: &mut impl ScanBlocks, value: u32) { blocks.set(ScanField::Word13c, value.min(9)) }
-
-/// Values above 2 become 3 (0xd789f0).
-pub fn set_148(blocks: &mut impl ScanBlocks, value: u32) { blocks.set(ScanField::Word148, value.min(3)) }
-
 /// The window limits the window part copies into the request (0xd7914c).
-pub fn set_window(blocks: &mut impl ScanBlocks, limits: [u16; 3]) {
-    for (field, limit) in [ScanField::Half1c8, ScanField::Half1ca, ScanField::Half1cc].into_iter().zip(limits) {
-        blocks.set(field, u32::from(limit));
-    }
-}
-
-/// Values above 4 become 0 (0xd79364).
-pub fn set_1dc(blocks: &mut impl ScanBlocks, value: u32) { blocks.set(ScanField::Word1dc, if value > 4 { 0 } else { value }) }
+pub fn set_window(blocks: &mut impl ScanBlocks, limits: [u16; 3]) { blocks.set_configured_window(limits) }
 
 /// 0xd77abc.
 pub fn clear(blocks: &mut impl ScanBlocks) { blocks.clear_configuration() }
-
-/// The defaults 0xd791b0 stores, in its order.
-const DEFAULTS: [(ScanField, u32); 54] = [
-    (ScanField::WordEc, 0),
-    (ScanField::WordE4, 0),
-    (ScanField::WordDc, 1),
-    (ScanField::WordE0, 0),
-    (ScanField::WordF0, 0),
-    (ScanField::WordF4, 2),
-    (ScanField::WordF8, 2),
-    (ScanField::WordFc, 2),
-    (ScanField::Word100, 2),
-    (ScanField::Word104, 0),
-    (ScanField::Word108, 0),
-    (ScanField::Word10c, 2),
-    (ScanField::Word110, 0),
-    (ScanField::Word114, 2),
-    (ScanField::Byte11b, 1),
-    (ScanField::Word11c, 600),
-    (ScanField::Half118, 0),
-    (ScanField::Byte11a, 1),
-    (ScanField::Word124, 1),
-    (ScanField::Word160, 0),
-    (ScanField::Word164, 0),
-    (ScanField::Half168, 0),
-    (ScanField::Half16a, 0),
-    (ScanField::Byte16c, 0),
-    (ScanField::Word180, 2),
-    (ScanField::Word184, 0),
-    (ScanField::Word188, 0),
-    (ScanField::Word17c, 1),
-    (ScanField::Word18c, 0),
-    (ScanField::Byte190, 0),
-    (ScanField::Word194, 2),
-    (ScanField::Word128, 0),
-    (ScanField::Half1a0, 0x2ba),
-    (ScanField::Byte1a2, 0),
-    (ScanField::Half1a4, 0x7e),
-    (ScanField::Byte1ac, 0),
-    (ScanField::Word1a8, 0),
-    (ScanField::Byte1ad, 0),
-    (ScanField::Byte1ae, 0),
-    (ScanField::Byte1af, 0),
-    (ScanField::Word1bc, 1),
-    (ScanField::Word1e0, 0),
-    (ScanField::WordE8, 0),
-    (ScanField::Half1c8, 0),
-    (ScanField::Half1ca, 0),
-    (ScanField::Half1cc, 0),
-    (ScanField::Word1d0, 0),
-    (ScanField::Word1d4, 0),
-    (ScanField::Word1d8, 0),
-    (ScanField::Word1b4, 0),
-    (ScanField::Word1dc, 0),
-    (ScanField::Word1e4, 0),
-    (ScanField::Half1e8, 0),
-    (ScanField::Half1ea, 0),
-];
 
 /// The scan library's entries the configuration parts, defaults and reads call.
 pub trait ScanLibrary<B: ScanBlocks> {
@@ -202,14 +57,6 @@ pub fn nine_values<B: ScanBlocks>(library: &mut impl ScanLibrary<B>, blocks: &B)
 
 /// 0xd5e120.
 pub fn four_values<B: ScanBlocks>(library: &mut impl ScanLibrary<B>, blocks: &B) -> [u16; 4] { library.four(blocks).values }
-
-/// Stores the defaults and lets the library finish them (0xd791b0).
-pub fn set_defaults<B: ScanBlocks>(blocks: &mut B, library: &mut impl ScanLibrary<B>) {
-    for (field, value) in DEFAULTS {
-        blocks.set(field, value);
-    }
-    library.finish_defaults(blocks);
-}
 
 /// The scan library's part entries.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -328,7 +175,7 @@ pub fn apply<B: ScanBlocks>(part: Part, blocks: &mut B, library: &mut impl ScanL
     match stock {
         Some(stock) => library.apply(stock, blocks),
         None => {
-            let window = [ScanField::Half1c8, ScanField::Half1ca, ScanField::Half1cc].map(|field| blocks.configuration(field) as u16);
+            let window = blocks.configured_window();
             blocks.set_request_window(window);
         }
     }

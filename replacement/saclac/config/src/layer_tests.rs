@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use xm1_saclac_interface::stock::StockCallbackWord;
 use xm1_saclac_interface::{ImageProcessor, ImageProcessorOperation, ImageProcessorRequest};
 use xm1_saclac_shared::image_registers::{RegisterGroup, RegisterSnapshot, WindowLimits};
@@ -12,25 +10,22 @@ use crate::services::*;
 
 #[derive(Default)]
 struct Blocks {
-    fields: HashMap<String, u32>,
     flags: [u8; 19],
     applied: AppliedParts,
-    window: Option<[u16; 3]>,
+    configured: [u16; 3],
+    requested: Option<[u16; 3]>,
     cleared: bool,
 }
 
 impl ScanBlocks for Blocks {
-    fn clear_configuration(&mut self) {
-        self.cleared = true;
-        self.fields.clear();
-    }
-    fn set(&mut self, field: ScanField, value: u32) { self.fields.insert(format!("{field:?}"), value); }
-    fn configuration(&self, field: ScanField) -> u32 { self.fields.get(&format!("{field:?}")).copied().unwrap_or(0) }
+    fn clear_configuration(&mut self) { self.cleared = true; }
     fn request_flag(&self, index: u8) -> u8 { self.flags[usize::from(index)] }
     fn applied_parts(&self) -> AppliedParts { self.applied }
     fn mark_applied(&mut self, parts: AppliedParts) { self.applied.0 |= parts.0; }
     fn clear_applied_parts(&mut self) { self.applied = AppliedParts(0); }
-    fn set_request_window(&mut self, limits: [u16; 3]) { self.window = Some(limits); }
+    fn configured_window(&self) -> [u16; 3] { self.configured }
+    fn set_configured_window(&mut self, limits: [u16; 3]) { self.configured = limits; }
+    fn set_request_window(&mut self, limits: [u16; 3]) { self.requested = Some(limits); }
 }
 
 #[derive(Default)]
@@ -76,37 +71,7 @@ fn the_window_part_copies_the_configured_window_into_the_request() {
     blocks.flags[2] = 1;
     let mut library = Library::default();
     assert!(apply(Part::Window, &mut blocks, &mut library));
-    assert_eq!((blocks.window, blocks.applied, library.0.len()), (Some([3, 4, 5]), AppliedParts(1 << 18), 0));
-}
-
-#[test]
-fn setters_clamp_as_the_scan_library_expects() {
-    let mut blocks = Blocks::default();
-    set_140(&mut blocks, 12);
-    set_13c(&mut blocks, 12);
-    set_148(&mut blocks, 12);
-    set_1dc(&mut blocks, 5);
-    set_144(&mut blocks, true);
-    assert_eq!(
-        [ScanField::Word140, ScanField::Word13c, ScanField::Word148, ScanField::Word1dc, ScanField::Word144].map(|field| blocks.configuration(field)),
-        [8, 9, 3, 0, 1]
-    );
-    set_1dc(&mut blocks, 4);
-    assert_eq!(blocks.configuration(ScanField::Word1dc), 4);
-}
-
-#[test]
-fn defaults_set_the_configuration_and_let_the_library_finish() {
-    let mut blocks = Blocks::default();
-    let mut library = Library::default();
-    set_defaults(&mut blocks, &mut library);
-    assert_eq!(blocks.configuration(ScanField::Word11c), 600);
-    assert_eq!(blocks.configuration(ScanField::Half1a0), 0x2ba);
-    assert_eq!(blocks.configuration(ScanField::Half1a4), 0x7e);
-    assert_eq!(blocks.configuration(ScanField::WordF4), 2);
-    assert_eq!(library.1, 1);
-    clear(&mut blocks);
-    assert!(blocks.cleared);
+    assert_eq!((blocks.requested, blocks.applied, library.0.len()), (Some([3, 4, 5]), AppliedParts(1 << 18), 0));
 }
 
 #[derive(Default)]
@@ -151,21 +116,48 @@ fn a_restore_holds_the_hardware_around_the_groups() {
 }
 
 #[test]
-fn services_clear_the_alias_bit_and_adjust_the_delay() {
+fn the_cached_alias_clears_bit_thirty() {
     assert_eq!(cached(0x4012_3456), 0x0012_3456);
-    assert_eq!(adjusted_delay(20), 21);
-    assert_eq!(adjusted_delay(21), 21);
-    assert_eq!(adjusted_delay(0x8000_0005), 5);
-    assert!(lens_status_bit(0x40));
-    assert!(!lens_status_bit(0xbf));
 }
 
 #[derive(Default)]
-struct Requests(Vec<u32>, Vec<(u8, u32)>, u32);
+struct Clock(Vec<u32>);
+
+impl KernelDelay for Clock {
+    fn delay(&mut self, ticks: u32) -> u32 {
+        self.0.push(ticks);
+        7
+    }
+}
+
+#[test]
+fn a_delay_asks_the_kernel_for_the_adjusted_ticks_and_returns_its_status() {
+    let mut clock = Clock::default();
+    assert_eq!(delay(&mut clock, 20), 7);
+    delay(&mut clock, 21);
+    delay(&mut clock, 0x8000_0005);
+    assert_eq!(clock.0, [21, 21, 5]);
+}
+
+struct Lens(Option<u8>);
+
+impl LensStatus for Lens {
+    fn status(&mut self) -> Option<u8> { self.0 }
+}
+
+#[test]
+fn the_lens_status_is_bit_six_of_the_read_byte() {
+    assert!(lens_status(&mut Lens(Some(0x40))));
+    assert!(!lens_status(&mut Lens(Some(0xbf))));
+    assert!(!lens_status(&mut Lens(None)), "a failed read reads as clear");
+}
+
+#[derive(Default)]
+struct Requests(Vec<StockCallbackWord>, Vec<(u8, StockCallbackWord)>, u32);
 
 impl LensRequests for Requests {
-    fn store_callback(&mut self, callback: u32) { self.0.push(callback); }
-    fn request(&mut self, number: u8, callback: u32) -> u32 {
+    fn store_callback(&mut self, callback: StockCallbackWord) { self.0.push(callback); }
+    fn request(&mut self, number: u8, callback: StockCallbackWord) -> u32 {
         self.1.push((number, callback));
         self.2
     }
@@ -173,13 +165,14 @@ impl LensRequests for Requests {
 
 #[test]
 fn a_lens_request_stores_the_callback_then_requests_the_mapped_number() {
+    let (first, second, third) = (StockCallbackWord(0xaa), StockCallbackWord(0xbb), StockCallbackWord(0xcc));
     let mut requests = Requests::default();
-    assert_eq!(lens_request(&mut requests, 11, 0xaa), 0);
-    assert_eq!(lens_request(&mut requests, 15, 0xbb), REFUSED_INDEX);
+    assert_eq!(lens_request(&mut requests, 11, first), 0);
+    assert_eq!(lens_request(&mut requests, 15, second), REFUSED_INDEX);
     requests.2 = 1;
-    assert_eq!(lens_request(&mut requests, 3, 0xcc), NOT_POSTED);
-    assert_eq!(requests.0, [0xaa, 0xbb, 0xcc], "the callback is stored even for a refused index");
-    assert_eq!(requests.1, [(12, 0xaa), (3, 0xcc)]);
+    assert_eq!(lens_request(&mut requests, 3, third), NOT_POSTED);
+    assert_eq!(requests.0, [first, second, third], "the callback is stored even for a refused index");
+    assert_eq!(requests.1, [(12, first), (3, third)]);
 }
 
 struct Processor(Vec<Vec<u8>>, bool);

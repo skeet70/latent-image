@@ -8,6 +8,19 @@
 //! unit, and flags 0x2000 and 0x4000 of 0xd9fd54 the processing and input units, without holding
 //! them (unit masks 0xfc at 0xd9ea50 and 0xd9f874, 0xb at 0xd9fd88).
 
+/// A caller's request word, which each unit record keeps as its client word (0xd9ea08,
+/// 0xd9f828, 0xd9fd54, 0xda027c).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Client(pub u32);
+
+/// A caller's part word; each entry reads its own bits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Flags(pub u32);
+
+impl Flags {
+    const fn meets(self, mask: u32) -> bool { self.0 & mask != 0 }
+}
+
 /// The pipeline units a stage operation holds while it programs them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Unit {
@@ -21,17 +34,39 @@ pub enum Unit {
     Filter,
 }
 
-/// Stages whose mode is set from the parameter block.
+/// The four stages the parameter block sets modes for, in operation order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Stage {
     /// 0x685208.
-    Stage400,
+    First,
     /// 0x6852ec.
-    Stage4,
+    Second,
     /// 0x6853d0.
-    Stage8,
+    Third,
     /// 0x6854b4.
-    Stage10,
+    Fourth,
+}
+
+impl Stage {
+    /// The caller's word bit that selects the stage (0xd9ea08).
+    pub const fn flag(self) -> u32 {
+        match self {
+            Self::First => 0x400,
+            Self::Second => 0x4,
+            Self::Third => 0x8,
+            Self::Fourth => 0x10,
+        }
+    }
+}
+
+/// A stage's mode word.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StageMode { Off, On, Alternate }
+
+impl StageMode {
+    /// The mode the parameter block's word selects: 2 is `Alternate`, any other word `On`
+    /// (0xd9ea08).
+    pub const fn of(word: u32) -> Self { if word == 2 { Self::Alternate } else { Self::On } }
 }
 
 /// One of the transform unit's two register banks.
@@ -179,8 +214,7 @@ pub struct ModeWords {
 
 /// A caller's region, parameter or geometry block, read where the stage control decides.
 pub trait StageBlock {
-    /// The mode word for `stage`; 2 selects the stage's second mode.
-    fn stage_mode(&self, stage: Stage) -> u32;
+    fn stage_mode(&self, stage: Stage) -> StageMode;
     fn enable_change(&self, enable: Enable) -> EnableChange;
     fn setting(&self, setting: Setting) -> u32;
 }
@@ -190,13 +224,13 @@ pub trait ImageStages {
     type Session;
     type Block: StageBlock;
 
-    fn acquire(&mut self, unit: Unit, handle: u32) -> (i32, Self::Session);
+    fn acquire(&mut self, unit: Unit, client: Client) -> (i32, Self::Session);
     fn release(&mut self, session: Self::Session) -> i32;
     /// Programs `part` of `block` under `session`.
     fn program(&mut self, session: &Self::Session, block: &Self::Block, part: Part) -> i32;
     /// 0x65fcb4.
     fn enable_input(&mut self, session: &Self::Session, enabled: bool) -> i32;
-    fn set_stage(&mut self, session: &Self::Session, stage: Stage, mode: u32) -> i32;
+    fn set_stage(&mut self, session: &Self::Session, stage: Stage, mode: StageMode) -> i32;
     /// The processing unit's two gate words (0x6856cc).
     fn gates(&mut self, session: &Self::Session) -> (i32, [u32; 2]);
     /// 0x685598.
@@ -221,10 +255,9 @@ pub trait ImageStages {
     fn load_transform_table(&mut self, session: &Self::Session, table: &[u32; 31], bank: Bank) -> i32;
     /// 0x66049c.
     fn reset_input_unit(&mut self) -> i32;
-    /// The record stock passes for `unit` when the operation does not hold it: `handle` as the
-    /// client word and a session word the unit's operations do not read (0x685298, 0x68634c,
-    /// 0x686084, 0x660084).
-    fn unheld(&self, unit: Unit, handle: u32) -> Self::Session;
+    /// The record stock passes for an unheld `unit`: `client` and a session the unit does not
+    /// read (0x685298, 0x68634c, 0x686084, 0x660084).
+    fn unheld(&self, unit: Unit, client: Client) -> Self::Session;
 }
 
 struct Record<S: ImageStages> {
@@ -233,15 +266,15 @@ struct Record<S: ImageStages> {
 }
 
 impl<S: ImageStages> Record<S> {
-    fn take(stages: &mut S, unit: Unit, handle: u32, held: bool) -> Self {
-        let session = if held { stages.acquire(unit, handle).1 } else { stages.unheld(unit, handle) };
+    fn take(stages: &mut S, unit: Unit, client: Client, held: bool) -> Self {
+        let session = if held { stages.acquire(unit, client).1 } else { stages.unheld(unit, client) };
         Self { session, held }
     }
 }
 
 /// Takes each unit's record, holding the units whose mask meets `flags`, in order.
-fn records<S: ImageStages, const N: usize>(stages: &mut S, handle: u32, flags: u32, units: [(Unit, u32); N]) -> [Record<S>; N] {
-    units.map(|(unit, mask)| Record::take(stages, unit, handle, flags & mask != 0))
+fn records<S: ImageStages, const N: usize>(stages: &mut S, client: Client, flags: Flags, units: [(Unit, u32); N]) -> [Record<S>; N] {
+    units.map(|(unit, mask)| Record::take(stages, unit, client, flags.meets(mask)))
 }
 
 /// Releases the held units in order; the last release's status, or `None` when none was held.
@@ -254,20 +287,24 @@ const SHARED_UNITS: [(Unit, u32); 3] = [(Unit::Input, 0x3), (Unit::Transform, 0x
 
 /// Enables or disables the stages `flags` selects: input enable (bit 0), stage modes (0x400, 4,
 /// 8, 0x10), the first gate (0x20) and the path source bits (0x40, 0x80). Enabling sets each
-/// stage's mode to 2 where the block asks for 2, else 1, and sets the source bit; disabling sets
-/// mode 0 and toggles the source bit as stock does (0xd9ea08). Returns the last release's status,
-/// with no unit held the unheld stage write's (0xd9eaa4), else 0.
-pub fn enable_stages<S: ImageStages>(stages: &mut S, handle: u32, flags: u32, enabled: bool, block: Option<&S::Block>) -> i32 {
-    let [input, transform, processing] = records(stages, handle, flags, SHARED_UNITS);
-    if flags & 1 != 0 {
+/// stage's mode from the block, and sets the source bit; disabling sets mode 0 and toggles the
+/// source bit as stock does (0xd9ea08). Returns the last release's status, with no unit held the
+/// unheld stage write's (0xd9eaa4), else 0.
+pub fn enable_stages<S: ImageStages>(stages: &mut S, client: Client, flags: Flags, enabled: bool, block: Option<&S::Block>) -> i32 {
+    const INPUT_ENABLE: u32 = 1;
+    const FIRST_GATE: u32 = 0x20;
+    const PATH_SOURCE_ONE: u32 = 0x40;
+    const PATH_SOURCE_TWO: u32 = 0x80;
+    let [input, transform, processing] = records(stages, client, flags, SHARED_UNITS);
+    if flags.meets(INPUT_ENABLE) {
         stages.enable_input(&input.session, enabled);
     }
     let mut unheld = None;
-    for (mask, stage) in [(0x400, Stage::Stage400), (0x4, Stage::Stage4), (0x8, Stage::Stage8), (0x10, Stage::Stage10)] {
-        if flags & mask != 0 {
+    for stage in [Stage::First, Stage::Second, Stage::Third, Stage::Fourth] {
+        if flags.meets(stage.flag()) {
             let mode = match block {
-                Some(block) if enabled => if block.stage_mode(stage) == 2 { 2 } else { 1 },
-                _ => 0,
+                Some(block) if enabled => block.stage_mode(stage),
+                _ => StageMode::Off,
             };
             let status = stages.set_stage(&processing.session, stage, mode);
             if !processing.held {
@@ -275,12 +312,12 @@ pub fn enable_stages<S: ImageStages>(stages: &mut S, handle: u32, flags: u32, en
             }
         }
     }
-    if flags & 0x20 != 0 {
+    if flags.meets(FIRST_GATE) {
         let (_, [_, second]) = stages.gates(&processing.session);
         stages.set_gates(&processing.session, [u32::from(enabled), second]);
     }
-    for (mask, bit) in [(0x40, 1), (0x80, 2)] {
-        if flags & mask != 0 {
+    for (mask, bit) in [(PATH_SOURCE_ONE, 1), (PATH_SOURCE_TWO, 2)] {
+        if flags.meets(mask) {
             let (_, [source, path_enabled]) = stages.path(&processing.session);
             let source = if enabled { source | bit } else { source ^ bit };
             stages.set_path(&processing.session, [source, path_enabled]);
@@ -290,17 +327,19 @@ pub fn enable_stages<S: ImageStages>(stages: &mut S, handle: u32, flags: u32, en
 }
 
 /// 0xd9f7c0.
-pub fn enable_configured_stages<S: ImageStages>(stages: &mut S, handle: u32, flags: u32, block: &S::Block) -> i32 {
-    enable_stages(stages, handle, flags, true, Some(block))
+pub fn enable_configured_stages<S: ImageStages>(stages: &mut S, client: Client, flags: Flags, block: &S::Block) -> i32 {
+    enable_stages(stages, client, flags, true, Some(block))
 }
 
 /// Disables the stages and resets the transform banks `flags` names (0x100, 0x200)
 /// (0xd9f7d8).
-pub fn disable_stages<S: ImageStages>(stages: &mut S, handle: u32, flags: u32) -> i32 {
-    let result = enable_stages(stages, handle, flags, false, None);
-    for (mask, bank) in [(0x100, Bank::First), (0x200, Bank::Second)] {
-        if flags & mask != 0 {
-            reset_transform(stages, handle, bank);
+pub fn disable_stages<S: ImageStages>(stages: &mut S, client: Client, flags: Flags) -> i32 {
+    const TRANSFORM_FIRST: u32 = 0x100;
+    const TRANSFORM_SECOND: u32 = 0x200;
+    let result = enable_stages(stages, client, flags, false, None);
+    for (mask, bank) in [(TRANSFORM_FIRST, Bank::First), (TRANSFORM_SECOND, Bank::Second)] {
+        if flags.meets(mask) {
+            reset_transform(stages, client, bank);
         }
     }
     result
@@ -308,8 +347,8 @@ pub fn disable_stages<S: ImageStages>(stages: &mut S, handle: u32, flags: u32) -
 
 /// Resets a transform bank: first offsets 0x1000, window positions 0 and every table entry
 /// 0x10000 (0xd9e964).
-pub fn reset_transform<S: ImageStages>(stages: &mut S, handle: u32, bank: Bank) {
-    let (_, session) = stages.acquire(Unit::Transform, handle);
+pub fn reset_transform<S: ImageStages>(stages: &mut S, client: Client, bank: Bank) {
+    let (_, session) = stages.acquire(Unit::Transform, client);
     stages.set_transform_offset(&session, [0x1000, 0x1000], bank);
     let (_, [_, _, repeat, count]) = stages.transform_window(&session, bank);
     stages.set_transform_window(&session, [0, 0, repeat, count], bank);
@@ -319,19 +358,21 @@ pub fn reset_transform<S: ImageStages>(stages: &mut S, handle: u32, bank: Bank) 
 
 /// Writes the processing region and input mode (flag 4), then the filter selectors (flag 2)
 /// (0xda027c). Returns the last release's status.
-pub fn write_region<S: ImageStages>(stages: &mut S, handle: u32, flags: u32, block: &S::Block) -> i32 {
+pub fn write_region<S: ImageStages>(stages: &mut S, client: Client, flags: Flags, block: &S::Block) -> i32 {
+    const PROCESSING_REGION: u32 = 4;
+    const FILTER_SELECTORS: u32 = 2;
     let mut result = 0;
-    if flags & 4 != 0 {
-        let (_, processing) = stages.acquire(Unit::Processing, handle);
+    if flags.meets(PROCESSING_REGION) {
+        let (_, processing) = stages.acquire(Unit::Processing, client);
         stages.program(&processing, block, Part::ProcessingOrigin);
         stages.program(&processing, block, Part::ProcessingFormat);
         stages.release(processing);
-        let (_, input) = stages.acquire(Unit::Input, handle);
+        let (_, input) = stages.acquire(Unit::Input, client);
         stages.program(&input, block, Part::InputMode);
         result = stages.release(input);
     }
-    if flags & 2 != 0 {
-        let (_, filter) = stages.acquire(Unit::Filter, handle);
+    if flags.meets(FILTER_SELECTORS) {
+        let (_, filter) = stages.acquire(Unit::Filter, client);
         stages.program(&filter, block, Part::FilterSelectors);
         result = stages.release(filter);
     }
@@ -349,26 +390,36 @@ fn change_switch<S: ImageStages>(stages: &mut S, session: &S::Session, switch: S
 /// Programs the parameter block's groups `flags` selects into the units running them
 /// (0xd9f828). Returns the last release's status, with no unit held the unheld division write's
 /// (0xd9f8b0..0xd9f8b4), else 0.
-pub fn apply_parameters<S: ImageStages>(stages: &mut S, handle: u32, flags: u32, block: &S::Block) -> i32 {
-    let [input, transform, processing] = records(stages, handle, flags, SHARED_UNITS);
-    let on = |mask: u32| flags & mask != 0;
+pub fn apply_parameters<S: ImageStages>(stages: &mut S, client: Client, flags: Flags, block: &S::Block) -> i32 {
+    const INPUT_CONTROL: u32 = 1;
+    const INPUT_REGISTER_3C: u32 = 2;
+    const POINTS: u32 = 4;
+    const PAIRS: u32 = 8;
+    const AREA_AND_BLOCK_LAYOUT: u32 = 0x10;
+    const WINDOW_AND_CURVES: u32 = 0x20;
+    const SECOND_WINDOW_AND_ROTATED_TABLES: u32 = 0x40;
+    const SECOND_EXTENT_AND_TABLES: u32 = 0x80;
+    const TRANSFORM_FIRST: u32 = 0x100;
+    const TRANSFORM_SECOND: u32 = 0x200;
+    const DIVISION: u32 = 0x400;
+    let [input, transform, processing] = records(stages, client, flags, SHARED_UNITS);
     let (input_session, transform_session, processing_session) = (&input.session, &transform.session, &processing.session);
-    if on(1) {
+    if flags.meets(INPUT_CONTROL) {
         stages.program(input_session, block, Part::InputControl);
     }
-    let division = on(0x400).then(|| stages.program(processing_session, block, Part::Division));
-    if on(4) {
+    let division = flags.meets(DIVISION).then(|| stages.program(processing_session, block, Part::Division));
+    if flags.meets(POINTS) {
         stages.program(processing_session, block, Part::Points);
         change_switch(stages, processing_session, Switch::Gate, block.enable_change(Enable::Gate));
     }
-    if on(8) {
+    if flags.meets(PAIRS) {
         stages.program(processing_session, block, Part::Pairs);
     }
-    if on(0x40) {
+    if flags.meets(SECOND_WINDOW_AND_ROTATED_TABLES) {
         stages.program(processing_session, block, Part::SecondWindow);
         stages.program(processing_session, block, Part::RotatedTables);
     }
-    if on(0x80) {
+    if flags.meets(SECOND_EXTENT_AND_TABLES) {
         for part in [Part::SecondExtent, Part::FirstTables, Part::SecondTables] {
             stages.program(processing_session, block, part);
         }
@@ -381,21 +432,21 @@ pub fn apply_parameters<S: ImageStages>(stages: &mut S, handle: u32, flags: u32,
         };
         stages.set_mode(processing_session, mode);
     }
-    if on(0x10) {
+    if flags.meets(AREA_AND_BLOCK_LAYOUT) {
         stages.program(processing_session, block, Part::Area);
         stages.program(processing_session, block, Part::BlockLayout);
     }
-    if on(2) {
+    if flags.meets(INPUT_REGISTER_3C) {
         stages.program(input_session, block, Part::InputRegister3c);
     }
-    for (mask, bank) in [(0x100, Bank::First), (0x200, Bank::Second)] {
-        if on(mask) {
+    for (mask, bank) in [(TRANSFORM_FIRST, Bank::First), (TRANSFORM_SECOND, Bank::Second)] {
+        if flags.meets(mask) {
             for part in [Part::TransformOffset(bank), Part::TransformThirdOffset(bank), Part::TransformWindow(bank), Part::TransformTable(bank)] {
                 stages.program(transform_session, block, part);
             }
         }
     }
-    if on(0x20) {
+    if flags.meets(WINDOW_AND_CURVES) {
         stages.program(processing_session, block, Part::Window);
         stages.program(processing_session, block, Part::Curves);
         let (_, [first, _]) = stages.gates(processing_session);
@@ -407,14 +458,28 @@ pub fn apply_parameters<S: ImageStages>(stages: &mut S, handle: u32, flags: u32,
 
 /// Programs the geometry block's groups `flags` selects (0xd9fd54). Returns the last release's
 /// status, with no unit held the last unheld write's (0xd9ff90, 0xd9ffa4), else 0.
-pub fn configure_geometry<S: ImageStages>(stages: &mut S, handle: u32, flags: u32, block: &S::Block) -> i32 {
+pub fn configure_geometry<S: ImageStages>(stages: &mut S, client: Client, flags: Flags, block: &S::Block) -> i32 {
+    const INPUT_REGISTER_14: u32 = 1;
+    const INPUT_REGISTER_34: u32 = 2;
+    const INPUT_REGISTER_28: u32 = 8;
+    const FILTER_SECOND_GRID: u32 = 0x10;
+    const FILTER_SECOND_BANK: u32 = 0x20;
+    const FILTER_FIRST_GRID: u32 = 0x40;
+    const FILTER_FIRST_BANK: u32 = 0x80;
+    const FILTER_THIRD_GRID: u32 = 0x100;
+    const FILTER_WINDOWS: u32 = 0x200;
+    const FILTER_FOURTH_WINDOW: u32 = 0x400;
+    const TRANSFORM_FIRST: u32 = 0x800;
+    const TRANSFORM_SECOND: u32 = 0x1000;
+    const EXTENT: u32 = 0x2000;
+    const INPUT_REGISTER_34_ALTERNATE: u32 = 0x4000;
     let units = [(Unit::Filter, 0x7f0), (Unit::Input, 0xb), (Unit::Transform, 0x1800), (Unit::Processing, 0)];
-    let [filter, input, transform, processing] = records(stages, handle, flags, units);
+    let [filter, input, transform, processing] = records(stages, client, flags, units);
     let program = |stages: &mut S, record: &Record<S>, mask: u32, parts: &[Part]| {
-        (flags & mask != 0).then(|| parts.iter().fold(0, |_, part| stages.program(&record.session, block, *part)))
+        flags.meets(mask).then(|| parts.iter().fold(0, |_, part| stages.program(&record.session, block, *part)))
     };
-    program(stages, &input, 1, &[Part::InputRegister14]);
-    for (mask, bank) in [(0x800, Bank::First), (0x1000, Bank::Second)] {
+    program(stages, &input, INPUT_REGISTER_14, &[Part::InputRegister14]);
+    for (mask, bank) in [(TRANSFORM_FIRST, Bank::First), (TRANSFORM_SECOND, Bank::Second)] {
         let parts = [
             Part::TransformDimensions(bank),
             Part::TransformGeometry(bank),
@@ -426,17 +491,17 @@ pub fn configure_geometry<S: ImageStages>(stages: &mut S, handle: u32, flags: u3
         ];
         program(stages, &transform, mask, &parts);
     }
-    program(stages, &input, 2, &[Part::InputRegister34]);
-    program(stages, &filter, 0x10, &[Part::FilterGrid(Grid::Second)]);
-    program(stages, &filter, 0x20, &[Part::FilterSecondBank]);
-    program(stages, &filter, 0x40, &[Part::FilterGrid(Grid::First)]);
-    program(stages, &filter, 0x80, &[Part::FilterFirstBank]);
-    program(stages, &filter, 0x100, &[Part::FilterGrid(Grid::Third)]);
+    program(stages, &input, INPUT_REGISTER_34, &[Part::InputRegister34]);
+    program(stages, &filter, FILTER_SECOND_GRID, &[Part::FilterGrid(Grid::Second)]);
+    program(stages, &filter, FILTER_SECOND_BANK, &[Part::FilterSecondBank]);
+    program(stages, &filter, FILTER_FIRST_GRID, &[Part::FilterGrid(Grid::First)]);
+    program(stages, &filter, FILTER_FIRST_BANK, &[Part::FilterFirstBank]);
+    program(stages, &filter, FILTER_THIRD_GRID, &[Part::FilterGrid(Grid::Third)]);
     let windows = [FilterWindow::First, FilterWindow::Second, FilterWindow::Third].map(Part::FilterWindow);
-    program(stages, &filter, 0x200, &windows);
-    program(stages, &filter, 0x400, &[Part::FilterWindow(FilterWindow::Fourth)]);
-    program(stages, &input, 8, &[Part::InputRegister28]);
-    let alternate = program(stages, &input, 0x4000, &[Part::InputRegister34Alternate]);
-    let extent = program(stages, &processing, 0x2000, &[Part::Extent]);
+    program(stages, &filter, FILTER_WINDOWS, &windows);
+    program(stages, &filter, FILTER_FOURTH_WINDOW, &[Part::FilterWindow(FilterWindow::Fourth)]);
+    program(stages, &input, INPUT_REGISTER_28, &[Part::InputRegister28]);
+    let alternate = program(stages, &input, INPUT_REGISTER_34_ALTERNATE, &[Part::InputRegister34Alternate]);
+    let extent = program(stages, &processing, EXTENT, &[Part::Extent]);
     release(stages, [filter, input, transform, processing]).or(extent).or(alternate).unwrap_or(0)
 }

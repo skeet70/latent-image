@@ -8,10 +8,11 @@ use crate::dump::{ConfigurationDump, DumpDerivations};
 use crate::table::{Row, Step};
 use crate::face::{FaceTracking, TrackingBusy};
 use crate::ports::{Derivations, ExportQuery};
-use crate::pipeline::{Bank, Enable, EnableChange, FilterWindow, Grid, Part, Setting, Stage, StageBlock};
+use crate::pipeline::{Bank, Enable, EnableChange, FilterWindow, Grid, Part, Setting, Stage, StageBlock, StageMode};
 use crate::registers::PipelineHardware;
 use crate::scan::AppliedParts;
-use crate::scan::{ScanBlocks, ScanField, ScanLibrary, StockPart};
+use crate::scan::{ScanBlocks, ScanLibrary, StockPart};
+use crate::services::{KernelDelay, LensStatus};
 
 macro_rules! entry {
     ($address:expr, fn($($argument:ty),*) $(-> $result:ty)?) => {{
@@ -117,6 +118,22 @@ impl FloatLog for StockFloatLog {
     fn ln(&mut self, value: f32) -> f32 { f32::from_bits(entry!(0x89_4778u32, fn(u32) -> u32)(value.to_bits())) }
 }
 
+pub struct StockKernelDelay;
+
+impl KernelDelay for StockKernelDelay {
+    fn delay(&mut self, ticks: u32) -> u32 { entry!(0x72_3ce8u32, fn(u32) -> u32)(ticks) }
+}
+
+/// The status byte 0x6c6b08 copies out of `0x93c544 + 0x64`, or `None` when it reports failure.
+pub struct StockLensStatus;
+
+impl LensStatus for StockLensStatus {
+    fn status(&mut self) -> Option<u8> {
+        let mut status = 0u8;
+        if entry!(0x6c_6b08u32, fn(*mut u8) -> u32)(&mut status) == 0 { None } else { Some(status) }
+    }
+}
+
 pub struct StockPipelineHardware;
 
 impl PipelineHardware for StockPipelineHardware {
@@ -155,9 +172,73 @@ pub struct StockScanBlocks<M = StockMemory> {
 const CONFIGURATION_BYTES: u32 = 0x244;
 const APPLIED_PARTS: u32 = 0x14c;
 const REQUEST_WINDOW: u32 = 0x3e;
+const CONFIGURED_WINDOW: u32 = 0x1c8;
 
 #[derive(Clone, Copy)]
 enum Width { Byte, Half, Word }
+
+/// A configuration field by its stock offset; its meaning awaits the caller that names it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ScanField {
+    WordDc,
+    WordE0,
+    WordE4,
+    WordE8,
+    WordEc,
+    WordF0,
+    WordF4,
+    WordF8,
+    WordFc,
+    Word100,
+    Word104,
+    Word108,
+    Word10c,
+    Word110,
+    Word114,
+    Half118,
+    Byte11a,
+    Byte11b,
+    Word11c,
+    Word124,
+    Word128,
+    Word13c,
+    Word140,
+    Word144,
+    Word148,
+    Word160,
+    Word164,
+    Half168,
+    Half16a,
+    Byte16c,
+    Word17c,
+    Word180,
+    Word184,
+    Word188,
+    Word18c,
+    Byte190,
+    Word194,
+    Half1a0,
+    Byte1a2,
+    Half1a4,
+    Word1a8,
+    Byte1ac,
+    Byte1ad,
+    Byte1ae,
+    Byte1af,
+    Word1b4,
+    Word1bc,
+    Half1c8,
+    Half1ca,
+    Half1cc,
+    Word1d0,
+    Word1d4,
+    Word1d8,
+    Word1dc,
+    Word1e0,
+    Word1e4,
+    Half1e8,
+    Half1ea,
+}
 
 fn layout(field: ScanField) -> (u32, Width) {
     use ScanField::*;
@@ -223,11 +304,8 @@ fn layout(field: ScanField) -> (u32, Width) {
     }
 }
 
-impl<M: GuestMemory> ScanBlocks for StockScanBlocks<M> {
-    /// 0xd77abc fills the block through fill_bytes (0x7221c8).
-    fn clear_configuration(&mut self) { self.memory.fill(self.configuration, 0, CONFIGURATION_BYTES) }
-
-    fn set(&mut self, field: ScanField, value: u32) {
+impl<M: GuestMemory> StockScanBlocks<M> {
+    pub(crate) fn set_field(&mut self, field: ScanField, value: u32) {
         let (offset, width) = layout(field);
         let at = self.configuration + offset;
         match width {
@@ -237,7 +315,7 @@ impl<M: GuestMemory> ScanBlocks for StockScanBlocks<M> {
         }
     }
 
-    fn configuration(&self, field: ScanField) -> u32 {
+    pub(crate) fn field(&self, field: ScanField) -> u32 {
         let (offset, width) = layout(field);
         let at = self.configuration + offset;
         match width {
@@ -246,6 +324,98 @@ impl<M: GuestMemory> ScanBlocks for StockScanBlocks<M> {
             Width::Word => self.memory.word(at),
         }
     }
+
+    /// 0xd78400.
+    pub fn set_ec(&mut self, value: u32) { self.set_field(ScanField::WordEc, value) }
+
+    /// Values above 7 become 8 (0xd784ac).
+    pub fn set_140(&mut self, value: u32) { self.set_field(ScanField::Word140, value.min(8)) }
+
+    /// 0xd784cc.
+    pub fn set_144(&mut self, enabled: bool) { self.set_field(ScanField::Word144, u32::from(enabled)) }
+
+    /// 0xd78674.
+    pub fn set_11a(&mut self, value: u8) { self.set_field(ScanField::Byte11a, u32::from(value)) }
+
+    /// Values above 8 become 9 (0xd7868c).
+    pub fn set_13c(&mut self, value: u32) { self.set_field(ScanField::Word13c, value.min(9)) }
+
+    /// Values above 2 become 3 (0xd789f0).
+    pub fn set_148(&mut self, value: u32) { self.set_field(ScanField::Word148, value.min(3)) }
+
+    /// Values above 4 become 0 (0xd79364).
+    pub fn set_1dc(&mut self, value: u32) { self.set_field(ScanField::Word1dc, if value > 4 { 0 } else { value }) }
+
+    /// Stores the defaults 0xd791b0 writes, then the library's finish entries.
+    pub fn set_defaults(&mut self, library: &mut impl ScanLibrary<Self>) {
+        for (field, value) in DEFAULTS {
+            self.set_field(field, value);
+        }
+        library.finish_defaults(self);
+    }
+}
+
+/// The defaults 0xd791b0 stores, in its order.
+const DEFAULTS: [(ScanField, u32); 54] = [
+    (ScanField::WordEc, 0),
+    (ScanField::WordE4, 0),
+    (ScanField::WordDc, 1),
+    (ScanField::WordE0, 0),
+    (ScanField::WordF0, 0),
+    (ScanField::WordF4, 2),
+    (ScanField::WordF8, 2),
+    (ScanField::WordFc, 2),
+    (ScanField::Word100, 2),
+    (ScanField::Word104, 0),
+    (ScanField::Word108, 0),
+    (ScanField::Word10c, 2),
+    (ScanField::Word110, 0),
+    (ScanField::Word114, 2),
+    (ScanField::Byte11b, 1),
+    (ScanField::Word11c, 600),
+    (ScanField::Half118, 0),
+    (ScanField::Byte11a, 1),
+    (ScanField::Word124, 1),
+    (ScanField::Word160, 0),
+    (ScanField::Word164, 0),
+    (ScanField::Half168, 0),
+    (ScanField::Half16a, 0),
+    (ScanField::Byte16c, 0),
+    (ScanField::Word180, 2),
+    (ScanField::Word184, 0),
+    (ScanField::Word188, 0),
+    (ScanField::Word17c, 1),
+    (ScanField::Word18c, 0),
+    (ScanField::Byte190, 0),
+    (ScanField::Word194, 2),
+    (ScanField::Word128, 0),
+    (ScanField::Half1a0, 0x2ba),
+    (ScanField::Byte1a2, 0),
+    (ScanField::Half1a4, 0x7e),
+    (ScanField::Byte1ac, 0),
+    (ScanField::Word1a8, 0),
+    (ScanField::Byte1ad, 0),
+    (ScanField::Byte1ae, 0),
+    (ScanField::Byte1af, 0),
+    (ScanField::Word1bc, 1),
+    (ScanField::Word1e0, 0),
+    (ScanField::WordE8, 0),
+    (ScanField::Half1c8, 0),
+    (ScanField::Half1ca, 0),
+    (ScanField::Half1cc, 0),
+    (ScanField::Word1d0, 0),
+    (ScanField::Word1d4, 0),
+    (ScanField::Word1d8, 0),
+    (ScanField::Word1b4, 0),
+    (ScanField::Word1dc, 0),
+    (ScanField::Word1e4, 0),
+    (ScanField::Half1e8, 0),
+    (ScanField::Half1ea, 0),
+];
+
+impl<M: GuestMemory> ScanBlocks for StockScanBlocks<M> {
+    /// 0xd77abc fills the block through fill_bytes (0x7221c8).
+    fn clear_configuration(&mut self) { self.memory.fill(self.configuration, 0, CONFIGURATION_BYTES) }
 
     fn request_flag(&self, index: u8) -> u8 { self.memory.byte(self.request + u32::from(index)) }
 
@@ -257,6 +427,16 @@ impl<M: GuestMemory> ScanBlocks for StockScanBlocks<M> {
     }
 
     fn clear_applied_parts(&mut self) { self.memory.set_word(self.configuration + APPLIED_PARTS, 0) }
+
+    fn configured_window(&self) -> [u16; 3] {
+        core::array::from_fn(|index| self.memory.halfword(self.configuration + CONFIGURED_WINDOW + 2 * index as u32))
+    }
+
+    fn set_configured_window(&mut self, limits: [u16; 3]) {
+        for (index, limit) in limits.into_iter().enumerate() {
+            self.memory.set_halfword(self.configuration + CONFIGURED_WINDOW + 2 * index as u32, limit);
+        }
+    }
 
     fn set_request_window(&mut self, limits: [u16; 3]) {
         for (index, limit) in limits.into_iter().enumerate() {
@@ -403,13 +583,13 @@ impl<M: GuestMemory> StockStageBlock<M> {
 }
 
 impl<M: GuestMemory> StageBlock for StockStageBlock<M> {
-    fn stage_mode(&self, stage: Stage) -> u32 {
-        self.word(match stage {
-            Stage::Stage400 => 0x14,
-            Stage::Stage4 => 0x30,
-            Stage::Stage8 => 0x40,
-            Stage::Stage10 => 0x88,
-        })
+    fn stage_mode(&self, stage: Stage) -> StageMode {
+        StageMode::of(self.word(match stage {
+            Stage::First => 0x14,
+            Stage::Second => 0x30,
+            Stage::Third => 0x40,
+            Stage::Fourth => 0x88,
+        }))
     }
 
     fn enable_change(&self, enable: Enable) -> EnableChange {

@@ -6,7 +6,7 @@ enum Op {
     Release(Unit),
     Program(Unit, Part),
     EnableInput(bool),
-    Stage(Stage, u32),
+    Stage(Stage, StageMode),
     Gates([u32; 2]),
     Path([u32; 2]),
     Switch(Switch, u32),
@@ -17,7 +17,7 @@ enum Op {
 }
 
 struct Block {
-    modes: Vec<(Stage, u32)>,
+    modes: Vec<(Stage, StageMode)>,
     gate: EnableChange,
     mode: EnableChange,
     output: EnableChange,
@@ -41,7 +41,7 @@ impl Default for Block {
 }
 
 impl StageBlock for Block {
-    fn stage_mode(&self, stage: Stage) -> u32 { self.modes.iter().find(|(at, _)| *at == stage).map_or(0, |(_, mode)| *mode) }
+    fn stage_mode(&self, stage: Stage) -> StageMode { self.modes.iter().find(|(at, _)| *at == stage).map_or(StageMode::On, |(_, mode)| *mode) }
 
     fn enable_change(&self, enable: Enable) -> EnableChange {
         match enable {
@@ -99,7 +99,7 @@ impl ImageStages for Stages {
     type Session = Unit;
     type Block = Block;
 
-    fn acquire(&mut self, unit: Unit, _: u32) -> (i32, Unit) {
+    fn acquire(&mut self, unit: Unit, _: Client) -> (i32, Unit) {
         self.ops.push(Op::Acquire(unit));
         (-1, unit)
     }
@@ -115,7 +115,7 @@ impl ImageStages for Stages {
         self.ops.push(Op::EnableInput(enabled));
         -1
     }
-    fn set_stage(&mut self, _: &Unit, stage: Stage, mode: u32) -> i32 {
+    fn set_stage(&mut self, _: &Unit, stage: Stage, mode: StageMode) -> i32 {
         self.ops.push(Op::Stage(stage, mode));
         if self.refused_stage == Some(stage) { -30 } else { -1 }
     }
@@ -161,25 +161,29 @@ impl ImageStages for Stages {
         -1
     }
     fn reset_input_unit(&mut self) -> i32 { -1 }
-    fn unheld(&self, unit: Unit, _: u32) -> Unit { unit }
+    fn unheld(&self, unit: Unit, _: Client) -> Unit { unit }
 }
 
 use Op::{Acquire, Program, Release};
 use Unit::{Filter, Input, Processing, Transform};
 
+fn client() -> Client { Client(1) }
+
+fn flags(bits: u32) -> Flags { Flags(bits) }
+
 #[test]
 fn enabling_stages_holds_the_units_sets_modes_gates_and_path_and_releases_in_order() {
     let mut stages = stages();
-    let block = Block { modes: vec![(Stage::Stage4, 2)], ..Block::default() };
-    assert_eq!(enable_configured_stages(&mut stages, 1, 0x1 | 0x4 | 0x8 | 0x20 | 0x40, &block), released(Processing));
+    let block = Block { modes: vec![(Stage::Second, StageMode::Alternate)], ..Block::default() };
+    assert_eq!(enable_configured_stages(&mut stages, client(), flags(0x1 | 0x4 | 0x8 | 0x20 | 0x40), &block), released(Processing));
     assert_eq!(
         stages.ops,
         [
             Acquire(Input),
             Acquire(Processing),
             Op::EnableInput(true),
-            Op::Stage(Stage::Stage4, 2),
-            Op::Stage(Stage::Stage8, 1),
+            Op::Stage(Stage::Second, StageMode::Alternate),
+            Op::Stage(Stage::Third, StageMode::On),
             Op::Gates([1, 8]),
             Op::Path([0b101, 0]),
             Release(Input),
@@ -190,28 +194,28 @@ fn enabling_stages_holds_the_units_sets_modes_gates_and_path_and_releases_in_ord
 
 #[test]
 fn stage_400_alone_is_written_unheld_and_returns_the_writes_status() {
-    let mut stages = Stages { refused_stage: Some(Stage::Stage400), ..stages() };
-    assert_eq!(enable_configured_stages(&mut stages, 1, 0x400, &Block::default()), -30);
-    assert_eq!(stages.ops, [Op::Stage(Stage::Stage400, 1)]);
+    let mut stages = Stages { refused_stage: Some(Stage::First), ..stages() };
+    assert_eq!(enable_configured_stages(&mut stages, client(), flags(0x400), &Block::default()), -30);
+    assert_eq!(stages.ops, [Op::Stage(Stage::First, StageMode::On)]);
 }
 
 #[test]
 fn a_held_unit_makes_the_last_release_the_status() {
-    let mut stages = Stages { refused_stage: Some(Stage::Stage400), ..stages() };
-    assert_eq!(enable_configured_stages(&mut stages, 1, 0x400 | 0x1, &Block::default()), released(Input));
-    assert_eq!(stages.ops, [Acquire(Input), Op::EnableInput(true), Op::Stage(Stage::Stage400, 1), Release(Input)]);
+    let mut stages = Stages { refused_stage: Some(Stage::First), ..stages() };
+    assert_eq!(enable_configured_stages(&mut stages, client(), flags(0x400 | 0x1), &Block::default()), released(Input));
+    assert_eq!(stages.ops, [Acquire(Input), Op::EnableInput(true), Op::Stage(Stage::First, StageMode::On), Release(Input)]);
 }
 
 #[test]
 fn disabling_stages_zeroes_modes_toggles_the_path_and_resets_named_banks() {
     let mut stages = stages();
-    disable_stages(&mut stages, 1, 0x10 | 0x80 | 0x200);
+    disable_stages(&mut stages, client(), flags(0x10 | 0x80 | 0x200));
     assert_eq!(
         stages.ops,
         [
             Acquire(Transform),
             Acquire(Processing),
-            Op::Stage(Stage::Stage10, 0),
+            Op::Stage(Stage::Fourth, StageMode::Off),
             Op::Path([0b110, 0]),
             Release(Transform),
             Release(Processing),
@@ -227,7 +231,7 @@ fn disabling_stages_zeroes_modes_toggles_the_path_and_resets_named_banks() {
 #[test]
 fn a_region_write_programs_processing_and_input_then_the_filter() {
     let mut stages = stages();
-    assert_eq!(write_region(&mut stages, 1, 6, &Block::default()), released(Filter));
+    assert_eq!(write_region(&mut stages, client(), flags(6), &Block::default()), released(Filter));
     assert_eq!(
         stages.ops,
         [
@@ -249,7 +253,7 @@ fn a_region_write_programs_processing_and_input_then_the_filter() {
 fn applying_parameters_programs_every_selected_group_in_order() {
     let mut stages = stages();
     let block = Block { gate: EnableChange::Invert, mode: EnableChange::Set(0), path_enable: 1, second_gate: 1, level: 5, ..Block::default() };
-    assert_eq!(apply_parameters(&mut stages, 1, 0x7ff, &block), released(Processing));
+    assert_eq!(apply_parameters(&mut stages, client(), flags(0x7ff), &block), released(Processing));
     let bank = |bank| {
         [Part::TransformOffset(bank), Part::TransformThirdOffset(bank), Part::TransformWindow(bank), Part::TransformTable(bank)]
             .map(|part| Program(Transform, part))
@@ -293,7 +297,7 @@ fn applying_parameters_programs_every_selected_group_in_order() {
 fn a_kept_switch_is_neither_read_nor_written_and_a_kept_mode_is_written_back_with_the_level() {
     let mut stages = stages();
     let block = Block { level: 2, ..Block::default() };
-    apply_parameters(&mut stages, 1, 0x4 | 0x80 | 0x20, &block);
+    apply_parameters(&mut stages, client(), flags(0x4 | 0x80 | 0x20), &block);
     assert!(!stages.ops.iter().any(|op| matches!(op, Op::Switch(..))));
     assert!(stages.ops.contains(&Op::Mode(ModeWords { enabled: 1, level: 2 })));
 }
@@ -302,7 +306,7 @@ fn a_kept_switch_is_neither_read_nor_written_and_a_kept_mode_is_written_back_wit
 fn switch_changes_invert_the_current_word_or_set_the_block_word_unchanged() {
     let mut stages = stages();
     let block = Block { gate: EnableChange::Set(5), output: EnableChange::Invert, ..Block::default() };
-    apply_parameters(&mut stages, 1, 0x4 | 0x20, &block);
+    apply_parameters(&mut stages, client(), flags(0x4 | 0x20), &block);
     let switches: Vec<Op> = stages.ops.into_iter().filter(|op| matches!(op, Op::Switch(..))).collect();
     assert_eq!(switches, [Op::Switch(Switch::Gate, 5), Op::Switch(Switch::Output, 0)]);
 }
@@ -310,22 +314,22 @@ fn switch_changes_invert_the_current_word_or_set_the_block_word_unchanged() {
 #[test]
 fn nothing_selected_holds_nothing_and_returns_0() {
     let mut stages = stages();
-    assert_eq!(apply_parameters(&mut stages, 1, 0, &Block::default()), 0);
-    assert_eq!(configure_geometry(&mut stages, 1, 0x8000, &Block::default()), 0);
+    assert_eq!(apply_parameters(&mut stages, client(), flags(0), &Block::default()), 0);
+    assert_eq!(configure_geometry(&mut stages, client(), flags(0x8000), &Block::default()), 0);
     assert!(stages.ops.is_empty());
 }
 
 #[test]
 fn the_division_alone_is_written_unheld_and_returns_its_status() {
     let mut stages = Stages { refused: Some(Part::Division), ..stages() };
-    assert_eq!(apply_parameters(&mut stages, 1, 0x400, &Block::default()), -30);
+    assert_eq!(apply_parameters(&mut stages, client(), flags(0x400), &Block::default()), -30);
     assert_eq!(stages.ops, [Program(Processing, Part::Division)]);
 }
 
 #[test]
 fn configuring_geometry_programs_every_selected_group_in_order() {
     let mut stages = stages();
-    assert_eq!(configure_geometry(&mut stages, 1, 0x7fff, &Block::default()), released(Transform));
+    assert_eq!(configure_geometry(&mut stages, client(), flags(0x7fff), &Block::default()), released(Transform));
     let bank = |bank| {
         [
             Part::TransformDimensions(bank),
@@ -367,10 +371,10 @@ fn configuring_geometry_programs_every_selected_group_in_order() {
 #[test]
 fn the_alternate_input_word_and_the_extent_are_written_unheld_and_the_last_returns_its_status() {
     let mut stages = Stages { refused: Some(Part::Extent), ..stages() };
-    assert_eq!(configure_geometry(&mut stages, 1, 0x4000 | 0x2000, &Block::default()), -30);
+    assert_eq!(configure_geometry(&mut stages, client(), flags(0x4000 | 0x2000), &Block::default()), -30);
     stages.refused = Some(Part::InputRegister34Alternate);
-    assert_eq!(configure_geometry(&mut stages, 1, 0x4000, &Block::default()), -30);
-    assert_eq!(configure_geometry(&mut stages, 1, 0x4000 | 0x2000, &Block::default()), -1);
+    assert_eq!(configure_geometry(&mut stages, client(), flags(0x4000), &Block::default()), -30);
+    assert_eq!(configure_geometry(&mut stages, client(), flags(0x4000 | 0x2000), &Block::default()), -1);
     assert_eq!(
         stages.ops,
         [
