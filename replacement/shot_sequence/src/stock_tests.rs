@@ -26,6 +26,18 @@ fn outcome_words_are_the_ones_parents_test() {
 }
 
 #[test]
+fn the_processing_selection_block_leaves_room_for_the_two_words_the_configuration_writes() {
+    use crate::calculations_work::ProcessingSelection;
+    let selection = ProcessingSelection { variant: 3, variant_mode: true, mode: 0x11, value: 0x2222, ..ProcessingSelection::default() };
+    let bytes = stock::calculations::selection_bytes(&selection);
+    assert_eq!(bytes.len(), 0x2c);
+    assert_eq!(bytes[0], 3);
+    let word = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+    assert_eq!((word(0x18), word(0x1c), word(0x20)), (1, 0x11, 0x2222));
+    assert_eq!((word(0x24), word(0x28)), (0, 0));
+}
+
+#[test]
 fn half_press_block_fields() {
     let mut block = [0u8; 64];
     block[4..8].copy_from_slice(&5u32.to_le_bytes());

@@ -40,10 +40,11 @@ pub fn binned_words(planes: &BinnedPlanes) -> [u32; PLANES * BINNED * BINNED] {
 /// The capture pipeline's configuration entry 0xfeacac (source, buffer, processing, client word,
 /// detail, selection).
 pub const CONFIGURE_PROCESSING: u32 = 0xfeacac;
-pub const SELECTION_BYTES: usize = 0x24;
+pub const SELECTION_BYTES: usize = 0x2c;
 
 /// The selection block 0xf2e7bc builds on its stack: the variant byte at +0, the variant-mode word
-/// at +0x18, the readout mode and value at +0x1c and +0x20; stock leaves the rest unwritten.
+/// at +0x18, the readout mode and value at +0x1c and +0x20; stock leaves the rest unwritten. The
+/// configuration writes words at +0x24 and +0x28 (0xffd520..0xffd534), which 0xedb05c reads.
 pub fn selection_bytes(selection: &ProcessingSelection) -> [u8; SELECTION_BYTES] {
     let mut bytes = [0; SELECTION_BYTES];
     bytes[0] = selection.variant;
