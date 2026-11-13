@@ -7,6 +7,7 @@ module BankAllowlist
   , parseAllowlist, Finding (..), Reason (..), LayoutRule (..), Region (..)
   , Layout (..), EngineExtents (..), readLayout, regionOf, writable, layoutFindings
   , Verdict (..), Report (..), allowlistAnalysisIdentity, checkBank, checkBankFile
+  , AddressRange(..), InterfaceLayout(..), checkImageInterfaces
   , violations, declared, renderFinding, reportValue
   ) where
 
@@ -368,13 +369,38 @@ layoutFindings elf layout =
 -- | Exact aliases share one function extent.
 data Function = Function {functionName :: String, functionStart :: Word32, functionEnd :: Word32}
 
+data AddressRange = AddressRange Word32 Word32 deriving (Eq, Show)
+data InterfaceLayout = InterfaceLayout
+  { interfaceAllocation :: AddressRange
+  , interfaceCode :: [AddressRange]
+  , interfaceSections :: [String]
+  , interfaceLayoutProblems :: [Finding]
+  }
+
 checkBank :: Allowlist -> Elf -> Either String Report
 checkBank allowlist elf = do
   layout <- readLayout elf
-  let layoutProblems = layoutFindings elf layout
+  let ranges = AddressRange (textStart layout) (textEnd layout) : maybe [] (\r -> [AddressRange (engineCodeStart r) (engineCodeEnd r)]) (engine layout)
+      inside address = any (\(AddressRange low high) -> low <= address && address < high) ranges
+      stack = case engine layout of
+        Nothing -> []
+        Just _ -> let result = do
+                        _ <- EngineStack.checkEngineStack EngineStack.taskOneBudget elf inside
+                        when (hasPublicationGroup RenderPublication (layoutBankVariant layout)) $ do
+                          _ <- RenderStack.checkRenderStack elf inside
+                          pure ()
+                   in case result of Left problem -> [Finding (textStart layout) "<stack>" Violation StackBudgetViolation problem]; Right () -> []
+  report <- checkImageInterfaces allowlist elf (InterfaceLayout
+    (AddressRange (allocationBase layout) (allocationEnd layout)) ranges
+    (bankSections ++ engineSections layout) (layoutFindings elf layout))
+  pure report { reportFindings = reportFindings report ++ stack }
+
+checkImageInterfaces :: Allowlist -> Elf -> InterfaceLayout -> Either String Report
+checkImageInterfaces allowlist elf layout = do
+  let layoutProblems = interfaceLayoutProblems layout
   relocations <- if null layoutProblems then addressRelocations elf else pure []
   unless (not (null relocations) || not (null layoutProblems)) (Left "retained ELF address relocations required; relink with --emit-relocs")
-  let ranges = (textStart layout, textEnd layout) : maybe [] (\r -> [(engineCodeStart r, engineCodeEnd r)]) (engine layout)
+  let ranges = [(low,high) | AddressRange low high <- interfaceCode layout]
       inside address = any (\(lo, hi) -> lo <= address && address < hi) ranges
       symbols = [s | s <- elfSymbols elf, symbolKind s == FunctionSymbol, symbolSize s > 0, inside (symbolValue s)]
       groups = groupBy (\a b -> symbolValue a == symbolValue b && symbolSize a == symbolSize b)
@@ -387,8 +413,9 @@ checkBank allowlist elf = do
       belongs target = inside target && isCode target
       entry target = target `elem` map stockCallAddress (stockCalls allowlist)
       region target = any (\s -> stockRegionAddress s <= target && toInteger target < toInteger (stockRegionAddress s) + toInteger (stockRegionBytes s)) (stockRegions allowlist)
-      owned target = allocationBase layout <= target && target < allocationEnd layout
-      ownedSite address = any (\section -> sectionName section `elem` bankSections ++ engineSections layout
+      AddressRange allocationLow allocationHigh = interfaceAllocation layout
+      owned target = allocationLow <= target && target < allocationHigh
+      ownedSite address = any (\section -> sectionName section `elem` interfaceSections layout
         && sectionAddress section <= address && toInteger address + 4 <= toInteger (sectionAddress section) + toInteger (sectionSize section)) (elfSections elf)
       finding address reason detail verdict = Finding address (maybe "<unowned code>" functionName (owner address)) verdict reason detail
       external address target
@@ -410,15 +437,7 @@ checkBank allowlist elf = do
         , ownedSite (addressSite relocation) ]
       extents = [Finding (functionStart f) "<layout>" Violation (LayoutProblem (SectionExtent "function")) "function extent leaves owned code"
         | f <- functions, not (any (\(lo, hi) -> lo <= functionStart f && functionEnd f <= hi) ranges)]
-      stack = case engine layout of
-        Nothing -> []
-        Just _ -> let result = do
-                        _ <- EngineStack.checkEngineStack EngineStack.taskOneBudget elf inside
-                        when (hasPublicationGroup RenderPublication (layoutBankVariant layout)) $ do
-                          _ <- RenderStack.checkRenderStack elf inside
-                          pure ()
-                   in case result of Left problem -> [Finding (textStart layout) "<stack>" Violation StackBudgetViolation problem]; Right () -> []
-      found = layoutProblems ++ extents ++ concatMap inspect code ++ references ++ stack
+      found = layoutProblems ++ extents ++ concatMap inspect code ++ references
   when (null functions) (Left "bank: no function symbols in owned code")
   pure (Report found
     (length [() | (address, word) <- code, Just target <- [directTarget address word], belongs target || entry target]) (length code) (length functions))
