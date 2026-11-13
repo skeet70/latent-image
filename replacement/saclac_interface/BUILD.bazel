@@ -6,6 +6,7 @@ xm1_rust_rlib(
     name = "saclac-interface",
     src = "src/lib.rs",
     crate_name = "xm1_saclac_interface",
+    out = "libxm1_saclac_interface.rlib",
     data = ["src/stock.rs"],
 )
 

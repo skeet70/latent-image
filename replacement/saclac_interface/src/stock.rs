@@ -483,6 +483,23 @@ pub fn client_callback(parameters: Parameters<'_>) -> Result<ClientCallback, Par
 
 pub fn callback_word(callback: ClientCallback) -> u32 { callback.0 }
 
+pub fn optional_callback(word: u32) -> Option<ClientCallback> {
+    if word == 0 { None } else { Some(ClientCallback(word)) }
+}
+
+pub fn reply_target_code(target: ReplyTarget) -> u8 {
+    match target {
+        ReplyTarget::Command(kind) => command_code(kind),
+        ReplyTarget::Notification(notification) => match notification {
+            ClientNotification::Notification12 => 0x12,
+            ClientNotification::Notification18 => 0x18,
+            ClientNotification::Notification19 => 0x19,
+            ClientNotification::Notification1b => 0x1b,
+            ClientNotification::Notification1c => 0x1c,
+        },
+    }
+}
+
 pub fn parse(operation: u16, payload: &[u8]) -> Result<Message<'_>, ParseError> {
     let code = operation.checked_sub(0x3b00).and_then(|code| u8::try_from(code).ok()).ok_or(ParseError::UnknownOperation)?;
     if let Some(kind) = command(code) {
