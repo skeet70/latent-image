@@ -12,6 +12,7 @@ module Replacement.Saclac.PayloadProjection
 
 import Control.Monad (unless)
 import Data.Aeson
+import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import qualified Data.Aeson.Types as J
 import Data.List (find, sortOn)
@@ -39,7 +40,12 @@ data Discriminator = Discriminator Offset Word32 deriving (Eq, Show)
 discriminatorWidth :: Int
 discriminatorWidth = 4
 
-data Message = Message Direction QueueId Operation PayloadSize [Field] [Padding] (Maybe Discriminator) deriving (Eq, Show)
+data Message
+  = Message Direction QueueId Operation PayloadSize [Field] [Padding] (Maybe Discriminator)
+  -- | A completion one of saclac's callbacks posts into queue 43 from the
+  -- sender's task. Its payload projects to nothing whatever its length.
+  | Internal QueueId Operation [Citation]
+  deriving (Eq, Show)
 data Declaration = Declaration T.Text [Message] [Value] [Value] deriving (Eq, Show)
 
 instance FromJSON Direction where
@@ -103,36 +109,51 @@ instance FromJSON Message where
     direction <- row .: "direction"
     queue <- QueueId <$> row .: "queue"
     operation <- Operation <$> row .: "operation"
-    size <- row .: "bytes"
-    fields <- row .: "fields"
-    padding <- row .:? "padding" .!= []
-    discriminator <- row .:? "discriminator"
-    let spans = sortOn fst
-          ([(offset, width) | Field _ (Offset offset) (Width width) _ _ <- fields]
-          ++ [(offset, width) | Padding (Offset offset) (Width width) _ <- padding])
-        covered = foldl advance (Just 0) spans
-        advance (Just next) (offset, width) | next == offset && width <= size - offset = Just (offset + width)
-        advance _ _ = Nothing
-        unconditional (Field _ (Offset start) (Width count) _ Nothing) = [(start, start + count)]
-        unconditional _ = []
-        insideSelector (Discriminator (Offset offset) _) =
-          any (\(start, end) -> start <= offset && offset + discriminatorWidth <= end)
-            (concatMap unconditional fields)
-        discriminatorFits (Discriminator (Offset offset) _) = offset + discriminatorWidth <= size
-    unless (size >= 0 && size <= 4096 && covered == Just size) (fail "message fields and padding must partition its payload")
-    let selectorDefined (Field _ _ _ _ Nothing) = True
-        selectorDefined (Field _ _ _ _ (Just (Exclusion (Offset offset) (Width width) _ _))) =
-          any (\(Field _ (Offset start) (Width count) _ condition) ->
-            condition == Nothing && start <= offset && offset + width <= start + count) fields
-    unless (all selectorDefined fields) (fail "conditional selector must be an unconditional field")
-    unless (maybe True (\value -> discriminatorFits value && insideSelector value) discriminator)
-      (fail "message discriminator must lie inside an unconditional field")
-    pure (Message direction queue operation (PayloadSize size) (sortOn fieldOffset fields) padding discriminator)
-    where fieldOffset (Field _ (Offset offset) _ _ _) = offset
+    internal <- row .:? "saclac_internal"
+    case internal of
+      Just body -> do
+        sources <- withObject "saclac-internal completion" (.: "sources") body
+        unless (direction == Incoming && not (null sources)
+            && not (any (`KM.member` row) ["bytes", "fields", "padding", "discriminator"]))
+          (fail "a saclac-internal completion is incoming, cites its callback and declares no payload")
+        pure (Internal queue operation sources)
+      Nothing -> declaredMessage row direction queue operation
+
+declaredMessage :: Object -> Direction -> QueueId -> Operation -> J.Parser Message
+declaredMessage row direction queue operation = do
+  size <- row .: "bytes"
+  fields <- row .: "fields"
+  padding <- row .:? "padding" .!= []
+  discriminator <- row .:? "discriminator"
+  let spans = sortOn fst
+        ([(offset, width) | Field _ (Offset offset) (Width width) _ _ <- fields]
+        ++ [(offset, width) | Padding (Offset offset) (Width width) _ <- padding])
+      covered = foldl advance (Just 0) spans
+      advance (Just next) (offset, width) | next == offset && width <= size - offset = Just (offset + width)
+      advance _ _ = Nothing
+      unconditional (Field _ (Offset start) (Width count) _ Nothing) = [(start, start + count)]
+      unconditional _ = []
+      insideSelector (Discriminator (Offset offset) _) =
+        any (\(start, end) -> start <= offset && offset + discriminatorWidth <= end)
+          (concatMap unconditional fields)
+      discriminatorFits (Discriminator (Offset offset) _) = offset + discriminatorWidth <= size
+  unless (size >= 0 && size <= 4096 && covered == Just size) (fail "message fields and padding must partition its payload")
+  let selectorDefined (Field _ _ _ _ Nothing) = True
+      selectorDefined (Field _ _ _ _ (Just (Exclusion (Offset offset) (Width width) _ _))) =
+        any (\(Field _ (Offset start) (Width count) _ condition) ->
+          condition == Nothing && start <= offset && offset + width <= start + count) fields
+  unless (all selectorDefined fields) (fail "conditional selector must be an unconditional field")
+  unless (maybe True (\value -> discriminatorFits value && insideSelector value) discriminator)
+    (fail "message discriminator must lie inside an unconditional field")
+  pure (Message direction queue operation (PayloadSize size) (sortOn fieldOffset fields) padding discriminator)
+  where fieldOffset (Field _ (Offset offset) _ _ _) = offset
+
 instance ToJSON Message where
   toJSON (Message direction (QueueId queue) (Operation operation) (PayloadSize size) fields padding discriminator) = object
     (["direction" .= direction, "queue" .= queue, "operation" .= operation, "bytes" .= size, "fields" .= fields, "padding" .= padding]
       ++ maybe [] (\value -> ["discriminator" .= value]) discriminator)
+  toJSON (Internal (QueueId queue) (Operation operation) sources) = object
+    ["direction" .= Incoming, "queue" .= queue, "operation" .= operation, "saclac_internal" .= object ["sources" .= sources]]
 instance FromJSON Declaration where
   parseJSON = withObject "payload projection" $ \row -> do
     schema <- row .: "schema" :: J.Parser Int
@@ -140,13 +161,12 @@ instance FromJSON Declaration where
     messages <- row .: "messages"
     channels <- row .:? "channels" .!= []
     causal <- row .:? "causal_pairs" .!= []
-    let key (Message direction queue operation _ _ _ discriminator) = (direction, queue, operation, discriminator)
-        address (Message direction queue operation _ _ _ _) = (direction, queue, operation)
+    let key message = (messageAddress message, messageDiscriminator message)
         unique [] = True
         unique (message : rest) = all ((/= key message) . key) rest && unique rest
         selected rows = and
           [ isJust (messageDiscriminator message)
-            || length (filter ((== address message) . address) rows) == 1
+            || length (filter ((== messageAddress message) . messageAddress) rows) == 1
           | message <- rows ]
     unless (schema == 1 && not (T.null source) && unique messages && selected messages)
       (fail "invalid, duplicate or undiscriminated message projection")
@@ -154,6 +174,11 @@ instance FromJSON Declaration where
 
 messageDiscriminator :: Message -> Maybe Discriminator
 messageDiscriminator (Message _ _ _ _ _ _ discriminator) = discriminator
+messageDiscriminator Internal {} = Nothing
+
+messageAddress :: Message -> (Direction, QueueId, Operation)
+messageAddress (Message direction queue operation _ _ _ _) = (direction, queue, operation)
+messageAddress (Internal queue operation _) = (Incoming, queue, operation)
 
 -- | The little-endian word of @width@ bytes at an offset of a payload.
 wordAt :: Int -> Int -> [Word8] -> Word32
@@ -170,17 +195,19 @@ declarationJson (Declaration source messages channels causal) = object
 
 projectPayload :: Declaration -> Direction -> QueueId -> Operation -> [Word8] -> Either String [Word8]
 projectPayload (Declaration _ messages _ _) direction queue operation payload = do
-  let candidates = filter (\(Message candidateDirection candidateQueue candidateOperation _ _ _ _) ->
-        candidateDirection == direction && candidateQueue == queue && candidateOperation == operation) messages
+  let candidates = filter ((== (direction, queue, operation)) . messageAddress) messages
   unless (not (null candidates)) (Left "message has no field declaration")
-  Message _ _ _ (PayloadSize size) fields _ _ <- maybe (Left "message discriminator matches no declaration") Right
-    (find (`selectedBy` payload) candidates)
-  unless (length payload == size) (Left "message payload length differs from field declaration")
-  let included Nothing = True
-      included (Just (Exclusion (Offset offset) (Width width) values _)) =
-        wordAt offset width payload `notElem` values
-  pure (concat [take width (drop offset payload) | Field _ (Offset offset) (Width width) _ condition <- fields, included condition])
+  selected <- maybe (Left "message discriminator matches no declaration") Right (find (`selectedBy` payload) candidates)
+  case selected of
+    Internal {} -> pure []
+    Message _ _ _ (PayloadSize size) fields _ _ -> do
+      unless (length payload == size) (Left "message payload length differs from field declaration")
+      let included Nothing = True
+          included (Just (Exclusion (Offset offset) (Width width) values _)) =
+            wordAt offset width payload `notElem` values
+      pure (concat [take width (drop offset payload) | Field _ (Offset offset) (Width width) _ condition <- fields, included condition])
   where
+    selectedBy Internal {} _ = True
     selectedBy (Message _ _ _ _ _ _ Nothing) _ = True
     selectedBy (Message _ _ _ (PayloadSize size) _ _ (Just (Discriminator (Offset offset) value))) bytes =
       length bytes == size && wordAt offset discriminatorWidth bytes == value
