@@ -36,6 +36,8 @@ The stager writes `OUTPUT_DAT.json` with input-bound sizes, digests and the imag
 
 `stage-fixed-image --ceiling-only ENCODER REBUILD DECODER SOURCE_DAT OUTPUT_DAT` stages only the stock heap ceiling for placement measurements. `//emulation:heap-observe --placement prepare|capture|playback|reset-watch --run RUN --update DAT --boot-rom ROM --checkpoint FILE --output DIR` records heap-break high-water and guards `[0x00ba0000, 0x00bf1a00)`. Preparation writes a post-setup live-view checkpoint and its identity; capture and playback restore that checkpoint. `reset-watch` runs the canonical stock DAT from reset and requires one boot fill and no later write into the partition. A high-water within 256 KiB of the fixed ceiling fails. Wi-Fi remains a camera final-pass measurement.
 
+The capture placement route follows the visible shooting-menu cursor to row 20 with a 64-key bound, selects SHOOT WITHOUT LENS ON, closes the menu and drives the half/full shutter inputs. Disabled menu rows need not consume one key each.
+
 Existing RAM-push routes remain heap-linked until the placement prerequisites and their route's migration are qualified. The boot format does not authorize an internal-flash write or a camera run.
 
 ## Lens transport

@@ -120,7 +120,10 @@ impl Observation {
         self.key(machine, RouteKey::Ok)?;
         self.advance(machine, 90_000_000)?;
         require(menu(machine)? == Some([1, 5, 2]), "placement shooting menu differs")?;
-        for _ in 2..20 { self.key(machine, RouteKey::Down)?; }
+        for _ in 0..64 {
+            if menu(machine)? == Some([1, 5, 20]) { break; }
+            self.key(machine, RouteKey::Down)?;
+        }
         require(menu(machine)? == Some([1, 5, 20]), "shoot-without-lens row differs")?;
         self.key(machine, RouteKey::Right)?;
         require(menu(machine)? == Some([1, 0xa3, 1]), "shoot-without-lens editor differs")?;
