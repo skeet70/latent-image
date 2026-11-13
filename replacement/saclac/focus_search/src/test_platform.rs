@@ -7,7 +7,7 @@ use crate::contrast::{
     LimitQuery, MonitorStepQuery, PeakSearchTrace, PinnedStatus, Platform, RetainedFocus, ScanPlan, ScanQuery, StageRecord, Step, StepQuery,
     TableOffset, TransitionTrace,
 };
-use crate::intake::{FrameSnapshot, IntakePorts, IntakeRecord, ProgramInputs};
+use crate::intake::{FrameSnapshot, IntakePorts, IntakeRecord, ProgramInputs, RecordReads, Zone};
 use std::vec::Vec;
 use xm1_saclac_controllers::search::LensPosition;
 
@@ -87,6 +87,7 @@ impl Fake {
                 extent: [0; 2],
                 timing: 0,
                 step: 0,
+                zone: Zone(0),
                 levels: [0; 2],
                 adjustment: 0,
                 level_offset: 0,
@@ -202,16 +203,19 @@ impl Platform for Fake {
     }
 }
 
+impl RecordReads for Fake {
+    fn selection_ratio(&mut self) -> [u32; 2] { [0; 2] }
+    fn converted_decade(&mut self) -> u16 { 0 }
+    fn zone_limit(&mut self, _: Zone) -> i16 { 0 }
+    fn lens_level(&mut self, _: u32, _: LensIdentity) -> i16 { 0 }
+}
+
 impl IntakePorts for Fake {
     fn frame_snapshot(&mut self) -> FrameSnapshot { FrameSnapshot { lens: self.lens, ..self.snapshot } }
     fn record(&mut self) -> IntakeRecord { self.record }
     fn imaging_profile_class(&mut self) -> u32 { 0 }
-    fn selection_ratio(&mut self) -> [u32; 2] { [0; 2] }
     fn parameter_index(&mut self, parameter: u32) -> u32 { parameter }
     fn lens_identity(&mut self) -> LensIdentity { self.lens }
-    fn converted_decade(&mut self) -> u16 { 0 }
-    fn zone_limit(&mut self) -> i16 { 0 }
-    fn lens_level(&mut self, _: u32, _: LensIdentity) -> i16 { 0 }
     fn lens_step(&mut self, _: u8, _: LensIdentity) -> u32 { 0 }
     fn program_level_word(&mut self, _: u8, _: i16, _: u32, _: u32) -> u16 { 0 }
     fn planner_word(&mut self) -> u32 { 0 }
