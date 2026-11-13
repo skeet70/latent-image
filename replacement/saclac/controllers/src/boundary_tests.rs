@@ -164,3 +164,15 @@ fn measurement_controls_preserve_geometry_suspend_and_resume_codes() {
         assert_eq!(crate::stock::measurement_control_code(control), code);
     }
 }
+
+#[test]
+fn the_s1_progress_byte_puts_each_owed_step_in_its_readers_bit() {
+    use crate::s1::Waiting;
+    use crate::stock::s1_progress;
+    let none = Waiting::default();
+    assert_eq!(s1_progress(none), 0);
+    assert_eq!(s1_progress(Waiting { shot: true, ..none }), 1);
+    assert_eq!(s1_progress(Waiting { capture: true, ..none }), 2);
+    assert_eq!(s1_progress(Waiting { bridge: true, ..none }), 4);
+    assert_eq!(s1_progress(Waiting { release: true, ..none }), 8);
+}

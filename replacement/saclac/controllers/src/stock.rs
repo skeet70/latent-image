@@ -58,6 +58,13 @@ pub const fn measurement_update_operation(update: crate::children::MeasurementUp
     }
 }
 
+/// X-M1 1.50 keeps the S1 progress in bits 0..3 of the byte at 0x169d508, which nothing else
+/// writes; the shot sequence reads capture, bridge and release through 0xf153a0, 0xf15414 and
+/// 0xf154b0 (from 0xf17dbc, 0xf17dcc, 0xf17ddc).
+pub const fn s1_progress(waiting: crate::s1::Waiting) -> u8 {
+    waiting.shot as u8 | (waiting.capture as u8) << 1 | (waiting.bridge as u8) << 2 | (waiting.release as u8) << 3
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LensFinishRoute {
     Ordinary,
