@@ -2482,6 +2482,35 @@
           ]
         }
       ]
+    },
+    {
+      "direction": "outgoing",
+      "queue": 47,
+      "operation": 16214,
+      "bytes": 68,
+      "fields": [
+        { "name": "record-parameters", "offset": 0, "bytes": 20, "sources": ["X-M1 1.50 id5 0xefbec0..0xefbee0 initializes record words0..3 and halfwords8..9"] },
+        { "name": "record-source-and-sample", "offset": 24, "bytes": 24, "sources": ["X-M1 1.50 id5 0xefbee4..0xefbf28 initializes source, constants100/16 and the16-byte sample"] },
+        { "name": "completion", "offset": 64, "bytes": 4, "sources": ["X-M1 1.50 id5 0xfeae24 stores callback at payload64 before posting0x3f56 with68 bytes at0xfeae34..0xfeae40"] }
+      ],
+      "padding": [
+        { "offset": 20, "bytes": 4, "sources": ["X-M1 1.50 id5 0xefbedc..0xefbef8: the halfword at record18 is followed by the word at record24; record20..23 has no store"] },
+        { "offset": 48, "bytes": 16, "sources": ["X-M1 1.50 id5 0xefbf28 is the last record store at44;0xefbf4c submits the record;0xfeae2c copies64 bytes"] }
+      ]
+    },
+    {
+      "direction": "outgoing",
+      "queue": 47,
+      "operation": 16215,
+      "bytes": 20,
+      "fields": [
+        { "name": "exposure-and-value", "offset": 0, "bytes": 8, "sources": ["X-M1 1.50 id5 0xfeae5c..0xfeae60 stores duration and value"] },
+        { "name": "position", "offset": 8, "bytes": 2, "sources": ["X-M1 1.50 id5 0xfeae64 stores the position halfword"] },
+        { "name": "auxiliary-and-completion", "offset": 12, "bytes": 8, "sources": ["X-M1 1.50 id5 0xfeae68..0xfeae6c stores auxiliary;0xfeae58 stores callback at16;0xfeae70..0xfeae7c posts0x3f57 with20 bytes"] }
+      ],
+      "padding": [
+        { "offset": 10, "bytes": 2, "sources": ["X-M1 1.50 id5 0xfeae64 halfword at8 is followed by0xfeae6c word at12; bytes10..11 have no store"] }
+      ]
     }
   ]
 }

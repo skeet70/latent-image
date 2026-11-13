@@ -35,6 +35,16 @@ main = do
   check (image zeros == image (changed 94))
   check (image zeros /= image (changed 96))
   check (isLeft (image (replicate 231 0)))
+  let startRecord = projectPayload recovered Outgoing (QueueId 47) (Operation 0x3f56)
+      startBytes = replicate 68 0
+      mutate offset bytes = take offset bytes ++ 1 : drop (offset + 1) bytes
+  mapM_ (\offset -> check (startRecord startBytes == startRecord (mutate offset startBytes))) ([20..23] ++ [48..63])
+  mapM_ (\offset -> check (startRecord startBytes /= startRecord (mutate offset startBytes))) ([0..19] ++ [24..47] ++ [64..67])
+  check (isLeft (startRecord (replicate 67 0)))
+  let updateRecord = projectPayload recovered Outgoing (QueueId 47) (Operation 0x3f57)
+      updateBytes = replicate 20 0
+  mapM_ (\offset -> check (updateRecord updateBytes == updateRecord (mutate offset updateBytes))) [10,11]
+  mapM_ (\offset -> check (updateRecord updateBytes /= updateRecord (mutate offset updateBytes))) ([0..9] ++ [12..19])
   putStrLn "payload field projection behavioral tests passed"
   where parse = either fail pure . parseDeclaration . L.toStrict . encode
 

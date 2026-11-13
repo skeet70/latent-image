@@ -98,3 +98,9 @@ fn indirect_lens_drive_and_unclassified_requests_require_the_lens_contract() {
     }
     assert!(!lens_effect(PeerOperation::Calc(CalcOperation::Request0c)).requires_lens_safety_contract());
 }
+
+#[test]
+fn synchronous_record_requests_keep_wire_operation_codes() {
+    assert_eq!(stock::img_dc_operation(crate::ImgDcOperation::Request56), 0x3f56);
+    assert_eq!(stock::img_dc_operation(crate::ImgDcOperation::Request57), 0x3f57);
+}
