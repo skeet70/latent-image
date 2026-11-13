@@ -7,32 +7,12 @@ use xm1_saclac_profile_records::stock::record::{group_00, group_13};
 use xm1_saclac_profile_records::stock::shared::group_27;
 use xm1_saclac_profile_records::{IntervalTracking, MeasurementSelection, SharedHeaderByte, WindowStatus};
 
+use crate::adjust::scene_settings::{self, RangeInputs, SceneRange, SceneSelection};
 use crate::exposure::context::{CandidateSpan, ExposureContext, ExposureStep, StartBound, PROGRAM_STEPS};
 use crate::exposure::ports::Ports;
 use crate::exposure::settings;
 use crate::stock::tables::PROGRAM_PROFILES;
 use crate::stock::{property, shared};
-
-/// What the scene's range reads (0xf6f2d0).
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct RangeInputs {
-    pub measurement_selection: MeasurementSelection,
-    pub kind: u32,
-    pub flags: u16,
-    pub class: u8,
-    pub unmeasured: bool,
-    pub policy: u32,
-    pub armed: u8,
-    pub variant: u8,
-}
-
-/// The scene's range: levels above and below the start, in tenths, and the base level.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct SceneRange {
-    pub above: i16,
-    pub below: i16,
-    pub base: i16,
-}
 
 /// What the unselected measurement's range reads (0xf72c3c).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -77,8 +57,6 @@ pub struct SelectedInputs {
 
 /// The adjustment layer's ranges the program is built from.
 pub trait Limits {
-    /// 0xf6f2d0.
-    fn scene_range(&mut self, inputs: &RangeInputs) -> SceneRange;
     /// 0xf72c3c.
     fn primary_range(&mut self, inputs: &PrimaryInputs) -> PrimaryRange;
     /// The record's second result code (0xfaaddc).
@@ -265,8 +243,8 @@ fn range(ports: &mut impl Ports, limits: &mut impl Limits, context: &ExposureCon
         let primary = limits.primary_range(&inputs);
         let near = ports.base_level(primary.near_lens);
         let far = ports.base_level(primary.far_lens);
-        let low = primary.lower.wrapping_sub(scene.below).wrapping_add(near);
-        let high = scene.above.wrapping_add(primary.upper).wrapping_add(far);
+        let low = primary.lower.wrapping_sub(scene.below as i16).wrapping_add(near);
+        let high = (scene.above as i16).wrapping_add(primary.upper).wrapping_add(far);
         let (low, high) = if levels.unmeasured {
             (low.wrapping_add(500).wrapping_sub(primary.floor).wrapping_sub(step_three), high.wrapping_add(500).wrapping_sub(step_three))
         } else {
@@ -285,9 +263,9 @@ fn range(ports: &mut impl Ports, limits: &mut impl Limits, context: &ExposureCon
         let program = limits.selected_program(&inputs);
         let (near_lens, far_lens) = limits.selected_lenses(program, binding.lens_reference);
         let offset = limits.selected_offset(program);
-        let low = limits.selected_level(program, binding.lens_reference).wrapping_sub(scene.below);
+        let low = limits.selected_level(program, binding.lens_reference).wrapping_sub(scene.below as i16);
         let far = ports.level(far_lens, binding.lens_reference);
-        let high = scene.above.wrapping_add(far).wrapping_add(settings::signed_word(ports, property::SELECTED_HIGH_OFFSET));
+        let high = (scene.above as i16).wrapping_add(far).wrapping_add(settings::signed_word(ports, property::SELECTED_HIGH_OFFSET));
         let low = low.wrapping_sub(step_three.wrapping_add(offset)).wrapping_add(500);
         let high = high.wrapping_add(500).wrapping_sub(step_three).wrapping_sub(offset);
         Range { low, high: high.max(low), near_lens, far_lens }
@@ -304,16 +282,19 @@ pub fn build(ports: &mut impl Ports, limits: &mut impl Limits, context: &Exposur
     let record = context.binding.record_handle();
     let refinement_pass = context.binding.refinement_pass;
     let levels = context.levels;
-    let scene = limits.scene_range(&RangeInputs {
-        measurement_selection: ports.profile().measurement_selection(record),
-        kind: ports.profile().selection_kind(record, refinement_pass),
-        flags: ports.profile().selection_flags(record, refinement_pass),
+    let inputs = RangeInputs {
+        selection: SceneSelection {
+            measurement_selection: ports.profile().measurement_selection(record),
+            scene: ports.profile().selection_kind(record, refinement_pass),
+            flags: ports.profile().selection_flags(record, refinement_pass),
+        },
         class: ports.profile().read(record, &group_00::AT_0034),
         unmeasured: levels.unmeasured,
-        policy: levels.policy,
-        armed: ports.profile().header(record, SharedHeaderByte::At63),
+        policy: levels.policy as u8,
+        armed: ports.profile().header(record, SharedHeaderByte::At63) != 0,
         variant: ports.profile().read(record, &group_00::AT_0066),
-    });
+    };
+    let scene = scene_settings::range(ports, inputs);
     let program_offset = settings::signed_word(ports, property::PROGRAM_OFFSET);
     let level_limit = settings::signed_word(ports, property::PROGRAM_LEVEL_LIMIT);
     let start_margin = settings::level(ports, property::START_MARGIN).wrapping_mul(10);
@@ -322,13 +303,13 @@ pub fn build(ports: &mut impl Ports, limits: &mut impl Limits, context: &Exposur
     let lens_reference = context.binding.lens_reference;
     let Range { low, high, near_lens, far_lens } = range(ports, limits, context, scene);
     let reference_offset = ports.level_offset(PROGRAM_PROFILES[0]);
-    let first_profile = profile_at_or_below(ports, scene.base);
+    let first_profile = profile_at_or_below(ports, scene.offset);
     let tolerance = settings::tenths(ports, property::UPPER_TOLERANCE) as i16;
     let below_high = |level: i16| if i32::from(level) + i32::from(tolerance) > i32::from(high) { high.wrapping_sub(tolerance) } else { level };
 
     let mut start = below_high(start_margin.wrapping_add(low));
     let near = ports.level(near_lens, lens_reference);
-    let floor = scene.base.wrapping_add(500).wrapping_sub(program_offset).wrapping_sub(target).wrapping_add(near).wrapping_sub(reference_offset);
+    let floor = scene.offset.wrapping_add(500).wrapping_sub(program_offset).wrapping_sub(target).wrapping_add(near).wrapping_sub(reference_offset);
     let far = ports.level(far_lens, lens_reference);
     let ceiling = level_limit.wrapping_add(500).wrapping_sub(target).wrapping_add(far).wrapping_sub(reference_offset);
     let mut bound = StartBound::Margin;
@@ -356,11 +337,11 @@ pub fn build(ports: &mut impl Ports, limits: &mut impl Limits, context: &Exposur
     let (end, room) = if room < headroom { (start.wrapping_add(room), room) } else { (high.wrapping_sub(tolerance), headroom) };
     let (count, step) = steps(room, step_limit);
 
-    let builder = Builder { lens_reference, target, base: scene.base, level_limit, reference_offset, end, far_lens };
+    let builder = Builder { lens_reference, target, base: scene.offset, level_limit, reference_offset, end, far_lens };
     let mut program = [ExposureStep::default(); PROGRAM_STEPS];
     let mut previous = ExposureStep {
         offset: program_offset,
-        level: scene.base,
+        level: scene.offset,
         profile: first_profile,
         next_profile: first_profile,
         lens_step: near_lens,

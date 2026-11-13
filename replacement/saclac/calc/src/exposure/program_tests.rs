@@ -9,13 +9,11 @@ use crate::stock::{property, shared};
 
 #[derive(Default)]
 struct FixedLimits {
-    scene: SceneRange,
     primary: PrimaryRange,
     selected_level: i16,
 }
 
 impl Limits for FixedLimits {
-    fn scene_range(&mut self, _: &RangeInputs) -> SceneRange { self.scene }
     fn primary_range(&mut self, _: &PrimaryInputs) -> PrimaryRange { self.primary }
     fn second_result(&mut self, _: RecordHandle) -> u32 { 3 }
     fn selected_program(&mut self, _: &SelectedInputs) -> u32 { 7 }
