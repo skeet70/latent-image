@@ -14,6 +14,8 @@ The shared post-boot API uses `post-boot-KEY/session.fujimod` and `post-boot-KEY
 
 The [full-system starting-state inventory](checkpoint-runs.md) classifies the Bazel run targets and command scripts. Saclac's cold-boot scenario observes startup; its other scenarios share the saved post-setup live-view boundary. Cached route reports omit startup traffic and state their observation boundary explicitly.
 
+Retained-engine snapshots keep their existing `Emulation.CheckpointKey` guest-state identity, including the native library and interpreter bytes. The cardless bridge also binds its executable. Their receipts record `snapshot_manifest_sha256`; the portable snapshot manifest identifies the stored state blobs. FujiMod receipts record `snapshot_sha256` for the exported session bytes.
+
 ### RAM-push committed NAND lifecycle
 
 Initial sessions use `--adjustment-nand NAND` with an optional `--record-nand NAND` fixture. A power-cycle continuation instead uses `--committed-nand NAND --fresh-boot`, mutually exclusive with both seed flags. Full committed import replaces the NAND before instruction zero; it does not reapply adjustment or record fixtures. The boot and initialized-reset cache identities bind the full committed input digest separately from fixture digests.

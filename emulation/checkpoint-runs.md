@@ -16,12 +16,13 @@ All labels without a package prefix are in `//emulation`. The declarations are i
 | `xm1-viewer --ram-push-e2e` | post-boot/post-install | Attach and installed checkpoint selection, [Xm1RamPushE2E.hs](Xm1RamPushE2E.hs). `--fresh-boot` explicitly tests installation/startup instead; AF ownership and allocation keeper observers remain from reset. |
 | `xm1-viewer --flash-candidate` | post-boot | Menu, modal, RAM-diff and trajectory observations use the candidate's attach checkpoint, [Xm1RamPushE2E.hs](Xm1RamPushE2E.hs). A flash-boot check is the distinct reset scenario. |
 | `xm1-viewer --warm-checkpoint` | post-boot producer | Saves or restores attach state without a trajectory, [Xm1RamPushE2E.hs](Xm1RamPushE2E.hs). |
+| `xm1-viewer --ff80-rehearsal` | post-boot | Endpoint rehearsal from attach state, [Ff80Rehearsal.hs](Emulation/Ff80Rehearsal.hs). |
 | `cardless-ram-push-bridge` | post-boot | Retained cardless attach checkpoint, [CardlessRamPush.hs](CardlessRamPush.hs). Explicit reset observations and `--fresh-boot` preserve startup. |
 | `xm1-bulk-read-e2e` | post-boot | Endpoint reads and alias comparisons, [Xm1BulkReadE2E.hs](Xm1BulkReadE2E.hs). |
 | `xm1-half-press-e2e` | post-boot | Shooting/menu input consumers, [Xm1HalfPressE2E.hs](Xm1HalfPressE2E.hs). |
 | `xm1-af-ring-e2e` | post-boot | Ordinary half-press and recorder fallback, [Xm1AfRingE2E.hs](Xm1AfRingE2E.hs). |
 | `xm1-viewer-inputs-e2e` | post-boot | Controls, modes, S2 and restoration isolation, [Xm1ViewerInputsE2E.hs](Xm1ViewerInputsE2E.hs). Explicit fresh cases remain reset. |
-| `usb-toggle-emu` | post-boot | Personality operations from a keyed attach boundary, [UsbToggleEmu.hs](UsbToggleEmu.hs). Fresh/recovery scenarios retain their installation path. |
+| `usb-toggle-emu` | mixed | Route operations use keyed post-boot state. Cable-at-reset and access-probe cases observe startup, [UsbToggleEmu.hs](UsbToggleEmu.hs). |
 | `checkpoint-warmup` | post-boot producer | Delegates to the viewer and toggle runners, [CheckpointWarmup.hs](CheckpointWarmup.hs). |
 | `ram-calibration` | post-boot | Captures post-attach RAM on either runtime, [RamCalibration.hs](RamCalibration.hs). |
 | `fujimod-ram-push-check` | reset | Tests cold bridge start and empty installed-checkpoint list, [FujiModRamPushCheck.hs](FujiModRamPushCheck.hs). |
@@ -48,7 +49,7 @@ All labels without a package prefix are in `//emulation`. The declarations are i
 | `property-pair-observe` | reset | From-reset property allocation/initialization and storage boot observer, [PropertyPairObserverMain.hs](PropertyPairObserverMain.hs), [SettingsStorageObserver.hs](Emulation/SettingsStorageObserver.hs). |
 | `record-store-pair-observe` | reset | Startup record reads and later route traffic, [RecordStorePairObserverMain.hs](RecordStorePairObserverMain.hs). |
 | `record-store-timing-control` | reset | Controlled startup timing and allocation history, [RecordStoreTimingControlMain.hs](RecordStoreTimingControlMain.hs). |
-| `media-route-smoke` | reset | Boot, media initialization and committed-NAND reboot are explicit phases, [MediaRouteSmoke.hs](MediaRouteSmoke.hs). |
+| `media-route-smoke` | post-boot | Media routes use the keyed card-backed attach boundary, [MediaRouteSmoke.hs](MediaRouteSmoke.hs). Committed-NAND reboot scenarios retain their reset path. |
 | `verify-candidate` | mixed | Runs the existing candidate matrix, including updater cold boots and post-boot viewer trajectories, [VerifyCandidate.hs](VerifyCandidate.hs). |
 | `critical-pair-witness` | reset | Driver startup witness, [CriticalPairWitness.hs](CriticalPairWitness.hs). |
 | `//replacement/modal_runtime:menu-engine-qualify-bounded` | post-boot/post-install | Menu/render cohort, [QualifyBoundedMain.hs](../replacement/modal_runtime/QualifyBoundedMain.hs). Its installation cache is maintained with the shared guest-state identity. |

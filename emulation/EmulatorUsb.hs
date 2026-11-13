@@ -101,6 +101,7 @@ import Emulation.WatchObservation
 import qualified Emulation.CaptureStream as Capture
 import qualified Emulation.SaveLifecycle as Lifecycle
 import qualified Data.ByteString.Lazy as BL
+import Emulation.Sha256 (sha256File, sha256Hex)
 import Data.Bits (shiftL, (.|.))
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
 import Data.Int (Int32)
@@ -108,6 +109,8 @@ import Data.List (sort)
 import Data.Word (Word8, Word32, Word64)
 import Numeric (readHex, showHex)
 import System.Exit (ExitCode (..))
+import System.Directory (doesFileExist)
+import System.FilePath ((</>))
 import System.IO
 import System.Process
 import FujiAF.Transport
@@ -296,7 +299,7 @@ startEmulator python directory arguments choose = bracketOnError create stopEmul
   (chosen, extra) <- choose candidates
   send emulator (object ["command" .= String "start", "installed" .= fmap installDirectory chosen])
   fields <- event emulator "ready"
-  record <- objectField "checkpoint" fields
+  record <- objectField "checkpoint" fields >>= bindSnapshot
   start <- case record of
     Object checkpoint -> objectField "start" checkpoint >>= \kind -> case kind of
       String "cold" -> pure ColdStart
@@ -307,6 +310,16 @@ startEmulator python directory arguments choose = bracketOnError create stopEmul
     _ -> ioError (userError "emulator ready response lacks a checkpoint record")
   pure (emulator, EmulatorStart start record, extra)
   where
+    bindSnapshot record@(Object checkpoint)
+      | M.member "snapshot_sha256" checkpoint || M.member "snapshot_manifest_sha256" checkpoint
+          || M.lookup "saved" checkpoint == Just (Bool False) = pure record
+      | Just (String path) <- M.lookup "installed" checkpoint <|> M.lookup "directory" checkpoint = do
+          let root = directory </> T.unpack path
+          exported <- doesFileExist (root </> "session.fujimod")
+          let (name, digestField) = if exported then ("session.fujimod", "snapshot_sha256") else ("manifest.json", "snapshot_manifest_sha256")
+          digest <- sha256File (root </> name)
+          pure (Object (M.insert digestField (String (T.pack (sha256Hex digest))) checkpoint))
+    bindSnapshot record = pure record
     create = do
       (Just input, Just output, _, process) <- createProcess (proc python arguments)
         { std_in = CreatePipe, std_out = CreatePipe, std_err = Inherit, cwd = Just directory }
