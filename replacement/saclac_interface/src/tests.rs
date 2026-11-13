@@ -106,6 +106,11 @@ fn synchronous_record_requests_keep_wire_operation_codes() {
 }
 
 #[test]
+fn live_view_adjustment_request_keeps_its_wire_code() {
+    assert_eq!(stock::img_dc_operation(crate::ImgDcOperation::Request34), 0x3f34);
+}
+
+#[test]
 fn capture_layout_preserves_callback_and_converted_value_order() {
     use stock::CaptureRecordField as F;
     let mut packet = [0; 176];
