@@ -36,6 +36,11 @@ pub trait DriveLimits {
     fn slowest_ramped_speed(&mut self) -> u32;
 }
 
+/// The fastest a drive of a kind may run, in steps per second (0x748144).
+pub trait DriveSpeed {
+    fn top_speed(&mut self, kind: DriveKind, mode: DriveMode) -> u32;
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Ramp {
     /// The speed the ramp ends at.

@@ -5,13 +5,13 @@ use xm1_saclac_profile_records::stock::record::group_00;
 use xm1_saclac_profile_records::MeasurementSelection;
 
 use crate::exposure::context::Levels;
-use crate::exposure::ports::Ports;
+use crate::exposure::ports::{Ports, ProfileAccess, Properties};
 use crate::exposure::settings;
 use crate::stock::property;
 
 /// The level the record measures at: step 2 of the level table when the record selects its own
 /// measurement, else the record's level (0xf5fc00).
-pub fn measured_level(ports: &mut impl Ports, record: RecordHandle) -> i16 {
+pub fn measured_level(ports: &mut (impl ProfileAccess + Properties), record: RecordHandle) -> i16 {
     let selection = ports.profile().measurement_selection(record);
     if selection == MeasurementSelection::Record { settings::level_step(ports, 2) } else { ports.profile().read(record, &group_00::AT_0022) }
 }
