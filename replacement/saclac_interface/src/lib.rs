@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 pub mod stock;
+pub mod lens;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClientCallback(pub(crate) u32);
