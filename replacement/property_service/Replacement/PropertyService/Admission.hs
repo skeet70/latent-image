@@ -168,7 +168,7 @@ data FrameRegister = R11Entry | R11Saved Int | R11Changed deriving (Eq, Ord, Sho
 data Alias = LocalAlias StackOffset | CallerAlias FrameSlot Int deriving (Eq, Ord, Show)
 
 -- | Whether a value survives a comparison on the path it selects.
-data Refined = Kept Int | Empty
+data Refined = Kept | Empty
 
 -- | The immediate a guard compares against, and whether the guard adds it (CMN) or compares (CMP).
 data Comparison = Compared Int | Added Int deriving (Eq, Show)
@@ -232,8 +232,8 @@ mappedData layout address = any (\mapping -> case mapping of
 -- cannot be evaluated exactly keeps the value and leaves both successors possible.
 refineCondition :: A.Cond -> Comparison -> Int -> Refined
 refineCondition (A.Cond code) comparison value = case code of
-  0 -> if value == bound then Kept value else Empty
-  1 -> if value == bound then Empty else Kept value
+  0 -> if value == bound then Kept else Empty
+  1 -> if value == bound then Empty else Kept
   -- Unsigned conditions read the carry of a subtraction, so they refine only against a
   -- non-negative immediate and a non-negative value, and never after an addition.
   2 -> unsigned (value >= bound)
@@ -245,26 +245,36 @@ refineCondition (A.Cond code) comparison value = case code of
   11 -> signed (value < bound)
   12 -> signed (value > bound)
   13 -> signed (value <= bound)
-  _ -> Kept value
+  _ -> Kept
   where
     bound = case comparison of
       Compared amount -> amount
       Added amount -> negate amount
     unsigned holds = case comparison of
-      Compared amount | amount >= 0 && value >= 0 -> if holds then Kept value else Empty
-      _ -> Kept value
-    signed holds = if value >= 0 then (if holds then Kept value else Empty) else Kept value
+      Compared amount | amount >= 0 && value >= 0 -> if holds then Kept else Empty
+      _ -> Kept
+    signed holds = if value >= 0 then (if holds then Kept else Empty) else Kept
 
 immediate :: Word32 -> Int
 immediate = fromIntegral . (fromIntegral :: Word32 -> Int32)
 
+-- | A caller alias offset, kept only within the bound that also bounds counters. No
+-- frame-argument slot holds more bytes, and an unbounded offset would let a loop reach a
+-- distinct alias on every iteration.
+callerAlias :: FrameSlot -> Int -> Maybe Alias
+callerAlias slot offset
+  | abs offset <= stackLimit = Just (CallerAlias slot offset)
+  | otherwise = Nothing
+
 -- | The policy the probe walk uses: every argument register is a frame pointer with no
--- bound yet, so a store through one becomes visible.
-probePolicy :: FramePolicy
-probePolicy = FramePolicy (M.fromList [(slot, Nothing) | slot <- argumentRegisters]) M.empty M.empty S.empty False
+-- bound yet, so a store through one becomes visible. The probe's callee calls keep r4-r10,
+-- so it is given every function as preserving and its frames do not depend on that set.
+probePolicy :: S.Set GuestAddress -> FramePolicy
+probePolicy preserving = FramePolicy (M.fromList [(slot, Nothing) | slot <- argumentRegisters]) M.empty M.empty preserving False
 
 -- | The policy a discovered function is walked under: its declared slots are frame
--- arguments with no bound yet, and a declared slot the call site does not fill is refused.
+-- arguments with no bound yet. Only the admitted walk refuses a declared slot the call
+-- site does not fill.
 ownPolicy :: M.Map GuestAddress (S.Set FrameSlot) -> M.Map GuestAddress (S.Set Int) -> S.Set GuestAddress -> FunctionExtent -> FramePolicy
 ownPolicy declared incoming preserving (FunctionExtent _ (GuestAddress start) _) =
   FramePolicy (M.fromList [(slot, Nothing) | slot <- S.toList (M.findWithDefault S.empty (GuestAddress start) declared)]) declared incoming preserving False
@@ -322,14 +332,18 @@ admitCodeWithCallbacks callbacks layout bytes = do
     (Left (AdmissionError (layoutBase layout) BoundaryInvalid))
   (declared, incoming) <- discoverArguments callbacks layout bytes
   let declaredMap = M.fromListWith S.union [(callee, S.singleton slot) | (callee, slot) <- S.toList declared]
+      entries = S.fromList [GuestAddress entry | FunctionExtent _ (GuestAddress entry) _ <- layoutFunctions layout]
+      -- The summary walk gives no owned callee the r4-r10 preservation.
       nonreturning = nonreturningEntries callbacks layout bytes (ownPolicy declaredMap incoming S.empty)
-      -- A function preserves r4-r10 unless its own walk leaves one changed, and its callees'
-      -- results only remove registers, so the greatest fixed point is reached from all.
-      preserving = closePreserving (S.fromList [GuestAddress entry | FunctionExtent _ (GuestAddress entry) _ <- layoutFunctions layout])
+      -- A function preserves r4-r10 when its walk leaves them at their entry values, and that
+      -- walk reads its callees' membership. The fixed point starts from every function and
+      -- reconsiders only current members, so the set shrinks monotonically and terminates.
+      preserving = closePreserving entries
       closePreserving known =
         let next = S.fromList
               [ GuestAddress entry
               | function@(FunctionExtent _ (GuestAddress entry) _) <- layoutFunctions layout
+              , S.member (GuestAddress entry) known
               , Right (frame, _, _) <- [walkFunction callbacks layout bytes nonreturning (ownPolicy declaredMap incoming known function) function]
               , framePreserved frame
               ]
@@ -355,9 +369,10 @@ admitCodeWithCallbacks callbacks layout bytes = do
 -- incoming stack words each callee reads. A function the probe cannot walk is refused.
 discoverArguments :: [FunctionExtent] -> CodeLayout -> B.ByteString -> Either AdmissionError (S.Set (GuestAddress, FrameSlot), M.Map GuestAddress (S.Set Int))
 discoverArguments callbacks layout bytes = do
-  let nonreturning = nonreturningEntries callbacks layout bytes (const probePolicy)
+  let preserving = S.fromList [GuestAddress entry | FunctionExtent _ (GuestAddress entry) _ <- layoutFunctions layout]
+      nonreturning = nonreturningEntries callbacks layout bytes (const (probePolicy preserving))
   -- The probe declares every argument register so that a store through one is visible.
-  frames <- mapM (\function -> fst3 <$> walkFunction callbacks layout bytes nonreturning probePolicy function)
+  frames <- mapM (\function -> fst3 <$> walkFunction callbacks layout bytes nonreturning (probePolicy preserving) function)
     (layoutFunctions layout)
   pure (slotsOf frames, incomingOf frames)
   where
@@ -456,8 +471,8 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
     inBoundary address = any (\(low, high) -> low <= address && address < high) boundaryExtents
     functionEntries = S.fromList [entryPoint | FunctionExtent _ (GuestAddress entryPoint) _ <- layoutFunctions layout]
     -- The functions that call through a slot word: a boundary entry that branches through a
-    -- register, and the one-instruction wrapper that only tail-branches to one. Nothing else
-    -- may call into them.
+    -- register, and any function whose only cross-function branch target is one of those.
+    -- Nothing else may call into them.
     indirectEntries = S.fromList
       [ entryPoint
       | FunctionExtent _ (GuestAddress entryPoint) (GuestAddress finish) <- layoutFunctions layout
@@ -491,13 +506,10 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
             | operation == A.CMN -> Just (source, Added (immediate amount))
           _ -> Nothing
     -- The counters the path key carries: the registers a store offset reads and every
-    -- register whose counter can reach one of them, plus the registers a comparison guard
-    -- reads. A counter that only reaches a guard is not carried, so a loop whose counter is
-    -- reloaded from a callee-saved register still reaches a fixed point.
-    keyRegisters = S.union guardRegisters (closeCounters storeOffsetRegisters)
-    guardRegisters = S.fromList [register | (address, word, _) <- decoded
-                                  , word `shiftR` 28 < 14
-                                  , Just (register, _) <- [compareGuard address]]
+    -- register whose counter can reach one of them. A guard on any other register keeps both
+    -- successors, so a counter that only reaches such a guard is not keyed and a loop that
+    -- reloads one still reaches a fixed point.
+    offsetRegisters = closeCounters storeOffsetRegisters
     storeOffsetRegisters = S.fromList [register | (_, _, A.Store _ _ _ _ (A.OffsetRegister _ register _ _) _) <- decoded]
     counterSources = [(destination, source) | (_, _, instruction) <- decoded, (destination, source) <- counterEdge instruction]
     counterEdge instruction = case instruction of
@@ -533,7 +545,7 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
       let pc = statePc state
           key = ( stateSp state, stateFp state, stateLink state, stateR11 state, stateHolds state, stateSaved state
                 , stateAliases state, stateSlots state
-                , M.filterWithKey (\register _ -> S.member register keyRegisters) (stateCounters state)
+                , M.filterWithKey (\register _ -> S.member register offsetRegisters) (stateCounters state)
                 , stateReserved state )
       in case M.lookup pc seen of
         Just keys | S.member key keys -> go seen pending low calls literals arguments incoming stored preserved
@@ -579,15 +591,18 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
           Nothing -> Left FrameArgumentNotFrame
           Just alias -> unless (frameAlias alias) (Left FrameArgumentNotFrame)
       let passed = [ (slot, alias) | slot <- outgoingSlots current, Just alias <- [argumentValue current slot], frameAlias alias ]
-      -- A pointer moved below the object it came from no longer names that object.
+      -- A pointer moved below the object it came from no longer names that object. Only the
+      -- admitted walk refuses it: the probe cannot tell a frame pointer from an ordinary value,
+      -- and walking it further can only add declared slots, which this refusal then covers.
       when (policyStrict policy) $ forM_ passed $ \(_, alias) -> case alias of
         CallerAlias _ offset -> when (offset < 0) (Left FrameArgumentExceeded)
         LocalAlias _ -> pure ()
       -- An object the callee is given must not cover the words it reads as its own arguments.
+      -- The object's first byte can lie inside a word, so the word's span is what counts.
       forM_ passed $ \(_, alias) -> case alias of
         LocalAlias (StackOffset offset) ->
           forM_ (S.toList (M.findWithDefault S.empty target (policyIncoming policy))) $ \word ->
-            when (stateSp current + word >= offset && stateSp current + word < stateReserved current) (Left FrameArgumentExceeded)
+            when (stateSp current + word + 4 > offset && stateSp current + word < stateReserved current) (Left FrameArgumentExceeded)
         CallerAlias _ _ -> pure ()
       pure [ CallArgument target slot origin (argumentBytes current alias)
            | (slot, alias) <- passed
@@ -600,15 +615,16 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
           conditional = word `shiftR` 28 < 14
           condition = A.Cond (word `shiftR` 28)
           guard = compareGuard pc
-          -- The path key carries every comparison guard's counter, so a state refined
-          -- here is the only state at that pc with this counter value.
+          -- A guard on an unkeyed register could choose between states the key merges, so only
+          -- a guard on a keyed register refines; any other guard keeps both successors.
           restrict selected current = case guard of
-            Nothing -> Just current
-            Just (register, comparison) -> case M.lookup register (stateCounters current) of
-              Nothing -> Just current
-              Just value -> case refineCondition (if selected then condition else A.negateCond condition) comparison value of
-                Empty -> Nothing
-                Kept narrowed -> Just current {stateCounters = M.insert register narrowed (stateCounters current)}
+            Just (register, comparison) | S.member register offsetRegisters ->
+              case M.lookup register (stateCounters current) of
+                Nothing -> Just current
+                Just value -> case refineCondition (if selected then condition else A.negateCond condition) comparison value of
+                  Empty -> Nothing
+                  Kept -> Just current
+            _ -> Just current
           skip paths = paths ++ [falsePath {statePc = pc + 4} | conditional, Just falsePath <- [restrict False state]]
           taken next = [refined | Just refined <- [restrict True next]]
           result stored paths touched edges literalAddresses passed readOffsets =
@@ -625,8 +641,8 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
           localAddress (LocalAlias (StackOffset offset)) amount = Just (offset + fromIntegral amount)
           localAddress _ _ = Nothing
           affine operation source operand = case (operation, operand) of
-            -- A register MOV ignores Rn; its source is Rm.
-            (A.MOV, A.ShiftedImmediate moved A.LSL 0) -> baseAlias moved
+            -- A register MOV ignores Rn; its source is Rm, bounded like an ADD or SUB.
+            (A.MOV, A.ShiftedImmediate moved A.LSL 0) -> shift 0 =<< baseAlias moved
             (A.ADD, A.Immediate amount) -> shift (immediate amount) =<< baseAlias source
             (A.SUB, A.Immediate amount) -> shift (negate (immediate amount)) =<< baseAlias source
             _ -> Nothing
@@ -635,7 +651,7 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
                 LocalAlias (StackOffset offset)
                   | let moved = offset + amount, sp <= moved && moved <= 0 -> Just (LocalAlias (StackOffset moved))
                   | otherwise -> Nothing
-                CallerAlias slot offset -> Just (CallerAlias slot (offset + amount))
+                CallerAlias slot offset -> callerAlias slot (offset + amount)
           counter operation source operand = case (operation, operand) of
             (A.MOV, A.Immediate amount) -> Just (immediate amount)
             (A.MOV, A.ShiftedImmediate moved A.LSL 0) -> M.lookup moved counters
@@ -662,12 +678,12 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
             unless (offset >= negate stackLimit) (Left StackUnbounded)
           inFrame offset (LocalAlias (StackOffset address)) = offset <= address && address <= 0
           inFrame _ CallerAlias {} = True
-          -- A callee preserves r4-r11 and sp. It may change r0-r3, r12 and lr, and it may
-          -- write the caller's frame through a pointer the call site passed it. An owned
-          -- callee proves the r4-r10 half at its own returns; one that does not is treated as
-          -- clobbering them. A stock leaf, stock site, callback or slot-word callee keeps
-          -- r4-r11 under the AAPCS alone, which is the same assumption stateR11 and stateLink
-          -- already make for those calls.
+          -- A callee may change r0-r3, r12 and lr, and it may write the caller's frame through
+          -- a pointer the call site passed it. An owned callee keeps r4-r10 only when it is in
+          -- the preserving set; otherwise the call drops the aliases, counters and entry values
+          -- those registers hold. A stock leaf, stock site, callback or slot-word callee keeps
+          -- r4-r10 under the AAPCS alone, which is the assumption stateR11 and stateLink already
+          -- make; a linked slot-word call drops them in every walk.
           afterCall proven current = current
             { stateAliases = foldr M.delete (stateAliases current) (callerSaved ++ if proven then [] else calleeSaved)
             , stateCounters = foldr M.delete (stateCounters current) (callerSaved ++ if proven then [] else calleeSaved)
@@ -680,7 +696,7 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
           moveSp offset current = current
             { stateSp = offset
             , stateAliases = M.filter (inFrame offset) (stateAliases current)
-            , stateSlots = M.filterWithKey (\address _ -> offset <= address && address <= 0) (stateSlots current)
+            , stateSlots = M.filterWithKey (\address alias -> offset <= address && address <= 0 && inFrame offset alias) (stateSlots current)
             , stateLink = case stateLink current of
                 LinkSaved slot | slot < offset -> LinkLost
                 other -> other
@@ -720,7 +736,8 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
               { stateSlots = M.filterWithKey (\offset _ -> offset + 4 <= address || address + widthBytes width <= offset) (stateSlots current) }
           placeAlias writtenBack register slot offset current
             | not writtenBack = current
-            | otherwise = current {stateAliases = M.insert register (CallerAlias slot offset) (stateAliases current)}
+            | Just alias <- callerAlias slot offset = current {stateAliases = M.insert register alias (stateAliases current)}
+            | otherwise = current {stateAliases = M.delete register (stateAliases current)}
           leaving current = do
             unless (stateSp current == 0) (Left StackUnbalanced)
             unless (stateR11 current == R11Entry) (Left FramePointerLost)
@@ -739,8 +756,8 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
             | width == A.Word, Just value <- M.lookup address (stateSlots current) =
                 current {stateAliases = M.insert destination value (stateAliases current)}
             | otherwise = current
-          held width destination value current =
-            (written (loaded destination width) current) {stateAliases = M.insert destination value (stateAliases current)}
+          held destination value current =
+            (written [destination] current) {stateAliases = M.insert destination value (stateAliases current)}
           loaded destination@(A.Reg number) width = destination : [A.Reg (number + 1) | width == A.Dual]
       case instruction of
         A.Rejected reason -> Left (ForbiddenWord reason)
@@ -757,8 +774,7 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
           | otherwise -> Left (CallOutsideOwned (GuestAddress target))
           where
             call kind = do
-              let proven = not (policyStrict policy) || kind /= Call
-                            || S.member (GuestAddress target) (policyPreserving policy)
+              let proven = kind /= Call || S.member (GuestAddress target) (policyPreserving policy)
               unless (sp `mod` 8 == 0) (Left StackMisaligned)
               passed <- callArguments (GuestAddress target) state
               let next = afterCall proven state {statePc = pc + 4, stateLink = if link == LinkLive then LinkLost else link}
@@ -773,7 +789,9 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
           | otherwise -> Left (BranchOutsideOwned (GuestAddress target))
           where
             tailTo kind = do
-              preserved <- returning state
+              atReturn <- returning state
+              let preserved = atReturn
+                    && (kind /= TailCall || S.member (GuestAddress target) (policyPreserving policy))
               passed <- callArguments (GuestAddress target) state
               Right (returned preserved [] (skip []) sp [CallEdge (GuestAddress pc) (GuestAddress target) (StackOffset sp) kind] [] passed [])
         A.BranchExchange _ linked register
@@ -785,7 +803,7 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
           where
             indirect True = do
               unless (sp `mod` 8 == 0) (Left StackMisaligned)
-              let next = afterCall (not (policyStrict policy)) state {statePc = pc + 4, stateLink = if link == LinkLive then LinkLost else link}
+              let next = afterCall False state {statePc = pc + 4, stateLink = if link == LinkLive then LinkLost else link}
               Right (result [] (skip (taken next)) sp [CallEdge (GuestAddress pc) (GuestAddress pc) (StackOffset sp) StockSiteCall] [] [] [])
             indirect False = do
               preserved <- returning state
@@ -867,23 +885,16 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
           | A.pc `elem` registers -> Left PcWrite
           | register == A.sp && writeback -> Left StackUnbounded
           | writeback, Just (LocalAlias (StackOffset offset)) <- baseAlias register -> do
-              -- A writeback multiple load moves the base by the words it reads, so the
-              -- written-back address is proved like a store's.
+              -- A writeback multiple load reads where the base names and moves the base by the
+              -- words it reads; a base written back outside the live frame stops being an alias.
               when (register `elem` registers) (Left NonStackStore)
               let count = 4 * length registers
-                  lowest = case mode of
-                    A.IncrementAfter -> offset
-                    A.IncrementBefore -> offset + 4
-                    A.DecrementAfter -> offset - count + 4
-                    A.DecrementBefore -> offset - count
                   after = case mode of
                     A.IncrementAfter -> offset + count
                     A.IncrementBefore -> offset + count
                     A.DecrementAfter -> offset - count
                     A.DecrementBefore -> offset - count
-              unless (lowest >= sp && lowest + count <= 0) (Left NonStackStore)
-              cleared <- clear lowest (lowest + count)
-              let loaded' = written (registers ++ [register]) cleared
+                  loaded' = written (registers ++ [register]) state
               advance (if sp <= after && after <= 0
                          then remember register (Just (LocalAlias (StackOffset after))) loaded'
                          else loaded')
@@ -904,9 +915,12 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
               (remember destination (affine operation source operand)
                 (written [destination | operation `notElem` [A.CMP, A.CMN, A.TST, A.TEQ]] state)))
           where
+            -- A counter is kept only while it is a value the 32-bit register holds exactly,
+            -- so a refined guard reads the same comparison the hardware makes.
             counted op source' operand' current
               | op `elem` [A.CMP, A.CMN, A.TST, A.TEQ] = current
-              | Just value <- counter op source' operand' = current {stateCounters = M.insert destination value (stateCounters current)}
+              | Just value <- counter op source' operand', abs value <= stackLimit =
+                  current {stateCounters = M.insert destination value (stateCounters current)}
               | otherwise = current
         A.Store _ width value register offset indexing
           | S.member pc storeSites && indexing == A.OffsetOnly -> advance state
@@ -971,10 +985,10 @@ walkFunction callbacks layout bytes nonreturning policy (FunctionExtent _ (Guest
               A.OffsetRegister {} -> Left StackUnbounded
           | indexing == A.OffsetOnly, Just alias <- baseAlias register, A.OffsetImmediate amount <- offset
           , Just address <- localAddress alias amount, width == A.Word, Just value <- M.lookup address slots ->
-              advance (held width destination value state)
+              advance (held destination value state)
           | indexing == A.OffsetOnly, Just alias <- baseAlias register, A.OffsetImmediate amount <- offset
           , Just address <- localAddress alias amount, width == A.Word, address >= 0, address .&. 3 == 0 ->
-              Right (result [] (skip [(held width destination (CallerAlias (ArgumentStackWord address) 0) state) {statePc = pc + 4}]) sp [] [] [] [address])
+              Right (result [] (skip [(held destination (CallerAlias (ArgumentStackWord address) 0) state) {statePc = pc + 4}]) sp [] [] [] [address])
           | otherwise -> advance (written (loaded destination width ++ [register | indexing /= A.OffsetOnly]) state)
         _ -> do
           let registers = writtenRegisters instruction
