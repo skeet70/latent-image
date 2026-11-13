@@ -16,7 +16,7 @@ import Data.IORef (newIORef, readIORef, writeIORef)
 import Emulation.ObservationStream
   ( ObservationRef (..), TraceHitRef (..), TraceHitSnapshot (..), TraceHitSource (..)
   , VerifiedObservation (..)
-  , countObservationDrawers, decodeObservationRef, foldTraceHitSources
+  , countObservationDrawers, decodeObservationRef, foldTraceHitSources, freezeTraceHitSource
   , loadReceiptObservations, loadVerifiedObservation, resolveReference
   , rowNext, withRowReader )
 import Emulation.Sha256 (sha256, sha256Hex)
@@ -57,10 +57,29 @@ main = do
           [hit | (index, hit) <- zip [0 :: Int ..] rows, index >= from, index < min (from + limit) snapshot]
   changed <- try (foldTraceHitSources [TraceHitSource (TraceHitCursor 0) (TraceHitCursor 24) (TraceHitSnapshot 24) (\cursor limit -> pure (changing 24 cursor limit))] (\values hit -> pure (values ++ [hit])) [])
   unless (isLeft (changed :: Either SomeException [TraceHit])) (putStrLn "FAIL: a changed page total was accepted" >> exitFailure)
+  frozenInterval
   stickySidecar
   verifiedDocument
   receiptBinding
   putStrLn "observation-stream interval/snapshot and verified-document counterexamples passed"
+
+-- | The pre-exit interval is frozen at the count its range ends at, the segment's steps then record
+-- more hits, and the segment's observation folds the interval after them. The frozen interval keeps
+-- its rows; the same interval read after the steps refuses.
+frozenInterval :: IO ()
+frozenInterval = do
+  total <- newIORef (8 :: Int)
+  let interval = TraceHitSource (TraceHitCursor 0) (TraceHitCursor 3) (TraceHitSnapshot 8) $ \cursor limit -> do
+        current <- readIORef total
+        pure (pageAt current cursor limit)
+  frozen <- freezeTraceHitSource interval
+  writeIORef total 11
+  replayed <- foldTraceHitSources [frozen] (\values hit -> pure (values ++ [hit])) []
+  unless (instructionsOf replayed == [0, 1, 2])
+    (putStrLn ("FAIL: a frozen interval lost its rows, got " ++ show (instructionsOf replayed)) >> exitFailure)
+  late <- try (foldTraceHitSources [interval] (\values hit -> pure (values ++ [hit])) [])
+  unless (isLeft (late :: Either SomeException [TraceHit]))
+    (putStrLn "FAIL: an interval was read after its total moved" >> exitFailure)
 
 stickySidecar :: IO ()
 stickySidecar = do
