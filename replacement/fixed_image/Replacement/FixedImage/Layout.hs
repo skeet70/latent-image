@@ -3,17 +3,8 @@ module Replacement.FixedImage.Layout
   , rustConstants, linkerMemory
   ) where
 
-import Data.Word (Word32)
+import Replacement.FixedImage.Values
 import Numeric (showHex)
-
-imageBase, imageLimit, recordFlash, recordBlocks, blockBytes, headerBytes, recordMagic :: Word32
-imageBase = 0x00ba0000
-imageLimit = 0x00be0000
-recordFlash = 0x00900000
-recordBlocks = 2
-blockBytes = 0x20000
-headerBytes = 32
-recordMagic = 0x584d314f
 
 rustConstants :: String
 rustConstants = unlines ["pub const " ++ name ++ ": u32 = 0x" ++ showHex value ";" | (name, value) <-

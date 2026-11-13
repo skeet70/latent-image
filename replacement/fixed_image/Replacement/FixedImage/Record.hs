@@ -1,12 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.FixedImage.Record
   ( BuildId(..), Bss(..), Publication(..), Image(..), publication, applyPublications
-  , makeRecord, crc32, stageRecord, restoreRecord
+  , makeRecord, crc32, stageRecord, restoreRecord, ceilingPublications, reservationPublications, corruptRecord
   ) where
 
 import Control.Monad (foldM, unless)
 import qualified Data.ByteString as B
-import Data.Bits (complement, shiftR, xor, (.&.))
+import Data.Bits (complement, shiftL, shiftR, xor, (.&.), (.|.))
 import Data.List (nub)
 import Data.Word (Word32)
 import qualified FujiAF.UpdateContainer as U
@@ -25,6 +25,23 @@ publication address old new = do
     else if address >= 0x1100000 && address + 4 <= 0x1180000 then Right Plain
     else Left "publication leaves the admitted image windows"
   pure (Publication image address old new)
+
+ceilingPublications :: [Publication]
+ceilingPublications =
+  [ Publication Image4 0x72b12c 0xe3013a00 (instruction 0xe3003000 (imageBase .&. 0xffff))
+  , Publication Image4 0x72b130 0xe34030bf (instruction 0xe3403000 (imageBase `shiftR` 16))
+  ]
+
+reservationPublications :: [Publication]
+reservationPublications = ceilingPublications ++
+  [ Publication Image4 0x69ce18 0xe3022e00 (instruction 0xe3002000 (clearBytes .&. 0xffff))
+  , Publication Image4 0x69ce1c 0xe3402035 (instruction 0xe3402000 (clearBytes `shiftR` 16))
+  ]
+  where
+    clearBytes = imageBase - 0x89ec00
+
+instruction :: Word32 -> Word32 -> Word32
+instruction opcode immediate = opcode .|. ((immediate .&. 0xf000) `shiftL` 4) .|. (immediate .&. 0xfff)
 
 applyPublications :: Image -> [Publication] -> B.ByteString -> Either String B.ByteString
 applyPublications image rows bytes = do
@@ -79,3 +96,12 @@ restoreRecord original staged = do
   let spanBytes = fromIntegral (recordBlocks * blockBytes)
       source = U.partPostHead staged
   pure staged { U.partPostHead = B.take offset source <> B.take spanBytes (B.drop originalOffset (U.partPostHead original)) <> B.drop (offset + spanBytes) source }
+
+corruptRecord :: U.Parts -> Either String U.Parts
+corruptRecord parts = do
+  offset <- recordOffset parts
+  let source = U.partPostHead parts
+      location = offset + fromIntegral headerBytes
+  unless (U.mediaWordAt source offset == recordMagic) (Left "corruption control requires an owned record")
+  let changed = B.index source location `xor` 1
+  pure parts { U.partPostHead = B.take location source <> B.singleton changed <> B.drop (location + 1) source }

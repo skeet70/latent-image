@@ -8,6 +8,12 @@
 # crate's manifest and lock alone and includes FujiMod's path crates and their
 # vendored Unicorn.
 let
+  fixedImage = builtins.fromJSON (builtins.readFile ../replacement/fixed_image/layout.json);
+  fixedImageRust = pkgs.writeText "fixed-image-layout.rs" (pkgs.lib.concatStringsSep "\n" (
+    pkgs.lib.mapAttrsToList (name: key: "pub const ${name}: u32 = ${toString fixedImage.${key}};") {
+      IMAGE_BASE = "imageBase"; IMAGE_LIMIT = "imageLimit"; RECORD_FLASH = "recordFlash";
+      RECORD_BLOCKS = "recordBlocks"; BLOCK_BYTES = "blockBytes"; HEADER_BYTES = "headerBytes"; RECORD_MAGIC = "recordMagic";
+    }));
   craneSource = builtins.fetchTarball {
     url = "https://github.com/ipetkov/crane/archive/32daa78aa882b7a43c508d1d5a5ad18a7968d731.tar.gz";
     sha256 = "06y3dvs9ms4c70r2ia50k77650yrihc09jibqbqrzly23dn42s4m";
@@ -62,6 +68,7 @@ let
     # nand_image.rs links zlib for retained-identical committed NAND exports.
     buildInputs = [ pkgs.zlib ];
     dontUseCmakeConfigure = true;
+    XM1_FIXED_IMAGE_LAYOUT_RS = "${fixedImageRust}";
   } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
     NIX_LDFLAGS = "-L${pkgs.apple-sdk.sdkroot}/usr/lib/swift -lobjc";
   };

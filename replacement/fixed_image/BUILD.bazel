@@ -1,11 +1,21 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
-load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
 
+exports_files(["layout.json"])
+
+genrule(
+    name = "layout-values",
+    srcs = ["layout.json"],
+    outs = ["Replacement/FixedImage/Values.hs"],
+    tools = ["@lab_jq//:bin/jq"],
+    cmd = "$(location @lab_jq//:bin/jq) -r '\"module Replacement.FixedImage.Values where\\nimport Data.Word (Word32)\\n\" + (to_entries | map(.key + \" :: Word32\\n\" + .key + \" = \" + (.value|tostring)) | join(\"\\n\"))' $(location layout.json) > $@",
+)
+
 haskell_library(
     name = "contract",
-    srcs = ["Replacement/FixedImage/Layout.hs", "Replacement/FixedImage/Record.hs"],
+    srcs = ["Replacement/FixedImage/Layout.hs", "Replacement/FixedImage/Record.hs", ":layout-values"],
     src_strip_prefix = ".",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = ["//host:base", "//host:bytestring", "//host:update-container"],
@@ -36,6 +46,7 @@ xm1_rust_rlib(
     name = "layout",
     src = ":layout.rs",
     crate_name = "xm1_fixed_image_layout",
+    out = "libxm1_fixed_image_layout.rlib",
 )
 
 haskell_test(
@@ -50,4 +61,44 @@ haskell_binary(
     srcs = ["StageMain.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
     deps = [":contract", "//host:aeson", "//host:base", "//host:bytestring", "//host:filepath", "//host:first-stage", "//host:host-support", "//host:update-container"],
+)
+
+genrule(
+    name = "heap-end",
+    outs = ["heap-end.rs"],
+    tools = [":fixed-image-layout"],
+    cmd = "$(location :fixed-image-layout) heap-end > $@",
+)
+
+haskell_binary(
+    name = "fixed-image-probe",
+    testonly = True,
+    srcs = ["ProbeMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [":contract", "//host:aeson", "//host:base", "//host:bytestring", "//host:first-stage", "//host:host-support", "//host:update-container"],
+)
+
+genrule(
+    name = "probe-script",
+    testonly = True,
+    outs = ["probe.ld"],
+    tools = [":fixed-image-probe"],
+    cmd = "$(location :fixed-image-probe) script > $@",
+)
+
+xm1_rust_staticlib(
+    name = "probe-rust",
+    testonly = True,
+    src = "probe.rs",
+    crate_name = "xm1_fixed_image_probe",
+)
+
+xm1_rust_elf(
+    name = "probe-image",
+    testonly = True,
+    rust_staticlib = ":probe-rust",
+    asm_srcs = ["probe-entry.S"],
+    entry = "xm1_fixed_test_entry",
+    link_script = ":probe.ld",
+    extra_ldflags = ["-Wl,--gc-sections"],
 )

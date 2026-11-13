@@ -4,6 +4,9 @@ pub mod af_ownership;
 pub mod af_ownership_receipt;
 pub mod attach_boot;
 pub mod checkpoint;
+pub mod fixed_image_layout {
+    include!(env!("XM1_FIXED_IMAGE_LAYOUT_RS"));
+}
 pub mod adjustment;
 pub mod application_observation;
 pub mod attach_relations;

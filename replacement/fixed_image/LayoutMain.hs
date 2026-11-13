@@ -9,5 +9,6 @@ main = do
   arguments <- getArgs
   case arguments of
     ["rust"] -> putStr rustConstants
+    ["heap-end"] -> print imageBase
     ["memory"] -> putStr linkerMemory
     _ -> die "usage: fixed-image-layout rust|memory"
