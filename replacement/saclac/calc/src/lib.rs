@@ -7,8 +7,10 @@
 pub mod exposure;
 pub mod geometry;
 pub mod policy;
+pub mod profile;
 pub mod requests;
 pub mod selection;
+pub mod stock;
 
 #[cfg(test)]
 extern crate std;
@@ -16,6 +18,8 @@ extern crate std;
 mod geometry_tests;
 #[cfg(test)]
 mod policy_tests;
+#[cfg(test)]
+mod profile_tests;
 #[cfg(test)]
 mod requests_tests;
 #[cfg(test)]

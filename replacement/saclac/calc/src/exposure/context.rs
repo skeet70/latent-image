@@ -100,10 +100,10 @@ pub struct Snapshot {
     pub offset: i16,
     pub focus: FocusResult,
     pub bounds: [i16; 4],
-    /// Count of the subject level table `focus.subject_levels` names.
-    pub subject_levels: u16,
+    /// The record's subjects; `focus.subject_levels` names one level per listed subject.
+    pub subjects: SubjectList,
     pub table_words: [u32; 10],
-    pub table_bytes: [u32; 20],
+    pub table_block: [u32; 20],
     pub limits: [i16; 6],
     pub limit_word: u32,
 }
