@@ -7,19 +7,19 @@ xm1_rust_rlib(
     src = "src/lib.rs",
     crate_name = "xm1_saclac_interface",
     out = "arm/libxm1_saclac_interface.rlib",
-    data = ["src/stock.rs", "src/round.rs"],
+    data = ["src/stock.rs", "src/round.rs", "src/calc.rs"],
 )
 
 xm1_rust_host_rlib(
     name = "host",
     src = "src/lib.rs",
     crate_name = "xm1_saclac_interface",
-    data = ["src/stock.rs", "src/round.rs"],
+    data = ["src/stock.rs", "src/round.rs", "src/calc.rs"],
 )
 
 xm1_rust_host_test(
     name = "host-tests",
     src = "src/lib.rs",
     crate_name = "xm1_saclac_interface",
-    data = ["src/stock.rs", "src/round.rs", "src/tests.rs"],
+    data = ["src/stock.rs", "src/round.rs", "src/calc.rs", "src/tests.rs", "src/calc_tests.rs"],
 )

@@ -1,6 +1,6 @@
-use crate::children::{AcquisitionControl, ChildEvent, ChildRequest, LensControl, LensEffect, MeasurementControl, ShotControl};
+use crate::children::{AcquisitionControl, ChildEvent, ChildRequest, LensControl, LensEffect, MeasurementControl, ShotControl, ShotEvent, ShotTarget};
 use crate::search::SearchInput;
-use xm1_saclac_interface::{stock, Command, CommandKind, Message};
+use xm1_saclac_interface::{stock, Command, CommandKind, Completed, Completion, Message};
 
 #[test]
 fn search_and_lens_reachable_child_requests_are_emulator_only() {
@@ -14,7 +14,9 @@ fn search_and_lens_reachable_child_requests_are_emulator_only() {
         ChildRequest::LensBringUp(Message::Command(Command { kind: CommandKind::LensBringUp, parameters })),
         ChildRequest::LensLive(ChildEvent::Control { control: LensControl::Initialize, parameters, record }),
         ChildRequest::LensS1(ChildEvent::Control { control: LensControl::S1Release, parameters, record }),
-        ChildRequest::Shot(ChildEvent::Control { control: ShotControl::StartS1, parameters, record }),
+        ChildRequest::Shot(ShotEvent::Control { control: ShotControl::StartS1, record }),
+        ChildRequest::Shot(ShotEvent::Command { target: ShotTarget::Live, command: Command { kind: CommandKind::Command02, parameters }, record }),
+        ChildRequest::Shot(ShotEvent::Completed { target: ShotTarget::Capture, completed: Completed { completion: Completion::Image5e, parameters }, record }),
     ];
     for request in requests {
         assert_eq!(request.lens_effect(), LensEffect::LensReaching);
