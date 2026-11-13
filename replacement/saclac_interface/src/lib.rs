@@ -240,6 +240,7 @@ pub enum LensDcOperation {
     Request18,
     Request19,
     Request1a,
+    Request1c,
     Request1d,
     Request1e,
     Request20,

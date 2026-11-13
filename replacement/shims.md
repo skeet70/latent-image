@@ -579,7 +579,7 @@ The owned timer heap.
 
 ## saclac
 
-The task 43 engine: the owned dispatcher and machine 0's router over stock's 37 machine tables, entered at the two stock extents they retire. No machine is owned yet, so every action is a stock action word.
+The task-43 driver and engine use stock's 37 machine tables. Every machine action remains a stock action word. The three boundary entries are the dispatcher, machine-0 router and task loop.
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
@@ -587,7 +587,8 @@ The task 43 engine: the owned dispatcher and machine 0's router over stock's 37 
 | `StockTables`, `StockPorts` and the guest addresses in `src/stock.rs`, with the four per-machine count arrays `SACLAC_CELL_COUNTS`, `SACLAC_ACTION_COUNTS`, `SACLAC_SECOND_COUNTS` and `SACLAC_ROW_COUNTS` and machine 0's row map `SACLAC_ROW_MAP` exported for the layout check | guest-memory layout view | the cell, action and second tables at `0xf12f70`, `0xf133ec` and `0xf12074`, the state counts at `0xf1158c`, and the two halfword arrays | no | every machine owned | required |
 | the trace entry `0xf46c38` called through the literal word at `0xefcce4`, declared in `Replacement.Saclac.Artifact.retainedExternals` | trampoline into retained stock | the stock trace body at `0xf46c38` | no | the trace recorder is owned | required |
 | stock action words and second-table words entered through `StockCodeWord` with r2 = the machine's table base word and r3 = the entered word, the values stock's dispatcher holds at `0xefcb20` and `0xefcb58` | trampoline into retained stock | the 813 distinct action words the cells reference, all image-5 code addresses, of which 701 are declared function starts and 112 are entries the decomp does not declare; no cell selects a second-table word; no entry reads r2, and 224 save r3 in a store-multiple prologue, the only r3 read the walk finds | no | every machine owned | required |
-| `xm1_saclac_driver_entry` at `0xf01bc8`, `DriverPorts` and the task-43 receive scratch at `0x169d374` with payload at `0x169d380` | stock-ABI export and guest-memory layout view | retained task constructor, command blocks, command-present flags and stock machine actions | no | every machine and all queue-43 producers are owned | required |
+| `xm1_saclac_driver_entry` at `0xf01bc8` | stock-ABI export | retained task constructor | no | the task constructor calls owned Rust directly | required |
+| `DriverPorts` receive scratch at `0x169d374` with payload at `0x169d380`, command blocks and command-present flags | guest-memory layout view | stock machine actions and queue-43 producers | no | every machine and all queue-43 producers are owned | required |
 | fault reaction `0xf46c20` | trampoline into retained stock | retained SACLAC fault reporting | no | subsystem fault reporting is owned | required |
 
 ## saclac_interface
