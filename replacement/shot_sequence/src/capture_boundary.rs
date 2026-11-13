@@ -287,6 +287,9 @@ pub trait CaptureShared {
     fn classify_subjects(&mut self, reference: &AreaReference, kind: u32, source: u32, area: u32);
     /// Updates the capture's selection from the calculation.
     fn update_capture_selection(&mut self, record: RecordHandle);
+    /// The selection map stands in the frame's dump.
+    fn dump_armed(&mut self) -> bool;
+    fn set_dump_armed(&mut self, armed: bool);
     /// The subjects the primary (`true`) or the secondary source left for the capture.
     fn subject_source(&mut self, primary: bool) -> SubjectList;
 }
@@ -315,11 +318,11 @@ pub trait CapturePlatform {
     fn prepare_setting(&mut self);
     fn refresh_setting(&mut self);
     fn monitor_device_commands(&mut self, monitored: bool);
-    fn capture_busy(&mut self) -> bool;
+    fn device_status_bit(&mut self) -> bool;
     fn slot_rate(&mut self, active: u32, profile: u32) -> u32;
     fn split_distance(&mut self, distance: i16) -> DistanceSplit;
     fn device_value(&mut self) -> u32;
-    fn export_capture(&mut self, frame: Frame);
+    fn export_record_snapshot(&mut self, frame: Frame);
     fn export_pipeline(&mut self, frame: Frame);
     fn prepare_dump_area(&mut self, frame: Frame, offset: FrameOffset);
 }

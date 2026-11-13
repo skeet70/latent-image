@@ -42,8 +42,6 @@ pub struct CaptureControl {
     setting_result: SettingResult,
     /// The statistics record of the last primary job; a capture setting starts from it.
     pub setting_template: StatisticsSetting,
-    /// The selection map is in the frame's dump.
-    map_dumped: bool,
 }
 
 impl Default for CaptureControl {
@@ -58,7 +56,6 @@ impl CaptureControl {
             secondary_pending: false,
             setting_result: SettingResult([0; 4]),
             setting_template: StatisticsSetting::from_bytes([0; StatisticsSetting::BYTES]),
-            map_dumped: false,
         }
     }
 
@@ -234,7 +231,7 @@ impl CaptureControl {
         let dumps = dumps(boundary);
         if dumps {
             let frame = boundary.frame(parameters.sources);
-            boundary.export_capture(frame);
+            boundary.export_record_snapshot(frame);
             boundary.export_joint_tables(frame);
             boundary.export_pipeline(frame);
         }
@@ -289,7 +286,7 @@ impl CaptureControl {
         if boundary.adjustment(CaptureAdjustment::SlotLock) & 1 != 0 { boundary.set_field(record, RecordField::SlotLock, 1); }
         if boundary.slot_field(record, 0, SlotField::SecondaryFirst) != 0
             && boundary.slot_field(record, 0, SlotField::SecondarySecond) != 0
-            && (boundary.capture_busy()
+            && (boundary.device_status_bit()
                 || boundary.field(record, RecordField::SecondaryMode) == SECONDARY_MODE
                 || boundary.field(record, RecordField::SecondaryLatch) == 1)
         {
@@ -316,14 +313,14 @@ impl CaptureControl {
     }
 
     /// Readies the selection map area of the frame's dump.
-    fn prepare_selection_dump(&mut self, record: RecordHandle, parameters: &CaptureParameters, dumps: bool, boundary: &mut impl ControlBoundary) {
+    fn prepare_selection_dump(&self, record: RecordHandle, parameters: &CaptureParameters, dumps: bool, boundary: &mut impl ControlBoundary) {
         let frame = boundary.frame(parameters.sources);
         let present = boundary.field(record, RecordField::MapPresent) == 1;
         if !dumps { return; }
-        if !self.map_dumped && present {
+        if !boundary.dump_armed() && present {
             boundary.prepare_dump_area(frame, capture_stock::MAP_AREA);
             self.mark_map(frame, boundary);
-            self.map_dumped = true;
+            boundary.set_dump_armed(true);
         }
         if boundary.adjustment(CaptureAdjustment::Subjects) == 0 {
             boundary.fill_frame(frame, capture_stock::MAP_TABLE, capture_stock::MAP_TABLE_BYTES, 0);
@@ -333,7 +330,7 @@ impl CaptureControl {
         } else {
             boundary.fill_frame(frame, capture_stock::MAP_AREA, capture_stock::MAP_AREA_BYTES, 0);
             self.mark_map(frame, boundary);
-            self.map_dumped = false;
+            boundary.set_dump_armed(false);
         }
     }
 

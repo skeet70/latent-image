@@ -42,7 +42,7 @@ pub enum Call {
     PrepareSetting,
     RefreshSetting,
     MonitorDeviceCommands(bool),
-    ExportCapture(Frame),
+    ExportRecordSnapshot(Frame),
     ExportPipeline(Frame),
     PrepareDumpArea(Frame, FrameOffset),
     Trace(CaptureTrace),
@@ -72,9 +72,10 @@ pub struct CaptureFake {
     pub moved_areas: u8,
     pub sources: [SubjectList; 2],
     pub focus: FocusResult,
-    pub capture_busy: bool,
+    pub device_status_bit: bool,
     pub split_limit: i16,
     pub device_value: u32,
+    pub dump_armed: bool,
 }
 
 pub fn field_key(field: RecordField) -> u8 { field as u8 }
@@ -105,9 +106,10 @@ impl CaptureFake {
             moved_areas: 0,
             sources: [SubjectList::default(); 2],
             focus: FocusResult { reference: LensReference(0), valid: 1, kept: 1, refined: 1, extent: 0, bytes: [0; 132] },
-            capture_busy: false,
+            device_status_bit: false,
             split_limit: i16::MAX,
             device_value: 0,
+            dump_armed: false,
         }
     }
 
@@ -252,6 +254,8 @@ impl CaptureShared for CaptureFake {
     fn moved_areas(&mut self) -> u8 { self.moved_areas }
     fn classify_subjects(&mut self, _reference: &AreaReference, kind: u32, source: u32, area: u32) { self.calls.push(Call::ClassifySubjects { kind, source, area }); }
     fn update_capture_selection(&mut self, record: RecordHandle) { self.calls.push(Call::UpdateCaptureSelection(record)); }
+    fn dump_armed(&mut self) -> bool { self.dump_armed }
+    fn set_dump_armed(&mut self, armed: bool) { self.dump_armed = armed; }
     fn subject_source(&mut self, primary: bool) -> SubjectList { self.sources[usize::from(!primary)] }
 }
 
@@ -260,13 +264,13 @@ impl CapturePlatform for CaptureFake {
     fn prepare_setting(&mut self) { self.calls.push(Call::PrepareSetting); }
     fn refresh_setting(&mut self) { self.calls.push(Call::RefreshSetting); }
     fn monitor_device_commands(&mut self, monitored: bool) { self.calls.push(Call::MonitorDeviceCommands(monitored)); }
-    fn capture_busy(&mut self) -> bool { self.capture_busy }
+    fn device_status_bit(&mut self) -> bool { self.device_status_bit }
     fn slot_rate(&mut self, active: u32, profile: u32) -> u32 { if active != 0 { 4 } else { 2 + u32::from(profile != 0) } }
     fn split_distance(&mut self, distance: i16) -> DistanceSplit {
         if distance > self.split_limit { DistanceSplit { kept: self.split_limit, excess: distance - self.split_limit } } else { DistanceSplit { kept: distance, excess: 0 } }
     }
     fn device_value(&mut self) -> u32 { self.device_value }
-    fn export_capture(&mut self, frame: Frame) { self.calls.push(Call::ExportCapture(frame)); }
+    fn export_record_snapshot(&mut self, frame: Frame) { self.calls.push(Call::ExportRecordSnapshot(frame)); }
     fn export_pipeline(&mut self, frame: Frame) { self.calls.push(Call::ExportPipeline(frame)); }
     fn prepare_dump_area(&mut self, frame: Frame, offset: FrameOffset) { self.calls.push(Call::PrepareDumpArea(frame, offset)); }
 }

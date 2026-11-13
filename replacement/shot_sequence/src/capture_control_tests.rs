@@ -321,7 +321,7 @@ fn the_dump_clears_the_trace_area_but_its_kept_words_and_exports() {
         let restore = fake.calls.iter().position(|call| *call == Call::SetFrameWord(FRAME, offset, index as u32 + 1)).unwrap();
         assert!(restore > fill);
     }
-    for export in [Call::ExportCapture(FRAME), Call::ExportJointTables(FRAME), Call::ExportPipeline(FRAME)] { assert!(fake.has(&export)); }
+    for export in [Call::ExportRecordSnapshot(FRAME), Call::ExportJointTables(FRAME), Call::ExportPipeline(FRAME)] { assert!(fake.has(&export)); }
 }
 
 #[test]
