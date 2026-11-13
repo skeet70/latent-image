@@ -104,10 +104,6 @@ impl<S: LiveStrategy> LiveSearch<S> {
         &self.context
     }
 
-    pub fn strategy(&self) -> &S {
-        &self.strategy
-    }
-
     pub fn handle(&mut self, event: LaneEvent<S::Evaluation>, ports: &mut impl Ports<S::Record, S::Drive>) -> LaneStatus {
         match (self.lane, event) {
             (Lane::Idle, LaneEvent::Initialize) => {
