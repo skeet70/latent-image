@@ -15,7 +15,7 @@ use crate::adjust::motion::exposure::{FrameExposure, ProgramStep, PROGRAM_STEPS}
 use crate::adjust::motion::plan::Plan;
 use crate::adjust::motion::layout::SampleLayout;
 use crate::adjust::motion::ports::{
-    AreaCurves, AreaGrid, BoundsQuery, CaptureFraming, ChannelRates, Clock, CropGeometry, CurveRequest, DefaultCurve, ExposureTimes, FrameGeometry, GridArea,
+    AreaCurves, AreaGrid, BoundsQuery, CaptureFraming, ChannelRates, Clock, CropGeometry, ExposureTimes, FrameGeometry, GridArea,
     LensBounds, LensCalibration, LensLimits, LensTables, LimitQuery, Logarithms10, MeasurementReadings, ProfileGains, SampleFrameRequest, SearchBounds,
     SearchFrameRequest, StatisticsFrameRequest, Ticks,
 };
@@ -28,6 +28,7 @@ use crate::adjust::peak::Logarithms;
 use crate::adjust::timing::{CaptureTiming, LevelScale};
 use crate::exposure::fakes::{handle, Headers, World};
 use crate::exposure::ports::{CaptureProfiles, Lens, ProfileAccess, Properties, Property, StockMemory};
+use crate::gains::{BlendSelector, CaptureGains, GainRequest, SelectedGains};
 use crate::profile::Profile;
 
 pub struct MotionWorld {
@@ -73,8 +74,8 @@ pub struct MotionWorld {
     pub cell_steps: [u32; 2],
     pub readout_start: u32,
     pub reference_line: u16,
-    pub default_curve: DefaultCurve,
-    pub curve_requests: Vec<CurveRequest>,
+    pub selected_gains: SelectedGains,
+    pub gain_requests: Vec<GainRequest>,
 }
 
 impl Default for MotionWorld {
@@ -117,8 +118,8 @@ impl Default for MotionWorld {
             cell_steps: [1, 1],
             readout_start: 0,
             reference_line: 0,
-            default_curve: DefaultCurve::default(),
-            curve_requests: Vec::new(),
+            selected_gains: SelectedGains::default(),
+            gain_requests: Vec::new(),
             now: 0,
         }
     }
@@ -137,7 +138,6 @@ pub fn blank_readings(lens: u32) -> RecordReadings {
         measurement_selection: Default::default(),
         scene: 0,
         channel: 0,
-        style: 0,
         at_0043: 0,
         class: 0,
         policy: 0,
@@ -145,7 +145,6 @@ pub fn blank_readings(lens: u32) -> RecordReadings {
         limit_word: 0,
         level_step: 0,
         at_0035: 0,
-        at_0036: 0,
         at_0038: 0,
         at_20cc: 0,
         at_20c8: 0,
@@ -378,13 +377,17 @@ impl FrameGeometry for MotionWorld {
 
 /// The selector adds to the first point and each delta to the next point.
 impl AreaCurves for MotionWorld {
-    fn default_curve(&mut self, request: &CurveRequest) -> DefaultCurve {
-        self.curve_requests.push(*request);
-        self.default_curve
-    }
     fn with_profile_factors(&mut self, [first, second, third]: [u16; 3], [first_delta, second_delta]: [u8; 2], selector: u8) -> [u16; 3] {
         [first + u16::from(selector), second + u16::from(first_delta), third + u16::from(second_delta)]
     }
+}
+
+impl CaptureGains for MotionWorld {
+    fn gains(&mut self, request: &GainRequest) -> SelectedGains {
+        self.gain_requests.push(*request);
+        self.selected_gains
+    }
+    fn blend_weight(&mut self, _selector: &BlendSelector) -> u8 { 0 }
 }
 
 impl ChannelRates for MotionWorld {

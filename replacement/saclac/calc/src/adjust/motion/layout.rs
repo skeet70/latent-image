@@ -9,8 +9,8 @@ use crate::adjust::lens::LensConfiguration;
 use crate::adjust::metering::MeteringTables;
 use crate::adjust::motion::exposure::FrameExposure;
 use crate::adjust::motion::ports::{
-    AreaClass, AreaCurves, AreaGrid, CaptureFraming, CropGeometry, CurveRequest, DefaultCurve, FrameGeometry, GridRequest, LensBounds, LensCalibration,
-    LensTables, LimitQuery, Rectangle, SampleFrameRequest, Tracking,
+    AreaClass, AreaCurves, AreaGrid, CaptureFraming, CropGeometry, FrameGeometry, GridRequest, LensBounds, LensCalibration, LensTables, LimitQuery,
+    Rectangle, SampleFrameRequest, Tracking,
 };
 use crate::adjust::motion::prepare::{channel_bounds, search_bounds, stored_second_level};
 use crate::adjust::motion::readings::{ListedArea, RecordReadings};
@@ -22,6 +22,7 @@ use crate::adjust::rate_policy;
 use crate::adjust::timing::{CaptureTiming, LevelScale};
 use crate::exposure::ports::{Lens, ProfileAccess, Properties, StockMemory};
 use crate::exposure::settings;
+use crate::gains::{self, CaptureGains, GainRequest, SelectedGains};
 use crate::stock::motion::{self as stock, LayoutTrace, TreatedWindowTrace};
 
 /// Everything the layout reaches.
@@ -38,6 +39,7 @@ pub trait LayoutPorts:
     + CaptureTiming
     + LevelScale
     + AreaCurves
+    + CaptureGains
     + StockMemory
 {
 }
@@ -55,6 +57,7 @@ impl<
             + CaptureTiming
             + LevelScale
             + AreaCurves
+            + CaptureGains
             + StockMemory,
     > LayoutPorts for T
 {
@@ -252,7 +255,7 @@ impl MotionState {
         let curve = self.default_curve(ports);
         let deltas = [ports.profile().read(readings.record, &group_00::AT_0049), ports.profile().read(readings.record, &group_00::AT_004A)];
         let selector = ports.profile().read(readings.record, &group_00::AT_003E);
-        let curve_points = ports.with_profile_factors(curve.points, deltas, selector);
+        let curve_points = ports.with_profile_factors(curve.gains, deltas, selector);
         let exposure_ratio = exposure_ratio(ports, &readings, &second);
         let expanded = ports.expanded_ratio(grids[0].cell_height.wrapping_mul(grids[0].cell_width));
         let cell_rate = rate_policy::scaled_by_configured_factor(ports, expanded);
@@ -270,7 +273,7 @@ impl MotionState {
             exposure_at_06: second.at_06,
             weights,
             curve: curve_points,
-            curve_limit: curve.limit,
+            curve_limit: curve.class.0,
             exposure_ratio,
             cell_rate,
             lowest_level: lowest.bottom.wrapping_add(lowest.second_top),
@@ -366,22 +369,21 @@ impl MotionState {
         (moved.max(i32::from(self.bounds.low)) as i16).min(self.bounds.high)
     }
 
-    /// The area layer's default curve for the record (0xf4d5bc).
-    fn default_curve(&self, ports: &mut impl LayoutPorts) -> DefaultCurve {
+    /// The record's default curve and its limit (0xf4d5bc).
+    fn default_curve(&self, ports: &mut impl LayoutPorts) -> SelectedGains {
         let readings = &self.readings;
         let record = readings.record;
-        let request = CurveRequest {
-            scene: readings.scene,
-            at_0048: ports.profile().read(record, &group_00::AT_0048),
-            at_002a: ports.profile().read(record, &group_00::AT_002A),
-            channel: readings.channel,
-            style: readings.style,
-            at_0036: readings.at_0036,
-            at_000e: ports.profile().read(record, &group_00::AT_000E),
-            lens: readings.lens,
-            level: readings.levels[0],
-            weights: curve_weights(ports, readings),
+        let request = GainRequest {
+            mode: u32::from(readings.scene),
+            variant: u32::from(ports.profile().read(record, &group_00::AT_0048)),
+            custom_source: u32::from(ports.profile().read(record, &group_00::AT_002A)),
+            bank: u32::from(readings.channel),
+            fixed: gains::fixed_gains(ports, record),
+            temperature: readings.levels[0] as u16,
+            custom: curve_weights(ports, readings),
+            forced: true,
+            ..GainRequest::default()
         };
-        ports.default_curve(&request)
+        gains::reference_gains(ports, &request)
     }
 }

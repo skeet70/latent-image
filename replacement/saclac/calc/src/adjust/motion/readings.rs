@@ -97,7 +97,6 @@ pub struct RecordReadings {
     pub scene: u8,
     /// Header byte 0x46: 0, 1 or 2.
     pub channel: u8,
-    pub style: u8,
     pub at_0043: u8,
     /// Header byte 0x47.
     pub class: u8,
@@ -107,7 +106,6 @@ pub struct RecordReadings {
     /// The step the run's levels are read at.
     pub level_step: u32,
     pub at_0035: u8,
-    pub at_0036: u8,
     pub at_0038: u8,
     pub at_20cc: u32,
     pub at_20c8: u32,
@@ -188,14 +186,12 @@ impl RecordReadings {
         let measurement_selection = profile.measurement_selection(record);
         let scene = profile.header(record, SharedHeaderByte::At31);
         let channel = profile.header(record, SharedHeaderByte::At46);
-        let style = profile.read(record, &group_00::AT_003F);
         let at_0043 = profile.read(record, &group_00::AT_0043);
         let class = profile.header(record, SharedHeaderByte::At47);
         let policy = profile.read(record, &group_00::AT_0045);
         let armed = profile.header(record, SharedHeaderByte::At63);
         let auxiliary = profile.header(record, SharedHeaderByte::At61);
         let at_0035 = profile.read(record, &group_00::AT_0035);
-        let at_0036 = profile.read(record, &group_00::AT_0036);
         let at_0038 = profile.read(record, &group_00::AT_0038);
         let at_20cc = profile.read(record, &group_13::AT_20CC);
         let locked = profile.read(record, &group_13::AT_20B0_4);
@@ -244,7 +240,6 @@ impl RecordReadings {
             measurement_selection,
             scene,
             channel,
-            style,
             at_0043,
             class,
             policy,
@@ -252,7 +247,6 @@ impl RecordReadings {
             limit_word: if armed == 0 { limit_word } else { 0 },
             level_step: if armed == 0 && class != 0 { record_step } else { lowest },
             at_0035,
-            at_0036,
             at_0038,
             at_20cc,
             at_20c8,

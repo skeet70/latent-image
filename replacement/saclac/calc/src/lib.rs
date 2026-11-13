@@ -9,6 +9,7 @@ pub mod capture_requests;
 pub mod diagnostics;
 pub mod exposure;
 pub mod finish;
+pub mod gains;
 pub mod geometry;
 pub mod library_state;
 pub mod policy;
@@ -28,6 +29,8 @@ mod capture_requests_tests;
 mod diagnostics_tests;
 #[cfg(test)]
 mod finish_tests;
+#[cfg(test)]
+mod gains_tests;
 #[cfg(test)]
 mod geometry_tests;
 #[cfg(test)]
