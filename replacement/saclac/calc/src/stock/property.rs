@@ -40,3 +40,26 @@ pub const fn window(source: WindowSource) -> (Property, Property) {
         WindowSource::Default => (Property(0x64b8), Property(0x64b0)),
     }
 }
+
+/// Lens resources at or beyond this count narrow area kind 2 to kind 1 (0xfa76d4, 0xfa7a00).
+pub const AREA_RESOURCES: Property = Property(0x3e1214);
+
+/// The table an area's output offset is read from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OffsetTable { Standard, First, Second }
+
+/// Two bytes per lens resource (0xfa7870, 0xfa78ac, 0xfa78d4).
+pub const fn area_offset(table: OffsetTable, resource: u32) -> Property {
+    let base = match table {
+        OffsetTable::Standard => 0x3e07f7,
+        OffsetTable::First => 0x3e08c0,
+        OffsetTable::Second => 0x3e0989,
+    };
+    Property(base + 2 * resource)
+}
+
+/// Five bytes of scene enable bits, scene flag `n` at bit `n % 8` of byte `n / 8` (0xf6f8a8..0xf6fa40).
+pub const fn scene_mask(byte: u8) -> Property { Property(0x64a3 + byte as u32) }
+
+/// The focus-result reuse tolerance in tens of level steps (0xf6b924, 0xf6b9a8).
+pub const REUSE_TOLERANCE: Property = Property(0x65a7);

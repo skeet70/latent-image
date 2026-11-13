@@ -1,6 +1,6 @@
-use std::cell::Cell;
-
 use crate::adjust::scene_policy::*;
+use crate::exposure::fakes::World;
+use crate::stock::property;
 
 fn inputs(scene: u32, class: u32) -> TreatmentInputs {
     TreatmentInputs { active: 1, subjects: 2, scene, class, ..TreatmentInputs::default() }
@@ -52,57 +52,52 @@ fn any_treatment_is_either_one() {
     assert!(!inputs(6, 1).admits_any());
 }
 
-struct Mask {
-    enabled: [u8; 5],
-    level_one: bool,
-    asked: Cell<Option<u8>>,
-}
-
-impl Mask {
-    fn with(byte: usize, bit: u8) -> Self {
-        let mut enabled = [0; 5];
-        enabled[byte] = bit;
-        Self { enabled, level_one: true, asked: Cell::new(None) }
+/// Settings with one scene mask bit on and both treatment settings on.
+fn mask(byte: u8, bit: u8) -> World {
+    let mut world = World::default();
+    for each in 0..5 {
+        world.property(property::scene_mask(each), 0);
     }
-}
-
-impl SceneMaskSettings for Mask {
-    fn enabled(&self, flag: SceneFlag) -> bool {
-        self.asked.set(Some(flag.0));
-        self.enabled[usize::from(flag.0 / 8)] & (1 << (flag.0 % 8)) != 0
-    }
-    fn level_one_admitted(&self) -> bool { self.level_one }
+    world.property(property::scene_mask(byte), u32::from(bit));
+    world.property(property::DUMP_FIRST, 1);
+    world.property(property::DUMP_SECOND, 1);
+    world
 }
 
 fn mask_inputs(scene: u32) -> SceneMaskInputs { SceneMaskInputs { scene, subjects: 1, ..SceneMaskInputs::default() } }
 
 #[test]
 fn each_scene_reads_its_own_mask_bit() {
-    assert!(scene_enabled(&Mask::with(0, 1), mask_inputs(0)));
-    assert!(!scene_enabled(&Mask::with(0, 1), mask_inputs(1)));
-    assert!(scene_enabled(&Mask::with(2, 1), mask_inputs(1)));
-    assert!(scene_enabled(&Mask::with(4, 0x80), mask_inputs(17)));
-    assert!(scene_enabled(&Mask::with(4, 0x80), mask_inputs(200)));
-    assert!(scene_enabled(&Mask::with(3, 0x20), mask_inputs(29)));
-    assert!(scene_enabled(&Mask::with(1, 0x10), mask_inputs(56)));
+    assert!(scene_enabled(&mut mask(0, 1), mask_inputs(0)));
+    assert!(!scene_enabled(&mut mask(0, 1), mask_inputs(1)));
+    assert!(scene_enabled(&mut mask(2, 1), mask_inputs(1)));
+    assert!(!scene_enabled(&mut mask(2, 2), mask_inputs(1)));
+    assert!(scene_enabled(&mut mask(4, 0x80), mask_inputs(17)));
+    assert!(scene_enabled(&mut mask(4, 0x80), mask_inputs(200)));
+    assert!(scene_enabled(&mut mask(3, 0x20), mask_inputs(29)));
+    assert!(scene_enabled(&mut mask(1, 0x10), mask_inputs(56)));
 }
 
 #[test]
 fn a_selected_or_armed_record_reads_its_own_bit() {
-    let mask = Mask::with(1, 0x40);
-    assert!(scene_enabled(&mask, SceneMaskInputs { measurement_selection: 1, callback_armed: 1, ..mask_inputs(0) }));
-    assert_eq!(mask.asked.get(), Some(14));
-    let mask = Mask::with(1, 0x80);
-    assert!(scene_enabled(&mask, SceneMaskInputs { callback_armed: 1, ..mask_inputs(0) }));
-    assert_eq!(mask.asked.get(), Some(15));
+    let selected = SceneMaskInputs { measurement_selection: 1, callback_armed: 1, ..mask_inputs(0) };
+    assert!(scene_enabled(&mut mask(1, 0x40), selected));
+    assert!(!scene_enabled(&mut mask(0, 1), selected));
+    let armed = SceneMaskInputs { callback_armed: 1, ..mask_inputs(0) };
+    assert!(scene_enabled(&mut mask(1, 0x80), armed));
+    assert!(!scene_enabled(&mut mask(1, 0x40), armed));
 }
 
 #[test]
-fn level_one_needs_both_settings_and_subjects() {
-    let mut mask = Mask::with(0, 1);
-    assert!(scene_enabled(&mask, SceneMaskInputs { level: 1, ..mask_inputs(0) }));
-    assert!(!scene_enabled(&mask, SceneMaskInputs { level: 1, subjects: 0, ..mask_inputs(0) }));
-    mask.level_one = false;
-    assert!(!scene_enabled(&mask, SceneMaskInputs { level: 1, ..mask_inputs(0) }));
-    assert!(scene_enabled(&mask, SceneMaskInputs { level: 2, subjects: 0, ..mask_inputs(0) }));
+fn a_treated_exposure_needs_both_settings_and_a_subject() {
+    let treated = SceneMaskInputs { treated: true, ..mask_inputs(0) };
+    assert!(scene_enabled(&mut mask(0, 1), treated));
+    assert!(!scene_enabled(&mut mask(0, 1), SceneMaskInputs { subjects: 0, ..treated }));
+    let mut first_off = mask(0, 1);
+    first_off.property(property::DUMP_FIRST, 0);
+    assert!(!scene_enabled(&mut first_off, treated));
+    assert!(scene_enabled(&mut first_off, SceneMaskInputs { subjects: 0, ..mask_inputs(0) }));
+    let mut second_off = mask(0, 1);
+    second_off.property(property::DUMP_SECOND, 0);
+    assert!(!scene_enabled(&mut second_off, treated));
 }

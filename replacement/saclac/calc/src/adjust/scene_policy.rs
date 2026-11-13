@@ -1,6 +1,9 @@
 //! Which subject treatments a scene admits, and whether the scene is enabled in the scene mask
 //! settings.
 
+use crate::exposure::ports::Properties;
+use crate::stock::property;
+
 /// Scene kinds the policy tables cover; a larger kind admits nothing.
 pub const SCENES: u32 = 58;
 
@@ -98,7 +101,7 @@ impl TreatmentInputs {
 
 /// One bit of the scene mask settings, numbered from the first mask byte's lowest bit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SceneFlag(pub u8);
+struct SceneFlag(u8);
 
 impl SceneFlag {
     const SELECTED: Self = Self(14);
@@ -114,32 +117,29 @@ impl SceneFlag {
     }
 }
 
-pub trait SceneMaskSettings {
-    fn enabled(&self, flag: SceneFlag) -> bool;
-    /// The two settings both on admit a record whose level is one.
-    fn level_one_admitted(&self) -> bool;
-}
-
 /// What decides whether a record's scene is enabled.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SceneMaskInputs {
     pub measurement_selection: u32,
     pub scene: u32,
     pub callback_armed: u32,
-    pub level: i32,
+    /// A treated exposure also needs both treatment settings on and a subject.
+    pub treated: bool,
     pub subjects: u32,
 }
 
-pub fn scene_enabled(settings: &impl SceneMaskSettings, inputs: SceneMaskInputs) -> bool {
-    if inputs.level == 1 && (!settings.level_one_admitted() || inputs.subjects == 0) {
+pub fn scene_enabled(properties: &mut impl Properties, inputs: SceneMaskInputs) -> bool {
+    if inputs.treated
+        && (properties.property(property::DUMP_SECOND) == 0 || properties.property(property::DUMP_FIRST) == 0 || inputs.subjects == 0)
+    {
         return false;
     }
-    let flag = if inputs.measurement_selection == 1 {
+    let SceneFlag(bit) = if inputs.measurement_selection == 1 {
         SceneFlag::SELECTED
     } else if inputs.callback_armed == 1 {
         SceneFlag::ARMED
     } else {
         SceneFlag::of_scene(inputs.scene)
     };
-    settings.enabled(flag)
+    properties.property(property::scene_mask(bit / 8)) & (1 << (bit % 8)) != 0
 }
