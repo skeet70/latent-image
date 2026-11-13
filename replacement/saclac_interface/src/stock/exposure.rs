@@ -5,7 +5,7 @@
 //! 0xf1ee10, 0xf1fc08); the owned callbacks carry them as the posted payload instead.
 
 use crate::calc::SharedAddress;
-use crate::exposure::{Correction, CorrectionRequest, Evaluation, EvaluationRequest, MeasuredEntry, ReleaseStatus, StatisticsRequest, CORRECTION_HALVES, EVALUATION_BYTES};
+use crate::exposure::{CalculationInput, Correction, CorrectionRequest, Evaluation, EvaluationRequest, MeasuredEntry, ReleaseStatus, StatisticsRequest, CORRECTION_HALVES, EVALUATION_BYTES};
 use crate::stock::StockCallbackWord;
 
 pub const STATISTICS_REQUEST_BYTES: usize = 220;
@@ -194,5 +194,95 @@ pub fn correction_request(request: &CorrectionRequest, callback: StockCallbackWo
     for (index, at) in [request.buffers[0], request.buffers[1], request.frame].into_iter().enumerate() {
         tail[4 * index..4 * index + 4].copy_from_slice(&address(at).to_le_bytes());
     }
+    bytes
+}
+
+pub const CALCULATION_INPUT_BYTES: usize = 300;
+
+/// The calc 0x3c02 input at exposure context +0x1134, which calc reads in place (0xf1a284,
+/// 0xf601fc): 0xf61b8c clears it and fills bytes 0x00..0x4e, 0xf6191c bytes 0x50..0xfc and 0xf61754
+/// bytes 0x100..0x12c. Bytes 0x82..0x84 hold 0xf5f9fc's constant 0; bytes 0x4e, 0x4f, 0xfc..0x100 are
+/// never written.
+pub fn calculation_input(input: &CalculationInput) -> [u8; CALCULATION_INPUT_BYTES] {
+    let mut bytes = [0; CALCULATION_INPUT_BYTES];
+    let mut word = |offset: usize, value: u32| bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    word(0x04, if input.selection { 4 } else { 3 });
+    word(0x08, input.lens_reference);
+    word(0x0c, input.target_word);
+    word(0x14, input.area[0]);
+    word(0x18, input.area[1]);
+    word(0x24, input.level_profile);
+    word(0x28, u32::from(input.unmeasured));
+    word(0x2c, input.level_policy);
+    word(0x30, u32::from(input.refinement_pass));
+    word(0x34, u32::from(input.first_treatment));
+    word(0x40, input.plan_kind);
+    let words = [
+        (0x50, input.measurement_selection),
+        (0x54, input.selection_kind),
+        (0x5c, input.record_32),
+        (0x64, input.record_5b),
+        (0x68, input.record_5d),
+        (0x6c, input.record_34),
+        (0x70, input.record_3d),
+        (0x74, input.record_3e),
+        (0x78, input.selection_style),
+        (0x7c, input.record_43),
+        (0x84, input.record_14),
+        (0x8c, input.source),
+        (0x98, input.record_45),
+        (0x9c, input.selection_auxiliary),
+        (0xa0, input.header_47),
+        (0xa4, input.header_63),
+        (0xa8, input.record_4b),
+        (0xac, input.header_61),
+        (0xb0, input.interval_tracking),
+        (0xb4, input.record_51),
+        (0xb8, input.record_66),
+        (0xbc, input.record_67),
+        (0xc0, input.record_68),
+        (0xc4, input.record_69),
+        (0xc8, input.record_20c8),
+        (0xcc, input.record_20cc),
+        (0xd0, input.record_2110),
+        (0xd4, input.record_20d4),
+        (0xd8, input.record_20b0),
+        (0xdc, input.record_5f),
+        (0xe0, input.capture_offset),
+        (0xe4, input.offered_measurements),
+        (0xe8, input.window_status),
+        (0xec, input.shared_738),
+        (0xf0, input.second_result),
+        (0xf4, input.grid_layout),
+        (0xf8, input.shared_85c),
+        (0x100, input.record_lens_reference),
+        (0x11c, input.option),
+        (0x120, 4),
+        (0x128, u32::from(input.refinement_pass)),
+    ];
+    for (offset, value) in words {
+        word(offset, value);
+    }
+    let mut half = |offset: usize, value: u16| bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    half(0x10, input.target_half);
+    half(0x1c, input.target_level as u16);
+    half(0x1e, input.start_level as u16);
+    half(0x20, input.measured_level);
+    half(0x38, input.metering_level);
+    for (index, value) in input.plan_exposure.iter().enumerate() {
+        half(0x44 + 2 * index, *value);
+    }
+    half(0x58, input.selection_flags);
+    half(0x62, input.record_26);
+    half(0x80, input.offset as u16);
+    half(0x88, input.lead as u16);
+    half(0x90, input.record_20 as u16);
+    half(0x92, input.record_level as u16);
+    half(0x94, input.record_24 as u16);
+    for (index, level) in input.levels.iter().enumerate() {
+        half(0x104 + 2 * index, *level as u16);
+    }
+    bytes[0x3c..0x40].copy_from_slice(&[input.grid[0], input.grid[1], input.grid_steps[0], input.grid_steps[1]]);
+    bytes[0x60] = input.record_33;
     bytes
 }
