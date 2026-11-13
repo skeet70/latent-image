@@ -7,6 +7,7 @@ _SOURCES = glob(["src/**/*.rs"], exclude = ["src/lib.rs", "src/*_tests.rs"])
 _HOST_DEPS = {
     "xm1_saclac_controllers": "//replacement/saclac/controllers:host",
     "xm1_saclac_interface": "//replacement/saclac_interface:host",
+    "xm1_saclac_profile_geometry": "//replacement/saclac/profile_geometry:host",
 }
 
 xm1_rust_rlib(
@@ -18,6 +19,7 @@ xm1_rust_rlib(
     rlib_deps = {
         "xm1_saclac_controllers": "//replacement/saclac/controllers:controllers",
         "xm1_saclac_interface": "//replacement/saclac_interface:saclac-interface",
+        "xm1_saclac_profile_geometry": "//replacement/saclac/profile_geometry:profile_geometry",
     },
 )
 

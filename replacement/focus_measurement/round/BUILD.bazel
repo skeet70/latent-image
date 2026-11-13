@@ -2,7 +2,7 @@ load("//replacement/toolchain:rust.bzl", "xm1_rust_host_rlib", "xm1_rust_host_te
 
 package(default_visibility = ["//visibility:public"])
 
-_SOURCES = ["src/jobs.rs", "src/acquisition.rs", "src/children.rs", "src/lanes.rs", "src/history.rs", "src/round.rs", "src/image.rs", "src/live.rs", "src/stock.rs", "src/planner.rs", "src/profile.rs", "src/record.rs", "src/pipeline.rs", "src/window.rs", "src/auxiliary.rs", "src/source.rs"] + glob(["src/acquisition/*.rs"])
+_SOURCES = ["src/jobs.rs", "src/acquisition.rs", "src/children.rs", "src/lanes.rs", "src/history.rs", "src/round.rs", "src/image.rs", "src/live.rs", "src/stock.rs", "src/planner.rs", "src/profile.rs", "src/record.rs", "src/replies.rs", "src/pipeline.rs", "src/window.rs", "src/auxiliary.rs", "src/source.rs"] + glob(["src/acquisition/*.rs"])
 
 xm1_rust_rlib(
     name = "round",
@@ -13,6 +13,7 @@ xm1_rust_rlib(
     rlib_deps = {
         "xm1_saclac_controllers": "//replacement/saclac/controllers:controllers",
         "xm1_saclac_interface": "//replacement/saclac_interface:saclac-interface",
+        "xm1_saclac_profile_geometry": "//replacement/saclac/profile_geometry:profile_geometry",
     },
 )
 
@@ -24,6 +25,7 @@ xm1_rust_host_rlib(
     rlib_deps = {
         "xm1_saclac_controllers": "//replacement/saclac/controllers:host",
         "xm1_saclac_interface": "//replacement/saclac_interface:host",
+        "xm1_saclac_profile_geometry": "//replacement/saclac/profile_geometry:host",
     },
 )
 
@@ -35,5 +37,6 @@ xm1_rust_host_test(
     rlib_deps = {
         "xm1_saclac_controllers": "//replacement/saclac/controllers:host",
         "xm1_saclac_interface": "//replacement/saclac_interface:host",
+        "xm1_saclac_profile_geometry": "//replacement/saclac/profile_geometry:host",
     },
 )
