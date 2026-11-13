@@ -13,7 +13,7 @@ use crate::services::*;
 struct Blocks {
     fields: HashMap<String, u32>,
     flags: [u8; 19],
-    applied: u32,
+    applied: AppliedParts,
     window: Option<[u16; 3]>,
     cleared: bool,
 }
@@ -26,7 +26,9 @@ impl ScanBlocks for Blocks {
     fn set(&mut self, field: ScanField, value: u32) { self.fields.insert(format!("{field:?}"), value); }
     fn configuration(&self, field: ScanField) -> u32 { self.fields.get(&format!("{field:?}")).copied().unwrap_or(0) }
     fn request_flag(&self, index: u8) -> u8 { self.flags[usize::from(index)] }
-    fn mark_applied(&mut self, bits: u32) { self.applied |= bits; }
+    fn applied_parts(&self) -> AppliedParts { self.applied }
+    fn mark_applied(&mut self, parts: AppliedParts) { self.applied.0 |= parts.0; }
+    fn clear_applied_parts(&mut self) { self.applied = AppliedParts(0); }
     fn set_request_window(&mut self, limits: [u16; 3]) { self.window = Some(limits); }
 }
 
@@ -51,7 +53,7 @@ fn a_part_applies_only_when_its_request_byte_enables_it_and_marks_its_bit() {
     blocks.flags[16] = 5;
     assert!(apply(Part::Seventeenth, &mut blocks, &mut library), "any nonzero byte");
     assert_eq!(library.0, [StockPart::Geometry, StockPart::Second, StockPart::Seventeenth]);
-    assert_eq!(blocks.applied, 1 << 16 | 1 << 17 | 1 << 29);
+    assert_eq!(blocks.applied, AppliedParts(1 << 16 | 1 << 17 | 1 << 29));
 }
 
 #[test]
@@ -61,7 +63,7 @@ fn the_window_part_copies_the_configured_window_into_the_request() {
     blocks.flags[2] = 1;
     let mut library = Library::default();
     assert!(apply(Part::Window, &mut blocks, &mut library));
-    assert_eq!((blocks.window, blocks.applied, library.0.len()), (Some([3, 4, 5]), 1 << 18, 0));
+    assert_eq!((blocks.window, blocks.applied, library.0.len()), (Some([3, 4, 5]), AppliedParts(1 << 18), 0));
 }
 
 #[test]
@@ -118,19 +120,19 @@ impl PipelineHardware for Hardware {
 }
 
 #[test]
-fn register_groups_follow_the_flag_bits_with_group_zero_for_any_of_them() {
-    let selected: Vec<usize> = groups(1 << 18 | 1 << 30).map(|group| group.index()).collect();
+fn register_groups_follow_the_applied_parts_with_group_zero_for_any_of_them() {
+    let selected: Vec<usize> = groups(AppliedParts(1 << 18 | 1 << 30)).map(|group| group.index()).collect();
     assert_eq!(selected, [0, 2, 14]);
-    assert_eq!(groups(1 << 16).count(), 0);
+    assert_eq!(groups(AppliedParts(1 << 16)).count(), 0);
     let mut snapshot = Snapshot::default();
-    pack_groups(1 << 17 | 1 << 18, (), &mut snapshot);
+    pack_groups(AppliedParts(1 << 17 | 1 << 18), (), &mut snapshot);
     assert_eq!(snapshot.0, [('p', 0), ('p', 1), ('w', 2)]);
 }
 
 #[test]
 fn a_restore_holds_the_hardware_around_the_groups() {
     let (mut snapshot, mut hardware) = (Snapshot::default(), Hardware::default());
-    restore_groups(1 << 19, &mut snapshot, &mut hardware);
+    restore_groups(AppliedParts(1 << 19), &mut snapshot, &mut hardware);
     assert_eq!(snapshot.0, [('r', 0), ('r', 3)]);
     assert_eq!(hardware.0, [(RESTORE_CLIENT, 0), (RESTORE_CLIENT, 42)]);
 }

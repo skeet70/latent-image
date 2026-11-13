@@ -67,6 +67,10 @@ pub enum ScanField {
     Half1ea,
 }
 
+/// The configuration's applied-parts word, a bit from 16 up for each part applied.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AppliedParts(pub u32);
+
 /// The configuration and request blocks of one scan, in the layout the scan library reads.
 pub trait ScanBlocks {
     fn clear_configuration(&mut self);
@@ -74,7 +78,10 @@ pub trait ScanBlocks {
     fn configuration(&self, field: ScanField) -> u32;
     /// Request byte `index` of the part enables.
     fn request_flag(&self, index: u8) -> u8;
-    fn mark_applied(&mut self, bits: u32);
+    fn applied_parts(&self) -> AppliedParts;
+    fn mark_applied(&mut self, parts: AppliedParts);
+    /// 0xd5e1b8, which 0xedc61c enters on the applied-parts word after restoring the groups.
+    fn clear_applied_parts(&mut self);
     /// The request's window limits (bytes 0x3e, 0x40, 0x42).
     fn set_request_window(&mut self, limits: [u16; 3]);
 }
@@ -305,6 +312,6 @@ pub fn apply<B: ScanBlocks>(part: Part, blocks: &mut B, library: &mut impl ScanL
             blocks.set_request_window(window);
         }
     }
-    blocks.mark_applied(bit);
+    blocks.mark_applied(AppliedParts(bit));
     true
 }

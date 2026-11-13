@@ -5,8 +5,8 @@ use xm1_saclac_shared::image_registers::{RegisterGroup, RegisterSnapshot, Window
 
 use crate::compiled::{attach, restore};
 use crate::registers::{PipelineHardware, RESTORE_CLIENT};
-use crate::scan::{apply, Part, ScanLibrary, StockPart};
-use crate::stock::{GuestMemory, StockCompiledScan, StockScanBlocks};
+use crate::scan::{apply, Part, ScanBlocks, ScanLibrary, StockPart};
+use crate::stock::{GuestMemory, StockScanBlocks};
 
 /// Guest memory as bytes by address; a byte never stored reads 0.
 #[derive(Default)]
@@ -83,18 +83,25 @@ fn the_register_groups_follow_the_parts_applied_to_the_scan_configuration() {
     // The request enables the second part (0xd5e258 reads request byte 1).
     memory.set_byte(REQUEST + 1, 1);
     // The compile copies configuration word 0xd8 to the compiled scan's first word
-    // (0xd5da20..0xd5da24).
+    // (0xd5da20..0xd5da24), which 0xd5e1d4 and 0xd5e1f4 load and drop.
     memory.set_word(COMPILED, 1 << 19);
     let mut blocks = StockScanBlocks { configuration: CONFIGURATION, request: REQUEST, memory: &memory };
     let mut library = Library::default();
     assert!(apply(Part::Geometry, &mut blocks, &mut library));
     assert!(apply(Part::Second, &mut blocks, &mut library));
+    // 0xedd100..0xedd110 passes 0xd5e1d4 the word at configuration + 0x14c.
+    assert_eq!(memory.word(CONFIGURATION + 0x14c), 0x3_0000);
 
-    let scan = StockCompiledScan { address: COMPILED, memory: &memory };
     let (mut snapshot, mut hardware) = (Snapshot::default(), Hardware::default());
-    attach(&scan, (), &mut snapshot);
-    restore(&scan, &mut snapshot, &mut hardware);
+    attach(blocks.applied_parts(), (), &mut snapshot);
+    restore(blocks.applied_parts(), &mut snapshot, &mut hardware);
     use Snapshotted::{Packed, Restored};
     assert_eq!(snapshot.0, [Packed(0), Packed(1), Restored(0), Restored(1)]);
     assert_eq!(hardware.0, [(RESTORE_CLIENT, 0), (RESTORE_CLIENT, 42)]);
+
+    // 0xedc5fc restores, then clears the word through 0xd5e1b8 (0xedc618..0xedc61c).
+    blocks.clear_applied_parts();
+    assert_eq!(memory.word(CONFIGURATION + 0x14c), 0);
+    restore(blocks.applied_parts(), &mut snapshot, &mut hardware);
+    assert_eq!(snapshot.0.len(), 4, "nothing is applied");
 }

@@ -1,13 +1,10 @@
-use xm1_saclac_shared::image_registers::{RegisterGroup, RegisterSnapshot, WindowLimits};
-
 use crate::compiled::*;
-use crate::registers::{PipelineHardware, RESTORE_CLIENT};
+use crate::registers::PipelineHardware;
 
 #[derive(Default)]
 struct Scan {
     nine: Option<Optioned<9>>,
     four: Option<Optioned<4>>,
-    flags: u32,
 }
 
 impl CompiledScan for Scan {
@@ -22,7 +19,6 @@ impl CompiledScan for Scan {
     fn set_four(&mut self, table: Optioned<4>) { self.four = Some(table); }
     fn options(&self) -> [u8; 2] { [7, 9] }
     fn set_output_kind(&mut self, _: u8) {}
-    fn stage_flags(&self) -> u32 { self.flags }
 }
 
 #[test]
@@ -37,18 +33,6 @@ fn reads_give_the_values_and_stores_keep_each_tables_option() {
 }
 
 #[derive(Default)]
-struct Snapshot(Vec<(char, usize)>);
-
-impl RegisterSnapshot for Snapshot {
-    type Configuration = ();
-    fn restore(&mut self, group: RegisterGroup) { self.0.push(('r', group.index())); }
-    fn window_limits(&self, _: ()) -> WindowLimits { WindowLimits([1, 2, 3]) }
-    fn window_words(&self) -> [u32; 2] { [0, 0] }
-    fn set_window_words(&mut self, _: [u32; 2]) { self.0.push(('w', 2)); }
-    fn pack_retained(&mut self, group: RegisterGroup, _: ()) { self.0.push(('p', group.index())); }
-}
-
-#[derive(Default)]
 struct Hardware(Vec<(u32, u32)>);
 
 impl PipelineHardware for Hardware {
@@ -57,16 +41,6 @@ impl PipelineHardware for Hardware {
         42
     }
     fn release(&mut self, client: u32, grant: u32) { self.0.push((client, grant)); }
-}
-
-#[test]
-fn attaching_and_restoring_follow_the_configurations_stage_flags() {
-    let scan = Scan { flags: 1 << 17 | 1 << 19, ..Scan::default() };
-    let (mut snapshot, mut hardware) = (Snapshot::default(), Hardware::default());
-    attach(&scan, (), &mut snapshot);
-    restore(&scan, &mut snapshot, &mut hardware);
-    assert_eq!(snapshot.0, [('p', 0), ('p', 1), ('p', 3), ('r', 0), ('r', 1), ('r', 3)]);
-    assert_eq!(hardware.0, [(RESTORE_CLIENT, 0), (RESTORE_CLIENT, 42)]);
 }
 
 #[test]

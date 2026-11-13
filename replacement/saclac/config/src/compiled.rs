@@ -2,11 +2,12 @@
 
 //! The compiled scan configuration the profile layer fills and hands the pipeline (image 5,
 //! 0xd5d268..0xd5e240, 0xd6b394, 0xd6b460): its register tables, its output kind, the register
-//! groups its stage flags select, and the stream snapshot taken with it.
+//! groups of the configuration's applied parts, and the stream snapshot taken with it.
 
 use xm1_saclac_shared::image_registers::RegisterSnapshot;
 
 use crate::registers::{pack_groups, restore_groups, PipelineHardware, RESTORE_CLIENT};
+use crate::scan::AppliedParts;
 
 /// A table the scan library keeps beside an option byte.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,8 +42,6 @@ pub trait CompiledScan {
     fn options(&self) -> [u8; 2];
     /// 0xd5e240.
     fn set_output_kind(&mut self, kind: u8);
-    /// The stage flags the configuration's register groups follow.
-    fn stage_flags(&self) -> u32;
 }
 
 /// 0xd5dfec.
@@ -63,14 +62,15 @@ pub fn store_four(scan: &mut impl CompiledScan, values: [u16; 4]) {
     scan.set_four(Optioned { option, values });
 }
 
-/// Packs the register groups the configuration's stage flags select (0xd5e1d4).
-pub fn attach<S: RegisterSnapshot>(scan: &impl CompiledScan, configuration: S::Configuration, snapshot: &mut S) {
-    pack_groups(scan.stage_flags(), configuration, snapshot);
+/// Packs the register groups of `applied` from `configuration`, the compiled scan's library
+/// configuration (0xd5e1d4).
+pub fn attach<S: RegisterSnapshot>(applied: AppliedParts, configuration: S::Configuration, snapshot: &mut S) {
+    pack_groups(applied, configuration, snapshot);
 }
 
-/// Restores the register groups the configuration's stage flags select (0xd5e1f4).
-pub fn restore(scan: &impl CompiledScan, snapshot: &mut impl RegisterSnapshot, hardware: &mut impl PipelineHardware) {
-    restore_groups(scan.stage_flags(), snapshot, hardware);
+/// Restores the register groups of `applied` (0xd5e1f4).
+pub fn restore(applied: AppliedParts, snapshot: &mut impl RegisterSnapshot, hardware: &mut impl PipelineHardware) {
+    restore_groups(applied, snapshot, hardware);
 }
 
 /// Releases `client`'s configuration hold (0xd5d268).

@@ -10,7 +10,7 @@ use crate::face::{FaceTracking, TrackingBusy};
 use crate::ports::{Derivations, ExportQuery};
 use crate::pipeline::{Bank, Enable, EnableChange, FilterWindow, Grid, Part, Setting, Stage, StageBlock};
 use crate::registers::PipelineHardware;
-use crate::scan::{ScanBlocks, ScanField, ScanLibrary, StockPart};
+use crate::scan::{AppliedParts, ScanBlocks, ScanField, ScanLibrary, StockPart};
 use crate::services::LensRequests;
 
 macro_rules! entry {
@@ -260,10 +260,14 @@ impl<M: GuestMemory> ScanBlocks for StockScanBlocks<M> {
 
     fn request_flag(&self, index: u8) -> u8 { self.memory.byte(self.request + u32::from(index)) }
 
-    fn mark_applied(&mut self, bits: u32) {
+    fn applied_parts(&self) -> AppliedParts { AppliedParts(self.memory.word(self.configuration + APPLIED_PARTS)) }
+
+    fn mark_applied(&mut self, AppliedParts(bits): AppliedParts) {
         let at = self.configuration + APPLIED_PARTS;
         self.memory.set_word(at, self.memory.word(at) | bits);
     }
+
+    fn clear_applied_parts(&mut self) { self.memory.set_word(self.configuration + APPLIED_PARTS, 0) }
 
     fn set_request_window(&mut self, limits: [u16; 3]) {
         for (index, limit) in limits.into_iter().enumerate() {
@@ -422,8 +426,8 @@ impl<M: GuestMemory> StageBlock for StockStageBlock<M> {
 
 fn address_of<T>(value: &mut T) -> u32 { value as *mut T as usize as u32 }
 
-/// A compiled scan configuration by guest address: stage flags at +0 and the scan library's
-/// configuration from +0x101c (output kind, then the option bytes at +4 and +8).
+/// A compiled scan configuration by guest address: the scan library's configuration from
+/// +0x101c (output kind, then the option bytes at +4 and +8).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StockCompiledScan<M = StockMemory> {
     pub address: u32,
@@ -437,7 +441,8 @@ pub struct StockScanOutput(pub u32);
 const LIBRARY_CONFIGURATION: u32 = 0x101c;
 
 impl<M> StockCompiledScan<M> {
-    fn library(&self) -> u32 { self.address + LIBRARY_CONFIGURATION }
+    /// The scan library's configuration, which 0xd5e1d4 passes 0xda21cc (0xd5e1e4..0xd5e1e8).
+    pub fn library(&self) -> u32 { self.address + LIBRARY_CONFIGURATION }
 }
 
 /// The library's optioned table: the option byte, then the values from +2.
@@ -494,8 +499,6 @@ impl<M: GuestMemory> CompiledScan for StockCompiledScan<M> {
     fn options(&self) -> [u8; 2] { [self.memory.byte(self.library() + 4), self.memory.byte(self.library() + 8)] }
 
     fn set_output_kind(&mut self, kind: u8) { self.memory.set_byte(self.library(), kind) }
-
-    fn stage_flags(&self) -> u32 { self.memory.word(self.address) }
 }
 
 /// The stream a snapshot's options name, by guest address.
