@@ -204,6 +204,7 @@ fn prepared(mode: u32, mask: u32) -> Prepared {
             lens_target: None,
             frame_slot: Some(ClientRef(0x7000)),
             lens_reference: LensReference(0),
+            ..HalfPressParameters::default()
         }),
         ..Prepared::default()
     }

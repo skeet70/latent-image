@@ -100,3 +100,8 @@ pub fn with_result_word(mut snapshot: LensSnapshot, word: u32) -> LensSnapshot {
     snapshot.tail[SNAPSHOT_RESULT..SNAPSHOT_RESULT + 4].copy_from_slice(&word.to_le_bytes());
     snapshot
 }
+
+pub fn result_word(snapshot: &LensSnapshot) -> u32 {
+    let tail = &snapshot.tail[SNAPSHOT_RESULT..SNAPSHOT_RESULT + 4];
+    u32::from_le_bytes([tail[0], tail[1], tail[2], tail[3]])
+}

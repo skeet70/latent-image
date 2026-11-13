@@ -160,6 +160,7 @@ fn parameters(mode: u32, mask: u32) -> HalfPressParameters {
         lens_target: None,
         frame_slot: None,
         lens_reference: LensReference(0),
+        ..HalfPressParameters::default()
     }
 }
 

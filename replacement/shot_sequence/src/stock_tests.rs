@@ -1,4 +1,5 @@
 use crate::boundary::{ClientRef, LensReference};
+use crate::capture_boundary::ReferencePair;
 use crate::ports::{AbortStatus, HalfPressMode, HalfPressNotifications};
 use crate::subjects::SubjectId;
 use crate::{stock, summary};
@@ -35,6 +36,15 @@ fn half_press_block_fields() {
     assert_eq!(stock::half_press_notifications(&block), Some(HalfPressNotifications { frame_released: true, relative_lens_done: false }));
     assert_eq!(stock::half_press_mode(&block[..7]), None);
     assert_eq!(stock::half_press_notifications(&block[..0x13]), None);
+}
+
+#[test]
+fn the_client_reference_pair_takes_its_reference_from_the_block_end() {
+    let mut block = [0u8; 64];
+    block[0x38..0x3c].copy_from_slice(&0x1111u32.to_le_bytes());
+    block[0x3c..0x40].copy_from_slice(&0x2222u32.to_le_bytes());
+    let parameters = stock::half_press_parameters(&block).unwrap();
+    assert_eq!(parameters.client_reference, ReferencePair { reference: 0x2222, detail: 0x1111 });
 }
 
 #[test]

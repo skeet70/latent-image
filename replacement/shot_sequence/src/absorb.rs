@@ -242,10 +242,28 @@ impl Plan {
         let focus = self.returning || (!self.whole && matches!(self.mode, 0 | 1));
         (reset, focus)
     }
+
+    fn target(&self, record: RecordHandle) -> AreaTarget {
+        AreaTarget { record, mode: self.mode, skip_first: self.returning && self.return_pending }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Form { Full, Short }
+pub(crate) enum Form { Full, Short }
+
+/// The record and selection the area stores write for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AreaTarget {
+    pub record: RecordHandle,
+    pub mode: u32,
+    /// The lens return still has a lens point pending, so the first area keeps its value.
+    pub skip_first: bool,
+}
+
+pub(crate) const FIRST_AREA: AreaIndex = match AreaIndex::new(0) {
+    Some(index) => index,
+    None => panic!(),
+};
 
 /// Absorbs the calculation block's result into the bound record.
 pub fn absorb(absorb: &Absorb, boundary: &mut impl AbsorbBoundary) {
@@ -280,20 +298,23 @@ pub fn absorb(absorb: &Absorb, boundary: &mut impl AbsorbBoundary) {
     }
 
     let (stored, positioned) = if plan.whole {
-        store_areas(Form::Full, ResultPass::Plain, absorb, &plan, boundary);
+        store_areas(Form::Full, ResultPass::Plain, plan.target(absorb.record), boundary);
         let half = boundary.retained_half();
         boundary.retain_target_half(half);
         (true, true)
     } else if matches!(plan.mode, 0 | 1) {
-        store_areas(Form::Full, ResultPass::Plain, absorb, &plan, boundary);
+        store_areas(Form::Full, ResultPass::Plain, plan.target(absorb.record), boundary);
         (true, true)
     } else if boundary.tracking() {
-        store_areas(Form::Short, ResultPass::Plain, absorb, &plan, boundary);
+        store_areas(Form::Short, ResultPass::Plain, plan.target(absorb.record), boundary);
         (true, false)
     } else {
         (false, false)
     };
-    if positioned { store_cell(ResultPass::Plain, absorb.record, boundary); }
+    if positioned {
+        let cell = boundary.cell(ResultPass::Plain, FIRST_AREA);
+        store_cell(absorb.record, cell, boundary);
+    }
     let summarized = matches!(absorb.selection.0, 0 | 1 | 5);
     if summarized {
         let summary = boundary.focus_summary();
@@ -332,10 +353,10 @@ fn update_grid(absorb: &Absorb, plan: &Plan, boundary: &mut impl AbsorbBoundary)
 fn area_indices(start: u8, count: u8) -> impl Iterator<Item = AreaIndex> { (start..count).map_while(AreaIndex::new) }
 
 /// Stores each area of `pass` into the record, the half press's first area taking the auxiliary
-/// reference in mode 7; a returning absorb with a pending lens point leaves the first area.
-fn store_areas(form: Form, pass: ResultPass, absorb: &Absorb, plan: &Plan, boundary: &mut impl AbsorbBoundary) {
-    let record = absorb.record;
-    let start = u8::from(plan.returning && plan.return_pending);
+/// reference in mode 7.
+pub(crate) fn store_areas(form: Form, pass: ResultPass, target: AreaTarget, boundary: &mut impl AbsorbBoundary) {
+    let record = target.record;
+    let start = u8::from(target.skip_first);
     let tracking = boundary.tracking();
     let count = boundary.result_areas();
     let require = boundary.requires_eligibility();
@@ -352,7 +373,7 @@ fn store_areas(form: Form, pass: ResultPass, absorb: &Absorb, plan: &Plan, bound
             Some(kind) => AreaAt::Tracked { pass: ResultPass::Plain, kind, index },
         };
         let area = boundary.result_area(at);
-        let auxiliary = auxiliary_reference(record, plan.mode, require, area.reference(), index, boundary);
+        let auxiliary = auxiliary_reference(record, target.mode, require, area.reference(), index, boundary);
         if index.get() == 0 { boundary.set_auxiliary(auxiliary.outcome); }
         if auxiliary.outcome == AuxiliaryOutcome::Replaced {
             boundary.store_auxiliary(record, index, &auxiliary);
@@ -375,7 +396,7 @@ fn store_areas(form: Form, pass: ResultPass, absorb: &Absorb, plan: &Plan, bound
             }
         }
     }
-    if plan.mode == AUXILIARY_MODE && boundary.auxiliary() != AuxiliaryOutcome::Replaced {
+    if target.mode == AUXILIARY_MODE && boundary.auxiliary() != AuxiliaryOutcome::Replaced {
         boundary.retain_result();
         boundary.mark_auxiliary_retained();
     }
@@ -417,11 +438,10 @@ fn auxiliary_reference(record: RecordHandle, mode: u32, require: bool, reference
     AuxiliaryReference { outcome, source, target, normalized: boundary.compensated(target) }
 }
 
-fn store_cell(pass: ResultPass, record: RecordHandle, boundary: &mut impl AbsorbBoundary) {
-    let Some(first) = AreaIndex::new(0) else { return };
-    let cell = boundary.cell(pass, first);
+/// Stores the plain summary of `cell` with the first area's weight.
+pub(crate) fn store_cell(record: RecordHandle, cell: GridCell, boundary: &mut impl AbsorbBoundary) {
     let summary = boundary.cell_summary(ResultPass::Plain, cell);
-    let weight = boundary.area_weight(first);
+    let weight = boundary.area_weight(FIRST_AREA);
     boundary.store_cell(record, &summary, weight);
 }
 

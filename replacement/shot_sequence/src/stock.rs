@@ -7,8 +7,10 @@ pub mod calculation;
 pub mod calculations;
 pub mod finish;
 pub mod pipeline;
+pub mod record_load;
 
 use crate::boundary::{ClientRef, FocusConfirmation, FocusHistory, FocusResult, LensPoint, LensReference, LensSnapshot};
+use crate::capture_boundary::ReferencePair;
 use crate::ports::{AbortStatus, HalfPressMode, HalfPressNotifications};
 use crate::preparation::{FrameHeader, HalfPressMask, HalfPressParameters};
 use crate::subjects::{Subject, SubjectId, SubjectList, CAPACITY, DETAIL_BYTES};
@@ -82,6 +84,7 @@ pub fn half_press_parameters(block: &[u8]) -> Option<HalfPressParameters> {
         lens_target: client(at(0x24)),
         frame_slot: client(at(0x2c)),
         lens_reference: LensReference(at(0x30)),
+        client_reference: ReferencePair { reference: at(0x3c), detail: at(0x38) },
     })
 }
 

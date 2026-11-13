@@ -18,6 +18,7 @@ fn parameters(mode: u32) -> HalfPressParameters {
         lens_target: None,
         frame_slot: Some(ClientRef(0x300)),
         lens_reference: REFERENCE,
+        ..HalfPressParameters::default()
     }
 }
 

@@ -21,6 +21,7 @@ pub mod pipeline;
 pub mod pipeline_work;
 pub mod ports;
 pub mod preparation;
+pub mod record_load;
 pub mod sequence;
 pub mod secondary_boundary;
 pub mod secondary_job;
@@ -130,3 +131,7 @@ mod absorb_tests;
 mod secondary_job_tests;
 #[cfg(test)]
 mod pipeline_work_tests;
+#[cfg(test)]
+mod calculation_fakes;
+#[cfg(test)]
+mod record_load_tests;

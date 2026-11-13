@@ -7,6 +7,7 @@ use crate::boundary::{
     Adjustment, Client, ClientRef, Diagnostics, Dump, Frame, Hold, Lens, LensReading, LensReference, Planner, Platform, Publication, Records,
     SelectionPlan, Setting, Trace,
 };
+use crate::capture_boundary::ReferencePair;
 use crate::ports::{HalfPressMode, HalfPressNotifications};
 use crate::subjects::{self, Candidates, SubjectServices};
 use crate::summary;
@@ -46,6 +47,8 @@ pub struct HalfPressParameters {
     pub lens_target: Option<ClientRef>,
     pub frame_slot: Option<ClientRef>,
     pub lens_reference: LensReference,
+    /// The record's third reference pair when the selection source is 46, 47, 54 or 56.
+    pub client_reference: ReferencePair,
 }
 
 /// What the frame header carries for the calculation task.
