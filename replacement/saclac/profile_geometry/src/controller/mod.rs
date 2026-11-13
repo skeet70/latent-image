@@ -38,12 +38,14 @@ pub enum Refusal {
     PipelineRefused,
     /// An argument outside what the entry takes.
     BadArgument,
+    /// The record mode is not in the state the request needs.
+    RecordState,
 }
 
 impl Refusal {
     pub const fn code(self) -> u32 {
         match self {
-            Refusal::AlreadyThere => 0x11,
+            Refusal::AlreadyThere | Refusal::RecordState => 0x11,
             Refusal::WrongState => 0x81,
             Refusal::BadArgument => 0x84,
             Refusal::PipelineRefused => 0x86,
