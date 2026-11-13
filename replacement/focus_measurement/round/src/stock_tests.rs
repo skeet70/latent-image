@@ -43,12 +43,12 @@ fn cadence_properties_use_mode_specific_keys_and_share_auxiliary_source_policy()
     use crate::stock::cadence_property;
     assert_eq!(cadence_property(Work::PrimaryAcquisition, Mode::Default).unwrap().word(), 0x4bc5);
     assert_eq!(cadence_property(Work::Search, Mode::RecordSelected).unwrap().word(), 0x4bc6);
-    assert_eq!(cadence_property(Work::Image, Mode::ResourceSelected).unwrap().word(), 0x4bcd);
+    assert_eq!(cadence_property(Work::Image, Mode::ProfileSelected).unwrap().word(), 0x4bce);
+    assert_eq!(cadence_property(Work::Image, Mode::AboveThreshold).unwrap().word(), 0x4bcf);
     assert_eq!(cadence_property(Work::Source, Mode::BelowThreshold).unwrap().word(), 0x4bd6);
     assert_eq!(cadence_property(Work::Source, Mode::ProfileSelected), cadence_property(Work::Auxiliary, Mode::ProfileSelected));
     assert_eq!(cadence_property(Work::Window, Mode::Default), None);
     assert_eq!(cadence_property(Work::SecondaryAcquisition, Mode::Default), None);
-    assert_eq!(cadence_property(Work::Search, Mode::Paused), None);
 }
 
 #[test]

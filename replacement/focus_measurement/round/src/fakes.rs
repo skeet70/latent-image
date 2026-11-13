@@ -1,8 +1,8 @@
 use crate::image::{ChannelCount, LensReport, ReplyPorts};
 use crate::lanes::Selection;
 use crate::planner::{Cadence, Mode, Work};
-use crate::pipeline::{Exposure, GainStep, Pipeline, PipelineSnapshot, PipelineWord, Statistics};
-use crate::profile::{FrameInterval, IntervalHistory, IntervalTracking, Profile, ProfileGeometry, ProfileMode, ProfileRecords, ProfileSelection, PublishedResult, StatisticsInUse, WindowPosition, WindowRecord, WindowStatus};
+use crate::pipeline::{Exposure, GainStep, Pipeline, PipelineSnapshot, PipelineWord, Statistics, TimingWord};
+use crate::profile::{FrameInterval, FrameRate, IntervalHistory, IntervalTracking, Profile, ProfileGeometry, ProfileMode, ProfileRecords, ProfileSelection, PublishedResult, StatisticsInUse, WindowPosition, WindowRecord, WindowStatus};
 use crate::record::{self, AlternateSearch, Power, Request, Settings, Trace, TraceMark};
 use crate::window::{self, WindowResult};
 use xm1_saclac_controllers::replies;
@@ -42,6 +42,8 @@ impl Records {
                 mode: ProfileMode(0),
                 interval_tracking: IntervalTracking::Keep,
                 geometry_on_autofocus: false,
+                profile_cadence: false,
+                frame_rate_cadence: false,
             },
             geometry: ProfileGeometry {
                 resource: GeometryPair([0; 2]),
@@ -76,7 +78,12 @@ pub struct Ports<X = ()> {
     pub alternate: AlternateSearch,
     pub interval_history: bool,
     pub calibration: GeometryCalibration,
-    pub frame_interval: Option<FrameInterval>,
+    /// The pipeline's current timing.
+    pub timing: TimingWord,
+    /// Frame intervals by timing; a timing not listed has none.
+    pub intervals: Vec<(TimingWord, FrameInterval)>,
+    pub frame_rate_threshold: FrameRate,
+    pub cadence: fn(Work, Mode) -> Cadence,
     pub snapshot: PipelineSnapshot,
     pub window_refresh: bool,
     pub gain_offsets: [u32; 11],
@@ -97,7 +104,10 @@ impl<X> Ports<X> {
             alternate: AlternateSearch::Never,
             interval_history: false,
             calibration: GeometryCalibration([0; 4]),
-            frame_interval: None,
+            timing: TimingWord(0x7000),
+            intervals: Vec::new(),
+            frame_rate_threshold: FrameRate(0),
+            cadence: |_, _| Cadence { first: true, second: true, third: true, fourth: true },
             snapshot: PipelineSnapshot::default(),
             window_refresh: false,
             gain_offsets: [0; 11],
@@ -112,6 +122,13 @@ impl<X> Ports<X> {
     }
 
     pub fn take(&mut self) -> Vec<Outbound> { core::mem::take(&mut self.outbound) }
+
+    /// Gives the pipeline's current timing `interval`, or none.
+    pub fn set_current_interval(&mut self, interval: Option<FrameInterval>) {
+        let timing = self.timing;
+        self.intervals.retain(|&(listed, _)| listed != timing);
+        if let Some(interval) = interval { self.intervals.push((timing, interval)); }
+    }
 }
 
 impl<X> ProfileRecords for Ports<X> {
@@ -148,7 +165,8 @@ impl<X> ProfileRecords for Ports<X> {
 impl<X> Settings for Ports<X> {
     fn search_permitted(&mut self) -> bool { self.search_permitted }
     fn alternate_search(&mut self) -> AlternateSearch { self.alternate }
-    fn cadence(&mut self, _: Work, _: Mode) -> Cadence { Cadence { first: true, second: true, third: true, fourth: true } }
+    fn cadence(&mut self, work: Work, mode: Mode) -> Cadence { (self.cadence)(work, mode) }
+    fn frame_rate_threshold(&mut self) -> FrameRate { self.frame_rate_threshold }
     fn keeps_interval_history(&mut self) -> bool { self.interval_history }
     fn geometry_calibration(&mut self) -> GeometryCalibration { self.calibration }
     fn traces_measurement(&mut self) -> bool { self.traces }
@@ -156,7 +174,10 @@ impl<X> Settings for Ports<X> {
 
 impl<X> Pipeline for Ports<X> {
     fn capture(&mut self, statistics: Statistics) { self.outbound.push(Outbound::Capture(statistics)); }
-    fn frame_interval(&mut self) -> Option<FrameInterval> { self.frame_interval }
+    fn timing(&mut self) -> TimingWord { self.timing }
+    fn frame_interval(&mut self, timing: TimingWord) -> Option<FrameInterval> {
+        self.intervals.iter().find(|&&(listed, _)| listed == timing).map(|&(_, interval)| interval)
+    }
     fn request_mode_six_statistics(&mut self) { self.outbound.push(Outbound::ModeSixStatistics); }
     fn snapshot(&mut self, _: Statistics) -> PipelineSnapshot { self.snapshot }
     fn take_window_refresh(&mut self) -> bool { core::mem::take(&mut self.window_refresh) }

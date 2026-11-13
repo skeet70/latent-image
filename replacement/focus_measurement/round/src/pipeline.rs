@@ -12,6 +12,11 @@ pub enum Statistics { Primary, Search, Auxiliary, History }
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PipelineWord(pub u32);
 
+/// A sensor timing the pipeline runs or the acquisition programs; the pipeline
+/// derives its frame interval.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TimingWord(pub u32);
+
 /// Index of the gain-offset settings.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct GainStep(pub u32);
@@ -31,8 +36,10 @@ pub struct PipelineSnapshot {
 pub trait Pipeline {
     fn capture(&mut self, statistics: Statistics);
     fn snapshot(&mut self, statistics: Statistics) -> PipelineSnapshot;
-    /// `None` when the pipeline's current timing has no known interval.
-    fn frame_interval(&mut self) -> Option<FrameInterval>;
+    /// The timing the pipeline currently runs.
+    fn timing(&mut self) -> TimingWord;
+    /// `None` when `timing` has no known interval.
+    fn frame_interval(&mut self, timing: TimingWord) -> Option<FrameInterval>;
     /// Requests the mode-six statistics unless a request is outstanding.
     fn request_mode_six_statistics(&mut self);
     /// Takes the flag the pipeline raises for the next window request.

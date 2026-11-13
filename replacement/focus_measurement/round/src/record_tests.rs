@@ -119,7 +119,7 @@ fn the_interval_history_keeps_the_last_ten_intervals() {
 #[test]
 fn a_running_tick_records_the_frame_interval_or_clears_the_history_by_profile() {
     let mut ports = Ports::new(Some(ACQUISITION), ());
-    ports.frame_interval = Some(FrameInterval(33_333));
+    ports.set_current_interval(Some(FrameInterval(33_333)));
     apply(RecordEffect::SelectionHistory, record(), &mut ports);
     assert!(ports.records.intervals.intervals().is_empty());
 
@@ -129,7 +129,7 @@ fn a_running_tick_records_the_frame_interval_or_clears_the_history_by_profile() 
     apply(RecordEffect::SelectionHistory, record(), &mut ports);
     assert_eq!(ports.records.intervals.intervals(), intervals(&[33_333, 33_333]));
 
-    ports.frame_interval = None;
+    ports.set_current_interval(None);
     apply(RecordEffect::SelectionHistory, record(), &mut ports);
     assert_eq!(ports.records.intervals.intervals().len(), 2);
 
@@ -142,7 +142,7 @@ fn a_running_tick_records_the_frame_interval_or_clears_the_history_by_profile() 
 fn a_plan_that_considered_primary_acquisition_updates_the_interval_history() {
     let mut ports = Ports::new(Some(ACQUISITION), ());
     ports.interval_history = true;
-    ports.frame_interval = Some(FrameInterval(16_666));
+    ports.set_current_interval(Some(FrameInterval(16_666)));
     ports.records.profile.interval_tracking = IntervalTracking::Record;
     apply(RecordEffect::Planned { primary_considered: false }, record(), &mut ports);
     assert!(ports.records.intervals.intervals().is_empty());

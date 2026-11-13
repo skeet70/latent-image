@@ -58,7 +58,8 @@ pub fn lane_flags(lanes: Lanes) -> u8 {
 pub struct SchedulingProperty(u32);
 impl SchedulingProperty { pub const fn word(self) -> u32 { self.0 } }
 
-/// X-M1 1.50: 0xfa72d0..0xfa72e8 reads the property keys at 0xfab110.
+/// X-M1 1.50: 0xfa72d0..0xfa72e8 reads the configuration bytes keyed at 0xfab110
+/// (seven per work, by mode word); mode words 2 and 6 are never stored at 0x16d877c.
 pub const fn cadence_property(work: crate::planner::Work, mode: crate::planner::Mode) -> Option<SchedulingProperty> {
     use crate::planner::{Mode, Work};
     let base = match work {
@@ -69,12 +70,14 @@ pub const fn cadence_property(work: crate::planner::Work, mode: crate::planner::
         Work::SecondaryAcquisition | Work::Window => return None,
     };
     let offset = match mode {
-        Mode::Default => 5, Mode::RecordSelected => 0, Mode::ResourceSelected => 1,
+        Mode::Default => 5, Mode::RecordSelected => 0,
         Mode::ProfileSelected => 2, Mode::AboveThreshold => 3, Mode::BelowThreshold => 4,
-        Mode::Paused => return None,
     };
     Some(SchedulingProperty(base + offset))
 }
+
+/// X-M1 1.50: 0xfa9a20 reads this configuration byte as the frame-rate threshold.
+pub const FRAME_RATE_THRESHOLD: SchedulingProperty = SchedulingProperty(0x4bd8);
 
 pub const fn cadence(word: u32) -> crate::planner::Cadence {
     crate::planner::Cadence { first: word & 1 != 0, second: word & 2 != 0, third: word & 4 != 0, fourth: word & 8 != 0 }

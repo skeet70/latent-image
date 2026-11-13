@@ -46,6 +46,17 @@ pub enum IntervalTracking { Clear, Record, Keep }
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct FrameInterval(pub u32);
 
+impl FrameInterval {
+    /// One million over the interval, keeping the low sixteen bits; zero for a zero interval.
+    pub const fn rate(self) -> FrameRate {
+        match 1_000_000u32.checked_div(self.0) { Some(rate) => FrameRate(rate as u16), None => FrameRate(0) }
+    }
+}
+
+/// Frames per second as the planner compares them.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct FrameRate(pub u16);
+
 /// The last ten frame intervals the round recorded, oldest first.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct IntervalHistory {
@@ -82,6 +93,10 @@ pub struct Profile {
     pub interval_tracking: IntervalTracking,
     /// An autofocus command refreshes the measurement geometry.
     pub geometry_on_autofocus: bool,
+    /// The planner takes the profile's own cadence.
+    pub profile_cadence: bool,
+    /// The planner takes its cadence by the acquisition's frame rate.
+    pub frame_rate_cadence: bool,
 }
 
 /// The profile's part of the measurement geometry.

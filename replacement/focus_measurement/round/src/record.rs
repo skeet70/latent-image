@@ -5,7 +5,7 @@
 
 use crate::pipeline::{Exposure, Pipeline, Statistics};
 use crate::planner::{Cadence, Mode, Work};
-use crate::profile::{IntervalHistory, IntervalTracking, ProfileRecords, ProfileSelection, PublishedResult};
+use crate::profile::{FrameRate, IntervalHistory, IntervalTracking, ProfileRecords, ProfileSelection, PublishedResult};
 use crate::round::{ParameterClient, RecordEffect, SearchStart};
 use xm1_saclac_controllers::replies;
 use xm1_saclac_interface::round::{GeometryCalibration, MeasurementGeometry};
@@ -31,6 +31,8 @@ pub trait Settings {
     fn search_permitted(&mut self) -> bool;
     fn alternate_search(&mut self) -> AlternateSearch;
     fn cadence(&mut self, work: Work, mode: Mode) -> Cadence;
+    /// The frame rate that separates the planner's two frame-rate cadences.
+    fn frame_rate_threshold(&mut self) -> FrameRate;
     /// Whether the round keeps the frame-interval history at all.
     fn keeps_interval_history(&mut self) -> bool;
     fn geometry_calibration(&mut self) -> GeometryCalibration;
@@ -145,7 +147,8 @@ fn collect(record: RecordHandle, ports: &mut impl Ports) {
 }
 
 fn record_interval(record: RecordHandle, ports: &mut impl Ports) {
-    let Some(interval) = ports.frame_interval() else { return };
+    let timing = ports.timing();
+    let Some(interval) = ports.frame_interval(timing) else { return };
     let mut history = ports.interval_history();
     history.record(interval);
     ports.set_interval_history(record, history);

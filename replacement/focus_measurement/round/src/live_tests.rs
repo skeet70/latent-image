@@ -4,9 +4,9 @@ use crate::image::{ChannelCount, ImagePeer, LensReport};
 use crate::jobs::{self, Calculation};
 use crate::lanes::Selection;
 use crate::live::{Effects, Measurement};
-use crate::planner::Mode;
-use crate::pipeline::Statistics;
-use crate::profile::{WindowPosition, WindowStatus};
+use crate::pipeline::{Statistics, TimingWord};
+use crate::planner::{Cadence, Mode, Work};
+use crate::profile::{FrameInterval, FrameRate, ProfileSelection, WindowPosition, WindowStatus};
 use crate::record::Request;
 use crate::window::WindowResult;
 use crate::round::{LaneSignal, LaneStatus};
@@ -23,7 +23,7 @@ enum Traffic {
     Fault,
 }
 
-struct Live { traffic: Vec<Traffic>, source_ready: bool, failed: bool }
+struct Live { traffic: Vec<Traffic>, source_ready: bool, failed: bool, programmed: Option<TimingWord> }
 
 impl Live {
     fn take(&mut self) -> Vec<Traffic> { core::mem::take(&mut self.traffic) }
@@ -31,10 +31,9 @@ impl Live {
 
 type Fake = Ports<Live>;
 
-fn fake(available: Selection) -> Fake { Ports::new(Some(available), Live { traffic: Vec::new(), source_ready: false, failed: false }) }
+fn fake(available: Selection) -> Fake { Ports::new(Some(available), Live { traffic: Vec::new(), source_ready: false, failed: false, programmed: None }) }
 
 impl Effects for Fake {
-    fn planning_mode(&mut self, _: RecordHandle) -> Mode { Mode::Default }
     fn fault(&mut self) { self.extra.traffic.push(Traffic::Fault); }
     fn search(&mut self, signal: LaneSignal<'_>, _: RecordHandle) -> LaneStatus {
         let (name, status) = match signal {
@@ -50,7 +49,10 @@ impl Effects for Fake {
     fn calculation(&mut self, _: RecordHandle, calculation: Calculation, effect: jobs::Effect) { self.extra.traffic.push(Traffic::Calculation(calculation, effect)); }
     fn source_available(&mut self, _: RecordHandle) -> bool { self.extra.source_ready }
     fn result_changed(&mut self, _: RecordHandle, _: Calculation) -> bool { false }
-    fn acquisition(&mut self, _: RecordHandle, effect: acquisition::Effect) { self.extra.traffic.push(Traffic::Acquisition(effect)); }
+    fn acquisition(&mut self, _: RecordHandle, effect: acquisition::Effect) -> Option<TimingWord> {
+        self.extra.traffic.push(Traffic::Acquisition(effect));
+        if effect == acquisition::Effect::Initialize { self.extra.programmed } else { None }
+    }
     fn selection_changed(&mut self, _: RecordHandle) -> bool { false }
     fn image(&mut self, _: RecordHandle, request: ImagePeer<'_>) {
         self.extra.traffic.push(Traffic::Image(match request {
@@ -182,4 +184,47 @@ fn a_parameter_change_with_nothing_to_change_answers_its_client() {
         Outbound::ClearPending(target),
         Outbound::Reply { target, callback: stock::optional_callback(0xf0a0).unwrap(), status: CompletionStatus(0), values: [0; 3] },
     ]);
+}
+
+fn primary_in(mode: Mode, work: Work, current: Mode) -> Cadence {
+    let admitted = work != Work::PrimaryAcquisition || current == mode;
+    Cadence { first: admitted, second: admitted, third: admitted, fourth: admitted }
+}
+fn fast(work: Work, mode: Mode) -> Cadence { primary_in(Mode::AboveThreshold, work, mode) }
+fn slow(work: Work, mode: Mode) -> Cadence { primary_in(Mode::BelowThreshold, work, mode) }
+fn by_record(work: Work, mode: Mode) -> Cadence { primary_in(Mode::RecordSelected, work, mode) }
+fn by_profile(work: Work, mode: Mode) -> Cadence { primary_in(Mode::ProfileSelected, work, mode) }
+
+/// A round over a profile that paces by frame rate, after `configure`; whether its first tick submits primary acquisition.
+fn submits_primary(configure: impl FnOnce(&mut Fake)) -> bool {
+    let mut measurement = Measurement::new();
+    let mut fake = fake(ACQUISITION);
+    fake.records.profile.frame_rate_cadence = true;
+    fake.frame_rate_threshold = FrameRate(30);
+    fake.extra.programmed = Some(TimingWord(0x55));
+    fake.set_current_interval(Some(FrameInterval(1_000)));
+    configure(&mut fake);
+    measurement.handle(control(MeasurementControl::Initialize), &mut fake);
+    fake.extra.take();
+    measurement.handle(completion(Completion::Accessor4b), &mut fake);
+    fake.extra.take().contains(&Traffic::Acquisition(acquisition::Effect::SubmitPrimary(Pass::First)))
+}
+
+#[test]
+fn a_frame_rate_profile_paces_the_round_by_the_acquisitions_timing() {
+    let paced = |interval: u32, cadence: fn(Work, Mode) -> Cadence| submits_primary(|fake| {
+        fake.intervals.push((TimingWord(0x55), FrameInterval(interval)));
+        fake.cadence = cadence;
+    });
+    assert!(paced(33_333, fast));
+    assert!(!paced(40_000, fast));
+    assert!(paced(40_000, slow));
+    assert!(submits_primary(|fake| fake.cadence = slow));
+}
+
+#[test]
+fn record_and_profile_selection_take_precedence_over_the_frame_rate() {
+    assert!(submits_primary(|fake| { fake.records.profile.selection = ProfileSelection::Record; fake.cadence = by_record; }));
+    assert!(submits_primary(|fake| { fake.records.profile.profile_cadence = true; fake.cadence = by_profile; }));
+    assert!(!submits_primary(|fake| { fake.records.profile.profile_cadence = true; fake.cadence = by_record; }));
 }

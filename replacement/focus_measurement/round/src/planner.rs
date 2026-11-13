@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use crate::lanes::{Lane, Lanes};
+use crate::profile::FrameRate;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Work { PrimaryAcquisition, SecondaryAcquisition, Search, Auxiliary, Image, Window, Source }
@@ -17,17 +18,23 @@ impl Work {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SamplingBand { AboveThreshold, BelowThreshold }
 
+impl SamplingBand {
+    /// A rate equal to the threshold is above it.
+    pub const fn of(rate: FrameRate, threshold: FrameRate) -> Self {
+        if rate.0 >= threshold.0 { Self::AboveThreshold } else { Self::BelowThreshold }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ModeInputs {
     pub record_selected: bool,
-    pub resource_selected: bool,
     pub profile_selected: bool,
+    /// `None` when the profile does not pace the planner by frame rate.
     pub automatic_sampling: Option<SamplingBand>,
 }
 
 pub const fn classify_mode(inputs: ModeInputs) -> Mode {
     if inputs.record_selected { Mode::RecordSelected }
-    else if inputs.resource_selected { Mode::ResourceSelected }
     else if inputs.profile_selected { Mode::ProfileSelected }
     else { match inputs.automatic_sampling {
         Some(SamplingBand::AboveThreshold) => Mode::AboveThreshold,
@@ -37,7 +44,7 @@ pub const fn classify_mode(inputs: ModeInputs) -> Mode {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Mode { Default, RecordSelected, ResourceSelected, ProfileSelected, AboveThreshold, BelowThreshold, Paused }
+pub enum Mode { Default, RecordSelected, ProfileSelected, AboveThreshold, BelowThreshold }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Phase { First, Second, Third, Fourth }
@@ -55,7 +62,11 @@ impl Cadence {
     }
 }
 
-pub trait Policy { fn cadence(&mut self, work: Work, mode: Mode) -> Cadence; }
+pub trait Policy {
+    /// Asked once per cycle, before the cycle's first selection.
+    fn mode(&mut self) -> Mode;
+    fn cadence(&mut self, work: Work, mode: Mode) -> Cadence;
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Slot { First, Second }
@@ -84,10 +95,9 @@ impl Planner {
         Self { first_cursor: 0, second_cursor: 0, phase: Phase::First, mode: Mode::Default, first_running: None, second_running: None }
     }
 
-    pub fn next(&mut self, mode: Mode, enabled: Lanes, policy: &mut impl Policy) -> Plan {
-        if self.first_cursor == 0 && self.second_cursor == 0 { self.mode = mode; }
+    pub fn next(&mut self, enabled: Lanes, policy: &mut impl Policy) -> Plan {
+        if self.first_cursor == 0 && self.second_cursor == 0 { self.mode = policy.mode(); }
         let mut plan = Plan { first: None, second: None, primary_considered: false, cycle_complete: false };
-        if self.mode == Mode::Paused { return plan; }
         if self.first_running.is_none() {
             plan.first = Self::select(&[Work::Window, Work::Search, Work::Image, Work::Source], &mut self.first_cursor, self.phase, self.mode, enabled, policy, &mut plan.primary_considered);
         }

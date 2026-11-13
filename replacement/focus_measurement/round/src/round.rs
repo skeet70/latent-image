@@ -75,9 +75,10 @@ pub struct Round {
 
 impl Default for Round { fn default() -> Self { Self::new() } }
 
-struct Cadences<'a, E>(&'a mut E);
+struct Cadences<'a, E> { record: RecordHandle, env: &'a mut E }
 impl<E: Environment> Policy for Cadences<'_, E> {
-    fn cadence(&mut self, work: Work, mode: Mode) -> Cadence { self.0.cadence(work, mode) }
+    fn mode(&mut self) -> Mode { self.env.planning_mode(self.record) }
+    fn cadence(&mut self, work: Work, mode: Mode) -> Cadence { self.env.cadence(work, mode) }
 }
 
 impl Round {
@@ -400,9 +401,8 @@ impl Round {
     fn fan_run(&mut self, record: RecordHandle, env: &mut impl Environment) -> LaneStatus {
         if self.fan == Fan::Stopping { env.fault(); return LaneStatus::Refused; }
         loop {
-            let mode = env.planning_mode(record);
             let enabled = self.selected;
-            let plan = self.planner.next(mode, enabled, &mut Cadences(env));
+            let plan = self.planner.next(enabled, &mut Cadences { record, env: &mut *env });
             env.record_effect(record, RecordEffect::Planned { primary_considered: plan.primary_considered });
             let first = self.dispatch(Slot::First, plan.first, record, env);
             let second = self.dispatch(Slot::Second, plan.second, record, env);
