@@ -137,9 +137,9 @@ pub struct Adjustment {
 /// What the shot's exposure step and its calculation step read back from the engine.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Outcome {
-    /// The level the evaluation concluded at and the level it is measured against.
-    pub base_level: i32,
-    pub reference_level: i32,
+    /// The scene admits a subject treatment (0xfa672c), and admits the first (0xfa66d4).
+    pub treated: bool,
+    pub first_treatment: bool,
     /// The adjustment path replaces the evaluation's conclusion.
     pub adjusting: bool,
     /// Nonzero when the conclusion is exported to the frame.

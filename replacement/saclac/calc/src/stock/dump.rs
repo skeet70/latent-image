@@ -27,7 +27,7 @@ pub const fn configuration(frame: SharedAddress, index: usize) -> SharedAddress 
 
 pub const fn subjects_present(frame: SharedAddress) -> SharedAddress { at(frame, 0x1074) }
 
-pub const fn base_level_present(frame: SharedAddress) -> SharedAddress { at(frame, 0x1078) }
+pub const fn treated(frame: SharedAddress) -> SharedAddress { at(frame, 0x1078) }
 
 /// The record's level tables relative to the focus level, one word per point (0xf6ae48..0xf6aea8).
 pub const fn level_table(frame: SharedAddress, table: usize, point: usize) -> SharedAddress {
