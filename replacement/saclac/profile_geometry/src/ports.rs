@@ -1,0 +1,599 @@
+#![forbid(unsafe_code)]
+
+//! What the layer calls outside itself; saclac's composition root binds each trait.
+
+use xm1_saclac_interface::pipeline::FormatPayload;
+
+use crate::geometry::{AreaQuery, GeometryStart};
+use crate::memory::Location;
+use crate::profile::{PipelineGroup, ProfileHandle, QuadGroup, Rectangle};
+use crate::stock::areas::TransitionAreas;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConfigOffset(pub u32);
+
+pub trait Configuration {
+    /// 0x69f8fc.
+    fn byte(&mut self, offset: ConfigOffset) -> u8;
+    /// 0x69fec8.
+    fn halfword(&mut self, offset: ConfigOffset) -> u16;
+    /// 0x69ff7c.
+    fn signed_halfword(&mut self, offset: ConfigOffset) -> i16;
+    /// 0x746834.
+    fn collapse_index(&mut self, value: u32) -> u32;
+    /// 0x7468b8.
+    fn transform(&mut self, value: u32, scale: u32) -> u16;
+    /// 0x74677c.
+    fn split_index(&mut self) -> u8;
+}
+
+/// An image pipeline channel the controller's requests name.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PipelineChannel(pub u32);
+
+/// A set of pipeline stages, one bit each.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Stages(pub u32);
+
+pub trait Pipeline {
+    /// Stops `stages` on `channel`; false when the pipeline refuses (0xd9f504).
+    fn stop(&mut self, channel: PipelineChannel, stages: Stages) -> bool;
+    /// 0xd9ef3c.
+    fn release(&mut self, channel: PipelineChannel, stages: Stages);
+    /// 0xd9f0a0.
+    fn settle(&mut self);
+    /// 0xd5d27c.
+    fn release_capture_hardware(&mut self);
+    /// Releases the configuration the controller handed the pipeline (0xd5d268).
+    fn release_configuration_hardware(&mut self);
+    /// Enables `stages` with the payloads at `payloads`; false when refused (0xd9f7c0).
+    fn enable(&mut self, channel: PipelineChannel, stages: Stages, payloads: Location) -> bool;
+    /// 0xd9f7d8.
+    fn disable(&mut self, channel: PipelineChannel, stages: Stages) -> bool;
+    /// Applies the payloads at `payloads` to running `stages` (0xd9f828).
+    fn apply(&mut self, channel: PipelineChannel, stages: Stages, payloads: Location) -> bool;
+    /// Sends the geometry records at `records` that `stages` names (0xd9fd54).
+    fn configure(&mut self, channel: PipelineChannel, stages: Stages, records: Location) -> bool;
+    /// Hands `stages` of the configuration at `configuration` back to the pipeline (0xd5e1f4).
+    fn restore_stages(&mut self, configuration: Location, stages: Stages);
+}
+
+/// The parameter fields the pipeline's mode payload depends on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ModeRequest {
+    pub group: PipelineGroup,
+    pub index_scale: u8,
+    pub index: u8,
+    pub shift: i16,
+    pub mode: u8,
+    pub first: Location,
+    pub second: Location,
+    pub mode_byte: i8,
+}
+
+/// The sensor window a windowed primary payload covers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PrimaryWindow {
+    pub rectangle: Rectangle,
+    pub offset: u32,
+    pub scale: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PrimaryPayload {
+    pub entries: u32,
+    /// Zero leaves the primary payload stage off.
+    pub count: u16,
+    pub first_offset: u16,
+    pub second_offset: u16,
+    pub option: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SecondaryWindow {
+    pub rectangle: Rectangle,
+    pub origin: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SecondaryPayload {
+    pub first: u16,
+    pub second: u16,
+    pub value: u32,
+    pub extra: u32,
+}
+
+/// The pipeline layer's payload builders.
+pub trait StagePayloads {
+    /// Fills the mode payloads at `into`; the mode stages it filled (0xda0ab0).
+    fn mode_payload(&mut self, request: &ModeRequest, into: Location) -> Stages;
+    /// Fills the tertiary payload at `into`; the stages it filled (0xda09f4).
+    fn tertiary_payload(&mut self, group: PipelineGroup, index_scale: u8, index: u8, into: Location) -> Stages;
+    /// False when the pipeline refuses (0xda027c on channel 2, format stage).
+    fn set_format(&mut self, payload: &FormatPayload) -> bool;
+    /// The configuration byte that selects the quad gains for `group`, if the group has one
+    /// (0xdabb38).
+    fn quad_selection_offset(&mut self, group: PipelineGroup) -> Option<ConfigOffset>;
+    /// The quad gains at `limit`; `base_only` leaves out the trims (0xdab6f8).
+    fn quad_gains(&mut self, group: QuadGroup, limit: i16, base_only: bool) -> [u16; 4];
+    /// 0xda1acc.
+    fn quad_area_scale(&mut self, area: u32) -> u32;
+    /// 0xda1af8.
+    fn quad_area_limit(&mut self) -> u16;
+    /// The primary payload for `group`, over `window` when the profile's policy has one; `None`
+    /// when the group has none (0xdaba08).
+    fn primary_payload(&mut self, group: PipelineGroup, window: Option<PrimaryWindow>) -> Option<PrimaryPayload>;
+    /// 0xdab900.
+    fn secondary_payload(&mut self, group: PipelineGroup, window: Option<SecondaryWindow>) -> Option<SecondaryPayload>;
+    /// Whether `group`'s primary payload takes a window under policy 0x40 (0xdabbac).
+    fn has_windowed_payload(&mut self, group: PipelineGroup) -> bool;
+}
+
+/// One setting of the pipeline's scan configuration object, each taken by its own builder entry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScanSetting {
+    /// 0xd783ec.
+    ProcessingOption(u32),
+    /// 0xd7910c.
+    OutputMode(u32),
+    /// 0xd7912c.
+    ScanOption(bool),
+    /// 0xd78af0.
+    GeometryKind(u32),
+    /// 0xd784ac.
+    RecordProcessing(u32),
+    /// 0xd79364.
+    RecordProcessingThird(u32),
+    /// 0xd784cc.
+    RecordProcessingSecond(u32),
+    /// 0xd785e0.
+    Toggle(u32),
+    /// 0xd78a6c.
+    QueryKind(u32),
+    /// 0xd78a80.
+    Format(u32),
+    /// 0xd78660.
+    Code(u32),
+    /// 0xd77f7c.
+    QueryMode(u32),
+    /// 0xd77fec.
+    PrimaryRecordKind(u32),
+    /// 0xd7805c.
+    SecondaryRecordKind(u32),
+    /// 0xd78674.
+    Channel(u32),
+    /// 0xd78508.
+    GeometryEnabled(u32),
+    /// 0xd78538.
+    FormatCompanion(u32),
+    /// 0xd78070.
+    OffsetSum(u32),
+    /// 0xd786ac with a leading zero.
+    OffsetSumLow(u16),
+    /// 0xd78db8.
+    ScanRate(u32),
+    /// 0xd787b8 with a leading zero.
+    Limit(u16),
+    /// 0xd789f0.
+    Dimensions(u32),
+    /// 0xd785a8.
+    Fixed(u32),
+    /// 0xd78f80.
+    LimitTenths(u16),
+    /// 0xd78f9c.
+    Rate(u16),
+    /// 0xd78400.
+    RateCompanion(u32),
+    /// 0xd78eec.
+    Byte70(u8),
+    /// 0xd790f8.
+    ProcessingLevel(u32),
+    /// 0xd79344.
+    AreaPresent(bool),
+    /// 0xd792e4.
+    FirstOf(u32),
+    /// 0xd79324.
+    Split(u32),
+    /// 0xd79304.
+    Multiple(bool),
+    /// 0xd7914c.
+    WhiteBalance([u16; 3]),
+    /// 0xd78fb8.
+    OutputLevel(u32),
+    /// 0xd7868c.
+    ChannelCode(u32),
+}
+
+/// The four parts of a scan object a caller's export buffer takes, in their stock order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScanExport {
+    /// 0xd5e0d4.
+    Settings,
+    /// 0xd5dfc4.
+    Geometry,
+    /// 0xd5dfec.
+    Values,
+    /// 0xd5e120.
+    Curve,
+}
+
+impl ScanExport {
+    pub const ALL: [ScanExport; 4] = [ScanExport::Settings, ScanExport::Geometry, ScanExport::Values, ScanExport::Curve];
+
+    /// The part's offset in the export buffer.
+    pub const fn offset(self) -> u32 {
+        match self {
+            ScanExport::Settings => 0,
+            ScanExport::Geometry => 56,
+            ScanExport::Values => 100,
+            ScanExport::Curve => 118,
+        }
+    }
+}
+
+/// The pipeline layer's scan objects, which the controller fills, compiles and attaches.
+pub trait ScanConfiguration {
+    fn set(&mut self, scan: Location, setting: ScanSetting);
+    /// Zeroes the scan object (0xd77abc).
+    fn clear_scan(&mut self, scan: Location);
+    /// 0xd791b0.
+    fn default_scan(&mut self, scan: Location);
+    /// `codes` at the index of the first channel threshold at or above `channel` (0xd5dce8).
+    fn channel_code(&mut self, channel: u32, codes: &'static [u16; 10]) -> u16;
+    fn export_scan(&mut self, scan: Location, part: ScanExport, out: StockData);
+    /// The compile entries 0xd5e208 to 0xd5e538 in their stock order; `output_kind` goes to
+    /// 0xd5e240.
+    fn compile_scan_configuration(&mut self, output_kind: u8);
+    /// Copies the selection block's callbacks into the compiled configuration (0xd5e0f8,
+    /// 0xd5dfd4, 0xd5e05c, 0xd5e168).
+    fn apply_selection(&mut self, selection: Location, configuration: Location);
+    /// 0xd5e1d4.
+    fn attach_scan_configuration(&mut self, configuration: Location, stages: Stages);
+    /// 0x772ff8.
+    fn rate_code(&mut self, offset_sum: u32) -> u32;
+    /// 0x10065fc.
+    fn limit_tenths(&mut self, limit: i16) -> u16;
+    /// 0x1004618.
+    fn output_level(&mut self) -> u32;
+    /// 0x747b50.
+    fn channel_count(&mut self) -> u8;
+}
+
+/// A radial model the image's radial geometry derives from 31 coefficients; its layout is the
+/// model's own.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RadialModel(pub [u32; 9]);
+
+/// The coefficients, scales and results of one radial table, as the radial model reads and
+/// writes them.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RadialBuffer {
+    pub points: [u32; 31],
+    pub scales: [u16; 2],
+    pub bounds: [u16; 2],
+    pub gains: [u16; 2],
+    pub shift: u16,
+}
+
+/// The image-4 radial geometry the scan stages use; every call takes the pixel clock pair.
+pub trait RadialGeometry {
+    /// 0x6e3b0c.
+    fn radial_model(&mut self, points: &[u32; 31]) -> RadialModel;
+    /// Refits the table for the compact pipeline group; false when refused (0x6e3744).
+    fn fit_compact(&mut self, clocks: (u32, u32), model: &RadialModel, table: &mut RadialBuffer) -> bool;
+    /// 0x6e3488.
+    fn radial_bound(&mut self, clocks: (u32, u32)) -> u16;
+    /// 0x6e3400.
+    fn radial_centre(&mut self, model: &mut RadialModel) -> u32;
+    /// 0x6e35f4.
+    fn radial_extent(&mut self, clocks: (u32, u32), centre: u32, bound: u16, gain: u16) -> u16;
+    /// The table's block shift (0x6e384c).
+    fn radial_table(
+        &mut self,
+        clocks: (u32, u32),
+        pair: [u32; 2],
+        model: &RadialModel,
+        extent: u16,
+        scales: [u16; 2],
+        gain: u16,
+    ) -> u16;
+}
+
+/// One of the two handler units 0x7411c4 serves.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HandlerUnit {
+    First,
+    Second,
+}
+
+/// A stock code address the layer stores or calls but does not own.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct StockCode(pub u32);
+
+impl StockCode {
+    pub const fn is_set(self) -> bool { self.0 != 0 }
+}
+
+pub trait Handlers {
+    /// Attaches the controller's handler to `unit`; the handle, or the unit's refusal code
+    /// (0x7411c4).
+    fn attach(&mut self, unit: HandlerUnit) -> Result<u32, u32>;
+    /// Detaches `handle` from `unit`; zero or the unit's refusal code (0x74140c).
+    fn detach(&mut self, unit: HandlerUnit, handle: u32) -> u32;
+    /// Enters the completion `operation`'s starter stored, telling it the controller stopped it.
+    fn notify_stopped(&mut self, operation: crate::controller::Operation, callback: StockCode);
+}
+
+/// The dump block's two regions, declared at initialization (0x75e6d8, 0x75e704, 0x75e6f0).
+pub trait DumpRegions {
+    fn reserve_region(&mut self, region: u32, address: u32, bytes: u32);
+    fn register_region(&mut self, region: u32, address: u32, bytes: u32);
+    fn release_region(&mut self, region: u32);
+}
+
+/// The image's diagnostic label tables.
+pub trait DiagnosticLabels {
+    /// Writes the label of `profile` and returns its length.
+    fn profile_label(&mut self, profile: ProfileHandle, into: &mut [u8]) -> usize;
+    /// Writes the label of profile feature `feature` and returns its length.
+    fn feature_label(&mut self, feature: u8, into: &mut [u8]) -> usize;
+    /// The label shown instead of the description while the description is fixed.
+    fn fixed_label(&mut self, into: &mut [u8]) -> usize;
+    /// The separator after the integer part and the suffix after the fraction.
+    fn rate_separator(&mut self, into: &mut [u8]) -> usize;
+    fn rate_suffix(&mut self, into: &mut [u8]) -> usize;
+}
+
+/// The rate the diagnostic description shows for profiles of kind 2 and 3 (0x1007ce0).
+pub trait ConfiguredRate {
+    fn configured_rate(&mut self) -> u16;
+}
+
+/// Band functions other tasks reach, which stay stock.
+pub trait Retained {
+    /// Limits an adjusted triplet (0xef4bf4).
+    fn limit_triplet(&mut self, triplet: [u16; 3]) -> [u16; 3];
+    /// 0xef54fc.
+    fn expanded_rectangle(&mut self, profile: ProfileHandle) -> Rectangle;
+    /// 0xef5190.
+    fn configured_rectangle(&mut self, profile: ProfileHandle) -> Rectangle;
+    /// The profile's window, made relative to its configured rectangle and divided by the class
+    /// multipliers when `relative` (0xef5d44).
+    fn relative_rectangle(&mut self, profile: ProfileHandle, relative: bool) -> Rectangle;
+    /// The scan selection the two scan thresholds encode (0xef743c).
+    fn encode_thresholds(&mut self, first: i16, second: i16) -> u32;
+    /// 0xef74e4.
+    fn converted_decade(&mut self, selection: u32) -> i32;
+    /// The offset of `region` within a statistics buffer (0xedae88).
+    fn statistics_offset(&mut self, region: StatisticsRegion) -> u32;
+    /// 0xeea014.
+    fn selection_limit(&mut self) -> u32;
+    /// The two factors of a profile factor selection (0xef4274).
+    fn profile_factors(&mut self, selection: u32) -> [u16; 2];
+    /// Two calibration factors and the rounding the products add (0xef3f04).
+    fn calibration_factors(&mut self, first: u32, second: u32) -> [u16; 3];
+    /// Ten times the configured value at `offset` (0xef74ac).
+    fn configured_decade(&mut self, offset: u8) -> i16;
+    /// The level an encoded level byte stands for (0xef73e4).
+    fn decode_level(&mut self, encoded: u32) -> u8;
+}
+
+/// A stock data address a caller hands through the layer, such as its output buffer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StockData(pub u32);
+
+impl StockData {
+    pub const fn plus(self, bytes: u32) -> Self { Self(self.0.wrapping_add(bytes)) }
+}
+
+/// 0x64982c.
+pub trait OutputRoutes {
+    /// The route's status, zero when it takes `level`.
+    fn set_requested_level(&mut self, route: u32, level: u32) -> i32;
+}
+
+/// An ADC byte read: the interface's status, and the byte, which is zero unless the status is.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AdcReading {
+    pub status: u32,
+    pub value: u8,
+}
+
+/// The OS interface entries the layer calls.
+pub trait Interface {
+    /// 0x741ee0.
+    fn read_adc_byte(&mut self, channel: u32) -> AdcReading;
+    /// Sleeps the calling task (0x743ce4).
+    fn wait_ticks(&mut self, ticks: u32);
+    /// Sets a task's priority; the dispatcher's status (0x723a14).
+    fn configure_task(&mut self, task: u32, priority: u32) -> i32;
+}
+
+pub trait DeviceRegisters {
+    fn register(&mut self, register: Register) -> u32;
+}
+
+/// The peak-rate service 0x6b7820, 0x6b7830 and 0x6b7840 front.
+pub trait PeakService {
+    /// 0x6b7830.
+    fn read_selection(&mut self);
+    /// 0x6b7840.
+    fn notify_return(&mut self);
+    /// The service's state word (0x6b7820).
+    fn state(&mut self) -> u32;
+}
+
+/// The lens control's configured values by index (0x772f28).
+pub trait LensValues {
+    fn lens_value(&mut self, index: u32) -> i16;
+}
+
+/// The settings layer's profile resource records.
+pub trait ProfileResources {
+    /// 0x750474.
+    fn resource_byte(&mut self, record: u32) -> u8;
+}
+
+/// The display driver's selected-output services; false when the driver refuses.
+pub trait DisplayDriver {
+    /// 0x6cfed0.
+    fn write_selected_quad(&mut self, channel: u32, values: Location) -> bool;
+    /// 0x6cfe14.
+    fn write_selected_channel(&mut self, channel: u32, value: Location) -> bool;
+    /// 0x6d0000.
+    fn apply_scale_layout(&mut self, layout: Location) -> bool;
+    /// 0x6d1b24.
+    fn graphic_service(&mut self, value: u32) -> bool;
+    /// 0x6cffbc.
+    fn update_configuration_bits(&mut self, value: u32) -> bool;
+    /// 0x6d0244.
+    fn forward_selection(&mut self, value: Location) -> bool;
+    /// 0x6d1520.
+    fn apply_selected(&mut self, value: u32) -> bool;
+    /// 0x6d0ee4.
+    fn set_selected_colour(&mut self, rgb: u32);
+    /// 0x6d01bc.
+    fn forward_selected_value(&mut self, value: u32) -> bool;
+    /// Has the driver enter `callback` on its next selected-output event (0x6cfcf4).
+    fn on_selected_event(&mut self, callback: StockCode) -> bool;
+}
+
+/// The layer's own entries the storage service enters when a dump file request completes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FileCompletion {
+    /// Takes the status and the file's handle.
+    Opened,
+    /// Takes the status.
+    Done,
+}
+
+/// The storage service's file entries.
+pub trait DumpFiles {
+    /// Writes the next numbered file name into `name` (0x70fbfc with zero arguments).
+    fn next_file_name(&mut self, name: Location);
+    /// 0x742250.
+    fn copy_text(&mut self, to: Location, from: Location);
+    /// Appends `text`, which ends in a zero byte (0x742260).
+    fn append_text(&mut self, to: Location, text: &'static [u8]);
+    /// Opens the file at `path` for writing; what the request entry returns (0x71c648 with
+    /// count 1).
+    fn open_file(&mut self, completion: FileCompletion, path: Location) -> u32;
+    /// 0x71c75c.
+    fn write_file(&mut self, completion: FileCompletion, handle: u32, length: u32, data: StockData);
+    /// 0x71c7bc with two zero words.
+    fn close_file(&mut self, completion: FileCompletion, handle: u32);
+    /// 0x71c938.
+    fn finish_file(&mut self, completion: FileCompletion, handle: u32);
+    /// Stores the current directory and file numbers as halfwords at `numbers` (0x70fb68).
+    fn read_file_numbers(&mut self, numbers: StockData);
+}
+
+/// A region of the image pipeline's statistics buffers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StatisticsRegion(pub u32);
+
+/// A statistics buffer the image pipeline filled, in stock memory.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StatisticsBuffer(pub u32);
+
+/// A word address below 0x100, the live exception vector area.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LowAddress(pub u8);
+
+pub trait StatisticsMemory {
+    fn statistics_word(&mut self, buffer: StatisticsBuffer, offset: u32) -> u32;
+    fn low_word(&mut self, address: LowAddress) -> u32;
+}
+
+/// A frame dump buffer in stock memory.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DumpBuffer(pub u32);
+
+/// A device register.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Register(pub u32);
+
+/// The two dumps of the policy block the pipeline layer writes into a frame dump.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PolicyDump {
+    /// 0xd6b460.
+    Pipeline,
+    /// 0xd6b3f8.
+    Result,
+}
+
+pub trait FrameDumps {
+    fn write_dump(&mut self, buffer: DumpBuffer, offset: u32, bytes: &[u8]);
+    fn dump_policy(&mut self, buffer: DumpBuffer, dump: PolicyDump, policy: Location);
+}
+
+/// What the geometry service answers to an area query.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AreaAnswer {
+    Areas(TransitionAreas),
+    /// The service has no areas for the query (-11).
+    Empty,
+    Refused,
+}
+
+/// The transition layer's geometry service.
+pub trait GeometryService {
+    /// False when the service refuses (0x106631c).
+    fn start_geometry(&mut self, start: &GeometryStart, callback: StockCode) -> bool;
+    /// False when the service refuses (0x106637c).
+    fn stop_geometry(&mut self) -> bool;
+    /// 0x106638c.
+    fn query_areas(&mut self, code: u32, query: &AreaQuery) -> AreaAnswer;
+    /// Enters `callback` with `status`.
+    fn notify_geometry(&mut self, callback: StockCode, status: i32);
+}
+
+pub trait Ports:
+    Configuration
+    + Pipeline
+    + StagePayloads
+    + ScanConfiguration
+    + Handlers
+    + DumpRegions
+    + DiagnosticLabels
+    + ConfiguredRate
+    + Retained
+    + RadialGeometry
+    + StatisticsMemory
+    + DeviceRegisters
+    + FrameDumps
+    + GeometryService
+    + OutputRoutes
+    + Interface
+    + PeakService
+    + LensValues
+    + ProfileResources
+    + DisplayDriver
+    + DumpFiles
+{
+}
+
+impl<T> Ports for T where
+    T: Configuration
+        + Pipeline
+        + StagePayloads
+        + ScanConfiguration
+        + Handlers
+        + DumpRegions
+        + DiagnosticLabels
+        + ConfiguredRate
+        + Retained
+        + RadialGeometry
+        + StatisticsMemory
+        + DeviceRegisters
+        + FrameDumps
+        + GeometryService
+        + OutputRoutes
+        + Interface
+        + PeakService
+        + LensValues
+        + ProfileResources
+        + DisplayDriver
+        + DumpFiles
+{
+}

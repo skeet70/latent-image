@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 pub mod exposure;
+pub mod pipeline;
 pub mod stock;
 pub mod lens;
 pub mod round;
@@ -477,3 +478,5 @@ mod calc_tests;
 mod statistics_tests;
 #[cfg(test)]
 mod imaging_tests;
+#[cfg(test)]
+mod pipeline_tests;

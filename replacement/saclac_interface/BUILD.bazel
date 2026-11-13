@@ -7,12 +7,14 @@ SOURCES = [
     "src/exposure.rs",
     "src/imaging.rs",
     "src/lens.rs",
+    "src/pipeline.rs",
     "src/round.rs",
     "src/statistics.rs",
     "src/stock.rs",
     "src/stock/exposure.rs",
     "src/stock/imaging.rs",
     "src/stock/statistics.rs",
+    "src/stock/pipeline.rs",
 ]
 
 xm1_rust_rlib(
@@ -39,6 +41,7 @@ xm1_rust_host_test(
         "src/exposure_tests.rs",
         "src/imaging_tests.rs",
         "src/statistics_tests.rs",
+        "src/pipeline_tests.rs",
         "src/tests.rs",
     ],
 )

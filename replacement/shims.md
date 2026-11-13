@@ -726,6 +726,15 @@ The vendor, wireless, filesystem and device-protocol unit. Most of its externals
 | `xm1_wireless_driver_task`, `xm1_wireless_supplicant_task` retained services | trampoline into retained stock | stock wireless driver and supplicant tasks | no | the wireless subsystem is owned | required |
 | filesystem and media-task ABI views (`filesystem_*`, `media_parser`, `metadata_*`) | guest-memory layout view | retained stock filesystem, media and metadata services | no | the owned file service and filesystem are qualified | required |
 
+## saclac_profile_records
+
+saclac's view of the profile records (`replacement/saclac/profile_records`), shared in stock with tasks 3, 50, 59 and 104.
+
+| Shim | Kind | Other side | Owned now | Removal condition | State |
+| --- | --- | --- | --- | --- | --- |
+| `StockMemory`, the registry, record and shared-block addresses `0x915d38`, `0x96ebd0` and `0x91904c` in `src/stock/mod.rs`, the layout in `src/stock/layout.rs` and the field catalog in `src/stock/record.rs` and `src/stock/shared.rs` | guest-memory layout view | the stock accessors tasks 3, 50, 59 and 104 reach (0x75a910, 0x75a8c0, 0x75e618, 0x75b054.. and the open, close and initialize entries), which read and write the same objects | no | every task that reaches the records is owned | required |
+| the handle word codec `stock::handle` and `stock::record_handle` | guest-memory layout view | handles the stock open (`0x75a63c`) issues and the retained gates decode | no | the registry and its gates are owned | required |
+| `Stock`, the `StockEntries` binding: header byte readers `0x74e5c0`, `0x74e648`, `0x74f9a4`, `0x74fa2c`, `0x74fc64`, `0x7503ec`, lens designation `0x758c68`, header replace `0x74e074`, open `0x75a63c` with grant table `0x81aa6c`, close `0x75a6cc`, initialize `0x756720` | trampoline into retained stock | the stock bodies at those addresses, which tasks 50, 59 and 104 also call | no | tasks 50, 59 and 104 no longer reach them | required |
 
 ## Not registered
 
