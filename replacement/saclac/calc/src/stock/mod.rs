@@ -4,6 +4,7 @@
 
 pub mod adjust;
 pub mod calculation;
+pub mod context_trace;
 pub mod dump;
 pub mod lists;
 pub mod motion;
