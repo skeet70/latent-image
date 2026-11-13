@@ -6,7 +6,8 @@
 
 use crate::absorb::{AuxiliaryOutcome, CalculationResults};
 use crate::stock::state as layout;
-use xm1_saclac_interface::calculation::{AreaAt, AreaIndex, AreaResult, AreaRow, CellSummary, FocusSummary, GridCell, GridPass, ResultPass, TrackedKind};
+use xm1_saclac_interface::calculation::{AreaAt, AreaIndex, AreaResult, AreaRow, AreaTarget, CellSummary, FocusSummary, GridCell, GridPass, ReferenceRequest, ResultPass, TrackedKind};
+use xm1_saclac_interface::selection::{CellCode, ClassifyStage, SelectionClass, SelectionList, SelectionSlot};
 
 /// A location of shot state; only `stock::state` makes one.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,7 +63,7 @@ impl<M: StateMemory> CalculationResults for ShotState<M> {
 
     fn tracking(&mut self) -> bool { self.word(layout::TRACKING) != 0 }
 
-    fn area_kind(&mut self, index: AreaIndex) -> u8 { self.byte(layout::area_kind(index)) }
+    fn area_kind(&mut self, index: AreaIndex) -> u8 { self.byte(layout::subject_kind(ClassifyStage::Absorb, index)) }
 
     fn grid_selected(&mut self) -> bool { self.word(layout::GRID_SELECTED) != 0 }
 
@@ -118,12 +119,11 @@ impl<M: StateMemory> CalculationResults for ShotState<M> {
 impl<M: StateMemory> ShotState<M> {
     /// The grid cell the selection holds for an area of a pass, or of a tracked kind's areas.
     pub fn cell_of(&mut self, kind: Option<TrackedKind>, pass: ResultPass, index: AreaIndex) -> GridCell {
-        let [column, row] = self.bytes(layout::cell(kind, pass, index));
-        GridCell::new(column, row).unwrap_or_default()
+        self.selection_cell(SelectionSlot { kind, pass, index }).cell()
     }
 
     pub fn set_cell_of(&mut self, kind: Option<TrackedKind>, pass: ResultPass, index: AreaIndex, cell: GridCell) {
-        self.memory.write(layout::cell(kind, pass, index), &[cell.column, cell.row]);
+        self.memory.write(layout::cell(SelectionSlot { kind, pass, index }), &[cell.column, cell.row]);
     }
 
     pub fn retain_result(&mut self) { self.memory.copy(layout::RETAINED_RESULT, layout::RESULT, layout::RESULT_BYTES); }
@@ -140,4 +140,130 @@ impl<M: StateMemory> ShotState<M> {
     pub fn retain_target_half(&mut self, half: u16) {
         for at in layout::RETAINED_TARGET_HALF { self.set_half(at, half); }
     }
+
+    pub fn request_word(&mut self) -> u32 { self.word(layout::REQUEST_WORD) }
+
+    /// The block's area count as the selection grid reads it (a byte).
+    pub fn area_count(&mut self) -> u8 { self.byte(layout::AREA_COUNT) }
+
+    /// The tracked kinds the grid walks: none unless the plan tracks.
+    pub fn tracked_kinds(&mut self) -> u8 { if self.word(layout::TRACKING) == 0 { 0 } else { self.byte(layout::TRACKED_KINDS) } }
+
+    pub fn grid_selected(&mut self) -> bool { self.word(layout::GRID_SELECTED) != 0 }
+
+    /// The pass the selection mode names when a grid is selected; the plain pass otherwise.
+    pub fn selected_pass(&mut self) -> ResultPass {
+        if !self.grid_selected() { return ResultPass::Plain; }
+        GridPass::new(self.word(layout::SELECTION_MODE)).map_or(ResultPass::Plain, ResultPass::Grid)
+    }
+
+    pub fn exposure_columns(&mut self) -> u8 { self.byte(layout::EXPOSURE_COLUMNS) }
+
+    pub fn exposure_rows(&mut self) -> u8 { self.byte(layout::EXPOSURE_ROWS) }
+
+    pub fn refinement(&mut self) -> u32 { self.word(layout::EXPOSURE_REFINEMENT) }
+
+    pub fn exposure_lens_reference(&mut self) -> u32 { self.word(layout::EXPOSURE_LENS_REFERENCE) }
+
+    pub fn exposure_target_word(&mut self) -> u32 { self.word(layout::EXPOSURE_TARGET_WORD) }
+
+    pub fn exposure_focus_mode(&mut self) -> u32 { self.word(layout::EXPOSURE_FOCUS_MODE) }
+
+    pub fn selection(&mut self) -> SelectionList { SelectionList::from_bytes(self.bytes(layout::SELECTION_LIST)) }
+
+    pub fn set_selection(&mut self, list: &SelectionList) { self.memory.write(layout::SELECTION_LIST, list.bytes()); }
+
+    pub fn saved_selection(&mut self) -> SelectionList { SelectionList::from_bytes(self.bytes(layout::SAVED_SELECTION)) }
+
+    pub fn save_selection(&mut self) { self.memory.copy(layout::SAVED_SELECTION, layout::SELECTION_LIST, layout::SELECTION_BYTES); }
+
+    /// Takes the saved list back, keeping the list's weights.
+    pub fn load_saved_selection(&mut self) {
+        let weights: [u8; layout::SELECTION_WEIGHT_BYTES] = self.bytes(layout::SELECTION_WEIGHTS);
+        self.memory.copy(layout::SELECTION_LIST, layout::SAVED_SELECTION, layout::SELECTION_BYTES);
+        self.memory.write(layout::SELECTION_WEIGHTS, &weights);
+    }
+
+    pub fn selection_fixed(&mut self) -> bool { self.word(layout::SELECTION_LIST) != 0 }
+
+    pub fn selection_class(&mut self, slot: SelectionSlot) -> SelectionClass { SelectionClass(self.word(layout::class(slot))) }
+
+    pub fn selection_cell(&mut self, slot: SelectionSlot) -> CellCode {
+        let [column, row] = self.bytes(layout::cell(slot));
+        CellCode { column, row }
+    }
+
+    pub fn set_selection_entry(&mut self, slot: SelectionSlot, class: SelectionClass, cell: CellCode) {
+        self.set_word(layout::class(slot), class.0);
+        self.memory.write(layout::cell(slot), &[cell.column, cell.row]);
+    }
+
+    pub fn area(&mut self, at: AreaAt) -> AreaResult { AreaResult::from_bytes(self.bytes(layout::area(at))) }
+
+    pub fn set_area(&mut self, at: AreaAt, area: &AreaResult) { self.memory.write(layout::area(at), area.bytes()); }
+
+    pub fn target(&mut self, kind: TrackedKind, pass: ResultPass, cell: GridCell, index: AreaIndex) -> AreaTarget {
+        AreaTarget::from_bytes(self.bytes(layout::target(kind, pass, cell, index)))
+    }
+
+    pub fn set_target(&mut self, kind: TrackedKind, pass: ResultPass, cell: GridCell, index: AreaIndex, target: AreaTarget) {
+        self.memory.write(layout::target(kind, pass, cell, index), &target.to_bytes());
+    }
+
+    pub fn target_gate(&mut self, kind: TrackedKind, pass: ResultPass, cell: GridCell, index: AreaIndex) -> bool {
+        self.word(layout::target_gate(kind, pass, cell, index)) != 0
+    }
+
+    pub fn set_target_gate(&mut self, kind: TrackedKind, pass: ResultPass, cell: GridCell, index: AreaIndex, open: bool) {
+        self.set_word(layout::target_gate(kind, pass, cell, index), u32::from(open));
+    }
+
+    pub fn set_marker(&mut self, pass: ResultPass, kind: Option<TrackedKind>, index: AreaIndex, marker: u32) { self.set_word(layout::marker(pass, kind, index), marker); }
+
+    pub fn row_flags(&mut self, pass: ResultPass, cell: GridCell, index: AreaIndex) -> u8 { self.byte(layout::row(pass, cell, index)) }
+
+    /// Sets bits of an area's plan word.
+    pub fn mark_plan(&mut self, pass: ResultPass, cell: GridCell, index: AreaIndex, bits: u8) {
+        let at = layout::plan_value(pass, cell, index);
+        let word = self.word(at);
+        self.set_word(at, word | u32::from(bits));
+    }
+
+    pub fn subject_kind(&mut self, stage: ClassifyStage, index: AreaIndex) -> Option<TrackedKind> {
+        u8::try_from(self.word(layout::subject_kind(stage, index))).ok().and_then(TrackedKind::new)
+    }
+
+    pub fn set_subject_kind(&mut self, stage: ClassifyStage, index: AreaIndex, kind: Option<TrackedKind>) {
+        self.set_word(layout::subject_kind(stage, index), kind.map_or(UNTRACKED, |kind| u32::from(kind.get())));
+    }
+
+    pub fn subject_level(&mut self, stage: ClassifyStage, index: AreaIndex) -> u64 { u64::from_le_bytes(self.bytes(layout::subject_level(stage, index))) }
+
+    pub fn set_subject_level(&mut self, stage: ClassifyStage, index: AreaIndex, level: u64) { self.memory.write(layout::subject_level(stage, index), &level.to_le_bytes()); }
+
+    pub fn subject_mode(&mut self, stage: ClassifyStage) -> u32 { self.word(layout::subject_mode(stage)) }
+
+    pub fn set_subject_mode(&mut self, stage: ClassifyStage, mode: u32) { self.set_word(layout::subject_mode(stage), mode); }
+
+    /// Copies a result buffer of another task over the retained result.
+    pub fn retain_result_from(&mut self, from: StateAddress) { self.memory.copy(layout::RETAINED_RESULT, from, layout::RESULT_BYTES); }
+
+    pub fn retained_source(&mut self) -> u32 { self.word(layout::RETAINED_SOURCE) }
+
+    pub fn set_retained_source(&mut self, source: u32) { self.set_word(layout::RETAINED_SOURCE, source); }
+
+    /// Replaces an area's reference and position in the retained result.
+    pub fn set_retained_reference(&mut self, pass: ResultPass, cell: GridCell, index: AreaIndex, reference: u32, position: i16) {
+        let at = layout::retained_area(AreaAt::Cell { pass, cell, index });
+        let mut area = AreaResult::from_bytes(self.bytes(at));
+        area.set_reference(reference, position);
+        self.memory.write(at, area.bytes());
+    }
+
+    pub fn retained_area(&mut self, at: AreaAt) -> AreaResult { AreaResult::from_bytes(self.bytes(layout::retained_area(at))) }
+
+    pub fn saved_input(&mut self) -> ReferenceRequest { ReferenceRequest::from_bytes(self.bytes(layout::SAVED_INPUT)) }
 }
+
+/// The subject kind word of an area no tracked kind holds.
+pub const UNTRACKED: u32 = 7;

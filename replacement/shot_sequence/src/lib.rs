@@ -14,6 +14,7 @@ pub mod exposure;
 pub mod exposure_work;
 pub mod finish;
 pub mod finish_work;
+pub mod grid_boundary;
 pub mod jobs;
 pub mod lens_return;
 pub mod outcome;
@@ -27,6 +28,7 @@ pub mod record_load;
 pub mod sequence;
 pub mod secondary_boundary;
 pub mod secondary_job;
+pub mod selection;
 pub mod shared;
 pub mod state;
 pub mod statistics_dump;
@@ -142,3 +144,5 @@ mod record_load_tests;
 mod state_tests;
 #[cfg(test)]
 mod primary_job_tests;
+#[cfg(test)]
+mod selection_tests;

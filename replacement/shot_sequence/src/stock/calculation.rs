@@ -76,7 +76,8 @@ pub fn plan_bytes(plan: PlanWords) -> [u8; PLAN_BYTES] {
 }
 
 /// Image-4 accessors behind each profile value (0xf1d22c, 0xf1d2a4, 0xf1d2c4, 0xf1d2d0, 0xf1d300,
-/// 0xf1d324, 0xf1d4d4, 0xf1d4e0); 0x75a414 stores the resume offset (0xf1d518).
+/// 0xf1d324, 0xf1d4d4, 0xf1d4e0, and the selection grid's); 0x75a414 stores the resume offset
+/// (0xf1d518).
 pub const fn profile_accessor(value: CalculationProfile) -> u32 {
     match value {
         CalculationProfile::LensReference => 0x751b74,
@@ -87,6 +88,18 @@ pub const fn profile_accessor(value: CalculationProfile) -> u32 {
         CalculationProfile::AdjustmentOption => 0x7503ec,
         CalculationProfile::ResumeLead => 0x74f6fc,
         CalculationProfile::ResumeOffset => 0x74f5ec,
+        CalculationProfile::At0024 => 0x74f91c,
+        CalculationProfile::At0026 => 0x74e900,
+        CalculationProfile::At0032 => 0x74e7f0,
+        CalculationProfile::At0033 => 0x74e878,
+        CalculationProfile::At0034 => 0x74eba8,
+        CalculationProfile::At003c => 0x74f09c,
+        CalculationProfile::At003e => 0x74f1f0,
+        CalculationProfile::At0045 => 0x750034,
+        CalculationProfile::At004b => 0x7500bc,
+        CalculationProfile::At005d => 0x74eb20,
+        CalculationProfile::At0066 => 0x7509c4,
+        CalculationProfile::HeaderAt31 => 0x74e648,
     }
 }
 pub const RESUME_OFFSET_STORE: u32 = 0x75a414;

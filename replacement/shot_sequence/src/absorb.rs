@@ -148,9 +148,7 @@ pub trait SelectionGrid {
     fn retain_target_half(&mut self, half: u16);
 }
 
-/// Which caller classifies the subjects (the classification's first argument, 0 to 3).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ClassifyStage { Absorb, RecordLoad, Round, CaptureJob }
+pub use xm1_saclac_interface::selection::ClassifyStage;
 
 /// Calculation-library and configuration entries the absorb calls.
 pub trait AbsorbLibrary {

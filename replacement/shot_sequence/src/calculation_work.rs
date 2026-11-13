@@ -48,6 +48,21 @@ pub enum CalculationProfile {
     /// Resume offsets copied into a resumed input.
     ResumeLead,
     ResumeOffset,
+    /// Values the selection grid reads, named after the profile-record layer's fields.
+    At0024,
+    At0026,
+    /// 2 and 12 give every area the first area's class; 13 numbers a default list's areas.
+    At0032,
+    At0033,
+    At0034,
+    At003c,
+    At003e,
+    At0045,
+    At004b,
+    At005d,
+    At0066,
+    /// The record's shared header byte at +0x31.
+    HeaderAt31,
 }
 
 /// The exposure context the calculation binds and the calculation input inside it, which the

@@ -124,6 +124,7 @@ impl CalculationProfiles for World {
             CalculationProfile::AdjustmentOption => 0x15,
             CalculationProfile::ResumeLead => 0x16,
             CalculationProfile::ResumeOffset => 0x17,
+            _ => 0,
         }
     }
     fn store_resume_offset(&mut self, _record: RecordHandle, offset: u16) { self.stored_offset = Some(offset); }
