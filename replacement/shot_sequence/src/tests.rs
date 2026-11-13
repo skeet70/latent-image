@@ -1,8 +1,8 @@
 use crate::ports::*;
-use crate::{Outcome, Shot, Target};
+use crate::{Outcome, Shot};
 use std::collections::VecDeque;
 use std::vec::Vec;
-use xm1_saclac_controllers::children::ShotControl;
+use xm1_saclac_controllers::children::{ShotControl, ShotTarget as Target};
 use xm1_saclac_interface::{stock, BlockingRequest, CommandKind, Completion, CompletionStatus, LensEffect, RecordHandle};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

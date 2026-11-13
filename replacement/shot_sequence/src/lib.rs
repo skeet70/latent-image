@@ -17,12 +17,8 @@ pub use outcome::Outcome;
 use capture::Capture;
 use ports::{Ports, Signal};
 use sequence::{HalfPress, Live, Steps};
-use xm1_saclac_controllers::children::{ChildEvent, ShotControl};
+use xm1_saclac_controllers::children::{ShotControl, ShotEvent, ShotTarget};
 use xm1_saclac_interface::{CommandKind, Completion, RecordHandle};
-
-/// The entry a parent routes a command or completion through. Controls select their own entry.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Target { HalfPress, Capture, Live }
 
 /// S1 preparation, the live preparation sequence and the capture pipeline behind queue 43.
 #[derive(Default)]
@@ -36,11 +32,11 @@ pub struct Shot {
 impl Shot {
     pub fn new() -> Self { Self::default() }
 
-    pub fn handle(&mut self, target: Target, event: ChildEvent<'_, ShotControl>, ports: &mut impl Ports) -> Outcome {
+    pub fn handle(&mut self, event: ShotEvent<'_>, ports: &mut impl Ports) -> Outcome {
         match event {
-            ChildEvent::Control { control, record, .. } => self.control(control, record, ports),
-            ChildEvent::Command { command, record } => self.command(target, command.kind, record, ports),
-            ChildEvent::Completed { completed, record } => self.completed(target, completed.completion, record, ports),
+            ShotEvent::Control { control, record } => self.control(control, record, ports),
+            ShotEvent::Command { target, command, record } => self.command(target, command.kind, record, ports),
+            ShotEvent::Completed { target, completed, record } => self.completed(target, completed.completion, record, ports),
         }
     }
 
@@ -53,20 +49,20 @@ impl Shot {
         }
     }
 
-    pub fn command(&mut self, target: Target, command: CommandKind, record: RecordHandle, ports: &mut impl Ports) -> Outcome {
+    pub fn command(&mut self, target: ShotTarget, command: CommandKind, record: RecordHandle, ports: &mut impl Ports) -> Outcome {
         match target {
-            Target::HalfPress => self.half_press.command(command, record, &mut self.steps, ports),
-            Target::Capture => self.capture.command(command, record, ports),
-            Target::Live => self.live.signal(Signal::Command(command), record, &mut self.steps, ports),
+            ShotTarget::HalfPress => self.half_press.command(command, record, &mut self.steps, ports),
+            ShotTarget::Capture => self.capture.command(command, record, ports),
+            ShotTarget::Live => self.live.signal(Signal::Command(command), record, &mut self.steps, ports),
         }
     }
 
-    pub fn completed(&mut self, target: Target, completion: Completion, record: RecordHandle, ports: &mut impl Ports) -> Outcome {
+    pub fn completed(&mut self, target: ShotTarget, completion: Completion, record: RecordHandle, ports: &mut impl Ports) -> Outcome {
         let signal = Signal::Completion(completion);
         match target {
-            Target::HalfPress => self.half_press.signal(signal, record, &mut self.steps, ports),
-            Target::Capture => self.capture.completed(completion, record, ports),
-            Target::Live => self.live.signal(signal, record, &mut self.steps, ports),
+            ShotTarget::HalfPress => self.half_press.signal(signal, record, &mut self.steps, ports),
+            ShotTarget::Capture => self.capture.completed(completion, record, ports),
+            ShotTarget::Live => self.live.signal(signal, record, &mut self.steps, ports),
         }
     }
 }

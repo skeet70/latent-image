@@ -1,9 +1,9 @@
 use crate::ports::*;
 use crate::tests::{record, Call, Recorder};
-use crate::{Outcome, Shot, Target};
+use crate::{Outcome, Shot};
 use std::vec::Vec;
-use xm1_saclac_controllers::children::ShotControl;
-use xm1_saclac_interface::{CommandKind, Completion, CompletionStatus};
+use xm1_saclac_controllers::children::{ShotControl, ShotEvent, ShotTarget as Target};
+use xm1_saclac_interface::{stock, Command, CommandKind, Completion, CompletionStatus};
 
 fn primary_readout(ports: &mut Recorder) {
     ports.answer(Query::Primary(PrimaryQuery::ImageFirst), true);
@@ -155,6 +155,17 @@ fn idle_capture_answers_commands_and_runs_a_setting() {
     assert_eq!(shot.command(Target::Capture, CommandKind::Command08, record(), &mut ports), Outcome::Fault);
     assert_eq!(shot.completed(Target::Capture, Completion::Statistics85, record(), &mut ports), Outcome::Complete);
     assert_eq!(ports.replies(), [(CommandKind::Command0c, 21), (CommandKind::Command28, 21), (CommandKind::Command08, 0)]);
+}
+
+#[test]
+fn an_event_reaches_the_entry_its_target_names() {
+    let mut shot = Shot::new();
+    let mut ports = Recorder::new();
+    let command = Command { kind: CommandKind::Command0c, parameters: stock::parameters(&[]) };
+    assert_eq!(shot.handle(ShotEvent::Command { target: Target::HalfPress, command, record: record() }, &mut ports), Outcome::Unhandled);
+    assert!(ports.calls.is_empty());
+    assert_eq!(shot.handle(ShotEvent::Command { target: Target::Capture, command, record: record() }, &mut ports), Outcome::Pending);
+    assert_eq!(ports.replies(), [(CommandKind::Command0c, 21)]);
 }
 
 #[test]
