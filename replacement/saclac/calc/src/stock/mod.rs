@@ -7,6 +7,7 @@ pub mod calculation;
 pub mod capture;
 pub mod context_trace;
 pub mod dump;
+pub mod exposure_limits;
 pub mod finish;
 pub mod lists;
 pub mod motion;
