@@ -3,6 +3,7 @@
 
 pub mod focus_profile;
 pub mod focus_reuse;
+pub mod motion;
 pub mod scene_policy;
 
 #[cfg(test)]

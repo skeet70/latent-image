@@ -3,6 +3,7 @@
 //! the exposure engine parses.
 
 pub mod dump;
+pub mod motion;
 pub mod property;
 pub mod record;
 pub mod shared;
