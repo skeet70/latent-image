@@ -1,5 +1,5 @@
-use crate::search::{BridgePhase, BridgeReport, BridgeRequest, BridgeStatus, LensClass};
-use crate::stock::search::{bridge_report, bridge_request};
+use crate::search::{BridgePhase, BridgeReport, BridgeRequest, BridgeStatus, Evaluation, LensClass};
+use crate::stock::search::{bridge_report, bridge_request, evaluation, EVALUATION_BYTES};
 
 #[test]
 fn a_bridge_request_lays_out_phase_window_travel_and_speed() {
@@ -47,4 +47,26 @@ fn a_bridge_report_parses_status_position_and_class() {
     assert_eq!(bridge_report(&payload), Some(BridgeReport { status: BridgeStatus::Fault, position: -32752, class: LensClass(2) }));
     assert_eq!(bridge_report(&[21, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]).map(|report| report.status), Some(BridgeStatus::Deferred));
     assert_eq!(bridge_report(&payload[..11]), None);
+}
+
+#[test]
+fn an_evaluation_result_parses_pairs_levels_and_focus_values() {
+    let mut result = [0u8; EVALUATION_BYTES];
+    for (index, word) in result.chunks_exact_mut(4).enumerate() {
+        word.copy_from_slice(&(0x0100_0000 + index as u32).to_le_bytes());
+    }
+    result[0x6c..0x70].copy_from_slice(&[0x34, 0x12, 0x78, 0x56]);
+    assert_eq!(
+        evaluation(&result),
+        Evaluation {
+            pairs: [[0x0100_0000, 0x0100_0001], [0x0100_0002, 0x0100_0003], [0x0100_0004, 0x0100_0005]],
+            levels: [10, 11],
+            scan_pairs: [[0x0100_000c, 0x0100_000d], [0x0100_000e, 0x0100_000f], [0x0100_0010, 0x0100_0011]],
+            scan_levels: [22, 23],
+            reference: 0x0100_0018,
+            settled: 0x0100_0019,
+            flag: 0x0100_001a,
+            focus_values: [0x1234, 0x5678],
+        }
+    );
 }
