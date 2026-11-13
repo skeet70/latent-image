@@ -348,7 +348,7 @@ pub enum RecordChannel { LiveView, S1 }
 
 /// The profile geometry layer's display record mode.
 pub trait RecordMode {
-    /// True when the record mode was already initialized.
+    /// Initializes the record mode again; false when every channel is disabled.
     fn initialize(&mut self) -> bool;
     fn available(&mut self, channel: RecordChannel) -> bool;
     fn begin(&mut self, channel: RecordChannel);

@@ -41,7 +41,7 @@ struct Fake {
     refuse: bool,
     alternate: bool,
     lens_follows: bool,
-    record_mode_initialized: bool,
+    record_mode_disabled: bool,
     record_mode_available: bool,
     values: ConfigurationValues,
     seen: Vec<Seen>,
@@ -107,7 +107,7 @@ impl DisplayRecords for Fake {
 }
 
 impl RecordMode for Fake {
-    fn initialize(&mut self) -> bool { self.record_mode_initialized }
+    fn initialize(&mut self) -> bool { !self.record_mode_disabled }
     fn available(&mut self, channel: RecordChannel) -> bool {
         assert_eq!(channel, RecordChannel::LiveView);
         self.record_mode_available
@@ -425,11 +425,14 @@ fn direct_start_is_refused_only_in_the_locked_third_view_mode() {
 }
 
 #[test]
-fn record_mode_begins_only_when_idle_and_its_channel_is_ready() {
+fn record_mode_begins_only_when_it_initializes_and_its_channel_is_available() {
     let mut live = LiveProfile::new();
-    let mut busy = Fake { record_mode_initialized: true, record_mode_available: true, ..Fake::default() };
-    live.effect(Effect::BeginRecordMode, record(), &mut busy);
-    assert!(busy.take().is_empty());
+    let mut disabled = Fake { record_mode_disabled: true, record_mode_available: true, ..Fake::default() };
+    live.effect(Effect::BeginRecordMode, record(), &mut disabled);
+    assert!(disabled.take().is_empty());
+    let mut unavailable = Fake::default();
+    live.effect(Effect::BeginRecordMode, record(), &mut unavailable);
+    assert!(unavailable.take().is_empty());
     let mut idle = Fake { record_mode_available: true, ..Fake::default() };
     live.effect(Effect::BeginRecordMode, record(), &mut idle);
     live.effect(Effect::FinishRecordMode, record(), &mut idle);

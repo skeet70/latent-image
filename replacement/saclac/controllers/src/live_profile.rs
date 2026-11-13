@@ -436,7 +436,7 @@ impl LiveProfile {
             }
             Effect::BeginRecordMode => {
                 let mode = layers.record_mode();
-                if !mode.initialize() && mode.available(RecordChannel::LiveView) {
+                if mode.initialize() && mode.available(RecordChannel::LiveView) {
                     mode.begin(RecordChannel::LiveView);
                 }
             }
