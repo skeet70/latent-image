@@ -69,3 +69,26 @@ pub const fn cadence_property(work: crate::planner::Work, mode: crate::planner::
 pub const fn cadence(word: u32) -> crate::planner::Cadence {
     crate::planner::Cadence { first: word & 1 != 0, second: word & 2 != 0, third: word & 4 != 0, fourth: word & 8 != 0 }
 }
+
+fn word(parameters: xm1_saclac_interface::Parameters<'_>, offset: usize) -> u32 {
+    parameters.bytes().get(offset..offset + 4).map_or(0, |bytes| u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+/// X-M1 1.50: the image row function caches the channel from word 3 of command
+/// 0x14 (0xefe2fc) and word 2 of command 0x2b (0xefe3ec); the replies at
+/// 0xefb328 and 0xefb438 take the callback from word 0 and the value from word 4
+/// of 0x14 and word 3 of 0x2b.
+pub fn image_client(kind: crate::image::ImageRequest, parameters: xm1_saclac_interface::Parameters<'_>) -> crate::image::ImageClient {
+    use crate::image::{ImageChannel, ImageClient, ImageRequest, ReplyValue};
+    let (channel, value) = match kind { ImageRequest::Image => (12, 16), ImageRequest::Snapshot => (8, 12) };
+    ImageClient {
+        callback: xm1_saclac_interface::stock::optional_callback(word(parameters, 0)),
+        channel: ImageChannel(word(parameters, channel)),
+        value: ReplyValue(word(parameters, value)),
+    }
+}
+
+/// X-M1 1.50: 0xefb3a8 and 0xefb3f0 enter word 0 of command 0x15 or 0x16.
+pub fn interruption_callback(parameters: xm1_saclac_interface::Parameters<'_>) -> Option<xm1_saclac_interface::ClientCallback> {
+    xm1_saclac_interface::stock::optional_callback(word(parameters, 0))
+}

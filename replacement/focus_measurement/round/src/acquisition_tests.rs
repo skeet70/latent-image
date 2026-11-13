@@ -58,7 +58,7 @@ fn mismatched_completions_cannot_release_an_active_primary_job() {
     acquisition.control(Control::Enable, &mut effects).unwrap();
     acquisition.control(Control::Primary, &mut effects).unwrap();
     let before = effects.events.clone();
-    assert_eq!(acquisition.completed(Completion::Secondary, &mut effects), Outcome::Unhandled);
+    assert_eq!(acquisition.completed(Completion::Secondary, &mut effects), Outcome::Ignored);
     assert_eq!(effects.events, before);
     assert_eq!(acquisition.control(Control::Primary, &mut effects), Err(InvalidTransition));
 }

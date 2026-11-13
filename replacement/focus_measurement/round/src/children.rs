@@ -60,7 +60,7 @@ impl S1Acquisition {
             Outcome::Complete => ChildOutcome::Complete,
             Outcome::Pending => ChildOutcome::Pending,
             Outcome::NoWork => ChildOutcome::Measurement(MeasurementOutcome::Round(RetainedRoundStatus::Status0c)),
-            Outcome::Unhandled => ChildOutcome::Fault,
+            Outcome::Ignored => ChildOutcome::Fault,
             Outcome::Updated(_) | Outcome::SelectionUpdated => {
                 ports.effects.fault();
                 ChildOutcome::Fault

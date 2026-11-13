@@ -144,7 +144,7 @@ impl Acquisition {
                 self.stage = Stage::Disabled;
                 Outcome::Complete
             }
-            _ => Outcome::Unhandled,
+            _ => Outcome::Ignored,
         }
     }
 }

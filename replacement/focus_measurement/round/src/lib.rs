@@ -6,6 +6,8 @@ pub mod acquisition;
 pub mod children;
 pub mod lanes;
 pub mod round;
+pub mod image;
+pub mod live;
 pub mod stock;
 pub mod planner;
 
@@ -23,3 +25,7 @@ mod round_tests;
 mod stock_tests;
 #[cfg(test)]
 mod planner_tests;
+#[cfg(test)]
+mod image_tests;
+#[cfg(test)]
+mod live_tests;

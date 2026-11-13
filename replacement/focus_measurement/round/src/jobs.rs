@@ -7,7 +7,7 @@ pub enum Calculation { Auxiliary, Window, Source }
 pub enum Control { Initialize, Enable, Stop, Run }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Outcome { Complete, Pending, NoWork, Updated(Calculation), SelectionUpdated, Unhandled }
+pub enum Outcome { Complete, Pending, NoWork, Updated(Calculation), SelectionUpdated, Ignored }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Effect { Initialize, Enable, Release, Submit, Collect }
@@ -63,7 +63,7 @@ impl CalculationJob {
 
     pub fn completed(&mut self, ports: &mut impl CalculationPorts) -> Outcome {
         match self.state {
-            State::Disabled | State::Ready => Outcome::Unhandled,
+            State::Disabled | State::Ready => Outcome::Ignored,
             State::Running => {
                 ports.effect(self.calculation, Effect::Collect);
                 self.state = State::Ready;
