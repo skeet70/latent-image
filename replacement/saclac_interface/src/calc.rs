@@ -5,7 +5,7 @@
 //! A `Record` is bytes a requester built and the peer reads whole; its fields are the
 //! requester's to type.
 
-use crate::exposure::EvaluationRequest;
+use crate::exposure::{CorrectionRequest, EvaluationRequest};
 use crate::stock::StockCallbackWord;
 
 /// An address in saclac memory that the peer reads.
@@ -56,6 +56,8 @@ pub struct WindowRequest {
 pub enum CalcPayload {
     /// 0x3c00.
     Evaluation { request: EvaluationRequest, callback: StockCallbackWord },
+    /// 0x3c01.
+    Correction { request: CorrectionRequest, callback: StockCallbackWord },
     /// 0x3c02: calc reads `block` and `source` in place.
     Calculation { block: SharedAddress, source: SharedAddress, callback: StockCallbackWord },
     /// 0x3c03.

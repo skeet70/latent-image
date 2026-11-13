@@ -651,6 +651,11 @@ pub fn calc_payload(payload: &calc::CalcPayload) -> (CalcOperation, Encoded) {
             message.put(0, &exposure::evaluation_request(&request, callback));
             (CalcOperation::Request00, message)
         }
+        P::Correction { request, callback } => {
+            let mut message = Encoded::new(exposure::CORRECTION_REQUEST_BYTES);
+            message.put(0, &exposure::correction_request(&request, callback));
+            (CalcOperation::Request01, message)
+        }
         P::Calculation { block, source, callback } => {
             let mut message = Encoded::new(232);
             message.word(0, callback.0);
