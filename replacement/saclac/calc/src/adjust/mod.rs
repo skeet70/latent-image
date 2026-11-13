@@ -7,6 +7,7 @@ pub mod focus_reuse;
 pub mod lens;
 pub mod motion;
 pub mod rate_policy;
+pub mod result_dispatch;
 pub mod scene_policy;
 pub mod scene_settings;
 pub mod search_targets;
@@ -22,6 +23,8 @@ mod focus_profile_tests;
 mod focus_reuse_tests;
 #[cfg(test)]
 mod rate_policy_tests;
+#[cfg(test)]
+mod result_dispatch_tests;
 #[cfg(test)]
 mod scene_policy_tests;
 #[cfg(test)]
