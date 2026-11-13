@@ -108,6 +108,10 @@ impl Platform for Fake {
     fn profile_focus(&mut self) -> i16 { 0 }
     fn detailed_tracing(&mut self) -> bool { false }
     fn trace_peak_search(&mut self, _: PeakSearchTrace) {}
+    fn focus_tracing(&mut self) -> bool { false }
+    fn trace_focus(&mut self, _: crate::contrast::FocusTrace) {}
+    fn minimum_step(&mut self, minimum: u32) -> u32 { minimum }
+    fn profile_mode(&mut self) -> u32 { 0 }
     fn parameter_label(&mut self, _: u32) -> u16 { 0 }
     fn ticks(&mut self) -> u32 { 0 }
     fn append_focus_log(&mut self, _: &FocusLog) {}

@@ -147,7 +147,7 @@ impl Context {
             Phase::PeakSearch => Some(self.peak_words(platform, peak_search_code(self.peak.rose, self.peak.passed))),
             Phase::Monitor if self.monitor.watched == 14 => Some(self.peak_words(platform, monitor_code(self.peak.rose, self.peak.passed))),
             Phase::Peak | Phase::FocusDrive => Some([NONE; 5]),
-            Phase::Focus => Some([self.focus_class(platform), u32::from(self.focus.count), u32::from(self.focus.flags), NONE, NONE]),
+            Phase::Focus => Some([self.focus_class(platform), u32::from(self.focus.count), u32::from(self.focus.strikes), NONE, NONE]),
             Phase::Approach => Some([self.search.previous_contrast, u32::from(self.search.peak_flags[0]), u32::from(self.search.peak_flags[1]), NONE, NONE]),
             Phase::Return | Phase::Monitor => None,
         }

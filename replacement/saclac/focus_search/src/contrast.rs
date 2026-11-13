@@ -18,6 +18,7 @@ mod step;
 mod tracks;
 
 pub use log::{FocusLog, FocusLogEntry, LoggedSample};
+pub use focus::FocusTrace;
 pub use peak_search::PeakSearchTrace;
 pub use sample::{BridgeDrive, CorrectedPosition, Stage};
 use settings::{Setting, StepKind};
@@ -200,6 +201,13 @@ pub trait Platform {
     /// Property 0xe8 bit 5, which with bit 4 traces each peak search step.
     fn detailed_tracing(&mut self) -> bool;
     fn trace_peak_search(&mut self, trace: PeakSearchTrace);
+    /// Property 0xe8 bit 6, which with bit 4 traces each focus step.
+    fn focus_tracing(&mut self) -> bool;
+    fn trace_focus(&mut self, trace: FocusTrace);
+    /// The configured minimum step, at least `minimum` (0xfa7614).
+    fn minimum_step(&mut self, minimum: u32) -> u32;
+    /// The record's mode word (profile shared +0x14c, 0x756ac4).
+    fn profile_mode(&mut self) -> u32;
     /// The lens table's label of the intake's parameter (0x7469a0 of the parameter modulo
     /// 0x74677c).
     fn parameter_label(&mut self, parameter: u32) -> u16;
