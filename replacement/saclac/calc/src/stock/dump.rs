@@ -50,3 +50,16 @@ pub const fn weight(frame: SharedAddress, index: usize) -> SharedAddress { at(fr
 
 /// The snapshot words 0xf6a0a4..0xf6a0bc store after the evaluation is prepared.
 pub const fn evaluation(frame: SharedAddress, index: usize) -> SharedAddress { at(frame, 0x15e8 + 4 * index as u32) }
+
+/// The reuse trace 0xf6b8a8..0xf6b930 stores: the result's three adjustment words, its kind and
+/// subject count.
+pub const fn reuse_result(frame: SharedAddress, index: usize) -> SharedAddress { at(frame, 0xc764 + 4 * index as u32) }
+
+/// Cleared by the trace, set when the result's level is out of tolerance (0xf6b9d0).
+pub const fn reuse_out_of_tolerance(frame: SharedAddress) -> SharedAddress { at(frame, 0xc7a0) }
+
+pub const fn reuse_level(frame: SharedAddress) -> SharedAddress { at(frame, 0xc7a4) }
+
+pub const fn reuse_limit(frame: SharedAddress) -> SharedAddress { at(frame, 0xc7a8) }
+
+pub const fn reuse_tolerance(frame: SharedAddress) -> SharedAddress { at(frame, 0xc7ac) }

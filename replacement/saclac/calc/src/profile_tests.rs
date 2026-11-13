@@ -2,7 +2,7 @@ use xm1_saclac_profile_records::stock::record::group_00;
 use xm1_saclac_profile_records::SharedHeaderByte;
 
 use crate::exposure::fakes::{handle, World};
-use crate::exposure::ports::Ports;
+use crate::exposure::ports::ProfileAccess;
 
 fn world(kind: u8, style: u8, flags: u16, withheld: bool) -> World {
     let mut world = World::default();

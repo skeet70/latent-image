@@ -10,7 +10,7 @@ use xm1_saclac_profile_records::field::{RecordField, RecordRead, RecordWrite, Sh
 use xm1_saclac_profile_records::stock::layout;
 use xm1_saclac_profile_records::{AccessGroup, Bytes, Grants, Handle, OpenMode, ProfileRecords, RecordImage, Scope, Serial, SharedHeaderByte, Slot, StockEntries, Tag};
 
-use crate::exposure::ports::{CaptureProfiles, Lens, Ports, Properties, Property, StockMemory};
+use crate::exposure::ports::{CaptureProfiles, Lens, ProfileAccess, Properties, Property, StockMemory};
 use crate::profile::Profile;
 
 const SLOT: u8 = 2;
@@ -188,7 +188,7 @@ impl StockMemory for World {
     }
 }
 
-impl Ports for World {
+impl ProfileAccess for World {
     type Records = Bytes;
     type Entries = Headers;
     fn profile(&mut self) -> Profile<'_, Bytes, Headers> { Profile::new(&self.records, &mut self.headers) }
