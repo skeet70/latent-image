@@ -1,12 +1,17 @@
 //! The contrast scan's lens drive, and where along it each focus area's sample falls. Times are
 //! microseconds of scan time unless named otherwise.
 
+use xm1_saclac_interface::RecordHandle;
+
 use crate::adjust::configuration::Configuration;
-use crate::adjust::drive_step::search_mode;
+use crate::adjust::drive_step::{scan_step, search_mode, Monitor, ScanStep, ScanStepQuery};
+use crate::adjust::lens::{LensConfiguration, LensControl, LensSteps, ReferenceScale};
 use crate::adjust::motion::drive::{DriveKind, DriveLimits, DriveProfile};
 use crate::adjust::motion::sampling::{SampleTargets, PRIMARY_AREAS, SECONDARY_AREAS};
 use crate::adjust::timing::{CaptureTiming, LevelScale};
-use crate::exposure::ports::Properties;
+use crate::exposure::ports::{ProfileAccess, Properties};
+use crate::exposure::settings;
+use crate::stock::adjust as stock;
 
 /// When a group of focus areas is exposed within a frame, in pipeline lines.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -52,14 +57,57 @@ pub struct SampleTiming {
     pub areas: SampleAreas,
 }
 
-/// Where a scan drive runs and when it starts.
+/// What the search took in for the frame a scan is planned from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ScanLeg {
-    pub start: i16,
-    pub end: i16,
-    pub reverse: bool,
-    pub start_time: i32,
+pub struct ScanFrame {
+    /// The lens's calibration index.
+    pub index: u32,
+    pub level: i16,
+    pub resource: u32,
+    /// The reference scale entry the frame interval is read from.
+    pub scale_group: u16,
+    pub scale_entry: u8,
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScanQuery {
+    pub frame: ScanFrame,
+    pub monitor: Option<Monitor>,
+    pub contrast: u32,
+    pub drive_kind: DriveKind,
+    /// Drives past the second limit, else past the first.
+    pub toward_second: bool,
+    /// The first and second limits, as the area pair leaves them.
+    pub limits: [i16; 2],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScanPlan {
+    pub step: ScanStep,
+    /// How far the lens moves before a frame's latest area is half exposed.
+    pub travel: u16,
+    /// The limits widened by the travel.
+    pub limits: [i16; 2],
+    /// The drive's ends: the lens's position and the travel past the far limit, clamped into the
+    /// lens's position limits.
+    pub window: [i16; 2],
+    /// The drive runs toward the first limit.
+    pub reverse: bool,
+}
+
+/// Where a frame's samples put the lens.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CorrectedPosition {
+    /// The first secondary area's target, or the centre primary area's.
+    pub target: i16,
+    /// Where the drive has the lens.
+    pub position: i16,
+}
+
+/// Everything planning a scan reaches.
+pub trait ScanPorts: Properties + ProfileAccess + LensSteps + ReferenceScale + LensControl + LensConfiguration + CaptureTiming + LevelScale + DriveLimits {}
+
+impl<T: Properties + ProfileAccess + LensSteps + ReferenceScale + LensControl + LensConfiguration + CaptureTiming + LevelScale + DriveLimits> ScanPorts for T {}
 
 /// Each sampled area's exposure start relative to its frame's, and how long it lasts.
 struct Schedule {
@@ -74,16 +122,54 @@ impl Schedule {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ScanDrive {
-    pub profile: DriveProfile,
+    profile: DriveProfile,
     /// The scan time at which the drive starts.
-    pub start_time: i32,
+    start_time: i32,
+    /// Microseconds per frame.
+    interval: u32,
     timing: SampleTiming,
 }
 
 impl ScanDrive {
-    pub const fn timing(&self) -> &SampleTiming { &self.timing }
-
     pub fn set_timing(&mut self, timing: SampleTiming) { self.timing = timing; }
+
+    /// Plans the scan's step and its drive for the frame the search took in (0xf3ec50 after the
+    /// area pair: 0xfa9bc0, 0xfaa990, 0xfaa578, 0xfaa670, 0xfa9bf0, 0xfaa6a0, 0xfa9c4c).
+    pub fn plan_scan(&mut self, ports: &mut impl ScanPorts, configuration: &Configuration, record: RecordHandle, query: ScanQuery) -> ScanPlan {
+        let frame = query.frame;
+        self.interval = 100_000_000 / ports.reference_scale(frame.scale_group, frame.scale_entry).max(1);
+        let step_query = ScanStepQuery { monitor: query.monitor, index: frame.index, resource: frame.resource, interval: self.interval, contrast: query.contrast, drive_kind: query.drive_kind };
+        let step = scan_step(ports, configuration, record, step_query);
+        let travel = self.exposure_travel(ports, frame.level, step.step.rate);
+        let reach = travel as i16;
+        let [first, second] = query.limits;
+        let limits = [first.wrapping_sub(reach), second.wrapping_add(reach)];
+        let position = ports.position() as i16;
+        let reverse = !query.toward_second;
+        let far = if reverse { limits[0].wrapping_sub(reach) } else { limits[1].wrapping_add(reach) };
+        let mut window = [position, far];
+        clamp_window(ports, frame.resource, &mut window);
+        let delay = u32::from(settings::word(ports, stock::SCAN_DRIVE_DELAY)).wrapping_add(ports.property(stock::SCAN_DRIVE_DELAY_TRIM));
+        self.profile.start = window[0];
+        self.profile.end = window[1];
+        self.profile.reverse = reverse;
+        self.start_time = delay.wrapping_mul(100) as i32;
+        self.profile.plan_for(step.step.rate, query.drive_kind, search_mode(configuration), ports);
+        ScanPlan { step, travel, limits, window, reverse }
+    }
+
+    /// The lens position `frames` frame intervals into the scan, and the target its samples put
+    /// the lens at (0xf3edcc: 0xfa9ff4, 0xfa9e34, 0xfaa018).
+    pub fn corrected_position(&self, ports: &mut (impl CaptureTiming + LevelScale + Properties), frames: u16) -> CorrectedPosition {
+        let time = u32::from(frames).wrapping_mul(self.interval).wrapping_sub(self.start_time as u32) as i32;
+        let position = self.profile.position_at(time);
+        let targets = self.sample_targets(ports, position, time);
+        let target = match self.timing.areas {
+            SampleAreas::Primary(_) => targets.primary[PRIMARY_AREAS / 2],
+            SampleAreas::Secondary(_) => targets.secondary[0],
+        };
+        CorrectedPosition { target, position }
+    }
 
     fn schedule(&self, ports: &mut (impl CaptureTiming + LevelScale)) -> Schedule {
         let span = match ports.linear(self.timing.level) {
@@ -110,7 +196,7 @@ impl ScanDrive {
 
     /// Takes `level` as the exposure level and returns the lens travel at `speed` from a frame's
     /// start to halfway through its latest-exposed area (0xfaa578).
-    pub fn exposure_travel(&mut self, ports: &mut (impl CaptureTiming + LevelScale), level: i16, speed: u32) -> u16 {
+    fn exposure_travel(&mut self, ports: &mut (impl CaptureTiming + LevelScale), level: i16, speed: u32) -> u16 {
         self.timing.level = level;
         let schedule = self.schedule(ports);
         let Some(&latest) = schedule.offsets().iter().max() else {
@@ -121,32 +207,12 @@ impl ScanDrive {
         midpoint.max(0) as u16
     }
 
-    /// Plans the drive along `leg` at up to `speed` (0xfa9c4c).
-    pub fn plan(&mut self, limits: &mut impl DriveLimits, configuration: &Configuration, leg: ScanLeg, speed: u32, kind: DriveKind) {
-        self.profile.start = leg.start;
-        self.profile.end = leg.end;
-        self.profile.reverse = leg.reverse;
-        self.start_time = leg.start_time;
-        self.profile.plan_for(speed, kind, search_mode(configuration), limits);
-    }
-
-    /// The scan time `frames` frame intervals in, less the drive's start time.
-    fn drive_time(&self, frames: u32, interval: u32) -> i32 { frames.wrapping_mul(interval).wrapping_sub(self.start_time as u32) as i32 }
-
-    /// The lens position `frames` frame intervals into the scan (0xfa9ff4).
-    pub fn position_at_frame(&self, frames: u32, interval: u32) -> i16 { self.profile.position_at(self.drive_time(frames, interval)) }
-
-    /// Each sampled area's lens target for a frame taken at `position`, `frames` frame intervals
-    /// into the scan: the position moved by the drive's midpoint over the area's exposure
-    /// (0xfa9e34, 0xfaa018).
-    pub fn sample_targets(&self, ports: &mut (impl CaptureTiming + LevelScale + Properties), position: i16, frames: u32, interval: u32) -> SampleTargets {
+    /// Each sampled area's lens target for a frame taken at `position`, `time` into the drive:
+    /// the position moved by the drive's midpoint over the area's exposure (0xfaa018).
+    fn sample_targets(&self, ports: &mut (impl CaptureTiming + LevelScale + Properties), position: i16, time: i32) -> SampleTargets {
         let schedule = self.schedule(ports);
         let distance = (i32::from(position) - i32::from(self.profile.start)).abs();
-        let time = if 0 < distance && distance < i32::from(self.profile.distance()) {
-            self.profile.time_to(position) as i32
-        } else {
-            self.drive_time(frames, interval)
-        };
+        let time = if 0 < distance && distance < i32::from(self.profile.distance()) { self.profile.time_to(position) as i32 } else { time };
         let mut targets = SampleTargets::default();
         let slots = match self.timing.areas {
             SampleAreas::Primary(_) => &mut targets.primary[..],
@@ -162,5 +228,20 @@ impl ScanDrive {
             }
         }
         targets
+    }
+}
+
+/// Clamps the window into the lens's position limits for `key`, the limit on its starting side
+/// pulled in by the lens's travel margin (0xfaa6a0).
+fn clamp_window(ports: &mut (impl LensConfiguration + LensControl), key: u32, window: &mut [i16; 2]) {
+    let margin = ports.travel_margin() as i16;
+    let [mut lower, mut upper] = ports.position_limits(key);
+    if window[1] < window[0] {
+        upper = upper.wrapping_sub(margin);
+    } else {
+        lower = lower.wrapping_add(margin);
+    }
+    for end in window.iter_mut() {
+        *end = (*end).min(upper).max(lower);
     }
 }

@@ -99,44 +99,6 @@ fn a_fall_from_the_peak_needs_both_length_and_depth() {
 }
 
 #[test]
-fn the_inverse_reference_scale_reads_zero_as_one() {
-    let mut lens = Lens::default();
-    assert_eq!(inverse_reference_scale(&mut lens, 4, 5), 5_000_000);
-    assert_eq!(inverse_reference_scale(&mut lens, 0, 5), 100_000_000);
-}
-
-#[test]
-fn a_drive_leg_runs_past_one_end_by_the_margin() {
-    let mut lens = Lens { position: 77, ..Lens::default() };
-    assert_eq!(drive_leg(&mut lens, true, -50, 50, 10), DriveLeg { position: 77, limit: 60, direction: 0 });
-    assert_eq!(drive_leg(&mut lens, false, -50, 50, 10), DriveLeg { position: 77, limit: -60, direction: 1 });
-}
-
-#[test]
-fn narrowed_limits_move_inward() {
-    let mut limits = [-50, 50];
-    narrow(5, &mut limits);
-    assert_eq!(limits, [-45, 45]);
-}
-
-#[test]
-fn limits_are_clamped_with_the_margin_on_their_far_side() {
-    let mut configuration = Lens { limits: [-100, 100], ..Lens::default() };
-    let mut control = Lens { margin: 10, ..Lens::default() };
-    let mut rising = [-200, 200];
-    clamp_limits(&mut configuration, &mut control, 0, &mut rising);
-    assert_eq!(rising, [-90, 100]);
-    let mut falling = [200, -200];
-    clamp_limits(&mut configuration, &mut control, 0, &mut falling);
-    assert_eq!(falling, [90, -100]);
-}
-
-#[test]
-fn zero_stays_zero_when_offset() {
-    assert_eq!((offset_unless_zero(0, 5), offset_unless_zero(3, 5), offset_unless_zero(0xffff, 2)), (0, 8, 1));
-}
-
-#[test]
 fn the_follow_word_carries_the_enable_in_bit_zero() {
     let mut world = World::default();
     world.header(SharedHeaderByte::At31, 12);

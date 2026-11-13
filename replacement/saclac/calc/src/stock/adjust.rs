@@ -156,6 +156,10 @@ pub const LOW_CONTRAST_STEP: Property = Property(0x87f1);
 pub const SELECTED_LOW_CONTRAST_STEP: Property = Property(0x87f2);
 /// The shift the frame interval takes before the lens table reads its step rate (0xfaac18).
 pub const STEP_PERIOD_SHIFT: Property = Property(0x87da);
+/// The scan drive's start delay in hundreds of microseconds: a two-byte value and a byte added
+/// to it (0xf3ed84..0xf3eda8).
+pub const SCAN_DRIVE_DELAY: Property = Property(0x3e_0fdd);
+pub const SCAN_DRIVE_DELAY_TRIM: Property = Property(0x9281);
 
 /// The base step in tens for a step kind, the second of each pair for a measurement the record
 /// selects (0xfab390, jump table 0xfab3ac).
