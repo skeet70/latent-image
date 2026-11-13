@@ -2,7 +2,7 @@ load("//replacement/toolchain:rust.bzl", "xm1_rust_host_rlib", "xm1_rust_host_te
 
 package(default_visibility = ["//visibility:public"])
 
-_SOURCES = glob(["src/*.rs"], exclude = ["src/lib.rs", "src/*_tests.rs", "src/fake.rs"])
+_SOURCES = glob(["src/**/*.rs"], exclude = ["src/lib.rs", "src/**/*_tests.rs", "src/**/fake.rs"])
 
 xm1_rust_rlib(
     name = "imaging",
@@ -23,5 +23,5 @@ xm1_rust_host_test(
     name = "host-tests",
     src = "src/lib.rs",
     crate_name = "xm1_saclac_imaging_tests",
-    data = glob(["src/*.rs"], exclude = ["src/lib.rs"]),
+    data = glob(["src/**/*.rs"], exclude = ["src/lib.rs"]),
 )
