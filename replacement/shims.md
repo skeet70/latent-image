@@ -250,7 +250,7 @@ saclac's lens children (machines 1, 2 and 35). Its cores take typed events and l
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
 | `live_event`, `s1_event`, `bring_up_event` and `outcome_word` in `src/stock.rs` | guest-memory layout view | the event codes the row functions `0xefd2fc`, `0xf0194c` and `0xefd624` route from machines 11, 3 and 0, and the action return words 0 to 3 | no | the lens children are entered only through `children::LensChildren` from owned routers linked in the same image | required |
-| `reply_call` and `reply_target` in `src/stock.rs` | trampoline into retained stock | the reply entries `0xefb104`, `0xefb194`, `0xefb1dc`, `0xefb604`, `0xefb654`, `0xefb6ac`, `0xefa348` and `0xefa3a8` | no | the client reply layer is owned and takes `ports::Reply` | required |
+| `reply_call` and `reply_target` in `src/stock.rs`: each reply's client and argument words, which `saclac_root` passes to `saclac_shared`'s `Commands` in place of the reply entries `0xefb104`, `0xefb194`, `0xefb1dc`, `0xefb604`, `0xefb654`, `0xefb6ac`, `0xefa348` and `0xefa3a8` | guest-memory layout view | the client callbacks the queue-43 producers store in the command blocks | no | every queue-43 client is owned | required |
 
 ## lens_transport
 
@@ -609,7 +609,7 @@ The helpers several saclac modules call (`replacement/saclac/shared`), over the 
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
-| `Stock<Guest>`'s `CommandMemory`: parameter-block words through the interface's block table (read and written; the lens children write LensDrive word 3 from Cancel word 1 as `0xf14c20` does) and the pending bytes at `0x169cf24` | guest-memory layout view | retained queue-43 producers and stock machine actions that read the blocks and flags | no | queue-43 producers and every machine are owned | required |
+| `Stock<Guest>`'s `CommandMemory`: parameter-block words through the interface's block table (read and written; the lens children write LensDrive word 3 from Cancel word 1 as `0xf14c20` does) and the pending bytes at `0x169cf24`, one per message code, commands and notification 0x1b alike | guest-memory layout view | retained queue-43 producers and stock machine actions that read the blocks and flags | no | queue-43 producers and every machine are owned | required |
 | `Stock<Guest>`'s `Clients`: client callback words entered with the status, or the status and four words | trampoline into retained stock | client callbacks stored in the command blocks by other tasks | no | every queue-43 client is owned | required |
 | `Stock<Guest>`'s `LensControl` (`0x76d9a8`, `0x76da38`, `0x76dba4`, `0x76da48`, `0x76b8b4`, `0x772f28`, runtime word `0x942ab0`+0x98) and `LensNotices` (block `0x954dbc`: notices +4/+8/+0xc, notifier +0x1c, enable +0x20; notifier entered with a four-word record) | trampoline into retained stock | lens control and the tasks that write the notice block (104, 59) | no | lens control is owned | required |
 | `Stock<Guest>`'s `Rendezvous`: current task `0x723cb8` stored at `0x16c2214`, wait `0x7243a8` on event 2, wake callback `0xf46be0` | trampoline into retained stock | the kernel and saclac's own retained wake callback | no | the driver supplies a kernel-backed rendezvous with an owned wake entry | required |
@@ -619,6 +619,17 @@ The helpers several saclac modules call (`replacement/saclac/shared`), over the 
 | `Stock<Guest>`'s `LensComClient`: client word and request number at `0x8e1f3c`+8/+0xc, completion `0x6b6f9c`, failure report `0x6b92cc` | trampoline into retained stock | lenscom's completion path | no | lenscom requests complete through an owned callback | required |
 | `Stock<Guest>`'s `Display`: `0x6c68c0`, `0x6c4bec` | trampoline into retained stock | the display driver | no | the display driver is owned | required |
 | the display driver's 60-byte status record: byte 7 gates the outputs on route 2 (`0x6c5df4`) and bytes 16..19 are the output bits (`0x6c693c`, `0x6c6948`, `0x6c6954`, `0x6c6960`) | guest-memory layout view | the display driver's status record | no | the display driver is owned | required |
+
+## saclac_root
+
+saclac's composition root (`replacement/saclac/root`): `Services` binds the lens children's, the measurement round's and the shared layer's ports to the merged modules, and what no merged module owns to the rows below, all in `src/stock.rs` and entered or read through `saclac_shared`'s `Machine`.
+
+| Shim | Kind | Other side | Owned now | Removal condition | State |
+| --- | --- | --- | --- | --- | --- |
+| `send_lens`: lens control's queue-50 senders `0x76dbe4` (0x4202), `0x76dc90`, `0x76dd24`, `0x76ddb0`, `0x76de3c`, `0x76dec8` (refuses with 0x81 while `0x76d9a8` reports 1), `0x76df7c`, `0x76e008`, `0x76e1ac`, `0x76ffec`, `0x770080` (0x4212), with the arguments of `0xf14dc8`, `0xf14e38`, `0xf14e6c`, `0xf15148`, `0xf151dc` and the lens children's callback words | trampoline into retained stock | lens control | no | the lens children post through the peer ports (`agent/PeerPorts`, `LensDc::request`) with the `0x76dec8` gate kept in the child | required |
+| lens control's resource index `0x76d9c8`, the configuration lookup selection `0x740b18`, the adjustment configuration's first parameter `0xfa8018` | trampoline into retained stock | lens control, the configuration services, the L5 adjustment configuration | no | lens control, the configuration lookup and the L5 adjustment configuration are owned | required |
+| the drive result words `0x954dbc` (live, stored by `0xf14be4`) and `0x16b750c` (S1, stored by `0xf28e94`) | guest-memory layout view | the retained lens completion callbacks | no | the lens completion callbacks are owned | required |
+| the focus controller's profile-record handle at `0x16be01c`, under which the round invalidates the focus history (`0xf32a48`) | guest-memory layout view | the stock focus controller that opens and stores the handle | no | the focus controller's record handle is owned by the controllers | required |
 
 ## saclac_config
 

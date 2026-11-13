@@ -2,8 +2,8 @@
 
 use core::ptr::{read_volatile, write_volatile};
 
-use xm1_saclac_interface::stock::{callback_word, command_code, StockCallbackWord, PARAMETER_BLOCKS};
-use xm1_saclac_interface::{ClientCallback, CommandKind};
+use xm1_saclac_interface::stock::{callback_word, reply_target_code, StockCallbackWord, PARAMETER_BLOCKS};
+use xm1_saclac_interface::{ClientCallback, ReplyTarget};
 
 use crate::commands::{ClientArguments, Clients, CommandMemory, StoredCommand};
 use crate::display::{Display, DisplayRoute, Outputs};
@@ -112,8 +112,8 @@ impl<M: Machine> CommandMemory for Stock<M> {
         self.machine.write_u32(Self::block_address(command, index), value);
     }
 
-    fn set_pending(&mut self, command: CommandKind, pending: bool) {
-        self.machine.write_u8(PENDING_FLAGS + u32::from(command_code(command)), u8::from(pending));
+    fn set_pending(&mut self, target: ReplyTarget, pending: bool) {
+        self.machine.write_u8(PENDING_FLAGS + u32::from(reply_target_code(target)), u8::from(pending));
     }
 }
 

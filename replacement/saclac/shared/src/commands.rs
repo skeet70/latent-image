@@ -11,10 +11,24 @@ use crate::settings::{Channel, Channels};
 
 /// A queue-43 message whose stored parameters modules read after its event.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum StoredCommand { Command02, Command03, LensBringUp, LensStop, HalfPress, Autofocus, LensDrive, Cancel, Command17, Step, Command2c }
+pub enum StoredCommand {
+    Command02,
+    Command03,
+    LensBringUp,
+    LensStop,
+    HalfPress,
+    Autofocus,
+    LensDrive,
+    Cancel,
+    Command10,
+    Command17,
+    Step,
+    Command2c,
+    Command2d,
+}
 
 impl StoredCommand {
-    const fn target(self) -> ReplyTarget {
+    pub const fn target(self) -> ReplyTarget {
         ReplyTarget::Command(match self {
             Self::Command02 => CommandKind::Command02,
             Self::Command03 => CommandKind::Command03,
@@ -24,8 +38,10 @@ impl StoredCommand {
             Self::Autofocus => CommandKind::Autofocus,
             Self::LensDrive => CommandKind::LensDrive,
             Self::Cancel => CommandKind::Cancel,
+            Self::Command10 => CommandKind::Command10,
             Self::Command17 => CommandKind::Command17,
             Self::Command2c => CommandKind::Command2c,
+            Self::Command2d => CommandKind::Command2d,
             Self::Step => return ReplyTarget::Notification(ClientNotification::Notification1b),
         })
     }
@@ -42,13 +58,22 @@ impl StoredCommand {
 pub trait CommandMemory {
     fn word(&self, command: StoredCommand, index: usize) -> u32;
     fn set_word(&mut self, command: StoredCommand, index: usize, value: u32);
-    fn set_pending(&mut self, command: CommandKind, pending: bool);
+    /// Sets the pending byte of the message whose code `target` has.
+    fn set_pending(&mut self, target: ReplyTarget, pending: bool);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClientArguments {
     Status(CompletionStatus),
     Reply { status: CompletionStatus, words: [u32; 4] },
+}
+
+impl ClientArguments {
+    pub const fn status(self) -> CompletionStatus {
+        match self {
+            Self::Status(status) | Self::Reply { status, .. } => status,
+        }
+    }
 }
 
 pub trait Clients {
@@ -92,15 +117,25 @@ impl<M: CommandMemory> Commands<M> {
         inside
     }
 
-    pub fn set_pending(&mut self, command: CommandKind, pending: bool) { self.memory.set_pending(command, pending) }
+    pub fn set_pending(&mut self, command: CommandKind, pending: bool) { self.memory.set_pending(ReplyTarget::Command(command), pending) }
 
     fn callback(&self, command: StoredCommand) -> Option<ClientCallback> {
         xm1_saclac_interface::stock::optional_callback(self.memory.word(command, 0))
     }
 
-    fn finish(&mut self, command: CommandKind, status: CompletionStatus) {
+    fn finish(&mut self, command: StoredCommand, status: CompletionStatus) {
         if ends_command(status) {
-            self.memory.set_pending(command, false);
+            self.memory.set_pending(command.target(), false);
+        }
+    }
+
+    /// Replies to `command`'s client with `arguments` as the reply entries 0xefa348, 0xefa3a8,
+    /// 0xefb194, 0xefb1dc, 0xefb604, 0xefb654 and 0xefb6ac do.
+    pub fn reply(&mut self, command: StoredCommand, arguments: ClientArguments, clients: &mut impl Clients) {
+        let callback = self.callback(command);
+        self.finish(command, arguments.status());
+        if let Some(callback) = callback {
+            clients.enter(callback, arguments);
         }
     }
 
@@ -108,7 +143,7 @@ impl<M: CommandMemory> Commands<M> {
     pub fn reply_lens_drive(&mut self, reply: LensDriveReply, channels: &impl Channels, clients: &mut impl Clients) {
         let callback = self.callback(StoredCommand::LensDrive);
         let client = self.memory.word(StoredCommand::LensDrive, 2);
-        self.finish(CommandKind::LensDrive, reply.status);
+        self.finish(StoredCommand::LensDrive, reply.status);
         if let Some(callback) = callback {
             let third = if channels.is_valid(reply.channel) { client } else { UNCONFIGURED_CHANNEL };
             let [fourth, fifth] = reply.words;
@@ -119,7 +154,7 @@ impl<M: CommandMemory> Commands<M> {
     /// Replies to command 0x17 with its status (0xefb4b8).
     pub fn reply_command17(&mut self, status: CompletionStatus, clients: &mut impl Clients) {
         let callback = self.callback(StoredCommand::Command17);
-        self.finish(CommandKind::Command17, status);
+        self.finish(StoredCommand::Command17, status);
         if let Some(callback) = callback {
             clients.enter(callback, ClientArguments::Status(status));
         }
@@ -144,7 +179,7 @@ impl<M: CommandMemory> Commands<M> {
 
         let callback = self.callback(StoredCommand::Autofocus);
         let client = self.memory.word(StoredCommand::Autofocus, 39);
-        self.finish(CommandKind::Autofocus, status);
+        self.finish(StoredCommand::Autofocus, status);
         if let Some(callback) = callback {
             clients.enter(callback, ClientArguments::Reply { status, words: [value, client, u32::from(noticed), probes] });
         }

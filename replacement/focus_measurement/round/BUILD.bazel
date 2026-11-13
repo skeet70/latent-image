@@ -1,16 +1,29 @@
-load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib", "xm1_rust_host_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_host_rlib", "xm1_rust_host_test", "xm1_rust_rlib")
 
 package(default_visibility = ["//visibility:public"])
+
+_SOURCES = ["src/jobs.rs", "src/acquisition.rs", "src/children.rs", "src/lanes.rs", "src/history.rs", "src/round.rs", "src/image.rs", "src/live.rs", "src/stock.rs", "src/planner.rs", "src/profile.rs", "src/record.rs", "src/pipeline.rs", "src/window.rs", "src/auxiliary.rs", "src/source.rs"] + glob(["src/acquisition/*.rs"])
 
 xm1_rust_rlib(
     name = "round",
     src = "src/lib.rs",
     crate_name = "xm1_focus_measurement_round",
-    data = ["src/jobs.rs", "src/acquisition.rs", "src/children.rs", "src/lanes.rs", "src/history.rs", "src/round.rs", "src/image.rs", "src/live.rs", "src/stock.rs", "src/planner.rs", "src/profile.rs", "src/record.rs", "src/pipeline.rs", "src/window.rs", "src/auxiliary.rs", "src/source.rs"] + glob(["src/acquisition/*.rs"]),
+    data = _SOURCES,
     out = "arm/libxm1_focus_measurement_round.rlib",
     rlib_deps = {
         "xm1_saclac_controllers": "//replacement/saclac/controllers:controllers",
         "xm1_saclac_interface": "//replacement/saclac_interface:saclac-interface",
+    },
+)
+
+xm1_rust_host_rlib(
+    name = "host",
+    src = "src/lib.rs",
+    crate_name = "xm1_focus_measurement_round",
+    data = _SOURCES,
+    rlib_deps = {
+        "xm1_saclac_controllers": "//replacement/saclac/controllers:host",
+        "xm1_saclac_interface": "//replacement/saclac_interface:host",
     },
 )
 

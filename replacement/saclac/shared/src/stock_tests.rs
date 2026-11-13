@@ -7,7 +7,7 @@ use std::rc::Rc;
 use xm1_saclac_interface::stock::{
     callback_word, command_code, optional_callback, StockCallbackWord, PARAMETER_BLOCKS,
 };
-use xm1_saclac_interface::{CommandKind, CompletionStatus};
+use xm1_saclac_interface::{ClientNotification, CommandKind, CompletionStatus, ReplyTarget};
 
 use crate::commands::{ClientArguments, Clients, CommandMemory, StoredCommand};
 use crate::display::{active_outputs, Display, DisplayRoute, Outputs};
@@ -159,9 +159,11 @@ fn parameter_words_are_read_from_the_interface_block_table() {
         StoredCommand::Autofocus,
         StoredCommand::LensDrive,
         StoredCommand::Cancel,
+        StoredCommand::Command10,
         StoredCommand::Command17,
         StoredCommand::Step,
         StoredCommand::Command2c,
+        StoredCommand::Command2d,
     ] {
         let block = PARAMETER_BLOCKS[usize::from(command.code())];
         let words = block.capacity / 4;
@@ -172,7 +174,8 @@ fn parameter_words_are_read_from_the_interface_block_table() {
     }
 }
 
-/// 0xef9cc4, 0xef9ce0, 0xef9b50 and 0xef9ca8 return these blocks; 0x1b's and 0x2c's follow the table.
+/// 0xef9cc4, 0xef9ce0, 0xef9b50, 0xef9ca8, 0xef9cfc and 0xefa00c return these blocks; 0x1b's and
+/// 0x2c's follow the table.
 #[test]
 fn the_lens_blocks_are_the_ones_their_getters_return() {
     for (command, address) in [
@@ -182,6 +185,8 @@ fn the_lens_blocks_are_the_ones_their_getters_return() {
         (StoredCommand::Autofocus, 0x169_d128),
         (StoredCommand::Step, 0x169_d28c),
         (StoredCommand::Command2c, 0x169_d360),
+        (StoredCommand::Command10, 0x169_d1e4),
+        (StoredCommand::Command2d, 0x169_d368),
     ] {
         let (fake, mut stock) = stock();
         CommandMemory::set_word(&mut stock, command, 1, 0x1234);
@@ -190,13 +195,14 @@ fn the_lens_blocks_are_the_ones_their_getters_return() {
 }
 
 #[test]
-fn the_pending_flag_is_one_byte_per_command_code() {
+fn the_pending_flag_is_one_byte_per_message_code() {
     let (fake, mut stock) = stock();
-    CommandMemory::set_pending(&mut stock, CommandKind::Autofocus, true);
-    CommandMemory::set_pending(&mut stock, CommandKind::Command2d, false);
+    CommandMemory::set_pending(&mut stock, ReplyTarget::Command(CommandKind::Autofocus), true);
+    CommandMemory::set_pending(&mut stock, ReplyTarget::Command(CommandKind::Command2d), false);
+    CommandMemory::set_pending(&mut stock, ReplyTarget::Notification(ClientNotification::Notification1b), false);
     let autofocus = 0x169_cf24 + u32::from(command_code(CommandKind::Autofocus));
     let command2d = 0x169_cf24 + u32::from(command_code(CommandKind::Command2d));
-    assert_eq!(fake.calls(), [Call::Write8(autofocus, 1), Call::Write8(command2d, 0)]);
+    assert_eq!(fake.calls(), [Call::Write8(autofocus, 1), Call::Write8(command2d, 0), Call::Write8(0x169_cf24 + 0x1b, 0)]);
 }
 
 #[test]

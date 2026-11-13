@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use xm1_saclac_interface::stock::{callback_word, StockCallbackWord};
-use xm1_saclac_interface::{ClientCallback, CommandKind, CompletionStatus};
+use xm1_saclac_interface::{ClientCallback, ClientNotification, CommandKind, CompletionStatus, ReplyTarget};
 
 use crate::commands::*;
 use crate::lens::{LensBounds, LensControl, LensNotices, LensProbe, Notice, ProbeState};
@@ -12,6 +12,7 @@ use crate::settings::{Channel, Channels};
 #[derive(Clone, Debug, PartialEq)]
 enum Event {
     Pending(CommandKind, bool),
+    NotificationPending(ClientNotification, bool),
     Entered(u32, ClientArguments),
     NoticesCleared,
 }
@@ -35,7 +36,13 @@ impl CommandMemory for Memory {
 
     fn set_word(&mut self, command: StoredCommand, index: usize, value: u32) { self.words.insert((command, index), value); }
 
-    fn set_pending(&mut self, command: CommandKind, pending: bool) { self.log.borrow_mut().push(Event::Pending(command, pending)) }
+    fn set_pending(&mut self, target: ReplyTarget, pending: bool) {
+        let event = match target {
+            ReplyTarget::Command(command) => Event::Pending(command, pending),
+            ReplyTarget::Notification(notification) => Event::NotificationPending(notification, pending),
+        };
+        self.log.borrow_mut().push(event)
+    }
 }
 
 struct Recorder(Log);
@@ -91,9 +98,11 @@ fn each_command_reads_the_words_its_parameter_block_holds() {
         (StoredCommand::Autofocus, 40),
         (StoredCommand::LensDrive, 5),
         (StoredCommand::Cancel, 2),
+        (StoredCommand::Command10, 2),
         (StoredCommand::Command17, 10),
         (StoredCommand::Step, 2),
         (StoredCommand::Command2c, 2),
+        (StoredCommand::Command2d, 2),
     ] {
         let (commands, ..) = commands(&[]);
         assert_eq!(command.words(), words, "{command:?}");
@@ -168,6 +177,31 @@ fn pending_flags_are_set_for_any_command() {
     let (mut commands, _, log) = commands(&[]);
     commands.set_pending(CommandKind::Command2d, true);
     assert_eq!(*log.borrow(), [Event::Pending(CommandKind::Command2d, true)]);
+}
+
+#[test]
+fn a_client_reply_finishes_its_message_then_enters_the_client_with_the_arguments() {
+    let arguments = ClientArguments::Reply { status: CompletionStatus(20), words: [5, 6, 0, 0] };
+    let (mut commands, mut clients, log) = commands(&[(StoredCommand::Step, 0, CALLBACK)]);
+    commands.reply(StoredCommand::Step, arguments, &mut clients);
+    assert_eq!(*log.borrow(), [
+        Event::NotificationPending(ClientNotification::Notification1b, false),
+        Event::Entered(CALLBACK, arguments),
+    ]);
+}
+
+#[test]
+fn a_progress_client_reply_keeps_its_message_pending() {
+    let (mut commands, mut clients, log) = commands(&[(StoredCommand::Command10, 0, CALLBACK)]);
+    commands.reply(StoredCommand::Command10, ClientArguments::Status(CompletionStatus(18)), &mut clients);
+    assert_eq!(*log.borrow(), [Event::Entered(CALLBACK, ClientArguments::Status(CompletionStatus(18)))]);
+}
+
+#[test]
+fn a_client_reply_without_a_callback_only_finishes() {
+    let (mut commands, mut clients, log) = commands(&[]);
+    commands.reply(StoredCommand::Command2d, ClientArguments::Status(CompletionStatus(-98)), &mut clients);
+    assert_eq!(*log.borrow(), [Event::Pending(CommandKind::Command2d, false)]);
 }
 
 struct Lens {
