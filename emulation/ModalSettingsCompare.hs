@@ -143,15 +143,18 @@ parseExtents :: Value -> Either String [(Integer, Integer)]
 parseExtents (Array entries) = traverse parseExtent (foldr (:) [] entries)
 parseExtents _ = Left "settings writers are not a list"
 
--- | Each role's writers come from its own image: the stock setter for the stock
--- role, and extents inside the image's runtime for the owned role.
+-- | Each role declares the stock setter it executes; the owned role also declares
+-- the storage store extents its image exports.
 checkWriterIdentity :: Role -> Either String ()
 checkWriterIdentity role
-  | roleScoped role = unless (not (null bounds) && all inside bounds)
-      (Left "the owned role's settings writers are not extents inside its image")
-  | otherwise = unless (bounds == [(toInteger low, toInteger high) | (low, high) <- map watchRangeBounds stockSettingsWriters])
+  | roleScoped role = unless (take (length stockBounds) bounds == stockBounds
+      && not (null ownedBounds) && all inside ownedBounds)
+      (Left "the owned role's settings writers are not the stock setter plus extents inside its image")
+  | otherwise = unless (bounds == stockBounds)
       (Left "the stock role's settings writer is not the stock setter")
  where
   bounds = roleWriterBounds role
+  stockBounds = [(toInteger low, toInteger high) | (low, high) <- map watchRangeBounds stockSettingsWriters]
+  ownedBounds = drop (length stockBounds) bounds
   (runtimeLow, runtimeHigh) = roleRuntime role
   inside (low, high) = runtimeLow <= low && low < high && high <= runtimeHigh

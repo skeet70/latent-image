@@ -1170,7 +1170,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
       loaderA <- B.readFile "private-data/analysis/x-m1-1.50/decode/loader-40000.bin"
       loaderB <- B.readFile "private-data/analysis/x-m1-1.50/decode/loader-d0000.bin"
       writers <- either (ioError . userError) pure (case modalOwnedPackage settings of
-        Just _ -> ownedSettingsWriters elfBytes
+        Just _ -> (stockSettingsWriters ++) <$> ownedSettingsWriters elfBytes
         Nothing -> Right stockSettingsWriters)
       lifetimeBound <- either (ioError . userError) pure (bindModalLifetimeSource writers manifest elfBytes loaderA loaderB)
       retiredSource <- either (ioError . userError) pure (maybe (Right lifetimeBound)

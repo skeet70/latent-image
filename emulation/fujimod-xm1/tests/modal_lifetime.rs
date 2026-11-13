@@ -222,6 +222,15 @@ fn owned_storage_store_writers_admit_the_stock_live_setting_store() {
 }
 
 #[test]
+fn owned_role_writers_admit_the_stock_setter_and_the_owned_stores() {
+    let writers = json!([[0x0062_4694, 0x0063_09c4], [OWNED_STORE8, OWNED_STORE8_END], [OWNED_STORE16, OWNED_STORE16_END]]);
+    let mut monitor = writer_fixture(writers);
+    write_from(&mut monitor, SETTER, SETTINGS + 0x1a0, &[0x5a], 0).unwrap();
+    write_from(&mut monitor, OWNED_WINDOW_STORE, SETTINGS + 0x66, &[0x5a], 0x29).unwrap();
+    assert_eq!(monitor.receipt().admitted_settings_writes, 2);
+}
+
+#[test]
 fn settings_changes_outside_a_settings_writer_or_the_block_refuse() {
     for (pc, address, before, value) in [
         (0x0062_4690, SETTINGS + 0x66, vec![0x5a], 0x5b),
