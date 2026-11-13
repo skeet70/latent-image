@@ -5,6 +5,7 @@ pub mod jobs;
 pub mod acquisition;
 pub mod children;
 pub mod scheduling;
+pub mod measurement;
 
 #[cfg(test)]
 extern crate std;
@@ -16,3 +17,5 @@ mod acquisition_tests;
 mod child_tests;
 #[cfg(test)]
 mod scheduling_tests;
+#[cfg(test)]
+mod measurement_tests;
