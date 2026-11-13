@@ -90,3 +90,28 @@ pub enum Calc1Payload {
 /// The block calc1 reads with a 0x3d00 request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AcquisitionGrid(pub [u8; 1236]);
+
+/// The secondary job's measurement geometry, which the calc 0x3c0d request is built from.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AreaGeometry {
+    pub active: bool,
+    pub list: Option<crate::area_measurement::EvaluatedList>,
+    /// Configuration bytes the calc request carries.
+    pub settings: [u8; 3],
+    /// The chosen list's area count, up to three.
+    pub count: u8,
+    /// Each area's longer side as a percentage of the frame.
+    pub shares: [u32; 3],
+    pub scale: u16,
+    pub list_value: u32,
+    /// The areas that were measured, nonzero only while `active`.
+    pub area_count: u32,
+    pub areas: crate::area_measurement::MeasuredAreas,
+    pub accepted: [bool; 3],
+    /// Rows of the measurement band on each side of the frame's middle.
+    pub span: u16,
+    pub shift: i16,
+    pub record_value: u32,
+    pub within_limit: bool,
+    pub slot_rate: u32,
+}
