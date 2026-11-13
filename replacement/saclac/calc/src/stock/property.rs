@@ -33,6 +33,8 @@ pub const CORRECTION_FLAGS: Property = Property(0x65a8);
 /// Copied into the dump frame (0xf6ad00, 0xf6ad18).
 pub const DUMP_FIRST: Property = Property(0x4a07);
 pub const DUMP_SECOND: Property = Property(0x4a08);
+/// Copied into the dump frame by 0xf6c8fc (0xf6d858).
+pub const DUMP_SETTING: Property = Property(0x4a10);
 /// Two bytes: the weight sum at which the adjustment path is not taken (0xf6afd8).
 pub const WEIGHT_LIMIT: Property = Property(0x6490);
 /// Two bytes each: weight thresholds that set the adjustment state (0xf6b214, 0xf6b234).
