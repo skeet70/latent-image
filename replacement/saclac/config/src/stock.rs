@@ -4,6 +4,8 @@ use core::ptr::{read_volatile, write_volatile};
 
 use crate::channel::{Channel, FloatLog};
 use crate::compiled::{CompiledScan, Optioned, StreamSnapshot};
+use crate::dump::{ConfigurationDump, DumpDerivations};
+use crate::table::{Row, Step};
 use crate::face::{FaceTracking, TrackingBusy};
 use crate::ports::{Derivations, ExportQuery};
 use crate::pipeline::{Bank, Enable, EnableChange, FilterWindow, Grid, Part, Setting, Stage, StageBlock};
@@ -507,4 +509,77 @@ impl StreamSnapshot for StockStreamSnapshot {
     }
 
     fn apply_options(&mut self, source: StreamSource) { entry!(0xd6_afe4u32, fn(u32, u32))(self.stream + STREAM_OPTIONS, source.0) }
+}
+
+pub struct StockDumpDerivations;
+
+impl DumpDerivations for StockDumpDerivations {
+    fn transformed_value(&mut self, step: Step, row: Row) -> u16 { entry!(0x74_68b8u32, fn(u32, u32) -> u32)(step.0, row.0) as u16 }
+
+    fn transformed_word(&mut self, step: Step, row: Row) -> u16 { entry!(0x74_695cu32, fn(u32, u32) -> u32)(step.0, row.0) as u16 }
+
+    fn lens_position_flags(&mut self) -> u32 { entry!(0x76_f340u32, fn() -> u32)() }
+
+    fn selection_word(&mut self, channel: Channel, mode: u32, flags: u32, word: i16) -> u32 {
+        entry!(0x74_8398u32, fn(i32, u32, u32, i32) -> u32)(channel.0, mode, flags, i32::from(word))
+    }
+}
+
+/// A shot's dump buffer, by guest address; its configuration section starts at +0xb174c.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StockDumpBuffer(pub u32);
+
+const CONFIGURATION_SECTION: u32 = 0xb_174c;
+const END_OF_STEPS: u16 = 0xfdfd;
+
+impl StockDumpBuffer {
+    /// Writes the section in 0x748928's store order.
+    pub fn write_configuration(self, dump: &ConfigurationDump) {
+        let section = self.0 + CONFIGURATION_SECTION;
+        let word = |offset: u32, value: u32| write_u32(section + offset, value);
+        word(0, u32::from_le_bytes(*b"ELTS"));
+        word(0x2a4, u32::from_le_bytes(*b"ELAL"));
+        let column = |index: u32, first: u32| section + 4 + 2 * (first + index);
+        let scale = |index: u32| section + 2 * (184 + index);
+        let steps = dump.steps.iter().take(dump.count);
+        for (index, step) in (0u32..).zip(steps) {
+            write_u16(column(index, 0), step.rounded as u16);
+            write_u16(column(index, 32), step.value);
+            write_u16(column(index, 68), step.transformed_value);
+            write_u16(column(index, 100), step.transformed_word);
+            write_u16(scale(index), step.scale);
+        }
+        let end = dump.count as u32;
+        for first in [0, 32, 68, 100] {
+            write_u16(column(end, first), END_OF_STEPS);
+        }
+        write_u16(scale(end), END_OF_STEPS);
+        let references = dump.references.unwrap_or([0; 3]);
+        for (offset, value) in [0x130, 0x134, 0x140].into_iter().zip(references) {
+            word(offset, value);
+        }
+        let record_word = i32::from(dump.record_word) as u32;
+        word(0x84, record_word);
+        word(0x88, record_word);
+        let words = [0x10c, 0x110, 0x114, 0x118, 0x11c, 0x120, 0x124, 0x128, 0x12c, 0x138, 0x13c, 0x144, 0x148, 0x154, 0x158];
+        let floors = [0x14c, 0x150];
+        let late = [0x15c, 0x160, 0x164, 0x168];
+        let ordered = words[..13].iter().zip(&dump.words[..13])
+            .chain(floors.iter().zip(&dump.floors))
+            .chain(words[13..].iter().zip(&dump.words[13..]))
+            .chain(late.iter().zip(&dump.late_words));
+        for (offset, value) in ordered {
+            word(*offset, *value);
+        }
+        word(0x16c, u32::from(dump.channel_scale));
+        for (offset, value) in (0x1b0..).step_by(4).zip(dump.limits.iter().flatten()) {
+            word(offset, *value);
+        }
+        for (offset, value) in [0x278, 0x27c, 0x280, 0x284, 0x288, 0x28c, 0x298, 0x29c].into_iter().zip(dump.selections) {
+            word(offset, value);
+        }
+        for (offset, value) in [0x290, 0x294, 0x2a0].into_iter().zip(dump.reference_selections.unwrap_or([0; 3])) {
+            word(offset, value);
+        }
+    }
 }
