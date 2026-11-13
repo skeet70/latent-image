@@ -465,6 +465,21 @@ pub trait LensCom {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ImageProcessorOperation { Request03 }
+
+/// A request to the image processor, queue 55.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ImageProcessorRequest<'a> {
+    pub operation: ImageProcessorOperation,
+    pub parameters: Parameters<'a>,
+}
+
+pub trait ImageProcessor {
+    type Error;
+    fn request(&mut self, request: ImageProcessorRequest<'_>) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PeerOperation {
     LensDc(LensDcOperation),
     ImgDc(ImgDcOperation),
@@ -473,6 +488,7 @@ pub enum PeerOperation {
     Statistics(StatisticsOperation),
     Flash(FlashOperation),
     LensCom(LensComOperation),
+    ImageProcessor(ImageProcessorOperation),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -487,7 +503,11 @@ pub const fn lens_effect(operation: PeerOperation) -> LensEffect {
         // 0x3f2e reaches lensdc 0x420c; 0x3f2f in imgdc state 7 reaches lensdc 0x420e (0xff4dac -> 0xff7a98 -> 0x76e450).
         PeerOperation::ImgDc(ImgDcOperation::Request2e | ImgDcOperation::Request2f) => LensEffect::DriveThroughImageBridge,
         PeerOperation::Calc(_) | PeerOperation::Calc1(_) | PeerOperation::Statistics(_) => LensEffect::NoLensDrive,
-        PeerOperation::LensDc(_) | PeerOperation::ImgDc(_) | PeerOperation::Flash(_) | PeerOperation::LensCom(_) => {
+        PeerOperation::LensDc(_)
+        | PeerOperation::ImgDc(_)
+        | PeerOperation::Flash(_)
+        | PeerOperation::LensCom(_)
+        | PeerOperation::ImageProcessor(_) => {
             LensEffect::Unclassified
         }
     }
