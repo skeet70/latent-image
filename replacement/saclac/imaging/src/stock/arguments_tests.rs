@@ -84,6 +84,21 @@ fn an_overlong_list_is_refused_without_reading_it() {
 }
 
 #[test]
+fn empty_lists_accept_a_null_unused_pointer_at_the_argument_boundary() {
+    let memory = Memory::new(BLOCK, &[0, 0x0005_0000, 7]);
+    let mut isp = FakeIsp::new();
+    let (points, shift) = raid0_arguments::points(&memory, BLOCK).unwrap();
+    raid0::set_points(&mut isp, Client::REC, points, shift).unwrap();
+    let (pairs, shift) = raid0_arguments::pairs(&memory, BLOCK).unwrap();
+    raid0::set_pairs(&mut isp, Client::REC, pairs, shift).unwrap();
+    assert_eq!(isp.writes(), [
+        (Register::Raid0(0x100), 0x9fff_1fff),
+        (Register::Raid0(0x104), 0x9fff_1fff),
+        (Register::Raid0(0x20), 0x1fff_1fff),
+    ]);
+}
+
+#[test]
 fn a_switch_word_other_than_zero_or_one_is_a_parameter_fault() {
     assert_eq!(raid0_arguments::gate(1), Ok(true));
     assert_eq!(raid0_arguments::output(0), Ok(false));

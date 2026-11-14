@@ -145,6 +145,38 @@ fn windows() {
 }
 
 #[test]
+fn zero_window_dimensions_refuse_after_operation_and_session_handling() {
+    use crate::fake::Effect;
+    let cases = [
+        (0x1c, Window::First([segment(1, 0), segment(2, 3)])),
+        (0x1c, Window::First([segment(1, 2), segment(2, 0)])),
+        (0x1e, Window::Second(span(1, 0, 3), segment(4, 5))),
+        (0x1e, Window::Second(span(1, 2, 0), segment(4, 5))),
+        (0x1e, Window::Second(span(1, 2, 3), segment(4, 0))),
+        (0x20, Window::Third(segment(1, 0), span(2, 3, 4))),
+        (0x20, Window::Third(segment(1, 2), span(2, 0, 4))),
+        (0x20, Window::Third(segment(1, 2), span(2, 3, 0))),
+        (0x31, Window::Fourth([segment(1, 0), segment(2, 3)])),
+        (0x31, Window::Fourth([segment(1, 2), segment(2, 0)])),
+    ];
+    for (operation, window) in cases {
+        for session in [None, Some(SessionId(1)), Some(SessionId(2))] {
+            let mut isp = held();
+            let caller = Caller { session, ..CALLER };
+            assert_eq!(set_window(&mut isp, caller, window), Err(Refusal::Parameter));
+            let mut expected = vec![Effect::Note(Unit::Auto, Operation(operation))];
+            if session != CALLER.session {
+                expected.push(Effect::Log(Event::Refused {
+                    client: Client::S2, unit: Unit::Auto, operation: Operation(operation), fault: Fault::ResourceId,
+                }));
+            }
+            expected.push(Effect::Log(parameter(operation)));
+            assert_eq!(isp.take(), expected);
+        }
+    }
+}
+
+#[test]
 fn auto_sessions_use_the_shared_lock() {
     let mut isp = FakeIsp::new();
     isp.put_record(Unit::Auto, Record { active: Some(SessionId(3)), holder: Client::REC, ..IDLE });

@@ -11,7 +11,7 @@ use crate::capture::configuration::{
 use crate::capture::pipeline::{StockBlock, STATISTICS_BLOCK_BYTES, STATISTICS_PARAMETER_BYTES};
 use crate::capture::ports::{Adjustments, PixelGeometry};
 use crate::capture::statistics::{
-    prepare, Area, CaptureParameters, ChannelPixels, GridBuffer, Plane, Prepared, RawStatistics, RawStore, Region, CHANNELS, REGIONS,
+    prepare, Area, CaptureParameters, ChannelPixels, GridBuffer, Plane, Prepared, RawStatistics, RawStore, Region, CHANNELS, REGION_AREAS,
 };
 use crate::capture::{AdjustmentKey, ProfileHandle};
 
@@ -135,12 +135,13 @@ fn completed(kind: u8, parameters: &mut ParameterBytes, block: Option<&mut [u8; 
 /// The preparation 0xfeaba8 enters: `store` receives the completed capture's corrected grid and
 /// regions, `parameters` its parameters with their areas rescaled. False when the last completed
 /// capture is another kind; `parameters` is then untouched.
+/// `store` covers 0x1140 writable bytes and retains its seven trailing regions between calls.
 pub fn prepare_statistics(kind: u8, store: StockBlock, parameters: &mut ParameterBytes) -> bool {
     let Some(source) = completed(kind, parameters, None) else { return false };
     let mut typed = self::parameters(parameters);
     let output = Prepared {
         planes: unsafe { &mut *(store.0 as usize as *mut [Plane; CHANNELS]) },
-        regions: unsafe { &mut *((store.0 + 0x1000) as usize as *mut [Region; REGIONS]) },
+        regions: unsafe { &mut *((store.0 + 0x1000) as usize as *mut [Region; REGION_AREAS]) },
     };
     prepare(&mut StockCapture, &raw(source), &mut typed, output);
     store_areas(&typed, parameters);
