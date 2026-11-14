@@ -66,7 +66,8 @@ pub const SCAN_INTERVAL_TICKS: u64 = 300_000;
 
 /// Two scan intervals, the longest an ADC key row waits for its second matching sample, plus
 /// 120,000 ticks (10 ms); 2.4 of the 40 scans before rows 14..20 repeat.
-pub const SCANNED_HOLD: Hold = Hold::BoardTicks(2 * SCAN_INTERVAL_TICKS + 120_000);
+pub const SCANNED_HOLD_TICKS: u64 = 2 * SCAN_INTERVAL_TICKS + 120_000;
+pub const SCANNED_HOLD: Hold = Hold::BoardTicks(SCANNED_HOLD_TICKS);
 
 pub const MENU_PULSE: KeyPulse = KeyPulse { hold: SCANNED_HOLD, release: 6_000_000 };
 pub const DIRECTIONAL_PULSE: KeyPulse = KeyPulse { hold: SCANNED_HOLD, release: 12_000_000 };
@@ -731,7 +732,7 @@ impl Machine {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::run::ValidatedUpdate;
 
@@ -743,7 +744,7 @@ mod tests {
         machine_with_code(&[SPIN])
     }
 
-    fn machine_with_code(code: &[u32]) -> Machine {
+    pub(crate) fn machine_with_code(code: &[u32]) -> Machine {
         fujimod_emulator_exr2_board::register_board_builder();
         fujimod_emulator_models::register();
         let document = RunDocument::parse(RUN).unwrap();

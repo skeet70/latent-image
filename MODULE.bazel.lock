@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "bba+JnlVfKXOTEiIGMJBijdx3UTZtIst6KcYlNtYfwQ=",
+        "bzlTransitiveDigest": "kz39OH6vuUUM/Q4AZWmJPzIo54dvM8Z2a3Q7N7GP3VM=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -659,6 +659,7 @@
                 "@@//emulation:fujimod-xm1/src/startup_dispatch_shared.rs": "//emulation:fujimod-xm1/src/startup_dispatch_shared.rs",
                 "@@//emulation:fujimod-xm1/src/startup_joined.rs": "//emulation:fujimod-xm1/src/startup_joined.rs",
                 "@@//emulation:fujimod-xm1/src/startup_sites.rs": "//emulation:fujimod-xm1/src/startup_sites.rs",
+                "@@//emulation:fujimod-xm1/src/stimulus.rs": "//emulation:fujimod-xm1/src/stimulus.rs",
                 "@@//emulation:fujimod-xm1/src/startup_tasks.rs": "//emulation:fujimod-xm1/src/startup_tasks.rs",
                 "@@//emulation:fujimod-xm1/src/idle_tasks.rs": "//emulation:fujimod-xm1/src/idle_tasks.rs",
                 "@@//emulation:fujimod-xm1/src/task_constructors.rs": "//emulation:fujimod-xm1/src/task_constructors.rs",
@@ -863,6 +864,7 @@
                 "@@//emulation:fujimod-xm1/src/startup_dispatch_shared.rs": "//emulation:fujimod-xm1/src/startup_dispatch_shared.rs",
                 "@@//emulation:fujimod-xm1/src/startup_joined.rs": "//emulation:fujimod-xm1/src/startup_joined.rs",
                 "@@//emulation:fujimod-xm1/src/startup_sites.rs": "//emulation:fujimod-xm1/src/startup_sites.rs",
+                "@@//emulation:fujimod-xm1/src/stimulus.rs": "//emulation:fujimod-xm1/src/stimulus.rs",
                 "@@//emulation:fujimod-xm1/src/startup_tasks.rs": "//emulation:fujimod-xm1/src/startup_tasks.rs",
                 "@@//emulation:fujimod-xm1/src/idle_tasks.rs": "//emulation:fujimod-xm1/src/idle_tasks.rs",
                 "@@//emulation:fujimod-xm1/src/task_constructors.rs": "//emulation:fujimod-xm1/src/task_constructors.rs",
@@ -1067,6 +1069,7 @@
                 "@@//emulation:fujimod-xm1/src/startup_dispatch_shared.rs": "//emulation:fujimod-xm1/src/startup_dispatch_shared.rs",
                 "@@//emulation:fujimod-xm1/src/startup_joined.rs": "//emulation:fujimod-xm1/src/startup_joined.rs",
                 "@@//emulation:fujimod-xm1/src/startup_sites.rs": "//emulation:fujimod-xm1/src/startup_sites.rs",
+                "@@//emulation:fujimod-xm1/src/stimulus.rs": "//emulation:fujimod-xm1/src/stimulus.rs",
                 "@@//emulation:fujimod-xm1/src/startup_tasks.rs": "//emulation:fujimod-xm1/src/startup_tasks.rs",
                 "@@//emulation:fujimod-xm1/src/idle_tasks.rs": "//emulation:fujimod-xm1/src/idle_tasks.rs",
                 "@@//emulation:fujimod-xm1/src/task_constructors.rs": "//emulation:fujimod-xm1/src/task_constructors.rs",
@@ -1274,6 +1277,7 @@
                 "@@//emulation:fujimod-xm1/src/startup_dispatch_shared.rs": "//emulation:fujimod-xm1/src/startup_dispatch_shared.rs",
                 "@@//emulation:fujimod-xm1/src/startup_joined.rs": "//emulation:fujimod-xm1/src/startup_joined.rs",
                 "@@//emulation:fujimod-xm1/src/startup_sites.rs": "//emulation:fujimod-xm1/src/startup_sites.rs",
+                "@@//emulation:fujimod-xm1/src/stimulus.rs": "//emulation:fujimod-xm1/src/stimulus.rs",
                 "@@//emulation:fujimod-xm1/src/startup_tasks.rs": "//emulation:fujimod-xm1/src/startup_tasks.rs",
                 "@@//emulation:fujimod-xm1/src/idle_tasks.rs": "//emulation:fujimod-xm1/src/idle_tasks.rs",
                 "@@//emulation:fujimod-xm1/src/task_constructors.rs": "//emulation:fujimod-xm1/src/task_constructors.rs",
@@ -1481,6 +1485,7 @@
                 "@@//emulation:fujimod-xm1/src/startup_dispatch_shared.rs": "//emulation:fujimod-xm1/src/startup_dispatch_shared.rs",
                 "@@//emulation:fujimod-xm1/src/startup_joined.rs": "//emulation:fujimod-xm1/src/startup_joined.rs",
                 "@@//emulation:fujimod-xm1/src/startup_sites.rs": "//emulation:fujimod-xm1/src/startup_sites.rs",
+                "@@//emulation:fujimod-xm1/src/stimulus.rs": "//emulation:fujimod-xm1/src/stimulus.rs",
                 "@@//emulation:fujimod-xm1/src/startup_tasks.rs": "//emulation:fujimod-xm1/src/startup_tasks.rs",
                 "@@//emulation:fujimod-xm1/src/idle_tasks.rs": "//emulation:fujimod-xm1/src/idle_tasks.rs",
                 "@@//emulation:fujimod-xm1/src/task_constructors.rs": "//emulation:fujimod-xm1/src/task_constructors.rs",
