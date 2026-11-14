@@ -224,6 +224,16 @@ The current `host-build` automatically reports the kernel-sampled lock holder on
 
 An older topic checkout may still provide an older launcher. Use the current qualified `host-build` executable through `devenv shell` from the worker checkout with its usual output base. Resolve it from current main only when that checkout is ready for Nix evaluation; otherwise use the integration owner's frozen launcher path. Keep the worker's source and working directory; do not change SDK identities merely to adopt admission. Each topic's emulator binary retains its compiled policy. Use the qualified shared wrapper or adopt the current admission modules before requesting the new RAM and swap caps; setting an environment variable does not upgrade an old binary. Current defaults are 12 GiB RAM plus 8 GiB swap for builds and native suites, and 8 GiB RAM plus 8 GiB swap for full-system runs, within the shared 64 GiB combined reservation budget. Keep completed and healthy running cohorts bound to their original scopes.
 
+## Playback decode observation
+
+<!-- evidence-record E-FUJIMOD-XM1-PLAY-JPEG-150 -->
+
+E-FUJIMOD-XM1-PLAY-JPEG-150: The stock X-M1 PLAY route's source/layout/extent observation is passed for 2 completed jobs, with the original card unchanged (true). Preview: 320x240, 153600 complete output bytes; 21400 exact fixture codestream bytes at offset 65728 plus 89 observed preserved pre-copy tail bytes make its 21489-byte programmed span, whose literal whole-fixture-subrange identity is false. Full image: 4896x2760, 3515192 literal fixture bytes and 27025920 complete output bytes. Both jobs are sampled before the shared destination is reused, with programmed operands, natural completion status and loaded endpoint bound separately. Independent JuicyPixels RGB-to-packed422 reference comparisons differ by 13862 preview bytes and 551768 full-frame bytes; these are not qualified pixel agreement. The final PNG visibly shows the playback photograph and overlay.
+
+Scope: One stock-DAT cold-boot public media-route-smoke play execution on the granted FujiMod runtime and one card fixture. Full sources are observed before decode and complete source/header-derived output extents before reuse; source, capacity, alias, geometry, padding and endpoint checks pass. No added MMIO reads, device-law changes or fitted pixel tolerance.
+
+<!-- /evidence-record E-FUJIMOD-XM1-PLAY-JPEG-150 -->
+
 ## RAM-loaded first-stage decode experiment
 
 <!-- evidence-record E-RAM-DECODE-OWNERSHIP-150 -->

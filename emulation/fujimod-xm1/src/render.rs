@@ -458,6 +458,112 @@ pub fn settled_key(machine: &mut Machine, key: Press, pulse: KeyPulse, budget: u
     })
 }
 
+enum PendingPhase {
+    Prior,
+    Input(crate::machine::PendingPress),
+    After,
+}
+
+pub struct PendingSettle {
+    key: Press,
+    pulse: KeyPulse,
+    budget: u64,
+    start: u64,
+    key_start: u64,
+    settle_start: u64,
+    prior: u64,
+    before: Option<Probe>,
+    old_frame: Option<Vec<u8>>,
+    requested: Option<u8>,
+    phase: PendingPhase,
+    chunk_end: Option<u64>,
+    tally: GateTally,
+    first: Option<GateSample>,
+    latest: Option<GateSample>,
+}
+
+impl PendingSettle {
+    pub fn begin(machine: &Machine, key: Press, pulse: KeyPulse, budget: u64) -> Result<Self, String> {
+        if matches!(key, Press::Dial(_)) {
+            return Err("trace-paused keys do not support dial phases".into());
+        }
+        Ok(Self { key, pulse, budget, start: machine.instructions(), key_start: 0, settle_start: 0,
+            prior: 0, before: None, old_frame: None, requested: None, phase: PendingPhase::Prior,
+            chunk_end: None, tally: GateTally::default(), first: None, latest: None })
+    }
+
+    pub fn resume(&mut self, machine: &mut Machine) -> Result<Option<Settle>, String> {
+        loop {
+            machine.require_running()?;
+            if let PendingPhase::Input(input) = &mut self.phase {
+                if !machine.continue_pending_press(input)? { return Ok(None); }
+                self.settle_start = machine.instructions();
+                self.phase = PendingPhase::After;
+                self.tally = GateTally::default();
+                self.first = None;
+                self.latest = None;
+            }
+            if let Some(endpoint) = self.chunk_end {
+                machine.run(endpoint.saturating_sub(machine.instructions()));
+                machine.require_running()?;
+                if machine.traces.paused { return Ok(None); }
+                self.chunk_end = None;
+            }
+            let sampled = machine.document.firmware.render.sample(machine)?;
+            let probe = sampled.probe;
+            self.tally.add(&sampled);
+            if self.first.is_none() { self.first = Some(sampled); } else { self.latest = Some(sampled); }
+            let (spent, status) = match self.phase {
+                PendingPhase::Prior => {
+                    let spent = machine.instructions() - self.start;
+                    if probe.drained && probe.consumer_finished() {
+                        self.before = Some(probe);
+                        self.prior = spent;
+                        self.old_frame = machine.frame()?;
+                        self.key_start = machine.instructions();
+                        self.phase = PendingPhase::Input(machine.start_pending_press(self.key, self.pulse)?);
+                        continue;
+                    }
+                    (spent, SettleStatus::PriorRenderPending)
+                }
+                PendingPhase::After => {
+                    let before = self.before.ok_or("settle prior boundary is absent")?;
+                    if probe.sender_token != before.sender_token { self.requested = Some(probe.sender_token); }
+                    let consumed = self.requested.is_some_and(|token| {
+                        probe.copied_command & 0xf000 == 0x4000 && probe.packet_token == token
+                            && probe.consumer_token == token && probe.copied_command == probe.sender_command
+                            || probe.auxiliary_acknowledged() && probe.staged_render_token == token
+                                && before.staged_render_token != token
+                    });
+                    let new_work = probe.graphics.started > before.graphics.started
+                        && probe.graphics.completed > before.graphics.completed
+                        && probe.graphics.bytes_completed > before.graphics.bytes_completed;
+                    if consumed && new_work && probe.drained && probe.consumer_finished() && machine.frame()? != self.old_frame {
+                        return Ok(Some(self.result(machine, SettleStatus::PacketConsumed, false)?));
+                    }
+                    (self.prior + machine.instructions() - self.settle_start, SettleStatus::BudgetExhausted)
+                }
+                PendingPhase::Input(_) => return Err("input continuation phase did not finish".into()),
+            };
+            if spent >= self.budget { return Ok(Some(self.result(machine, status, true)?)); }
+            self.chunk_end = Some(machine.instructions() + (self.budget - spent).min(CHUNK));
+        }
+    }
+
+    fn result(&self, machine: &Machine, status: SettleStatus, report: bool) -> Result<Settle, String> {
+        let prior_only = matches!(status, SettleStatus::PriorRenderPending);
+        let gate = if report {
+            let first = self.first.clone().ok_or("settle first sample is absent")?;
+            let last = self.latest.clone().unwrap_or_else(|| first.clone());
+            Some(GateReport { tally: self.tally.clone(), first, last })
+        } else { None };
+        Ok(Settle { status,
+            prior_instructions: if prior_only { machine.instructions() - self.start } else { self.prior },
+            key_instructions: if prior_only { 0 } else { self.settle_start - self.key_start },
+            settle_instructions: if prior_only { 0 } else { machine.instructions() - self.settle_start }, gate })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

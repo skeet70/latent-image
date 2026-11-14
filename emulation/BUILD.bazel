@@ -3577,6 +3577,33 @@ haskell_library(
     ],
 )
 
+haskell_library(
+    name = "playback-decode-lib",
+    srcs = ["Emulation/PlaybackDecode.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:JuicyPixels",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
+haskell_test(
+    name = "playback-decode-tests",
+    size = "small",
+    srcs = ["PlaybackDecodeTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":playback-decode-lib",
+        "//host:JuicyPixels",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
 haskell_binary(
     name = "media-route-smoke",
     srcs = ["MediaRouteSmoke.hs"],
@@ -3584,6 +3611,7 @@ haskell_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":capture-stream-lib",
+        ":playback-decode-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
