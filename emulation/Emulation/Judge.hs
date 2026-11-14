@@ -368,7 +368,7 @@ data Verdict = Verdict
 
 -- | Bumped when the rule changes; the verdict document names it.
 judgeVersion :: String
-judgeVersion = "6"
+judgeVersion = "7"
 
 judgeReport :: JudgeInput -> Report -> Verdict
 judgeReport input report =

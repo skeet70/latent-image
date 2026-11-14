@@ -1,9 +1,9 @@
 //! A scripted backend for host tests.
 
-use crate::{Backend, Error, Form, IrqState, SemaphoreId, TaskId, Timeout};
-use std::cell::RefCell;
+use crate::{Backend, Error, FlagBits, Form, Header, IrqState, MessageBlock, PostError, QueueConfig, QueueId, SemaphoreId, SemaphoreWord, Status, TaskId, Timeout};
+use std::cell::{Cell, RefCell};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Call {
     CurrentTask,
     InHandler,
@@ -13,6 +13,21 @@ pub enum Call {
     CoresUnlock(u32),
     Wait { id: SemaphoreId, timeout: u32 },
     Signal { id: SemaphoreId, form: Form },
+    Post { id: QueueId, form: Form, header: Header, payload: Vec<u8> },
+    Receive { id: QueueId, timeout: u32 },
+    QueueCreate { id: QueueId, config: QueueConfig },
+    QueueDelete(QueueId),
+    SemaphoreCreateBinary,
+    SemaphoreDelete(SemaphoreId),
+    TryTake(SemaphoreId),
+    WaitWord { word: SemaphoreWord, timeout: Timeout },
+    SignalWord { word: SemaphoreWord, form: Form },
+    PollWord(SemaphoreWord),
+    FlagsWait { id: TaskId, bits: FlagBits, timeout: u32 },
+    FlagsClear(TaskId),
+    FlagsSet { id: TaskId, bits: FlagBits, form: Form },
+    DispatchDisable,
+    DispatchEnable,
 }
 
 pub struct Fake {
@@ -23,6 +38,16 @@ pub struct Fake {
     wait: Result<(), Error>,
     signal: Result<(), Error>,
     calls: RefCell<Vec<Call>>,
+    messages: RefCell<std::collections::VecDeque<Result<FakeMessage, Error>>>,
+    posted: Result<(), PostError>,
+    created: Result<SemaphoreId, Error>,
+    flags: Result<FlagBits, Error>,
+    tasks: RefCell<std::collections::BTreeSet<TaskId>>,
+    queues: RefCell<std::collections::BTreeSet<QueueId>>,
+    creation_responses: RefCell<std::collections::VecDeque<Status>>,
+    queue_delete_failure: RefCell<Option<Error>>,
+    dispatch_disable_failure: RefCell<Option<Error>>,
+    dispatch_disabled: Cell<bool>,
 }
 
 impl Fake {
@@ -35,6 +60,16 @@ impl Fake {
             wait: Ok(()),
             signal: Ok(()),
             calls: RefCell::new(Vec::new()),
+            messages: RefCell::new(std::collections::VecDeque::new()),
+            posted: Ok(()),
+            created: Ok(SemaphoreId::new(169).unwrap()),
+            flags: Ok(FlagBits(0)),
+            tasks: RefCell::new(std::collections::BTreeSet::new()),
+            queues: RefCell::new(std::collections::BTreeSet::new()),
+            creation_responses: RefCell::new(std::collections::VecDeque::new()),
+            queue_delete_failure: RefCell::new(None),
+            dispatch_disable_failure: RefCell::new(None),
+            dispatch_disabled: Cell::new(false),
         }
     }
 
@@ -45,6 +80,16 @@ impl Fake {
     pub fn wait_result(mut self, result: Result<(), Error>) -> Self { self.wait = result; self }
     pub fn signal_result(mut self, result: Result<(), Error>) -> Self { self.signal = result; self }
     pub fn calls(&self) -> Vec<Call> { self.calls.borrow().clone() }
+    pub fn receive_result(self, message: Result<FakeMessage, Error>) -> Self { self.messages.borrow_mut().push_back(message); self }
+    pub fn post_result(mut self, result: Result<(), PostError>) -> Self { self.posted = result; self }
+    pub fn create_result(mut self, result: Result<SemaphoreId, Error>) -> Self { self.created = result; self }
+    pub fn flags_result(mut self, result: Result<FlagBits, Error>) -> Self { self.flags = result; self }
+    pub fn creation_responses(self, responses: impl IntoIterator<Item = Status>) -> Self {
+        self.creation_responses.borrow_mut().extend(responses); self
+    }
+    pub fn fail_queue_delete_once(self, error: Error) -> Self { *self.queue_delete_failure.borrow_mut() = Some(error); self }
+    pub fn fail_dispatch_disable_once(self, error: Error) -> Self { *self.dispatch_disable_failure.borrow_mut() = Some(error); self }
+    pub fn initially_dispatch_disabled(self) -> Self { self.dispatch_disabled.set(true); self }
 
     fn record(&self, call: Call) { self.calls.borrow_mut().push(call); }
 }
@@ -56,6 +101,7 @@ impl Default for Fake {
 impl crate::sealed::Sealed for Fake {}
 
 impl Backend for Fake {
+    type Message = FakeMessage;
     fn current_task(&self) -> Option<TaskId> {
         self.record(Call::CurrentTask);
         self.task
@@ -76,10 +122,97 @@ impl Backend for Fake {
     fn cores_unlock(&self, saved: IrqState) { self.record(Call::CoresUnlock(saved.word())); }
     fn semaphore_wait(&self, id: SemaphoreId, timeout: Timeout) -> Result<(), Error> {
         self.record(Call::Wait { id, timeout: timeout.word() });
+        if timeout != Timeout::Poll && self.dispatch_disabled.get() { return Err(Error::Context); }
         self.wait
     }
     fn semaphore_signal(&self, id: SemaphoreId, form: Form) -> Result<(), Error> {
         self.record(Call::Signal { id, form });
         self.signal
+    }
+    fn semaphore_wait_word(&self, word: SemaphoreWord, timeout: Timeout) -> Result<(), Error> {
+        match word.id() {
+            Ok(id) => self.semaphore_wait(id, timeout),
+            Err(_) => { self.record(Call::WaitWord { word, timeout }); Err(Error::InvalidId) }
+        }
+    }
+    fn semaphore_signal_word(&self, word: SemaphoreWord, form: Form) -> Result<(), Error> {
+        match word.id() {
+            Ok(id) => self.semaphore_signal(id, form),
+            Err(_) => { self.record(Call::SignalWord { word, form }); Err(Error::InvalidId) }
+        }
+    }
+    fn message_post(&self, id: QueueId, form: Form, header: Header, payload: &[u8]) -> Result<(), PostError> {
+        self.record(Call::Post { id, form, header, payload: payload.to_vec() }); self.posted
+    }
+    fn message_receive(&self, id: QueueId, timeout: Timeout) -> Result<Self::Message, Error> {
+        self.record(Call::Receive { id, timeout: timeout.word() });
+        self.messages.borrow_mut().pop_front().unwrap_or(Err(Error::TimedOut))
+    }
+    fn queue_create(&self, id: QueueId, config: QueueConfig) -> Result<(), Error> {
+        self.record(Call::QueueCreate { id, config });
+        self.wait?;
+        if self.queues.borrow_mut().insert(id) { Ok(()) } else { Err(Error::State) }
+    }
+    fn queue_delete(&self, id: QueueId) -> Result<(), Error> {
+        self.record(Call::QueueDelete(id));
+        if let Some(error) = self.queue_delete_failure.borrow_mut().take() { return Err(error); }
+        self.signal?;
+        if self.queues.borrow_mut().remove(&id) { Ok(()) } else { Err(Error::NotCreated) }
+    }
+    fn semaphore_create_binary(&self) -> SemaphoreWord {
+        self.record(Call::SemaphoreCreateBinary);
+        match self.creation_responses.borrow_mut().pop_front() {
+            Some(word) => SemaphoreWord::from_creation_word(word.0 as u32),
+            None => self.created.map(SemaphoreWord::from).unwrap_or_else(|error| SemaphoreWord::from_creation_word(error.status().0 as u32)),
+        }
+    }
+    fn semaphore_delete(&self, id: SemaphoreId) -> Result<(), Error> { self.record(Call::SemaphoreDelete(id)); self.signal }
+    fn semaphore_try_take(&self, word: SemaphoreWord) -> Result<(), Error> {
+        match word.id() {
+            Ok(id) => { self.record(Call::TryTake(id)); self.wait }
+            Err(_) => { self.record(Call::PollWord(word)); Err(Error::InvalidId) }
+        }
+    }
+    fn flags_wait_any(&self, id: TaskId, bits: FlagBits, timeout: Timeout) -> Result<FlagBits, Error> {
+        self.record(Call::FlagsWait { id, bits, timeout: timeout.word() }); self.flags
+    }
+    fn flags_clear(&self, id: TaskId) -> Result<(), Error> { self.record(Call::FlagsClear(id)); self.signal }
+    fn flags_set(&self, id: TaskId, bits: FlagBits, form: Form) -> Result<(), Error> { self.record(Call::FlagsSet { id, bits, form }); self.signal }
+    fn dispatch_disable(&self) -> Result<(), Error> {
+        self.record(Call::DispatchDisable);
+        if let Some(error) = self.dispatch_disable_failure.borrow_mut().take() { return Err(error); }
+        self.wait?;
+        self.dispatch_disabled.set(true);
+        Ok(())
+    }
+    fn dispatch_enable(&self) -> Result<(), Error> {
+        self.record(Call::DispatchEnable);
+        self.signal?;
+        self.dispatch_disabled.set(false);
+        Ok(())
+    }
+}
+
+pub struct FakeMessage {
+    pub header: Header,
+    pub payload: Vec<u8>,
+    pub releases: std::rc::Rc<std::cell::Cell<usize>>,
+}
+impl MessageBlock for FakeMessage {
+    fn header(&self) -> Header { self.header }
+    fn payload(&self) -> &[u8] { &self.payload }
+}
+impl Drop for FakeMessage {
+    fn drop(&mut self) { self.releases.set(self.releases.get() + 1); }
+}
+
+impl crate::TaskBackend for Fake {
+    fn task_create(&self, config: crate::TaskConfig) -> Result<(), Error> {
+        self.wait?;
+        if self.tasks.borrow_mut().insert(config.id) { Ok(()) } else { Err(Error::State) }
+    }
+    fn task_delete(&self, id: TaskId) -> Result<(), Error> {
+        self.signal?;
+        if self.tasks.borrow_mut().remove(&id) { Ok(()) } else { Err(Error::NotCreated) }
     }
 }

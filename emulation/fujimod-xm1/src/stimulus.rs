@@ -54,6 +54,18 @@ impl<S: DeserializeOwned> TickSchedule<S> {
 }
 
 impl<S> TickSchedule<S> {
+    pub fn followed_by(mut self, next: Self) -> Result<Self, String> {
+        let offset = self.0.last().ok_or("preparation schedule has no end")?.tick.0;
+        let end = next.0.last().ok_or("following schedule has no end")?.tick.0;
+        offset.checked_add(end).ok_or("combined board tick schedule overflows")?;
+        self.0.reserve(next.0.len());
+        self.0.extend(next.0.into_iter().map(|point| ScheduledPoint {
+            stimulus: point.stimulus,
+            tick: TickOrdinal(offset + point.tick.0),
+        }));
+        Ok(self)
+    }
+
     /// Delays each point that follows one `opens` matches, and every later point with it, until it
     /// comes at least `gap` ticks after that point.
     pub fn widened(self, gap: u64, opens: impl Fn(&S) -> bool) -> Self {
@@ -234,6 +246,20 @@ mod tests {
 
     fn ticks(stimuli: &Stimuli<String>) -> Vec<u64> {
         stimuli.receipt().points.iter().map(|point| point.tick.0).collect()
+    }
+
+    #[test]
+    fn following_schedule_preserves_each_relative_stimulus_deadline() {
+        let combined = schedule(&[("press", 20), ("release", 40)])
+            .followed_by(schedule(&[("press", 0), ("release", 15)])).unwrap();
+        let document = serde_json::to_value(combined).unwrap();
+        assert_eq!(document, serde_json::json!({"points": [
+            {"stimulus": "press", "tick": 20},
+            {"stimulus": "release", "tick": 40},
+            {"stimulus": "press", "tick": 40},
+            {"stimulus": "release", "tick": 55},
+        ]}));
+        assert!(schedule(&[("end", u64::MAX)]).followed_by(schedule(&[("end", 1)])).is_err());
     }
 
     #[test]

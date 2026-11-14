@@ -7,7 +7,7 @@ package(default_visibility = ["//visibility:public"])
 
 genrule(
     name = "host",
-    srcs = ["src/lib.rs", "src/fake.rs", "src/slot_table.rs"],
+    srcs = ["src/lib.rs", "src/fake.rs", "src/slot_table.rs", "src/slot_table/messages.rs", "src/task.rs", "src/slot_table/task.rs"],
     outs = ["host/libxm1_kernel.rlib"],
     cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --crate-type=rlib --crate-name=xm1_kernel $(location src/lib.rs) -o $@",
     tools = ["@lab_xm1_rust//:bin/rustc"],
@@ -16,7 +16,7 @@ genrule(
 xm1_rust_rlib(
     name = "arm",
     src = "src/lib.rs",
-    data = ["src/fake.rs", "src/slot_table.rs"],
+    data = ["src/fake.rs", "src/slot_table.rs", "src/slot_table/messages.rs", "src/task.rs", "src/slot_table/task.rs"],
     crate_name = "xm1_kernel",
     out = "arm/libxm1_kernel.rlib",
     rustc_flags = ["-C", "jump-tables=no"],
@@ -24,7 +24,7 @@ xm1_rust_rlib(
 
 genrule(
     name = "host-test-binary",
-    srcs = ["src/lib.rs", "src/fake.rs", "src/slot_table.rs", "src/host_tests.rs", "src/slot_table_tests.rs"],
+    srcs = ["src/lib.rs", "src/fake.rs", "src/slot_table.rs", "src/host_tests.rs", "src/slot_table_tests.rs", "src/message_tests.rs", "src/slot_table/messages.rs", "src/task.rs", "src/slot_table/task.rs"],
     outs = ["kernel-host-tests-bin"],
     cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --crate-name=xm1_kernel $(location src/lib.rs) -o $@",
     executable = True,

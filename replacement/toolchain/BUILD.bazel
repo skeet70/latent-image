@@ -3,6 +3,7 @@ package(default_visibility = ["//visibility:public"])
 exports_files([
     "README.md",
     "rust.bzl",
+    "host-test.sh",
     "xm1-rust.nix",
 ])
 

@@ -1,0 +1,43 @@
+{
+  "schema": 2,
+  "stock_calls": [
+    {"address":"0x00041a34","name":"kernel-console","source":"replacement/shims.md kernel-slot-table"},
+    {"address":"0x007235d8","name":"kernel-critical-enter","source":"replacement/shims.md kernel-slot-table"},
+    {"address":"0x007236b0","name":"kernel-critical-exit","source":"replacement/shims.md kernel-slot-table"},
+    {"address":"0x00723efc","name":"kernel-dispatch-disable","source":"replacement/kernel/src/slot_table/messages.rs dispatch_disable"},
+    {"address":"0x00723f7c","name":"kernel-dispatch-enable","source":"replacement/kernel/src/slot_table/messages.rs dispatch_enable"},
+    {"address":"0x00724974","name":"kernel-semaphore-delete","source":"replacement/kernel/src/slot_table/messages.rs semaphore_delete"},
+    {"address":"0x0065722c","name":"handle-allocate","source":"replacement/time_services/stock-interface.json imports"},
+    {"address":"0x00657384","name":"handle-resolve","source":"replacement/time_services/stock-interface.json imports"},
+    {"address":"0x0065744c","name":"handle-release","source":"replacement/time_services/stock-interface.json imports"},
+    {"address":"0x00655b28","name":"device-acquire","source":"replacement/time_services/stock-interface.json imports"},
+    {"address":"0x00655ccc","name":"device-configure","source":"replacement/time_services/stock-interface.json imports"},
+    {"address":"0x00655fe8","name":"device-stop","source":"replacement/time_services/stock-interface.json imports"},
+    {"address":"0x00655c24","name":"device-release","source":"replacement/time_services/stock-interface.json imports"},
+    {"address":"0x00723870","name":"irq-configure","source":"replacement/time_services/stock-interface.json imports"},
+    {"address":"0x007239a0","name":"irq-detach","source":"replacement/time_services/stock-interface.json imports"},
+    {"address":"0x00726c74","name":"diagnostic","source":"replacement/time_services/stock-interface.json imports"},
+    {"address":"0x00724cdc","name":"queue-create","source":"replacement/time_services/stock-interface.json imports"},
+    {"address":"0x00724f08","name":"queue-delete","source":"replacement/time_services/stock-interface.json imports"},
+    {"address":"0x00725dd8","name":"task-create","source":"replacement/time_services/stock-interface.json imports"},
+    {"address":"0x0072612c","name":"task-delete","source":"replacement/time_services/stock-interface.json imports"},
+    {"address":"0x007247ac","name":"semaphore-create","source":"replacement/time_services/stock-interface.json imports"},
+    {"address":"0x00724ad8","name":"semaphore-poll","source":"replacement/time_services/stock-interface.json imports"}
+  ],
+  "stock_regions": [
+    {"address":"0x0095aa9c","bytes":132,"name":"timer-handles","source":"replacement/time_services/src/stock.rs TIMER_HANDLES"},
+    {"address":"0x00940e9c","bytes":1024,"name":"interrupt-handles-and-sources","source":"replacement/time_services/stock-interface.json shared"},
+    {"address":"0x007c9124","bytes":1476,"name":"interrupt-routes","source":"replacement/time_services/src/stock.rs IRQ_ROUTES, twelve bytes for sources 0 through 122"},
+    {"address":"0x0095dc08","bytes":24,"name":"delay-shared","source":"replacement/time_services/stock-interface.json shared"},
+    {"address":"0x0096bd40","bytes":24,"name":"timer-shared","source":"replacement/time_services/stock-interface.json shared"},
+    {"address":"0x0096e97c","bytes":4,"name":"ticks","source":"replacement/time_services/stock-interface.json shared"},
+    {"address":"0x0089f76c","bytes":20,"name":"task-arguments","source":"replacement/time_services/src/stock.rs create-delay and initialize"},
+    {"address":"0x0096bd20","bytes":8,"name":"kernel-roots","source":"replacement/kernel/src/slot_table.rs ROOT_TABLE"},
+    {"address":"0x0093e6f4","bytes":676,"name":"semaphore-classes","source":"replacement/kernel/src/slot_table.rs SEMAPHORE_CLASSES"},
+    {"address":"0x40a0f82c","bytes":4,"name":"kernel-error-status","source":"replacement/kernel/src/slot_table.rs ERROR_STATUS"},
+    {"address":"0x4089ea8c","bytes":4,"name":"kernel-error-callback","source":"replacement/kernel/src/slot_table.rs ERROR_CALLBACK"},
+    {"address":"0x007cad9c","bytes":1020,"name":"kernel-object-classes","source":"replacement/kernel/src/slot_table/messages.rs CLASSES, eight-bit nonzero ids"},
+    {"address":"0x40a0fa50","bytes":1020,"name":"kernel-block-capacities","source":"replacement/kernel/src/slot_table/messages.rs CAPACITIES, eight-bit nonzero ids"},
+    {"address":"0x4089ea94","bytes":4,"name":"kernel-post-hook","source":"replacement/kernel/src/slot_table/messages.rs POST_HOOK"}
+  ]
+}

@@ -93,6 +93,8 @@ The [artifact policy and placement admission](property_service/Replacement/Prope
 
 `--native-jobs N` bounds independent host pipelines inside one admitted native scope. Shared input pooling and the raw observation cache preserve exact wire/runner identities; current model and caller-frame checks run again on reuse. Successful staged files are compacted only after a verified cache binding exists. Failed/incomplete cases and their consumer judgments remain retained. Cache inspection and cache-only reads reject symlink escapes, missing/corrupt entries, ambiguous compressed payloads and incomplete provenance without running the SDK.
 
+Bank native fixtures replace the property producer's split code regions with the existing patched chain windows. Replacement requires matching region descriptions and bytes, with complete containment in a chain window. Partial or unrelated overlaps and modified producer code are refused. Other regions and expected state are retained. Only declarations at replaced chain-function entry addresses are replaced; indirect slot-stub declarations remain. Stock and owned defect controls are applied after fixture assembly. The shared assembly retains its entry-register obligations; a direct canonical caller selects the existing canonical entry contract explicitly.
+
 The frozen native cohort in `E-SETTINGS-STORAGE-COMPOSED-NATIVE-150` qualifies its own source, runner and artifacts. Importing its source into the current SDK does not rebind those observations. Composed cold boot, repeated set/get, custom save/recall, cancellation/restore, handback and physical persistence remain separate acceptance.
 
 ## Record-store build and staging

@@ -684,6 +684,7 @@ data Segment = Segment
   , segmentObserve :: Bool
   , segmentReads :: [(String, ReadAddress, Int)]
   , segmentRequires :: [T.Text]
+  , segmentTraceRequires :: [String]
   , segmentFilmRow :: Maybe FilmRow
   , segmentKeyPulse :: Maybe KeyPulse
   , segmentReadExpectations :: [ReadExpectation]
@@ -703,6 +704,7 @@ instance FromJSON Segment where
       <*> segment .:? "observe" .!= False
       <*> (mapM window =<< segment .:? "reads" .!= [])
       <*> segment .:? "requires" .!= []
+      <*> segment .:? "trace_requires" .!= []
       <*> segment .:? "film_row"
       <*> (traverse keyPulse =<< segment .:? "key_pulse")
       <*> segment .:? "read_expectations" .!= []
@@ -919,8 +921,13 @@ decodeTrajectories bytes = do
     (segmentReadPreservations entry)) (zip [0 :: Int ..] entries)
   case [ phase | entry <- beforeUnload trajectories ++ afterUnload trajectories
                , phase <- segmentRequires entry, phase `notElem` phaseNames trajectories ] of
-    [] -> Right trajectories
+    [] -> Right ()
     phase : _ -> Left ("trajectory requires an unknown segment: " ++ T.unpack phase)
+  let siteLabels = map traceSiteLabel (trajectoryTraceSites trajectories)
+  case [ label | entry <- beforeUnload trajectories ++ afterUnload trajectories
+               , label <- segmentTraceRequires entry, label `notElem` siteLabels ] of
+    [] -> Right trajectories
+    label : _ -> Left ("trajectory requires an undeclared trace site: " ++ label)
 
 -- | Where VARIANT differs from RETAINED in anything but press timing (segment key pulses and step
 -- timing) and the retained-only MENU after each rendezvous ('withoutOverlayExits'); empty when
@@ -955,6 +962,7 @@ variantMismatches retained variant
       , ("read_expectations", segmentReadExpectations a == segmentReadExpectations b)
       , ("read_preservations", segmentReadPreservations a == segmentReadPreservations b)
       , ("requires", segmentRequires a == segmentRequires b)
+      , ("trace_requires", segmentTraceRequires a == segmentTraceRequires b)
       , ("film_row", segmentFilmRow a == segmentFilmRow b)
       , ("save_lifecycle", segmentSaveLifecycle a == segmentSaveLifecycle b)
       , ("af_ownership", segmentAfOwnership a == segmentAfOwnership b) ]

@@ -3,6 +3,10 @@
 use crate::{Error, Form, IrqState, SemaphoreId, Status, TaskId, Timeout};
 #[cfg(target_arch = "arm")]
 use crate::{Backend, Kernel};
+#[cfg(target_arch = "arm")]
+mod messages;
+#[cfg(target_arch = "arm")]
+mod task;
 
 /// The stock kernel's interface root: one word per core, each the core's slot block.
 pub(crate) const ROOT_TABLE: u32 = 0x96bd20;
@@ -186,18 +190,39 @@ impl crate::sealed::Sealed for SlotTable {}
 
 #[cfg(target_arch = "arm")]
 impl Backend for SlotTable {
+    type Message = messages::ReceivedBlock;
     fn current_task(&self) -> Option<TaskId> { current_task(&StockGuest) }
     fn in_handler(&self) -> bool { in_handler(&StockGuest) }
     fn irq_mask(&self) -> IrqState { irq_mask(&StockGuest) }
     fn irq_restore(&self, saved: IrqState) { irq_restore(&StockGuest, saved) }
     fn cores_lock(&self) -> IrqState { cores_lock(&StockGuest) }
     fn cores_unlock(&self, saved: IrqState) { cores_unlock(&StockGuest, saved) }
-    fn semaphore_wait(&self, id: SemaphoreId, timeout: Timeout) -> Result<(), Error> {
-        semaphore_wait(&StockGuest, id, timeout)
+    fn semaphore_wait(&self, id: SemaphoreId, timeout: Timeout) -> Result<(), Error> { semaphore_wait(&StockGuest, id, timeout) }
+    fn semaphore_signal(&self, id: SemaphoreId, form: Form) -> Result<(), Error> { semaphore_signal(&StockGuest, id, form) }
+    fn semaphore_wait_word(&self, word: crate::SemaphoreWord, timeout: Timeout) -> Result<(), Error> {
+        match word.id() {
+            Ok(id) => semaphore_wait(&StockGuest, id, timeout),
+            Err(_) => messages::semaphore_wait_word(word, timeout),
+        }
     }
-    fn semaphore_signal(&self, id: SemaphoreId, form: Form) -> Result<(), Error> {
-        semaphore_signal(&StockGuest, id, form)
+    fn semaphore_signal_word(&self, word: crate::SemaphoreWord, form: Form) -> Result<(), Error> {
+        match word.id() {
+            Ok(id) => semaphore_signal(&StockGuest, id, form),
+            Err(_) => messages::semaphore_signal_word(word),
+        }
     }
+    fn message_post(&self, id: crate::QueueId, form: Form, header: crate::Header, payload: &[u8]) -> Result<(), crate::PostError> { messages::post(id, form, header, payload) }
+    fn message_receive(&self, id: crate::QueueId, timeout: Timeout) -> Result<Self::Message, Error> { messages::receive(id, timeout) }
+    fn queue_create(&self, id: crate::QueueId, config: crate::QueueConfig) -> Result<(), Error> { messages::create(id, config) }
+    fn queue_delete(&self, id: crate::QueueId) -> Result<(), Error> { messages::delete(id) }
+    fn semaphore_create_binary(&self) -> crate::SemaphoreWord { messages::semaphore_create_binary() }
+    fn semaphore_delete(&self, id: SemaphoreId) -> Result<(), Error> { messages::semaphore_delete(id) }
+    fn semaphore_try_take(&self, word: crate::SemaphoreWord) -> Result<(), Error> { messages::semaphore_try_take(word) }
+    fn flags_wait_any(&self, id: TaskId, bits: crate::FlagBits, timeout: Timeout) -> Result<crate::FlagBits, Error> { messages::flags_wait(id, bits, timeout) }
+    fn flags_clear(&self, id: TaskId) -> Result<(), Error> { messages::flags_clear(id) }
+    fn flags_set(&self, id: TaskId, bits: crate::FlagBits, form: Form) -> Result<(), Error> { messages::flags_set(id, bits, form) }
+    fn dispatch_disable(&self) -> Result<(), Error> { messages::dispatch_disable() }
+    fn dispatch_enable(&self) -> Result<(), Error> { messages::dispatch_enable() }
 }
 
 #[cfg(target_arch = "arm")]
@@ -207,38 +232,36 @@ impl Kernel<SlotTable> {
     pub const unsafe fn stock() -> Self { Kernel::new(SlotTable) }
 }
 
-/// The absolute windows this backend reads. The class window starts one entry low because the
-/// class read folds `SEMAPHORE_CLASSES + 4 * (id - 1)` to that base.
-#[cfg(target_arch = "arm")]
-pub(crate) const WINDOWS: [(u32, u32); 4] = [
-    (ROOT_TABLE, ROOT_TABLE + 8),
-    (SEMAPHORE_CLASSES - 4, SEMAPHORE_CLASSES + 4 * (SEMAPHORE_CLASS_LIMIT + 1)),
-    (ERROR_STATUS, ERROR_STATUS + 4),
-    (ERROR_CALLBACK, ERROR_CALLBACK + 4),
-];
-
-/// The declaration the linked image's admission reads.
+/// Admission metadata emitted by a consuming image as `XM1_KERNEL_BOUNDARY`.
+///
+/// Property and bank roots use [`BASIC_BOUNDARY`]; the time-services root uses
+/// [`FULL_BOUNDARY`]. Libraries do not emit the wire symbol.
+/// The wire layout is three header words, window pairs, then entry addresses.
 #[cfg(target_arch = "arm")]
 #[repr(C)]
-pub struct Boundary {
-    pub magic: u32,
-    pub window_count: u32,
-    pub entry_count: u32,
-    pub windows: [(u32, u32); 4],
-    pub entries: [*const (); 12],
+pub struct Boundary<const W: usize, const E: usize> {
+    magic: u32,
+    window_count: u32,
+    entry_count: u32,
+    windows: [(u32, u32); W],
+    entries: [*const (); E],
 }
 
 #[cfg(target_arch = "arm")]
-unsafe impl Sync for Boundary {}
+unsafe impl<const W: usize, const E: usize> Sync for Boundary<W, E> {}
 
+/// The class window includes the folded base for `id - 1`.
 #[cfg(target_arch = "arm")]
-#[no_mangle]
-#[used]
-pub static XM1_KERNEL_BOUNDARY: Boundary = Boundary {
+pub const BASIC_BOUNDARY: Boundary<4, 12> = Boundary {
     magic: 0x314e524b,
     window_count: 4,
     entry_count: 12,
-    windows: WINDOWS,
+    windows: [
+        (ROOT_TABLE, ROOT_TABLE + 8),
+        (SEMAPHORE_CLASSES - 4, SEMAPHORE_CLASSES + 4 * (SEMAPHORE_CLASS_LIMIT + 1)),
+        (ERROR_STATUS, ERROR_STATUS + 4),
+        (ERROR_CALLBACK, ERROR_CALLBACK + 4),
+    ],
     entries: [
         core_index::<StockGuest> as *const (),
         block::<StockGuest> as *const (),
@@ -252,5 +275,50 @@ pub static XM1_KERNEL_BOUNDARY: Boundary = Boundary {
         <SlotTable as Backend>::semaphore_wait as *const (),
         <SlotTable as Backend>::semaphore_signal as *const (),
         xm1_kernel_enter_slot as *const (),
+    ],
+};
+
+/// Time-services capabilities, including retained creation-word wait and signal.
+#[cfg(target_arch = "arm")]
+pub const FULL_BOUNDARY: Boundary<7, 26> = Boundary {
+    magic: 0x314e524b,
+    window_count: 7,
+    entry_count: 26,
+    windows: [
+        BASIC_BOUNDARY.windows[0],
+        BASIC_BOUNDARY.windows[1],
+        BASIC_BOUNDARY.windows[2],
+        BASIC_BOUNDARY.windows[3],
+        (messages::CLASSES, messages::CLASSES + 4 * 120),
+        (messages::CAPACITIES, messages::CAPACITIES + 4 * 120),
+        (messages::POST_HOOK, messages::POST_HOOK + 4),
+    ],
+    entries: [
+        BASIC_BOUNDARY.entries[0],
+        BASIC_BOUNDARY.entries[1],
+        BASIC_BOUNDARY.entries[2],
+        BASIC_BOUNDARY.entries[3],
+        BASIC_BOUNDARY.entries[4],
+        BASIC_BOUNDARY.entries[5],
+        BASIC_BOUNDARY.entries[6],
+        BASIC_BOUNDARY.entries[7],
+        BASIC_BOUNDARY.entries[8],
+        <SlotTable as Backend>::semaphore_wait_word as *const (),
+        <SlotTable as Backend>::semaphore_signal_word as *const (),
+        BASIC_BOUNDARY.entries[11],
+        <SlotTable as Backend>::message_post as *const (),
+        <SlotTable as Backend>::message_receive as *const (),
+        <SlotTable as Backend>::queue_create as *const (),
+        <SlotTable as Backend>::queue_delete as *const (),
+        <SlotTable as Backend>::semaphore_create_binary as *const (),
+        <SlotTable as Backend>::semaphore_delete as *const (),
+        <SlotTable as Backend>::semaphore_try_take as *const (),
+        <SlotTable as Backend>::flags_wait_any as *const (),
+        <SlotTable as Backend>::flags_clear as *const (),
+        <SlotTable as Backend>::flags_set as *const (),
+        <SlotTable as Backend>::dispatch_disable as *const (),
+        <SlotTable as Backend>::dispatch_enable as *const (),
+        <SlotTable as crate::TaskBackend>::task_create as *const (),
+        <SlotTable as crate::TaskBackend>::task_delete as *const (),
     ],
 };

@@ -284,6 +284,21 @@ main = do
   check (verdictStatus otherFirmware == VerdictNoVerdict)
   check (case parseInterfaceReport "{\"mode\":\"interface-stream\",\"schema\":1}" of Left _ -> True; Right _ -> False)
 
+  _ <- status firmware (timingCase 10 2 [] []) VerdictEqualUpToMilestone
+  _ <- status firmware (timingCase 5 2 [] []) VerdictDifferent
+  _ <- status firmware (timingCase 10 1 [] []) VerdictDifferent
+  _ <- status firmware (timingCase 10 2 [2,4,6,8] [2,5,8,10]) VerdictDifferent
+  _ <- status firmware (timingCase 10 2 [2,4,6,8] [2,6,8]) VerdictDifferent
+  let slowBoth = timingCase 5 2 [] []
+      slowStock = timingRun stockDigest 16 (timingEvents 5 2 [] 0)
+      noStockProgress = Object (KM.insert "stock" slowStock (objectOf slowBoth))
+      missingClock = changeOwned (without "clock") (timingCase 10 2 [] [])
+      shorterClock = changeOwned (\run -> Object (KM.insert "clock"
+        (object ["origin" .= (0 :: Int), "first_tick" .= (30000 :: Int), "end" .= (150000 :: Int)]) (objectOf run))) (timingCase 5 2 [] [])
+  _ <- status firmware noStockProgress VerdictNoVerdict
+  _ <- status firmware missingClock VerdictDifferent
+  _ <- status firmware shorterClock VerdictDifferent
+
   putStrLn "interface stream judge behavioral tests passed"
 
 check :: Bool -> IO ()
@@ -406,3 +421,53 @@ stockDigest, ownedDigest, wrongDigest :: String
 stockDigest = replicate 64 'a'
 ownedDigest = replicate 64 'b'
 wrongDigest = replicate 64 'c'
+
+timingCase :: Int -> Int -> [Int] -> [Int] -> Value
+timingCase count elapsed expectedCallbacks actualCallbacks =
+  let stockEvents = timingEvents 10 2 expectedCallbacks 0
+      ownedEvents = timingEvents count elapsed actualCallbacks 0
+      document = withChannels
+        [ channelWithin "ticks" (object ["channel" .= ("ticks" :: String)]) True 6 "original self-normalized tick share"
+        , channel "delay" (object ["channel" .= ("delay" :: String)]) False
+        , channel "callbacks" (object ["channel" .= ("callbacks" :: String)]) True
+        , channel "reply" (object ["channel" .= ("reply" :: String)]) False ] [] $
+        report (timingRun stockDigest 16 stockEvents) (timingRun ownedDigest 64 ownedEvents)
+          [control "wrong-reply" (timingRun wrongDigest 64 (timingEvents 10 2 expectedCallbacks 99))]
+          (object ["name" .= ("end" :: String), "observation" .= max (length stockEvents) (length ownedEvents)])
+   in Object (KM.insert "timing_policy" timingPolicyFixture (objectOf document))
+
+timingPolicyFixture :: Value
+timingPolicyFixture = object
+  [ "tick" .= object ["kind" .= ("tick" :: String)]
+  , "period_board_ticks" .= (30000 :: Int), "boundary_error_ticks" .= (2 :: Int)
+  , "start_skew_board_ticks" .= (30000 :: Int)
+  , "durations" .= [object
+      [ "begin" .= object ["kind" .= ("call" :: String), "entry" .= ("delay" :: String)]
+      , "end" .= object ["kind" .= ("return" :: String), "entry" .= ("delay" :: String), "status" .= (0 :: Int)] ]]
+  , "callbacks" .= object ["kind" .= ("callback" :: String), "target" .= (4096 :: Int)]
+  , "cadence_barriers" .=
+      [object ["kind" .= ("call" :: String), "entry" .= entry]
+      | entry <- ["start", "cancel", "set-reload", "delay", "arm-delay", "disarm-delay", "arm-timer",
+          "create-delay", "delete-delay", "create-timer", "delete-timer", "initialize", "shutdown" :: String]]
+  , "sources" .= (["synthetic independent board-clock fixture"] :: [String])
+  ]
+
+timingRun :: String -> Int -> [Value] -> Value
+timingRun digest start events = Object (KM.insert "clock"
+  (object ["origin" .= (0 :: Int), "first_tick" .= (30000 :: Int), "end" .= (300000 :: Int)])
+  (objectOf (runValues digest start (start + 16) 1 events)))
+
+timingEvents :: Int -> Int -> [Int] -> Int -> [Value]
+timingEvents count elapsed callbacks observedReply =
+  [object ["kind" .= ("call" :: String), "channel" .= ("delay" :: String), "entry" .= ("delay" :: String), "arguments" .= ([1] :: [Int])]]
+  ++ concat
+    [ [object ["kind" .= ("tick" :: String), "channel" .= ("ticks" :: String), "increment" .= (1 :: Int)]]
+      ++ [object ["kind" .= ("callback" :: String), "channel" .= ("callbacks" :: String), "target" .= (4096 :: Int)] | position `elem` callbacks]
+      ++ [object ["kind" .= ("return" :: String), "channel" .= ("delay" :: String), "entry" .= ("delay" :: String), "status" .= (0 :: Int)] | position == elapsed]
+    | position <- [1..count] ]
+  ++ [object ["kind" .= ("reply" :: String), "channel" .= ("reply" :: String), "value" .= observedReply], at "end"]
+
+changeOwned :: (Value -> Value) -> Value -> Value
+changeOwned transform value = case KM.lookup "owned" (objectOf value) of
+  Just owned -> Object (KM.insert "owned" (transform owned) (objectOf value))
+  Nothing -> error "timing fixture has no owned run"

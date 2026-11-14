@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "trace_sites": [
+    ["006a96c0", "lz-image5-load"],
+    ["006ae360", "lz-session-setup"],
+    ["00684638", "lz-engine-start"],
+    ["00684308", "lz-engine-close"],
+    ["00da6400", "crop-initialize"],
+    ["00da642c", "crop-release"],
+    ["00ef2ec8", "liveview-start"],
+    ["00ef3120", "liveview-release"],
+    ["00683830", "engine-acquire"],
+    ["00724b68", "reservation-wait"],
+    ["0068385c", "reservation-wait-return"],
+    ["00649c4c", "clock-take"],
+    ["006838dc", "stock-release"],
+    ["00649ddc", "clock-release"],
+    ["006499d0", "route-level"],
+    ["00724c00", "resource-signal"],
+    ["runtime:xm1_decode_test_on_dispatch", "payload-entry"],
+    ["runtime:_RNvNtCsg1oEXllPk8C_15xm1_first_stage11decode_test11crc32_range", "payload-digest"],
+    ["runtime:_RNvNtCsg1oEXllPk8C_15xm1_first_stage11decode_test12engine_words", "payload-engine-words"]
+  ],
+  "before_unload": [
+    {
+      "phase": "decode-test-root",
+      "observe": true,
+      "capture": "decode-test-root",
+      "steps": []
+    },
+    {
+      "phase": "decode-test-shooting-menu",
+      "observe": true,
+      "capture": "decode-test-shooting-menu",
+      "requires": ["decode-test-root"],
+      "reads": [["record", "runtime:DECODE_TEST_RECORD", 928]],
+      "steps": [["menu", 1, 5, 2]]
+    },
+    {
+      "phase": "decode-test-root-return",
+      "observe": true,
+      "capture": "decode-test-root-return",
+      "requires": ["decode-test-shooting-menu"],
+      "reads": [["record", "runtime:DECODE_TEST_RECORD", 928]],
+      "steps": [["back", 67, 56, 0]]
+    }
+  ],
+  "after_unload": [
+    {
+      "phase": "decode-test-unloaded",
+      "observe": true,
+      "capture": "decode-test-unloaded",
+      "trace_requires": ["liveview-start", "liveview-release"],
+      "steps": [["menu", 1, 5, 2, {"idle_instructions": 4000000}], ["back", 67, 56, 0, {"idle_instructions": 4000000}]]
+    }
+  ]
+}

@@ -650,11 +650,9 @@ haskell_library(
     src_strip_prefix = ".",
     visibility = ["//visibility:public"],
     deps = [
-        "//host/firmware:bank-allowlist",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
-        "//host:cryptohash-sha256",
         "//host:text",
     ],
 )
@@ -665,10 +663,8 @@ haskell_test(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
     deps = [
         ":render-stack-evidence-lib",
-        "//host/firmware:bank-allowlist",
         "//host:aeson",
         "//host:base",
-        "//host:bytestring",
         "//host:text",
     ],
 )
@@ -765,14 +761,14 @@ haskell_library(
     srcs = ["Replacement/ModalRuntime/QualifierPolicy.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
-    deps = ["//host:aeson", "//host:base"],
+    deps = ["//emulation:case-sha256", "//host:aeson", "//host:base"],
 )
 
 haskell_test(
     name = "qualifier-policy-tests",
     srcs = ["QualifierPolicyTests.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-threaded"],
-    deps = [":qualifier-policy", "//emulation:parallel-cases", "//host:aeson", "//host:base"],
+    deps = [":qualifier-policy", "//emulation:case-sha256", "//emulation:parallel-cases", "//host:aeson", "//host:base"],
 )
 
 haskell_binary(

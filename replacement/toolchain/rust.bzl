@@ -1,5 +1,7 @@
 """Freestanding X-M1 Rust cross-build and link entry points."""
 
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
 _RUSTC = "@lab_xm1_rust//:bin/rustc"
 _CLANG = "@lab_clang//:bin/clang"
 _LLD = "@lab_lld//:bin/ld.lld"
@@ -255,5 +257,48 @@ def xm1_rust_rlib(
         testonly = testonly,
         tags = tags,
         tools = [_RUSTC],
+        visibility = visibility,
+    )
+
+def xm1_rust_host_rlib(name, src, crate_name, data = [], rlib_deps = {}, testonly = False, visibility = None):
+    """Compiles a host rlib with dependencies declared by Rust crate name."""
+    native.genrule(
+        name = name,
+        srcs = [src] + data + rlib_deps.values(),
+        outs = ["lib" + crate_name + ".rlib"],
+        cmd = " ".join([
+            "$(location %s)" % _RUSTC,
+            "--edition=2021 --crate-type=rlib --crate-name=" + crate_name,
+        ] + ["--extern=%s=$(location %s)" % (crate, label) for crate, label in rlib_deps.items()] + [
+            "-Ldependency=$$(dirname $(location %s))" % label for label in rlib_deps.values()
+        ] + ["$(location %s) -o $@" % src]),
+        tools = [_RUSTC],
+        testonly = testonly,
+        visibility = visibility,
+    )
+
+def xm1_rust_host_test(name, src, crate_name, data = [], rlib_deps = {}, size = "small", visibility = None):
+    """Builds and runs a host test crate with the same dependency interface as rlibs."""
+    binary = name + "-binary"
+    native.genrule(
+        name = binary,
+        srcs = [src] + data + rlib_deps.values(),
+        outs = [binary + ".bin"],
+        cmd = " ".join([
+            "$(location %s)" % _RUSTC,
+            "--edition=2021 --test --crate-name=" + crate_name,
+        ] + ["--extern=%s=$(location %s)" % (crate, label) for crate, label in rlib_deps.items()] + [
+            "-Ldependency=$$(dirname $(location %s))" % label for label in rlib_deps.values()
+        ] + ["$(location %s) -o $@" % src]),
+        tools = [_RUSTC],
+        executable = True,
+        testonly = True,
+    )
+    sh_test(
+        name = name,
+        srcs = ["//replacement/toolchain:host-test.sh"],
+        args = ["$(location :%s)" % binary],
+        data = [":" + binary],
+        size = size,
         visibility = visibility,
     )

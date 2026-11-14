@@ -1,4 +1,5 @@
 ENTRY(xm1_property_get_entry)
+EXTERN(XM1_KERNEL_BOUNDARY)
 
 /* The stock leaf functions whose results are defaults. */
 xm1_stock_61df44 = 0x61df44;

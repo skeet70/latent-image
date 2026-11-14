@@ -187,6 +187,7 @@ The owned first-record stage, entered at the stock record slot and presenting st
 | the memory DMA block at `0xfff02000` the stage fills the application bss through, with the eight-word descriptor at `0x400042c0` and completion on `0xfff02024` bit 6 | guest-memory layout view | the stock record's own `0x3844` fill and the block's device models | no | the application's bss is owned memory that no device has to clear | required |
 | `xm1_first_stage_handoff`, `xm1_first_stage_handoff_vector` and `xm1_first_stage_completion_zero`: the handoff reads stock's `0x4300`/`0x4304` words and jumps, the completion export zeroes stock's completion word, and `xm1_first_stage_stage_images` writes the two handoff words | guest-memory layout view | stock loader A's entry word and the record-2 companion wait | no | loader A and the record-2 companion startup are owned | required |
 | the loader-A entry at `0x40020` and the image-4 argument the stage reads at the fixed `0x61c40c`, image 4's own header word and not the record table, and jumps to | trampoline into retained stock | stock loader A and the application image the stage hands off to | no | the loaders and application are owned and entered by owned code | required |
+| `decode_test_stock.S`'s `xm1_decode_test_acquire` at `0x00683830`, `xm1_decode_test_release_clock` at `0x00649ddc`, `xm1_decode_test_clear_route` at `0x006499d0` and `xm1_decode_test_signal_resource` at `0x00724c00`, called by the RAM-loaded decode test | trampoline into retained stock | the stock shared-engine reservation `hw_fff430_acquire` and the bookkeeping `hw_fff430_release` makes after its enable write, which live view and crop call | no | the decode-test experiment is retired | required |
 
 ## idle_task
 
@@ -228,8 +229,12 @@ The kernel crate: typed handles over the image's interface slots, with the per-c
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
-| `SlotTable` in `src/slot_table.rs` | kernel interface slot | the kernel bodies behind the root blocks at 0x96bd20 and 0x96bd24, the loader-A console writer 0x41a34 and the error-callback word at 0x4089ea8c | partly | every image whose `.symbols` lists an `xm1_kernel` item also lists the kernel family entry for each slot offset in `SlotTable`'s table | required |
+| `SlotTable` in `src/slot_table.rs` and `src/slot_table/messages.rs` | kernel interface slot | the kernel bodies behind the root blocks at 0x96bd20 and 0x96bd24, the loader-A console writer 0x41a34, the error-callback word at 0x4089ea8c, the post hook at 0x4089ea94, task/queue classes and message-pool capacity words | partly | every image whose `.symbols` lists an `xm1_kernel` item also lists the kernel family entry for each slot offset in `SlotTable`'s table | required |
 | `CoreLock` in `src/slot_table.rs` | trampoline into retained stock | the stock cross-core critical section at 0x7235d8 and its release 0x7236b0 | partly | no stock caller of 0x7235d8 remains | required |
+| Object construction and deletion in `src/slot_table/messages.rs` | trampoline into retained stock | queue constructor 0x724cdc and deleter 0x724f08, binary-semaphore allocator 0x7247ac and deleter 0x724974, semaphore poll 0x724ad8 | no | the kernel crate owns queue backing allocation and resource lifetime, and semaphore allocation/deletion/poll, in every linked image | required |
+| `SemaphoreWord` in `src/slot_table/messages.rs` | trampoline into retained stock | timed wait 0x724b68 and signal 0x724c00 for failed creation words | no | retained callers no longer preserve or use failed semaphore creation words | required |
+| Dispatch bracket in `src/slot_table/messages.rs` | trampoline into retained stock | dispatch disable 0x723efc and enable 0x723f7c | no | the kernel crate owns the dispatch wrappers and their error reporting in every linked image | required |
+| Task construction and deletion in `src/slot_table/task.rs` | trampoline into retained stock | task constructor 0x725dd8 and deletion 0x72612c, including its storage release 0x726098 | no | the kernel crate owns task registration, stack allocation, activation, deletion and reservation release in every linked image | required |
 
 ## kernel_install
 
@@ -587,6 +592,12 @@ The task 43 engine: the owned dispatcher and machine 0's router over stock's 37 
 | the trace entry `0xf46c38` called through the literal word at `0xefcce4`, declared in `Replacement.Saclac.Artifact.retainedExternals` | trampoline into retained stock | the stock trace body at `0xf46c38` | no | the trace recorder is owned | required |
 | stock action words and second-table words entered through `StockCodeWord` with r2 = the machine's table base word and r3 = the entered word, the values stock's dispatcher holds at `0xefcb20` and `0xefcb58` | trampoline into retained stock | the 813 distinct action words the cells reference, all image-5 code addresses, of which 701 are declared function starts and 112 are entries the decomp does not declare; no cell selects a second-table word; no entry reads r2, and 224 save r3 in a store-multiple prologue, the only r3 read the walk finds | no | every machine owned | required |
 
+## saclac_interface
+
+| Shim | Kind | Other side | Owned now | Removal condition | State |
+| --- | --- | --- | --- | --- | --- |
+| Command, parameter-block and callback descriptors in `src/stock.rs` | guest-memory layout view | retained queue-43 command producers, their 46 shared parameter blocks and 106 completion callbacks | no | queue-43 producers and completion callbacks are owned and no retained consumer reads the parameter blocks | required |
+
 ## save
 
 The save facade and its retained image-5 services.
@@ -706,3 +717,17 @@ The vendor, wireless, filesystem and device-protocol unit. Most of its externals
 ## Not registered
 
 `replacement/rtos_layout` and `replacement/rtos_reservation` contain Rust but no firmware artifact target; they are shared host views, not units. `replacement/toolchain` contains build rules only. `replacement/record5_staging`, `startup_artifact`, `startup_composition` and `startup_consumers` contain no Rust or assembly sources; they are host orchestration.
+
+## time_services
+
+`time_services` owns tasks 6 and 9, software timers, timed delays and interrupt registration. Its interface entries and their owned symbols are declared in `time_services/stock-interface.json`; `time_services:artifact` derives publications from those rows.
+
+| Shim | Kind | Other side | Owned now | Removal condition | State |
+| --- | --- | --- | --- | --- | --- |
+| Published time entries in `time_services/src/stock.rs` | stock-ABI export | retained callers and callback words entering the entries in `stock-interface.json` | partly | no retained branch, table word or executed computed reference enters the published stock entries | required |
+| Handle allocation in `time_services/src/stock.rs` | trampoline into retained stock | allocator 0x65722c, resolver 0x657384 and release 0x65744c | no | the peripherals owner supplies typed handle allocation to the linked image | required |
+| Device timer programming in `time_services/src/stock.rs` | trampoline into retained stock | acquire 0x655b28, configure 0x655ccc, stop 0x655fe8 and release 0x655c24 | no | device timer programming is owned in the linked image | required |
+| Interrupt backend in `time_services/src/stock.rs` | trampoline into retained stock | interrupt configure 0x723870 and detach 0x7239a0 | no | the kernel crate exposes the owned interrupt backend in the linked image | required |
+| Diagnostic and callback words in `time_services/src/stock.rs` | trampoline into retained stock | diagnostic 0x726c74 and callbacks supplied by retained consumers | partly | every supplying consumer and the diagnostic service are owned in the linked image | required |
+| Stock memory in `time_services/src/stock.rs` | guest-memory layout view | interrupt handles and sources 0x940e9c, delay and timer descriptors 0x95dc08 and 0x96bd40, tick count 0x96e97c, timer handle table 0x95aa9c, task arguments 0x89f76c | partly | no retained code reads these words and the retained allocator no longer holds the handle tables | required |
+

@@ -147,11 +147,34 @@ chainFunctions = [(GuestAddress (fromIntegral a), b-a) | (a,b) <-
 region :: String -> Word32 -> Permission -> B.ByteString -> CaseRegion
 region name base permission bytes = mkRegion (RegionId name) (GuestAddress (fromIntegral base)) (B.length bytes) permission bytes
 
+data PropertyCodeError
+  = UncoveredPropertyCode RegionId
+  | UnexpectedCodeOverlap RegionId
+  deriving (Eq, Show)
+
+replacePropertyCodeRegions :: NativeImage -> TaskContext -> [CaseRegion] -> Either PropertyCodeError [CaseRegion]
+replacePropertyCodeRegions source context original = (stockRegions source context ++) <$> foldr keep (Right []) original
+  where
+    declared = P.codeRegions (canonicalBytes source) P.stockFunctions
+    sameRegion left right = description (caseRegion left) == description (caseRegion right)
+      && regionBytes (caseRegion left) == regionBytes (caseRegion right)
+    covered r window = fromIntegral (windowBase window) <= baseAddress r
+      && baseAddress r + regionSize r <= fromIntegral (windowEnd window)
+    overlaps r window = baseAddress r < fromIntegral (windowEnd window)
+      && fromIntegral (windowBase window) < baseAddress r + regionSize r
+    keep candidate rest
+      | any (sameRegion candidate) declared =
+          if any (covered (caseRegion candidate)) codeWindows then rest
+          else Left (UncoveredPropertyCode (regionBytesOfId candidate))
+      | any (overlaps (caseRegion candidate)) codeWindows =
+          Left (UnexpectedCodeOverlap (regionBytesOfId candidate))
+      | otherwise = (candidate :) <$> rest
+
 propertyCase :: NativeImage -> M.Map PropertyId Property -> P.Fixture -> TaskContext -> P.OracleCase -> Owned -> CaseSpec
 propertyCase source properties fx context oracleCase owned = base
   { caseProvenance = "X-M1 1.50 E02/E03/E06/E07/E08/E09, independent field model with real stock header chain to backup-register driver"
-  , caseRegions = stockRegions source context ++ filter keep (caseRegions base) ++ extra
-  , caseFunctions = filter (\(GuestAddress address,size) -> (fromIntegral address,fromIntegral address+size) `notElem` H.functionSpans) (caseFunctions base) ++ chainFunctions
+  , caseRegions = either (error . show) id (replacePropertyCodeRegions source context (filter keep (caseRegions base))) ++ extra
+  , caseFunctions = filter (\(address,_) -> address `notElem` map fst chainFunctions) (caseFunctions base) ++ chainFunctions
   , caseExpectedMemory = [(RegionId "banks", P.effectBanks effect),(RegionId "previous",P.effectPrevious effect),(RegionId "config",P.fixtureConfig fx),(RegionId "calls",eventBytes events),(RegionId "backing",finalBacking)]
   , caseIgnoredMemory = deadPrivateFrame base
   }
@@ -161,7 +184,7 @@ propertyCase source properties fx context oracleCase owned = base
     expected = maybe (error "field outside admitted fixture") id (P.modelExpectation fx owned (P.oracleOperation oracleCase))
     base = P.caseSpec image P.stockFunctions fx (P.caseLabel oracleCase) standing oracleCase expected
     (effect,mirror,events) = maybe (error "field outside admitted fixture") id (propertyResult (backupKeys source) context fx owned (P.oracleOperation oracleCase))
-    keep r = regionBytesOfId r `notElem` map RegionId ["code","backup","calls","backing","header-mirror-code","header-runtime-code","header-reporter","header-log","slot-defaults","kernel-slots","stack","caller-frame"]
+    keep r = regionBytesOfId r `notElem` map RegionId ["backup","calls","backing","header-mirror-code","header-runtime-code","header-reporter","header-log","slot-defaults","kernel-slots","stack","caller-frame"]
     initialBacking = replace 0x19c (shadowBytes (initialMirror fx)) (replace 0 (liveBytes (initialMirror fx)) (B.pack [fromIntegral (i*37+19) | i <- [0..0x1ab::Int]]))
     finalBacking = replace 0 (liveBytes mirror) (replace 0x19c (shadowBytes mirror) initialBacking)
     taskWord = case context of Task -> 1; Interrupt -> 0

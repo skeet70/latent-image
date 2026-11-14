@@ -16,11 +16,15 @@ mod sealed {
 #[cfg(not(target_arch = "arm"))]
 pub mod fake;
 pub mod slot_table;
+mod task;
+pub use task::{CreatedTask, StackBytes, TaskArgument, TaskBackend, TaskConfig, TaskFlagPolicy, TaskPriority};
 
 #[cfg(test)]
 mod host_tests;
 #[cfg(test)]
 mod slot_table_tests;
+#[cfg(test)]
+mod message_tests;
 
 pub use slot_table::SlotTable;
 
@@ -44,6 +48,35 @@ impl SemaphoreId {
         if number >= 1 && number <= Self::MAX { Some(Self(NonZeroU8::new(number).unwrap())) } else { None }
     }
     pub const fn get(self) -> u8 { self.0.get() }
+}
+
+/// A retained semaphore creation response, including a failed or zero word.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SemaphoreWord(u32);
+impl SemaphoreWord {
+    pub(crate) const fn from_creation_word(word: u32) -> Self { Self(word) }
+    pub const fn word(self) -> u32 { self.0 }
+    pub const fn created(self) -> bool { (self.0 as i32) > 0 }
+    pub fn id(self) -> Result<SemaphoreId, Error> {
+        u8::try_from(self.0).ok().and_then(SemaphoreId::new).ok_or_else(|| {
+            if self.created() { Error::InvalidId } else { Status(self.0 as i32).check().err().unwrap_or(Error::InvalidId) }
+        })
+    }
+    pub fn create_binary<B: Backend>(cx: &TaskContext<'_, B>) -> Self {
+        cx.kernel.backend.semaphore_create_binary()
+    }
+    pub fn try_take<B: Backend>(self, cx: &TaskContext<'_, B>) -> Result<(), Error> {
+        cx.kernel.backend.semaphore_try_take(self)
+    }
+    pub fn wait<B: Backend>(self, cx: &TaskContext<'_, B>, timeout: Timeout) -> Result<(), Error> {
+        cx.kernel.backend.semaphore_wait_word(self, timeout)
+    }
+    pub fn signal<B: Backend>(self, cx: &impl Caller<B>) -> Result<(), Error> {
+        cx.kernel().backend.semaphore_signal_word(self, cx.form())
+    }
+}
+impl From<SemaphoreId> for SemaphoreWord {
+    fn from(id: SemaphoreId) -> Self { Self(u32::from(id.get())) }
 }
 
 /// Kernel clock units: a timeout is added unscaled to the domain clock word, which advances
@@ -153,6 +186,7 @@ impl IrqState {
 
 /// The kernel behind one image.
 pub trait Backend: sealed::Sealed {
+    type Message: MessageBlock;
     fn current_task(&self) -> Option<TaskId>;
     fn in_handler(&self) -> bool;
     fn irq_mask(&self) -> IrqState;
@@ -161,6 +195,22 @@ pub trait Backend: sealed::Sealed {
     fn cores_unlock(&self, saved: IrqState);
     fn semaphore_wait(&self, id: SemaphoreId, timeout: Timeout) -> Result<(), Error>;
     fn semaphore_signal(&self, id: SemaphoreId, form: Form) -> Result<(), Error>;
+    /// Waits on a retained creation response, including a failed or zero word.
+    fn semaphore_wait_word(&self, word: SemaphoreWord, timeout: Timeout) -> Result<(), Error>;
+    /// Signals a retained creation response, including a failed or zero word.
+    fn semaphore_signal_word(&self, word: SemaphoreWord, form: Form) -> Result<(), Error>;
+    fn message_post(&self, id: QueueId, form: Form, header: Header, payload: &[u8]) -> Result<(), PostError>;
+    fn message_receive(&self, id: QueueId, timeout: Timeout) -> Result<Self::Message, Error>;
+    fn queue_create(&self, id: QueueId, config: QueueConfig) -> Result<(), Error>;
+    fn queue_delete(&self, id: QueueId) -> Result<(), Error>;
+    fn semaphore_create_binary(&self) -> SemaphoreWord;
+    fn semaphore_delete(&self, id: SemaphoreId) -> Result<(), Error>;
+    fn semaphore_try_take(&self, word: SemaphoreWord) -> Result<(), Error>;
+    fn flags_wait_any(&self, id: TaskId, bits: FlagBits, timeout: Timeout) -> Result<FlagBits, Error>;
+    fn flags_clear(&self, id: TaskId) -> Result<(), Error>;
+    fn flags_set(&self, id: TaskId, bits: FlagBits, form: Form) -> Result<(), Error>;
+    fn dispatch_disable(&self) -> Result<(), Error>;
+    fn dispatch_enable(&self) -> Result<(), Error>;
 }
 
 pub struct Kernel<B: Backend> {
@@ -295,4 +345,126 @@ pub struct Task(TaskId);
 impl Task {
     pub const fn stock(id: TaskId) -> Self { Self(id) }
     pub fn id(self) -> TaskId { self.0 }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct QueueId(NonZeroU8);
+impl QueueId {
+    pub const fn new(number: u8) -> Option<Self> {
+        if number >= 1 && number <= TaskId::MAX { Some(Self(NonZeroU8::new(number).unwrap())) } else { None }
+    }
+    pub const fn get(self) -> u8 { self.0.get() }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FlagBits(pub u32);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Header { pub operation: u16, pub sender: u8, pub destination: u8 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PostError { TooLong, NoBlock, Kernel(Error) }
+
+pub trait MessageBlock {
+    fn header(&self) -> Header;
+    fn payload(&self) -> &[u8];
+}
+
+pub struct Received<'c, B: Backend> {
+    message: B::Message,
+    _caller: PhantomData<&'c TaskContext<'c, B>>,
+}
+impl<B: Backend> Received<'_, B> {
+    pub fn header(&self) -> Header { self.message.header() }
+    pub fn payload(&self) -> &[u8] { self.message.payload() }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QueueConfig { depth: NonZeroU32, message_bytes: NonZeroU32 }
+impl QueueConfig {
+    pub const fn new(depth: u32, message_bytes: u32) -> Option<Self> {
+        if depth == 0 || message_bytes < 8 { return None; }
+        let Some(stride) = message_bytes.checked_add(4) else { return None; };
+        if depth.checked_mul(stride).is_none() { return None; }
+        Some(Self { depth: NonZeroU32::new(depth).unwrap(), message_bytes: NonZeroU32::new(message_bytes).unwrap() })
+    }
+    pub const fn depth(self) -> u32 { self.depth.get() }
+    pub const fn message_bytes(self) -> u32 { self.message_bytes.get() }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MessageQueue(QueueId);
+impl MessageQueue {
+    pub const fn stock(id: QueueId) -> Self { Self(id) }
+    pub fn id(self) -> QueueId { self.0 }
+    pub fn post<B: Backend>(self, cx: &impl Caller<B>, header: Header, payload: &[u8]) -> Result<(), PostError> {
+        cx.kernel().backend.message_post(self.0, cx.form(), header, payload)
+    }
+    pub fn receive<'c, B: Backend>(self, cx: &'c TaskContext<'_, B>, timeout: Timeout) -> Result<Received<'c, B>, Error> {
+        cx.kernel.backend.message_receive(self.0, timeout).map(|message| Received { message, _caller: PhantomData })
+    }
+    pub fn create<B: Backend>(cx: &TaskContext<'_, B>, id: QueueId, config: QueueConfig) -> Result<CreatedQueue, Error> {
+        cx.kernel.backend.queue_create(id, config)?;
+        Ok(CreatedQueue(Self(id)))
+    }
+    pub fn delete<B: Backend>(self, cx: &TaskContext<'_, B>) -> Result<(), Error> {
+        cx.kernel.backend.queue_delete(self.0)
+    }
+}
+
+pub struct CreatedQueue(MessageQueue);
+impl CreatedQueue {
+    pub fn handle(&self) -> MessageQueue { self.0 }
+    pub fn delete<B: Backend>(self, cx: &TaskContext<'_, B>) -> Result<(), Error> {
+        self.0.delete(cx)
+    }
+}
+
+pub struct CreatedSemaphore(Semaphore);
+impl CreatedSemaphore {
+    pub fn handle(&self) -> Semaphore { self.0 }
+    pub fn delete<B: Backend>(self, cx: &TaskContext<'_, B>) -> Result<(), Error> {
+        cx.kernel.backend.semaphore_delete(self.0.0)
+    }
+}
+impl Semaphore {
+    pub fn id(self) -> SemaphoreId { self.0 }
+    pub fn create_binary<B: Backend>(cx: &TaskContext<'_, B>) -> Result<CreatedSemaphore, Error> {
+        cx.kernel.backend.semaphore_create_binary().id().map(|id| CreatedSemaphore(Self(id)))
+    }
+    pub fn try_take<B: Backend>(self, cx: &TaskContext<'_, B>) -> Result<(), Error> {
+        cx.kernel.backend.semaphore_try_take(self.0.into())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TaskFlags(TaskId);
+impl TaskFlags {
+    pub const fn stock(id: TaskId) -> Self { Self(id) }
+    pub fn set<B: Backend>(self, cx: &impl Caller<B>, bits: FlagBits) -> Result<(), Error> {
+        cx.kernel().backend.flags_set(self.0, bits, cx.form())
+    }
+}
+
+impl<'k, B: Backend> TaskContext<'k, B> {
+    pub fn wait_any(&self, bits: FlagBits, timeout: Timeout) -> Result<FlagBits, Error> {
+        self.kernel.backend.flags_wait_any(self.task, bits, timeout)
+    }
+    pub fn clear_flags(&self) -> Result<(), Error> { self.kernel.backend.flags_clear(self.task) }
+    pub fn suspend_dispatch<'c>(&'c mut self) -> Result<DispatchSuspended<'c, 'k, B>, Error> {
+        self.kernel.backend.dispatch_disable()?;
+        Ok(DispatchSuspended { caller: self })
+    }
+}
+
+pub struct DispatchSuspended<'c, 'k, B: Backend> { caller: &'c mut TaskContext<'k, B> }
+impl<B: Backend> DispatchSuspended<'_, '_, B> {
+    pub fn resume(self) -> Result<(), Error> {
+        let result = self.caller.kernel.backend.dispatch_enable();
+        core::mem::forget(self);
+        result
+    }
+}
+impl<B: Backend> Drop for DispatchSuspended<'_, '_, B> {
+    fn drop(&mut self) { let _ = self.caller.kernel.backend.dispatch_enable(); }
 }

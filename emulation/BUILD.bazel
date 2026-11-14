@@ -1806,6 +1806,43 @@ sh_binary(
 )
 
 sh_binary(
+    name = "time-observer",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-time-observer"],
+    visibility = ["//visibility:public"],
+)
+
+haskell_binary(
+    name = "time-prefix",
+    srcs = ["TimePrefix.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+    ],
+)
+
+sh_test(
+    name = "time-prefix-test",
+    srcs = ["time-prefix-test.sh"],
+    args = [
+        "$(location :time-prefix)",
+        "$(location @lab_jq//:bin/jq)",
+        "$(location @lab_coreutils//:bin/sha256sum)",
+    ],
+    data = [
+        ":time-prefix",
+        "@lab_jq//:bin/jq",
+        "@lab_coreutils//:bin/sha256sum",
+    ],
+)
+
+sh_binary(
     name = "heap-replay",
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-heap-replay"],
     visibility = ["//visibility:public"],
@@ -4818,7 +4855,6 @@ haskell_library(
         "//host:directory",
         "//host:filepath",
         "//host:text",
-        "//replacement/modal_runtime:render-stack-evidence-lib",
     ],
 )
 

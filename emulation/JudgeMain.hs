@@ -77,7 +77,7 @@ interfaceMain arguments = do
   reportPath <- required "--report" arguments
   imagePath <- required "--image" arguments
   outPath <- optional "--out" arguments
-  bytes <- readRegular (16 * 1024 * 1024) reportPath
+  bytes <- readRegular (256 * 1024 * 1024) reportPath
   report <- either failH pure (parseInterfaceReport bytes)
   firmware <- firmwareFor imagePath
   let verdict = judgeInterfaceReport firmware (ReportDigest (sha256Hex (sha256 bytes))) report

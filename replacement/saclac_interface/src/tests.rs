@@ -1,0 +1,39 @@
+use crate::{stock, Message};
+
+#[test]
+fn all_command_producers_parse_with_their_payloads() {
+    for command in stock::COMMANDS {
+        let payload = [0xa5; 168];
+        let message = stock::parse(0x3b00 + u16::from(command.code), &payload[..command.payload_bytes]).unwrap();
+        assert!(matches!(message, Message::Command(value) if value.kind == command.kind && value.parameters.bytes() == &payload[..command.payload_bytes]));
+    }
+}
+
+#[test]
+fn oversized_command_is_refused() {
+    assert_eq!(stock::parse(0x3b01, &[0; 5]), Err(stock::ParseError::Oversize));
+}
+
+#[test]
+fn callback_word_and_payload_survive_intake() {
+    let payload = [0x34, 0x12, 0xcd, 0xab];
+    let Message::Command(command) = stock::parse(0x3b01, &payload).unwrap() else { panic!("not a command") };
+    assert_eq!(stock::callback_word(stock::client_callback(command.parameters).unwrap()), 0xabcd1234);
+}
+
+#[test]
+fn each_callback_post_is_an_admitted_completion() {
+    for callback in stock::CALLBACKS {
+        for code in callback.posts {
+            let Message::Completed(message) = stock::parse(0x3b00 + u16::from(*code), &[]).unwrap() else { panic!("not a completion") };
+            assert_eq!(stock::completion_code(message.completion), *code);
+        }
+    }
+}
+
+#[test]
+fn no_producer_codes_are_not_invented() {
+    for code in [0x2e, 0x3b, 0x48, 0x8c, 0x9f, 0xa0] {
+        assert_eq!(stock::parse(0x3b00 + code, &[]), Err(stock::ParseError::UnknownOperation));
+    }
+}

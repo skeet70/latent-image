@@ -78,6 +78,24 @@ xm1_rust_staticlib(
     ],
 )
 
+_ENGINE_CONTROL_RLIB_DEPS = dict(_ENGINE_RLIB_DEPS)
+
+_ENGINE_CONTROL_RLIB_DEPS.update({
+    "menu_widgets": "//replacement/menu_widgets:arm-control-tree-selected-unstyled",
+    "render_adapter": "//replacement/render_adapter:arm-control-tree-selected-unstyled",
+})
+
+# The render link unit with the tree's selected row drawn unstyled, which the render pair suite
+# must report as different from stock.
+xm1_rust_staticlib(
+    name = "bank-modal75-engine-render-control-tree-selected-unstyled",
+    src = "lib.rs",
+    crate_name = "bank",
+    rustc_flags = _ENGINE_FLAGS,
+    rlib_deps = _ENGINE_CONTROL_RLIB_DEPS,
+    testonly = True,
+)
+
 # The 225-publication modal75,menu-engine link unit: the full engine unit
 # without the render rlibs and cfg, so drawing stays stock.
 _ENGINE_STOCK_DRAW_RLIB_DEPS = {
@@ -259,6 +277,15 @@ filegroup(
         "//host/firmware:__pkg__",
         "//transport:__pkg__",
     ],
+)
+
+xm1_rust_staticlib(
+    name = "bank-time-services",
+    src = "lib.rs",
+    crate_name = "bank",
+    rustc_flags = ["--cfg", "rb_time_services_owned"],
+    rlib_deps = dict(_RLIB_DEPS, xm1_time_services = "//replacement/time_services:arm", xm1_kernel = "//replacement/kernel:arm"),
+    visibility = ["//replacement/time_services:__pkg__"],
 )
 
 rust_source_boundary_test(

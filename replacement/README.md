@@ -20,7 +20,23 @@ devenv shell -- host-build test //replacement/abi:pilot-abi-tests
 
 The [Rust toolchain guide](toolchain/README.md) owns compiler provenance and build macros; the [ABI guide](abi/README.md) owns the bounded ARM qualification. Existing package guides cover the [record validator](validator/README.md), [retained row-availability service](service/README.md) and [render adapter](render_adapter/README.md).
 
+Emit retained-kernel capability metadata as `XM1_KERNEL_BOUNDARY` from the consuming image root. Property/menu images use `BASIC_BOUNDARY`; time-services uses `FULL_BOUNDARY`, whose wait/signal entries accept retained semaphore creation words. Property admission verifies every named function against the ELF and coalesces only exact code aliases. Unequal overlapping extents remain rejected.
+
+`devenv shell -- run-output exec --label linked-image-bytes -- host-build run //host/firmware:owned-image-bytes` reports bytes by crate and section for the linked menu and render variants.
+
 Stagers require their declared canonical X-M1 1.50 inputs, not an arbitrary previously staged candidate. Firmware and generated artifacts remain in ignored `private-data/`; use a named `private-data/scratch/` directory or `private-data/verify-candidate/runs/` for new outputs. Individual commands specify whether directories must already exist or be fresh. Guest execution uses the shared [emulator slot](../build-support/README.md#commands), normally `XM1_EMULATOR_SLOTS=1`; file-only admission and comparison do not execute firmware.
+
+## Render pairs
+
+The [render adapter](render_adapter/README.md) links the owned render bank into the RAM package. `emulation/menu-engine-pair-trajectories/run-render-pairs.sh` admits each role's inputs, replays the finite R1 stock/owned cohort and compares engine traffic, settings and rendered output. Its selected-tree-row control must change the draw and image comparisons while preserving engine reads and posts.
+
+<!-- evidence-record E-RENDER-R1-MAIN-COHORT-150 -->
+
+E-RENDER-R1-MAIN-COHORT-150: The finite R1 render cohort passes 67 of 67 stock/owned pairs: 56 reach drawers and 11 are draw-free. Stock engine execution is authenticated in 67 pairs; stock and owned record 952 and 952 drawer entries. The executed selected-tree-row control is detected (true), with pair/settings/render comparison exits 1/0/1. Both roles use the same controlled-RTC run document, retaining existing pixel exclusions. The production archive is 1381f61df022db041f88a76e1b95ade206e66659a8e3a671136acfea24069f64; recorded source is 0d83f65f3eebecc1755ac1eb6a84433212d2f5e9. The fresh replay uses observer 4cc3d45ee7491f1c01f74ca2555a95221096b9964dd33eb8f19b193abe61e1e3, with its executed driver and runner retained.
+
+Scope: Emulated X-M1 1.50 replay of the finite admitted R1 renderer cohort and one executed wrong-render control on the recorded new archive and observer. This qualifies neither expanded tree/picker classes nor glyph rasterization through RasterWorkspace.
+
+<!-- /evidence-record E-RENDER-R1-MAIN-COHORT-150 -->
 
 ## Fixed owned image
 
@@ -32,7 +48,7 @@ Export `__fixed_body_start` at the first fixed-region file byte and `__fixed_bod
 
 `//replacement/fixed_image:check-fixed-image ALLOWLIST ELF BODY ENTRY OWNED_STACK_BYTES OUTPUT_JSON` applies the bank checker's shared ELF-relocation and direct-transfer admission to a fixed-only link. Link with `--emit-relocs`; the checker also verifies fixed section bounds, permissions, body bytes and BSS against that ELF. The allowlist uses schema 2 stock entries and regions. It reports the entry's owned direct-call stack depth against the supplied budget, not retained callee demand or caller/task headroom. The probe uses `probe-allowlist.json`, entry `xm1_fixed_test_entry` and a 48-byte owned budget: its veneer reserves 40 bytes and the emitted Rust observer reserves eight at `0xba0050`. An aggregate link with retired in-place sections needs its subsystem's placement admission as well.
 
-`//replacement/fixed_image:stage-fixed-image` takes `ENCODER REBUILD DECODER SOURCE_DAT BODY_BIN SYMBOLS PUBLICATIONS_JSON FIRST_STAGE_SYMBOLS OUTPUT_DAT`. The tools are `//lz:lz-encode`, `//host/firmware:rebuild-update` and `//lz:fflzd`. `SOURCE_DAT` must already contain `//replacement/first_stage:first-stage-fixed-image`, staged with `//host/firmware:build-first-stage`; `FIRST_STAGE_SYMBOLS` comes from that exact link. The stager derives a build id from the body and publication words and stages it into the first stage's declared build-id word. It refuses a non-placeholder preimage. The JSON is an array of rows with numeric `address`, `old` and `new` words. Equal words, duplicates, unaligned sites, sites outside the image windows and wrong preimages are refused. Image 4 and 5 publications are decoded, patched and re-encoded through the existing record gates; plain-image words use `replace-plain`. The stager adds the stock heap ceiling and phase-0 mode-1 clear bounds itself; those four sites must retain their stock preimages in the source DAT. Do not repeat them in the publication manifest.
+`//replacement/fixed_image:stage-fixed-image` takes `ENCODER REBUILD DECODER SOURCE_DAT BODY_BIN SYMBOLS PUBLICATIONS_JSON FIRST_STAGE_SYMBOLS OUTPUT_DAT`. The tools are `//lz:lz-encode`, `//host/firmware:rebuild-update` and `//lz:fflzd`. `SOURCE_DAT` must already contain `//replacement/first_stage:first-stage-fixed-image`, staged with `//host/firmware:build-first-stage`; `FIRST_STAGE_SYMBOLS` comes from that exact link. The stager derives a build id from the body and publication words and stages it into the first stage's declared build-id word. It refuses a non-placeholder preimage. The JSON is an array of rows with numeric `address`, `old` and `new` words. Equal words, duplicates, unaligned sites, sites outside the image windows and wrong preimages are refused. Image 4 and 5 publications are decoded, patched and re-encoded through the existing record gates, each image placed at the load address of its entry in `SOURCE_DAT`'s segment table (image 4 at `0x61c400` in stock 1.50 and `0x61c340` in the RC0 prefix container `acb0fbbb…ca8`); plain-image words use `replace-plain`. The stager adds the stock heap ceiling and phase-0 mode-1 clear bounds itself; those four sites must retain their stock preimages in the source DAT. Do not repeat them in the publication manifest.
 
 The stager places nested encoder and container-tool temporaries under `XM1_RUN_WORK`. Apply each in-place mutation once: include its changed words in the publication manifest against their stock preimages, or stage section content separately and omit those words from the manifest. Do not pre-stage a veneer and then supply its old-to-new row. Do not use the aggregate ELF's flat binary as `BODY_BIN`: extract the fixed sections from that same link, preserving their address gaps, and retain the same symbols for BSS and publications.
 
@@ -159,6 +175,40 @@ Scope: X-M1 1.50 cardless RAM-push value package, 226 publications and one conti
 
 <!-- /evidence-record E-MENU-ENGINE-CUTOVER-150 -->
 
+## Time services
+
+`replacement/time_services` owns the task-6 delay and task-9 timer loops, software timer slots and interrupt registration behind typed ports. `//replacement/time_services:host-tests` exercises callback ordering, cancellation, delay completion and the task receive-error contract. These are core contract tests, not stock equality evidence.
+
+Delay expiry records completed waiters under the cross-core lock and signals their semaphores after releasing it. The retained current-task query returns zero while IRQ is masked.
+
+Delay waiters retain the allocator's complete creation word, poll it even after creation fails, retry zero words, and bracket scheduling with an enable attempt even if dispatch disable fails. Service teardown uses the fixed queue/task identities on every attempt, including calls without a local creator and retries after a failed queue deletion.
+
+`//replacement/time_services:image` links the time-service rlib through the existing `bank` Rust root into `OWNED_FIXED`. The link and publication generator read the entry rows in `stock-interface.json`. Run `artifact publications CONTRACT IMAGE4 SYMBOLS OUTPUT_JSON`, then use `//replacement/fixed_image:stage-fixed-image` with that image binary and symbols. The linked marker requires a lens safety contract before camera use.
+
+Apply `//replacement/fixed_image:check-fixed-image` to the ELF and body with `replacement/time_services/image-allowlist.json`, naming each exercised entry and its owned stack budget. This accounts for direct owned calls only; indirect callbacks and retained callees need their own headroom accounting. `//replacement/time_services:mutants ELF FUNCTION[,FUNCTION...] SEED COUNT OUTPUT_DIRECTORY` samples the shared mutation generator's eligible conditional branches and stores across the named linked functions; `mutants site ELF ADDRESS OUTPUT_DIRECTORY` emits one eligible site. Each variant emits the mutated ELF, fixed body and a seed-bound receipt. Stage its body with the unchanged symbols and publications before running its matching full-system scenario, and require a fetch at the mutated site rather than merely somewhere in the owned image.
+
+Exception analysis uses a conservative 2,048-byte budget at `0x70001800..0x70002000`, below the source-initialized IRQ top (`E-PEER-ENTRY-FRAME-HANDOFF-SOURCE-150`). This is an analysis budget, not a hardware guard or a recovered allocation boundary. Nested attach and notify demand adds their direct bounds; the run-derived record reports root margins and observed SPs. Startup hits without a current task are classified separately from TCM exception stacks. Retained callee and callback demand remains observed rather than statically bounded.
+
+The ordered observer and its memory-view projection are documented in [the emulator guide](../emulation/README.md#timer-service-interface-streams). An ingress-only census does not qualify the cutover. A cutover requires complete stock/owned observations, independently executed semantic controls and independent review with no open interface finding.
+
+Use `time-observer schedule STOCK_SUMMARY OUTPUT` for ADC replay across images. It preserves longer gaps and leaves at least 720,000 board ticks after each press/release: the scanner needs two observations, and equal stimulus ticks do not imply equal scanner phase. Cold boot and the three routed comparisons start from strict reset with the same independently fixed boot schedule and continuous raw/interface history. Judge the preparation prefix separately from each routed suffix. Startup publications are ordered exactly; no historical body-bound phase allowance enters the current comparison.
+
+The current timing policy admits each run's serviced-tick count against a 30,000-board-tick period with a fixed two-tick endpoint bound, then checks equal board-time spans and at most one period of first-notify phase difference. The tick-channel tail bound is fixed independently of the observed count difference. Successful delay returns carry compared elapsed serviced ticks; the dedicated task-9 callback at `0x6b7a4c` carries exact stable cadence. Shared callback targets are excluded because multiple timers can invoke the same code word. Public timer and delay lifecycle calls delimit stable cadence claims.
+
+Run `menu-engine-qualify-bounded --root DIR --owned-base DAT SHA256 execute` on the time-services-over-RC0 DAT. It reuses admitted completed roles and archives unfinished role output once, after acquiring the emulator slot. A recorded completion that fails admission is refused, not automatically replayed.
+
+A sampled instruction patch is not automatically a known-wrong control. Require a mutated-site fetch and establish its caller-visible effect on the exercised input; report unused reference copies, input-masked changes and missing fetch evidence separately. Startup publication mutations need the cold-boot stream. The timing control also has measured delay durations, not just an event-count difference. A watch refusal is a failed observation, never a passing firmware result.
+
+The generated record below binds its claims to the changed firmware, judge, failure probes, controls and full qualification inputs. Focused independent confirmation remains required before landing.
+
+<!-- evidence-record E-TIME-INTERFACE-STREAMS-150 -->
+
+E-TIME-INTERFACE-STREAMS-150: The current application time-service body has stock-owned-equal cold-boot, menu, half-press and RTC comparisons under the original independent timing, exact delay and callback-cadence bounds. Fresh executed semantic controls report fresh-semantic-controls-detected (3 detected), and scoped real-kernel probes report failure-boundaries-match. Preparation-prefix raw/interface equivalence and complete-extent coverage are independently proven. The new-body composed qualification is qualified: 67 passing pairs and 134 completed roles, with 0 failed and 0 partial roles; 133 matrix executions and 1 reused current gate role. No historical body qualification is transferred.
+
+Scope: Emulated X-M1 1.50 application tasks 6 and 9 over retained kernel calls, not the RTOS timer family. Firmware source 0d83f65f3eebecc1755ac1eb6a84433212d2f5e9; body dedf1413136add020399a4c17b4fefa9661cc548032747dbc7a4c4a07739ff34, 21792 bytes (record 21824, 28 publications), observer 6963a48239ea50a194f52c4c11b0e385f26cc00a7cc4a938bcbd4bbacf68f560. Stock-based DAT e8d315a7869eeaf6226d98b00364d0cb51248c96a3c45ad37638decf50b20c93; composed DAT b0de4bc46dd9545ff9507225ad145242c33d0e32de753884f232ad961158fbd8. Every current interface route begins at strict reset with the same candidate-independent preparation schedule and continuous history; the route is judged separately after the drained boundary. All six observed preparation prefixes equal fresh independent boot raw/interface bytes and typed summaries except unavailable prefix menu metadata. The original 30000-board-tick period and timing/traffic bounds remain unchanged. Composed qualification used source 55882eb2f9c163d5f504208451a9cd3292dc9dbb, fixed qualifier source 082636ac1a4b51d706d042357d03aa1d80653916 and measured 5759 seconds.
+
+<!-- /evidence-record E-TIME-INTERFACE-STREAMS-150 -->
+
 ## Stimulus clock for stock-against-owned scenarios
 
 Full-system comparisons of a subsystem that changes guest timing fire their scenario stimuli on board ticks ([stimulus clock](../emulation/checkpoint-runs.md#stimulus-clock)).
@@ -185,6 +235,26 @@ devenv shell -- env XM1_EMULATOR_SLOTS=1 host-build test --jobs=2 --local_test_j
 The current `host-build` automatically reports the kernel-sampled lock holder on first contention and owner changes. Use its PID, workspace/output-base context and existing `command.log` pointer before doing manual process archaeology. Unavailable or raced metadata is not evidence that the lane is free, and elapsed time does not authorize stopping a holder. The [build command guide](../build-support/README.md#commands) owns diagnostic details, resource limits and the real-wrapper checks. `host-build run` releases the build lock before executing its target; emulator targets then take their own slot.
 
 An older topic checkout may still provide an older launcher. Use the current qualified `host-build` executable through `devenv shell` from the worker checkout with its usual output base. Resolve it from current main only when that checkout is ready for Nix evaluation; otherwise use the integration owner's frozen launcher path. Keep the worker's source and working directory; do not change SDK identities merely to adopt admission. Each topic's emulator binary retains its compiled policy. Use the qualified shared wrapper or adopt the current admission modules before requesting the new RAM and swap caps; setting an environment variable does not upgrade an old binary. Current defaults are 12 GiB RAM plus 8 GiB swap for builds and native suites, and 8 GiB RAM plus 8 GiB swap for full-system runs, within the shared 64 GiB combined reservation budget. Keep completed and healthy running cohorts bound to their original scopes.
+
+## RAM-loaded first-stage decode experiment
+
+<!-- evidence-record E-RAM-DECODE-OWNERSHIP-150 -->
+
+E-RAM-DECODE-OWNERSHIP-150: The stock-clock-backed RAM image-4 decode completes with state 2, verdict 1, 11 jobs, 2631680 output bytes and CRC-32 564241381. The clock word remains 34836 after driver close and becomes 34832 after stock bookkeeping release. Install, trajectory and unload checks are {"install":"PASS","trajectory":"PASS","unload":"PASS"}. All job status observations, including the last job, are retained. Kernel tick-cell samples extend timing across counter wraps.
+
+Scope: One FujiMod experiment route with the compile-time ReservedClock backend, diagnostic engine snapshot after successful acquire and clock/route check, and a trace window beginning after unload completes; boot start kind restored. The RAM experiment does not exercise BootClock register writes on silicon.
+
+<!-- /evidence-record E-RAM-DECODE-OWNERSHIP-150 -->
+
+## First-stage boot qualification
+
+<!-- evidence-record E-FIRST-RECORD-FLASH-BOOT-CHECK-150 -->
+
+E-FIRST-RECORD-FLASH-BOOT-CHECK-150: The compile-time clock-backend first stage cold-boots both staged packages to SHOOTING MENU. Retained stock: passed at 382538404 instructions; retained RC0: passed at 382538290; FujiMod stock: passed at 381500000; FujiMod RC0: passed at 381500000. Stock-derived DAT 42488245aa329b735147874e915d98520e6fa258c1976c8ca20da30ee5db8b0c; RC0-derived DAT 8225836bed4341bed4832052e535de1c815e5f76baf3b84663eb50d072e72d8f.
+
+Scope: Four actual cold-boot-to-menu executions, the two packages on each engine, from the committed first-stage image identified in the run's binary digest receipt. Packaging runs outside emulator admission; each emulator launcher acquires its own slot.
+
+<!-- /evidence-record E-FIRST-RECORD-FLASH-BOOT-CHECK-150 -->
 
 ## Authoritative references
 

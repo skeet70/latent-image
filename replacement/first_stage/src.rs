@@ -296,3 +296,10 @@ unsafe fn inject_fault() {}
 unsafe extern "C" fn xm1_first_stage_handler_tail_fault() {
     write(0x24 as *mut u32, 0xdead_be00);
 }
+
+#[cfg(decode_test)]
+mod decode_test_crc;
+#[cfg(decode_test)]
+mod decode_test_stock;
+#[cfg(decode_test)]
+mod decode_test;

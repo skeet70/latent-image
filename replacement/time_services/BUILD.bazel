@@ -1,0 +1,82 @@
+load("//build-support:rust_source_boundary.bzl", "rust_source_boundary_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_host_test", "xm1_rust_rlib")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+xm1_rust_rlib(
+    name = "arm",
+    src = "src/lib.rs",
+    crate_name = "xm1_time_services",
+    data = ["src/tests.rs", "src/interrupts.rs", "src/driver.rs", "src/timers.rs", "src/stock.rs"],
+    rlib_deps = {"xm1_kernel": "//replacement/kernel:arm"},
+    out = "arm/libxm1_time_services.rlib",
+)
+
+xm1_rust_host_test(
+    name = "host-tests",
+    src = "src/lib.rs",
+    crate_name = "xm1_time_services",
+    data = ["src/tests.rs", "src/interrupts.rs", "src/driver.rs", "src/timers.rs", "src/stock.rs"],
+    rlib_deps = {"xm1_kernel": "//replacement/kernel:host"},
+)
+
+haskell_binary(
+    name = "artifact",
+    srcs = ["ArtifactMain.hs"],
+    main_file = "ArtifactMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:first-stage",
+        "//host:host-support",
+        "//host:update-container",
+        "//replacement/fixed_image:contract",
+    ],
+)
+
+haskell_binary(
+    name = "mutants",
+    srcs = ["MutantMain.hs"],
+    main_file = "MutantMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:mutation",
+        "//emulation:scenario-generation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+genrule(
+    name = "linker-script",
+    srcs = ["stock-interface.json"],
+    outs = ["time-services.ld"],
+    cmd = "$(location :artifact) script $(location stock-interface.json) > $@",
+    tools = [":artifact"],
+)
+
+xm1_rust_elf(
+    name = "image",
+    rust_staticlib = "//replacement/bank:bank-time-services",
+    entry = "xm1_time_initialize",
+    link_script = ":linker-script",
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
+    link_map = True,
+)
+
+rust_source_boundary_test(
+    name = "unsafe-boundary-check",
+    declaration = "unsafe-boundary.json",
+    srcs = glob(["src/**/*.rs"]),
+)

@@ -30,7 +30,7 @@ module Emulation.InterfaceJudge
 
 import Control.Applicative ((<|>))
 import Control.Monad (foldM, unless)
-import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', withObject, withText, (.:), (.:?), (.!=))
+import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', object, toJSON, withObject, withText, (.:), (.:?), (.!=), (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Types as J
@@ -80,11 +80,34 @@ data Causal = Causal
 
 data Span = Span GuestAddress GuestAddress deriving (Eq, Show)
 data FetchReceipt = FetchReceipt Span FetchCount deriving (Eq, Show)
+
+newtype BoardTicks = BoardTicks Word64 deriving (Eq, Show)
+newtype ServiceTicks = ServiceTicks Word64 deriving (Eq, Show)
+data ClockWindow = ClockWindow
+  { clockOrigin :: BoardTicks
+  , clockFirstTick :: BoardTicks
+  , clockEnd :: BoardTicks
+  } deriving (Eq, Show)
+data DurationRule = DurationRule
+  { durationBegin :: Selector
+  , durationEnd :: Selector
+  } deriving (Eq, Show)
+data TimingPolicy = TimingPolicy
+  { timingTick :: Selector
+  , timingPeriod :: BoardTicks
+  , timingBoundaryError :: ServiceTicks
+  , timingStartSkew :: BoardTicks
+  , timingDurations :: [DurationRule]
+  , timingCallbacks :: Selector
+  , timingBarriers :: [Selector]
+  , timingSources :: [T.Text]
+  } deriving (Eq, Show)
 data StreamRun = StreamRun
   { runDigest :: Digest
   , runComplete :: Bool
   , runFetches :: [FetchReceipt]
   , runEvents :: [Observation]
+  , runClock :: Maybe ClockWindow
   } deriving (Eq, Show)
 data WrongRun = WrongRun Variant StreamRun deriving (Eq, Show)
 data InterfaceReport = InterfaceReport
@@ -98,6 +121,7 @@ data InterfaceReport = InterfaceReport
   , milestone :: Maybe Milestone
   , channels :: [Channel]
   , causalPairs :: [Causal]
+  , timingPolicy :: Maybe TimingPolicy
   } deriving (Eq, Show)
 
 -- | The first failure of the channel relation: a differing event on the first
@@ -112,6 +136,7 @@ data StreamDifference
 data Comparison = Comparison
   { comparisonDifference :: Maybe StreamDifference
   , comparisonTolerances :: [ChannelTolerance]
+  , comparisonTiming :: [String]
   }
 
 name :: String -> (T.Text -> a) -> Value -> J.Parser a
@@ -151,6 +176,24 @@ instance FromJSON Digest where
     pure (Digest (T.toLower text))
 instance FromJSON GuestAddress where parseJSON value = GuestAddress <$> parseJSON value
 instance FromJSON FetchCount where parseJSON value = FetchCount <$> parseJSON value
+
+instance FromJSON BoardTicks where parseJSON value = BoardTicks <$> parseJSON value
+instance FromJSON ServiceTicks where parseJSON value = ServiceTicks <$> parseJSON value
+instance FromJSON ClockWindow where
+  parseJSON = withObject "board-clock window" $ \value -> ClockWindow
+    <$> value .: "origin" <*> value .: "first_tick" <*> value .: "end"
+instance FromJSON DurationRule where
+  parseJSON = withObject "duration rule" $ \value -> DurationRule <$> value .: "begin" <*> value .: "end"
+instance FromJSON TimingPolicy where
+  parseJSON = withObject "timing policy" $ \value -> do
+    period@(BoardTicks ticks) <- value .: "period_board_ticks"
+    unless (ticks > 0) (fail "service period must be positive")
+    sources <- value .: "sources"
+    unless (not (null sources)) (fail "timing policy must cite a source")
+    TimingPolicy <$> value .: "tick" <*> pure period
+      <*> value .: "boundary_error_ticks" <*> value .: "start_skew_board_ticks"
+      <*> value .: "durations" <*> value .: "callbacks"
+      <*> value .:? "cadence_barriers" .!= [] <*> pure sources
 instance FromJSON Span where
   parseJSON = withObject "guest extent" $ \value -> do
     start <- value .: "start"
@@ -165,6 +208,7 @@ instance FromJSON StreamRun where
     <*> value .:? "complete" .!= False
     <*> value .:? "fetch_receipts" .!= []
     <*> (map Observation <$> value .: "events")
+    <*> value .:? "clock"
 instance FromJSON WrongRun where
   parseJSON = withObject "wrong interface run" $ \value -> WrongRun <$> value .: "name" <*> value .: "run"
 instance FromJSON InterfaceReport where
@@ -185,7 +229,7 @@ instance FromJSON InterfaceReport where
     InterfaceReport <$> value .: "subsystem" <*> value .: "scenario"
       <*> value .:? "retired_extents" .!= [] <*> value .:? "owned_extents" .!= []
       <*> value .: "stock" <*> value .: "owned" <*> value .:? "controls" .!= [] <*> pure mark
-      <*> pure declaredChannels <*> pure declaredCausal
+      <*> pure declaredChannels <*> pure declaredCausal <*> value .:? "timing_policy"
 
 parseInterfaceReport :: B.ByteString -> Either String InterfaceReport
 parseInterfaceReport = eitherDecodeStrict'
@@ -261,11 +305,11 @@ allowanceOf (Just _) channel = case channelTailAllowance channel of
 -- sequence must be a prefix of the longer, which may carry at most
 -- @allowance@ more events. Past the shorter sequence, the event named is the
 -- first beyond the allowance.
-tailDifference :: ChannelName -> Int -> [Value] -> [Value] -> Maybe StreamDifference
-tailDifference label allowance = go 0
+tailDifference :: (Value -> Value -> Bool) -> ChannelName -> Int -> [Value] -> [Value] -> Maybe StreamDifference
+tailDifference same label allowance = go 0
   where
     go occurrence (expected : expecteds) (actual : actuals)
-      | expected == actual = go (occurrence + 1) expecteds actuals
+      | same expected actual = go (occurrence + 1) expecteds actuals
       | otherwise = Just (DifferingEvent label (Occurrence occurrence) (Just expected) (Just actual))
     go occurrence expecteds actuals = case (drop allowance expecteds, drop allowance actuals) of
       (extra : _, _) -> Just (DifferingEvent label (Occurrence (occurrence + allowance)) (Just extra) Nothing)
@@ -286,26 +330,144 @@ causalViolation side (Causal first then_ _) run =
       | otherwise = go (unmatched - fromEnum effect + fromEnum (matchesSelector first value)) rest
       where effect = matchesSelector then_ value
 
+
+boardCount :: BoardTicks -> Integer
+boardCount (BoardTicks ticks) = toInteger ticks
+
+clockWindow :: StreamRun -> Either String ClockWindow
+clockWindow run = maybe (Left "missing independent board-clock window") Right (runClock run)
+
+clockAdmission :: InterfaceReport -> TimingPolicy -> String -> StreamRun -> Either String String
+clockAdmission report policy side run = do
+  window <- clockWindow run
+  let origin = boardCount (clockOrigin window)
+      first = boardCount (clockFirstTick window)
+      end = boardCount (clockEnd window)
+      period = boardCount (timingPeriod policy)
+      ServiceTicks boundary = timingBoundaryError policy
+      beforeEnd = takeWhile (\event -> not (any (`isMilestoneMarker` event) (milestone report))) (map observationValue (runEvents run))
+      observed = toInteger (length (filter (matchesSelector (timingTick policy)) beforeEnd))
+      expected = (end - first) `div` period + 1
+      low = max 0 (expected - toInteger boundary)
+      high = expected + toInteger boundary
+      detail = side ++ " serviced ticks " ++ show observed ++ ", independent board-time range "
+        ++ show low ++ ".." ++ show high ++ ", first " ++ show first ++ ", end " ++ show end ++ ", period " ++ show period
+  unless (origin <= first && first <= end) (Left (side ++ " has a nonmonotonic board-clock window"))
+  unless (low <= observed && observed <= high) (Left detail)
+  pure detail
+
+clockAlignment :: TimingPolicy -> StreamRun -> StreamRun -> Either String ()
+clockAlignment policy stock candidate = do
+  left <- clockWindow stock
+  right <- clockWindow candidate
+  let spanOf window = boardCount (clockEnd window) - boardCount (clockOrigin window)
+      firstOf window = boardCount (clockFirstTick window) - boardCount (clockOrigin window)
+  unless (spanOf left == spanOf right) (Left "stock and candidate board-time spans differ")
+  unless (abs (firstOf left - firstOf right) <= boardCount (timingStartSkew policy))
+    (Left "first serviced tick exceeds the independent board-time start-skew bound")
+
+data TimingState = TimingState
+  { servicedPosition :: Word64
+  , cadenceEpoch :: Int
+  , durationStarts :: M.Map (Int, ChannelName) Word64
+  , callbackStarts :: M.Map (ChannelName, GuestAddress) (Int, Word64)
+  , timedEvents :: [Observation]
+  , durationCount :: Int
+  , cadenceCount :: Int
+  }
+
+timedRun :: InterfaceReport -> TimingPolicy -> String -> StreamRun -> Either String (StreamRun, String)
+timedRun report policy side run = do
+  state <- foldM step (TimingState 0 0 M.empty M.empty [] 0 0) (runEvents run)
+  pure (run { runEvents = reverse (timedEvents state) },
+    side ++ " checked delay durations " ++ show (durationCount state)
+      ++ ", stable callback intervals " ++ show (cadenceCount state))
+  where
+    rules = zip [0 :: Int ..] (timingDurations policy)
+    step state observation@(Observation value)
+      | isMarker value = Right state { timedEvents = observation : timedEvents state }
+      | otherwise = do
+          channel <- maybe (Left (side ++ " timed observation matches no channel")) (Right . channelName) (claim (channels report) value)
+          let now = servicedPosition state + fromIntegral (fromEnum (matchesSelector (timingTick policy) value))
+              epoch = cadenceEpoch state + fromEnum (any (`matchesSelector` value) (timingBarriers policy))
+              starts = foldl' (\table (index, rule) ->
+                if matchesSelector (durationBegin rule) value then M.insert (index, channel) now table else table)
+                (durationStarts state) rules
+              ends = [(index, rule) | (index, rule) <- rules, matchesSelector (durationEnd rule) value]
+          (elapsed, remaining, measured) <- case ends of
+            [] -> Right (value, starts, 0)
+            [(index, _)] -> do
+              began <- maybe (Left (side ++ " delay return has no observed call")) Right (M.lookup (index, channel) starts)
+              updated <- addField "elapsed_ticks" (toJSON (now - began)) value
+              Right (updated, M.delete (index, channel) starts, 1)
+            _ -> Left "overlapping duration rules"
+          (annotated, previous, stable) <-
+            if matchesSelector (timingCallbacks policy) value then do
+              target <- case value of
+                Object row -> maybe (Left "callback lacks a code word") (J.parseEither parseJSON) (KM.lookup "target" row)
+                _ -> Left "callback is not an object"
+              let prior = M.lookup (channel, target) (callbackStarts state)
+                  interval = case prior of
+                    Just (priorEpoch, tick) | priorEpoch == epoch -> Just (now - tick)
+                    _ -> Nothing
+              updated <- addField "cadence_ticks" (maybe Null toJSON interval) elapsed
+              Right (updated, M.insert (channel, target) (epoch, now) (callbackStarts state), fromEnum (isJust interval))
+            else Right (elapsed, callbackStarts state, 0)
+          Right state { servicedPosition = now, cadenceEpoch = epoch, durationStarts = remaining
+            , callbackStarts = previous, timedEvents = Observation annotated : timedEvents state
+            , durationCount = durationCount state + measured, cadenceCount = cadenceCount state + stable }
+    addField key field (Object row) = Right (Object (KM.insert key field row))
+    addField _ _ _ = Left "a timed boundary observation is not an object"
+
+sameTimedEvent :: Maybe TimingPolicy -> Value -> Value -> Bool
+sameTimedEvent (Just policy) left@(Object expected) right@(Object actual)
+  | matchesSelector (timingCallbacks policy) left && matchesSelector (timingCallbacks policy) right
+  , KM.lookup "cadence_ticks" expected == Just Null || KM.lookup "cadence_ticks" actual == Just Null =
+      KM.delete "cadence_ticks" expected == KM.delete "cadence_ticks" actual
+sameTimedEvent _ left right = left == right
+
+prepareTiming :: InterfaceReport -> String -> StreamRun -> Either String (StreamRun, [String])
+prepareTiming report side run = case timingPolicy report of
+  Nothing -> Right (run, [])
+  Just policy -> do
+    clock <- clockAdmission report policy side run
+    (measured, detail) <- timedRun report policy side run
+    pure (measured, [clock, detail])
 -- | Judge a candidate run against the stock run under the report's
 -- declarations, or say why the declarations cannot judge them.
 compareRuns :: InterfaceReport -> String -> StreamRun -> Either String Comparison
 compareRuns report candidateLabel candidate = do
-  stockTable <- partition "stock" end declared stock
-  candidateTable <- partition candidateLabel end declared candidate
-  let judged channel =
-        let (allowance, basis) = allowanceOf end channel
-            stockEvents = M.findWithDefault [] (channelName channel) stockTable
-            candidateEvents = M.findWithDefault [] (channelName channel) candidateTable
-         in ( tailDifference (channelName channel) allowance stockEvents candidateEvents
-            , ChannelTolerance (channelName channel) (channelTimeDriven channel) allowance basis
-                (length stockEvents) (length candidateEvents) )
-      results = map judged (judgedChannels declared)
-      pairDifference side run = firstJust [UncausedEvent <$> causalViolation side pair run | pair <- causalPairs report]
-  pure Comparison
-    { comparisonDifference = firstJust (map fst results)
-        <|> pairDifference "stock" stock <|> pairDifference candidateLabel candidate
-    , comparisonTolerances = map snd results
-    }
+  (measuredStock, stockTiming) <- prepareTiming report "stock" stock
+  let prepared = do
+        case timingPolicy report of
+          Nothing -> Right ()
+          Just policy -> clockAlignment policy stock candidate
+        prepareTiming report candidateLabel candidate
+  case prepared of
+    Left reason -> pure Comparison
+      { comparisonDifference = Just (DifferingEvent (ChannelName "timing admission") (Occurrence 0)
+          (Just (object ["admitted" .= True])) (Just (object ["admitted" .= False, "reason" .= reason])))
+      , comparisonTolerances = []
+      , comparisonTiming = stockTiming ++ [candidateLabel ++ ": " ++ reason]
+      }
+    Right (measuredCandidate, candidateTiming) -> do
+      stockTable <- partition "stock" end declared measuredStock
+      candidateTable <- partition candidateLabel end declared measuredCandidate
+      let judged channel =
+            let (allowance, basis) = allowanceOf end channel
+                stockEvents = M.findWithDefault [] (channelName channel) stockTable
+                candidateEvents = M.findWithDefault [] (channelName channel) candidateTable
+             in ( tailDifference (sameTimedEvent (timingPolicy report)) (channelName channel) allowance stockEvents candidateEvents
+                , ChannelTolerance (channelName channel) (channelTimeDriven channel) allowance basis
+                    (length stockEvents) (length candidateEvents) )
+          results = map judged (judgedChannels declared)
+          pairDifference side run = firstJust [UncausedEvent <$> causalViolation side pair run | pair <- causalPairs report]
+      pure Comparison
+        { comparisonDifference = firstJust (map fst results)
+            <|> pairDifference "stock" stock <|> pairDifference candidateLabel candidate
+        , comparisonTolerances = map snd results
+        , comparisonTiming = stockTiming ++ candidateTiming
+        }
   where
     end = milestone report
     declared = channels report
@@ -380,7 +542,7 @@ judgeInterfaceReport firmware (ReportDigest reportDigest) report = base
       , verdictUnmet = unmet
       , verdictDifferentCases = []
       , verdictSurvivors = survivors
-      , verdictDiagnostics = []
+      , verdictDiagnostics = either (const []) comparisonTiming compared
       , verdictReasons = []
       , verdictMilestone = milestone report
       , verdictChannelDifference = Nothing

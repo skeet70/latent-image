@@ -21,6 +21,12 @@ use storage::native_configuration::NativeConfiguration;
 #[cfg(not(test))]
 use xm1_kernel::{Kernel, SlotTable};
 
+#[cfg(all(target_arch = "arm", not(test), not(feature = "component"), not(property_rlib)))]
+#[no_mangle]
+#[used]
+pub static XM1_KERNEL_BOUNDARY: xm1_kernel::slot_table::Boundary<4, 12> =
+    xm1_kernel::slot_table::BASIC_BOUNDARY;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PropertyId(u32);
 impl PropertyId {
