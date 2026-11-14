@@ -60,3 +60,13 @@ xm1_rust_host_test(
     data = _SOURCES + ["src/controller_tests.rs", "src/tests.rs"],
     rlib_deps = {"xm1_saclac_interface": "//replacement/saclac_interface:host"},
 )
+
+xm1_rust_host_test(
+    name = "public-path-smoke",
+    src = "src/public_path_tests.rs",
+    crate_name = "xm1_saclac_profile_geometry_public_tests",
+    rlib_deps = {
+        "xm1_saclac_profile_geometry": ":host",
+        "xm1_saclac_interface": "//replacement/saclac_interface:host",
+    },
+)

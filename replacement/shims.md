@@ -829,7 +829,7 @@ The vendor, wireless, filesystem and device-protocol unit. Most of its externals
 
 ## saclac_profile_geometry
 
-saclac's layer L4 (`replacement/saclac/profile_geometry`): the DCF controller, profile tables, geometry operation, services and record mode of the image-5 band `[0xed7d64, 0xef8c08)`. Its ports are bound by `saclac_root`; the rows below are the crate's own stock boundary, all in `src/stock/`.
+saclac's layer L4 (`replacement/saclac/profile_geometry`): the DCF controller, profile tables, geometry operation, services and record mode of the image-5 band `[0xed7d64, 0xef8c08)`. `saclac_root` owns port binding and linked-image qualification; the proposed bindings are not evidence of execution. The rows below are the crate's own stock boundary, all in `src/stock/`.
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
@@ -838,6 +838,7 @@ saclac's layer L4 (`replacement/saclac/profile_geometry`): the DCF controller, p
 | `tables.rs`, `StockTables`: the image-5 read-only tables at `0xef6de4`, `0xef6aa4`, `0xef66d4`, `0xef6dd4`, `0xef6ddc`, `0xee9ef4`, `0xee9d60`, `0xef50c4`, `0xef70b4`, `0xed7e08`, `0xef66d0`, `0xee8664`..`0xee8864`, `0xede9a8`, `0xeef628` | guest-memory layout view | the retained band getters other tasks reach (`0xef5448`, `0xef5190`, `0xef5a68` ..), which read the same tables | no | the band's retained getters are owned | required |
 | `StockFloatLog` in `mod.rs`: `0x894778` | trampoline into retained stock | the runtime library | no | an owned logarithm is qualified against it | required |
 
+Retained area-list destinations use `stock::areas::convert_into` for a service answer or `AreaList::write_into` for an owned geometry result. Both take an initialized `[u8; AREA_LIST_BYTES]` destination, retain present-area bytes `+0x27` and `+0x33`, and clear absent records. These are untouched destination bytes, not an undefined-source-read correction. Root bindings must preserve those bytes from the caller's existing destination and publish successful results back to that same buffer; they must not serialize through a fresh zeroed destination or publish a refused query.
 
 ## Not registered
 

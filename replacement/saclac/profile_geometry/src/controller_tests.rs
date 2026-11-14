@@ -82,10 +82,20 @@ impl Memory for SharedBytes {
     fn write_u32(&mut self, at: Location, value: u32) { self.0.borrow_mut().write_u32(at, value) }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PipelineAction {
+    Configure,
+    Apply,
+    Enable,
+    Disable,
+}
+
 #[derive(Default)]
 struct Fake {
     calls: Vec<Call>,
     refuse_stop: bool,
+    refuse_pipeline: Option<PipelineAction>,
+    pipeline_actions: Vec<PipelineAction>,
     config: Vec<(u32, u8)>,
     halfwords: Vec<(u32, u16)>,
     window: Rectangle,
@@ -123,18 +133,24 @@ impl Pipeline for Fake {
     fn settle(&mut self) { self.calls.push(Call::Settle) }
     fn release_capture_hardware(&mut self) { self.calls.push(Call::CaptureReleased) }
     fn release_configuration_hardware(&mut self, holder: ConfigurationHolder) { self.calls.push(Call::ConfigurationReleased(holder.0)) }
-    fn enable(&mut self, _: PipelineChannel, _: Stages, _: Location) -> bool { true }
+    fn enable(&mut self, _: PipelineChannel, _: Stages, _: Location) -> bool {
+        self.pipeline_actions.push(PipelineAction::Enable);
+        self.refuse_pipeline != Some(PipelineAction::Enable)
+    }
     fn disable(&mut self, channel: PipelineChannel, stages: Stages) -> bool {
         self.calls.push(Call::Disable(channel.0, stages.0));
-        true
+        self.pipeline_actions.push(PipelineAction::Disable);
+        self.refuse_pipeline != Some(PipelineAction::Disable)
     }
     fn apply(&mut self, channel: PipelineChannel, stages: Stages, _: Location) -> bool {
         self.calls.push(Call::Apply(channel.0, stages.0));
-        true
+        self.pipeline_actions.push(PipelineAction::Apply);
+        self.refuse_pipeline != Some(PipelineAction::Apply)
     }
     fn configure(&mut self, channel: PipelineChannel, stages: Stages, _: Location) -> bool {
         self.calls.push(Call::Configure(channel.0, stages.0));
-        true
+        self.pipeline_actions.push(PipelineAction::Configure);
+        self.refuse_pipeline != Some(PipelineAction::Configure)
     }
     fn restore_stages(&mut self, _: Location, _: Stages) {}
     fn point_statistics(&mut self, channel: PipelineChannel, stages: Stages, destinations: &StatisticsDestinations) {
@@ -534,6 +550,40 @@ fn parameters_for(profile: u32) -> crate::stock::Parameters {
 }
 
 #[test]
+fn record_updates_succeed_and_stop_refresh_at_each_pipeline_refusal() {
+    use crate::controller::changes::Mask;
+    use PipelineAction::*;
+    let actions = [Configure, Apply, Enable, Disable];
+    for update_status in [false, true] {
+        for (refused, action) in actions.into_iter().enumerate() {
+            let mut layer = layer(0, 0);
+            layer.memory.write_u32(field::PIPELINE_CHANNEL, 7);
+            // Retained callers can leave pending stage masks in the shared work record.
+            for mask in [Mask::Geometry, Mask::Apply, Mask::Enable, Mask::Disable] {
+                layer.memory.write_u32(work::mask(mask), 0x80);
+            }
+            layer.ports.refuse_pipeline = Some(action);
+            if update_status {
+                let mut snapshot = layer.status_snapshot();
+                snapshot.set_dimensions([480, 640]);
+                assert_eq!(layer.apply_status(&snapshot), Ok(()), "{action:?}");
+                assert_eq!(layer.status_snapshot().dimensions(), [480, 640]);
+            } else {
+                let mut parameters = layer.parameters();
+                parameters.set_mode_byte(3);
+                assert_eq!(layer.apply_parameters(&parameters), Ok(()), "{action:?}");
+                assert_eq!(layer.parameters().mode_byte(), 3);
+            }
+            assert_eq!(layer.ports.pipeline_actions, actions[..=refused]);
+            layer.ports.pipeline_actions.clear();
+            layer.ports.refuse_pipeline = None;
+            assert_eq!(layer.apply_status(&layer.status_snapshot()), Ok(()));
+            assert_eq!(layer.ports.pipeline_actions, actions[refused + 1..]);
+        }
+    }
+}
+
+#[test]
 fn a_new_profile_sends_the_format_to_output_and_format_subscribers() {
     let mut layer = layer(0, 0);
     layer.memory.write_u32(requests::subscription(Subscription::Output), 1);
@@ -749,6 +799,13 @@ fn window_areas_query_the_inner_window_and_rescale_each_area() {
     assert_eq!(layer.ports.calls, vec![Call::AreaQuery(1, query)]);
     assert_eq!(list.count, 1);
     assert_eq!((list.present()[0].origins()[0][0], list.present()[0].extent()), (5, 50));
+    let mut output = [0xa5; crate::stock::areas::AREA_LIST_BYTES];
+    output[4 + 0x33] = 0x5a;
+    list.write_into(&mut output);
+    assert_eq!(&output[..8], &[1, 0, 0, 0, 5, 0, 0, 0]);
+    assert_eq!(&output[4 + 0x22..4 + 0x24], &[50, 0]);
+    assert_eq!([output[4 + 0x27], output[4 + 0x33]], [0xa5, 0x5a]);
+    assert!(output[108..].iter().all(|&byte| byte == 0));
 }
 
 #[test]
