@@ -30,6 +30,17 @@ fn a_missing_key_reads_zeros_and_leaves_the_values_incomplete() {
 }
 
 #[test]
+fn each_parameter_set_uses_its_own_base_and_signed_trim() {
+    let area = quadruple(Area::default(), 0x2079, [100, 200, 300, 400]);
+    let area = quadruple(area, 0x2151, [3, 5, -7, 500]);
+    let area = quadruple(area, 0x2031, [20, 40, 60, 80]);
+    let area = quadruple(area, 0x2109, [-10, 5, 70, 9]);
+    let area = quadruple(area, 0x1fe9, [1, 2, 3, 4]);
+    assert_eq!(adjusted_values(&area, Some(ParameterSet::Zero), 450, false), Adjusted { values: [195, 97, 0, 307], complete: true });
+    assert_eq!(adjusted_values(&area, Some(ParameterSet::Two), 450, false), Adjusted { values: [35, 30, 71, 0], complete: true });
+}
+
+#[test]
 fn mode_keys_and_kind_five() {
     assert_eq!(mode_key(4), Some(0x1de7));
     assert_eq!(mode_key(5), Some(0x1de5));
@@ -80,6 +91,27 @@ fn no_kept_point_empties_the_list_and_a_disabled_window_changes_nothing() {
     let mut points = PointRecord { window: PointWindow { enabled: false, ..window() }, ..record(1) };
     filter_points(&area, &mut points, &mut buffer);
     assert_eq!((points.count, buffer[0]), (1, 7));
+}
+
+#[test]
+fn filtering_caps_the_published_list_at_buffer_capacity() {
+    struct Points;
+    impl crate::adjustment::Adjustments for Points {
+        fn byte(&self, key: crate::adjustment::AdjustmentKey) -> u8 {
+            let offset = key.0 - 0x100;
+            (1 + offset / 4).to_le_bytes()[(offset % 4) as usize]
+        }
+    }
+    let mut points = PointRecord {
+        count: 1025,
+        shift: [0, 0],
+        window: PointWindow { enabled: true, width: 2048, height: 1, ..PointWindow::default() },
+        ..record(0)
+    };
+    let mut buffer = [0; POINT_BUFFER_WORDS];
+    filter_points(&Points, &mut points, &mut buffer);
+    assert_eq!((points.count, points.source), (1024, PointSource::Buffer));
+    assert_eq!((buffer[0], buffer[1023]), (1, 1024));
 }
 
 #[test]

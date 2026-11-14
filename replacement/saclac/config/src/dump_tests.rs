@@ -122,3 +122,15 @@ fn unset_optional_limits_read_0xffff_and_the_others_0() {
     let dump = configuration_dump(&Area::default(), &mut Scales::default(), &mut Sources::default(), Channel(1));
     assert_eq!(dump.limits, [[0xffff; 10], [0xffff; 10], [0xffff; 10], [0; 10], [0; 10]]);
 }
+
+#[test]
+fn the_dump_keeps_signed_record_values_and_both_shifted_floors() {
+    let area = area().with_half(0x3f3d14 + 22, 0xfffe)
+        .with_half(0x3e15a6, 9).with_half(0x3e15a8, 13).with(0x3e162f, 3)
+        .with_half(0x3e0b40 + 2, 0x101).with_half(0x3e0c09 + 2, 0x203)
+        .with_half(0x3e0cd2 + 2, 0x405).with_half(0x3e0d9b + 2, 0x807);
+    let dump = configuration_dump(&area, &mut Scales::default(), &mut Sources::default(), Channel(1));
+    assert_eq!(dump.record_word, -2);
+    assert_eq!(dump.floors, [72, 104]);
+    assert_eq!(dump.late_words, [0x101, 0x203, 0x405, 0x807]);
+}
