@@ -3,7 +3,7 @@
 module Main (main) where
 
 import Control.Monad (unless)
-import Data.Aeson (Value (..), encode, object, (.=))
+import Data.Aeson (Value (..), eitherDecode, encode, object, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy as L
@@ -18,6 +18,7 @@ import Emulation.InterfaceStream
   , Occurrence (..)
   )
 import Emulation.Judge
+import System.Environment (getArgs)
 
 main :: IO ()
 main = do
@@ -283,8 +284,51 @@ main = do
   otherFirmware <- judge (Just (Firmware "other.bin" wrongDigest)) legacy
   check (verdictStatus otherFirmware == VerdictNoVerdict)
   check (case parseInterfaceReport "{\"mode\":\"interface-stream\",\"schema\":1}" of Left _ -> True; Right _ -> False)
+  driverOrderContract firmware
 
   putStrLn "interface stream judge behavioral tests passed"
+
+driverOrderContract :: Maybe Firmware -> IO ()
+driverOrderContract firmware = do
+  arguments <- getArgs
+  path <- case arguments of
+    [value] -> pure value
+    _ -> fail "expected the production payload declaration"
+  declaration <- L.readFile path >>= either fail pure . eitherDecode
+  let arrival :: Int -> Value
+      arrival operation = object ["kind" .= ("queue-in" :: String), "operation" .= operation, "sender" .= (3 :: Int), "payload" .= ([] :: [Int])]
+      copied :: Int -> Int -> Value
+      copied address byte = object ["kind" .= ("store" :: String), "address" .= address, "bytes" .= [byte]]
+      contract left right =
+        Object (KM.insert "payload_projection" declaration (objectOf (report
+          (runValues stockDigest 16 32 12 left)
+          (runValues ownedDigest 64 96 9 right)
+          [control "changed-command" (runValues wrongDigest 64 96 8 [arrival (15106 :: Int)])] Null)))
+  mapM_ (\(operation, address) -> do
+    let command = arrival operation
+        first = copied address (17 :: Int)
+        second = copied address 34
+    _ <- status firmware (contract [command, first] [command, first]) VerdictEqual
+    before <- status firmware (contract [command, first] [first, command]) VerdictDifferent
+    check (verdictChannelDifference before == Nothing && verdictCausalViolation before /= Nothing)
+    repeated <- status firmware (contract [command, first, command, second] [command, first, second, command]) VerdictDifferent
+    check (verdictChannelDifference repeated == Nothing && verdictCausalViolation repeated /= Nothing)
+    initial <- status firmware (contract [first, command] [first, command]) VerdictDifferent
+    check (verdictCausalViolation initial /= Nothing)
+    ) ([(15104, 23711576), (15105, 23711744), (15106, 23711748), (15107, 23711776),
+        (15108, 23711800), (15109, 23711824), (15110, 23711836), (15111, 23711900),
+        (15115, 23712024), (15117, 23712040), (15127, 23712300), (15141, 23712508)] :: [(Int, Int)])
+  let wake = object ["kind" .= ("queue-in" :: String), "operation" .= (15179 :: Int), "sender" .= (47 :: Int), "payload" .= ([] :: [Int])]
+      effect = object ["kind" .= ("peer-request" :: String), "queue" .= (44 :: Int), "operation" .= (15372 :: Int), "payload" .= ([] :: [Int])]
+  _ <- status firmware (contract [wake, effect] [wake, effect]) VerdictEqual
+  broken <- status firmware (contract [wake, effect] [effect, wake]) VerdictDifferent
+  check (verdictChannelDifference broken == Nothing && verdictCausalViolation broken /= Nothing)
+  counted <- status firmware (contract [wake, effect, wake, effect] [wake, effect, effect, wake]) VerdictDifferent
+  check (verdictChannelDifference counted == Nothing && verdictCausalViolation counted /= Nothing)
+  _ <- status firmware (contract
+    [arrival (15110 :: Int), copied (23711836 :: Int) (17 :: Int), wake, effect]
+    [wake, arrival (15110 :: Int), effect, copied (23711836 :: Int) (17 :: Int)]) VerdictEqual
+  pure ()
 
 check :: Bool -> IO ()
 check yes = unless yes (fail "interface stream verdict differs")

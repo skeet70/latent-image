@@ -2300,6 +2300,8 @@ haskell_test(
     name = "interface-judge-tests",
     size = "small",
     srcs = ["InterfaceJudgeTests.hs"],
+    args = ["$(location //replacement/saclac:payload-fields.json)"],
+    data = ["//replacement/saclac:payload-fields.json"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":judge-lib",
