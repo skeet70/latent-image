@@ -89,22 +89,21 @@ pub struct FocusResult {
     pub position: u16,
     /// Row times seven plus column.
     pub area: u32,
-    /// Words whose meaning no reader in this layer shows.
-    pub at_0c: u32,
-    pub at_10: u32,
+    /// The two status words included in the focus diagnostic.
+    pub diagnostic_status: [u32; 2],
     /// 9 marks a settled plan's result found.
     pub class: u32,
-    pub at_18: u32,
-    pub at_1c: u32,
-    pub at_20: u32,
+    pub pending: u32,
+    pub treated_pending: u32,
+    pub decision: u32,
     /// 1 once the pipeline's selected sample word reaches `Plan::speeds[2]` (0xf203f8).
     pub fast: u32,
-    pub at_28: u32,
+    pub area_status: u32,
     pub area_count: u8,
     pub areas: [ResultArea; RESULT_AREAS],
     /// The 20 bytes the pipeline copies from +0x48.
     pub source: [u8; 20],
-    pub at_5c: u32,
+    pub retry_requested: u32,
 }
 
 /// What the plan tells the pipeline about the result (+0x168).
@@ -112,7 +111,25 @@ pub struct FocusResult {
 pub struct ResultFlags {
     pub found: bool,
     pub searching: bool,
-    pub at_08: u32,
+    /// 0 or 1 identifies a drive side; 2 means neither side was selected.
+    pub side: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct StartTarget {
+    pub source: u32,
+    pub position: i16,
+    pub direction: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ToneWindow {
+    pub peak: bool,
+    pub channel: bool,
+    pub enabled: bool,
+    pub below_level: bool,
+    pub untreated: bool,
+    pub single_cell: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -144,12 +161,16 @@ pub struct Plan {
     /// Calc 0x3c04's window words +0x38 and +0x40.
     pub channel_window: bool,
     pub below_level: bool,
+    pub window_enabled: bool,
+    pub untreated_window: bool,
+    pub single_cell_window: bool,
     pub layout: AreaLayout,
     /// A primary and a secondary sample cell's area in ten-thousandths of a search frame cell.
     pub primary_share: u32,
     pub secondary_share: u32,
     /// The three statistics weights the pipeline's scan request carries.
     pub weights: [u8; 3],
+    pub target: StartTarget,
     /// The run time, from its frame 0, at which the drive starts.
     pub start_time: i32,
     /// Frames the run had taken before its recorded positions begin.
@@ -174,10 +195,27 @@ impl Plan {
             self.tone.words[index] = value;
         }
         let result = &mut self.result;
-        (result.kind, result.position, result.area, result.at_0c, result.at_10, result.at_18, result.at_1c) = (3, 0, 0x18, 4, 3, 0, 0);
-        self.flags = ResultFlags { found: false, searching: false, at_08: 2 };
+        (result.kind, result.position, result.area) = (3, 0, 0x18);
+        result.diagnostic_status = [4, 3];
+        (result.pending, result.treated_pending) = (0, 0);
+        self.flags = ResultFlags { found: false, searching: false, side: 2 };
         self.tone_limits = [2, 2];
         self.scan_requested = 0;
+    }
+
+    pub fn selected_speed(&self) -> Option<u32> {
+        self.speeds.get(self.selection as usize).copied()
+    }
+
+    pub fn tone_window(&self) -> ToneWindow {
+        ToneWindow {
+            peak: self.checks_peak,
+            channel: self.channel_window,
+            enabled: self.window_enabled,
+            below_level: self.below_level,
+            untreated: self.untreated_window,
+            single_cell: self.single_cell_window,
+        }
     }
 }
 
