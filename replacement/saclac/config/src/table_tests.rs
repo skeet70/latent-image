@@ -121,10 +121,22 @@ fn searches_find_the_first_step_reaching_and_the_last_within_a_limit() {
     assert_eq!(last_within(&area, Row(1), 25, Bounds::Primary), Step(3));
     assert_eq!(last_within(&area, Row(1), 50, Bounds::Primary), Step(6));
     assert_eq!(last_within(&area, Row(1), 0, Bounds::Primary), Step(2));
-    assert_eq!(lower_step(&area, Row(1), None, Bounds::Selected), Step(2));
-    assert_eq!(upper_step(&area, Row(1), None, Bounds::Selected), Step(6));
-    assert_eq!(lower_step(&area, Row(1), Some(35), Bounds::Selected), Step(5));
-    assert_eq!(upper_step(&area, Row(1), Some(35), Bounds::Selected), Step(4));
+    assert_eq!(lower_step(&area, Row(1), StepLimit::Unbounded, Bounds::Selected), Step(2));
+    assert_eq!(upper_step(&area, Row(1), StepLimit::Unbounded, Bounds::Selected), Step(6));
+    assert_eq!(lower_step(&area, Row(1), StepLimit::Value(35), Bounds::Selected), Step(5));
+    assert_eq!(upper_step(&area, Row(1), StepLimit::Value(35), Bounds::Selected), Step(4));
+}
+
+#[test]
+fn stock_limit_words_distinguish_the_sentinel_from_numeric_limits() {
+    let area = searchable();
+    let lower = |word| lower_step(&area, Row(1), crate::stock::decode_step_limit(word), Bounds::Primary);
+    let upper = |word| upper_step(&area, Row(1), crate::stock::decode_step_limit(word), Bounds::Primary);
+    assert_eq!((lower(0xffff), upper(0xffff)), (Step(2), Step(6)));
+    assert_eq!((lower(35), upper(35)), (Step(5), Step(4)));
+    assert_eq!((lower(0), upper(0)), (Step(2), Step(2)));
+    assert_eq!((lower(0xfffe), upper(0xfffe)), (Step(6), Step(6)));
+    assert_eq!((lower(0x1ffff), upper(0x1ffff)), (Step(6), Step(6)));
 }
 
 #[test]
@@ -139,14 +151,14 @@ fn empty_bounds_give_the_bound_the_search_starts_from() {
 #[test]
 fn the_selected_bounds_follow_the_alternate_bounds_while_selected() {
     let area = searchable().with(0x3e47c6 + 1, 3).with(0x3e4761 + 1, 5);
-    assert_eq!(lower_step(&area, Row(1), None, Bounds::Selected), Step(2));
+    assert_eq!(lower_step(&area, Row(1), StepLimit::Unbounded, Bounds::Selected), Step(2));
     let area = area.with(0x3e4760, 1);
-    assert_eq!(lower_step(&area, Row(1), None, Bounds::Selected), Step(3));
-    assert_eq!(upper_step(&area, Row(1), None, Bounds::Selected), Step(5));
-    assert_eq!(upper_step(&area, Row(1), Some(99), Bounds::Selected), Step(5));
+    assert_eq!(lower_step(&area, Row(1), StepLimit::Unbounded, Bounds::Selected), Step(3));
+    assert_eq!(upper_step(&area, Row(1), StepLimit::Unbounded, Bounds::Selected), Step(5));
+    assert_eq!(upper_step(&area, Row(1), StepLimit::Value(99), Bounds::Selected), Step(5));
     assert_eq!(first_reaching(&area, Row(1), 0, Bounds::Primary), Step(2), "primary ignores the selector");
-    assert_eq!(lower_step(&area, Row(1), None, Bounds::Primary), Step(2), "the primary low bound ignores the selector");
-    assert_eq!(upper_step(&area, Row(1), None, Bounds::Primary), Step(6));
+    assert_eq!(lower_step(&area, Row(1), StepLimit::Unbounded, Bounds::Primary), Step(2), "the primary low bound ignores the selector");
+    assert_eq!(upper_step(&area, Row(1), StepLimit::Unbounded, Bounds::Primary), Step(6));
 }
 
 #[test]
