@@ -12,7 +12,7 @@ use xm1_saclac_interface::RecordHandle;
 use xm1_saclac_profile_records::stock::layout::{slot_grant, slot_record, slot_serial, GRANT_READ, GRANT_WRITE};
 use xm1_saclac_profile_records::stock::record_handle;
 use xm1_saclac_profile_records::{
-    AccessGroup, Bytes, Grants, Handle, MeasurementSelection, OpenMode, RecordImage, Scope, Serial, SharedHeaderByte, Slot,
+    AccessGroup, Bytes, Grants, Handle, MeasurementSelection, OpenMode, Header, Scope, Serial, SharedHeaderByte, Slot,
     StockEntries, Tag,
 };
 use xm1_saclac_peers::{EmulatorOnly, PeerPorts};
@@ -129,7 +129,7 @@ impl StockEntries for Entries {
 
     fn lens_designation(&mut self, _: RecordHandle) -> [u8; 28] { [0; 28] }
 
-    fn replace_header(&mut self, _: RecordHandle, _: &RecordImage) {}
+    fn replace_header(&mut self, _: RecordHandle, _: Header<'_>) {}
 
     fn open(&mut self, _: OpenMode, _: Grants) -> RecordHandle { record_handle_from_a2(u32::MAX) }
 

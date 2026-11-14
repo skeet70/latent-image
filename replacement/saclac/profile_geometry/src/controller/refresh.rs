@@ -36,6 +36,31 @@ const CURVE_CEILING: i32 = 1850;
 /// The factor a limit below the curves keeps.
 const UNIT_FACTOR: i32 = 0x80;
 
+/// The profile curve factor (0xef3dac), over the caller's knot and configuration views.
+pub fn profile_curve_value(mut knot: impl FnMut(usize) -> i16, mut halfword: impl FnMut(u32) -> u16, limit: i32, curve: u8) -> i32 {
+    if limit < CURVE_FLOOR { return UNIT_FACTOR; }
+    let limit = limit.min(CURVE_CEILING) as i16;
+    let base = match curve {
+        1 | 4 | 6 => 0x221c,
+        2 => 0x2240,
+        3 => 0x21b0,
+        5 => 0x21f8,
+        _ => 0x21d4,
+    };
+    let mut point = |index: usize| halfword(base + index as u32 * 2);
+    if limit == CURVE_FLOOR as i16 { return point(0) as i32; }
+    let Some(upper) = (1..CURVE_KNOTS).find(|&index| knot(index) >= limit) else { return point(CURVE_KNOTS) as i32 };
+    let (lower_knot, upper_knot) = (knot(upper - 1), knot(upper));
+    if upper_knot == limit { return point(upper) as i32; }
+    let low = (point(upper - 1) as u32 * 10) as u16;
+    let high = point(upper) as u32 * 10;
+    let rise = (low as u32).wrapping_sub(high) as i16 as i32;
+    let run = lower_knot.wrapping_sub(upper_knot) as i32;
+    let at_limit = (limit as i32 * rise).checked_div(run).unwrap_or(0);
+    let at_lower = (lower_knot as i32 * rise).checked_div(run).unwrap_or(0);
+    round_tenths(at_limit + low as i16 as i32 - at_lower)
+}
+
 impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
     /// 0xed8af4.
     pub fn parameters(&self) -> Parameters {
@@ -367,37 +392,10 @@ impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
     }
 
     /// The factor in 128ths the triplet's first value takes at `limit` (0xef3dac).
-    pub(crate) fn profile_curve(&mut self, limit: i32, curve: u8) -> i32 {
-        if limit < CURVE_FLOOR {
-            return UNIT_FACTOR;
-        }
-        let limit = limit.min(CURVE_CEILING) as i16;
-        let base = match curve {
-            1 | 4 | 6 => 0x221c,
-            2 => 0x2240,
-            3 => 0x21b0,
-            5 => 0x21f8,
-            _ => 0x21d4,
-        };
-        let mut point = |index: usize| self.ports.halfword(ConfigOffset(base + index as u32 * 2));
-        if limit == CURVE_FLOOR as i16 {
-            return point(0) as i32;
-        }
+    pub fn profile_curve(&mut self, limit: i32, curve: u8) -> i32 {
         let tables = self.profiles.tables();
-        let Some(upper) = (1..CURVE_KNOTS).find(|&index| tables.curve_knot(index) >= limit) else {
-            return point(CURVE_KNOTS) as i32;
-        };
-        let (lower_knot, upper_knot) = (tables.curve_knot(upper - 1), tables.curve_knot(upper));
-        if upper_knot == limit {
-            return point(upper) as i32;
-        }
-        let low = (point(upper - 1) as u32 * 10) as u16;
-        let high = point(upper) as u32 * 10;
-        let rise = (low as u32).wrapping_sub(high) as i16 as i32;
-        let run = lower_knot.wrapping_sub(upper_knot) as i32;
-        let at_limit = (limit as i32 * rise).checked_div(run).unwrap_or(0);
-        let at_lower = (lower_knot as i32 * rise).checked_div(run).unwrap_or(0);
-        round_tenths(at_limit + low as i16 as i32 - at_lower)
+        let ports = &mut self.ports;
+        profile_curve_value(|index| tables.curve_knot(index), |offset| ports.halfword(ConfigOffset(offset)), limit, curve)
     }
 
     /// The profile feature's scales for the triplet's second and third values (0xef643c).

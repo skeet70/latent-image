@@ -107,8 +107,8 @@ fn grid(ports: &mut impl Ports, record: RecordHandle, live: bool) -> ([u8; 2], [
     (steps.map(|step| step.wrapping_add(1)), steps)
 }
 
-/// Builds the input for the exposure's snapshot record and keeps its metered level.
-pub fn build_input(ports: &mut impl Ports, context: &mut ExposureContext, area: [u32; 2], plan: PlanInput, selection: bool) {
+/// Builds the input for publication in the shared calc buffer and keeps its metered level.
+pub fn build_input(ports: &mut impl Ports, context: &mut ExposureContext, area: [u32; 2], plan: PlanInput, selection: bool) -> CalculationInput {
     let binding = context.binding;
     let record = binding.snapshot_handle();
     let refinement_pass = binding.refinement_pass;
@@ -192,12 +192,12 @@ pub fn build_input(ports: &mut impl Ports, context: &mut ExposureContext, area: 
         option: binding.option,
     };
     context.metered_level = metered_level;
-    context.calculation = input;
+    input
 }
 
 /// Takes back an input saved for a resumed half press, its levels moved from the lens reference it
 /// was built at to `lens_reference` (0xf1fc5c).
-pub fn resume_input(lens: &mut impl Lens, context: &mut ExposureContext, saved: &CalculationInput, lens_reference: u32) {
+pub fn resume_input(lens: &mut impl Lens, saved: &CalculationInput, lens_reference: u32) -> CalculationInput {
     let shift = lens.reference_offset(saved.record_lens_reference).wrapping_sub(lens.reference_offset(lens_reference));
     let mut input = *saved;
     input.metering_level = input.metering_level.wrapping_add(shift as u16);
@@ -206,5 +206,5 @@ pub fn resume_input(lens: &mut impl Lens, context: &mut ExposureContext, saved: 
     }
     input.lens_reference = lens_reference;
     input.record_lens_reference = lens_reference;
-    context.calculation = input;
+    input
 }

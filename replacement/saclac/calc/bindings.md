@@ -36,7 +36,7 @@ The shot's adapter holds one `exposure::context::ExposureContext`. Public state 
 
 For the mode-7 half press, the shot deliberately skips preparation. Its adapter still updates `context.binding` before `correction::post`; retained tables are not a retained binding.
 
-The remaining shot bindings are the existing typed request, calculation-input, grid, gain and finish interfaces. In particular, `exposure::calculation::build_input` takes the plan's kind and five exposure halves, `stock::exposure` in the interface crate encodes its `CalculationInput`, and `gains::focus_blend`, `lens_checks::point_zone` and `finish::target_selection` take the decoded shot queries directly.
+The remaining shot bindings use the typed request, calculation-input, grid, gain and finish interfaces. `exposure::calculation::build_input` takes the plan's kind and five exposure halves and returns a transient `CalculationInput` for publication; `resume_input` returns its rebased historical value. `ExposureContext` retains no active input copy: Root publishes directly into the one INPUT buffer shared with ShotState and calc0x3c02. `grid::area_distances` receives that buffer's current lens reference explicitly. The interface's `stock::exposure` defines the wire encoding. `gains::focus_blend`, `lens_checks::point_zone` and `finish::target_selection` take decoded shot queries directly.
 
 ## Selection flags
 
@@ -88,7 +88,7 @@ The earlier declared auxiliary-word correction remains: `profile_mode::limit_lev
 | 0xf4f13c | 0xfa30f0 | Unchanged. `MotionState::replan_from_run(ports, earlier, in_force, positions)`; decode the frame/speed schedule and position observations. |
 | 0xf4f14c | 0xf8d7b8 | Unchanged. `rate_samples::record_column(memory, samples, column)`. |
 | 0xf4f15c | 0xf8d8c8 | Unchanged. `rate_samples::scan_extremes(memory, count)`. |
-| 0xf526fc | 0xf7a9ec | Five unchanged arguments: row, column, index, table, output. `profile_adjustment::halfword_offset` locates the two table bytes. `CellTable::mode_cell(rate)` is the profile-mode caller's row-7/index-0 specialization, not a replacement for every row. |
+| 0xf526fc | 0xf7a9ec | Five unchanged arguments: row, column, index, table, output. `profile_adjustment::halfword_offset` locates the two table bytes. `CellTable::mode_cell(rate)` is the row-7/index-0 decoder, not a replacement for every row. The owned `ModeInputs` takes the resolved `Cell`; root reads those two bytes from current mutable ShotState saved selection without copying the536-byte table. |
 | 0xf5ecb0 | 0xf6fa5c | Unchanged selection/scene/flags inputs become `SceneSelection`; `scene_settings::curve_table` returns the property key. |
 | 0xf5f6c0 | 0xf6ec88 | Nine unchanged arguments: scene, flags, measured level, policy, armed, selector, choice, low output, high output. `scene_settings::nibbles(properties, NibbleInputs)` returns the two output nibbles. |
 | 0xf6022c | 0xf69788 | Five unchanged arguments: lens reference, area, metered-plus-offset, offset, output row. `exposure::grid::area_distances` takes the lens reference and metered-minus-offset through the context and the decoded `AreaReading`. The sole shot caller passes `(context.metered_level + offset)` and `offset`, so they cancel in halfword arithmetic (0xf1e1c0..0xf1e1e8). If the output row's flag is clear, use `AreaDistances::default()` instead. Store its code at +4 and four halves at +8..+14. |

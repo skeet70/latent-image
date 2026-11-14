@@ -5,6 +5,9 @@
 
 pub mod acquisition;
 pub mod shot;
+pub mod callbacks;
+pub mod statistics;
+mod commands;
 pub mod stages;
 pub mod geometry;
 mod geometry_services;
@@ -19,6 +22,10 @@ pub const SELECT_LOOKUP: u32 = 0x74_0b18;
 pub const FAULT: u32 = 0xf4_6c20;
 /// The word the live drive's callback records from Lens34, read by the reply at 0xf14f14.
 pub const LIVE_DRIVE_RESULT: u32 = 0x95_4dbc;
+/// The live intake's cancel/command origin (efe668 -> f238c0), read by f238e0.
+pub const LIVE_DRIVE_ORIGIN: u32 = 0x16b_5b14;
+/// Waiting bits, deferred count and lens-stop byte published by the S1 router.
+pub const S1_PROGRESS: u32 = 0x169_d508;
 /// The word the S1 drive's callback 0xf28e94 stores (0xf28eb8), read by the reply at 0xf28f94.
 pub const S1_DRIVE_REPORT: u32 = 0x16b_750c;
 /// The profile-record handle the focus controller holds (0x16be004 + 0x18), under which
@@ -26,3 +33,11 @@ pub const S1_DRIVE_REPORT: u32 = 0x16b_750c;
 pub const FOCUS_CONTROLLER_RECORD: u32 = 0x16b_e01c;
 /// The word 0x742a6c stores a lens request's callback in before it requests.
 pub const LENS_REQUEST_CALLBACK: u32 = 0x96_bd04;
+/// Current receipt's status word at 169d370+10 (f2e65c), not a stored command parameter.
+pub const CURRENT_COMPLETION_STATUS: u32 = 0x169_d380;
+/// Calc's frame-header source at 16cd228+14 (f176d0..f176e0).
+pub const CALC_FRAME_HEADER_SOURCE: u32 = 0x16c_d23c;
+/// Root rendezvous waiter task words: lens at +0 and adjustment at +4 (f47288..f472f4).
+pub const RENDEZVOUS_WAITERS: u32 = 0x16c_2214;
+/// Shared adjustment service: invokes the supplied callback after synchronizing (f472a0).
+pub const REQUEST_ADJUSTMENT_SYNCHRONIZATION: u32 = 0x74_4c48;

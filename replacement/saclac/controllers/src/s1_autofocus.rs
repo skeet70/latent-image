@@ -148,6 +148,29 @@ pub(crate) fn move_lens(record: RecordHandle, layers: &mut impl Layers) -> bool 
     false
 }
 
+/// Returns the live cancellation's lens toward its current pair (0xf251e4).
+/// `base` is the lens service's current resource, not its validated configuration index.
+pub fn correct_drive(record: RecordHandle, base: u32, callback: xm1_saclac_interface::stock::StockCallbackWord, layers: &mut impl Layers) -> bool {
+    let current: [u32; 2] = block(layers, record, Block::Lens(LensSlot::Current));
+    let target = layers.curve().combine_lens_pair(current[0], current[1], base);
+    let next: [u32; 2] = block(layers, record, Block::Lens(LensSlot::Next));
+    let current_value = layers.curve().mapped_value(current[1], current[0]);
+    if current_value != layers.curve().mapped_value(next[1], next[0]) {
+        layers.mark_selection_changed();
+    }
+    write_pair(layers, record, LensSlot::Next, [base, target]);
+    if target == next[1] { return true; }
+    let restarts = read(layers, record, Field::Command1dRestarts);
+    let [held]: [u32; 1] = block(layers, record, Block::LensTarget);
+    let Some(position) = target_position(held as u16 as i16, target, base, record, layers) else {
+        return true;
+    };
+    let steps = u32::from(position).wrapping_sub(layers.lens().position()) as i16;
+    let mode_index = layers.lens().mode_index();
+    layers.move_lens(LensMove { callback, steps, mode_index, words: [1, 0, if restarts == 0 { 11 } else { 0 }, 4] });
+    false
+}
+
 /// The lens target's position, remapped when the release range asks for it; `None` in the
 /// unselected profile mode without a lens designation (0xf240b0).
 fn target_position(position: i16, target: u32, reference: u32, record: RecordHandle, layers: &mut impl Layers) -> Option<u16> {

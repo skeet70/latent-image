@@ -33,6 +33,18 @@ impl<'s, M: Machine + Clone, R: Memory, E: StockEntries, P> SearchSession<'s, M,
         Self { services, record }
     }
 
+    pub fn set_record(&self, record: xm1_saclac_interface::RecordHandle) { self.record.set(record); }
+
+    pub fn record(&self) -> xm1_saclac_interface::RecordHandle { self.record.get() }
+
+    pub fn set_history(&self, history: &xm1_focus_measurement_round::history::MeasurementHistory, kept: bool) {
+        self.services.borrow_mut().search_bindings().set_history(history, kept);
+    }
+
+    pub fn live_completion(&self, completed: xm1_saclac_interface::Completed<'_>) -> Option<live::LaneEvent<Evaluation>> {
+        self.with_session(|session| session.live_completion(completed))
+    }
+
     fn with_session<T>(&self, operation: impl FnOnce(Session<'_, '_, M, R, E, P>) -> T) -> T {
         let mut services = self.services.borrow_mut();
         let bindings = RefCell::new(services.search_bindings());

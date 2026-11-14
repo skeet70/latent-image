@@ -6,7 +6,7 @@ use xm1_saclac_interface::RecordHandle;
 
 use crate::field::{ChangeBank, ChangeBit, ChangeSet, Index, RecordArray, RecordField, RecordRead, RecordWrite, SharedArray, SharedField, SharedRead, SharedWrite, Unread, Value};
 use crate::handle::{AccessGroup, Handle};
-use crate::image::RecordImage;
+use crate::image::Header;
 use crate::memory::{Block, Location, Memory, RecordIndex};
 use crate::stock::{self, layout, record};
 
@@ -98,8 +98,13 @@ impl<M: Memory> ProfileRecords<M> {
 
     /// Stores the value, then sets the field's change bit in the same record.
     pub fn write<T: Value, R>(&mut self, handle: RecordHandle, field: &RecordField<T, R, RecordWrite>, value: T) -> Result<(), Refusal> {
+        self.write_with(handle, field, || value)
+    }
+
+    /// Resolves the value only after write admission, before publishing its change bit.
+    pub fn write_with<T: Value, R>(&mut self, handle: RecordHandle, field: &RecordField<T, R, RecordWrite>, value: impl FnOnce() -> T) -> Result<(), Refusal> {
         let record = self.write_record(handle, field.write)?;
-        value.store(&mut self.memory, Location::new(Block::Record(record), field.offset));
+        value().store(&mut self.memory, Location::new(Block::Record(record), field.offset));
         if let Some(change) = field.change {
             self.mark_changed(record, change);
         }
@@ -166,7 +171,7 @@ impl<M: Memory> ProfileRecords<M> {
     /// Clears both change masks of the record a header read would read, then writes each field
     /// `staged` marks changed, in stock's order. Each write is gated alone, and a refused one is
     /// skipped.
-    pub fn apply_changes(&mut self, handle: RecordHandle, staged: &RecordImage) -> Result<(), Refusal> {
+    pub fn apply_changes(&mut self, handle: RecordHandle, staged: Header<'_>) -> Result<(), Refusal> {
         let record = self.read_record(handle, layout::HEADER_GROUP)?;
         self.store_change_mask(record, ChangeBank::First, 0);
         self.store_change_mask(record, ChangeBank::Second, 0);
@@ -191,7 +196,7 @@ impl<M: Memory> ProfileRecords<M> {
         Ok(())
     }
 
-    fn apply<T: Value>(&mut self, handle: RecordHandle, staged: &RecordImage, field: &RecordField<T, Unread, RecordWrite>) -> Result<(), Refusal> {
+    fn apply<T: Value>(&mut self, handle: RecordHandle, staged: Header<'_>, field: &RecordField<T, Unread, RecordWrite>) -> Result<(), Refusal> {
         match field.change {
             Some(change) if staged.changed(change) => self.write(handle, field, staged.get(field)),
             _ => Ok(()),

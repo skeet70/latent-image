@@ -59,7 +59,7 @@ pub(crate) const fn record_preset(view: &RecordView) -> LensPreset {
 
 /// Clears the record's selection and both presets.
 pub(crate) fn clear(record: RecordHandle, ports: &mut impl Ports) {
-    ports.selection_memory().clear_presets();
+    ports.with_selection(|memory| memory.clear_presets());
     ports.store_selection_record(record, &SelectionRecord::default());
 }
 
@@ -70,7 +70,7 @@ pub(crate) fn changed(record: RecordHandle, view: &RecordView, selection: &Selec
     let reported = ports.mapped_value(result.position, result.position_word);
     let stored = ports.mapped_value(selection.word, selection.position);
     if mode.tracks_position() && stored != reported { return true; }
-    let (current, saved) = ports.selection_memory().presets();
+    let (current, saved) = ports.with_selection(|memory| memory.presets());
     if mode.follows_lens_halfword() && saved.halfwords[0] != current.halfwords[0] { return true; }
     if mode.follows_reference() && saved.halfwords[1] != current.halfwords[1] { return true; }
     let pair = ports.position_pair(record, PositionSlot::Lens);

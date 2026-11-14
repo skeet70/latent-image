@@ -51,6 +51,8 @@ pub trait Layers {
     /// The live statistics configuration's record; the S1 start header, capture geometry and
     /// output block are read from it.
     fn live_statistics_record(&mut self) -> RecordHandle;
+    /// The statistics task reads this publication without borrowing the controller.
+    fn report_results(&mut self, open: bool);
     /// Command27's lens option.
     fn lens_option(&mut self, record: RecordHandle);
     /// Replies to the autofocus command with the lens state (0xf46c4c).

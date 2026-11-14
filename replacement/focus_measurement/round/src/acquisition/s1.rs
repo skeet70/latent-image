@@ -191,7 +191,7 @@ impl S1Work {
         ports.copy_reference_backup(Branch::S1);
         request.shot_copy = true;
         request.recording = true;
-        ports.selection_memory().set_preset(LensPreset { word: request.lens_reference, halfwords: [request.lens_halfword, request.reference] });
+        ports.with_selection(|memory| memory.set_preset(LensPreset { word: request.lens_reference, halfwords: [request.lens_halfword, request.reference] }));
         if settings.traces { ports.trace(TraceMark::SelectionRequest); }
         ports.request_selection(Branch::S1, &request);
     }
@@ -207,7 +207,7 @@ impl S1Work {
             if selection::changed(record, &view, &selection, &result, ports) {
                 ports.copy_selection_to_saved(result.saved_record);
                 ports.restore_selection_if_enabled(record, result.position_word);
-                if ports.selection_memory().value_changed() { ports.apply_selection_value_change(); }
+                if ports.with_selection(|memory| memory.value_changed()) { ports.apply_selection_value_change(); }
             } else {
                 ports.save_selection(result.position_word, &result.save, result.position);
             }
@@ -230,7 +230,7 @@ impl S1Work {
         } else {
             selection::take_result(record, &mut selection, &result, false, ports);
         }
-        ports.selection_memory().save_preset();
+        ports.with_selection(|memory| memory.save_preset());
         ports.store_position_pair(record, PositionSlot::Reported, [result.position_word, result.position]);
         selection::publish(record, &view, Publication::Restored, selection, ports);
         ports.release_result(ReleasedResult::Selection { result: result.address, shot: None });
@@ -280,6 +280,6 @@ impl S1Work {
     pub fn stop(&mut self, record: RecordHandle, ports: &mut impl Ports) {
         let view = ports.record_view(record);
         if view.s1_mode.tracks_position() { ports.store_slot_word(record, view.lens_reference); }
-        ports.selection_memory().clear_value_changed();
+        ports.with_selection(|memory| memory.clear_value_changed());
     }
 }

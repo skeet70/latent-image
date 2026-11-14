@@ -5,7 +5,7 @@
 
 use xm1_saclac_interface::RecordHandle;
 
-use crate::image::RecordImage;
+use crate::image::Header;
 use crate::values::MeasurementSelection;
 
 /// Header bytes whose only reader is a stock accessor other tasks share.
@@ -44,7 +44,7 @@ pub trait StockEntries {
     fn lens_designation(&mut self, handle: RecordHandle) -> [u8; 28];
     /// Copies `staged`'s header into the handle's record and clears that record's change masks,
     /// when the handle may write group 0.
-    fn replace_header(&mut self, handle: RecordHandle, staged: &RecordImage);
+    fn replace_header(&mut self, handle: RecordHandle, staged: Header<'_>);
     /// The new slot's owner handle, or the all-ones word when no slot is free or `mode` is refused.
     fn open(&mut self, mode: OpenMode, grants: Grants) -> RecordHandle;
     fn close(&mut self, handle: RecordHandle);

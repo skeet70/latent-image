@@ -8,7 +8,7 @@ use xm1_saclac_interface::calc::SharedAddress;
 use xm1_saclac_interface::RecordHandle;
 use xm1_saclac_profile_records::field::{RecordField, RecordRead, RecordWrite, SharedField, SharedRead, SharedWrite, Value};
 use xm1_saclac_profile_records::stock::layout;
-use xm1_saclac_profile_records::{AccessGroup, Bytes, Grants, Handle, MeasurementSelection, OpenMode, ProfileRecords, RecordImage, Scope, Serial, SharedHeaderByte, Slot, StockEntries, Tag};
+use xm1_saclac_profile_records::{AccessGroup, Bytes, Grants, Handle, MeasurementSelection, OpenMode, ProfileRecords, Header, Scope, Serial, SharedHeaderByte, Slot, StockEntries, Tag};
 
 use crate::adjust::exposure_limits::{CellLevels, ChannelLevels};
 use crate::adjust::lens::{BiasTable, LensConfiguration};
@@ -42,7 +42,7 @@ impl StockEntries for Headers {
     fn measurement_selection(&mut self, _handle: RecordHandle) -> MeasurementSelection { self.selection }
     fn header_byte(&mut self, _handle: RecordHandle, byte: SharedHeaderByte) -> u8 { self.bytes.get(&header_key(byte)).copied().unwrap_or(0) }
     fn lens_designation(&mut self, _handle: RecordHandle) -> [u8; 28] { [0; 28] }
-    fn replace_header(&mut self, _handle: RecordHandle, _staged: &RecordImage) {}
+    fn replace_header(&mut self, _handle: RecordHandle, _staged: Header<'_>) {}
     fn open(&mut self, _mode: OpenMode, _grants: Grants) -> RecordHandle { handle() }
     fn close(&mut self, _handle: RecordHandle) {}
     fn initialize(&mut self) {}

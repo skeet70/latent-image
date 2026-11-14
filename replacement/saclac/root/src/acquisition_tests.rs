@@ -152,7 +152,7 @@ fn s1_child_drives_four_bound_passes_then_restores_selection_and_publishes_the_f
     assert_eq!((root.setting_echo(Branch::S1).shot_word, machine.read_u32(0x41717c28 + 0x118)), (0, 0x41717c44));
 
     root.mark_selection_changed();
-    assert!(root.selection_memory().value_changed());
+    assert!(root.with_selection(|memory| memory.value_changed()));
     let mut result = [0; 0x114];
     put(&mut result, 0x88, 4); put(&mut result, 0xfc, 7);
     half(&mut result, 0x8c, 222); half(&mut result, 0x8e, 333);
@@ -177,7 +177,7 @@ fn s1_child_drives_four_bound_passes_then_restores_selection_and_publishes_the_f
     assert_eq!((machine.read_u32(0x16f224c), machine.read_u32(0x16f224c + 12)), (0x55, 8));
     assert!(machine.take_entered().contains(&(0xf17af8, vec![1])));
     assert_eq!(child.handle(control(AcquisitionControl::Stop), &mut root), ChildOutcome::Complete);
-    assert!(!root.selection_memory().value_changed());
+    assert!(!root.with_selection(|memory| memory.value_changed()));
 }
 
 #[test]
@@ -235,17 +235,17 @@ fn live_and_s1_keep_one_selection_preset_and_s1_consumes_the_controllers_change(
     machine.set_word(xm1_saclac_calc::stock::adjust::SHARED_WORD.0, 1);
     let mut live = LiveWork::new();
     live.submit_secondary(record, &mut root);
-    let (current, saved) = root.selection_memory().presets();
+    let (current, saved) = root.with_selection(|memory| memory.presets());
     assert_eq!((current.word, current.halfwords, saved.word), (8, [77, 66], 0));
     root.mark_selection_changed();
     let mut s1 = S1Acquisition::new();
     let control = |control| ChildEvent::Control { control, parameters: parameters(&[]), record };
     assert_eq!(s1.handle(control(AcquisitionControl::Initialize), &mut root), ChildOutcome::Complete);
-    assert_eq!(root.selection_memory().presets().0, current);
-    assert!(root.selection_memory().value_changed());
+    assert_eq!(root.with_selection(|memory| memory.presets()).0, current);
+    assert!(root.with_selection(|memory| memory.value_changed()));
     assert_eq!(s1.handle(control(AcquisitionControl::Stop), &mut root), ChildOutcome::Complete);
-    assert_eq!(root.selection_memory().presets().0, current);
-    assert!(!root.selection_memory().value_changed());
+    assert_eq!(root.with_selection(|memory| memory.presets()).0, current);
+    assert!(!root.with_selection(|memory| memory.value_changed()));
     let posts = fake::posts(&kernel);
     assert_eq!(posts.iter().map(|post| (post.0, post.1)).collect::<Vec<_>>(), vec![(45, 0x3d01)]);
 }

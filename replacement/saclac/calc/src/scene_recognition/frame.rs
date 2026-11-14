@@ -47,7 +47,7 @@ pub(crate) fn response(ports: &mut (impl Properties + LensServices), lens: u32, 
 }
 
 /// The lens position `lens` targets at `step` (0xf4e5dc).
-pub(crate) fn target(ports: &mut (impl LensTables + LensServices), lens: u32, step: u32) -> i16 {
+pub fn target(ports: &mut (impl LensTables + LensServices), lens: u32, step: u32) -> i16 {
     let reference = ports.lens_reference();
     ports.channel_positions(lens, step, reference, 0)[0]
 }

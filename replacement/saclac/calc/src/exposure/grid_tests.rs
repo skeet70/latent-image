@@ -25,7 +25,6 @@ fn world() -> World {
 fn context(metered_level: i16) -> ExposureContext {
     let mut context = ExposureContext::default();
     context.metered_level = metered_level;
-    context.calculation.lens_reference = LENS_REFERENCE;
     context
 }
 
@@ -34,7 +33,7 @@ fn area(at44: i16) -> AreaReading { AreaReading { at00: 10, reference: 7, level:
 
 #[test]
 fn the_metered_distance_counts_step_three_and_the_lens_references_offset() {
-    let distances = area_distances(&mut world(), &context(-60), &area(20));
+    let distances = area_distances(&mut world(), &context(-60), LENS_REFERENCE, &area(20));
     assert_eq!((distances.metered, distances.lens), (25, -30));
     assert_eq!((distances.metered_limit, distances.lens_limit), (30, -20));
     assert_eq!((distances.class, distances.code()), (Some(DistanceClass::Within), 1));
@@ -43,10 +42,10 @@ fn the_metered_distance_counts_step_three_and_the_lens_references_offset() {
 #[test]
 fn a_metered_distance_past_its_limit_classes_the_area_before_its_lens_distance() {
     let mut world = world();
-    let at_limit = area_distances(&mut world, &context(-55), &area(20));
+    let at_limit = area_distances(&mut world, &context(-55), LENS_REFERENCE, &area(20));
     assert_eq!((at_limit.metered, at_limit.class), (30, Some(DistanceClass::Within)));
     world.lens_levels.insert((7, LENS_REFERENCE), 0);
-    let beyond = area_distances(&mut world, &context(-54), &area(20));
+    let beyond = area_distances(&mut world, &context(-54), LENS_REFERENCE, &area(20));
     assert_eq!((beyond.lens, beyond.class, beyond.code()), (10, Some(DistanceClass::BeyondMetered), 2));
 }
 
@@ -54,7 +53,7 @@ fn a_metered_distance_past_its_limit_classes_the_area_before_its_lens_distance()
 fn a_lens_distance_past_its_signed_limit_classes_the_area() {
     let mut world = world();
     world.lens_levels.insert((7, LENS_REFERENCE), 29);
-    let distances = area_distances(&mut world, &context(-60), &area(20));
+    let distances = area_distances(&mut world, &context(-60), LENS_REFERENCE, &area(20));
     assert_eq!((distances.lens, distances.class, distances.code()), (-19, Some(DistanceClass::BeyondLens), 3));
 }
 

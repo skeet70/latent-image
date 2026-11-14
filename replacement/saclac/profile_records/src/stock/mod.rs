@@ -11,7 +11,7 @@ use xm1_saclac_interface::RecordHandle;
 use crate::entries::{Grants, OpenMode, SharedHeaderByte, StockEntries};
 use crate::field::Value;
 use crate::handle::{Handle, Scope, Serial, Slot, Tag};
-use crate::image::RecordImage;
+use crate::image::Header;
 use crate::memory::{Block, Location, Memory};
 use crate::values::MeasurementSelection;
 
@@ -136,9 +136,9 @@ impl StockEntries for Stock {
         designation.0
     }
 
-    fn replace_header(&mut self, handle: RecordHandle, staged: &RecordImage) {
-        let entry: extern "C" fn(u32, *const RecordImage) = unsafe { core::mem::transmute(REPLACE_HEADER as *const ()) };
-        entry(record_handle_word(handle), staged);
+    fn replace_header(&mut self, handle: RecordHandle, staged: Header<'_>) {
+        let entry: extern "C" fn(u32, *const u8) = unsafe { core::mem::transmute(REPLACE_HEADER as *const ()) };
+        entry(record_handle_word(handle), staged.bytes().as_ptr());
     }
 
     fn open(&mut self, mode: OpenMode, grants: Grants) -> RecordHandle {

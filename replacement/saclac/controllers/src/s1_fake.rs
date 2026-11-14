@@ -69,6 +69,7 @@ pub(crate) struct Fake {
     pub extended: bool,
     pub records: Vec<u8>,
     pub child_outcome: Option<ChildOutcome>,
+    pub reporting: Option<bool>,
     pub seen: Vec<Seen>,
 }
 
@@ -298,6 +299,7 @@ impl Layers for Fake {
     fn lens(&mut self) -> &mut Self { self }
     fn curve(&mut self) -> &mut Self { self }
     fn live_statistics_record(&mut self) -> RecordHandle { live_record() }
+    fn report_results(&mut self, open: bool) { self.reporting = Some(open); }
     fn lens_option(&mut self, record: RecordHandle) {
         assert_eq!(record, self::record());
         self.seen.push(Seen::LensOption);

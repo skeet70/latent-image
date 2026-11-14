@@ -17,7 +17,7 @@ use crate::exposure::settings;
 use crate::stock::adjust::motion_enable;
 use crate::stock::calculation::Cell;
 use crate::stock::capture::FIRST_ELEMENT;
-use crate::stock::profile_mode::{self as stock, CellTable};
+use crate::stock::profile_mode as stock;
 use crate::stock::property;
 
 /// Image 4's readiness answer.
@@ -270,11 +270,11 @@ pub fn limit_flags(ports: &mut (impl LimitPorts + Lens + DeviceReadiness), input
 
 /// What a profile mode's step is chosen from beside the record (0xf5271c's arguments).
 #[derive(Clone, Copy, Debug)]
-pub struct ModeInputs<'a> {
+pub struct ModeInputs {
     pub record: RecordHandle,
-    /// The limit index, and the column of the mode's cell in `cells`.
+    /// The limit index and the saved-selection column used to obtain `cell`.
     pub rate: u32,
-    pub cells: &'a CellTable,
+    pub cell: Cell,
     /// The bound lens reference (0x76d9c8).
     pub lens_reference: u32,
 }
@@ -329,7 +329,7 @@ pub fn mode_step(ports: &mut (impl Ports + DeviceReadiness), mode: &ModeInputs) 
     let request = Request {
         selection: Selection { unmeasured: levels.unmeasured, ..request.selection },
         bank: bank.0,
-        cell: mode.cells.mode_cell(mode.rate),
+        cell: mode.cell,
         minimum: request_minimum,
         ..request
     };

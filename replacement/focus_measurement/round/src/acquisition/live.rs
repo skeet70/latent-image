@@ -290,9 +290,10 @@ impl LiveWork {
         selection.tracked = 1;
         ports.store_selection_record(record, &selection);
         let preset = selection::record_preset(view);
-        let memory = ports.selection_memory();
-        memory.set_preset(preset);
-        memory.save_preset();
+        ports.with_selection(|memory| {
+            memory.set_preset(preset);
+            memory.save_preset();
+        });
         ports.notify_selection(record, &super::ports::SelectionNotice {
             kind: slot.kind,
             level: slot.level as i16,
@@ -788,7 +789,7 @@ impl LiveWork {
         }
         self.guard.lens = ports.current_lens();
         if recording {
-            ports.selection_memory().set_preset(LensPreset { word: request.lens_reference, halfwords: [request.lens_halfword, request.reference] });
+            ports.with_selection(|memory| memory.set_preset(LensPreset { word: request.lens_reference, halfwords: [request.lens_halfword, request.reference] }));
         }
         if settings.traces { ports.trace(TraceMark::SelectionRequest); }
         self.selection = request;
@@ -858,7 +859,7 @@ impl LiveWork {
                 selection::take_result(record, &mut selection, result, true, ports);
                 ports.store_position_pair(record, PositionSlot::Selected, [selection.position, selection.word]);
             }
-            ports.selection_memory().save_preset();
+            ports.with_selection(|memory| memory.save_preset());
         } else {
             selection::clear(record, ports);
             selection::take_result(record, &mut selection, result, true, ports);

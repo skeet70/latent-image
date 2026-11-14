@@ -85,6 +85,7 @@ impl RecordBinding {
     pub fn set(&self, record: RecordHandle) {
         self.0.set(record);
     }
+    pub fn get(&self) -> RecordHandle { self.0.get() }
 }
 
 /// Copies share services, planner state and the record selector, not their contents.

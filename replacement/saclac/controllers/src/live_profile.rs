@@ -119,6 +119,8 @@ impl LiveProfile {
         Self { selection_active: false, primary_applied: false, prepared: Prepared::None, selection_mode: 0 }
     }
 
+    pub const fn primary_applied(&self) -> bool { self.primary_applied }
+
     /// Prepares the profile for `command`; `None` prepares without one.
     pub fn prepare(&mut self, command: Option<Command<'_>>, record: RecordHandle, layers: &mut impl Layers) -> Preparation {
         self.prepared = Prepared::None;

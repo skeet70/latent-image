@@ -30,8 +30,7 @@ fn context() -> ExposureContext {
 }
 
 fn built(world: &mut World, context: &mut ExposureContext) -> CalculationInput {
-    build_input(world, context, [7, 8], PlanInput { kind: 2, exposure: [11, 12, 13, 14, 15] }, true);
-    context.calculation
+    build_input(world, context, [7, 8], PlanInput { kind: 2, exposure: [11, 12, 13, 14, 15] }, true)
 }
 
 #[test]
@@ -104,9 +103,7 @@ fn a_resumed_input_moves_its_levels_to_the_new_lens_reference() {
     let mut world = world();
     world.reference_offsets.insert(0x99, 10);
     let saved = CalculationInput { metering_level: 100, levels: [1, 2, 3, 4, 0x7fff, 6, 7, 8, 9], record_lens_reference: RECORD_REFERENCE, lens_reference: RECORD_REFERENCE, option: 5, ..CalculationInput::default() };
-    let mut context = context();
-    resume_input(&mut world, &mut context, &saved, 0x99);
-    let input = context.calculation;
+    let input = resume_input(&mut world, &saved, 0x99);
     assert_eq!(input.metering_level, 120);
     assert_eq!(input.levels, [21, 22, 23, 24, 0x7fffi16.wrapping_add(20), 26, 27, 28, 29]);
     assert_eq!((input.lens_reference, input.record_lens_reference, input.option), (0x99, 0x99, 5));

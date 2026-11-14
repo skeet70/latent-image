@@ -59,31 +59,36 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: LensDc> LensControl for 
     fn resource_index(&mut self) -> ResourceIndex { ResourceIndex(self.machine.enter(stock::RESOURCE_INDEX, &[])) }
 }
 
+pub(crate) fn reply<M: Machine + Clone>(machine: M, reply: Reply) {
+    let call = reply_call(&reply);
+    let [status, first, second, third] = call.arguments;
+    let status = CompletionStatus(status as i32);
+    let mut commands = xm1_saclac_shared::commands::Commands::new(Stock::new(machine.clone()));
+    let mut stock = Stock::new(machine.clone());
+    let command = match reply {
+        Reply::Drive(_) => {
+            let reply = LensDriveReply { status, channel: Channel(first as i32), words: [second, third] };
+            commands.reply_lens_drive(reply, &ConfiguredChannels(&stock), &mut Stock::new(machine));
+            return;
+        }
+        Reply::Cancel(_) => StoredCommand::Cancel,
+        Reply::Stop(_) => StoredCommand::Command10,
+        Reply::Step { .. } => StoredCommand::Step,
+        Reply::Select { .. } => StoredCommand::Command2c,
+        Reply::Release(_) => StoredCommand::Command2d,
+        Reply::BringUp { .. } => StoredCommand::LensBringUp,
+        Reply::LensStop { .. } => StoredCommand::LensStop,
+    };
+    let arguments = match call.count {
+        1 => ClientArguments::Status(status),
+        _ => ClientArguments::Reply { status, words: [first, second, third, 0] },
+    };
+    commands.reply(command, arguments, &mut stock);
+}
+
 impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Replies for Services<M, R, E, P> {
     fn reply(&mut self, reply: Reply) {
-        let call = reply_call(&reply);
-        let [status, first, second, third] = call.arguments;
-        let status = CompletionStatus(status as i32);
-        let command = match reply {
-            Reply::Drive(_) => {
-                let reply = LensDriveReply { status, channel: Channel(first as i32), words: [second, third] };
-                let adjustments = Stock::new(self.machine.clone());
-                self.commands.reply_lens_drive(reply, &ConfiguredChannels(&adjustments), &mut self.stock);
-                return;
-            }
-            Reply::Cancel(_) => StoredCommand::Cancel,
-            Reply::Stop(_) => StoredCommand::Command10,
-            Reply::Step { .. } => StoredCommand::Step,
-            Reply::Select { .. } => StoredCommand::Command2c,
-            Reply::Release(_) => StoredCommand::Command2d,
-            Reply::BringUp { .. } => StoredCommand::LensBringUp,
-            Reply::LensStop { .. } => StoredCommand::LensStop,
-        };
-        let arguments = match call.count {
-            1 => ClientArguments::Status(status),
-            _ => ClientArguments::Reply { status, words: [first, second, third, 0] },
-        };
-        self.commands.reply(command, arguments, &mut self.stock);
+        self::reply(self.machine.clone(), reply);
     }
 }
 

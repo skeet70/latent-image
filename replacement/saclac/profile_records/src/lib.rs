@@ -19,7 +19,7 @@ pub mod stock;
 pub use entries::{Grants, OpenMode, SharedHeaderByte, StockEntries};
 pub use field::{ChangeBank, ChangeBit, ChangeSet, Index, RecordArray, RecordField, SharedArray, SharedField};
 pub use handle::{Access, AccessGroup, DeriveRefused, Handle, Scope, Serial, Slot, Tag};
-pub use image::RecordImage;
+pub use image::{Header, RecordImage};
 pub use memory::{Bytes, Location, Memory, RecordIndex};
 pub use values::{CaptureBuffer, IntervalTracking, MeasurementSelection, OfferedMeasurements, StatisticsInUse, WindowPosition, WindowStatus};
 pub use view::{ProfileRecords, Refusal};

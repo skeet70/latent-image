@@ -76,6 +76,8 @@ pub trait Port {
     /// Holds or releases the display record mode for the S1 measurement.
     fn record_mode(&mut self, held: bool);
     fn request(&mut self, request: Request, record: RecordHandle);
+    /// Publishes the 0x7f callback gate before a peer can observe the next request.
+    fn report_results(&mut self, open: bool);
     fn reply(&mut self, reply: Reply, record: RecordHandle);
     fn apply(&mut self, apply: Apply, record: RecordHandle);
     fn condition(&mut self, condition: Condition, record: RecordHandle) -> bool;
@@ -247,6 +249,7 @@ impl S1Statistics {
     fn snapshot<P: Port>(&mut self, call: &mut Call<'_, P>) {
         self.view_active = call.port.snapshot(call.record).view_active;
         self.results_closed = false;
+        call.port.report_results(true);
         self.retune_pending = false;
         self.finished = Finished::default();
     }
@@ -281,6 +284,7 @@ impl S1Statistics {
                 self.half_press_children(call);
                 if self.state == S::Selecting {
                     self.results_closed = true;
+                    call.port.report_results(false);
                 }
                 self.state = S::Prepared;
                 Outcome::Pending
@@ -572,6 +576,7 @@ impl S1Statistics {
     fn stop_finished<P: Port>(&mut self, call: &mut Call<'_, P>) {
         self.state = State::Stopping;
         self.results_closed = true;
+        call.port.report_results(false);
         call.request(Request::Stop { pause: false });
     }
 

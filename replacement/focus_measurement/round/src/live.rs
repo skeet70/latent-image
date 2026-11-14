@@ -20,8 +20,8 @@ use xm1_saclac_interface::{CommandKind, Completed, Completion, RecordHandle};
 pub trait Effects: RecordPorts + image::Ports + window::Ports + auxiliary::Ports + source::Ports + acquisition::ports::Ports {
     fn fault(&mut self);
 
-    /// The contrast search lane, whose implementation is the AF-candidate slot.
-    fn search(&mut self, signal: LaneSignal<'_>, record: RecordHandle) -> LaneStatus;
+    /// The contrast search lane consumes the history after this event's record effects.
+    fn search(&mut self, signal: LaneSignal<'_>, record: RecordHandle, history: &MeasurementHistory) -> LaneStatus;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -228,7 +228,7 @@ impl<E: Effects> Environment for Lanes<'_, E> {
     fn signal(&mut self, lane: Lane, signal: LaneSignal<'_>, record: RecordHandle) -> LaneStatus {
         match lane {
             Lane::Acquisition => self.acquisition(signal, record),
-            Lane::Search => self.effects.search(signal, record),
+            Lane::Search => self.effects.search(signal, record, self.history),
             Lane::Auxiliary | Lane::Window | Lane::Source => self.calculation(lane, signal, record),
             Lane::Image => self.image(signal, record),
             Lane::Bookkeeping => self.bookkeeping(signal),

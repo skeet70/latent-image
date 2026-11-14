@@ -30,6 +30,8 @@ struct Fake {
     restart: bool,
     change: Option<AutofocusChange>,
     lens_in_place: bool,
+    reporting: Option<bool>,
+    reports_on_requests: Vec<(Request, bool)>,
 }
 
 impl Fake {
@@ -63,7 +65,11 @@ impl Port for Fake {
         Snapshot { view_active: self.view_active }
     }
     fn record_mode(&mut self, held: bool) { self.seen.push(Seen::RecordMode(held)) }
-    fn request(&mut self, request: Request, _: RecordHandle) { self.seen.push(Seen::Request(request)) }
+    fn report_results(&mut self, open: bool) { self.reporting = Some(open); }
+    fn request(&mut self, request: Request, _: RecordHandle) {
+        self.reports_on_requests.push((request, self.reporting.expect("begin publishes the callback gate")));
+        self.seen.push(Seen::Request(request));
+    }
     fn reply(&mut self, reply: Reply, _: RecordHandle) { self.seen.push(Seen::Reply(reply)) }
     fn apply(&mut self, apply: Apply, _: RecordHandle) { self.seen.push(Seen::Apply(apply)) }
     fn condition(&mut self, condition: Condition, _: RecordHandle) -> bool {
@@ -384,4 +390,18 @@ fn results_are_delivered_only_while_running() {
     fake.take();
     assert_eq!(send(&mut statistics, &mut fake, completed(C::Statistics7f)), Outcome::Fault);
     assert_eq!(fake.take(), [Seen::Fault]);
+}
+
+#[test]
+fn stop_closes_the_callback_gate_before_the_peer_can_reply_and_begin_reopens_it() {
+    let mut fake = Fake::default();
+    let mut statistics = running(&mut fake);
+    fake.acquisition.push_back(ChildOutcome::Complete);
+    fake.search.push_back(ChildOutcome::Complete);
+    assert_eq!(send(&mut statistics, &mut fake, StatisticsEvent::Prepare), Outcome::Pending);
+    assert_eq!(fake.reports_on_requests.last(), Some(&(Request::Stop { pause: false }, false)));
+    assert_eq!(send(&mut statistics, &mut fake, completed(C::Statistics7c)), Outcome::Pending);
+    assert_eq!(send(&mut statistics, &mut fake, completed(C::Image58)), Outcome::Complete);
+    assert_eq!(send(&mut statistics, &mut fake, StatisticsEvent::Begin), Outcome::Pending);
+    assert_eq!(fake.reports_on_requests.last(), Some(&(Request::BeginImaging, true)));
 }

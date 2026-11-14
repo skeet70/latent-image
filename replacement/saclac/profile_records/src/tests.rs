@@ -240,7 +240,7 @@ fn applying_a_staged_record_writes_only_its_changed_fields() {
     registry.memory.records[0][0x31] = 0x44;
     registry.memory.records[0][0x80] = 0xff;
     let mut view = registry.view();
-    assert_eq!(view.apply_changes(word_of(owner()), &staged), Ok(()));
+    assert_eq!(view.apply_changes(word_of(owner()), staged.header()), Ok(()));
     let record = &view.memory().records[0];
     assert_eq!(record[0x30], 1);
     assert_eq!(record[0x69], 6);
@@ -264,7 +264,7 @@ fn applying_without_write_access_clears_the_masks_and_writes_nothing() {
     let mut registry = Registry::new(0).open(0, &[0], READ);
     registry.memory.records[0][0x80] = 0xff;
     let mut view = registry.view();
-    assert_eq!(view.apply_changes(word_of(owner()), &staged), Ok(()));
+    assert_eq!(view.apply_changes(word_of(owner()), staged.header()), Ok(()));
     let record = &view.memory().records[0];
     assert_eq!(record[0x30], 0);
     assert_eq!(word(record, 0x80), 0);
@@ -319,16 +319,16 @@ fn derivation_refusals() {
 fn a_staged_record_matches_a_change_set_exactly_or_when_the_other_mask_is_clear() {
     let selection = ChangeSet::of(record::group_00::MEASUREMENT_SELECTION.change().unwrap());
     let mut staged = RecordImage::default();
-    assert!(staged.changes_are(selection));
+    assert!(staged.header().changes_are(selection));
     staged.set(&record::group_00::AT_0069, 1);
-    assert!(!staged.changes_are(selection));
+    assert!(!staged.header().changes_are(selection));
     staged.set(&record::group_00::MEASUREMENT_SELECTION, MeasurementSelection::Record);
-    assert!(staged.changes_are(selection));
+    assert!(staged.header().changes_are(selection));
     staged.set(&record::group_00::AT_0031, 1);
-    assert!(!staged.changes_are(selection));
+    assert!(!staged.header().changes_are(selection));
     staged.clear_changes();
     staged.set(&record::group_00::AT_0031, 1);
-    assert!(staged.changes_are(selection));
+    assert!(staged.header().changes_are(selection));
 }
 
 #[test]
@@ -440,7 +440,7 @@ fn applying_a_staged_record_stores_fields_in_the_tracked_order() {
     staged.set(&record::group_00::AT_002E, 0x0506);
     staged.set(&record::group_00::MEASUREMENT_SELECTION, MeasurementSelection::Record);
     let mut view = recording(Registry::new(0).open(0, &[0], READ | WRITE));
-    view.apply_changes(word_of(owner()), &staged).unwrap();
+    view.apply_changes(word_of(owner()), staged.header()).unwrap();
     let field_offsets: Vec<u16> = view.memory().stores.iter().filter(|&&(block, offset, _)| block == FIRST && !(0x80..0x90).contains(&offset)).map(|&(_, offset, _)| offset).collect();
     assert_eq!(field_offsets, [0x30, 0x2e, 0x0, 0x71, 0x5a]);
 }

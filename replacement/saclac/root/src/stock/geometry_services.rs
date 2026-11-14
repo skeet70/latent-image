@@ -33,7 +33,7 @@ impl<M: Machine + Clone, P, I> Retained for GeometryBindings<M, P, I> {
     fn decode_level(&mut self, encoded: u32) -> u8 { self.stages.machine.enter(0xef_73e4, &[encoded as usize]) as u8 }
 }
 impl<M: Machine, P, I> OutputRoutes for GeometryBindings<M, P, I> {
-    fn set_requested_level(&mut self, route: u32, level: u32) -> i32 { self.stages.machine.enter(0x64_982c, &[route as usize, level as usize]) as i32 }
+    fn set_requested_level(&mut self, route: u32, level: u32) -> i32 { self.stages.machine.enter(0x64_982c, &[route as usize, level as usize, 0]) as i32 }
 }
 impl<M: Machine, P, I> Interface for GeometryBindings<M, P, I> {
     fn read_adc_byte(&mut self, channel: u32) -> AdcReading { let mut bytes = [0]; let status = self.stages.machine.enter_with(0x74_1ee0, &[Word(channel), Buffer(0)], &mut bytes); AdcReading { status, value: bytes[0] } }

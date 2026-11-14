@@ -507,7 +507,7 @@ pub enum ReleasedResult {
 
 /// The profile records, the layers and the peers the acquisition works through.
 pub trait Ports: Pipeline + Exposure + Adjustment + Trace + ProfileRecords {
-    fn selection_memory(&mut self) -> &mut SelectionMemory;
+    fn with_selection<V>(&mut self, operation: impl FnOnce(&mut SelectionMemory) -> V) -> V;
     fn acquisition_settings(&mut self) -> AcquisitionSettings;
 
     fn record_view(&mut self, record: RecordHandle) -> RecordView;

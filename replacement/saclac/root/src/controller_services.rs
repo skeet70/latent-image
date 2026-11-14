@@ -131,13 +131,27 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Configuration for Servic
 impl<M: Machine + Clone, R: Memory, E: StockEntries, P> MirrorSources for Services<M, R, E, P> {
     fn capture_window(&mut self, mode: u32, ratio: u32) -> Option<[u32; 2]> {
         let mode = CaptureMode::new(mode)?;
-        match settings::capture_window(mode, AspectPair([ratio as u16, (ratio >> 16) as u16]), &mut self.stock).ok()? {
+        match settings::capture_window(mode, AspectPair([ratio as u16, (ratio >> 16) as u16]), &mut self.stock).expect("capture-window conversion missing") {
             WindowScale::Unscaled => None,
             WindowScale::Scaled(window) => Some([window.alternate, window.value]),
         }
     }
     fn collapse_index(&mut self, index: u32) -> u32 { table::column(&self.stock, table::Step(index)) }
     fn linearize(&mut self, value: u32) -> u32 { self.machine.enter(0xee_9ab0, &[value as usize]) }
+}
+
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P> StatisticsHelpers for Services<M, R, E, P> {
+    fn scale_capture_window(&mut self, mode: u32, ratio: u32) -> Option<[u32; 2]> {
+        MirrorSources::capture_window(self, mode, ratio)
+    }
+    fn selection_ratio(&mut self, record: RecordHandle) -> [u32; 2] {
+        let header = self.entries.header_byte(record, SharedHeaderByte::At47);
+        let cell = self.focus_cell(record, header);
+        [cell.column, cell.row]
+    }
+    fn lens_offset(&mut self, index: u32) -> u32 {
+        self.machine.enter(0x77_2f28, &[index as usize])
+    }
 }
 impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Pipeline for Services<M, R, E, P> {
     fn stop_queried(&mut self) -> bool {
@@ -235,4 +249,64 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> xm1_saclac_calc::lens_ch
 impl<M: Machine + Clone, R: Memory, E: StockEntries, P> xm1_saclac_calc::adjust::timing::LevelScale for Services<M, R, E, P> {
     fn linear(&mut self, level: i16) -> u32 { self.machine.enter(0xee_9ab0, &[level as i32 as usize]) }
     fn log2_difference(&mut self, value: u32, reference: u32) -> i16 { self.machine.enter(0xee_99f0, &[value as usize, reference as usize]) as i16 }
+}
+
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Services<M, R, E, P> {
+    /// f46fd4's defined session fields; its two unwritten padding bytes are zero.
+    pub(crate) fn set_lens_session(&mut self, record: RecordHandle, enabled: u32, profile_pair: bool) {
+        let mut bytes = [0; 28];
+        let mut pair = [3, 3];
+        let (position, channel, reference, mode) = if enabled == 1 {
+            bytes[..4].copy_from_slice(&1u32.to_le_bytes());
+            let position = self.machine.enter(0x76_da84, &[]) as u16;
+            let channel = self.machine.enter(0x76_d9c8, &[]);
+            let reference = self.machine.enter(0x76_dbb4, &[]);
+            let mode = self.machine.enter(0x76_dad4, &[]);
+            if profile_pair {
+                let source = self.field(record, &record::group_02::AT_00F4);
+                pair = core::array::from_fn(|index| u32::from_le_bytes(source[4 * index..4 * index + 4].try_into().expect("lens session pair")));
+            } else if self.entries.header_byte(record, SharedHeaderByte::At47) == 2 {
+                ProfileRecord::read_block(self, record, Block::Classes, &mut pair);
+            }
+            (position, channel, reference, mode)
+        } else { (0, 0, 0x80, 2) };
+        bytes[4..8].copy_from_slice(&pair[0].to_le_bytes());
+        bytes[8..12].copy_from_slice(&pair[1].to_le_bytes());
+        bytes[12..14].copy_from_slice(&position.to_le_bytes());
+        for (offset, value) in [(16, channel), (20, reference), (24, mode)] {
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        let _ = self.records.write_shared(record, &shared::group_36::AT_0840, bytes);
+    }
+
+    /// f4711c uses the remembered lens tuple, unlike f46fd4's current tuple.
+    pub(crate) fn set_stopped_lens_session(&mut self, record: RecordHandle, enabled: u32) {
+        let mut bytes = [0; 28];
+        let mut pair = [3, 3];
+        if enabled == 1 {
+            bytes[..4].copy_from_slice(&1u32.to_le_bytes());
+            self.machine.enter_with(0x76_fb54, &[xm1_saclac_shared::stock::Argument::Buffer(0)], &mut bytes[12..]);
+            // The snapshot's alignment halfword is not a session field.
+            bytes[14..16].fill(0);
+            if i16::from_le_bytes(bytes[12..14].try_into().expect("remembered position")) == i16::MIN {
+                let channel = if self.entries.header_byte(record, SharedHeaderByte::At63) != 0 {
+                    0
+                } else { u32::from(self.entries.header_byte(record, SharedHeaderByte::At46)) };
+                let reference = self.machine.enter(0x76_f340, &[]);
+                let position = self.machine.enter(0x74_8730, &[0, 0, channel as usize, 0, reference as usize, 0]) as u16;
+                bytes[12..14].copy_from_slice(&position.to_le_bytes());
+                bytes[16..24].fill(0);
+                bytes[24..28].copy_from_slice(&1u32.to_le_bytes());
+            }
+            if self.entries.header_byte(record, SharedHeaderByte::At47) == 2 {
+                ProfileRecord::read_block(self, record, Block::Classes, &mut pair);
+            }
+        } else {
+            bytes[20..24].copy_from_slice(&0x80u32.to_le_bytes());
+            bytes[24..28].copy_from_slice(&2u32.to_le_bytes());
+        }
+        bytes[4..8].copy_from_slice(&pair[0].to_le_bytes());
+        bytes[8..12].copy_from_slice(&pair[1].to_le_bytes());
+        let _ = self.records.write_shared(record, &shared::group_36::AT_0840, bytes);
+    }
 }

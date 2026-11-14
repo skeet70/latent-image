@@ -195,8 +195,7 @@ fn mode_world(first_position: i16) -> World {
 }
 
 fn mode_step_of(world: &mut World) -> u32 {
-    let cells = CellTable([0; CELL_TABLE_BYTES]);
-    mode_step(world, &ModeInputs { record: handle(), rate: 4, cells: &cells, lens_reference: 0 })
+    mode_step(world, &ModeInputs { record: handle(), rate: 4, cell: Cell { column: 0, row: 0 }, lens_reference: 0 })
 }
 
 #[test]

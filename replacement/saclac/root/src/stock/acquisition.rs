@@ -367,10 +367,6 @@ pub fn grid_count(machine: &impl Machine, selection: u32, mode: u32, adjustment:
     enter(machine, 0xfa_b250, &[word(selection), word(mode), word(adjustment), word(grid_kind)])
 }
 
-/// 0xfa7e20.
-pub fn level_category(machine: &impl Machine, level: i16, selection: u32, adjustment: u32) -> u32 {
-    enter(machine, 0xfa_7e20, &[signed(level), word(selection), word(adjustment)])
-}
 
 /// 0xfa7bb8 over the five input words and the grid.
 pub fn fill_grid(machine: &impl Machine, inputs: &GridInputs, grid: &mut AcquisitionGrid) {

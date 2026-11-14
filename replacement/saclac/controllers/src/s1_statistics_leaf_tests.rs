@@ -391,3 +391,51 @@ fn the_release_range_remaps_the_target_before_the_move() {
     let remap = RemapRequest { position: 0x150, reference: 0x720, target: 0x77, convert: true, mode_index: MODE_INDEX };
     assert_eq!(rig.seen(), [Seen::Remap(remap), lens_move((u32::from(REMAPPED)).wrapping_sub(LENS_POSITION) as i16, 11)]);
 }
+
+#[test]
+fn live_correction_rebases_an_equal_target_without_starting_a_move() {
+    let mut fake = with_blocks(Fake::default(), &[
+        (Block::Lens(LensSlot::Current), &[2, 10]),
+        (Block::Lens(LensSlot::Next), &[99, 15]),
+    ]);
+    assert!(crate::s1_autofocus::correct_drive(record(), 3, interface::StockCallbackWord(0xca11), &mut fake));
+    assert_eq!(fake.block_words(Block::Lens(LensSlot::Next)).unwrap(), &[3, 15]);
+    let seen = fake.take_seen();
+    assert_eq!(seen.iter().filter(|seen| **seen == Seen::SelectionChanged).count(), 1);
+    assert!(!seen.iter().any(|seen| matches!(seen, Seen::Move(_))));
+}
+
+#[test]
+fn live_correction_keeps_the_new_pair_but_does_not_move_an_undesignated_unselected_lens() {
+    let mut fake = with_blocks(Fake { unselected: true, ..Fake::default() }, &[
+        (Block::Lens(LensSlot::Current), &[2, 10]),
+        (Block::Lens(LensSlot::Next), &[99, 11]),
+    ]);
+    assert!(crate::s1_autofocus::correct_drive(record(), 3, interface::StockCallbackWord(0xca11), &mut fake));
+    assert_eq!(fake.block_words(Block::Lens(LensSlot::Next)).unwrap(), &[3, 15]);
+    assert!(!fake.take_seen().iter().any(|seen| matches!(seen, Seen::Move(_) | Seen::Remap(_))));
+}
+
+#[test]
+fn live_correction_remaps_the_signed_held_position_against_the_current_resource_before_moving() {
+    for restarts in [0, 1] {
+        let mut release = [0; 12];
+        release[8] = 1;
+        let mut fake = with_blocks(Fake::with(&[
+            (Field::LensReference, 0x999),
+            (Field::LensConversion, 1),
+            (Field::Command1dRestarts, restarts),
+        ]), &[
+            (Block::Lens(LensSlot::Current), &[2, 10]),
+            (Block::Lens(LensSlot::Next), &[99, 11]),
+            (Block::LensTarget, &[0xabcd_ff80]),
+            (Block::ReleaseRange, &release),
+        ]);
+        let callback = interface::StockCallbackWord(0xca11);
+        assert!(!crate::s1_autofocus::correct_drive(record(), 3, callback, &mut fake));
+        let seen = fake.take_seen();
+        assert!(seen.contains(&Seen::Remap(RemapRequest { position: -128, reference: 3, target: 15, convert: true, mode_index: MODE_INDEX })));
+        assert!(seen.contains(&Seen::Move(LensMove { callback, steps: (u32::from(REMAPPED) - LENS_POSITION) as i16, mode_index: MODE_INDEX, words: [1, 0, if restarts == 0 { 11 } else { 0 }, 4] })));
+        assert_eq!(fake.block_words(Block::Lens(LensSlot::Next)).unwrap(), &[3, 15]);
+    }
+}

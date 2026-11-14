@@ -47,7 +47,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Services<M, R, E, P> {
 }
 
 /// Calculation-only ports, independent of the focus search's binding implementations.
-struct Calculations<'a, M>(&'a M, &'a Stock<M>);
+pub(crate) struct Calculations<'a, M>(pub(crate) &'a M, pub(crate) &'a Stock<M>);
 
 impl<M: Machine> Properties for Calculations<'_, M> {
     fn property(&mut self, property: Property) -> u32 { u32::from(self.1.byte(AdjustmentKey(property.key()))) }
@@ -137,7 +137,7 @@ macro_rules! store {
 }
 
 impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc> Ports for Services<M, R, E, P> {
-    fn selection_memory(&mut self) -> &mut SelectionMemory { &mut self.acquisition.selection }
+    fn with_selection<V>(&mut self, operation: impl FnOnce(&mut SelectionMemory) -> V) -> V { operation(&mut self.acquisition.selection) }
     fn acquisition_settings(&mut self) -> AcquisitionSettings { boundary::acquisition_settings(|key| self.stock.byte(AdjustmentKey(key))) }
 
     fn record_view(&mut self, record: RecordHandle) -> RecordView {
@@ -338,7 +338,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc> Po
 
     fn grid_count(&mut self, selection: ProfileSelection, mode: AcquisitionMode, adjustment: u32, grid_kind: u32) -> u32 { boundary::grid_count(&self.machine, selection_word(selection), mode.0, adjustment, grid_kind) }
     fn indexed_configuration(&mut self, selection: ProfileSelection, adjustment: u32, index: u32) -> u8 { rate_policy::policy_setting(&mut Calculations(&self.machine, &self.stock), selection == ProfileSelection::Record, adjustment, index == 1) as u8 }
-    fn level_category(&mut self, level: i16, selection: ProfileSelection, adjustment: u32) -> u32 { boundary::level_category(&self.machine, level, selection_word(selection), adjustment) }
+    fn level_category(&mut self, level: i16, selection: ProfileSelection, adjustment: u32) -> u32 { rate_policy::profile_curve(self, i32::from(level), selection == ProfileSelection::Record, adjustment) }
     fn selection_limits(&mut self, selection: ProfileSelection, adjustment: u32, grid_count: u32, request: u32) -> SelectionLimits {
         let limits = rate_policy::rate_settings(&mut Calculations(&self.machine, &self.stock), selection == ProfileSelection::Record, adjustment, grid_count != 0, request == 2);
         SelectionLimits { step: limits.base, lower: limits.second as u16, upper: limits.first as u16, byte: limits.byte }
@@ -459,7 +459,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc> Po
     }
 }
 
-struct CalculationPeers<'a, M, P> { machine: &'a mut M, peers: &'a mut P }
+pub(crate) struct CalculationPeers<'a, M, P> { pub(crate) machine: &'a mut M, pub(crate) peers: &'a mut P }
 
 impl<M: Machine, P: Calc + Calc1> xm1_saclac_calc::requests::Peers for CalculationPeers<'_, M, P> {
     type Error = ();

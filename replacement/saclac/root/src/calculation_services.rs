@@ -2,14 +2,14 @@
 
 use xm1_saclac_calc::{adjust::{exposure_limits::{CellLevels, ChannelLevels}, lens::{BiasTable, LensConfiguration, LensControl, LensSteps, Step, StepRequest}, profile_mode::DeviceReadiness}, exposure::ports::{self, CaptureProfiles, ImageReport, Lens, Placement, ProfileAccess, ProfileLevels, Properties, Property, StockMemory}, profile::Profile, scene_levels::FeatureClasses, stock::calculation::Cell};
 use xm1_saclac_calc::adjust::{motion::{drive::{DriveKind, DriveLimits, DriveMode, DriveSpeed}, plan_ports::{PlanServices, PlanSpeedRequest, PositionRemap}}, timing::LevelScale};
-use xm1_saclac_config::{channel, numeric::FloatLog, table};
+use xm1_saclac_config::{channel, table};
 use xm1_saclac_imaging::driver::Isp;
 use xm1_saclac_interface::{calc::SharedAddress, ImageProcessor};
-use xm1_saclac_profile_geometry::{controller::{ProfileGeometry, Tables}, profile::ProfileHandle, services::{LevelPair, SelectionRequest}};
+use xm1_saclac_profile_geometry::{controller::{ProfileGeometry, Tables}, profile::ProfileHandle, services::LevelPair};
 use xm1_saclac_profile_records::{Memory, StockEntries};
 use xm1_saclac_search_bindings::calc::Tables as Calibration;
 use xm1_saclac_shared::{settings::Channel, stock::{Argument::{Buffer, Word}, Machine}};
-use crate::{geometry::GeometryBindings, services::Services, stock::{acquisition::Aligned, geometry::Memory as GeometryMemory}};
+use crate::{geometry::GeometryBindings, lens_calibration::Log, profile_calibration::ProfileCalibration, services::Services, stock::{acquisition::Aligned, geometry::Memory as GeometryMemory}};
 
 /// One operation's borrows of the shared services and geometry; exposure state stays with its caller.
 pub struct Calculation<'a, M, R, E, P, I, T, A> {
@@ -19,10 +19,7 @@ pub struct Calculation<'a, M, R, E, P, I, T, A> {
 }
 impl<M: Machine, R, E, P, I, T, A> Calculation<'_, M, R, E, P, I, T, A> {
     fn calibration(&self) -> Calibration<'_, M> { Calibration(&self.services.machine) }
-}
-struct Log<'a, M>(&'a M);
-impl<M: Machine> FloatLog for Log<'_, M> {
-    fn ln(&mut self, value: f32) -> f32 { f32::from_bits(self.0.enter(0x89_4778, &[value.to_bits() as usize])) }
+    fn profiles(&mut self) -> ProfileCalibration<'_, M, P, I, T> { ProfileCalibration(self.geometry) }
 }
 
 macro_rules! implement {
@@ -63,20 +60,16 @@ implement!(LensSteps {
     fn travel_distance(&mut self, resource: u32, index: u32, travel: i16) -> u16 { self.calibration().travel_distance(resource, index, travel) }
 });
 implement!(CaptureProfiles {
-    fn level_offset(&mut self, profile: u32) -> i16 { self.geometry.profiles().aspect_value(ProfileHandle(profile)) }
-    fn class_offset(&mut self, class: u8) -> i16 { self.geometry.profiles().tables().aspect_value(if class > 1 { 0 } else { class }) }
-    fn offset_class(&mut self, profile: u32) -> u8 { self.geometry.profiles().aspect_index(ProfileHandle(profile)) }
-    fn sensitivity_class(&mut self, profile: u32) -> u8 { self.geometry.profiles().threshold_index(ProfileHandle(profile)) }
-    fn sensitivity_class_for(&mut self, value: u32) -> u8 { self.geometry.profiles().threshold_index_for(value) }
-    fn configured_level(&mut self) -> u16 { self.geometry.selection_values(SelectionRequest { level: true, ..SelectionRequest::default() }).level.expect("requested level") }
-    fn configured_profile(&mut self, _: i16) -> u32 { 1 } // 0xeea094's two branches: literal0xeea2ac and immediate1.
-    fn record_profile(&mut self) -> u32 { 1 } // 0xef6790.
-    fn default_dimensions(&mut self) -> [u16; 3] {
-        let mut output = Aligned([0; 6]);
-        self.services.machine.enter_with(0xef_3434, &[Word(5), Word(0), Buffer(0)], &mut output.0);
-        core::array::from_fn(|index| u16::from_le_bytes(output.0[2 * index..2 * index + 2].try_into().expect("default dimension")))
-    }
-    fn grid_steps(&mut self, layout: u8) -> [u8; 2] { self.geometry.level_pair(0, u32::from(layout)).0 }
+    fn level_offset(&mut self, profile: u32) -> i16 { self.profiles().level_offset(profile) }
+    fn class_offset(&mut self, class: u8) -> i16 { self.profiles().class_offset(class) }
+    fn offset_class(&mut self, profile: u32) -> u8 { self.profiles().offset_class(profile) }
+    fn sensitivity_class(&mut self, profile: u32) -> u8 { self.profiles().sensitivity_class(profile) }
+    fn sensitivity_class_for(&mut self, value: u32) -> u8 { self.profiles().sensitivity_class_for(value) }
+    fn configured_level(&mut self) -> u16 { self.profiles().configured_level() }
+    fn configured_profile(&mut self, level: i16) -> u32 { self.profiles().configured_profile(level) }
+    fn record_profile(&mut self) -> u32 { self.profiles().record_profile() }
+    fn default_dimensions(&mut self) -> [u16; 3] { self.profiles().default_dimensions() }
+    fn grid_steps(&mut self, layout: u8) -> [u8; 2] { self.profiles().grid_steps(layout) }
 });
 implement!(ProfileLevels {
     fn profile_level(&mut self, profile: u32) -> i16 {
@@ -142,4 +135,33 @@ implement!(PlanServices {
     fn snapshot_mode(&mut self) -> u32 { self.services.snapshot_mode() }
     fn cached_focus(&mut self) -> Option<[u32; 4]> { self.services.cached_focus() }
     fn release_aux_text(&mut self) { self.services.release_aux_text(); }
+});
+implement!(xm1_saclac_calc::gains::CaptureGains {
+    fn gains(&mut self, request: &xm1_saclac_calc::gains::GainRequest) -> xm1_saclac_calc::gains::SelectedGains {
+        xm1_saclac_calc::gains::CaptureGains::gains(self.services, request)
+    }
+    fn blend_weight(&mut self, selector: &xm1_saclac_calc::gains::BlendSelector) -> u8 {
+        xm1_saclac_calc::gains::CaptureGains::blend_weight(self.services, selector)
+    }
+});
+implement!(xm1_saclac_calc::diagnostics::CacheMaintenance {
+    fn invalidate(&mut self, at: SharedAddress, bytes: usize) {
+        self.services.machine.enter(0x74_0e74, &[at.0 as usize, bytes]);
+    }
+});
+implement!(xm1_saclac_calc::adjust::context_trace::ChannelPixels {
+    fn channel_pixels(&mut self, pixels: u32) -> [u32; 4] {
+        let mut output = Aligned([0; 20]);
+        self.services.machine.enter_with(0xef_56cc, &[Buffer(0), Word(pixels)], &mut output.0);
+        core::array::from_fn(|index| u32::from_le_bytes(output.0[index * 4..index * 4 + 4].try_into().expect("channel pixels")))
+    }
+});
+implement!(xm1_saclac_calc::adjust::profile_adjustment::LensSteps {
+    fn near_step(&mut self, reference: u32, limit: u16, which: xm1_saclac_calc::adjust::profile_adjustment::StepTable) -> u32 {
+        xm1_saclac_calc::adjust::profile_adjustment::LensSteps::near_step(self.services, reference, limit, which)
+    }
+    fn far_step(&mut self, reference: u32, limit: u16, which: xm1_saclac_calc::adjust::profile_adjustment::StepTable) -> u32 {
+        xm1_saclac_calc::adjust::profile_adjustment::LensSteps::far_step(self.services, reference, limit, which)
+    }
+    fn lens_step(&mut self, step: u32) -> u32 { xm1_saclac_calc::adjust::profile_adjustment::LensSteps::lens_step(self.services, step) }
 });

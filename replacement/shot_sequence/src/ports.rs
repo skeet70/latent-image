@@ -436,7 +436,7 @@ impl Reply {
 pub const fn blocking_lens_effect(request: BlockingRequest) -> LensEffect {
     match request {
         BlockingRequest::LensSynchronize => lens_effect(PeerOperation::LensDc(LensDcOperation::Request17)),
-        BlockingRequest::AdjustmentSynchronize | BlockingRequest::FileSynchronize => LensEffect::NoLensDrive,
+        BlockingRequest::AdjustmentSynchronize => LensEffect::NoLensDrive,
     }
 }
 

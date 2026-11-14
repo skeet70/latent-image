@@ -33,6 +33,29 @@ pub trait Effects {
     fn emit(&mut self, request: Request);
 }
 
+/// The ordered service boundary used by both the standalone lifecycle and the root router.
+pub fn start_services(startup: Startup, effects: &mut impl Effects) {
+    effects.emit(Request::ReserveAccessor);
+    if startup == Startup::Normal {
+        effects.emit(Request::Start(Service::Lens));
+    }
+    effects.emit(Request::Start(Service::RecordingBuffers));
+    effects.emit(Request::ResetImageBuffer);
+    for service in [Service::Image, Service::Calculation, Service::AuxiliaryGate,
+        Service::Statistics, Service::Tracking, Service::MotionDetection] {
+        effects.emit(Request::Start(service));
+    }
+    effects.emit(Request::PublishParameters);
+}
+
+pub fn stop_services(effects: &mut impl Effects) {
+    for service in [Service::Image, Service::Calculation, Service::AuxiliaryGate,
+        Service::Statistics, Service::Lens, Service::Tracking, Service::MotionDetection,
+        Service::RecordingBuffers] {
+        effects.emit(Request::Stop(service));
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Event {
     Start(Startup),
@@ -74,19 +97,7 @@ impl Lifecycle {
     pub fn handle(&mut self, event: Event, effects: &mut impl Effects) -> Outcome {
         match (self.mode, event) {
             (previous @ (Mode::Stopped | Mode::Started), Event::Start(startup)) => {
-                effects.emit(Request::ReserveAccessor);
-                if startup == Startup::Normal {
-                    effects.emit(Request::Start(Service::Lens));
-                }
-                effects.emit(Request::Start(Service::RecordingBuffers));
-                effects.emit(Request::ResetImageBuffer);
-                effects.emit(Request::Start(Service::Image));
-                effects.emit(Request::Start(Service::Calculation));
-                effects.emit(Request::Start(Service::AuxiliaryGate));
-                effects.emit(Request::Start(Service::Statistics));
-                effects.emit(Request::Start(Service::Tracking));
-                effects.emit(Request::Start(Service::MotionDetection));
-                effects.emit(Request::PublishParameters);
+                start_services(startup, effects);
                 effects.emit(Request::ReplyStarted);
                 if previous == Mode::Stopped && startup == Startup::ResumeLive {
                     self.mode = Mode::Live;
@@ -97,18 +108,7 @@ impl Lifecycle {
                 }
             }
             (Mode::Started, Event::Stop) => {
-                for service in [
-                    Service::Image,
-                    Service::Calculation,
-                    Service::AuxiliaryGate,
-                    Service::Statistics,
-                    Service::Lens,
-                    Service::Tracking,
-                    Service::MotionDetection,
-                    Service::RecordingBuffers,
-                ] {
-                    effects.emit(Request::Stop(service));
-                }
+                stop_services(effects);
                 effects.emit(Request::ReplyStopped);
                 self.mode = Mode::Stopped;
                 Outcome::Stopped

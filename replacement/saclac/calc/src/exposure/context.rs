@@ -3,7 +3,7 @@
 //! modules read back.
 
 use xm1_saclac_interface::calc::SharedAddress;
-use xm1_saclac_interface::exposure::{CalculationInput, CorrectionRequest, EvaluationRequest};
+use xm1_saclac_interface::exposure::{CorrectionRequest, EvaluationRequest};
 use xm1_saclac_interface::RecordHandle;
 
 use crate::policy::ExposureMode;
@@ -248,5 +248,4 @@ pub struct ExposureContext {
     pub saved: SavedTables,
     /// The record's metered level relative to the lens (0xf61c70..0xf61cb8).
     pub metered_level: i16,
-    pub calculation: CalculationInput,
 }

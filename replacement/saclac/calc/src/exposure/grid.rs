@@ -115,9 +115,8 @@ impl AreaDistances {
     }
 }
 
-/// The distances of `area` at the calculation's lens reference.
-pub fn area_distances(ports: &mut impl Ports, context: &ExposureContext, area: &AreaReading) -> AreaDistances {
-    let lens_reference = context.calculation.lens_reference;
+/// The distances of `area` at the active calculation input's lens reference.
+pub fn area_distances(ports: &mut impl Ports, context: &ExposureContext, lens_reference: u32, area: &AreaReading) -> AreaDistances {
     let metered = context
         .metered_level
         .wrapping_sub(area.at44)

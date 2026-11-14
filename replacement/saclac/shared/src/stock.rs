@@ -123,6 +123,10 @@ impl Machine for Guest {
                     usize,
                     extern "C" fn(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) -> u32,
                 >(entry)(*a as u32, *b as u32, *c as u32, *d as u32, *e as u32, *f as u32, *g as u32, *h as u32, *i as u32, *j as u32),
+                [a, b, c, d, e, f, g, h, i, j, k] => core::mem::transmute::<
+                    usize,
+                    extern "C" fn(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) -> u32,
+                >(entry)(*a as u32, *b as u32, *c as u32, *d as u32, *e as u32, *f as u32, *g as u32, *h as u32, *i as u32, *j as u32, *k as u32),
                 [a, b, c, d, e, f, g, h, i, j, k, l] => core::mem::transmute::<
                     usize,
                     extern "C" fn(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) -> u32,
@@ -134,12 +138,27 @@ impl Machine for Guest {
                     *a as u32, *b as u32, *c as u32, *d as u32, *e as u32, *f as u32, *g as u32, *h as u32, *i as u32, *j as u32,
                     *k as u32, *l as u32, *m as u32,
                 ),
+                [a, b, c, d, e, f, g, h, i, j, k, l, m, n] => core::mem::transmute::<
+                    usize,
+                    extern "C" fn(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) -> u32,
+                >(entry)(
+                    *a as u32, *b as u32, *c as u32, *d as u32, *e as u32, *f as u32, *g as u32, *h as u32, *i as u32, *j as u32,
+                    *k as u32, *l as u32, *m as u32, *n as u32,
+                ),
                 [a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q] => core::mem::transmute::<
                     usize,
                     extern "C" fn(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) -> u32,
                 >(entry)(
                     *a as u32, *b as u32, *c as u32, *d as u32, *e as u32, *f as u32, *g as u32, *h as u32, *i as u32, *j as u32,
                     *k as u32, *l as u32, *m as u32, *n as u32, *o as u32, *p as u32, *q as u32,
+                ),
+                [a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w] => core::mem::transmute::<
+                    usize,
+                    extern "C" fn(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) -> u32,
+                >(entry)(
+                    *a as u32, *b as u32, *c as u32, *d as u32, *e as u32, *f as u32, *g as u32, *h as u32, *i as u32, *j as u32,
+                    *k as u32, *l as u32, *m as u32, *n as u32, *o as u32, *p as u32, *q as u32, *r as u32, *s as u32, *t as u32,
+                    *u as u32, *v as u32, *w as u32,
                 ),
                 _ => panic!("no retained entry takes {} arguments", arguments.len()),
             }

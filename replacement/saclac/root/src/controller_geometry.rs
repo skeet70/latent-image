@@ -2,11 +2,11 @@
 
 use core::cell::RefCell;
 use xm1_saclac_controllers::layers::{CorrectedWindow, DisplayRecords, RecordChannel, RecordMode, StatisticsGeometry, WindowInputs};
-use xm1_saclac_imaging::{capture::{self, gains::{self, GainClass, GainRequest, GainSources, Gains}}, driver::Isp};
+use xm1_saclac_imaging::{capture::gains::{self, GainClass, GainRequest, GainSources}, driver::Isp};
 use xm1_saclac_interface::ImageProcessor;
 use xm1_saclac_profile_geometry::{controller::{ProfileGeometry, Tables}, ports::DumpBuffer, record_mode, services::OperationConditions, profile::ProfileHandle, stock::records::{Parameters, StatusSnapshot}};
-use xm1_saclac_shared::stock::{Argument::{Buffer, Word}, Machine};
-use crate::{geometry::GeometryBindings, stock::{acquisition::Aligned, geometry::Memory}};
+use xm1_saclac_shared::stock::Machine;
+use crate::{capture_gains::Sources as GainPorts, geometry::GeometryBindings, stock::geometry::Memory};
 
 type Layer<M, P, I, T> = ProfileGeometry<Memory<M>, GeometryBindings<M, P, I>, T>;
 
@@ -39,56 +39,48 @@ impl<M: Machine + Clone, P: ImageProcessor, I: Isp, T: Tables> StatisticsGeometr
     fn dump_pipeline(&mut self, buffer: u32) { self.geometry.borrow_mut().dump_pipeline((buffer != 0).then_some(DumpBuffer(buffer))); }
 }
 
-struct GainPorts<'a, M>(&'a M);
-impl<M: Machine> capture::ports::Adjustments for GainPorts<'_, M> {
-    fn byte(&self, key: capture::AdjustmentKey) -> u8 { self.0.enter(0x69_f8fc, &[key.0 as usize]) as u8 }
-}
-impl<M: Machine> GainSources for GainPorts<'_, M> {
-    fn class_gains(&mut self, class: GainClass, column: i16) -> Gains { gain_triplet(self.0, 0xef_3434, class.0, column) }
-    fn custom_gains(&mut self, source: u32, column: i16) -> Gains { gain_triplet(self.0, 0xef_4fc8, source, column) }
-    fn forced_class(&mut self, setting: u8) -> GainClass { GainClass(self.0.enter(0xef_4fd8, &[usize::from(setting)])) }
-    fn temperature_offset(&mut self) -> u16 { self.0.enter(0x77_2f28, &[3]) as u16 }
-}
-fn gain_triplet(machine: &impl Machine, entry: u32, class: u32, column: i16) -> Gains {
-    let mut bytes = Aligned([0; 8]);
-    machine.enter_with(entry, &[Word(class), Word(column as i32 as u32), Buffer(0)], &mut bytes);
-    core::array::from_fn(|index| u16::from_le_bytes([bytes[2 * index], bytes[2 * index + 1]]))
-}
 
 impl<M: Machine + Clone, P: ImageProcessor, I: Isp, T: Tables> GeometryServices<'_, M, P, I, T> {
     pub fn corrected_window(&mut self, input: &WindowInputs) -> CorrectedWindow {
-        let mut geometry = self.geometry.borrow_mut();
-        let (window, class) = {
-            let machine = &geometry.ports().stages.machine;
-            let mut ports = GainPorts(machine);
-            let custom = input.measured.unwrap_or_else(|| ports.class_gains(GainClass(5), 0));
-            let request = GainRequest {
-                mode: input.scene,
-                variant: input.words[0],
-                custom_source: input.words[1],
-                bank: input.words[2],
-                fixed: core::array::from_fn(|index| u16::from_le_bytes([input.bytes[2 * index], input.bytes[2 * index + 1]])),
-                preset: 0,
-                temperature: input.mode,
-                column: 500,
-                level: 600,
-                custom,
-                variant_set: 0,
-                forced: true,
-                variant_subset: 0,
-            };
-            gains::gains(&mut ports, &request)
-        };
-        CorrectedWindow { window: geometry.apply_profile_factors(window, input.factors[0], input.factors[1], input.class), extent: class.0 }
+        corrected_window(&mut *self.geometry.borrow_mut(), input)
     }
 
     pub fn configured_operation(&mut self, values: [u32; 11]) -> u32 {
-        let conditions = OperationConditions {
-            requested: values[0], alternate: values[1], held: values[2], vetoes: [values[3], values[5], values[8]],
-            mode: values[4], profile: ProfileHandle(values[7]), busy: values[9], stage: values[10],
-        };
+        let conditions = operation_conditions(values);
         u32::from(self.geometry.borrow_mut().configured_operation(&conditions))
     }
 
     pub fn operation_available(&mut self, record: u32) -> u32 { u32::from(self.geometry.borrow_mut().configured_operation_available(record)) }
+}
+
+pub(crate) fn operation_conditions(values: [u32; 11]) -> OperationConditions {
+    OperationConditions {
+        requested: values[0], alternate: values[1], held: values[2], vetoes: [values[3], values[5], values[8]],
+        mode: values[4], profile: ProfileHandle(values[7]), busy: values[9], stage: values[10],
+    }
+}
+
+pub(crate) fn corrected_window<M: Machine + Clone, P: ImageProcessor, I: Isp, T: Tables>(geometry: &mut Layer<M, P, I, T>, input: &WindowInputs) -> CorrectedWindow {
+    let (window, class) = {
+        let machine = &geometry.ports().stages.machine;
+        let mut ports = GainPorts(machine);
+        let custom = input.measured.unwrap_or_else(|| ports.class_gains(GainClass(5), 0));
+        let request = GainRequest {
+            mode: input.scene,
+            variant: input.words[0],
+            custom_source: input.words[1],
+            bank: input.words[2],
+            fixed: core::array::from_fn(|index| u16::from_le_bytes([input.bytes[2 * index], input.bytes[2 * index + 1]])),
+            preset: 0,
+            temperature: input.mode,
+            column: 500,
+            level: 600,
+            custom,
+            variant_set: 0,
+            forced: true,
+            variant_subset: 0,
+        };
+        gains::gains(&mut ports, &request)
+    };
+    CorrectedWindow { window: geometry.apply_profile_factors(window, input.factors[0], input.factors[1], input.class), extent: class.0 }
 }

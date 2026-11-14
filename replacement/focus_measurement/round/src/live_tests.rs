@@ -39,7 +39,7 @@ fn acquisition_requests(outbound: &[Outbound]) -> usize {
 
 impl Effects for Fake {
     fn fault(&mut self) { self.extra.traffic.push(Traffic::Fault); }
-    fn search(&mut self, signal: LaneSignal<'_>, _: RecordHandle) -> LaneStatus {
+    fn search(&mut self, signal: LaneSignal<'_>, _: RecordHandle, _: &crate::history::MeasurementHistory) -> LaneStatus {
         let (name, status) = match signal {
             LaneSignal::Work(_) => ("work", LaneStatus::Pending),
             LaneSignal::Initialize => ("initialize", LaneStatus::Complete),

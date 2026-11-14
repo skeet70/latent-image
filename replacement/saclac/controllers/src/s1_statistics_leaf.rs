@@ -56,6 +56,8 @@ impl<L: Layers> Port for Leaf<'_, L> {
         self.profile.taken = take(record, self.layers);
         Snapshot { view_active: self.profile.taken.view_active() }
     }
+    fn report_results(&mut self, open: bool) { self.layers.report_results(open); }
+
 
     fn record_mode(&mut self, held: bool) {
         let mode = self.layers.record_mode();

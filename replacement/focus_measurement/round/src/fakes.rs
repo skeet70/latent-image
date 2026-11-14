@@ -572,7 +572,7 @@ impl<X> Ports<X> {
 }
 
 impl<X> crate::acquisition::ports::Ports for Ports<X> {
-    fn selection_memory(&mut self) -> &mut SelectionMemory { &mut self.acquisition.memory }
+    fn with_selection<V>(&mut self, operation: impl FnOnce(&mut SelectionMemory) -> V) -> V { operation(&mut self.acquisition.memory) }
     fn acquisition_settings(&mut self) -> AcquisitionSettings { self.acquisition.settings_read += 1; AcquisitionSettings { traces: self.traces, ..self.acquisition.settings } }
     fn record_view(&mut self, _: RecordHandle) -> RecordView { self.acquisition.views_read += 1; self.acquisition.view }
     fn s1_rate_enabled(&mut self, _: RecordHandle) -> bool { self.acquisition.view.rate_enabled == 1 }
