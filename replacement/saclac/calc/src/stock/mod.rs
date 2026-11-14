@@ -17,6 +17,8 @@ pub mod lists;
 pub mod measurement;
 pub mod motion;
 pub mod plan;
+pub mod plan_config;
+pub mod plan_trace;
 pub mod profile_adjustment;
 pub mod profile_mode;
 pub mod property;

@@ -217,6 +217,22 @@ impl Plan {
             single_cell: self.single_cell_window,
         }
     }
+    pub fn record_focus(&mut self, mut result: FocusResult, selected_sample: u32) {
+        if self.checks_speed && selected_sample >= self.speeds[2] {
+            result.fast = 1;
+        }
+        self.result = result;
+    }
+
+    pub fn record_tone(&mut self, mut result: ToneResult) {
+        for (limit, value) in self.tone_limits.iter_mut().zip(&result.words[8..10]) {
+            if *limit != 1 { *limit = *value; }
+        }
+        for index in [11, 12] {
+            if self.tone.words[index] == 1 { result.words[index] = 1; }
+        }
+        self.tone = result;
+    }
 }
 
 /// The record 0xfa0130 writes at block +0x498: configured contrast thresholds scaled by the

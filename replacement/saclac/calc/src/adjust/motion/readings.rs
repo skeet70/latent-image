@@ -97,6 +97,7 @@ pub struct RecordReadings {
     pub scene: u8,
     /// Header byte 0x46: 0, 1 or 2.
     pub channel: u8,
+    pub style: u8,
     pub at_0043: u8,
     /// Header byte 0x47.
     pub class: u8,
@@ -186,6 +187,7 @@ impl RecordReadings {
         let measurement_selection = profile.measurement_selection(record);
         let scene = profile.header(record, SharedHeaderByte::At31);
         let channel = profile.header(record, SharedHeaderByte::At46);
+        let style = profile.read(record, &group_00::AT_003F);
         let at_0043 = profile.read(record, &group_00::AT_0043);
         let class = profile.header(record, SharedHeaderByte::At47);
         let policy = profile.read(record, &group_00::AT_0045);
@@ -240,6 +242,7 @@ impl RecordReadings {
             measurement_selection,
             scene,
             channel,
+            style,
             at_0043,
             class,
             policy,

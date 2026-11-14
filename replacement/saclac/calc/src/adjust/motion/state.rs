@@ -42,6 +42,8 @@ impl SampleSchedule {
     pub fn primary(&self) -> &[i32] { &self.primary[..usize::from(self.primary_count)] }
 
     pub fn secondary(&self) -> &[i32] { &self.secondary[..usize::from(self.secondary_rows).min(SECONDARY_AREAS)] }
+
+    pub(crate) fn secondary_cells(&self) -> &[i32; SECONDARY_AREAS] { &self.secondary }
 }
 
 /// The frame exposures a preparation computes: the first corrected to the second's lens step,

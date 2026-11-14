@@ -9,6 +9,11 @@ pub mod layout;
 pub mod measured;
 pub mod measurement;
 pub mod plan;
+pub mod plan_ports;
+pub mod planning;
+mod plan_policy;
+mod plan_geometry;
+pub mod plan_result;
 pub mod ports;
 pub mod prepare;
 pub mod preparation;
@@ -43,3 +48,5 @@ mod readings_tests;
 mod sampling_tests;
 #[cfg(test)]
 mod world;
+#[cfg(test)]
+mod plan_tests;

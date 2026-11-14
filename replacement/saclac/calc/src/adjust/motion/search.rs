@@ -89,6 +89,7 @@ impl AreaCell {
 pub struct SearchSetup {
     pub mode: SearchMode,
     pub channel_class: ChannelClass,
+    pub retry_missing: bool,
     /// The lens snapshot's position on side 1.
     pub snapshot_position: i16,
     /// What 0xf9cdd8 answers the pipeline.
@@ -153,7 +154,7 @@ impl SearchSetup {
         let level_ceiling = level_ceiling(ports, readings, mode, area, results);
         let request = search_frame_request(ports, areas);
         let frames = ports.search_frames(&request);
-        Self { mode, channel_class, snapshot_position, channel_status, frame_delay, area_scale, area, below_reference, level_ceiling, frames }
+        Self { mode, channel_class, retry_missing: false, snapshot_position, channel_status, frame_delay, area_scale, area, below_reference, level_ceiling, frames }
     }
 }
 

@@ -49,6 +49,8 @@ impl MotionState {
     /// The plan the pipeline installed for the current pass (output +0x10).
     pub fn plan(&self) -> &Plan { &self.plan }
 
+    pub fn plan_mut(&mut self) -> &mut Plan { &mut self.plan }
+
     /// The contrast thresholds the plan computed (block +0x498).
     pub fn thresholds(&self) -> &ContrastThresholds { &self.thresholds }
 
