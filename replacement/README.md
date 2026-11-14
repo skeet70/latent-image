@@ -202,6 +202,15 @@ E-FOCUS-ROUND-HOST-CONTRACTS-150: The X-M1 1.50 measurement-round correction con
 Scope: Source-inspected contracts at x70view 55436fc85c0560dd252b0410af6f2427fe198cd3, synthetic host tests and a standalone host smoke through Measurement::handle and S1Acquisition::handle. No stock code executed in these host runs.
 
 <!-- /evidence-record E-FOCUS-ROUND-HOST-CONTRACTS-150 -->
+### Shot capture host boundaries
+
+<!-- evidence-record E-SHOT-CAPTURE-REENTRY-BOUNDS-150 -->
+
+E-SHOT-CAPTURE-REENTRY-BOUNDS-150: A standalone production-rlib consumer completes capture after abort before readout and during calculations, with client replies [7,13,7,0] and [7,13,7,0]. It translates 12 client areas, including last rectangle [400,400,1,1], while retaining 10 record entries and raw diagnostic count 12.
+
+Scope: Host-native Rust execution with synthetic external services and initialized boundary fixtures. The capture scenarios call public Shot::handle through abstract Ports; the area scenario calls public PrimaryJob against the retained external fixture. Stock execution is false. Separate ShotPorts regression cases exercise production composition. X-M1 1.50 bytes ground the client/record capacities; this is not full-system or camera qualification.
+
+<!-- /evidence-record E-SHOT-CAPTURE-REENTRY-BOUNDS-150 -->
 
 ## General heap
 

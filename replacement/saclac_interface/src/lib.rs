@@ -538,8 +538,6 @@ mod tests;
 #[cfg(test)]
 mod area_measurement_tests;
 #[cfg(test)]
-mod calc_tests;
-#[cfg(test)]
 mod calculation_tests;
 #[cfg(test)]
 mod capture_job_tests;
@@ -567,3 +565,5 @@ mod shared_tests;
 mod statistics_tests;
 #[cfg(test)]
 mod calc_sub_tests;
+#[cfg(test)]
+mod calc_tests;

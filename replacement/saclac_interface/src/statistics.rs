@@ -149,6 +149,7 @@ pub struct CaptureReport<'a> {
     pub results: &'a [u8; RESULTS_BYTES],
 }
 
+
 /// The 144-byte record of a statistics 0x4005 request (X-M1 1.50 id5 0x1039b48 copies its four
 /// parts, 56, 16, 16 and 56 bytes, ahead of the callback word).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -14,6 +14,7 @@ pub mod round_image;
 pub mod search;
 pub mod shared;
 pub mod statistics;
+pub mod pipeline;
 
 pub const fn record_handle_from_a2(word: u32) -> RecordHandle { RecordHandle(word) }
 

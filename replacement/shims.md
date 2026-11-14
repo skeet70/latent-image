@@ -721,6 +721,15 @@ saclac's view of the profile records (`replacement/saclac/profile_records`), sha
 | the handle word codec `stock::handle` and `stock::record_handle` | guest-memory layout view | handles the stock open (`0x75a63c`) issues and the retained gates decode | no | the registry and its gates are owned | required |
 | `Stock`, the `StockEntries` binding: header byte readers `0x74e5c0`, `0x74e648`, `0x74f9a4`, `0x74fa2c`, `0x74fc64`, `0x7503ec`, lens designation `0x758c68`, header replace `0x74e074`, open `0x75a63c` with grant table `0x81aa6c`, close `0x75a6cc`, initialize `0x756720` | trampoline into retained stock | the stock bodies at those addresses, which tasks 50, 59 and 104 also call | no | tasks 50, 59 and 104 no longer reach them | required |
 
+## shot_sequence
+
+The task 43 half-press and live preparation and capture pipeline behind the saclac child contract. Its steps reach peers, records and replies through one `Ports` trait and narrow layer traits that its composition root binds; the crate itself links no stock symbol.
+
+| Shim | Kind | Other side | Owned now | Removal condition | State |
+| --- | --- | --- | --- | --- | --- |
+| `half_press_mode`, `half_press_notifications` and `abort_status` in `src/stock.rs` | guest-memory layout view | words +4 and +0x10 of the command-6 parameter block written by the retained command function `0xef8fa0`, and the capture status word at `0x169d380` | no | the half-press command producer and the capture status writer are owned | required |
+| `MeasurementProfiles::profile_extent`, bound to `0xef5d44` as `src/capture_stock.rs` names it in `MEASUREMENT_PROFILES` | trampoline into retained stock | the profile geometry's retained `0xef5d44`, which tasks 3 and 7 also reach | no | the profile geometry owns `0xef5d44` and `profile_extent` binds to its Rust function | required |
+
 ## save
 
 The save facade and its retained image-5 services.

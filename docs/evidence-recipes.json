@@ -1,5 +1,31 @@
 [
   {
+    "id": "E-SHOT-CAPTURE-REENTRY-BOUNDS-150",
+    "claim": "A standalone production-rlib consumer completes capture after abort before readout and during calculations, with client replies {{before_readout_replies}} and {{during_calculations_replies}}. It translates {{client_count}} client areas, including last rectangle {{last_client_rectangle}}, while retaining {{record_entries}} record entries and raw diagnostic count {{dump_count}}.",
+    "scope": "Host-native Rust execution with synthetic external services and initialized boundary fixtures. The capture scenarios call public Shot::handle through abstract Ports; the area scenario calls public PrimaryJob against the retained external fixture. Stock execution is {{stock_executed}}. Separate ShotPorts regression cases exercise production composition. X-M1 1.50 bytes ground the client/record capacities; this is not full-system or camera qualification.",
+    "notes": "The client list has capacity 20 and the record list capacity 10. Translation retains valid client entries beyond ten; record publication and diagnostics stay within the ten-entry record and diagnostic-frame bounds. Raw counts are preserved. The receipt exercises count 12, not every oversize combination. Root callback routing, stale/out-of-order completions, actual shared storage, stock equivalence, image composition and camera behavior remain unqualified. The two callback contracts are distinct: f2c9c4 posts Image5e with 16 bytes; f2c918 replies status 8 only for status 0 and posts nothing.",
+    "artifacts": [
+      "private-data/scratch/ShotSequence/runs/20261114T041035Z-shot-review-public-consumer/result/verdict.json",
+      "private-data/scratch/ShotSequence/runs/20261114T041035Z-shot-review-public-consumer/result/inputs.sha256",
+      "private-data/scratch/ShotSequence/runs/20261114T041035Z-shot-review-public-consumer/result/compile.log",
+      "private-data/scratch/ShotSequence/runs/20261114T041035Z-shot-review-public-consumer/result/consumer.rs",
+      "private-data/scratch/ShotSequence/runs/20261114T041035Z-shot-review-public-consumer/result/primary_fixture.rs",
+      "private-data/scratch/ShotSequence/runs/20261114T034307Z-shot-review-before/result/before.log",
+      "private-data/scratch/ShotSequence/runs/20261114T035204Z-shot-client-list-before/result/before.log",
+      "private-data/scratch/ShotSequence/runs/20261114T035736Z-shot-review-verified/result/verified.log"
+    ],
+    "facts": [
+      {"name":"firmware_sha256","path":"private-data/scratch/ShotSequence/runs/20261114T041635Z-shot-review-reference/result/reference.json","pointer":["firmware_sha256"]},
+      {"name":"before_readout_replies","path":"private-data/scratch/ShotSequence/runs/20261114T041035Z-shot-review-public-consumer/result/verdict.json","pointer":["before_readout","replies"]},
+      {"name":"during_calculations_replies","path":"private-data/scratch/ShotSequence/runs/20261114T041035Z-shot-review-public-consumer/result/verdict.json","pointer":["during_calculations","replies"]},
+      {"name":"client_count","path":"private-data/scratch/ShotSequence/runs/20261114T041035Z-shot-review-public-consumer/result/verdict.json","pointer":["client_count"]},
+      {"name":"record_entries","path":"private-data/scratch/ShotSequence/runs/20261114T041035Z-shot-review-public-consumer/result/verdict.json","pointer":["record_entries"]},
+      {"name":"last_client_rectangle","path":"private-data/scratch/ShotSequence/runs/20261114T041035Z-shot-review-public-consumer/result/verdict.json","pointer":["last_client_rectangle"]},
+      {"name":"dump_count","path":"private-data/scratch/ShotSequence/runs/20261114T041035Z-shot-review-public-consumer/result/verdict.json","pointer":["dump_count"]},
+      {"name":"stock_executed","path":"private-data/scratch/ShotSequence/runs/20261114T041035Z-shot-review-public-consumer/result/verdict.json","pointer":["stock_executed"]}
+    ]
+  },
+  {
     "id": "E-FIXED-IMAGE-PLACEMENT-150",
     "claim": "A {{body_bytes}}-byte owned test body in a {{record_bytes}}-byte fixed record with {{publication_words}} staged words boots candidate DAT {{candidate_dat}} to the shooting menu on the retained engine ({{retained_boot}}) and FujiMod ({{fujimod_boot}}). Its load begins at {{load_begin}}, handoff is at {{handoff}}, and the first published entry is at {{first_entry}} model instructions, with {{entry_calls}} calls and {{fixed_fetches}} observed fixed-range fetches. A body-bit corruption halts before handoff ({{corrupt_halted}}), with {{corrupt_calls}} entry calls. With the lowered ceiling, the cardless capture-input scenario has heap-break high-water {{capture_peak}} with {{capture_headroom}} bytes of ceiling headroom, and the playback-input scenario has high-water {{playback_peak}} with {{playback_headroom}} bytes of headroom. Both restore post-boot checkpoints. The stock reset route has {{stock_writes}} writes after its boot fill. Narrowed ELF interface admission is {{interface_verdict}} for body {{admitted_body}}, with {{interface_instructions}} instructions, {{interface_transfers}} direct transfers and {{owned_stack}} owned direct-call stack bytes. Removing the retained continuation and supplying a zero stack budget are refused with exit statuses {{undeclared_exit}} and {{short_stack_exit}}.",
     "scope": "Emulated X-M1 1.50 fixed-record boot, one staged startup boundary entry, initialized data/BSS and corrupt-record fail-stop. Heap figures cover bounded cardless input scenarios, not admitted capture or saved-image decoding.",
