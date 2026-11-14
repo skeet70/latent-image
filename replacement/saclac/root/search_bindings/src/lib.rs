@@ -22,6 +22,7 @@ use xm1_saclac_shared::stock::Machine;
 pub struct State {
     pub configuration: Configuration,
     pub scan_drive: ScanDrive,
+    history: Option<[Option<[u16; 2]>; 5]>,
 }
 
 impl State {
@@ -36,7 +37,6 @@ pub struct Bindings<'a, M, R, E, P> {
     pub entries: &'a mut E,
     pub peers: &'a mut P,
     pub state: &'a mut State,
-    history: Option<[Option<[u16; 2]>; 5]>,
 }
 
 impl<'a, M: Machine, R: Memory, E: StockEntries, P> Bindings<'a, M, R, E, P> {
@@ -53,13 +53,12 @@ impl<'a, M: Machine, R: Memory, E: StockEntries, P> Bindings<'a, M, R, E, P> {
             entries,
             peers,
             state,
-            history: None,
         }
     }
 
     /// Refresh before dispatching a measurement event; the round owns the history itself.
     pub fn set_history(&mut self, history: &MeasurementHistory, kept: bool) {
-        self.history = (kept && history.started()).then(|| {
+        self.state.history = (kept && history.started()).then(|| {
             let mut entries = [None; 5];
             for (out, entry) in entries.iter_mut().zip(history.recent()) {
                 *out = entry.written().then(|| entry.cell_levels());

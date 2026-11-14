@@ -302,7 +302,7 @@ impl<M: Machine, R: Memory, E: StockEntries, P> Platform for Session<'_, '_, M, 
     }
     fn area_levels(&mut self) -> [u16; 2] {
         let b = self.bindings.borrow();
-        if let Some(Some(levels)) = b.history.map(|entries| entries[0]) {
+        if let Some(Some(levels)) = b.state.history.map(|entries| entries[0]) {
             return levels;
         }
         stock::area_levels(&*b.machine, &self.bytes(&group_16::AREA_STATISTICS))
@@ -521,7 +521,7 @@ impl<M: Machine, R: Memory, E: StockEntries, P> Platform for Session<'_, '_, M, 
         LensPosition(peak::peak_position(&mut Tables(&*b.machine), &curve))
     }
     fn measurement_history(&mut self) -> Option<[Option<[u16; 2]>; 5]> {
-        self.bindings.borrow().history
+        self.bindings.borrow().state.history
     }
     fn profile_focus(&mut self) -> i16 {
         self.shared(&group_27::AT_0244)
@@ -827,6 +827,7 @@ impl<M: Machine, R: Memory, E: StockEntries, P> IntakePorts for Session<'_, '_, 
         let threshold = Platform::setting(self, Setting::RecentPeakLevel) as u16;
         self.bindings
             .borrow()
+            .state
             .history
             .and_then(|entries| entries[0])
             .is_some_and(|levels| levels.into_iter().any(|level| level >= threshold))

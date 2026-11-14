@@ -21,6 +21,7 @@ pub struct Services<M, R, E, P> {
     pub(crate) peers: P,
     pub(crate) acquisition: crate::acquisition::AcquisitionState,
     pub(crate) search: xm1_saclac_search_bindings::State,
+    pub(crate) selection_publication: crate::controller_services::SelectionPublication,
 }
 
 impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Services<M, R, E, P> {
@@ -34,6 +35,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Services<M, R, E, P> {
             peers,
             acquisition: crate::acquisition::AcquisitionState::default(),
             search: xm1_saclac_search_bindings::State::default(),
+            selection_publication: crate::controller_services::SelectionPublication::default(),
         }
     }
 

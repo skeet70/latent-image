@@ -624,7 +624,7 @@ The helpers several saclac modules call (`replacement/saclac/shared`), over the 
 
 ## saclac_root
 
-saclac's composition root (`replacement/saclac/root`): `Services`, `StageDriver` and `GeometryBindings` bind module ports to the merged modules; `saclac_peers::PeerPorts` supplies kernel queue posts. Remaining retained calls and layouts live in `src/stock.rs` and `src/stock/`, entered or read through `saclac_shared::Machine`. The rows below register those boundaries.
+saclac's composition root (`replacement/saclac/root`): `Services`, `StageDriver` and `GeometryBindings` bind module ports to the merged modules; `saclac_peers::PeerPorts` supplies kernel queue posts. Retained calls and layouts are explicit `saclac_shared::Machine` boundaries in `src/stock.rs`, `src/stock/` and the controller service adapters. The rows below register those boundaries.
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
@@ -662,6 +662,9 @@ saclac's composition root (`replacement/saclac/root`): `Services`, `StageDriver`
 | Calc1 completion callbacks `0xf33568`/`0xf241a8` (0x87/0x9b), `0xf33520`/`0xf241d4` (0x88/0x9c); profile-record selection/rate hook words in groups 20 `AT_0158`/`AT_016C` (13/5 arguments) | trampoline into retained stock | calc1 and the record's retained consumers | no | completion and record consumers use typed owned events; no callback registry is introduced | required |
 | `stock/acquisition.rs`: the catalog-backed focus result (132 bytes), selection (44), exposure mirror (76), rate (40), program choice (24), position pairs and grid publications; calc1 result/shot/saved records and live/S1 window/setting regions via `saclac_interface::stock::round_acquisition` | guest-memory layout view | retained profile, calc1 and shot consumers | no | all consumers accept owned typed records; exposure mirror writes require mode flag exactly 1 and preserve unmodified bytes | required |
 | Acquisition shared memory: calc1 grid `0x16d4280`; live/S1 grid `0x16bf370`/`0x16b6030`; shot reference/word/defaults `0x16b3d38`/`0x16ad738`/`0x16bfc30`; history `0x5ffee314`..`0x5ffee618`; release classes/offsets/extra/copy `0x5ffbf930`/`0x5ffbece0`/`0x5ffbf4e0`/`0x5ffb6120`, extra source `0x5ffc6340`, snapshot copy source `0x5ffec1b4`; imgdc selection/focus tables `0x16f4488`/`0x16f224c` | guest-memory layout view | calc1, imgdc, capture pipeline and shot sequence | no | those consumers share owned storage and typed publications | required |
+| Controller channel hold/claim/publication services `0x74046c`, `0x740404`, `0x740d50`, `0x740cf8`, `0x740cc4`, `0x740bd4`, `0x740b80`, `0x740ad8`; curve level/interpolation/combine `0x7499a0`, `0x746018`, `0x74714c` | trampoline into retained stock | shared configuration channel and lens table services; result adoption, measured level and curve positions call owned Rust directly | no | the shared services are owned and qualified | required |
+| Controller lens queries `0x76da48`, `0x76dad4`, `0x76fc4c`, `0x76fbac` in addition to the registered shared probes; `0x76fbac` writes separate channel and fraction outputs | trampoline into retained stock | shared lens control state | no | lens control is owned and linked | required |
+| Library diagnostic buffers at `0x1fea2280`, `0x5fead820`, snapshot `0x5ffdb9ec`, memory copy/fill `0x74213c`/`0x742154`; controller Prepare's four-word source pointer | guest-memory layout view | retained diagnostic readers and the command producer; published selection kind/speed/area/exposure are root-owned state | no | all diagnostic and command consumers use owned typed storage | required |
 
 ## saclac_config
 
