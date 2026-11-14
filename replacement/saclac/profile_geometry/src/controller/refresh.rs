@@ -54,13 +54,15 @@ impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
     /// 0xed8b2c.
     pub fn apply_parameters(&mut self, new: &Parameters) -> Status {
         self.update_parameters(new.bytes());
-        self.refresh_operations()
+        let _ = self.refresh_operations();
+        Ok(())
     }
 
     /// 0xed8b6c.
     pub fn apply_status(&mut self, new: &StatusSnapshot) -> Status {
         self.update_status(new.bytes());
-        self.refresh_operations()
+        let _ = self.refresh_operations();
+        Ok(())
     }
 
     /// Stores `new` at `at` when it differs; true when it did.

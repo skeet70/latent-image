@@ -54,13 +54,16 @@ pub struct AreaList {
 }
 
 impl AreaList {
-    pub fn bytes(&self) -> [u8; AREA_LIST_BYTES] {
-        let mut bytes = [0; AREA_LIST_BYTES];
-        bytes[..4].copy_from_slice(&self.count.to_le_bytes());
-        for (index, area) in self.areas.iter().enumerate() {
-            bytes[4 + index * AREA_BYTES..][..AREA_BYTES].copy_from_slice(&area.0);
+    /// Writes a retained caller's output, preserving present-area bytes +0x27 and +0x33.
+    pub fn write_into(&self, destination: &mut [u8; AREA_LIST_BYTES]) {
+        destination[..4].copy_from_slice(&self.count.to_le_bytes());
+        let count = (self.count as usize).min(AREAS);
+        for (area, output) in self.areas.iter().zip(destination[4..].chunks_exact_mut(AREA_BYTES)).take(count) {
+            output[..0x27].copy_from_slice(&area.0[..0x27]);
+            output[0x28..0x33].copy_from_slice(&area.0[0x28..0x33]);
+            output[0x34..].copy_from_slice(&area.0[0x34..]);
         }
-        bytes
+        destination[4 + count * AREA_BYTES..].fill(0);
     }
 
     pub fn present(&mut self) -> &mut [Area] { &mut self.areas[..(self.count as usize).min(AREAS)] }
@@ -94,18 +97,36 @@ const FIELDS: [(usize, usize, usize); 23] = [
     (0x64, 0x50, 4),
 ];
 
-/// 0xeec1a0: at most ten areas, the rest of the list zero. Halfword and byte fields widen into
-/// zeroed words; the bytes at +0x27 and +0x33 of a converted area, which stock leaves as they
-/// were, are zero.
+/// Converts an answer for owned geometry operations. Retained output uses `AreaList::write_into`.
 pub fn area_list(answer: &TransitionAreas) -> AreaList {
     let count = answer.count.min(AREAS as u8) as usize;
     let mut list = AreaList { count: count as u32, areas: [Area([0; AREA_BYTES]); AREAS] };
     for (area, source) in list.areas.iter_mut().zip(&answer.areas).take(count) {
-        for (to, from, bytes) in FIELDS {
-            area.0[to..to + bytes].copy_from_slice(&source[from..from + bytes]);
-        }
+        copy_area_fields(source, &mut area.0);
     }
     list
+}
+
+/// 0xeec1a0: converts into an initialized caller buffer, preserving present-area +0x27/+0x33.
+pub fn convert_into(answer: &TransitionAreas, destination: &mut [u8; AREA_LIST_BYTES]) {
+    let count = answer.count.min(AREAS as u8) as usize;
+    destination[..4].copy_from_slice(&(count as u32).to_le_bytes());
+    for (source, output) in answer.areas.iter().zip(destination[4..].chunks_exact_mut(AREA_BYTES)).take(count) {
+        for offset in [0x00, 0x04, 0x08, 0x0c, 0x10, 0x14] {
+            output[offset + 2..offset + 4].fill(0);
+        }
+        for offset in [0x18, 0x1c] {
+            output[offset + 1..offset + 4].fill(0);
+        }
+        copy_area_fields(source, output);
+    }
+    destination[4 + count * AREA_BYTES..].fill(0);
+}
+
+fn copy_area_fields(source: &[u8; TRANSITION_AREA_BYTES], destination: &mut [u8]) {
+    for (to, from, bytes) in FIELDS {
+        destination[to..to + bytes].copy_from_slice(&source[from..from + bytes]);
+    }
 }
 
 /// The query's halfwords in their stock order.
