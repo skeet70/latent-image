@@ -12,11 +12,17 @@ use xm1_saclac_calc::adjust::{
     scan_drive::{AreaTiming, SampleAreas, SampleTiming},
 };
 use xm1_saclac_controllers::children::{ChildEvent, ChildOutcome, SearchControl};
-use xm1_saclac_controllers::search::LensPosition;
+use xm1_saclac_controllers::search::{
+    FocusSearch, LensPosition, SearchDecision, SearchInput, SearchTerminal,
+};
 use xm1_saclac_focus_search::{
     contrast::settings::StepKind,
-    contrast::{Context, ContrastSearch, Platform, ScanFrame, ScanQuery, StepQuery, TravelLimits},
-    live::{LaneEvent, LaneStatus, LiveSearch},
+    contrast::{
+        BridgeDrive, Context, ContrastSearch, Platform, ScanFrame, ScanQuery, StepQuery,
+        TravelLimits,
+    },
+    intake::IntakePorts,
+    live::{LaneEvent, LaneStatus, LiveSearch, LiveStrategy, Measurement},
     s1::S1Search,
 };
 use xm1_saclac_interface::search::{BridgeReport, BridgeStatus, LensClass};
@@ -922,63 +928,113 @@ fn live_and_s1_interleave_over_one_service_borrow_and_drain_independently() {
     let mut s1_ports = Session::new(&bindings, &s1_record);
     let mut live = LiveSearch::new(ContrastSearch::new(live_ports), Context::new());
     let mut s1 = S1Search::new();
-    assert_eq!(live.handle(LaneEvent::Initialize, &mut live_ports), LaneStatus::Complete);
-    assert_eq!(live.handle(LaneEvent::Enable, &mut live_ports), LaneStatus::Complete);
     assert_eq!(
-        control(&mut s1, &mut s1_ports, SearchControl::Initialize, s1_record.0.get()),
+        live.handle(LaneEvent::Initialize, &mut live_ports),
+        LaneStatus::Complete
+    );
+    assert_eq!(
+        live.handle(LaneEvent::Enable, &mut live_ports),
+        LaneStatus::Complete
+    );
+    assert_eq!(
+        control(
+            &mut s1,
+            &mut s1_ports,
+            SearchControl::Initialize,
+            s1_record.0.get()
+        ),
         ChildOutcome::Complete
     );
     assert_eq!(
-        control(&mut s1, &mut s1_ports, SearchControl::Start, s1_record.0.get()),
+        control(
+            &mut s1,
+            &mut s1_ports,
+            SearchControl::Start,
+            s1_record.0.get()
+        ),
         ChildOutcome::Pending
     );
-    assert_eq!(live.handle(LaneEvent::Work, &mut live_ports), LaneStatus::Pending);
-    assert_eq!(live.handle(LaneEvent::Stop, &mut live_ports), LaneStatus::Pending);
     assert_eq!(
-        control(&mut s1, &mut s1_ports, SearchControl::Cancel, s1_record.0.get()),
+        live.handle(LaneEvent::Work, &mut live_ports),
+        LaneStatus::Pending
+    );
+    assert_eq!(
+        live.handle(LaneEvent::Stop, &mut live_ports),
+        LaneStatus::Pending
+    );
+    assert_eq!(
+        control(
+            &mut s1,
+            &mut s1_ports,
+            SearchControl::Cancel,
+            s1_record.0.get()
+        ),
         ChildOutcome::Pending
     );
     let evaluated = words(&[0, 0x90000000]);
-    let live_event = live_ports.live_completion(Completed {
-        completion: Completion::Calculation89,
-        parameters: interface::parameters(&evaluated),
-    }).unwrap();
-    assert_eq!(live.handle(live_event, &mut live_ports), LaneStatus::Pending);
+    let live_event = live_ports
+        .live_completion(Completed {
+            completion: Completion::Calculation89,
+            parameters: interface::parameters(&evaluated),
+        })
+        .unwrap();
     assert_eq!(
-        s1.handle(ChildEvent::Completed {
-            completed: Completed {
-                completion: Completion::Calculation9d,
-                parameters: interface::parameters(&evaluated),
+        live.handle(live_event, &mut live_ports),
+        LaneStatus::Pending
+    );
+    assert_eq!(
+        s1.handle(
+            ChildEvent::Completed {
+                completed: Completed {
+                    completion: Completion::Calculation9d,
+                    parameters: interface::parameters(&evaluated),
+                },
+                record: s1_record.0.get(),
             },
-            record: s1_record.0.get(),
-        }, &mut s1_ports),
+            &mut s1_ports
+        ),
         ChildOutcome::Pending
     );
-    let traffic: Vec<_> = posts(&k).into_iter().map(|(queue, operation, bytes)| {
-        (queue, operation, stock::word(&bytes, 0))
-    }).collect();
-    assert_eq!(traffic, [
-        (44, 0x3c09, 0xf25758),
-        (44, 0x3c09, 0xf3c104),
-        (47, 0x3f2e, 0xf3c14c),
-        (47, 0x3f44, 0xf25728),
-    ]);
+    let traffic: Vec<_> = posts(&k)
+        .into_iter()
+        .map(|(queue, operation, bytes)| (queue, operation, stock::word(&bytes, 0)))
+        .collect();
     assert_eq!(
-        live.handle(LaneEvent::LensReported(report(BridgeStatus::Moved)), &mut live_ports),
+        traffic,
+        [
+            (44, 0x3c09, 0xf25758),
+            (44, 0x3c09, 0xf3c104),
+            (47, 0x3f2e, 0xf3c14c),
+            (47, 0x3f44, 0xf25728),
+        ]
+    );
+    assert_eq!(
+        live.handle(
+            LaneEvent::LensReported(report(BridgeStatus::Moved)),
+            &mut live_ports
+        ),
         LaneStatus::Complete
     );
     let reported = words(&[0, (-30i16) as u16 as u32, 2]);
     assert_eq!(
-        s1.handle(ChildEvent::Completed {
-            completed: Completed {
-                completion: Completion::Image5a,
-                parameters: interface::parameters(&reported),
+        s1.handle(
+            ChildEvent::Completed {
+                completed: Completed {
+                    completion: Completion::Image5a,
+                    parameters: interface::parameters(&reported),
+                },
+                record: s1_record.0.get(),
             },
-            record: s1_record.0.get(),
-        }, &mut s1_ports),
+            &mut s1_ports
+        ),
         ChildOutcome::Complete
     );
-    assert!(!bindings.borrow().machine.calls().iter().any(|call| call.0 == 0xf46c20));
+    assert!(!bindings
+        .borrow()
+        .machine
+        .calls()
+        .iter()
+        .any(|call| call.0 == 0xf46c20));
     println!("shared-service smoke: traffic={traffic:x?}; live=Complete; S1=Complete; faults=0");
 }
 
@@ -1017,4 +1073,192 @@ fn live_evaluation_publishes_lens_row_before_step_in_the_shot_status() {
         .unwrap();
     assert_eq!(stock::word(&status, 0), 1);
     assert_eq!((stock::word(&status, 12), stock::word(&status, 16)), (0, 3));
+}
+
+struct TerminalCandidate<P> {
+    stock: ContrastSearch<P>,
+    outcome: SearchTerminal,
+}
+
+struct TerminalContext {
+    stock: Context,
+    notifications: Vec<SearchTerminal>,
+    samples: usize,
+    resumes: usize,
+}
+
+impl<P: Platform + IntakePorts> FocusSearch for TerminalCandidate<P> {
+    type Context = TerminalContext;
+    type Sample = Measurement<xm1_saclac_interface::search::Evaluation>;
+    type Drive = BridgeDrive;
+
+    fn advance(
+        &mut self,
+        context: &mut TerminalContext,
+        input: SearchInput<Self::Sample>,
+    ) -> SearchDecision<BridgeDrive> {
+        match input {
+            SearchInput::Sample(_) => {
+                context.samples += 1;
+                SearchDecision::Terminal(self.outcome)
+            }
+            SearchInput::Cancel => SearchDecision::Terminal(self.outcome),
+            SearchInput::Resume => {
+                context.resumes += 1;
+                self.stock.advance(&mut context.stock, SearchInput::Resume)
+            }
+            SearchInput::Initialize
+            | SearchInput::Begin
+            | SearchInput::Suspend
+            | SearchInput::ResumePending => self.stock.advance(&mut context.stock, input),
+        }
+    }
+}
+
+impl<P: Platform + IntakePorts> LiveStrategy for TerminalCandidate<P> {
+    type Evaluation = xm1_saclac_interface::search::Evaluation;
+    type Record = xm1_saclac_interface::search::SearchRecord;
+
+    fn ready(&mut self, context: &TerminalContext, bridge_busy: bool) -> bool {
+        self.stock.ready(&context.stock, bridge_busy)
+    }
+    fn take_in(&mut self, context: &mut TerminalContext) -> Self::Record {
+        self.stock.take_in(&mut context.stock)
+    }
+    fn lens_reported(&mut self, context: &mut TerminalContext, report: BridgeReport) {
+        self.stock.lens_reported(&mut context.stock, report);
+    }
+    fn release(&mut self, context: &TerminalContext) -> BridgeDrive {
+        self.stock.release(&context.stock)
+    }
+    fn accepts_begin(&self, context: &TerminalContext) -> bool {
+        self.stock.accepts_begin(&context.stock)
+    }
+    fn finished(&mut self, context: &mut TerminalContext, outcome: SearchTerminal) {
+        context.notifications.push(outcome);
+    }
+}
+
+#[test]
+fn binding_preserves_terminal_outcomes_quiescence_resume_and_stop_drain() {
+    for outcome in [
+        SearchTerminal::Focused(LensPosition(-37)),
+        SearchTerminal::Failed,
+        SearchTerminal::Cancelled,
+    ] {
+        let mut f = Fixture::new();
+        let observer = f.machine.clone();
+        let k = kernel();
+        let cx = k.task().unwrap();
+        let mut peers = PeerPorts::new(&cx, EmulatorOnly::new(&SAFETY_MARKER).unwrap());
+        let record = RecordBinding::new(f.record);
+        let bindings = RefCell::new(Bindings::new(
+            &mut f.machine,
+            &mut f.records,
+            &mut f.entries,
+            &mut peers,
+            &mut f.state,
+        ));
+        let mut ports = Session::new(&bindings, &record);
+        let candidate = TerminalCandidate {
+            stock: ContrastSearch::new(ports),
+            outcome,
+        };
+        let context = TerminalContext {
+            stock: Context::new(),
+            notifications: Vec::new(),
+            samples: 0,
+            resumes: 0,
+        };
+        let mut lane = LiveSearch::new(candidate, context);
+        assert_eq!(
+            ports.handle_live(&mut lane, LaneEvent::Initialize),
+            LaneStatus::Complete
+        );
+        assert_eq!(
+            ports.handle_live(&mut lane, LaneEvent::Enable),
+            LaneStatus::Complete
+        );
+        assert_eq!(
+            ports.handle_live(&mut lane, LaneEvent::Work),
+            LaneStatus::Pending
+        );
+        let evaluated = words(&[0, 0x90000000]);
+        let event = ports
+            .live_completion(Completed {
+                completion: Completion::Calculation89,
+                parameters: interface::parameters(&evaluated),
+            })
+            .unwrap();
+        assert_eq!(
+            ports.handle_live(&mut lane, event),
+            LaneStatus::Terminal(outcome)
+        );
+        assert_eq!(lane.context().notifications, [outcome]);
+        assert_eq!(lane.context().samples, 1);
+        let calls = observer.calls();
+        let requests = posts(&k);
+        assert_eq!((requests[0].0, requests[0].1), (44, 0x3c09));
+        for _ in 0..2 {
+            assert_eq!(
+                ports.handle_live(&mut lane, LaneEvent::Work),
+                LaneStatus::Terminal(outcome)
+            );
+            assert_eq!(
+                ports.handle_live(&mut lane, LaneEvent::Suspend),
+                LaneStatus::Complete
+            );
+        }
+        assert_eq!(observer.calls(), calls);
+        assert_eq!(posts(&k), requests);
+        assert_eq!(lane.context().notifications, [outcome]);
+        assert_eq!(
+            ports.handle_live(&mut lane, LaneEvent::Resume),
+            LaneStatus::Complete
+        );
+        assert_eq!(lane.context().resumes, 1);
+        assert_eq!(
+            ports.handle_live(&mut lane, LaneEvent::Work),
+            LaneStatus::Pending
+        );
+        assert_eq!(
+            ports.handle_live(&mut lane, LaneEvent::Stop),
+            LaneStatus::Terminal(outcome)
+        );
+        assert_eq!(lane.context().notifications, [outcome, outcome]);
+        assert_eq!(
+            ports.handle_live(&mut lane, LaneEvent::Work),
+            LaneStatus::Idle
+        );
+        assert_eq!(
+            posts(&k).iter().map(|p| (p.0, p.1)).collect::<Vec<_>>(),
+            [(44, 0x3c09), (44, 0x3c09)]
+        );
+        let event = ports
+            .live_completion(Completed {
+                completion: Completion::Calculation89,
+                parameters: interface::parameters(&evaluated),
+            })
+            .unwrap();
+        assert_eq!(ports.handle_live(&mut lane, event), LaneStatus::Pending);
+        assert_eq!(lane.context().samples, 1);
+        let release = &posts(&k)[2];
+        assert_eq!((release.0, release.1), (47, 0x3f2e));
+        assert_eq!(stock::word(&release.2, 0), 0xf3c14c);
+        assert_eq!(stock::half(&release.2, 16), 0);
+        assert_eq!(stock::word(&release.2, 24), 0);
+        let moved = words(&[0, u32::from((-30i16) as u16), 2]);
+        let event = ports
+            .live_completion(Completed {
+                completion: Completion::Image46,
+                parameters: interface::parameters(&moved),
+            })
+            .unwrap();
+        assert_eq!(ports.handle_live(&mut lane, event), LaneStatus::Complete);
+        assert_eq!(lane.context().notifications, [outcome, outcome]);
+        assert!(!observer.calls().iter().any(|c| c.0 == 0xf46c20));
+        println!(
+            "terminal binding smoke: {outcome:?}; resumed; stop calc drained; release completed"
+        );
+    }
 }

@@ -102,6 +102,18 @@ impl<M: Machine, R: Memory, E: StockEntries, P> Session<'_, '_, M, R, E, P> {
 }
 
 impl<M: Machine, R: Memory, E: StockEntries, P> Session<'_, '_, M, R, E, P> {
+    /// Preserve typed terminal outcomes for the root router.
+    pub fn handle_live<S: live::LiveStrategy>(
+        &mut self,
+        search: &mut live::LiveSearch<S>,
+        event: live::LaneEvent<S::Evaluation>,
+    ) -> live::LaneStatus
+    where
+        Self: live::Ports<S::Record, S::Drive>,
+    {
+        search.handle(event, self)
+    }
+
     /// Decode the two completions the round forwards to the live search.
     pub fn live_completion(
         &self,
