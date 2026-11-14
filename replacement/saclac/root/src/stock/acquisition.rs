@@ -1,13 +1,25 @@
 #![forbid(unsafe_code)]
 
 //! X-M1 1.50 layouts of the shared-block records the measurement round's acquisition reads and
-//! writes, and the configuration keys it reads.
+//! writes, the configuration keys it reads, the memory it shares with calc1, imgdc and the shot,
+//! and the retained entries it enters.
 
 use xm1_focus_measurement_round::acquisition::ports::{
-    AcquisitionBlock, ExposureRecordUpdate, ProgramChoice, RateRecord, ReleaseSettings, SelectionRecord, StatisticsBuffer,
+    AcquisitionBlock, AcquisitionSettings, Branch, ExposureRecordUpdate, GridInputs, GridReference, ModeInputs, PositionInputs,
+    ProgramChoice, ProgramTarget, Range, RangeInputs, RateNotice, RateRecord, ReleaseSettings, SelectionNotice, SelectionPosition,
+    SelectionRecord, ShotContext, StatisticsBuffer, TargetInputs,
 };
 use xm1_focus_measurement_round::auxiliary::ResourceIndex;
-use xm1_focus_measurement_round::pipeline::{PipelineWord, TimingWord};
+use xm1_focus_measurement_round::pipeline::{HistoryStatistics, PipelineWord, Statistics, TimingWord};
+use xm1_focus_measurement_round::profile::GridCell;
+use xm1_focus_measurement_round::record::TraceMark;
+use xm1_focus_measurement_round::stock::{SNAPSHOT_BYTES, S1_SAMPLE_BYTES};
+use xm1_saclac_interface::calc::{AcquisitionGrid, SharedAddress};
+use xm1_saclac_interface::round_acquisition::SavedSelection;
+use xm1_saclac_interface::stock::round_acquisition::{SelectionRegion, LIVE_REGION, S1_REGION};
+use xm1_saclac_interface::stock::{record_handle_word, StockCallbackWord};
+use xm1_saclac_interface::{Completion, RecordHandle};
+use xm1_saclac_shared::stock::{Argument, Machine};
 
 /// A value at a byte offset of a record, little-endian.
 trait Packed: Sized {
@@ -177,36 +189,525 @@ pub fn put_words<const N: usize, const BYTES: usize>(bytes: &mut [u8; BYTES], wo
 
 /// Configuration keys the acquisition reads through 0x69f8fc (0xf34c98, 0xf3515c, 0xf2457c,
 /// 0xf332d0, 0xf367a4, 0xf3579c).
-pub mod keys {
-    /// Grid copy and extra statistics (0xf35b64, 0xf350c8).
-    pub const SNAPSHOT_GRID: u32 = 0x4a07;
-    pub const RATE: u32 = 0x5256;
-    pub const S1_RATE: u32 = 0x5257;
-    /// Bit 0 draws the rate status.
-    pub const RATE_STATUS: u32 = 0x5258;
-    /// Bit 7 draws the rate.
-    pub const DRAWS_RATE: u32 = 0xa8;
-    /// Bit 0 opens the selection gate (0xf332d0).
-    pub const GATE: u32 = 0x65a6;
-    pub const RATE_DIVISOR: u32 = 0x657d;
-    /// Bit 3 of the halfword suppresses the eligible word (0xf353a0).
-    pub const SUPPRESSES_ELIGIBLE: u32 = 0xe8;
-    pub const TOP_STEPS: u32 = 0x24f;
-    /// 1 leaves trace marks.
-    pub const TRACES: u32 = 0x24e;
+const SNAPSHOT_GRID: u32 = 0x4a07;
+const RATE: u32 = 0x5256;
+const S1_RATE: u32 = 0x5257;
+const RATE_STATUS: u32 = 0x5258;
+const DRAWS_RATE: u32 = 0xa8;
+const GATE: u32 = 0x65a6;
+const RATE_DIVISOR: u32 = 0x657d;
+/// The low byte of the halfword 0x69fec8 reads at 232 (0xf353a0).
+const SUPPRESSES_ELIGIBLE: u32 = 0xe8;
+const TOP_STEPS: u32 = 0x24f;
+const TRACES: u32 = 0x24e;
+/// The release's signed tens of the bounds, class weights and signed offsets (0xf34c98).
+const RELEASE_BOUNDS: [u32; 4] = [0x6484, 0x6485, 0x6486, 0x6487];
+const RELEASE_WEIGHTS: [[u32; 2]; 4] = [[0x648c, 0x648d], [0x6488, 0x6489], [0x6494, 0x6495], [0x6492, 0x6493]];
+const RELEASE_OFFSETS: [u32; 3] = [0x64a0, 0x64a1, 0x64a2];
+
+/// The acquisition's settings from the configuration bytes `byte` reads.
+pub fn acquisition_settings(byte: impl Fn(u32) -> u8) -> AcquisitionSettings {
+    AcquisitionSettings {
+        snapshot_grid: byte(SNAPSHOT_GRID) != 0,
+        rate: byte(RATE),
+        s1_rate: byte(S1_RATE),
+        rate_status: byte(RATE_STATUS) & 1 != 0,
+        draws_rate: byte(DRAWS_RATE) & 0x80 != 0,
+        gate: byte(GATE) & 1 != 0,
+        rate_divisor: byte(RATE_DIVISOR) != 0,
+        suppresses_eligible: byte(SUPPRESSES_ELIGIBLE) & 8 != 0,
+        top_steps: byte(TOP_STEPS),
+        traces: byte(TRACES) == 1,
+        release: ReleaseSettings {
+            bounds: RELEASE_BOUNDS.map(|key| byte(key) as i8),
+            weights: RELEASE_WEIGHTS.map(|pair| pair.map(&byte)),
+            offsets: RELEASE_OFFSETS.map(|key| byte(key) as i8),
+        },
+    }
 }
 
-/// The release settings' keys (0xf34c98): signed tens of the bounds, the class weights and the
-/// signed offsets.
-pub const RELEASE_BOUNDS: [u32; 4] = [0x6484, 0x6485, 0x6486, 0x6487];
-pub const RELEASE_WEIGHTS: [[u32; 2]; 4] = [[0x648c, 0x648d], [0x6488, 0x6489], [0x6494, 0x6495], [0x6492, 0x6493]];
-pub const RELEASE_OFFSETS: [u32; 3] = [0x64a0, 0x64a1, 0x64a2];
+fn handle(record: RecordHandle) -> Argument { Argument::Word(record_handle_word(record)) }
 
-/// The release settings from the configuration bytes `byte` reads.
-pub fn release_settings(byte: impl Fn(u32) -> u8) -> ReleaseSettings {
-    ReleaseSettings {
-        bounds: RELEASE_BOUNDS.map(|key| byte(key) as i8),
-        weights: RELEASE_WEIGHTS.map(|pair| pair.map(&byte)),
-        offsets: RELEASE_OFFSETS.map(|key| byte(key) as i8),
+/// A halfword the entry takes sign-extended.
+fn signed(value: i16) -> Argument { Argument::Word(value as i32 as u32) }
+
+fn word(value: u32) -> Argument { Argument::Word(value) }
+
+fn enter(machine: &impl Machine, address: u32, arguments: &[Argument]) -> u32 { machine.enter_with(address, arguments, &mut []) }
+
+fn read_bytes<const N: usize>(machine: &impl Machine, address: u32) -> [u8; N] {
+    core::array::from_fn(|index| {
+        let at = address.wrapping_add(index as u32);
+        (machine.read_u16(at & !1) >> (8 * (at & 1))) as u8
+    })
+}
+
+fn write_bytes(machine: &mut impl Machine, address: u32, bytes: &[u8]) {
+    for (offset, &byte) in bytes.iter().enumerate() {
+        machine.write_u8(address.wrapping_add(offset as u32), byte);
     }
+}
+
+/// The record values only retained entries give: the mode word (0xfa7634), the updated position
+/// and its halfword (0xfa7954, 0xfa7984), the converted level (0xfa6bb4), the restore adjustment
+/// (0xf5f9fc), the decade of the profile index (0xef74e4) and the lens limit (0xf51b94 with
+/// 0xffff).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RecordEntries {
+    pub mode: u32,
+    pub updated_position: u32,
+    pub position_halfword: u16,
+    pub converted_level: u32,
+    pub restore_adjustment: u16,
+    pub decade: u16,
+    pub lens_limit: u32,
+}
+
+pub fn record_entries(machine: &impl Machine, record: RecordHandle, profile_index: u32) -> RecordEntries {
+    let of = |address| enter(machine, address, &[handle(record)]);
+    RecordEntries {
+        mode: of(0xfa_7634),
+        updated_position: of(0xfa_7954),
+        position_halfword: of(0xfa_7984) as u16,
+        converted_level: of(0xfa_6bb4),
+        restore_adjustment: of(0xf5_f9fc) as u16,
+        decade: enter(machine, 0xef_74e4, &[word(profile_index)]) as u16,
+        lens_limit: enter(machine, 0xf5_1b94, &[handle(record), word(0xffff)]),
+    }
+}
+
+/// 0xf4f16c: the record's chosen word for `lens`, 0xffff naming none.
+pub fn lens_word(machine: &impl Machine, record: RecordHandle, lens: Option<ResourceIndex>) -> u32 {
+    enter(machine, 0xf4_f16c, &[handle(record), word(lens.map_or(0xffff, |lens| lens.0))])
+}
+
+/// 0xfa7edc.
+pub fn acquisition_gain_step(machine: &impl Machine, adjustment: u32) -> u32 { enter(machine, 0xfa_7edc, &[word(adjustment)]) }
+
+/// 0xef7820.
+pub fn kind_decade(machine: &impl Machine, kind: u32) -> u32 { enter(machine, 0xef_7820, &[word(kind)]) }
+
+/// 0xf797f0 with the lens reference, else 0xf79b94: the target block at the buffer's start (base
+/// +0, level +2, exposure +4, gain level +8 preset, second +0xa, adjustment +0xc) and the offset
+/// halfword after it, in and out; the entry returns the adjustment flag.
+pub fn program_target(machine: &impl Machine, inputs: &TargetInputs) -> ProgramTarget {
+    const OFFSET: usize = 0x10;
+    let mut buffer = [0; OFFSET + 2];
+    inputs.gain_level.put(&mut buffer, 8);
+    inputs.offset.put(&mut buffer, OFFSET);
+    let lead = [word(inputs.program.0), signed(inputs.reference as i16), word(inputs.lens.0), signed(inputs.level), signed(inputs.gain_offset)];
+    let adjustment_flag = match inputs.lens_reference {
+        Some(reference) => {
+            let arguments = [lead[0], lead[1], lead[2], lead[3], lead[4], word(reference), Argument::Buffer(0), Argument::Buffer(OFFSET)];
+            machine.enter_with(0xf7_97f0, &arguments, &mut buffer)
+        }
+        None => {
+            let arguments = [lead[0], lead[1], lead[2], lead[3], lead[4], Argument::Buffer(0), Argument::Buffer(OFFSET)];
+            machine.enter_with(0xf7_9b94, &arguments, &mut buffer)
+        }
+    };
+    ProgramTarget {
+        adjustment_flag,
+        base: u16::get(&buffer, 0),
+        level: u16::get(&buffer, 2),
+        exposure: PipelineWord::get(&buffer, 4),
+        gain_level: u16::get(&buffer, 8),
+        second: u16::get(&buffer, 0xa),
+        adjustment: u16::get(&buffer, 0xc),
+        offset: u16::get(&buffer, OFFSET),
+    }
+}
+
+/// 0xf7a0cc: `lower` is the program's lower bound 0xf7809c gives its callers; the level, first
+/// and second halfwords are in and out, the code and selected byte out, and the timing returned.
+pub fn program_range(machine: &impl Machine, inputs: &RangeInputs, lower: u32) -> Range {
+    let mut buffer = [0; 10];
+    inputs.level.put(&mut buffer, 0);
+    inputs.first.put(&mut buffer, 2);
+    inputs.second.put(&mut buffer, 4);
+    let arguments = [
+        word(inputs.program.0), word(inputs.exposure.0), word(lower), Argument::Buffer(0), Argument::Buffer(2), Argument::Buffer(4),
+        signed(inputs.adjustment), word(inputs.mode), word(inputs.argument), word(inputs.forced), word(inputs.primary),
+        word(inputs.lens), word(inputs.alternate), word(inputs.request), word(0), Argument::Buffer(6), Argument::Buffer(8),
+    ];
+    let timing = machine.enter_with(0xf7_a0cc, &arguments, &mut buffer);
+    Range {
+        timing: TimingWord(timing),
+        level: u16::get(&buffer, 0),
+        first: u16::get(&buffer, 2),
+        second: u16::get(&buffer, 4),
+        code: u16::get(&buffer, 6),
+        selected: buffer[8],
+    }
+}
+
+/// 0x746804.
+pub fn lens_step(machine: &impl Machine, step: u32) -> u32 { enter(machine, 0x74_6804, &[word(step)]) }
+
+/// 0x1007e44.
+pub fn step_ratio(machine: &impl Machine, code: u16, selector: u8) -> u32 {
+    enter(machine, 0x100_7e44, &[word(u32::from(code)), word(u32::from(selector))])
+}
+
+/// 0xfab250.
+pub fn grid_count(machine: &impl Machine, selection: u32, mode: u32, adjustment: u32, grid_kind: u32) -> u32 {
+    enter(machine, 0xfa_b250, &[word(selection), word(mode), word(adjustment), word(grid_kind)])
+}
+
+/// 0xfa7e20.
+pub fn level_category(machine: &impl Machine, level: i16, selection: u32, adjustment: u32) -> u32 {
+    enter(machine, 0xfa_7e20, &[signed(level), word(selection), word(adjustment)])
+}
+
+/// 0xfa7bb8 over the five input words and the grid.
+pub fn fill_grid(machine: &impl Machine, inputs: &GridInputs, grid: &mut AcquisitionGrid) {
+    const GRID: usize = 20;
+    let mut buffer = [0; GRID + 1236];
+    inputs.timing.put(&mut buffer, 0);
+    inputs.lens_word.put(&mut buffer, 4);
+    [8, 12].put(&mut buffer, &inputs.positions);
+    inputs.window.put(&mut buffer, 16);
+    buffer[GRID..].copy_from_slice(&grid.0);
+    machine.enter_with(0xfa_7bb8, &[Argument::Buffer(0), Argument::Buffer(GRID)], &mut buffer);
+    grid.0.copy_from_slice(&buffer[GRID..]);
+}
+
+/// 0xfa9588, which the window request also carries as its second adjustment word.
+pub fn adjustment_option(machine: &impl Machine) -> u32 { enter(machine, 0xfa_9588, &[]) }
+
+/// 0xfa7604.
+pub fn refreshed_position(machine: &impl Machine) -> u32 { enter(machine, 0xfa_7604, &[]) }
+
+fn mode_arguments(inputs: &ModeInputs) -> [Argument; 8] {
+    [
+        word(inputs.grid_kind), word(u32::from(inputs.grid_byte)), word(inputs.selection), word(inputs.updated_position),
+        word(inputs.category), word(inputs.mode_flag), word(inputs.change_category), word(u32::from(inputs.grid_flag)),
+    ]
+}
+
+/// 0xfa66d4.
+pub fn mode_one(machine: &impl Machine, inputs: &ModeInputs) -> u32 { enter(machine, 0xfa_66d4, &mode_arguments(inputs)) }
+
+/// 0xfa672c.
+pub fn both_modes(machine: &impl Machine, inputs: &ModeInputs) -> u32 { enter(machine, 0xfa_672c, &mode_arguments(inputs)) }
+
+/// 0xf625cc.
+pub fn five_parameter_adjustment(machine: &impl Machine, arguments: [u32; 5]) -> u32 { enter(machine, 0xf6_25cc, &arguments.map(word)) }
+
+/// 0xfa6934 with its last two arguments 0.
+pub fn rate_divisor(machine: &impl Machine, updated_position: u32, change_category: u32, lens: ResourceIndex, grid_halfword: u16) -> u32 {
+    let arguments = [word(updated_position), word(change_category), word(lens.0), word(u32::from(grid_halfword)), word(0), word(0)];
+    enter(machine, 0xfa_6934, &arguments)
+}
+
+/// 0xf5ecb0.
+pub fn rate_limit(machine: &impl Machine, selection: u32, updated_position: u32, position_halfword: u16) -> u32 {
+    enter(machine, 0xf5_ecb0, &[word(selection), word(updated_position), word(u32::from(position_halfword))])
+}
+
+/// 0xf5ecc0.
+pub fn rate_mode(machine: &impl Machine, arguments: [u32; 4]) -> u16 { enter(machine, 0xf5_ecc0, &arguments.map(word)) as u16 }
+
+/// 0xf5f368.
+pub fn clamp_selection_difference(machine: &impl Machine, mode: u32, lens: ResourceIndex, level: i16, lens_halfword: u16, lens_reference: u32, target: i16) -> i16 {
+    let arguments = [word(mode), word(lens.0), signed(level), signed(lens_halfword as i16), word(lens_reference), signed(target)];
+    enter(machine, 0xf5_f368, &arguments) as i16
+}
+
+/// 0xf4ddbc returns 0 where an unflagged selection is allowed.
+pub fn allows_unflagged_selection(machine: &impl Machine, updated_position: u32, halfword: u16) -> bool {
+    enter(machine, 0xf4_ddbc, &[word(updated_position), word(u32::from(halfword))]) == 0
+}
+
+/// 0xf624a8 writes the setting from +0x1c, in place where calc1 reads it; the window takes back
+/// the signed level at +0x1e and the flag word at +0x28.
+pub fn capture_selection_position(machine: &impl Machine, setting: SharedAddress, branch: Branch, inputs: &PositionInputs) -> SelectionPosition {
+    let arguments = [
+        word(setting.0 + 0x1c), word(inputs.word), signed(inputs.level), word(inputs.updated_position),
+        word(u32::from(inputs.position_halfword)), word(inputs.mode_word), word(u32::from(inputs.byte)), word(u32::from(inputs.halfword)),
+        word(match branch { Branch::Live => 0, Branch::S1 => 1 }),
+    ];
+    enter(machine, 0xf6_24a8, &arguments);
+    SelectionPosition { level: machine.read_u16(setting.0 + 0x1e), flag: machine.read_u32(setting.0 + 0x28) }
+}
+
+/// 0xf4dd50.
+pub fn copy_rate_grid_source(machine: &impl Machine, buffer: StatisticsBuffer) { enter(machine, 0xf4_dd50, &[word(buffer.0)]); }
+
+/// 0xfa95b8 with the pair in and out.
+pub fn rate_pair(machine: &impl Machine, record: RecordHandle, result: SharedAddress, flag: u32, pair: &mut [u32; 2]) {
+    let mut buffer = [0; 8];
+    [0, 4].put(&mut buffer, pair);
+    let arguments = [handle(record), word(result.0), word(flag), Argument::Buffer(0), Argument::Buffer(4)];
+    machine.enter_with(0xfa_95b8, &arguments, &mut buffer);
+    *pair = [0, 4].get(&buffer);
+}
+
+/// 0xfa8520.
+pub fn rate_flag(machine: &impl Machine, record: RecordHandle, flag: u32) { enter(machine, 0xfa_8520, &[handle(record), word(flag)]); }
+
+/// 0xfa91b0.
+pub fn draw_rate(machine: &impl Machine, result: SharedAddress, flag: u32) { enter(machine, 0xfa_91b0, &[word(result.0), word(flag)]); }
+
+/// 0xf521d8.
+pub fn draw_rate_status(machine: &impl Machine, level: u16, status: u32, flag: u32) {
+    enter(machine, 0xf5_21d8, &[word(u32::from(level)), word(status), word(flag)]);
+}
+
+/// 0xfaa7b0 over a copy of the rate record: the word and halfword it writes out.
+pub fn rate_position(machine: &impl Machine, record: RecordHandle, rate: &[u8; 40]) -> (u32, u16) {
+    let mut buffer = [0; 48];
+    buffer[..40].copy_from_slice(rate);
+    let arguments = [handle(record), Argument::Buffer(0), Argument::Buffer(40), Argument::Buffer(44)];
+    machine.enter_with(0xfa_a7b0, &arguments, &mut buffer);
+    (u32::get(&buffer, 40), u16::get(&buffer, 44))
+}
+
+/// 0xf1c8fc over a copy of the rate record, with the level, second, word and the four levels in
+/// and out.
+pub fn selected_grid_reference(machine: &impl Machine, record: RecordHandle, rate: &[u8; 40], reference: GridReference) -> GridReference {
+    const LEVELS: [usize; 4] = [48, 50, 52, 54];
+    let mut buffer = [0; 56];
+    buffer[..40].copy_from_slice(rate);
+    reference.level.put(&mut buffer, 40);
+    reference.second.put(&mut buffer, 42);
+    reference.word.put(&mut buffer, 44);
+    LEVELS.put(&mut buffer, &reference.levels);
+    let at = Argument::Buffer;
+    let arguments = [handle(record), at(0), at(40), at(42), at(44), at(LEVELS[0]), at(LEVELS[1]), at(LEVELS[2]), at(LEVELS[3])];
+    machine.enter_with(0xf1_c8fc, &arguments, &mut buffer);
+    GridReference { level: u16::get(&buffer, 40), second: u16::get(&buffer, 42), word: u32::get(&buffer, 44), levels: LEVELS.get(&buffer) }
+}
+
+/// 256 statistics halfwords from the buffer's address.
+pub fn statistics_values(machine: &impl Machine, buffer: StatisticsBuffer) -> [u16; 256] {
+    core::array::from_fn(|index| machine.read_u16(buffer.0 + 2 * index as u32))
+}
+
+/// Where the release takes the extra statistics from (0xf350c8).
+const EXTRA_STATISTICS: u32 = 0x5ffc_6340;
+
+pub fn extra_statistics(machine: &impl Machine, values: &mut [u16]) {
+    for (index, value) in values.iter_mut().enumerate() {
+        *value = machine.read_u16(EXTRA_STATISTICS + 2 * index as u32);
+    }
+}
+
+/// 0x103af30.
+pub fn set_pipeline_reference(machine: &impl Machine, level: i16) { enter(machine, 0x103_af30, &[signed(level)]); }
+
+/// The pipeline slot of each capture, which 0xfea79c captures and 0xfea7ac copies out.
+const fn slot(statistics: Statistics) -> u32 {
+    match statistics {
+        Statistics::Primary => 0,
+        Statistics::Search => 1,
+        Statistics::Auxiliary => 2,
+        Statistics::History => 4,
+    }
+}
+
+pub fn capture(machine: &impl Machine, statistics: Statistics) { enter(machine, 0xfe_a79c, &[word(slot(statistics))]); }
+
+pub fn snapshot(machine: &impl Machine, statistics: Statistics) -> [u8; SNAPSHOT_BYTES] {
+    let mut buffer = [0; SNAPSHOT_BYTES];
+    machine.enter_with(0xfe_a7ac, &[word(slot(statistics)), Argument::Buffer(0)], &mut buffer);
+    buffer
+}
+
+/// 0xfeaacc(0) prepares slot 0's S1 sample; 0xfeaadc(0, out) copies it.
+pub fn prepare_s1_sample(machine: &impl Machine) { enter(machine, 0xfe_aacc, &[word(0)]); }
+
+pub fn s1_sample(machine: &impl Machine) -> [u8; S1_SAMPLE_BYTES] {
+    let mut buffer = [0; S1_SAMPLE_BYTES];
+    machine.enter_with(0xfe_aadc, &[word(0), Argument::Buffer(0)], &mut buffer);
+    buffer
+}
+
+/// An entry that writes one word through its last argument: what it returns and the word.
+fn word_out(machine: &impl Machine, address: u32, lead: Option<Argument>) -> (u32, u32) {
+    let mut buffer = [0; 4];
+    let returned = match lead {
+        Some(lead) => machine.enter_with(address, &[lead, Argument::Buffer(0)], &mut buffer),
+        None => machine.enter_with(address, &[Argument::Buffer(0)], &mut buffer),
+    };
+    (returned, u32::get(&buffer, 0))
+}
+
+/// 0xfea7bc.
+pub fn timing(machine: &impl Machine) -> TimingWord { TimingWord(word_out(machine, 0xfe_a7bc, None).1) }
+
+/// 0xfa95a8: a nonzero return leaves the interval unknown.
+pub fn frame_interval(machine: &impl Machine, timing: TimingWord) -> Option<u32> {
+    match word_out(machine, 0xfa_95a8, Some(word(timing.0))) {
+        (0, interval) => Some(interval),
+        _ => None,
+    }
+}
+
+/// 0x103b064.
+pub fn request_mode_six_statistics(machine: &impl Machine) { enter(machine, 0x103_b064, &[]); }
+
+/// 0xfea7cc writes 1 when the pipeline raised the window refresh (0xf2fec4).
+pub fn take_window_refresh(machine: &impl Machine) -> bool { word_out(machine, 0xfe_a7cc, None).1 == 1 }
+
+/// The history capture's banks (0x5ffee314, 0x5ffee414), its word (0x5ffee514) and the two
+/// halfword banks from 0x5ffee518, eight cells a row (0xf32838..0xf32878).
+pub fn history_statistics(machine: &impl Machine, cell: GridCell) -> HistoryStatistics {
+    let bank = |base: u32| core::array::from_fn(|index| machine.read_u32(base + 4 * index as u32));
+    let at = 0x5ffe_e518 + 2 * (cell.column + 8 * cell.row);
+    HistoryStatistics {
+        banks: [bank(0x5ffe_e314), bank(0x5ffe_e414)],
+        word: PipelineWord(machine.read_u32(0x5ffe_e514)),
+        cell_levels: [machine.read_u16(at), machine.read_u16(at + 128)],
+    }
+}
+
+/// Where 0xfea5c0 copies the selection table and 0xfeab3c the focus table before posting them.
+pub const SELECTION_TABLE: u32 = 0x16f_4488;
+pub const FOCUS_TABLE: u32 = 0x16f_224c;
+
+pub fn place(machine: &mut impl Machine, address: u32, bytes: &[u8]) { write_bytes(machine, address, bytes) }
+
+/// The shot's reference level (0xf36778) and selection word (0xf367f4).
+pub fn shot_reference_level(machine: &impl Machine) -> u16 { machine.read_u16(0x16b_3d38) }
+
+pub fn shot_selection_word(machine: &impl Machine) -> u32 { machine.read_u32(0x16a_d738) }
+
+/// 0xf162e4 builds the selection defaults at 0x16bfc30 (0xf3691c); the window reads their first
+/// word, the words at +8..+0x10 and the byte at +0x216.
+pub fn prepare_selection_defaults(machine: &impl Machine, record: RecordHandle) -> ShotContext {
+    const DEFAULTS: u32 = 0x16b_fc30;
+    enter(machine, 0xf1_62e4, &[word(DEFAULTS), handle(record), word(0), word(1), word(0)]);
+    ShotContext {
+        word: machine.read_u32(DEFAULTS),
+        words: [8, 12, 16].map(|offset| machine.read_u32(DEFAULTS + offset)),
+        byte: read_bytes::<1>(machine, DEFAULTS + 0x216)[0],
+    }
+}
+
+pub const fn region(branch: Branch) -> SelectionRegion {
+    match branch {
+        Branch::Live => LIVE_REGION,
+        Branch::S1 => S1_REGION,
+    }
+}
+
+/// Where each branch keeps the grid its window names (0xf36e74 with 0x16bf370, 0xf250e8 with
+/// 0x16b6030).
+pub const fn grid_address(branch: Branch) -> SharedAddress {
+    match branch {
+        Branch::Live => SharedAddress(0x16b_f370),
+        Branch::S1 => SharedAddress(0x16b_6030),
+    }
+}
+
+/// 0xf1fc5c restores the shot's saved setting over the branch's.
+pub fn restore_selection_setting(machine: &impl Machine, branch: Branch, lens: ResourceIndex) {
+    enter(machine, 0xf1_fc5c, &[word(region(branch).setting.0), word(lens.0)]);
+}
+
+/// 0xf17abc copies the shot's reference into the branch's copy.
+pub fn copy_reference_backup(machine: &impl Machine, branch: Branch) { enter(machine, 0xf1_7abc, &[word(region(branch).shot_copy.0)]); }
+
+/// 0xf1fbe8.
+pub fn write_saved_settings(machine: &impl Machine, record: SharedAddress) { enter(machine, 0xf1_fbe8, &[word(record.0)]); }
+
+/// 0xf1d134.
+pub fn copy_selection_to_saved(machine: &impl Machine, record: SharedAddress) { enter(machine, 0xf1_d134, &[word(record.0)]); }
+
+/// 0xf1d0f4.
+pub fn restore_selection_if_enabled(machine: &impl Machine, record: RecordHandle, position: u32) {
+    enter(machine, 0xf1_d0f4, &[handle(record), word(position)]);
+}
+
+/// 0xf17af8(1).
+pub fn apply_selection_value_change(machine: &impl Machine) { enter(machine, 0xf1_7af8, &[word(1)]); }
+
+/// 0xf1d5d4.
+pub fn save_selection(machine: &impl Machine, position: u32, saved: &SavedSelection, lens_position: u32) {
+    let arguments = [
+        word(position), word(saved.index), word(u32::from(saved.bytes[0])), word(u32::from(saved.bytes[1])),
+        word(u32::from(saved.flag)), word(saved.word), word(lens_position), signed(saved.level),
+    ];
+    enter(machine, 0xf1_d5d4, &arguments);
+}
+
+/// 0x7407b0.
+pub fn refresh_hardware_state(machine: &impl Machine) { enter(machine, 0x74_07b0, &[]); }
+
+/// 0x74081c.
+pub fn hardware_ready(machine: &impl Machine) -> bool { enter(machine, 0x74_081c, &[]) != 0 }
+
+/// 0x740888(0, out, 0, 0) writes the clock word.
+pub fn clock_word(machine: &impl Machine) -> u32 {
+    let mut buffer = [0; 4];
+    machine.enter_with(0x74_0888, &[word(0), Argument::Buffer(0), word(0), word(0)], &mut buffer);
+    u32::get(&buffer, 0)
+}
+
+pub fn write_record(machine: &mut impl Machine, at: SharedAddress, offset: usize, bytes: &[u8]) {
+    write_bytes(machine, at.0.wrapping_add(offset as u32), bytes)
+}
+
+pub fn read_record<const N: usize>(machine: &impl Machine, at: SharedAddress) -> [u8; N] { read_bytes(machine, at.0) }
+
+/// The callback calc1 enters for each branch's 0x3d00 and the completion it posts back.
+pub const fn acquisition_callback(branch: Branch) -> (StockCallbackWord, Completion) {
+    match branch {
+        Branch::Live => (StockCallbackWord(0xf3_3568), Completion::Calculation87),
+        Branch::S1 => (StockCallbackWord(0xf2_41a8), Completion::Calculation9b),
+    }
+}
+
+/// The callback calc1 enters for each branch's 0x3d01 and the completion it posts back.
+pub const fn selection_callback(branch: Branch) -> (StockCallbackWord, Completion) {
+    match branch {
+        Branch::Live => (StockCallbackWord(0xf3_3520), Completion::Calculation88),
+        Branch::S1 => (StockCallbackWord(0xf2_41d4), Completion::Calculation9c),
+    }
+}
+
+/// 0x740e3c cleans the copied grid from the data cache before calc1 reads it (0xf4c584).
+pub fn clean(machine: &impl Machine, address: u32, bytes: usize) { enter(machine, 0x74_0e3c, &[word(address), word(bytes as u32)]); }
+
+/// 0x740e74 hands a record calc1 filled back to it.
+pub fn release(machine: &impl Machine, record: SharedAddress, bytes: usize) { enter(machine, 0x74_0e74, &[word(record.0), word(bytes as u32)]); }
+
+/// The completion's second parameter word names the result record (0xf35168, 0xf24704).
+pub fn result_address(parameters: &[u8]) -> Option<SharedAddress> {
+    let bytes = parameters.get(4..8)?;
+    match u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) {
+        0 => None,
+        address => Some(SharedAddress(address)),
+    }
+}
+
+/// 0x72872c's trace point for each request (0xf3a714, 0xf38584, 0xf39750, 0xf35cd4, 0xf377ec).
+pub const fn trace_point(mark: TraceMark) -> u32 {
+    match mark {
+        TraceMark::WindowRequest => 0x0110_7000,
+        TraceMark::AuxiliaryRequest => 0x0110_4000,
+        TraceMark::SourceRequest => 0x0110_5000,
+        TraceMark::AcquisitionRequest => 0x0110_1000,
+        TraceMark::SelectionRequest => 0x0110_2000,
+    }
+}
+
+pub fn trace(machine: &impl Machine, point: u32) { enter(machine, 0x72_872c, &[word(point)]); }
+
+/// The selection hook 0x756b9c names takes 13 arguments with 0 seventh (0xf3664c, 0xf34704); the
+/// rate hook 0x756d04 names takes 5 (0xf24734).
+pub fn enter_selection_hook(machine: &impl Machine, hook: StockCallbackWord, notice: &SelectionNotice) {
+    let [first, last] = notice.flags;
+    let [l0, l1, l2, l3] = notice.levels.map(signed);
+    let arguments = [
+        word(notice.kind), signed(notice.level), word(notice.word), signed(notice.limit_level), word(first), word(last), word(0),
+        word(notice.recording), l0, l1, l2, l3, word(notice.position),
+    ];
+    enter(machine, hook.0, &arguments);
+}
+
+pub fn enter_rate_hook(machine: &impl Machine, hook: StockCallbackWord, notice: &RateNotice) {
+    let arguments = [word(notice.position), word(u32::from(notice.feature)), signed(notice.levels[0]), signed(notice.levels[1]), word(notice.word)];
+    enter(machine, hook.0, &arguments);
 }

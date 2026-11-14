@@ -23,7 +23,7 @@ pub enum Argument {
 }
 
 /// The most arguments a retained entry `Guest` enters takes.
-const MOST_ARGUMENTS: usize = 13;
+const MOST_ARGUMENTS: usize = 17;
 
 /// The machine the boundary reads, writes and enters.
 pub trait Machine {
@@ -116,6 +116,13 @@ impl Machine for Guest {
                 >(entry)(
                     *a as u32, *b as u32, *c as u32, *d as u32, *e as u32, *f as u32, *g as u32, *h as u32, *i as u32, *j as u32,
                     *k as u32, *l as u32, *m as u32,
+                ),
+                [a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q] => core::mem::transmute::<
+                    usize,
+                    extern "C" fn(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) -> u32,
+                >(entry)(
+                    *a as u32, *b as u32, *c as u32, *d as u32, *e as u32, *f as u32, *g as u32, *h as u32, *i as u32, *j as u32,
+                    *k as u32, *l as u32, *m as u32, *n as u32, *o as u32, *p as u32, *q as u32,
                 ),
                 _ => panic!("no retained entry takes {} arguments", arguments.len()),
             }
