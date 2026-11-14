@@ -2,7 +2,7 @@ use xm1_saclac_interface::calc::SharedAddress;
 use xm1_saclac_profile_records::stock::shared::{group_27, group_33};
 use xm1_saclac_profile_records::MeasurementSelection;
 
-use super::fakes::{Scenery, TraceLine};
+use super::fakes::{ClassificationPeer, Scenery, TraceLine, CLASSIFICATION_FRAME, CLASSIFICATION_COMPLETE};
 use super::{Mode, Recognition, Scene, SceneFlags, SceneRecognition};
 use crate::exposure::fakes::handle;
 use crate::exposure::ports::Property;
@@ -47,7 +47,7 @@ fn live_view_publishes_the_majority_of_its_queries_and_calls_back_on_a_change() 
 fn live_view_settles_on_its_recording_and_holds_until_released() {
     let mut scenery = landscape_scenery();
     let mut state = reset(&mut scenery);
-    state.take_adjustments_changed();
+    state.request_classification(&mut ClassificationPeer::default(), CLASSIFICATION_FRAME, [3, 2], 1, CLASSIFICATION_COMPLETE).unwrap();
     state.choose_group_hint(&mut scenery, Scene(18));
     property(&mut scenery, 0x75b0, 1);
     property(&mut scenery, 0x75b1, 2);

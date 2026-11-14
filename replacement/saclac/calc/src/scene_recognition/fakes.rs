@@ -147,3 +147,41 @@ pub struct LensFake {
     pub class: u32,
     pub class_level: i32,
 }
+
+pub const CLASSIFICATION_FRAME: xm1_saclac_interface::calc_sub::Frame = xm1_saclac_interface::calc_sub::Frame {
+    samples: SharedAddress(0x0170_1234),
+    plane: SharedAddress(0x0171_5678),
+    levels: SharedAddress(0x4172_9abc),
+    columns: SharedAddress(0x0173_1358),
+    rows: SharedAddress(0x0174_2468),
+    average_levels: 1,
+    motion_regions: 7,
+    region_list: SharedAddress(0x4175_abcd),
+};
+pub const CLASSIFICATION_COMPLETE: xm1_saclac_interface::stock::StockCallbackWord =
+    xm1_saclac_interface::stock::StockCallbackWord(0x0102_df28);
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum ClassificationEvent {
+    Enable,
+    Post(xm1_saclac_interface::CalcSubOperation, [u8; 48]),
+}
+
+#[derive(Default)]
+pub struct ClassificationPeer {
+    pub events: Vec<ClassificationEvent>,
+    pub refuse: bool,
+}
+
+impl super::ports::ClassificationControl for ClassificationPeer {
+    fn enable_classification(&mut self) { self.events.push(ClassificationEvent::Enable); }
+}
+
+impl xm1_saclac_interface::CalcSub for ClassificationPeer {
+    type Error = ();
+
+    fn request(&mut self, request: xm1_saclac_interface::CalcSubRequest<'_>) -> Result<(), Self::Error> {
+        self.events.push(ClassificationEvent::Post(request.operation, request.parameters.bytes().try_into().unwrap()));
+        if self.refuse { Err(()) } else { Ok(()) }
+    }
+}

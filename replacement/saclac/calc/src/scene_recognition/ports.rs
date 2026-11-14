@@ -5,6 +5,11 @@ use xm1_saclac_interface::RecordHandle;
 use super::{Recognition, Scene, SceneFlags};
 use crate::exposure::ports::{ProfileAccess, Properties, StockMemory};
 
+/// The retained classifier's gate, enabled by 0xfb236c(0) before 0xf4eae0 posts.
+pub trait ClassificationControl {
+    fn enable_classification(&mut self);
+}
+
 /// The record words the subject query reads (0xf4f18c).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SubjectRequest {

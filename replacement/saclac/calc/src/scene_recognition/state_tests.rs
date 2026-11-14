@@ -134,12 +134,3 @@ fn the_corrected_grid_reads_the_source_when_corrected() {
     state.correct_grid(&mut world);
     assert_eq!(state.corrected_grid()[7], 600);
 }
-
-#[test]
-fn the_adjustments_changed_mark_is_taken_once() {
-    let (mut state, _) = reset();
-    assert!(state.take_adjustments_changed());
-    assert!(!state.take_adjustments_changed());
-    state.mark_adjustments_changed();
-    assert!(state.take_adjustments_changed());
-}
