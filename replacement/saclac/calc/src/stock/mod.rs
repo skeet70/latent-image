@@ -8,6 +8,7 @@ pub mod capture;
 pub mod context_trace;
 pub mod diagnostics;
 pub mod dump;
+pub mod exposure;
 pub mod exposure_limits;
 pub mod finish;
 pub mod gains;

@@ -125,6 +125,8 @@ The `0x756d4c` accessor is a zero-argument settings getter, not an asynchronous 
 
 The interface also has a typed Flash peer for operations `0x1a0d` and `0x1a0e`. `lens_effect` identifies direct drive requests and the imgdc `0x3f2e` bridge to lensdc `0x420c`; calc, calc1 and statistics jobs have no lens-drive effect. Other unclassified peer requests conservatively require lens review. The linked driver retains the four-byte `XM1_REQUIRES_LENS_SAFETY_CONTRACT = 1` marker. Fixed-image staging reads it from the exact linked body and emits `emulator_only` and `lens_safety_contract_required`; camera use waits for the lens safety contract.
 
+The [calculation-library binding table](saclac/calc/bindings.md) maps the shot's exposure surface, selection flags and all 44 library forwarders to typed Rust operations. Composition-root adapters own record decoding and output placement; the table distinguishes implemented operations from pending motion-plan dependencies.
+
 Admission checks allocated sections, entry veneers, retained table counts, definite ELF address relocations and direct branches, trap fill and the owned direct-call stack budget. Literal words and unrelocated instruction constants are not classified as addresses. Entries and regions come from `Replacement.Saclac.Artifact` and the linked kernel's boundary metadata. Memory safety inside the core rests on the compiler and bounded types. The driver, engine and router modules forbid unsafe code; `src/stock.rs` contains the retained-memory and stock-call adapters. Their unsafe operations have these invariants:
 
 | Block | Invariant |

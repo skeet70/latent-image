@@ -128,6 +128,9 @@ impl SelectionBank {
 
     pub fn mark_requested(&mut self, row: usize) { self.rows[row].phase = RowPhase::Requested; }
 
+    /// Applied rows across all eight slots, including those outside the current span (0xf1f460).
+    pub fn evaluated_count(&self) -> u8 { self.rows.iter().filter(|row| row.phase == RowPhase::Applied).count() as u8 }
+
     pub fn apply(&mut self, update: RowUpdate) {
         self.rows[update.row].phase = RowPhase::Applied;
         self.first_limits = update.first;
