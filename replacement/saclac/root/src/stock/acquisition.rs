@@ -23,7 +23,7 @@ use xm1_saclac_shared::stock::{Argument, Machine};
 
 /// Retained entries may load words through their buffer arguments.
 #[repr(align(4))]
-struct Aligned<const N: usize>([u8; N]);
+pub(crate) struct Aligned<const N: usize>(pub(crate) [u8; N]);
 
 impl<const N: usize> core::ops::Deref for Aligned<N> {
     type Target = [u8];

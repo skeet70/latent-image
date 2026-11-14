@@ -7,7 +7,7 @@ use xm1_focus_measurement_round::acquisition::ports::*;
 use xm1_focus_measurement_round::acquisition::selection::SelectionMemory;
 use xm1_focus_measurement_round::auxiliary::ResourceIndex;
 use xm1_focus_measurement_round::pipeline::{Exposure, GainStep, HistoryStatistics, Pipeline, PipelineSnapshot, PipelineWord, Statistics, TimingWord};
-use xm1_focus_measurement_round::profile::{FrameInterval, GridCell, RetainedWord};
+use xm1_focus_measurement_round::profile::{FrameInterval, GridCell, ProfileSelection, RetainedWord};
 use xm1_focus_measurement_round::record::{Adjustment, AdjustmentWords, Trace, TraceMark};
 use xm1_saclac_calc::adjust::{configuration, profile_adjustment as programs, rate_policy, sample_grid};
 use xm1_saclac_calc::exposure::ports::{Lens, Properties, Property, StockMemory};
@@ -29,11 +29,17 @@ use crate::stock::acquisition as boundary;
 /// The state retained between the two children and the controllers' selection-value setter.
 pub struct AcquisitionState {
     pub(crate) selection: SelectionMemory,
+    grids: [AcquisitionGrid; 2],
 }
 
 impl Default for AcquisitionState {
-    fn default() -> Self { Self { selection: SelectionMemory::new() } }
+    fn default() -> Self { Self { selection: SelectionMemory::new(), grids: [AcquisitionGrid([0; 1236]); 2] } }
 }
+
+fn branch_index(branch: Branch) -> usize { match branch { Branch::Live => 0, Branch::S1 => 1 } }
+fn profile_selection(word: u32) -> ProfileSelection { match word { 0 => ProfileSelection::Unselected, 1 => ProfileSelection::Record, other => ProfileSelection::Other(other as u8) } }
+fn selection_word(selection: ProfileSelection) -> u32 { match selection { ProfileSelection::Unselected => 0, ProfileSelection::Record => 1, ProfileSelection::Other(word) => u32::from(word) } }
+static EMPTY_GRID: AcquisitionGrid = AcquisitionGrid([0; 1236]);
 
 impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Services<M, R, E, P> {
     /// The controllers' 0xf251c4 report; S1 consumes it after restoring the selection.
@@ -57,11 +63,11 @@ impl<M: Machine> Lens for Calculations<'_, M> {
 impl<M: Machine> programs::LensSteps for Calculations<'_, M> {
     fn near_step(&mut self, reference: u32, limit: u16, which: programs::StepTable) -> u32 {
         let which = match which { programs::StepTable::Standard => Bounds::Primary, programs::StepTable::Lens => Bounds::Selected };
-        table::lower_step(self.1, Row(reference), (limit != u16::MAX).then_some(u32::from(limit)), which).0
+        table::lower_step(self.1, Row(reference), xm1_saclac_config::stock::decode_step_limit(u32::from(limit)), which).0
     }
     fn far_step(&mut self, reference: u32, limit: u16, which: programs::StepTable) -> u32 {
         let which = match which { programs::StepTable::Standard => Bounds::Primary, programs::StepTable::Lens => Bounds::Selected };
-        table::upper_step(self.1, Row(reference), (limit != u16::MAX).then_some(u32::from(limit)), which).0
+        table::upper_step(self.1, Row(reference), xm1_saclac_config::stock::decode_step_limit(u32::from(limit)), which).0
     }
     fn lens_step(&mut self, step: u32) -> u32 { boundary::lens_step(self.0, step) }
 }
@@ -127,7 +133,7 @@ fn selection(code: u32) -> MeasurementSelection {
 fn treatments(inputs: &ModeInputs) -> xm1_saclac_calc::adjust::scene_policy::TreatmentInputs {
     xm1_saclac_calc::adjust::scene_policy::TreatmentInputs {
         active: inputs.grid_kind, subjects: u32::from(inputs.grid_byte),
-        measurement_selection: selection(inputs.selection), scene: inputs.updated_position,
+        measurement_selection: selection(selection_word(inputs.selection)), scene: inputs.updated_position,
         class: inputs.category, callback_armed: inputs.mode_flag,
         held: inputs.change_category, single_subject: inputs.grid_flag,
     }
@@ -155,26 +161,26 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc> Po
         let (block_reference, block_word) = boundary::lens_snapshot_reference(&self.shared_bytes(record, &shared::group_17::LENS_SNAPSHOT));
         let selected = xm1_saclac_calc::profile::selection_code(self.entries.measurement_selection(record));
         RecordView {
-            start: self.shared(record, &c::AT_0140), selection: u32::from(selected),
-            s1_mode: u32::from(self.entries.header_byte(record, SharedHeaderByte::At31)),
+            start: Start::of(self.shared(record, &c::AT_0140)), selection: profile_selection(u32::from(selected)),
+            s1_mode: AcquisitionMode(u32::from(self.entries.header_byte(record, SharedHeaderByte::At31))),
             halfword: self.field(record, &h::AT_002E), mode_word: u32::from(self.field(record, &h::AT_0032)),
             byte: self.field(record, &h::AT_0033), second_halfword: self.field(record, &h::AT_0026),
             setting_word: u32::from(self.field(record, &h::AT_005B)), grid_kind: u32::from(self.field(record, &h::AT_005D)),
             focus_word: u32::from(self.field(record, &h::AT_0034)), window: self.field(record, &h::AT_0000),
-            seventh_word: u32::from(self.field(record, &h::AT_0036)), fourth_word: u32::from(self.field(record, &h::AT_003D)),
-            third_word: u32::from(self.field(record, &h::AT_003F)), request: u32::from(self.field(record, &h::AT_003E)),
+            seventh_word: RetainedWord(u32::from(self.field(record, &h::AT_0036))), fourth_word: RetainedWord(u32::from(self.field(record, &h::AT_003D))),
+            third_word: RetainedWord(u32::from(self.field(record, &h::AT_003F))), request: u32::from(self.field(record, &h::AT_003E)),
             detail_flag: u32::from(self.field(record, &h::AT_0041)), word: u32::from(self.field(record, &h::AT_0043)),
             reference: self.field(record, &h::AT_001C) as u16, selection_word: self.field(record, &h::AT_0014),
             lens_halfword: self.field(record, &h::AT_001E) as u16, lens_reference: u32::from(self.field(record, &h::AT_0044)),
             halfwords: [self.field(record, &h::AT_0020) as u16, self.field(record, &h::AT_0024) as u16],
-            zero_word: u32::from(self.entries.header_byte(record, SharedHeaderByte::At46)), category: u32::from(category),
-            pair: boundary::words(&self.field(record, &h::AT_0004)), tenth_word: u32::from(self.field(record, &h::AT_005F)),
+            zero_word: RetainedWord(u32::from(self.entries.header_byte(record, SharedHeaderByte::At46))), category: u32::from(category),
+            pair: boundary::words(&self.field(record, &h::AT_0004)), tenth_word: RetainedWord(u32::from(self.field(record, &h::AT_005F))),
             change_category: u32::from(self.entries.header_byte(record, SharedHeaderByte::At61)),
             signed_word: if selected == 1 { self.stock.zone_limit(2) as u16 } else { self.field(record, &h::AT_0022) as u16 },
-            eighth_word: u32::from(self.field(record, &h::AT_0045)), second_word: u32::from(self.field(record, &h::AT_004B)),
+            eighth_word: RetainedWord(u32::from(self.field(record, &h::AT_0045))), second_word: RetainedWord(u32::from(self.field(record, &h::AT_004B))),
             mode_flag: u32::from(self.entries.header_byte(record, SharedHeaderByte::At63)),
-            rate_enabled: u32::from(self.field(record, &h::INTERVAL_TRACKING).0), fifth_word: u32::from(self.field(record, &h::AT_0051)),
-            forced: u32::from(self.field(record, &h::AT_006B)), ninth_word: u32::from(self.field(record, &h::AT_0066)),
+            rate_enabled: u32::from(self.field(record, &h::INTERVAL_TRACKING).0), fifth_word: RetainedWord(u32::from(self.field(record, &h::AT_0051))),
+            forced: u32::from(self.field(record, &h::AT_006B)), ninth_word: RetainedWord(u32::from(self.field(record, &h::AT_0066))),
             profile_flags: [u32::from(self.field(record, &h::AT_0067)), u32::from(self.field(record, &h::AT_0068)), u32::from(self.field(record, &h::AT_0069)),
                 self.field(record, &record::group_13::AT_20C8), self.field(record, &record::group_13::AT_20CC), self.field(record, &record::group_31::AT_2110),
                 self.field(record, &record::group_13::AT_20D4), self.field(record, &record::group_13::AT_20B0_4)],
@@ -184,13 +190,14 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc> Po
             program_word: boundary::words(&self.shared_bytes(record, &shared::group_37::AT_085C)), restore_position: u32::from(self.field(record, &h::AT_006F)),
             s1_byte: self.shared(record, &shared::group_26::AT_0236), s1_halfword: self.shared(record, &shared::group_26::AT_0238) as u16,
             release_halfword: self.shared(record, &x::AT_0246) as u16, area: boundary::words(&self.shared_bytes(record, &shared::group_22::AT_0180)),
-            mode: entries.mode, updated_position: entries.updated_position, position_halfword: entries.position_halfword,
+            mode: AcquisitionMode(entries.mode), updated_position: entries.updated_position, position_halfword: entries.position_halfword,
             converted_level: entries.converted_level, restore_adjustment: entries.restore_adjustment, decade: entries.decade,
             profile_index, ratio: [cell.column, cell.row], lens_limit: entries.lens_limit, block_reference, block_word,
             s1_exposure: PipelineWord(self.shared(record, &shared::group_26::AT_0200)), s1_level: self.shared(record, &shared::group_26::AT_0206) as u16,
             s1_second: self.shared(record, &shared::group_26::AT_0208) as u16, s1_timing: TimingWord(self.shared(record, &shared::group_26::AT_0230)),
         }
     }
+    fn s1_rate_enabled(&mut self, record: RecordHandle) -> bool { self.field(record, &record::group_00::INTERVAL_TRACKING).0 == 1 }
 
     fn published_exposure(&mut self, record: RecordHandle) -> PublishedExposure {
         use shared::group_27 as x;
@@ -227,8 +234,8 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc> Po
         store!(self, record, x::AT_025E, p.levels[4]); store!(self, record, x::AT_0260, p.levels[5]); store!(self, record, x::AT_0266, p.levels[6]);
     }
 
-    fn publish_grid(&mut self, record: RecordHandle, grid: &AcquisitionGrid) {
-        let (cells, window, entries) = boundary::grid_records(grid);
+    fn publish_grid(&mut self, record: RecordHandle, branch: Branch) {
+        let (cells, window, entries) = boundary::grid_records(&self.acquisition.grids[branch_index(branch)]);
         store!(self, record, shared::group_27::AT_026C, cells); store!(self, record, shared::group_27::AT_0680, window);
         store!(self, record, shared::group_27::AT_06A8, entries);
     }
@@ -302,8 +309,6 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc> Po
     }
     fn store_s1_level(&mut self, record: RecordHandle, level: i16) { store!(self, record, shared::group_41::AT_0970, level); }
     fn clear_grid_selection(&mut self, record: RecordHandle) { store!(self, record, shared::group_39::AT_0898, [0; 48]); }
-    fn acquisition_word(&mut self, record: RecordHandle) -> u32 { boundary::statistics_in_use_word(self.shared(record, &shared::group_20::STATISTICS_IN_USE)) }
-    fn store_acquisition_word(&mut self, record: RecordHandle, word: u32) { store!(self, record, shared::group_20::STATISTICS_IN_USE, boundary::statistics_in_use(word)); }
     fn rate_record(&mut self, record: RecordHandle) -> RateRecord { boundary::rate_record(&self.shared_bytes(record, &shared::group_27::AT_07EC)) }
     fn store_rate_selection(&mut self, record: RecordHandle, selected: u32) {
         let mut bytes = self.shared_bytes(record, &shared::group_27::AT_07EC); boundary::put_rate_selection(&mut bytes, selected); store!(self, record, shared::group_27::AT_07EC, bytes);
@@ -324,7 +329,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc> Po
     fn change_positions(&mut self, record: RecordHandle) -> [u32; 2] { [self.field(record, &record::group_04::AT_0164), self.field(record, &record::group_04::AT_0168)] }
 
     fn select_program(&mut self, inputs: &ProgramInputs) -> Option<Program> {
-        let choice = programs::ProfileChoice { selection: selection(inputs.selection), result: inputs.adjustment, window_status: WindowStatus(inputs.kind), mode: inputs.mode,
+        let choice = programs::ProfileChoice { selection: selection(selection_word(inputs.selection)), result: inputs.adjustment, window_status: WindowStatus(inputs.kind), mode: inputs.mode.0,
             flagged: inputs.word == 1, banded: inputs.option == 1, percent: inputs.percent, held: inputs.bytes[0] != 0, held_variant: inputs.bytes[1] };
         programs::choose(&mut Calculations(&self.machine, &self.stock), &choice).map(|profile| Program(profile.id()))
     }
@@ -342,28 +347,33 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc> Po
     fn program_lower_bound(&mut self, p: Program, lens: u32) -> u32 { programs::lens_limits(&mut Calculations(&self.machine, &self.stock), program(p), lens).near }
     fn profile_percent(&mut self, p: Program, combined: u16, lens: ResourceIndex, bound: u32) -> u16 { programs::choose_percent(&mut Calculations(&self.machine, &self.stock), program(p), i32::from(combined as i16), lens.0, bound) }
 
-    fn grid_count(&mut self, selection: u32, mode: u32, adjustment: u32, grid_kind: u32) -> u32 { boundary::grid_count(&self.machine, selection, mode, adjustment, grid_kind) }
-    fn indexed_configuration(&mut self, selection: u32, adjustment: u32, index: u32) -> u8 { rate_policy::policy_setting(&mut Calculations(&self.machine, &self.stock), selection == 1, adjustment, index == 1) as u8 }
-    fn level_category(&mut self, level: i16, selection: u32, adjustment: u32) -> u32 { boundary::level_category(&self.machine, level, selection, adjustment) }
-    fn selection_limits(&mut self, selection: u32, adjustment: u32, grid_count: u32, request: u32) -> SelectionLimits {
-        let limits = rate_policy::rate_settings(&mut Calculations(&self.machine, &self.stock), selection == 1, adjustment, grid_count != 0, request == 2);
+    fn grid_count(&mut self, selection: ProfileSelection, mode: AcquisitionMode, adjustment: u32, grid_kind: u32) -> u32 { boundary::grid_count(&self.machine, selection_word(selection), mode.0, adjustment, grid_kind) }
+    fn indexed_configuration(&mut self, selection: ProfileSelection, adjustment: u32, index: u32) -> u8 { rate_policy::policy_setting(&mut Calculations(&self.machine, &self.stock), selection == ProfileSelection::Record, adjustment, index == 1) as u8 }
+    fn level_category(&mut self, level: i16, selection: ProfileSelection, adjustment: u32) -> u32 { boundary::level_category(&self.machine, level, selection_word(selection), adjustment) }
+    fn selection_limits(&mut self, selection: ProfileSelection, adjustment: u32, grid_count: u32, request: u32) -> SelectionLimits {
+        let limits = rate_policy::rate_settings(&mut Calculations(&self.machine, &self.stock), selection == ProfileSelection::Record, adjustment, grid_count != 0, request == 2);
         SelectionLimits { step: limits.base, lower: limits.second as u16, upper: limits.first as u16, byte: limits.byte }
     }
-    fn fill_grid(&mut self, inputs: &GridInputs, grid: &mut AcquisitionGrid) { boundary::fill_grid(&self.machine, inputs, grid) }
-    fn snapshot_grid(&mut self, statistics: Statistics, grid: &mut AcquisitionGrid) { codec::grid_from_snapshot(grid, &boundary::snapshot(&self.machine, statistics)) }
+    fn grid_lead(&mut self, branch: Branch) -> codec::GridLead { codec::grid_lead(&self.acquisition.grids[branch_index(branch)]) }
+    fn set_grid_count(&mut self, branch: Branch, count: u32) { codec::set_grid_count(&mut self.acquisition.grids[branch_index(branch)], count); }
+    fn clear_grid_lead(&mut self, branch: Branch) { codec::clear_grid_lead(&mut self.acquisition.grids[branch_index(branch)]); }
+    fn set_grid_configuration(&mut self, branch: Branch, configuration: u8) { codec::set_grid_configuration(&mut self.acquisition.grids[branch_index(branch)], configuration); }
+    fn set_grid_inputs(&mut self, branch: Branch, inputs: &GridInputs) { codec::set_grid_inputs(&mut self.acquisition.grids[branch_index(branch)], inputs.timing.0, inputs.lens_word, inputs.positions, inputs.window); }
+    fn fill_grid(&mut self, branch: Branch, inputs: &GridInputs) { boundary::fill_grid(&self.machine, inputs, &mut self.acquisition.grids[branch_index(branch)]); }
+    fn snapshot_grid(&mut self, branch: Branch, statistics: Statistics) { codec::grid_from_snapshot(&mut self.acquisition.grids[branch_index(branch)], &boundary::snapshot(&self.machine, statistics)); }
     fn adjustment_class(&mut self, adjustment: u32, reference: i16) -> u8 { rate_policy::level_selection(adjustment, reference) }
     fn adjustment_option(&mut self) -> u32 { u32::from(self.configuration.refresh()) }
     fn refreshed_position(&mut self) -> u32 { boundary::refreshed_position(&self.machine) }
     fn mode_one(&mut self, inputs: &ModeInputs) -> u32 { u32::from(treatments(inputs).admits(xm1_saclac_calc::adjust::scene_policy::Treatment::First)) }
     fn both_modes(&mut self, inputs: &ModeInputs) -> u32 { u32::from(treatments(inputs).admits_any()) }
-    fn five_parameter_adjustment(&mut self, selection: u32, position: u32, mode_flag: u32, modes: u32, grid_word: u32) -> u32 { boundary::five_parameter_adjustment(&self.machine, [selection, position, mode_flag, modes, grid_word]) }
+    fn five_parameter_adjustment(&mut self, selection: ProfileSelection, position: u32, mode_flag: u32, modes: u32, grid_word: u32) -> u32 { boundary::five_parameter_adjustment(&self.machine, [selection_word(selection), position, mode_flag, modes, grid_word]) }
     fn rate_divisor(&mut self, position: u32, category: u32, lens: ResourceIndex, halfword: u16) -> u32 { boundary::rate_divisor(&self.machine, position, category, lens, halfword) }
-    fn rate_limit(&mut self, selection: u32, position: u32, halfword: u16) -> u32 { boundary::rate_limit(&self.machine, selection, position, halfword) }
+    fn rate_limit(&mut self, selection: ProfileSelection, position: u32, halfword: u16) -> u32 { boundary::rate_limit(&self.machine, selection_word(selection), position, halfword) }
     fn rate_mode(&mut self, position: u32, halfword: u16, word: u32, mode_flag: u32) -> u16 { boundary::rate_mode(&self.machine, [position, u32::from(halfword), word, mode_flag]) }
     fn selection_mode_category(&mut self, mode_word: u32) -> u32 { u32::from(xm1_saclac_calc::policy::SelectionMode(mode_word).category()) }
     fn offset_position(&mut self, level: i16, reference: u16, flag: u32) -> u16 { xm1_saclac_calc::policy::offset_position(level, i32::from(reference), flag == 1) as u16 }
-    fn clamp_selection_difference(&mut self, mode: u32, lens: ResourceIndex, level: i16, halfword: u16, reference: u32, target: i16) -> i16 { boundary::clamp_selection_difference(&self.machine, mode, lens, level, halfword, reference, target) }
-    fn has_valid_offset(&mut self, selection: u32, mode: u32, halfword: i16) -> u32 { u32::from(sample_grid::scene_offset_valid(selection, mode, halfword)) }
+    fn clamp_selection_difference(&mut self, mode: AcquisitionMode, lens: ResourceIndex, level: i16, halfword: u16, reference: u32, target: i16) -> i16 { boundary::clamp_selection_difference(&self.machine, mode.0, lens, level, halfword, reference, target) }
+    fn has_valid_offset(&mut self, selection: ProfileSelection, mode: AcquisitionMode, halfword: i16) -> u32 { u32::from(sample_grid::scene_offset_valid(selection_word(selection), mode.0, halfword)) }
     fn allows_unflagged_selection(&mut self, position: u32, halfword: u16) -> bool { boundary::allows_unflagged_selection(&self.machine, position, halfword) }
     fn capture_selection_position(&mut self, branch: Branch, inputs: &PositionInputs) -> SelectionPosition { boundary::capture_selection_position(&self.machine, boundary::region(branch).setting, branch, inputs) }
     fn copy_rate_grid_source(&mut self, buffer: StatisticsBuffer) { boundary::copy_rate_grid_source(&self.machine, buffer) }
@@ -410,8 +420,8 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc> Po
     fn refresh_hardware_state(&mut self) { boundary::refresh_hardware_state(&self.machine) }
     fn hardware_ready(&mut self) -> bool { boundary::hardware_ready(&self.machine) }
     fn clock_word(&mut self) -> u32 { boundary::clock_word(&self.machine) }
-    fn store_selection_window(&mut self, branch: Branch, window: &SelectionWindow, grid: &AcquisitionGrid) {
-        boundary::place(&mut self.machine, boundary::grid_address(branch).0, &grid.0);
+    fn store_selection_window(&mut self, branch: Branch, window: &SelectionWindow) {
+        boundary::place(&mut self.machine, boundary::grid_address(branch).0, &self.acquisition.grids[branch_index(branch)].0);
         codec::selection_window(window, boundary::grid_address(branch), |at, bytes| boundary::write_record(&mut self.machine, boundary::region(branch).window, at, bytes));
     }
     fn store_selection_setting(&mut self, branch: Branch, setting: &SelectionSetting) {
@@ -425,8 +435,10 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc> Po
         let (ready, updated_position, position_halfword, shot_word) = codec::setting_echo(&boundary::read_record(&self.machine, boundary::region(branch).setting));
         SettingEcho { ready, updated_position, position_halfword, shot_word }
     }
-    fn request_acquisition(&mut self, branch: Branch, request: &AcquisitionRequest, grid: &AcquisitionGrid) {
-        if xm1_saclac_calc::requests::request_acquisition(self, grid, *request, boundary::acquisition_callback(branch).0).is_err() { boundary::fault(&self.machine); }
+    fn request_acquisition(&mut self, branch: Branch, request: &AcquisitionRequest, grid: EvaluationGrid) {
+        let grid = match grid { EvaluationGrid::Current => &self.acquisition.grids[branch_index(branch)], EvaluationGrid::Empty => &EMPTY_GRID };
+        let mut peers = CalculationPeers { machine: &mut self.machine, peers: &mut self.peers };
+        if xm1_saclac_calc::requests::request_acquisition(&mut peers, grid, *request, boundary::acquisition_callback(branch).0).is_err() { boundary::fault(&self.machine); }
     }
     fn request_selection(&mut self, branch: Branch, request: &SelectionRequest) {
         let payload = Calc1Payload::Selection { request: *request, region: boundary::region(branch), callback: boundary::selection_callback(branch).0 };
@@ -458,19 +470,34 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc> Po
     }
 }
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1> xm1_saclac_calc::requests::Peers for Services<M, R, E, P> {
+struct CalculationPeers<'a, M, P> { machine: &'a mut M, peers: &'a mut P }
+
+impl<M: Machine, P: Calc + Calc1> xm1_saclac_calc::requests::Peers for CalculationPeers<'_, M, P> {
     type Error = ();
     fn calc(&mut self, payload: &CalcPayload) -> Result<(), ()> {
         let (operation, bytes) = wire::calc_payload(payload);
-        Calc::request(&mut self.peers, CalcRequest { operation, parameters: wire::parameters(bytes.bytes()), completions: &[] }).map_err(|_| ())
+        Calc::request(self.peers, CalcRequest { operation, parameters: wire::parameters(bytes.bytes()), completions: &[] }).map_err(|_| ())
     }
     fn calc1(&mut self, payload: &Calc1Payload) -> Result<(), ()> {
         let (operation, bytes) = wire::calc1_payload(payload);
-        Calc1::request(&mut self.peers, Calc1Request { operation, parameters: wire::parameters(bytes.bytes()), completions: &[] }).map_err(|_| ())
+        Calc1::request(self.peers, Calc1Request { operation, parameters: wire::parameters(bytes.bytes()), completions: &[] }).map_err(|_| ())
     }
     fn store_acquisition_grid(&mut self, grid: &AcquisitionGrid) {
-        boundary::place(&mut self.machine, boundary::CALC1_GRID.0, &grid.0);
-        boundary::clean(&self.machine, boundary::CALC1_GRID.0, wire::ACQUISITION_GRID.2);
+        boundary::place(self.machine, boundary::CALC1_GRID.0, &grid.0);
+        boundary::clean(self.machine, boundary::CALC1_GRID.0, wire::ACQUISITION_GRID.2);
+    }
+}
+
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1> xm1_saclac_calc::requests::Peers for Services<M, R, E, P> {
+    type Error = ();
+    fn calc(&mut self, payload: &CalcPayload) -> Result<(), ()> {
+        xm1_saclac_calc::requests::Peers::calc(&mut CalculationPeers { machine: &mut self.machine, peers: &mut self.peers }, payload)
+    }
+    fn calc1(&mut self, payload: &Calc1Payload) -> Result<(), ()> {
+        xm1_saclac_calc::requests::Peers::calc1(&mut CalculationPeers { machine: &mut self.machine, peers: &mut self.peers }, payload)
+    }
+    fn store_acquisition_grid(&mut self, grid: &AcquisitionGrid) {
+        xm1_saclac_calc::requests::Peers::store_acquisition_grid(&mut CalculationPeers { machine: &mut self.machine, peers: &mut self.peers }, grid)
     }
 }
 

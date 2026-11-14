@@ -2,11 +2,12 @@ use xm1_saclac_profile_geometry::{ports::*, memory::Location, profile::{ProfileH
 use xm1_saclac_shared::stock::{Argument::{Buffer, Word}, Machine, Stock};
 use crate::geometry::GeometryBindings;
 use super::geometry::{address, Memory};
+use super::acquisition::Aligned;
 
 fn word(bytes: &[u8], at: usize) -> u32 { u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) }
 fn half(bytes: &[u8], at: usize) -> u16 { u16::from_le_bytes(bytes[at..at + 2].try_into().unwrap()) }
 fn rectangle(m: &impl Machine, entry: u32, profile: ProfileHandle, relative: Option<bool>) -> Rectangle {
-    let mut bytes = [0; 16];
+    let mut bytes = Aligned([0; 16]);
     if let Some(relative) = relative { m.enter_with(entry, &[Word(profile.0), Word(u32::from(relative)), Buffer(0)], &mut bytes); }
     else { m.enter_with(entry, &[Word(profile.0), Buffer(0)], &mut bytes); }
     Rectangle { top: word(&bytes, 0), left: word(&bytes, 4), width: word(&bytes, 8), height: word(&bytes, 12) }
@@ -14,7 +15,7 @@ fn rectangle(m: &impl Machine, entry: u32, profile: ProfileHandle, relative: Opt
 
 impl<M: Machine + Clone, P, I> Retained for GeometryBindings<M, P, I> {
     fn limit_triplet(&mut self, triplet: [u16; 3]) -> [u16; 3] {
-        let mut bytes = [0; 12];
+        let mut bytes = Aligned([0; 12]);
         for (to, value) in bytes[..6].chunks_exact_mut(2).zip(triplet) { to.copy_from_slice(&value.to_le_bytes()); }
         self.stages.machine.enter_with(0xef_4bf4, &[Buffer(0), Buffer(6), Word(0)], &mut bytes);
         [half(&bytes, 6), half(&bytes, 8), half(&bytes, 10)]
@@ -24,10 +25,10 @@ impl<M: Machine + Clone, P, I> Retained for GeometryBindings<M, P, I> {
     fn relative_rectangle(&mut self, profile: ProfileHandle, relative: bool) -> Rectangle { rectangle(&self.stages.machine, 0xef_5d44, profile, Some(relative)) }
     fn encode_thresholds(&mut self, first: i16, second: i16) -> u32 { self.stages.machine.enter(0xef_743c, &[first as usize, second as usize]) }
     fn converted_decade(&mut self, selection: u32) -> i32 { self.stages.machine.enter(0xef_74e4, &[selection as usize]) as i32 }
-    fn statistics_offset(&mut self, region: StatisticsRegion) -> u32 { let mut bytes = [0; 4]; self.stages.machine.enter_with(0xed_ae88, &[Word(region.0), Buffer(0)], &mut bytes); word(&bytes, 0) }
+    fn statistics_offset(&mut self, region: StatisticsRegion) -> u32 { let mut bytes = Aligned([0; 4]); self.stages.machine.enter_with(0xed_ae88, &[Word(region.0), Buffer(0)], &mut bytes); word(&bytes, 0) }
     fn selection_limit(&mut self) -> u32 { self.stages.machine.enter(0xee_a014, &[]) }
-    fn profile_factors(&mut self, selection: u32) -> [u16; 2] { let mut bytes = [0; 4]; self.stages.machine.enter_with(0xef_4274, &[Word(selection), Buffer(0)], &mut bytes); [half(&bytes, 0), half(&bytes, 2)] }
-    fn calibration_factors(&mut self, first: u32, second: u32) -> [u16; 3] { let mut bytes = [0; 6]; self.stages.machine.enter_with(0xef_3f04, &[Word(first), Word(second), Buffer(0)], &mut bytes); [half(&bytes, 0), half(&bytes, 2), half(&bytes, 4)] }
+    fn profile_factors(&mut self, selection: u32) -> [u16; 2] { let mut bytes = Aligned([0; 4]); self.stages.machine.enter_with(0xef_4274, &[Word(selection), Buffer(0)], &mut bytes); [half(&bytes, 0), half(&bytes, 2)] }
+    fn calibration_factors(&mut self, first: u32, second: u32) -> [u16; 3] { let mut bytes = Aligned([0; 6]); self.stages.machine.enter_with(0xef_3f04, &[Word(first), Word(second), Buffer(0)], &mut bytes); [half(&bytes, 0), half(&bytes, 2), half(&bytes, 4)] }
     fn configured_decade(&mut self, offset: u8) -> i16 { self.stages.machine.enter(0xef_74ac, &[offset as usize]) as i16 }
     fn decode_level(&mut self, encoded: u32) -> u8 { self.stages.machine.enter(0xef_73e4, &[encoded as usize]) as u8 }
 }
@@ -58,7 +59,7 @@ impl<M: Machine, P, I> DumpRegions for GeometryBindings<M, P, I> {
 impl<M: Machine, P, I> Handlers for GeometryBindings<M, P, I> {
     fn attach(&mut self, unit: HandlerUnit) -> Result<u32, u32> {
         let unit = match unit { HandlerUnit::First => 0, HandlerUnit::Second => 1 };
-        let mut bytes = [0; 4];
+        let mut bytes = Aligned([0; 4]);
         let result = self.stages.machine.enter_with(0x74_11c4, &[Word(unit), Word(super::geometry::frame_handler as *const () as usize as u32), Word(2), Buffer(0)], &mut bytes);
         if result == 0 { Ok(word(&bytes, 0)) } else { Err(result) }
     }

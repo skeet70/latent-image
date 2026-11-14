@@ -55,7 +55,7 @@ fn fresh_live_acquisition_publishes_the_retained_target_and_range_through_owned_
     assert_eq!((published.exposure.0, published.level, published.second, published.offset), (3, 250, 80, 20));
     assert_eq!((published.reference, published.combined, published.reference_level, published.aspect), (40, 150, 190, 7));
     assert_eq!((published.code, published.selected, published.gain_step.0, published.lens.0), (0x1122, 2, 3, 9));
-    assert_eq!(root.acquisition_word(record), 1);
+    assert!(xm1_focus_measurement_round::profile::ProfileRecords::statistics_in_use(&mut root).primary);
     let mirror = &root.records().memory().shared[0x7a0..0x7ec];
     assert_eq!((word(mirror, 0x34), word(mirror, 0x38), word(mirror, 0x3c)), (3, 9, 0));
     let block = root.acquisition_block(record);
@@ -248,4 +248,27 @@ fn live_and_s1_keep_one_selection_preset_and_s1_consumes_the_controllers_change(
     assert!(!root.selection_memory().value_changed());
     let posts = fake::posts(&kernel);
     assert_eq!(posts.iter().map(|post| (post.0, post.1)).collect::<Vec<_>>(), vec![(45, 0x3d01)]);
+}
+
+#[test]
+fn empty_s1_evaluation_preserves_both_persistent_selection_grids() {
+    use xm1_focus_measurement_round::acquisition::ports::EvaluationGrid;
+    use xm1_saclac_interface::round_acquisition::AcquisitionRequest;
+    let kernel = fake::saclac_kernel();
+    let cx = kernel.task().unwrap();
+    let (machine, mut root) = fake::root_with(fake::peers(&cx), Bytes::default(), Entries::default());
+    root.set_grid_count(Branch::Live, 7);
+    root.set_grid_count(Branch::S1, 9);
+    root.set_grid_configuration(Branch::Live, 0x12);
+    root.set_grid_configuration(Branch::S1, 0x34);
+    let grid = crate::stock::acquisition::CALC1_GRID.0;
+    let request = AcquisitionRequest::default();
+    root.request_acquisition(Branch::S1, &request, EvaluationGrid::Empty);
+    assert!((0..1236).all(|offset| machine.byte(grid + offset) == 0));
+    root.request_acquisition(Branch::S1, &request, EvaluationGrid::Current);
+    assert_eq!((machine.word(grid), machine.byte(grid + 0x458)), (9, 0x34));
+    root.request_acquisition(Branch::Live, &request, EvaluationGrid::Current);
+    assert_eq!((machine.word(grid), machine.byte(grid + 0x458)), (7, 0x12));
+    root.request_acquisition(Branch::S1, &request, EvaluationGrid::Current);
+    assert_eq!((machine.word(grid), machine.byte(grid + 0x458)), (9, 0x34));
 }

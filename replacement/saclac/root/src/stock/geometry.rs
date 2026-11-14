@@ -6,6 +6,7 @@ use xm1_saclac_profile_geometry::stock::{layout, areas};
 use xm1_saclac_shared::{settings::Adjustments, stock::{Argument::{Buffer, Word}, Machine}};
 use crate::stages::StageDriver;
 use super::stages::StageMemory;
+use super::acquisition::Aligned;
 
 pub fn address(at: Location) -> u32 { layout::address(at) as u32 }
 
@@ -39,7 +40,7 @@ pub fn mode_payload(m: &impl Machine, r: &ModeRequest, into: Location) -> Stages
 pub fn tertiary_payload(m: &impl Machine, group: PipelineGroup, scale: u8, index: u8, into: Location) -> Stages { Stages(m.enter(0xda_09f4, &[group.0 as usize, scale as usize, index as usize, address(into) as usize])) }
 
 pub fn format<I: Isp, M: Machine>(stages: &mut StageDriver<I, StageMemory, M>, payload: &xm1_saclac_interface::pipeline::FormatPayload) -> bool {
-    let bytes = xm1_saclac_interface::stock::pipeline::format_block(payload);
+    let bytes = Aligned(xm1_saclac_interface::stock::pipeline::format_block(payload));
     let block = config::StockStageBlock { address: bytes.as_ptr() as usize as u32, memory: StageMemory };
     pipeline::write_region(stages, pipeline::Client(2), pipeline::Flags(4), &block) == 0
 }
@@ -56,7 +57,7 @@ pub fn primary_payload(m: &impl Machine, area: &impl Adjustments, group: Pipelin
     Some(PrimaryPayload { entries, count: record.count, first_offset: record.shift[0] as u16, second_offset: record.shift[1] as u16, option })
 }
 pub fn secondary_payload(m: &impl Machine, group: PipelineGroup, _: Option<SecondaryWindow>) -> Option<SecondaryPayload> {
-    let mut bytes = [0; 16];
+    let mut bytes = Aligned([0; 16]);
     let present = m.enter_with(0xda_b900, &[Word(group.0), Buffer(0)], &mut bytes);
     (present != 0).then(|| SecondaryPayload { first: half(&bytes, 0), second: half(&bytes, 2), value: word(&bytes, 4), extra: word(&bytes, 8) })
 }
@@ -117,7 +118,7 @@ pub fn output_level(m: &impl Machine) -> u32 { m.enter(0x100_4618, &[]) }
 
 pub fn query_areas(m: &impl Machine, code: u32, query: &xm1_saclac_profile_geometry::geometry::AreaQuery) -> AreaAnswer {
     let query = areas::query_bytes(query);
-    let mut bytes = [0; 24 + 4 + 10 * areas::TRANSITION_AREA_BYTES];
+    let mut bytes = Aligned([0; 24 + 4 + 10 * areas::TRANSITION_AREA_BYTES]);
     bytes[..24].copy_from_slice(&query);
     let result = m.enter_with(0x106_a2f0, &[Word(code), Buffer(0), Buffer(24)], &mut bytes) as i32;
     if result == -11 { return AreaAnswer::Empty; }

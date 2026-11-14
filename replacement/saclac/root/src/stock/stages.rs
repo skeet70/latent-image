@@ -4,8 +4,9 @@ use xm1_saclac_config::{pipeline::Part, stock::GuestMemory as ConfigurationMemor
 use xm1_saclac_imaging::stock::arguments::GuestMemory as ArgumentMemory;
 use xm1_saclac_shared::stock::{Argument::{Buffer, Word}, Machine};
 
-fn record(client: u32, session: u32) -> [u8; 8] {
-    let mut bytes = [0; 8];
+use super::acquisition::Aligned;
+fn record(client: u32, session: u32) -> Aligned<8> {
+    let mut bytes = Aligned([0; 8]);
     bytes[..4].copy_from_slice(&client.to_le_bytes());
     bytes[4..].copy_from_slice(&session.to_le_bytes());
     bytes

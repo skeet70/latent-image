@@ -18,7 +18,6 @@ pub mod pipeline;
 pub mod window;
 pub mod auxiliary;
 pub mod source;
-pub mod replies;
 
 #[cfg(test)]
 extern crate std;
