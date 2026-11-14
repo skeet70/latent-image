@@ -14,8 +14,6 @@ mod geometry_numeric;
 pub const RESOURCE_INDEX: u32 = 0x76_d9c8;
 /// The configuration lookup selection the bring-up applies the resource index to (0x740b18).
 pub const SELECT_LOOKUP: u32 = 0x74_0b18;
-/// The adjustment configuration's first parameter (0xfa8018).
-pub const ADJUSTMENT_FIRST_PARAMETER: u32 = 0xfa_8018;
 /// saclac's fault reaction (0xf46c20).
 pub const FAULT: u32 = 0xf4_6c20;
 /// The word the live drive's callback records from Lens34, read by the reply at 0xf14f14.

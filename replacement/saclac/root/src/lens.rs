@@ -152,7 +152,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Records for Services<M, 
 impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Configuration for Services<M, R, E, P> {
     fn drive_policy(&mut self) -> DrivePolicy { drive_policy(self.stock.byte(DRIVE_POLICY)) }
 
-    fn adjustment_configured(&mut self) -> bool { self.machine.enter(stock::ADJUSTMENT_FIRST_PARAMETER, &[]) != 0 }
+    fn adjustment_configured(&mut self) -> bool { self.search.configuration.controller_flag(xm1_saclac_calc::adjust::configuration::ControllerFlag::First) }
 
     fn select_lookup(&mut self, index: ResourceIndex) { self.machine.enter(stock::SELECT_LOOKUP, &[index.0 as usize]); }
 }
