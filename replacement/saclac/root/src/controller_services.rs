@@ -220,3 +220,19 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> ProfileShared for Shared
         Source { word: u32::from_le_bytes(bytes[4..8].try_into().expect("measurement source")), byte: bytes[12] }
     }
 }
+
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P> xm1_saclac_calc::exposure::ports::Lens for Services<M, R, E, P> {
+    fn level(&mut self, lens: u32, reference: u32) -> i16 { table::combined_word(&self.stock, table::Step(lens), table::Row(reference)) }
+    fn base_level(&mut self, lens: u32) -> i16 { table::primary_rounded_word(&self.stock, table::Step(lens)) }
+    fn reference_offset(&mut self, reference: u32) -> i16 { table::relative_word(&self.stock, table::Row(reference)) }
+    fn calibration_index(&mut self, lens: u32) -> u32 { table::column(&self.stock, table::Step(lens)) }
+}
+
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P> xm1_saclac_calc::lens_checks::LensControl for Services<M, R, E, P> {
+    fn held_reference(&mut self) -> u32 { self.machine.enter(0x76_d9b8, &[]) }
+}
+
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P> xm1_saclac_calc::adjust::timing::LevelScale for Services<M, R, E, P> {
+    fn linear(&mut self, level: i16) -> u32 { self.machine.enter(0xee_9ab0, &[level as i32 as usize]) }
+    fn log2_difference(&mut self, value: u32, reference: u32) -> i16 { self.machine.enter(0xee_99f0, &[value as usize, reference as usize]) as i16 }
+}

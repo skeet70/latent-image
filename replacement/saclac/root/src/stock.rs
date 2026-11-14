@@ -4,6 +4,7 @@
 //! module owns. Entries are entered and memory read through the shared layer's `Machine`.
 
 pub mod acquisition;
+pub mod shot;
 pub mod stages;
 pub mod geometry;
 mod geometry_services;

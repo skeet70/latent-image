@@ -6,6 +6,9 @@
 //! `stock`.
 
 pub mod geometry;
+pub mod controller_geometry;
+pub mod controller_source;
+mod plan_services;
 pub mod acquisition;
 mod controller_records;
 pub mod controller_services;
