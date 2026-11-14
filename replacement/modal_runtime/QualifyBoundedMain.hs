@@ -267,7 +267,7 @@ expectedFirmware = sha "acb0fbbb9507421f48a6254920cafb5ce20e1fd6bf821bc80c912c1f
 expectedAdjustment = sha "baf475358f1b8ec5b619fd4891cd32a1c8225c0d9341e60318031106a4354aa0"
 
 expectedArchive, expectedRetired, expectedTables, expectedPlan, expectedClock, expectedRom :: Sha256
-expectedArchive = sha "826f86179632ca06994c9b5f3f6c007eef90f6a676752a204b49fde53de43000"
+expectedArchive = sha "6ceb7d4c03c13d043ebecd220ab8a3e5bc762196d4d4ab502df24cc63e7e71ce"
 expectedRetired = sha "4808a6fe7ffec15ebbff6a2f482e1dad0c55e6565f437390b37d594635479c3b"
 expectedTables = sha "7fa536b6f4ab72205be57f407ce7224fa0bbc397aca2061ad2fac3e14ba2021d"
 expectedPlan = sha "b7ee628a84ad930e309bccf74bf69ec8065f22c12ec5b5b059db842bf7bba05a"
@@ -289,7 +289,7 @@ checkerRoot = "bazel-bin"
 trajectoryRoot, runDocument, inputsRoot, tablesPath, planPath, clockPath :: FilePath
 trajectoryRoot = "private-data/scratch/MenuValueFix/inputs/value-trajectories"
 runDocument = "private-data/scratch/ControllerStrategy/engine225/controlled-rtc/xm1-150.json"
-inputsRoot = "private-data/scratch/MenuValueFix/inputs/value-qualifier"
+inputsRoot = "private-data/scratch/MenuValueFix/inputs/value-current6"
 tablesPath = "private-data/scratch/ControllerStrategy/menu-tables.json"
 planPath = inputsRoot </> "bank-plan.json"
 clockPath = "emulation/menu-engine-pair-trajectories/clock-exclusions.json"

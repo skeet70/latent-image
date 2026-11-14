@@ -115,3 +115,10 @@ private-data/scratch/TimeServices/runs/20261114T054438Z-time-evidence-facts12/re
 private-data/scratch/TimeServices/runs/20261114T054438Z-time-evidence-facts12/run.json
 private-data/scratch/TimeServices/runs/20261114T055946Z-time-qualifier-recover67-fixed12/result
 private-data/scratch/TimeServices/runs/20261114T055946Z-time-qualifier-recover67-fixed12/run.json
+private-data/scratch/MenuValueFix/inputs/value-current6
+private-data/scratch/MenuValueFix/runs/20261114T221358Z-stage-current-value6/result
+private-data/scratch/MenuValueFix/runs/20261114T221358Z-stage-current-value6/run.json
+private-data/scratch/MenuValueFix/runs/20261114T215249Z-readiness-acceptance6/result
+private-data/scratch/MenuValueFix/runs/20261114T215249Z-readiness-acceptance6/run.json
+private-data/scratch/MenuValueFix/runs/20261114T215525Z-diag-handoff-debug-repaired/result
+private-data/scratch/MenuValueFix/runs/20261114T215525Z-diag-handoff-debug-repaired/run.json
