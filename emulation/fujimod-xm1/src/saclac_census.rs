@@ -10,15 +10,16 @@ use fujimod_xm1::bridge::{read, sha256, write};
 use fujimod_xm1::checkpoint::{BootIdentity, PostBootReceipt, SHARED_STORE, post_boot};
 use fujimod_xm1::trace::SiteRead;
 use fujimod_xm1::guest::{GpioKey, ModeDialPosition, RouteKey, ShutterStage};
-use fujimod_xm1::machine::{Hold, KeyPulse, MENU_PULSE, Machine, RunOutcome, key_pulse};
+use fujimod_xm1::machine::{Hold, KeyPulse, MENU_PULSE, Machine, RunOutcome, SCANNED_HOLD_TICKS, key_pulse};
 use fujimod_xm1::run::{self, RunDocument, ValidatedUpdate};
+use fujimod_xm1::stimulus::{Deadline, StimulusClock, StimulusReceipt, Stimuli, TickSchedule};
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const USAGE: &str = "saclac-census --run RUN --update STOCK_DAT --boot-rom ROM --sites SITES --scenario cold-boot|menu-route|half-press|shoot-without-lens|capture|playback|mode-dial [--steps STEPS] [--checkpoints ROOT] [--start reset|post-boot] --output NEW_DIR";
+const USAGE: &str = "saclac-census --run RUN --update STOCK_DAT --boot-rom ROM --sites SITES --scenario cold-boot|menu-route|half-press|shoot-without-lens|capture|playback|mode-dial [--steps STEPS] [--checkpoints ROOT] [--start reset|post-boot] [--stimulus-ticks SCHEDULE] --output NEW_DIR | saclac-census schedule CENSUS_JSON SCHEDULE_JSON";
 const SITE_LABEL: &str = "saclac-site";
 const SITE_LIMIT: usize = 4096;
 const CONTEXT_LIMIT: usize = 1024;
@@ -303,9 +304,24 @@ struct Pulse { key: Key, pressed: u64, released: u64, settled: u64, debounced: b
 #[derive(Clone, Copy, Debug, Serialize)]
 struct PressRow { kind: PressKind, pressed: u64, released: u64, settled: u64, debounced: bool }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum PressKind { HalfPress, FullPress, Play }
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(untagged)]
+enum Input { Key(Key), Gpio(PressKind) }
+
+/// What the census does to the guest at a schedule point.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case", tag = "action")]
+enum Stimulus {
+    Press { input: Input },
+    Release { input: Input },
+    ModeDial { position: ModeDialPosition },
+    /// The observation ends.
+    End,
+}
 
 /// The mode-dial position set and the calibrated window it was held at.
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -562,9 +578,11 @@ struct Report<'a> {
     observation_start_instructions: u64,
     executed_instructions: u64,
     counts: Option<[u64; 2]>,
+    stimuli: StimulusReceipt<'a, Stimulus>,
     milestones: &'a [Milestone],
     menu_trace: &'a [MenuSample],
     presses: &'a [PressRow],
+    key_pulses: &'a [Pulse],
     mode_dial: Option<DialRow>,
     points: Vec<PointRow<'a>>,
     dispatcher: Dispatcher,
@@ -644,7 +662,9 @@ struct Census<'a> {
     milestones: Vec<Milestone>,
     menu_trace: Vec<MenuSample>,
     presses: Vec<PressRow>,
+    key_pulses: Vec<Pulse>,
     mode_dial: Option<DialRow>,
+    stimuli: Stimuli<Stimulus>,
 }
 
 impl<'a> Census<'a> {
@@ -712,13 +732,14 @@ impl<'a> Census<'a> {
         Ok(())
     }
 
-    fn advance(&mut self, machine: &mut Machine, budget: u64) -> Result<(), String> {
-        let end = machine.instructions().checked_add(budget).filter(|end| *end <= INSTRUCTION_LIMIT)
-            .ok_or("census instruction bound exceeded")?;
-        while machine.instructions() < end {
-            machine.traces.hits.clear();
+    /// Runs to `deadline`, recording every census stop on the way.
+    fn run_to(&mut self, machine: &mut Machine, deadline: Deadline) -> Result<(), String> {
+        while !deadline.reached(machine) {
             let before = machine.instructions();
-            let outcome = machine.run_until(end - before, None);
+            require(before < INSTRUCTION_LIMIT, "census instruction bound exceeded")?;
+            let before_tick = machine.session.board.now();
+            machine.traces.hits.clear();
+            let outcome = deadline.run(machine, INSTRUCTION_LIMIT - before);
             machine.require_running()?;
             require(matches!(outcome, RunOutcome::Stopped | RunOutcome::Completed), "unexpected census run outcome")?;
             let mut stops = Vec::new();
@@ -736,11 +757,13 @@ impl<'a> Census<'a> {
                 });
             }
             if stops.is_empty() {
-                require(machine.instructions() >= end, "run ended early without a census stop")?;
+                require(deadline.reached(machine) || machine.instructions() < INSTRUCTION_LIMIT, "census instruction bound exceeded")?;
+                require(deadline.reached(machine), "run ended early without a census stop")?;
             } else {
                 self.stop(machine, &stops)?;
             }
-            require(machine.instructions() > before || !stops.is_empty(), "census made no progress")?;
+            require(machine.instructions() > before || machine.session.board.now() > before_tick || !stops.is_empty(),
+                "census made no progress")?;
             if self.watch.as_ref().is_some_and(|watch| machine.instructions() - watch.started >= SEGMENT_INSTRUCTIONS) {
                 self.restart_watch(machine)?;
             }
@@ -748,37 +771,94 @@ impl<'a> Census<'a> {
         Ok(())
     }
 
+    fn advance(&mut self, machine: &mut Machine, budget: u64) -> Result<(), String> {
+        let end = machine.instructions().checked_add(budget).filter(|end| *end <= INSTRUCTION_LIMIT)
+            .ok_or("census instruction bound exceeded")?;
+        self.run_to(machine, Deadline::instructions(end))
+    }
+
+    /// Runs `budget` instructions on the instruction clock; on the board-tick clock, to the next point's tick.
+    fn wait(&mut self, machine: &mut Machine, budget: u64) -> Result<(), String> {
+        match self.stimuli.clock() {
+            StimulusClock::Instructions => self.advance(machine, budget),
+            StimulusClock::BoardTicks => {
+                let deadline = self.stimuli.deadline(machine, budget)?;
+                self.run_to(machine, deadline)
+            }
+        }
+    }
+
+    /// Runs to the next point's deadline and records it; the caller applies `stimulus` there.
+    fn reach(&mut self, machine: &mut Machine, stimulus: Stimulus) -> Result<(), String> {
+        let deadline = self.stimuli.deadline(machine, 0)?;
+        self.run_to(machine, deadline)?;
+        self.stimuli.reach(machine, stimulus)
+    }
+
+    /// Calls `probe` before each slice of at most `slice` instructions until it holds or the window
+    /// closes: after `cap` instructions on the instruction clock, at the next point's tick on the
+    /// board-tick clock. Returns the instruction count it stopped at and whether `probe` held.
+    fn poll(
+        &mut self,
+        machine: &mut Machine,
+        cap: u64,
+        slice: u64,
+        mut probe: impl FnMut(&mut Self, &Machine) -> Result<bool, String>,
+    ) -> Result<(u64, bool), String> {
+        let start = machine.instructions();
+        loop {
+            if probe(self, machine)? { return Ok((machine.instructions(), true)); }
+            match self.stimuli.clock() {
+                StimulusClock::Instructions => {
+                    let spent = machine.instructions() - start;
+                    if spent >= cap { return Ok((machine.instructions(), false)); }
+                    self.advance(machine, (cap - spent).min(slice))?;
+                }
+                StimulusClock::BoardTicks => {
+                    let deadline = self.stimuli.deadline(machine, 0)?;
+                    if deadline.reached(machine) { return Ok((machine.instructions(), false)); }
+                    self.run_to(machine, deadline.within(machine, slice))?;
+                }
+            }
+        }
+    }
+
     fn hold(&mut self, machine: &mut Machine, hold: Hold) -> Result<(), String> {
         let count = match hold {
             Hold::Instructions(count) => count,
             Hold::BoardTicks(ticks) => machine.hold_bound(ticks),
         };
-        self.advance(machine, count)
+        self.wait(machine, count)
     }
 
     fn pulse(&mut self, machine: &mut Machine, key: Key, pulse: KeyPulse) -> Result<Pulse, String> {
-        let Some(route) = key.route() else {
-            let gpio = machine.document.firmware.fn_key(&machine.session)?;
-            let (pressed, released, settled, debounced) = self.gpio_row(machine, gpio, pulse)?;
-            return Ok(Pulse { key, pressed, released, settled, debounced });
+        let row = match key.route() {
+            None => {
+                let gpio = machine.document.firmware.fn_key(&machine.session)?;
+                let (pressed, released, settled, debounced) = self.gpio_row(machine, Input::Key(key), gpio, pulse)?;
+                Pulse { key, pressed, released, settled, debounced }
+            }
+            Some(route) => {
+                self.reach(machine, Stimulus::Press { input: Input::Key(key) })?;
+                let pressed = machine.instructions();
+                machine.press(route)?;
+                self.hold(machine, pulse.hold)?;
+                self.reach(machine, Stimulus::Release { input: Input::Key(key) })?;
+                machine.release_key(route)?;
+                let released = machine.instructions();
+                let (settled, debounced) = self.poll(machine, pulse.release, RELEASE_POLL,
+                    |_, machine| machine.document.firmware.released(&machine.session, route))?;
+                Pulse { key, pressed, released, settled, debounced }
+            }
         };
-        let pressed = machine.instructions();
-        machine.press(route)?;
-        self.hold(machine, pulse.hold)?;
-        machine.release_key(route)?;
-        let released = machine.instructions();
-        let (settled, debounced) = loop {
-            if machine.document.firmware.released(&machine.session, route)? { break (machine.instructions(), true); }
-            let spent = machine.instructions() - released;
-            if spent >= pulse.release { break (machine.instructions(), false); }
-            self.advance(machine, (pulse.release - spent).min(RELEASE_POLL))?;
-        };
-        Ok(Pulse { key, pressed, released, settled, debounced })
+        self.key_pulses.push(row);
+        Ok(row)
     }
 
     /// Holds a GPIO key down; a stop inside the hold is recorded.
-    fn gpio_down(&mut self, machine: &mut Machine, gpio: GpioKey, hold: Hold) -> Result<u64, String> {
+    fn gpio_down(&mut self, machine: &mut Machine, input: Input, gpio: GpioKey, hold: Hold) -> Result<u64, String> {
         let node = machine.document.gpio.clone();
+        self.reach(machine, Stimulus::Press { input })?;
         let pressed = machine.instructions();
         machine.session.gpio(&node.0, gpio.port, gpio.pin, gpio.pressed_high)?;
         self.hold(machine, hold)?;
@@ -786,28 +866,25 @@ impl<'a> Census<'a> {
     }
 
     /// Releases a GPIO key and waits for the firmware-debounced release byte.
-    fn gpio_up(&mut self, machine: &mut Machine, gpio: GpioKey, release: u64) -> Result<(u64, u64, bool), String> {
+    fn gpio_up(&mut self, machine: &mut Machine, input: Input, gpio: GpioKey, release: u64) -> Result<(u64, u64, bool), String> {
         let node = machine.document.gpio.clone();
+        self.reach(machine, Stimulus::Release { input })?;
         machine.session.gpio(&node.0, gpio.port, gpio.pin, !gpio.pressed_high)?;
         let released = machine.instructions();
-        let (settled, debounced) = loop {
-            if machine.document.firmware.gpio_released(&machine.session, gpio)? { break (machine.instructions(), true); }
-            let spent = machine.instructions() - released;
-            if spent >= release { break (machine.instructions(), false); }
-            self.advance(machine, (release - spent).min(RELEASE_POLL))?;
-        };
+        let (settled, debounced) = self.poll(machine, release, RELEASE_POLL,
+            |_, machine| machine.document.firmware.gpio_released(&machine.session, gpio))?;
         Ok((released, settled, debounced))
     }
 
     /// Holds and releases a GPIO key, advancing through the census so a stop inside the hold is recorded.
-    fn gpio_row(&mut self, machine: &mut Machine, gpio: GpioKey, pulse: KeyPulse) -> Result<(u64, u64, u64, bool), String> {
-        let pressed = self.gpio_down(machine, gpio, pulse.hold)?;
-        let (released, settled, debounced) = self.gpio_up(machine, gpio, pulse.release)?;
+    fn gpio_row(&mut self, machine: &mut Machine, input: Input, gpio: GpioKey, pulse: KeyPulse) -> Result<(u64, u64, u64, bool), String> {
+        let pressed = self.gpio_down(machine, input, gpio, pulse.hold)?;
+        let (released, settled, debounced) = self.gpio_up(machine, input, gpio, pulse.release)?;
         Ok((pressed, released, settled, debounced))
     }
 
     fn press_row(&mut self, machine: &mut Machine, kind: PressKind, gpio: GpioKey, pulse: KeyPulse) -> Result<(), String> {
-        let (pressed, released, settled, debounced) = self.gpio_row(machine, gpio, pulse)?;
+        let (pressed, released, settled, debounced) = self.gpio_row(machine, Input::Gpio(kind), gpio, pulse)?;
         self.presses.push(PressRow { kind, pressed, released, settled, debounced });
         Ok(())
     }
@@ -835,15 +912,25 @@ impl<'a> Census<'a> {
         require(reached.is_some(), "menu endpoint differs")
     }
 
-    /// Advances `budget` instructions in menu polls, recording the first instruction at
-    /// which the expected menu is observed.
+    /// Advances `budget` instructions in menu polls, on the board-tick clock to the next point's tick,
+    /// recording the first instruction at which the expected menu is observed.
     fn advance_to(&mut self, machine: &mut Machine, budget: u64, expected: MenuTriple) -> Result<Option<u64>, String> {
         let mut first = None;
         let mut spent = 0;
-        while spent < budget {
-            let step = (budget - spent).min(MENU_POLL);
-            self.advance(machine, step)?;
-            spent += step;
+        loop {
+            match self.stimuli.clock() {
+                StimulusClock::Instructions => {
+                    if spent >= budget { break; }
+                    let step = (budget - spent).min(MENU_POLL);
+                    self.advance(machine, step)?;
+                    spent += step;
+                }
+                StimulusClock::BoardTicks => {
+                    let deadline = self.stimuli.deadline(machine, budget)?;
+                    if deadline.reached(machine) { break; }
+                    self.run_to(machine, deadline.within(machine, MENU_POLL))?;
+                }
+            }
             if first.is_none() && Self::menu(machine)? == Some(expected) {
                 first = Some(machine.instructions());
             }
@@ -852,15 +939,12 @@ impl<'a> Census<'a> {
     }
 
     fn state(&mut self, machine: &mut Machine, pulse: Pulse, expected: MenuTriple) -> Result<(), String> {
-        let start = machine.instructions();
-        let reached = loop {
-            self.sample_menu(machine)?;
-            if Self::menu(machine)? == Some(expected) { break Some(machine.instructions()); }
-            let spent = machine.instructions() - start;
-            if spent >= STEP_STATE_CAP { break None; }
-            self.advance(machine, (STEP_STATE_CAP - spent).min(MENU_POLL))?;
-        };
-        if reached.is_some() { self.advance(machine, STEP_SETTLE)?; }
+        let (at, met) = self.poll(machine, STEP_STATE_CAP, MENU_POLL, |census, machine| {
+            census.sample_menu(machine)?;
+            Ok(Self::menu(machine)? == Some(expected))
+        })?;
+        let reached = met.then_some(at);
+        if reached.is_some() { self.wait(machine, STEP_SETTLE)?; }
         let observed = Self::menu(machine)?;
         self.milestones.push(Milestone { phase: self.phase.clone(), pulse: Some(pulse), expected, first: reached, reached, observed, finished: machine.instructions() });
         require(reached.is_some() && observed == Some(expected), "menu trajectory state differs")
@@ -884,7 +968,7 @@ impl<'a> Census<'a> {
         for key in std::iter::repeat_n(Key::Up, 12).chain([Key::Ok, Key::Ok]) {
             self.pulse(machine, key, KeyPulse::instructions(SETUP_HOLD, SETUP_RELEASE))?;
         }
-        self.advance(machine, SETUP_SETTLE)?;
+        self.wait(machine, SETUP_SETTLE)?;
         Ok(())
     }
 
@@ -911,9 +995,9 @@ impl<'a> Census<'a> {
         let pulse = self.pulse(machine, Key::Up, Key::Up.pulse())?;
         self.state(machine, pulse, MenuTriple { menu: 1, setting: LENS_SETTING, cursor: LENS_ON_CURSOR })?;
         self.pulse(machine, Key::Ok, Key::Ok.pulse())?;
-        self.advance(machine, SETUP_SETTLE)?;
+        self.wait(machine, SETUP_SETTLE)?;
         self.pulse(machine, Key::Back, Key::Back.pulse())?;
-        self.advance(machine, SETUP_SETTLE)
+        self.wait(machine, SETUP_SETTLE)
     }
 
     fn half_press(&mut self, machine: &mut Machine) -> Result<(), String> {
@@ -921,9 +1005,9 @@ impl<'a> Census<'a> {
         let pulse = KeyPulse::instructions(HALF_PRESS_HOLD, HALF_PRESS_RELEASE);
         let gpio = machine.document.firmware.shutter(&machine.session, ShutterStage::Half)?;
         self.press_row(machine, PressKind::HalfPress, gpio, pulse)?;
-        self.advance(machine, HALF_PRESS_SETTLE)?;
+        self.wait(machine, HALF_PRESS_SETTLE)?;
         self.phase = "half-press-settled".into();
-        self.advance(machine, HALF_PRESS_SETTLE)
+        self.wait(machine, HALF_PRESS_SETTLE)
     }
 
     fn full_press(&mut self, machine: &mut Machine) -> Result<(), String> {
@@ -931,7 +1015,7 @@ impl<'a> Census<'a> {
         let pulse = KeyPulse::instructions(FULL_PRESS_HOLD, FULL_PRESS_RELEASE);
         let gpio = machine.document.firmware.shutter(&machine.session, ShutterStage::Full)?;
         self.press_row(machine, PressKind::FullPress, gpio, pulse)?;
-        self.advance(machine, HALF_PRESS_SETTLE)
+        self.wait(machine, HALF_PRESS_SETTLE)
     }
 
     /// S1 held, S2 pressed and released, then S1 released.
@@ -939,28 +1023,30 @@ impl<'a> Census<'a> {
         self.phase = "s1-s2".into();
         let half = machine.document.firmware.shutter(&machine.session, ShutterStage::Half)?;
         let full = machine.document.firmware.shutter(&machine.session, ShutterStage::Full)?;
-        let pressed = self.gpio_down(machine, half, Hold::Instructions(HALF_PRESS_HOLD))?;
-        let full_pressed = self.gpio_down(machine, full, Hold::Instructions(FULL_PRESS_HOLD))?;
-        let (full_released, full_settled, full_debounced) = self.gpio_up(machine, full, FULL_PRESS_RELEASE)?;
+        let (half_input, full_input) = (Input::Gpio(PressKind::HalfPress), Input::Gpio(PressKind::FullPress));
+        let pressed = self.gpio_down(machine, half_input, half, Hold::Instructions(HALF_PRESS_HOLD))?;
+        let full_pressed = self.gpio_down(machine, full_input, full, Hold::Instructions(FULL_PRESS_HOLD))?;
+        let (full_released, full_settled, full_debounced) = self.gpio_up(machine, full_input, full, FULL_PRESS_RELEASE)?;
         self.presses.push(PressRow { kind: PressKind::FullPress, pressed: full_pressed, released: full_released, settled: full_settled, debounced: full_debounced });
-        self.advance(machine, HALF_PRESS_SETTLE)?;
-        let (half_released, half_settled, half_debounced) = self.gpio_up(machine, half, HALF_PRESS_RELEASE)?;
+        self.wait(machine, HALF_PRESS_SETTLE)?;
+        let (half_released, half_settled, half_debounced) = self.gpio_up(machine, half_input, half, HALF_PRESS_RELEASE)?;
         self.presses.push(PressRow { kind: PressKind::HalfPress, pressed, released: half_released, settled: half_settled, debounced: half_debounced });
-        self.advance(machine, HALF_PRESS_SETTLE)
+        self.wait(machine, HALF_PRESS_SETTLE)
     }
 
     fn playback(&mut self, machine: &mut Machine) -> Result<(), String> {
         self.phase = "playback".into();
         let gpio = machine.document.firmware.play(&machine.session)?;
         self.press_row(machine, PressKind::Play, gpio, MENU_PULSE)?;
-        self.advance(machine, PLAY_SETTLE)
+        self.wait(machine, PLAY_SETTLE)
     }
 
     fn mode_dial(&mut self, machine: &mut Machine) -> Result<(), String> {
         self.phase = "mode-dial".into();
+        self.reach(machine, Stimulus::ModeDial { position: ModeDialPosition::M })?;
         let window = machine.set_mode_dial(ModeDialPosition::M)?;
         self.mode_dial = Some(DialRow { position: window.position, low: window.low, high: window.high });
-        self.advance(machine, MODE_DIAL_SETTLE)
+        self.wait(machine, MODE_DIAL_SETTLE)
     }
 
     fn scenario(&mut self, machine: &mut Machine, scenario: Scenario, trajectory: Vec<TrajectoryPhase>) -> Result<(), String> {
@@ -1001,7 +1087,9 @@ impl<'a> Census<'a> {
                 self.boot(machine, false)?;
                 self.mode_dial(machine)
             }
-        }
+        }?;
+        self.reach(machine, Stimulus::End)?;
+        self.stimuli.require_complete()
     }
 
     fn point_rows(&self) -> Vec<PointRow<'_>> {
@@ -1046,7 +1134,7 @@ fn arguments() -> Result<BTreeMap<String, PathBuf>, String> {
     while let Some(flag) = arguments.next() {
         let name = flag.to_str().ok_or(USAGE)?.to_owned();
         let value = arguments.next().ok_or(USAGE)?;
-        require(REQUIRED.contains(&name.as_str()) || name == "--steps" || name == "--checkpoints" || name == "--start", USAGE)?;
+        require(REQUIRED.contains(&name.as_str()) || ["--steps", "--checkpoints", "--start", "--stimulus-ticks"].contains(&name.as_str()), USAGE)?;
         require(paths.insert(name, PathBuf::from(value)).is_none(), USAGE)?;
     }
     for name in REQUIRED {
@@ -1108,6 +1196,13 @@ fn drive() -> Result<(), String> {
         (_, None) => (Trajectory { before_unload: Vec::new() }, None),
     };
     let phases = trajectory.before_unload;
+    let (schedule, schedule_binding) = match paths.get("--stimulus-ticks") {
+        Some(path) => {
+            let (bytes, binding) = bound(path)?;
+            (Some(TickSchedule::<Stimulus>::parse(&bytes)?), Some(binding))
+        }
+        None => (None, None),
+    };
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let (executable_bytes, executable_binding) = bound(&executable)?;
     let boot_identity = BootIdentity::new(&run_bytes, &dat, &rom, &[], None,
@@ -1137,7 +1232,9 @@ fn drive() -> Result<(), String> {
         milestones: Vec::new(),
         menu_trace: Vec::new(),
         presses: Vec::new(),
+        key_pulses: Vec::new(),
         mode_dial: None,
+        stimuli: Stimuli::instructions(&machine),
     };
     let setup = if start == ObservationStart::PostBoot {
         let root = paths.get("--checkpoints").map(PathBuf::as_path).unwrap_or_else(|| Path::new(SHARED_STORE));
@@ -1145,11 +1242,16 @@ fn drive() -> Result<(), String> {
             checkpoint = Some(receipt);
             census.milestones.clear();
             census.menu_trace.clear();
+            census.key_pulses.clear();
         })
     } else { Ok(()) };
     let observation_start_instructions = machine.instructions();
     let reused_instructions = checkpoint.as_ref().filter(|receipt| receipt.lookup == fujimod_xm1::checkpoint::CacheLookup::Hit)
         .map_or(0, |receipt| receipt.record.instructions);
+    census.stimuli = match schedule {
+        Some(schedule) => Stimuli::board_ticks(&machine, schedule),
+        None => Stimuli::instructions(&machine),
+    };
     machine.traces.bound_full_registers(NonZeroUsize::new(2).ok_or("zero hit bound")?);
     machine.traces.stop_labels = [SITE_LABEL.to_owned()].into_iter().collect();
     if let Some(dispatch) = &plan.dispatch {
@@ -1177,7 +1279,8 @@ fn drive() -> Result<(), String> {
         None => Ok(()),
     };
     let error = observed.err().or(ended.err());
-    let inputs = [Some(run_binding), Some(dat_binding), Some(rom_binding), Some(sites_binding), trajectory_binding, Some(executable_binding)]
+    let inputs = [Some(run_binding), Some(dat_binding), Some(rom_binding), Some(sites_binding), trajectory_binding, schedule_binding,
+        Some(executable_binding)]
         .into_iter().flatten().collect();
     let report = Report {
         schema: 3,
@@ -1192,9 +1295,11 @@ fn drive() -> Result<(), String> {
         observation_start_instructions,
         executed_instructions: machine.instructions() - reused_instructions,
         counts: machine.session.board.instruction_counts().try_into().ok(),
+        stimuli: census.stimuli.receipt(),
         milestones: &census.milestones,
         menu_trace: &census.menu_trace,
         presses: &census.presses,
+        key_pulses: &census.key_pulses,
         mode_dial: census.mode_dial,
         points: census.point_rows(),
         dispatcher: census.dispatcher(),
@@ -1226,8 +1331,31 @@ fn drive() -> Result<(), String> {
     match error { Some(error) => Err(error), None => Ok(()) }
 }
 
+/// The schedule of a census receipt's points, with each point after a release at least
+/// `SCANNED_HOLD_TICKS` after it.
+fn schedule_from_receipt(bytes: &[u8]) -> Result<TickSchedule<Stimulus>, String> {
+    #[derive(Deserialize)]
+    struct Receipt<'a> {
+        #[serde(borrow)]
+        stimuli: &'a serde_json::value::RawValue,
+    }
+    let receipt: Receipt = serde_json::from_slice(bytes).map_err(|error| format!("census receipt: {error}"))?;
+    Ok(TickSchedule::parse(receipt.stimuli.get().as_bytes())?
+        .widened(SCANNED_HOLD_TICKS, |stimulus| matches!(stimulus, Stimulus::Release { .. })))
+}
+
+fn write_schedule(census: &Path, output: &Path) -> Result<(), String> {
+    let schedule = schedule_from_receipt(&read(census)?)?;
+    write(output, &serde_json::to_vec_pretty(&schedule).map_err(|error| error.to_string())?)
+}
+
 fn main() -> ExitCode {
-    match drive() {
+    let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    let result = match arguments.as_slice() {
+        [command, census, output] if command == "schedule" => write_schedule(Path::new(census), Path::new(output)),
+        _ => drive(),
+    };
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("saclac-census: {error}");
@@ -1318,5 +1446,50 @@ mod tests {
         }
         assert!(parse_scenario("movie").unwrap_err().contains("no movie key"));
         assert!(parse_scenario("still").is_err());
+    }
+
+    #[test]
+    fn a_receipt_stimulus_section_is_a_schedule_of_census_stimuli() {
+        let points = [
+            Stimulus::Press { input: Input::Key(Key::Down) },
+            Stimulus::Release { input: Input::Key(Key::Fn) },
+            Stimulus::Press { input: Input::Gpio(PressKind::HalfPress) },
+            Stimulus::ModeDial { position: ModeDialPosition::M },
+            Stimulus::End,
+        ];
+        let section = serde_json::json!({
+            "clock": "instructions",
+            "origin": {"board_tick": 7, "instructions": 9},
+            "points": points.iter().enumerate().map(|(tick, stimulus)| serde_json::json!({
+                "stimulus": stimulus, "tick": tick * 1_000, "instructions": tick * 24_000,
+            })).collect::<Vec<_>>(),
+        });
+        assert_eq!(section["points"][0]["stimulus"], serde_json::json!({"action": "press", "input": "down"}));
+        assert_eq!(section["points"][2]["stimulus"], serde_json::json!({"action": "press", "input": "half-press"}));
+        assert_eq!(section["points"][4]["stimulus"], serde_json::json!({"action": "end"}));
+        let schedule = TickSchedule::<Stimulus>::parse(&serde_json::to_vec(&section).unwrap()).unwrap();
+        let reparsed = serde_json::json!({"points": points.iter().enumerate().map(|(tick, stimulus)| serde_json::json!({
+            "stimulus": stimulus, "tick": tick * 1_000,
+        })).collect::<Vec<_>>()});
+        for stimulus in points {
+            assert_eq!(serde_json::from_value::<Stimulus>(serde_json::to_value(stimulus).unwrap()).unwrap(), stimulus);
+        }
+        assert_eq!(schedule, TickSchedule::parse(&serde_json::to_vec(&reparsed).unwrap()).unwrap());
+    }
+
+    #[test]
+    fn a_schedule_from_a_receipt_leaves_a_scanned_hold_after_each_release() {
+        let down = |action: &str, tick: u64| serde_json::json!({"stimulus": {"action": action, "input": "down"}, "tick": tick, "instructions": 0});
+        let receipt = serde_json::json!({
+            "schema": 3,
+            "stimuli": {"clock": "instructions", "origin": {"board_tick": 0, "instructions": 0}, "points": [
+                down("press", 0), down("release", 1_000), down("press", 1_100), down("release", 2_000_000),
+                {"stimulus": {"action": "end"}, "tick": 9_000_000, "instructions": 0},
+            ]},
+        });
+        let schedule = schedule_from_receipt(&serde_json::to_vec(&receipt).unwrap()).unwrap();
+        let ticks: Vec<_> = serde_json::to_value(&schedule).unwrap()["points"].as_array().unwrap().iter()
+            .map(|point| point["tick"].as_u64().unwrap()).collect();
+        assert_eq!(ticks, [0, 1_000, 721_000, 2_719_900, 9_719_900]);
     }
 }
