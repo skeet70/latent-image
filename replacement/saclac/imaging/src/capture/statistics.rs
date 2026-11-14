@@ -81,7 +81,8 @@ pub struct RawStatistics<'a> {
 #[derive(Debug)]
 pub struct Prepared<'a> {
     pub planes: &'a mut [Plane; CHANNELS],
-    pub regions: &'a mut [Region; REGIONS],
+    /// Three regions are replaced from raw sums; all ten caller regions are corrected in place.
+    pub regions: &'a mut [Region; REGION_AREAS],
 }
 
 #[derive(Debug)]
@@ -183,7 +184,7 @@ const fn normalised_area(total: u32, reference_total: u32) -> Area {
 
 /// Normalises the grid and regions to the profile's scaled pixel count, and records the areas
 /// they now stand for in `parameters` (0xffc668).
-fn rescale(geometry: &mut impl PixelGeometry, planes: &mut [Plane; CHANNELS], regions: Option<&mut [Region; REGIONS]>, parameters: &mut CaptureParameters) {
+fn rescale(geometry: &mut impl PixelGeometry, planes: &mut [Plane; CHANNELS], regions: Option<&mut [Region; REGION_AREAS]>, parameters: &mut CaptureParameters) {
     let [first, second] = geometry.scale_divisors(parameters.profile);
     let reference = first.wrapping_mul(second);
     let reference_total = geometry.channel_pixels(reference).total;
@@ -228,8 +229,10 @@ pub fn prepare(ports: &mut (impl PixelGeometry + Adjustments), raw: &RawStatisti
         transfer.apply(output.planes, &pixels);
     }
 
-    for ((region, [first, second, third]), area) in output.regions.iter_mut().zip(raw.regions).zip(parameters.regions) {
+    for (region, [first, second, third]) in output.regions.iter_mut().zip(raw.regions) {
         *region = [first, second, third, second];
+    }
+    for (region, area) in output.regions.iter_mut().zip(parameters.regions) {
         let pixels = ports.channel_pixels(area.pixels().max(floor));
         subtract_region_black(region, &pixels, black);
         if let Some(transfer) = &transfer {

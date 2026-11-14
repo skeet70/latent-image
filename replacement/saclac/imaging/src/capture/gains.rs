@@ -46,6 +46,7 @@ pub struct GainRequest {
     /// 1 or 2..=3 select the class variant sets.
     pub variant_set: u32,
     pub forced: bool,
+    /// Stock's request builder 0xf4d4cc never writes the request's +0x3c, so stock reads stack residue here.
     pub variant_subset: u32,
 }
 

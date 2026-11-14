@@ -124,6 +124,9 @@ pub mod raid0 {
             return Err(fault(unit::POINTS_LOAD));
         }
         let shift = Shift { low: memory.halfword(at + 6), high: memory.halfword(at + 8) };
+        if count == 0 {
+            return Ok((&[], shift));
+        }
         Ok((memory.words(memory.word(at), count), shift))
     }
 
@@ -133,6 +136,9 @@ pub mod raid0 {
         let count = usize::from(memory.halfword(at + 4));
         if count > unit::PAIR_LIMIT {
             return Err(fault(unit::PAIRS_LOAD));
+        }
+        if count == 0 {
+            return Ok((&[], memory.halfword(at + 6)));
         }
         Ok((memory.words(memory.word(at), count), memory.halfword(at + 6)))
     }

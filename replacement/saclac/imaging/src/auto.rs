@@ -168,24 +168,21 @@ pub enum Window {
 }
 
 pub fn set_window<I: Isp>(isp: &mut I, caller: Caller, window: Window) -> Result<(), Refusal> {
-    let (operation, register, checks, words) = match window {
+    let (operation, register, checks) = match window {
         Window::First([first, second]) => (
             Operation(0x1c),
             0x400,
             [first.position <= 0x3fff, length_fits(first.length), second.position <= 0x1fff, length_fits(second.length)],
-            [segment_word(first.position.into(), first.length), segment_word(second.position.into(), second.length)],
         ),
         Window::Second(span, segment) => (
             Operation(0x1e),
             0x408,
             [span.start <= 0x3fff, span_fits(span), segment.position <= 0x1fff, length_fits(segment.length)],
-            [span_word14(span), segment_word(segment.position.into(), segment.length)],
         ),
         Window::Third(segment, span) => (
             Operation(0x20),
             0x410,
             [segment.position <= 0x3fff, length_fits(segment.length), span.start <= 0x1fff, span_fits(span)],
-            [segment_word(segment.position.into(), segment.length), span_word(span.start.into(), span)],
         ),
         Window::Fourth([first, second]) => {
             let shifted = u32::from(second.position) + 1;
@@ -193,12 +190,17 @@ pub fn set_window<I: Isp>(isp: &mut I, caller: Caller, window: Window) -> Result
                 Operation(0x31),
                 0x604,
                 [first.position <= 0x1fff, length_fits(first.length), shifted <= 0x1fff, length_fits(second.length)],
-                [segment_word(first.position.into(), first.length), segment_word(shifted, second.length)],
             )
         }
     };
     begin(isp, caller, operation);
     admit(isp, caller, operation, &checks)?;
+    let words = match window {
+        Window::First([first, second]) => [segment_word(first.position.into(), first.length), segment_word(second.position.into(), second.length)],
+        Window::Second(span, segment) => [span_word14(span), segment_word(segment.position.into(), segment.length)],
+        Window::Third(segment, span) => [segment_word(segment.position.into(), segment.length), span_word(span.start.into(), span)],
+        Window::Fourth([first, second]) => [segment_word(first.position.into(), first.length), segment_word(u32::from(second.position) + 1, second.length)],
+    };
     write(isp, register, words[0]);
     write(isp, register + 4, words[1]);
     Ok(())

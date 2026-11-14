@@ -33,6 +33,12 @@ fn gates_and_path_share_the_control_register() {
     assert_eq!(gates(&mut isp), Gates { first: true, second: false });
     isp.preset(r(0), 0x0006_0000);
     assert_eq!(path(&mut isp), Path { source: PathSource::Third, enabled: true });
+    set_gates(&mut isp, Gates { first: false, second: true });
+    set_path(&mut isp, Path { source: PathSource::Fourth, enabled: true });
+    assert_eq!(isp.writes(), [
+        (r(0), 0x0001_0005), (r(0), 0x0001_1005),
+        (r(0), 0x0006_2000), (r(0), 0x0007_2000),
+    ]);
 }
 
 #[test]
@@ -140,25 +146,36 @@ fn the_second_window_replaces_the_step_register() {
 #[test]
 fn tables_are_rotated_or_masked() {
     let mut isp = FakeIsp::new();
-    let rotated = [0x1234_5678; 14];
-    load_rotated(&mut isp, [&rotated, &rotated]);
-    assert_eq!(isp.value(r(0x88)), Some(0x1678_1234));
-    assert_eq!(isp.value(r(0xc0 + 4 * 13)), Some(0x1678_1234));
-    let full = [0xffff_ffff; 256];
-    load_second_tables(&mut isp, [&full, &full, &full]);
-    assert_eq!(isp.value(r(0x2800)), Some(0x3fff_ffff));
-    assert_eq!(isp.value(r(0x3000 + 4 * 255)), Some(0x000f_ffff));
-    load_first_tables(&mut isp, [&full, &full, &full]);
-    assert_eq!(isp.value(r(0x2400)), Some(0x3fff_ffff));
+    let first = core::array::from_fn(|index| 0xc123_c456 + index as u32);
+    let second = core::array::from_fn(|index| 0x8234_8567 + index as u32);
+    load_rotated(&mut isp, [&first, &second]);
+    let mut expected: Vec<_> = (0..14).map(|index| (r(0x88 + 4 * index), 0x0456_0123 + (u32::from(index) << 16))).collect();
+    expected.extend((0..14).map(|index| (r(0xc0 + 4 * index), 0x0567_0234 + (u32::from(index) << 16))));
+    assert_eq!(isp.writes(), expected);
+    isp.take();
+    let first = core::array::from_fn(|index| 0xc123_4000 + index as u32);
+    let second = core::array::from_fn(|index| 0x8234_5000 + index as u32);
+    let third = core::array::from_fn(|index| 0xf345_6000 + index as u32);
+    load_second_tables(&mut isp, [&first, &second, &third]);
+    let mut expected: Vec<_> = (0..256).map(|index| (r(0x2800 + 4 * index), 0x0123_4000 + u32::from(index))).collect();
+    expected.extend((0..256).map(|index| (r(0x2c00 + 4 * index), 0x0234_5000 + u32::from(index))));
+    expected.extend((0..256).map(|index| (r(0x3000 + 4 * index), 0x0005_6000 + u32::from(index))));
+    assert_eq!(isp.writes(), expected);
+    isp.take();
+    load_first_tables(&mut isp, [&first, &second, &third]);
+    let mut expected: Vec<_> = (0..256).map(|index| (r(0x1c00 + 4 * index), 0x0123_4000 + u32::from(index))).collect();
+    expected.extend((0..256).map(|index| (r(0x2000 + 4 * index), 0x0234_5000 + u32::from(index))));
+    expected.extend((0..256).map(|index| (r(0x2400 + 4 * index), 0x3345_6000 + u32::from(index))));
+    assert_eq!(isp.writes(), expected);
 }
 
 #[test]
 fn curves_load_unchanged() {
     let mut isp = FakeIsp::new();
-    let curves: Vec<[u32; 64]> = (0..9).map(|curve| [curve as u32; 64]).collect();
+    let curves: Vec<[u32; 64]> = (0..9).map(|curve| core::array::from_fn(|index| 100 * curve + index as u32)).collect();
     load_curves(&mut isp, core::array::from_fn(|index| &curves[index]));
-    assert_eq!(isp.value(r(0x1100)), Some(0));
-    assert_eq!(isp.value(r(0x1900 + 4 * 63)), Some(8));
+    let expected: Vec<_> = (0u16..9).flat_map(|curve| (0u16..64).map(move |index| (r(0x1100 + 0x100 * curve + 4 * index), u32::from(100 * curve + index)))).collect();
+    assert_eq!(isp.writes(), expected);
 }
 
 #[test]

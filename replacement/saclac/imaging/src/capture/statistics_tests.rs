@@ -34,11 +34,11 @@ impl Source {
 
 struct Output {
     planes: [Plane; CHANNELS],
-    regions: [Region; REGIONS],
+    regions: [Region; REGION_AREAS],
 }
 
 fn prepared(ports: &mut FakeCapture, source: &Source, parameters: &mut CaptureParameters) -> Output {
-    let mut output = Output { planes: [[0; CELLS]; CHANNELS], regions: [[0; CHANNELS]; REGIONS] };
+    let mut output = Output { planes: [[0; CELLS]; CHANNELS], regions: [[0; CHANNELS]; REGION_AREAS] };
     prepare(ports, &source.raw(), parameters, Prepared { planes: &mut output.planes, regions: &mut output.regions });
     output
 }
@@ -63,6 +63,24 @@ fn regions_are_normalised_to_the_profile_pixels_and_every_area_rescaled() {
     assert_eq!(parameters.regions[0], Area { width: 64, height: 4 });
     assert!(parameters.regions[1..].iter().all(|area| *area == Area { width: 64, height: 1 }));
     assert_eq!(parameters.grid, Area { width: 10, height: 10 });
+}
+
+#[test]
+fn preparation_corrects_persistent_regions_beyond_the_three_produced_regions() {
+    let mut ports = ports();
+    ports.set_byte(TRANSFER_ROW, 1);
+    ports.set_halfword(PEDESTAL_FIRST, 5);
+    let mut source = Source::new();
+    source.black = [100; CHANNELS];
+    let mut parameters = CaptureParameters { reference: 20, ..capture_parameters() };
+    parameters.regions[3..].fill(Area { width: 16, height: 16 });
+    let mut planes = [[0; CELLS]; CHANNELS];
+    let mut regions = [[1000, 2000, 3000, 4000]; REGION_AREAS];
+    prepare(&mut ports, &source.raw(), &mut parameters, Prepared { planes: &mut planes, regions: &mut regions });
+    assert_eq!(regions[3..], [[1064, 1744, 2744, 3744]; 7]);
+    assert_eq!(parameters.regions[3..], [Area { width: 64, height: 4 }; 7]);
+    prepare(&mut ports, &source.raw(), &mut parameters, Prepared { planes: &mut planes, regions: &mut regions });
+    assert_eq!(regions[3..], [[1128, 1488, 2488, 3488]; 7]);
 }
 
 #[test]
