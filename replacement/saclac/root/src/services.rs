@@ -20,7 +20,7 @@ pub struct Services<M, R, E, P> {
     pub(crate) entries: E,
     pub(crate) peers: P,
     pub(crate) acquisition: crate::acquisition::AcquisitionState,
-    pub(crate) configuration: xm1_saclac_calc::adjust::configuration::Configuration,
+    pub(crate) search: xm1_saclac_search_bindings::State,
 }
 
 impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Services<M, R, E, P> {
@@ -33,11 +33,18 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Services<M, R, E, P> {
             entries,
             peers,
             acquisition: crate::acquisition::AcquisitionState::default(),
-            configuration: xm1_saclac_calc::adjust::configuration::Configuration::default(),
+            search: xm1_saclac_search_bindings::State::default(),
         }
     }
 
     pub fn records(&self) -> &ProfileRecords<R> { &self.records }
+
+    /// A scoped borrow of the same records, peers and planner state used by acquisition.
+    pub fn search_bindings(&mut self) -> xm1_saclac_search_bindings::Bindings<'_, M, R, E, P> {
+        xm1_saclac_search_bindings::Bindings::new(&mut self.machine, &mut self.records, &mut self.entries, &mut self.peers, &mut self.search)
+    }
+
+    pub fn configuration(&mut self) -> &mut xm1_saclac_calc::adjust::configuration::Configuration { &mut self.search.configuration }
 
     /// A record field, or zero when the registry selects neither record.
     pub(crate) fn field<T: Value + Default, W>(&self, record: RecordHandle, field: &RecordField<T, RecordRead, W>) -> T {

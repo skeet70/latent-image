@@ -112,8 +112,8 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Adjustment for Services<
         AdjustmentWords {
             mode: RetainedWord(u32::from(configuration::shared::mode_is_one(self))),
             recording: RetainedWord(configuration::shared::word(self)),
-            controllers: RetainedWord(u32::from(self.configuration.controller_flag(configuration::ControllerFlag::First))),
-            search: RetainedWord(u32::from(self.configuration.refresh())),
+            controllers: RetainedWord(u32::from(self.search.configuration.controller_flag(configuration::ControllerFlag::First))),
+            search: RetainedWord(u32::from(self.search.configuration.refresh())),
         }
     }
 }
@@ -362,7 +362,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc> Po
     fn fill_grid(&mut self, branch: Branch, inputs: &GridInputs) { boundary::fill_grid(&self.machine, inputs, &mut self.acquisition.grids[branch_index(branch)]); }
     fn snapshot_grid(&mut self, branch: Branch, statistics: Statistics) { codec::grid_from_snapshot(&mut self.acquisition.grids[branch_index(branch)], &boundary::snapshot(&self.machine, statistics)); }
     fn adjustment_class(&mut self, adjustment: u32, reference: i16) -> u8 { rate_policy::level_selection(adjustment, reference) }
-    fn adjustment_option(&mut self) -> u32 { u32::from(self.configuration.refresh()) }
+    fn adjustment_option(&mut self) -> u32 { u32::from(self.search.configuration.refresh()) }
     fn refreshed_position(&mut self) -> u32 { boundary::refreshed_position(&self.machine) }
     fn mode_one(&mut self, inputs: &ModeInputs) -> u32 { u32::from(treatments(inputs).admits(xm1_saclac_calc::adjust::scene_policy::Treatment::First)) }
     fn both_modes(&mut self, inputs: &ModeInputs) -> u32 { u32::from(treatments(inputs).admits_any()) }

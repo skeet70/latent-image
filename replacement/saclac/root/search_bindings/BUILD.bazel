@@ -11,6 +11,7 @@ _HOST_DEPS = {
     "xm1_saclac_focus_search": "//replacement/saclac/focus_search:host",
     "xm1_saclac_interface": "//replacement/saclac_interface:host",
     "xm1_saclac_profile_records": "//replacement/saclac/profile_records:host",
+    "xm1_saclac_profile_geometry": "//replacement/saclac/profile_geometry:host",
     "xm1_saclac_shared": "//replacement/saclac/shared:host",
 }
 
@@ -48,6 +49,7 @@ xm1_rust_rlib(
         "xm1_saclac_focus_search": "//replacement/saclac/focus_search:focus-search",
         "xm1_saclac_interface": "//replacement/saclac_interface:saclac-interface",
         "xm1_saclac_profile_records": "//replacement/saclac/profile_records:profile_records",
+        "xm1_saclac_profile_geometry": "//replacement/saclac/profile_geometry:profile_geometry",
         "xm1_saclac_shared": "//replacement/saclac/shared:shared",
     },
 )

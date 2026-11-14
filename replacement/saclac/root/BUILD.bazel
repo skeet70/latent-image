@@ -11,6 +11,8 @@ xm1_rust_rlib(
     out = "arm/libxm1_saclac_root.rlib",
     data = _SOURCES,
     rlib_deps = {
+        "xm1_saclac_search_bindings": "//replacement/saclac/root/search_bindings:bindings",
+        "xm1_saclac_focus_search": "//replacement/saclac/focus_search:focus-search",
         "display_scanout_panel": "//replacement/display_scanout:libdisplay_scanout_panel",
         "calibration_liveview": "//replacement/calibration_liveview:libcalibration_liveview",
         "xm1_focus_measurement_round": "//replacement/focus_measurement/round:round",
@@ -34,6 +36,8 @@ xm1_rust_host_test(
     crate_name = "xm1_saclac_root_tests",
     data = glob(["src/*.rs", "src/stock/*.rs"], exclude = ["src/lib.rs"]),
     rlib_deps = {
+        "xm1_saclac_search_bindings": "//replacement/saclac/root/search_bindings:host",
+        "xm1_saclac_focus_search": "//replacement/saclac/focus_search:host",
         "xm1_focus_measurement_round": "//replacement/focus_measurement/round:host",
         "xm1_kernel": "//replacement/kernel:host",
         "xm1_saclac_calc": "//replacement/saclac/calc:host",
@@ -55,6 +59,8 @@ xm1_rust_host_rlib(
     crate_name = "xm1_saclac_root",
     data = _SOURCES,
     rlib_deps = {
+        "xm1_saclac_search_bindings": "//replacement/saclac/root/search_bindings:host",
+        "xm1_saclac_focus_search": "//replacement/saclac/focus_search:host",
         "xm1_focus_measurement_round": "//replacement/focus_measurement/round:host",
         "xm1_kernel": "//replacement/kernel:host",
         "xm1_saclac_calc": "//replacement/saclac/calc:host",

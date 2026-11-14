@@ -272,3 +272,27 @@ fn empty_s1_evaluation_preserves_both_persistent_selection_grids() {
     root.request_acquisition(Branch::S1, &request, EvaluationGrid::Current);
     assert_eq!((machine.word(grid), machine.byte(grid + 0x458)), (9, 0x34));
 }
+
+#[test]
+fn search_refresh_and_acquisition_observe_one_configuration() {
+    use core::cell::RefCell;
+    use xm1_saclac_focus_search::contrast::Platform;
+    use xm1_saclac_search_bindings::{RecordBinding, Session};
+    let kernel = fake::saclac_kernel();
+    let cx = kernel.task().unwrap();
+    let (machine, mut root) = fake::root_with(fake::peers(&cx), Bytes::default(), Entries::default());
+    let record = RecordBinding::new(xm1_saclac_interface::stock::record_handle_from_a2(0));
+    {
+        let bindings = RefCell::new(root.search_bindings());
+        Session::new(&bindings, &record).request_scan_refresh(true);
+    }
+    assert_eq!(root.adjustment_option(), 1);
+    machine.adjustment(0x87fd, 1);
+    {
+        let bindings = RefCell::new(root.search_bindings());
+        let mut search = Session::new(&bindings, &record);
+        assert!(search.scan_refresh());
+        search.request_scan_refresh(true);
+    }
+    assert_eq!(root.adjustment_option(), 0);
+}
