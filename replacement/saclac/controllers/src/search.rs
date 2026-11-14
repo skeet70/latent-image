@@ -32,6 +32,8 @@ pub enum SearchInput<Sample> {
     Suspend,
     /// Search again after a suspension.
     Resume,
+    /// Prepare to resume after outstanding requests drain.
+    ResumePending,
     Cancel,
 }
 
