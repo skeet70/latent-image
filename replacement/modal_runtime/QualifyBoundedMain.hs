@@ -1356,7 +1356,7 @@ publish matrix source inputs = do
         ]
     , "failed_case" .= failedCase roles checks
     , "remaining_scope" .= object
-        [ "image_size" .= ("token 0 over equal values is the only IMAGE SIZE apply reached; a changed IMAGE SIZE apply and a changed value confirmed and then restored elsewhere are final-pass: under the run document stock refuses the half-press after DOWN inside the IMAGE SIZE picker, and LEFT, OK, BACK and MENU after the change" :: String)
+        [ "image_size" .= ("the opening-time landing apply changes live settings; a changed selection followed by Close or by confirmation and a restore elsewhere is final-pass: under the run document stock refuses the half-press after DOWN inside the IMAGE SIZE picker, and LEFT, OK, BACK and MENU after the change" :: String)
         , "full_matrix" .= (if qualified then "claimed by this matrix" else "not claimed" :: String)
         , "hardware" .= ("not claimed" :: String)
         ]

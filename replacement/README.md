@@ -147,6 +147,18 @@ Scope: Whole general-heap artifact behind retained A32 entries on the finite nat
 
 <!-- /evidence-record E-GENERAL-HEAP-CUTOVER-NATURAL-PAIR-150 -->
 
+## Menu engine value cutover
+
+The [engine design](../reports/owned-menu-engine-design.md#cutover-qualification) defines the stock boundary and the remaining IMAGE SIZE paths. The value-package comparison includes ordered notifications and live-settings reads at every segment; the completed old-session control must be rejected by those rules.
+
+<!-- evidence-record E-MENU-ENGINE-CUTOVER-150 -->
+
+E-MENU-ENGINE-CUTOVER-150: The controlled-RTC matrix selects the 226-publication value package, the owned menu engine and IMAGE SIZE apply seam with stock drawing, for all 68 routes. At source 6ddf5f98ba03abc2be5376ab93391456da7a7214 and archive 826f86179632ca06994c9b5f3f6c007eef90f6a676752a204b49fde53de43000, its saved verdict is blocked / not-qualified: 135 of 136 roles complete, 1 failed and 0 missing. The 67 completed pairs pass the frozen engine/value pair checker; their separate ordered-settings and rendered-artifact comparisons report 0 and 0 failures. The required picker-26 owned role remains incomplete after a CPSR handoff refusal during unload; it recorded 0 OOM kills. The known-worst stock gate completed=true, with 490339 terminal watch rows, peak 1324797952 bytes and 822685696 bytes of headroom under its 2 GiB/no-swap cap. On value-close-pop, 1 resident stock IMAGE SIZE arm entries each match one owned apply, 16 calls to 0xd5b350 agree in order over 15 segments, and live settings agree in 14 segments. The reached owned apply token is 0x00000001, changed_apply=true, with equal-role live-setting changes [{"after":"a9","before":"89","offset":110}]. The e5b1081c old-session archive c3a2203f0720f8bbd4bea47f84ecf3fb5e28b3a08485750899c371d689f30cde, relinked by control commit 9949b6f29dc928a3ac6c36c65a1fceca88001080, completes the control-only navigation=true and is rejected=true by ["engine-reads-posts","live-settings","render-compare","settings-compare","value-notify"]. In other-cancel it omits stock's Pop notification and leaves different live settings.
+
+Scope: X-M1 1.50 cardless RAM-push value package, 226 publications and one contiguous 0x3dd00 allocation, under the controlled-RTC FujiMod run document. 67 complete pairs and an executed old-session control are compared; the full 68-route qualification remains blocked. No owned-renderer or hardware qualification; changed-selection confirmation and close/restore remain unreached.
+
+<!-- /evidence-record E-MENU-ENGINE-CUTOVER-150 -->
+
 ## Native rewrite qualification
 
 For an applicable native-only increment, run the native SDK and runner suites plus the affected caller's qualification command:
