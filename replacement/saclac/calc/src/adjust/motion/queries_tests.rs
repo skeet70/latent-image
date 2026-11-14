@@ -6,7 +6,8 @@ use xm1_saclac_profile_records::SharedHeaderByte;
 use crate::adjust::motion::fakes::Bench;
 use crate::adjust::motion::ports::Ticks;
 use crate::adjust::motion::queries::*;
-use crate::adjust::motion::state::{Drive, MotionState};
+use crate::adjust::motion::plan::Plan;
+use crate::adjust::motion::state::MotionState;
 use crate::adjust::motion::world::blank_state;
 use crate::exposure::fakes::{handle, World};
 use crate::stock::motion::{self as trace, PEAK_CHECK, PEAK_THRESHOLD, STEP_SCALE_HIGH, STEP_SCALE_LOW, STEP_SCALE_SELECTOR};
@@ -15,7 +16,7 @@ const SECTION: SharedAddress = SharedAddress(0x1000_0000);
 const RESULTS: SharedAddress = SharedAddress(0x2000_0000);
 
 fn state() -> MotionState {
-    MotionState { prepared_at: Ticks(40), drive: Drive { checks_peak: true, ..Drive::default() }, ..blank_state(SECTION, RESULTS, 0) }
+    MotionState { prepared_at: Ticks(40), plan: Plan { checks_peak: true, ..Plan::default() }, ..blank_state(SECTION, RESULTS, 0) }
 }
 
 #[test]
@@ -122,7 +123,7 @@ fn the_peak_is_reached_when_a_measured_area_meets_the_threshold() {
 #[test]
 fn no_peak_without_the_check_the_window_or_results() {
     let mut unchecked = state();
-    unchecked.drive.checks_peak = false;
+    unchecked.plan.checks_peak = false;
     let mut bench = measured(0, [900, 900]);
     assert!(!unchecked.peak_reached(&mut bench));
     assert!(bench.stores.is_empty());

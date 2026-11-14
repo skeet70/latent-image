@@ -12,22 +12,24 @@ use crate::adjust::lens::{BiasTable, LensConfiguration};
 use crate::adjust::metering::MeteringTables;
 use crate::adjust::motion::drive::{DriveKind, DriveMode, DriveSpeed};
 use crate::adjust::motion::exposure::{FrameExposure, ProgramStep, PROGRAM_STEPS};
-use crate::adjust::motion::plan::Plan;
+use crate::adjust::motion::plan::{ContrastThresholds, DepthSettings, Plan};
 use crate::adjust::motion::layout::SampleLayout;
 use crate::adjust::motion::ports::{
-    AreaCurves, AreaGrid, BoundsQuery, CaptureFraming, ChannelRates, Clock, CropGeometry, CurveRequest, DefaultCurve, ExposureTimes, FrameGeometry, GridArea,
+    AreaCurves, AreaGrid, BoundsQuery, CaptureFraming, ChannelRates, Clock, CropGeometry, ExposureTimes, FrameGeometry, GridArea,
     LensBounds, LensCalibration, LensLimits, LensTables, LimitQuery, Logarithms10, MeasurementReadings, ProfileGains, SampleFrameRequest, SearchBounds,
     SearchFrameRequest, StatisticsFrameRequest, Ticks,
 };
+use crate::adjust::motion::measured::LevelCheck;
 use crate::adjust::motion::preparation::{CaptureFrames, FrameSize, LensStatus, PreviousFocus};
 use crate::adjust::motion::readings::{AreaList, FocusRequest, RecordReadings, SelectionLists, StepLimits, AREA_POSITIONS};
 use crate::adjust::motion::search::SearchSetup;
-use crate::adjust::motion::state::{Drive, FrameExposures, MotionState, SampleSchedule};
+use crate::adjust::motion::state::{FrameExposures, MotionState, SampleSchedule};
 use crate::adjust::motion::statistics::Statistics;
 use crate::adjust::peak::Logarithms;
 use crate::adjust::timing::{CaptureTiming, LevelScale};
 use crate::exposure::fakes::{handle, Headers, World};
 use crate::exposure::ports::{CaptureProfiles, Lens, ProfileAccess, Properties, Property, StockMemory};
+use crate::gains::{BlendSelector, CaptureGains, GainRequest, SelectedGains};
 use crate::profile::Profile;
 
 pub struct MotionWorld {
@@ -73,8 +75,11 @@ pub struct MotionWorld {
     pub cell_steps: [u32; 2],
     pub readout_start: u32,
     pub reference_line: u16,
-    pub default_curve: DefaultCurve,
-    pub curve_requests: Vec<CurveRequest>,
+    pub selected_gains: SelectedGains,
+    pub gain_requests: Vec<GainRequest>,
+    pub position_rate: u32,
+    pub curve_word: u32,
+    pub mapped_step_word: u32,
 }
 
 impl Default for MotionWorld {
@@ -117,8 +122,11 @@ impl Default for MotionWorld {
             cell_steps: [1, 1],
             readout_start: 0,
             reference_line: 0,
-            default_curve: DefaultCurve::default(),
-            curve_requests: Vec::new(),
+            selected_gains: SelectedGains::default(),
+            gain_requests: Vec::new(),
+            position_rate: 0,
+            curve_word: 0,
+            mapped_step_word: 0,
             now: 0,
         }
     }
@@ -137,7 +145,6 @@ pub fn blank_readings(lens: u32) -> RecordReadings {
         measurement_selection: Default::default(),
         scene: 0,
         channel: 0,
-        style: 0,
         at_0043: 0,
         class: 0,
         policy: 0,
@@ -145,7 +152,6 @@ pub fn blank_readings(lens: u32) -> RecordReadings {
         limit_word: 0,
         level_step: 0,
         at_0035: 0,
-        at_0036: 0,
         at_0038: 0,
         at_20cc: 0,
         at_20c8: 0,
@@ -197,7 +203,7 @@ pub fn blank_state(section: SharedAddress, results: SharedAddress, frame_period:
         limits: StepLimits::default(),
         search: SearchSetup::default(),
         areas: AreaList::default(),
-        exposures: FrameExposures { first: FrameExposure::default(), second },
+        exposures: FrameExposures { first: FrameExposure::default(), second, prepared_second: second },
         program: [ProgramStep::default(); PROGRAM_STEPS],
         previous: PreviousFocus::default(),
         bounds: SearchBounds::default(),
@@ -216,9 +222,11 @@ pub fn blank_state(section: SharedAddress, results: SharedAddress, frame_period:
         },
         treated_settings: [0; 4],
         plan: Plan::default(),
+        thresholds: ContrastThresholds::default(),
+        depth_settings: DepthSettings::default(),
         sampling: SampleSchedule::default(),
         layout: SampleLayout::default(),
-        drive: Drive::default(),
+        level_check: LevelCheck::default(),
     }
 }
 
@@ -378,13 +386,17 @@ impl FrameGeometry for MotionWorld {
 
 /// The selector adds to the first point and each delta to the next point.
 impl AreaCurves for MotionWorld {
-    fn default_curve(&mut self, request: &CurveRequest) -> DefaultCurve {
-        self.curve_requests.push(*request);
-        self.default_curve
-    }
     fn with_profile_factors(&mut self, [first, second, third]: [u16; 3], [first_delta, second_delta]: [u8; 2], selector: u8) -> [u16; 3] {
         [first + u16::from(selector), second + u16::from(first_delta), third + u16::from(second_delta)]
     }
+}
+
+impl CaptureGains for MotionWorld {
+    fn gains(&mut self, request: &GainRequest) -> SelectedGains {
+        self.gain_requests.push(*request);
+        self.selected_gains
+    }
+    fn blend_weight(&mut self, _selector: &BlendSelector) -> u8 { 0 }
 }
 
 impl ChannelRates for MotionWorld {
@@ -410,4 +422,10 @@ impl MeteringTables for MotionWorld {
 impl Clock for MotionWorld {
     fn now(&mut self) -> Ticks { Ticks(self.now) }
     fn elapsed(&mut self, since: Ticks) -> u32 { self.now.wrapping_sub(since.0) * 10 }
+}
+
+impl crate::adjust::motion::ports::LensWords for MotionWorld {
+    fn position_rate(&mut self, _position: i16, _lens: u32, _step: u32, _reference: u32) -> u32 { self.position_rate }
+    fn curve_word(&mut self, _lens: u32) -> u32 { self.curve_word }
+    fn mapped_step_word(&mut self, _step: u32, _lens: u32) -> u32 { self.mapped_step_word }
 }

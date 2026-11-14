@@ -82,6 +82,6 @@ impl MotionState {
     /// Whether a measured area's level has reached the configured peak level, when the run
     /// checks for it (0xf9ed44).
     pub fn peak_reached(&self, ports: &mut (impl Properties + StockMemory)) -> bool {
-        ports.property(PEAK_CHECK) != 0 && self.drive.checks_peak && level_peaked(ports, self.results)
+        ports.property(PEAK_CHECK) != 0 && self.plan.checks_peak && level_peaked(ports, self.results)
     }
 }

@@ -6,6 +6,8 @@ pub mod access;
 pub mod drive;
 pub mod exposure;
 pub mod layout;
+pub mod measured;
+pub mod measurement;
 pub mod plan;
 pub mod ports;
 pub mod prepare;
@@ -27,6 +29,10 @@ mod exposure_tests;
 mod layout_tests;
 #[cfg(test)]
 mod fakes;
+#[cfg(test)]
+mod measured_tests;
+#[cfg(test)]
+mod measurement_tests;
 #[cfg(test)]
 mod preparation_tests;
 #[cfg(test)]

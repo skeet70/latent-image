@@ -8,18 +8,19 @@ use xm1_saclac_profile_records::stock::shared::group_27;
 use crate::adjust::metering::MeteringTables;
 use crate::adjust::motion::drive::{quotient, DriveSpeed};
 use crate::adjust::motion::exposure::{ExposureInputs, ExposurePorts, FrameExposure, Program, ProgramStep, PROGRAM_STEPS};
-use crate::adjust::motion::plan::Plan;
-use crate::adjust::motion::ports::{BoundsQuery, ChannelRates, Clock, LensBounds, MeasurementReadings, SearchBounds};
+use crate::adjust::motion::measured::LevelCheck;
+use crate::adjust::motion::plan::{ContrastThresholds, DepthSettings, Plan};
+use crate::adjust::motion::ports::{BoundsQuery, ChannelRates, Clock, ExposureTimes, LensBounds, MeasurementReadings, SearchBounds};
 use crate::adjust::motion::preparation::{searches_in_full, CaptureFrames, LensStatus, PreviousFocus};
 use crate::adjust::motion::queries;
 use crate::adjust::motion::readings::{AreaList, PreparationInput, RecordReadings, SelectionLists, StepLimits};
 use crate::adjust::motion::search::{ListReadings, SearchMode, SearchPorts, SearchSetup};
 use crate::adjust::motion::layout::SampleLayout;
-use crate::adjust::motion::state::{Drive, FrameExposures, MotionState, SampleSchedule};
+use crate::adjust::motion::state::{FrameExposures, MotionState, SampleSchedule};
 use crate::adjust::motion::statistics::Statistics;
 use crate::adjust::peak::Logarithms;
 use crate::adjust::timing::CaptureTiming;
-use crate::exposure::ports::{Lens, ProfileAccess, Properties};
+use crate::exposure::ports::{Lens, ProfileAccess, Properties, StockMemory};
 use crate::exposure::settings;
 use crate::stock::motion::{self as stock, AreaTrace, PreparationTrace};
 
@@ -160,10 +161,10 @@ fn second_change(ports: &mut (impl Properties + ProfileAccess + Lens), readings:
 }
 
 /// The index of `profile` among the program's capture-mode profiles, else 255 (0xf95d14).
-fn profile_mode(profile: u32) -> u32 { stock::MODE_PROFILES.iter().position(|&mode| mode == profile).map_or(255, |index| index as u32) }
+pub(crate) fn profile_mode(profile: u32) -> u32 { stock::MODE_PROFILES.iter().position(|&mode| mode == profile).map_or(255, |index| index as u32) }
 
 /// The second exposure as the section records it (0xfa42b4..0xfa43c4).
-fn trace_exposure(ports: &mut impl PreparationPorts, section: SharedAddress, exposure: &FrameExposure, requested: i16, lens: u32) {
+pub(crate) fn trace_exposure(ports: &mut (impl Lens + CaptureTiming + StockMemory), section: SharedAddress, exposure: &FrameExposure, requested: i16, lens: u32) {
     let signed = |value: i16| i32::from(value) as u32;
     let step_level = ports.level(exposure.lens_step, lens);
     let period = ports.line_period(exposure.profile).unwrap_or(0);
@@ -191,7 +192,7 @@ fn trace_exposure(ports: &mut impl PreparationPorts, section: SharedAddress, exp
 
 /// Moves the first exposure to the second's lens step, raising its level by any fall in the
 /// step's level up to the configured ceiling, and retimes it (0xfa43c8..0xfa446c).
-fn corrected(ports: &mut impl PreparationPorts, mut first: FrameExposure, second: &FrameExposure, lens: u32) -> FrameExposure {
+pub(crate) fn corrected(ports: &mut (impl Properties + Lens + ExposureTimes), mut first: FrameExposure, second: &FrameExposure, lens: u32) -> FrameExposure {
     let fall = ports.level(first.lens_step, lens).wrapping_sub(ports.level(second.lens_step, lens));
     first.lens_step = second.lens_step;
     first.exposure_level = first.exposure_level.wrapping_add(fall.max(0));
@@ -290,6 +291,8 @@ impl MotionState {
             areas: area_trace(&readings, &areas, step_two),
         };
         stock::trace_preparation(section, &trace, ports);
+        let mut plan = Plan::default();
+        plan.reset_results();
         let state = Self {
             section,
             results,
@@ -298,16 +301,18 @@ impl MotionState {
             limits,
             search,
             areas,
-            exposures: FrameExposures { first, second },
+            exposures: FrameExposures { first, second, prepared_second: second },
             program,
             previous,
             bounds,
             statistics,
             treated_settings,
-            plan: Plan::default(),
+            plan,
+            thresholds: ContrastThresholds::default(),
+            depth_settings: DepthSettings::default(),
             sampling: SampleSchedule::default(),
             layout: SampleLayout::default(),
-            drive: Drive::default(),
+            level_check: LevelCheck::default(),
         };
         (state, preparation)
     }

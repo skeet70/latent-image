@@ -5,10 +5,11 @@ use xm1_saclac_profile_records::stock::record::group_00;
 use xm1_saclac_profile_records::stock::shared::group_22;
 
 use crate::adjust::motion::exposure::{FrameExposure, ProgramKind};
-use crate::adjust::motion::ports::{AreaClass, AreaGrid, CropGeometry, DefaultCurve, LensLimits, Rectangle, SearchBounds};
+use crate::adjust::motion::ports::{AreaClass, AreaGrid, CropGeometry, LensLimits, Rectangle, SearchBounds};
 use crate::adjust::motion::search::{AreaCell, SearchMode};
 use crate::adjust::motion::state::MotionState;
 use crate::adjust::motion::world::{blank_state, MotionWorld};
+use crate::gains::{GainClass, SelectedGains};
 use crate::stock::adjust::{CONFIGURED_FACTOR, RATE_SECOND_FACTOR, RATE_STEPS, TARGET_FACTOR};
 use crate::stock::motion::{self as stock};
 
@@ -221,7 +222,7 @@ fn the_exposure_ratio_is_held_between_its_floor_and_its_ceilings() {
 fn the_default_curve_takes_the_records_stored_weights_and_profile_factors() {
     let mut world = MotionWorld::default();
     world.channel_weights = [7, 8, 9];
-    world.default_curve = DefaultCurve { points: [10, 20, 30], limit: 77 };
+    world.selected_gains = SelectedGains { gains: [10, 20, 30], class: GainClass(77) };
     world.world.set(&group_00::AT_0049, 1);
     world.world.set(&group_00::AT_004A, 2);
     world.world.set(&group_00::AT_003E, 3);
@@ -230,14 +231,14 @@ fn the_default_curve_takes_the_records_stored_weights_and_profile_factors() {
     lay_out(&mut state, &mut world);
     assert_eq!(state.layout().curve, [13, 21, 32]);
     assert_eq!(state.layout().curve_limit, 77);
-    let request = world.curve_requests.last().unwrap();
-    assert_eq!((request.weights, request.lens, request.level), ([7, 8, 9], LENS, -4));
+    let request = world.gain_requests.last().unwrap();
+    assert_eq!((request.custom, request.temperature, request.column, request.level, request.forced), ([7, 8, 9], (-4i16) as u16, 500, 600, true));
     let mut stored = [0u8; 20];
     stored[..6].copy_from_slice(&[1, 0, 2, 0, 3, 0]);
     stored[14] = 1;
     world.world.set_shared(&group_22::AT_0180, stored);
     lay_out(&mut state, &mut world);
-    assert_eq!(world.curve_requests.last().unwrap().weights, [1, 2, 3]);
+    assert_eq!(world.gain_requests.last().unwrap().custom, [1, 2, 3]);
 }
 
 #[test]

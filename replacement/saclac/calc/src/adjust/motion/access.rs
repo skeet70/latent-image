@@ -2,7 +2,8 @@
 //! block that stock's preparation hands it.
 
 use crate::adjust::motion::exposure::FrameExposure;
-use crate::adjust::motion::plan::Plan;
+use crate::adjust::motion::measured::LevelCheck;
+use crate::adjust::motion::plan::{ContrastThresholds, DepthSettings, Plan};
 use crate::adjust::motion::ports::SearchBounds;
 use crate::adjust::motion::preparation::PreviousFocus;
 use crate::adjust::motion::readings::{AreaList, RecordReadings, StepLimits};
@@ -29,8 +30,11 @@ impl MotionState {
     /// The frame exposure the run's frames follow (output +0x4).
     pub fn frame_exposure(&self) -> &FrameExposure { &self.exposures.second }
 
-    /// Both frame exposures (output +0x54 and +0x50).
+    /// The first exposure (output +0x54), the frames' and the second as prepared (output +0x50).
     pub fn exposures(&self) -> &FrameExposures { &self.exposures }
+
+    /// What the run made of calc's measured levels.
+    pub fn level_check(&self) -> LevelCheck { self.level_check }
 
     pub fn statistics(&self) -> &Statistics { &self.statistics }
 
@@ -42,8 +46,14 @@ impl MotionState {
     /// The listed areas the run measures.
     pub fn areas(&self) -> &AreaList { &self.areas }
 
-    /// The plan the pipeline keeps between the plan's calls (output +0x10).
+    /// The plan the pipeline installed for the current pass (output +0x10).
     pub fn plan(&self) -> &Plan { &self.plan }
+
+    /// The contrast thresholds the plan computed (block +0x498).
+    pub fn thresholds(&self) -> &ContrastThresholds { &self.thresholds }
+
+    /// The settings the plan's frame depth chose (block +0x96c).
+    pub fn depth_settings(&self) -> DepthSettings { self.depth_settings }
 
     /// The sample layout: its grids, crop, positions, curve and exposure ratio.
     pub fn layout(&self) -> &SampleLayout { &self.layout }

@@ -32,8 +32,13 @@ pub const ROW_STRIDE: u32 = 0x10;
 
 /// The first area's level beside the start level.
 pub const AREA_LEVEL: u32 = 0xf88c;
+/// The selection lists' correction word (`stock::lists::CORRECTION_WORD`).
+pub const LIST_WORD: u32 = 0xe7d0;
+/// One compensated level per lens step, the rest of the 31 words zero.
+pub const STEP_LEVELS: u32 = 0xfcac;
+pub const STEP_LEVEL_WORDS: u32 = 31;
 pub const PASS_WORD: u32 = 0x116a0;
-/// The configuration value 0xf6c8fc copies (0x4a10).
+/// The configuration value 0xf6c8fc copies (`property::DUMP_SETTING`).
 pub const SETTING: u32 = 0x116a4;
 
 /// Where a trace slot's selected cell, lens levels and area grid are.
@@ -41,9 +46,11 @@ pub const SETTING: u32 = 0x116a4;
 pub struct SlotLayout {
     /// Fifteen words: the lens levels from +0, the selected cell from +0x1c.
     pub levels: u32,
-    /// Nine cells of twenty bytes, by column then row.
+    /// Nine cells of twenty bytes, by column then row; the first slot follows them with a grid
+    /// pass's nine after another.
     pub cells: u32,
-    /// Thirty-two bytes per area, by column then row, then index.
+    /// Thirty-two bytes per area, by column then row, then index; within an index the first
+    /// slot follows the plain areas with each grid pass's nine.
     pub areas: u32,
     pub area_index_stride: u32,
 }

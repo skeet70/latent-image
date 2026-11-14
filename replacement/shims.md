@@ -687,6 +687,7 @@ saclac's image-4 ISP units RAID0, MVREC and AUTO, and its capture-pipeline layer
 | Command, parameter-block and callback descriptors in `src/stock.rs` | guest-memory layout view | retained queue-43 command producers, their 46 shared parameter blocks and 106 completion callbacks | no | queue-43 producers and completion callbacks are owned and no retained consumer reads the parameter blocks | required |
 | `lens::LensPayload` with `lens_callback_word`, `lens_payload` and `lens_dc_request` in `src/stock.rs` | guest-memory layout view | retained lens control's queue-50 requests 0x4202 to 0x4212 (senders `0x76dbe4` to `0x770080`) and the retained lens completion callbacks `0xf14ae4`, `0xf14b14`, `0xf14b50`, `0xf14b8c`, `0xf14bc8`, `0xf14be4`, `0xf150c4`, `0xf150f0` and `0xf28e94` | no | lens control and the lens children's completion callbacks are owned | required |
 | `stock::peers`: each peer's queue (lensdc 50, imgdc 47, calc 44, calc1 45, statistics 48, flash 10, lenscom 98, image processor 55), the sender byte its stock senders write and the block size each queue was created with (`0x724cdc`) | guest-memory layout view | the retained peer tasks and their queues | no | every peer task saclac posts to is owned | required |
+| Frame-classification codec in `src/stock/calc_sub.rs` | guest-memory layout view | retained queue-46 classifier `0xf49eb4` reads eleven inputs and enters the twelfth word as its completion | no | the classifier and its completion consumers use a typed owned interface | required |
 
 ## saclac_profile_records
 
