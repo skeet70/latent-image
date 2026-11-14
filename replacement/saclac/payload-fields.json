@@ -9485,6 +9485,71 @@
  ],
  "causal_pairs": [
   {
+   "first": {"kind": "queue-in", "operation": 15104},
+   "then": {"kind": "store", "address": 23711576},
+   "sources": ["X-M1 1.50, x70view 55436fc85c0560dd252b0410af6f2427fe198cd3: received command 0x3b00 is copied at 0xf01c14..0xf01c28 through table 0xefbb20 entry 0 to 0x0169cf58; this selector anchors the first copied byte, not producer preparation"]
+  },
+  {
+   "first": {"kind": "queue-in", "operation": 15105},
+   "then": {"kind": "store", "address": 23711744},
+   "sources": ["X-M1 1.50 55436fc85c0560dd252b0410af6f2427fe198cd3: 0xf01c14..0xf01c28 copies received command 0x3b01 through table 0xefbb24 to first byte 0x0169d000"]
+  },
+  {
+   "first": {"kind": "queue-in", "operation": 15106},
+   "then": {"kind": "store", "address": 23711748},
+   "sources": ["X-M1 1.50 55436fc85c0560dd252b0410af6f2427fe198cd3: 0xf01c14..0xf01c28 copies received command 0x3b02 through table 0xefbb28 to first byte 0x0169d004"]
+  },
+  {
+   "first": {"kind": "queue-in", "operation": 15107},
+   "then": {"kind": "store", "address": 23711776},
+   "sources": ["X-M1 1.50 55436fc85c0560dd252b0410af6f2427fe198cd3: 0xf01c14..0xf01c28 copies received command 0x3b03 through table 0xefbb2c to first byte 0x0169d020"]
+  },
+  {
+   "first": {"kind": "queue-in", "operation": 15108},
+   "then": {"kind": "store", "address": 23711800},
+   "sources": ["X-M1 1.50 55436fc85c0560dd252b0410af6f2427fe198cd3: 0xf01c14..0xf01c28 copies received command 0x3b04 through table 0xefbb30 to first byte 0x0169d038"]
+  },
+  {
+   "first": {"kind": "queue-in", "operation": 15109},
+   "then": {"kind": "store", "address": 23711824},
+   "sources": ["X-M1 1.50 55436fc85c0560dd252b0410af6f2427fe198cd3: 0xf01c14..0xf01c28 copies received command 0x3b05 through table 0xefbb34 to first byte 0x0169d050"]
+  },
+  {
+   "first": {"kind": "queue-in", "operation": 15110},
+   "then": {"kind": "store", "address": 23711836},
+   "sources": ["X-M1 1.50 55436fc85c0560dd252b0410af6f2427fe198cd3: 0xf01c14..0xf01c28 copies received command 0x3b06 through table 0xefbb38 to first byte 0x0169d05c"]
+  },
+  {
+   "first": {"kind": "queue-in", "operation": 15111},
+   "then": {"kind": "store", "address": 23711900},
+   "sources": ["X-M1 1.50 55436fc85c0560dd252b0410af6f2427fe198cd3: 0xf01c14..0xf01c28 copies received command 0x3b07 through table 0xefbb3c to first byte 0x0169d09c"]
+  },
+  {
+   "first": {"kind": "queue-in", "operation": 15115},
+   "then": {"kind": "store", "address": 23712024},
+   "sources": ["X-M1 1.50 55436fc85c0560dd252b0410af6f2427fe198cd3: 0xf01c14..0xf01c28 copies received command 0x3b0b through table 0xefbb4c to first byte 0x0169d118"]
+  },
+  {
+   "first": {"kind": "queue-in", "operation": 15117},
+   "then": {"kind": "store", "address": 23712040},
+   "sources": ["X-M1 1.50 55436fc85c0560dd252b0410af6f2427fe198cd3: 0xf01c14..0xf01c28 copies received command 0x3b0d through table 0xefbb54 to first byte 0x0169d128"]
+  },
+  {
+   "first": {"kind": "queue-in", "operation": 15127},
+   "then": {"kind": "store", "address": 23712300},
+   "sources": ["X-M1 1.50 55436fc85c0560dd252b0410af6f2427fe198cd3: 0xf01c14..0xf01c28 copies received command 0x3b17 through table 0xefbb7c to first byte 0x0169d22c"]
+  },
+  {
+   "first": {"kind": "queue-in", "operation": 15141},
+   "then": {"kind": "store", "address": 23712508},
+   "sources": ["X-M1 1.50 55436fc85c0560dd252b0410af6f2427fe198cd3: 0xf01c14..0xf01c28 copies received command 0x3b25 through table 0xefbbb4 to first byte 0x0169d2fc"]
+  },
+  {
+   "first": {"kind": "queue-in", "operation": 15179, "sender": 47},
+   "then": {"kind": "peer-request", "queue": 44, "operation": 15372},
+   "sources": ["X-M1 1.50 55436fc85c0560dd252b0410af6f2427fe198cd3: received 0x3b4b routes via 0xf028e4 and machine13's 0xeff4e4..0xeff50c cyclic branch to planning; 0xf050f4 selects window event 0xe6 at 0xf051dc..0xf051e4, 0xf01358..0xf0137c routes machine29 row3, action 0xf0f74c calls 0xf3a564 at 0xf0f754, which posts queue44 operation 0x3c0c through 0xf4c6e8 at 0xf3a73c and 0xf4c714..0xf4c720; no initial credit is granted"]
+  },
+  {
    "first": {
     "kind": "callback",
     "entry": 15922860
