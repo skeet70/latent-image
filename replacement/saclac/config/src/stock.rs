@@ -5,7 +5,7 @@ use core::ptr::{read_volatile, write_volatile};
 use crate::channel::{Channel, FloatLog};
 use crate::compiled::{CompiledScan, Optioned, StreamSnapshot};
 use crate::dump::{ConfigurationDump, DumpDerivations};
-use crate::table::{Row, Step};
+use crate::table::{Row, Step, StepLimit};
 use crate::face::{FaceTracking, TrackingBusy};
 use crate::ports::{Derivations, ExportQuery};
 use crate::pipeline::{Bank, Enable, EnableChange, FilterWindow, Grid, Part, Setting, Stage, StageBlock, StageMode};
@@ -13,6 +13,14 @@ use crate::registers::PipelineHardware;
 use crate::scan::AppliedParts;
 use crate::scan::{ScanBlocks, ScanLibrary, StockPart};
 use crate::services::{KernelDelay, LensStatus};
+
+/// X-M1 1.50 limit arguments use 0xffff for no limit (0x746cd4..0x746cdc).
+pub fn decode_step_limit(word: u32) -> StepLimit {
+    match word {
+        0xffff => StepLimit::Unbounded,
+        value => StepLimit::Value(value),
+    }
+}
 
 macro_rules! entry {
     ($address:expr, fn($($argument:ty),*) $(-> $result:ty)?) => {{
@@ -315,15 +323,6 @@ impl<M: GuestMemory> StockScanBlocks<M> {
         }
     }
 
-    pub(crate) fn field(&self, field: ScanField) -> u32 {
-        let (offset, width) = layout(field);
-        let at = self.configuration + offset;
-        match width {
-            Width::Byte => u32::from(self.memory.byte(at)),
-            Width::Half => u32::from(self.memory.halfword(at)),
-            Width::Word => self.memory.word(at),
-        }
-    }
 
     /// 0xd78400.
     pub fn set_ec(&mut self, value: u32) { self.set_field(ScanField::WordEc, value) }
