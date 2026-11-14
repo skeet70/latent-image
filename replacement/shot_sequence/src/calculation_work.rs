@@ -103,6 +103,8 @@ pub trait CalculationBlock {
     fn retain_result(&mut self);
     /// The result word the bound record's lens snapshot takes.
     fn result_word(&mut self) -> u32;
+    /// The canonical selection list's kind and five exposure halfwords.
+    fn input_plan(&mut self) -> (u32, [u16; 5]);
 }
 
 /// The calculation library's planning functions.
@@ -114,7 +116,7 @@ pub trait CalculationLibrary {
     fn display_class(&mut self, record: RecordHandle, refinement: u32) -> u32;
     fn selection_policy(&mut self, kind: u32, display: u32, evaluation: u32, option: u32) -> u32;
     /// Builds the calc 0x3c02 input from the exposure context.
-    fn build_input(&mut self, area: [u32; 2], selection: u32);
+    fn build_input(&mut self, area: [u32; 2], selection: u32, kind: u32, exposure: [u16; 5]);
     fn class_reuses_result(&mut self, class: u32) -> bool;
 }
 
@@ -152,7 +154,8 @@ impl CalculationWork {
         shot.reset_plan(PlanWords::default());
         shot.set_selection(0);
         shot.mark_requested();
-        ports.build_input([0; 2], 0);
+        let (kind, exposure) = shot.input_plan();
+        ports.build_input([0; 2], 0, kind, exposure);
     }
 
     /// Prepares the half-press calculation and reports whether calc 0x3c02 is requested or the
@@ -188,7 +191,8 @@ impl CalculationWork {
             self.retained_selection
         };
         shot.set_selection(selection);
-        ports.build_input(area, selection);
+        let (kind, exposure) = shot.input_plan();
+        ports.build_input(area, selection, kind, exposure);
 
         if !new_calculation {
             let (word, half) = shot.retained_targets();

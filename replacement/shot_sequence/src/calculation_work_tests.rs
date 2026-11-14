@@ -145,6 +145,7 @@ impl CalculationBlock for Shot {
     fn restore_result(&mut self) { self.result = self.retained.unwrap_or(0); }
     fn retain_result(&mut self) { self.retained = Some(self.result); }
     fn result_word(&mut self) -> u32 { self.result }
+    fn input_plan(&mut self) -> (u32, [u16; 5]) { (0, [0; 5]) }
 }
 
 impl CalculationLibrary for World {
@@ -158,7 +159,7 @@ impl CalculationLibrary for World {
     fn selection_policy(&mut self, kind: u32, display: u32, evaluation: u32, option: u32) -> u32 {
         if [kind, display, evaluation] == [0x11, 0x201, 0x30] { 0x40 + option } else { 0xdead }
     }
-    fn build_input(&mut self, area: [u32; 2], selection: u32) { self.input.set(Input { built: Some((area, selection)), ..Input::default() }); }
+    fn build_input(&mut self, area: [u32; 2], selection: u32, _kind: u32, _exposure: [u16; 5]) { self.input.set(Input { built: Some((area, selection)), ..Input::default() }); }
     fn class_reuses_result(&mut self, _class: u32) -> bool { self.reuses_result }
 }
 

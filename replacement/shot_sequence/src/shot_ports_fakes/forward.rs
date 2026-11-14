@@ -384,7 +384,7 @@ impl CalculationLibrary for ExternalFake {
     fn class_skips_selection(&mut self, _class: u32) -> bool {  CalculationLibrary::class_skips_selection(&mut self.calculation, _class) }
     fn display_class(&mut self, _record: RecordHandle, refinement: u32) -> u32 {  CalculationLibrary::display_class(&mut self.calculation, _record, refinement) }
     fn selection_policy(&mut self, kind: u32, display: u32, evaluation: u32, option: u32) -> u32 {  CalculationLibrary::selection_policy(&mut self.calculation, kind, display, evaluation, option) }
-    fn build_input(&mut self, area: [u32; 2], selection: u32) {  CalculationLibrary::build_input(&mut self.calculation, area, selection) }
+    fn build_input(&mut self, area: [u32; 2], selection: u32, kind: u32, exposure: [u16; 5]) { CalculationLibrary::build_input(&mut self.calculation, area, selection, kind, exposure) }
     fn class_reuses_result(&mut self, _class: u32) -> bool {  CalculationLibrary::class_reuses_result(&mut self.calculation, _class) }
 }
 impl CalculationProfiles for ExternalFake {

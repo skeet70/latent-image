@@ -245,6 +245,11 @@ impl<M: StateMemory> CalculationBlock for ShotState<M> {
     fn retain_result(&mut self) { ShotState::retain_result(self); }
 
     fn result_word(&mut self) -> u32 { self.word(layout::RESULT_WORD) }
+    fn input_plan(&mut self) -> (u32, [u16; 5]) {
+        let kind = self.word(layout::SELECTION_LIST);
+        let bytes: [u8; 10] = self.bytes(layout::SELECTION_EXPOSURES);
+        (kind, core::array::from_fn(|index| u16::from_le_bytes([bytes[2 * index], bytes[2 * index + 1]])))
+    }
 }
 
 impl<M: StateMemory, P: LoadPorts + GridLayers> FinishCalculation<P> for ShotState<M> {

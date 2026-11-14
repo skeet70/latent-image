@@ -132,6 +132,8 @@ pub const UNREAD_LENS: u32 = 0xff;
 /// The selection list (0xf17830's pool word).
 pub const SELECTION_LIST: StateAddress = SHOT_CONTEXT.offset(0x1cec);
 pub const SELECTION_BYTES: usize = SelectionList::BYTES;
+/// Five halfwords 0xf61d9c..0xf61ddc reads from the selection list.
+pub const SELECTION_EXPOSURES: StateAddress = SELECTION_LIST.offset(0x20c);
 /// The list 0xf17abc and 0xf17ad8 copy.
 pub const SAVED_SELECTION: StateAddress = at(0x4171_783c);
 /// The list's weights, which a grid reset keeps (0xf1cf90..0xf1cfb8).

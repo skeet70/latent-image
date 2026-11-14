@@ -79,3 +79,40 @@ impl<M: xm1_saclac_shared::stock::Machine + Clone, R, E, P: xm1_saclac_interface
         self.geometry.borrow_mut().configure_extended_operations(xm1_saclac_profile_geometry::services::ExtendedOperations::Secondary);
     }
 }
+
+impl<M: xm1_saclac_shared::stock::Machine + Clone, R: Memory, E: xm1_saclac_profile_records::StockEntries, P, I, T, A, Q>
+    xm1_shot_sequence::calculation_work::CalculationProfiles for Libraries<'_, M, R, E, P, I, T, A, Q> {
+    fn profile(&mut self, record: xm1_saclac_interface::RecordHandle, value: xm1_shot_sequence::calculation_work::CalculationProfile) -> u32 {
+        use xm1_shot_sequence::calculation_work::CalculationProfile as V;
+        use xm1_saclac_profile_records::SharedHeaderByte;
+        let mut services = self.services.borrow_mut();
+        macro_rules! field { ($group:ident::$name:ident) => { services.field(record, &r::$group::$name) as u32 }; }
+        match value {
+            V::LensReference => field!(group_01::AT_00BC),
+            V::SelectionKind => u32::from(xm1_saclac_calc::profile::selection_code(services.entries.measurement_selection(record))),
+            V::RowLimit => field!(group_00::AT_003D),
+            V::RowOption => u32::from(services.field(record, &r::group_00::INTERVAL_TRACKING).0),
+            V::AdjustmentKind => field!(group_00::AT_0051),
+            V::AdjustmentOption => u32::from(services.entries.header_byte(record, SharedHeaderByte::At63)),
+            V::ResumeLead => field!(group_00::AT_001E), V::ResumeOffset => field!(group_00::AT_001C),
+            V::At0024 => field!(group_00::AT_0024), V::At0026 => field!(group_00::AT_0026),
+            V::At0032 => field!(group_00::AT_0032), V::At0033 => field!(group_00::AT_0033),
+            V::At0034 => field!(group_00::AT_0034), V::At003c => field!(group_00::AT_003C),
+            V::At003e => field!(group_00::AT_003E), V::At0045 => field!(group_00::AT_0045),
+            V::At004b => field!(group_00::AT_004B), V::At005d => field!(group_00::AT_005D),
+            V::At0066 => field!(group_00::AT_0066),
+            V::HeaderAt31 => u32::from(services.entries.header_byte(record, SharedHeaderByte::At31)),
+        }
+    }
+    fn store_resume_offset(&mut self, record: xm1_saclac_interface::RecordHandle, offset: u16) {
+        let _ = self.services.borrow_mut().records.write_shared(record, &s::group_41::AT_0972, offset as i16);
+    }
+    fn reuse_control(&mut self) -> u32 {
+        use xm1_saclac_shared::settings::Adjustments;
+        u32::from(self.services.borrow().stock.byte(xm1_saclac_shared::settings::AdjustmentKey(u32::from(xm1_shot_sequence::stock::calculation::REUSE_CONTROL_PROPERTY))))
+    }
+    fn client_pair(&mut self, at: xm1_shot_sequence::boundary::ClientRef) -> [u32; 2] {
+        let services = self.services.borrow();
+        [services.machine.read_u32(at.0), services.machine.read_u32(at.0.wrapping_add(4))]
+    }
+}

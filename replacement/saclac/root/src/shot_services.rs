@@ -164,3 +164,43 @@ impl<M, R, E, P, I, T, A, Q: xm1_shot_sequence::boundary::Completions> xm1_shot_
         xm1_shot_sequence::boundary::Completions::self_complete(&mut self.peers, completion);
     }
 }
+
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor, I: Isp, T: Tables, A: Placement, Q: Calc + Calc1>
+    xm1_shot_sequence::calculation_work::CalculationLibrary for Libraries<'_, M, R, E, P, I, T, A, Q> {
+    fn selection_mode(&mut self, record: RecordHandle, refinement: u32) -> u32 {
+        use xm1_saclac_calc::exposure::ports::ProfileAccess;
+        self.services.borrow_mut().profile().selection_kind(record, refinement != 0)
+    }
+    fn row_data(&mut self, kind: u32, mode: u32, evaluation: u32, limit: u32, option: u32) -> u32 {
+        use xm1_saclac_profile_records::{IntervalTracking, MeasurementSelection};
+        // f60c04/10/20 compare full words before narrowing their predicates.
+        let query = xm1_saclac_calc::record_policy::RowDataQuery {
+            selection: if kind == 1 { MeasurementSelection::Record } else { MeasurementSelection::Unselected },
+            kind: xm1_saclac_calc::policy::SelectionKind(mode), evaluation,
+            layout: if matches!(limit, 4 | 5) { limit as u8 } else { 0 },
+            tracking: IntervalTracking(u8::from(option != 0)),
+        };
+        u32::from(xm1_saclac_calc::record_policy::row_data_allowed(&mut *self.services.borrow_mut(), &query))
+    }
+    fn adjustment_status(&mut self, kind: u32, mode: u32, option: u32) -> u8 {
+        xm1_saclac_calc::record_policy::adjustment_status(
+            u8::from(kind == 1), xm1_saclac_calc::policy::SelectionKind(mode), u8::from(option != 0),
+        ).code()
+    }
+    fn class_skips_selection(&mut self, class: u32) -> bool {
+        xm1_saclac_calc::policy::ExposureMode(class).uses_primary_limit()
+    }
+    fn display_class(&mut self, record: RecordHandle, refinement: u32) -> u32 {
+        use xm1_saclac_calc::exposure::ports::ProfileAccess;
+        u32::from(self.services.borrow_mut().profile().selection_style(record, refinement != 0))
+    }
+    fn selection_policy(&mut self, kind: u32, display: u32, evaluation: u32, option: u32) -> u32 {
+        u32::from(xm1_saclac_calc::policy::SelectionKind(display).qualifies(kind == 1, evaluation == 1, option != 0))
+    }
+    fn build_input(&mut self, area: [u32; 2], selection: u32, kind: u32, exposure: [u16; 5]) {
+        self.build_calculation_input(area, xm1_saclac_calc::exposure::calculation::PlanInput { kind, exposure }, selection != 0);
+    }
+    fn class_reuses_result(&mut self, class: u32) -> bool {
+        xm1_saclac_calc::policy::ExposureMode(class).uses_adjustment()
+    }
+}
