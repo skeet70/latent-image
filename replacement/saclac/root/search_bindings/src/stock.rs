@@ -165,10 +165,6 @@ pub fn area_levels(machine: &impl Machine, descriptor: &[u8; 12]) -> [u16; 2] {
         machine.read_u16(address.wrapping_add(0x206)),
     ]
 }
-pub fn claim_statistics(bytes: &mut [u8; 12]) {
-    let flags = word(bytes, 0) | 2;
-    put_word(bytes, 0, flags);
-}
 pub fn pinned_status(
     bytes: &mut [u8; 76],
     status: xm1_saclac_focus_search::contrast::PinnedStatus,

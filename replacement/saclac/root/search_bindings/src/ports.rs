@@ -629,7 +629,7 @@ impl<M: Machine, R: Memory, E: StockEntries, P> Platform for Session<'_, '_, M, 
     }
     fn status_snapshot(&mut self) -> [u32; 2] {
         let bytes = self.snapshot();
-        [stock::word(&bytes, 0xf8), stock::word(&bytes, 0x110)]
+        [stock::word(&bytes, 0x110), stock::word(&bytes, 0xf8)]
     }
     fn publish_pinned_status(&mut self, status: PinnedStatus) {
         let mut bytes = self.bytes(&group_33::AT_07A0);
