@@ -4,6 +4,27 @@
  "messages": [
   {
    "direction": "outgoing",
+   "queue": 46,
+   "operation": 15872,
+   "bytes": 48,
+   "fields": [
+    { "name": "samples", "offset": 0, "bytes": 4, "sources": ["0x00f4eb0c stores the samples address; 0x00f4ebd0..0x00f4ebdc posts all 48 bytes through 0x00f49e58"] },
+    { "name": "plane", "offset": 4, "bytes": 4, "sources": ["0x00f4eb10 stores the image-plane address"] },
+    { "name": "aspect", "offset": 8, "bytes": 4, "sources": ["0x00f4eb14..0x00f4eb5c maps the aspect ratio to 0, 1, 2 or 3"] },
+    { "name": "orientation", "offset": 12, "bytes": 4, "sources": ["0x00f4eb60..0x00f4eb84 maps the input reading to 0, 1, 2 or 3"] },
+    { "name": "levels", "offset": 16, "bytes": 4, "sources": ["0x00f4eb8c stores the halfword-level grid address"] },
+    { "name": "columns", "offset": 20, "bytes": 4, "sources": ["0x00f4eb94 stores the column-bound table address"] },
+    { "name": "rows", "offset": 24, "bytes": 4, "sources": ["0x00f4eb9c stores the row-bound table address"] },
+    { "name": "average-levels", "offset": 28, "bytes": 4, "sources": ["0x00f4eba4 stores the averaging word; 0x00fb28dc..0x00fb2930 compares it with 1"] },
+    { "name": "motion-regions", "offset": 32, "bytes": 4, "sources": ["0x00f4ebac stores the motion-region count"] },
+    { "name": "region-list", "offset": 36, "bytes": 4, "sources": ["0x00f4ebb4 stores the motion-region list address"] },
+    { "name": "restart", "offset": 40, "bytes": 4, "sources": ["0x00f4ebc4 stores the adaptation-restart flag"] },
+    { "name": "completion", "offset": 44, "bytes": 4, "sources": ["0x00f4ebcc stores the completion callback"] }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
    "queue": 3,
    "operation": 5012,
    "bytes": 0,

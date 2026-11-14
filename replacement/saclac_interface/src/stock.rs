@@ -4,6 +4,7 @@ pub mod area_measurement;
 pub mod calculation_result;
 pub mod capture_job;
 pub mod capture_results;
+pub mod calc_sub;
 pub mod exposure;
 pub mod imaging;
 pub mod peers;

@@ -19,6 +19,7 @@ pub mod selection;
 pub mod shared;
 pub mod statistics;
 pub mod stock;
+pub mod calc_sub;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClientCallback(pub(crate) u32);
@@ -391,6 +392,23 @@ pub trait Calc1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CalcSubOperation {
+    Request00,
+}
+
+/// A request to calcsub, queue 46.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CalcSubRequest<'a> {
+    pub operation: CalcSubOperation,
+    pub parameters: Parameters<'a>,
+}
+
+pub trait CalcSub {
+    type Error;
+    fn request(&mut self, request: CalcSubRequest<'_>) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StatisticsOperation {
     Request00,
     Request01,
@@ -490,6 +508,7 @@ pub enum PeerOperation {
     ImgDc(ImgDcOperation),
     Calc(CalcOperation),
     Calc1(Calc1Operation),
+    CalcSub(CalcSubOperation),
     Statistics(StatisticsOperation),
     Flash(FlashOperation),
     LensCom(LensComOperation),
@@ -511,7 +530,7 @@ pub const fn lens_effect(operation: PeerOperation) -> LensEffect {
         PeerOperation::ImgDc(ImgDcOperation::Request2e | ImgDcOperation::Request2f | ImgDcOperation::Request44) => {
             LensEffect::DriveThroughImageBridge
         }
-        PeerOperation::Calc(_) | PeerOperation::Calc1(_) | PeerOperation::Statistics(_) => LensEffect::NoLensDrive,
+        PeerOperation::Calc(_) | PeerOperation::Calc1(_) | PeerOperation::CalcSub(_) | PeerOperation::Statistics(_) => LensEffect::NoLensDrive,
         PeerOperation::LensDc(_)
         | PeerOperation::ImgDc(_)
         | PeerOperation::Flash(_)
@@ -554,3 +573,5 @@ mod selection_tests;
 mod shared_tests;
 #[cfg(test)]
 mod statistics_tests;
+#[cfg(test)]
+mod calc_sub_tests;
