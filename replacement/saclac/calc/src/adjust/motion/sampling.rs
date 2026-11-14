@@ -76,7 +76,7 @@ impl MotionState {
             }
             AreaLayout::Grid | AreaLayout::GridAlternate => {
                 let centre = targets.primary[usize::from(self.sampling.primary_count >> 1)];
-                let areas = self.sampling.secondary_columns.wrapping_mul(self.sampling.secondary_rows);
+                let areas = self.layout.grids[1].columns.wrapping_mul(self.layout.grids[1].rows);
                 for slot in targets.secondary.iter_mut().take(usize::from(areas)) {
                     *slot = centre;
                 }

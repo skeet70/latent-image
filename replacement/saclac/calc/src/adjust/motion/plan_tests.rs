@@ -158,6 +158,35 @@ fn fixture() -> (MotionState, MotionWorld) {
 }
 
 #[test]
+fn planned_grid_dimensions_govern_targets_and_measurement_after_sample_layout() {
+    for (initial_side, alternate, expected_layout, count) in [(1, 1, AreaLayout::Grid, 9), (3, 0, AreaLayout::GridAlternate, 1)] {
+        let (mut s, mut w) = fixture();
+        s.readings.class = 1;
+        s.readings.channel = 1;
+        s.search.mode = SearchMode::Channel;
+        let primary = AreaGrid { cell_height: 10, cell_width: 10, columns: 7, rows: 7, ..AreaGrid::default() };
+        w.sample_frames = [primary, AreaGrid { columns: initial_side, rows: initial_side, ..primary }];
+        s.search.frames = [AreaGrid { columns: 3, rows: 3, ..primary }; 2];
+        w.bounds.insert(0, SearchBounds { low: 100, high: 800 });
+        w.bounds.insert(1, SearchBounds { low: 100, high: 900 });
+        byte(&mut w, 0x94d2, alternate);
+        byte(&mut w, 0x3e1213, 64);
+        byte(&mut w, 0x94dd, 100);
+        byte(&mut w, 0x9618, 100);
+        s.lay_out_samples(&mut w);
+        assert_eq!(s.schedule().secondary().len(), usize::from(initial_side));
+        assert_ne!(s.plan_next(&mut w), PlanKind::SETTLED);
+        assert_eq!(s.plan().layout, expected_layout);
+        let targets = s.targets(&mut w, 500, 1);
+        let settings = s.measurement_settings(&mut w);
+        assert_eq!(settings.secondary_areas, count);
+        let centre = targets.primary[s.schedule().primary().len() / 2];
+        assert_ne!(centre, 0);
+        assert_eq!(targets.secondary, core::array::from_fn(|index| if index < usize::from(count) { centre } else { 0 }));
+    }
+}
+
+#[test]
 fn a_new_pass_publishes_drive_sampling_and_depth_scaled_contrast() {
     let (mut s, mut w) = fixture();
     byte(&mut w, 0xde, 1);

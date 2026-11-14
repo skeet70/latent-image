@@ -27,6 +27,16 @@ fn state() -> MotionState {
 }
 
 #[test]
+fn measurement_records_preserve_both_configured_property_bytes() {
+    let mut world = MotionWorld::default();
+    world.property(Property(0x94cb), 0x34);
+    world.property(Property(0x94cc), 0x12);
+    state().set_up_measurement(records(), &mut world);
+    assert_eq!(word(&mut world, records().checks, 0xa0), 0x1234);
+    assert_eq!(word(&mut world, records().search, 0x118), 0x1234);
+}
+
+#[test]
 fn map_marks_neighbours_but_never_invents_an_invalid_measured_cell() {
     let mut world = MotionWorld::default();
     let mut state = state();

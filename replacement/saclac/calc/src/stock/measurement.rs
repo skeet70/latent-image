@@ -207,7 +207,7 @@ fn write_fields<P: Properties + StockMemory>(records: MeasurementRecords, state:
         for (index, value) in channels.channels.iter().enumerate() { byte!(b, 0x78 + index as u32, *value); byte!(b, 0x86 + index as u32, *value && channels.kept); }
         pw!(b, 0x94, 0x9dc2); pw!(b, 0x98, 0x9dc3);
     }
-    w!(b, 0x9c, settings.kind_flag); pw!(b, 0xa0, 0x94cb); w!(b, 0xa4, layout == 2);
+    w!(b, 0x9c, settings.kind_flag); w!(b, 0xa0, settings::word(ports, Property(0x94cb))); w!(b, 0xa4, layout == 2);
     for (index, value) in thresholds[12..].iter().enumerate() { w!(b, 0xa8 + 4 * index as u32, *value); }
     pb!(b, 0xc0, 0x94d8);
     for (offset, id) in [(0, 0x92bf), (1, 0x92bf), (2, 0x9476), (3, 0x92c0), (4, 0x92c0), (5, 0x9475)] { pb!(c, offset, id); }
@@ -254,7 +254,7 @@ fn write_fields<P: Properties + StockMemory>(records: MeasurementRecords, state:
         for (index, value) in channels.iter().enumerate() { byte!(g, 0xf0 + index as u32, *value); byte!(g, 0xfe + index as u32, *value); }
         pw!(g, 0x10c, 0x9de4); pw!(g, 0x110, 0x9dc3);
     }
-    w!(g, 0x114, settings.kind_flag); pw!(g, 0x118, 0x94cb);
+    w!(g, 0x114, settings.kind_flag); w!(g, 0x118, settings::word(ports, Property(0x94cb)));
     match settings.kind {
         KindSettings::Treated(treated) => {
             w!(g, 0x1a0, limit[0]); w!(g, 0x1a4, limit[1]); w!(g, 0x1a8, 0); w!(g, 0x1ac, 4); w!(g, 0x1b0, treated.window); byte!(g, 0x1b4, treated.setting);
