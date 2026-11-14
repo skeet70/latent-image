@@ -409,7 +409,7 @@ use xm1_saclac_interface::pipeline::*;
 use xm1_saclac_interface::stock::pipeline as payloads;
 use xm1_saclac_interface::{stock, Completed, Completion, RecordHandle};
 impl PipelineLibrary for ExternalFake {
-    fn plan(&mut self, input: &PlanInput) -> Option<Plan> {  PipelineLibrary::plan(&mut self.pipeline, input) }
+    fn plan(&mut self, input: &PlanInput, candidates: &crate::subjects::Candidates, selection_reference: u32) -> Option<Plan> { PipelineLibrary::plan(&mut self.pipeline, input, candidates, selection_reference) }
     fn refresh_channels(&mut self) {  PipelineLibrary::refresh_channels(&mut self.pipeline) }
     fn channel_item_ready(&mut self, _record: RecordHandle) -> bool {  PipelineLibrary::channel_item_ready(&mut self.pipeline, _record) }
     fn apply_adjustment(&mut self, _adjustment: &[PlanBlock; 7], _pass: AdjustmentPass) {  PipelineLibrary::apply_adjustment(&mut self.pipeline, _adjustment, _pass) }

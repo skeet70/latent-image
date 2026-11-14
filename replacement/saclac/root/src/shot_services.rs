@@ -34,6 +34,7 @@ pub struct Libraries<'a, M, R, E, P, I, T, A, Q> {
     /// LiveSearch's current record (native16c21fc), not the current Shot argument.
     pub live_search_record: &'a xm1_saclac_search_bindings::RecordBinding,
     pub subjects: &'a RefCell<crate::shot_subjects::Workspace>,
+    pub motion: &'a RefCell<Option<xm1_saclac_calc::adjust::motion::state::MotionState>>,
     pub callbacks: Callbacks,
 }
 impl<M, R, E, P, I, T, A, Q> BindRecord for Libraries<'_, M, R, E, P, I, T, A, Q> {

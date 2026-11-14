@@ -265,7 +265,7 @@ fn the_preparation_traces_its_configuration_and_ten_area_records() {
     let mut lists = treated(&mut world);
     lists.area_positions = [30; 10];
     let mut areas = AreaList { count: 2, ..AreaList::default() };
-    areas.areas[1] = ListedArea { x: 11, y: 12, width: 13, height: 14, at_18: 15, at_1c: 16, at_20: 17, at_22: 18, ..ListedArea::default() };
+    areas.areas[1] = ListedArea { x: 11, y: 12, width: 13, height: 14, centre_x: 19, centre_y: 20, at_18: 15, at_1c: 16, at_20: 17, at_22: 18, ..ListedArea::default() };
     lists.areas = areas;
     prepare_with(&mut world, &mut lists, false);
     assert_eq!(section_word(&world, 0x44c38), 7);
@@ -274,5 +274,5 @@ fn the_preparation_traces_its_configuration_and_ten_area_records() {
     assert_eq!(section_word(&world, 0x46998), 0x1234);
     assert_eq!(section_word(&world, 0x46a0c), 2);
     let record: Vec<u32> = (0..11).map(|word| section_word(&world, 0x46a10 + 0x2c + 4 * word)).collect();
-    assert_eq!(record, [30, 0, 0, 18, 11, 12, 13, 14, 17, 15, 16]);
+    assert_eq!(record, [30, 20, 19, 18, 12, 11, 14, 13, 17, 15, 16]);
 }

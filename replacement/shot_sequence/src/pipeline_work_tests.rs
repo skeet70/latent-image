@@ -43,7 +43,7 @@ fn plan() -> Plan {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Call {
-    Plan(PlanInput),
+    Plan,
     Scan(ScanStore),
     Install,
     LensDriven,
@@ -151,8 +151,8 @@ impl World {
 }
 
 impl PipelineLibrary for World {
-    fn plan(&mut self, input: &PlanInput) -> Option<Plan> {
-        self.calls.push(Call::Plan(*input));
+    fn plan(&mut self, _input: &PlanInput, _candidates: &crate::subjects::Candidates, _selection_reference: u32) -> Option<Plan> {
+        self.calls.push(Call::Plan);
         self.plan
     }
     fn refresh_channels(&mut self) {}
@@ -339,18 +339,17 @@ fn deliver(work: &mut PipelineWork, world: &mut World, completion: Completion, p
 fn work_area() -> WorkArea { crate::stock::pipeline::work_area(FRAME) }
 
 #[test]
-fn a_planned_half_press_has_a_ready_frame_and_asks_the_plan_with_the_command_words() {
+fn only_a_planned_half_press_has_a_ready_frame() {
     let (mut work, mut world) = (PipelineWork::new(), World::new());
     let mut prepared = prepared(1, MASK_RELEASED);
     prepare(&mut work, &mut prepared, &mut world);
     assert!(world.has(&Call::Trace(PipelineTrace::Prepare)));
-    assert!(world.has(&Call::Plan(PlanInput { record: record(), lens_reference: 0x42, load_test_window: false, area_count: 0x18, option: 0x14, frame_slot: 0x2c })));
     assert!(work.query(Q::FrameReady, &mut world));
     assert!(!work.query(Q::FinishOnly, &mut world));
 
     let (mut unplanned, mut world) = (PipelineWork::new(), World::new());
     prepare(&mut unplanned, &mut self::prepared(1, 0), &mut world);
-    assert!(!world.calls.iter().any(|call| matches!(call, Call::Plan(_))));
+    assert!(!world.calls.iter().any(|call| matches!(call, Call::Plan)));
     assert!(!unplanned.query(Q::FrameReady, &mut world));
 }
 

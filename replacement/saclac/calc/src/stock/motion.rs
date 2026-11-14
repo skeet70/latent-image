@@ -703,15 +703,16 @@ pub fn trace_preparation<P: Properties + StockMemory>(section: SharedAddress, tr
     store(ports, 0x46a08, 0);
     store(ports, 0x46a0c, trace.area_count);
     for (index, area) in (0..).zip(&trace.areas) {
+        //fa5b24..fa5bcc: r3=section+0x8d278+44*i; the signed offsets start at -0x46868.
         let words = [
             area.position as u32,
-            area.centre_x,
             area.centre_y,
+            area.centre_x,
             u32::from(area.at_22),
-            area.x,
             area.y,
-            area.width,
+            area.x,
             area.height,
+            area.width,
             u32::from(area.at_20),
             area.at_18,
             area.at_1c,

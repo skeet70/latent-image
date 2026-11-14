@@ -8,7 +8,7 @@
 use crate::boundary::{Client, Frame, Lens, LensPoint, LensReference};
 use crate::finish_work::{AreaPositions, CorrectionRecord, FinishPipeline};
 use crate::ports::{PipelineEffect as E, PipelinePhase, PipelineQuery as Q, PipelineRequest as R};
-use crate::preparation::{record_lens, HalfPressParameters, LensStage, Prepared};
+use crate::preparation::{record_lens, LensStage, Prepared};
 use crate::state::{ShotState, StateMemory};
 use crate::stock::pipeline::{self as layout, ToneWord};
 use xm1_saclac_interface::pipeline::{
@@ -80,7 +80,7 @@ pub struct Plan {
     pub raw_result: PlanBlock,
 }
 
-/// The plan's inputs besides the shot context the library reads in place.
+/// The plan's client inputs; candidate state is borrowed separately from the preparation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PlanInput {
     pub record: RecordHandle,
@@ -270,7 +270,7 @@ pub enum PhaseAttribute { ToneFinal }
 
 /// Calc-library entries (0xf4c000..0xf6b000) and the motion library behind them.
 pub trait PipelineLibrary {
-    fn plan(&mut self, input: &PlanInput) -> Option<Plan>;
+    fn plan(&mut self, input: &PlanInput, candidates: &crate::subjects::Candidates, selection_reference: u32) -> Option<Plan>;
     fn refresh_channels(&mut self);
     fn channel_item_ready(&mut self, record: RecordHandle) -> bool;
     fn apply_adjustment(&mut self, adjustment: &[PlanBlock; 7], pass: AdjustmentPass);
@@ -482,7 +482,7 @@ impl PipelineWork {
         match effect {
             E::BindRecord(record) => self.bind(record, prepared, state.lens_reference(), boundary),
             E::RecordLensStatus => record_lens(LensStage::Pipeline, state, boundary),
-            E::Prepare(record) => self.prepare(record, prepared.parameters.unwrap_or_default(), state.lens_reference(), boundary),
+            E::Prepare(record) => self.prepare(record, prepared, state.lens_reference(), boundary),
             E::MarkRestart => boundary.mark_restart(),
             E::Configure { first, .. } => self.configure(first, prepared, state, boundary),
             E::ClearFrameReady => self.frame = FrameFlags::default(),
@@ -563,7 +563,8 @@ impl PipelineWork {
         prepared.pipeline_gate = 0;
     }
 
-    fn prepare(&mut self, record: RecordHandle, parameters: HalfPressParameters, lens_reference: LensReference, boundary: &mut impl PipelineBoundary) {
+    fn prepare(&mut self, record: RecordHandle, prepared: &Prepared, lens_reference: LensReference, boundary: &mut impl PipelineBoundary) {
+        let parameters = prepared.parameters.unwrap_or_default();
         boundary.trace(PipelineTrace::Prepare);
         self.mode = parameters.mode.0;
         if self.mode != FINISH_ONLY_MODE {
@@ -583,7 +584,7 @@ impl PipelineWork {
             option: parameters.plan_option,
             frame_slot: parameters.frame_slot.map_or(0, |slot| slot.0),
         };
-        if let Some(plan) = boundary.plan(&input) {
+        if let Some(plan) = boundary.plan(&input, &prepared.candidates, prepared.lens_control) {
             self.frame = plan.frame_flags;
             self.plan = Some(plan);
         }

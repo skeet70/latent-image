@@ -1,5 +1,5 @@
 use crate::{calculation_services::Calculation, fake, geometry::GeometryBindings, services::Services, stages::StageDriver, stock::{geometry::Memory, stages::StageMemory}};
-use xm1_saclac_calc::adjust::motion::readings::{AreaList, ListedArea};
+use xm1_saclac_calc::adjust::motion::readings::SelectionLists;
 use xm1_saclac_profile_geometry::{controller::ProfileGeometry, profile::Profiles, stock::StockTables};
 use xm1_saclac_shared::stock::{Argument, Machine};
 
@@ -32,7 +32,7 @@ impl Machine for Frames {
 }
 
 #[test]
-fn listed_areas_use_relative_non_square_capture_dimensions() {
+fn prepared_candidate_areas_use_relative_non_square_capture_dimensions() {
     let machine = Frames;
     let mut services = Services::new(machine.clone(), xm1_saclac_profile_records::Bytes::default(), fake::Entries::default(), ());
     let mut geometry = ProfileGeometry::new(Memory(machine.clone()), GeometryBindings {
@@ -40,16 +40,23 @@ fn listed_areas_use_relative_non_square_capture_dimensions() {
     }, Profiles::new(StockTables));
     let mut placement = ();
     let mut calculation = Calculation { services: &mut services, geometry: &mut geometry, placement: &mut placement };
-    let mut areas = AreaList { count: 1, ..AreaList::default() };
-    areas.areas[0] = ListedArea {
-        x: 90, y: 40, height: 20, width: 30, centre_x: 100, centre_y: 50,
-        at_18: 0x87654321, rest: [0xa5; 0x44], ..ListedArea::default()
-    };
-    areas.areas[1] = ListedArea { x: 71, height: 39, ..ListedArea::default() };
+    let mut candidates = xm1_shot_sequence::subjects::Candidates::default();
+    candidates.lists[1].count = 1;
+    let subject = &mut candidates.lists[1].entries[0];
+    subject.detail.fill(0xa5);
+    for (bytes, value) in subject.detail[..0x1c].chunks_exact_mut(4).zip([40u32, 90, 30, 20, 50, 100, 0x12345678]) {
+        bytes.copy_from_slice(&value.to_le_bytes());
+    }
+    subject.id.0 = 0x87654321;
+    candidates.lists[1].entries[1].detail[4..8].copy_from_slice(&71u32.to_le_bytes());
+    candidates.lists[1].entries[1].detail[12..16].copy_from_slice(&39u32.to_le_bytes());
+    let areas = crate::motion_memory::Selection { candidates: &candidates, reference: 0 }.areas();
     let converted = areas.in_mode(&mut calculation, 34);
     assert_eq!(converted.count, 1);
     let area = converted.areas[0];
     assert_eq!((area.x, area.y, area.height, area.width, area.centre_x, area.centre_y), (45, 13, 6, 15, 50, 16));
-    assert_eq!((area.at_18, area.rest), (0x87654321, [0xa5; 0x44]));
-    assert_eq!(converted.areas[1], areas.areas[1]);
+    let mut expected = [0xa5; 0x44];
+    expected[0x38..0x3c].copy_from_slice(&0x87654321u32.to_le_bytes());
+    assert_eq!((area.at_18, area.rest), (0x12345678, expected));
+    assert_eq!((converted.areas[1].x, converted.areas[1].height), (71, 39));
 }
