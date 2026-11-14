@@ -164,7 +164,7 @@ pub fn evaluate_selection<T: Copy>(
     };
     let selected = if last.0 & (LimitFlags::AT_OR_ABOVE | LimitFlags::SPREAD) != 0 { preferred } else { query.positions.position };
     let mut result = SelectionLevels { selected, reference: selected, baseline: query.positions.position };
-    if input.record_5d >= 2 || !first.contains(LimitFlags::BELOW) {
+    if input.selection_style > 1 || !first.contains(LimitFlags::BELOW) {
         result.reference = result.reference.wrapping_sub(input.record_20).wrapping_sub(input.record_level);
         result.baseline = result.baseline.wrapping_sub(input.record_20).wrapping_sub(input.record_level);
     }

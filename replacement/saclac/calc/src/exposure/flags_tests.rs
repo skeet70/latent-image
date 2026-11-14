@@ -90,14 +90,53 @@ fn statistics_areas_keep_full_width_words_and_separate_the_unsigned_halves() {
 }
 
 #[test]
-fn the_last_present_area_selects_the_level_but_the_first_flag_controls_record_offsets() {
+fn the_last_present_area_selects_the_level_and_style_two_always_removes_record_offsets() {
     let mut world = world();
     let input = CalculationInput { record_32: 5, selection_style: 2, record_20: 20, record_level: 30, ..input(1) };
     let query = FlagQuery { positions: Positions { position: 200, ..query().positions }, ..query() };
     let mut rows = [AreaFlagRow { flags: LimitFlags(0xff), retained: 71 }, AreaFlagRow { flags: LimitFlags(0xff), retained: 83 }];
     assert_eq!(evaluate_selection(&mut world, &input, &Levels::default(), &query, 300, Some(&[false, true]), &mut rows), SelectionLevels { selected: 300, reference: 250, baseline: 150 });
     let query = FlagQuery { positions: Positions { position: 199, ..query.positions }, ..query };
-    assert_eq!(evaluate_selection(&mut world, &input, &Levels::default(), &query, 300, Some(&[true, true]), &mut rows), SelectionLevels { selected: 199, reference: 199, baseline: 199 });
+    assert_eq!(evaluate_selection(&mut world, &input, &Levels::default(), &query, 300, Some(&[true, true]), &mut rows), SelectionLevels { selected: 199, reference: 149, baseline: 149 });
+}
+
+#[test]
+fn selection_style_not_record_5d_decides_whether_a_below_selection_keeps_record_offsets() {
+    let mut world = world();
+    for record_5d in [0, 2] {
+        for (selection_style, expected) in [(0, 199), (1, 199), (2, 149)] {
+            let input = CalculationInput { record_32: 5, selection_style, record_5d, record_20: 20, record_level: 30, ..input(1) };
+            let mut rows = [AreaFlagRow { flags: LimitFlags(0), retained: () }];
+            let result = evaluate_selection(&mut world, &input, &Levels::default(), &query(), 300, Some(&[true]), &mut rows);
+            assert_eq!(result, SelectionLevels { selected: 199, reference: expected, baseline: expected }, "style {selection_style}, record_5d {record_5d}");
+        }
+    }
+}
+
+#[test]
+fn explicit_wrapper_readiness_keeps_the_selection_overrides() {
+    let mut world = world();
+    for device_ready in [false, true] {
+        world.device_ready = device_ready;
+        for (wrapper, readiness, flags, selected) in [(1, Readiness::Ready, 2, 300), (2, Readiness::NotReady, 0, 200)] {
+            let query = FlagQuery { readiness, positions: Positions { position: 200, ..query().positions }, ..query() };
+            let mut rows = [AreaFlagRow { flags: LimitFlags(0), retained: () }];
+            let input = CalculationInput { selection_style: 2, ..input(1) };
+            let result = evaluate_selection(&mut world, &input, &Levels::default(), &query, 300, None, &mut rows);
+            assert_eq!((rows[0].flags, result.selected), (LimitFlags(flags), selected), "wrapper {wrapper}, device ready {device_ready}");
+            for suppressed in [CalculationInput { measurement_selection: 1, ..input }, CalculationInput { selection_auxiliary: 2, ..input }] {
+                area_flags(&mut world, &suppressed, &Levels::default(), &query, None, &mut rows);
+                assert_eq!(rows[0].flags, LimitFlags(0));
+            }
+            let styled = CalculationInput { selection_style: 7, measurement_selection: 1, selection_auxiliary: 2, ..input };
+            area_flags(&mut world, &styled, &Levels::default(), &query, None, &mut rows);
+            assert_eq!(rows[0].flags, LimitFlags(0x42));
+            world.property(Property(0xa8), 8);
+            area_flags(&mut world, &styled, &Levels::default(), &query, None, &mut rows);
+            assert_eq!(rows[0].flags, LimitFlags(0));
+            world.property(Property(0xa8), 0);
+        }
+    }
 }
 
 #[test]

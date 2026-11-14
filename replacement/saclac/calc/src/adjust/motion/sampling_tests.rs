@@ -110,7 +110,9 @@ fn listed_secondary_rows_are_sampled_then_repeated_across_the_columns() {
 fn a_grid_takes_the_centre_primary_target_in_every_area() {
     let sampling = SampleSchedule::new(2000, &[0, 1000, -3000], &[0, 0], 2, 3);
     for layout in [AreaLayout::Grid, AreaLayout::GridAlternate] {
-        let motion = state(cruise(0, 1000), layout, sampling);
+        let mut motion = state(cruise(0, 1000), layout, sampling);
+        motion.layout.grids[1].columns = 2;
+        motion.layout.grids[1].rows = 3;
         assert_eq!(motion.targets(&mut corrections(), 200, 3).secondary, [198, 198, 198, 198, 198, 198, 0, 0, 0, 0]);
     }
 }
