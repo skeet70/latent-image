@@ -14,6 +14,9 @@ use std::time::Instant;
 const FIRST_POLL: u64 = 1_000;
 const WAIT_STEP: u64 = 200_000;
 const WAIT_BUDGET: u64 = 30_000_000;
+/// A control OUT's status stage follows the request handler, and a RAM-push request can run an
+/// installed payload: the decode test's three digests and compare measured 43M instructions.
+const CONTROL_STATUS_BUDGET: u64 = 90_000_000;
 const ACTIVATION_BUDGET: u64 = 140_000_000;
 /// The host waits at least 10 ms after SetAddress's status stage, as Linux's `hub_port_init` does
 /// (`msleep(10)` after `hub_set_address`); USB 2.0 §9.2.6.3 gives the device 2 ms. Board ticks
@@ -548,7 +551,7 @@ impl Ff80 {
             Ok(status.setup_position == status.setup_length)
         })?;
         self.machine.session.usb_out(&self.usb(), 0, payload)?;
-        self.wait("control OUT status", WAIT_BUDGET, |host| Ok(host.status()?.tx_packets[0] > 0))?;
+        self.wait("control OUT status", CONTROL_STATUS_BUDGET, |host| Ok(host.status()?.tx_packets[0] > 0))?;
         if !self.machine.session.usb_in(&self.usb(), 0x80, 64)?.is_empty() {
             return Err("control OUT status packet was not empty".into());
         }

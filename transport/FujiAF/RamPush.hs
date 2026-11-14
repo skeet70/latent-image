@@ -1540,6 +1540,7 @@ withPinnedReviewedBuildUsing contract relinker base action = do
 -- ELF allowlist check under `policy` for a payload that links the bank.
 withRelinkedBuildUsing :: RamPushRelinker -> AllowlistPolicy -> Address -> (PinnedBuild -> IO a) -> IO a
 withRelinkedBuildUsing relinker policy base action = withReviewedBuildDirectory payload $ \root directory -> do
+  workDirectory <- lookupEnv "XM1_RUN_WORK"
   let tools = relinkerToolchain relinker
       environment =
         [ ("PATH",toolCoreutilsBin tools)
@@ -1550,7 +1551,7 @@ withRelinkedBuildUsing relinker policy base action = withReviewedBuildDirectory 
         , ("RAM_PUSH_OBJCOPY",toolObjcopy tools)
         , ("RAM_PUSH_NM",toolNm tools)
         , ("RAM_PUSH_OBJDUMP",toolObjdump tools)
-        ] ++ payloadRelinkInputs payload ++ concat [[("RB_RUST_ARCHIVE", rustBankArchive rust), ("RB_RUST_BUILD_FACTS", rustBankBuildFacts rust)] | Just rust <- [relinkerRust relinker]] ++ case payloadKind payload of
+        ] ++ [("XM1_RUN_WORK",work) | Just work <- [workDirectory]] ++ payloadRelinkInputs payload ++ concat [[("RB_RUST_ARCHIVE", rustBankArchive rust), ("RB_RUST_BUILD_FACTS", rustBankBuildFacts rust)] | Just rust <- [relinkerRust relinker]] ++ case payloadKind payload of
           UsbToggle ->
             [ ("USB_TOGGLE_STUB", takeDirectory (relinkerScript relinker) </> "usb-toggle-stub.bin")
             , ("USB_TOGGLE_STUB_SYMBOLS", takeDirectory (relinkerScript relinker) </> "usb-toggle-stub.sym")

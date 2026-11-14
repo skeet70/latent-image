@@ -1516,6 +1516,9 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
               unless (unload == RamUnloaded) (stop "ram-unload" (show unload))
               requireLiveSettings "ram-unload" settingsBeforeUnload
               recordModalLifetimeBoundary lifetimeSession RollbackReadback
+              previousHits <- readIORef (runnerHits runner)
+              unloadedHits <- emulatorTraceHitCount emulator (TraceHitCursor previousHits)
+              writeIORef (runnerHits runner) unloadedHits
               Just <$> readMailbox
             else pure Nothing
           capturedAfter <- segments (planAfter plan)
@@ -2039,10 +2042,11 @@ data HitEffects = HitEffects
   , effectHookRows :: ![Word32]
   , effectCcHits :: ![String]
   , effectDeclared :: !Int
+  , effectLabels :: ![String]
   }
 
 emptyEffects :: HitEffects
-emptyEffects = HitEffects [] [] [] 0
+emptyEffects = HitEffects [] [] [] 0 []
 
 addHitEffect :: SegmentRunner -> HitEffects -> TraceHit -> HitEffects
 addHitEffect runner effects hit = HitEffects
@@ -2052,6 +2056,7 @@ addHitEffect runner effects hit = HitEffects
       Just (_, label) -> label : effectCcHits effects
       Nothing -> effectCcHits effects
   , effectDeclared = effectDeclared effects + if traceSite hit `elem` runnerTraceLabels runner then 1 else 0
+  , effectLabels = traceSite hit : effectLabels effects
   }
 
 effectsSuffix :: HitEffects -> Maybe ProvenanceBatch -> [(FilmRow, Word32)] -> Value
@@ -2167,6 +2172,9 @@ runSegments runner segments = forM (zip [0 :: Int ..] segments) $ \(index, liste
     `catch` \(failure :: IOException) -> throwIO (userError ("segment " ++ T.unpack (segmentPhase segment) ++ " from hit "
       ++ show before ++ ", leading " ++ show [(sourceStart source, sourceEnd source) | source <- leadingSources]
       ++ ": " ++ ioeGetErrorString failure))
+  forM_ (segmentTraceRequires segment) $ \label ->
+    unless (label `elem` effectLabels effects) $
+      stop (segmentPhase segment) ("trace site " ++ label ++ " was not entered")
   when (segmentObserve segment || not (null (segmentReads segment)) || not (null (effectHookRows effects))
         || not (null (effectCcHits effects)) || effectDeclared effects > 0 || not (null film)) $ do
     provenance <- emulatorRenderObjectProvenance emulator

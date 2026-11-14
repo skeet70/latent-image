@@ -81,6 +81,8 @@ cp -r experiments/hello experiments/my-feature
 - **`lib.rs`** (a `no_std` crate root) and/or **`*.c` and `*.S` files**. C includes [`experiments/sdk/experiment.h`](../experiments/sdk/experiment.h).
 - Or, instead of `lib.rs`, **`prelinked.json`**: a JSON string naming a relocatable object under `bazel-bin/`, for code with crate dependencies. Build that Bazel target before each run; the manifest records the object's SHA-256. [`experiments/embassy_phase1`](../experiments/embassy_phase1/) uses `//replacement/embassy_platform:embassy-platform-demo`.
 
+The `first_stage_decode` experiment's 928-byte `DECODE_TEST_RECORD` retains the original 804-byte prefix and appends the post-close high clock word and 30 kernel tick-cell samples: run, acquire, reset and digest start/end pairs, then eleven job start/end pairs. Timestamps combine the 30,000-count timer period with the tick cell; status samples belong to the job that triggered them. The closed-state verdict checks reset bit 0, cleared status bits 0 and 8-11, and enable 0, not the diagnostic engine snapshot taken after acquire and the clock/route check, before reset. The compile-time `ReservedClock` backend makes no direct clock writes at open or close: stock's acquire holds the clock and route, and stock release bookkeeping drops them. It refuses before its engine writes if the held clock bit or route request is absent. Boot's `BootClock` backend retains the direct register writes; this RAM experiment does not qualify those writes on silicon. Independent review of the changed mechanism and the owner's go precede camera execution.
+
 A handler receives the hooked function's registers at entry, `r0`-`r3` being its first four arguments. Whatever you write back is what the stock function sees; it always runs after your handler returns.
 
 ```rust
@@ -118,6 +120,8 @@ bazel run //emulation:xm1-viewer -- --ram-push-e2e --experiment my-feature \
 ```
 
 The emulator boots the stock firmware with no card (the first run boots from scratch and saves a checkpoint; later runs start from it), allocates the RAM, links and installs your experiment exactly as the camera does, opens MENU and presses a few keys, reads the symbols you name with `--read SYMBOL[:LENGTH]`, then removes the experiment again. It ends with `PASS (install, trajectory, unload)` or `FAIL` and the receipt directory, which holds `e2e-result.json` and screenshots. For `hello`, the `HELLO` dump starts `48454c4f` (`HELO`) followed by a nonzero call count. Put your own key sequence in `experiments/my-feature/trajectory.json` in the shape of [the e2e trajectories](../emulation/ram-push-e2e-trajectories.json). Use a new `--output` and `--receipt-output` directory for each run.
+
+Host experiment relinks accept an existing, non-symlink output directory under the current run's `$XM1_RUN_WORK`. Run experiments through `run-output exec -- COMMAND`, using `$XM1_RUN_WORK` for runtime/build output and `$XM1_RUN_RESULT` for compact receipts. Canonical-path admission also retains the existing private RAM-push build root.
 
 ## 4. Put it on your camera
 
