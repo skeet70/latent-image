@@ -2,7 +2,7 @@
 
 The composition root owns the bindings. This crate exposes typed Rust operations, not replicas of the stock forwarders. Ports are explicit dependencies; `MotionState` and `ExposureContext` replace stock global blocks. Addresses below identify X-M1 1.50 interfaces only. No owned-to-owned C ABI is needed.
 
-Grounding: x70view `55436fc85c0560dd252b0410af6f2427fe198cd3`, with NONMATCHING definitions checked against id5 instructions. The 44 forwarder bodies were inspected for argument insertion, copying, narrowing and output placement. This is a static binding audit, not stock execution or subsystem qualification. Pending rows name implementation dependencies, not stock fallbacks provided by this crate.
+Grounding: x70view `55436fc85c0560dd252b0410af6f2427fe198cd3`, with NONMATCHING definitions checked against id5 instructions. The 44 forwarder bodies were inspected for argument insertion, copying, narrowing and output placement. Every row now maps to an implemented typed operation, explicit constant or external service. This is a static binding audit, not stock execution or subsystem qualification.
 
 ## The shot's ExposureCalculation surface
 
@@ -111,7 +111,7 @@ The grid rows above supersede the incorrect names in the earlier private table: 
 
 `SceneRecognition::request_classification` implements the retained 0xf4eae0 entry through `ClassificationControl + CalcSub`. The adapter supplies `Frame` from arguments 0, 1 and 4..9, splits argument 2 into high/low aspect halves, forwards argument 3 as the orientation reading and argument 10 as the callback word. Queue 46 operation 0x3e00 uses block 56, the running task's sender byte, and the complete 48-byte interface encoder with no exclusions. Enable classification through retained 0xfb236c(0) before the post. The core clears its changed mark even on refusal; the retained caller ignores the post result. The sole retained caller supplies completion 0x102df28.
 
-The measurement settings consume a typed plan; implementing their seven records does not implement the missing plan decision or its result incorporation/fallback. The three pending forwarder rows above remain dependencies until that source arrives.
+The measurement settings consume the installed plan produced by `MotionState::plan_next`; existing and fallback results enter through `publish_existing` and `publish_fallback`. All three planner/result entries are implemented. Root's ABI adapters, composition and full-system qualification remain separate obligations.
 
 ## Qualification boundary
 
