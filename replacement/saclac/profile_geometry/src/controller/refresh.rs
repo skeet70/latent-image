@@ -399,7 +399,7 @@ impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
     }
 
     /// The profile feature's scales for the triplet's second and third values (0xef643c).
-    pub(crate) fn feature_scales(&mut self, profile: ProfileHandle) -> [u8; 2] {
+    pub fn feature_scales(&mut self, profile: ProfileHandle) -> [u8; 2] {
         let entry = self.profiles.entry(profile);
         if entry.kind == ProfileKind(1) {
             return [UNIT_FACTOR as u8; 2];

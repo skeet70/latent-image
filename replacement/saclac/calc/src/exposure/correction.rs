@@ -13,7 +13,7 @@ use crate::adjust::scene_settings::{self, SceneSelection};
 use crate::exposure::context::{ExposureContext, SubjectList};
 use crate::exposure::evaluation::reference_value;
 use crate::exposure::levels;
-use crate::exposure::ports::{InPlace, Ports, Property};
+use crate::exposure::ports::{InPlace, Ports, ProfileAccess, Property};
 use crate::exposure::prepare::treatments;
 use crate::exposure::settings;
 use crate::exposure::tables::CurveRange;
@@ -47,7 +47,7 @@ const fn rate_setting(kind: u32, flags: u16, style: u8, auxiliary: u8) -> RateSe
 }
 
 /// The record's two ratio words (0xf5206c).
-fn ratio(ports: &mut impl Ports, record: xm1_saclac_interface::RecordHandle) -> [u32; 2] {
+pub fn ratio(ports: &mut impl ProfileAccess, record: xm1_saclac_interface::RecordHandle) -> [u32; 2] {
     match ports.profile().header(record, SharedHeaderByte::At47) {
         2 | 5 => {
             let bytes: [u8; 8] = ports.profile().read(record, &group_00::AT_0004);

@@ -27,6 +27,7 @@ mod plan_services;
 mod controller_replies;
 mod calculation_memory;
 pub mod calculation_services;
+mod motion_services;
 pub mod completion_callbacks;
 pub mod exposure_memory;
 pub mod exposure_services;
@@ -86,3 +87,5 @@ mod peer_context_tests;
 mod round_services_tests;
 #[cfg(test)]
 mod shot_memory_tests;
+#[cfg(test)]
+mod motion_services_tests;
