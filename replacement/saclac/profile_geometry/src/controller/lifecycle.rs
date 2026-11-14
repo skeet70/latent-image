@@ -6,7 +6,7 @@
 use super::changes::{Mask, Stage, Subscription, Work};
 use super::{Lifecycle, Operation, OperationState, ProfileGeometry, Refusal, Status, Tables};
 use crate::memory::{Block, Location, Memory};
-use crate::ports::{HandlerUnit, PipelineChannel, Ports, Stages};
+use crate::ports::{ConfigurationHolder, HandlerUnit, PipelineChannel, Ports, Stages};
 use crate::stock::layout::{self, cleared, controller as field, dump, policy, work};
 
 /// The pipeline channel the second, third and indexed operations and the stage releases name.
@@ -377,10 +377,11 @@ impl<M: Memory, P: Ports, T: Tables> ProfileGeometry<M, P, T> {
 
     /// Drops the configuration the pipeline holds for the policy block (0xedc628).
     pub(crate) fn release_policy_configuration(&mut self) {
-        if self.memory.read_u32(policy::CONFIGURATION) == 0 {
+        let holder = self.memory.read_u32(policy::CONFIGURATION);
+        if holder == 0 {
             return;
         }
-        self.ports.release_configuration_hardware();
+        self.ports.release_configuration_hardware(ConfigurationHolder(holder));
         self.memory.fill(policy::CONFIGURATION, policy::CONFIGURATION_BYTES, 0);
     }
 }

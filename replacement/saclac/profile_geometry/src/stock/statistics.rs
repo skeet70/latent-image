@@ -1,8 +1,10 @@
 #![forbid(unsafe_code)]
 
-//! X-M1 1.50 layout of the statistics summary in the shot record 0xedb05c writes.
+//! X-M1 1.50 layouts of the statistics summary in the shot record 0xedb05c writes, and of the
+//! destination record the image pipeline's 0xda035c reads.
 
 use crate::controller::statistics::{RecordHalf, StatisticsSummary, Summary};
+use crate::ports::StatisticsDestinations;
 
 pub const HALF_BYTES: usize = 712;
 /// Where the record keeps a copy of its first half.
@@ -51,4 +53,10 @@ pub fn write_summary(record: &mut [u8; RECORD_BYTES], summary: Option<&Statistic
     if keep_copy {
         record.copy_within(..HALF_BYTES, COPY_OFFSET);
     }
+}
+
+/// The record 0xda035c takes; it reads the two leading words only for stage bits from 0x80.
+pub fn destination_record(destinations: &StatisticsDestinations) -> [u32; 12] {
+    let [s01, s02, s04, s08, s10, s20, s40] = destinations.0.map(|stage| stage.map(|address| address.0));
+    [0, 0, s01[0], s04[0], s10[0], s10[1], s20[0], s20[1], s20[2], s02[0], s08[0], s40[0]]
 }

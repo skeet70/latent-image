@@ -783,6 +783,17 @@ The vendor, wireless, filesystem and device-protocol unit. Most of its externals
 | `xm1_wireless_driver_task`, `xm1_wireless_supplicant_task` retained services | trampoline into retained stock | stock wireless driver and supplicant tasks | no | the wireless subsystem is owned | required |
 | filesystem and media-task ABI views (`filesystem_*`, `media_parser`, `metadata_*`) | guest-memory layout view | retained stock filesystem, media and metadata services | no | the owned file service and filesystem are qualified | required |
 
+## saclac_profile_geometry
+
+saclac's layer L4 (`replacement/saclac/profile_geometry`): the DCF controller, profile tables, geometry operation, services and record mode of the image-5 band `[0xed7d64, 0xef8c08)`. Its ports are bound by `saclac_root`; the rows below are the crate's own stock boundary, all in `src/stock/`.
+
+| Shim | Kind | Other side | Owned now | Removal condition | State |
+| --- | --- | --- | --- | --- | --- |
+| `layout.rs` with `memory::Memory`: the state blocks `0x1698a34`..`0x169cefc` (changes, controller, parameters, status, requests, counters, work, selection, policy, dump, diagnostics, display, geometry operation, operation callbacks, record mode), the geometry service state at `0x41717764` and the statistics buffers `0x5ffb0dc0` and `0x5ffb3770` | guest-memory layout view | the band functions no census root reaches, which read and write the blocks (the channel and indexed starters `0xee39c4` and `0xee3dac` with their completions `0xedb25c` and `0xedb3f8`, the latch `0xed8368`, `0xed9040`, `0xed8e24`, `0xedb630`), the geometry service stop `0xeecd94`, and the pipeline and storage services that fill the work, dump and record-mode blocks | no | every band function that reads or writes the blocks is owned or removed | required |
+| `records.rs` (parameter record and status snapshot), `statistics.rs` (shot-record summary of `0xedb05c`, destination record of `0xda035c`), `dumps.rs` (the device registers the frame dumps `0xedb554` and `0xedb564` copy, and their dump-buffer offsets), `areas.rs` (the area query and answer of `0x106638c` and the caller's area list) | guest-memory layout view | the controllers and shot callers that copy the records, the shot record's and frame dump's stock readers, the pipeline's `0xda035c` and the geometry service | no | the callers, readers and services are owned and take typed values | required |
+| `tables.rs`, `StockTables`: the image-5 read-only tables at `0xef6de4`, `0xef6aa4`, `0xef66d4`, `0xef6dd4`, `0xef6ddc`, `0xee9ef4`, `0xee9d60`, `0xef50c4`, `0xef70b4`, `0xed7e08`, `0xef66d0`, `0xee8664`..`0xee8864`, `0xede9a8`, `0xeef628` | guest-memory layout view | the retained band getters other tasks reach (`0xef5448`, `0xef5190`, `0xef5a68` ..), which read the same tables | no | the band's retained getters are owned | required |
+| `StockFloatLog` in `mod.rs`: `0x894778` | trampoline into retained stock | the runtime library | no | an owned logarithm is qualified against it | required |
+
 
 ## Not registered
 

@@ -6,6 +6,7 @@
 pub mod changes;
 pub mod crop;
 pub mod dumps;
+pub mod frame;
 pub mod lifecycle;
 pub mod operations;
 pub mod payloads;

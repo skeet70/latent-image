@@ -35,6 +35,11 @@ pub struct PipelineChannel(pub u32);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Stages(pub u32);
 
+/// The first word of the configuration the controller handed the pipeline, which names its
+/// hold; zero while none is held.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConfigurationHolder(pub u32);
+
 pub trait Pipeline {
     /// Stops `stages` on `channel`; false when the pipeline refuses (0xd9f504).
     fn stop(&mut self, channel: PipelineChannel, stages: Stages) -> bool;
@@ -44,8 +49,8 @@ pub trait Pipeline {
     fn settle(&mut self);
     /// 0xd5d27c.
     fn release_capture_hardware(&mut self);
-    /// Releases the configuration the controller handed the pipeline (0xd5d268).
-    fn release_configuration_hardware(&mut self);
+    /// Releases the configuration hold `holder` names (0xd5d268).
+    fn release_configuration_hardware(&mut self, holder: ConfigurationHolder);
     /// Enables `stages` with the payloads at `payloads`; false when refused (0xd9f7c0).
     fn enable(&mut self, channel: PipelineChannel, stages: Stages, payloads: Location) -> bool;
     /// 0xd9f7d8.
@@ -56,7 +61,19 @@ pub trait Pipeline {
     fn configure(&mut self, channel: PipelineChannel, stages: Stages, records: Location) -> bool;
     /// Hands `stages` of the configuration at `configuration` back to the pipeline (0xd5e1f4).
     fn restore_stages(&mut self, configuration: Location, stages: Stages);
+    /// Points the statistics `stages` of `channel` at `destinations` (0xda035c with a zero last
+    /// argument).
+    fn point_statistics(&mut self, channel: PipelineChannel, stages: Stages, destinations: &StatisticsDestinations);
+    /// Reads the results of the statistics `stages` of `channel` into the record at `into`
+    /// (0xd9ffe8, which names stage bit `s` of these as result bit `s << 4`).
+    fn collect_statistics(&mut self, channel: PipelineChannel, stages: Stages, into: Location);
 }
+
+/// The buffer addresses a statistics destination update gives each statistics stage, by the
+/// stage's bit: stage 0x10 takes two, stage 0x20 three and the others one. The pipeline reads
+/// only the stages the update names.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct StatisticsDestinations(pub [[StockData; 3]; 7]);
 
 /// The parameter fields the pipeline's mode payload depends on.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -315,8 +332,8 @@ impl StockCode {
 }
 
 pub trait Handlers {
-    /// Attaches the controller's handler to `unit`; the handle, or the unit's refusal code
-    /// (0x7411c4).
+    /// Attaches the controller's frame handler, `ProfileGeometry::handle_frame`, to `unit`; the
+    /// handle, or the unit's refusal code (0x7411c4).
     fn attach(&mut self, unit: HandlerUnit) -> Result<u32, u32>;
     /// Detaches `handle` from `unit`; zero or the unit's refusal code (0x74140c).
     fn detach(&mut self, unit: HandlerUnit, handle: u32) -> u32;
@@ -379,7 +396,7 @@ pub trait Retained {
 }
 
 /// A stock data address a caller hands through the layer, such as its output buffer.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct StockData(pub u32);
 
 impl StockData {
