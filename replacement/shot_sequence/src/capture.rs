@@ -29,6 +29,8 @@ impl Capture {
 
     pub fn start(&mut self, record: RecordHandle, ports: &mut impl Ports) -> Outcome {
         if self.state != State::Idle { return fault(ports); }
+        self.primary = Primary::new();
+        self.calculations = Calculations::new();
         self.bind(record, ports);
         ports.effect(Effect::Capture(E::RequestStatisticsSetup));
         self.state = State::AwaitingSetup;

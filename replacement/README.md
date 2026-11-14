@@ -158,6 +158,16 @@ Scope: The dispatcher at 0x00efca6c and machine 0's router at 0x00efcb88 over st
 
 <!-- /evidence-record E-SACLAC-ENGINE-COMPARE-150 -->
 
+### Shot capture host boundaries
+
+<!-- evidence-record E-SHOT-CAPTURE-REENTRY-BOUNDS-150 -->
+
+E-SHOT-CAPTURE-REENTRY-BOUNDS-150: A standalone production-rlib consumer completes capture after abort before readout and during calculations, with client replies [7,13,7,0] and [7,13,7,0]. It translates 12 client areas, including last rectangle [400,400,1,1], while retaining 10 record entries and raw diagnostic count 12.
+
+Scope: Host-native Rust execution with synthetic external services and initialized boundary fixtures. The capture scenarios call public Shot::handle through abstract Ports; the area scenario calls public PrimaryJob against the retained external fixture. Stock execution is false. Separate ShotPorts regression cases exercise production composition. X-M1 1.50 bytes ground the client/record capacities; this is not full-system or camera qualification.
+
+<!-- /evidence-record E-SHOT-CAPTURE-REENTRY-BOUNDS-150 -->
+
 ## General heap
 
 The [cutover report](../reports/general-heap-cutover.md) defines the interface projection, placement, caller-grounded corrections and final-pass queue. The implementation and external RTOS/client shims remain unchanged; the current consumer checks global interface order and an executed wrong binary.

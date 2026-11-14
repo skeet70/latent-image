@@ -18,7 +18,7 @@ use xm1_saclac_interface::RecordHandle;
 pub enum DeliveredList { First, Second, Third }
 
 impl DeliveredList {
-    /// The record and the client's buffer each hold this many areas per list.
+    /// The record holds this many areas per delivered list.
     pub const CAPACITY: usize = 10;
 }
 

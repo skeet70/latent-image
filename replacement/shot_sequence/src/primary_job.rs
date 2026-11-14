@@ -555,7 +555,7 @@ impl PrimaryJob {
         boundary.generate_areas(AreaMode::Second, selector, &frame, buffer);
         boundary.generate_areas(AreaMode::Third, selector, &frame, buffer);
         let corner = [frame.crop[2], frame.crop[3]];
-        for index in 0..capped(boundary.area_count(buffer, DeliveredList::Second)) {
+        for index in 0..boundary.area_count(buffer, DeliveredList::Second).min(capture_stock::AREA_BUFFER_CAPACITY) as u8 {
             let mut area = boundary.area(buffer, DeliveredList::Second, index);
             let mut rectangle = area.rectangle();
             let mut centre = area.centre();
@@ -578,7 +578,7 @@ impl PrimaryJob {
         let Some(record) = self.record else { return };
         let count = boundary.delivered_count(record, DeliveredList::Second);
         boundary.set_frame_word(frame, capture_stock::PRIMARY_DUMP_COUNT, count);
-        for index in 0..count as u8 {
+        for index in 0..capped(count) {
             let area = boundary.delivered_area(record, DeliveredList::Second, index);
             let word = |offset: usize| u32::from_le_bytes([area.0[offset], area.0[offset + 1], area.0[offset + 2], area.0[offset + 3]]);
             for (slot, offset) in capture_stock::DUMPED_AREA_WORDS.into_iter().enumerate() {

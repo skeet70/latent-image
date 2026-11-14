@@ -23,6 +23,15 @@ fn complete(shot: &mut Shot, ports: &mut Ports, target: ShotTarget, completion: 
     shot.handle(ShotEvent::Completed { target, completed, record: record() }, ports)
 }
 
+fn readout_payload() -> [u8; 0x24] {
+    let mut payload = [0; 0x24];
+    payload[4] = 6;
+    payload[5] = 2;
+    payload[0x1c..0x20].copy_from_slice(&3u32.to_le_bytes());
+    payload[0x20..0x24].copy_from_slice(&0x3254u32.to_le_bytes());
+    payload
+}
+
 fn replies(ports: &mut Ports) -> Vec<(CommandKind, i32)> {
     ports.external().events.iter().filter_map(|event| match event {
         Event::Reply(reply) => { assert_eq!(reply.record, Some(record())); Some((reply.command, reply.status.0)) }
@@ -78,9 +87,14 @@ fn a_capture_measures_then_runs_all_four_jobs_and_delivers_their_results_before_
     let capture = ports.external().events.iter().find_map(|event| if let Event::Capture(request, completions) = event { Some((*request, *completions)) } else { None }).unwrap();
     assert_eq!((capture.1.outputs, capture.1.readout, capture.1.delivery), (true, true, false));
 
-    let readout = [6, 2, 0, 0, 3, 0, 0, 0, 0x54, 0x32, 0, 0];
+    let readout = readout_payload();
     assert_eq!(complete(&mut shot, &mut ports, ShotTarget::Capture, Completion::Image61, &readout), Outcome::Pending);
     assert_eq!(ports.external().events.last(), Some(&Event::Job(CalculationsJob::First)));
+    assert!(ports.external().events.contains(&Event::Readout(3, 0x3254)));
+    assert!(ports.external().events.contains(&Event::Configured {
+        source: 6, statistics: true,
+        selection: crate::calculations_work::ProcessingSelection { variant: 2, variant_mode: true, mode: 3, value: 0x3254 },
+    }));
     assert_eq!(complete(&mut shot, &mut ports, ShotTarget::Capture, Completion::Calculation99, &[1; 12]), Outcome::Pending);
     assert!(matches!(ports.external().events.last(), Some(Event::SecondJob(_))));
     assert_eq!(complete(&mut shot, &mut ports, ShotTarget::Capture, Completion::Calculation97, &[2; 48]), Outcome::Pending);
@@ -100,6 +114,43 @@ fn a_capture_measures_then_runs_all_four_jobs_and_delivers_their_results_before_
     assert_eq!(complete(&mut shot, &mut ports, ShotTarget::Capture, Completion::Image5e, &[]), Outcome::Complete);
     assert_eq!(replies(&mut ports), [(CommandKind::Command07, 7), (CommandKind::Command07, 10), (CommandKind::Command07, 0)]);
     assert!(!ports.external().events.contains(&Event::Fault));
+}
+
+#[test]
+fn a_capture_after_abort_starts_fresh_jobs_and_can_complete() {
+    enum AbortPoint { BeforeReadout, DuringCalculations }
+    for point in [AbortPoint::BeforeReadout, AbortPoint::DuringCalculations] {
+        let mut ports = Ports::new(Memory::default(), ExternalFake::new());
+        let mut shot = Shot::new();
+        assert_eq!(start(&mut shot, &mut ports, ShotControl::InitializeCapture), Outcome::Pending);
+        assert_eq!(complete(&mut shot, &mut ports, ShotTarget::Capture, Completion::Statistics83, &[]), Outcome::Pending);
+        if matches!(point, AbortPoint::DuringCalculations) {
+            assert_eq!(complete(&mut shot, &mut ports, ShotTarget::Capture, Completion::Image61, &readout_payload()), Outcome::Pending);
+            assert_eq!(ports.external().events.last(), Some(&Event::Job(CalculationsJob::First)));
+        }
+        ports.external().abort = Some(crate::ports::AbortStatus(xm1_saclac_interface::CompletionStatus(13)));
+        assert_eq!(complete(&mut shot, &mut ports, ShotTarget::Capture, Completion::Image5e, &[]), Outcome::Complete);
+        assert_eq!(replies(&mut ports), [(CommandKind::Command07, 7), (CommandKind::Command07, 13)]);
+
+        ports.external().abort = None;
+        ports.external().events.clear();
+        assert_eq!(start(&mut shot, &mut ports, ShotControl::InitializeCapture), Outcome::Pending);
+        assert_eq!(complete(&mut shot, &mut ports, ShotTarget::Capture, Completion::Statistics83, &[]), Outcome::Pending);
+        assert_eq!(complete(&mut shot, &mut ports, ShotTarget::Capture, Completion::Image61, &readout_payload()), Outcome::Pending);
+        assert_eq!(ports.external().events.last(), Some(&Event::Job(CalculationsJob::First)));
+        for (completion, payload) in [
+            (Completion::Calculation99, &[1; 12][..]),
+            (Completion::Calculation97, &[2; 48][..]),
+            (Completion::Calculation98, &[0x34, 0x12, 0, 0][..]),
+            (Completion::Calculation9a, &[3, 0, 4, 0, 5, 0][..]),
+            (Completion::Image60, &[][..]),
+        ] {
+            assert_eq!(complete(&mut shot, &mut ports, ShotTarget::Capture, completion, payload), Outcome::Pending);
+        }
+        assert_eq!(complete(&mut shot, &mut ports, ShotTarget::Capture, Completion::Image5e, &[]), Outcome::Complete);
+        assert_eq!(replies(&mut ports), [(CommandKind::Command07, 7), (CommandKind::Command07, 10), (CommandKind::Command07, 0)]);
+        assert!(!ports.external().events.contains(&Event::Fault));
+    }
 }
 
 #[test]

@@ -512,6 +512,8 @@ pub fn primary_dump_table(index: usize) -> Option<FrameOffset> {
 /// display extent 0xedb0bc, table 0xeed630.
 pub const PRIMARY_JOB_ENTRIES: [u32; 12] = [0xfeac00, 0xfeac54, 0xfeac84, 0xfead28, 0xfeacd4, 0xfead5c, 0xfeacfc, 0x1039b48, 0xf4d4cc, 0x749be4, 0xef617c, 0xef6324];
 pub const AREA_BUFFER_LISTS: [u32; 3] = [0, 0x828, 0x1050];
+/// Capacity of each 0x828-byte client list of 104-byte areas.
+pub const AREA_BUFFER_CAPACITY: u32 = 20;
 pub const fn area_mode(mode: AreaMode) -> u32 {
     match mode {
         AreaMode::Second => 2,

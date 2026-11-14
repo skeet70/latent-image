@@ -67,6 +67,7 @@ pub(super) struct World {
     lists: [Vec<AreaEntry>; 3],
     list_counts: [u32; 3],
     stored_lists: [Vec<AreaEntry>; 3],
+    stored_counts: [u32; 3],
     stored_setting: SettingResult,
     keeps_template: bool,
     statistics_ready: bool,
@@ -94,6 +95,7 @@ impl World {
             lists: [Vec::new(), Vec::new(), Vec::new()],
             list_counts: [0; 3],
             stored_lists: [Vec::new(), Vec::new(), Vec::new()],
+            stored_counts: [0; 3],
             stored_setting: SettingResult([0; 5]),
             keeps_template: true,
             statistics_ready: true,
@@ -290,13 +292,15 @@ impl CaptureJobRecords for World {
     fn slot_positions(&mut self, _record: RecordHandle) -> SlotPositions { self.positions }
     fn setting_result(&mut self, _record: RecordHandle) -> SettingResult { self.stored_setting }
     fn slot_record(&mut self, slot: SlotHandle) -> SlotEntry { self.slot_records[&slot.0] }
-    fn delivered_count(&mut self, _record: RecordHandle, list: DeliveredList) -> u32 { self.stored_lists[list_index(list)].len() as u32 }
+    fn delivered_count(&mut self, _record: RecordHandle, list: DeliveredList) -> u32 { self.stored_counts[list_index(list)] }
     fn delivered_area(&mut self, _record: RecordHandle, list: DeliveredList, index: u8) -> AreaEntry { self.stored_lists[list_index(list)][usize::from(index)] }
     fn store_delivered_count(&mut self, _record: RecordHandle, list: DeliveredList, count: u32) {
+        self.stored_counts[list_index(list)] = count;
         self.stored_lists[list_index(list)].clear();
         self.calls.push(Call::StoreCount(list, count));
     }
     fn store_delivered_area(&mut self, _record: RecordHandle, list: DeliveredList, index: u8, area: &AreaEntry) {
+        assert!(usize::from(index) < 10);
         self.stored_lists[list_index(list)].push(*area);
         self.calls.push(Call::StoreArea(list, index, area.rectangle()[0]));
     }
@@ -670,7 +674,7 @@ fn a_delivery_without_areas_clears_the_buffer_and_stores_empty_lists() {
 }
 
 #[test]
-fn a_delivery_with_areas_generates_moves_and_stores_them() {
+fn a_delivery_translates_the_client_list_before_copying_the_record_capacity() {
     let mut world = World::new();
     world.field(RecordField::Layout, 0x0006_0005);
     world.field(RecordField::FrameFirst, 0xf1);
@@ -684,18 +688,15 @@ fn a_delivery_with_areas_generates_moves_and_stores_them() {
     deliver(&mut job, Completion::Image64, &[1, 0, 0, 0, 0, 0, 0, 0]);
     world.calls.clear();
     run(&mut job, &[PrimaryEffect::Delivered], 0, &mut world);
-    let frame = AreaFrame { crop: [400, 600, 100, 200, 30, 40], sensor: [54, 64, 70, 80] };
-    assert_eq!(world.calls[..2], [Call::Generate(AreaMode::Second, 41, frame), Call::Generate(AreaMode::Third, 41, frame)]);
-    assert_eq!(world.calls[2], Call::SetArea(DeliveredList::Second, 0, [400, 410]), "corners move into the crop's window");
-    let words = GeometryWords { offset: CAPTURE_OFFSET, frame_words: [0xf1, 0], layout: [5, 6] };
-    assert_eq!(world.calls[12], Call::FrameAreas(words, [30, 40]));
-    assert_eq!(world.calls[13..16], [
-        Call::StoreCount(DeliveredList::Second, 12),
-        Call::StoreCount(DeliveredList::First, 0),
-        Call::StoreCount(DeliveredList::Third, 0),
-    ]);
-    let stored: Vec<_> = world.calls[16..].iter().filter(|call| matches!(call, Call::StoreArea(..))).collect();
-    assert_eq!(stored.len(), 10, "the record keeps ten areas of a list");
+    let buffer = parameters(0).areas;
+    assert_eq!(world.area_count(buffer, DeliveredList::Second), 12);
+    for index in [0, 11] {
+        let area = world.area(buffer, DeliveredList::Second, index);
+        assert_eq!(area.rectangle(), [400, 400, 1, 1]);
+        assert_eq!(area.centre(), [410, 410]);
+    }
+    assert_eq!(world.delivered_count(record(), DeliveredList::Second), 12);
+    assert_eq!(world.delivered_area(record(), DeliveredList::Second, 9).rectangle(), [400, 400, 1, 1]);
 }
 
 #[test]
@@ -730,6 +731,23 @@ fn diagnostics_mark_the_dump_area_and_dump_the_second_delivered_list() {
     assert_eq!(dumped[&capture_stock::PRIMARY_DUMP_EXTENT[0].0], 0x701, "the table overwrites the extent");
     assert_eq!(dumped[&(capture_stock::PRIMARY_DUMP.0 + 0x4e4)], 0x711);
     assert!(!dumped.contains_key(&(capture_stock::PRIMARY_DUMP.0 + 0x4e8)));
+}
+
+#[test]
+fn diagnostics_dump_only_the_areas_the_record_can_hold() {
+    let mut world = World::new();
+    world.adjustments.insert(CaptureAdjustment::Diagnostics as u8, 0x80);
+    let mut job = begun(&mut world);
+    deliver(&mut job, Completion::Image64, &[1, 0, 0, 0, 0, 0, 0, 0]);
+    run(&mut job, &[PrimaryEffect::Delivered], 0, &mut world);
+    let dumped: BTreeMap<u32, u32> = world.calls.iter().filter_map(|call| match call {
+        Call::FrameWord(offset, value) => Some((offset.0, *value)),
+        _ => None,
+    }).collect();
+    assert_eq!(dumped[&0xa5ae8], 12);
+    assert_eq!(dumped[&0xa5b08], 500);
+    assert_eq!(dumped[&0xa5ed4], 500);
+    assert!(dumped.keys().all(|offset| (0xa5ae0..0xa5fcc).contains(offset)));
 }
 
 #[test]

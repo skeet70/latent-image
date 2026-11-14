@@ -1,5 +1,5 @@
 use crate::boundary::{Frame, LensReference, Trace};
-use crate::calculations_work::{Processing, SecondJobInput};
+use crate::calculations_work::{Processing, ProcessingSelection, SecondJobInput};
 use crate::capture_boundary::{CalculationResult, CaptureOptions, CaptureParameters, MoveProfile, SlotSelection};
 use crate::ports::{AbortStatus, CalculationsJob, Reply};
 use crate::preparation::HalfPressParameters;
@@ -38,6 +38,8 @@ pub enum Event {
     Command28,
     Measure(MeasurementRequest, [Completion; 2]),
     Job(CalculationsJob),
+    Readout(u32, u32),
+    Configured { source: u8, statistics: bool, selection: ProcessingSelection },
     SecondJob(SecondJobInput),
     First(FirstResult),
     Second(SecondResult),

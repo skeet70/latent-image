@@ -721,12 +721,15 @@ impl CaptureCommand for ExternalFake {
     fn detail(&mut self) -> u32 {  CaptureCommand::detail(&mut self.calculations) }
     fn processing_word(&mut self) -> u32 {  CaptureCommand::processing_word(&mut self.calculations) }
     fn fourth_target(&mut self) -> bool {  CaptureCommand::fourth_target(&mut self.calculations) }
-    fn publish_readout(&mut self, mode: u32, value: u32) {  CaptureCommand::publish_readout(&mut self.calculations, mode, value) }
+    fn publish_readout(&mut self, mode: u32, value: u32) { self.events.push(Event::Readout(mode, value)); CaptureCommand::publish_readout(&mut self.calculations, mode, value) }
     fn publish_planes(&mut self, planes: &BinnedPlanes, extent: [u16; 2]) {  CaptureCommand::publish_planes(&mut self.calculations, planes, extent) }
     fn publish(&mut self, job: CalculationsJob, _record: RecordHandle) { self.events.push(Event::Published(job)); CaptureCommand::publish(&mut self.calculations, job, _record) }
 }
 impl CaptureProcessing for ExternalFake {
-    fn configure(&mut self, source: u8, statistics: bool, processing: &mut Processing, client: u32, detail: u32, selection: &ProcessingSelection) -> u32 {  CaptureProcessing::configure(&mut self.calculations, source, statistics, processing, client, detail, selection) }
+    fn configure(&mut self, source: u8, statistics: bool, processing: &mut Processing, client: u32, detail: u32, selection: &ProcessingSelection) -> u32 {
+        self.events.push(Event::Configured { source, statistics, selection: *selection });
+        CaptureProcessing::configure(&mut self.calculations, source, statistics, processing, client, detail, selection)
+    }
     fn statistics(&mut self) -> StatisticsPlanes {  CaptureProcessing::statistics(&mut self.calculations) }
 }
 impl CalculationsLibrary for ExternalFake {
