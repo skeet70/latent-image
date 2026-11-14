@@ -77,6 +77,7 @@ pub struct MotionWorld {
     pub reference_line: u16,
     pub selected_gains: SelectedGains,
     pub gain_requests: Vec<GainRequest>,
+    pub planner: super::plan_tests::Planner,
 }
 
 impl Default for MotionWorld {
@@ -121,6 +122,7 @@ impl Default for MotionWorld {
             reference_line: 0,
             selected_gains: SelectedGains::default(),
             gain_requests: Vec::new(),
+            planner: super::plan_tests::Planner::default(),
             now: 0,
         }
     }
@@ -139,6 +141,7 @@ pub fn blank_readings(lens: u32) -> RecordReadings {
         measurement_selection: Default::default(),
         scene: 0,
         channel: 0,
+        style: 0,
         at_0043: 0,
         class: 0,
         policy: 0,
