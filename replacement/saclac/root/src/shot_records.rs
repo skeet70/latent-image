@@ -57,3 +57,25 @@ fn record_channel(mode: xm1_shot_sequence::boundary::RecorderMode) -> xm1_saclac
         xm1_shot_sequence::boundary::RecorderMode::Exposure => xm1_saclac_profile_geometry::record_mode::RecordChannel::SHORT,
     }
 }
+
+impl<M: xm1_saclac_shared::stock::Machine + Clone, R, E, P: xm1_saclac_interface::ImageProcessor, I: xm1_saclac_imaging::driver::Isp, T: xm1_saclac_profile_geometry::controller::Tables, A, Q>
+    xm1_shot_sequence::pipeline_work::PipelineProfiles for Libraries<'_, M, R, E, P, I, T, A, Q> {
+    fn requires_adjustment(&mut self, profile: u32) -> bool {
+        self.geometry.borrow().profiles().requires_adjustment(xm1_saclac_profile_geometry::profile::ProfileHandle(profile))
+    }
+    fn record_mode_available(&mut self, mode: u32) -> bool {
+        self.geometry.borrow_mut().record_mode_available(xm1_saclac_profile_geometry::record_mode::RecordChannel(mode))
+    }
+    fn begin_record_mode(&mut self, mode: u32) {
+        let _ = self.geometry.borrow_mut().begin_record_mode(xm1_saclac_profile_geometry::record_mode::RecordChannel(mode));
+    }
+    fn finish_record_mode(&mut self, threshold: u8) {
+        let _ = self.geometry.borrow_mut().finish_record_mode(u16::from(threshold));
+    }
+    fn configure_extended_operations(&mut self) {
+        self.geometry.borrow_mut().configure_extended_operations(xm1_saclac_profile_geometry::services::ExtendedOperations::Primary);
+    }
+    fn configure_secondary_operations(&mut self) {
+        self.geometry.borrow_mut().configure_extended_operations(xm1_saclac_profile_geometry::services::ExtendedOperations::Secondary);
+    }
+}

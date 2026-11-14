@@ -102,9 +102,9 @@ impl<M: CommandSource + Clone, R: Memory, E: StockEntries,
         }
     }
     fn effect(&mut self, effect: Effect, record: RecordHandle) {
-        let mut machine = self.machine();
+        let machine = self.machine();
         match effect {
-            Effect::ResetShotProgress => machine.write_u32(xm1_shot_sequence::stock::pipeline::RESTART_FLAG, 0),
+            Effect::ResetShotProgress => self.layers.services.borrow_mut().pipeline.restart = false,
             Effect::ApplyHalfPressOption => {
                 // f1550c..20 dereferences the client's slot before testing its frame word.
                 let slot = parameter_word(&machine, CommandKind::HalfPress, 11);

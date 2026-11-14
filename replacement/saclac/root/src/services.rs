@@ -23,6 +23,7 @@ pub struct Services<M, R, E, P> {
     pub(crate) search: xm1_saclac_search_bindings::State,
     pub(crate) selection_publication: crate::controller_services::SelectionPublication,
     pub(crate) round_callbacks: Option<crate::round_services::Callbacks>,
+    pub(crate) pipeline: crate::shot_platform::PipelineState,
 }
 
 impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Services<M, R, E, P> {
@@ -38,6 +39,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Services<M, R, E, P> {
             search: xm1_saclac_search_bindings::State::default(),
             selection_publication: crate::controller_services::SelectionPublication::default(),
             round_callbacks: None,
+            pipeline: crate::shot_platform::PipelineState::default(),
         }
     }
 

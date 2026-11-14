@@ -2056,7 +2056,7 @@
   ,{
     "id": "E-SACLAC-ROOT-PERSISTENT-PROVIDERS-150",
     "claim": "Author-run bounded host execution exercised persistent root providers: one active calculation input shared by ShotState and calc0x3c02; stored commands/abort/client publication; persistent lens/Prepare/S1 behavior; callback-task S1 gate transitions. Exposure field widths/refusal, signed lens/target, real Blocking request/wait/callback/admission, dump transitions/guards, shared Geometry recorder and301 history entries/tail/guards passed. Distinct LiveSearch/Shot identity, both owned history-reset callers, platform outputs and subject staging/wait/refusal passed. A reproduced four-byte subject-coordinate shift was repaired and public preparation then observed native-layout geometry. Preparation records passed the actual summary consumer, absent/read-only-refused pointer non-dereference,56/168/124-byte publications and frame35/link14. Statistics staging/queued callbacks passed status/payload/sender/null branches. Motion providers passed tick wrap,12/14-argument signed limits, exposure/gain outputs, owned ratio/chosen word and non-square relative-frame conversion. Borrowed preparation candidates preserve inactive geometry and IDs; public owned geometry calls passed non-square search class-limit order, crop axes, statistics cells and sample cells. Input {{consumer_status}}/{{consumer_exit}}; memory {{memory_status}}/{{memory_exit}}; subjects {{subject_status}}; preparation {{preparation_status}}/{{preparation_exit}}; motion {{motion_status}}/{{motion_exit}}; geometry {{geometry_status}}; latest ARM/host gate exit {{latest_gate_exit}}.",
-    "scope": "X-M1 1.50 scoped synthetic host paths and ARM compilation only. Consumer stock_executed={{stock_executed}}, full_system={{full_system}}, native_task_hold={{native_task_hold}}. Post-public-main60 raw creation-word/Root rendezvous/callback interoperability {{integration_status}}. Motion trace consumer {{trace_status}}/{{trace_exit}} reads ten records at effective addresses derived from native fa5ae0..fa5bd8; static-byte and host evidence, not stock execution.",
+    "scope": "X-M1 1.50 scoped synthetic host paths and ARM compilation only. Consumer stock_executed={{stock_executed}}, full_system={{full_system}}, native_task_hold={{native_task_hold}}. Post-public-main60 raw creation-word/Root rendezvous/callback interoperability {{integration_status}}. Motion trace consumer {{trace_status}}/{{trace_exit}} reads ten records at effective addresses derived from native fa5ae0..fa5bd8; static-byte and host evidence, not stock execution. Pipeline platform consumer {{pipeline_status}}/{{pipeline_exit}} observes shared restart across independent library handles, record-channel admission, guarded four-byte frame clear and exact-one work marker with signed tone storage; native S1 reset and the full Shot aggregate remain unexercised.",
     "notes": "Author-run evidence, not independent confirmation. Persistent MotionState preparation compiles but has not been runtime-qualified. Complete Shot/plan aggregate, concrete image, native placement/ISP/hold, callback argument capture, stock-authenticated ordered scenarios and executed wrong variant remain unqualified. Kernel/stock answers are synthetic; no native peer or camera ran. Subject regression observes the public preparation's native-layout coordinates, not execution of Calc evaluation or stock. ExposureContext retains no second active calculation input or staged subject list. FileSynchronize had no producer and was removed; Filea1 remains separate.",
     "artifacts": [
       "private-data/scratch/SaclacRoot/runs/20261114T151216Z-root4-canonical-input-callback-gate-fixed/result/gate.log",
@@ -2076,7 +2076,9 @@
       "private-data/scratch/SaclacRoot/runs/20261114T201717Z-root4-motion-geometry-consumer-configured/result/consumer.log",
       "private-data/scratch/SaclacRoot/runs/20261114T202433Z-root4-motion-trace-axis-before/result/gate.log",
       "private-data/scratch/SaclacRoot/runs/20261114T202846Z-root4-motion-trace-axis-corrected/result/gate.log",
-      "private-data/scratch/SaclacRoot/runs/20261114T203008Z-root4-motion-trace-native-address-consumer/result/consumer.log"
+      "private-data/scratch/SaclacRoot/runs/20261114T203008Z-root4-motion-trace-native-address-consumer/result/consumer.log",
+      "private-data/scratch/SaclacRoot/runs/20261114T222007Z-root4-shot-pipeline-profile-platform-clean/result/gate.log",
+      "private-data/scratch/SaclacRoot/runs/20261114T222137Z-root4-shot-pipeline-platform-consumer/result/consumer.log"
     ],
     "facts": [
       {"name":"firmware_sha256","path":"private-data/scratch/ShotSequence/runs/20261114T041635Z-shot-review-reference/result/reference.json","pointer":["firmware_sha256"]},
@@ -2085,7 +2087,7 @@
       {"name":"consumer_exit","path":"private-data/scratch/SaclacRoot/runs/20261114T153101Z-root4-shared-input-callback-consumer/result/verdict.json","pointer":["exit_code"]},
       {"name":"stock_executed","path":"private-data/scratch/SaclacRoot/runs/20261114T153101Z-root4-shared-input-callback-consumer/result/verdict.json","pointer":["stock_executed"]},
       {"name":"full_system","path":"private-data/scratch/SaclacRoot/runs/20261114T153101Z-root4-shared-input-callback-consumer/result/verdict.json","pointer":["full_system"]},
-      {"name":"latest_gate_exit","path":"private-data/scratch/SaclacRoot/runs/20261114T202846Z-root4-motion-trace-axis-corrected/result/verdict.json","pointer":["exit_status"]},
+      {"name":"latest_gate_exit","path":"private-data/scratch/SaclacRoot/runs/20261114T222007Z-root4-shot-pipeline-profile-platform-clean/result/verdict.json","pointer":["exit_status"]},
       {"name":"memory_status","path":"private-data/scratch/SaclacRoot/runs/20261114T170820Z-root4-record-mode-history-consumer/result/verdict.json","pointer":["status"]},
       {"name":"memory_exit","path":"private-data/scratch/SaclacRoot/runs/20261114T170820Z-root4-record-mode-history-consumer/result/verdict.json","pointer":["exit_code"]},
       {"name":"native_task_hold","path":"private-data/scratch/SaclacRoot/runs/20261114T170820Z-root4-record-mode-history-consumer/result/verdict.json","pointer":["native_task_hold"]},
@@ -2097,6 +2099,8 @@
       {"name":"integration_status","path":"private-data/scratch/SaclacRoot/runs/20261114T194444Z-root4-main60-public-consumer/result/verdict.json","pointer":["status"]},
       {"name":"geometry_status","path":"private-data/scratch/SaclacRoot/runs/20261114T201717Z-root4-motion-geometry-consumer-configured/result/verdict.json","pointer":["status"]},
       {"name":"trace_status","path":"private-data/scratch/SaclacRoot/runs/20261114T203008Z-root4-motion-trace-native-address-consumer/result/verdict.json","pointer":["status"]},
+      {"name":"pipeline_status","path":"private-data/scratch/SaclacRoot/runs/20261114T222137Z-root4-shot-pipeline-platform-consumer/result/verdict.json","pointer":["status"]},
+      {"name":"pipeline_exit","path":"private-data/scratch/SaclacRoot/runs/20261114T222137Z-root4-shot-pipeline-platform-consumer/result/verdict.json","pointer":["exit_code"]},
       {"name":"trace_exit","path":"private-data/scratch/SaclacRoot/runs/20261114T203008Z-root4-motion-trace-native-address-consumer/result/verdict.json","pointer":["exit_code"]}
     ]
   }
