@@ -1,8 +1,8 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
-//! saclac's calculation library: the requests saclac posts to calc (queue 44) and calc1
-//! (queue 45), and the computations its measurement and shot modules share.
+//! saclac's calculation library: requests to calc (queue 44), calc1 (queue 45) and calcsub
+//! (queue 46), and the computations its measurement and shot modules share.
 
 pub mod adjust;
 pub mod capture_requests;
