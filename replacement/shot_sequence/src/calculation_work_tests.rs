@@ -19,7 +19,7 @@ struct Input {
     offsets: Option<(u16, u32, u16)>,
 }
 
-struct World {
+pub(super) struct World {
     mode: u32,
     evaluation: u32,
     class: u32,
@@ -41,7 +41,7 @@ struct World {
 }
 
 impl World {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             mode: 0,
             evaluation: 0x30,

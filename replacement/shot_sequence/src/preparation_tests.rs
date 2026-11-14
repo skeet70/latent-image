@@ -169,9 +169,9 @@ fn the_frame_dumps_follow_the_record_and_adjustment() {
     fake.set_adjustment(Adjustment::StatisticsDump, 0x80);
     fake.calculation_mode = 1;
     prepared(Some(parameters(0)), &mut fake);
-    let dumps: Vec<_> = fake.events.iter().filter(|event| matches!(event, Event::Dump(..) | Event::DumpCalculation | Event::Summary(..))).cloned().collect();
+    let dumps: Vec<_> = fake.events.iter().filter(|event| matches!(event, Event::StatisticsDump(..) | Event::Dump(..) | Event::DumpCalculation | Event::Summary(..))).cloned().collect();
     assert_eq!(dumps.len(), 6);
-    assert_eq!(dumps[0], Event::Dump(Dump::Statistics, Frame(0x8000), 6));
+    assert_eq!(dumps[0], Event::StatisticsDump(Frame(0x8000), false));
     assert_eq!(dumps[1], Event::Dump(Dump::Frame, Frame(0x8000), 0));
     assert_eq!(dumps[2], Event::Dump(Dump::Lens, Frame(0x8000), 0));
     assert_eq!(dumps[3], Event::DumpCalculation);

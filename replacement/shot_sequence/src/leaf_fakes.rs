@@ -23,6 +23,7 @@ pub enum Event {
     Announced(Frame, FrameHeader),
     Summary(Frame, FrameSummary),
     Dump(Dump, Frame, u32),
+    StatisticsDump(Frame, bool),
     DumpCalculation,
     ResetImageProgress,
     Detect(&'static str, u32),
@@ -106,10 +107,11 @@ impl LensReadings for Context {
     fn set_lens_notice(&mut self, notice: bool) { self.lens_notice = Some(notice); }
 }
 
-impl<P> PreparationShot<P> for Context {
+impl PreparationShot<Fake> for Context {
     fn lens_reference(&mut self) -> LensReference { self.lens_reference }
     fn bind_lens_reference(&mut self, reference: LensReference) { self.lens_reference = reference; }
-    fn prepare_selection(&mut self, _record: RecordHandle, area_count: Option<ClientRef>, live: bool, _ports: &mut P) { self.plans.push((area_count, live)); }
+    fn prepare_selection(&mut self, _record: RecordHandle, area_count: Option<ClientRef>, live: bool, _ports: &mut Fake) { self.plans.push((area_count, live)); }
+    fn dump_statistics(&mut self, frame: Frame, first_capture: bool, ports: &mut Fake) { ports.events.push(Event::StatisticsDump(frame, first_capture)); }
     fn carry(&mut self, mode: Option<u32>) { self.carried.push(mode); }
 }
 

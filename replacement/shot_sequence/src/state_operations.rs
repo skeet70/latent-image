@@ -141,7 +141,7 @@ impl<M: StateMemory> LensReadings for ShotState<M> {
     fn set_lens_notice(&mut self, notice: bool) { ShotState::set_lens_notice(self, notice); }
 }
 
-impl<M: StateMemory, P: GridLayers + Client + CalculationProfiles> PreparationShot<P> for ShotState<M> {
+impl<M: StateMemory, P: GridLayers + Client + CalculationProfiles + crate::statistics_dump::DumpBoundary> PreparationShot<P> for ShotState<M> {
     fn lens_reference(&mut self) -> LensReference { ShotState::lens_reference(self) }
 
     /// 0xf160ac.
@@ -160,6 +160,10 @@ impl<M: StateMemory, P: GridLayers + Client + CalculationProfiles> PreparationSh
         };
         let list = record_list(record, source, self, ports);
         self.set_selection(&list);
+    }
+
+    fn dump_statistics(&mut self, frame: crate::boundary::Frame, first_capture: bool, ports: &mut P) {
+        self.frame_dump().write(frame, first_capture, ports);
     }
 
     fn carry(&mut self, mode: Option<u32>) { self.carry_words(mode); }

@@ -84,6 +84,9 @@ impl ExposureWork {
 
     pub fn correction(&self) -> &Correction { &self.correction }
 
+    /// The focus round can replace the correction kept for a later null correction callback.
+    pub fn keep_correction(&mut self, correction: &Correction) { self.last_correction = *correction; }
+
     /// Exposure values the conclusion derived for the ten areas.
     pub fn area_values(&self) -> [i16; 10] { self.area_values }
 

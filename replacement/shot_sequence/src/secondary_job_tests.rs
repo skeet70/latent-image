@@ -63,7 +63,7 @@ enum Call {
 
 const CAPTURE_OFFSET: u32 = 1000;
 
-struct World {
+pub(super) struct World {
     calls: Vec<Call>,
     fields: BTreeMap<u8, u32>,
     slot_fields: BTreeMap<u8, u32>,
@@ -78,7 +78,7 @@ struct World {
 }
 
 impl World {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let mut world = Self {
             calls: Vec::new(),
             fields: BTreeMap::new(),

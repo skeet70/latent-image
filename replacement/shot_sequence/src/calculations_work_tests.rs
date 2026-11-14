@@ -23,7 +23,7 @@ enum Call {
     Publish(CalculationsJob),
 }
 
-struct World {
+pub(super) struct World {
     jobs: u32,
     configuration: u32,
     fourth_target: bool,
@@ -36,7 +36,7 @@ struct World {
 }
 
 impl World {
-    fn new(jobs: u32) -> Self {
+    pub(super) fn new(jobs: u32) -> Self {
         let mut processing = Processing::default();
         processing.0[0..4].copy_from_slice(&0x30u32.to_le_bytes());
         processing.0[4..8].copy_from_slice(&0x40u32.to_le_bytes());

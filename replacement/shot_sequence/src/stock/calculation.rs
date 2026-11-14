@@ -56,6 +56,13 @@ pub const SELECTION: u32 = BLOCK + 0x6410;
 /// 4 marks a requested calculation (0xf1d3fc, 0xf1a26c).
 pub const REQUEST_MARK: u32 = BLOCK + 0x6414;
 pub const REQUESTED: u32 = 4;
+
+/// Both the half press (0xf1d5a8) and live sequence (0xf1a284) request this input/result pair.
+/// The callback posts 0x90; the owned step then records and absorbs the result.
+pub const fn request(callback: xm1_saclac_interface::stock::StockCallbackWord) -> xm1_saclac_interface::calc::CalcPayload {
+    use xm1_saclac_interface::calc::{CalcPayload, SharedAddress};
+    CalcPayload::Calculation { block: SharedAddress(INPUT), source: SharedAddress(RESULT), callback }
+}
 /// Plan words 0xf1d23c..0xf1d29c clear and fill: 136 bytes from +0x6568.
 pub const PLAN: u32 = BLOCK + 0x6568;
 pub const PLAN_BYTES: usize = 136;

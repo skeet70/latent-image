@@ -11,7 +11,7 @@ use xm1_saclac_interface::{Completion, RecordHandle};
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Move { Relative { delta: i16, kind: u32, profile: MoveProfile }, Absolute { target: u32, profile: MoveProfile } }
 
-struct World {
+pub(super) struct World {
     snapshot: LensSnapshot,
     designated: LensPoint,
     lens_position: u32,
@@ -38,7 +38,7 @@ struct World {
 }
 
 impl World {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             snapshot: LensSnapshot { current: LensPoint { position: 100, detail: 0, reference: LensReference(40), state: 3, kind: 1 }, ..LensSnapshot::default() },
             designated: LensPoint { position: 300, detail: 0, reference: LensReference(41), state: 4, kind: 0 },

@@ -37,6 +37,7 @@ pub mod secondary_job;
 pub mod selection;
 pub mod selection_operations;
 pub mod shared;
+pub mod shot_ports;
 pub mod state;
 pub mod state_operations;
 pub mod statistics_dump;
@@ -45,6 +46,7 @@ pub mod subjects;
 pub mod summary;
 
 pub use outcome::Outcome;
+pub use shot_ports::ShotPorts;
 
 use capture::Capture;
 use ports::{Ports, Signal};
@@ -166,3 +168,7 @@ mod classification_tests;
 mod selection_operations_tests;
 #[cfg(test)]
 mod exposure_callbacks_tests;
+#[cfg(test)]
+mod shot_ports_fakes;
+#[cfg(test)]
+mod shot_ports_tests;

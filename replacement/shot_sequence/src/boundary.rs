@@ -175,7 +175,7 @@ pub trait Client {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Dump { Statistics, Frame, Lens, Numbered }
+pub enum Dump { Frame, Lens, Numbered }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Trace { Prepare, HalfPressReplied, ExposureBegun, EvaluationRequested, CorrectionRequested, ExposureConcluded }

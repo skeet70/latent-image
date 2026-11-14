@@ -86,7 +86,7 @@ enum Call {
     Converted,
 }
 
-struct World {
+pub(super) struct World {
     calls: Vec<Call>,
     plan: Option<Plan>,
     subject: SubjectBlock,
@@ -112,7 +112,7 @@ struct World {
 }
 
 impl World {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             calls: Vec::new(),
             plan: Some(plan()),

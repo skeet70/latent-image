@@ -39,6 +39,7 @@ SOURCES = [
     "src/selection.rs",
     "src/selection_operations.rs",
     "src/shared.rs",
+    "src/shot_ports.rs",
     "src/state.rs",
     "src/state_operations.rs",
     "src/statistics_dump.rs",

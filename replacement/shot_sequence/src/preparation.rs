@@ -79,6 +79,8 @@ pub trait PreparationShot<P: ?Sized>: LensReadings {
     /// Builds the record's selection list from the half-press client's area count block, or for
     /// the live sequence.
     fn prepare_selection(&mut self, record: RecordHandle, area_count: Option<ClientRef>, live: bool, ports: &mut P);
+    /// Uses the same frame tag as the capture's selection map.
+    fn dump_statistics(&mut self, frame: Frame, first_capture: bool, ports: &mut P);
     /// The words a preparation in `mode` (`None` for the live sequence) carries to the next.
     fn carry(&mut self, mode: Option<u32>);
 }
@@ -178,7 +180,7 @@ impl Prepared {
         if let Some(parameters) = parameters { publish_areas(parameters, boundary); }
 
         let frame = parameters.and_then(|parameters| announce_frame(parameters, boundary));
-        if let Some(frame) = frame.filter(|_| !measuring) { dump_frame(frame, boundary); }
+        if let Some(frame) = frame.filter(|_| !measuring) { dump_frame(frame, shot, boundary); }
         if matches!(mode, Some(0 | 3 | 5)) { boundary.load_lens_capabilities(); }
         if boundary.setting(Setting::ContextMode) == 1 && parameters.is_some() && !measuring && boundary.setting(Setting::SelectionOption) != 0x39 {
             boundary.publish(Publication::CaptureFrame(frame));
@@ -274,9 +276,9 @@ fn announce_frame(parameters: HalfPressParameters, boundary: &mut impl Client) -
     Some(frame)
 }
 
-fn dump_frame(frame: Frame, boundary: &mut impl Boundary) {
+fn dump_frame<P: Boundary>(frame: Frame, shot: &mut impl PreparationShot<P>, boundary: &mut P) {
     let argument = boundary.setting(Setting::DumpArgument);
-    if boundary.adjustment(Adjustment::StatisticsDump) & 0x80 != 0 { boundary.dump(Dump::Statistics, frame, argument); }
+    if boundary.adjustment(Adjustment::StatisticsDump) & 0x80 != 0 { shot.dump_statistics(frame, argument == 1, boundary); }
     boundary.dump(Dump::Frame, frame, 0);
     if (4..=6).contains(&boundary.setting(Setting::LensPolicy)) {
         boundary.dump(Dump::Lens, frame, 0);

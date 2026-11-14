@@ -40,7 +40,7 @@ enum Event {
     Export(Frame, u32),
 }
 
-struct World {
+pub(super) struct World {
     diagnostics: u8,
     fields: BTreeMap<u8, u32>,
     slot_fields: BTreeMap<u8, u32>,
@@ -58,7 +58,7 @@ struct World {
 }
 
 impl World {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             diagnostics: 0x80,
             fields: BTreeMap::new(),

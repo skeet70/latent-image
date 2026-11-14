@@ -23,6 +23,20 @@ use xm1_saclac_interface::CompletionStatus;
 pub mod exposure;
 pub mod statistics_dump;
 
+/// Words passed to 0x72872c by the preparation, reply and exposure (0xf17010, 0xf17ab4,
+/// 0xf1ee64, 0xf1f17c, 0xf1f200, 0xf1fbd4).
+pub const fn trace_word(trace: crate::boundary::Trace) -> u32 {
+    use crate::boundary::Trace;
+    match trace {
+        Trace::Prepare => 0x0200_0000,
+        Trace::HalfPressReplied => 0x1200_0000,
+        Trace::ExposureBegun => 0x0201_0000,
+        Trace::EvaluationRequested => 0x0201_0500,
+        Trace::CorrectionRequested => 0x0201_0300,
+        Trace::ExposureConcluded => 0x1201_0000,
+    }
+}
+
 /// Codes retained parents pass to the row functions 0xefdab8 (0xeb, 0xec), 0xeffcfc (0x103)
 /// and 0xf005b4 (0xac).
 pub const fn control_code(control: ShotControl) -> u16 {
