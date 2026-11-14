@@ -132,8 +132,8 @@ pub fn query_areas(m: &impl Machine, code: u32, query: &xm1_saclac_profile_geome
 fn word(bytes: &[u8], at: usize) -> u32 { u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) }
 fn half(bytes: &[u8], at: usize) -> u16 { u16::from_le_bytes(bytes[at..at + 2].try_into().unwrap()) }
 
-#[no_mangle]
-pub static XM1_REQUIRES_LENS_SAFETY_CONTRACT: u32 = 1;
+#[cfg(target_arch = "arm")]
+static EMULATOR_ONLY_MARKER: u32 = 1;
 
 pub extern "C" fn frame_handler() {
     #[cfg(not(target_arch = "arm"))]
@@ -152,7 +152,7 @@ pub extern "C" fn frame_handler() {
 #[cfg(target_arch = "arm")]
 fn frame_with<C: xm1_saclac_peers::Poster>(kernel: &xm1_kernel::Kernel<xm1_kernel::SlotTable>, cx: &C) {
     use xm1_saclac_profile_geometry::{controller::ProfileGeometry, profile::Profiles, stock::StockTables};
-    let peers = xm1_saclac_peers::PeerPorts::new(cx, xm1_saclac_peers::EmulatorOnly::new(&XM1_REQUIRES_LENS_SAFETY_CONTRACT).unwrap());
+    let peers = xm1_saclac_peers::PeerPorts::new(cx, xm1_saclac_peers::EmulatorOnly::new(&EMULATOR_ONLY_MARKER).unwrap());
     let ports = crate::geometry::GeometryBindings {
         stages: StageDriver { isp: xm1_saclac_imaging::stock::StockIsp { exclusion: crate::stages::KernelExclusion(kernel) }, arguments: StageMemory, machine: xm1_saclac_shared::stock::Guest },
         peers,
