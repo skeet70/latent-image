@@ -24,6 +24,7 @@ use crate::stock::{Machine, Stock, StockConfiguration};
 
 #[derive(Clone, Debug, PartialEq)]
 enum Call {
+    Read8(u32),
     Read16(u32),
     Read32(u32),
     Write8(u32, u8),
@@ -95,6 +96,12 @@ impl Fake {
 }
 
 impl Machine for Fake {
+    fn read_u8(&self, address: u32) -> u8 {
+        let mut state = self.0.borrow_mut();
+        state.calls.push(Call::Read8(address));
+        state.byte(address)
+    }
+
     fn read_u16(&self, address: u32) -> u16 {
         let mut state = self.0.borrow_mut();
         state.calls.push(Call::Read16(address));

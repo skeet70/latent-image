@@ -10,7 +10,7 @@ use xm1_focus_measurement_round::pipeline::{Exposure, GainStep, HistoryStatistic
 use xm1_focus_measurement_round::profile::{FrameInterval, GridCell, ProfileSelection, RetainedWord};
 use xm1_focus_measurement_round::record::{Adjustment, AdjustmentWords, Trace, TraceMark};
 use xm1_saclac_calc::adjust::{configuration, profile_adjustment as programs, rate_policy, sample_grid};
-use xm1_saclac_calc::exposure::ports::{Lens, Properties, Property, StockMemory};
+use xm1_saclac_calc::exposure::ports::{Lens, Properties, Property};
 use xm1_saclac_config::table::{self, Bounds, Row, Step};
 use xm1_saclac_interface::calc::{AcquisitionGrid, Calc1Payload, CalcPayload, SharedAddress};
 use xm1_saclac_interface::round_acquisition::*;
@@ -76,17 +76,6 @@ impl<M: Machine> programs::StepRatios for Calculations<'_, M> {
     fn step_ratio(&mut self, code: u16, selector: u8) -> u32 { boundary::step_ratio(self.0, code, selector) }
 }
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries, P> StockMemory for Services<M, R, E, P> {
-    fn read_u8(&mut self, at: SharedAddress) -> u8 { boundary::read_record::<1>(&self.machine, at)[0] }
-    fn read_u16(&mut self, at: SharedAddress) -> u16 { self.machine.read_u16(at.0) }
-    fn read_u32(&mut self, at: SharedAddress) -> u32 { self.machine.read_u32(at.0) }
-    fn write_u8(&mut self, at: SharedAddress, value: u8) { self.machine.write_u8(at.0, value) }
-    fn write_u16(&mut self, at: SharedAddress, value: u16) { boundary::place(&mut self.machine, at.0, &value.to_le_bytes()) }
-    fn write_u32(&mut self, at: SharedAddress, value: u32) { self.machine.write_u32(at.0, value) }
-    fn fill(&mut self, at: SharedAddress, bytes: usize, value: u8) {
-        for offset in 0..bytes { self.machine.write_u8(at.0.wrapping_add(offset as u32), value); }
-    }
-}
 
 impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Pipeline for Services<M, R, E, P> {
     fn capture(&mut self, statistics: Statistics) { boundary::capture(&self.machine, statistics) }

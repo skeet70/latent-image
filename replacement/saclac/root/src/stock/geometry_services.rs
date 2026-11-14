@@ -76,14 +76,14 @@ fn label(m: &impl Machine, at: u32, limit: usize, into: &mut [u8]) -> usize {
     let mut len = 0;
     for byte in into.iter_mut().take(limit) {
         let at = at + len as u32;
-        let value = (m.read_u16(at & !1) >> ((at & 1) * 8)) as u8;
+        let value = m.read_u8(at);
         if value == 0 { break; }
         *byte = value; len += 1;
     }
     len
 }
 impl<M: Machine, P, I> DiagnosticLabels for GeometryBindings<M, P, I> {
-    fn profile_label(&mut self, profile: ProfileHandle, into: &mut [u8]) -> usize { let at = 0xee_b3a8 + profile.0; let index = (self.stages.machine.read_u16(at & !1) >> ((at & 1) * 8)) as u8; label(&self.stages.machine, 0xee_b460 + 9 * u32::from(index), 9, into) }
+    fn profile_label(&mut self, profile: ProfileHandle, into: &mut [u8]) -> usize { let at = 0xee_b3a8 + profile.0; let index = self.stages.machine.read_u8(at); label(&self.stages.machine, 0xee_b460 + 9 * u32::from(index), 9, into) }
     fn feature_label(&mut self, feature: u8, into: &mut [u8]) -> usize { label(&self.stages.machine, 0xee_b3d0 + 12 * u32::from(feature), 12, into) }
     fn fixed_label(&mut self, into: &mut [u8]) -> usize { label(&self.stages.machine, 0xee_b2c4, usize::MAX, into) }
     fn rate_separator(&mut self, into: &mut [u8]) -> usize { label(&self.stages.machine, 0xee_b2d0, usize::MAX, into) }

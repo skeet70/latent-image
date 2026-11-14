@@ -251,7 +251,7 @@ fn enter(machine: &impl Machine, address: u32, arguments: &[Argument]) -> u32 { 
 fn read_bytes<const N: usize>(machine: &impl Machine, address: u32) -> [u8; N] {
     core::array::from_fn(|index| {
         let at = address.wrapping_add(index as u32);
-        (machine.read_u16(at & !1) >> (8 * (at & 1))) as u8
+        machine.read_u8(at)
     })
 }
 

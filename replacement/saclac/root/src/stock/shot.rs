@@ -13,7 +13,7 @@ impl<M: Machine> StateMemory for ShotMemory<M> {
             let value = match width {
                 4 => self.0.read_u32(address),
                 2 => u32::from(self.0.read_u16(address)),
-                _ => u32::from((self.0.read_u16(address & !1) >> (8 * (address & 1))) as u8),
+                _ => u32::from(self.0.read_u8(address)),
             };
             into[..width].copy_from_slice(&value.to_le_bytes()[..width]);
             into = &mut into[width..];
@@ -39,7 +39,7 @@ impl<M: Machine> StateMemory for ShotMemory<M> {
     fn copy(&mut self, to: StateAddress, from: StateAddress, bytes: usize) {
         for offset in 0..bytes as u32 {
             let source = from.get() + offset;
-            let byte = (self.0.read_u16(source & !1) >> (8 * (source & 1))) as u8;
+            let byte = self.0.read_u8(source);
             self.0.write_u8(to.get() + offset, byte);
         }
     }

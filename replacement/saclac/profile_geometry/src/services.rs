@@ -59,6 +59,14 @@ impl LevelPair {
     /// 0xef7550.
     pub const SECONDARY: Self = Self([2, 2]);
 
+    /// The pair's profile level class (0xef7380).
+    pub const fn encoded_class(self) -> u32 {
+        match self.0[0] as u32 + self.0[1] as u32 {
+            sum @ 1..=4 => sum + 1,
+            _ => 1,
+        }
+    }
+
     /// 0 for no level, 1 for a first byte alone, 2 for both bytes (0xef74f8).
     pub const fn class(self) -> u8 {
         match self.0 {

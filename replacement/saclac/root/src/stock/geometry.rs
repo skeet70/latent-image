@@ -12,7 +12,7 @@ pub fn address(at: Location) -> u32 { layout::address(at) as u32 }
 
 pub struct Memory<M>(pub M);
 impl<M: Machine> ProfileMemory for Memory<M> {
-    fn read_u8(&self, at: Location) -> u8 { (self.0.read_u16(address(at) & !1) >> ((address(at) & 1) * 8)) as u8 }
+    fn read_u8(&self, at: Location) -> u8 { self.0.read_u8(address(at)) }
     fn read_u16(&self, at: Location) -> u16 { self.0.read_u16(address(at)) }
     fn read_u32(&self, at: Location) -> u32 { self.0.read_u32(address(at)) }
     fn write_u8(&mut self, at: Location, value: u8) { self.0.write_u8(address(at), value) }

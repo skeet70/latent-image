@@ -130,6 +130,8 @@ impl<M: Memory, P, T: ProfileTables> ProfileGeometry<M, P, T> {
 
     pub fn memory(&self) -> &M { &self.memory }
 
+    pub fn profiles(&self) -> &Profiles<T> { &self.profiles }
+
     pub fn ports(&mut self) -> &mut P { &mut self.ports }
 
     pub fn lifecycle(&self) -> Option<Lifecycle> { Lifecycle::from_word(self.memory.read_u32(field::LIFECYCLE)) }

@@ -68,6 +68,8 @@ impl Fake {
 }
 
 impl Machine for Fake {
+    fn read_u8(&self, address: u32) -> u8 { self.0.borrow().byte(address) }
+
     fn read_u16(&self, address: u32) -> u16 {
         let state = self.0.borrow();
         u16::from_le_bytes([state.byte(address), state.byte(address + 1)])

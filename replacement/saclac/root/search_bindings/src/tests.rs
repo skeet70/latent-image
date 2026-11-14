@@ -111,6 +111,8 @@ impl Fake {
     }
 }
 impl Machine for Fake {
+    fn read_u8(&self, address: u32) -> u8 { self.0.borrow().memory.get(&address).copied().unwrap_or(0) }
+
     fn read_u16(&self, address: u32) -> u16 {
         let b = self.0.borrow();
         u16::from_le_bytes([

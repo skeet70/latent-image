@@ -317,3 +317,11 @@ fn snapshot_fields_read_back_what_was_set() {
     assert_eq!(snapshot.bytes()[0x3c..0x42], [1, 0, 2, 0, 4, 3]);
     assert_eq!(snapshot.bytes()[0xc6..], [0, 0]);
 }
+
+#[test]
+fn encoded_level_class_adds_pair_bytes_without_wrapping() {
+    use crate::services::LevelPair;
+    assert_eq!(LevelPair([1, 0]).encoded_class(), 2);
+    assert_eq!(LevelPair([1, 3]).encoded_class(), 5);
+    assert_eq!(LevelPair([255, 2]).encoded_class(), 1);
+}

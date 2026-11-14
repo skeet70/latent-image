@@ -131,11 +131,11 @@ The first/next-kind policies (0xf9d690, 0xf9ed8c) and planning helpers belong to
 
 The new `PlanServices` bindings are:
 
-| Method | Retained X-M1 service |
+| Method | Root binding |
 | --- | --- |
-| `plan_speed(PlanSpeedRequest)` | 0x7492ac(lens, step, depth, period, maximum_step, minimum_step, step_out, drive_kind, 0, 8, selector); `period` is already in hundreds of microseconds. Returns rate and the output step. |
+| `plan_speed(PlanSpeedRequest)` | Owned config `limits::selected_limit`, with selector2 Uncapped, selector1 Bounded, otherwise Capped; kind from drive_kind, direction0 and drive step8. `period` is already in hundreds of microseconds. Source behavior is0x7492ac; root does not re-enter that owned algorithm. Only its residual Derivations services remain external. |
 | `remap_position(PositionRemap)` | 0x74947c(position, lens, calibration, step, 0, 0, side), signed low-half result. |
-| `minimum_speed()` | 0x747af8. |
+| `minimum_speed()` | Owned config `limits::shifted_floor`; source behavior0x747af8. |
 | `current_side()` | 0x76dad4. |
 | `checks_drive_speed()` | 0x76e4b0 equals 1. |
 | `load_register(register)` | 0x742088; the planner combines each high/low register pair as big-endian. |
