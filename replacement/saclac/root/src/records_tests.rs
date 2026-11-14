@@ -17,9 +17,7 @@ fn put(bytes: &mut [u8], at: usize, value: u32) { bytes[at..at + 4].copy_from_sl
 #[test]
 fn an_invalidated_result_loses_only_its_validity_word_and_only_under_its_grant() {
     for (result, at, cleared) in [
-        (PublishedResult::Acquisition, 0x0, 4..8),
         (PublishedResult::Search, 0x84, 0..4),
-        (PublishedResult::Auxiliary, 0x180, 12..16),
         (PublishedResult::Source, 0x194, 0..4),
     ] {
         for granted in [true, false] {
@@ -155,7 +153,7 @@ fn the_profile_comes_from_the_record_the_handle_selects_and_the_shared_header_en
         (5, GridCell { column: 4, row: 6 }, false),
         (6, GridCell { column: 3, row: 3 }, true),
     ] {
-        let entries = Entries { selection: MeasurementSelection::Other(9), header_47: header };
+        let entries = Entries { selection: MeasurementSelection::Other(9), header_47: header, ..Entries::default() };
         let (_, mut root) = root(bytes.clone(), entries);
         let profile = root.profile(record);
         assert_eq!(profile.selection, ProfileSelection::Other(9));

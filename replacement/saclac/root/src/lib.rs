@@ -5,6 +5,7 @@
 //! implements them, and what no merged module implements to the stock entries and memory in
 //! `stock`.
 
+pub mod acquisition;
 pub mod lens;
 pub mod records;
 pub mod services;
@@ -18,3 +19,5 @@ mod fake;
 mod lens_tests;
 #[cfg(test)]
 mod records_tests;
+#[cfg(test)]
+mod acquisition_tests;

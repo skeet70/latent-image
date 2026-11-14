@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "ff1Dl8sGTbdICXG7lgRnmomSsKb9T4HJRjfxYcHBSss=",
+        "bzlTransitiveDigest": "kz39OH6vuUUM/Q4AZWmJPzIo54dvM8Z2a3Q7N7GP3VM=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

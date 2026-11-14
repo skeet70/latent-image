@@ -48,6 +48,7 @@ pub trait Machine {
 }
 
 /// The X-M1 1.50 machine.
+#[derive(Clone, Copy)]
 pub struct Guest;
 
 impl Machine for Guest {

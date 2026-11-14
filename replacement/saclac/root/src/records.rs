@@ -15,7 +15,7 @@ use xm1_saclac_interface::stock::record_handle_from_a2;
 use xm1_saclac_interface::RecordHandle;
 use xm1_saclac_profile_records::field::{SharedField, SharedRead, SharedWrite, Value};
 use xm1_saclac_profile_records::stock::record::{group_00, group_04, group_13};
-use xm1_saclac_profile_records::stock::shared::{group_14, group_15, group_20, group_22, group_23, group_25, group_27};
+use xm1_saclac_profile_records::stock::shared::{group_14, group_15, group_20, group_23, group_25, group_27};
 use xm1_saclac_profile_records::{
     AccessGroup, ChangeSet, MeasurementSelection, Memory, SharedHeaderByte, StockEntries,
 };
@@ -62,7 +62,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Services<M, R, E, P> {
     }
 
     /// 0xf5206c: header byte 0x47 chooses the eight bytes at +4, the halfword at +0xc or cell 3, 3.
-    fn focus_cell(&self, record: RecordHandle, header: u8) -> GridCell {
+    pub(crate) fn focus_cell(&self, record: RecordHandle, header: u8) -> GridCell {
         match header {
             2 | 5 => {
                 let bytes = self.field(record, &group_00::AT_0004);
@@ -103,9 +103,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> ProfileRecords for Servi
     /// word 0 of +0x194.
     fn invalidate(&mut self, record: RecordHandle, result: PublishedResult) {
         match result {
-            PublishedResult::Acquisition => self.clear_shared(record, &group_14::FOCUS_RESULT, 4..8),
             PublishedResult::Search => self.clear_shared(record, &group_15::FOCUS_CONFIRMATION, 0..4),
-            PublishedResult::Auxiliary => self.clear_shared(record, &group_22::AT_0180, 12..16),
             PublishedResult::Source => self.clear_shared(record, &group_23::AT_0194, 0..4),
         }
     }
