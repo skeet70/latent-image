@@ -145,7 +145,7 @@ fn channel_drive_keeps_plain_settings_and_ceil_rounds_lens_travel() {
     world.property(stock::CHANNEL_DRIVE_FACTOR, 2);
     world.property(stock::CHANNEL_DRIVE_LIMIT, 100);
     world.property_word(stock::CHANNEL_TRAVEL_SCALE, 1);
-    world.property(stock::CHANNEL_TRAVEL_PERCENT, 1);
+    world.property(stock::CHANNEL_TRAVEL_PERCENT, 4);
     for (id, value) in stock::PLAIN_TRAVEL.into_iter().zip([2, 1, 10]) { world.property(id, value); }
     let result = state.set_up_measurement(records(), &mut world);
     let KindSettings::Channel { drive, plain } = result.kind else { panic!("channel kind"); };
@@ -155,6 +155,12 @@ fn channel_drive_keeps_plain_settings_and_ceil_rounds_lens_travel() {
     assert_eq!(half(&mut world, records().search, 0x15e), 10);
     assert_eq!(word(&mut world, records().search, 0x18c), 100);
     assert_eq!(half(&mut world, records().search, 0x198), 4);
+    world.property(stock::CHANNEL_TRAVEL_PERCENT, 1);
+    let KindSettings::Channel { drive, .. } = state.measurement_settings(&mut world).kind else { panic!("channel kind"); };
+    assert_eq!(drive.travel, 3);
+    world.world.lens_configuration.values.insert(0, 0);
+    let KindSettings::Channel { drive, .. } = state.measurement_settings(&mut world).kind else { panic!("channel kind"); };
+    assert_eq!(drive.travel, 0);
 }
 
 #[test]

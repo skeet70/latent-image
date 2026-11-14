@@ -60,8 +60,7 @@ impl AreaMap {
     }
 }
 
-/// Whether a configured limit applies at the run's level: its configuration bit is set and the
-/// level is at most the program's lowest level less the configured margin (0xf992c0).
+/// The margin is signed and the resulting floor wraps to a level halfword.
 fn limit_applies(ports: &mut impl Properties, state: &MotionState, check: LimitCheck) -> bool {
     if ports.property(check.enable) & u32::from(check.mask) == 0 {
         return false;
@@ -71,7 +70,7 @@ fn limit_applies(ports: &mut impl Properties, state: &MotionState, check: LimitC
     state.exposures.second.level <= floor
 }
 
-/// A limit word pair: selected, or the upper word 3 (0xf99368).
+/// A selected limit uses upper word 1; an unselected limit uses 3.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Limit {
     pub selected: bool,
@@ -132,7 +131,7 @@ fn level_checks(ports: &mut impl Properties, state: &MotionState) -> LevelChecks
 pub struct FirstCheck {
     /// 3, 2 or 4 by the configured kind 1, 2 or any other.
     pub kind: u32,
-    /// The third level is the configured alternate, for the plan's word 0x4c at 2.
+    /// Grid layout uses the configured alternate third level.
     pub alternate_level: bool,
     pub limit: Limit,
     pub above_margin: bool,
@@ -232,7 +231,7 @@ fn level_band(ports: &mut impl Properties, state: &MotionState) -> u8 {
     ((i32::from(share.wrapping_add(10) as u8) + 5) / 10) as u8
 }
 
-/// The configured order of a selection's three steps for a kind word (0xf9666c).
+/// Listed layouts stop after the first step; only alternate grids admit the third.
 fn step_order(ports: &mut impl Properties, kind: u32, id: Property) -> [u32; 3] {
     let bits = ports.property(id);
     let mut order = [4; 3];
@@ -249,7 +248,7 @@ fn step_order(ports: &mut impl Properties, kind: u32, id: Property) -> [u32; 3] 
     order
 }
 
-/// A channel search's drive figures (0xf9bc0c..0xf9bf40).
+/// A channel search's drive figures.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ChannelDrive {
     pub depth: i16,
@@ -307,7 +306,7 @@ pub struct TreatedSearch {
     pub setting: u8,
 }
 
-/// A plain search's two limits and its travel at the plan's word 0x1c.
+/// Plain-search limits and travel over one frame.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PlainSearch {
     pub first: bool,
