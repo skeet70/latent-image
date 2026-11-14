@@ -77,3 +77,30 @@ pub fn exposure_evaluation<M: Machine, B: Backend>(machine: &M, poster: &Poster<
 pub fn exposure_correction<M: Machine, B: Backend>(machine: &M, poster: &Poster<B>, correction: Option<&[u8; xm1_saclac_interface::stock::exposure::CORRECTION_BYTES]>) -> Result<(), PostError> {
     exposure_callback(machine, poster, |port| xm1_shot_sequence::exposure_callbacks::correction_completed(correction, port))
 }
+
+pub fn pipeline_raw_check<B: Backend>(poster: &Poster<B>, value: u32) -> Result<(), PostError> {
+    let payload = xm1_saclac_interface::stock::pipeline::raw_check_payload(xm1_saclac_interface::pipeline::RawCheck(value));
+    post(poster, Completion::Image4e, &payload)
+}
+
+pub fn pipeline_tone_progress<B: Backend>(poster: &Poster<B>, status: u32, level: u16) -> Result<(), PostError> {
+    let payload = xm1_saclac_interface::stock::pipeline::tone_progress_payload(xm1_saclac_interface::pipeline::ToneProgress { status, level });
+    post(poster, Completion::Image50, &payload)
+}
+
+pub fn pipeline_tone_status<B: Backend>(poster: &Poster<B>, value: u32) -> Result<(), PostError> {
+    let payload = xm1_saclac_interface::stock::pipeline::tone_status_payload(xm1_saclac_interface::pipeline::ToneStatus(value));
+    post(poster, Completion::Image51, &payload)
+}
+
+pub fn pipeline_raw_calculation<B: Backend>(poster: &Poster<B>, result: &xm1_saclac_interface::pipeline::RawCalculation) -> Result<(), PostError> {
+    post(poster, Completion::Calculation91, &result.0)
+}
+
+pub fn pipeline_tone_calculation<B: Backend>(poster: &Poster<B>, result: &xm1_saclac_interface::pipeline::ToneCalculation) -> Result<(), PostError> {
+    post(poster, Completion::Calculation92, &result.0)
+}
+
+pub fn pipeline_gradation_calculation<B: Backend>(poster: &Poster<B>, result: &xm1_saclac_interface::pipeline::GradationCalculation) -> Result<(), PostError> {
+    post(poster, Completion::Calculation93, &result.0)
+}

@@ -103,3 +103,83 @@ pub extern "C" fn xm1_saclac_root_calculated() {
     let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
     crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Calculation90, &[]).expect("calculation completion post");
 }
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_pipeline_raw_checked(value: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::pipeline_raw_check(&poster, value).expect("pipeline raw check post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_pipeline_tone_progress(status: u32, level: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::pipeline_tone_progress(&poster, status, level as u16).expect("pipeline tone progress post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_pipeline_tone_finished(value: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::pipeline_tone_status(&poster, value).expect("pipeline tone status post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_pipeline_raw_calculated(address: u32) {
+    let result = xm1_saclac_interface::pipeline::RawCalculation(crate::stock::acquisition::read_record(&Guest, xm1_saclac_interface::calc::SharedAddress(address)));
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::pipeline_raw_calculation(&poster, &result).expect("pipeline raw calculation post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_pipeline_tone_calculated(address: u32) {
+    let result = xm1_saclac_interface::pipeline::ToneCalculation(crate::stock::acquisition::read_record(&Guest, xm1_saclac_interface::calc::SharedAddress(address)));
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::pipeline_tone_calculation(&poster, &result).expect("pipeline tone calculation post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_pipeline_gradation_calculated(address: u32) {
+    let result = xm1_saclac_interface::pipeline::GradationCalculation(crate::stock::acquisition::read_record(&Guest, xm1_saclac_interface::calc::SharedAddress(address)));
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::pipeline_gradation_calculation(&poster, &result).expect("pipeline gradation calculation post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_pipeline_frame_finished() {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Image4f, &[]).expect("pipeline frame completion post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_pipeline_output_finished() {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Image52, &[]).expect("pipeline output completion post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_pipeline_commit_finished() {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Image53, &[]).expect("pipeline commit completion post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_pipeline_statistics_finished() {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Statistics7a, &[]).expect("pipeline statistics completion post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_pipeline_statistics_committed() {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Statistics6b, &[]).expect("pipeline statistics commit post");
+}
