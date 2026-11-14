@@ -65,9 +65,9 @@ The earlier declared auxiliary-word correction remains: `profile_mode::limit_lev
 | 0xf4c730 | 0xfa364c | Unchanged. `MotionState::prepare(ports, lists, PreparationInput, frame)` replaces the state/output pointers; the input contains record, lens, load-test setting and focus request. `Preparation` exposes output flags, frame delay and image-buffer order. |
 | 0xf4c740 | 0xf99ad0 | Unchanged. `MotionState::lay_out_samples(ports)` reads the prepared state; `layout()` exposes the result to the pipeline. |
 | 0xf4c750 | 0xf9a6ac | Unchanged. Owned callers use `MotionState::measurement_settings(ports)` and keep `MeasurementSettings`; retained request adapters use `stock::measurement::configure_request(request, state, ports)`. Its seven output pointers are request words 2..8; a null outer request returns 0x84. `set_up_measurement(records, ports)` writes explicitly supplied records. |
-| 0xf4c760 | 0xfa0130 | Unchanged. Implementation dependency: ExposurePlan's plan decision. Plan record types alone do not implement the decision. |
-| 0xf4c770 | 0xf9c96c | Unchanged. Implementation dependency: motion/plan result incorporation. |
-| 0xf4c780 | 0xf9cd00 | Unchanged. Implementation dependency: motion/plan fallback result. |
+| 0xf4c760 | 0xfa0130 | `MotionState::plan_next(ports) -> PlanKind` constructs and installs the next pass. `SETTLED` keeps the installed drive and updates result flags. The retained wrapper returns 0; the pipeline consumes the typed kind and plan instead of copying a temporary 0x184-byte block. |
+| 0xf4c770 | 0xf9c96c | `MotionState::publish_existing(ports, &mut FocusPublication)` incorporates the admitted S1 result into the plan and caller publication. |
+| 0xf4c780 | 0xf9cd00 | `MotionState::publish_fallback(ports, &mut FocusPublication)` incorporates the record snapshot with unavailable state. The retained wrapper returns 0. |
 | 0xf4c790 | 0xf9d3dc | Unchanged. `MotionState::pipeline_flag(memory)` uses the state's dump section. |
 | 0xf4c7a0 | 0xf9cdd8 | Unchanged. `MotionState::channel_status()` uses the prepared search state. |
 | 0xf4c7b0 | 0xf9cdfc | Unchanged. Decode the calc result with `stock::motion::measured_levels`, then `MotionState::check_measured_levels(ports, measured)`. |
@@ -116,3 +116,31 @@ The measurement settings consume a typed plan; implementing their seven records 
 ## Qualification boundary
 
 Host tests and the standalone synthetic consumer exercise the new APIs and wire output. They do not execute stock or establish whole-subsystem ownership. Image linkage, ordered subsystem-interface scenarios with demonstrated stock execution and a detected wrong variant, and the single independent review remain prerequisites of the cutover. Unreached scene/style combinations, adjustment paths and retained callers stay in the final-pass queue.
+
+## Motion plan integration
+
+The first/next-kind policies (0xf9d690, 0xf9ed8c) and planning helpers belong to `MotionState::plan_next`; root does not bind those internals back to stock. Call preparation, sample layout, planning and measurement setup in that order. Pass results enter through `Plan::record_focus` and `record_tone`; use `plan_mut()` for these methods and the pipeline's typed selection/decision/request fields. `record_focus` sets `fast` at equality with `speeds[2]` only when speed checking is enabled. `record_tone` preserves reached limits and the two reached-tone words.
+
+`plan()` exposes drive/profile, last frame, first frame, speeds, weights, layout, window flags and results. `Plan::tone_window()` supplies the six window switches; `selected_speed()` refuses an invalid selection with `None`. `thresholds()` and `depth_settings()` are the records consumed by measurement setup, not pointers into the stock motion block. `FocusPublication` maps the retained caller's seven words as enabled, status, four snapshot words and pending; short position assignments preserve the upper half of snapshot word 0.
+
+The new `PlanServices` bindings are:
+
+| Method | Retained X-M1 service |
+| --- | --- |
+| `plan_speed(PlanSpeedRequest)` | 0x7492ac(lens, step, depth, period, maximum_step, minimum_step, step_out, drive_kind, 0, 8, selector); `period` is already in hundreds of microseconds. Returns rate and the output step. |
+| `remap_position(PositionRemap)` | 0x74947c(position, lens, calibration, step, 0, 0, side), signed low-half result. |
+| `minimum_speed()` | 0x747af8. |
+| `current_side()` | 0x76dad4. |
+| `checks_drive_speed()` | 0x76e4b0 equals 1. |
+| `load_register(register)` | 0x742088; the planner combines each high/low register pair as big-endian. |
+| `snapshot_mode()` | 0x76fc4c. |
+| `cached_focus()` | 0x10538a4 followed by 0x10538c4 only when the first returns 1; `Some` carries four snapshot words. |
+| `release_aux_text()` | 0x1110a84. |
+
+The rest of `PlanPorts` reuses existing Properties, StockMemory, ProfileAccess, LensConfiguration, LensControl, LensSteps, LensTables, LensCalibration, LensBounds, DriveLimits, DriveSpeed, FrameGeometry, CaptureFrames, LensStatus, LevelScale and Overlay contracts. `RecordReadings::style` now reads group_00::AT_003F, required by the scene-dependent direction mask. `SearchSetup::retry_missing` represents the preparation-zeroed word beside channel class; a retained external writer must enter through that typed state, not an assumed alias.
+
+### Corrections and qualification limits
+
+The retained program table at block +0x180 is preparation-zeroed; weight calculation does not substitute the separately computed owned exposure program. A temporary scan-layout plan has initialized speed/check fields instead of reading stale stack data. Failed or invalid-direction target-window attempts retain known search bounds instead of exporting unwritten halves. An area index above 99 displays `--` rather than copying an unwritten decimal-format buffer. Secondary schedule reads stop at their ten-element capacity. Scene kinds outside the recovered table use the existing bounded default. Corrected 32-bit zero-divisor paths derive zero instead of halting; the stock 64-bit quotient's defined zero-divisor behavior remains unchanged.
+
+These are host-verified implementation contracts, not cutover acceptance. Root must bind the services, link the contiguous artifact and exercise ordered subsystem-boundary stock/owned scenarios from a checkpoint, showing stock execution and a detected wrong variant. Final-pass paths include initial reuse gates; target-side retries; scan eligibility; all next-kind overrides; channel/wide and alternate-grid bounds; speed/depth/period endpoints; load-test register overrides; treated windows and schedules; S1 designation/cache/snapshot precedence; debug overlay release/formatting; threshold floors and wrapping; repeated plans and diagnostic-history store order. Independent subsystem review remains required. No camera-heap headroom follows from host allocations or unused RAM elsewhere.
