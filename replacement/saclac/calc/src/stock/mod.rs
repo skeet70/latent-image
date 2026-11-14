@@ -14,6 +14,7 @@ pub mod finish;
 pub mod gains;
 pub mod lens_checks;
 pub mod lists;
+pub mod measurement;
 pub mod motion;
 pub mod plan;
 pub mod profile_adjustment;
