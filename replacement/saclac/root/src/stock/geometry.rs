@@ -34,7 +34,7 @@ pub fn point_statistics(m: &impl Machine, channel: PipelineChannel, stages: Stag
 }
 pub fn collect_statistics(m: &impl Machine, channel: PipelineChannel, stages: Stages, into: Location) { m.enter(0xd9_ffe8, &[channel.0 as usize, (stages.0 << 4) as usize, address(into) as usize]); }
 pub fn mode_payload(m: &impl Machine, r: &ModeRequest, into: Location) -> Stages {
-    Stages(m.enter(0xda_0ab0, &[r.group.0 as usize, r.index_scale as usize, r.index as usize, r.shift as usize, address(into) as usize, r.mode as usize, address(r.first) as usize, address(r.second) as usize, r.mode_byte as usize]))
+    Stages(m.enter(0xda_0ab0, &[r.group.0 as usize, r.index_scale as usize, r.index as usize, r.shift as usize, r.mode as usize, address(r.first) as usize, address(r.second) as usize, r.mode_byte as usize, address(into) as usize]))
 }
 pub fn tertiary_payload(m: &impl Machine, group: PipelineGroup, scale: u8, index: u8, into: Location) -> Stages { Stages(m.enter(0xda_09f4, &[group.0 as usize, scale as usize, index as usize, address(into) as usize])) }
 

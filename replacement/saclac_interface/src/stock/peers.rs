@@ -73,6 +73,9 @@ pub const CALC: PeerRoute = PeerRoute { queue: PeerQueue::new(44), sender: Sende
 /// with block 240 at 0xf49ba4.
 pub const CALC1: PeerRoute = PeerRoute { queue: PeerQueue::new(45), sender: SenderByte::RunningTask, block_bytes: 240 };
 
+/// Frame classifier queue 46, with a 48-byte payload in a 56-byte block.
+pub const CALC_SUB: PeerRoute = PeerRoute { queue: PeerQueue::new(46), sender: SenderByte::RunningTask, block_bytes: 56 };
+
 /// The statistics senders 0x1039638..0x103b0b4 pass 48 with 0x723cb8's byte (e.g.
 /// 0x103975c..0x1039764 in 0x1039638); queue 48 is created with block 256 at 0x1039524.
 pub const STATISTICS: PeerRoute = PeerRoute { queue: PeerQueue::new(48), sender: SenderByte::RunningTask, block_bytes: 256 };
@@ -96,6 +99,7 @@ pub const fn route(operation: PeerOperation) -> PeerRoute {
         PeerOperation::ImgDc(_) => IMG_DC,
         PeerOperation::Calc(_) => CALC,
         PeerOperation::Calc1(_) => CALC1,
+        PeerOperation::CalcSub(_) => CALC_SUB,
         PeerOperation::Statistics(_) => STATISTICS,
         PeerOperation::Flash(_) => FLASH,
         PeerOperation::LensCom(_) => LENS_COM,
@@ -110,6 +114,7 @@ pub fn operation_code(operation: PeerOperation) -> u16 {
         PeerOperation::ImgDc(operation) => img_dc_operation(operation),
         PeerOperation::Calc(operation) => calc_operation(operation),
         PeerOperation::Calc1(operation) => calc1_operation(operation),
+        PeerOperation::CalcSub(_) => 0x3e00,
         PeerOperation::Statistics(operation) => statistics_operation(operation),
         PeerOperation::Flash(operation) => flash_operation(operation),
         PeerOperation::LensCom(operation) => lens_com_operation(operation),

@@ -4,6 +4,23 @@
  "messages": [
   {
    "direction": "outgoing",
+   "queue": 46,
+   "operation": 15872,
+   "bytes": 48,
+   "fields": [
+    {
+     "name": "classification-request",
+     "offset": 0,
+     "bytes": 48,
+     "sources": [
+      "0xf4eae0: eleven frame/classification inputs and completion word; calcsub 0xf49eb4 consumes the complete request"
+     ]
+    }
+   ],
+   "padding": []
+  },
+  {
+   "direction": "outgoing",
    "queue": 3,
    "operation": 5012,
    "bytes": 0,

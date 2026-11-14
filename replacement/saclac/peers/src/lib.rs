@@ -9,7 +9,7 @@ use core::num::NonZeroU8;
 use xm1_kernel::{Backend, Header, InterruptContext, MessageQueue, PostError, QueueId, TaskContext};
 use xm1_saclac_interface::stock::peers::{self, PeerRoute};
 use xm1_saclac_interface::{
-    lens_effect, Calc, Calc1, Calc1Request, CalcRequest, Flash, FlashRequest, ImageProcessor, ImageProcessorRequest, ImgDc,
+    lens_effect, Calc, Calc1, Calc1Request, CalcRequest, CalcSub, CalcSubRequest, Flash, FlashRequest, ImageProcessor, ImageProcessorRequest, ImgDc,
     ImgDcRequest, LensCom, LensComRequest, LensDc, LensDcRequest, LensEffect, Parameters, PeerOperation, Statistics,
     StatisticsRequest,
 };
@@ -118,6 +118,7 @@ fn kernel_queue(operation: PeerOperation) -> MessageQueue {
         PeerOperation::ImgDc(_) => const { stock_queue(peers::IMG_DC) },
         PeerOperation::Calc(_) => const { stock_queue(peers::CALC) },
         PeerOperation::Calc1(_) => const { stock_queue(peers::CALC1) },
+        PeerOperation::CalcSub(_) => const { stock_queue(peers::CALC_SUB) },
         PeerOperation::Statistics(_) => const { stock_queue(peers::STATISTICS) },
         PeerOperation::Flash(_) => const { stock_queue(peers::FLASH) },
         PeerOperation::LensCom(_) => const { stock_queue(peers::LENS_COM) },
@@ -141,6 +142,7 @@ port!(LensDc, LensDcRequest);
 port!(ImgDc, ImgDcRequest);
 port!(Calc, CalcRequest);
 port!(Calc1, Calc1Request);
+port!(CalcSub, CalcSubRequest);
 port!(Statistics, StatisticsRequest);
 port!(Flash, FlashRequest);
 port!(LensCom, LensComRequest);

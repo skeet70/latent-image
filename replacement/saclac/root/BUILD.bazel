@@ -11,6 +11,8 @@ xm1_rust_rlib(
     out = "arm/libxm1_saclac_root.rlib",
     data = _SOURCES,
     rlib_deps = {
+        "display_scanout_panel": "//replacement/display_scanout:libdisplay_scanout_panel",
+        "calibration_liveview": "//replacement/calibration_liveview:libcalibration_liveview",
         "xm1_focus_measurement_round": "//replacement/focus_measurement/round:round",
         "xm1_kernel": "//replacement/kernel:arm",
         "xm1_saclac_calc": "//replacement/saclac/calc:calc",

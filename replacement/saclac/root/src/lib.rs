@@ -9,6 +9,7 @@ pub mod geometry;
 pub mod lens;
 pub mod lens_com;
 pub mod records;
+pub mod scene;
 pub mod services;
 pub mod stages;
 #[allow(unsafe_code)]

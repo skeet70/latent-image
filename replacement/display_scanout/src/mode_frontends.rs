@@ -170,6 +170,10 @@ pub fn preset(runtime: &mut impl PresetRuntime, selector: PresetSelector) -> i32
     runtime.set_timing(target, source)
 }
 
+/// Applies the selected live panel and formatter through the owned display implementation.
+#[cfg(all(target_arch = "arm", feature = "panel"))]
+pub fn apply_selected(value: u32) -> i32 { native::apply_selected(value) }
+
 #[cfg(all(target_arch = "arm", feature = "panel"))]
 mod native {
     use super::*;
@@ -274,6 +278,7 @@ mod native {
         }
         fn formatter_strobe(&mut self, engine: Engine) { unsafe { let _ = crate::abi::xm1_scanout_formatter_strobe(engine.index() as u32); } }
     }
+    pub(super) fn apply_selected(value: u32) -> i32 { select(&mut LiveSelect, value) }
     #[unsafe(no_mangle)]
-    pub extern "C" fn xm1_scanout_mode_select(value: u32) -> i32 { select(&mut LiveSelect, value) }
+    pub extern "C" fn xm1_scanout_mode_select(value: u32) -> i32 { apply_selected(value) }
 }

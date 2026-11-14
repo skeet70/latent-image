@@ -166,3 +166,16 @@ fn handler_context_posts_in_handler_form_with_each_sender_byte_rule() {
         ]
     );
 }
+
+#[test]
+fn classification_keeps_the_calling_task_sender_including_refusal() {
+    use xm1_saclac_interface::{CalcSub, CalcSubOperation, CalcSubRequest};
+    let payload = words(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0x102df28]);
+    for sender in [11, 43, 59] {
+        let kernel = Kernel::new(Fake::with_task(TaskId::new(sender).unwrap()).post_result(Err(PostError::NoBlock)));
+        let cx = kernel.task().unwrap();
+        let mut ports = PeerPorts::new(&cx, LensDriveRefused);
+        assert_eq!(CalcSub::request(&mut ports, CalcSubRequest { operation: CalcSubOperation::Request00, parameters: stock::parameters(&payload) }), Err(PeerError::Refused(PostError::NoBlock)));
+        assert_eq!(posts(&kernel), [post(46, Form::Task, 0x3e00, sender, &payload)]);
+    }
+}

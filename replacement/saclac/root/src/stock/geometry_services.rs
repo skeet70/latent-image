@@ -116,7 +116,12 @@ impl<M: Machine, P, I> DisplayDriver for GeometryBindings<M, P, I> {
     fn graphic_service(&mut self, value: u32) -> bool { self.stages.machine.enter(0x6d_1b24, &[value as usize]) == 0 }
     fn update_configuration_bits(&mut self, value: u32) -> bool { self.stages.machine.enter(0x6c_ffbc, &[value as usize]) == 0 }
     fn forward_selection(&mut self, value: Location) -> bool { self.stages.machine.enter(0x6d_0244, &[address(value) as usize]) == 0 }
-    fn apply_selected(&mut self, value: u32) -> bool { self.stages.machine.enter(0x6d_1520, &[value as usize]) == 0 }
+    fn apply_selected(&mut self, value: u32) -> bool {
+        #[cfg(target_arch = "arm")]
+        { display_scanout_panel::mode_frontends::apply_selected(value) == 0 }
+        #[cfg(not(target_arch = "arm"))]
+        { let _ = value; panic!("live display selection requires the ARM display backend") }
+    }
     fn set_selected_colour(&mut self, rgb: u32) { self.stages.machine.enter(0x6d_0ee4, &[rgb as usize]); }
     fn forward_selected_value(&mut self, value: u32) -> bool { self.stages.machine.enter(0x6d_01bc, &[value as usize]) == 0 }
     fn on_selected_event(&mut self, callback: StockCode) -> bool { self.stages.machine.enter(0x6c_fcf4, &[callback.0 as usize]) == 0 }
