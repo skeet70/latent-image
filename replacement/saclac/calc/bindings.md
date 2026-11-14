@@ -64,7 +64,7 @@ The earlier declared auxiliary-word correction remains: `profile_mode::limit_lev
 | 0xf4c3d0 | 0xf88dcc | Target arguments `(a0,a1,a2,a3,0,a4,a5)`. `sample_grid::grid_pair(samples, selection)` uses `Cell([cell[0],cell[1]])` for mode 2 or 5, otherwise `Rings { limit: a2, weights: None }`. Tuple first goes to a4 (second sample half), tuple second to a5 (first sample half). |
 | 0xf4c730 | 0xfa364c | Unchanged. `MotionState::prepare(ports, lists, PreparationInput, frame)` replaces the state/output pointers; the input contains record, lens, load-test setting and focus request. `Preparation` exposes output flags, frame delay and image-buffer order. |
 | 0xf4c740 | 0xf99ad0 | Unchanged. `MotionState::lay_out_samples(ports)` reads the prepared state; `layout()` exposes the result to the pipeline. |
-| 0xf4c750 | 0xf9a6ac | Unchanged. Implementation dependency: ExposureMotion's measurement settings. No stock fallback is supplied. |
+| 0xf4c750 | 0xf9a6ac | Unchanged. Owned callers use `MotionState::measurement_settings(ports)` and keep `MeasurementSettings`; retained request adapters use `stock::measurement::configure_request(request, state, ports)`. Its seven output pointers are request words 2..8; a null outer request returns 0x84. `set_up_measurement(records, ports)` writes explicitly supplied records. |
 | 0xf4c760 | 0xfa0130 | Unchanged. Implementation dependency: ExposurePlan's plan decision. Plan record types alone do not implement the decision. |
 | 0xf4c770 | 0xf9c96c | Unchanged. Implementation dependency: motion/plan result incorporation. |
 | 0xf4c780 | 0xf9cd00 | Unchanged. Implementation dependency: motion/plan fallback result. |
@@ -106,6 +106,12 @@ The earlier declared auxiliary-word correction remains: `profile_mode::limit_lev
 | 0xf625cc | 0xf6f734 | Five unchanged arguments become `SceneMaskInputs`: measurement selection, scene, callback armed, treated, subjects. `scene_policy::scene_enabled` already implements this target. The treated input is the owned boolean's 0/1 code. |
 
 The grid rows above supersede the incorrect names in the earlier private table: 0xf69788 is area distances, 0xf69884 is target reference, 0xf699e4 is target level, and 0xf6c8fc is the plain-selection trace. Function addresses and typed semantics, not old table labels, determine the binding.
+
+## Scene classification and measurement dependencies
+
+`SceneRecognition::request_classification` implements the retained 0xf4eae0 entry through `ClassificationControl + CalcSub`. The adapter supplies `Frame` from arguments 0, 1 and 4..9, splits argument 2 into high/low aspect halves, forwards argument 3 as the orientation reading and argument 10 as the callback word. Queue 46 operation 0x3e00 uses block 56, the running task's sender byte, and the complete 48-byte interface encoder with no exclusions. Enable classification through retained 0xfb236c(0) before the post. The core clears its changed mark even on refusal; the retained caller ignores the post result. The sole retained caller supplies completion 0x102df28.
+
+The measurement settings consume a typed plan; implementing their seven records does not implement the missing plan decision or its result incorporation/fallback. The three pending forwarder rows above remain dependencies until that source arrives.
 
 ## Qualification boundary
 
