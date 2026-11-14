@@ -246,6 +246,7 @@ fn start(taken: &Taken, record: RecordHandle, layers: &mut impl Layers) -> P {
         read(layers, record, F::CaptureOptionFourth) as u8,
         read(layers, record, F::CaptureOptionFifth) as u8,
     ];
+    // 0xf23088 leaves capture +16 unwritten; the owned S1 start defines it as zero.
     let capture = Capture {
         position: job.scene,
         selection: job.selection,
@@ -287,6 +288,7 @@ fn retune(record: RecordHandle, layers: &mut impl Layers) -> Capture {
     let selection = read(layers, record, F::Selection);
     let settings = [read(layers, record, F::CaptureFirst), read(layers, record, F::CaptureSecond)];
     let retune = read(layers, record, F::StatisticsRetune);
+    // 0xf23584 leaves wire bytes 30 and 33 unwritten; both options are defined as zero.
     let options = [
         read(layers, record, F::CaptureOptionFirst) as u8,
         0,

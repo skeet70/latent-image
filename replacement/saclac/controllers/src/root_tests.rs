@@ -178,17 +178,6 @@ fn ordinary_stop_replies_before_releasing_current_and_previous_contexts() {
         Event::Release(Context::S1, Generation::Current), Event::Release(Context::S1, Generation::Previous)]);
 }
 
-#[test]
-fn deferred_option_is_forwarded_only_after_live_quiesces() {
-    let (mut root, mut peers) = live();
-    peers.replies.push_back(Outcome::Pending);
-    root.handle(command(K::Command24), &mut peers);
-    peers.events.clear();
-    root.handle(completion(), &mut peers);
-    assert_eq!(peers.events, [Event::Context(Context::Live, Allocation::Reuse),
-        Event::Child(Branch::Live, Input::Message(completion()), handle(Context::Live)),
-        Event::Child(Branch::LiveSequence, Input::Control(Control::RefreshDeferred), handle(Context::Live))]);
-}
 
 #[test]
 fn live_admits_all_queue_commands_except_start_stop_and_capture_value() {
@@ -211,19 +200,6 @@ fn capture_followup_routes_to_s1_without_quiescing_live_again() {
     }
 }
 
-#[test]
-fn lens_status_completion_restores_started_before_stop() {
-    let (mut root, mut peers) = live();
-    let message = Message::Completed(Completed { completion: Completion::Lens3c, parameters: stock::parameters(&[]) });
-    root.handle(message, &mut peers);
-    root.handle(command(K::Stop), &mut peers);
-    assert_eq!(&peers.events[..3], &[
-        Event::Context(Context::Lens, Allocation::Reuse), Event::Child(Branch::Lens, Input::Message(message), handle(Context::Lens)),
-        Event::Release(Context::Lens, Generation::Current),
-    ]);
-    assert!(peers.events.contains(&Event::Lifecycle(Request::ReplyStopped)));
-    assert!(!peers.events.contains(&Event::Fault));
-}
 
 #[test]
 fn lens_start_and_parameter_completion_join_in_either_order() {
@@ -246,5 +222,231 @@ fn lens_start_and_parameter_completion_join_in_either_order() {
         root.handle(command(K::HalfPress), &mut peers);
         assert_eq!(peers.events[0], Event::Context(Context::S1, Allocation::Reuse));
         assert!(!peers.events.contains(&Event::Fault));
+    }
+}
+
+mod consumers {
+    use super::*;
+    use crate::{children::*, live, live_statistics as statistics, live_view as view, s1};
+
+    #[derive(Default)]
+    struct Boundary {
+        view: view::Controller,
+        preparation: view::PreparationOverride,
+        requests: Vec<(view::ViewRequest, RecordHandle)>,
+        replies: Vec<(Option<K>, view::ReplyStatus, RecordHandle)>,
+        faults: usize,
+        restored: Vec<(i16, u32)>,
+        root_payload: Vec<u8>,
+        statistics: statistics::LiveStatistics,
+        statistics_requests: Vec<(statistics::Request, RecordHandle)>,
+        statistics_replies: Vec<(bool, Vec<u8>, RecordHandle)>,
+        released: Vec<(Context, Generation)>,
+    }
+
+    impl view::Port for Boundary {
+        fn statistics(&mut self, call: view::StatisticsCall<'_>, record: RecordHandle) -> view::StatisticsOutcome {
+            let mut statistics = core::mem::take(&mut self.statistics);
+            let result = statistics.send(call, record, self);
+            self.statistics = statistics;
+            result
+        }
+        fn measurement(&mut self, _: ChildEvent<'_, MeasurementControl>) -> ChildOutcome { ChildOutcome::Complete }
+        fn sequence(&mut self, _: ShotEvent<'_>) -> Outcome { Outcome::Complete }
+        fn prepare(&mut self, _: Option<Command<'_>>, _: RecordHandle) -> view::Preparation { view::Preparation::default() }
+        fn apply(&mut self, _: Command<'_>, _: RecordHandle) -> view::Application { view::Application::Applied }
+        fn view(&mut self, request: view::ViewRequest, record: RecordHandle) { self.requests.push((request, record)); }
+        fn effect(&mut self, _: view::Effect, _: RecordHandle) {}
+        fn condition(&mut self, _: view::Condition, _: Option<Command<'_>>, _: RecordHandle) -> bool { false }
+        fn motion_setting(&mut self) -> view::MotionSetting { view::MotionSetting::default() }
+        fn reply(&mut self, command: Option<K>, status: view::ReplyStatus, record: RecordHandle) { self.replies.push((command, status, record)); }
+        fn fault(&mut self) { self.faults += 1; }
+    }
+
+    impl statistics::Port for Boundary {
+        fn request(&mut self, request: statistics::Request, record: RecordHandle) { self.statistics_requests.push((request, record)); }
+        fn reply(&mut self, reply: statistics::Reply<'_>, record: RecordHandle) {
+            if let statistics::Reply::Command24 { refused, completion } = reply {
+                self.statistics_replies.push((refused, completion.bytes().to_vec(), record));
+            }
+        }
+        fn condition(&mut self, _: statistics::Condition, _: RecordHandle) -> bool { false }
+        fn changes(&mut self, _: RecordHandle) -> statistics::Groups { statistics::Groups::default() }
+        fn deliver_results(&mut self, _: RecordHandle) {}
+        fn select_descriptor(&mut self, _: u32, _: RecordHandle) {}
+        fn fault(&mut self) { self.faults += 1; }
+    }
+
+    impl Boundary {
+        fn enter_view(&mut self, signal: view::Signal<'_>, record: RecordHandle) -> Outcome {
+            let mut controller = core::mem::take(&mut self.view);
+            let mut preparation = self.preparation;
+            let result = controller.handle(signal, record, &mut preparation, self);
+            self.preparation = preparation;
+            self.view = controller;
+            result
+        }
+        fn forward(&mut self, input: Input<'_>, record: RecordHandle) -> Outcome {
+            let signal = match input {
+                Input::Message(Message::Command(command)) => view::Signal::Command(command),
+                Input::Message(Message::Completed(done)) => view::Signal::Completed(done),
+                Input::Control(Control::SuspendLive) => return Outcome::Complete,
+                _ => return Outcome::Fault,
+            };
+            self.enter_view(signal, record)
+        }
+    }
+
+    impl live::Port for Boundary {
+        fn controller(&mut self, event: live::ControllerEvent<'_>, record: RecordHandle) -> Outcome {
+            match event {
+                live::ControllerEvent::Forward(input) => self.forward(input, record),
+                live::ControllerEvent::Reissue(kind) => self.forward(input(kind), record),
+                _ => Outcome::Complete,
+            }
+        }
+        fn lens(&mut self, _: live::LensEvent<'_>, _: RecordHandle) -> Outcome { Outcome::Inactive }
+        fn lens_follows(&mut self, _: live::Profile, _: RecordHandle) -> bool { false }
+        fn effect(&mut self, _: live::Effect<'_>, _: RecordHandle) {}
+        fn drive_origin(&mut self) -> live::DriveOrigin { live::DriveOrigin::Command }
+        fn drive_check_applies(&mut self, _: RecordHandle) -> bool { false }
+        fn correct_drive(&mut self, _: RecordHandle) -> Outcome { Outcome::Complete }
+        fn fault(&mut self) { self.faults += 1; }
+    }
+
+    impl s1::Port for Boundary {
+        fn shot(&mut self, _: s1::ShotEvent<'_>, _: RecordHandle) -> Outcome { Outcome::Complete }
+        fn statistics(&mut self, _: s1::StatisticsEvent<'_>, _: RecordHandle) -> Outcome { Outcome::Complete }
+        fn capture(&mut self, _: s1::CaptureEvent<'_>, _: RecordHandle) -> Outcome { Outcome::Complete }
+        fn lens(&mut self, _: s1::LensEvent<'_>, _: RecordHandle) -> Outcome { Outcome::Complete }
+        fn live(&mut self, event: s1::LiveEvent<'_>, record: RecordHandle) -> Outcome {
+            match event {
+                s1::LiveEvent::Forward(input) => self.forward(input, record),
+                s1::LiveEvent::Reissue(kind) => self.forward(input(kind), record),
+            }
+        }
+        fn publish(&mut self, _: s1::Published) {}
+        fn effect(&mut self, _: s1::Effect, _: RecordHandle) {}
+        fn second_shot(&mut self, _: RecordHandle) -> bool { false }
+        fn lens_cancellable(&mut self, _: RecordHandle) -> bool { false }
+        fn release_allowed(&mut self) -> bool { true }
+        fn fault(&mut self) { self.faults += 1; }
+    }
+
+    struct Composition { boundary: Boundary, live: live::Router, s1: s1::Router, startup: Startup }
+    impl Composition {
+        fn new(startup: Startup) -> Self { Self { boundary: Boundary::default(), live: live::Router::new(), s1: s1::Router::new(), startup } }
+    }
+    impl Effects for Composition { fn emit(&mut self, _: Request) {} }
+    impl Port for Composition {
+        fn startup(&mut self) -> Startup { self.startup }
+        fn initialize_contexts(&mut self) {}
+        fn context(&mut self, context: Context, _: Allocation, input: Input<'_>) -> RecordHandle {
+            if context == Context::Root {
+                if let Input::Message(Message::Completed(done)) = input { self.boundary.root_payload = done.parameters.bytes().to_vec(); }
+            }
+            handle(context)
+        }
+        fn release(&mut self, context: Context, generation: Generation) { self.boundary.released.push((context, generation)); }
+        fn initialize_services(&mut self, _: RecordHandle, _: Parameters<'_>) {}
+        fn stop_services(&mut self) {}
+        fn child(&mut self, branch: Branch, input: Input<'_>, record: RecordHandle) -> Outcome {
+            match branch {
+                Branch::Live => self.live.handle(input, record, &mut self.boundary),
+                Branch::S1 => self.s1.handle(input, record, &mut self.boundary),
+                _ => Outcome::Complete,
+            }
+        }
+        fn utility(&mut self, utility: Utility, record: RecordHandle) {
+            if utility == Utility::RestoreLensStatus {
+                assert_eq!(record, handle(Context::Root));
+                let bytes = &self.boundary.root_payload;
+                self.boundary.restored.push((i16::from_le_bytes(bytes[0..2].try_into().unwrap()), u32::from_le_bytes(bytes[4..8].try_into().unwrap())));
+            }
+        }
+        fn autofocus_admitted(&mut self) -> bool { true }
+        fn s1_lens_route(&mut self, _: RecordHandle) -> bool { false }
+        fn still_record(&mut self, _: RecordHandle) -> bool { true }
+        fn live_option_allowed(&mut self) -> bool { true }
+        fn fault(&mut self) { self.boundary.faults += 1; }
+    }
+
+    #[test]
+    fn lens_notice_restores_context_status_without_stopping_live() {
+        let mut root = Root::new();
+        let mut port = Composition::new(Startup::ResumeLive);
+        root.handle(command(K::Start), &mut port);
+        port.boundary.released.clear();
+        let bytes = [0xfe, 0xff, 0, 0, 0x78, 0x56, 0x34, 0x12];
+        let notice = Message::Completed(Completed { completion: Completion::Lens3c, parameters: stock::parameters(&bytes) });
+        assert_eq!(root.handle(notice, &mut port), Outcome::Complete);
+        assert_eq!(port.boundary.restored, [(-2, 0x12345678)]);
+        assert_eq!(port.boundary.released, [(Context::Root, Generation::Current)]);
+        assert_eq!(root.handle(command(K::Stop), &mut port), Outcome::Fault);
+        assert_eq!(port.boundary.faults, 1);
+    }
+
+    #[test]
+    fn started_window_completion_replies_to_client_and_allows_next_command() {
+        let mut root = Root::new();
+        let mut port = Composition::new(Startup::Normal);
+        root.handle(command(K::Start), &mut port);
+        let bytes = [0, 0, 0, 0, 0x39, 0, 0, 0];
+        let window = Message::Command(Command { kind: K::Command29, parameters: stock::parameters(&bytes) });
+        assert_eq!(root.handle(window, &mut port), Outcome::Pending);
+        assert_eq!(port.boundary.requests, [(view::ViewRequest::Window(0x39), handle(Context::Live))]);
+        assert!(port.boundary.replies.is_empty());
+        let done = Message::Completed(Completed { completion: Completion::Image65, parameters: stock::parameters(&[]) });
+        assert_eq!(root.handle(done, &mut port), Outcome::Pending);
+        assert_eq!(port.boundary.replies, [(Some(K::Command29), view::ReplyStatus::Accepted, handle(Context::Live))]);
+        assert_eq!(root.handle(command(K::Command23), &mut port), Outcome::Pending);
+        assert_eq!(port.boundary.replies.last(), Some(&(Some(K::Command23), view::ReplyStatus::Accepted, handle(Context::Live))));
+        assert_eq!(root.handle(command(K::Stop), &mut port), Outcome::Pending);
+        assert_eq!(port.boundary.faults, 0);
+    }
+
+    #[test]
+    fn started_command23_replies_and_releases_its_context() {
+        let mut root = Root::new();
+        let mut port = Composition::new(Startup::Normal);
+        root.handle(command(K::Start), &mut port);
+        port.boundary.released.clear();
+        assert_eq!(root.handle(command(K::Command23), &mut port), Outcome::Pending);
+        assert_eq!(port.boundary.replies, [(Some(K::Command23), view::ReplyStatus::Accepted, handle(Context::Live))]);
+        assert_eq!(port.boundary.released, [(Context::Live, Generation::Current)]);
+        assert_eq!(port.boundary.faults, 0);
+    }
+
+    #[test]
+    fn pending_bridge_command17_is_silently_refused() {
+        let mut root = Root::new();
+        let mut port = Composition::new(Startup::ResumeLive);
+        root.handle(command(K::Start), &mut port);
+        root.handle(command(K::Command09), &mut port);
+        assert_eq!(port.boundary.requests.len(), 1);
+        let replies = port.boundary.replies.len();
+        assert_eq!(root.handle(command(K::Command17), &mut port), Outcome::Pending);
+        assert_eq!(port.boundary.requests.len(), 1);
+        assert_eq!(port.boundary.replies.len(), replies);
+        assert_eq!(port.boundary.faults, 0);
+        assert_eq!(root.handle(command(K::Autofocus), &mut port), Outcome::Fault);
+        assert_eq!(port.boundary.faults, 1);
+    }
+
+    #[test]
+    fn command24_reaches_statistics_and_waits_in_autofocus_route() {
+        let mut root = Root::new();
+        let mut port = Composition::new(Startup::ResumeLive);
+        root.handle(command(K::Start), &mut port);
+        assert_eq!(root.handle(command(K::Command24), &mut port), Outcome::Pending);
+        assert_eq!(port.boundary.statistics_requests, [(statistics::Request::Command24, handle(Context::Live))]);
+        assert!(port.boundary.requests.is_empty());
+        assert_eq!(root.handle(command(K::Command24), &mut port), Outcome::Fault);
+        assert_eq!(port.boundary.faults, 1);
+        let bytes = [0xfa, 0xff, 0xff, 0xff, 0x78, 0x56, 0x34, 0x12];
+        let completion = Message::Completed(Completed { completion: Completion::Statistics82, parameters: stock::parameters(&bytes) });
+        assert_eq!(root.handle(completion, &mut port), Outcome::Pending);
+        assert_eq!(port.boundary.statistics_replies, [(false, bytes.to_vec(), handle(Context::Live))]);
+        assert_eq!(port.boundary.faults, 1);
     }
 }
