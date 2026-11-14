@@ -66,3 +66,40 @@ pub extern "C" fn xm1_saclac_root_lens_synchronized() {
     let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
     crate::peer_services::signal(&Guest, &poster, crate::peer_services::Rendezvous::Lens).expect("lens waiter signal");
 }
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_subject_selected() {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::peer_services::subject_selected(&Guest, &poster).expect("subject selection waiter signal");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_exposure_statistics(status: u32, entry: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::exposure_statistics(&Guest, &poster, status, entry).expect("exposure statistics post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_exposure_evaluated(address: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    let evaluation = crate::stock::acquisition::read_record::<{ xm1_saclac_interface::exposure::EVALUATION_BYTES }>(&Guest, xm1_saclac_interface::calc::SharedAddress(address));
+    crate::completion_callbacks::exposure_evaluation(&Guest, &poster, &evaluation).expect("exposure evaluation post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_exposure_corrected(address: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    let correction = (address != 0).then(|| crate::stock::acquisition::read_record::<{ xm1_saclac_interface::stock::exposure::CORRECTION_BYTES }>(&Guest, xm1_saclac_interface::calc::SharedAddress(address)));
+    crate::completion_callbacks::exposure_correction(&Guest, &poster, correction.as_ref()).expect("exposure correction post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_calculated() {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Calculation90, &[]).expect("calculation completion post");
+}

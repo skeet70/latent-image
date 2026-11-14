@@ -1784,14 +1784,19 @@
   }
   ,{
     "id": "E-SACLAC-ROOT-PERSISTENT-PROVIDERS-150",
-    "claim": "Author-run bounded host execution exercised persistent root providers: the owned calculation builder publishes into the same active input ShotState updates and calc0x3c02 names; stored commands/current abort/client frame publication, persistent lens reentry/Prepare and S1 effects/progress passed. A callback-task poster observed the S1 result gate open/closed/reopened. Additional public execution passed exposure half/full-word widths and refused stores, signed lens arguments and owned target calculation, both real Blocking request/wait/callback paths with admission before mutation, statistics dump unsourced/sourced/clear and unaligned guards, the shared Geometry recorder idle/SHORT/idle, and all301 history sentinels/tail/guards with disabled preservation. Input/callback consumer {{consumer_status}}/{{consumer_exit}}; memory/rendezvous/recorder consumer {{memory_status}}/{{memory_exit}}; latest ARM/host gate exit {{latest_gate_exit}}.",
+    "claim": "Author-run bounded host execution exercised persistent root providers: the owned calculation builder publishes into the same active input ShotState updates and calc0x3c02 names; stored commands/current abort/client frame publication, persistent lens reentry/Prepare and S1 effects/progress passed. A callback-task poster observed the S1 result gate open/closed/reopened. Additional execution passed exposure field widths/refusal, signed lens arguments/owned target, real Blocking request/wait/callback/admission, dump transitions/guards, the shared Geometry recorder and301 history sentinels/tail/guards. Distinct LiveSearch/Shot identity, both real owned history-reset callers, platform outputs and subject staging/wait/refusal passed. A reproduced four-byte subject-coordinate shift was repaired; the same public preparation smoke then observed the native geometry. Preparation-record execution passed summary values/weights/signed fields/absent entries, no dereference of absent or read-only-refused pointers,56/168/124-byte publications and frame35/link14. Statistics staging and queued callbacks passed status/payload/sender/null paths. Input consumer {{consumer_status}}/{{consumer_exit}}; memory consumer {{memory_status}}/{{memory_exit}}; subject consumer {{subject_status}}; preparation consumer {{preparation_status}}/{{preparation_exit}}; latest ARM/host gate exit {{latest_gate_exit}}.",
     "scope": "X-M1 1.50 scoped synthetic host paths and ARM compilation only. Consumer stock_executed={{stock_executed}}, full_system={{full_system}}, native_task_hold={{native_task_hold}}.",
-    "notes": "Author-run evidence, not independent confirmation. Complete Shot/plan aggregate, concrete image, native placement/ISP/hold, callback argument capture, stock-authenticated ordered scenarios and executed wrong variant remain unqualified. Distinct LiveSearch/Shot record identity is not yet exercised. Kernel/stock answers are synthetic; no native peer or camera ran. ExposureContext retains no second active calculation input. FileSynchronize had no producer and was removed; Filea1 remains separate.",
+    "notes": "Author-run evidence, not independent confirmation. Complete Shot/plan aggregate, concrete image, native placement/ISP/hold, callback argument capture, stock-authenticated ordered scenarios and executed wrong variant remain unqualified. Kernel/stock answers are synthetic; no native peer or camera ran. Subject regression observes the public preparation's native-layout coordinates, not execution of Calc evaluation or stock. ExposureContext retains no second active calculation input or staged subject list. FileSynchronize had no producer and was removed; Filea1 remains separate.",
     "artifacts": [
       "private-data/scratch/SaclacRoot/runs/20261114T151216Z-root4-canonical-input-callback-gate-fixed/result/gate.log",
       "private-data/scratch/SaclacRoot/runs/20261114T153101Z-root4-shared-input-callback-consumer/result/consumer.log",
       "private-data/scratch/SaclacRoot/runs/20261114T170759Z-root4-record-mode-history-provider/result/gate.log",
-      "private-data/scratch/SaclacRoot/runs/20261114T170820Z-root4-record-mode-history-consumer/result/consumer.log"
+      "private-data/scratch/SaclacRoot/runs/20261114T170820Z-root4-record-mode-history-consumer/result/consumer.log",
+      "private-data/scratch/SaclacRoot/runs/20261114T175019Z-root4-subject-platform-consumer/result/consumer.log",
+      "private-data/scratch/SaclacRoot/runs/20261114T182205Z-root4-subject-binding-before/result/consumer.log",
+      "private-data/scratch/SaclacRoot/runs/20261114T182614Z-root4-subject-binding-after/result/consumer.log",
+      "private-data/scratch/SaclacRoot/runs/20261114T182540Z-root4-exposure-record-statistics-provider/result/gate.log",
+      "private-data/scratch/SaclacRoot/runs/20261114T183508Z-root4-exposure-record-callback-consumer/result/consumer.log"
     ],
     "facts": [
       {"name":"firmware_sha256","path":"private-data/scratch/ShotSequence/runs/20261114T041635Z-shot-review-reference/result/reference.json","pointer":["firmware_sha256"]},
@@ -1800,10 +1805,13 @@
       {"name":"consumer_exit","path":"private-data/scratch/SaclacRoot/runs/20261114T153101Z-root4-shared-input-callback-consumer/result/verdict.json","pointer":["exit_code"]},
       {"name":"stock_executed","path":"private-data/scratch/SaclacRoot/runs/20261114T153101Z-root4-shared-input-callback-consumer/result/verdict.json","pointer":["stock_executed"]},
       {"name":"full_system","path":"private-data/scratch/SaclacRoot/runs/20261114T153101Z-root4-shared-input-callback-consumer/result/verdict.json","pointer":["full_system"]},
-      {"name":"latest_gate_exit","path":"private-data/scratch/SaclacRoot/runs/20261114T170759Z-root4-record-mode-history-provider/result/verdict.json","pointer":["exit_status"]},
+      {"name":"latest_gate_exit","path":"private-data/scratch/SaclacRoot/runs/20261114T182540Z-root4-exposure-record-statistics-provider/result/verdict.json","pointer":["exit_status"]},
       {"name":"memory_status","path":"private-data/scratch/SaclacRoot/runs/20261114T170820Z-root4-record-mode-history-consumer/result/verdict.json","pointer":["status"]},
       {"name":"memory_exit","path":"private-data/scratch/SaclacRoot/runs/20261114T170820Z-root4-record-mode-history-consumer/result/verdict.json","pointer":["exit_code"]},
-      {"name":"native_task_hold","path":"private-data/scratch/SaclacRoot/runs/20261114T170820Z-root4-record-mode-history-consumer/result/verdict.json","pointer":["native_task_hold"]}
+      {"name":"native_task_hold","path":"private-data/scratch/SaclacRoot/runs/20261114T170820Z-root4-record-mode-history-consumer/result/verdict.json","pointer":["native_task_hold"]},
+      {"name":"subject_status","path":"private-data/scratch/SaclacRoot/runs/20261114T175019Z-root4-subject-platform-consumer/result/verdict.json","pointer":["status"]},
+      {"name":"preparation_status","path":"private-data/scratch/SaclacRoot/runs/20261114T183508Z-root4-exposure-record-callback-consumer/result/verdict.json","pointer":["status"]},
+      {"name":"preparation_exit","path":"private-data/scratch/SaclacRoot/runs/20261114T183508Z-root4-exposure-record-callback-consumer/result/verdict.json","pointer":["exit_code"]}
     ]
   }
 ]

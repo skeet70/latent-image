@@ -147,6 +147,36 @@ impl Machine for Fake {
         self.execute(address, &words, bytes)
     }
 }
+
+#[test]
+fn focus_history_reset_obeys_enable_bit_and_preserves_the_buffer_extent() {
+    let mut machine = Fake::default();
+    let base = 0x0200_0000u32;
+    let bytes = 301 * 108 + 188;
+    machine.memory(0xf49358, &base.to_le_bytes());
+    machine.memory(base - 1, &vec![0x55; bytes + 2]);
+    machine.memory(0x16c2228, &17u32.to_le_bytes());
+    machine.adjustment(0x24c, 1);
+    crate::stock::reset_focus_log(&mut machine);
+    assert_eq!(machine.read_u32(0x16c2228), 17);
+    assert!((0..bytes).all(|offset| machine.read_u8(base + offset as u32) == 0x55));
+
+    machine.adjustment(0x24c, 2);
+    crate::stock::reset_focus_log(&mut machine);
+    assert_eq!(machine.read_u32(0x16c2228), 0);
+    let newest = crate::stock::newest_log(&machine);
+    assert_eq!((newest.phase, newest.profile_focus, newest.parameter, newest.snapshot_level), (0, 0x7fff, 0x7fff, 0x7fff));
+    assert_eq!((newest.level, newest.lens_position, newest.focus_mark), (0x7fff, 0x7fff, 0x7fff));
+    for index in [0, 150, 300] {
+        let record = base + index * 108;
+        assert_eq!(machine.read_u16(record), 0);
+        assert_eq!(machine.read_u16(record + 2), 0x7fff);
+        assert!((16..108).all(|offset| machine.read_u8(record + offset) == 0));
+    }
+    assert!((0..188).all(|offset| machine.read_u8(base + 301 * 108 + offset) == 0));
+    assert_eq!((machine.read_u8(base - 1), machine.read_u8(base + bytes as u32)), (0x55, 0x55));
+}
+
 struct Entries {
     mode: u8,
     selection: MeasurementSelection,
@@ -263,7 +293,6 @@ impl Fixture {
             (0xf784f8, 10),
             (0xf78d24, 30),
             (0xf46c20, 0),
-            (0xf47468, 0),
             (0xfeaacc, 0),
             (0x6b7830, 0x80008000),
             (0x6b7840, 0),

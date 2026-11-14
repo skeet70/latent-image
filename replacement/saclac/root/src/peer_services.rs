@@ -14,7 +14,7 @@ impl Rendezvous {
     const fn flag(self) -> FlagBits { FlagBits(match self { Self::Adjustment => 4, Self::Lens => 2 }) }
 }
 #[derive(Clone, Copy)]
-pub struct Callbacks { pub adjustment: StockCallbackWord, pub lens: StockCallbackWord }
+pub struct Callbacks { pub adjustment: StockCallbackWord, pub lens: StockCallbackWord, pub subject: StockCallbackWord }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -91,14 +91,49 @@ impl<M: Machine, B: Backend, L: LensAccess + Copy> xm1_saclac_interface::Blockin
     }
 }
 
+pub trait SubjectSelection {
+    fn select_subjects(&mut self, kind: u32, option: u32) -> Result<bool, Error>;
+}
+impl<M: Machine, B: Backend, L> SubjectSelection for Peers<'_, M, B, L> {
+    fn select_subjects(&mut self, kind: u32, option: u32) -> Result<bool, Error> {
+        let context = match self.poster.kernel().context() { Context::Task(context) => context, _ => return Err(Error::Context) };
+        self.machine.write_u32(crate::stock::SUBJECT_SELECTION_WAITER, u32::from(context.id().get()));
+        let status = self.machine.enter(crate::stock::START_SUBJECT_SELECTION, &[kind as usize, 0, option as usize, self.callbacks.subject.0 as usize]);
+        // f15800..f15820 waits and clears even when the start returned a refusal.
+        context.wait_any(FlagBits(1), Timeout::Forever).map_err(Error::Kernel)?;
+        context.clear_flags().map_err(Error::Kernel)?;
+        Ok(status == 0)
+    }
+}
+
+impl<M: Machine, B: Backend, L> xm1_shot_sequence::boundary::Completions for Peers<'_, M, B, L> {
+    fn self_complete(&mut self, completion: xm1_saclac_interface::Completion) {
+        let result = if completion == xm1_saclac_interface::Completion::Calculation8f {
+            crate::completion_callbacks::exposure_correction(&self.machine, self.poster, None)
+        } else {
+            crate::completion_callbacks::post(self.poster, completion, &[])
+        };
+        assert!(result.is_ok(), "saclac self completion enqueue failed");
+    }
+}
+
 /// f46be0/f46c00 signal the registered waiter, not the callback's running task.
 pub fn signal<M: Machine, B: Backend>(machine: &M, poster: &Poster<B>, kind: Rendezvous) -> Result<(), Error> {
-    let word = machine.read_u32(crate::stock::RENDEZVOUS_WAITERS + kind.offset());
+    signal_waiter(machine, poster, crate::stock::RENDEZVOUS_WAITERS + kind.offset(), kind.flag())
+}
+
+/// f156b4 signals the task registered by the subject selection operation.
+pub fn subject_selected<M: Machine, B: Backend>(machine: &M, poster: &Poster<B>) -> Result<(), Error> {
+    signal_waiter(machine, poster, crate::stock::SUBJECT_SELECTION_WAITER, FlagBits(1))
+}
+
+fn signal_waiter<M: Machine, B: Backend>(machine: &M, poster: &Poster<B>, address: u32, flag: FlagBits) -> Result<(), Error> {
+    let word = machine.read_u32(address);
     let task = u8::try_from(word).ok().and_then(TaskId::new).ok_or(Error::InvalidWaiter(word))?;
     let target = TaskFlags::stock(task);
     match poster.kernel().context() {
-        Context::Task(context) => target.set(&context, kind.flag()),
-        Context::Interrupt(context) => target.set(&context, kind.flag()),
+        Context::Task(context) => target.set(&context, flag),
+        Context::Interrupt(context) => target.set(&context, flag),
         Context::Masked(_) => return Err(Error::Context),
     }.map_err(Error::Kernel)
 }

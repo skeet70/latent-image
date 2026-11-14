@@ -41,3 +41,7 @@ pub const CALC_FRAME_HEADER_SOURCE: u32 = 0x16c_d23c;
 pub const RENDEZVOUS_WAITERS: u32 = 0x16c_2214;
 /// Shared adjustment service: invokes the supplied callback after synchronizing (f472a0).
 pub const REQUEST_ADJUSTMENT_SYNCHRONIZATION: u32 = 0x74_4c48;
+/// Subject selection registers task at16a049c+8 before eeccc0 (f157e0..f157fc).
+pub const SUBJECT_SELECTION_WAITER: u32 = 0x16a_04a4;
+pub const START_SUBJECT_SELECTION: u32 = 0xee_ccc0;
+pub const END_SUBJECT_SELECTION: u32 = 0xee_cddc;

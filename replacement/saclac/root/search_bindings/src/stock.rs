@@ -28,7 +28,7 @@ entries! {
     SELECTION_RATIO = 0xf5206c; CONVERTED_DECADE = 0xef74e4; ZONE_LIMIT = 0x772f28;
     LENS_STEP = 0xf77ef8; PROGRAM_LEVEL_WORD = 0xf784f8;
     SELECT_PROGRAM = 0xf77c8c; PROGRAM_LEVEL = 0xf78d24;
-    FAULT = 0xf46c20; RESET_LOG = 0xf47468; TICKS = 0x7257a8;
+    FAULT = 0xf46c20; TICKS = 0x7257a8;
     ANGULAR_RATE = 0x6b7830; REQUEST_ANGULAR_RATE = 0x6b7840;
     DEBUG_TEXT = 0x1110918; TRACE = 0x64744c;
 }
@@ -88,6 +88,24 @@ fn write(machine: &mut impl Machine, address: u32, bytes: &[u8]) {
 }
 pub fn report_position(machine: &mut impl Machine, position: i16) {
     write(machine, SHOT_POSITION, &position.to_le_bytes());
+}
+
+/// f47468/f473a4: reset the existing shared focus history, including its cursor and tail.
+pub fn reset_focus_log<M: Machine>(machine: &mut M) {
+    let enabled = |machine: &M| call(machine, ADJUSTMENT, &[0x24c]) & 2 != 0;
+    if !enabled(machine) { return; }
+    machine.write_u32(LOG_INDEX, 0);
+    let start = machine.read_u32(LOG_BASE_WORD);
+    for index in 0..301 {
+        if !enabled(machine) { continue; }
+        let base = start.wrapping_add(index * 108);
+        for (word, value) in [0x7fff_0000, 0x7fff_7fff, 0x0000_7fff, 0x7fff_7fff].into_iter().enumerate() {
+            machine.write_u32(base.wrapping_add(word as u32 * 4), value);
+        }
+        for offset in (16..108).step_by(4) { machine.write_u32(base.wrapping_add(offset), 0); }
+    }
+    let tail = machine.read_u32(LOG_BASE_WORD).wrapping_add(301 * 108);
+    for offset in (0..188).step_by(4) { machine.write_u32(tail.wrapping_add(offset), 0); }
 }
 
 pub struct Area<'a, M>(pub &'a M);

@@ -42,8 +42,9 @@ fn binding(setup: &ExposureSetup) -> Binding {
         lens_reference: setup.lens_reference.0, source: setup.source, option: setup.option,
         snapshot_record: setup.record, record: setup.record,
         subjects: SubjectList { count: setup.subjects.count, entries: core::array::from_fn(|index| {
-            let subject = &setup.subjects.entries[index];
-            Subject { id: subject.id.0, detail: subject.detail }
+            // Calc's first word is native offset0, not the shot's identity at native+5c.
+            let bytes = xm1_shot_sequence::stock::subject_bytes(&setup.subjects.entries[index]);
+            Subject { id: u32::from_le_bytes(bytes[..4].try_into().expect("subject first word")), detail: bytes[4..].try_into().expect("subject remaining bytes") }
         }) },
         summary: setup.summary, refinement_pass: setup.refinement_pass, live: setup.live,
     }

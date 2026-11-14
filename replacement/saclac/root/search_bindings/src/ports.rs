@@ -277,7 +277,7 @@ impl<M: Machine, R: Memory, E: StockEntries, P> Platform for Session<'_, '_, M, 
         self.store(&group_20::STATISTICS_IN_USE, in_use);
     }
     fn reset_focus_log(&mut self) {
-        self.enter(stock::RESET_LOG, &[]);
+        stock::reset_focus_log(&mut *self.bindings.borrow_mut().machine);
     }
     fn tracing(&mut self) -> bool {
         self.tracing_bit(0x10)

@@ -17,6 +17,7 @@ pub trait BindRecord { fn bind_record(&mut self, record: RecordHandle); }
 pub struct Callbacks {
     pub exposure: crate::exposure_services::Callbacks,
     pub calculation: StockCallbackWord,
+    pub statistics: StockCallbackWord,
 }
 
 /// Persistent library capabilities over the same configuration, records and exposure context.
@@ -32,6 +33,7 @@ pub struct Libraries<'a, M, R, E, P, I, T, A, Q> {
     pub record: RecordHandle,
     /// LiveSearch's current record (native16c21fc), not the current Shot argument.
     pub live_search_record: &'a xm1_saclac_search_bindings::RecordBinding,
+    pub subjects: &'a RefCell<crate::shot_subjects::Workspace>,
     pub callbacks: Callbacks,
 }
 impl<M, R, E, P, I, T, A, Q> BindRecord for Libraries<'_, M, R, E, P, I, T, A, Q> {
@@ -154,4 +156,10 @@ exposure! {
     fn export(&mut self, frame: Option<Frame>, correction: &Correction, kind: ExportKind);
     fn clear_selection(&mut self, frame: Option<Frame>, primary: bool);
     fn finish_primary(&mut self);
+}
+
+impl<M, R, E, P, I, T, A, Q: xm1_shot_sequence::boundary::Completions> xm1_shot_sequence::boundary::Completions for Libraries<'_, M, R, E, P, I, T, A, Q> {
+    fn self_complete(&mut self, completion: Completion) {
+        xm1_shot_sequence::boundary::Completions::self_complete(&mut self.peers, completion);
+    }
 }

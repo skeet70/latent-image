@@ -45,3 +45,35 @@ pub fn lens_status<B: Backend>(poster: &Poster<B>, position: u16, mode: u32) -> 
 pub fn s1_result<B: Backend>(poster: &Poster<B>, gate: &crate::statistics_results::ReportingGate, value: u32) -> Result<(), PostError> {
     if gate.is_open() { post(poster, Completion::Statistics7f, &value.to_le_bytes()) } else { Ok(()) }
 }
+
+struct ExposureCallback<'a, M, B: Backend> {
+    machine: &'a M,
+    poster: &'a Poster<B>,
+    result: Result<(), PostError>,
+}
+impl<M: Machine, B: Backend> xm1_shot_sequence::exposure_callbacks::CallbackPort for ExposureCallback<'_, M, B> {
+    fn trace(&mut self, trace: xm1_shot_sequence::exposure_callbacks::CallbackTrace) {
+        self.machine.enter(0x72872c, &[xm1_shot_sequence::stock::exposure::callback_trace_word(trace) as usize]);
+    }
+    fn post(&mut self, completed: xm1_saclac_interface::Completed<'_>) {
+        self.result = post(self.poster, completed.completion, completed.parameters.bytes());
+    }
+}
+
+fn exposure_callback<M: Machine, B: Backend>(machine: &M, poster: &Poster<B>, invoke: impl FnOnce(&mut ExposureCallback<'_, M, B>)) -> Result<(), PostError> {
+    let mut callback = ExposureCallback { machine, poster, result: Ok(()) };
+    invoke(&mut callback);
+    callback.result
+}
+
+pub fn exposure_statistics<M: Machine, B: Backend>(machine: &M, poster: &Poster<B>, status: u32, entry: u32) -> Result<(), PostError> {
+    exposure_callback(machine, poster, |port| xm1_shot_sequence::exposure_callbacks::statistics_completed(status, entry, port))
+}
+
+pub fn exposure_evaluation<M: Machine, B: Backend>(machine: &M, poster: &Poster<B>, evaluation: &[u8; xm1_saclac_interface::exposure::EVALUATION_BYTES]) -> Result<(), PostError> {
+    exposure_callback(machine, poster, |port| xm1_shot_sequence::exposure_callbacks::evaluation_completed(evaluation, port))
+}
+
+pub fn exposure_correction<M: Machine, B: Backend>(machine: &M, poster: &Poster<B>, correction: Option<&[u8; xm1_saclac_interface::stock::exposure::CORRECTION_BYTES]>) -> Result<(), PostError> {
+    exposure_callback(machine, poster, |port| xm1_shot_sequence::exposure_callbacks::correction_completed(correction, port))
+}
