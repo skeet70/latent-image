@@ -49,9 +49,9 @@ fn lenscom_requests_need_the_lens_safety_contract() {
 }
 
 #[test]
-fn an_image_processor_triplet_leads_with_its_mode() {
-    let bytes = stock::shared::image_processor_triplet(&ImageProcessorTriplet { mode: 2, values: [7, 8, 9] });
-    assert_eq!([word(&bytes, 0), word(&bytes, 4), word(&bytes, 8), word(&bytes, 12)], [2, 7, 8, 9]);
+fn an_image_processor_triplet_leads_with_its_completion() {
+    let bytes = stock::shared::image_processor_triplet(&ImageProcessorTriplet { completion: CALLBACK, values: [7, 8, 9] });
+    assert_eq!([word(&bytes, 0), word(&bytes, 4), word(&bytes, 8), word(&bytes, 12)], [CALLBACK.0, 7, 8, 9]);
     assert_eq!(stock::shared::image_processor_operation(ImageProcessorOperation::Request03), 0x4703);
     assert!(lens_effect(PeerOperation::ImageProcessor(ImageProcessorOperation::Request03)).requires_lens_safety_contract());
 }

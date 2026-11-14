@@ -8057,6 +8057,23 @@
    "bytes": 0,
    "fields": [],
    "padding": []
+  },
+  {
+   "direction": "outgoing",
+   "queue": 47,
+   "operation": 16152,
+   "bytes": 8,
+   "fields": [
+    {
+     "name": "words",
+     "offset": 0,
+     "bytes": 8,
+     "sources": [
+      "0x00fead78..0x00fead7c: first and second arguments at r11-0xc and r11-8; 0x00fead8c posts 8 from r11-12"
+     ]
+    }
+   ],
+   "padding": []
   }
  ],
  "channels": [
