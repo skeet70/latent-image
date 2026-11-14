@@ -271,11 +271,6 @@ pub enum ToneWord {
     SecondReached = 0x38,
 }
 
-/// 0xf2230c starts the scan plan's selection (+0x180) at +0x20 before it installs the plan.
-pub fn start_selection(scan: &mut ScanBlock) {
-    let start = word(&scan.0, 0x20);
-    put(&mut scan.0, 0x180, start);
-}
 
 /// The scan request 0xf2230c builds from the installed scan plan, the capture and lens blocks
 /// (0xf22368..0xf22524), without the selection setting and the correction.

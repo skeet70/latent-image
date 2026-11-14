@@ -34,6 +34,16 @@ implement!(ProfileAccess {
     fn profile(&mut self) -> Profile<'_, R, E> { self.services.profile() }
 });
 implement!(Properties { fn property(&mut self, property: Property) -> u32 { Properties::property(self.services, property) } });
+implement!(xm1_saclac_calc::scene_recognition::ports::Overlay {
+    fn text(&mut self, text: &[u8], column: u8, row: u8, foreground: u8, background: u8) {
+        crate::round_scene::overlay_text(&self.services.machine, text, column, row, foreground, background);
+    }
+});
+implement!(xm1_saclac_calc::adjust::motion::ports::AreaCurves {
+    fn with_profile_factors(&mut self, points: [u16; 3], deltas: [u8; 2], selector: u8) -> [u16; 3] {
+        self.geometry.apply_profile_factors(points, u32::from(deltas[0]), u32::from(deltas[1]), u32::from(selector))
+    }
+});
 implement!(Lens {
     fn level(&mut self, lens: u32, reference: u32) -> i16 { Lens::level(self.services, lens, reference) }
     fn base_level(&mut self, lens: u32) -> i16 { Lens::base_level(self.services, lens) }

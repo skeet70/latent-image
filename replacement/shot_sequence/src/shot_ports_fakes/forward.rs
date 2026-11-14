@@ -414,7 +414,7 @@ impl PipelineLibrary for ExternalFake {
     fn channel_item_ready(&mut self, _record: RecordHandle) -> bool {  PipelineLibrary::channel_item_ready(&mut self.pipeline, _record) }
     fn apply_adjustment(&mut self, _adjustment: &[PlanBlock; 7], _pass: AdjustmentPass) {  PipelineLibrary::apply_adjustment(&mut self.pipeline, _adjustment, _pass) }
     fn adjustment_gated(&mut self) -> bool {  PipelineLibrary::adjustment_gated(&mut self.pipeline) }
-    fn build_scan_plan(&mut self, _scan: PlanBlock) -> ScanBlock {  PipelineLibrary::build_scan_plan(&mut self.pipeline, _scan) }
+    fn build_scan_plan(&mut self, scan: PlanBlock) -> u32 { PipelineLibrary::build_scan_plan(&mut self.pipeline, scan) }
     fn focus_result(&mut self, _scan: PlanBlock, _kind: ResultKind) -> FocusResultOut {  PipelineLibrary::focus_result(&mut self.pipeline, _scan, _kind) }
     fn selected_value(&mut self) -> u32 {  PipelineLibrary::selected_value(&mut self.pipeline) }
     fn needs_raw(&mut self) -> bool {  PipelineLibrary::needs_raw(&mut self.pipeline) }
@@ -445,7 +445,6 @@ impl PlanMemory for ExternalFake {
     fn raw_selection(&mut self, _block: PlanBlock) -> u32 {  PlanMemory::raw_selection(&mut self.pipeline, _block) }
     fn raw_first_word(&mut self, _block: PlanBlock) -> u32 {  PlanMemory::raw_first_word(&mut self.pipeline, _block) }
     fn store_scan(&mut self, _block: PlanBlock, store: ScanStore) {  PlanMemory::store_scan(&mut self.pipeline, _block, store) }
-    fn install_scan_plan(&mut self, _block: PlanBlock, scan: &ScanBlock) {  PlanMemory::install_scan_plan(&mut self.pipeline, _block, scan) }
     fn mark_lens_driven(&mut self, _block: PlanBlock) {  PlanMemory::mark_lens_driven(&mut self.pipeline, _block) }
     fn store_raw_calculation(&mut self, block: PlanBlock, result: &RawCalculation) {  PlanMemory::store_raw_calculation(&mut self.pipeline, block, result) }
 }

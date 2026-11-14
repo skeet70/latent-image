@@ -26,4 +26,24 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor, I: Isp, 
         *self.motion.borrow_mut() = Some(state);
         prepared
     }
+    pub fn lay_out_motion(&mut self) {
+        self.motion.borrow_mut().as_mut().expect("motion layout before preparation").lay_out_samples(&mut Calculation {
+            services: &mut self.services.borrow_mut(), geometry: &mut self.geometry.borrow_mut(),
+            placement: &mut *self.placement.borrow_mut(),
+        });
+    }
+    pub fn next_motion_plan(&mut self) -> xm1_saclac_calc::adjust::motion::plan::PlanKind {
+        use xm1_saclac_calc::adjust::motion::plan::PlanKind;
+        let mut motion = self.motion.borrow_mut();
+        let state = motion.as_mut().expect("motion planning before preparation");
+        let kind = state.plan_next(&mut Calculation {
+            services: &mut self.services.borrow_mut(), geometry: &mut self.geometry.borrow_mut(),
+            placement: &mut *self.placement.borrow_mut(),
+        });
+        if kind != PlanKind::SETTLED {
+            let plan = state.plan_mut();
+            plan.selection = u32::from(plan.speed_choice);
+        }
+        kind
+    }
 }

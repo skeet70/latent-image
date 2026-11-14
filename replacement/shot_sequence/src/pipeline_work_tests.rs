@@ -45,7 +45,6 @@ fn plan() -> Plan {
 enum Call {
     Plan,
     Scan(ScanStore),
-    Install,
     LensDriven,
     RawResult(PlanBlock, RawCalculation),
     Work(WorkArea, WorkStore),
@@ -159,7 +158,14 @@ impl PipelineLibrary for World {
     fn channel_item_ready(&mut self, _record: RecordHandle) -> bool { true }
     fn apply_adjustment(&mut self, _adjustment: &[PlanBlock; 7], _pass: AdjustmentPass) {}
     fn adjustment_gated(&mut self) -> bool { self.gated }
-    fn build_scan_plan(&mut self, _scan: PlanBlock) -> ScanBlock { self.built }
+    fn build_scan_plan(&mut self, _scan: PlanBlock) -> u32 {
+        let phase = self.built.phase();
+        if phase != 3 {
+            self.scan = self.built;
+            self.scan.0[SCAN_SELECTION..SCAN_SELECTION + 4].copy_from_slice(&self.built.0[0x20..0x24]);
+        }
+        phase
+    }
     fn focus_result(&mut self, _scan: PlanBlock, _kind: ResultKind) -> FocusResultOut { self.focus }
     fn selected_value(&mut self) -> u32 { 0x77 }
     fn needs_raw(&mut self) -> bool { false }
@@ -201,10 +207,6 @@ impl PlanMemory for World {
             _ => {}
         }
         self.calls.push(Call::Scan(store));
-    }
-    fn install_scan_plan(&mut self, _block: PlanBlock, scan: &ScanBlock) {
-        self.scan = *scan;
-        self.calls.push(Call::Install);
     }
     fn mark_lens_driven(&mut self, _block: PlanBlock) { self.calls.push(Call::LensDriven); }
     fn store_raw_calculation(&mut self, block: PlanBlock, result: &RawCalculation) { self.calls.push(Call::RawResult(block, *result)); }
@@ -599,7 +601,7 @@ fn the_fallback_publishes_up_to_three_positions_and_every_area_block() {
 }
 
 #[test]
-fn the_frame_preparation_installs_the_scan_plan_and_builds_the_scan_request() {
+fn scan_requests_choose_initial_speed_and_lens_correction() {
     let (mut work, mut world) = (PipelineWork::new(), World::new());
     let mut prepared = prepared(1, MASK_RELEASED);
     prepare(&mut work, &mut prepared, &mut world);
@@ -613,7 +615,6 @@ fn the_frame_preparation_installs_the_scan_plan_and_builds_the_scan_request() {
     world.lens_position = 80;
     world.direction = 0;
     effect(&mut work, E::PrepareFrame, &mut prepared, &mut world);
-    assert_eq!(world.scan.0[SCAN_SELECTION..SCAN_SELECTION + 4], 1u32.to_le_bytes());
     effect(&mut work, E::Request(R::Image1f), &mut prepared, &mut world);
     let Some(Call::ScanRequest(request)) = world.calls.last() else { panic!("scan requested") };
     assert_eq!((request.start, request.positions[0], request.selection_word, request.selection_setting), (1, 100, 0xabc, 0));
@@ -630,12 +631,6 @@ fn the_frame_preparation_installs_the_scan_plan_and_builds_the_scan_request() {
     assert_eq!(request.correction, 0);
     assert!(work.query(Q::ToneResultSet, &mut world));
 
-    let (mut unplanned, mut world) = (PipelineWork::new(), World::new());
-    prepare(&mut unplanned, &mut self::prepared(1, MASK_RELEASED), &mut world);
-    put(&mut world.built.0, 0x8, 3);
-    world.take();
-    effect(&mut unplanned, E::PrepareFrame, &mut self::prepared(1, MASK_RELEASED), &mut world);
-    assert!(!world.has(&Call::Install));
 }
 
 #[test]

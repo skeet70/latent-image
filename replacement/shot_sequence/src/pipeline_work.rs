@@ -275,8 +275,9 @@ pub trait PipelineLibrary {
     fn channel_item_ready(&mut self, record: RecordHandle) -> bool;
     fn apply_adjustment(&mut self, adjustment: &[PlanBlock; 7], pass: AdjustmentPass);
     fn adjustment_gated(&mut self) -> bool;
-    /// The next scan plan, built from the scan block.
-    fn build_scan_plan(&mut self, scan: PlanBlock) -> ScanBlock;
+    /// Builds and installs the next pass, initializing its selection to its speed choice.
+    /// Phase3 keeps the installed pass unchanged.
+    fn build_scan_plan(&mut self, scan: PlanBlock) -> u32;
     fn focus_result(&mut self, scan: PlanBlock, kind: ResultKind) -> FocusResultOut;
     fn selected_value(&mut self) -> u32;
     fn needs_raw(&mut self) -> bool;
@@ -311,7 +312,6 @@ pub trait PlanMemory {
     fn raw_selection(&mut self, block: PlanBlock) -> u32;
     fn raw_first_word(&mut self, block: PlanBlock) -> u32;
     fn store_scan(&mut self, block: PlanBlock, store: ScanStore);
-    fn install_scan_plan(&mut self, block: PlanBlock, scan: &ScanBlock);
     fn mark_lens_driven(&mut self, block: PlanBlock);
     fn store_raw_calculation(&mut self, block: PlanBlock, result: &RawCalculation);
 }
@@ -718,11 +718,9 @@ impl PipelineWork {
 
     fn prepare_frame(&mut self, boundary: &mut impl PipelineBoundary) {
         let Some(plan) = self.plan else { return };
-        let mut scan = boundary.build_scan_plan(plan.scan);
-        self.phase = scan.phase();
+        self.phase = boundary.build_scan_plan(plan.scan);
         if self.phase == UNPLANNED_PHASE { return; }
-        layout::start_selection(&mut scan);
-        boundary.install_scan_plan(plan.scan, &scan);
+        let scan = boundary.scan(plan.scan);
         let capture = boundary.capture(plan.capture);
         let lens = boundary.lens(plan.lens);
         let mut request = layout::scan_request(&scan, &capture, &lens);

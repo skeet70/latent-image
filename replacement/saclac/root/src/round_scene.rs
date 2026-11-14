@@ -76,12 +76,15 @@ implement!(LensServices {
 });
 implement!(Overlay {
     fn text(&mut self, text: &[u8], column: u8, row: u8, foreground: u8, background: u8) {
-        let mut line = Aligned([0; 25]);
-        let length = text.len().min(24);
-        line[..length].copy_from_slice(&text[..length]);
-        self.services.machine.enter_with(0x111_0918, &[Buffer(0), Word(u32::from(column)), Word(u32::from(row)), Word(u32::from(foreground)), Word(u32::from(background))], &mut line.0);
+        overlay_text(&self.services.machine, text, column, row, foreground, background);
     }
 });
+pub(crate) fn overlay_text(machine: &impl Machine, text: &[u8], column: u8, row: u8, foreground: u8, background: u8) {
+    let mut line = Aligned([0; 25]);
+    let length = text.len().min(24);
+    line[..length].copy_from_slice(&text[..length]);
+    machine.enter_with(0x111_0918, &[Buffer(0), Word(u32::from(column)), Word(u32::from(row)), Word(u32::from(foreground)), Word(u32::from(background))], &mut line.0);
+}
 implement!(SceneEvents {
     fn scene_changed(&mut self, handle: RecordHandle, recognition: Recognition) {
         let callback = self.services.shared(handle, &group_20::AT_016C);
