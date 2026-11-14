@@ -1486,5 +1486,29 @@
       {"name":"stock_checkpoint_lookup","path":"private-data/scratch/StimulusTicks/runs/20261113T200947Z-board-ticks-shoot-without-lens/result/stock-ticks-a.json","pointer":["checkpoint","lookup"]},
       {"name":"stock_checkpoint_created","path":"private-data/scratch/StimulusTicks/runs/20261113T200722Z-instruction-clock-shoot-without-lens/result/stock-instructions.json","pointer":["checkpoint","key"]}
     ]
+  },
+  {
+    "id": "E-FOCUS-ROUND-HOST-CONTRACTS-150",
+    "claim": "The X-M1 1.50 measurement-round correction contracts preserve the defined zero-divisor ratio result, omit an undefined interval-history stack word, retain partial source-buffer visibility and make release copying and invalidation explicit. The host gate passes {{round_tests}} round tests and {{interface_tests}} interface tests. A standalone caller-entry smoke executes {{live_primary}} live primary requests, {{live_selection}} live selections and {{live_releases}} release payloads, then {{s1_primary}} S1 primary requests, {{s1_selection}} S1 selections and {{s1_focus}} focus tables over two cycles.",
+    "scope": "Source-inspected contracts at x70view 55436fc85c0560dd252b0410af6f2427fe198cd3, synthetic host tests and a standalone host smoke through Measurement::handle and S1Acquisition::handle. No stock code executed in these host runs.",
+    "notes": "The correction triggers, original behavior, retained readers and dependence limits are in spec/11. Host traffic and byte-contract tests do not establish stock equality, firmware ownership or camera behavior. The composition root still must bind the revised grid/source contracts and exercise the linked subsystem in the emulator before cutover.",
+    "artifacts": [
+      "private-data/scratch/FocusRound/review-302aa594.md",
+      "private-data/scratch/FocusRound/runs/20261114T025105Z-focus-round9-gate/result/gate.log",
+      "private-data/scratch/FocusRound/runs/20261114T025433Z-focus-round9-smoke/result/smoke.jsonl",
+      "private-data/scratch/FocusRound/runs/20261114T025539Z-focus-round9-evidence-inputs/result/gate-run.json",
+      "private-data/scratch/FocusRound/runs/20261114T025539Z-focus-round9-evidence-inputs/result/smoke-run.json"
+    ],
+    "facts": [
+      {"name":"firmware_sha256","path":"private-data/scratch/FocusRound/runs/20261114T025539Z-focus-round9-evidence-inputs/result/source-identity.json","pointer":["firmware_sha256"]},
+      {"name":"round_tests","path":"private-data/scratch/FocusRound/runs/20261114T025539Z-focus-round9-evidence-inputs/result/round-tests.log","operation":"decimal-between","prefix":"test result: ok. ","suffix":" passed;"},
+      {"name":"interface_tests","path":"private-data/scratch/FocusRound/runs/20261114T025539Z-focus-round9-evidence-inputs/result/interface-tests.log","operation":"decimal-between","prefix":"test result: ok. ","suffix":" passed;"},
+      {"name":"live_primary","path":"private-data/scratch/FocusRound/runs/20261114T025539Z-focus-round9-evidence-inputs/result/smoke.json","pointer":["live","primary_requests"]},
+      {"name":"live_selection","path":"private-data/scratch/FocusRound/runs/20261114T025539Z-focus-round9-evidence-inputs/result/smoke.json","pointer":["live","selection_requests"]},
+      {"name":"live_releases","path":"private-data/scratch/FocusRound/runs/20261114T025539Z-focus-round9-evidence-inputs/result/smoke.json","pointer":["live","release_payloads"]},
+      {"name":"s1_primary","path":"private-data/scratch/FocusRound/runs/20261114T025539Z-focus-round9-evidence-inputs/result/smoke.json","pointer":["s1","primary_requests"]},
+      {"name":"s1_selection","path":"private-data/scratch/FocusRound/runs/20261114T025539Z-focus-round9-evidence-inputs/result/smoke.json","pointer":["s1","selection_requests"]},
+      {"name":"s1_focus","path":"private-data/scratch/FocusRound/runs/20261114T025539Z-focus-round9-evidence-inputs/result/smoke.json","pointer":["s1","focus_tables"]}
+    ]
   }
 ]

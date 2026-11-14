@@ -122,8 +122,7 @@ pub struct ProfileGeometry {
 }
 
 /// A value the shared record holds for a retained consumer, which alone gives it meaning.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct RetainedWord(pub u32);
+pub use xm1_saclac_interface::round_acquisition::RetainedWord;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RetainedHalfword(pub u16);

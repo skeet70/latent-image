@@ -74,7 +74,7 @@ fn initialization_enables_acquisition_and_window_and_initializes_the_other_lanes
     fake.image_client = Some(StockCallbackWord(0x00e0_1234));
     assert_eq!(measurement.handle(control(MeasurementControl::Initialize), &mut fake), ChildOutcome::Complete);
     assert_eq!(fake.extra.take(), [Traffic::Search("initialize")]);
-    assert_eq!(fake.acquisition.word & 1, 1);
+    assert!(fake.records.in_use.primary);
     let outbound = fake.take();
     assert!(outbound.contains(&Outbound::NotifyImageClient(StockCallbackWord(0x00e0_1234))));
     assert!(outbound.iter().any(|traffic| matches!(traffic, Outbound::Acquisition(AcquisitionTraffic::Exposure(_)))));
@@ -248,7 +248,7 @@ fn submits_primary(configure: impl FnOnce(&mut Fake)) -> bool {
     let mut fake = fake(ACQUISITION);
     fake.records.profile.frame_rate_cadence = true;
     fake.frame_rate_threshold = FrameRate(30);
-    fake.acquisition.view.start = 1;
+    fake.acquisition.view.start = crate::acquisition::ports::Start::Fresh;
     fake.acquisition.range.timing = TimingWord(0x55);
     fake.set_current_interval(Some(FrameInterval(1_000)));
     configure(&mut fake);
@@ -275,4 +275,184 @@ fn record_and_profile_selection_take_precedence_over_the_frame_rate() {
     assert!(submits_primary(|fake| { fake.records.profile.selection = ProfileSelection::Record; fake.cadence = by_record; }));
     assert!(submits_primary(|fake| { fake.records.profile.profile_cadence = true; fake.cadence = by_profile; }));
     assert!(!submits_primary(|fake| { fake.records.profile.profile_cadence = true; fake.cadence = by_record; }));
+}
+
+#[test]
+fn each_live_start_publishes_its_exposure_and_initial_levels_before_requests() {
+    use crate::acquisition::ports::{Start, ExposurePublication, ExposureRecordUpdate, Program};
+    use crate::acquisition_fixtures as fixture;
+    use crate::pipeline::{GainStep, PipelineWord};
+    use xm1_saclac_interface::round_acquisition::{PrimaryLevels, SelectionLevels};
+    for start in [Start::Restore, Start::Fresh, Start::Resume] {
+        let mut measurement = Measurement::new();
+        let mut fake = fake(ACQUISITION);
+        fixture::configure(&mut fake);
+        fake.acquisition.view.start = start;
+        fake.acquisition.no_program = true;
+        fake.acquisition.program = Program(0x56);
+        fake.acquisition.published.reference_level = 1000;
+        fake.acquisition.published.aspect = 9;
+        assert_eq!(measurement.handle(control(MeasurementControl::Initialize), &mut fake), ChildOutcome::Complete);
+        let traffic = fake.take();
+        let publications: Vec<_> = traffic.into_iter().filter_map(|event| match event {
+            Outbound::Acquisition(AcquisitionTraffic::Exposure(value)) => Some(value), _ => None,
+        }).collect();
+        let expected = ExposurePublication { exposure: PipelineWord(0x3030), level: 700, second: 100, reference: 100,
+            decade: 200, offset: 20, correction: 0, gain_step: GainStep(3), timing: TimingWord(0x9090), code: 0x66,
+            selected: 3, adjustment: 0, combined: 620, reference_level: 720, aspect: 7 };
+        assert_eq!(publications.last(), Some(&expected));
+        assert_eq!(publications.len(), if start == Start::Restore { 2 } else { 1 });
+        assert_eq!(fake.acquisition.target_queries[0].program, Program(0x56));
+        assert_eq!(fake.acquisition.target_queries[0].level, match start { Start::Fresh => 200, Start::Resume => 991, Start::Restore => 24 });
+        assert_eq!(fake.acquisition.primary_levels, Some(PrimaryLevels { base: 600, levels: [600; 7], word: 0 }));
+        assert_eq!(fake.acquisition.selection_levels, Some(SelectionLevels { base: 600, levels: [600; 3], reference: 600, tail: [600; 3], ..SelectionLevels::default() }));
+        assert!(fake.acquisition.exposure_updates.contains(&ExposureRecordUpdate::Context { lens: crate::auxiliary::ResourceIndex(0x4040), index: 0x3030 }));
+        assert_eq!(measurement.handle(completion(Completion::Accessor4b), &mut fake), ChildOutcome::Pending);
+        let requests: Vec<_> = fake.take().into_iter().filter_map(|event| match event { Outbound::Acquisition(AcquisitionTraffic::Acquisition(Branch::Live, request)) => Some(request), _ => None }).collect();
+        assert_eq!(requests, [fixture::primary_request(Branch::Live, true)]);
+    }
+}
+
+#[test]
+fn live_round_fourth_tick_selects_publishes_and_then_starts_a_new_primary() {
+    use crate::acquisition::ports::*;
+    use crate::acquisition_fixtures as fixture;
+    use crate::fakes::ShotCall;
+    use crate::pipeline::PipelineWord;
+    use xm1_saclac_interface::round_acquisition::*;
+    for recording in [false, true] {
+        let mut measurement = Measurement::new();
+        let mut fake = fake(ACQUISITION);
+        fixture::configure(&mut fake);
+        fake.adjustment.recording = RetainedWord(u32::from(recording));
+        fake.cadence = |work, _| match work {
+            Work::PrimaryAcquisition => Cadence { first: true, second: true, third: true, fourth: false },
+            Work::SecondaryAcquisition => Cadence { first: false, second: false, third: false, fourth: true },
+            _ => Cadence { first: true, second: true, third: true, fourth: true },
+        };
+        measurement.handle(control(MeasurementControl::Initialize), &mut fake);
+        fake.take();
+        fake.acquisition.acquisition_result = Some(fixture::primary_result());
+        for phase in 0..4 {
+            assert_eq!(measurement.handle(completion(Completion::Accessor4b), &mut fake), ChildOutcome::Pending);
+            let traffic = fake.take();
+            let requests: Vec<_> = traffic.iter().filter_map(|event| match event {
+                Outbound::Acquisition(AcquisitionTraffic::Acquisition(Branch::Live, request)) => Some(*request), _ => None,
+            }).collect();
+            if phase < 3 {
+                assert_eq!(requests, [fixture::primary_request(Branch::Live, phase == 0)]);
+                assert!(!traffic.iter().any(|event| matches!(event, Outbound::Acquisition(AcquisitionTraffic::Selection(_, _)))));
+                measurement.handle(completion(Completion::Calculation8d), &mut fake);
+                assert_eq!(measurement.handle(completion(Completion::Calculation87), &mut fake), ChildOutcome::Pending);
+                let traffic = fake.take();
+                assert_eq!(fake.acquisition.primary_levels, Some(fixture::primary_result().levels));
+                assert!(traffic.contains(&Outbound::Acquisition(AcquisitionTraffic::Released(ReleasedResult::Acquisition(fixture::primary_result().address)))));
+                assert_eq!(fake.acquisition.block.collected, 1);
+                if phase > 0 {
+                    assert!(traffic.contains(&Outbound::Acquisition(AcquisitionTraffic::ChangeNotice(ChangeNotice {
+                        category: 31, mode_is_one: 0, lens: 0x2020, positions: [0, 0], unbounded: 0xffff, pair: [29, 30], kind: 3,
+                    }))));
+                }
+            } else {
+                assert!(requests.is_empty());
+                let requests: Vec<_> = traffic.into_iter().filter_map(|event| match event {
+                    Outbound::Acquisition(AcquisitionTraffic::Selection(Branch::Live, request)) => Some(request), _ => None,
+                }).collect();
+                assert_eq!(requests, [fixture::selection_request(Branch::Live, true, recording)]);
+                if recording {
+                    assert_eq!(fake.acquisition.restored_settings, [(Branch::Live, RestoredSetting { margin: 65488, reference: 100, lens_halfword: 25, lens_reference: 26 })]);
+                    assert_eq!(fake.acquisition.settings_written, [(Branch::Live, SelectionSetting {
+                        lens: 0x4040, shot_word: 0, margin: 65488, category: 0, one_mode: 0, context_word: 0,
+                        selection: 1, updated_position: 44, position_halfword: 45, mode_word: 5, byte: 6, halfword: 7,
+                        setting_word: 8, grid_kind: 9, focus_word: 10, fourth_word: RetainedWord(16), request: 22, rate_mode: 13,
+                        word: 2, reference: 100, restore_adjustment: 47, selection_word: 24, lens_halfword: 25, lens_reference: 26,
+                        halfwords: [27, 32, 28], eighth_word: RetainedWord(19), mode_rule: 14, category_word: 3, change_category: 31,
+                        second_word: RetainedWord(15), mode_flag: 1, rate_flag: false, fifth_word: RetainedWord(17), ninth_word: RetainedWord(20),
+                        profile_flags: [0, 2, 3, 4, 5, 6, 7, 8], tenth_word: RetainedWord(21), lens_limit: 51, lens_word_index: 33,
+                        kind: 35, kind_override: 36, adjustment: 34, profile_index: 48, program_word: 38, restore_position: 40, hardware_ready: false,
+                    })]);
+                    assert_eq!(fake.acquisition.windows, [(Branch::Live, SelectionWindow {
+                        kind: 2, selection: 1, updated_position: 44, position_halfword: 45, focus_word: 10, lens: 0x4040, lens_reference: 26,
+                        mode_rule: 14, second_word: RetainedWord(15), mode_word: 5, request: 22, rate: 1,
+                        relative_level: 65516, resource_level: 60, target_level: 1620, ratio: [49, 50], change_category: 31,
+                        category: 3, limit_halfword: 27, ..SelectionWindow::default()
+                    })]);
+                } else {
+                    assert!(fake.acquisition.windows.is_empty());
+                    assert!(fake.acquisition.settings_written.is_empty());
+                }
+                let result = fixture::selection_result();
+                fake.acquisition.selection_result = Some(result);
+                fake.acquisition.range_passthrough = true;
+                measurement.handle(completion(Completion::Calculation8d), &mut fake);
+                assert_eq!(measurement.handle(completion(Completion::Calculation88), &mut fake), ChildOutcome::Measurement(xm1_saclac_controllers::children::MeasurementOutcome::Update { update: xm1_saclac_controllers::children::MeasurementUpdate::NoPeerRequest, restart: xm1_saclac_controllers::children::Restart::Pending }));
+                let traffic = fake.take();
+                let selected = SelectionNotice { kind: 3, level: 120, word: 0x8181, limit_level: 113, flags: [1, 1], recording: u32::from(recording), levels: [131, 132, 133, 134], position: 0x8282 };
+                assert_eq!(fake.acquisition.selection, SelectionRecord { position: 0x8282, word: 0x8181, level: 120,
+                    levels: [131, 132, 133, 134], target: 121, limit_level: 135, reference: 114, flags: [1, 2, 3, 1], limit: 129, tracked: 1 });
+                assert_eq!(fake.acquisition.selection_levels, Some(result.levels));
+                let candidates = |exposure, level, second, offset| SelectionEntry { timing: 0x9090, code: 0x66, selected: 3, gain_step: 3,
+                    exposure, level, second, offset, word: 123, reference: 122, decade: 126 };
+                let table = SelectionTable {
+                    primary: [candidates(0x8000, 201, 235, 209), candidates(0x8000, 202, 236, 210), candidates(0x8000, 203, 237, 211), candidates(0x8000, 204, 238, 212)],
+                    secondary: [candidates(0x9000, 301, 335, 309), candidates(0x9000, 302, 336, 310), candidates(0x9000, 303, 337, 311), candidates(0x9000, 304, 338, 312)], levels: [103, 104, 105],
+                };
+                assert_eq!(traffic, [Outbound::Acquisition(AcquisitionTraffic::Selected(selected)), Outbound::Acquisition(AcquisitionTraffic::SelectionTable(table)),
+                    Outbound::Acquisition(AcquisitionTraffic::Released(ReleasedResult::Selection { result: result.address, shot: Some((result.shot_record, result.saved_record)) }))]);
+                assert_eq!(fake.acquisition.restore_levels, Some((122, [118, 119])));
+                assert!(fake.acquisition.shot_calls.ends_with(&[ShotCall::Write(result.shot_record), ShotCall::Copy(result.saved_record)]));
+                assert_eq!((fake.acquisition.block.selected, fake.acquisition.block.setting_position, fake.acquisition.block.setting_halfword, fake.acquisition.block.setting_shot_word), (1, 0x81, 0x82, 0x83));
+                assert_eq!(measurement.handle(completion(Completion::Accessor4b), &mut fake), ChildOutcome::Pending);
+                let requests: Vec<_> = fake.take().into_iter().filter_map(|event| match event { Outbound::Acquisition(AcquisitionTraffic::Acquisition(_, request)) => Some(request), _ => None }).collect();
+                let mut expected = fixture::primary_request(Branch::Live, false);
+                expected.correction = 0;
+                assert_eq!(requests, [expected]);
+                assert_eq!(fake.acquisition.published.exposure, PipelineWord(0x1010));
+            }
+        }
+        assert_eq!(fake.faults, 0);
+    }
+}
+
+#[test]
+fn release_classifies_boundaries_weights_each_side_and_moves_every_buffer() {
+    use crate::acquisition::ports::*;
+    use crate::acquisition_fixtures as fixture;
+    use crate::fakes::ReleaseRecord;
+    for (adjustment, class_profile, configured) in [(4, 7, -2i16), (34, 7, -3), (34, 1, -4)] {
+        let mut measurement = Measurement::new();
+        let mut fake = fake(ACQUISITION);
+        fixture::configure(&mut fake);
+        fake.acquisition.view.adjustment = adjustment;
+        fake.acquisition.view.profile_flags[6] = class_profile;
+        fake.acquisition.settings.snapshot_grid = true;
+        fake.acquisition.settings.release = ReleaseSettings { bounds: [-1, -2, 1, 2], weights: [[2, 3], [5, 7], [11, 13], [17, 19]], offsets: [-2, -3, -4] };
+        let mut primary = [915; 256];
+        primary[..9].copy_from_slice(&[894, 895, 904, 905, 915, 925, 926, 935, 936]);
+        fake.acquisition.statistics_banks = Some([primary, [100; 256], [200; 256], [300; 256]]);
+        fake.acquisition.extra = core::array::from_fn(|index| index as u16);
+        measurement.handle(control(MeasurementControl::Initialize), &mut fake);
+        measurement.handle(completion(Completion::Accessor4b), &mut fake);
+        let mut result = fixture::primary_result();
+        result.count = 0x10000 + 553;
+        fake.acquisition.acquisition_result = Some(result);
+        measurement.handle(completion(Completion::Calculation8d), &mut fake);
+        measurement.handle(completion(Completion::Calculation87), &mut fake);
+        fake.take();
+        assert_eq!(measurement.handle(control(MeasurementControl::Stop), &mut fake), ChildOutcome::Complete);
+        assert_eq!(fake.take(), [Outbound::Acquisition(AcquisitionTraffic::Release)]);
+        let mut classes = [0; 256];
+        classes[..9].copy_from_slice(&[4, 2, 2, 0, 0, 0, 1, 1, 3]);
+        let offset = 5u16.wrapping_sub(configured as u16);
+        assert_eq!(fake.acquisition.releases, [ReleaseRecord { classes,
+            offsets: [primary.map(|value| value.wrapping_add(offset)), [100 + offset; 256], [200 + offset; 256], [300 + offset; 256]],
+            snapshot: Some(((0..552).map(|value| value + offset).collect(), crate::stock::RELEASE_COPY)),
+        }]);
+        assert_eq!(fake.acquisition.block.weights, [7, 17, 35, 53]);
+        assert_eq!(fake.acquisition.block.release_offset, configured as u16);
+        assert_eq!(fake.acquisition.block.release_halfword, 43);
+        assert_eq!((fake.acquisition.block.classes, fake.acquisition.block.offsets, fake.acquisition.block.extra, fake.acquisition.block.copy),
+            (crate::stock::RELEASE_CLASSES, crate::stock::RELEASE_OFFSETS, crate::stock::RELEASE_EXTRA, crate::stock::RELEASE_COPY));
+        assert_eq!(fake.acquisition.selection, SelectionRecord::default());
+    }
 }

@@ -6,6 +6,10 @@
 
 use crate::calc::SharedAddress;
 
+/// A word carried unchanged for the retained consumer to interpret.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RetainedWord(pub u32);
+
 /// Profile values a 0x3d00 request carries without the round interpreting them.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct AcquisitionProfile {
@@ -74,8 +78,8 @@ pub struct SelectionRequest {
     pub first: bool,
     pub mode: u32,
     pub halfword: u16,
-    pub third_word: u32,
-    pub zero_word: u32,
+    pub third_word: RetainedWord,
+    pub zero_word: RetainedWord,
     pub mode_word: u32,
     pub byte: u8,
     pub second_halfword: u16,
@@ -99,22 +103,22 @@ pub struct SelectionRequest {
     pub decade: u16,
     /// Left zero by the S1 acquisition.
     pub adjustment_class: u8,
-    pub eighth_word: u32,
+    pub eighth_word: RetainedWord,
     pub grid_count: u32,
-    pub second_word: u32,
+    pub second_word: RetainedWord,
     pub adjustment: u32,
     pub signed_word: u16,
     /// Left zero by the S1 acquisition.
-    pub seventh_word: u32,
-    pub fourth_word: u32,
-    pub fifth_word: u32,
+    pub seventh_word: RetainedWord,
+    pub fourth_word: RetainedWord,
+    pub fifth_word: RetainedWord,
     pub focus_word: u32,
     pub word: u32,
     pub rate_mode: u16,
     pub resource_level: u16,
     pub mode_flag: u32,
     pub kind: u32,
-    pub ninth_word: u32,
+    pub ninth_word: RetainedWord,
     pub option: u32,
     pub area: [u16; 3],
     pub pair_word: u32,
@@ -157,7 +161,7 @@ pub struct SelectionWindow {
     pub lens: u32,
     pub lens_reference: u32,
     pub mode_rule: u32,
-    pub second_word: u32,
+    pub second_word: RetainedWord,
     pub mode_word: u32,
     pub request: u32,
     pub clock: u32,
@@ -199,7 +203,7 @@ pub struct SelectionSetting {
     pub setting_word: u32,
     pub grid_kind: u32,
     pub focus_word: u32,
-    pub fourth_word: u32,
+    pub fourth_word: RetainedWord,
     pub request: u32,
     pub rate_mode: u32,
     pub word: u32,
@@ -209,17 +213,17 @@ pub struct SelectionSetting {
     pub lens_halfword: u16,
     pub lens_reference: u32,
     pub halfwords: [u16; 3],
-    pub eighth_word: u32,
+    pub eighth_word: RetainedWord,
     pub mode_rule: u32,
     pub category_word: u32,
     pub change_category: u32,
-    pub second_word: u32,
+    pub second_word: RetainedWord,
     pub mode_flag: u32,
     pub rate_flag: bool,
-    pub fifth_word: u32,
-    pub ninth_word: u32,
+    pub fifth_word: RetainedWord,
+    pub ninth_word: RetainedWord,
     pub profile_flags: [u32; 8],
-    pub tenth_word: u32,
+    pub tenth_word: RetainedWord,
     pub lens_limit: u32,
     pub lens_word_index: u32,
     pub kind: u32,

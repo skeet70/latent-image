@@ -5,8 +5,10 @@
 
 use crate::auxiliary::ResourceIndex;
 use crate::pipeline::{Exposure, GainStep, Pipeline, PipelineSnapshot, PipelineWord, Statistics, TimingWord};
+use crate::profile::{ProfileRecords, ProfileSelection, RetainedWord};
 use crate::record::{Adjustment, Trace};
-use xm1_saclac_interface::calc::{AcquisitionGrid, SharedAddress};
+use xm1_saclac_interface::calc::SharedAddress;
+use xm1_saclac_interface::stock::round_acquisition::GridLead;
 use xm1_saclac_interface::round_acquisition::{
     AcquisitionRequest, AcquisitionResult, ChangeNotice, FocusTable, PrimaryLevels, RestoredSetting, SavedExposure,
     SavedSelection, SelectionLevels, SelectionLimits, SelectionRequest, SelectionResult, SelectionSetting,
@@ -25,13 +27,53 @@ pub struct Program(pub u32);
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct StatisticsBuffer(pub u32);
 
+/// Which grid a primary evaluation reads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EvaluationGrid { Empty, Current }
+
+/// How an initialization starts the exposure, as the record chooses.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Start {
+    /// From the record's published selection, entering the record's selection hook.
+    #[default]
+    Restore,
+    /// From the configured top of the program's range.
+    Fresh,
+    /// From the record's published reference level.
+    Resume,
+}
+
+impl Start {
+    pub const fn of(word: u32) -> Self {
+        match word { 0 => Self::Restore, 1 => Self::Fresh, _ => Self::Resume }
+    }
+}
+
+/// A record's acquisition mode; requests carry it whole and the round tests it only through
+/// these sets.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AcquisitionMode(pub u32);
+
+impl AcquisitionMode {
+    /// The S1 stop hands the lens reference to the selection slot, and a result whose mapped
+    /// position differs replaces the selection.
+    pub const fn tracks_position(self) -> bool { matches!(self.0, 46 | 47 | 54 | 56) }
+    /// A changed lens halfword in the preset replaces the selection.
+    pub const fn follows_lens_halfword(self) -> bool { matches!(self.0, 13 | 45 | 47 | 55 | 56) }
+    /// A changed reference in the preset replaces the selection.
+    pub const fn follows_reference(self) -> bool { !matches!(self.0, 47 | 56) }
+    /// Under record selection, a fresh start targets the lens reference.
+    pub const fn wide(self) -> bool { self.0 == 46 }
+    /// The S1 mode under which calc1 never reuses a live selection.
+    pub const fn refuses_reuse(self) -> bool { self.0 == 57 }
+}
+
 /// The profile record values the acquisition reads and does not write.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RecordView {
-    /// How an initialization starts the exposure.
-    pub start: u32,
-    pub selection: u32,
-    pub s1_mode: u32,
+    pub start: Start,
+    pub selection: ProfileSelection,
+    pub s1_mode: AcquisitionMode,
     pub halfword: u16,
     pub mode_word: u32,
     pub byte: u8,
@@ -40,9 +82,9 @@ pub struct RecordView {
     pub grid_kind: u32,
     pub focus_word: u32,
     pub window: u32,
-    pub seventh_word: u32,
-    pub fourth_word: u32,
-    pub third_word: u32,
+    pub seventh_word: RetainedWord,
+    pub fourth_word: RetainedWord,
+    pub third_word: RetainedWord,
     /// Six asks for the mode-six statistics before an S1 sample.
     pub request: u32,
     pub detail_flag: u32,
@@ -52,20 +94,20 @@ pub struct RecordView {
     pub lens_halfword: u16,
     pub lens_reference: u32,
     pub halfwords: [u16; 2],
-    pub zero_word: u32,
+    pub zero_word: RetainedWord,
     pub category: u32,
     pub pair: [u32; 2],
-    pub tenth_word: u32,
+    pub tenth_word: RetainedWord,
     pub change_category: u32,
     pub signed_word: u16,
-    pub eighth_word: u32,
-    pub second_word: u32,
+    pub eighth_word: RetainedWord,
+    pub second_word: RetainedWord,
     /// One keeps the exposure record beside the published exposure.
     pub mode_flag: u32,
     pub rate_enabled: u32,
-    pub fifth_word: u32,
+    pub fifth_word: RetainedWord,
     pub forced: u32,
-    pub ninth_word: u32,
+    pub ninth_word: RetainedWord,
     /// The last is the program flag.
     pub profile_flags: [u32; 8],
     pub lens_word_index: u32,
@@ -81,7 +123,7 @@ pub struct RecordView {
     pub s1_halfword: u16,
     pub release_halfword: u16,
     pub area: [u32; 5],
-    pub mode: u32,
+    pub mode: AcquisitionMode,
     pub updated_position: u32,
     pub position_halfword: u16,
     pub converted_level: u32,
@@ -104,6 +146,10 @@ impl RecordView {
     /// The area's first three halfwords.
     pub const fn area_halfwords(&self) -> [u16; 3] {
         [self.area[0] as u16, (self.area[0] >> 16) as u16, self.area[1] as u16]
+    }
+    /// The record's own words let calc1 reuse a selection.
+    pub const fn allows_reuse(&self) -> bool {
+        self.detail_flag != 1 && self.third_word.0 != 7 && !matches!(self.mode_word, 2 | 5)
     }
 }
 
@@ -284,10 +330,10 @@ pub struct ProgramChoice {
 /// The inputs of an exposure program selection.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ProgramInputs {
-    pub selection: u32,
+    pub selection: ProfileSelection,
     pub adjustment: u32,
     pub kind: u32,
-    pub mode: u32,
+    pub mode: AcquisitionMode,
     pub word: u32,
     pub flag: u32,
     pub program_flag: u32,
@@ -358,7 +404,7 @@ pub struct Range {
 pub struct ModeInputs {
     pub grid_kind: u32,
     pub grid_byte: u8,
-    pub selection: u32,
+    pub selection: ProfileSelection,
     pub updated_position: u32,
     pub category: u32,
     pub mode_flag: u32,
@@ -460,15 +506,16 @@ pub enum ReleasedResult {
 }
 
 /// The profile records, the layers and the peers the acquisition works through.
-pub trait Ports: Pipeline + Exposure + Adjustment + Trace {
+pub trait Ports: Pipeline + Exposure + Adjustment + Trace + ProfileRecords {
     fn selection_memory(&mut self) -> &mut SelectionMemory;
     fn acquisition_settings(&mut self) -> AcquisitionSettings;
 
     fn record_view(&mut self, record: RecordHandle) -> RecordView;
+    fn s1_rate_enabled(&mut self, record: RecordHandle) -> bool;
     fn published_exposure(&mut self, record: RecordHandle) -> PublishedExposure;
     fn publish_exposure(&mut self, record: RecordHandle, publication: &ExposurePublication);
     fn publish_primary_levels(&mut self, record: RecordHandle, levels: &PrimaryLevels);
-    fn publish_grid(&mut self, record: RecordHandle, grid: &AcquisitionGrid);
+    fn publish_grid(&mut self, record: RecordHandle, branch: Branch);
     fn publish_selection_levels(&mut self, record: RecordHandle, levels: &SelectionLevels);
     fn update_exposure_record(&mut self, record: RecordHandle, update: ExposureRecordUpdate);
     fn store_lens(&mut self, record: RecordHandle, lens: ResourceIndex);
@@ -492,8 +539,6 @@ pub trait Ports: Pipeline + Exposure + Adjustment + Trace {
     fn store_restore_levels(&mut self, record: RecordHandle, reference: u16, levels: [u16; 2]);
     fn store_s1_level(&mut self, record: RecordHandle, level: i16);
     fn clear_grid_selection(&mut self, record: RecordHandle);
-    fn acquisition_word(&mut self, record: RecordHandle) -> u32;
-    fn store_acquisition_word(&mut self, record: RecordHandle, word: u32);
     fn rate_record(&mut self, record: RecordHandle) -> RateRecord;
     fn store_rate_selection(&mut self, record: RecordHandle, selected: u32);
     fn clear_selection_reuse(&mut self, record: RecordHandle);
@@ -525,25 +570,31 @@ pub trait Ports: Pipeline + Exposure + Adjustment + Trace {
     fn program_lower_bound(&mut self, program: Program, lens: u32) -> u32;
     fn profile_percent(&mut self, program: Program, combined: u16, lens: ResourceIndex, bound: u32) -> u16;
 
-    fn grid_count(&mut self, selection: u32, mode: u32, adjustment: u32, grid_kind: u32) -> u32;
-    fn indexed_configuration(&mut self, selection: u32, adjustment: u32, index: u32) -> u8;
-    fn level_category(&mut self, level: i16, selection: u32, adjustment: u32) -> u32;
-    fn selection_limits(&mut self, selection: u32, adjustment: u32, grid_count: u32, request: u32) -> SelectionLimits;
-    fn fill_grid(&mut self, inputs: &GridInputs, grid: &mut AcquisitionGrid);
-    fn snapshot_grid(&mut self, statistics: Statistics, grid: &mut AcquisitionGrid);
+    fn grid_count(&mut self, selection: ProfileSelection, mode: AcquisitionMode, adjustment: u32, grid_kind: u32) -> u32;
+    fn indexed_configuration(&mut self, selection: ProfileSelection, adjustment: u32, index: u32) -> u8;
+    fn level_category(&mut self, level: i16, selection: ProfileSelection, adjustment: u32) -> u32;
+    fn selection_limits(&mut self, selection: ProfileSelection, adjustment: u32, grid_count: u32, request: u32) -> SelectionLimits;
+    /// Grid storage and its stock layout belong to the binding, not to round state.
+    fn grid_lead(&mut self, branch: Branch) -> GridLead;
+    fn set_grid_count(&mut self, branch: Branch, count: u32);
+    fn clear_grid_lead(&mut self, branch: Branch);
+    fn set_grid_configuration(&mut self, branch: Branch, configuration: u8);
+    fn set_grid_inputs(&mut self, branch: Branch, inputs: &GridInputs);
+    fn fill_grid(&mut self, branch: Branch, inputs: &GridInputs);
+    fn snapshot_grid(&mut self, branch: Branch, statistics: Statistics);
     fn adjustment_class(&mut self, adjustment: u32, reference: i16) -> u8;
     fn adjustment_option(&mut self) -> u32;
     fn refreshed_position(&mut self) -> u32;
     fn mode_one(&mut self, inputs: &ModeInputs) -> u32;
     fn both_modes(&mut self, inputs: &ModeInputs) -> u32;
-    fn five_parameter_adjustment(&mut self, selection: u32, updated_position: u32, mode_flag: u32, modes: u32, grid_word: u32) -> u32;
+    fn five_parameter_adjustment(&mut self, selection: ProfileSelection, updated_position: u32, mode_flag: u32, modes: u32, grid_word: u32) -> u32;
     fn rate_divisor(&mut self, updated_position: u32, change_category: u32, lens: ResourceIndex, grid_halfword: u16) -> u32;
-    fn rate_limit(&mut self, selection: u32, updated_position: u32, position_halfword: u16) -> u32;
+    fn rate_limit(&mut self, selection: ProfileSelection, updated_position: u32, position_halfword: u16) -> u32;
     fn rate_mode(&mut self, updated_position: u32, position_halfword: u16, word: u32, mode_flag: u32) -> u16;
     fn selection_mode_category(&mut self, mode_word: u32) -> u32;
     fn offset_position(&mut self, level: i16, reference: u16, flag: u32) -> u16;
-    fn clamp_selection_difference(&mut self, mode: u32, lens: ResourceIndex, level: i16, lens_halfword: u16, lens_reference: u32, target: i16) -> i16;
-    fn has_valid_offset(&mut self, selection: u32, mode: u32, lens_halfword: i16) -> u32;
+    fn clamp_selection_difference(&mut self, mode: AcquisitionMode, lens: ResourceIndex, level: i16, lens_halfword: u16, lens_reference: u32, target: i16) -> i16;
+    fn has_valid_offset(&mut self, selection: ProfileSelection, mode: AcquisitionMode, lens_halfword: i16) -> u32;
     fn allows_unflagged_selection(&mut self, updated_position: u32, halfword: u16) -> bool;
     fn capture_selection_position(&mut self, branch: Branch, inputs: &PositionInputs) -> SelectionPosition;
     fn copy_rate_grid_source(&mut self, buffer: StatisticsBuffer);
@@ -582,12 +633,12 @@ pub trait Ports: Pipeline + Exposure + Adjustment + Trace {
     fn hardware_ready(&mut self) -> bool;
     fn clock_word(&mut self) -> u32;
 
-    /// The window names the body and tail of `grid` for calc1.
-    fn store_selection_window(&mut self, branch: Branch, window: &SelectionWindow, grid: &AcquisitionGrid);
+    /// The window names the body and tail of the branch's grid for calc1.
+    fn store_selection_window(&mut self, branch: Branch, window: &SelectionWindow);
     fn store_selection_setting(&mut self, branch: Branch, setting: &SelectionSetting);
     fn store_restored_setting(&mut self, branch: Branch, setting: &RestoredSetting);
     fn setting_echo(&mut self, branch: Branch) -> SettingEcho;
-    fn request_acquisition(&mut self, branch: Branch, request: &AcquisitionRequest, grid: &AcquisitionGrid);
+    fn request_acquisition(&mut self, branch: Branch, request: &AcquisitionRequest, grid: EvaluationGrid);
     fn request_selection(&mut self, branch: Branch, request: &SelectionRequest);
     fn acquisition_result(&mut self, completed: Completed<'_>) -> Option<AcquisitionResult>;
     fn selection_result(&mut self, completed: Completed<'_>) -> Option<SelectionResult>;

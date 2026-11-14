@@ -6,8 +6,8 @@
 
 use crate::auxiliary::ResourceIndex;
 use crate::pipeline::{GainStep, PipelineWord};
+use crate::profile::ProfileSelection;
 use crate::record::TraceMark;
-use xm1_saclac_interface::calc::AcquisitionGrid;
 use xm1_saclac_interface::round_acquisition::{
     AcquisitionRequest, AcquisitionSample, FocusTable, RestoredSetting, SelectionEntry, SelectionRequest, SelectionS1,
 };
@@ -29,14 +29,13 @@ pub struct S1Work {
     selection_pending: bool,
     /// The latest selection request's program.
     program: Program,
-    grid: AcquisitionGrid,
 }
 
 impl Default for S1Work { fn default() -> Self { Self::new() } }
 
 impl S1Work {
     pub const fn new() -> Self {
-        Self { level: 0, rate_pair: [0; 2], primary_pending: false, selection_pending: false, program: Program(0), grid: AcquisitionGrid([0; 1236]) }
+        Self { level: 0, rate_pair: [0; 2], primary_pending: false, selection_pending: false, program: Program(0) }
     }
 
     /// Takes the record's level from its saved S1 exposure.
@@ -67,7 +66,7 @@ impl S1Work {
             .wrapping_add(value);
         let correction = ports.published_exposure(record).correction;
         let request = AcquisitionRequest {
-            mode: view.s1_mode,
+            mode: view.s1_mode.0,
             first: self.primary_pending,
             profile: acquisition_profile(&view, 0),
             sample: AcquisitionSample {
@@ -91,7 +90,7 @@ impl S1Work {
             aspect: ports.timing_offset(sample.timing),
             decade: view.decade,
         };
-        ports.request_acquisition(Branch::S1, &request, &AcquisitionGrid([0; 1236]));
+        ports.request_acquisition(Branch::S1, &request, super::ports::EvaluationGrid::Empty);
     }
 
     /// Takes the result's level and, under the S1 rate, hands it to the rate layer and the
@@ -101,7 +100,7 @@ impl S1Work {
         let Some(result) = ports.acquisition_result(completed) else { return };
         ports.store_s1_level(record, result.levels.base as i16);
         let settings = ports.acquisition_settings();
-        if settings.s1_rate & 3 != 0 && ports.record_view(record).rate_enabled == 1 {
+        if settings.s1_rate & 3 != 0 && ports.s1_rate_enabled(record) {
             let rate = ports.rate_record(record);
             ports.store_rate_selection(record, 1);
             if settings.s1_rate & 2 != 0 { ports.rate_pair(record, result.address, 1, &mut self.rate_pair); }
@@ -126,12 +125,12 @@ impl S1Work {
     /// Calc1 0x3d01 with the window and a setting the shot restores from its saved reference.
     pub fn submit_secondary(&mut self, record: RecordHandle, ports: &mut impl Ports) {
         let view = ports.record_view(record);
+        let settings = ports.acquisition_settings();
         let mut request = SelectionRequest::default();
         fill_selection(&mut request, &view, view.s1_mode, ports);
         request.offset_mode = ports.has_valid_offset(view.selection, view.s1_mode, view.lens_halfword as i16);
         request.program_word = view.program_word[0];
         if view.program_word[0] == 0 { ports.store_program_word(record, [0, 0]); }
-        let settings = ports.acquisition_settings();
         request.rate_flag = settings.rate & 3 != 0 && view.rate_enabled != 0;
         let sample = ports.s1_sample();
         let current = ports.position_pair(record, PositionSlot::Current);
@@ -147,16 +146,16 @@ impl S1Work {
         request.s1 = SelectionS1 {
             byte: view.s1_byte,
             halfword: view.s1_halfword,
-            margin: selection::margin(record, ports),
+            margin: selection::margin(&view, ports),
             position: ports.lens_position(pair, current[0]),
         };
-        fill_limits(&mut request, &view, ports);
+        fill_limits(&mut request, &view, view.s1_mode, ports);
         request.resource_level = ports.relative_exposure(PipelineWord(published.lens.0)) as u16;
         let program = ports.select_program(&ProgramInputs {
-            selection: request.selection,
+            selection: view.selection,
             adjustment: request.adjustment,
             kind: request.kind,
-            mode: request.mode,
+            mode: view.s1_mode,
             word: request.program_word,
             flag: request.offset_mode,
             program_flag: request.program_flag,
@@ -168,20 +167,20 @@ impl S1Work {
         self.program = program;
         request.program = program.0;
         request.first = self.selection_pending;
-        if request.selection == 0 { ports.refresh_hardware_state(); }
+        if view.selection == ProfileSelection::Unselected { ports.refresh_hardware_state(); }
         let inputs = GridInputs {
             timing: sample.timing,
             lens_word: ports.lens_word(record, Some(published.lens)),
             positions: ports.change_positions(record),
             window: view.window,
         };
-        ports.fill_grid(&inputs, &mut self.grid);
+        ports.fill_grid(Branch::S1, &inputs);
         request.eligible = 1;
-        selection::store_records(record, Branch::S1, &request, &self.grid, ports);
+        selection::store_records(record, &view, &settings, Branch::S1, &request, ports);
         request.window = true;
         let lens = ports.published_exposure(record).lens;
         ports.restore_selection_setting(Branch::S1, lens);
-        let margin = selection::margin(record, ports);
+        let margin = selection::margin(&view, ports);
         ports.store_restored_setting(Branch::S1, &RestoredSetting {
             margin,
             reference: request.reference,
@@ -201,10 +200,11 @@ impl S1Work {
     pub fn restore(&mut self, record: RecordHandle, completed: Completed<'_>, ports: &mut impl Ports) {
         self.selection_pending = false;
         let Some(result) = ports.selection_result(completed) else { return };
+        let view = ports.record_view(record);
         let selection = ports.selection_record(record);
         if result.shot_data {
             ports.write_saved_settings(result.shot_record);
-            if selection::changed(record, &selection, &result, ports) {
+            if selection::changed(record, &view, &selection, &result, ports) {
                 ports.copy_selection_to_saved(result.saved_record);
                 ports.restore_selection_if_enabled(record, result.position_word);
                 if ports.selection_memory().value_changed() { ports.apply_selection_value_change(); }
@@ -222,8 +222,9 @@ impl S1Work {
     /// Takes the result into the record's selection and publishes it.
     pub fn publish_selection(&mut self, record: RecordHandle, completed: Completed<'_>, ports: &mut impl Ports) {
         let Some(result) = ports.selection_result(completed) else { return };
+        let view = ports.record_view(record);
         let mut selection = ports.selection_record(record);
-        if selection::changed(record, &selection, &result, ports) {
+        if selection::changed(record, &view, &selection, &result, ports) {
             selection::take_result(record, &mut selection, &result, true, ports);
             ports.store_position_pair(record, PositionSlot::Selected, [selection.position, selection.word]);
         } else {
@@ -231,7 +232,7 @@ impl S1Work {
         }
         ports.selection_memory().save_preset();
         ports.store_position_pair(record, PositionSlot::Reported, [result.position_word, result.position]);
-        selection::publish(record, Publication::Restored, selection, ports);
+        selection::publish(record, &view, Publication::Restored, selection, ports);
         ports.release_result(ReleasedResult::Selection { result: result.address, shot: None });
     }
 
@@ -278,7 +279,7 @@ impl S1Work {
     /// the controllers' value change.
     pub fn stop(&mut self, record: RecordHandle, ports: &mut impl Ports) {
         let view = ports.record_view(record);
-        if matches!(view.s1_mode, 46 | 47 | 54 | 56) { ports.store_slot_word(record, view.lens_reference); }
+        if view.s1_mode.tracks_position() { ports.store_slot_word(record, view.lens_reference); }
         ports.selection_memory().clear_value_changed();
     }
 }

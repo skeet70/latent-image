@@ -5,12 +5,13 @@
 //! selection request names.
 
 use crate::pipeline::{GainStep, PipelineWord};
-use xm1_saclac_interface::calc::AcquisitionGrid;
 use xm1_saclac_interface::round_acquisition::{SelectionRequest, SelectionResult, SelectionSetting, SelectionWindow};
-use xm1_saclac_interface::stock::round_acquisition::grid_lead;
 use xm1_saclac_interface::RecordHandle;
 
-use super::ports::{Branch, GridReference, ModeInputs, PositionInputs, PositionSlot, Ports, SelectionNotice, SelectionRecord, SelectionSlot};
+use super::ports::{
+    AcquisitionSettings, Branch, GridReference, ModeInputs, PositionInputs, PositionSlot, Ports, RecordView, SelectionNotice,
+    SelectionRecord, SelectionSlot,
+};
 
 /// A lens position as the record reports it: a word and two halfwords.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -52,8 +53,7 @@ impl SelectionMemory {
 }
 
 /// The record's current lens preset: lens reference, lens halfword and reference.
-pub(crate) fn record_preset(record: RecordHandle, ports: &mut impl Ports) -> LensPreset {
-    let view = ports.record_view(record);
+pub(crate) const fn record_preset(view: &RecordView) -> LensPreset {
     LensPreset { word: view.lens_reference, halfwords: [view.lens_halfword, view.reference] }
 }
 
@@ -64,15 +64,15 @@ pub(crate) fn clear(record: RecordHandle, ports: &mut impl Ports) {
 }
 
 /// Whether a result's position replaces the record's selection.
-pub(crate) fn changed(record: RecordHandle, selection: &SelectionRecord, result: &SelectionResult, ports: &mut impl Ports) -> bool {
+pub(crate) fn changed(record: RecordHandle, view: &RecordView, selection: &SelectionRecord, result: &SelectionResult, ports: &mut impl Ports) -> bool {
     if selection.tracked == 0 { return true; }
-    let mode = ports.record_view(record).s1_mode;
+    let mode = view.s1_mode;
     let reported = ports.mapped_value(result.position, result.position_word);
     let stored = ports.mapped_value(selection.word, selection.position);
-    if matches!(mode, 46 | 47 | 54 | 56) && stored != reported { return true; }
+    if mode.tracks_position() && stored != reported { return true; }
     let (current, saved) = ports.selection_memory().presets();
-    if matches!(mode, 13 | 45 | 47 | 55 | 56) && saved.halfwords[0] != current.halfwords[0] { return true; }
-    if !matches!(mode, 47 | 56) && saved.halfwords[1] != current.halfwords[1] { return true; }
+    if mode.follows_lens_halfword() && saved.halfwords[0] != current.halfwords[0] { return true; }
+    if mode.follows_reference() && saved.halfwords[1] != current.halfwords[1] { return true; }
     let pair = ports.position_pair(record, PositionSlot::Lens);
     let lensed = ports.lens_position(pair, result.position_word);
     let mapped = ports.mapped_value(lensed, result.position_word);
@@ -106,7 +106,7 @@ pub(crate) enum Publication {
 }
 
 /// Publishes the record's selection and enters the record's selection hook.
-pub(crate) fn publish(record: RecordHandle, publication: Publication, mut selection: SelectionRecord, ports: &mut impl Ports) {
+pub(crate) fn publish(record: RecordHandle, view: &RecordView, publication: Publication, mut selection: SelectionRecord, ports: &mut impl Ports) {
     let first = selection.flags[0] & 1;
     let kind = if selection.flags[2] & 3 != 0 { 3 } else if selection.flags[1] & 2 != 0 { 2 } else { selection.flags[1] & 1 };
     let last = selection.flags[3] & 1;
@@ -122,11 +122,10 @@ pub(crate) fn publish(record: RecordHandle, publication: Publication, mut select
                 flags: [first, last],
                 levels: selection.levels,
             });
-            take_grid_reference(record, &mut selection, ports);
+            take_grid_reference(record, view, &mut selection, ports);
             (level, 1)
         }
         Publication::Collected => {
-            let view = ports.record_view(record);
             let raised = selection.reference.wrapping_add(view.converted_level as u16).wrapping_sub(view.restore_adjustment);
             let lens = ports.published_exposure(record).lens;
             let level = ports.clamp_selection_difference(view.mode, lens, raised as i16, view.lens_halfword, view.lens_reference, selection.target as i16);
@@ -155,31 +154,36 @@ fn store_selection_byte(record: RecordHandle, byte: u8, ports: &mut impl Ports) 
 }
 
 /// Lets the shot's grid reference adjust the selection's level and levels when the S1 rate applies.
-fn take_grid_reference(record: RecordHandle, selection: &mut SelectionRecord, ports: &mut impl Ports) {
-    if ports.acquisition_settings().s1_rate & 3 == 0 || ports.record_view(record).rate_enabled != 1 { return; }
+fn take_grid_reference(record: RecordHandle, view: &RecordView, selection: &mut SelectionRecord, ports: &mut impl Ports) {
+    if ports.acquisition_settings().s1_rate & 3 == 0 || view.rate_enabled != 1 { return; }
     let reference = ports.selected_grid_reference(record, GridReference { level: selection.level, second: 0, word: 0, levels: selection.levels });
     selection.level = reference.level;
     selection.levels = reference.levels;
 }
 
 /// The shot's reference level against the record's reference, offset by the record block's.
-pub(crate) fn margin(record: RecordHandle, ports: &mut impl Ports) -> u16 {
-    let view = ports.record_view(record);
+pub(crate) fn margin(view: &RecordView, ports: &mut impl Ports) -> u16 {
     ports.shot_reference_level().wrapping_sub(view.reference.wrapping_sub(view.block_reference))
 }
 
 /// Builds the window and setting a selection request names and stores them where calc1 reads them.
-pub(crate) fn store_records(record: RecordHandle, branch: Branch, request: &SelectionRequest, grid: &AcquisitionGrid, ports: &mut impl Ports) {
-    let view = ports.record_view(record);
+pub(crate) fn store_records(
+    record: RecordHandle,
+    view: &RecordView,
+    settings: &AcquisitionSettings,
+    branch: Branch,
+    request: &SelectionRequest,
+    ports: &mut impl Ports,
+) {
     let lens = ports.published_exposure(record).lens;
     let (shot_word, margin) = if branch == Branch::S1 || ports.adjustment_words().recording.0 == 1 {
-        (ports.shot_selection_word(), margin(record, ports))
+        (ports.shot_selection_word(), margin(view, ports))
     } else {
         (128, 0)
     };
     let category = ports.selection_mode_category(request.mode_word);
     let position = ports.capture_selection_position(branch, &PositionInputs {
-        word: request.eighth_word,
+        word: request.eighth_word.0,
         level: request.signed_word as i16,
         updated_position: view.updated_position,
         position_halfword: view.position_halfword,
@@ -187,11 +191,11 @@ pub(crate) fn store_records(record: RecordHandle, branch: Branch, request: &Sele
         byte: request.byte,
         halfword: request.second_halfword,
     });
-    let lead = grid_lead(grid);
+    let lead = ports.grid_lead(branch);
     let modes = ModeInputs {
         grid_kind: view.grid_kind,
         grid_byte: lead.first_byte,
-        selection: request.selection,
+        selection: view.selection,
         updated_position: view.updated_position,
         category: view.category,
         mode_flag: request.mode_flag,
@@ -200,12 +204,12 @@ pub(crate) fn store_records(record: RecordHandle, branch: Branch, request: &Sele
     };
     let one_mode = ports.mode_one(&modes);
     let shot = ports.prepare_selection_defaults(record);
-    let rate_mode = if request.mode_flag != 0 && !ports.allows_unflagged_selection(view.updated_position, request.halfword) && request.third_word <= 1 {
+    let rate_mode = if request.mode_flag != 0 && !ports.allows_unflagged_selection(view.updated_position, request.halfword) && request.third_word.0 <= 1 {
         6
     } else {
-        request.third_word
+        request.third_word.0
     };
-    let mode_rule = if request.mode_flag != 0 && view.updated_position == 48 { 1 } else { request.zero_word };
+    let mode_rule = if request.mode_flag != 0 && view.updated_position == 48 { 1 } else { request.zero_word.0 };
     let setting = SelectionSetting {
         lens: lens.0,
         shot_word,
@@ -259,7 +263,7 @@ pub(crate) fn store_records(record: RecordHandle, branch: Branch, request: &Sele
     let gain = ports.gain_offset(GainStep(request.gain_step)) as u16;
     let relative_level = position.level.wrapping_sub(gain).wrapping_sub(correction);
     let exposure = ports.exposure_value([PipelineWord(request.exposure), PipelineWord(lens.0)]) as u16;
-    let rate = if one_mode != 0 && ports.acquisition_settings().rate_divisor {
+    let rate = if one_mode != 0 && settings.rate_divisor {
         match ports.rate_divisor(view.updated_position, view.change_category, lens, lead.halfword) {
             0 => 1,
             divisor => 10_000 / divisor,
@@ -286,7 +290,7 @@ pub(crate) fn store_records(record: RecordHandle, branch: Branch, request: &Sele
         position_level: position.level,
         relative_level,
         resource_level: ports.relative_exposure(PipelineWord(lens.0)) as u16,
-        rate_limit: ports.rate_limit(request.selection, view.updated_position, view.position_halfword),
+        rate_limit: ports.rate_limit(view.selection, view.updated_position, view.position_halfword),
         rate_mode: ports.rate_mode(view.updated_position, view.position_halfword, rate_mode, mode_rule),
         target_level: relative_level.wrapping_add(1600).wrapping_add(exposure),
         ratio: view.ratio,
@@ -299,5 +303,5 @@ pub(crate) fn store_records(record: RecordHandle, branch: Branch, request: &Sele
         position_flag: position.flag == 1,
         limit_halfword: request.limit_halfwords[0],
     };
-    ports.store_selection_window(branch, &window, grid);
+    ports.store_selection_window(branch, &window);
 }

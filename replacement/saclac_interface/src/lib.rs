@@ -13,6 +13,8 @@ pub mod lens;
 pub mod pipeline;
 pub mod round;
 pub mod round_acquisition;
+#[cfg(test)]
+mod round_acquisition_tests;
 pub mod round_image;
 pub mod search;
 pub mod selection;

@@ -175,6 +175,28 @@ Scope: The dispatcher at 0x00efca6c and machine 0's router at 0x00efcb88 over st
 
 <!-- /evidence-record E-SACLAC-ENGINE-COMPARE-150 -->
 
+### Measurement round
+
+`focus_measurement/round` owns the measurement orchestration core, not a linked
+firmware cutover. Acquisition requests carry typed retained words and modes.
+Bindings own the live and S1 grid storage; `EvaluationGrid::Empty` gives S1
+primary requests their independent empty grid. Source publications retain stable
+summary/means buffers: `update_source_values` changes their contents without
+replacing the last publication's flag, pointers or strength. The stock boundary's
+`source_publication` encoder supplies the publication flag and pointer layout.
+
+The [measurement-round corrections](../spec/11-incremental-firmware-replacement.md#measurement-round-corrections-x-m1-150)
+record undefined reads, the empty-channel mean correction, invalidation offsets
+and conditional release copying.
+
+<!-- evidence-record E-FOCUS-ROUND-HOST-CONTRACTS-150 -->
+
+E-FOCUS-ROUND-HOST-CONTRACTS-150: The X-M1 1.50 measurement-round correction contracts preserve the defined zero-divisor ratio result, omit an undefined interval-history stack word, retain partial source-buffer visibility and make release copying and invalidation explicit. The host gate passes 123 round tests and 47 interface tests. A standalone caller-entry smoke executes 3 live primary requests, 1 live selections and 1 release payloads, then 8 S1 primary requests, 2 S1 selections and 2 focus tables over two cycles.
+
+Scope: Source-inspected contracts at x70view 55436fc85c0560dd252b0410af6f2427fe198cd3, synthetic host tests and a standalone host smoke through Measurement::handle and S1Acquisition::handle. No stock code executed in these host runs.
+
+<!-- /evidence-record E-FOCUS-ROUND-HOST-CONTRACTS-150 -->
+
 ## General heap
 
 The [cutover report](../reports/general-heap-cutover.md) defines the interface projection, placement, caller-grounded corrections and final-pass queue. The implementation and external RTOS/client shims remain unchanged; the current consumer checks global interface order and an executed wrong binary.

@@ -163,7 +163,7 @@ fn a_segment_with_an_empty_ring_and_no_weight_withholds_the_publication() {
     source.effect(Effect::Initialize, record(), None, &mut ports);
     source.effect(Effect::Submit, record(), None, &mut ports);
     collect(&mut source, &mut ports, &completed(0x2a));
-    assert_eq!(ports.source.published, Some(Published::Fresh { summary: summary([100, 100, 100, -20]), strength: SourceStrength(128) }));
+    assert_eq!(ports.source.published, Some(Published::Fresh { summary: summary([102, 90, 100, -22]), strength: SourceStrength(128) }));
     assert!(!source.changed());
 }
 
@@ -182,4 +182,31 @@ fn a_release_withdraws_and_a_kept_restart_republishes_with_the_released_strength
         summary: summary([100, 100, 100, -20]), means: Summary::ZERO, strength: SourceStrength(128),
     }));
     assert_eq!((ports.source.callbacks_enabled, ports.source.requests.len()), (Some(true), 1));
+}
+
+#[test]
+fn a_partial_collection_updates_both_published_buffers_without_replacing_the_strength() {
+    let mut ports = ports();
+    ports.source.settings.segments = [SegmentSettings { ring_length: 0, newest_weight: 1, gain: 128 }; 4];
+    ports.source.summaries = [summary([1, 2, 3, -4]), summary([10, 20, 30, -40]), summary([100, 200, 300, -400])].into();
+    let mut source = Source::new();
+    source.effect(Effect::Initialize, record(), None, &mut ports);
+    collect(&mut source, &mut ports, &completed(17));
+    ports.source.settings.segments[2].newest_weight = 0;
+    collect(&mut source, &mut ports, &completed(29));
+    assert_eq!(ports.source.published, Some(Published::Averaged {
+        summary: summary([100, 200, 30, -400]), means: summary([100, 200, 30, -400]), strength: SourceStrength(17),
+    }));
+    assert!(!source.changed());
+}
+
+#[test]
+fn source_publications_encode_validity_pointers_and_strength_in_full() {
+    use crate::source::SourcePublication;
+    let summary = Summary::ZERO;
+    assert_eq!(crate::stock::source_publication(SourcePublication::Withdrawn), [0; 16]);
+    assert_eq!(crate::stock::source_publication(SourcePublication::Fresh { summary: &summary, strength: SourceStrength(0x73) }),
+        [1, 0, 0, 0, 0xa4, 5, 0x6c, 1, 0xa4, 5, 0x6c, 1, 0x73, 0, 0, 0]);
+    assert_eq!(crate::stock::source_publication(SourcePublication::Averaged { summary: &summary, means: &summary, strength: SourceStrength(0x29) }),
+        [1, 0, 0, 0, 0xa4, 5, 0x6c, 1, 0x22, 6, 0x6c, 1, 0x29, 0, 0, 0]);
 }

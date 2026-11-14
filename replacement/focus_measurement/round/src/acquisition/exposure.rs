@@ -3,7 +3,6 @@
 //! The exposure an acquisition settles on and its publication in the profile record.
 
 use crate::pipeline::{GainStep, PipelineWord, TimingWord};
-use xm1_saclac_interface::calc::AcquisitionGrid;
 use xm1_saclac_interface::round_acquisition::{PrimaryLevels, SelectionLevels};
 use xm1_saclac_interface::RecordHandle;
 
@@ -51,7 +50,7 @@ pub struct ExposureSetting {
 }
 
 /// Publishes an exposure with the levels and aspect the record derives from it.
-pub(crate) fn publish(record: RecordHandle, setting: &ExposureSetting, ports: &mut impl Ports) {
+pub(crate) fn publish(record: RecordHandle, view: &RecordView, setting: &ExposureSetting, ports: &mut impl Ports) {
     let value = ports.exposure_value([setting.exposure, setting.second_exposure]) as u16;
     let combined = setting.level.wrapping_sub(setting.second).wrapping_sub(setting.offset).wrapping_add(value);
     let reference = if setting.adjustment == 1 { setting.reference.wrapping_sub(100) } else { setting.reference };
@@ -73,30 +72,28 @@ pub(crate) fn publish(record: RecordHandle, setting: &ExposureSetting, ports: &m
         reference_level: combined.wrapping_add(reference),
         aspect,
     });
-    if keeps_exposure_record(record, ports) {
+    if keeps_exposure_record(view) {
         ports.update_exposure_record(record, ExposureRecordUpdate::GainStep(setting.gain_step));
     }
 }
 
 /// Publishes the primary levels and the grid they were taken over.
-pub(crate) fn publish_primary(record: RecordHandle, levels: &PrimaryLevels, grid: &AcquisitionGrid, ports: &mut impl Ports) {
+pub(crate) fn publish_primary(record: RecordHandle, view: &RecordView, levels: &PrimaryLevels, branch: super::Branch, ports: &mut impl Ports) {
     ports.publish_primary_levels(record, levels);
-    ports.publish_grid(record, grid);
-    if keeps_exposure_record(record, ports) {
+    ports.publish_grid(record, branch);
+    if keeps_exposure_record(view) {
         ports.update_exposure_record(record, ExposureRecordUpdate::PrimaryPair([levels.levels[2], levels.levels[6]]));
     }
 }
 
-pub(crate) fn publish_selection(record: RecordHandle, levels: &SelectionLevels, ports: &mut impl Ports) {
+pub(crate) fn publish_selection(record: RecordHandle, view: &RecordView, levels: &SelectionLevels, ports: &mut impl Ports) {
     ports.publish_selection_levels(record, levels);
-    if keeps_exposure_record(record, ports) {
+    if keeps_exposure_record(view) {
         ports.update_exposure_record(record, ExposureRecordUpdate::SelectionTail { tail: levels.tail, last: levels.last });
     }
 }
 
-pub(crate) fn keeps_exposure_record(record: RecordHandle, ports: &mut impl Ports) -> bool {
-    ports.record_view(record).mode_flag == 1
-}
+pub(crate) const fn keeps_exposure_record(view: &RecordView) -> bool { view.mode_flag == 1 }
 
 /// The primary and selection levels an initialization publishes for a program's base level.
 pub(crate) fn initial_levels(base: u16) -> (PrimaryLevels, SelectionLevels) {

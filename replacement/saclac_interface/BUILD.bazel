@@ -74,6 +74,7 @@ xm1_rust_host_test(
         "src/selection_tests.rs",
         "src/shared_tests.rs",
         "src/statistics_tests.rs",
+        "src/round_acquisition_tests.rs",
         "src/tests.rs",
     ],
 )

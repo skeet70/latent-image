@@ -170,13 +170,13 @@ pub const SELECTION_REQUEST_BYTES: usize = 228;
 pub fn selection_request(request: &SelectionRequest, region: SelectionRegion) -> [u8; SELECTION_REQUEST_BYTES] {
     let mut bytes = [0; SELECTION_REQUEST_BYTES];
     let words: [(usize, u32); 36] = [
-        (0x00, u32::from(request.first)), (0x04, request.mode), (0x0c, request.third_word), (0x10, request.zero_word),
+        (0x00, u32::from(request.first)), (0x04, request.mode), (0x0c, request.third_word.0), (0x10, request.zero_word.0),
         (0x14, request.mode_word), (0x1c, request.lens), (0x20, request.converted_step), (0x2c, request.selection_word),
         (0x30, request.selection), (0x34, request.exposure), (0x44, request.lens_reference), (0x4c, request.gain_step),
-        (0x50, u32::from(request.unrestored)), (0x5c, request.eighth_word), (0x60, request.grid_count), (0x64, request.second_word),
-        (0x68, request.adjustment), (0x70, request.seventh_word), (0x74, request.fourth_word), (0x78, request.fifth_word),
+        (0x50, u32::from(request.unrestored)), (0x5c, request.eighth_word.0), (0x60, request.grid_count), (0x64, request.second_word.0),
+        (0x68, request.adjustment), (0x70, request.seventh_word.0), (0x74, request.fourth_word.0), (0x78, request.fifth_word.0),
         (0x7c, request.focus_word), (0x80, request.word), (0x88, request.mode_flag), (0x8c, request.kind),
-        (0x90, request.ninth_word), (0x94, request.option), (0x98, u32::from(request.area[1])), (0x9c, u32::from(request.area[0])),
+        (0x90, request.ninth_word.0), (0x94, request.option), (0x98, u32::from(request.area[1])), (0x9c, u32::from(request.area[0])),
         (0xa0, u32::from(request.area[2])), (0xa4, request.pair_word), (0xa8, request.program_word), (0xac, u32::from(request.rate_flag)),
         (0xb0, request.program), (0xb4, request.request), (0xb8, request.eligible), (0xc8, u32::from(request.scale_change)),
     ];
@@ -213,7 +213,7 @@ pub fn selection_request(request: &SelectionRequest, region: SelectionRegion) ->
 pub fn selection_window(window: &SelectionWindow, grid: SharedAddress, mut put: impl FnMut(usize, &[u8])) {
     let words: [(usize, u32); 27] = [
         (0x00, window.kind), (0x04, window.selection), (0x08, window.updated_position), (0x10, window.focus_word),
-        (0x14, window.lens), (0x18, window.lens_reference), (0x1c, window.mode_rule), (0x20, window.second_word),
+        (0x14, window.lens), (0x18, window.lens_reference), (0x1c, window.mode_rule), (0x20, window.second_word.0),
         (0x24, window.mode_word), (0x28, window.request), (0x30, window.clock), (0x34, window.rate),
         (0x38, window.context[0]), (0x3c, window.context[1]), (0x40, window.context[2]), (0x60, window.rate_limit),
         (0x68, window.ratio[0]), (0x6c, window.ratio[1]), (0x70, u32::from(window.converted)), (0x74, window.both_modes),
@@ -238,10 +238,10 @@ pub fn selection_setting(setting: &SelectionSetting, address: SharedAddress, mut
         (0x00, 1), (0x04, 3), (0x08, setting.lens), (0x0c, setting.shot_word), (0x14, setting.category), (0x30, 0),
         (0x34, setting.one_mode), (0x40, setting.context_word), (0x50, setting.selection), (0x54, setting.updated_position),
         (0x5c, setting.mode_word), (0x64, setting.setting_word), (0x68, setting.grid_kind), (0x6c, setting.focus_word),
-        (0x70, setting.fourth_word), (0x74, setting.request), (0x78, setting.rate_mode), (0x7c, setting.word),
-        (0x84, setting.selection_word), (0x8c, setting.lens_reference), (0x98, setting.eighth_word), (0x9c, setting.mode_rule),
-        (0xa0, setting.category_word), (0xa4, setting.change_category), (0xa8, setting.second_word), (0xac, setting.mode_flag),
-        (0xb0, u32::from(setting.rate_flag)), (0xb4, setting.fifth_word), (0xb8, setting.ninth_word), (0xdc, setting.tenth_word),
+        (0x70, setting.fourth_word.0), (0x74, setting.request), (0x78, setting.rate_mode), (0x7c, setting.word),
+        (0x84, setting.selection_word), (0x8c, setting.lens_reference), (0x98, setting.eighth_word.0), (0x9c, setting.mode_rule),
+        (0xa0, setting.category_word), (0xa4, setting.change_category), (0xa8, setting.second_word.0), (0xac, setting.mode_flag),
+        (0xb0, u32::from(setting.rate_flag)), (0xb4, setting.fifth_word.0), (0xb8, setting.ninth_word.0), (0xdc, setting.tenth_word.0),
         (0xe0, setting.lens_limit), (0xe4, setting.lens_word_index), (0xe8, setting.kind), (0xec, setting.kind_override),
         (0xf0, setting.adjustment), (0xf4, setting.profile_index), (0xf8, setting.program_word), (0xfc, setting.restore_position),
         (0x100, setting.lens), (0x118, address.0.wrapping_add(0x1c)), (0x11c, u32::from(setting.hardware_ready)),

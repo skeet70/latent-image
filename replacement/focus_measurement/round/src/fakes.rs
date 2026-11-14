@@ -422,6 +422,13 @@ impl<X> source::Ports for Ports<X> {
     }
     fn enable_processing_callbacks(&mut self, enabled: bool) { self.source.callbacks_enabled = Some(enabled); }
     fn published_strength(&mut self) -> SourceStrength { self.source.strength }
+    fn update_source_values(&mut self, summary: &Summary, means: &Summary) {
+        match self.source.published.as_mut() {
+            Some(Published::Fresh { summary: current, .. }) => *current = *summary,
+            Some(Published::Averaged { summary: current, means: current_means, .. }) => { *current = *summary; *current_means = *means; }
+            _ => {}
+        }
+    }
     fn publish_source(&mut self, _: RecordHandle, publication: SourcePublication<'_>) {
         if !self.records.granted { return; }
         let (published, strength) = match publication {
@@ -436,7 +443,7 @@ impl<X> source::Ports for Ports<X> {
 
 use crate::acquisition::ports::{
     AcquisitionBlock, AcquisitionSettings, Branch as AcquisitionBranch, ExposurePublication, ExposureRecordUpdate, GridInputs,
-    GridReference, ModeInputs, PositionInputs, PositionSlot, Program, ProgramChoice, ProgramInputs, ProgramTarget,
+    GridReference, AcquisitionMode, ModeInputs, PositionInputs, PositionSlot, Program, ProgramChoice, ProgramInputs, ProgramTarget,
     PublishedExposure, Range, RangeInputs, RateNotice, RateRecord, RecordView, Release, ReleasedResult, SelectionNotice,
     SelectionPosition, SelectionRecord, SelectionSlot, SettingEcho, ShotContext, StatisticsBuffer, TargetInputs,
 };
@@ -486,12 +493,40 @@ pub struct AcquisitionRecords {
     pub target: ProgramTarget,
     pub lens: ResourceIndex,
     pub statistics: [u16; 256],
+    pub statistics_banks: Option<[[u16; 256]; 4]>,
+    pub range_passthrough: bool,
     /// The extra statistics the release reads, from the first.
     pub extra: [u16; 600],
     pub releases: Vec<ReleaseRecord>,
     pub acquisition_result: Option<AcquisitionResult>,
     pub selection_result: Option<SelectionResult>,
-    pub word: u32,
+    pub grids: [AcquisitionGrid; 2],
+    pub submitted_grids: Vec<AcquisitionGrid>,
+    pub grid_publications: Vec<AcquisitionGrid>,
+    pub exposure_updates: Vec<ExposureRecordUpdate>,
+    pub primary_levels: Option<PrimaryLevels>,
+    pub selection_levels: Option<SelectionLevels>,
+    pub choices: Vec<ProgramChoice>,
+    pub positions: [[u32; 2]; 4],
+    pub restore_levels: Option<(u16, [u16; 2])>,
+    pub s1_level: i16,
+    pub windows: Vec<(AcquisitionBranch, SelectionWindow)>,
+    pub settings_written: Vec<(AcquisitionBranch, SelectionSetting)>,
+    pub restored_settings: Vec<(AcquisitionBranch, RestoredSetting)>,
+    pub shot_calls: Vec<ShotCall>,
+    pub saved: SavedExposure,
+    pub saved_publications: Vec<SavedExposure>,
+    pub program_queries: Vec<ProgramInputs>,
+    pub target_queries: Vec<TargetInputs>,
+    pub no_program: bool,
+    pub gain_step_conversion: fn(i32) -> GainStep,
+    pub grid_count: u32,
+    pub configuration: u8,
+    pub category: u32,
+    pub limits: SelectionLimits,
+    pub echo: SettingEcho,
+    pub views_read: usize,
+    pub settings_read: usize,
 }
 
 impl Default for AcquisitionRecords {
@@ -510,14 +545,27 @@ impl Default for AcquisitionRecords {
             target: ProgramTarget::default(),
             lens: ResourceIndex(0),
             statistics: [0; 256],
+            statistics_banks: None, range_passthrough: false,
             extra: [0; 600],
             releases: Vec::new(),
             acquisition_result: None,
             selection_result: None,
-            word: 0,
+            grids: [AcquisitionGrid([0; 1236]); 2], submitted_grids: Vec::new(), grid_publications: Vec::new(),
+            exposure_updates: Vec::new(), primary_levels: None, selection_levels: None, choices: Vec::new(),
+            positions: [[0; 2]; 4], restore_levels: None, s1_level: 0, windows: Vec::new(),
+            settings_written: Vec::new(), restored_settings: Vec::new(), shot_calls: Vec::new(),
+            saved: SavedExposure::default(), saved_publications: Vec::new(), program_queries: Vec::new(),
+            target_queries: Vec::new(), no_program: false, gain_step_conversion: |offset| GainStep(offset as u32), grid_count: 0, configuration: 0,
+            category: 0, limits: SelectionLimits::default(), echo: SettingEcho::default(), views_read: 0, settings_read: 0,
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShotCall { Restore(AcquisitionBranch, ResourceIndex), Backup(AcquisitionBranch), Write(SharedAddress), Copy(SharedAddress), Apply(u32), ValueChange, Save(u32, SavedSelection, u32) }
+
+fn branch_index(branch: AcquisitionBranch) -> usize { match branch { AcquisitionBranch::Live => 0, AcquisitionBranch::S1 => 1 } }
+fn slot_index(slot: PositionSlot) -> usize { match slot { PositionSlot::Reported => 0, PositionSlot::Lens => 1, PositionSlot::Current => 2, PositionSlot::Selected => 3 } }
 
 impl<X> Ports<X> {
     fn send(&mut self, traffic: AcquisitionTraffic) { self.outbound.push(Outbound::Acquisition(traffic)); }
@@ -525,8 +573,9 @@ impl<X> Ports<X> {
 
 impl<X> crate::acquisition::ports::Ports for Ports<X> {
     fn selection_memory(&mut self) -> &mut SelectionMemory { &mut self.acquisition.memory }
-    fn acquisition_settings(&mut self) -> AcquisitionSettings { AcquisitionSettings { traces: self.traces, ..self.acquisition.settings } }
-    fn record_view(&mut self, _: RecordHandle) -> RecordView { self.acquisition.view }
+    fn acquisition_settings(&mut self) -> AcquisitionSettings { self.acquisition.settings_read += 1; AcquisitionSettings { traces: self.traces, ..self.acquisition.settings } }
+    fn record_view(&mut self, _: RecordHandle) -> RecordView { self.acquisition.views_read += 1; self.acquisition.view }
+    fn s1_rate_enabled(&mut self, _: RecordHandle) -> bool { self.acquisition.view.rate_enabled == 1 }
     fn published_exposure(&mut self, _: RecordHandle) -> PublishedExposure { self.acquisition.published }
     fn publish_exposure(&mut self, _: RecordHandle, publication: &ExposurePublication) {
         let published = &mut self.acquisition.published;
@@ -547,11 +596,12 @@ impl<X> crate::acquisition::ports::Ports for Ports<X> {
         self.send(AcquisitionTraffic::Exposure(*publication));
     }
     fn publish_primary_levels(&mut self, _: RecordHandle, levels: &PrimaryLevels) {
+        self.acquisition.primary_levels = Some(*levels);
         self.acquisition.published.primary_levels = [levels.levels[0], levels.levels[1], levels.levels[2], levels.levels[3]];
     }
-    fn publish_grid(&mut self, _: RecordHandle, _: &AcquisitionGrid) {}
-    fn publish_selection_levels(&mut self, _: RecordHandle, levels: &SelectionLevels) { self.acquisition.published.selection_reference = levels.reference; }
-    fn update_exposure_record(&mut self, _: RecordHandle, _: ExposureRecordUpdate) {}
+    fn publish_grid(&mut self, _: RecordHandle, branch: AcquisitionBranch) { self.acquisition.grid_publications.push(self.acquisition.grids[branch_index(branch)]); }
+    fn publish_selection_levels(&mut self, _: RecordHandle, levels: &SelectionLevels) { self.acquisition.selection_levels = Some(*levels); self.acquisition.published.selection_reference = levels.reference; }
+    fn update_exposure_record(&mut self, _: RecordHandle, update: ExposureRecordUpdate) { self.acquisition.exposure_updates.push(update); }
     fn store_lens(&mut self, _: RecordHandle, lens: ResourceIndex) { self.acquisition.published.lens = lens; }
     fn store_reference(&mut self, _: RecordHandle, reference: u16) { self.acquisition.published.reference = reference; }
     fn store_selection_reference(&mut self, _: RecordHandle, reference: u16) { self.acquisition.published.selection_reference = reference; }
@@ -560,7 +610,7 @@ impl<X> crate::acquisition::ports::Ports for Ports<X> {
     fn stored_program(&mut self, _: RecordHandle) -> Program { self.acquisition.program }
     fn store_program(&mut self, _: RecordHandle, program: Program) { self.acquisition.program = program; }
     fn store_program_word(&mut self, _: RecordHandle, word: [u32; 2]) { self.acquisition.view.program_word = word; }
-    fn store_program_choice(&mut self, _: RecordHandle, _: &ProgramChoice) {}
+    fn store_program_choice(&mut self, _: RecordHandle, choice: &ProgramChoice) { self.acquisition.choices.push(*choice); }
     fn acquisition_block(&mut self, _: RecordHandle) -> AcquisitionBlock { self.acquisition.block }
     fn store_acquisition_block(&mut self, _: RecordHandle, block: &AcquisitionBlock) { self.acquisition.block = *block; }
     fn selection_record(&mut self, _: RecordHandle) -> SelectionRecord { self.acquisition.selection }
@@ -568,13 +618,11 @@ impl<X> crate::acquisition::ports::Ports for Ports<X> {
     fn selection_slot(&mut self, _: RecordHandle) -> SelectionSlot { self.acquisition.slot }
     fn publish_selection_slot(&mut self, _: RecordHandle, slot: &SelectionSlot) { self.acquisition.slot = *slot; }
     fn store_slot_word(&mut self, _: RecordHandle, word: u32) { self.acquisition.slot.word = word; }
-    fn position_pair(&mut self, _: RecordHandle, _: PositionSlot) -> [u32; 2] { [0; 2] }
-    fn store_position_pair(&mut self, _: RecordHandle, _: PositionSlot, _: [u32; 2]) {}
-    fn store_restore_levels(&mut self, _: RecordHandle, _: u16, _: [u16; 2]) {}
-    fn store_s1_level(&mut self, _: RecordHandle, _: i16) {}
+    fn position_pair(&mut self, _: RecordHandle, slot: PositionSlot) -> [u32; 2] { self.acquisition.positions[slot_index(slot)] }
+    fn store_position_pair(&mut self, _: RecordHandle, slot: PositionSlot, pair: [u32; 2]) { self.acquisition.positions[slot_index(slot)] = pair; }
+    fn store_restore_levels(&mut self, _: RecordHandle, reference: u16, levels: [u16; 2]) { self.acquisition.restore_levels = Some((reference, levels)); }
+    fn store_s1_level(&mut self, _: RecordHandle, level: i16) { self.acquisition.s1_level = level; }
     fn clear_grid_selection(&mut self, _: RecordHandle) {}
-    fn acquisition_word(&mut self, _: RecordHandle) -> u32 { self.acquisition.word }
-    fn store_acquisition_word(&mut self, _: RecordHandle, word: u32) { self.acquisition.word = word; }
     fn rate_record(&mut self, _: RecordHandle) -> RateRecord { RateRecord::default() }
     fn store_rate_selection(&mut self, _: RecordHandle, _: u32) {}
     fn clear_selection_reuse(&mut self, _: RecordHandle) {}
@@ -586,40 +634,45 @@ impl<X> crate::acquisition::ports::Ports for Ports<X> {
     fn collapse_index(&mut self, exposure: PipelineWord) -> u32 { exposure.0 }
     fn mapped_value(&mut self, first: u32, second: u32) -> u32 { first ^ second }
     fn lens_position(&mut self, _: [u32; 2], position: u32) -> u32 { position }
-    fn gain_step_for(&mut self, offset: i32) -> GainStep { GainStep(offset as u32) }
+    fn gain_step_for(&mut self, offset: i32) -> GainStep { (self.acquisition.gain_step_conversion)(offset) }
     fn acquisition_gain_step(&mut self, _: u32) -> GainStep { GainStep(3) }
     fn kind_decade(&mut self, kind: u32) -> u32 { kind }
     fn change_positions(&mut self, _: RecordHandle) -> [u32; 2] { [0; 2] }
-    fn select_program(&mut self, inputs: &ProgramInputs) -> Option<Program> { Some(Program(inputs.kind)) }
+    fn select_program(&mut self, inputs: &ProgramInputs) -> Option<Program> { self.acquisition.program_queries.push(*inputs); (!self.acquisition.no_program).then_some(Program(inputs.kind)) }
     fn program_adjustment(&mut self, _: Program) -> u32 { 0 }
     fn program_range_limit(&mut self, _: Program) -> u32 { 0 }
     fn program_policy(&mut self, _: Program) -> u32 { 0 }
     fn program_secondary_gate(&mut self, _: Program) -> u32 { 0 }
     fn program_scale(&mut self, _: Program) -> u32 { 0 }
     fn program_percent(&mut self, _: Program) -> u16 { 0 }
-    fn program_target(&mut self, _: &TargetInputs) -> ProgramTarget { self.acquisition.target }
-    fn program_range(&mut self, _: &RangeInputs) -> Range { self.acquisition.range }
+    fn program_target(&mut self, inputs: &TargetInputs) -> ProgramTarget { self.acquisition.target_queries.push(*inputs); self.acquisition.target }
+    fn program_range(&mut self, inputs: &RangeInputs) -> Range { if self.acquisition.range_passthrough { Range { level: inputs.level, first: inputs.first, second: inputs.second, ..self.acquisition.range } } else { self.acquisition.range } }
     fn program_lower_bound(&mut self, _: Program, _: u32) -> u32 { 0 }
     fn profile_percent(&mut self, _: Program, _: u16, _: ResourceIndex, _: u32) -> u16 { 0 }
-    fn grid_count(&mut self, _: u32, _: u32, _: u32, _: u32) -> u32 { 0 }
-    fn indexed_configuration(&mut self, _: u32, _: u32, _: u32) -> u8 { 0 }
-    fn level_category(&mut self, _: i16, _: u32, _: u32) -> u32 { 0 }
-    fn selection_limits(&mut self, _: u32, _: u32, _: u32, _: u32) -> SelectionLimits { SelectionLimits::default() }
-    fn fill_grid(&mut self, _: &GridInputs, _: &mut AcquisitionGrid) {}
-    fn snapshot_grid(&mut self, _: Statistics, _: &mut AcquisitionGrid) {}
+    fn grid_count(&mut self, _: ProfileSelection, _: AcquisitionMode, _: u32, _: u32) -> u32 { self.acquisition.grid_count }
+    fn indexed_configuration(&mut self, _: ProfileSelection, _: u32, offset: u32) -> u8 { self.acquisition.configuration.wrapping_add(offset as u8) }
+    fn level_category(&mut self, _: i16, _: ProfileSelection, _: u32) -> u32 { self.acquisition.category }
+    fn selection_limits(&mut self, _: ProfileSelection, _: u32, _: u32, _: u32) -> SelectionLimits { self.acquisition.limits }
+    fn grid_lead(&mut self, branch: AcquisitionBranch) -> xm1_saclac_interface::stock::round_acquisition::GridLead { xm1_saclac_interface::stock::round_acquisition::grid_lead(&self.acquisition.grids[branch_index(branch)]) }
+    fn set_grid_count(&mut self, branch: AcquisitionBranch, count: u32) { xm1_saclac_interface::stock::round_acquisition::set_grid_count(&mut self.acquisition.grids[branch_index(branch)], count); }
+    fn clear_grid_lead(&mut self, branch: AcquisitionBranch) { xm1_saclac_interface::stock::round_acquisition::clear_grid_lead(&mut self.acquisition.grids[branch_index(branch)]); }
+    fn set_grid_configuration(&mut self, branch: AcquisitionBranch, configuration: u8) { xm1_saclac_interface::stock::round_acquisition::set_grid_configuration(&mut self.acquisition.grids[branch_index(branch)], configuration); }
+    fn set_grid_inputs(&mut self, branch: AcquisitionBranch, inputs: &GridInputs) { xm1_saclac_interface::stock::round_acquisition::set_grid_inputs(&mut self.acquisition.grids[branch_index(branch)], inputs.timing.0, inputs.lens_word, inputs.positions, inputs.window); }
+    fn fill_grid(&mut self, _: AcquisitionBranch, _: &GridInputs) {}
+    fn snapshot_grid(&mut self, _: AcquisitionBranch, _: Statistics) {}
     fn adjustment_class(&mut self, _: u32, _: i16) -> u8 { 0 }
     fn adjustment_option(&mut self) -> u32 { 0 }
     fn refreshed_position(&mut self) -> u32 { 0 }
     fn mode_one(&mut self, _: &ModeInputs) -> u32 { 0 }
     fn both_modes(&mut self, _: &ModeInputs) -> u32 { 0 }
-    fn five_parameter_adjustment(&mut self, _: u32, _: u32, _: u32, _: u32, _: u32) -> u32 { 0 }
+    fn five_parameter_adjustment(&mut self, _: ProfileSelection, _: u32, _: u32, _: u32, _: u32) -> u32 { 0 }
     fn rate_divisor(&mut self, _: u32, _: u32, _: ResourceIndex, _: u16) -> u32 { 0 }
-    fn rate_limit(&mut self, _: u32, _: u32, _: u16) -> u32 { 0 }
+    fn rate_limit(&mut self, _: ProfileSelection, _: u32, _: u16) -> u32 { 0 }
     fn rate_mode(&mut self, _: u32, _: u16, _: u32, _: u32) -> u16 { 0 }
     fn selection_mode_category(&mut self, _: u32) -> u32 { 0 }
     fn offset_position(&mut self, level: i16, _: u16, _: u32) -> u16 { level as u16 }
-    fn clamp_selection_difference(&mut self, _: u32, _: ResourceIndex, level: i16, _: u16, _: u32, _: i16) -> i16 { level }
-    fn has_valid_offset(&mut self, _: u32, _: u32, _: i16) -> u32 { 0 }
+    fn clamp_selection_difference(&mut self, _: AcquisitionMode, _: ResourceIndex, level: i16, _: u16, _: u32, _: i16) -> i16 { level }
+    fn has_valid_offset(&mut self, _: ProfileSelection, _: AcquisitionMode, _: i16) -> u32 { 0 }
     fn allows_unflagged_selection(&mut self, _: u32, _: u16) -> bool { true }
     fn capture_selection_position(&mut self, _: AcquisitionBranch, _: &PositionInputs) -> SelectionPosition { SelectionPosition::default() }
     fn copy_rate_grid_source(&mut self, _: StatisticsBuffer) {}
@@ -629,7 +682,12 @@ impl<X> crate::acquisition::ports::Ports for Ports<X> {
     fn draw_rate(&mut self, _: SharedAddress, _: u32) {}
     fn draw_rate_status(&mut self, _: u16, _: u32, _: u32) {}
     fn rate_position(&mut self, _: RecordHandle) -> (u32, u16) { (0, 0) }
-    fn statistics_buffer(&mut self, _: StatisticsBuffer) -> [u16; 256] { self.acquisition.statistics }
+    fn statistics_buffer(&mut self, buffer: StatisticsBuffer) -> [u16; 256] {
+        if let (Some(banks), Some(result)) = (self.acquisition.statistics_banks, self.acquisition.acquisition_result) {
+            if let Some(index) = result.statistics.iter().position(|address| address.0 == buffer.0) { return banks[index]; }
+        }
+        self.acquisition.statistics
+    }
     fn extra_statistics(&mut self, values: &mut [u16]) { values.copy_from_slice(&self.acquisition.extra[..values.len()]); }
     fn store_release(&mut self, release: &Release<'_>) {
         self.acquisition.releases.push(ReleaseRecord {
@@ -648,22 +706,23 @@ impl<X> crate::acquisition::ports::Ports for Ports<X> {
     fn shot_reference_level(&mut self) -> u16 { 0 }
     fn shot_selection_word(&mut self) -> u32 { 0 }
     fn prepare_selection_defaults(&mut self, _: RecordHandle) -> ShotContext { ShotContext::default() }
-    fn restore_selection_setting(&mut self, _: AcquisitionBranch, _: ResourceIndex) {}
-    fn copy_reference_backup(&mut self, _: AcquisitionBranch) {}
-    fn write_saved_settings(&mut self, _: SharedAddress) {}
-    fn copy_selection_to_saved(&mut self, _: SharedAddress) {}
-    fn restore_selection_if_enabled(&mut self, _: RecordHandle, _: u32) {}
-    fn apply_selection_value_change(&mut self) {}
-    fn save_selection(&mut self, _: u32, _: &SavedSelection, _: u32) {}
+    fn restore_selection_setting(&mut self, branch: AcquisitionBranch, lens: ResourceIndex) { self.acquisition.shot_calls.push(ShotCall::Restore(branch, lens)); }
+    fn copy_reference_backup(&mut self, branch: AcquisitionBranch) { self.acquisition.shot_calls.push(ShotCall::Backup(branch)); }
+    fn write_saved_settings(&mut self, address: SharedAddress) { self.acquisition.shot_calls.push(ShotCall::Write(address)); }
+    fn copy_selection_to_saved(&mut self, address: SharedAddress) { self.acquisition.shot_calls.push(ShotCall::Copy(address)); }
+    fn restore_selection_if_enabled(&mut self, _: RecordHandle, position: u32) { self.acquisition.shot_calls.push(ShotCall::Apply(position)); }
+    fn apply_selection_value_change(&mut self) { self.acquisition.shot_calls.push(ShotCall::ValueChange); }
+    fn save_selection(&mut self, word: u32, saved: &SavedSelection, position: u32) { self.acquisition.shot_calls.push(ShotCall::Save(word, *saved, position)); }
     fn selected_grid_reference(&mut self, _: RecordHandle, reference: GridReference) -> GridReference { reference }
     fn refresh_hardware_state(&mut self) {}
     fn hardware_ready(&mut self) -> bool { false }
     fn clock_word(&mut self) -> u32 { 0 }
-    fn store_selection_window(&mut self, _: AcquisitionBranch, _: &SelectionWindow, _: &AcquisitionGrid) {}
-    fn store_selection_setting(&mut self, _: AcquisitionBranch, _: &SelectionSetting) {}
-    fn store_restored_setting(&mut self, _: AcquisitionBranch, _: &RestoredSetting) {}
-    fn setting_echo(&mut self, _: AcquisitionBranch) -> SettingEcho { SettingEcho::default() }
-    fn request_acquisition(&mut self, branch: AcquisitionBranch, request: &AcquisitionRequest, _: &AcquisitionGrid) {
+    fn store_selection_window(&mut self, branch: AcquisitionBranch, window: &SelectionWindow) { self.acquisition.windows.push((branch, *window)); }
+    fn store_selection_setting(&mut self, branch: AcquisitionBranch, setting: &SelectionSetting) { self.acquisition.settings_written.push((branch, *setting)); }
+    fn store_restored_setting(&mut self, branch: AcquisitionBranch, setting: &RestoredSetting) { self.acquisition.restored_settings.push((branch, *setting)); }
+    fn setting_echo(&mut self, _: AcquisitionBranch) -> SettingEcho { self.acquisition.echo }
+    fn request_acquisition(&mut self, branch: AcquisitionBranch, request: &AcquisitionRequest, grid: crate::acquisition::ports::EvaluationGrid) {
+        self.acquisition.submitted_grids.push(match grid { crate::acquisition::ports::EvaluationGrid::Empty => AcquisitionGrid([0; 1236]), crate::acquisition::ports::EvaluationGrid::Current => self.acquisition.grids[branch_index(branch)] });
         self.send(AcquisitionTraffic::Acquisition(branch, *request));
     }
     fn request_selection(&mut self, branch: AcquisitionBranch, request: &SelectionRequest) {
@@ -672,8 +731,8 @@ impl<X> crate::acquisition::ports::Ports for Ports<X> {
     fn acquisition_result(&mut self, _: Completed<'_>) -> Option<AcquisitionResult> { self.acquisition.acquisition_result }
     fn selection_result(&mut self, _: Completed<'_>) -> Option<SelectionResult> { self.acquisition.selection_result }
     fn shot_record_levels(&mut self, _: SharedAddress) -> ShotRecordLevels { ShotRecordLevels::default() }
-    fn saved_exposure(&mut self, _: SharedAddress) -> SavedExposure { SavedExposure::default() }
-    fn publish_saved_exposure(&mut self, _: RecordHandle, _: &SavedExposure) {}
+    fn saved_exposure(&mut self, _: SharedAddress) -> SavedExposure { self.acquisition.saved }
+    fn publish_saved_exposure(&mut self, _: RecordHandle, saved: &SavedExposure) { self.acquisition.saved_publications.push(*saved); }
     fn release_result(&mut self, released: ReleasedResult) { self.send(AcquisitionTraffic::Released(released)); }
 }
 
