@@ -89,7 +89,6 @@ pub struct CaptureCommand { pub second: u32, pub third: u32, pub fourth: u32 }
 /// Command24's parameter words and the profile's selection ratio.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Command24 { pub second: u32, pub third: u32, pub fourth: u32, pub fifth: u32, pub ratio: [u32; 2] }
-
 /// Bytes a requester built and statistics reads whole; its fields are the requester's to type.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Record<const BYTES: usize>(pub [u8; BYTES]);
