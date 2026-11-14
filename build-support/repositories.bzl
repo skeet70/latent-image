@@ -204,6 +204,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/startup_dispatch_shared.rs",
     "//emulation:fujimod-xm1/src/startup_joined.rs",
     "//emulation:fujimod-xm1/src/startup_sites.rs",
+    "//emulation:fujimod-xm1/src/stimulus.rs",
     "//emulation:fujimod-xm1/src/startup_tasks.rs",
     "//emulation:fujimod-xm1/src/idle_tasks.rs",
     "//emulation:fujimod-xm1/src/task_constructors.rs",

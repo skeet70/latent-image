@@ -19,16 +19,16 @@
 -- does not name the firmware is @no-verdict@, as is one that fails any other
 -- condition. Only a complete report whose cases all agree is @equal@.
 --
--- A cutover report may instead declare a milestone: both sides reach the
--- observation at the declared index, the observations are equal through it,
--- and after it the stock tail is a prefix of the owned tail. That relation
--- is the verdict @equal-up-to-milestone@, never @equal@.
+-- A cutover report declares no milestone: the parser refuses a report that
+-- carries one. A comparison that cannot claim full equality compares
+-- interface streams instead.
 --
 -- An interface-stream report may declare channels instead of one observation
 -- sequence. Its verdict then compares each channel's events in order and the
 -- declared causal pairs; the order between channels is not compared. The
--- first failing channel event is carried in 'verdictChannelDifference' and
--- the first failing declared pair in 'verdictCausalViolation'.
+-- first failing channel event is carried in 'verdictChannelDifference', the
+-- first failing declared pair in 'verdictCausalViolation' and each channel's
+-- tail allowance in 'verdictChannelTolerances'.
 module Emulation.Judge
   ( -- * Stock-side evidence
     StockEvidence (..)
@@ -41,9 +41,7 @@ module Emulation.Judge
   , Observation (..)
   , ObservationIndex (..)
   , Milestone (..)
-  , FirstDifference (..)
   , parseReport
-  , milestoneDifference
     -- * Verdicts
   , JudgeInput (..)
   , Firmware (..)
@@ -72,8 +70,10 @@ import qualified Data.Text as T
 import Data.Word (Word32, Word64)
 import Emulation.NativeObservation (parseWord32)
 import Emulation.InterfaceStream
-  ( CausalViolation (..)
+  ( AllowanceBasis (..)
+  , CausalViolation (..)
   , ChannelDifference (..)
+  , ChannelTolerance (..)
   , Selector (..)
   , channelNameText
   , occurrenceIndex
@@ -143,8 +143,8 @@ data ReportControl = ReportControl
   , reportControlDiagnostics :: [String]
   } deriving (Eq, Show)
 
--- | One ordered observation of a cutover comparison. Two observations are
--- equal when their JSON values are equal.
+-- | One event of a comparison's ordered stream. Two observations are equal
+-- when their JSON values are equal.
 newtype Observation = Observation { observationValue :: Value }
   deriving (Eq, Show)
 
@@ -152,18 +152,12 @@ newtype Observation = Observation { observationValue :: Value }
 newtype ObservationIndex = ObservationIndex { observationIndex :: Int }
   deriving (Eq, Show)
 
--- | A cutover milestone: its name and the observation that marks it.
+-- | The end milestone a report declares: its name and the observation index
+-- it names. The index is carried into the verdict and selects no observation;
+-- each side's marker event ends that side's compared stream.
 data Milestone = Milestone
   { milestoneName :: String
   , milestoneMark :: ObservationIndex
-  } deriving (Eq, Show)
-
--- | The first observation at which the milestone relation fails. A side that
--- has no observation at that index is @Nothing@.
-data FirstDifference = FirstDifference
-  { differenceAt :: ObservationIndex
-  , differenceStock :: Maybe Observation
-  , differenceOwned :: Maybe Observation
   } deriving (Eq, Show)
 
 data Report = Report
@@ -173,9 +167,6 @@ data Report = Report
   , reportCases :: [ReportCase]
   , reportControls :: [ReportControl]
   , reportDiagnostics :: [String]
-  , reportMilestone :: Maybe Milestone
-  , reportStockObservations :: [Observation]
-  , reportOwnedObservations :: [Observation]
   } deriving (Eq, Show)
 
 -- | Parse a comparison report. Field names follow the reports the suites
@@ -184,18 +175,15 @@ data Report = Report
 -- @differences@ and its @diagnostic_differences@; a control names @name@ and
 -- carries @reported@ (or @detected@); the report names its image digests as
 -- @firmware_sha256@, @image_sha256@, @image4_sha256@, @image5_sha256@,
--- @stock_id4_sha256@ or @stock_id5_sha256@, and @owned_sha256@. A cutover
--- report declares @milestone@ as @{"name": NAME, "observation": INDEX}@ and
--- its ordered @stock_observations@ and @owned_observations@. Missing fields
+-- @stock_id4_sha256@ or @stock_id5_sha256@, and @owned_sha256@. Missing fields
 -- are kept as missing so the verdict can name the unmet condition; a row that
--- is not an object, and a milestone that is not a named observation index,
--- are refused.
+-- is not an object, and a report that declares a milestone, are refused.
 parseReport :: B.ByteString -> Either String Report
 parseReport bytes = do
   value <- eitherDecodeStrict' bytes
   case value of
     Object root -> do
-      milestone <- parseMilestone root
+      refuseMilestone root
       let rows = list (get value "cases") ++ list (get value "replies")
           caseRows = mapMaybe parseCaseRow (zip [0 :: Int ..] rows)
           controlsValue = KM.lookup "controls" root
@@ -223,35 +211,16 @@ parseReport bytes = do
                 , reportCases = caseRows
                 , reportControls = controlRows
                 , reportDiagnostics = []
-                , reportMilestone = milestone
-                , reportStockObservations = parseObservations root "stock_observations"
-                , reportOwnedObservations = parseObservations root "owned_observations"
                 }
     _ -> Left "comparison report must be a JSON object"
 
-parseObservations :: KM.KeyMap Value -> String -> [Observation]
-parseObservations root key = map Observation (list (get (Object root) key))
-
--- | A milestone is declared by name and the index of the observation that
--- marks it. A report that carries one must declare both.
-parseMilestone :: KM.KeyMap Value -> Either String (Maybe Milestone)
-parseMilestone root = case KM.lookup "milestone" root of
-  Nothing -> Right Nothing
-  Just Null -> Right Nothing
-  Just (Object milestone) -> do
-    name <- case KM.lookup "name" milestone of
-      Just (String text) -> Right (T.unpack text)
-      _ -> Left "comparison report milestone has no name"
-    mark <- case KM.lookup "observation" milestone of
-      Just (Number number) -> maybe (Left badIndex) Right (toBoundedInteger number)
-      Just (String text) -> case reads (T.unpack text) of
-        [(index, "")] -> Right index
-        _ -> Left badIndex
-      _ -> Left badIndex
-    if mark < 0 then Left badIndex else Right (Just (Milestone name (ObservationIndex mark)))
-  Just _ -> Left "comparison report milestone is not an object"
-  where
-    badIndex = "comparison report milestone has no observation index"
+-- | A cutover report compares every case, so a report that declares a
+-- milestone is refused rather than judged on its cases alone.
+refuseMilestone :: KM.KeyMap Value -> Either String ()
+refuseMilestone root = case KM.lookup "milestone" root of
+  Nothing -> Right ()
+  Just Null -> Right ()
+  Just _ -> Left "comparison report declares a milestone; a cutover report compares every case"
 
 parseCaseRow :: (Int, Value) -> Maybe ReportCase
 parseCaseRow (_, String name) = Just ReportCase
@@ -392,14 +361,14 @@ data Verdict = Verdict
   , verdictDiagnostics :: [String]
   , verdictReasons :: [String]
   , verdictMilestone :: Maybe Milestone
-  , verdictFirstDifference :: Maybe FirstDifference
   , verdictChannelDifference :: Maybe ChannelDifference
   , verdictCausalViolation :: Maybe CausalViolation
+  , verdictChannelTolerances :: [ChannelTolerance]
   } deriving (Eq, Show)
 
 -- | Bumped when the rule changes; the verdict document names it.
 judgeVersion :: String
-judgeVersion = "4"
+judgeVersion = "6"
 
 judgeReport :: JudgeInput -> Report -> Verdict
 judgeReport input report =
@@ -410,24 +379,8 @@ judgeReport input report =
       }
     Just _ ->
       if not (null unmet) then base { verdictStatus = VerdictNoVerdict }
-        else case reportMilestone report of
-          Just milestone ->
-            case milestoneDifference milestone (reportStockObservations report) (reportOwnedObservations report) of
-              Nothing -> base
-                { verdictStatus = VerdictEqualUpToMilestone
-                , verdictMilestone = Just milestone
-                , verdictDifferentCases = []
-                }
-              Just difference -> base
-                { verdictStatus = VerdictDifferent
-                , verdictMilestone = Just milestone
-                , verdictFirstDifference = Just difference
-                , verdictDifferentCases = []
-                , verdictReasons = milestoneMisses milestone (reportStockObservations report) (reportOwnedObservations report)
-                }
-          Nothing ->
-            if not (null differing) then base { verdictStatus = VerdictDifferent, verdictDifferentCases = differing }
-              else base { verdictStatus = VerdictEqual }
+        else if not (null differing) then base { verdictStatus = VerdictDifferent, verdictDifferentCases = differing }
+          else base { verdictStatus = VerdictEqual }
   where
     reportOwned = reportOwnedDigest report
     conditions =
@@ -457,44 +410,10 @@ judgeReport input report =
       , verdictDiagnostics = diagnostics
       , verdictReasons = []
       , verdictMilestone = Nothing
-      , verdictFirstDifference = Nothing
       , verdictChannelDifference = Nothing
       , verdictCausalViolation = Nothing
+      , verdictChannelTolerances = []
       }
-
--- | The first observation at which the milestone relation fails, or
--- @Nothing@ when both sides reach the milestone, the observations are equal
--- through it, and the stock tail is a prefix of the owned tail.
-milestoneDifference :: Milestone -> [Observation] -> [Observation] -> Maybe FirstDifference
-milestoneDifference (Milestone _ (ObservationIndex mark)) stock owned = go 0 stock owned
-  where
-    go index (stockObservation : stockRest) (ownedObservation : ownedRest)
-      | stockObservation /= ownedObservation =
-          Just (FirstDifference (ObservationIndex index) (Just stockObservation) (Just ownedObservation))
-      | index == mark = tailDifference (index + 1) stockRest ownedRest
-      | otherwise = go (index + 1) stockRest ownedRest
-    go index [] (ownedObservation : _) =
-      Just (FirstDifference (ObservationIndex index) Nothing (Just ownedObservation))
-    go index (stockObservation : _) [] =
-      Just (FirstDifference (ObservationIndex index) (Just stockObservation) Nothing)
-    go _ [] [] =
-      Just (FirstDifference (ObservationIndex mark) Nothing Nothing)
-
-    tailDifference index (stockObservation : stockRest) (ownedObservation : ownedRest)
-      | stockObservation /= ownedObservation =
-          Just (FirstDifference (ObservationIndex index) (Just stockObservation) (Just ownedObservation))
-      | otherwise = tailDifference (index + 1) stockRest ownedRest
-    tailDifference _ [] _ = Nothing
-    tailDifference index (stockObservation : _) [] =
-      Just (FirstDifference (ObservationIndex index) (Just stockObservation) Nothing)
-
--- | The sides that do not reach the milestone observation.
-milestoneMisses :: Milestone -> [Observation] -> [Observation] -> [String]
-milestoneMisses (Milestone name (ObservationIndex mark)) stock owned =
-  [ side ++ " does not reach milestone " ++ name ++ " at observation " ++ show mark
-  | (side, observations) <- [("stock", stock), ("owned", owned)]
-  , length observations <= mark
-  ]
 
 stockCondition :: Report -> Condition
 stockCondition report
@@ -571,7 +490,6 @@ verdictText verdict =
     ++ (if null (verdictReasons verdict) then "" else " reasons: " ++ intercalate "; " (verdictReasons verdict))
     ++ maybe "" (\milestone -> " milestone " ++ milestoneName milestone
         ++ " at observation " ++ show (observationIndex (milestoneMark milestone))) (verdictMilestone verdict)
-    ++ maybe "" (\difference -> " first-difference " ++ differenceText difference) (verdictFirstDifference verdict)
     ++ maybe "" (\difference -> " channel-difference "
         ++ T.unpack (channelNameText (differenceChannel difference))
         ++ " occurrence " ++ show (occurrenceIndex (differenceOccurrence difference))
@@ -579,6 +497,20 @@ verdictText verdict =
         ++ " owned " ++ maybe "absent" valueText (differenceChannelOwned difference)) (verdictChannelDifference verdict)
     ++ maybe "" (\violation -> " causal-violation observation " ++ show (violationObservation violation)
         ++ ": " ++ violationReason violation) (verdictCausalViolation verdict)
+    ++ tailsText (verdictChannelTolerances verdict)
+
+-- | The channels whose two sides differ in length, with the allowance each
+-- was judged under.
+tailsText :: [ChannelTolerance] -> String
+tailsText tolerances = case
+    [ T.unpack (channelNameText (toleranceChannel tolerance))
+        ++ " stock " ++ show (toleranceStockEvents tolerance)
+        ++ " owned " ++ show (toleranceOwnedEvents tolerance)
+        ++ " allowance " ++ show (toleranceAllowance tolerance)
+    | tolerance <- tolerances
+    , toleranceStockEvents tolerance /= toleranceOwnedEvents tolerance ] of
+  [] -> ""
+  tails -> " tails: " ++ intercalate ", " tails
 
 milestoneJson :: Milestone -> Value
 milestoneJson milestone = object
@@ -586,24 +518,8 @@ milestoneJson milestone = object
   , ("observation", toJSON (observationIndex (milestoneMark milestone)))
   ]
 
-differenceText :: FirstDifference -> String
-differenceText difference =
-  show (observationIndex (differenceAt difference))
-    ++ " stock " ++ maybe "absent" observationText (differenceStock difference)
-    ++ " owned " ++ maybe "absent" observationText (differenceOwned difference)
-
-observationText :: Observation -> String
-observationText observation = valueText (observationValue observation)
-
 valueText :: Value -> String
 valueText value = take 200 (BL8.unpack (encode value))
-
-firstDifferenceJson :: FirstDifference -> Value
-firstDifferenceJson difference = object
-  [ ("observation", toJSON (observationIndex (differenceAt difference)))
-  , ("stock", maybe Null observationValue (differenceStock difference))
-  , ("owned", maybe Null observationValue (differenceOwned difference))
-  ]
 
 selectorJson :: Selector -> Value
 selectorJson (Selector fields) = Object fields
@@ -622,6 +538,26 @@ causalViolationJson violation = object
   , ("first", selectorJson (violationFirst violation))
   , ("then", selectorJson (violationThen violation))
   , ("reason", toJSON (violationReason violation))
+  ]
+
+allowanceBasisLabel :: AllowanceBasis -> String
+allowanceBasisLabel NoMilestone = "no-milestone"
+allowanceBasisLabel OrderedDefault = "ordered-default"
+allowanceBasisLabel TimeDrivenDefault = "time-driven-default"
+allowanceBasisLabel (DeclaredAllowance _) = "declared"
+
+channelToleranceJson :: ChannelTolerance -> Value
+channelToleranceJson tolerance = object
+  [ ("channel", toJSON (channelNameText (toleranceChannel tolerance)))
+  , ("time_driven", toJSON (toleranceTimeDriven tolerance))
+  , ("tail_allowance", toJSON (toleranceAllowance tolerance))
+  , ("allowance_basis", toJSON (allowanceBasisLabel (toleranceBasis tolerance)))
+  , ("allowance_reason", case toleranceBasis tolerance of
+      DeclaredAllowance reason -> toJSON reason
+      _ -> Null)
+  , ("stock_events", toJSON (toleranceStockEvents tolerance))
+  , ("owned_events", toJSON (toleranceOwnedEvents tolerance))
+  , ("tail_used", toJSON (abs (toleranceStockEvents tolerance - toleranceOwnedEvents tolerance)))
   ]
 
 verdictJson :: Verdict -> Value
@@ -646,9 +582,9 @@ verdictJson verdict = object
   , ("diagnostics", toJSON (verdictDiagnostics verdict))
   , ("reasons", toJSON (verdictReasons verdict))
   , ("milestone", maybe Null milestoneJson (verdictMilestone verdict))
-  , ("first_difference", maybe Null firstDifferenceJson (verdictFirstDifference verdict))
   , ("channel_difference", maybe Null channelDifferenceJson (verdictChannelDifference verdict))
   , ("causal_violation", maybe Null causalViolationJson (verdictCausalViolation verdict))
+  , ("channel_tolerances", toJSON (map channelToleranceJson (verdictChannelTolerances verdict)))
   ]
 
 -- | Only @equal@ is a pass. A @no-verdict@ and a @not-run@ are never reported

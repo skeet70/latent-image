@@ -9,6 +9,7 @@ module Emulation.ObservationStream
   ( TraceHitSource (..)
   , TraceHitSnapshot (..)
   , emulatorTraceHitSource
+  , freezeTraceHitSource
   , foldTraceHitSources
   , TraceHitFormat (..)
   , TraceHitRef (..)
@@ -61,6 +62,17 @@ data TraceHitSource = TraceHitSource
 emulatorTraceHitSource :: Emulator -> TraceHitCursor -> TraceHitCursor -> TraceHitSnapshot -> TraceHitSource
 emulatorTraceHitSource emulator start end snapshot =
   TraceHitSource start end snapshot (emulatorTraceHitPage emulator)
+
+-- | Reads SOURCE now and returns a source that replays those rows. A fold that runs after the guest
+-- recorded more hits reads the frozen rows instead of the ring, whose total has moved past
+-- 'sourceSnapshot' by then.
+freezeTraceHitSource :: TraceHitSource -> IO TraceHitSource
+freezeTraceHitSource source = do
+  hits <- reverse <$> foldTraceHitSources [source] (\rows hit -> pure (hit : rows)) []
+  let TraceHitSnapshot snapshot = sourceSnapshot source
+      page (TraceHitCursor from) (TraceHitLimit limit) =
+        pure (TraceHitPage snapshot (TraceHitCursor from) (take limit (drop from hits)))
+  pure (TraceHitSource (TraceHitCursor 0) (TraceHitCursor (length hits)) (sourceSnapshot source) page)
 
 data TraceHitFormat = TraceHitFormat
   { formatLrLabels :: [String]
@@ -333,7 +345,9 @@ foldTraceHitSources sources step initial = do
                       limit = TraceHitLimit (min 16 remaining)
                   page <- sourcePage source (TraceHitCursor from) limit
                   if tracePageCount page /= snapshot
-                    then writeIORef failure (Just "trace-hit page count changed while collecting a segment")
+                    then writeIORef failure (Just ("trace-hit page count changed while collecting a segment: rows "
+                      ++ show (cursorValue (sourceStart source)) ++ ".." ++ show end ++ " frozen at "
+                      ++ show snapshot ++ ", the page reports " ++ show (tracePageCount page)))
                     else if tracePageCursor page /= TraceHitCursor from
                       then writeIORef failure (Just "trace-hit page cursor differs from the requested cursor")
                       else if length (tracePageHits page) /= min 16 remaining
