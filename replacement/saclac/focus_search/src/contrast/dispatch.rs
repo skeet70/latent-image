@@ -7,7 +7,7 @@ use super::sample::{Range, Stage};
 use super::{BridgeDrive, Context, Phase, Platform, ScanFrame};
 use crate::intake::{self, Intake, IntakePorts, IntakeView};
 use crate::live::{LiveStrategy, Measurement};
-use xm1_saclac_controllers::search::{FocusSearch, LensPosition, SearchDecision, SearchInput, SearchStep};
+use xm1_saclac_controllers::search::{FocusSearch, LensPosition, SearchDecision, SearchInput, SearchStep, SearchTerminal};
 use xm1_saclac_interface::search::{BridgeReport, Evaluation, SearchRecord};
 
 /// Stock X-M1 1.50's contrast search as a strategy of the live search.
@@ -51,6 +51,7 @@ impl<P: Platform + IntakePorts> FocusSearch for ContrastSearch<P> {
                 SearchStep::Measure
             }
             SearchInput::Cancel => context.cancel(platform),
+            SearchInput::ResumePending => context.cancel_watch(platform),
         })
     }
 }
@@ -83,6 +84,8 @@ impl<P: Platform + IntakePorts> LiveStrategy for ContrastSearch<P> {
     fn release(&mut self, context: &Context) -> BridgeDrive { context.drive(&mut self.platform, false).1 }
 
     fn accepts_begin(&self, context: &Context) -> bool { matches!(context.stage, Stage::Direction | Stage::Focus) }
+
+    fn finished(&mut self, _: &mut Context, _: SearchTerminal) {}
 }
 
 impl Context {
@@ -126,9 +129,7 @@ impl Context {
         self.recent_peak = taken.scan;
     }
 
-    /// A stop, suspension or resumption with requests in flight: a scanning peak search, the
-    /// monitor's included, stops its drive and interrupts a scan still moving (0xf0ca70,
-    /// 0xf0cae8, 0xf0cc60, 0xf0cce0).
+    /// Stop or suspend with requests in flight (0xf0ca70, 0xf0cae8).
     fn cancel(&mut self, platform: &mut impl Platform) -> SearchStep<BridgeDrive> {
         let scanning = match self.stage {
             Stage::PeakSearch => true,
@@ -136,6 +137,15 @@ impl Context {
             _ => false,
         };
         if !scanning {
+            return SearchStep::Measure;
+        }
+        self.stop_scan(platform);
+        self.interrupt_scan()
+    }
+
+    /// Resume with requests in flight (0xf0cc60, 0xf0cce0).
+    fn cancel_watch(&mut self, platform: &mut impl Platform) -> SearchStep<BridgeDrive> {
+        if self.monitor.following_lens() {
             return SearchStep::Measure;
         }
         self.stop_scan(platform);

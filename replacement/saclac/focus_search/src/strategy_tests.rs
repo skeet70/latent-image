@@ -498,3 +498,76 @@ fn the_evaluation_record_marks_the_first_frame_of_a_search() {
     harness.input(SearchInput::Sample(Measurement { evaluation: evaluation(100), bridge_busy: false }));
     assert!(!harness.search.take_in(&mut harness.context).first);
 }
+
+#[test]
+fn fault_drain_resume_retains_the_scene_watch_without_a_stop_request() {
+    use crate::live::{LaneEvent, LaneStatus, LiveSearch, Ports};
+    use crate::requests::{BridgeMotion, Request};
+    use xm1_saclac_interface::search::SearchRecord;
+
+    #[derive(Debug, Eq, PartialEq)]
+    enum Out { Evaluate, Travel, Stop, Release }
+    #[derive(Default)]
+    struct Peers(Vec<Out>);
+    impl Ports<SearchRecord, BridgeDrive> for Peers {
+        fn fault(&mut self) { panic!("unexpected lane fault"); }
+        fn request(&mut self, request: Request<SearchRecord, BridgeDrive>) {
+            self.0.push(match request {
+                Request::Evaluate(_) => Out::Evaluate,
+                Request::BridgeStop => Out::Stop,
+                Request::Bridge { motion: BridgeMotion::Travel(_), .. } => Out::Travel,
+                Request::Bridge { motion: BridgeMotion::Release, .. } => Out::Release,
+            });
+        }
+    }
+    let mut fake = Fake::new();
+    fake.retained.valid = 0;
+    fake.set(Setting::ProbeDirection, 8);
+    fake.set(Setting::ScanDriveDisabled, 0);
+    fake.record.stage.first_pass = 1;
+    fake.steps = vec![(StepKind::Direction, DIRECTION_STEP), (StepKind::Scan, SCAN_STEP)];
+    let mut lane = LiveSearch::new(ContrastSearch::new(fake), Context::new());
+    let mut peers = Peers::default();
+    assert_eq!(lane.handle(LaneEvent::Enable, &mut peers), LaneStatus::Complete);
+    assert_eq!(lane.handle(LaneEvent::Suspend, &mut peers), LaneStatus::Complete);
+    assert_eq!(lane.handle(LaneEvent::Resume, &mut peers), LaneStatus::Complete);
+    for _ in 0..3 {
+        assert_eq!(lane.handle(LaneEvent::Work, &mut peers), LaneStatus::Pending);
+        assert_eq!(lane.handle(LaneEvent::Evaluated(evaluation(100)), &mut peers), LaneStatus::Idle);
+    }
+    assert_eq!(lane.handle(LaneEvent::Work, &mut peers), LaneStatus::Pending);
+    assert_eq!(lane.handle(LaneEvent::LensReported(BridgeReport {
+        status: BridgeStatus::Fault, position: 0, class: LensClass(0),
+    }), &mut peers), LaneStatus::Idle);
+    assert_eq!(lane.handle(LaneEvent::Resume, &mut peers), LaneStatus::Pending);
+    assert_eq!(peers.0, [Out::Evaluate, Out::Evaluate, Out::Evaluate, Out::Travel, Out::Evaluate]);
+    assert_eq!(lane.handle(LaneEvent::Work, &mut peers), LaneStatus::Idle);
+    assert_eq!(lane.handle(LaneEvent::Evaluated(evaluation(100)), &mut peers), LaneStatus::Complete);
+    assert_eq!(lane.handle(LaneEvent::Work, &mut peers), LaneStatus::Pending);
+    assert_eq!(peers.0, [Out::Evaluate, Out::Evaluate, Out::Evaluate, Out::Travel, Out::Evaluate, Out::Evaluate]);
+}
+
+#[test]
+fn pending_resume_uses_the_retained_return_or_peak_watch_after_leaving_the_monitor() {
+    for (bias, stops) in [(5, false), (-500, true)] {
+        let mut harness = monitoring(|fake| {
+            fake.bias = bias;
+            fake.set(Setting::ScanDriveDisabled, 0);
+            fake.record.stage.first_pass = 1;
+        });
+        harness.sample(100);
+        harness.fake().lens = LensIdentity(1);
+        harness.sample(100);
+        harness.sample(100);
+        assert_eq!(harness.input(SearchInput::Resume), SearchStep::Measure);
+        harness.fake().effects.clear();
+        let step = harness.input(SearchInput::ResumePending);
+        if stops {
+            assert_eq!(harness.search.platform().effects, [Effect::ScanRefresh(false)]);
+            assert_eq!(step, SearchStep::Interrupt);
+        } else {
+            assert!(harness.search.platform().effects.is_empty());
+            assert_eq!(step, SearchStep::Measure);
+        }
+    }
+}

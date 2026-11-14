@@ -38,3 +38,10 @@ xm1_rust_host_test(
     data = glob(["src/**/*.rs"], exclude = ["src/lib.rs"]),
     rlib_deps = _HOST_DEPS,
 )
+
+xm1_rust_host_test(
+    name = "consumer-tests",
+    src = "consumer_tests.rs",
+    crate_name = "xm1_saclac_focus_search_consumer_tests",
+    rlib_deps = dict(_HOST_DEPS, xm1_saclac_focus_search = ":host"),
+)

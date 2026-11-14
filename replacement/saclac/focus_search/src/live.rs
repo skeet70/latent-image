@@ -29,6 +29,8 @@ pub trait LiveStrategy: FocusSearch<Sample = Measurement<Self::Evaluation>> {
     /// Whether a second `Begin` while searching is accepted; stock faults on it except in
     /// its direction and focus states (m23 row 1).
     fn accepts_begin(&self, context: &Self::Context) -> bool;
+    /// A terminal decision makes the lane quiescent; existing requests still drain.
+    fn finished(&mut self, context: &mut Self::Context, outcome: SearchTerminal);
 }
 
 pub trait Ports<Record, Drive> {
@@ -59,6 +61,8 @@ pub enum LaneStatus {
     Pending,
     Unhandled,
     Idle,
+    /// A strategy result, retained by the quiescent lane until Resume or Stop.
+    Terminal(SearchTerminal),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -70,6 +74,7 @@ enum Activity {
     Suspending,
     Suspended,
     Resuming,
+    Terminal(SearchTerminal),
     /// A bridge fault arrived with an evaluation in flight.
     FaultDraining,
     FaultReleasing,
@@ -86,6 +91,13 @@ enum Lane {
     Stopping,
 }
 
+/// A terminal decision calls `LiveStrategy::finished` once and returns its typed outcome.
+/// Outside Stop, it enters a quiescent lane: Work returns the outcome without intake,
+/// and Suspend completes without entering monitoring. Evaluations drain without sampling;
+/// nonfault bridge reports still reach the strategy.
+/// Resume waits for both requests before sending `SearchInput::Resume`.
+/// Stop drains both requests and releases the lens, including after a terminal Cancel decision.
+/// A bridge fault retains the normal fault-release and halt lifecycle.
 pub struct LiveSearch<S: LiveStrategy> {
     strategy: S,
     context: S::Context,
@@ -107,13 +119,15 @@ impl<S: LiveStrategy> LiveSearch<S> {
     pub fn handle(&mut self, event: LaneEvent<S::Evaluation>, ports: &mut impl Ports<S::Record, S::Drive>) -> LaneStatus {
         match (self.lane, event) {
             (Lane::Idle, LaneEvent::Initialize) => {
-                self.search(LaneEvent::Initialize, ports);
-                LaneStatus::Complete
+                let status = self.search(LaneEvent::Initialize, ports);
+                if matches!(status, LaneStatus::Terminal(_)) {
+                    self.lane = Lane::Active;
+                }
+                status
             }
             (Lane::Idle, LaneEvent::Enable) => {
                 self.lane = Lane::Active;
-                self.search(LaneEvent::Enable, ports);
-                LaneStatus::Complete
+                self.search(LaneEvent::Enable, ports)
             }
             (Lane::Idle, LaneEvent::Stop) | (Lane::Active, LaneEvent::Enable) => LaneStatus::Complete,
             (Lane::Idle, _) => LaneStatus::Unhandled,
@@ -143,14 +157,10 @@ impl<S: LiveStrategy> LiveSearch<S> {
         match (self.activity, event) {
             (_, LaneEvent::Other) => LaneStatus::Unhandled,
 
-            (A::Idle, LaneEvent::Initialize) => {
-                self.advance(SearchInput::Initialize, ports);
-                LaneStatus::Complete
-            }
+            (A::Idle, LaneEvent::Initialize) => self.advance(SearchInput::Initialize, LaneStatus::Complete, ports),
             (A::Idle, LaneEvent::Enable) => {
                 self.activity = A::Searching;
-                self.advance(SearchInput::Begin, ports);
-                LaneStatus::Complete
+                self.advance(SearchInput::Begin, LaneStatus::Complete, ports)
             }
             (A::Searching, LaneEvent::Enable) if self.strategy.accepts_begin(&self.context) => LaneStatus::Complete,
             (A::Idle | A::Halted, LaneEvent::Suspend | LaneEvent::Resume) | (A::Idle, LaneEvent::Stop) => LaneStatus::Complete,
@@ -160,10 +170,13 @@ impl<S: LiveStrategy> LiveSearch<S> {
             }
             (_, LaneEvent::Initialize | LaneEvent::Enable) => self.refuse(ports),
 
-            (A::Searching | A::Suspended, LaneEvent::Stop) => {
+            (A::Searching | A::Suspended | A::Terminal(_), LaneEvent::Stop) => {
+                let terminal = matches!(self.activity, A::Terminal(_));
                 if self.in_flight() {
                     self.activity = A::Draining;
-                    self.advance(SearchInput::Cancel, ports);
+                    if !terminal {
+                        return self.advance(SearchInput::Cancel, LaneStatus::Pending, ports);
+                    }
                 } else {
                     self.release(A::Releasing, ports);
                 }
@@ -182,18 +195,25 @@ impl<S: LiveStrategy> LiveSearch<S> {
             (A::Searching, LaneEvent::Suspend) => {
                 if self.in_flight() {
                     self.activity = A::Suspending;
-                    self.advance(SearchInput::Cancel, ports);
-                    LaneStatus::Pending
+                    self.advance(SearchInput::Cancel, LaneStatus::Pending, ports)
                 } else {
                     self.suspend(ports)
                 }
             }
+            (A::Terminal(_), LaneEvent::Suspend) => LaneStatus::Complete,
             (_, LaneEvent::Suspend) => self.refuse(ports),
 
             (A::Suspended | A::FaultDraining, LaneEvent::Resume) => {
                 if self.in_flight() {
                     self.activity = A::Resuming;
-                    self.advance(SearchInput::Cancel, ports);
+                    self.advance(SearchInput::ResumePending, LaneStatus::Pending, ports)
+                } else {
+                    self.resume(ports)
+                }
+            }
+            (A::Terminal(_), LaneEvent::Resume) => {
+                if self.in_flight() {
+                    self.activity = A::Resuming;
                     LaneStatus::Pending
                 } else {
                     self.resume(ports)
@@ -211,14 +231,19 @@ impl<S: LiveStrategy> LiveSearch<S> {
                     LaneStatus::Idle
                 }
             }
+            (A::Terminal(outcome), LaneEvent::Work) => LaneStatus::Terminal(outcome),
             (_, LaneEvent::Work) => LaneStatus::Idle,
 
             (A::Searching | A::Suspended, LaneEvent::Evaluated(evaluation)) => {
                 if self.evaluating {
                     self.evaluating = false;
-                    self.advance(SearchInput::Sample(Measurement { evaluation, bridge_busy: self.bridging }), ports);
+                    return self.advance(SearchInput::Sample(Measurement { evaluation, bridge_busy: self.bridging }), LaneStatus::Idle, ports);
                 }
                 LaneStatus::Idle
+            }
+            (A::Terminal(outcome), LaneEvent::Evaluated(_)) => {
+                self.evaluating = false;
+                LaneStatus::Terminal(outcome)
             }
             (A::Halted, LaneEvent::Evaluated(_)) => LaneStatus::Idle,
             (A::Suspending, LaneEvent::Evaluated(_)) => {
@@ -255,6 +280,19 @@ impl<S: LiveStrategy> LiveSearch<S> {
                     self.strategy.lens_reported(&mut self.context, report);
                 }
                 LaneStatus::Idle
+            }
+            (A::Terminal(outcome), LaneEvent::LensReported(report)) => {
+                self.bridging = false;
+                if report.status == BridgeStatus::Fault {
+                    if self.evaluating {
+                        self.activity = A::FaultDraining;
+                    } else {
+                        self.release(A::FaultReleasing, ports);
+                    }
+                } else {
+                    self.strategy.lens_reported(&mut self.context, report);
+                }
+                LaneStatus::Terminal(outcome)
             }
             (A::Suspending, LaneEvent::LensReported(report)) => {
                 self.bridging = false;
@@ -303,14 +341,12 @@ impl<S: LiveStrategy> LiveSearch<S> {
 
     fn suspend(&mut self, ports: &mut impl Ports<S::Record, S::Drive>) -> LaneStatus {
         self.activity = Activity::Suspended;
-        self.advance(SearchInput::Suspend, ports);
-        LaneStatus::Complete
+        self.advance(SearchInput::Suspend, LaneStatus::Complete, ports)
     }
 
     fn resume(&mut self, ports: &mut impl Ports<S::Record, S::Drive>) -> LaneStatus {
         self.activity = Activity::Searching;
-        self.advance(SearchInput::Resume, ports);
-        LaneStatus::Complete
+        self.advance(SearchInput::Resume, LaneStatus::Complete, ports)
     }
 
     fn release(&mut self, next: Activity, ports: &mut impl Ports<S::Record, S::Drive>) {
@@ -327,17 +363,19 @@ impl<S: LiveStrategy> LiveSearch<S> {
         }
     }
 
-    fn advance(&mut self, input: SearchInput<S::Sample>, ports: &mut impl Ports<S::Record, S::Drive>) {
+    fn advance(&mut self, input: SearchInput<S::Sample>, status: LaneStatus, ports: &mut impl Ports<S::Record, S::Drive>) -> LaneStatus {
         match self.strategy.advance(&mut self.context, input) {
             SearchDecision::Next(SearchStep::Measure) => {}
             SearchDecision::Next(SearchStep::Travel { travel, drive }) => self.bridge(BridgeMotion::Travel(travel), drive, ports),
             SearchDecision::Next(SearchStep::Interrupt) => ports.request(Request::BridgeStop),
-            // Stock's strategy never ends; one that does keeps the lens and watches the scene.
-            SearchDecision::Terminal(SearchTerminal::Focused(_) | SearchTerminal::Failed | SearchTerminal::Cancelled) => {
-                if self.activity == Activity::Searching {
-                    self.activity = Activity::Suspended;
+            SearchDecision::Terminal(outcome) => {
+                self.strategy.finished(&mut self.context, outcome);
+                if self.activity != Activity::Draining {
+                    self.activity = Activity::Terminal(outcome);
                 }
+                return LaneStatus::Terminal(outcome);
             }
         }
+        status
     }
 }
