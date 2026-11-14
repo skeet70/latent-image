@@ -437,8 +437,26 @@ pub struct ReleaseSettings {
 pub struct Release<'a> {
     pub classes: &'a [u8; 256],
     pub offsets: &'a [[u16; 256]; 4],
-    /// Present when the configuration copies the extra statistics.
-    pub extra: Option<&'a [u16]>,
+    /// Present when the grid is the primary snapshot's.
+    pub snapshot: Option<SnapshotRelease<'a>>,
+}
+
+/// What a release under a snapshot grid also writes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SnapshotRelease<'a> {
+    /// The extra statistics, moved by the release offset.
+    pub extra: &'a [u16],
+    /// Receives a whole copy of the primary statistics buffers a 0x3d00 request names.
+    pub copy: StatisticsBuffer,
+}
+
+/// A finished calc1 result the round hands back.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReleasedResult {
+    /// A 0x3d00 result.
+    Acquisition(SharedAddress),
+    /// A 0x3d01 result with its shot and saved records when it carries shot data.
+    Selection { result: SharedAddress, shot: Option<(SharedAddress, SharedAddress)> },
 }
 
 /// The profile records, the layers and the peers the acquisition works through.
@@ -494,7 +512,8 @@ pub trait Ports: Pipeline + Exposure + Adjustment + Trace {
     fn kind_decade(&mut self, kind: u32) -> u32;
     fn change_positions(&mut self, record: RecordHandle) -> [u32; 2];
 
-    fn select_program(&mut self, inputs: &ProgramInputs) -> Program;
+    /// `None` when the adjustment layer chooses no program.
+    fn select_program(&mut self, inputs: &ProgramInputs) -> Option<Program>;
     fn program_adjustment(&mut self, program: Program) -> u32;
     fn program_range_limit(&mut self, program: Program) -> u32;
     fn program_policy(&mut self, program: Program) -> u32;
@@ -576,5 +595,5 @@ pub trait Ports: Pipeline + Exposure + Adjustment + Trace {
     fn saved_exposure(&mut self, record: SharedAddress) -> SavedExposure;
     fn publish_saved_exposure(&mut self, record: RecordHandle, exposure: &SavedExposure);
     /// Hands calc1's records of a finished result back to calc1.
-    fn release_result(&mut self, result: SharedAddress, records: Option<(SharedAddress, SharedAddress)>);
+    fn release_result(&mut self, released: ReleasedResult);
 }
