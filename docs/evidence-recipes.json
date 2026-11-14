@@ -1487,4 +1487,57 @@
       {"name":"stock_checkpoint_created","path":"private-data/scratch/StimulusTicks/runs/20261113T200722Z-instruction-clock-shoot-without-lens/result/stock-instructions.json","pointer":["checkpoint","key"]}
     ]
   }
+  ,{
+    "id": "E-SACLAC-INTERFACE-ROUTES-150",
+    "claim": "Judge {{judge_version}} compares the driver-over-stock-module image {{owned_image}} against X-M1 1.50 on the nine instruction-timed routes. Route verdicts, detected controls and used tails: {{routes}}.",
+    "scope": "Driver, router and dispatcher over retained stock actions, not whole-saclac ownership. Cold boot ends at shooting-menu; resumed routes compare their complete window through window-end. Firmware {{firmware_sha256}}. Completion callback arguments are not captured; internal completion payloads are not compared.",
+    "notes": "Every time-driven channel has allowance one; every ordered channel has allowance zero. The cyclic callback/post may straddle the independently reached menu endpoint. Per-wake requests, replies and callbacks may straddle an observation bound by one occurrence; the shorter sequence must remain an exact prefix. No ordered allowance is granted. Callback argument capture is required before whole-saclac comparison. Instruction-timed stimuli are not phase-locked. Cardless playback covers idle wakes, not saved-image playback. Trigger-to-effect causal pairs remain undeclared.",
+    "artifacts": [
+      "private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/source-run.txt",
+      "private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/inputs.sha256",
+      "private-data/scratch/SaclacInterface/runs/20261114T022710Z-interface15-f6-instructions/result/capture/crossing.json",
+      "private-data/scratch/SaclacInterface/runs/20261114T022710Z-interface15-f6-instructions/result/shoot-without-lens/crossing.json"
+    ],
+    "facts": [
+      {"name":"execution","path":"private-data/scratch/SaclacInterface/runs/20261114T023037Z-interface15-execution/result/execution.json","pointer":[]},
+      {"name":"firmware_sha256","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/cold-boot/verdict.json","pointer":["firmware_sha256"]},
+      {"name":"judge_version","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/cold-boot/verdict.json","pointer":["judge_version"]},
+      {"name":"owned_image","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/cold-boot/verdict.json","pointer":["image_sha256"]},
+      {"name":"routes","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/summary.json","pointer":[]},
+      {"name":"cold_boot_verdict","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/cold-boot/verdict.json","pointer":["verdict"]},
+      {"name":"cold_boot_control","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/cold-boot/control-as-candidate-verdict.json","pointer":["verdict"]},
+      {"name":"half_press_verdict","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/half-press/verdict.json","pointer":["verdict"]},
+      {"name":"half_press_image","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/half-press/verdict.json","pointer":["image_sha256"]},
+      {"name":"half_press_firmware","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/half-press/verdict.json","pointer":["firmware_sha256"]},
+      {"name":"half_press_control","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/half-press/control-as-candidate-verdict.json","pointer":["verdict"]},
+      {"name":"mode_dial_verdict","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/mode-dial/verdict.json","pointer":["verdict"]},
+      {"name":"mode_dial_image","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/mode-dial/verdict.json","pointer":["image_sha256"]},
+      {"name":"mode_dial_firmware","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/mode-dial/verdict.json","pointer":["firmware_sha256"]},
+      {"name":"mode_dial_control","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/mode-dial/control-as-candidate-verdict.json","pointer":["verdict"]},
+      {"name":"fn_verdict","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/fn/verdict.json","pointer":["verdict"]},
+      {"name":"fn_image","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/fn/verdict.json","pointer":["image_sha256"]},
+      {"name":"fn_firmware","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/fn/verdict.json","pointer":["firmware_sha256"]},
+      {"name":"fn_control","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/fn/control-as-candidate-verdict.json","pointer":["verdict"]},
+      {"name":"fn_down_verdict","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/fn-down/verdict.json","pointer":["verdict"]},
+      {"name":"fn_down_image","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/fn-down/verdict.json","pointer":["image_sha256"]},
+      {"name":"fn_down_firmware","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/fn-down/verdict.json","pointer":["firmware_sha256"]},
+      {"name":"fn_down_control","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/fn-down/control-as-candidate-verdict.json","pointer":["verdict"]},
+      {"name":"fn_auto_verdict","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/fn-auto/verdict.json","pointer":["verdict"]},
+      {"name":"fn_auto_image","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/fn-auto/verdict.json","pointer":["image_sha256"]},
+      {"name":"fn_auto_firmware","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/fn-auto/verdict.json","pointer":["firmware_sha256"]},
+      {"name":"fn_auto_control","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/fn-auto/control-as-candidate-verdict.json","pointer":["verdict"]},
+      {"name":"capture_verdict","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/capture/verdict.json","pointer":["verdict"]},
+      {"name":"capture_image","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/capture/verdict.json","pointer":["image_sha256"]},
+      {"name":"capture_firmware","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/capture/verdict.json","pointer":["firmware_sha256"]},
+      {"name":"capture_control","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/capture/control-as-candidate-verdict.json","pointer":["verdict"]},
+      {"name":"shoot_verdict","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/shoot-without-lens/verdict.json","pointer":["verdict"]},
+      {"name":"shoot_image","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/shoot-without-lens/verdict.json","pointer":["image_sha256"]},
+      {"name":"shoot_firmware","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/shoot-without-lens/verdict.json","pointer":["firmware_sha256"]},
+      {"name":"shoot_control","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/shoot-without-lens/control-as-candidate-verdict.json","pointer":["verdict"]},
+      {"name":"playback_verdict","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/playback/verdict.json","pointer":["verdict"]},
+      {"name":"playback_image","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/playback/verdict.json","pointer":["image_sha256"]},
+      {"name":"playback_firmware","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/playback/verdict.json","pointer":["firmware_sha256"]},
+      {"name":"playback_control","path":"private-data/scratch/SaclacInterface/runs/20261114T022633Z-interface15-nine-receipt/result/playback/control-as-candidate-verdict.json","pointer":["verdict"]}
+    ]
+  }
 ]
