@@ -75,3 +75,14 @@ fn a_single_level_at_the_reference_is_not_a_range_unless_any_range_is_allowed() 
     assert!(selection.range_is_valid(&mut Exact(false)));
     assert!(bank(&[4], &[Applied]).range_is_valid(&mut Exact(false)));
 }
+
+#[test]
+fn evaluated_count_includes_nonleading_rows_and_slots_outside_the_span() {
+    let mut selection = bank(&[1, 2], &[RowPhase::Applied, RowPhase::Requested, RowPhase::Applied]);
+    selection.rows[7].phase = RowPhase::Applied;
+    assert_eq!(selection.evaluated_count(), 3);
+    selection.count = 0;
+    assert_eq!(selection.evaluated_count(), 3);
+    selection.rows.fill(Row::default());
+    assert_eq!(selection.evaluated_count(), 0);
+}

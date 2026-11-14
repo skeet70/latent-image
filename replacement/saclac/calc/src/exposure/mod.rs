@@ -7,6 +7,7 @@ pub mod calculation;
 pub mod context;
 pub mod correction;
 pub mod evaluation;
+pub mod flags;
 pub mod grid;
 pub mod levels;
 pub mod ports;
@@ -26,6 +27,8 @@ mod adjustment_tests;
 mod correction_tests;
 #[cfg(test)]
 mod evaluation_tests;
+#[cfg(test)]
+mod flags_tests;
 #[cfg(test)]
 mod grid_tests;
 #[cfg(test)]

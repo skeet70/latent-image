@@ -163,7 +163,7 @@ fn secondary_lines(grid: &AreaGrid, class: AreaClass, line_offset: u32) -> [u32;
 }
 
 /// The bit of the treated window start configuration for a run and its first listed area.
-fn window_start_case(readings: &RecordReadings, area: &ListedArea) -> u32 {
+pub(crate) fn window_start_case(readings: &RecordReadings, area: &ListedArea) -> u32 {
     match readings.scene {
         _ if readings.auxiliary != 0 => 0x10,
         stock::FIRST_HELD_SCENE => 4,

@@ -2,12 +2,15 @@
 //! view and at capture, the frames it notes to tell when the scene changed, and the histories its
 //! votes settle by.
 
+pub mod classification;
 pub mod detectors;
 pub mod frame;
 pub mod history;
 pub mod ports;
 pub mod vote;
 
+#[cfg(test)]
+mod classification_tests;
 #[cfg(test)]
 mod detector_tests;
 #[cfg(test)]
@@ -470,9 +473,6 @@ impl SceneRecognition {
 
     /// 0xf4ec04.
     pub fn mark_adjustments_changed(&mut self) { self.adjustments_changed = true; }
-
-    /// Whether the adjustments changed since the last call, clearing the mark (0xf4ebc0, 0xf4ebe4).
-    pub fn take_adjustments_changed(&mut self) -> bool { core::mem::take(&mut self.adjustments_changed) }
 
     /// Writes the capture dump's scene-recognition section into the frame at `frame`: the mark,
     /// five level settings in tenths, the work-memory log and the end mark, with the log entry

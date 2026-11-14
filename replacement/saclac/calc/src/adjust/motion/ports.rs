@@ -33,6 +33,17 @@ pub trait LensTables {
     fn period_position(&mut self, period: u16, lens: u32, step: u32, reference: u32) -> i32;
 }
 
+/// Image 4's lens words a channel search's drive figures read.
+pub trait LensWords {
+    /// The rate at lens position `position` for `lens` at `step` and `reference` (0x749be4 with
+    /// its fifth argument 1).
+    fn position_rate(&mut self, position: i16, lens: u32, step: u32, reference: u32) -> u32;
+    /// 0x747d8c.
+    fn curve_word(&mut self, lens: u32) -> u32;
+    /// The step's mapped word for `lens` (0x74695c).
+    fn mapped_step_word(&mut self, step: u32, lens: u32) -> u32;
+}
+
 /// The step range image 4's lens calibration covers and the positions it allows.
 pub trait LensCalibration {
     /// How many steps the calibration has (0x74677c).
