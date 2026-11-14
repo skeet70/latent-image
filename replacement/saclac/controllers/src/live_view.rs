@@ -2,8 +2,7 @@
 
 //! The live view: brings the image pipeline's live view up and down around the live
 //! statistics configuration and the live measurement, and carries profile commands into
-//! the running view. The live router enters it as its controller, root enters it for the
-//! deferred option and the S1 bridge enters it during S1.
+//! the running view. The live router and the S1 bridge enter it as their controller.
 
 use crate::children::{
     ChildEvent, ChildOutcome, MeasurementControl, MeasurementOutcome, MeasurementUpdate, Restart, RetainedRoundStatus,
@@ -21,7 +20,7 @@ pub enum Signal<'a> {
     Resume,
     /// Root quiesces live processing for S1.
     SuspendLive,
-    /// Root's deferred option after the parameter join.
+    /// The separate block-0x2a configuration, not queue Command24.
     RefreshDeferred,
     /// Root's lens-drive cancellation.
     Cancel,

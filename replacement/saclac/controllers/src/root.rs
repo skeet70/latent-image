@@ -10,9 +10,9 @@ pub enum Generation { Current, Previous }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Allocation { Reuse, Replace }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Branch { Lens, Live, S1, LiveSequence }
+pub enum Branch { Lens, Live, S1 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Control { SuspendLive, BeginS1, ReleaseS1, QueryS1, Cancel, RefreshDeferred }
+pub enum Control { SuspendLive, BeginS1, ReleaseS1, QueryS1, Cancel }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Input<'a> { Message(Message<'a>), Control(Control) }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -27,7 +27,6 @@ pub enum Utility {
     RestoreLensStatus,
     SetLensOption,
     SetLensOptionWithoutWait,
-    SetDeferredOption,
 }
 
 pub trait Port: lifecycle::Effects {
@@ -54,20 +53,19 @@ enum Mode { Stopped, Started, LensStarting, LensStopping, Live, Pending(Pending)
 pub struct Root {
     mode: Mode,
     release_s1: bool,
-    refresh_deferred: bool,
 }
 
 impl Default for Root { fn default() -> Self { Self::new() } }
 
 impl Root {
     pub const fn new() -> Self {
-        Self { mode: Mode::Stopped, release_s1: false, refresh_deferred: false }
+        Self { mode: Mode::Stopped, release_s1: false }
     }
 
     fn dispatch(&mut self, branch: Branch, input: Input<'_>, allocation: Allocation, port: &mut impl Port) -> Outcome {
         let context = match branch {
             Branch::Lens => Context::Lens,
-            Branch::Live | Branch::LiveSequence => Context::Live,
+            Branch::Live => Context::Live,
             Branch::S1 => Context::S1,
         };
         let record = port.context(context, allocation, input);
@@ -90,14 +88,10 @@ impl Root {
         let input = Input::Message(message);
         if matches!(message, Message::Completed(completed) if completed.completion == xm1_saclac_interface::Completion::Lens3c) {
             if matches!(self.mode, Mode::Stopped | Mode::Started) { return Self::fault(port); }
-            let outcome = self.dispatch(Branch::Lens, input, Allocation::Reuse, port);
-            if outcome == Outcome::Complete {
-                self.mode = Mode::Started;
-                Self::release_context(port, Context::Lens);
-            } else {
-                self.mode = Mode::LensStopping;
-            }
-            return Outcome::Pending;
+            let record = port.context(Context::Root, Allocation::Reuse, input);
+            port.utility(Utility::RestoreLensStatus, record);
+            Self::release_context(port, Context::Root);
+            return Outcome::Complete;
         }
         if let Message::Command(command) = message {
             match command.kind {
@@ -172,7 +166,7 @@ impl Root {
                 }
                 K::Command02 if self.mode == Mode::LensStarting => return self.forward_live(input, Pending::DuringLensStart, port),
                 K::Command02 | K::Command03 | K::Command22 if self.mode == Mode::Live => return self.forward_live(input, Pending::Parameters, port),
-                K::Command17 | K::Prepare | K::Command1d | K::Command1e | K::Command1f | K::Command20 | K::Command21 if self.mode == Mode::Live => return self.forward_live(input, Pending::Autofocus, port),
+                K::Command17 | K::Prepare | K::Command1d | K::Command1e | K::Command1f | K::Command20 | K::Command21 | K::Command24 if self.mode == Mode::Live => return self.forward_live(input, Pending::Autofocus, port),
                 K::Command23 if self.mode == Mode::Live => {
                     match self.dispatch(Branch::Live, input, Allocation::Reuse, port) {
                         Outcome::Complete => port.release(Context::Live, Generation::Previous),
@@ -246,16 +240,6 @@ impl Root {
                     return Outcome::Pending;
                 }
                 K::LensDrive | K::Cancel | K::Command10 | K::Command11 | K::Command13 | K::Command14 | K::Command15 | K::Command16 | K::Command2b | K::Command2c | K::Command2d if self.mode == Mode::Live => return self.forward_live(input, Pending::LensOperation, port),
-                K::Command24 if self.mode == Mode::Live => {
-                    self.refresh_deferred = true;
-                    let record = port.context(Context::Live, Allocation::Reuse, input);
-                    port.utility(Utility::SetDeferredOption, record);
-                    return match port.child(Branch::Live, Input::Control(Control::SuspendLive), record) {
-                        Outcome::Complete => { port.child(Branch::LiveSequence, input, record); Outcome::Pending }
-                        Outcome::Pending => { self.mode = Mode::Pending(Pending::Parameters); Outcome::Pending }
-                        _ => Self::fault(port),
-                    };
-                }
                 K::Prepare26 | K::Command29 if self.mode == Mode::Live => {
                     return match self.dispatch(Branch::Live, input, Allocation::Reuse, port) {
                         Outcome::Complete => { self.mode = Mode::Live; Outcome::Pending }
@@ -263,14 +247,18 @@ impl Root {
                         _ => Self::fault(port),
                     };
                 }
-                K::Command17 | K::Prepare | K::Command1d | K::Command1e | K::Command1f | K::Command20 | K::Command21 | K::Command11 | K::Prepare26 | K::Command29 if self.mode == Mode::Started => {
+                K::Command17 | K::Prepare | K::Command1d | K::Command1e | K::Command1f | K::Command20 | K::Command21 | K::Command23 | K::Command11 | K::Prepare26 | K::Command29 if self.mode == Mode::Started => {
                     return match self.dispatch(Branch::Live, input, Allocation::Reuse, port) {
                         Outcome::Complete => { Self::release_context(port, Context::Live); Outcome::Pending }
                         Outcome::Pending => Outcome::Pending,
                         _ => Self::fault(port),
                     };
                 }
-                K::Command02 | K::Command03 | K::Command17 | K::Prepare | K::Command1d | K::HalfPress | K::Command07 | K::Command0c | K::Command28 | K::Command09 | K::Command0a | K::Command23 | K::Command27 if self.mode == Mode::S1 => {
+                K::Command17 | K::Command1d | K::HalfPress | K::Command07 | K::Command0c | K::Command28 | K::Command09 | K::Command0a | K::Command23 | K::Command27 if self.mode == Mode::S1 => {
+                    self.dispatch(Branch::S1, input, Allocation::Reuse, port);
+                    return Outcome::Pending;
+                }
+                K::Command02 | K::Command03 | K::Prepare if self.mode == Mode::S1 => {
                     return match self.dispatch(Branch::S1, input, Allocation::Reuse, port) {
                         Outcome::Complete | Outcome::Pending => Outcome::Pending,
                         _ => Self::fault(port),
@@ -336,10 +324,10 @@ impl Root {
         match self.mode {
             Mode::Stopped => Self::fault(port),
             Mode::Started => {
-                let record = port.context(Context::Root, Allocation::Reuse, input);
-                port.utility(Utility::RestoreLensStatus, record);
-                Self::release_context(port, Context::Root);
-                Outcome::Complete
+                match self.dispatch(Branch::Live, input, Allocation::Reuse, port) {
+                    Outcome::Complete | Outcome::Pending => Outcome::Pending,
+                    _ => Self::fault(port),
+                }
             }
             Mode::Live | Mode::Pending(Pending::LensOperation) => {
                 let pending = self.mode != Mode::Live;
@@ -362,10 +350,6 @@ impl Root {
                 match port.child(Branch::Live, input, record) {
                     Outcome::Complete => {
                         self.mode = Mode::Live;
-                        if self.refresh_deferred {
-                            self.refresh_deferred = false;
-                            port.child(Branch::LiveSequence, Input::Control(Control::RefreshDeferred), record);
-                        }
                         Outcome::Pending
                     }
                     Outcome::Pending => Outcome::Pending,

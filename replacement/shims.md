@@ -603,6 +603,8 @@ The task-43 driver and engine use stock's 37 machine tables. Every machine actio
 | fault reaction `0xf46c20` | trampoline into retained stock | retained SACLAC fault reporting | no | subsystem fault reporting is owned | required |
 | `XM1_REQUIRES_LENS_SAFETY_CONTRACT`, four bytes with value 1 in the linked fixed body | guest-memory layout view | fixed-image stager derives the emulator-only admission contract from this marker | no | a lens safety contract qualifies the image's lens-reaching effects | required |
 
+The clean controllers crate's Root port requires Lens3c's completion fields in the Root record for status notification `0xf46f28`, followed by current Root-context release. Ordinary Started completions use the Live record instead. Command24 has no deferred-option root binding: it forwards the original event to Live. The obsolete root `LiveSequence`, `RefreshDeferred` and `SetDeferredOption` variants are removed. The production composition owner binds these ports and qualifies ordered boundary scenarios in the linked image before retiring the corresponding stock actions. S1's explicit zero definitions and retained-reader limits are recorded in [the boundary documentation](README.md#saclac).
+
 ## saclac_interface
 
 | Shim | Kind | Other side | Owned now | Removal condition | State |
