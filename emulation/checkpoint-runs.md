@@ -8,6 +8,12 @@ Post-boot census reports use schema 3 and declare `observation_start_instruction
 
 The post-boot store removes abandoned partial publications under its store lock. Publishing syncs the snapshot, record and directories. On lookup it evicts entries at least seven days old when all identity fields except `emulator_binary` match the current request and the executable digest differs. Other firmware/procedure identities are retained. One store lock replaces per-key locks.
 
+## Stimulus clock
+
+`saclac-census` presses and releases its inputs, sets the mode dial and ends its observation at schedule points. By default each point is due after an instruction budget, so an image that executes a different number of instructions meets the same press at a different guest time. `--stimulus-ticks SCHEDULE` fires every point at its board tick counted from the observation origin: reset, or the restored post-boot checkpoint. Board ticks are the guest time the device models count, the system timer included. On that clock a wait for a firmware condition (a debounced release, a menu state) ends at the next point's tick at the latest, and the run fails when a point is not reached exactly at its tick or the schedule names another stimulus there.
+
+`census.json` records `stimuli`: the clock, the origin's board tick and instruction count, and each point's stimulus, tick ordinal and instruction count. `key_pulses` records every key press with its debounced release. `saclac-census schedule CENSUS_JSON SCHEDULE_JSON` turns a receipt's `stimuli` into a schedule, delaying each point that follows a release, and every later point with it, to at least `SCANNED_HOLD_TICKS` (720,000 ticks, two scan intervals plus 10 ms) after the release. The post-boot checkpoint identity does not include the clock; both clocks restore the same checkpoint. Other drivers take the same timing from `fujimod_xm1::stimulus`.
+
 ## Bazel run targets
 
 All labels without a package prefix are in `//emulation`. The declarations are in [BUILD.bazel](BUILD.bazel). Each implementation link identifies the launch and its observation contract.
