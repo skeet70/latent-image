@@ -127,6 +127,8 @@ The interface also has a typed Flash peer for operations `0x1a0d` and `0x1a0e`. 
 
 The [calculation-library binding table](saclac/calc/bindings.md) maps the shot's exposure surface, selection flags and all 44 library forwarders to typed Rust operations. Composition-root adapters own record decoding and output placement; the table distinguishes implemented operations from pending motion-plan dependencies.
 
+`calc::scene_recognition::SceneRecognition::request_classification` builds calcsub's 48-byte `0x3e00` request through the interface's `CalcSub` port. Its encoder in `saclac_interface::stock::calc_sub` cites every word store. The core enables the retained classifier before posting and clears the adjustments-changed mark afterward, including on refusal. Retained-entry adaptation, the queue-46 kernel binding and image qualification remain composition-root work.
+
 Admission checks allocated sections, entry veneers, retained table counts, definite ELF address relocations and direct branches, trap fill and the owned direct-call stack budget. Literal words and unrelocated instruction constants are not classified as addresses. Entries and regions come from `Replacement.Saclac.Artifact` and the linked kernel's boundary metadata. Memory safety inside the core rests on the compiler and bounded types. The driver, engine and router modules forbid unsafe code; `src/stock.rs` contains the retained-memory and stock-call adapters. Their unsafe operations have these invariants:
 
 | Block | Invariant |

@@ -5,10 +5,12 @@ package(default_visibility = ["//visibility:public"])
 SOURCES = [
     "src/area_measurement.rs",
     "src/calc.rs",
+    "src/calc_sub.rs",
     "src/exposure.rs",
     "src/round.rs",
     "src/stock.rs",
     "src/stock/area_measurement.rs",
+    "src/stock/calc_sub.rs",
     "src/stock/exposure.rs",
 ]
 
@@ -34,6 +36,7 @@ xm1_rust_host_test(
     data = SOURCES + [
         "src/area_measurement_tests.rs",
         "src/calc_tests.rs",
+        "src/calc_sub_tests.rs",
         "src/exposure_tests.rs",
         "src/tests.rs",
     ],

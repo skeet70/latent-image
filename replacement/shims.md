@@ -599,6 +599,7 @@ The task-43 driver and engine use stock's 37 machine tables. Every machine actio
 | Shim | Kind | Other side | Owned now | Removal condition | State |
 | --- | --- | --- | --- | --- | --- |
 | Command, parameter-block and callback descriptors in `src/stock.rs` | guest-memory layout view | retained queue-43 command producers, their 46 shared parameter blocks and 106 completion callbacks | no | queue-43 producers and completion callbacks are owned and no retained consumer reads the parameter blocks | required |
+| Frame-classification codec in `src/stock/calc_sub.rs` | guest-memory layout view | retained queue-46 classifier `0xf49eb4` reads eleven inputs and enters the twelfth word as its completion | no | the classifier and its completion consumers use a typed owned interface | required |
 
 ## saclac_profile_records
 
