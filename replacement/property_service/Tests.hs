@@ -333,6 +333,10 @@ artifactTests arguments = do
   artifact <- either (fail . ("real artifact refused: " ++) . show) pure (admit bytes symbolText)
   unless (artifactCarrier artifact == testCarrier) (fail "carrier differs")
   putStrLn "admitted the linked artifact against the synthetic classification"
+  expectRefusal "same-start symbols with different code extents" ExtentRejected
+    (admit bytes (symbolText <> C.pack ("\n" ++ showHex getterStubAddress "" ++ " 00000008 T xm1_test_overlapping_extent\n")))
+  expectRefusal "symbol alias without matching ELF evidence" ElfRejected
+    (admit bytes (symbolText <> C.pack ("\n" ++ showHex getterStubAddress "" ++ " " ++ showHex getterStubSize "" ++ " T xm1_test_unproven_alias\n")))
   expectRefusal "missing mandatory ELF evidence" ElfRejected
     (deriveArtifact ProductionArtifact properties testCarrier (ArtifactInput bytes symbolText B.empty))
   expectRefusal "ELF bytes differ from the linked artifact" ElfRejected

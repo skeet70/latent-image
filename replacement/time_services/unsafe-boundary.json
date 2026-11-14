@@ -1,0 +1,8 @@
+{
+  "source_roots": ["src"],
+  "boundary_files": [
+    {"path": "src/stock.rs", "reason": "Translates retained layouts, code words and device timer requests at the time-service boundary."}
+  ],
+  "boundary_items": [],
+  "known_exceptions": []
+}

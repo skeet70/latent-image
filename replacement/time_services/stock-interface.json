@@ -1,0 +1,953 @@
+{
+  "schema": 1,
+  "firmware": "X-M1 1.50",
+  "decomp_revision": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "extents": [
+    [
+      6926752,
+      6932348
+    ],
+    [
+      6613272,
+      6613968
+    ]
+  ],
+  "entries": [
+    {
+      "address": "0x69b1a0",
+      "symbol": "xm1_time_initialize",
+      "label": "initialize",
+      "arguments": [
+        0
+      ],
+      "code_arguments": [
+        0
+      ],
+      "returns": true
+    },
+    {
+      "address": "0x69b228",
+      "symbol": "xm1_time_shutdown",
+      "label": "shutdown",
+      "arguments": [],
+      "returns": true
+    },
+    {
+      "address": "0x69b328",
+      "symbol": "xm1_time_start",
+      "label": "start",
+      "arguments": [
+        0,
+        1,
+        2
+      ],
+      "code_arguments": [
+        2
+      ],
+      "returns": true,
+      "outputs": [
+        3
+      ]
+    },
+    {
+      "address": "0x69b7a4",
+      "symbol": "xm1_time_cancel",
+      "label": "cancel",
+      "arguments": [
+        0
+      ],
+      "returns": true
+    },
+    {
+      "address": "0x69b86c",
+      "symbol": "xm1_time_reload",
+      "label": "set-reload",
+      "arguments": [
+        0,
+        1
+      ],
+      "returns": true
+    },
+    {
+      "address": "0x69b9c4",
+      "symbol": "xm1_time_delay",
+      "label": "delay",
+      "arguments": [
+        0
+      ],
+      "returns": true
+    },
+    {
+      "address": "0x69bdc0",
+      "symbol": "xm1_time_ticks",
+      "label": "clock",
+      "arguments": [],
+      "returns": true
+    },
+    {
+      "address": "0x69bde4",
+      "symbol": "xm1_time_tick",
+      "label": "software-tick",
+      "arguments": []
+    },
+    {
+      "address": "0x69c03c",
+      "symbol": "xm1_time_delay_tick",
+      "label": "delay-tick",
+      "arguments": []
+    },
+    {
+      "address": "0x69c2b0",
+      "symbol": "xm1_time_delay_task",
+      "label": "delay-task",
+      "arguments": [
+        0
+      ]
+    },
+    {
+      "address": "0x69c304",
+      "symbol": "xm1_time_notify_delay",
+      "label": "notify-delay",
+      "arguments": []
+    },
+    {
+      "address": "0x69c364",
+      "symbol": "xm1_time_create_delay",
+      "label": "create-delay",
+      "arguments": [
+        0
+      ],
+      "code_arguments": [
+        0
+      ],
+      "returns": true
+    },
+    {
+      "address": "0x69c3f8",
+      "symbol": "xm1_time_delete_delay",
+      "label": "delete-delay",
+      "arguments": [],
+      "returns": true
+    },
+    {
+      "address": "0x69c430",
+      "symbol": "xm1_time_arm_delay",
+      "label": "arm-delay",
+      "arguments": [
+        0,
+        1
+      ],
+      "code_arguments": [
+        1
+      ],
+      "returns": true
+    },
+    {
+      "address": "0x69c4a4",
+      "symbol": "xm1_time_disarm_delay",
+      "label": "disarm-delay",
+      "arguments": [],
+      "returns": true
+    },
+    {
+      "address": "0x69c4d8",
+      "symbol": "xm1_time_notify_timer",
+      "label": "notify-timer",
+      "arguments": []
+    },
+    {
+      "address": "0x69c548",
+      "symbol": "xm1_time_arm_timer",
+      "label": "arm-timer",
+      "arguments": [
+        0,
+        2,
+        3
+      ],
+      "code_arguments": [
+        1,
+        2
+      ]
+    },
+    {
+      "address": "0x69c5d4",
+      "symbol": "xm1_time_timer_task",
+      "label": "timer-task",
+      "arguments": [
+        0
+      ]
+    },
+    {
+      "address": "0x69c628",
+      "symbol": "xm1_time_ticks",
+      "label": "ticks",
+      "interface_label": "clock",
+      "arguments": [],
+      "returns": true
+    },
+    {
+      "address": "0x69c648",
+      "symbol": "xm1_time_create_timer",
+      "label": "create-timer",
+      "arguments": [
+        0,
+        2,
+        3
+      ],
+      "code_arguments": [
+        1,
+        2
+      ],
+      "returns": true
+    },
+    {
+      "address": "0x69c6f4",
+      "symbol": "xm1_time_delete_timer",
+      "label": "delete-timer",
+      "arguments": [],
+      "returns": true
+    },
+    {
+      "address": "0x69c75c",
+      "symbol": "xm1_time_ticks",
+      "label": "ticks-alias",
+      "interface_label": "clock",
+      "arguments": [],
+      "returns": true
+    },
+    {
+      "address": "0x64e918",
+      "symbol": "xm1_time_attach",
+      "label": "attach",
+      "arguments": [
+        0,
+        1
+      ],
+      "code_arguments": [
+        1
+      ],
+      "returns": true,
+      "outputs": [
+        2
+      ]
+    },
+    {
+      "address": "0x64eb20",
+      "symbol": "xm1_time_release",
+      "label": "release",
+      "arguments": [
+        0
+      ],
+      "returns": true
+    }
+  ],
+  "callbacks": [
+    {
+      "address": "0x69bf34",
+      "symbol": "xm1_time_expiry_callback",
+      "label": "expiry",
+      "register": 3
+    },
+    {
+      "address": "0x69bf34",
+      "symbol": "xm1_time_owned_expiry_callback",
+      "label": "expiry",
+      "register": 3,
+      "owned_only": true
+    },
+    {
+      "address": "0x69c278",
+      "symbol": "xm1_time_delay_callback",
+      "label": "delay-message",
+      "register": 3
+    },
+    {
+      "address": "0x69c2a8",
+      "symbol": "xm1_time_delay_fault",
+      "label": "delay-fault",
+      "register": 3
+    },
+    {
+      "address": "0x69c358",
+      "symbol": "xm1_time_delay_post_fault",
+      "label": "delay-post-fault",
+      "register": 3
+    },
+    {
+      "address": "0x69c528",
+      "symbol": "xm1_time_timer_post_fault",
+      "label": "timer-post-fault",
+      "register": 3
+    },
+    {
+      "address": "0x69c61c",
+      "symbol": "xm1_time_timer_callback",
+      "label": "timer-message",
+      "register": 3
+    }
+  ],
+  "effect_extents": [
+    [
+      6648364,
+      6649012
+    ],
+    [
+      6642472,
+      6642724
+    ],
+    [
+      7492376,
+      7492644
+    ]
+  ],
+  "kernel_root_table": "0x96bd20",
+  "imports": [
+    {
+      "address": "0x65722c",
+      "label": "handle-allocate",
+      "arguments": [
+        0,
+        1,
+        2
+      ],
+      "returns": true
+    },
+    {
+      "address": "0x657384",
+      "label": "handle-resolve",
+      "arguments": [
+        0,
+        1,
+        2
+      ],
+      "returns": true,
+      "outputs": [
+        3
+      ]
+    },
+    {
+      "address": "0x65744c",
+      "label": "handle-release",
+      "arguments": [
+        0,
+        1,
+        2
+      ],
+      "returns": true
+    },
+    {
+      "address": "0x655b28",
+      "label": "device-acquire",
+      "arguments": [
+        0
+      ],
+      "returns": true,
+      "outputs": [
+        1
+      ]
+    },
+    {
+      "address": "0x655ccc",
+      "label": "device-configure",
+      "arguments": [
+        0
+      ],
+      "reads": [
+        {
+          "register": 1,
+          "offsets": [
+            0,
+            4,
+            8,
+            12
+          ],
+          "code_offsets": [
+            12
+          ]
+        }
+      ],
+      "returns": true
+    },
+    {
+      "address": "0x655fe8",
+      "label": "device-stop",
+      "arguments": [
+        0
+      ],
+      "returns": true
+    },
+    {
+      "address": "0x655c24",
+      "label": "device-release",
+      "arguments": [
+        0
+      ],
+      "returns": true
+    },
+    {
+      "address": "0x723870",
+      "label": "irq-configure",
+      "arguments": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "code_arguments": [
+        3
+      ],
+      "returns": true
+    },
+    {
+      "address": "0x7239a0",
+      "label": "irq-detach",
+      "arguments": [
+        0
+      ],
+      "returns": true
+    },
+    {
+      "address": "0x726c74",
+      "label": "diagnostic",
+      "arguments": [
+        0,
+        1
+      ]
+    },
+    {
+      "address": "0x723efc",
+      "label": "dispatch-disable",
+      "arguments": [],
+      "returns": true
+    },
+    {
+      "address": "0x723f7c",
+      "label": "dispatch-enable",
+      "arguments": [],
+      "returns": true
+    },
+    {
+      "address": "0x724cdc",
+      "label": "queue-create",
+      "arguments": [
+        0
+      ],
+      "reads": [
+        {
+          "register": 1,
+          "offsets": [
+            0,
+            4
+          ]
+        }
+      ],
+      "returns": true
+    },
+    {
+      "address": "0x724f08",
+      "label": "queue-delete",
+      "arguments": [
+        0
+      ],
+      "returns": true
+    },
+    {
+      "address": "0x725dd8",
+      "label": "task-create",
+      "arguments": [],
+      "reads": [
+        {
+          "register": 0,
+          "offsets": [
+            0,
+            8,
+            12,
+            16,
+            20
+          ],
+          "code_offsets": [
+            16
+          ]
+        }
+      ],
+      "returns": true
+    },
+    {
+      "address": "0x72612c",
+      "label": "task-delete",
+      "arguments": [
+        0
+      ],
+      "returns": true
+    },
+    {
+      "address": "0x7247ac",
+      "label": "semaphore-create",
+      "arguments": [
+        0,
+        1
+      ],
+      "returns": true
+    },
+    {
+      "address": "0x724ad8",
+      "label": "semaphore-poll",
+      "arguments": [
+        0
+      ],
+      "returns": true
+    },
+    {
+      "address": "0x724b68",
+      "label": "semaphore-wait-wrapper",
+      "arguments": [],
+      "track": true
+    },
+    {
+      "address": "0x724c00",
+      "label": "semaphore-signal-wrapper",
+      "arguments": [],
+      "track": true
+    }
+  ],
+  "slots": [
+    {
+      "offset": 172,
+      "label": "queue-post",
+      "arguments": [
+        0
+      ],
+      "queues": [
+        6,
+        9
+      ],
+      "reads": [
+        {
+          "register": 1,
+          "offsets": [
+            4,
+            8
+          ]
+        }
+      ],
+      "payload": {
+        "register": 1,
+        "length_offset": 8,
+        "data_offset": 12,
+        "maximum": 4
+      }
+    },
+    {
+      "offset": 176,
+      "label": "queue-post",
+      "arguments": [
+        0
+      ],
+      "queues": [
+        6,
+        9
+      ],
+      "reads": [
+        {
+          "register": 1,
+          "offsets": [
+            4,
+            8
+          ]
+        }
+      ],
+      "payload": {
+        "register": 1,
+        "length_offset": 8,
+        "data_offset": 12,
+        "maximum": 4
+      }
+    },
+    {
+      "offset": 200,
+      "label": "queue-receive",
+      "arguments": [
+        0,
+        2
+      ],
+      "queues": [
+        6,
+        9
+      ],
+      "block_output": 1
+    },
+    {
+      "offset": 124,
+      "label": "semaphore-wait",
+      "arguments": [
+        0,
+        1
+      ]
+    },
+    {
+      "offset": 108,
+      "label": "semaphore-signal",
+      "arguments": [
+        0
+      ]
+    },
+    {
+      "offset": 112,
+      "label": "semaphore-signal",
+      "arguments": [
+        0
+      ]
+    }
+  ],
+  "queues": [
+    {
+      "id": 6,
+      "depth": 48,
+      "message_bytes": 12,
+      "notification": 5632,
+      "sender": "current-task",
+      "stack_bytes": 3072,
+      "priority": 3
+    },
+    {
+      "id": 9,
+      "depth": 48,
+      "message_bytes": 12,
+      "notification": 6400,
+      "sender": "timer-task",
+      "stack_bytes": 3072,
+      "priority": 3
+    }
+  ],
+  "messages": [
+    {
+      "queue": 6,
+      "operation": 5632,
+      "sender_writes": [
+        "operation",
+        "sender",
+        "destination",
+        "length",
+        "payload-pointer"
+      ],
+      "receiver_reads": [
+        "operation"
+      ],
+      "sender_extent": [
+        "0x69c310",
+        "0x69c33c"
+      ],
+      "receiver_extent": [
+        "0x69c244",
+        "0x69c28c"
+      ]
+    },
+    {
+      "queue": 9,
+      "operation": 6400,
+      "sender_writes": [
+        "operation",
+        "sender",
+        "destination",
+        "length",
+        "payload-pointer"
+      ],
+      "receiver_reads": [],
+      "sender_extent": [
+        "0x69c4e4",
+        "0x69c50c"
+      ],
+      "receiver_extent": [
+        "0x69c60c",
+        "0x69c624"
+      ]
+    }
+  ],
+  "shared": [
+    {
+      "address": "0x96e97c",
+      "bytes": 4,
+      "kind": "counter",
+      "meaning": "timer interrupt count"
+    },
+    {
+      "address": "0x95dc08",
+      "bytes": 24,
+      "kind": "message",
+      "queue": 6,
+      "meaning": "delay receive descriptor and persistent hardware handle, handler and fault callback"
+    },
+    {
+      "address": "0x96bd40",
+      "bytes": 24,
+      "kind": "message",
+      "queue": 9,
+      "meaning": "timer receive descriptor and persistent hardware handle, handler and fault callback"
+    },
+    {
+      "address": "0x940e9c",
+      "bytes": 1024,
+      "kind": "interrupts",
+      "meaning": "interrupt handles and source map retained callers share"
+    }
+  ],
+  "projection": {
+    "identity": {
+      "task": "an event at exception depth 0 belongs to its task's creation word in the trace task facts",
+      "interrupt": "an event at exception depth 1 or deeper belongs to the retained handler that entered its root unit entry, named by that call's return address",
+      "interrupt_callers": [
+        "attach",
+        "release",
+        "notify-timer",
+        "notify-delay"
+      ],
+      "sources": [
+        "0x656210 returns from the cyclic dispatch call of notify-timer through 0x94446c+0x48",
+        "0x6561c0 returns from the delay channel's call of notify-delay",
+        "0x6c6f58 and 0x6c6fc4 return from a retained interrupt handler's release and attach",
+        "0xef21b4, 0x66583c and 0x6a2e24 return from retained interrupt handlers' release"
+      ]
+    },
+    "channels": {
+      "rule": "one channel per actor and root entry, carrying the root call and every call, return and callback nested in it; a task's callback outside a root entry has one channel per target; queue-post and queue-receive roots have one channel per queue; each declared view has one channel, the interrupt view one per line; an event of no generated channel falls to an ordered channel of its kind",
+      "sources": [
+        "time observer task facts: each hit's task id, creation word and exception depth",
+        "0x69c5d4: the timer task invokes each expired timer's callback from one tick"
+      ]
+    },
+    "handles": {
+      "rule": "a nonzero handle becomes its first-appearance rank, from 1, among its actor's handles of the same kind; a view's handle ranks within its channel",
+      "positions": [
+        {
+          "entry": "attach",
+          "event": "return",
+          "field": "outputs",
+          "index": 0,
+          "kind": 128
+        },
+        {
+          "entry": "release",
+          "event": "call",
+          "field": "arguments",
+          "index": 0,
+          "kind": 128
+        },
+        {
+          "entry": "start",
+          "event": "return",
+          "field": "outputs",
+          "index": 0,
+          "kind": 32
+        },
+        {
+          "entry": "cancel",
+          "event": "call",
+          "field": "arguments",
+          "index": 0,
+          "kind": 32
+        },
+        {
+          "entry": "set-reload",
+          "event": "call",
+          "field": "arguments",
+          "index": 0,
+          "kind": 32
+        },
+        {
+          "entry": "handle-resolve",
+          "event": "call",
+          "field": "arguments",
+          "index": 0,
+          "kind_from": 1
+        },
+        {
+          "entry": "device-acquire",
+          "event": "return",
+          "field": "outputs",
+          "index": 0,
+          "kind": 4
+        },
+        {
+          "entry": "device-configure",
+          "event": "call",
+          "field": "arguments",
+          "index": 0,
+          "kind": 4
+        },
+        {
+          "entry": "device-stop",
+          "event": "call",
+          "field": "arguments",
+          "index": 0,
+          "kind": 4
+        },
+        {
+          "entry": "device-release",
+          "event": "call",
+          "field": "arguments",
+          "index": 0,
+          "kind": 4
+        }
+      ],
+      "sources": [
+        "0x65722c numbers every handle array from one serial counter",
+        "0x64e918 returns the interrupt array's serial; 0x64eb20 resolves it with type 128",
+        "0x69b328 returns the timer array's serial; 0x69b7a4 and 0x69b86c resolve it with type 32",
+        "0x655b28 returns the device array's serial; 0x655ccc, 0x655fe8 and 0x655c24 take it",
+        "0x657384 takes a serial and its array's type word"
+      ]
+    },
+    "private_tables": {
+      "rule": "calls of these entries on a listed table, and their returns, are not compared",
+      "entries": [
+        "handle-allocate",
+        "handle-resolve",
+        "handle-release"
+      ],
+      "argument": 2,
+      "bases": [
+        9808540
+      ],
+      "sources": [
+        "0x95aa9c, the timer handle table, is built by movw #0xaa9c / movt #0x95 only at 0x69b1b0..0x69bfdc, inside the retired extent; the image 5 and image 6 listings do not reference it"
+      ]
+    },
+    "views": {
+      "9703068": {
+        "name": "interrupts",
+        "stride": 4,
+        "elements": 128,
+        "counter": false,
+        "handles": [
+          {
+            "below": 512,
+            "kind": 128
+          }
+        ],
+        "sources": [
+          "0x940e9c holds 128 serials, then 128 sources (0x64e918, 0x64eb20)"
+        ]
+      },
+      "9890172": {
+        "name": "ticks",
+        "counter": true,
+        "sources": [
+          "0x69c52c..0x69c53c adds 1 to 0x96e97c after each notification; a store is compared as its difference from the previous store"
+        ]
+      },
+      "9821192": {
+        "name": "delay",
+        "counter": false,
+        "handles": [
+          {
+            "offset": 12,
+            "kind": 4
+          }
+        ],
+        "sources": [
+          "0x95dc08+12 receives 0x655b28's serial"
+        ]
+      },
+      "9878848": {
+        "name": "timer",
+        "counter": false,
+        "handles": [
+          {
+            "offset": 12,
+            "kind": 4
+          }
+        ],
+        "sources": [
+          "0x96bd40+12 receives 0x655b28's serial"
+        ]
+      }
+    },
+    "ordered_channels": {
+      "channels": [
+        "task 0x4005bf74 delay-task",
+        "task 0x4005bfec timer-task",
+        "task 0x4005cec4 clock",
+        "task 0x4005cec4 create-delay",
+        "task 0x4005cec4 initialize",
+        "view timer"
+      ],
+      "reason": "startup and timer callback publication are finite lifecycle traffic, not periodic work; no missing or extra publication is permitted at the end milestone",
+      "sources": ["0x69b1a0", "0x69c2b0", "0x69c364", "0x69c548", "0x69c5d4"]
+    },
+    "time_driven": {
+      "rule": "a generated channel is time-driven when stock and owned both carry it and ordered_channels does not name it; otherwise it is ordered",
+      "sources": [
+        "each scenario retains observed reset-to-route history and pending call frames through its prepared boundary, then ends at the same board-tick ordinal on both sides; retained-device phases may still differ"
+      ]
+    },
+    "timing_policy": {
+      "tick": {"kind": "store", "channel": "view ticks", "increment": 1},
+      "period_board_ticks": 30000,
+      "boundary_error_ticks": 2,
+      "start_skew_board_ticks": 30000,
+      "durations": [
+        {"begin": {"kind": "call", "entry": "delay"}, "end": {"kind": "return", "entry": "delay", "status": 0}}
+      ],
+      "callbacks": {"kind": "callback", "target": 7043788},
+      "cadence_barriers": [
+        {"kind": "call", "entry": "start"},
+        {"kind": "call", "entry": "cancel"},
+        {"kind": "call", "entry": "set-reload"},
+        {"kind": "call", "entry": "delay"},
+        {"kind": "call", "entry": "arm-delay"},
+        {"kind": "call", "entry": "disarm-delay"},
+        {"kind": "call", "entry": "arm-timer"},
+        {"kind": "call", "entry": "create-delay"},
+        {"kind": "call", "entry": "delete-delay"},
+        {"kind": "call", "entry": "create-timer"},
+        {"kind": "call", "entry": "delete-timer"},
+        {"kind": "call", "entry": "initialize"},
+        {"kind": "call", "entry": "shutdown"}
+      ],
+      "sources": [
+        "12 MHz board clock and 2500 us device reload at 0x655ee8/0x655fcc give 30000 board ticks per service tick, independently of event counts",
+        "two fixed boundary ticks cover the unmeasured first counter increment and a final notify before its counter store; there is no duration-proportional drift allowance",
+        "the first notify offset may differ by at most one service period; old four-route offsets differ by at most 10883 board ticks",
+        "private-data/scratch/TimeServices/runs/20261114T081438Z-time-independent-board-audit12/result/summary.json",
+        "successful delay calls compare exact elapsed serviced ticks; the dedicated task-9 callback at 0x6b7a4c compares exact stable cadence while shared callback targets are excluded"
+      ]
+    },
+    "tail_allowance": {
+      "tick_channel": "view ticks",
+      "rule": "admit each run against independent board time first; the tick channel has a fixed five-event bound (two endpoint ticks per run plus one first-notify phase tick), never D+1; other shared channels admit ceil(longer count * admitted tick difference / larger tick count) + 1 events; one-sided channels have no allowance",
+      "reason": "the 30000-board-tick service period, fixed two-tick endpoint bound and one-period first-notify alignment are independent admission requirements; event content, ordering, elapsed delay, stable cadence and counted causal pairs remain required"
+    },
+    "milestone": {
+      "name": "board-tick observation end",
+      "sources": [
+        "summary.json stimuli.clock is board-ticks and every stimulus and tick ordinal, including End, matches between the stock, owned and admitted control runs"
+      ]
+    },
+    "causal_pairs": [
+      {
+        "first": {
+          "entry": "notify-timer"
+        },
+        "then": {
+          "kind": "message",
+          "queue": 9
+        },
+        "sources": [
+          "0x69c4d8 posts queue 9 from 0x69c4e4"
+        ]
+      },
+      {
+        "first": {
+          "entry": "notify-delay"
+        },
+        "then": {
+          "kind": "message",
+          "queue": 6
+        },
+        "sources": [
+          "0x69c304 posts queue 6 from 0x69c310"
+        ]
+      }
+    ]
+  }
+}

@@ -1,7 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.FixedImage.Record
-  ( BuildId(..), BodyBounds(..), Bss(..), Publication(..), Image(..), publication, applyPublications
-  , makeRecord, crc32, stageRecord, restoreRecord, ceilingPublications, reservationPublications, corruptRecord
+  ( BuildId(..), BodyBounds(..), Bss(..), Publication(..), Image(..), LoadAddress(..), publication, imageLoad
+  , applyPublications, makeRecord, crc32, stageRecord, restoreRecord, ceilingPublications, reservationPublications
+  , corruptRecord
   ) where
 
 import Control.Monad (foldM, unless)
@@ -17,6 +18,9 @@ data BodyBounds = BodyBounds Word32 Word32 deriving (Eq, Show)
 data Bss = Bss Word32 Word32 deriving (Eq, Show)
 data Image = Image4 | Image5 | Plain deriving (Eq, Show)
 data Publication = Publication Image Word32 Word32 Word32 deriving (Eq, Show)
+
+-- | The guest address of a decoded image's first byte.
+newtype LoadAddress = LoadAddress Word32 deriving (Eq, Show)
 
 publication :: Word32 -> Word32 -> Word32 -> Either String Publication
 publication address old new = do
@@ -44,23 +48,32 @@ reservationPublications = ceilingPublications ++
 instruction :: Word32 -> Word32 -> Word32
 instruction opcode immediate = opcode .|. ((immediate .&. 0xf000) `shiftL` 4) .|. (immediate .&. 0xfff)
 
-applyPublications :: Image -> [Publication] -> B.ByteString -> Either String B.ByteString
-applyPublications image rows bytes = do
+-- | Images 4 and 5 load where the container's segment table says; RC0 loads image 4 at 0x61c340, stock at 0x61c400.
+imageLoad :: [U.SegmentEntry] -> Image -> Either String LoadAddress
+imageLoad _ Plain = Right (LoadAddress 0x1100000)
+imageLoad segments image = case [U.segLoad entry | entry <- segments, U.segId entry == number] of
+  [load] -> Right (LoadAddress load)
+  _ -> Left ("container lacks a unique image " ++ show number ++ " segment")
+  where
+    number = if image == Image4 then 4 else 5
+
+applyPublications :: Image -> LoadAddress -> [Publication] -> B.ByteString -> Either String B.ByteString
+applyPublications image (LoadAddress base) rows bytes = do
   unless (length addresses == length (nub addresses)) (Left "duplicate publication address")
   whenImage4
   foldM apply bytes selected
   where
     selected = [(address, old, new) | Publication target address old new <- rows, target == image]
     addresses = [address | (address, _, _) <- selected]
-    base = case image of Image4 -> 0x61c400; Image5 -> 0xbf1a00; Plain -> 0x1100000
     apply current (address, old, new) = do
+      unless (address >= base) (Left ("publication precedes decoded image at " ++ U.showHexWord address))
       let offset = fromIntegral (address - base)
       unless (offset + 4 <= B.length current) (Left "publication leaves decoded image")
       unless (U.word32At current offset == old) (Left ("publication preimage differs at " ++ U.showHexWord address))
       pure (B.take offset current <> U.putWord32 new <> B.drop (offset + 4) current)
     whenImage4 = unless (image /= Image4) $ mapM_ checkHeap
       [offset | (low, high) <- [(0x89cda4,0x89d4f8),(0x89d4fc,0x89d908),(0x89da3c,0x89dfc0),(0x89e464,0x89e7c4)]
-      , address <- [low,low+4..high-56], let offset = address - 0x61c400
+      , address <- [low,low+4..high-56], let offset = address - fromIntegral base
       , offset + 56 <= B.length bytes
       , map (U.word32At bytes . (offset +)) [0,4,8] == [0x48454150,1,0xa71a00]]
     checkHeap offset = unless (U.word32At bytes (offset+12) <= imageBase)

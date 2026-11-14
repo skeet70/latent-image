@@ -7,10 +7,11 @@ import qualified CustomNative as Custom
 import qualified CustomAdmission as Boundary
 import Data.Bits (shiftR, (.&.), (.|.))
 import Data.Either (isLeft)
+import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import qualified Emulation.NativeCase as NativeCase
 import qualified Emulation.NativeObservation as Observation
-import Emulation.OwnedCase (CaseId(..), CaseRegion(..), Permission(..), Symbol(..), mkRegion, parseSymbols, word32le)
+import Emulation.OwnedCase (CaseId(..), CaseSpec(..), CaseRegion(..), Permission(..), Symbol(..), mkRegion, parseSymbols, word32le)
 import Control.Monad (forM_, unless)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
@@ -18,6 +19,10 @@ import Data.Word (Word32)
 import Numeric (showHex)
 import qualified FujiAF.FirstStage as F
 import Oracle
+import qualified Native as Bank
+import PropertyFields (PropertyId(..))
+import Replacement.PropertyService.Classify (Owned(..))
+import qualified Replacement.PropertyService.Oracle as Property
 import Replacement.PropertyService.Artifact (StorageWidth(..), storageOutputName)
 import Replacement.PropertyService.Placement (Carrier(..), GuestAddress(..))
 import qualified SettingsEeNative as Ee
@@ -188,8 +193,47 @@ eeTraceTests = do
   assert "EE controls include cache, ordering, final setter, void result, and stale backing"
     (length controlsDeclared == 7 && M.size (M.fromList [(Ee.eeControlName control,()) | control <- controlsDeclared]) == 7)
 
+propertyCodeRegionTests :: IO ()
+propertyCodeRegionTests = do
+  let image = B.replicate 0x210000 0
+      source = Bank.prepareNativeImage image
+      operation = Property.OracleCase (PropertyId 0) (Property.Get Property.Bank0 Property.LiveRead (Property.SlotArgument 0))
+      spec = Bank.propertyCase source M.empty (Property.fixture image) Task operation OwnedUnassigned
+      setter = Bank.propertyCase source M.empty (Property.fixture image) Task
+        (Property.OracleCase (PropertyId 0) (Property.Set Property.Bank0 (Property.SlotArgument 0xffffffff) Property.SetZero)) OwnedUnassigned
+      ordered = sortOn NativeCase.baseAddress (map caseRegion (caseRegions spec))
+      disjoint = and [NativeCase.baseAddress left + NativeCase.regionSize left <= NativeCase.baseAddress right | (left,right) <- zip ordered (drop 1 ordered)]
+      declared = Property.codeRegions image Property.stockFunctions
+      dataRegion = mkRegion (Observation.RegionId "retained-data") (Observation.GuestAddress 0x950000) 4 ReadWrite (B.replicate 4 0)
+      replaceCode = Bank.replacePropertyCodeRegions source Task
+  assert "property fixtures emit disjoint logical regions" disjoint
+  assert "shared property assembly retains the setter r3 obligation"
+    (lookup Observation.R3 (caseExpectedRegisters setter) == Just 0xffffffff)
+  replaced <- either (fail . show) pure (replaceCode (declared ++ [dataRegion]))
+  assert "property code replacement retains unrelated data"
+    (any ((== Observation.RegionId "retained-data") . Observation.regionIdOf . caseRegion) replaced)
+  forM_
+    [ ("unrelated-code",0x61e110,4)
+    , ("partial-code",0x61d598,8)
+    ] $ \(name,address,size) -> do
+      let unknown = mkRegion (Observation.RegionId name) (Observation.GuestAddress address) size ReadExecute (B.replicate size 0)
+      assert ("property code replacement refuses " ++ name)
+        (case replaceCode (declared ++ [unknown]) of
+          Left (Bank.UnexpectedCodeOverlap identifier) -> identifier == Observation.RegionId name
+          _ -> False)
+  case declared of
+    [] -> fail "property code producer emits no regions"
+    first:rest -> do
+      let raw = caseRegion first
+          changed = first {caseRegion = raw {NativeCase.regionBytes = word32le 0xe12fff1e <> B.drop 4 (NativeCase.regionBytes raw)}}
+      assert "property code replacement refuses to discard a modified code control"
+        (case replaceCode (changed:rest) of
+          Left (Bank.UnexpectedCodeOverlap _) -> True
+          _ -> False)
+
 main :: IO ()
 main = do
+  propertyCodeRegionTests
   bankApplyElfTests
   bankApplyAncestorElfTests
   eeTraceTests

@@ -19,7 +19,9 @@ import FujiAF.Host (failH, get, num, str)
 import GHC.Clock (getMonotonicTimeNSec)
 import FujiAF.JSON (encodeCanonical)
 import FujiAF.StorageBudget (checkStorageBudget)
-import Replacement.ModalRuntime.QualifierPolicy (executionIdentity, installedCheckpointMatches)
+import Replacement.ModalRuntime.QualifierPolicy
+  ( OwnedBase (..), Qualification (..), Role (..), executionIdentity, installedCheckpointMatches
+  , ownedBaseInputs, parseInvocation, qualificationOptions, roleFirmware )
 import Emulation.ParallelCases (mapBounded)
 import Replacement.ModalRuntime.MemoryCounters (oomEvents, oomKills, peakBytes, readCounter)
 import System.Directory
@@ -39,8 +41,6 @@ import Text.Read (readMaybe)
 newtype CaseId = CaseId String deriving (Eq, Ord, Show)
 newtype CommitId = CommitId String deriving (Eq, Show)
 newtype Predicate = Predicate String deriving (Eq, Show)
-
-data Role = Stock | Owned deriving (Eq, Show)
 
 data QualificationScope = HeadroomOnly | FullMatrix
 
@@ -93,6 +93,7 @@ data InputIdentity = InputIdentity
   { inputRunDocument, inputTrajectories, inputFirmware, inputAdjustment :: Sha256
   , inputArchive, inputRetired, inputRom, inputTables, inputPlan, inputClock :: Sha256
   , inputPairs :: Int
+  , inputOwnedBase :: OwnedBase
   } deriving (Eq)
 
 data ToolIdentity = ToolIdentity
@@ -271,9 +272,12 @@ expectedRom = sha "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf
 memoryMaxBytes :: Integer
 memoryMaxBytes = 2147483648
 
-qualRoot, binRoot :: FilePath
-qualRoot = "private-data/scratch/QualifierSpeed/qualification3"
-binRoot = qualRoot </> "bin"
+defaultQualRoot :: FilePath
+defaultQualRoot = "private-data/scratch/QualifierSpeed/qualification3"
+
+qualRoot, binRoot :: Qualification -> FilePath
+qualRoot = qualificationRoot
+binRoot q = qualRoot q </> "bin"
 checkerRoot :: FilePath
 checkerRoot = "bazel-bin"
 
@@ -291,110 +295,114 @@ main = do
   atRoot <- doesFileExist "emulation/BUILD.bazel"
   unless atRoot (failH "run from the repository root")
   arguments <- getArgs
-  case arguments of
-    ["plan"] -> planMode FullMatrix
-    ["plan", "headroom"] -> planMode HeadroomOnly
-    ["execute"] -> executeMode FullMatrix
-    ["recheck"] -> recheckMode
-    ["headroom"] -> executeMode HeadroomOnly
-    ["measure"] -> measureMode
-    ["install-producer"] -> slottedMode ["install-producer"] installCase Owned (qualRoot </> "install-producer")
-    ["role-slotted", name, role] | CaseId name `elem` pairs, Just parsed <- parseRole role -> roleMode (CaseId name) parsed
-    _ -> failH "usage: menu-engine-qualify-bounded plan [headroom]|execute|headroom|measure|recheck"
+  (q, command) <- either failH pure (parseInvocation defaultQualRoot arguments)
+  case command of
+    ["plan"] -> planMode q FullMatrix
+    ["plan", "headroom"] -> planMode q HeadroomOnly
+    ["execute"] -> executeMode q FullMatrix
+    ["recheck"] -> recheckMode q
+    ["headroom"] -> executeMode q HeadroomOnly
+    ["measure"] -> measureMode q
+    ["install-producer"] -> slottedMode q ["install-producer"] installCase Owned (qualRoot q </> "install-producer")
+    ["role-slotted", name, role] | CaseId name `elem` pairs, Just parsed <- parseRole role -> roleMode q (CaseId name) parsed
+    _ -> failH "usage: menu-engine-qualify-bounded [--root DIR] [--owned-base DAT SHA256] plan [headroom]|execute|headroom|measure|recheck"
 
-measureMode :: IO ()
-measureMode = do
+measureMode :: Qualification -> IO ()
+measureMode q = do
   occupied <- insideSlot
   when occupied (failH "qualification measurement must start outside an emulator slot")
   requireCleanSource
-  verifyInputs
+  verifyInputs q
   _ <- boundedSlotPolicy
-  checkStorageBudget qualRoot
-  buildAndTest
-  prepareInstalledCheckpoint
+  checkStorageBudget (qualRoot q)
+  buildAndTest q
+  prepareInstalledCheckpoint q
   started <- getMonotonicTimeNSec
   measurements <- forM [installCase, CaseId "oracle-close-property"] $ \name -> do
     forM_ [Stock, Owned] $ \role -> do
-      result <- runRole name role
+      result <- runRole q name role
       case result of
-        Left failure -> writeFailurePacket "blocked" failure >> failH "measurement role failed"
+        Left failure -> writeFailurePacket q "blocked" failure >> failH "measurement role failed"
         Right _ -> pure ()
-    comparison <- runPairCheck name
+    comparison <- runPairCheck q name
     directory <- case comparison of
-      Left failure -> writeFailurePacket "blocked" failure >> failH "measurement pair failed"
+      Left failure -> writeFailurePacket q "blocked" failure >> failH "measurement pair failed"
       Right path -> pure path
     roles <- forM [Stock, Owned] $ \role -> do
-      completion <- decodeFile (roleDirectory name role </> "completion.json") >>= either failH pure
-      receipt <- decodeFile (roleDirectory name role </> "receipt" </> "e2e-result.json") >>= either failH pure
+      completion <- decodeFile (roleDirectory q name role </> "completion.json") >>= either failH pure
+      receipt <- decodeFile (roleDirectory q name role </> "receipt" </> "e2e-result.json") >>= either failH pure
       pure (object ["role" .= roleText role, "wall_seconds" .= get completion "wall_seconds", "phases" .= get receipt "phases"])
     comparisonValue <- decodeFile (directory </> "pair.json") >>= either failH pure
     pure (object ["case" .= caseText name, "roles" .= roles, "comparison" .= comparisonValue])
   ended <- getMonotonicTimeNSec
-  writeJson (qualRoot </> "measurement.json") $ object
+  writeJson (qualRoot q </> "measurement.json") $ object
     [ "passed" .= True, "pairs" .= measurements
     , "wall_seconds" .= (fromIntegral (ended - started) / 1e9 :: Double) ]
 
-planMode :: QualificationScope -> IO ()
-planMode scope = do
+planMode :: Qualification -> QualificationScope -> IO ()
+planMode q scope = do
   requireCleanSource
   identity <- verifySource
-  verifyInputs
+  verifyInputs q
   printJson $ object
     [ "schema" .= (1 :: Int)
     , "status" .= ("planned-not-executed" :: String)
     , "qualification_scope" .= scopeText scope
     , "source" .= sourceJson identity
-    , "inputs" .= inputJson inputIdentity
+    , "inputs" .= inputJson (inputIdentity q)
     , "resources" .= resourcesValue
     , "gate" .= (caseText gateCase ++ "." ++ roleText gateRole)
     , "reuse" .= object
         [ "old_matrix_eligible" .= False
         , "reason" .= ("the prior matrix binds run document efa32ff8 and trajectory inventory 5efb00f" :: String) ]
-    , "command" .= ("menu-engine-qualify-bounded " ++ case scope of
+    , "command" .= unwords ("menu-engine-qualify-bounded" : qualificationOptions q ++ [case scope of
         HeadroomOnly -> "headroom"
-        FullMatrix -> "execute")
+        FullMatrix -> "execute"])
     , "execution" .= ("host-build queues builds automatically; execution takes an emulator slot after the build" :: String)
     ]
 
-executeMode :: QualificationScope -> IO ()
-executeMode scope = do
+executeMode :: Qualification -> QualificationScope -> IO ()
+executeMode q scope = do
   occupied <- insideSlot
   when occupied (failH "qualification preparation must start outside an emulator slot")
   requireCleanSource
-  verifyInputs
+  verifyInputs q
   _ <- boundedSlotPolicy
-  checkStorageBudget qualRoot
-  buildAndTest
-  prepareInstalledCheckpoint
+  checkStorageBudget (qualRoot q)
+  buildAndTest q
+  prepareInstalledCheckpoint q
   source <- verifySource
-  outcome <- runGate source inputIdentity
+  outcome <- runGate q source (inputIdentity q)
   case scope of
-    HeadroomOnly -> publishHeadroom outcome source inputIdentity
-    FullMatrix -> runMatrix source inputIdentity >>= \matrix -> publish matrix source inputIdentity
+    HeadroomOnly -> publishHeadroom q outcome source (inputIdentity q)
+    FullMatrix -> runMatrix q source (inputIdentity q) >>= \matrix -> publish q matrix source (inputIdentity q)
 
-ownedCheckpointRoot :: IO FilePath
-ownedCheckpointRoot = do
-  tools <- toolIdentity
+ownedCheckpointRoot :: Qualification -> IO FilePath
+ownedCheckpointRoot q = do
+  tools <- toolIdentity q
   let producer = object
         [ "viewer" .= sha256Hex (toolViewer tools), "sdk" .= sha256Hex (toolSdkRamPush tools)
-        , "run" .= sha256Hex expectedRunDocument, "firmware" .= sha256Hex expectedFirmware
+        , "run" .= sha256Hex expectedRunDocument, "firmware" .= sha256Hex (snd (firmwareFor q Owned))
         , "adjustment" .= sha256Hex expectedAdjustment, "rom" .= sha256Hex expectedRom
         , "archive" .= sha256Hex expectedArchive, "retired" .= sha256Hex expectedRetired ]
   pure ("private-data/emulator-checkpoints" </> ("qualifier-install-" ++ sha256Hex (sha256 (encodeCanonical producer))))
 
-ownedProofPath :: IO FilePath
-ownedProofPath = (</> "observed-install.json") <$> ownedCheckpointRoot
+ownedProofPath :: Qualification -> IO FilePath
+ownedProofPath q = (</> "observed-install.json") <$> ownedCheckpointRoot q
+
+firmwareFor :: Qualification -> Role -> (FilePath, Sha256)
+firmwareFor q = roleFirmware (qualificationOwnedBase q) (inputsRoot </> "firmware.DAT", expectedFirmware)
 
 installCase :: CaseId
 installCase = CaseId "oracle-close"
 
-prepareInstalledCheckpoint :: IO ()
-prepareInstalledCheckpoint = do
-  proof <- ownedProofPath
+prepareInstalledCheckpoint :: Qualification -> IO ()
+prepareInstalledCheckpoint q = do
+  proof <- ownedProofPath q
   present <- doesFileExist proof
   unless present $ do
     executable <- getExecutablePath
-    status <- spawn executable ["install-producer"] (qualRoot </> "logs" </> "install-producer.log") []
+    status <- spawn executable (qualificationOptions q ++ ["install-producer"]) (qualRoot q </> "logs" </> "install-producer.log") []
     saved <- doesFileExist proof
     unless (status == ExitSuccess && saved) (failH "observed installation producer failed")
 
@@ -415,27 +423,27 @@ boundedSlotPolicy = do
     (failH "qualification requires 1..3 emulator slots, a 2G emulator cap and zero swap")
   pure policy
 
-roleMode :: CaseId -> Role -> IO ()
-roleMode name role = slottedMode ["role-slotted", caseText name, roleText role] name role (roleDirectory name role)
+roleMode :: Qualification -> CaseId -> Role -> IO ()
+roleMode q name role = slottedMode q ["role-slotted", caseText name, roleText role] name role (roleDirectory q name role)
 
-slottedMode :: [String] -> CaseId -> Role -> FilePath -> IO ()
-slottedMode arguments name role directory = do
+slottedMode :: Qualification -> [String] -> CaseId -> Role -> FilePath -> IO ()
+slottedMode q arguments name role directory = do
   policy <- boundedSlotPolicy
-  archiveStale directory (caseText name ++ "-" ++ roleText role)
-  createDirectoryIfMissing True directory
   started <- getMonotonicTimeNSec
-  reexecInSlot policy arguments
+  reexecInSlot policy (qualificationOptions q ++ arguments)
   ended <- getMonotonicTimeNSec
   occupied <- insideSlot
   unless occupied (failH "role requires an emulator slot")
+  archiveStale q directory (caseText name ++ "-" ++ roleText role)
+  createDirectoryIfMissing True directory
   slot <- admittedSlot
   writeJson (directory </> "admission.json") $ object
     [ "slot" .= fmap slotIndex slot
     , "wait_seconds" .= (fromIntegral (ended - started) / 1e9 :: Double)
     ]
   requireCleanSource
-  verifyInputs
-  outcome <- executeRole name role directory
+  verifyInputs q
+  outcome <- executeRole q name role directory
   case outcome of
     Right _ -> pure ()
     Left (Failure predicate detail _) -> failH (predicateText predicate ++ ": " ++ detail)
@@ -467,8 +475,8 @@ requireCleanSource = do
   dirty <- readProcess "git" ["status", "--porcelain"] ""
   unless (null (trim dirty)) (failH "source tree is dirty; commit the frozen source before qualification")
 
-inputIdentity :: InputIdentity
-inputIdentity = InputIdentity
+inputIdentity :: Qualification -> InputIdentity
+inputIdentity q = InputIdentity
   { inputRunDocument = expectedRunDocument
   , inputTrajectories = expectedTrajectories
   , inputFirmware = expectedFirmware
@@ -480,6 +488,7 @@ inputIdentity = InputIdentity
   , inputPlan = expectedPlan
   , inputClock = expectedClock
   , inputPairs = length pairs
+  , inputOwnedBase = qualificationOwnedBase q
   }
 
 sourceJson :: SourceProvenance -> Value
@@ -491,7 +500,7 @@ sourceJson source = object
   ]
 
 inputJson :: InputIdentity -> Value
-inputJson inputs = object
+inputJson inputs = object $
   [ "run_document" .= sha256Hex (inputRunDocument inputs)
   , "trajectory_inventory" .= sha256Hex (inputTrajectories inputs)
   , "firmware" .= sha256Hex (inputFirmware inputs)
@@ -504,7 +513,7 @@ inputJson inputs = object
   , "clock_exclusions" .= sha256Hex (inputClock inputs)
   , "pairs" .= inputPairs inputs
   , "roles" .= (2 * inputPairs inputs)
-  ]
+  ] ++ ownedBaseInputs (inputOwnedBase inputs)
 
 resourcesValue :: Value
 resourcesValue = object
@@ -516,8 +525,8 @@ resourcesValue = object
   , "native_batches" .= (0 :: Int)
   ]
 
-verifyInputs :: IO ()
-verifyInputs = do
+verifyInputs :: Qualification -> IO ()
+verifyInputs q = do
   forM_
     [ ("run document", runDocument, expectedRunDocument)
     , ("firmware", inputsRoot </> "firmware.DAT", expectedFirmware)
@@ -529,6 +538,9 @@ verifyInputs = do
     , ("clock exclusions", clockPath, expectedClock)
     , ("boot ROM", "private-data/analysis/x-m1-1.50/bootrom/bootrom-0x80000000-4000.bin", expectedRom)
     ] $ \(label, path, expected) -> requireDigest label path expected
+  case qualificationOwnedBase q of
+    SharedBase -> pure ()
+    StagedBase path digest -> requireDigest "owned base firmware" path digest
   files <- sort . filter (".json" `isSuffixOf`) <$> listDirectory trajectoryRoot
   unless (length files == 134) (failH ("expected 134 trajectories, found " ++ show (length files)))
   let names = sort . nub $ map pairName files
@@ -560,9 +572,9 @@ requireDigest label path expected = do
   unless (actual == expected)
     (failH (label ++ " digest " ++ sha256Hex actual ++ " differs from " ++ sha256Hex expected))
 
-buildAndTest :: IO ()
-buildAndTest = do
-  createDirectoryIfMissing True (qualRoot </> "logs")
+buildAndTest :: Qualification -> IO ()
+buildAndTest q = do
+  createDirectoryIfMissing True (qualRoot q </> "logs")
   configured <- lookupEnv "MENU_BOUNDED_QUAL_OUTPUT_BASE"
   let baseArguments = ["--output_base=" ++ path | Just path <- [configured]]
       buildTargets =
@@ -582,24 +594,24 @@ buildAndTest = do
         , "//replacement/modal_runtime:render-pair-tests"
         , "//replacement/modal_runtime:menu-engine-pair-tests"
         , "//replacement/modal_runtime:menu-engine-generator-tests" ]
-  buildVerdict <- runHostBuild baseArguments CompileTargets buildTargets (qualRoot </> "logs" </> "build.log")
-  testVerdict <- runHostBuild baseArguments CheckTargets testTargets (qualRoot </> "logs" </> "host-tests.log")
+  buildVerdict <- runHostBuild q baseArguments CompileTargets buildTargets (qualRoot q </> "logs" </> "build.log")
+  testVerdict <- runHostBuild q baseArguments CheckTargets testTargets (qualRoot q </> "logs" </> "host-tests.log")
   source <- verifySource
-  writeJson (qualRoot </> "host-build-verdicts.json") $ object
+  writeJson (qualRoot q </> "host-build-verdicts.json") $ object
     [ "source" .= sourceJson source
     , "verdict_lines" .= [C.unpack line | VerdictLine line <- [buildVerdict, testVerdict]]
     ]
-  checkStorageBudget qualRoot
-  freezeTools
+  checkStorageBudget (qualRoot q)
+  freezeTools q
 
-runHostBuild :: [String] -> BuildPhase -> [String] -> FilePath -> IO VerdictLine
-runHostBuild baseArguments phase targets logPath = do
+runHostBuild :: Qualification -> [String] -> BuildPhase -> [String] -> FilePath -> IO VerdictLine
+runHostBuild q baseArguments phase targets logPath = do
   let arguments = ["shell", "--", "host-build"] ++ baseArguments
         ++ [buildCommand phase, "--jobs=2", "--local_test_jobs=1"]
         ++ ["--test_output=errors" | CheckTargets <- [phase]]
         ++ targets
       blocked predicate detail code = do
-        writeFailurePacket "blocked" (Failure (Predicate predicate) detail logPath)
+        writeFailurePacket q "blocked" (Failure (Predicate predicate) detail logPath)
         exitWith (ExitFailure code)
   status <- spawn "devenv" arguments logPath []
   size <- getFileSize logPath
@@ -622,26 +634,26 @@ runHostBuild baseArguments phase targets logPath = do
     (_, (_, HostBuildReport BuildInterrupted)) -> blocked "host-build-interrupted" "host-build was interrupted" 8
     _ -> blocked "host-build-failed" "host-build did not pass" (max 1 (exitCodeValue status))
 
-freezeTools :: IO ()
-freezeTools = do
-  exists <- doesDirectoryExist binRoot
+freezeTools :: Qualification -> IO ()
+freezeTools q = do
+  exists <- doesDirectoryExist (binRoot q)
   when exists $ do
-    _ <- rawSystem "chmod" ["-R", "u+w", binRoot]
-    removePathForcibly binRoot
-  createDirectoryIfMissing True binRoot
+    _ <- rawSystem "chmod" ["-R", "u+w", binRoot q]
+    removePathForcibly (binRoot q)
+  createDirectoryIfMissing True (binRoot q)
   forM_
     [ "bazel-bin/emulation/xm1-viewer"
     , "bazel-bin/emulation/xm1-viewer.runfiles"
     , "bazel-bin/emulation/modal-settings-compare"
     , "bazel-bin/emulation/render-compare"
     , "bazel-bin/replacement/modal_runtime/menu-engine-pair-check"
-    ] $ \source -> copyPath source binRoot
+    ] $ \source -> copyPath source (binRoot q)
   moduleText <- readFile "bazel-bin/emulation/FujiModPaths.hs"
   driver <- sdkPath "fujimodDriver" moduleText
   ramPush <- sdkPath "fujimodRamPushBridge" moduleText
   driverDigest <- sha256File driver
   ramPushDigest <- sha256File ramPush
-  writeJson (binRoot </> "sdk.json") $ object
+  writeJson (binRoot q </> "sdk.json") $ object
     [ "store" .= takeDirectory (takeDirectory driver)
     , "driver" .= driver
     , "ram_push" .= ramPush
@@ -685,32 +697,32 @@ cgroupDirectory = do
     line : _ -> pure ("/sys/fs/cgroup" ++ dropWhile (/= '/') line)
     [] -> failH "cgroup membership is unavailable"
 
-runGate :: SourceProvenance -> InputIdentity -> IO RunOutcome
-runGate source inputs = do
-  result <- runRole gateCase gateRole
+runGate :: Qualification -> SourceProvenance -> InputIdentity -> IO RunOutcome
+runGate q source inputs = do
+  result <- runRole q gateCase gateRole
   outcome <- case result of
     Left failure -> do
-      writeFailurePacket "blocked" failure
+      writeFailurePacket q "blocked" failure
       failH "gate role failed"
     Right completed -> pure completed
-  let directory = roleDirectory gateCase gateRole
+  let directory = roleDirectory q gateCase gateRole
       completionPath = directory </> "completion.json"
       watch = directory </> "receipt" </> "e2e-modal-watch-final.json"
   completionBytes <- B.readFile completionPath
   memory <- case eitherDecodeStrict' completionBytes >>= parseSlotMemory of
     Left problem -> do
-      writeFailurePacket "blocked" (Failure (Predicate "memory-headroom") problem completionPath)
+      writeFailurePacket q "blocked" (Failure (Predicate "memory-headroom") problem completionPath)
       failH problem
     Right observed -> pure observed
   present <- doesFileExist watch
   unless present $ do
-    writeFailurePacket "blocked" (Failure (Predicate "known-worst-watch") "gate role wrote no terminal watch" directory)
+    writeFailurePacket q "blocked" (Failure (Predicate "known-worst-watch") "gate role wrote no terminal watch" directory)
     failH "gate role did not produce its terminal watch"
   size <- getFileSize watch
   digest <- sha256Hex <$> sha256File watch
-  rows <- gateWatchRows
+  rows <- gateWatchRows q
   let OomCount kills = slotOomKills memory
-  writeJson (qualRoot </> "gate.json") $ object
+  writeJson (qualRoot q </> "gate.json") $ object
     [ "case" .= caseText gateCase
     , "role" .= roleText gateRole
     , "complete" .= True
@@ -726,11 +738,11 @@ runGate source inputs = do
     ]
   pure outcome
 
-publishHeadroom :: RunOutcome -> SourceProvenance -> InputIdentity -> IO ()
-publishHeadroom outcome source inputs = do
-  gateValue <- decodeFile (qualRoot </> "gate.json") >>= either failH pure
-  tools <- toolIdentity
-  let directory = qualRoot </> "headroom"
+publishHeadroom :: Qualification -> RunOutcome -> SourceProvenance -> InputIdentity -> IO ()
+publishHeadroom q outcome source inputs = do
+  gateValue <- decodeFile (qualRoot q </> "gate.json") >>= either failH pure
+  tools <- toolIdentity q
+  let directory = qualRoot q </> "headroom"
       terminalPath = directory </> "terminal.json"
       reviewPath = directory </> "review-packet.json"
       executed = case outcome of Executed -> 1 :: Int; Reused -> 0
@@ -776,9 +788,9 @@ publishHeadroom outcome source inputs = do
     , "review_packet" .= reviewPath
     ]
 
-gateWatchRows :: IO Integer
-gateWatchRows = do
-  let path = roleDirectory gateCase gateRole </> "receipt" </> "e2e-modal-observation.json"
+gateWatchRows :: Qualification -> IO Integer
+gateWatchRows q = do
+  let path = roleDirectory q gateCase gateRole </> "receipt" </> "e2e-modal-observation.json"
   present <- doesFileExist path
   unless present (failH "gate role wrote no observation receipt")
   value <- decodeFile path
@@ -789,36 +801,36 @@ gateWatchRows = do
       unless (rows > 0) (failH "gate role recorded no final watch rows")
       pure rows
 
-runMatrix :: SourceProvenance -> InputIdentity -> IO Matrix
-runMatrix _source _inputs = do
+runMatrix :: Qualification -> SourceProvenance -> InputIdentity -> IO Matrix
+runMatrix q _source _inputs = do
   executed <- newIORef (0 :: Int)
   reused <- newIORef (0 :: Int)
   comparisons <- newIORef ([] :: [(CaseId, FilePath)])
   policy <- boundedSlotPolicy
   let SlotCount slots = slotCount policy
-  installed <- runRole installCase Owned
+  installed <- runRole q installCase Owned
   case installed of
-    Left failure -> writeFailurePacket "blocked" failure >> failH "observed installation role failed"
+    Left failure -> writeFailurePacket q "blocked" failure >> failH "observed installation role failed"
     Right _ -> pure ()
-  outcomes <- mapBounded slots (uncurry runRole)
+  outcomes <- mapBounded slots (uncurry (runRole q))
     [(name, role) | name <- pairs, role <- [Stock, Owned], (name, role) /= (installCase, Owned)]
   forM_ (installed : outcomes) $ \outcome -> case matrixGate outcome of
     Stop failure -> do
-      writeFailurePacket "blocked" failure
+      writeFailurePacket q "blocked" failure
       failH "matrix role failed"
     Continue Reused -> modifyIORef' reused (+ 1)
     Continue Executed -> modifyIORef' executed (+ 1)
   forM_ pairs $ \name -> do
-    complete <- roleComplete name Stock
-    completeOwned <- roleComplete name Owned
+    complete <- roleComplete q name Stock
+    completeOwned <- roleComplete q name Owned
     unless (complete && completeOwned) $ do
-      writeFailurePacket "blocked" (Failure (Predicate "role-completion")
-        ("role incomplete after execution: " ++ caseText name) (roleDirectory name Stock))
+      writeFailurePacket q "blocked" (Failure (Predicate "role-completion")
+        ("role incomplete after execution: " ++ caseText name) (roleDirectory q name Stock))
       failH ("role incomplete: " ++ caseText name)
-    outcome <- runPairCheck name
+    outcome <- runPairCheck q name
     case outcome of
       Left failure -> do
-        writeFailurePacket "blocked" failure
+        writeFailurePacket q "blocked" failure
         failH ("pair comparison failed: " ++ caseText name)
       Right directory -> modifyIORef' comparisons ((name, directory) :)
   compared <- reverse <$> readIORef comparisons
@@ -838,50 +850,50 @@ matrixGate (Right outcome) = Continue outcome
 
 data RunOutcome = Executed | Reused deriving (Eq, Show)
 
-runRole :: CaseId -> Role -> IO (Either Failure RunOutcome)
-runRole name role = do
-  let directory = roleDirectory name role
-  complete <- roleComplete name role
+runRole :: Qualification -> CaseId -> Role -> IO (Either Failure RunOutcome)
+runRole q name role = do
+  let directory = roleDirectory q name role
+  complete <- roleComplete q name role
   if complete then pure (Right Reused) else do
     stored <- decodeFile (directory </> "input.json")
-    current <- roleJson <$> roleIdentity name role
+    current <- roleJson <$> roleIdentity q name role
     recorded <- doesFileExist (directory </> "completion.json")
     if recorded && either (const False) ((== executionJson current) . executionJson) stored
       then pure (Left (Failure (Predicate "completed-observation-admission")
         "recorded completion failed current admission; automatic replay is refused"
         (directory </> "completion.json")))
       else do
-        terminal <- roleTerminalFailure name role
+        terminal <- roleTerminalFailure q name role
         case terminal of
           Just failure -> pure (Left failure)
           Nothing -> do
             executable <- getExecutablePath
-            status <- spawn executable ["role-slotted", caseText name, roleText role]
-              (qualRoot </> "logs" </> (caseText name ++ "." ++ roleText role ++ ".log")) []
-            finished <- roleComplete name role
+            status <- spawn executable (qualificationOptions q ++ ["role-slotted", caseText name, roleText role])
+              (qualRoot q </> "logs" </> (caseText name ++ "." ++ roleText role ++ ".log")) []
+            finished <- roleComplete q name role
             if status == ExitSuccess && finished
               then pure (Right Executed)
               else pure (Left (Failure (Predicate "role-completion") "role worker did not complete" directory))
 
-completionHolds :: Value -> Value -> Value -> Sha256 -> Sha256 -> Either String Value -> Bool
-completionHolds current stored completionValue inputDigest resultDigest receiptValue =
+completionHolds :: Sha256 -> Value -> Value -> Value -> Sha256 -> Sha256 -> Either String Value -> Bool
+completionHolds firmware current stored completionValue inputDigest resultDigest receiptValue =
   executionJson stored == executionJson current
   && either (const False) (\parsed ->
        completionIdentity parsed == inputDigest
        && completionResult parsed == resultDigest
        && completionExit parsed == 0
        && completionOomKills parsed == 0) (parseCompletion completionValue)
-  && receiptInputsMatch receiptValue
+  && receiptInputsMatch firmware receiptValue
 
-roleComplete :: CaseId -> Role -> IO Bool
-roleComplete name role = do
-  let directory = roleDirectory name role
+roleComplete :: Qualification -> CaseId -> Role -> IO Bool
+roleComplete q name role = do
+  let directory = roleDirectory q name role
       inputPath = directory </> "input.json"
       completionPath = directory </> "completion.json"
       receipt = directory </> "receipt" </> "e2e-result.json"
   present <- andM [doesFileExist inputPath, doesFileExist completionPath, doesFileExist receipt]
   if not present then pure False else do
-    current <- roleIdentity name role
+    current <- roleIdentity q name role
     stored <- decodeFile inputPath
     completionValue <- decodeFile completionPath
     inputDigest <- sha256File inputPath
@@ -890,7 +902,7 @@ roleComplete name role = do
     observation <- decodeFile (directory </> "receipt" </> "e2e-modal-observation.json")
     pure $ case (stored, completionValue) of
       (Right storedValue, Right completion) ->
-        completionHolds (roleJson current) storedValue completion inputDigest resultDigest receiptValue
+        completionHolds (snd (firmwareFor q role)) (roleJson current) storedValue completion inputDigest resultDigest receiptValue
           && either (const False) (installedCheckpointMatches (roleJson current)) observation
       _ -> False
 
@@ -920,17 +932,17 @@ parseFailure value = do
                  (str (get value "reason"))
                  (str (get value "viewer_log")))
 
-receiptInputsMatch :: Either String Value -> Bool
-receiptInputsMatch (Right value) =
+receiptInputsMatch :: Sha256 -> Either String Value -> Bool
+receiptInputsMatch firmware (Right value) =
   let inputs = get (get value "emulator_start") "inputs"
       parsed field = parseSha256Hex (str (get inputs field))
   in num (get inputs "schema") == 3
      && parsed "run_document" == Right expectedRunDocument
-     && parsed "installed_dat" == Right expectedFirmware
+     && parsed "installed_dat" == Right firmware
      && parsed "adjustment_nand" == Right expectedAdjustment
      && parsed "boot_rom" == Right expectedRom
      && get value "trajectory_failure" == Null
-receiptInputsMatch _ = False
+receiptInputsMatch _ _ = False
 
 terminalFailureFrom :: Value -> Maybe Value -> Maybe Failure
 terminalFailureFrom current storedFailure = case storedFailure of
@@ -939,13 +951,13 @@ terminalFailureFrom current storedFailure = case storedFailure of
     , get value "execution" == executionJson current -> Just parsed
   _ -> Nothing
 
-roleTerminalFailure :: CaseId -> Role -> IO (Maybe Failure)
-roleTerminalFailure name role = do
-  let failurePath = roleDirectory name role </> "failure.json"
+roleTerminalFailure :: Qualification -> CaseId -> Role -> IO (Maybe Failure)
+roleTerminalFailure q name role = do
+  let failurePath = roleDirectory q name role </> "failure.json"
   present <- doesFileExist failurePath
   if not present then pure Nothing else do
     failure <- decodeFile failurePath
-    current <- roleIdentity name role
+    current <- roleIdentity q name role
     case failure of
       Right value -> do
         let terminal = terminalFailureFrom (roleJson current) (Just value)
@@ -958,17 +970,17 @@ roleTerminalFailure name role = do
               Nothing -> terminal
       Left _ -> pure Nothing
 
-executeRole :: CaseId -> Role -> FilePath -> IO (Either Failure RunOutcome)
-executeRole name role directory = do
+executeRole :: Qualification -> CaseId -> Role -> FilePath -> IO (Either Failure RunOutcome)
+executeRole q name role directory = do
   readBoundedScope directory
-  identity <- roleIdentity name role
+  identity <- roleIdentity q name role
   writeJson (directory </> "input.json") (roleJson identity)
   cgroup <- cgroupDirectory
   beforeKills <- oomKills cgroup
   beforeEvents <- oomEvents cgroup
   beforePeak <- peakBytes cgroup
   started <- getMonotonicTimeNSec
-  status <- runViewer name role directory (directory </> "viewer.log")
+  status <- runViewer q name role directory (directory </> "viewer.log")
   ended <- getMonotonicTimeNSec
   afterKills <- oomKills cgroup
   afterEvents <- oomEvents cgroup
@@ -976,11 +988,11 @@ executeRole name role directory = do
       eventDelta = afterEvents - beforeEvents
       receipt = directory </> "receipt" </> "e2e-result.json"
   receiptValue <- decodeFile receipt
-  let receiptOk = receiptInputsMatch receiptValue
+  let receiptOk = receiptInputsMatch (snd (firmwareFor q role)) receiptValue
       receiptProblem = either Just (const Nothing) receiptValue
   if status == ExitSuccess && receiptOk && killDelta == 0 && eventDelta == 0 then do
     when (role == Owned && name == installCase) $ do
-      checkpointRoot <- ownedCheckpointRoot
+      checkpointRoot <- ownedCheckpointRoot q
       let prelinked = checkpointRoot </> "prelinked"
       retained <- doesDirectoryExist prelinked
       unless retained (copyPath (directory </> "receipt" </> "relinked") prelinked)
@@ -1057,10 +1069,12 @@ executeRole name role directory = do
               ]
             pure (Left (Failure predicate reason (directory </> "viewer.log")))
 
-runViewer :: CaseId -> Role -> FilePath -> FilePath -> IO ExitCode
-runViewer name role directory logPath = do
-  checkpointRoot <- ownedCheckpointRoot
-  proofPath <- ownedProofPath
+runViewer :: Qualification -> CaseId -> Role -> FilePath -> FilePath -> IO ExitCode
+runViewer q name role directory logPath = do
+  policy <- boundedSlotPolicy
+  let SlotCount slots = slotCount policy
+  checkpointRoot <- ownedCheckpointRoot q
+  proofPath <- ownedProofPath q
   proofPresent <- doesFileExist proofPath
   prelinkedPresent <- doesDirectoryExist (checkpointRoot </> "prelinked")
   let progress = runDocument
@@ -1074,7 +1088,7 @@ runViewer name role directory logPath = do
       common = [ "--workspace", "."
                , "--ram-push-e2e", "--cardless", "--fujimod", "--unreviewed-relink"
                , "--fujimod-run-document", progress
-               , "--firmware", inputsRoot </> "firmware.DAT"
+               , "--firmware", fst (firmwareFor q role)
                , "--installed-nand", inputsRoot </> "adjustment.nand"
                , "--trajectories", trajectoryPath name role
                , "--output", directory </> "runtime"
@@ -1084,28 +1098,28 @@ runViewer name role directory logPath = do
   let checkpointEnvironment = case role of
         Stock -> [("XM1_RAM_PUSH_CHECKPOINT_ROOT", "private-data/emulator-checkpoints/ram-push")]
         Owned -> [("XM1_RAM_PUSH_CHECKPOINT_ROOT", checkpointRoot), ("XM1_MODAL_INSTALL_CHECKPOINT", proofPath)]
-  spawn "devenv" (["shell", "--", binRoot </> "xm1-viewer"] ++ common ++ extra) logPath
-    ([ ("XM1_EMULATOR_SLOTS", "3")
+  spawn "devenv" (["shell", "--", binRoot q </> "xm1-viewer"] ++ common ++ extra) logPath
+    ([ ("XM1_EMULATOR_SLOTS", show slots)
      , ("XM1_EMULATOR_MEMORY_MAX", "2G")
      , ("XM1_EMULATOR_SWAP_MAX", "0")
      , admissionGrant owner purpose
      ] ++ checkpointEnvironment)
 
-runPairCheck :: CaseId -> IO (Either Failure FilePath)
-runPairCheck name = do
-  let stock = roleDirectory name Stock </> "receipt"
-      owned = roleDirectory name Owned </> "receipt"
-  check <- freshDirectory (qualRoot </> "checks") (caseText name)
+runPairCheck :: Qualification -> CaseId -> IO (Either Failure FilePath)
+runPairCheck q name = do
+  let stock = roleDirectory q name Stock </> "receipt"
+      owned = roleDirectory q name Owned </> "receipt"
+  check <- freshDirectory (qualRoot q </> "checks") (caseText name)
   started <- getMonotonicTimeNSec
-  pairStatus <- spawn (binRoot </> "menu-engine-pair-check")
+  pairStatus <- spawn (binRoot q </> "menu-engine-pair-check")
     ([ "--retained-render", "--write-render-receipt", "--tables", tablesPath, "--package-plan", planPath
      , "--stock", stock, "--owned", owned ]) (check </> "pair-check.log") []
-  settingsStatus <- spawn (binRoot </> "modal-settings-compare")
+  settingsStatus <- spawn (binRoot q </> "modal-settings-compare")
     [stock, owned, check </> "settings.json"] (check </> "settings.log") []
   let exclusion
         | caseText name `elem` ["oracle-frame-fixed-open", "oracle-fixed-wrap"] = ["--clock-exclusions", clockPath]
         | otherwise = []
-  renderStatus <- spawn (binRoot </> "render-compare")
+  renderStatus <- spawn (binRoot q </> "render-compare")
     ([ stock </> "e2e-result-render.json"
      , owned </> "e2e-result-render.json"
      , check </> "render.json" ] ++ exclusion) (check </> "render.log") []
@@ -1125,48 +1139,48 @@ runPairCheck name = do
     , "directory" .= check
     , "pass" .= pass
     ]
-  writeFile (qualRoot </> "checks" </> ("latest-" ++ caseText name)) check
+  writeFile (qualRoot q </> "checks" </> ("latest-" ++ caseText name)) check
   pure $ if pass
     then Right check
     else Left (Failure (Predicate "pair-comparison")
       ("pair comparison failed: " ++ caseText name) (check </> "pair.json"))
 
-recheckMode :: IO ()
-recheckMode = do
+recheckMode :: Qualification -> IO ()
+recheckMode q = do
   requireCleanSource
-  verifyInputs
+  verifyInputs q
   source <- verifySource
-  buildCheckers
-  forM_ pairs $ \name -> forM_ [Stock, Owned] (admitRole name)
+  buildCheckers q
+  forM_ pairs $ \name -> forM_ [Stock, Owned] (admitRole q name)
   checks <- forM pairs $ \name -> do
-    outcome <- runPairCheckCurrent name
+    outcome <- runPairCheckCurrent q name
     case outcome of
       Left failure -> do
-        writeFailurePacket "blocked" failure
+        writeFailurePacket q "blocked" failure
         failH ("pair comparison failed: " ++ caseText name)
       Right directory -> pure (name, directory)
-  publishRecheck source checks
+  publishRecheck q source checks
 
-buildCheckers :: IO ()
-buildCheckers = do
-  createDirectoryIfMissing True (qualRoot </> "logs")
+buildCheckers :: Qualification -> IO ()
+buildCheckers q = do
+  createDirectoryIfMissing True (qualRoot q </> "logs")
   configured <- lookupEnv "MENU_BOUNDED_QUAL_OUTPUT_BASE"
   let baseArguments = ["--output_base=" ++ path | Just path <- [configured]]
-  _ <- runHostBuild baseArguments CompileTargets
+  _ <- runHostBuild q baseArguments CompileTargets
     [ "//replacement/modal_runtime:menu-engine-pair-check"
     , "//emulation:modal-settings-compare", "//emulation:render-compare" ]
-    (qualRoot </> "logs" </> "recheck-build.log")
+    (qualRoot q </> "logs" </> "recheck-build.log")
   pure ()
 
-admitRole :: CaseId -> Role -> IO ()
-admitRole name role = do
-  complete <- roleComplete name role
+admitRole :: Qualification -> CaseId -> Role -> IO ()
+admitRole q name role = do
+  complete <- roleComplete q name role
   unless complete $ do
-    terminal <- roleTerminalFailure name role
+    terminal <- roleTerminalFailure q name role
     let (predicate, detail) = case terminal of
           Just (Failure stored reason _) -> (stored, reason)
           Nothing -> (Predicate "role-completion", "role is missing or incomplete; recheck refuses guest execution")
-    writeFailurePacket "blocked" (Failure predicate detail (roleDirectory name role))
+    writeFailurePacket q "blocked" (Failure predicate detail (roleDirectory q name role))
     failH ("role admission refused: " ++ caseText name ++ "." ++ roleText role)
 
 mirrorReceipt :: FilePath -> FilePath -> IO ()
@@ -1179,14 +1193,14 @@ mirrorReceipt source destination = do
     when (name /= "render-banks.json") $
       createSymbolicLink (absolute </> entry) (destination </> entry)
 
-runPairCheckCurrent :: CaseId -> IO (Either Failure FilePath)
-runPairCheckCurrent name = do
-  check <- freshDirectory (qualRoot </> "recheck-checks") (caseText name)
-  receipts <- freshDirectory (qualRoot </> "recheck-receipts") (caseText name)
+runPairCheckCurrent :: Qualification -> CaseId -> IO (Either Failure FilePath)
+runPairCheckCurrent q name = do
+  check <- freshDirectory (qualRoot q </> "recheck-checks") (caseText name)
+  receipts <- freshDirectory (qualRoot q </> "recheck-receipts") (caseText name)
   let stock = receipts </> "stock"
       owned = receipts </> "owned"
-  mirrorReceipt (roleDirectory name Stock </> "receipt") stock
-  mirrorReceipt (roleDirectory name Owned </> "receipt") owned
+  mirrorReceipt (roleDirectory q name Stock </> "receipt") stock
+  mirrorReceipt (roleDirectory q name Owned </> "receipt") owned
   pairStatus <- spawn (checkerRoot </> "replacement/modal_runtime/menu-engine-pair-check")
     ([ "--retained-render", "--tables", tablesPath, "--package-plan", planPath
      , "--stock", stock, "--owned", owned ]) (check </> "pair-check.log") []
@@ -1213,19 +1227,19 @@ runPairCheckCurrent name = do
     , "directory" .= check
     , "pass" .= pass
     ]
-  writeFile (qualRoot </> "recheck-checks" </> ("latest-" ++ caseText name)) check
+  writeFile (qualRoot q </> "recheck-checks" </> ("latest-" ++ caseText name)) check
   pure $ if pass
     then Right check
     else Left (Failure (Predicate "pair-comparison")
       ("recheck comparison failed: " ++ caseText name) (check </> "pair.json"))
 
-publishRecheck :: SourceProvenance -> [(CaseId, FilePath)] -> IO ()
-publishRecheck source checks = do
-  producer <- toolIdentity
+publishRecheck :: Qualification -> SourceProvenance -> [(CaseId, FilePath)] -> IO ()
+publishRecheck q source checks = do
+  producer <- toolIdentity q
   pairHash <- sha256File (checkerRoot </> "replacement/modal_runtime/menu-engine-pair-check")
   settingsHash <- sha256File (checkerRoot </> "emulation/modal-settings-compare")
   renderHash <- sha256File (checkerRoot </> "emulation/render-compare")
-  let roles = [ object ["name" .= caseText name, "role" .= roleText role, "outcome" .= ("complete" :: String), "directory" .= roleDirectory name role]
+  let roles = [ object ["name" .= caseText name, "role" .= roleText role, "outcome" .= ("complete" :: String), "directory" .= roleDirectory q name role]
               | name <- pairs, role <- [Stock, Owned] ]
       pairsJson = [ object ["name" .= caseText name, "directory" .= directory, "pass" .= True] | (name, directory) <- checks ]
       producerValue = object
@@ -1243,7 +1257,7 @@ publishRecheck source checks = do
         [ "schema" .= (1 :: Int)
         , "status" .= ("recheck-passed" :: String)
         , "source" .= sourceJson source
-        , "inputs" .= inputJson inputIdentity
+        , "inputs" .= inputJson (inputIdentity q)
         , "producer" .= producerValue
         , "checker" .= checkerValue
         , "execution" .= object
@@ -1257,14 +1271,14 @@ publishRecheck source checks = do
                           | name <- ["all-roles-admitted" :: String, "all-pairs-compared", "all-pairs-pass", "no-guest-execution"] ]
         , "pairs" .= pairsJson
         , "roles" .= roles
-        , "review_packet" .= (qualRoot </> "review-packet.json")
+        , "review_packet" .= (qualRoot q </> "review-packet.json")
         , "remaining_scope" .= object
             [ "full67" .= ("rechecked from frozen receipts" :: String)
             , "hardware" .= ("not claimed" :: String)
             ]
         ]
-  writeJson (qualRoot </> "terminal.json") terminal
-  writeJson (qualRoot </> "review-packet.json") $ object
+  writeJson (qualRoot q </> "terminal.json") terminal
+  writeJson (qualRoot q </> "review-packet.json") $ object
     [ "terminal" .= terminal
     , "review" .= object ["checks_run_by_reviewer" .= False, "cutover_approved" .= False]
     ]
@@ -1272,23 +1286,23 @@ publishRecheck source checks = do
     [ "status" .= ("recheck-passed" :: String)
     , "pairs" .= length checks
     , "roles" .= length roles
-    , "review_packet" .= (qualRoot </> "review-packet.json")
+    , "review_packet" .= (qualRoot q </> "review-packet.json")
     ]
 
-publish :: Matrix -> SourceProvenance -> InputIdentity -> IO ()
-publish matrix source inputs = do
+publish :: Qualification -> Matrix -> SourceProvenance -> InputIdentity -> IO ()
+publish q matrix source inputs = do
   roles <- fmap concat $ forM pairs $ \name -> forM [Stock, Owned] $ \role -> do
-    complete <- roleComplete name role
-    failed <- roleTerminalFailure name role
-    completion <- decodeFile (roleDirectory name role </> "completion.json")
-    receipt <- decodeFile (roleDirectory name role </> "receipt" </> "e2e-result.json")
+    complete <- roleComplete q name role
+    failed <- roleTerminalFailure q name role
+    completion <- decodeFile (roleDirectory q name role </> "completion.json")
+    receipt <- decodeFile (roleDirectory q name role </> "receipt" </> "e2e-result.json")
     let outcome
           | complete = "complete" :: String
           | Just _ <- failed = "failed"
           | otherwise = "partial"
     pure $ object
       [ "name" .= caseText name, "role" .= roleText role
-      , "outcome" .= outcome, "directory" .= roleDirectory name role
+      , "outcome" .= outcome, "directory" .= roleDirectory q name role
       , "completion" .= either (const Null) id completion
       , "phases" .= either (const Null) (\value -> get value "phases") receipt ]
   checks <- forM (matrixPairs matrix) $ \(name, directory) -> do
@@ -1303,8 +1317,8 @@ publish matrix source inputs = do
       failedPairs = length checks - passedPairs
       requiredPairs = length pairs
       allCompared = length checks == requiredPairs
-  gateValue <- decodeFile (qualRoot </> "gate.json")
-  tools <- toolIdentity
+  gateValue <- decodeFile (qualRoot q </> "gate.json")
+  tools <- toolIdentity q
   let gateParsed = case gateValue of
         Right value -> parseGate value
         Left problem -> Left problem
@@ -1355,8 +1369,8 @@ publish matrix source inputs = do
         , "hardware" .= ("not claimed" :: String)
         ]
     ]
-  writeJson (qualRoot </> "terminal.json") terminal
-  writeJson (qualRoot </> "review-packet.json") $ object
+  writeJson (qualRoot q </> "terminal.json") terminal
+  writeJson (qualRoot q </> "review-packet.json") $ object
     [ "terminal" .= terminal
     , "review" .= object
         [ "checks_run_by_reviewer" .= False
@@ -1368,7 +1382,7 @@ publish matrix source inputs = do
     , "passed_pairs" .= passedPairs
     , "required_pairs" .= requiredPairs
     , "failed_case" .= failedCase roles checks
-    , "review_packet" .= (qualRoot </> "review-packet.json")
+    , "review_packet" .= (qualRoot q </> "review-packet.json")
     ]
   unless qualified (exitWith (ExitFailure 1))
 
@@ -1380,15 +1394,15 @@ failedCase roles checks =
       value : _ -> value
       [] -> Null
 
-roleIdentity :: CaseId -> Role -> IO RoleIdentity
-roleIdentity name role = do
+roleIdentity :: Qualification -> CaseId -> Role -> IO RoleIdentity
+roleIdentity q name role = do
   source <- verifySource
   trajectoryDigest <- sha256File (trajectoryPath name role)
-  tools <- toolIdentity
+  tools <- toolIdentity q
   checkpoint <- case role of
     Stock -> pure Nothing
     Owned -> do
-      proof <- ownedProofPath
+      proof <- ownedProofPath q
       present <- doesFileExist proof
       if not present then pure Nothing else do
         value <- decodeFile proof >>= either failH pure
@@ -1402,7 +1416,7 @@ roleIdentity name role = do
     , roleCase = name
     , roleRole = role
     , roleTrajectory = trajectoryDigest
-    , roleInputs = inputIdentity
+    , roleInputs = inputIdentity q
     , roleTools = tools
     , roleCheckpoint = checkpoint
     }
@@ -1431,13 +1445,13 @@ executionJson = executionIdentity
 commitText :: CommitId -> String
 commitText (CommitId value) = value
 
-toolIdentity :: IO ToolIdentity
-toolIdentity = do
-  viewer <- sha256File (binRoot </> "xm1-viewer")
-  pairCheck <- sha256File (binRoot </> "menu-engine-pair-check")
-  settingsCompare <- sha256File (binRoot </> "modal-settings-compare")
-  renderCompare <- sha256File (binRoot </> "render-compare")
-  sdk <- decodeFile (binRoot </> "sdk.json")
+toolIdentity :: Qualification -> IO ToolIdentity
+toolIdentity q = do
+  viewer <- sha256File (binRoot q </> "xm1-viewer")
+  pairCheck <- sha256File (binRoot q </> "menu-engine-pair-check")
+  settingsCompare <- sha256File (binRoot q </> "modal-settings-compare")
+  renderCompare <- sha256File (binRoot q </> "render-compare")
+  sdk <- decodeFile (binRoot q </> "sdk.json")
   case sdk of
     Left problem -> failH ("frozen SDK identity is unreadable: " ++ problem)
     Right value -> do
@@ -1464,19 +1478,19 @@ toolJson tools = object
   , "sdk_ram_push" .= sha256Hex (toolSdkRamPush tools)
   ]
 
-roleDirectory :: CaseId -> Role -> FilePath
-roleDirectory name role = qualRoot </> "runs" </> caseText name </> roleText role
+roleDirectory :: Qualification -> CaseId -> Role -> FilePath
+roleDirectory q name role = qualRoot q </> "runs" </> caseText name </> roleText role
 
 trajectoryPath :: CaseId -> Role -> FilePath
 trajectoryPath name role = trajectoryRoot </> (caseText name ++ "." ++ roleText role ++ ".json")
 
-archiveStale :: FilePath -> String -> IO ()
-archiveStale directory label = do
+archiveStale :: Qualification -> FilePath -> String -> IO ()
+archiveStale q directory label = do
   present <- doesDirectoryExist directory
   when present $ do
-    createDirectoryIfMissing True (qualRoot </> "stale")
+    createDirectoryIfMissing True (qualRoot q </> "stale")
     processId <- getProcessID
-    renameDirectory directory (qualRoot </> "stale" </> (label ++ "-" ++ show processId))
+    renameDirectory directory (qualRoot q </> "stale" </> (label ++ "-" ++ show processId))
 
 freshDirectory :: FilePath -> String -> IO FilePath
 freshDirectory parent label = do
@@ -1486,23 +1500,23 @@ freshDirectory parent label = do
   createDirectoryIfMissing True directory
   pure directory
 
-writeFailurePacket :: String -> Failure -> IO ()
-writeFailurePacket status (Failure predicate detail artifact) = do
-  createDirectoryIfMissing True qualRoot
+writeFailurePacket :: Qualification -> String -> Failure -> IO ()
+writeFailurePacket q status (Failure predicate detail artifact) = do
+  createDirectoryIfMissing True (qualRoot q)
   source <- verifySource
   let value = object
         [ "schema" .= (1 :: Int)
         , "status" .= status
         , "qualification" .= ("not-qualified" :: String)
         , "source" .= sourceJson source
-        , "inputs" .= inputJson inputIdentity
+        , "inputs" .= inputJson (inputIdentity q)
         , "resources" .= resourcesValue
         , "failed_case" .= object ["predicate" .= predicateText predicate, "detail" .= detail, "artifact" .= artifact]
         , "predicates" .= [object ["name" .= predicateText predicate, "pass" .= False, "detail" .= detail]]
         , "remaining_scope" .= object ["full67" .= ("not claimed" :: String)]
         ]
-  writeJson (qualRoot </> "terminal.json") value
-  writeJson (qualRoot </> "review-packet.json") $ object
+  writeJson (qualRoot q </> "terminal.json") value
+  writeJson (qualRoot q </> "review-packet.json") $ object
     [ "terminal" .= value
     , "review" .= object ["checks_run_by_reviewer" .= False, "cutover_approved" .= False]
     ]

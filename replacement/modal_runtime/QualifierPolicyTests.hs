@@ -3,10 +3,13 @@ module Main (main) where
 
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (finally)
-import Control.Monad (unless)
+import Control.Monad (forM_, unless)
 import Data.Aeson (Value, object, (.=))
 import Data.IORef (atomicModifyIORef', newIORef, readIORef)
-import Replacement.ModalRuntime.QualifierPolicy (executionIdentity, installedCheckpointMatches)
+import Emulation.Sha256 (Sha256, parseSha256Hex, sha256Hex)
+import Replacement.ModalRuntime.QualifierPolicy
+  ( OwnedBase (..), Qualification (..), Role (..), executionIdentity, installedCheckpointMatches
+  , ownedBaseInputs, parseInvocation, qualificationOptions, roleFirmware )
 import Emulation.ParallelCases (mapBounded)
 
 main :: IO ()
@@ -32,7 +35,42 @@ main = do
   expect "named checkpoint refuses wrong snapshot" (not (installedCheckpointMatches named (restored "wrong" "installation")))
   expect "named checkpoint refuses wrong installation" (not (installedCheckpointMatches named (restored "snapshot" "wrong")))
   expect "named checkpoint refuses producer observation" (not (installedCheckpointMatches named (object ["install_checkpoint_saved" .= True])))
+  ownedBaseOption
   mapM_ parallelAdmission [1, 2, 3]
+
+ownedBaseOption :: IO ()
+ownedBaseOption = do
+  let stockDat = ("firmware.DAT", digest 'a')
+      staged = StagedBase "time.DAT" (digest 'b')
+  expect "no option keeps the default root and the shared base"
+    (parseInvocation "default" ["execute"] == Right (Qualification "default" SharedBase, ["execute"]))
+  expect "options before the command select the root and the staged base"
+    (parseInvocation "default" ["--root", "fresh", "--owned-base", "time.DAT", sha256Hex (digest 'b'), "execute"]
+      == Right (Qualification "fresh" staged, ["execute"]))
+  forM_ [Qualification "default" SharedBase, Qualification "fresh" staged] $ \qualification ->
+    expect "child processes receive the same qualification"
+      (parseInvocation "other" (qualificationOptions qualification ++ ["role-slotted", "oracle-open", "owned"])
+        == Right (qualification, ["role-slotted", "oracle-open", "owned"]))
+  expect "a malformed base digest is refused" (isLeft (parseInvocation "default" ["--owned-base", "time.DAT", "abc", "execute"]))
+  expect "a base without a digest is refused" (isLeft (parseInvocation "default" ["--owned-base", "time.DAT"]))
+  expect "the stock role boots the stock DAT under a staged base" (roleFirmware staged stockDat Stock == stockDat)
+  expect "the owned role boots the stock DAT by default" (roleFirmware SharedBase stockDat Owned == stockDat)
+  expect "the owned role boots the staged base" (roleFirmware staged stockDat Owned == ("time.DAT", digest 'b'))
+  let identity role base = executionIdentity $ object
+        [ "role" .= (role :: String), "tools" .= object ["viewer" .= ("viewer" :: String)]
+        , "trajectory" .= object ["sha256" .= ("route" :: String)]
+        , "inputs" .= object (["firmware" .= sha256Hex (digest 'a')] ++ ownedBaseInputs base) ]
+  expect "a staged base invalidates the owned observation" (identity "owned" SharedBase /= identity "owned" staged)
+  expect "a different staged base invalidates the owned observation"
+    (identity "owned" staged /= identity "owned" (StagedBase "time.DAT" (digest 'c')))
+  expect "a staged base preserves the stock observation" (identity "stock" SharedBase == identity "stock" staged)
+
+digest :: Char -> Sha256
+digest character = either error id (parseSha256Hex (replicate 64 character))
+
+isLeft :: Either a b -> Bool
+isLeft (Left _) = True
+isLeft _ = False
 
 roleInput :: Int -> String -> Value
 roleInput route archive = object

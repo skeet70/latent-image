@@ -761,14 +761,14 @@ haskell_library(
     srcs = ["Replacement/ModalRuntime/QualifierPolicy.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
-    deps = ["//host:aeson", "//host:base"],
+    deps = ["//emulation:case-sha256", "//host:aeson", "//host:base"],
 )
 
 haskell_test(
     name = "qualifier-policy-tests",
     srcs = ["QualifierPolicyTests.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-threaded"],
-    deps = [":qualifier-policy", "//emulation:parallel-cases", "//host:aeson", "//host:base"],
+    deps = [":qualifier-policy", "//emulation:case-sha256", "//emulation:parallel-cases", "//host:aeson", "//host:base"],
 )
 
 haskell_binary(

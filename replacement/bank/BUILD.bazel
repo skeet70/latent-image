@@ -284,6 +284,15 @@ filegroup(
     ],
 )
 
+xm1_rust_staticlib(
+    name = "bank-time-services",
+    src = "lib.rs",
+    crate_name = "bank",
+    rustc_flags = ["--cfg", "rb_time_services_owned"],
+    rlib_deps = dict(_RLIB_DEPS, xm1_time_services = "//replacement/time_services:arm", xm1_kernel = "//replacement/kernel:arm"),
+    visibility = ["//replacement/time_services:__pkg__"],
+)
+
 rust_source_boundary_test(
     name = "unsafe-boundary-check",
     declaration = "unsafe-boundary.json",

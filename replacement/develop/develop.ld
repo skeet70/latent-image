@@ -1,3 +1,4 @@
+EXTERN(XM1_KERNEL_BOUNDARY)
 ENTRY(xm1_develop_dispatch)
 xm1_stock_61df44 = 0x61df44;
 xm1_stock_61d8a4 = 0x61d8a4;

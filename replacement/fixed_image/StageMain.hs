@@ -119,9 +119,10 @@ patchImage encoder rebuild decoder temporary rows source image
           B.writeFile recordPath (B.map complement (U.serializeRecord record))
           run decoder [recordPath, "0", originalPath, show (U.recDecodedSize (U.recHeader record))]
           H.readRegular (16 * 1024 * 1024) originalPath
-      patched <- either H.failH pure (applyPublications image rows original)
+      load <- either H.failH pure (imageLoad (U.partSegments parts) image)
+      patched <- either H.failH pure (applyPublications image load rows original)
       let inverse = [Publication target address new old | Publication target address old new <- rows]
-      roundtrip <- either H.failH pure (applyPublications image inverse patched)
+      roundtrip <- either H.failH pure (applyPublications image load inverse patched)
       H.ensure (roundtrip == original) "publication staging is not invertible"
       B.writeFile patchedPath patched
       case image of

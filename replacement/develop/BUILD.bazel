@@ -70,7 +70,10 @@ xm1_rust_staticlib(
     name = "develop-rust",
     src = "standalone.rs",
     crate_name = "xm1_develop",
-    rlib_deps = {"xm1_callback_core": "//replacement/callback_core:arm"},
+    rlib_deps = {
+        "xm1_callback_core": "//replacement/callback_core:arm",
+        "xm1_kernel": "//replacement/kernel:arm",
+    },
     strict_align = False,
     data = [
         ":module",
