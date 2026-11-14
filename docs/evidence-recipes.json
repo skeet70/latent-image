@@ -2154,4 +2154,37 @@
       {"name":"action_fetches","path":"private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/verdict.json","pointer":["action_extent_fetches"]}
     ]
   }
+  ,{
+    "id": "E-FUJIMOD-XM1-PLAY-JPEG-150",
+    "claim": "The stock X-M1 PLAY route's source/layout/extent observation is {{result}} for {{jobs}} completed jobs, with the original card unchanged ({{card_unchanged}}). Preview: {{preview_width}}x{{preview_height}}, {{preview_output}} complete output bytes; {{preview_copy}} exact fixture codestream bytes at offset {{preview_offset}} plus {{preview_tail}} observed preserved pre-copy tail bytes make its {{preview_source}}-byte programmed span, whose literal whole-fixture-subrange identity is {{preview_literal}}. Full image: {{full_width}}x{{full_height}}, {{full_source}} literal fixture bytes and {{full_output}} complete output bytes. Both jobs are sampled before the shared destination is reused, with programmed operands, natural completion status and loaded endpoint bound separately. Independent JuicyPixels RGB-to-packed422 reference comparisons differ by {{preview_differences}} preview bytes and {{full_differences}} full-frame bytes; these are not qualified pixel agreement. The final PNG visibly shows the playback photograph and overlay.",
+    "scope": "One stock-DAT cold-boot public media-route-smoke play execution on the granted FujiMod runtime and one card fixture. Full sources are observed before decode and complete source/header-derived output extents before reuse; source, capacity, alias, geometry, padding and endpoint checks pass. No added MMIO reads, device-law changes or fitted pixel tolerance.",
+    "notes": "Host provenance/layout proof, not a Rust firmware cutover, physical JPEG fidelity or capture/development/save acceptance. The preview's unchanged observed tail is not a general zero-fill law. Independent conversion differences and false pre-press stability Context remain explicit. The earlier unidentified caller reaching 0x00d350c4(2) and bounded SD-command history remain limitations; this work does not resolve them.",
+    "artifacts": [
+      "private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/result.json",
+      "private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json",
+      "private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/emulator-session.json",
+      "private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/final.png",
+      "private-data/scratch/PlaybackDecodeHost/runs/20261114T222937Z-playback-play/result/result.json"
+    ],
+    "facts": [
+      {"name":"firmware_sha256","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/emulator-session.json","pointer":["inputs","installed_dat"]},
+      {"name":"result","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json","pointer":["status"]},
+      {"name":"jobs","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json","pointer":["jobs"],"operation":"length"},
+      {"name":"card_unchanged","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/result.json","pointer":["card_original_unchanged"]},
+      {"name":"preview_width","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json","pointer":["jobs","0","geometry","width"]},
+      {"name":"preview_height","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json","pointer":["jobs","0","geometry","height"]},
+      {"name":"preview_output","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json","pointer":["jobs","0","geometry","written_bytes"]},
+      {"name":"preview_source","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json","pointer":["jobs","0","geometry","source_bytes"]},
+      {"name":"preview_copy","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json","pointer":["jobs","0","geometry","source_identity","fixture_bytes"]},
+      {"name":"preview_offset","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json","pointer":["jobs","0","geometry","source_identity","fixture_offset"]},
+      {"name":"preview_tail","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json","pointer":["jobs","0","geometry","source_identity","preserved_tail_bytes"]},
+      {"name":"preview_literal","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json","pointer":["jobs","0","geometry","source_identity","whole_span_exact"]},
+      {"name":"preview_differences","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json","pointer":["jobs","0","geometry","different_bytes"]},
+      {"name":"full_width","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json","pointer":["jobs","1","geometry","width"]},
+      {"name":"full_height","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json","pointer":["jobs","1","geometry","height"]},
+      {"name":"full_source","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json","pointer":["jobs","1","geometry","source_bytes"]},
+      {"name":"full_output","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json","pointer":["jobs","1","geometry","written_bytes"]},
+      {"name":"full_differences","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json","pointer":["jobs","1","geometry","different_bytes"]}
+    ]
+  }
 ]

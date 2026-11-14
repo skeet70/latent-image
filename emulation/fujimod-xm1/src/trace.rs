@@ -27,6 +27,10 @@ pub struct InstalledObservation {
     state: crate::modal_guard::InstalledGuardState,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct PauseId(std::num::NonZeroU64);
+
 /// One entry into an armed site, before its instruction executes.
 #[derive(Clone, Debug, Serialize)]
 pub struct Hit {
@@ -1032,6 +1036,9 @@ pub struct TraceSites {
     pub sites: BTreeMap<u32, String>,
     /// Labels whose entry ends the current run.
     pub stop_labels: BTreeSet<String>,
+    pause_labels: BTreeMap<String, u8>,
+    pub paused: bool,
+    pause_generation: u64,
     pub hits: Vec<Hit>,
     /// Physical ranges each site's hits read at entry, by site address.
     pub site_reads: BTreeMap<u32, Vec<SiteRead>>,
@@ -1906,6 +1913,14 @@ impl TraceSites {
             }).transpose()?.unwrap_or(StackPoint::Unscoped);
             if !matches!(scoped, StackPoint::Outside) {
                 stop |= self.stop_labels.contains(site);
+                if let Some(remaining) = self.pause_labels.get_mut(site) {
+                    if *remaining > 0 {
+                        self.pause_generation = self.pause_generation.checked_add(1).ok_or("trace pause identity exhausted")?;
+                        *remaining -= 1;
+                        self.paused = true;
+                        stop = true;
+                    }
+                }
                 if self.hit_limit.is_some_and(|limit| self.hits.len() >= limit.get()) {
                     return Err("trace hit limit reached".into());
                 }
@@ -2011,6 +2026,24 @@ impl TraceSites {
             observation.boundary_complete = true;
         }
         Ok(if stop { CollectionOutcome::Stop } else { CollectionOutcome::Continue })
+    }
+
+    pub fn arm_pauses(&mut self, labels: BTreeMap<String, u8>) -> Result<(), String> {
+        if labels.len() > 8 || self.capture_observation_active()
+            || labels.iter().any(|(label, count)| !(1..=64).contains(count)
+                || self.sites.values().filter(|registered| *registered == label).count() != 1) {
+            return Err("trace pauses require at most 8 unique registered labels and 1..64 occurrences outside capture collection".into());
+        }
+        self.pause_labels = labels;
+        Ok(())
+    }
+
+    pub fn pauses_active(&self) -> bool {
+        self.paused || self.pause_labels.values().any(|remaining| *remaining > 0)
+    }
+
+    pub fn pause_id(&self) -> Option<PauseId> {
+        self.paused.then(|| std::num::NonZeroU64::new(self.pause_generation).map(PauseId)).flatten()
     }
 }
 

@@ -23,7 +23,7 @@ use fujimod_emulator::board::preservation::{
 };
 use fujimod_xm1::sd_host::{Backing, MediaImage, SectorAddress, SectorCount};
 use fujimod_xm1::nand_read::{RowAddress, RowCount};
-use fujimod_xm1::trace::{CAPTURE_OBSERVATION_BOUNDS, CaptureCursor, CaptureScope, CaptureSnapshot, Hit, InstructionCount, SiteRead, parse_site_reads, TaskCapture};
+use fujimod_xm1::trace::{CAPTURE_OBSERVATION_BOUNDS, CaptureCursor, CaptureScope, CaptureSnapshot, Hit, InstructionCount, PauseId, SiteRead, parse_site_reads, TaskCapture};
 use serde::{Deserialize, Serialize};
 use fujimod_emulator_devices::Device;
 use fujimod_emulator_exr2_isp_input::ImageInput;
@@ -304,8 +304,9 @@ enum Request {
     NandExport { label: NandArtifactLabel },
     Transfer(Transfer),
     TraceSites { sites: BTreeMap<String, String>, #[serde(default)] reads: BTreeMap<String, Vec<SiteRead>>,
-        #[serde(default)] task: TaskCapture },
+        #[serde(default)] task: TaskCapture, #[serde(default)] pauses: BTreeMap<String, u8> },
     TraceHits { from: usize, #[serde(default)] limit: Option<std::num::NonZeroUsize> },
+    TraceResume { pause_id: PauseId },
     RenderStackDiagnosticBegin(fujimod_xm1::render_stack::BeginRequest),
     RenderStackDiagnosticReport,
     RenderStackDiagnosticEnd,
@@ -368,6 +369,7 @@ enum RequestKind {
     Transfer,
     TraceSites,
     TraceHits,
+    TraceResume,
     RenderStackDiagnosticBegin,
     RenderStackDiagnosticReport,
     RenderStackDiagnosticEnd,
@@ -420,6 +422,7 @@ impl Request {
             Request::Transfer(_) => RequestKind::Transfer,
             Request::TraceSites { .. } => RequestKind::TraceSites,
             Request::TraceHits { .. } => RequestKind::TraceHits,
+            Request::TraceResume { .. } => RequestKind::TraceResume,
             Request::RenderStackDiagnosticBegin(_) => RequestKind::RenderStackDiagnosticBegin,
             Request::RenderStackDiagnosticReport => RequestKind::RenderStackDiagnosticReport,
             Request::RenderStackDiagnosticEnd => RequestKind::RenderStackDiagnosticEnd,
@@ -508,6 +511,7 @@ struct Server {
     requests: RequestProfile,
     rendezvous: RendezvousInputs,
     pending_capture: Option<PendingCapture>,
+    pending_key: Option<PendingKey>,
     capture_evidence_error: Option<String>,
     /// In-memory guest snapshots by client name.
     snapshots: BTreeMap<SnapshotName, (Vec<u8>, fujimod_xm1::trace::calls::Calls)>,
@@ -789,6 +793,7 @@ enum CaptureOperation {
 enum CaptureProgressState {
     Completed,
     DrainRequired,
+    TracePaused,
 }
 
 #[derive(Clone, Copy)]
@@ -846,12 +851,21 @@ struct PendingCapture {
     current: Option<PendingShutterPhase>,
 }
 
+struct PendingKey {
+    continuation: fujimod_xm1::render::PendingSettle,
+    name: String,
+    started: Instant,
+    before: u64,
+}
+
 #[derive(Serialize)]
 struct CaptureProgress<'a> {
     state: CaptureProgressState,
     operation: CaptureOperation,
     instructions: GuestInstructions,
     intended_endpoint: GuestInstructions,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pause_id: Option<PauseId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     current_phase: Option<ShutterPhaseIndex>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -906,8 +920,8 @@ impl Server {
 
     fn start_capture_operation(&mut self, operation: CaptureOperation) -> Result<Value, String> {
         self.bridge.machine.require_running()?;
-        if !self.bridge.machine.traces.capture_observation_active() {
-            return Err("capture progress requires an active observation".into());
+        if !self.bridge.machine.traces.capture_observation_active() && !self.bridge.machine.traces.pauses_active() {
+            return Err("capture progress requires an active observation or trace pause".into());
         }
         if self.pending_capture.is_some() || self.bridge.machine.traces.capture_page_outstanding() {
             return Err("capture operation requires no pending continuation or published page".into());
@@ -947,7 +961,8 @@ impl Server {
                 }
             };
             let drained = outcome == RunOutcome::DrainRequired;
-            if !drained {
+            let paused = self.bridge.machine.traces.paused;
+            if !drained && !paused {
                 if let Some(current) = pending.current.take() {
                     pending.phases.push(ShutterPhaseObservation {
                         position: current.index.position(), started: current.started,
@@ -962,19 +977,42 @@ impl Server {
                 }
             }
             let progress = CaptureProgress {
-                state: if drained { CaptureProgressState::DrainRequired } else { CaptureProgressState::Completed },
+                state: if paused { CaptureProgressState::TracePaused } else if drained { CaptureProgressState::DrainRequired } else { CaptureProgressState::Completed },
                 operation: pending.operation,
                 instructions: GuestInstructions(self.bridge.machine.instructions()),
                 intended_endpoint: pending.endpoint,
+                pause_id: self.bridge.machine.traces.pause_id(),
                 current_phase: pending.current.as_ref().map(|phase| phase.index),
                 position: pending.current.as_ref().map(|phase| phase.index.position()),
                 phases: matches!(pending.operation, CaptureOperation::ShutterSequence).then_some(pending.phases.as_slice()),
             };
             let response = serde_json::to_value(progress).map_err(|error| format!("capture progress: {error}"))?;
-            if drained {
+            if drained || paused {
                 self.pending_capture = Some(pending);
             }
             return Ok(response);
+        }
+    }
+
+    fn continue_key(&mut self, mut pending: PendingKey) -> Result<Value, String> {
+        let result = match self.bridge.pending_settled_key(&mut pending.continuation) {
+            Ok(result) => result,
+            Err(error) => {
+                self.pending_key = Some(pending);
+                return Err(error);
+            }
+        };
+        match result {
+            Some(settle) => {
+                self.key_log.push(json!({"key": pending.name, "seconds": pending.started.elapsed().as_secs_f64(),
+                    "instructions": self.bridge.machine.instructions() - pending.before, "settle": settle}));
+                Ok(json!({"menu": menu_value(self.bridge.machine.menu()?), "settle": settle}))
+            }
+            None => {
+                self.pending_key = Some(pending);
+                Ok(json!({"state": "trace-paused", "operation": "key",
+                    "instructions": self.bridge.machine.instructions(), "pause_id": self.bridge.machine.traces.pause_id()}))
+            }
         }
     }
 
@@ -992,12 +1030,6 @@ impl Server {
         }
     }
 
-    fn arm(&mut self, requested: &BTreeMap<String, String>, task: TaskCapture) -> Result<usize, String> {
-        let parsed = requested.iter()
-            .map(|(address, label)| Ok((parse_address(address)?, label.clone())))
-            .collect::<Result<BTreeMap<u32, String>, String>>()?;
-        self.arm_sites(&parsed, Some(task))
-    }
 
     fn arm_sites(&mut self, requested: &BTreeMap<u32, String>, task: Option<TaskCapture>) -> Result<usize, String> {
         let mut sites: BTreeMap<u32, String> =
@@ -1151,13 +1183,22 @@ impl Server {
         let read_only = tail_request || matches!(&request, Request::List | Request::TraceHits { .. }
             | Request::ImageInputFingerprint { .. } | Request::ReadMemory { .. } | Request::MediaRead { .. } | Request::NandRead { .. }
             | Request::WatchState | Request::PreservationState | Request::MediaState | Request::NandExport { .. } | Request::UiState);
+        if (self.pending_key.is_some() || self.bridge.machine.traces.paused) && !read_only
+            && !matches!(request, Request::TraceResume { .. }) {
+            return Err("trace continuation must resume before mutation".into());
+        }
+        if self.bridge.machine.traces.pauses_active() && !read_only
+            && !matches!(request, Request::TraceSites { .. } | Request::TraceResume { .. } | Request::Key { .. }
+                | Request::CaptureObservationWindow) {
+            return Err("active trace pauses admit only key/window continuation operations".into());
+        }
         if !read_only {
             if let Some(failure) = self.bridge.machine.traces.modal_observation_report().failure {
                 return Err(failure.to_owned());
             }
         }
         if (self.pending_capture.is_some() || self.bridge.machine.traces.capture_page_outstanding())
-            && !read_only && !matches!(&request, Request::CaptureObservationResume) {
+            && !read_only && !matches!(&request, Request::CaptureObservationResume | Request::TraceResume { .. }) {
             return Err("capture continuation must be drained and resumed before mutation".into());
         }
         if self.bridge.machine.traces.capture_observation_active() && !read_only
@@ -1199,11 +1240,35 @@ impl Server {
                 let (count, payload) = self.bridge.transfer(&transfer)?;
                 json!({"count": count, "bytes": encode_hex(&payload)})
             }
-            Request::TraceSites { sites, reads, task } => {
+            Request::TraceSites { sites, reads, task, pauses } => {
+                let mut normalized = BTreeMap::new();
+                for (address, label) in &sites {
+                    if normalized.insert(parse_address(address)?, label.clone()).is_some() {
+                        return Err("trace sites contain duplicate numeric addresses".into());
+                    }
+                }
                 let site_reads = parse_site_reads(&sites, &reads)?;
-                let count = self.arm(&sites, task)?;
+                if pauses.len() > 8 || pauses.iter().any(|(label, count)|
+                    !(1..=64).contains(count) || normalized.values().filter(|registered| *registered == label).count() != 1
+                        || FIXED_SITES.iter().any(|(_, fixed)| *fixed == label.as_str()) || label == "call-return") {
+                    return Err("trace pauses require at most 8 unique proposed labels and 1..64 occurrences".into());
+                }
+                let count = self.arm_sites(&normalized, Some(task))?;
                 self.bridge.machine.traces.site_reads = site_reads;
+                self.bridge.machine.traces.arm_pauses(pauses)?;
                 json!({"sites": count})
+            }
+            Request::TraceResume { pause_id } => {
+                self.bridge.machine.require_running()?;
+                if self.bridge.machine.traces.pause_id() != Some(pause_id) || (self.pending_key.is_none() && self.pending_capture.is_none()) {
+                    return Err("no trace-paused operation awaits resume".into());
+                }
+                self.bridge.machine.traces.paused = false;
+                if let Some(pending) = self.pending_key.take() { self.continue_key(pending)? }
+                else {
+                    let pending = self.pending_capture.take().ok_or("trace continuation disappeared")?;
+                    self.continue_capture(pending)?
+                }
             }
             Request::TraceHits { from, limit } => {
                 if self.bridge.machine.failure.is_some() {
@@ -1322,6 +1387,11 @@ impl Server {
                     Some(budget) if (1..=MAX_SETTLE).contains(&budget) => budget,
                     Some(_) => return Err(format!("settle_instructions must be 1..{MAX_SETTLE}")),
                 };
+                if self.bridge.machine.traces.pauses_active() {
+                    let continuation = fujimod_xm1::render::PendingSettle::begin(&self.bridge.machine, route, pulse, budget)?;
+                    return Ok(Some(self.continue_key(PendingKey { continuation, name: key,
+                        started: Instant::now(), before: self.bridge.machine.instructions() })?));
+                }
                 let started = Instant::now();
                 let before = self.bridge.machine.instructions();
                 let settle = match self.bridge.settled_key(route, pulse, budget) {
@@ -1361,7 +1431,7 @@ impl Server {
                 json!({"instructions": machine.instructions(), "fingerprint": fingerprint})
             }
             Request::CaptureObservationWindow => {
-                if self.bridge.machine.traces.capture_observation_active() {
+                if self.bridge.machine.traces.capture_observation_active() || self.bridge.machine.traces.pauses_active() {
                     return Ok(Some(self.start_capture_operation(CaptureOperation::Window)?));
                 }
                 self.bridge.advance(CAPTURE_OBSERVATION_WINDOW.0)?;
@@ -1374,7 +1444,7 @@ impl Server {
                     "menu": menu_value(self.bridge.machine.menu()?)})
             }
             Request::ReadMemory { address, count } => {
-                if !(1..=MAX_READ).contains(&count) || address + count as u64 > 1 << 32 {
+                if !(1..=MAX_READ).contains(&count) || address.checked_add(count as u64).is_none_or(|end| end > 1 << 32) {
                     return Err("read-memory requires an address and 1..4096 bytes".into());
                 }
                 json!({"bytes": encode_hex(&self.bridge.machine.read(address, count)?)})
@@ -1609,6 +1679,9 @@ impl Server {
                 json!({"name": name, "held": self.snapshots.len()})
             }
             Request::Finish => {
+                if self.pending_key.is_some() || self.bridge.machine.traces.paused {
+                    return Err("finish refuses an incomplete operation continuation".into());
+                }
                 if self.bridge.machine.traces.modal_observation_active() {
                     let machine = &mut self.bridge.machine;
                     let instructions = InstructionCount::from_board(&machine.session)?;
@@ -1639,8 +1712,9 @@ impl Server {
             "device_descriptor": encode_hex(&self.attachment.device),
             "configuration_descriptor": encode_hex(&self.attachment.configuration),
             "checkpoint": self.checkpoint,
-            "bridge_error": error,
+            "bridge_error": error.or_else(|| (self.pending_key.is_some() || self.bridge.machine.traces.paused).then_some("producer ended with an incomplete trace continuation")),
             "capture_evidence_error": self.capture_evidence_error,
+            "trace_paused": self.bridge.machine.traces.paused,
             "key_log": self.key_log,
             "transfer_log": self.bridge.transfer_log,
             "transfer_profile": self.bridge.profile,
@@ -1735,11 +1809,11 @@ impl Server {
                         self.capture_evidence_error.get_or_insert(message);
                     } else if self.bridge.machine.failure.is_some()
                         || !(self.bridge.machine.traces.capture_observation_active()
-                            || self.bridge.machine.traces.modal_observation_active()) {
+                            || self.bridge.machine.traces.modal_observation_active() || self.bridge.machine.traces.pauses_active()) {
                         error = Some(message);
                     }
                     let observing = self.bridge.machine.traces.capture_observation_active()
-                        || self.bridge.machine.traces.modal_observation_active();
+                        || self.bridge.machine.traces.modal_observation_active() || self.bridge.machine.traces.pauses_active();
                     (Reply::Value(Some(response)), !observing)
                 }
             };
@@ -1985,6 +2059,7 @@ fn drive() -> Result<(), String> {
         requests: RequestProfile::default(),
         rendezvous,
         pending_capture: None,
+        pending_key: None,
         capture_evidence_error: None,
         snapshots: BTreeMap::new(),
         nand_template,
@@ -2245,6 +2320,7 @@ mod tests {
             screenshots: Vec::new(), watch: None, preservation: None,
             key_log: Vec::new(), requests: RequestProfile::default(),
             rendezvous, pending_capture: None,
+            pending_key: None,
             capture_evidence_error: None, snapshots: BTreeMap::new(),
             nand_template: CommittedImage::parse(&CommittedImage::compose(&[0; 2048], &BTreeMap::new()).unwrap()).unwrap(),
             nand_source: NandSourceKind::InitialSeeded,
@@ -2639,10 +2715,8 @@ mod tests {
             machine.require_running().unwrap();
         }
         server.bridge.machine.session.board.write_register(0, Register::Pc, 0).unwrap();
-        server.arm(&BTreeMap::from([
-            ("0x006d76ec".to_owned(), "render-osd-buffer".to_owned()),
-            ("0x006d7d44".to_owned(), "render-osd-increment".to_owned()),
-        ]), TaskCapture::Off).unwrap();
+        server.handle(request(json!({"command":"trace-sites","sites":{
+            "0x006d76ec":"render-osd-buffer","0x006d7d44":"render-osd-increment"}}))).unwrap();
         let mut output = Vec::new();
         server.serve_io(b"{\"command\":\"display-key\",\"key\":\"back\"}\n".as_slice(), &mut output).unwrap();
         let responses: Vec<Value> = output.split(|byte| *byte == b'\n').filter(|line| !line.is_empty())
@@ -2721,6 +2795,154 @@ mod tests {
         server.bridge.machine.failure = Some("synthetic terminal fault".into());
         let final_state = server.handle(Request::WatchState).unwrap().unwrap();
         assert_eq!(final_state, state);
+    }
+
+    fn input_pause_fixture() -> Server {
+        use fujimod_xm1::run::Address;
+        let mut server = server(&[0xe2800001, 0xeafffffd]);
+        let machine = &mut server.bridge.machine;
+        machine.document.firmware.keys.clear();
+        machine.document.firmware.render.task_entries = vec![Address(0x1000)];
+        machine.document.firmware.render.task_tables = vec![(0, Address(0x2000))];
+        let put = |address, value: u32| machine.session.board.write_physical(address, &value.to_le_bytes()).unwrap();
+        put(0x2000, 0x3000); put(0x2004, 1);
+        put(0x3008, 0x4000); put(0x300c, 0x12);
+        put(0x4008, 0x1000); put(0x4024, 1);
+        let facts = &machine.document.firmware.render;
+        put(facts.initialized.0, 1);
+        put(facts.copied_command.0, 0x14001);
+        put(facts.sender_command.0, 0x4001);
+        put(facts.sender_token.0, 1);
+        put(facts.consumer_token.0, 1);
+        let table = &machine.document.firmware.key_table;
+        let base = table.base.0 + 12 * table.row_bytes;
+        put(base, 11); put(base + 8, 0x200); put(base + 12, 0x20009);
+        machine.session.board.write_physical(base + table.released_offset, &[1]).unwrap();
+        server
+    }
+
+    #[test]
+    fn trace_pauses_preserve_input_phase_and_uninterrupted_endpoint() {
+        let mut baseline = input_pause_fixture();
+        let mut observed = input_pause_fixture();
+        baseline.handle(request(json!({"command": "trace-sites", "sites": {"0x00000000": "loop"}}))).unwrap();
+        let press = json!({"command": "key", "key": "play", "hold_instructions": 20,
+            "release_instructions": 30, "settle_instructions": 100});
+        let expected = baseline.handle(request(press.clone())).unwrap().unwrap();
+        observed.handle(request(json!({"command": "trace-sites", "sites": {"0x00000000": "loop"},
+            "pauses": {"loop": 3}}))).unwrap();
+        let mut reply = observed.handle(request(press)).unwrap().unwrap();
+        let mut pauses = 0;
+        let mut previous_pause = None;
+        while reply["state"] == "trace-paused" {
+            pauses += 1;
+            let before = (observed.bridge.machine.instructions(), observed.bridge.machine.session.board.now());
+            assert!(before.0 < 20);
+            for _ in 0..2 {
+                observed.handle(request(json!({"command": "read-memory", "address": 0x2000, "count": 4}))).unwrap();
+            }
+            assert_eq!((observed.bridge.machine.instructions(), observed.bridge.machine.session.board.now()), before);
+            assert!(observed.handle(request(json!({"command": "key", "key": "play"}))).is_err());
+            if let Some(stale) = previous_pause.take() {
+                assert!(observed.handle(request(json!({"command": "trace-resume", "pause_id": stale}))).is_err());
+                assert_eq!((observed.bridge.machine.instructions(), observed.bridge.machine.session.board.now()), before);
+            }
+            let pause_id = reply["pause_id"].clone();
+            reply = observed.handle(request(json!({"command": "trace-resume", "pause_id": pause_id}))).unwrap().unwrap();
+            previous_pause = Some(pause_id);
+        }
+        assert_eq!(pauses, 3);
+        assert_eq!(reply, expected);
+        assert_eq!(observed.bridge.machine.instructions(), baseline.bridge.machine.instructions());
+        let expected = baseline.handle(request(json!({"command": "machine-fingerprint"}))).unwrap();
+        let actual = observed.handle(request(json!({"command": "machine-fingerprint"}))).unwrap();
+        assert_eq!(actual, expected);
+        assert!(observed.handle(request(json!({"command": "trace-resume", "pause_id": previous_pause.unwrap()}))).is_err());
+    }
+
+    #[test]
+    fn trace_pause_refuses_incomplete_finish_and_terminal_resume() {
+        let mut server = input_pause_fixture();
+        server.handle(request(json!({"command": "trace-sites", "sites": {"0x00000000": "loop"},
+            "pauses": {"loop": 1}}))).unwrap();
+        let before = server.bridge.machine.instructions();
+        assert!(server.handle(request(json!({"command": "key", "key": "dial-left"}))).is_err());
+        assert_eq!(server.bridge.machine.instructions(), before);
+        let reply = server.handle(request(json!({"command": "key", "key": "play",
+            "hold_instructions": 20, "release_instructions": 30, "settle_instructions": 100}))).unwrap().unwrap();
+        assert_eq!(reply["state"], "trace-paused");
+        assert!(server.handle(request(json!({"command": "finish"}))).is_err());
+        assert!(server.receipt(None).unwrap()["bridge_error"].is_string());
+        server.bridge.machine.failure = Some("terminal producer failure".into());
+        assert!(server.handle(request(json!({"command": "trace-resume", "pause_id": reply["pause_id"]}))).is_err());
+        assert_eq!(server.bridge.machine.instructions(), before);
+    }
+
+    #[test]
+    fn invalid_pause_plan_preserves_registered_sites_reads_and_occurrences() {
+        let mut baseline = input_pause_fixture();
+        let mut observed = input_pause_fixture();
+        let plan = json!({"command": "trace-sites", "sites": {"0x00000000": "original"},
+            "reads": {"0x00000000": [[0x2000,4]]}, "pauses": {"original": 1}});
+        baseline.handle(request(plan.clone())).unwrap();
+        observed.handle(request(plan)).unwrap();
+        for pauses in [json!({"missing": 1}), json!({"replacement": 0}), json!({"replacement": 65})] {
+            assert!(observed.handle(request(json!({"command": "trace-sites", "sites": {"0x00000004": "replacement"},
+                "reads": {"0x00000004": [[0x2004,4]]}, "pauses": pauses}))).is_err());
+        }
+        for sites in [json!({"0x00000000":"pause-target","0x0":"replacement"}),
+            json!({"0x0":"pause-target","0x00000000":"replacement"})] {
+            assert!(observed.handle(request(json!({"command":"trace-sites","sites":sites,"pauses":{"pause-target":1}}))).is_err());
+        }
+        let press = json!({"command": "key", "key": "play", "hold_instructions": 20,
+            "release_instructions": 30, "settle_instructions": 100});
+        let expected = baseline.handle(request(press.clone())).unwrap();
+        let actual = observed.handle(request(press)).unwrap();
+        assert_eq!(actual, expected);
+        let hits = json!({"command": "trace-hits", "from": 0});
+        assert_eq!(observed.handle(request(hits.clone())).unwrap(), baseline.handle(request(hits)).unwrap());
+    }
+
+    #[test]
+    fn trace_pauses_around_secondary_release_irq_preserve_both_core_quanta() {
+        let fixture = || {
+            let mut code = vec![0xe1a00000; 0x94 / 4];
+            code[..9].copy_from_slice(&[0xe304c0cc,0xe34fcffb,0xe3a03401,0xe58c3000,
+                0xe3002000,0xe3442010,0xe2800001,0xe5820000,0xeafffffc]);
+            code[0x80/4..].copy_from_slice(&[0xe3002004,0xe3442010,0xe2811001,0xe5821000,0xeafffffc]);
+            let server = server(&code);
+            server.bridge.machine.session.board.write_physical(0x3fff0000,
+                &[0xe51ff004u32.to_le_bytes(),0x80u32.to_le_bytes()].concat()).unwrap();
+            server
+        };
+        let mut baseline = fixture();
+        let mut observed = fixture();
+        let sites = json!({"0x0000000c":"release-before","0x00000010":"release-after","0x00000080":"secondary-entry"});
+        baseline.handle(request(json!({"command":"trace-sites","sites":sites}))).unwrap();
+        observed.handle(request(json!({"command":"trace-sites","sites":sites,
+            "pauses":{"release-before":1,"release-after":1,"secondary-entry":1}}))).unwrap();
+        baseline.handle(request(json!({"command":"capture-observation-window"}))).unwrap();
+        let mut reply = observed.handle(request(json!({"command":"capture-observation-window"}))).unwrap().unwrap();
+        let mut pauses = 0;
+        while reply["state"] == "trace-paused" {
+            pauses += 1;
+            let before = observed.handle(request(json!({"command":"machine-fingerprint"}))).unwrap();
+            observed.handle(request(json!({"command":"read-memory","address":0x100000,"count":8}))).unwrap();
+            observed.handle(request(json!({"command":"read-memory","address":0x200000,"count":4096}))).unwrap();
+            let after = observed.handle(request(json!({"command":"machine-fingerprint"}))).unwrap();
+            assert_eq!(before, after);
+            reply = observed.handle(request(json!({"command":"trace-resume","pause_id":reply["pause_id"]}))).unwrap().unwrap();
+        }
+        assert_eq!(pauses, 3);
+        let actual = observed.handle(request(json!({"command":"machine-fingerprint"}))).unwrap().unwrap();
+        let expected = baseline.handle(request(json!({"command":"machine-fingerprint"}))).unwrap().unwrap();
+        assert_eq!(actual["counts"].as_array().unwrap().iter().map(|v|v.as_u64().unwrap()).sum::<u64>(),40_000_000);
+        assert!(actual["counts"].as_array().unwrap().iter().all(|v|v.as_u64().unwrap()>0));
+        assert_eq!(actual, expected);
+        let memory = observed.handle(request(json!({"command":"read-memory","address":0x100000,"count":8}))).unwrap().unwrap();
+        let bytes = hex_field(memory["bytes"].as_str().unwrap()).unwrap();
+        assert_ne!(&bytes[..4], &[0;4]);
+        assert_ne!(&bytes[4..], &[0;4]);
     }
 
     #[test]
