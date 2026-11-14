@@ -320,14 +320,15 @@ driverOrderContract firmware = do
         (15115, 23712024), (15117, 23712040), (15127, 23712300), (15141, 23712508)] :: [(Int, Int)])
   let wake = object ["kind" .= ("queue-in" :: String), "operation" .= (15179 :: Int), "sender" .= (47 :: Int), "payload" .= ([] :: [Int])]
       effect = object ["kind" .= ("peer-request" :: String), "queue" .= (44 :: Int), "operation" .= (15372 :: Int), "payload" .= ([] :: [Int])]
-  _ <- status firmware (contract [wake, effect] [wake, effect]) VerdictEqual
-  broken <- status firmware (contract [wake, effect] [effect, wake]) VerdictDifferent
+      signal = object ["kind" .= ("callback" :: String), "entry" .= (15922860 :: Int)]
+  _ <- status firmware (contract [signal, wake, effect] [signal, wake, effect]) VerdictEqual
+  broken <- status firmware (contract [signal, wake, effect] [signal, effect, wake]) VerdictDifferent
   check (verdictChannelDifference broken == Nothing && verdictCausalViolation broken /= Nothing)
-  counted <- status firmware (contract [wake, effect, wake, effect] [wake, effect, effect, wake]) VerdictDifferent
+  counted <- status firmware (contract [signal, wake, effect, signal, wake, effect] [signal, wake, effect, signal, effect, wake]) VerdictDifferent
   check (verdictChannelDifference counted == Nothing && verdictCausalViolation counted /= Nothing)
   _ <- status firmware (contract
-    [arrival (15110 :: Int), copied (23711836 :: Int) (17 :: Int), wake, effect]
-    [wake, arrival (15110 :: Int), effect, copied (23711836 :: Int) (17 :: Int)]) VerdictEqual
+    [arrival (15110 :: Int), copied (23711836 :: Int) (17 :: Int), signal, wake, effect]
+    [signal, wake, arrival (15110 :: Int), effect, copied (23711836 :: Int) (17 :: Int)]) VerdictEqual
   pure ()
 
 check :: Bool -> IO ()
