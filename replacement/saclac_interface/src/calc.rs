@@ -34,6 +34,36 @@ pub struct WindowSample {
     pub adjustment: u32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlannerWord(pub u32);
+
+/// The profile byte returned by 0x74fa2c, as the window builder tests it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WindowAdjustmentProfile { Other, Mode6 }
+
+impl WindowAdjustmentProfile {
+    pub const fn from_byte(byte: u8) -> Self {
+        if byte == 6 { Self::Mode6 } else { Self::Other }
+    }
+}
+
+/// Planner +0x48 (0xfa8018) and +0x44 (0xfa9588), at wire offsets 56 and 60.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WindowAdjustment {
+    pub controllers: PlannerWord,
+    pub search: PlannerWord,
+}
+
+impl WindowAdjustment {
+    /// 0xf3a67c..0xf3a694 retains the search word only for profile byte 6.
+    pub const fn for_profile(self, profile: WindowAdjustmentProfile) -> Self {
+        match profile {
+            WindowAdjustmentProfile::Mode6 => self,
+            WindowAdjustmentProfile::Other => Self { search: PlannerWord(0), ..self },
+        }
+    }
+}
+
 /// Calc 0x3c0c: one window calculation over the primary statistics.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WindowRequest {
@@ -49,8 +79,7 @@ pub struct WindowRequest {
     pub reference: u16,
     pub window: WindowRecord,
     pub refresh: bool,
-    /// The adjustment state's words the request carries; the second is zero unless the profile takes it.
-    pub adjustment: [u32; 2],
+    pub adjustment: WindowAdjustment,
 }
 
 /// The statistics buffer a source reading is taken over.

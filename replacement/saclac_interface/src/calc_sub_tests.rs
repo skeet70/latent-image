@@ -53,6 +53,10 @@ fn cleared_flags_post_zero() {
 
 #[test]
 fn a_classification_is_operation_3e00_without_a_lens_effect() {
-    assert_eq!(calc_sub::calc_sub_operation(CalcSubOperation::Request00), 0x3e00);
-    assert_eq!(lens_effect(PeerOperation::CalcSub(CalcSubOperation::Request00)), LensEffect::NoLensDrive);
+    let operation = PeerOperation::CalcSub(CalcSubOperation::Request00);
+    let route = crate::stock::peers::route(operation);
+    assert_eq!(crate::stock::peers::operation_code(operation), 0x3e00);
+    assert_eq!((route.queue.number(), route.block_bytes, route.payload_capacity()), (46, 56, 48));
+    assert_eq!(route.sender, crate::stock::peers::SenderByte::RunningTask);
+    assert_eq!(lens_effect(operation), LensEffect::NoLensDrive);
 }

@@ -55,8 +55,9 @@ pub struct Capture {
     pub position: u32,
     pub selection: u32,
     pub settings: [u32; 2],
-    /// The profile's retune word, or 1 to resume and 0 to suspend.
+    /// The profile's retune word, or 1 to resume and 0 to suspend. The S1 start supplies 0.
     pub retune: u32,
+    /// The S1 retune supplies zero for indices 1 and 4, wire bytes 30 and 33.
     pub options: [u8; 5],
     pub spans: [u32; 2],
     pub dimensions: [u32; 2],
@@ -132,7 +133,7 @@ pub enum StatisticsPayload {
         /// Payload 0, 4 bytes, stored at 0x103a20c.
         callback: StockCallbackWord,
     },
-    /// X-M1 1.50: 0x103b064 posts 0x4043 with no bytes when the word at 0x016f3afc is zero.
+    /// X-M1 1.50: caller 0x103b064 posts 0x4043 with no bytes when 0x01703afc is zero.
     Request43,
 }
 

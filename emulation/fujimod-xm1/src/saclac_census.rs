@@ -664,6 +664,7 @@ struct Census<'a> {
     presses: Vec<PressRow>,
     key_pulses: Vec<Pulse>,
     mode_dial: Option<DialRow>,
+    interface: saclac_interface::Stream,
     stimuli: Stimuli<Stimulus>,
 }
 
@@ -1234,6 +1235,7 @@ fn drive() -> Result<(), String> {
         presses: Vec::new(),
         key_pulses: Vec::new(),
         mode_dial: None,
+        interface: saclac_interface::Stream::default(),
         stimuli: Stimuli::instructions(&machine),
     };
     let setup = if start == ObservationStart::PostBoot {
@@ -1278,7 +1280,7 @@ fn drive() -> Result<(), String> {
         Some(watch) => watch.end(&machine, &plan.ranges, &plan.watch, &mut census.ranges, &mut census.watch_ranges),
         None => Ok(()),
     };
-    let error = observed.err().or(ended.err());
+    let error = observed.err().or(interface_end.err()).or(ended.err());
     let inputs = [Some(run_binding), Some(dat_binding), Some(rom_binding), Some(sites_binding), trajectory_binding, schedule_binding,
         Some(executable_binding)]
         .into_iter().flatten().collect();
