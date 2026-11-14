@@ -100,7 +100,7 @@ fn statistics_imaging_flash_lenscom_and_image_processor_requests_reach_their_que
     Flash::request(&mut ports, FlashRequest { operation: FlashOperation::Request0e, parameters: stock::parameters(&mask), completions: &[] }).unwrap();
     let command = stock::shared::lens_com(&LensComCommand { code: LensComCode::new(2).unwrap(), completion: StockCallbackWord(0x6bbf98) });
     LensCom::request(&mut ports, LensComRequest { operation: LensComOperation::Request2d, parameters: stock::parameters(&command), completions: &[] }).unwrap();
-    let triplet = stock::shared::image_processor_triplet(&ImageProcessorTriplet { mode: 1, values: [2, 3, 4] });
+    let triplet = stock::shared::image_processor_triplet(&ImageProcessorTriplet { completion: StockCallbackWord(1), values: [2, 3, 4] });
     ImageProcessor::request(&mut ports, ImageProcessorRequest { operation: ImageProcessorOperation::Request03, parameters: stock::parameters(&triplet) }).unwrap();
 
     assert_eq!(

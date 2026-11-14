@@ -10,9 +10,11 @@ use crate::dump::{ConfigurationDump, DumpDerivations};
 use crate::table::{Row, Step};
 use crate::face::{FaceTracking, TrackingBusy};
 use crate::ports::{Derivations, ExportQuery};
-use crate::pipeline::{Bank, Enable, EnableChange, FilterWindow, Grid, Part, Setting, Stage, StageBlock};
+use crate::pipeline::{Bank, Enable, EnableChange, FilterWindow, Grid, Part, Setting, Stage, StageBlock, StageMode};
 use crate::registers::PipelineHardware;
-use crate::scan::{ScanBlocks, ScanField, ScanLibrary, StockPart};
+use crate::scan::AppliedParts;
+use crate::scan::{ScanBlocks, ScanLibrary, StockPart};
+use crate::services::{KernelDelay, LensStatus};
 
 macro_rules! entry {
     ($address:expr, fn($($argument:ty),*) $(-> $result:ty)?) => {{
@@ -21,12 +23,41 @@ macro_rules! entry {
     }};
 }
 
-fn read_u8(address: u32) -> u8 { unsafe { read_volatile(address as usize as *const u8) } }
-fn read_u16(address: u32) -> u16 { unsafe { read_volatile(address as usize as *const u16) } }
-fn read_u32(address: u32) -> u32 { unsafe { read_volatile(address as usize as *const u32) } }
-fn write_u8(address: u32, value: u8) { unsafe { write_volatile(address as usize as *mut u8, value) } }
-fn write_u16(address: u32, value: u16) { unsafe { write_volatile(address as usize as *mut u16, value) } }
-fn write_u32(address: u32, value: u32) { unsafe { write_volatile(address as usize as *mut u32, value) } }
+/// Guest memory by address, which the stock layouts below are read from and written to.
+pub trait GuestMemory {
+    fn byte(&self, at: u32) -> u8;
+    fn halfword(&self, at: u32) -> u16;
+    fn word(&self, at: u32) -> u32;
+    fn set_byte(&self, at: u32, value: u8);
+    fn set_halfword(&self, at: u32, value: u16);
+    fn set_word(&self, at: u32, value: u32);
+    /// Stores `value` in `count` bytes from `at`.
+    fn fill(&self, at: u32, value: u8, count: u32);
+}
+
+/// Guest memory at its own addresses; `fill` is the runtime's fill_bytes (0x7221c8).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct StockMemory;
+
+impl GuestMemory for StockMemory {
+    fn byte(&self, at: u32) -> u8 { unsafe { read_volatile(at as usize as *const u8) } }
+    fn halfword(&self, at: u32) -> u16 { unsafe { read_volatile(at as usize as *const u16) } }
+    fn word(&self, at: u32) -> u32 { unsafe { read_volatile(at as usize as *const u32) } }
+    fn set_byte(&self, at: u32, value: u8) { unsafe { write_volatile(at as usize as *mut u8, value) } }
+    fn set_halfword(&self, at: u32, value: u16) { unsafe { write_volatile(at as usize as *mut u16, value) } }
+    fn set_word(&self, at: u32, value: u32) { unsafe { write_volatile(at as usize as *mut u32, value) } }
+    fn fill(&self, at: u32, value: u8, count: u32) { entry!(0x72_21c8u32, fn(u32, u32, u32))(at, u32::from(value), count) }
+}
+
+impl<M: GuestMemory + ?Sized> GuestMemory for &M {
+    fn byte(&self, at: u32) -> u8 { (**self).byte(at) }
+    fn halfword(&self, at: u32) -> u16 { (**self).halfword(at) }
+    fn word(&self, at: u32) -> u32 { (**self).word(at) }
+    fn set_byte(&self, at: u32, value: u8) { (**self).set_byte(at, value) }
+    fn set_halfword(&self, at: u32, value: u16) { (**self).set_halfword(at, value) }
+    fn set_word(&self, at: u32, value: u32) { (**self).set_word(at, value) }
+    fn fill(&self, at: u32, value: u8, count: u32) { (**self).fill(at, value, count) }
+}
 
 pub struct StockDerivations;
 
@@ -89,6 +120,22 @@ impl FloatLog for StockFloatLog {
     fn ln(&mut self, value: f32) -> f32 { f32::from_bits(entry!(0x89_4778u32, fn(u32) -> u32)(value.to_bits())) }
 }
 
+pub struct StockKernelDelay;
+
+impl KernelDelay for StockKernelDelay {
+    fn delay(&mut self, ticks: u32) -> u32 { entry!(0x72_3ce8u32, fn(u32) -> u32)(ticks) }
+}
+
+/// The status byte 0x6c6b08 copies out of `0x93c544 + 0x64`, or `None` when it reports failure.
+pub struct StockLensStatus;
+
+impl LensStatus for StockLensStatus {
+    fn status(&mut self) -> Option<u8> {
+        let mut status = 0u8;
+        if entry!(0x6c_6b08u32, fn(*mut u8) -> u32)(&mut status) == 0 { None } else { Some(status) }
+    }
+}
+
 pub struct StockPipelineHardware;
 
 impl PipelineHardware for StockPipelineHardware {
@@ -118,17 +165,82 @@ impl FaceTracking for StockFaceTracking {
 
 /// A scan's configuration block (0x244 bytes) and request block, by guest address.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct StockScanBlocks {
+pub struct StockScanBlocks<M = StockMemory> {
     pub configuration: u32,
     pub request: u32,
+    pub memory: M,
 }
 
 const CONFIGURATION_BYTES: u32 = 0x244;
 const APPLIED_PARTS: u32 = 0x14c;
 const REQUEST_WINDOW: u32 = 0x3e;
+const CONFIGURED_WINDOW: u32 = 0x1c8;
 
 #[derive(Clone, Copy)]
 enum Width { Byte, Half, Word }
+
+/// A configuration field by its stock offset; its meaning awaits the caller that names it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ScanField {
+    WordDc,
+    WordE0,
+    WordE4,
+    WordE8,
+    WordEc,
+    WordF0,
+    WordF4,
+    WordF8,
+    WordFc,
+    Word100,
+    Word104,
+    Word108,
+    Word10c,
+    Word110,
+    Word114,
+    Half118,
+    Byte11a,
+    Byte11b,
+    Word11c,
+    Word124,
+    Word128,
+    Word13c,
+    Word140,
+    Word144,
+    Word148,
+    Word160,
+    Word164,
+    Half168,
+    Half16a,
+    Byte16c,
+    Word17c,
+    Word180,
+    Word184,
+    Word188,
+    Word18c,
+    Byte190,
+    Word194,
+    Half1a0,
+    Byte1a2,
+    Half1a4,
+    Word1a8,
+    Byte1ac,
+    Byte1ad,
+    Byte1ae,
+    Byte1af,
+    Word1b4,
+    Word1bc,
+    Half1c8,
+    Half1ca,
+    Half1cc,
+    Word1d0,
+    Word1d4,
+    Word1d8,
+    Word1dc,
+    Word1e0,
+    Word1e4,
+    Half1e8,
+    Half1ea,
+}
 
 fn layout(field: ScanField) -> (u32, Width) {
     use ScanField::*;
@@ -194,42 +306,143 @@ fn layout(field: ScanField) -> (u32, Width) {
     }
 }
 
-impl ScanBlocks for StockScanBlocks {
+impl<M: GuestMemory> StockScanBlocks<M> {
+    pub(crate) fn set_field(&mut self, field: ScanField, value: u32) {
+        let (offset, width) = layout(field);
+        let at = self.configuration + offset;
+        match width {
+            Width::Byte => self.memory.set_byte(at, value as u8),
+            Width::Half => self.memory.set_halfword(at, value as u16),
+            Width::Word => self.memory.set_word(at, value),
+        }
+    }
+
+    pub(crate) fn field(&self, field: ScanField) -> u32 {
+        let (offset, width) = layout(field);
+        let at = self.configuration + offset;
+        match width {
+            Width::Byte => u32::from(self.memory.byte(at)),
+            Width::Half => u32::from(self.memory.halfword(at)),
+            Width::Word => self.memory.word(at),
+        }
+    }
+
+    /// 0xd78400.
+    pub fn set_ec(&mut self, value: u32) { self.set_field(ScanField::WordEc, value) }
+
+    /// Values above 7 become 8 (0xd784ac).
+    pub fn set_140(&mut self, value: u32) { self.set_field(ScanField::Word140, value.min(8)) }
+
+    /// 0xd784cc.
+    pub fn set_144(&mut self, enabled: bool) { self.set_field(ScanField::Word144, u32::from(enabled)) }
+
+    /// 0xd78674.
+    pub fn set_11a(&mut self, value: u8) { self.set_field(ScanField::Byte11a, u32::from(value)) }
+
+    /// Values above 8 become 9 (0xd7868c).
+    pub fn set_13c(&mut self, value: u32) { self.set_field(ScanField::Word13c, value.min(9)) }
+
+    /// Values above 2 become 3 (0xd789f0).
+    pub fn set_148(&mut self, value: u32) { self.set_field(ScanField::Word148, value.min(3)) }
+
+    /// Values above 4 become 0 (0xd79364).
+    pub fn set_1dc(&mut self, value: u32) { self.set_field(ScanField::Word1dc, if value > 4 { 0 } else { value }) }
+
+    /// Stores the defaults 0xd791b0 writes, then the library's finish entries.
+    pub fn set_defaults(&mut self, library: &mut impl ScanLibrary<Self>) {
+        for (field, value) in DEFAULTS {
+            self.set_field(field, value);
+        }
+        library.finish_defaults(self);
+    }
+}
+
+/// The defaults 0xd791b0 stores, in its order.
+const DEFAULTS: [(ScanField, u32); 54] = [
+    (ScanField::WordEc, 0),
+    (ScanField::WordE4, 0),
+    (ScanField::WordDc, 1),
+    (ScanField::WordE0, 0),
+    (ScanField::WordF0, 0),
+    (ScanField::WordF4, 2),
+    (ScanField::WordF8, 2),
+    (ScanField::WordFc, 2),
+    (ScanField::Word100, 2),
+    (ScanField::Word104, 0),
+    (ScanField::Word108, 0),
+    (ScanField::Word10c, 2),
+    (ScanField::Word110, 0),
+    (ScanField::Word114, 2),
+    (ScanField::Byte11b, 1),
+    (ScanField::Word11c, 600),
+    (ScanField::Half118, 0),
+    (ScanField::Byte11a, 1),
+    (ScanField::Word124, 1),
+    (ScanField::Word160, 0),
+    (ScanField::Word164, 0),
+    (ScanField::Half168, 0),
+    (ScanField::Half16a, 0),
+    (ScanField::Byte16c, 0),
+    (ScanField::Word180, 2),
+    (ScanField::Word184, 0),
+    (ScanField::Word188, 0),
+    (ScanField::Word17c, 1),
+    (ScanField::Word18c, 0),
+    (ScanField::Byte190, 0),
+    (ScanField::Word194, 2),
+    (ScanField::Word128, 0),
+    (ScanField::Half1a0, 0x2ba),
+    (ScanField::Byte1a2, 0),
+    (ScanField::Half1a4, 0x7e),
+    (ScanField::Byte1ac, 0),
+    (ScanField::Word1a8, 0),
+    (ScanField::Byte1ad, 0),
+    (ScanField::Byte1ae, 0),
+    (ScanField::Byte1af, 0),
+    (ScanField::Word1bc, 1),
+    (ScanField::Word1e0, 0),
+    (ScanField::WordE8, 0),
+    (ScanField::Half1c8, 0),
+    (ScanField::Half1ca, 0),
+    (ScanField::Half1cc, 0),
+    (ScanField::Word1d0, 0),
+    (ScanField::Word1d4, 0),
+    (ScanField::Word1d8, 0),
+    (ScanField::Word1b4, 0),
+    (ScanField::Word1dc, 0),
+    (ScanField::Word1e4, 0),
+    (ScanField::Half1e8, 0),
+    (ScanField::Half1ea, 0),
+];
+
+impl<M: GuestMemory> ScanBlocks for StockScanBlocks<M> {
     /// 0xd77abc fills the block through fill_bytes (0x7221c8).
-    fn clear_configuration(&mut self) {
-        entry!(0x72_21c8u32, fn(u32, u32, u32))(self.configuration, 0, CONFIGURATION_BYTES);
-    }
+    fn clear_configuration(&mut self) { self.memory.fill(self.configuration, 0, CONFIGURATION_BYTES) }
 
-    fn set(&mut self, field: ScanField, value: u32) {
-        let (offset, width) = layout(field);
-        let at = self.configuration + offset;
-        match width {
-            Width::Byte => write_u8(at, value as u8),
-            Width::Half => write_u16(at, value as u16),
-            Width::Word => write_u32(at, value),
-        }
-    }
+    fn request_flag(&self, index: u8) -> u8 { self.memory.byte(self.request + u32::from(index)) }
 
-    fn configuration(&self, field: ScanField) -> u32 {
-        let (offset, width) = layout(field);
-        let at = self.configuration + offset;
-        match width {
-            Width::Byte => u32::from(read_u8(at)),
-            Width::Half => u32::from(read_u16(at)),
-            Width::Word => read_u32(at),
-        }
-    }
+    fn applied_parts(&self) -> AppliedParts { AppliedParts(self.memory.word(self.configuration + APPLIED_PARTS)) }
 
-    fn request_flag(&self, index: u8) -> u8 { read_u8(self.request + u32::from(index)) }
-
-    fn mark_applied(&mut self, bits: u32) {
+    fn mark_applied(&mut self, AppliedParts(bits): AppliedParts) {
         let at = self.configuration + APPLIED_PARTS;
-        write_u32(at, read_u32(at) | bits);
+        self.memory.set_word(at, self.memory.word(at) | bits);
+    }
+
+    fn clear_applied_parts(&mut self) { self.memory.set_word(self.configuration + APPLIED_PARTS, 0) }
+
+    fn configured_window(&self) -> [u16; 3] {
+        core::array::from_fn(|index| self.memory.halfword(self.configuration + CONFIGURED_WINDOW + 2 * index as u32))
+    }
+
+    fn set_configured_window(&mut self, limits: [u16; 3]) {
+        for (index, limit) in limits.into_iter().enumerate() {
+            self.memory.set_halfword(self.configuration + CONFIGURED_WINDOW + 2 * index as u32, limit);
+        }
     }
 
     fn set_request_window(&mut self, limits: [u16; 3]) {
         for (index, limit) in limits.into_iter().enumerate() {
-            write_u16(self.request + REQUEST_WINDOW + 2 * index as u32, limit);
+            self.memory.set_halfword(self.request + REQUEST_WINDOW + 2 * index as u32, limit);
         }
     }
 }
@@ -237,6 +450,8 @@ impl ScanBlocks for StockScanBlocks {
 pub struct StockScanLibrary;
 
 impl ScanLibrary<StockScanBlocks> for StockScanLibrary {
+    type Output = StockScanOutput;
+
     fn apply(&mut self, part: StockPart, blocks: &mut StockScanBlocks) {
         let (configuration, request) = (blocks.configuration, blocks.request);
         let both = |entry: u32| entry!(entry, fn(u32, u32))(configuration, request);
@@ -275,12 +490,36 @@ impl ScanLibrary<StockScanBlocks> for StockScanLibrary {
         entry!(0xd7_9178u32, fn(u32))(blocks.configuration);
         entry!(0xd7_9194u32, fn(u32))(blocks.configuration);
     }
+
+    fn fill_settings(&mut self, blocks: &StockScanBlocks, output: &mut StockScanOutput) {
+        entry!(0xd6_4840u32, fn(u32, u32))(blocks.configuration, output.0)
+    }
+
+    fn fill_geometry(&mut self, blocks: &StockScanBlocks, output: &mut StockScanOutput) {
+        let (mut first, mut second) = ([0u32; 3], 0u16);
+        entry!(0xd6_49e8u32, fn(u32, u32, u32, u32))(blocks.configuration, address_of(&mut first), output.0, address_of(&mut second));
+    }
+
+    fn nine(&mut self, blocks: &StockScanBlocks) -> Optioned<9> {
+        let mut table = [0u16; 10];
+        entry!(0xd6_4940u32, fn(u32, u32))(address_of(&mut table), blocks.configuration);
+        optioned::<9, 10>(table)
+    }
+
+    fn four(&mut self, blocks: &StockScanBlocks) -> Optioned<4> {
+        let mut table = [0u16; 5];
+        entry!(0xd6_4e2cu32, fn(u32, u32))(address_of(&mut table), blocks.configuration);
+        optioned::<4, 5>(table)
+    }
 }
 
 /// A caller's region (0xda027c), parameter (0xd9f7c0, 0xd9f828) or geometry (0xd9fd54) block,
 /// by guest address.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct StockStageBlock(pub u32);
+pub struct StockStageBlock<M = StockMemory> {
+    pub address: u32,
+    pub memory: M,
+}
 
 const fn banked(bank: Bank, first: u32, second: u32) -> u32 {
     match bank {
@@ -336,21 +575,23 @@ const fn part_offset(part: Part) -> u32 {
     }
 }
 
-impl StockStageBlock {
+impl<M> StockStageBlock<M> {
     /// The address the part's stock entry takes; `Part::InputMode`'s entry takes the word there.
-    pub const fn part(self, part: Part) -> u32 { self.0 + part_offset(part) }
-
-    fn word(self, offset: u32) -> u32 { read_u32(self.0 + offset) }
+    pub const fn part(&self, part: Part) -> u32 { self.address + part_offset(part) }
 }
 
-impl StageBlock for StockStageBlock {
-    fn stage_mode(&self, stage: Stage) -> u32 {
-        self.word(match stage {
-            Stage::Stage400 => 0x14,
-            Stage::Stage4 => 0x30,
-            Stage::Stage8 => 0x40,
-            Stage::Stage10 => 0x88,
-        })
+impl<M: GuestMemory> StockStageBlock<M> {
+    fn word(&self, offset: u32) -> u32 { self.memory.word(self.address + offset) }
+}
+
+impl<M: GuestMemory> StageBlock for StockStageBlock<M> {
+    fn stage_mode(&self, stage: Stage) -> StageMode {
+        StageMode::of(self.word(match stage {
+            Stage::First => 0x14,
+            Stage::Second => 0x30,
+            Stage::Third => 0x40,
+            Stage::Fourth => 0x88,
+        }))
     }
 
     fn enable_change(&self, enable: Enable) -> EnableChange {
@@ -372,17 +613,20 @@ impl StageBlock for StockStageBlock {
         match setting {
             Setting::PathEnable => self.word(0x5c),
             Setting::SecondGate => self.word(0x254),
-            Setting::ModeLevel => u32::from(read_u8(self.0 + 0x78)),
+            Setting::ModeLevel => u32::from(self.memory.byte(self.address + 0x78)),
         }
     }
 }
 
 fn address_of<T>(value: &mut T) -> u32 { value as *mut T as usize as u32 }
 
-/// A compiled scan configuration by guest address: stage flags at +0 and the scan library's
-/// configuration from +0x101c (output kind, then the option bytes at +4 and +8).
+/// A compiled scan configuration by guest address: the scan library's configuration from
+/// +0x101c (output kind, then the option bytes at +4 and +8).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct StockCompiledScan(pub u32);
+pub struct StockCompiledScan<M = StockMemory> {
+    pub address: u32,
+    pub memory: M,
+}
 
 /// A caller's block the scan library fills, by guest address.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -390,8 +634,9 @@ pub struct StockScanOutput(pub u32);
 
 const LIBRARY_CONFIGURATION: u32 = 0x101c;
 
-impl StockCompiledScan {
-    fn library(self) -> u32 { self.0 + LIBRARY_CONFIGURATION }
+impl<M> StockCompiledScan<M> {
+    /// The scan library's configuration, which 0xd5e1d4 passes 0xda21cc (0xd5e1e4..0xd5e1e8).
+    pub fn library(&self) -> u32 { self.address + LIBRARY_CONFIGURATION }
 }
 
 /// The library's optioned table: the option byte, then the values from +2.
@@ -403,16 +648,7 @@ fn raw<const N: usize, const W: usize>(table: Optioned<N>) -> [u16; W] {
     core::array::from_fn(|index| if index == 0 { u16::from(table.option) } else { table.values[index - 1] })
 }
 
-impl CompiledScan for StockCompiledScan {
-    type Block = StockScanOutput;
-
-    fn fill_settings(&mut self, block: &mut StockScanOutput) { entry!(0xd6_4840u32, fn(u32, u32))(self.0, block.0) }
-
-    fn fill_geometry(&mut self, block: &mut StockScanOutput) {
-        let (mut first, mut second) = ([0u32; 3], 0u16);
-        entry!(0xd6_49e8u32, fn(u32, u32, u32, u32))(self.0, address_of(&mut first), block.0, address_of(&mut second));
-    }
-
+impl<M: GuestMemory> CompiledScan for StockCompiledScan<M> {
     fn set_long_table(&mut self, values: &[u16; 22]) {
         let mut values = *values;
         entry!(0xd6_4850u32, fn(u32, u32))(address_of(&mut values), self.library());
@@ -423,21 +659,9 @@ impl CompiledScan for StockCompiledScan {
         entry!(0xd6_49f8u32, fn(u32, u32, u32, u32))(0, address_of(&mut values), 0, self.library());
     }
 
-    fn nine(&mut self) -> Optioned<9> {
-        let mut table = [0u16; 10];
-        entry!(0xd6_4940u32, fn(u32, u32))(address_of(&mut table), self.0);
-        optioned::<9, 10>(table)
-    }
-
     fn set_nine(&mut self, table: Optioned<9>) {
         let mut table = raw::<9, 10>(table);
         entry!(0xd6_4950u32, fn(u32, u32))(address_of(&mut table), self.library());
-    }
-
-    fn four(&mut self) -> Optioned<4> {
-        let mut table = [0u16; 5];
-        entry!(0xd6_4e2cu32, fn(u32, u32))(address_of(&mut table), self.0);
-        optioned::<4, 5>(table)
     }
 
     fn set_four(&mut self, table: Optioned<4>) {
@@ -445,11 +669,9 @@ impl CompiledScan for StockCompiledScan {
         entry!(0xd6_537cu32, fn(u32, u32))(address_of(&mut table), self.library());
     }
 
-    fn options(&self) -> [u8; 2] { [read_u8(self.library() + 4), read_u8(self.library() + 8)] }
+    fn options(&self) -> [u8; 2] { [self.memory.byte(self.library() + 4), self.memory.byte(self.library() + 8)] }
 
-    fn set_output_kind(&mut self, kind: u8) { write_u8(self.library(), kind) }
-
-    fn stage_flags(&self) -> u32 { read_u32(self.0) }
+    fn set_output_kind(&mut self, kind: u8) { self.memory.set_byte(self.library(), kind) }
 }
 
 /// The stream a snapshot's options name, by guest address.
@@ -458,25 +680,26 @@ pub struct StreamSource(pub u32);
 
 /// A stream object and the snapshot block it is written to, by guest address.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct StockStreamSnapshot {
+pub struct StockStreamSnapshot<M = StockMemory> {
     pub stream: u32,
     pub snapshot: u32,
+    pub memory: M,
 }
 
 const STREAM_OPTIONS: u32 = 0xb_d668;
 
 impl StockStreamSnapshot {
     /// The stream's own snapshot block, which 0xd6b460 writes.
-    pub const fn of_stream(stream: u32) -> Self { Self { stream, snapshot: stream + 0xb_d4e4 } }
+    pub const fn of_stream(stream: u32) -> Self { Self { stream, snapshot: stream + 0xb_d4e4, memory: StockMemory } }
 }
 
-impl StreamSnapshot for StockStreamSnapshot {
+impl<M: GuestMemory> StreamSnapshot for StockStreamSnapshot<M> {
     type Registers = [u32; 96];
     type Source = StreamSource;
 
     fn write_tag(&mut self, tag: [u8; 4]) {
         for (at, byte) in (self.snapshot..).zip(tag) {
-            write_u8(at, byte);
+            self.memory.set_byte(at, byte);
         }
     }
 
@@ -494,8 +717,8 @@ impl StreamSnapshot for StockStreamSnapshot {
     fn select(&mut self, source: StreamSource) { entry!(0xd6_ae18u32, fn(u32, u32, u32))(self.stream, 0, source.0) }
 
     fn set_options(&mut self, options: [u32; 2]) {
-        write_u32(self.stream + STREAM_OPTIONS + 0x370, options[0]);
-        write_u32(self.stream + STREAM_OPTIONS + 0x374, options[1]);
+        self.memory.set_word(self.stream + STREAM_OPTIONS + 0x370, options[0]);
+        self.memory.set_word(self.stream + STREAM_OPTIONS + 0x374, options[1]);
     }
 
     fn apply_options(&mut self, source: StreamSource) { entry!(0xd6_afe4u32, fn(u32, u32))(self.stream + STREAM_OPTIONS, source.0) }
@@ -517,33 +740,37 @@ impl DumpDerivations for StockDumpDerivations {
 
 /// A shot's dump buffer, by guest address; its configuration section starts at +0xb174c.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct StockDumpBuffer(pub u32);
+pub struct StockDumpBuffer<M = StockMemory> {
+    pub address: u32,
+    pub memory: M,
+}
 
 const CONFIGURATION_SECTION: u32 = 0xb_174c;
 const END_OF_STEPS: u16 = 0xfdfd;
 
-impl StockDumpBuffer {
+impl<M: GuestMemory> StockDumpBuffer<M> {
     /// Writes the section in 0x748928's store order.
-    pub fn write_configuration(self, dump: &ConfigurationDump) {
-        let section = self.0 + CONFIGURATION_SECTION;
-        let word = |offset: u32, value: u32| write_u32(section + offset, value);
+    pub fn write_configuration(&self, dump: &ConfigurationDump) {
+        let section = self.address + CONFIGURATION_SECTION;
+        let word = |offset: u32, value: u32| self.memory.set_word(section + offset, value);
+        let half = |at: u32, value: u16| self.memory.set_halfword(at, value);
         word(0, u32::from_le_bytes(*b"ELTS"));
         word(0x2a4, u32::from_le_bytes(*b"ELAL"));
         let column = |index: u32, first: u32| section + 4 + 2 * (first + index);
         let scale = |index: u32| section + 2 * (184 + index);
         let steps = dump.steps.iter().take(dump.count);
         for (index, step) in (0u32..).zip(steps) {
-            write_u16(column(index, 0), step.rounded as u16);
-            write_u16(column(index, 32), step.value);
-            write_u16(column(index, 68), step.transformed_value);
-            write_u16(column(index, 100), step.transformed_word);
-            write_u16(scale(index), step.scale);
+            half(column(index, 0), step.rounded as u16);
+            half(column(index, 32), step.value);
+            half(column(index, 68), step.transformed_value);
+            half(column(index, 100), step.transformed_word);
+            half(scale(index), step.scale);
         }
         let end = dump.count as u32;
         for first in [0, 32, 68, 100] {
-            write_u16(column(end, first), END_OF_STEPS);
+            half(column(end, first), END_OF_STEPS);
         }
-        write_u16(scale(end), END_OF_STEPS);
+        half(scale(end), END_OF_STEPS);
         let references = dump.references.unwrap_or([0; 3]);
         for (offset, value) in [0x130, 0x134, 0x140].into_iter().zip(references) {
             word(offset, value);

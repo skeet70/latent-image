@@ -2,11 +2,12 @@
 
 //! The compiled scan configuration the profile layer fills and hands the pipeline (image 5,
 //! 0xd5d268..0xd5e240, 0xd6b394, 0xd6b460): its register tables, its output kind, the register
-//! groups its stage flags select, and the stream snapshot taken with it.
+//! groups of the configuration's applied parts, and the stream snapshot taken with it.
 
 use xm1_saclac_shared::image_registers::RegisterSnapshot;
 
 use crate::registers::{pack_groups, restore_groups, PipelineHardware, RESTORE_CLIENT};
+use crate::scan::AppliedParts;
 
 /// A table the scan library keeps beside an option byte.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -18,35 +19,19 @@ pub struct Optioned<const N: usize> {
 /// The scan library's entries over one compiled configuration, which stay stock with the
 /// library.
 pub trait CompiledScan {
-    /// A caller's block the library fills, in the library's layout.
-    type Block;
-
-    /// 0xd64840.
-    fn fill_settings(&mut self, block: &mut Self::Block);
-    /// 0xd649e8, whose two scratch outputs are dropped.
-    fn fill_geometry(&mut self, block: &mut Self::Block);
     /// 0xd64850.
     fn set_long_table(&mut self, values: &[u16; 22]);
     /// 0xd649f8 with its halfwords alone.
     fn set_wide_table(&mut self, values: &[u16; 28]);
-    /// 0xd64940.
-    fn nine(&mut self) -> Optioned<9>;
     /// 0xd64950.
     fn set_nine(&mut self, table: Optioned<9>);
-    /// 0xd64e2c.
-    fn four(&mut self) -> Optioned<4>;
     /// 0xd6537c.
     fn set_four(&mut self, table: Optioned<4>);
     /// The option bytes the library keeps beside the nine- and four-entry tables.
     fn options(&self) -> [u8; 2];
     /// 0xd5e240.
     fn set_output_kind(&mut self, kind: u8);
-    /// The stage flags the configuration's register groups follow.
-    fn stage_flags(&self) -> u32;
 }
-
-/// 0xd5dfec.
-pub fn nine_values(scan: &mut impl CompiledScan) -> [u16; 9] { scan.nine().values }
 
 /// Replaces the nine-entry table, keeping its option byte (0xd5e05c).
 pub fn store_nine(scan: &mut impl CompiledScan, values: [u16; 9]) {
@@ -54,23 +39,21 @@ pub fn store_nine(scan: &mut impl CompiledScan, values: [u16; 9]) {
     scan.set_nine(Optioned { option, values });
 }
 
-/// 0xd5e120.
-pub fn four_values(scan: &mut impl CompiledScan) -> [u16; 4] { scan.four().values }
-
 /// Replaces the four-entry table, keeping its option byte (0xd5e168).
 pub fn store_four(scan: &mut impl CompiledScan, values: [u16; 4]) {
     let [_, option] = scan.options();
     scan.set_four(Optioned { option, values });
 }
 
-/// Packs the register groups the configuration's stage flags select (0xd5e1d4).
-pub fn attach<S: RegisterSnapshot>(scan: &impl CompiledScan, configuration: S::Configuration, snapshot: &mut S) {
-    pack_groups(scan.stage_flags(), configuration, snapshot);
+/// Packs the register groups of `applied` from `configuration`, the compiled scan's library
+/// configuration (0xd5e1d4).
+pub fn attach<S: RegisterSnapshot>(applied: AppliedParts, configuration: S::Configuration, snapshot: &mut S) {
+    pack_groups(applied, configuration, snapshot);
 }
 
-/// Restores the register groups the configuration's stage flags select (0xd5e1f4).
-pub fn restore(scan: &impl CompiledScan, snapshot: &mut impl RegisterSnapshot, hardware: &mut impl PipelineHardware) {
-    restore_groups(scan.stage_flags(), snapshot, hardware);
+/// Restores the register groups of `applied` (0xd5e1f4).
+pub fn restore(applied: AppliedParts, snapshot: &mut impl RegisterSnapshot, hardware: &mut impl PipelineHardware) {
+    restore_groups(applied, snapshot, hardware);
 }
 
 /// Releases `client`'s configuration hold (0xd5d268).

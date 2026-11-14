@@ -45,7 +45,9 @@ fn a_bias_adds_the_rounded_factor_term_only_when_scale_and_divisor_are_set() {
     let area = Area::default().with_half(0x3e0317 + 4, 50).with_half(0x3e03e0 + 4, 70).with(0x1fc, 3);
     assert_eq!(bias(&area, Channel(2), 0), 50);
     assert_eq!(bias(&area, Channel(2), ALTERNATE_BIAS), 70);
-    let area = area.with_half(0x3e2640, 400).with_half(0x3e1b00 + 44, 100);
+    // 0x747354 reads the channel's divisor at 0x3f1b00 + 22 * channel (0x747364); the halfword at
+    // 0x3e1b00 + 22 * channel is another word.
+    let area = area.with_half(0x3e2640, 400).with_half(0x3f1b00 + 44, 100).with_half(0x3e1b00 + 44, 7);
     // -(3,000,000 / 40,000) = -75, which is -7.5 tenths, rounded to -8.
     assert_eq!(bias(&area, Channel(2), 0), 42);
     assert_eq!(biased_step(&area.with_half(0x3e0572 + 4, 1000), Channel(2), 0), 1042);
