@@ -1,5 +1,56 @@
 [
   {
+    "id":"E-FIRST-RECORD-FLASH-BOOT-CHECK-150",
+    "claim":"The compile-time clock-backend first stage cold-boots both staged packages to SHOOTING MENU. Retained stock: {{retained_stock}} at {{retained_stock_instructions}} instructions; retained RC0: {{retained_rc0}} at {{retained_rc0_instructions}}; FujiMod stock: {{fujimod_stock}} at {{fujimod_stock_instructions}}; FujiMod RC0: {{fujimod_rc0}} at {{fujimod_rc0_instructions}}. Stock-derived DAT {{stock_dat}}; RC0-derived DAT {{rc0_dat}}.",
+    "scope":"Four actual cold-boot-to-menu executions, the two packages on each engine, from the committed first-stage image identified in the run's binary digest receipt. Packaging runs outside emulator admission; each emulator launcher acquires its own slot.",
+    "notes":"No camera operation or emulator model change. The RAM experiment selects ReservedClock and does not exercise BootClock clock writes on silicon. These cold-menu checks exercise BootClock in emulation, not physical startup or ordinary capture/playback. Instruction counts are engine-specific, not silicon latency or a performance comparison between engines. Use the retained package receipts for a pin update; no pin list was edited by this change.",
+    "artifacts":[
+      "private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/retained-stock/flash-boot-receipt.json",
+      "private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/retained-rc0/flash-boot-receipt.json",
+      "private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/fujimod-stock/fujimod-flash-boot-receipt.json",
+      "private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/fujimod-rc0/fujimod-flash-boot-receipt.json",
+      "private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/binaries.sha256",
+      "private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/packages.sha256"
+    ],
+    "facts":[
+      {"name":"firmware_sha256","path":"private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/retained-stock/flash-boot-receipt.json","pointer":["firmware","sha256"]},
+      {"name":"stock_dat","path":"private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/retained-stock/flash-boot-receipt.json","pointer":["firmware","sha256"]},
+      {"name":"rc0_dat","path":"private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/retained-rc0/flash-boot-receipt.json","pointer":["firmware","sha256"]},
+      {"name":"retained_stock","path":"private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/retained-stock/flash-boot-receipt.json","pointer":["result"]},
+      {"name":"retained_rc0","path":"private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/retained-rc0/flash-boot-receipt.json","pointer":["result"]},
+      {"name":"fujimod_stock","path":"private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/fujimod-stock/fujimod-flash-boot-receipt.json","pointer":["result"]},
+      {"name":"fujimod_rc0","path":"private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/fujimod-rc0/fujimod-flash-boot-receipt.json","pointer":["result"]},
+      {"name":"retained_stock_instructions","path":"private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/retained-stock/flash-boot-receipt.json","pointer":["instructions"]},
+      {"name":"retained_rc0_instructions","path":"private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/retained-rc0/flash-boot-receipt.json","pointer":["instructions"]},
+      {"name":"fujimod_stock_instructions","path":"private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/fujimod-stock/fujimod-flash-boot-receipt.json","pointer":["instructions"]},
+      {"name":"fujimod_rc0_instructions","path":"private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/fujimod-rc0/fujimod-flash-boot-receipt.json","pointer":["instructions"]}
+    ]
+  },
+  {
+    "id": "E-RAM-DECODE-OWNERSHIP-150",
+    "claim": "The stock-clock-backed RAM image-4 decode completes with state {{state}}, verdict {{verdict}}, {{jobs}} jobs, {{produced}} output bytes and CRC-32 {{crc}}. The clock word remains {{clock_closed}} after driver close and becomes {{clock_after}} after stock bookkeeping release. Install, trajectory and unload checks are {{checks}}. All job status observations, including the last job, are retained. Kernel tick-cell samples extend timing across counter wraps.",
+    "scope": "One FujiMod experiment route with the compile-time ReservedClock backend, diagnostic engine snapshot after successful acquire and clock/route check, and a trace window beginning after unload completes; boot start kind {{start}}. The RAM experiment does not exercise BootClock register writes on silicon.",
+    "notes": "The output oracle is the pinned decoded image CRC and summed count. Emulator durations are not silicon throughput. Review at 1dd539eb returned correct with P3-1; the candidate applies its prescribed one-line snapshot move. The clock-41 lifetime proof assumes successful live-view and crop waits; their inability to return an error is unproven. State 11 can retain 0x2b if clock take fails outside that invariant, requiring battery removal; no unwind is installed. Camera execution still needs the owner's go and visibly updating live view with the hook installed, then battery removal, reboot-byte check, shot and playback.",
+    "artifacts": [
+      "private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/verdict.json",
+      "private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/e2e-result.json",
+      "private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/binaries.sha256",
+      "private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/e2e-observation-3.trace-hits.jsonl"
+    ],
+    "facts": [
+      {"name":"firmware_sha256","path":"private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/e2e-result.json","pointer":["emulator_start","inputs","installed_dat"]},
+      {"name":"state","path":"private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/verdict.json","pointer":["state"]},
+      {"name":"verdict","path":"private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/verdict.json","pointer":["verdict"]},
+      {"name":"jobs","path":"private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/verdict.json","pointer":["jobs"]},
+      {"name":"produced","path":"private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/verdict.json","pointer":["produced"]},
+      {"name":"crc","path":"private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/verdict.json","pointer":["output_crc"]},
+      {"name":"clock_closed","path":"private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/verdict.json","pointer":["clock_closed"]},
+      {"name":"clock_after","path":"private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/verdict.json","pointer":["clock_after","1"]},
+      {"name":"checks","path":"private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/e2e-result.json","pointer":["checks"]},
+      {"name":"start","path":"private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/e2e-result.json","pointer":["emulator_start","start"]}
+    ]
+  },
+  {
     "id": "E-FIXED-IMAGE-PLACEMENT-150",
     "claim": "A {{body_bytes}}-byte owned test body in a {{record_bytes}}-byte fixed record with {{publication_words}} staged words boots candidate DAT {{candidate_dat}} to the shooting menu on the retained engine ({{retained_boot}}) and FujiMod ({{fujimod_boot}}). Its load begins at {{load_begin}}, handoff is at {{handoff}}, and the first published entry is at {{first_entry}} model instructions, with {{entry_calls}} calls and {{fixed_fetches}} observed fixed-range fetches. A body-bit corruption halts before handoff ({{corrupt_halted}}), with {{corrupt_calls}} entry calls. With the lowered ceiling, the cardless capture-input scenario has heap-break high-water {{capture_peak}} with {{capture_headroom}} bytes of ceiling headroom, and the playback-input scenario has high-water {{playback_peak}} with {{playback_headroom}} bytes of headroom. Both restore post-boot checkpoints. The stock reset route has {{stock_writes}} writes after its boot fill. Narrowed ELF interface admission is {{interface_verdict}} for body {{admitted_body}}, with {{interface_instructions}} instructions, {{interface_transfers}} direct transfers and {{owned_stack}} owned direct-call stack bytes. Removing the retained continuation and supplying a zero stack budget are refused with exit statuses {{undeclared_exit}} and {{short_stack_exit}}.",
     "scope": "Emulated X-M1 1.50 fixed-record boot, one staged startup boundary entry, initialized data/BSS and corrupt-record fail-stop. Heap figures cover bounded cardless input scenarios, not admitted capture or saved-image decoding.",

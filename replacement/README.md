@@ -174,6 +174,26 @@ The current `host-build` automatically reports the kernel-sampled lock holder on
 
 An older topic checkout may still provide an older launcher. Use the current qualified `host-build` executable through `devenv shell` from the worker checkout with its usual output base. Resolve it from current main only when that checkout is ready for Nix evaluation; otherwise use the integration owner's frozen launcher path. Keep the worker's source and working directory; do not change SDK identities merely to adopt admission. Each topic's emulator binary retains its compiled policy. Use the qualified shared wrapper or adopt the current admission modules before requesting the new RAM and swap caps; setting an environment variable does not upgrade an old binary. Current defaults are 12 GiB RAM plus 8 GiB swap for builds and native suites, and 8 GiB RAM plus 8 GiB swap for full-system runs, within the shared 64 GiB combined reservation budget. Keep completed and healthy running cohorts bound to their original scopes.
 
+## RAM-loaded first-stage decode experiment
+
+<!-- evidence-record E-RAM-DECODE-OWNERSHIP-150 -->
+
+E-RAM-DECODE-OWNERSHIP-150: The stock-clock-backed RAM image-4 decode completes with state 2, verdict 1, 11 jobs, 2631680 output bytes and CRC-32 564241381. The clock word remains 34836 after driver close and becomes 34832 after stock bookkeeping release. Install, trajectory and unload checks are {"install":"PASS","trajectory":"PASS","unload":"PASS"}. All job status observations, including the last job, are retained. Kernel tick-cell samples extend timing across counter wraps.
+
+Scope: One FujiMod experiment route with the compile-time ReservedClock backend, diagnostic engine snapshot after successful acquire and clock/route check, and a trace window beginning after unload completes; boot start kind restored. The RAM experiment does not exercise BootClock register writes on silicon.
+
+<!-- /evidence-record E-RAM-DECODE-OWNERSHIP-150 -->
+
+## First-stage boot qualification
+
+<!-- evidence-record E-FIRST-RECORD-FLASH-BOOT-CHECK-150 -->
+
+E-FIRST-RECORD-FLASH-BOOT-CHECK-150: The compile-time clock-backend first stage cold-boots both staged packages to SHOOTING MENU. Retained stock: passed at 382538404 instructions; retained RC0: passed at 382538290; FujiMod stock: passed at 381500000; FujiMod RC0: passed at 381500000. Stock-derived DAT 42488245aa329b735147874e915d98520e6fa258c1976c8ca20da30ee5db8b0c; RC0-derived DAT 8225836bed4341bed4832052e535de1c815e5f76baf3b84663eb50d072e72d8f.
+
+Scope: Four actual cold-boot-to-menu executions, the two packages on each engine, from the committed first-stage image identified in the run's binary digest receipt. Packaging runs outside emulator admission; each emulator launcher acquires its own slot.
+
+<!-- /evidence-record E-FIRST-RECORD-FLASH-BOOT-CHECK-150 -->
+
 ## Authoritative references
 
 | Question | Home |

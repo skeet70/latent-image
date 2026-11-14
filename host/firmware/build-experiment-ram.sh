@@ -17,9 +17,13 @@ STOCK_ID4="${STOCK_ID4:?}"
 STOCK_ID5="${STOCK_ID5:?}"
 STOCK_PLAIN="${STOCK_PLAIN:?}"
 
-case "$OUT" in
-  private-data/analysis/x-m1-1.50/experiments/ram-push/*) ;;
-  *) printf 'experiment output must stay under its private RAM-push build directory\n' >&2; exit 1 ;;
+canonical_out="$(realpath -m -- "$OUT")"
+case "$canonical_out" in
+  "$(realpath -m -- private-data/analysis/x-m1-1.50/experiments/ram-push)"/*) ;;
+  *)
+    [[ -n "${XM1_RUN_WORK:-}" ]] && [[ "$canonical_out" == "$(realpath -m -- "$XM1_RUN_WORK")"/* ]] ||
+      { printf 'experiment output must stay under the current run work directory or its private RAM-push build directory\n' >&2; exit 1; }
+    ;;
 esac
 [[ -d "$OUT" && ! -L "$OUT" ]] || { printf 'output directory must exist\n' >&2; exit 1; }
 [[ -f "$EXPERIMENT/hooks.json" ]] || { printf 'no experiment at %s: it needs a hooks.json\n' "$EXPERIMENT" >&2; exit 1; }

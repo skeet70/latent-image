@@ -79,22 +79,57 @@ pub enum EngineError {
     Page,
 }
 
-/// Stock 0x3bcc waits for reset bit 0 and has no failure exit.
-pub struct Session<B: Bus> {
-    bus: B,
+pub trait ClockControl {
+    fn open<B: Bus>(bus: &mut B);
+    fn close<B: Bus>(bus: &mut B);
 }
 
-impl<B: Bus> Session<B> {
-    pub fn open(mut bus: B) -> Self {
+pub struct BootClock;
+
+impl ClockControl for BootClock {
+    fn open<B: Bus>(bus: &mut B) {
         let gate = bus.read(Register::Clock(ClockRegister::Gate));
         bus.write(Register::Clock(ClockRegister::Gate), gate & !7);
         let enable = bus.read(Register::Clock(ClockRegister::Enable));
         bus.write(Register::Clock(ClockRegister::Enable), enable | 4);
+    }
+
+    fn close<B: Bus>(bus: &mut B) {
+        let enable = bus.read(Register::Clock(ClockRegister::Enable));
+        bus.write(Register::Clock(ClockRegister::Enable), enable & !4);
+        let gate = bus.read(Register::Clock(ClockRegister::Gate));
+        bus.write(Register::Clock(ClockRegister::Gate), gate | 7);
+    }
+}
+
+/// The caller holds stock's clock handle and route request for the entire session.
+pub struct ReservedClock;
+
+impl ClockControl for ReservedClock {
+    fn open<B: Bus>(_bus: &mut B) {}
+    fn close<B: Bus>(_bus: &mut B) {}
+}
+
+/// Stock 0x3bcc waits for reset bit 0 and has no failure exit.
+pub struct Session<B: Bus, C: ClockControl = BootClock> {
+    bus: B,
+    clock: core::marker::PhantomData<C>,
+}
+
+impl<B: Bus> Session<B, BootClock> {
+    pub fn open(bus: B) -> Self {
+        Self::open_with_clock(bus)
+    }
+}
+
+impl<B: Bus, C: ClockControl> Session<B, C> {
+    pub fn open_with_clock(mut bus: B) -> Self {
+        C::open(&mut bus);
         bus.write(Register::Engine(EngineRegister::Enable), 0);
         bus.write(Register::Engine(EngineRegister::Reset), 0);
         while bus.read(Register::Engine(EngineRegister::Reset)) & 1 == 0 {}
         bus.write(Register::Engine(EngineRegister::Status), STATUS_CLEAR);
-        Self { bus }
+        Self { bus, clock: core::marker::PhantomData }
     }
 
     pub fn submit(&mut self, source: Source, destination: Destination, length: u32) -> Result<u32, EngineError> {
@@ -130,10 +165,7 @@ impl<B: Bus> Session<B> {
     pub fn close(mut self) -> B {
         self.bus.write(Register::Engine(EngineRegister::Enable), 0);
         self.bus.write(Register::Engine(EngineRegister::Status), STATUS_CLEAR);
-        let enable = self.bus.read(Register::Clock(ClockRegister::Enable));
-        self.bus.write(Register::Clock(ClockRegister::Enable), enable & !4);
-        let gate = self.bus.read(Register::Clock(ClockRegister::Gate));
-        self.bus.write(Register::Clock(ClockRegister::Gate), gate | 7);
+        C::close(&mut self.bus);
         self.bus
     }
 }
@@ -306,6 +338,22 @@ mod tests {
                 (clock(ClockRegister::Gate), 0x1234_567f),
             ]
         );
+    }
+
+    #[test]
+    fn reserved_session_preserves_stock_clock_ownership() {
+        let record = record();
+        let mut device = Device::new(&record);
+        device.clock[0] = 0x1234_5678;
+        device.clock[ClockRegister::Enable as usize / 4] = 0x804;
+        let mut session = Session::<_, ReservedClock>::open_with_clock(device);
+        let count = session.submit(Source(SOURCE_BASE + 20), Destination(DEST_BASE), 9).unwrap();
+        assert_eq!(count, 20);
+        let device = session.close();
+        assert_eq!(&device.output[..20], b"abcabcabcabcabcabcde");
+        assert_eq!(device.clock[0], 0x1234_5678);
+        assert_eq!(device.clock[ClockRegister::Enable as usize / 4], 0x804);
+        assert!(device.writes.iter().all(|(address, _)| *address < CLOCK_BASE || *address > CLOCK_BASE + 0x20));
     }
 
     #[test]

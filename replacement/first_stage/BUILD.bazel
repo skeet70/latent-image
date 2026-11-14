@@ -108,3 +108,53 @@ genrule(
     tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
     cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 -C opt-level=2 -C linker=$(location @lab_clang//:bin/clang) $(location stream_oracle.rs) -o $@",
 )
+
+# The RAM-loaded decode test: this crate with the experiment handler under --cfg decode_test.
+xm1_rust_staticlib(
+    name = "decode-test-rust",
+    testonly = True,
+    src = "src.rs",
+    crate_name = "xm1_first_stage",
+    data = ["media.rs", "images.rs", "format.rs", "engine.rs", "decode_test.rs", "decode_test_crc.rs", "decode_test_stock.rs"],
+    rustc_flags = ["--cfg", "decode_test"],
+)
+
+# The relocatable object `experiments/first_stage_decode/prelinked.json` names.
+genrule(
+    name = "decode-test",
+    testonly = True,
+    srcs = [
+        ":decode-test-rust",
+        "src.rs",
+        "decode_test.rs",
+        "decode_test_crc.rs",
+        "decode_test_stock.rs",
+        "decode_test_stock.S",
+        "engine.rs",
+        "images.rs",
+        "format.rs",
+        "media.rs",
+        "BUILD.bazel",
+    ],
+    outs = ["decode-test.o", "decode-test.sources.sha256"],
+    cmd = """
+set -eu
+NIX_HARDENING_ENABLE= $(location @lab_clang//:bin/clang) --target=armv7r-none-eabi -march=armv7-r -marm \
+  -c $(location decode_test_stock.S) -o $(@D)/decode_test_stock.o
+$(location @lab_lld//:bin/ld.lld) -m armelf -r --gc-sections \
+  -u xm1_decode_test_on_dispatch -u DECODE_TEST_RECORD \
+  $(location :decode-test-rust) $(@D)/decode_test_stock.o -o $(location decode-test.o)
+$(location @lab_coreutils//:bin/sha256sum) $(SRCS) > $(location decode-test.sources.sha256)
+""",
+    tools = ["@lab_lld//:bin/ld.lld", "@lab_clang//:bin/clang", "@lab_coreutils//:bin/sha256sum"],
+)
+
+genrule(
+    name = "decode-test-crc-tests",
+    testonly = True,
+    srcs = ["decode_test_crc.rs", "decode_test_crc_tests.rs"],
+    outs = ["decode-test-crc-tests-bin", "decode-test-crc-tests.passed"],
+    tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location decode_test_crc_tests.rs) -o $(@D)/decode-test-crc-tests-bin && $(@D)/decode-test-crc-tests-bin && touch $(@D)/decode-test-crc-tests.passed",
+)
+
