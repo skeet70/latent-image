@@ -5,10 +5,13 @@
 //! implements them, and what no merged module implements to the stock entries and memory in
 //! `stock`.
 
+pub mod geometry;
 pub mod lens;
 pub mod lens_com;
 pub mod records;
 pub mod services;
+pub mod stages;
+#[allow(unsafe_code)]
 pub mod stock;
 
 pub use services::Services;
@@ -21,3 +24,5 @@ mod lens_com_tests;
 mod lens_tests;
 #[cfg(test)]
 mod records_tests;
+#[cfg(test)]
+mod stages_tests;

@@ -48,6 +48,15 @@ Stages overlap across subsystems. Do not wait for application-wide replacement b
 
 For each retirement, distinguish executable code, data, initialization duties and intentionally retained resources. Scan for remaining references, including pointer tables and instruction-built addresses; retain unresolved computed references as obligations. Trap fetches from retired code and prohibited accesses to retired data during capability scenarios. Where feasible, build and boot an artifact with the retired implementation absent. If removal is not yet possible, record the remaining dependency rather than declaring full retirement. These checks establish independence within the declared scenario and artifact scope, not all possible executions.
 
+### Composition placement and heap pressure
+
+Use a simple contiguous composition layout during implementation. Do not fit subsystems into scattered retired-code holes or optimize early reservations from pre-link size estimates. Keep explicit address, overlap and admission checks; a contiguous layout does not waive correctness or permit overwriting live stock state.
+
+Defer space optimization until actual on-camera operation demonstrates a problem, not emulator measurements or projected image sizes. Record linked code, data and reservation sizes as facts without turning estimates into a packing prerequisite. This policy authorizes no camera operation; the camera-run procedure still governs each live run.
+
+Measure demand and pressure in the particular heap affected by capture, playback or another exercised operation. Unused RAM elsewhere does not establish that heap's headroom. Distinguish transition-time stock-plus-Rust dual residency from the final composition after stock code is reclaimed, and report both scopes explicitly.
+
+
 ## Replacement contract
 
 Each selected target has a versioned, machine-readable contract and a short human explanation. Develop its typed representation with the bounded computation pilot in #120, extending existing artifact/native-case contracts only where the running consumer needs it. #118 supplies an inventory and baseline, not a prerequisite schema or a second pilot-selection process.

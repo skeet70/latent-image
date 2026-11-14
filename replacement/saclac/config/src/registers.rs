@@ -18,7 +18,7 @@ pub fn groups(AppliedParts(flags): AppliedParts) -> impl Iterator<Item = Registe
 /// 0xda21cc.
 pub fn pack_groups<S: RegisterSnapshot>(applied: AppliedParts, configuration: S::Configuration, snapshot: &mut S) {
     for group in groups(applied) {
-        pack(group, configuration, snapshot);
+        snapshot.pack(group, configuration);
     }
 }
 

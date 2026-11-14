@@ -1,9 +1,14 @@
-#![forbid(unsafe_code)]
+#![allow(unsafe_code)]
 
 //! The root's stock boundary: X-M1 1.50 entries and memory the bound modules reach that no merged
 //! module owns. Entries are entered and memory read through the shared layer's `Machine`.
 
 pub mod acquisition;
+pub mod stages;
+pub mod geometry;
+mod geometry_services;
+mod geometry_radial;
+mod geometry_numeric;
 
 /// Lens control's resource index (0x76d9c8).
 pub const RESOURCE_INDEX: u32 = 0x76_d9c8;

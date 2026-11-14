@@ -30,6 +30,9 @@ pub trait Machine {
     fn read_u16(&self, address: u32) -> u16;
     fn read_u32(&self, address: u32) -> u32;
     fn write_u8(&mut self, address: u32, value: u8);
+    fn write_u16(&mut self, address: u32, value: u16) {
+        for (offset, byte) in value.to_le_bytes().into_iter().enumerate() { self.write_u8(address + offset as u32, byte); }
+    }
     fn write_u32(&mut self, address: u32, value: u32);
     /// Enters the retained entry at `address` with `arguments` in r0.. and returns r0.
     fn enter(&self, address: u32, arguments: &[usize]) -> u32;
@@ -48,6 +51,7 @@ pub trait Machine {
 }
 
 /// The X-M1 1.50 machine.
+#[derive(Clone, Copy)]
 pub struct Guest;
 
 impl Machine for Guest {
@@ -56,6 +60,8 @@ impl Machine for Guest {
     fn read_u32(&self, address: u32) -> u32 { unsafe { read_volatile(address as usize as *const u32) } }
 
     fn write_u8(&mut self, address: u32, value: u8) { unsafe { write_volatile(address as usize as *mut u8, value) } }
+
+    fn write_u16(&mut self, address: u32, value: u16) { unsafe { write_volatile(address as usize as *mut u16, value) } }
 
     fn write_u32(&mut self, address: u32, value: u32) { unsafe { write_volatile(address as usize as *mut u32, value) } }
 
@@ -110,6 +116,10 @@ impl Machine for Guest {
                     usize,
                     extern "C" fn(u32, u32, u32, u32, u32, u32, u32, u32, u32) -> u32,
                 >(entry)(*a as u32, *b as u32, *c as u32, *d as u32, *e as u32, *f as u32, *g as u32, *h as u32, *i as u32),
+                [a, b, c, d, e, f, g, h, i, j] => core::mem::transmute::<
+                    usize,
+                    extern "C" fn(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) -> u32,
+                >(entry)(*a as u32, *b as u32, *c as u32, *d as u32, *e as u32, *f as u32, *g as u32, *h as u32, *i as u32, *j as u32),
                 [a, b, c, d, e, f, g, h, i, j, k, l, m] => core::mem::transmute::<
                     usize,
                     extern "C" fn(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) -> u32,

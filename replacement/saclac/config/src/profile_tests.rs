@@ -101,6 +101,8 @@ fn filtering_caps_the_published_list_at_buffer_capacity() {
             let offset = key.0 - 0x100;
             (1 + offset / 4).to_le_bytes()[(offset % 4) as usize]
         }
+        fn lens_adjustment(&self) -> u16 { panic!("point filtering does not read lens adjustment") }
+        fn admits_unselected_mode(&self) -> bool { panic!("point filtering does not read lens mode") }
     }
     let mut points = PointRecord {
         count: 1025,

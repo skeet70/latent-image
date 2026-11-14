@@ -70,7 +70,7 @@ impl RegisterSnapshot for Snapshot {
     fn window_limits(&self, _: ()) -> WindowLimits { WindowLimits([1, 2, 3]) }
     fn window_words(&self) -> [u32; 2] { [0, 0] }
     fn set_window_words(&mut self, _: [u32; 2]) { self.0.push(Snapshotted::Packed(2)); }
-    fn pack_retained(&mut self, group: RegisterGroup, _: ()) { self.0.push(Snapshotted::Packed(group.index())); }
+    fn pack(&mut self, group: RegisterGroup, _: ()) { self.0.push(Snapshotted::Packed(group.index())); }
 }
 
 #[derive(Default)]
