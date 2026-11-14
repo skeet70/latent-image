@@ -4,7 +4,7 @@
 //! make of imgdc and the replies their clients receive.
 
 use crate::profile::{ProfileRecords, StatisticsInUse};
-use xm1_saclac_controllers::replies;
+use crate::replies;
 use xm1_saclac_interface::round_image::{CancelArgument, ImageArea, ImageArguments, ImageChannel, ImageLaneRequest, SnapshotArgument};
 use xm1_saclac_interface::stock::StockCallbackWord;
 use xm1_saclac_interface::{ClientCallback, CommandKind, CompletionStatus, RecordHandle, ReplyTarget};

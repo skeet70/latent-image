@@ -35,20 +35,6 @@ fn copied_records_follow_the_callback_for_calc() {
 }
 
 #[test]
-fn calc1_records_precede_the_callback() {
-    use crate::round_acquisition::{AcquisitionRequest, SelectionRequest};
-    use crate::stock::round_acquisition::LIVE_REGION;
-    for (payload, operation, length, first) in [
-        (Calc1Payload::Acquisition { request: AcquisitionRequest { mode: 7, ..AcquisitionRequest::default() }, callback: CALLBACK }, Calc1Operation::Request00, 172, 7),
-        (Calc1Payload::Selection { request: SelectionRequest { first: true, ..SelectionRequest::default() }, region: LIVE_REGION, callback: CALLBACK }, Calc1Operation::Request01, 232, 1),
-    ] {
-        let (posted, message) = stock::calc1_payload(&payload);
-        assert_eq!((posted, message.bytes().len(), message.bytes()[0]), (operation, length, first));
-        assert_eq!(&message.bytes()[length - 4..], &CALLBACK.0.to_le_bytes());
-    }
-}
-
-#[test]
 fn auxiliary_request_places_each_value_the_constants_and_the_buffers() {
     let request = AuxiliaryRequest {
         complete: true,

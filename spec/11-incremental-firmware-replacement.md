@@ -112,6 +112,30 @@ Exercise boundary values, invalid inputs, repeated operations, resource exhausti
 
 The owned saclac driver corrects two accepted defects at the retained queue-43 boundary. A command payload longer than its parameter block reaches an unbounded copy in stock at `0xf01c14..0xf01c28`. The owned driver releases the received block, calls stock's fault reaction `0xf46c20`, and neither copies nor dispatches that message. A failed receive calls the fault reaction in stock at `0xf01bf8..0xf01c04`, then dispatches the stale receive scratch. The owned driver calls the same fault reaction and receives again without copying or dispatching stale data. The command producers, shared block layouts, engine A and stock machines remain retained boundaries. No consumer dependence on either defect has been observed; that is not a claim that malformed messages cannot reach the queue.
 
+#### Measurement-round corrections, X-M1 1.50
+
+These are source-inspected contracts, not stock-execution or camera evidence. The
+decomp reference is x70view commit `55436fc85c0560dd252b0410af6f2427fe198cd3`;
+the address-level claims below were checked against the X-M1 1.50 image bytes.
+
+| Trigger | Original behavior | Intended behavior | Retained boundary and dependency evidence |
+| --- | --- | --- | --- |
+| A timing class other than 2, 3 or 5 cannot supply a frame interval. | `0xfa95a8` enters `0x1005f60`; `0x1005f90..0x1005fa8` and `0x1005ff4` return 133 without writing the output. In `0xf32bc4`, the output at `[r11-0x38]` is unwritten: `0xfea7bc`/`0xff5690`/`0xff6fc0` write only the timing at `[r11-0x3c]`, and the history load starts at `[r11-0x34]`. Stock appends that undefined stack word at `0xf32c00..0xf32c28`, or shifts then appends at `0xf32c2c..0xf32c54`, and stores 48 bytes through `0x758028` at `0xf32c68`. | Do not append or write the history when the interval is unavailable. Preserve its count and previous values. | Shared interval history `0x9198b0`, count halfword at +40. The rate layer reads it through `0xfa964c` (`0xfa95b8`) and clears it at `0xfa89cc`. Those readers can observe one fewer entry; none supplies meaning for the undefined word. Runtime dependence on the discarded residue remains unmeasured. |
+| An auxiliary channel's accumulated count is zero. | The unsigned division at `0x4d978` enters `0x43614` and the supervisor trap at `0x43604` for divisor zero. | Use mean zero for the empty channel, allowing the remaining channels to be processed. | Auxiliary publication and subsequent ratio bands remain the consumer boundary. A zero ratio divisor is **not** corrected: `0x89bed0` returns all ones for nonzero dividend and zero divisor, and zero for zero dividend and divisor. The owned ratio preserves its low word `0xffffffff` or zero, including unsigned wrapping band arithmetic (`0xf382f4..0xf3832c`, `0xf38340..0xf38390`, `0xf383e0` onward). No consumer dependence on the empty-channel trap has been demonstrated. |
+| A source collection averages all four segments after the publication was withdrawn. | `0xf396f0..0xf39718` writes the summary and means pointers and strength but leaves the publication's first word unwritten. | Publish flag 1 for fresh, kept and averaged publications; flag 0 when withdrawn. Continue updating the stable summary and means buffers even when one empty, unweighted segment withholds a new publication. | The 16-byte publication names summary `0x16c05a4` and means `0x16c0622`; a fresh publication aliases both pointers to the summary (`0xf38cb8..0xf38cd4`), a kept one names both buffers (`0xf38d0c..0xf38d38`). Readers `0xf22b08`, `0xf2cf44`, `0xf3b13c`, `0xf3b8f0`, `0xfa3bac` retain the published summary pointer, so partial updates remain visible without changing the old strength. No dependence on an invalid flag accompanying new pointers is established. |
+| Program adjustment declines to choose a program. | Selection can return without storing its output. Initializations (`0xf33b08`, `0xf3415c`, `0xf3486c`), the live preliminary selection (`0xf373f4`), table publication (`0xf35f40`) and S1 focus (`0xf24900`) pass stack output slots with no defined prior value. Final request selections (`0xf3754c`, `0xf25024`) instead write a persistent request's +0xb0 word. | Represent no choice explicitly. Keep the record's stored program for the undefined stack-output cases; preserve the previous request program for the persistent-output cases. | Program adjustment and the calc1 request program remain retained boundaries. The no-choice result is distinct from choosing program zero. No retained caller supplies or depends on a defined previous value for those stack slots; runtime dependence remains unmeasured. |
+
+Invalidation is not a blanket first-word clear. `0xf32a48` clears acquisition
+block +4 (`collected`, `0xf32a98..0xf32ab0`), search +0
+(`0xf32ac8..0xf32ae0`), auxiliary publication +12 (`published`,
+`0xf32b00..0xf32b28`), source publication +0 (`0xf32b4c..0xf32b68`) and
+focus result +0 (`0xf32b88..0xf32ba8`). Other fields remain intact.
+
+The release always names its copy buffer in acquisition block +0x48
+(`0xf3510c..0xf35114`). Only configuration `0x4a07` enables the preceding
+`0x1150`-byte copy from `0x5ffec1b4` to `0x5ffb6120`
+(`0xf35090..0xf3509c`, `0xf350f4..0xf35108`).
+
 ### Mechanical work
 
 Follow the existing [implementation and build policy](../docs/principles.md#implementation-and-build). The new work is a pinned Rust native build interoperating with the established C/Clang infrastructure, not a replacement build system. Qualify `no_std`, `core` and compiler-builtins provenance, panic behavior, linking and the float ABI at each retained boundary; a target name alone does not establish stock ABI compatibility.

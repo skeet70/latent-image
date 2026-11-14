@@ -37,6 +37,7 @@ xm1_rust_host_test(
         "src/calc_tests.rs",
         "src/exposure_tests.rs",
         "src/round_image_tests.rs",
+        "src/round_acquisition_tests.rs",
         "src/tests.rs",
     ],
 )

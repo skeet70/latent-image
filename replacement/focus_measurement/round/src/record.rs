@@ -9,7 +9,7 @@ use crate::pipeline::{Exposure, Pipeline, PipelineSnapshot, Statistics};
 use crate::planner::{Cadence, Mode, Work};
 use crate::profile::{FrameRate, IntervalHistory, IntervalTracking, ProfileRecords, ProfileSelection, PublishedResult, RetainedWord};
 use crate::round::{ParameterClient, RecordEffect, SearchStart};
-use xm1_saclac_controllers::replies;
+use crate::replies;
 use xm1_saclac_interface::round::{GeometryCalibration, MeasurementGeometry};
 use xm1_saclac_interface::{CommandKind, CompletionStatus, RecordHandle, ReplyTarget};
 

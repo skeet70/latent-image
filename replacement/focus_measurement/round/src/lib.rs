@@ -17,6 +17,7 @@ pub mod pipeline;
 pub mod window;
 pub mod auxiliary;
 pub mod source;
+pub mod replies;
 
 #[cfg(test)]
 extern crate std;
@@ -24,6 +25,8 @@ extern crate std;
 mod tests;
 #[cfg(test)]
 mod acquisition_tests;
+#[cfg(test)]
+mod acquisition_fixtures;
 #[cfg(test)]
 mod child_tests;
 #[cfg(test)]

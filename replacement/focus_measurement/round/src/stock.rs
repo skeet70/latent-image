@@ -348,8 +348,9 @@ pub const RELEASE_COPY: StatisticsBuffer = StatisticsBuffer(0x5ffb_6120);
 ///
 /// Retained readers, by module: FocusSearch machine 34 at 0xf26688, 0xf2706c and
 /// 0xf2821c; FocusSearch machine 23 at 0xf3db20, 0xf43d24 and 0xf47a1c;
-/// ShotSequence machines 5 and 25 at 0xf16b08. They read the newest slot and,
-/// in 0xf2821c and 0xf16b08, the five slots.
+/// ShotSequence machines 5 and 25 at 0xf16b08. Also 0xf3dbcc checks started and
+/// walks the five newest entries; 0xf47d48 reads the newest cell levels.
+/// The five-slot walks also occur at 0xf2821c and 0xf16b08.
 pub const HISTORY_RING: u32 = 0x5ffe_e718;
 pub const HISTORY_ENTRY_BYTES: usize = 552;
 /// 0xf326d4..0xf326e4 clears the started word of six entries; the ring uses five.
@@ -371,5 +372,22 @@ pub fn history_entry_bytes(entry: &crate::history::HistoryEntry) -> [u8; HISTORY
     put(0x20a, &entry.reference_level().to_le_bytes());
     for (index, word) in entry.retained().iter().enumerate() { put(0x20c + index * 4, &word.0.to_le_bytes()); }
     put(0x224, &statistics.word.0.to_le_bytes());
+    bytes
+}
+
+/// X-M1 1.50 source publication at 0xf38cb8..0xf38d38 and 0xf396f0..0xf39718.
+/// The averaged path never writes the flag; owned always publishes flag 1.
+pub fn source_publication(publication: crate::source::SourcePublication<'_>) -> [u8; 16] {
+    use crate::source::SourcePublication;
+    let (flag, summary, means, strength): (u32, u32, u32, u8) = match publication {
+        SourcePublication::Withdrawn => (0, 0, 0, 0),
+        SourcePublication::Fresh { strength, .. } => (1, 0x16c05a4, 0x16c05a4, strength.0),
+        SourcePublication::Averaged { strength, .. } => (1, 0x16c05a4, 0x16c0622, strength.0),
+    };
+    let mut bytes = [0; 16];
+    bytes[..4].copy_from_slice(&flag.to_le_bytes());
+    bytes[4..8].copy_from_slice(&summary.to_le_bytes());
+    bytes[8..12].copy_from_slice(&means.to_le_bytes());
+    bytes[12] = strength;
     bytes
 }

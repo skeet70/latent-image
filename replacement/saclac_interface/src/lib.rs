@@ -6,6 +6,8 @@ pub mod stock;
 pub mod round;
 pub mod calc;
 pub mod round_acquisition;
+#[cfg(test)]
+mod round_acquisition_tests;
 pub mod round_image;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

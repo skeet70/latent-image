@@ -135,6 +135,9 @@ pub trait Ports: RecordPorts {
     fn enable_processing_callbacks(&mut self, enabled: bool);
     /// The strength the shared record currently shows.
     fn published_strength(&mut self) -> SourceStrength;
+    /// Updates the stable backing buffers; existing publications keep seeing their contents.
+    /// Does not change the publication flag, pointers or strength.
+    fn update_source_values(&mut self, summary: &Summary, means: &Summary);
     fn publish_source(&mut self, record: RecordHandle, publication: SourcePublication<'_>);
 }
 
@@ -252,6 +255,7 @@ impl Source {
             self.rows[position].0[range.clone()].copy_from_slice(&fresh.0[range.clone()]);
             averaged &= self.average(segment, range.clone(), position, settings.segments[segment]);
         }
+        ports.update_source_values(&self.summary, &self.means);
         if averaged {
             ports.publish_source(record, SourcePublication::Averaged { summary: &self.summary, means: &self.means, strength });
             ports.enable_processing_callbacks(true);
