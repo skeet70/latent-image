@@ -200,7 +200,7 @@ pub struct Completed<'a> {
 pub enum Message<'a> { Command(Command<'a>), Completed(Completed<'a>) }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BlockingRequest { LensSynchronize, AdjustmentSynchronize, FileSynchronize }
+pub enum BlockingRequest { LensSynchronize, AdjustmentSynchronize }
 
 pub trait Blocking {
     type Error;
