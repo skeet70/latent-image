@@ -27,6 +27,7 @@ fn selection_posts_its_four_arguments_in_order() {
     };
     let (operation, message) = stock::imgdc_payload(&payload);
     assert_eq!(operation, ImgDcOperation::Request16);
+    assert_eq!(stock::peers::operation_code(crate::PeerOperation::ImgDc(operation)), 0x3f16);
     let mut expected = [0; 16];
     expected[0..4].copy_from_slice(&CALLBACK.0.to_le_bytes());
     expected[4..8].copy_from_slice(&0x1122_3344u32.to_le_bytes());
@@ -41,6 +42,7 @@ fn scan_record_follows_the_callback() {
     let payload = ImgDcPayload::Scan { callback: CALLBACK, record };
     let (operation, message) = stock::imgdc_payload(&payload);
     assert_eq!(operation, ImgDcOperation::Request26);
+    assert_eq!(stock::peers::operation_code(crate::PeerOperation::ImgDc(operation)), 0x3f26);
     let posted = bytes(&message);
     assert_eq!(posted.len(), 232);
     assert_eq!(&posted[..4], &CALLBACK.0.to_le_bytes());
@@ -49,26 +51,28 @@ fn scan_record_follows_the_callback() {
 
 #[test]
 fn single_word_requests_carry_only_the_callback() {
-    for (payload, operation) in [
-        (ImgDcPayload::Request28 { callback: CALLBACK }, ImgDcOperation::Request28),
-        (ImgDcPayload::Request22 { callback: CALLBACK }, ImgDcOperation::Request22),
-        (ImgDcPayload::Request23 { callback: CALLBACK }, ImgDcOperation::Request23),
-        (ImgDcPayload::Request43 { callback: CALLBACK }, ImgDcOperation::Request43),
+    for (payload, operation, wire) in [
+        (ImgDcPayload::Request28 { callback: CALLBACK }, ImgDcOperation::Request28, 0x3f28),
+        (ImgDcPayload::Request22 { callback: CALLBACK }, ImgDcOperation::Request22, 0x3f22),
+        (ImgDcPayload::Request23 { callback: CALLBACK }, ImgDcOperation::Request23, 0x3f23),
+        (ImgDcPayload::Request43 { callback: CALLBACK }, ImgDcOperation::Request43, 0x3f43),
     ] {
         let (posted, message) = stock::imgdc_payload(&payload);
         assert_eq!(posted, operation);
+        assert_eq!(stock::peers::operation_code(crate::PeerOperation::ImgDc(posted)), wire);
         assert_eq!(bytes(&message), &CALLBACK.0.to_le_bytes()[..]);
     }
 }
 
 #[test]
 fn two_word_requests_place_their_value_after_the_callback() {
-    for (payload, operation, value) in [
-        (ImgDcPayload::Request29 { callback: CALLBACK, value: 0x0102_0304 }, ImgDcOperation::Request29, 0x0102_0304u32),
-        (ImgDcPayload::Request2a { callback: CALLBACK, value: 0x0506_0708 }, ImgDcOperation::Request2a, 0x0506_0708u32),
+    for (payload, operation, wire, value) in [
+        (ImgDcPayload::Request29 { callback: CALLBACK, value: 0x0102_0304 }, ImgDcOperation::Request29, 0x3f29, 0x0102_0304u32),
+        (ImgDcPayload::Request2a { callback: CALLBACK, value: 0x0506_0708 }, ImgDcOperation::Request2a, 0x3f2a, 0x0506_0708u32),
     ] {
         let (posted, message) = stock::imgdc_payload(&payload);
         assert_eq!(posted, operation);
+        assert_eq!(stock::peers::operation_code(crate::PeerOperation::ImgDc(posted)), wire);
         let mut expected = [0; 8];
         expected[0..4].copy_from_slice(&CALLBACK.0.to_le_bytes());
         expected[4..8].copy_from_slice(&value.to_le_bytes());
@@ -78,14 +82,15 @@ fn two_word_requests_place_their_value_after_the_callback() {
 
 #[test]
 fn empty_requests_post_no_bytes() {
-    for (payload, operation) in [
-        (ImgDcPayload::Request2f, ImgDcOperation::Request2f),
-        (ImgDcPayload::Request1b, ImgDcOperation::Request1b),
-        (ImgDcPayload::Request21, ImgDcOperation::Request21),
-        (ImgDcPayload::Request3b, ImgDcOperation::Request3b),
+    for (payload, operation, wire) in [
+        (ImgDcPayload::Request2f, ImgDcOperation::Request2f, 0x3f2f),
+        (ImgDcPayload::Request1b, ImgDcOperation::Request1b, 0x3f1b),
+        (ImgDcPayload::Request21, ImgDcOperation::Request21, 0x3f21),
+        (ImgDcPayload::Request3b, ImgDcOperation::Request3b, 0x3f3b),
     ] {
         let (posted, message) = stock::imgdc_payload(&payload);
         assert_eq!(posted, operation);
+        assert_eq!(stock::peers::operation_code(crate::PeerOperation::ImgDc(posted)), wire);
         assert!(bytes(&message).is_empty());
     }
 }
@@ -96,6 +101,7 @@ fn request_2d_posts_its_record_whole() {
     let payload = ImgDcPayload::Request2d { record };
     let (operation, message) = stock::imgdc_payload(&payload);
     assert_eq!(operation, ImgDcOperation::Request2d);
+    assert_eq!(stock::peers::operation_code(crate::PeerOperation::ImgDc(operation)), 0x3f2d);
     assert_eq!(bytes(&message), &record.0[..]);
 }
 
@@ -110,6 +116,7 @@ fn child_selection_places_the_record_then_three_callback_words() {
     };
     let (operation, message) = stock::imgdc_payload(&payload);
     assert_eq!(operation, ImgDcOperation::Request42);
+    assert_eq!(stock::peers::operation_code(crate::PeerOperation::ImgDc(operation)), 0x3f42);
     let posted = bytes(&message);
     assert_eq!(posted.len(), 136);
     assert_eq!(&posted[..124], &record.0);
@@ -130,6 +137,7 @@ fn request_44_leaves_bytes_six_to_eight_zero() {
     };
     let (operation, message) = stock::imgdc_payload(&payload);
     assert_eq!(operation, ImgDcOperation::Request44);
+    assert_eq!(stock::peers::operation_code(crate::PeerOperation::ImgDc(operation)), 0x3f44);
     let mut expected = [0xff; 24];
     expected[0..4].copy_from_slice(&CALLBACK.0.to_le_bytes());
     expected[4..6].copy_from_slice(&0x1234u16.to_le_bytes());
@@ -156,6 +164,7 @@ fn request_3a_leaves_bytes_nine_to_twelve_zero() {
     };
     let (operation, message) = stock::imgdc_payload(&payload);
     assert_eq!(operation, ImgDcOperation::Request3a);
+    assert_eq!(stock::peers::operation_code(crate::PeerOperation::ImgDc(operation)), 0x3f3a);
     let mut expected = [0xff; 40];
     expected[0..4].copy_from_slice(&CALLBACK.0.to_le_bytes());
     expected[4..8].copy_from_slice(&0x11u32.to_le_bytes());
@@ -173,6 +182,7 @@ fn record_requests_name_the_stock_block_and_post_no_bytes() {
     let payload = ImgDcPayload::Request2c { record };
     let (operation, message) = stock::imgdc_payload(&payload);
     assert_eq!(operation, ImgDcOperation::Request2c);
+    assert_eq!(stock::peers::operation_code(crate::PeerOperation::ImgDc(operation)), 0x3f2c);
     assert!(matches!(
         message,
         ImgDcMessage::Block { address: 0x016f_4488, capacity: 296, record: posted } if posted == &record.0[..]
@@ -182,6 +192,7 @@ fn record_requests_name_the_stock_block_and_post_no_bytes() {
     let payload = ImgDcPayload::Request45 { record };
     let (operation, message) = stock::imgdc_payload(&payload);
     assert_eq!(operation, ImgDcOperation::Request45);
+    assert_eq!(stock::peers::operation_code(crate::PeerOperation::ImgDc(operation)), 0x3f45);
     assert!(matches!(
         message,
         ImgDcMessage::Block { address: 0x016f_224c, capacity: 80, record: posted } if posted == &record.0[..]

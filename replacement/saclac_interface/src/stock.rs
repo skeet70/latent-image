@@ -792,8 +792,8 @@ fn window(request: calc::WindowRequest, callback: StockCallbackWord) -> Encoded 
     message.word(44, request.sample.adjustment);
     message.word(48, request.window.status);
     message.word(52, request.window.second);
-    message.word(56, request.adjustment[0]);
-    message.word(60, request.adjustment[1]);
+    message.word(56, request.adjustment.controllers.0);
+    message.word(60, request.adjustment.search.0);
     message.word(64, u32::from(request.refresh));
     message.word(68, u32::from(request.mode));
     message.word(72, u32::from(request.selected));

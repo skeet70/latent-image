@@ -32,6 +32,7 @@ fn copied_records_follow_the_callback_for_calc() {
     let (operation, message) = stock::calc_payload(&CalcPayload::PipelineThird { block, callback: CALLBACK });
     assert_eq!((operation, message.bytes().len()), (CalcOperation::Request05, 120));
     assert_eq!(&message.bytes()[..4], &CALLBACK.0.to_le_bytes());
+    assert_eq!(&message.bytes()[4..], &block.0);
 }
 
 #[test]
@@ -155,7 +156,10 @@ fn window_request_places_each_value_and_the_statistics_buffer() {
         reference: 0x3132,
         window: WindowRecord { first: 0x4142_4344, second: 0x5152_5354, status: 2, halfword: 0x6162 },
         refresh: true,
-        adjustment: [0x7172_7374, 1],
+        adjustment: WindowAdjustment {
+            controllers: PlannerWord(0x7172_7374),
+            search: PlannerWord(1),
+        }.for_profile(WindowAdjustmentProfile::from_byte(6)),
     };
     let (operation, message) = stock::calc_payload(&CalcPayload::Window { request, callback: CALLBACK });
     assert_eq!(operation, CalcOperation::Request0c);
@@ -166,6 +170,14 @@ fn window_request_places_each_value_and_the_statistics_buffer() {
         2, 0, 0, 0, 0x54, 0x53, 0x52, 0x51, 0x74, 0x73, 0x72, 0x71, 1, 0, 0, 0,
         1, 0, 0, 0, 5, 0, 0, 0, 1, 0, 0, 0, 0x04, 0xc1, 0xf3, 0,
     ][..]);
+    for profile_byte in [0, 5, 7, u8::MAX] {
+        let adjustment = request.adjustment.for_profile(WindowAdjustmentProfile::from_byte(profile_byte));
+        let (_, message) = stock::calc_payload(&CalcPayload::Window {
+            request: WindowRequest { adjustment, ..request },
+            callback: CALLBACK,
+        });
+        assert_eq!(&message.bytes()[56..64], &[0x74, 0x73, 0x72, 0x71, 0, 0, 0, 0]);
+    }
 }
 
 #[test]

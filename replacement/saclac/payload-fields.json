@@ -4433,7 +4433,8 @@
      "sources": [
       "0x010398f8..0x010399a4: copies of 16, 24, 16, 16, 56 and 56 bytes from the arguments to r11-256, r11-240, r11-216, r11-200, r11-184 and r11-128; 0x01039a0c posts 208 from r11-256",
       "blocks built by 0x00f23088 (0x00f2309c..0x00f232c8), the only caller of 0x010398b0",
-      "nothing stores capture +16..+28 (r11-188..r11-176)"
+      "nothing stores capture +16..+28 (r11-188..r11-176)",
+      "capture +16 is retained state 0x016fec34+0x4538, tested against 1 at 0x0102a164..0x0102a17c; owned S1 start explicitly uses retune=0, not an ignored-padding claim"
      ]
     },
     {
@@ -4623,14 +4624,16 @@
      "offset": 30,
      "bytes": 1,
      "sources": [
-      "0x00f23584..0x00f23620 has no store at record+0x1e"
+      "0x00f23584..0x00f23620 has no store at record+0x1e",
+      "retained state 0x016fec34+0x4546 is tested against 1 at 0x01030d24..0x01030d70; owned S1 retune explicitly uses zero"
      ]
     },
     {
      "offset": 33,
      "bytes": 3,
      "sources": [
-      "0x00f23584..0x00f23620 has no store at record+0x21..+0x23"
+      "0x00f23584..0x00f23620 has no store at record+0x21..+0x23",
+      "record+0x21 reaches retained state 0x016fec34+0x4549 and is transferred to status at 0x0102e4d4..0x0102e4dc; owned S1 retune explicitly uses zero"
      ]
     },
     {
@@ -7252,7 +7255,8 @@
      "sources": [
       "0x01039a24..0x01039ac0: copies of 16, 24, 16, 16, 56 and 56 bytes from the arguments to r11-256, r11-240, r11-216, r11-200, r11-184 and r11-128; 0x01039b30 posts 204 from r11-256",
       "blocks built by 0x00f23088 (0x00f2309c..0x00f232c8), the only caller of 0x010398b0",
-      "nothing stores capture +16..+28 (r11-188..r11-176)"
+      "nothing stores capture +16..+28 (r11-188..r11-176)",
+      "capture +16 is retained state 0x016fec34+0x4538, tested against 1 at 0x0102a164..0x0102a17c; owned S1 start explicitly uses retune=0, not an ignored-padding claim"
      ]
     },
     {
