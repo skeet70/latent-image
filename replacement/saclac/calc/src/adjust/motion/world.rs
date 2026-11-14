@@ -77,6 +77,9 @@ pub struct MotionWorld {
     pub reference_line: u16,
     pub selected_gains: SelectedGains,
     pub gain_requests: Vec<GainRequest>,
+    pub position_rate: u32,
+    pub curve_word: u32,
+    pub mapped_step_word: u32,
 }
 
 impl Default for MotionWorld {
@@ -121,6 +124,9 @@ impl Default for MotionWorld {
             reference_line: 0,
             selected_gains: SelectedGains::default(),
             gain_requests: Vec::new(),
+            position_rate: 0,
+            curve_word: 0,
+            mapped_step_word: 0,
             now: 0,
         }
     }
@@ -416,4 +422,10 @@ impl MeteringTables for MotionWorld {
 impl Clock for MotionWorld {
     fn now(&mut self) -> Ticks { Ticks(self.now) }
     fn elapsed(&mut self, since: Ticks) -> u32 { self.now.wrapping_sub(since.0) * 10 }
+}
+
+impl crate::adjust::motion::ports::LensWords for MotionWorld {
+    fn position_rate(&mut self, _position: i16, _lens: u32, _step: u32, _reference: u32) -> u32 { self.position_rate }
+    fn curve_word(&mut self, _lens: u32) -> u32 { self.curve_word }
+    fn mapped_step_word(&mut self, _step: u32, _lens: u32) -> u32 { self.mapped_step_word }
 }
