@@ -10,6 +10,8 @@
     {"path": "src/lib.rs", "kind": "fn", "name": "xm1_property_set", "reason": "Setter ABI entry adopts the retained settings and configuration services."}
   ],
   "known_exceptions": [
-    {"path": "src/lib.rs", "lines": [320], "reason": "The pair-before-close defect control writes the retained bank directly from core logic; moving it requires a byte-changing qualification."}
+    {"path": "src/lib.rs", "lines": [25], "reason": "Exports image-owned immutable kernel capability metadata."},
+    {"path": "linked-panic.rs", "lines": [3], "reason": "Exports linked-image immutable kernel capability metadata."},
+    {"path": "src/lib.rs", "lines": [326], "reason": "The pair-before-close defect control writes the retained bank directly from core logic; moving it requires a byte-changing qualification."}
   ]
 }

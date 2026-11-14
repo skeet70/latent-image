@@ -83,32 +83,191 @@
     "notes": "No existing RAM-push route moved to the fixed range. Stack admission covers owned direct calls only, not indirect targets, retained callee demand or caller/task headroom. Flash block 0x48 is exercised by the small record; block 0x49, updater programming and absence of unrelated stock reads/erases remain open. The active owned media reader replaces the retired reader. Mode-1 trigger/reload behavior and each subsystem's earliest published callers remain separate obligations. Card-backed capture, saved-image playback, Wi-Fi, cache coherence and later MPU behavior remain camera final-pass measurements; E-RAM-PUSH-INSTALL-150 retains the earlier resident-allocation shot/playback camera evidence.",
     "artifacts": [],
     "facts": [
-      {"name":"firmware_sha256","path":"private-data/scratch/FixedRange/runs/20261113T065417Z-fixed-stock-reset3/result/placement.json","pointer":["dat_sha256"]},
-      {"name":"stock_writes","path":"private-data/scratch/FixedRange/runs/20261113T065417Z-fixed-stock-reset3/result/placement.json","pointer":["guarded_writes"]},
-      {"name":"candidate_dat","path":"private-data/scratch/FixedRange/runs/20261113T065442Z-fixed-probe-stage3/result/staging.json","pointer":["dat_sha256"]},
-      {"name":"body_bytes","path":"private-data/scratch/FixedRange/runs/20261113T065442Z-fixed-probe-stage3/result/staging.json","pointer":["body_bytes"]},
-      {"name":"record_bytes","path":"private-data/scratch/FixedRange/runs/20261113T065442Z-fixed-probe-stage3/result/staging.json","pointer":["record_bytes"]},
-      {"name":"publication_words","path":"private-data/scratch/FixedRange/runs/20261113T065442Z-fixed-probe-stage3/result/staging.json","pointer":["publication_words"]},
-      {"name":"retained_boot","path":"private-data/scratch/FixedRange/runs/20261113T065458Z-fixed-probe-retained-boot3/result/flash-boot-receipt.json","pointer":["result"]},
-      {"name":"fujimod_boot","path":"private-data/scratch/FixedRange/runs/20261113T065458Z-fixed-probe-fujimod-boot3/result/fujimod-flash-boot-receipt.json","pointer":["result"]},
-      {"name":"load_begin","path":"private-data/scratch/FixedRange/runs/20261113T065504Z-fixed-probe-entry-observe3/result/fixed-image.json","pointer":["load_begin"]},
-      {"name":"handoff","path":"private-data/scratch/FixedRange/runs/20261113T065504Z-fixed-probe-entry-observe3/result/fixed-image.json","pointer":["handoff"]},
-      {"name":"first_entry","path":"private-data/scratch/FixedRange/runs/20261113T065504Z-fixed-probe-entry-observe3/result/fixed-image.json","pointer":["first_published_entry"]},
-      {"name":"entry_calls","path":"private-data/scratch/FixedRange/runs/20261113T065504Z-fixed-probe-entry-observe3/result/fixed-image.json","pointer":["published_entry_calls"]},
-      {"name":"fixed_fetches","path":"private-data/scratch/FixedRange/runs/20261113T065504Z-fixed-probe-entry-observe3/result/fixed-image.json","pointer":["fixed_instruction_fetches"]},
-      {"name":"corrupt_halted","path":"private-data/scratch/FixedRange/runs/20261113T065458Z-fixed-probe-corrupt-observe3/result/fixed-image.json","pointer":["halted"]},
-      {"name":"corrupt_calls","path":"private-data/scratch/FixedRange/runs/20261113T065458Z-fixed-probe-corrupt-observe3/result/fixed-image.json","pointer":["published_entry_calls"]},
-      {"name":"capture_peak","path":"private-data/scratch/FixedRange/runs/20261113T055550Z-fixed-ceiling-capture-seek2/result/placement.json","pointer":["heap_break_high_water"]},
-      {"name":"capture_headroom","path":"private-data/scratch/FixedRange/runs/20261113T055550Z-fixed-ceiling-capture-seek2/result/placement.json","pointer":["ceiling_headroom"]},
-      {"name":"playback_peak","path":"private-data/scratch/FixedRange/runs/20261113T054536Z-fixed-ceiling-playback2/result/placement.json","pointer":["heap_break_high_water"]},
-      {"name":"interface_verdict","path":"private-data/scratch/FixedRange/runs/20261113T072657Z-fixed-interface-admitted3/result/admission.json","pointer":["interface","result"]},
-      {"name":"admitted_body","path":"private-data/scratch/FixedRange/runs/20261113T072657Z-fixed-interface-admitted3/result/admission.json","pointer":["body_sha256"]},
-      {"name":"interface_instructions","path":"private-data/scratch/FixedRange/runs/20261113T072657Z-fixed-interface-admitted3/result/admission.json","pointer":["interface","instructions"]},
-      {"name":"interface_transfers","path":"private-data/scratch/FixedRange/runs/20261113T072657Z-fixed-interface-admitted3/result/admission.json","pointer":["interface","proven_branches"]},
-      {"name":"owned_stack","path":"private-data/scratch/FixedRange/runs/20261113T072657Z-fixed-interface-admitted3/result/admission.json","pointer":["owned_stack_bytes"]},
-      {"name":"undeclared_exit","path":"private-data/scratch/FixedRange/runs/20261113T072657Z-fixed-interface-admitted3/result/controls.json","pointer":["undeclared_exit"]},
-      {"name":"short_stack_exit","path":"private-data/scratch/FixedRange/runs/20261113T072657Z-fixed-interface-admitted3/result/controls.json","pointer":["short_stack_exit"]},
-      {"name":"playback_headroom","path":"private-data/scratch/FixedRange/runs/20261113T054536Z-fixed-ceiling-playback2/result/placement.json","pointer":["ceiling_headroom"]}
+      {
+        "name": "firmware_sha256",
+        "path": "private-data/scratch/FixedRange/runs/20261113T065417Z-fixed-stock-reset3/result/placement.json",
+        "pointer": [
+          "dat_sha256"
+        ]
+      },
+      {
+        "name": "stock_writes",
+        "path": "private-data/scratch/FixedRange/runs/20261113T065417Z-fixed-stock-reset3/result/placement.json",
+        "pointer": [
+          "guarded_writes"
+        ]
+      },
+      {
+        "name": "candidate_dat",
+        "path": "private-data/scratch/FixedRange/runs/20261113T065442Z-fixed-probe-stage3/result/staging.json",
+        "pointer": [
+          "dat_sha256"
+        ]
+      },
+      {
+        "name": "body_bytes",
+        "path": "private-data/scratch/FixedRange/runs/20261113T065442Z-fixed-probe-stage3/result/staging.json",
+        "pointer": [
+          "body_bytes"
+        ]
+      },
+      {
+        "name": "record_bytes",
+        "path": "private-data/scratch/FixedRange/runs/20261113T065442Z-fixed-probe-stage3/result/staging.json",
+        "pointer": [
+          "record_bytes"
+        ]
+      },
+      {
+        "name": "publication_words",
+        "path": "private-data/scratch/FixedRange/runs/20261113T065442Z-fixed-probe-stage3/result/staging.json",
+        "pointer": [
+          "publication_words"
+        ]
+      },
+      {
+        "name": "retained_boot",
+        "path": "private-data/scratch/FixedRange/runs/20261113T065458Z-fixed-probe-retained-boot3/result/flash-boot-receipt.json",
+        "pointer": [
+          "result"
+        ]
+      },
+      {
+        "name": "fujimod_boot",
+        "path": "private-data/scratch/FixedRange/runs/20261113T065458Z-fixed-probe-fujimod-boot3/result/fujimod-flash-boot-receipt.json",
+        "pointer": [
+          "result"
+        ]
+      },
+      {
+        "name": "load_begin",
+        "path": "private-data/scratch/FixedRange/runs/20261113T065504Z-fixed-probe-entry-observe3/result/fixed-image.json",
+        "pointer": [
+          "load_begin"
+        ]
+      },
+      {
+        "name": "handoff",
+        "path": "private-data/scratch/FixedRange/runs/20261113T065504Z-fixed-probe-entry-observe3/result/fixed-image.json",
+        "pointer": [
+          "handoff"
+        ]
+      },
+      {
+        "name": "first_entry",
+        "path": "private-data/scratch/FixedRange/runs/20261113T065504Z-fixed-probe-entry-observe3/result/fixed-image.json",
+        "pointer": [
+          "first_published_entry"
+        ]
+      },
+      {
+        "name": "entry_calls",
+        "path": "private-data/scratch/FixedRange/runs/20261113T065504Z-fixed-probe-entry-observe3/result/fixed-image.json",
+        "pointer": [
+          "published_entry_calls"
+        ]
+      },
+      {
+        "name": "fixed_fetches",
+        "path": "private-data/scratch/FixedRange/runs/20261113T065504Z-fixed-probe-entry-observe3/result/fixed-image.json",
+        "pointer": [
+          "fixed_instruction_fetches"
+        ]
+      },
+      {
+        "name": "corrupt_halted",
+        "path": "private-data/scratch/FixedRange/runs/20261113T065458Z-fixed-probe-corrupt-observe3/result/fixed-image.json",
+        "pointer": [
+          "halted"
+        ]
+      },
+      {
+        "name": "corrupt_calls",
+        "path": "private-data/scratch/FixedRange/runs/20261113T065458Z-fixed-probe-corrupt-observe3/result/fixed-image.json",
+        "pointer": [
+          "published_entry_calls"
+        ]
+      },
+      {
+        "name": "capture_peak",
+        "path": "private-data/scratch/FixedRange/runs/20261113T055550Z-fixed-ceiling-capture-seek2/result/placement.json",
+        "pointer": [
+          "heap_break_high_water"
+        ]
+      },
+      {
+        "name": "capture_headroom",
+        "path": "private-data/scratch/FixedRange/runs/20261113T055550Z-fixed-ceiling-capture-seek2/result/placement.json",
+        "pointer": [
+          "ceiling_headroom"
+        ]
+      },
+      {
+        "name": "playback_peak",
+        "path": "private-data/scratch/FixedRange/runs/20261113T054536Z-fixed-ceiling-playback2/result/placement.json",
+        "pointer": [
+          "heap_break_high_water"
+        ]
+      },
+      {
+        "name": "interface_verdict",
+        "path": "private-data/scratch/FixedRange/runs/20261113T072657Z-fixed-interface-admitted3/result/admission.json",
+        "pointer": [
+          "interface",
+          "result"
+        ]
+      },
+      {
+        "name": "admitted_body",
+        "path": "private-data/scratch/FixedRange/runs/20261113T072657Z-fixed-interface-admitted3/result/admission.json",
+        "pointer": [
+          "body_sha256"
+        ]
+      },
+      {
+        "name": "interface_instructions",
+        "path": "private-data/scratch/FixedRange/runs/20261113T072657Z-fixed-interface-admitted3/result/admission.json",
+        "pointer": [
+          "interface",
+          "instructions"
+        ]
+      },
+      {
+        "name": "interface_transfers",
+        "path": "private-data/scratch/FixedRange/runs/20261113T072657Z-fixed-interface-admitted3/result/admission.json",
+        "pointer": [
+          "interface",
+          "proven_branches"
+        ]
+      },
+      {
+        "name": "owned_stack",
+        "path": "private-data/scratch/FixedRange/runs/20261113T072657Z-fixed-interface-admitted3/result/admission.json",
+        "pointer": [
+          "owned_stack_bytes"
+        ]
+      },
+      {
+        "name": "undeclared_exit",
+        "path": "private-data/scratch/FixedRange/runs/20261113T072657Z-fixed-interface-admitted3/result/controls.json",
+        "pointer": [
+          "undeclared_exit"
+        ]
+      },
+      {
+        "name": "short_stack_exit",
+        "path": "private-data/scratch/FixedRange/runs/20261113T072657Z-fixed-interface-admitted3/result/controls.json",
+        "pointer": [
+          "short_stack_exit"
+        ]
+      },
+      {
+        "name": "playback_headroom",
+        "path": "private-data/scratch/FixedRange/runs/20261113T054536Z-fixed-ceiling-playback2/result/placement.json",
+        "pointer": [
+          "ceiling_headroom"
+        ]
+      }
     ]
   },
   {
@@ -1485,8 +1644,8 @@
         "operation": "value"
       }
     ]
-  }
-  ,{
+  },
+  {
     "id": "E-GENERAL-HEAP-CUTOVER-NATURAL-PAIR-150",
     "claim": "The rebuilt general heap preserves ordered interface traffic and the no-card boot/menu end states on the current emulator. The comparison admits {{calls}} logical calls across {{contexts}} contexts with global order identical={{global_order}}. Cases per entry in stock/owned order are {{entry_cases}}. Owned allocation failures on cores 0/1 are {{failures0}}/{{failures1}}. Both roles reach menu endpoints {{menus}} and the same rendered frame {{frame}}. Authenticated stock/owned allocator fetches are {{stock_fetches}}/{{owned_fetches}}. The staged wrong owned binary executes {{mutant_fetches}} allocator fetches, completes its role-local checks and is detected by the ordered comparator: {{mutant_error}} (detected={{mutant_detected}}). The owned DAT {{candidate_sha256}} and linked binary {{linked_sha256}} reproduce the existing cutover. The live/peak requested bytes are {{requested_live}}/{{requested_peak}}; the owned live allocation count is {{live_allocations}}.",
     "scope": "Whole general-heap artifact behind retained A32 entries on the finite natural no-card cold-boot/menu route, conditional on {{premises}}. Compared traffic includes operation, arguments, logical allocation identity, success/failure and errno in global order; pointer addresses and internal allocator state are not equality criteria. Both roles execute their allocator bodies. The RTOS recursive lock and external graphics/service adapters remain registered stock interfaces.",
@@ -1503,26 +1662,219 @@
       "private-data/scratch/GeneralHeap/runs/20261113T053100Z-heap-reviewed-staging/result/staging-contract.json"
     ],
     "facts": [
-      {"name":"firmware_sha256","path":"private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json","pointer":["stock","update_sha256"]},
-      {"name":"calls","path":"private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json","pointer":["calls"]},
-      {"name":"contexts","path":"private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json","pointer":["contexts"]},
-      {"name":"global_order","path":"private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json","pointer":["global_order_identical"]},
-      {"name":"entry_cases","path":"private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json","pointer":["cases_per_entry"]},
-      {"name":"menus","path":"private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json","pointer":["stock","menus"]},
-      {"name":"frame","path":"private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json","pointer":["stock","frame"]},
-      {"name":"stock_fetches","path":"private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json","pointer":["stock","fetches_checked"]},
-      {"name":"owned_fetches","path":"private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json","pointer":["owned","fetches_checked"]},
-      {"name":"premises","path":"private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json","pointer":["conditional_premises"]},
-      {"name":"mutant_fetches","path":"private-data/scratch/GeneralHeap/runs/20261113T053158Z-heap-traffic-mutant-owned-boot/result/natural-receipt.json","pointer":["fetches_checked"]},
-      {"name":"mutant_error","path":"private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/mutant-comparison.json","pointer":["error"]},
-      {"name":"mutant_detected","path":"private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/mutant-comparison.json","pointer":["detected"]},
-      {"name":"failures0","path":"private-data/scratch/GeneralHeap/runs/20261113T053155Z-heap-reviewed-owned-boot/result/summary.json","pointer":["per_core","0","mix","failed_calls"]},
-      {"name":"failures1","path":"private-data/scratch/GeneralHeap/runs/20261113T053155Z-heap-reviewed-owned-boot/result/summary.json","pointer":["per_core","1","mix","failed_calls"]},
-      {"name":"requested_live","path":"private-data/scratch/GeneralHeap/runs/20261113T053155Z-heap-reviewed-owned-boot/result/summary.json","pointer":["requested_live"]},
-      {"name":"requested_peak","path":"private-data/scratch/GeneralHeap/runs/20261113T053155Z-heap-reviewed-owned-boot/result/summary.json","pointer":["requested_peak"]},
-      {"name":"live_allocations","path":"private-data/scratch/GeneralHeap/runs/20261113T053155Z-heap-reviewed-owned-boot/result/summary.json","pointer":["live_allocations"],"operation":"length"},
-      {"name":"candidate_sha256","path":"private-data/scratch/GeneralHeap/runs/20261113T053100Z-heap-reviewed-staging/result/staging-contract.json","pointer":["candidate_dat_sha256"]},
-      {"name":"linked_sha256","path":"private-data/scratch/GeneralHeap/runs/20261113T053100Z-heap-reviewed-staging/result/staging-contract.json","pointer":["linked_sha256"]}
+      {
+        "name": "firmware_sha256",
+        "path": "private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json",
+        "pointer": [
+          "stock",
+          "update_sha256"
+        ]
+      },
+      {
+        "name": "calls",
+        "path": "private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json",
+        "pointer": [
+          "calls"
+        ]
+      },
+      {
+        "name": "contexts",
+        "path": "private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json",
+        "pointer": [
+          "contexts"
+        ]
+      },
+      {
+        "name": "global_order",
+        "path": "private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json",
+        "pointer": [
+          "global_order_identical"
+        ]
+      },
+      {
+        "name": "entry_cases",
+        "path": "private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json",
+        "pointer": [
+          "cases_per_entry"
+        ]
+      },
+      {
+        "name": "menus",
+        "path": "private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json",
+        "pointer": [
+          "stock",
+          "menus"
+        ]
+      },
+      {
+        "name": "frame",
+        "path": "private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json",
+        "pointer": [
+          "stock",
+          "frame"
+        ]
+      },
+      {
+        "name": "stock_fetches",
+        "path": "private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json",
+        "pointer": [
+          "stock",
+          "fetches_checked"
+        ]
+      },
+      {
+        "name": "owned_fetches",
+        "path": "private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json",
+        "pointer": [
+          "owned",
+          "fetches_checked"
+        ]
+      },
+      {
+        "name": "premises",
+        "path": "private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/qualification.json",
+        "pointer": [
+          "conditional_premises"
+        ]
+      },
+      {
+        "name": "mutant_fetches",
+        "path": "private-data/scratch/GeneralHeap/runs/20261113T053158Z-heap-traffic-mutant-owned-boot/result/natural-receipt.json",
+        "pointer": [
+          "fetches_checked"
+        ]
+      },
+      {
+        "name": "mutant_error",
+        "path": "private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/mutant-comparison.json",
+        "pointer": [
+          "error"
+        ]
+      },
+      {
+        "name": "mutant_detected",
+        "path": "private-data/scratch/GeneralHeap/runs/20261113T054014Z-heap-reviewed-comparison/result/mutant-comparison.json",
+        "pointer": [
+          "detected"
+        ]
+      },
+      {
+        "name": "failures0",
+        "path": "private-data/scratch/GeneralHeap/runs/20261113T053155Z-heap-reviewed-owned-boot/result/summary.json",
+        "pointer": [
+          "per_core",
+          "0",
+          "mix",
+          "failed_calls"
+        ]
+      },
+      {
+        "name": "failures1",
+        "path": "private-data/scratch/GeneralHeap/runs/20261113T053155Z-heap-reviewed-owned-boot/result/summary.json",
+        "pointer": [
+          "per_core",
+          "1",
+          "mix",
+          "failed_calls"
+        ]
+      },
+      {
+        "name": "requested_live",
+        "path": "private-data/scratch/GeneralHeap/runs/20261113T053155Z-heap-reviewed-owned-boot/result/summary.json",
+        "pointer": [
+          "requested_live"
+        ]
+      },
+      {
+        "name": "requested_peak",
+        "path": "private-data/scratch/GeneralHeap/runs/20261113T053155Z-heap-reviewed-owned-boot/result/summary.json",
+        "pointer": [
+          "requested_peak"
+        ]
+      },
+      {
+        "name": "live_allocations",
+        "path": "private-data/scratch/GeneralHeap/runs/20261113T053155Z-heap-reviewed-owned-boot/result/summary.json",
+        "pointer": [
+          "live_allocations"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "candidate_sha256",
+        "path": "private-data/scratch/GeneralHeap/runs/20261113T053100Z-heap-reviewed-staging/result/staging-contract.json",
+        "pointer": [
+          "candidate_dat_sha256"
+        ]
+      },
+      {
+        "name": "linked_sha256",
+        "path": "private-data/scratch/GeneralHeap/runs/20261113T053100Z-heap-reviewed-staging/result/staging-contract.json",
+        "pointer": [
+          "linked_sha256"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "E-TIME-INTERFACE-STREAMS-150",
+    "claim": "The current application time-service body has {{interface_verdict}} cold-boot, menu, half-press and RTC comparisons under the original independent timing, exact delay and callback-cadence bounds. Fresh executed semantic controls report {{control_verdict}} ({{detected_controls}} detected), and scoped real-kernel probes report {{failure_verdict}}. Preparation-prefix raw/interface equivalence and complete-extent coverage are independently proven. The new-body composed qualification is {{qualifier_status}}: {{qualified_pairs}} passing pairs and {{completed_roles}} completed roles, with {{failed_roles}} failed and {{partial_roles}} partial roles; {{executed_roles}} matrix executions and {{reused_roles}} reused current gate role. No historical body qualification is transferred.",
+    "scope": "Emulated X-M1 1.50 application tasks 6 and 9 over retained kernel calls, not the RTOS timer family. Firmware source 0d83f65f3eebecc1755ac1eb6a84433212d2f5e9; body {{owned_body_sha256}}, {{body_bytes}} bytes (record {{record_bytes}}, {{publications}} publications), observer {{observer_sha256}}. Stock-based DAT e8d315a7869eeaf6226d98b00364d0cb51248c96a3c45ad37638decf50b20c93; composed DAT {{composed_dat_sha256}}. Every current interface route begins at strict reset with the same candidate-independent preparation schedule and continuous history; the route is judged separately after the drained boundary. All six observed preparation prefixes equal fresh independent boot raw/interface bytes and typed summaries except unavailable prefix menu metadata. The original {{board_period}}-board-tick period and timing/traffic bounds remain unchanged. Composed qualification used source {{qualification_source}}, fixed qualifier source {{qualifier_source}} and measured {{qualifier_seconds}} seconds.",
+    "notes": "The generic judge retains its no-verdict solely for the separate wrong-control requirement; the existing integration combines equal traffic with fresh strict semantic-failure receipts rather than relabeling failed controls complete. Observer refusal and interruption are not detections. All pending frames are retained; named queue receives do not prove empty queues or equal private machine state. Original per-phase raw-hit budgets and monotonic total history are preserved. No event filtering, firmware timing fit or historical body-bound phase allowance enters current comparison. Failed-dispatch wrapper absence does not prove an omitted direct-slot wait; deletion returns do not prove eventual task reclamation. Original instruction-prepared observations and raw differences remain retained. Terminal resource defaults are descriptive metadata, not measured concurrency; the launcher and validated role policy establish the single-guest configuration. Bounded Census preparation reuse belongs to its composition owner and does not gate this result. Hardware, persistence and complete RTOS ownership remain separate.",
+    "artifacts": [
+      "private-data/scratch/TimeQualification13/runs/20261114T130008Z-time-stage-stock13/result/owned-interface.json",
+      "private-data/scratch/TimeEvidence14/runs/20261114T184054Z-time-current-source-stage14/result/staging.json",
+      "private-data/scratch/TimeEvidence14/runs/20261114T184054Z-time-current-source-stage14/result/owned-interface.json",
+      "private-data/scratch/TimeEvidence14/runs/20261114T184054Z-time-current-source-stage14/result/verdict.json",
+      "private-data/scratch/TimeProof14/runs/20261114T165728Z-time-stock-boot14/result/summary.json",
+      "private-data/scratch/TimeProof14/runs/20261114T165846Z-time-owned-boot14/result/summary.json",
+      "private-data/scratch/TimeProof14/runs/20261114T171151Z-time-current-four14/result/verdict.json",
+      "private-data/scratch/TimeProof14/runs/20261114T171151Z-time-current-four14/result/verdicts-summary.json",
+      "private-data/scratch/TimeProof14/runs/20261114T171151Z-time-current-four14/result/unbound-interface.json",
+      "private-data/scratch/TimeProof14/runs/20261114T171151Z-time-current-four14/result/input-sha256.txt",
+      "private-data/scratch/TimeProof14/runs/20261114T171155Z-time-fresh-controls14/result/verdict.json",
+      "private-data/scratch/TimeProof14/runs/20261114T171219Z-time-failure-compare14/result/verdict.json",
+      "private-data/scratch/TimeProof14/runs/20261114T172346Z-time-prefix14-final/result/verdict.json",
+      "private-data/scratch/TimeEvidence14/runs/20261114T181645Z-time-current-manifest14/result/interface.json",
+      "private-data/scratch/TimeEvidence14/runs/20261114T181645Z-time-current-manifest14/result/menu-verdict.json",
+      "private-data/scratch/TimeEvidence14/runs/20261114T181645Z-time-current-manifest14/result/verdict.json",
+      "private-data/scratch/TimeEvidence14/runs/20261114T182131Z-time-manifest-bound-audit14/result/bounds.json",
+      "private-data/scratch/TimeProof14/runs/20261114T172750Z-time-full67-new-body14/result/qualifier-terminal.json",
+      "private-data/scratch/TimeProof14/runs/20261114T172750Z-time-full67-new-body14/result/qualifier-host-build-verdicts.json",
+      "private-data/scratch/TimeProof14/runs/20261114T172750Z-time-full67-new-body14/result/measurement.json",
+      "private-data/scratch/TimeProof14/runs/20261114T172750Z-time-full67-new-body14/result/role-summaries.jsonl",
+      "private-data/scratch/TimeProof14/runs/20261114T172750Z-time-full67-new-body14/result/pairs.jsonl",
+      "private-data/scratch/TimeProof14/runs/20261114T190622Z-time-final14-complete/result/verdict.json",
+      "private-data/scratch/TimePrefix14/runs/20261114T171928Z-time-prefix14-final-smoke/result/stock-menu-routes-equivalence.json",
+      "private-data/scratch/TimePrefix14/runs/20261114T171928Z-time-prefix14-final-smoke/result/owned-menu-routes-equivalence.json",
+      "private-data/scratch/TimePrefix14/runs/20261114T171928Z-time-prefix14-final-smoke/result/stock-half-press-equivalence.json",
+      "private-data/scratch/TimePrefix14/runs/20261114T171928Z-time-prefix14-final-smoke/result/owned-half-press-equivalence.json",
+      "private-data/scratch/TimePrefix14/runs/20261114T171928Z-time-prefix14-final-smoke/result/stock-rtc-equivalence.json",
+      "private-data/scratch/TimePrefix14/runs/20261114T171928Z-time-prefix14-final-smoke/result/owned-rtc-equivalence.json"
+    ],
+    "facts": [
+      {"name":"firmware_sha256","path":"private-data/scratch/TimeProof14/runs/20261114T165728Z-time-stock-boot14/result/summary.json","pointer":["update_sha256"]},
+      {"name":"owned_body_sha256","path":"private-data/scratch/TimeEvidence14/runs/20261114T184054Z-time-current-source-stage14/result/staging.json","pointer":["body_sha256"]},
+      {"name":"body_bytes","path":"private-data/scratch/TimeEvidence14/runs/20261114T184054Z-time-current-source-stage14/result/staging.json","pointer":["body_bytes"]},
+      {"name":"record_bytes","path":"private-data/scratch/TimeEvidence14/runs/20261114T184054Z-time-current-source-stage14/result/staging.json","pointer":["record_bytes"]},
+      {"name":"publications","path":"private-data/scratch/TimeEvidence14/runs/20261114T184054Z-time-current-source-stage14/result/staging.json","pointer":["publication_words"]},
+      {"name":"composed_dat_sha256","path":"private-data/scratch/TimeEvidence14/runs/20261114T184054Z-time-current-source-stage14/result/staging.json","pointer":["dat_sha256"]},
+      {"name":"observer_sha256","path":"private-data/scratch/TimeProof14/runs/20261114T165846Z-time-owned-boot14/result/summary.json","pointer":["observer_sha256"]},
+      {"name":"interface_verdict","path":"private-data/scratch/TimeProof14/runs/20261114T171151Z-time-current-four14/result/verdict.json","pointer":["verdict"]},
+      {"name":"board_period","path":"private-data/scratch/TimeProof14/runs/20261114T171151Z-time-current-four14/result/unbound-interface.json","pointer":["projection","timing_policy","period_board_ticks"]},
+      {"name":"control_verdict","path":"private-data/scratch/TimeProof14/runs/20261114T171155Z-time-fresh-controls14/result/verdict.json","pointer":["verdict"]},
+      {"name":"detected_controls","path":"private-data/scratch/TimeProof14/runs/20261114T171155Z-time-fresh-controls14/result/verdict.json","pointer":["detected"]},
+      {"name":"failure_verdict","path":"private-data/scratch/TimeProof14/runs/20261114T171219Z-time-failure-compare14/result/verdict.json","pointer":["verdict"]},
+      {"name":"qualifier_status","path":"private-data/scratch/TimeProof14/runs/20261114T172750Z-time-full67-new-body14/result/qualifier-terminal.json","pointer":["status"]},
+      {"name":"qualified_pairs","path":"private-data/scratch/TimeProof14/runs/20261114T172750Z-time-full67-new-body14/result/qualifier-terminal.json","pointer":["pairs"],"operation":"length"},
+      {"name":"completed_roles","path":"private-data/scratch/TimeProof14/runs/20261114T172750Z-time-full67-new-body14/result/qualifier-terminal.json","pointer":["execution","completed_roles"]},
+      {"name":"executed_roles","path":"private-data/scratch/TimeProof14/runs/20261114T172750Z-time-full67-new-body14/result/qualifier-terminal.json","pointer":["execution","executed_roles"]},
+      {"name":"reused_roles","path":"private-data/scratch/TimeProof14/runs/20261114T172750Z-time-full67-new-body14/result/qualifier-terminal.json","pointer":["execution","reused_roles"]},
+      {"name":"failed_roles","path":"private-data/scratch/TimeProof14/runs/20261114T172750Z-time-full67-new-body14/result/qualifier-terminal.json","pointer":["execution","failed_roles"]},
+      {"name":"partial_roles","path":"private-data/scratch/TimeProof14/runs/20261114T172750Z-time-full67-new-body14/result/qualifier-terminal.json","pointer":["execution","partial_roles"]},
+      {"name":"qualification_source","path":"private-data/scratch/TimeProof14/runs/20261114T172750Z-time-full67-new-body14/result/qualifier-terminal.json","pointer":["source","head"]},
+      {"name":"qualifier_source","path":"private-data/scratch/TimeProof14/runs/20261114T190622Z-time-final14-complete/result/verdict.json","pointer":["qualifier_source"]},
+      {"name":"qualifier_seconds","path":"private-data/scratch/TimeProof14/runs/20261114T172750Z-time-full67-new-body14/result/measurement.json","pointer":["wall_seconds"]}
     ]
   }
   ,{
@@ -1667,125 +2019,44 @@
   }
   ,{
     "id": "E-RENDER-R1-MAIN-COHORT-150",
-    "claim": "The finite R1 render cohort passes {{passed}} of {{cases}} stock/owned pairs: {{draw_cases}} reach drawers and {{draw_free_cases}} are draw-free. Stock engine execution is authenticated in {{stock_engine_executed_cases}} pairs; stock and owned record {{stock_draw_entries}} and {{owned_draw_entries}} drawer entries. The executed selected-tree-row control is detected ({{control_detected}}), with pair/settings/render comparison exits {{control_pair_exit}}/{{control_settings_exit}}/{{control_render_exit}}. Both roles use the same controlled-RTC run document, retaining existing pixel exclusions. The production archive is {{archive_sha256}}; recorded source is {{source_commit}}, with the executed runner retained separately.",
-    "scope": "Emulated X-M1 1.50 replay of the finite admitted R1 renderer cohort and one executed wrong-render control, using the observer and controlled-RTC document identified by the retained driver and inputs. This qualifies neither expanded tree/picker classes nor glyph rasterization through RasterWorkspace.",
-    "notes": "The observer is /nix/store/v926q21mrbffqlanlrmf3c23pzgn8rkz-fujimod-xm1-0.1.0, not a relabeling to a newer SDK. RTC progression is disabled; initial registers and timer models are unchanged. Existing frame-fixed-open, fixed-wrap, framed-pop-back and framed-push clock masks remain. The control reports draw order/state differing with equal engine reads and 0x1d posts; settings match. Picker selected-row control remains E-RENDER-TREE-PICKER-GUEST-CONTROLS-150. The raster storage correction has host evidence only; no current image reaches RasterWorkspace. Task-33 unobserved stack demand and the summary-buffer defect in #161 remain open. No whole-firmware or hardware acceptance.",
+    "claim": "The finite R1 render cohort passes {{passed}} of {{cases}} stock/owned pairs: {{draw_cases}} reach drawers and {{draw_free_cases}} are draw-free. Stock engine execution is authenticated in {{stock_engine_executed_cases}} pairs; stock and owned record {{stock_draw_entries}} and {{owned_draw_entries}} drawer entries. The executed selected-tree-row control is detected ({{control_detected}}), with pair/settings/render comparison exits {{control_pair_exit}}/{{control_settings_exit}}/{{control_render_exit}}. Both roles use the same controlled-RTC run document, retaining existing pixel exclusions. The production archive is {{archive_sha256}}; recorded source is {{source_commit}}. The fresh replay uses observer {{observer_sha256}}, with its executed driver and runner retained.",
+    "scope": "Emulated X-M1 1.50 replay of the finite admitted R1 renderer cohort and one executed wrong-render control on the recorded new archive and observer. This qualifies neither expanded tree/picker classes nor glyph rasterization through RasterWorkspace.",
+    "notes": "The fresh replay uses the b31 FujiMod SDK's ram-push bridge. The historical RasterSafeStorage result used v926 and the old bdc2acaf archive; those receipts are not relabeled. Completed new-input receipts from the deadline-interrupted first attempt were reverified on continuation. RTC progression is disabled; initial registers and timer models are unchanged. Existing frame-fixed-open, fixed-wrap, framed-pop-back and framed-push clock masks remain. The control reports draw order/state differing with equal engine reads and 0x1d posts; settings match. The existing start-state recipes do not establish a new pending-work, timer or device start-state premise. Picker selected-row control remains E-RENDER-TREE-PICKER-GUEST-CONTROLS-150. RasterWorkspace has host evidence only and remains unreached; retained font services are not newly retired. Task-33 unobserved stack demand and the summary-buffer defect in #161 remain open. No whole-firmware or hardware acceptance.",
     "artifacts": [
-      "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/checks/suite.json",
-      "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/verdict.json",
-      "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/control/oracle-fn-auto-open-checks.json",
-      "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/control/oracle-fn-auto-open-pair-check.txt",
-      "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/control/oracle-fn-auto-open-render.json",
-      "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/inputs.sha256",
-      "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/driver.sh",
-      "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/runner.sh",
-      "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/render-run-document.json"
+      "private-data/scratch/BasicKernelRequal/runs/20261114T140309Z-basic-render-resume/result/checks/suite.json",
+      "private-data/scratch/BasicKernelRequal/runs/20261114T140309Z-basic-render-resume/result/verdict.json",
+      "private-data/scratch/BasicKernelRequal/runs/20261114T140309Z-basic-render-resume/result/control/oracle-fn-auto-open-checks.json",
+      "private-data/scratch/BasicKernelRequal/runs/20261114T140309Z-basic-render-resume/result/control/oracle-fn-auto-open-pair-check.txt",
+      "private-data/scratch/BasicKernelRequal/runs/20261114T140309Z-basic-render-resume/result/control/oracle-fn-auto-open-render.json",
+      "private-data/scratch/BasicKernelRequal/runs/20261114T140309Z-basic-render-resume/result/inputs.sha256",
+      "private-data/scratch/BasicKernelRequal/runs/20261114T140309Z-basic-render-resume/result/programs.sha256",
+      "private-data/scratch/BasicKernelRequal/runs/20261114T140309Z-basic-render-resume/result/driver.sh",
+      "private-data/scratch/BasicKernelRequal/runs/20261114T140309Z-basic-render-resume/result/runner.sh",
+      "private-data/scratch/BasicKernelRequal/runs/20261114T140309Z-basic-render-resume/result/render-run-document.json",
+      "private-data/scratch/BasicKernelRequal/runs/20261114T161257Z-basic-render-facts/result/facts.json"
     ],
     "facts": [
-      {
-        "name": "firmware_sha256",
-        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/checks/suite.json",
-        "pointer": [
-          "firmware_sha256"
-        ]
-      },
-      {
-        "name": "cases",
-        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/checks/suite.json",
-        "pointer": [
-          "cases"
-        ]
-      },
-      {
-        "name": "passed",
-        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/checks/suite.json",
-        "pointer": [
-          "passed"
-        ]
-      },
-      {
-        "name": "draw_cases",
-        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/checks/suite.json",
-        "pointer": [
-          "draw_cases"
-        ]
-      },
-      {
-        "name": "draw_free_cases",
-        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/checks/suite.json",
-        "pointer": [
-          "draw_free_cases"
-        ]
-      },
-      {
-        "name": "stock_engine_executed_cases",
-        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/checks/suite.json",
-        "pointer": [
-          "stock_engine_executed_cases"
-        ]
-      },
-      {
-        "name": "stock_draw_entries",
-        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/checks/suite.json",
-        "pointer": [
-          "stock_draw_entries"
-        ]
-      },
-      {
-        "name": "owned_draw_entries",
-        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/checks/suite.json",
-        "pointer": [
-          "owned_draw_entries"
-        ]
-      },
-      {
-        "name": "source_commit",
-        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/checks/suite.json",
-        "pointer": [
-          "source_commit"
-        ]
-      },
-      {
-        "name": "archive_sha256",
-        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/checks/suite.json",
-        "pointer": [
-          "archive_sha256"
-        ]
-      },
-      {
-        "name": "control_detected",
-        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/verdict.json",
-        "pointer": [
-          "control_detected"
-        ]
-      },
-      {
-        "name": "control_pair_exit",
-        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/control/oracle-fn-auto-open-checks.json",
-        "pointer": [
-          "menu_engine_pair_check"
-        ]
-      },
-      {
-        "name": "control_settings_exit",
-        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/control/oracle-fn-auto-open-checks.json",
-        "pointer": [
-          "modal_settings_compare"
-        ]
-      },
-      {
-        "name": "control_render_exit",
-        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/control/oracle-fn-auto-open-checks.json",
-        "pointer": [
-          "render_compare"
-        ]
-      }
+      {"name":"firmware_sha256","path":"private-data/scratch/BasicKernelRequal/runs/20261114T140309Z-basic-render-resume/result/checks/suite.json","pointer":["firmware_sha256"]},
+      {"name":"cases","path":"private-data/scratch/BasicKernelRequal/runs/20261114T140309Z-basic-render-resume/result/checks/suite.json","pointer":["cases"]},
+      {"name":"passed","path":"private-data/scratch/BasicKernelRequal/runs/20261114T140309Z-basic-render-resume/result/checks/suite.json","pointer":["passed"]},
+      {"name":"draw_cases","path":"private-data/scratch/BasicKernelRequal/runs/20261114T140309Z-basic-render-resume/result/checks/suite.json","pointer":["draw_cases"]},
+      {"name":"draw_free_cases","path":"private-data/scratch/BasicKernelRequal/runs/20261114T140309Z-basic-render-resume/result/checks/suite.json","pointer":["draw_free_cases"]},
+      {"name":"stock_engine_executed_cases","path":"private-data/scratch/BasicKernelRequal/runs/20261114T140309Z-basic-render-resume/result/checks/suite.json","pointer":["stock_engine_executed_cases"]},
+      {"name":"stock_draw_entries","path":"private-data/scratch/BasicKernelRequal/runs/20261114T140309Z-basic-render-resume/result/checks/suite.json","pointer":["stock_draw_entries"]},
+      {"name":"owned_draw_entries","path":"private-data/scratch/BasicKernelRequal/runs/20261114T140309Z-basic-render-resume/result/checks/suite.json","pointer":["owned_draw_entries"]},
+      {"name":"source_commit","path":"private-data/scratch/BasicKernelRequal/runs/20261114T140309Z-basic-render-resume/result/checks/suite.json","pointer":["source_commit"]},
+      {"name":"archive_sha256","path":"private-data/scratch/BasicKernelRequal/runs/20261114T140309Z-basic-render-resume/result/checks/suite.json","pointer":["archive_sha256"]},
+      {"name":"observer_sha256","path":"private-data/scratch/BasicKernelRequal/runs/20261114T161257Z-basic-render-facts/result/facts.json","pointer":["observer_sha256"]},
+      {"name":"control_detected","path":"private-data/scratch/BasicKernelRequal/runs/20261114T140309Z-basic-render-resume/result/verdict.json","pointer":["control_detected"]},
+      {"name":"control_pair_exit","path":"private-data/scratch/BasicKernelRequal/runs/20261114T140309Z-basic-render-resume/result/control/oracle-fn-auto-open-checks.json","pointer":["menu_engine_pair_check"]},
+      {"name":"control_settings_exit","path":"private-data/scratch/BasicKernelRequal/runs/20261114T140309Z-basic-render-resume/result/control/oracle-fn-auto-open-checks.json","pointer":["modal_settings_compare"]},
+      {"name":"control_render_exit","path":"private-data/scratch/BasicKernelRequal/runs/20261114T140309Z-basic-render-resume/result/control/oracle-fn-auto-open-checks.json","pointer":["render_compare"]}
     ]
   }
   ,{
     "id": "E-SACLAC-ROOT-PERSISTENT-PROVIDERS-150",
     "claim": "Author-run bounded host execution exercised persistent root providers: one active calculation input shared by ShotState and calc0x3c02; stored commands/abort/client publication; persistent lens/Prepare/S1 behavior; callback-task S1 gate transitions. Exposure field widths/refusal, signed lens/target, real Blocking request/wait/callback/admission, dump transitions/guards, shared Geometry recorder and301 history entries/tail/guards passed. Distinct LiveSearch/Shot identity, both owned history-reset callers, platform outputs and subject staging/wait/refusal passed. A reproduced four-byte subject-coordinate shift was repaired and public preparation then observed native-layout geometry. Preparation records passed the actual summary consumer, absent/read-only-refused pointer non-dereference,56/168/124-byte publications and frame35/link14. Statistics staging/queued callbacks passed status/payload/sender/null branches. Motion providers passed tick wrap,12/14-argument signed limits, exposure/gain outputs, owned ratio/chosen word and non-square relative-frame conversion. Input {{consumer_status}}/{{consumer_exit}}; memory {{memory_status}}/{{memory_exit}}; subjects {{subject_status}}; preparation {{preparation_status}}/{{preparation_exit}}; motion {{motion_status}}/{{motion_exit}}; latest ARM/host gate exit {{latest_gate_exit}}.",
-    "scope": "X-M1 1.50 scoped synthetic host paths and ARM compilation only. Consumer stock_executed={{stock_executed}}, full_system={{full_system}}, native_task_hold={{native_task_hold}}.",
+    "scope": "X-M1 1.50 scoped synthetic host paths and ARM compilation only. Consumer stock_executed={{stock_executed}}, full_system={{full_system}}, native_task_hold={{native_task_hold}}. Post-public-main60 raw creation-word/Root rendezvous/callback interoperability {{integration_status}}.",
     "notes": "Author-run evidence, not independent confirmation. Complete Shot/plan aggregate, concrete image, native placement/ISP/hold, callback argument capture, stock-authenticated ordered scenarios and executed wrong variant remain unqualified. Kernel/stock answers are synthetic; no native peer or camera ran. Subject regression observes the public preparation's native-layout coordinates, not execution of Calc evaluation or stock. ExposureContext retains no second active calculation input or staged subject list. FileSynchronize had no producer and was removed; Filea1 remains separate.",
     "artifacts": [
       "private-data/scratch/SaclacRoot/runs/20261114T151216Z-root4-canonical-input-callback-gate-fixed/result/gate.log",
@@ -1798,7 +2069,9 @@
       "private-data/scratch/SaclacRoot/runs/20261114T182540Z-root4-exposure-record-statistics-provider/result/gate.log",
       "private-data/scratch/SaclacRoot/runs/20261114T183508Z-root4-exposure-record-callback-consumer/result/consumer.log",
       "private-data/scratch/SaclacRoot/runs/20261114T192300Z-root4-motion-service-providers/result/gate.log",
-      "private-data/scratch/SaclacRoot/runs/20261114T192541Z-root4-motion-service-consumer/result/consumer.log"
+      "private-data/scratch/SaclacRoot/runs/20261114T192541Z-root4-motion-service-consumer/result/consumer.log",
+      "private-data/scratch/SaclacRoot/runs/20261114T193958Z-root4-public-main60-integration/result/gate.log",
+      "private-data/scratch/SaclacRoot/runs/20261114T194444Z-root4-main60-public-consumer/result/consumer.log"
     ],
     "facts": [
       {"name":"firmware_sha256","path":"private-data/scratch/ShotSequence/runs/20261114T041635Z-shot-review-reference/result/reference.json","pointer":["firmware_sha256"]},
@@ -1807,7 +2080,7 @@
       {"name":"consumer_exit","path":"private-data/scratch/SaclacRoot/runs/20261114T153101Z-root4-shared-input-callback-consumer/result/verdict.json","pointer":["exit_code"]},
       {"name":"stock_executed","path":"private-data/scratch/SaclacRoot/runs/20261114T153101Z-root4-shared-input-callback-consumer/result/verdict.json","pointer":["stock_executed"]},
       {"name":"full_system","path":"private-data/scratch/SaclacRoot/runs/20261114T153101Z-root4-shared-input-callback-consumer/result/verdict.json","pointer":["full_system"]},
-      {"name":"latest_gate_exit","path":"private-data/scratch/SaclacRoot/runs/20261114T192300Z-root4-motion-service-providers/result/verdict.json","pointer":["exit_status"]},
+      {"name":"latest_gate_exit","path":"private-data/scratch/SaclacRoot/runs/20261114T193958Z-root4-public-main60-integration/result/verdict.json","pointer":["exit_status"]},
       {"name":"memory_status","path":"private-data/scratch/SaclacRoot/runs/20261114T170820Z-root4-record-mode-history-consumer/result/verdict.json","pointer":["status"]},
       {"name":"memory_exit","path":"private-data/scratch/SaclacRoot/runs/20261114T170820Z-root4-record-mode-history-consumer/result/verdict.json","pointer":["exit_code"]},
       {"name":"native_task_hold","path":"private-data/scratch/SaclacRoot/runs/20261114T170820Z-root4-record-mode-history-consumer/result/verdict.json","pointer":["native_task_hold"]},
@@ -1815,7 +2088,8 @@
       {"name":"preparation_status","path":"private-data/scratch/SaclacRoot/runs/20261114T183508Z-root4-exposure-record-callback-consumer/result/verdict.json","pointer":["status"]},
       {"name":"preparation_exit","path":"private-data/scratch/SaclacRoot/runs/20261114T183508Z-root4-exposure-record-callback-consumer/result/verdict.json","pointer":["exit_code"]},
       {"name":"motion_status","path":"private-data/scratch/SaclacRoot/runs/20261114T192541Z-root4-motion-service-consumer/result/verdict.json","pointer":["status"]},
-      {"name":"motion_exit","path":"private-data/scratch/SaclacRoot/runs/20261114T192541Z-root4-motion-service-consumer/result/verdict.json","pointer":["exit_code"]}
+      {"name":"motion_exit","path":"private-data/scratch/SaclacRoot/runs/20261114T192541Z-root4-motion-service-consumer/result/verdict.json","pointer":["exit_code"]},
+      {"name":"integration_status","path":"private-data/scratch/SaclacRoot/runs/20261114T194444Z-root4-main60-public-consumer/result/verdict.json","pointer":["status"]}
     ]
   }
 ]

@@ -18,7 +18,6 @@ pub mod statistics;
 pub const fn record_handle_from_a2(word: u32) -> RecordHandle { RecordHandle(word) }
 
 pub const fn record_handle_word(handle: RecordHandle) -> u32 { handle.0 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CommandDescriptor {
     pub kind: CommandKind,
@@ -518,7 +517,6 @@ pub fn reply_target_code(target: ReplyTarget) -> u8 {
         },
     }
 }
-
 pub fn parse(operation: u16, payload: &[u8]) -> Result<Message<'_>, ParseError> {
     let code = operation.checked_sub(0x3b00).and_then(|code| u8::try_from(code).ok()).ok_or(ParseError::UnknownOperation)?;
     if let Some(kind) = command(code) {
@@ -1001,7 +999,6 @@ fn area_evaluation(request: &calc::AreaEvaluationRequest, callbacks: [StockCallb
     message.word(216, request.frames[0]);
     message
 }
-
 pub fn calc1_operation(operation: Calc1Operation) -> u16 {
     match operation {
         Calc1Operation::Request00 => 0x3d00,
@@ -1261,4 +1258,3 @@ fn callback_only(callback: StockCallbackWord, length: usize) -> imgdc::ImgDcMess
     message.word(0, callback.0);
     imgdc::ImgDcMessage::Bytes(message)
 }
-

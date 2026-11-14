@@ -4,5 +4,7 @@
   ],
   "boundary_files": [],
   "boundary_items": [],
-  "known_exceptions": []
+  "known_exceptions": [
+    {"path": "lib.rs", "lines": [15, 21], "reason": "Exports image-owned immutable kernel capability metadata."}
+  ]
 }

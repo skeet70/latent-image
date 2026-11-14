@@ -37,7 +37,6 @@ SOURCES = [
     "src/stock/shared.rs",
     "src/stock/statistics.rs",
 ]
-
 xm1_rust_rlib(
     name = "saclac-interface",
     src = "src/lib.rs",

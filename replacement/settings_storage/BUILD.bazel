@@ -574,7 +574,7 @@ haskell_test(
     args = ["$(rootpath :settings-storage-image.bin)", "$(rootpath :settings-storage-image.symbols)", "$(rootpath :custom-settings-image.bin)", "$(rootpath :custom-settings-image.symbols)"],
     data = [":settings-storage-image.bin", ":settings-storage-image.symbols", ":custom-settings-image.bin", ":custom-settings-image.symbols"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
-    deps = [":storage-oracle-lib", ":custom-oracle-lib", ":bank-apply-fixture", "//replacement/property_service:property-oracle-lib", "//replacement/property_service:property-service-artifact", "//emulation:owned-case", "//emulation:native-adapter", "//emulation:native-observation", "//host:base", "//host:bytestring", "//host:containers", "//host:first-stage"],
+    deps = [":storage-oracle-lib", ":custom-oracle-lib", ":bank-apply-fixture", "//replacement/property_service:property-oracle-lib", "//replacement/property_service:property-service-artifact", "//replacement/property_service:classify", "//replacement/media_permit:property-fields", "//emulation:owned-case", "//emulation:native-adapter", "//emulation:native-observation", "//host:base", "//host:bytestring", "//host:containers", "//host:first-stage"],
 )
 
 haskell_test(

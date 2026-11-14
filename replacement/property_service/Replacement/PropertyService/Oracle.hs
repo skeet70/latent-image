@@ -76,6 +76,7 @@ module Replacement.PropertyService.Oracle
   , headerSpans
   , splitFunctions
   , caseSpec
+  , codeRegions
   , Patch (..)
   , applyPatches
   , EntryControl (..)

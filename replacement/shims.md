@@ -233,7 +233,9 @@ The kernel crate: typed handles over the image's interface slots, with the per-c
 | `SlotTable` in `src/slot_table.rs` and `src/slot_table/messages.rs` | kernel interface slot | the kernel bodies behind the root blocks at 0x96bd20 and 0x96bd24, the loader-A console writer 0x41a34, the error-callback word at 0x4089ea8c, the post hook at 0x4089ea94, task/queue classes and message-pool capacity words | partly | every image whose `.symbols` lists an `xm1_kernel` item also lists the kernel family entry for each slot offset in `SlotTable`'s table | required |
 | `CoreLock` in `src/slot_table.rs` | trampoline into retained stock | the stock cross-core critical section at 0x7235d8 and its release 0x7236b0 | partly | no stock caller of 0x7235d8 remains | required |
 | Object construction and deletion in `src/slot_table/messages.rs` | trampoline into retained stock | queue constructor 0x724cdc and deleter 0x724f08, binary-semaphore allocator 0x7247ac and deleter 0x724974, semaphore poll 0x724ad8 | no | the kernel crate owns queue backing allocation and resource lifetime, and semaphore allocation/deletion/poll, in every linked image | required |
+| `SemaphoreWord` in `src/slot_table/messages.rs` | trampoline into retained stock | timed wait 0x724b68 and signal 0x724c00 for failed creation words | no | retained callers no longer preserve or use failed semaphore creation words | required |
 | Dispatch bracket in `src/slot_table/messages.rs` | trampoline into retained stock | dispatch disable 0x723efc and enable 0x723f7c | no | the kernel crate owns the dispatch wrappers and their error reporting in every linked image | required |
+| Task construction and deletion in `src/slot_table/task.rs` | trampoline into retained stock | task constructor 0x725dd8 and deletion 0x72612c, including its storage release 0x726098 | no | the kernel crate owns task registration, stack allocation, activation, deletion and reservation release in every linked image | required |
 
 ## kernel_install
 
@@ -749,6 +751,12 @@ The task 43 half-press and live preparation and capture pipeline behind the sacl
 | `half_press_mode`, `half_press_notifications` and `abort_status` in `src/stock.rs` | guest-memory layout view | words +4 and +0x10 of the command-6 parameter block written by the retained command function `0xef8fa0`, and the capture status word at `0x169d380` | no | the half-press command producer and the capture status writer are owned | required |
 | `MeasurementProfiles::profile_extent`, bound to `0xef5d44` as `src/capture_stock.rs` names it in `MEASUREMENT_PROFILES` | trampoline into retained stock | the profile geometry's retained `0xef5d44`, which tasks 3 and 7 also reach | no | the profile geometry owns `0xef5d44` and `profile_extent` binds to its Rust function | required |
 
+## saclac_interface
+
+| Shim | Kind | Other side | Owned now | Removal condition | State |
+| --- | --- | --- | --- | --- | --- |
+| Command, parameter-block and callback descriptors in `src/stock.rs` | guest-memory layout view | retained queue-43 command producers, their 46 shared parameter blocks and 106 completion callbacks | no | queue-43 producers and completion callbacks are owned and no retained consumer reads the parameter blocks | required |
+
 ## save
 
 The save facade and its retained image-5 services.
@@ -881,3 +889,17 @@ Retained area-list destinations use `stock::areas::convert_into` for a service a
 ## Not registered
 
 `replacement/rtos_layout` and `replacement/rtos_reservation` contain Rust but no firmware artifact target; they are shared host views, not units. `replacement/toolchain` contains build rules only. `replacement/record5_staging`, `startup_artifact`, `startup_composition` and `startup_consumers` contain no Rust or assembly sources; they are host orchestration.
+
+## time_services
+
+`time_services` owns tasks 6 and 9, software timers, timed delays and interrupt registration. Its interface entries and their owned symbols are declared in `time_services/stock-interface.json`; `time_services:artifact` derives publications from those rows.
+
+| Shim | Kind | Other side | Owned now | Removal condition | State |
+| --- | --- | --- | --- | --- | --- |
+| Published time entries in `time_services/src/stock.rs` | stock-ABI export | retained callers and callback words entering the entries in `stock-interface.json` | partly | no retained branch, table word or executed computed reference enters the published stock entries | required |
+| Handle allocation in `time_services/src/stock.rs` | trampoline into retained stock | allocator 0x65722c, resolver 0x657384 and release 0x65744c | no | the peripherals owner supplies typed handle allocation to the linked image | required |
+| Device timer programming in `time_services/src/stock.rs` | trampoline into retained stock | acquire 0x655b28, configure 0x655ccc, stop 0x655fe8 and release 0x655c24 | no | device timer programming is owned in the linked image | required |
+| Interrupt backend in `time_services/src/stock.rs` | trampoline into retained stock | interrupt configure 0x723870 and detach 0x7239a0 | no | the kernel crate exposes the owned interrupt backend in the linked image | required |
+| Diagnostic and callback words in `time_services/src/stock.rs` | trampoline into retained stock | diagnostic 0x726c74 and callbacks supplied by retained consumers | partly | every supplying consumer and the diagnostic service are owned in the linked image | required |
+| Stock memory in `time_services/src/stock.rs` | guest-memory layout view | interrupt handles and sources 0x940e9c, delay and timer descriptors 0x95dc08 and 0x96bd40, tick count 0x96e97c, timer handle table 0x95aa9c, task arguments 0x89f76c | partly | no retained code reads these words and the retained allocator no longer holds the handle tables | required |
+

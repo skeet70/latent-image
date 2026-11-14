@@ -14,6 +14,9 @@ pub enum TaskCapture { #[default] Off, Logical }
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(transparent)]
 pub struct ContextDepth(u32);
+impl ContextDepth {
+    pub const fn get(self) -> u32 { self.0 }
+}
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(transparent)]

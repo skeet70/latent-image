@@ -143,21 +143,24 @@ pub(super) fn delete(id: QueueId) -> Result<(), Error> {
     Status(unsafe { StockCodeWord(0x724f08).call(u32::from(id.get()), 0, 0) } as i32).check()
 }
 
-pub(super) fn semaphore_create_binary() -> Result<SemaphoreId, Error> {
-    let word = unsafe { StockCodeWord(0x7247ac).call(0, 1, 0) } as i32;
-    if word > 0 {
-        u8::try_from(word).ok().and_then(SemaphoreId::new).ok_or(Error::InvalidId)
-    } else {
-        Err(Status(word).check().err().unwrap_or(Error::InvalidId))
-    }
+pub(super) fn semaphore_create_binary() -> crate::SemaphoreWord {
+    crate::SemaphoreWord::from_creation_word(unsafe { StockCodeWord(0x7247ac).call(0, 1, 0) })
+}
+
+pub(super) fn semaphore_wait_word(word: crate::SemaphoreWord, timeout: Timeout) -> Result<(), Error> {
+    Status(unsafe { StockCodeWord(0x724b68).call(word.word(), timeout.word(), 0) } as i32).check()
+}
+
+pub(super) fn semaphore_signal_word(word: crate::SemaphoreWord) -> Result<(), Error> {
+    Status(unsafe { StockCodeWord(0x724c00).call(word.word(), 0, 0) } as i32).check()
 }
 
 pub(super) fn semaphore_delete(id: SemaphoreId) -> Result<(), Error> {
     Status(unsafe { StockCodeWord(0x724974).call(u32::from(id.get()), 0, 0) } as i32).check()
 }
 
-pub(super) fn semaphore_try_take(id: SemaphoreId) -> Result<(), Error> {
-    Status(unsafe { StockCodeWord(0x724ad8).call(u32::from(id.get()), 0, 0) } as i32).check()
+pub(super) fn semaphore_try_take(word: crate::SemaphoreWord) -> Result<(), Error> {
+    Status(unsafe { StockCodeWord(0x724ad8).call(word.word(), 0, 0) } as i32).check()
 }
 
 pub(super) fn flags_wait(id: TaskId, bits: FlagBits, timeout: Timeout) -> Result<FlagBits, Error> {

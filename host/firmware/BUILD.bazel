@@ -2109,9 +2109,9 @@ genrule(
     ("modal75-menu-engine-render", "modal75,menu-engine,render", "//replacement/bank:bank-modal75-engine-render"),
 ]]
 
-haskell_test(
-    name = "owned-image-bytes-tests",
-    srcs = ["OwnedImageBytesTests.hs"],
+haskell_binary(
+    name = "owned-image-bytes",
+    srcs = ["OwnedImageBytes.hs"],
     args = [
         "$(location :engine-modal75-menu-engine/kernel.map)",
         "$(location :engine-modal75-menu-engine-render/kernel.map)",

@@ -1,5 +1,6 @@
 ENTRY(xm1_public_get)
 EXTERN(TAIL_BYTES SLOT_BYTES)
+EXTERN(XM1_KERNEL_BOUNDARY)
 
 /* The stock leaf functions whose results are defaults. */
 xm1_stock_61df44 = 0x61df44;

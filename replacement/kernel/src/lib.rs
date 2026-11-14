@@ -16,6 +16,8 @@ mod sealed {
 #[cfg(not(target_arch = "arm"))]
 pub mod fake;
 pub mod slot_table;
+mod task;
+pub use task::{CreatedTask, StackBytes, TaskArgument, TaskBackend, TaskConfig, TaskFlagPolicy, TaskPriority};
 
 #[cfg(test)]
 mod host_tests;
@@ -46,6 +48,35 @@ impl SemaphoreId {
         if number >= 1 && number <= Self::MAX { Some(Self(NonZeroU8::new(number).unwrap())) } else { None }
     }
     pub const fn get(self) -> u8 { self.0.get() }
+}
+
+/// A retained semaphore creation response, including a failed or zero word.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SemaphoreWord(u32);
+impl SemaphoreWord {
+    pub(crate) const fn from_creation_word(word: u32) -> Self { Self(word) }
+    pub const fn word(self) -> u32 { self.0 }
+    pub const fn created(self) -> bool { (self.0 as i32) > 0 }
+    pub fn id(self) -> Result<SemaphoreId, Error> {
+        u8::try_from(self.0).ok().and_then(SemaphoreId::new).ok_or_else(|| {
+            if self.created() { Error::InvalidId } else { Status(self.0 as i32).check().err().unwrap_or(Error::InvalidId) }
+        })
+    }
+    pub fn create_binary<B: Backend>(cx: &TaskContext<'_, B>) -> Self {
+        cx.kernel.backend.semaphore_create_binary()
+    }
+    pub fn try_take<B: Backend>(self, cx: &TaskContext<'_, B>) -> Result<(), Error> {
+        cx.kernel.backend.semaphore_try_take(self)
+    }
+    pub fn wait<B: Backend>(self, cx: &TaskContext<'_, B>, timeout: Timeout) -> Result<(), Error> {
+        cx.kernel.backend.semaphore_wait_word(self, timeout)
+    }
+    pub fn signal<B: Backend>(self, cx: &impl Caller<B>) -> Result<(), Error> {
+        cx.kernel().backend.semaphore_signal_word(self, cx.form())
+    }
+}
+impl From<SemaphoreId> for SemaphoreWord {
+    fn from(id: SemaphoreId) -> Self { Self(u32::from(id.get())) }
 }
 
 /// Kernel clock units: a timeout is added unscaled to the domain clock word, which advances
@@ -164,13 +195,17 @@ pub trait Backend: sealed::Sealed {
     fn cores_unlock(&self, saved: IrqState);
     fn semaphore_wait(&self, id: SemaphoreId, timeout: Timeout) -> Result<(), Error>;
     fn semaphore_signal(&self, id: SemaphoreId, form: Form) -> Result<(), Error>;
+    /// Waits on a retained creation response, including a failed or zero word.
+    fn semaphore_wait_word(&self, word: SemaphoreWord, timeout: Timeout) -> Result<(), Error>;
+    /// Signals a retained creation response, including a failed or zero word.
+    fn semaphore_signal_word(&self, word: SemaphoreWord, form: Form) -> Result<(), Error>;
     fn message_post(&self, id: QueueId, form: Form, header: Header, payload: &[u8]) -> Result<(), PostError>;
     fn message_receive(&self, id: QueueId, timeout: Timeout) -> Result<Self::Message, Error>;
     fn queue_create(&self, id: QueueId, config: QueueConfig) -> Result<(), Error>;
     fn queue_delete(&self, id: QueueId) -> Result<(), Error>;
-    fn semaphore_create_binary(&self) -> Result<SemaphoreId, Error>;
+    fn semaphore_create_binary(&self) -> SemaphoreWord;
     fn semaphore_delete(&self, id: SemaphoreId) -> Result<(), Error>;
-    fn semaphore_try_take(&self, id: SemaphoreId) -> Result<(), Error>;
+    fn semaphore_try_take(&self, word: SemaphoreWord) -> Result<(), Error>;
     fn flags_wait_any(&self, id: TaskId, bits: FlagBits, timeout: Timeout) -> Result<FlagBits, Error>;
     fn flags_clear(&self, id: TaskId) -> Result<(), Error>;
     fn flags_set(&self, id: TaskId, bits: FlagBits, form: Form) -> Result<(), Error>;
@@ -372,13 +407,16 @@ impl MessageQueue {
         cx.kernel.backend.queue_create(id, config)?;
         Ok(CreatedQueue(Self(id)))
     }
+    pub fn delete<B: Backend>(self, cx: &TaskContext<'_, B>) -> Result<(), Error> {
+        cx.kernel.backend.queue_delete(self.0)
+    }
 }
 
 pub struct CreatedQueue(MessageQueue);
 impl CreatedQueue {
     pub fn handle(&self) -> MessageQueue { self.0 }
     pub fn delete<B: Backend>(self, cx: &TaskContext<'_, B>) -> Result<(), Error> {
-        cx.kernel.backend.queue_delete(self.0.0)
+        self.0.delete(cx)
     }
 }
 
@@ -392,10 +430,10 @@ impl CreatedSemaphore {
 impl Semaphore {
     pub fn id(self) -> SemaphoreId { self.0 }
     pub fn create_binary<B: Backend>(cx: &TaskContext<'_, B>) -> Result<CreatedSemaphore, Error> {
-        cx.kernel.backend.semaphore_create_binary().map(|id| CreatedSemaphore(Self(id)))
+        cx.kernel.backend.semaphore_create_binary().id().map(|id| CreatedSemaphore(Self(id)))
     }
     pub fn try_take<B: Backend>(self, cx: &TaskContext<'_, B>) -> Result<(), Error> {
-        cx.kernel.backend.semaphore_try_take(self.0)
+        cx.kernel.backend.semaphore_try_take(self.0.into())
     }
 }
 

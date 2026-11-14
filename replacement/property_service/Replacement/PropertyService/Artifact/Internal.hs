@@ -302,7 +302,7 @@ kernelBoundaryStack =
   , (GuestAddress 0x7236b0, StackOffset (-24))
   ]
 
--- | The table the kernel crate exports as its declared boundary.
+-- | The table the consuming image exports as its declared kernel boundary.
 kernelBoundaryName :: String
 kernelBoundaryName = "XM1_KERNEL_BOUNDARY"
 
@@ -452,11 +452,13 @@ deriveArtifactUsing shape purpose dependency properties carrier@(Carrier (GuestA
     [ ("SLOT_BYTES",200,"f556b0f2f3cf1232809b5bedf6e4b7354d6f4e3ff62b740269573d1a1f705bb6")
     , ("TAIL_BYTES",40,"7e6a0e9ab8e0bfdea806e3f11a5a1f567c22c4275e4e5382f33d23baccac58c9")
     ]
-  let functions =
-        sortOn functionStart
-          [ FunctionExtent (FunctionName (F.symbolName entry)) (GuestAddress (F.symbolAddress entry)) (GuestAddress (F.symbolAddress entry + F.symbolSize entry))
-          | entry <- symbols, F.symbolSize entry > 0, entry `notElem` ([tableSymbol, slotSymbol, specialSymbol, boundarySymbol] ++ defaultSymbols), kindIs [GlobalText, LocalText] entry
-          ]
+  -- Compiler aliases share an exact code extent.
+  let namedFunctions =
+        [ FunctionExtent (FunctionName (F.symbolName entry)) (GuestAddress (F.symbolAddress entry)) (GuestAddress (F.symbolAddress entry + F.symbolSize entry))
+        | entry <- symbols, F.symbolSize entry > 0, entry `notElem` ([tableSymbol, slotSymbol, specialSymbol, boundarySymbol] ++ defaultSymbols), kindIs [GlobalText, LocalText] entry
+        ]
+      functions = M.elems $ M.fromListWith (flip const)
+        [((low, high), function) | function@(FunctionExtent _ low high) <- namedFunctions]
       disjoint = and (zipWith (\(FunctionExtent _ _ a) (FunctionExtent _ b _) -> a <= b) functions (drop 1 functions))
   require (disjoint && all (\(FunctionExtent _ (GuestAddress low) (GuestAddress high)) -> low .&. 3 == 0 && high .&. 3 == 0) functions) ExtentRejected
   require (all (`elem` map functionStart functions) (map GuestAddress rustEntries)) SymbolRejected
@@ -496,7 +498,7 @@ deriveArtifactUsing shape purpose dependency properties carrier@(Carrier (GuestA
   require ([EncodedSlot (word address) | address <- take (length slots) [slotAddress, slotAddress + 4 ..]] == slots) SlotTableRejected
   require (F.symbolSize specialSymbol == specialBytes && specialAddress .&. 3 == 0) SpecialTableRejected
   require ([EncodedSpecial (word address) (word (address + 4)) | address <- take (length specials) [specialAddress, specialAddress + 8 ..]] == specials) SpecialTableRejected
-  mappings <- artifactMappings start end functions bytes symbolBytes elfBytes
+  mappings <- artifactMappings start end namedFunctions bytes symbolBytes elfBytes
   elf <- either (const (Left ElfRejected)) Right (ELF.parseElf elfBytes)
   references <- either (const (Left ElfRejected)) Right (ELF.addressRelocations elf)
   require (not (null references)) ElfRejected
@@ -551,7 +553,7 @@ artifactMappings start end functions bytes symbolBytes elfBytes = do
     _ -> Left ElfRejected
   require (all (\symbol -> ELF.symbolKind symbol `notElem` [ELF.FunctionSymbol, ELF.ObjectSymbol]
     || any (\entry -> F.symbolName entry == ELF.symbolName symbol) symbols) elfSymbols) ElfRejected
-  require (sortOn functionStart functions == sortOn functionStart
+  require (sortOn (\(FunctionExtent name _ _) -> name) functions == sortOn (\(FunctionExtent name _ _) -> name)
     [FunctionExtent (FunctionName (ELF.symbolName symbol)) (GuestAddress (ELF.symbolValue symbol))
       (GuestAddress (ELF.symbolValue symbol + ELF.symbolSize symbol))
     | symbol <- elfSymbols, ELF.symbolKind symbol == ELF.FunctionSymbol, ELF.symbolSize symbol > 0]) ElfRejected

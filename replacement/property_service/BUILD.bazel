@@ -134,6 +134,7 @@ xm1_rust_staticlib(
     name = "property-linked-panic",
     src = "linked-panic.rs",
     crate_name = "xm1_property_linked_panic",
+    rlib_deps = {"xm1_kernel": "//replacement/kernel:arm"},
 )
 
 xm1_rust_elf(
