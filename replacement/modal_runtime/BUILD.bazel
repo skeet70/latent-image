@@ -650,11 +650,9 @@ haskell_library(
     src_strip_prefix = ".",
     visibility = ["//visibility:public"],
     deps = [
-        "//host/firmware:bank-allowlist",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
-        "//host:cryptohash-sha256",
         "//host:text",
     ],
 )
@@ -665,10 +663,8 @@ haskell_test(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
     deps = [
         ":render-stack-evidence-lib",
-        "//host/firmware:bank-allowlist",
         "//host:aeson",
         "//host:base",
-        "//host:bytestring",
         "//host:text",
     ],
 )

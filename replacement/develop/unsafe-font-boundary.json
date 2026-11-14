@@ -5,23 +5,5 @@
   ],
   "boundary_files": [],
   "boundary_items": [],
-  "known_exceptions": [
-    {
-      "path": "src/font_core/raster.rs",
-      "lines": [
-        611,
-        624,
-        637,
-        680,
-        971,
-        1083,
-        1085,
-        1087,
-        1093,
-        1094,
-        1095
-      ],
-      "reason": "Owned scratch MaybeUninit accesses and head-slice construction remain a known internal-unsafe exception pending the separate safe-storage cutover."
-    }
-  ]
+  "known_exceptions": []
 }

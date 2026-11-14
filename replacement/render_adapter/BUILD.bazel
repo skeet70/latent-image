@@ -33,6 +33,35 @@ xm1_rust_rlib(
 )
 
 xm1_rust_rlib(
+    name = "arm-control-tree-selected-unstyled",
+    src = "mod.rs",
+    crate_name = "render_adapter",
+    out = "librender_adapter_control_tree_selected_unstyled.rlib",
+    data = [":module"],
+    rlib_deps = {
+        "libm": "//replacement/render_commands:libm-arm",
+        "menu_engine": "//replacement/menu_engine:arm",
+        "menu_engine_adapter": "//replacement/menu_engine:adapter-arm",
+        "menu_widgets": "//replacement/menu_widgets:arm-control-tree-selected-unstyled",
+        "owned_menu": "//replacement/owned_menu:arm",
+        "render_commands": "//replacement/render_commands:runtime-arm",
+        "xm1_kernel": "//replacement/kernel:arm",
+        "xm1_property_service": "//replacement/property_service:property-service-arm",
+        "xm1_settings_storage_core": "//replacement/settings_storage:property-core-arm",
+    },
+    rustc_flags = [
+        "-C",
+        "target-feature=+strict-align",
+        "--cfg",
+        "rb_render_owned",
+        "-C",
+        "llvm-args=-min-jump-table-entries=4096",
+    ],
+    testonly = True,
+    visibility = ["//replacement/bank:__pkg__"],
+)
+
+xm1_rust_rlib(
     name = "arm-value",
     src = "mod.rs",
     crate_name = "render_adapter",

@@ -4,12 +4,11 @@ module Replacement.ModalRuntime.RenderPair
   ( RenderConfig(..), DrawCoverage(..), ResourceId(..), DrawClass(..), DrawFunction(..), Draw(..)
   , deriveDrawClass, renderDraws, compareDraws, checkRenderStackObservations, checkRetainedRenderStackObservations
   , validateRenderDeclarations, validateRetainedRenderDeclarations, DeclarationScope (..), checkRenderCoverage
-  , checkRenderInvocationEvidence
   , osdInputs, discoveredBanks
   , foldRenderDraws, collectDrawsReader, compareDrawsReader, compareDrawsReaderRole, discoveredBanksReader, discoveredBanksReaderRole
   , checkRenderCoverageReader, checkRenderStackObservationsReader
   , checkRetainedRenderStackObservationsReader
-  , checkRenderInvocationEvidenceReader, osdInputsReader
+  , osdInputsReader
   ) where
 
 import Control.Monad (foldM, forM, forM_, unless, when)
@@ -28,7 +27,6 @@ import qualified RenderStack as S
 import Replacement.ModalRuntime.MenuEnginePair
 import Replacement.ModalRuntime.MenuEngineTree
 import Replacement.ModalRuntime.RenderObjectProvenance
-import qualified Replacement.ModalRuntime.RenderStackEvidence as E
 
 newtype ResourceId = ResourceId Word32 deriving (Eq, Show)
 data DrawCoverage = DrawsRequired | RetainedObservation | DeclaredDrawFree deriving (Eq, Show)
@@ -627,40 +625,6 @@ checkRetainedRenderStackObservationsReader config readers
         Right ()
     | otherwise = Right ()
 
-checkRenderInvocationEvidenceReader :: S.RenderStackReport -> [ObservationReader] -> E.RenderStackEvidence -> IO (Either String E.AllocationVerdict)
-checkRenderInvocationEvidenceReader bounds readers evidence = do
-  result <- go [] readers
-  case result of
-    Left problem -> pure (Left problem)
-    Right witnesses -> pure $ do
-      let frames = [(E.TreeStack,E.FrameBytes (S.entryDepth (S.reportTree bounds)))
-            ,(E.PickerStack,E.FrameBytes (S.entryDepth (S.reportPicker bounds)))
-            ,(E.PaneStack,E.FrameBytes (S.entryDepth (S.reportPane bounds)))]
-          (start, end) = E.evidenceInterval evidence
-          scoped = [witness | witness@(E.EntryWitness _ counter _ _) <- witnesses, counter >= start, counter <= end]
-      E.checkEntryWitnesses frames scoped evidence
-      pure (E.allocationVerdict evidence)
- where
-  go witnesses [] = pure (Right (reverse witnesses))
-  go witnesses (reader:rest) = do
-    result <- readerFoldHits reader step witnesses
-    case result of
-      Left problem -> pure (Left problem)
-      Right next -> go next rest
-  step witnesses hit
-    | site hit `elem` ["render-tree-entry","render-picker-entry","render-pane-entry"] = do
-        unless (hitCore hit == 0) (Left "render invocation entry is not on primary")
-        counter <- maybe (Left "render invocation entry lacks instruction boundary") Right (hitInstructions hit)
-        sp <- maybe (Left "render invocation entry lacks SP") Right (hitSp hit)
-        lr <- maybe (Left "render invocation entry lacks LR") Right (hitLr hit)
-        kind <- case functionOf (site hit) of
-          Just TreeDraw -> Right E.TreeStack
-          Just PickerDraw -> Right E.PickerStack
-          Just PaneDraw -> Right E.PaneStack
-          Nothing -> Left "unknown render invocation entry"
-        Right (E.EntryWitness kind counter (E.StackAddress (sp .&. 0xbfffffff)) (E.CodeAddress lr) : witnesses)
-    | otherwise = Right witnesses
-
 osdInputsReader :: [ObservationReader] -> IO (Either String [(T.Text,J.Value)])
 osdInputsReader readers = do
   -- Captures may precede the first observation of both stage-0 buffer addresses.
@@ -788,28 +752,6 @@ renderStackObservations config admission observations = do
  where
   safeFirst (a:_) = Just a
   safeFirst [] = Nothing
-
-checkRenderInvocationEvidence :: S.RenderStackReport -> [Observation] -> E.RenderStackEvidence -> Either String E.AllocationVerdict
-checkRenderInvocationEvidence bounds observations evidence = do
-  witnesses <- forM [hit | observation <- observations, hit <- observationHits observation
-    , site hit `elem` ["render-tree-entry","render-picker-entry","render-pane-entry"]] $ \hit -> do
-      unless (hitCore hit == 0) (Left "render invocation entry is not on primary")
-      counter <- maybe (Left "render invocation entry lacks instruction boundary") Right (hitInstructions hit)
-      sp <- maybe (Left "render invocation entry lacks SP") Right (hitSp hit)
-      lr <- maybe (Left "render invocation entry lacks LR") Right (hitLr hit)
-      kind <- case functionOf (site hit) of
-        Just TreeDraw -> Right E.TreeStack
-        Just PickerDraw -> Right E.PickerStack
-        Just PaneDraw -> Right E.PaneStack
-        Nothing -> Left "unknown render invocation entry"
-      pure (E.EntryWitness kind counter (E.StackAddress (sp .&. 0xbfffffff)) (E.CodeAddress lr))
-  let frames = [(E.TreeStack,E.FrameBytes (S.entryDepth (S.reportTree bounds)))
-        ,(E.PickerStack,E.FrameBytes (S.entryDepth (S.reportPicker bounds)))
-        ,(E.PaneStack,E.FrameBytes (S.entryDepth (S.reportPane bounds)))]
-      (start, end) = E.evidenceInterval evidence
-      scoped = [witness | witness@(E.EntryWitness _ counter _ _) <- witnesses, counter >= start, counter <= end]
-  E.checkEntryWitnesses frames scoped evidence
-  pure (E.allocationVerdict evidence)
 
 osdInputs :: [Observation] -> Either String [(T.Text,J.Value)]
 osdInputs observations = do

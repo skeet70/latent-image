@@ -2,25 +2,19 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.ModalRuntime.RenderStackEvidence
-  ( StackRole(..), StackKind(..), InstructionCounter(..), StackBoundary(..)
-  , RenderStackEvidence, AllocationVerdict, EntryWitness(..)
-  , StackAddress(..), CodeAddress(..), FrameBytes(..)
-  , parseRenderStackEvidence, allocationVerdict, checkEntryWitnesses, evidenceInterval
-  , checkLifetimeGuard, checkOwnedSources, allocationVerdictJson
+  ( StackRole(..), InstructionCounter(..)
+  , RenderStackEvidence
+  , parseRenderStackEvidence, checkLifetimeCoverage
   ) where
 
-import qualified ArmElf as ELF
 import Control.Monad (foldM, forM_, unless)
-import qualified Crypto.Hash.SHA256 as SHA256
 import qualified Data.Aeson as J
 import qualified Data.Aeson.Types as J
 import Data.Bits ((.&.))
-import qualified Data.ByteString as B
 import qualified Data.Foldable as F
 import Data.List (find, nub, sort)
 import qualified Data.Text as T
 import Data.Word (Word32, Word64)
-import Numeric (showHex)
 
 data StackRole = StockStack | OwnedStack deriving (Eq, Show)
 data StackKind = TreeStack | PickerStack | PaneStack deriving (Eq, Ord, Show)
@@ -42,7 +36,6 @@ data CpuCore = Core0 | Core1 deriving (Eq, Show)
 data SupervisorMode = SupervisorMode deriving (Eq, Show)
 newtype RawCpsr = RawCpsr Word32 deriving newtype (J.FromJSON, Eq, Show)
 newtype ContextDepth = ContextDepth Word32 deriving newtype (J.FromJSON, Eq, Show)
-newtype InvocationCount = InvocationCount Int deriving newtype (J.ToJSON, Eq, Show)
 data Descriptor = Descriptor Word32 Word32 CodeAddress KernelPriority StackExtent StackAddress Word32 Word32 TaskId CreationState deriving (Eq, Show)
 data Kernel = Primary | Secondary deriving (Eq, Show)
 data Identity = Identity Kernel TaskId NodeAddress CreationAddress Descriptor deriving (Eq, Show)
@@ -55,7 +48,6 @@ newtype SourcePath = SourcePath FilePath deriving newtype (J.FromJSON, Eq, Ord, 
 newtype SourceDigest = SourceDigest T.Text deriving (Eq, Ord, Show)
 data SourceBinding = SourceBinding SourceKind CodeAddress SourcePath SourceDigest deriving (Eq, Ord, Show)
 newtype PhysicalAddress = PhysicalAddress Word32 deriving newtype (J.FromJSON, Eq, Ord, Show)
-newtype GuardBaseline = GuardBaseline B.ByteString deriving (Eq)
 data GuardAccess = GuardWrites | GuardFetches deriving (Eq, Show)
 data GuardClass = GuardClass PhysicalAddress PhysicalAddress GuardAccess
 data TransitionContext = TransitionContext CodeAddress RawCpsr ContextDepth NodeAddress (Maybe NodeAddress) Bool (Maybe ModeSource) deriving (Eq, Show)
@@ -86,13 +78,7 @@ data Invocation = Invocation
   , invocationTransitions :: [TransitionRun]
   } deriving (Eq, Show)
 newtype ActiveObservations = ActiveObservations Word64 deriving newtype (J.FromJSON, Eq, Show)
-data RenderStackEvidence = RenderStackEvidence StackRole StackBoundary StackBoundary ActiveObservations [SourceBinding] [Invocation] AllocationVerdict deriving (Eq, Show)
-data EntryWitness = EntryWitness StackKind InstructionCounter StackAddress CodeAddress deriving (Eq, Show)
-
--- | The diagnostic interval a report covers; entries outside it are post-unload activity.
-evidenceInterval :: RenderStackEvidence -> (InstructionCounter, InstructionCounter)
-evidenceInterval (RenderStackEvidence _ (StackBoundary start _) (StackBoundary end _) _ _ _ _) = (start, end)
-data AllocationVerdict = AllocationVerdict StackRole InvocationCount InvocationCount InvocationCount (Maybe StackAddress) deriving (Eq, Show)
+data RenderStackEvidence = RenderStackEvidence StackRole StackBoundary StackBoundary ActiveObservations [SourceBinding] [Invocation] deriving (Eq, Show)
 
 instance J.FromJSON CpuCore where
   parseJSON value = do
@@ -338,8 +324,8 @@ parseRenderStackEvidence expectedRole request value = J.parseEither parse value
         (fail "render invocation frame differs from admitted request")
       unless (invocationTerminal invocation == FallbackHandoff || invocationEntryLr invocation `elem` returns)
         (fail "render invocation return leaves admitted return sites")
-    verdict <- either fail pure (validateAllocationEvidence role start end observations invocations)
-    pure (RenderStackEvidence role start end observations sources invocations verdict)
+    either fail pure (validateAllocationEvidence role start end observations invocations)
+    pure (RenderStackEvidence role start end observations sources invocations)
 
 physical :: StackAddress -> Word32
 physical (StackAddress address) = address .&. 0xbfffffff
@@ -349,10 +335,7 @@ entryAddress TreeStack = CodeAddress 0x1164e1c
 entryAddress PickerStack = CodeAddress 0x1163f2c
 entryAddress PaneStack = CodeAddress 0x11662a0
 
-allocationVerdict :: RenderStackEvidence -> AllocationVerdict
-allocationVerdict (RenderStackEvidence _ _ _ _ _ _ verdict) = verdict
-
-validateAllocationEvidence :: StackRole -> StackBoundary -> StackBoundary -> ActiveObservations -> [Invocation] -> Either String AllocationVerdict
+validateAllocationEvidence :: StackRole -> StackBoundary -> StackBoundary -> ActiveObservations -> [Invocation] -> Either String ()
 validateAllocationEvidence role start end (ActiveObservations observations) invocations = do
   unless (map invocationId invocations == map InvocationId [1 .. fromIntegral (length invocations)])
     (Left "render invocation identifiers are missing or repeated")
@@ -402,22 +385,12 @@ validateAllocationEvidence role start end (ActiveObservations observations) invo
         && owner == Just canonicalIdentity && scheduler /= Nothing)
         (Left "render minimum lacks its validated owner or observation coordinate")
     pure (invocation:active)) [] invocations
-  let failures = length (filter (not . invocationEstimatePassed) invocations)
-      fallbacks = length (filter ((==FallbackHandoff) . invocationTerminal) invocations)
-      minimum_ = case invocations of [] -> Nothing; _ -> Just (StackAddress (minimum (map (physical . invocationMinimum) invocations)))
-  pure (AllocationVerdict role (InvocationCount (length invocations)) (InvocationCount fallbacks) (InvocationCount failures) minimum_)
+  pure ()
 
-checkEntryWitnesses :: [(StackKind,FrameBytes)] -> [EntryWitness] -> RenderStackEvidence -> Either String ()
-checkEntryWitnesses frames witnesses (RenderStackEvidence _ _ _ _ _ invocations _) = do
-  let observed = [EntryWitness (invocationKind invocation) instructions (StackAddress (physical (invocationEntrySp invocation))) (invocationEntryLr invocation)
-        | invocation <- invocations, let StackBoundary instructions _ = invocationStart invocation]
-  unless (witnesses == observed) (Left "render invocation coverage does not match captured entry boundaries")
-  forM_ invocations $ \invocation -> do
-    unless (lookup (invocationKind invocation) frames == Just (invocationFrame invocation))
-      (Left "render invocation frame differs from linked owned ELF")
-
-checkLifetimeGuard :: J.Value -> Either String ()
-checkLifetimeGuard = J.parseEither $ J.withObject "render lifetime evidence" $ \fields -> do
+-- | The installed lifetime completed with continuous coverage, no failure or watch violation, and
+-- write watches over task 33's descriptor word and creation-record backlink.
+checkLifetimeCoverage :: J.Value -> Either String ()
+checkLifetimeCoverage = J.parseEither $ J.withObject "render lifetime evidence" $ \fields -> do
   complete <- fields J..: "whole_installed_lifetime_coverage"
   failures <- fields J..: "failures" :: J.Parser [J.Value]
   (violation,classes) <- fields J..: "watch_final_summary" >>= J.withObject "lifetime watch" (\watch -> do
@@ -428,15 +401,13 @@ checkLifetimeGuard = J.parseEither $ J.withObject "render lifetime evidence" $ \
   unless (complete && null failures && violation == (Nothing :: Maybe J.Value))
     (fail "render lifetime identity or attempted-write coverage refused")
   let ranges = sort [(start,end) | GuardClass start end GuardWrites <- classes]
-  forM_ [(0x60614,0x60618),(0x5c3ac,0x5c3d4),(0xa4ce00,0xa4ce40)] $ \(start,end) ->
+  forM_ [(0x60614,0x60618),(0x5c3ac,0x5c3d4)] $ \(start,end) ->
     unless (covers (PhysicalAddress start) (PhysicalAddress end) ranges)
-      (fail "render lifetime watch omits descriptor, backlink or attempted bottom writes")
+      (fail "render lifetime watch omits descriptor or backlink writes")
   forM_ ["observation_error","permit_end_error","watch_final_error"] $ \key -> do
     problem <- fields J..: key :: J.Parser (Maybe T.Text)
     unless (problem == Nothing) (fail "render completed lifetime contains an observation error")
-  requested <- fields J..: "request" >>= J.withObject "modal observation request" (\request ->
-    request J..: "lifetime" >>= J.withObject "modal lifetime" (\lifetime -> lifetime J..: "task33_stack_guard" >>= parseGuard))
-  completed <- fields J..: "permit_end" >>= J.withObject "completed modal permit" (\permit -> do
+  fields J..: "permit_end" >>= J.withObject "completed modal permit" (\permit -> do
     enabled <- permit J..: "enabled"
     physicalCoverage <- permit J..: "physical_fetch_coverage"
     failure <- permit J..: "failure" :: J.Parser (Maybe T.Text)
@@ -444,29 +415,8 @@ checkLifetimeGuard = J.parseEither $ J.withObject "render lifetime evidence" $ \
     permit J..: "lifetime" >>= J.withObject "completed task lifetime" (\lifetime -> do
       phase <- lifetime J..: "phase" :: J.Parser T.Text
       problem <- lifetime J..: "failure" :: J.Parser (Maybe T.Text)
-      unless (phase == "ended" && problem == Nothing) (fail "render Task33 guard lifetime is incomplete or refused")
-      lifetime J..: "task33_stack_guard" >>= J.withObject "completed Task33 guard" (\guard -> do
-        scope <- guard J..: "scope" :: J.Parser T.Text
-        priority <- guard J..: "priority" :: J.Parser Word32
-        task <- guard J..: "task_id" :: J.Parser Word32
-        created <- guard J..: "created" :: J.Parser Word32
-        unless (scope == "diagnostic_only_bottom_guard_write_attempts" && priority == 8 && task == 33 && created == 1)
-          (fail "render completed Task33 guard owner differs")
-        parseGuard (J.Object guard))))
-  unless (requested == completed) (fail "render completed Task33 guard differs from requested baseline")
+      unless (phase == "ended" && problem == Nothing) (fail "render installed lifetime is incomplete or refused")))
  where
-  parseGuard = J.withObject "Task33 bottom guard" $ \guard -> do
-    node <- guard J..: "node" :: J.Parser Word32
-    creation <- guard J..: "creation" :: J.Parser Word32
-    entry <- guard J..: "entry" :: J.Parser Word32
-    base <- guard J..: "base" :: J.Parser Word32
-    size <- guard J..: "size" :: J.Parser Word32
-    extent <- guard J..: "guard_bytes" :: J.Parser Word32
-    baseline <- guard J..: "baseline" :: J.Parser [Word32]
-    unless (node == 0x4006060c && creation == 0x4005c3ac && entry == 0x1109130 && base == 0xa4ce00
-      && size == 4096 && extent == 64 && length baseline == 64 && all (<=255) baseline)
-      (fail "render lifetime Task33 descriptor or existing bottom guard differs")
-    pure (GuardBaseline (B.pack (map fromIntegral baseline)))
   parseGuardClass = J.withObject "render lifetime watch class" $ \fields -> do
     access <- fields J..: "kinds" >>= \kinds -> case (kinds :: [T.Text]) of
       ["cpu-write","host-write","model-bus-write"] -> pure GuardWrites
@@ -481,24 +431,3 @@ checkLifetimeGuard = J.parseEither $ J.withObject "render lifetime evidence" $ \
     | start > cursor = False
     | otherwise = covers (max cursor last_) end rest
 
-checkOwnedSources :: ELF.Elf -> RenderStackEvidence -> Either String ()
-checkOwnedSources elf (RenderStackEvidence _ _ _ _ sources _ _) = do
-  let expected = sort [(CodeAddress (ELF.sectionAddress section),digest (B.take (fromIntegral (ELF.sectionSize section))
-        (B.drop (fromIntegral (ELF.sectionOffset section)) (ELF.elfBytes elf))))
-        | section <- ELF.elfSections elf, ELF.sectionExecutable section, ELF.sectionSize section > 0]
-      actual = sort [(start,sha) | SourceBinding OwnedSource start _ sha <- sources]
-  unless (actual == expected) (Left "render executable source identities differ from linked role ELF")
- where
-  digest = SourceDigest . T.pack . concatMap hexByte . B.unpack . SHA256.hash
-  hexByte byte = let text = showHex byte "" in replicate (2-length text) '0' ++ text
-
-allocationVerdictJson :: AllocationVerdict -> J.Value
-allocationVerdictJson (AllocationVerdict role count fallbacks (InvocationCount estimateFailures) minimum_) = J.object
-  [ "contract" J..= ("finite-owner-allocation-r1-revised" :: T.Text)
-  , "role" J..= (case role of StockStack -> "stock"; OwnedStack -> "owned" :: T.Text)
-  , "allocation_verdict" J..= ("pass" :: T.Text), "floor" J..= (0xa4ce40 :: Word32)
-  , "stack_base" J..= (0xa4ce00 :: Word32), "stack_size" J..= (4096 :: Word32), "existing_bottom_guard_bytes" J..= (64 :: Word32)
-  , "invocations" J..= count, "fallback_prefixes" J..= fallbacks, "minimum_sp" J..= minimum_
-  , "elf_plus_1024_estimate_violations" J..= estimateFailures
-  , "elf_plus_1024_estimate_verdict" J..= (if estimateFailures == 0 then "not-falsified-on-observed-route" else "falsified" :: T.Text)
-  , "whole_task_overflow_freedom_proven" J..= False, "static_retained_callee_bound_proven" J..= False ]

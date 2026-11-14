@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 pub mod bitmap;
 pub mod outline;
 pub mod raster;

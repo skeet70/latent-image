@@ -24,16 +24,14 @@ B=(devenv shell -- host-build --output_base="$output_base")
 firmware=private-data/analysis/x-m1-1.50/update/prefix/FWUP0002-prefix.DAT
 nand=private-data/analysis/x-m1-1.50/stored-f7/emulation/inputs/f7-1.nand
 boot_rom=private-data/analysis/x-m1-1.50/bootrom/bootrom-0x80000000-4000.bin
-run_document=${RENDER_RUN_DOCUMENT:-emulation/fujimod-xm1/data/xm1-150.json}
+run_document=${RENDER_RUN_DOCUMENT:-$O/render-run-document.json}
 source_commit=${RENDER_SOURCE_COMMIT:-$(git rev-parse --short=8 HEAD)}
 sdk=${RENDER_SDK:-}
 frozen_manifest=${RENDER_FROZEN_MANIFEST:-}
 frozen_trajectories=${RENDER_FROZEN_TRAJECTORIES:-}
-config_dir=${RENDER_STACK_DIAGNOSTIC_CONFIGS:-}
 allocation_base=${RENDER_ALLOCATION_BASE:-0xa81be0}
 prelinked=${RENDER_PRELINKED:-private-data/scratch/RenderCutover/prelinked-proof}
 prelinked_base=$allocation_base
-owned_retained=${RENDER_OWNED_RETAINED_CONFIG:-private-data/scratch/RenderCutover/runs/stack-diagnostic-complete-services/owned-config.json}
 admission=${RENDER_ADMISSION:-bazel-bin/emulation/render-pair-admission}
 stock_packet=${RENDER_STOCK_REUSE_PACKET:-}
 stock_source=${RENDER_STOCK_REUSE_RECEIPT:-}
@@ -69,8 +67,13 @@ build() {
 prepare() {
   mkdir -p "$runs4" "$trajectories"
   [ -f "$archive" ] || { printf 'render archive is missing: %s\n' "$archive" >&2; exit 2; }
+  if [ -z "${RENDER_RUN_DOCUMENT:-}" ]; then
+    jq '(.devices.nodes[] | select(.name == "serial_spi1") | .model.routes[]
+      | select(.endpoint.kind == "registers") | .endpoint.options.clock) = null' \
+      emulation/fujimod-xm1/data/xm1-150.json > "$run_document" || exit 1
+  fi
   prepare_trajectories || exit 1
-  prepare_diagnostics || exit 1
+  prepare_prelinked || exit 1
 }
 
 prepare_trajectories() {
@@ -99,21 +102,15 @@ prepare_trajectories() {
   done <<< "$files"
 }
 
-prepare_diagnostics() {
-  [ -n "$config_dir" ] || return 0
-  [ -f "$config_dir/stock-config.json" ] || { printf 'missing stock diagnostic configuration in %s\n' "$config_dir" >&2; return 2; }
-  [ -f "$config_dir/owned-config.json" ] && [ -f "$prelinked/ram-push-manifest.json" ] && return 0
-  local relink="$prelinked"
-  if [ -e "$relink" ]; then
-    printf 'owned relink directory exists without a configuration: %s\n' "$relink" >&2
+prepare_prelinked() {
+  [ -f "$prelinked/bank-allowlist-proof.json" ] && return 0
+  if [ -e "$prelinked" ]; then
+    printf 'prelinked directory exists without an allowlist proof: %s\n' "$prelinked" >&2
     return 2
   fi
-  mkdir -p "$relink" || return 2
+  mkdir -p "$prelinked" || return 2
   RB_BAZEL_OUTPUT_BASE="$output_base" devenv shell -- bash replacement/render_adapter/relink.sh \
-    "$allocation_base" "$archive" "$relink" || return 2
-  "$admission" config --elf "$relink/kernel.elf" --manifest "$relink/ram-push-manifest.json" \
-    --base "$allocation_base" --stock-config "$config_dir/stock-config.json" \
-    --owned-retained-config "$owned_retained" --out "$config_dir/owned-config.json" || return 2
+    "$allocation_base" "$archive" "$prelinked" || return 2
 }
 
 check_end() {
@@ -177,13 +174,11 @@ receipt_head() {
 admission_run() {
   local verb="$1" name="$2" role="$3"
   shift 3
-  local config="$config_dir/$role-config.json" trajectory="$trajectories/$name.$role.json"
-  local trajectory_digest config_digest args head_commit recorded_head role_source
+  local trajectory="$trajectories/$name.$role.json"
+  local trajectory_digest args head_commit recorded_head role_source
   [ -n "$sdk" ] || { printf 'render admission needs RENDER_SDK\n' >&2; return 2; }
-  [ -f "$config" ] || { printf 'missing diagnostic config: %s\n' "$config" >&2; return 2; }
   [ -f "$trajectory" ] || { printf 'missing trajectory: %s\n' "$trajectory" >&2; return 2; }
   trajectory_digest=$(trajectory_sha "$name" "$role") || return 2
-  config_digest=$(sha "$config") || return 2
   head_commit=$(git rev-parse HEAD)
   role_source=$source_commit
   if [ "$role" = stock ]; then
@@ -196,8 +191,7 @@ admission_run() {
   args=(--name "$name" --role "$role" --source-commit "$role_source" --head-commit "$head_commit"
     --sdk "$sdk" --fujimod-paths bazel-bin/emulation/FujiModPaths.hs
     --trajectory "$trajectory" --trajectory-sha256 "$trajectory_digest"
-    --firmware "$firmware" --nand "$nand" --boot-rom "$boot_rom" --run-document "$run_document"
-    --config "$config" --config-sha256 "$config_digest")
+    --firmware "$firmware" --nand "$nand" --boot-rom "$boot_rom" --run-document "$run_document")
   if [ "$role" = owned ]; then
     args+=(--archive "$archive" --archive-sha256 "$(archive_digest)")
     [ -f "$(dirname "$archive")/render-source-identity.json" ] && args+=(--source-identity "$(dirname "$archive")/render-source-identity.json")
@@ -222,12 +216,6 @@ guest_arguments() {
              --modal75-prelinked "$prelinked") ;;
     *) printf 'role must be stock or owned\n' >&2; return 2 ;;
   esac
-  GUEST_CONFIG=""
-  if [ -n "$config_dir" ]; then
-    GUEST_CONFIG="$config_dir/$role-config.json"
-    case "$GUEST_CONFIG" in /*) ;; *) GUEST_CONFIG="$PWD/$GUEST_CONFIG" ;; esac
-    [ -f "$GUEST_CONFIG" ] || { printf 'missing diagnostic config: %s\n' "$GUEST_CONFIG" >&2; return 2; }
-  fi
 }
 
 reuse_stock() {
@@ -261,10 +249,9 @@ run() {
   fi
   admission_run inputs "$name" "$role" "${bind_admission[@]}" || return 2
   local launch=(env) started finished run_status
-  [ -n "$GUEST_CONFIG" ] && launch+=("XM1_RENDER_STACK_DIAGNOSTIC=$GUEST_CONFIG")
   [ -n "${RENDER_VIEWER_GHCRTS:-}" ] && launch+=("GHCRTS=$RENDER_VIEWER_GHCRTS")
   started=$(date +%s%N)
-  "${launch[@]}" XM1_EMULATOR_SLOTS=1 devenv shell -- bazel-bin/emulation/xm1-viewer "${GUEST[@]}" \
+  "${launch[@]}" XM1_EMULATOR_SLOTS="${XM1_EMULATOR_SLOTS:-1}" devenv shell -- bazel-bin/emulation/xm1-viewer "${GUEST[@]}" \
     < /dev/null > "$runs/$dir-viewer.log" 2>&1
   run_status=$?
   finished=$(date +%s%N)
@@ -301,9 +288,8 @@ admit() {
   admission_run inputs "$name" "$role" "${bind_admission[@]}" || return 2
   printf 'admitted %s %s inputs; guest command:\n' "$name" "$role"
   local preview=(env)
-  [ -n "$GUEST_CONFIG" ] && preview+=("XM1_RENDER_STACK_DIAGNOSTIC=$GUEST_CONFIG")
   [ -n "${RENDER_VIEWER_GHCRTS:-}" ] && preview+=("GHCRTS=$RENDER_VIEWER_GHCRTS")
-  printf '%q ' "${preview[@]}" XM1_EMULATOR_SLOTS=1 devenv shell -- bazel-bin/emulation/xm1-viewer "${GUEST[@]}"
+  printf '%q ' "${preview[@]}" XM1_EMULATOR_SLOTS="${XM1_EMULATOR_SLOTS:-1}" devenv shell -- bazel-bin/emulation/xm1-viewer "${GUEST[@]}"
   printf '\n'
 }
 
@@ -314,10 +300,8 @@ check() {
   for output in render-mode.json pair-check.txt settings.json settings-check.txt render.json render-check.txt checks.json; do
     [ ! -e "$results/$name$s-$output" ] || { printf 'comparison output already exists: %s\n' "$results/$name$s-$output" >&2; return 2; }
   done
-  if [ -n "$config_dir" ]; then
-    admission_run verify "$name" stock --receipt "$runs/$name-stock$s" > /dev/null || { printf '%s stock receipt is not admitted\n' "$name$s" >&2; return 2; }
-    admission_run verify "$name" owned --receipt "$runs/$name-owned$s" > /dev/null || { printf '%s owned receipt is not admitted\n' "$name$s" >&2; return 2; }
-  fi
+  admission_run verify "$name" stock --receipt "$runs/$name-stock$s" > /dev/null || { printf '%s stock receipt is not admitted\n' "$name$s" >&2; return 2; }
+  admission_run verify "$name" owned --receipt "$runs/$name-owned$s" > /dev/null || { printf '%s owned receipt is not admitted\n' "$name$s" >&2; return 2; }
   local clock=()
   local stock_draws owned_draws mode=required reason='At least one role reached a render drawer entry.'
   local pair_check=bazel-bin/replacement/modal_runtime/menu-engine-pair-check
@@ -354,6 +338,36 @@ check() {
   (( engine_status == 0 && settings_status == 0 && render_status == 0 ))
 }
 
+# suite[-SUFFIX].json: each cohort case's comparison exits and the stock-side execution they rest
+# on (engine stage events and drawer entries in the stock receipt), with cohort totals.
+summary() {
+  local s="${1:+-$1}" results="${RENDER_CHECK_OUTPUT:-$runs4}" name stock_events owned_events firmware
+  shift
+  [ ! -e "$results/suite$s.json" ] || { printf 'suite summary already exists: %s\n' "$results/suite$s.json" >&2; return 2; }
+  firmware=$(jq -r '.inputs.installed_dat // empty' "$runs4/$1-stock$s/admission.json" 2>/dev/null)
+  for name in "$@"; do
+    if [ ! -f "$results/$name$s-checks.json" ]; then
+      jq -n --arg name "$name" '{name:$name,checked:false,passed:false}'
+      continue
+    fi
+    stock_events=$(sed -n '/^StockRole: [0-9]* stage events/{s/^StockRole: \([0-9]*\).*/\1/p;q;}' "$results/$name$s-pair-check.txt")
+    owned_events=$(sed -n '/^OwnedRole: [0-9]* stage events/{s/^OwnedRole: \([0-9]*\).*/\1/p;q;}' "$results/$name$s-pair-check.txt")
+    jq -n --arg name "$name" --argjson stock_events "${stock_events:-null}" --argjson owned_events "${owned_events:-null}" \
+      --slurpfile mode "$results/$name$s-render-mode.json" --slurpfile checks "$results/$name$s-checks.json" \
+      '{name:$name,checked:true,passed:([$checks[0][]] | all(. == 0)),checks:$checks[0],render_mode:$mode[0].mode
+        ,stock_draw_entries:$mode[0].stock_draw_entries,owned_draw_entries:$mode[0].owned_draw_entries
+        ,stock_stage_events:$stock_events,owned_stage_events:$owned_events}'
+  done | jq -s --arg firmware "$firmware" --arg archive "$(archive_digest)" --arg source "$source_commit" \
+    '{firmware_sha256:$firmware,archive_sha256:$archive,source_commit:$source,cases:length
+     ,passed:(map(select(.passed))|length),failed:[.[] | select(.passed | not) | .name]
+     ,draw_cases:(map(select(.render_mode == "required"))|length)
+     ,draw_free_cases:(map(select(.render_mode == "draw-free"))|length)
+     ,stock_draw_entries:(map(.stock_draw_entries // 0)|add),owned_draw_entries:(map(.owned_draw_entries // 0)|add)
+     ,stock_engine_executed_cases:(map(select((.stock_stage_events // 0) > 0))|length)
+     ,stock_drawer_executed_cases:(map(select((.stock_draw_entries // 0) > 0))|length)
+     ,case_results:.}' > "$results/suite$s.json"
+}
+
 names() { for p in "${pickers[@]}"; do echo "picker-$p"; done; for n in "${oracles[@]}"; do echo "oracle-$n"; done; }
 
 case "${1:-}" in
@@ -365,6 +379,6 @@ case "${1:-}" in
   admit) admit "$2" "$3" "${4:-}" ;;
   all) for name in $(names); do run "$name" stock "${2:-}" || exit "$?"; run "$name" owned "${2:-}" || exit "$?"; done ;;
   rerun) echo "Use run NAME ROLE SUFFIX for a separately named receipt" >&2; exit 2 ;;
-  check) if [ -n "${2:-}" ]; then check "$2" "${3:-}"; else status=0; for name in $(names); do check "$name" "${3:-}" || status=1; done; exit "$status"; fi ;;
+  check) if [ -n "${2:-}" ]; then check "$2" "${3:-}"; else status=0; for name in $(names); do check "$name" "${3:-}" || status=1; done; summary "${3:-}" $(names) || status=1; exit "$status"; fi ;;
   *) printf 'usage: %s build|prepare|trajectories|names|run NAME ROLE [SUFFIX]|admit NAME ROLE [SUFFIX]|all [SUFFIX]|check [NAME [SUFFIX]]\n' "$0" >&2; exit 2 ;;
 esac

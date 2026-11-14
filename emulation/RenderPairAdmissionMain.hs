@@ -2,8 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | @render-pair-admission@ verifies the input identity of a render-pair role and the recorded
--- identity of its completed receipt, imports a review-packet-bound stock receipt, and derives the
--- owned diagnostic configuration from a relinked owned ELF.
+-- identity of its completed receipt, and imports a review-packet-bound stock receipt.
 module Main (main) where
 
 import qualified Data.Aeson as J
@@ -36,8 +35,6 @@ data Options = Options
   , optionNand :: Maybe FilePath
   , optionBootRom :: Maybe FilePath
   , optionRunDocument :: Maybe FilePath
-  , optionConfig :: Maybe FilePath
-  , optionConfigSha :: Maybe String
   , optionArchive :: Maybe FilePath
   , optionArchiveSha :: Maybe String
   , optionSourceIdentity :: Maybe FilePath
@@ -49,18 +46,11 @@ data Options = Options
   , optionReceipt :: Maybe FilePath
   , optionPacket :: Maybe FilePath
   , optionDestination :: Maybe FilePath
-  , optionElf :: Maybe FilePath
-  , optionManifest :: Maybe FilePath
-  , optionBase :: Maybe Word32
-  , optionStockConfig :: Maybe FilePath
-  , optionOwnedRetained :: Maybe FilePath
-  , optionOut :: Maybe FilePath
   }
 
 emptyOptions :: Options
 emptyOptions = Options Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-  Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-  Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+  Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
 main :: IO ()
 main = do
@@ -74,7 +64,6 @@ main = do
         bindReceipt expected directory GuestRun >>= report "bind" expected
       "import" -> withExpected rest $ \expected -> withReceipt rest $ \directory -> withPacket rest $ \packet ->
         withDestination rest $ \destination -> importReceipt expected packet directory destination >>= report "import" expected
-      "config" -> configCommand rest
       _ -> usage
     [] -> usage
 
@@ -89,7 +78,6 @@ reportInputs expected result = case result of
       , ("name", J.String (expectedName expected))
       , ("role", J.String (roleText (expectedRole expected)))
       , ("trajectory_sha256", J.String (digestText (expectedTrajectorySha expected)))
-      , ("config_sha256", J.String (digestText (expectedConfigSha expected)))
       , ("archive_sha256", maybe J.Null (J.String . digestText) (expectedArchiveSha expected))
       ])
     exitSuccess
@@ -105,7 +93,6 @@ report operation expected result = case result of
       , ("name", J.String (expectedName expected))
       , ("role", J.String (roleText (expectedRole expected)))
       , ("trajectory_sha256", J.String (digestText (expectedTrajectorySha expected)))
-      , ("config_sha256", J.String (digestText (expectedConfigSha expected)))
       , ("archive_sha256", maybe J.Null (J.String . digestText) (expectedArchiveSha expected))
       , ("checkpoint", J.String (checkpointText (identityCheckpoint identity)))
       , ("kernel_elf_sha256", J.String (digestText (identityKernelElf identity)))
@@ -143,8 +130,6 @@ expectedFrom options = do
     nand <- required "nand" (optionNand options)
     bootRom <- required "boot-rom" (optionBootRom options)
     runDocument <- required "run-document" (optionRunDocument options)
-    config <- required "config" (optionConfig options)
-    configSha <- digest "config-sha256" (optionConfigSha options)
     archiveSha <- traverse (digestValue "archive-sha256") (optionArchiveSha options)
     pure Expected
       { expectedName = T.pack name
@@ -159,8 +144,6 @@ expectedFrom options = do
       , expectedNand = nand
       , expectedBootRom = bootRom
       , expectedRunDocument = runDocument
-      , expectedConfig = config
-      , expectedConfigSha = configSha
       , expectedArchive = optionArchive options
       , expectedArchiveSha = archiveSha
       , expectedSourceIdentity = optionSourceIdentity options
@@ -206,18 +189,6 @@ withDestination arguments action = case parseOptions arguments of
   Left problem -> refuse problem
   Right options -> maybe (refuse "missing --destination") action (optionDestination options)
 
-configCommand :: [String] -> IO ()
-configCommand arguments = case parseOptions arguments of
-  Left problem -> refuse problem
-  Right options -> case (optionElf options, optionManifest options, optionBase options, optionStockConfig options, optionOut options) of
-    (Just elf, Just manifest, Just base, Just stock, Just out) ->
-      writeOwnedConfig elf manifest base stock (maybe stock id (optionOwnedRetained options)) out >>= \result -> case result of
-        Left problem -> refuse problem
-        Right () -> do
-          putStrLn (jsonLine [("result", J.String "config"), ("out", J.String (T.pack out))])
-          exitSuccess
-    _ -> refuse "config needs --elf --manifest --base --stock-config --out"
-
 refuse :: String -> IO a
 refuse problem = do
   hPutStrLn stderr ("render-pair-admission: " ++ problem)
@@ -226,9 +197,8 @@ refuse problem = do
 usage :: IO a
 usage = do
   hPutStrLn stderr "usage: render-pair-admission inputs|verify|bind|import EXPECTED [--receipt DIR] [--packet FILE] [--destination DIR]"
-  hPutStrLn stderr "       render-pair-admission config --elf FILE --manifest FILE --base 0xADDR --stock-config FILE [--owned-retained-config FILE] --out FILE"
   hPutStrLn stderr "EXPECTED: --name --role --source-commit --head-commit --sdk --fujimod-paths --trajectory --trajectory-sha256"
-  hPutStrLn stderr "          --firmware --nand --boot-rom --run-document --config --config-sha256"
+  hPutStrLn stderr "          --firmware --nand --boot-rom --run-document"
   hPutStrLn stderr "          [--archive --archive-sha256] [--source-identity FILE] [--checker FILE] [--bind-admission DIR]"
   exitFailure
 
@@ -248,8 +218,6 @@ parseOptions = go emptyOptions
   go options ("--nand" : value : rest) = go options {optionNand = Just value} rest
   go options ("--boot-rom" : value : rest) = go options {optionBootRom = Just value} rest
   go options ("--run-document" : value : rest) = go options {optionRunDocument = Just value} rest
-  go options ("--config" : value : rest) = go options {optionConfig = Just value} rest
-  go options ("--config-sha256" : value : rest) = go options {optionConfigSha = Just value} rest
   go options ("--archive" : value : rest) = go options {optionArchive = Just value} rest
   go options ("--archive-sha256" : value : rest) = go options {optionArchiveSha = Just value} rest
   go options ("--source-identity" : value : rest) = go options {optionSourceIdentity = Just value} rest
@@ -265,14 +233,6 @@ parseOptions = go emptyOptions
   go options ("--receipt" : value : rest) = go options {optionReceipt = Just value} rest
   go options ("--packet" : value : rest) = go options {optionPacket = Just value} rest
   go options ("--destination" : value : rest) = go options {optionDestination = Just value} rest
-  go options ("--elf" : value : rest) = go options {optionElf = Just value} rest
-  go options ("--manifest" : value : rest) = go options {optionManifest = Just value} rest
-  go options ("--stock-config" : value : rest) = go options {optionStockConfig = Just value} rest
-  go options ("--owned-retained-config" : value : rest) = go options {optionOwnedRetained = Just value} rest
-  go options ("--out" : value : rest) = go options {optionOut = Just value} rest
-  go options ("--base" : value : rest) = case readHexWord value of
-    Nothing -> Left ("--base is not a hex word: " ++ value)
-    Just base -> go options {optionBase = Just base} rest
   go _ (unexpected : _) = Left ("unexpected argument " ++ unexpected)
 
 readHexWord :: String -> Maybe Word32

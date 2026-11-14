@@ -2,12 +2,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main (main) where
 
-import qualified ArmElf as ELF
 import Control.Monad (forM_, unless)
 import qualified Data.Aeson as J
 import qualified Data.Aeson.KeyMap as KM
-import qualified Data.Aeson.Types as J
-import qualified Data.ByteString as B
 import Data.Either (isLeft)
 import qualified Data.Text as T
 import Data.Word (Word32)
@@ -99,11 +96,7 @@ main = do
   let parse = parseRenderStackEvidence OwnedStack request
       accepts = not . isLeft . parse
       singleton = report . pure
-  evidence <- either fail pure (parse (singleton invocation))
-  let verdict = allocationVerdict evidence
-  check "allocation acceptance preserves the failed historical estimate"
-    (J.parseEither (J.withObject "verdict" (\o -> (,) <$> o J..: "allocation_verdict" <*> o J..: "elf_plus_1024_estimate_violations"))
-      (allocationVerdictJson verdict) == Right ("pass" :: T.Text,1 :: Int))
+  check "complete owned invocation with a failed historical estimate is accepted" (accepts (singleton invocation))
   check "finite route with no entries has no invented demand" (accepts (report []))
   forM_ [ set "min_sp" (number 0xa4ce3c) invocation
         , set "min_sp" (number 0xa4de04) invocation
@@ -239,63 +232,33 @@ main = do
         , ("performance",J.object ["active_instructions" J..= (10000 :: Word32)
             ,"invocation_count" J..= (1 :: Word32),"hook_transitions" J..= (2 :: Word32)]) ]
   check "logical rows can exceed retained entry limit without expanded storage" (accepts longReport)
-  let frames = [(TreeStack,FrameBytes 556),(PickerStack,FrameBytes 636),(PaneStack,FrameBytes 452)]
-      witness = EntryWitness PaneStack (InstructionCounter 2) (StackAddress 0xa4dd80) (CodeAddress 0x1158184)
-  check "entry witness binds exact recorded instruction boundary" (checkEntryWitnesses frames [witness] evidence == Right ())
-  forM_ [[],[witness,witness],[EntryWitness PaneStack (InstructionCounter 3) (StackAddress 0xa4dd80) (CodeAddress 0x1158184)]] $ \witnesses ->
-    check "missing, extra or stale trace entries refuse" (isLeft (checkEntryWitnesses frames witnesses evidence))
-  check "linked ELF depth cannot be replaced by fitted runtime demand"
-    (isLeft (checkEntryWitnesses [(PaneStack,FrameBytes 1812)] [witness] evidence))
-  let ownedSource = set "kind" (J.String "owned")
-        (set "sha256" (J.String "379bec29dccd0a93c94826144d7ef6e42fab64ef195a3b8313a16926f66f388f") source)
-      sourceRequest = set "sources" (J.toJSON [ownedSource]) request
-      sourceReport = set "sources" (J.toJSON [ownedSource]) (singleton invocation)
-      elf = ELF.Elf 0 [ELF.Section ".text" 1 6 0x1100000 0 4] [] [] (B.pack [0x1e,0xff,0x2f,0xe1])
-  sourceEvidence <- either fail pure (parseRenderStackEvidence OwnedStack sourceRequest sourceReport)
-  check "owned executable identity binds to linked ELF section bytes" (checkOwnedSources elf sourceEvidence == Right ())
-  check "changed executable bytes cannot reuse old source receipt"
-    (isLeft (checkOwnedSources (elf {ELF.elfBytes=B.replicate 4 0}) sourceEvidence))
-  check "extra executable section cannot escape source binding"
-    (isLeft (checkOwnedSources (elf {ELF.elfSections=ELF.elfSections elf ++ [ELF.Section ".extra" 1 6 0x1100010 0 4]}) sourceEvidence))
-  let guard = J.object
-        ["node" J..= (0x4006060c :: Word32),"creation" J..= (0x4005c3ac :: Word32),"entry" J..= (0x1109130 :: Word32)
-        ,"base" J..= (0xa4ce00 :: Word32),"size" J..= (4096 :: Word32),"guard_bytes" J..= (64 :: Word32)
-        ,"baseline" J..= replicate 64 (33 :: Word32)]
-      classes = [J.object ["range" J..= ([start,end] :: [Word32])
+  let writes = [J.object ["range" J..= ([start,end] :: [Word32])
         ,"kinds" J..= (["cpu-write","host-write","model-bus-write"] :: [T.Text])]
-        | (start,end) <- [(0x60614,0x60618),(0x5c3ac,0x5c3d4),(0xa4ce00,0xa4ce40)]]
-      watch = J.object ["violation" J..= J.Null,"enabled" J..= True,"views" J..= ("fixed" :: T.Text),"classes" J..= classes]
-      completedGuard :: J.Value -> J.Value
-      completedGuard guarded = foldr (uncurry set) guarded
-        [("scope",J.String "diagnostic_only_bottom_guard_write_attempts")
-        ,("priority",number 8),("task_id",number 33),("created",number 1)]
-      permit :: J.Value -> J.Value
-      permit guarded = J.object
-        ["enabled" J..= False,"physical_fetch_coverage" J..= True,"failure" J..= J.Null
-        ,"lifetime" J..= J.object ["phase" J..= ("ended" :: T.Text),"failure" J..= J.Null,"task33_stack_guard" J..= guarded]]
-      lifetime :: J.Value -> J.Value
-      lifetime guarded = J.object
-        ["task_identity_verified" J..= False,"whole_installed_lifetime_coverage" J..= True,"failures" J..= ([] :: [J.Value])
+        | (start,end) <- [(0x60614,0x60618),(0x5c3ac,0x5c3d4)]]
+      fetches = J.object ["range" J..= ([0x1100000,0x1200000] :: [Word32]),"kinds" J..= (["cpu-fetch"] :: [T.Text])]
+      watch = J.object ["violation" J..= J.Null,"enabled" J..= True,"views" J..= ("fixed" :: T.Text),"classes" J..= (writes ++ [fetches])]
+      permitLifetime = J.object ["phase" J..= ("ended" :: T.Text),"failure" J..= J.Null,"publication_count" J..= (228 :: Word32)]
+      permit = J.object
+        ["enabled" J..= False,"physical_fetch_coverage" J..= True,"failure" J..= J.Null,"lifetime" J..= permitLifetime]
+      lifetime = J.object
+        ["task_identity_verified" J..= True,"whole_installed_lifetime_coverage" J..= True,"failures" J..= ([] :: [J.Value])
         ,"observation_error" J..= J.Null,"permit_end_error" J..= J.Null,"watch_final_error" J..= J.Null
-        ,"watch_final_summary" J..= watch,"permit_end" J..= permit (completedGuard guarded)
-        ,"request" J..= J.object ["lifetime" J..= J.object ["task33_stack_guard" J..= guarded]]]
-  check "completed Task33 guard verifies stock without unrelated modal task entries" (checkLifetimeGuard (lifetime guard) == Right ())
-  forM_ [ set "whole_installed_lifetime_coverage" (J.Bool False) (lifetime guard)
-        , set "watch_final_summary" (set "violation" (J.String "write-restored") watch) (lifetime guard)
-        , set "watch_final_summary" (set "enabled" (J.Bool False) watch) (lifetime guard)
-        , set "watch_final_summary" (set "views" (J.String "observe") watch) (lifetime guard)
-        , set "watch_final_summary" (set "classes" (J.toJSON (take 2 classes)) watch) (lifetime guard)
-        , lifetime (set "guard_bytes" (number 32) guard),lifetime (set "size" (number 8192) guard)
-        , set "permit_end" J.Null (lifetime guard)
-        , set "permit_end" (permit J.Null) (lifetime guard)
-        , set "permit_end" (permit (set "task_id" (number 34) (completedGuard guard))) (lifetime guard)
-        , set "permit_end" (permit (set "priority" (number 9) (completedGuard guard))) (lifetime guard)
-        , set "permit_end" (permit (set "created" (number 0) (completedGuard guard))) (lifetime guard)
-        , set "permit_end" (permit (set "baseline" (J.toJSON (replicate 64 (34 :: Word32))) (completedGuard guard))) (lifetime guard)
-        , set "permit_end" (set "physical_fetch_coverage" (J.Bool False) (permit (completedGuard guard))) (lifetime guard)
-        , set "permit_end" (set "enabled" (J.Bool True) (permit (completedGuard guard))) (lifetime guard)
-        , set "permit_end" (set "lifetime" (J.object ["phase" J..= ("installed" :: T.Text),"failure" J..= J.Null
-            ,"task33_stack_guard" J..= completedGuard guard]) (permit (completedGuard guard))) (lifetime guard)
-        , set "observation_error" (J.String "failed") (lifetime guard)
-        , lifetime (set "baseline" (J.toJSON ([] :: [Word32])) guard) ] $ \invalid ->
-    check "missing lifetime coverage, attempted writes or repinned backing refuse" (isLeft (checkLifetimeGuard invalid))
+        ,"watch_final_summary" J..= watch,"permit_end" J..= permit
+        ,"request" J..= J.object ["lifetime" J..= J.object ["bank_variant" J..= ("modal75,menu-engine,render" :: T.Text)]]]
+  check "completed lifetime with descriptor and backlink watches and no task 33 bottom guard is accepted"
+    (checkLifetimeCoverage lifetime == Right ())
+  forM_ [ set "whole_installed_lifetime_coverage" (J.Bool False) lifetime
+        , set "failures" (J.toJSON [J.String "watch"]) lifetime
+        , set "watch_final_summary" (set "violation" (J.String "write-restored") watch) lifetime
+        , set "watch_final_summary" (set "enabled" (J.Bool False) watch) lifetime
+        , set "watch_final_summary" (set "views" (J.String "observe") watch) lifetime
+        , set "watch_final_summary" (set "classes" (J.toJSON (take 1 writes ++ [fetches])) watch) lifetime
+        , set "watch_final_summary" (set "classes" (J.toJSON [fetches]) watch) lifetime
+        , set "permit_end" J.Null lifetime
+        , set "permit_end" (set "physical_fetch_coverage" (J.Bool False) permit) lifetime
+        , set "permit_end" (set "enabled" (J.Bool True) permit) lifetime
+        , set "permit_end" (set "failure" (J.String "refused") permit) lifetime
+        , set "permit_end" (set "lifetime" (set "phase" (J.String "installed") permitLifetime) permit) lifetime
+        , set "permit_end" (set "lifetime" (set "failure" (J.String "refused") permitLifetime) permit) lifetime
+        , set "observation_error" (J.String "failed") lifetime ] $ \invalid ->
+    check "missing lifetime coverage, attempted writes, descriptor or backlink watches refuse" (isLeft (checkLifetimeCoverage invalid))

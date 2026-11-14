@@ -3,7 +3,7 @@
 
 -- | Admission behaviour: a complete matching receipt binds and reuses, and a changed, partial,
 -- wrong-role or wrong-input receipt refuses. The review-packet import path is exercised against a
--- synthetic packet, and the owned configuration takes its depths and source bytes from the ELF.
+-- synthetic packet.
 module Main (main) where
 
 import Control.Monad (forM_, unless)
@@ -11,9 +11,7 @@ import qualified Data.Aeson as J
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
-import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
-import Data.Bits (shiftR)
 import Data.Either (isLeft)
 import qualified Data.Text as T
 import Data.Word (Word32)
@@ -47,43 +45,6 @@ accepts :: String -> Either String a -> IO Bool
 accepts label result = case result of
   Right _ -> check label True
   Left problem -> putStrLn ("     " ++ problem) >> check label False
-
-word :: Word32 -> B.ByteString
-word value = B.pack [fromIntegral (value `shiftR` shift) | shift <- [0, 8, 16, 24]]
-
-half :: Word32 -> B.ByteString
-half = B.take 2 . word
-
--- The RenderStack test fixture: a linked bank ELF whose four functions reserve the requested
--- bytes, so the derived entry depths are known.
-elfFixture :: Word32 -> Word32 -> Word32 -> Word32 -> (B.ByteString, B.ByteString)
-elfFixture treeReservation pickerReservation paneReservation bankReservation =
-  (bytes, code)
- where
-  code = B.concat [word (0xe24dd000 + reservation) <> word 0xe12fff1e
-                  | reservation <- [treeReservation, pickerReservation, paneReservation, bankReservation]]
-  names = C.pack "\0.text\0.shstrtab\0.strtab\0.symtab\0"
-  strings = C.pack "\0rb_render_tree_entry\0rb_render_picker_entry\0rb_render_pane_entry\0rb_bank_draw_root\0"
-  symbol name address = B.concat (map word [name, address, 8]) <> B.pack [0x12, 0] <> half 1
-  symbols = B.replicate 16 0 <> symbol 1 0xc40000 <> symbol 22 (0xc40000 + 8)
-    <> symbol 45 (0xc40000 + 16) <> symbol 66 (0xc40000 + 24)
-  namesAt = 0x100 + B.length code
-  stringsAt = namesAt + B.length names
-  symbolsAt = stringsAt + B.length strings
-  headersAt = symbolsAt + B.length symbols
-  section :: Word32 -> Word32 -> Word32 -> Word32 -> Int -> Int -> Word32 -> Word32 -> B.ByteString
-  section name kind flags address offset size link entrySize = B.concat
-    (map word [name, kind, flags, address, fromIntegral offset, fromIntegral size, link, 0, 4, entrySize])
-  sections = B.concat
-    [ B.replicate 40 0
-    , section 1 1 6 0xc40000 0x100 (B.length code) 0 0
-    , section 7 3 0 0 namesAt (B.length names) 0 0
-    , section 17 3 0 0 stringsAt (B.length strings) 0 0
-    , section 25 2 0 0 symbolsAt (B.length symbols) 3 16
-    ]
-  header = B.pack [0x7f, 69, 76, 70, 1, 1, 1] <> B.replicate 9 0 <> half 2 <> half 40 <> word 1 <> word 0xc40000
-    <> word 0 <> word (fromIntegral headersAt) <> word 0 <> half 52 <> half 32 <> half 0 <> half 40 <> half 5 <> half 2
-  bytes = header <> B.replicate (0x100 - B.length header) 0 <> code <> names <> strings <> symbols <> sections
 
 data Fixture = Fixture
   { fixtureRoot :: FilePath
@@ -123,6 +84,8 @@ runRoot root (label, role) = do
   admittedFile <- check (label ++ " bind writes its admission record") admissionFile
   reused <- verifyReceipt (fixtureExpected fixture) receipt
   reusedOk <- accepts (label ++ " admitted receipt reuses") reused
+  priorSchema <- priorSchemaAdmission fixture receipt
+  priorSchemaOk <- expectLeft (label ++ " schema-1 admission record refuses reuse") priorSchema
   let tamperedReceipt = fixtureRoot fixture </> "tampered-observation"
   copyTreeForTest receipt tamperedReceipt
   B.appendFile (tamperedReceipt </> "e2e-observation-0.json") "\n"
@@ -193,29 +156,20 @@ runRoot root (label, role) = do
     expectLeft (label ++ " " ++ control ++ " refuses") result)
     [ ("mismatched qualification", "e2e-result.json", "outcome", J.String mismatchedOutcome)
     , ("missing lifetime coverage", "e2e-modal-observation.json", "whole_installed_lifetime_coverage", J.Bool False)
-    , ("old diagnostic version", "e2e-render-stack-diagnostic.json", "version", J.toJSON (1 :: Word32))
-    , ("missing transition encoding", "e2e-render-stack-diagnostic.json", "transition_encoding", J.Null)
-    , ("false logical transition counter", "e2e-render-stack-diagnostic.json", "transition_storage"
-      , J.object ["per_invocation_limit" J..= (4096 :: Word32),"aggregate_limit" J..= (65536 :: Word32)
-          ,"retained_entries" J..= (0 :: Word32),"allocated_entries" J..= (65536 :: Word32),"logical_transitions" J..= (1 :: Word32)])
     ]
   setCurrentDirectory original
-  pure ([admitted, admittedFile, reusedOk, tamperedOk, missingListOk, emptyListOk, unboundSidecarOk, unboundSourcesOk, changedOk, missingOk, wrongTrajectoryOk, wrongRoleOk, malformedOk, emptyOk, prelinkedBaseOk, prelinkedSizeOk, mutatedPrelinkedOk
+  pure ([admitted, admittedFile, reusedOk, priorSchemaOk, tamperedOk, missingListOk, emptyListOk, unboundSidecarOk, unboundSourcesOk, changedOk, missingOk, wrongTrajectoryOk, wrongRoleOk, malformedOk, emptyOk, prelinkedBaseOk, prelinkedSizeOk, mutatedPrelinkedOk
        , alteredElfOk, alteredRuntimeOk, alteredInputOk, alteredReportOk, alteredProofOk, alteredCheckerOk, alteredArchiveOk, alteredSourceOk, missingCheckerOk, failingReportOk, imported] ++ refused)
 
 buildFixture :: FilePath -> FilePath -> Role -> IO Fixture
 buildFixture directory receipt role = do
   let write name bytes = B.writeFile (directory </> name) bytes
-      (elfBytes, code) = elfFixture 16 32 16 16
-      retainedBytes = B.pack [1, 2, 3, 4]
+      elfBytes = B.pack [0x7f, 0x45, 0x4c, 0x46, 1, 1, 1, 0]
       firmwareBytes = B.pack [5, 6, 7]
       nandBytes = B.pack [8, 9]
       bootRomBytes = B.pack [10, 11]
       runBytes = B.pack [12, 13]
       trajectoryBytes = B.pack [14, 15]
-      configPath = directory </> "diagnostic.json"
-      retainedPath = directory </> "retained.bin"
-      textPath = directory </> "text.bin"
       firmwarePath = directory </> "firmware.bin"
       nandPath = directory </> "nand.bin"
       bootRomPath = directory </> "bootrom.bin"
@@ -229,8 +183,6 @@ buildFixture directory receipt role = do
       checkerPath = directory </> "checker.bin"
       checkerBytes = B.pack [23, 24, 25]
   createDirectoryIfMissing True (receipt </> "relinked")
-  write "retained.bin" retainedBytes
-  write "text.bin" code
   write "firmware.bin" firmwareBytes
   write "nand.bin" nandBytes
   write "bootrom.bin" bootRomBytes
@@ -249,20 +201,6 @@ buildFixture directory receipt role = do
     createDirectoryIfMissing True (takeDirectory path)
     B.writeFile path bytes
   BL.writeFile sourceIdentityPath (J.encode (J.object [K.fromString relative J..= digestBytes bytes | (relative, bytes) <- sources]) <> "\n")
-  let config = J.object
-        [ "version" J..= (1 :: Word32)
-        , "role" J..= role
-        , "sources" J..= [ J.object ["kind" J..= ("retained" :: T.Text), "start" J..= (4096 :: Word32), "sha256" J..= digestBytes retainedBytes, "path" J..= retainedPath]
-                        , J.object ["kind" J..= ("owned" :: T.Text), "start" J..= (0xc40000 :: Word32), "sha256" J..= digestBytes code, "path" J..= textPath]
-                        ]
-        , "entries" J..= [ J.object ["kind" J..= ("tree" :: T.Text), "address" J..= (0x1164e1c :: Word32), "frame_depth" J..= (16 :: Word32)]
-                         , J.object ["kind" J..= ("picker" :: T.Text), "address" J..= (0x1163f2c :: Word32), "frame_depth" J..= (32 :: Word32)]
-                         , J.object ["kind" J..= ("pane" :: T.Text), "address" J..= (0x11662a0 :: Word32), "frame_depth" J..= (16 :: Word32)]
-                         ]
-        , "returns" J..= ([0x1167a60] :: [Word32])
-        , "retained_services" J..= ([0x43560] :: [Word32])
-        ]
-  BL.writeFile configPath (J.encode config <> "\n")
   let session = J.object
         [ "checkpoint" J..= J.object ["directory" J..= (directory </> ("checkpoint-" ++ replicate 64 'a'))]
         , "inputs" J..= J.object
@@ -307,46 +245,16 @@ buildFixture directory receipt role = do
             , "lifetime" J..= J.object ["publication_count" J..= (publications :: Int)]
             ]
         ]
-  let diagnostic = J.object
-        [ "version" J..= (2 :: Word32)
-        , "transition_encoding" J..= ("pair-stride-v1" :: T.Text)
-        , "transition_storage" J..= J.object
-            ["per_invocation_limit" J..= (4096 :: Word32),"aggregate_limit" J..= (65536 :: Word32)
-            ,"retained_entries" J..= (0 :: Word32),"allocated_entries" J..= (65536 :: Word32),"logical_transitions" J..= (0 :: Word32)]
-        , "start" J..= J.object ["instructions" J..= (0 :: Word32),"tick" J..= (0 :: Word32)]
-        , "end" J..= J.object ["instructions" J..= (0 :: Word32),"tick" J..= (0 :: Word32)]
-        , "sources" J..= (case config of J.Object fields -> KM.lookup "sources" fields; _ -> Nothing)
-        , "invocations" J..= ([] :: [J.Value])
-        , "retained_service_coverage" J..= ("partial-observed-source-transitions" :: T.Text)
-        , "retained_service_spans_informational" J..= True
-        , "performance" J..= J.object ["active_instructions" J..= (0 :: Word32)
-            ,"invocation_count" J..= (0 :: Word32),"hook_transitions" J..= (0 :: Word32)]
-        , "scope" J..= ("installed-before-unload" :: T.Text)
-        , "diagnostic_only" J..= True
-        , "whole_route_stack_minimum_proven" J..= False
-        , "coverage" J..= ("continuous" :: T.Text)
-        , "finished" J..= True
-        , "failure" J..= (Nothing :: Maybe T.Text)
-        , "active_invocations" J..= (0 :: Word32)
-        , "incomplete_intervals" J..= False
-        , "role" J..= role
-        ]
-  let request = case config of
-        J.Object fields -> J.Object (KM.insert "command" (J.String "render-stack-diagnostic-begin") fields)
-        _ -> config
   let manifest = J.object ["bytes" J..= (32 :: Word32)]
   BL.writeFile (receipt </> "e2e-result.json") (J.encode result <> "\n")
   BL.writeFile (receipt </> "emulator-session.json") (J.encode session <> "\n")
   BL.writeFile (receipt </> "e2e-modal-observation.json") (J.encode modal <> "\n")
-  BL.writeFile (receipt </> "e2e-render-stack-diagnostic.json") (J.encode diagnostic <> "\n")
-  BL.writeFile (receipt </> "e2e-render-stack-diagnostic-request.json") (J.encode request <> "\n")
   BL.writeFile (receipt </> "e2e-modal-watch-final.json") "{}\n"
   B.writeFile (receipt </> "e2e-observation-0.json") observationBytes
   BL.writeFile (receipt </> "relinked/kernel.elf") (BL.fromStrict elfBytes)
   BL.writeFile (receipt </> "relinked/ram-push-manifest.json") (J.encode manifest <> "\n")
   BL.writeFile (receipt </> "relinked/runtime.bin") (BL.fromStrict (B.pack [18, 19]))
   trajectorySha <- digestFile trajectoryPath
-  configSha <- digestFile configPath
   archiveSha <- digestFile archivePath
   prelinkedPath <- if role == OwnedRole then do
     let prelinked = directory </> "prelinked"
@@ -404,8 +312,6 @@ buildFixture directory receipt role = do
         , expectedNand = nandPath
         , expectedBootRom = bootRomPath
         , expectedRunDocument = runPath
-        , expectedConfig = configPath
-        , expectedConfigSha = configSha
         , expectedArchive = if role == OwnedRole then Just archivePath else Nothing
         , expectedArchiveSha = if role == OwnedRole then Just archiveSha else Nothing
         , expectedSourceIdentity = if role == OwnedRole then Just sourceIdentityPath else Nothing
@@ -416,6 +322,14 @@ buildFixture directory receipt role = do
         , expectedPins = Nothing
         }
   pure (Fixture directory receipt expected)
+
+priorSchemaAdmission :: Fixture -> FilePath -> IO (Either String ReceiptIdentity)
+priorSchemaAdmission fixture receipt = do
+  let copy = fixtureRoot fixture </> "prior-schema"
+  copyTreeForTest receipt copy
+  bytes <- B.readFile (copy </> "admission.json")
+  B.writeFile (copy </> "admission.json") (replaceObjectField bytes "schema" (J.toJSON (1 :: Word32)))
+  verifyReceipt (fixtureExpected fixture) copy
 
 mutateAndVerify :: Fixture -> FilePath -> String -> (B.ByteString -> B.ByteString) -> IO (Either String ReceiptIdentity)
 mutateAndVerify fixture receipt name change = do
@@ -574,7 +488,6 @@ importSynthetic root label fixture = do
   copyTreeForTest (fixtureReceipt fixture) source
   BL.writeFile terminalPath "{\"passed\":true}\n"
   resultSha <- digestFile (source </> "e2e-result.json")
-  diagnosticSha <- digestFile (source </> "e2e-render-stack-diagnostic.json")
   sessionSha <- digestFile (source </> "emulator-session.json")
   terminalSha <- digestFile terminalPath
   let expected = fixtureExpected fixture
@@ -583,11 +496,9 @@ importSynthetic root label fixture = do
         , "source_commit" J..= ("2ef924c6" :: T.Text)
         , "sdk_package" J..= expectedSdk expected
         , "trajectory" J..= J.object ["path" J..= expectedTrajectory expected, "sha256" J..= expectedTrajectorySha expected]
-        , "config" J..= J.object ["path" J..= expectedConfig expected, "sha256" J..= expectedConfigSha expected]
         , "terminal" J..= J.object ["path" J..= terminalPath, "sha256" J..= terminalSha]
         , "evidence" J..= J.object
             [ "result" J..= J.object ["path" J..= (source </> "e2e-result.json"), "sha256" J..= resultSha]
-            , "diagnostic" J..= J.object ["path" J..= (source </> "e2e-render-stack-diagnostic.json"), "sha256" J..= diagnosticSha]
             , "session" J..= J.object ["path" J..= (source </> "emulator-session.json"), "sha256" J..= sessionSha]
             ]
         ]
