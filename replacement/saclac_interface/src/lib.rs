@@ -6,6 +6,7 @@ pub mod exposure;
 pub mod stock;
 pub mod round;
 pub mod calc;
+pub mod calc_sub;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClientCallback(pub(crate) u32);
@@ -378,6 +379,23 @@ pub trait Calc1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CalcSubOperation {
+    Request00,
+}
+
+/// A request to calcsub, queue 46.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CalcSubRequest<'a> {
+    pub operation: CalcSubOperation,
+    pub parameters: Parameters<'a>,
+}
+
+pub trait CalcSub {
+    type Error;
+    fn request(&mut self, request: CalcSubRequest<'_>) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StatisticsOperation {
     Request00,
     Request01,
@@ -446,6 +464,7 @@ pub enum PeerOperation {
     ImgDc(ImgDcOperation),
     Calc(CalcOperation),
     Calc1(Calc1Operation),
+    CalcSub(CalcSubOperation),
     Statistics(StatisticsOperation),
     Flash(FlashOperation),
 }
@@ -460,7 +479,11 @@ pub const fn lens_effect(operation: PeerOperation) -> LensEffect {
     match operation {
         PeerOperation::LensDc(LensDcOperation::Request07 | LensDcOperation::Request08 | LensDcOperation::Request0c) => LensEffect::DirectDrive,
         PeerOperation::ImgDc(ImgDcOperation::Request2e) => LensEffect::DriveThroughImageBridge,
-        PeerOperation::Calc(_) | PeerOperation::Calc1(_) | PeerOperation::Statistics(_) => LensEffect::NoLensDrive,
+        // calcsub's dispatch table (0xf49fc8) handles only 0x3e00, in 0xf49eb4, which classifies the
+        // frame and enters the request's completion.
+        PeerOperation::Calc(_) | PeerOperation::Calc1(_) | PeerOperation::CalcSub(_) | PeerOperation::Statistics(_) => {
+            LensEffect::NoLensDrive
+        }
         PeerOperation::LensDc(_) | PeerOperation::ImgDc(_) | PeerOperation::Flash(_) => LensEffect::Unclassified,
     }
 }
@@ -473,3 +496,5 @@ mod exposure_tests;
 mod area_measurement_tests;
 #[cfg(test)]
 mod calc_tests;
+#[cfg(test)]
+mod calc_sub_tests;

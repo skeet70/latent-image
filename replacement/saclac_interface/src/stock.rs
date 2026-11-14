@@ -1,6 +1,7 @@
 use crate::*;
 
 pub mod area_measurement;
+pub mod calc_sub;
 pub mod exposure;
 
 pub const fn record_handle_from_a2(word: u32) -> RecordHandle { RecordHandle(word) }
