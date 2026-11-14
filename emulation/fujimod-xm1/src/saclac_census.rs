@@ -18,6 +18,7 @@ use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+mod saclac_interface;
 
 const USAGE: &str = "saclac-census --run RUN --update STOCK_DAT --boot-rom ROM --sites SITES --scenario cold-boot|menu-route|half-press|shoot-without-lens|capture|playback|mode-dial [--steps STEPS] [--checkpoints ROOT] [--start reset|post-boot] [--stimulus-ticks SCHEDULE] --output NEW_DIR | saclac-census schedule CENSUS_JSON SCHEDULE_JSON";
 const SITE_LABEL: &str = "saclac-site";
@@ -118,6 +119,8 @@ struct Sites {
     dispatch: Option<DispatchSites>,
     #[serde(default)]
     watch: Vec<WatchDecl>,
+    #[serde(default)]
+    interface: Option<saclac_interface::Declaration>,
 }
 
 struct Site {
@@ -156,6 +159,7 @@ struct Plan {
     ranges: Vec<Range>,
     dispatch: Option<Dispatch>,
     watch: Vec<Watch>,
+    interface: Option<saclac_interface::Plan>,
 }
 
 fn load_sites(bytes: &[u8]) -> Result<Plan, String> {
@@ -232,7 +236,8 @@ fn load_sites(bytes: &[u8]) -> Result<Plan, String> {
         watch.push(Watch { label: declared.label.clone(), start, end });
     }
     watch.sort_by_key(|range| range.start);
-    Ok(Plan { task_id: sites.task_id, state_base, points, ranges, dispatch, watch })
+    let interface = sites.interface.map(saclac_interface::Declaration::validate).transpose()?;
+    Ok(Plan { task_id: sites.task_id, state_base, points, ranges, dispatch, watch, interface })
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -590,6 +595,7 @@ struct Report<'a> {
     action_ranges: Vec<RangeRow>,
     dispatch: Option<DispatchTrace>,
     watch: Vec<WatchRow>,
+    interface: &'a saclac_interface::Stream,
     error: Option<String>,
     machine_failure: Option<String>,
 }
@@ -682,18 +688,31 @@ impl<'a> Census<'a> {
             start: u64::from(range.start),
             end: u64::from(range.end),
             kinds: WatchKinds::CPU_FETCH,
-        })).collect()
+        })).chain(self.plan.interface.iter().flat_map(|plan| plan.classes())).collect()
     }
 
     fn restart_watch(&mut self, machine: &Machine) -> Result<(), String> {
+        self.record_stores()?;
         let watch = self.watch.take().ok_or("action fetch watch is not active")?;
         watch.end(machine, &self.plan.ranges, &self.plan.watch, &mut self.ranges, &mut self.watch_ranges)?;
+        self.interface.restart();
         self.watch = Some(FetchWatch::begin(machine, &self.maps, self.classes())?);
         Ok(())
     }
 
+    fn record_stores(&mut self) -> Result<(), String> {
+        if let (Some(plan), Some(watch)) = (&self.plan.interface, &self.watch) {
+            self.interface.stores(plan, &watch.watch.records.borrow().state())?;
+        }
+        Ok(())
+    }
+
     fn stop(&mut self, machine: &Machine, stops: &[Stop]) -> Result<(), String> {
+        self.record_stores()?;
         for stop in stops {
+            if let Some(plan) = &self.plan.interface {
+                self.interface.entry(machine, plan, stop)?;
+            }
             if let Some(dispatch) = &self.plan.dispatch {
                 if stop.address == dispatch.trace {
                     if self.dispatch.len() >= DISPATCH_LIMIT {
@@ -1270,12 +1289,16 @@ fn drive() -> Result<(), String> {
     if let Some(dispatch) = &plan.dispatch {
         sites.insert(dispatch.trace, SITE_LABEL.to_owned());
     }
+    if let Some(interface) = &plan.interface {
+        sites.extend(interface.sites().map(|address| (address, SITE_LABEL.to_owned())));
+    }
     let observed = (|| -> Result<(), String> {
         setup?;
         machine.traces.arm(&machine.session, sites)?;
         census.watch = Some(FetchWatch::begin(&machine, &census.maps, census.classes())?);
         census.scenario(&mut machine, scenario, phases)
     })();
+    let interface_end = census.record_stores();
     let ended = match census.watch.take() {
         Some(watch) => watch.end(&machine, &plan.ranges, &plan.watch, &mut census.ranges, &mut census.watch_ranges),
         None => Ok(()),
@@ -1285,7 +1308,7 @@ fn drive() -> Result<(), String> {
         Some(executable_binding)]
         .into_iter().flatten().collect();
     let report = Report {
-        schema: 3,
+        schema: 4,
         scenario,
         checkpoint,
         inputs,
@@ -1326,6 +1349,7 @@ fn drive() -> Result<(), String> {
             addresses: counted(&stats.addresses),
             address_overflow: stats.address_overflow,
         }).collect(),
+        interface: &census.interface,
         error: error.clone(),
         machine_failure: machine.failure.clone(),
     };
