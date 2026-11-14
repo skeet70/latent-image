@@ -2100,4 +2100,39 @@
       {"name":"trace_exit","path":"private-data/scratch/SaclacRoot/runs/20261114T203008Z-root4-motion-trace-native-address-consumer/result/verdict.json","pointer":["exit_code"]}
     ]
   }
+  ,{
+    "id": "E-SACLAC-CENSUS-RESET-HISTORY-150",
+    "claim": "Census board-clock post-boot routes compose independent stock boot/route schedules with checked TickSchedule::followed_by and attach shared pending-context/raw observation before reset startup. Author-run stock half-press executed from origin {{origin_tick}}/{{origin_instructions}} without checkpoint restoration. At boot boundary tick{{boundary_tick}}, raw ordinal{{boot_raw}} and context ordinal{{boot_events}} retain{{pending}} pending calls. The complete observation preserves{{raw_events}}/{{raw_lines}} recorded raw hits/lines and{{context_events}}/{{context_lines}} projected events/lines, with{{route_raw}} route raw hits. Stock action extents fetched{{action_fetches}} instructions; native exit{{native_exit}}, current native build/test gate exit{{gate_exit}}.",
+    "scope": "X-M1 1.50 original DAT{{firmware_sha256}}, fixed-RTC host emulator and stock-only producer smoke. The selected context declaration covers application Time tasks6/9. No owned Root image, RTOS-timer coverage, stock/owned pending-context equivalence, camera operation or whole-saclac acceptance is established.",
+    "notes": "Author-run evidence, not independent review. The observer was built from the uncommitted Census batch on63927d043; each census inputs binds the actual executable, not HEAD alone. Two pending queue receives are not empty-queue proof. Whole-root qualification still requires all relevant timer/queue/in-flight declarations, original independent bounds, raw-difference retention and first-causal-difference reduction where needed, plus the actual contiguous owned image and executed wrong variant. Producer raw/interface state stays continuous across the drained boundary; raw-hit budgets remain500000 separately for boot and route. Working raw streams expire under run-output; this record binds the checked result facts.",
+    "artifacts": [
+      "private-data/scratch/SaclacRoot/runs/20261114T212829Z-root4-census-raw-context-preparation/result/gate.log",
+      "private-data/scratch/SaclacRoot/runs/20261114T211420Z-root4-census-stock-prepare-clock/result/census.json",
+      "private-data/scratch/SaclacRoot/runs/20261114T211420Z-root4-census-stock-prepare-clock/result/boot-schedule.json",
+      "private-data/scratch/SaclacRoot/runs/20261114T211840Z-root4-census-stock-halfpress-clock/result/census.json",
+      "private-data/scratch/SaclacRoot/runs/20261114T211840Z-root4-census-stock-halfpress-clock/result/route-schedule.json",
+      "private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/census.json",
+      "private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/stream-counts.txt",
+      "private-data/scratch/SaclacRoot/runs/20261114T220315Z-root4-census-clock-admission/result/cases.jsonl"
+    ],
+    "facts": [
+      {"name":"firmware_sha256","path":"private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/census.json","pointer":["inputs","1","sha256"]},
+      {"name":"gate_exit","path":"private-data/scratch/SaclacRoot/runs/20261114T212829Z-root4-census-raw-context-preparation/result/verdict.json","pointer":["exit_status"]},
+      {"name":"observer_sha256","path":"private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/census.json","pointer":["inputs","7","sha256"]},
+      {"name":"native_exit","path":"private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/verdict.json","pointer":["exit_status"]},
+      {"name":"admission_exit","path":"private-data/scratch/SaclacRoot/runs/20261114T220315Z-root4-census-clock-admission/result/verdict.json","pointer":["exit_status"]},
+      {"name":"origin_tick","path":"private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/census.json","pointer":["stimuli","origin","board_tick"]},
+      {"name":"origin_instructions","path":"private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/census.json","pointer":["observation_start_instructions"]},
+      {"name":"boundary_tick","path":"private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/census.json","pointer":["preparation","boundary","board_tick"]},
+      {"name":"boot_raw","path":"private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/census.json","pointer":["preparation","raw_events"]},
+      {"name":"boot_events","path":"private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/census.json","pointer":["preparation","context","event_count"]},
+      {"name":"pending","path":"private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/verdict.json","pointer":["preparation_pending_calls"]},
+      {"name":"raw_events","path":"private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/census.json","pointer":["context","raw_events"]},
+      {"name":"raw_lines","path":"private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/verdict.json","pointer":["raw_lines"]},
+      {"name":"context_events","path":"private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/census.json","pointer":["context","events"]},
+      {"name":"context_lines","path":"private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/verdict.json","pointer":["context_lines"]},
+      {"name":"route_raw","path":"private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/census.json","pointer":["context","raw_phase_events"]},
+      {"name":"action_fetches","path":"private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/verdict.json","pointer":["action_extent_fetches"]}
+    ]
+  }
 ]

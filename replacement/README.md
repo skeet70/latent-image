@@ -189,6 +189,16 @@ Scope: X-M1 1.50 scoped synthetic host paths and ARM compilation only. Consumer 
 
 <!-- /evidence-record E-SACLAC-ROOT-PERSISTENT-PROVIDERS-150 -->
 
+The Census producer now supports continuous board-clock preparation observation, separately from owned-root qualification:
+
+<!-- evidence-record E-SACLAC-CENSUS-RESET-HISTORY-150 -->
+
+E-SACLAC-CENSUS-RESET-HISTORY-150: Census board-clock post-boot routes compose independent stock boot/route schedules with checked TickSchedule::followed_by and attach shared pending-context/raw observation before reset startup. Author-run stock half-press executed from origin 0/0 without checkpoint restoration. At boot boundary tick151752582, raw ordinal231130 and context ordinal66742 retain2 pending calls. The complete observation preserves246956/246956 recorded raw hits/lines and71636/71636 projected events/lines, with15826 route raw hits. Stock action extents fetched19552 instructions; native exit0, current native build/test gate exit0.
+
+Scope: X-M1 1.50 original DAT43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490, fixed-RTC host emulator and stock-only producer smoke. The selected context declaration covers application Time tasks6/9. No owned Root image, RTOS-timer coverage, stock/owned pending-context equivalence, camera operation or whole-saclac acceptance is established.
+
+<!-- /evidence-record E-SACLAC-CENSUS-RESET-HISTORY-150 -->
+
 The topic controller crate `saclac/controllers` contains safe, `no_std` orchestration cores, not an image cutover. Its live router (`live::Router`) owns the live branch root enters: the primary and secondary profile pairs around live suspension and the lens, autofocus forwarding and replies, lens drives with their preparation, reissue, correction and resumption, the Command11 hold across a drive, and the forwarded Command14/2b/2c/2d/23 holds. Each child call carries the record root supplied. The contract comes from X-M1 1.50 image-5 bytes `0xf06350..0xf07c6c` (actions) and `0xefe584..0xefe958` (event intake and its two hooks). States the bytes cannot reach are absent: the deferred-lens drain behind `0xf06508` follows a call (`0xf39940`) that always returns 0, and event 0x1b has no producer among the 40 command functions. Lens-reaching effects remain emulator-only.
 
 The S1 router (`s1::Router`) owns the S1 branch root enters during a half press: shot, statistics, capture and bridge sequencing, release and lens cancellation, from image-5 bytes `0xf03584..0xf03ec0` with intake `0xefd790`. It publishes every store the stock S1 progress accessors (`0xf15264..0xf156a0`) make, because the retained shot sequence reads those bytes. The bridge (`s1::Bridge`, `0xf03ec0..0xf03ff0`, intake `0xefd9e8`) carries S1-time Command17, Autofocus and Command0a to the live controller.

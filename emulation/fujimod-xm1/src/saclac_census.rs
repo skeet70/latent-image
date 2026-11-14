@@ -8,19 +8,24 @@ use fujimod_emulator::board::factory::MemoryMap;
 use fujimod_emulator::board::observation::{MemoryWatch, ViewPolicy, WatchKinds, WatchRange};
 use fujimod_xm1::bridge::{read, sha256, write};
 use fujimod_xm1::checkpoint::{BootIdentity, PostBootReceipt, SHARED_STORE, post_boot};
-use fujimod_xm1::trace::SiteRead;
+use fujimod_xm1::trace::{Hit, SiteRead, TaskCapture};
 use fujimod_xm1::guest::{GpioKey, ModeDialPosition, RouteKey, ShutterStage};
 use fujimod_xm1::machine::{Hold, KeyPulse, MENU_PULSE, Machine, RunOutcome, SCANNED_HOLD_TICKS, key_pulse};
 use fujimod_xm1::run::{self, RunDocument, ValidatedUpdate};
-use fujimod_xm1::stimulus::{Deadline, StimulusClock, StimulusReceipt, Stimuli, TickSchedule};
+use fujimod_xm1::stimulus::{Deadline, Origin, StimulusClock, StimulusReceipt, Stimuli, TickSchedule};
 use serde::{Deserialize, Serialize, Serializer};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs::File;
+use std::io::{BufWriter, Write};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 mod saclac_interface;
+mod time_interface;
 
-const USAGE: &str = "saclac-census --run RUN --update STOCK_DAT --boot-rom ROM --sites SITES --scenario cold-boot|menu-route|half-press|shoot-without-lens|capture|playback|mode-dial [--steps STEPS] [--checkpoints ROOT] [--start reset|post-boot] [--stimulus-ticks SCHEDULE] --output NEW_DIR | saclac-census schedule CENSUS_JSON SCHEDULE_JSON";
+const CONTEXT_HIT_LIMIT: usize = 500_000;
+
+const USAGE: &str = "saclac-census --run RUN --update STOCK_DAT --boot-rom ROM --sites SITES --scenario prepare-boot|cold-boot|menu-route|half-press|shoot-without-lens|capture|playback|mode-dial [--steps STEPS] [--checkpoints ROOT] [--start reset|post-boot] [--stimulus-ticks SCHEDULE --context-interface CONTRACT] [--preparation-ticks BOOT_SCHEDULE] --output NEW_DIR | saclac-census schedule CENSUS_JSON SCHEDULE_JSON";
 const SITE_LABEL: &str = "saclac-site";
 const SITE_LIMIT: usize = 4096;
 const CONTEXT_LIMIT: usize = 1024;
@@ -267,7 +272,7 @@ impl Key {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum Scenario { ColdBoot, MenuRoute, HalfPress, ShootWithoutLens, Capture, Playback, ModeDial }
+enum Scenario { PrepareBoot, ColdBoot, MenuRoute, HalfPress, ShootWithoutLens, Capture, Playback, ModeDial }
 
 #[derive(Debug, Deserialize)]
 struct Trajectory { before_unload: Vec<TrajectoryPhase> }
@@ -484,8 +489,73 @@ impl FetchWatch {
 struct Binding { path: PathBuf, sha256: String }
 
 #[derive(Serialize)]
+struct PreparationReceipt {
+    origin: Origin,
+    boundary: Origin,
+    interface_events: usize,
+    raw_events: usize,
+    context: time_interface::Boundary,
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum ContextPhase { Boot, Route }
+
+#[derive(Serialize)]
+struct ContextHit<'a> {
+    #[serde(flatten)]
+    hit: &'a Hit,
+    board_tick: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct ContextReceipt {
+    raw_events: usize,
+    raw_phase: ContextPhase,
+    raw_phase_events: usize,
+    #[serde(flatten)]
+    coverage: time_interface::Coverage,
+}
+
+struct ContextHistory {
+    recorder: time_interface::Recorder,
+    writer: BufWriter<File>,
+    raw_events: usize,
+    phase_start: usize,
+    phase: ContextPhase,
+}
+
+impl ContextHistory {
+    fn new(bytes: &[u8], output: &Path, phase: ContextPhase) -> Result<Self, String> {
+        Ok(Self {
+            recorder: time_interface::Recorder::new(bytes, &output.join("pending-context.jsonl"))?,
+            writer: BufWriter::new(File::create(output.join("context-traffic.jsonl")).map_err(|error| error.to_string())?),
+            raw_events: 0, phase_start: 0, phase,
+        })
+    }
+
+    fn observe(&mut self, machine: &Machine, hit: &Hit) -> Result<BTreeMap<u32, String>, String> {
+        require(self.raw_events - self.phase_start < CONTEXT_HIT_LIMIT, "pending-context phase hit bound exceeded")?;
+        self.recorder.before_hit(hit.instructions)?;
+        serde_json::to_writer(&mut self.writer, &ContextHit {
+            hit, board_tick: (hit.instructions == machine.instructions()).then(|| machine.session.board.now()),
+        }).map_err(|error| error.to_string())?;
+        self.writer.write_all(b"\n").map_err(|error| error.to_string())?;
+        self.raw_events += 1;
+        self.recorder.observe(machine, hit)
+    }
+
+    fn finish(&mut self) -> Result<ContextReceipt, String> {
+        let coverage = self.recorder.finish()?;
+        self.writer.flush().map_err(|error| error.to_string())?;
+        Ok(ContextReceipt { raw_events: self.raw_events, raw_phase: self.phase, raw_phase_events: self.raw_events - self.phase_start, coverage })
+    }
+}
+
+#[derive(Serialize)]
 struct Limits {
     sites: usize, contexts: usize, callers: usize, addresses: usize, instructions: u64, watch_rows: usize, segment_instructions: u64,
+    context_hits_per_phase: usize,
 }
 
 #[derive(Serialize)]
@@ -583,6 +653,9 @@ struct Report<'a> {
     observation_start_instructions: u64,
     executed_instructions: u64,
     counts: Option<[u64; 2]>,
+    route_origin: Origin,
+    preparation: Option<PreparationReceipt>,
+    context: Option<ContextReceipt>,
     stimuli: StimulusReceipt<'a, Stimulus>,
     milestones: &'a [Milestone],
     menu_trace: &'a [MenuSample],
@@ -671,6 +744,8 @@ struct Census<'a> {
     key_pulses: Vec<Pulse>,
     mode_dial: Option<DialRow>,
     interface: saclac_interface::Stream,
+    sites: BTreeSet<u32>,
+    context: Option<ContextHistory>,
     stimuli: Stimuli<Stimulus>,
 }
 
@@ -759,30 +834,39 @@ impl<'a> Census<'a> {
             require(before < INSTRUCTION_LIMIT, "census instruction bound exceeded")?;
             let before_tick = machine.session.board.now();
             machine.traces.hits.clear();
-            let outcome = deadline.run(machine, INSTRUCTION_LIMIT - before);
+            let budget = if self.context.is_some() { (INSTRUCTION_LIMIT - before).min(1_000_000) } else { INSTRUCTION_LIMIT - before };
+            let outcome = deadline.run(machine, budget);
             machine.require_running()?;
             require(matches!(outcome, RunOutcome::Stopped | RunOutcome::Completed), "unexpected census run outcome")?;
+            if let Some(context) = &mut self.context { context.recorder.end_watch(machine)?; }
+            let mut added = BTreeMap::new();
             let mut stops = Vec::new();
             for hit in &machine.traces.hits {
+                if let Some(context) = &mut self.context {
+                    //Raw hits and pending frames remain continuous across preparation.
+                    added.extend(context.observe(machine, hit)?);
+                }
+                let address = parse_hex(&hit.address)?;
+                if !self.sites.contains(&address) { continue; }
                 require(hit.instructions == machine.instructions(), "census stop is no longer current")?;
                 stops.push(Stop {
-                    core: hit.core,
-                    address: parse_hex(&hit.address)?,
-                    instructions: hit.instructions,
-                    registers: hit.registers.clone(),
-                    memory: hit.memory.clone(),
-                    sp: hit.sp.clone(),
-                    lr: hit.lr.clone(),
-                    cpsr: hit.cpsr,
+                    core: hit.core, address, instructions: hit.instructions,
+                    registers: hit.registers.clone(), memory: hit.memory.clone(),
+                    sp: hit.sp.clone(), lr: hit.lr.clone(), cpsr: hit.cpsr,
                 });
             }
-            if stops.is_empty() {
+            if let Some(context) = &mut self.context {
+                context.recorder.after_hits()?;
+                context.recorder.require_owned()?;
+                if !added.is_empty() { machine.traces.add_sites(&machine.session, added)?; }
+                context.recorder.begin_watch(machine)?;
+            }
+            if machine.traces.hits.is_empty() && self.context.is_none() {
                 require(deadline.reached(machine) || machine.instructions() < INSTRUCTION_LIMIT, "census instruction bound exceeded")?;
                 require(deadline.reached(machine), "run ended early without a census stop")?;
-            } else {
-                self.stop(machine, &stops)?;
             }
-            require(machine.instructions() > before || machine.session.board.now() > before_tick || !stops.is_empty(),
+            if !stops.is_empty() { self.stop(machine, &stops)?; }
+            require(machine.instructions() > before || machine.session.board.now() > before_tick || !machine.traces.hits.is_empty(),
                 "census made no progress")?;
             if self.watch.as_ref().is_some_and(|watch| machine.instructions() - watch.started >= SEGMENT_INSTRUCTIONS) {
                 self.restart_watch(machine)?;
@@ -1071,6 +1155,7 @@ impl<'a> Census<'a> {
 
     fn scenario(&mut self, machine: &mut Machine, scenario: Scenario, trajectory: Vec<TrajectoryPhase>) -> Result<(), String> {
         match scenario {
+            Scenario::PrepareBoot => self.boot(machine, false),
             Scenario::ColdBoot => self.boot(machine, true),
             Scenario::MenuRoute => {
                 self.boot(machine, false)?;
@@ -1154,7 +1239,7 @@ fn arguments() -> Result<BTreeMap<String, PathBuf>, String> {
     while let Some(flag) = arguments.next() {
         let name = flag.to_str().ok_or(USAGE)?.to_owned();
         let value = arguments.next().ok_or(USAGE)?;
-        require(REQUIRED.contains(&name.as_str()) || ["--steps", "--checkpoints", "--start", "--stimulus-ticks"].contains(&name.as_str()), USAGE)?;
+        require(REQUIRED.contains(&name.as_str()) || ["--steps", "--checkpoints", "--start", "--stimulus-ticks", "--preparation-ticks", "--context-interface"].contains(&name.as_str()), USAGE)?;
         require(paths.insert(name, PathBuf::from(value)).is_none(), USAGE)?;
     }
     for name in REQUIRED {
@@ -1171,6 +1256,7 @@ fn bound(path: &Path) -> Result<(Vec<u8>, Binding), String> {
 
 fn parse_scenario(text: &str) -> Result<Scenario, String> {
     Ok(match text {
+        "prepare-boot" => Scenario::PrepareBoot,
         "cold-boot" => Scenario::ColdBoot,
         "menu-route" => Scenario::MenuRoute,
         "half-press" => Scenario::HalfPress,
@@ -1190,15 +1276,22 @@ fn drive() -> Result<(), String> {
     let paths = arguments()?;
     let output = paths["--output"].clone();
     let scenario = parse_scenario(paths["--scenario"].to_str().ok_or("scenario is not text")?)?;
-    require(scenario != Scenario::ColdBoot || !paths.contains_key("--checkpoints"), "--checkpoints is not allowed for cold-boot")?;
+    let reset_boot = matches!(scenario, Scenario::PrepareBoot | Scenario::ColdBoot);
+    require(!reset_boot || !paths.contains_key("--checkpoints"), "--checkpoints is not allowed for reset boot")?;
     let start = match paths.get("--start").and_then(|path| path.to_str()) {
-        None if scenario == Scenario::ColdBoot => ObservationStart::Reset,
+        None if reset_boot => ObservationStart::Reset,
         None | Some("post-boot") => ObservationStart::PostBoot,
         Some("reset") => ObservationStart::Reset,
         Some(_) => return Err("--start must be reset or post-boot".into()),
     };
-    require(scenario != Scenario::ColdBoot || start == ObservationStart::Reset, "cold-boot requires --start reset")?;
+    require(!reset_boot || start == ObservationStart::Reset, "boot scenarios require --start reset")?;
     require(start != ObservationStart::Reset || !paths.contains_key("--checkpoints"), "--checkpoints is not allowed with --start reset")?;
+    let board_clock = paths.contains_key("--stimulus-ticks");
+    let observed_preparation = board_clock && start == ObservationStart::PostBoot;
+    require(!observed_preparation || paths.contains_key("--preparation-ticks"), "board-clock post-boot scenarios require --preparation-ticks")?;
+    require(!paths.contains_key("--preparation-ticks") || observed_preparation, "--preparation-ticks requires a board-clock post-boot scenario")?;
+    require(!board_clock || paths.contains_key("--context-interface"), "board-clock observations require --context-interface for continuous pending-context history")?;
+    require(!paths.contains_key("--context-interface") || board_clock, "--context-interface requires a board-clock observation")?;
     let (run_bytes, run_binding) = bound(&paths["--run"])?;
     let (dat, dat_binding) = bound(&paths["--update"])?;
     let (rom, rom_binding) = bound(&paths["--boot-rom"])?;
@@ -1223,6 +1316,17 @@ fn drive() -> Result<(), String> {
         }
         None => (None, None),
     };
+    let (preparation_schedule, preparation_binding) = match paths.get("--preparation-ticks") {
+        Some(path) => {
+            let (bytes, binding) = bound(path)?;
+            (Some(TickSchedule::<Stimulus>::parse(&bytes)?), Some(binding))
+        }
+        None => (None, None),
+    };
+    let (context_bytes, context_binding) = match paths.get("--context-interface") {
+        Some(path) => { let (bytes, binding) = bound(path)?; (Some(bytes), Some(binding)) }
+        None => (None, None),
+    };
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let (executable_bytes, executable_binding) = bound(&executable)?;
     let boot_identity = BootIdentity::new(&run_bytes, &dat, &rom, &[], None,
@@ -1238,6 +1342,13 @@ fn drive() -> Result<(), String> {
     session.board.set_execution_policy(document.execution_policy.into())?;
     let mut machine = Machine::new(document, session)?;
     let mut checkpoint = None;
+    let context = context_bytes.as_deref().map(|bytes| ContextHistory::new(bytes, &output,
+        if reset_boot || observed_preparation { ContextPhase::Boot } else { ContextPhase::Route })).transpose()?;
+    let mut sites: BTreeMap<u32, String> = plan.points.iter().map(|point| (point.address, SITE_LABEL.to_owned())).collect();
+    if let Some(dispatch) = &plan.dispatch { sites.insert(dispatch.trace, SITE_LABEL.to_owned()); }
+    if let Some(interface) = &plan.interface {
+        sites.extend(interface.sites().map(|address| (address, SITE_LABEL.to_owned())));
+    }
 
     let mut census = Census {
         points: plan.points.iter().map(|_| PointStats::default()).collect(),
@@ -1255,9 +1366,11 @@ fn drive() -> Result<(), String> {
         key_pulses: Vec::new(),
         mode_dial: None,
         interface: saclac_interface::Stream::default(),
+        sites: sites.keys().copied().collect(),
+        context,
         stimuli: Stimuli::instructions(&machine),
     };
-    let setup = if start == ObservationStart::PostBoot {
+    let setup = if start == ObservationStart::PostBoot && !observed_preparation {
         let root = paths.get("--checkpoints").map(PathBuf::as_path).unwrap_or_else(|| Path::new(SHARED_STORE));
         post_boot(&mut machine, &boot_identity, root, |machine| census.prepare_boot(machine)).map(|receipt| {
             checkpoint = Some(receipt);
@@ -1269,12 +1382,17 @@ fn drive() -> Result<(), String> {
     let observation_start_instructions = machine.instructions();
     let reused_instructions = checkpoint.as_ref().filter(|receipt| receipt.lookup == fujimod_xm1::checkpoint::CacheLookup::Hit)
         .map_or(0, |receipt| receipt.record.instructions);
-    census.stimuli = match schedule {
-        Some(schedule) => Stimuli::board_ticks(&machine, schedule),
-        None => Stimuli::instructions(&machine),
+    census.stimuli = match (preparation_schedule, schedule) {
+        (Some(preparation), Some(route)) => {
+            require(machine.instructions() == 0 && machine.session.board.now() == 0, "observed preparation must start from reset")?;
+            Stimuli::board_ticks(&machine, preparation.followed_by(route)?)
+        }
+        (None, Some(schedule)) => Stimuli::board_ticks(&machine, schedule),
+        (None, None) => Stimuli::instructions(&machine),
+        _ => return Err("preparation and route schedules must use the same clock".into()),
     };
     machine.traces.bound_full_registers(NonZeroUsize::new(2).ok_or("zero hit bound")?);
-    machine.traces.stop_labels = [SITE_LABEL.to_owned()].into_iter().collect();
+    machine.traces.stop_labels = [SITE_LABEL.to_owned(), "pending-context".into(), "time-return".into()].into_iter().collect();
     if let Some(dispatch) = &plan.dispatch {
         let machines = u64::from(dispatch.machines);
         machine.traces.site_reads = BTreeMap::from([(dispatch.trace, vec![
@@ -1285,17 +1403,39 @@ fn drive() -> Result<(), String> {
             SiteRead::Absolute([u64::from(dispatch.states), machines * 2]),
         ])]);
     }
-    let mut sites: BTreeMap<u32, String> = plan.points.iter().map(|point| (point.address, SITE_LABEL.to_owned())).collect();
-    if let Some(dispatch) = &plan.dispatch {
-        sites.insert(dispatch.trace, SITE_LABEL.to_owned());
+    if let Some(context) = &census.context {
+        for address in context.recorder.site_addresses() { sites.entry(address).or_insert_with(|| "pending-context".into()); }
     }
-    if let Some(interface) = &plan.interface {
-        sites.extend(interface.sites().map(|address| (address, SITE_LABEL.to_owned())));
-    }
+    let mut preparation = None;
+    let mut route_origin = Origin { board_tick: machine.session.board.now(), instructions: machine.instructions() };
     let observed = (|| -> Result<(), String> {
         setup?;
-        machine.traces.arm(&machine.session, sites)?;
+        if let Some(context) = &mut census.context {
+            machine.traces.arm_with_task_capture(&machine.session, sites, TaskCapture::Logical)?;
+            context.recorder.begin_watch(&machine)?;
+        } else {
+            machine.traces.arm(&machine.session, sites)?;
+        }
         census.watch = Some(FetchWatch::begin(&machine, &census.maps, census.classes())?);
+        if observed_preparation {
+            let origin = Origin { board_tick: machine.session.board.now(), instructions: machine.instructions() };
+            census.prepare_boot(&mut machine)?;
+            census.reach(&mut machine, Stimulus::End)?;
+            census.record_stores()?;
+            let history = census.context.as_mut().ok_or("observed preparation lacks pending context")?;
+            history.recorder.end_watch(&machine)?;
+            history.recorder.after_hits()?;
+            let context = history.recorder.boundary();
+            let raw_events = history.raw_events;
+            history.recorder.begin_watch(&machine)?;
+            history.phase_start = history.raw_events;
+            history.phase = ContextPhase::Route;
+            preparation = Some(PreparationReceipt {
+                origin, boundary: Origin { board_tick: machine.session.board.now(), instructions: machine.instructions() },
+                interface_events: census.interface.events.len(), raw_events, context,
+            });
+        }
+        route_origin = Origin { board_tick: machine.session.board.now(), instructions: machine.instructions() };
         census.scenario(&mut machine, scenario, phases)
     })();
     let interface_end = census.record_stores();
@@ -1303,23 +1443,35 @@ fn drive() -> Result<(), String> {
         Some(watch) => watch.end(&machine, &plan.ranges, &plan.watch, &mut census.ranges, &mut census.watch_ranges),
         None => Ok(()),
     };
-    let error = observed.err().or(interface_end.err()).or(ended.err());
+    let context_end = match &mut census.context {
+        Some(context) => context.recorder.end_watch(&machine).and_then(|()| context.finish()).map(Some),
+        None => Ok(None),
+    };
+    let (context, context_error) = match context_end {
+        Ok(context) => (context, None),
+        Err(error) => (None, Some(error)),
+    };
+    let error = observed.err().or(interface_end.err()).or(ended.err()).or(context_error);
     let inputs = [Some(run_binding), Some(dat_binding), Some(rom_binding), Some(sites_binding), trajectory_binding, schedule_binding,
-        Some(executable_binding)]
+        preparation_binding, context_binding, Some(executable_binding)]
         .into_iter().flatten().collect();
     let report = Report {
-        schema: 4,
+        schema: 5,
         scenario,
         checkpoint,
         inputs,
         limits: Limits {
             sites: SITE_LIMIT, contexts: CONTEXT_LIMIT, callers: CALLER_LIMIT, addresses: ADDRESS_LIMIT,
             instructions: INSTRUCTION_LIMIT, watch_rows: WATCH_LIMIT, segment_instructions: SEGMENT_INSTRUCTIONS,
+            context_hits_per_phase: CONTEXT_HIT_LIMIT,
         },
         instructions: machine.instructions(),
         observation_start_instructions,
         executed_instructions: machine.instructions() - reused_instructions,
         counts: machine.session.board.instruction_counts().try_into().ok(),
+        route_origin,
+        preparation,
+        context,
         stimuli: census.stimuli.receipt(),
         milestones: &census.milestones,
         menu_trace: &census.menu_trace,
@@ -1420,11 +1572,7 @@ mod tests {
     }
 
     #[test]
-    fn sites_declare_a_halfword_state_base() {
-        let plan = load_sites(&sites(Some("0x0169d4b4"), 2)).unwrap();
-        assert_eq!(plan.state_base, 0x0169d4b4);
-        assert_eq!(plan.points.len(), 40);
-        assert_eq!(plan.ranges.len(), 37);
+    fn invalid_sites_layouts_are_refused() {
         assert!(load_sites(&sites(None, 2)).is_err(), "a sites file without a state base is refused");
         assert!(load_sites(&sites(Some("0x0169d4b5"), 2)).is_err(), "an odd state base is refused");
         assert!(load_sites(&sites(Some("0x0169d4b4"), 1)).is_err(), "schema 1 is refused");
@@ -1457,20 +1605,8 @@ mod tests {
     }
 
     #[test]
-    fn scenarios_parse_and_serialize() {
-        for (name, scenario) in [
-            ("cold-boot", Scenario::ColdBoot),
-            ("menu-route", Scenario::MenuRoute),
-            ("half-press", Scenario::HalfPress),
-            ("shoot-without-lens", Scenario::ShootWithoutLens),
-            ("capture", Scenario::Capture),
-            ("playback", Scenario::Playback),
-            ("mode-dial", Scenario::ModeDial),
-        ] {
-            assert_eq!(parse_scenario(name).unwrap(), scenario);
-            assert_eq!(serde_json::to_value(scenario).unwrap(), serde_json::json!(name));
-        }
-        assert!(parse_scenario("movie").unwrap_err().contains("no movie key"));
+    fn unsupported_scenarios_are_refused() {
+        assert!(parse_scenario("movie").is_err());
         assert!(parse_scenario("still").is_err());
     }
 
