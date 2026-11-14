@@ -19,6 +19,8 @@ pub struct Services<M, R, E, P> {
     pub(crate) records: ProfileRecords<R>,
     pub(crate) entries: E,
     pub(crate) peers: P,
+    pub(crate) acquisition: crate::acquisition::AcquisitionState,
+    pub(crate) configuration: xm1_saclac_calc::adjust::configuration::Configuration,
 }
 
 impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Services<M, R, E, P> {
@@ -30,6 +32,8 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Services<M, R, E, P> {
             records: ProfileRecords::new(records),
             entries,
             peers,
+            acquisition: crate::acquisition::AcquisitionState::default(),
+            configuration: xm1_saclac_calc::adjust::configuration::Configuration::default(),
         }
     }
 

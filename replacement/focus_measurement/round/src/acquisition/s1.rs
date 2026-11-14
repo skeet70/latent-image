@@ -14,7 +14,7 @@ use xm1_saclac_interface::round_acquisition::{
 use xm1_saclac_interface::{Completed, RecordHandle};
 
 use super::live::{acquisition_profile, fill_limits, fill_selection};
-use super::ports::{GridInputs, GridReference, PositionSlot, Ports, Program, ProgramInputs, RateNotice};
+use super::ports::{GridInputs, GridReference, PositionSlot, Ports, Program, ProgramInputs, RateNotice, ReleasedResult};
 use super::selection::{self, LensPreset, Publication};
 use super::Branch;
 
@@ -27,6 +27,8 @@ pub struct S1Work {
     rate_pair: [u32; 2],
     primary_pending: bool,
     selection_pending: bool,
+    /// The latest selection request's program.
+    program: Program,
     grid: AcquisitionGrid,
 }
 
@@ -34,7 +36,7 @@ impl Default for S1Work { fn default() -> Self { Self::new() } }
 
 impl S1Work {
     pub const fn new() -> Self {
-        Self { level: 0, rate_pair: [0; 2], primary_pending: false, selection_pending: false, grid: AcquisitionGrid([0; 1236]) }
+        Self { level: 0, rate_pair: [0; 2], primary_pending: false, selection_pending: false, program: Program(0), grid: AcquisitionGrid([0; 1236]) }
     }
 
     /// Takes the record's level from its saved S1 exposure.
@@ -118,7 +120,7 @@ impl S1Work {
         let mut block = ports.acquisition_block(record);
         block.eligible = 1;
         ports.store_acquisition_block(record, &block);
-        ports.release_result(result.address, None);
+        ports.release_result(ReleasedResult::Acquisition(result.address));
     }
 
     /// Calc1 0x3d01 with the window and a setting the shot restores from its saved reference.
@@ -162,7 +164,8 @@ impl S1Work {
             policy: false,
             percent: 0,
             bytes: [1, 0],
-        });
+        }).unwrap_or(self.program);
+        self.program = program;
         request.program = program.0;
         request.first = self.selection_pending;
         if request.selection == 0 { ports.refresh_hardware_state(); }
@@ -212,8 +215,8 @@ impl S1Work {
             ports.publish_saved_exposure(record, &saved);
             ports.store_restore_levels(record, result.table_reference, result.restore_levels);
         }
-        let records = result.shot_data.then_some((result.shot_record, result.saved_record));
-        ports.release_result(result.address, records);
+        let shot = result.shot_data.then_some((result.shot_record, result.saved_record));
+        ports.release_result(ReleasedResult::Selection { result: result.address, shot });
     }
 
     /// Takes the result into the record's selection and publishes it.
@@ -229,7 +232,7 @@ impl S1Work {
         ports.selection_memory().save_preset();
         ports.store_position_pair(record, PositionSlot::Reported, [result.position_word, result.position]);
         selection::publish(record, Publication::Restored, selection, ports);
-        ports.release_result(result.address, None);
+        ports.release_result(ReleasedResult::Selection { result: result.address, shot: None });
     }
 
     /// Posts the result's last candidate under each program, at the S1 sample's timing, to imgdc.
@@ -239,7 +242,7 @@ impl S1Work {
         let view = ports.record_view(record);
         let gain_step = ports.acquisition_gain_step(result.adjustment);
         let decade = ports.kind_decade(result.kind);
-        let program = ports.select_program(&ProgramInputs {
+        let program = super::exposure::chosen_program(record, &ProgramInputs {
             selection: view.selection,
             adjustment: result.adjustment,
             kind: result.kind,
@@ -251,7 +254,7 @@ impl S1Work {
             policy: false,
             percent: 0,
             bytes: [1, 0],
-        });
+        }, ports);
         ports.store_program(record, Program(program.0 & 0xff));
         let gain = ports.gain_offset(gain_step) as u16;
         let entry = |program: &xm1_saclac_interface::round_acquisition::SelectionProgram| SelectionEntry {
@@ -268,7 +271,7 @@ impl S1Work {
             decade,
         };
         ports.post_focus_table(&FocusTable { primary: entry(&result.primary), secondary: entry(&result.secondary) });
-        ports.release_result(result.address, None);
+        ports.release_result(ReleasedResult::Selection { result: result.address, shot: None });
     }
 
     /// Hands the record's lens reference to the selection slot for the tracking modes and forgets

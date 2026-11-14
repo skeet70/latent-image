@@ -1,7 +1,9 @@
 use crate::fakes::{Outbound, Ports};
 use crate::history::MeasurementHistory;
 use crate::lanes::Selection;
-use crate::profile::{FrameInterval, GridCell, ProfileMode, IntervalHistory, IntervalTracking, ProfileSelection, PublishedResult, StatisticsInUse};
+use crate::acquisition::ports::AcquisitionBlock;
+use crate::auxiliary::{AuxiliaryPublication, ResourceIndex};
+use crate::profile::{FrameInterval, GridCell, ProfileMode, IntervalHistory, IntervalTracking, ProfileSelection, PublishedResult, RetainedWord, StatisticsInUse};
 use crate::pipeline::{GainStep, PipelineWord, SnapshotStatus, Statistics, TimingWord};
 use crate::record::{self, Request, SearchMode};
 use crate::round::{ParameterClient, RecordEffect, SearchStart};
@@ -111,9 +113,16 @@ fn an_incomplete_history_snapshot_leaves_the_history_alone() {
     assert!(history.started());
 }
 
+/// A collected acquisition block and a published auxiliary curve, as the shared record holds them.
+fn published(ports: &mut Ports) {
+    ports.acquisition.block = AcquisitionBlock { lens: ResourceIndex(0x76d9c8), collected: 1, level: 0x123, ..AcquisitionBlock::default() };
+    ports.auxiliary.publication = AuxiliaryPublication { curve: [1, 2, 3], levels: [4, 5, 6], published: true, curve_word: RetainedWord(7) };
+}
+
 #[test]
 fn finishing_a_selection_clear_answers_the_client_and_invalidates_what_is_no_longer_offered() {
     let mut ports = Ports::new(Some(Selection { auxiliary: true, ..ACQUISITION }), ());
+    published(&mut ports);
     let client = stock::optional_callback(0xf0a0);
     apply(RecordEffect::FinishSelectionClear(ParameterClient(client)), record(), &mut ports);
     let target = ReplyTarget::Command(CommandKind::Command17);
@@ -122,15 +131,20 @@ fn finishing_a_selection_clear_answers_the_client_and_invalidates_what_is_no_lon
         Outbound::Reply { target, callback: client.unwrap(), status: CompletionStatus(0), values: [0; 3] },
     ]);
     assert_eq!(ports.records.invalid, [PublishedResult::Search, PublishedResult::Source]);
+    assert_eq!(ports.acquisition.block.collected, 1);
+    assert!(ports.auxiliary.publication.published);
     assert!(!ports.records.focus_invalid);
 }
 
 #[test]
-fn a_record_that_offers_nothing_also_invalidates_the_focus_result() {
+fn a_record_that_offers_nothing_clears_each_results_valid_word_and_the_focus_result() {
     let mut ports = Ports::new(None, ());
+    published(&mut ports);
     apply(RecordEffect::FinishSelectionClear(ParameterClient(None)), record(), &mut ports);
     assert_eq!(ports.take(), [Outbound::ClearPending(ReplyTarget::Command(CommandKind::Command17))]);
-    assert_eq!(ports.records.invalid, [PublishedResult::Acquisition, PublishedResult::Search, PublishedResult::Auxiliary, PublishedResult::Source]);
+    assert_eq!(ports.acquisition.block, AcquisitionBlock { lens: ResourceIndex(0x76d9c8), collected: 0, level: 0x123, ..AcquisitionBlock::default() });
+    assert_eq!(ports.auxiliary.publication, AuxiliaryPublication { curve: [1, 2, 3], levels: [4, 5, 6], published: false, curve_word: RetainedWord(7) });
+    assert_eq!(ports.records.invalid, [PublishedResult::Search, PublishedResult::Source]);
     assert!(ports.records.focus_invalid);
 }
 

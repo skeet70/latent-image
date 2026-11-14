@@ -206,6 +206,25 @@ fn a_completion_without_a_reading_changes_nothing() {
 }
 
 #[test]
+fn a_zero_channel_mean_under_a_wide_band_is_followed_unless_its_dividend_is_zero_too() {
+    let wide = AuxiliarySettings { ring_length: 1, early_readings: 0, follow_band: 200, settled_band: 200, ..SETTINGS };
+    let mut moved = ports();
+    moved.auxiliary.settings = wide;
+    let mut auxiliary = on_third_pass(&mut moved);
+    // The third channel's divisor is zero and its dividend is not: the ratio is out of band and the averages move half way.
+    assert!(follow(&mut auxiliary, &mut moved, [100, 200, 0]));
+    assert_eq!(averages(&moved), [100, 200, 200]);
+
+    let mut settled = ports();
+    settled.auxiliary.settings = wide;
+    let mut auxiliary = on_third_pass(&mut settled);
+    // A zero first channel zeroes both dividends: both ratios are zero, inside a band of 128 or more, and following stops.
+    follow(&mut auxiliary, &mut settled, [0, 200, 0]);
+    follow(&mut auxiliary, &mut settled, [0, 200, 0]);
+    assert_eq!(averages(&settled), [100, 200, 400]);
+}
+
+#[test]
 fn following_steps_the_averages_towards_the_ring_means_with_the_early_gain_first() {
     let mut ports = ports();
     let mut auxiliary = on_third_pass(&mut ports);

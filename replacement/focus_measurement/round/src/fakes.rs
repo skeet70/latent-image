@@ -437,8 +437,8 @@ impl<X> source::Ports for Ports<X> {
 use crate::acquisition::ports::{
     AcquisitionBlock, AcquisitionSettings, Branch as AcquisitionBranch, ExposurePublication, ExposureRecordUpdate, GridInputs,
     GridReference, ModeInputs, PositionInputs, PositionSlot, Program, ProgramChoice, ProgramInputs, ProgramTarget,
-    PublishedExposure, Range, RangeInputs, RateNotice, RateRecord, RecordView, Release, SelectionNotice, SelectionPosition,
-    SelectionRecord, SelectionSlot, SettingEcho, ShotContext, StatisticsBuffer, TargetInputs,
+    PublishedExposure, Range, RangeInputs, RateNotice, RateRecord, RecordView, Release, ReleasedResult, SelectionNotice,
+    SelectionPosition, SelectionRecord, SelectionSlot, SettingEcho, ShotContext, StatisticsBuffer, TargetInputs,
 };
 use crate::acquisition::selection::SelectionMemory;
 use xm1_saclac_interface::calc::{AcquisitionGrid, SharedAddress};
@@ -458,8 +458,17 @@ pub enum AcquisitionTraffic {
     SelectionTable(SelectionTable),
     FocusTable(FocusTable),
     Selected(SelectionNotice),
-    Released(SharedAddress),
-    Statistics,
+    Released(ReleasedResult),
+    /// The release's statistics; their content is in `AcquisitionRecords::releases`.
+    Release,
+}
+
+/// One release's statistics as the port received them.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReleaseRecord {
+    pub classes: [u8; 256],
+    pub offsets: [[u16; 256]; 4],
+    pub snapshot: Option<(Vec<u16>, StatisticsBuffer)>,
 }
 
 /// The profile record and layer values the acquisition reads, and what it last wrote back.
@@ -477,6 +486,9 @@ pub struct AcquisitionRecords {
     pub target: ProgramTarget,
     pub lens: ResourceIndex,
     pub statistics: [u16; 256],
+    /// The extra statistics the release reads, from the first.
+    pub extra: [u16; 600],
+    pub releases: Vec<ReleaseRecord>,
     pub acquisition_result: Option<AcquisitionResult>,
     pub selection_result: Option<SelectionResult>,
     pub word: u32,
@@ -498,6 +510,8 @@ impl Default for AcquisitionRecords {
             target: ProgramTarget::default(),
             lens: ResourceIndex(0),
             statistics: [0; 256],
+            extra: [0; 600],
+            releases: Vec::new(),
             acquisition_result: None,
             selection_result: None,
             word: 0,
@@ -576,7 +590,7 @@ impl<X> crate::acquisition::ports::Ports for Ports<X> {
     fn acquisition_gain_step(&mut self, _: u32) -> GainStep { GainStep(3) }
     fn kind_decade(&mut self, kind: u32) -> u32 { kind }
     fn change_positions(&mut self, _: RecordHandle) -> [u32; 2] { [0; 2] }
-    fn select_program(&mut self, inputs: &ProgramInputs) -> Program { Program(inputs.kind) }
+    fn select_program(&mut self, inputs: &ProgramInputs) -> Option<Program> { Some(Program(inputs.kind)) }
     fn program_adjustment(&mut self, _: Program) -> u32 { 0 }
     fn program_range_limit(&mut self, _: Program) -> u32 { 0 }
     fn program_policy(&mut self, _: Program) -> u32 { 0 }
@@ -616,8 +630,15 @@ impl<X> crate::acquisition::ports::Ports for Ports<X> {
     fn draw_rate_status(&mut self, _: u16, _: u32, _: u32) {}
     fn rate_position(&mut self, _: RecordHandle) -> (u32, u16) { (0, 0) }
     fn statistics_buffer(&mut self, _: StatisticsBuffer) -> [u16; 256] { self.acquisition.statistics }
-    fn extra_statistics(&mut self, values: &mut [u16]) { values.fill(0); }
-    fn store_release(&mut self, _: &Release<'_>) { self.send(AcquisitionTraffic::Statistics); }
+    fn extra_statistics(&mut self, values: &mut [u16]) { values.copy_from_slice(&self.acquisition.extra[..values.len()]); }
+    fn store_release(&mut self, release: &Release<'_>) {
+        self.acquisition.releases.push(ReleaseRecord {
+            classes: *release.classes,
+            offsets: *release.offsets,
+            snapshot: release.snapshot.map(|snapshot| (snapshot.extra.to_vec(), snapshot.copy)),
+        });
+        self.send(AcquisitionTraffic::Release);
+    }
     fn set_pipeline_reference(&mut self, _: i16) {}
     fn prepare_s1_sample(&mut self) {}
     fn s1_sample(&mut self) -> PipelineSnapshot { self.snapshot }
@@ -653,9 +674,7 @@ impl<X> crate::acquisition::ports::Ports for Ports<X> {
     fn shot_record_levels(&mut self, _: SharedAddress) -> ShotRecordLevels { ShotRecordLevels::default() }
     fn saved_exposure(&mut self, _: SharedAddress) -> SavedExposure { SavedExposure::default() }
     fn publish_saved_exposure(&mut self, _: RecordHandle, _: &SavedExposure) {}
-    fn release_result(&mut self, result: SharedAddress, _: Option<(SharedAddress, SharedAddress)>) {
-        self.send(AcquisitionTraffic::Released(result));
-    }
+    fn release_result(&mut self, released: ReleasedResult) { self.send(AcquisitionTraffic::Released(released)); }
 }
 
 impl<X> crate::children::Ports for Ports<X> {

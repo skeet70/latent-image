@@ -6,6 +6,7 @@
 //! `stock`.
 
 pub mod geometry;
+pub mod acquisition;
 pub mod lens;
 pub mod lens_com;
 pub mod records;
@@ -27,3 +28,5 @@ mod lens_tests;
 mod records_tests;
 #[cfg(test)]
 mod stages_tests;
+#[cfg(test)]
+mod acquisition_tests;

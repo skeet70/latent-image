@@ -3,6 +3,7 @@
 //! The round's record effects carried out against the profile records, the
 //! property store, the imaging pipeline and the image peer.
 
+use crate::auxiliary::AuxiliaryPublication;
 use crate::history::{HistoryEntry, MeasurementHistory};
 use crate::pipeline::{Exposure, Pipeline, PipelineSnapshot, Statistics};
 use crate::planner::{Cadence, Mode, Work};
@@ -85,7 +86,7 @@ pub trait Ports: ProfileRecords + Settings + Pipeline + Exposure + Power + Adjus
     fn request(&mut self, request: Request);
 }
 
-pub fn apply(effect: RecordEffect, record: RecordHandle, history: &mut MeasurementHistory, ports: &mut impl Ports) {
+pub fn apply(effect: RecordEffect, record: RecordHandle, history: &mut MeasurementHistory, ports: &mut (impl crate::auxiliary::Ports + crate::acquisition::ports::Ports)) {
     match effect {
         RecordEffect::ResetSelection => ports.detach_capture_buffer(record),
         RecordEffect::ClearSelection => {
@@ -120,7 +121,7 @@ pub fn apply(effect: RecordEffect, record: RecordHandle, history: &mut Measureme
     }
 }
 
-fn finish_selection_clear(client: ParameterClient, record: RecordHandle, ports: &mut impl Ports) {
+fn finish_selection_clear(client: ParameterClient, record: RecordHandle, ports: &mut (impl crate::auxiliary::Ports + crate::acquisition::ports::Ports)) {
     replies::deliver(replies::Reply {
         target: ReplyTarget::Command(CommandKind::Command17),
         callback: client.0,
@@ -129,14 +130,17 @@ fn finish_selection_clear(client: ParameterClient, record: RecordHandle, ports: 
     }, ports);
     let offered = ports.offered();
     let kinds = offered.unwrap_or_default();
-    for (offered, result) in [
-        (kinds.acquisition, PublishedResult::Acquisition),
-        (kinds.search, PublishedResult::Search),
-        (kinds.auxiliary, PublishedResult::Auxiliary),
-        (kinds.source, PublishedResult::Source),
-    ] {
-        if !offered { ports.invalidate(record, result); }
+    if !kinds.acquisition {
+        let mut block = ports.acquisition_block(record);
+        block.collected = 0;
+        ports.store_acquisition_block(record, &block);
     }
+    if !kinds.search { ports.invalidate(record, PublishedResult::Search); }
+    if !kinds.auxiliary {
+        let publication = ports.auxiliary_publication(record);
+        ports.publish_auxiliary(record, AuxiliaryPublication { published: false, ..publication });
+    }
+    if !kinds.source { ports.invalidate(record, PublishedResult::Source); }
     if offered.is_none() { ports.invalidate_focus_result(); }
 }
 

@@ -16,7 +16,7 @@ use xm1_saclac_profile_records::{
     StockEntries, Tag,
 };
 use xm1_saclac_peers::{EmulatorOnly, PeerPorts};
-use xm1_saclac_shared::stock::Machine;
+use xm1_saclac_shared::stock::{Argument, Machine};
 
 use crate::Services;
 
@@ -29,6 +29,7 @@ pub struct State {
     memory: HashMap<u32, u8>,
     answers: HashMap<u32, VecDeque<u32>>,
     entered: Vec<(u32, Vec<u32>)>,
+    buffer_writes: HashMap<u32, Vec<(usize, Vec<u8>)>>,
 }
 
 impl State {
@@ -59,6 +60,11 @@ impl Fake {
     pub fn adjustment(&self, key: u32, value: u8) { self.set_byte(ADJUSTMENTS + key, value) }
 
     pub fn take_entered(&self) -> Vec<(u32, Vec<u32>)> { std::mem::take(&mut self.0.borrow_mut().entered) }
+
+    /// A retained entry's writes to its caller's buffer.
+    pub fn buffer(&self, address: u32, offset: usize, bytes: &[u8]) {
+        self.0.borrow_mut().buffer_writes.entry(address).or_default().push((offset, bytes.to_vec()));
+    }
 }
 
 impl Machine for Fake {
@@ -84,6 +90,18 @@ impl Machine for Fake {
         state.entered.push((address, arguments.iter().map(|&argument| argument as u32).collect()));
         state.answers.get_mut(&address).and_then(VecDeque::pop_front).unwrap_or(0)
     }
+
+    fn enter_with(&self, address: u32, arguments: &[Argument], buffer: &mut [u8]) -> u32 {
+        let arguments: Vec<_> = arguments.iter().map(|argument| match *argument {
+            Argument::Word(word) => word as usize,
+            Argument::Buffer(offset) => 0xb000_0000 + offset,
+        }).collect();
+        let answer = self.enter(address, &arguments);
+        if let Some(writes) = self.0.borrow().buffer_writes.get(&address) {
+            for (offset, bytes) in writes { buffer[*offset..*offset + bytes.len()].copy_from_slice(bytes); }
+        }
+        answer
+    }
 }
 
 /// The shared profile-record entries, answered from fixed values.
@@ -91,6 +109,8 @@ impl Machine for Fake {
 pub struct Entries {
     pub selection: MeasurementSelection,
     pub header_47: u8,
+    pub header_31: u8,
+    pub header_63: u8,
 }
 
 impl StockEntries for Entries {
@@ -99,6 +119,8 @@ impl StockEntries for Entries {
     fn header_byte(&mut self, _: RecordHandle, byte: SharedHeaderByte) -> u8 {
         match byte {
             SharedHeaderByte::At47 => self.header_47,
+            SharedHeaderByte::At31 => self.header_31,
+            SharedHeaderByte::At63 => self.header_63,
             _ => 0,
         }
     }

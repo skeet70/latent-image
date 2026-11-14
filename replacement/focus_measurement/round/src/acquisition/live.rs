@@ -18,7 +18,7 @@ use xm1_saclac_interface::{Completed, RecordHandle};
 use super::exposure::{self, ExposureSetting, ExposureSummary};
 use super::ports::{
     ExposureRecordUpdate, GridInputs, ModeInputs, PositionSlot, Ports, Program, ProgramChoice, ProgramInputs, Range,
-    RangeInputs, Release, StatisticsBuffer, TargetInputs,
+    RangeInputs, Release, ReleasedResult, SnapshotRelease, StatisticsBuffer, TargetInputs,
 };
 use super::selection::{self, LensPreset, Publication};
 use super::statistics::{classify, offset_values, release_offset, StatisticsSet, VALUES};
@@ -150,7 +150,7 @@ impl LiveWork {
         let view = ports.record_view(record);
         let lens = ports.current_lens();
         ports.store_lens(record, lens);
-        let program = ports.select_program(&exposure::initial_program(&view, view.kind));
+        let program = exposure::chosen_program(record, &exposure::initial_program(&view, view.kind), ports);
         let lens = ports.published_exposure(record).lens;
         let gain_step = ports.acquisition_gain_step(view.adjustment);
         let gain = ports.gain_offset(gain_step) as u16;
@@ -227,7 +227,7 @@ impl LiveWork {
         } else {
             view.kind
         };
-        let program = ports.select_program(&exposure::initial_program(&view, kind));
+        let program = exposure::chosen_program(record, &exposure::initial_program(&view, kind), ports);
         let range_inputs = |exposure, level, first, second, adjustment| RangeInputs {
             program,
             exposure,
@@ -333,7 +333,7 @@ impl LiveWork {
         let level = published.reference_level.wrapping_sub(published.aspect);
         let gain_step = ports.acquisition_gain_step(view.adjustment);
         let base_gain = ports.gain_offset(published.gain_step) as u16;
-        let program = ports.select_program(&exposure::initial_program(&view, view.kind));
+        let program = exposure::chosen_program(record, &exposure::initial_program(&view, view.kind), ports);
         let gain = ports.gain_offset(gain_step) as u16;
         let wide = ports.program_adjustment(program) == 1 || ports.program_range_limit(program) == 46;
         let target = ports.program_target(&TargetInputs {
@@ -493,17 +493,17 @@ impl LiveWork {
         }
         block.offsets = crate::stock::RELEASE_OFFSETS;
         let mut extra = [0u16; EXTRA_CAPACITY];
-        let extra = if settings.snapshot_grid {
+        let snapshot = if settings.snapshot_grid {
             let count = usize::from(set.count as u16).min(EXTRA_CAPACITY);
             let values = &mut extra[..count];
             ports.extra_statistics(values);
             for value in values.iter_mut() { *value = value.wrapping_add(offset); }
             block.extra = crate::stock::RELEASE_EXTRA;
-            Some(&extra[..count])
+            Some(SnapshotRelease { extra: &extra[..count], copy: crate::stock::RELEASE_COPY })
         } else {
             None
         };
-        ports.store_release(&Release { classes: &classification.classes, offsets: &offsets, extra });
+        ports.store_release(&Release { classes: &classification.classes, offsets: &offsets, snapshot });
         block.copy = crate::stock::RELEASE_COPY;
         block.release_halfword = view.release_halfword;
         ports.store_acquisition_block(record, &block);
@@ -625,7 +625,7 @@ impl LiveWork {
         block.eligible = if settings.suppresses_eligible { 0 } else { self.guard.eligible };
         block.reused = self.statistics.selected != 0 && self.guard.lens == ports.current_lens();
         ports.store_acquisition_block(record, &block);
-        ports.release_result(result.address, None);
+        ports.release_result(ReleasedResult::Acquisition(result.address));
         self.report_change(record, ports);
     }
 
@@ -753,7 +753,7 @@ impl LiveWork {
             ports.program_kind(record)
         } else {
             let stored = ports.stored_program(record);
-            let fresh = ports.select_program(&inputs);
+            let fresh = exposure::chosen_program(record, &inputs, ports);
             let kept = ports.program_secondary_gate(stored) == 1;
             if kept == (ports.program_secondary_gate(fresh) == 1) {
                 let kind = u32::from(kept);
@@ -778,7 +778,7 @@ impl LiveWork {
         inputs.percent = percent;
         inputs.policy = policy;
         self.program_tail = (percent, policy);
-        let program = ports.select_program(&inputs);
+        let program = ports.select_program(&inputs).unwrap_or(Program(request.program));
         request.program = program.0;
         let stored = ports.stored_program(record);
         let (old, new) = (ports.program_scale(stored), ports.program_scale(Program(program.0 & 0xff)));
@@ -838,8 +838,8 @@ impl LiveWork {
         self.take_selection(record, &result, ports);
         self.publish_selection(record, &result, ports);
         self.changed = self.publish_table(record, &result, ports);
-        let records = result.shot_data.then_some((result.shot_record, result.saved_record));
-        ports.release_result(result.address, records);
+        let shot = result.shot_data.then_some((result.shot_record, result.saved_record));
+        ports.release_result(ReleasedResult::Selection { result: result.address, shot });
         self.changed
     }
 
@@ -911,7 +911,7 @@ impl LiveWork {
             }
         };
         let (percent, policy) = self.program_percent_and_policy(record, bound, result.primary_only, ports);
-        let program = ports.select_program(&ProgramInputs {
+        let program = exposure::chosen_program(record, &ProgramInputs {
             selection: view.selection,
             adjustment: result.adjustment,
             kind: result.kind,
@@ -923,7 +923,7 @@ impl LiveWork {
             policy,
             percent,
             bytes: [0, 2],
-        });
+        }, ports);
         ports.store_program(record, Program(program.0 & 0xff));
         let gain = ports.gain_offset(gain_step) as u16;
         let entry = |range: &Range, exposure: u32| SelectionEntry {

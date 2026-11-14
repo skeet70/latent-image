@@ -7,7 +7,7 @@ use xm1_saclac_interface::calc::AcquisitionGrid;
 use xm1_saclac_interface::round_acquisition::{PrimaryLevels, SelectionLevels};
 use xm1_saclac_interface::RecordHandle;
 
-use super::ports::{ExposurePublication, ExposureRecordUpdate, Ports, ProgramInputs, RecordView};
+use super::ports::{ExposurePublication, ExposureRecordUpdate, Ports, Program, ProgramInputs, RecordView};
 
 /// What the live acquisition keeps of the exposure it settled on.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -104,6 +104,15 @@ pub(crate) fn initial_levels(base: u16) -> (PrimaryLevels, SelectionLevels) {
         PrimaryLevels { base, levels: [base; 7], word: 0 },
         SelectionLevels { base, levels: [base; 3], zeroed: [0; 6], unsigned: 0, word: 0, last: 0, reference: base, tail: [base; 3] },
     )
+}
+
+/// The adjustment layer's program for `inputs`; the record's stored program when it chooses none.
+/// Corrected: X-M1 1.50 reads an unwritten stack word there (spec/11, measurement round corrections).
+pub(crate) fn chosen_program(record: RecordHandle, inputs: &ProgramInputs, ports: &mut impl Ports) -> Program {
+    match ports.select_program(inputs) {
+        Some(program) => program,
+        None => ports.stored_program(record),
+    }
 }
 
 /// The program selection an initialization makes for the record's own kind.
