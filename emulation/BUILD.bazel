@@ -4837,7 +4837,6 @@ haskell_library(
         "//host:directory",
         "//host:filepath",
         "//host:text",
-        "//replacement/modal_runtime:render-stack-evidence-lib",
     ],
 )
 

@@ -26,6 +26,34 @@ xm1_rust_rlib(
     ],
 )
 
+# The production rlib with the tree's selected row drawn unstyled: the render pair suite's
+# wrong owned variant.
+xm1_rust_rlib(
+    name = "arm-control-tree-selected-unstyled",
+    src = "src/lib.rs",
+    crate_name = "menu_widgets",
+    out = "libmenu_widgets_control_tree_selected_unstyled.rlib",
+    data = [":module"],
+    rlib_deps = {
+        "libm": "//replacement/render_commands:libm-arm",
+        "menu_engine": "//replacement/menu_engine:arm",
+        "render_commands": "//replacement/render_commands:runtime-arm",
+    },
+    rustc_flags = [
+        "-C",
+        "target-feature=+strict-align",
+        "-C",
+        "llvm-args=-min-jump-table-entries=4096",
+        "--cfg",
+        "tree_selected_unstyled",
+    ],
+    testonly = True,
+    visibility = [
+        "//replacement/bank:__pkg__",
+        "//replacement/render_adapter:__pkg__",
+    ],
+)
+
 filegroup(
     name = "module",
     srcs = ["src/lib.rs", "src/value_picker.rs", "src/tree_list.rs", "src/pane_drawer.rs", "src/owned_frame.rs", "src/owned_tree.rs", "src/owned_picker.rs", "src/owned_pane.rs", "src/engine_frame.rs", "src/engine_model.rs", "src/owned_frame_tests.rs"],

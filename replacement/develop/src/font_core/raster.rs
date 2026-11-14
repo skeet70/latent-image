@@ -1,7 +1,6 @@
 use super::scanlines::{Coordinate, Dimension, Row, Span};
 use super::{ByteStride, CoverageEncoding, FontConfig, FontError, FontSize, GlyphAdvance, GlyphId, GlyphMask, GlyphMetrics, PixelExtent, PixelOffset, WritingMode};
 use super::raster_vm as vmcore;
-use core::mem::MaybeUninit;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)]
@@ -602,46 +601,47 @@ const RUN_CAPACITY: usize = u16::MAX as usize;
 const CURVE_CAPACITY: usize = 80;
 const COARSE_CAPACITY: usize = 20;
 
-struct Registers<T: Copy, const N: usize> { values: [MaybeUninit<T>; N], produced: u16 }
+struct Registers<T: Copy, const N: usize> { values: [T; N], produced: u16 }
 impl<T: Copy, const N: usize> Registers<T, N> {
-    fn new() -> Self { Self { values: [MaybeUninit::uninit(); N], produced: 0 } }
+    fn new(fill: T) -> Self { Self { values: [fill; N], produced: 0 } }
     fn get(&self, index: usize) -> Result<T, FontError> {
         if index >= N { return Err(FontError::workspace((index + 1) * core::mem::size_of::<T>(), N * core::mem::size_of::<T>())); }
         if self.produced & (1 << index) == 0 { return Err(FontError::UninitializedRasterState); }
-        Ok(unsafe { self.values[index].assume_init_read() })
+        Ok(self.values[index])
     }
     fn set(&mut self, index: usize, value: T) -> Result<(), FontError> {
         if index >= N { return Err(FontError::workspace((index + 1) * core::mem::size_of::<T>(), N * core::mem::size_of::<T>())); }
-        self.values[index].write(value); self.produced |= 1 << index; Ok(())
+        self.values[index] = value; self.produced |= 1 << index; Ok(())
     }
 }
-struct EdgeRows { values: [MaybeUninit<EdgeCoordinate>; ROW_CAPACITY], produced: [u64; ROW_CAPACITY / 64] }
+struct EdgeRows { values: [EdgeCoordinate; ROW_CAPACITY], produced: [u64; ROW_CAPACITY / 64] }
 impl EdgeRows {
-    fn new() -> Self { Self { values: [MaybeUninit::uninit(); ROW_CAPACITY], produced: [0; ROW_CAPACITY / 64] } }
+    fn new() -> Self { Self { values: [EdgeCoordinate(0); ROW_CAPACITY], produced: [0; ROW_CAPACITY / 64] } }
     fn get(&self, index: usize) -> Result<EdgeCoordinate, FontError> {
         if index >= ROW_CAPACITY { return Err(FontError::workspace((index + 1) * 2, ROW_CAPACITY * 2)); }
         if self.produced[index / 64] & (1 << (index % 64)) == 0 { return Err(FontError::UninitializedRasterState); }
-        Ok(unsafe { self.values[index].assume_init_read() })
+        Ok(self.values[index])
     }
     fn set(&mut self, index: usize, value: EdgeCoordinate) -> Result<(), FontError> {
         if index >= ROW_CAPACITY { return Err(FontError::workspace((index + 1) * 2, ROW_CAPACITY * 2)); }
-        self.values[index].write(value); self.produced[index / 64] |= 1 << (index % 64); Ok(())
+        self.values[index] = value; self.produced[index / 64] |= 1 << (index % 64); Ok(())
     }
 }
-struct CurveStack<T: Copy, const N: usize> { values: [MaybeUninit<T>; N], produced: usize }
+struct CurveStack<T: Copy, const N: usize> { values: [T; N], produced: usize }
 impl<T: Copy, const N: usize> CurveStack<T, N> {
-    fn new() -> Self { Self { values: [MaybeUninit::uninit(); N], produced: 0 } }
+    fn new(fill: T) -> Self { Self { values: [fill; N], produced: 0 } }
     fn get(&self, index: CurveStackIndex) -> Result<T, FontError> {
         if index.0 >= N { return Err(FontError::workspace((index.0 + 1) * core::mem::size_of::<T>(), N * core::mem::size_of::<T>())); }
         if index.0 >= self.produced { return Err(FontError::UninitializedRasterState); }
-        Ok(unsafe { self.values[index.0].assume_init_read() })
+        Ok(self.values[index.0])
     }
     fn set(&mut self, index: CurveStackIndex, value: T) -> Result<(), FontError> {
         if index.0 >= N { return Err(FontError::workspace((index.0 + 1) * core::mem::size_of::<T>(), N * core::mem::size_of::<T>())); }
         if index.0 > self.produced { return Err(FontError::UninitializedRasterState); }
-        self.values[index.0].write(value); self.produced = self.produced.max(index.0 + 1); Ok(())
+        self.values[index.0] = value; self.produced = self.produced.max(index.0 + 1); Ok(())
     }
 }
+const EMPTY_RUN_NODE: RunNode = RunNode { first: EdgeCoordinate(0), last: EdgeCoordinate(0), next: RunIndex::NONE };
 pub struct RasterWorkspace {
     vm: vmcore::VmState,
     points: [Registers<vmcore::GridCoordinate, 16>; 2],
@@ -652,32 +652,34 @@ pub struct RasterWorkspace {
     scale: Option<vmcore::Scale>, inline_origin: super::scanlines::Point,
     left: EdgeRows, right: EdgeRows, scratch_left: EdgeRows, scratch_right: EdgeRows,
     curves: CurveStack<RasterPoint, CURVE_CAPACITY>, coarse: CurveStack<CoarseCurveNode, COARSE_CAPACITY>,
-    heads: [MaybeUninit<RunIndex>; ROW_CAPACITY], tails: [MaybeUninit<RunIndex>; ROW_CAPACITY],
-    nodes: [MaybeUninit<RunNode>; RUN_CAPACITY], run_rows: usize, runs_produced: bool,
+    heads: [RunIndex; ROW_CAPACITY], tails: [RunIndex; ROW_CAPACITY],
+    nodes: [RunNode; RUN_CAPACITY], run_rows: usize, runs_produced: bool,
     allocated: u16, nodes_produced: u16, free: RunIndex,
 }
 impl RasterWorkspace {
     pub fn new() -> Self {
         Self {
             vm: vmcore::VmState::default(),
-            points: [Registers::new(), Registers::new()], coefficients: [Registers::new(), Registers::new(), Registers::new()],
-            initial_points: Registers::new(), initial_values: Registers::new(), point_header: false, value_header: false, body_produced: false,
+            points: [Registers::new(vmcore::GridCoordinate(0)), Registers::new(vmcore::GridCoordinate(0))],
+            coefficients: [Registers::new(vmcore::ScaleValue(0)), Registers::new(vmcore::ScaleValue(0)), Registers::new(vmcore::ScaleValue(0))],
+            initial_points: Registers::new(vmcore::BytePoint { x: 0, y: 0 }), initial_values: Registers::new(0), point_header: false, value_header: false, body_produced: false,
             primary: None, secondary: None, active: StreamSelection::PRIMARY, scale: None,
             inline_origin: super::scanlines::Point { x: Coordinate(0), y: Coordinate(0) },
             left: EdgeRows::new(), right: EdgeRows::new(), scratch_left: EdgeRows::new(), scratch_right: EdgeRows::new(),
-            curves: CurveStack::new(), coarse: CurveStack::new(),
-            heads: [MaybeUninit::uninit(); ROW_CAPACITY], tails: [MaybeUninit::uninit(); ROW_CAPACITY],
-            nodes: [MaybeUninit::uninit(); RUN_CAPACITY], run_rows: 0, runs_produced: false, allocated: 0, nodes_produced: 0, free: RunIndex::NONE,
+            curves: CurveStack::new(RasterPoint::new(0, 0)),
+            coarse: CurveStack::new(CoarseCurveNode { end: RasterPoint::new(0, 0), control: RasterPoint::new(0, 0) }),
+            heads: [RunIndex::NONE; ROW_CAPACITY], tails: [RunIndex::NONE; ROW_CAPACITY],
+            nodes: [EMPTY_RUN_NODE; RUN_CAPACITY], run_rows: 0, runs_produced: false, allocated: 0, nodes_produced: 0, free: RunIndex::NONE,
         }
     }
     fn reset_runs(&mut self, rows: usize) -> Result<(), FontError> {
         if rows > ROW_CAPACITY { return Err(FontError::workspace(rows * 4, ROW_CAPACITY * 4)); }
-        for head in &mut self.heads[..rows] { head.write(RunIndex::NONE); }
+        self.heads[..rows].fill(RunIndex::NONE);
         self.run_rows = rows; self.allocated = 0; self.nodes_produced = 0; self.free = RunIndex::NONE; self.runs_produced = true; Ok(())
     }
     fn heads(&self) -> Result<&[RunIndex], FontError> {
         if !self.runs_produced { return Err(FontError::UninitializedRasterState); }
-        Ok(unsafe { core::slice::from_raw_parts(self.heads.as_ptr() as *const RunIndex, self.run_rows) })
+        Ok(&self.heads[..self.run_rows])
     }
     fn apply_run(&mut self, row: Row, span: Span, erase: bool) -> Result<bool, FontError> {
         if !self.runs_produced { return Err(FontError::UninitializedRasterState); }
@@ -968,7 +970,7 @@ impl CoverageStorage for RenderStorage<'_, '_, '_, '_> {
     fn run(&self, index: RunIndex) -> Result<RunNode, FontError> {
         if !self.workspace.runs_produced { return Err(FontError::UninitializedRasterState); }
         if index.0 >= self.workspace.nodes_produced { return Err(FontError::UninitializedRasterState); }
-        Ok(unsafe { self.workspace.nodes[usize::from(index.0)].assume_init_read() })
+        Ok(self.workspace.nodes[usize::from(index.0)])
     }
     fn alignment(&self, offset: super::scanlines::BitmapOffset) -> u8 { ((self.pixels.as_ptr() as usize).wrapping_add(offset.0 as usize) & 3) as u8 }
     fn lookup(&self, value: u8) -> Result<u8, FontError> { Ok(value) }
@@ -1080,19 +1082,19 @@ impl RunStorage for WorkspaceRuns<'_> {
     type Error = FontError;
     fn first_row(&self) -> Row { Row(0) }
     fn row_count(&self) -> super::scanlines::RowCount { super::scanlines::RowCount(self.0.run_rows as i32) }
-    fn head(&self, row: Row) -> Result<RunIndex, FontError> { Ok(unsafe { self.0.heads[self.row(row)?].assume_init_read() }) }
-    fn set_head(&mut self, row: Row, index: RunIndex) -> Result<(), FontError> { let row = self.row(row)?; self.0.heads[row].write(index); Ok(()) }
-    fn tail(&self, row: Row) -> Result<RunIndex, FontError> { Ok(unsafe { self.0.tails[self.row(row)?].assume_init_read() }) }
-    fn set_tail(&mut self, row: Row, index: RunIndex) -> Result<(), FontError> { let row = self.row(row)?; self.0.tails[row].write(index); Ok(()) }
-    fn node(&self, index: RunIndex) -> Result<RunNode, FontError> { Ok(unsafe { self.0.nodes[self.node_index(index)?].assume_init_read() }) }
+    fn head(&self, row: Row) -> Result<RunIndex, FontError> { Ok(self.0.heads[self.row(row)?]) }
+    fn set_head(&mut self, row: Row, index: RunIndex) -> Result<(), FontError> { let row = self.row(row)?; self.0.heads[row] = index; Ok(()) }
+    fn tail(&self, row: Row) -> Result<RunIndex, FontError> { Ok(self.0.tails[self.row(row)?]) }
+    fn set_tail(&mut self, row: Row, index: RunIndex) -> Result<(), FontError> { let row = self.row(row)?; self.0.tails[row] = index; Ok(()) }
+    fn node(&self, index: RunIndex) -> Result<RunNode, FontError> { Ok(self.0.nodes[self.node_index(index)?]) }
     fn initialize_node(&mut self, index: RunIndex, node: RunNode) -> Result<(), FontError> {
         if usize::from(index.0) >= RUN_CAPACITY { return Err(FontError::workspace((usize::from(index.0) + 1) * 6, RUN_CAPACITY * 6)); }
         if index.0 > self.0.nodes_produced { return Err(FontError::UninitializedRasterState); }
-        self.0.nodes[usize::from(index.0)].write(node); self.0.nodes_produced = self.0.nodes_produced.max(index.0.wrapping_add(1)); Ok(())
+        self.0.nodes[usize::from(index.0)] = node; self.0.nodes_produced = self.0.nodes_produced.max(index.0.wrapping_add(1)); Ok(())
     }
-    fn set_first(&mut self, index: RunIndex, value: EdgeCoordinate) -> Result<(), FontError> { let index = self.node_index(index)?; unsafe { self.0.nodes[index].assume_init_mut() }.first = value; Ok(()) }
-    fn set_last(&mut self, index: RunIndex, value: EdgeCoordinate) -> Result<(), FontError> { let index = self.node_index(index)?; unsafe { self.0.nodes[index].assume_init_mut() }.last = value; Ok(()) }
-    fn set_next(&mut self, index: RunIndex, next: RunIndex) -> Result<(), FontError> { let index = self.node_index(index)?; unsafe { self.0.nodes[index].assume_init_mut() }.next = next; Ok(()) }
+    fn set_first(&mut self, index: RunIndex, value: EdgeCoordinate) -> Result<(), FontError> { let index = self.node_index(index)?; self.0.nodes[index].first = value; Ok(()) }
+    fn set_last(&mut self, index: RunIndex, value: EdgeCoordinate) -> Result<(), FontError> { let index = self.node_index(index)?; self.0.nodes[index].last = value; Ok(()) }
+    fn set_next(&mut self, index: RunIndex, next: RunIndex) -> Result<(), FontError> { let index = self.node_index(index)?; self.0.nodes[index].next = next; Ok(()) }
     fn capacity(&self) -> u16 { RUN_CAPACITY as u16 }
     fn allocated(&self) -> u16 { self.0.allocated }
     fn set_allocated(&mut self, count: u16) { self.0.allocated = count; }
@@ -1201,6 +1203,29 @@ mod tests {
     }
 
     #[test]
+    fn a_smaller_glyph_reusing_the_workspace_matches_a_fresh_one() {
+        let bytes = font(RECTANGLE, 500);
+        let mut raster = RasterWorkspace::new();
+        let mut tall = [0xa5; 64];
+        {
+            let mut engine = FontEngine::new(FontAsset::parse(&bytes).unwrap(), config(8, CoverageEncoding::Gray4), FontWorkspace::fdl(&mut raster, &mut tall)).unwrap();
+            assert_eq!(engine.glyph_mask(GLYPH).unwrap().pixels(), &[15; 64]);
+        }
+        let mut reused = [0xa5; 16];
+        {
+            let mut engine = FontEngine::new(FontAsset::parse(&bytes).unwrap(), config(4, CoverageEncoding::Gray4), FontWorkspace::fdl(&mut raster, &mut reused)).unwrap();
+            assert_eq!(engine.glyph_mask(GLYPH).unwrap().pixels(), &[15; 16]);
+        }
+        let mut fresh_raster = RasterWorkspace::new();
+        let mut fresh = [0xa5; 16];
+        {
+            let mut engine = FontEngine::new(FontAsset::parse(&bytes).unwrap(), config(4, CoverageEncoding::Gray4), FontWorkspace::fdl(&mut fresh_raster, &mut fresh)).unwrap();
+            assert_eq!(engine.glyph_mask(GLYPH).unwrap().pixels(), &[15; 16]);
+        }
+        assert_eq!(reused, fresh);
+    }
+
+    #[test]
     fn constructed_small_gray8_glyph_uses_scalar_coverage() {
         let bytes = font(RECTANGLE, 500);
         let mut raster = RasterWorkspace::new();
@@ -1221,6 +1246,69 @@ mod tests {
             assert!(matches!(engine.glyph_mask(GLYPH), Err(FontError::UninitializedRasterState)));
         }
         assert_eq!(pixels, [0xa5, 0, 0xa5]);
+    }
+
+    fn refused<T>(result: Result<T, FontError>) -> bool { matches!(result, Err(FontError::UninitializedRasterState)) }
+
+    fn with_render_storage<T>(raster: &mut RasterWorkspace, check: impl FnOnce(&mut RenderStorage<'_, '_, '_, '_>) -> T) -> T {
+        let bytes = font(RECTANGLE, 500);
+        let resource = super::super::outline::FdlResource::parse(&bytes).unwrap();
+        let requested = config(8, CoverageEncoding::Gray4);
+        let program = resource.glyph_program(GLYPH, requested.writing).unwrap();
+        let profile = RenderProfile::new(requested, requested.size, GLYPH, program.metrics).unwrap();
+        let origin = super::super::scanlines::Point { x: Coordinate(0), y: Coordinate(0) };
+        let mut pixels = [0; 64];
+        let mut storage = RenderStorage { resource: &resource, workspace: raster, pixels: &mut pixels, profile,
+            bounds: super::super::scanlines::Bounds { minimum: origin, maximum: origin } };
+        check(&mut storage)
+    }
+
+    #[test]
+    fn unproduced_vm_registers_refuse_until_written() {
+        let mut raster = RasterWorkspace::new();
+        with_render_storage(&mut raster, |storage| {
+            assert!(refused(vmcore::Storage::point(&*storage, vmcore::Axis::X, vmcore::PointIndex(3))));
+            vmcore::Storage::set_point(&mut *storage, vmcore::Axis::X, vmcore::PointIndex(3), vmcore::GridCoordinate(5)).unwrap();
+            assert_eq!(vmcore::Storage::point(&*storage, vmcore::Axis::X, vmcore::PointIndex(3)).unwrap(), vmcore::GridCoordinate(5));
+            assert!(refused(vmcore::Storage::point(&*storage, vmcore::Axis::Y, vmcore::PointIndex(3))));
+            assert!(refused(vmcore::Storage::coefficient(&*storage, vmcore::CoefficientBank::Values, vmcore::ScaleIndex(2))));
+            assert!(refused(vmcore::Storage::initial_value(&*storage, vmcore::ScaleIndex(0))));
+            assert!(refused(vmcore::Storage::initial_point(&*storage, vmcore::PointIndex(0))));
+        });
+    }
+
+    #[test]
+    fn curve_stacks_refuse_reads_past_the_produced_top_and_gapped_writes() {
+        let mut raster = RasterWorkspace::new();
+        with_render_storage(&mut raster, |storage| {
+            assert!(refused(GeometryStorage::curve_point(&*storage, CurveStackIndex(0))));
+            GeometryStorage::set_curve_point(&mut *storage, CurveStackIndex(0), RasterPoint::new(1, 2)).unwrap();
+            assert!(GeometryStorage::curve_point(&*storage, CurveStackIndex(0)).is_ok());
+            assert!(refused(GeometryStorage::curve_point(&*storage, CurveStackIndex(1))));
+            assert!(refused(GeometryStorage::set_curve_point(&mut *storage, CurveStackIndex(2), RasterPoint::new(3, 4))));
+            assert!(refused(CachedCurveStorage::node(&*storage, CurveStackIndex(0))));
+        });
+    }
+
+    #[test]
+    fn run_nodes_refuse_reads_before_they_are_initialized() {
+        let mut raster = RasterWorkspace::new();
+        with_render_storage(&mut raster, |storage| assert!(refused(CoverageStorage::run(&*storage, RunIndex(0)))));
+        raster.reset_runs(8).unwrap();
+        with_render_storage(&mut raster, |storage| assert!(refused(CoverageStorage::run(&*storage, RunIndex(0)))));
+        {
+            let mut runs = WorkspaceRuns(&mut raster);
+            assert!(refused(RunStorage::node(&runs, RunIndex(0))));
+            assert!(refused(RunStorage::initialize_node(&mut runs, RunIndex(1), EMPTY_RUN_NODE)));
+            RunStorage::initialize_node(&mut runs, RunIndex(0), EMPTY_RUN_NODE).unwrap();
+            assert!(RunStorage::node(&runs, RunIndex(0)).is_ok());
+            assert!(refused(RunStorage::node(&runs, RunIndex(1))));
+            assert!(refused(RunStorage::set_next(&mut runs, RunIndex(1), RunIndex::NONE)));
+        }
+        with_render_storage(&mut raster, |storage| {
+            assert!(CoverageStorage::run(&*storage, RunIndex(0)).is_ok());
+            assert!(refused(CoverageStorage::run(&*storage, RunIndex(1))));
+        });
     }
 
     #[test]

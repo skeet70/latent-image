@@ -17,27 +17,17 @@ module Emulation.RenderPairAdmission
   , ProcedureId (..)
   , CheckpointId (..)
   , checkpointText
-  , SourceKind (..)
-  , sourceKindText
   , Expected (..)
   , InputPins (..)
   , Provenance (..)
   , ReceiptIdentity (..)
-  , DiagnosticSource (..)
-  , DiagnosticEntry (..)
-  , DiagnosticConfig (..)
   , verifyInputs
   , verifyReceipt
   , bindReceipt
   , importReceipt
-  , writeOwnedConfig
-  , ownedConfigFromElf
-  , readDiagnosticConfig
   , renderSourceIdentityPaths
   ) where
 
-import qualified ArmElf as ELF
-import Control.Applicative ((<|>))
 import Control.Monad (forM, unless)
 import BankAllowlist (Report, allowlistAnalysisIdentity, violations)
 import qualified Data.Aeson as J
@@ -47,16 +37,14 @@ import qualified Data.Aeson.Types as J
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.Char (isDigit)
-import Data.List (isInfixOf, isPrefixOf, nub, sort, sortOn, stripPrefix)
+import Data.List (isInfixOf, isPrefixOf, nub, sort, stripPrefix)
 import qualified Data.Map.Strict as M
 import Data.String (IsString (..))
 import qualified Data.Text as T
 import Data.Word (Word32)
 import Emulation.Sha256 (Sha256, parseSha256Hex, sha256, sha256File, sha256Hex)
 import qualified Emulation.ObservationStream as OS
-import Numeric (readHex, showHex)
-import qualified RenderStack as R
-import qualified Replacement.ModalRuntime.RenderStackEvidence as E
+import Numeric (readHex)
 import System.Directory
   ( canonicalizePath
   , copyFileWithMetadata
@@ -64,7 +52,6 @@ import System.Directory
   , doesDirectoryExist
   , doesFileExist
   , listDirectory
-  , makeAbsolute
   , pathIsSymbolicLink
   , removeFile
   , renameFile
@@ -131,28 +118,6 @@ newtype CheckpointId = CheckpointId T.Text deriving (Eq, Ord, Show)
 checkpointText :: CheckpointId -> T.Text
 checkpointText (CheckpointId text) = text
 
-data SourceKind = OwnedSource | RetainedSource deriving (Eq, Ord, Show)
-
-sourceKindText :: SourceKind -> T.Text
-sourceKindText OwnedSource = "owned"
-sourceKindText RetainedSource = "retained"
-
-parseSourceKind :: T.Text -> Either String SourceKind
-parseSourceKind "owned" = Right OwnedSource
-parseSourceKind "retained" = Right RetainedSource
-parseSourceKind other = Left ("unknown diagnostic source kind " ++ T.unpack other)
-
-stackKindText :: E.StackKind -> T.Text
-stackKindText E.TreeStack = "tree"
-stackKindText E.PickerStack = "picker"
-stackKindText E.PaneStack = "pane"
-
-parseStackKind :: T.Text -> Either String E.StackKind
-parseStackKind "tree" = Right E.TreeStack
-parseStackKind "picker" = Right E.PickerStack
-parseStackKind "pane" = Right E.PaneStack
-parseStackKind other = Left ("unknown diagnostic entry kind " ++ T.unpack other)
-
 -- | The input identities one role's invocation must use. 'expectedPins' carries the guest inputs
 -- a previously admitted role of the same cohort recorded, so both roles bind the same inputs.
 data Expected = Expected
@@ -168,8 +133,6 @@ data Expected = Expected
   , expectedNand :: FilePath
   , expectedBootRom :: FilePath
   , expectedRunDocument :: FilePath
-  , expectedConfig :: FilePath
-  , expectedConfigSha :: Digest
   , expectedArchive :: Maybe FilePath
   , expectedArchiveSha :: Maybe Digest
   , expectedSourceIdentity :: Maybe FilePath
@@ -203,8 +166,6 @@ data ReceiptIdentity = ReceiptIdentity
   , identityResult :: Digest
   , identitySession :: Digest
   , identityModal :: Digest
-  , identityDiagnostic :: Digest
-  , identityRequest :: Digest
   , identityWatchFinal :: Digest
   , identityManifest :: Digest
   , identityRuntime :: Digest
@@ -212,30 +173,6 @@ data ReceiptIdentity = ReceiptIdentity
   , identityTaskEntries :: Int
   , identityBankVariant :: T.Text
   , identityPublications :: Int
-  } deriving (Eq, Show)
-
-data DiagnosticSource = DiagnosticSource
-  { sourceKind :: SourceKind
-  , sourceStart :: E.StackAddress
-  , sourceSha :: Digest
-  , sourcePath :: FilePath
-  } deriving (Eq, Ord, Show)
-
-data DiagnosticEntry = DiagnosticEntry
-  { entryKind :: E.StackKind
-  , entryAddress :: E.StackAddress
-  , entryDepth :: E.FrameBytes
-  } deriving (Eq, Show)
-
-entryKey :: DiagnosticEntry -> (E.StackKind, E.StackAddress)
-entryKey entry = (entryKind entry, entryAddress entry)
-
-data DiagnosticConfig = DiagnosticConfig
-  { configRole :: Role
-  , configSources :: [DiagnosticSource]
-  , configEntries :: [DiagnosticEntry]
-  , configReturns :: [Word32]
-  , configRetained :: [Word32]
   } deriving (Eq, Show)
 
 -- JSON ---------------------------------------------------------------------------------------
@@ -276,56 +213,12 @@ instance J.FromJSON Role where
 instance J.ToJSON Role where
   toJSON = J.String . roleText
 
-sourceValue :: DiagnosticSource -> J.Value
-sourceValue (DiagnosticSource kind start sha path) = J.object
-  [ "kind" J..= sourceKindText kind, "start" J..= start, "sha256" J..= sha, "path" J..= path ]
-
-entryValue :: DiagnosticEntry -> J.Value
-entryValue (DiagnosticEntry kind address depth) = J.object
-  [ "kind" J..= stackKindText kind, "address" J..= address, "frame_depth" J..= frameDepth depth ]
- where
-  frameDepth (E.FrameBytes bytes) = bytes
-
-configValue :: DiagnosticConfig -> J.Value
-configValue (DiagnosticConfig role sources entries returns retained) = J.object
-  [ "version" J..= (1 :: Word32)
-  , "role" J..= roleText role
-  , "sources" J..= map sourceValue sources
-  , "entries" J..= map entryValue entries
-  , "returns" J..= returns
-  , "retained_services" J..= retained
-  ]
-
-instance J.FromJSON DiagnosticSource where
-  parseJSON = J.withObject "diagnostic source" $ \fields -> do
-    kind <- fields J..: "kind" >>= either fail pure . parseSourceKind
-    DiagnosticSource kind <$> fields J..: "start" <*> fields J..: "sha256" <*> fields J..: "path"
-
-instance J.FromJSON DiagnosticEntry where
-  parseJSON = J.withObject "diagnostic entry" $ \fields -> do
-    kind <- fields J..: "kind" >>= either fail pure . parseStackKind
-    DiagnosticEntry kind <$> fields J..: "address" <*> fields J..: "frame_depth"
-
-instance J.FromJSON DiagnosticConfig where
-  parseJSON = J.withObject "diagnostic configuration" $ \fields -> do
-    version <- fields J..: "version" :: J.Parser Word32
-    unless (version == 1) (fail "unsupported render diagnostic configuration version")
-    DiagnosticConfig
-      <$> fields J..: "role" <*> fields J..: "sources" <*> fields J..: "entries"
-      <*> fields J..: "returns" <*> fields J..: "retained_services"
-
-readDiagnosticConfig :: FilePath -> IO (Either String DiagnosticConfig)
-readDiagnosticConfig path = do
-  bytes <- B.readFile path
-  pure (J.eitherDecodeStrict' bytes)
-
 -- Input verification -------------------------------------------------------------------------
 
 -- | Runs before any guest launch.
 verifyInputs :: Expected -> IO (Either String ())
 verifyInputs expected = runChecks
   [ checkDigest "trajectory" (expectedTrajectory expected) (expectedTrajectorySha expected)
-  , checkDigest "diagnostic configuration" (expectedConfig expected) (expectedConfigSha expected)
   , checkFujiModPaths expected
   , checkSourceIdentity expected
   , checkOwnedInputs expected
@@ -419,33 +312,11 @@ checkOwnedInputs expected = case expectedRole expected of
     (_, Nothing) -> pure (Left "owned role needs the frozen archive SHA-256")
     (Just archive, Just sha) -> do
       digest <- checkDigest "owned archive" archive sha
-      config <- readDiagnosticConfig (expectedConfig expected)
-      case (digest, config) of
-        (Left problem, _) -> pure (Left problem)
-        (_, Left problem) -> pure (Left ("owned diagnostic configuration: " ++ problem))
-        (_, Right parsed) -> do
-          sources <- forM (configSources parsed) $ \source -> do
-            present <- doesFileExist (sourcePath source)
-            if not present then pure (Left ("diagnostic source is missing: " ++ sourcePath source)) else do
-              actual <- digestFile (sourcePath source)
-              pure (if actual == sourceSha source then Right () else Left
-                ("diagnostic source " ++ sourcePath source ++ " differs from its recorded bytes"))
-          prelinkedCheck <- case (expectedPrelinked expected, expectedPrelinkedBase expected, expectedPrelinkedSize expected, expectedArchiveSha expected) of
-            (Nothing, _, _, _) -> pure (Right ())
-            (Just directory, Just base, Just size, Just archiveSha) -> checkPrelinked directory base size archiveSha (expectedChecker expected) (expectedSourceIdentity expected)
-            _ -> pure (Left "prelinked admission needs --prelinked-base, --prelinked-size and --archive-sha256")
-          pure $ do
-            unless (configRole parsed == OwnedRole) (Left "owned role was given a non-owned diagnostic configuration")
-            let kinds = sort (map entryKind (configEntries parsed))
-            unless (kinds == [E.TreeStack, E.PickerStack, E.PaneStack])
-              (Left "owned diagnostic configuration lacks the three drawer entries")
-            unless (any ((== RetainedSource) . sourceKind) (configSources parsed)
-              && any ((== OwnedSource) . sourceKind) (configSources parsed))
-              (Left "owned diagnostic configuration lacks retained or owned sources")
-            case [problem | Left problem <- sources] of
-              [] -> Right ()
-              problem : _ -> Left problem
-            prelinkedCheck
+      prelinkedCheck <- case (expectedPrelinked expected, expectedPrelinkedBase expected, expectedPrelinkedSize expected) of
+        (Nothing, _, _) -> pure (Right ())
+        (Just directory, Just base, Just size) -> checkPrelinked directory base size sha (expectedChecker expected) (expectedSourceIdentity expected)
+        _ -> pure (Left "prelinked admission needs --prelinked-base and --prelinked-size")
+      pure (digest >> prelinkedCheck)
 
 data PrelinkedProof = PrelinkedProof
   { admissionProofAnalysis :: String
@@ -737,8 +608,6 @@ data AdmissionRecord = AdmissionRecord
   , recordSdk :: FilePath
   , recordTrajectory :: FilePath
   , recordTrajectorySha :: Digest
-  , recordConfig :: FilePath
-  , recordConfigSha :: Digest
   , recordArchive :: Maybe FilePath
   , recordArchiveSha :: Maybe Digest
   , recordSourceIdentity :: Maybe Digest
@@ -748,8 +617,6 @@ data AdmissionRecord = AdmissionRecord
   , recordResult :: Digest
   , recordSession :: Digest
   , recordModal :: Digest
-  , recordDiagnostic :: Digest
-  , recordRequest :: Digest
   , recordWatchFinal :: Digest
   , recordManifest :: Digest
   , recordRuntime :: Digest
@@ -768,7 +635,6 @@ instance J.ToJSON AdmissionRecord where
     , "head_commit" J..= recordHeadCommit record
     , "sdk_package" J..= recordSdk record
     , "trajectory" J..= J.object ["path" J..= recordTrajectory record, "sha256" J..= recordTrajectorySha record]
-    , "diagnostic_config" J..= J.object ["path" J..= recordConfig record, "sha256" J..= recordConfigSha record]
     , "archive" J..= fmap (\path -> J.object ["path" J..= path, "sha256" J..= recordArchiveSha record]) (recordArchive record)
     , "source_identity" J..= recordSourceIdentity record
     , "inputs" J..= pinsValue (recordPins record)
@@ -778,8 +644,6 @@ instance J.ToJSON AdmissionRecord where
         , "e2e_result_sha256" J..= recordResult record
         , "emulator_session_sha256" J..= recordSession record
         , "e2e_modal_observation_sha256" J..= recordModal record
-        , "e2e_render_stack_diagnostic_sha256" J..= recordDiagnostic record
-        , "e2e_render_stack_diagnostic_request_sha256" J..= recordRequest record
         , "e2e_modal_watch_final_sha256" J..= recordWatchFinal record
         , "ram_push_manifest_sha256" J..= recordManifest record
         , "runtime_sha256" J..= recordRuntime record
@@ -792,20 +656,17 @@ instance J.ToJSON AdmissionRecord where
 instance J.FromJSON AdmissionRecord where
   parseJSON = J.withObject "admission record" $ \fields -> do
     schema <- fields J..: "schema"
-    unless (schema == (1 :: Word32)) (fail "unsupported admission record version")
+    unless (schema == (2 :: Word32)) (fail "unsupported admission record version")
     contract <- fields J..: "contract"
     unless (contract == ("render-pair-receipt-admission" :: T.Text)) (fail "not a render pair admission record")
     receipt <- fields J..: "receipt"
     trajectory <- fields J..: "trajectory"
-    config <- fields J..: "diagnostic_config"
     archive <- fields J..:? "archive"
     AdmissionRecord schema contract
       <$> fields J..: "name" <*> fields J..: "role" <*> fields J..: "source_commit" <*> fields J..: "head_commit"
       <*> fields J..: "sdk_package"
       <*> J.withObject "trajectory" (\t -> t J..: "path") trajectory
       <*> J.withObject "trajectory" (\t -> t J..: "sha256") trajectory
-      <*> J.withObject "diagnostic_config" (\c -> c J..: "path") config
-      <*> J.withObject "diagnostic_config" (\c -> c J..: "sha256") config
       <*> traverse (J.withObject "archive" (\a -> a J..: "path")) archive
       <*> traverse (J.withObject "archive" (\a -> a J..: "sha256")) archive
       <*> fields J..:? "source_identity"
@@ -815,8 +676,6 @@ instance J.FromJSON AdmissionRecord where
       <*> J.withObject "receipt" (\r -> r J..: "e2e_result_sha256") receipt
       <*> J.withObject "receipt" (\r -> r J..: "emulator_session_sha256") receipt
       <*> J.withObject "receipt" (\r -> r J..: "e2e_modal_observation_sha256") receipt
-      <*> J.withObject "receipt" (\r -> r J..: "e2e_render_stack_diagnostic_sha256") receipt
-      <*> J.withObject "receipt" (\r -> r J..: "e2e_render_stack_diagnostic_request_sha256") receipt
       <*> J.withObject "receipt" (\r -> r J..: "e2e_modal_watch_final_sha256") receipt
       <*> J.withObject "receipt" (\r -> r J..: "ram_push_manifest_sha256") receipt
       <*> J.withObject "receipt" (\r -> r J..: "runtime_sha256") receipt
@@ -854,7 +713,7 @@ instance J.FromJSON Provenance where
 
 admissionRecord :: Expected -> ReceiptIdentity -> Maybe Digest -> Provenance -> AdmissionRecord
 admissionRecord expected identity sourceIdentity provenance = AdmissionRecord
-  { recordSchema = 1
+  { recordSchema = 2
   , recordContract = "render-pair-receipt-admission"
   , recordName = expectedName expected
   , recordRole = expectedRole expected
@@ -863,8 +722,6 @@ admissionRecord expected identity sourceIdentity provenance = AdmissionRecord
   , recordSdk = expectedSdk expected
   , recordTrajectory = expectedTrajectory expected
   , recordTrajectorySha = expectedTrajectorySha expected
-  , recordConfig = expectedConfig expected
-  , recordConfigSha = expectedConfigSha expected
   , recordArchive = expectedArchive expected
   , recordArchiveSha = expectedArchiveSha expected
   , recordSourceIdentity = sourceIdentity
@@ -874,8 +731,6 @@ admissionRecord expected identity sourceIdentity provenance = AdmissionRecord
   , recordResult = identityResult identity
   , recordSession = identitySession identity
   , recordModal = identityModal identity
-  , recordDiagnostic = identityDiagnostic identity
-  , recordRequest = identityRequest identity
   , recordWatchFinal = identityWatchFinal identity
   , recordManifest = identityManifest identity
   , recordRuntime = identityRuntime identity
@@ -891,7 +746,6 @@ admissionMismatch expected record
   | not (commitMatches (recordSourceCommit record) (expectedSourceCommit expected)) = Just "admission names a different source commit"
   | recordSdk record /= expectedSdk expected = Just "admission names a different SDK package"
   | recordTrajectorySha record /= expectedTrajectorySha expected = Just "admission names a different trajectory"
-  | recordConfigSha record /= expectedConfigSha expected = Just "admission names a different diagnostic configuration"
   | recordArchiveSha record /= expectedArchiveSha expected = Just "admission names a different owned archive"
   | otherwise = Nothing
  where
@@ -907,8 +761,6 @@ receiptMismatch record identity
   | recordResult record /= identityResult identity = Just "receipt result differs from the admission"
   | recordSession record /= identitySession identity = Just "receipt session differs from the admission"
   | recordModal record /= identityModal identity = Just "receipt modal observation differs from the admission"
-  | recordDiagnostic record /= identityDiagnostic identity = Just "receipt render diagnostic differs from the admission"
-  | recordRequest record /= identityRequest identity = Just "receipt diagnostic request differs from the admission"
   | recordWatchFinal record /= identityWatchFinal identity = Just "receipt lifetime watch differs from the admission"
   | recordManifest record /= identityManifest identity = Just "receipt manifest differs from the admission"
   | recordRuntime record /= identityRuntime identity = Just "receipt runtime differs from the admission"
@@ -933,7 +785,6 @@ verifyContents :: Expected -> FilePath -> IO (Either String ReceiptIdentity)
 verifyContents expected directory = do
   let required =
         [ "e2e-result.json", "emulator-session.json", "e2e-modal-observation.json"
-        , "e2e-render-stack-diagnostic.json", "e2e-render-stack-diagnostic-request.json"
         , "e2e-modal-watch-final.json", "relinked/kernel.elf", "relinked/ram-push-manifest.json"
         , "relinked/runtime.bin" ]
   missing <- fmap concat $ forM required $ \name -> do
@@ -945,57 +796,39 @@ verifyContents expected directory = do
       resultValue <- jsonFile (directory </> "e2e-result.json")
       sessionValue <- jsonFile (directory </> "emulator-session.json")
       modalValue <- jsonFile (directory </> "e2e-modal-observation.json")
-      diagnosticValue <- jsonFile (directory </> "e2e-render-stack-diagnostic.json")
-      requestValue <- jsonFile (directory </> "e2e-render-stack-diagnostic-request.json")
-      config <- readDiagnosticConfig (expectedConfig expected)
       observations <- observationFiles directory
-      elfBytes <- B.readFile (directory </> "relinked/kernel.elf")
-      case (config, ELF.parseElf elfBytes) of
-        (Left problem, _) -> pure (Left problem)
-        (_, Left problem) -> pure (Left ("relinked ELF: " ++ problem))
-        (Right configValue', Right elf) -> do
-          retained <- checkRetainedSources configValue'
-          case retained of
+      case (resultValue, sessionValue, modalValue, observations) of
+        (Left problem, _, _, _) -> pure (Left problem)
+        (_, Left problem, _, _) -> pure (Left problem)
+        (_, _, Left problem, _) -> pure (Left problem)
+        (_, _, _, Left problem) -> pure (Left problem)
+        (Right result, Right session, Right modal, Right indices) ->
+          case decodeReceipt expected result session modal indices of
             Left problem -> pure (Left problem)
-            Right () -> case (resultValue, sessionValue, modalValue, diagnosticValue, requestValue, observations) of
-              (Left problem, _, _, _, _, _) -> pure (Left problem)
-              (_, Left problem, _, _, _, _) -> pure (Left problem)
-              (_, _, Left problem, _, _, _) -> pure (Left problem)
-              (_, _, _, Left problem, _, _) -> pure (Left problem)
-              (_, _, _, _, Left problem, _) -> pure (Left problem)
-              (_, _, _, _, _, Left problem) -> pure (Left problem)
-              (Right result, Right session, Right modal, Right diagnostic, Right request, Right indices) ->
-                case decodeReceipt expected configValue' elf result session modal diagnostic request indices of
-                  Left problem -> pure (Left problem)
-                  Right identity -> do
-                    bound <- OS.loadReceiptObservationValues directory result
-                    case bound of
-                      Left problem -> pure (Left problem)
-                      Right verified
-                        | map (takeFileName . fst) verified
-                            /= ["e2e-observation-" ++ show index ++ ".json" | index <- indices] ->
-                            pure (Left "observation references do not match the receipt's numbered documents")
-                        | otherwise -> do
-                            hashes <- receiptHashes directory
-                            case hashes of
-                              Left problem -> pure (Left problem)
-                              Right (kernel, resultSha, sessionSha, modalSha, diagnosticSha, requestSha, watchSha, manifestSha, runtimeSha) -> do
-                                prelinked <- case (expectedRole expected, expectedPrelinked expected) of
-                                  (OwnedRole, Just prelinkedDirectory) -> comparePrelinked prelinkedDirectory directory
-                                  _ -> pure (Right ())
-                                pure $ do
-                                  prelinked
-                                  pure identity
-                                    { identityKernelElf = kernel
-                                    , identityResult = resultSha
-                                    , identitySession = sessionSha
-                                    , identityModal = modalSha
-                                    , identityDiagnostic = diagnosticSha
-                                    , identityRequest = requestSha
-                                    , identityWatchFinal = watchSha
-                                    , identityManifest = manifestSha
-                                    , identityRuntime = runtimeSha
-                                    }
+            Right identity -> do
+              bound <- OS.loadReceiptObservationValues directory result
+              case bound of
+                Left problem -> pure (Left problem)
+                Right verified
+                  | map (takeFileName . fst) verified
+                      /= ["e2e-observation-" ++ show index ++ ".json" | index <- indices] ->
+                      pure (Left "observation references do not match the receipt's numbered documents")
+                  | otherwise -> do
+                      (kernel, resultSha, sessionSha, modalSha, watchSha, manifestSha, runtimeSha) <- receiptHashes directory
+                      prelinked <- case (expectedRole expected, expectedPrelinked expected) of
+                        (OwnedRole, Just prelinkedDirectory) -> comparePrelinked prelinkedDirectory directory
+                        _ -> pure (Right ())
+                      pure $ do
+                        prelinked
+                        pure identity
+                          { identityKernelElf = kernel
+                          , identityResult = resultSha
+                          , identitySession = sessionSha
+                          , identityModal = modalSha
+                          , identityWatchFinal = watchSha
+                          , identityManifest = manifestSha
+                          , identityRuntime = runtimeSha
+                          }
 
 observationFiles :: FilePath -> IO (Either String [Int])
 observationFiles directory = do
@@ -1011,23 +844,19 @@ observationFiles directory = do
     then Right ordered
     else Left ("observation files are not one per segment: " ++ show ordered))
 
-receiptHashes :: FilePath -> IO (Either String (Digest, Digest, Digest, Digest, Digest, Digest, Digest, Digest, Digest))
+receiptHashes :: FilePath -> IO (Digest, Digest, Digest, Digest, Digest, Digest, Digest)
 receiptHashes directory = do
   kernel <- digestFile (directory </> "relinked/kernel.elf")
   result <- digestFile (directory </> "e2e-result.json")
   session <- digestFile (directory </> "emulator-session.json")
   modal <- digestFile (directory </> "e2e-modal-observation.json")
-  diagnostic <- digestFile (directory </> "e2e-render-stack-diagnostic.json")
-  request <- digestFile (directory </> "e2e-render-stack-diagnostic-request.json")
   watch <- digestFile (directory </> "e2e-modal-watch-final.json")
   manifest <- digestFile (directory </> "relinked/ram-push-manifest.json")
   runtime <- digestFile (directory </> "relinked/runtime.bin")
-  pure (Right (kernel, result, session, modal, diagnostic, request, watch, manifest, runtime))
+  pure (kernel, result, session, modal, watch, manifest, runtime)
 
-decodeReceipt
-  :: Expected -> DiagnosticConfig -> ELF.Elf -> J.Value -> J.Value -> J.Value -> J.Value -> J.Value -> [Int]
-  -> Either String ReceiptIdentity
-decodeReceipt expected config elf result session modal diagnostic request indices =
+decodeReceipt :: Expected -> J.Value -> J.Value -> J.Value -> [Int] -> Either String ReceiptIdentity
+decodeReceipt expected result session modal indices =
   J.parseEither (\_ -> do
     (outcome, trajectoryFailure, forbidden) <- J.withObject "e2e result" (\fields ->
       (,,) <$> (fields J..: "outcome" >>= parseQualification)
@@ -1072,12 +901,6 @@ decodeReceipt expected config elf result session modal diagnostic request indice
         unless (verified && entries > 0) (fail "owned receipt lacks verified task identity")
         unless (variant == ("modal75,menu-engine,render" :: T.Text) && publications == 228)
           (fail "owned receipt publication vector differs")
-    let evidenceRole = case expectedRole expected of StockRole -> E.StockStack; OwnedRole -> E.OwnedStack
-    _ <- either fail pure (E.parseRenderStackEvidence evidenceRole request diagnostic)
-    requestConfig <- J.parseJSON request
-    unless (sameConfig (config {configRole = expectedRole expected}) (requestConfig :: DiagnosticConfig))
-      (fail "diagnostic request differs from the admitted configuration")
-    checkConfigSources config elf
     pure (ReceiptIdentity
       { identityName = expectedName expected
       , identityRole = expectedRole expected
@@ -1089,8 +912,6 @@ decodeReceipt expected config elf result session modal diagnostic request indice
       , identityResult = digestBytes B.empty
       , identitySession = digestBytes B.empty
       , identityModal = digestBytes B.empty
-      , identityDiagnostic = digestBytes B.empty
-      , identityRequest = digestBytes B.empty
       , identityWatchFinal = digestBytes B.empty
       , identityManifest = digestBytes B.empty
       , identityRuntime = digestBytes B.empty
@@ -1100,47 +921,6 @@ decodeReceipt expected config elf result session modal diagnostic request indice
       , identityPublications = publications
       })) J.Null
 
-sameConfig :: DiagnosticConfig -> DiagnosticConfig -> Bool
-sameConfig left right =
-  configRole left == configRole right
-    && sort (configSources left) == sort (configSources right)
-    && sortOn entryKey (configEntries left) == sortOn entryKey (configEntries right)
-    && configReturns left == configReturns right
-    && configRetained left == configRetained right
-
--- | Source paths are presentation; only kind, start and bytes are compared.
-sameAdmittedConfig :: DiagnosticConfig -> DiagnosticConfig -> Bool
-sameAdmittedConfig left right =
-  configRole left == configRole right
-    && sort [(sourceKind s, sourceStart s, sourceSha s) | s <- configSources left]
-      == sort [(sourceKind s, sourceStart s, sourceSha s) | s <- configSources right]
-    && sortOn entryKey (configEntries left) == sortOn entryKey (configEntries right)
-    && configReturns left == configReturns right
-    && configRetained left == configRetained right
-
--- | Retained source files must still hold their recorded bytes.
-checkRetainedSources :: DiagnosticConfig -> IO (Either String ())
-checkRetainedSources config = runChecks
-  [ do
-      present <- doesFileExist (sourcePath source)
-      if not present then pure (Left ("retained diagnostic source is missing: " ++ sourcePath source)) else do
-        actual <- digestFile (sourcePath source)
-        pure (if actual == sourceSha source then Right () else Left
-          ("retained diagnostic source " ++ sourcePath source ++ " differs from its recorded bytes"))
-  | source <- configSources config, sourceKind source == RetainedSource ]
-
--- | The owned sources must be exactly the role ELF's executable sections, as
--- 'Replacement.ModalRuntime.RenderStackEvidence.checkOwnedSources' requires.
-checkConfigSources :: DiagnosticConfig -> ELF.Elf -> J.Parser ()
-checkConfigSources config elf = do
-  let expected = sort [(E.StackAddress (ELF.sectionAddress section), digestBytes (sectionBytes section))
-                      | section <- ELF.elfSections elf, ELF.sectionExecutable section, ELF.sectionSize section > 0]
-      actual = sort [(sourceStart source, sourceSha source) | source <- configSources config, sourceKind source == OwnedSource]
-  unless (actual == expected) (fail "diagnostic owned sources differ from the linked role ELF")
- where
-  sectionBytes section = B.take (fromIntegral (ELF.sectionSize section))
-    (B.drop (fromIntegral (ELF.sectionOffset section)) (ELF.elfBytes elf))
-
 -- Review packet ------------------------------------------------------------------------------
 
 data ReviewPacket = ReviewPacket
@@ -1149,8 +929,6 @@ data ReviewPacket = ReviewPacket
   , packetSdk :: FilePath
   , packetTrajectory :: FilePath
   , packetTrajectorySha :: Digest
-  , packetConfig :: FilePath
-  , packetConfigSha :: Digest
   , packetTerminal :: FilePath
   , packetTerminalSha :: Digest
   , packetEvidence :: [(FilePath, Digest)]
@@ -1162,12 +940,10 @@ instance J.FromJSON ReviewPacket where
     source <- fields J..: "source_commit"
     sdk <- fields J..: "sdk_package"
     trajectory <- fields J..: "trajectory" >>= J.withObject "trajectory" (\t -> (,) <$> t J..: "path" <*> t J..: "sha256")
-    config <- fields J..: "config" >>= J.withObject "config" (\c -> (,) <$> c J..: "path" <*> c J..: "sha256")
     terminal <- fields J..: "terminal" >>= J.withObject "terminal" (\t -> (,) <$> t J..: "path" <*> t J..: "sha256")
-    evidence <- fields J..: "evidence" >>= J.withObject "evidence" (\e -> forM ["result", "diagnostic", "session"] $ \key ->
+    evidence <- fields J..: "evidence" >>= J.withObject "evidence" (\e -> forM ["result", "session"] $ \key ->
       e J..: key >>= J.withObject "evidence file" (\file -> (,) <$> file J..: "path" <*> file J..: "sha256"))
-    pure (ReviewPacket passed source sdk (fst trajectory) (snd trajectory) (fst config) (snd config)
-      (fst terminal) (snd terminal) evidence)
+    pure (ReviewPacket passed source sdk (fst trajectory) (snd trajectory) (fst terminal) (snd terminal) evidence)
 
 packetProblems :: Expected -> ReviewPacket -> [String]
 packetProblems expected packet =
@@ -1175,7 +951,6 @@ packetProblems expected packet =
     ++ [ "review packet source commit differs" | not (commitMatches (packetSourceCommit packet) (expectedSourceCommit expected)) ]
     ++ [ "review packet SDK differs" | packetSdk packet /= expectedSdk expected ]
     ++ [ "review packet trajectory differs" | packetTrajectorySha packet /= expectedTrajectorySha expected ]
-    ++ [ "review packet configuration differs" | packetConfigSha packet /= expectedConfigSha expected ]
  where
   commitMatches (CommitId recorded) (CommitId wanted) = recorded == wanted
     || (T.length recorded >= 8 && recorded `T.isPrefixOf` wanted)
@@ -1184,7 +959,6 @@ packetProblems expected packet =
 verifyPacketEvidence :: ReviewPacket -> FilePath -> IO (Either String ())
 verifyPacketEvidence packet receipt = runChecks
   ( checkDigest "packet trajectory" (packetTrajectory packet) (packetTrajectorySha packet)
-  : checkDigest "packet configuration" (packetConfig packet) (packetConfigSha packet)
   : checkDigest "packet terminal" (packetTerminal packet) (packetTerminalSha packet)
   : [ verifyEvidence path sha | (path, sha) <- packetEvidence packet ]
   )
@@ -1197,80 +971,6 @@ verifyPacketEvidence packet receipt = runChecks
       else do
         digest <- digestFile actual
         pure (if digest == sha then Right () else Left ("packet evidence " ++ name ++ " differs from the receipt"))
-
--- Owned configuration ------------------------------------------------------------------------
-
--- | Frame depths and owned sources come from the relinked owned ELF; returns and retained services
--- come from the stock configuration. Retained images come from the owned retained configuration,
--- whose hook-patched images carry the owned entry branches.
-writeOwnedConfig :: FilePath -> FilePath -> Word32 -> FilePath -> FilePath -> FilePath -> IO (Either String ())
-writeOwnedConfig elfPath manifestPath base stockConfigPath retainedConfigPath outPath = do
-  bytes <- B.readFile elfPath
-  manifest <- jsonFile manifestPath
-  stock <- readDiagnosticConfig stockConfigPath
-  retainedConfig <- readDiagnosticConfig retainedConfigPath
-  case (ELF.parseElf bytes, manifest, stock, retainedConfig) of
-    (Left problem, _, _, _) -> pure (Left ("owned ELF: " ++ problem))
-    (_, Left problem, _, _) -> pure (Left ("owned manifest: " ++ problem))
-    (_, _, Left problem, _) -> pure (Left ("stock configuration: " ++ problem))
-    (_, _, _, Left problem) -> pure (Left ("retained configuration: " ++ problem))
-    (Right elf, Right manifestValue, Right stockConfig, Right retained) ->
-      case J.parseEither (J.withObject "manifest" (\fields -> (fields J..: "size" :: J.Parser Word32) <|> fields J..: "bytes")) manifestValue of
-        Left problem -> pure (Left ("owned manifest: " ++ problem))
-        Right allocationSize -> case ownedConfigFromElf elf allocationSize base stockConfig retained of
-          Left problem -> pure (Left problem)
-          Right (owned, sections) -> do
-            retainedCheck <- checkRetainedSources owned
-            case retainedCheck of
-              Left problem -> pure (Left problem)
-              Right () -> do
-                let retainedSources = [source | source <- configSources owned, sourceKind source == RetainedSource]
-                exists <- doesFileExist outPath
-                if exists
-                  then do
-                    previous <- readDiagnosticConfig outPath
-                    pure $ case previous of
-                      Right prior | sameAdmittedConfig prior owned -> Right ()
-                      _ -> Left ("refusing to replace the existing diagnostic configuration " ++ outPath)
-                  else do
-                    createDirectoryIfMissing True (takeDirectory outPath)
-                    sourceDirectory <- makeAbsolute (takeDirectory outPath </> "owned-sources")
-                    createDirectoryIfMissing True sourceDirectory
-                    ownedSources <- forM sections $ \(address, sectionBytes) -> do
-                      let path = sourceDirectory </> ("section-" ++ showHexWord address ++ ".bin")
-                      B.writeFile path sectionBytes
-                      pure (DiagnosticSource OwnedSource (E.StackAddress address) (digestBytes sectionBytes) path)
-                    let final = owned { configSources = retainedSources ++ ownedSources }
-                    writeAtomic outPath (BL.toStrict (J.encode (configValue final)) <> "\n")
-                    pure (Right ())
-
--- | Depths and owned sources come from the ELF; returns and services from the stock configuration;
--- retained images from the retained configuration. The executable section bytes are returned for
--- the caller to write.
-ownedConfigFromElf :: ELF.Elf -> Word32 -> Word32 -> DiagnosticConfig -> DiagnosticConfig -> Either String (DiagnosticConfig, [(Word32, B.ByteString)])
-ownedConfigFromElf elf allocationSize base stock retainedConfig = do
-  let inRuntime address = address >= base && toInteger address < toInteger base + toInteger allocationSize
-  report <- R.checkRenderStack elf inRuntime
-  let depths = [ (E.TreeStack, R.entryDepth (R.reportTree report))
-               , (E.PickerStack, R.entryDepth (R.reportPicker report))
-               , (E.PaneStack, R.entryDepth (R.reportPane report)) ]
-  let sections = [(ELF.sectionAddress section, sectionBytes section)
-                 | section <- ELF.elfSections elf, ELF.sectionExecutable section, ELF.sectionSize section > 0]
-      ownedSources = [DiagnosticSource OwnedSource (E.StackAddress address) (digestBytes bytes) "" | (address, bytes) <- sections]
-  unless (not (null ownedSources)) (Left "owned ELF has no executable section")
-  let retained = [source | source <- configSources retainedConfig, sourceKind source == RetainedSource]
-  pure ( stock
-    { configRole = OwnedRole
-    , configSources = retained ++ ownedSources
-    , configEntries = [entry { entryDepth = E.FrameBytes depth } | entry <- configEntries stock, Just depth <- [lookup (entryKind entry) depths]]
-    }
-    , sections )
- where
-  sectionBytes section = B.take (fromIntegral (ELF.sectionSize section))
-    (B.drop (fromIntegral (ELF.sectionOffset section)) (ELF.elfBytes elf))
-
-showHexWord :: Word32 -> String
-showHexWord value = let text = showHex value "" in replicate (8 - length text) '0' ++ text
 
 -- Utility ------------------------------------------------------------------------------------
 

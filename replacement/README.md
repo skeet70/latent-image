@@ -22,6 +22,18 @@ The [Rust toolchain guide](toolchain/README.md) owns compiler provenance and bui
 
 Stagers require their declared canonical X-M1 1.50 inputs, not an arbitrary previously staged candidate. Firmware and generated artifacts remain in ignored `private-data/`; use a named `private-data/scratch/` directory or `private-data/verify-candidate/runs/` for new outputs. Individual commands specify whether directories must already exist or be fresh. Guest execution uses the shared [emulator slot](../build-support/README.md#commands), normally `XM1_EMULATOR_SLOTS=1`; file-only admission and comparison do not execute firmware.
 
+## Render pairs
+
+The [render adapter](render_adapter/README.md) links the owned render bank into the RAM package. `emulation/menu-engine-pair-trajectories/run-render-pairs.sh` admits each role's inputs, replays the finite R1 stock/owned cohort and compares engine traffic, settings and rendered output. Its selected-tree-row control must change the draw and image comparisons while preserving engine reads and posts.
+
+<!-- evidence-record E-RENDER-R1-MAIN-COHORT-150 -->
+
+E-RENDER-R1-MAIN-COHORT-150: The finite R1 render cohort passes 67 of 67 stock/owned pairs: 56 reach drawers and 11 are draw-free. Stock engine execution is authenticated in 67 pairs; stock and owned record 952 and 952 drawer entries. The executed selected-tree-row control is detected (true), with pair/settings/render comparison exits 1/0/1. Both roles use the same controlled-RTC run document, retaining existing pixel exclusions. The production archive is bdc2acaf0caa3d71b5f410b215a8ede6ca58b8501d6be474c9a3e7c4170f131f; recorded source is 9cf65ff1, with the executed runner retained separately.
+
+Scope: Emulated X-M1 1.50 replay of the finite admitted R1 renderer cohort and one executed wrong-render control, using the observer and controlled-RTC document identified by the retained driver and inputs. This qualifies neither expanded tree/picker classes nor glyph rasterization through RasterWorkspace.
+
+<!-- /evidence-record E-RENDER-R1-MAIN-COHORT-150 -->
+
 ## Fixed owned image
 
 `replacement/fixed_image/layout.json` defines the layout constants. `//replacement/fixed_image:contract` exposes them through `Replacement.FixedImage.Layout`; `//replacement/fixed_image:layout` exposes the Rust rlib `xm1_fixed_image_layout`. The reserved RAM range is `[0x00ba0000, 0x00be0000)`. Its 32-byte record header precedes the linked body at `0x00ba0020`; flash starts at `0x00900000` and holds at most two 128 KiB blocks.

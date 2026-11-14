@@ -1176,7 +1176,7 @@ mirrorReceipt source destination = do
   entries <- listDirectory source
   forM_ entries $ \entry -> do
     let name = takeFileName entry
-    when (name `notElem` ["render-banks.json", "e2e-render-stack-allocation-check.json"]) $
+    when (name /= "render-banks.json") $
       createSymbolicLink (absolute </> entry) (destination </> entry)
 
 runPairCheckCurrent :: CaseId -> IO (Either Failure FilePath)

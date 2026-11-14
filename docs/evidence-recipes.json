@@ -1538,4 +1538,121 @@
       {"name":"stock_checkpoint_created","path":"private-data/scratch/StimulusTicks/runs/20261113T200722Z-instruction-clock-shoot-without-lens/result/stock-instructions.json","pointer":["checkpoint","key"]}
     ]
   }
+  ,{
+    "id": "E-RENDER-R1-MAIN-COHORT-150",
+    "claim": "The finite R1 render cohort passes {{passed}} of {{cases}} stock/owned pairs: {{draw_cases}} reach drawers and {{draw_free_cases}} are draw-free. Stock engine execution is authenticated in {{stock_engine_executed_cases}} pairs; stock and owned record {{stock_draw_entries}} and {{owned_draw_entries}} drawer entries. The executed selected-tree-row control is detected ({{control_detected}}), with pair/settings/render comparison exits {{control_pair_exit}}/{{control_settings_exit}}/{{control_render_exit}}. Both roles use the same controlled-RTC run document, retaining existing pixel exclusions. The production archive is {{archive_sha256}}; recorded source is {{source_commit}}, with the executed runner retained separately.",
+    "scope": "Emulated X-M1 1.50 replay of the finite admitted R1 renderer cohort and one executed wrong-render control, using the observer and controlled-RTC document identified by the retained driver and inputs. This qualifies neither expanded tree/picker classes nor glyph rasterization through RasterWorkspace.",
+    "notes": "The observer is /nix/store/v926q21mrbffqlanlrmf3c23pzgn8rkz-fujimod-xm1-0.1.0, not a relabeling to a newer SDK. RTC progression is disabled; initial registers and timer models are unchanged. Existing frame-fixed-open, fixed-wrap, framed-pop-back and framed-push clock masks remain. The control reports draw order/state differing with equal engine reads and 0x1d posts; settings match. Picker selected-row control remains E-RENDER-TREE-PICKER-GUEST-CONTROLS-150. The raster storage correction has host evidence only; no current image reaches RasterWorkspace. Task-33 unobserved stack demand and the summary-buffer defect in #161 remain open. No whole-firmware or hardware acceptance.",
+    "artifacts": [
+      "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/checks/suite.json",
+      "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/verdict.json",
+      "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/control/oracle-fn-auto-open-checks.json",
+      "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/control/oracle-fn-auto-open-pair-check.txt",
+      "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/control/oracle-fn-auto-open-render.json",
+      "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/inputs.sha256",
+      "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/driver.sh",
+      "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/runner.sh",
+      "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/render-run-document.json"
+    ],
+    "facts": [
+      {
+        "name": "firmware_sha256",
+        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/checks/suite.json",
+        "pointer": [
+          "firmware_sha256"
+        ]
+      },
+      {
+        "name": "cases",
+        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/checks/suite.json",
+        "pointer": [
+          "cases"
+        ]
+      },
+      {
+        "name": "passed",
+        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/checks/suite.json",
+        "pointer": [
+          "passed"
+        ]
+      },
+      {
+        "name": "draw_cases",
+        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/checks/suite.json",
+        "pointer": [
+          "draw_cases"
+        ]
+      },
+      {
+        "name": "draw_free_cases",
+        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/checks/suite.json",
+        "pointer": [
+          "draw_free_cases"
+        ]
+      },
+      {
+        "name": "stock_engine_executed_cases",
+        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/checks/suite.json",
+        "pointer": [
+          "stock_engine_executed_cases"
+        ]
+      },
+      {
+        "name": "stock_draw_entries",
+        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/checks/suite.json",
+        "pointer": [
+          "stock_draw_entries"
+        ]
+      },
+      {
+        "name": "owned_draw_entries",
+        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/checks/suite.json",
+        "pointer": [
+          "owned_draw_entries"
+        ]
+      },
+      {
+        "name": "source_commit",
+        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/checks/suite.json",
+        "pointer": [
+          "source_commit"
+        ]
+      },
+      {
+        "name": "archive_sha256",
+        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/checks/suite.json",
+        "pointer": [
+          "archive_sha256"
+        ]
+      },
+      {
+        "name": "control_detected",
+        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/verdict.json",
+        "pointer": [
+          "control_detected"
+        ]
+      },
+      {
+        "name": "control_pair_exit",
+        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/control/oracle-fn-auto-open-checks.json",
+        "pointer": [
+          "menu_engine_pair_check"
+        ]
+      },
+      {
+        "name": "control_settings_exit",
+        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/control/oracle-fn-auto-open-checks.json",
+        "pointer": [
+          "modal_settings_compare"
+        ]
+      },
+      {
+        "name": "control_render_exit",
+        "path": "private-data/scratch/RasterSafeStorage/runs/20261114T045937Z-render-fixed-rtc-cohort/result/control/oracle-fn-auto-open-checks.json",
+        "pointer": [
+          "render_compare"
+        ]
+      }
+    ]
+  }
 ]

@@ -75,18 +75,11 @@ sessionHits directory = do
     bytes <- B.readFile path
     pure (parseSessionClockHits bytes)
 
-renderEvidence :: Role -> FilePath -> IO E.RenderStackEvidence
-renderEvidence role directory = do
-  let json name = B.readFile (directory </> name) >>= either fail pure . J.eitherDecodeStrict'
-      stackRole = case role of StockRole -> E.StockStack; OwnedRole -> E.OwnedStack
-  request <- json "e2e-render-stack-diagnostic-request.json"
-  report <- json "e2e-render-stack-diagnostic.json"
-  evidence <- either fail pure (E.parseRenderStackEvidence stackRole request report)
-  lifetime <- json "e2e-modal-observation.json"
-  either fail pure (E.checkLifetimeGuard lifetime)
-  roleElf <- B.readFile (directory </> "relinked" </> "kernel.elf") >>= either fail pure . ELF.parseElf
-  either fail pure (E.checkOwnedSources roleElf evidence)
-  pure evidence
+checkLifetime :: FilePath -> IO ()
+checkLifetime directory = do
+  bytes <- B.readFile (directory </> "e2e-modal-observation.json")
+  lifetime <- either fail pure (J.eitherDecodeStrict' bytes)
+  either fail pure (E.checkLifetimeCoverage lifetime)
 
 runRetained :: RenderConfig -> Bool -> MenuTree -> TablesDocument -> TablesDocument -> FilePath -> FilePath -> IO Bool
 runRetained config write tree stockTables document stockPath ownedPath = do
@@ -291,9 +284,7 @@ runCheck arguments = do
         either fail pure (J.parseEither (validateRenderDeclarations config role) value)
         writeRenderReceipt path segments
       renderBounds <- either fail pure (R.checkRenderStack elf (\address -> base <= address && address - base < size))
-      evidence <- forM [(StockRole,stockPath,stock),(OwnedRole,ownedPath,owned)] $ \(role,path,segments) -> do
-        proof <- renderEvidence role path
-        pure (path,segments,proof)
+      forM_ [stockPath, ownedPath] checkLifetime
       checked <- (if map readerPhase stock /= map readerPhase owned
         then pure (Left "render segment phases differ")
         else do
@@ -318,20 +309,13 @@ runCheck arguments = do
                         (_, Left failure, _, _) -> pure (Left failure)
                         (_, _, Left failure, _) -> pure (Left failure)
                         (_, _, _, Left failure) -> pure (Left failure)
-                        (Right stockStack, Right ownedStack, Right ownedBanks, Right stockBanks) -> do
-                          allocation <- forM evidence $ \(path,segments,proof) -> do
-                            verdict <- checkRenderInvocationEvidenceReader renderBounds segments proof
-                            pure (path,verdict)
-                          case sequence [fmap (\value -> (path,value)) verdict | (path,verdict) <- allocation] of
-                            Left failure -> pure (Left failure)
-                            Right verdicts -> pure (Right (stockStack, ownedStack, sort (nub (stockBanks ++ ownedBanks)), verdicts)))
+                        (Right stockStack, Right ownedStack, Right ownedBanks, Right stockBanks) ->
+                          pure (Right (stockStack, ownedStack, sort (nub (stockBanks ++ ownedBanks)))))
       case checked of
         Left failure -> hPutStrLn stderr ("render: " ++ failure) >> pure False
-        Right (stockStack,ownedStack,banks,allocation) -> do
+        Right (stockStack,ownedStack,banks) -> do
           putStrLn ("render: " ++ show (renderCoverage config) ++ " changed-word lower-bound reports "
-            ++ show (stockStack,ownedStack) ++ ", allocation-based invocation verdicts " ++ show (map snd allocation))
-          forM_ allocation $ \(path,verdict) ->
-            BL.writeFile (path </> "e2e-render-stack-allocation-check.json") (J.encode (E.allocationVerdictJson verdict) <> "\n")
+            ++ show (stockStack,ownedStack))
           BL.writeFile (ownedPath </> "render-banks.json") (J.encode banks <> "\n")
           pure True
   unless (and (valueLifecycle : rendered : paired : results ++ stacks)) exitFailure

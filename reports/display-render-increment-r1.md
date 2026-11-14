@@ -96,6 +96,8 @@ This explicitly revises the former rejection below `entry SP - (ownedDepth + 102
 
 The claim is limited to the exercised emulator routes. Neither active-invocation minima nor the separate lifetime bottom guard establish whole-task overflow freedom, a static transitive native-callee bound, future-path bounds, all-interleaving safety or absence of early SVC IRQ work. Raw CPSR, depth, owner and minimum coordinates remain evidence without filtering those samples.
 
+The render pair suite no longer applies this criterion or the task 33 bottom-guard write watch. Task 33's stack budget is the static bound that `check-bank-allowlist` and `BuildRecipeBank` take from the linked archive (owned entry depths plus the 1,024-byte stock margin within the 4,096-byte allocation). `run-render-pairs.sh` admits and compares receipts without the stack-diagnostic request and report, and its lifetime check keeps the write watches on task 33's descriptor and creation-record backlink. The viewer still accepts an `XM1_RENDER_STACK_DIAGNOSTIC` configuration, and no tool in the tree generates one.
+
 
 ## 6. Qualification
 
@@ -131,7 +133,7 @@ Both affected host suites pass on the repair. A file-only run of the rebuilt pub
 
 The new scope default and maximum are 4 GiB; the topic retains its existing two-slot concurrency. Its rebuilt slot tests pass, a real cgroup probe reads `memory.max=4294967296`, and an 8G request refuses before execution. Later common host-concurrency changes remain separate from these recorded runs. The current producer archive, SDK, canonical RTC, runtime, checker pin and original ten receipt identities are unchanged.
 
-Main integration at `61481dec` rejudges all 67 original pairs with four concurrent bounded verification processes. All 201 engine, settings and render comparisons pass in 879.49 seconds without guest replay or clock masks. The indexed checks, original role bindings and main-consumer digests are retained in `private-data/scratch/RenderMainAdmission/main-rejudgment.json` (`E-RENDER-R1-MAIN-COHORT-150`). This does not qualify the expanded tree/picker classes or the retained summary-buffer correction tracked in [#161](https://github.com/skeet70/latent-image/issues/161).
+The repaired pair suite replays all 67 pairs with a controlled RTC and an executed selected-tree-row control (`E-RENDER-R1-MAIN-COHORT-150`). All engine, settings and render comparisons pass; the control changes draw state and rendered output while engine reads and posts remain equal. Preparation derives the same RTC-disabled document for both roles without changing initial registers or timer models; four existing clock-field masks remain, with no broader exclusion. The retained driver, runner and input identities bind this replay to its original observer and archive, not a newer SDK. Expanded tree/picker classes, glyph rasterization through `RasterWorkspace`, unobserved task-33 stack demand and the summary-buffer correction in [#161](https://github.com/skeet70/latent-image/issues/161) remain outside this qualification.
 
 ### Executed defect controls
 
