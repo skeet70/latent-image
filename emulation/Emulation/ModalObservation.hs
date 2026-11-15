@@ -587,28 +587,38 @@ parseModalReport limit value = do
     forM_ (optionalField "earlier_irq_provenance" entry) parseEarlierIrq
     pure entry
   parseEarlierIrq entry = do
-    modalKeys ["total", "dropped", "coverage_complete", "target_irq_lr", "matching_events", "retained"] entry
+    modalKeys ["total", "dropped", "coverage_complete", "target_post_prefix_lr",
+      "vector_lr_subtract", "matching_events", "raw_equal_wrong_phase_events",
+      "normalization_underflow_events", "retained"] entry
     total <- modalField "total" entry >>= modalWord
     dropped <- modalField "dropped" entry >>= modalWord
     complete <- modalField "coverage_complete" entry >>= modalBool
-    target <- modalField "target_irq_lr" entry >>= \item -> case item of
+    target <- modalField "target_post_prefix_lr" entry >>= \item -> case item of
       Null -> Right Nothing
       _ -> Just <$> modalWord32 item
+    lrSubtract <- modalField "vector_lr_subtract" entry >>= modalWord32
+    unless (lrSubtract == 4) (Left "earlier IRQ provenance has an unsupported LR phase relation")
     retained <- modalField "retained" entry >>= earlierEvents
     matching <- modalField "matching_events" entry >>= earlierEvents
+    rawEqual <- modalField "raw_equal_wrong_phase_events" entry >>= earlierEvents
+    underflow <- modalField "normalization_underflow_events" entry >>= earlierEvents
     let expectedRetained = min total 16
-        retainedValues = map fst retained
+        normalized relationTarget (_, lr) = lr >= lrSubtract && lr - lrSubtract == relationTarget
+        rawWrong relationTarget event@(_, lr) =
+          lr == relationTarget && not (normalized relationTarget event)
     unless (fromIntegral (length retained) == expectedRetained
       && dropped == total - expectedRetained && complete == (dropped == 0))
       (Left "earlier IRQ provenance has inconsistent bounded-retention counters")
-    unless (all (\(raw, lr) -> raw `elem` retainedValues && Just lr == target) matching
-      && maybe (null matching) (const True) target)
-      (Left "earlier IRQ provenance matches are not retained target events")
+    unless (maybe (null matching && null rawEqual && null underflow) (\relationTarget ->
+      matching == filter (normalized relationTarget) retained
+      && rawEqual == filter (rawWrong relationTarget) retained
+      && underflow == filter (\(_, lr) -> lr < lrSubtract) retained) target)
+      (Left "earlier IRQ provenance misclassifies LR phase evidence")
   earlierEvents (Array rows) | V.length rows <= 16 = mapM earlierEvent (V.toList rows)
   earlierEvents _ = Left "earlier IRQ provenance exceeds its fixed event bound"
   earlierEvent entry = do
     modalKeys ["instructions", "address", "physical", "bytes", "progress", "pstate", "tcm",
-      "word", "cpsr", "spsr", "sp", "lr"] entry
+      "word", "cpsr", "irq_spsr", "sp", "lr"] entry
     _ <- modalField "instructions" entry >>= modalWord
     address <- modalField "address" entry >>= modalWord32
     _ <- modalField "physical" entry >>= modalWord32
@@ -618,7 +628,7 @@ parseModalReport limit value = do
     modalField "tcm" entry >>= earlierTcm
     _ <- modalField "word" entry >>= modalWord32
     cpsr <- modalField "cpsr" entry >>= modalWord32
-    _ <- modalField "spsr" entry >>= modalWord32
+    _ <- modalField "irq_spsr" entry >>= modalWord32
     _ <- modalField "sp" entry >>= modalWord32
     lr <- modalField "lr" entry >>= modalWord32
     unless (address == 0x18 && bytes == 4 && pstate == cpsr

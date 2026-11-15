@@ -22,6 +22,7 @@ enum Adapter { #[default] Board, Context }
 
 
 const EARLIER_IRQ_CAPACITY: usize = 16;
+const IRQ_VECTOR_LR_SUBTRACT: u32 = 4;
 
 #[derive(Clone, Copy, Serialize)]
 struct TcmEvidence { address: u64, bytes: usize }
@@ -37,7 +38,7 @@ struct EarlierIrq {
     tcm: [Option<TcmEvidence>; 2],
     word: u32,
     cpsr: u32,
-    spsr: u32,
+    irq_spsr: u32,
     sp: u32,
     lr: u32,
 }
@@ -47,8 +48,11 @@ pub(crate) struct EarlierIrqReport {
     total: u64,
     dropped: u64,
     coverage_complete: bool,
-    target_irq_lr: Option<u32>,
+    target_post_prefix_lr: Option<u32>,
+    vector_lr_subtract: u32,
     matching_events: Vec<EarlierIrq>,
+    raw_equal_wrong_phase_events: Vec<EarlierIrq>,
+    normalization_underflow_events: Vec<EarlierIrq>,
     retained: Vec<EarlierIrq>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -146,6 +150,7 @@ impl Capture {
             }
         }
         let bank_start = request.bank_transfer.checked_sub(4).ok_or("shadow bank-transfer prefix underflows")?;
+        // The word at 0x40218 computes the interrupted return PC as IRQ LR minus four.
         let bank_prefix = [0xe3a0d0d3, 0xe129f00d, 0xe92dd00f, 0xe3a000d2, 0xe129f000,
             0xe24e0004, 0xe14f1000, 0xe2012040, 0xe3822093, 0xe129f002, 0xe58d0018];
         for (index, word) in bank_prefix.into_iter().enumerate() {
@@ -192,7 +197,7 @@ impl Capture {
                 .map_err(|_| "earlier IRQ register exceeds32bits".to_owned())
         };
         let cpsr = register(arm::Register::Cpsr)?;
-        let spsr = register(arm::Register::Spsr)?;
+        let irq_spsr = register(arm::Register::Spsr)?;
         let sp = register(arm::Register::R(13))?;
         let lr = register(arm::Register::R(14))?;
         if point.entry.pstate != cpsr || cpsr & 0x1f != 0x12 || cpsr & 0x180 != 0x180 {
@@ -209,7 +214,7 @@ impl Capture {
         }));
         let event = EarlierIrq { instructions: instructions.value(), address: point.entry.address,
             physical: point.entry.physical, bytes: point.entry.bytes, progress: point.entry.progress,
-            pstate: point.entry.pstate, tcm, word, cpsr, spsr, sp, lr };
+            pstate: point.entry.pstate, tcm, word, cpsr, irq_spsr, sp, lr };
         let mut state = self.state.borrow_mut();
         if state.failure.is_some() || state.first_irq.is_some() { return Ok(()); }
         if state.earlier_irq_word.is_some_and(|expected| expected != word) {
@@ -304,16 +309,52 @@ fn earlier_irq_report(state: &State) -> EarlierIrqReport {
     let retained = (0..count).filter_map(|offset| {
         state.earlier_irq[(start + offset) % EARLIER_IRQ_CAPACITY]
     }).collect::<Vec<_>>();
-    let target_irq_lr = state.first_irq.and_then(|frame| frame.evidence.into_iter().flatten()
+    let target_post_prefix_lr = state.first_irq.and_then(|frame| frame.evidence.into_iter().flatten()
         .find_map(|event| match event {
             PreservationEvidence::Retired(retired) => Some(retired.before.irq_lr),
             _ => None,
         }));
-    let matching_events = target_irq_lr.map(|target| retained.iter().copied()
-        .filter(|event| event.lr == target).collect()).unwrap_or_default();
+    let mut matching_events = Vec::new();
+    let mut raw_equal_wrong_phase_events = Vec::new();
+    let mut normalization_underflow_events = Vec::new();
+    if let Some(target) = target_post_prefix_lr {
+        for event in retained.iter().copied() {
+            match lr_relation(event.lr, target) {
+                LrRelation::NormalizedMatch => matching_events.push(event),
+                LrRelation::RawEqualWrongPhase => raw_equal_wrong_phase_events.push(event),
+                LrRelation::NormalizationUnderflow => normalization_underflow_events.push(event),
+                LrRelation::Different => {}
+            }
+        }
+    }
     let dropped = state.earlier_irq_total.saturating_sub(EARLIER_IRQ_CAPACITY as u64);
     EarlierIrqReport { total: state.earlier_irq_total, dropped, coverage_complete: dropped == 0,
-        target_irq_lr, matching_events, retained }
+        target_post_prefix_lr, vector_lr_subtract: IRQ_VECTOR_LR_SUBTRACT, matching_events,
+        raw_equal_wrong_phase_events, normalization_underflow_events, retained }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LrRelation { NormalizedMatch, RawEqualWrongPhase, NormalizationUnderflow, Different }
+
+fn lr_relation(vector_entry_lr: u32, post_prefix_lr: u32) -> LrRelation {
+    let Some(return_pc) = vector_entry_lr.checked_sub(IRQ_VECTOR_LR_SUBTRACT) else {
+        return LrRelation::NormalizationUnderflow;
+    };
+    if return_pc == post_prefix_lr { LrRelation::NormalizedMatch }
+    else if vector_entry_lr == post_prefix_lr { LrRelation::RawEqualWrongPhase }
+    else { LrRelation::Different }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LrRelation, lr_relation};
+
+    #[test]
+    fn vector_lr_is_compared_at_the_post_prefix_phase() {
+        assert_eq!(lr_relation(0x0069cc04, 0x0069cc00), LrRelation::NormalizedMatch);
+        assert_eq!(lr_relation(0x0069cc00, 0x0069cc00), LrRelation::RawEqualWrongPhase);
+        assert_eq!(lr_relation(3, 0), LrRelation::NormalizationUnderflow);
+    }
 }
 
 fn registers(snapshot: &Snapshot) -> [u32; 16] {
