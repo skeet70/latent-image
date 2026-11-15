@@ -3630,6 +3630,39 @@ haskell_test(
     ],
 )
 
+haskell_library(
+    name = "playback-owned-lib",
+    srcs = ["Emulation/PlaybackOwned.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":watch-observation",
+        "//host/firmware:bank-allowlist",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:cryptohash-sha256",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+    ],
+)
+
+haskell_test(
+    name = "playback-owned-tests",
+    size = "small",
+    srcs = ["PlaybackOwnedTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":playback-owned-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:cryptohash-sha256",
+        "//host:text",
+    ],
+)
+
 haskell_binary(
     name = "media-route-smoke",
     srcs = ["MediaRouteSmoke.hs"],
@@ -3639,6 +3672,7 @@ haskell_binary(
         ":capture-stream-lib",
         ":media-inspection-lib",
         ":playback-decode-lib",
+        ":playback-owned-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

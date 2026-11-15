@@ -1,0 +1,24 @@
+{
+  "hooks": [
+    {
+      "address": "0x0120b40c",
+      "handler": "xm1_playback_source_entry",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x0120b40c",
+        "end": "0x0120b778",
+        "sha256": "90da01fffdecd496e473c74aa012c9028be5d2dad33a1b8f4a95b4ea7c466d32"
+      }
+    },
+    {
+      "address": "0x0120cab0",
+      "handler": "xm1_playback_mode_entry",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x0120cab0",
+        "end": "0x0120cd74",
+        "sha256": "d9b5d69e40838f9bcecc142fb1bfeaefa18e43b790a027e0442d7b31deef0f0c"
+      }
+    }
+  ]
+}
