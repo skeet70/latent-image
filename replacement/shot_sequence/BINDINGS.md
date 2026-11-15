@@ -111,6 +111,10 @@ Capture record snapshots use canonical ProfileGeometry. Arbitrary record-source/
 
 `Replies` admits the idle producers' Command0c/Command28 status21 and Autofocus status0, including absent records. Scalar replies use the owned command completion helper; Autofocus preserves its five-word client result and consumes lens notices. `ProfileReplies` carries `RecordHandle` and canonical `Recognition` through its effect callbacks; raw record and tuple conversion is confined to the stock bridge. `AtomicLensChange` returns `LensChange` before the existing Shot boundary converts its word.
 
+The native primary and secondary capture-profile shims now bind their residue-body exports to the existing owned projections. Primary preserves the entry shim's eight-byte residue address and uses aligned local comparison scratch; secondary preserves its 28-byte caller scratch. ARM compilation and actual symbol inspection qualify the bindings, not stock/replacement caller-residue equivalence.
+
+Auxiliary task43 wrappers occupy separate text sections. A real ARM linker control discards unreachable wrappers with identical instruction bytes; explicitly rooting an unimplemented frame still fails the link. This does not establish that a whole-image caller is retired or that the image fits or runs.
+
 ## Completion and result ownership
 
 | Completion | Root callback payload / delivery |
