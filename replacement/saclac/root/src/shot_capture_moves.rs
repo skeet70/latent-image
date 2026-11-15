@@ -11,7 +11,7 @@ where Self: PipelinePlatform {
         let words = capture_stock::absolute_move_arguments(profile);
         let special = PipelinePlatform::load_test_state(self) != 0
             && PipelinePlatform::load_test_setting(self) == 0x70 && words[3] == 10;
-        let operation = if special { LensDcOperation::Request12 } else { LensDcOperation::Request13 };
+        let operation = if special { LensDcOperation::Request1d } else { LensDcOperation::Request13 };
         let callback = if matches!(profile, MoveProfile::Finish { .. }) { self.callbacks.moves.finish_absolute } else { self.callbacks.moves.capture_absolute };
         let bytes = crate::stock::capture_moves::absolute(callback, target, words);
         assert!(LensDc::request(&mut self.peers, LensDcRequest {
