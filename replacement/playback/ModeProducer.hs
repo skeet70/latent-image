@@ -74,10 +74,9 @@ field :: String -> Value -> Maybe Value
 field name (Object fields) = KM.lookup (Key.fromString name) fields
 field _ _ = Nothing
 
-sourcePath, sourceRevision, packagePath, scope :: String
+sourcePath, sourceRevision, scope :: String
 sourcePath = "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin"
 sourceRevision = "55436fc85c0560dd252b0410af6f2427fe198cd3"
-packagePath = "private-data/scratch/PlaybackMediaClosure/inputs/install/relinked"
 scope = "conditional actual stock UI machine 5 action 5, packet producer and queue-4 descriptor boundary; no modeled USB route, natural device-input path, installed mode acceptance or whole mode acceptance"
 
 sourceDigest, runtimeDigest, elfDigest, runnerDigest :: Digest
@@ -223,8 +222,6 @@ run runner package output = do
   runnerHash <- Digest <$> Native.runnerDigest runner
   ensure (runnerHash == runnerDigest) "mode producer native runner identity mismatch"
   actualPackage <- canonicalizePath package
-  requiredPackage <- canonicalizePath packagePath
-  ensure (actualPackage == requiredPackage) "mode producer requires the exact installed relinked package"
   runtime <- readPinned (package </> "runtime.bin") runtimeDigest
   elf <- readPinned (package </> "kernel.elf") elfDigest
   source <- readPinned sourcePath sourceDigest
