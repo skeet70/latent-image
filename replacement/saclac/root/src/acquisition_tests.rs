@@ -358,6 +358,52 @@ fn owned_lens_services_preserve_record_calibration_and_class_boundaries() {
     }));
 }
 
+
+#[test]
+fn owned_rate_tables_preserve_mode_and_admission_boundaries() {
+    let kernel = fake::saclac_kernel();
+    let cx = kernel.task().unwrap();
+    let mut bytes = Bytes::default();
+    fake::open(&mut bytes, &[0]);
+    let (machine, root) = fake::root_with(fake::peers(&cx), bytes, Entries::default());
+    machine.set_word(0x0094_2b88, 0x1234_5678);
+    for (key, value) in [(0x6511, 11), (0x6512, 12), (0x6513, 13), (0x6515, 15), (0x6516, 16)] {
+        machine.adjustment(key, value);
+    }
+    let recognition = RefCell::new(SceneRecognition::new());
+    acquisition!(root, recognition, cx);
+    use xm1_focus_measurement_round::profile::ProfileSelection;
+
+    assert_eq!(root.refreshed_position(), 0x1234_5678);
+    assert_eq!(
+        [
+            root.rate_limit(ProfileSelection::Unselected, 1, 0),
+            root.rate_limit(ProfileSelection::Record, 1, 0),
+            root.rate_limit(ProfileSelection::Unselected, 17, 0),
+            root.rate_limit(ProfileSelection::Unselected, 17, 2),
+        ],
+        [0x64d4, 0x64bc, 0x6504, 0x64bc],
+    );
+    assert_eq!(
+        [
+            root.rate_mode(1, 0, 7, 9),
+            root.rate_mode(11, 0, 0, 9),
+            root.rate_mode(11, 2, 0, 9),
+            root.rate_mode(1, 0, 0, 0),
+            root.rate_mode(1, 0, 0, 2),
+            root.rate_mode(1, 0, 0, 9),
+        ],
+        [12, 13, 16, 16, 11, 15],
+    );
+    assert_eq!(
+        [root.allows_unflagged_selection(1, 0), root.allows_unflagged_selection(5, 0), root.allows_unflagged_selection(1, 2)],
+        [false, true, true],
+    );
+    let entered = machine.take_entered();
+    assert!(!entered.iter().any(|(address, _)| {
+        [0xfa_7604, 0xf5_ecb0, 0xf5_ecc0, 0xf4_ddbc].contains(address)
+    }));
+}
 #[test]
 fn live_and_s1_keep_one_selection_preset_and_s1_consumes_the_controllers_change() {
     let kernel = fake::saclac_kernel();

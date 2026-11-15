@@ -413,18 +413,49 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc, S:
     }
     fn adjustment_class(&mut self, adjustment: u32, reference: i16) -> u8 { rate_policy::level_selection(adjustment, reference) }
     fn adjustment_option(&mut self) -> u32 { u32::from(self.services.search.configuration.refresh()) }
-    fn refreshed_position(&mut self) -> u32 { boundary::refreshed_position(&self.services.machine) }
+    fn refreshed_position(&mut self) -> u32 { self.services.machine.read_u32(0x0094_2b88) }
     fn mode_one(&mut self, inputs: &ModeInputs) -> u32 { u32::from(treatments(inputs).admits(xm1_saclac_calc::adjust::scene_policy::Treatment::First)) }
     fn both_modes(&mut self, inputs: &ModeInputs) -> u32 { u32::from(treatments(inputs).admits_any()) }
     fn five_parameter_adjustment(&mut self, selection: ProfileSelection, position: u32, mode_flag: u32, modes: u32, grid_word: u32) -> u32 { boundary::five_parameter_adjustment(&self.services.machine, [selection_word(selection), position, mode_flag, modes, grid_word]) }
     fn rate_divisor(&mut self, position: u32, category: u32, lens: ResourceIndex, halfword: u16) -> u32 { boundary::rate_divisor(&self.services.machine, position, category, lens, halfword) }
-    fn rate_limit(&mut self, selection: ProfileSelection, position: u32, halfword: u16) -> u32 { boundary::rate_limit(&self.services.machine, selection_word(selection), position, halfword) }
-    fn rate_mode(&mut self, position: u32, halfword: u16, word: u32, mode_flag: u32) -> u16 { boundary::rate_mode(&self.services.machine, [position, u32::from(halfword), word, mode_flag]) }
+    fn rate_limit(&mut self, selection: ProfileSelection, position: u32, halfword: u16) -> u32 {
+        if halfword & 2 != 0 || selection == ProfileSelection::Record {
+            0x64bc
+        } else {
+            match position {
+                1..=4 | 8 | 9 | 14 | 15 | 19 | 20 | 22 | 23 | 26 | 27 | 35 | 36 | 38 | 39 | 41 | 42 => 0x64d4,
+                5..=7 | 24 | 25 | 34 | 37 | 40 => 0x64e0,
+                10 => 0x64c8,
+                11..=13 => 0x64ec,
+                16 | 33 => 0x64f8,
+                17 => 0x6504,
+                _ => 0x64bc,
+            }
+        }
+    }
+    fn rate_mode(&mut self, position: u32, halfword: u16, word: u32, mode_flag: u32) -> u16 {
+        let key = if word == 7 || word.wrapping_sub(4) < 2 {
+            0x6512
+        } else if position.wrapping_sub(11) < 3 {
+            if halfword & 2 == 0 { 0x6513 } else { 0x6516 }
+        } else if mode_flag == 0 {
+            0x6516
+        } else if mode_flag == 2 {
+            0x6511
+        } else {
+            0x6515
+        };
+        u16::from(self.services.stock.byte(AdjustmentKey(key)))
+    }
     fn selection_mode_category(&mut self, mode_word: u32) -> u32 { u32::from(xm1_saclac_calc::policy::SelectionMode(mode_word).category()) }
     fn offset_position(&mut self, level: i16, reference: u16, flag: u32) -> u16 { xm1_saclac_calc::policy::offset_position(level, i32::from(reference), flag == 1) as u16 }
-    fn clamp_selection_difference(&mut self, mode: AcquisitionMode, lens: ResourceIndex, level: i16, halfword: u16, reference: u32, target: i16) -> i16 { boundary::clamp_selection_difference(&self.services.machine, mode.0, lens, level, halfword, reference, target) }
+    fn clamp_selection_difference(&mut self, mode: AcquisitionMode, lens: ResourceIndex, level: i16, halfword: u16, reference: u32, target: i16) -> i16 {
+        boundary::clamp_selection_difference(&self.services.machine, mode.0, lens, level, halfword, reference, target)
+    }
     fn has_valid_offset(&mut self, selection: ProfileSelection, mode: AcquisitionMode, halfword: i16) -> u32 { u32::from(sample_grid::scene_offset_valid(selection_word(selection), mode.0, halfword)) }
-    fn allows_unflagged_selection(&mut self, position: u32, halfword: u16) -> bool { boundary::allows_unflagged_selection(&self.services.machine, position, halfword) }
+    fn allows_unflagged_selection(&mut self, position: u32, halfword: u16) -> bool {
+        halfword & 2 != 0 || matches!(position, 5 | 11 | 12 | 18 | 21 | 25 | 34 | 37 | 40)
+    }
     fn capture_selection_position(&mut self, branch: Branch, inputs: &PositionInputs) -> SelectionPosition { boundary::capture_selection_position(&self.services.machine, boundary::region(branch).setting, branch, inputs) }
     fn copy_rate_grid_source(&mut self, buffer: StatisticsBuffer) {
         self.recognition.borrow_mut().set_source(&mut *self.services, SharedAddress(buffer.0));

@@ -259,10 +259,6 @@ fn write_bytes(machine: &mut impl Machine, address: u32, bytes: &[u8]) {
     }
 }
 
-
-
-
-
 /// 0xfa7bb8 over the five input words and the grid.
 pub fn fill_grid(machine: &impl Machine, inputs: &GridInputs, grid: &mut AcquisitionGrid) {
     xm1_saclac_interface::stock::round_acquisition::set_grid_inputs(grid, inputs.timing.0, inputs.lens_word, inputs.positions, inputs.window);
@@ -271,8 +267,6 @@ pub fn fill_grid(machine: &impl Machine, inputs: &GridInputs, grid: &mut Acquisi
     grid.0 = buffer.0;
 }
 
-/// 0xfa7604.
-pub fn refreshed_position(machine: &impl Machine) -> u32 { enter(machine, 0xfa_7604, &[]) }
 
 /// 0xf625cc.
 pub fn five_parameter_adjustment(machine: &impl Machine, arguments: [u32; 5]) -> u32 { enter(machine, 0xf6_25cc, &arguments.map(word)) }
@@ -283,23 +277,10 @@ pub fn rate_divisor(machine: &impl Machine, updated_position: u32, change_catego
     enter(machine, 0xfa_6934, &arguments)
 }
 
-/// 0xf5ecb0.
-pub fn rate_limit(machine: &impl Machine, selection: u32, updated_position: u32, position_halfword: u16) -> u32 {
-    enter(machine, 0xf5_ecb0, &[word(selection), word(updated_position), word(u32::from(position_halfword))])
-}
-
-/// 0xf5ecc0.
-pub fn rate_mode(machine: &impl Machine, arguments: [u32; 4]) -> u16 { enter(machine, 0xf5_ecc0, &arguments.map(word)) as u16 }
-
 /// 0xf5f368.
 pub fn clamp_selection_difference(machine: &impl Machine, mode: u32, lens: ResourceIndex, level: i16, lens_halfword: u16, lens_reference: u32, target: i16) -> i16 {
     let arguments = [word(mode), word(lens.0), signed(level), signed(lens_halfword as i16), word(lens_reference), signed(target)];
     enter(machine, 0xf5_f368, &arguments) as i16
-}
-
-/// 0xf4ddbc returns 0 where an unflagged selection is allowed.
-pub fn allows_unflagged_selection(machine: &impl Machine, updated_position: u32, halfword: u16) -> bool {
-    enter(machine, 0xf4_ddbc, &[word(updated_position), word(u32::from(halfword))]) == 0
 }
 
 /// 0xf624a8 writes the setting from +0x1c, in place where calc1 reads it; the window takes back

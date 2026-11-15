@@ -965,11 +965,11 @@
     },
     {
       "id": "saclac_root-root-27",
-      "shim": "saclac_root: Acquisition grid/rate helpers: `0xfa7bb8` (2), `0xfa7604` (0), `0xf625cc` (5), `0xfa6934` (6; last two zero), `0xf5ecb0` (3), `0xf5ecc0` (4), `0xf5f368` (6), `0xf4ddbc` (2), `0xf624a8` (9; branch last); category admission formerly at fab250 calls owned Calc",
+      "shim": "saclac_root: Acquisition grid/rate helpers: `0xfa7bb8` (2), `0xf625cc` (5), `0xfa6934` (6; last two zero), `0xf5f368` (6), `0xf624a8` (9; branch last); refreshed-position, rate table, rate-mode selection and admission paths are owned",
       "kind": "trampoline into retained stock",
-      "other_side": "calc's grid count, grid builder, position capture, rate and clamp contracts",
+      "other_side": "calc's grid count, grid builder, rate-divisor, clamp and position-capture contracts",
       "owned": "no",
-      "removal": "those owned calc APIs expose the request's argument/result shapes; configuration indexing/limits, treatment admission, class/offset policy and the profile curve formerly entered through `0xfa7e20` now call owned calc/geometry",
+      "removal": "owned calc APIs must expose the remaining grid, rate-divisor, clamp and position-capture argument/result shapes without exceeding the fixed image",
       "state": "required",
       "evidence": [
         {
