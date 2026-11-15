@@ -110,6 +110,27 @@ haskell_test(
     ],
 )
 
+haskell_binary(
+    name = "image5-native-routes",
+    srcs = ["NativeRoutes.hs", "Fixtures.hs"],
+    main_file = "NativeRoutes.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":image5-load-artifact",
+        "//replacement/plain_load:plain-load-artifact",
+        "//emulation:owned-case",
+        "//emulation:native-observation",
+        "//host:containers",
+        "//host:update-container",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:json",
+    ],
+)
+
 filegroup(
     name = "shim-catalog-data",
     srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel"],

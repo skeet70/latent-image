@@ -263,13 +263,41 @@ The current `host-build` automatically reports the kernel-sampled lock holder on
 
 An older topic checkout may still provide an older launcher. Use the current qualified `host-build` executable through `devenv shell` from the worker checkout with its usual output base. Resolve it from current main only when that checkout is ready for Nix evaluation; otherwise use the integration owner's frozen launcher path. Keep the worker's source and working directory; do not change SDK identities merely to adopt admission. Each topic's emulator binary retains its compiled policy. Use the qualified shared wrapper or adopt the current admission modules before requesting the new RAM and swap caps; setting an environment variable does not upgrade an old binary. Current defaults are 12 GiB RAM plus 8 GiB swap for builds and native suites, and 8 GiB RAM plus 8 GiB swap for full-system runs, within the shared 64 GiB combined reservation budget. Keep completed and healthy running cohorts bound to their original scopes.
 
+## Platform host qualification
+
+[RTOS workflow](rtos.md) and [platform contract](../reports/rtos-platform-options.md).
+
+<!-- evidence-record E-RTOS-PLATFORM-SOURCE-ADMISSION-150 -->
+
+E-RTOS-PLATFORM-SOURCE-ADMISSION-150: Platform source admission requires supplied A/B loader bytes to equal the corresponding loaders extracted from the source container. Both domains reject same-size one-bit mismatches and truncation. Actual staging exits 0 and reproduces candidate a78209f93a96ad9e436e00369c31ac3729df04820eab3ecf928d54b4e857f797 with loaders fe28e845a4a2376e81e7b6d9e68bf065f599569539072fdab10bef3f9e9cc22f and 43cf5c574095362253009cda1f5a444ace9c5e41e695d2fbc0e658cc2f6bdf7e. The owned reset/menu observer smoke exits 0; its raw observation is retained (false). Firmware bytes are unchanged.
+
+Scope: Host admission source snapshot 229c5701696c6c0a242bad9607f89bcaf9d329ee9ce992fd321134527fb2be27, synthetic mismatched-loader regressions, canonical staging and an owned reset/menu route smoke. The raw full-system observation expired at successful run close; its digest and command remain, not a fresh paired semantic judgment.
+
+<!-- /evidence-record E-RTOS-PLATFORM-SOURCE-ADMISSION-150 -->
+
+<!-- evidence-record E-NATIVE-REGION-CAPACITY-150 -->
+
+E-NATIVE-REGION-CAPACITY-150: The native host/SDK/schema envelope admits 128 logical regions and refuses 129, retaining byte, function, stub, instruction, wall, wire, overlap, permission and host-resource bounds. The demonstrated current-union dispatcher case needs 67 disjoint regions. Its direct replay reaches stop_address after 24 instructions, while generic judgment remains failed with 2 task/frame memory mismatches. The unchanged full S2 suspended-boundary comparator holds (true): domain A has 560 cases/22 control groups and B has 560/22, under runner e2d7aee8c59e9d419c05a53fe2338bc025558eb1ad9209522247b61c9015476f. Stock provenance is A BatchReused and B BatchExecuted; Owned is A BatchExecuted and B BatchExecuted, with StockRepeat A BatchReused and B BatchReused. The preserved earlier settings witness has 39 regions, 1604148 mapped bytes and 607768 instructions; its 12 declared memory regions match while 5 generic extra regions differ.
+
+Scope: Logical-region representation, the full bounded current-union S2 native cohort and preserved historical witnesses, not whole-platform or natural paired qualification. The new complete qualifier runs in the NativeVerification scope under unchanged resource limits; cached stock observations are not retroactively resource-contained executions. The earlier direct replay lacks whole-qualifier native-scope containment. Exact RX/RO separation remains; no absent gap is mapped to fit a count limit. The historical settings witness retains its original packing adapter and runner identities and is not reexecuted or relabeled under the new runner.
+
+<!-- /evidence-record E-NATIVE-REGION-CAPACITY-150 -->
+
+<!-- evidence-record E-RTOS-PLATFORM-CURRENT-UNION-NATIVE-150 -->
+
+E-RTOS-PLATFORM-CURRENT-UNION-NATIVE-150: The staged-effective union A 384f8963070aa35c08947e47c4633457f46afc49d34585e0f0d9237cc2e64768 and B 7e8edaef61bc30f4d517abfd0dc5c6a26db8157b63752055ffb59942adc5fa07 passes the completed native service cohorts in the cited current matrix under unchanged family contracts, equivalence controls and defect controls. Full S2 holds (true). Source-grounded host admission repairs admit Timer's 56 cases/280 controls with 0 failures and Global Lock's 64 comparisons/456 controls with 0 failures. Timer aggregate cases execute the linked owned wait-release helper; Global Lock validates its six public entries through the canonical byte-bound veneer/thunk resolver. Firmware and comparison rules are unchanged.
+
+Scope: Current staged-effective loader union and the completed scoped native cohorts, not complete kernel ownership or natural startup. Each complete qualifier runs under the existing NativeVerification memory limits. Role-specific cached observations remain reused, not newly executed or retroactively contained. Own-first full qualification remains open. The packaged domain-A application join uses the real loader with a standalone linked application overlay and fixture contexts, registries and scheduler-lock callbacks; it is not final packaged image4 or Root lifetime acceptance.
+
+<!-- /evidence-record E-RTOS-PLATFORM-CURRENT-UNION-NATIVE-150 -->
+
 ## Playback decode observation
 
 <!-- evidence-record E-FUJIMOD-XM1-PLAY-JPEG-150 -->
 
-E-FUJIMOD-XM1-PLAY-JPEG-150: The stock X-M1 PLAY route's source/layout/extent observation is passed for 2 completed jobs, with the original card unchanged (true). Preview: 320x240, 153600 complete output bytes; 21400 exact fixture codestream bytes at offset 65728 plus 89 observed preserved pre-copy tail bytes make its 21489-byte programmed span, whose literal whole-fixture-subrange identity is false. Full image: 4896x2760, 3515192 literal fixture bytes and 27025920 complete output bytes. Both jobs are sampled before the shared destination is reused, with programmed operands, natural completion status and loaded endpoint bound separately. Independent JuicyPixels RGB-to-packed422 reference comparisons differ by 13862 preview bytes and 551768 full-frame bytes; these are not qualified pixel agreement. The final PNG visibly shows the playback photograph and overlay.
+E-FUJIMOD-XM1-PLAY-JPEG-150: The stock X-M1 PLAY route's source/layout/extent observation is passed for 2 completed jobs, with the original card unchanged (true). Preview: 320x240, 153600 complete output bytes; 21400 exact fixture codestream bytes at offset 65728 plus 89 observed preserved pre-copy tail bytes make its 21489-byte programmed span, whose literal whole-fixture-subrange identity is false. Full image: 4896x2760, 3515192 literal fixture bytes and 27025920 complete output bytes. Both jobs are sampled before the shared destination is reused, with programmed operands, natural completion status and loaded endpoint bound separately. Independent JuicyPixels RGB-to-packed422 reference comparisons differ by 13862 preview bytes and 551768 full-frame bytes; these are not qualified pixel agreement. The final PNG visibly shows the playback photograph and overlay. A later matching-checkpoint PLAY run independently inspects 6905 sectors before and 6905 after playback in 26/26 actual media-read requests, including allocation slack. All inspected sectors match the original file (true/true), exposed SD state is unchanged (true/true), and the whole original card remains unchanged (true).
 
-Scope: One stock-DAT cold-boot public media-route-smoke play execution on the granted FujiMod runtime and one card fixture. Full sources are observed before decode and complete source/header-derived output extents before reuse; source, capacity, alias, geometry, padding and endpoint checks pass. No added MMIO reads, device-law changes or fitted pixel tolerance.
+Scope: One stock-DAT cold-boot PLAY execution and one later matching-keyed-attach-checkpoint PLAY execution on the unchanged pinned FujiMod runtime and identified card fixture. Full sources are observed before decode and complete source/header-derived output extents before reuse; source, capacity, alias, geometry, padding and endpoint checks pass. The later run adds independent original-file sector comparisons and whole-card hashes, not another cold boot or owned playback acceptance. No added MMIO reads, device-law changes or fitted pixel tolerance.
 
 <!-- /evidence-record E-FUJIMOD-XM1-PLAY-JPEG-150 -->
 
@@ -292,6 +320,18 @@ E-FIRST-RECORD-FLASH-BOOT-CHECK-150: The compile-time clock-backend first stage 
 Scope: Four actual cold-boot-to-menu executions, the two packages on each engine, from the committed first-stage image identified in the run's binary digest receipt. Packaging runs outside emulator admission; each emulator launcher acquires its own slot.
 
 <!-- /evidence-record E-FIRST-RECORD-FLASH-BOOT-CHECK-150 -->
+
+## Later-loading native qualification
+
+[Startup workflow](startup.md#bounded-image5-skiprefusal-and-cpu-fill-witness) and [caller contract](../reports/replacement-inventory-baseline.md#bounded-image5-skiprefusal-and-cpu-fill-caller-path).
+
+<!-- evidence-record E-LATER-IMAGE5-SKIP-REFUSAL-NATIVE-150 -->
+
+E-LATER-IMAGE5-SKIP-REFUSAL-NATIVE-150: The conditional image5 skip/refusal/CPU-fill matrix passes (true) over 15 native executions. Retained and linked owned producers are exercised through the actual stock flashloader caller and continuation. Cases cover rejected aligned fill, unaligned BSS base and unaligned BSS length; exact BSS zeroing, unchanged halos and destination, cache publication, done-before-release and callback error agree. Executed producers omitting CPU fill, error status or cache publication reach the declared stop and are rejected by their behavioral oracle. The missing-segment matrix passes (true) over 5 executions: retained/owned image5 and plain producers remain at their source-bound refusal loops with status instruction_budget after 20000 instructions, keeping busy/done/resource state and destination/BSS unchanged; an executed premature-return control is rejected. Plain skip passes (true) over 4 executions through actual progress/notification code. Zero source length sends no progress; length0x40001 makes 3 delay calls and 3 notifications while destination bytes remain unchanged. Stock image4 is f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16, owned image5 producer c4002c01c67a18647ffe5e0b2bc561af3e212c59c5ebcec0dac77000c6ea7703, and initial matrix runner e070f23ea648823af72bc7c38d588031a5ff1e59fceebb446442cbf96efddd46.
+
+Scope: Conditional X-M1 1.50 flashloader entry/caller continuation through retained or emitted Rust image5/plain producers, unconfigured-storage refusal, CPU fill, missing-segment loops and plain progress/notification wrapper. Mailbox, nonzero mode, segment/group, rejected fill result, notification recipient and RTOS/cache sinks are synthetic. Nonzero mode skips decoder initialization, feed and finish. Stock instructions confirm NONMATCHING caller/storage C; fill/progress definitions are exact at x70view55436fc85c0560dd252b0410af6f2427fe198cd3. Progress offsets and command completion do not establish fresh executable residency.
+
+<!-- /evidence-record E-LATER-IMAGE5-SKIP-REFUSAL-NATIVE-150 -->
 
 ## Authoritative references
 

@@ -1558,9 +1558,9 @@ fn function_count_boundary_calls_the_last_function_and_refuses_one_more() {
 
 #[test]
 fn region_count_boundary_reads_the_last_region_and_refuses_past_limits() {
-    const LAST: u32 = 0x6000 + 4 * 61;
+    const LAST: u32 = 0x6000 + 4 * 125;
     let mut valid = Case::new(&[LDR_R0_R1, ADD_R0_1, STR_R0_R1_POST_4, BX_LR]).register(1, LAST);
-    for i in 0..61 {
+    for i in 0..125 {
         valid = valid.region(0x6000 + 4 * i, READ_WRITE, &[0; 4]);
     }
     valid = valid.region(LAST, READ_WRITE, &[0; 4]);
@@ -1570,19 +1570,19 @@ fn region_count_boundary_reads_the_last_region_and_refuses_past_limits() {
     assert_eq!(observed.bytes(LAST), "01000000");
 
     let mut too_many = Case::new(&[BX_LR]);
-    for i in 0..63 {
+    for i in 0..127 {
         too_many = too_many.region(0x6000 + 4 * i, READ_WRITE, &[0; 4]);
     }
     assert_eq!(too_many.run().status(), Status::InvalidCase);
 
     let mut oversized = Case::new(&[BX_LR]);
-    for i in 0..62 {
-        oversized = oversized.region(0x1000_0000 + 0x2_0000 * i, READ_WRITE, &vec![0; 68_782]);
+    for i in 0..126 {
+        oversized = oversized.region(0x1000_0000 + 0x2_0000 * i, READ_WRITE, &vec![0; 33_300]);
     }
     assert_eq!(oversized.run().status(), Status::InvalidCase);
 
     let mut read_only = Case::new(&[STR_R0_R1_POST_4, BX_LR]).register(0, 0xdead_beef).register(1, LAST);
-    for i in 0..61 {
+    for i in 0..125 {
         read_only = read_only.region(0x6000 + 4 * i, READ_WRITE, &[0; 4]);
     }
     read_only = read_only.region(LAST, READ, &[0; 4]);
@@ -1593,7 +1593,7 @@ fn region_count_boundary_reads_the_last_region_and_refuses_past_limits() {
     assert_eq!(observed.bytes(LAST), "00000000");
 
     let mut bad_permission = Case::new(&[BX_LR]);
-    for i in 0..61 {
+    for i in 0..125 {
         bad_permission = bad_permission.region(0x6000 + 4 * i, READ_WRITE, &[0; 4]);
     }
     bad_permission = bad_permission.region(LAST, 2, &[0; 4]);
