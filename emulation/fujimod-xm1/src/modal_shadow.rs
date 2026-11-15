@@ -10,7 +10,7 @@ use std::{cell::RefCell, rc::Rc};
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
-    core: usize, vector: u32, status: u32, returning: u32,
+    core: usize, vector: u32, bank_transfer: u32, status: u32, returning: u32,
     #[serde(default)]
     adapter: Adapter,
 }
@@ -98,7 +98,7 @@ pub(crate) struct Capture {
 impl Capture {
     pub(crate) fn new(request: Request, guard: &InstalledGuard, session: &Session) -> Result<Self, String> {
         if request.core >= 2 || request.status.checked_add(4) != Some(request.returning)
-            || request.status & 3 != 0 || request.vector & 3 != 0 {
+            || request.vector != 0x18 || request.status & 3 != 0 || request.bank_transfer & 3 != 0 {
             return Err("shadow source is not a bounded A32 exception-return plan".into());
         }
         let start = request.status.checked_sub(20).ok_or("shadow return prefix underflows")?;
@@ -109,7 +109,7 @@ impl Capture {
                 return Err("shadow return prefix leaves the authenticated immutable loader image".into());
             }
         }
-        let bank_start = request.vector.checked_sub(4).ok_or("shadow bank-transfer prefix underflows")?;
+        let bank_start = request.bank_transfer.checked_sub(4).ok_or("shadow bank-transfer prefix underflows")?;
         let bank_prefix = [0xe3a0d0d3, 0xe129f00d, 0xe92dd00f, 0xe3a000d2, 0xe129f000,
             0xe24e0004, 0xe14f1000, 0xe2012040, 0xe3822093, 0xe129f002, 0xe58d0018];
         for (index, word) in bank_prefix.into_iter().enumerate() {

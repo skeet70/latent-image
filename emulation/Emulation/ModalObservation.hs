@@ -319,19 +319,21 @@ preservationShadowRequest value (ModalRequest stock scoped limit lifetime previo
 parseShadowPlan :: Value -> Either String Value
 parseShadowPlan value = do
   let adapterFields = maybe [] (const ["adapter"]) (optionalField "adapter" value)
-  modalKeys (["core", "vector", "status", "returning"] ++ adapterFields) value
+  modalKeys (["core", "vector", "bank_transfer", "status", "returning"] ++ adapterFields) value
   core <- modalField "core" value >>= modalWord
   unless (core <= 1) (Left "shadow core is unavailable")
   vector <- modalField "vector" value >>= modalWord32
+  bankTransfer <- modalField "bank_transfer" value >>= modalWord32
   status <- modalField "status" value >>= modalWord32
   returning <- modalField "returning" value >>= modalWord32
-  unless (all ((== 0) . (`mod` 4)) [vector,status,returning] && status >= 20
+  unless (vector == 0x18 && all ((== 0) . (`mod` 4)) [bankTransfer,status,returning] && status >= 20
     && toInteger returning == toInteger status + 4) (Left "shadow source plan is not bounded A32")
   adapter <- case optionalField "adapter" value of
     Nothing -> Right (String "board")
     Just name | name `elem` [String "board", String "context"] -> Right name
     _ -> Left "unknown shadow observation adapter"
-  pure (object ["core" .= core, "vector" .= vector, "status" .= status, "returning" .= returning, "adapter" .= adapter])
+  pure (object ["core" .= core, "vector" .= vector, "bank_transfer" .= bankTransfer,
+    "status" .= status, "returning" .= returning, "adapter" .= adapter])
 
 data ModalPolicy = StockBaseline | ScopedOwned75 deriving (Eq, Show)
 
