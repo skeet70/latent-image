@@ -277,10 +277,26 @@ pub fn rate_divisor(machine: &impl Machine, updated_position: u32, change_catego
     enter(machine, 0xfa_6934, &arguments)
 }
 
-/// 0xf5f368.
-pub fn clamp_selection_difference(machine: &impl Machine, mode: u32, lens: ResourceIndex, level: i16, lens_halfword: u16, lens_reference: u32, target: i16) -> i16 {
-    let arguments = [word(mode), word(lens.0), signed(level), signed(lens_halfword as i16), word(lens_reference), signed(target)];
-    enter(machine, 0xf5_f368, &arguments) as i16
+/// The mode-gated signed difference formerly at 0xf5f368.
+pub fn clamp_selection_difference(
+    machine: &(impl Machine + Clone),
+    mode: u32,
+    _lens: ResourceIndex,
+    level: i16,
+    lens_halfword: u16,
+    lens_reference: u32,
+    target: i16,
+) -> i16 {
+    if !matches!(mode, 47 | 56) || target as u16 == 0x8000 { return 0; }
+    let converted = xm1_power_lifecycle::record_profile_mapping::helper_7469a0(
+        &mut crate::calibration_inputs::runtime(machine),
+        lens_reference,
+    ).expect("mapped selection reference");
+    let difference = u32::from(level as u16)
+        .wrapping_sub(u32::from(lens_halfword))
+        .wrapping_add(u32::from(target as u16))
+        .wrapping_sub(converted) as u16 as i16;
+    difference.clamp(-200, 200)
 }
 
 /// 0xf624a8 writes the setting from +0x1c, in place where calc1 reads it; the window takes back

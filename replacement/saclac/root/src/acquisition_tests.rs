@@ -524,6 +524,33 @@ fn owned_frame_interval_preserves_stock_projection_branches() {
     assert_eq!(Pipeline::frame_interval(&mut root, xm1_focus_measurement_round::pipeline::TimingWord(2)), None);
     assert!(!machine.take_entered().iter().any(|(address, _)| *address == 0xfa_95a8));
 }
+
+#[test]
+fn owned_selection_difference_preserves_mode_sentinel_and_signed_clamp() {
+    let kernel = fake::saclac_kernel();
+    let cx = kernel.task().unwrap();
+    let (machine, _) = fake::root_with(fake::peers(&cx), Bytes::default(), Entries::default());
+    machine.set_word(0x0096_ca50, 0x0020_0000);
+    memory(&machine, 0x005f_2400, &1000u16.to_le_bytes());
+    let difference = |mode, level, halfword, target| {
+        crate::stock::acquisition::clamp_selection_difference(
+            &machine,
+            mode,
+            xm1_focus_measurement_round::auxiliary::ResourceIndex(0),
+            level,
+            halfword,
+            0,
+            target,
+        )
+    };
+
+    assert_eq!(difference(48, 300, 100, 50), 0);
+    assert_eq!(difference(47, 300, 100, i16::MIN), 0);
+    assert_eq!(difference(47, 300, 100, 50), 150);
+    assert_eq!(difference(56, 1_000, 0, 0), 200);
+    assert_eq!(difference(56, -1_000, 0, 0), -200);
+    assert!(!machine.take_entered().iter().any(|(address, _)| *address == 0xf5_f368));
+}
 #[test]
 fn live_and_s1_keep_one_selection_preset_and_s1_consumes_the_controllers_change() {
     let kernel = fake::saclac_kernel();
