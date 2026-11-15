@@ -22,15 +22,6 @@ pub trait DumpDerivations {
     fn selection_word(&mut self, channel: Channel, mode: u32, flags: u32, word: i16) -> u32;
 }
 
-/// One step of the channel's row.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct StepDump {
-    pub rounded: i16,
-    pub value: u16,
-    pub transformed_value: u16,
-    pub transformed_word: u16,
-    pub scale: u16,
-}
 
 /// How an adjustment word of the dump reads.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -102,27 +93,6 @@ pub const LIMIT_QUERIES: [(Kind, Side, u32); 10] = [
     (Kind::Second, Side::Other, 11),
 ];
 
-const SELECTED: [usize; 6] = [5, 6, 7, 8, 9, 10];
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ConfigurationDump {
-    /// The channel's steps; `count` of them are the bank's.
-    pub steps: [StepDump; 31],
-    pub count: usize,
-    pub record_word: i16,
-    /// `WORDS` as read, signed halfwords sign-extended.
-    pub words: [u32; 15],
-    pub references: Option<[u32; 3]>,
-    pub floors: [u32; 2],
-    pub late_words: [u32; 4],
-    pub channel_scale: u16,
-    pub limits: [[u32; 10]; 5],
-    /// The base word under mode 2, `WORDS[4]` under mode 1, then the base plus each of
-    /// `WORDS[5..=10]` under mode 2.
-    pub selections: [u32; 8],
-    /// The base plus each reference word under mode 2.
-    pub reference_selections: Option<[u32; 3]>,
-}
 
 fn read(area: &impl Adjustments, word: AdjustmentWord, channel: Channel) -> u32 {
     let at = word.at.wrapping_add(word.stride.wrapping_mul(channel.0 as u32));
@@ -133,50 +103,75 @@ fn read(area: &impl Adjustments, word: AdjustmentWord, channel: Channel) -> u32 
     }
 }
 
-/// The configuration dump of `channel` (0x748928).
-pub fn configuration_dump(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DumpOffset(pub u32);
+
+pub trait DumpBuffer {
+    fn read_word(&self, at: DumpOffset) -> u32;
+    fn write_word(&self, at: DumpOffset, value: u32);
+    fn write_half(&self, at: DumpOffset, value: u16);
+}
+
+/// The configuration section's live reads and publications (0x748928).
+pub fn export_configuration(
     area: &impl Adjustments,
     derivations: &mut impl Derivations,
     sources: &mut impl DumpDerivations,
     channel: Channel,
-) -> ConfigurationDump {
+    output: &impl DumpBuffer,
+) {
+    let word = |at, value| output.write_word(DumpOffset(at), value);
+    let half = |at, value| output.write_half(DumpOffset(at), value);
+    word(0, 0x5354_4c45);
+    word(0x2a4, 0x4c41_4c45);
     let row = Row(channel.0 as u32);
-    let count = bank_size(area) as usize;
-    let mut steps = [StepDump::default(); 31];
-    for (index, step) in steps.iter_mut().enumerate().take(count) {
-        let at = Step(index as u32);
-        *step = StepDump {
-            rounded: rounded_word(area, at, row),
-            value: value(area, at, row),
-            transformed_value: sources.transformed_value(at, row),
-            transformed_word: sources.transformed_word(at, row),
-            scale: derivations.table_scale(at.0, channel),
-        };
+    let mut index = 0;
+    while index < bank_size(area) {
+        let step = Step(index);
+        half(4 + 2 * index, rounded_word(area, step, row) as u16);
+        half(4 + 2 * (32 + index), value(area, step, row));
+        half(4 + 2 * (68 + index), sources.transformed_value(step, row));
+        half(4 + 2 * (100 + index), sources.transformed_word(step, row));
+        half(2 * (184 + index), derivations.table_scale(index, channel));
+        index += 1;
     }
-    let has_references = channel.0 <= 9;
-    let words = WORDS.map(|word| read(area, word, channel));
-    let references = has_references.then(|| REFERENCE_WORDS.map(|word| read(area, word, channel)));
-    let channel_scale = derivations.channel_scale(channel);
-    let limits = LIMITS.map(|which| LIMIT_QUERIES.map(|(kind, side, mode)| limit(area, which, kind, side, mode)));
+    for first in [0, 32, 68, 100] { half(4 + 2 * (first + index), 0xfdfd); }
+    half(2 * (184 + index), 0xfdfd);
+    for (at, source) in [0x130, 0x134, 0x140].into_iter().zip(REFERENCE_WORDS) {
+        word(at, if channel.0 <= 9 { read(area, source, channel) } else { 0 });
+    }
+    word(0x84, read(area, RECORD_WORD, channel));
+    word(0x88, read(area, RECORD_WORD, channel));
+    let offsets = [0x10c, 0x110, 0x114, 0x118, 0x11c, 0x120, 0x124, 0x128, 0x12c, 0x138, 0x13c, 0x144, 0x148, 0x154, 0x158];
+    for (at, source) in offsets[..13].iter().copied().zip(&WORDS[..13]) { word(at, read(area, *source, channel)); }
+    word(0x14c, shifted_floor(area));
+    word(0x150, shifted_second_floor(area));
+    for (at, source) in offsets[13..].iter().copied().zip(&WORDS[13..]) { word(at, read(area, *source, channel)); }
+    for (at, source) in [0x15c, 0x160, 0x164, 0x168].into_iter().zip(LATE_WORDS) { word(at, read(area, source, channel)); }
+    word(0x16c, u32::from(derivations.channel_scale(channel)));
+    let mut at = 0x1b0;
+    for which in LIMITS {
+        for (kind, side, mode) in LIMIT_QUERIES {
+            word(at, limit(area, which, kind, side, mode));
+            at += 4;
+        }
+    }
     let flags = sources.lens_position_flags();
-    let base = words[3];
-    let mut select = |mode: u32, word: u32| sources.selection_word(channel, mode, flags, word as i16);
-    let mut selections = [select(2, base), select(1, words[4]), 0, 0, 0, 0, 0, 0];
-    for (slot, index) in selections[2..].iter_mut().zip(SELECTED) {
-        *slot = select(2, base.wrapping_add(words[index]));
+    let base = output.read_word(DumpOffset(0x118)) as i16;
+    word(0x278, sources.selection_word(channel, 2, flags, base));
+    let primary = output.read_word(DumpOffset(0x11c)) as i16;
+    word(0x27c, sources.selection_word(channel, 1, flags, primary));
+    for (at, addition) in [(0x280, 0x120), (0x284, 0x124), (0x288, 0x128), (0x28c, 0x12c), (0x298, 0x138), (0x29c, 0x13c)] {
+        let added = output.read_word(DumpOffset(addition));
+        let base = output.read_word(DumpOffset(0x118));
+        word(at, sources.selection_word(channel, 2, flags, base.wrapping_add(added) as i16));
     }
-    let reference_selections = references.map(|references| references.map(|word| select(2, base.wrapping_add(word))));
-    ConfigurationDump {
-        steps,
-        count,
-        record_word: read(area, RECORD_WORD, channel) as i16,
-        words,
-        references,
-        floors: [shifted_floor(area), shifted_second_floor(area)],
-        late_words: LATE_WORDS.map(|word| read(area, word, channel)),
-        channel_scale,
-        limits,
-        selections,
-        reference_selections,
+    for (at, addition) in [(0x290, 0x130), (0x294, 0x134), (0x2a0, 0x140)] {
+        let value = if channel.0 <= 9 {
+            let added = output.read_word(DumpOffset(addition));
+            let base = output.read_word(DumpOffset(0x118));
+            sources.selection_word(channel, 2, flags, base.wrapping_add(added) as i16)
+        } else { 0 };
+        word(at, value);
     }
 }

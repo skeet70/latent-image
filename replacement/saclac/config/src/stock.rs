@@ -6,7 +6,7 @@ use xm1_saclac_shared::settings::Channel;
 
 use crate::numeric::FloatLog;
 use crate::compiled::{CompiledScan, Optioned, StreamSnapshot};
-use crate::dump::{ConfigurationDump, DumpDerivations};
+use crate::dump::{self, DumpBuffer, DumpDerivations, DumpOffset};
 use crate::table::{Row, Step, StepLimit};
 use crate::face::{FaceTracking, TrackingBusy};
 use crate::ports::{Derivations, ExportQuery};
@@ -745,57 +745,15 @@ pub struct StockDumpBuffer<M = StockMemory> {
 }
 
 const CONFIGURATION_SECTION: u32 = 0xb_174c;
-const END_OF_STEPS: u16 = 0xfdfd;
+impl<M: GuestMemory> DumpBuffer for StockDumpBuffer<M> {
+    fn read_word(&self, at: DumpOffset) -> u32 { self.memory.word(self.address.wrapping_add(CONFIGURATION_SECTION).wrapping_add(at.0)) }
+    fn write_word(&self, at: DumpOffset, value: u32) { self.memory.set_word(self.address.wrapping_add(CONFIGURATION_SECTION).wrapping_add(at.0), value); }
+    fn write_half(&self, at: DumpOffset, value: u16) { self.memory.set_halfword(self.address.wrapping_add(CONFIGURATION_SECTION).wrapping_add(at.0), value); }
+}
 
 impl<M: GuestMemory> StockDumpBuffer<M> {
-    /// Writes the section in 0x748928's store order.
-    pub fn write_configuration(&self, dump: &ConfigurationDump) {
-        let section = self.address + CONFIGURATION_SECTION;
-        let word = |offset: u32, value: u32| self.memory.set_word(section + offset, value);
-        let half = |at: u32, value: u16| self.memory.set_halfword(at, value);
-        word(0, u32::from_le_bytes(*b"ELTS"));
-        word(0x2a4, u32::from_le_bytes(*b"ELAL"));
-        let column = |index: u32, first: u32| section + 4 + 2 * (first + index);
-        let scale = |index: u32| section + 2 * (184 + index);
-        let steps = dump.steps.iter().take(dump.count);
-        for (index, step) in (0u32..).zip(steps) {
-            half(column(index, 0), step.rounded as u16);
-            half(column(index, 32), step.value);
-            half(column(index, 68), step.transformed_value);
-            half(column(index, 100), step.transformed_word);
-            half(scale(index), step.scale);
-        }
-        let end = dump.count as u32;
-        for first in [0, 32, 68, 100] {
-            half(column(end, first), END_OF_STEPS);
-        }
-        half(scale(end), END_OF_STEPS);
-        let references = dump.references.unwrap_or([0; 3]);
-        for (offset, value) in [0x130, 0x134, 0x140].into_iter().zip(references) {
-            word(offset, value);
-        }
-        let record_word = i32::from(dump.record_word) as u32;
-        word(0x84, record_word);
-        word(0x88, record_word);
-        let words = [0x10c, 0x110, 0x114, 0x118, 0x11c, 0x120, 0x124, 0x128, 0x12c, 0x138, 0x13c, 0x144, 0x148, 0x154, 0x158];
-        let floors = [0x14c, 0x150];
-        let late = [0x15c, 0x160, 0x164, 0x168];
-        let ordered = words[..13].iter().zip(&dump.words[..13])
-            .chain(floors.iter().zip(&dump.floors))
-            .chain(words[13..].iter().zip(&dump.words[13..]))
-            .chain(late.iter().zip(&dump.late_words));
-        for (offset, value) in ordered {
-            word(*offset, *value);
-        }
-        word(0x16c, u32::from(dump.channel_scale));
-        for (offset, value) in (0x1b0..).step_by(4).zip(dump.limits.iter().flatten()) {
-            word(offset, *value);
-        }
-        for (offset, value) in [0x278, 0x27c, 0x280, 0x284, 0x288, 0x28c, 0x298, 0x29c].into_iter().zip(dump.selections) {
-            word(offset, value);
-        }
-        for (offset, value) in [0x290, 0x294, 0x2a0].into_iter().zip(dump.reference_selections.unwrap_or([0; 3])) {
-            word(offset, value);
-        }
+    pub fn export_configuration(&self, area: &impl crate::adjustment::Adjustments, derivations: &mut impl Derivations, sources: &mut impl DumpDerivations, channel: Channel) {
+        if self.address == 0 { return; }
+        dump::export_configuration(area, derivations, sources, channel, self);
     }
 }

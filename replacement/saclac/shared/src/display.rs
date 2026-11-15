@@ -20,6 +20,18 @@ pub trait Display {
     fn outputs(&self) -> Outputs;
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CaptureDisplay {
+    FeatureOff,
+    ModeOne,
+    ModeTwo,
+    OtherMode,
+}
+
+pub trait CaptureDisplayStatus {
+    fn capture_display(&self) -> CaptureDisplay;
+}
+
 /// The active outputs (0x6b7468).
 pub fn active_outputs(display: &impl Display) -> Outputs {
     let route = display.route();

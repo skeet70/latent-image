@@ -77,6 +77,7 @@ mod capture_gains;
 mod lens_calibration;
 mod profile_calibration;
 mod shot_input;
+mod shot_measurement_dump_data;
 mod round_source;
 mod round_auxiliary;
 mod round_scene;
