@@ -109,8 +109,14 @@ impl Capture {
                 return Err("shadow return prefix leaves the authenticated immutable loader image".into());
             }
         }
-        if guard.context_word(Guest(request.vector)) != Some(Word(0xe129f00d)) {
-            return Err("shadow vector leaves the authenticated stock bank-transfer source".into());
+        let bank_start = request.vector.checked_sub(4).ok_or("shadow bank-transfer prefix underflows")?;
+        let bank_prefix = [0xe3a0d0d3, 0xe129f00d, 0xe92dd00f, 0xe3a000d2, 0xe129f000,
+            0xe24e0004, 0xe14f1000, 0xe2012040, 0xe3822093, 0xe129f002, 0xe58d0018];
+        for (index, word) in bank_prefix.into_iter().enumerate() {
+            let address = bank_start.checked_add(index as u32 * 4).ok_or("shadow bank-transfer prefix overflows")?;
+            if guard.context_word(Guest(address)) != Some(Word(word)) {
+                return Err("shadow bank-transfer prefix leaves the authenticated immutable loader image".into());
+            }
         }
         let state = Rc::new(RefCell::new(State { active: None, started: 0, completed: 0, native_events: 0, failure: None,
             evidence: [None; 16], evidence_count: 0, context: None, first_irq: None }));

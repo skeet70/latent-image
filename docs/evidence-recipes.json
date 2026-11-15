@@ -2050,9 +2050,9 @@
   }
   ,{
     "id": "E-MENU-HANDOFF-PRESERVATION-150",
-    "claim": "The opt-in native preservation runtime {{sdk}} (bridge {{bridge}}, model {{model}}, patch {{patch}}) passes {{positive_roles}} synthetic direct/worker × Board/ObservationContext original-PUSH/IRQ/late-handoff roles, with independently equal full pending and final architectural/Board fingerprints. All {{negative_controls}} corruption/provenance/retirement controls refuse; a real native fault is observed={{actual_fault}}. A separate actual X-M1 Menu scenario using archive {{archive}} exits {{viewer_exit}} after install, picker keys, close, unload and reopen, with {{started}} authenticated PUSH retirements and {{completed}} full late checks, failure_free={{failure_free}} and production_admission={{production_admission}}. That new cold-start scenario captures {{irq_windows}} PUSH/IRQ windows and does not reproduce or accept the old installed-checkpoint refusal.",
-    "scope": "Host/emulator observation-only evidence. The synthetic controls exercise native CPU retirement and the source-shaped stock IRQ return through both adapters and execution paths; equality covers architecture, RAM, clocks, deadlines/events and queued in-flight completion. The actual Menu scenario uses the new runtime/model without transferring old-model checkpoints or qualifier receipts. Production guard changed={{guard_changed}}, value qualification={{qualification}}, camera operation={{camera_operation}}. No camera ownership, hardware behavior, full136-role value acceptance or changed-selection close/confirmation/restore is established.",
-    "notes": "Native pre-mutation entry, settled committed PUSH effects and source-bound banked-status restoration are separate from the production one-use destination permit. A shadow pass never admits the production handoff. The actual Menu smoke has no IRQ in its PUSH windows; the frozen failing installed-checkpoint role remains an explicit final-pass item. Independent review is required before a production observer correction. Particular camera heap headroom is unmeasured.",
+    "claim": "Historical runtime {{sdk}} (bridge {{bridge}}, model {{model}}, patch {{patch}}) passes {{positive_roles}} synthetic PUSH/IRQ/late-handoff roles and {{negative_controls}} refused controls, with actual native fault={{actual_fault}}. Its separate actual Menu smoke on archive {{archive}} exits {{viewer_exit}}, checks {{started}} PUSH retirements / {{completed}} late states, failure_free={{failure_free}}, production_admission={{production_admission}}, and captures {{irq_windows}} IRQ windows; it does not accept the old installed-checkpoint failure. Native review reproduces {{baseline_timeouts}} bounded stopped-RPC deadlocks, {{baseline_lineages}} stale-lineage cases, stale fault continuation={{baseline_fault}}, genuine retry-chain reuse={{baseline_retry}}, and {{baseline_banks}} admitted coordinated bank corruptions. Corrected runtime {{current_sdk}} (bridge {{current_bridge}}, model {{current_model}}, patch {{current_patch}}) passes {{lifecycle_cases}} lifecycle/bank cases, including {{bounded_irq_roles}} successful bounded IRQ roles, {{partial_store_roles}} partial-store roles and {{banks_refused}} refused coordinated bank corruptions. The partial PUSH commits {{partial_words}} saved words before a real fault and emits no retirement certificate. Its {{current_roles}} fresh noninterference roles independently retain equal full enabled/disabled pending/final fingerprints, and all {{current_negatives}} corruption/provenance controls refuse.",
+    "scope": "Host/emulator observation-only evidence, with historical and corrected runtime identities kept separate. Current equality covers architecture, RAM, clocks, future timers, deadlines/events and queued in-flight completion; the retry fixture uses bounded standalone CPU requests and an existing completed-store observer, not a Board quantum or firmware timing change. Actual-artifact diagnostic held={{diagnostic_held}}. Production guard changed={{guard_changed}}, value qualification={{qualification}}, camera operation={{camera_operation}}. No camera ownership, hardware behavior, full136-role value acceptance or changed-selection close/confirmation/restore is established.",
+    "notes": "Stopped-RPC invalidation is serviced before completion, stopped-entry lineage is admitted once and expires on execution/source/state changes, and failed/retried native admissions invalidate open exception IDs before publication. Full inactive bank return state derives from independent entry plus authenticated stock bank-transfer bytes. Baseline child deadlines target only owned children. The prior single-step code-store and refused-quantum attempts are preserved but are not actual-retry proof. Native completion never admits the separate production one-use destination permit. The historical Menu smoke has no IRQ-containing PUSH window; independent re-review and an authorized actual-artifact continuation remain required. Particular camera heap headroom is unmeasured.",
     "artifacts": [
       "private-data/scratch/MenuValueFix/runs/20261115T093216Z-native-shadow-control6-forward/result/control.json",
       "private-data/scratch/MenuValueFix/runs/20261115T093216Z-native-shadow-control6-forward/result/control.stderr",
@@ -2063,7 +2063,25 @@
       "private-data/scratch/MenuValueFix/runs/20261115T093312Z-menu-shadow-artifact6/result/inputs.sha256",
       "private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json",
       "private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/native-input-check.txt",
-      "private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/menu-input-check.txt"
+      "private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/menu-input-check.txt",
+      "private-data/scratch/MenuValueFix/runs/20261115T101930Z-lifecycle-baseline-controls6/result/verdict.json",
+      "private-data/scratch/MenuValueFix/runs/20261115T101930Z-lifecycle-baseline-controls6/result/remove-open-irq-worker-board.stderr",
+      "private-data/scratch/MenuValueFix/runs/20261115T101930Z-lifecycle-baseline-controls6/result/restore-open-irq-worker-board.stderr",
+      "private-data/scratch/MenuValueFix/runs/20261115T103146Z-lifecycle-bank-baseline-controls6/result/independent-banks.json",
+      "private-data/scratch/MenuValueFix/runs/20261115T103146Z-lifecycle-bank-baseline-controls6/result/partial-store-direct-board.json",
+      "private-data/scratch/MenuValueFix/runs/20261115T111233Z-lifecycle-alias-baseline-controls6/result/fault-open-irq-direct-board.json",
+      "private-data/scratch/MenuValueFix/runs/20261115T114154Z-lifecycle-store-retry-baseline-controls6/result/restart-open-irq-direct-board.json",
+      "private-data/scratch/MenuValueFix/runs/20261115T114349Z-lifecycle-fix-gate6-store-retry/result/inputs.sha256",
+      "private-data/scratch/MenuValueFix/runs/20261115T115233Z-lifecycle-fixed-store-controls6/result/verdict.json",
+      "private-data/scratch/MenuValueFix/runs/20261115T115233Z-lifecycle-fixed-store-controls6/result/raw.sha256",
+      "private-data/scratch/MenuValueFix/runs/20261115T115233Z-lifecycle-fixed-store-controls6/result/restart-open-irq-worker-context.json",
+      "private-data/scratch/MenuValueFix/runs/20261115T115233Z-lifecycle-fixed-store-controls6/result/fault-open-irq-direct-board.json",
+      "private-data/scratch/MenuValueFix/runs/20261115T115303Z-lifecycle-noninterference6/result/control.json",
+      "private-data/scratch/MenuValueFix/runs/20261115T115303Z-lifecycle-noninterference6/result/inputs.sha256",
+      "private-data/scratch/MenuValueFix/runs/20261115T115335Z-lifecycle-facts6/result/facts.json",
+      "private-data/scratch/MenuValueFix/runs/20261115T115335Z-lifecycle-facts6/result/source-input-check.txt",
+      "private-data/scratch/MenuValueFix/runs/20261115T115335Z-lifecycle-facts6/result/control-input-check.txt",
+      "private-data/scratch/MenuValueFix/runs/20261115T115335Z-lifecycle-facts6/result/noninterference-input-check.txt"
     ],
     "facts": [
       {"name":"firmware_sha256","path":"private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json","pointer":["firmware_sha256"]},
@@ -2083,7 +2101,24 @@
       {"name":"irq_windows","path":"private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json","pointer":["menu","irq_windows"]},
       {"name":"qualification","path":"private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json","pointer":["menu","qualification"]},
       {"name":"guard_changed","path":"private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json","pointer":["production_guard_changed"]},
-      {"name":"camera_operation","path":"private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json","pointer":["camera_operation"]}
+      {"name":"camera_operation","path":"private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json","pointer":["camera_operation"]},
+      {"name":"current_sdk","path":"private-data/scratch/MenuValueFix/runs/20261115T115335Z-lifecycle-facts6/result/facts.json","pointer":["sdk"]},
+      {"name":"current_bridge","path":"private-data/scratch/MenuValueFix/runs/20261115T115335Z-lifecycle-facts6/result/facts.json","pointer":["bridge_sha256"]},
+      {"name":"current_model","path":"private-data/scratch/MenuValueFix/runs/20261115T115335Z-lifecycle-facts6/result/facts.json","pointer":["model_sha256"]},
+      {"name":"current_patch","path":"private-data/scratch/MenuValueFix/runs/20261115T115335Z-lifecycle-facts6/result/facts.json","pointer":["patch_sha256"]},
+      {"name":"baseline_timeouts","path":"private-data/scratch/MenuValueFix/runs/20261115T115335Z-lifecycle-facts6/result/facts.json","pointer":["baseline","exact_child_timeouts"]},
+      {"name":"baseline_lineages","path":"private-data/scratch/MenuValueFix/runs/20261115T115335Z-lifecycle-facts6/result/facts.json","pointer":["baseline","lineage_failures"]},
+      {"name":"baseline_fault","path":"private-data/scratch/MenuValueFix/runs/20261115T115335Z-lifecycle-facts6/result/facts.json","pointer":["baseline","fault_stale_continuation"]},
+      {"name":"baseline_retry","path":"private-data/scratch/MenuValueFix/runs/20261115T115335Z-lifecycle-facts6/result/facts.json","pointer":["baseline","restart_failure"]},
+      {"name":"baseline_banks","path":"private-data/scratch/MenuValueFix/runs/20261115T115335Z-lifecycle-facts6/result/facts.json","pointer":["baseline","admitted_bank_corruptions"]},
+      {"name":"lifecycle_cases","path":"private-data/scratch/MenuValueFix/runs/20261115T115335Z-lifecycle-facts6/result/facts.json","pointer":["corrected","cases"]},
+      {"name":"bounded_irq_roles","path":"private-data/scratch/MenuValueFix/runs/20261115T115335Z-lifecycle-facts6/result/facts.json","pointer":["corrected","bounded_irq_roles"]},
+      {"name":"partial_store_roles","path":"private-data/scratch/MenuValueFix/runs/20261115T115335Z-lifecycle-facts6/result/facts.json","pointer":["corrected","partial_store_roles"]},
+      {"name":"partial_words","path":"private-data/scratch/MenuValueFix/runs/20261115T115335Z-lifecycle-facts6/result/facts.json","pointer":["baseline","partial_committed_words"]},
+      {"name":"banks_refused","path":"private-data/scratch/MenuValueFix/runs/20261115T115335Z-lifecycle-facts6/result/facts.json","pointer":["corrected","bank_corruptions_refused"]},
+      {"name":"current_roles","path":"private-data/scratch/MenuValueFix/runs/20261115T115335Z-lifecycle-facts6/result/facts.json","pointer":["corrected","noninterference_roles"]},
+      {"name":"current_negatives","path":"private-data/scratch/MenuValueFix/runs/20261115T115335Z-lifecycle-facts6/result/facts.json","pointer":["corrected","negative_controls"]},
+      {"name":"diagnostic_held","path":"private-data/scratch/MenuValueFix/runs/20261115T115335Z-lifecycle-facts6/result/facts.json","pointer":["actual_artifact_diagnostic_held"]}
     ]
   }
 ]

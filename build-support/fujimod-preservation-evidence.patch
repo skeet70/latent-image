@@ -147,7 +147,7 @@
 +}
 --- /dev/null
 +++ b/crates/emulator-cpu/src/preservation/shadow.rs
-@@ -0,0 +1,210 @@
+@@ -0,0 +1,222 @@
 +//! A passive proposal checker. A successful check never authorizes execution.
 +use super::*;
 +use crate::InstructionEntry;
@@ -179,6 +179,7 @@
 +#[derive(Clone, Copy)]
 +struct Irq {
 +    entry: ExceptionEntry,
++    predicted: Arm32State,
 +    written: Option<SavedStatusWrite>,
 +}
 +
@@ -287,7 +288,16 @@
 +                expected.registers[14] = before.registers[15].checked_add(4).ok_or(Failure::ExceptionEntry)?;
 +                expected.registers[15] = entry.vector;
 +                if entry.after != expected { return Err(Failure::ExceptionEntry); }
-+                self.irq = Some(Irq { entry, written: None });
++                let mut predicted = before;
++                predicted.spsr = (before.spsr & !0xff0000ff) | (before.cpsr & 0xff0000ff);
++                predicted.cpsr = predicted.spsr;
++                predicted.svc_spsr = before.spsr;
++                predicted.irq_spsr = before.cpsr;
++                predicted.svc_sp = before.registers[13].checked_sub(28).ok_or(Failure::ExceptionEntry)?;
++                predicted.svc_lr = before.registers[14];
++                predicted.irq_sp = 0xd3;
++                predicted.irq_lr = before.registers[15].checked_add(4).ok_or(Failure::ExceptionEntry)?;
++                self.irq = Some(Irq { entry, predicted, written: None });
 +                Ok(())
 +            }
 +            PreservationEvidence::SavedStatus(written) => {
@@ -304,11 +314,15 @@
 +                    || written.before.cpsr & 0x40 != saved & 0x40
 +                    || written.before.registers[1] != saved
 +                    || written.before.svc_spsr != old_svc
-+                    || written.before.irq_spsr != irq.entry.before.cpsr {
++                    || written.before.irq_spsr != irq.predicted.irq_spsr
++                    || written.before.svc_sp != irq.predicted.svc_sp
++                    || written.before.svc_lr != irq.predicted.svc_lr
++                    || written.before.irq_sp != irq.predicted.irq_sp
++                    || written.before.irq_lr != irq.predicted.irq_lr {
 +                    return Err(Failure::SavedStatus);
 +                }
 +                let mut expected = written.before;
-+                expected.spsr = (old_svc & !0xff0000ff) | (saved & 0xff0000ff);
++                expected.spsr = irq.predicted.spsr;
 +                expected.registers[15] = written.source.address.checked_add(4).ok_or(Failure::SavedStatus)?;
 +                if written.after != expected { return Err(Failure::SavedStatus); }
 +                irq.written = Some(written);
@@ -323,9 +337,7 @@
 +                }
 +                if returned.before != written.after || returned.written_status != written.after.spsr
 +                    || returned.mask != 0xff1fffff { return Err(Failure::ExceptionReturn); }
-+                let mut expected = returned.before;
-+                expected.registers = self.retired.ok_or(Failure::MissingRetirement)?.after.registers;
-+                expected.cpsr = written.after.spsr;
++                let expected = irq.predicted;
 +                if returned.after != expected { return Err(Failure::ExceptionReturn); }
 +                self.expected = Some(expected);
 +                self.irq = None;
@@ -568,6 +580,17 @@
              }
          }
      }
+@@ -871,6 +882,10 @@
+     e.guarded(|| {
+         // The instruction has not completed; its isolated retry will publish.
+         e.pending_stores.borrow_mut().clear();
++        if !e.observer_index.borrow().preservation.is_empty() {
++            e.preservation.invalidate(e,
++                fujimod_emulator_cpu::preservation::EvidenceFailure::Restarted);
++        }
+         // Interactive peers may already have synchronized against the full
+         // coarse block admission. Retaining its tail keeps that published
+         // progress monotonic while the pending store is retried in isolation.
 --- a/crates/emulator-cpu-unicorn/src/rprofile/core/backend.rs
 +++ b/crates/emulator-cpu-unicorn/src/rprofile/core/backend.rs
 @@ -46,6 +46,10 @@
@@ -581,13 +604,15 @@
          if e.memory.run_reserved(e.id.get()) {
              return Err("execution policy requires a stopped processor".into());
          }
-@@ -111,9 +115,15 @@
+@@ -111,9 +115,17 @@
          self.execution.cpu.read_register(r, bytes)
      }
      fn write_register(&self, r: Register, bytes: &[u8]) -> Result<(), String> {
 +        if self.execution.preservation.dispatching() {
 +            return Err("register mutation during preservation dispatch is refused".into());
 +        }
++        self.execution.preservation.expire_lineage(&self.execution,
++            fujimod_emulator_cpu::preservation::EvidenceFailure::SourceChanged);
          self.execution.cpu.write_register(r, bytes)
      }
      fn coprocessor(&self, r: arm::Coprocessor, value: Option<u64>) -> Result<u64, String> {
@@ -597,7 +622,7 @@
          if r.cp == 15 && r.opc1 == 0 && r.crn == 9 && r.crm == 1 {
              if r.wide || r.opc2 > 1 || r.secure > 1 {
                  return Err("unmodeled R-profile TCM selector".into());
-@@ -485,7 +495,7 @@
+@@ -485,7 +497,7 @@
      fn run(&self, request: Run) -> Result<Exit, ExecutionError> {
          let e = &self.execution;
          let _guest_tick_scope = crate::rprofile::GuestTickScope::new();
@@ -606,7 +631,27 @@
              return Err("nested R-profile execution is refused".into());
          }
          let _owner_barrier_run = e.owner_barrier_run_guard();
-@@ -531,9 +541,14 @@
+@@ -509,10 +521,19 @@
+                     .into(),
+             );
+         }
++        let mut evidence_run = (!e.observer_index.borrow().preservation.is_empty())
++            .then(|| preservation::RunValidity::new(e));
+         let _run = e
+             .memory
+             .reserve_run(e.id.get(), e.policy.get(), e.parallel_tcg)?;
++        if !e.observer_index.borrow().preservation.is_empty() && e.memory.flush_pending() {
++            e.preservation.expire_lineage(e,
++                fujimod_emulator_cpu::preservation::EvidenceFailure::SourceChanged);
++        }
+         e.memory.flush()?;
++        if !e.observer_index.borrow().preservation.is_empty() {
++            e.preservation.admit(e, request.begin);
++        }
+         e.cap.set(
+             request
+                 .instructions
+@@ -531,9 +552,14 @@
          if e.irq.get() {
              // Entry must use the requested architectural PC, including Thumb.
              e.set(arm::PC, begin as u32)?;
@@ -622,17 +667,26 @@
                  e.observe_exception(arm::Exception::Irq);
              }
          }
-@@ -579,6 +594,9 @@
+@@ -550,6 +576,7 @@
+         if let Some(clock) = e.clock.get() {
+             e.clock.set(Some(clock.after(e.count.get())?));
+         }
++        if let Some(validity) = &mut evidence_run { validity.success = result.is_ok(); }
+         result
+     }
+ 
+@@ -579,6 +606,10 @@
                      .ok_or("missing observed entry")?,
              );
          }
 +        if !e.observer_index.borrow().preservation.is_empty() {
-+            e.preservation.paused(e.entry.get());
++            e.preservation.paused(e.entry.get().filter(|entry|
++                !e.observer_index.borrow().preservation.at(entry.address).is_empty()));
 +        }
          self.stop()
      }
      fn rprofile_identity(&self, value: Option<u32>) -> Result<u32, String> {
-@@ -609,14 +627,23 @@
+@@ -609,14 +640,23 @@
          self.capture(previous)
      }
      fn restore(&self, snapshot: &dyn Snapshot) -> Result<(), String> {
@@ -658,7 +712,7 @@
              return Err("cannot install a hook during mutation dispatch".into());
          }
          e.observer_index
-@@ -639,6 +666,25 @@
+@@ -639,6 +679,25 @@
              .checked_add(1)
              .ok_or("R-profile hook identity overflow")?;
          let native = match hook {
@@ -684,7 +738,7 @@
              Hook::Instruction { range, .. } | Hook::Block { range, .. } | Hook::TranslationAdmission { range, .. } => {
                  self.retranslate(range)?;
                  None
-@@ -682,7 +728,7 @@
+@@ -682,7 +741,7 @@
      }
      fn remove_hook(&self, hook: HookId) -> Result<(), String> {
          let e = &self.execution;
@@ -693,7 +747,7 @@
              return Err("cannot remove a hook during mutation dispatch".into());
          }
          e.observer_index
-@@ -695,6 +741,18 @@
+@@ -695,6 +754,18 @@
          let observers = e.observers.borrow();
          let observer = observers.get(&hook.key).ok_or("unknown R-profile hook")?;
          match observer.hook {
@@ -740,7 +794,7 @@
              Hook::CompletedStore { range, .. } => self.stores.remove(key, range),
 --- a/crates/emulator-cpu-unicorn/src/rprofile/core/run.rs
 +++ b/crates/emulator-cpu-unicorn/src/rprofile/core/run.rs
-@@ -32,6 +32,18 @@
+@@ -32,6 +32,22 @@
                  e.pending_stores.borrow_mut().clear();
                  settlement
              };
@@ -754,7 +808,11 @@
 +                } else {
 +                    EvidenceFailure::MissingRetirement
 +                };
-+                e.preservation.finish_run(e, reason);
++                if matches!(reason, EvidenceFailure::Faulted | EvidenceFailure::Restarted) {
++                    e.preservation.invalidate(e, reason);
++                } else {
++                    e.preservation.finish_run(e, reason);
++                }
 +            }
              e.active.set(false);
              e.memory.end();
@@ -771,9 +829,18 @@
          let admission = &self.mutation;
          if admission.dispatching.get() {
              return Err(admission.refuse(Refusal::Reentered));
+@@ -93,6 +96,8 @@
+                 }
+             }
+         }
++        self.preservation.expire_lineage(self,
++            fujimod_emulator_cpu::preservation::EvidenceFailure::SourceChanged);
+         let result = apply();
+         match admission.refusal.get() {
+             Some(first) => Err(first.error()),
 --- /dev/null
 +++ b/crates/emulator-cpu-unicorn/src/rprofile/core/preservation.rs
-@@ -0,0 +1,303 @@
+@@ -0,0 +1,339 @@
 +//! Native post-effect capture. This module never changes architectural execution.
 +use super::*;
 +use fujimod_emulator_cpu::preservation::*;
@@ -800,7 +867,23 @@
 +    completed: RefCell<[Option<InstructionRetirement>; 32]>,
 +    completed_len: Cell<usize>,
 +    paused: Cell<Option<InstructionEntry>>,
++    resuming: Cell<Option<InstructionEntry>>,
 +}
++pub(super) struct RunValidity<'a> {
++    execution: &'a Execution,
++    pub(super) success: bool,
++}
++impl<'a> RunValidity<'a> {
++    pub(super) fn new(execution: &'a Execution) -> Self { Self { execution, success: false } }
++}
++impl Drop for RunValidity<'_> {
++    fn drop(&mut self) {
++        if !self.success {
++            self.execution.preservation.invalidate(self.execution, EvidenceFailure::Faulted);
++        }
++    }
++}
++
 +
 +struct Dispatch<'a>(&'a Cell<bool>);
 +impl Drop for Dispatch<'_> {
@@ -810,7 +893,24 @@
 +impl Capture {
 +    pub(super) fn dispatching(&self) -> bool { self.dispatching.get() }
 +    pub(super) fn paused(&self, entry: Option<InstructionEntry>) {
++        self.resuming.take();
 +        self.paused.set(entry);
++    }
++
++    pub(super) fn admit(&self, execution: &Execution, begin: u64) {
++        let paused = self.paused.take();
++        self.resuming.set(paused.filter(|entry|
++            entry.address == (begin & !1)
++                && (begin & 1 != 0) == (entry.pstate & 32 != 0)
++                && execution.scalar(arm::CPSR).ok() == Some(entry.pstate)));
++        if paused.is_some() && self.resuming.get().is_none() {
++            execution.evidence_failed(paused.unwrap().address, EvidenceFailure::SourceChanged);
++        }
++    }
++
++    pub(super) fn expire_lineage(&self, execution: &Execution, reason: EvidenceFailure) {
++        let paused = self.paused.take().or(self.resuming.take());
++        if let Some(entry) = paused { execution.evidence_failed(entry.address, reason); }
 +    }
 +
 +    fn next(&self, execution: &Execution) -> Option<EvidenceId> {
@@ -821,7 +921,7 @@
 +    }
 +
 +    pub(super) fn invalidate(&self, execution: &Execution, reason: EvidenceFailure) {
-+        self.paused.take();
++        self.expire_lineage(execution, reason);
 +        self.finish_run(execution, reason);
 +        let entering = self.entering.take().is_some();
 +        let depth = self.depth.replace(0);
@@ -839,6 +939,9 @@
 +            if let Some(retired) = self.completed.borrow_mut()[index].take() {
 +                execution.evidence_failed(u64::from(retired.source.address), reason);
 +            }
++        }
++        if self.resuming.get().is_some() {
++            self.expire_lineage(execution, reason);
 +        }
 +    }
 +
@@ -869,9 +972,9 @@
 +                && entry.pstate == before.cpsr
 +                && entry.tcm == source.tcm
 +        });
-+        let resumed_from = self.paused.get().filter(|entry| {
++        let resumed_from = self.resuming.take().filter(|entry| {
 +            entry.address == u64::from(address) && entry.physical == Some(source.physical)
-+                && entry.bytes == 4 && entry.tcm == source.tcm
++                && entry.bytes == 4 && entry.tcm == source.tcm && entry.pstate == before.cpsr
 +        });
 +        Some(Pending { id: self.next(execution)?, source, before, observation, resumed_from })
 +    }
@@ -882,6 +985,7 @@
 +
 +    pub(super) fn before_irq(&self, execution: &Execution) {
 +        if execution.observer_index.borrow().preservation.is_empty() { return; }
++        self.expire_lineage(execution, EvidenceFailure::MissingRetirement);
 +        let Some(id) = self.next(execution) else { return; };
 +        match execution.cpu.capture_arm32() {
 +            Ok(before) => {
@@ -918,7 +1022,6 @@
 +        match phase {
 +            0 | 2 | 4 => {
 +                let Some(pending) = self.pending(execution, address, word, state) else { return; };
-+                if phase == 0 { self.paused.take(); }
 +                let slot = match phase { 0 => &self.instruction, 2 => &self.status, _ => &self.returning };
 +                if slot.replace(Some(pending)).is_some() {
 +                    execution.evidence_failed(u64::from(address), EvidenceFailure::MissingRetirement);
@@ -1224,7 +1327,46 @@
 +}
 --- a/crates/emulator-cpu-unicorn/src/rprofile/worker.rs
 +++ b/crates/emulator-cpu-unicorn/src/rprofile/worker.rs
-@@ -218,6 +218,7 @@
+@@ -68,6 +68,7 @@
+     >,
+     run_result: RefCell<Option<Result<Exit, ExecutionError>>>,
+     callback_depth: Cell<u32>,
++    preservation_dispatching: Cell<bool>,
+     deferred_instruction_limit: Cell<Option<u64>>,
+     _owner: PhantomData<Rc<()>>,
+ }
+@@ -152,6 +153,7 @@
+                 pending_callback: RefCell::new(None),
+                 run_result: RefCell::new(None),
+                 callback_depth: Cell::new(0),
++                preservation_dispatching: Cell::new(false),
+                 deferred_instruction_limit: Cell::new(None),
+                 _owner: PhantomData,
+             })
+@@ -166,6 +168,10 @@
+ enum Message {
+     Request {
+         operation: Operation,
++        reply: Sender<RpcEvent>,
++    },
++    ExportSnapshot {
++        token: u64,
+         reply: Sender<Result<Value, String>>,
+     },
+     Run {
+@@ -183,6 +189,11 @@
+     Shutdown,
+ }
+ 
++enum RpcEvent {
++    Preservation { callback: usize, evidence: preservation::PreservationEvidence },
++    Complete(Result<Value, String>),
++}
++
+ enum Event {
+     Callback {
+         id: u64,
+@@ -218,6 +229,7 @@
      },
      Block(Block),
      TranslationAdmission { address: u64, word: u32, thumb: bool },
@@ -1232,7 +1374,7 @@
      Exception(arm::Exception),
      Synchronization,
      Memory {
-@@ -242,6 +243,7 @@
+@@ -242,6 +254,7 @@
      Instruction,
      TranslationAdmission,
      Block,
@@ -1240,7 +1382,7 @@
      Exception,
      Synchronization,
      Memory,
-@@ -256,6 +258,7 @@
+@@ -256,6 +269,7 @@
          Self::Instruction,
          Self::TranslationAdmission,
          Self::Block,
@@ -1248,7 +1390,7 @@
          Self::Exception,
          Self::Synchronization,
          Self::Memory,
-@@ -268,6 +271,7 @@
+@@ -268,6 +282,7 @@
              CallbackCall::MmioWrite { .. } => Self::MmioWrite,
              CallbackCall::Instruction { .. } => Self::Instruction,
              CallbackCall::TranslationAdmission { .. } => Self::TranslationAdmission,
@@ -1256,7 +1398,7 @@
              CallbackCall::Block(_) => Self::Block,
              CallbackCall::Exception(_) => Self::Exception,
              CallbackCall::Synchronization => Self::Synchronization,
-@@ -282,6 +286,7 @@
+@@ -282,6 +297,7 @@
              Self::MmioWrite => "worker_callback_mmio_write",
              Self::Instruction => "worker_callback_instruction",
              Self::TranslationAdmission => "worker_callback_translation_admission",
@@ -1264,7 +1406,7 @@
              Self::Block => "worker_callback_block",
              Self::Exception => "worker_callback_exception",
              Self::Synchronization => "worker_callback_synchronization",
-@@ -532,6 +537,7 @@
+@@ -532,6 +548,7 @@
  enum HookKind {
      Instruction(HookRange),
      TranslationAdmission(HookRange),
@@ -1272,11 +1414,44 @@
      Block(HookRange),
      Exception,
      Synchronization,
-@@ -618,14 +624,16 @@
+@@ -579,6 +596,7 @@
+     next_snapshot: Cell<u64>,
+     next_event: Cell<u64>,
+     callback_error: RefCell<Option<String>>,
++    stopped_reply: RefCell<Option<Sender<RpcEvent>>>,
+     wakeup: RefCell<Option<RunWakeup>>,
+     shutdown: Cell<bool>,
+ }
+@@ -597,6 +615,15 @@
+     Some(u32::from_le_bytes(bytes))
+ }
+ impl WorkerLoop {
++    fn reply_rpc(&self, cpu: &core::Core, operation: Operation, reply: Sender<RpcEvent>) {
++        let previous = self.stopped_reply.replace(Some(reply));
++        let mut result = dispatch(self, cpu, operation);
++        let reply = self.stopped_reply.replace(previous).expect("stopped RPC lost its evidence channel");
++        if let Some(error) = self.callback_error.borrow().as_ref() {
++            result = Err(error.clone());
++        }
++        let _ = reply.send(RpcEvent::Complete(result));
++    }
+     fn notify_wakeup(&self) {
+         if let Some(wakeup) = self.wakeup.borrow().as_ref() {
+             wakeup.notify();
+@@ -618,14 +645,25 @@
          let Some(cpu) = (unsafe { self.core.get().as_ref() }) else {
              return CallbackResult::Error;
          };
 +        if matches!(call, CallbackCall::Preservation(_)) {
++            if let Some(reply) = self.stopped_reply.borrow().as_ref() {
++                let CallbackCall::Preservation(evidence) = call else { unreachable!() };
++                return if reply.send(RpcEvent::Preservation { callback, evidence }).is_ok() {
++                    CallbackResult::Unit
++                } else {
++                    *self.callback_error.borrow_mut() = Some("stopped preservation receiver disconnected".into());
++                    CallbackResult::Error
++                };
++            }
 +            return self.wait_callback_parked(cpu, callback, call, None, None, None);
 +        }
          if let Err(error) = cpu.owner_callback_parked(true) {
@@ -1292,7 +1467,7 @@
          let is_synchronization = matches!(call, CallbackCall::Synchronization);
          let result = self.wait_callback_parked(cpu, callback, call, progress, pc, pstate);
          if is_synchronization && !matches!(result, CallbackResult::Error) {
-@@ -648,8 +656,14 @@
+@@ -648,8 +686,14 @@
          pc: Option<u32>,
          pstate: Option<u32>,
      ) -> CallbackResult {
@@ -1307,7 +1482,7 @@
          if self
              .events
              .send(Event::Callback {
-@@ -657,7 +671,7 @@
+@@ -657,7 +701,7 @@
                  callback,
                  call,
                  progress,
@@ -1316,7 +1491,7 @@
                  pc,
                  pstate,
              })
-@@ -678,7 +692,9 @@
+@@ -678,7 +722,9 @@
                      tighten,
                      applied,
                  } if response_id == id => {
@@ -1327,24 +1502,30 @@
                          tighten.map_or(Ok(()), |total| cpu.tighten_instruction_limit(total))
                      } else {
                          Ok(())
-@@ -699,9 +715,13 @@
+@@ -699,9 +745,19 @@
                      return result;
                  }
                  Message::Request { operation, reply } => {
 -                    let result = match unsafe { self.core.get().as_ref() } {
 -                        Some(cpu) => dispatch(self, cpu, operation),
 -                        None => Err("R-profile CPU worker is not initialized".into()),
-+                    let result = if preserving {
-+                        Err("CPU reentry during preservation dispatch is refused".into())
++                    if preserving {
++                        let _ = reply.send(RpcEvent::Complete(Err("CPU reentry during preservation dispatch is refused".into())));
++                    } else if let Some(cpu) = unsafe { self.core.get().as_ref() } {
++                        self.reply_rpc(cpu, operation, reply);
 +                    } else {
-+                        match unsafe { self.core.get().as_ref() } {
-+                            Some(cpu) => dispatch(self, cpu, operation),
-+                            None => Err("R-profile CPU worker is not initialized".into()),
-+                        }
++                        let _ = reply.send(RpcEvent::Complete(Err("R-profile CPU worker is not initialized".into())));
++                    }
++                }
++                Message::ExportSnapshot { token, reply } => {
++                    let result = if preserving {
++                        Err("snapshot export during preservation dispatch is refused".into())
++                    } else {
++                        dispatch(self, cpu, Operation::ExportSnapshot(token))
                      };
                      let _ = reply.send(result);
                  }
-@@ -790,6 +810,12 @@
+@@ -790,6 +846,12 @@
          )
      }, CallbackResult::Bool(true))
  }
@@ -1357,7 +1538,28 @@
  unsafe fn exception(exception: arm::Exception, data: *mut std::ffi::c_void) {
      let context = unsafe { callback_context(data) };
      unsafe {
-@@ -1128,6 +1154,9 @@
+@@ -855,6 +917,7 @@
+         next_snapshot: Cell::new(1),
+         next_event: Cell::new(1),
+         callback_error: RefCell::new(None),
++        stopped_reply: RefCell::new(None),
+         wakeup: RefCell::new(None),
+         shutdown: Cell::new(false),
+     });
+@@ -900,7 +963,11 @@
+         };
+         match message {
+             Message::Request { operation, reply } => {
+-                let _ = reply.send(dispatch(&context, &cpu, operation));
++                context.callback_error.borrow_mut().take();
++                context.reply_rpc(&cpu, operation, reply);
++            }
++            Message::ExportSnapshot { token, reply } => {
++                let _ = reply.send(dispatch(&context, &cpu, Operation::ExportSnapshot(token)));
+             }
+             Message::Run { id, request } => {
+                 context.callback_error.borrow_mut().take();
+@@ -1128,6 +1195,9 @@
                      HookKind::TranslationAdmission(range) => Hook::TranslationAdmission {
                          callback: translation_admission, data, range,
                      },
@@ -1367,7 +1569,52 @@
                      HookKind::Block(range) => Hook::Block {
                          callback: block,
                          data,
-@@ -1281,6 +1310,13 @@
+@@ -1212,6 +1282,9 @@
+ 
+ impl CpuWorker {
+     fn rpc(&self, operation: Operation) -> Result<Value, String> {
++        if self.preservation_dispatching.get() {
++            return Err("CPU reentry during preservation dispatch is refused".into());
++        }
+         #[cfg(test)]
+         self.rpc_calls.set(self.rpc_calls.get() + 1);
+         let counter = operation.counter();
+@@ -1223,9 +1296,22 @@
+             let count = &self.rpc_counts[counter as usize];
+             count.set(count.get().saturating_add(1));
+         }
+-        response
+-            .recv()
+-            .map_err(|_| "R-profile CPU worker reply disconnected")?
++        let mut callback_error = None;
++        loop {
++            match response.recv().map_err(|_| "R-profile CPU worker reply disconnected")? {
++                RpcEvent::Complete(result) => return match callback_error {
++                    Some(error) => Err(error), None => result,
++                },
++                RpcEvent::Preservation { callback, evidence } => {
++                    self.callback_events.set(self.callback_events.get().saturating_add(1));
++                    let count = &self.callback_counts[WorkerCallbackCounter::Preservation as usize];
++                    count.set(count.get().saturating_add(1));
++                    if matches!(self.service_callback(callback, CallbackCall::Preservation(evidence)), CallbackResult::Error) {
++                        callback_error.get_or_insert_with(|| "stopped preservation callback failed".to_string());
++                    }
++                }
++            }
++        }
+     }
+     fn unit(&self, operation: Operation) -> Result<(), String> {
+         match self.rpc(operation)? {
+@@ -1253,6 +1339,8 @@
+         };
+         self.callback_depth
+             .set(self.callback_depth.get().saturating_add(1));
++        let previous_preservation = self.preservation_dispatching.get();
++        self.preservation_dispatching.set(previous_preservation || matches!(&call, CallbackCall::Preservation(_)));
+         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+             match (entry, call) {
+                 (CallbackEntry::Mmio(mmio), CallbackCall::MmioRead { offset, size }) => {
+@@ -1281,6 +1369,13 @@
                      CallbackCall::TranslationAdmission { address, word, thumb },
                  ) => CallbackResult::Bool(callback(address, word, thumb, data)),
                  (
@@ -1381,7 +1628,52 @@
                      CallbackEntry::Hook(Hook::Block { callback, data, .. }),
                      CallbackCall::Block(block),
                  ) => {
-@@ -1942,6 +1978,7 @@
+@@ -1330,6 +1425,7 @@
+         }));
+         self.callback_depth
+             .set(self.callback_depth.get().saturating_sub(1));
++        self.preservation_dispatching.set(previous_preservation);
+         result.unwrap_or(CallbackResult::Error)
+     }
+ 
+@@ -1488,6 +1584,9 @@
+         self.unit(Operation::SetGuestClock(clock))
+     }
+     fn read_register(&self, register: Register, out: &mut [u8]) -> Result<usize, String> {
++        if self.preservation_dispatching.get() {
++            return Err("register inspection during preservation dispatch is refused".into());
++        }
+         if matches!(register, Register::Pc | arm::PC)
+             && out.len() >= 4
+             && (self.callback_depth.get() != 0
+@@ -1672,7 +1771,7 @@
+         self.unit(Operation::InvalidateCode(range))
+     }
+     fn start_run(&self, request: Run) -> Result<RunToken, ExecutionError> {
+-        if self.running.get() {
++        if self.running.get() || self.preservation_dispatching.get() {
+             return Err(ExecutionError::Backend(
+                 "nested R-profile worker execution is refused".into(),
+             ));
+@@ -1821,6 +1920,9 @@
+         }
+     }
+     fn tighten_instruction_limit(&self, total: u64) -> Result<(), String> {
++        if self.preservation_dispatching.get() {
++            return Err("preservation dispatch cannot change the run budget".into());
++        }
+         if self.callback_depth.get() != 0 {
+             let total = self
+                 .deferred_instruction_limit
+@@ -1832,6 +1934,7 @@
+         self.unit(Operation::TightenInstructionLimit(total))
+     }
+     fn instruction_progress(&self) -> Option<u64> {
++        if self.preservation_dispatching.get() { return None; }
+         if (self.callback_depth.get() != 0
+             || self.pending_callback.borrow().is_some()
+             || self.run_result.borrow().is_some())
+@@ -1942,6 +2045,7 @@
              let kind = match hook {
                  Hook::Instruction { range, .. } => HookKind::Instruction(range),
                  Hook::TranslationAdmission { range, .. } => HookKind::TranslationAdmission(range),
@@ -1734,3 +2026,16 @@
 +        begin(&self.cpus, &self.memory, core, range, callback)
 +    }
 +}
+--- a/crates/emulator-cpu-unicorn/src/rprofile/worker/durable.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/worker/durable.rs
+@@ -6,8 +6,8 @@
+     pub(super) fn export_bytes(&self) -> Result<Vec<u8>, String> {
+         let (reply, response) = mpsc::channel();
+         self.commands
+-            .send(Message::Request {
+-                operation: Operation::ExportSnapshot(self.token),
++            .send(Message::ExportSnapshot {
++                token: self.token,
+                 reply,
+             })
+             .map_err(|_| "R-profile snapshot worker disconnected")?;
