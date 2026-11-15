@@ -29,7 +29,6 @@ pub struct State {
     memory: HashMap<u32, u8>,
     answers: HashMap<u32, VecDeque<u32>>,
     entered: Vec<(u32, Vec<u32>)>,
-    buffer_writes: HashMap<u32, Vec<(usize, Vec<u8>)>>,
 }
 
 impl State {
@@ -61,10 +60,6 @@ impl Fake {
 
     pub fn take_entered(&self) -> Vec<(u32, Vec<u32>)> { std::mem::take(&mut self.0.borrow_mut().entered) }
 
-    /// A retained entry's writes to its caller's buffer.
-    pub fn buffer(&self, address: u32, offset: usize, bytes: &[u8]) {
-        self.0.borrow_mut().buffer_writes.entry(address).or_default().push((offset, bytes.to_vec()));
-    }
 }
 
 impl Machine for Fake {
@@ -93,16 +88,12 @@ impl Machine for Fake {
         state.answers.get_mut(&address).and_then(VecDeque::pop_front).unwrap_or(0)
     }
 
-    fn enter_with(&self, address: u32, arguments: &[Argument], buffer: &mut [u8]) -> u32 {
+    fn enter_with(&self, address: u32, arguments: &[Argument], _buffer: &mut [u8]) -> u32 {
         let arguments: Vec<_> = arguments.iter().map(|argument| match *argument {
             Argument::Word(word) => word as usize,
             Argument::Buffer(offset) => 0xb000_0000 + offset,
         }).collect();
-        let answer = self.enter(address, &arguments);
-        if let Some(writes) = self.0.borrow().buffer_writes.get(&address) {
-            for (offset, bytes) in writes { buffer[*offset..*offset + bytes.len()].copy_from_slice(bytes); }
-        }
-        answer
+        self.enter(address, &arguments)
     }
 }
 

@@ -5,7 +5,7 @@ use xm1_saclac_calc::scene_recognition::SceneRecognition;
 use xm1_focus_measurement_round::acquisition::live::LiveWork;
 use xm1_focus_measurement_round::acquisition::ports::{Branch, ExposureRecordUpdate, Ports, ProgramInputs};
 use xm1_focus_measurement_round::children::S1Acquisition;
-use xm1_focus_measurement_round::pipeline::{Exposure, GainStep};
+use xm1_focus_measurement_round::pipeline::{Exposure, GainStep, Pipeline};
 use xm1_saclac_controllers::children::{AcquisitionControl, ChildEvent, ChildOutcome};
 use xm1_saclac_interface::stock::{parameters, record_handle_word};
 use xm1_saclac_interface::{Completed, Completion};
@@ -102,7 +102,7 @@ fn live_primary_round_publishes_completion_levels_and_releases_statistics_for_it
     put(&mut snapshot, 0, 5); put(&mut snapshot, 0xec, 0x1234);
     put(&mut snapshot, 0xf8, 6); put(&mut snapshot, 0x110, 2);
     half(&mut snapshot, 0xfc, 400); half(&mut snapshot, 0xfe, 100); half(&mut snapshot, 0x100, 20);
-    machine.buffer(0xfea7ac, 0, &snapshot);
+    memory(&machine, 0x016f_496c, &snapshot);
     machine.adjustment(0x4a07, 1);
     machine.adjustment(0x64a1, 20);
     let mut live = LiveWork::new();
@@ -162,7 +162,7 @@ fn s1_child_drives_four_bound_passes_then_restores_selection_and_publishes_the_f
     let mut sample = [0; 0x6c];
     put(&mut sample, 0x18, 0x55); put(&mut sample, 0x58, 5);
     half(&mut sample, 0x20, 210); half(&mut sample, 0x22, 80);
-    machine.buffer(0xfeaadc, 0, &sample);
+    memory(&machine, 0x016f_247c, &sample[..96]);
     let mut child = S1Acquisition::new();
     let control = |control| ChildEvent::Control { control, parameters: parameters(&[]), record };
     assert_eq!(child.handle(control(AcquisitionControl::Initialize), &mut root), ChildOutcome::Complete);
@@ -442,6 +442,34 @@ fn owned_pipeline_words_preserve_clock_reference_and_profile_offsets() {
     assert_eq!(root.timing_offset(xm1_focus_measurement_round::pipeline::TimingWord(3)), 0xff80);
     assert_eq!(root.timing_offset(xm1_focus_measurement_round::pipeline::TimingWord(4)), 0x1234);
     assert!(!machine.take_entered().iter().any(|(address, _)| [0x103_af30, 0x74_0888, 0xef_5310].contains(address)));
+}
+
+#[test]
+fn owned_pipeline_snapshots_preserve_slot_and_s1_record_layouts() {
+    let kernel = fake::saclac_kernel();
+    let cx = kernel.task().unwrap();
+    let (machine, root) = fake::root_with(fake::peers(&cx), Bytes::default(), Entries::default());
+    let recognition = RefCell::new(SceneRecognition::new());
+    acquisition!(root, recognition, cx);
+    let mut snapshot = [0u8; 0x5c4];
+    put(&mut snapshot, 0, 0x1122_3344);
+    put(&mut snapshot, 0xec, 0x5566_7788);
+    snapshot[0xf2] = 0x9a;
+    put(&mut snapshot, 0x110, 0xaabb_ccdd);
+    memory(&machine, 0x016f_496c + 2 * 0x5c4, &snapshot);
+    let mut s1 = [0u8; 96];
+    put(&mut s1, 0x58, 0x1357_2468);
+    put(&mut s1, 0x18, 0x89ab_cdef);
+    half(&mut s1, 0x4e, 0x7654);
+    s1[0x5c] = 0x32;
+    memory(&machine, 0x016f_247c, &s1);
+
+    let captured = root.snapshot(xm1_focus_measurement_round::pipeline::Statistics::Auxiliary);
+    let sample = root.s1_sample();
+
+    assert_eq!((captured.status.0, captured.timing.0, captured.flags, captured.exposure[1].0), (0x1122_3344, 0x5566_7788, 0x9a, 0xaabb_ccdd));
+    assert_eq!((sample.status.0, sample.timing.0, sample.code, sample.flags), (0x1357_2468, 0x89ab_cdef, 0x7654, 0x32));
+    assert!(!machine.take_entered().iter().any(|(address, _)| [0xfe_a7ac, 0xfe_aadc].contains(address)));
 }
 #[test]
 fn live_and_s1_keep_one_selection_preset_and_s1_consumes_the_controllers_change() {

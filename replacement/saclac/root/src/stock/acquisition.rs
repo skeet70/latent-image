@@ -333,18 +333,15 @@ const fn slot(statistics: Statistics) -> u32 {
 pub fn capture(machine: &impl Machine, statistics: Statistics) { enter(machine, 0xfe_a79c, &[word(slot(statistics))]); }
 
 pub fn snapshot(machine: &impl Machine, statistics: Statistics) -> [u8; SNAPSHOT_BYTES] {
-    let mut buffer = Aligned([0; SNAPSHOT_BYTES]);
-    machine.enter_with(0xfe_a7ac, &[word(slot(statistics)), Argument::Buffer(0)], &mut buffer);
-    buffer.0
+    read_bytes(machine, 0x016f_496c + slot(statistics) * SNAPSHOT_BYTES as u32)
 }
 
-/// 0xfeaacc(0) prepares slot 0's S1 sample; 0xfeaadc(0, out) copies it.
+/// 0xfeaacc(0) prepares slot 0's S1 sample.
 pub fn prepare_s1_sample(machine: &impl Machine) { enter(machine, 0xfe_aacc, &[word(0)]); }
 
+/// The prepared S1 record has 96 defined bytes; the round's 108-byte staging tail starts clear.
 pub fn s1_sample(machine: &impl Machine) -> [u8; S1_SAMPLE_BYTES] {
-    let mut buffer = Aligned([0; S1_SAMPLE_BYTES]);
-    machine.enter_with(0xfe_aadc, &[word(0), Argument::Buffer(0)], &mut buffer);
-    buffer.0
+    core::array::from_fn(|index| if index < 96 { machine.read_u8(0x016f_247c + index as u32) } else { 0 })
 }
 
 /// An entry that writes one word through its last argument: what it returns and the word.
