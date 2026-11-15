@@ -95,6 +95,8 @@ Every method of every non-aggregate trait required by ExternalPorts is listed be
 | DumpSettings | `adjustment_byte`, `settings_class`, `export_configuration` | Shared adjustments/configuration and configuration diagnostic export. `capture_stock::CAPTURE_DUMP` and `dump_boundary` identify each width and key. |
 | DumpShared | `capture_window` | Root calls owned shared settings::capture_window with canonical conversion services. Out-of-range mode, unscaled aspect and NoVariant return None; no dummy window or stock unbounded loop. Scaled output preserves alternate/value order. |
 
+`CaptureJobClient::calibration_block` and `statistics_window` require word-aligned sources, matching native `ldmib` at `0xf2cca0` and `ldmne` at `0xf2ce20`. Root rejects misaligned sources before reading them. `CaptureRecords::load_profile` narrows its source after destination admission. Native data-abort and recovery handling remain unqualified.
+
 ## Completion and result ownership
 
 | Completion | Root callback payload / delivery |

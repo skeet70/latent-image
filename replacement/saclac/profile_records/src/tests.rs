@@ -505,3 +505,27 @@ fn a_location_outside_its_block_or_misaligned_cannot_be_formed() {
     }
     assert_eq!(Location::<u32>::new(Block::Shared, 0x9d0).offset(), 0x9d0);
 }
+
+#[test]
+fn streaming_copy_refuses_before_reading_a_source_without_every_destination_grant() {
+    for missing in 5..=10 {
+        let groups: std::vec::Vec<_> = (5..=10).filter(|&group| group != missing).collect();
+        let mut view = Registry::new(0).open(1, &groups, READ | WRITE).view();
+        assert_eq!(view.copy_element_with_source(word_of(owner()), &record::group_05::AT_016C_168, Index::new(0).unwrap(), crate::CopyGranule::Byte, |_, _| panic!("refused source read")), Err(Refusal::NotGranted));
+        assert_eq!(view.into_memory().records[1], [0; 0x2158]);
+    }
+}
+
+#[test]
+fn streaming_copy_preserves_neighboring_fields_and_marks_only_the_admitted_record() {
+    let mut registry = Registry::new(0).open(1, &[0], READ | WRITE);
+    registry.memory.records[1].fill(PREFILL);
+    let mut view = registry.view();
+    assert_eq!(view.copy_with_source(word_of(owner()), &record::group_00::AT_0004, crate::CopyGranule::Byte, |offset, out| {
+        out[0] = [0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0][offset.get()];
+    }), Ok(()));
+    let memory = view.into_memory();
+    assert_eq!(&memory.records[1][3..13], &[PREFILL, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, PREFILL]);
+    assert_eq!(word(&memory.records[1], 0x80), 0x5e5a5a5a);
+    assert_eq!(memory.records[0], [0; 0x2158]);
+}

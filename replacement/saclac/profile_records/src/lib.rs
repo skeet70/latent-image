@@ -22,7 +22,7 @@ pub use handle::{Access, AccessGroup, DeriveRefused, Handle, Scope, Serial, Slot
 pub use image::{Header, RecordImage};
 pub use memory::{Bytes, Location, Memory, RecordIndex};
 pub use values::{CaptureBuffer, IntervalTracking, MeasurementSelection, OfferedMeasurements, StatisticsInUse, WindowPosition, WindowStatus};
-pub use view::{ProfileRecords, Refusal};
+pub use view::{CopyGranule, ProfileRecords, Refusal};
 
 #[cfg(test)]
 mod tests;

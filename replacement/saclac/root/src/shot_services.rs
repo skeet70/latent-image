@@ -18,6 +18,7 @@ pub struct Callbacks<'a> {
     pub exposure: crate::exposure_services::Callbacks,
     pub calculation: StockCallbackWord,
     pub statistics: StockCallbackWord,
+    pub capture_selection_hook: StockCallbackWord,
     pub pipeline: PipelineCallbacks<'a>,
 }
 

@@ -18,6 +18,12 @@ pub enum Refusal {
     SelectionOutOfRange(u32),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CopyGranule {
+    Byte,
+    SixteenBytes,
+}
+
 pub struct ProfileRecords<M> {
     memory: M,
 }
@@ -109,6 +115,41 @@ impl<M: Memory> ProfileRecords<M> {
             self.mark_changed(record, change);
         }
         Ok(())
+    }
+
+    /// Admits the complete destination before reading the source; each chunk is published before the next source read.
+    pub fn copy_with_source<const N: usize, R>(&mut self, handle: RecordHandle, field: &RecordField<[u8; N], R, RecordWrite>, granule: CopyGranule, mut source: impl FnMut(Index<N>, &mut [u8])) -> Result<(), Refusal> {
+        assert!(N <= 256, "copy source index exceeds its representation");
+        let chunk = match granule {
+            CopyGranule::Byte => 1,
+            CopyGranule::SixteenBytes => {
+                assert!(field.offset % 4 == 0 && N % 4 == 0, "word-copy destination alignment");
+                16
+            }
+        };
+        let record = self.write_record(handle, field.write)?;
+        let mut bytes = [0; 16];
+        let mut offset = 0;
+        while offset < N {
+            let count = chunk.min(N - offset);
+            source(Index::new(offset).expect("bounded copy source"), &mut bytes[..count]);
+            let target = field.offset + offset as u16;
+            match granule {
+                CopyGranule::Byte => self.memory.write_u8(Location::new(Block::Record(record), target), bytes[0]),
+                CopyGranule::SixteenBytes => {
+                    for (index, word) in bytes[..count].chunks_exact(4).enumerate() {
+                        self.memory.write_u32(Location::new(Block::Record(record), target + 4 * index as u16), u32::from_le_bytes(word.try_into().expect("copy word")));
+                    }
+                }
+            }
+            offset += count;
+        }
+        if let Some(change) = field.change { self.mark_changed(record, change); }
+        Ok(())
+    }
+
+    pub fn copy_element_with_source<const N: usize, const COUNT: usize, R: Copy>(&mut self, handle: RecordHandle, array: &RecordArray<[u8; N], COUNT, R, RecordWrite>, index: Index<COUNT>, granule: CopyGranule, source: impl FnMut(Index<N>, &mut [u8])) -> Result<(), Refusal> {
+        self.copy_with_source(handle, &array.at(index), granule, source)
     }
 
     pub fn read_element<T: Value, const N: usize, W: Copy>(&self, handle: RecordHandle, array: &RecordArray<T, N, RecordRead, W>, index: Index<N>) -> Result<T, Refusal> {
