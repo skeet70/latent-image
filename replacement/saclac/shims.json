@@ -986,11 +986,11 @@
     },
     {
       "id": "saclac_root-root-29",
-      "shim": "saclac_root: Capture/pipeline calls: `0xfea79c(slot)`, `0xfea7ac(slot, out_5c4)`, `0xfeaacc(0)`, `0xfeaadc(0, out_6c)`, `0xfea7bc(out)`, `0xfea7cc(out)`, `0xfa95a8(timing, out_interval)`, `0x103b064()`, `0x103af30(level)`, `0xef5310(timing)`",
+      "shim": "saclac_root: Capture/pipeline calls: `0xfea79c(slot)`, `0xfea7ac(slot, out_5c4)`, `0xfeaacc(0)`, `0xfeaadc(0, out_6c)`, `0xfea7bc(out)`, `0xfea7cc(out)`, `0xfa95a8(timing, out_interval)`, `0x103b064()`; pipeline reference and capture-profile offset reads are owned",
       "kind": "trampoline into retained stock",
-      "other_side": "imaging capture slots and capture-profile timing/level tables",
+      "other_side": "imaging capture slots, interval projection and mode-six capture request",
       "owned": "no",
-      "removal": "imaging and capture-profile services expose these operations through the root's machine boundary",
+      "removal": "imaging services expose the remaining operations through the root's machine boundary",
       "state": "required",
       "evidence": [
         {
@@ -1007,9 +1007,9 @@
     },
     {
       "id": "saclac_root-root-31",
-      "shim": "saclac_root: `0x7407b0()`, `0x74081c()`, `0x740888(0, out_clock, 0, 0)`, `0x740e3c(address, bytes)`, `0x740e74(address, bytes)`, `0x72872c(point)`, fault `0xf46c20()`",
+      "shim": "saclac_root: `0x7407b0()`, `0x74081c()`, `0x740e3c(address, bytes)`, `0x740e74(address, bytes)`, `0x72872c(point)`, fault `0xf46c20()`; hardware clock publication is owned",
       "kind": "trampoline into retained stock",
-      "other_side": "hardware state/clock, cache visibility, diagnostic trace and task fault handling",
+      "other_side": "hardware state, cache visibility, diagnostic trace and task fault handling",
       "owned": "no",
       "removal": "the platform owns these interfaces; grid visibility cleans 1204 bytes after placing all 1236",
       "state": "required",

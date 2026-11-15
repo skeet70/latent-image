@@ -5,7 +5,7 @@ use xm1_saclac_calc::scene_recognition::SceneRecognition;
 use xm1_focus_measurement_round::acquisition::live::LiveWork;
 use xm1_focus_measurement_round::acquisition::ports::{Branch, ExposureRecordUpdate, Ports, ProgramInputs};
 use xm1_focus_measurement_round::children::S1Acquisition;
-use xm1_focus_measurement_round::pipeline::GainStep;
+use xm1_focus_measurement_round::pipeline::{Exposure, GainStep};
 use xm1_saclac_controllers::children::{AcquisitionControl, ChildEvent, ChildOutcome};
 use xm1_saclac_interface::stock::{parameters, record_handle_word};
 use xm1_saclac_interface::{Completed, Completion};
@@ -420,6 +420,28 @@ fn saved_settings_copy_uses_owned_memory_access() {
 
     assert_eq!(core::array::from_fn::<_, 0x9c, _>(|index| machine.read_u8(0x16b_510c + index as u32)), expected);
     assert!(!machine.take_entered().iter().any(|(address, _)| *address == 0x74_213c));
+}
+
+#[test]
+fn owned_pipeline_words_preserve_clock_reference_and_profile_offsets() {
+    let kernel = fake::saclac_kernel();
+    let cx = kernel.task().unwrap();
+    let (machine, root) = fake::root_with(fake::peers(&cx), Bytes::default(), Entries::default());
+    let recognition = RefCell::new(SceneRecognition::new());
+    acquisition!(root, recognition, cx);
+    machine.set_word(0x0091_4df0, 0x1234_5678);
+    machine.set_byte(0x00ef_6de4 + 3 * 20 + 14, 1);
+    machine.set_byte(0x00ef_6de4 + 4 * 20 + 14, 9);
+    memory(&machine, 0x00ef_66d0, &0x1234u16.to_le_bytes());
+    memory(&machine, 0x00ef_66d2, &0xff80u16.to_le_bytes());
+
+    root.set_pipeline_reference(-7);
+
+    assert_eq!(machine.read_u16(0x0170_380a), 0xfff9);
+    assert_eq!(root.clock_word(), 0x1234_5678);
+    assert_eq!(root.timing_offset(xm1_focus_measurement_round::pipeline::TimingWord(3)), 0xff80);
+    assert_eq!(root.timing_offset(xm1_focus_measurement_round::pipeline::TimingWord(4)), 0x1234);
+    assert!(!machine.take_entered().iter().any(|(address, _)| [0x103_af30, 0x74_0888, 0xef_5310].contains(address)));
 }
 #[test]
 fn live_and_s1_keep_one_selection_preset_and_s1_consumes_the_controllers_change() {

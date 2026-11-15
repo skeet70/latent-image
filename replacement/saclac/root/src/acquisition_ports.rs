@@ -499,7 +499,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc, S:
     fn statistics_buffer(&mut self, buffer: StatisticsBuffer) -> [u16; 256] { boundary::statistics_values(&self.services.machine, buffer) }
     fn extra_statistics(&mut self, values: &mut [u16]) { boundary::extra_statistics(&self.services.machine, values) }
     fn store_release(&mut self, release: &Release<'_>) { boundary::store_release(&mut self.services.machine, release) }
-    fn set_pipeline_reference(&mut self, level: i16) { boundary::set_pipeline_reference(&self.services.machine, level) }
+    fn set_pipeline_reference(&mut self, level: i16) { boundary::set_pipeline_reference(&mut self.services.machine, level) }
     fn prepare_s1_sample(&mut self) { boundary::prepare_s1_sample(&self.services.machine) }
     fn s1_sample(&mut self) -> PipelineSnapshot { xm1_focus_measurement_round::stock::s1_sample(&boundary::s1_sample(&self.services.machine)) }
     fn post_change_notice(&mut self, notice: &ChangeNotice) {

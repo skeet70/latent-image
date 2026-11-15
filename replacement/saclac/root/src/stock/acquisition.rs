@@ -317,8 +317,8 @@ pub fn extra_statistics(machine: &impl Machine, values: &mut [u16]) {
     }
 }
 
-/// 0x103af30.
-pub fn set_pipeline_reference(machine: &impl Machine, level: i16) { enter(machine, 0x103_af30, &[signed(level)]); }
+/// The pipeline reference halfword at 0x170380a.
+pub fn set_pipeline_reference(machine: &mut impl Machine, level: i16) { machine.write_u16(0x0170_380a, level as u16); }
 
 /// The pipeline slot of each capture, which 0xfea79c captures and 0xfea7ac copies out.
 const fn slot(statistics: Statistics) -> u32 {
@@ -430,12 +430,8 @@ pub fn refresh_hardware_state(machine: &impl Machine) { enter(machine, 0x74_07b0
 /// 0x74081c.
 pub fn hardware_ready(machine: &impl Machine) -> bool { enter(machine, 0x74_081c, &[]) != 0 }
 
-/// 0x740888(0, out, 0, 0) writes the clock word.
-pub fn clock_word(machine: &impl Machine) -> u32 {
-    let mut buffer = Aligned([0; 4]);
-    machine.enter_with(0x74_0888, &[word(0), Argument::Buffer(0), word(0), word(0)], &mut buffer);
-    u32::get(&buffer, 0)
-}
+/// The second output of 0x740888 reads the current hardware clock word.
+pub fn clock_word(machine: &impl Machine) -> u32 { machine.read_u32(0x0091_4df0) }
 
 pub fn write_record(machine: &mut impl Machine, at: SharedAddress, offset: usize, bytes: &[u8]) {
     write_bytes(machine, at.0.wrapping_add(offset as u32), bytes)
@@ -539,8 +535,12 @@ pub fn controller_record(machine: &impl Machine) -> RecordHandle {
 
 pub fn current_lens(machine: &impl Machine) -> u32 { enter(machine, super::RESOURCE_INDEX, &[]) }
 
-/// The retained capture-profile table's level offset (0xef5310).
-pub fn timing_offset(machine: &impl Machine, timing: TimingWord) -> u16 { enter(machine, 0xef_5310, &[word(timing.0)]) as u16 }
+/// The capture profile selects one of two signed level offsets.
+pub fn timing_offset(machine: &impl Machine, timing: TimingWord) -> u16 {
+    let row = 0x00ef_6de4u32.wrapping_add(timing.0.wrapping_mul(20));
+    let selector = u32::from(machine.read_u8(row.wrapping_add(14)));
+    machine.read_u16(0x00ef_66d0 + if selector > 1 { 0 } else { selector * 2 })
+}
 
 /// The grid 0xf4c584 places before posting calc1 0x3d00.
 pub const CALC1_GRID: SharedAddress = SharedAddress(0x16d_4280);
