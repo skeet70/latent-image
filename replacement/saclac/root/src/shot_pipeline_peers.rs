@@ -68,7 +68,9 @@ impl<M: Machine + Clone, R, E, P, I, T, A, Q: ImgDc + Statistics> PipelinePeers 
     }
     fn request_statistics_commit(&mut self, completion: Completion) {
         assert_eq!(completion, Completion::Statistics6b);
-        statistics(&mut self.peers, StatisticsOperation::Request07, &self.callbacks.pipeline.statistics_commit.0.to_le_bytes(), &[completion]);
+        let (operation, payload) = xm1_saclac_interface::stock::statistics::statistics_payload(
+            &xm1_saclac_interface::statistics::StatisticsPayload::Stop { pause: false, shot_idle: true, callback: self.callbacks.pipeline.statistics_commit });
+        statistics(&mut self.peers, operation, payload.bytes(), &[completion]);
     }
     fn store_statistics_weights(&mut self, target: u32, weights: &StatisticsWeights) {
         let mut machine = self.services.borrow().machine.clone();

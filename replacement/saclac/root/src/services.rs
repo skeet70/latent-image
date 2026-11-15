@@ -24,6 +24,8 @@ pub struct Services<M, R, E, P> {
     pub(crate) selection_publication: crate::controller_services::SelectionPublication,
     pub(crate) round_callbacks: Option<crate::round_services::Callbacks>,
     pub(crate) pipeline: crate::shot_platform::PipelineState,
+    /// Router-owned publication read synchronously by Shot while the S1 router is borrowed.
+    pub(crate) s1_waiting: xm1_saclac_controllers::s1::Waiting,
 }
 
 impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Services<M, R, E, P> {
@@ -40,6 +42,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Services<M, R, E, P> {
             selection_publication: crate::controller_services::SelectionPublication::default(),
             round_callbacks: None,
             pipeline: crate::shot_platform::PipelineState::default(),
+            s1_waiting: xm1_saclac_controllers::s1::Waiting::default(),
         }
     }
 

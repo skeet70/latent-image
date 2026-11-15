@@ -42,7 +42,9 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> LensTables for Services<
         self.machine.enter_with(0x74_98e0, &[Word(lens), Word(step), Word(reference), Word(mode), Buffer(0), Buffer(2)], &mut output.0);
         [i16::from_le_bytes([output[0], output[1]]), i16::from_le_bytes([output[2], output[3]])]
     }
-    fn side_adjusted(&mut self, value: i16, from: u32, to: u32) -> i16 { self.machine.enter(0x74_7aac, &[value as i32 as usize, from as usize, to as usize]) as i16 }
+    fn side_adjusted(&mut self, value: i16, from: u32, to: u32) -> i16 {
+        xm1_power_lifecycle::record_profile_mapping::helper_747aac(&mut crate::calibration_inputs::runtime(&self.machine), value as i32 as u32, from, to).expect("lens direction configuration") as i16
+    }
     fn table_offset(&mut self, lens: u32, step: u32, delta: i16) -> i32 { i32::from(curve::curve_value(&self.stock, lens, step, i32::from(delta))) }
     fn channel_start(&mut self, lens: u32, channel: u8, reference: u32) -> i16 { self.machine.enter(0x74_8730, &[lens as usize, 0, usize::from(channel), 0, reference as usize, 1]) as i16 }
     fn period_position(&mut self, period: u16, lens: u32, step: u32, reference: u32) -> i32 { self.machine.enter(0x74_99a0, &[usize::from(period), lens as usize, step as usize, reference as usize, 1]) as i32 }

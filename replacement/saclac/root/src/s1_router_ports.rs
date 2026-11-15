@@ -93,6 +93,7 @@ impl<M: CommandSource + Clone, R: Memory, E: StockEntries,
         let mut machine = self.machine();
         match published {
             Published::Waiting(waiting) => {
+                self.layers.services.borrow_mut().s1_waiting = waiting;
                 let retained = machine.read_u8(crate::stock::S1_PROGRESS) & 0xf0;
                 machine.write_u8(crate::stock::S1_PROGRESS, retained | xm1_saclac_controllers::stock::s1_progress(waiting));
             }

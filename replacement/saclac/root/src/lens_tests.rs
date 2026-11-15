@@ -99,6 +99,22 @@ fn a_drive_the_kernel_refuses_faults_the_child_and_ends_the_command() {
 }
 
 #[test]
+fn lens_side_adjustment_preserves_signed_wrap_and_reads_configuration_changes() {
+    use xm1_saclac_calc::adjust::motion::ports::LensTables;
+    let (fake, mut root) = crate::fake::root(Bytes::default(), Entries::default());
+    fake.set_word(0x96ca50, 0xa0000000);
+    fake.adjustment(0x3e0240, 1);
+    assert_eq!(root.side_adjusted(i16::MAX, 1, 0), i16::MIN);
+    assert_eq!(root.side_adjusted(i16::MIN, 0, 1), i16::MAX);
+    assert_eq!(root.side_adjusted(-123, 1, 1), -123);
+    fake.adjustment(0x3e0240, 0);
+    fake.adjustment(0x3e0241, 1);
+    assert_eq!(root.side_adjusted(-123, 1, 0), 133);
+    assert_eq!(root.side_adjusted(-123, 0, 1), -379);
+    assert_eq!(root.side_adjusted(-123, 3, 0), -123);
+}
+
+#[test]
 fn a_drive_is_not_posted_while_lens_control_reports_its_first_probe() {
     let kernel = saclac_kernel();
     let cx = kernel.task().unwrap();
