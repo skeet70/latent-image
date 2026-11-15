@@ -243,6 +243,26 @@ The current `host-build` automatically reports the kernel-sampled lock holder on
 
 An older topic checkout may still provide an older launcher. Use the current qualified `host-build` executable through `devenv shell` from the worker checkout with its usual output base. Resolve it from current main only when that checkout is ready for Nix evaluation; otherwise use the integration owner's frozen launcher path. Keep the worker's source and working directory; do not change SDK identities merely to adopt admission. Each topic's emulator binary retains its compiled policy. Use the qualified shared wrapper or adopt the current admission modules before requesting the new RAM and swap caps; setting an environment variable does not upgrade an old binary. Current defaults are 12 GiB RAM plus 8 GiB swap for builds and native suites, and 8 GiB RAM plus 8 GiB swap for full-system runs, within the shared 64 GiB combined reservation budget. Keep completed and healthy running cohorts bound to their original scopes.
 
+## Platform host qualification
+
+[RTOS workflow](rtos.md) and [platform contract](../reports/rtos-platform-options.md).
+
+<!-- evidence-record E-RTOS-PLATFORM-SOURCE-ADMISSION-150 -->
+
+E-RTOS-PLATFORM-SOURCE-ADMISSION-150: Platform source admission requires supplied A/B loader bytes to equal the corresponding loaders extracted from the source container. Both domains reject same-size one-bit mismatches and truncation. Actual staging exits 0 and reproduces candidate a78209f93a96ad9e436e00369c31ac3729df04820eab3ecf928d54b4e857f797 with loaders fe28e845a4a2376e81e7b6d9e68bf065f599569539072fdab10bef3f9e9cc22f and 43cf5c574095362253009cda1f5a444ace9c5e41e695d2fbc0e658cc2f6bdf7e. The owned reset/menu observer smoke exits 0; its raw observation is retained (false). Firmware bytes are unchanged.
+
+Scope: Host admission source snapshot 229c5701696c6c0a242bad9607f89bcaf9d329ee9ce992fd321134527fb2be27, synthetic mismatched-loader regressions, canonical staging and an owned reset/menu route smoke. The raw full-system observation expired at successful run close; its digest and command remain, not a fresh paired semantic judgment.
+
+<!-- /evidence-record E-RTOS-PLATFORM-SOURCE-ADMISSION-150 -->
+
+<!-- evidence-record E-NATIVE-REGION-CAPACITY-150 -->
+
+E-NATIVE-REGION-CAPACITY-150: The native host/SDK/schema envelope admits 128 logical regions and refuses 129, retaining byte, function, stub, instruction, wall, wire, overlap, permission and host-resource bounds. The demonstrated current-union dispatcher case needs 67 disjoint regions. Its direct replay reaches stop_address after 24 instructions, while generic judgment remains failed with 2 task/frame memory mismatches. The unchanged S2 suspended-boundary sample comparator holds (true): domain A has 29 cases/22 control groups and B has 29/22, under runner e2d7aee8c59e9d419c05a53fe2338bc025558eb1ad9209522247b61c9015476f. Stock and Owned execute fresh; StockRepeat reuses observations. The preserved earlier settings witness has 39 regions, 1604148 mapped bytes and 607768 instructions; its 12 declared memory regions match while 5 generic extra regions differ.
+
+Scope: Logical-region representation and bounded current-union dispatcher functional evidence, not full current-union family or natural paired qualification. The earlier dispatcher sample and direct replay lack whole-qualifier native-scope containment; they establish no resource-containment result. Exact RX/RO separation remains; no absent gap is mapped to fit a count limit. The historical settings witness retains its original packing adapter and runner identities and is not reexecuted or relabeled under the new runner.
+
+<!-- /evidence-record E-NATIVE-REGION-CAPACITY-150 -->
+
 ## Playback decode observation
 
 <!-- evidence-record E-FUJIMOD-XM1-PLAY-JPEG-150 -->
