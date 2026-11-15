@@ -41,6 +41,7 @@ pub mod exposure_memory;
 pub mod exposure_services;
 pub mod shot_services;
 mod shot_lens;
+mod shot_grid;
 mod shot_records;
 mod shot_pipeline_records;
 mod shot_pipeline_peers;
