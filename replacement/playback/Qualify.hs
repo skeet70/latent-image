@@ -15,6 +15,8 @@ import qualified Emulation.NativeCase as Native
 import Emulation.OwnedCase (assemble)
 import Emulation.Sha256 (sha256, sha256Hex)
 import Numeric (readHex, showHex)
+import qualified ModeEntryCaller
+import qualified ModeProducer
 import System.Directory (createDirectory, doesPathExist)
 import System.Environment (getArgs)
 import System.FilePath ((</>))
@@ -25,6 +27,7 @@ newtype Event = Event Word16
 newtype Digest = Digest String deriving (Eq, Show)
 data Preparation = Source | Mode deriving (Eq, Show)
 data Role = Original | Owned | OmittedEntry deriving (Eq, Show)
+data Qualification = PreparationBoundary | ModeCallerBoundary
 data Cell = Primary | Secondary | Step | Command | Work | SourceWork | Preset deriving (Eq, Show)
 data Scenario = Scenario
   { scenarioName :: String, scenarioPreparation :: Preparation, scenarioCode :: MessageCode
@@ -190,12 +193,28 @@ readPinned path expected = do
 main :: IO ()
 main = do
   arguments<-getArgs
-  (runner,package,output)<-case arguments of
-    ["--runner",runner,"--package",package,"--output",output,"--native-jobs","1"] -> pure(runner,package,output)
-    _ -> ioError(userError "qualify --runner NATIVE_RUNNER --package LINKED_EXPERIMENT_DIR --output NEW_DIR --native-jobs 1")
+  (runner,package,output,boundary)<-case arguments of
+    ["--runner",runner,"--package",package,"--output",output,"--native-jobs","1"] -> pure(runner,package,output,PreparationBoundary)
+    ["--mode-callers","--runner",runner,"--package",package,"--output",output,"--native-jobs","1"] -> pure(runner,package,output,ModeCallerBoundary)
+    _ -> ioError(userError "qualify [--mode-callers] --runner NATIVE_RUNNER --package LINKED_PACKAGE_DIR --output NEW_DIR --native-jobs 1")
   exists<-doesPathExist output
   ensure(not exists)"output directory exists"
   createDirectory output
+  case boundary of
+    PreparationBoundary -> qualifyPreparation runner package output
+    ModeCallerBoundary -> do
+      producer <- ModeProducer.run runner package (output </> "producer")
+      caller <- ModeEntryCaller.run runner package (output </> "entry-caller")
+      runnerSha <- Native.runnerDigest runner
+      json (output </> "result.json") (object
+        ["schema" .= (1::Int), "qualified" .= True
+        ,"scope" .= ("conditional actual mode producer and installed-entry caller native boundaries; not a natural USB route, integrated JPEG pair acceptance or whole mode machine" :: String)
+        ,"native_jobs" .= (1::Int), "runner_sha256" .= runnerSha
+        ,"producer" .= producer, "entry_caller" .= caller])
+      putStrLn "conditional mode producer and installed-entry caller boundaries passed"
+
+qualifyPreparation :: FilePath -> FilePath -> FilePath -> IO ()
+qualifyPreparation runner package output = do
   runtime<-B.readFile(package </> "runtime.bin")
   elfBytes<-B.readFile(package </> "kernel.elf")
   elf<-either (ioError.userError) pure (Elf.parseElf elfBytes)
