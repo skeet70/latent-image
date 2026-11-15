@@ -460,6 +460,27 @@
       }
     },
     {
+      "id": "saclac_shared-root-11",
+      "shim": "saclac_shared: device command monitoring `0x69e0fc`/`0x69e148` and its retained cyclic callback `0x69e03c`, reached through typed DeviceCommandMonitoring",
+      "kind": "trampoline into retained stock",
+      "other_side": "retained device monitoring and cyclic scheduling service",
+      "owned": "no",
+      "removal": "the actual monitoring service and callback are owned and qualified",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/saclac/shared/src/stock.rs",
+          "requirement": "Root CapturePlatform calls the genuine retained monitor interface, not a second cyclic/kernel model. Synthetic host queue/control execution does not establish native scheduling or removal."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
       "id": "saclac_root-root-01",
       "shim": "saclac_root: `LensControl::send` in `src/lens.rs`: a lens drive (0x4207) is not posted while `0x76d9a8`, entered through `saclac_shared`'s `LensControl::probe`, reports 1, as lens control's retired sender `0x76dec8` refuses with 0x81 then (`0x76def4..0x76df00`); every lens request posts through `LensDc::request`",
       "kind": "trampoline into retained stock",
@@ -734,7 +755,7 @@
     },
     {
       "id": "saclac_root-root-14",
-      "shim": "saclac_root: geometry output/configured-rate `0x1004618`/`0x1007ce0`, power level `0x64982c`, ADC `0x741ee0`, task setup/delay `0x723a14`/`0x723ce8`, peak service `0x6b7830`/`0x6b7840`/`0x6b7820`, profile resource `0x750474`",
+      "shim": "saclac_root: geometry output/configured-rate `0x1004618`/`0x1007ce0`, signed32 control-distance limit `0x1005700`, power level `0x64982c`, ADC `0x741ee0`, task setup/delay `0x723a14`/`0x723ce8`, peak service `0x6b7830`/`0x6b7840`/`0x6b7820`, profile resource `0x750474`",
       "kind": "trampoline into retained stock",
       "other_side": "capture, power, kernel, interface, peak and profile services",
       "owned": "no",
@@ -744,7 +765,7 @@
         {
           "kind": "reference-only",
           "contract": "replacement/saclac/root/BUILD.bazel",
-          "requirement": "Source/model boundary; not linked-image execution or removal acceptance. trampoline into retained stock."
+          "requirement": "Source/model boundary; not linked-image execution or removal acceptance. Grid and Capture share the owned signed16 split around the full signed32 retained1005700 limit; the limit primitive itself remains required."
         }
       ],
       "predicates": {

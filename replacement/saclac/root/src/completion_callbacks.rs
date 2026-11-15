@@ -15,6 +15,26 @@ pub fn post<B: Backend>(poster: &Poster<B>, completion: Completion, payload: &[u
     poster.post(queue, header, payload)
 }
 
+/// Return/capture move callbacks post first, then trace; Finish callbacks have no trace.
+pub fn capture_lens_moved<B: Backend>(poster: &Poster<B>, machine: &impl Machine, completion: Completion) -> Result<(), PostError> {
+    let point = match completion {
+        Completion::Lens35 => 0x1303_0000,
+        Completion::Lens3a => 0x1303_0100,
+        _ => panic!("capture lens completion outside35/3a"),
+    };
+    let result = post(poster, completion, &[]);
+    machine.enter(0x72_872c, &[point]);
+    result
+}
+
+/// Calc0x3c02 supplies a complete result pointer, not a status or an empty callback.
+/// Shot's owned calculation/return steps consume this one canonical working result.
+pub fn calculated<B: Backend>(poster: &Poster<B>, machine: &impl Machine, source: u32) -> Result<(), PostError> {
+    use xm1_shot_sequence::stock::calculation::{RESULT, RESULT_BYTES};
+    if source != RESULT { machine.enter(0x74_213c, &[RESULT as usize, source as usize, RESULT_BYTES]); }
+    post(poster, Completion::Calculation90, &[])
+}
+
 /// The statistics progress callback reads only its publication and posts calc0x3c12.
 pub fn pipeline_statistics_progress<B: Backend>(poster: &Poster<B>, gate: &crate::statistics_results::ReportingGate) -> Result<(), PostError> {
     if !gate.is_open() { return Ok(()); }
@@ -137,4 +157,39 @@ pub fn pipeline_tone_calculation<B: Backend>(poster: &Poster<B>, result: &xm1_sa
 
 pub fn pipeline_gradation_calculation<B: Backend>(poster: &Poster<B>, result: &xm1_saclac_interface::pipeline::GradationCalculation) -> Result<(), PostError> {
     post(poster, Completion::Calculation93, &result.0)
+}
+
+/// f2ca78 compares result bytes+3c/+3e; equality and ascending pairs select60.
+pub fn primary_output<B: Backend>(poster: &Poster<B>, status: u32, result: &[u8; 88]) -> Result<(), PostError> {
+    let completion = if result[0x3c] > result[0x3e] { Completion::Image5f } else { Completion::Image60 };
+    let mut payload = [0; 92];
+    payload[..4].copy_from_slice(&status.to_le_bytes());
+    payload[4..].copy_from_slice(result);
+    post(poster, completion, &payload)
+}
+
+/// f2ca34 writes only source/variant bytes and mode/value words in its36-byte packet.
+pub fn primary_readout<B: Backend>(poster: &Poster<B>, machine: &impl Machine, status: u32, source: u32, descriptor: u32) -> Result<(), PostError> {
+    let mut payload = [0; 36];
+    payload[..4].copy_from_slice(&status.to_le_bytes());
+    payload[4] = source as u8;
+    payload[5] = machine.read_u8(descriptor);
+    payload[0x1c..0x20].copy_from_slice(&machine.read_u32(descriptor.wrapping_add(0x1c)).to_le_bytes());
+    payload[0x20..].copy_from_slice(&machine.read_u32(descriptor.wrapping_add(0x20)).to_le_bytes());
+    post(poster, Completion::Image61, &payload)
+}
+
+/// f2c990: full status and the four pointed words; no status filtering.
+pub fn primary_complete<B: Backend>(poster: &Poster<B>, status: u32, result: [u32; 4]) -> Result<(), PostError> {
+    let mut payload = [0; 20];
+    for (out, word) in payload.chunks_exact_mut(4).zip(core::iter::once(status).chain(result)) { out.copy_from_slice(&word.to_le_bytes()); }
+    post(poster, Completion::Image62, &payload)
+}
+
+/// f2ca04 receives its second word by value, not through a result pointer.
+pub fn primary_delivery<B: Backend>(poster: &Poster<B>, status: u32, word: u32) -> Result<(), PostError> {
+    let mut payload = [0; 8];
+    payload[..4].copy_from_slice(&status.to_le_bytes());
+    payload[4..].copy_from_slice(&word.to_le_bytes());
+    post(poster, Completion::Image64, &payload)
 }

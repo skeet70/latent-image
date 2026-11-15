@@ -22,6 +22,8 @@ pub struct Callbacks<'a> {
     pub capture_calculations: CaptureCalculationCallbacks,
     pub moves: LensMoveCallbacks,
     pub capture_statistics: CaptureStatisticsCallbacks,
+    pub measurement: MeasurementCallbacks,
+    pub capture_image: CaptureImageCallbacks,
     pub pipeline: PipelineCallbacks<'a>,
 }
 
@@ -37,8 +39,10 @@ pub struct CaptureCalculationCallbacks {
 
 #[derive(Clone, Copy)]
 pub struct LensMoveCallbacks {
-    pub relative: StockCallbackWord,
-    pub absolute: StockCallbackWord,
+    pub finish_relative: StockCallbackWord,
+    pub finish_absolute: StockCallbackWord,
+    pub capture_relative: StockCallbackWord,
+    pub capture_absolute: StockCallbackWord,
 }
 
 #[derive(Clone, Copy)]
@@ -46,6 +50,25 @@ pub struct CaptureStatisticsCallbacks {
     pub setup: StockCallbackWord,
     pub setting: StockCallbackWord,
     pub primary_setting: StockCallbackWord,
+}
+
+#[derive(Clone, Copy)]
+pub struct MeasurementCallbacks {
+    pub finished: StockCallbackWord,
+    pub ready: StockCallbackWord,
+    pub transferred: StockCallbackWord,
+}
+
+#[derive(Clone, Copy)]
+pub struct CaptureImageCallbacks {
+    pub end: StockCallbackWord,
+    pub outputs: StockCallbackWord,
+    pub readout: StockCallbackWord,
+    pub delivery: StockCallbackWord,
+    pub complete: StockCallbackWord,
+    pub notice: StockCallbackWord,
+    pub command_c: StockCallbackWord,
+    pub command_28: StockCallbackWord,
 }
 
 #[derive(Clone, Copy)]
