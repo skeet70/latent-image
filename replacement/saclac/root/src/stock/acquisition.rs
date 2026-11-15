@@ -16,7 +16,7 @@ use xm1_focus_measurement_round::record::TraceMark;
 use xm1_focus_measurement_round::stock::{SNAPSHOT_BYTES, S1_SAMPLE_BYTES};
 use xm1_saclac_interface::calc::{AcquisitionGrid, SharedAddress};
 use xm1_saclac_interface::stock::round_acquisition::{SelectionRegion, LIVE_REGION, S1_REGION};
-use xm1_saclac_interface::stock::{record_handle_word, StockCallbackWord};
+use xm1_saclac_interface::stock::StockCallbackWord;
 use xm1_saclac_interface::{Completion, RecordHandle};
 use xm1_saclac_shared::stock::{Argument, Machine};
 
@@ -238,7 +238,6 @@ pub fn acquisition_settings(byte: impl Fn(u32) -> u8) -> AcquisitionSettings {
     }
 }
 
-fn handle(record: RecordHandle) -> Argument { Argument::Word(record_handle_word(record)) }
 
 /// A halfword the entry takes sign-extended.
 fn signed(value: i16) -> Argument { Argument::Word(value as i32 as u32) }
@@ -261,25 +260,6 @@ fn write_bytes(machine: &mut impl Machine, address: u32, bytes: &[u8]) {
 }
 
 
-/// 0xf4f16c: the record's chosen word for `lens`, 0xffff naming none.
-pub fn lens_word(machine: &impl Machine, record: RecordHandle, lens: Option<ResourceIndex>) -> u32 {
-    enter(machine, 0xf4_f16c, &[handle(record), word(lens.map_or(0xffff, |lens| lens.0))])
-}
-
-/// 0xfa7edc.
-pub fn acquisition_gain_step(machine: &impl Machine, adjustment: u32) -> u32 { enter(machine, 0xfa_7edc, &[word(adjustment)]) }
-
-/// 0xef7820.
-pub fn kind_decade(machine: &impl Machine, kind: u32) -> u32 { enter(machine, 0xef_7820, &[word(kind)]) }
-
-
-/// 0x746804.
-pub fn lens_step(machine: &impl Machine, step: u32) -> u32 { enter(machine, 0x74_6804, &[word(step)]) }
-
-/// 0x1007e44.
-pub fn step_ratio(machine: &impl Machine, code: u16, selector: u8) -> u32 {
-    enter(machine, 0x100_7e44, &[word(u32::from(code)), word(u32::from(selector))])
-}
 
 
 

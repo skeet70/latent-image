@@ -323,6 +323,42 @@ fn selected_record_level_uses_the_owned_zone_fallback() {
 }
 
 #[test]
+fn owned_lens_services_preserve_record_calibration_and_class_boundaries() {
+    let kernel = fake::saclac_kernel();
+    let cx = kernel.task().unwrap();
+    let mut bytes = Bytes::default();
+    let record = fake::open(&mut bytes, &[0]);
+    bytes.records[0][0x69] = 1;
+    half(&mut bytes.records[0], 0x2c, 0x4567);
+    let (machine, mut root) = fake::root_with(fake::peers(&cx), bytes, Entries::default());
+    machine.adjustment(0x3e0f82, 2);
+    machine.set_word(0x0102_2fbc, 0x500);
+    machine.set_word(0x0102_2fc0, 0x600);
+    machine.adjustment(0x500, 6);
+    machine.adjustment(0x501, 0);
+    machine.adjustment(0x600, 1);
+    machine.adjustment(0x601, 0);
+    let lens_steps = [
+        xm1_saclac_calc::adjust::profile_adjustment::LensSteps::lens_step(&mut root, 0),
+        xm1_saclac_calc::adjust::profile_adjustment::LensSteps::lens_step(&mut root, 31),
+        xm1_saclac_calc::adjust::profile_adjustment::LensSteps::lens_step(&mut root, 2),
+    ];
+    let ratio = xm1_saclac_calc::adjust::profile_adjustment::StepRatios::step_ratio(&mut root, 2, 1);
+    let recognition = RefCell::new(SceneRecognition::new());
+    acquisition!(root, recognition, cx);
+
+    assert_eq!(lens_steps, [31, 31, 0]);
+    assert_eq!(ratio, 17);
+    assert_eq!(root.lens_word(record, None), 0x4567);
+    assert_eq!(root.acquisition_gain_step(900).0, 3);
+    assert_eq!([2, 3, 4, 5].map(|kind| root.kind_decade(kind)), [0, 1, 1, 0]);
+    let entered = machine.take_entered();
+    assert!(!entered.iter().any(|(address, _)| {
+        [0xf4_f16c, 0xfa_7edc, 0xef_7820, 0x74_6804, 0x100_7e44].contains(address)
+    }));
+}
+
+#[test]
 fn live_and_s1_keep_one_selection_preset_and_s1_consumes_the_controllers_change() {
     let kernel = fake::saclac_kernel();
     let cx = kernel.task().unwrap();

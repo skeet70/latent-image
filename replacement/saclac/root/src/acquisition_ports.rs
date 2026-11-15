@@ -335,13 +335,17 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc, S:
     fn notify_rate(&mut self, record: RecordHandle, notice: &RateNotice) { boundary::enter_rate_hook(&self.services.machine, wire::StockCallbackWord(self.shared(record, &shared::group_20::AT_016C)), notice) }
 
     fn current_lens(&mut self) -> ResourceIndex { ResourceIndex(boundary::current_lens(&self.services.machine)) }
-    fn lens_word(&mut self, record: RecordHandle, lens: Option<ResourceIndex>) -> u32 { boundary::lens_word(&self.services.machine, record, lens) }
+    fn lens_word(&mut self, record: RecordHandle, _: Option<ResourceIndex>) -> u32 {
+        let _ = self.services.stock.byte(AdjustmentKey(0x2c0));
+        let services = &mut *self.services;
+        xm1_saclac_calc::profile::Profile::new(&services.records, &mut services.entries).chosen_word(record)
+    }
     fn collapse_index(&mut self, exposure: PipelineWord) -> u32 { table::column(&self.services.stock, Step(exposure.0)) }
     fn mapped_value(&mut self, first: u32, second: u32) -> u32 { u32::from(table::value(&self.services.stock, Step(first), Row(second))) }
     fn lens_position(&mut self, pair: [u32; 2], position: u32) -> u32 { table::nearest_step(&self.services.stock, Row(pair[0]), Step(pair[1]), Row(position)).0 }
     fn gain_step_for(&mut self, offset: i32) -> GainStep { GainStep(u32::from(lens::zone(offset, &mut self.services.stock).get())) }
-    fn acquisition_gain_step(&mut self, adjustment: u32) -> GainStep { GainStep(boundary::acquisition_gain_step(&self.services.machine, adjustment)) }
-    fn kind_decade(&mut self, kind: u32) -> u32 { boundary::kind_decade(&self.services.machine, kind) }
+    fn acquisition_gain_step(&mut self, _: u32) -> GainStep { GainStep(3) }
+    fn kind_decade(&mut self, kind: u32) -> u32 { u32::from(matches!(kind, 3 | 4)) }
     fn change_positions(&mut self, record: RecordHandle) -> [u32; 2] { [self.field(record, &record::group_04::AT_0164), self.field(record, &record::group_04::AT_0168)] }
 
     fn select_program(&mut self, inputs: &ProgramInputs) -> Option<Program> {

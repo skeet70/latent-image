@@ -964,27 +964,6 @@
       }
     },
     {
-      "id": "saclac_root-root-25",
-      "shim": "saclac_root: Acquisition lens services: `0xf4f16c(record, lens_or_ffff)`, `0xfa7edc(adjustment)`, `0xef7820(kind)`, `0x746804(step)`, `0x1007e44(code, selector)`",
-      "kind": "trampoline into retained stock",
-      "other_side": "lens-word composition, gain selection, kind classification and calibration tables",
-      "owned": "no",
-      "removal": "the owned lens and capture-profile services expose these operations",
-      "state": "required",
-      "evidence": [
-        {
-          "kind": "reference-only",
-          "contract": "replacement/saclac/root/BUILD.bazel",
-          "requirement": "Source/model boundary; not linked-image execution or removal acceptance. trampoline into retained stock."
-        }
-      ],
-      "predicates": {
-        "caller_closure": "unestablished",
-        "same_image_comparison": "unestablished",
-        "direct_owned_api": "unestablished"
-      }
-    },
-    {
       "id": "saclac_root-root-27",
       "shim": "saclac_root: Acquisition grid/rate helpers: `0xfa7bb8` (2), `0xfa7604` (0), `0xf625cc` (5), `0xfa6934` (6; last two zero), `0xf5ecb0` (3), `0xf5ecc0` (4), `0xf5f368` (6), `0xf4ddbc` (2), `0xf624a8` (9; branch last); category admission formerly at fab250 calls owned Calc",
       "kind": "trampoline into retained stock",
