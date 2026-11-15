@@ -126,8 +126,9 @@ pub(crate) fn lens_position_flags<M: Machine + Clone>(machine: &M) -> u32 {
 }
 
 /// Signed comparison and halfword outputs of 0x100585c.
-pub(crate) fn split_distance(machine: &impl Machine, distance: i16) -> xm1_shot_sequence::capture_boundary::DistanceSplit {
+pub(crate) fn split_distance(machine: &impl Machine, distance: crate::stock::ControlDistance) -> xm1_shot_sequence::capture_boundary::DistanceSplit {
     use xm1_shot_sequence::capture_boundary::DistanceSplit;
+    let crate::stock::ControlDistance(distance) = distance;
     let crate::stock::ControlDistanceLimit(limit) = crate::stock::control_distance_limit(machine);
     if i32::from(distance) > limit {
         DistanceSplit { kept: limit as i16, excess: distance.wrapping_sub(limit as i16) }

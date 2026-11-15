@@ -47,6 +47,9 @@ pub const START_SUBJECT_SELECTION: u32 = 0xee_ccc0;
 pub const END_SUBJECT_SELECTION: u32 = 0xee_cddc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ControlDistance(pub(crate) i16);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ControlDistanceLimit(pub i32);
 
 /// Retained control-distance limit primitive (0x1005700).

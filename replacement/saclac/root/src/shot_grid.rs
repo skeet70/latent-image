@@ -80,7 +80,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor, I: Isp, 
         }))
     }
     fn settle_level(&mut self, level: i16) -> (i16, i16) {
-        let split = crate::calibration_inputs::split_distance(&self.services.borrow().machine, level);
+        let split = crate::calibration_inputs::split_distance(&self.services.borrow().machine, crate::stock::ControlDistance(level));
         (split.kept, split.excess)
     }
     fn floor_level(&mut self, level: i16) -> i16 {

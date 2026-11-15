@@ -52,7 +52,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: xm1_saclac_interface::Im
     }
 
     fn split_distance(&mut self, distance: i16) -> DistanceSplit {
-        crate::calibration_inputs::split_distance(&self.services.borrow().machine, distance)
+        crate::calibration_inputs::split_distance(&self.services.borrow().machine, crate::stock::ControlDistance(distance))
     }
 
     fn device_value(&mut self) -> u32 { self.services.borrow().machine.read_u32(0x0091_4dec) }
