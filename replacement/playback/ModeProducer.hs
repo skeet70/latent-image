@@ -143,8 +143,8 @@ memoryRead selector target offset bytes = object
   [Key.fromString selector .= target, "offset" .= offset, "hex" .= Native.hexBytes bytes]
 
 scriptCall :: [(String, Word32)] -> Word32 -> [Value] -> Value
-scriptCall inputs result reads = object
-  ["inputs" .= registers inputs, "outputs" .= registers [("r0",result)], "reads" .= reads, "writes" .= ([] :: [Value])]
+scriptCall inputs result memoryReads = object
+  ["inputs" .= registers inputs, "outputs" .= registers [("r0",result)], "reads" .= memoryReads, "writes" .= ([] :: [Value])]
 
 stub :: Address -> [Value] -> Value
 stub target calls = object ["address" .= address target, "calls" .= calls]

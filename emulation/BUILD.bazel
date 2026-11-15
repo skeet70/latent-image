@@ -3635,6 +3635,7 @@ haskell_library(
     srcs = ["Emulation/PlaybackOwned.hs"],
     src_strip_prefix = ".",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//replacement/playback:__pkg__"],
     deps = [
         ":watch-observation",
         "//host/firmware:bank-allowlist",
