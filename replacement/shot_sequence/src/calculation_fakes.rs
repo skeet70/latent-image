@@ -263,7 +263,7 @@ impl AbsorbLibrary for World {
     fn evaluate_distances(&mut self, pass: ResultPass, _cell: GridCell, index: AreaIndex) { self.events.push(Event::Evaluate(pass, index.get())); }
     fn selection_changed(&mut self, _record: RecordHandle, _source: u32, _reference: u32) -> bool { self.changed }
     fn compare_reference(&mut self, _record: RecordHandle, _source: u32) -> (bool, u32) { (self.available, 0x4444) }
-    fn compensated(&mut self, target: u32) -> i16 { target as i16 / 2 }
+    fn compensated(&mut self, target: CompensationStep, _source: CompensationRow) -> i16 { target.0 as i16 / 2 }
     fn classify_level(&mut self, value: i16) -> u32 { 0x100 + value as u32 }
     fn split_reference(&mut self) -> u32 { self.split }
     fn lower_reference(&mut self, _lens_reference: LensReference) -> u32 { self.lower }
