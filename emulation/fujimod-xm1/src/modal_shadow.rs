@@ -1,9 +1,10 @@
 //! Passive late-preservation proposal. No result admits a production handoff.
 use crate::{modal_guard::InstalledGuard, modal_lifetime::{LifetimePhase, LifetimeReceipt, Word},
     modal_permit::{CoreId, EntryInstruction, Snapshot, STOCK_ENTRY, STOCK_RESUME},
-    modal_task::TaskExecution, provenance::Guest};
+    modal_task::TaskExecution, provenance::Guest, trace::InstructionCount};
 use fujimod_emulator::{board::observation::{CoreIndex, InstructionPointEvent, PreservationWatch}, session::Session};
-use fujimod_emulator_cpu::{HookRange, preservation::{ExecutionSource, PreservationEvidence, SavedFrame, shadow}};
+use fujimod_emulator_cpu::{HookRange, Register, arm,
+    preservation::{ExecutionSource, PreservationEvidence, SavedFrame, shadow}};
 use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, rc::Rc};
 
@@ -19,6 +20,37 @@ pub struct Request {
 #[serde(rename_all = "snake_case")]
 enum Adapter { #[default] Board, Context }
 
+
+const EARLIER_IRQ_CAPACITY: usize = 16;
+
+#[derive(Clone, Copy, Serialize)]
+struct TcmEvidence { address: u64, bytes: usize }
+
+#[derive(Clone, Copy, Serialize)]
+struct EarlierIrq {
+    instructions: u64,
+    address: u64,
+    physical: Option<u64>,
+    bytes: u32,
+    progress: u64,
+    pstate: u32,
+    tcm: [Option<TcmEvidence>; 2],
+    word: u32,
+    cpsr: u32,
+    spsr: u32,
+    sp: u32,
+    lr: u32,
+}
+
+#[derive(Serialize)]
+pub(crate) struct EarlierIrqReport {
+    total: u64,
+    dropped: u64,
+    coverage_complete: bool,
+    target_irq_lr: Option<u32>,
+    matching_events: Vec<EarlierIrq>,
+    retained: Vec<EarlierIrq>,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Context {
     task: TaskExecution,
@@ -50,6 +82,9 @@ struct State {
     evidence_count: usize,
     context: Option<Context>,
     first_irq: Option<FrameEvidence>,
+    earlier_irq: [Option<EarlierIrq>; EARLIER_IRQ_CAPACITY],
+    earlier_irq_total: u64,
+    earlier_irq_word: Option<u32>,
 }
 impl State {
     fn fail(&mut self, failure: Failure) { if self.failure.is_none() { self.failure = Some(failure); } }
@@ -88,6 +123,7 @@ pub(crate) struct Report {
     pub context: Option<String>,
     pub native_evidence: Vec<String>,
     pub first_irq: Option<IrqReport>,
+    pub earlier_irq_provenance: EarlierIrqReport,
 }
 
 pub(crate) struct Capture {
@@ -119,7 +155,8 @@ impl Capture {
             }
         }
         let state = Rc::new(RefCell::new(State { active: None, started: 0, completed: 0, native_events: 0, failure: None,
-            evidence: [None; 16], evidence_count: 0, context: None, first_irq: None }));
+            evidence: [None; 16], evidence_count: 0, context: None, first_irq: None,
+            earlier_irq: [None; EARLIER_IRQ_CAPACITY], earlier_irq_total: 0, earlier_irq_word: None }));
         let observed = state.clone();
         let core = request.core;
         let callback = Rc::new(move |actual: CoreIndex, evidence| {
@@ -136,6 +173,55 @@ impl Capture {
 
     pub(crate) fn wants_task(&self, core: CoreId, pc: Guest) -> bool {
         core.0 == self.request.core && (pc == STOCK_ENTRY || pc == STOCK_RESUME)
+    }
+
+    pub(crate) fn sites(&self) -> impl Iterator<Item = Guest> {
+        std::iter::once(Guest(self.request.vector))
+    }
+
+    pub(crate) fn contains(&self, pc: Guest) -> bool { pc.0 == self.request.vector }
+
+    pub(crate) fn observe_earlier_irq(&mut self, session: &Session, core: CoreId, pc: Guest,
+        instructions: InstructionCount, point: InstructionPointEvent) -> Result<(), String> {
+        if core.0 != self.request.core || !self.contains(pc) || point.core.0 != core.0
+            || point.entry.address != u64::from(pc.0) || point.entry.physical != Some(u64::from(pc.0)) {
+            return Err("earlier IRQ point leaves its configured core/vector/physical identity".into());
+        }
+        let register = |register| {
+            u32::try_from(session.board.read_register(core.0, Register::Arm32(register))?)
+                .map_err(|_| "earlier IRQ register exceeds32bits".to_owned())
+        };
+        let cpsr = register(arm::Register::Cpsr)?;
+        let spsr = register(arm::Register::Spsr)?;
+        let sp = register(arm::Register::R(13))?;
+        let lr = register(arm::Register::R(14))?;
+        if point.entry.pstate != cpsr || cpsr & 0x1f != 0x12 || cpsr & 0x180 != 0x180 {
+            return Err("earlier IRQ vector is not an A-masked IRQ entry".into());
+        }
+        let mut guest = [0; 4];
+        let mut physical = [0; 4];
+        session.board.read_memory(core.0, u64::from(pc.0), &mut guest)?;
+        session.board.read_physical(u64::from(pc.0), &mut physical)?;
+        if guest != physical { return Err("earlier IRQ vector guest and physical words differ".into()); }
+        let word = u32::from_le_bytes(guest);
+        let tcm = point.entry.tcm.map(|window| window.map(|window| TcmEvidence {
+            address: window.address, bytes: window.bytes,
+        }));
+        let event = EarlierIrq { instructions: instructions.value(), address: point.entry.address,
+            physical: point.entry.physical, bytes: point.entry.bytes, progress: point.entry.progress,
+            pstate: point.entry.pstate, tcm, word, cpsr, spsr, sp, lr };
+        let mut state = self.state.borrow_mut();
+        if state.failure.is_some() || state.first_irq.is_some() { return Ok(()); }
+        if state.earlier_irq_word.is_some_and(|expected| expected != word) {
+            return Err("earlier IRQ vector word changed before the authenticated IRQ chain".into());
+        }
+        state.earlier_irq_word = Some(word);
+        let index = usize::try_from(state.earlier_irq_total % EARLIER_IRQ_CAPACITY as u64)
+            .map_err(|_| "earlier IRQ index exceeds usize")?;
+        state.earlier_irq[index] = Some(event);
+        state.earlier_irq_total = state.earlier_irq_total.checked_add(1)
+            .ok_or("earlier IRQ count overflow")?;
+        Ok(())
     }
 
     pub(crate) fn observe(&mut self, snapshot: &Snapshot, point: Option<InstructionPointEvent>, lifetime: LifetimeReceipt) {
@@ -203,8 +289,31 @@ impl Capture {
             context: state.context.map(|context| format!("{context:?}")),
             native_evidence: state.evidence.iter().flatten().map(|event| format!("{event:?}")).collect(),
             first_irq: state.first_irq.map(|frame| IrqReport { context: format!("{:?}", frame.context),
-                evidence: frame.evidence.iter().flatten().map(|event| format!("{event:?}")).collect() }) }
+                evidence: frame.evidence.iter().flatten().map(|event| format!("{event:?}")).collect() }),
+            earlier_irq_provenance: earlier_irq_report(&state) }
     }
+}
+
+fn earlier_irq_report(state: &State) -> EarlierIrqReport {
+    let count = usize::try_from(state.earlier_irq_total.min(EARLIER_IRQ_CAPACITY as u64))
+        .expect("bounded earlier IRQ count fits usize");
+    let start = if state.earlier_irq_total > EARLIER_IRQ_CAPACITY as u64 {
+        usize::try_from(state.earlier_irq_total % EARLIER_IRQ_CAPACITY as u64)
+            .expect("bounded earlier IRQ index fits usize")
+    } else { 0 };
+    let retained = (0..count).filter_map(|offset| {
+        state.earlier_irq[(start + offset) % EARLIER_IRQ_CAPACITY]
+    }).collect::<Vec<_>>();
+    let target_irq_lr = state.first_irq.and_then(|frame| frame.evidence.into_iter().flatten()
+        .find_map(|event| match event {
+            PreservationEvidence::Retired(retired) => Some(retired.before.irq_lr),
+            _ => None,
+        }));
+    let matching_events = target_irq_lr.map(|target| retained.iter().copied()
+        .filter(|event| event.lr == target).collect()).unwrap_or_default();
+    let dropped = state.earlier_irq_total.saturating_sub(EARLIER_IRQ_CAPACITY as u64);
+    EarlierIrqReport { total: state.earlier_irq_total, dropped, coverage_complete: dropped == 0,
+        target_irq_lr, matching_events, retained }
 }
 
 fn registers(snapshot: &Snapshot) -> [u32; 16] {

@@ -217,6 +217,28 @@ permitTests = do
     (isLeft (checkModalEnd shadowedFailure) && modalReportFailure shadowedFailure == modalReportFailure failed)
   check "passive evidence cannot assert production authority"
     (isLeft (parseModalReport permitLimit (set "preservation_shadow" (set "production_admission" (Bool True) passive) permitEnvelope)))
+  let vectorEvent = object ["instructions" .= (101 :: Int), "address" .= (0x18 :: Word32),
+        "physical" .= (0x18 :: Word32), "bytes" .= (4 :: Int), "progress" .= (0 :: Int),
+        "pstate" .= (0x800001d2 :: Word32), "tcm" .= [Null, object ["address" .= (0x70000000 :: Int), "bytes" .= (8192 :: Int)]],
+        "word" .= (0xea000000 :: Word32),
+        "cpsr" .= (0x800001d2 :: Word32), "spsr" .= (0x800001d3 :: Word32),
+        "sp" .= (0xa4cd00 :: Word32), "lr" .= (0x69cc00 :: Word32)]
+      unmaskedVector = set "cpsr" (Number 0x800000d2) vectorEvent
+      earlier = object ["total" .= (1 :: Int), "dropped" .= (0 :: Int), "coverage_complete" .= True,
+        "target_irq_lr" .= (0x69cc00 :: Word32), "matching_events" .= [vectorEvent],
+        "retained" .= [vectorEvent]]
+      unmaskedEarlier = set "matching_events" (toArray [unmaskedVector])
+        (set "retained" (toArray [unmaskedVector]) earlier)
+      withEarlier = set "preservation_shadow" (set "earlier_irq_provenance" earlier passive) permitEnvelope
+  check "passive shadow accepts bounded canonical earlier IRQ provenance"
+    (not (isLeft (parseModalReport permitLimit withEarlier)))
+  check "passive shadow refuses inconsistent earlier IRQ retention counters"
+    (isLeft (parseModalReport permitLimit (set "preservation_shadow"
+      (set "earlier_irq_provenance" (set "dropped" (Number 1) earlier) passive) permitEnvelope)))
+  check "passive shadow refuses an unmasked earlier IRQ vector event"
+    (isLeft (parseModalReport permitLimit (set "preservation_shadow"
+      (set "earlier_irq_provenance" unmaskedEarlier passive)
+      permitEnvelope)))
   check "shadow plan separates the architectural IRQ vector from authenticated bank-transfer code"
     (isLeft (parseModalReport permitLimit (set "preservation_shadow"
       (set "source" (set "vector" (Number 0x40208) source) passive) permitEnvelope)))

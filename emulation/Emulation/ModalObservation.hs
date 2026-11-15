@@ -555,7 +555,8 @@ parseModalReport limit value = do
   pure (ModalReport enabled policy counts fetches domains guard tasks lifetime watch physicalCoverage taskVerified contextSpans failure shadow)
  where
   parseShadowReport entry = do
-    let diagnostics = [key | key <- ["context", "native_evidence", "first_irq"], isJust (optionalField key entry)]
+    let diagnostics = [key | key <- ["context", "native_evidence", "first_irq", "earlier_irq_provenance"],
+          isJust (optionalField key entry)]
     modalKeys (["core", "source", "started", "completed", "native_events", "active", "failure", "production_admission"] ++ diagnostics) entry
     core <- modalField "core" entry >>= modalWord
     unless (core <= 1) (Left "shadow report names an unavailable core")
@@ -583,7 +584,56 @@ parseModalReport limit value = do
         modalKeys ["context", "evidence"] raw
         _ <- modalField "context" raw >>= shadowText
         modalField "evidence" raw >>= shadowEvidence
+    forM_ (optionalField "earlier_irq_provenance" entry) parseEarlierIrq
     pure entry
+  parseEarlierIrq entry = do
+    modalKeys ["total", "dropped", "coverage_complete", "target_irq_lr", "matching_events", "retained"] entry
+    total <- modalField "total" entry >>= modalWord
+    dropped <- modalField "dropped" entry >>= modalWord
+    complete <- modalField "coverage_complete" entry >>= modalBool
+    target <- modalField "target_irq_lr" entry >>= \item -> case item of
+      Null -> Right Nothing
+      _ -> Just <$> modalWord32 item
+    retained <- modalField "retained" entry >>= earlierEvents
+    matching <- modalField "matching_events" entry >>= earlierEvents
+    let expectedRetained = min total 16
+        retainedValues = map fst retained
+    unless (fromIntegral (length retained) == expectedRetained
+      && dropped == total - expectedRetained && complete == (dropped == 0))
+      (Left "earlier IRQ provenance has inconsistent bounded-retention counters")
+    unless (all (\(raw, lr) -> raw `elem` retainedValues && Just lr == target) matching
+      && maybe (null matching) (const True) target)
+      (Left "earlier IRQ provenance matches are not retained target events")
+  earlierEvents (Array rows) | V.length rows <= 16 = mapM earlierEvent (V.toList rows)
+  earlierEvents _ = Left "earlier IRQ provenance exceeds its fixed event bound"
+  earlierEvent entry = do
+    modalKeys ["instructions", "address", "physical", "bytes", "progress", "pstate", "tcm",
+      "word", "cpsr", "spsr", "sp", "lr"] entry
+    _ <- modalField "instructions" entry >>= modalWord
+    address <- modalField "address" entry >>= modalWord32
+    _ <- modalField "physical" entry >>= modalWord32
+    bytes <- modalField "bytes" entry >>= modalWord
+    _ <- modalField "progress" entry >>= modalWord
+    pstate <- modalField "pstate" entry >>= modalWord32
+    modalField "tcm" entry >>= earlierTcm
+    _ <- modalField "word" entry >>= modalWord32
+    cpsr <- modalField "cpsr" entry >>= modalWord32
+    _ <- modalField "spsr" entry >>= modalWord32
+    _ <- modalField "sp" entry >>= modalWord32
+    lr <- modalField "lr" entry >>= modalWord32
+    unless (address == 0x18 && bytes == 4 && pstate == cpsr
+      && cpsr .&. 0x1f == 0x12 && cpsr .&. 0x180 == 0x180)
+      (Left "earlier IRQ provenance is not a stable masked IRQ vector entry")
+    pure (entry, lr)
+  earlierTcm Null = Right ()
+  earlierTcm (Array windows) | V.length windows == 2 = mapM_ earlierTcmWindow windows
+  earlierTcm _ = Left "earlier IRQ provenance has malformed TCM identity"
+  earlierTcmWindow Null = Right ()
+  earlierTcmWindow entry = do
+    modalKeys ["address", "bytes"] entry
+    _ <- modalField "address" entry >>= modalWord
+    bytes <- modalField "bytes" entry >>= modalWord
+    unless (bytes > 0) (Left "earlier IRQ provenance TCM identity is empty")
   shadowText (String text) | not (T.null text) && T.length text <= 16384 = Right text
   shadowText _ = Left "shadow evidence text is not bounded"
   shadowEvidence (Array rows) | V.length rows <= 16 = mapM_ shadowText rows

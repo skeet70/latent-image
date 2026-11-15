@@ -434,6 +434,7 @@ impl ModalTrace {
         self.config.instruction_sites().chain(self.guard.iter().flat_map(InstalledGuard::sites))
             .chain(self.returns.keys().copied())
             .chain(self.af_ownership.iter().flat_map(|projection| projection.sites().map(Guest)))
+            .chain(self.preservation_shadow.iter().flat_map(crate::modal_shadow::Capture::sites))
     }
 
     pub(crate) fn active(&self) -> bool { self.enabled }
@@ -446,6 +447,7 @@ impl ModalTrace {
             || self.config.owned_prehook == Some(pc) || self.returns.contains_key(&pc)
             || self.guard.as_ref().is_some_and(|guard| guard.contains(pc))
             || self.af_ownership.as_ref().is_some_and(|projection| projection.contains(pc.0))
+            || self.preservation_shadow.as_ref().is_some_and(|shadow| shadow.contains(pc))
     }
 
     pub(crate) fn fail(&mut self, failure: String) {
@@ -478,6 +480,11 @@ impl ModalTrace {
     fn observe_inner(&mut self, session: &Session, core: usize, pc: Guest,
         instructions: InstructionCount, point: Option<InstructionPointEvent>) -> Result<Option<Guest>, String> {
         if !self.contains(pc) { return Err("instruction point outside modal observation".into()); }
+        if let Some(shadow) = self.preservation_shadow.as_mut().filter(|shadow| shadow.contains(pc)) {
+            let point = point.ok_or("earlier IRQ provenance point lacks stable instruction identity")?;
+            shadow.observe_earlier_irq(session, CoreId(core), pc, instructions, point)?;
+            return Ok(None);
+        }
         if self.af_ownership.as_ref().is_some_and(|projection| projection.contains(pc.0)) {
             self.check_interval()?;
             let observed = (|| {

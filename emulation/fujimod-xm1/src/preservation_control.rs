@@ -3,6 +3,13 @@ use fujimod_emulator::board::{Board, bus::{Bus, Mode}, memory::{Memory, BusMappi
 use fujimod_emulator_cpu::{*, memory::Backing, preservation::{*, shadow}};
 use fujimod_emulator_cpu_unicorn::{Library, rprofile};
 use fujimod_emulator_devices::{Device, Cx};
+use fujimod_xm1::{
+    modal_lifetime::LifetimePhase,
+    modal_permit::{CoreId as ModalCoreId, Count as PublicationCount, Cpsr as ModalCpsr},
+    modal_task::{self, KernelId, MemoryError, StackExtent, TaskExecution, TaskIdentity,
+        ValidatedTaskMemory},
+    provenance::Guest,
+};
 use serde_json::{Value, json};
 use std::{cell::{Cell, RefCell}, ptr::NonNull, rc::Rc};
 
@@ -272,20 +279,85 @@ fn bank_controls() -> Result<Value, String> {
         "original_events":trace.events.iter().map(|e|format!("{e:?}")).collect::<Vec<_>>()}))
 }
 
+const ACTUAL_CREATION_WORDS: [u32; 10] =
+    [2, 0, 12726112, 5, 3072, 10797568, 0, 0, 1, 1];
+
+struct CopiedTaskMemory {
+    context: (Guest, [u8; 4]),
+    current: (Guest, [u8; 4]),
+    backlink: (Guest, [u8; 4]),
+    creation: (Guest, [u8; 40]),
+    stack_start: Guest,
+    stack_end: Guest,
+}
+impl ValidatedTaskMemory for CopiedTaskMemory {
+    fn read(&self, address: Guest, output: &mut [u8]) -> Result<(), MemoryError> {
+        let source: &[u8] = if address == self.context.0 && output.len() == self.context.1.len() {
+            &self.context.1
+        } else if address == self.current.0 && output.len() == self.current.1.len() {
+            &self.current.1
+        } else if address == self.backlink.0 && output.len() == self.backlink.1.len() {
+            &self.backlink.1
+        } else if address == self.creation.0 && output.len() == self.creation.1.len() {
+            &self.creation.1
+        } else {
+            return Err(MemoryError::Unmapped);
+        };
+        output.copy_from_slice(source);
+        Ok(())
+    }
+
+    fn validate_stack(&self, extent: StackExtent) -> Result<(), MemoryError> {
+        let physical = extent.physical();
+        if physical.start() == self.stack_start && physical.end() == self.stack_end {
+            Ok(())
+        } else {
+            Err(MemoryError::PhysicalMismatch)
+        }
+    }
+}
+
+fn copied_task(kernel: KernelId, creation_words: [u32; 10]) -> Result<TaskExecution, String> {
+    let layout = modal_task::source_layouts().into_iter().find(|layout| layout.kernel == kernel)
+        .ok_or("canonical task layout is absent")?;
+    let node = Guest(layout.nodes.start().0 | 0x40000000);
+    let creation = Guest(layout.creations.start().0 | 0x40000000);
+    if creation_words[8] != 1 {
+        return Err("copied canonical task fixture is not task 1".into());
+    }
+    let mut creation_bytes = [0; 40];
+    for (index, word) in creation_words.into_iter().enumerate() {
+        creation_bytes[index * 4..index * 4 + 4].copy_from_slice(&word.to_le_bytes());
+    }
+    let stack_start = Guest(creation_words[5] & !0x40000000);
+    let stack_end = Guest(stack_start.0.checked_add(creation_words[4])
+        .ok_or("task stack address overflow")?);
+    let memory = CopiedTaskMemory {
+        context: (kernel.context_cell(), 0u32.to_le_bytes()),
+        current: (kernel.current_cell(), node.0.to_le_bytes()),
+        backlink: (Guest(node.0 + 8), creation.0.to_le_bytes()),
+        creation: (creation, creation_bytes),
+        stack_start,
+        stack_end,
+    };
+    let core = match kernel { KernelId::Primary => ModalCoreId(0), KernelId::Secondary => ModalCoreId(1) };
+    let task = modal_task::sample(&memory, core, Guest(10800568), ModalCpsr(0x80000153))
+        .map_err(|error| format!("copied canonical task fixture refused: {error:?}"))?;
+    let identity = task.identity();
+    if identity.node.address() != node || identity.creation.address() != creation {
+        return Err("canonical task fixture changed copied identity".into());
+    }
+    Ok(task)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ActualContext {
-    task_id: u32,
-    node: u32,
-    creation: u32,
-    stack_start: u32,
-    stack_end: u32,
-    creation_words: [u32; 10],
-    execution_core: u32,
-    phase: u32,
-    forward: u64,
-    reverse: u64,
-    install_core: Option<u32>,
-    rollback_core: Option<u32>,
+    task: TaskExecution,
+    phase: LifetimePhase,
+    forward: PublicationCount,
+    reverse: PublicationCount,
+    install_core: Option<ModalCoreId>,
+    rollback_core: Option<ModalCoreId>,
 }
 
 struct ActualTrace {
@@ -302,10 +374,35 @@ fn actual_state(registers: [u32; 16], cpsr: u32, spsr: u32, svc_spsr: u32,
     irq_spsr: u32, svc_sp: u32, irq_sp: u32, svc_lr: u32, irq_lr: u32) -> Arm32State {
     Arm32State { registers, cpsr, spsr, svc_spsr, irq_spsr, svc_sp, irq_sp, svc_lr, irq_lr }
 }
+fn task_value(task: TaskExecution) -> Value {
+    let identity: TaskIdentity = task.identity();
+    let stack = task.stack().physical();
+    json!({
+        "kernel":match identity.kernel { KernelId::Primary => "primary", KernelId::Secondary => "secondary" },
+        "id":identity.id.get(),
+        "node":identity.node.address().0,
+        "creation":identity.creation.address().0,
+        "stack":{"start":stack.start().0,"end":stack.end().0},
+        "execution_core":task.execution_core().0
+    })
+}
+
+fn phase_name(phase: LifetimePhase) -> &'static str {
+    match phase {
+        LifetimePhase::Prepared => "prepared",
+        LifetimePhase::Publishing => "publishing",
+        LifetimePhase::Installed => "installed",
+        LifetimePhase::RollingBack => "rolling_back",
+        LifetimePhase::RollbackStored => "rollback_stored",
+        LifetimePhase::RollbackVerified => "rollback_verified",
+        LifetimePhase::Ended => "ended",
+    }
+}
+
 
 // Copied from 20261115T131950Z-menu-irq-vector-restored6's first_irq packet,
 // e2e-modal-observation.json SHA-256 23bb11e1206b66199a475c1f2c540f1ae19e54734b6b4d4bdee1f7c51ba8f312.
-fn actual_menu_trace() -> ActualTrace {
+fn actual_menu_trace() -> Result<ActualTrace, String> {
     let owner = Identity::allocate();
     let serial = |value| std::num::NonZeroU64::new(value).expect("actual evidence serial is nonzero");
     // Entry IDs are opaque; preserve their same-owner/resume relation while the report retains original serials.
@@ -366,18 +463,25 @@ fn actual_menu_trace() -> ActualTrace {
             written_status: 0x80000053, mask: 0xff1fffff,
         }),
     ];
+    let task = copied_task(KernelId::Primary, ACTUAL_CREATION_WORDS)?;
+    let identity = task.identity();
+    if identity.id.get() != 1 || identity.node.address() != Guest(1074134796)
+        || identity.creation.address() != Guest(1074118316) {
+        return Err("canonical task sample differs from retained Menu identity".into());
+    }
     let context = ActualContext {
-        task_id: 1, node: 1074134796, creation: 1074118316,
-        stack_start: 10797568, stack_end: 10800640,
-        creation_words: [2, 0, 12726112, 5, 3072, 10797568, 0, 0, 1, 1],
-        execution_core: 0, phase: 3, forward: 226, reverse: 226,
-        install_core: Some(0), rollback_core: Some(0),
+        task,
+        phase: LifetimePhase::RollbackStored,
+        forward: PublicationCount(226),
+        reverse: PublicationCount(226),
+        install_core: Some(ModalCoreId(0)),
+        rollback_core: Some(ModalCoreId(0)),
     };
-    ActualTrace {
+    Ok(ActualTrace {
         binding: shadow::Binding { entry, registers: before.registers, cpsr: before.cpsr, context },
         stock: shadow::StockReturn { vector: 24, status, returning },
         events, registers: returned_after.registers, cpsr: returned_after.cpsr, frame, context,
-    }
+    })
 }
 
 fn actual_refusal(controls: &mut serde_json::Map<String, Value>, name: &str,
@@ -402,7 +506,7 @@ fn completed_actual(trace: &ActualTrace) -> Result<shadow::Shadow<ActualContext>
 }
 
 fn actual_menu_controls() -> Result<Value, String> {
-    let trace = actual_menu_trace();
+    let trace = actual_menu_trace()?;
     judge_bound(trace.binding, trace.stock, &trace.events, trace.registers, trace.cpsr,
         trace.context, trace.frame).map_err(|failure| format!("actual positive refused: {failure:?}"))?;
     let mut controls = serde_json::Map::new();
@@ -480,10 +584,22 @@ fn actual_menu_controls() -> Result<Value, String> {
     actual_refusal(&mut controls, "return-source-physical", &trace, &changed,
         trace.registers, trace.cpsr, trace.context, trace.frame)?;
 
-    let task = ActualContext { task_id: 2, ..trace.context };
+    let mut alternate_words = ACTUAL_CREATION_WORDS;
+    alternate_words[4] = 3584;
+    alternate_words[5] = 10797056;
+    let task = ActualContext {
+        task: copied_task(KernelId::Primary, alternate_words)?,
+        ..trace.context
+    };
     actual_refusal(&mut controls, "menu-task-substitution", &trace, &trace.events,
         trace.registers, trace.cpsr, task, trace.frame)?;
-    let publication = ActualContext { forward: 227, ..trace.context };
+    let wrong_kernel = ActualContext {
+        task: copied_task(KernelId::Secondary, ACTUAL_CREATION_WORDS)?,
+        ..trace.context
+    };
+    actual_refusal(&mut controls, "menu-wrong-kernel-identity", &trace, &trace.events,
+        trace.registers, trace.cpsr, wrong_kernel, trace.frame)?;
+    let publication = ActualContext { forward: PublicationCount(227), ..trace.context };
     actual_refusal(&mut controls, "menu-publication-substitution", &trace, &trace.events,
         trace.registers, trace.cpsr, publication, trace.frame)?;
 
@@ -503,7 +619,7 @@ fn actual_menu_controls() -> Result<Value, String> {
     controls.insert("destination-after-completion".into(),
         json!({"refused":true,"failure":format!("{failure:?}")}));
 
-    let passed = controls.len() == 24 && controls.values().all(|control| control["refused"] == true);
+    let passed = controls.len() == 25 && controls.values().all(|control| control["refused"] == true);
     Ok(json!({
         "case":"actual-menu-causal-controls",
         "passed":passed,
@@ -513,12 +629,20 @@ fn actual_menu_controls() -> Result<Value, String> {
             "kind":"copied-adversarial-host-fixture",
             "source":"retained actual Menu first_irq artifact",
             "source_sha256":"23bb11e1206b66199a475c1f2c540f1ae19e54734b6b4d4bdee1f7c51ba8f312",
+            "construction":"fujimod_xm1::modal_task::sample over explicit ValidatedTaskMemory",
+            "unknown_memory":"MemoryError::Unmapped",
             "original_stopped_entry_serial":799689u64,
             "retirement_serial":65624u64,
             "exception_serial":65625u64,
-            "task_id":trace.context.task_id,
-            "publication_forward":trace.context.forward,
-            "publication_reverse":trace.context.reverse
+            "task":task_value(trace.context.task),
+            "creation_words":ACTUAL_CREATION_WORDS,
+            "publication":{
+                "phase":phase_name(trace.context.phase),
+                "forward":trace.context.forward.0,
+                "reverse":trace.context.reverse.0,
+                "install_core":trace.context.install_core.map(|core|core.0),
+                "rollback_core":trace.context.rollback_core.map(|core|core.0)
+            }
         },
         "scope":{
             "inner_verifier":"unchanged fujimod_emulator_cpu::preservation::shadow::Shadow",
