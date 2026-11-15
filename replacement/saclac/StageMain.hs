@@ -17,10 +17,10 @@ main = do
       [encoder', rebuild', decoder'] <- mapM canonicalizePath [encoder, rebuild, decoder]
       dat <- H.readRegular (64 * 1024 * 1024) datPath
       image5 <- H.readRegular (16 * 1024 * 1024) image5Path
-      elf <- H.readRegular (4 * 1024 * 1024) elfPath
-      bin <- H.readRegular (4 * 1024 * 1024) binPath
-      symbols <- H.readRegular (1024 * 1024) symbolsPath
-      disasm <- H.readRegular (1024 * 1024) disasmPath
+      elf <- H.readRegular (8 * 1024 * 1024) elfPath
+      bin <- H.readRegular (8 * 1024 * 1024) binPath
+      symbols <- H.readRegular (4 * 1024 * 1024) symbolsPath
+      disasm <- H.readRegular (64 * 1024 * 1024) disasmPath
       sections <- H.readRegular (1024 * 1024) sectionsPath
       staged <- stageSaclac (Image4.Tools encoder' rebuild' decoder') scratchPath dat image5 elf bin symbols disasm sections
       B.writeFile outputImage (stagedImage5 staged)

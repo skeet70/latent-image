@@ -299,7 +299,7 @@ unsafe extern "C" {
     fn xm1_power_record_helper_fa7e20(value: i32, kind: u32, mode: u32) -> u32;
     fn xm1_power_record_helper_f4c584(callback: unsafe extern "C" fn(u32, u32), parameters: *const u32, workspace: *mut u32);
     fn xm1_power_record_helper_75a3c4(request: u32, value: i32);
-    fn xm1_power_record_helper_7582c0(output: *mut u32, request: u32);
+    fn xm1_power_record_helper_7582c0(output: *mut u32) -> *mut u32;
     fn xm1_power_record_helper_758300(request: u32, value: *const u32);
     fn xm1_power_record_helper_fa95b8(request: u32, reference: u32, enabled: u32, first: *mut u32, second: *mut u32);
     fn xm1_power_record_helper_fa8520(request: u32, enabled: u32);
@@ -406,7 +406,7 @@ pub unsafe extern "C" fn xm1_power_record_helper_f2457c(request: u32) {
         xm1_power_record_helper_75a3c4(request, half(source) as i16 as i32);
         if xm1_power_record_helper_69f8fc(0x5257) & 3 != 0 && xm1_power_record_helper_750474(request) == 1 {
             let mut record = [0; 10];
-            xm1_power_record_helper_7582c0(record.as_mut_ptr(), request);
+            xm1_power_record_helper_7582c0(record.as_mut_ptr());
             record[9] = 1;
             xm1_power_record_helper_758300(request, record.as_ptr());
             if xm1_power_record_helper_69f8fc(0x5257) & 2 != 0 {
@@ -415,7 +415,7 @@ pub unsafe extern "C" fn xm1_power_record_helper_f2457c(request: u32) {
             xm1_power_record_helper_fa8520(request, record[9]);
             if xm1_power_record_helper_69f8fc(0xa8) & 0x80 != 0 { xm1_power_record_helper_fa91b0(source as u32, record[9]); }
             if xm1_power_record_helper_69f8fc(0x5258) & 1 != 0 { xm1_power_record_helper_f521d8(record[5] as u16 as u32, record[4], record[9]); }
-            xm1_power_record_helper_7582c0(record.as_mut_ptr(), request);
+            xm1_power_record_helper_7582c0(record.as_mut_ptr());
             let mut output = 0;
             let mut value = 0;
             xm1_power_record_helper_faa7b0(request, record.as_ptr(), &mut output, &mut value);

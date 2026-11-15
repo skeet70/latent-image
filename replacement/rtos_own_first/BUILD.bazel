@@ -31,6 +31,19 @@ xm1_rust_rlib(
     rustc_flags = ["--cfg", "'feature=\"library\"'", "-C", "metadata=library"],
 )
 
+xm1_rust_rlib(
+    name = "own-first-a-component",
+    src = "src/lib.rs",
+    crate_name = "xm1_rtos_own_first_component",
+    out = "arm/libxm1_rtos_own_first_component.rlib",
+    data = [
+        "src/entries.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_reservation:src/lib.rs",
+    ],
+    rustc_flags = ["--cfg", "'feature=\"domain-a\"'", "--cfg", "'feature=\"component\"'"],
+)
+
 [
     xm1_rust_staticlib(
         name = "own-first-%s-rust" % domain,

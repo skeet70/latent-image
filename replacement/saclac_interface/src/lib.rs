@@ -448,6 +448,8 @@ pub struct StatisticsRequest<'a> {
 }
 
 pub trait Statistics {
+    /// Raw ports preserve linked words; a composition may bind an owned callback instead.
+    fn resolve_callback(&self, word: stock::StockCallbackWord) -> stock::StockCallbackWord { word }
     type Error;
     fn request(&mut self, request: StatisticsRequest<'_>) -> Result<(), Self::Error>;
 }

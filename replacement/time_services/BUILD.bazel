@@ -55,6 +55,7 @@ haskell_binary(
         "//host:host-support",
         "//host:update-container",
         "//host/firmware:bank-allowlist",
+        "//replacement/fixed_image:contract",
     ],
 )
 

@@ -66,12 +66,15 @@ def xm1_rust_staticlib(
         env = {},
         strict_align = True,
         testonly = False,
-        visibility = None):
+        visibility = None,
+        rlib_search_deps = [],
+        dependency_archives = []):
     """Compiles one no_std crate root to a staticlib for armv7r-none-eabi.
 
     `data` stages additional module files at their package paths; `mod` names in
     the crate root resolve against them. `env` sets compile-time variables for
     `include!` and `env!`.
+    Search-only rlibs and dependency archives use the same scoped setup as `xm1_rust_rlib`.
     """
     if crate_name == None:
         crate_name = name.replace("-", "_")
@@ -89,7 +92,7 @@ def xm1_rust_staticlib(
         ] + [
             "-Ldependency=$$(dirname $(location %s))" % label
             for label in rlib_deps.values()
-        ] + [
+        ] + _rlib_search_flags(rlib_search_deps, dependency_archives) + [
             "$(location %s)" % src,
             "-o",
             "$@",
@@ -97,12 +100,12 @@ def xm1_rust_staticlib(
     )
     native.genrule(
         name = name,
-        srcs = [src] + data + rlib_deps.values(),
+        srcs = [src] + data + rlib_deps.values() + rlib_search_deps + dependency_archives,
         outs = [name + ".a"],
-        cmd = cmd,
+        cmd = _rlib_archive_setup(dependency_archives) + cmd,
         message = "Cross-compiling %s for armv7r-none-eabi" % crate_name,
         testonly = testonly,
-        tools = [_RUSTC],
+        tools = [_RUSTC] + (["@lab_gnutar//:bin/tar"] if dependency_archives else []),
         visibility = visibility,
     )
 

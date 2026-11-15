@@ -6,6 +6,16 @@ pub static PIPELINE_PROGRESS: crate::statistics_results::ReportingGate = crate::
 
 pub struct NativeDelivery;
 impl Delivery for NativeDelivery {
+    fn resolve_callback(&self, word: xm1_saclac_interface::stock::StockCallbackWord) -> xm1_saclac_interface::stock::StockCallbackWord {
+        #[cfg(target_arch = "arm")]
+        {
+            if word.0 == 0xf2_2730 {
+                xm1_saclac_interface::stock::StockCallbackWord(super::callbacks::xm1_saclac_root_s1_result as *const () as u32)
+            } else { word }
+        }
+        #[cfg(not(target_arch = "arm"))]
+        { let _ = word; panic!("native callback binding requires ARM"); }
+    }
     fn report_results(&mut self, open: bool) { S1_REPORTS.publish(open); }
     fn enter(&mut self, callback: ClientCallback, result: ResultWords) {
         #[cfg(target_arch = "arm")]

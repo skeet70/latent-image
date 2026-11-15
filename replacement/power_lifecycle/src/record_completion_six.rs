@@ -76,11 +76,15 @@ pub unsafe extern "C" fn xm1_power_record_helper_efa3f8(profile: u32, event: u32
             let mut flags = 0u16;
             xm1_power_record_helper_f4f838(profile, 1, &mut resource as *mut u32 as u32, &mut flags as *mut u16 as u32);
             (resource, flags)
-        }, |profile| xm1_power_record_helper_f60e28(profile));
+        }, |profile| xm1_power_record_helper_f60e28(profile),
+        |_, mode, destination| match destination {
+            None => xm1_power_record_helper_f17838(mode),
+            Some(destination) => xm1_power_record_helper_f17984(mode, destination),
+        });
     }
 }
 
-/// Runs the completion against the composition's recognition and adjustment services.
+/// Runs the completion against the composition's recognition, adjustment and area services.
 ///
 /// # Safety
 /// The task43 command/client slots and admitted profile stores must be live.
@@ -88,6 +92,7 @@ pub unsafe fn complete(
     profile: u32, event: u32,
     mut capture_vote: impl FnMut(u32) -> (u32, u16),
     mut apply_position: impl FnMut(u32),
+    mut prepare_area: impl FnMut(u32, u32, Option<u32>),
 ) {
     unsafe {
         let slot = 0x0169_d05c;
@@ -110,10 +115,10 @@ pub unsafe fn complete(
                 if mode == 0 {
                     xm1_power_record_helper_752928(output, profile, 0);
                     mode = word(output + 160);
-                    xm1_power_record_helper_f17984(1, 0x0169_f5d0);
-                    xm1_power_record_helper_f17984(2, 0x0169_f9e4);
+                    prepare_area(profile, 1, Some(0x0169_f5d0));
+                    prepare_area(profile, 2, Some(0x0169_f9e4));
                 }
-                xm1_power_record_helper_f17838(mode);
+                prepare_area(profile, mode, None);
                 if xm1_power_record_helper_74fc64(profile) == 0 { xm1_power_record_helper_f15cbc(0); }
                 selected = xm1_power_record_helper_f16184();
                 if selected != 0 { xm1_power_record_helper_76f394(selection, word(slot + 52), 1); }

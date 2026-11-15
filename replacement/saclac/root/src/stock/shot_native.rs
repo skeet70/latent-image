@@ -22,6 +22,8 @@ impl ProfileReplies for Guest {
                     (vote.scene.0, vote.flags.0)
                 },
                 |profile| apply_position(record_handle_from_a2(profile)),
+                |profile, mode, destination| super::completion_areas::prepare(
+                    record_handle_from_a2(profile), mode, destination.map(xm1_saclac_interface::calc::SharedAddress)),
             );
         }
     }

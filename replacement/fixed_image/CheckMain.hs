@@ -35,7 +35,7 @@ check allowlistPath elfPath bodyPath (EntryName entryName) (OwnedStackBudget bud
   allowlist <- H.readRegularWith (pure ()) False 0x100000 allowlistPath >>= either H.failH pure . A.parseAllowlist
   elfBytes <- H.readRegularWith (pure ()) False 0x400000 elfPath
   elf <- either H.failH pure (E.parseElf elfBytes)
-  body <- H.readRegularWith (pure ()) False 0x40000 bodyPath
+  body <- H.readRegularWith (pure ()) False (fromIntegral (imageLimit - imageBase - headerBytes)) bodyPath
   let symbol name = case [E.symbolValue value | value <- E.elfSymbols elf, E.symbolName value == name, E.symbolSection value /= E.Undefined] of
         [value] -> pure value
         _ -> H.failH ("missing or duplicate fixed symbol " ++ name)

@@ -1,5 +1,8 @@
 #![cfg_attr(not(test),no_std)]
 
+#[cfg(target_arch = "arm")]
+pub use xm1_power_services::application_nand;
+#[cfg(not(target_arch = "arm"))]
 #[path = "../application_nand/src/lib.rs"]
 pub mod application_nand;
 pub mod af_capture_actor;

@@ -435,6 +435,86 @@ pub mod record_profile_accessors {
     use super::stock_export;
     use crate::record_address_space::GuestAddress;
     stock_export!(
+        xm1_power_record_helper_74e648,
+        helper_74e648_abi,
+        (),
+        (handle: u32) -> u32,
+        (handle: u32),
+        (handle),
+        crate::record_profile_accessors::helper_74e648,
+        |value| value
+    );
+    stock_export!(
+        xm1_power_record_helper_74e718,
+        helper_74e718_abi,
+        (),
+        (handle: u32) -> u32,
+        (handle: u32),
+        (handle),
+        crate::record_profile_accessors::helper_74e718,
+        |value| value
+    );
+    stock_export!(
+        xm1_power_record_helper_74eba8,
+        helper_74eba8_abi,
+        (),
+        (handle: u32) -> u32,
+        (handle: u32),
+        (handle),
+        crate::record_profile_accessors::helper_74eba8,
+        |value| value
+    );
+    stock_export!(
+        xm1_power_record_helper_74fc64,
+        helper_74fc64_abi,
+        (),
+        (handle: u32) -> u32,
+        (handle: u32),
+        (handle),
+        crate::record_profile_accessors::helper_74fc64,
+        |value| value
+    );
+    stock_export!(
+        xm1_power_record_helper_75060c,
+        helper_75060c_abi,
+        (),
+        (handle: u32) -> u32,
+        (handle: u32),
+        (handle),
+        crate::record_profile_accessors::helper_75060c,
+        |value| value
+    );
+    stock_export!(
+        xm1_power_record_helper_7503ec,
+        helper_7503ec_abi,
+        (),
+        (handle: u32) -> u32,
+        (handle: u32),
+        (handle),
+        crate::record_profile_accessors::helper_7503ec,
+        |value| value
+    );
+    stock_export!(
+        xm1_power_record_helper_74f1ac,
+        helper_74f1ac_abi,
+        (),
+        (handle: u32) -> u32,
+        (handle: u32),
+        (handle),
+        crate::record_profile_accessors::helper_74f1ac,
+        |value| value
+    );
+    stock_export!(
+        xm1_power_record_helper_74f3cc,
+        helper_74f3cc_abi,
+        (),
+        (handle: u32) -> u32,
+        (handle: u32),
+        (handle),
+        crate::record_profile_accessors::helper_74f3cc,
+        |value| value
+    );
+    stock_export!(
         xm1_power_record_helper_74e020,
         helper_74e020_abi,
         (),
@@ -1050,6 +1130,66 @@ pub mod record_profile_shared_cpu {
     use super::stock_export;
     use crate::record_address_space::GuestAddress;
     stock_export!(
+        xm1_power_record_helper_7582c0,
+        helper_7582c0_abi,
+        (),
+        (destination: u32) -> u32,
+        (destination: GuestAddress),
+        (GuestAddress::new(destination)),
+        crate::record_profile_shared_cpu::helper_7582c0,
+        |value| value.get()
+    );
+    stock_export!(
+        xm1_power_record_helper_756550,
+        helper_756550_abi,
+        (),
+        (handle: u32) -> u32,
+        (handle: u32),
+        (handle),
+        crate::record_profile_shared_cpu::helper_756550,
+        |value| value
+    );
+    stock_export!(
+        xm1_power_record_helper_7565e0,
+        helper_7565e0_abi,
+        (),
+        (handle: u32) -> u32,
+        (handle: u32),
+        (handle),
+        crate::record_profile_shared_cpu::helper_7565e0,
+        |value| value
+    );
+    stock_export!(
+        xm1_power_record_helper_756670,
+        helper_756670_abi,
+        (),
+        (handle: u32) -> u32,
+        (handle: u32),
+        (handle),
+        crate::record_profile_shared_cpu::helper_756670,
+        |value| value
+    );
+    stock_export!(
+        xm1_power_record_helper_7563d4,
+        helper_7563d4_abi,
+        (),
+        (handle: u32) -> u32,
+        (handle: u32),
+        (handle),
+        crate::record_profile_shared_cpu::helper_7563d4,
+        |value| value
+    );
+    stock_export!(
+        xm1_power_record_helper_7564c0,
+        helper_7564c0_abi,
+        (),
+        (handle: u32) -> u32,
+        (handle: u32),
+        (handle),
+        crate::record_profile_shared_cpu::helper_7564c0,
+        |value| value
+    );
+    stock_export!(
         xm1_power_record_helper_75624c,
         helper_75624c_abi,
         (),
@@ -1189,6 +1329,86 @@ pub mod record_profile_slot_accessors {
 pub mod record_profile_slotfields {
     use super::stock_export;
     use crate::record_address_space::GuestAddress;
+    stock_export!(
+        xm1_power_record_helper_755cfc,
+        helper_755cfc_abi,
+        (),
+        (handle: u32, index: u32) -> u32,
+        (handle: u32, index: u32),
+        (handle, index),
+        crate::record_profile_slotfields::helper_755cfc,
+        |value| value.get()
+    );
+    stock_export!(
+        xm1_power_record_helper_75587c,
+        helper_75587c_abi,
+        (),
+        (handle: u32) -> u32,
+        (handle: u32),
+        (handle),
+        crate::record_profile_slotfields::helper_75587c,
+        |value| value
+    );
+    stock_export!(
+        xm1_power_record_helper_7559bc,
+        helper_7559bc_abi,
+        (),
+        (handle: u32) -> u32,
+        (handle: u32),
+        (handle),
+        crate::record_profile_slotfields::helper_7559bc,
+        |value| value
+    );
+    stock_export!(
+        xm1_power_record_helper_755c5c,
+        helper_755c5c_abi,
+        (),
+        (handle: u32) -> u32,
+        (handle: u32),
+        (handle),
+        crate::record_profile_slotfields::helper_755c5c,
+        |value| value
+    );
+    stock_export!(
+        xm1_power_record_helper_755914,
+        helper_755914_abi,
+        (),
+        (handle: u32, index: u32) -> u32,
+        (handle: u32, index: u32),
+        (handle, index),
+        crate::record_profile_slotfields::helper_755914,
+        |value| value.get()
+    );
+    stock_export!(
+        xm1_power_record_helper_755a5c,
+        helper_755a5c_abi,
+        (),
+        (handle: u32, index: u32) -> u32,
+        (handle: u32, index: u32),
+        (handle, index),
+        crate::record_profile_slotfields::helper_755a5c,
+        |value| value.get()
+    );
+    stock_export!(
+        xm1_power_record_helper_755bac,
+        helper_755bac_abi,
+        (),
+        (handle: u32, index: u32) -> u32,
+        (handle: u32, index: u32),
+        (handle, index),
+        crate::record_profile_slotfields::helper_755bac,
+        |value| value.get()
+    );
+    stock_export!(
+        xm1_power_record_helper_753a10,
+        helper_753a10_abi,
+        (),
+        (handle: u32, index: u32) -> u32,
+        (handle: u32, index: u32),
+        (handle, index),
+        crate::record_profile_slotfields::helper_753a10,
+        |value| value
+    );
     stock_export!(
         xm1_power_record_helper_752714,
         helper_752714_abi,
@@ -2384,6 +2604,26 @@ pub mod record_task43_selection_early_tail {
 pub mod record_task43_selection_lists {
     use super::stock_export;
     use crate::record_address_space::GuestAddress;
+    stock_export!(
+        xm1_power_record_helper_f160d0,
+        helper_f160d0_abi,
+        (),
+        () -> u32,
+        (),
+        (),
+        crate::record_task43_selection_lists::helper_f160d0,
+        |value| value as u32
+    );
+    stock_export!(
+        xm1_power_record_helper_f16184,
+        helper_f16184_abi,
+        (),
+        () -> u32,
+        (),
+        (),
+        crate::record_task43_selection_lists::helper_f16184,
+        |value| value as u32
+    );
     stock_export!(
         xm1_power_record_helper_f156d4,
         helper_f156d4_abi,

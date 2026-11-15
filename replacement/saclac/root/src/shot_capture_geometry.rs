@@ -22,7 +22,7 @@ fn rectangle_words(rectangle: Rectangle) -> [u32; 4] { [rectangle.top, rectangle
 
 fn rectangle(words: [u32; 4]) -> Rectangle { Rectangle { top: words[0], left: words[1], width: words[2], height: words[3] } }
 
-fn publish_areas(machine: &mut impl Machine, buffer: ClientRef, list: &AreaList) {
+pub(crate) fn publish_areas(machine: &mut impl Machine, buffer: ClientRef, list: &AreaList) {
     let mut bytes = [0; AREA_LIST_BYTES];
     list.write_into(&mut bytes);
     machine.write_u32(buffer.0, list.count);

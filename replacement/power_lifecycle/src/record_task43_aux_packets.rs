@@ -16,7 +16,7 @@ unsafe extern "C" {
     fn xm1_power_record_helper_69f8fc(key: u32) -> u32;
     fn xm1_power_record_helper_69fec8(key: u32) -> u32;
     fn xm1_power_record_helper_750474(request: u32) -> u32;
-    fn xm1_power_record_helper_7582c0(output: *mut u32, request: u32);
+    fn xm1_power_record_helper_7582c0(output: *mut u32) -> *mut u32;
     fn xm1_power_record_helper_758300(request: u32, input: *const u32);
     fn xm1_power_record_helper_fa95b8(request: u32, source: u32, mode: u32, first: *mut u32, second: *mut u32);
     fn xm1_power_record_helper_fa89b8(request: u32);
@@ -72,7 +72,7 @@ pub unsafe extern "C" fn xm1_power_record_helper_f3515c() {
         let request = word(0x016bfe48);
         if xm1_power_record_helper_69f8fc(0x5256) & 3 != 0 && xm1_power_record_helper_750474(request) == 1 && word(source + 0x44) == 1 {
             let mut exposure = [0u32; 10];
-            xm1_power_record_helper_7582c0(exposure.as_mut_ptr(), request);
+            xm1_power_record_helper_7582c0(exposure.as_mut_ptr());
             exposure[9] = 0;
             xm1_power_record_helper_758300(request, exposure.as_ptr());
             if xm1_power_record_helper_69f8fc(0x5256) & 2 != 0 {

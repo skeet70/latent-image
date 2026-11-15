@@ -77,20 +77,20 @@ impl DetectionPorts for StockDetection {
 
 /// Writes the status, state and box words a placement leaves in the caller's output; word 2 is
 /// not written, and without a box only the count (word 3) is cleared.
-fn write_placement(placement: &Placement, out: &mut [u32; 10]) {
-    out[0] = placement.status;
-    out[1] = placement.state;
+pub fn write_placement(placement: &Placement, mut write: impl FnMut(usize, u32)) {
+    write(0, placement.status);
+    write(1, placement.state);
     match placement.placed {
-        Some(placed) => out[3..].copy_from_slice(&[
-            placed.count,
-            placed.corner.x,
-            placed.corner.y,
-            placed.extent.height,
-            placed.extent.width,
-            placed.center.x,
-            placed.center.y,
-        ]),
-        None => out[3] = 0,
+        Some(placed) => {
+            write(3, placed.count);
+            write(4, placed.corner.x);
+            write(5, placed.corner.y);
+            write(6, placed.extent.height);
+            write(7, placed.extent.width);
+            write(8, placed.center.x);
+            write(9, placed.center.y);
+        }
+        None => write(3, 0),
     }
 }
 
@@ -104,7 +104,7 @@ fn write_framing(framing: &Framing, out: &mut [u32; 10]) {
 
 fn finish(result: Result<(Placement, Option<Framing>), crate::capture::detection::Refused>, out: &mut [u32; 10], framing: Option<&mut [u32; 10]>) -> u32 {
     let Ok((placement, used)) = result else { return REFUSED };
-    write_placement(&placement, out);
+    write_placement(&placement, |index, value| out[index] = value);
     if let (Some(used), Some(framing)) = (used, framing) {
         write_framing(&used, framing);
     }
@@ -130,7 +130,7 @@ pub fn rescale_detection(area: Option<&[u32; 4]>, to: Option<&[u32; 2]>, out: Op
     let (Some(area), Some(to), Some(out)) = (area, to, out) else { return REFUSED };
     let ratio = [area[3] as u16, (area[3] >> 16) as u16];
     let placement = rescale(&mut StockDetection, [area[0], area[1], area[2]], ratio, Extent { height: to[0], width: to[1] });
-    write_placement(&placement, out);
+    write_placement(&placement, |index, value| out[index] = value);
     0
 }
 

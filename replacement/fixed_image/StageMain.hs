@@ -43,7 +43,7 @@ main = do
         patched <- patchImage encoder rebuild decoder temporary ceilingPublications source Image4
         H.readRegular (64 * 1024 * 1024) patched >>= B.writeFile output
     [encoder, rebuild, decoder, source, bodyPath, symbolsPath, rowsPath, firstSymbolsPath, output] -> do
-      body <- H.readRegular 0x40000 bodyPath
+      body <- H.readRegular (fromIntegral (imageLimit - imageBase - headerBytes)) bodyPath
       symbols <- H.readRegular 0x400000 symbolsPath >>= either H.failH pure . F.parseSymbols
       begin <- F.symbolAddress <$> either H.failH pure (F.lookupSymbol symbols "__fixed_bss_start")
       end <- F.symbolAddress <$> either H.failH pure (F.lookupSymbol symbols "__fixed_bss_end")

@@ -476,7 +476,7 @@ pub fn post_statistics(
     completions: &[xm1_saclac_interface::Completion],
     statistics: &mut impl xm1_saclac_interface::Statistics,
 ) {
-    let (operation, message) = xm1_saclac_interface::stock::statistics::statistics_payload(payload);
+    let (operation, message) = xm1_saclac_interface::stock::statistics::statistics_payload_with_callbacks(payload, |word| statistics.resolve_callback(word));
     let request = xm1_saclac_interface::StatisticsRequest { operation, parameters: xm1_saclac_interface::stock::parameters(message.bytes()), completions };
     let _ = statistics.request(request);
 }

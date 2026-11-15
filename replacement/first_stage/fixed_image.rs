@@ -1,6 +1,6 @@
 use core::arch::asm;
 use core::ptr::{addr_of, read_volatile, write_volatile};
-use xm1_fixed_image_layout::{BLOCK_BYTES, HEADER_BYTES, IMAGE_BASE, IMAGE_LIMIT, RECORD_FLASH, RECORD_MAGIC};
+use xm1_fixed_image_layout::{BLOCK_BYTES, HEADER_BYTES, IMAGE_BASE, IMAGE_LIMIT, RECORD_BLOCKS, RECORD_FLASH, RECORD_MAGIC};
 use super::media;
 
 #[used]
@@ -26,7 +26,8 @@ pub unsafe fn xm1_first_stage_fixed_image_load() -> Result<(), LoadError> {
     media::read_units(RECORD_FLASH, IMAGE_BASE, 1).map_err(LoadError::Media)?;
     let length = header(2);
     if header(0) != RECORD_MAGIC || header(1) != IMAGE_BASE
-        || length <= HEADER_BYTES || length > IMAGE_LIMIT - IMAGE_BASE {
+        || length <= HEADER_BYTES || length > IMAGE_LIMIT - IMAGE_BASE
+        || length > RECORD_BLOCKS * BLOCK_BYTES {
         return Err(LoadError::Header);
     }
     let begin = header(5);
@@ -36,7 +37,7 @@ pub unsafe fn xm1_first_stage_fixed_image_load() -> Result<(), LoadError> {
         return Err(LoadError::Header);
     }
     if length > BLOCK_BYTES {
-        media::read_units(RECORD_FLASH + BLOCK_BYTES, IMAGE_BASE + BLOCK_BYTES, 1).map_err(LoadError::Media)?;
+        media::read_units(RECORD_FLASH + BLOCK_BYTES, IMAGE_BASE + BLOCK_BYTES, (length - 1) / BLOCK_BYTES).map_err(LoadError::Media)?;
     }
     let mut crc = 0xffff_ffffu32;
     for offset in HEADER_BYTES..length {

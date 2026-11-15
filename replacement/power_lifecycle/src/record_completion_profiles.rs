@@ -11,7 +11,7 @@ extern "C" {
     fn xm1_power_record_helper_754ae4(output: u32, profile: u32);
     fn xm1_power_record_helper_752928(output: u32, profile: u32, index: u32);
     fn xm1_power_record_helper_758578(output: u32, profile: u32);
-    fn xm1_power_record_helper_7582c0(output: u32, profile: u32);
+    fn xm1_power_record_helper_7582c0(output: u32) -> u32;
     fn xm1_power_record_helper_75641c(profile: u32, destination: u32);
     fn xm1_power_record_helper_75587c(profile: u32) -> u32;
     fn xm1_power_record_helper_755914(profile: u32, index: u32) -> u32;
@@ -147,7 +147,7 @@ pub unsafe extern "C" fn xm1_power_record_helper_efab18(profile: u32, status: u3
                 let mode = xm1_power_record_helper_74f1ac(profile);
                 let mut information = MaybeUninit::<[u32; 10]>::uninit();
                 let information = information.as_mut_ptr() as u32;
-                xm1_power_record_helper_7582c0(information, profile);
+                xm1_power_record_helper_7582c0(information);
                 let information_mode = word(information + 16);
                 put(word(slot + 56) + 0x5c, information_mode);
                 write_volatile((word(slot + 56) + 0x60) as *mut u16, read_volatile((information + 20) as *const u16));

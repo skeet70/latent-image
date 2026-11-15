@@ -4,7 +4,6 @@ use crate::engine::{
     dispatch_raw, CellIndex, CellSource, Machine, MachineTable, Ports, Row, State, StockCodeWord,
     TableBase, Tables, WordIndex, WordSource,
 };
-use crate::machine0::route;
 
 const CELL_TABLES: u32 = 0xf12f70;
 const ACTION_TABLES: u32 = 0xf133ec;
@@ -287,6 +286,13 @@ pub extern "C" fn xm1_saclac_dispatch(machine: u32, a1: u32, a2: u32) -> i32 {
 
 /// Machine 0's router entry retained stock callers enter at 0xefcb88.
 #[no_mangle]
-pub extern "C" fn xm1_saclac_router(event: u32, a2: u32) -> i32 {
-    route(&StockTables, &mut StockPorts, event, a2)
+pub extern "C" fn xm1_saclac_router(event: u32, _record: u32) -> i32 {
+    #[cfg(target_arch = "arm")]
+    {
+        let length = read_word(RECEIVE.0 + 4) as usize;
+        let parameters = unsafe { core::slice::from_raw_parts(RECEIVE_PAYLOAD.0 as *const u8, length) };
+        xm1_saclac_root::stock::composition::dispatch(event, parameters, &XM1_REQUIRES_LENS_SAFETY_CONTRACT)
+    }
+    #[cfg(not(target_arch = "arm"))]
+    { let _ = event; panic!("native saclac router requires ARM"); }
 }

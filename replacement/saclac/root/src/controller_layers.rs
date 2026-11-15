@@ -216,6 +216,7 @@ implement!(Results {
 implement!(Children { fn handle(&mut self, request: ChildRequest<'_>) -> ChildOutcome { self.children.handle(request) } });
 implement!(Statistics {
     type Error = <P as Statistics>::Error;
+    fn resolve_callback(&self, word: xm1_saclac_interface::stock::StockCallbackWord) -> xm1_saclac_interface::stock::StockCallbackWord { self.delivery.resolve_callback(word) }
     fn request(&mut self, request: StatisticsRequest<'_>) -> Result<(), Self::Error> { Statistics::request(&mut self.services.borrow_mut().peers, request) }
 });
 implement!(ImgDc {
@@ -300,7 +301,7 @@ implement!(s1_statistics_profile::Layers {
         lens::notify_bounds(detail, LensBounds(bounds), &mut Stock::new(machine));
     }
     fn mark_selection_changed(&mut self) {
-        xm1_focus_measurement_round::acquisition::ports::Ports::with_selection(&mut *self.services.borrow_mut(), |selection| selection.mark_value_changed());
+        self.services.borrow_mut().mark_selection_changed();
     }
     fn remap_lens_target(&mut self, request: RemapRequest) -> u16 {
         self.services.borrow_mut().stock.remap(RemapArguments([request.position as i32 as u32, request.reference, 0, request.target, 0, u32::from(request.convert), request.mode_index])).0

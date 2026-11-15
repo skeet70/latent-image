@@ -25,6 +25,7 @@ impl ResultWords {
 }
 
 pub trait Delivery {
+    fn resolve_callback(&self, word: xm1_saclac_interface::stock::StockCallbackWord) -> xm1_saclac_interface::stock::StockCallbackWord { word }
     fn report_results(&mut self, open: bool);
     fn enter(&mut self, callback: ClientCallback, result: ResultWords);
 }

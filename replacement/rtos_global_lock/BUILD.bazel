@@ -1,6 +1,6 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
-load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -15,6 +15,20 @@ xm1_rust_staticlib(
         "//replacement/rtos_reservation:src/lib.rs",
     ],
     rustc_flags = ["--cfg", "'feature=\"stage\"'"],
+)
+
+xm1_rust_rlib(
+    name = "global-lock-component",
+    src = "stage/abi.rs",
+    crate_name = "xm1_rtos_global_lock_component",
+    out = "arm/libxm1_rtos_global_lock_component.rlib",
+    data = [
+        "src/lib.rs",
+        "src/tests.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+        "//replacement/rtos_reservation:src/lib.rs",
+    ],
+    rustc_flags = ["--cfg", "'feature=\"stage\"'", "--cfg", "'feature=\"component\"'"],
 )
 
 [
