@@ -1006,27 +1006,6 @@
       }
     },
     {
-      "id": "saclac_root-root-30",
-      "shim": "saclac_root: saved-prefix publication uses platform byte-copy `0x74213c(0x16b510c, shot, 0x9c)`",
-      "kind": "trampoline into retained stock",
-      "other_side": "the platform byte-copy primitive",
-      "owned": "no",
-      "removal": "the platform owns byte-copy; Shot restoration and selected-grid reference are owned Rust calls",
-      "state": "required",
-      "evidence": [
-        {
-          "kind": "reference-only",
-          "contract": "replacement/saclac/root/BUILD.bazel",
-          "requirement": "Source/model boundary; not linked-image execution or removal acceptance. trampoline into retained stock."
-        }
-      ],
-      "predicates": {
-        "caller_closure": "unestablished",
-        "same_image_comparison": "unestablished",
-        "direct_owned_api": "unestablished"
-      }
-    },
-    {
       "id": "saclac_root-root-31",
       "shim": "saclac_root: `0x7407b0()`, `0x74081c()`, `0x740888(0, out_clock, 0, 0)`, `0x740e3c(address, bytes)`, `0x740e74(address, bytes)`, `0x72872c(point)`, fault `0xf46c20()`",
       "kind": "trampoline into retained stock",

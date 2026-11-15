@@ -404,6 +404,23 @@ fn owned_rate_tables_preserve_mode_and_admission_boundaries() {
         [0xfa_7604, 0xf5_ecb0, 0xf5_ecc0, 0xf4_ddbc].contains(address)
     }));
 }
+
+#[test]
+fn saved_settings_copy_uses_owned_memory_access() {
+    let kernel = fake::saclac_kernel();
+    let cx = kernel.task().unwrap();
+    let (machine, root) = fake::root_with(fake::peers(&cx), Bytes::default(), Entries::default());
+    let recognition = RefCell::new(SceneRecognition::new());
+    acquisition!(root, recognition, cx);
+    let source = xm1_saclac_interface::calc::SharedAddress(0x0020_0000);
+    let expected: [u8; 0x9c] = core::array::from_fn(|index| index as u8 ^ 0x5a);
+    memory(&machine, source.0, &expected);
+
+    root.write_saved_settings(source);
+
+    assert_eq!(core::array::from_fn::<_, 0x9c, _>(|index| machine.read_u8(0x16b_510c + index as u32)), expected);
+    assert!(!machine.take_entered().iter().any(|(address, _)| *address == 0x74_213c));
+}
 #[test]
 fn live_and_s1_keep_one_selection_preset_and_s1_consumes_the_controllers_change() {
     let kernel = fake::saclac_kernel();

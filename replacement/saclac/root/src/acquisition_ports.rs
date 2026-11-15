@@ -535,7 +535,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc, S:
         let list = self.with_shot(|state, _| state.saved_selection());
         boundary::place(&mut self.services.machine, boundary::region(branch).shot_copy.0, list.bytes());
     }
-    fn write_saved_settings(&mut self, record: SharedAddress) { boundary::write_saved_settings(&self.services.machine, record) }
+    fn write_saved_settings(&mut self, record: SharedAddress) { boundary::write_saved_settings(&mut self.services.machine, record) }
     fn copy_selection_to_saved(&mut self, record: SharedAddress) {
         self.with_shot(|state, _| state.retain_result_from(xm1_saclac_interface::selection::ResultBuffer(record.0)));
     }

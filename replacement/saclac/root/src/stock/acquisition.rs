@@ -415,9 +415,12 @@ pub const fn grid_address(branch: Branch) -> SharedAddress {
 }
 
 
-/// The saved setting prefix (0xf1fbe8) uses the platform's byte-copy primitive.
-pub fn write_saved_settings(machine: &impl Machine, record: SharedAddress) {
-    enter(machine, 0x74_213c, &[word(0x16b_510c), word(record.0), word(0x9c)]);
+/// The saved setting prefix 0xf1fbe8 copies from the shot record.
+pub fn write_saved_settings(machine: &mut impl Machine, record: SharedAddress) {
+    for offset in 0..0x9c {
+        let byte = machine.read_u8(record.0 + offset);
+        machine.write_u8(0x16b_510c + offset, byte);
+    }
 }
 
 
