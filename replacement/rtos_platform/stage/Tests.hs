@@ -5,13 +5,13 @@ module Main (main) where
 import Control.Monad (forM_)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
-import Data.Bits (xor)
+import Data.Bits (complement, xor)
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.List (isPrefixOf, sort)
 import qualified Data.Map.Strict as M
 import Data.Word (Word8, Word32)
 import Numeric (showHex)
-import Fixtures (fixtureDat)
+import Fixtures (fixtureDat, patternBytes)
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.UpdateContainer as U
 import Replacement.RtosOwnFirst.Regions (Domain (..), Extent (..), GuestAddress (..), extentEnd, extentStart)
@@ -53,7 +53,12 @@ hex :: Word32 -> String
 hex value = let digits = showHex value "" in replicate (8 - length digits) '0' ++ digits
 
 sourceFor :: Either StageError CanonicalSource
-sourceFor = canonicalSource fixtureDat (B.replicate 0xdae0 0) (B.replicate 0xdaa0 0)
+sourceFor = canonicalSource fixtureDat (fixtureLoader DomainA) (fixtureLoader DomainB)
+
+fixtureLoader :: Domain -> B.ByteString
+fixtureLoader domain =
+  let (offset, size) = if domain == DomainA then (0x60000, 0xdae0) else (0x70000, 0xdaa0)
+  in B.map complement (B.take size (B.drop offset (patternBytes 0x80000)))
 
 withLink :: Union -> Linked -> Either StageError (CanonicalSource, Admitted, Staged)
 withLink union linked = do
@@ -149,6 +154,17 @@ main = do
       Left _ -> False)
   expectLeft "entry thunk without a genuine positive-size body is refused" (const True)
     (resolveEntryTarget aliasImage [] [aliasPlacement] aliasEntry)
+  forM_ [DomainA, DomainB] $ \domain -> do
+    let mutate bytes = B.cons (B.head bytes `xor` 1) (B.tail bytes)
+        loader candidate = (if candidate == domain then mutate else id) (fixtureLoader candidate)
+    expectLeft ("same-size loader mismatch refuses in domain " ++ show domain)
+      (== LoaderMismatch domain)
+      (canonicalSource fixtureDat (loader DomainA) (loader DomainB))
+    expectLeft ("truncated loader refuses in domain " ++ show domain)
+      (== LoaderMismatch domain)
+      (canonicalSource fixtureDat
+        ((if domain == DomainA then B.tail else id) (fixtureLoader DomainA))
+        ((if domain == DomainB then B.tail else id) (fixtureLoader DomainB)))
   case withLink synthetic (linkedFor synthetic) of
     Left err -> check ("positive admission: " ++ show err) False
     Right (source, admitted, staged) -> do
