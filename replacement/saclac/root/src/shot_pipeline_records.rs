@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use xm1_saclac_config::{dump, limits::{self, Kind, Limit, Side, WordQuery}, numeric, stock::StockDumpBuffer, table::{self, Row, Step}};
+use xm1_saclac_config::{limits::{self, Kind, Limit, Side, WordQuery}, numeric, stock::StockDumpBuffer, table::{self, Row, Step}};
 use xm1_saclac_shared::settings::Channel;
 use xm1_saclac_interface::RecordHandle;
 use xm1_saclac_profile_records::{stock::{record as r, shared as s}, Memory, SharedHeaderByte, StockEntries};
@@ -10,10 +10,10 @@ use crate::{calibration_inputs::{self, Native}, shot_services::Libraries};
 
 impl<M: Machine + Clone, R: Memory, E: StockEntries, P, I, T, A, Q> PipelineRecords for Libraries<'_, M, R, E, P, I, T, A, Q> {
     fn stamp_frame(&mut self, frame: Frame, lens_reference: u32) {
-        if frame.0 == 0 { return; }
         let services = self.services.borrow();
-        let dump = dump::configuration_dump(&services.stock, &mut Native(&services.machine, &services.stock), &mut Native(&services.machine, &services.stock), Channel(lens_reference as i32));
-        StockDumpBuffer { address: frame.0, memory: Native(&services.machine, &services.stock) }.write_configuration(&dump);
+        StockDumpBuffer { address: frame.0, memory: Native(&services.machine, &services.stock) }.export_configuration(
+            &services.stock, &mut Native(&services.machine, &services.stock), &mut Native(&services.machine, &services.stock), Channel(lens_reference as i32),
+        );
     }
     fn resource(&mut self, record: RecordHandle) -> u32 {
         u32::from(self.services.borrow_mut().entries.header_byte(record, SharedHeaderByte::At47))

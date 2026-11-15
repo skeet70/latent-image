@@ -134,3 +134,17 @@ fn the_corrected_grid_reads_the_source_when_corrected() {
     state.correct_grid(&mut world);
     assert_eq!(state.corrected_grid()[7], 600);
 }
+
+#[test]
+fn workspace_fields_zero_extend_at_the_selected_record_boundary() {
+    let (state, _) = reset();
+    assert_eq!(workspace_field(&state, Workspace::References, 0x213, Width::Word), 0);
+    assert_eq!(workspace_field(&state, Workspace::References, 0x214, Width::Byte), 100);
+    assert_eq!(workspace_field(&state, Workspace::References, 20 * 0x214, Width::Word), 0);
+    for workspace in [Workspace::PrimaryCodes, Workspace::SecondaryCodes, Workspace::Changes] {
+        assert_eq!(workspace_field(&state, workspace, 19, Width::Word), 100);
+        assert_eq!(workspace_field(&state, workspace, 20, Width::SignedHalf), 0);
+    }
+    assert_eq!(workspace_field(&state, Workspace::Stationary, 20 * 0x24, Width::Word), 0);
+    assert_eq!(workspace_field(&state, Workspace::Comparisons, 5 * 0x450, Width::Word), 0);
+}

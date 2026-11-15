@@ -6,7 +6,7 @@ use xm1_saclac_interface::stock::{callback_word, reply_target_code, StockCallbac
 use xm1_saclac_interface::{ClientCallback, ReplyTarget};
 
 use crate::commands::{ClientArguments, Clients, CommandMemory, StoredCommand};
-use crate::display::{Display, DisplayRoute, Outputs};
+use crate::display::{CaptureDisplay, CaptureDisplayStatus, Display, DisplayRoute, Outputs};
 use crate::image_registers::{pack_window_limits, RegisterGroup, RegisterSnapshot, WindowLimits};
 use crate::lens::{LensBounds, LensControl, LensNotices, LensProbe, Notice, ProbeState, Rendezvous};
 use crate::lens_com::{LensComClient, RequestNumber};
@@ -460,11 +460,22 @@ const STATUS_GATE: usize = 7;
 const STATUS_OUTPUTS: core::ops::Range<usize> = 16..20;
 
 impl<M: Machine> Stock<M> {
-    /// The display driver's 60-byte status record (0x6c4c08).
+    //0x6c4bec copies all 60 bytes under the display driver's critical section and returns 1.
     fn status(&self) -> [u8; STATUS_BYTES] {
         let mut status = [0u8; STATUS_BYTES];
-        self.machine.enter(DISPLAY_STATUS, &[status.as_mut_ptr() as usize]);
+        self.machine.enter_with(DISPLAY_STATUS, &[Argument::Buffer(0)], &mut status);
         status
+    }
+}
+
+impl<M: Machine> CaptureDisplayStatus for Stock<M> {
+    fn capture_display(&self) -> CaptureDisplay {
+        if self.machine.read_u8(0x0093_adf1) == 0 { return CaptureDisplay::FeatureOff; }
+        match self.status()[5] {
+            1 => CaptureDisplay::ModeOne,
+            2 => CaptureDisplay::ModeTwo,
+            _ => CaptureDisplay::OtherMode,
+        }
     }
 }
 

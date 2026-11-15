@@ -461,3 +461,20 @@ fn display_route_gate_and_outputs_come_from_the_driver_entries() {
     assert_eq!(active_outputs(&stock), Outputs(0));
     assert!(fake.calls().iter().all(|call| matches!(call, Call::Enter(0x6c_4bec, _) | Call::Enter(0x6c_68c0, _))));
 }
+
+#[test]
+fn capture_display_reads_live_feature_before_the_driver_mode() {
+    use crate::display::{CaptureDisplay, CaptureDisplayStatus};
+    let (fake, stock) = stock();
+    assert_eq!(stock.capture_display(), CaptureDisplay::FeatureOff);
+    assert_eq!(fake.calls(), [Call::Read8(0x0093_adf1)]);
+    fake.set_word(0x0093_adf0, 0x8000);
+    for (mode, expected) in [(1, CaptureDisplay::ModeOne), (2, CaptureDisplay::ModeTwo), (0, CaptureDisplay::OtherMode), (0x80, CaptureDisplay::OtherMode), (0xff, CaptureDisplay::OtherMode)] {
+        let mut status = [0x37; 60];
+        status[5] = mode;
+        fake.set_status(status);
+        assert_eq!(stock.capture_display(), expected);
+    }
+    fake.set_word(0x0093_adf0, 0);
+    assert_eq!(stock.capture_display(), CaptureDisplay::FeatureOff);
+}

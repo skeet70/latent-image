@@ -4,7 +4,7 @@
 
 use xm1_saclac_interface::calc::SharedAddress;
 
-use crate::adjust::configuration::{History, HISTORY};
+use crate::adjust::configuration::HISTORY;
 use crate::exposure::ports::Property;
 use crate::scene_recognition::history::{Code, ComparisonRecord, FrameNote, IndexRecord, KeyRecord};
 use crate::scene_recognition::detectors::{CaptureFrame, FrameRecord, LiveFrame};
@@ -372,20 +372,6 @@ pub enum Width {
     Word,
 }
 
-fn put(bytes: &mut [u8], at: usize, value: &[u8]) { bytes[at..at + value.len()].copy_from_slice(value) }
-
-fn put_word(bytes: &mut [u8], at: usize, value: u32) { put(bytes, at, &value.to_le_bytes()) }
-
-fn put_half(bytes: &mut [u8], at: usize, value: u16) { put(bytes, at, &value.to_le_bytes()) }
-
-fn put_grid(bytes: &mut [u8], at: usize, grid: &Grid) {
-    for (index, cell) in grid.iter().enumerate() {
-        put_half(bytes, at + 2 * index, *cell as u16);
-    }
-}
-
-fn code_byte(code: Option<Code>) -> u8 { code.map_or(EMPTY_CODE, Code::byte) }
-
 const KEY_RECORD_BYTES: usize = 0x214;
 const INDEX_RECORD_BYTES: usize = 0x24;
 const COMPARISON_RECORD_BYTES: usize = 0x450;
@@ -394,214 +380,233 @@ const EVALUATION_BYTES: usize = 0x974;
 const LIVE_TRACE_BYTES: usize = 0x5c;
 const CAPTURE_TRACE_BYTES: usize = 0x40;
 
-/// The note's grid, position and words; the snapshot's words follow a two-byte pad.
-fn note(bytes: &mut [u8], at: usize, note: &FrameNote, words_at: usize) {
-    put_grid(bytes, at, &note.grid);
-    put_half(bytes, at + 0x200, note.position as u16);
-    for (index, word) in [u32::from(note.subject), note.reference, note.motion, u32::from(note.stationary)].into_iter().enumerate() {
-        put_word(bytes, at + words_at + 4 * index, word);
+fn word_byte(value: u32, at: usize) -> u8 { value.to_le_bytes()[at & 3] }
+fn half_byte(value: u16, at: usize) -> u8 { value.to_le_bytes()[at & 1] }
+fn grid_byte(grid: &Grid, at: usize) -> u8 { half_byte(grid[at / 2] as u16, at) }
+fn recognition_byte(value: Recognition, at: usize) -> u8 {
+    match at {
+        0..=3 => word_byte(value.scene.0, at),
+        4..=5 => half_byte(value.flags.0, at),
+        _ => 0,
     }
 }
 
-fn key_record(bytes: &mut [u8], at: usize, record: Option<&KeyRecord>) {
-    match record {
-        Some(record) => {
-            bytes[at] = record.code.byte();
-            note(bytes, at + 2, &record.note, 0x202);
+fn note_byte(note: &FrameNote, at: usize, words_at: usize) -> u8 {
+    match at {
+        0..=0x1ff => return grid_byte(&note.grid, at),
+        0x200..=0x201 => return half_byte(note.position as u16, at),
+        _ => {}
+    }
+    let Some(at) = at.checked_sub(words_at) else { return 0 };
+    let value = match at / 4 {
+        0 => u32::from(note.subject),
+        1 => note.reference,
+        2 => note.motion,
+        3 => u32::from(note.stationary),
+        _ => return 0,
+    };
+    word_byte(value, at)
+}
+
+fn key_byte(record: Option<&KeyRecord>, at: usize) -> u8 {
+    if at >= KEY_RECORD_BYTES { return 0; }
+    match (record, at) {
+        (Some(record), 0) => record.code.byte(),
+        (Some(record), 2..) => note_byte(&record.note, at - 2, 0x202),
+        (None, 0) => EMPTY_CODE,
+        _ => 0,
+    }
+}
+
+fn index_byte(record: &IndexRecord, at: usize) -> u8 {
+    match at {
+        0..=3 => word_byte(u32::from(record.stationary), at),
+        4..=7 => word_byte(u32::from(record.steady), at),
+        8 => record.count,
+        _ => 0,
+    }
+}
+
+fn comparison_byte(record: &ComparisonRecord, at: usize) -> u8 {
+    match at {
+        0..=0x213 => key_byte(Some(&record.reference), at),
+        0x214..=0x217 => word_byte(record.source.map_or(0, |source| source.0), at),
+        0x218..=0x417 => grid_byte(&record.compared, at - 0x218),
+        0x418..=0x419 => half_byte(record.mean, at),
+        0x41c..=0x41d => half_byte(record.position as u16, at),
+        0x41e..=0x41f => half_byte(record.previous_position as u16, at),
+        0x420..=0x421 => half_byte(record.position_change, at),
+        0x424..=0x427 => word_byte(u32::from(record.subject_present), at),
+        0x428..=0x42b => word_byte(record.motion, at),
+        0x42c..=0x437 => index_byte(&record.stationary, at - 0x42c),
+        _ => 0,
+    }
+}
+
+fn motion_byte(record: &crate::adjust::configuration::MotionRecord, at: usize) -> u8 {
+    match at {
+        0..=3 => word_byte(record.found, at),
+        4..=5 => half_byte(record.speed, at),
+        8..=11 => word_byte(record.published_kind, at),
+        12..=13 => half_byte(record.published_speed, at),
+        16..=19 => word_byte(record.dominant, at),
+        20..=21 => half_byte(record.average, at),
+        22..=23 => half_byte(record.average_scale, at),
+        24..=27 => word_byte(record.published_area, at),
+        28..=31 => word_byte(record.published_exposure, at),
+        36..=39 => word_byte(record.source, at),
+        _ => record.bytes.get(at).copied().unwrap_or(0),
+    }
+}
+
+fn features_byte(value: &Features, at: usize) -> u8 {
+    match at {
+        0..=5 => recognition_byte(value.selection, at),
+        6..=11 => value.tried[at - 6],
+        0x14..=0x1f => {
+            let level = match (at - 0x14) / 2 {
+                0 => value.level, 1 => value.primary_level, 2 => value.alternate_level,
+                3 => value.third_level, 4 => value.upper_level, _ => value.lower_level,
+            };
+            half_byte(level as u16, at)
         }
-        None => bytes[at] = EMPTY_CODE,
+        0x24..=0x25 => half_byte(value.at_38 as u16, at),
+        0x30..=0x37 => {
+            let half = match (at - 0x30) / 2 {
+                0 => value.position, 1 => value.lens_step, 2 => value.distance, _ => value.response,
+            };
+            half_byte(half as u16, at)
+        }
+        0x48..=0x4f => {
+            let bounds = &value.bounds[(at - 0x48) / 4];
+            half_byte(if at & 2 == 0 { bounds.high } else { bounds.low } as u16, at)
+        }
+        0x50..=0x77 => motion_byte(&value.motion, at - 0x50),
+        _ => {
+            let word = match at & !3 {
+                0x0c => value.at_005d, 0x10 => value.subjects, 0x20 => value.difference_answer,
+                0x28 => value.at_3c, 0x2c => value.status, 0x38 => value.at_4c,
+                0x3c => value.reference, 0x40 => value.state, 0x44 => value.selected,
+                0x78 => u32::from(value.stationary), 0x7c => u32::from(value.index_recorded),
+                _ => return 0,
+            };
+            word_byte(word, at)
+        }
     }
 }
 
-fn index_record(bytes: &mut [u8], at: usize, record: &IndexRecord) {
-    put_word(bytes, at, u32::from(record.stationary));
-    put_word(bytes, at + 4, u32::from(record.steady));
-    bytes[at + 8] = record.count;
-}
-
-fn comparison_record(bytes: &mut [u8], at: usize, record: &ComparisonRecord) {
-    key_record(bytes, at, Some(&record.reference));
-    put_word(bytes, at + 0x214, record.source.map_or(0, |source| source.0));
-    put_grid(bytes, at + 0x218, &record.compared);
-    put_half(bytes, at + 0x418, record.mean);
-    put_half(bytes, at + 0x41c, record.position as u16);
-    put_half(bytes, at + 0x41e, record.previous_position as u16);
-    put_half(bytes, at + 0x420, record.position_change);
-    put_word(bytes, at + 0x424, u32::from(record.subject_present));
-    put_word(bytes, at + 0x428, record.motion);
-    index_record(bytes, at + 0x42c, &record.stationary);
-}
-
-fn recognition(bytes: &mut [u8], at: usize, recognition: Recognition) {
-    put_word(bytes, at, recognition.scene.0);
-    put_half(bytes, at + 4, recognition.flags.0);
-}
-
-fn features(bytes: &mut [u8], features: &Features) {
-    recognition(bytes, 0x00, features.selection);
-    put(bytes, 0x06, &features.tried);
-    put_word(bytes, 0x0c, features.at_005d);
-    put_word(bytes, 0x10, features.subjects);
-    let levels = [features.level, features.primary_level, features.alternate_level, features.third_level, features.upper_level, features.lower_level];
-    for (index, level) in levels.into_iter().enumerate() {
-        put_half(bytes, 0x14 + 2 * index, level as u16);
-    }
-    put_word(bytes, 0x20, features.difference_answer);
-    put_half(bytes, 0x24, features.at_38 as u16);
-    put_word(bytes, 0x28, features.at_3c);
-    put_word(bytes, 0x2c, features.status);
-    for (index, half) in [features.position, features.lens_step, features.distance, features.response].into_iter().enumerate() {
-        put_half(bytes, 0x30 + 2 * index, half as u16);
-    }
-    put_word(bytes, 0x38, features.at_4c);
-    put_word(bytes, 0x3c, features.reference);
-    put_word(bytes, 0x40, features.state);
-    put_word(bytes, 0x44, features.selected);
-    for (index, bounds) in features.bounds.into_iter().enumerate() {
-        put_half(bytes, 0x48 + 4 * index, bounds.high as u16);
-        put_half(bytes, 0x4a + 4 * index, bounds.low as u16);
-    }
-    put(bytes, 0x50, &features.motion.encode());
-    put_word(bytes, 0x78, u32::from(features.stationary));
-    put_word(bytes, 0x7c, u32::from(features.index_recorded));
-}
-
-/// The evaluation as stock keeps it at state +0x14 and its saved copy at +0xfa8.
-fn evaluation(bytes: &mut [u8], evaluation: &Evaluation) {
-    features(bytes, &evaluation.features);
-    let choices = &evaluation.choices;
-    recognition(bytes, 0x80, choices.history);
-    recognition(bytes, 0x88, choices.majority);
-    put_word(bytes, 0x90, u32::from(choices.holding));
-    put_word(bytes, 0x94, u32::from(choices.recording));
-    bytes[0x98] = choices.recorded;
-    bytes[0x9c] = choices.held;
-    put_word(bytes, 0xa0, u32::from(choices.released));
-    put_word(bytes, 0xa4, u32::from(choices.unchanged));
+fn evaluation_byte(value: &Evaluation, at: usize) -> u8 {
+    let choices = &value.choices;
     let tally = &choices.tally;
-    put(bytes, 0xa8, &tally.detectors);
-    put(bytes, 0xae, &tally.weights);
-    for (index, answer) in tally.answers.into_iter().enumerate() {
-        put_word(bytes, 0xb4 + 4 * index, answer);
+    match at {
+        0..=0x7f => features_byte(&value.features, at),
+        0x80..=0x85 => recognition_byte(choices.history, at - 0x80),
+        0x88..=0x8d => recognition_byte(choices.majority, at - 0x88),
+        0x98 => choices.recorded,
+        0x9c => choices.held,
+        0xa8..=0xad => tally.detectors[at - 0xa8],
+        0xae..=0xb3 => tally.weights[at - 0xae],
+        0xb4..=0xcb => word_byte(tally.answers[(at - 0xb4) / 4], at),
+        0xcc => tally.weight,
+        0xd4..=0x523 => comparison_byte(&value.against_reference, at - 0xd4),
+        0x524..=0x737 => note_byte(&value.snapshot, at - 0x524, 0x204),
+        0x73c..=0x93b => grid_byte(&value.against_snapshot.compared, at - 0x73c),
+        0x93c..=0x93d => half_byte(value.against_snapshot.mean, at),
+        0x942..=0x943 => half_byte(value.against_snapshot.previous_position as u16, at),
+        0x944..=0x945 => half_byte(value.against_snapshot.position_change, at),
+        _ => {
+            let word = match at & !3 {
+                0x90 => u32::from(choices.holding), 0x94 => u32::from(choices.recording),
+                0xa0 => u32::from(choices.released), 0xa4 => u32::from(choices.unchanged),
+                0xd0 => tally.decision,
+                _ => return 0,
+            };
+            word_byte(word, at)
+        }
     }
-    bytes[0xcc] = tally.weight;
-    put_word(bytes, 0xd0, tally.decision);
-    comparison_record(bytes, 0xd4, &evaluation.against_reference);
-    note(bytes, 0x524, &evaluation.snapshot, 0x204);
-    put_grid(bytes, 0x73c, &evaluation.against_snapshot.compared);
-    put_half(bytes, 0x93c, evaluation.against_snapshot.mean);
-    put_half(bytes, 0x942, evaluation.against_snapshot.previous_position as u16);
-    put_half(bytes, 0x944, evaluation.against_snapshot.position_change);
 }
 
-fn lens_detectors(bytes: &mut [u8], at: usize, detectors: &LensDetectors) {
-    let words = [u32::from(detectors.matched), detectors.match_direction, u32::from(detectors.lens_moved), detectors.lens_direction, u32::from(detectors.lens_changed)];
-    for (index, word) in words.into_iter().enumerate() {
-        put_word(bytes, at + 4 * index, word);
+fn detectors_byte(value: &LensDetectors, at: usize) -> u8 {
+    let word = match at / 4 {
+        0 => u32::from(value.matched), 1 => value.match_direction,
+        2 => u32::from(value.lens_moved), 3 => value.lens_direction,
+        4 => u32::from(value.lens_changed),
+        _ => return 0,
+    };
+    word_byte(word, at)
+}
+
+fn live_trace_byte(value: &Trace, at: usize) -> u8 {
+    match at {
+        0x10..=0x23 => value.hints.entries()[at - 0x10].map_or(EMPTY_CODE, Code::byte),
+        0x34..=0x35 => half_byte(value.flags.0, at),
+        0x40..=0x53 => detectors_byte(&value.detectors, at - 0x40),
+        0x54..=0x5b => recognition_byte(value.promoted, at - 0x54),
+        _ => {
+            let word = match at & !3 {
+                0 => value.query.0, 4 => value.option, 8 => value.candidate.0, 12 => u32::from(value.ready),
+                0x24 => value.filtered.0, 0x28 => value.earlier_candidate.0,
+                0x2c => value.earlier_filtered.0, 0x30 => value.selection.0,
+                0x38 => u32::from(value.filter.position), 0x3c => u32::from(value.filter.level),
+                _ => return 0,
+            };
+            word_byte(word, at)
+        }
     }
 }
 
-fn codes(bytes: &mut [u8], at: usize, codes: &History<Code>) {
-    for (index, code) in codes.entries().iter().enumerate() {
-        bytes[at + index] = code_byte(*code);
-    }
-}
-
-fn live_trace(bytes: &mut [u8], trace: &Trace) {
-    for (index, word) in [trace.query.0, trace.option, trace.candidate.0, u32::from(trace.ready)].into_iter().enumerate() {
-        put_word(bytes, 4 * index, word);
-    }
-    codes(bytes, 0x10, &trace.hints);
-    for (index, word) in [trace.filtered.0, trace.earlier_candidate.0, trace.earlier_filtered.0, trace.selection.0].into_iter().enumerate() {
-        put_word(bytes, 0x24 + 4 * index, word);
-    }
-    put_half(bytes, 0x34, trace.flags.0);
-    put_word(bytes, 0x38, u32::from(trace.filter.position));
-    put_word(bytes, 0x3c, u32::from(trace.filter.level));
-    lens_detectors(bytes, 0x40, &trace.detectors);
-    recognition(bytes, 0x54, trace.promoted);
-}
-
-fn capture_trace(bytes: &mut [u8], trace: &CaptureTrace) {
-    for (index, word) in [trace.query.0, trace.option, trace.candidate.0, u32::from(trace.ready)].into_iter().enumerate() {
-        put_word(bytes, 4 * index, word);
-    }
-    lens_detectors(bytes, 0x10, &trace.detectors);
-    for (index, word) in [trace.group.0, trace.hint.0, trace.filtered.0].into_iter().enumerate() {
-        put_word(bytes, 0x24 + 4 * index, word);
-    }
-    recognition(bytes, 0x30, trace.selection);
-    recognition(bytes, 0x38, trace.promoted);
-}
-
-fn widen(bytes: &[u8], at: usize, width: Width) -> u32 {
-    let byte = |offset: usize| bytes.get(at + offset).copied().unwrap_or(0);
-    let half = u16::from_le_bytes([byte(0), byte(1)]);
-    match width {
-        Width::Byte => u32::from(byte(0)),
-        Width::Half => u32::from(half),
-        Width::SignedHalf => half as i16 as u32,
-        Width::Word => u32::from_le_bytes([byte(0), byte(1), byte(2), byte(3)]),
+fn capture_trace_byte(value: &CaptureTrace, at: usize) -> u8 {
+    match at {
+        0x10..=0x23 => detectors_byte(&value.detectors, at - 0x10),
+        0x30..=0x37 => recognition_byte(value.selection, at - 0x30),
+        0x38..=0x3f => recognition_byte(value.promoted, at - 0x38),
+        _ => {
+            let word = match at & !3 {
+                0 => value.query.0, 4 => value.option, 8 => value.candidate.0, 12 => u32::from(value.ready),
+                0x24 => value.group.0, 0x28 => value.hint.0, 0x2c => value.filtered.0,
+                _ => return 0,
+            };
+            word_byte(word, at)
+        }
     }
 }
 
 /// The field at `offset` of `workspace` as the capture dump reads it.
 pub fn workspace_field(state: &SceneRecognition, workspace: Workspace, offset: u32, width: Width) -> u32 {
     let offset = offset as usize;
-    let field = |bytes: &[u8], at: usize| widen(bytes, at, width);
-    match workspace {
-        Workspace::SavedEvaluation => {
-            let mut bytes = [0; EVALUATION_BYTES];
-            evaluation(&mut bytes, state.saved_evaluation());
-            field(&bytes, offset)
-        }
-        Workspace::SavedFeatures => {
-            let mut bytes = [0; FEATURES_BYTES + 8];
-            let (saved, chosen) = state.saved_features();
-            features(&mut bytes, saved);
-            recognition(&mut bytes, FEATURES_BYTES, chosen);
-            field(&bytes, offset)
-        }
-        Workspace::LiveTrace => {
-            let mut bytes = [0; LIVE_TRACE_BYTES];
-            live_trace(&mut bytes, state.live_trace());
-            field(&bytes, offset)
-        }
-        Workspace::CaptureTrace => {
-            let mut bytes = [0; CAPTURE_TRACE_BYTES];
-            capture_trace(&mut bytes, state.capture_trace());
-            field(&bytes, offset)
-        }
-        Workspace::Changes => {
-            let mut bytes = [0; HISTORY];
-            for (byte, change) in bytes.iter_mut().zip(state.changes().entries()) {
-                *byte = change.map_or(EMPTY_CODE, u8::from);
+    let (base, extent) = match workspace {
+        Workspace::SavedEvaluation => (0, EVALUATION_BYTES),
+        Workspace::SavedFeatures => (0, FEATURES_BYTES + 8),
+        Workspace::LiveTrace => (0, LIVE_TRACE_BYTES),
+        Workspace::CaptureTrace => (0, CAPTURE_TRACE_BYTES),
+        Workspace::Changes | Workspace::PrimaryCodes | Workspace::SecondaryCodes => (0, HISTORY),
+        Workspace::References => (offset / KEY_RECORD_BYTES * KEY_RECORD_BYTES, KEY_RECORD_BYTES),
+        Workspace::Stationary => (offset / INDEX_RECORD_BYTES * INDEX_RECORD_BYTES, INDEX_RECORD_BYTES),
+        Workspace::Comparisons => (offset / COMPARISON_RECORD_BYTES * COMPARISON_RECORD_BYTES, COMPARISON_RECORD_BYTES),
+    };
+    let byte = |index| {
+        let at = offset - base + index;
+        if at >= extent { return 0; }
+        match workspace {
+            Workspace::SavedEvaluation => evaluation_byte(state.saved_evaluation(), at),
+            Workspace::SavedFeatures => {
+                let (saved, chosen) = state.saved_features();
+                if at < FEATURES_BYTES { features_byte(saved, at) } else { recognition_byte(chosen, at - FEATURES_BYTES) }
             }
-            field(&bytes, offset)
+            Workspace::LiveTrace => live_trace_byte(state.live_trace(), at),
+            Workspace::CaptureTrace => capture_trace_byte(state.capture_trace(), at),
+            Workspace::Changes => state.changes().entries()[at].map_or(EMPTY_CODE, u8::from),
+            Workspace::PrimaryCodes => state.primary_codes().entries()[at].map_or(EMPTY_CODE, Code::byte),
+            Workspace::SecondaryCodes => state.secondary_codes().entries()[at].map_or(EMPTY_CODE, Code::byte),
+            Workspace::References => state.references().entries().get(base / KEY_RECORD_BYTES).map_or(0, |entry| key_byte(entry.as_ref(), at)),
+            Workspace::Stationary => state.stationary_history().get(base / INDEX_RECORD_BYTES).map_or(0, |entry| index_byte(entry, at)),
+            Workspace::Comparisons => state.comparisons().get(base / COMPARISON_RECORD_BYTES).map_or(0, |entry| comparison_byte(entry, at)),
         }
-        Workspace::PrimaryCodes | Workspace::SecondaryCodes => {
-            let list = if workspace == Workspace::PrimaryCodes { state.primary_codes() } else { state.secondary_codes() };
-            let mut bytes = [0; HISTORY];
-            codes(&mut bytes, 0, list);
-            field(&bytes, offset)
-        }
-        Workspace::References => {
-            let Some(entry) = state.references().entries().get(offset / KEY_RECORD_BYTES) else { return 0 };
-            let mut bytes = [0; KEY_RECORD_BYTES];
-            key_record(&mut bytes, 0, entry.as_ref());
-            field(&bytes, offset % KEY_RECORD_BYTES)
-        }
-        Workspace::Stationary => {
-            let Some(entry) = state.stationary_history().get(offset / INDEX_RECORD_BYTES) else { return 0 };
-            let mut bytes = [0; INDEX_RECORD_BYTES];
-            index_record(&mut bytes, 0, entry);
-            field(&bytes, offset % INDEX_RECORD_BYTES)
-        }
-        Workspace::Comparisons => {
-            let Some(entry) = state.comparisons().get(offset / COMPARISON_RECORD_BYTES) else { return 0 };
-            let mut bytes = [0; COMPARISON_RECORD_BYTES];
-            comparison_record(&mut bytes, 0, entry);
-            field(&bytes, offset % COMPARISON_RECORD_BYTES)
-        }
+    };
+    match width {
+        Width::Byte => u32::from(byte(0)),
+        Width::Half => u32::from(u16::from_le_bytes([byte(0), byte(1)])),
+        Width::SignedHalf => i32::from(i16::from_le_bytes([byte(0), byte(1)])) as u32,
+        Width::Word => u32::from_le_bytes([byte(0), byte(1), byte(2), byte(3)]),
     }
 }
