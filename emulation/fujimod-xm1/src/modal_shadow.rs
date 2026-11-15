@@ -319,11 +319,11 @@ fn earlier_irq_report(state: &State) -> EarlierIrqReport {
     let mut normalization_underflow_events = Vec::new();
     if let Some(target) = target_post_prefix_lr {
         for event in retained.iter().copied() {
-            match lr_relation(event.lr, target) {
-                LrRelation::NormalizedMatch => matching_events.push(event),
-                LrRelation::RawEqualWrongPhase => raw_equal_wrong_phase_events.push(event),
-                LrRelation::NormalizationUnderflow => normalization_underflow_events.push(event),
-                LrRelation::Different => {}
+            match event.lr.checked_sub(IRQ_VECTOR_LR_SUBTRACT) {
+                Some(return_pc) if return_pc == target => matching_events.push(event),
+                Some(_) if event.lr == target => raw_equal_wrong_phase_events.push(event),
+                None => normalization_underflow_events.push(event),
+                _ => {}
             }
         }
     }
@@ -333,29 +333,6 @@ fn earlier_irq_report(state: &State) -> EarlierIrqReport {
         raw_equal_wrong_phase_events, normalization_underflow_events, retained }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum LrRelation { NormalizedMatch, RawEqualWrongPhase, NormalizationUnderflow, Different }
-
-fn lr_relation(vector_entry_lr: u32, post_prefix_lr: u32) -> LrRelation {
-    let Some(return_pc) = vector_entry_lr.checked_sub(IRQ_VECTOR_LR_SUBTRACT) else {
-        return LrRelation::NormalizationUnderflow;
-    };
-    if return_pc == post_prefix_lr { LrRelation::NormalizedMatch }
-    else if vector_entry_lr == post_prefix_lr { LrRelation::RawEqualWrongPhase }
-    else { LrRelation::Different }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{LrRelation, lr_relation};
-
-    #[test]
-    fn vector_lr_is_compared_at_the_post_prefix_phase() {
-        assert_eq!(lr_relation(0x0069cc04, 0x0069cc00), LrRelation::NormalizedMatch);
-        assert_eq!(lr_relation(0x0069cc00, 0x0069cc00), LrRelation::RawEqualWrongPhase);
-        assert_eq!(lr_relation(3, 0), LrRelation::NormalizationUnderflow);
-    }
-}
 
 fn registers(snapshot: &Snapshot) -> [u32; 16] {
     let mut registers = [0; 16];
