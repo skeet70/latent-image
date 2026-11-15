@@ -171,8 +171,20 @@ pub struct Stock<M> {
     machine: M,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeviceCommandMonitoring { Enabled, Disabled }
+
 impl<M: Machine> Stock<M> {
     pub const fn new(machine: M) -> Self { Self { machine } }
+
+    /// Retained device-monitor bindings (0x7409f0 -> 0x69e0fc, 0x740a00 -> 0x69e148).
+    pub fn monitor_device_commands(&mut self, monitoring: DeviceCommandMonitoring) {
+        let entry = match monitoring {
+            DeviceCommandMonitoring::Enabled => 0x69_e0fc,
+            DeviceCommandMonitoring::Disabled => 0x69_e148,
+        };
+        self.machine.enter(entry, &[]);
+    }
 }
 
 /// One pending byte per command code (0xef9aec).

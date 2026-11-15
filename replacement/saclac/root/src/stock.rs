@@ -47,3 +47,14 @@ pub const REQUEST_ADJUSTMENT_SYNCHRONIZATION: u32 = 0x74_4c48;
 pub const SUBJECT_SELECTION_WAITER: u32 = 0x16a_04a4;
 pub const START_SUBJECT_SELECTION: u32 = 0xee_ccc0;
 pub const END_SUBJECT_SELECTION: u32 = 0xee_cddc;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ControlDistance(pub(crate) i16);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ControlDistanceLimit(pub i32);
+
+/// Retained control-distance limit primitive (0x1005700).
+pub fn control_distance_limit(machine: &impl xm1_saclac_shared::stock::Machine) -> ControlDistanceLimit {
+    ControlDistanceLimit(machine.enter(0x100_5700, &[]) as i32)
+}

@@ -5,9 +5,9 @@ use xm1_saclac_imaging::driver::Isp;
 use xm1_saclac_interface::{calculation::ResultPass, selection::{CellCode, SelectionClass, SubjectQuery}, ImageProcessor, RecordHandle};
 use xm1_saclac_profile_geometry::{controller::Tables, ports::Retained, profile::ProfileHandle, services::LevelPair};
 use xm1_saclac_profile_records::{stock::{record::group_00, shared::group_27}, Memory, SharedHeaderByte, StockEntries};
-use xm1_saclac_shared::stock::{Argument::Buffer, Machine};
+use xm1_saclac_shared::stock::Machine;
 use xm1_shot_sequence::{calculation_work::{CalculationProfile, CalculationProfiles}, grid_boundary::{BlendQuery, ClassLimits, ClassQuery, DefaultQuery, GridImaging, GridLibrary, GridProfiles, GridSetting, GridSettings, LevelQuery, LimitInputs, ReferenceQuery}};
-use crate::{calculation_services::Calculation, shot_services::Libraries, stock::acquisition::Aligned};
+use crate::{calculation_services::Calculation, shot_services::Libraries};
 
 fn pass_index(pass: ResultPass) -> u32 {
     match pass { ResultPass::Plain => 4, ResultPass::Grid(pass) => u32::from(pass.index()) }
@@ -80,11 +80,8 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor, I: Isp, 
         }))
     }
     fn settle_level(&mut self, level: i16) -> (i16, i16) {
-        let machine = self.services.borrow().machine.clone();
-        let mut bytes = Aligned([0; 4]);
-        bytes.0[..2].copy_from_slice(&level.to_le_bytes());
-        machine.enter_with(0x100_585c, &[Buffer(0), Buffer(2)], &mut bytes.0);
-        (i16::from_le_bytes([bytes.0[0], bytes.0[1]]), i16::from_le_bytes([bytes.0[2], bytes.0[3]]))
+        let split = crate::calibration_inputs::split_distance(&self.services.borrow().machine, crate::stock::ControlDistance(level));
+        (split.kept, split.excess)
     }
     fn floor_level(&mut self, level: i16) -> i16 {
         record_policy::floor_level(&mut *self.services.borrow_mut(), level)

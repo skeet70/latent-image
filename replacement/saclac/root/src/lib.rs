@@ -52,6 +52,7 @@ mod shot_capture_processing;
 mod shot_capture_library;
 mod shot_capture_moves;
 mod shot_capture_peers;
+mod shot_capture_platform;
 mod shot_records;
 mod shot_pipeline_records;
 mod shot_pipeline_peers;
