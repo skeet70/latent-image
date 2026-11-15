@@ -50,7 +50,7 @@ pub fn helper_1042e9c<M: GuestAddressSpace, E>(context: &mut RecordContext<M, E>
     }
     for index in 0..14 {
         let byte = context.read_u8(configuration.table.checked_add(index)?)?;
-        context.write_u8(GuestAddress::new(PREVIEW + 0x104 + index), byte)?;
+        context.write_u8(GuestAddress::new(PREVIEW + 0x108 + index), byte)?;
     }
     Ok(())
 }

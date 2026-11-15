@@ -1,32 +1,17 @@
 #![forbid(unsafe_code)]
 
-use xm1_saclac_calc::{adjust::{motion::{ports::{LensTables, MeasurementReadings}, plan::PlanKind, plan_result::FocusPublication, sampling::{PositionSamples, SpeedStep}, state::MotionState}, rate_samples::{self, RecorderSetup}}, exposure::ports::Placement, stock::{measurement::{MeasurementRecords, RECORDER_RESULTS}, motion as native_motion}};
+use xm1_saclac_calc::{adjust::{motion::{ports::{LensTables, MeasurementReadings}, plan::PlanKind, plan_result::FocusPublication, sampling::SpeedStep, state::MotionState}, rate_samples::{self, RecorderSetup}}, exposure::ports::Placement, stock::{measurement::{MeasurementRecords, RECORDER_RESULTS}, motion as native_motion}};
 use xm1_saclac_imaging::driver::Isp;
 use xm1_saclac_interface::{calc::{CalcPayload, Record, SharedAddress}, pipeline::{GradationRequest, ToneRequest, TONE_LEVELS}, Calc, Calc1, Completion, ImageProcessor, ImgDc, RecordHandle};
 use xm1_saclac_profile_geometry::controller::Tables;
 use xm1_saclac_profile_records::{Memory, StockEntries};
-use xm1_saclac_shared::stock::{Argument::Buffer, Machine};
+use xm1_saclac_shared::stock::Machine;
 use xm1_shot_sequence::{boundary::{LensPoint, LensReference}, pipeline_work::{AdjustmentPass, FocusResultOut, FrameFlags, PhaseAttribute, PipelineLibrary, Plan, PlanBlock, PlanInput, ResultKind, SampleSnapshot}, subjects::Candidates};
 use crate::{calculation_services::Calculation, motion_plan as blocks, motion_projection, round_ports::RoundPorts, shot_services::Libraries};
 
 const ADJUSTMENT: [u32; 7] = [0x16d7870, 0x16d7908, 0x16d79cc, 0x16d7a38, 0x16d7a50, 0x16d7a54, 0x16d7ae4];
 const RAW_SECOND: u32 = 0x16d84dc;
 
-struct CapturedPositions<M> { machine: M, address: u32, count: usize }
-impl<M: Machine> PositionSamples for CapturedPositions<M> {
-    fn count(&self) -> usize { self.count }
-    fn position(&self, index: usize) -> i16 {
-        assert!(index < self.count);
-        self.machine.read_u16(self.address.wrapping_add(2 * index as u32)) as i16
-    }
-}
-fn positions<M: Machine>(machine: M) -> CapturedPositions<M> {
-    let mut count = [0; 2];
-    let address = machine.enter_with(xm1_shot_sequence::stock::pipeline::CHANNEL_SAMPLES, &[Buffer(0)], &mut count);
-    let count = usize::from(u16::from_le_bytes(count));
-    assert!(count == 0 || address != 0, "capture samples require a buffer");
-    CapturedPositions { machine, address, count }
-}
 fn speed_step(snapshot: &SampleSnapshot, index: usize) -> SpeedStep {
     let at = 8 * index;
     SpeedStep { frame: snapshot.0[at], speed: u32::from_le_bytes(snapshot.0[at + 4..at + 8].try_into().unwrap()) }
@@ -123,7 +108,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + 
         assert_eq!(scan.0, blocks::SCAN);
         let index = usize::from(snapshot.0[0xa0]);
         assert!(index < 20, "capture schedule index");
-        let positions = positions(self.services.borrow().machine.clone());
+        let positions = crate::capture_samples::Samples::new(self.services.borrow().machine.clone());
         self.with_motion(|state, calculation| state.replan_from_run(calculation, (0..index).map(|i| speed_step(snapshot, i)), speed_step(snapshot, index), &positions));
     }
     fn store_channel_sample(&mut self, scan: PlanBlock, sample: i16, index: u8) {

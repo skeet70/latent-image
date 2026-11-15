@@ -89,7 +89,7 @@ impl<M: Machine + Clone> Native<'_, M> {
     fn record(&self) -> RecordContext<RecordMemory<'_, M>, ()> { runtime(self.0) }
 }
 
-struct RecordMemory<'a, M>(&'a M);
+pub(crate) struct RecordMemory<'a, M>(&'a M);
 impl<M: Machine + Clone> GuestAddressSpace for RecordMemory<'_, M> {
     fn domain(&self) -> GuestDomain { GuestDomain::A }
     fn read_u8(&mut self, at: GuestAddress) -> Result<u8, MemoryError> { Ok(self.0.read_u8(at.get())) }
@@ -109,7 +109,7 @@ impl<M: Machine + Clone> GuestAddressSpace for RecordMemory<'_, M> {
     }
 }
 
-fn runtime<M: Machine + Clone>(machine: &M) -> RecordContext<RecordMemory<'_, M>, ()> {
+pub(crate) fn runtime<M: Machine + Clone>(machine: &M) -> RecordContext<RecordMemory<'_, M>, ()> {
     RecordContext::new(RecordMemory(machine), ())
 }
 

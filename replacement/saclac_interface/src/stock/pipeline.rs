@@ -146,7 +146,7 @@ pub fn statistics_blocks(setup: &StatisticsSetup) -> StatisticsBlocks {
     }
 }
 
-/// The weights 0xf20b60 hands to 0x1042e9c, in its argument order after the target.
+/// The scalar arguments to0x1042e9c, after the target handle and fourteen-byte table pointer.
 pub fn statistics_weights_arguments(weights: &StatisticsWeights) -> [u32; 7] {
     [u32::from(weights.mode), u32::from(weights.extent[0]), u32::from(weights.extent[1]), u32::from(weights.origin[0]), u32::from(weights.origin[1]),
         u32::from(weights.size[0]), u32::from(weights.size[1])]
