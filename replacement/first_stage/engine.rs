@@ -79,6 +79,67 @@ pub enum EngineError {
     Page,
 }
 
+#[derive(Clone, Copy)]
+pub struct JobLength(u32);
+
+impl JobLength {
+    pub fn from_register_field(value: u32) -> Self {
+        Self(value & 0x7ffff)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum Framing {
+    Method4,
+    Framed,
+}
+
+impl Framing {
+    pub fn from_header_mode(mode: u8) -> Self {
+        if mode == 4 { Self::Method4 } else { Self::Framed }
+    }
+}
+
+pub fn reset<B: Bus>(bus: &mut B) {
+    bus.write(Register::Engine(EngineRegister::Enable), 0);
+    bus.write(Register::Engine(EngineRegister::Reset), 0);
+    while bus.read(Register::Engine(EngineRegister::Reset)) & 1 == 0 {}
+    bus.write(Register::Engine(EngineRegister::Status), STATUS_CLEAR);
+}
+
+pub fn program<B: Bus>(bus: &mut B, source: Source, destination: Destination, length: JobLength, framing: Framing) {
+    let framed = match framing { Framing::Method4 => 0, Framing::Framed => 1 << 24 };
+    bus.write(Register::Engine(EngineRegister::Source), source.0);
+    bus.write(Register::Engine(EngineRegister::Length), length.0 | framed);
+    bus.write(Register::Engine(EngineRegister::Destination), destination.0);
+    bus.write(Register::Engine(EngineRegister::Control), CONTROL);
+    bus.write(Register::Engine(EngineRegister::Enable), 1);
+}
+
+pub fn trigger<B: Bus>(bus: &mut B) {
+    bus.write(Register::Engine(EngineRegister::Start), 2);
+}
+
+pub fn completed<B: Bus>(bus: &mut B) -> Result<bool, EngineError> {
+    let status = bus.read(Register::Engine(EngineRegister::Status));
+    if status & STATUS_FAULT_MASK != 0 {
+        Err(EngineError::Fault(status))
+    } else {
+        Ok(status & 1 != 0)
+    }
+}
+
+pub fn take_output<B: Bus>(bus: &mut B) -> u32 {
+    let count = bus.read(Register::Engine(EngineRegister::OutputCount));
+    bus.write(Register::Engine(EngineRegister::Status), 1);
+    count
+}
+
+pub fn close<B: Bus>(bus: &mut B) {
+    bus.write(Register::Engine(EngineRegister::Enable), 0);
+    bus.write(Register::Engine(EngineRegister::Status), STATUS_CLEAR);
+}
+
 pub trait ClockControl {
     fn open<B: Bus>(bus: &mut B);
     fn close<B: Bus>(bus: &mut B);
@@ -125,10 +186,7 @@ impl<B: Bus> Session<B, BootClock> {
 impl<B: Bus, C: ClockControl> Session<B, C> {
     pub fn open_with_clock(mut bus: B) -> Self {
         C::open(&mut bus);
-        bus.write(Register::Engine(EngineRegister::Enable), 0);
-        bus.write(Register::Engine(EngineRegister::Reset), 0);
-        while bus.read(Register::Engine(EngineRegister::Reset)) & 1 == 0 {}
-        bus.write(Register::Engine(EngineRegister::Status), STATUS_CLEAR);
+        reset(&mut bus);
         Self { bus, clock: core::marker::PhantomData }
     }
 
@@ -136,26 +194,16 @@ impl<B: Bus, C: ClockControl> Session<B, C> {
         if length == 0 || length > 0x7ffff {
             return Err(EngineError::Length);
         }
-        self.bus.write(Register::Engine(EngineRegister::Source), source.0);
-        self.bus.write(Register::Engine(EngineRegister::Length), length);
-        self.bus.write(Register::Engine(EngineRegister::Destination), destination.0);
-        self.bus.write(Register::Engine(EngineRegister::Control), CONTROL);
-        self.bus.write(Register::Engine(EngineRegister::Enable), 1);
-        self.bus.write(Register::Engine(EngineRegister::Start), 2);
+        program(&mut self.bus, source, destination, JobLength(length), Framing::Method4);
+        trigger(&mut self.bus);
         self.wait()?;
-        let count = self.bus.read(Register::Engine(EngineRegister::OutputCount));
-        self.bus.write(Register::Engine(EngineRegister::Status), 1);
-        Ok(count)
+        Ok(take_output(&mut self.bus))
     }
 
     /// Stock 0x3d08 treats fault bits 8-11 as a halt.
     fn wait(&mut self) -> Result<(), EngineError> {
         loop {
-            let status = self.bus.read(Register::Engine(EngineRegister::Status));
-            if status & STATUS_FAULT_MASK != 0 {
-                return Err(EngineError::Fault(status));
-            }
-            if status & 1 != 0 {
+            if completed(&mut self.bus)? {
                 return Ok(());
             }
         }
@@ -163,8 +211,7 @@ impl<B: Bus, C: ClockControl> Session<B, C> {
 
     /// Stock 0x3c1c then 0x3b9c.
     pub fn close(mut self) -> B {
-        self.bus.write(Register::Engine(EngineRegister::Enable), 0);
-        self.bus.write(Register::Engine(EngineRegister::Status), STATUS_CLEAR);
+        close(&mut self.bus);
         C::close(&mut self.bus);
         self.bus
     }

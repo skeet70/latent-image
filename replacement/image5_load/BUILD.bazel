@@ -1,5 +1,5 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
-load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -17,6 +17,24 @@ haskell_binary(
     ],
 )
 
+haskell_binary(
+    name = "image5-decoder-source",
+    srcs = ["DecoderSource.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:json",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
+        "//replacement/media_permit:stock-inventory",
+        "//replacement/startup_artifact:startup-artifact",
+    ],
+)
+
 xm1_rust_staticlib(
     name = "image5-load-rust",
     src = "src.rs",
@@ -30,6 +48,67 @@ xm1_rust_elf(
     entry = "xm1_image5_load_entry",
     link_script = "image5-load.ld",
     extra_ldflags = ["-Wl,--gc-sections"],
+)
+
+xm1_rust_staticlib(
+    name = "image5-decoder-rust",
+    src = "decoder.rs",
+    crate_name = "xm1_image5_decoder",
+    data = ["decoder_native.rs", "//replacement/first_stage:engine.rs"],
+    rustc_flags = ["--cfg", "decoder_standalone"],
+)
+
+xm1_rust_rlib(
+    name = "decoder-arm",
+    src = "decoder.rs",
+    crate_name = "xm1_image5_decoder",
+    data = ["decoder_native.rs", "//replacement/first_stage:engine.rs"],
+    out = "arm/libxm1_image5_decoder.rlib",
+)
+
+xm1_rust_elf(
+    name = "image5-decoder-measure",
+    rust_staticlib = ":image5-decoder-rust",
+    entry = "xm1_decoder_init",
+    link_script = "decoder.ld",
+    extra_ldflags = ["-Wl,--gc-sections"],
+    link_map = True,
+)
+
+haskell_binary(
+    name = "image5-decoder-artifact",
+    srcs = ["DecoderArtifact.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    deps = [
+        ":image5-load-artifact",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
+        "//host:first-stage",
+        "//host:host-support",
+        "//host:json",
+        "//host:update-container",
+        "//replacement/fixed_image:contract",
+    ],
+)
+
+genrule(
+    name = "decoder-fixed-script",
+    srcs = ["decoder.ld"],
+    outs = ["decoder-fixed.ld"],
+    tools = [":image5-decoder-artifact"],
+    cmd = "$(location :image5-decoder-artifact) script $(location decoder.ld) > $@",
+)
+
+xm1_rust_elf(
+    name = "image5-decoder-image",
+    rust_staticlib = "//replacement/bank:bank-image5-decoder",
+    entry = "xm1_decoder_init",
+    link_script = ":decoder-fixed-script",
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
+    link_map = True,
 )
 
 haskell_library(

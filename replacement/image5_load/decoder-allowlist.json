@@ -1,0 +1,20 @@
+{
+  "schema": 2,
+  "stock_calls": [
+    {"address":"0x00723cb8","name":"initialization-task-query","source":"replacement/image5_load/decoder.ld"},
+    {"address":"0x00724b68","name":"resource-take","source":"replacement/image5_load/decoder.ld"},
+    {"address":"0x00724c00","name":"resource-give","source":"replacement/image5_load/decoder.ld"},
+    {"address":"0x006499d0","name":"engine-route","source":"replacement/image5_load/decoder.ld"},
+    {"address":"0x00649c4c","name":"clock-reserve","source":"replacement/image5_load/decoder.ld"},
+    {"address":"0x00649ddc","name":"clock-release","source":"replacement/image5_load/decoder.ld"},
+    {"address":"0x0064e918","name":"irq-source-attach","source":"replacement/image5_load/decoder.ld"},
+    {"address":"0x0064eb20","name":"irq-source-detach","source":"replacement/image5_load/decoder.ld"},
+    {"address":"0x00042188","name":"marker","source":"replacement/image5_load/decoder.ld"},
+    {"address":"0x006ae1dc","name":"owned-progress-entry-veneer","source":"replacement/image5_load/DecoderArtifact.hs"},
+    {"address":"0x006ae310","name":"owned-complete-entry-veneer","source":"replacement/image5_load/DecoderArtifact.hs"}
+  ],
+  "stock_regions": [
+    {"address":"0xfff43000","bytes":256,"name":"decompression-engine-registers","source":"replacement/first_stage/engine.rs"},
+    {"address":"0x007819d0","bytes":20,"name":"stream-marker-identifiers","source":"replacement/image5_load/decoder.rs"}
+  ]
+}
