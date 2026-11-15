@@ -31,13 +31,13 @@ word :: Word32 -> B.ByteString
 word value = B.pack [fromIntegral (value `shiftR` n) | n <- [0,8,16,24]]
 
 elf :: B.ByteString
-elf = B.pack [byte i | i <- [0..0x3c7]]
+elf = B.pack [byte i | i <- [0..0x63f]]
   where
     names = "\0xm1_playback_source_entry\0xm1_playback_mode_entry\0"
-    sectionNames = "\0.text\0.symtab\0.strtab\0.shstrtab\0"
+    sectionNames = "\0.text\0.symtab\0.strtab\0.shstrtab\0.ram_push.rendezvous\0.ram_push.mailbox\0.ram_push.publications\0"
     header = B.pack [127,69,76,70,1,1,1] <> B.replicate 9 0
       <> B.pack [2,0,40,0] <> word 1 <> word 0x10000 <> word 0 <> word 0x300 <> word 0
-      <> B.pack [52,0,32,0,0,0,40,0,5,0,4,0]
+      <> B.pack [52,0,32,0,0,0,40,0,8,0,4,0]
     symbol name value = word name <> word value <> word 4 <> B.pack [0x12,0,1,0]
     section name typ flags addr offset size link entsize = B.concat (map word [name,typ,flags,addr,offset,size,link,0,4,entsize])
     sections = B.replicate 40 0
@@ -45,13 +45,25 @@ elf = B.pack [byte i | i <- [0..0x3c7]]
       <> section 7 2 0 0 0x110 48 3 16
       <> section 15 3 0 0 0x140 (fromIntegral (B.length names)) 0 0
       <> section 23 3 0 0 0x200 (fromIntegral (B.length sectionNames)) 0 0
+      <> section 33 1 3 0x15000 0x440 128 0 0
+      <> section 54 1 3 0x15080 0x4c0 128 0 0
+      <> section 72 1 3 0x15100 0x540 256 0 0
     chunks = [(0,header),(0x100,B.replicate 8 0),(0x110,B.replicate 16 0 <> symbol 1 0x10000 <> symbol 27 0x10004),(0x140,names),(0x200,sectionNames),(0x300,sections)]
     byte i = case [B.index bytes (i-offset) | (offset,bytes) <- chunks, i >= offset, i-offset < B.length bytes] of
       x:_ -> x
       [] -> 0
 
 runtime :: B.ByteString
-runtime = B.replicate 256 0
+runtime = B.replicate 0x5200 0
+
+completedRuntime :: B.ByteString
+completedRuntime = B.take 0x5000 runtime <> B.concat (map word
+  [4,9,0,0x4003,0,0,0,0,3,0,0,0,0,0,0,0,9,386,0,0,0,0,0,0,9,0x8003,0,16,0,0,0,0
+  ,0x31504d52,7,9,1,0,16,8,8,0,0x4003,9,0x8003,0,16,0x80000,82,9,9,9,291,386,0,0,0,0,0,0,0,0,0,0,0])
+  <> B.drop 0x5100 runtime
+
+changeByte :: Int -> B.ByteString -> B.ByteString
+changeByte offset bytes = B.take offset bytes <> B.singleton 1 <> B.drop (offset+1) bytes
 
 hook :: Word32 -> Word32 -> Word32 -> T.Text -> T.Text -> Value
 hook site end target name hash = object
@@ -93,10 +105,14 @@ main = do
   package <- either fail pure (P.parsePackage (json manifest) (json metadata) runtime elf)
   check "runtime mutation refused" (isLeft (P.parsePackage (json manifest) (json metadata) (B.cons 1 (B.drop 1 runtime)) elf))
   check "extra hook refused" (isLeft (P.parsePackage (json manifest) (json (put "hooks" (A.toJSON ([] :: [Value])) metadata)) runtime elf))
-  check "guest upload alone has no execution witness" (isRight (P.checkGuestArtifacts package (P.guestArtifacts package)))
-  check "guest identity reads only the allocated immutable ELF bytes" (case P.guestArtifacts package of
-    (0x10000, bytes) : _ -> bytes == B.replicate 8 0
-    _ -> False)
+  let installed bytes = (0x10000,bytes) : drop 1 (P.guestArtifacts package)
+  check "uploaded initializer is not a completed install" (isLeft (P.checkGuestArtifacts package (P.guestArtifacts package)))
+  check "completed scalar installation reports admitted" (isRight (P.checkGuestArtifacts package (installed completedRuntime)))
+  check "active entry mutation refused" (isLeft (P.checkGuestArtifacts package (installed (changeByte 0 completedRuntime))))
+  check "writable publication table mutation refused" (isLeft (P.checkGuestArtifacts package (installed (changeByte 0x5100 completedRuntime))))
+  check "rendezvous padding mutation refused" (isLeft (P.checkGuestArtifacts package (installed (changeByte 0x5010 completedRuntime))))
+  check "unsuccessful installer status refused" (isLeft (P.checkGuestArtifacts package (installed (changeByte 0x5090 completedRuntime))))
+  check "incomplete peer callback refused" (isLeft (P.checkGuestArtifacts package (installed (changeByte 0x50c8 completedRuntime))))
   check "guest publication mutation refused" (isLeft (P.checkGuestArtifacts package [(0x10000,runtime)]))
   check "original source identity mutation refused" (isLeft (P.checkOriginalBodies package [B.replicate 868 0,B.replicate 700 0]))
   let request = P.watchRequest package
