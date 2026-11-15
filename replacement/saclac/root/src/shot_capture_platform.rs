@@ -14,6 +14,12 @@ impl<S: Adjustments> Properties for Configuration<'_, S> {
     }
 }
 
+pub(crate) fn dump_configuration(machine: &mut impl Machine, settings: &impl Adjustments, destination: u32) {
+    for (index, value) in xm1_saclac_calc::adjust::rate_policy::configuration_words(&mut Configuration(settings)) {
+        machine.write_u32(destination.wrapping_add((index as u32 + 1) * 4), value);
+    }
+}
+
 impl<M: Machine + Clone, R: Memory, E: StockEntries, P, I, T, A, Q> CaptureDiagnostics for Libraries<'_, M, R, E, P, I, T, A, Q> {
     fn trace(&mut self, trace: CaptureTrace) {
         self.services.borrow().machine.enter(0x72_872c, &[xm1_shot_sequence::capture_stock::trace_word(trace) as usize]);
@@ -69,9 +75,6 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: xm1_saclac_interface::Im
 
     fn prepare_dump_area(&mut self, frame: Frame, offset: FrameOffset) {
         let services = self.services.borrow();
-        let mut machine = services.machine.clone();
-        for (index, value) in xm1_saclac_calc::adjust::rate_policy::configuration_words(&mut Configuration(&services.stock)) {
-            machine.write_u32(frame.0.wrapping_add(offset.0).wrapping_add((index as u32 + 1) * 4), value);
-        }
+        dump_configuration(&mut services.machine.clone(), &services.stock, frame.0.wrapping_add(offset.0));
     }
 }

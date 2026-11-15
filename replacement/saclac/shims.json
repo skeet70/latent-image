@@ -1049,9 +1049,9 @@
     },
     {
       "id": "saclac_root-root-28",
-      "shim": "saclac_root: Rate source and diagnostics: `0xf4dd50(buffer)`, `0xfa95b8(record, result, flag, out_first, out_second)`, `0xfa8520(record, flag)`, `0xfa91b0(result, flag)`, `0xf521d8(level, word, flag)`, `0xfaa7b0(record, rate_record, out_word, out_halfword)`",
+      "shim": "saclac_root: Rate source and diagnostics: `0xf4dd50(buffer)`, `0xfa95b8(record, result, flag, out_first, out_second)`, `0xfa8520(record, flag)`, `0xfa91b0(result, flag)`, `0xfaa7b0(record, rate_record, out_word, out_halfword)`",
       "kind": "trampoline into retained stock",
-      "other_side": "scene recognition and rate diagnostics' retained result-record interface",
+      "other_side": "remaining scene recognition/rate result-record interfaces; rate/status now uses one owned Calc overlay renderer at both Round and Absorb callers rather than retainedf521d8",
       "owned": "no",
       "removal": "the composition root joins the owned scene-recognition/diagnostic state and adapts the retained result record into its inputs",
       "state": "required",
@@ -1490,9 +1490,9 @@
     },
     {
       "id": "saclac_root-root-49",
-      "shim": "saclac_root: Shot atomic lens change take `0x76f438`, distance `0x749be4` and channel-position derivation `0x7498e0`",
+      "shim": "saclac_root: Shot distance `0x749be4`, channel-position derivation `0x7498e0` and adjustment-position publication `0x740c3c`",
       "kind": "trampoline into retained stock",
-      "other_side": "five Shot readings reuse owned Finish/Core getters, including owned76dbb4 state normalization; target calls owned Calc frame::target and owned direction adjustment; atomic owned-export binding and actual image qualification remain open",
+      "other_side": "Shot readings reuse owned Finish/Core getters and target uses owned Calc frame::target/direction adjustment. Atomic take uses the existing owned interrupt-locked76f438 helper, not ROM; HalfPress mode-position policy is owned Calc over canonical records and retains only the image4 publication primitive",
       "owned": "partly",
       "removal": "lens/config services owned and whole-root qualified",
       "state": "required",
@@ -1500,7 +1500,7 @@
         {
           "kind": "reference-only",
           "contract": "replacement/saclac/root/BUILD.bazel",
-          "requirement": "Source/model boundary, not linked-image removal acceptance. Residual atomic/geometry interfaces remain; bounded host signed getters, target and configuration paths do not qualify native scheduling or the whole root."
+          "requirement": "Source/model boundary, not linked-image removal acceptance. Residual geometry/publication interfaces remain; owned atomic binding and bounded host signed getters/target/configuration do not qualify actual interrupt scheduling or the whole root."
         }
       ],
       "predicates": {
@@ -1511,17 +1511,17 @@
     },
     {
       "id": "saclac_root-root-50",
-      "shim": "saclac_root: Statistics dump header `0xfa89fc`, source `0x5ffdb9ec`, config5256 and client frame storage",
-      "kind": "trampoline into retained stock",
-      "other_side": "SAME Shot StatisticsDump retains its armed state; aligned word copies/fills preserve byte edges",
+      "shim": "saclac_root: Statistics dump source `0x5ffdb9ec`, config5256 and client frame storage",
+      "kind": "guest-memory layout view",
+      "other_side": "SAME Shot StatisticsDump armed state and aligned copies/fills; header uses the same lazy owned configuration_words publisher as CapturePlatform, not retainedfa89fc",
       "owned": "partly",
-      "removal": "native header plus full frame/consumer qualification",
+      "removal": "full native frame/consumer qualification",
       "state": "required",
       "evidence": [
         {
           "kind": "reference-only",
           "contract": "replacement/saclac/root/BUILD.bazel",
-          "requirement": "Source/model boundary; not linked-image execution or removal acceptance. retained header service and owned memory view. Recorded host-only scope: host unsourced/sourced/clear/guards exercised."
+          "requirement": "Source/model boundary; not linked-image execution or removal acceptance. Owned header publication and memory view. Recorded bounded host unsourced/sourced/clear/guards do not establish native frame/alias lifetime."
         }
       ],
       "predicates": {

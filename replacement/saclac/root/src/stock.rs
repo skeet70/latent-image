@@ -10,6 +10,7 @@ pub(crate) mod capture_moves;
 pub(crate) mod capture_statistics;
 pub mod statistics;
 mod commands;
+mod shot_native;
 pub mod stages;
 pub mod geometry;
 mod geometry_services;

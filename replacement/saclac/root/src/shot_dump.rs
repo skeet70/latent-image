@@ -6,15 +6,14 @@ use xm1_shot_sequence::{boundary::Frame, statistics_dump::DumpBoundary, stock::s
 use crate::shot_services::Libraries;
 
 const SOURCE: u32 = 0x5ffd_b9ec;
-const PREPARE_HEADER: u32 = 0x00fa_89fc;
 
 impl<M: Machine + Clone, R: Memory, E: StockEntries, P, I, T, A, Q> DumpBoundary for Libraries<'_, M, R, E, P, I, T, A, Q> {
     fn statistics_source_present(&mut self) -> bool {
         self.services.borrow().stock.byte(AdjustmentKey(0x5256)) != 0
     }
     fn fill_dump_header(&mut self, frame: Frame) {
-        let machine = self.services.borrow().machine.clone();
-        machine.enter(PREPARE_HEADER, &[frame.0.wrapping_add(DUMP) as usize]);
+        let services = self.services.borrow();
+        crate::shot_capture_platform::dump_configuration(&mut services.machine.clone(), &services.stock, frame.0.wrapping_add(DUMP));
     }
     fn fill_frame(&mut self, frame: Frame, offset: u32, length: u32, byte: u8) {
         fill(&mut self.services.borrow().machine.clone(), frame.0.wrapping_add(offset), length, byte);

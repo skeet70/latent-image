@@ -71,6 +71,25 @@ impl Completion {
 #[no_mangle]
 pub unsafe extern "C" fn xm1_power_record_helper_efa3f8(profile: u32, event: u32) {
     unsafe {
+        complete(profile, event, |profile| {
+            let mut resource = 0u32;
+            let mut flags = 0u16;
+            xm1_power_record_helper_f4f838(profile, 1, &mut resource as *mut u32 as u32, &mut flags as *mut u16 as u32);
+            (resource, flags)
+        }, |profile| xm1_power_record_helper_f60e28(profile));
+    }
+}
+
+/// Runs the completion against the composition's recognition and adjustment services.
+///
+/// # Safety
+/// The task43 command/client slots and admitted profile stores must be live.
+pub unsafe fn complete(
+    profile: u32, event: u32,
+    mut capture_vote: impl FnMut(u32) -> (u32, u16),
+    mut apply_position: impl FnMut(u32),
+) {
+    unsafe {
         let slot = 0x0169_d05c;
         let parent = word(word(slot + 44));
         let processing = if parent == 0 { 0 } else { parent.wrapping_add(0x35c8) };
@@ -149,7 +168,7 @@ pub unsafe extern "C" fn xm1_power_record_helper_efa3f8(profile: u32, event: u32
             if word(slot + 4) == 5 {
                 xm1_power_record_helper_7588e8(output, profile);
                 if word(output + 8) != 0 {
-                    xm1_power_record_helper_f4f838(profile, 1, &mut resource as *mut u32 as u32, &mut flags as *mut u16 as u32);
+                    (resource, flags) = capture_vote(profile);
                 }
             }
             value = xm1_power_record_helper_75060c(profile);
@@ -162,7 +181,7 @@ pub unsafe extern "C" fn xm1_power_record_helper_efa3f8(profile: u32, event: u32
             if image_context != 0 { xm1_power_record_helper_103b044(image_context); }
             let limit = read_volatile(0x016a_048c as *const u8) as u32;
             threshold = u32::from(limit >= xm1_power_record_helper_69f8fc(0x2b81));
-            if matches!(word(slot + 4), 0 | 3 | 6) { xm1_power_record_helper_f60e28(profile); }
+            if matches!(word(slot + 4), 0 | 3 | 6) { apply_position(profile); }
             let mut metadata = MaybeUninit::<[u32; 33]>::uninit();
             let metadata = metadata.as_mut_ptr() as u32;
             xm1_power_record_helper_756734(profile, metadata);

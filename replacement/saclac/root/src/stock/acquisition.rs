@@ -437,9 +437,9 @@ pub fn rate_flag(machine: &impl Machine, record: RecordHandle, flag: u32) { ente
 /// 0xfa91b0.
 pub fn draw_rate(machine: &impl Machine, result: SharedAddress, flag: u32) { enter(machine, 0xfa_91b0, &[word(result.0), word(flag)]); }
 
-/// 0xf521d8.
+/// The owned rate/status renderer formerly at0xf521d8.
 pub fn draw_rate_status(machine: &impl Machine, level: u16, status: u32, flag: u32) {
-    enter(machine, 0xf5_21d8, &[word(u32::from(level)), word(status), word(flag)]);
+    crate::shot_absorb_diagnostics::draw_rate_status(machine, level, status, flag != 0);
 }
 
 /// 0xfaa7b0 over a copy of the rate record: the word and halfword it writes out.
