@@ -495,12 +495,35 @@ checkReferences elfBytes admitted = do
       retained address = address `elem` externalAddresses
         || any (\(_, _, low, bytes) -> low <= address && toInteger address < toInteger low + toInteger bytes) stockArrays
         || any (\(low, high) -> low <= address && address < high) ranges
+      metadataBoundary reference symbol = ELF.addressKind reference == ELF.DataReference
+        && ELF.symbolName symbol == "__power_cpu_end"
+        && ELF.symbolSize symbol == 0
+        && ELF.symbolKind symbol == ELF.OtherSymbol
+        && case [section | section <- admittedSections admitted, sectionAllocated section,
+                  sectionNoBits section, sectionName section == ".bss"] of
+          [section] ->
+            let end = toInteger (sectionLow section) + toInteger (sectionBytes section)
+                matchingBss =
+                  [index | (index, linked) <- zip [0 ..] (ELF.elfSections elf),
+                    ELF.sectionName linked == ".bss", ELF.sectionAllocated linked,
+                    ELF.sectionType linked == 8, ELF.sectionAddress linked == sectionLow section,
+                    toInteger (ELF.sectionSize linked) == toInteger (sectionBytes section)]
+            in sectionBytes section >= 0
+              && extentContains fixedExtent (sectionLow section)
+              && end <= toInteger (extentHigh fixedExtent)
+              && toInteger (ELF.symbolValue symbol) == end
+              && toInteger (ELF.addressTarget reference) == end
+              && case matchingBss of
+                [index] -> ELF.symbolSection symbol `elem` [ELF.Absolute, ELF.InSection index]
+                _ -> False
+          _ -> False
   forM_ references $ \reference -> do
-    let site = ELF.addressSite reference
+    let symbol = ELF.addressSymbol reference
+        site = ELF.addressSite reference
         target = ELF.addressTarget reference
         owned address = any (\(low, high) -> low <= address && address < high) (ownedSpans admitted)
     require (wordAt admitted site == maybe 0 id (ELF.wordAt elf site)) (ExtentImageMismatch site 4)
-    require (owned target || retained target) (ReferenceOutside site target)
+    require (owned target || retained target || metadataBoundary reference symbol) (ReferenceOutside site target)
 
 -- | Install one extent: section bytes stay, every other byte is the trap word.
 installExtent :: Admitted -> Extent -> Either PlacementError B.ByteString

@@ -194,6 +194,7 @@ data AddressRelocation = AddressRelocation
   { addressSite :: Word32
   , addressTarget :: Word32
   , addressKind :: AddressReferenceKind
+  , addressSymbol :: Symbol
   } deriving (Eq, Show)
 
 -- | Resolved references retained by --emit-relocs, including relocated MOVW/MOVT pairs.
@@ -228,8 +229,8 @@ addressRelocations elf = concat <$> mapM readTable tables
         symbol <- indexed "relocation symbol" (elfSymbols elf) (encoding `shiftR` 8)
         unless (symbolSection symbol /= Undefined) (Left "ARM relocation references undefined symbol")
         content <- maybe (Left "ARM relocation word outside allocated bytes") pure (wordAt elf site)
-        pure (site, encoding .&. 0xff, encoding `shiftR` 8, content)
-      forM [(site, kind, symbol, content) | (site, kind, symbol, content) <- records, kind /= 0] $ \(site, kind, symbol, content) -> do
+        pure (site, encoding .&. 0xff, encoding `shiftR` 8, content, symbol)
+      forM [(site, kind, symbol, content, resolved) | (site, kind, symbol, content, resolved) <- records, kind /= 0] $ \(site, kind, symbol, content, relocationSymbol) -> do
         direct <- case kind of
           1 -> branchTarget site content
           28 -> branchTarget site content
@@ -237,23 +238,24 @@ addressRelocations elf = concat <$> mapM readTable tables
           _ -> pure 0
         let immediate word = ((word `shiftR` 4) .&. 0xf000) .|. (word .&. 0xfff)
             register word = (word `shiftR` 12) .&. 15
-            pair other = sortOn fst [(at, instruction) | (at, code, identity, instruction) <- records
+            pair other = sortOn fst [(at, instruction) | (at, code, identity, instruction, _) <- records
               , code == other, identity == symbol, register instruction == register content]
             paired other = case if other == 44 then filter ((> site) . fst) (pair other) else reverse (filter ((< site) . fst) (pair other)) of
               (_, instruction) : _ -> Right instruction
               [] -> Left "unpaired ARM address relocation"
+            reference resolvedTarget referenceKind = AddressRelocation site resolvedTarget referenceKind relocationSymbol
         case kind of
-          2 -> pure (AddressRelocation site content DataReference)
-          3 -> pure (AddressRelocation site (site + content) DataReference)
-          1 -> pure (AddressRelocation site direct DirectReference)
-          28 -> pure (AddressRelocation site direct DirectReference)
-          29 -> pure (AddressRelocation site direct DirectReference)
+          2 -> pure (reference content DataReference)
+          3 -> pure (reference (site + content) DataReference)
+          1 -> pure (reference direct DirectReference)
+          28 -> pure (reference direct DirectReference)
+          29 -> pure (reference direct DirectReference)
           43 -> do
             upper <- paired 44
-            pure (AddressRelocation site ((immediate upper `shiftL` 16) .|. immediate content) DataReference)
+            pure (reference ((immediate upper `shiftL` 16) .|. immediate content) DataReference)
           44 -> do
             lower <- paired 43
-            pure (AddressRelocation site ((immediate content `shiftL` 16) .|. immediate lower) DataReference)
+            pure (reference ((immediate content `shiftL` 16) .|. immediate lower) DataReference)
           _ -> Left ("unsupported ARM address relocation: " ++ show kind)
   branchTarget site content = maybe (Left "ARM branch relocation does not contain a direct branch") Right (directBranchTarget site content)
 

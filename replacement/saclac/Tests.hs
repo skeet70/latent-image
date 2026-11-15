@@ -113,9 +113,62 @@ main = do
           refused "undeclared definite reference" (ReferenceOutside site target)
             (Artifact.admit badElf (patch base bin site target) symbols disasm sections)
         [] -> H.failH "linked ELF has no data relocation for the refusal control"
+      boundaryReferenceTests elf bin symbols disasm sections admitted parsed dataReferences
       stackTests
       putStrLn ("saclac-placement: fixed body " ++ show (B.length body) ++ " bytes; veneers, layout, publications and stack controls passed")
     _ -> H.failH "usage: saclac-placement-tests LINKED_ELF LINKED_BIN SYMBOLS DISASM SECTIONS"
+
+boundaryReferenceTests :: B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString
+  -> Admitted -> ELF.Elf -> [(ELF.AddressRelocation, ELF.Section)] -> IO ()
+boundaryReferenceTests elf bin symbols disasm sections admitted parsed references = do
+  let bss = [section | section <- admittedSections admitted, sectionAllocated section,
+        sectionNoBits section, sectionName section == ".bss"]
+      boundarySymbols = [(index, value) | (index, value) <- zip [0 :: Word32 ..] (ELF.elfSymbols parsed),
+        ELF.symbolName value == "__power_cpu_end"]
+      symbolTables = [section | section <- ELF.elfSections parsed, ELF.sectionType section == 2]
+  case (bss, boundarySymbols, symbolTables, references) of
+    ([section], [(identity, boundary)], [table], (reference, source) : _) -> do
+      let site = ELF.addressSite reference
+          end = sectionLow section + fromIntegral (sectionBytes section)
+          contentOffset = ELF.sectionOffset source + site - ELF.sectionAddress source
+          symbolOffset = ELF.sectionOffset table + identity * 16
+          relocationOffsets =
+            [offset + 4 | relocation <- ELF.elfSections parsed, ELF.sectionType relocation == 9,
+              offset <- [ELF.sectionOffset relocation, ELF.sectionOffset relocation + 8
+                .. ELF.sectionOffset relocation + ELF.sectionSize relocation - 8],
+              U.word32At elf (fromIntegral offset) == site]
+          run image target = Artifact.admit (patch 0 image contentOffset target)
+            (patch (extentLow fixedExtent) bin site target) symbols disasm sections
+          refusedEndpoint name result = case result of
+            Left (ReferenceOutside _ target) -> check name (target == end)
+            other -> H.failH (name ++ ": expected endpoint refusal, got " ++ show other)
+      check "linked power boundary equals allocated BSS endpoint" (ELF.symbolValue boundary == end)
+      check "endpoint is not allocated storage" (not (any (\(low, high) -> low <= end && end < high) (ownedSpans admitted)))
+      case relocationOffsets of
+        [encodingOffset] -> do
+          let metadata = patch 0 elf encodingOffset ((identity `shiftL` 8) .|. 2)
+              direct = patch 0 metadata encodingOffset ((identity `shiftL` 8) .|. 29)
+              wrongName = patch 0 metadata symbolOffset 0
+              wrongValue = patch 0 metadata (symbolOffset + 4) (end + 4)
+              sized = patch 0 metadata (symbolOffset + 8) 4
+              undefinedSymbol = patch 0 metadata (symbolOffset + 12)
+                (U.word32At metadata (fromIntegral (symbolOffset + 12)) .&. 0xffff)
+          either (H.failH . show) (const (pure ())) (run metadata end)
+          refusedEndpoint "unnamed endpoint is not metadata" (run wrongName end)
+          refusedEndpoint "boundary symbol has wrong value" (run wrongValue end)
+          refused "boundary addend leaves endpoint" (ReferenceOutside site (end + 4)) (run metadata (end + 4))
+          refusedEndpoint "sized symbol is not endpoint metadata" (run sized end)
+          refused "endpoint metadata is not a branch destination" (ReferenceOutside site end)
+            (Artifact.admit (patch 0 direct contentOffset (branch site end))
+              (patch (extentLow fixedExtent) bin site (branch site end)) symbols disasm sections)
+          case run undefinedSymbol end of
+            Left (ElfRejected _) -> pure ()
+            other -> H.failH ("undefined boundary symbol admitted: " ++ show other)
+          refused "raw ELF/bin reference disagreement" (ExtentImageMismatch site 4)
+            (Artifact.admit (patch 0 metadata contentOffset end) (patch (extentLow fixedExtent) bin site (end + 4))
+              symbols disasm sections)
+        _ -> H.failH "fixture requires one relocation at its data-reference site"
+    _ -> H.failH "fixture requires allocated BSS, __power_cpu_end and a data relocation"
 
 stackTests :: IO ()
 stackTests = do
