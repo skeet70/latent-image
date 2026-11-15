@@ -70,7 +70,7 @@ wireHeader Resource8 False="FUJI_NATIVE_RESOURCE8_V1"
 wireHeader Resource8 True="FUJI_NATIVE_RESOURCE8_SCRIPT_V1"
 artifactCount, regionCount, functionCount, stubCount, eventCount, memoryCount :: Int
 artifactCount=20
-regionCount=64
+regionCount=128
 functionCount=512
 stubCount=32
 eventCount=128
