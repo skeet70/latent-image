@@ -1,0 +1,288 @@
+{
+  "unit": "time_services",
+  "summary": "`time_services` owns tasks 6 and 9, software timers, timed delays and interrupt registration. Its interface entries and their owned symbols are declared in `time_services/stock-interface.json`; `time_services:artifact` derives publications from those rows.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "time_services-01",
+      "shim": "Published time entries in `time_services/src/stock.rs`",
+      "kind": "stock-ABI export",
+      "other_side": "retained callers and callback words entering the entries in `stock-interface.json`",
+      "owned": "partly",
+      "removal": "no retained branch, table word or executed computed reference enters the published stock entries",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/time_services:image",
+          "kind": "export",
+          "symbols": [
+            "xm1_time_arm_delay",
+            "xm1_time_arm_timer",
+            "xm1_time_attach",
+            "xm1_time_cancel",
+            "xm1_time_create_delay",
+            "xm1_time_create_timer",
+            "xm1_time_delay",
+            "xm1_time_delay_task",
+            "xm1_time_delay_tick",
+            "xm1_time_delete_delay",
+            "xm1_time_delete_timer",
+            "xm1_time_disarm_delay",
+            "xm1_time_initialize",
+            "xm1_time_notify_delay",
+            "xm1_time_notify_timer",
+            "xm1_time_release",
+            "xm1_time_reload",
+            "xm1_time_shutdown",
+            "xm1_time_start",
+            "xm1_time_tick",
+            "xm1_time_ticks",
+            "xm1_time_timer_task"
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "Published time entries in `time_services/src/stock.rs`. retained callers and callback words entering the entries in `stock-interface.json`. no retained branch, table word or executed computed reference enters the published stock entries"
+        },
+        {
+          "image": "//replacement/time_services:image",
+          "kind": "export",
+          "symbols": [
+            "xm1_time_delay_callback",
+            "xm1_time_delay_fault",
+            "xm1_time_delay_post_fault",
+            "xm1_time_expiry_callback",
+            "xm1_time_owned_expiry_callback",
+            "xm1_time_timer_callback",
+            "xm1_time_timer_post_fault"
+          ],
+          "contract": "replacement/time_services/time-services.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "time_services-02",
+      "shim": "Handle allocation in `time_services/src/stock.rs`",
+      "kind": "trampoline into retained stock",
+      "other_side": "allocator 0x65722c, resolver 0x657384 and release 0x65744c",
+      "owned": "no",
+      "removal": "the peripherals owner supplies typed handle allocation to the linked image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/time_services:image",
+          "kind": "retained-entry",
+          "symbols": [
+            "xm1_time_start"
+          ],
+          "retained_targets": [
+            6648364,
+            6648708,
+            6648908
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "Handle allocation in `time_services/src/stock.rs`. allocator 0x65722c, resolver 0x657384 and release 0x65744c. the peripherals owner supplies typed handle allocation to the linked image"
+        },
+        {
+          "image": "//replacement/time_services:image",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_kernel_console9",
+            "xm1_kernel_critical_enter",
+            "xm1_kernel_critical_exit"
+          ],
+          "contract": "replacement/time_services/time-services.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "time_services-03",
+      "shim": "Device timer programming in `time_services/src/stock.rs`",
+      "kind": "trampoline into retained stock",
+      "other_side": "acquire 0x655b28, configure 0x655ccc, stop 0x655fe8 and release 0x655c24",
+      "owned": "no",
+      "removal": "device timer programming is owned in the linked image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/time_services:image",
+          "kind": "retained-entry",
+          "symbols": [
+            "xm1_time_start"
+          ],
+          "retained_targets": [
+            6642472,
+            6642724,
+            6642892,
+            6643688
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "Device timer programming in `time_services/src/stock.rs`. acquire 0x655b28, configure 0x655ccc, stop 0x655fe8 and release 0x655c24. device timer programming is owned in the linked image"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "time_services-04",
+      "shim": "Interrupt backend in `time_services/src/stock.rs`",
+      "kind": "trampoline into retained stock",
+      "other_side": "interrupt configure 0x723870 and detach 0x7239a0",
+      "owned": "no",
+      "removal": "the kernel crate exposes the owned interrupt backend in the linked image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/time_services:image",
+          "kind": "retained-entry",
+          "symbols": [
+            "xm1_time_initialize"
+          ],
+          "retained_targets": [
+            7485552,
+            7485856
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "Interrupt backend in `time_services/src/stock.rs`. interrupt configure 0x723870 and detach 0x7239a0. the kernel crate exposes the owned interrupt backend in the linked image"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "time_services-05",
+      "shim": "Diagnostic and callback words in `time_services/src/stock.rs`",
+      "kind": "trampoline into retained stock",
+      "other_side": "diagnostic 0x726c74 and callbacks supplied by retained consumers",
+      "owned": "partly",
+      "removal": "every supplying consumer and the diagnostic service are owned in the linked image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/time_services:image",
+          "kind": "retained-entry",
+          "symbols": [
+            "xm1_time_tick"
+          ],
+          "retained_targets": [
+            7498868
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "Diagnostic and callback words in `time_services/src/stock.rs`. diagnostic 0x726c74 and callbacks supplied by retained consumers. every supplying consumer and the diagnostic service are owned in the linked image"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "time_services-06",
+      "shim": "Stock memory in `time_services/src/stock.rs`",
+      "kind": "guest-memory layout view",
+      "other_side": "interrupt handles and sources 0x940e9c, delay and timer descriptors 0x95dc08 and 0x96bd40, tick count 0x96e97c, timer handle table 0x95aa9c, task arguments 0x89f76c",
+      "owned": "partly",
+      "removal": "no retained code reads these words and the retained allocator no longer holds the handle tables",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/time_services:image",
+          "kind": "layout",
+          "symbols": [
+            "xm1_time_initialize"
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "Stock memory in `time_services/src/stock.rs`. interrupt handles and sources 0x940e9c, delay and timer descriptors 0x95dc08 and 0x96bd40, tick count 0x96e97c, timer handle table 0x95aa9c, task arguments 0x89f76c. no retained code reads these words and the retained allocator no longer holds the handle tables"
+        },
+        {
+          "image": "//replacement/time_services:image",
+          "kind": "layout",
+          "symbols": [
+            "XM1_REQUIRES_LENS_SAFETY_CONTRACT"
+          ],
+          "contract": "replacement/time_services/time-services.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "time_services-linked-retained-references",
+      "shim": "Definite retained references in the current linked instruction and relocation metadata",
+      "kind": "retained stock seam in assembly",
+      "other_side": "retained code and guest address contracts reached by the composed image",
+      "owned": "partly",
+      "removal": "all declared retained targets have owned typed replacements and both sides are compared in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/time_services:image",
+          "kind": "retained-entry",
+          "symbols": [],
+          "retained_targets": [
+            14872808,
+            23777524,
+            27527900
+          ],
+          "contract": "replacement/time_services/time-services.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "time_services-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/time_services:image",
+          "kind": "publication",
+          "symbols": [
+            "__fixed_body_end",
+            "__fixed_body_start",
+            "__fixed_bss_end",
+            "__fixed_bss_start"
+          ],
+          "contract": "replacement/time_services/time-services.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

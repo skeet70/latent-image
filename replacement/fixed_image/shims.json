@@ -1,0 +1,150 @@
+{
+  "unit": "fixed_image",
+  "summary": "The fixed-range test image preserves the retained startup phase call while observing entry and initialized storage.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "fixed_image-01",
+      "shim": "`xm1_fixed_test_entry` in `probe-entry.S`, published at `0x69cdf8` by `ProbeMain.hs`",
+      "kind": "stock-ABI export",
+      "other_side": "retained startup phase callers",
+      "owned": "no",
+      "removal": "the placement probe is replaced by the subsystem image's entries",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/fixed_image:probe-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_fixed_test_entry"
+          ],
+          "contract": "replacement/fixed_image/ProbeMain.hs",
+          "requirement": "`xm1_fixed_test_entry` in `probe-entry.S`, published at `0x69cdf8` by `ProbeMain.hs`. retained startup phase callers. the placement probe is replaced by the subsystem image's entries"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "fixed_image-02",
+      "shim": "`xm1_fixed_test_resume` at `0x69cdfc`, bound by `ProbeMain.hs`",
+      "kind": "trampoline into retained stock",
+      "other_side": "the retained startup phase body after its entry push",
+      "owned": "no",
+      "removal": "the placement probe is replaced by the subsystem image's entries",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/fixed_image:probe-image",
+          "kind": "retained-entry",
+          "symbols": [
+            "xm1_fixed_test_resume"
+          ],
+          "retained_targets": [
+            6934012
+          ],
+          "contract": "replacement/fixed_image/ProbeMain.hs",
+          "requirement": "The placement probe resumes the retained startup body at 0x69cdfc; ProbeMain.hs supplies that retained-entry contract. The probe image is qualification-only."
+        },
+        {
+          "image": "//replacement/fixed_image:probe-image",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_fixed_test_resume"
+          ],
+          "contract": "replacement/fixed_image/ProbeMain.hs",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "fixed_image-linked-abi",
+      "shim": "Additional linked unmangled ABI entry points",
+      "kind": "stock-ABI export",
+      "other_side": "the publication or qualification consumers of the current linked image",
+      "owned": "partly",
+      "removal": "all consumers use owned typed interfaces and both sides have a qualified comparison in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/fixed_image:probe-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_fixed_test_observe"
+          ],
+          "contract": "replacement/fixed_image/ProbeMain.hs",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "fixed_image-linked-layout",
+      "shim": "Linked publication and qualification metadata",
+      "kind": "guest-memory layout view",
+      "other_side": "the publication or qualification consumers of the current linked image",
+      "owned": "partly",
+      "removal": "all consumers use owned typed interfaces and both sides have a qualified comparison in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/fixed_image:probe-image",
+          "kind": "layout",
+          "symbols": [
+            "XM1_FIXED_TEST_COUNT",
+            "XM1_FIXED_TEST_DATA",
+            "XM1_FIXED_TEST_FAILURES"
+          ],
+          "contract": "replacement/fixed_image/ProbeMain.hs",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "fixed_image-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/fixed_image:probe-image",
+          "kind": "publication",
+          "symbols": [
+            "__fixed_body_end",
+            "__fixed_body_start",
+            "__fixed_bss_end",
+            "__fixed_bss_start"
+          ],
+          "contract": "replacement/fixed_image/ProbeMain.hs",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

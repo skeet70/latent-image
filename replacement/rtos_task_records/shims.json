@@ -1,0 +1,99 @@
+{
+  "unit": "rtos_task_records",
+  "summary": "The owned task-record create/delete entries.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "rtos_task_records-01",
+      "shim": "`xm1_rtos_task_create`/`xm1_rtos_task_delete` exports placed by `task-records-a-native.ld`/`task-records-b-native.ld`",
+      "kind": "stock-ABI export",
+      "other_side": "stock task-creation callers",
+      "owned": "no",
+      "removal": "every task caller is owned or migrated",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/rtos_task_records/BUILD.bazel",
+          "requirement": "Standalone family qualification images are frozen reference artifacts; the current linked boundary is the platform aggregate, not a rebuilt standalone family image."
+        },
+        {
+          "image": "//replacement/rtos_platform:platform-a",
+          "kind": "export",
+          "symbols": [
+            "xm1_platform_veneer_task_records_create",
+            "xm1_platform_veneer_task_records_delete",
+            "xm1_rtos_task_create",
+            "xm1_rtos_task_create_body",
+            "xm1_rtos_task_delete",
+            "xm1_rtos_task_delete_body"
+          ],
+          "contract": "replacement/rtos_platform/carriers.json",
+          "requirement": "`xm1_rtos_task_create`/`xm1_rtos_task_delete` exports placed by `task-records-a-native.ld`/`task-records-b-native.ld`. stock task-creation callers. every task caller is owned or migrated",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/rtos_platform:platform-b",
+          "kind": "export",
+          "symbols": [
+            "xm1_platform_veneer_task_records_create",
+            "xm1_platform_veneer_task_records_delete",
+            "xm1_rtos_task_create",
+            "xm1_rtos_task_create_body",
+            "xm1_rtos_task_delete",
+            "xm1_rtos_task_delete_body"
+          ],
+          "contract": "replacement/rtos_platform/carriers.json",
+          "requirement": "`xm1_rtos_task_create`/`xm1_rtos_task_delete` exports placed by `task-records-a-native.ld`/`task-records-b-native.ld`. stock task-creation callers. every task caller is owned or migrated",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "rtos_task_records-02",
+      "shim": "`xm1_task_mask_save`/`xm1_task_mask_restore` externs",
+      "kind": "trampoline into retained stock",
+      "other_side": "the stock mask helpers",
+      "owned": "no",
+      "removal": "the RTOS platform owns mask handling",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/rtos_task_records/BUILD.bazel",
+          "requirement": "Standalone family qualification images are frozen reference artifacts; the current linked boundary is the platform aggregate, not a rebuilt standalone family image."
+        },
+        {
+          "image": "//replacement/rtos_platform:platform-a",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_task_mask_restore",
+            "xm1_task_mask_save"
+          ],
+          "contract": "replacement/rtos_platform/carriers.json",
+          "requirement": "`xm1_task_mask_save`/`xm1_task_mask_restore` externs. the stock mask helpers. the RTOS platform owns mask handling"
+        },
+        {
+          "image": "//replacement/rtos_platform:platform-b",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_task_mask_restore",
+            "xm1_task_mask_save"
+          ],
+          "contract": "replacement/rtos_platform/carriers.json",
+          "requirement": "`xm1_task_mask_save`/`xm1_task_mask_restore` externs. the stock mask helpers. the RTOS platform owns mask handling"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

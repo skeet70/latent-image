@@ -1,0 +1,196 @@
+{
+  "unit": "loader_orchestration",
+  "summary": "The loader orchestration step.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "loader_orchestration-01",
+      "shim": "`xm1_loader_orchestration` and `xm1_loader_orchestration_entry` in `entry.S`/`src.rs`, placed by `loader-a.ld`/`loader-b.ld`",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the stock loader continuation",
+      "owned": "no",
+      "removal": "the loader continuation is owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/loader_orchestration:loader-a-orchestration-image",
+          "kind": "publication",
+          "symbols": [
+            "xm1_loader_orchestration",
+            "xm1_loader_orchestration_entry"
+          ],
+          "contract": "replacement/loader_orchestration/loader-a.ld",
+          "requirement": "`xm1_loader_orchestration` and `xm1_loader_orchestration_entry` in `entry.S`/`src.rs`, placed by `loader-a.ld`/`loader-b.ld`. the stock loader continuation. the loader continuation is owned"
+        },
+        {
+          "image": "//replacement/loader_orchestration:loader-b-orchestration-image",
+          "kind": "publication",
+          "symbols": [
+            "xm1_loader_orchestration",
+            "xm1_loader_orchestration_entry"
+          ],
+          "contract": "replacement/loader_orchestration/loader-b.ld",
+          "requirement": "`xm1_loader_orchestration` and `xm1_loader_orchestration_entry` in `entry.S`/`src.rs`, placed by `loader-a.ld`/`loader-b.ld`. the stock loader continuation. the loader continuation is owned"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "loader_orchestration-02",
+      "shim": "21 `xm1_loader_*` retained externs (continue, prepare, activate timers, auto-ready, clear, identity, log, peer, private initialize, publish callback, schedule)",
+      "kind": "trampoline into retained stock",
+      "other_side": "stock loader and kernel startup services",
+      "owned": "no",
+      "removal": "those services are owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/loader_orchestration:loader-a-orchestration-image",
+          "kind": "retained-entry",
+          "symbols": [
+            "xm1_loader_orchestration",
+            "xm1_loader_orchestration_entry"
+          ],
+          "contract": "replacement/loader_orchestration/loader-a.ld",
+          "requirement": "21 `xm1_loader_*` retained externs (continue, prepare, activate timers, auto-ready, clear, identity, log, peer, private initialize, publish callback, schedule). stock loader and kernel startup services. those services are owned"
+        },
+        {
+          "image": "//replacement/loader_orchestration:loader-a-orchestration-image",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_loader_activate_timers",
+            "xm1_loader_auto_ready",
+            "xm1_loader_base",
+            "xm1_loader_clear",
+            "xm1_loader_continue1",
+            "xm1_loader_continue2",
+            "xm1_loader_continue3",
+            "xm1_loader_continue4",
+            "xm1_loader_continue5",
+            "xm1_loader_continue6",
+            "xm1_loader_continue7",
+            "xm1_loader_identity",
+            "xm1_loader_log",
+            "xm1_loader_peer_continue",
+            "xm1_loader_prepare1",
+            "xm1_loader_prepare2",
+            "xm1_loader_prepare3",
+            "xm1_loader_prepare4",
+            "xm1_loader_primary_continue",
+            "xm1_loader_private_initialize",
+            "xm1_loader_publish_callback",
+            "xm1_loader_ready",
+            "xm1_loader_schedule"
+          ],
+          "contract": "replacement/loader_orchestration/loader-a.ld",
+          "requirement": "21 `xm1_loader_*` retained externs (continue, prepare, activate timers, auto-ready, clear, identity, log, peer, private initialize, publish callback, schedule). stock loader and kernel startup services. those services are owned",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/loader_orchestration:loader-b-orchestration-image",
+          "kind": "retained-entry",
+          "symbols": [
+            "xm1_loader_orchestration",
+            "xm1_loader_orchestration_entry"
+          ],
+          "contract": "replacement/loader_orchestration/loader-a.ld",
+          "requirement": "21 `xm1_loader_*` retained externs (continue, prepare, activate timers, auto-ready, clear, identity, log, peer, private initialize, publish callback, schedule). stock loader and kernel startup services. those services are owned"
+        },
+        {
+          "image": "//replacement/loader_orchestration:loader-b-orchestration-image",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_loader_activate_timers",
+            "xm1_loader_auto_ready",
+            "xm1_loader_base",
+            "xm1_loader_continue1",
+            "xm1_loader_continue2",
+            "xm1_loader_continue3",
+            "xm1_loader_continue4",
+            "xm1_loader_continue6",
+            "xm1_loader_prepare2",
+            "xm1_loader_ready"
+          ],
+          "contract": "replacement/loader_orchestration/loader-a.ld",
+          "requirement": "21 `xm1_loader_*` retained externs (continue, prepare, activate timers, auto-ready, clear, identity, log, peer, private initialize, publish callback, schedule). stock loader and kernel startup services. those services are owned"
+        },
+        {
+          "image": "//replacement/loader_orchestration:loader-b-orchestration-image",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_loader_activate_timers",
+            "xm1_loader_auto_ready",
+            "xm1_loader_base",
+            "xm1_loader_clear",
+            "xm1_loader_continue1",
+            "xm1_loader_continue2",
+            "xm1_loader_continue3",
+            "xm1_loader_continue4",
+            "xm1_loader_continue5",
+            "xm1_loader_continue6",
+            "xm1_loader_continue7",
+            "xm1_loader_identity",
+            "xm1_loader_log",
+            "xm1_loader_peer_continue",
+            "xm1_loader_prepare1",
+            "xm1_loader_prepare2",
+            "xm1_loader_prepare3",
+            "xm1_loader_prepare4",
+            "xm1_loader_primary_continue",
+            "xm1_loader_private_initialize",
+            "xm1_loader_publish_callback",
+            "xm1_loader_ready",
+            "xm1_loader_schedule"
+          ],
+          "contract": "replacement/loader_orchestration/loader-b.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "loader_orchestration-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/loader_orchestration:loader-a-orchestration-image",
+          "kind": "publication",
+          "symbols": [
+            "__loader_orchestration_end",
+            "__loader_orchestration_start"
+          ],
+          "contract": "replacement/loader_orchestration/loader-a.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        },
+        {
+          "image": "//replacement/loader_orchestration:loader-b-orchestration-image",
+          "kind": "publication",
+          "symbols": [
+            "__loader_orchestration_end",
+            "__loader_orchestration_start"
+          ],
+          "contract": "replacement/loader_orchestration/loader-b.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

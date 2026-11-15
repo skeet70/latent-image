@@ -1,0 +1,200 @@
+{
+  "unit": "media_permit",
+  "summary": "The media-write permit resolver and its effects over retained frame services.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "media_permit-01",
+      "shim": "11 exports in `src/lib.rs` (permit resolution, cancel, effects)",
+      "kind": "stock-ABI export",
+      "other_side": "stock callers of `FUN_00e77168` and the permit entry",
+      "owned": "no",
+      "removal": "every permit caller is owned or migrated",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/media_permit:media-permit-candidate",
+          "kind": "export",
+          "symbols": [
+            "rb_media_permit_case"
+          ],
+          "contract": "replacement/media_permit/media_permit.ld",
+          "requirement": "11 exports in `src/lib.rs` (permit resolution, cancel, effects). stock callers of `FUN_00e77168` and the permit entry. every permit caller is owned or migrated"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "media_permit-02",
+      "shim": "`rb_mp_stock_*` trampolines in `rb_media_permit_stock.S` (bit set, cancel, command, context, count/kind, fatal, frame kind/of-kind, map subframe, mirror read, subframe, subframe count)",
+      "kind": "trampoline into retained stock",
+      "other_side": "stock frame, event and slot services",
+      "owned": "no",
+      "removal": "the frame services are owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/develop:develop-candidate",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_mp_stock_bit_set",
+            "rb_mp_stock_cancel",
+            "rb_mp_stock_command",
+            "rb_mp_stock_context",
+            "rb_mp_stock_count_kind",
+            "rb_mp_stock_fatal",
+            "rb_mp_stock_frame_kind",
+            "rb_mp_stock_frame_of_kind",
+            "rb_mp_stock_map_subframe",
+            "rb_mp_stock_mirror_read",
+            "rb_mp_stock_subframe",
+            "rb_mp_stock_subframe_count"
+          ],
+          "contract": "replacement/media_permit/media_permit.ld",
+          "requirement": "`rb_mp_stock_*` trampolines in `rb_media_permit_stock.S` (bit set, cancel, command, context, count/kind, fatal, frame kind/of-kind, map subframe, mirror read, subframe, subframe count). stock frame, event and slot services. the frame services are owned"
+        },
+        {
+          "image": "//replacement/media_permit:media-permit-candidate",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_mp_stock_bit_set",
+            "rb_mp_stock_cancel",
+            "rb_mp_stock_command",
+            "rb_mp_stock_context",
+            "rb_mp_stock_count_kind",
+            "rb_mp_stock_fatal",
+            "rb_mp_stock_frame_kind",
+            "rb_mp_stock_frame_of_kind",
+            "rb_mp_stock_map_subframe",
+            "rb_mp_stock_mirror_read",
+            "rb_mp_stock_subframe",
+            "rb_mp_stock_subframe_count"
+          ],
+          "contract": "replacement/media_permit/media_permit.ld",
+          "requirement": "`rb_mp_stock_*` trampolines in `rb_media_permit_stock.S` (bit set, cancel, command, context, count/kind, fatal, frame kind/of-kind, map subframe, mirror read, subframe, subframe count). stock frame, event and slot services. the frame services are owned"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "media_permit-03",
+      "shim": "`media_permit.ld` and the `cancel`/`command`/`count`/`fatal2`/`low`/`side_a`/`side_b` placements",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "stock permit callers",
+      "owned": "no",
+      "removal": "owned code is called directly",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/media_permit:media-permit-candidate",
+          "kind": "publication",
+          "symbols": [
+            "rb_media_permit_case"
+          ],
+          "contract": "replacement/media_permit/media_permit.ld",
+          "requirement": "`media_permit.ld` and the `cancel`/`command`/`count`/`fatal2`/`low`/`side_a`/`side_b` placements. stock permit callers. owned code is called directly"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "media_permit-04",
+      "shim": "`rb_mp_forbidden_body_probe` in `rb_media_permit_probe.S`",
+      "kind": "retained stock seam in assembly",
+      "other_side": "the retired resolver body used as a negative control",
+      "owned": "no",
+      "removal": "the probe is removed with the qualification controls",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/media_permit/BUILD.bazel",
+          "requirement": "The registered mechanism remains required; this reference or qualification-only mechanism is not part of the selected linked image. `rb_mp_forbidden_body_probe` in `rb_media_permit_probe.S`"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "media_permit-linked-abi",
+      "shim": "Additional linked unmangled ABI entry points",
+      "kind": "stock-ABI export",
+      "other_side": "the publication or qualification consumers of the current linked image",
+      "owned": "partly",
+      "removal": "all consumers use owned typed interfaces and both sides have a qualified comparison in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/media_permit:media-permit-candidate",
+          "kind": "export",
+          "symbols": [
+            "rb_media_permit_apply",
+            "rb_media_permit_resolve",
+            "rb_mp_forbidden_body_probe"
+          ],
+          "contract": "replacement/media_permit/media_permit.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "media_permit-linked-retained-references",
+      "shim": "Definite retained references in the current linked instruction and relocation metadata",
+      "kind": "retained stock seam in assembly",
+      "other_side": "retained code and guest address contracts reached by the composed image",
+      "owned": "partly",
+      "removal": "all declared retained targets have owned typed replacements and both sides are compared in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/media_permit:media-permit-candidate",
+          "kind": "retained-entry",
+          "symbols": [],
+          "retained_targets": [
+            15131496,
+            15157448,
+            15158376,
+            15160464,
+            15167852,
+            15233300,
+            15235796,
+            15237608,
+            15238892,
+            15239172,
+            15240732,
+            15259692,
+            15404704
+          ],
+          "contract": "replacement/media_permit/media_permit.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

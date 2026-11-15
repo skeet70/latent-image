@@ -1,0 +1,4 @@
+exports_files([
+    "shim-images.json",
+    "shims.md",
+])

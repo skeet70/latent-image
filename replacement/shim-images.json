@@ -1,0 +1,2475 @@
+{
+  "version": 1,
+  "images": [
+    {
+      "id": "//host/firmware:bank-elf-00c40000",
+      "elf": "host/firmware/bank-elf-00c40000.elf",
+      "units": [
+        "bank",
+        "capture",
+        "media_permit",
+        "menu_engine",
+        "modal_runtime",
+        "owned_menu",
+        "recipe_ui",
+        "save",
+        "service"
+      ],
+      "classification": "production",
+      "contracts": [
+        "menu/recipe_bank_allowlist.json",
+        "menu/recipe_bank_ram.ld",
+        "transport/ram-push-review.json"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "RAM_PUSH_BANK_END",
+        "RAM_PUSH_BASE",
+        "RAM_PUSH_INSTALLER_START",
+        "RAM_PUSH_LINK_PUBLICATION_CAPACITY",
+        "RAM_PUSH_LINK_PUBLICATION_COUNT",
+        "RAM_PUSH_PUBLICATION_CAPACITY",
+        "RAM_PUSH_PUBLICATION_COUNT",
+        "__ram_push_start",
+        "__rb_modal_stock_resume",
+        "__rb_name_records",
+        "cc_stock_chroma_read",
+        "cc_stock_colour_read",
+        "cc_stock_filmmode_return",
+        "cc_stock_filmmode_zero",
+        "cc_stock_raw_commit_resume",
+        "cc_stock_raw_highlight_done",
+        "cc_stock_raw_highlight_resume",
+        "cc_stock_raw_request_done",
+        "cc_stock_raw_request_resume",
+        "cc_stock_saturation_mode_arm",
+        "cc_stock_saturation_zero",
+        "cc_stock_tone_read",
+        "rb_stock_attach_continue",
+        "rb_stock_detach_continue",
+        "rb_stock_draw_root_continue",
+        "rb_stock_page_entry",
+        "rb_stock_present_continue",
+        "rb_stock_probe_epilogue"
+      ],
+      "expected_sha256": "a0b3410921b0f417bbdc8911e7ba953e3915548f0868054518b344ae76519d99",
+      "qualified_artifacts": [
+        {
+          "path": "host/firmware/bank-linked-00c40000.bin",
+          "sha256": "06a562f2f0a32b3a03c0168a5b8ad7e48e43003861b6865df18ba5aa27c298b8"
+        }
+      ]
+    },
+    {
+      "id": "//host/firmware:bank-elf-00c4fc88",
+      "elf": "host/firmware/bank-elf-00c4fc88.elf",
+      "units": [
+        "bank",
+        "capture",
+        "media_permit",
+        "menu_engine",
+        "modal_runtime",
+        "owned_menu",
+        "recipe_ui",
+        "save",
+        "service"
+      ],
+      "classification": "production",
+      "contracts": [
+        "menu/recipe_bank_allowlist.json",
+        "menu/recipe_bank_ram.ld",
+        "transport/ram-push-review.json"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "RAM_PUSH_BANK_END",
+        "RAM_PUSH_BASE",
+        "RAM_PUSH_INSTALLER_START",
+        "RAM_PUSH_LINK_PUBLICATION_CAPACITY",
+        "RAM_PUSH_LINK_PUBLICATION_COUNT",
+        "RAM_PUSH_PUBLICATION_CAPACITY",
+        "RAM_PUSH_PUBLICATION_COUNT",
+        "__ram_push_start",
+        "__rb_modal_stock_resume",
+        "__rb_name_records",
+        "cc_stock_chroma_read",
+        "cc_stock_colour_read",
+        "cc_stock_filmmode_return",
+        "cc_stock_filmmode_zero",
+        "cc_stock_raw_commit_resume",
+        "cc_stock_raw_highlight_done",
+        "cc_stock_raw_highlight_resume",
+        "cc_stock_raw_request_done",
+        "cc_stock_raw_request_resume",
+        "cc_stock_saturation_mode_arm",
+        "cc_stock_saturation_zero",
+        "cc_stock_tone_read",
+        "rb_stock_attach_continue",
+        "rb_stock_detach_continue",
+        "rb_stock_draw_root_continue",
+        "rb_stock_page_entry",
+        "rb_stock_present_continue",
+        "rb_stock_probe_epilogue"
+      ],
+      "expected_sha256": "e94b89b1f3fa0dd849060825e66f6bc0ecd08a34ab0d580a4e9bd2854d711515",
+      "qualified_artifacts": [
+        {
+          "path": "host/firmware/bank-linked-00c4fc88.bin",
+          "sha256": "aca16a2da278edad82d4b28d6cf4dc163718376d92335bdc588e5c26c42fcf70"
+        }
+      ]
+    },
+    {
+      "id": "//host/firmware:bank-modal-elf-00c40000",
+      "elf": "host/firmware/modal-00c40000/kernel.elf",
+      "units": [
+        "bank",
+        "capture",
+        "media_permit",
+        "menu_engine",
+        "modal_runtime",
+        "owned_menu",
+        "recipe_ui",
+        "save",
+        "service"
+      ],
+      "classification": "production",
+      "contracts": [
+        "menu/recipe_bank_allowlist.json",
+        "menu/recipe_bank_ram.ld",
+        "menu/recipe_bank_modal_allowlist_fragment.json"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "RAM_PUSH_BANK_END",
+        "RAM_PUSH_BASE",
+        "RAM_PUSH_INSTALLER_START",
+        "RAM_PUSH_LINK_PUBLICATION_CAPACITY",
+        "RAM_PUSH_LINK_PUBLICATION_COUNT",
+        "RAM_PUSH_PUBLICATION_CAPACITY",
+        "RAM_PUSH_PUBLICATION_COUNT",
+        "__ram_push_start",
+        "__rb_modal_stock_resume",
+        "__rb_name_records",
+        "cc_stock_chroma_read",
+        "cc_stock_colour_read",
+        "cc_stock_filmmode_return",
+        "cc_stock_filmmode_zero",
+        "cc_stock_raw_commit_resume",
+        "cc_stock_raw_highlight_done",
+        "cc_stock_raw_highlight_resume",
+        "cc_stock_raw_request_done",
+        "cc_stock_raw_request_resume",
+        "cc_stock_saturation_mode_arm",
+        "cc_stock_saturation_zero",
+        "cc_stock_tone_read",
+        "rb_stock_attach_continue",
+        "rb_stock_detach_continue",
+        "rb_stock_draw_root_continue",
+        "rb_stock_page_entry",
+        "rb_stock_present_continue",
+        "rb_stock_probe_epilogue"
+      ],
+      "expected_sha256": "9fe463ec0853eb68ac660df773cf82b5de2cab382a574b821d48b86cb4aadebd"
+    },
+    {
+      "id": "//host/firmware:bank-modal-elf-00c4fc88",
+      "elf": "host/firmware/modal-00c4fc88/kernel.elf",
+      "units": [
+        "bank",
+        "capture",
+        "media_permit",
+        "menu_engine",
+        "modal_runtime",
+        "owned_menu",
+        "recipe_ui",
+        "save",
+        "service"
+      ],
+      "classification": "production",
+      "contracts": [
+        "menu/recipe_bank_allowlist.json",
+        "menu/recipe_bank_ram.ld",
+        "menu/recipe_bank_modal_allowlist_fragment.json"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "RAM_PUSH_BANK_END",
+        "RAM_PUSH_BASE",
+        "RAM_PUSH_INSTALLER_START",
+        "RAM_PUSH_LINK_PUBLICATION_CAPACITY",
+        "RAM_PUSH_LINK_PUBLICATION_COUNT",
+        "RAM_PUSH_PUBLICATION_CAPACITY",
+        "RAM_PUSH_PUBLICATION_COUNT",
+        "__ram_push_start",
+        "__rb_modal_stock_resume",
+        "__rb_name_records",
+        "cc_stock_chroma_read",
+        "cc_stock_colour_read",
+        "cc_stock_filmmode_return",
+        "cc_stock_filmmode_zero",
+        "cc_stock_raw_commit_resume",
+        "cc_stock_raw_highlight_done",
+        "cc_stock_raw_highlight_resume",
+        "cc_stock_raw_request_done",
+        "cc_stock_raw_request_resume",
+        "cc_stock_saturation_mode_arm",
+        "cc_stock_saturation_zero",
+        "cc_stock_tone_read",
+        "rb_stock_attach_continue",
+        "rb_stock_detach_continue",
+        "rb_stock_draw_root_continue",
+        "rb_stock_page_entry",
+        "rb_stock_present_continue",
+        "rb_stock_probe_epilogue"
+      ],
+      "expected_sha256": "ee78d6a345e58b301fb56a3476aa5e1e6b6ed1c843a8dd21410f4500090b6041"
+    },
+    {
+      "id": "//host/firmware:engine-elf-modal75-menu-engine",
+      "elf": "host/firmware/engine-modal75-menu-engine/kernel.elf",
+      "units": [
+        "bank",
+        "capture",
+        "kernel",
+        "menu_engine",
+        "modal_runtime",
+        "owned_menu",
+        "property_service",
+        "recipe_ui",
+        "record_store",
+        "service",
+        "settings_storage"
+      ],
+      "classification": "production",
+      "contracts": [
+        "menu/recipe_bank_allowlist.json",
+        "menu/recipe_bank_ram.ld",
+        "menu/recipe_bank_ram_engine.ld",
+        "menu/recipe_bank_menu_engine_allowlist_fragment.json"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "RAM_PUSH_BANK_END",
+        "RAM_PUSH_BASE",
+        "RAM_PUSH_INSTALLER_START",
+        "RAM_PUSH_LINK_PUBLICATION_CAPACITY",
+        "RAM_PUSH_LINK_PUBLICATION_COUNT",
+        "RAM_PUSH_MENU_ENGINE_END",
+        "RAM_PUSH_MENU_ENGINE_START",
+        "RAM_PUSH_PUBLICATION_COUNT",
+        "__ram_push_start",
+        "__rb_menu_engine_stock_resume",
+        "__rb_menu_value_shared_tail",
+        "__rb_menu_value_stock_arm",
+        "__rb_modal_stock_resume",
+        "__rb_name_records",
+        "cc_stock_chroma_read",
+        "cc_stock_colour_read",
+        "cc_stock_filmmode_return",
+        "cc_stock_filmmode_zero",
+        "cc_stock_raw_commit_resume",
+        "cc_stock_raw_highlight_done",
+        "cc_stock_raw_highlight_resume",
+        "cc_stock_raw_request_done",
+        "cc_stock_raw_request_resume",
+        "cc_stock_saturation_mode_arm",
+        "cc_stock_saturation_zero",
+        "cc_stock_tone_read",
+        "rb_stock_attach_continue",
+        "rb_stock_detach_continue",
+        "rb_stock_draw_root_continue",
+        "rb_stock_page_entry",
+        "rb_stock_present_continue",
+        "rb_stock_probe_epilogue",
+        "xm1_backup_diagnostic726c74",
+        "xm1_backup_report633594",
+        "xm1_backup_write6a59b8",
+        "xm1_bank_current_selection",
+        "xm1_bank_custom_refresh",
+        "xm1_kernel_console9",
+        "xm1_kernel_critical_enter",
+        "xm1_kernel_critical_exit",
+        "xm1_stock_61d59c",
+        "xm1_stock_61d5f0",
+        "xm1_stock_61d618",
+        "xm1_stock_61d65c",
+        "xm1_stock_61d8a4",
+        "xm1_stock_61df44"
+      ],
+      "expected_sha256": "df4353c2e84993108b598595bde0175631de337e636a784524a6d055497c47f7"
+    },
+    {
+      "id": "//host/firmware:engine-elf-modal75-menu-engine-render",
+      "elf": "host/firmware/engine-modal75-menu-engine-render/kernel.elf",
+      "units": [
+        "bank",
+        "capture",
+        "kernel",
+        "menu_engine",
+        "menu_widgets",
+        "modal_runtime",
+        "owned_menu",
+        "property_service",
+        "recipe_ui",
+        "record_store",
+        "render_adapter",
+        "render_commands",
+        "service",
+        "settings_storage"
+      ],
+      "classification": "production",
+      "contracts": [
+        "menu/recipe_bank_allowlist.json",
+        "menu/recipe_bank_ram.ld",
+        "menu/recipe_bank_ram_engine.ld",
+        "menu/recipe_bank_render_allowlist_fragment.json"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "RAM_PUSH_BANK_END",
+        "RAM_PUSH_BANK_VARIANT",
+        "RAM_PUSH_BASE",
+        "RAM_PUSH_INSTALLER_START",
+        "RAM_PUSH_LINK_PUBLICATION_CAPACITY",
+        "RAM_PUSH_LINK_PUBLICATION_COUNT",
+        "RAM_PUSH_MENU_ENGINE_END",
+        "RAM_PUSH_MENU_ENGINE_START",
+        "RAM_PUSH_PUBLICATION_COUNT",
+        "__ram_push_start",
+        "__rb_menu_engine_stock_resume",
+        "__rb_menu_value_shared_tail",
+        "__rb_menu_value_stock_arm",
+        "__rb_modal_stock_resume",
+        "__rb_name_records",
+        "__rb_render_pane_stock_resume",
+        "__rb_render_picker_stock_resume",
+        "__rb_render_tree_stock_resume",
+        "cc_stock_chroma_read",
+        "cc_stock_colour_read",
+        "cc_stock_filmmode_return",
+        "cc_stock_filmmode_zero",
+        "cc_stock_raw_commit_resume",
+        "cc_stock_raw_highlight_done",
+        "cc_stock_raw_highlight_resume",
+        "cc_stock_raw_request_done",
+        "cc_stock_raw_request_resume",
+        "cc_stock_saturation_mode_arm",
+        "cc_stock_saturation_zero",
+        "cc_stock_tone_read",
+        "rb_stock_attach_continue",
+        "rb_stock_detach_continue",
+        "rb_stock_draw_root_continue",
+        "rb_stock_page_entry",
+        "rb_stock_present_continue",
+        "rb_stock_probe_epilogue",
+        "xm1_backup_diagnostic726c74",
+        "xm1_backup_report633594",
+        "xm1_backup_write6a59b8",
+        "xm1_bank_current_selection",
+        "xm1_bank_custom_refresh",
+        "xm1_kernel_console9",
+        "xm1_kernel_critical_enter",
+        "xm1_kernel_critical_exit",
+        "xm1_stock_61d59c",
+        "xm1_stock_61d5f0",
+        "xm1_stock_61d618",
+        "xm1_stock_61d65c",
+        "xm1_stock_61d8a4",
+        "xm1_stock_61df44"
+      ],
+      "expected_sha256": "633b0a291b8d7af38e09a1c4a62253b55cee4af7a5a7e19044d35f6401a352e7"
+    },
+    {
+      "id": "//replacement/abi:pilot-image",
+      "elf": "replacement/abi/pilot-image.elf",
+      "units": [
+        "abi"
+      ],
+      "classification": "qualification",
+      "contracts": [
+        "replacement/abi/pilot.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [],
+      "expected_sha256": "f4c071e4ccae5bc2d046500b5f46b1bf136ad51d2ad783be4b506613e24fc8d8"
+    },
+    {
+      "id": "//replacement/af_result:af-result",
+      "elf": "replacement/af_result/af-result.elf",
+      "units": [
+        "af_result"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/af_result/af-result.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_af_critical_enter",
+        "xm1_af_critical_leave",
+        "xm1_af_secondary_mode"
+      ],
+      "expected_sha256": "4ae942609ce339eecdde49dd7507edbd3856492f37933165ada35235052f38f0"
+    },
+    {
+      "id": "//replacement/application_pump:application-pump-image",
+      "elf": "replacement/application_pump/application-pump-image.elf",
+      "units": [
+        "application_pump"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/application_pump/application-pump.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_application_normalizer",
+        "xm1_application_posthook",
+        "xm1_application_prehook"
+      ],
+      "expected_sha256": "58ef9a6c7102739b80d494ce97322e51c5ca12f318d841f08d7198b9b35d031a"
+    },
+    {
+      "id": "//replacement/calibration_liveview:calibration-liveview",
+      "elf": "replacement/calibration_liveview/calibration-liveview.elf",
+      "units": [
+        "calibration_liveview"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/calibration_liveview/calibration-liveview.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [],
+      "expected_sha256": "8d2414296bfce43ea14f46339f1cca713dcabc72cdcd8b720d1906bf1a63c4d3"
+    },
+    {
+      "id": "//replacement/capture:capture-candidate",
+      "elf": "replacement/capture/capture-candidate.elf",
+      "units": [
+        "capture"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/capture/capture.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [],
+      "expected_sha256": "c06e506aae164257692e98e4687177eb976ce6711714c28162b475d97bcdafc4"
+    },
+    {
+      "id": "//replacement/completion_delay:completion-delay-image",
+      "elf": "replacement/completion_delay/completion-delay-image.elf",
+      "units": [
+        "completion_delay"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/completion_delay/completion-delay.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [],
+      "expected_sha256": "1af96352b61d55732013388ea0cad6b8d2a09bc62a00eeecabcbc8c33cd33c6d"
+    },
+    {
+      "id": "//replacement/critical_pair:critical-pair-image",
+      "elf": "replacement/critical_pair/critical-pair-image.elf",
+      "units": [
+        "critical_pair",
+        "interface_initializer",
+        "loader_prefix",
+        "secondary_stage"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/loader_prefix/loader-prefix.ld",
+        "replacement/secondary_stage/secondary-stage.ld",
+        "replacement/rtos_timer/package/Replacement/RtosTimer/RootPackage.hs"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_forbid_fetch_entry_end",
+        "xm1_forbid_fetch_entry_start",
+        "xm1_forbid_fetch_log_end",
+        "xm1_forbid_fetch_log_start",
+        "xm1_forbid_fetch_main_end",
+        "xm1_forbid_fetch_main_start",
+        "xm1_forbid_fetch_mpu_discriminator_end",
+        "xm1_forbid_fetch_mpu_discriminator_start",
+        "xm1_forbid_fetch_selection_end",
+        "xm1_forbid_fetch_selection_start",
+        "xm1_forbid_fetch_stub_a_end",
+        "xm1_forbid_fetch_stub_a_start",
+        "xm1_forbid_fetch_stub_b_end",
+        "xm1_forbid_fetch_stub_b_start",
+        "xm1_forbid_read_entry_pool_end",
+        "xm1_forbid_read_entry_pool_start",
+        "xm1_forbid_read_handoff_pool_end",
+        "xm1_forbid_read_handoff_pool_start",
+        "xm1_forbid_read_main_pool_end",
+        "xm1_forbid_read_main_pool_start",
+        "xm1_loader_b_forbid_fetch_entry_end",
+        "xm1_loader_b_forbid_fetch_entry_start",
+        "xm1_loader_b_forbid_read_entry_pool_end",
+        "xm1_loader_b_forbid_read_entry_pool_start",
+        "xm1_loader_b_frame_return",
+        "xm1_loader_b_image_end",
+        "xm1_loader_b_image_start",
+        "xm1_loader_b_stack_top",
+        "xm1_loader_b_startup",
+        "xm1_loader_b_stock_entry",
+        "xm1_publication_argument",
+        "xm1_publication_target",
+        "xm1_record_base",
+        "xm1_retained_body_end",
+        "xm1_retained_body_start",
+        "xm1_retained_companion_flags",
+        "xm1_retained_companion_transfer",
+        "xm1_retained_config_record",
+        "xm1_retained_conversion",
+        "xm1_retained_data_end",
+        "xm1_retained_data_start",
+        "xm1_retained_delay",
+        "xm1_retained_execution_state",
+        "xm1_retained_peripheral_final",
+        "xm1_retained_peripheral_init",
+        "xm1_retained_segment_lookup",
+        "xm1_retained_structure_init",
+        "xm1_retained_tcm_stacks",
+        "xm1_vector_after_reset_start",
+        "xm1_vector_before_reset_end",
+        "xm1_vector_table_end",
+        "xm1_vector_table_start"
+      ],
+      "expected_sha256": "d90e4b882c4d333b9d777faea2ba1aa43e32bbe8e27a8cded2142e3ac9a12a34"
+    },
+    {
+      "id": "//replacement/develop:develop-candidate",
+      "elf": "replacement/develop/develop-candidate.elf",
+      "units": [
+        "callback_core",
+        "capture",
+        "develop",
+        "kernel",
+        "media_permit",
+        "property_service",
+        "record_store",
+        "save",
+        "settings_storage"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/develop/develop.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "image_planes_thread_event",
+        "redeye_divide_fault",
+        "resize_log",
+        "sensor_calibration_border_keys",
+        "sensor_calibration_cell_map",
+        "sensor_calibration_exposure_starts",
+        "sensor_calibration_primary_components",
+        "sensor_calibration_primary_keys",
+        "sensor_calibration_secondary_components",
+        "sensor_calibration_secondary_keys",
+        "xm1_font_scanlines_original_entry",
+        "xm1_kernel_console9",
+        "xm1_kernel_critical_enter",
+        "xm1_kernel_critical_exit",
+        "xm1_original_font_builtin_decode_bitmap",
+        "xm1_original_font_builtin_destroy",
+        "xm1_original_font_builtin_dimensions",
+        "xm1_original_font_builtin_glyph_width",
+        "xm1_original_font_builtin_height",
+        "xm1_original_font_builtin_index_glyphs",
+        "xm1_original_font_builtin_init",
+        "xm1_original_font_builtin_parse_line",
+        "xm1_original_font_builtin_parse_text_lines",
+        "xm1_original_font_builtin_properties",
+        "xm1_original_font_builtin_read_text_line",
+        "xm1_original_font_builtin_right_overhang",
+        "xm1_original_font_builtin_scan_glyph",
+        "xm1_original_font_builtin_scan_header",
+        "xm1_original_font_builtin_secondary_extent",
+        "xm1_original_font_builtin_storage_size",
+        "xm1_original_font_builtin_stroke_padding",
+        "xm1_original_font_builtin_thai_metric",
+        "xm1_original_font_builtin_top_overhang",
+        "xm1_original_font_builtin_width",
+        "xm1_original_font_draw_icon_bitmap",
+        "xm1_original_font_draw_text_bitmap",
+        "xm1_original_font_icon_destroy",
+        "xm1_original_font_icon_dimensions",
+        "xm1_original_font_icon_glyph_width",
+        "xm1_original_font_icon_height",
+        "xm1_original_font_icon_init",
+        "xm1_original_font_icon_right_overhang",
+        "xm1_original_font_icon_secondary_extent",
+        "xm1_original_font_icon_storage_size",
+        "xm1_original_font_icon_stroke_padding",
+        "xm1_original_font_icon_top_overhang",
+        "xm1_original_font_icon_weights",
+        "xm1_original_font_icon_width",
+        "xm1_pipeline_debug_kernel_error",
+        "xm1_stock_61d59c",
+        "xm1_stock_61d5f0",
+        "xm1_stock_61d618",
+        "xm1_stock_61d65c",
+        "xm1_stock_61d8a4",
+        "xm1_stock_61df44"
+      ],
+      "expected_sha256": "2ceff5202e6bae5e309d9148a7ea580259aebd2acc6060b70d90888ae68bcac7"
+    },
+    {
+      "id": "//replacement/display_scanout:display-scanout",
+      "elf": "replacement/display_scanout/display-scanout.elf",
+      "units": [
+        "display_scanout"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/display_scanout/display-scanout.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "scanout_enter_critical",
+        "scanout_irq_configure",
+        "scanout_irq_release",
+        "scanout_leave_critical",
+        "scanout_yield"
+      ],
+      "expected_sha256": "5abfbddfb8a22a27294f5acb9970cdb3a7ddf692fe775878c00e8f7f1ffb78d9"
+    },
+    {
+      "id": "//replacement/display_scanout:display-scanout-panel",
+      "elf": "replacement/display_scanout/display-scanout-panel.elf",
+      "units": [
+        "display_scanout"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/display_scanout/display-scanout-panel.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "scanout_enter_critical",
+        "scanout_irq_configure",
+        "scanout_irq_release",
+        "scanout_leave_critical",
+        "scanout_yield",
+        "xm1_power_interrupt_lock",
+        "xm1_power_interrupt_unlock",
+        "xm1_power_restore_irq",
+        "xm1_power_save_irq"
+      ],
+      "expected_sha256": "fbdda5d596c775c09e86a3e284602790c4eae7d9c1708d44c4523875eaf2a207"
+    },
+    {
+      "id": "//replacement/first_stage:first-stage-fixed-image",
+      "elf": "replacement/first_stage/first-stage-fixed-image.elf",
+      "units": [
+        "first_stage"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/first_stage/first-stage.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_config_data_end",
+        "xm1_config_data_start",
+        "xm1_retained_data_end",
+        "xm1_retained_data_start",
+        "xm1_retired_body_end",
+        "xm1_retired_body_start",
+        "xm1_vector_after_reset_start",
+        "xm1_vector_before_reset_end",
+        "xm1_vector_table_end",
+        "xm1_vector_table_start"
+      ],
+      "expected_sha256": "e3813402a6264724775465eada738b62f1a6c3a1b9a3699411ee8666896c317d"
+    },
+    {
+      "id": "//replacement/first_stage:first-stage-image",
+      "elf": "replacement/first_stage/first-stage-image.elf",
+      "units": [
+        "first_stage"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/first_stage/first-stage.ld",
+        "replacement/rtos_timer/package/Replacement/RtosTimer/RootPackage.hs"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_config_data_end",
+        "xm1_config_data_start",
+        "xm1_retained_data_end",
+        "xm1_retained_data_start",
+        "xm1_retired_body_end",
+        "xm1_retired_body_start",
+        "xm1_vector_after_reset_start",
+        "xm1_vector_before_reset_end",
+        "xm1_vector_table_end",
+        "xm1_vector_table_start"
+      ],
+      "expected_sha256": "456fa5c10d041ac21dd0d475e964c0f54c44d1767967ce85a05a5692f8b446b8"
+    },
+    {
+      "id": "//replacement/fixed_image:probe-image",
+      "elf": "replacement/fixed_image/probe-image.elf",
+      "units": [
+        "fixed_image"
+      ],
+      "classification": "qualification",
+      "contracts": [
+        "replacement/fixed_image/ProbeMain.hs"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_fixed_test_resume"
+      ],
+      "expected_sha256": "58ba95911e96baea878c8789ad1b3b38bd538ce8d12509649faa6f8d6c7ca987"
+    },
+    {
+      "id": "//replacement/general_heap:general-heap-fixed-image",
+      "elf": "replacement/general_heap/general-heap-fixed-image.elf",
+      "units": [
+        "general_heap"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/general_heap/general-heap.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "__heap_retained_lock",
+        "__heap_retained_unlock"
+      ],
+      "expected_sha256": "09b755f4f1d8d6f487efb33554e9a20eab220d5ec0797f28f9040ce78803a3d1"
+    },
+    {
+      "id": "//replacement/general_heap:general-heap-image",
+      "elf": "replacement/general_heap/general-heap-image.elf",
+      "units": [
+        "general_heap"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/general_heap/general-heap.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "__heap_retained_lock",
+        "__heap_retained_unlock"
+      ],
+      "expected_sha256": "c38a6034df692d3a1e5b0fcbd1ecbd781eef4a3bbb732e40481d5f6830ede3b2"
+    },
+    {
+      "id": "//replacement/general_heap:general-heap-recipe-image",
+      "elf": "replacement/general_heap/general-heap-recipe-image.elf",
+      "units": [
+        "general_heap"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/general_heap/general-heap.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "__heap_retained_lock",
+        "__heap_retained_unlock"
+      ],
+      "expected_sha256": "c8781f9e7cb9e5666b840baa93df68ec913890af8266bc2c7cdcb7fa05b8fde7"
+    },
+    {
+      "id": "//replacement/idle_task:idle-task-image",
+      "elf": "replacement/idle_task/idle-task-image.elf",
+      "units": [
+        "idle_task"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/idle_task/idle-task.ld",
+        "replacement/rtos_timer/package/Replacement/RtosTimer/RootPackage.hs"
+      ],
+      "required_exports": [],
+      "allowed_imports": [],
+      "expected_sha256": "b53919f2fc23b9b21fbd2a5904d82b695c27ff4d38736388388ac459edc2f6bc"
+    },
+    {
+      "id": "//replacement/image5_init:image5-init-image",
+      "elf": "replacement/image5_init/image5-init-image.elf",
+      "units": [
+        "image5_init"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/image5_init/image5-init.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "service_1055d10",
+        "service_1056c24",
+        "service_69cf84",
+        "service_69f000",
+        "service_6b7df8",
+        "service_6c62a8",
+        "service_72872c",
+        "service_73aca4",
+        "service_d80d44",
+        "service_d986b0",
+        "service_db01fc",
+        "service_db63e0",
+        "service_dca604",
+        "service_ec5350",
+        "service_ed10b4",
+        "service_ed2b00",
+        "service_ed4acc",
+        "service_ed4afc",
+        "service_ef8c90"
+      ],
+      "expected_sha256": "8063198ef345596b5fc01bb6497fccbd259ab409c1e3ca9e38470af395ed08f5"
+    },
+    {
+      "id": "//replacement/image5_load:image5-load-image",
+      "elf": "replacement/image5_load/image5-load-image.elf",
+      "units": [
+        "image5_load"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/image5_load/image5-load.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_image5_cache",
+        "xm1_image5_cpu_fill",
+        "xm1_image5_decoder_finish",
+        "xm1_image5_decoder_init",
+        "xm1_image5_feed",
+        "xm1_image5_fill_done",
+        "xm1_image5_fill_flag",
+        "xm1_image5_fill_request",
+        "xm1_image5_marker",
+        "xm1_image5_mode",
+        "xm1_image5_read",
+        "xm1_image5_segment"
+      ],
+      "expected_sha256": "c6d69197bdc28e89c8e448b88c75e7d1693e33282d33048e8667cfee078c410e"
+    },
+    {
+      "id": "//replacement/interface_initializer:interface-initializer-image",
+      "elf": "replacement/interface_initializer/interface-initializer-image.elf",
+      "units": [
+        "interface_initializer",
+        "loader_prefix",
+        "secondary_stage"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/loader_prefix/loader-prefix.ld",
+        "replacement/secondary_stage/secondary-stage.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_forbid_fetch_entry_end",
+        "xm1_forbid_fetch_entry_start",
+        "xm1_forbid_fetch_log_end",
+        "xm1_forbid_fetch_log_start",
+        "xm1_forbid_fetch_main_end",
+        "xm1_forbid_fetch_main_start",
+        "xm1_forbid_fetch_mpu_discriminator_end",
+        "xm1_forbid_fetch_mpu_discriminator_start",
+        "xm1_forbid_fetch_selection_end",
+        "xm1_forbid_fetch_selection_start",
+        "xm1_forbid_fetch_stub_a_end",
+        "xm1_forbid_fetch_stub_a_start",
+        "xm1_forbid_fetch_stub_b_end",
+        "xm1_forbid_fetch_stub_b_start",
+        "xm1_forbid_read_entry_pool_end",
+        "xm1_forbid_read_entry_pool_start",
+        "xm1_forbid_read_handoff_pool_end",
+        "xm1_forbid_read_handoff_pool_start",
+        "xm1_forbid_read_main_pool_end",
+        "xm1_forbid_read_main_pool_start",
+        "xm1_loader_b_forbid_fetch_entry_end",
+        "xm1_loader_b_forbid_fetch_entry_start",
+        "xm1_loader_b_forbid_read_entry_pool_end",
+        "xm1_loader_b_forbid_read_entry_pool_start",
+        "xm1_loader_b_frame_return",
+        "xm1_loader_b_image_end",
+        "xm1_loader_b_image_start",
+        "xm1_loader_b_stack_top",
+        "xm1_loader_b_startup",
+        "xm1_loader_b_stock_entry",
+        "xm1_publication_argument",
+        "xm1_publication_target",
+        "xm1_record_base",
+        "xm1_retained_body_end",
+        "xm1_retained_body_start",
+        "xm1_retained_companion_flags",
+        "xm1_retained_companion_transfer",
+        "xm1_retained_config_record",
+        "xm1_retained_conversion",
+        "xm1_retained_data_end",
+        "xm1_retained_data_start",
+        "xm1_retained_delay",
+        "xm1_retained_execution_state",
+        "xm1_retained_peripheral_final",
+        "xm1_retained_peripheral_init",
+        "xm1_retained_segment_lookup",
+        "xm1_retained_structure_init",
+        "xm1_retained_tcm_stacks",
+        "xm1_vector_after_reset_start",
+        "xm1_vector_before_reset_end",
+        "xm1_vector_table_end",
+        "xm1_vector_table_start"
+      ],
+      "expected_sha256": "14073b5d70bbfbc9e33950e002ba14dcae5dff9dcb3bc0fbb6d982f92b9c36f1"
+    },
+    {
+      "id": "//replacement/kernel_install:kernel-install-image",
+      "elf": "replacement/kernel_install/kernel-install-image.elf",
+      "units": [
+        "kernel_install"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/kernel_install/kernel-install.ld",
+        "replacement/rtos_timer/package/Replacement/RtosTimer/RootPackage.hs"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_kernel_cache"
+      ],
+      "expected_sha256": "de6da2ed2024f77acbe97221d9bb47a0625f16fa901e2b093325b47853317dfb"
+    },
+    {
+      "id": "//replacement/lens_transport:actor",
+      "elf": "replacement/lens_transport/actor.elf",
+      "units": [
+        "lens_transport"
+      ],
+      "classification": "qualification",
+      "contracts": [
+        "replacement/lens_transport/native/actor.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [],
+      "expected_sha256": "4cb968084afba99a03784c8d0c1983ab528cad51784bab56417ab86b333f361d"
+    },
+    {
+      "id": "//replacement/loader_orchestration:loader-a-orchestration-image",
+      "elf": "replacement/loader_orchestration/loader-a-orchestration-image.elf",
+      "units": [
+        "loader_orchestration"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/loader_orchestration/loader-a.ld",
+        "replacement/loader_orchestration/loader-orchestration.ld",
+        "replacement/rtos_timer/package/Replacement/RtosTimer/RootPackage.hs"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_loader_activate_timers",
+        "xm1_loader_auto_ready",
+        "xm1_loader_base",
+        "xm1_loader_clear",
+        "xm1_loader_continue1",
+        "xm1_loader_continue2",
+        "xm1_loader_continue3",
+        "xm1_loader_continue4",
+        "xm1_loader_continue5",
+        "xm1_loader_continue6",
+        "xm1_loader_continue7",
+        "xm1_loader_identity",
+        "xm1_loader_log",
+        "xm1_loader_peer_continue",
+        "xm1_loader_prepare1",
+        "xm1_loader_prepare2",
+        "xm1_loader_prepare3",
+        "xm1_loader_prepare4",
+        "xm1_loader_primary_continue",
+        "xm1_loader_private_initialize",
+        "xm1_loader_publish_callback",
+        "xm1_loader_ready",
+        "xm1_loader_schedule"
+      ],
+      "expected_sha256": "b4b23b35e2273670b4d678ddf56def9587edef4825f8fb9d54869b19a25f5b15"
+    },
+    {
+      "id": "//replacement/loader_orchestration:loader-b-orchestration-image",
+      "elf": "replacement/loader_orchestration/loader-b-orchestration-image.elf",
+      "units": [
+        "loader_orchestration"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/loader_orchestration/loader-b.ld",
+        "replacement/loader_orchestration/loader-orchestration.ld",
+        "replacement/rtos_timer/package/Replacement/RtosTimer/RootPackage.hs"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_loader_activate_timers",
+        "xm1_loader_auto_ready",
+        "xm1_loader_base",
+        "xm1_loader_clear",
+        "xm1_loader_continue1",
+        "xm1_loader_continue2",
+        "xm1_loader_continue3",
+        "xm1_loader_continue4",
+        "xm1_loader_continue5",
+        "xm1_loader_continue6",
+        "xm1_loader_continue7",
+        "xm1_loader_identity",
+        "xm1_loader_log",
+        "xm1_loader_peer_continue",
+        "xm1_loader_prepare1",
+        "xm1_loader_prepare2",
+        "xm1_loader_prepare3",
+        "xm1_loader_prepare4",
+        "xm1_loader_primary_continue",
+        "xm1_loader_private_initialize",
+        "xm1_loader_publish_callback",
+        "xm1_loader_ready",
+        "xm1_loader_schedule"
+      ],
+      "expected_sha256": "72a26fde5ff8ca6b041b0c0b6f47cf5a161140f2591bc4018588d095fc5967ba"
+    },
+    {
+      "id": "//replacement/loader_prefix:loader-prefix-image",
+      "elf": "replacement/loader_prefix/loader-prefix-image.elf",
+      "units": [
+        "loader_prefix",
+        "secondary_stage"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/loader_prefix/loader-prefix.ld",
+        "replacement/secondary_stage/secondary-stage.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_forbid_fetch_entry_end",
+        "xm1_forbid_fetch_entry_start",
+        "xm1_forbid_fetch_log_end",
+        "xm1_forbid_fetch_log_start",
+        "xm1_forbid_fetch_main_end",
+        "xm1_forbid_fetch_main_start",
+        "xm1_forbid_fetch_mpu_discriminator_end",
+        "xm1_forbid_fetch_mpu_discriminator_start",
+        "xm1_forbid_fetch_selection_end",
+        "xm1_forbid_fetch_selection_start",
+        "xm1_forbid_fetch_stub_a_end",
+        "xm1_forbid_fetch_stub_a_start",
+        "xm1_forbid_fetch_stub_b_end",
+        "xm1_forbid_fetch_stub_b_start",
+        "xm1_forbid_read_entry_pool_end",
+        "xm1_forbid_read_entry_pool_start",
+        "xm1_forbid_read_handoff_pool_end",
+        "xm1_forbid_read_handoff_pool_start",
+        "xm1_forbid_read_main_pool_end",
+        "xm1_forbid_read_main_pool_start",
+        "xm1_loader_b_forbid_fetch_entry_end",
+        "xm1_loader_b_forbid_fetch_entry_start",
+        "xm1_loader_b_forbid_read_entry_pool_end",
+        "xm1_loader_b_forbid_read_entry_pool_start",
+        "xm1_loader_b_frame_return",
+        "xm1_loader_b_image_end",
+        "xm1_loader_b_image_start",
+        "xm1_loader_b_stack_top",
+        "xm1_loader_b_startup",
+        "xm1_loader_b_stock_entry",
+        "xm1_publication_argument",
+        "xm1_publication_target",
+        "xm1_record_base",
+        "xm1_retained_body_end",
+        "xm1_retained_body_start",
+        "xm1_retained_companion_flags",
+        "xm1_retained_companion_transfer",
+        "xm1_retained_config_record",
+        "xm1_retained_conversion",
+        "xm1_retained_data_end",
+        "xm1_retained_data_start",
+        "xm1_retained_delay",
+        "xm1_retained_execution_state",
+        "xm1_retained_peripheral_final",
+        "xm1_retained_peripheral_init",
+        "xm1_retained_segment_lookup",
+        "xm1_retained_structure_init",
+        "xm1_retained_tcm_stacks",
+        "xm1_vector_after_reset_start",
+        "xm1_vector_before_reset_end",
+        "xm1_vector_table_end",
+        "xm1_vector_table_start"
+      ],
+      "expected_sha256": "efd835310e89ba09355458f71aaa6ef1366111fc27261b86381fc6cae45d6510"
+    },
+    {
+      "id": "//replacement/media_permit:media-permit-candidate",
+      "elf": "replacement/media_permit/media-permit-candidate.elf",
+      "units": [
+        "media_permit"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/media_permit/media_permit.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [],
+      "expected_sha256": "693993d794e2b53c18c89a34b463421f933812852dc4f410e544b08cf425baa3"
+    },
+    {
+      "id": "//replacement/peer_wait_control:peer-wait-control-image",
+      "elf": "replacement/peer_wait_control/peer-wait-control-image.elf",
+      "units": [
+        "peer_wait_control"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/peer_wait_control/peer-wait-control.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_peer_wait_original_clear"
+      ],
+      "expected_sha256": "90707469dd5952c1d926a6d065a2e2a038f806e52d258ee3bacf1797e4a3316c"
+    },
+    {
+      "id": "//replacement/plain_load:plain-load-image",
+      "elf": "replacement/plain_load/plain-load-image.elf",
+      "units": [
+        "plain_load"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/plain_load/plain-load.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_plain_delay",
+        "xm1_plain_extents",
+        "xm1_plain_give",
+        "xm1_plain_mode",
+        "xm1_plain_progress",
+        "xm1_plain_read",
+        "xm1_plain_segment",
+        "xm1_plain_take"
+      ],
+      "expected_sha256": "8a75a64a4274c370c01bf9bab82ffa84e4f7c8a9b95f6c45c2e355f700da993a"
+    },
+    {
+      "id": "//replacement/power_lifecycle:record-helpers",
+      "elf": "replacement/power_lifecycle/record-helpers.elf",
+      "units": [
+        "power_lifecycle"
+      ],
+      "classification": "qualification",
+      "contracts": [
+        "replacement/power_lifecycle/native/record-helpers.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_kernel_console9",
+        "xm1_kernel_critical_enter",
+        "xm1_kernel_critical_exit"
+      ],
+      "expected_sha256": "ac127b54371e0277db13b8bf8b9ea8acdd9fa9c3a65c6ef5dfd087564bf35495"
+    },
+    {
+      "id": "//replacement/primary_initializer:primary-initializer-image",
+      "elf": "replacement/primary_initializer/primary-initializer-image.elf",
+      "units": [
+        "primary_initializer"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/primary_initializer/primary-initializer.ld",
+        "replacement/rtos_timer/package/Replacement/RtosTimer/RootPackage.hs"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "__primary_initializer_capacity"
+      ],
+      "expected_sha256": "1ffae27541c87c960f8584cc9a63773e2c9a3f01c2dfdd32e54ad51ca65cb592"
+    },
+    {
+      "id": "//replacement/property_service:property-service-image",
+      "elf": "replacement/property_service/property-service-image.elf",
+      "units": [
+        "kernel",
+        "property_service",
+        "record_store",
+        "settings_storage"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/property_service/property-service.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_backup_diagnostic726c74",
+        "xm1_backup_report633594",
+        "xm1_backup_write6a59b8",
+        "xm1_kernel_console9",
+        "xm1_kernel_critical_enter",
+        "xm1_kernel_critical_exit",
+        "xm1_stock_61d59c",
+        "xm1_stock_61d5f0",
+        "xm1_stock_61d618",
+        "xm1_stock_61d65c",
+        "xm1_stock_61d8a4",
+        "xm1_stock_61df44"
+      ],
+      "expected_sha256": "fe245ec2d32c484a9c13a2f28656beb8258db64e8094d569298e38529ec663de"
+    },
+    {
+      "id": "//replacement/property_service:property-service-linked-image",
+      "elf": "replacement/property_service/property-service-linked-image.elf",
+      "units": [
+        "kernel",
+        "property_service",
+        "record_store",
+        "settings_storage"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/property_service/property-service-public.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_backup_diagnostic726c74",
+        "xm1_backup_report633594",
+        "xm1_backup_write6a59b8",
+        "xm1_kernel_console9",
+        "xm1_kernel_critical_enter",
+        "xm1_kernel_critical_exit",
+        "xm1_stock_61d59c",
+        "xm1_stock_61d5f0",
+        "xm1_stock_61d618",
+        "xm1_stock_61d65c",
+        "xm1_stock_61d8a4",
+        "xm1_stock_61df44"
+      ],
+      "expected_sha256": "e3b9b795d71f5d3853cae4c38ae73f3f06109b3c6e41b3a6fbcbaba1461f634c"
+    },
+    {
+      "id": "//replacement/property_service:property-service-public-image",
+      "elf": "replacement/property_service/property-service-public-image.elf",
+      "units": [
+        "kernel",
+        "property_service",
+        "record_store",
+        "settings_storage"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/property_service/property-service-public.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_backup_diagnostic726c74",
+        "xm1_backup_report633594",
+        "xm1_backup_write6a59b8",
+        "xm1_kernel_console9",
+        "xm1_kernel_critical_enter",
+        "xm1_kernel_critical_exit",
+        "xm1_stock_61d59c",
+        "xm1_stock_61d5f0",
+        "xm1_stock_61d618",
+        "xm1_stock_61d65c",
+        "xm1_stock_61d8a4",
+        "xm1_stock_61df44"
+      ],
+      "expected_sha256": "ea248ab3c3d6a2a448e6ab4b5985e13fd0d9ec33ebefbec3556142f9787eb68c"
+    },
+    {
+      "id": "//replacement/record_store_carrier:record-store-image",
+      "elf": "replacement/record_store_carrier/record-store-image.elf",
+      "units": [
+        "record_store",
+        "record_store_carrier"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/record_store_carrier/imports.ld",
+        "replacement/record_store_carrier/record-store.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "record_raw_erase_0",
+        "record_raw_erase_1",
+        "record_raw_erase_2",
+        "record_raw_erase_3",
+        "record_raw_erase_4",
+        "record_raw_region_read",
+        "record_raw_write_0",
+        "record_raw_write_1",
+        "record_raw_write_2",
+        "record_raw_write_3",
+        "record_raw_write_4",
+        "record_semaphore_give",
+        "record_semaphore_take",
+        "record_store_block",
+        "record_store_cache_ages",
+        "record_store_cache_tags",
+        "record_store_cache_timestamp",
+        "record_store_initialized",
+        "record_store_second_block",
+        "record_store_staging_0",
+        "record_store_staging_1",
+        "record_store_staging_2",
+        "record_store_staging_3",
+        "record_store_staging_4",
+        "record_store_state",
+        "record_store_wrappers"
+      ],
+      "expected_sha256": "ab9f21de8ad531c38fcf434fac4ee64287cc33e3f01a833d2a9ae3ea976dbdbc"
+    },
+    {
+      "id": "//replacement/root_task:root-task-image",
+      "elf": "replacement/root_task/root-task-image.elf",
+      "units": [
+        "root_task"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/root_task/root-task.ld",
+        "replacement/rtos_timer/package/Replacement/RtosTimer/RootPackage.hs"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "root_checked_init_a",
+        "root_checked_init_b",
+        "root_cleanup",
+        "root_config_query",
+        "root_config_write",
+        "root_create_resource",
+        "root_create_workers",
+        "root_init_649070",
+        "root_init_6490dc",
+        "root_init_656788",
+        "root_init_6568ec",
+        "root_init_662e48",
+        "root_init_665224",
+        "root_init_676054",
+        "root_init_69f204",
+        "root_init_6a5634",
+        "root_init_6a564c",
+        "root_init_6a5c08",
+        "root_init_7262cc",
+        "root_install_descriptor",
+        "root_install_table",
+        "root_mark",
+        "root_mode",
+        "root_periodic_callback",
+        "root_periodic_context",
+        "root_platform_init",
+        "root_runtime_init",
+        "root_submit_later",
+        "xm1_app_register_callback"
+      ],
+      "expected_sha256": "b655e8c01e297d682a7e9236a6b81560290fbe859fe212565176f582e0ea321f",
+      "qualified_artifacts": [
+        {
+          "path": "replacement/root_task/root-task-image.bin",
+          "sha256": "a1e8d76e7be401f434342ec9df2c538dd01f373cd6e3f47274fa449e3a11d210"
+        }
+      ]
+    },
+    {
+      "id": "//replacement/rtos_cyclic:app-callback",
+      "elf": "replacement/rtos_cyclic/app-callback.elf",
+      "units": [
+        "rtos_cyclic"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/rtos_cyclic/app-callback.ld",
+        "replacement/rtos_timer/package/Replacement/RtosTimer/RootPackage.hs"
+      ],
+      "required_exports": [],
+      "allowed_imports": [],
+      "expected_sha256": "642ca1dd4f327c52ab996a2666f193f5caf8ba6f126b7380e7d9ecc16ae948ee"
+    },
+    {
+      "id": "//replacement/rtos_exception:exception-a",
+      "elf": "replacement/rtos_exception/exception-a.elf",
+      "units": [
+        "rtos_exception"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/rtos_exception/exception-a.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_exception_halt",
+        "xm1_exception_scheduler_return",
+        "xm1_exception_shutdown",
+        "xm1_exception_stock_identity",
+        "xm1_exception_stock_log",
+        "xm1_exception_stock_release",
+        "xm1_exception_stock_try",
+        "xm1_exception_vfp_owner"
+      ],
+      "expected_sha256": "e81a3fd5acba7680de14e090d9f7d050741a41ece1eb7324fe002991640daef4"
+    },
+    {
+      "id": "//replacement/rtos_exception:exception-b",
+      "elf": "replacement/rtos_exception/exception-b.elf",
+      "units": [
+        "rtos_exception"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/rtos_exception/exception-b.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_exception_halt",
+        "xm1_exception_scheduler_return",
+        "xm1_exception_shutdown",
+        "xm1_exception_stock_identity",
+        "xm1_exception_stock_log",
+        "xm1_exception_stock_release",
+        "xm1_exception_stock_try",
+        "xm1_exception_vfp_owner"
+      ],
+      "expected_sha256": "ef4c8127b22b59a81c4beac6b88ba44657867d25b76bfa2da1840d8fdc041997"
+    },
+    {
+      "id": "//replacement/rtos_irq_control:irq-a",
+      "elf": "replacement/rtos_irq_control/irq-a.elf",
+      "units": [
+        "rtos_irq_control"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/rtos_irq_control/irq-a.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [],
+      "expected_sha256": "90e9b9201867c80e00d0484fdd4f204bb4c63ebf892248dabb34ef606df42da0"
+    },
+    {
+      "id": "//replacement/rtos_irq_control:irq-b",
+      "elf": "replacement/rtos_irq_control/irq-b.elf",
+      "units": [
+        "rtos_irq_control"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/rtos_irq_control/irq-b.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [],
+      "expected_sha256": "ed1d34e92c1314c64c7a70130c6b50e93934e220c4a8e6a3ab4f49cf7edde192"
+    },
+    {
+      "id": "//replacement/rtos_platform:platform-a",
+      "elf": "replacement/rtos_platform/platform-a.elf",
+      "units": [
+        "rtos_cyclic",
+        "rtos_data_queue",
+        "rtos_fixed_pool",
+        "rtos_global_lock",
+        "rtos_objects",
+        "rtos_own_first",
+        "rtos_platform",
+        "rtos_scheduler",
+        "rtos_semaphore",
+        "rtos_task_records",
+        "rtos_timer"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/rtos_platform/carriers.json",
+        "replacement/rtos_timer/package/Replacement/RtosTimer/RootPackage.hs"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "s3a_stock_discard",
+        "s3a_stock_notify",
+        "s3a_stock_prepare",
+        "s3a_stock_remove",
+        "s3a_stock_reset",
+        "s3a_stock_rotate",
+        "s3a_stock_save",
+        "s3b_notify",
+        "s3b_prepare",
+        "s3b_release_wait",
+        "s3b_switch",
+        "s3c_insert",
+        "s3c_notify",
+        "s3c_remove",
+        "s3c_switch",
+        "s3d_insert_ready",
+        "s3d_notify_dispatch",
+        "s3d_remove_ready",
+        "s3d_reset_task",
+        "s3d_restart_task",
+        "s3d_switch",
+        "s3d_timer_insert",
+        "s3d_timer_remove",
+        "xm1_fixed_pool_stock_acquire",
+        "xm1_fixed_pool_stock_dispatch",
+        "xm1_fixed_pool_stock_mask",
+        "xm1_fixed_pool_stock_notify",
+        "xm1_fixed_pool_stock_release",
+        "xm1_fixed_pool_stock_restore",
+        "xm1_fixed_pool_stock_restore_irq",
+        "xm1_fixed_pool_stock_save_irq",
+        "xm1_fixed_pool_stock_uidivmod",
+        "xm1_fixed_pool_stock_wait_cancel",
+        "xm1_fixed_pool_stock_wait_enqueue",
+        "xm1_fixed_pool_stock_wait_enqueue_timed",
+        "xm1_fixed_pool_stock_wait_release",
+        "xm1_rtos_cyclic_timer_insert",
+        "xm1_rtos_cyclic_timer_remove",
+        "xm1_rtos_data_queue_stock_insert_timer",
+        "xm1_rtos_data_queue_stock_remove_timer",
+        "xm1_rtos_objects_stock_insert_timer",
+        "xm1_rtos_objects_stock_remove_timer",
+        "xm1_rtos_objects_stock_timeout",
+        "xm1_rtos_scheduler_s2_clear_irq",
+        "xm1_rtos_scheduler_s2_deliver_exception",
+        "xm1_rtos_scheduler_s2_exit_task",
+        "xm1_rtos_scheduler_s2_global_unlock",
+        "xm1_rtos_scheduler_stock_raise_irq",
+        "xm1_semaphore_stock_acquire",
+        "xm1_semaphore_stock_dispatch",
+        "xm1_semaphore_stock_mask",
+        "xm1_semaphore_stock_notify",
+        "xm1_semaphore_stock_release",
+        "xm1_semaphore_stock_restore",
+        "xm1_semaphore_stock_wait_cancel",
+        "xm1_semaphore_stock_wait_enqueue",
+        "xm1_semaphore_stock_wait_enqueue_timed",
+        "xm1_semaphore_stock_wait_release",
+        "xm1_task_mask_restore",
+        "xm1_task_mask_save"
+      ],
+      "expected_sha256": "482b9c803bad427f3bf6b1cb95df219824b592eba560940995bb0ada6a1c495c",
+      "qualified_artifacts": [
+        {
+          "path": "replacement/rtos_platform/platform-a.bin",
+          "sha256": "f5f9c935707f18e75ba5c07242a02000fb8de80946ac907871da6d5fbc252106"
+        }
+      ]
+    },
+    {
+      "id": "//replacement/rtos_platform:platform-b",
+      "elf": "replacement/rtos_platform/platform-b.elf",
+      "units": [
+        "rtos_cyclic",
+        "rtos_data_queue",
+        "rtos_fixed_pool",
+        "rtos_global_lock",
+        "rtos_objects",
+        "rtos_own_first",
+        "rtos_platform",
+        "rtos_scheduler",
+        "rtos_semaphore",
+        "rtos_task_records",
+        "rtos_timer"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/rtos_platform/carriers.json",
+        "replacement/rtos_timer/package/Replacement/RtosTimer/RootPackage.hs"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "s3a_stock_discard",
+        "s3a_stock_notify",
+        "s3a_stock_prepare",
+        "s3a_stock_remove",
+        "s3a_stock_reset",
+        "s3a_stock_rotate",
+        "s3a_stock_save",
+        "s3b_notify",
+        "s3b_prepare",
+        "s3b_release_wait",
+        "s3b_switch",
+        "s3c_insert",
+        "s3c_notify",
+        "s3c_remove",
+        "s3c_switch",
+        "s3d_insert_ready",
+        "s3d_notify_dispatch",
+        "s3d_remove_ready",
+        "s3d_reset_task",
+        "s3d_restart_task",
+        "s3d_switch",
+        "s3d_timer_insert",
+        "s3d_timer_remove",
+        "xm1_fixed_pool_stock_acquire",
+        "xm1_fixed_pool_stock_dispatch",
+        "xm1_fixed_pool_stock_mask",
+        "xm1_fixed_pool_stock_notify",
+        "xm1_fixed_pool_stock_release",
+        "xm1_fixed_pool_stock_restore",
+        "xm1_fixed_pool_stock_restore_irq",
+        "xm1_fixed_pool_stock_save_irq",
+        "xm1_fixed_pool_stock_uidivmod",
+        "xm1_fixed_pool_stock_wait_cancel",
+        "xm1_fixed_pool_stock_wait_enqueue",
+        "xm1_fixed_pool_stock_wait_enqueue_timed",
+        "xm1_fixed_pool_stock_wait_release",
+        "xm1_rtos_cyclic_timer_insert",
+        "xm1_rtos_cyclic_timer_remove",
+        "xm1_rtos_data_queue_stock_insert_timer",
+        "xm1_rtos_data_queue_stock_remove_timer",
+        "xm1_rtos_objects_stock_insert_timer",
+        "xm1_rtos_objects_stock_remove_timer",
+        "xm1_rtos_objects_stock_timeout",
+        "xm1_rtos_scheduler_s2_clear_irq",
+        "xm1_rtos_scheduler_s2_deliver_exception",
+        "xm1_rtos_scheduler_s2_exit_task",
+        "xm1_rtos_scheduler_s2_global_unlock",
+        "xm1_rtos_scheduler_stock_raise_irq",
+        "xm1_semaphore_stock_acquire",
+        "xm1_semaphore_stock_dispatch",
+        "xm1_semaphore_stock_mask",
+        "xm1_semaphore_stock_notify",
+        "xm1_semaphore_stock_release",
+        "xm1_semaphore_stock_restore",
+        "xm1_semaphore_stock_wait_cancel",
+        "xm1_semaphore_stock_wait_enqueue",
+        "xm1_semaphore_stock_wait_enqueue_timed",
+        "xm1_semaphore_stock_wait_release",
+        "xm1_task_mask_restore",
+        "xm1_task_mask_save"
+      ],
+      "expected_sha256": "80fac07213e96a4a51e18643b743a4d5508ec5817c46736891fb28490f9cf0d7",
+      "qualified_artifacts": [
+        {
+          "path": "replacement/rtos_platform/platform-b.bin",
+          "sha256": "41adbaed3d18d88dc069435c5f8a9a2214f5a66470722a1b5beec10e609c43c8"
+        }
+      ]
+    },
+    {
+      "id": "//replacement/saclac:saclac-image",
+      "elf": "replacement/saclac/saclac-image.elf",
+      "units": [
+        "saclac",
+        "saclac_interface"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/saclac/Replacement/Saclac/Artifact.hs",
+        "replacement/saclac/saclac.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [],
+      "expected_sha256": "de462e1abc5db75acdd04a8bd5c42a476bc6bda499d8198c7bb7afd2ccaf8349"
+    },
+    {
+      "id": "//replacement/save:save-owned",
+      "elf": "replacement/save/save-owned.elf",
+      "units": [
+        "save"
+      ],
+      "classification": "qualification",
+      "contracts": [
+        "replacement/save/save.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [],
+      "expected_sha256": "d77874c0529d1558f6a18d0d80dd69a792a6fc243c00093fb449031b2ca92a4d"
+    },
+    {
+      "id": "//replacement/secondary_stage:secondary-stage-image",
+      "elf": "replacement/secondary_stage/secondary-stage-image.elf",
+      "units": [
+        "secondary_stage"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/secondary_stage/secondary-stage.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_forbid_fetch_entry_end",
+        "xm1_forbid_fetch_entry_start",
+        "xm1_forbid_fetch_log_end",
+        "xm1_forbid_fetch_log_start",
+        "xm1_forbid_fetch_main_end",
+        "xm1_forbid_fetch_main_start",
+        "xm1_forbid_fetch_mpu_discriminator_end",
+        "xm1_forbid_fetch_mpu_discriminator_start",
+        "xm1_forbid_fetch_selection_end",
+        "xm1_forbid_fetch_selection_start",
+        "xm1_forbid_fetch_stub_a_end",
+        "xm1_forbid_fetch_stub_a_start",
+        "xm1_forbid_fetch_stub_b_end",
+        "xm1_forbid_fetch_stub_b_start",
+        "xm1_forbid_read_entry_pool_end",
+        "xm1_forbid_read_entry_pool_start",
+        "xm1_forbid_read_handoff_pool_end",
+        "xm1_forbid_read_handoff_pool_start",
+        "xm1_forbid_read_main_pool_end",
+        "xm1_forbid_read_main_pool_start",
+        "xm1_publication_argument",
+        "xm1_publication_target",
+        "xm1_record_base",
+        "xm1_retained_body_end",
+        "xm1_retained_body_start",
+        "xm1_retained_companion_flags",
+        "xm1_retained_companion_transfer",
+        "xm1_retained_config_record",
+        "xm1_retained_conversion",
+        "xm1_retained_data_end",
+        "xm1_retained_data_start",
+        "xm1_retained_delay",
+        "xm1_retained_execution_state",
+        "xm1_retained_peripheral_final",
+        "xm1_retained_peripheral_init",
+        "xm1_retained_segment_lookup",
+        "xm1_retained_structure_init",
+        "xm1_retained_tcm_stacks",
+        "xm1_vector_after_reset_start",
+        "xm1_vector_before_reset_end",
+        "xm1_vector_table_end",
+        "xm1_vector_table_start"
+      ],
+      "expected_sha256": "ade2f8781d3dc88c0ddbea1a97c2634beafa6493ca9571d24cb56ebe867278a8"
+    },
+    {
+      "id": "//replacement/settings_storage:custom-settings-image",
+      "elf": "replacement/settings_storage/custom-settings-image.elf",
+      "units": [
+        "kernel",
+        "record_store",
+        "settings_storage"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/settings_storage/custom-settings.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "record_raw_erase_0",
+        "record_raw_erase_1",
+        "record_raw_erase_2",
+        "record_raw_erase_3",
+        "record_raw_erase_4",
+        "record_raw_region_read",
+        "record_raw_write_0",
+        "record_raw_write_1",
+        "record_raw_write_2",
+        "record_raw_write_3",
+        "record_raw_write_4",
+        "record_semaphore_give",
+        "record_semaphore_take",
+        "record_store_block",
+        "record_store_cache_ages",
+        "record_store_cache_tags",
+        "record_store_cache_timestamp",
+        "record_store_initialized",
+        "record_store_second_block",
+        "record_store_staging_0",
+        "record_store_staging_1",
+        "record_store_staging_2",
+        "record_store_staging_3",
+        "record_store_staging_4",
+        "record_store_state",
+        "record_store_wrappers",
+        "xm1_backup_diagnostic726c74",
+        "xm1_backup_report633594",
+        "xm1_backup_write6a59b8",
+        "xm1_bank_current_selection",
+        "xm1_bank_custom_refresh",
+        "xm1_bank_property_set",
+        "xm1_bank_short_read",
+        "xm1_kernel_console9",
+        "xm1_kernel_critical_enter",
+        "xm1_kernel_critical_exit",
+        "xm1_stock_61d59c",
+        "xm1_stock_61d5f0",
+        "xm1_stock_61d618",
+        "xm1_stock_61d65c",
+        "xm1_stock_61d8a4",
+        "xm1_stock_61df44",
+        "xm1_stock_custom_config_read",
+        "xm1_stock_custom_reset_modes"
+      ],
+      "expected_sha256": "9de019defe657952a6dba8542b4913bc77b471c4fa0cf59e57406a2e7d57b7fa"
+    },
+    {
+      "id": "//replacement/settings_storage:custom-settings-published-image",
+      "elf": "replacement/settings_storage/custom-settings-published-image.elf",
+      "units": [
+        "kernel",
+        "record_store",
+        "settings_storage"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/settings_storage/custom-settings.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "__published_image_start",
+        "record_raw_erase_0",
+        "record_raw_erase_1",
+        "record_raw_erase_2",
+        "record_raw_erase_3",
+        "record_raw_erase_4",
+        "record_raw_region_read",
+        "record_raw_write_0",
+        "record_raw_write_1",
+        "record_raw_write_2",
+        "record_raw_write_3",
+        "record_raw_write_4",
+        "record_semaphore_give",
+        "record_semaphore_take",
+        "record_store_block",
+        "record_store_cache_ages",
+        "record_store_cache_tags",
+        "record_store_cache_timestamp",
+        "record_store_initialized",
+        "record_store_second_block",
+        "record_store_staging_0",
+        "record_store_staging_1",
+        "record_store_staging_2",
+        "record_store_staging_3",
+        "record_store_staging_4",
+        "record_store_state",
+        "record_store_wrappers",
+        "xm1_backup_diagnostic726c74",
+        "xm1_backup_report633594",
+        "xm1_backup_write6a59b8",
+        "xm1_bank_current_selection",
+        "xm1_bank_custom_refresh",
+        "xm1_bank_property_set",
+        "xm1_bank_short_read",
+        "xm1_kernel_console9",
+        "xm1_kernel_critical_enter",
+        "xm1_kernel_critical_exit",
+        "xm1_stock_61d59c",
+        "xm1_stock_61d5f0",
+        "xm1_stock_61d618",
+        "xm1_stock_61d65c",
+        "xm1_stock_61d8a4",
+        "xm1_stock_61df44",
+        "xm1_stock_custom_config_read",
+        "xm1_stock_custom_reset_modes"
+      ],
+      "expected_sha256": "27ced092bc63e5e4c75e44c6a63242eb23bc14cc176ab8aec59538c1cd665f6a"
+    },
+    {
+      "id": "//replacement/settings_storage:settings-storage-image",
+      "elf": "replacement/settings_storage/settings-storage-image.elf",
+      "units": [
+        "kernel",
+        "property_service",
+        "record_store",
+        "settings_storage"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/settings_storage/settings-storage.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_backup_diagnostic726c74",
+        "xm1_backup_report633594",
+        "xm1_backup_write6a59b8",
+        "xm1_bank_current_selection",
+        "xm1_bank_custom_refresh",
+        "xm1_bank_property_set",
+        "xm1_bank_short_read",
+        "xm1_kernel_console9",
+        "xm1_kernel_critical_enter",
+        "xm1_kernel_critical_exit",
+        "xm1_stock_61d59c",
+        "xm1_stock_61d5f0",
+        "xm1_stock_61d618",
+        "xm1_stock_61d65c",
+        "xm1_stock_61d8a4",
+        "xm1_stock_61df44"
+      ],
+      "expected_sha256": "ba0665e6c9842ff9070e02d68e3c5248bc8e817fe12fbf23adb587308285cc45"
+    },
+    {
+      "id": "//replacement/startup_dispatch:startup-dispatch-image",
+      "elf": "replacement/startup_dispatch/startup-dispatch-image.elf",
+      "units": [
+        "startup_dispatch"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/startup_dispatch/startup-dispatch.ld",
+        "replacement/rtos_timer/package/Replacement/RtosTimer/RootPackage.hs"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_startup_clear",
+        "xm1_startup_install",
+        "xm1_startup_mode",
+        "xm1_startup_submit"
+      ],
+      "expected_sha256": "f783ed3e430dfe48fcfb5ac4f28421a8e63cf3065f5ae0a5a113ae59ac13b1ac"
+    },
+    {
+      "id": "//replacement/task1_actor:task1-actor-image",
+      "elf": "replacement/task1_actor/task1-actor-image.elf",
+      "units": [
+        "task1_actor"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/task1_actor/task1-actor.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "after_first",
+        "after_second",
+        "after_third",
+        "allocate",
+        "command_service",
+        "controller_setup",
+        "deferred_first",
+        "deferred_second",
+        "diagnostic",
+        "execution",
+        "held_clear",
+        "held_command",
+        "image4_pending",
+        "loop_service",
+        "low_command",
+        "pending_first",
+        "pending_predicate",
+        "pending_priority",
+        "pending_second",
+        "pending_third",
+        "predicate_a",
+        "predicate_b",
+        "pump",
+        "receive",
+        "register",
+        "registration_error",
+        "setup",
+        "setup_service",
+        "setup_zero",
+        "suppression"
+      ],
+      "expected_sha256": "04625ce5113511977ee5feb09843be5f45f523578c014d3897e38a160fe3b3f8"
+    },
+    {
+      "id": "//replacement/task_constructors:task-constructors-image",
+      "elf": "replacement/task_constructors/task-constructors-image.elf",
+      "units": [
+        "task_constructors"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/task_constructors/task-constructors.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "__ctor_1055d10_load",
+        "__ctor_1062090_load",
+        "__ctor_1066280_load",
+        "__ctor_10726f4_load",
+        "__ctor_69f000_load",
+        "__ctor_d0a238_load",
+        "__ctor_d80d44_load",
+        "__ctor_db63e0_load",
+        "__ctor_dca604_load",
+        "__ctor_ec5350_load",
+        "__ctor_ed10b4_load",
+        "__ctor_ed2b00_load",
+        "__ctor_ef8c90_load",
+        "xm1_create_queue",
+        "xm1_diag_initialize",
+        "xm1_record_finish",
+        "xm1_record_initialize",
+        "xm1_record_service",
+        "xm1_sac_1009974",
+        "xm1_sac_1039500",
+        "xm1_sac_1050efc",
+        "xm1_sac_1051f30",
+        "xm1_sac_1053854",
+        "xm1_sac_10546c0",
+        "xm1_sac_capture",
+        "xm1_sac_eecbf4",
+        "xm1_sac_empty",
+        "xm1_sac_f4c368",
+        "xm1_sac_optional",
+        "xm1_sac_prepare",
+        "xm1_sac_reset",
+        "xm1_submit_task",
+        "xm1_usb_clear"
+      ],
+      "expected_sha256": "6111b8783401fafe5e7aea46228c5c4a77a8ff0e42568a5d3219dfc8cbae1804"
+    },
+    {
+      "id": "//replacement/task_storage:task-storage-image",
+      "elf": "replacement/task_storage/task-storage-image.elf",
+      "units": [
+        "task_storage"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/task_storage/task-storage.ld",
+        "replacement/rtos_timer/package/Replacement/RtosTimer/RootPackage.hs"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_task_storage_pool_base_literal",
+        "xm1_task_storage_resume"
+      ],
+      "expected_sha256": "31ff9f2baee6acd48646f636e63793ab72455a31d04c38f5ea861a22737f7433"
+    },
+    {
+      "id": "//replacement/task_submission:task-submission-image",
+      "elf": "replacement/task_submission/task-submission-image.elf",
+      "units": [
+        "task_submission"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/task_submission/task-submission.ld",
+        "replacement/rtos_timer/package/Replacement/RtosTimer/RootPackage.hs"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_task_cache",
+        "xm1_task_class_table",
+        "xm1_task_critical_enter",
+        "xm1_task_critical_exit",
+        "xm1_task_error_callback_dispatch",
+        "xm1_task_error_word",
+        "xm1_task_fill",
+        "xm1_task_interface_roots",
+        "xm1_task_log",
+        "xm1_task_release_lock",
+        "xm1_task_reservation",
+        "xm1_task_state_base",
+        "xm1_task_try_lock",
+        "xm1_task_unlock",
+        "xm1_task_wrapper_base"
+      ],
+      "expected_sha256": "837fabfd385ada25f0710c09db63cfa2f5b3501732b70201615395dc18d2e954"
+    },
+    {
+      "id": "//replacement/time_services:image",
+      "elf": "replacement/time_services/image.elf",
+      "units": [
+        "kernel",
+        "time_services"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/time_services/stock-interface.json",
+        "replacement/time_services/time-services.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "xm1_kernel_console9",
+        "xm1_kernel_critical_enter",
+        "xm1_kernel_critical_exit"
+      ],
+      "expected_sha256": "875344c0cf3927585e5a8f4c9db75e2cb7f1fe7833fb0b63afe266dbf8846da9"
+    },
+    {
+      "id": "//replacement/validator:area3-arm",
+      "elf": "replacement/validator/area3-arm.elf",
+      "units": [
+        "validator"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/validator/validator.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [],
+      "expected_sha256": "d6c484d728c3b753cd6213521141a9e4c9007449c6237f722ff1153413431ba0"
+    },
+    {
+      "id": "//replacement/vendor_protocol:session-native",
+      "elf": "replacement/vendor_protocol/session-native.elf",
+      "units": [
+        "vendor_protocol"
+      ],
+      "classification": "qualification",
+      "contracts": [
+        "replacement/vendor_protocol/vendor-session-native.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [],
+      "expected_sha256": "2b17ed6e977a1bb01c84db7749e37320f49f130827d3e36689eae93552095d6a"
+    }
+  ],
+  "references": [
+    {
+      "id": "//replacement/develop:develop-services",
+      "units": [
+        "develop"
+      ],
+      "contract": "replacement/develop/BUILD.bazel",
+      "reason": "Native comparison support artifact, not a current production composition."
+    },
+    {
+      "id": "//replacement/develop:develop-caller-observer",
+      "units": [
+        "develop"
+      ],
+      "contract": "replacement/develop/BUILD.bazel",
+      "reason": "Native comparison support artifact, not a current production composition."
+    },
+    {
+      "id": "//replacement/capture:capture-deps-high",
+      "units": [
+        "capture"
+      ],
+      "contract": "replacement/capture/BUILD.bazel",
+      "reason": "Native comparison support artifact, not a current production composition."
+    },
+    {
+      "id": "//replacement/capture:capture-deps-low",
+      "units": [
+        "capture"
+      ],
+      "contract": "replacement/capture/BUILD.bazel",
+      "reason": "Native comparison support artifact, not a current production composition."
+    },
+    {
+      "id": "//replacement/embassy_trial:embassy-trial",
+      "units": [
+        "embassy_trial"
+      ],
+      "contract": "replacement/embassy_trial/BUILD.bazel",
+      "reason": "Native comparison support artifact, not a current production composition."
+    },
+    {
+      "id": "//replacement/rtos_own_first:own-first-a",
+      "units": [
+        "rtos_own_first"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_own_first:own-first-b",
+      "units": [
+        "rtos_own_first"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_data_queue:data-queue-a",
+      "units": [
+        "rtos_data_queue"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_data_queue:data-queue-b",
+      "units": [
+        "rtos_data_queue"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_cyclic:cyclic-a",
+      "units": [
+        "rtos_cyclic"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_cyclic:cyclic-b",
+      "units": [
+        "rtos_cyclic"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_fixed_pool:fixed-pool-a",
+      "units": [
+        "rtos_fixed_pool"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_fixed_pool:fixed-pool-b",
+      "units": [
+        "rtos_fixed_pool"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_objects:objects-family-stage-a",
+      "units": [
+        "rtos_objects"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_objects:objects-family-stage-b",
+      "units": [
+        "rtos_objects"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_global_lock:global-lock-a",
+      "units": [
+        "rtos_global_lock"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_global_lock:global-lock-b",
+      "units": [
+        "rtos_global_lock"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_semaphore:semaphore-a",
+      "units": [
+        "rtos_semaphore"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_semaphore:semaphore-b",
+      "units": [
+        "rtos_semaphore"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_timer:timer-a",
+      "units": [
+        "rtos_timer"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_timer:timer-b",
+      "units": [
+        "rtos_timer"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_scheduler:scheduler-a",
+      "units": [
+        "rtos_scheduler"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_scheduler:scheduler-b",
+      "units": [
+        "rtos_scheduler"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_scheduler:scheduler-s2-a",
+      "units": [
+        "rtos_scheduler"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_scheduler:scheduler-s2-b",
+      "units": [
+        "rtos_scheduler"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_scheduler:s3a-a",
+      "units": [
+        "rtos_scheduler"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_scheduler:s3a-b",
+      "units": [
+        "rtos_scheduler"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_scheduler:s3b-a",
+      "units": [
+        "rtos_scheduler"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_scheduler:s3b-b",
+      "units": [
+        "rtos_scheduler"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_scheduler:s3c-a",
+      "units": [
+        "rtos_scheduler"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_scheduler:s3c-b",
+      "units": [
+        "rtos_scheduler"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_scheduler:s3d-a",
+      "units": [
+        "rtos_scheduler"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_scheduler:s3d-b",
+      "units": [
+        "rtos_scheduler"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_task_records:task-records-a-native",
+      "units": [
+        "rtos_task_records"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/rtos_task_records:task-records-b-native",
+      "units": [
+        "rtos_task_records"
+      ],
+      "contract": "replacement/rtos_platform/carriers.json",
+      "reason": "Frozen standalone function-reference artifact. Current linked coverage uses platform-a and platform-b."
+    },
+    {
+      "id": "//replacement/bank:bank-modal75-engine-render-value",
+      "units": [
+        "menu_value"
+      ],
+      "contract": "replacement/bank/BUILD.bazel",
+      "reason": "The archive is declared but no current Bazel image target publishes its ELF."
+    },
+    {
+      "id": "//replacement/embassy_platform:module",
+      "units": [
+        "embassy_platform"
+      ],
+      "contract": "replacement/embassy_platform/BUILD.bazel",
+      "reason": "Experimental relocatable objects, not a current linked firmware image."
+    },
+    {
+      "id": "//replacement/lens_transport:codec",
+      "units": [
+        "lens_transport"
+      ],
+      "contract": "replacement/lens_transport/BUILD.bazel",
+      "reason": "Synthetic native comparison fixture, not a current production composition."
+    },
+    {
+      "id": "//replacement/menu_widgets:value-picker-case-image",
+      "units": [
+        "menu_widgets"
+      ],
+      "contract": "replacement/menu_widgets/BUILD.bazel",
+      "reason": "Synthetic native comparison fixture, not a current production composition."
+    },
+    {
+      "id": "//replacement/menu_widgets:value-picker-bank-case-image",
+      "units": [
+        "menu_widgets"
+      ],
+      "contract": "replacement/menu_widgets/BUILD.bazel",
+      "reason": "Synthetic native comparison fixture, not a current production composition."
+    },
+    {
+      "id": "//replacement/menu_widgets:tree-list-case-image",
+      "units": [
+        "menu_widgets"
+      ],
+      "contract": "replacement/menu_widgets/BUILD.bazel",
+      "reason": "Synthetic native comparison fixture, not a current production composition."
+    },
+    {
+      "id": "//replacement/menu_widgets:pane-drawer-case-image",
+      "units": [
+        "menu_widgets"
+      ],
+      "contract": "replacement/menu_widgets/BUILD.bazel",
+      "reason": "Synthetic native comparison fixture, not a current production composition."
+    },
+    {
+      "id": "//replacement/save:save-model-storage",
+      "units": [
+        "save"
+      ],
+      "contract": "replacement/save/BUILD.bazel",
+      "reason": "Synthetic native comparison fixture, not a current production composition."
+    },
+    {
+      "id": "//replacement/save:save-model-wait",
+      "units": [
+        "save"
+      ],
+      "contract": "replacement/save/BUILD.bazel",
+      "reason": "Synthetic native comparison fixture, not a current production composition."
+    },
+    {
+      "id": "//replacement/save:save-model-stage",
+      "units": [
+        "save"
+      ],
+      "contract": "replacement/save/BUILD.bazel",
+      "reason": "Synthetic native comparison fixture, not a current production composition."
+    }
+  ]
+}

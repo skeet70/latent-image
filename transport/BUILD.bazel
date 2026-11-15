@@ -6,6 +6,11 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
+exports_files(
+    ["ram-push-review.json"],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)
+
 _GHCOPTS = [
     "-Wall",
     "-Werror",

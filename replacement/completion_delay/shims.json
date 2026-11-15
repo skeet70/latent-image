@@ -1,0 +1,58 @@
+{
+  "unit": "completion_delay",
+  "summary": "A loader-A completion-delay carrier entered by a patched `bl` and returning to the original site.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "completion_delay-01",
+      "shim": "`xm1_completion_delay_entry`, `_end`, `_release` in `entry.S`, placed by `completion-delay.ld`",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the stock loader-A instruction at `0x40a00` that branches into the carrier",
+      "owned": "no",
+      "removal": "loader-A is owned and no patched branch remains",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/completion_delay:completion-delay-image",
+          "kind": "publication",
+          "symbols": [
+            "xm1_completion_delay_entry"
+          ],
+          "contract": "replacement/completion_delay/completion-delay.ld",
+          "requirement": "`xm1_completion_delay_entry`, `_end`, `_release` in `entry.S`, placed by `completion-delay.ld`. the stock loader-A instruction at `0x40a00` that branches into the carrier. loader-A is owned and no patched branch remains"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "completion_delay-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/completion_delay:completion-delay-image",
+          "kind": "publication",
+          "symbols": [
+            "xm1_completion_delay_end",
+            "xm1_completion_delay_release"
+          ],
+          "contract": "replacement/completion_delay/completion-delay.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

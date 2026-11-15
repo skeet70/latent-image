@@ -1,0 +1,355 @@
+{
+  "unit": "first_stage",
+  "summary": "The owned first-record stage, entered at the stock record slot and presenting stock's record layout, media controller, handoff words and loader entry.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "first_stage-01",
+      "shim": "`xm1_first_stage_entry`, `xm1_first_stage_contract` and `first-stage.ld` placing the image at `0x6000` in the first record's slot",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the stock boot ROM's mode-4 handoff and the record-1 consumers that enter the slot",
+      "owned": "no",
+      "removal": "the boot ROM and every record-1 consumer are owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/first_stage:first-stage-fixed-image",
+          "kind": "publication",
+          "symbols": [
+            "xm1_first_stage_contract",
+            "xm1_first_stage_entry"
+          ],
+          "contract": "replacement/first_stage/first-stage.ld",
+          "requirement": "`xm1_first_stage_entry`, `xm1_first_stage_contract` and `first-stage.ld` placing the image at `0x6000` in the first record's slot. the stock boot ROM's mode-4 handoff and the record-1 consumers that enter the slot. the boot ROM and every record-1 consumer are owned"
+        },
+        {
+          "image": "//replacement/first_stage:first-stage-image",
+          "kind": "publication",
+          "symbols": [
+            "xm1_first_stage_contract",
+            "xm1_first_stage_entry"
+          ],
+          "contract": "replacement/first_stage/first-stage.ld",
+          "requirement": "`xm1_first_stage_entry`, `xm1_first_stage_contract` and `first-stage.ld` placing the image at `0x6000` in the first record's slot. the stock boot ROM's mode-4 handoff and the record-1 consumers that enter the slot. the boot ROM and every record-1 consumer are owned"
+        },
+        {
+          "image": "//replacement/first_stage:first-stage-fixed-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_first_stage_fixed_image_halt",
+            "xm1_first_stage_fixed_image_load",
+            "xm1_first_stage_log_timestamp",
+            "xm1_first_stage_main",
+            "xm1_first_stage_storage_init",
+            "xm1_first_stage_trailer_check"
+          ],
+          "contract": "replacement/first_stage/first-stage.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/first_stage:first-stage-fixed-image",
+          "kind": "layout",
+          "symbols": [
+            "XM1_FIXED_IMAGE_BUILD_ID"
+          ],
+          "contract": "replacement/first_stage/first-stage.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        },
+        {
+          "image": "//replacement/first_stage:first-stage-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_first_stage_log_timestamp",
+            "xm1_first_stage_main",
+            "xm1_first_stage_storage_init",
+            "xm1_first_stage_trailer_check"
+          ],
+          "contract": "replacement/first_stage/first-stage.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "first_stage-02",
+      "shim": "the 20-byte compressed header, the 36-byte segment entries and 12-byte sub-list header at `0x61c000`, the publication cell and the 32-byte trailer with `0xaaaa` at offset 30",
+      "kind": "guest-memory layout view",
+      "other_side": "the stock update container's record 1 and image 4",
+      "owned": "no",
+      "removal": "owned update records replace the stock container layout",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/first_stage:first-stage-fixed-image",
+          "kind": "layout",
+          "symbols": [
+            "xm1_first_stage_entry"
+          ],
+          "contract": "replacement/first_stage/first-stage.ld",
+          "requirement": "the 20-byte compressed header, the 36-byte segment entries and 12-byte sub-list header at `0x61c000`, the publication cell and the 32-byte trailer with `0xaaaa` at offset 30. the stock update container's record 1 and image 4. owned update records replace the stock container layout"
+        },
+        {
+          "image": "//replacement/first_stage:first-stage-image",
+          "kind": "layout",
+          "symbols": [
+            "xm1_first_stage_entry"
+          ],
+          "contract": "replacement/first_stage/first-stage.ld",
+          "requirement": "the 20-byte compressed header, the 36-byte segment entries and 12-byte sub-list header at `0x61c000`, the publication cell and the 32-byte trailer with `0xaaaa` at offset 30. the stock update container's record 1 and image 4. owned update records replace the stock container layout"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "first_stage-03",
+      "shim": "the NAND controller at `0xfff52000` with 128 KiB units and 512-byte sectors",
+      "kind": "guest-memory layout view",
+      "other_side": "the stock controller and the boot ROM's mode-4 staging",
+      "owned": "no",
+      "removal": "the owned flash layer and its device model replace the stock controller",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/first_stage:first-stage-fixed-image",
+          "kind": "layout",
+          "symbols": [
+            "xm1_first_stage_entry"
+          ],
+          "contract": "replacement/first_stage/first-stage.ld",
+          "requirement": "the NAND controller at `0xfff52000` with 128 KiB units and 512-byte sectors. the stock controller and the boot ROM's mode-4 staging. the owned flash layer and its device model replace the stock controller"
+        },
+        {
+          "image": "//replacement/first_stage:first-stage-image",
+          "kind": "layout",
+          "symbols": [
+            "xm1_first_stage_entry"
+          ],
+          "contract": "replacement/first_stage/first-stage.ld",
+          "requirement": "the NAND controller at `0xfff52000` with 128 KiB units and 512-byte sectors. the stock controller and the boot ROM's mode-4 staging. the owned flash layer and its device model replace the stock controller"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "first_stage-04",
+      "shim": "the memory DMA block at `0xfff02000` the stage fills the application bss through, with the eight-word descriptor at `0x400042c0` and completion on `0xfff02024` bit 6",
+      "kind": "guest-memory layout view",
+      "other_side": "the stock record's own `0x3844` fill and the block's device models",
+      "owned": "no",
+      "removal": "the application's bss is owned memory that no device has to clear",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/first_stage:first-stage-fixed-image",
+          "kind": "layout",
+          "symbols": [
+            "xm1_first_stage_entry"
+          ],
+          "contract": "replacement/first_stage/first-stage.ld",
+          "requirement": "the memory DMA block at `0xfff02000` the stage fills the application bss through, with the eight-word descriptor at `0x400042c0` and completion on `0xfff02024` bit 6. the stock record's own `0x3844` fill and the block's device models. the application's bss is owned memory that no device has to clear"
+        },
+        {
+          "image": "//replacement/first_stage:first-stage-image",
+          "kind": "layout",
+          "symbols": [
+            "xm1_first_stage_entry"
+          ],
+          "contract": "replacement/first_stage/first-stage.ld",
+          "requirement": "the memory DMA block at `0xfff02000` the stage fills the application bss through, with the eight-word descriptor at `0x400042c0` and completion on `0xfff02024` bit 6. the stock record's own `0x3844` fill and the block's device models. the application's bss is owned memory that no device has to clear"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "first_stage-05",
+      "shim": "`xm1_first_stage_handoff`, `xm1_first_stage_handoff_vector` and `xm1_first_stage_completion_zero`: the handoff reads stock's `0x4300`/`0x4304` words and jumps, the completion export zeroes stock's completion word, and `xm1_first_stage_stage_images` writes the two handoff words",
+      "kind": "guest-memory layout view",
+      "other_side": "stock loader A's entry word and the record-2 companion wait",
+      "owned": "no",
+      "removal": "loader A and the record-2 companion startup are owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/first_stage:first-stage-fixed-image",
+          "kind": "layout",
+          "symbols": [
+            "xm1_first_stage_completion_zero",
+            "xm1_first_stage_handoff",
+            "xm1_first_stage_handoff_vector",
+            "xm1_first_stage_stage_images"
+          ],
+          "contract": "replacement/first_stage/first-stage.ld",
+          "requirement": "`xm1_first_stage_handoff`, `xm1_first_stage_handoff_vector` and `xm1_first_stage_completion_zero`: the handoff reads stock's `0x4300`/`0x4304` words and jumps, the completion export zeroes stock's completion word, and `xm1_first_stage_stage_images` writes the two handoff words. stock loader A's entry word and the record-2 companion wait. loader A and the record-2 companion startup are owned"
+        },
+        {
+          "image": "//replacement/first_stage:first-stage-image",
+          "kind": "layout",
+          "symbols": [
+            "xm1_first_stage_completion_zero",
+            "xm1_first_stage_handoff",
+            "xm1_first_stage_handoff_vector",
+            "xm1_first_stage_stage_images"
+          ],
+          "contract": "replacement/first_stage/first-stage.ld",
+          "requirement": "`xm1_first_stage_handoff`, `xm1_first_stage_handoff_vector` and `xm1_first_stage_completion_zero`: the handoff reads stock's `0x4300`/`0x4304` words and jumps, the completion export zeroes stock's completion word, and `xm1_first_stage_stage_images` writes the two handoff words. stock loader A's entry word and the record-2 companion wait. loader A and the record-2 companion startup are owned"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "first_stage-06",
+      "shim": "the loader-A entry at `0x40020` and the image-4 argument the stage reads at the fixed `0x61c40c`, image 4's own header word and not the record table, and jumps to",
+      "kind": "trampoline into retained stock",
+      "other_side": "stock loader A and the application image the stage hands off to",
+      "owned": "no",
+      "removal": "the loaders and application are owned and entered by owned code",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/first_stage:first-stage-fixed-image",
+          "kind": "retained-entry",
+          "symbols": [
+            "xm1_first_stage_handoff",
+            "xm1_first_stage_handoff_vector"
+          ],
+          "contract": "replacement/first_stage/first-stage.ld",
+          "requirement": "the loader-A entry at `0x40020` and the image-4 argument the stage reads at the fixed `0x61c40c`, image 4's own header word and not the record table, and jumps to. stock loader A and the application image the stage hands off to. the loaders and application are owned and entered by owned code"
+        },
+        {
+          "image": "//replacement/first_stage:first-stage-image",
+          "kind": "retained-entry",
+          "symbols": [
+            "xm1_first_stage_handoff",
+            "xm1_first_stage_handoff_vector"
+          ],
+          "contract": "replacement/first_stage/first-stage.ld",
+          "requirement": "the loader-A entry at `0x40020` and the image-4 argument the stage reads at the fixed `0x61c40c`, image 4's own header word and not the record table, and jumps to. stock loader A and the application image the stage hands off to. the loaders and application are owned and entered by owned code"
+        },
+        {
+          "image": "//replacement/first_stage:first-stage-fixed-image",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_config_data_end",
+            "xm1_config_data_start",
+            "xm1_retained_data_end",
+            "xm1_retained_data_start",
+            "xm1_retired_body_end",
+            "xm1_retired_body_start",
+            "xm1_vector_after_reset_start",
+            "xm1_vector_before_reset_end",
+            "xm1_vector_table_end",
+            "xm1_vector_table_start"
+          ],
+          "contract": "replacement/first_stage/first-stage.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        },
+        {
+          "image": "//replacement/first_stage:first-stage-image",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_config_data_end",
+            "xm1_config_data_start",
+            "xm1_retained_data_end",
+            "xm1_retained_data_start",
+            "xm1_retired_body_end",
+            "xm1_retired_body_start",
+            "xm1_vector_after_reset_start",
+            "xm1_vector_before_reset_end",
+            "xm1_vector_table_end",
+            "xm1_vector_table_start"
+          ],
+          "contract": "replacement/first_stage/first-stage.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "first_stage-07",
+      "shim": "`decode_test_stock.S`'s `xm1_decode_test_acquire` at `0x00683830`, `xm1_decode_test_release_clock` at `0x00649ddc`, `xm1_decode_test_clear_route` at `0x006499d0` and `xm1_decode_test_signal_resource` at `0x00724c00`, called by the RAM-loaded decode test",
+      "kind": "trampoline into retained stock",
+      "other_side": "the stock shared-engine reservation `hw_fff430_acquire` and the bookkeeping `hw_fff430_release` makes after its enable write, which live view and crop call",
+      "owned": "no",
+      "removal": "the decode-test experiment is retired",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/first_stage/BUILD.bazel",
+          "requirement": "decode-test is a relocatable object for the RAM-loaded experiment, not part of first-stage-image or a declared produced linked ELF. The decode_test_stock.S services remain required by that experiment."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "first_stage-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/first_stage:first-stage-fixed-image",
+          "kind": "publication",
+          "symbols": [
+            "__first_stage_end",
+            "__first_stage_start",
+            "xm1_first_stage_log_read",
+            "xm1_first_stage_log_store"
+          ],
+          "contract": "replacement/first_stage/first-stage.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        },
+        {
+          "image": "//replacement/first_stage:first-stage-image",
+          "kind": "publication",
+          "symbols": [
+            "__first_stage_end",
+            "__first_stage_start",
+            "xm1_first_stage_log_read",
+            "xm1_first_stage_log_store"
+          ],
+          "contract": "replacement/first_stage/first-stage.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

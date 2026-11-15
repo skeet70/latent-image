@@ -13,6 +13,7 @@ module ArmElf
   , addressRelocations
   , directBranchTarget
   , parseElf
+  , globalSymbols
   , sectionWritable
   , sectionExecutable
   , sectionAllocated
@@ -73,6 +74,16 @@ data Symbol = Symbol
   , symbolSection :: SymbolSection
   }
   deriving (Eq, Show)
+
+globalSymbols :: Elf -> [Symbol]
+globalSymbols elf = case [section | section <- elfSections elf, sectionType section == 2] of
+  [table] ->
+    [ symbol
+    | (index,symbol) <- zip [0 :: Int ..] (elfSymbols elf)
+    , let info = B.index (elfBytes elf) (fromIntegral (sectionOffset table) + index * 16 + 12)
+    , info `shiftR` 4 `elem` [1,2]
+    ]
+  _ -> []
 
 sectionAllocated, sectionWritable, sectionExecutable :: Section -> Bool
 sectionAllocated section = testBit (sectionFlags section) 1

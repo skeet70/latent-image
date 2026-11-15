@@ -1,0 +1,139 @@
+{
+  "unit": "task1_actor",
+  "summary": "The owned task1 UI actor and its pump.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "task1_actor-01",
+      "shim": "the actor export and `task1-actor.ld` placement",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the stock task1 entry at `0xc22f60`",
+      "owned": "no",
+      "removal": "the task1 entry is owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/task1_actor:task1-actor-image",
+          "kind": "publication",
+          "symbols": [
+            "xm1_task1_actor"
+          ],
+          "contract": "replacement/task1_actor/task1-actor.ld",
+          "requirement": "the actor export and `task1-actor.ld` placement. the stock task1 entry at `0xc22f60`. the task1 entry is owned"
+        },
+        {
+          "image": "//replacement/task1_actor:task1-actor-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_task1_once"
+          ],
+          "contract": "replacement/task1_actor/task1-actor.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "task1_actor-02",
+      "shim": "29 retained `extern \"C\"` declarations (queue receive/service, pending predicates, controller setup, pump, registration, diagnostics)",
+      "kind": "trampoline into retained stock",
+      "other_side": "stock image-4/image-5 application and queue services",
+      "owned": "no",
+      "removal": "those services are owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/task1_actor:task1-actor-image",
+          "kind": "retained-import",
+          "symbols": [
+            "after_first",
+            "after_second",
+            "after_third",
+            "allocate",
+            "command_service",
+            "controller_setup",
+            "deferred_first",
+            "deferred_second",
+            "diagnostic",
+            "execution",
+            "held_clear",
+            "held_command",
+            "image4_pending",
+            "loop_service",
+            "low_command",
+            "pending_first",
+            "pending_predicate",
+            "pending_priority",
+            "pending_second",
+            "pending_third",
+            "predicate_a",
+            "predicate_b",
+            "pump",
+            "receive",
+            "register",
+            "registration_error",
+            "setup",
+            "setup_service",
+            "setup_zero",
+            "suppression"
+          ],
+          "contract": "replacement/task1_actor/task1-actor.ld",
+          "requirement": "29 retained `extern \"C\"` declarations (queue receive/service, pending predicates, controller setup, pump, registration, diagnostics). stock image-4/image-5 application and queue services. those services are owned",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "task1_actor-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/task1_actor:task1-actor-image",
+          "kind": "publication",
+          "symbols": [
+            "j11_c22f64",
+            "j11_c22f74",
+            "j11_c22f84",
+            "j11_c22fb4",
+            "j11_c22fd8",
+            "j11_c23094",
+            "j11_c230a0",
+            "j11_c230b4",
+            "j11_c230c0",
+            "j11_c230d8",
+            "j11_c230f4",
+            "j11_c23104",
+            "j11_c23114",
+            "j11_c2311c",
+            "j11_c2312c",
+            "j11_c23150",
+            "j11_c231ec",
+            "j11_c231fc",
+            "j11_c23278"
+          ],
+          "contract": "replacement/task1_actor/task1-actor.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

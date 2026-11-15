@@ -1,0 +1,140 @@
+{
+  "unit": "lens_transport",
+  "summary": "The lens transport and control actor. Its stock-ABI exports and retained task/queue/IRQ services are the current seam; power leaf calls are already owned on both sides.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "lens_transport-01",
+      "shim": "`xm1_power_current_task`, `xm1_power_interrupt_lock`, `xm1_power_interrupt_unlock`, `xm1_power_service_post`, `xm1_power_set_task_flags`, `xm1_power_resource_route_request` externs",
+      "kind": "C-ABI bridge between two owned units",
+      "other_side": "power_lifecycle leaf",
+      "owned": "yes",
+      "removal": "the leaf is linked directly and both sides compare with stock in one image",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/lens_transport/BUILD.bazel",
+          "requirement": "The registered mechanism remains required; this reference or qualification-only mechanism is not part of the selected linked image. `xm1_power_current_task`, `xm1_power_interrupt_lock`, `xm1_power_interrupt_unlock`, `xm1_power_service_post`, `xm1_power_set_task_flags`, `xm1_power_resource_route_request` externs"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "lens_transport-02",
+      "shim": "14 `xm1_lens_*` exports in `src/abi.rs` and `src/control_native.rs`, placed by `control-roots.ld` and `codec.ld`",
+      "kind": "stock-ABI export",
+      "other_side": "stock lens task and control callers",
+      "owned": "no",
+      "removal": "every lens caller is owned or migrated",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/lens_transport/BUILD.bazel",
+          "requirement": "The registered mechanism remains required; this reference or qualification-only mechanism is not part of the selected linked image. 14 `xm1_lens_*` exports in `src/abi.rs` and `src/control_native.rs`, placed by `control-roots.ld` and `codec.ld`"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "lens_transport-03",
+      "shim": "`xm1_lens_task99_entry` in `native/control-entry.S`",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the stock task99 entry",
+      "owned": "no",
+      "removal": "the task99 entry is owned",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/lens_transport/BUILD.bazel",
+          "requirement": "The registered mechanism remains required; this reference or qualification-only mechanism is not part of the selected linked image. `xm1_lens_task99_entry` in `native/control-entry.S`"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "lens_transport-04",
+      "shim": "retained task/queue/IRQ externs (`task_create`, `task_delete`, `activate`, `queue_create`, `queue_delete`, `send`, `send_irq`, `receive`, `delay`, `cyclic_*`, `xm1_rtos_irq_*`)",
+      "kind": "trampoline into retained stock",
+      "other_side": "stock RTOS task, queue and IRQ services",
+      "owned": "no",
+      "removal": "the RTOS platform owns those services",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/lens_transport/BUILD.bazel",
+          "requirement": "The registered mechanism remains required; this reference or qualification-only mechanism is not part of the selected linked image. retained task/queue/IRQ externs (`task_create`, `task_delete`, `activate`, `queue_create`, `queue_delete`, `send`, `send_irq`, `receive`, `delay`, `cyclic_*`, `xm1_rtos_irq_*`)"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "lens_transport-05",
+      "shim": "`Callbacks` C-ABI struct and callback registration in `src/abi.rs`",
+      "kind": "callback registry for guest words",
+      "other_side": "stock callers that pass function pointers and context words",
+      "owned": "no",
+      "removal": "callers use the typed completion sink",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/lens_transport/BUILD.bazel",
+          "requirement": "The registered mechanism remains required; this reference or qualification-only mechanism is not part of the selected linked image. `Callbacks` C-ABI struct and callback registration in `src/abi.rs`"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "lens_transport-06",
+      "shim": "`lens_actor_request`, `lens_actor_wake`, `lens_actor_timer`, `lens_actor_device_callback` and the fixed stock addresses in `src/actor_abi.rs`, built only with feature `native-actor` and placed by `native/actor.ld`",
+      "kind": "stock-ABI export",
+      "other_side": "the native comparison harness, not stock firmware",
+      "owned": "no",
+      "removal": "the actor is compared with stock through its owned interface in a linked image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/lens_transport:actor",
+          "kind": "export",
+          "symbols": [
+            "lens_actor_device_callback",
+            "lens_actor_request",
+            "lens_actor_timer",
+            "lens_actor_wake"
+          ],
+          "contract": "replacement/lens_transport/native/actor.ld",
+          "requirement": "`lens_actor_request`, `lens_actor_wake`, `lens_actor_timer`, `lens_actor_device_callback` and the fixed stock addresses in `src/actor_abi.rs`, built only with feature `native-actor` and placed by `native/actor.ld`. the native comparison harness, not stock firmware. the actor is compared with stock through its owned interface in a linked image"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

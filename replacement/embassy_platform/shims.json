@@ -1,0 +1,28 @@
+{
+  "unit": "embassy_platform",
+  "summary": "The Embassy phase-1 experiment and controls are relocatable objects consumed by experiment composition, not standalone linked firmware ELFs.",
+  "classification": "reference-only",
+  "rows": [
+    {
+      "id": "embassy_platform-01",
+      "shim": "Embassy dispatch hook, demo record and executor-stack publication",
+      "kind": "callback registry for guest words",
+      "other_side": "the phase-1 experiment dispatcher and retained kernel wake path",
+      "owned": "no",
+      "removal": "the owned runtime is linked and entered through typed dispatch without the experiment hook",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/embassy_platform/BUILD.bazel",
+          "requirement": "The demonstration and controls produce .o files rooted at embassy_on_dispatch, EMBASSY_DEMO and EMBASSY_STACKS; no standalone ELF is declared."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

@@ -1,0 +1,111 @@
+{
+  "unit": "menu_widgets",
+  "summary": "The owned tree, pane and picker widgets and their native adapters.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "menu_widgets-01",
+      "shim": "`owned_pane_drawer`, `tree_list_entry` and the picker/pane/tree native entries in `native/*.rs`, placed by `picker.ld`, `pane_drawer.ld`, `tree.ld`",
+      "kind": "stock-ABI export",
+      "other_side": "stock draw callers that enter the widget addresses",
+      "owned": "no",
+      "removal": "the owned renderer calls the widgets directly",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_render_pane_apply",
+            "rb_render_picker_apply",
+            "rb_render_tree_apply"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`owned_pane_drawer`, `tree_list_entry` and the picker/pane/tree native entries in `native/*.rs`, placed by `picker.ld`, `pane_drawer.ld`, `tree.ld`. stock draw callers that enter the widget addresses. the owned renderer calls the widgets directly"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "menu_widgets-02",
+      "shim": "`rb_picker_call_*`, `rb_tree_call_*` and `rb_pane_call_*` retained services (draw leaves, hooks, menu-table accessors, setting reads, snapshot readers)",
+      "kind": "trampoline into retained stock",
+      "other_side": "stock draw layer and menu table",
+      "owned": "no",
+      "removal": "the owned renderer, tree and settings service own those services",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_render_pane_apply",
+            "rb_render_picker_apply",
+            "rb_render_tree_apply"
+          ],
+          "contract": "menu/recipe_bank_render_allowlist_fragment.json",
+          "requirement": "`rb_picker_call_*`, `rb_tree_call_*` and `rb_pane_call_*` retained services (draw leaves, hooks, menu-table accessors, setting reads, snapshot readers). stock draw layer and menu table. the owned renderer, tree and settings service own those services"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "menu_widgets-03",
+      "shim": "side state `0x15e64d8` and the palette/report block kept for stock readers",
+      "kind": "guest-memory layout view",
+      "other_side": "stock readers `FUN_011662a0`, `FUN_01165aa0` and the bank root drawer",
+      "owned": "no",
+      "removal": "those readers are owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "layout",
+          "symbols": [
+            "rb_menu_engine_entry"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "side state `0x15e64d8` and the palette/report block kept for stock readers. stock readers `FUN_011662a0`, `FUN_01165aa0` and the bank root drawer. those readers are owned"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "menu_widgets-04",
+      "shim": "installed label-id bound `0x849` in the native adapters",
+      "kind": "guest-memory layout view",
+      "other_side": "the installed package's label table",
+      "owned": "no",
+      "removal": "the package's labels are declared in the tree",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "layout",
+          "symbols": [
+            "rb_menu_engine_entry"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "installed label-id bound `0x849` in the native adapters. the installed package's label table. the package's labels are declared in the tree"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

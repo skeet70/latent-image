@@ -1,0 +1,53 @@
+{
+  "unit": "validator",
+  "summary": "The area-3 record validator replacement and its stock-ABI adapter.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "validator-01",
+      "shim": "`area3_validate` export in `validator.rs`/`faulty.rs`, placed by `validator.ld`",
+      "kind": "stock-ABI export",
+      "other_side": "the stock area-3 check callback address",
+      "owned": "no",
+      "removal": "the record store calls the Rust validator directly",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/validator:area3-arm",
+          "kind": "export",
+          "symbols": [
+            "area3_validate"
+          ],
+          "contract": "replacement/validator/validator.ld",
+          "requirement": "`area3_validate` export in `validator.rs`/`faulty.rs`, placed by `validator.ld`. the stock area-3 check callback address. the record store calls the Rust validator directly"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "validator-02",
+      "shim": "`adapter.rs` host C-ABI shim",
+      "kind": "stock-ABI export",
+      "other_side": "the native qualification adapter",
+      "owned": "no",
+      "removal": "the adapter is no longer needed for qualification",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/validator/BUILD.bazel",
+          "requirement": "The registered mechanism remains required; this reference or qualification-only mechanism is not part of the selected linked image. `adapter.rs` host C-ABI shim"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

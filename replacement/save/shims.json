@@ -1,0 +1,233 @@
+{
+  "unit": "save",
+  "summary": "The save facade and its retained image-5 services.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "save-01",
+      "shim": "`xm1_save_facade`, `xm1_save_completion`, `xm1_save_release_completion`, `svc_*` exports in `src/lib.rs`/`save_entry.S`",
+      "kind": "stock-ABI export",
+      "other_side": "stock save callers",
+      "owned": "no",
+      "removal": "every save caller is owned or migrated",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/develop:develop-candidate",
+          "kind": "export",
+          "symbols": [
+            "xm1_save_completion",
+            "xm1_save_facade",
+            "xm1_save_release_completion"
+          ],
+          "contract": "replacement/save/save.ld",
+          "requirement": "`xm1_save_facade`, `xm1_save_completion`, `xm1_save_release_completion`, `svc_*` exports in `src/lib.rs`/`save_entry.S`. stock save callers. every save caller is owned or migrated"
+        },
+        {
+          "image": "//replacement/save:save-owned",
+          "kind": "export",
+          "symbols": [
+            "xm1_save_completion",
+            "xm1_save_facade",
+            "xm1_save_release_completion"
+          ],
+          "contract": "replacement/save/save.ld",
+          "requirement": "`xm1_save_facade`, `xm1_save_completion`, `xm1_save_release_completion`, `svc_*` exports in `src/lib.rs`/`save_entry.S`. stock save callers. every save caller is owned or migrated"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "save-02",
+      "shim": "`xm1_save_facade` export",
+      "kind": "C-ABI bridge between two owned units",
+      "other_side": "develop",
+      "owned": "yes",
+      "removal": "develop links the facade directly and both sides compare with stock in one image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/develop:develop-candidate",
+          "kind": "export",
+          "symbols": [
+            "xm1_save_facade"
+          ],
+          "contract": "replacement/save/save.ld",
+          "requirement": "`xm1_save_facade` export. develop. develop links the facade directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//replacement/save:save-owned",
+          "kind": "export",
+          "symbols": [
+            "xm1_save_facade"
+          ],
+          "contract": "replacement/save/save.ld",
+          "requirement": "`xm1_save_facade` export. develop. develop links the facade directly and both sides compare with stock in one image"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "save-03",
+      "shim": "`rb_save_*` retained services in `save_stock.S` (current task, extent copy/name/preset, prepare metadata, register release, cached state, service byte/present/profile, signal, stage, storage direct/kind-three, wait)",
+      "kind": "trampoline into retained stock",
+      "other_side": "stock image-5 save and storage services",
+      "owned": "no",
+      "removal": "those services are owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/develop:develop-candidate",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_save_current_task",
+            "rb_save_extent_copy",
+            "rb_save_extent_name",
+            "rb_save_extent_preset",
+            "rb_save_prepare_metadata",
+            "rb_save_register_release",
+            "rb_save_sample_cached_state",
+            "rb_save_service_byte",
+            "rb_save_service_present",
+            "rb_save_service_profile",
+            "rb_save_signal",
+            "rb_save_stage",
+            "rb_save_storage_direct",
+            "rb_save_storage_kind_three",
+            "rb_save_wait"
+          ],
+          "contract": "replacement/save/save.ld",
+          "requirement": "`rb_save_*` retained services in `save_stock.S` (current task, extent copy/name/preset, prepare metadata, register release, cached state, service byte/present/profile, signal, stage, storage direct/kind-three, wait). stock image-5 save and storage services. those services are owned"
+        },
+        {
+          "image": "//replacement/save:save-owned",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_save_current_task",
+            "rb_save_extent_copy",
+            "rb_save_extent_name",
+            "rb_save_extent_preset",
+            "rb_save_prepare_metadata",
+            "rb_save_register_release",
+            "rb_save_sample_cached_state",
+            "rb_save_service_byte",
+            "rb_save_service_present",
+            "rb_save_service_profile",
+            "rb_save_signal",
+            "rb_save_stage",
+            "rb_save_storage_direct",
+            "rb_save_storage_kind_three",
+            "rb_save_wait"
+          ],
+          "contract": "replacement/save/save.ld",
+          "requirement": "`rb_save_*` retained services in `save_stock.S` (current task, extent copy/name/preset, prepare metadata, register release, cached state, service byte/present/profile, signal, stage, storage direct/kind-three, wait). stock image-5 save and storage services. those services are owned"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "save-04",
+      "shim": "`save.ld`, `stage.ld`, `storage.ld`, `wait.ld` placements and the `xm1_save_*_probe` entries",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "stock save callers and the qualification probes",
+      "owned": "no",
+      "removal": "owned code is called directly",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/save:save-owned",
+          "kind": "publication",
+          "symbols": [
+            "xm1_save_probe"
+          ],
+          "contract": "replacement/save/save.ld",
+          "requirement": "`save.ld`, `stage.ld`, `storage.ld`, `wait.ld` placements and the `xm1_save_*_probe` entries. stock save callers and the qualification probes. owned code is called directly"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "save-linked-abi",
+      "shim": "Additional linked unmangled ABI entry points",
+      "kind": "stock-ABI export",
+      "other_side": "the publication or qualification consumers of the current linked image",
+      "owned": "partly",
+      "removal": "all consumers use owned typed interfaces and both sides have a qualified comparison in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/save:save-owned",
+          "kind": "export",
+          "symbols": [
+            "xm1_save_lifecycle_probe",
+            "xm1_save_reentry_probe"
+          ],
+          "contract": "replacement/save/save.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "save-linked-retained-references",
+      "shim": "Definite retained references in the current linked instruction and relocation metadata",
+      "kind": "retained stock seam in assembly",
+      "other_side": "retained code and guest address contracts reached by the composed image",
+      "owned": "partly",
+      "removal": "all declared retained targets have owned typed replacements and both sides are compared in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/save:save-owned",
+          "kind": "retained-entry",
+          "symbols": [],
+          "retained_targets": [
+            6945020,
+            7319168,
+            7406052,
+            7486648,
+            7488424,
+            7488856,
+            7580652,
+            7580768,
+            14999732,
+            18699776,
+            18699912,
+            18700052,
+            18700368,
+            18700572,
+            18700596
+          ],
+          "contract": "replacement/save/save.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

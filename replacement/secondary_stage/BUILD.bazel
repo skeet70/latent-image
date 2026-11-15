@@ -57,3 +57,9 @@ xm1_rust_elf(
     link_script = "secondary-stage.ld",
     rust_staticlib = ":secondary-stage-rust",
 )
+
+filegroup(
+    name = "shim-catalog-data",
+    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel"],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)

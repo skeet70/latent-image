@@ -25,6 +25,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Word (Word32, Word64, Word8)
 import qualified Emulation.CaptureStream as CS
+import qualified Emulation.PlaybackDecode as PD
 import GHC.Generics (Generic)
 import Numeric (readHex, showHex)
 import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMissing, doesFileExist, doesPathExist, makeAbsolute)
@@ -1142,6 +1143,9 @@ data Observed = Observed
   -- | Bridge hits read from emulator-session.json after the bridge left its command loop.
   , obsRecovered :: IORef (Maybe Int)
   , obsCapture :: IORef (Maybe CaptureProgress)
+  , obsDecodePending :: IORef (Maybe DecodeJob)
+  , obsDecodeJobs :: IORef [(Bool, Value)]
+  , obsDecodeCopy :: IORef (Maybe (PD.SourceCopy, Value))
   }
 
 data NewFile = NewFile { newJpeg :: Bool, newValue :: Value }
@@ -1151,6 +1155,8 @@ newObserved = Observed <$> newIORef Nothing <*> newIORef [] <*> newIORef 0 <*> n
   <*> newIORef Nothing <*> newIORef Nothing <*> newIORef Nothing <*> newIORef Nothing <*> newIORef Nothing
   <*> newIORef Nothing <*> newIORef Nothing <*> newIORef Nothing <*> newIORef [] <*> newIORef Nothing <*> newIORef Nothing
   <*> newIORef Nothing <*> newIORef emptyLedger <*> newIORef Nothing <*> newIORef [] <*> newIORef Nothing <*> newIORef Nothing
+  <*> newIORef Nothing
+  <*> newIORef Nothing <*> newIORef []
   <*> newIORef Nothing
 
 -- | Folds hits into the ledger and returns their journal record; after the press, kept hits also feed the verdict.
@@ -1178,46 +1184,155 @@ ledgerValue ledger = object
   , "last_line_36" .= fmap line36Value (ledgerLastLine36 ledger) ]
   where line36Value l = object ["instructions" .= line36Instructions l, "traced_configuration" .= tracedConfigurationValue (line36Configuration l)]
 
--- | render.rs physical(): the uncached 0x4000_0000 alias of the first 512 MiB.
 physicalAddress :: Word32 -> Word32
-physicalAddress address
-  | address >= 0x40000000 && address < 0x60000000 = address - 0x40000000
-  | otherwise = address
+physicalAddress = PD.physical
 
-readGuest :: Bridge -> Word32 -> Int -> IO B.ByteString
-readGuest bridge address count = do
-  reply <- call bridge (command "read-memory" ["address" .= physicalAddress address, "count" .= count])
+readMemory :: Bridge -> Word32 -> Int -> IO B.ByteString
+readMemory bridge address count = do
+  require (count > 0 && count <= 4096 && toInteger address + toInteger count <= 0x100000000) "read-memory range exceeds page or address bound"
+  reply <- call bridge (command "read-memory" ["address" .= address, "count" .= count])
   bytes <- either (harness . ("read-memory: " ++)) pure (maybe (Left "missing bytes") decodeHex (textAt "bytes" reply))
   require (B.length bytes == count) "read-memory returned a different length"
   pure bytes
 
--- | Relates the last programmed 0xfff63000 job to the buffer the file client filled. FujiMod's
--- jpeg-decoder reads its input from +0x10c for +0x110 bytes and writes packed 4:2:2 to +0x100;
--- 0x0065a58c loads those from param words 0, 1 and 2 at 0x014c5890.
-decodeBinding :: Bridge -> Target -> [Hit] -> Maybe CellValues -> IO (Maybe (Bool, Value))
-decodeBinding bridge target hits values = case [(buf, len) | hit <- hitsAt "file-read" hits, Just len <- [hitR 2 hit], Just buf <- [hitR 3 hit]] of
-  [] -> pure Nothing
-  fileReads@((start, firstLength) : _) -> do
-    let contiguous = and (zipWith (\(b, l) (b', _) -> b + l == b') fileReads (drop 1 fileReads))
-        end = if contiguous then start + sum (map snd fileReads) else start + firstLength
-        prefix = min 4096 (fromIntegral firstLength)
-        word offset = values >>= Map.lookup "decode_params" >>= \bytes ->
-          if B.length bytes >= offset + 4 then Just (fromIntegral (le bytes offset 4) :: Word32) else Nothing
-        source = word 8
-        count = word 12
-        inBuffer = case (source, count) of
-          (Just s, Just n) -> s >= start && s < end && s + n <= end
-          _ -> False
-    head' <- readGuest bridge start prefix
-    let prefixMatches = head' == B.take prefix (targetBytes target)
-    pure (Just (prefixMatches && inBuffer, object
-      [ "file_reads" .= [object ["buffer" .= hex32 b, "length" .= l] | (b, l) <- fileReads]
-      , "file_reads_contiguous" .= contiguous, "file_buffer_end" .= hex32 end
-      , "file_buffer_prefix_bytes" .= prefix, "file_buffer_prefix_matches_fixture" .= prefixMatches
-      , "decode_job" .= fmap hex32 (word 0), "decode_source" .= fmap hex32 source, "decode_source_count" .= count
-      , "decode_source_offset_in_file" .= fmap (\s -> toInteger s - toInteger start) source
-      , "decode_destination" .= fmap hex32 (word 16), "decode_capacity" .= word 0x1c, "decode_shift" .= fmap (.&. 3) (word 0x24)
-      , "decode_source_in_file_buffer" .= inBuffer ]))
+readGuest :: Bridge -> Word32 -> Int -> IO B.ByteString
+readGuest bridge address count = do
+  let physical = physicalAddress address
+  require (count > 0 && count <= 8192 * 8192 * 2 && toInteger physical + toInteger count <= 0x20000000)
+    "guest read exceeds observation bound or physical DRAM"
+  B.concat <$> mapM (\offset -> readMemory bridge (physical + fromIntegral offset) (min 4096 (count-offset))) [0,4096..count-1]
+
+readDecodeRange :: Bridge -> PD.ByteRange -> IO B.ByteString
+readDecodeRange bridge range = readGuest bridge (PD.rangeAddress range) (PD.rangeCount range)
+
+data DecodeJob
+  = DecodeStarted PD.Snapshot B.ByteString Value
+  | DecodeSampled PD.Snapshot PD.Snapshot Value Value
+
+decodeStores :: [(Word32, Word32)]
+decodeStores = [(0x0065a730,0x008),(0x0065a768,0x0a0),(0x0065a78c,0x100),(0x0065a7b0,0x104)
+  ,(0x0065a7d4,0x10c),(0x0065a7f8,0x110),(0x0065a870,0x11c),(0x0065a8a8,0x120)
+  ,(0x0065a910,0x124),(0x0065a978,0x128)]
+
+decodeStoreLabel :: Word32 -> T.Text
+decodeStoreLabel offset = "jpeg-register-" <> T.pack (hex32 offset)
+
+decodeObservationSites :: [Site]
+decodeObservationSites =
+  [Site address (decodeStoreLabel offset) "X-M1 1.50 id4.dis: ordinary decoder programming store r2,[r3]" | (address,offset) <- decodeStores]
+  ++ [ Site 0x0065ab3c "jpeg-status-loaded" "X-M1 1.50 id4.dis: r2 loaded from 0xfff63004; before status ACK"
+     , Site 0x0065aa00 "jpeg-endpoint-loaded" "X-M1 1.50 id4.dis: r2 loaded from 0xfff63108; before completion callback" ]
+  ++ [Site 0x0065a57c "jpeg-start-store" "X-M1 1.50 id4.dis: ordinary start-control store r2,[r3]"]
+  ++ [Site 0x011d3e9c "jpeg-preview-copy" "X-M1 1.50 plain image: EOI-trimmed final memcpy r0,r1,r2"]
+
+programRegisters :: [Hit] -> B.ByteString -> IO B.ByteString
+programRegisters hits params = do
+  programmed <- maybe (harness "decode start lacks its programming call") pure (find ((== "decode-program") . hitLabel) (reverse hits))
+  require (hitR0 programmed == Just 0x014c5890) "decode programming call used an unknown parameter block"
+  let current = filter (\h -> hitInstructions h >= hitInstructions programmed) hits
+      operand offset = case hitsAt (decodeStoreLabel offset) current of
+        [h] | hitR 3 h == Just (0xfff63000 + offset), Just value <- hitR 2 h -> pure value
+        _ -> harness ("missing, repeated or mismatched programmed register " ++ hex32 offset)
+  mode <- operand 8
+  shift <- operand 0xa0
+  flags <- mapM operand [0x11c,0x120,0x124,0x128]
+  require (mode == 0xfd0020 && fromIntegral shift == le params 0x24 4 && all (== 0) flags) "unsupported or mismatched actual decoder register configuration"
+  values <- mapM operand [0x100,0x104,0x10c,0x110]
+  pure (B.pack [fromIntegral (value `shiftR` (8*i)) | value <- values, i <- [0..3]])
+
+newtype PlaybackPauseId = PlaybackPauseId Word64
+
+playbackAdvance :: FilePath -> Bridge -> Journal -> Observed -> Target -> Value -> IO Fields
+playbackAdvance directory bridge journal observed target request = call bridge request >>= continue
+  where
+    continue reply
+      | textAt "state" reply /= Just "trace-paused" = pure reply
+      | otherwise = do
+          PlaybackPauseId pauseId <- case num "pause_id" reply of
+            Just value | value > 0 -> pure (PlaybackPauseId value)
+            _ -> harness "trace pause lacks its monotonic identity"
+          note journal "playback-pause" (Object reply)
+          (_, hits) <- traceHits bridge 0
+          hit <- maybe (harness "trace pause lacks its event") pure (case reverse hits of h:_ -> Just h; [] -> Nothing)
+          require (case hitRaw hit of Object o -> num "core" o == Just (0 :: Int); _ -> False) "decode pause is not on the primary CPU"
+          case hitLabel hit of
+            "jpeg-preview-copy" -> do
+              previous <- readIORef (obsDecodeCopy observed)
+              active <- readIORef (obsDecodePending observed)
+              require (isNothing previous && isNothing active) "preview copy is ambiguous with a pending copy or decode"
+              destination <- maybe (harness "preview copy lacks destination") pure (hitR 0 hit)
+              source <- maybe (harness "preview copy lacks source") pure (hitR 1 hit)
+              count <- maybe (harness "preview copy lacks count") pure (hitR 2 hit)
+              require (count > 0 && count <= 16*1024*1024
+                && toInteger (physicalAddress destination) + toInteger count + 4096 <= 0x20000000
+                && toInteger (physicalAddress source) + toInteger count <= 0x20000000) "preview copy range exceeds physical or input bounds"
+              copied <- readGuest bridge source (fromIntegral count)
+              beforeTail <- readGuest bridge (physicalAddress destination + count) 4096
+              prepared <- either harness pure (PD.sourceCopy destination copied beforeTail)
+              let provenance = object ["event" .= hitRaw hit, "copied_bytes" .= count
+                    , "copied_sha256" .= digestText (digest copied), "pre_copy_tail" .= hexBytes beforeTail]
+              writeIORef (obsDecodeCopy observed) (Just (prepared, provenance))
+              note journal "decode-source-copy" provenance
+            "jpeg-start-store" -> do
+              require (hitR 2 hit == Just 1 && hitR 3 hit == Just 0xfff63000) "decode start-control store operands differ"
+              previous <- readIORef (obsDecodePending observed)
+              require (isNothing previous) "a decode was reprogrammed before its observed completion"
+              params <- readGuest bridge 0x014c5888 0x78
+              registers <- programRegisters hits params
+              template <- either harness pure (PD.snapshot [params, registers, B.empty, B.empty])
+              range <- either harness pure (PD.sourceRange template)
+              source <- readDecodeRange bridge range
+              sampledStart <- either harness pure (PD.snapshot [params, registers, source, B.empty])
+              copied <- readIORef (obsDecodeCopy observed)
+              let started = maybe sampledStart (\(prepared, _) -> PD.withSourceCopy prepared sampledStart) copied
+              writeIORef (obsDecodeCopy observed) Nothing
+              _ <- either harness pure (PD.outputRange started)
+              let provenance = object ["event" .= hitRaw hit, "parameters" .= hexBytes params
+                    , "programmed_store_operands" .= hexBytes registers, "source_sha256" .= digestText (digest source)
+                    , "source_bytes" .= B.length source, "construction" .= maybe Null snd copied
+                    , "register_stores" .= take (length decodeStores) [hitRaw h | h <- reverse hits, "jpeg-register-" `T.isPrefixOf` hitLabel h]]
+              writeIORef (obsDecodePending observed) (Just (DecodeStarted started registers provenance))
+              note journal "decode-programmed" provenance
+            "jpeg-status-loaded" -> do
+              status <- maybe (harness "status load lacks r2") pure (hitR 2 hit)
+              if status .&. 0x10 == 0 then note journal "decode-noncompletion-irq" (hitRaw hit) else do
+                pending <- readIORef (obsDecodePending observed)
+                (started, registers, programmed) <- case pending of
+                  Just (DecodeStarted s r p) -> pure (s,r,p)
+                  _ -> harness "completion has no uniquely observed programmed job"
+                params <- readGuest bridge 0x014c5888 0x78
+                range <- either harness pure (PD.sourceRange started)
+                source <- readDecodeRange bridge range
+                extent <- either harness pure (PD.outputRange started)
+                output <- readDecodeRange bridge extent
+                completed <- either harness pure (PD.snapshot [params, registers, source, output])
+                jobs <- readIORef (obsDecodeJobs observed)
+                require (length jobs < 64) "decode completion count exceeds observation bound"
+                createDirectoryIfMissing True (directory </> "decode")
+                let base = directory </> "decode" </> show (length jobs)
+                    provenance = object ["event" .= hitRaw hit, "parameters" .= hexBytes params
+                      , "source_sha256" .= digestText (digest source), "source_bytes" .= B.length source
+                      , "output_sha256" .= digestText (digest output), "output_bytes" .= B.length output]
+                B.writeFile (base ++ "-source.bin") source
+                B.writeFile (base ++ "-output.bin") output
+                writeIORef (obsDecodePending observed) (Just (DecodeSampled started completed programmed provenance))
+                note journal "decode-output-sampled" provenance
+            "jpeg-endpoint-loaded" -> do
+              pending <- readIORef (obsDecodePending observed)
+              (started, sampled, programmed, completed) <- case pending of
+                Just (DecodeSampled a b p c) -> pure (a,b,p,c)
+                _ -> harness "endpoint has no sampled completion from the same job"
+              endpoint <- maybe (harness "endpoint load lacks r2") pure (hitR 2 hit)
+              let comparison = PD.inspect (targetBytes target) started (PD.withEndpoint endpoint sampled)
+                  receipt = object ["programmed" .= programmed, "completed" .= completed, "endpoint_event" .= hitRaw hit
+                    , "comparison" .= either (object . pure . ("refusal" .=)) id comparison]
+              modifyIORef' (obsDecodeJobs observed) (++ [(either (const False) (const True) comparison, receipt)])
+              writeIORef (obsDecodePending observed) Nothing
+              allJobs <- readIORef (obsDecodeJobs observed)
+              writeIORef (obsDecode observed) (Just (all fst allJobs, toJSON (map snd allJobs)))
+              note journal "decode-completed" receipt
+            _ -> harness "unexpected trace pause in playback"
+          call bridge (command "trace-resume" ["pause_id" .= pauseId]) >>= continue
 
 data RawGeometry = RawGeometry
   { rgDestination :: Word32, rgLeft :: Int, rgTop :: Int, rgWidth :: Int, rgHeight :: Int
@@ -1362,7 +1477,7 @@ newFiles directory before after = fmap concat . forM (viewFolders after) $ \fold
 runRoute :: Options -> FilePath -> Bridge -> Journal -> Observed -> IO ()
 runRoute options directory bridge journal observed = do
   let route = optRoute options
-      sites = routeSites route
+      sites = routeSites route ++ (if route == PlayRoute then decodeObservationSites else [])
   _ <- call bridge (command "trace-sites" ["sites" .= object [K.fromString (hex32 (siteAddress s)) .= siteLabel s | s <- sites]])
   note journal "trace-sites" (toJSON (map siteValue sites))
   before <- walkCard bridge
@@ -1414,9 +1529,15 @@ runRoute options directory bridge journal observed = do
     writeIORef (obsCapture observed) (Just (CaptureProgress (CS.startCoverage at) Nothing CS.initialCursor False))
     _ <- captureObservationHits bridge journal observed
     pure ()
+  when (route == PlayRoute) $ do
+    _ <- call bridge (command "trace-sites"
+      [ "sites" .= object [K.fromString (hex32 (siteAddress s)) .= siteLabel s | s <- sites]
+      , "pauses" .= object [K.fromText label .= (64 :: Int) | label <- ["jpeg-preview-copy","jpeg-start-store","jpeg-status-loaded","jpeg-endpoint-loaded"]] ])
+    pure ()
+  let advance = if route == PlayRoute then playbackAdvance directory bridge journal observed target else call bridge
   pressed <- if captureObservationEnabled (optCaptureObservation options)
     then captureAdvance bridge journal observed CS.ShutterSequence (routeInput route)
-    else call bridge (routeInput route)
+    else advance (routeInput route)
   writeIORef (obsPressReply observed) (Just pressed)
   note journal "press" (object ["input" .= routeInput route, "reply" .= Object pressed])
   when (captureObservationEnabled (optCaptureObservation options)) $
@@ -1434,7 +1555,7 @@ runRoute options directory bridge journal observed = do
             (sdFields, sd) <- if index == 0 then mediaState bridge else do
               reply <- if captureObservationEnabled (optCaptureObservation options)
                 then captureAdvance bridge journal observed CS.Window (command "capture-observation-window" [])
-                else call bridge (command "capture-observation-window" [])
+                else advance (command "capture-observation-window" [])
               note journal "capture-observation-window" (object ["window" .= index, "reply" .= Object reply])
               mediaState bridge
             values <- readCells bridge
@@ -1468,6 +1589,9 @@ runRoute options directory bridge journal observed = do
               , "sd_commands" .= map (sdCommandValue index) seen, "sd_commands_outside_history" .= lost ])
             window (index + 1) (if active || index == 0 then 0 else quiet + 1 :: Int) sd count
   final <- window (0 :: Int) (0 :: Int) sd0 startHits
+  when (route == PlayRoute) $ do
+    ended <- call bridge (command "trace-sites" ["sites" .= object [K.fromString (hex32 (siteAddress s)) .= siteLabel s | s <- sites]])
+    note journal "playback-observation-ended" (Object ended)
   writeIORef (obsSdFinal observed) (Just final)
   ledger <- readIORef (obsLedger observed)
   note journal "trace-ledger" (ledgerValue ledger)
@@ -1476,10 +1600,17 @@ runRoute options directory bridge journal observed = do
   raw <- rawSamples bridge (optRamp options) device
   writeIORef (obsRaw observed) raw
   note journal "raw-samples" (maybe Null snd raw)
-  routeHits <- readIORef (obsHits observed)
-  finalCells <- readIORef (obsCellsFinal observed)
-  decode <- decodeBinding bridge target routeHits finalCells
-  writeIORef (obsDecode observed) decode
+  when (route == PlayRoute) $ do
+    pending <- readIORef (obsDecodePending observed)
+    jobs <- readIORef (obsDecodeJobs observed)
+    copyPending <- readIORef (obsDecodeCopy observed)
+    let programmed = sincePress ledger "jpeg-start-store"
+        endpoints = sincePress ledger "jpeg-endpoint-loaded"
+        covered = toInteger (length jobs) == programmed && programmed == endpoints
+    writeIORef (obsDecode observed) (Just (covered && isNothing pending && isNothing copyPending && not (null jobs) && all fst jobs,
+      object ["completed_jobs" .= map snd jobs, "unfinished_job" .= isJust pending
+             , "programmed_jobs" .= programmed, "endpoint_loads" .= endpoints, "all_jobs_sampled" .= covered]))
+  decode <- readIORef (obsDecode observed)
   note journal "decode-binding" (maybe Null snd decode)
   after <- walkCard bridge
   note journal "card-after" (viewValue after)
@@ -1599,6 +1730,8 @@ verdict route lensOn observed = do
             "emulation/fujimod-xm1/src/ram_push.rs:548-561"
         , Finding "decode-source-in-loaded-file" Context (maybe False fst decode) (maybe Null snd decode)
             "FujiMod crates/emulator-exr2-codecs/src/jpeg/decoder.rs:80-96; af/functions/00d99714.c, 0065a58c.c"
+        , Finding "completed-decode-source-layout-and-extent" Gate (maybe False fst decode) (maybe Null snd decode)
+            "emulation/Emulation/PlaybackDecode.hs; X-M1 1.50 id4.dis programming stores, status and endpoint loads"
         , Finding "fixture-unchanged-after" Gate (targetAfter == Just True) (toJSON targetAfter) "emulation/fujimod-xm1/src/sd_host.rs:364-374" ]
       results = r0s "admission-result"
       shutter =
@@ -1670,7 +1803,7 @@ verdict route lensOn observed = do
       reasons =
         [ ("raw-dma-matches-ramp12", "no ramp comparison was made") | maybe True (isNothing . fst) raw ]
         ++ [ (name, "the route ended before its final card walk and capture") | not routeEnded
-           , name <- ["final-frame-differs-from-pre-press-frame", "decode-source-in-loaded-file", "card-written", "new-jpeg-on-card", "fixture-unchanged-after"] ]
+           , name <- ["final-frame-differs-from-pre-press-frame", "decode-source-in-loaded-file", "completed-decode-source-layout-and-extent", "card-written", "new-jpeg-on-card", "fixture-unchanged-after"] ]
         ++ [ (name, "trace hits after the last collected window were not recovered") | not traceComplete
            , name <- ["target-sectors-read", "admitted", "save-chain-entered", "raw-open-requested", "raw-open-returned-success", "raw-irq-handler-entered", "ui-816-posted-after-press"] ]
         ++ [ (name, "bounded capture observation has missing event detail or an uncollected interval")

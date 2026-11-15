@@ -1,0 +1,168 @@
+{
+  "unit": "calibration_liveview",
+  "summary": "The calibration cache consumer and live-view publication. Its exports sit at the stock cache/publication entries; its retained trampolines enter stock calibration services.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "calibration_liveview-01",
+      "shim": "19 `xm1_calibration_*` and `xm1_liveview_*` exports in `src/abi.rs` and `src/publication.rs`, placed by `calibration-liveview.ld`",
+      "kind": "stock-ABI export",
+      "other_side": "stock calibration and live-view callers",
+      "owned": "no",
+      "removal": "every calibration and live-view caller is owned or migrated",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/calibration_liveview:calibration-liveview",
+          "kind": "export",
+          "symbols": [
+            "xm1_calibration_base",
+            "xm1_calibration_byte_halfword",
+            "xm1_calibration_defaults",
+            "xm1_calibration_fixed_halfword",
+            "xm1_calibration_i16",
+            "xm1_calibration_i8",
+            "xm1_calibration_initialize",
+            "xm1_calibration_pointer",
+            "xm1_calibration_region",
+            "xm1_calibration_reload",
+            "xm1_calibration_resource_base",
+            "xm1_calibration_set_byte",
+            "xm1_calibration_u16",
+            "xm1_calibration_u24",
+            "xm1_calibration_u32",
+            "xm1_calibration_u8",
+            "xm1_calibration_zero",
+            "xm1_liveview_publish",
+            "xm1_liveview_service"
+          ],
+          "contract": "replacement/calibration_liveview/calibration-liveview.ld",
+          "requirement": "19 `xm1_calibration_*` and `xm1_liveview_*` exports in `src/abi.rs` and `src/publication.rs`, placed by `calibration-liveview.ld`. stock calibration and live-view callers. every calibration and live-view caller is owned or migrated"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "calibration_liveview-02",
+      "shim": "`retained_primary`, `retained_backup`, `retained_fixed`, `retained_copy`, `retained_wb_convert`, `retained_wb_publish`, `retained_halfword`, `retained_lock`, `retained_rebuild` in `entry.S`",
+      "kind": "trampoline into retained stock",
+      "other_side": "stock calibration storage, white-balance and rebuild services",
+      "owned": "no",
+      "removal": "the settings/calibration services and white-balance path are owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/calibration_liveview:calibration-liveview",
+          "kind": "retained-entry",
+          "symbols": [
+            "retained_backup",
+            "retained_copy",
+            "retained_fixed",
+            "retained_halfword",
+            "retained_lock",
+            "retained_primary",
+            "retained_rebuild",
+            "retained_wb_convert",
+            "retained_wb_publish"
+          ],
+          "contract": "replacement/calibration_liveview/calibration-liveview.ld",
+          "requirement": "`retained_primary`, `retained_backup`, `retained_fixed`, `retained_copy`, `retained_wb_convert`, `retained_wb_publish`, `retained_halfword`, `retained_lock`, `retained_rebuild` in `entry.S`. stock calibration storage, white-balance and rebuild services. the settings/calibration services and white-balance path are owned"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "calibration_liveview-03",
+      "shim": "fixed calibration cache at `0x41acd800` and the 504-byte defaults resource",
+      "kind": "guest-memory layout view",
+      "other_side": "retained calibration consumers that read the same cache",
+      "owned": "no",
+      "removal": "every cache consumer is owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/calibration_liveview:calibration-liveview",
+          "kind": "layout",
+          "symbols": [
+            "xm1_liveview_publish"
+          ],
+          "contract": "replacement/calibration_liveview/calibration-liveview.ld",
+          "requirement": "fixed calibration cache at `0x41acd800` and the 504-byte defaults resource. retained calibration consumers that read the same cache. every cache consumer is owned"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "calibration_liveview-04",
+      "shim": "`xm1_calibration_u16`/`xm1_calibration_i16` exports",
+      "kind": "C-ABI bridge between two owned units",
+      "other_side": "power_lifecycle",
+      "owned": "yes",
+      "removal": "power links the crate directly and both sides compare with stock in one image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/calibration_liveview:calibration-liveview",
+          "kind": "export",
+          "symbols": [
+            "xm1_calibration_i16",
+            "xm1_calibration_u16"
+          ],
+          "contract": "replacement/calibration_liveview/calibration-liveview.ld",
+          "requirement": "`xm1_calibration_u16`/`xm1_calibration_i16` exports. power_lifecycle. power links the crate directly and both sides compare with stock in one image"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "calibration_liveview-linked-retained-references",
+      "shim": "Definite retained references in the current linked instruction and relocation metadata",
+      "kind": "retained stock seam in assembly",
+      "other_side": "retained code and guest address contracts reached by the composed image",
+      "owned": "partly",
+      "removal": "all declared retained targets have owned typed replacements and both sides are compared in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/calibration_liveview:calibration-liveview",
+          "kind": "retained-entry",
+          "symbols": [],
+          "retained_targets": [
+            6986436,
+            6986864,
+            6987416,
+            7610684,
+            15611468,
+            15614348,
+            15621824,
+            15640232,
+            15640312
+          ],
+          "contract": "replacement/calibration_liveview/calibration-liveview.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

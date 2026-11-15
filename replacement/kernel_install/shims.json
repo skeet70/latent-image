@@ -1,0 +1,85 @@
+{
+  "unit": "kernel_install",
+  "summary": "The kernel installer and its cache maintenance.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "kernel_install-01",
+      "shim": "`xm1_kernel_install` and `xm1_kernel_install_entry` in `entry.S`/`src.rs`",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the stock phase entry and installer callers",
+      "owned": "no",
+      "removal": "the phase entry and installer callers are owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/kernel_install:kernel-install-image",
+          "kind": "publication",
+          "symbols": [
+            "xm1_kernel_install",
+            "xm1_kernel_install_entry"
+          ],
+          "contract": "replacement/kernel_install/kernel-install.ld",
+          "requirement": "`xm1_kernel_install` and `xm1_kernel_install_entry` in `entry.S`/`src.rs`. the stock phase entry and installer callers. the phase entry and installer callers are owned"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "kernel_install-02",
+      "shim": "`xm1_kernel_cache` retained service",
+      "kind": "trampoline into retained stock",
+      "other_side": "the stock cache-maintenance helper",
+      "owned": "no",
+      "removal": "cache maintenance is owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/kernel_install:kernel-install-image",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_kernel_cache"
+          ],
+          "contract": "replacement/kernel_install/kernel-install.ld",
+          "requirement": "`xm1_kernel_cache` retained service. the stock cache-maintenance helper. cache maintenance is owned",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "kernel_install-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/kernel_install:kernel-install-image",
+          "kind": "publication",
+          "symbols": [
+            "__kernel_install_end",
+            "__kernel_install_start"
+          ],
+          "contract": "replacement/kernel_install/kernel-install.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

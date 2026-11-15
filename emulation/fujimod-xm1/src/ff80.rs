@@ -381,7 +381,7 @@ impl Ff80 {
             let outcome = self.machine.run(remaining);
             self.machine.require_running()?;
             self.observe()?;
-            if outcome == RunOutcome::DrainRequired {
+            if outcome == RunOutcome::DrainRequired || self.machine.traces.paused {
                 return Ok(outcome);
             }
             if self.machine.instructions() >= end {
@@ -760,6 +760,12 @@ impl Ff80 {
         let settle = crate::render::settled_key(&mut self.machine, key, pulse, budget)?;
         self.observe()?;
         Ok(settle)
+    }
+
+    pub fn pending_settled_key(&mut self, pending: &mut crate::render::PendingSettle) -> Result<Option<crate::render::Settle>, String> {
+        let result = pending.resume(&mut self.machine)?;
+        self.observe()?;
+        Ok(result)
     }
 }
 

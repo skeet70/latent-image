@@ -1,0 +1,249 @@
+{
+  "unit": "menu_engine",
+  "summary": "The address-independent menu engine and its stock-state mirror. Its shims are listed in [the engine design](../reports/owned-menu-engine-design.md#shims-for-this-unit).",
+  "classification": "module",
+  "rows": [
+    {
+      "id": "menu_engine-01",
+      "shim": "`rb_menu_engine_entry` and the fallback push in `adapter/entry.S`, published at `0xbf95c8`",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the stock stage consumer and `0xbfa234` fallback",
+      "owned": "no",
+      "removal": "the owned key layer and stage consumers call the engine directly",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine",
+          "kind": "publication",
+          "symbols": [
+            "rb_menu_engine_entry"
+          ],
+          "contract": "menu/recipe_bank_ram.ld",
+          "requirement": "`rb_menu_engine_entry` and the fallback push in `adapter/entry.S`, published at `0xbf95c8`. the stock stage consumer and `0xbfa234` fallback. the owned key layer and stage consumers call the engine directly"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "publication",
+          "symbols": [
+            "rb_menu_engine_entry"
+          ],
+          "contract": "menu/recipe_bank_ram.ld",
+          "requirement": "`rb_menu_engine_entry` and the fallback push in `adapter/entry.S`, published at `0xbf95c8`. the stock stage consumer and `0xbfa234` fallback. the owned key layer and stage consumers call the engine directly"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine",
+          "kind": "export",
+          "symbols": [
+            "rb_menu_engine_apply"
+          ],
+          "contract": "menu/recipe_bank_ram.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "export",
+          "symbols": [
+            "rb_menu_engine_apply"
+          ],
+          "contract": "menu/recipe_bank_ram.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "menu_engine-02",
+      "shim": "`rb_menu_engine_call_*` retained services (availability, initial row, kind switch, notify, seek)",
+      "kind": "trampoline into retained stock",
+      "other_side": "stock menu services",
+      "owned": "no",
+      "removal": "the tree and typed settings service answer them",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_menu_engine_call_availability",
+            "rb_menu_engine_call_initial_row",
+            "rb_menu_engine_call_kind_switch",
+            "rb_menu_engine_call_notify",
+            "rb_menu_engine_call_seek"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_menu_engine_call_*` retained services (availability, initial row, kind switch, notify, seek). stock menu services. the tree and typed settings service answer them"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_menu_engine_call_availability",
+            "rb_menu_engine_call_initial_row",
+            "rb_menu_engine_call_kind_switch",
+            "rb_menu_engine_call_notify",
+            "rb_menu_engine_call_seek"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_menu_engine_call_*` retained services (availability, initial row, kind switch, notify, seek). stock menu services. the tree and typed settings service answer them"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "menu_engine-03",
+      "shim": "`rb_menu_engine_guard_failure` and `__aeabi_*` in `adapter/entry.S`",
+      "kind": "retained stock seam in assembly",
+      "other_side": "stock ABI helper routines and the guard path",
+      "owned": "no",
+      "removal": "the engine no longer needs the stock ABI helpers",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine",
+          "kind": "retained-entry",
+          "symbols": [
+            "__aeabi_memclr4",
+            "__aeabi_memclr8",
+            "__aeabi_memcpy",
+            "__aeabi_memcpy4",
+            "__aeabi_memcpy8",
+            "rb_menu_engine_guard_failure"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_menu_engine_guard_failure` and `__aeabi_*` in `adapter/entry.S`. stock ABI helper routines and the guard path. the engine no longer needs the stock ABI helpers"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "retained-entry",
+          "symbols": [
+            "__aeabi_memclr4",
+            "__aeabi_memclr8",
+            "__aeabi_memcpy",
+            "__aeabi_memcpy4",
+            "__aeabi_memcpy8",
+            "rb_menu_engine_guard_failure"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_menu_engine_guard_failure` and `__aeabi_*` in `adapter/entry.S`. stock ABI helper routines and the guard path. the engine no longer needs the stock ABI helpers"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "menu_engine-04",
+      "shim": "block mirror at `0x430` bytes and `0x01467580/84` (`src/state.rs`)",
+      "kind": "guest-memory layout view",
+      "other_side": "stock readers and writers of the menu block",
+      "owned": "no",
+      "removal": "no stock code reads or writes the block",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine",
+          "kind": "layout",
+          "symbols": [
+            "rb_menu_engine_entry"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "block mirror at `0x430` bytes and `0x01467580/84` (`src/state.rs`). stock readers and writers of the menu block. no stock code reads or writes the block"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "layout",
+          "symbols": [
+            "rb_menu_engine_entry"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "block mirror at `0x430` bytes and `0x01467580/84` (`src/state.rs`). stock readers and writers of the menu block. no stock code reads or writes the block"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "menu_engine-05",
+      "shim": "`rb_ui_probe_visit` page-entry replay",
+      "kind": "callback registry for guest words",
+      "other_side": "the installed bank's `rb_bank_page_entry` hook",
+      "owned": "no",
+      "removal": "the bank's page-entry work is an owned engine consumer",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//host/firmware:bank-elf-00c40000",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_bank_page_entry"
+          ],
+          "contract": "menu/recipe_bank_allowlist.json",
+          "requirement": "`rb_ui_probe_visit` page-entry replay. the installed bank's `rb_bank_page_entry` hook. the bank's page-entry work is an owned engine consumer"
+        },
+        {
+          "image": "//host/firmware:bank-elf-00c4fc88",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_bank_page_entry"
+          ],
+          "contract": "menu/recipe_bank_allowlist.json",
+          "requirement": "`rb_ui_probe_visit` page-entry replay. the installed bank's `rb_bank_page_entry` hook. the bank's page-entry work is an owned engine consumer"
+        },
+        {
+          "image": "//host/firmware:bank-modal-elf-00c40000",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_bank_page_entry"
+          ],
+          "contract": "menu/recipe_bank_allowlist.json",
+          "requirement": "`rb_ui_probe_visit` page-entry replay. the installed bank's `rb_bank_page_entry` hook. the bank's page-entry work is an owned engine consumer"
+        },
+        {
+          "image": "//host/firmware:bank-modal-elf-00c4fc88",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_bank_page_entry"
+          ],
+          "contract": "menu/recipe_bank_allowlist.json",
+          "requirement": "`rb_ui_probe_visit` page-entry replay. the installed bank's `rb_bank_page_entry` hook. the bank's page-entry work is an owned engine consumer"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_bank_page_entry"
+          ],
+          "contract": "menu/recipe_bank_allowlist.json",
+          "requirement": "`rb_ui_probe_visit` page-entry replay. the installed bank's `rb_bank_page_entry` hook. the bank's page-entry work is an owned engine consumer"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_bank_page_entry"
+          ],
+          "contract": "menu/recipe_bank_allowlist.json",
+          "requirement": "`rb_ui_probe_visit` page-entry replay. the installed bank's `rb_bank_page_entry` hook. the bank's page-entry work is an owned engine consumer"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

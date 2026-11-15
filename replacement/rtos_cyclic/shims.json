@@ -1,0 +1,319 @@
+{
+  "unit": "rtos_cyclic",
+  "summary": "The owned cyclic-handler family.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "rtos_cyclic-01",
+      "shim": "`xm1_rtos_cyclic_*` exports placed at `0x4be3c`-family addresses by `cyclic-a.ld`/`cyclic-b.ld`",
+      "kind": "stock-ABI export",
+      "other_side": "stock callers of the cyclic entries",
+      "owned": "no",
+      "removal": "every cyclic caller is owned or migrated",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/rtos_cyclic/BUILD.bazel",
+          "requirement": "Standalone family qualification images are frozen reference artifacts; the current linked boundary is the platform aggregate, not a rebuilt standalone family image."
+        },
+        {
+          "image": "//replacement/rtos_platform:platform-a",
+          "kind": "export",
+          "symbols": [
+            "xm1_platform_veneer_cyclic_configure",
+            "xm1_platform_veneer_cyclic_create",
+            "xm1_platform_veneer_cyclic_delete",
+            "xm1_platform_veneer_cyclic_expire",
+            "xm1_platform_veneer_cyclic_initialize",
+            "xm1_platform_veneer_cyclic_schedule",
+            "xm1_platform_veneer_cyclic_start",
+            "xm1_platform_veneer_cyclic_stop",
+            "xm1_rtos_cyclic_configure",
+            "xm1_rtos_cyclic_configure_body",
+            "xm1_rtos_cyclic_create",
+            "xm1_rtos_cyclic_create_body",
+            "xm1_rtos_cyclic_delete",
+            "xm1_rtos_cyclic_delete_body",
+            "xm1_rtos_cyclic_expire",
+            "xm1_rtos_cyclic_expire_body",
+            "xm1_rtos_cyclic_initialize",
+            "xm1_rtos_cyclic_initialize_body",
+            "xm1_rtos_cyclic_schedule",
+            "xm1_rtos_cyclic_schedule_body",
+            "xm1_rtos_cyclic_start",
+            "xm1_rtos_cyclic_start_body",
+            "xm1_rtos_cyclic_stop",
+            "xm1_rtos_cyclic_stop_body"
+          ],
+          "contract": "replacement/rtos_platform/carriers.json",
+          "requirement": "`xm1_rtos_cyclic_*` exports placed at `0x4be3c`-family addresses by `cyclic-a.ld`/`cyclic-b.ld`. stock callers of the cyclic entries. every cyclic caller is owned or migrated",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/rtos_platform:platform-b",
+          "kind": "export",
+          "symbols": [
+            "xm1_platform_veneer_cyclic_configure",
+            "xm1_platform_veneer_cyclic_create",
+            "xm1_platform_veneer_cyclic_delete",
+            "xm1_platform_veneer_cyclic_expire",
+            "xm1_platform_veneer_cyclic_initialize",
+            "xm1_platform_veneer_cyclic_schedule",
+            "xm1_platform_veneer_cyclic_start",
+            "xm1_platform_veneer_cyclic_stop",
+            "xm1_rtos_cyclic_configure",
+            "xm1_rtos_cyclic_configure_body",
+            "xm1_rtos_cyclic_create",
+            "xm1_rtos_cyclic_create_body",
+            "xm1_rtos_cyclic_delete",
+            "xm1_rtos_cyclic_delete_body",
+            "xm1_rtos_cyclic_expire",
+            "xm1_rtos_cyclic_expire_body",
+            "xm1_rtos_cyclic_initialize",
+            "xm1_rtos_cyclic_initialize_body",
+            "xm1_rtos_cyclic_schedule",
+            "xm1_rtos_cyclic_schedule_body",
+            "xm1_rtos_cyclic_start",
+            "xm1_rtos_cyclic_start_body",
+            "xm1_rtos_cyclic_stop",
+            "xm1_rtos_cyclic_stop_body"
+          ],
+          "contract": "replacement/rtos_platform/carriers.json",
+          "requirement": "`xm1_rtos_cyclic_*` exports placed at `0x4be3c`-family addresses by `cyclic-a.ld`/`cyclic-b.ld`. stock callers of the cyclic entries. every cyclic caller is owned or migrated",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/rtos_cyclic:app-callback",
+          "kind": "export",
+          "symbols": [
+            "xm1_app_dispatch_callback",
+            "xm1_app_unregister_callback"
+          ],
+          "contract": "replacement/rtos_cyclic/app-callback.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "rtos_cyclic-02",
+      "shim": "`app-callback.ld` app-callback carrier",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the stock domain-A app caller",
+      "owned": "no",
+      "removal": "the app caller is owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/rtos_cyclic:app-callback",
+          "kind": "publication",
+          "symbols": [
+            "xm1_app_register_callback"
+          ],
+          "contract": "replacement/rtos_cyclic/app-callback.ld",
+          "requirement": "`app-callback.ld` app-callback carrier. the app caller is owned"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "rtos_cyclic-03",
+      "shim": "`xm1_rtos_cyclic_timer_insert`/`_remove` externs",
+      "kind": "C-ABI bridge between two owned units",
+      "other_side": "rtos_timer",
+      "owned": "yes",
+      "removal": "the cyclic crate links the timer crate directly and both sides compare with stock in one image",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/rtos_cyclic/BUILD.bazel",
+          "requirement": "Standalone family qualification images are frozen reference artifacts; the current linked boundary is the platform aggregate, not a rebuilt standalone family image."
+        },
+        {
+          "image": "//replacement/rtos_platform:platform-a",
+          "kind": "retained-import",
+          "symbols": [
+            "s3a_stock_discard",
+            "s3a_stock_notify",
+            "s3a_stock_prepare",
+            "s3a_stock_remove",
+            "s3a_stock_reset",
+            "s3a_stock_rotate",
+            "s3a_stock_save",
+            "s3b_notify",
+            "s3b_prepare",
+            "s3b_release_wait",
+            "s3b_switch",
+            "s3c_insert",
+            "s3c_notify",
+            "s3c_remove",
+            "s3c_switch",
+            "s3d_insert_ready",
+            "s3d_notify_dispatch",
+            "s3d_remove_ready",
+            "s3d_reset_task",
+            "s3d_restart_task",
+            "s3d_switch",
+            "s3d_timer_insert",
+            "s3d_timer_remove",
+            "xm1_fixed_pool_stock_acquire",
+            "xm1_fixed_pool_stock_dispatch",
+            "xm1_fixed_pool_stock_notify",
+            "xm1_fixed_pool_stock_release",
+            "xm1_fixed_pool_stock_wait_cancel",
+            "xm1_fixed_pool_stock_wait_enqueue",
+            "xm1_fixed_pool_stock_wait_enqueue_timed",
+            "xm1_fixed_pool_stock_wait_release",
+            "xm1_rtos_cyclic_timer_insert",
+            "xm1_rtos_cyclic_timer_remove",
+            "xm1_rtos_data_queue_stock_insert_timer",
+            "xm1_rtos_data_queue_stock_remove_timer",
+            "xm1_rtos_objects_stock_insert_timer",
+            "xm1_rtos_objects_stock_remove_timer",
+            "xm1_rtos_objects_stock_timeout",
+            "xm1_rtos_scheduler_s2_deliver_exception",
+            "xm1_rtos_scheduler_s2_exit_task",
+            "xm1_rtos_scheduler_s2_global_unlock",
+            "xm1_semaphore_stock_acquire",
+            "xm1_semaphore_stock_dispatch",
+            "xm1_semaphore_stock_notify",
+            "xm1_semaphore_stock_release",
+            "xm1_semaphore_stock_wait_cancel",
+            "xm1_semaphore_stock_wait_enqueue",
+            "xm1_semaphore_stock_wait_enqueue_timed",
+            "xm1_semaphore_stock_wait_release"
+          ],
+          "contract": "replacement/rtos_platform/carriers.json",
+          "requirement": "`xm1_rtos_cyclic_timer_insert`/`_remove` externs. rtos_timer. the cyclic crate links the timer crate directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//replacement/rtos_platform:platform-b",
+          "kind": "retained-import",
+          "symbols": [
+            "s3a_stock_discard",
+            "s3a_stock_notify",
+            "s3a_stock_prepare",
+            "s3a_stock_remove",
+            "s3a_stock_reset",
+            "s3a_stock_rotate",
+            "s3a_stock_save",
+            "s3b_notify",
+            "s3b_prepare",
+            "s3b_release_wait",
+            "s3b_switch",
+            "s3c_insert",
+            "s3c_notify",
+            "s3c_remove",
+            "s3c_switch",
+            "s3d_insert_ready",
+            "s3d_notify_dispatch",
+            "s3d_remove_ready",
+            "s3d_reset_task",
+            "s3d_restart_task",
+            "s3d_switch",
+            "s3d_timer_insert",
+            "s3d_timer_remove",
+            "xm1_fixed_pool_stock_acquire",
+            "xm1_fixed_pool_stock_dispatch",
+            "xm1_fixed_pool_stock_notify",
+            "xm1_fixed_pool_stock_release",
+            "xm1_fixed_pool_stock_wait_cancel",
+            "xm1_fixed_pool_stock_wait_enqueue",
+            "xm1_fixed_pool_stock_wait_enqueue_timed",
+            "xm1_fixed_pool_stock_wait_release",
+            "xm1_rtos_cyclic_timer_insert",
+            "xm1_rtos_cyclic_timer_remove",
+            "xm1_rtos_data_queue_stock_insert_timer",
+            "xm1_rtos_data_queue_stock_remove_timer",
+            "xm1_rtos_objects_stock_insert_timer",
+            "xm1_rtos_objects_stock_remove_timer",
+            "xm1_rtos_objects_stock_timeout",
+            "xm1_rtos_scheduler_s2_deliver_exception",
+            "xm1_rtos_scheduler_s2_exit_task",
+            "xm1_rtos_scheduler_s2_global_unlock",
+            "xm1_semaphore_stock_acquire",
+            "xm1_semaphore_stock_dispatch",
+            "xm1_semaphore_stock_notify",
+            "xm1_semaphore_stock_release",
+            "xm1_semaphore_stock_wait_cancel",
+            "xm1_semaphore_stock_wait_enqueue",
+            "xm1_semaphore_stock_wait_enqueue_timed",
+            "xm1_semaphore_stock_wait_release"
+          ],
+          "contract": "replacement/rtos_platform/carriers.json",
+          "requirement": "`xm1_rtos_cyclic_timer_insert`/`_remove` externs. rtos_timer. the cyclic crate links the timer crate directly and both sides compare with stock in one image"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "rtos_cyclic-linked-retained-references",
+      "shim": "Definite retained references in the current linked instruction and relocation metadata",
+      "kind": "retained stock seam in assembly",
+      "other_side": "retained code and guest address contracts reached by the composed image",
+      "owned": "partly",
+      "removal": "all declared retained targets have owned typed replacements and both sides are compared in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/rtos_cyclic:app-callback",
+          "kind": "retained-entry",
+          "symbols": [],
+          "retained_targets": [
+            268852,
+            7484312
+          ],
+          "contract": "replacement/rtos_cyclic/app-callback.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "rtos_cyclic-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/rtos_cyclic:app-callback",
+          "kind": "publication",
+          "symbols": [
+            "__dispatch_end",
+            "__register_end",
+            "__unregister_end"
+          ],
+          "contract": "replacement/rtos_cyclic/app-callback.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

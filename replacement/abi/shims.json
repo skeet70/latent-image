@@ -1,0 +1,93 @@
+{
+  "unit": "abi",
+  "summary": "The bounded ARM ABI pilot. Its exports exist for the qualification harness, not for production firmware.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "abi-01",
+      "shim": "`xm1_pilot_*` probe exports and `xm1_abi_probe` in `pilot.rs`/`pilot-entry.S`",
+      "kind": "stock-ABI export",
+      "other_side": "the ABI qualification harness and `pilot.ld`, not stock firmware",
+      "owned": "no",
+      "removal": "the pilot is superseded and no harness entry remains",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/abi:pilot-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_abi_probe",
+            "xm1_pilot_add_u32",
+            "xm1_pilot_add_u64",
+            "xm1_pilot_checksum",
+            "xm1_pilot_extra",
+            "xm1_pilot_many_args",
+            "xm1_pilot_mixed",
+            "xm1_pilot_pair",
+            "xm1_pilot_pair_sum",
+            "xm1_pilot_pair_swap",
+            "xm1_pilot_preserve_pressure",
+            "xm1_pilot_store"
+          ],
+          "contract": "replacement/abi/pilot.ld",
+          "requirement": "`xm1_pilot_*` probe exports and `xm1_abi_probe` in `pilot.rs`/`pilot-entry.S`. the ABI qualification harness and `pilot.ld`, not stock firmware. the pilot is superseded and no harness entry remains"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "abi-02",
+      "shim": "`xm1_panic_loop` retained loop in `pilot-entry.S`",
+      "kind": "retained stock seam in assembly",
+      "other_side": "stock panic behaviour used by the pilot",
+      "owned": "no",
+      "removal": "the pilot is retired",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/abi:pilot-image",
+          "kind": "retained-entry",
+          "symbols": [
+            "xm1_panic_loop"
+          ],
+          "contract": "replacement/abi/pilot.ld",
+          "requirement": "`xm1_panic_loop` retained loop in `pilot-entry.S`. stock panic behaviour used by the pilot. the pilot is retired"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "abi-linked-abi",
+      "shim": "Additional linked unmangled ABI entry points",
+      "kind": "stock-ABI export",
+      "other_side": "the publication or qualification consumers of the current linked image",
+      "owned": "partly",
+      "removal": "all consumers use owned typed interfaces and both sides have a qualified comparison in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/abi:pilot-image",
+          "kind": "export",
+          "symbols": [
+            "pilot_run"
+          ],
+          "contract": "replacement/abi/pilot.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

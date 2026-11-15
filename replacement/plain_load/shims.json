@@ -1,0 +1,92 @@
+{
+  "unit": "plain_load",
+  "summary": "The owned plain-image loader.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "plain_load-01",
+      "shim": "`xm1_plain_load` and `xm1_plain_load_entry` in `entry.S`/`src.rs`",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the stock plain-loader caller",
+      "owned": "no",
+      "removal": "the caller is owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/plain_load:plain-load-image",
+          "kind": "publication",
+          "symbols": [
+            "xm1_plain_load",
+            "xm1_plain_load_entry"
+          ],
+          "contract": "replacement/plain_load/plain-load.ld",
+          "requirement": "`xm1_plain_load` and `xm1_plain_load_entry` in `entry.S`/`src.rs`. the stock plain-loader caller. the caller is owned"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "plain_load-02",
+      "shim": "`xm1_plain_delay`, `xm1_plain_extents`, `xm1_plain_give`, `xm1_plain_mode`, `xm1_plain_progress`, `xm1_plain_read`, `xm1_plain_segment`, `xm1_plain_take` retained services",
+      "kind": "trampoline into retained stock",
+      "other_side": "stock plain-loader and scheduler services",
+      "owned": "no",
+      "removal": "those services are owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/plain_load:plain-load-image",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_plain_delay",
+            "xm1_plain_extents",
+            "xm1_plain_give",
+            "xm1_plain_mode",
+            "xm1_plain_progress",
+            "xm1_plain_read",
+            "xm1_plain_segment",
+            "xm1_plain_take"
+          ],
+          "contract": "replacement/plain_load/plain-load.ld",
+          "requirement": "`xm1_plain_delay`, `xm1_plain_extents`, `xm1_plain_give`, `xm1_plain_mode`, `xm1_plain_progress`, `xm1_plain_read`, `xm1_plain_segment`, `xm1_plain_take` retained services. stock plain-loader and scheduler services. those services are owned",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "plain_load-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/plain_load:plain-load-image",
+          "kind": "publication",
+          "symbols": [
+            "__plain_load_end",
+            "__plain_load_start"
+          ],
+          "contract": "replacement/plain_load/plain-load.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

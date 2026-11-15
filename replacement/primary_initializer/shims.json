@@ -1,0 +1,98 @@
+{
+  "unit": "primary_initializer",
+  "summary": "The loader-A interface publisher.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "primary_initializer-01",
+      "shim": "`xm1_primary_initializer_entry` and `xm1_primary_initializer_publish` in `entry.S`/`src.rs`, placed at `0x40430` by `primary-initializer.ld`",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the stock loader-A caller",
+      "owned": "no",
+      "removal": "the loader-A caller is owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/primary_initializer:primary-initializer-image",
+          "kind": "publication",
+          "symbols": [
+            "xm1_primary_initializer_entry",
+            "xm1_primary_initializer_publish"
+          ],
+          "contract": "replacement/primary_initializer/primary-initializer.ld",
+          "requirement": "`xm1_primary_initializer_entry` and `xm1_primary_initializer_publish` in `entry.S`/`src.rs`, placed at `0x40430` by `primary-initializer.ld`. the stock loader-A caller. the loader-A caller is owned"
+        },
+        {
+          "image": "//replacement/primary_initializer:primary-initializer-image",
+          "kind": "retained-import",
+          "symbols": [
+            "__primary_initializer_capacity"
+          ],
+          "contract": "replacement/primary_initializer/primary-initializer.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "primary_initializer-02",
+      "shim": "the 97-slot root descriptor table written by the publisher",
+      "kind": "kernel interface slot",
+      "other_side": "retained stock root-service callers",
+      "owned": "no",
+      "removal": "the RTOS platform owns the root services",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/primary_initializer:primary-initializer-image",
+          "kind": "layout",
+          "symbols": [
+            "xm1_primary_initializer_entry"
+          ],
+          "contract": "replacement/primary_initializer/primary-initializer.ld",
+          "requirement": "the 97-slot root descriptor table written by the publisher. retained stock root-service callers. the RTOS platform owns the root services"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "primary_initializer-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/primary_initializer:primary-initializer-image",
+          "kind": "publication",
+          "symbols": [
+            "__primary_initializer_image_end",
+            "__primary_initializer_image_start",
+            "__primary_initializer_payload_end",
+            "__primary_initializer_rodata_end",
+            "__primary_initializer_rodata_start",
+            "__primary_initializer_text_end",
+            "__primary_initializer_text_start"
+          ],
+          "contract": "replacement/primary_initializer/primary-initializer.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

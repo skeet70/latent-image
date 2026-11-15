@@ -61,6 +61,21 @@ impl KeyPulse {
     }
 }
 
+enum InputPad {
+    Adc(RouteKey),
+    Gpio(GpioKey, GpioReleaseKey),
+}
+
+pub struct PendingPress {
+    press: Press,
+    pad: InputPad,
+    hold_end: u64,
+    hold_until: Option<u64>,
+    release_budget: u64,
+    release_start: Option<u64>,
+    poll_end: Option<u64>,
+}
+
 /// Board ticks between two X-M1 key-scanner samples (period argument 25, 25 ms at 12 MHz).
 pub const SCAN_INTERVAL_TICKS: u64 = 300_000;
 
@@ -288,6 +303,9 @@ impl Machine {
 
     /// Runs at most `count` instructions, ending at board tick `until` when given.
     pub fn run_until(&mut self, count: u64, until: Option<u64>) -> RunOutcome {
+        if self.traces.paused && self.failure.is_none() {
+            return RunOutcome::Stopped;
+        }
         if self.failure.is_some() {
             return RunOutcome::Failed;
         }
@@ -600,6 +618,81 @@ impl Machine {
         let channel = self.document.firmware.binding(key)?.channel;
         let released = self.document.firmware.released_sample;
         set_adc(&mut self.session, &self.document.adc, channel, released)
+    }
+
+    pub fn start_pending_press(&mut self, press: Press, pulse: KeyPulse) -> Result<PendingPress, String> {
+        self.require_running()?;
+        let pad = match press {
+            Press::Key(key) => InputPad::Adc(key),
+            Press::Play => InputPad::Gpio(self.document.firmware.play(&self.session)?, GpioReleaseKey::Play),
+            Press::Fn => InputPad::Gpio(self.document.firmware.fn_key(&self.session)?, GpioReleaseKey::Fn),
+            Press::Shutter(stage) => InputPad::Gpio(self.document.firmware.shutter(&self.session, stage)?,
+                match stage { ShutterStage::Half => GpioReleaseKey::HalfPress, ShutterStage::Full => GpioReleaseKey::FullPress }),
+            Press::Dial(_) => return Err("trace-paused keys do not support dial phases".into()),
+        };
+        let (hold, until) = match pulse.hold {
+            Hold::Instructions(count) => (count, None),
+            Hold::BoardTicks(ticks) => (self.hold_bound(ticks), Some(self.session.board.now().checked_add(ticks).ok_or("input tick endpoint overflow")?)),
+        };
+        let hold_end = self.instructions().checked_add(hold).ok_or("input instruction endpoint overflow")?;
+        match pad {
+            InputPad::Adc(key) => { self.press(key)?; }
+            InputPad::Gpio(key, _) => self.session.gpio(&self.document.gpio.0, key.port, key.pin, key.pressed_high)?,
+        }
+        Ok(PendingPress { press, pad, hold_end, hold_until: until, release_budget: pulse.release,
+            release_start: None, poll_end: None })
+    }
+
+    pub fn continue_pending_press(&mut self, pending: &mut PendingPress) -> Result<bool, String> {
+        self.require_running()?;
+        if pending.release_start.is_none() {
+            self.run_until(pending.hold_end.saturating_sub(self.instructions()), pending.hold_until);
+            self.require_running()?;
+            if self.traces.paused { return Ok(false); }
+            match pending.pad {
+                InputPad::Adc(key) => self.release_key(key)?,
+                InputPad::Gpio(key, _) => self.session.gpio(&self.document.gpio.0, key.port, key.pin, !key.pressed_high)?,
+            }
+            let start = self.instructions();
+            pending.release_start = Some(start);
+            if self.pending_pad_released(&pending.pad)? {
+                return Err(format!("{:?} press was not latched: its key row read released when the hold ended, at instruction {start}", pending.press));
+            }
+        }
+        let start = pending.release_start.ok_or("input release phase is absent")?;
+        loop {
+            if let Some(endpoint) = pending.poll_end {
+                self.run(endpoint.saturating_sub(self.instructions()));
+                self.require_running()?;
+                if self.traces.paused { return Ok(false); }
+                pending.poll_end = None;
+            }
+            if self.pending_pad_released(&pending.pad)? { return Ok(true); }
+            let spent = self.instructions() - start;
+            if spent >= pending.release_budget {
+                match pending.pad {
+                    InputPad::Adc(key) => {
+                        let row = KeyRow(self.document.firmware.binding(key)?.row);
+                        self.observe_incomplete_release(ReleaseKey::Adc(key), Some(row), pending.release_budget, start);
+                    }
+                    InputPad::Gpio(key, release) => self.observe_incomplete_release(ReleaseKey::Gpio(release), Some(KeyRow(key.row)), pending.release_budget, start),
+                }
+                return Ok(true);
+            }
+            pending.poll_end = Some(self.instructions() + (pending.release_budget - spent).min(RELEASE_POLL));
+        }
+    }
+
+    fn pending_pad_released(&self, pad: &InputPad) -> Result<bool, String> {
+        match *pad {
+            InputPad::Adc(key) => self.document.firmware.released(&self.session, key),
+            InputPad::Gpio(key, _) => {
+                let address = self.document.firmware.key_table.base.0
+                    + key.row * self.document.firmware.key_table.row_bytes
+                    + self.document.firmware.key_table.released_offset;
+                Ok(self.read(address, 1)?[0] == 0)
+            }
+        }
     }
 
     /// Holds the mode-dial ADC channel at the position's calibrated midpoint.

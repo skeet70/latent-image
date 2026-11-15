@@ -35,3 +35,9 @@ xm1_rust_elf(
     entry = "_start",
     extra_ldflags = ["-Wl,--gc-sections"],
 )
+
+filegroup(
+    name = "shim-catalog-data",
+    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel"],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)

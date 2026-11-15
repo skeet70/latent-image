@@ -1,0 +1,149 @@
+{
+  "unit": "render_adapter",
+  "summary": "The render adapter that presents owned widget drawing at stock draw addresses.",
+  "classification": "module",
+  "rows": [
+    {
+      "id": "render_adapter-01",
+      "shim": "`rb_render_picker_apply`, `rb_render_tree_apply`, `rb_render_pane_apply` in `mod.rs`, with `entry.S` and `build.sh` placements",
+      "kind": "stock-ABI export",
+      "other_side": "stock draw callers that enter the adapted widget entries",
+      "owned": "no",
+      "removal": "the owned renderer calls the widgets directly",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "export",
+          "symbols": [
+            "rb_render_pane_apply",
+            "rb_render_picker_apply",
+            "rb_render_tree_apply"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_render_picker_apply`, `rb_render_tree_apply`, `rb_render_pane_apply` in `mod.rs`, with `entry.S` and `build.sh` placements. stock draw callers that enter the adapted widget entries. the owned renderer calls the widgets directly"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "export",
+          "symbols": [
+            "rb_render_pane_entry",
+            "rb_render_picker_entry",
+            "rb_render_tree_entry"
+          ],
+          "contract": "menu/recipe_bank_ram.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "render_adapter-02",
+      "shim": "`rb_render_call_*` retained services (draw leaves, hooks, menu-table accessors)",
+      "kind": "trampoline into retained stock",
+      "other_side": "the stock draw layer",
+      "owned": "no",
+      "removal": "the owned renderer owns the draw layer",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_render_call_11121d4",
+            "rb_render_call_111236c",
+            "rb_render_call_111258c",
+            "rb_render_call_111278c",
+            "rb_render_call_111299c",
+            "rb_render_call_1112a6c",
+            "rb_render_call_1112b2c",
+            "rb_render_call_1112ce4",
+            "rb_render_call_1112d64",
+            "rb_render_call_1112d84",
+            "rb_render_call_1112da4",
+            "rb_render_call_1112e38",
+            "rb_render_call_1112e58",
+            "rb_render_call_1112e78",
+            "rb_render_call_11130e0",
+            "rb_render_call_1113514",
+            "rb_render_call_112eb38",
+            "rb_render_call_1130e68",
+            "rb_render_call_1135db0",
+            "rb_render_call_1137cf8",
+            "rb_render_call_1137d2c",
+            "rb_render_call_1138060",
+            "rb_render_call_1138a00",
+            "rb_render_call_11391a0",
+            "rb_render_call_1139a68",
+            "rb_render_call_113f1e8",
+            "rb_render_call_1159168",
+            "rb_render_call_1163c1c",
+            "rb_render_call_1163e04",
+            "rb_render_call_1165aa0",
+            "rb_render_call_116cf50",
+            "rb_render_call_116d4e4",
+            "rb_render_call_116dce0",
+            "rb_render_call_116e264",
+            "rb_render_call_116f948",
+            "rb_render_call_11730dc",
+            "rb_render_call_1177e10",
+            "rb_render_call_43550",
+            "rb_render_call_4d978",
+            "rb_render_call_61ca2c",
+            "rb_render_call_61cd14",
+            "rb_render_call_61ce1c",
+            "rb_render_call_7221c8",
+            "rb_render_call_bf8d20",
+            "rb_render_call_bf8e64",
+            "rb_render_call_bf8f4c",
+            "rb_render_call_bf90f0",
+            "rb_render_call_bf9360",
+            "rb_render_call_bf93e0",
+            "rb_render_call_bf9614",
+            "rb_render_call_bf963c",
+            "rb_render_call_bf9660",
+            "rb_render_call_bf9688",
+            "rb_render_call_bf96b0"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_render_call_*` retained services (draw leaves, hooks, menu-table accessors). the stock draw layer. the owned renderer owns the draw layer"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "render_adapter-03",
+      "shim": "`rb_render_remainder` in `entry.S`",
+      "kind": "retained stock seam in assembly",
+      "other_side": "the stock remainder path after an unhandled class",
+      "owned": "no",
+      "removal": "every class is owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_render_remainder"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_render_remainder` in `entry.S`. the stock remainder path after an unhandled class. every class is owned"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

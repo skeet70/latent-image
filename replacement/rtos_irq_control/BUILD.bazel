@@ -129,3 +129,9 @@ haskell_binary(
         "//replacement/rtos_own_first/stage:own-first-artifact",
     ],
 )
+
+filegroup(
+    name = "shim-catalog-data",
+    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel"],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)

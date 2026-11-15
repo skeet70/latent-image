@@ -1,0 +1,207 @@
+{
+  "unit": "rtos_exception",
+  "summary": "The owned exception entries, vectors and ack/EOI wrappers.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "rtos_exception-01",
+      "shim": "`xm1_exception_*` vector slots, dispatcher, ack/EOI wrappers and data in `stage/carrier.S`, placed by `exception-a.ld`/`exception-b.ld` at the stock vector addresses",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the stock vector table and exception callers",
+      "owned": "no",
+      "removal": "the vector table and every exception entry are owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/rtos_exception:exception-a",
+          "kind": "publication",
+          "symbols": [
+            "xm1_exception_ack",
+            "xm1_exception_ack_wrapper",
+            "xm1_exception_data",
+            "xm1_exception_dispatcher",
+            "xm1_exception_eoi",
+            "xm1_exception_eoi_wrapper",
+            "xm1_exception_exit_tail",
+            "xm1_exception_fault_record",
+            "xm1_exception_fiq",
+            "xm1_exception_fiq_hook",
+            "xm1_exception_irq",
+            "xm1_exception_lock_acquire",
+            "xm1_exception_prefetch",
+            "xm1_exception_reserved",
+            "xm1_exception_svc",
+            "xm1_exception_svc_diag",
+            "xm1_exception_undefined",
+            "xm1_exception_vector_slot"
+          ],
+          "contract": "replacement/rtos_exception/exception-a.ld",
+          "requirement": "`xm1_exception_*` vector slots, dispatcher, ack/EOI wrappers and data in `stage/carrier.S`, placed by `exception-a.ld`/`exception-b.ld` at the stock vector addresses. the stock vector table and exception callers. the vector table and every exception entry are owned"
+        },
+        {
+          "image": "//replacement/rtos_exception:exception-a",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_exception_halt",
+            "xm1_exception_scheduler_return",
+            "xm1_exception_shutdown",
+            "xm1_exception_stock_identity",
+            "xm1_exception_stock_log",
+            "xm1_exception_stock_release",
+            "xm1_exception_stock_try",
+            "xm1_exception_vfp_owner"
+          ],
+          "contract": "replacement/rtos_exception/exception-a.ld",
+          "requirement": "`xm1_exception_*` vector slots, dispatcher, ack/EOI wrappers and data in `stage/carrier.S`, placed by `exception-a.ld`/`exception-b.ld` at the stock vector addresses. the stock vector table and exception callers. the vector table and every exception entry are owned"
+        },
+        {
+          "image": "//replacement/rtos_exception:exception-b",
+          "kind": "publication",
+          "symbols": [
+            "xm1_exception_ack",
+            "xm1_exception_ack_wrapper",
+            "xm1_exception_data",
+            "xm1_exception_dispatcher",
+            "xm1_exception_eoi",
+            "xm1_exception_eoi_wrapper",
+            "xm1_exception_exit_tail",
+            "xm1_exception_fault_record",
+            "xm1_exception_fiq",
+            "xm1_exception_fiq_hook",
+            "xm1_exception_irq",
+            "xm1_exception_lock_acquire",
+            "xm1_exception_prefetch",
+            "xm1_exception_reserved",
+            "xm1_exception_svc",
+            "xm1_exception_svc_diag",
+            "xm1_exception_undefined",
+            "xm1_exception_vector_slot"
+          ],
+          "contract": "replacement/rtos_exception/exception-b.ld",
+          "requirement": "`xm1_exception_*` vector slots, dispatcher, ack/EOI wrappers and data in `stage/carrier.S`, placed by `exception-a.ld`/`exception-b.ld` at the stock vector addresses. the stock vector table and exception callers. the vector table and every exception entry are owned"
+        },
+        {
+          "image": "//replacement/rtos_exception:exception-b",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_exception_halt",
+            "xm1_exception_scheduler_return",
+            "xm1_exception_shutdown",
+            "xm1_exception_stock_identity",
+            "xm1_exception_stock_log",
+            "xm1_exception_stock_release",
+            "xm1_exception_stock_try",
+            "xm1_exception_vfp_owner"
+          ],
+          "contract": "replacement/rtos_exception/exception-a.ld",
+          "requirement": "`xm1_exception_*` vector slots, dispatcher, ack/EOI wrappers and data in `stage/carrier.S`, placed by `exception-a.ld`/`exception-b.ld` at the stock vector addresses. the stock vector table and exception callers. the vector table and every exception entry are owned"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "rtos_exception-02",
+      "shim": "`xm1_exception_stock_identity`, `_log`, `_release`, `_try` retained services",
+      "kind": "trampoline into retained stock",
+      "other_side": "stock exception identity, logging and release services",
+      "owned": "no",
+      "removal": "those services are owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/rtos_exception:exception-a",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_exception_halt",
+            "xm1_exception_scheduler_return",
+            "xm1_exception_shutdown",
+            "xm1_exception_stock_identity",
+            "xm1_exception_stock_log",
+            "xm1_exception_stock_release",
+            "xm1_exception_stock_try",
+            "xm1_exception_vfp_owner"
+          ],
+          "contract": "replacement/rtos_exception/exception-a.ld",
+          "requirement": "`xm1_exception_stock_identity`, `_log`, `_release`, `_try` retained services. stock exception identity, logging and release services. those services are owned",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/rtos_exception:exception-b",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_exception_stock_identity"
+          ],
+          "contract": "replacement/rtos_exception/exception-a.ld",
+          "requirement": "`xm1_exception_stock_identity`, `_log`, `_release`, `_try` retained services. stock exception identity, logging and release services. those services are owned"
+        },
+        {
+          "image": "//replacement/rtos_exception:exception-b",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_exception_halt",
+            "xm1_exception_scheduler_return",
+            "xm1_exception_shutdown",
+            "xm1_exception_stock_identity",
+            "xm1_exception_stock_log",
+            "xm1_exception_stock_release",
+            "xm1_exception_stock_try",
+            "xm1_exception_vfp_owner"
+          ],
+          "contract": "replacement/rtos_exception/exception-b.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "rtos_exception-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/rtos_exception:exception-a",
+          "kind": "publication",
+          "symbols": [
+            "__ack_end",
+            "__eoi_end",
+            "__exit_end",
+            "__fault_end",
+            "__lock_end"
+          ],
+          "contract": "replacement/rtos_exception/exception-a.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        },
+        {
+          "image": "//replacement/rtos_exception:exception-b",
+          "kind": "publication",
+          "symbols": [
+            "__ack_end",
+            "__eoi_end",
+            "__exit_end",
+            "__fault_end",
+            "__lock_end"
+          ],
+          "contract": "replacement/rtos_exception/exception-b.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

@@ -1,0 +1,106 @@
+{
+  "unit": "image5_load",
+  "summary": "The owned image-5 loader.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "image5_load-01",
+      "shim": "`xm1_image5_load` and `xm1_image5_load_entry` in `entry.S`/`src.rs`",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the stock loader caller at `0x4c22b8`",
+      "owned": "no",
+      "removal": "the loader caller is owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/image5_load:image5-load-image",
+          "kind": "publication",
+          "symbols": [
+            "xm1_image5_load",
+            "xm1_image5_load_entry"
+          ],
+          "contract": "replacement/image5_load/image5-load.ld",
+          "requirement": "`xm1_image5_load` and `xm1_image5_load_entry` in `entry.S`/`src.rs`. the stock loader caller at `0x4c22b8`. the loader caller is owned"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "image5_load-02",
+      "shim": "`xm1_image5_*` retained externs (cache, CPU fill, decoder init/finish, feed, fill request/done, marker, mode, read, segment)",
+      "kind": "trampoline into retained stock",
+      "other_side": "stock image-5 decoder and cache services",
+      "owned": "no",
+      "removal": "the decoder and cache services are owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/image5_load:image5-load-image",
+          "kind": "retained-entry",
+          "symbols": [
+            "xm1_image5_load",
+            "xm1_image5_load_entry"
+          ],
+          "contract": "replacement/image5_load/image5-load.ld",
+          "requirement": "`xm1_image5_*` retained externs (cache, CPU fill, decoder init/finish, feed, fill request/done, marker, mode, read, segment). stock image-5 decoder and cache services. the decoder and cache services are owned"
+        },
+        {
+          "image": "//replacement/image5_load:image5-load-image",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_image5_cache",
+            "xm1_image5_cpu_fill",
+            "xm1_image5_decoder_finish",
+            "xm1_image5_decoder_init",
+            "xm1_image5_feed",
+            "xm1_image5_fill_done",
+            "xm1_image5_fill_flag",
+            "xm1_image5_fill_request",
+            "xm1_image5_marker",
+            "xm1_image5_mode",
+            "xm1_image5_read",
+            "xm1_image5_segment"
+          ],
+          "contract": "replacement/image5_load/image5-load.ld",
+          "requirement": "`xm1_image5_*` retained externs (cache, CPU fill, decoder init/finish, feed, fill request/done, marker, mode, read, segment). stock image-5 decoder and cache services. the decoder and cache services are owned",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "image5_load-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/image5_load:image5-load-image",
+          "kind": "publication",
+          "symbols": [
+            "__image5_load_end",
+            "__image5_load_start"
+          ],
+          "contract": "replacement/image5_load/image5-load.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}
