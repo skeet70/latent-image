@@ -1,0 +1,70 @@
+{
+  "unit": "rtos_timer",
+  "summary": "The owned timer heap.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "rtos_timer-01",
+      "shim": "`xm1_rtos_timer_initialize`, `_insert`, `_remove`, `_tick` exports placed by `timer-a.ld`/`timer-b.ld` at `0x44a50`-family addresses",
+      "kind": "stock-ABI export",
+      "other_side": "stock timer callers",
+      "owned": "no",
+      "removal": "every timer caller is owned or migrated",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/rtos_timer/BUILD.bazel",
+          "requirement": "Standalone family qualification images are frozen reference artifacts; the current linked boundary is the platform aggregate, not a rebuilt standalone family image."
+        },
+        {
+          "image": "//replacement/rtos_platform:platform-a",
+          "kind": "export",
+          "symbols": [
+            "xm1_platform_veneer_timer_initialize",
+            "xm1_platform_veneer_timer_insert",
+            "xm1_platform_veneer_timer_remove",
+            "xm1_platform_veneer_timer_tick",
+            "xm1_rtos_timer_initialize",
+            "xm1_rtos_timer_initialize_body",
+            "xm1_rtos_timer_insert",
+            "xm1_rtos_timer_insert_body",
+            "xm1_rtos_timer_remove",
+            "xm1_rtos_timer_remove_body",
+            "xm1_rtos_timer_tick",
+            "xm1_rtos_timer_tick_body"
+          ],
+          "contract": "replacement/rtos_platform/carriers.json",
+          "requirement": "`xm1_rtos_timer_initialize`, `_insert`, `_remove`, `_tick` exports placed by `timer-a.ld`/`timer-b.ld` at `0x44a50`-family addresses. stock timer callers. every timer caller is owned or migrated",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/rtos_platform:platform-b",
+          "kind": "export",
+          "symbols": [
+            "xm1_platform_veneer_timer_initialize",
+            "xm1_platform_veneer_timer_insert",
+            "xm1_platform_veneer_timer_remove",
+            "xm1_platform_veneer_timer_tick",
+            "xm1_rtos_timer_initialize",
+            "xm1_rtos_timer_initialize_body",
+            "xm1_rtos_timer_insert",
+            "xm1_rtos_timer_insert_body",
+            "xm1_rtos_timer_remove",
+            "xm1_rtos_timer_remove_body",
+            "xm1_rtos_timer_tick",
+            "xm1_rtos_timer_tick_body"
+          ],
+          "contract": "replacement/rtos_platform/carriers.json",
+          "requirement": "`xm1_rtos_timer_initialize`, `_insert`, `_remove`, `_tick` exports placed by `timer-a.ld`/`timer-b.ld` at `0x44a50`-family addresses. stock timer callers. every timer caller is owned or migrated",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

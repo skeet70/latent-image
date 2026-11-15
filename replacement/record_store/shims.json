@@ -1,0 +1,458 @@
+{
+  "unit": "record_store",
+  "summary": "The owned record store core and guest adapter. Its shim list is [the record-store design](../reports/owned-record-store-design.md#7-shims).",
+  "classification": "module",
+  "rows": [
+    {
+      "id": "record_store-01",
+      "shim": "`record_store_*` exports",
+      "kind": "C-ABI bridge between two owned units",
+      "other_side": "settings_storage and power_lifecycle",
+      "owned": "yes",
+      "removal": "both clients link the store directly and both sides compare with stock in one image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/record_store_carrier:record-store-image",
+          "kind": "export",
+          "symbols": [
+            "record_store_append",
+            "record_store_close",
+            "record_store_collect",
+            "record_store_erase_all",
+            "record_store_open",
+            "record_store_read_at",
+            "record_store_read_latest",
+            "record_store_register",
+            "record_store_zero"
+          ],
+          "contract": "replacement/record_store_carrier/record-store.ld",
+          "requirement": "`record_store_*` exports. settings_storage and power_lifecycle. both clients link the store directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-image",
+          "kind": "export",
+          "symbols": [
+            "record_store_append",
+            "record_store_close",
+            "record_store_collect",
+            "record_store_erase_all",
+            "record_store_open",
+            "record_store_read_at",
+            "record_store_read_latest",
+            "record_store_register",
+            "record_store_zero"
+          ],
+          "contract": "replacement/record_store_carrier/record-store.ld",
+          "requirement": "`record_store_*` exports. settings_storage and power_lifecycle. both clients link the store directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-published-image",
+          "kind": "export",
+          "symbols": [
+            "record_store_append",
+            "record_store_close",
+            "record_store_collect",
+            "record_store_erase_all",
+            "record_store_open",
+            "record_store_read_at",
+            "record_store_read_latest",
+            "record_store_register",
+            "record_store_zero"
+          ],
+          "contract": "replacement/record_store_carrier/record-store.ld",
+          "requirement": "`record_store_*` exports. settings_storage and power_lifecycle. both clients link the store directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-image",
+          "kind": "export",
+          "symbols": [
+            "record_store_entry_append",
+            "record_store_entry_close",
+            "record_store_entry_collect",
+            "record_store_entry_erase_all",
+            "record_store_entry_read_at",
+            "record_store_entry_read_latest",
+            "record_store_entry_register",
+            "record_store_entry_zero"
+          ],
+          "contract": "replacement/settings_storage/custom-settings.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-published-image",
+          "kind": "export",
+          "symbols": [
+            "record_store_entry_append",
+            "record_store_entry_close",
+            "record_store_entry_collect",
+            "record_store_entry_erase_all",
+            "record_store_entry_read_at",
+            "record_store_entry_read_latest",
+            "record_store_entry_register",
+            "record_store_entry_zero"
+          ],
+          "contract": "replacement/settings_storage/custom-settings.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "record_store-02",
+      "shim": "nine entry veneers at the stock wrapper addresses and `record_store_carrier/entry.S`",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "stock callers of `0x6ac2b4`-family entries",
+      "owned": "no",
+      "removal": "every client calls the owned API",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/record_store_carrier:record-store-image",
+          "kind": "publication",
+          "symbols": [
+            "record_store_entry_open"
+          ],
+          "contract": "replacement/record_store_carrier/imports.ld",
+          "requirement": "nine entry veneers at the stock wrapper addresses and `record_store_carrier/entry.S`. stock callers of `0x6ac2b4`-family entries. every client calls the owned API"
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-image",
+          "kind": "publication",
+          "symbols": [
+            "record_store_entry_open"
+          ],
+          "contract": "replacement/settings_storage/custom-settings.ld",
+          "requirement": "nine entry veneers at the stock wrapper addresses and `record_store_carrier/entry.S`. stock callers of `0x6ac2b4`-family entries. every client calls the owned API"
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-published-image",
+          "kind": "publication",
+          "symbols": [
+            "record_store_entry_open"
+          ],
+          "contract": "replacement/settings_storage/custom-settings.ld",
+          "requirement": "nine entry veneers at the stock wrapper addresses and `record_store_carrier/entry.S`. stock callers of `0x6ac2b4`-family entries. every client calls the owned API"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "record_store-03",
+      "shim": "stock statuses, ignored write results and stock program lengths",
+      "kind": "stock-ABI export",
+      "other_side": "stock clients that consume stock statuses and `0x600` kind-3 programs",
+      "owned": "no",
+      "removal": "clients consume typed results and the owned NAND partial-program law is qualified",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/record_store_carrier:record-store-image",
+          "kind": "export",
+          "symbols": [
+            "record_store_append"
+          ],
+          "contract": "replacement/record_store_carrier/record-store.ld",
+          "requirement": "stock statuses, ignored write results and stock program lengths. stock clients that consume stock statuses and `0x600` kind-3 programs. clients consume typed results and the owned NAND partial-program law is qualified"
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-image",
+          "kind": "export",
+          "symbols": [
+            "record_store_append"
+          ],
+          "contract": "replacement/record_store_carrier/record-store.ld",
+          "requirement": "stock statuses, ignored write results and stock program lengths. stock clients that consume stock statuses and `0x600` kind-3 programs. clients consume typed results and the owned NAND partial-program law is qualified"
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-published-image",
+          "kind": "export",
+          "symbols": [
+            "record_store_append"
+          ],
+          "contract": "replacement/record_store_carrier/record-store.ld",
+          "requirement": "stock statuses, ignored write results and stock program lengths. stock clients that consume stock statuses and `0x600` kind-3 programs. clients consume typed results and the owned NAND partial-program law is qualified"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "record_store-04",
+      "shim": "staging buffers at the stock addresses, handles at `0x89f8b4 + 12i` and the client words",
+      "kind": "guest-memory layout view",
+      "other_side": "stock clients that read buffers, handles and client words",
+      "owned": "no",
+      "removal": "no stock client reads them",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/record_store_carrier:record-store-image",
+          "kind": "layout",
+          "symbols": [
+            "record_store_open"
+          ],
+          "contract": "replacement/record_store_carrier/record-store.ld",
+          "requirement": "staging buffers at the stock addresses, handles at `0x89f8b4 + 12i` and the client words. stock clients that read buffers, handles and client words. no stock client reads them"
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-image",
+          "kind": "layout",
+          "symbols": [
+            "record_store_open"
+          ],
+          "contract": "replacement/record_store_carrier/record-store.ld",
+          "requirement": "staging buffers at the stock addresses, handles at `0x89f8b4 + 12i` and the client words. stock clients that read buffers, handles and client words. no stock client reads them"
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-published-image",
+          "kind": "layout",
+          "symbols": [
+            "record_store_open"
+          ],
+          "contract": "replacement/record_store_carrier/record-store.ld",
+          "requirement": "staging buffers at the stock addresses, handles at `0x89f8b4 + 12i` and the client words. stock clients that read buffers, handles and client words. no stock client reads them"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine",
+          "kind": "layout",
+          "symbols": [
+            "SLOT_BYTES",
+            "TAIL_BYTES"
+          ],
+          "contract": "menu/recipe_bank_ram.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "layout",
+          "symbols": [
+            "SLOT_BYTES",
+            "TAIL_BYTES"
+          ],
+          "contract": "menu/recipe_bank_ram.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/develop:develop-candidate",
+          "kind": "layout",
+          "symbols": [
+            "SLOT_BYTES",
+            "TAIL_BYTES"
+          ],
+          "contract": "replacement/develop/develop.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/property_service:property-service-image",
+          "kind": "layout",
+          "symbols": [
+            "SLOT_BYTES",
+            "TAIL_BYTES"
+          ],
+          "contract": "replacement/property_service/property-service.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/property_service:property-service-linked-image",
+          "kind": "layout",
+          "symbols": [
+            "SLOT_BYTES",
+            "TAIL_BYTES"
+          ],
+          "contract": "replacement/property_service/property-service-public.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/property_service:property-service-public-image",
+          "kind": "layout",
+          "symbols": [
+            "SLOT_BYTES",
+            "TAIL_BYTES"
+          ],
+          "contract": "replacement/property_service/property-service-public.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-image",
+          "kind": "layout",
+          "symbols": [
+            "SLOT_BYTES",
+            "TAIL_BYTES"
+          ],
+          "contract": "replacement/settings_storage/custom-settings.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-published-image",
+          "kind": "layout",
+          "symbols": [
+            "SLOT_BYTES",
+            "TAIL_BYTES"
+          ],
+          "contract": "replacement/settings_storage/custom-settings.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/settings_storage:settings-storage-image",
+          "kind": "layout",
+          "symbols": [
+            "SLOT_BYTES",
+            "TAIL_BYTES"
+          ],
+          "contract": "replacement/settings_storage/settings-storage.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "record_store-05",
+      "shim": "`record_raw_*`, `record_semaphore_*` externs",
+      "kind": "trampoline into retained stock",
+      "other_side": "the stock raw NAND service and semaphore `0x4b`",
+      "owned": "no",
+      "removal": "the owned `NandFlash`/`FlashMap` and RTOS semaphore are qualified",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/record_store_carrier:record-store-image",
+          "kind": "retained-import",
+          "symbols": [
+            "record_raw_erase_0",
+            "record_raw_erase_1",
+            "record_raw_erase_2",
+            "record_raw_erase_3",
+            "record_raw_erase_4",
+            "record_raw_region_read",
+            "record_raw_write_0",
+            "record_raw_write_1",
+            "record_raw_write_2",
+            "record_raw_write_3",
+            "record_raw_write_4",
+            "record_semaphore_give",
+            "record_semaphore_take"
+          ],
+          "contract": "replacement/record_store_carrier/imports.ld",
+          "requirement": "`record_raw_*`, `record_semaphore_*` externs. the stock raw NAND service and semaphore `0x4b`. the owned `NandFlash`/`FlashMap` and RTOS semaphore are qualified"
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-image",
+          "kind": "retained-import",
+          "symbols": [
+            "record_raw_erase_0",
+            "record_raw_erase_1",
+            "record_raw_erase_2",
+            "record_raw_erase_3",
+            "record_raw_erase_4",
+            "record_raw_region_read",
+            "record_raw_write_0",
+            "record_raw_write_1",
+            "record_raw_write_2",
+            "record_raw_write_3",
+            "record_raw_write_4",
+            "record_semaphore_give",
+            "record_semaphore_take"
+          ],
+          "contract": "replacement/record_store_carrier/imports.ld",
+          "requirement": "`record_raw_*`, `record_semaphore_*` externs. the stock raw NAND service and semaphore `0x4b`. the owned `NandFlash`/`FlashMap` and RTOS semaphore are qualified"
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-published-image",
+          "kind": "retained-import",
+          "symbols": [
+            "record_raw_erase_0",
+            "record_raw_erase_1",
+            "record_raw_erase_2",
+            "record_raw_erase_3",
+            "record_raw_erase_4",
+            "record_raw_region_read",
+            "record_raw_write_0",
+            "record_raw_write_1",
+            "record_raw_write_2",
+            "record_raw_write_3",
+            "record_raw_write_4",
+            "record_semaphore_give",
+            "record_semaphore_take"
+          ],
+          "contract": "replacement/record_store_carrier/imports.ld",
+          "requirement": "`record_raw_*`, `record_semaphore_*` externs. the stock raw NAND service and semaphore `0x4b`. the owned `NandFlash`/`FlashMap` and RTOS semaphore are qualified"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "record_store-06",
+      "shim": "stock check/prepare callbacks of the five clients",
+      "kind": "callback registry for guest words",
+      "other_side": "stock area callbacks",
+      "owned": "no",
+      "removal": "each client's seal and check are owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/record_store_carrier:record-store-image",
+          "kind": "retained-entry",
+          "symbols": [
+            "record_store_register"
+          ],
+          "contract": "replacement/record_store_carrier/record-store.ld",
+          "requirement": "stock check/prepare callbacks of the five clients. stock area callbacks. each client's seal and check are owned"
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-image",
+          "kind": "retained-entry",
+          "symbols": [
+            "record_store_register"
+          ],
+          "contract": "replacement/record_store_carrier/record-store.ld",
+          "requirement": "stock check/prepare callbacks of the five clients. stock area callbacks. each client's seal and check are owned"
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-published-image",
+          "kind": "retained-entry",
+          "symbols": [
+            "record_store_register"
+          ],
+          "contract": "replacement/record_store_carrier/record-store.ld",
+          "requirement": "stock check/prepare callbacks of the five clients. stock area callbacks. each client's seal and check are owned"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

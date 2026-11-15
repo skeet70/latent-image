@@ -1,0 +1,95 @@
+{
+  "unit": "saclac_interface",
+  "summary": "Shared command and peer ABI declarations. Linked command-table evidence and source-only peer codec obligations remain distinct; neither establishes peer ownership or callback closure.",
+  "classification": "module",
+  "rows": [
+    {
+      "id": "saclac_interface-01",
+      "shim": "Command, parameter-block and callback descriptors in `src/stock.rs`",
+      "kind": "guest-memory layout view",
+      "other_side": "retained queue-43 command producers, their 46 shared parameter blocks and 106 completion callbacks",
+      "owned": "no",
+      "removal": "queue-43 producers and completion callbacks are owned and no retained consumer reads the parameter blocks",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/saclac:saclac-image",
+          "kind": "layout",
+          "symbols": [
+            "xm1_saclac_dispatch_entry"
+          ],
+          "contract": "replacement/saclac/Replacement/Saclac/Artifact.hs",
+          "requirement": "Command, parameter-block and callback descriptors in `src/stock.rs`. retained queue-43 command producers, their 46 shared parameter blocks and 106 completion callbacks. queue-43 producers and completion callbacks are owned and no retained consumer reads the parameter blocks"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "saclac_interface-root-02",
+      "shim": "`lens::LensPayload` with `lens_callback_word`, `lens_payload` and `lens_dc_request` in `src/stock.rs`",
+      "kind": "guest-memory layout view",
+      "other_side": "retained lens control's queue-50 requests 0x4202 to 0x4212 (senders `0x76dbe4` to `0x770080`) and the retained lens completion callbacks `0xf14ae4`, `0xf14b14`, `0xf14b50`, `0xf14b8c`, `0xf14bc8`, `0xf14be4`, `0xf150c4`, `0xf150f0` and `0xf28e94`",
+      "owned": "no",
+      "removal": "lens control and the lens children's completion callbacks are owned",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/saclac_interface/BUILD.bazel",
+          "requirement": "Source/model boundary; not linked-image execution or removal acceptance. guest-memory layout view."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "saclac_interface-root-03",
+      "shim": "`stock::peers`: each peer's queue (lensdc 50, imgdc 47, calc 44, calc1 45, statistics 48, flash 10, lenscom 98, image processor 55), the sender byte its stock senders write and the block size each queue was created with (`0x724cdc`)",
+      "kind": "guest-memory layout view",
+      "other_side": "the retained peer tasks and their queues",
+      "owned": "no",
+      "removal": "every peer task saclac posts to is owned",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/saclac_interface/BUILD.bazel",
+          "requirement": "Source/model boundary; not linked-image execution or removal acceptance. guest-memory layout view."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "saclac_interface-root-04",
+      "shim": "Frame-classification codec in `src/stock/calc_sub.rs`",
+      "kind": "guest-memory layout view",
+      "other_side": "retained queue-46 classifier `0xf49eb4` reads eleven inputs and enters the twelfth word as its completion",
+      "owned": "no",
+      "removal": "the classifier and its completion consumers use a typed owned interface",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/saclac_interface/BUILD.bazel",
+          "requirement": "Source/model boundary; not linked-image execution or removal acceptance. guest-memory layout view."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

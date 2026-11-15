@@ -1,0 +1,374 @@
+{
+  "unit": "property_service",
+  "summary": "The property classifier, table generator, service and public entries. Its compatibility contract is [the property shim table](settings-storage.md#property-compatibility-shims).",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "property_service-01",
+      "shim": "repointed table words selecting `xm1_property_get`/`xm1_property_set`",
+      "kind": "stock-ABI export",
+      "other_side": "the stock entry/dispatch tables",
+      "owned": "no",
+      "removal": "owned entry and dispatch replace both stock dispatchers",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/develop:develop-candidate",
+          "kind": "export",
+          "symbols": [
+            "xm1_property_get"
+          ],
+          "contract": "replacement/property_service/property-service.ld",
+          "requirement": "repointed table words selecting `xm1_property_get`/`xm1_property_set`. the stock entry/dispatch tables. owned entry and dispatch replace both stock dispatchers"
+        },
+        {
+          "image": "//replacement/property_service:property-service-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_property_get",
+            "xm1_property_set"
+          ],
+          "contract": "replacement/property_service/property-service.ld",
+          "requirement": "repointed table words selecting `xm1_property_get`/`xm1_property_set`. the stock entry/dispatch tables. owned entry and dispatch replace both stock dispatchers"
+        },
+        {
+          "image": "//replacement/property_service:property-service-linked-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_property_get",
+            "xm1_property_set"
+          ],
+          "contract": "replacement/property_service/property-service.ld",
+          "requirement": "repointed table words selecting `xm1_property_get`/`xm1_property_set`. the stock entry/dispatch tables. owned entry and dispatch replace both stock dispatchers"
+        },
+        {
+          "image": "//replacement/property_service:property-service-public-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_property_get",
+            "xm1_property_set"
+          ],
+          "contract": "replacement/property_service/property-service.ld",
+          "requirement": "repointed table words selecting `xm1_property_get`/`xm1_property_set`. the stock entry/dispatch tables. owned entry and dispatch replace both stock dispatchers"
+        },
+        {
+          "image": "//replacement/settings_storage:settings-storage-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_property_get",
+            "xm1_property_set"
+          ],
+          "contract": "replacement/property_service/property-service.ld",
+          "requirement": "repointed table words selecting `xm1_property_get`/`xm1_property_set`. the stock entry/dispatch tables. owned entry and dispatch replace both stock dispatchers"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "property_service-02",
+      "shim": "`xm1_getter_stub`/`xm1_setter_stub` stock-frame stubs and the shared exits/fallbacks",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the stock prologues, shared exits and out-of-range ids",
+      "owned": "no",
+      "removal": "owned entry and dispatch handle every id and frame",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/property_service:property-service-image",
+          "kind": "publication",
+          "symbols": [
+            "xm1_property_get_entry"
+          ],
+          "contract": "replacement/property_service/property-service.ld",
+          "requirement": "`xm1_getter_stub`/`xm1_setter_stub` stock-frame stubs and the shared exits/fallbacks. the stock prologues, shared exits and out-of-range ids. owned entry and dispatch handle every id and frame"
+        },
+        {
+          "image": "//replacement/property_service:property-service-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_property_set_entry"
+          ],
+          "contract": "replacement/property_service/property-service.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "property_service-03",
+      "shim": "`xm1_storage_store8` and `xm1_recipe_edit_get` retained services",
+      "kind": "trampoline into retained stock",
+      "other_side": "the retained bank/previous-value storage and recipe getter",
+      "owned": "no",
+      "removal": "owned settings storage and the recipe getter own those paths",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/property_service:property-service-image",
+          "kind": "retained-entry",
+          "symbols": [
+            "xm1_property_get_entry"
+          ],
+          "contract": "replacement/property_service/property-service.ld",
+          "requirement": "`xm1_storage_store8` and `xm1_recipe_edit_get` retained services. the retained bank/previous-value storage and recipe getter. owned settings storage and the recipe getter own those paths"
+        },
+        {
+          "image": "//replacement/property_service:property-service-image",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_backup_diagnostic726c74",
+            "xm1_backup_report633594",
+            "xm1_backup_write6a59b8",
+            "xm1_kernel_console9",
+            "xm1_kernel_critical_enter",
+            "xm1_kernel_critical_exit",
+            "xm1_stock_61d59c",
+            "xm1_stock_61d5f0",
+            "xm1_stock_61d618",
+            "xm1_stock_61d65c",
+            "xm1_stock_61d8a4",
+            "xm1_stock_61df44"
+          ],
+          "contract": "replacement/property_service/property-service.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        },
+        {
+          "image": "//replacement/property_service:property-service-linked-image",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_backup_diagnostic726c74",
+            "xm1_backup_report633594",
+            "xm1_backup_write6a59b8",
+            "xm1_kernel_console9",
+            "xm1_kernel_critical_enter",
+            "xm1_kernel_critical_exit",
+            "xm1_stock_61d59c",
+            "xm1_stock_61d5f0",
+            "xm1_stock_61d618",
+            "xm1_stock_61d65c",
+            "xm1_stock_61d8a4",
+            "xm1_stock_61df44"
+          ],
+          "contract": "replacement/property_service/property-service-public.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        },
+        {
+          "image": "//replacement/property_service:property-service-public-image",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_backup_diagnostic726c74",
+            "xm1_backup_report633594",
+            "xm1_backup_write6a59b8",
+            "xm1_kernel_console9",
+            "xm1_kernel_critical_enter",
+            "xm1_kernel_critical_exit",
+            "xm1_stock_61d59c",
+            "xm1_stock_61d5f0",
+            "xm1_stock_61d618",
+            "xm1_stock_61d65c",
+            "xm1_stock_61d8a4",
+            "xm1_stock_61df44"
+          ],
+          "contract": "replacement/property_service/property-service-public.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "property_service-04",
+      "shim": "`xm1_property_get`/`xm1_property_set` exports",
+      "kind": "C-ABI bridge between two owned units",
+      "other_side": "develop and power_lifecycle",
+      "owned": "yes",
+      "removal": "both callers link the crate directly and both sides compare with stock in one image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/develop:develop-candidate",
+          "kind": "export",
+          "symbols": [
+            "xm1_property_get"
+          ],
+          "contract": "replacement/property_service/property-service.ld",
+          "requirement": "`xm1_property_get`/`xm1_property_set` exports. develop and power_lifecycle. both callers link the crate directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//replacement/property_service:property-service-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_property_get",
+            "xm1_property_set"
+          ],
+          "contract": "replacement/property_service/property-service.ld",
+          "requirement": "`xm1_property_get`/`xm1_property_set` exports. develop and power_lifecycle. both callers link the crate directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//replacement/property_service:property-service-linked-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_property_get",
+            "xm1_property_set"
+          ],
+          "contract": "replacement/property_service/property-service.ld",
+          "requirement": "`xm1_property_get`/`xm1_property_set` exports. develop and power_lifecycle. both callers link the crate directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//replacement/property_service:property-service-public-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_property_get",
+            "xm1_property_set"
+          ],
+          "contract": "replacement/property_service/property-service.ld",
+          "requirement": "`xm1_property_get`/`xm1_property_set` exports. develop and power_lifecycle. both callers link the crate directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//replacement/settings_storage:settings-storage-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_property_get",
+            "xm1_property_set"
+          ],
+          "contract": "replacement/property_service/property-service.ld",
+          "requirement": "`xm1_property_get`/`xm1_property_set` exports. develop and power_lifecycle. both callers link the crate directly and both sides compare with stock in one image"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "property_service-05",
+      "shim": "base-fixed accessors, named default leaves, bank-0 bracket callees and the carrier in retired setter arms (`src/`, `entry*.S`, `property-service*.ld`, `menu/recipe_bank_ram_engine.ld`)",
+      "kind": "guest-memory layout view",
+      "other_side": "retained bank/previous-value layout and default leaves, and the owned image's link script, which binds `0x6439e0`, the six default leaves and the three backup callbacks",
+      "owned": "no",
+      "removal": "owned storage carries the data and defaults",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/property_service:property-service-image",
+          "kind": "layout",
+          "symbols": [
+            "xm1_property_get_entry"
+          ],
+          "contract": "replacement/property_service/property-service.ld",
+          "requirement": "base-fixed accessors, named default leaves, bank-0 bracket callees and the carrier in retired setter arms (`src/`, `entry*.S`, `property-service*.ld`, `menu/recipe_bank_ram_engine.ld`). retained bank/previous-value layout and default leaves, and the owned image's link script, which binds `0x6439e0`, the six default leaves and the three backup callbacks. owned storage carries the data and defaults"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "property_service-06",
+      "shim": "The property service carried twice: the stock-visible carrier at `0x62c120` (`property-service-public.ld`) and the `property-service-arm` rlib the owned menu adapters link",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "stock callers of `0x62c120`",
+      "owned": "no",
+      "removal": "no stock caller enters the `0x62c120` carrier",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/property_service:property-service-image",
+          "kind": "publication",
+          "symbols": [
+            "xm1_property_get_entry"
+          ],
+          "contract": "replacement/property_service/property-service.ld",
+          "requirement": "The property service carried twice: the stock-visible carrier at `0x62c120` (`property-service-public.ld`) and the `property-service-arm` rlib the owned menu adapters link. stock callers of `0x62c120`. no stock caller enters the `0x62c120` carrier"
+        },
+        {
+          "image": "//replacement/property_service:property-service-linked-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_public_get",
+            "xm1_public_set"
+          ],
+          "contract": "replacement/property_service/property-service-public.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/property_service:property-service-public-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_public_get",
+            "xm1_public_set"
+          ],
+          "contract": "replacement/property_service/property-service-public.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "property_service-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/property_service:property-service-image",
+          "kind": "publication",
+          "symbols": [
+            "__property_service_end",
+            "__property_service_start"
+          ],
+          "contract": "replacement/property_service/property-service.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        },
+        {
+          "image": "//replacement/property_service:property-service-linked-image",
+          "kind": "publication",
+          "symbols": [
+            "__property_service_end",
+            "__property_service_start"
+          ],
+          "contract": "replacement/property_service/property-service-public.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        },
+        {
+          "image": "//replacement/property_service:property-service-public-image",
+          "kind": "publication",
+          "symbols": [
+            "__property_service_end",
+            "__property_service_start"
+          ],
+          "contract": "replacement/property_service/property-service-public.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

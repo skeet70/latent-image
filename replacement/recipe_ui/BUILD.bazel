@@ -50,3 +50,9 @@ rust_source_boundary_test(
     declaration = "unsafe-boundary.json",
     srcs = glob(["src/**/*.rs"]),
 )
+
+filegroup(
+    name = "shim-catalog-data",
+    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel"],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)

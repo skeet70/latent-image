@@ -68,3 +68,9 @@ sh_test(
     args = ["$(location :task-records-host-tests-build)"],
     data = [":task-records-host-tests-build"],
 )
+
+filegroup(
+    name = "shim-catalog-data",
+    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel"],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)

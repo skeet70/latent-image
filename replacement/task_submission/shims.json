@@ -1,0 +1,138 @@
+{
+  "unit": "task_submission",
+  "summary": "The owned task submission and release wrappers.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "task_submission-01",
+      "shim": "`xm1_task_submit_entry`, `xm1_task_release_entry` in `entry.S` and `xm1_task_submit`/`xm1_task_release` in `src.rs`",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the stock submit/release callers",
+      "owned": "no",
+      "removal": "every caller is owned or migrated",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/task_submission:task-submission-image",
+          "kind": "publication",
+          "symbols": [
+            "xm1_task_release",
+            "xm1_task_release_entry",
+            "xm1_task_submit",
+            "xm1_task_submit_entry"
+          ],
+          "contract": "replacement/task_submission/task-submission.ld",
+          "requirement": "`xm1_task_submit_entry`, `xm1_task_release_entry` in `entry.S` and `xm1_task_submit`/`xm1_task_release` in `src.rs`. the stock submit/release callers. every caller is owned or migrated"
+        },
+        {
+          "image": "//replacement/task_submission:task-submission-image",
+          "kind": "layout",
+          "symbols": [
+            "xm1_task_release_lock_literal"
+          ],
+          "contract": "replacement/task_submission/task-submission.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "task_submission-02",
+      "shim": "`xm1_task_submit`/`xm1_task_release` exports",
+      "kind": "C-ABI bridge between two owned units",
+      "other_side": "power_lifecycle",
+      "owned": "yes",
+      "removal": "power links the submission crate directly and both sides compare with stock in one image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/task_submission:task-submission-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_task_release",
+            "xm1_task_submit"
+          ],
+          "contract": "replacement/task_submission/task-submission.ld",
+          "requirement": "`xm1_task_submit`/`xm1_task_release` exports. power_lifecycle. power links the submission crate directly and both sides compare with stock in one image"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "task_submission-03",
+      "shim": "`xm1_task_cache`, `xm1_task_critical_enter/exit`, `xm1_task_error_callback_dispatch`, `xm1_task_fill`, `xm1_task_log`, `xm1_task_reservation`, `xm1_task_try_lock`, `xm1_task_unlock` retained services",
+      "kind": "trampoline into retained stock",
+      "other_side": "stock kernel and cache services",
+      "owned": "no",
+      "removal": "the RTOS platform owns those services",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/task_submission:task-submission-image",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_task_cache",
+            "xm1_task_class_table",
+            "xm1_task_critical_enter",
+            "xm1_task_critical_exit",
+            "xm1_task_error_callback_dispatch",
+            "xm1_task_error_word",
+            "xm1_task_fill",
+            "xm1_task_interface_roots",
+            "xm1_task_log",
+            "xm1_task_release_lock",
+            "xm1_task_reservation",
+            "xm1_task_state_base",
+            "xm1_task_try_lock",
+            "xm1_task_unlock",
+            "xm1_task_wrapper_base"
+          ],
+          "contract": "replacement/task_submission/task-submission.ld",
+          "requirement": "`xm1_task_cache`, `xm1_task_critical_enter/exit`, `xm1_task_error_callback_dispatch`, `xm1_task_fill`, `xm1_task_log`, `xm1_task_reservation`, `xm1_task_try_lock`, `xm1_task_unlock` retained services. stock kernel and cache services. the RTOS platform owns those services",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "task_submission-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/task_submission:task-submission-image",
+          "kind": "publication",
+          "symbols": [
+            "__task_submission_bodies_end",
+            "__task_submission_end",
+            "__task_submission_release_adapter_end",
+            "__task_submission_start"
+          ],
+          "contract": "replacement/task_submission/task-submission.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

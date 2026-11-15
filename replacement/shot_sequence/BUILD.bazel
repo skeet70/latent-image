@@ -99,3 +99,9 @@ xm1_rust_host_test(
         "xm1_saclac_profile_geometry": "//replacement/saclac/profile_geometry:host",
     },
 )
+
+filegroup(
+    name = "shim-catalog-data",
+    srcs = ["BUILD.bazel", "shims.json"],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)

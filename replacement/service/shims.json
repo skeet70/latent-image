@@ -1,0 +1,147 @@
+{
+  "unit": "service",
+  "summary": "The retained row-availability probe binding.",
+  "classification": "module",
+  "rows": [
+    {
+      "id": "service-01",
+      "shim": "`rb_service_field_row_state` export",
+      "kind": "stock-ABI export",
+      "other_side": "stock menu callers of the row probe",
+      "owned": "no",
+      "removal": "the menu engine declares availability itself",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//host/firmware:bank-elf-00c40000",
+          "kind": "export",
+          "symbols": [
+            "rb_service_field_row_state"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_service_field_row_state` export. stock menu callers of the row probe. the menu engine declares availability itself"
+        },
+        {
+          "image": "//host/firmware:bank-elf-00c4fc88",
+          "kind": "export",
+          "symbols": [
+            "rb_service_field_row_state"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_service_field_row_state` export. stock menu callers of the row probe. the menu engine declares availability itself"
+        },
+        {
+          "image": "//host/firmware:bank-modal-elf-00c40000",
+          "kind": "export",
+          "symbols": [
+            "rb_service_field_row_state"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_service_field_row_state` export. stock menu callers of the row probe. the menu engine declares availability itself"
+        },
+        {
+          "image": "//host/firmware:bank-modal-elf-00c4fc88",
+          "kind": "export",
+          "symbols": [
+            "rb_service_field_row_state"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_service_field_row_state` export. stock menu callers of the row probe. the menu engine declares availability itself"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine",
+          "kind": "export",
+          "symbols": [
+            "rb_service_field_row_state"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_service_field_row_state` export. stock menu callers of the row probe. the menu engine declares availability itself"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "export",
+          "symbols": [
+            "rb_service_field_row_state"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_service_field_row_state` export. stock menu callers of the row probe. the menu engine declares availability itself"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "service-02",
+      "shim": "`rb_call_stock_probe` in `rb_service_stock.S`",
+      "kind": "trampoline into retained stock",
+      "other_side": "the stock probe `FUN_00d52684`",
+      "owned": "no",
+      "removal": "the probe is owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//host/firmware:bank-elf-00c40000",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_call_stock_probe"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_call_stock_probe` in `rb_service_stock.S`. the stock probe `FUN_00d52684`. the probe is owned"
+        },
+        {
+          "image": "//host/firmware:bank-elf-00c4fc88",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_call_stock_probe"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_call_stock_probe` in `rb_service_stock.S`. the stock probe `FUN_00d52684`. the probe is owned"
+        },
+        {
+          "image": "//host/firmware:bank-modal-elf-00c40000",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_call_stock_probe"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_call_stock_probe` in `rb_service_stock.S`. the stock probe `FUN_00d52684`. the probe is owned"
+        },
+        {
+          "image": "//host/firmware:bank-modal-elf-00c4fc88",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_call_stock_probe"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_call_stock_probe` in `rb_service_stock.S`. the stock probe `FUN_00d52684`. the probe is owned"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_call_stock_probe"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_call_stock_probe` in `rb_service_stock.S`. the stock probe `FUN_00d52684`. the probe is owned"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_call_stock_probe"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_call_stock_probe` in `rb_service_stock.S`. the stock probe `FUN_00d52684`. the probe is owned"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

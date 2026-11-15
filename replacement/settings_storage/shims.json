@@ -1,0 +1,740 @@
+{
+  "unit": "settings_storage",
+  "summary": "The owned settings storage, bank projections, custom record lifecycle and header mirror.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "settings_storage-01",
+      "shim": "`record_store_append`/`record_store_register` externs",
+      "kind": "C-ABI bridge between two owned units",
+      "other_side": "record_store",
+      "owned": "yes",
+      "removal": "settings links the store directly and both sides compare with stock in one image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/settings_storage:custom-settings-image",
+          "kind": "export",
+          "symbols": [
+            "record_store_append",
+            "record_store_register"
+          ],
+          "contract": "replacement/settings_storage/settings-storage.ld",
+          "requirement": "`record_store_append`/`record_store_register` externs. record_store. settings links the store directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-published-image",
+          "kind": "export",
+          "symbols": [
+            "record_store_append",
+            "record_store_register"
+          ],
+          "contract": "replacement/settings_storage/settings-storage.ld",
+          "requirement": "`record_store_append`/`record_store_register` externs. record_store. settings links the store directly and both sides compare with stock in one image"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "settings_storage-02",
+      "shim": "`xm1_storage_output8`/`_output16`/`_status32` externs",
+      "kind": "C-ABI bridge between two owned units",
+      "other_side": "property_service",
+      "owned": "yes",
+      "removal": "settings links the property service directly and both sides compare with stock in one image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/settings_storage:settings-storage-image",
+          "kind": "retained-entry",
+          "symbols": [
+            "xm1_getter_owned"
+          ],
+          "contract": "replacement/settings_storage/settings-storage.ld",
+          "requirement": "`xm1_storage_output8`/`_output16`/`_status32` externs. property_service. settings links the property service directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine",
+          "kind": "export",
+          "symbols": [
+            "xm1_storage_output16",
+            "xm1_storage_output8",
+            "xm1_storage_status32"
+          ],
+          "contract": "menu/recipe_bank_ram.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "export",
+          "symbols": [
+            "xm1_storage_output16",
+            "xm1_storage_output8",
+            "xm1_storage_status32"
+          ],
+          "contract": "menu/recipe_bank_ram.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/property_service:property-service-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_storage_output16",
+            "xm1_storage_output8",
+            "xm1_storage_status32"
+          ],
+          "contract": "replacement/property_service/property-service.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/property_service:property-service-linked-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_storage_output16",
+            "xm1_storage_output8",
+            "xm1_storage_status32"
+          ],
+          "contract": "replacement/property_service/property-service-public.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/property_service:property-service-public-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_storage_output16",
+            "xm1_storage_output8",
+            "xm1_storage_status32"
+          ],
+          "contract": "replacement/property_service/property-service-public.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_storage_output16",
+            "xm1_storage_output8",
+            "xm1_storage_status32"
+          ],
+          "contract": "replacement/settings_storage/custom-settings.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-published-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_storage_output16",
+            "xm1_storage_output8",
+            "xm1_storage_status32"
+          ],
+          "contract": "replacement/settings_storage/custom-settings.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/settings_storage:settings-storage-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_storage_output16",
+            "xm1_storage_output8",
+            "xm1_storage_status32"
+          ],
+          "contract": "replacement/settings_storage/settings-storage.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "settings_storage-03",
+      "shim": "`xm1_getter_owned`, `xm1_setter_owned`, `xm1_storage_initialize` exports",
+      "kind": "C-ABI bridge between two owned units",
+      "other_side": "power_lifecycle",
+      "owned": "yes",
+      "removal": "power links the settings crate directly and both sides compare with stock in one image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/settings_storage:custom-settings-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_storage_initialize"
+          ],
+          "contract": "replacement/settings_storage/settings-storage.ld",
+          "requirement": "`xm1_getter_owned`, `xm1_setter_owned`, `xm1_storage_initialize` exports. power_lifecycle. power links the settings crate directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-published-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_storage_initialize"
+          ],
+          "contract": "replacement/settings_storage/settings-storage.ld",
+          "requirement": "`xm1_getter_owned`, `xm1_setter_owned`, `xm1_storage_initialize` exports. power_lifecycle. power links the settings crate directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//replacement/settings_storage:settings-storage-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_getter_owned",
+            "xm1_setter_owned",
+            "xm1_settings_contract_violation",
+            "xm1_storage_apply",
+            "xm1_storage_capture",
+            "xm1_storage_close",
+            "xm1_storage_copy",
+            "xm1_storage_diagnostic",
+            "xm1_storage_exchange",
+            "xm1_storage_export",
+            "xm1_storage_import",
+            "xm1_storage_initialize",
+            "xm1_storage_open",
+            "xm1_storage_read_body",
+            "xm1_storage_read_custom",
+            "xm1_storage_read_header",
+            "xm1_storage_read_request",
+            "xm1_storage_report",
+            "xm1_storage_restore",
+            "xm1_storage_store16",
+            "xm1_storage_store8",
+            "xm1_storage_write",
+            "xm1_storage_write_active_body",
+            "xm1_storage_write_body",
+            "xm1_storage_write_header",
+            "xm1_storage_write_request"
+          ],
+          "contract": "replacement/settings_storage/settings-storage.ld",
+          "requirement": "`xm1_getter_owned`, `xm1_setter_owned`, `xm1_storage_initialize` exports. power_lifecycle. power links the settings crate directly and both sides compare with stock in one image",
+          "retained_targets": []
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine",
+          "kind": "export",
+          "symbols": [
+            "xm1_settings_contract_violation",
+            "xm1_storage_diagnostic",
+            "xm1_storage_report",
+            "xm1_storage_store16",
+            "xm1_storage_store8",
+            "xm1_storage_write"
+          ],
+          "contract": "menu/recipe_bank_ram.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "export",
+          "symbols": [
+            "xm1_settings_contract_violation",
+            "xm1_storage_diagnostic",
+            "xm1_storage_report",
+            "xm1_storage_store16",
+            "xm1_storage_store8",
+            "xm1_storage_write"
+          ],
+          "contract": "menu/recipe_bank_ram.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/property_service:property-service-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_settings_contract_violation",
+            "xm1_storage_diagnostic",
+            "xm1_storage_report",
+            "xm1_storage_store16",
+            "xm1_storage_store8",
+            "xm1_storage_write"
+          ],
+          "contract": "replacement/property_service/property-service.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/property_service:property-service-linked-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_settings_contract_violation",
+            "xm1_storage_diagnostic",
+            "xm1_storage_report",
+            "xm1_storage_store16",
+            "xm1_storage_store8",
+            "xm1_storage_write"
+          ],
+          "contract": "replacement/property_service/property-service-public.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/property_service:property-service-public-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_settings_contract_violation",
+            "xm1_storage_diagnostic",
+            "xm1_storage_report",
+            "xm1_storage_store16",
+            "xm1_storage_store8",
+            "xm1_storage_write"
+          ],
+          "contract": "replacement/property_service/property-service-public.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_settings_contract_violation",
+            "xm1_storage_apply",
+            "xm1_storage_capture",
+            "xm1_storage_copy",
+            "xm1_storage_diagnostic",
+            "xm1_storage_exchange",
+            "xm1_storage_read_body",
+            "xm1_storage_read_custom",
+            "xm1_storage_read_header",
+            "xm1_storage_report",
+            "xm1_storage_restore",
+            "xm1_storage_store16",
+            "xm1_storage_store8",
+            "xm1_storage_write",
+            "xm1_storage_write_active_body",
+            "xm1_storage_write_body",
+            "xm1_storage_write_header"
+          ],
+          "contract": "replacement/settings_storage/custom-settings.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-published-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_settings_contract_violation",
+            "xm1_storage_apply",
+            "xm1_storage_capture",
+            "xm1_storage_copy",
+            "xm1_storage_diagnostic",
+            "xm1_storage_exchange",
+            "xm1_storage_read_body",
+            "xm1_storage_read_custom",
+            "xm1_storage_read_header",
+            "xm1_storage_report",
+            "xm1_storage_restore",
+            "xm1_storage_store16",
+            "xm1_storage_store8",
+            "xm1_storage_write",
+            "xm1_storage_write_active_body",
+            "xm1_storage_write_body",
+            "xm1_storage_write_header"
+          ],
+          "contract": "replacement/settings_storage/custom-settings.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "settings_storage-04",
+      "shim": "`settings_bank_*` and `settings_custom_*` entries in `bank_entry.S`/`custom_entry.S`, placed by `settings-storage.ld`/`custom-settings.ld`",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "stock bank/custom callers",
+      "owned": "no",
+      "removal": "every bank/custom caller is owned or migrated",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/settings_storage:custom-settings-image",
+          "kind": "publication",
+          "symbols": [
+            "settings_custom_boot_entry"
+          ],
+          "contract": "replacement/settings_storage/custom-settings.ld",
+          "requirement": "`settings_bank_*` and `settings_custom_*` entries in `bank_entry.S`/`custom_entry.S`, placed by `settings-storage.ld`/`custom-settings.ld`. stock bank/custom callers. every bank/custom caller is owned or migrated"
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-published-image",
+          "kind": "publication",
+          "symbols": [
+            "settings_custom_boot_entry"
+          ],
+          "contract": "replacement/settings_storage/custom-settings.ld",
+          "requirement": "`settings_bank_*` and `settings_custom_*` entries in `bank_entry.S`/`custom_entry.S`, placed by `settings-storage.ld`/`custom-settings.ld`. stock bank/custom callers. every bank/custom caller is owned or migrated"
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-image",
+          "kind": "export",
+          "symbols": [
+            "settings_bank_apply_entry",
+            "settings_bank_capture_entry",
+            "settings_bank_copy_entry",
+            "settings_bank_exchange_entry",
+            "settings_bank_initialize_entry",
+            "settings_bank_read_body_entry",
+            "settings_bank_read_custom_entry",
+            "settings_bank_read_header_entry",
+            "settings_bank_restore_entry",
+            "settings_bank_write_active_body_entry",
+            "settings_bank_write_body_entry",
+            "settings_bank_write_header_entry",
+            "settings_custom_append",
+            "settings_custom_boot",
+            "settings_custom_check",
+            "settings_custom_check_entry",
+            "settings_custom_codec_check",
+            "settings_custom_config_read",
+            "settings_custom_defaults",
+            "settings_custom_defaults_entry",
+            "settings_custom_prepare",
+            "settings_custom_prepare_entry",
+            "settings_custom_read",
+            "settings_custom_read_entry",
+            "settings_custom_refresh",
+            "settings_custom_refresh_entry",
+            "settings_custom_reset_modes",
+            "settings_custom_store16",
+            "settings_custom_store32",
+            "settings_custom_store8"
+          ],
+          "contract": "replacement/settings_storage/custom-settings.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-published-image",
+          "kind": "export",
+          "symbols": [
+            "settings_bank_apply_entry",
+            "settings_bank_capture_entry",
+            "settings_bank_copy_entry",
+            "settings_bank_exchange_entry",
+            "settings_bank_initialize_entry",
+            "settings_bank_read_body_entry",
+            "settings_bank_read_custom_entry",
+            "settings_bank_read_header_entry",
+            "settings_bank_restore_entry",
+            "settings_bank_write_active_body_entry",
+            "settings_bank_write_body_entry",
+            "settings_bank_write_header_entry",
+            "settings_custom_append",
+            "settings_custom_boot",
+            "settings_custom_check",
+            "settings_custom_check_entry",
+            "settings_custom_codec_check",
+            "settings_custom_config_read",
+            "settings_custom_defaults",
+            "settings_custom_defaults_entry",
+            "settings_custom_prepare",
+            "settings_custom_prepare_entry",
+            "settings_custom_read",
+            "settings_custom_read_entry",
+            "settings_custom_refresh",
+            "settings_custom_refresh_entry",
+            "settings_custom_reset_modes",
+            "settings_custom_store16",
+            "settings_custom_store32",
+            "settings_custom_store8"
+          ],
+          "contract": "replacement/settings_storage/custom-settings.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "settings_storage-05",
+      "shim": "25 retained `xm1_stock_*`, `xm1_bank_*`, `xm1_storage_*` and `settings_custom_*` externs",
+      "kind": "trampoline into retained stock",
+      "other_side": "stock bank, header, storage and custom-record services",
+      "owned": "no",
+      "removal": "owned storage replaces those services",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/settings_storage:settings-storage-image",
+          "kind": "retained-entry",
+          "symbols": [
+            "xm1_getter_owned"
+          ],
+          "contract": "replacement/settings_storage/settings-storage.ld",
+          "requirement": "25 retained `xm1_stock_*`, `xm1_bank_*`, `xm1_storage_*` and `settings_custom_*` externs. stock bank, header, storage and custom-record services. owned storage replaces those services"
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-image",
+          "kind": "retained-import",
+          "symbols": [
+            "record_raw_erase_0",
+            "record_raw_erase_1",
+            "record_raw_erase_2",
+            "record_raw_erase_3",
+            "record_raw_erase_4",
+            "record_raw_region_read",
+            "record_raw_write_0",
+            "record_raw_write_1",
+            "record_raw_write_2",
+            "record_raw_write_3",
+            "record_raw_write_4",
+            "record_semaphore_give",
+            "record_semaphore_take",
+            "record_store_block",
+            "record_store_cache_ages",
+            "record_store_cache_tags",
+            "record_store_cache_timestamp",
+            "record_store_initialized",
+            "record_store_second_block",
+            "record_store_staging_0",
+            "record_store_staging_1",
+            "record_store_staging_2",
+            "record_store_staging_3",
+            "record_store_staging_4",
+            "record_store_state",
+            "record_store_wrappers",
+            "xm1_backup_diagnostic726c74",
+            "xm1_backup_report633594",
+            "xm1_backup_write6a59b8",
+            "xm1_bank_current_selection",
+            "xm1_bank_custom_refresh",
+            "xm1_bank_property_set",
+            "xm1_bank_short_read",
+            "xm1_kernel_console9",
+            "xm1_kernel_critical_enter",
+            "xm1_kernel_critical_exit",
+            "xm1_stock_61d59c",
+            "xm1_stock_61d5f0",
+            "xm1_stock_61d618",
+            "xm1_stock_61d65c",
+            "xm1_stock_61d8a4",
+            "xm1_stock_61df44",
+            "xm1_stock_custom_config_read",
+            "xm1_stock_custom_reset_modes"
+          ],
+          "contract": "replacement/settings_storage/custom-settings.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-published-image",
+          "kind": "retained-import",
+          "symbols": [
+            "__published_image_start",
+            "record_raw_erase_0",
+            "record_raw_erase_1",
+            "record_raw_erase_2",
+            "record_raw_erase_3",
+            "record_raw_erase_4",
+            "record_raw_region_read",
+            "record_raw_write_0",
+            "record_raw_write_1",
+            "record_raw_write_2",
+            "record_raw_write_3",
+            "record_raw_write_4",
+            "record_semaphore_give",
+            "record_semaphore_take",
+            "record_store_block",
+            "record_store_cache_ages",
+            "record_store_cache_tags",
+            "record_store_cache_timestamp",
+            "record_store_initialized",
+            "record_store_second_block",
+            "record_store_staging_0",
+            "record_store_staging_1",
+            "record_store_staging_2",
+            "record_store_staging_3",
+            "record_store_staging_4",
+            "record_store_state",
+            "record_store_wrappers",
+            "xm1_backup_diagnostic726c74",
+            "xm1_backup_report633594",
+            "xm1_backup_write6a59b8",
+            "xm1_bank_current_selection",
+            "xm1_bank_custom_refresh",
+            "xm1_bank_property_set",
+            "xm1_bank_short_read",
+            "xm1_kernel_console9",
+            "xm1_kernel_critical_enter",
+            "xm1_kernel_critical_exit",
+            "xm1_stock_61d59c",
+            "xm1_stock_61d5f0",
+            "xm1_stock_61d618",
+            "xm1_stock_61d65c",
+            "xm1_stock_61d8a4",
+            "xm1_stock_61df44",
+            "xm1_stock_custom_config_read",
+            "xm1_stock_custom_reset_modes"
+          ],
+          "contract": "replacement/settings_storage/custom-settings.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        },
+        {
+          "image": "//replacement/settings_storage:settings-storage-image",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_backup_diagnostic726c74",
+            "xm1_backup_report633594",
+            "xm1_backup_write6a59b8",
+            "xm1_bank_current_selection",
+            "xm1_bank_custom_refresh",
+            "xm1_bank_property_set",
+            "xm1_bank_short_read",
+            "xm1_kernel_console9",
+            "xm1_kernel_critical_enter",
+            "xm1_kernel_critical_exit",
+            "xm1_stock_61d59c",
+            "xm1_stock_61d5f0",
+            "xm1_stock_61d618",
+            "xm1_stock_61d65c",
+            "xm1_stock_61d8a4",
+            "xm1_stock_61df44"
+          ],
+          "contract": "replacement/settings_storage/settings-storage.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "settings_storage-06",
+      "shim": "header mirror, previous-value snapshot `0x89ec00`, backup memory `0x409c281c` and the 16-byte shadow `0x409c29b8`",
+      "kind": "guest-memory layout view",
+      "other_side": "retained stock readers and the bank-0 backup contract",
+      "owned": "no",
+      "removal": "no stock code reads the mirror or backup",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/settings_storage:settings-storage-image",
+          "kind": "layout",
+          "symbols": [
+            "xm1_getter_owned"
+          ],
+          "contract": "replacement/settings_storage/settings-storage.ld",
+          "requirement": "header mirror, previous-value snapshot `0x89ec00`, backup memory `0x409c281c` and the 16-byte shadow `0x409c29b8`. retained stock readers and the bank-0 backup contract. no stock code reads the mirror or backup"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "settings_storage-linked-retained-references",
+      "shim": "Definite retained references in the current linked instruction and relocation metadata",
+      "kind": "retained stock seam in assembly",
+      "other_side": "retained code and guest address contracts reached by the composed image",
+      "owned": "partly",
+      "removal": "all declared retained targets have owned typed replacements and both sides are compared in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/settings_storage:custom-settings-image",
+          "kind": "retained-entry",
+          "symbols": [],
+          "retained_targets": [
+            21431304
+          ],
+          "contract": "replacement/settings_storage/custom-settings.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        },
+        {
+          "image": "//replacement/settings_storage:settings-storage-image",
+          "kind": "retained-entry",
+          "symbols": [],
+          "retained_targets": [
+            8720056,
+            9039852,
+            11168548,
+            17624772,
+            21375148,
+            25524940,
+            27946152,
+            36303164,
+            4267937188,
+            4272581548,
+            4272614096,
+            4287396596,
+            4289358688
+          ],
+          "contract": "replacement/settings_storage/settings-storage.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "settings_storage-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/settings_storage:custom-settings-image",
+          "kind": "publication",
+          "symbols": [
+            "__custom_text_end"
+          ],
+          "contract": "replacement/settings_storage/custom-settings.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-published-image",
+          "kind": "publication",
+          "symbols": [
+            "__custom_segment_0_end",
+            "__custom_segment_0_start",
+            "__custom_segment_1_end",
+            "__custom_segment_1_start",
+            "__custom_segment_2_end",
+            "__custom_segment_2_start",
+            "__custom_text_end",
+            "__custom_text_start"
+          ],
+          "contract": "replacement/settings_storage/custom-settings.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

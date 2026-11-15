@@ -1,0 +1,91 @@
+{
+  "unit": "menu_value",
+  "summary": "The menu value transaction, published at the dispatcher's IMAGE SIZE jump-table word.",
+  "classification": "reference-only",
+  "rows": [
+    {
+      "id": "menu_value-01",
+      "shim": "`rb_menu_value_size_arm` in `adapter/entry.S`, placed by `adapter/image.ld`",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the stock dispatcher's jump-table word for property `0xf6`",
+      "owned": "no",
+      "removal": "the owned dispatcher calls the transaction directly",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/menu_value/BUILD.bazel",
+          "requirement": "The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `rb_menu_value_size_arm` in `adapter/entry.S`, placed by `adapter/image.ld`"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "menu_value-02",
+      "shim": "`rb_menu_value_begin`, `rb_menu_value_size_apply`, `rb_menu_value_retained`, `rb_menu_value_cancel`, `rb_menu_value_confirm` exports in `src/lib.rs`",
+      "kind": "stock-ABI export",
+      "other_side": "stock stage consumers and controller arms",
+      "owned": "no",
+      "removal": "every stage consumer and controller arm is owned",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/menu_value/BUILD.bazel",
+          "requirement": "The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `rb_menu_value_begin`, `rb_menu_value_size_apply`, `rb_menu_value_retained`, `rb_menu_value_cancel`, `rb_menu_value_confirm` exports in `src/lib.rs`"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "menu_value-03",
+      "shim": "`rb_menu_value_call_*` retained services (aspect/size cells, change marker, current property, display update, restore aux, snapshot cells/state)",
+      "kind": "trampoline into retained stock",
+      "other_side": "stock property, cell and display services",
+      "owned": "no",
+      "removal": "the typed settings service and owned display own those services",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/menu_value/BUILD.bazel",
+          "requirement": "The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `rb_menu_value_call_*` retained services (aspect/size cells, change marker, current property, display update, restore aux, snapshot cells/state)"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "menu_value-04",
+      "shim": "`rb_menu_value_cancel`/`rb_menu_value_confirm` exports",
+      "kind": "C-ABI bridge between two owned units",
+      "other_side": "modal_runtime",
+      "owned": "yes",
+      "removal": "modal dispatch calls the crate directly and both sides compare with stock in one image",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/menu_value/BUILD.bazel",
+          "requirement": "The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `rb_menu_value_cancel`/`rb_menu_value_confirm` exports"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

@@ -1,0 +1,107 @@
+{
+  "unit": "application_pump",
+  "summary": "The application-phase pump hooks, staged at the stock prehook, normalizer and posthook addresses.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "application_pump-01",
+      "shim": "`xm1_application_prehook`, `xm1_application_normalizer`, `xm1_application_posthook` in `entry.S`",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the stock application loop at `0xbfb1b8`, `0xbfb20c`, `0xbfb1e0`",
+      "owned": "no",
+      "removal": "the owned task1 actor calls the pump directly",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/application_pump:application-pump-image",
+          "kind": "publication",
+          "symbols": [
+            "xm1_application_normalizer",
+            "xm1_application_posthook",
+            "xm1_application_prehook"
+          ],
+          "contract": "replacement/application_pump/application-pump.ld",
+          "requirement": "`xm1_application_prehook`, `xm1_application_normalizer`, `xm1_application_posthook` in `entry.S`. the stock application loop at `0xbfb1b8`, `0xbfb20c`, `0xbfb1e0`. the owned task1 actor calls the pump directly"
+        },
+        {
+          "image": "//replacement/application_pump:application-pump-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_application_pump"
+          ],
+          "contract": "replacement/application_pump/application-pump.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "application_pump-02",
+      "shim": "the same three stock hooks as `extern \"C\"` retained services in `src.rs`",
+      "kind": "trampoline into retained stock",
+      "other_side": "the stock application loop",
+      "owned": "no",
+      "removal": "the application loop is owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/application_pump:application-pump-image",
+          "kind": "retained-entry",
+          "symbols": [
+            "xm1_application_normalizer",
+            "xm1_application_posthook",
+            "xm1_application_prehook"
+          ],
+          "contract": "replacement/application_pump/application-pump.ld",
+          "requirement": "the same three stock hooks as `extern \"C\"` retained services in `src.rs`. the stock application loop. the application loop is owned"
+        },
+        {
+          "image": "//replacement/application_pump:application-pump-image",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_application_normalizer",
+            "xm1_application_posthook",
+            "xm1_application_prehook"
+          ],
+          "contract": "replacement/application_pump/application-pump.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "application_pump-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/application_pump:application-pump-image",
+          "kind": "publication",
+          "symbols": [
+            "__application_pump_end",
+            "__application_pump_start"
+          ],
+          "contract": "replacement/application_pump/application-pump.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

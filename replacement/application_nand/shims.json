@@ -1,0 +1,70 @@
+{
+  "unit": "application_nand",
+  "summary": "The NAND controller and profile-map implementation. Its exports are consumed by owned units; the raw device shape is the remaining seam.",
+  "classification": "reference-only",
+  "rows": [
+    {
+      "id": "application_nand-01",
+      "shim": "`xm1_app_nand_*` exports (14 functions in `src/lib.rs`)",
+      "kind": "C-ABI bridge between two owned units",
+      "other_side": "power_lifecycle and vendor_protocol",
+      "owned": "yes",
+      "removal": "both callers link the NAND crate directly and both sides compare with stock in one image",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/application_nand/BUILD.bazel",
+          "requirement": "The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `xm1_app_nand_*` exports (14 functions in `src/lib.rs`)"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "application_nand-02",
+      "shim": "NAND register and profile-map layout (`NAND = 0xfff50000`, profile base `0x380`, `src/physical.rs`, `src/memory.rs`)",
+      "kind": "guest-memory layout view",
+      "other_side": "the stock raw-NAND clients and the boot-time map that the controller must reproduce",
+      "owned": "partly",
+      "removal": "every stock raw-NAND client uses the owned flash layer and the map is initialized by owned startup",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/application_nand/BUILD.bazel",
+          "requirement": "The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. NAND register and profile-map layout (`NAND = 0xfff50000`, profile base `0x380`, `src/physical.rs`, `src/memory.rs`)"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "application_nand-03",
+      "shim": "`xm1_power_resource_route_request` and the other `xm1_power_*` externs in `src/lib.rs`",
+      "kind": "C-ABI bridge between two owned units",
+      "other_side": "power_lifecycle leaf",
+      "owned": "yes",
+      "removal": "the leaf is linked directly and both sides compare with stock in one image",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/application_nand/BUILD.bazel",
+          "requirement": "The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `xm1_power_resource_route_request` and the other `xm1_power_*` externs in `src/lib.rs`"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

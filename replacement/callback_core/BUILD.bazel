@@ -36,3 +36,9 @@ sh_test(
     args = ["$(location :host-test-binary)"],
     data = [":host-test-binary"],
 )
+
+filegroup(
+    name = "shim-catalog-data",
+    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel"],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)

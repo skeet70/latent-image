@@ -1,0 +1,137 @@
+{
+  "unit": "image5_init",
+  "summary": "The image-5 synchronous initializer, calling 19 retained stock services.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "image5_init-01",
+      "shim": "the image-5 initializer export and `entry.S` placement in `image5-init.ld`",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the stock image-5 initializer caller",
+      "owned": "no",
+      "removal": "the image-5 caller is owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/image5_init:image5-init-image",
+          "kind": "publication",
+          "symbols": [
+            "xm1_image5_init"
+          ],
+          "contract": "replacement/image5_init/image5-init.ld",
+          "requirement": "the image-5 initializer export and `entry.S` placement in `image5-init.ld`. the stock image-5 initializer caller. the image-5 caller is owned"
+        },
+        {
+          "image": "//replacement/image5_init:image5-init-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_image5_hooks"
+          ],
+          "contract": "replacement/image5_init/image5-init.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "image5_init-02",
+      "shim": "19 `service_*` retained externs in `src.rs` and `entry.S`",
+      "kind": "trampoline into retained stock",
+      "other_side": "stock image-5 constructors, task-60 adapter and settings/calibration initializers",
+      "owned": "no",
+      "removal": "those services are owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/image5_init:image5-init-image",
+          "kind": "retained-entry",
+          "symbols": [
+            "service_1055d10",
+            "service_1056c24",
+            "service_69cf84",
+            "service_69f000",
+            "service_6b7df8",
+            "service_6c62a8",
+            "service_72872c",
+            "service_73aca4",
+            "service_d80d44",
+            "service_d986b0",
+            "service_db01fc",
+            "service_db63e0",
+            "service_dca604",
+            "service_ec5350",
+            "service_ed10b4",
+            "service_ed2b00",
+            "service_ed4acc",
+            "service_ed4afc",
+            "service_ef8c90"
+          ],
+          "contract": "replacement/image5_init/image5-init.ld",
+          "requirement": "19 `service_*` retained externs in `src.rs` and `entry.S`. stock image-5 constructors, task-60 adapter and settings/calibration initializers. those services are owned"
+        },
+        {
+          "image": "//replacement/image5_init:image5-init-image",
+          "kind": "retained-import",
+          "symbols": [
+            "service_1055d10",
+            "service_1056c24",
+            "service_69cf84",
+            "service_69f000",
+            "service_6b7df8",
+            "service_6c62a8",
+            "service_72872c",
+            "service_73aca4",
+            "service_d80d44",
+            "service_d986b0",
+            "service_db01fc",
+            "service_db63e0",
+            "service_dca604",
+            "service_ec5350",
+            "service_ed10b4",
+            "service_ed2b00",
+            "service_ed4acc",
+            "service_ed4afc",
+            "service_ef8c90"
+          ],
+          "contract": "replacement/image5_init/image5-init.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "image5_init-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/image5_init:image5-init-image",
+          "kind": "publication",
+          "symbols": [
+            "__image5_init_end",
+            "__image5_init_start"
+          ],
+          "contract": "replacement/image5_init/image5-init.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

@@ -1,0 +1,187 @@
+{
+  "unit": "task_constructors",
+  "summary": "The owned task constructors.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "task_constructors-01",
+      "shim": "13 `xm1_ctor_*` entries in `entry.S`, placed by `task-constructors.ld` at the stock constructor addresses",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the stock constructor caller list",
+      "owned": "no",
+      "removal": "the constructor list is owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/task_constructors:task-constructors-image",
+          "kind": "publication",
+          "symbols": [
+            "xm1_ctor_1055d10",
+            "xm1_ctor_1062090",
+            "xm1_ctor_1066280",
+            "xm1_ctor_10726f4",
+            "xm1_ctor_69f000",
+            "xm1_ctor_d0a238",
+            "xm1_ctor_d80d44",
+            "xm1_ctor_db63e0",
+            "xm1_ctor_dca604",
+            "xm1_ctor_ec5350",
+            "xm1_ctor_ed10b4",
+            "xm1_ctor_ed2b00",
+            "xm1_ctor_ef8c90"
+          ],
+          "contract": "replacement/task_constructors/task-constructors.ld",
+          "requirement": "13 `xm1_ctor_*` entries in `entry.S`, placed by `task-constructors.ld` at the stock constructor addresses. the stock constructor caller list. the constructor list is owned"
+        },
+        {
+          "image": "//replacement/task_constructors:task-constructors-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_ctor_1055d10_body",
+            "xm1_ctor_1062090_body",
+            "xm1_ctor_1066280_body",
+            "xm1_ctor_10726f4_body",
+            "xm1_ctor_69f000_body",
+            "xm1_ctor_d0a238_body",
+            "xm1_ctor_d80d44_body",
+            "xm1_ctor_db63e0_body",
+            "xm1_ctor_dca604_body",
+            "xm1_ctor_ec5350_body",
+            "xm1_ctor_ed10b4_body",
+            "xm1_ctor_ed2b00_body",
+            "xm1_ctor_ef8c90_body"
+          ],
+          "contract": "replacement/task_constructors/task-constructors.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "task_constructors-02",
+      "shim": "21 `xm1_sac_*`, `xm1_create_queue`, `xm1_record_*`, `xm1_submit_task`, `xm1_usb_clear`, `xm1_diag_initialize` retained services",
+      "kind": "trampoline into retained stock",
+      "other_side": "stock subsystem constructors",
+      "owned": "no",
+      "removal": "those subsystems are owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/task_constructors:task-constructors-image",
+          "kind": "retained-import",
+          "symbols": [
+            "__ctor_1055d10_load",
+            "__ctor_1062090_load",
+            "__ctor_1066280_load",
+            "__ctor_10726f4_load",
+            "__ctor_69f000_load",
+            "__ctor_d0a238_load",
+            "__ctor_d80d44_load",
+            "__ctor_db63e0_load",
+            "__ctor_dca604_load",
+            "__ctor_ec5350_load",
+            "__ctor_ed10b4_load",
+            "__ctor_ed2b00_load",
+            "__ctor_ef8c90_load",
+            "xm1_create_queue",
+            "xm1_diag_initialize",
+            "xm1_record_finish",
+            "xm1_record_initialize",
+            "xm1_record_service",
+            "xm1_sac_1009974",
+            "xm1_sac_1039500",
+            "xm1_sac_1050efc",
+            "xm1_sac_1051f30",
+            "xm1_sac_1053854",
+            "xm1_sac_10546c0",
+            "xm1_sac_capture",
+            "xm1_sac_eecbf4",
+            "xm1_sac_empty",
+            "xm1_sac_f4c368",
+            "xm1_sac_optional",
+            "xm1_sac_prepare",
+            "xm1_sac_reset",
+            "xm1_submit_task",
+            "xm1_usb_clear"
+          ],
+          "contract": "replacement/task_constructors/task-constructors.ld",
+          "requirement": "21 `xm1_sac_*`, `xm1_create_queue`, `xm1_record_*`, `xm1_submit_task`, `xm1_usb_clear`, `xm1_diag_initialize` retained services. stock subsystem constructors. those subsystems are owned",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "task_constructors-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/task_constructors:task-constructors-image",
+          "kind": "publication",
+          "symbols": [
+            "__ctor_1055d10_code_end",
+            "__ctor_1055d10_end",
+            "__ctor_1055d10_start",
+            "__ctor_1062090_code_end",
+            "__ctor_1062090_end",
+            "__ctor_1062090_start",
+            "__ctor_1066280_code_end",
+            "__ctor_1066280_end",
+            "__ctor_1066280_start",
+            "__ctor_10726f4_code_end",
+            "__ctor_10726f4_end",
+            "__ctor_10726f4_start",
+            "__ctor_69f000_code_end",
+            "__ctor_69f000_end",
+            "__ctor_69f000_start",
+            "__ctor_d0a238_code_end",
+            "__ctor_d0a238_end",
+            "__ctor_d0a238_start",
+            "__ctor_d80d44_code_end",
+            "__ctor_d80d44_end",
+            "__ctor_d80d44_start",
+            "__ctor_db63e0_code_end",
+            "__ctor_db63e0_end",
+            "__ctor_db63e0_start",
+            "__ctor_dca604_code_end",
+            "__ctor_dca604_end",
+            "__ctor_dca604_start",
+            "__ctor_ec5350_code_end",
+            "__ctor_ec5350_end",
+            "__ctor_ec5350_start",
+            "__ctor_ed10b4_code_end",
+            "__ctor_ed10b4_end",
+            "__ctor_ed10b4_start",
+            "__ctor_ed2b00_code_end",
+            "__ctor_ed2b00_end",
+            "__ctor_ed2b00_start",
+            "__ctor_ef8c90_code_end",
+            "__ctor_ef8c90_end",
+            "__ctor_ef8c90_start"
+          ],
+          "contract": "replacement/task_constructors/task-constructors.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

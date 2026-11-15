@@ -1,0 +1,437 @@
+{
+  "unit": "kernel",
+  "summary": "The kernel crate: typed handles over the image's interface slots, with the per-core slot table as its first backend.",
+  "classification": "module",
+  "rows": [
+    {
+      "id": "kernel-01",
+      "shim": "`SlotTable` in `src/slot_table.rs` and `src/slot_table/messages.rs`",
+      "kind": "kernel interface slot",
+      "other_side": "the kernel bodies behind the root blocks at 0x96bd20 and 0x96bd24, the loader-A console writer 0x41a34, the error-callback word at 0x4089ea8c, the post hook at 0x4089ea94, task/queue classes and message-pool capacity words",
+      "owned": "partly",
+      "removal": "every image whose `.symbols` lists an `xm1_kernel` item also lists the kernel family entry for each slot offset in `SlotTable`'s table",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine",
+          "kind": "layout",
+          "symbols": [
+            "XM1_KERNEL_BOUNDARY"
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "`SlotTable` in `src/slot_table.rs` and `src/slot_table/messages.rs`. the kernel bodies behind the root blocks at 0x96bd20 and 0x96bd24, the loader-A console writer 0x41a34, the error-callback word at 0x4089ea8c, the post hook at 0x4089ea94, task/queue classes and message-pool capacity words. every image whose `.symbols` lists an `xm1_kernel` item also lists the kernel family entry for each slot offset in `SlotTable`'s table"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "layout",
+          "symbols": [
+            "XM1_KERNEL_BOUNDARY"
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "`SlotTable` in `src/slot_table.rs` and `src/slot_table/messages.rs`. the kernel bodies behind the root blocks at 0x96bd20 and 0x96bd24, the loader-A console writer 0x41a34, the error-callback word at 0x4089ea8c, the post hook at 0x4089ea94, task/queue classes and message-pool capacity words. every image whose `.symbols` lists an `xm1_kernel` item also lists the kernel family entry for each slot offset in `SlotTable`'s table"
+        },
+        {
+          "image": "//replacement/develop:develop-candidate",
+          "kind": "layout",
+          "symbols": [
+            "XM1_KERNEL_BOUNDARY"
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "`SlotTable` in `src/slot_table.rs` and `src/slot_table/messages.rs`. the kernel bodies behind the root blocks at 0x96bd20 and 0x96bd24, the loader-A console writer 0x41a34, the error-callback word at 0x4089ea8c, the post hook at 0x4089ea94, task/queue classes and message-pool capacity words. every image whose `.symbols` lists an `xm1_kernel` item also lists the kernel family entry for each slot offset in `SlotTable`'s table"
+        },
+        {
+          "image": "//replacement/property_service:property-service-image",
+          "kind": "layout",
+          "symbols": [
+            "XM1_KERNEL_BOUNDARY"
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "`SlotTable` in `src/slot_table.rs` and `src/slot_table/messages.rs`. the kernel bodies behind the root blocks at 0x96bd20 and 0x96bd24, the loader-A console writer 0x41a34, the error-callback word at 0x4089ea8c, the post hook at 0x4089ea94, task/queue classes and message-pool capacity words. every image whose `.symbols` lists an `xm1_kernel` item also lists the kernel family entry for each slot offset in `SlotTable`'s table"
+        },
+        {
+          "image": "//replacement/property_service:property-service-linked-image",
+          "kind": "layout",
+          "symbols": [
+            "XM1_KERNEL_BOUNDARY"
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "`SlotTable` in `src/slot_table.rs` and `src/slot_table/messages.rs`. the kernel bodies behind the root blocks at 0x96bd20 and 0x96bd24, the loader-A console writer 0x41a34, the error-callback word at 0x4089ea8c, the post hook at 0x4089ea94, task/queue classes and message-pool capacity words. every image whose `.symbols` lists an `xm1_kernel` item also lists the kernel family entry for each slot offset in `SlotTable`'s table"
+        },
+        {
+          "image": "//replacement/property_service:property-service-public-image",
+          "kind": "layout",
+          "symbols": [
+            "XM1_KERNEL_BOUNDARY"
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "`SlotTable` in `src/slot_table.rs` and `src/slot_table/messages.rs`. the kernel bodies behind the root blocks at 0x96bd20 and 0x96bd24, the loader-A console writer 0x41a34, the error-callback word at 0x4089ea8c, the post hook at 0x4089ea94, task/queue classes and message-pool capacity words. every image whose `.symbols` lists an `xm1_kernel` item also lists the kernel family entry for each slot offset in `SlotTable`'s table"
+        },
+        {
+          "image": "//replacement/settings_storage:settings-storage-image",
+          "kind": "layout",
+          "symbols": [
+            "XM1_KERNEL_BOUNDARY"
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "`SlotTable` in `src/slot_table.rs` and `src/slot_table/messages.rs`. the kernel bodies behind the root blocks at 0x96bd20 and 0x96bd24, the loader-A console writer 0x41a34, the error-callback word at 0x4089ea8c, the post hook at 0x4089ea94, task/queue classes and message-pool capacity words. every image whose `.symbols` lists an `xm1_kernel` item also lists the kernel family entry for each slot offset in `SlotTable`'s table"
+        },
+        {
+          "image": "//replacement/time_services:image",
+          "kind": "layout",
+          "symbols": [
+            "XM1_KERNEL_BOUNDARY"
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "`SlotTable` in `src/slot_table.rs` and `src/slot_table/messages.rs`. the kernel bodies behind the root blocks at 0x96bd20 and 0x96bd24, the loader-A console writer 0x41a34, the error-callback word at 0x4089ea8c, the post hook at 0x4089ea94, task/queue classes and message-pool capacity words. every image whose `.symbols` lists an `xm1_kernel` item also lists the kernel family entry for each slot offset in `SlotTable`'s table"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine",
+          "kind": "export",
+          "symbols": [
+            "xm1_kernel_enter_slot"
+          ],
+          "contract": "menu/recipe_bank_ram.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "export",
+          "symbols": [
+            "xm1_kernel_enter_slot"
+          ],
+          "contract": "menu/recipe_bank_ram.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        },
+        {
+          "image": "//replacement/develop:develop-candidate",
+          "kind": "export",
+          "symbols": [
+            "xm1_kernel_enter_slot"
+          ],
+          "contract": "replacement/develop/develop.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        },
+        {
+          "image": "//replacement/property_service:property-service-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_kernel_enter_slot"
+          ],
+          "contract": "replacement/property_service/property-service.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        },
+        {
+          "image": "//replacement/property_service:property-service-linked-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_kernel_enter_slot"
+          ],
+          "contract": "replacement/property_service/property-service-public.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        },
+        {
+          "image": "//replacement/property_service:property-service-public-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_kernel_enter_slot"
+          ],
+          "contract": "replacement/property_service/property-service-public.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_kernel_enter_slot"
+          ],
+          "contract": "replacement/settings_storage/custom-settings.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        },
+        {
+          "image": "//replacement/settings_storage:custom-settings-published-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_kernel_enter_slot"
+          ],
+          "contract": "replacement/settings_storage/custom-settings.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        },
+        {
+          "image": "//replacement/settings_storage:settings-storage-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_kernel_enter_slot"
+          ],
+          "contract": "replacement/settings_storage/settings-storage.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        },
+        {
+          "image": "//replacement/time_services:image",
+          "kind": "export",
+          "symbols": [
+            "xm1_kernel_enter_slot"
+          ],
+          "contract": "replacement/time_services/time-services.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "kernel-02",
+      "shim": "`CoreLock` in `src/slot_table.rs`",
+      "kind": "trampoline into retained stock",
+      "other_side": "the stock cross-core critical section at 0x7235d8 and its release 0x7236b0",
+      "owned": "partly",
+      "removal": "no stock caller of 0x7235d8 remains",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine",
+          "kind": "retained-entry",
+          "symbols": [
+            "XM1_KERNEL_BOUNDARY"
+          ],
+          "retained_targets": [
+            7484888,
+            7485104
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "`CoreLock` in `src/slot_table.rs`. the stock cross-core critical section at 0x7235d8 and its release 0x7236b0. no stock caller of 0x7235d8 remains"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "retained-entry",
+          "symbols": [
+            "XM1_KERNEL_BOUNDARY"
+          ],
+          "retained_targets": [
+            7484888,
+            7485104
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "`CoreLock` in `src/slot_table.rs`. the stock cross-core critical section at 0x7235d8 and its release 0x7236b0. no stock caller of 0x7235d8 remains"
+        },
+        {
+          "image": "//replacement/develop:develop-candidate",
+          "kind": "retained-entry",
+          "symbols": [
+            "XM1_KERNEL_BOUNDARY"
+          ],
+          "retained_targets": [
+            7484888,
+            7485104
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "`CoreLock` in `src/slot_table.rs`. the stock cross-core critical section at 0x7235d8 and its release 0x7236b0. no stock caller of 0x7235d8 remains"
+        },
+        {
+          "image": "//replacement/property_service:property-service-image",
+          "kind": "retained-entry",
+          "symbols": [
+            "XM1_KERNEL_BOUNDARY"
+          ],
+          "retained_targets": [
+            7484888,
+            7485104
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "`CoreLock` in `src/slot_table.rs`. the stock cross-core critical section at 0x7235d8 and its release 0x7236b0. no stock caller of 0x7235d8 remains"
+        },
+        {
+          "image": "//replacement/property_service:property-service-linked-image",
+          "kind": "retained-entry",
+          "symbols": [
+            "XM1_KERNEL_BOUNDARY"
+          ],
+          "retained_targets": [
+            7484888,
+            7485104
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "`CoreLock` in `src/slot_table.rs`. the stock cross-core critical section at 0x7235d8 and its release 0x7236b0. no stock caller of 0x7235d8 remains"
+        },
+        {
+          "image": "//replacement/property_service:property-service-public-image",
+          "kind": "retained-entry",
+          "symbols": [
+            "XM1_KERNEL_BOUNDARY"
+          ],
+          "retained_targets": [
+            7484888,
+            7485104
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "`CoreLock` in `src/slot_table.rs`. the stock cross-core critical section at 0x7235d8 and its release 0x7236b0. no stock caller of 0x7235d8 remains"
+        },
+        {
+          "image": "//replacement/settings_storage:settings-storage-image",
+          "kind": "retained-entry",
+          "symbols": [
+            "XM1_KERNEL_BOUNDARY"
+          ],
+          "retained_targets": [
+            7484888,
+            7485104
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "`CoreLock` in `src/slot_table.rs`. the stock cross-core critical section at 0x7235d8 and its release 0x7236b0. no stock caller of 0x7235d8 remains"
+        },
+        {
+          "image": "//replacement/time_services:image",
+          "kind": "retained-entry",
+          "symbols": [
+            "XM1_KERNEL_BOUNDARY"
+          ],
+          "retained_targets": [
+            7484888,
+            7485104
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "`CoreLock` in `src/slot_table.rs`. the stock cross-core critical section at 0x7235d8 and its release 0x7236b0. no stock caller of 0x7235d8 remains"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "kernel-03",
+      "shim": "Object construction and deletion in `src/slot_table/messages.rs`",
+      "kind": "trampoline into retained stock",
+      "other_side": "queue constructor 0x724cdc and deleter 0x724f08, binary-semaphore allocator 0x7247ac and deleter 0x724974, semaphore poll 0x724ad8",
+      "owned": "no",
+      "removal": "the kernel crate owns queue backing allocation and resource lifetime, and semaphore allocation/deletion/poll, in every linked image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/time_services:image",
+          "kind": "retained-entry",
+          "symbols": [
+            "XM1_KERNEL_BOUNDARY"
+          ],
+          "retained_targets": [
+            7489452,
+            7489908,
+            7490264,
+            7490780,
+            7491336
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "Object construction and deletion in `src/slot_table/messages.rs`. queue constructor 0x724cdc and deleter 0x724f08, binary-semaphore allocator 0x7247ac and deleter 0x724974, semaphore poll 0x724ad8. the kernel crate owns queue backing allocation and resource lifetime, and semaphore allocation/deletion/poll, in every linked image"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "kernel-04",
+      "shim": "`SemaphoreWord` in `src/slot_table/messages.rs`",
+      "kind": "trampoline into retained stock",
+      "other_side": "timed wait 0x724b68 and signal 0x724c00 for failed creation words",
+      "owned": "no",
+      "removal": "retained callers no longer preserve or use failed semaphore creation words",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/develop:develop-candidate",
+          "kind": "retained-entry",
+          "symbols": [
+            "XM1_KERNEL_BOUNDARY"
+          ],
+          "retained_targets": [
+            7490408,
+            7490560
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "`SemaphoreWord` in `src/slot_table/messages.rs`. timed wait 0x724b68 and signal 0x724c00 for failed creation words. retained callers no longer preserve or use failed semaphore creation words"
+        },
+        {
+          "image": "//replacement/time_services:image",
+          "kind": "retained-entry",
+          "symbols": [
+            "XM1_KERNEL_BOUNDARY"
+          ],
+          "retained_targets": [
+            7490408,
+            7490560
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "`SemaphoreWord` in `src/slot_table/messages.rs`. timed wait 0x724b68 and signal 0x724c00 for failed creation words. retained callers no longer preserve or use failed semaphore creation words"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "kernel-05",
+      "shim": "Dispatch bracket in `src/slot_table/messages.rs`",
+      "kind": "trampoline into retained stock",
+      "other_side": "dispatch disable 0x723efc and enable 0x723f7c",
+      "owned": "no",
+      "removal": "the kernel crate owns the dispatch wrappers and their error reporting in every linked image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/time_services:image",
+          "kind": "retained-entry",
+          "symbols": [
+            "XM1_KERNEL_BOUNDARY"
+          ],
+          "retained_targets": [
+            7487228,
+            7487356
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "Dispatch bracket in `src/slot_table/messages.rs`. dispatch disable 0x723efc and enable 0x723f7c. the kernel crate owns the dispatch wrappers and their error reporting in every linked image"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "kernel-06",
+      "shim": "Task construction and deletion in `src/slot_table/task.rs`",
+      "kind": "trampoline into retained stock",
+      "other_side": "task constructor 0x725dd8 and deletion 0x72612c, including its storage release 0x726098",
+      "owned": "no",
+      "removal": "the kernel crate owns task registration, stack allocation, activation, deletion and reservation release in every linked image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/time_services:image",
+          "kind": "retained-entry",
+          "symbols": [
+            "XM1_KERNEL_BOUNDARY"
+          ],
+          "retained_targets": [
+            7495128,
+            7495980
+          ],
+          "contract": "replacement/time_services/stock-interface.json",
+          "requirement": "Task construction and deletion in `src/slot_table/task.rs`. task constructor 0x725dd8 and deletion 0x72612c, including its storage release 0x726098. the kernel crate owns task registration, stack allocation, activation, deletion and reservation release in every linked image"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

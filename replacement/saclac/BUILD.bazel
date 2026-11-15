@@ -394,3 +394,19 @@ filegroup(
         ":stage-saclac",
     ],
 )
+
+filegroup(
+    name = "shim-catalog-data",
+    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + [
+        "BUILD.bazel",
+        "Replacement/Saclac/Artifact.hs",
+        "//replacement/saclac/config:src/stock.rs",
+        "//replacement/saclac/imaging:src/stock.rs",
+        "//replacement/saclac/lens_drive:src/stock.rs",
+        "//replacement/saclac/profile_geometry:src/stock/mod.rs",
+        "//replacement/saclac/profile_records:src/stock/mod.rs",
+        "//replacement/saclac/root:BUILD.bazel",
+        "//replacement/saclac/shared:src/stock.rs",
+    ],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)

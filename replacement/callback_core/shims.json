@@ -1,0 +1,57 @@
+{
+  "unit": "callback_core",
+  "summary": "The shared admission table, shape-typed registry and kernel-slot reader. The Power services leaf and the develop unit both compile it; the leaf re-exports it with the Power interrupt lock, develop with its own, and neither keeps a private extents table or kernel-slot reader.",
+  "classification": "module",
+  "rows": [
+    {
+      "id": "callback_core-01",
+      "shim": "`CallbackRegistry` in `src/lib.rs` and the nine image text extents in `IMAGES`/`EXCLUDED`/`ADMITTED`",
+      "kind": "callback registry for guest words",
+      "other_side": "stock image 4, 5 and 6 callback words and the owned registrants in the Power leaf, develop, display_scanout, application_nand and vendor_protocol",
+      "owned": "no",
+      "removal": "every stock callback word is replaced by an owned entry with a typed Rust signature",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/develop:develop-candidate",
+          "kind": "retained-entry",
+          "symbols": [
+            "xm1_develop_dispatch"
+          ],
+          "contract": "replacement/develop/develop.ld",
+          "requirement": "`CallbackRegistry` in `src/lib.rs` and the nine image text extents in `IMAGES`/`EXCLUDED`/`ADMITTED`. stock image 4, 5 and 6 callback words and the owned registrants in the Power leaf, develop, display_scanout, application_nand and vendor_protocol. every stock callback word is replaced by an owned entry with a typed Rust signature"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "callback_core-02",
+      "shim": "`KernelSlot::read` and `kernel_slot` in `src/lib.rs`",
+      "kind": "kernel interface slot",
+      "other_side": "the kernel interface block at 0x96bd20 read by the Power leaf and develop",
+      "owned": "no",
+      "removal": "the kernel interface is owned and entered through typed Rust functions",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/develop:develop-candidate",
+          "kind": "layout",
+          "symbols": [
+            "xm1_develop_dispatch"
+          ],
+          "contract": "replacement/develop/develop.ld",
+          "requirement": "`KernelSlot::read` and `kernel_slot` in `src/lib.rs`. the kernel interface block at 0x96bd20 read by the Power leaf and develop. the kernel interface is owned and entered through typed Rust functions"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

@@ -1,0 +1,201 @@
+{
+  "unit": "rtos_semaphore",
+  "summary": "The owned semaphore family.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "rtos_semaphore-01",
+      "shim": "`xm1_rtos_semaphore_*` exports placed by `sem-a.ld`/`sem-b.ld` at the stock entries",
+      "kind": "stock-ABI export",
+      "other_side": "stock semaphore callers",
+      "owned": "no",
+      "removal": "every semaphore caller is owned or migrated",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/rtos_semaphore/BUILD.bazel",
+          "requirement": "Standalone family qualification images are frozen reference artifacts; the current linked boundary is the platform aggregate, not a rebuilt standalone family image."
+        },
+        {
+          "image": "//replacement/rtos_platform:platform-a",
+          "kind": "export",
+          "symbols": [
+            "xm1_platform_veneer_semaphore_create",
+            "xm1_platform_veneer_semaphore_delete",
+            "xm1_platform_veneer_semaphore_interrupt_signal",
+            "xm1_platform_veneer_semaphore_poll",
+            "xm1_platform_veneer_semaphore_signal",
+            "xm1_platform_veneer_semaphore_timed_wait",
+            "xm1_platform_veneer_semaphore_wait",
+            "xm1_rtos_semaphore_admit",
+            "xm1_rtos_semaphore_block_body",
+            "xm1_rtos_semaphore_create",
+            "xm1_rtos_semaphore_create_body",
+            "xm1_rtos_semaphore_delete",
+            "xm1_rtos_semaphore_delete_body",
+            "xm1_rtos_semaphore_interrupt_signal",
+            "xm1_rtos_semaphore_poll",
+            "xm1_rtos_semaphore_signal",
+            "xm1_rtos_semaphore_signal_body",
+            "xm1_rtos_semaphore_timed_wait",
+            "xm1_rtos_semaphore_wait"
+          ],
+          "contract": "replacement/rtos_platform/carriers.json",
+          "requirement": "`xm1_rtos_semaphore_*` exports placed by `sem-a.ld`/`sem-b.ld` at the stock entries. stock semaphore callers. every semaphore caller is owned or migrated",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/rtos_platform:platform-b",
+          "kind": "export",
+          "symbols": [
+            "xm1_platform_veneer_semaphore_create",
+            "xm1_platform_veneer_semaphore_delete",
+            "xm1_platform_veneer_semaphore_interrupt_signal",
+            "xm1_platform_veneer_semaphore_poll",
+            "xm1_platform_veneer_semaphore_signal",
+            "xm1_platform_veneer_semaphore_timed_wait",
+            "xm1_platform_veneer_semaphore_wait",
+            "xm1_rtos_semaphore_admit",
+            "xm1_rtos_semaphore_block_body",
+            "xm1_rtos_semaphore_create",
+            "xm1_rtos_semaphore_create_body",
+            "xm1_rtos_semaphore_delete",
+            "xm1_rtos_semaphore_delete_body",
+            "xm1_rtos_semaphore_interrupt_signal",
+            "xm1_rtos_semaphore_poll",
+            "xm1_rtos_semaphore_signal",
+            "xm1_rtos_semaphore_signal_body",
+            "xm1_rtos_semaphore_timed_wait",
+            "xm1_rtos_semaphore_wait"
+          ],
+          "contract": "replacement/rtos_platform/carriers.json",
+          "requirement": "`xm1_rtos_semaphore_*` exports placed by `sem-a.ld`/`sem-b.ld` at the stock entries. stock semaphore callers. every semaphore caller is owned or migrated",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "rtos_semaphore-02",
+      "shim": "`xm1_semaphore_stock_acquire`, `_release`, `_notify`, `_dispatch` externs",
+      "kind": "C-ABI bridge between two owned units",
+      "other_side": "rtos_scheduler",
+      "owned": "yes",
+      "removal": "the semaphore crate links the scheduler crate directly and both sides compare with stock in one image",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/rtos_semaphore/BUILD.bazel",
+          "requirement": "Standalone family qualification images are frozen reference artifacts; the current linked boundary is the platform aggregate, not a rebuilt standalone family image."
+        },
+        {
+          "image": "//replacement/rtos_platform:platform-a",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_semaphore_stock_acquire"
+          ],
+          "contract": "replacement/rtos_platform/carriers.json",
+          "requirement": "`xm1_semaphore_stock_acquire`, `_release`, `_notify`, `_dispatch` externs. rtos_scheduler. the semaphore crate links the scheduler crate directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//replacement/rtos_platform:platform-b",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_semaphore_stock_acquire"
+          ],
+          "contract": "replacement/rtos_platform/carriers.json",
+          "requirement": "`xm1_semaphore_stock_acquire`, `_release`, `_notify`, `_dispatch` externs. rtos_scheduler. the semaphore crate links the scheduler crate directly and both sides compare with stock in one image"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "rtos_semaphore-03",
+      "shim": "`xm1_semaphore_stock_wait_release`, `_wait_cancel`, `_wait_enqueue`, `_wait_enqueue_timed` externs at A `0x44568`/`0x44744`/`0x44800`/`0x448e4` (B `0xd4528`/`0xd4704`/`0xd47c0`/`0xd48a4`)",
+      "kind": "C-ABI bridge between two owned units",
+      "other_side": "rtos_objects event-flag carriers",
+      "owned": "yes",
+      "removal": "the semaphore crate links the object crate directly and both sides compare with stock in one image",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/rtos_semaphore/BUILD.bazel",
+          "requirement": "Standalone family qualification images are frozen reference artifacts; the current linked boundary is the platform aggregate, not a rebuilt standalone family image."
+        },
+        {
+          "image": "//replacement/rtos_platform:platform-a",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_semaphore_stock_wait_release"
+          ],
+          "contract": "replacement/rtos_platform/carriers.json",
+          "requirement": "`xm1_semaphore_stock_wait_release`, `_wait_cancel`, `_wait_enqueue`, `_wait_enqueue_timed` externs at A `0x44568`/`0x44744`/`0x44800`/`0x448e4` (B `0xd4528`/`0xd4704`/`0xd47c0`/`0xd48a4`). rtos_objects event-flag carriers. the semaphore crate links the object crate directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//replacement/rtos_platform:platform-b",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_semaphore_stock_wait_release"
+          ],
+          "contract": "replacement/rtos_platform/carriers.json",
+          "requirement": "`xm1_semaphore_stock_wait_release`, `_wait_cancel`, `_wait_enqueue`, `_wait_enqueue_timed` externs at A `0x44568`/`0x44744`/`0x44800`/`0x448e4` (B `0xd4528`/`0xd4704`/`0xd47c0`/`0xd48a4`). rtos_objects event-flag carriers. the semaphore crate links the object crate directly and both sides compare with stock in one image"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "rtos_semaphore-04",
+      "shim": "`xm1_semaphore_stock_mask`, `_restore` externs",
+      "kind": "trampoline into retained stock",
+      "other_side": "retained mask/restore helpers",
+      "owned": "no",
+      "removal": "the RTOS platform owns those helpers",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/rtos_semaphore/BUILD.bazel",
+          "requirement": "Standalone family qualification images are frozen reference artifacts; the current linked boundary is the platform aggregate, not a rebuilt standalone family image."
+        },
+        {
+          "image": "//replacement/rtos_platform:platform-a",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_semaphore_stock_mask"
+          ],
+          "contract": "replacement/rtos_platform/carriers.json",
+          "requirement": "`xm1_semaphore_stock_mask`, `_restore` externs. retained mask/restore helpers. the RTOS platform owns those helpers"
+        },
+        {
+          "image": "//replacement/rtos_platform:platform-b",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_semaphore_stock_mask"
+          ],
+          "contract": "replacement/rtos_platform/carriers.json",
+          "requirement": "`xm1_semaphore_stock_mask`, `_restore` externs. retained mask/restore helpers. the RTOS platform owns those helpers"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}
