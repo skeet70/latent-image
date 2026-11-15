@@ -211,10 +211,10 @@ checkGuestArtifacts package@(Package (Address base) runtime _ _ _ _ _ mutable) a
   case actual of
     (_,observed) : publications -> do
       ensure (publications == drop 1 (guestArtifacts package)) "guest publication bytes differ from identified package"
-      let fields = sort [(fromIntegral (address - base) + offset, count) | (kind,Address address) <- mutable, (offset,count) <- scalarFields kind]
+      let fields = sort [(fromIntegral (storageAddress - base) + offset, count) | (kind,Address storageAddress) <- mutable, (offset,count) <- scalarFields kind]
           stable start [] = B.drop start observed == B.drop start runtime
           stable start ((offset,count):rest) = B.take (offset-start) (B.drop start observed) == B.take (offset-start) (B.drop start runtime) && stable (offset+count) rest
-          bytes kind = case [B.take 128 (B.drop (fromIntegral (address-base)) observed) | (found,Address address) <- mutable, kind == found] of
+          bytes kind = case [B.take 128 (B.drop (fromIntegral (storageAddress-base)) observed) | (found,Address storageAddress) <- mutable, kind == found] of
             [value] -> value
             _ -> B.empty
       ensure (stable 0 fields) "guest immutable runtime bytes differ from identified package"
@@ -228,10 +228,10 @@ scalarFields MailboxStorage = [(0,100)]
 -- The completed nonce is the peer completion callback's final store.
 checkInstallerTerminal :: B.ByteString -> B.ByteString -> Either String ()
 checkInstallerTerminal rendezvous mailbox = do
-  let word bytes offset = fromIntegral (B.index bytes offset) + 256 * fromIntegral (B.index bytes (offset+1))
+  let scalarWord bytes offset = fromIntegral (B.index bytes offset) + 256 * fromIntegral (B.index bytes (offset+1))
         + 65536 * fromIntegral (B.index bytes (offset+2)) + 16777216 * fromIntegral (B.index bytes (offset+3)) :: Word32
-      m = word mailbox
-      r = word rendezvous
+      m = scalarWord mailbox
+      r = scalarWord rendezvous
       nonce = m 8
       peer = m 44
   ensure (B.length rendezvous == 128 && B.length mailbox == 128) "installer scalar report length differs"
