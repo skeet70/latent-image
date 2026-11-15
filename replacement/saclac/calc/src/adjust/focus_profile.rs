@@ -89,7 +89,7 @@ pub struct KindInputs {
 
 /// The level-step band a level falls in: 0 for level 0, else the step below the first of steps 2
 /// to 10 above it, 10 from step 10 up (0x772ff8).
-pub(crate) fn level_band(properties: &mut impl Properties, level: i16) -> u8 {
+pub fn level_band(properties: &mut impl Properties, level: i16) -> u8 {
     if level == 0 {
         return 0;
     }
