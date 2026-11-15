@@ -34,6 +34,12 @@ static mut RECEIVED: u32 = 0;
 #[link_section = ".rodata.XM1_REQUIRES_LENS_SAFETY_CONTRACT"]
 pub static XM1_REQUIRES_LENS_SAFETY_CONTRACT: u32 = 1;
 
+#[cfg(target_arch = "arm")]
+#[used]
+#[no_mangle]
+pub static XM1_KERNEL_BOUNDARY: xm1_kernel::slot_table::Boundary<7, 26> =
+    xm1_kernel::slot_table::FULL_BOUNDARY;
+
 struct DriverPorts;
 
 impl crate::driver::Ports for DriverPorts {

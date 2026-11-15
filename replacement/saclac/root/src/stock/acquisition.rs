@@ -6,8 +6,8 @@
 
 use xm1_focus_measurement_round::acquisition::ports::{
     AcquisitionBlock, AcquisitionSettings, Branch, ExposureRecordUpdate, GridInputs, GridReference, PositionInputs,
-    ProgramChoice, ProgramTarget, Range, RangeInputs, RateNotice, RateRecord, ReleaseSettings, SelectionNotice, SelectionPosition,
-    SelectionRecord, ShotContext, StatisticsBuffer, TargetInputs,
+    ProgramChoice, RateNotice, RateRecord, ReleaseSettings, SelectionNotice, SelectionPosition,
+    SelectionRecord, StatisticsBuffer,
 };
 use xm1_focus_measurement_round::auxiliary::ResourceIndex;
 use xm1_focus_measurement_round::pipeline::{HistoryStatistics, PipelineWord, Statistics, TimingWord};
@@ -15,7 +15,6 @@ use xm1_focus_measurement_round::profile::GridCell;
 use xm1_focus_measurement_round::record::TraceMark;
 use xm1_focus_measurement_round::stock::{SNAPSHOT_BYTES, S1_SAMPLE_BYTES};
 use xm1_saclac_interface::calc::{AcquisitionGrid, SharedAddress};
-use xm1_saclac_interface::round_acquisition::SavedSelection;
 use xm1_saclac_interface::stock::round_acquisition::{SelectionRegion, LIVE_REGION, S1_REGION};
 use xm1_saclac_interface::stock::{record_handle_word, StockCallbackWord};
 use xm1_saclac_interface::{Completion, RecordHandle};
@@ -300,59 +299,6 @@ pub fn acquisition_gain_step(machine: &impl Machine, adjustment: u32) -> u32 { e
 /// 0xef7820.
 pub fn kind_decade(machine: &impl Machine, kind: u32) -> u32 { enter(machine, 0xef_7820, &[word(kind)]) }
 
-/// 0xf797f0 with the lens reference, else 0xf79b94: the target block at the buffer's start (base
-/// +0, level +2, exposure +4, gain level +8 preset, second +0xa, adjustment +0xc) and the offset
-/// halfword after it, in and out; the entry returns the adjustment flag.
-pub fn program_target(machine: &impl Machine, inputs: &TargetInputs) -> ProgramTarget {
-    const OFFSET: usize = 0x10;
-    let mut buffer = Aligned([0; OFFSET + 2]);
-    inputs.gain_level.put(&mut buffer, 8);
-    inputs.offset.put(&mut buffer, OFFSET);
-    let lead = [word(inputs.program.0), signed(inputs.reference as i16), word(inputs.lens.0), signed(inputs.level), signed(inputs.gain_offset)];
-    let adjustment_flag = match inputs.lens_reference {
-        Some(reference) => {
-            let arguments = [lead[0], lead[1], lead[2], lead[3], lead[4], word(reference), Argument::Buffer(0), Argument::Buffer(OFFSET)];
-            machine.enter_with(0xf7_97f0, &arguments, &mut buffer)
-        }
-        None => {
-            let arguments = [lead[0], lead[1], lead[2], lead[3], lead[4], Argument::Buffer(0), Argument::Buffer(OFFSET)];
-            machine.enter_with(0xf7_9b94, &arguments, &mut buffer)
-        }
-    };
-    ProgramTarget {
-        adjustment_flag,
-        base: u16::get(&buffer, 0),
-        level: u16::get(&buffer, 2),
-        exposure: PipelineWord::get(&buffer, 4),
-        gain_level: u16::get(&buffer, 8),
-        second: u16::get(&buffer, 0xa),
-        adjustment: u16::get(&buffer, 0xc),
-        offset: u16::get(&buffer, OFFSET),
-    }
-}
-
-/// 0xf7a0cc: `lower` is the program's lower bound 0xf7809c gives its callers; the level, first
-/// and second halfwords are in and out, the code and selected byte out, and the timing returned.
-pub fn program_range(machine: &impl Machine, inputs: &RangeInputs, lower: u32) -> Range {
-    let mut buffer = Aligned([0; 10]);
-    inputs.level.put(&mut buffer, 0);
-    inputs.first.put(&mut buffer, 2);
-    inputs.second.put(&mut buffer, 4);
-    let arguments = [
-        word(inputs.program.0), word(inputs.exposure.0), word(lower), Argument::Buffer(0), Argument::Buffer(2), Argument::Buffer(4),
-        signed(inputs.adjustment), word(inputs.mode), word(inputs.argument), word(inputs.forced), word(inputs.primary),
-        word(inputs.lens), word(inputs.alternate), word(inputs.request), word(0), Argument::Buffer(6), Argument::Buffer(8),
-    ];
-    let timing = machine.enter_with(0xf7_a0cc, &arguments, &mut buffer);
-    Range {
-        timing: TimingWord(timing),
-        level: u16::get(&buffer, 0),
-        first: u16::get(&buffer, 2),
-        second: u16::get(&buffer, 4),
-        code: u16::get(&buffer, 6),
-        selected: buffer[8],
-    }
-}
 
 /// 0x746804.
 pub fn lens_step(machine: &impl Machine, step: u32) -> u32 { enter(machine, 0x74_6804, &[word(step)]) }
@@ -362,10 +308,6 @@ pub fn step_ratio(machine: &impl Machine, code: u16, selector: u8) -> u32 {
     enter(machine, 0x100_7e44, &[word(u32::from(code)), word(u32::from(selector))])
 }
 
-/// 0xfab250.
-pub fn grid_count(machine: &impl Machine, selection: u32, mode: u32, adjustment: u32, grid_kind: u32) -> u32 {
-    enter(machine, 0xfa_b250, &[word(selection), word(mode), word(adjustment), word(grid_kind)])
-}
 
 
 /// 0xfa7bb8 over the five input words and the grid.
@@ -419,37 +361,12 @@ pub fn capture_selection_position(machine: &impl Machine, setting: SharedAddress
     SelectionPosition { level: machine.read_u16(setting.0 + 0x1e), flag: machine.read_u32(setting.0 + 0x28) }
 }
 
-/// 0xf4dd50.
-pub fn copy_rate_grid_source(machine: &impl Machine, buffer: StatisticsBuffer) { enter(machine, 0xf4_dd50, &[word(buffer.0)]); }
-
-/// 0xfa95b8 with the pair in and out.
-pub fn rate_pair(machine: &impl Machine, record: RecordHandle, result: SharedAddress, flag: u32, pair: &mut [u32; 2]) {
-    let mut buffer = Aligned([0; 8]);
-    [0, 4].put(&mut buffer, pair);
-    let arguments = [handle(record), word(result.0), word(flag), Argument::Buffer(0), Argument::Buffer(4)];
-    machine.enter_with(0xfa_95b8, &arguments, &mut buffer);
-    *pair = [0, 4].get(&buffer);
-}
-
-/// 0xfa8520.
-pub fn rate_flag(machine: &impl Machine, record: RecordHandle, flag: u32) { enter(machine, 0xfa_8520, &[handle(record), word(flag)]); }
-
-/// 0xfa91b0.
-pub fn draw_rate(machine: &impl Machine, result: SharedAddress, flag: u32) { enter(machine, 0xfa_91b0, &[word(result.0), word(flag)]); }
 
 /// The owned rate/status renderer formerly at0xf521d8.
 pub fn draw_rate_status(machine: &impl Machine, level: u16, status: u32, flag: u32) {
     crate::shot_absorb_diagnostics::draw_rate_status(machine, crate::shot_absorb_diagnostics::RateTenths(level), xm1_saclac_calc::diagnostics::RateStatus::from_code(status), flag != 0);
 }
 
-/// 0xfaa7b0 over a copy of the rate record: the word and halfword it writes out.
-pub fn rate_position(machine: &impl Machine, record: RecordHandle, rate: &[u8; 40]) -> (u32, u16) {
-    let mut buffer = Aligned([0; 48]);
-    buffer[..40].copy_from_slice(rate);
-    let arguments = [handle(record), Argument::Buffer(0), Argument::Buffer(40), Argument::Buffer(44)];
-    machine.enter_with(0xfa_a7b0, &arguments, &mut buffer);
-    (u32::get(&buffer, 40), u16::get(&buffer, 44))
-}
 
 /// 0xf1c8fc over a copy of the rate record, with the level, second, word and the four levels in
 /// and out.
@@ -561,17 +478,6 @@ pub fn shot_reference_level(machine: &impl Machine) -> u16 { machine.read_u16(0x
 
 pub fn shot_selection_word(machine: &impl Machine) -> u32 { machine.read_u32(0x16a_d738) }
 
-/// 0xf162e4 builds the selection defaults at 0x16bfc30 (0xf3691c); the window reads their first
-/// word, the words at +8..+0x10 and the byte at +0x216.
-pub fn prepare_selection_defaults(machine: &impl Machine, record: RecordHandle) -> ShotContext {
-    const DEFAULTS: u32 = 0x16b_fc30;
-    enter(machine, 0xf1_62e4, &[word(DEFAULTS), handle(record), word(0), word(1), word(0)]);
-    ShotContext {
-        word: machine.read_u32(DEFAULTS),
-        words: [8, 12, 16].map(|offset| machine.read_u32(DEFAULTS + offset)),
-        byte: read_bytes::<1>(machine, DEFAULTS + 0x216)[0],
-    }
-}
 
 pub const fn region(branch: Branch) -> SelectionRegion {
     match branch {
@@ -589,36 +495,17 @@ pub const fn grid_address(branch: Branch) -> SharedAddress {
     }
 }
 
-/// 0xf1fc5c restores the shot's saved setting over the branch's.
-pub fn restore_selection_setting(machine: &impl Machine, branch: Branch, lens: ResourceIndex) {
-    enter(machine, 0xf1_fc5c, &[word(region(branch).setting.0), word(lens.0)]);
+
+/// The saved setting prefix (0xf1fbe8) uses the platform's byte-copy primitive.
+pub fn write_saved_settings(machine: &impl Machine, record: SharedAddress) {
+    enter(machine, 0x74_213c, &[word(0x16b_510c), word(record.0), word(0x9c)]);
 }
-
-/// 0xf17abc copies the shot's reference into the branch's copy.
-pub fn copy_reference_backup(machine: &impl Machine, branch: Branch) { enter(machine, 0xf1_7abc, &[word(region(branch).shot_copy.0)]); }
-
-/// 0xf1fbe8.
-pub fn write_saved_settings(machine: &impl Machine, record: SharedAddress) { enter(machine, 0xf1_fbe8, &[word(record.0)]); }
-
-/// 0xf1d134.
-pub fn copy_selection_to_saved(machine: &impl Machine, record: SharedAddress) { enter(machine, 0xf1_d134, &[word(record.0)]); }
 
 /// 0xf1d0f4.
 pub fn restore_selection_if_enabled(machine: &impl Machine, record: RecordHandle, position: u32) {
     enter(machine, 0xf1_d0f4, &[handle(record), word(position)]);
 }
 
-/// 0xf17af8(1).
-pub fn apply_selection_value_change(machine: &impl Machine) { enter(machine, 0xf1_7af8, &[word(1)]); }
-
-/// 0xf1d5d4.
-pub fn save_selection(machine: &impl Machine, position: u32, saved: &SavedSelection, lens_position: u32) {
-    let arguments = [
-        word(position), word(saved.index), word(u32::from(saved.bytes[0])), word(u32::from(saved.bytes[1])),
-        word(u32::from(saved.flag)), word(saved.word), word(lens_position), signed(saved.level),
-    ];
-    enter(machine, 0xf1_d5d4, &arguments);
-}
 
 /// 0x7407b0.
 pub fn refresh_hardware_state(machine: &impl Machine) { enter(machine, 0x74_07b0, &[]); }

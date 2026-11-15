@@ -422,12 +422,12 @@ impl SceneRecognition {
         self.saved_features = Features::ZERO;
         self.saved_capture = Recognition::AUTO;
         self.live_trace = Trace::ZERO;
-        self.live_trace.hints = History::empty();
+        self.live_trace.hints.clear();
         self.capture_trace = CaptureTrace::ZERO;
-        self.references = History::empty();
-        self.primary_codes = History::empty();
-        self.secondary_codes = History::empty();
-        self.changes = History::empty();
+        self.references.clear();
+        self.primary_codes.clear();
+        self.secondary_codes.clear();
+        self.changes.clear();
         self.comparisons = [ComparisonRecord::ZERO; 5];
         memory.fill(stock::LOG, stock::LOG_BYTES as usize, 0);
     }

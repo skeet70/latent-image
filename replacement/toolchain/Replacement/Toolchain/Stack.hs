@@ -57,6 +57,24 @@ spWrite instruction = case instruction of
   A.StoreMultiple _ base _ writeback _ -> base == A.sp && writeback
   _ -> False
 
+-- A leaf exit before a shrink-wrapped frame leaves SP unchanged.
+framePreludeInstruction :: A.Instruction -> Bool
+framePreludeInstruction instruction = not (spWrite instruction) && case instruction of
+  A.Branch {} -> False
+  A.BranchExchange condition False register -> condition /= A.Cond 14 && register == A.lr
+  A.BranchExchange {} -> False
+  A.Rejected {} -> False
+  A.Load _ _ _ destination _ _ _ -> destination /= A.pc && destination /= A.sp
+  A.LoadMultiple _ _ _ _ registers -> A.pc `notElem` registers && A.sp `notElem` registers
+  A.DataProcessing _ _ _ destination _ _ -> destination /= A.pc
+  A.MoveWide _ destination _ -> destination /= A.pc && destination /= A.sp
+  A.MoveTop _ destination _ -> destination /= A.pc && destination /= A.sp
+  A.ReadStatus _ destination -> destination /= A.pc && destination /= A.sp
+  A.ZeroExtend _ destination _ _ _ -> destination /= A.pc && destination /= A.sp
+  A.Multiply _ destination _ _ _ -> destination /= A.pc && destination /= A.sp
+  A.Compute _ destinations -> all (`notElem` destinations) [A.pc, A.sp]
+  _ -> True
+
 frameBytes :: Image -> F.Symbol -> Either Failure Int
 frameBytes image symbol = do
   let start = F.symbolAddress symbol
@@ -68,7 +86,8 @@ frameBytes image symbol = do
     (Left (InvalidFunction (Guest start)))
   instructions <- traverse (fmap (uncurry A.decode) . instructionAt)
     [address | address <- [start, start + 4 .. fromInteger end - 4], S.member (Guest address) (imageInstructions image)]
-  let prologue = takeWhile prologueInstruction instructions
+  let (_, framed) = span (\instruction -> not (prologueInstruction instruction) && framePreludeInstruction instruction) instructions
+      prologue = takeWhile prologueInstruction framed
       pushed = sum [4 * length registers | A.StoreMultiple (A.Cond 14) base A.DecrementBefore True registers <- prologue, base == A.sp]
       adjusted = sum [fromIntegral count | A.DataProcessing (A.Cond 14) A.SUB False destination base (A.Immediate count) <- prologue, destination == A.sp, base == A.sp]
   if null prologue && any spWrite instructions then Left (FrameNotDerivable (Guest start))

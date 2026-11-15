@@ -1,4 +1,5 @@
 use core::cell::RefCell;
+use xm1_power_lifecycle::{record_address_space::{GuestAddressSpace, MemoryError, RecordContext}, record_profile_accessors as profile, record_scan_messages};
 use xm1_saclac_imaging::capture::{detection::{self, Crop, CropRequest, Detection, DetectionPorts, Extent, Point, Rect}, ports::Adjustments, AdjustmentKey};
 use xm1_saclac_interface::{calc::SharedAddress, stock::record_handle_word, RecordHandle};
 use xm1_saclac_profile_geometry::{controller::{queries::centred_rectangle, windows::CropInput, ProfileGeometry, Tables}, geometry::AreaSource, memory::Memory, ports::Ports, profile::{ProfileHandle, Rectangle}};
@@ -12,14 +13,14 @@ const PRIMARY_DETECTION: u32 = 0x0169_dd40;
 const SECONDARY_DETECTION: u32 = 0x0169_d920;
 const LIST_WORDS: u32 = 0x414 / 4;
 
-/// f51b50's exact query/refresh order at x70view 55436fc85c0560dd252b0410af6f2427fe198cd3.
-pub fn source_offset(machine: &impl Machine, record: RecordHandle) -> u32 {
-    let value = machine.enter(0x128_7354, &[]);
-    let record = record_handle_word(record) as usize;
-    if machine.enter(0x9e_b104, &[record]) == 1 && machine.enter(0x9e_b6ec, &[record]) == 6 {
-        machine.enter(0x9e_d8e4, &[record]);
+/// f51b50's owned profile queries in stock order.
+pub fn source_offset<M: GuestAddressSpace, E>(context: &mut RecordContext<M, E>, record: RecordHandle) -> Result<u32, MemoryError> {
+    let record = record_handle_word(record);
+    let value = record_scan_messages::helper_f4f16c(context, record, 0)?;
+    if profile::helper_74e5c0(context, record)? == 1 && profile::helper_74eba8(context, record)? == 6 {
+        profile::helper_750c00(context, record)?;
     }
-    value
+    Ok(value)
 }
 
 struct DetectionView<'a, M, G, P, T> {
@@ -101,8 +102,8 @@ mod native {
         let (services, geometry) = super::super::composition::area_services();
         let mut machine = Guest;
         let record = xm1_saclac_interface::stock::record_handle_from_a2(profile);
-        let offset = source_offset(&machine, record);
-        let (second, third, ratio) = unsafe { access(|context| Ok((
+        let (offset, second, third, ratio) = unsafe { access(|context| Ok((
+            source_offset(context, record)?,
             core_record::record_profile_slotfields::helper_7527f8(context, profile)?,
             core_record::record_profile_slotfields::helper_752890(context, profile)?,
             core_record::record_profile_accessors::helper_74ec30(context, profile)?,

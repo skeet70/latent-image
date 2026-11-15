@@ -8,7 +8,7 @@ use xm1_saclac_profile_records::{Bytes, ProfileRecords};
 
 use crate::adjust::configuration::*;
 use crate::exposure::fakes::{handle, World};
-use crate::exposure::ports::Property;
+use crate::exposure::ports::{Property, StockMemory};
 use crate::stock::adjust as stock;
 
 impl ProfileStore for World {
@@ -177,7 +177,7 @@ fn a_live_interval_count_above_ten_sums_the_ten_intervals() {
 
 fn classify(configuration: &mut Configuration, world: &mut World, source: MotionSource) -> Library {
     let mut library = Library::default();
-    configuration.classify_motion(world, &mut library, handle(), source);
+    configuration.classify_motion(world, |_, record| library.publish_selection(record), handle(), source);
     library
 }
 
@@ -349,9 +349,7 @@ fn the_diagnostics_store_every_value_in_order() {
     classify(&mut configuration, &mut world, MotionSource::Live);
     world.stores.clear();
     let mut library = Library::default();
-    configuration.export_diagnostics(&mut world, &mut library, &grids);
-    assert_eq!(library.calls, ["snapshot"]);
-    assert_eq!(world.stores.len(), 2 * GRID_CELLS + 9 + HISTORY + 2 + HISTORY + 1);
+    configuration.export_diagnostics(&mut world, |_| library.snapshot_diagnostics(), |_| grids);
     let word = |world: &World, at: u32| world.u32_at(SharedAddress(at));
     assert_eq!(world.stores[0], (0x5ffe_6f84, 4, 100));
     assert_eq!(world.stores[1], (0x5ffe_7384, 4, u32::MAX - 1));
@@ -361,6 +359,18 @@ fn the_diagnostics_store_every_value_in_order() {
     assert_eq!((word(&world, 0x5ffe_77a8), word(&world, 0x5ffe_77ac)), (1, 100));
     assert_eq!((word(&world, 0x5ffe_7800), word(&world, 0x5ffe_7804)), (0, 0xffff));
     assert_eq!(world.stores.last(), Some(&(0x5ffe_7850, 4, 0)));
+}
+
+#[test]
+fn diagnostics_read_grid_storage_after_the_library_snapshot() {
+    let mut world = World::default();
+    let input = SharedAddress(0x2000);
+    world.put_u16(input, 17);
+    Configuration::default().export_diagnostics(&mut world,
+        |memory| memory.put_u16(input, (-9_i16) as u16),
+        |memory| GridPair { current: [memory.read_u16(input) as i16; GRID_CELLS], previous: [3; GRID_CELLS] });
+    assert_eq!(world.u32_at(SharedAddress(0x5ffe_6f84)), (-9_i32) as u32);
+    assert_eq!(world.u32_at(SharedAddress(0x5ffe_7384)), 3);
 }
 
 #[test]

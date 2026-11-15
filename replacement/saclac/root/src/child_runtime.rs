@@ -20,7 +20,7 @@ type Geometry<M, P, I, T> = ProfileGeometry<GeometryMemory<M>, GeometryBindings<
 /// All child engines survive queue dispatch. The ShotPorts owner is shared with profile views.
 pub struct ChildRuntime<'s, M: Machine + Clone, R: Memory, E: StockEntries, P, I, T, S, X> {
     services: &'s RefCell<Services<M, R, E, P>>,
-    measurement: RefCell<MeasurementRuntime<'s, M, R, E, P, I, T>>,
+    measurement: RefCell<MeasurementRuntime<'s, M, R, E, P, I, T, S, X>>,
     acquisition: RefCell<S1Acquisition>,
     search: RefCell<S1Search>,
     session: SearchSession<'s, M, R, E, P>,
@@ -35,7 +35,7 @@ impl<'s, M: Machine + Clone, R: Memory, E: StockEntries,
     pub fn new(services: &'s RefCell<Services<M, R, E, P>>, geometry: &'s RefCell<Geometry<M, P, I, T>>, recognition: &'s RefCell<SceneRecognition>, live_record: &'s RecordBinding, s1_record: &'s RecordBinding, shot_ports: &'s RefCell<ShotPorts<S, X>>) -> Self {
         Self {
             services,
-            measurement: RefCell::new(MeasurementRuntime::new(services, geometry, recognition, live_record)),
+            measurement: RefCell::new(MeasurementRuntime::new(services, geometry, recognition, live_record, shot_ports)),
             acquisition: RefCell::new(S1Acquisition::new()),
             search: RefCell::new(S1Search::new()),
             session: SearchSession::new(services, s1_record),
@@ -59,7 +59,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries,
                 }
                 dispatch.outcome
             }
-            ChildRequest::S1Acquisition(event) => self.acquisition.borrow_mut().handle(event, &mut *self.services.borrow_mut()),
+            ChildRequest::S1Acquisition(event) => self.measurement.borrow().handle_s1_acquisition(&mut self.acquisition.borrow_mut(), event),
             ChildRequest::S1Search(event) => self.session.handle_s1(&mut self.search.borrow_mut(), event),
             ChildRequest::LensBringUp { message, record } => self.lens.borrow_mut().bring_up(message, record, &mut LensPorts(self.services)),
             ChildRequest::LensLive(event) => self.lens.borrow_mut().live(event, &mut LensPorts(self.services)),

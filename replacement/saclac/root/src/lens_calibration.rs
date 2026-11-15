@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
 
-use xm1_saclac_calc::adjust::{lens::{BiasTable, LensConfiguration, LensControl, LensSteps, Step, StepRequest}, motion::ports::LensTables, profile_adjustment::{LensSteps as ProfileSteps, StepTable}};
-use xm1_saclac_config::{curve, numeric::FloatLog};
+use xm1_saclac_calc::adjust::{lens::{BiasTable, LensConfiguration, LensControl, LensSteps, Step, StepRequest}, motion::ports::LensTables, profile_adjustment::{LensSteps as ProfileSteps, StepRatios, StepTable}};
+use xm1_saclac_config::{curve, numeric::FloatLog, table::{self, Bounds, Row}};
 use xm1_saclac_profile_records::{Memory, StockEntries};
 use xm1_saclac_search_bindings::calc::Tables;
 use xm1_saclac_shared::stock::{Argument::{Buffer, Word}, Machine};
-use crate::{acquisition::Calculations, services::Services, stock::acquisition::Aligned};
+use crate::{services::Services, stock::acquisition::{self as acquisition, Aligned}};
 
 pub(crate) struct Log<'a, M>(pub(crate) &'a M);
 impl<M: Machine> FloatLog for Log<'_, M> {
@@ -32,9 +32,18 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> LensSteps for Services<M
     fn travel_distance(&mut self, resource: u32, index: u32, travel: i16) -> u16 { Tables(&self.machine).travel_distance(resource, index, travel) }
 }
 impl<M: Machine + Clone, R: Memory, E: StockEntries, P> ProfileSteps for Services<M, R, E, P> {
-    fn near_step(&mut self, reference: u32, limit: u16, which: StepTable) -> u32 { Calculations(&self.machine, &self.stock).near_step(reference, limit, which) }
-    fn far_step(&mut self, reference: u32, limit: u16, which: StepTable) -> u32 { Calculations(&self.machine, &self.stock).far_step(reference, limit, which) }
-    fn lens_step(&mut self, step: u32) -> u32 { Calculations(&self.machine, &self.stock).lens_step(step) }
+    fn near_step(&mut self, reference: u32, limit: u16, which: StepTable) -> u32 {
+        let which = match which { StepTable::Standard => Bounds::Primary, StepTable::Lens => Bounds::Selected };
+        table::lower_step(&self.stock, Row(reference), xm1_saclac_config::stock::decode_step_limit(u32::from(limit)), which).0
+    }
+    fn far_step(&mut self, reference: u32, limit: u16, which: StepTable) -> u32 {
+        let which = match which { StepTable::Standard => Bounds::Primary, StepTable::Lens => Bounds::Selected };
+        table::upper_step(&self.stock, Row(reference), xm1_saclac_config::stock::decode_step_limit(u32::from(limit)), which).0
+    }
+    fn lens_step(&mut self, step: u32) -> u32 { acquisition::lens_step(&self.machine, step) }
+}
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P> StepRatios for Services<M, R, E, P> {
+    fn step_ratio(&mut self, code: u16, selector: u8) -> u32 { acquisition::step_ratio(&self.machine, code, selector) }
 }
 impl<M: Machine + Clone, R: Memory, E: StockEntries, P> LensTables for Services<M, R, E, P> {
     fn channel_positions(&mut self, lens: u32, step: u32, reference: u32, mode: u32) -> [i16; 2] {

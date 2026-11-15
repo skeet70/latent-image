@@ -114,6 +114,44 @@ struct WatchDecl {
 }
 
 #[derive(Debug, Deserialize)]
+struct TaskStackDecl {
+    cursor: String,
+    allocation: String,
+}
+
+struct TaskStackRead {
+    cursor: u32,
+    allocation: u32,
+}
+
+#[derive(Serialize)]
+struct TaskStackSnapshot {
+    cursor_address: Address,
+    cursor_word: u32,
+    allocation_address: Address,
+    base: u32,
+    bytes: u32,
+    active: u32,
+}
+
+impl TaskStackRead {
+    fn snapshot(&self, machine: &Machine) -> Result<TaskStackSnapshot, String> {
+        let mut cursor = [0; 4];
+        let mut allocation = [0; 12];
+        machine.session.board.read_memory(0, u64::from(self.cursor), &mut cursor)?;
+        machine.session.board.read_memory(0, u64::from(self.allocation), &mut allocation)?;
+        Ok(TaskStackSnapshot {
+            cursor_address: Address(self.cursor),
+            cursor_word: read_u32(&cursor, 0),
+            allocation_address: Address(self.allocation),
+            base: read_u32(&allocation, 0),
+            bytes: read_u32(&allocation, 4),
+            active: read_u32(&allocation, 8),
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
 struct Sites {
     schema: u32,
     task_id: u8,
@@ -126,6 +164,8 @@ struct Sites {
     watch: Vec<WatchDecl>,
     #[serde(default)]
     interface: Option<saclac_interface::Declaration>,
+    #[serde(default)]
+    task_stack: Option<TaskStackDecl>,
 }
 
 struct Site {
@@ -165,6 +205,7 @@ struct Plan {
     dispatch: Option<Dispatch>,
     watch: Vec<Watch>,
     interface: Option<saclac_interface::Plan>,
+    task_stack: Option<TaskStackRead>,
 }
 
 fn load_sites(bytes: &[u8]) -> Result<Plan, String> {
@@ -242,7 +283,14 @@ fn load_sites(bytes: &[u8]) -> Result<Plan, String> {
     }
     watch.sort_by_key(|range| range.start);
     let interface = sites.interface.map(saclac_interface::Declaration::validate).transpose()?;
-    Ok(Plan { task_id: sites.task_id, state_base, points, ranges, dispatch, watch, interface })
+    let task_stack = sites.task_stack.map(|declared| {
+        let cursor = parse_hex(&declared.cursor)?;
+        let allocation = parse_hex(&declared.allocation)?;
+        require(cursor % 4 == 0 && allocation % 4 == 0 && allocation <= u32::MAX - 11,
+            "sites: a task-stack read is misaligned or wraps")?;
+        Ok::<_, String>(TaskStackRead { cursor, allocation })
+    }).transpose()?;
+    Ok(Plan { task_id: sites.task_id, state_base, points, ranges, dispatch, watch, interface, task_stack })
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -669,6 +717,7 @@ struct Report<'a> {
     dispatch: Option<DispatchTrace>,
     watch: Vec<WatchRow>,
     interface: &'a saclac_interface::Stream,
+    task_stack: Option<TaskStackSnapshot>,
     error: Option<String>,
     machine_failure: Option<String>,
 }
@@ -1451,7 +1500,11 @@ fn drive() -> Result<(), String> {
         Ok(context) => (context, None),
         Err(error) => (None, Some(error)),
     };
-    let error = observed.err().or(interface_end.err()).or(ended.err()).or(context_error);
+    let (task_stack, task_stack_error) = match census.plan.task_stack.as_ref().map(|read| read.snapshot(&machine)).transpose() {
+        Ok(snapshot) => (snapshot, None),
+        Err(error) => (None, Some(error)),
+    };
+    let error = observed.err().or(interface_end.err()).or(ended.err()).or(context_error).or(task_stack_error);
     let inputs = [Some(run_binding), Some(dat_binding), Some(rom_binding), Some(sites_binding), trajectory_binding, schedule_binding,
         preparation_binding, context_binding, Some(executable_binding)]
         .into_iter().flatten().collect();
@@ -1502,6 +1555,7 @@ fn drive() -> Result<(), String> {
             address_overflow: stats.address_overflow,
         }).collect(),
         interface: &census.interface,
+        task_stack,
         error: error.clone(),
         machine_failure: machine.failure.clone(),
     };

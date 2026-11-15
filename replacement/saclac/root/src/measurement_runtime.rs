@@ -18,6 +18,7 @@ use xm1_saclac_profile_geometry::controller::{ProfileGeometry, Tables};
 use xm1_saclac_profile_records::{Memory, StockEntries};
 use xm1_saclac_search_bindings::RecordBinding;
 use xm1_saclac_shared::stock::Machine;
+use xm1_shot_sequence::{grid_boundary::GridLayers, shot_ports::ShotPorts, state::StateMemory};
 use crate::{geometry::GeometryBindings, round_ports::RoundPorts, search_runtime::SearchSession, services::Services, stock::geometry::Memory as GeometryMemory};
 
 type Geometry<M, P, I, T> = ProfileGeometry<GeometryMemory<M>, GeometryBindings<M, P, I>, T>;
@@ -29,44 +30,53 @@ pub struct Dispatch {
     pub terminal: Option<SearchTerminal>,
 }
 
-pub struct MeasurementRuntime<'s, M: Machine + Clone, R: Memory, E: StockEntries, P, I, T> {
+pub struct MeasurementRuntime<'s, M: Machine + Clone, R: Memory, E: StockEntries, P, I, T, S, X> {
     services: &'s RefCell<Services<M, R, E, P>>,
     geometry: &'s RefCell<Geometry<M, P, I, T>>,
     recognition: &'s RefCell<SceneRecognition>,
+    shot: &'s RefCell<ShotPorts<S, X>>,
     session: SearchSession<'s, M, R, E, P>,
     measurement: Measurement,
     search: LiveSearch<SearchSession<'s, M, R, E, P>>,
 }
 
-impl<'s, M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc, I: Isp, T: Tables>
-    MeasurementRuntime<'s, M, R, E, P, I, T> {
-    pub fn new(services: &'s RefCell<Services<M, R, E, P>>, geometry: &'s RefCell<Geometry<M, P, I, T>>, recognition: &'s RefCell<SceneRecognition>, record: &'s RecordBinding) -> Self {
+impl<'s, M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc, I: Isp, T: Tables, S, X>
+    MeasurementRuntime<'s, M, R, E, P, I, T, S, X> {
+    pub fn new(services: &'s RefCell<Services<M, R, E, P>>, geometry: &'s RefCell<Geometry<M, P, I, T>>, recognition: &'s RefCell<SceneRecognition>, record: &'s RecordBinding, shot: &'s RefCell<ShotPorts<S, X>>) -> Self {
         let session = SearchSession::new(services, record);
-        Self { services, geometry, recognition, session, measurement: Measurement::new(), search: LiveSearch::new(session, Context::new()) }
+        Self { services, geometry, recognition, shot, session, measurement: Measurement::new(), search: LiveSearch::new(session, Context::new()) }
     }
 
-    pub fn handle(&mut self, event: ChildEvent<'_, MeasurementControl>) -> Dispatch {
-        let mut effects = MeasurementEffects { services: self.services, geometry: self.geometry, recognition: self.recognition, session: self.session, search: &mut self.search, auxiliary_buffer: None, terminal: None };
+    pub fn handle(&mut self, event: ChildEvent<'_, MeasurementControl>) -> Dispatch where S: StateMemory, X: GridLayers {
+        let mut effects = MeasurementEffects { services: self.services, geometry: self.geometry, recognition: self.recognition, shot: self.shot, session: self.session, search: &mut self.search, auxiliary_buffer: None, terminal: None };
         let outcome = self.measurement.handle(event, &mut effects);
         Dispatch { outcome, terminal: effects.terminal }
     }
 
     pub fn history(&self) -> &MeasurementHistory { self.measurement.history() }
+
+    pub(crate) fn handle_s1_acquisition(&self, child: &mut xm1_focus_measurement_round::children::S1Acquisition, event: ChildEvent<'_, xm1_saclac_controllers::children::AcquisitionControl>) -> ChildOutcome where S: StateMemory, X: GridLayers {
+        child.handle(event, &mut crate::acquisition::Acquisition::new(self.services, self.recognition, self.shot))
+    }
 }
 
-struct MeasurementEffects<'a, 's, M: Machine + Clone, R: Memory, E: StockEntries, P, I, T> {
+struct MeasurementEffects<'a, 's, M: Machine + Clone, R: Memory, E: StockEntries, P, I, T, S, X> {
     services: &'s RefCell<Services<M, R, E, P>>,
     geometry: &'s RefCell<Geometry<M, P, I, T>>,
     recognition: &'s RefCell<SceneRecognition>,
+    shot: &'s RefCell<ShotPorts<S, X>>,
     session: SearchSession<'s, M, R, E, P>,
     search: &'a mut LiveSearch<SearchSession<'s, M, R, E, P>>,
     auxiliary_buffer: Option<u32>,
     terminal: Option<SearchTerminal>,
 }
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries, P, I, T> MeasurementEffects<'_, '_, M, R, E, P, I, T> {
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P, I, T, S, X> MeasurementEffects<'_, '_, M, R, E, P, I, T, S, X> {
     fn with_services<V>(&mut self, operation: impl FnOnce(&mut Services<M, R, E, P>) -> V) -> V {
         operation(&mut self.services.borrow_mut())
+    }
+    fn with_acquisition<V>(&mut self, operation: impl FnOnce(&mut crate::acquisition::Acquisition<'_, M, R, E, P, S, X>) -> V) -> V {
+        operation(&mut crate::acquisition::Acquisition::new(self.services, self.recognition, self.shot))
     }
     fn with_round<V>(&mut self, operation: impl FnOnce(&mut RoundPorts<'_, M, R, E, P, I, T>) -> V) -> V {
         let mut services = self.services.borrow_mut();
@@ -83,14 +93,14 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P, I, T> MeasurementEffects
         }
     }
 }
-impl<M: Machine + Clone, R: Memory, E: StockEntries, P, I, T> Drop for MeasurementEffects<'_, '_, M, R, E, P, I, T> {
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P, I, T, S, X> Drop for MeasurementEffects<'_, '_, M, R, E, P, I, T, S, X> {
     fn drop(&mut self) { self.invalidate_auxiliary(); }
 }
 
 macro_rules! delegate {
     ($scope:ident, $contract:path { $(fn $name:ident(&mut self $(, $argument:ident: $type:ty)*) $(-> $result:ty)?;)* } $($extra:item)*) => {
-        impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc, I: Isp, T: Tables>
-            $contract for MeasurementEffects<'_, '_, M, R, E, P, I, T> {
+        impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc, I: Isp, T: Tables, S: StateMemory, X: GridLayers>
+            $contract for MeasurementEffects<'_, '_, M, R, E, P, I, T, S, X> {
             $(fn $name(&mut self $(, $argument: $type)*) $(-> $result)? {
                 self.$scope(|ports| <_ as $contract>::$name(ports $(, $argument)*))
             })*
@@ -146,8 +156,8 @@ delegate!(with_services, Trace { fn trace(&mut self, mark: TraceMark); });
 delegate!(with_services, Effects { fn emit(&mut self, effect: Effect<'_>); });
 delegate!(with_services, window::Ports { fn window_result(&mut self, completed: Completed<'_>) -> Option<window::WindowResult>; });
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc, I: Isp, T: Tables>
-    xm1_focus_measurement_round::record::Ports for MeasurementEffects<'_, '_, M, R, E, P, I, T> {
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc, I: Isp, T: Tables, S: StateMemory, X: GridLayers>
+    xm1_focus_measurement_round::record::Ports for MeasurementEffects<'_, '_, M, R, E, P, I, T, S, X> {
     fn request(&mut self, request: RecordRequest) {
         // A next auxiliary request can be planned in this same completion dispatch.
         if matches!(request, RecordRequest::Auxiliary(_)) { self.invalidate_auxiliary(); }
@@ -155,7 +165,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + 
     }
 }
 
-delegate!(with_services, xm1_focus_measurement_round::acquisition::ports::Ports {
+delegate!(with_acquisition, xm1_focus_measurement_round::acquisition::ports::Ports {
     fn acquisition_settings(&mut self) -> AcquisitionSettings;
     fn record_view(&mut self, record: RecordHandle) -> RecordView;
     fn s1_rate_enabled(&mut self, record: RecordHandle) -> bool;
@@ -282,7 +292,7 @@ delegate!(with_services, xm1_focus_measurement_round::acquisition::ports::Ports 
     fn release_result(&mut self, released: ReleasedResult);
 }
     fn with_selection<V>(&mut self, operation: impl FnOnce(&mut SelectionMemory) -> V) -> V {
-        self.with_services(|ports| xm1_focus_measurement_round::acquisition::ports::Ports::with_selection(ports, operation))
+        self.with_acquisition(|ports| xm1_focus_measurement_round::acquisition::ports::Ports::with_selection(ports, operation))
     }
 );
 
@@ -332,8 +342,8 @@ delegate!(with_round, image::Ports {
     fn request_image(&mut self, request: xm1_saclac_interface::round_image::ImageLaneRequest);
 });
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc, I: Isp, T: Tables>
-    LiveEffects for MeasurementEffects<'_, '_, M, R, E, P, I, T> {
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc, I: Isp, T: Tables, S: StateMemory, X: GridLayers>
+    LiveEffects for MeasurementEffects<'_, '_, M, R, E, P, I, T, S, X> {
     fn fault(&mut self) { self.with_services(|ports| crate::stock::acquisition::fault(&ports.machine)); }
     fn search(&mut self, signal: LaneSignal<'_>, record: RecordHandle, history: &MeasurementHistory) -> LaneStatus {
         self.session.set_record(record);

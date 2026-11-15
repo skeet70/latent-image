@@ -36,4 +36,14 @@ main = do
   either (H.failH . show) pure (check zero tails)
   let tailThenCall = tails { imageBytes = B.concat (map U.putWord32 [0xeaffffff, 0xebfffffd]) }
   H.ensure (check zero tailThenCall == Left (RecursiveCall (Guest (base + 4)) (Guest base))) "call growth through a tail edge was admitted"
+  let earlyWords = [0xe3500000, 0x112fff1e, 0xe92d4800, 0xe24dd010, 0xeb000001, 0xe28dd010, 0xe8bd8800, 0xe92d4800, 0xe8bd8800]
+      earlyBody = B.concat (map U.putWord32 earlyWords)
+  earlySymbols <- either H.failH pure (F.parseSymbols "00001000 0000001c T early\n0000101c 00000008 T callee\n")
+  let early = Image (Guest base) earlyBody earlySymbols (S.fromList (map Guest [base, base + 4 .. base + 32]))
+  exact <- maybe (H.failH "invalid frame budget") pure (stackBytes 32)
+  under <- maybe (H.failH "invalid frame budget") pure (stackBytes 31)
+  either (H.failH . show) pure (check exact early)
+  H.ensure (check under early == Left (BudgetExceeded (Guest base) exact)) "early return hid the allocated frame or callee depth"
+  let skipsFrame = early { imageBytes = B.take 4 earlyBody <> U.putWord32 0x1a000004 <> B.drop 8 earlyBody }
+  H.ensure (check exact skipsFrame == Left (FrameNotDerivable (Guest base))) "a branch past frame allocation was treated as a leaf return"
   putStrLn "stack-proof: consecutive pushes, direct depth, recursion, frame and image-bound controls passed"

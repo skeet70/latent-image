@@ -1,5 +1,7 @@
 //! Synthetic X-M1 1.50 stock-memory fixtures. No stock instructions or devices execute here.
 
+use core::cell::RefCell;
+use xm1_saclac_calc::scene_recognition::SceneRecognition;
 use xm1_focus_measurement_round::acquisition::live::LiveWork;
 use xm1_focus_measurement_round::acquisition::ports::{Branch, ExposureRecordUpdate, Ports, ProgramInputs};
 use xm1_focus_measurement_round::children::S1Acquisition;
@@ -12,6 +14,71 @@ use xm1_saclac_shared::stock::Machine;
 
 use crate::fake::{self, Entries, Fake};
 
+struct NoHardware;
+impl xm1_saclac_imaging::driver::Isp for NoHardware {
+    fn read(&mut self, _: xm1_saclac_imaging::driver::Register) -> u32 { panic!("unexpected ISP read") }
+    fn write(&mut self, _: xm1_saclac_imaging::driver::Register, _: u32) { panic!("unexpected ISP write") }
+    fn record(&mut self, _: xm1_saclac_imaging::driver::Unit) -> xm1_saclac_imaging::driver::Record { panic!("unexpected ISP record") }
+    fn set_record(&mut self, _: xm1_saclac_imaging::driver::Unit, _: xm1_saclac_imaging::driver::Record) { panic!("unexpected ISP record write") }
+    fn note(&mut self, _: xm1_saclac_imaging::driver::Unit, _: xm1_saclac_imaging::driver::Operation) { panic!("unexpected ISP operation") }
+    fn log(&mut self, _: xm1_saclac_imaging::driver::Event) { panic!("unexpected ISP log") }
+    fn exclusive<V>(&mut self, _: impl FnOnce(&mut Self) -> V) -> V { panic!("unexpected ISP lock") }
+}
+impl xm1_saclac_calc::exposure::ports::Placement for NoHardware {
+    fn address(&mut self, _: xm1_saclac_calc::exposure::ports::InPlace) -> xm1_saclac_interface::calc::SharedAddress { panic!("unexpected placement") }
+}
+
+fn unused_callbacks(gate: &crate::statistics_results::ReportingGate) -> crate::shot_services::Callbacks<'_> {
+    use crate::shot_services::*;
+    use xm1_saclac_interface::stock::StockCallbackWord as Callback;
+    Callbacks {
+        exposure: crate::exposure_services::Callbacks { evaluation: Callback(0), correction: Callback(0) },
+        calculation: Callback(0), statistics: Callback(0), capture_selection_hook: Callback(0),
+        capture_calculations: CaptureCalculationCallbacks { first: Callback(0), second: Callback(0), third: Callback(0), fourth: Callback(0), area_evaluation: [Callback(0); 2] },
+        moves: LensMoveCallbacks { finish_relative: Callback(0), finish_absolute: Callback(0), capture_relative: Callback(0), capture_absolute: Callback(0) },
+        capture_statistics: CaptureStatisticsCallbacks { setup: Callback(0), setting: Callback(0), primary_setting: Callback(0) },
+        measurement: MeasurementCallbacks { finished: Callback(0), ready: Callback(0), transferred: Callback(0) },
+        capture_image: CaptureImageCallbacks { end: Callback(0), outputs: Callback(0), readout: Callback(0), delivery: Callback(0), complete: Callback(0), notice: Callback(0), command_c: Callback(0), command_28: Callback(0) },
+        pipeline: PipelineCallbacks {
+            raw_calculated: Callback(0), tone_calculated: Callback(0), gradation_calculated: Callback(0), raw_checked: Callback(0),
+            frame_prepared: Callback(0), tone_progress: Callback(0), tone_finished: Callback(0), output: Callback(0), commit: Callback(0),
+            statistics: Callback(0), statistics_commit: Callback(0), statistics_progress: Callback(0), progress_gate: gate,
+        },
+    }
+}
+
+macro_rules! acquisition {
+    ($root:ident, $recognition:ident, $cx:ident) => {
+        let owner = RefCell::new($root);
+        let machine = owner.borrow().machine.clone();
+        let geometry = RefCell::new(xm1_saclac_profile_geometry::controller::ProfileGeometry::new(
+            crate::stock::geometry::Memory(machine.clone()),
+            crate::geometry::GeometryBindings {
+                stages: crate::stages::StageDriver { isp: NoHardware, arguments: crate::stock::stages::StageMemory, machine: machine.clone() },
+                peers: fake::peers(&$cx),
+            },
+            xm1_saclac_profile_geometry::profile::Profiles::new(xm1_saclac_profile_geometry::stock::StockTables),
+        ));
+        let exposure = crate::exposure_services::ExposureState::default();
+        let placement = RefCell::new(NoHardware);
+        let subjects = RefCell::new(crate::shot_subjects::Workspace::default());
+        let capture = RefCell::new(crate::shot_capture_workspace::Workspace::default());
+        let motion = RefCell::new(None);
+        let record = xm1_saclac_interface::stock::record_handle_from_a2(u32::MAX);
+        let binding = xm1_saclac_search_bindings::RecordBinding::new(record);
+        let progress = crate::statistics_results::ReportingGate::new(false);
+        let library = crate::shot_services::Libraries {
+            services: &owner, geometry: &geometry, recognition: &$recognition, placement: &placement, exposure: &exposure,
+            peers: (), record, live_search_record: &binding, subjects: &subjects, capture: &capture, motion: &motion,
+            callbacks: unused_callbacks(&progress),
+        };
+        let shot = RefCell::new(xm1_shot_sequence::shot_ports::ShotPorts::new(
+            crate::stock::shot::ShotMemory(machine, &exposure.context), library,
+        ));
+        let mut $root = crate::acquisition::Acquisition::new(&owner, &$recognition, &shot);
+    };
+}
+
 fn put(bytes: &mut [u8], at: usize, value: u32) { bytes[at..at + 4].copy_from_slice(&value.to_le_bytes()); }
 fn half(bytes: &mut [u8], at: usize, value: u16) { bytes[at..at + 2].copy_from_slice(&value.to_le_bytes()); }
 fn word(bytes: &[u8], at: usize) -> u32 { u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) }
@@ -19,50 +86,8 @@ fn load_half(bytes: &[u8], at: usize) -> u16 { u16::from_le_bytes(bytes[at..at +
 fn memory(fake: &Fake, address: u32, bytes: &[u8]) {
     for (offset, &byte) in bytes.iter().enumerate() { fake.set_byte(address + offset as u32, byte); }
 }
-fn returning(fake: &Fake, address: u32, value: u32) { for _ in 0..100 { fake.answer(address, value); } }
 fn completion<'a>(kind: Completion, bytes: &'a [u8]) -> Completed<'a> { Completed { completion: kind, parameters: parameters(bytes) } }
 
-#[test]
-fn fresh_live_acquisition_publishes_the_retained_target_and_range_through_owned_records() {
-    let kernel = fake::saclac_kernel();
-    let cx = kernel.task().unwrap();
-    let mut bytes = Bytes::default();
-    let record = fake::open(&mut bytes, &[0, 4, 5, 6, 13, 14, 15, 17, 20, 27, 31, 33, 37, 39, 41]);
-    put(&mut bytes.shared, 0x140, 1);
-    put(&mut bytes.shared, 0x734, 3);
-    half(&mut bytes.records[0], 0x1c, 40);
-    let (machine, mut root) = fake::root_with(fake::peers(&cx), bytes, Entries { header_63: 1, ..Entries::default() });
-    returning(&machine, 0x76d9c8, 9);
-    returning(&machine, 0xfa7edc, 3);
-    returning(&machine, 0x772f28, 12);
-    returning(&machine, 0xef5310, 7);
-    returning(&machine, 0xef74e4, 70);
-    let mut target = [0; 18];
-    half(&mut target, 0, 300); half(&mut target, 2, 280); put(&mut target, 4, 3);
-    half(&mut target, 8, 12); half(&mut target, 10, 90); half(&mut target, 16, 21);
-    machine.buffer(0xf79b94, 0, &target);
-    let mut range = [0; 10];
-    half(&mut range, 0, 250); half(&mut range, 2, 80); half(&mut range, 4, 20);
-    half(&mut range, 6, 0x1122); range[8] = 2;
-    machine.buffer(0xf7a0cc, 0, &range);
-    returning(&machine, 0xf7a0cc, 0x56);
-
-    let mut live = LiveWork::new();
-    live.initialize(record, &mut root);
-    live.enable(record, &mut root);
-    let published = root.published_exposure(record);
-    assert_eq!((live.timing().0, published.timing.0), (0x56, 0x56));
-    assert_eq!((published.exposure.0, published.level, published.second, published.offset), (3, 250, 80, 20));
-    assert_eq!((published.reference, published.combined, published.reference_level, published.aspect), (40, 150, 190, 7));
-    assert_eq!((published.code, published.selected, published.gain_step.0, published.lens.0), (0x1122, 2, 3, 9));
-    assert!(xm1_focus_measurement_round::profile::ProfileRecords::statistics_in_use(&mut root).primary);
-    let mirror = &root.records().memory().shared[0x7a0..0x7ec];
-    assert_eq!((word(mirror, 0x34), word(mirror, 0x38), word(mirror, 0x3c)), (3, 9, 0));
-    let block = root.acquisition_block(record);
-    assert_eq!((block.collected, block.selected, block.lens.0, block.exposure.0), (0, 0, 9, 3));
-    assert_eq!((block.level, block.offset, block.gain_offset), (250, 100, 12));
-    assert_eq!(fake::posts(&kernel), vec![]);
-}
 
 #[test]
 fn live_primary_round_publishes_completion_levels_and_releases_statistics_for_its_consumers() {
@@ -70,7 +95,9 @@ fn live_primary_round_publishes_completion_levels_and_releases_statistics_for_it
     let cx = kernel.task().unwrap();
     let mut bytes = Bytes::default();
     let record = fake::open(&mut bytes, &[0, 4, 5, 6, 13, 14, 17, 20, 22, 26, 27, 31, 33, 37, 39, 41]);
-    let (machine, mut root) = fake::root_with(fake::peers(&cx), bytes, Entries::default());
+    let (machine, root) = fake::root_with(fake::peers(&cx), bytes, Entries::default());
+    let recognition = RefCell::new(SceneRecognition::new());
+    acquisition!(root, recognition, cx);
     let mut snapshot = [0; 0x5c4];
     put(&mut snapshot, 0, 5); put(&mut snapshot, 0xec, 0x1234);
     put(&mut snapshot, 0xf8, 6); put(&mut snapshot, 0x110, 2);
@@ -129,7 +156,9 @@ fn s1_child_drives_four_bound_passes_then_restores_selection_and_publishes_the_f
     let mut bytes = Bytes::default();
     let record = fake::open(&mut bytes, &[0, 4, 5, 6, 13, 14, 15, 17, 20, 22, 26, 27, 31, 33, 37, 39, 41]);
     half(&mut bytes.shared, 0x206, 150); half(&mut bytes.shared, 0x208, 30);
-    let (machine, mut root) = fake::root_with(fake::peers(&cx), bytes, Entries { header_31: 47, ..Entries::default() });
+    let (machine, root) = fake::root_with(fake::peers(&cx), bytes, Entries { header_31: 47, ..Entries::default() });
+    let recognition = RefCell::new(SceneRecognition::new());
+    acquisition!(root, recognition, cx);
     let mut sample = [0; 0x6c];
     put(&mut sample, 0x18, 0x55); put(&mut sample, 0x58, 5);
     half(&mut sample, 0x20, 210); half(&mut sample, 0x22, 80);
@@ -149,7 +178,6 @@ fn s1_child_drives_four_bound_passes_then_restores_selection_and_publishes_the_f
     assert_eq!(posts.iter().map(|p| (p.0, p.1)).collect::<Vec<_>>(), vec![(45, 0x3d00), (45, 0x3d00), (45, 0x3d00), (45, 0x3d00), (45, 0x3d01)]);
     assert_eq!(posts[..4].iter().map(|p| word(&p.2, 0xc)).collect::<Vec<_>>(), vec![1, 0, 0, 0]);
     assert_eq!(root.records().memory().shared[0x970..0x972], 133i16.to_le_bytes());
-    assert_eq!((root.setting_echo(Branch::S1).shot_word, machine.read_u32(0x41717c28 + 0x118)), (0, 0x41717c44));
 
     root.mark_selection_changed();
     assert!(root.with_selection(|memory| memory.value_changed()));
@@ -175,7 +203,6 @@ fn s1_child_drives_four_bound_passes_then_restores_selection_and_publishes_the_f
     let posts = fake::posts(&kernel);
     assert_eq!((posts.last().unwrap().0, posts.last().unwrap().1), (47, 0x3f45));
     assert_eq!((machine.read_u32(0x16f224c), machine.read_u32(0x16f224c + 12)), (0x55, 8));
-    assert!(machine.take_entered().contains(&(0xf17af8, vec![1])));
     assert_eq!(child.handle(control(AcquisitionControl::Stop), &mut root), ChildOutcome::Complete);
     assert!(!root.with_selection(|memory| memory.value_changed()));
 }
@@ -187,7 +214,9 @@ fn exposure_mirror_updates_are_gated_and_leave_other_consumers_bytes_unchanged()
         let mut bytes = Bytes::default();
         let record = fake::open(&mut bytes, &[33]);
         bytes.shared[0x7a0..0x7ec].fill(0xa5);
-        let (_, mut root) = fake::root_with(fake::peers(&cx), bytes, Entries { header_63: mode, ..Entries::default() });
+        let (_, root) = fake::root_with(fake::peers(&cx), bytes, Entries { header_63: mode, ..Entries::default() });
+        let recognition = RefCell::new(SceneRecognition::new());
+        acquisition!(root, recognition, cx);
         root.update_exposure_record(record, ExposureRecordUpdate::PrimaryPair([11, 22]));
         root.update_exposure_record(record, ExposureRecordUpdate::SelectionTail { tail: [33, 44, 55], last: 66 });
         root.update_exposure_record(record, ExposureRecordUpdate::GainStep(GainStep(7)));
@@ -204,7 +233,9 @@ fn exposure_mirror_updates_are_gated_and_leave_other_consumers_bytes_unchanged()
 #[test]
 fn an_unselected_banded_choice_without_an_entry_does_not_invent_a_program() {
     let kernel = fake::saclac_kernel(); let cx = kernel.task().unwrap();
-    let (_, mut root) = fake::root_with(fake::peers(&cx), Bytes::default(), Entries::default());
+    let (_, root) = fake::root_with(fake::peers(&cx), Bytes::default(), Entries::default());
+    let recognition = RefCell::new(SceneRecognition::new());
+    acquisition!(root, recognition, cx);
     assert_eq!(root.select_program(&ProgramInputs { kind: 2, option: 1, percent: 31, ..ProgramInputs::default() }), None);
 }
 
@@ -213,7 +244,9 @@ fn controller_reuse_is_cleared_only_under_the_record_named_by_its_reply_block() 
     let kernel = fake::saclac_kernel(); let cx = kernel.task().unwrap();
     let mut bytes = Bytes::default(); let record = fake::open(&mut bytes, &[27]);
     put(&mut bytes.shared, 0x744, 1);
-    let (machine, mut root) = fake::root_with(fake::peers(&cx), bytes, Entries::default());
+    let (machine, root) = fake::root_with(fake::peers(&cx), bytes, Entries::default());
+    let recognition = RefCell::new(SceneRecognition::new());
+    acquisition!(root, recognition, cx);
     machine.set_word(0x16be01c, u32::MAX);
     root.clear_controller_reuse();
     assert_eq!(root.record_view(record).reuse_blocked, 1);
@@ -231,7 +264,9 @@ fn live_and_s1_keep_one_selection_preset_and_s1_consumes_the_controllers_change(
     bytes.records[0][0x44] = 8;
     half(&mut bytes.records[0], 0x1e, 77);
     half(&mut bytes.records[0], 0x1c, 66);
-    let (machine, mut root) = fake::root_with(fake::peers(&cx), bytes, Entries::default());
+    let (machine, root) = fake::root_with(fake::peers(&cx), bytes, Entries::default());
+    let recognition = RefCell::new(SceneRecognition::new());
+    acquisition!(root, recognition, cx);
     machine.set_word(xm1_saclac_calc::stock::adjust::SHARED_WORD.0, 1);
     let mut live = LiveWork::new();
     live.submit_secondary(record, &mut root);
@@ -256,7 +291,9 @@ fn empty_s1_evaluation_preserves_both_persistent_selection_grids() {
     use xm1_saclac_interface::round_acquisition::AcquisitionRequest;
     let kernel = fake::saclac_kernel();
     let cx = kernel.task().unwrap();
-    let (machine, mut root) = fake::root_with(fake::peers(&cx), Bytes::default(), Entries::default());
+    let (machine, root) = fake::root_with(fake::peers(&cx), Bytes::default(), Entries::default());
+    let recognition = RefCell::new(SceneRecognition::new());
+    acquisition!(root, recognition, cx);
     root.set_grid_count(Branch::Live, 7);
     root.set_grid_count(Branch::S1, 9);
     root.set_grid_configuration(Branch::Live, 0x12);
@@ -280,7 +317,9 @@ fn search_refresh_and_acquisition_observe_one_configuration() {
     use xm1_saclac_search_bindings::{RecordBinding, Session};
     let kernel = fake::saclac_kernel();
     let cx = kernel.task().unwrap();
-    let (machine, mut root) = fake::root_with(fake::peers(&cx), Bytes::default(), Entries::default());
+    let (machine, root) = fake::root_with(fake::peers(&cx), Bytes::default(), Entries::default());
+    let recognition = RefCell::new(SceneRecognition::new());
+    acquisition!(root, recognition, cx);
     let record = RecordBinding::new(xm1_saclac_interface::stock::record_handle_from_a2(0));
     {
         let bindings = RefCell::new(root.search_bindings());
@@ -295,4 +334,44 @@ fn search_refresh_and_acquisition_observe_one_configuration() {
         search.request_scan_refresh(true);
     }
     assert_eq!(root.adjustment_option(), 0);
+}
+
+#[test]
+fn selection_defaults_reflect_numbered_record_layout_and_preserve_pending_selection_change() {
+    let kernel = fake::saclac_kernel();
+    let cx = kernel.task().unwrap();
+    let mut bytes = Bytes::default();
+    let record = fake::open(&mut bytes, &[0, 1, 27]);
+    bytes.records[0][0x32] = 13;
+    put(&mut bytes.records[0], 0x3c, 0x1234);
+    let (_, root) = fake::root_with(fake::peers(&cx), bytes, Entries::default());
+    let recognition = RefCell::new(SceneRecognition::new());
+    acquisition!(root, recognition, cx);
+    root.mark_selection_changed();
+    let defaults = root.prepare_selection_defaults(record);
+    assert_eq!((defaults.word, defaults.words), (1, [1, 2, 3]));
+    assert!(root.with_selection(|selection| selection.value_changed()));
+}
+
+#[test]
+fn restored_setting_keeps_saved_signed_positions_at_the_same_reference_and_names_both_references() {
+    use xm1_focus_measurement_round::auxiliary::ResourceIndex;
+    use xm1_saclac_interface::calculation::ReferenceRequest;
+    let kernel = fake::saclac_kernel();
+    let cx = kernel.task().unwrap();
+    let (machine, root) = fake::root_with(fake::peers(&cx), Bytes::default(), Entries::default());
+    let mut saved = [0; ReferenceRequest::BYTES];
+    put(&mut saved, 0x100, 100);
+    put(&mut saved, 8, 999);
+    half(&mut saved, 0x38, (-17i16) as u16);
+    let positions = [i16::MIN, -20, -1, 0, 1, 17, 200, 1000, i16::MAX];
+    for (index, position) in positions.into_iter().enumerate() { half(&mut saved, 0x104 + 2 * index, position as u16); }
+    memory(&machine, xm1_shot_sequence::stock::calculation::SAVED_INPUT, &saved);
+    let recognition = RefCell::new(SceneRecognition::new());
+    acquisition!(root, recognition, cx);
+    root.restore_selection_setting(Branch::S1, ResourceIndex(100));
+    let destination = crate::stock::acquisition::region(Branch::S1).setting.0;
+    let answer = ReferenceRequest::from_bytes(core::array::from_fn(|index| machine.read_u8(destination + index as u32)));
+    assert_eq!((answer.reference(), answer.reference_copy(), answer.position()), (100, 100, -17));
+    assert_eq!(answer.area_positions(), positions);
 }

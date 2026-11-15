@@ -126,6 +126,8 @@ pub struct History<T> {
 impl<T: Copy> History<T> {
     pub const fn empty() -> Self { Self { entries: [None; HISTORY] } }
 
+    pub fn clear(&mut self) { self.entries.fill(None); }
+
     pub(crate) const fn filled(value: T) -> Self { Self { entries: [Some(value); HISTORY] } }
 
     pub fn record(&mut self, value: T) {
@@ -396,14 +398,14 @@ impl Configuration {
     /// Classifies the latest measurement with what the calc library published, records the class
     /// and an offset in the histories, and stores the dominant class and the offset average into
     /// the record's motion record (0xfa8520).
-    pub fn classify_motion(
+    pub fn classify_motion<P: ProfileStore + Properties>(
         &mut self,
-        ports: &mut (impl ProfileStore + Properties),
-        library: &mut impl LibraryDiagnostics,
+        ports: &mut P,
+        publish_selection: impl FnOnce(&mut P, RecordHandle),
         record: RecordHandle,
         source: MotionSource,
     ) {
-        library.publish_selection(record);
+        publish_selection(ports, record);
         let mut motion = motion_record(ports, record);
         let limit = ports.property(stock::offset_limit(source));
         let published_level = ((u32::from(motion.published_speed) * 1000 + 1280) / 2560) as u16;
@@ -503,8 +505,14 @@ impl Configuration {
 
     /// Exports the grids, the measurement, the classification and both histories to the work
     /// memory after the library's own diagnostics (0xfa91b0).
-    pub fn export_diagnostics(&self, memory: &mut impl StockMemory, library: &mut impl LibraryDiagnostics, grids: &GridPair) {
-        library.snapshot_diagnostics();
+    pub fn export_diagnostics<M: StockMemory>(
+        &self,
+        memory: &mut M,
+        snapshot: impl FnOnce(&mut M),
+        grids: impl FnOnce(&mut M) -> GridPair,
+    ) {
+        snapshot(memory);
+        let grids = grids(memory);
         let diagnostics = MotionDiagnostics {
             current: &grids.current,
             previous: &grids.previous,

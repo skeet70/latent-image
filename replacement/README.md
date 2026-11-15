@@ -129,7 +129,7 @@ The application crate (root `src/lib.rs`) holds the mode frontends, audio releas
 
 ## saclac
 
-[`saclac/`](saclac/) contains the task-43 driver, the dispatcher at `0xefca6c` and machine 0's router at `0xefcb88` over stock's 37 machine tables. Every action remains a stock word. The driver at `0xf01bc8` uses `xm1_kernel` queue reception, preserves retained receive scratch and command blocks, and releases each received block before dispatch. Oversized commands and receive failures call the retained fault reaction without dispatch. `//replacement/saclac:saclac` is the rlib; `:saclac-image` links the image-5 replacement. `:host-tests` exercises engine and intake contracts. The earlier `:saclac-suite` native comparison remains engine-boundary evidence, not subsystem acceptance.
+[`saclac/`](saclac/) contains the task-43 driver and retained dispatcher model. The native router at `0xefcb88` dispatches to the persistent `saclac/root` aggregate; the generic dispatcher at `0xefca6c` still links stock's 37 machine tables and actions and is not an accepted complete cutover. The driver at `0xf01bc8` uses `xm1_kernel` queue reception, preserves retained receive scratch and command blocks, and releases each received block before dispatch. Oversized commands and receive failures call the retained fault reaction without dispatch. `//replacement/saclac:saclac` is the rlib; `:saclac-image` links the image-5 replacement. `:host-tests` exercises engine and intake contracts. The earlier `:saclac-suite` native comparison remains engine-boundary evidence, not subsystem acceptance.
 
 The retired extents are declared in `Replacement.Saclac.Artifact.extents`:
 
@@ -194,11 +194,17 @@ Admission checks allocated sections, entry veneers, retained table counts, defin
 | `RawWords::word` | The base is the machine's action or second table word; `WordIndex` is below that table's declared count. |
 | `enter_word` | The word is a nonzero word read from a declared machine table below its count, and stock code words take the four-word signature with the table base in r2 and the word in r3. |
 | `DriverPorts::stage` | Kernel reception bounds the payload by queue 43's 168-byte capacity. Intake checks the selected command block's capacity before any copy. The receive scratch header and its payload pointer keep their retained layout. |
-| `DriverPorts::dispatch` | A command copies the previously checked length from receive scratch to its declared block and sets its command-present byte before the engine is entered. |
+| `DriverPorts::dispatch` | A command copies the previously checked length from receive scratch to its declared block and sets its command-present byte before Root is entered. |
 
 The shim rows are in [the register](shims.md#saclac).
 
 The composition provider `saclac/root` shares one selection/configuration state and one typed exposure context with ShotState. Its active calculation input has one machine-backed store, named by calc 0x3c02 and directly updated by ShotState; the Rust input builder returns a transient value for publication, not a second persistent input. `Runtime` keeps the root/live/S1 routers and children persistent over scoped views, and publishes Shot's current record argument without copying a record. `Profiles` shares the live profile and preparation override with S1. S1 result callbacks read an atomic gate published at actual controller transitions, not a cross-task `RefCell`. Lifecycle starts/stops owned geometry/calculation and the declared external actors. Controller helpers use the current saved-selection cell and recognition state. The complete concrete Shot/plan provider and linked image remain unfinished; scoped host checks are not camera or firmware-cutover acceptance.
+
+Live and S1 acquisition motion use the same `Services`, `SceneRecognition` and configuration. Program settlement/range selection call owned Calc over canonical service ports. Motion classification publishes the selection before reading its inputs; diagnostic export takes the library snapshot before resolving potentially overlapping grid pointers. Native completion-area source queries call owned Core profile helpers through the same admitted `RecordContext` as the other area inputs, preserving the explicit record argument. These internal bindings do not establish incoming ARM frame correctness or full-image qualification.
+
+Acquisition's selection defaults and reference restoration use the installed Shot state and library ports. The scoped service loan is released before lending those fields together and reacquired afterward, so grid layers read the same configuration without recursively borrowing `Services`. Saved lists, retained results, auxiliary publication and retained references use the same Shot state; no additional persistent state or input cache is constructed.
+
+The native Census site declaration accepts an optional `task_stack` object with word-aligned hexadecimal `cursor` and `allocation` addresses. Its report reads the final cursor and the allocation's three raw words (`base`, `bytes`, `active`); a read failure fails the observation rather than inventing an allocation. These guest readbacks alone do not establish cross-core/physical-alias agreement, task lifetime, composed stack demand or heap headroom. A candidate must establish an adequate physical task stack before executing code that exceeds the stock allocation.
 
 <!-- evidence-record E-SACLAC-ROOT-PERSISTENT-PROVIDERS-150 -->
 
