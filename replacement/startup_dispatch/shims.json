@@ -1,0 +1,88 @@
+{
+  "unit": "startup_dispatch",
+  "summary": "The phase dispatcher.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "startup_dispatch-01",
+      "shim": "`xm1_startup_dispatch` and `xm1_startup_dispatch_entry` in `entry.S`/`src.rs`, placed by `startup-dispatch.ld`",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the stock phase entry at `0x69cdf8`",
+      "owned": "no",
+      "removal": "the phase entry is owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/startup_dispatch:startup-dispatch-image",
+          "kind": "publication",
+          "symbols": [
+            "xm1_startup_dispatch",
+            "xm1_startup_dispatch_entry"
+          ],
+          "contract": "replacement/startup_dispatch/startup-dispatch.ld",
+          "requirement": "`xm1_startup_dispatch` and `xm1_startup_dispatch_entry` in `entry.S`/`src.rs`, placed by `startup-dispatch.ld`. the stock phase entry at `0x69cdf8`. the phase entry is owned"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "startup_dispatch-02",
+      "shim": "`xm1_startup_clear`, `xm1_startup_install`, `xm1_startup_mode`, `xm1_startup_submit` retained services",
+      "kind": "trampoline into retained stock",
+      "other_side": "stock startup clear/install/mode/submit services",
+      "owned": "no",
+      "removal": "those services are owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/startup_dispatch:startup-dispatch-image",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_startup_clear",
+            "xm1_startup_install",
+            "xm1_startup_mode",
+            "xm1_startup_submit"
+          ],
+          "contract": "replacement/startup_dispatch/startup-dispatch.ld",
+          "requirement": "`xm1_startup_clear`, `xm1_startup_install`, `xm1_startup_mode`, `xm1_startup_submit` retained services. stock startup clear/install/mode/submit services. those services are owned",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "startup_dispatch-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/startup_dispatch:startup-dispatch-image",
+          "kind": "publication",
+          "symbols": [
+            "__startup_dispatch_end",
+            "__startup_dispatch_start"
+          ],
+          "contract": "replacement/startup_dispatch/startup-dispatch.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

@@ -1,0 +1,396 @@
+{
+  "unit": "capture",
+  "summary": "The develop-step completion, cancellation and scheduler-release body. It exports its boundary to develop and trampolines into retained capture services.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "capture-01",
+      "shim": "`rb_capture_*` exports in `src/lib.rs` and `rb_capture_stock.S`",
+      "kind": "C-ABI bridge between two owned units",
+      "other_side": "develop",
+      "owned": "yes",
+      "removal": "develop calls the capture crate directly and both sides compare with stock in one image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//host/firmware:bank-elf-00c40000",
+          "kind": "export",
+          "symbols": [
+            "rb_capture_develop_wait",
+            "rb_capture_invalid_descriptor",
+            "rb_capture_step_wait",
+            "rb_capture_stock_advance",
+            "rb_capture_stock_cancel_signals",
+            "rb_capture_stock_check",
+            "rb_capture_stock_clear",
+            "rb_capture_stock_log",
+            "rb_capture_stock_release",
+            "rb_capture_stock_step_plan",
+            "rb_capture_stock_wait"
+          ],
+          "contract": "replacement/capture/capture.ld",
+          "requirement": "`rb_capture_*` exports in `src/lib.rs` and `rb_capture_stock.S`. develop. develop calls the capture crate directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//host/firmware:bank-elf-00c4fc88",
+          "kind": "export",
+          "symbols": [
+            "rb_capture_develop_wait",
+            "rb_capture_invalid_descriptor",
+            "rb_capture_step_wait",
+            "rb_capture_stock_advance",
+            "rb_capture_stock_cancel_signals",
+            "rb_capture_stock_check",
+            "rb_capture_stock_clear",
+            "rb_capture_stock_log",
+            "rb_capture_stock_release",
+            "rb_capture_stock_step_plan",
+            "rb_capture_stock_wait"
+          ],
+          "contract": "replacement/capture/capture.ld",
+          "requirement": "`rb_capture_*` exports in `src/lib.rs` and `rb_capture_stock.S`. develop. develop calls the capture crate directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//host/firmware:bank-modal-elf-00c40000",
+          "kind": "export",
+          "symbols": [
+            "rb_capture_develop_wait",
+            "rb_capture_invalid_descriptor",
+            "rb_capture_step_wait",
+            "rb_capture_stock_advance",
+            "rb_capture_stock_cancel_signals",
+            "rb_capture_stock_check",
+            "rb_capture_stock_clear",
+            "rb_capture_stock_log",
+            "rb_capture_stock_release",
+            "rb_capture_stock_step_plan",
+            "rb_capture_stock_wait"
+          ],
+          "contract": "replacement/capture/capture.ld",
+          "requirement": "`rb_capture_*` exports in `src/lib.rs` and `rb_capture_stock.S`. develop. develop calls the capture crate directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//host/firmware:bank-modal-elf-00c4fc88",
+          "kind": "export",
+          "symbols": [
+            "rb_capture_develop_wait",
+            "rb_capture_invalid_descriptor",
+            "rb_capture_step_wait",
+            "rb_capture_stock_advance",
+            "rb_capture_stock_cancel_signals",
+            "rb_capture_stock_check",
+            "rb_capture_stock_clear",
+            "rb_capture_stock_log",
+            "rb_capture_stock_release",
+            "rb_capture_stock_step_plan",
+            "rb_capture_stock_wait"
+          ],
+          "contract": "replacement/capture/capture.ld",
+          "requirement": "`rb_capture_*` exports in `src/lib.rs` and `rb_capture_stock.S`. develop. develop calls the capture crate directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine",
+          "kind": "export",
+          "symbols": [
+            "rb_capture_develop_wait",
+            "rb_capture_invalid_descriptor",
+            "rb_capture_step_wait",
+            "rb_capture_stock_advance",
+            "rb_capture_stock_cancel_signals",
+            "rb_capture_stock_check",
+            "rb_capture_stock_clear",
+            "rb_capture_stock_log",
+            "rb_capture_stock_release",
+            "rb_capture_stock_step_plan",
+            "rb_capture_stock_wait"
+          ],
+          "contract": "replacement/capture/capture.ld",
+          "requirement": "`rb_capture_*` exports in `src/lib.rs` and `rb_capture_stock.S`. develop. develop calls the capture crate directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "export",
+          "symbols": [
+            "rb_capture_develop_wait",
+            "rb_capture_invalid_descriptor",
+            "rb_capture_step_wait",
+            "rb_capture_stock_advance",
+            "rb_capture_stock_cancel_signals",
+            "rb_capture_stock_check",
+            "rb_capture_stock_clear",
+            "rb_capture_stock_log",
+            "rb_capture_stock_release",
+            "rb_capture_stock_step_plan",
+            "rb_capture_stock_wait"
+          ],
+          "contract": "replacement/capture/capture.ld",
+          "requirement": "`rb_capture_*` exports in `src/lib.rs` and `rb_capture_stock.S`. develop. develop calls the capture crate directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//replacement/capture:capture-candidate",
+          "kind": "export",
+          "symbols": [
+            "rb_capture_develop_wait",
+            "rb_capture_invalid_descriptor",
+            "rb_capture_step_wait",
+            "rb_capture_stock_advance",
+            "rb_capture_stock_cancel_signals",
+            "rb_capture_stock_check",
+            "rb_capture_stock_clear",
+            "rb_capture_stock_log",
+            "rb_capture_stock_release",
+            "rb_capture_stock_step_plan",
+            "rb_capture_stock_wait"
+          ],
+          "contract": "replacement/capture/capture.ld",
+          "requirement": "`rb_capture_*` exports in `src/lib.rs` and `rb_capture_stock.S`. develop. develop calls the capture crate directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//replacement/develop:develop-candidate",
+          "kind": "export",
+          "symbols": [
+            "rb_capture_invalid_descriptor",
+            "rb_capture_step_wait",
+            "rb_capture_stock_advance",
+            "rb_capture_stock_cancel_signals",
+            "rb_capture_stock_check",
+            "rb_capture_stock_clear",
+            "rb_capture_stock_log",
+            "rb_capture_stock_release",
+            "rb_capture_stock_wait"
+          ],
+          "contract": "replacement/capture/capture.ld",
+          "requirement": "`rb_capture_*` exports in `src/lib.rs` and `rb_capture_stock.S`. develop. develop calls the capture crate directly and both sides compare with stock in one image"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "capture-02",
+      "shim": "`rb_capture_stock_advance`, `rb_capture_stock_check`, `rb_capture_stock_log`, `rb_capture_stock_release` and the wait/step-plan trampolines in `rb_capture_stock.S`",
+      "kind": "trampoline into retained stock",
+      "other_side": "stock capture/develop services at the image-5 boundary",
+      "owned": "no",
+      "removal": "the capture service and its scheduler events are owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//host/firmware:bank-elf-00c40000",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_capture_stock_advance",
+            "rb_capture_stock_check",
+            "rb_capture_stock_log",
+            "rb_capture_stock_release"
+          ],
+          "contract": "replacement/capture/capture.ld",
+          "requirement": "`rb_capture_stock_advance`, `rb_capture_stock_check`, `rb_capture_stock_log`, `rb_capture_stock_release` and the wait/step-plan trampolines in `rb_capture_stock.S`. stock capture/develop services at the image-5 boundary. the capture service and its scheduler events are owned"
+        },
+        {
+          "image": "//host/firmware:bank-elf-00c4fc88",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_capture_stock_advance",
+            "rb_capture_stock_check",
+            "rb_capture_stock_log",
+            "rb_capture_stock_release"
+          ],
+          "contract": "replacement/capture/capture.ld",
+          "requirement": "`rb_capture_stock_advance`, `rb_capture_stock_check`, `rb_capture_stock_log`, `rb_capture_stock_release` and the wait/step-plan trampolines in `rb_capture_stock.S`. stock capture/develop services at the image-5 boundary. the capture service and its scheduler events are owned"
+        },
+        {
+          "image": "//host/firmware:bank-modal-elf-00c40000",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_capture_stock_advance",
+            "rb_capture_stock_check",
+            "rb_capture_stock_log",
+            "rb_capture_stock_release"
+          ],
+          "contract": "replacement/capture/capture.ld",
+          "requirement": "`rb_capture_stock_advance`, `rb_capture_stock_check`, `rb_capture_stock_log`, `rb_capture_stock_release` and the wait/step-plan trampolines in `rb_capture_stock.S`. stock capture/develop services at the image-5 boundary. the capture service and its scheduler events are owned"
+        },
+        {
+          "image": "//host/firmware:bank-modal-elf-00c4fc88",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_capture_stock_advance",
+            "rb_capture_stock_check",
+            "rb_capture_stock_log",
+            "rb_capture_stock_release"
+          ],
+          "contract": "replacement/capture/capture.ld",
+          "requirement": "`rb_capture_stock_advance`, `rb_capture_stock_check`, `rb_capture_stock_log`, `rb_capture_stock_release` and the wait/step-plan trampolines in `rb_capture_stock.S`. stock capture/develop services at the image-5 boundary. the capture service and its scheduler events are owned"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_capture_stock_advance",
+            "rb_capture_stock_check",
+            "rb_capture_stock_log",
+            "rb_capture_stock_release"
+          ],
+          "contract": "replacement/capture/capture.ld",
+          "requirement": "`rb_capture_stock_advance`, `rb_capture_stock_check`, `rb_capture_stock_log`, `rb_capture_stock_release` and the wait/step-plan trampolines in `rb_capture_stock.S`. stock capture/develop services at the image-5 boundary. the capture service and its scheduler events are owned"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_capture_stock_advance",
+            "rb_capture_stock_check",
+            "rb_capture_stock_log",
+            "rb_capture_stock_release"
+          ],
+          "contract": "replacement/capture/capture.ld",
+          "requirement": "`rb_capture_stock_advance`, `rb_capture_stock_check`, `rb_capture_stock_log`, `rb_capture_stock_release` and the wait/step-plan trampolines in `rb_capture_stock.S`. stock capture/develop services at the image-5 boundary. the capture service and its scheduler events are owned"
+        },
+        {
+          "image": "//replacement/capture:capture-candidate",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_capture_stock_advance",
+            "rb_capture_stock_check",
+            "rb_capture_stock_log",
+            "rb_capture_stock_release"
+          ],
+          "contract": "replacement/capture/capture.ld",
+          "requirement": "`rb_capture_stock_advance`, `rb_capture_stock_check`, `rb_capture_stock_log`, `rb_capture_stock_release` and the wait/step-plan trampolines in `rb_capture_stock.S`. stock capture/develop services at the image-5 boundary. the capture service and its scheduler events are owned"
+        },
+        {
+          "image": "//replacement/develop:develop-candidate",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_capture_stock_advance",
+            "rb_capture_stock_check",
+            "rb_capture_stock_log",
+            "rb_capture_stock_release"
+          ],
+          "contract": "replacement/capture/capture.ld",
+          "requirement": "`rb_capture_stock_advance`, `rb_capture_stock_check`, `rb_capture_stock_log`, `rb_capture_stock_release` and the wait/step-plan trampolines in `rb_capture_stock.S`. stock capture/develop services at the image-5 boundary. the capture service and its scheduler events are owned"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "capture-03",
+      "shim": "`capture.ld`, `high.ld`, `low.ld` placements and the `deps/` low/high fault variants",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "stock callers of the capture step and the qualification controls",
+      "owned": "no",
+      "removal": "the capture entry is called directly",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//host/firmware:bank-elf-00c40000",
+          "kind": "publication",
+          "symbols": [
+            "rb_capture_develop_wait"
+          ],
+          "contract": "menu/recipe_bank_ram.ld",
+          "requirement": "`capture.ld`, `high.ld`, `low.ld` placements and the `deps/` low/high fault variants. stock callers of the capture step and the qualification controls. the capture entry is called directly"
+        },
+        {
+          "image": "//host/firmware:bank-elf-00c4fc88",
+          "kind": "publication",
+          "symbols": [
+            "rb_capture_develop_wait"
+          ],
+          "contract": "menu/recipe_bank_ram.ld",
+          "requirement": "`capture.ld`, `high.ld`, `low.ld` placements and the `deps/` low/high fault variants. stock callers of the capture step and the qualification controls. the capture entry is called directly"
+        },
+        {
+          "image": "//host/firmware:bank-modal-elf-00c40000",
+          "kind": "publication",
+          "symbols": [
+            "rb_capture_develop_wait"
+          ],
+          "contract": "menu/recipe_bank_ram.ld",
+          "requirement": "`capture.ld`, `high.ld`, `low.ld` placements and the `deps/` low/high fault variants. stock callers of the capture step and the qualification controls. the capture entry is called directly"
+        },
+        {
+          "image": "//host/firmware:bank-modal-elf-00c4fc88",
+          "kind": "publication",
+          "symbols": [
+            "rb_capture_develop_wait"
+          ],
+          "contract": "menu/recipe_bank_ram.ld",
+          "requirement": "`capture.ld`, `high.ld`, `low.ld` placements and the `deps/` low/high fault variants. stock callers of the capture step and the qualification controls. the capture entry is called directly"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine",
+          "kind": "publication",
+          "symbols": [
+            "rb_capture_develop_wait"
+          ],
+          "contract": "menu/recipe_bank_ram.ld",
+          "requirement": "`capture.ld`, `high.ld`, `low.ld` placements and the `deps/` low/high fault variants. stock callers of the capture step and the qualification controls. the capture entry is called directly"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "publication",
+          "symbols": [
+            "rb_capture_develop_wait"
+          ],
+          "contract": "menu/recipe_bank_ram.ld",
+          "requirement": "`capture.ld`, `high.ld`, `low.ld` placements and the `deps/` low/high fault variants. stock callers of the capture step and the qualification controls. the capture entry is called directly"
+        },
+        {
+          "image": "//replacement/capture:capture-candidate",
+          "kind": "publication",
+          "symbols": [
+            "rb_capture_develop_wait"
+          ],
+          "contract": "replacement/capture/capture.ld",
+          "requirement": "`capture.ld`, `high.ld`, `low.ld` placements and the `deps/` low/high fault variants. stock callers of the capture step and the qualification controls. the capture entry is called directly"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "capture-linked-retained-references",
+      "shim": "Definite retained references in the current linked instruction and relocation metadata",
+      "kind": "retained stock seam in assembly",
+      "other_side": "retained code and guest address contracts reached by the composed image",
+      "owned": "partly",
+      "removal": "all declared retained targets have owned typed replacements and both sides are compared in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/capture:capture-candidate",
+          "kind": "retained-entry",
+          "symbols": [],
+          "retained_targets": [
+            7488424,
+            7489080,
+            15276048,
+            15283812,
+            15284492,
+            15285212,
+            15326080
+          ],
+          "contract": "replacement/capture/capture.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

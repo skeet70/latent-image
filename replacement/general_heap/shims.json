@@ -1,0 +1,336 @@
+{
+  "unit": "general_heap",
+  "summary": "The owned general heap, with stock allocator entries, retained lock and memory-copy services, and charged arena metadata. The recipe and fixed-image variants preserve the same boundary.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "general_heap-01",
+      "shim": "Stock malloc, free, realloc, calloc and reentrant allocator entries in entry.S and src.rs",
+      "kind": "stock-ABI export",
+      "other_side": "retained stock allocation callers",
+      "owned": "no",
+      "removal": "every allocation caller uses the typed owned allocator",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/general_heap:general-heap-fixed-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_heap_calloc_entry",
+            "xm1_heap_calloc_r",
+            "xm1_heap_calloc_r_entry",
+            "xm1_heap_free_entry",
+            "xm1_heap_free_r",
+            "xm1_heap_free_r_entry",
+            "xm1_heap_malloc_entry",
+            "xm1_heap_malloc_r",
+            "xm1_heap_malloc_r_entry",
+            "xm1_heap_panic",
+            "xm1_heap_realloc_entry",
+            "xm1_heap_realloc_r",
+            "xm1_heap_realloc_r_entry",
+            "xm1_heap_trim_r",
+            "xm1_heap_trim_r_entry"
+          ],
+          "contract": "replacement/general_heap/general-heap.ld",
+          "requirement": "The linker retains the stock allocator entry sections and core allocator exports.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/general_heap:general-heap-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_heap_calloc_entry",
+            "xm1_heap_calloc_r",
+            "xm1_heap_calloc_r_entry",
+            "xm1_heap_free_entry",
+            "xm1_heap_free_r",
+            "xm1_heap_free_r_entry",
+            "xm1_heap_malloc_entry",
+            "xm1_heap_malloc_r",
+            "xm1_heap_malloc_r_entry",
+            "xm1_heap_panic",
+            "xm1_heap_realloc_entry",
+            "xm1_heap_realloc_r",
+            "xm1_heap_realloc_r_entry",
+            "xm1_heap_trim_r",
+            "xm1_heap_trim_r_entry"
+          ],
+          "contract": "replacement/general_heap/general-heap.ld",
+          "requirement": "The linker retains the stock allocator entry sections and core allocator exports.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/general_heap:general-heap-recipe-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_heap_calloc_entry",
+            "xm1_heap_calloc_r",
+            "xm1_heap_calloc_r_entry",
+            "xm1_heap_free_entry",
+            "xm1_heap_free_r",
+            "xm1_heap_free_r_entry",
+            "xm1_heap_malloc_entry",
+            "xm1_heap_malloc_r",
+            "xm1_heap_malloc_r_entry",
+            "xm1_heap_panic",
+            "xm1_heap_realloc_entry",
+            "xm1_heap_realloc_r",
+            "xm1_heap_realloc_r_entry",
+            "xm1_heap_trim_r",
+            "xm1_heap_trim_r_entry"
+          ],
+          "contract": "replacement/general_heap/general-heap.ld",
+          "requirement": "The linker retains the stock allocator entry sections and core allocator exports.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "general_heap-02",
+      "shim": "Retained cross-core heap lock and overlap-safe memory-copy helpers",
+      "kind": "trampoline into retained stock",
+      "other_side": "stock lock/unlock at 0x72b164/0x72b1cc and memmove at 0x89d908",
+      "owned": "no",
+      "removal": "owned synchronization and copying replace every retained allocator service",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/general_heap:general-heap-fixed-image",
+          "kind": "retained-import",
+          "symbols": [
+            "__aeabi_memcpy",
+            "__aeabi_memcpy4",
+            "__aeabi_memcpy8",
+            "__aeabi_memmove",
+            "__aeabi_memmove4",
+            "__aeabi_memmove8",
+            "__heap_retained_lock",
+            "__heap_retained_unlock",
+            "memcpy",
+            "memmove"
+          ],
+          "contract": "replacement/general_heap/general-heap.ld",
+          "requirement": "The linker binds the retained lock, unlock and memory-copy entry addresses.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/general_heap:general-heap-image",
+          "kind": "retained-import",
+          "symbols": [
+            "__aeabi_memcpy",
+            "__aeabi_memcpy4",
+            "__aeabi_memcpy8",
+            "__aeabi_memmove",
+            "__aeabi_memmove4",
+            "__aeabi_memmove8",
+            "__heap_retained_lock",
+            "__heap_retained_unlock",
+            "memcpy",
+            "memmove"
+          ],
+          "contract": "replacement/general_heap/general-heap.ld",
+          "requirement": "The linker binds the retained lock, unlock and memory-copy entry addresses.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/general_heap:general-heap-recipe-image",
+          "kind": "retained-import",
+          "symbols": [
+            "__aeabi_memcpy",
+            "__aeabi_memcpy4",
+            "__aeabi_memcpy8",
+            "__aeabi_memmove",
+            "__aeabi_memmove4",
+            "__aeabi_memmove8",
+            "__heap_retained_lock",
+            "__heap_retained_unlock",
+            "memcpy",
+            "memmove"
+          ],
+          "contract": "replacement/general_heap/general-heap.ld",
+          "requirement": "The linker binds the retained lock, unlock and memory-copy entry addresses.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/general_heap:general-heap-fixed-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_heap_lock",
+            "xm1_heap_unlock"
+          ],
+          "contract": "replacement/general_heap/general-heap.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/general_heap:general-heap-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_heap_lock",
+            "xm1_heap_unlock"
+          ],
+          "contract": "replacement/general_heap/general-heap.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        },
+        {
+          "image": "//replacement/general_heap:general-heap-recipe-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_heap_lock",
+            "xm1_heap_unlock"
+          ],
+          "contract": "replacement/general_heap/general-heap.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "general_heap-03",
+      "shim": "Charged arena metadata and the stock sentinel word",
+      "kind": "guest-memory layout view",
+      "other_side": "retained allocator consumers and the startup arena publication",
+      "owned": "partly",
+      "removal": "owned startup and allocation callers no longer read the stock sentinel or arena metadata",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/general_heap:general-heap-fixed-image",
+          "kind": "layout",
+          "symbols": [
+            "XM1_HEAP_METADATA",
+            "__heap_sentinel"
+          ],
+          "contract": "replacement/general_heap/general-heap.ld",
+          "requirement": "The linker retains .heap.metadata and the four-byte .heap.sentinel section."
+        },
+        {
+          "image": "//replacement/general_heap:general-heap-image",
+          "kind": "layout",
+          "symbols": [
+            "XM1_HEAP_METADATA",
+            "__heap_sentinel"
+          ],
+          "contract": "replacement/general_heap/general-heap.ld",
+          "requirement": "The linker retains .heap.metadata and the four-byte .heap.sentinel section."
+        },
+        {
+          "image": "//replacement/general_heap:general-heap-recipe-image",
+          "kind": "layout",
+          "symbols": [
+            "XM1_HEAP_METADATA",
+            "__heap_sentinel"
+          ],
+          "contract": "replacement/general_heap/general-heap.ld",
+          "requirement": "The linker retains .heap.metadata and the four-byte .heap.sentinel section."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "general_heap-linked-retained-references",
+      "shim": "Definite retained references in the current linked instruction and relocation metadata",
+      "kind": "retained stock seam in assembly",
+      "other_side": "retained code and guest address contracts reached by the composed image",
+      "owned": "partly",
+      "removal": "all declared retained targets have owned typed replacements and both sides are compared in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/general_heap:general-heap-fixed-image",
+          "kind": "retained-entry",
+          "symbols": [],
+          "retained_targets": [
+            9033992
+          ],
+          "contract": "replacement/general_heap/general-heap.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        },
+        {
+          "image": "//replacement/general_heap:general-heap-image",
+          "kind": "retained-entry",
+          "symbols": [],
+          "retained_targets": [
+            9033992
+          ],
+          "contract": "replacement/general_heap/general-heap.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        },
+        {
+          "image": "//replacement/general_heap:general-heap-recipe-image",
+          "kind": "retained-entry",
+          "symbols": [],
+          "retained_targets": [
+            9033992
+          ],
+          "contract": "replacement/general_heap/general-heap.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "general_heap-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/general_heap:general-heap-fixed-image",
+          "kind": "publication",
+          "symbols": [
+            "__heap_link_end"
+          ],
+          "contract": "replacement/general_heap/general-heap.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        },
+        {
+          "image": "//replacement/general_heap:general-heap-image",
+          "kind": "publication",
+          "symbols": [
+            "__heap_link_end"
+          ],
+          "contract": "replacement/general_heap/general-heap.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        },
+        {
+          "image": "//replacement/general_heap:general-heap-recipe-image",
+          "kind": "publication",
+          "symbols": [
+            "__heap_link_end"
+          ],
+          "contract": "replacement/general_heap/general-heap.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

@@ -158,3 +158,9 @@ genrule(
     cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location decode_test_crc_tests.rs) -o $(@D)/decode-test-crc-tests-bin && $(@D)/decode-test-crc-tests-bin && touch $(@D)/decode-test-crc-tests.passed",
 )
 
+
+filegroup(
+    name = "shim-catalog-data",
+    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel"],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)

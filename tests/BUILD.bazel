@@ -9,6 +9,7 @@ sh_test(
         "$(location @lab_jq//:bin/jq)",
         "$(location @lab_git//:bin/git)",
         "$(location //build-support:evidence-record)",
+        "$(location //replacement/shim_check:shim-check)",
     ],
     data = [
         "//docs:evidence.jsonl",
@@ -16,6 +17,8 @@ sh_test(
         "//docs:evidence-recipes.json",
         "//manifests:initial",
         "//replacement/startup_artifact:qualifications.json",
+        "//replacement/shim_check:shim-check",
+        "//replacement/shim_check:catalog-data",
         "//schemas:all",
         "output-root-allowlist.txt",
         "@lab_git//:bin/git",

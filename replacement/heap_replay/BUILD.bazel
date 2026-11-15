@@ -21,3 +21,9 @@ filegroup(
     name = "subjects",
     srcs = [":heap-replay-rlsf", ":heap-replay-talc", ":heap-replay-buddy"],
 )
+
+filegroup(
+    name = "shim-catalog-data",
+    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel"],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)

@@ -1,0 +1,32 @@
+{
+  "unit": "saclac_interface",
+  "summary": "",
+  "classification": "module",
+  "rows": [
+    {
+      "id": "saclac_interface-01",
+      "shim": "Command, parameter-block and callback descriptors in `src/stock.rs`",
+      "kind": "guest-memory layout view",
+      "other_side": "retained queue-43 command producers, their 46 shared parameter blocks and 106 completion callbacks",
+      "owned": "no",
+      "removal": "queue-43 producers and completion callbacks are owned and no retained consumer reads the parameter blocks",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/saclac:saclac-image",
+          "kind": "layout",
+          "symbols": [
+            "xm1_saclac_dispatch_entry"
+          ],
+          "contract": "replacement/saclac/Replacement/Saclac/Artifact.hs",
+          "requirement": "Command, parameter-block and callback descriptors in `src/stock.rs`. retained queue-43 command producers, their 46 shared parameter blocks and 106 completion callbacks. queue-43 producers and completion callbacks are owned and no retained consumer reads the parameter blocks"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

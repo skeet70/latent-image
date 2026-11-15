@@ -26,3 +26,9 @@ xm1_rust_elf(
     link_script = "//replacement/loader_prefix:loader-prefix.ld",
     rust_staticlib = ":interface-initializer-rust",
 )
+
+filegroup(
+    name = "shim-catalog-data",
+    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel"],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)

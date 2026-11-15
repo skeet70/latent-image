@@ -1,0 +1,137 @@
+{
+  "unit": "root_task",
+  "summary": "The owned root task, calling 28 retained stock services.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "root_task-01",
+      "shim": "the root-task export in `src.rs`, placed by `root-task.ld`",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the stock root-task entry",
+      "owned": "no",
+      "removal": "the root task is entered from owned startup",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/root_task:root-task-image",
+          "kind": "publication",
+          "symbols": [
+            "xm1_root_task"
+          ],
+          "contract": "replacement/root_task/root-task.ld",
+          "requirement": "the root-task export in `src.rs`, placed by `root-task.ld`. the stock root-task entry. the root task is entered from owned startup"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "root_task-02",
+      "shim": "28 `root_*` retained externs (checked init, cleanup, config query/write, resource/worker creation, descriptor/table install, platform/runtime init, periodic callback, later submission)",
+      "kind": "trampoline into retained stock",
+      "other_side": "stock kernel, resource and configuration services",
+      "owned": "no",
+      "removal": "the RTOS platform and owned configuration own those services",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/root_task:root-task-image",
+          "kind": "retained-import",
+          "symbols": [
+            "root_checked_init_a",
+            "root_checked_init_b",
+            "root_cleanup",
+            "root_config_query",
+            "root_config_write",
+            "root_create_resource",
+            "root_create_workers",
+            "root_init_649070",
+            "root_init_6490dc",
+            "root_init_656788",
+            "root_init_6568ec",
+            "root_init_662e48",
+            "root_init_665224",
+            "root_init_676054",
+            "root_init_69f204",
+            "root_init_6a5634",
+            "root_init_6a564c",
+            "root_init_6a5c08",
+            "root_init_7262cc",
+            "root_install_descriptor",
+            "root_install_table",
+            "root_mark",
+            "root_mode",
+            "root_periodic_callback",
+            "root_periodic_context",
+            "root_platform_init",
+            "root_runtime_init",
+            "root_submit_later",
+            "xm1_app_register_callback"
+          ],
+          "contract": "replacement/root_task/root-task.ld",
+          "requirement": "28 `root_*` retained externs (checked init, cleanup, config query/write, resource/worker creation, descriptor/table install, platform/runtime init, periodic callback, later submission). stock kernel, resource and configuration services. the RTOS platform and owned configuration own those services",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "root_task-03",
+      "shim": "`xm1_app_register_callback` retained service",
+      "kind": "callback registry for guest words",
+      "other_side": "the stock callback registry",
+      "owned": "no",
+      "removal": "the owned application registration owns it",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/root_task:root-task-image",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_app_register_callback"
+          ],
+          "contract": "replacement/root_task/root-task.ld",
+          "requirement": "`xm1_app_register_callback` retained service. the stock callback registry. the owned application registration owns it"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "root_task-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/root_task:root-task-image",
+          "kind": "publication",
+          "symbols": [
+            "__root_task_end",
+            "__root_task_start"
+          ],
+          "contract": "replacement/root_task/root-task.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

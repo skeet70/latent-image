@@ -1,0 +1,6 @@
+{
+  "unit": "calibration_core",
+  "summary": "A crate root that re-exports `develop/src/calibration_core` for power_lifecycle and vendor_protocol. It presents no stock shape of its own; the compatibility rows live in `develop`.",
+  "classification": "module",
+  "rows": []
+}

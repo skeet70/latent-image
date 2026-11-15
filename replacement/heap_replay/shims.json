@@ -1,0 +1,6 @@
+{
+  "unit": "heap_replay",
+  "summary": "The isolated allocator replay subjects for rlsf, talc and buddy. These qualification images expose the replay harness API, not a retained firmware interface; there are no stock compatibility rows.",
+  "classification": "module",
+  "rows": []
+}

@@ -1,0 +1,68 @@
+{
+  "unit": "rtos_global_lock",
+  "summary": "The owned global lock.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "rtos_global_lock-01",
+      "shim": "`xm1_rtos_global_lock_try`, `_release`, `_observe` and `helper_try`, `helper_release`, `helper_observe` exports placed at `0x412cc`, `0x412e8`, `0x41304`, `0x427d4`, `0x427fc`, `0x42828`",
+      "kind": "stock-ABI export",
+      "other_side": "stock lock callers",
+      "owned": "no",
+      "removal": "every lock caller is owned or migrated",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/rtos_global_lock/BUILD.bazel",
+          "requirement": "Standalone family qualification images are frozen reference artifacts; the current linked boundary is the platform aggregate, not a rebuilt standalone family image."
+        },
+        {
+          "image": "//replacement/rtos_platform:platform-a",
+          "kind": "export",
+          "symbols": [
+            "helper_observe",
+            "helper_release",
+            "helper_try",
+            "xm1_platform_veneer_global_lock_helper_observe",
+            "xm1_platform_veneer_global_lock_helper_release",
+            "xm1_platform_veneer_global_lock_helper_try",
+            "xm1_platform_veneer_global_lock_observe",
+            "xm1_platform_veneer_global_lock_release",
+            "xm1_platform_veneer_global_lock_try",
+            "xm1_rtos_global_lock_observe",
+            "xm1_rtos_global_lock_release",
+            "xm1_rtos_global_lock_try"
+          ],
+          "contract": "replacement/rtos_platform/carriers.json",
+          "requirement": "`xm1_rtos_global_lock_try`, `_release`, `_observe` and `helper_try`, `helper_release`, `helper_observe` exports placed at `0x412cc`, `0x412e8`, `0x41304`, `0x427d4`, `0x427fc`, `0x42828`. stock lock callers. every lock caller is owned or migrated"
+        },
+        {
+          "image": "//replacement/rtos_platform:platform-b",
+          "kind": "export",
+          "symbols": [
+            "helper_observe",
+            "helper_release",
+            "helper_try",
+            "xm1_platform_veneer_global_lock_helper_observe",
+            "xm1_platform_veneer_global_lock_helper_release",
+            "xm1_platform_veneer_global_lock_helper_try",
+            "xm1_platform_veneer_global_lock_observe",
+            "xm1_platform_veneer_global_lock_release",
+            "xm1_platform_veneer_global_lock_try",
+            "xm1_rtos_global_lock_observe",
+            "xm1_rtos_global_lock_release",
+            "xm1_rtos_global_lock_try"
+          ],
+          "contract": "replacement/rtos_platform/carriers.json",
+          "requirement": "`xm1_rtos_global_lock_try`, `_release`, `_observe` and `helper_try`, `helper_release`, `helper_observe` exports placed at `0x412cc`, `0x412e8`, `0x41304`, `0x427d4`, `0x427fc`, `0x42828`. stock lock callers. every lock caller is owned or migrated"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

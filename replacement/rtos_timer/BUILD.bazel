@@ -357,3 +357,9 @@ alias(
     actual = "//host/firmware:synthetic-host-source-validation",
     tags = ["manual"],
 )
+
+filegroup(
+    name = "shim-catalog-data",
+    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel", "package/Replacement/RtosTimer/RootPackage.hs"],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)

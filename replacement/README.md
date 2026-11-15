@@ -26,6 +26,25 @@ Emit retained-kernel capability metadata as `XM1_KERNEL_BOUNDARY` from the consu
 
 Stagers require their declared canonical X-M1 1.50 inputs, not an arbitrary previously staged candidate. Firmware and generated artifacts remain in ignored `private-data/`; use a named `private-data/scratch/` directory or `private-data/verify-candidate/runs/` for new outputs. Individual commands specify whether directories must already exist or be fresh. Guest execution uses the shared [emulator slot](../build-support/README.md#commands), normally `XM1_EMULATOR_SLOTS=1`; file-only admission and comparison do not execute firmware.
 
+## Linked shim admission
+
+Each owning unit's `shims.json` is the authoritative family declaration. [The register](shims.md) is generated from those declarations and `shim-images.json`; its composition and reference tables are the coverage matrix. The checker reads the actual ARM ELF symbol bindings, retained relocation records and constant call targets, checks each expected ELF identity and qualified binary pin, and refuses missing declarations, exports, retained imports, contradictory bindings and unsupported removal claims. A source filename or wildcard is not link evidence.
+
+The checker independently discovers firmware-owning directories from actual BUILD metadata and source kinds, including Rust cross-toolchain rules and Nix/native ARM-link producers. It resolves the startup packager's declared lists, recursive immutable aliases, parentheses and concatenations. Root BUILD metadata method invocations and indexed or augmented assignments are conservatively refused before resolution, including mutations through aliases. Unresolved, cyclic or unsupported relevant expressions fail closed. `--build-root` names that source checkout separately from a runfiles artifact root. A new firmware unit or RootPackage constituent without a declaration is refused. Required exports must be global definitions inside allocated image sections; absolute retained imports and untyped global entries remain distinct declared mechanisms.
+
+```sh
+devenv shell -- run-output exec --label shim-linked -- bash -c 'host-build run //replacement/shim_check:shim-check -- --receipt-output "$XM1_RUN_RESULT/checker.json"'
+devenv shell -- run-output exec --label shim-contracts -- host-build test //replacement/shim_check:shim-check-tests //tests:research-contracts
+devenv shell -- run-output exec --label shim-register -- host-build run //replacement/shim_check:shim-check -- --render replacement/shims.md
+```
+
+`result.link_admitted` reports the declared link boundary, not firmware acceptance or removal eligibility. Each family reports its remaining state and a three-valued removal predicate. `unestablished` remains pending. `removed` requires an absent linked mechanism, established caller closure and direct owned API use, plus a digest-bound comparison receipt whose compared units are exactly the checked image's participants. Declared consumers must participate before removal. Ownership alone supplies none of those predicates. Frozen standalone RTOS bodies remain references; current platform aggregates supply their linked evidence. The startup RootPackage composes fourteen constituent ELFs across 33 declared input files through its existing contract, not a fictitious aggregate ELF.
+
+Adding a composition or migrating a family is a declaration-data change: name its exact current symbols or retained-entry/layout/publication requirements, include its artifacts in `:linked-images`/`:catalog-data`, record the qualified expected identities, and regenerate the register. `--artifact-inventory PATH` emits non-admitting observations for this migration; it neither accepts comparisons nor updates pins. `//tests:research-contracts` invokes the real checker and rejects a stale generated register. Dynamically supplied callback and caller closure remain separate qualification obligations.
+
+Definite retained-reference analysis follows A32 instructions, relocation targets and tracked constants, including the taken and fallthrough edges of conditional PC writes. Unknown register targets, nonliteral loads, Thumb execution and rejected paths do not establish exhaustive caller closure. Power's record-helper image binds its actual helper exports and three kernel imports; the absent NAND/property/pipeline/task/modal/scanout clients, assembly residues, OSAL slot consumers, callback registry and 88 leaf-service producer entries remain explicit nonlinked obligations. Reference-only symbol assertions are checked for absence from the owner's current images.
+
+
 ## Render pairs
 
 The [render adapter](render_adapter/README.md) links the owned render bank into the RAM package. `emulation/menu-engine-pair-trajectories/run-render-pairs.sh` admits each role's inputs, replays the finite R1 stock/owned cohort and compares engine traffic, settings and rendered output. Its selected-tree-row control must change the draw and image comparisons while preserving engine reads and posts.

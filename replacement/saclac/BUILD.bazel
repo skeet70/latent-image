@@ -287,3 +287,9 @@ filegroup(
         ":stage-saclac",
     ],
 )
+
+filegroup(
+    name = "shim-catalog-data",
+    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel", "Replacement/Saclac/Artifact.hs"],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)

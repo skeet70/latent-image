@@ -1,0 +1,276 @@
+{
+  "unit": "modal_runtime",
+  "summary": "Modal dispatch, controller 75 and the cancellation hooks.",
+  "classification": "module",
+  "rows": [
+    {
+      "id": "modal_runtime-01",
+      "shim": "`rb_menu_value_cancel`/`rb_menu_value_confirm` externs",
+      "kind": "C-ABI bridge between two owned units",
+      "other_side": "menu_value",
+      "owned": "yes",
+      "removal": "modal dispatch calls the crate directly and both sides compare with stock in one image",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/modal_runtime/BUILD.bazel",
+          "requirement": "The registered mechanism remains required; this reference or qualification-only mechanism is not part of the selected linked image. `rb_menu_value_cancel`/`rb_menu_value_confirm` externs"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "modal_runtime-02",
+      "shim": "`rb_modal_entry` in `src/entry.S`, published at `0xbfb028`, with the stock+4 fallback for every controller other than 75",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the stock dispatcher and 173 stock controllers",
+      "owned": "no",
+      "removal": "the owned dispatcher owns all 174 controllers",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//host/firmware:bank-modal-elf-00c40000",
+          "kind": "publication",
+          "symbols": [
+            "rb_modal_entry"
+          ],
+          "contract": "menu/recipe_bank_ram.ld",
+          "requirement": "`rb_modal_entry` in `src/entry.S`, published at `0xbfb028`, with the stock+4 fallback for every controller other than 75. the stock dispatcher and 173 stock controllers. the owned dispatcher owns all 174 controllers"
+        },
+        {
+          "image": "//host/firmware:bank-modal-elf-00c4fc88",
+          "kind": "publication",
+          "symbols": [
+            "rb_modal_entry"
+          ],
+          "contract": "menu/recipe_bank_ram.ld",
+          "requirement": "`rb_modal_entry` in `src/entry.S`, published at `0xbfb028`, with the stock+4 fallback for every controller other than 75. the stock dispatcher and 173 stock controllers. the owned dispatcher owns all 174 controllers"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine",
+          "kind": "publication",
+          "symbols": [
+            "rb_modal_entry"
+          ],
+          "contract": "menu/recipe_bank_ram.ld",
+          "requirement": "`rb_modal_entry` in `src/entry.S`, published at `0xbfb028`, with the stock+4 fallback for every controller other than 75. the stock dispatcher and 173 stock controllers. the owned dispatcher owns all 174 controllers"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "publication",
+          "symbols": [
+            "rb_modal_entry"
+          ],
+          "contract": "menu/recipe_bank_ram.ld",
+          "requirement": "`rb_modal_entry` in `src/entry.S`, published at `0xbfb028`, with the stock+4 fallback for every controller other than 75. the stock dispatcher and 173 stock controllers. the owned dispatcher owns all 174 controllers"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "modal_runtime-03",
+      "shim": "`rb_modal_dispatch` export",
+      "kind": "C-ABI bridge between two owned units",
+      "other_side": "power_lifecycle",
+      "owned": "yes",
+      "removal": "power links the dispatch crate directly and both sides compare with stock in one image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//host/firmware:bank-modal-elf-00c40000",
+          "kind": "export",
+          "symbols": [
+            "rb_modal_dispatch"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_modal_dispatch` export. power_lifecycle. power links the dispatch crate directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//host/firmware:bank-modal-elf-00c4fc88",
+          "kind": "export",
+          "symbols": [
+            "rb_modal_dispatch"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_modal_dispatch` export. power_lifecycle. power links the dispatch crate directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine",
+          "kind": "export",
+          "symbols": [
+            "rb_modal_dispatch"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_modal_dispatch` export. power_lifecycle. power links the dispatch crate directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "export",
+          "symbols": [
+            "rb_modal_dispatch"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_modal_dispatch` export. power_lifecycle. power links the dispatch crate directly and both sides compare with stock in one image"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "modal_runtime-04",
+      "shim": "`rb_modal_call_prehook`, `rb_modal_call` and `dispatch.S` callback glue",
+      "kind": "callback registry for guest words",
+      "other_side": "the retained prehook `0xd0cc68` and stock action/transition callbacks",
+      "owned": "no",
+      "removal": "every callback is owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//host/firmware:bank-modal-elf-00c40000",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_modal_call",
+            "rb_modal_call_prehook"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_modal_call_prehook`, `rb_modal_call` and `dispatch.S` callback glue. the retained prehook `0xd0cc68` and stock action/transition callbacks. every callback is owned"
+        },
+        {
+          "image": "//host/firmware:bank-modal-elf-00c4fc88",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_modal_call",
+            "rb_modal_call_prehook"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_modal_call_prehook`, `rb_modal_call` and `dispatch.S` callback glue. the retained prehook `0xd0cc68` and stock action/transition callbacks. every callback is owned"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_modal_call",
+            "rb_modal_call_prehook"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_modal_call_prehook`, `rb_modal_call` and `dispatch.S` callback glue. the retained prehook `0xd0cc68` and stock action/transition callbacks. every callback is owned"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_modal_call",
+            "rb_modal_call_prehook"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_modal_call_prehook`, `rb_modal_call` and `dispatch.S` callback glue. the retained prehook `0xd0cc68` and stock action/transition callbacks. every callback is owned"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "modal_runtime-05",
+      "shim": "`rb_call_modal_query`, `rb_call_redraw`, `rb_call_stage_open`, `rb_call_transition`, `rb_bank_key_left/right`, `rb_lifecycle_*` retained services",
+      "kind": "trampoline into retained stock",
+      "other_side": "stock modal and bank services",
+      "owned": "no",
+      "removal": "those services are owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//host/firmware:bank-elf-00c40000",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_call_modal_query",
+            "rb_call_redraw",
+            "rb_call_stage_open",
+            "rb_call_transition"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_call_modal_query`, `rb_call_redraw`, `rb_call_stage_open`, `rb_call_transition`, `rb_bank_key_left/right`, `rb_lifecycle_*` retained services. stock modal and bank services. those services are owned"
+        },
+        {
+          "image": "//host/firmware:bank-elf-00c4fc88",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_call_modal_query",
+            "rb_call_redraw",
+            "rb_call_stage_open",
+            "rb_call_transition"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_call_modal_query`, `rb_call_redraw`, `rb_call_stage_open`, `rb_call_transition`, `rb_bank_key_left/right`, `rb_lifecycle_*` retained services. stock modal and bank services. those services are owned"
+        },
+        {
+          "image": "//host/firmware:bank-modal-elf-00c40000",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_call_modal_query",
+            "rb_call_redraw",
+            "rb_call_stage_open",
+            "rb_call_transition"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_call_modal_query`, `rb_call_redraw`, `rb_call_stage_open`, `rb_call_transition`, `rb_bank_key_left/right`, `rb_lifecycle_*` retained services. stock modal and bank services. those services are owned"
+        },
+        {
+          "image": "//host/firmware:bank-modal-elf-00c4fc88",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_call_modal_query",
+            "rb_call_redraw",
+            "rb_call_stage_open",
+            "rb_call_transition"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_call_modal_query`, `rb_call_redraw`, `rb_call_stage_open`, `rb_call_transition`, `rb_bank_key_left/right`, `rb_lifecycle_*` retained services. stock modal and bank services. those services are owned"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_call_modal_query",
+            "rb_call_redraw",
+            "rb_call_stage_open",
+            "rb_call_transition"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_call_modal_query`, `rb_call_redraw`, `rb_call_stage_open`, `rb_call_transition`, `rb_bank_key_left/right`, `rb_lifecycle_*` retained services. stock modal and bank services. those services are owned"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "retained-entry",
+          "symbols": [
+            "rb_call_modal_query",
+            "rb_call_redraw",
+            "rb_call_stage_open",
+            "rb_call_transition"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_call_modal_query`, `rb_call_redraw`, `rb_call_stage_open`, `rb_call_transition`, `rb_bank_key_left/right`, `rb_lifecycle_*` retained services. stock modal and bank services. those services are owned"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

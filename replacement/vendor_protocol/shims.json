@@ -1,0 +1,100 @@
+{
+  "unit": "vendor_protocol",
+  "summary": "The vendor, wireless, filesystem and device-protocol unit. Most of its externals are owned units; the remaining seam is the stock USB/wireless and filesystem surface.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "vendor_protocol-01",
+      "shim": "`xm1_app_nand_*`, `xm1_power_*`, `xm1_scanout_*`, `xm1_rtos_own_first_slot_*` externs (owned units)",
+      "kind": "C-ABI bridge between two owned units",
+      "other_side": "application_nand, power_lifecycle, display_scanout, rtos_own_first",
+      "owned": "yes",
+      "removal": "each caller links the owning crate directly and both sides compare with stock in one image",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/vendor_protocol/BUILD.bazel",
+          "requirement": "The registered mechanism belongs to the component/runtime composition, not the bounded session-native ELF. No produced production ELF establishes this boundary. `xm1_app_nand_*`, `xm1_power_*`, `xm1_scanout_*`, `xm1_rtos_own_first_slot_*` externs (owned units)"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "vendor_protocol-02",
+      "shim": "`vendor_session_initialize`, `vendor_session_control`, `vendor_session_context_size`, `vendor_session_context_alignment`, `xm1_vendor_usb_task`, `xm1_vendor_usb_interrupt` exports",
+      "kind": "stock-ABI export",
+      "other_side": "stock USB/session callers",
+      "owned": "no",
+      "removal": "every USB/session caller is owned or migrated",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/vendor_protocol/BUILD.bazel",
+          "requirement": "USB task and interrupt exports remain component declarations without an existing produced production ELF."
+        },
+        {
+          "image": "//replacement/vendor_protocol:session-native",
+          "kind": "retained-entry",
+          "symbols": [
+            "vendor_session_probe"
+          ],
+          "contract": "replacement/vendor_protocol/vendor-session-native.ld",
+          "requirement": "The bounded native session image retains the session control entry through vendor_session_probe; USB task and interrupt publication are not established by this qualification image."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "vendor_protocol-03",
+      "shim": "`xm1_wireless_driver_task`, `xm1_wireless_supplicant_task` retained services",
+      "kind": "trampoline into retained stock",
+      "other_side": "stock wireless driver and supplicant tasks",
+      "owned": "no",
+      "removal": "the wireless subsystem is owned",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/vendor_protocol/BUILD.bazel",
+          "requirement": "The registered mechanism belongs to the component/runtime composition, not the bounded session-native ELF. No produced production ELF establishes this boundary. `xm1_wireless_driver_task`, `xm1_wireless_supplicant_task` retained services"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "vendor_protocol-04",
+      "shim": "filesystem and media-task ABI views (`filesystem_*`, `media_parser`, `metadata_*`)",
+      "kind": "guest-memory layout view",
+      "other_side": "retained stock filesystem, media and metadata services",
+      "owned": "no",
+      "removal": "the owned file service and filesystem are qualified",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/vendor_protocol/BUILD.bazel",
+          "requirement": "The registered mechanism belongs to the component/runtime composition, not the bounded session-native ELF. No produced production ELF establishes this boundary. filesystem and media-task ABI views (`filesystem_*`, `media_parser`, `metadata_*`)"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

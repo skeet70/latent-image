@@ -15,3 +15,9 @@ xm1_rust_elf(
     link_script = "peer-wait-control.ld",
     rust_staticlib = ":peer-wait-control-rust",
 )
+
+filegroup(
+    name = "shim-catalog-data",
+    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel"],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)

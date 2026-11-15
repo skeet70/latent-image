@@ -139,3 +139,9 @@ sh_test(
     args = ["$(location :cyclic-host-tests-build)"],
     data = [":cyclic-host-tests-build"],
 )
+
+filegroup(
+    name = "shim-catalog-data",
+    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel"],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)

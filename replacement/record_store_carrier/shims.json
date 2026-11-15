@@ -1,0 +1,91 @@
+{
+  "unit": "record_store_carrier",
+  "summary": "The record-store carrier ELF: entry veneers and import stubs.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "record_store_carrier-01",
+      "shim": "`record_store_entry_*` in `entry.S` and `record-store.ld`",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "stock callers of the retired record-service span",
+      "owned": "no",
+      "removal": "every client enters the owned store directly",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/record_store_carrier:record-store-image",
+          "kind": "publication",
+          "symbols": [
+            "record_store_entry_append",
+            "record_store_entry_close",
+            "record_store_entry_collect",
+            "record_store_entry_erase_all",
+            "record_store_entry_open",
+            "record_store_entry_read_at",
+            "record_store_entry_read_latest",
+            "record_store_entry_register",
+            "record_store_entry_zero"
+          ],
+          "contract": "replacement/record_store_carrier/imports.ld",
+          "requirement": "`record_store_entry_*` in `entry.S` and `record-store.ld`. stock callers of the retired record-service span. every client enters the owned store directly"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "record_store_carrier-02",
+      "shim": "`imports.ld` import stubs",
+      "kind": "trampoline into retained stock",
+      "other_side": "the retained raw NAND and semaphore services",
+      "owned": "no",
+      "removal": "the owned NAND and RTOS services replace them",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/record_store_carrier:record-store-image",
+          "kind": "retained-import",
+          "symbols": [
+            "record_raw_erase_0",
+            "record_raw_erase_1",
+            "record_raw_erase_2",
+            "record_raw_erase_3",
+            "record_raw_erase_4",
+            "record_raw_region_read",
+            "record_raw_write_0",
+            "record_raw_write_1",
+            "record_raw_write_2",
+            "record_raw_write_3",
+            "record_raw_write_4",
+            "record_semaphore_give",
+            "record_semaphore_take",
+            "record_store_block",
+            "record_store_cache_ages",
+            "record_store_cache_tags",
+            "record_store_cache_timestamp",
+            "record_store_initialized",
+            "record_store_second_block",
+            "record_store_staging_0",
+            "record_store_staging_1",
+            "record_store_staging_2",
+            "record_store_staging_3",
+            "record_store_staging_4",
+            "record_store_state",
+            "record_store_wrappers"
+          ],
+          "contract": "replacement/record_store_carrier/imports.ld",
+          "requirement": "`imports.ld` import stubs. the retained raw NAND and semaphore services. the owned NAND and RTOS services replace them",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

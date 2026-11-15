@@ -1,0 +1,89 @@
+{
+  "unit": "recipe_ui",
+  "summary": "The recipe-bank UI route entry points.",
+  "classification": "module",
+  "rows": [
+    {
+      "id": "recipe_ui-01",
+      "shim": "`rb_ui_route_page`, `rb_ui_route_slot`, `rb_ui_route_item` exports",
+      "kind": "stock-ABI export",
+      "other_side": "stock bank route callers",
+      "owned": "no",
+      "removal": "the owned bank route calls them directly",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//host/firmware:bank-elf-00c40000",
+          "kind": "export",
+          "symbols": [
+            "rb_ui_route_item",
+            "rb_ui_route_page",
+            "rb_ui_route_slot"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_ui_route_page`, `rb_ui_route_slot`, `rb_ui_route_item` exports. stock bank route callers. the owned bank route calls them directly"
+        },
+        {
+          "image": "//host/firmware:bank-elf-00c4fc88",
+          "kind": "export",
+          "symbols": [
+            "rb_ui_route_item",
+            "rb_ui_route_page",
+            "rb_ui_route_slot"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_ui_route_page`, `rb_ui_route_slot`, `rb_ui_route_item` exports. stock bank route callers. the owned bank route calls them directly"
+        },
+        {
+          "image": "//host/firmware:bank-modal-elf-00c40000",
+          "kind": "export",
+          "symbols": [
+            "rb_ui_route_item",
+            "rb_ui_route_page",
+            "rb_ui_route_slot"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_ui_route_page`, `rb_ui_route_slot`, `rb_ui_route_item` exports. stock bank route callers. the owned bank route calls them directly"
+        },
+        {
+          "image": "//host/firmware:bank-modal-elf-00c4fc88",
+          "kind": "export",
+          "symbols": [
+            "rb_ui_route_item",
+            "rb_ui_route_page",
+            "rb_ui_route_slot"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_ui_route_page`, `rb_ui_route_slot`, `rb_ui_route_item` exports. stock bank route callers. the owned bank route calls them directly"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine",
+          "kind": "export",
+          "symbols": [
+            "rb_ui_route_item",
+            "rb_ui_route_page",
+            "rb_ui_route_slot"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_ui_route_page`, `rb_ui_route_slot`, `rb_ui_route_item` exports. stock bank route callers. the owned bank route calls them directly"
+        },
+        {
+          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
+          "kind": "export",
+          "symbols": [
+            "rb_ui_route_item",
+            "rb_ui_route_page",
+            "rb_ui_route_slot"
+          ],
+          "contract": "menu/recipe_bank_ram_engine.ld",
+          "requirement": "`rb_ui_route_page`, `rb_ui_route_slot`, `rb_ui_route_item` exports. stock bank route callers. the owned bank route calls them directly"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

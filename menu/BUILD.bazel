@@ -142,3 +142,9 @@ filegroup(
         "//emulation:__pkg__",
     ],
 )
+
+filegroup(
+    name = "shim-contract-data",
+    srcs = glob(["*.json", "*.ld"]),
+    visibility = ["//replacement/shim_check:__pkg__"],
+)

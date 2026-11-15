@@ -1,0 +1,85 @@
+{
+  "unit": "rtos_irq_control",
+  "summary": "The owned IRQ control and handler registration.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "rtos_irq_control-01",
+      "shim": "`xm1_rtos_irq_*` exports placed at `0x41108`, `0x41124`, `0x4d8fc`-family addresses by `irq-a.ld`/`irq-b.ld`",
+      "kind": "stock-ABI export",
+      "other_side": "stock IRQ callers",
+      "owned": "no",
+      "removal": "every IRQ caller is owned or migrated",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/rtos_irq_control:irq-a",
+          "kind": "export",
+          "symbols": [
+            "xm1_rtos_irq_define",
+            "xm1_rtos_irq_define_body",
+            "xm1_rtos_irq_disable",
+            "xm1_rtos_irq_disable_body",
+            "xm1_rtos_irq_enable",
+            "xm1_rtos_irq_enable_body"
+          ],
+          "contract": "replacement/rtos_irq_control/irq-a.ld",
+          "requirement": "`xm1_rtos_irq_*` exports placed at `0x41108`, `0x41124`, `0x4d8fc`-family addresses by `irq-a.ld`/`irq-b.ld`. stock IRQ callers. every IRQ caller is owned or migrated"
+        },
+        {
+          "image": "//replacement/rtos_irq_control:irq-b",
+          "kind": "export",
+          "symbols": [
+            "xm1_rtos_irq_define",
+            "xm1_rtos_irq_define_body",
+            "xm1_rtos_irq_disable",
+            "xm1_rtos_irq_disable_body",
+            "xm1_rtos_irq_enable",
+            "xm1_rtos_irq_enable_body"
+          ],
+          "contract": "replacement/rtos_irq_control/irq-a.ld",
+          "requirement": "`xm1_rtos_irq_*` exports placed at `0x41108`, `0x41124`, `0x4d8fc`-family addresses by `irq-a.ld`/`irq-b.ld`. stock IRQ callers. every IRQ caller is owned or migrated"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "rtos_irq_control-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/rtos_irq_control:irq-a",
+          "kind": "publication",
+          "symbols": [
+            "__irq_body_end"
+          ],
+          "contract": "replacement/rtos_irq_control/irq-a.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        },
+        {
+          "image": "//replacement/rtos_irq_control:irq-b",
+          "kind": "publication",
+          "symbols": [
+            "__irq_body_end"
+          ],
+          "contract": "replacement/rtos_irq_control/irq-b.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

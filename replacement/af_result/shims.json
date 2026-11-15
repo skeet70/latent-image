@@ -1,0 +1,118 @@
+{
+  "unit": "af_result",
+  "summary": "The autofocus result pool, published at the five stock entry addresses in `af-result.ld`.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "af_result-01",
+      "shim": "`xm1_af_select_adapter`, `xm1_af_rotate`, `xm1_af_reserve`, `xm1_af_release` and the secondary consumer in `src/abi.rs`, placed by `af-result.ld` at `0x103f190`, `0x103f1fc`, `0x103fb50`, `0x103fd38`, `0x103fd88`",
+      "kind": "stock-ABI export",
+      "other_side": "stock AF callers and pointer tables that enter the five addresses",
+      "owned": "no",
+      "removal": "every AF result caller is owned or migrated",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/af_result:af-result",
+          "kind": "export",
+          "symbols": [
+            "xm1_af_release",
+            "xm1_af_reserve",
+            "xm1_af_rotate",
+            "xm1_af_secondary_consumer",
+            "xm1_af_select_adapter"
+          ],
+          "contract": "replacement/af_result/af-result.ld",
+          "requirement": "`xm1_af_select_adapter`, `xm1_af_rotate`, `xm1_af_reserve`, `xm1_af_release` and the secondary consumer in `src/abi.rs`, placed by `af-result.ld` at `0x103f190`, `0x103f1fc`, `0x103fb50`, `0x103fd38`, `0x103fd88`. stock AF callers and pointer tables that enter the five addresses. every AF result caller is owned or migrated"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "af_result-02",
+      "shim": "`xm1_af_select` entry veneer in `entry.S`",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the stock selector entry",
+      "owned": "no",
+      "removal": "the selector is called directly",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/af_result:af-result",
+          "kind": "publication",
+          "symbols": [
+            "xm1_af_select"
+          ],
+          "contract": "replacement/af_result/af-result.ld",
+          "requirement": "`xm1_af_select` entry veneer in `entry.S`. the stock selector entry. the selector is called directly"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "af_result-03",
+      "shim": "`xm1_af_critical_enter`, `xm1_af_critical_leave`, `xm1_af_secondary_mode` retained services",
+      "kind": "trampoline into retained stock",
+      "other_side": "stock RTOS critical-section and secondary-core services",
+      "owned": "no",
+      "removal": "the RTOS platform and secondary-core state are owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/af_result:af-result",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_af_critical_enter",
+            "xm1_af_critical_leave",
+            "xm1_af_secondary_mode"
+          ],
+          "contract": "replacement/af_result/af-result.ld",
+          "requirement": "`xm1_af_critical_enter`, `xm1_af_critical_leave`, `xm1_af_secondary_mode` retained services. stock RTOS critical-section and secondary-core services. the RTOS platform and secondary-core state are owned",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "af_result-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/af_result:af-result",
+          "kind": "publication",
+          "symbols": [
+            "__af_release_end",
+            "__af_reserve_end",
+            "__af_rotate_end",
+            "__af_secondary_end",
+            "__af_select_end"
+          ],
+          "contract": "replacement/af_result/af-result.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

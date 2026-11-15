@@ -1,0 +1,6 @@
+{
+  "unit": "embassy_trial",
+  "summary": "A trial Embassy executor image. It presents no stock shape; the trial exists to qualify a runtime base.",
+  "classification": "module",
+  "rows": []
+}

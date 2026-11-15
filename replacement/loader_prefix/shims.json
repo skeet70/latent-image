@@ -1,0 +1,218 @@
+{
+  "unit": "loader_prefix",
+  "summary": "The owned loader-B core-1 entry.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "loader_prefix-01",
+      "shim": "`xm1_loader_prefix_entry`, `xm1_loader_prefix_exit`, `xm1_loader_prefix_install`, `xm1_loader_prefix_clear` and the fault variants in `entry.S`/`src.rs`",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the stock loader-B entry and the record-2 handoff",
+      "owned": "no",
+      "removal": "loader-B startup is owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/critical_pair:critical-pair-image",
+          "kind": "publication",
+          "symbols": [
+            "xm1_loader_prefix_clear",
+            "xm1_loader_prefix_entry",
+            "xm1_loader_prefix_exit",
+            "xm1_loader_prefix_install"
+          ],
+          "contract": "replacement/loader_prefix/loader-prefix.ld",
+          "requirement": "`xm1_loader_prefix_entry`, `xm1_loader_prefix_exit`, `xm1_loader_prefix_install`, `xm1_loader_prefix_clear` and the fault variants in `entry.S`/`src.rs`. the stock loader-B entry and the record-2 handoff. loader-B startup is owned"
+        },
+        {
+          "image": "//replacement/interface_initializer:interface-initializer-image",
+          "kind": "publication",
+          "symbols": [
+            "xm1_loader_prefix_clear",
+            "xm1_loader_prefix_entry",
+            "xm1_loader_prefix_exit",
+            "xm1_loader_prefix_install"
+          ],
+          "contract": "replacement/loader_prefix/loader-prefix.ld",
+          "requirement": "`xm1_loader_prefix_entry`, `xm1_loader_prefix_exit`, `xm1_loader_prefix_install`, `xm1_loader_prefix_clear` and the fault variants in `entry.S`/`src.rs`. the stock loader-B entry and the record-2 handoff. loader-B startup is owned"
+        },
+        {
+          "image": "//replacement/loader_prefix:loader-prefix-image",
+          "kind": "publication",
+          "symbols": [
+            "xm1_loader_prefix_clear",
+            "xm1_loader_prefix_entry",
+            "xm1_loader_prefix_exit",
+            "xm1_loader_prefix_install"
+          ],
+          "contract": "replacement/loader_prefix/loader-prefix.ld",
+          "requirement": "`xm1_loader_prefix_entry`, `xm1_loader_prefix_exit`, `xm1_loader_prefix_install`, `xm1_loader_prefix_clear` and the fault variants in `entry.S`/`src.rs`. the stock loader-B entry and the record-2 handoff. loader-B startup is owned"
+        },
+        {
+          "image": "//replacement/critical_pair:critical-pair-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_loader_prefix_clear_workspace"
+          ],
+          "contract": "replacement/loader_prefix/loader-prefix.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        },
+        {
+          "image": "//replacement/interface_initializer:interface-initializer-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_loader_prefix_clear_workspace"
+          ],
+          "contract": "replacement/loader_prefix/loader-prefix.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        },
+        {
+          "image": "//replacement/loader_prefix:loader-prefix-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_loader_prefix_clear_workspace"
+          ],
+          "contract": "replacement/loader_prefix/loader-prefix.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "loader_prefix-02",
+      "shim": "`xm1_loader_prefix_clear` retained service",
+      "kind": "trampoline into retained stock",
+      "other_side": "the stock workspace-clear helper",
+      "owned": "no",
+      "removal": "the clear is owned",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/critical_pair:critical-pair-image",
+          "kind": "retained-entry",
+          "symbols": [
+            "xm1_loader_prefix_clear"
+          ],
+          "contract": "replacement/loader_prefix/loader-prefix.ld",
+          "requirement": "`xm1_loader_prefix_clear` retained service. the stock workspace-clear helper. the clear is owned"
+        },
+        {
+          "image": "//replacement/interface_initializer:interface-initializer-image",
+          "kind": "retained-entry",
+          "symbols": [
+            "xm1_loader_prefix_clear"
+          ],
+          "contract": "replacement/loader_prefix/loader-prefix.ld",
+          "requirement": "`xm1_loader_prefix_clear` retained service. the stock workspace-clear helper. the clear is owned"
+        },
+        {
+          "image": "//replacement/loader_prefix:loader-prefix-image",
+          "kind": "retained-entry",
+          "symbols": [
+            "xm1_loader_prefix_clear"
+          ],
+          "contract": "replacement/loader_prefix/loader-prefix.ld",
+          "requirement": "`xm1_loader_prefix_clear` retained service. the stock workspace-clear helper. the clear is owned"
+        },
+        {
+          "image": "//replacement/loader_prefix:loader-prefix-image",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_forbid_fetch_entry_end",
+            "xm1_forbid_fetch_entry_start",
+            "xm1_forbid_fetch_log_end",
+            "xm1_forbid_fetch_log_start",
+            "xm1_forbid_fetch_main_end",
+            "xm1_forbid_fetch_main_start",
+            "xm1_forbid_fetch_mpu_discriminator_end",
+            "xm1_forbid_fetch_mpu_discriminator_start",
+            "xm1_forbid_fetch_selection_end",
+            "xm1_forbid_fetch_selection_start",
+            "xm1_forbid_fetch_stub_a_end",
+            "xm1_forbid_fetch_stub_a_start",
+            "xm1_forbid_fetch_stub_b_end",
+            "xm1_forbid_fetch_stub_b_start",
+            "xm1_forbid_read_entry_pool_end",
+            "xm1_forbid_read_entry_pool_start",
+            "xm1_forbid_read_handoff_pool_end",
+            "xm1_forbid_read_handoff_pool_start",
+            "xm1_forbid_read_main_pool_end",
+            "xm1_forbid_read_main_pool_start",
+            "xm1_loader_b_forbid_fetch_entry_end",
+            "xm1_loader_b_forbid_fetch_entry_start",
+            "xm1_loader_b_forbid_read_entry_pool_end",
+            "xm1_loader_b_forbid_read_entry_pool_start",
+            "xm1_loader_b_frame_return",
+            "xm1_loader_b_image_end",
+            "xm1_loader_b_image_start",
+            "xm1_loader_b_stack_top",
+            "xm1_loader_b_startup",
+            "xm1_loader_b_stock_entry",
+            "xm1_publication_argument",
+            "xm1_publication_target",
+            "xm1_record_base",
+            "xm1_retained_body_end",
+            "xm1_retained_body_start",
+            "xm1_retained_companion_flags",
+            "xm1_retained_companion_transfer",
+            "xm1_retained_config_record",
+            "xm1_retained_conversion",
+            "xm1_retained_data_end",
+            "xm1_retained_data_start",
+            "xm1_retained_delay",
+            "xm1_retained_execution_state",
+            "xm1_retained_peripheral_final",
+            "xm1_retained_peripheral_init",
+            "xm1_retained_segment_lookup",
+            "xm1_retained_structure_init",
+            "xm1_retained_tcm_stacks",
+            "xm1_vector_after_reset_start",
+            "xm1_vector_before_reset_end",
+            "xm1_vector_table_end",
+            "xm1_vector_table_start"
+          ],
+          "contract": "replacement/loader_prefix/loader-prefix.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "loader_prefix-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/loader_prefix:loader-prefix-image",
+          "kind": "publication",
+          "symbols": [
+            "__secondary_stage_end",
+            "__secondary_stage_start",
+            "xm1_secondary_handoff_vector",
+            "xm1_secondary_log_read",
+            "xm1_secondary_log_store"
+          ],
+          "contract": "replacement/loader_prefix/loader-prefix.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}
