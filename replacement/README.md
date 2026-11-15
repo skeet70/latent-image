@@ -247,9 +247,9 @@ An older topic checkout may still provide an older launcher. Use the current qua
 
 <!-- evidence-record E-FUJIMOD-XM1-PLAY-JPEG-150 -->
 
-E-FUJIMOD-XM1-PLAY-JPEG-150: The stock X-M1 PLAY route's source/layout/extent observation is passed for 2 completed jobs, with the original card unchanged (true). Preview: 320x240, 153600 complete output bytes; 21400 exact fixture codestream bytes at offset 65728 plus 89 observed preserved pre-copy tail bytes make its 21489-byte programmed span, whose literal whole-fixture-subrange identity is false. Full image: 4896x2760, 3515192 literal fixture bytes and 27025920 complete output bytes. Both jobs are sampled before the shared destination is reused, with programmed operands, natural completion status and loaded endpoint bound separately. Independent JuicyPixels RGB-to-packed422 reference comparisons differ by 13862 preview bytes and 551768 full-frame bytes; these are not qualified pixel agreement. The final PNG visibly shows the playback photograph and overlay.
+E-FUJIMOD-XM1-PLAY-JPEG-150: The stock X-M1 PLAY route's source/layout/extent observation is passed for 2 completed jobs, with the original card unchanged (true). Preview: 320x240, 153600 complete output bytes; 21400 exact fixture codestream bytes at offset 65728 plus 89 observed preserved pre-copy tail bytes make its 21489-byte programmed span, whose literal whole-fixture-subrange identity is false. Full image: 4896x2760, 3515192 literal fixture bytes and 27025920 complete output bytes. Both jobs are sampled before the shared destination is reused, with programmed operands, natural completion status and loaded endpoint bound separately. Independent JuicyPixels RGB-to-packed422 reference comparisons differ by 13862 preview bytes and 551768 full-frame bytes; these are not qualified pixel agreement. The final PNG visibly shows the playback photograph and overlay. A later matching-checkpoint PLAY run independently inspects 6905 sectors before and 6905 after playback in 26/26 actual media-read requests, including allocation slack. All inspected sectors match the original file (true/true), exposed SD state is unchanged (true/true), and the whole original card remains unchanged (true).
 
-Scope: One stock-DAT cold-boot public media-route-smoke play execution on the granted FujiMod runtime and one card fixture. Full sources are observed before decode and complete source/header-derived output extents before reuse; source, capacity, alias, geometry, padding and endpoint checks pass. No added MMIO reads, device-law changes or fitted pixel tolerance.
+Scope: One stock-DAT cold-boot PLAY execution and one later matching-keyed-attach-checkpoint PLAY execution on the unchanged pinned FujiMod runtime and identified card fixture. Full sources are observed before decode and complete source/header-derived output extents before reuse; source, capacity, alias, geometry, padding and endpoint checks pass. The later run adds independent original-file sector comparisons and whole-card hashes, not another cold boot or owned playback acceptance. No added MMIO reads, device-law changes or fitted pixel tolerance.
 
 <!-- /evidence-record E-FUJIMOD-XM1-PLAY-JPEG-150 -->
 
@@ -272,6 +272,18 @@ E-FIRST-RECORD-FLASH-BOOT-CHECK-150: The compile-time clock-backend first stage 
 Scope: Four actual cold-boot-to-menu executions, the two packages on each engine, from the committed first-stage image identified in the run's binary digest receipt. Packaging runs outside emulator admission; each emulator launcher acquires its own slot.
 
 <!-- /evidence-record E-FIRST-RECORD-FLASH-BOOT-CHECK-150 -->
+
+## Later-loading native qualification
+
+[Startup workflow](startup.md#bounded-image5-skiprefusal-and-cpu-fill-witness) and [caller contract](../reports/replacement-inventory-baseline.md#bounded-image5-skiprefusal-and-cpu-fill-caller-path).
+
+<!-- evidence-record E-LATER-IMAGE5-SKIP-REFUSAL-NATIVE-150 -->
+
+E-LATER-IMAGE5-SKIP-REFUSAL-NATIVE-150: The conditional image5 skip/refusal/CPU-fill matrix passes (true) over 15 native executions. Retained and linked owned producers are exercised through the actual stock flashloader caller and continuation. Cases cover rejected aligned fill, unaligned BSS base and unaligned BSS length; exact BSS zeroing, unchanged halos and destination, cache publication, done-before-release and callback error agree. Executed producers omitting CPU fill, error status or cache publication reach the declared stop and are rejected by their behavioral oracle. Stock image4 is f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16, owned producer c4002c01c67a18647ffe5e0b2bc561af3e212c59c5ebcec0dac77000c6ea7703, and runner e070f23ea648823af72bc7c38d588031a5ff1e59fceebb446442cbf96efddd46.
+
+Scope: Conditional X-M1 1.50 flashloader entry/caller continuation, retained or emitted Rust image5 producer, unconfigured-storage refusal and byte/word CPU-fill bodies. Mailbox, nonzero mode, segment, rejected fill result and RTOS/cache sinks are synthetic. Nonzero mode skips decoder initialization, feed and finish. Stock instructions confirm the NONMATCHING caller/storage C; fill definitions are exact at x70view55436fc85c0560dd252b0410af6f2427fe198cd3.
+
+<!-- /evidence-record E-LATER-IMAGE5-SKIP-REFUSAL-NATIVE-150 -->
 
 ## Authoritative references
 

@@ -1928,15 +1928,23 @@
   }
   ,{
     "id": "E-FUJIMOD-XM1-PLAY-JPEG-150",
-    "claim": "The stock X-M1 PLAY route's source/layout/extent observation is {{result}} for {{jobs}} completed jobs, with the original card unchanged ({{card_unchanged}}). Preview: {{preview_width}}x{{preview_height}}, {{preview_output}} complete output bytes; {{preview_copy}} exact fixture codestream bytes at offset {{preview_offset}} plus {{preview_tail}} observed preserved pre-copy tail bytes make its {{preview_source}}-byte programmed span, whose literal whole-fixture-subrange identity is {{preview_literal}}. Full image: {{full_width}}x{{full_height}}, {{full_source}} literal fixture bytes and {{full_output}} complete output bytes. Both jobs are sampled before the shared destination is reused, with programmed operands, natural completion status and loaded endpoint bound separately. Independent JuicyPixels RGB-to-packed422 reference comparisons differ by {{preview_differences}} preview bytes and {{full_differences}} full-frame bytes; these are not qualified pixel agreement. The final PNG visibly shows the playback photograph and overlay.",
-    "scope": "One stock-DAT cold-boot public media-route-smoke play execution on the granted FujiMod runtime and one card fixture. Full sources are observed before decode and complete source/header-derived output extents before reuse; source, capacity, alias, geometry, padding and endpoint checks pass. No added MMIO reads, device-law changes or fitted pixel tolerance.",
+    "claim": "The stock X-M1 PLAY route's source/layout/extent observation is {{result}} for {{jobs}} completed jobs, with the original card unchanged ({{card_unchanged}}). Preview: {{preview_width}}x{{preview_height}}, {{preview_output}} complete output bytes; {{preview_copy}} exact fixture codestream bytes at offset {{preview_offset}} plus {{preview_tail}} observed preserved pre-copy tail bytes make its {{preview_source}}-byte programmed span, whose literal whole-fixture-subrange identity is {{preview_literal}}. Full image: {{full_width}}x{{full_height}}, {{full_source}} literal fixture bytes and {{full_output}} complete output bytes. Both jobs are sampled before the shared destination is reused, with programmed operands, natural completion status and loaded endpoint bound separately. Independent JuicyPixels RGB-to-packed422 reference comparisons differ by {{preview_differences}} preview bytes and {{full_differences}} full-frame bytes; these are not qualified pixel agreement. The final PNG visibly shows the playback photograph and overlay. A later matching-checkpoint PLAY run independently inspects {{inspection_before_sectors}} sectors before and {{inspection_after_sectors}} after playback in {{inspection_before_reads}}/{{inspection_after_reads}} actual media-read requests, including allocation slack. All inspected sectors match the original file ({{inspection_before_matches}}/{{inspection_after_matches}}), exposed SD state is unchanged ({{inspection_before_state}}/{{inspection_after_state}}), and the whole original card remains unchanged ({{inspection_card_unchanged}}).",
+    "scope": "One stock-DAT cold-boot PLAY execution and one later matching-keyed-attach-checkpoint PLAY execution on the unchanged pinned FujiMod runtime and identified card fixture. Full sources are observed before decode and complete source/header-derived output extents before reuse; source, capacity, alias, geometry, padding and endpoint checks pass. The later run adds independent original-file sector comparisons and whole-card hashes, not another cold boot or owned playback acceptance. No added MMIO reads, device-law changes or fitted pixel tolerance.",
     "notes": "Host provenance/layout proof, not a Rust firmware cutover, physical JPEG fidelity or capture/development/save acceptance. The preview's unchanged observed tail is not a general zero-fill law. Independent conversion differences and false pre-press stability Context remain explicit. The earlier unidentified caller reaching 0x00d350c4(2) and bounded SD-command history remain limitations; this work does not resolve them.",
     "artifacts": [
       "private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/result.json",
       "private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json",
       "private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/emulator-session.json",
       "private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/final.png",
-      "private-data/scratch/PlaybackDecodeHost/runs/20261114T222937Z-playback-play/result/result.json"
+      "private-data/scratch/PlaybackDecodeHost/runs/20261114T222937Z-playback-play/result/result.json",
+      "private-data/scratch/PlaybackMediaClosure/runs/20261115T211205Z-playback-media-sectors/result/result.json",
+      "private-data/scratch/PlaybackMediaClosure/runs/20261115T211205Z-playback-media-sectors/result/media-inspection-before.json",
+      "private-data/scratch/PlaybackMediaClosure/runs/20261115T211205Z-playback-media-sectors/result/media-inspection-after.json",
+      "private-data/scratch/PlaybackMediaClosure/runs/20261115T211205Z-playback-media-sectors/result/invocation.json",
+      "private-data/scratch/PlaybackMediaClosure/runs/20261115T211205Z-playback-media-sectors/result/observer.sha256",
+      "private-data/scratch/PlaybackMediaClosure/runs/20261115T211205Z-playback-media-sectors/result/final.png",
+      "private-data/scratch/PlaybackMediaClosure/runs/20261115T210817Z-independent-media/result/directory.txt",
+      "private-data/scratch/PlaybackMediaClosure/runs/20261115T210817Z-independent-media/result/fixture.sha256"
     ],
     "facts": [
       {"name":"firmware_sha256","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/emulator-session.json","pointer":["inputs","installed_dat"]},
@@ -1956,7 +1964,34 @@
       {"name":"full_height","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json","pointer":["jobs","1","geometry","height"]},
       {"name":"full_source","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json","pointer":["jobs","1","geometry","source_bytes"]},
       {"name":"full_output","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json","pointer":["jobs","1","geometry","written_bytes"]},
-      {"name":"full_differences","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json","pointer":["jobs","1","geometry","different_bytes"]}
+      {"name":"full_differences","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json","pointer":["jobs","1","geometry","different_bytes"]},
+      {"name":"inspection_before_sectors","path":"private-data/scratch/PlaybackMediaClosure/runs/20261115T211205Z-playback-media-sectors/result/media-inspection-before.json","pointer":["sectors_read"]},
+      {"name":"inspection_after_sectors","path":"private-data/scratch/PlaybackMediaClosure/runs/20261115T211205Z-playback-media-sectors/result/media-inspection-after.json","pointer":["sectors_read"]},
+      {"name":"inspection_before_reads","path":"private-data/scratch/PlaybackMediaClosure/runs/20261115T211205Z-playback-media-sectors/result/media-inspection-before.json","pointer":["reads"],"operation":"length"},
+      {"name":"inspection_after_reads","path":"private-data/scratch/PlaybackMediaClosure/runs/20261115T211205Z-playback-media-sectors/result/media-inspection-after.json","pointer":["reads"],"operation":"length"},
+      {"name":"inspection_before_matches","path":"private-data/scratch/PlaybackMediaClosure/runs/20261115T211205Z-playback-media-sectors/result/media-inspection-before.json","pointer":["all_sectors_match_original"]},
+      {"name":"inspection_after_matches","path":"private-data/scratch/PlaybackMediaClosure/runs/20261115T211205Z-playback-media-sectors/result/media-inspection-after.json","pointer":["all_sectors_match_original"]},
+      {"name":"inspection_before_state","path":"private-data/scratch/PlaybackMediaClosure/runs/20261115T211205Z-playback-media-sectors/result/media-inspection-before.json","pointer":["media_state_unchanged"]},
+      {"name":"inspection_after_state","path":"private-data/scratch/PlaybackMediaClosure/runs/20261115T211205Z-playback-media-sectors/result/media-inspection-after.json","pointer":["media_state_unchanged"]},
+      {"name":"inspection_card_unchanged","path":"private-data/scratch/PlaybackMediaClosure/runs/20261115T211205Z-playback-media-sectors/result/result.json","pointer":["card_original_unchanged"]}
+    ]
+  }
+  ,{
+    "id": "E-LATER-IMAGE5-SKIP-REFUSAL-NATIVE-150",
+    "claim": "The conditional image5 skip/refusal/CPU-fill matrix passes ({{passed}}) over {{executions}} native executions. Retained and linked owned producers are exercised through the actual stock flashloader caller and continuation. Cases cover rejected aligned fill, unaligned BSS base and unaligned BSS length; exact BSS zeroing, unchanged halos and destination, cache publication, done-before-release and callback error agree. Executed producers omitting CPU fill, error status or cache publication reach the declared stop and are rejected by their behavioral oracle. Stock image4 is {{image4_sha256}}, owned producer {{owned_sha256}}, and runner {{runner_sha256}}.",
+    "scope": "Conditional X-M1 1.50 flashloader entry/caller continuation, retained or emitted Rust image5 producer, unconfigured-storage refusal and byte/word CPU-fill bodies. Mailbox, nonzero mode, segment, rejected fill result and RTOS/cache sinks are synthetic. Nonzero mode skips decoder initialization, feed and finish. Stock instructions confirm the NONMATCHING caller/storage C; fill definitions are exact at x70view55436fc85c0560dd252b0410af6f2427fe198cd3.",
+    "notes": "No natural reset reachability, nonempty transfer, read-mode decoder/storage failure, NAND/DMA, scheduler/resource or physical cache law is qualified. Real segment residency, transient remaps and post-consumer lifetime remain open. Lower-read primary/cleanup-error propagation, stop deadline and quarantine ownership remain unimplemented. This is not full later-loader or image5-initialization ownership.",
+    "artifacts": [
+      "private-data/scratch/LaterLoadingClosure/runs/20261115T211554Z-image5-native-committed-smoke/result/routes.json",
+      "private-data/scratch/Image5Producer/stage-v1/owned-image5-stage-v1-contract.json"
+    ],
+    "facts": [
+      {"name":"firmware_sha256","path":"private-data/scratch/Image5Producer/stage-v1/owned-image5-stage-v1-contract.json","pointer":["image5_load","source_dat_image4_sha256","0"]},
+      {"name":"passed","path":"private-data/scratch/LaterLoadingClosure/runs/20261115T211554Z-image5-native-committed-smoke/result/routes.json","pointer":["passed"]},
+      {"name":"executions","path":"private-data/scratch/LaterLoadingClosure/runs/20261115T211554Z-image5-native-committed-smoke/result/routes.json","pointer":["results"],"operation":"length"},
+      {"name":"image4_sha256","path":"private-data/scratch/LaterLoadingClosure/runs/20261115T211554Z-image5-native-committed-smoke/result/routes.json","pointer":["image4_sha256"]},
+      {"name":"owned_sha256","path":"private-data/scratch/LaterLoadingClosure/runs/20261115T211554Z-image5-native-committed-smoke/result/routes.json","pointer":["owned_sha256"]},
+      {"name":"runner_sha256","path":"private-data/scratch/LaterLoadingClosure/runs/20261115T211554Z-image5-native-committed-smoke/result/routes.json","pointer":["runner_sha256"]}
     ]
   }
 ]
