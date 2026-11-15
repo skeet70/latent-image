@@ -1,0 +1,54 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+_SOURCES = [
+    "lib.rs",
+    "BUILD.bazel",
+    "contract.json",
+    "//replacement/vendor_protocol:playback_consumer.rs",
+    "//replacement/vendor_protocol:playback_source_workspace.rs",
+]
+
+genrule(
+    name = "playback-owned",
+    srcs = _SOURCES,
+    outs = ["playback-owned.o", "playback-owned.sources.sha256"],
+    cmd = """
+set -eu
+$(location @lab_xm1_rust//:bin/rustc) --crate-name=xm1_playback --edition=2021 --crate-type=staticlib \
+  --target=armv7r-none-eabi -C panic=abort -C relocation-model=static -C target-cpu=cortex-r4f \
+  -C codegen-units=1 -C target-feature=+strict-align -C jump-tables=no -C opt-level=z \
+  $(location lib.rs) -o $(@D)/libxm1_playback.a
+$(location @lab_lld//:bin/ld.lld) -m armelf -r --gc-sections \
+  -u xm1_playback_source_entry -u xm1_playback_mode_entry \
+  $(@D)/libxm1_playback.a -o $(location playback-owned.o)
+$(location @lab_coreutils//:bin/sha256sum) $(SRCS) > $(location playback-owned.sources.sha256)
+""",
+    tools = [
+        "@lab_xm1_rust//:bin/rustc",
+        "@lab_lld//:bin/ld.lld",
+        "@lab_coreutils//:bin/sha256sum",
+    ],
+)
+
+haskell_binary(
+    name = "qualify",
+    srcs = ["Qualify.hs", "//host/firmware:ArmElf.hs"],
+    main_file = "Qualify.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    deps = [
+        "//emulation:native-adapter",
+        "//emulation:owned-case",
+        "//emulation:case-sha256",
+        "//host:base",
+        "//host:aeson",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:text",
+    ],
+)

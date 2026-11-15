@@ -27,6 +27,7 @@ import Data.Word (Word32, Word64, Word8)
 import qualified Emulation.CaptureStream as CS
 import qualified Emulation.MediaInspection as MI
 import qualified Emulation.PlaybackDecode as PD
+import qualified Emulation.PlaybackOwned as PO
 import GHC.Generics (Generic)
 import Numeric (readHex, showHex)
 import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMissing, doesFileExist, doesPathExist, makeAbsolute)
@@ -85,6 +86,8 @@ data Options = Options
   , optRunDocumentSha :: Maybe Digest
   , optRamp :: Maybe RampRasterWidth
   , optCaptureObservation :: CaptureObservation
+  , optInstalled :: Maybe FilePath
+  , optOwnedPlayback :: Maybe FilePath
   }
 
 usage :: String
@@ -93,6 +96,7 @@ usage = unlines
   , "  [--checkpoints DIR] [--windows N] [--shoot-without-lens] [--card IMG] [--firmware DAT]"
   , "  [--installed-nand NAND] [--boot-rom ROM] [--run-document JSON [--run-document-sha256 HEX]]"
   , "  [--expect-ramp12-width N]"
+  , "  [--installed DIR --owned-playback PACKAGE_DIR] (requires --route play)"
   , "  [--capture-continuation-observation | --capture-second-filter-observation] (requires --route s1-s2 --windows 1)"
   , "Without --checkpoints the bridge uses private-data/emulator-checkpoints/xm1-ram-push-fujimod."
   , "It restores a matching keyed attach checkpoint or cold-boots and saves one."
@@ -103,12 +107,14 @@ parseOptions = go Nothing Nothing Nothing Nothing defaults
   where
     defaults = Options "" (Digest "") "private-data/scratch/issue117-camera-fixture/DSCF3095-DCIM.img"
       "private-data/firmware/x-m1-1.50/FWUP0002.DAT" "private-data/analysis/x-m1-1.50/stored-f7/emulation/inputs/f7-1.nand"
-      "private-data/analysis/x-m1-1.50/bootrom/bootrom-0x80000000-4000.bin" "" PlayRoute Nothing 12 False Nothing Nothing Nothing NoCaptureObservation
+      "private-data/analysis/x-m1-1.50/bootrom/bootrom-0x80000000-4000.bin" "" PlayRoute Nothing 12 False Nothing Nothing Nothing NoCaptureObservation Nothing Nothing
     hex v = length v == 64 && all (`elem` ("0123456789abcdef" :: String)) v
     go (Just sdk) (Just sha) (Just output) (Just route) o []
       | captureObservationEnabled (optCaptureObservation o) && (route /= ShutterSequenceRoute || optWindows o /= 1) =
           usageError "capture observation requires --route s1-s2 --windows 1"
-      | otherwise = pure o { optSdk = sdk, optBridgeSha = sha, optOutput = output, optRoute = route }
+      | otherwise = case PO.selection (route == PlayRoute) (optInstalled o) (optOwnedPlayback o) of
+          Left problem -> usageError problem
+          Right _ -> pure o { optSdk = sdk, optBridgeSha = sha, optOutput = output, optRoute = route }
     go _ _ _ _ _ [] = usageError "--sdk, --bridge-sha256, --output and --route are required"
     go _ h out r o ("--sdk" : v : rest) = go (Just v) h out r o rest
     go s _ out r o ("--bridge-sha256" : v : rest)
@@ -128,6 +134,8 @@ parseOptions = go Nothing Nothing Nothing Nothing defaults
     go s h out r o ("--card" : v : rest) = go s h out r o { optCard = v } rest
     go s h out r o ("--firmware" : v : rest) = go s h out r o { optFirmware = v } rest
     go s h out r o ("--installed-nand" : v : rest) = go s h out r o { optNand = v } rest
+    go s h out r o ("--installed" : v : rest) = go s h out r o { optInstalled = Just v } rest
+    go s h out r o ("--owned-playback" : v : rest) = go s h out r o { optOwnedPlayback = Just v } rest
     go s h out r o ("--boot-rom" : v : rest) = go s h out r o { optBootRom = v } rest
     go s h out r o ("--run-document" : v : rest) = go s h out r o { optRunDocument = Just (RunDocumentPath v) } rest
     go s h out r o ("--run-document-sha256" : v : rest)
@@ -1525,8 +1533,8 @@ newFiles directory before after = fmap concat . forM (viewFolders after) $ \fold
                   , "extents" .= map extentValue (extentsOf (viewVolume after) clusters)
                   , "sha256" .= digestText (digest bytes), "soi" .= soi, "eoi" .= eoi, "fujifilm_in_first_64k" .= fujifilm ]))
 
-runRoute :: Options -> FilePath -> FilePath -> Bridge -> Journal -> Observed -> IO ()
-runRoute options directory original bridge journal observed = do
+runRoute :: Options -> Maybe PO.Package -> IORef (Maybe PO.Witness) -> FilePath -> FilePath -> Bridge -> Journal -> Observed -> IO ()
+runRoute options owned ownedWitness directory original bridge journal observed = do
   let route = optRoute options
       sites = routeSites route ++ (if route == PlayRoute then decodeObservationSites else [])
   _ <- call bridge (command "trace-sites" ["sites" .= object [K.fromString (hex32 (siteAddress s)) .= siteLabel s | s <- sites]])
@@ -1586,6 +1594,12 @@ runRoute options directory original bridge journal observed = do
       [ "sites" .= object [K.fromString (hex32 (siteAddress s)) .= siteLabel s | s <- sites]
       , "pauses" .= object [K.fromText label .= (64 :: Int) | label <- ["jpeg-preview-copy","jpeg-start-store","jpeg-status-loaded","jpeg-endpoint-loaded"]] ])
     pure ()
+  ownedAck <- forM owned $ \package -> do
+    checkOwnedGuest bridge package
+    armed <- call bridge (PO.watchRequest package)
+    either harness pure (PO.validateWatchBegin package (Object armed))
+    note journal "owned-playback-watch-begin" (Object armed)
+    pure (Object armed)
   let advance = if route == PlayRoute then playbackAdvance directory bridge journal observed target else call bridge
   pressed <- if captureObservationEnabled (optCaptureObservation options)
     then captureAdvance bridge journal observed CS.ShutterSequence (routeInput route)
@@ -1641,6 +1655,15 @@ runRoute options directory original bridge journal observed = do
               , "sd_commands" .= map (sdCommandValue index) seen, "sd_commands_outside_history" .= lost ])
             window (index + 1) (if active || index == 0 then 0 else quiet + 1 :: Int) sd count
   final <- window (0 :: Int) (0 :: Int) sd0 startHits
+  forM_ (zip (maybe [] pure owned) (maybe [] pure ownedAck)) $ \(package, ack) -> do
+    checkOwnedGuest bridge package
+    state <- call bridge (command "watch-state" [])
+    note journal "owned-playback-watch-state" (Object state)
+    ended <- call bridge (command "watch-end" [])
+    note journal "owned-playback-watch-end" (Object ended)
+    result <- either harness pure (PO.witness package ack (Object state) (Object ended))
+    writeIORef ownedWitness (Just result)
+    note journal "owned-playback-witness" (PO.witnessValue result)
   when (route == PlayRoute) $ do
     ended <- call bridge (command "trace-sites" ["sites" .= object [K.fromString (hex32 (siteAddress s)) .= siteLabel s | s <- sites]])
     note journal "playback-observation-ended" (Object ended)
@@ -1894,9 +1917,21 @@ freshOutput supplied = do
 writeJson :: FilePath -> Value -> IO ()
 writeJson path value = BL.writeFile path (encode value <> "\n")
 
+checkOwnedGuest :: Bridge -> PO.Package -> IO ()
+checkOwnedGuest bridge package = do
+  actual <- forM (PO.guestArtifacts package) $ \(address, expected) -> do
+    bytes <- B.concat <$> mapM (\offset -> readMemory bridge (address + fromIntegral offset) (min 4096 (B.length expected - offset))) [0,4096 .. B.length expected - 1]
+    pure (address, bytes)
+  either harness pure (PO.checkGuestArtifacts package actual)
+  bodies <- forM (PO.originalBodies package) $ \(address, count) -> readMemory bridge address count
+  either harness pure (PO.checkOriginalBodies package bodies)
+
 main :: IO ()
 main = do
   options <- getArgs >>= parseOptions
+  selection <- either harness pure (PO.selection (optRoute options == PlayRoute) (optInstalled options) (optOwnedPlayback options))
+  owned <- mapM PO.loadPackage selection
+  ownedWitness <- newIORef Nothing
   directory <- freshOutput (optOutput options)
   card <- makeAbsolute (optCard options)
   firmware <- makeAbsolute (optFirmware options)
@@ -1951,10 +1986,16 @@ main = do
   outcome <- try $ do
     startOptions <- event bridge "start-options"
     note journal "start-options" (Object startOptions)
-    send bridge (object ["command" .= ("start" :: T.Text), "installed" .= Null])
+    start <- case owned of
+      Nothing -> pure (object ["command" .= ("start" :: T.Text), "installed" .= Null])
+      Just (selected, package) -> do
+        record <- B.readFile (PO.installedDirectory selected </> "ram-push-install.json")
+        either harness pure (PO.validateInstalled selected package record (Object startOptions))
+    send bridge start
     ready <- event bridge "ready"
+    forM_ owned $ \(selected, _) -> either harness pure (PO.validateReady selected start (Object ready))
     note journal "ready" (object ["checkpoint" .= KM.lookup "checkpoint" ready, "pre_attach" .= KM.lookup "pre_attach" ready])
-    stopped <- try (runRoute options directory card bridge journal observed)
+    stopped <- try (runRoute options (snd <$> owned) ownedWitness directory card bridge journal observed)
     case stopped of
       Left (BridgeStopped message) -> do
         writeIORef (obsStop observed) (Just message)
@@ -1999,7 +2040,17 @@ main = do
     _ -> pure ()
   originalAfter <- cardStat card
   originalShaAfter <- fileDigest card
-  (findings, stopped) <- verdict (optRoute options) (optShootWithoutLens options) observed
+  (routeFindings, routeStopped) <- verdict (optRoute options) (optShootWithoutLens options) observed
+  pairWitness <- readIORef ownedWitness
+  let ownedFindings = case owned of
+        Nothing -> []
+        Just _ -> [Judged (Finding name Gate (maybe False predicate pairWitness) (maybe Null PO.witnessValue pairWitness)
+          "installed package bytes and loss-accounted SDK execution watch")
+          (if maybe False predicate pairWitness then Nothing else Just "owned entry unobserved in the bounded PLAY interval")
+          | (name, predicate) <- [("owned-playback-source-entry", PO.sourceObserved), ("owned-playback-mode-entry", PO.modeObserved)]]
+      findings = routeFindings ++ ownedFindings
+      stopped = routeStopped <|> (if null ownedFindings || maybe False (\w -> PO.sourceObserved w && PO.modeObserved w) pairWitness
+        then Nothing else Just (GateName "owned-playback-pair-unobserved"))
   ledger <- readIORef (obsLedger observed)
   recoveredCount <- readIORef (obsRecovered observed)
   captureProgress <- readIORef (obsCapture observed)
@@ -2018,7 +2069,7 @@ main = do
         _ -> Nothing
   note journal "bridge-exit" (toJSON (show exit))
   CS.closeJournal journal
-  writeJson (directory </> "result.json") (object
+  writeJson (directory </> "result.json") (object $
     [ "schema" .= (1 :: Int)
     , "scope" .= ("emulated X-M1 1.50 stock " ++ routeName (optRoute options) ++ " route on the granted FujiMod SDK; diagnostic reachability, not acceptance"
         ++ (case optRoute options of
@@ -2047,7 +2098,12 @@ main = do
     , "card_original_unchanged" .= unchanged
     , "card_original_sha256_before" .= digestText originalShaBefore
     , "card_original_sha256_after" .= digestText originalShaAfter
-    , "media_inspection_reports" .= (["media-inspection-before.json", "media-inspection-after.json"] :: [T.Text]) ])
+    , "media_inspection_reports" .= (["media-inspection-before.json", "media-inspection-after.json"] :: [T.Text]) ]
+    ++ [ "owned_playback" .= object
+        ["installed" .= PO.installedDirectory selected, "package" .= PO.packageDirectory selected
+        , "witness" .= fmap PO.witnessValue pairWitness
+        , "integrated_pair" .= maybe False (\w -> PO.sourceObserved w && PO.modeObserved w) pairWitness
+        , "whole_playback_acceptance" .= False] | (selected, _) <- maybe [] pure owned ])
   forM_ findings $ \(Judged f unknown) -> putStrLn
     ((if isJust unknown then "unknown " else if findingHolds f then "holds " else "fails ")
       ++ (if findingRole f == Gate then "gate    " else "context ") ++ T.unpack (findingName f))

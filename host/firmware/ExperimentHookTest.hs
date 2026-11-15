@@ -3,7 +3,7 @@ module Main (main) where
 import A32 (decode)
 import Control.Monad (unless)
 import Data.Word (Word32)
-import ExperimentHook (positionIndependent)
+import ExperimentHook (positionIndependent, HookMode (..), HookAdmission (..), PlaybackEntry (..), SourceSha256 (..), bindReplacement, admitHook, entryPublications, originalBody)
 import Numeric (showHex)
 import System.Exit (exitFailure)
 
@@ -28,4 +28,35 @@ main = do
   let failures = [(address, word, expected) | (address, word, expected) <- cases, positionIndependent (decode address word) /= expected]
   mapM_ (\(address, word, expected) -> putStrLn ("0x" ++ showHex word "" ++ " at 0x" ++ showHex address "" ++ ": expected displaceable=" ++ show expected)) failures
   unless (null failures) exitFailure
+  let check label result = unless result (putStrLn label >> exitFailure)
+      sourceHash = SourceSha256 "90da01fffdecd496e473c74aa012c9028be5d2dad33a1b8f4a95b4ea7c466d32"
+      modeHash = SourceSha256 "d9b5d69e40838f9bcecc142fb1bfeaefa18e43b790a027e0442d7b31deef0f0c"
+      source site handler entry end digest = bindReplacement site handler entry end digest
+      refused (Left _) = True
+      refused _ = False
+  check "Observe remains admitted by the live builder" (admitHook ObserveOnly Observe == Right ())
+  check "Observe publication retains its trampoline target"
+    (entryPublications 0x1000 0xe1a04000 0xe1a05001 0xc40100
+      == ((0x1004, 0xe1a05001, 0xc40100), (0x1000, 0xe1a04000, 0xe51ff004)))
+  check "Observe excludes no original body" (originalBody Observe == Nothing)
+  check "source replacement binds the exact supported contract"
+    (source 0x0120b40c "xm1_playback_source_entry" 0x0120b40c 0x0120b778 sourceHash == Right (ReplaceEntry PlaybackSource))
+  check "mode replacement binds the exact supported contract"
+    (source 0x0120cab0 "xm1_playback_mode_entry" 0x0120cab0 0x0120cd74 modeHash == Right (ReplaceEntry PlaybackMode))
+  check "replacement requires explicit emulator admission"
+    (refused (admitHook ObserveOnly (ReplaceEntry PlaybackSource)) && admitHook EmulatorOnly (ReplaceEntry PlaybackSource) == Right ())
+  check "replacement publication uses the owned entry and preserves rollback words"
+    (entryPublications 0x0120b40c 0xe92d48f0 0xe28db010 0xc40200
+      == ((0x0120b410, 0xe28db010, 0xc40200), (0x0120b40c, 0xe92d48f0, 0xe51ff004)))
+  check "source body exclusion preserves both publication words"
+    (originalBody (ReplaceEntry PlaybackSource) == Just (0x0120b414, 0x0120b778))
+  check "mode body exclusion preserves both publication words"
+    (originalBody (ReplaceEntry PlaybackMode) == Just (0x0120cab8, 0x0120cd74))
+  mapM_ (check "unsupported replacement contract was accepted" . refused)
+    [ source 0x0120b410 "xm1_playback_source_entry" 0x0120b40c 0x0120b778 sourceHash
+    , source 0x0120b40c "other_handler" 0x0120b40c 0x0120b778 sourceHash
+    , source 0x0120b40c "xm1_playback_source_entry" 0x0120cab0 0x0120b778 sourceHash
+    , source 0x0120b40c "xm1_playback_source_entry" 0x0120b40c 0x0120b77c sourceHash
+    , source 0x0120b40c "xm1_playback_source_entry" 0x0120b40c 0x0120b778 modeHash
+    ]
   putStrLn ("experiment hook: " ++ show (length cases) ++ " cases")

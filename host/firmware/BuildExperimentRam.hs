@@ -6,7 +6,7 @@
 module Main where
 
 import A32 (decode)
-import ExperimentHook (positionIndependent)
+import ExperimentHook (positionIndependent, HookMode (..), HookAdmission (..), SourceSha256 (..), playbackContract, bindReplacement, admitHook, entryPublications, originalBody)
 import ArmElf (Elf (..), Section (..), Symbol (..), SymbolKind (..), parseElf)
 import Control.Monad (filterM, forM, forM_, unless, when)
 import Data.Aeson (Value (..))
@@ -32,10 +32,6 @@ allocationBytes = 0x8000
 codeWindowBytes = 0x5000
 hookCapacity = 8
 
--- | `ldr pc, [pc, #-4]`: jump through the word that follows.
-jumpThroughNext :: Word32
-jumpThroughNext = 0xe51ff004
-
 data Image = Image { imageName :: String, imageBase :: Word32, imageBytes :: B.ByteString }
 
 data Hook = Hook
@@ -44,23 +40,28 @@ data Hook = Hook
   , hookHandler :: String
   , hookFirst :: Word32
   , hookSecond :: Word32
+  , hookMode :: HookMode
   }
 
 main :: IO ()
 main = do
-  args <- getArgs
+  arguments <- getArgs
+  let (admission, args) = case arguments of
+        "--emulator-only" : rest -> (EmulatorOnly, rest)
+        _ -> (ObserveOnly, arguments)
   case args of
     ["--abi"] -> putStrLn (unwords (map show [2 * hookCapacity, hookCapacity, hookCapacity, 7]))
     ["--trampolines", experiment, id4, id5, plain, output] -> do
       images <- loadImages id4 id5 plain
-      hooks <- readHooks experiment images
+      hooks <- readHooks admission experiment images
       refuseBranchesIntoSecondWord images hooks
       B.writeFile output (C.pack (trampolineSource hooks))
       putStrLn ("experiment: " ++ show (length hooks) ++ " hooks")
     [baseText, linked, out, experiment, id4, id5, plain] -> do
       base <- parseHex "base" baseText
       images <- loadImages id4 id5 plain
-      hooks <- readHooks experiment images
+      hooks <- readHooks admission experiment images
+      refuseBranchesIntoSecondWord images hooks
       build base linked out experiment images hooks
     _ -> H.failH "usage: build-experiment-ram --abi | --trampolines EXPERIMENT ID4 ID5 PLAIN OUT.S | BASE LINKED_DIR OUT_DIR EXPERIMENT ID4 ID5 PLAIN"
 
@@ -93,8 +94,8 @@ stockWord images address = case [image | image <- images, imageBase image <= add
 littleEndian :: B.ByteString -> Word32
 littleEndian bytes = sum [fromIntegral byte * 256 ^ position | (position, byte) <- zip [0 :: Int ..] (B.unpack bytes)]
 
-readHooks :: FilePath -> [Image] -> IO [Hook]
-readHooks experiment images = do
+readHooks :: HookAdmission -> FilePath -> [Image] -> IO [Hook]
+readHooks admission experiment images = do
   document <- H.readRegular (64 * 1024) (experiment </> "hooks.json") >>= H.jsonRead
   entries <- case H.get document "hooks" of
     Array _ -> pure (H.list (H.get document "hooks"))
@@ -108,11 +109,30 @@ readHooks experiment images = do
     H.ensure (site .&. 3 == 0) ("hook at " ++ hex site ++ " is not word aligned")
     (image, first) <- maybe (H.failH ("hook at " ++ hex site ++ " is outside the stock image 4, image 5 and plain decodes")) pure (stockWord images site)
     (_, second) <- maybe (H.failH ("hook at " ++ hex site ++ " runs past the end of " ++ image)) pure (stockWord images (site + 4))
-    forM_ [(site, first), (site + 4, second)] $ \(address, word) ->
-      unless (positionIndependent (decode address word)) $
-        H.failH ("hook at " ++ hex site ++ ": the instruction " ++ hex word ++ " at " ++ hex address
-          ++ " reads or writes the PC or branches, so it cannot run displaced in the trampoline; hook a different address")
-    pure (Hook index site handler first second)
+    mode <- case H.get entry "mode" of
+      Null -> pure Observe
+      String "observe" -> pure Observe
+      String "replace_entry" -> do
+        let source = H.get entry "source"
+        sourceEntry <- text source "entry" >>= parseHex "ReplaceEntry source entry"
+        sourceEnd <- text source "end" >>= parseHex "ReplaceEntry source end"
+        sourceHash <- SourceSha256 <$> text source "sha256"
+        replacement <- either H.failH pure (bindReplacement site handler sourceEntry sourceEnd sourceHash)
+        let containing = [imageBytes candidate | candidate <- images, imageBase candidate == 0x01100000]
+        bytes <- case containing of
+          [plain] -> pure (B.take (fromIntegral (sourceEnd - sourceEntry)) (B.drop (fromIntegral (sourceEntry - 0x01100000)) plain))
+          _ -> H.failH "ReplaceEntry requires the pinned plain decode"
+        actual <- SourceSha256 <$> H.sha256 bytes
+        H.ensure (actual == sourceHash) ("hook at " ++ hex site ++ ": ReplaceEntry source bytes differ from their pinned sha256")
+        pure replacement
+      _ -> H.failH "hooks.json: mode must be observe or replace_entry"
+    either H.failH pure (admitHook admission mode)
+    when (mode == Observe) $
+      forM_ [(site, first), (site + 4, second)] $ \(address, word) ->
+        unless (positionIndependent (decode address word)) $
+          H.failH ("hook at " ++ hex site ++ ": the instruction " ++ hex word ++ " at " ++ hex address
+            ++ " reads or writes the PC or branches, so it cannot run displaced in the trampoline; hook a different address")
+    pure (Hook index site handler first second mode)
   let sites = sort (map hookSite hooks)
   H.ensure (and (zipWith (\a b -> b >= a + 8) sites (drop 1 sites))) "hooks.json: hooked words overlap; hook sites must be at least 8 bytes apart"
   pure hooks
@@ -146,7 +166,7 @@ refuseBranchesIntoSecondWord images hooks =
 trampolineSource :: [Hook] -> String
 trampolineSource hooks = unlines $
   [ "@ Generated by build-experiment-ram from hooks.json.", ".syntax unified", ".arm", ".section .text.experiment_trampolines,\"ax\",%progbits" ]
-  ++ concatMap trampoline hooks
+  ++ concatMap trampoline [hook | hook <- hooks, hookMode hook == Observe]
  where
   trampoline hook =
     [ ".global " ++ name hook, ".type " ++ name hook ++ ",%function", ".balign 4", name hook ++ ":"
@@ -191,13 +211,17 @@ build base linked out experiment images hooks = do
   H.ensure (installerEnd <= base + allocationBytes) "installer runs past the allocation"
   H.ensure (tableEnd - table == 16 * 2 * hookCapacity) "publication table size differs from the hook capacity"
   H.ensure (install - installer == 0x600) "installer entry offset differs from the shared installer layout"
-  trampolines <- forM hooks $ \hook -> do
-    target <- symbol ("__experiment_hook_" ++ show (hookIndex hook))
-    H.ensure (base <= target && target < base + codeWindowBytes) "trampoline escapes the code window"
-    pure target
+  trampolines <- forM hooks $ \hook -> case hookMode hook of
+    Observe -> do
+      target <- symbol ("__experiment_hook_" ++ show (hookIndex hook))
+      H.ensure (base <= target && target < base + codeWindowBytes) "trampoline escapes the code window"
+      pure target
+    ReplaceEntry _ -> symbol (hookHandler hook)
   forM_ hooks $ \hook -> case [s | s <- elfSymbols elf, symbolName s == hookHandler hook] of
-    [s] | symbolKind s == FunctionSymbol, base <= symbolValue s, symbolValue s < codeEnd, symbolValue s `notElem` trampolines -> pure ()
-    _ -> H.failH ("hook at " ++ hex (hookSite hook) ++ ": handler " ++ hookHandler hook ++ " must be a function in the experiment's own code")
+    [s] | symbolKind s == FunctionSymbol, base <= symbolValue s, symbolValue s < codeEnd
+        , hookMode hook == Observe || symbolValue s .&. 3 == 0
+        , symbolValue s `notElem` [target | (observed, target) <- zip hooks trampolines, hookMode observed == Observe] -> pure ()
+    _ -> H.failH ("hook at " ++ hex (hookSite hook) ++ ": handler " ++ hookHandler hook ++ " must be an aligned A32 function in the experiment's own code")
   let used = concat [[hookSite hook, hookSite hook + 4] | hook <- hooks]
       spare = filter (`notElem` used) paddingCandidates
       padCount = fromIntegral hookCapacity - length hooks
@@ -205,9 +229,9 @@ build base linked out experiment images hooks = do
     maybe (H.failH ("padding word " ++ hex address ++ " is outside the stock decodes")) (pure . (,) address . snd) (stockWord images address)
   H.ensure (length padding == 2 * padCount) "not enough padding words"
   let (setupPads, activationPads) = splitAt padCount padding
-      setups = [(hookSite hook + 4, hookSecond hook, target) | (hook, target) <- zip hooks trampolines]
-        ++ [(address, word, word) | (address, word) <- setupPads]
-      activations = [(hookSite hook, hookFirst hook, jumpThroughNext) | hook <- hooks]
+      (hookSetups, hookActivations) = unzip [entryPublications (hookSite hook) (hookFirst hook) (hookSecond hook) target | (hook, target) <- zip hooks trampolines]
+      setups = hookSetups ++ [(address, word, word) | (address, word) <- setupPads]
+      activations = hookActivations
         ++ [(address, word, word) | (address, word) <- activationPads]
       publications = [(a, old, new, 0 :: Int) | (a, old, new) <- setups] ++ [(a, old, new, 1) | (a, old, new) <- activations]
   H.ensure (length (nub [a | (a, _, _, _) <- publications]) == length publications) "publication addresses must be distinct"
@@ -250,7 +274,7 @@ build base linked out experiment images hooks = do
                 , not (null (symbolName s)), not ("$" `isPrefixOf` symbolName s), not ("__" `isPrefixOf` symbolName s) ]
       metadata = H.obj
         [ ("schema", H.n 1), ("experiment", H.s experiment), ("base", H.s (hex base)), ("runtime_sha256", H.s runtimeHash)
-        , ("hooks", H.arr [H.obj [("address", H.s (hex (hookSite hook))), ("handler", H.s (hookHandler hook)), ("trampoline", H.s (hex target))] | (hook, target) <- zip hooks trampolines])
+        , ("hooks", H.arr [H.obj ([("address", H.s (hex (hookSite hook))), ("handler", H.s (hookHandler hook)), ("trampoline", H.s (hex target))] ++ replacementMetadata (hookMode hook)) | (hook, target) <- zip hooks trampolines])
         , ("symbols", H.obj symbols) ]
   setFileMode out 0o700
   forM_ [("runtime.bin", runtime), ("ram-push-manifest.json", encodeCanonical manifest), ("experiment.json", encodeCanonical metadata)] $ \(name, bytes) -> do
@@ -261,6 +285,17 @@ build base linked out experiment images hooks = do
  where
   t = ramPushToolchain
   pinnedTools = [("RAM_PUSH_CLANG", toolClang t), ("RAM_PUSH_LD_LLD", toolLdLld t), ("RAM_PUSH_OBJCOPY", toolObjcopy t), ("RAM_PUSH_NM", toolNm t), ("RAM_PUSH_OBJDUMP", toolObjdump t)]
+
+replacementMetadata :: HookMode -> [(String, Value)]
+replacementMetadata Observe = []
+replacementMetadata mode@(ReplaceEntry entry) =
+  let (start, end, SourceSha256 digest, _) = playbackContract entry
+      body = case originalBody mode of
+        Just (bodyStart, bodyEnd) -> H.obj [("start", H.s (hex bodyStart)), ("end", H.s (hex bodyEnd))]
+        Nothing -> Null
+  in [ ("mode", H.s "replace_entry")
+     , ("source", H.obj [("entry", H.s (hex start)), ("end", H.s (hex end)), ("sha256", H.s digest)])
+     , ("original_body", body) ]
 
 builderSources :: [FilePath]
 builderSources =
