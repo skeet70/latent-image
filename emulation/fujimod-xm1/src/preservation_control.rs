@@ -155,11 +155,16 @@ fn execute(worker: bool, context_adapter: bool, enabled: bool, injection: &str) 
     let events = events.borrow().clone();
     Ok(Trace { binding, stock, events, registers: late_registers, cpsr: late_cpsr, frame, pending, finished })
 }
+fn judge_bound<C: Copy + Eq>(binding: shadow::Binding<C>, stock: shadow::StockReturn,
+    events: &[PreservationEvidence], registers: [u32; 16], cpsr: u32, context: C,
+    frame: SavedFrame) -> Result<(), shadow::Failure> {
+    let mut verifier = shadow::Shadow::new(binding, stock)?;
+    for event in events { verifier.observe(*event)?; }
+    verifier.handoff(registers, cpsr, frame, context)?;
+    verifier.finish()
+}
 fn judge(trace: &Trace, events: &[PreservationEvidence], context: (u64, u64), frame: SavedFrame) -> Result<(), shadow::Failure> {
-    let mut shadow = shadow::Shadow::new(trace.binding, trace.stock)?;
-    for event in events { shadow.observe(*event)?; }
-    shadow.handoff(trace.registers, trace.cpsr, frame, context)?;
-    shadow.finish()
+    judge_bound(trace.binding, trace.stock, events, trace.registers, trace.cpsr, context, frame)
 }
 fn refused(trace: &Trace, events: &[PreservationEvidence], context: (u64, u64), frame: SavedFrame) -> Result<Value, String> {
     let failure = judge(trace, events, context, frame).err().ok_or("negative control was admitted")?;
@@ -265,6 +270,265 @@ fn bank_controls() -> Result<Value, String> {
     let passed = controls.values().all(|control|control["refused"] == true);
     Ok(json!({"case":"independent-banks","passed":passed,"controls":controls,
         "original_events":trace.events.iter().map(|e|format!("{e:?}")).collect::<Vec<_>>()}))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ActualContext {
+    task_id: u32,
+    node: u32,
+    creation: u32,
+    stack_start: u32,
+    stack_end: u32,
+    creation_words: [u32; 10],
+    execution_core: u32,
+    phase: u32,
+    forward: u64,
+    reverse: u64,
+    install_core: Option<u32>,
+    rollback_core: Option<u32>,
+}
+
+struct ActualTrace {
+    binding: shadow::Binding<ActualContext>,
+    stock: shadow::StockReturn,
+    events: Vec<PreservationEvidence>,
+    registers: [u32; 16],
+    cpsr: u32,
+    frame: SavedFrame,
+    context: ActualContext,
+}
+
+fn actual_state(registers: [u32; 16], cpsr: u32, spsr: u32, svc_spsr: u32,
+    irq_spsr: u32, svc_sp: u32, irq_sp: u32, svc_lr: u32, irq_lr: u32) -> Arm32State {
+    Arm32State { registers, cpsr, spsr, svc_spsr, irq_spsr, svc_sp, irq_sp, svc_lr, irq_lr }
+}
+
+// Copied from 20261115T131950Z-menu-irq-vector-restored6's first_irq packet,
+// e2e-modal-observation.json SHA-256 23bb11e1206b66199a475c1f2c540f1ae19e54734b6b4d4bdee1f7c51ba8f312.
+fn actual_menu_trace() -> ActualTrace {
+    let owner = Identity::allocate();
+    let serial = |value| std::num::NonZeroU64::new(value).expect("actual evidence serial is nonzero");
+    // Entry IDs are opaque; preserve their same-owner/resume relation while the report retains original serials.
+    let entry_id = InstructionEntryId::after(owner, None).expect("fresh synthetic entry identity");
+    let observed_id = InstructionEntryId::after(owner, Some(entry_id)).expect("resumed synthetic entry identity");
+    let tcm = [None, Some(InstructionTcm { address: 0x70000000, bytes: 0x2000 })];
+    let entry = InstructionEntry {
+        id: entry_id, address: 12562472, bytes: 4, progress: 6827, pstate: 0x80000153,
+        physical: Some(12562472), tcm,
+    };
+    let observed = InstructionEntry {
+        id: observed_id, address: 12562472, bytes: 4, progress: 1, pstate: 0x80000153,
+        physical: Some(12562472), tcm,
+    };
+    let before = actual_state(
+        [0, 2573, 48, 21395172, 0, 9717120, 1, 9717124, 1074099628, 9,
+            1074087392, 10800572, 5, 10800568, 12565776, 12562472],
+        0x80000153, 0x53, 0x53, 0x53, 10555872, 211, 283632, 6933504);
+    let retired_after = actual_state(
+        [0, 2573, 48, 21395172, 0, 9717120, 1, 9717124, 1074099628, 9,
+            1074087392, 10800572, 5, 10800532, 12565776, 12562476],
+        0x80000153, 0x53, 0x53, 0x53, 10555872, 211, 283632, 6933504);
+    let frame = SavedFrame { address: 10800532, physical: 10800532,
+        words: [0, 9717120, 1, 9717124, 1074099628, 9, 1074087392, 10800572, 12565776] };
+    let irq_after = actual_state(
+        [0, 2573, 48, 21395172, 0, 9717120, 1, 9717124, 1074099628, 9,
+            1074087392, 10800572, 5, 211, 12562480, 24],
+        0x800001d2, 0x80000153, 0x53, 0x53, 10800532, 211, 12565776, 6933504);
+    let status_before = actual_state(
+        [0, 0x80000153, 64, 0, 0, 9717120, 1, 9717124, 1074099628, 9,
+            1074087392, 10800572, 4294656000, 10800504, 262928, 263008],
+        0x600001d3, 0x53, 0x53, 0x80000153, 10800504, 211, 12565776, 12562480);
+    let mut status_after = status_before;
+    status_after.spsr = 0x80000053;
+    status_after.registers[15] = 263012;
+    let returned_after = actual_state(
+        [0, 2573, 48, 21395172, 0, 9717120, 1, 9717124, 1074099628, 9,
+            1074087392, 10800572, 5, 10800532, 12565776, 12562476],
+        0x80000053, 0x80000053, 0x53, 0x80000153, 10800504, 211, 12565776, 12562480);
+    let push = ExecutionSource { address: 12562472, physical: 12562472, word: 0xe92d4ff0, tcm };
+    let status = ExecutionSource { address: 263008, physical: 263008, word: 0xe169f001, tcm };
+    let returning = ExecutionSource { address: 263012, physical: 263012, word: 0xe8fdd00f, tcm };
+    let exception = EvidenceId { owner, serial: serial(65625) };
+    let events = vec![
+        PreservationEvidence::Retired(InstructionRetirement {
+            execution: EvidenceId { owner, serial: serial(65624) },
+            observation: Some(observed), resumed_from: Some(entry), source: push,
+            before, after: retired_after, frame,
+        }),
+        PreservationEvidence::Entered(ExceptionEntry {
+            execution: exception, before: retired_after, after: irq_after, vector: 24,
+        }),
+        PreservationEvidence::SavedStatus(SavedStatusWrite {
+            exception, source: status, before: status_before, after: status_after,
+        }),
+        PreservationEvidence::Returned(ExceptionReturn {
+            exception, source: returning, before: status_after, after: returned_after,
+            written_status: 0x80000053, mask: 0xff1fffff,
+        }),
+    ];
+    let context = ActualContext {
+        task_id: 1, node: 1074134796, creation: 1074118316,
+        stack_start: 10797568, stack_end: 10800640,
+        creation_words: [2, 0, 12726112, 5, 3072, 10797568, 0, 0, 1, 1],
+        execution_core: 0, phase: 3, forward: 226, reverse: 226,
+        install_core: Some(0), rollback_core: Some(0),
+    };
+    ActualTrace {
+        binding: shadow::Binding { entry, registers: before.registers, cpsr: before.cpsr, context },
+        stock: shadow::StockReturn { vector: 24, status, returning },
+        events, registers: returned_after.registers, cpsr: returned_after.cpsr, frame, context,
+    }
+}
+
+fn actual_refusal(controls: &mut serde_json::Map<String, Value>, name: &str,
+    trace: &ActualTrace, events: &[PreservationEvidence], registers: [u32; 16],
+    cpsr: u32, context: ActualContext, frame: SavedFrame) -> Result<(), String> {
+    let failure = judge_bound(trace.binding, trace.stock, events, registers, cpsr, context, frame)
+        .err().ok_or_else(|| format!("{name} actual evidence mutation was admitted"))?;
+    controls.insert(name.into(), json!({"refused":true,"failure":format!("{failure:?}")}));
+    Ok(())
+}
+
+fn completed_actual(trace: &ActualTrace) -> Result<shadow::Shadow<ActualContext>, String> {
+    let mut verifier = shadow::Shadow::new(trace.binding, trace.stock)
+        .map_err(|failure| format!("actual binding refused: {failure:?}"))?;
+    for event in &trace.events {
+        verifier.observe(*event).map_err(|failure| format!("actual event refused: {failure:?}"))?;
+    }
+    verifier.handoff(trace.registers, trace.cpsr, trace.frame, trace.context)
+        .map_err(|failure| format!("actual handoff refused: {failure:?}"))?;
+    verifier.finish().map_err(|failure| format!("actual finish refused: {failure:?}"))?;
+    Ok(verifier)
+}
+
+fn actual_menu_controls() -> Result<Value, String> {
+    let trace = actual_menu_trace();
+    judge_bound(trace.binding, trace.stock, &trace.events, trace.registers, trace.cpsr,
+        trace.context, trace.frame).map_err(|failure| format!("actual positive refused: {failure:?}"))?;
+    let mut controls = serde_json::Map::new();
+
+    actual_refusal(&mut controls, "missing-saved-status", &trace,
+        &[trace.events[0], trace.events[1], trace.events[3]], trace.registers,
+        trace.cpsr, trace.context, trace.frame)?;
+    actual_refusal(&mut controls, "duplicate-saved-status", &trace,
+        &[trace.events[0], trace.events[1], trace.events[2], trace.events[2], trace.events[3]],
+        trace.registers, trace.cpsr, trace.context, trace.frame)?;
+    actual_refusal(&mut controls, "return-before-saved-status", &trace,
+        &[trace.events[0], trace.events[1], trace.events[3], trace.events[2]],
+        trace.registers, trace.cpsr, trace.context, trace.frame)?;
+    actual_refusal(&mut controls, "missing-return", &trace, &trace.events[..3],
+        trace.registers, trace.cpsr, trace.context, trace.frame)?;
+    actual_refusal(&mut controls, "duplicate-return", &trace,
+        &[trace.events[0], trace.events[1], trace.events[2], trace.events[3], trace.events[3]],
+        trace.registers, trace.cpsr, trace.context, trace.frame)?;
+    actual_refusal(&mut controls, "retirement-after-entry", &trace,
+        &[trace.events[1], trace.events[0], trace.events[2], trace.events[3]],
+        trace.registers, trace.cpsr, trace.context, trace.frame)?;
+    actual_refusal(&mut controls, "destination-before-retirement", &trace, &[],
+        trace.registers, trace.cpsr, trace.context, trace.frame)?;
+    actual_refusal(&mut controls, "destination-during-open-irq", &trace, &trace.events[..2],
+        trace.registers, trace.cpsr, trace.context, trace.frame)?;
+    actual_refusal(&mut controls, "destination-before-return", &trace, &trace.events[..3],
+        trace.registers, trace.cpsr, trace.context, trace.frame)?;
+
+    let mut changed = trace.events.clone();
+    let PreservationEvidence::Returned(returned) = &mut changed[3] else { unreachable!() };
+    returned.after.registers[6] ^= 1;
+    actual_refusal(&mut controls, "returned-gpr", &trace, &changed,
+        trace.registers, trace.cpsr, trace.context, trace.frame)?;
+    let mut registers = trace.registers;
+    registers[6] ^= 1;
+    actual_refusal(&mut controls, "late-gpr", &trace, &trace.events,
+        registers, trace.cpsr, trace.context, trace.frame)?;
+    let mut changed = trace.events.clone();
+    let PreservationEvidence::Retired(retired) = &mut changed[0] else { unreachable!() };
+    retired.frame.address ^= 4;
+    actual_refusal(&mut controls, "retired-frame-address", &trace, &changed,
+        trace.registers, trace.cpsr, trace.context, trace.frame)?;
+    let mut frame = trace.frame;
+    frame.physical ^= 4;
+    actual_refusal(&mut controls, "late-frame-physical", &trace, &trace.events,
+        trace.registers, trace.cpsr, trace.context, frame)?;
+    let mut changed = trace.events.clone();
+    let PreservationEvidence::Retired(retired) = &mut changed[0] else { unreachable!() };
+    retired.resumed_from = None;
+    actual_refusal(&mut controls, "resume-lineage", &trace, &changed,
+        trace.registers, trace.cpsr, trace.context, trace.frame)?;
+    let mut changed = trace.events.clone();
+    let PreservationEvidence::Retired(retired) = &mut changed[0] else { unreachable!() };
+    retired.source.physical ^= 4;
+    actual_refusal(&mut controls, "source-physical", &trace, &changed,
+        trace.registers, trace.cpsr, trace.context, trace.frame)?;
+    let mut changed = trace.events.clone();
+    let PreservationEvidence::Retired(retired) = &mut changed[0] else { unreachable!() };
+    retired.source.tcm = [None, None];
+    actual_refusal(&mut controls, "source-tcm", &trace, &changed,
+        trace.registers, trace.cpsr, trace.context, trace.frame)?;
+    let mut changed = trace.events.clone();
+    let PreservationEvidence::Entered(entered) = &mut changed[1] else { unreachable!() };
+    entered.vector = 28;
+    actual_refusal(&mut controls, "exception-vector", &trace, &changed,
+        trace.registers, trace.cpsr, trace.context, trace.frame)?;
+    let mut changed = trace.events.clone();
+    let PreservationEvidence::SavedStatus(status) = &mut changed[2] else { unreachable!() };
+    status.source.physical ^= 4;
+    actual_refusal(&mut controls, "status-source-physical", &trace, &changed,
+        trace.registers, trace.cpsr, trace.context, trace.frame)?;
+    let mut changed = trace.events.clone();
+    let PreservationEvidence::Returned(returned) = &mut changed[3] else { unreachable!() };
+    returned.source.physical ^= 4;
+    actual_refusal(&mut controls, "return-source-physical", &trace, &changed,
+        trace.registers, trace.cpsr, trace.context, trace.frame)?;
+
+    let task = ActualContext { task_id: 2, ..trace.context };
+    actual_refusal(&mut controls, "menu-task-substitution", &trace, &trace.events,
+        trace.registers, trace.cpsr, task, trace.frame)?;
+    let publication = ActualContext { forward: 227, ..trace.context };
+    actual_refusal(&mut controls, "menu-publication-substitution", &trace, &trace.events,
+        trace.registers, trace.cpsr, publication, trace.frame)?;
+
+    let mut completed = completed_actual(&trace)?;
+    let failure = completed.observe(trace.events[0]).err()
+        .ok_or("late retirement after completed actual evidence was admitted")?;
+    controls.insert("retirement-after-completion".into(),
+        json!({"refused":true,"failure":format!("{failure:?}")}));
+    let mut completed = completed_actual(&trace)?;
+    let failure = completed.observe(trace.events[3]).err()
+        .ok_or("late return after completed actual evidence was admitted")?;
+    controls.insert("return-after-completion".into(),
+        json!({"refused":true,"failure":format!("{failure:?}")}));
+    let mut completed = completed_actual(&trace)?;
+    let failure = completed.handoff(trace.registers, trace.cpsr, trace.frame, trace.context).err()
+        .ok_or("duplicate destination after completed actual evidence was admitted")?;
+    controls.insert("destination-after-completion".into(),
+        json!({"refused":true,"failure":format!("{failure:?}")}));
+
+    let passed = controls.len() == 24 && controls.values().all(|control| control["refused"] == true);
+    Ok(json!({
+        "case":"actual-menu-causal-controls",
+        "passed":passed,
+        "positive":true,
+        "controls":controls,
+        "fixture_provenance":{
+            "kind":"copied-adversarial-host-fixture",
+            "source":"retained actual Menu first_irq artifact",
+            "source_sha256":"23bb11e1206b66199a475c1f2c540f1ae19e54734b6b4d4bdee1f7c51ba8f312",
+            "original_stopped_entry_serial":799689u64,
+            "retirement_serial":65624u64,
+            "exception_serial":65625u64,
+            "task_id":trace.context.task_id,
+            "publication_forward":trace.context.forward,
+            "publication_reverse":trace.context.reverse
+        },
+        "scope":{
+            "inner_verifier":"unchanged fujimod_emulator_cpu::preservation::shadow::Shadow",
+            "diagnostic_wrapper":"not exercised; packets without an active shadow are outside this proof",
+            "production_certificate_path":false,
+            "production_guard_changed":false,
+            "camera_operation":false
+        },
+        "original_events":trace.events.iter().map(|event|format!("{event:?}")).collect::<Vec<_>>()
+    }))
 }
 
 fn run_controls() -> Result<Value, String> {
@@ -549,11 +813,12 @@ fn main() {
     let result = match args.as_slice() {
         [] => run_controls(),
         [mode] if mode == "--bank-controls" => bank_controls(),
+        [mode] if mode == "--actual-menu-controls" => actual_menu_controls(),
         [mode, case, execution, adapter] if mode == "--lifecycle"
             && matches!(execution.as_str(), "direct" | "worker")
             && matches!(adapter.as_str(), "board" | "context") =>
                 lifecycle(case, execution == "worker", adapter == "context"),
-        _ => Err("expected --lifecycle CASE direct|worker board|context".into()),
+        _ => Err("expected --actual-menu-controls, --bank-controls or --lifecycle CASE direct|worker board|context".into()),
     };
     match result {
         Ok(value) => {
