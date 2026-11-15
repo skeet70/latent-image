@@ -2048,4 +2048,42 @@
       {"name":"full_differences","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json","pointer":["jobs","1","geometry","different_bytes"]}
     ]
   }
+  ,{
+    "id": "E-MENU-HANDOFF-PRESERVATION-150",
+    "claim": "The opt-in native preservation runtime {{sdk}} (bridge {{bridge}}, model {{model}}, patch {{patch}}) passes {{positive_roles}} synthetic direct/worker × Board/ObservationContext original-PUSH/IRQ/late-handoff roles, with independently equal full pending and final architectural/Board fingerprints. All {{negative_controls}} corruption/provenance/retirement controls refuse; a real native fault is observed={{actual_fault}}. A separate actual X-M1 Menu scenario using archive {{archive}} exits {{viewer_exit}} after install, picker keys, close, unload and reopen, with {{started}} authenticated PUSH retirements and {{completed}} full late checks, failure_free={{failure_free}} and production_admission={{production_admission}}. That new cold-start scenario captures {{irq_windows}} PUSH/IRQ windows and does not reproduce or accept the old installed-checkpoint refusal.",
+    "scope": "Host/emulator observation-only evidence. The synthetic controls exercise native CPU retirement and the source-shaped stock IRQ return through both adapters and execution paths; equality covers architecture, RAM, clocks, deadlines/events and queued in-flight completion. The actual Menu scenario uses the new runtime/model without transferring old-model checkpoints or qualifier receipts. Production guard changed={{guard_changed}}, value qualification={{qualification}}, camera operation={{camera_operation}}. No camera ownership, hardware behavior, full136-role value acceptance or changed-selection close/confirmation/restore is established.",
+    "notes": "Native pre-mutation entry, settled committed PUSH effects and source-bound banked-status restoration are separate from the production one-use destination permit. A shadow pass never admits the production handoff. The actual Menu smoke has no IRQ in its PUSH windows; the frozen failing installed-checkpoint role remains an explicit final-pass item. Independent review is required before a production observer correction. Particular camera heap headroom is unmeasured.",
+    "artifacts": [
+      "private-data/scratch/MenuValueFix/runs/20261115T093216Z-native-shadow-control6-forward/result/control.json",
+      "private-data/scratch/MenuValueFix/runs/20261115T093216Z-native-shadow-control6-forward/result/control.stderr",
+      "private-data/scratch/MenuValueFix/runs/20261115T093216Z-native-shadow-control6-forward/result/inputs.sha256",
+      "private-data/scratch/MenuValueFix/runs/20261115T093312Z-menu-shadow-artifact6/result/shadow-reports.json",
+      "private-data/scratch/MenuValueFix/runs/20261115T093312Z-menu-shadow-artifact6/result/e2e-modal-observation.json",
+      "private-data/scratch/MenuValueFix/runs/20261115T093312Z-menu-shadow-artifact6/result/viewer.log",
+      "private-data/scratch/MenuValueFix/runs/20261115T093312Z-menu-shadow-artifact6/result/inputs.sha256",
+      "private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json",
+      "private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/native-input-check.txt",
+      "private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/menu-input-check.txt"
+    ],
+    "facts": [
+      {"name":"firmware_sha256","path":"private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json","pointer":["firmware_sha256"]},
+      {"name":"sdk","path":"private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json","pointer":["sdk"]},
+      {"name":"bridge","path":"private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json","pointer":["bridge_sha256"]},
+      {"name":"model","path":"private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json","pointer":["model_sha256"]},
+      {"name":"patch","path":"private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json","pointer":["patch_sha256"]},
+      {"name":"archive","path":"private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json","pointer":["archive_sha256"]},
+      {"name":"positive_roles","path":"private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json","pointer":["native","positive_roles"]},
+      {"name":"negative_controls","path":"private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json","pointer":["native","negative_controls"]},
+      {"name":"actual_fault","path":"private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json","pointer":["native","actual_native_fault"]},
+      {"name":"viewer_exit","path":"private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json","pointer":["menu","viewer_exit"]},
+      {"name":"started","path":"private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json","pointer":["menu","started"]},
+      {"name":"completed","path":"private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json","pointer":["menu","completed"]},
+      {"name":"failure_free","path":"private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json","pointer":["menu","failure_free"]},
+      {"name":"production_admission","path":"private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json","pointer":["menu","production_admission"]},
+      {"name":"irq_windows","path":"private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json","pointer":["menu","irq_windows"]},
+      {"name":"qualification","path":"private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json","pointer":["menu","qualification"]},
+      {"name":"guard_changed","path":"private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json","pointer":["production_guard_changed"]},
+      {"name":"camera_operation","path":"private-data/scratch/MenuValueFix/runs/20261115T093906Z-preservation-facts6/result/facts.json","pointer":["camera_operation"]}
+    ]
+  }
 ]

@@ -206,6 +206,16 @@ permitTests = do
   unfinished <- either error pure (parseModalReport permitLimit (set "counts"
     (set "active_frames" (Number 1) (set "observations" (Number 1) permitCounts)) permitEnvelope))
   check "disabled report with unfinished frames refuses end" (isLeft (checkModalEnd unfinished))
+  let source = object ["core" .= (0 :: Int), "vector" .= (0x40208 :: Word32),
+        "status" .= (0x40360 :: Word32), "returning" .= (0x40364 :: Word32), "adapter" .= ("board" :: String)]
+      passive = object ["core" .= (0 :: Int), "source" .= source, "started" .= (1 :: Int), "completed" .= (1 :: Int),
+        "native_events" .= (4 :: Int), "active" .= False, "failure" .= Null, "production_admission" .= False]
+      stillFailed = set "preservation_shadow" passive (modalReportJson failed)
+  shadowedFailure <- either error pure (parseModalReport permitLimit stillFailed)
+  check "a passive shadow pass cannot consume the failed production handoff"
+    (isLeft (checkModalEnd shadowedFailure) && modalReportFailure shadowedFailure == modalReportFailure failed)
+  check "passive evidence cannot assert production authority"
+    (isLeft (parseModalReport permitLimit (set "preservation_shadow" (set "production_admission" (Bool True) passive) permitEnvelope)))
  where
   toArray values = get "values" (object ["values" .= values])
 

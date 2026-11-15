@@ -194,6 +194,14 @@ Scope: X-M1 1.50 cardless RAM-push value package under the controlled-RTC run do
 
 <!-- /evidence-record E-MENU-ENGINE-CUTOVER-150 -->
 
+<!-- evidence-record E-MENU-HANDOFF-PRESERVATION-150 -->
+
+E-MENU-HANDOFF-PRESERVATION-150: The opt-in native preservation runtime /nix/store/ycd118bxx3kb4zsbcw1g27br86659r7k-fujimod-xm1-0.1.0 (bridge a9305cb845d40b48dba2b34a40825cd9362845c47e5ea0ed89d64b5c74ee4811, model c94d736b6ab6b632e3695b06c6969bcb76bc3e3b40aaa8f8c40037544134052c, patch 0e506cbae456175e4c4a0feb4d3c7748627f999034b3af2a359d2ffe1def8fb4) passes 4 synthetic direct/worker × Board/ObservationContext original-PUSH/IRQ/late-handoff roles, with independently equal full pending and final architectural/Board fingerprints. All 22 corruption/provenance/retirement controls refuse; a real native fault is observed=true. A separate actual X-M1 Menu scenario using archive 6ceb7d4c03c13d043ebecd220ab8a3e5bc762196d4d4ab502df24cc63e7e71ce exits 0 after install, picker keys, close, unload and reopen, with 219 authenticated PUSH retirements and 219 full late checks, failure_free=true and production_admission=false. That new cold-start scenario captures 0 PUSH/IRQ windows and does not reproduce or accept the old installed-checkpoint refusal.
+
+Scope: Host/emulator observation-only evidence. The synthetic controls exercise native CPU retirement and the source-shaped stock IRQ return through both adapters and execution paths; equality covers architecture, RAM, clocks, deadlines/events and queued in-flight completion. The actual Menu scenario uses the new runtime/model without transferring old-model checkpoints or qualifier receipts. Production guard changed=false, value qualification=false, camera operation=false. No camera ownership, hardware behavior, full136-role value acceptance or changed-selection close/confirmation/restore is established.
+
+<!-- /evidence-record E-MENU-HANDOFF-PRESERVATION-150 -->
+
 ## Time services
 
 `replacement/time_services` owns the task-6 delay and task-9 timer loops, software timer slots and interrupt registration behind typed ports. `//replacement/time_services:host-tests` exercises callback ordering, cancellation, delay completion and the task receive-error contract. These are core contract tests, not stock equality evidence.

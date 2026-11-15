@@ -30,6 +30,7 @@ mod modal_guard;
 pub mod modal_lifetime;
 mod modal_memory;
 pub mod modal_permit;
+mod modal_shadow;
 pub mod modal_task;
 pub mod modal_trace;
 pub mod nand_image;

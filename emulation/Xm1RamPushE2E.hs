@@ -970,6 +970,17 @@ seconds value = showFFloat (Just 1) value " s"
 runSession :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> Plan -> FilePath -> IO ()
 runSession settings python runtime installedMedia adjustmentNand plan e2e = do
   stackDiagnostic <- lookupEnv "XM1_RENDER_STACK_DIAGNOSTIC" >>= traverse readRenderStackDiagnosticConfig
+  shadowPlan <- lookupEnv "XM1_MODAL_PRESERVATION_SHADOW_PLAN" >>= traverse (\path -> do
+    bytes <- B.readFile path
+    require (B.length bytes <= 4096) "preservation shadow plan exceeds4KiB"
+    either (ioError . userError . ("invalid preservation shadow plan: " ++)) pure (eitherDecodeStrict' bytes))
+  when (isJust shadowPlan) $ do
+    require (pushMode settings == RamPush && (modalLifetimeGuard settings == ContinuousModalLifetimeGuard
+      || payloadKind (e2ePayload settings) `elem` [RecipeBankModal75, RecipeBankModalLifecycle, RecipeBankModal75MenuEngine]))
+      "preservation shadow requires the installed modal lifetime observer"
+    case emulationRuntime settings of
+      FujiModRuntime _ -> pure ()
+      _ -> ioError (userError "preservation shadow requires FujiMod")
   splitPath <- lookupEnv "XM1_MODAL_INSTALL_CHECKPOINT"
   splitProof <- forM splitPath $ \path -> do
     present <- doesFileExist path
@@ -1243,7 +1254,9 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         else do
           request <- either (ioError . userError) pure (modalRequest stock Nothing (either error id (modalLimit 65536)))
           pure (request, Null)
-      request <- either (ioError . userError) pure (lifetimeModalRequest baseRequest lifetimeSource)
+      lifetimeRequest <- either (ioError . userError) pure (lifetimeModalRequest baseRequest lifetimeSource)
+      request <- either (ioError . userError) pure (maybe (Right lifetimeRequest)
+        (\shadow -> preservationShadowRequest shadow lifetimeRequest) shadowPlan)
       forM_ afPlan $ \af -> do
         bridge <- case emulationRuntime settings of
           FujiModRuntime bridge -> pure bridge
