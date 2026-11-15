@@ -45,7 +45,7 @@ data Entry = SourceEntry | ModeEntry deriving (Eq, Show)
 data Binding = Binding Entry Address Address Address
 
 data SourceIdentity = SourceIdentity Word32 Int B.ByteString Digest
-data Package = Package Address B.ByteString Digest Digest [Binding] [(Address, B.ByteString)] [SourceIdentity]
+data Package = Package Address B.ByteString Digest Digest [Binding] [(Address, B.ByteString)] [SourceIdentity] [(Address, B.ByteString)]
 
 ensure :: Bool -> String -> Either String ()
 ensure condition problem = unless condition (Left problem)
@@ -153,13 +153,23 @@ parsePackage manifestBytes metadataBytes runtime elfBytes = do
       _ -> Left "source publication word missing")
     let (_, _, _, hash) = contract entry
     pure (SourceIdentity (site + 8) (fromIntegral (end - site - 8)) header (Digest hash))
-  pure (Package base runtime (digest manifestBytes) runtimeDigest bindings artifacts sources)
+  let allocated = [s | s <- E.elfSections elf, E.sectionAllocated s, E.sectionSize s > 0]
+  forM_ allocated $ \section -> do
+    let low = toInteger (E.sectionAddress section)
+        high = low + toInteger (E.sectionSize section)
+    ensure (toInteger start <= low && high <= toInteger start + toInteger (B.length runtime)) "allocated ELF section lies outside runtime"
+    ensure (not (E.sectionWritable section) || low >= toInteger start + 0x5000) "owned preparation code window contains writable state"
+  let immutable =
+        [(Address (E.sectionAddress section), B.take (fromIntegral (E.sectionSize section))
+          (B.drop (fromIntegral (E.sectionAddress section - start)) runtime))
+        | section <- allocated, not (E.sectionWritable section)]
+  pure (Package base runtime (digest manifestBytes) runtimeDigest bindings artifacts sources immutable)
   where
     unique [] = []
     unique (x:xs) = x : unique (filter (/= x) xs)
 
 validateInstalled :: Selection -> Package -> B.ByteString -> Value -> Either String Value
-validateInstalled selected (Package base _ manifest runtime _ _ _) recordBytes options = do
+validateInstalled selected (Package base _ manifest runtime _ _ _ _) recordBytes options = do
   record <- A.eitherDecodeStrict' recordBytes
   listed <- field "installed" options >>= array
   candidate <- case [v | v <- listed, field "directory" v == Right (A.toJSON (installedDirectory selected))] of
@@ -183,22 +193,22 @@ validateReady selected start ready = do
   ensure (field "snapshot_sha256" checkpoint == Right expected) "restored snapshot differs from selected installed identity"
 
 guestArtifacts :: Package -> [(Word32, B.ByteString)]
-guestArtifacts (Package (Address base) runtime _ _ _ publications _) = (base, runtime) : [(a,b) | (Address a,b) <- publications]
+guestArtifacts (Package _ _ _ _ _ publications _ immutable) = [(a,b) | (Address a,b) <- immutable ++ publications]
 
 checkGuestArtifacts :: Package -> [(Word32, B.ByteString)] -> Either String ()
-checkGuestArtifacts package actual = ensure (actual == guestArtifacts package) "guest runtime or publication bytes differ from identified package"
+checkGuestArtifacts package actual = ensure (actual == guestArtifacts package) "guest immutable runtime or publication bytes differ from identified package"
 
 originalBodies :: Package -> [(Word32, Int)]
-originalBodies (Package _ _ _ _ _ _ sources) = [(start, count) | SourceIdentity start count _ _ <- sources]
+originalBodies (Package _ _ _ _ _ _ sources _) = [(start, count) | SourceIdentity start count _ _ <- sources]
 
 checkOriginalBodies :: Package -> [B.ByteString] -> Either String ()
-checkOriginalBodies (Package _ _ _ _ _ _ sources) bodies = do
+checkOriginalBodies (Package _ _ _ _ _ _ sources _) bodies = do
   ensure (length sources == length bodies) "original playback body reads missing"
   forM_ (zip sources bodies) $ \(SourceIdentity _ count header expected, bytes) ->
     ensure (B.length bytes == count && digest (header <> bytes) == expected) "original playback source bytes differ from pinned source identity"
 
 ranges :: Package -> ([W.WatchRange], [W.WatchRange])
-ranges (Package (Address base) runtime _ _ bindings publications _) = (W.unionWatchRanges (publicationRanges ++ bodies ++ [range base (base + fromIntegral (B.length runtime))]), bodies ++ entries)
+ranges (Package (Address base) runtime _ _ bindings publications _ _) = (W.unionWatchRanges (publicationRanges ++ bodies ++ [range base (base + fromIntegral (B.length runtime))]), bodies ++ entries)
   where
     range lo hi = either error id (W.watchRange (W.watchAddress lo) (W.watchAddress hi))
     publicationRanges = W.unionWatchRanges [range a (a + 4) | (Address a,_) <- publications]
@@ -245,7 +255,7 @@ witness package ackValue stateValue endValue = do
   ensure (not (any (\r -> case r of
     W.CpuRecord {W.cpuAccess = W.CpuFetch, W.cpuPhysical = physical, W.cpuBytes = bytes} -> body (W.watchAddressValue physical) (W.watchBytesValue bytes)
     _ -> False) records)) "original playback body fetched"
-  let Package _ _ _ _ bindings _ _ = package
+  let Package _ _ _ _ bindings _ _ _ = package
       seen entry = any (\r -> case r of
         W.CpuRecord {W.cpuAccess = W.CpuFetch, W.cpuPhysical = physical} -> any (\(Binding kind _ _ (Address target)) -> kind == entry && W.watchAddressValue physical == target) bindings
         _ -> False) records

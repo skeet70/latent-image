@@ -94,6 +94,9 @@ main = do
   check "runtime mutation refused" (isLeft (P.parsePackage (json manifest) (json metadata) (B.cons 1 (B.drop 1 runtime)) elf))
   check "extra hook refused" (isLeft (P.parsePackage (json manifest) (json (put "hooks" (A.toJSON ([] :: [Value])) metadata)) runtime elf))
   check "guest upload alone has no execution witness" (isRight (P.checkGuestArtifacts package (P.guestArtifacts package)))
+  check "guest identity reads only the allocated immutable ELF bytes" (case P.guestArtifacts package of
+    (0x10000, bytes) : _ -> bytes == B.replicate 8 0
+    _ -> False)
   check "guest publication mutation refused" (isLeft (P.checkGuestArtifacts package [(0x10000,runtime)]))
   check "original source identity mutation refused" (isLeft (P.checkOriginalBodies package [B.replicate 868 0,B.replicate 700 0]))
   let request = P.watchRequest package
