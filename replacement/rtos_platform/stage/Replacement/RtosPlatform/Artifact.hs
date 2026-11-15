@@ -111,8 +111,9 @@ canonicalSource dat loaderA loaderB = do
   require (U.rebuildContainer parsed (U.parsedParts parsed) == Right dat) ContainerRejected
   loaders <- forM domains $ \domain -> (,) domain <$> containedLoader (U.parsedParts parsed) domain
   let given = M.fromList (zip domains [loaderA, loaderB])
-  forM_ domains $ \domain -> require (B.length (given M.! domain) == domainLoaderSize domain) (LoaderMismatch domain)
-  pure (CanonicalSource dat parsed (M.fromList loaders))
+      contained = M.fromList loaders
+  forM_ domains $ \domain -> require (given M.! domain == contained M.! domain) (LoaderMismatch domain)
+  pure (CanonicalSource dat parsed contained)
 
 requirePinned :: CanonicalSource -> Either StageError ()
 requirePinned source =
