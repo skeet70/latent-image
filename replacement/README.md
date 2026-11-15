@@ -263,6 +263,14 @@ Scope: Logical-region representation, the full bounded current-union S2 native c
 
 <!-- /evidence-record E-NATIVE-REGION-CAPACITY-150 -->
 
+<!-- evidence-record E-RTOS-PLATFORM-CURRENT-UNION-NATIVE-150 -->
+
+E-RTOS-PLATFORM-CURRENT-UNION-NATIVE-150: The staged-effective union A 384f8963070aa35c08947e47c4633457f46afc49d34585e0f0d9237cc2e64768 and B 7e8edaef61bc30f4d517abfd0dc5c6a26db8157b63752055ffb59942adc5fa07 passes the completed native service cohorts in the cited current matrix under unchanged family contracts, equivalence controls and defect controls. Full S2 holds (true). Source-grounded host admission repairs admit Timer's 56 cases/280 controls with 0 failures and Global Lock's 64 comparisons/456 controls with 0 failures. Timer aggregate cases execute the linked owned wait-release helper; Global Lock validates its six public entries through the canonical byte-bound veneer/thunk resolver. Firmware and comparison rules are unchanged.
+
+Scope: Current staged-effective loader union and the completed scoped native cohorts, not complete kernel ownership or natural startup. Each complete qualifier runs under the existing NativeVerification memory limits. Role-specific cached observations remain reused, not newly executed or retroactively contained. Own-first full qualification remains open. The packaged domain-A application join uses the real loader with a standalone linked application overlay and fixture contexts, registries and scheduler-lock callbacks; it is not final packaged image4 or Root lifetime acceptance.
+
+<!-- /evidence-record E-RTOS-PLATFORM-CURRENT-UNION-NATIVE-150 -->
+
 ## Playback decode observation
 
 <!-- evidence-record E-FUJIMOD-XM1-PLAY-JPEG-150 -->

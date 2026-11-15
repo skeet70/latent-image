@@ -2070,4 +2070,59 @@
       {"name":"settings_mismatches","path":"private-data/scratch/NativeRegionCapacity-evidence.json","pointer":["joined_case","package_comparison","generic_extra_mismatches"],"operation":"length"}
     ]
   }
+  ,{
+    "id": "E-RTOS-PLATFORM-CURRENT-UNION-NATIVE-150",
+    "claim": "The staged-effective union A {{union_a}} and B {{union_b}} passes the completed native service cohorts in the cited current matrix under unchanged family contracts, equivalence controls and defect controls. Full S2 holds ({{s2_holds}}). Source-grounded host admission repairs admit Timer's {{timer_cases}} cases/{{timer_controls}} controls with {{timer_failures}} failures and Global Lock's {{global_cases}} comparisons/{{global_controls}} controls with {{global_failures}} failures. Timer aggregate cases execute the linked owned wait-release helper; Global Lock validates its six public entries through the canonical byte-bound veneer/thunk resolver. Firmware and comparison rules are unchanged.",
+    "scope": "Current staged-effective loader union and the completed scoped native cohorts, not complete kernel ownership or natural startup. Each complete qualifier runs under the existing NativeVerification memory limits. Role-specific cached observations remain reused, not newly executed or retroactively contained. Own-first full qualification remains open. The packaged domain-A application join uses the real loader with a standalone linked application overlay and fixture contexts, registries and scheduler-lock callbacks; it is not final packaged image4 or Root lifetime acceptance.",
+    "notes": "The supported contracts retain their declared bounded refusal/spin outcomes and accepted stock corrections. The former Timer fixture-overlap and Global Lock standalone-symbol refusals are host harness admission errors, not firmware discrepancies. Raw task/configuration/root layouts, mailbox extents, IRQ/vector/init backends, retained external declarations, both-core publication, allocation/reuse and natural callback lifetimes remain closure obligations. These native cohorts and the separate reset/menu smoke do not establish hardware exclusive/cache laws or whole-kernel retirement.",
+    "artifacts": [
+      "private-data/scratch/Image5Producer/stage-v1/owned-image5-stage-v1-contract.json",
+      "private-data/scratch/PlatformComposition/runs/20261115T214011Z-scoped-full-S1/result/native-summary.json",
+      "private-data/scratch/PlatformComposition/runs/20261115T214011Z-scoped-full-S1/result/qualifier.log",
+      "private-data/scratch/PlatformComposition/runs/20261115T213559Z-scoped-full-S2/result/native-summary.json",
+      "private-data/scratch/PlatformComposition/runs/20261115T213559Z-scoped-full-S2/result/qualifier.log",
+      "private-data/scratch/PlatformComposition/runs/20261115T214011Z-scoped-full-S3a/result/native-summary.json",
+      "private-data/scratch/PlatformComposition/runs/20261115T214011Z-scoped-full-S3a/result/qualifier.log",
+      "private-data/scratch/PlatformComposition/runs/20261115T215713Z-scoped-full-S3b-carriers/result/compact-summary.json",
+      "private-data/scratch/PlatformComposition/runs/20261115T215713Z-scoped-full-S3b-carriers/result/qualifier.log",
+      "private-data/scratch/PlatformComposition/runs/20261115T214011Z-scoped-full-S3c/result/cases-summary.json",
+      "private-data/scratch/PlatformComposition/runs/20261115T214011Z-scoped-full-S3c/result/qualifier.log",
+      "private-data/scratch/PlatformComposition/runs/20261115T213559Z-scoped-full-S3d/result/native-results.json",
+      "private-data/scratch/PlatformComposition/runs/20261115T213559Z-scoped-full-S3d/result/qualifier.log",
+      "private-data/scratch/PlatformComposition/runs/20261115T213654Z-scoped-full-ContextTransfer/result/native-results.json",
+      "private-data/scratch/PlatformComposition/runs/20261115T213654Z-scoped-full-ContextTransfer/result/qualifier.log",
+      "private-data/scratch/PlatformComposition/runs/20261115T213559Z-scoped-full-TaskRecords/result/native-results.json",
+      "private-data/scratch/PlatformComposition/runs/20261115T213559Z-scoped-full-TaskRecords/result/qualifier.log",
+      "private-data/scratch/PlatformComposition/runs/20261115T213827Z-scoped-full-Objects/result/native-results.json",
+      "private-data/scratch/PlatformComposition/runs/20261115T213827Z-scoped-full-Objects/result/qualifier.log",
+      "private-data/scratch/PlatformComposition/runs/20261115T213827Z-scoped-full-Semaphore/result/native-results.json",
+      "private-data/scratch/PlatformComposition/runs/20261115T213827Z-scoped-full-Semaphore/result/qualifier.log",
+      "private-data/scratch/PlatformComposition/runs/20261115T213827Z-scoped-full-FixedPool/result/native-results.json",
+      "private-data/scratch/PlatformComposition/runs/20261115T213827Z-scoped-full-FixedPool/result/qualifier.log",
+      "private-data/scratch/PlatformComposition/runs/20261115T213827Z-scoped-full-Queue/result/native-results.json",
+      "private-data/scratch/PlatformComposition/runs/20261115T213827Z-scoped-full-Queue/result/qualifier.log",
+      "private-data/scratch/PlatformComposition/runs/20261115T214723Z-scoped-full-Timer-owned-helper/result/native-results.json",
+      "private-data/scratch/PlatformComposition/runs/20261115T214723Z-scoped-full-Timer-owned-helper/result/qualifier.log",
+      "private-data/scratch/PlatformComposition/runs/20261115T214723Z-scoped-full-Timer-owned-helper/result/inputs.sha256",
+      "private-data/scratch/PlatformComposition/runs/20261115T213651Z-scoped-full-Cyclic/result/native-results.json",
+      "private-data/scratch/PlatformComposition/runs/20261115T213651Z-scoped-full-Cyclic/result/qualifier.log",
+      "private-data/scratch/PlatformComposition/runs/20261115T214402Z-scoped-full-GlobalLock-bound/result/native-results.json",
+      "private-data/scratch/PlatformComposition/runs/20261115T214402Z-scoped-full-GlobalLock-bound/result/qualifier.log",
+      "private-data/scratch/PlatformComposition/runs/20261115T214402Z-scoped-full-GlobalLock-bound/result/inputs.sha256",
+      "private-data/scratch/PlatformComposition/runs/20261115T214153Z-scoped-packaged-AppJoin/result/native-results.json",
+      "private-data/scratch/PlatformComposition/runs/20261115T214153Z-scoped-packaged-AppJoin/result/qualifier.log"
+    ],
+    "facts": [
+      {"name":"firmware_sha256","path":"private-data/scratch/Image5Producer/stage-v1/owned-image5-stage-v1-contract.json","pointer":["image5_load","source_dat_image4_sha256","0"]},
+      {"name":"union_a","path":"private-data/scratch/PlatformComposition/runs/20261115T213559Z-scoped-full-S2/result/native-summary.json","pointer":["inputs","0","owned_sha256"]},
+      {"name":"union_b","path":"private-data/scratch/PlatformComposition/runs/20261115T213559Z-scoped-full-S2/result/native-summary.json","pointer":["inputs","1","owned_sha256"]},
+      {"name":"s2_holds","path":"private-data/scratch/PlatformComposition/runs/20261115T213559Z-scoped-full-S2/result/native-summary.json","pointer":["holds"]},
+      {"name":"timer_cases","path":"private-data/scratch/PlatformComposition/runs/20261115T214723Z-scoped-full-Timer-owned-helper/result/native-results.json","pointer":["cases"],"operation":"length"},
+      {"name":"timer_controls","path":"private-data/scratch/PlatformComposition/runs/20261115T214723Z-scoped-full-Timer-owned-helper/result/native-results.json","pointer":["controls"],"operation":"length"},
+      {"name":"timer_failures","path":"private-data/scratch/PlatformComposition/runs/20261115T214723Z-scoped-full-Timer-owned-helper/result/native-results.json","pointer":["failures"]},
+      {"name":"global_cases","path":"private-data/scratch/PlatformComposition/runs/20261115T214402Z-scoped-full-GlobalLock-bound/result/native-results.json","pointer":["cases"],"operation":"length"},
+      {"name":"global_controls","path":"private-data/scratch/PlatformComposition/runs/20261115T214402Z-scoped-full-GlobalLock-bound/result/native-results.json","pointer":["controls"],"operation":"length"},
+      {"name":"global_failures","path":"private-data/scratch/PlatformComposition/runs/20261115T214402Z-scoped-full-GlobalLock-bound/result/native-results.json","pointer":["failures"]}
+    ]
+  }
 ]
