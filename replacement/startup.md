@@ -126,6 +126,19 @@ run-output exec --label image5-native-routes-controls -- bash -c '
 
 The consumer checks exact BSS zeroing and unchanged halo/destination bytes, command done before release, cleared busy at callback, error delivery and the cache boundary. It also executes producers with omitted CPU fill, erased error status and omitted cache publication. Unknown execution cannot count as a passing negative control. This is conditional producer/caller qualification, not a natural reset route or permission to enter stale image5 code after skip-mode completion.
 
+## Missing-segment and plain skip caller witnesses
+
+The same native executable also accepts these route selections:
+
+```text
+image5-native-routes RUNNER IMAGE4 IMAGE5_BIN PLAIN_BIN REPORT --missing-segments --native-jobs 1
+image5-native-routes RUNNER IMAGE4 PLAIN_BIN REPORT --plain-skip --native-jobs 1
+```
+
+Run each under `run-output exec` and `emulator-slot --native` as above, with a fresh report path in `$XM1_RUN_RESULT`. The missing-segment route enters the actual flashloader and both retained/owned producers. Its oracle requires the source-bound halt PC at the instruction budget, command busy retained, done zero, no release/callback, no mode call and unchanged destination/BSS/flag. An executable premature-return control must instead complete the command and be refused by that oracle.
+
+Plain skip qualification executes the actual progress reporter and notification wrapper through their message-send boundary, not only the producer's progress-call arguments. Zero and three-block cases check command/resource order, delay calls, actual notification headers and payloads, monotonically retained progress and the callback. The synthetic notification recipient does not initialize an extent or set its flag. Notifications and successful command completion with unchanged destination bytes are not fresh residency.
+
 ## Startup-consumer witness
 
 [Publication and first-consumer findings](../reports/replacement-inventory-baseline.md#qualified-first-consumer-agreement) own scoped comparison results and unresolved lifetimes; [the installation contract](../reports/replacement-inventory-baseline.md#812-image-4-phase-0-installation-contract-150) owns source behavior. `//emulation:startup-consumers` produces receipts for retained, installer-only and joined dispatcher-plus-installer roles. A producer's completed observation is not consumer acceptance.

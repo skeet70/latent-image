@@ -117,6 +117,7 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":image5-load-artifact",
+        "//replacement/plain_load:plain-load-artifact",
         "//emulation:owned-case",
         "//emulation:native-observation",
         "//host:containers",
