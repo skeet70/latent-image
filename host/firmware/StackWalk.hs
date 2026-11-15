@@ -92,21 +92,26 @@ written instruction = case instruction of
   A32.BranchExchange _ True _ -> [A32.Reg n | n <- [0 .. 3] ++ [12, 14]]
   _ -> []
 
--- | Registers the word writes under `Strict`: `written`, the second register of @ldrd@, and the
--- destination of the stack-neutral rejected classes (@mrc@, @mrs Rt, spsr@, @ldrex@/@strex@, @swp@, @vmrs@).
+-- | Explicit and implicit LDRD/LDREXD destinations and admitted system-transfer destinations.
+-- Transfer-base writeback is excluded.
 writes :: Word32 -> Word32 -> [A32.Reg]
 writes address word = case A32.decode address word of
   instruction@(A32.Load _ A32.Dual _ (A32.Reg n) _ _ _) -> written instruction ++ [A32.Reg (n + 1)]
   A32.Rejected (A32.Coprocessor coprocessor)
     | coprocessor `elem` [14, 15] && testBit word 20 && word .&. 0x0f000010 == 0x0e000010 -> destination
     | coprocessor `elem` [10, 11] && word .&. 0x0ff00fff == 0x0ef00a10 -> destination
-  A32.Rejected A32.Exclusive -> destination
+  A32.Rejected A32.Exclusive
+    | doubleExclusiveLoad word -> if rt < 15 then [A32.Reg rt, A32.Reg (rt + 1)] else [A32.pc]
+    | otherwise -> destination
   A32.Rejected A32.SystemRegister | word .&. 0x0fbf0fff == 0x010f0000 -> destination
   A32.Rejected _ | word .&. 0x0fb00ff0 == 0x01000090 -> destination
   instruction -> written instruction
   where
     rt = fromIntegral ((word `shiftR` 12) .&. 0xf)
     destination = [A32.Reg rt | rt /= 15]
+
+doubleExclusiveLoad :: Word32 -> Bool
+doubleExclusiveLoad word = word .&. 0x0ff00fff == 0x01b00f9f
 
 always :: A32.Cond -> Bool
 always (A32.Cond c) = c == 14
@@ -180,6 +185,9 @@ classify strictness address word = case A32.decode address word of
   -- MCR/MRC to coprocessor 14 or 15 with a register other than SP: a register transfer with no memory access.
   systemTransfer = word .&. 0x0f000010 == 0x0e000010 && field 11 8 `elem` [14, 15] && field 15 12 /= 13
   exclusiveTarget = field 15 12 `notElem` [13, 15]
+    && (not (doubleExclusiveLoad word)
+      || (field 15 12 .&. 1 == 0 && field 15 12 < 14
+        && field 19 16 /= 15 && field 15 12 + 1 `notElem` [13, 15]))
   strictRejected reason = case reason of
     A32.Coprocessor coprocessor | coprocessor `elem` [14, 15] && systemTransfer -> Neutral
     A32.Barrier -> Neutral

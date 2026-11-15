@@ -9,6 +9,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Word (Word32)
 import qualified FujiAF.FirstStage as F
+import qualified StackWalk as W
 
 newtype Guest = Guest Word32 deriving (Eq, Ord, Show)
 newtype StackBytes = StackBytes Int deriving (Eq, Ord, Show)
@@ -43,57 +44,103 @@ wordAt image address = do
       byte shift = fromIntegral (B.index (imageBytes image) (index + shift)) :: Word32
   pure (byte 0 + byte 1 * 0x100 + byte 2 * 0x10000 + byte 3 * 0x1000000)
 
-prologueInstruction :: A.Instruction -> Bool
-prologueInstruction instruction = case instruction of
-  A.StoreMultiple (A.Cond 14) base A.DecrementBefore True registers -> base == A.sp && not (null registers)
-  A.DataProcessing (A.Cond 14) _ _ destination base (A.Immediate _) -> destination == A.sp || base == A.sp
-  A.DataProcessing (A.Cond 14) A.MOV _ destination _ (A.ShiftedImmediate source A.LSL 0) -> destination == A.sp || source == A.sp
-  _ -> False
+newtype FrameOffset = FrameOffset Integer deriving (Eq)
 
-spWrite :: A.Instruction -> Bool
-spWrite instruction = case instruction of
-  A.DataProcessing _ _ _ destination _ _ -> destination == A.sp
-  A.LoadMultiple _ base _ writeback _ -> base == A.sp && writeback
-  A.StoreMultiple _ base _ writeback _ -> base == A.sp && writeback
-  _ -> False
+data FrameState = FrameState
+  { frameSp :: FrameOffset
+  , frameFp :: Maybe FrameOffset
+  } deriving (Eq)
 
--- A leaf exit before a shrink-wrapped frame leaves SP unchanged.
-framePreludeInstruction :: A.Instruction -> Bool
-framePreludeInstruction instruction = not (spWrite instruction) && case instruction of
-  A.Branch {} -> False
-  A.BranchExchange condition False register -> condition /= A.Cond 14 && register == A.lr
-  A.BranchExchange {} -> False
-  A.Rejected {} -> False
-  A.Load _ _ _ destination _ _ _ -> destination /= A.pc && destination /= A.sp
-  A.LoadMultiple _ _ _ _ registers -> A.pc `notElem` registers && A.sp `notElem` registers
-  A.DataProcessing _ _ _ destination _ _ -> destination /= A.pc
-  A.MoveWide _ destination _ -> destination /= A.pc && destination /= A.sp
-  A.MoveTop _ destination _ -> destination /= A.pc && destination /= A.sp
-  A.ReadStatus _ destination -> destination /= A.pc && destination /= A.sp
-  A.ZeroExtend _ destination _ _ _ -> destination /= A.pc && destination /= A.sp
-  A.Multiply _ destination _ _ _ -> destination /= A.pc && destination /= A.sp
-  A.Compute _ destinations -> all (`notElem` destinations) [A.pc, A.sp]
-  _ -> True
+data FrameVisit = FrameVisit Guest FrameState
 
-frameBytes :: Image -> F.Symbol -> Either Failure Int
-frameBytes image symbol = do
+frameBytes :: S.Set Guest -> Image -> F.Symbol -> Either Failure Int
+frameBytes entries image symbol = do
   let start = F.symbolAddress symbol
       size = F.symbolSize symbol
       end = toInteger start + toInteger size
-  let Guest firstByte = imageBase image
-  unless (size > 0 && size `mod` 4 == 0 && start `mod` 4 == 0 && end <= toInteger (maxBound :: Word32)
-    && start >= firstByte && end <= toInteger firstByte + toInteger (B.length (imageBytes image)))
+      Guest firstByte = imageBase image
+      refused = Left (FrameNotDerivable (Guest start))
+      inside address = start <= address && toInteger address < end
+      present address = inside address && S.member (Guest address) (imageInstructions image)
+      knownCallee target =
+        let Guest base = imageBase image
+            inImage = toInteger base <= toInteger target
+              && toInteger target < toInteger base + toInteger (B.length (imageBytes image))
+        in unless (not inImage || S.member (Guest target) entries) refused
+      offset (FrameOffset value) = value
+      sp state = offset (frameSp state)
+      adjusted value state
+        | value < 0 = refused
+        | otherwise = Right state { frameSp = FrameOffset value }
+      frameWriteback instruction = case instruction of
+        A.Load _ _ _ _ base _ indexing -> base == W.framePointer && indexing /= A.OffsetOnly
+        A.Store _ _ _ base _ indexing -> base == W.framePointer && indexing /= A.OffsetOnly
+        A.LoadMultiple _ base _ writeback _ -> base == W.framePointer && writeback
+        A.StoreMultiple _ base _ writeback _ -> base == W.framePointer && writeback
+        _ -> False
+      clobber instruction writtenRegisters state
+        | W.framePointer `elem` writtenRegisters || frameWriteback instruction = state { frameFp = Nothing }
+        | otherwise = state
+      next address state = do
+        unless (toInteger address + 4 < end && present (address + 4)) refused
+        pure [FrameVisit (Guest (address + 4)) state]
+      terminal state = unless (sp state == 0) refused
+      conditional condition address state visits
+        | condition == A.Cond 14 = Right visits
+        | otherwise = (visits ++) <$> next address state
+      jump target state
+        | inside target = if present target then Right [FrameVisit (Guest target) state] else refused
+        | otherwise = do
+            knownCallee target
+            terminal state
+            pure []
+      walk _ best [] = Right best
+      walk seen best (FrameVisit point@(Guest address) incoming : rest) =
+        case M.lookup point seen of
+          Just old | frameSp old /= frameSp incoming -> refused
+            | frameFp old == Nothing || frameFp old == frameFp incoming -> walk seen best rest
+            | otherwise -> step incoming { frameFp = Nothing }
+          Nothing -> step incoming
+        where
+          step state = do
+            unless (present address) refused
+            word <- wordAt image address
+            let instruction = A.decode address word
+                writtenRegisters = W.writes address word
+            case instruction of
+              A.Load {} | A.sp `elem` writtenRegisters -> refused
+              _ -> pure ()
+            visits <- case W.classify W.Strict address word of
+              W.Reserve amount -> adjusted (sp state + toInteger amount) state >>= next address
+              W.Release amount -> adjusted (sp state - toInteger amount) state
+                >>= next address . clobber instruction writtenRegisters
+              W.FromFrame displacement -> case frameFp state of
+                Just position -> adjusted (offset position - toInteger displacement) state >>= next address
+                Nothing -> refused
+              W.SetFrame amount -> next address state
+                { frameFp = Just (FrameOffset (sp state - toInteger amount)) }
+              W.Neutral
+                | any (`elem` writtenRegisters) [A.sp, A.pc] -> refused
+                | otherwise -> next address (clobber instruction writtenRegisters state)
+              W.Call target -> knownCallee target >> next address state
+              W.RegisterCall _ -> next address state
+              W.Jump condition target -> jump target state >>= conditional condition address state
+              W.Return condition amount -> do
+                returned <- adjusted (sp state - toInteger amount) state
+                terminal returned
+                conditional condition address state []
+              W.RegisterJump condition _ -> do
+                terminal state
+                conditional condition address state []
+              _ -> refused
+            walk (M.insert point state seen) (max best (sp state)) (visits ++ rest)
+  unless (size > 0 && size `mod` 4 == 0 && start `mod` 4 == 0
+    && end <= toInteger (maxBound :: Word32) && start >= firstByte
+    && end <= toInteger firstByte + toInteger (B.length (imageBytes image)))
     (Left (InvalidFunction (Guest start)))
-  instructions <- traverse (fmap (uncurry A.decode) . instructionAt)
-    [address | address <- [start, start + 4 .. fromInteger end - 4], S.member (Guest address) (imageInstructions image)]
-  let (_, framed) = span (\instruction -> not (prologueInstruction instruction) && framePreludeInstruction instruction) instructions
-      prologue = takeWhile prologueInstruction framed
-      pushed = sum [4 * length registers | A.StoreMultiple (A.Cond 14) base A.DecrementBefore True registers <- prologue, base == A.sp]
-      adjusted = sum [fromIntegral count | A.DataProcessing (A.Cond 14) A.SUB False destination base (A.Immediate count) <- prologue, destination == A.sp, base == A.sp]
-  if null prologue && any spWrite instructions then Left (FrameNotDerivable (Guest start))
-    else pure (pushed + adjusted)
-  where
-    instructionAt address = (,) address <$> wordAt image address
+  peak <- walk M.empty 0 [FrameVisit (Guest start) (FrameState (FrameOffset 0) Nothing)]
+  unless (peak <= toInteger (maxBound :: Int)) refused
+  pure (fromInteger peak)
 
 data Edge = Call Word32 Word32 | Tail Word32 Word32
 
@@ -107,16 +154,16 @@ check :: StackBytes -> Image -> Either Failure ()
 check (StackBytes budget) image = do
   forM_ (S.toList (imageInstructions image)) $ \(Guest address) -> wordAt image address >> pure ()
   let symbols = [symbol | symbol <- imageSymbols image, F.symbolSize symbol > 0, S.member (Guest (F.symbolAddress symbol)) (imageInstructions image)]
-      entries = S.fromList (map F.symbolAddress symbols)
+      entries = S.fromList (map (Guest . F.symbolAddress) symbols)
   frames <- forM symbols $ \symbol -> do
-    size <- frameBytes image symbol
+    size <- frameBytes entries image symbol
     let start = F.symbolAddress symbol
         end = start + F.symbolSize symbol
     callees <- fmap concat $ forM [start, start + 4 .. end - 4] $ \address ->
       if not (S.member (Guest address) (imageInstructions image)) then pure []
       else do
         instruction <- A.decode address <$> wordAt image address
-        pure [if linked then Call address target else Tail address target | A.Branch _ linked target <- [instruction], S.member target entries]
+        pure [if linked then Call address target else Tail address target | A.Branch _ linked target <- [instruction], S.member (Guest target) entries]
     pure (Frame start size callees)
   let byAddress = M.fromList [(frameEntry frame, frame) | frame <- frames]
       destination edge = case edge of Call _ target -> target; Tail _ target -> target
