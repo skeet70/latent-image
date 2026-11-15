@@ -6,6 +6,8 @@
 
 Construct one long-lived Shot and ShotPorts. Call Shot::handle for controls, commands and completions. The driver enters the kernel only at its boundary. StateMemory and every external library/client adapter that touches the same retained memory must see the same backing storage; no copied exposure context, calculation input or record snapshot. ShotPorts must not be reconstructed between events. No callback re-enters a mutable Shot synchronously.
 
+`ShotPorts::with_parts` lends the installed `ShotState<M>` and external ports simultaneously to one `FnOnce` closure and returns its result.
+
 The focus round replaces the previous correction through `ShotPorts::keep_correction` (the owned operation replacing 0xf1fbe8), not by writing a second previous-correction buffer. Root readers use `upload_done` and `statistics_pending` for the pipeline's owned flags.
 
 Shot-owned, not root-bound: Prepared, ExposureWork, CalculationWork, PipelineWork, FinishWork, CaptureControl, LensReturn, SecondaryJob, PrimaryJob, CalculationsWork; ShotState implements PreparationShot, LensReadings, CalculationContext, CalculationBlock, CalculationResults, SelectionGrid, FinishCalculation, ControlShot, ReturnShot and DumpShot. The secondary result and statistics/selection-map tag have one owner in ShotState. `SelectionOperations::new(memory, layers)` supplies ShotSelection over the same backing memory; its unused secondary/tag fields are not a second active shot.

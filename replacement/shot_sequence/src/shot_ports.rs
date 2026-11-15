@@ -84,6 +84,9 @@ impl<M: StateMemory, X> ShotPorts<M, X> {
 
     pub fn state(&mut self) -> &mut ShotState<M> { &mut self.state }
     pub fn external(&mut self) -> &mut X { &mut self.external }
+    pub fn with_parts<R>(&mut self, body: impl FnOnce(&mut ShotState<M>, &mut X) -> R) -> R {
+        body(&mut self.state, &mut self.external)
+    }
     pub fn upload_done(&self) -> bool { self.pipeline.upload_done() }
     pub fn statistics_pending(&self) -> bool { self.pipeline.statistics_pending() }
 
