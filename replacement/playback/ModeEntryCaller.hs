@@ -10,6 +10,8 @@ import Data.Bits (shiftR)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.Foldable (toList)
+import Data.List.NonEmpty (NonEmpty (..))
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Text as T
 import Data.Word (Word16, Word32)
 import qualified Emulation.NativeCase as Native
@@ -84,10 +86,10 @@ readPinned path digest = do
   ensure (hash bytes==digest) ("pinned input mismatch: "++path)
   pure bytes
 
-messages :: [MessageCase]
+messages :: NonEmpty MessageCase
 messages =
-  [ selected "primary" 0x142 (Just 0) (Just (0xd0,0xc4)) [(0x294,0x12345678),(0x290,0)] True
-  , selected "secondary" 0x143 (Just 3) (Just (0xd0,0xc4)) [(0x298,0x12345678),(0x290,0)] True
+  selected "primary" 0x142 (Just 0) (Just (0xd0,0xc4)) [(0x294,0x12345678),(0x290,0)] True :|
+  [ selected "secondary" 0x143 (Just 3) (Just (0xd0,0xc4)) [(0x298,0x12345678),(0x290,0)] True
   , selected "kind87" 0x144 (Just 1) (Just (0xd0,0xc4)) [(0x294,0x12345678),(0x290,0)] True
   , (selected "kind88" 0x144 (Just 2) (Just (0xd0,0xc4)) [(0x294,0x12345678),(0x290,0)] True) {header=0x88}
   , (selected "kind-refused" 0x144 Nothing (Just (0xd0,0xc4)) [(0x290,0)] True) {header=0x89}
@@ -202,14 +204,14 @@ run runner package output = do
       stock=[Block StockPlain (Address 0x11ea434) ReadExecute (B.take (0x1255ecc-0x11ea434)(B.drop(0x11ea434-0x1100000)plain)) [(Address address,count)|(address,count)<-stockFunctions]
         ,Block StockCopy (Address 0x722054) ReadExecute (B.take 292(B.drop(0x722054-0x61c400)image4)) [(Address 0x722054,292)]
         ,Block StockMove (Address 0x89d908) ReadExecute (B.take 308(B.drop(0x89d908-0x61c400)image4)) [(Address 0x89d908,308)]]
-      scenarios=[Scenario action selected (DispatchResult result)|action<-[Action2,Action3],selected<-messages,messageRoutedToCaller action selected,result<-case event selected of Nothing->[0];Just _->[0,3,0x00010003,0x86543210]]
+      scenarios=[Scenario action selected (DispatchResult result)|action<-[Action2,Action3],selected<-toList messages,messageRoutedToCaller action selected,result<-case event selected of Nothing->[0];Just _->[0,3,0x00010003,0x86543210]]
   forM_ [("runtime.bin",runtime),("kernel.elf",elfBytes),("ram-push-manifest.json",manifest),("experiment.json",metadata),("mode-publication.bin",published)] $ \(name,bytes)->B.writeFile(output </> name)bytes
   comparisons<-forM scenarios $ \scenario->do
     original<-execute runner output elf base runtime published stock ownedEntry scenario Original
     owned<-execute runner output elf base runtime published stock ownedEntry scenario Owned
     ensure (observable original==observable owned) (scenarioId scenario++": original/owned caller observations differ")
     pure(object ["case" .= scenarioId scenario,"consumer_observations_equal" .= True,"original_receipt" .= (scenarioId scenario++"-original-result.json"),"owned_receipt" .= (scenarioId scenario++"-owned-result.json")])
-  controls<-forM [Scenario action (head messages) (DispatchResult 3)|action<-[Action2,Action3]] $ \scenario->do
+  controls<-forM [Scenario action (NE.head messages) (DispatchResult 3)|action<-[Action2,Action3]] $ \scenario->do
     _<-execute runner output elf base runtime published stock ownedEntry scenario Omitted
     pure(object ["case" .= scenarioId scenario,"returned_behavioral_omission_rejected" .= True,"receipt" .= (scenarioId scenario++"-omitted-result.json")])
   let result=object ["schema" .= (1::Int),"qualified" .= True,"conditional_caller_coverage" .= True,"scope" .= scope,"natural_application_mode7" .= False,"integrated_jpeg_pair_acceptance" .= False,"whole_mode_machine_acceptance" .= False,"runner_sha256" .= runnerSha,"runtime_sha256" .= hashText(hash runtime),"elf_sha256" .= hashText(hash elfBytes),"manifest_sha256" .= hashText(hash manifest),"metadata_sha256" .= hashText(hash metadata),"plain_sha256" .= hashText(hash plain),"image4_sha256" .= hashText(hash image4),"publication_hex" .= Native.hexBytes published,"owned_entry" .= av ownedEntry,"comparisons" .= comparisons,"controls" .= controls]
