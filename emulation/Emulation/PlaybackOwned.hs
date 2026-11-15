@@ -45,7 +45,8 @@ data Entry = SourceEntry | ModeEntry deriving (Eq, Show)
 data Binding = Binding Entry Address Address Address
 
 data SourceIdentity = SourceIdentity Word32 Int B.ByteString Digest
-data Package = Package Address B.ByteString Digest Digest [Binding] [(Address, B.ByteString)] [SourceIdentity] [(Address, B.ByteString)]
+data InstallerStorage = RendezvousStorage | MailboxStorage deriving (Eq, Ord, Show)
+data Package = Package Address B.ByteString Digest Digest [Binding] [(Address, B.ByteString)] [SourceIdentity] [(InstallerStorage, Address)]
 
 ensure :: Bool -> String -> Either String ()
 ensure condition problem = unless condition (Left problem)
@@ -128,9 +129,12 @@ parsePackage manifestBytes metadataBytes runtime elfBytes = do
       [s] -> Right s
       _ -> Left "unique owned entry ELF function required"
     ensure (E.symbolValue symbol == targetWord && targetWord `mod` 4 == 0 && E.symbolSize symbol >= 4
-      && targetWord >= start && toInteger targetWord + toInteger (E.symbolSize symbol) <= toInteger start + toInteger (B.length runtime)) "owned ELF entry lies outside runtime"
-    ensure (any (\s -> E.sectionExecutable s && targetWord >= E.sectionAddress s && toInteger targetWord + 4 <= toInteger (E.sectionAddress s) + toInteger (E.sectionSize s)) (E.elfSections elf)) "owned entry is not executable"
-    ensure (Just (B.take 4 (B.drop (fromIntegral (targetWord - start)) runtime)) == (B.pack <$> mapM (E.byteAt elf . (targetWord +)) [0..3])) "owned entry runtime differs from ELF"
+      && targetWord >= start && toInteger targetWord + toInteger (E.symbolSize symbol) <= toInteger start + 0x5000) "owned ELF entry lies outside preparation code window"
+    ensure (any (\s -> E.sectionExecutable s && not (E.sectionWritable s)
+      && targetWord >= E.sectionAddress s && toInteger targetWord + toInteger (E.symbolSize symbol)
+        <= toInteger (E.sectionAddress s) + toInteger (E.sectionSize s)) (E.elfSections elf)) "owned entry is not immutable executable code"
+    ensure (Just (B.take (fromIntegral (E.symbolSize symbol)) (B.drop (fromIntegral (targetWord - start)) runtime))
+      == (B.pack <$> mapM (E.byteAt elf . (targetWord +)) [0 .. E.symbolSize symbol - 1])) "owned entry runtime differs from ELF"
     symbols <- field "symbols" metadata
     ensure (at name symbols == Right target) "metadata symbol differs from ELF"
     pure (Binding entry (Address site) (Address end) target)
@@ -159,12 +163,18 @@ parsePackage manifestBytes metadataBytes runtime elfBytes = do
         high = low + toInteger (E.sectionSize section)
     ensure (toInteger start <= low && high <= toInteger start + toInteger (B.length runtime)) "allocated ELF section lies outside runtime"
     ensure (not (E.sectionWritable section) || low >= toInteger start + 0x5000) "owned preparation code window contains writable state"
-  let immutable =
-        [(Address (E.sectionAddress section), B.take (fromIntegral (E.sectionSize section))
-          (B.drop (fromIntegral (E.sectionAddress section - start)) runtime))
-        | section <- allocated, not (E.sectionWritable section)]
-  pure (Package base runtime (digest manifestBytes) runtimeDigest bindings artifacts sources immutable)
+  let spans = sort [(toInteger (E.sectionAddress s), toInteger (E.sectionAddress s) + toInteger (E.sectionSize s)) | s <- allocated]
+  ensure (and [end <= next | ((_,end),(next,_)) <- zip spans (drop 1 spans)]) "allocated ELF sections overlap"
+  mutable <- fmap concat $ forM allocated $ \section -> case E.sectionName section of
+    ".ram_push.rendezvous" -> storage RendezvousStorage section
+    ".ram_push.mailbox" -> storage MailboxStorage section
+    _ -> pure []
+  ensure (null mutable || sort (map fst mutable) == [RendezvousStorage, MailboxStorage]) "installer scalar storage pair is incomplete"
+  pure (Package base runtime (digest manifestBytes) runtimeDigest bindings artifacts sources mutable)
   where
+    storage kind section = do
+      ensure (E.sectionWritable section && not (E.sectionExecutable section) && E.sectionSize section == 128) "installer scalar storage layout differs"
+      pure [(kind, Address (E.sectionAddress section))]
     unique [] = []
     unique (x:xs) = x : unique (filter (/= x) xs)
 
@@ -193,10 +203,45 @@ validateReady selected start ready = do
   ensure (field "snapshot_sha256" checkpoint == Right expected) "restored snapshot differs from selected installed identity"
 
 guestArtifacts :: Package -> [(Word32, B.ByteString)]
-guestArtifacts (Package _ _ _ _ _ publications _ immutable) = [(a,b) | (Address a,b) <- immutable ++ publications]
+guestArtifacts (Package (Address base) runtime _ _ _ publications _ _) = (base,runtime) : [(a,b) | (Address a,b) <- publications]
 
 checkGuestArtifacts :: Package -> [(Word32, B.ByteString)] -> Either String ()
-checkGuestArtifacts package actual = ensure (actual == guestArtifacts package) "guest immutable runtime or publication bytes differ from identified package"
+checkGuestArtifacts package@(Package (Address base) runtime _ _ _ _ _ mutable) actual = do
+  ensure (map (\(a,b) -> (a,B.length b)) actual == map (\(a,b) -> (a,B.length b)) (guestArtifacts package)) "guest artifact read layout differs"
+  case actual of
+    (_,observed) : publications -> do
+      ensure (publications == drop 1 (guestArtifacts package)) "guest publication bytes differ from identified package"
+      let fields = sort [(fromIntegral (address - base) + offset, count) | (kind,Address address) <- mutable, (offset,count) <- scalarFields kind]
+          stable start [] = B.drop start observed == B.drop start runtime
+          stable start ((offset,count):rest) = B.take (offset-start) (B.drop start observed) == B.take (offset-start) (B.drop start runtime) && stable (offset+count) rest
+          bytes kind = case [B.take 128 (B.drop (fromIntegral (address-base)) observed) | (found,Address address) <- mutable, kind == found] of
+            [value] -> value
+            _ -> B.empty
+      ensure (stable 0 fields) "guest immutable runtime bytes differ from identified package"
+      unless (null mutable) (checkInstallerTerminal (bytes RendezvousStorage) (bytes MailboxStorage))
+    [] -> Left "guest runtime read missing"
+
+scalarFields :: InstallerStorage -> [(Int,Int)]
+scalarFields RendezvousStorage = [(0,16),(32,4),(64,12),(96,16)]
+scalarFields MailboxStorage = [(0,100)]
+
+-- The completed nonce is the peer completion callback's final store.
+checkInstallerTerminal :: B.ByteString -> B.ByteString -> Either String ()
+checkInstallerTerminal rendezvous mailbox = do
+  let word bytes offset = fromIntegral (B.index bytes offset) + 256 * fromIntegral (B.index bytes (offset+1))
+        + 65536 * fromIntegral (B.index bytes (offset+2)) + 16777216 * fromIntegral (B.index bytes (offset+3)) :: Word32
+      m = word mailbox
+      r = word rendezvous
+      nonce = m 8
+      peer = m 44
+  ensure (B.length rendezvous == 128 && B.length mailbox == 128) "installer scalar report length differs"
+  ensure (m 0 == 0x31504d52 && m 4 == 7 && nonce /= 0 && m 12 == 1 && m 16 == 0
+    && m 20 == 16 && m 24 == 8 && m 28 == 8 && m 32 == 0 && m 36 == 0x4003
+    && m 40 == nonce && peer /= m 36 && m 48 == 0 && m 52 == 16 && m 56 == 0x80000
+    && m 64 == nonce && m 68 == nonce && m 72 == nonce) "installer mailbox is not a completed successful installation"
+  ensure (r 0 == 4 && r 4 == nonce && r 8 == 0 && r 12 == m 36
+    && r 32 == 3 && r 64 == nonce && r 96 == nonce && r 100 == peer && r 104 == 0 && r 108 == 16)
+    "installer rendezvous has not completed its declared peer callback"
 
 originalBodies :: Package -> [(Word32, Int)]
 originalBodies (Package _ _ _ _ _ _ sources _) = [(start, count) | SourceIdentity start count _ _ <- sources]

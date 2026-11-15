@@ -1589,17 +1589,17 @@ runRoute options owned ownedWitness directory original bridge journal observed =
     writeIORef (obsCapture observed) (Just (CaptureProgress (CS.startCoverage at) Nothing CS.initialCursor False))
     _ <- captureObservationHits bridge journal observed
     pure ()
+  ownedAck <- forM owned $ \package -> do
+    checkOwnedGuest bridge journal package
+    armed <- call bridge (PO.watchRequest package)
+    either harness pure (PO.validateWatchBegin package (Object armed))
+    note journal "owned-playback-watch-begin" (Object armed)
+    pure (Object armed)
   when (route == PlayRoute) $ do
     _ <- call bridge (command "trace-sites"
       [ "sites" .= object [K.fromString (hex32 (siteAddress s)) .= siteLabel s | s <- sites]
       , "pauses" .= object [K.fromText label .= (64 :: Int) | label <- ["jpeg-preview-copy","jpeg-start-store","jpeg-status-loaded","jpeg-endpoint-loaded"]] ])
     pure ()
-  ownedAck <- forM owned $ \package -> do
-    checkOwnedGuest bridge package
-    armed <- call bridge (PO.watchRequest package)
-    either harness pure (PO.validateWatchBegin package (Object armed))
-    note journal "owned-playback-watch-begin" (Object armed)
-    pure (Object armed)
   let advance = if route == PlayRoute then playbackAdvance directory bridge journal observed target else call bridge
   pressed <- if captureObservationEnabled (optCaptureObservation options)
     then captureAdvance bridge journal observed CS.ShutterSequence (routeInput route)
@@ -1655,8 +1655,11 @@ runRoute options owned ownedWitness directory original bridge journal observed =
               , "sd_commands" .= map (sdCommandValue index) seen, "sd_commands_outside_history" .= lost ])
             window (index + 1) (if active || index == 0 then 0 else quiet + 1 :: Int) sd count
   final <- window (0 :: Int) (0 :: Int) sd0 startHits
+  when (route == PlayRoute) $ do
+    ended <- call bridge (command "trace-sites" ["sites" .= object [K.fromString (hex32 (siteAddress s)) .= siteLabel s | s <- sites]])
+    note journal "playback-observation-ended" (Object ended)
   forM_ (zip (maybe [] pure owned) (maybe [] pure ownedAck)) $ \(package, ack) -> do
-    checkOwnedGuest bridge package
+    checkOwnedGuest bridge journal package
     state <- call bridge (command "watch-state" [])
     note journal "owned-playback-watch-state" (Object state)
     ended <- call bridge (command "watch-end" [])
@@ -1664,9 +1667,6 @@ runRoute options owned ownedWitness directory original bridge journal observed =
     result <- either harness pure (PO.witness package ack (Object state) (Object ended))
     writeIORef ownedWitness (Just result)
     note journal "owned-playback-witness" (PO.witnessValue result)
-  when (route == PlayRoute) $ do
-    ended <- call bridge (command "trace-sites" ["sites" .= object [K.fromString (hex32 (siteAddress s)) .= siteLabel s | s <- sites]])
-    note journal "playback-observation-ended" (Object ended)
   writeIORef (obsSdFinal observed) (Just final)
   ledger <- readIORef (obsLedger observed)
   note journal "trace-ledger" (ledgerValue ledger)
@@ -1917,11 +1917,15 @@ freshOutput supplied = do
 writeJson :: FilePath -> Value -> IO ()
 writeJson path value = BL.writeFile path (encode value <> "\n")
 
-checkOwnedGuest :: Bridge -> PO.Package -> IO ()
-checkOwnedGuest bridge package = do
+checkOwnedGuest :: Bridge -> Journal -> PO.Package -> IO ()
+checkOwnedGuest bridge journal package = do
   actual <- forM (PO.guestArtifacts package) $ \(address, expected) -> do
     bytes <- B.concat <$> mapM (\offset -> readMemory bridge (address + fromIntegral offset) (min 4096 (B.length expected - offset))) [0,4096 .. B.length expected - 1]
     pure (address, bytes)
+  note journal "owned-playback-artifact-comparison" (object
+    [ "artifacts" .= [object ["address" .= hex32 address, "expected_hex" .= hexBytes expected, "actual_hex" .= hexBytes bytes]
+      | ((address,expected),(_,bytes)) <- zip (PO.guestArtifacts package) actual]
+    , "installer_scalar_contract" .= ("menu/ram_push_abi.h ABI 7; menu/ram_push_installer.c completed installation reports, no pointer fields" :: T.Text) ])
   either harness pure (PO.checkGuestArtifacts package actual)
   bodies <- forM (PO.originalBodies package) $ \(address, count) -> readMemory bridge address count
   either harness pure (PO.checkOriginalBodies package bodies)
