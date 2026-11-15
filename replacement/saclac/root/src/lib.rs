@@ -31,6 +31,8 @@ mod motion_services;
 mod motion_geometry;
 mod motion_memory;
 mod motion_preparation;
+mod motion_projection;
+mod motion_plan;
 pub mod completion_callbacks;
 pub mod exposure_memory;
 pub mod exposure_services;

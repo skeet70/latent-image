@@ -27,6 +27,9 @@ impl MotionState {
     /// 0xf9cdd8 (output +0x4c).
     pub fn channel_status(&self) -> bool { self.search.channel_status }
 
+    /// The pipeline selected driving speed (native lens block +0x4ac).
+    pub fn mark_lens_driven(&mut self) { self.search.retry_missing = true; }
+
     /// The frame exposure the run's frames follow (output +0x4).
     pub fn frame_exposure(&self) -> &FrameExposure { &self.exposures.second }
 

@@ -107,6 +107,9 @@ The earlier declared auxiliary-word correction remains: `profile_mode::limit_lev
 | 0xf61280 | 0xf6efcc | Six unchanged arguments become `EnableInputs`: selection, scene, flags, auxiliary, hold, selector. `scene_settings::adjustment_enabled` returns the decision. |
 | 0xf625cc | 0xf6f734 | Five unchanged arguments become `SceneMaskInputs`: measurement selection, scene, callback armed, treated, subjects. `scene_policy::scene_enabled` already implements this target. The treated input is the owned boolean's 0/1 code. |
 
+The preparation snapshot includes record byte+0x36, distinct from+0x35 and+0x38. Native fa3898 calls74ed6c and fa389c stores its word at capture+0x30; Shot's statistics sampling consumes that word. fa7a64 calls74f09c (record+0x3c), regardless of the decomp alias's misleading resource-byte name.
+
+
 The grid rows above supersede the incorrect names in the earlier private table: 0xf69788 is area distances, 0xf69884 is target reference, 0xf699e4 is target level, and 0xf6c8fc is the plain-selection trace. Function addresses and typed semantics, not old table labels, determine the binding.
 
 ## Scene classification and measurement dependencies

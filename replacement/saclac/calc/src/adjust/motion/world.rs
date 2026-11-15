@@ -155,6 +155,7 @@ pub fn blank_readings(lens: u32) -> RecordReadings {
         limit_word: 0,
         level_step: 0,
         at_0035: 0,
+        at_0036: 0,
         at_0038: 0,
         at_20cc: 0,
         at_20c8: 0,

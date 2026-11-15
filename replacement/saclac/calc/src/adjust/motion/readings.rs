@@ -107,6 +107,7 @@ pub struct RecordReadings {
     /// The step the run's levels are read at.
     pub level_step: u32,
     pub at_0035: u8,
+    pub at_0036: u8,
     pub at_0038: u8,
     pub at_20cc: u32,
     pub at_20c8: u32,
@@ -194,6 +195,7 @@ impl RecordReadings {
         let armed = profile.header(record, SharedHeaderByte::At63);
         let auxiliary = profile.header(record, SharedHeaderByte::At61);
         let at_0035 = profile.read(record, &group_00::AT_0035);
+        let at_0036 = profile.read(record, &group_00::AT_0036);
         let at_0038 = profile.read(record, &group_00::AT_0038);
         let at_20cc = profile.read(record, &group_13::AT_20CC);
         let locked = profile.read(record, &group_13::AT_20B0_4);
@@ -250,6 +252,7 @@ impl RecordReadings {
             limit_word: if armed == 0 { limit_word } else { 0 },
             level_step: if armed == 0 && class != 0 { record_step } else { lowest },
             at_0035,
+            at_0036,
             at_0038,
             at_20cc,
             at_20c8,
