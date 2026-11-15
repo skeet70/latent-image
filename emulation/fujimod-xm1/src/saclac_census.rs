@@ -117,36 +117,99 @@ struct WatchDecl {
 struct TaskStackDecl {
     cursor: String,
     allocation: String,
+    #[serde(default)]
+    runtime: Option<String>,
 }
 
 struct TaskStackRead {
     cursor: u32,
     allocation: u32,
+    runtime: Option<u32>,
 }
 
 #[derive(Serialize)]
 struct TaskStackSnapshot {
     cursor_address: Address,
+    cursor_physical: Address,
     cursor_word: u32,
     allocation_address: Address,
+    allocation_physical: Address,
     base: u32,
     bytes: u32,
     active: u32,
+    runtime: Option<RuntimeStackSnapshot>,
+}
+
+#[derive(Serialize)]
+struct RuntimeStackSnapshot {
+    address: Address,
+    physical: Address,
+    base: u32,
+    bytes: u32,
+}
+
+fn stack_ram_translation(maps: &[MemoryMap], core: usize, address: u32, bytes: usize) -> Result<u32, String> {
+    let mut selected = maps.iter().filter(|map| map.core == core && map.address <= u64::from(address)
+        && u64::from(address) + bytes as u64 <= map.address + map.size as u64 && map.permissions & 3 == 3);
+    let map = selected.next().ok_or("task-stack word lacks writable static backing")?;
+    require(selected.next().is_none(), "task-stack word has ambiguous static backing")?;
+    u32::try_from(map.physical + u64::from(address) - map.address).map_err(|error| error.to_string())
+}
+
+fn stack_ram<const N: usize>(machine: &Machine, maps: &[MemoryMap], address: u32) -> Result<(u32, [u8; N]), String> {
+    let physical = stack_ram_translation(maps, 0, address, N)?;
+    for core in 0..2 {
+        let cpu = machine.session.board.cpu(core)?;
+        for bank in 0..2 {
+            let value = u32::try_from(cpu.coprocessor(fujimod_emulator_cpu::arm::Coprocessor {
+                cp: 15, opc1: 0, crn: 9, crm: 1, opc2: bank, secure: 0, wide: false,
+            }, None)?).map_err(|error| error.to_string())?;
+            let code = (value >> 2) & 31;
+            if value & 1 != 0 && code != 0 {
+                require((3..=14).contains(&code), "task-stack read has reserved TCM size")?;
+                let low = u64::from(value & 0xfffff000);
+                let high = low + (512u64 << code);
+                for alias in [address, physical] {
+                    require(!(low < u64::from(alias) + N as u64 && u64::from(alias) < high),
+                        "task-stack word overlaps active TCM")?;
+                }
+            }
+        }
+        for alias in [address, physical] {
+            require(stack_ram_translation(maps, core, alias, N)? == physical, "task-stack aliases have different static backing")?;
+        }
+    }
+    let mut actual = [0; N];
+    machine.session.board.read_physical(u64::from(physical), &mut actual)?;
+    for core in 0..2 {
+        for alias in [address, physical] {
+            let mut observed = [0; N];
+            machine.session.board.read_memory(core, u64::from(alias), &mut observed)?;
+            require(observed == actual, "task-stack guest/core/physical views differ")?;
+        }
+    }
+    Ok((physical, actual))
 }
 
 impl TaskStackRead {
-    fn snapshot(&self, machine: &Machine) -> Result<TaskStackSnapshot, String> {
-        let mut cursor = [0; 4];
-        let mut allocation = [0; 12];
-        machine.session.board.read_memory(0, u64::from(self.cursor), &mut cursor)?;
-        machine.session.board.read_memory(0, u64::from(self.allocation), &mut allocation)?;
+    fn snapshot(&self, machine: &Machine, maps: &[MemoryMap]) -> Result<TaskStackSnapshot, String> {
+        let (cursor_physical, cursor) = stack_ram::<4>(machine, maps, self.cursor)?;
+        let (allocation_physical, allocation) = stack_ram::<12>(machine, maps, self.allocation)?;
+        let runtime = self.runtime.map(|address| {
+            let (physical, words) = stack_ram::<8>(machine, maps, address)?;
+            Ok::<_, String>(RuntimeStackSnapshot { address: Address(address), physical: Address(physical),
+                base: read_u32(&words, 0), bytes: read_u32(&words, 4) })
+        }).transpose()?;
         Ok(TaskStackSnapshot {
             cursor_address: Address(self.cursor),
+            cursor_physical: Address(cursor_physical),
             cursor_word: read_u32(&cursor, 0),
             allocation_address: Address(self.allocation),
+            allocation_physical: Address(allocation_physical),
             base: read_u32(&allocation, 0),
             bytes: read_u32(&allocation, 4),
             active: read_u32(&allocation, 8),
+            runtime,
         })
     }
 }
@@ -286,9 +349,11 @@ fn load_sites(bytes: &[u8]) -> Result<Plan, String> {
     let task_stack = sites.task_stack.map(|declared| {
         let cursor = parse_hex(&declared.cursor)?;
         let allocation = parse_hex(&declared.allocation)?;
-        require(cursor % 4 == 0 && allocation % 4 == 0 && allocation <= u32::MAX - 11,
+        let runtime = declared.runtime.as_deref().map(parse_hex).transpose()?;
+        require(cursor % 4 == 0 && allocation % 4 == 0 && allocation <= u32::MAX - 11
+            && runtime.is_none_or(|address| address % 4 == 0 && address <= u32::MAX - 7),
             "sites: a task-stack read is misaligned or wraps")?;
-        Ok::<_, String>(TaskStackRead { cursor, allocation })
+        Ok::<_, String>(TaskStackRead { cursor, allocation, runtime })
     }).transpose()?;
     Ok(Plan { task_id: sites.task_id, state_base, points, ranges, dispatch, watch, interface, task_stack })
 }
@@ -1500,7 +1565,7 @@ fn drive() -> Result<(), String> {
         Ok(context) => (context, None),
         Err(error) => (None, Some(error)),
     };
-    let (task_stack, task_stack_error) = match census.plan.task_stack.as_ref().map(|read| read.snapshot(&machine)).transpose() {
+    let (task_stack, task_stack_error) = match census.plan.task_stack.as_ref().map(|read| read.snapshot(&machine, &census.maps)).transpose() {
         Ok(snapshot) => (snapshot, None),
         Err(error) => (None, Some(error)),
     };

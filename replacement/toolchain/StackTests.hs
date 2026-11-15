@@ -32,6 +32,21 @@ main = do
   haltSymbols <- either H.failH pure (F.parseSymbols "00001000 00000008 T halt\n")
   let halt = Image (Guest base) (B.concat (map U.putWord32 [0xe320f003, 0xeafffffd])) haltSymbols (S.fromList [Guest base, Guest (base + 4)])
   either (H.failH . show) pure (check zero halt)
+  nonreturnSymbols <- either H.failH pure (F.parseSymbols "00001000 0000000c T caller\n00001010 0000000c T halt\n")
+  let nonreturnBody = B.concat (map U.putWord32 [0xe92d4800, 0xeb000001, 0, 0, 0xe92d4800, 0xe320f003, 0xeafffffd])
+      nonreturnPoints = S.fromList (map Guest [base, base + 4, base + 16, base + 20, base + 24])
+      nonreturn = Image (Guest base) nonreturnBody nonreturnSymbols nonreturnPoints
+  sixteenHalt <- maybe (H.failH "invalid halt budget") pure (stackBytes 16)
+  fifteenHalt <- maybe (H.failH "invalid short halt budget") pure (stackBytes 15)
+  either (H.failH . show) pure (check sixteenHalt nonreturn)
+  H.ensure (check fifteenHalt nonreturn == Left (BudgetExceeded (Guest base) sixteenHalt))
+    "a nonreturning callee lost its caller's live frame"
+  let conditionalHalt = nonreturn { imageBytes = B.take 4 nonreturnBody <> U.putWord32 0x0b000001 <> B.drop 8 nonreturnBody }
+  H.ensure (check sixteenHalt conditionalHalt == Left (FrameNotDerivable (Guest base)))
+    "a conditional nonreturning call hid its uncovered fall-through"
+  let returningHalt = nonreturn { imageBytes = B.take 20 nonreturnBody <> U.putWord32 0xe8bd8800 <> B.drop 24 nonreturnBody }
+  H.ensure (check sixteenHalt returningHalt == Left (FrameNotDerivable (Guest base)))
+    "a returning callee was assumed not to return into data"
   tailSymbols <- either H.failH pure (F.parseSymbols "00001000 00000004 T first\n00001004 00000004 T second\n")
   let tails = halt { imageBytes = B.concat (map U.putWord32 [0xeaffffff, 0xeafffffd]), imageSymbols = tailSymbols }
   either (H.failH . show) pure (check zero tails)

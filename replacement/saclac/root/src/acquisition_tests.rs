@@ -375,3 +375,90 @@ fn restored_setting_keeps_saved_signed_positions_at_the_same_reference_and_names
     assert_eq!((answer.reference(), answer.reference_copy(), answer.position()), (100, 100, -17));
     assert_eq!(answer.area_positions(), positions);
 }
+
+#[test]
+fn conditional_restore_preserves_work_when_disabled_and_restores_the_full_result_for_nonzero_flags() {
+    use xm1_shot_sequence::stock::state::{RESULT, RESULT_BYTES, RETAINED_RESULT};
+    for enabled in [0, 2] {
+        let kernel = fake::saclac_kernel();
+        let cx = kernel.task().unwrap();
+        let mut bytes = Bytes::default();
+        let record = fake::open(&mut bytes, &[0, 27]);
+        bytes.records[0][0x62] = enabled;
+        let entries = Entries { selection: xm1_saclac_profile_records::MeasurementSelection::Record, ..Entries::default() };
+        let (machine, root) = fake::root_with(fake::peers(&cx), bytes, entries);
+        machine.set_word(RESULT.get(), 0x12345678);
+        machine.set_word(RETAINED_RESULT.get(), 0x87654321);
+        let last = RESULT_BYTES as u32 - 1;
+        machine.set_byte(RESULT.get() + last, 0x12);
+        machine.set_byte(RETAINED_RESULT.get() + last, 0x87);
+        let recognition = RefCell::new(SceneRecognition::new());
+        acquisition!(root, recognition, cx);
+        root.restore_selection_if_enabled(record, 0);
+        let expected = if enabled == 0 { (0x12345678, 0x12) } else { (0x87654321, 0x87) };
+        assert_eq!((machine.word(RESULT.get()), machine.byte(RESULT.get() + last)), expected);
+    }
+}
+
+#[test]
+fn selected_reference_uses_the_live_bank_and_reclassification_can_replace_a_tracked_area() {
+    use xm1_saclac_interface::{calculation::{AreaAt, AreaHalf, AreaIndex, AreaResult, GridCell, ResultPass, TrackedKind}, selection::{ClassifyStage, SelectionSlot}};
+    use xm1_shot_sequence::stock::state;
+    for (tracking, control, expected_level) in [(false, 0, 202), (false, 2, -101), (true, 0, 202), (true, 2, -101)] {
+        let kernel = fake::saclac_kernel();
+        let cx = kernel.task().unwrap();
+        let mut bytes = Bytes::default();
+        let record = fake::open(&mut bytes, &[0, 27]);
+        bytes.records[0][0x51] = 2;
+        let (machine, root) = fake::root_with(fake::peers(&cx), bytes, Entries::default());
+        machine.adjustment(0x5257, control);
+        machine.set_word(state::TRACKING.get(), u32::from(tracking));
+        machine.set_word(state::AREA_COUNT.get(), 1);
+        let index = AreaIndex::FIRST;
+        let pass = ResultPass::Plain;
+        memory(&machine, state::cell(SelectionSlot { kind: None, pass, index }).get(), &[1, 2]);
+        machine.set_word(state::subject_kind(ClassifyStage::Absorb, index).get(), 1);
+        machine.set_word(state::subject_kind(ClassifyStage::Round, index).get(), 2);
+        for (at, level) in [
+            (AreaAt::Cell { pass, cell: GridCell { column: 1, row: 2 }, index }, -101),
+            (AreaAt::Tracked { pass, kind: TrackedKind::new(1).unwrap(), index }, 202),
+        ] {
+            let mut area = AreaResult::default();
+            area.set_half(AreaHalf::Level, level);
+            for (half, value) in [(AreaHalf::At0c, -300), (AreaHalf::At0e, 7), (AreaHalf::At10, 11), (AreaHalf::At1a, 13)] { area.set_half(half, value); }
+            memory(&machine, state::area(at).get(), area.bytes());
+        }
+        let recognition = RefCell::new(SceneRecognition::new());
+        acquisition!(root, recognition, cx);
+        let answer = root.selected_grid_reference(record, Default::default());
+        assert_eq!((answer.level, answer.second, answer.word, answer.levels),
+            (expected_level as u16, (-269i16) as u16, 2, [(-300i16) as u16, 7, 11, 13]));
+        if tracking && control != 0 {
+            assert_eq!(machine.word(state::subject_kind(ClassifyStage::Round, index).get()), 7);
+        }
+    }
+}
+
+#[test]
+fn selected_reference_mode_one_uses_the_areas_active_word_and_live_class_aspect_byte() {
+    use xm1_saclac_interface::{calculation::{AreaAt, AreaIndex, AreaResult, AreaWord, GridCell, ResultPass}, selection::ClassifyStage};
+    use xm1_shot_sequence::stock::state;
+    for (active, aspect, expected) in [(0, 0, 2), (0, 1, 3), (9, 0, 4)] {
+        let kernel = fake::saclac_kernel();
+        let cx = kernel.task().unwrap();
+        let mut bytes = Bytes::default();
+        let record = fake::open(&mut bytes, &[0, 27]);
+        bytes.records[0][0x51] = 1;
+        let (machine, root) = fake::root_with(fake::peers(&cx), bytes, Entries::default());
+        machine.set_word(state::subject_kind(ClassifyStage::Absorb, AreaIndex::FIRST).get(), 7);
+        let mut area = AreaResult::default();
+        area.set_word(AreaWord::At24, active);
+        area.set_word(AreaWord::ClassIndex, 3);
+        let at = AreaAt::Cell { pass: ResultPass::Plain, cell: GridCell { column: 0, row: 0 }, index: AreaIndex::FIRST };
+        memory(&machine, state::area(at).get(), area.bytes());
+        machine.set_byte(0xef6df2 + 3 * 20, aspect);
+        let recognition = RefCell::new(SceneRecognition::new());
+        acquisition!(root, recognition, cx);
+        assert_eq!(root.selected_grid_reference(record, Default::default()).word, expected);
+    }
+}

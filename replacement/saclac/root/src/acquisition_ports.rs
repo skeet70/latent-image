@@ -482,7 +482,13 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc, S:
     fn copy_selection_to_saved(&mut self, record: SharedAddress) {
         self.with_shot(|state, _| state.retain_result_from(xm1_saclac_interface::selection::ResultBuffer(record.0)));
     }
-    fn restore_selection_if_enabled(&mut self, record: RecordHandle, position: u32) { boundary::restore_selection_if_enabled(&self.services.machine, record, position) }
+    fn restore_selection_if_enabled(&mut self, record: RecordHandle, position: u32) {
+        if self.field(record, &record::group_00::INTERVAL_TRACKING).0 == 0 { return; }
+        self.with_shot(|state, layers| {
+            state.restore_result();
+            xm1_shot_sequence::grid::update_grid(record, true, false, position, state, layers);
+        });
+    }
     fn apply_selection_value_change(&mut self) { self.with_shot(|state, _| state.set_auxiliary_retained(true)); }
     fn save_selection(&mut self, position: u32, saved: &SavedSelection, lens_position: u32) {
         use xm1_saclac_interface::{calculation::{AreaAt, AreaIndex, GridCell, GridPass, ResultPass}, selection::RetainedReference};
@@ -494,7 +500,42 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc, S:
         self.with_shot(|state, _| xm1_shot_sequence::selection_operations::retain_reference(
             RetainedReference { source: position, reference: lens_position, position: saved.level, untracked }, state));
     }
-    fn selected_grid_reference(&mut self, record: RecordHandle, reference: GridReference) -> GridReference { boundary::selected_grid_reference(&self.services.machine, record, &self.shared_bytes(record, &shared::group_27::AT_07EC), reference) }
+    fn selected_grid_reference(&mut self, record: RecordHandle, _: GridReference) -> GridReference {
+        use xm1_shot_sequence::{absorb::CalculationResults, classification::classify_subjects};
+        use xm1_saclac_interface::{calculation::{AreaAt, AreaHalf, AreaIndex, AreaWord, TrackedKind}, selection::{ClassifyStage, SelectionSlot, SubjectQuery, SubjectShare}};
+        use xm1_saclac_shared::settings::{AdjustmentKey, Adjustments};
+        let mode = self.field(record, &record::group_00::AT_0051);
+        let rate = self.shared_bytes(record, &shared::group_27::AT_07EC);
+        let services = self.services.source;
+        let (mut answer, active, class) = self.with_shot(|state, layers| {
+            let control = || services.borrow().stock.byte(AdjustmentKey(0x5257)) & 3;
+            let stage = if state.tracking() && control() != 0 {
+                let (source, area) = {
+                    let services = &mut *services.borrow_mut();
+                    (services.entries.header_byte(record, SharedHeaderByte::At31), services.entries.header_byte(record, SharedHeaderByte::At63))
+                };
+                classify_subjects(ClassifyStage::Round,
+                    SubjectShare { mode: u32::from_le_bytes(rate[16..20].try_into().expect("subject mode")), percent: u16::from_le_bytes([rate[20], rate[21]]) },
+                    SubjectQuery { kind: u32::from(mode), source: u32::from(source), area: u32::from(area) }, state, layers);
+                Some(ClassifyStage::Round)
+            } else if control() == 0 { Some(ClassifyStage::Absorb) } else { None };
+            let index = AreaIndex::FIRST;
+            let pass = state.selected_pass();
+            let cell = state.selection_cell(SelectionSlot { kind: None, pass, index }).cell();
+            let kind = stage.and_then(|stage| TrackedKind::new(state.area_kind(stage, index)));
+            let area = state.area(kind.map_or(AreaAt::Cell { pass, cell, index }, |kind| AreaAt::Tracked { pass, kind, index }));
+            (GridReference {
+                level: area.half(AreaHalf::Level) as u16, second: area.total() as u16, word: u32::from(mode),
+                levels: [AreaHalf::At0c, AreaHalf::At0e, AreaHalf::At10, AreaHalf::At1a].map(|half| area.half(half) as u16),
+            }, area.word(AreaWord::At24), area.word(AreaWord::ClassIndex))
+        });
+        if mode == 1 {
+            let mut context = xm1_power_lifecycle::record_address_space::RecordContext::new(
+                crate::calculation_memory::MachineMemory(&mut self.services.machine), ());
+            answer.word = xm1_power_lifecycle::record_numeric::helper_fa6904(&mut context, active, class).expect("selected-area class address");
+        }
+        answer
+    }
 
     fn refresh_hardware_state(&mut self) { boundary::refresh_hardware_state(&self.services.machine) }
     fn hardware_ready(&mut self) -> bool { boundary::hardware_ready(&self.services.machine) }

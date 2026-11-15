@@ -21,6 +21,9 @@ _TARGET_FLAGS = [
     "codegen-units=1",
     "-C",
     "debuginfo=0",
+    # Keep switch edges explicit for the native CFG/stack admission proof.
+    "-C",
+    "jump-tables=no",
 ]
 
 def _strict_align_flags(strict_align):

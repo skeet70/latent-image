@@ -53,8 +53,50 @@ data FrameState = FrameState
 
 data FrameVisit = FrameVisit Guest FrameState
 
-frameBytes :: S.Set Guest -> Image -> F.Symbol -> Either Failure Int
-frameBytes entries image symbol = do
+-- Only declared instruction paths prove nonreturning calls. Unknown transfers and uncovered
+-- fall-throughs remain returning possibilities; names and symbol-end data are not evidence.
+nonReturningEntries :: Image -> [F.Symbol] -> S.Set Guest
+nonReturningEntries image symbols = fixed (S.fromList (map (Guest . F.symbolAddress) symbols))
+  where
+    fixed candidates =
+      let remaining = S.fromList [Guest (F.symbolAddress symbol) | symbol <- symbols,
+            S.member (Guest (F.symbolAddress symbol)) candidates, neverReturns candidates symbol]
+      in if remaining == candidates then remaining else fixed remaining
+    neverReturns candidates symbol = walk S.empty [F.symbolAddress symbol]
+      where
+        start = F.symbolAddress symbol
+        end = toInteger start + toInteger (F.symbolSize symbol)
+        inside address = start <= address && toInteger address < end
+        present address = inside address && S.member (Guest address) (imageInstructions image)
+        walk _ [] = True
+        walk seen (address : rest)
+          | S.member address seen = walk seen rest
+          | not (present address) = False
+          | otherwise = case wordAt image address of
+              Left _ -> False
+              Right word ->
+                let next = address + 4
+                    proceed visits = walk (S.insert address seen) (visits ++ rest)
+                    jump condition target
+                      | inside target = proceed (target : [next | condition /= A.Cond 14])
+                      | S.member (Guest target) candidates = proceed [next | condition /= A.Cond 14]
+                      | otherwise = False
+                in case W.classify W.Strict address word of
+                  W.Call target
+                    | S.member (Guest target) candidates,
+                      A.Branch (A.Cond 14) True _ <- A.decode address word -> proceed []
+                    | otherwise -> proceed [next]
+                  W.Jump condition target -> jump condition target
+                  W.RegisterCall _ -> proceed [next]
+                  W.Reserve _ -> proceed [next]
+                  W.Release _ -> proceed [next]
+                  W.FromFrame _ -> proceed [next]
+                  W.SetFrame _ -> proceed [next]
+                  W.Neutral -> proceed [next]
+                  _ -> False
+
+frameBytes :: S.Set Guest -> S.Set Guest -> Image -> F.Symbol -> Either Failure Int
+frameBytes entries nonReturning image symbol = do
   let start = F.symbolAddress symbol
       size = F.symbolSize symbol
       end = toInteger start + toInteger size
@@ -122,7 +164,11 @@ frameBytes entries image symbol = do
               W.Neutral
                 | any (`elem` writtenRegisters) [A.sp, A.pc] -> refused
                 | otherwise -> next address (clobber instruction writtenRegisters state)
-              W.Call target -> knownCallee target >> next address state
+              W.Call target -> do
+                knownCallee target
+                case instruction of
+                  A.Branch (A.Cond 14) True _ | S.member (Guest target) nonReturning -> pure []
+                  _ -> next address state
               W.RegisterCall _ -> next address state
               W.Jump condition target -> jump target state >>= conditional condition address state
               W.Return condition amount -> do
@@ -155,8 +201,9 @@ check (StackBytes budget) image = do
   forM_ (S.toList (imageInstructions image)) $ \(Guest address) -> wordAt image address >> pure ()
   let symbols = [symbol | symbol <- imageSymbols image, F.symbolSize symbol > 0, S.member (Guest (F.symbolAddress symbol)) (imageInstructions image)]
       entries = S.fromList (map (Guest . F.symbolAddress) symbols)
+      nonReturning = nonReturningEntries image symbols
   frames <- forM symbols $ \symbol -> do
-    size <- frameBytes entries image symbol
+    size <- frameBytes entries nonReturning image symbol
     let start = F.symbolAddress symbol
         end = start + F.symbolSize symbol
     callees <- fmap concat $ forM [start, start + 4 .. end - 4] $ \address ->

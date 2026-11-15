@@ -3,7 +3,7 @@ load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_host_test", "
 
 package(default_visibility = ["//visibility:public"])
 
-_SOURCES = ["src/driver.rs", "src/engine.rs", "src/machine0.rs", "src/stock.rs"]
+_SOURCES = ["src/driver.rs", "src/engine.rs", "src/machine0.rs", "src/stock.rs", "src/task_stack.rs"]
 
 _ARM_DEPS = {
     "xm1_saclac_root": "//replacement/saclac/root:root",
@@ -11,6 +11,7 @@ _ARM_DEPS = {
     "xm1_saclac_interface": "//replacement/saclac_interface:saclac-interface",
     "xm1_rtos_own_first_component": "//replacement/rtos_own_first:own-first-a-component",
     "xm1_rtos_global_lock_component": "//replacement/rtos_global_lock:global-lock-component",
+    "xm1_fixed_image_layout": "//replacement/fixed_image:layout",
 }
 
 _ARM_SEARCH_DEPS = [

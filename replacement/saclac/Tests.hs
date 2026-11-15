@@ -7,6 +7,7 @@ import Control.Monad (forM_, unless)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
+import Data.List (sortOn)
 import Data.Word (Word32)
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.Host as H
@@ -55,12 +56,17 @@ main = do
       let base = extentLow fixedExtent
           imageBase = 0xbf1a00
           imageBytes = 0x4f1e60
-          blank = B.replicate imageBytes 0
-          gaps = zip (imageBase : map extentHigh extents) (map extentLow extents ++ [imageBase + fromIntegral imageBytes])
+          blank = patch imageBase (B.replicate imageBytes 0) taskCreateSite taskCreateWord
+          publications = sortOn extentLow (Extent taskCreateSite (taskCreateSite + 4) : extents)
+          gaps = zip (imageBase : map extentHigh publications) (map extentLow publications ++ [imageBase + fromIntegral imageBytes])
           outsideUntouched image (low, high) = B.all (== 0) (B.take (fromIntegral (high - low)) (B.drop (fromIntegral (low - imageBase)) image))
       installed <- either (H.failH . show) pure (installedImage blank admitted)
       either (H.failH . show) pure (admitInstalled installed admitted)
-      check "bytes outside retired extents are untouched" (all (outsideUntouched installed) gaps)
+      check "bytes outside declared publications are untouched" (all (outsideUntouched installed) gaps)
+      refused "unknown task creation preimage" (TaskCreatePreimage 0)
+        (installedImage (patch imageBase blank taskCreateSite 0) admitted)
+      refused "installed task creation target differs" (ExtentImageMismatch taskCreateSite 4)
+        (admitInstalled (patch imageBase installed taskCreateSite taskCreateWord) admitted)
       forM_ entries $ \entry -> do
         target <- F.symbolAddress <$> symbol symbols (entryBody entry)
         let offset = fromIntegral (entryAddress entry - imageBase)

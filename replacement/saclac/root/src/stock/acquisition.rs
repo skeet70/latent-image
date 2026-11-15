@@ -5,7 +5,7 @@
 //! and the retained entries it enters.
 
 use xm1_focus_measurement_round::acquisition::ports::{
-    AcquisitionBlock, AcquisitionSettings, Branch, ExposureRecordUpdate, GridInputs, GridReference, PositionInputs,
+    AcquisitionBlock, AcquisitionSettings, Branch, ExposureRecordUpdate, GridInputs, PositionInputs,
     ProgramChoice, RateNotice, RateRecord, ReleaseSettings, SelectionNotice, SelectionPosition,
     SelectionRecord, StatisticsBuffer,
 };
@@ -368,21 +368,6 @@ pub fn draw_rate_status(machine: &impl Machine, level: u16, status: u32, flag: u
 }
 
 
-/// 0xf1c8fc over a copy of the rate record, with the level, second, word and the four levels in
-/// and out.
-pub fn selected_grid_reference(machine: &impl Machine, record: RecordHandle, rate: &[u8; 40], reference: GridReference) -> GridReference {
-    const LEVELS: [usize; 4] = [48, 50, 52, 54];
-    let mut buffer = Aligned([0; 56]);
-    buffer[..40].copy_from_slice(rate);
-    reference.level.put(&mut buffer, 40);
-    reference.second.put(&mut buffer, 42);
-    reference.word.put(&mut buffer, 44);
-    LEVELS.put(&mut buffer, &reference.levels);
-    let at = Argument::Buffer;
-    let arguments = [handle(record), at(0), at(40), at(42), at(44), at(LEVELS[0]), at(LEVELS[1]), at(LEVELS[2]), at(LEVELS[3])];
-    machine.enter_with(0xf1_c8fc, &arguments, &mut buffer);
-    GridReference { level: u16::get(&buffer, 40), second: u16::get(&buffer, 42), word: u32::get(&buffer, 44), levels: LEVELS.get(&buffer) }
-}
 
 /// 256 statistics halfwords from the buffer's address.
 pub fn statistics_values(machine: &impl Machine, buffer: StatisticsBuffer) -> [u16; 256] {
@@ -499,11 +484,6 @@ pub const fn grid_address(branch: Branch) -> SharedAddress {
 /// The saved setting prefix (0xf1fbe8) uses the platform's byte-copy primitive.
 pub fn write_saved_settings(machine: &impl Machine, record: SharedAddress) {
     enter(machine, 0x74_213c, &[word(0x16b_510c), word(record.0), word(0x9c)]);
-}
-
-/// 0xf1d0f4.
-pub fn restore_selection_if_enabled(machine: &impl Machine, record: RecordHandle, position: u32) {
-    enter(machine, 0xf1_d0f4, &[handle(record), word(position)]);
 }
 
 

@@ -12,6 +12,10 @@ module Replacement.Saclac.Artifact
   , Retained (..)
   , retainedExternals
   , retainedData
+  , taskStackRuntime
+  , taskStackBytes
+  , taskCreateSite
+  , taskCreateWord
   , trapWord
   , trapBytes
   , Section (..)
@@ -42,6 +46,7 @@ import Data.Aeson (Value, object, toJSON, (.=))
 import Data.Bifunctor (first)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
+import Data.Bits ((.&.), (.|.))
 import Data.List (sortOn)
 import Data.Maybe (catMaybes, mapMaybe)
 import qualified Data.Set as S
@@ -102,6 +107,8 @@ retainedExternals =
   , Retained "xm1_kernel_console9" 0x41a34
   , Retained "xm1_kernel_critical_enter" 0x7235d8
   , Retained "xm1_kernel_critical_exit" 0x7236b0
+  , Retained "__saclac_runtime_malloc" 0x89cda4
+  , Retained "__saclac_runtime_create_task" 0x725dd8
   ]
 
 externalAddresses :: [Word32]
@@ -132,7 +139,15 @@ stockArrays =
 -- | Data words the owned image reads: the four per-machine tables and the two
 -- halfword arrays the boundary module supplies.
 retainedData :: [Retained]
-retainedData = [Retained name address | (_, name, address, _) <- stockArrays]
+retainedData = [Retained name address | (_, name, address, _) <- stockArrays] ++ [taskStackRuntime]
+
+taskStackRuntime :: Retained
+taskStackRuntime = Retained "__saclac_runtime_stack_words" 0x40a5b354
+
+taskStackBytes, taskCreateSite, taskCreateWord :: Word32
+taskStackBytes = 0x10000
+taskCreateSite = 0xef8d1c
+taskCreateWord = 0xebe0b42d
 
 
 -- | The platform stager's trap word for unused extent bytes.
@@ -185,6 +200,8 @@ data PlacementError
   | ElfRejected String
   | ReferenceOutside Word32 Word32
   | KernelBoundaryInvalid
+  | TaskStackContractInvalid
+  | TaskCreatePreimage Word32
   deriving (Eq, Show)
 
 require :: Bool -> PlacementError -> Either PlacementError ()
@@ -376,13 +393,10 @@ symbolKinds bytes =
   , Just address <- [hexWord32 (C.unpack addressText)]
   ]
 
--- | Task 43's stack is 0x1000 bytes: the creator at 0xef8c90 submits entry
--- 0xf01bc8 with @StackBytes(0x1000)@ (replacement/task_constructors/src.rs and
--- reports/replacement-inventory-baseline.md). The owned chain may use 1,024 of
--- those bytes; the stock actor, the row functions and the action bodies share
--- the rest of the same stack.
+-- | Task43 receives the linked stack contract before its retained creation call.
+-- The retained reserve is separate from owned demand, not a callee-depth proof.
 ownedStackBudget :: Int
-ownedStackBudget = 1024
+ownedStackBudget = fromIntegral taskStackBytes - 4096
 
 type StackBudget = Stack.StackBytes
 
@@ -473,11 +487,42 @@ admit elfBytes bin symbolsBytes disasm sectionsBytes = do
       (TableLengthMismatch "SACLAC_SECOND_COUNTS" index (machineSecondWords lengths) (wordOf OwnedSecondCounts))
     require (wordOf OwnedRowCounts == machineRowCount lengths)
       (TableLengthMismatch "SACLAC_ROW_COUNTS" index (machineRowCount lengths) (wordOf OwnedRowCounts))
+  checkTaskStackContract admitted
   budget <- maybe (Left SectionsRejected) Right (stackBudget ownedStackBudget)
   checkStack budget admitted instructions
   checkReferences elfBytes admitted
   checkControl admitted instructions dataWords
   pure admitted
+
+checkTaskStackContract :: Admitted -> Either PlacementError ()
+checkTaskStackContract admitted = do
+  metadata <- either (const (Left TaskStackContractInvalid)) Right
+    (F.lookupSymbol (admittedSymbols admitted) "XM1_SACLAC_TASK_STACK")
+  body <- either (const (Left TaskStackContractInvalid)) Right
+    (F.lookupSymbol (admittedSymbols admitted) "xm1_saclac_create_task")
+  let begin = F.symbolAddress metadata
+      allocatedReadOnly :: Word32 -> Word32 -> Bool
+      allocatedReadOnly low bytes = any (\section -> sectionAllocated section
+        && not (sectionWritable section) && not (sectionNoBits section)
+        && sectionLow section <= low
+        && toInteger low + toInteger bytes <= toInteger (sectionLow section) + toInteger (sectionBytes section))
+        (admittedSections admitted)
+  require (F.symbolSize metadata == 24 && begin `mod` 4 == 0
+    && allocatedReadOnly begin 24
+    && map (wordAt admitted . (begin +)) [0, 4 .. 20]
+       == [0x31545354, 43, taskStackBytes, retainedAddress taskStackRuntime, 0xa71a00, Fixed.imageBase]
+    && F.symbolSize body > 0 && F.symbolAddress body `mod` 4 == 0
+    && allocatedReadOnly (F.symbolAddress body) (F.symbolSize body)
+    && any (\(address, kind) -> address == F.symbolAddress body && kind `elem` ["T", "t"])
+       (symbolKinds (admittedSymbolsBytes admitted))) TaskStackContractInvalid
+
+taskCreateBranch :: Admitted -> Either PlacementError Word32
+taskCreateBranch admitted = do
+  body <- either (const (Left TaskStackContractInvalid)) Right
+    (F.lookupSymbol (admittedSymbols admitted) "xm1_saclac_create_task")
+  let delta = toInteger (F.symbolAddress body) - toInteger taskCreateSite - 8
+  require (delta `mod` 4 == 0 && delta >= -0x2000000 && delta < 0x2000000) TaskStackContractInvalid
+  pure (0xeb000000 .|. (fromIntegral (delta `div` 4) .&. 0xffffff))
 
 checkReferences :: B.ByteString -> Admitted -> Either PlacementError ()
 checkReferences elfBytes admitted = do
@@ -523,7 +568,10 @@ checkReferences elfBytes admitted = do
         target = ELF.addressTarget reference
         owned address = any (\(low, high) -> low <= address && address < high) (ownedSpans admitted)
     require (wordAt admitted site == maybe 0 id (ELF.wordAt elf site)) (ExtentImageMismatch site 4)
-    require (owned target || retained target || metadataBoundary reference symbol) (ReferenceOutside site target)
+    let stackRuntime = ELF.addressKind reference == ELF.DataReference
+          && retainedAddress taskStackRuntime <= target
+          && toInteger target < toInteger (retainedAddress taskStackRuntime) + 8
+    require (owned target || retained target || stackRuntime || metadataBoundary reference symbol) (ReferenceOutside site target)
 
 -- | Install one extent: section bytes stay, every other byte is the trap word.
 installExtent :: Admitted -> Extent -> Either PlacementError B.ByteString
@@ -552,7 +600,14 @@ fixedBody admitted = do
   pure (B.take count (B.drop offset (admittedBin admitted)))
 
 installedImage :: B.ByteString -> Admitted -> Either PlacementError B.ByteString
-installedImage image5 admitted = foldM put image5 extents
+installedImage image5 admitted = do
+  let offset = fromIntegral (taskCreateSite - 0xbf1a00)
+  require (offset + 4 <= B.length image5) (ExtentImageMismatch taskCreateSite 4)
+  let previous = U.word32At image5 offset
+  require (previous == taskCreateWord) (TaskCreatePreimage previous)
+  branch <- taskCreateBranch admitted
+  let prepared = B.take offset image5 <> U.putWord32 branch <> B.drop (offset + 4) image5
+  foldM put prepared extents
   where
     put current extent = do
       installed <- installExtent admitted extent
@@ -563,15 +618,18 @@ installedImage image5 admitted = foldM put image5 extents
 
 -- | Refuse an installed extent whose unused bytes are not the trap fill.
 admitInstalled :: B.ByteString -> Admitted -> Either PlacementError ()
-admitInstalled image5 admitted = forM_ extents $ \extent@(Extent low _) -> do
-  let spans = ownedSpans admitted
-      covered address = any (\(spanLow, spanHigh) -> spanLow <= address && address < spanHigh) spans
-      offset = (fromIntegral low :: Int) - fromIntegral (0xbf1a00 :: Word32)
-  require (offset >= 0 && offset + extentBytes extent <= B.length image5) (ExtentImageMismatch low (extentBytes extent))
-  forM_ [0 .. extentBytes extent - 1] $ \index -> do
-    let address = low + fromIntegral index
-    unless (covered address) $
-      require (B.index image5 (offset + index) == B.index trapBytes (index `mod` 4)) (FillDiffers address)
+admitInstalled image5 admitted = do
+  branch <- taskCreateBranch admitted
+  require (U.word32At image5 (fromIntegral (taskCreateSite - 0xbf1a00)) == branch) (ExtentImageMismatch taskCreateSite 4)
+  forM_ extents $ \extent@(Extent low _) -> do
+    let spans = ownedSpans admitted
+        covered address = any (\(spanLow, spanHigh) -> spanLow <= address && address < spanHigh) spans
+        offset = (fromIntegral low :: Int) - fromIntegral (0xbf1a00 :: Word32)
+    require (offset >= 0 && offset + extentBytes extent <= B.length image5) (ExtentImageMismatch low (extentBytes extent))
+    forM_ [0 .. extentBytes extent - 1] $ \index -> do
+      let address = low + fromIntegral index
+      unless (covered address) $
+        require (B.index image5 (offset + index) == B.index trapBytes (index `mod` 4)) (FillDiffers address)
 
 data Staged = Staged
   { stagedAdmitted :: Admitted
@@ -593,13 +651,13 @@ stageSaclac tools scratch dat image5 elf bin symbolsBytes disasm sectionsBytes =
   installed <- either (H.failH . show) pure (installedImage image5 admitted)
   either (H.failH . show) pure (admitInstalled installed admitted)
   body <- either (H.failH . show) pure (fixedBody admitted)
-  publications <- fmap concat $ forM extents $ \(Extent low high) ->
-    fmap catMaybes $ forM [low, low + 4 .. high - 4] $ \address -> do
-      let offset = fromIntegral (address - 0xbf1a00)
-          old = U.word32At image5 offset
-          new = U.word32At installed offset
-      if old == new then pure Nothing
-        else Just <$> either H.failH pure (Fixed.publication address old new)
+  let sites = taskCreateSite : concat [[low, low + 4 .. high - 4] | Extent low high <- extents]
+  publications <- fmap catMaybes $ forM sites $ \address -> do
+    let offset = fromIntegral (address - 0xbf1a00)
+        old = U.word32At image5 offset
+        new = U.word32At installed offset
+    if old == new then pure Nothing
+      else Just <$> either H.failH pure (Fixed.publication address old new)
   scratchDirectory <- Tools.validateScratchDirectory scratch
   staged <- Record5.stageRecord5 tools scratchDirectory dat image5 installed
   inverse <- Record5.stageRecord5 tools scratchDirectory dat image5 image5

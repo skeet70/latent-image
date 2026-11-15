@@ -11,6 +11,9 @@ pub mod driver;
 pub mod machine0;
 #[allow(unsafe_code)]
 pub mod stock;
+#[cfg(target_arch = "arm")]
+#[allow(unsafe_code)]
+mod task_stack;
 
 #[cfg(test)]
 mod tests;
