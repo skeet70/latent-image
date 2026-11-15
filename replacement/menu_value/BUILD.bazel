@@ -90,6 +90,9 @@ rust_source_boundary_test(
 
 filegroup(
     name = "shim-catalog-data",
-    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel"],
+    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + [
+        ":adapter-sources",
+        "BUILD.bazel",
+    ],
     visibility = ["//replacement/shim_check:__pkg__"],
 )
