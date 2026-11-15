@@ -4,13 +4,43 @@ package(default_visibility = ["//visibility:public"])
 
 _SOURCES = glob(["src/*.rs", "src/stock/*.rs"], exclude = ["src/lib.rs", "src/*_tests.rs", "src/fake.rs"])
 
+_HOST_SEARCH_DEPS = [
+    "//replacement/settings_storage:record-store-host-rlib",
+    "//replacement/settings_storage:property-core-host",
+    "//replacement/settings_storage:area3-validator-host-rlib",
+    "//replacement/power_lifecycle:services-host",
+    "//replacement/callback_core:host",
+    "//replacement/vendor_protocol:settings-core-host",
+    "//replacement/vendor_protocol:host/libxm1_wireless_crypto.rlib",
+    "//replacement/lens_transport:host-core",
+    "//replacement/rtos_own_first:host-core",
+    "//replacement/display_scanout/host:display-scanout-panel",
+    "//replacement/display_scanout/host:calibration-liveview-rlib",
+]
+_ARM_SEARCH_DEPS = [
+    "//replacement/settings_storage:record-store-guest-rlib",
+    "//replacement/settings_storage:property-core",
+    "//replacement/settings_storage:area3-validator-arm-rlib",
+    "//replacement/power_lifecycle:services-arm",
+    "//replacement/callback_core:arm",
+    "//replacement/vendor_protocol:settings-core-arm",
+    "//replacement/vendor_protocol:arm/libxm1_wireless_crypto.rlib",
+    "//replacement/lens_transport:libxm1_lens_transport",
+    "//replacement/rtos_own_first:libxm1_rtos_own_first",
+]
+
 xm1_rust_rlib(
     name = "root",
     src = "src/lib.rs",
     crate_name = "xm1_saclac_root",
     out = "arm/libxm1_saclac_root.rlib",
     data = _SOURCES,
+    rlib_search_deps = _ARM_SEARCH_DEPS,
+    dependency_archives = ["//replacement/vendor_protocol:arm/wireless-crypto-deps.tar"],
     rlib_deps = {
+        "xm1_calibration_core": "//replacement/calibration_core:libxm1_calibration_core",
+        "xm1_power_lifecycle": "//replacement/power_lifecycle:arm-core",
+        "xm1_vendor_protocol": "//replacement/vendor_protocol:core-arm",
         "xm1_saclac_search_bindings": "//replacement/saclac/root/search_bindings:bindings",
         "xm1_shot_sequence": "//replacement/shot_sequence:shot-sequence",
         "xm1_saclac_focus_search": "//replacement/saclac/focus_search:focus-search",
@@ -36,7 +66,12 @@ xm1_rust_host_test(
     src = "src/lib.rs",
     crate_name = "xm1_saclac_root_tests",
     data = glob(["src/*.rs", "src/stock/*.rs"], exclude = ["src/lib.rs"]),
+    rlib_search_deps = _HOST_SEARCH_DEPS,
+    dependency_archives = ["//replacement/vendor_protocol:host/wireless-crypto-deps.tar"],
     rlib_deps = {
+        "xm1_calibration_core": "//replacement/calibration_core:host",
+        "xm1_power_lifecycle": "//replacement/power_lifecycle:host-core",
+        "xm1_vendor_protocol": "//replacement/vendor_protocol:core-host",
         "xm1_saclac_search_bindings": "//replacement/saclac/root/search_bindings:host",
         "xm1_shot_sequence": "//replacement/shot_sequence:host",
         "xm1_saclac_focus_search": "//replacement/saclac/focus_search:host",
@@ -60,7 +95,12 @@ xm1_rust_host_rlib(
     src = "src/lib.rs",
     crate_name = "xm1_saclac_root",
     data = _SOURCES,
+    rlib_search_deps = _HOST_SEARCH_DEPS,
+    dependency_archives = ["//replacement/vendor_protocol:host/wireless-crypto-deps.tar"],
     rlib_deps = {
+        "xm1_calibration_core": "//replacement/calibration_core:host",
+        "xm1_power_lifecycle": "//replacement/power_lifecycle:host-core",
+        "xm1_vendor_protocol": "//replacement/vendor_protocol:core-host",
         "xm1_saclac_search_bindings": "//replacement/saclac/root/search_bindings:host",
         "xm1_shot_sequence": "//replacement/shot_sequence:host",
         "xm1_saclac_focus_search": "//replacement/saclac/focus_search:host",

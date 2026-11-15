@@ -37,6 +37,7 @@ pub mod exposure_services;
 pub mod shot_services;
 mod shot_lens;
 mod shot_records;
+mod shot_pipeline_records;
 mod shot_dump;
 mod shot_diagnostics;
 mod shot_platform;
