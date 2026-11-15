@@ -225,6 +225,27 @@ permitTests = do
     (isLeft (checkModalEnd shadowedFailure) && modalReportFailure shadowedFailure == modalReportFailure failed)
   check "shadow evidence cannot assert production authority without a one-use certificate"
     (isLeft (parseModalReport permitLimit (set "preservation_shadow" (set "production_admission" (Bool True) passive) permitEnvelope)))
+  let tcm = [Null, object ["address" .= (0x70000000 :: Word32), "bytes" .= (8192 :: Int)]]
+      certificateSource address word = object ["address" .= (address :: Word32),
+        "physical" .= (address :: Word32), "word" .= (word :: Word32), "tcm" .= tcm]
+      certificate = object [
+        "task" .= ("TaskIdentity primary task 1" :: String),
+        "publication_count" .= (226 :: Int), "forward" .= (226 :: Int), "reverse" .= (226 :: Int),
+        "retirement_source" .= certificateSource 0x00bfb028 0xe92d4ff0,
+        "status_source" .= certificateSource 0x00040360 0xe169f001,
+        "return_source" .= certificateSource 0x00040364 0xe8fdd00f,
+        "old_svc_spsr" .= (0x53 :: Word32), "entry_cpsr" .= (0x80000153 :: Word32),
+        "returned_cpsr" .= (0x80000053 :: Word32), "frame_address" .= (10800532 :: Word32),
+        "frame_physical" .= (10800532 :: Word32),
+        "frame_words" .= ([0, 9717120, 1, 9717124, 1074099628, 9, 1074087392, 10800572, 12565776] :: [Word32])]
+      verifiedThenFailed = set "failure" (String "late packet")
+        (set "certificates_issued" (Number 1)
+          (set "certificates_consumed" (Number 1)
+            (set "task_identity_verified" (Bool True)
+              (set "certificate" certificate passive))))
+  check "a later shadow failure retains an already verified one-use task identity without admission"
+    (not (isLeft (parseModalReport permitLimit
+      (set "preservation_shadow" verifiedThenFailed permitEnvelope))))
   let vectorEvent = object ["instructions" .= (101 :: Int), "address" .= (0x18 :: Word32),
         "physical" .= (0x18 :: Word32), "bytes" .= (4 :: Int), "progress" .= (0 :: Int),
         "pstate" .= (0x800001d2 :: Word32), "tcm" .= [Null, object ["address" .= (0x70000000 :: Int), "bytes" .= (8192 :: Int)]],

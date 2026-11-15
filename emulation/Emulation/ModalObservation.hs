@@ -588,9 +588,9 @@ parseModalReport limit value = do
       && (failure /= Nothing || started - completed == (if active then 1 else 0)))
       (Left "shadow report has inconsistent completion counters")
     unless (isJust certificate == (issued > 0)
-      && taskClaim == admission
-      && (not admission || failure == Nothing && not active && issued > 0
-        && issued == consumed && completed == started))
+      && taskClaim == (issued > 0 && issued == consumed)
+      && (not admission || taskClaim && failure == Nothing && not active
+        && completed == started))
       (Left "shadow report makes an unsupported production certificate claim")
     _ <- modalField "context" entry >>= parseNullable shadowText
     modalField "native_evidence" entry >>= shadowEvidence
