@@ -174,10 +174,10 @@ execute runner output stock selected = do
       statusRead = memoryRead "address" (address (Address 0x954d68)) 0 (assemble [actualStatus])
       services =
         [stub (Address 0xd36310) [scriptCall [("r0",0x82c0)] allocated []]
-        ,stub (Address 0x723cb8) [scriptCall [] current []]
+        ,stub (Address 0x723cb8) [scriptCall [] current [] | not omitted]
         ,stub (Address 0x72503c) [scriptCall [("r0",4),("r1",descriptorPointer)] status
           [memoryRead "register" (String "r1") 0 expectedDescriptor
-          ,memoryRead "address" (address (Address payloadPointer)) 0 expectedPayload]]
+          ,memoryRead "address" (address (Address payloadPointer)) 0 expectedPayload] | not omitted]
         ,stub (Address 0x633594) [scriptCall [("r0",actualStatus)] 0 [statusRead] | errorCalled]]
       calls = [event (Address 0xd36310) [("r0",0x82c0)] allocated
         ,event (Address 0x723cb8) [] current
