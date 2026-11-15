@@ -3604,6 +3604,32 @@ haskell_test(
     ],
 )
 
+haskell_library(
+    name = "media-inspection-lib",
+    srcs = ["Emulation/MediaInspection.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:cryptohash-sha256",
+    ],
+)
+
+haskell_test(
+    name = "media-inspection-tests",
+    size = "small",
+    srcs = ["MediaInspectionTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":media-inspection-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
 haskell_binary(
     name = "media-route-smoke",
     srcs = ["MediaRouteSmoke.hs"],
@@ -3611,6 +3637,7 @@ haskell_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":capture-stream-lib",
+        ":media-inspection-lib",
         ":playback-decode-lib",
         "//host:aeson",
         "//host:base",

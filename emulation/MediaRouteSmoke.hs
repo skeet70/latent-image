@@ -25,6 +25,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Word (Word32, Word64, Word8)
 import qualified Emulation.CaptureStream as CS
+import qualified Emulation.MediaInspection as MI
 import qualified Emulation.PlaybackDecode as PD
 import GHC.Generics (Generic)
 import Numeric (readHex, showHex)
@@ -32,7 +33,7 @@ import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMis
 import System.Environment (getArgs, getEnvironment)
 import System.Exit (ExitCode (..), exitWith)
 import System.FilePath (takeDirectory, takeFileName, splitDirectories, (</>))
-import System.IO (Handle, IOMode (..), hClose, hFlush, hPutStrLn, openBinaryFile, stderr)
+import System.IO (Handle, IOMode (..), SeekMode (..), hClose, hFlush, hPutStrLn, hSeek, openBinaryFile, stderr, withBinaryFile)
 import System.Posix.Files (fileID, fileSize, getSymbolicLinkStatus, isRegularFile, modificationTimeHiRes)
 import System.Process (CreateProcess (..), StdStream (..), callProcess, createProcess, proc, waitForProcess)
 
@@ -341,7 +342,9 @@ parseVolume boot
 maxMediaRead :: Word32
 maxMediaRead = 512
 
-readSectors :: Bridge -> Sector -> Word32 -> IO B.ByteString
+type SectorReader = Sector -> Word32 -> IO B.ByteString
+
+readSectors :: Bridge -> SectorReader
 readSectors _ _ 0 = pure B.empty
 readSectors bridge (Sector first) count = B.concat <$> mapM chunk (takeWhile (< count) (iterate (+ maxMediaRead) 0))
   where
@@ -354,7 +357,7 @@ readSectors bridge (Sector first) count = B.concat <$> mapM chunk (takeWhile (< 
       require (B.length bytes == fromIntegral n * 512) "media-read returned a different length"
       pure bytes
 
-data Card = Card { cardBridge :: Bridge, cardVolume :: Volume, cardFat :: IORef (Map.Map Word32 B.ByteString) }
+data Card = Card { cardRead :: SectorReader, cardVolume :: Volume, cardFat :: IORef (Map.Map Word32 B.ByteString) }
 
 fatEntry :: Card -> Cluster -> IO Word32
 fatEntry card (Cluster c) = do
@@ -365,7 +368,7 @@ fatEntry card (Cluster c) = do
   bytes <- case cached of
     Just b -> pure b
     Nothing -> do
-      b <- readSectors (cardBridge card) (Sector sector) 1
+      b <- cardRead card (Sector sector) 1
       modifyIORef' (cardFat card) (Map.insert sector b)
       pure b
   pure (fromIntegral (le bytes within 4) .&. 0x0fffffff)
@@ -394,7 +397,7 @@ extentsOf v clusters = [Extent (clusterSector v start) (n * volClusterSectors v)
 
 readClusters :: Card -> [Cluster] -> IO B.ByteString
 readClusters card clusters = B.concat <$> mapM readExtent (extentsOf (cardVolume card) clusters)
-  where readExtent (Extent first n) = readSectors (cardBridge card) first n
+  where readExtent (Extent first n) = cardRead card first n
 
 data DirEntry = DirEntry { entryName :: B.ByteString, entryAttributes :: Word8, entryCluster :: Cluster, entrySize :: Word32 }
 
@@ -440,12 +443,12 @@ data Folder = Folder { folderName :: B.ByteString, folderExtents :: [Extent], fo
 
 data CardView = CardView { viewVolume :: Volume, viewCard :: Card, viewDcimExtents :: [Extent], viewFolders :: [Folder] }
 
-walkCard :: Bridge -> IO CardView
-walkCard bridge = do
-  boot <- readSectors bridge (Sector 0) 1
+walkCard :: SectorReader -> IO CardView
+walkCard reader = do
+  boot <- reader (Sector 0) 1
   volume <- either (harness . ("card boot sector: " ++)) pure (parseVolume boot)
   cache <- newIORef Map.empty
-  let card = Card bridge volume cache
+  let card = Card reader volume cache
   (_, root) <- readDirectory card (volRootCluster volume)
   dcim <- maybe (harness "card root has no DCIM directory") pure (find (\e -> entryName e == "DCIM       " && isDirectory e) root)
   (dcimClusters, dcimEntries) <- readDirectory card (entryCluster dcim)
@@ -475,6 +478,54 @@ verifyFixture view = do
   pure (Target (folderExtents folder) extents bytes, object
     [ "entry" .= entryValue entry, "extents" .= map extentValue extents, "sha256" .= digestText (digest bytes)
     , "soi" .= (B.take 2 bytes == "\xff\xd8"), "eoi" .= (B.drop (B.length bytes - 2) bytes == "\xff\xd9") ])
+
+data InspectionPhase = BeforeRoute | AfterPlayback | AfterCapture deriving (Eq)
+
+inspectionLabel :: InspectionPhase -> T.Text
+inspectionLabel BeforeRoute = "media-inspection-before"
+inspectionLabel _ = "media-inspection-after"
+
+inspectCard :: FilePath -> FilePath -> InspectionPhase -> Bridge -> Journal -> (CardView -> IO a) -> IO a
+inspectCard original directory phase bridge journal consume = withBinaryFile original ReadMode $ \input -> do
+  (before, _) <- mediaState bridge
+  total <- newIORef (0 :: Word64)
+  reports <- newIORef []
+  matches <- newIORef True
+  let reader (Sector first) count = do
+        used <- readIORef total
+        require (used + fromIntegral count <= 262144) "card inspection exceeds its 128 MiB read budget"
+        writeIORef total (used + fromIntegral count)
+        B.concat <$> forM (takeWhile (< count) (iterate (+ maxMediaRead) 0)) (\offset -> do
+          let n = min maxMediaRead (count - offset)
+              at = toInteger first + toInteger offset
+          require (at <= toInteger (maxBound :: Word32)) "card inspection sector address wraps"
+          extent <- either harness pure (MI.sectorExtent (fromInteger at) n)
+          actual <- readSectors bridge (Sector (fromInteger at)) n
+          hSeek input AbsoluteSeek (MI.extentByteOffset extent)
+          expected <- B.hGet input (MI.extentByteCount extent)
+          comparison <- either harness pure (MI.inspect extent expected actual)
+          modifyIORef' matches (&& MI.inspectionMatches comparison)
+          report <- evaluate (force (MI.inspectionValue comparison))
+          modifyIORef' reports (report :)
+          pure actual)
+  result <- walkCard reader >>= consume
+  (after, _) <- mediaState bridge
+  comparisons <- reverse <$> readIORef reports
+  allMatch <- readIORef matches
+  sectors <- readIORef total
+  let unchanged = before == after
+      report = object
+        [ "scope" .= ("actual inserted-card sectors versus immutable original file, including allocation slack" :: T.Text)
+        , "sectors_read" .= sectors, "read_budget_sectors" .= (262144 :: Int)
+        , "all_sectors_match_original" .= allMatch, "media_state_unchanged" .= unchanged
+        , "media_state_before" .= Object before, "media_state_after" .= Object after
+        , "reads" .= comparisons ]
+  let label = inspectionLabel phase
+  writeJson (directory </> (T.unpack label ++ ".json")) report
+  note journal label report
+  require unchanged "read-only card inspection changed the SD host state"
+  require (phase == AfterCapture || allMatch) "inserted-card sectors differ from the original fixture"
+  pure result
 
 -- SD host state -------------------------------------------------------------------------------
 
@@ -1474,15 +1525,16 @@ newFiles directory before after = fmap concat . forM (viewFolders after) $ \fold
                   , "extents" .= map extentValue (extentsOf (viewVolume after) clusters)
                   , "sha256" .= digestText (digest bytes), "soi" .= soi, "eoi" .= eoi, "fujifilm_in_first_64k" .= fujifilm ]))
 
-runRoute :: Options -> FilePath -> Bridge -> Journal -> Observed -> IO ()
-runRoute options directory bridge journal observed = do
+runRoute :: Options -> FilePath -> FilePath -> Bridge -> Journal -> Observed -> IO ()
+runRoute options directory original bridge journal observed = do
   let route = optRoute options
       sites = routeSites route ++ (if route == PlayRoute then decodeObservationSites else [])
   _ <- call bridge (command "trace-sites" ["sites" .= object [K.fromString (hex32 (siteAddress s)) .= siteLabel s | s <- sites]])
   note journal "trace-sites" (toJSON (map siteValue sites))
-  before <- walkCard bridge
+  (before, target, fixture) <- inspectCard original directory BeforeRoute bridge journal $ \view -> do
+    (target, fixture) <- verifyFixture view
+    pure (view, target, fixture)
   note journal "card-before" (viewValue before)
-  (target, fixture) <- verifyFixture before
   writeIORef (obsTarget observed) (Just target)
   note journal "fixture-through-media-read" fixture
   when (optShootWithoutLens options) $ shootWithoutLens bridge >>= note journal "shoot-without-lens-keys" . toJSON
@@ -1612,11 +1664,12 @@ runRoute options directory bridge journal observed = do
              , "programmed_jobs" .= programmed, "endpoint_loads" .= endpoints, "all_jobs_sampled" .= covered]))
   decode <- readIORef (obsDecode observed)
   note journal "decode-binding" (maybe Null snd decode)
-  after <- walkCard bridge
+  (after, intact, added) <- inspectCard original directory (if route == PlayRoute then AfterPlayback else AfterCapture) bridge journal $ \view -> do
+    intact <- try (verifyFixture view)
+    added <- newFiles directory before view
+    pure (view, intact, added)
   note journal "card-after" (viewValue after)
-  intact <- try (verifyFixture after)
   writeIORef (obsTargetAfter observed) (Just (either (\e -> const False (e :: IOException)) (const True) intact))
-  added <- newFiles directory before after
   writeIORef (obsNewFiles observed) added
   note journal "card-new-files" (toJSON (map newValue added))
   shot <- capture bridge "final"
@@ -1862,6 +1915,7 @@ main = do
   originalBefore <- cardStat card
   let CardStat originalSize _ _ = originalBefore
   require (originalSize == cardBytes) "card image is not the declared 4 GiB capacity"
+  originalShaBefore <- fileDigest card
   createDirectory (directory </> "card")
   let copy = directory </> "card" </> "card.img"
   callProcess "cp" ["--reflink=auto", "--", card, copy]
@@ -1883,6 +1937,7 @@ main = do
     , "run_document_selected" .= isJust (optRunDocument options)
     , "expect_ramp12_width" .= fmap (\(RampRasterWidth w) -> w) (optRamp options)
     , "arguments" .= arguments, "card_original" .= card, "card_original_stat" .= statValue originalBefore
+    , "card_original_sha256" .= digestText originalShaBefore
     , "card_copy_stat" .= statValue copyStat, "windows" .= optWindows options
     , "capture_continuation_observation" .= captureObservationEnabled (optCaptureObservation options)
     , "capture_observation" .= captureObservationValue (optRoute options) (optCaptureObservation options)
@@ -1899,7 +1954,7 @@ main = do
     send bridge (object ["command" .= ("start" :: T.Text), "installed" .= Null])
     ready <- event bridge "ready"
     note journal "ready" (object ["checkpoint" .= KM.lookup "checkpoint" ready, "pre_attach" .= KM.lookup "pre_attach" ready])
-    stopped <- try (runRoute options directory bridge journal observed)
+    stopped <- try (runRoute options directory card bridge journal observed)
     case stopped of
       Left (BridgeStopped message) -> do
         writeIORef (obsStop observed) (Just message)
@@ -1943,12 +1998,13 @@ main = do
     (Just _, _, _) -> note journal "trace-recovered-from-session" Null
     _ -> pure ()
   originalAfter <- cardStat card
+  originalShaAfter <- fileDigest card
   (findings, stopped) <- verdict (optRoute options) (optShootWithoutLens options) observed
   ledger <- readIORef (obsLedger observed)
   recoveredCount <- readIORef (obsRecovered observed)
   captureProgress <- readIORef (obsCapture observed)
   forM_ captureProgress (note journal "capture-observation-interval" . captureProgressValue)
-  let unchanged = originalAfter == originalBefore
+  let unchanged = originalAfter == originalBefore && originalShaAfter == originalShaBefore
       bridgeSucceeded = exit == ExitSuccess
       stoppedAt = sessionStopBoundary session
         <|> (BridgeCommandFailure <$ stopMessage)
@@ -1988,11 +2044,14 @@ main = do
     , "bridge_error" .= sessionField "bridge_error"
     , "capture_evidence_error" .= sessionField "capture_evidence_error"
     , "checkpoint" .= sessionField "checkpoint"
-    , "card_original_unchanged" .= unchanged ])
+    , "card_original_unchanged" .= unchanged
+    , "card_original_sha256_before" .= digestText originalShaBefore
+    , "card_original_sha256_after" .= digestText originalShaAfter
+    , "media_inspection_reports" .= (["media-inspection-before.json", "media-inspection-after.json"] :: [T.Text]) ])
   forM_ findings $ \(Judged f unknown) -> putStrLn
     ((if isJust unknown then "unknown " else if findingHolds f then "holds " else "fails ")
       ++ (if findingRole f == Gate then "gate    " else "context ") ++ T.unpack (findingName f))
-  unless unchanged (hPutStrLn stderr "media-route-smoke: the original card file's size, mtime or inode changed")
+  unless unchanged (hPutStrLn stderr "media-route-smoke: the original card file's bytes, size, mtime or inode changed")
   unless bridgeSucceeded (hPutStrLn stderr ("media-route-smoke: bridge exited " ++ show exit))
   putStrLn ("result: " ++ directory </> "result.json")
   case (harnessError, reached) of
