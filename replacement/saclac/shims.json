@@ -986,9 +986,9 @@
     },
     {
       "id": "saclac_root-root-29",
-      "shim": "saclac_root: Capture/pipeline calls: `0xfea79c(slot)`, `0xfeaacc(0)`, `0xfa95a8(timing, out_interval)`, `0x103b064()`; snapshot copies, S1 sample copy, pipeline counter/pending flag, pipeline reference and capture-profile offsets are owned",
+      "shim": "saclac_root: Capture/pipeline calls: `0xfea79c(slot)`, `0xfeaacc(0)`, `0x103b064()`; snapshot copies, S1 sample copy, pipeline counter/pending flag, interval projection, pipeline reference and capture-profile offsets are owned",
       "kind": "trampoline into retained stock",
-      "other_side": "imaging capture preparation, interval projection and mode-six capture request",
+      "other_side": "imaging capture preparation and the mode-six capture request",
       "owned": "no",
       "removal": "imaging services expose the remaining operations through the root's machine boundary",
       "state": "required",

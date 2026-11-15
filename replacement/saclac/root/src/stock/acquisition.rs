@@ -344,25 +344,37 @@ pub fn s1_sample(machine: &impl Machine) -> [u8; S1_SAMPLE_BYTES] {
     core::array::from_fn(|index| if index < 96 { machine.read_u8(0x016f_247c + index as u32) } else { 0 })
 }
 
-/// An entry that writes one word through its last argument: what it returns and the word.
-fn word_out(machine: &impl Machine, address: u32, lead: Option<Argument>) -> (u32, u32) {
-    let mut buffer = Aligned([0; 4]);
-    let returned = match lead {
-        Some(lead) => machine.enter_with(address, &[lead, Argument::Buffer(0)], &mut buffer),
-        None => machine.enter_with(address, &[Argument::Buffer(0)], &mut buffer),
-    };
-    (returned, u32::get(&buffer, 0))
+fn configuration(machine: &impl Machine, key: u32) -> u32 { enter(machine, 0x69_f8fc, &[word(key)]) }
+
+fn special_sensor(machine: &impl Machine) -> bool {
+    machine.read_u32(0x0091_34f8) != 0 && matches!(configuration(machine, 0x80), 0x83 | 0x8a | 0x8b)
+}
+
+fn rounded_even_tenths(value: u32) -> u32 {
+    (value / 10 + u32::from(value % 10 >= 5)) & !1
 }
 
 /// The pipeline snapshot counter published by 0xff6fc0.
 pub fn timing(machine: &impl Machine) -> TimingWord { TimingWord(machine.read_u32(0x016f_672c)) }
 
-/// 0xfa95a8: a nonzero return leaves the interval unknown.
+/// The frame period projected by 0x1005f60.
 pub fn frame_interval(machine: &impl Machine, timing: TimingWord) -> Option<u32> {
-    match word_out(machine, 0xfa_95a8, Some(word(timing.0))) {
-        (0, interval) => Some(interval),
-        _ => None,
-    }
+    let index = machine.read_u32(0x0101_e014u32.wrapping_add(timing.0.wrapping_mul(8)));
+    let kind = machine.read_u8(0x00ef_6decu32.wrapping_add(timing.0.wrapping_mul(20)));
+    if !matches!(kind, 2 | 3 | 5) { return None; }
+    let record = 0x0101_de8cu32.wrapping_add(index.wrapping_mul(28));
+    let ticks = if special_sensor(machine) {
+        let measured = (((configuration(machine, 0xcb) << 8) | configuration(machine, 0xca)) as u16 as u32).wrapping_mul(1000);
+        let maximum = machine.read_u32(record.wrapping_add(16));
+        let rate = measured.min(maximum).max(1000);
+        let scale = machine.read_u32(record.wrapping_add(4));
+        rounded_even_tenths(maximum.wrapping_mul(scale.wrapping_mul(10)) / rate).wrapping_mul(8)
+    } else if kind == 5 {
+        machine.read_u32(record.wrapping_add(4)).wrapping_mul(8)
+    } else {
+        u32::from(machine.read_u16(0x016f_8f26)).wrapping_mul(8)
+    };
+    Some(machine.read_u32(record.wrapping_add(8)).wrapping_mul(ticks >> 3) / 54)
 }
 
 /// 0x103b064.

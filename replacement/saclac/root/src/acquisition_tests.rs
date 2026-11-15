@@ -488,6 +488,42 @@ fn owned_pipeline_status_words_preserve_counter_and_pending_flag() {
     assert!(!Pipeline::take_window_refresh(&mut root));
     assert!(!machine.take_entered().iter().any(|(address, _)| [0xfe_a7bc, 0xfe_a7cc].contains(address)));
 }
+
+#[test]
+fn owned_frame_interval_preserves_stock_projection_branches() {
+    let kernel = fake::saclac_kernel();
+    let cx = kernel.task().unwrap();
+    let (machine, root) = fake::root_with(fake::peers(&cx), Bytes::default(), Entries::default());
+    let recognition = RefCell::new(SceneRecognition::new());
+    acquisition!(root, recognition, cx);
+    machine.set_word(0x0101_e014, 2);
+    memory(&machine, 0x00ef_6dec, &[2]);
+    let ordinary = 0x0101_de8c + 2 * 28;
+    machine.set_word(ordinary + 8, 108);
+    memory(&machine, 0x016f_8f26, &270u16.to_le_bytes());
+
+    assert_eq!(Pipeline::frame_interval(&mut root, xm1_focus_measurement_round::pipeline::TimingWord(0)).map(|value| value.0), Some(540));
+
+    machine.set_word(0x0091_34f8, 1);
+    machine.adjustment(0x80, 0x83);
+    machine.adjustment(0xca, 0x34);
+    machine.adjustment(0xcb, 0x12);
+    machine.set_word(ordinary + 4, 135);
+    machine.set_word(ordinary + 16, 100_000);
+    assert_eq!(Pipeline::frame_interval(&mut root, xm1_focus_measurement_round::pipeline::TimingWord(0)).map(|value| value.0), Some(268));
+
+    machine.set_word(0x0101_e01c, 3);
+    memory(&machine, 0x00ef_6e00, &[5]);
+    let direct = 0x0101_de8c + 3 * 28;
+    machine.set_word(direct + 4, 81);
+    machine.set_word(direct + 8, 18);
+    machine.set_word(0x0091_34f8, 0);
+    assert_eq!(Pipeline::frame_interval(&mut root, xm1_focus_measurement_round::pipeline::TimingWord(1)).map(|value| value.0), Some(27));
+
+    memory(&machine, 0x00ef_6e14, &[4]);
+    assert_eq!(Pipeline::frame_interval(&mut root, xm1_focus_measurement_round::pipeline::TimingWord(2)), None);
+    assert!(!machine.take_entered().iter().any(|(address, _)| *address == 0xfa_95a8));
+}
 #[test]
 fn live_and_s1_keep_one_selection_preset_and_s1_consumes_the_controllers_change() {
     let kernel = fake::saclac_kernel();
