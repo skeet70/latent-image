@@ -1978,20 +1978,31 @@
   }
   ,{
     "id": "E-LATER-IMAGE5-SKIP-REFUSAL-NATIVE-150",
-    "claim": "The conditional image5 skip/refusal/CPU-fill matrix passes ({{passed}}) over {{executions}} native executions. Retained and linked owned producers are exercised through the actual stock flashloader caller and continuation. Cases cover rejected aligned fill, unaligned BSS base and unaligned BSS length; exact BSS zeroing, unchanged halos and destination, cache publication, done-before-release and callback error agree. Executed producers omitting CPU fill, error status or cache publication reach the declared stop and are rejected by their behavioral oracle. Stock image4 is {{image4_sha256}}, owned producer {{owned_sha256}}, and runner {{runner_sha256}}.",
-    "scope": "Conditional X-M1 1.50 flashloader entry/caller continuation, retained or emitted Rust image5 producer, unconfigured-storage refusal and byte/word CPU-fill bodies. Mailbox, nonzero mode, segment, rejected fill result and RTOS/cache sinks are synthetic. Nonzero mode skips decoder initialization, feed and finish. Stock instructions confirm the NONMATCHING caller/storage C; fill definitions are exact at x70view55436fc85c0560dd252b0410af6f2427fe198cd3.",
+    "claim": "The conditional image5 skip/refusal/CPU-fill matrix passes ({{passed}}) over {{executions}} native executions. Retained and linked owned producers are exercised through the actual stock flashloader caller and continuation. Cases cover rejected aligned fill, unaligned BSS base and unaligned BSS length; exact BSS zeroing, unchanged halos and destination, cache publication, done-before-release and callback error agree. Executed producers omitting CPU fill, error status or cache publication reach the declared stop and are rejected by their behavioral oracle. The missing-segment matrix passes ({{missing_passed}}) over {{missing_executions}} executions: retained/owned image5 and plain producers remain at their source-bound refusal loops with status {{missing_status}} after {{missing_instructions}} instructions, keeping busy/done/resource state and destination/BSS unchanged; an executed premature-return control is rejected. Plain skip passes ({{plain_passed}}) over {{plain_executions}} executions through actual progress/notification code. Zero source length sends no progress; length0x40001 makes {{plain_delays}} delay calls and {{plain_notifications}} notifications while destination bytes remain unchanged. Stock image4 is {{image4_sha256}}, owned image5 producer {{owned_sha256}}, and initial matrix runner {{runner_sha256}}.",
+    "scope": "Conditional X-M1 1.50 flashloader entry/caller continuation through retained or emitted Rust image5/plain producers, unconfigured-storage refusal, CPU fill, missing-segment loops and plain progress/notification wrapper. Mailbox, nonzero mode, segment/group, rejected fill result, notification recipient and RTOS/cache sinks are synthetic. Nonzero mode skips decoder initialization, feed and finish. Stock instructions confirm NONMATCHING caller/storage C; fill/progress definitions are exact at x70view55436fc85c0560dd252b0410af6f2427fe198cd3. Progress offsets and command completion do not establish fresh executable residency.",
     "notes": "No natural reset reachability, nonempty transfer, read-mode decoder/storage failure, NAND/DMA, scheduler/resource or physical cache law is qualified. Real segment residency, transient remaps and post-consumer lifetime remain open. Lower-read primary/cleanup-error propagation, stop deadline and quarantine ownership remain unimplemented. This is not full later-loader or image5-initialization ownership.",
     "artifacts": [
       "private-data/scratch/LaterLoadingClosure/runs/20261115T211554Z-image5-native-committed-smoke/result/routes.json",
-      "private-data/scratch/Image5Producer/stage-v1/owned-image5-stage-v1-contract.json"
+      "private-data/scratch/Image5Producer/stage-v1/owned-image5-stage-v1-contract.json",
+      "private-data/scratch/images153/source-contract.json",
+      "private-data/scratch/LaterLoadingClosure/runs/20261115T213514Z-later-missing-committed-smoke/result/missing.json",
+      "private-data/scratch/LaterLoadingClosure/runs/20261115T213520Z-later-plain-skip-committed-smoke/result/plain-skip.json"
     ],
     "facts": [
-      {"name":"firmware_sha256","path":"private-data/scratch/Image5Producer/stage-v1/owned-image5-stage-v1-contract.json","pointer":["image5_load","source_dat_image4_sha256","0"]},
+      {"name":"firmware_sha256","path":"private-data/scratch/images153/source-contract.json","pointer":["firmware_sha256"]},
       {"name":"passed","path":"private-data/scratch/LaterLoadingClosure/runs/20261115T211554Z-image5-native-committed-smoke/result/routes.json","pointer":["passed"]},
       {"name":"executions","path":"private-data/scratch/LaterLoadingClosure/runs/20261115T211554Z-image5-native-committed-smoke/result/routes.json","pointer":["results"],"operation":"length"},
       {"name":"image4_sha256","path":"private-data/scratch/LaterLoadingClosure/runs/20261115T211554Z-image5-native-committed-smoke/result/routes.json","pointer":["image4_sha256"]},
       {"name":"owned_sha256","path":"private-data/scratch/LaterLoadingClosure/runs/20261115T211554Z-image5-native-committed-smoke/result/routes.json","pointer":["owned_sha256"]},
-      {"name":"runner_sha256","path":"private-data/scratch/LaterLoadingClosure/runs/20261115T211554Z-image5-native-committed-smoke/result/routes.json","pointer":["runner_sha256"]}
+      {"name":"runner_sha256","path":"private-data/scratch/LaterLoadingClosure/runs/20261115T211554Z-image5-native-committed-smoke/result/routes.json","pointer":["runner_sha256"]},
+      {"name":"missing_passed","path":"private-data/scratch/LaterLoadingClosure/runs/20261115T213514Z-later-missing-committed-smoke/result/missing.json","pointer":["passed"]},
+      {"name":"missing_executions","path":"private-data/scratch/LaterLoadingClosure/runs/20261115T213514Z-later-missing-committed-smoke/result/missing.json","pointer":["results"],"operation":"length"},
+      {"name":"missing_status","path":"private-data/scratch/LaterLoadingClosure/runs/20261115T213514Z-later-missing-committed-smoke/result/missing.json","pointer":["results","0","status"]},
+      {"name":"missing_instructions","path":"private-data/scratch/LaterLoadingClosure/runs/20261115T213514Z-later-missing-committed-smoke/result/missing.json","pointer":["results","0","instructions"]},
+      {"name":"plain_passed","path":"private-data/scratch/LaterLoadingClosure/runs/20261115T213520Z-later-plain-skip-committed-smoke/result/plain-skip.json","pointer":["passed"]},
+      {"name":"plain_executions","path":"private-data/scratch/LaterLoadingClosure/runs/20261115T213520Z-later-plain-skip-committed-smoke/result/plain-skip.json","pointer":["results"],"operation":"length"},
+      {"name":"plain_delays","path":"private-data/scratch/LaterLoadingClosure/runs/20261115T213520Z-later-plain-skip-committed-smoke/result/plain-skip.json","pointer":["results","1","delay_calls"]},
+      {"name":"plain_notifications","path":"private-data/scratch/LaterLoadingClosure/runs/20261115T213520Z-later-plain-skip-committed-smoke/result/plain-skip.json","pointer":["results","1","notification_count"]}
     ]
   }
   ,{
