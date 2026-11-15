@@ -119,9 +119,7 @@ waitReleaseSize :: Word32
 waitReleaseSize = 0xcc
 
 fixtureCodeExtents :: [(Word32, Word32)]
-fixtureCodeExtents =
-  [(stubBase, stubSize), (exitAddress, 0x10)] ++
-  [(waitReleaseAddress domain, waitReleaseSize) | domain <- [DomainA, DomainB]]
+fixtureCodeExtents = [(stubBase, stubSize), (exitAddress, 0x10)]
 
 domainId :: Domain -> Word32
 domainId DomainA = 1
@@ -773,7 +771,7 @@ caseFor facts domain role stockImage ownedImage ownedSymbols aggregates one =
   CaseSpec
     { caseId = caseName one ++ "-" ++ domainLabel domain
     , caseProvenance = "X-M1 1.50 timer stock ABI, x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; synthetic heap, entry and callback state"
-    , caseExclusion = "Synthetic timer heap and foreign fixture callbacks; wait-release instrumentation uses the retained stock helper over a synthetic suspended task. No full-system qualification."
+    , caseExclusion = "Synthetic timer heap and foreign fixture callbacks; wait-release executes the role's linked helper over a synthetic suspended task. No full-system qualification."
     , caseEntry = GuestAddress (fromIntegral entry)
     , caseExit = GuestAddress (fromIntegral exitAddress)
     , caseRegions =
@@ -830,7 +828,7 @@ caseFor facts domain role stockImage ownedImage ownedSymbols aggregates one =
         let (base, _) = stockBase domain
          in [(base, 0xc4), (base + 0xc4, 0xdc), (insertEntry domain, 0x48), (removeEntry domain, 0xe4), (tickEntry domain, 0x1a0), (stubBase, stubSize), (waitReleaseAddress domain, waitReleaseSize)]
               ++ [(wordAddress (initializeAddress domain), 0x70) | caseCall one == Initialize]
-      Owned -> (if null aggregates then [(ownedAddress symbol, ownedSize symbol) | symbol <- ownedSymbols] else concatMap aggregateFunctions aggregates) ++ [(stubBase, stubSize), (waitReleaseAddress domain, waitReleaseSize)]
+      Owned -> (if null aggregates then [(ownedAddress symbol, ownedSize symbol) | symbol <- ownedSymbols] ++ [(waitReleaseAddress domain, waitReleaseSize)] else concatMap aggregateFunctions aggregates) ++ [(stubBase, stubSize)]
     initialRegisters =
       [ (register, case lookup register arguments of
           Just value -> value

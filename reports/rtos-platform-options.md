@@ -1323,5 +1323,41 @@ The host adapter, SDK wire reader and public schema now admit 128 regions and re
 
 Runner `e2d7aee8c59e9d419c05a53fe2338bc025558eb1ad9209522247b61c9015476f` executes the unchanged retained 67-region case SHA-256 `b96eef7c6a7ee69ad260d59ab25072d76fe1a264e068395c21ed8bcd9ccf30d6` to `stop_address` in 24 instructions. The generic native-case final-memory checker reports task/frame changes; the S2 family comparator, not generic unchanged-memory expectations, owns this suspended dispatcher boundary. Its current-union sample passes all 58 cases and 44 control groups across both domains (`20261115T212607Z-aggregate-dispatcher-128`), with freshly executed Stock and Owned batches and reused StockRepeat observations. All equivalence, mutant and approved-correction reversion controls hold. No firmware byte or comparison rule changes. This is the bounded dispatcher sample, not the full current-union family matrix or whole-kernel retirement.
 
+### Contained current-union native matrix
 
+The completed cohorts below execute the actual staged effective carrier slices, A `384f8963070aa35c08947e47c4633457f46afc49d34585e0f0d9237cc2e64768` and B `7e8edaef61bc30f4d517abfd0dc5c6a26db8157b63752055ffb59942adc5fa07`, with the unchanged family comparators. These slices include actual retained gaps and carrier fill from staged loaders `fe28e845…` / `43cf5c57…`, not the raw linker zeros. Each qualifier runs inside `emulator-slot --native` at the existing 12 GiB RAM / 8 GiB swap caps. The earlier 58-case sample and generic direct replay have functional-only evidence without whole-qualifier containment; the full S2 result supersedes that sample for the supported native dispatcher boundary.
+
+| Current cohort | Completed scope | Outcome |
+| --- | --- | --- |
+| S1 scheduler helpers | 10,172 comparisons, 46 control groups | All owned matches, stock outcomes and controls hold |
+| S2 dispatcher | 1,120 cases, 44 control groups | Both domains pass, including correction-reversion controls |
+| S3a dispatch/exit/rotation | 6,542 comparisons across 14 service/domain reports | All contracts, equivalence and mutant controls hold |
+| S3b activation/wakeup | 7,968 comparisons across 12 service/domain reports | All owned/equivalent matches; zero mutant matches |
+| S3c priority/exception services | 2,776 cases per role across 22 entry/domain groups | All groups pass |
+| S3d lifecycle | 50 cases | Both domains' contracts and comparisons pass |
+| Context transfer | Four timed-sleep/delay caller cases | Actual save/select/tick/callback/resume returns pass |
+| Task records | 66 result rows, including create/delete smoke, 496 controls | Zero failures |
+| Event flags | 100 cases, 440 observation controls | Zero failures |
+| Semaphores | 64 cases, 16 observation controls | Zero failures |
+| Fixed pools | 90 cases, 104 observation controls | Zero failures |
+| Data queues | 52 cases, 180 controls | Zero failures |
+| Timer/completion callbacks | 56 cases, 280 controls | Zero failures |
+| Cyclic handlers | 48 cases, 179 controls | Zero failures |
+| Global lock | 64 comparisons, 456 controls | Zero failures |
+| Packaged domain-A application join | 28 stock/owned stage rows, 21 controls | Zero failures; application remains a standalone linked overlay |
+| Own-first CPU-local slots | The original full invocation is interrupted by its outer 3,600-second host deadline | No final summary; no full-family verdict inferred |
+
+Compact verdicts, executable/payload digests, commands and native-scope logs are retained in `private-data/scratch/PlatformComposition/runs/`, under `scoped-full-*` and `scoped-packaged-AppJoin` labels. The initial S3b invocation omits its required `--carriers` argument and refuses before execution; the corrected invocation above changes only that argument. The interrupted Own-first invocation retains its failed receipt and work rather than being relabeled as a firmware failure.
+
+Two host admission repairs are required by the current composition. The Timer suite incorrectly classifies the retained wait-release helper as foreign fixture code even though its owned aggregate cases already omit that overlay. That helper is now the event-flag family's owned `family_release` carrier. Aggregate cases use its actual linked function metadata; the standalone stock helper remains declared only for standalone execution. The synthetic callback and exit intervals remain subject to the original disjointness guard. The Global Lock suite incorrectly requires the complete aggregate symbol table to contain exactly the six standalone functions. Aggregate admission instead requires all six public entries in the admitted union and resolves every declared veneer/thunk to its linked target; standalone admission keeps its exact six-function requirement. Neither repair changes firmware bytes or comparison rules.
+
+The slot-count request was not enforced by the original shared wrapper: acquisition searched the execution class's full concurrency ceiling instead of the requested count. These cohorts have real native memory containment, but no serial-execution claim. The integration owner's separate launcher fix and later scheduling changes do not relabel their provenance.
+
+### Current caller and lifetime frontier
+
+The domain-A application join advances a composed consumer boundary rather than another leaf: the stock loader initializer and root-publisher prefix produce the interface/root tables, the emitted application caller registers and starts the cyclic record through those tables, repeated timer ticks deliver through the registry and retained stack-guard callback, and unregister/refusal controls complete. The kernel is the actual packaged loader. The application is still a standalone linked overlay, and contexts, registry/task-definition contents and scheduler-lock callbacks are fixture state.
+
+The union retains the six mailbox extents and separate IRQ/vector/initialization backends. Its eleven retained external declarations per domain include aliases of mask/restore, IRQ-save/restore, IRQ raise/clear and division routines. Stock image4 and the other kernel still consume the 0x38-byte task, 0x28-byte configuration and published root-descriptor layouts. Descriptor-derived stack-integrity readers, copied/computed roots and saved-frame writers remain closure obligations. Native service equivalence, correct synthetic task resumption and a menu endpoint do not establish natural allocation ownership, teardown/reuse, both-core publication, nested IRQ/context lifetime or physical exclusive/cache laws.
+
+The next executable packaged join takes the final image4, final domain-A loader, its pre-platform startup-loader reference and matching aggregate binary/symbols/placements/carriers through the existing `join-oracle --packaged-image4 --packaged-loader-a --startup-loader-a` interface. Its expected result is the same caller registration/tick/delivery/unregister contract on the final package, followed separately by natural reset creation/auto-ready/first-execution and lifetime observations on that package. This requires no change to Root's fixed-layout contract and does not retire the retained backends.
 
