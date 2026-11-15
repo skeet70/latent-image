@@ -263,6 +263,9 @@ decode address word
     | otherwise = Rejected Unadmitted
   group0
     | field 7 4 word == 9 && field 27 20 word == 0 = withoutPcDestination [reg 16 word] (Multiply cond (reg 16 word) (reg 0 word) (reg 8 word) Nothing)
+    | field 7 4 word == 9 && field 27 20 word == 1 =
+        if pc `elem` [reg 0 word, reg 8 word] then Rejected Unadmitted
+        else withoutPcDestination [reg 16 word] (Compute cond [reg 16 word])
     | field 7 4 word == 9 && field 27 20 word == 2 = withoutPcDestination [reg 16 word] (Multiply cond (reg 16 word) (reg 0 word) (reg 8 word) (Just (reg 12 word)))
     | field 7 4 word == 9 && field 24 24 word == 0 && testBit word 20 = Rejected Unadmitted
     | field 7 4 word == 9 && field 24 24 word == 0 =
@@ -372,6 +375,15 @@ decode address word
   media
     | word .&. 0x0ff000f0 == 0x07f000f0 = Rejected UndefinedEncoding
     | word .&. 0x0fd0f0f0 == 0x0710f010 = Rejected Divide
+    | parallelAddSubtract word =
+        if pc `elem` [reg 16 word, reg 0 word] then Rejected Unadmitted
+        else withoutPcDestination [reg 12 word] (Compute cond [reg 12 word])
+    | word .&. 0x0ff00030 == 0x06800010 =
+        if pc `elem` [reg 12 word, reg 16 word, reg 0 word] then Rejected Unadmitted
+        else Compute cond [reg 12 word]
+    | word .&. 0x0fff03f0 == 0x06cf0070 =
+        if reg 0 word == pc then Rejected Unadmitted
+        else withoutPcDestination [reg 12 word] (ZeroExtend cond (reg 12 word) (reg 0 word) rotation 8)
     | word .&. 0x0fff03f0 == 0x06ef0070 = withoutPcDestination [reg 12 word] (ZeroExtend cond (reg 12 word) (reg 0 word) rotation 8)
     | word .&. 0x0fff03f0 == 0x06ff0070 = withoutPcDestination [reg 12 word] (ZeroExtend cond (reg 12 word) (reg 0 word) rotation 16)
     | word .&. 0x0fff03f0 `elem` [0x06af0070, 0x06bf0070] = withoutPcDestination [reg 12 word] (Compute cond [reg 12 word])
@@ -397,8 +409,16 @@ computeSources word
   | field 24 23 word == 2, testBit word 7, field 22 21 word /= 2 =
       [reg 0 word, reg 8 word]
         ++ [reg 12 word | field 22 21 word == 0 || (field 22 21 word == 1 && not (testBit word 5))]
+  | parallelAddSubtract word = [reg 16 word, reg 0 word]
+  | word .&. 0x0ff00030 == 0x06800010 = [reg 16 word, reg 0 word]
   | word .&. 0x0ff003f0 `elem` [0x06e00070, 0x06f00070, 0x06a00070, 0x06b00070] = [reg 0 word, reg 16 word]
   | word .&. 0x0fff0ff0 `elem` [0x06bf0f30, 0x06bf0fb0, 0x06ff0f30] = [reg 0 word]
   | word .&. 0x0fa00070 == 0x07a00050 = [reg 0 word]
   | word .&. 0x0fe00070 == 0x07c00010 = [reg 12 word] ++ [reg 0 word | field 3 0 word /= 15]
   | otherwise = []
+
+parallelAddSubtract :: Word32 -> Bool
+parallelAddSubtract word =
+  word .&. 0x0f800f10 == 0x06000f10
+    && field 22 20 word `elem` [1, 2, 3, 5, 6, 7]
+    && field 7 4 word `elem` [1, 3, 5, 7, 9, 15]

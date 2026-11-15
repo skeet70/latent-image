@@ -39,7 +39,7 @@ renderLinkerScript = case (entries, extents) of
     [ "ENTRY(" ++ entryVeneer firstEntry ++ ")"
     , ""
     , "/* Generated from Replacement.Saclac.Artifact.extents. */"
-    , "EXTERN(XM1_KERNEL_BOUNDARY XM1_SACLAC_TASK_STACK xm1_saclac_create_task)"
+    , "EXTERN(XM1_KERNEL_BOUNDARY XM1_SACLAC_TASK_STACK XM1_SACLAC_CONSTRUCTOR_STACK xm1_saclac_create_task)"
     ]
       ++ [ retainedName external ++ " = " ++ hexAddress (retainedAddress external) ++ ";"
          | external <- retainedExternals ++ retainedData,
@@ -65,7 +65,7 @@ renderLinkerScript = case (entries, extents) of
         | (index, entry) <- zip [0 :: Int ..] entries
         ]
       ++ [ "  .text : { __fixed_body_start = .; *(.text*) } > OWNED_FIXED"
-         , "  .rodata : { KEEP(*(.rodata.XM1_KERNEL_BOUNDARY)) KEEP(*(.rodata.XM1_SACLAC_TASK_STACK)) KEEP(*(.rodata.XM1_REQUIRES_LENS_SAFETY_CONTRACT)) *(.rodata*) . = ALIGN(4); } > OWNED_FIXED"
+         , "  .rodata : { KEEP(*(.rodata.XM1_KERNEL_BOUNDARY)) KEEP(*(.rodata.XM1_SACLAC_TASK_STACK)) KEEP(*(.rodata.XM1_SACLAC_CONSTRUCTOR_STACK)) KEEP(*(.rodata.XM1_REQUIRES_LENS_SAFETY_CONTRACT)) *(.rodata*) . = ALIGN(4); } > OWNED_FIXED"
          , "  .data : { *(.data*) *(.sdata*) *(.got*) . = ALIGN(4); __fixed_body_end = .; } > OWNED_FIXED"
          , "  .bss (NOLOAD) : { __fixed_bss_start = .; *(.bss*) *(.sbss*) *(COMMON) . = ALIGN(4); __fixed_bss_end = .; } > OWNED_FIXED"
          , "  __power_cpu_start = __fixed_body_start;"

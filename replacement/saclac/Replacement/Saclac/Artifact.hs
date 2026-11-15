@@ -60,6 +60,7 @@ import qualified Replacement.Record5Staging as Record5
 import qualified Replacement.FixedImage.Layout as Fixed
 import qualified Replacement.FixedImage.Record as Fixed
 import qualified Replacement.Toolchain.Stack as Stack
+import qualified StackWalk as W
 import qualified FujiAF.UpdateContainer as U
 
 data Extent = Extent
@@ -148,6 +149,10 @@ taskStackBytes, taskCreateSite, taskCreateWord :: Word32
 taskStackBytes = 0x10000
 taskCreateSite = 0xef8d1c
 taskCreateWord = 0xebe0b42d
+
+constructorStackBytes, constructorOwnedStackBudget :: Int
+constructorStackBytes = 0xc00
+constructorOwnedStackBudget = constructorStackBytes - 0x60 - 72 - max 128 104 - 88
 
 
 -- | The platform stager's trap word for unused extent bytes.
@@ -333,14 +338,22 @@ mayFallThrough instruction = case instruction of
   A.Branch (A.Cond 14) _ _ -> False
   A.BranchExchange (A.Cond 14) _ _ -> False
   _ -> not (unconditionalPcWrite instruction)
+compilerTrapWord :: Word32
+compilerTrapWord = 0xe7ffdefe
+
 
 
 -- | Direct targets stay in owned code or enter a declared retained entry.
 checkControl :: Admitted -> S.Set Word32 -> S.Set Word32 -> Either PlacementError ()
 checkControl admitted instructions dataWords = forM_ (S.toList instructions) $ \address -> do
-  let instruction = A.decode address (wordAt admitted address)
+  let word = wordAt admitted address
+      instruction = A.decode address word
   case instruction of
-    A.Rejected forbidden -> Left (WalkRefused address (DecoderRejected forbidden))
+    A.Rejected A.UndefinedEncoding | word == compilerTrapWord -> Right ()
+    A.Rejected forbidden -> case W.classify W.Strict address word of
+      W.Refuse _ -> Left (WalkRefused address (DecoderRejected forbidden))
+      W.Stop -> Left (WalkRefused address (DecoderRejected forbidden))
+      _ -> Right ()
     A.Branch _ _ target -> do
       unless (insideExtents target || target `elem` externalAddresses) $
         Left (WalkRefused address (BranchTargetNotAllowed target))
@@ -349,9 +362,9 @@ checkControl admitted instructions dataWords = forM_ (S.toList instructions) $ \
       unless (S.member target instructions || target `elem` externalAddresses) $
         Left (WalkRefused address (BranchTargetNotAllowed target))
     _ -> Right ()
-  when (mayFallThrough instruction && S.member (address + 4) dataWords) $
+  when (word /= compilerTrapWord && mayFallThrough instruction && S.member (address + 4) dataWords) $
     Left (WalkRefused (address + 4) FallThroughIntoDataWord)
-  when (mayFallThrough instruction && not (insideExtents (address + 4))) $
+  when (word /= compilerTrapWord && mayFallThrough instruction && not (insideExtents (address + 4))) $
     Left (WalkRefused (address + 4) FallThroughOutsideOwned)
 
 data Admitted = Admitted
@@ -417,17 +430,24 @@ checkStackArtifact budget bin symbolsBytes disasm sectionsBytes = do
   checkStack budget artifact instructions
 
 checkStack :: StackBudget -> Admitted -> S.Set Word32 -> Either PlacementError ()
-checkStack budget admitted instructions = first failure (Stack.check budget image)
-  where
-    image = Stack.Image (Stack.Guest (binBase admitted)) (admittedBin admitted)
-      (admittedSymbols admitted) (S.map Stack.Guest instructions)
-    failure problem = case problem of
-      Stack.OutsideImage (Stack.Guest address) -> ExtentImageMismatch address 4
-      Stack.InvalidFunction (Stack.Guest address) -> WalkRefused address FrameNotDerivable
-      Stack.FrameNotDerivable (Stack.Guest address) -> WalkRefused address FrameNotDerivable
-      Stack.RecursiveCall (Stack.Guest address) (Stack.Guest target) -> WalkRefused address (RecursiveCall target)
-      Stack.BudgetExceeded (Stack.Guest address) bytes -> WalkRefused address (StackBudgetExceeded (Stack.stackByteCount bytes))
+checkStack budget admitted instructions = first stackFailure (Stack.check budget (stackImage admitted instructions))
 
+checkStackEntry :: StackBudget -> Word32 -> Admitted -> S.Set Word32 -> Either PlacementError ()
+checkStackEntry budget entry admitted instructions =
+  first stackFailure (Stack.checkEntry budget (Stack.Guest entry) (stackImage admitted instructions))
+
+stackImage :: Admitted -> S.Set Word32 -> Stack.Image
+stackImage admitted instructions =
+  Stack.Image (Stack.Guest (binBase admitted)) (admittedBin admitted)
+    (admittedSymbols admitted) (S.map Stack.Guest instructions)
+
+stackFailure :: Stack.Failure -> PlacementError
+stackFailure problem = case problem of
+  Stack.OutsideImage (Stack.Guest address) -> ExtentImageMismatch address 4
+  Stack.InvalidFunction (Stack.Guest address) -> WalkRefused address FrameNotDerivable
+  Stack.FrameNotDerivable (Stack.Guest address) -> WalkRefused address FrameNotDerivable
+  Stack.RecursiveCall (Stack.Guest address) (Stack.Guest target) -> WalkRefused address (RecursiveCall target)
+  Stack.BudgetExceeded (Stack.Guest address) bytes -> WalkRefused address (StackBudgetExceeded (Stack.stackByteCount bytes))
 -- | Admit layout, direct control-flow targets and the owned stack budget.
 admit :: B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Either PlacementError Admitted
 admit elfBytes bin symbolsBytes disasm sectionsBytes = do
@@ -487,20 +507,23 @@ admit elfBytes bin symbolsBytes disasm sectionsBytes = do
       (TableLengthMismatch "SACLAC_SECOND_COUNTS" index (machineSecondWords lengths) (wordOf OwnedSecondCounts))
     require (wordOf OwnedRowCounts == machineRowCount lengths)
       (TableLengthMismatch "SACLAC_ROW_COUNTS" index (machineRowCount lengths) (wordOf OwnedRowCounts))
-  checkTaskStackContract admitted
+  checkTaskStackContract admitted instructions
   budget <- maybe (Left SectionsRejected) Right (stackBudget ownedStackBudget)
   checkStack budget admitted instructions
   checkReferences elfBytes admitted
   checkControl admitted instructions dataWords
   pure admitted
 
-checkTaskStackContract :: Admitted -> Either PlacementError ()
-checkTaskStackContract admitted = do
+checkTaskStackContract :: Admitted -> S.Set Word32 -> Either PlacementError ()
+checkTaskStackContract admitted instructions = do
   metadata <- either (const (Left TaskStackContractInvalid)) Right
     (F.lookupSymbol (admittedSymbols admitted) "XM1_SACLAC_TASK_STACK")
+  constructor <- either (const (Left TaskStackContractInvalid)) Right
+    (F.lookupSymbol (admittedSymbols admitted) "XM1_SACLAC_CONSTRUCTOR_STACK")
   body <- either (const (Left TaskStackContractInvalid)) Right
     (F.lookupSymbol (admittedSymbols admitted) "xm1_saclac_create_task")
   let begin = F.symbolAddress metadata
+      constructorBegin = F.symbolAddress constructor
       allocatedReadOnly :: Word32 -> Word32 -> Bool
       allocatedReadOnly low bytes = any (\section -> sectionAllocated section
         && not (sectionWritable section) && not (sectionNoBits section)
@@ -511,10 +534,18 @@ checkTaskStackContract admitted = do
     && allocatedReadOnly begin 24
     && map (wordAt admitted . (begin +)) [0, 4 .. 20]
        == [0x31545354, 43, taskStackBytes, retainedAddress taskStackRuntime, 0xa71a00, Fixed.imageBase]
+    && F.symbolSize constructor == 56 && constructorBegin `mod` 4 == 0
+    && allocatedReadOnly constructorBegin 56
+    && map (wordAt admitted . (constructorBegin +)) [0, 4 .. 52]
+       == [0x31545343, 59, fromIntegral constructorStackBytes, 0xa24a00, 0xa255a0,
+           0x60, 72, 128, 104, 88, fromIntegral constructorOwnedStackBudget,
+           0xd985a4, 0xef8c90, taskCreateSite]
     && F.symbolSize body > 0 && F.symbolAddress body `mod` 4 == 0
     && allocatedReadOnly (F.symbolAddress body) (F.symbolSize body)
     && any (\(address, kind) -> address == F.symbolAddress body && kind `elem` ["T", "t"])
        (symbolKinds (admittedSymbolsBytes admitted))) TaskStackContractInvalid
+  budget <- maybe (Left TaskStackContractInvalid) Right (stackBudget constructorOwnedStackBudget)
+  checkStackEntry budget (F.symbolAddress body) admitted instructions
 
 taskCreateBranch :: Admitted -> Either PlacementError Word32
 taskCreateBranch admitted = do

@@ -157,6 +157,52 @@ main = do
   let variable = single [0xe72d0001, 0xe92d4800, 0xe8bd4800, 0xe12fff1e]
   H.ensure (check fitting variable == Left (FrameNotDerivable (Guest base)))
     "a register-sized SP adjustment was assigned a fixed frame"
+  let flagMultiply = single [0xe92d4800, 0xe0120092, 0xe8bd4800, 0xe12fff1e]
+  either (H.failH . show) pure (check eight flagMultiply)
+  forM_ [0xe01d0092, 0xe012009f, 0xe0120f92, 0xe01f0092] $ \word -> do
+    let changed = flagMultiply
+          { imageBytes = B.take 4 (imageBytes flagMultiply) <> U.putWord32 word
+              <> B.drop 8 (imageBytes flagMultiply) }
+    H.ensure (check eight changed == Left (FrameNotDerivable (Guest base)))
+      "MULS admitted an SP/PC destination or PC operand"
+  forM_ [0x16655f90, 0xe6627f71] $ \parallel -> do
+    let parallelArithmetic = single [0xe92d4800, parallel, 0xe8bd4800, 0xe12fff1e]
+    either (H.failH . show) pure (check eight parallelArithmetic)
+    H.ensure (check seven parallelArithmetic == Left (BudgetExceeded (Guest base) eight))
+      "a parallel arithmetic operation hid the live frame"
+  let parallelArithmetic = single [0xe92d4800, 0xe6627f71, 0xe8bd4800, 0xe12fff1e]
+  forM_ [0xe662df71, 0xe66f7f71, 0xe6627f7f, 0xe6027f71, 0xe6427f71, 0xe6627fb1, 0xe6627fd1] $ \word -> do
+    let changed = parallelArithmetic { imageBytes = B.take 4 (imageBytes parallelArithmetic) <> U.putWord32 word <> B.drop 8 (imageBytes parallelArithmetic) }
+    H.ensure (check eight changed == Left (FrameNotDerivable (Guest base)))
+      "a parallel arithmetic operation admitted an SP destination, PC operand or unallocated encoding"
+  parallelFrameSymbols <- either H.failH pure (F.parseSymbols "00001000 00000014 T parallel\n")
+  let parallelFrame = Image (Guest base)
+        (B.concat (map U.putWord32 [0xe92d4800, 0xe1a0b00d, 0xe662bf71, 0xe1a0d00b, 0xe8bd8800]))
+        parallelFrameSymbols (S.fromList (map Guest [base, base + 4 .. base + 16]))
+  H.ensure (check eight parallelFrame == Left (FrameNotDerivable (Guest base)))
+    "a parallel arithmetic operation left a stale frame pointer usable"
+  let packHalf = single [0xe92d4800, 0xe6800810, 0xe8bd4800, 0xe12fff1e]
+  either (H.failH . show) pure (check eight packHalf)
+  H.ensure (check seven packHalf == Left (BudgetExceeded (Guest base) eight))
+    "a packed-halfword operation hid the live frame"
+  forM_ [0xe680f810, 0xe68f0810, 0xe680081f, 0xe680d810] $ \word -> do
+    let changed = packHalf { imageBytes = B.take 4 (imageBytes packHalf) <> U.putWord32 word <> B.drop 8 (imageBytes packHalf) }
+    H.ensure (check eight changed == Left (FrameNotDerivable (Guest base)))
+      "a packed-halfword operation admitted an SP destination or PC operand"
+  let packedFrame = parallelFrame
+        { imageBytes = B.concat (map U.putWord32 [0xe92d4800, 0xe1a0b00d, 0xe680b810, 0xe1a0d00b, 0xe8bd8800]) }
+  H.ensure (check eight packedFrame == Left (FrameNotDerivable (Guest base)))
+    "a packed-halfword operation left a stale frame pointer usable"
+  let bytePairs = single [0xe92d4800, 0xe6cf0070, 0xe8bd4800, 0xe12fff1e]
+  either (H.failH . show) pure (check eight bytePairs)
+  H.ensure (check seven bytePairs == Left (BudgetExceeded (Guest base) eight))
+    "UXTB16 changed the exact live-frame budget"
+  forM_ [0xe6cfd070, 0xe6cff070, 0xe6cf007f] $ \word -> do
+    let changed = bytePairs
+          { imageBytes = B.take 4 (imageBytes bytePairs) <> U.putWord32 word
+              <> B.drop 8 (imageBytes bytePairs) }
+    H.ensure (check eight changed == Left (FrameNotDerivable (Guest base)))
+      "UXTB16 admitted an SP/PC destination or PC source"
   forM_ [0xe59d0008, 0xe1cd00d8, 0xe5240008, 0xe4940008] $ \transfer -> do
     let framed = single [transfer, 0xe92d4800, 0xe8bd4800, 0xe12fff1e]
         leaf = single [transfer, 0xe12fff1e, 0xe320f000, 0xe320f000]
@@ -164,4 +210,129 @@ main = do
     H.ensure (check seven framed == Left (BudgetExceeded (Guest base) eight))
       ("a transfer preserving SP changed the frame budget: " ++ show transfer)
     either (H.failH . show) pure (check zero leaf)
+  epilogueSymbols <- either H.failH pure (F.parseSymbols "00001000 0000001c T epilogue\n")
+  let epilogueWords = [0xe92d4800, 0xe28db004, 0xe24dd010, 0xe3500000, 0x024bd004, 0x08bd8800, 0xeafffffe]
+      epilogue = Image (Guest base) (B.concat (map U.putWord32 epilogueWords))
+        epilogueSymbols (S.fromList (map Guest [base, base + 4 .. base + 24]))
+  twentyFour <- maybe (H.failH "invalid epilogue budget") pure (stackBytes 24)
+  twentyThree <- maybe (H.failH "invalid short epilogue budget") pure (stackBytes 23)
+  either (H.failH . show) pure (check twentyFour epilogue)
+  H.ensure (check twentyThree epilogue == Left (BudgetExceeded (Guest base) twentyFour))
+    "a conditional return epilogue hid its live frame"
+  forM_ [0x18bd8800, 0xe320f000] $ \changedWord -> do
+    let changed = epilogue
+          { imageBytes = B.take 20 (imageBytes epilogue) <> U.putWord32 changedWord <> B.drop 24 (imageBytes epilogue) }
+    H.ensure (check twentyFour changed == Left (FrameNotDerivable (Guest base)))
+      "a conditional stack restore without its matching return was admitted"
+  epilogueCallSymbols <- either H.failH pure
+    (F.parseSymbols "00001000 00000020 T epilogue_call\n00001024 00000008 T halt\n")
+  let epilogueCallWords =
+        [0xe92d4800, 0xe28db004, 0xe24dd010, 0xe3500000, 0x024bd004, 0x08bd8800,
+         0xe58d0000, 0xeb000000, 0, 0xe320f003, 0xeafffffd]
+      epilogueCall = Image (Guest base) (B.concat (map U.putWord32 epilogueCallWords))
+        epilogueCallSymbols (S.fromList (map Guest
+          [base, base + 4, base + 8, base + 12, base + 16, base + 20, base + 24,
+           base + 28, base + 36, base + 40]))
+  either (H.failH . show) pure (check twentyFour epilogueCall)
+  continuingSymbols <- either H.failH pure
+    (F.parseSymbols "00001000 00000020 T continuing_epilogue\n")
+  let continuingEpilogue = Image (Guest base) (B.concat (map U.putWord32
+        [0xe92d4800, 0xe1a0b00d, 0xe3500000, 0x11a0d00b, 0x18bd8800,
+         0xe59d0000, 0xe1a0d00b, 0xe8bd8800]))
+        continuingSymbols (S.fromList (map Guest [base, base + 4 .. base + 28]))
+  either (H.failH . show) pure (check eight continuingEpilogue)
+  H.ensure (check seven continuingEpilogue == Left (BudgetExceeded (Guest base) eight))
+    "a continuing conditional epilogue changed the exact frame budget"
+  moveEpilogueSymbols <- either H.failH pure
+    (F.parseSymbols "00001000 0000001c T move_epilogue\n00001020 00000008 T halt\n")
+  let moveEpilogueWords =
+        [0xe92d4ff8, 0xe28db020, 0xe3500000, 0x01a0d00b, 0x08bd8800,
+         0xe3a00001, 0xeb000000, 0, 0xe320f001, 0xeafffffd]
+      moveEpilogue = Image (Guest base) (B.concat (map U.putWord32 moveEpilogueWords))
+        moveEpilogueSymbols (S.fromList (map Guest
+          [base, base + 4, base + 8, base + 12, base + 16, base + 20, base + 24,
+           base + 32, base + 36]))
+  forty <- maybe (H.failH "invalid move epilogue budget") pure (stackBytes 40)
+  thirtyNine <- maybe (H.failH "invalid short move epilogue budget") pure (stackBytes 39)
+  either (H.failH . show) pure (check forty moveEpilogue)
+  H.ensure (check thirtyNine moveEpilogue == Left (BudgetExceeded (Guest base) forty))
+    "a conditional frame-pointer move epilogue hid its live frame"
+  vfpSymbols <- either H.failH pure (F.parseSymbols "00001000 00000024 T vfp\n")
+  let vfpWords =
+        [0xe92d4800, 0xe1a0b00d, 0xed2d8b04, 0xed9f8a14, 0xee880a00,
+         0xee101a10, 0xecbd8b04, 0xe1a0d00b, 0xe8bd8800]
+      vfpFrame = Image (Guest base) (B.concat (map U.putWord32 vfpWords))
+        vfpSymbols (S.fromList (map Guest [base, base + 4 .. base + 32]))
+  either (H.failH . show) pure (check twentyFour vfpFrame)
+  H.ensure (check twentyThree vfpFrame == Left (BudgetExceeded (Guest base) twentyFour))
+    "VFP register saves were not included in the exact frame budget"
+  forM_ [0xee10ba10, 0xee10da10] $ \transfer -> do
+    let changed = vfpFrame
+          { imageBytes = B.take 20 (imageBytes vfpFrame) <> U.putWord32 transfer
+              <> B.drop 24 (imageBytes vfpFrame) }
+    H.ensure (check twentyFour changed == Left (FrameNotDerivable (Guest base)))
+      "a VFP transfer admitted an SP destination or a stale frame pointer"
+  let vfpRegisterLoad = single [0xed940a00, 0xe12fff1e, 0xe320f000, 0xe320f000]
+  either (H.failH . show) pure (check zero vfpRegisterLoad)
+  selectedSymbols <- either H.failH pure
+    (F.parseSymbols "00001000 00000008 T selected\n00001008 00000008 T unrelated\n")
+  let selectedBody = B.concat (map U.putWord32 [0xe92d4800, 0xe8bd8800, 0xe92d4803, 0xe8bd8803])
+      selected = Image (Guest base) selectedBody selectedSymbols
+        (S.fromList (map Guest [base, base + 4 .. base + 12]))
+  either (H.failH . show) pure (checkEntry eight (Guest base) selected)
+  H.ensure (check eight selected == Left (BudgetExceeded (Guest (base + 8)) sixteen))
+    "the whole-image check ignored a deep function outside the selected root"
+  reachableSymbols <- either H.failH pure
+    (F.parseSymbols "00001000 0000000c T selected\n0000100c 00000008 T reachable\n")
+  let reachableBody = B.concat (map U.putWord32 [0xe92d4800, 0xeb000000, 0xe8bd8800, 0xe92d4803, 0xe8bd8803])
+      reachable = Image (Guest base) reachableBody reachableSymbols
+        (S.fromList (map Guest [base, base + 4 .. base + 16]))
+  H.ensure (checkEntry sixteen (Guest base) reachable
+      == Left (BudgetExceeded (Guest base) twentyFour))
+    "the selected-root check ignored a deep reachable callee"
+  zeroSizedSymbols <- either H.failH pure
+    (F.parseSymbols "00001000 0000000c T caller\n0000100c 00000000 T assembly_leaf\n")
+  let zeroSizedBody = B.concat (map U.putWord32
+        [0xe92d4800, 0xeb000000, 0xe8bd8800, 0xe12fff1e])
+      zeroSizedLeaf = Image (Guest base) zeroSizedBody zeroSizedSymbols
+        (S.fromList (map Guest [base, base + 4 .. base + 12]))
+  either (H.failH . show) pure (check eight zeroSizedLeaf)
+  undersizedSymbols <- either H.failH pure
+    (F.parseSymbols "00001000 00000008 T assembly_wrapper\n")
+  let undersized = Image (Guest base)
+        (B.concat (map U.putWord32 [0xe3a00001, 0xeaffffff, 0xe12fff1e]))
+        undersizedSymbols (S.fromList (map Guest [base, base + 4, base + 8]))
+  either (H.failH . show) pure (check zero undersized)
+  sharedBodySymbols <- either H.failH pure
+    (F.parseSymbols "00001000 00000008 T helper\n00001010 00000004 T caller\n")
+  let sharedBody = Image (Guest base) (B.concat (map U.putWord32
+        [0xe3a00001, 0xeaffffff, 0xe92d4800, 0xe8bd8800, 0xeafffffc]))
+        sharedBodySymbols (S.fromList (map Guest [base, base + 4 .. base + 16]))
+  either (H.failH . show) pure (check eight sharedBody)
+  H.ensure (check seven sharedBody == Left (BudgetExceeded (Guest base) eight))
+    "an unlabeled shared assembly body changed the exact frame budget"
+  modeSymbols <- either H.failH pure (F.parseSymbols "00001000 00000000 T mode\n")
+  let modeFunction instructions = Image (Guest base) (B.concat (map U.putWord32 instructions))
+        modeSymbols (S.fromList
+          (map Guest [base, base + 4 .. base + 4 * fromIntegral (length instructions - 1)]))
+      saveIrq = modeFunction [0xe10f1000, 0xe3812080, 0xe121f002, 0xe2010080, 0xe12fff1e]
+      restoreIrq = modeFunction [0xe2001080, 0xe10f2000, 0xe3c22080, 0xe1811002, 0xe121f001, 0xe12fff1e]
+      slot164 = modeFunction
+        [0xe92d4800, 0xe1a0b00d, 0xe10f0000, 0xe3801080, 0xe121f001, 0xe2000080, 0xe8bd8800]
+      slot168 = modeFunction
+        [0xe92d4800, 0xe1a0b00d, 0xe1a013a0, 0xe10f0000, 0xe7c70391, 0xe121f000, 0xe8bd8800]
+  either (H.failH . show) pure (check zero saveIrq)
+  either (H.failH . show) pure (check zero restoreIrq)
+  either (H.failH . show) pure (check eight slot164)
+  either (H.failH . show) pure (check eight slot168)
+  let modeChanging = saveIrq
+        { imageBytes = B.take 4 (imageBytes saveIrq) <> U.putWord32 0xe3812001
+            <> B.drop 8 (imageBytes saveIrq) }
+      lowInsert = slot168
+        { imageBytes = B.take 16 (imageBytes slot168) <> U.putWord32 0xe7c70011
+            <> B.drop 20 (imageBytes slot168) }
+  H.ensure (check zero modeChanging == Left (FrameNotDerivable (Guest base)))
+    "a control write that can change the processor mode was admitted"
+  H.ensure (check eight lowInsert == Left (FrameNotDerivable (Guest base)))
+    "a control write replacing processor-mode bits was admitted"
   putStrLn "stack-proof: consecutive pushes, direct depth, recursion, frame and image-bound controls passed"

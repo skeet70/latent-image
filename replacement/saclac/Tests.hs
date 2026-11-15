@@ -101,6 +101,9 @@ main = do
       marker <- F.symbolAddress <$> symbol symbols "XM1_REQUIRES_LENS_SAFETY_CONTRACT"
       refused "missing lens safety flag" SafetyMarkerInvalid
         (admit (patch base bin marker 0) symbols disasm sections)
+      constructorStack <- F.symbolAddress <$> symbol symbols "XM1_SACLAC_CONSTRUCTOR_STACK"
+      refused "constructor stack budget differs" TaskStackContractInvalid
+        (admit (patch base bin (constructorStack + 40) 0) symbols disasm sections)
       refused "retired fill differs" (FillDiffers 0xefca70)
         (admitInstalled (patch imageBase installed 0xefca70 0) admitted)
       parsed <- either H.failH pure (ELF.parseElf elf)

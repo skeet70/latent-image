@@ -1,10 +1,13 @@
 module Replacement.Toolchain.Stack
-  ( Guest(..), StackBytes, stackBytes, stackByteCount, Image(..), Failure(..), check
+  ( Guest(..), StackBytes, stackBytes, stackByteCount, Image(..), Failure(..), check, checkEntry
   ) where
 
 import qualified A32 as A
 import Control.Monad (forM, forM_, unless, when)
+import qualified Data.Graph as G
 import qualified Data.ByteString as B
+import Data.Bits ((.&.))
+import qualified Data.Map.Lazy as LM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Word (Word32)
@@ -53,19 +56,24 @@ data FrameState = FrameState
 
 data FrameVisit = FrameVisit Guest FrameState
 
+data Function = Function
+  { functionEntry :: Word32
+  , functionSize :: Word32
+  }
+
 -- Only declared instruction paths prove nonreturning calls. Unknown transfers and uncovered
 -- fall-throughs remain returning possibilities; names and symbol-end data are not evidence.
-nonReturningEntries :: Image -> [F.Symbol] -> S.Set Guest
-nonReturningEntries image symbols = fixed (S.fromList (map (Guest . F.symbolAddress) symbols))
+nonReturningEntries :: Image -> [Function] -> S.Set Guest
+nonReturningEntries image functions = fixed (S.fromList (map (Guest . functionEntry) functions))
   where
     fixed candidates =
-      let remaining = S.fromList [Guest (F.symbolAddress symbol) | symbol <- symbols,
-            S.member (Guest (F.symbolAddress symbol)) candidates, neverReturns candidates symbol]
+      let remaining = S.fromList [Guest (functionEntry function) | function <- functions,
+            S.member (Guest (functionEntry function)) candidates, neverReturns candidates function]
       in if remaining == candidates then remaining else fixed remaining
-    neverReturns candidates symbol = walk S.empty [F.symbolAddress symbol]
+    neverReturns candidates function = walk S.empty [functionEntry function]
       where
-        start = F.symbolAddress symbol
-        end = toInteger start + toInteger (F.symbolSize symbol)
+        start = functionEntry function
+        end = toInteger start + toInteger (functionSize function)
         inside address = start <= address && toInteger address < end
         present address = inside address && S.member (Guest address) (imageInstructions image)
         walk _ [] = True
@@ -95,10 +103,10 @@ nonReturningEntries image symbols = fixed (S.fromList (map (Guest . F.symbolAddr
                   W.Neutral -> proceed [next]
                   _ -> False
 
-frameBytes :: S.Set Guest -> S.Set Guest -> Image -> F.Symbol -> Either Failure Int
-frameBytes entries nonReturning image symbol = do
-  let start = F.symbolAddress symbol
-      size = F.symbolSize symbol
+frameBytes :: S.Set Guest -> S.Set Guest -> Image -> Function -> Either Failure Int
+frameBytes entries nonReturning image function = do
+  let start = functionEntry function
+      size = functionSize function
       end = toInteger start + toInteger size
       Guest firstByte = imageBase image
       refused = Left (FrameNotDerivable (Guest start))
@@ -136,6 +144,46 @@ frameBytes entries nonReturning image symbol = do
             knownCallee target
             terminal state
             pure []
+      modeWritePreserves address
+        | address < start + 8 = pure False
+        | otherwise = do
+            current <- wordAt image address
+            previous <- wordAt image (address - 4)
+            beforePrevious <- wordAt image (address - 8)
+            exactRestore <- if address >= start + 16
+              then (== [0xe2001080, 0xe10f2000, 0xe3c22080, 0xe1811002, 0xe121f001])
+                <$> mapM (wordAt image) [address - 16, address - 12 .. address]
+              else pure False
+            let currentStatus destination word =
+                  word .&. 0x00400000 == 0
+                    && A.decode (address - 8) word == A.ReadStatus (A.Cond 14) destination
+                copiedControl source = case A.decode (address - 4) previous of
+                  A.DataProcessing (A.Cond 14) operation False destination status (A.Immediate mask) ->
+                    destination == source && operation `elem` [A.ORR, A.BIC]
+                      && mask .&. 0x1f == 0 && currentStatus status beforePrevious
+                  _ -> False
+                insertedControl source = case A.bitFieldInsert previous of
+                  Just (A.BitFieldInsert (A.Cond 14) destination _ lsb _) ->
+                    destination == source && lsb >= 5 && currentStatus source beforePrevious
+                  _ -> False
+            pure $ case A.statusWrite current of
+              Just (A.StatusWrite (A.Cond 14) A.CurrentStatus fields (A.StatusFromRegister source)) ->
+                A.ControlBits `elem` fields && (copiedControl source || insertedControl source || exactRestore)
+              _ -> False
+      conditionalEpilogue condition displacement address state = do
+        let returnAddress = address + 4
+        unless (present returnAddress) refused
+        returnWord <- wordAt image returnAddress
+        case W.classify W.Strict returnAddress returnWord of
+          W.Return returnCondition amount
+            | returnCondition == condition -> do
+                restored <- case frameFp state of
+                  Just position -> adjusted (offset position - displacement) state
+                  Nothing -> refused
+                returned <- adjusted (sp restored - toInteger amount) restored
+                terminal returned
+                next returnAddress state
+          _ -> refused
       walk _ best [] = Right best
       walk seen best (FrameVisit point@(Guest address) incoming : rest) =
         case M.lookup point seen of
@@ -152,33 +200,46 @@ frameBytes entries nonReturning image symbol = do
             case instruction of
               A.Load {} | A.sp `elem` writtenRegisters -> refused
               _ -> pure ()
-            visits <- case W.classify W.Strict address word of
-              W.Reserve amount -> adjusted (sp state + toInteger amount) state >>= next address
-              W.Release amount -> adjusted (sp state - toInteger amount) state
-                >>= next address . clobber instruction writtenRegisters
-              W.FromFrame displacement -> case frameFp state of
-                Just position -> adjusted (offset position - toInteger displacement) state >>= next address
-                Nothing -> refused
-              W.SetFrame amount -> next address state
-                { frameFp = Just (FrameOffset (sp state - toInteger amount)) }
-              W.Neutral
-                | any (`elem` writtenRegisters) [A.sp, A.pc] -> refused
-                | otherwise -> next address (clobber instruction writtenRegisters state)
-              W.Call target -> do
-                knownCallee target
-                case instruction of
-                  A.Branch (A.Cond 14) True _ | S.member (Guest target) nonReturning -> pure []
-                  _ -> next address state
-              W.RegisterCall _ -> next address state
-              W.Jump condition target -> jump target state >>= conditional condition address state
-              W.Return condition amount -> do
-                returned <- adjusted (sp state - toInteger amount) state
-                terminal returned
-                conditional condition address state []
-              W.RegisterJump condition _ -> do
-                terminal state
-                conditional condition address state []
-              _ -> refused
+            visits <- case instruction of
+              A.DataProcessing condition A.MOV _ destination _ (A.ShiftedImmediate source A.LSL 0)
+                | destination == A.sp && source == W.framePointer && condition /= A.Cond 14 ->
+                    conditionalEpilogue condition 0 address state
+              A.DataProcessing condition operation _ destination source (A.Immediate amount)
+                | destination == A.sp && source == W.framePointer && condition /= A.Cond 14
+                , operation `elem` [A.ADD, A.SUB] ->
+                    conditionalEpilogue condition
+                      (if operation == A.ADD then toInteger amount else negate (toInteger amount))
+                      address state
+              _ -> case W.classify W.Strict address word of
+                W.Reserve amount -> adjusted (sp state + toInteger amount) state >>= next address
+                W.Release amount -> adjusted (sp state - toInteger amount) state
+                  >>= next address . clobber instruction writtenRegisters
+                W.FromFrame displacement -> case frameFp state of
+                  Just position -> adjusted (offset position - toInteger displacement) state >>= next address
+                  Nothing -> refused
+                W.SetFrame amount -> next address state
+                  { frameFp = Just (FrameOffset (sp state - toInteger amount)) }
+                W.Neutral
+                  | any (`elem` writtenRegisters) [A.sp, A.pc] -> refused
+                  | otherwise -> next address (clobber instruction writtenRegisters state)
+                W.Call target -> do
+                  knownCallee target
+                  case instruction of
+                    A.Branch (A.Cond 14) True _ | S.member (Guest target) nonReturning -> pure []
+                    _ -> next address state
+                W.RegisterCall _ -> next address state
+                W.Jump condition target -> jump target state >>= conditional condition address state
+                W.Return condition amount -> do
+                  returned <- adjusted (sp state - toInteger amount) state
+                  terminal returned
+                  conditional condition address state []
+                W.RegisterJump condition _ -> do
+                  terminal state
+                  conditional condition address state []
+                W.ModeWrite _ -> do
+                  preserving <- modeWritePreserves address
+                  if preserving then next address state else refused
+                _ -> refused
             walk (M.insert point state seen) (max best (sp state)) (visits ++ rest)
   unless (size > 0 && size `mod` 4 == 0 && start `mod` 4 == 0
     && end <= toInteger (maxBound :: Word32) && start >= firstByte
@@ -197,15 +258,54 @@ data Frame = Frame
   }
 
 check :: StackBytes -> Image -> Either Failure ()
-check (StackBytes budget) image = do
+check budget = checkWith budget Nothing
+
+checkEntry :: StackBytes -> Guest -> Image -> Either Failure ()
+checkEntry budget entry = checkWith budget (Just entry)
+
+checkWith :: StackBytes -> Maybe Guest -> Image -> Either Failure ()
+checkWith (StackBytes budget) selected image = do
   forM_ (S.toList (imageInstructions image)) $ \(Guest address) -> wordAt image address >> pure ()
-  let symbols = [symbol | symbol <- imageSymbols image, F.symbolSize symbol > 0, S.member (Guest (F.symbolAddress symbol)) (imageInstructions image)]
-      entries = S.fromList (map (Guest . F.symbolAddress) symbols)
-      nonReturning = nonReturningEntries image symbols
-  frames <- forM symbols $ \symbol -> do
-    size <- frameBytes entries nonReturning image symbol
-    let start = F.symbolAddress symbol
-        end = start + F.symbolSize symbol
+  let Guest imageStart = imageBase image
+      imageEnd = toInteger imageStart + toInteger (B.length (imageBytes image))
+      declaredEntries = S.fromList
+        [ F.symbolAddress symbol
+        | symbol <- imageSymbols image
+        , S.member (Guest (F.symbolAddress symbol)) (imageInstructions image)
+        ]
+      instructionSpan address =
+        let limit = maybe imageEnd toInteger (S.lookupGT address declaredEntries)
+        in 4 * fromIntegral (length (takeWhile
+          (\point -> S.member (Guest point) (imageInstructions image))
+          [fromInteger value | value <- [toInteger address, toInteger address + 4 .. limit - 4]]))
+      functionSizes = M.fromListWith max
+        [ (address, max (F.symbolSize symbol) (instructionSpan address))
+        | symbol <- imageSymbols image
+        , let address = F.symbolAddress symbol
+        , S.member (Guest address) (imageInstructions image)
+        ]
+      declaredFunctions = [Function address size | (address, size) <- M.toList functionSizes, size > 0]
+      sameFunction source target = any
+        (\function -> let low = toInteger (functionEntry function)
+                          high = low + toInteger (functionSize function)
+                          point value = let integer = toInteger value in low <= integer && integer < high
+          in point source && point target)
+        declaredFunctions
+  syntheticEntries <- fmap concat $ forM (S.toList (imageInstructions image)) $ \(Guest address) -> do
+    instruction <- A.decode address <$> wordAt image address
+    pure [target | A.Branch _ _ target <- [instruction]
+      , S.member (Guest target) (imageInstructions image)
+      , not (S.member target declaredEntries)
+      , not (sameFunction address target)]
+  let allFunctionSizes = M.unionWith max functionSizes
+        (M.fromListWith max [(target, instructionSpan target) | target <- syntheticEntries])
+      functions = [Function address size | (address, size) <- M.toList allFunctionSizes, size > 0]
+      entries = S.fromList (map (Guest . functionEntry) functions)
+      nonReturning = nonReturningEntries image functions
+  frames <- forM functions $ \function -> do
+    size <- frameBytes entries nonReturning image function
+    let start = functionEntry function
+        end = start + functionSize function
     callees <- fmap concat $ forM [start, start + 4 .. end - 4] $ \address ->
       if not (S.member (Guest address) (imageInstructions image)) then pure []
       else do
@@ -216,19 +316,51 @@ check (StackBytes budget) image = do
       destination edge = case edge of Call _ target -> target; Tail _ target -> target
       site edge = case edge of Call address _ -> address; Tail address _ -> address
       grows edge = case edge of Call _ _ -> True; Tail _ _ -> False
-      visit path calls address = case M.lookup address byAddress of
-        Nothing -> Right ()
-        Just frame -> forM_ (frameCallees frame) $ \edge -> do
-          let target = destination edge
-              nextCalls = calls + if grows edge then 1 else 0
-          case lookup target path of
-            Just previousCalls -> when (nextCalls > previousCalls) (Left (RecursiveCall (Guest (site edge)) (Guest target)))
-            Nothing -> visit ((target, nextCalls) : path) nextCalls target
-      chain path frame
-        | frameEntry frame `elem` path = 0
-        | otherwise = maximum (frameSize frame :
-            [ (if grows edge then frameSize frame else 0) + chain (frameEntry frame : path) callee
-            | edge <- frameCallees frame, Just callee <- [M.lookup (destination edge) byAddress]])
-  forM_ frames $ \frame -> visit [(frameEntry frame, 0 :: Int)] 0 (frameEntry frame)
-  forM_ frames $ \frame -> when (chain [] frame > budget)
-    (Left (BudgetExceeded (Guest (frameEntry frame)) (StackBytes (chain [] frame))))
+      components = zip [0 :: Int ..] (map G.flattenSCC (G.stronglyConnComp
+        [(frame, frameEntry frame, map destination (frameCallees frame)) | frame <- frames]))
+      componentByEntry = M.fromList
+        [(frameEntry frame, component) | (component, members) <- components, frame <- members]
+      internalGrowingEdges =
+        [ (component, edge)
+        | (component, members) <- components
+        , frame <- members
+        , edge <- frameCallees frame
+        , grows edge
+        , M.lookup (destination edge) componentByEntry == Just component
+        ]
+      componentSuccessors = M.fromList
+        [(component, S.fromList
+          [ targetComponent
+          | frame <- members
+          , edge <- frameCallees frame
+          , Just targetComponent <- [M.lookup (destination edge) componentByEntry]
+          , targetComponent /= component
+          ])
+        | (component, members) <- components]
+      reachable seen [] = seen
+      reachable seen (component : rest)
+        | S.member component seen = reachable seen rest
+        | otherwise = reachable (S.insert component seen)
+            (S.toList (M.findWithDefault S.empty component componentSuccessors) ++ rest)
+      componentDemands = LM.fromList [(component, demand component members) | (component, members) <- components]
+      demand component members = maximum
+        (map frameSize members ++
+          [ (if grows edge then frameSize frame else 0) + componentDemands LM.! targetComponent
+          | frame <- members
+          , edge <- frameCallees frame
+          , Just targetComponent <- [M.lookup (destination edge) componentByEntry]
+          , targetComponent /= component
+          ])
+      frameDemand frame = componentDemands LM.! (componentByEntry M.! frameEntry frame)
+  roots <- case selected of
+    Nothing -> pure frames
+    Just entry@(Guest address) -> case M.lookup address byAddress of
+      Nothing -> Left (InvalidFunction entry)
+      Just frame -> pure [frame]
+  let reachableComponents = reachable S.empty
+        [componentByEntry M.! frameEntry frame | frame <- roots]
+  case [edge | (component, edge) <- internalGrowingEdges, S.member component reachableComponents] of
+    edge : _ -> Left (RecursiveCall (Guest (site edge)) (Guest (destination edge)))
+    [] -> pure ()
+  forM_ roots $ \frame -> when (frameDemand frame > budget)
+    (Left (BudgetExceeded (Guest (frameEntry frame)) (StackBytes (frameDemand frame))))
