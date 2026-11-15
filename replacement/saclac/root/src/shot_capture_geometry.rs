@@ -91,7 +91,8 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor, I: Isp, 
         let geometry = WindowGeometry { window: [frame.crop[0], frame.crop[1]], inner: rectangle(frame.crop[2..].try_into().expect("crop rectangle")), outer: rectangle(frame.sensor) };
         let kind = AreaKind(xm1_shot_sequence::capture_stock::area_mode(mode));
         if let Ok(list) = self.geometry.borrow_mut().adjusted_window_areas(kind, ProfileHandle(selector), &geometry) {
-            publish_areas(&mut self.services.borrow().machine.clone(), buffer, &list);
+            let offset = xm1_shot_sequence::capture_stock::AREA_BUFFER_LISTS[match mode { AreaMode::Second => 1, AreaMode::Third => 2 }];
+            publish_areas(&mut self.services.borrow().machine.clone(), ClientRef(buffer.0.wrapping_add(offset)), &list);
         }
     }
 
