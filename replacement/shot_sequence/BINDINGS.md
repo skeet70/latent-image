@@ -97,6 +97,8 @@ Every method of every non-aggregate trait required by ExternalPorts is listed be
 
 `CaptureJobClient::calibration_block` and `statistics_window` require word-aligned sources, matching native `ldmib` at `0xf2cca0` and `ldmne` at `0xf2ce20`. Root rejects misaligned sources before reading them. `CaptureRecords::load_profile` narrows its source after destination admission. Native data-abort and recovery handling remain unqualified.
 
+`AbsorbLibrary::compensated` receives the saved selection-source row and the comparison target as distinct `CompensationRow` and `CompensationStep` values. Native `0xf1d73c..0xf1d748` passes that row in `r1` to `0x746a80`. The owned configuration call uses `Step(target.0)` and `Row(source.0)`; it must not reread the selection snapshot after comparison.
+
 ## Completion and result ownership
 
 | Completion | Root callback payload / delivery |

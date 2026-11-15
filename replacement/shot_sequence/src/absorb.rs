@@ -152,6 +152,12 @@ pub trait SelectionGrid<P: ?Sized> {
 
 pub use xm1_saclac_interface::selection::ClassifyStage;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompensationStep(pub u32);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompensationRow(pub u32);
+
 /// Calculation-library and configuration entries the absorb calls.
 pub trait AbsorbLibrary {
     fn subject_source(&mut self, record: RecordHandle, refinement: u32) -> u32;
@@ -161,7 +167,7 @@ pub trait AbsorbLibrary {
     fn selection_changed(&mut self, record: RecordHandle, source: u32, reference: u32) -> bool;
     /// Whether a reference is available for `source`, and the target the comparison leaves.
     fn compare_reference(&mut self, record: RecordHandle, source: u32) -> (bool, u32);
-    fn compensated(&mut self, target: u32) -> i16;
+    fn compensated(&mut self, target: CompensationStep, source: CompensationRow) -> i16;
     fn classify_level(&mut self, value: i16) -> u32;
     fn split_reference(&mut self) -> u32;
     fn lower_reference(&mut self, lens_reference: LensReference) -> u32;
@@ -436,9 +442,10 @@ fn area_detail(pass: ResultPass, cell: GridCell, index: AreaIndex, record: Recor
 /// and no other reference is available for it.
 fn auxiliary_reference(record: RecordHandle, mode: u32, require: bool, reference: u32, index: AreaIndex, ports: &mut impl AbsorbPorts) -> AuxiliaryReference {
     if mode != AUXILIARY_MODE || index.get() != 0 { return AuxiliaryReference::default(); }
-    let source = ports.selection_source(record);
-    let changed = require && ports.selection_changed(record, source, reference);
-    let (available, target) = ports.compare_reference(record, source);
+    let source = CompensationRow(ports.selection_source(record));
+    let changed = require && ports.selection_changed(record, source.0, reference);
+    let (available, target) = ports.compare_reference(record, source.0);
+    let target = CompensationStep(target);
     let outcome = if changed {
         AuxiliaryOutcome::Unchecked
     } else if available || require {
@@ -446,7 +453,7 @@ fn auxiliary_reference(record: RecordHandle, mode: u32, require: bool, reference
     } else {
         AuxiliaryOutcome::Replaced
     };
-    AuxiliaryReference { outcome, source, target, normalized: ports.compensated(target) }
+    AuxiliaryReference { outcome, source: source.0, target: target.0, normalized: ports.compensated(target, source) }
 }
 
 /// Stores the plain summary of `cell` with the first area's weight.

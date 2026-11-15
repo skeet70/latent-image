@@ -313,7 +313,7 @@ impl AbsorbLibrary for ExternalFake {
     fn evaluate_distances(&mut self, pass: ResultPass, _cell: GridCell, index: AreaIndex) {  AbsorbLibrary::evaluate_distances(&mut self.absorb, pass, _cell, index) }
     fn selection_changed(&mut self, _record: RecordHandle, _source: u32, _reference: u32) -> bool {  AbsorbLibrary::selection_changed(&mut self.absorb, _record, _source, _reference) }
     fn compare_reference(&mut self, _record: RecordHandle, _source: u32) -> (bool, u32) {  AbsorbLibrary::compare_reference(&mut self.absorb, _record, _source) }
-    fn compensated(&mut self, target: u32) -> i16 {  AbsorbLibrary::compensated(&mut self.absorb, target) }
+    fn compensated(&mut self, target: CompensationStep, source: CompensationRow) -> i16 {  AbsorbLibrary::compensated(&mut self.absorb, target, source) }
     fn classify_level(&mut self, value: i16) -> u32 {  AbsorbLibrary::classify_level(&mut self.absorb, value) }
     fn split_reference(&mut self) -> u32 {  AbsorbLibrary::split_reference(&mut self.absorb) }
     fn lower_reference(&mut self, _lens_reference: LensReference) -> u32 {  AbsorbLibrary::lower_reference(&mut self.absorb, _lens_reference) }
