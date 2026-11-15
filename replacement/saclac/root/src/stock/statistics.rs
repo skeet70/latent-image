@@ -2,6 +2,7 @@ use xm1_saclac_interface::ClientCallback;
 use crate::statistics_results::{Delivery, ResultWords};
 
 pub static S1_REPORTS: crate::statistics_results::ReportingGate = crate::statistics_results::ReportingGate::new(true);
+pub static PIPELINE_PROGRESS: crate::statistics_results::ReportingGate = crate::statistics_results::ReportingGate::new(false);
 
 pub struct NativeDelivery;
 impl Delivery for NativeDelivery {

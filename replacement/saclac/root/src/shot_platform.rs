@@ -43,6 +43,7 @@ pub(crate) struct PipelineState {
 
 impl<M: Machine + Clone, R: Memory, E: StockEntries, P, I, T, A, Q>
     xm1_shot_sequence::pipeline_work::PipelinePlatform for Libraries<'_, M, R, E, P, I, T, A, Q> {
+    fn publish_statistics_progress(&mut self, enabled: bool) { self.callbacks.pipeline.progress_gate.publish(enabled); }
     fn setting(&mut self, setting: xm1_shot_sequence::pipeline_work::PipelineSetting) -> u32 {
         use xm1_shot_sequence::stock::pipeline::{setting_entry, SettingReader};
         let (reader, key) = setting_entry(setting);

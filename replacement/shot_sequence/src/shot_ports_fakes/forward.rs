@@ -422,7 +422,6 @@ impl PipelineLibrary for ExternalFake {
     fn store_converted_input(&mut self) {  PipelineLibrary::store_converted_input(&mut self.pipeline) }
     fn begin_scan(&mut self) {  PipelineLibrary::begin_scan(&mut self.pipeline) }
     fn active_channels(&mut self) -> u8 {  PipelineLibrary::active_channels(&mut self.pipeline) }
-    fn release_second_channel(&mut self) {  PipelineLibrary::release_second_channel(&mut self.pipeline) }
     fn position_correction(&mut self) -> u32 {  PipelineLibrary::position_correction(&mut self.pipeline) }
     fn scaled_value(&mut self, _scan: PlanBlock, index: u8) -> u16 {  PipelineLibrary::scaled_value(&mut self.pipeline, _scan, index) }
     fn scaled_levels(&mut self, _scan: PlanBlock, value: u16, index: u8) -> [i16; TONE_LEVELS] {  PipelineLibrary::scaled_levels(&mut self.pipeline, _scan, value, index) }
@@ -435,7 +434,6 @@ impl PipelineLibrary for ExternalFake {
     fn request_raw(&mut self, _plan: &Plan, completion: Completion) {  PipelineLibrary::request_raw(&mut self.pipeline, _plan, completion) }
     fn request_tone(&mut self, request: &ToneRequest, _completion: Completion) {  PipelineLibrary::request_tone(&mut self.pipeline, request, _completion) }
     fn request_gradation(&mut self, request: &GradationRequest, _completion: Completion) {  PipelineLibrary::request_gradation(&mut self.pipeline, request, _completion) }
-    fn release_calculation(&mut self) {  PipelineLibrary::release_calculation(&mut self.pipeline) }
 }
 impl PlanMemory for ExternalFake {
     fn subject(&mut self, _block: PlanBlock) -> SubjectBlock {  PlanMemory::subject(&mut self.pipeline, _block) }
@@ -507,6 +505,7 @@ impl PipelinePlatform for ExternalFake {
     fn store_work(&mut self, area: WorkArea, store: WorkStore) {  PipelinePlatform::store_work(&mut self.pipeline, area, store) }
     fn work_marked(&mut self, _area: WorkArea) -> bool {  PipelinePlatform::work_marked(&mut self.pipeline, _area) }
     fn flush_work(&mut self, area: WorkArea) {  PipelinePlatform::flush_work(&mut self.pipeline, area) }
+    fn publish_statistics_progress(&mut self, enabled: bool) { PipelinePlatform::publish_statistics_progress(&mut self.pipeline, enabled); }
 }
 }
 

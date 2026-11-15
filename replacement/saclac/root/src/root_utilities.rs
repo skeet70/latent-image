@@ -59,8 +59,8 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Utilities<'_, M, R, E, P
                 let enabled = parameter_word(&machine, CommandKind::Command25, 2);
                 machine.write_u32(0x95_4ddc, enabled);
                 machine.enter(0x76_f5dc, &[self.callbacks.lens_status.0 as usize, enabled as usize]);
-                let position = machine.enter(0x76_da84, &[]) as i16;
-                let mode = if machine.enter(0x76_da38, &[]) != 0 { 1 } else { machine.enter(0x76_dad4, &[]) };
+                let position = crate::calibration_inputs::lens_position(&machine) as i16;
+                let mode = if machine.enter(0x76_da38, &[]) != 0 { 1 } else { crate::calibration_inputs::lens_direction(&machine) };
                 // f02840 supplies zero to this query, independently of the Root cache owner.
                 let LensBounds(values) = bounds(&mut *self.services.borrow_mut(), record_handle_from_a2(0), position, mode);
                 command_reply(machine, CommandKind::Command25, CompletionStatus(0), &values);

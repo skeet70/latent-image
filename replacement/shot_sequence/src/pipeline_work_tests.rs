@@ -63,7 +63,6 @@ enum Call {
     Tone(ToneRequest),
     Gradation(GradationRequest),
     Raw,
-    Release,
     History(OutcomeHistory),
     Correction(CorrectionRecord),
     Outcome(OutcomeValue),
@@ -108,6 +107,7 @@ pub(super) struct World {
     idle: bool,
     lens_position: u32,
     direction: u32,
+    progress_enabled: bool,
 }
 
 impl World {
@@ -135,6 +135,7 @@ impl World {
             idle: false,
             lens_position: 0,
             direction: 0,
+            progress_enabled: false,
         }
     }
 
@@ -173,7 +174,6 @@ impl PipelineLibrary for World {
     fn store_converted_input(&mut self) { self.calls.push(Call::Converted); }
     fn begin_scan(&mut self) {}
     fn active_channels(&mut self) -> u8 { self.channels }
-    fn release_second_channel(&mut self) {}
     fn position_correction(&mut self) -> u32 { 0 }
     fn scaled_value(&mut self, _scan: PlanBlock, index: u8) -> u16 { u16::from(index) + 1000 }
     fn scaled_levels(&mut self, _scan: PlanBlock, value: u16, index: u8) -> [i16; TONE_LEVELS] { [value as i16 + i16::from(index); TONE_LEVELS] }
@@ -189,7 +189,6 @@ impl PipelineLibrary for World {
     }
     fn request_tone(&mut self, request: &ToneRequest, _completion: Completion) { self.calls.push(Call::Tone(*request)); }
     fn request_gradation(&mut self, request: &GradationRequest, _completion: Completion) { self.calls.push(Call::Gradation(*request)); }
-    fn release_calculation(&mut self) { self.calls.push(Call::Release); }
 }
 
 impl PlanMemory for World {
@@ -286,6 +285,7 @@ impl PipelinePlatform for World {
     fn store_work(&mut self, area: WorkArea, store: WorkStore) { self.calls.push(Call::Work(area, store)); }
     fn work_marked(&mut self, _area: WorkArea) -> bool { self.work_marked }
     fn flush_work(&mut self, area: WorkArea) { self.calls.push(Call::Flush(area)); }
+    fn publish_statistics_progress(&mut self, enabled: bool) { self.progress_enabled = enabled; }
 }
 
 impl Client for World {
@@ -702,13 +702,6 @@ fn weighted_statistics_send_their_weights_before_the_request() {
     assert!(matches!(calls[1], Call::Weights(0x7000, sent) if sent.weights == weights));
     let Call::Statistics(setup) = calls[2] else { panic!("statistics requested") };
     assert_eq!((setup.weighted, setup.selection[0], setup.capture.words[3]), (true, 0x33, 0x44));
-
-    effect(&mut work, E::SetToneResult(true), &mut prepared, &mut world);
-    work.statistics_progress(&mut world);
-    assert_eq!(world.take(), [Call::Release]);
-    effect(&mut work, E::SetToneResult(false), &mut prepared, &mut world);
-    work.statistics_progress(&mut world);
-    assert!(world.take().is_empty());
 }
 
 #[test]

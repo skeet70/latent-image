@@ -102,3 +102,22 @@ pub(crate) fn focus_result(bytes: &[u8; 96]) -> FocusResult {
         source: bytes[72..92].try_into().unwrap(), retry_requested: word(92),
     }
 }
+
+pub(crate) fn raw_statistics(state: &MotionState) -> (xm1_saclac_interface::calc::Record<60>, xm1_saclac_interface::calc::Record<24>) {
+    let statistics = state.statistics();
+    let mut first = [0; 60];
+    for (i, value) in statistics.cell_size.into_iter().enumerate() { half(&mut first, 2 * i, value); }
+    word(&mut first, 4, statistics.trace.0);
+    for (i, value) in statistics.rates.into_iter().enumerate() { word(&mut first, 8 + 4 * i, value); }
+    for (i, value) in statistics.channel_scales.into_iter().chain(statistics.channel_weights).enumerate() { half(&mut first, 24 + 2 * i, value); }
+    half(&mut first, 36, statistics.exposure_offset as u16);
+    half(&mut first, 38, statistics.level_bounds[0] as u16);
+    half(&mut first, 40, statistics.level_bounds[1] as u16);
+    word(&mut first, 44, statistics.curve_table.key());
+    word(&mut first, 48, u32::from(statistics.class));
+    word(&mut first, 52, statistics.area.column);
+    word(&mut first, 56, statistics.area.row);
+    let mut second = [0; 24];
+    for (i, value) in statistics.buffers.into_iter().chain(core::iter::once(statistics.trace)).enumerate() { word(&mut second, 4 * i, value.0); }
+    (xm1_saclac_interface::calc::Record(first), xm1_saclac_interface::calc::Record(second))
+}

@@ -127,7 +127,7 @@ fn replanning(measured_frames: u32) -> (MotionState, Bench) {
     let mut bench = Bench::default();
     bench.property(MEASURED_RUN_FRAMES, measured_frames);
     let earlier = [SpeedStep { frame: 0, speed: 300 }];
-    motion.replan_from_run(&mut bench, &earlier, SpeedStep { frame: 0, speed: 500 }, &RUN);
+    motion.replan_from_run(&mut bench, earlier, SpeedStep { frame: 0, speed: 500 }, &RUN);
     (motion, bench)
 }
 

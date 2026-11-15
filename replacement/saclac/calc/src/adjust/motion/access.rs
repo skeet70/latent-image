@@ -13,6 +13,9 @@ use crate::adjust::motion::state::{FrameExposures, MotionState, SampleSchedule};
 use crate::adjust::motion::statistics::Statistics;
 
 impl MotionState {
+    /// The frame's retained sample/trace area.
+    pub fn section(&self) -> xm1_saclac_interface::calc::SharedAddress { self.section }
+
     /// The record, lens and selection-list readings (output +0x8).
     pub fn readings(&self) -> &RecordReadings { &self.readings }
 

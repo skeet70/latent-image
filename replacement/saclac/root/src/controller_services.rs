@@ -171,9 +171,9 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> LensControl for Services
         self.machine.enter(match probe { LensProbe::First => 0x76_d9a8, LensProbe::Second => 0x76_da38, LensProbe::Third => 0x76_dba4 }, &[]) == 2
     }
     fn value(&mut self) -> u32 { self.machine.enter(0x76_da48, &[]) }
-    fn position(&mut self) -> u32 { self.machine.enter(0x76_da84, &[]) }
-    fn mode_index(&mut self) -> u32 { self.machine.enter(0x76_dad4, &[]) }
-    fn reference(&mut self) -> u32 { self.machine.enter(0x76_f340, &[]) }
+    fn position(&mut self) -> u32 { crate::calibration_inputs::lens_position(&self.machine) }
+    fn mode_index(&mut self) -> u32 { crate::calibration_inputs::lens_direction(&self.machine) }
+    fn reference(&mut self) -> u32 { crate::calibration_inputs::lens_position_flags(&self.machine) }
     fn step(&mut self) -> u32 { self.machine.enter(0x76_fc4c, &[]) }
     fn channel(&mut self) -> (u32, u16) {
         let mut bytes = Aligned([0; 8]);
@@ -258,10 +258,10 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Services<M, R, E, P> {
         let mut pair = [3, 3];
         let (position, channel, reference, mode) = if enabled == 1 {
             bytes[..4].copy_from_slice(&1u32.to_le_bytes());
-            let position = self.machine.enter(0x76_da84, &[]) as u16;
+            let position = crate::calibration_inputs::lens_position(&self.machine) as u16;
             let channel = self.machine.enter(0x76_d9c8, &[]);
             let reference = self.machine.enter(0x76_dbb4, &[]);
-            let mode = self.machine.enter(0x76_dad4, &[]);
+            let mode = crate::calibration_inputs::lens_direction(&self.machine);
             if profile_pair {
                 let source = self.field(record, &record::group_02::AT_00F4);
                 pair = core::array::from_fn(|index| u32::from_le_bytes(source[4 * index..4 * index + 4].try_into().expect("lens session pair")));
@@ -292,7 +292,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Services<M, R, E, P> {
                 let channel = if self.entries.header_byte(record, SharedHeaderByte::At63) != 0 {
                     0
                 } else { u32::from(self.entries.header_byte(record, SharedHeaderByte::At46)) };
-                let reference = self.machine.enter(0x76_f340, &[]);
+                let reference = crate::calibration_inputs::lens_position_flags(&self.machine);
                 let position = self.machine.enter(0x74_8730, &[0, 0, channel as usize, 0, reference as usize, 0]) as u16;
                 bytes[12..14].copy_from_slice(&position.to_le_bytes());
                 bytes[16..24].fill(0);

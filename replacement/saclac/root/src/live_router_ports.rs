@@ -101,7 +101,7 @@ impl<M: CommandSource + Clone, R: Memory, E: StockEntries,
                     let _ = services.records.write_shared(record, &shared::group_19::AT_0120, options);
                     services.shared_bytes(record, &shared::group_26::AT_0240)
                 };
-                target[..2].copy_from_slice(&(machine.enter(0x76_da84, &[]) as u16).to_le_bytes());
+                target[..2].copy_from_slice(&(crate::calibration_inputs::lens_position(&machine) as u16).to_le_bytes());
                 let _ = self.layers.services.borrow_mut().records.write_shared(record, &shared::group_26::AT_0240, target);
             }
             Effect::RecordDriveOrigin(origin) => machine.write_u32(crate::stock::LIVE_DRIVE_ORIGIN, u32::from(origin == DriveOrigin::Cancel)),

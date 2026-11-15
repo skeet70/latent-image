@@ -1,13 +1,14 @@
 #![forbid(unsafe_code)]
 
 use xm1_saclac_calc::{adjust::{metering::MeteringTables, motion::{drive::DriveKind, ports::*, preparation::{CaptureFrames, FrameSize, LensStatus}}, peak::Logarithms, timing::CaptureTiming}, exposure::{correction, ports::Placement}};
+use xm1_saclac_config::{dump::DumpDerivations, table::{Row, Step}};
 use xm1_saclac_imaging::{capture::gains::{GainClass, GainSources}, driver::Isp};
 use xm1_saclac_interface::{ImageProcessor, RecordHandle};
 use xm1_saclac_profile_geometry::{controller::Tables, ports::Retained, profile::{ProfileHandle, ProfileTables}};
 use xm1_saclac_profile_records::{Memory, StockEntries};
 use xm1_saclac_search_bindings::calc::Tables as Calibration;
 use xm1_saclac_shared::stock::{Argument::{Buffer, Word}, Machine};
-use crate::{calculation_services::Calculation, capture_gains::Sources, stock::acquisition::Aligned};
+use crate::{calculation_services::Calculation, calibration_inputs::Native, capture_gains::Sources, stock::acquisition::Aligned};
 
 macro_rules! implement {
     ($contract:path { $($methods:tt)* }) => {
@@ -30,6 +31,17 @@ implement!(LensTables {
     fn table_offset(&mut self, lens: u32, step: u32, delta: i16) -> i32 { self.services.table_offset(lens, step, delta) }
     fn channel_start(&mut self, lens: u32, channel: u8, reference: u32) -> i16 { self.services.channel_start(lens, channel, reference) }
     fn period_position(&mut self, period: u16, lens: u32, step: u32, reference: u32) -> i32 { self.services.period_position(period, lens, step, reference) }
+});
+implement!(LensWords {
+    fn position_rate(&mut self, position: i16, lens: u32, step: u32, reference: u32) -> u32 {
+        self.services.machine.enter(0x749be4, &[position as isize as usize, lens as usize, step as usize, reference as usize, 1])
+    }
+    fn curve_word(&mut self, lens: u32) -> u32 {
+        xm1_saclac_config::channel::scaled_packed(&self.services.stock, xm1_saclac_shared::settings::Channel(lens as i32))
+    }
+    fn mapped_step_word(&mut self, step: u32, lens: u32) -> u32 {
+        u32::from(Native(&self.services.machine, &self.services.stock).transformed_word(Step(step), Row(lens)))
+    }
 });
 implement!(LensCalibration {
     fn steps(&mut self) -> u32 { self.services.machine.enter(0x74677c, &[]) }

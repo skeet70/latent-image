@@ -14,10 +14,28 @@ use crate::{calculation_services::Calculation, command_source::CommandSource, ex
 pub trait BindRecord { fn bind_record(&mut self, record: RecordHandle); }
 
 #[derive(Clone, Copy)]
-pub struct Callbacks {
+pub struct Callbacks<'a> {
     pub exposure: crate::exposure_services::Callbacks,
     pub calculation: StockCallbackWord,
     pub statistics: StockCallbackWord,
+    pub pipeline: PipelineCallbacks<'a>,
+}
+
+#[derive(Clone, Copy)]
+pub struct PipelineCallbacks<'a> {
+    pub raw_calculated: StockCallbackWord,
+    pub tone_calculated: StockCallbackWord,
+    pub gradation_calculated: StockCallbackWord,
+    pub raw_checked: StockCallbackWord,
+    pub frame_prepared: StockCallbackWord,
+    pub tone_progress: StockCallbackWord,
+    pub tone_finished: StockCallbackWord,
+    pub output: StockCallbackWord,
+    pub commit: StockCallbackWord,
+    pub statistics: StockCallbackWord,
+    pub statistics_commit: StockCallbackWord,
+    pub statistics_progress: StockCallbackWord,
+    pub progress_gate: &'a crate::statistics_results::ReportingGate,
 }
 
 /// Persistent library capabilities over the same configuration, records and exposure context.
@@ -35,7 +53,7 @@ pub struct Libraries<'a, M, R, E, P, I, T, A, Q> {
     pub live_search_record: &'a xm1_saclac_search_bindings::RecordBinding,
     pub subjects: &'a RefCell<crate::shot_subjects::Workspace>,
     pub motion: &'a RefCell<Option<xm1_saclac_calc::adjust::motion::state::MotionState>>,
-    pub callbacks: Callbacks,
+    pub callbacks: Callbacks<'a>,
 }
 impl<M, R, E, P, I, T, A, Q> BindRecord for Libraries<'_, M, R, E, P, I, T, A, Q> {
     fn bind_record(&mut self, record: RecordHandle) { self.record = record; }

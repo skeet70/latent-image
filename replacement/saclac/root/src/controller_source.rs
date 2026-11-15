@@ -69,17 +69,17 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: LensDc, S: StateMemory, 
         let mut services = self.services.borrow_mut();
         let mut range = services.shared_bytes(record, &shared::group_17::LENS_SNAPSHOT);
         let word = |at| u32::from_le_bytes(range[at..at + 4].try_into().expect("release range word"));
-        let mut position = services.machine.enter(0x76_da84, &[]) as i16;
-        if word(32) == 0 { return services.machine.enter(0x76_da84, &[]) as u16; }
+        let mut position = crate::calibration_inputs::lens_position(&services.machine) as i16;
+        if word(32) == 0 { return crate::calibration_inputs::lens_position(&services.machine) as u16; }
         if services.entries.header_byte(record, SharedHeaderByte::At47) == 0 {
             let Services { peers, stock, .. } = &mut *services;
             let _ = lens::synchronize(peers, stock);
-            position = services.machine.enter(0x76_da84, &[]) as i16;
+            position = crate::calibration_inputs::lens_position(&services.machine) as i16;
         }
         let reference = self.shot.borrow_mut().state().request_word();
         let selector = services.records.read_element(record, &record::group_05::AT_0170, Index::new(0).expect("first lens selector")).unwrap_or_default();
         let convert = services.field(record, &record::group_00::AT_0064) == 1;
-        let mode = services.machine.enter(0x76_dad4, &[]);
+        let mode = crate::calibration_inputs::lens_direction(&services.machine);
         let arguments = RemapArguments([position as i32 as u32, reference, selector, word(8), u32::from(convert), 0, mode]);
         let position = services.stock.remap(arguments).0;
         range[32..36].fill(0);

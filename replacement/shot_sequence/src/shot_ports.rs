@@ -91,10 +91,6 @@ impl<M: StateMemory, X> ShotPorts<M, X> {
         self.exposure.keep_correction(correction);
     }
 
-    /// Statistics 0x4003's progress callback, before its final completion.
-    pub fn statistics_progress(&mut self) where X: crate::pipeline_work::PipelineLibrary {
-        self.pipeline.statistics_progress(&mut self.external);
-    }
 }
 
 impl<M: StateMemory, X: ExternalPorts> ShotPorts<M, X> {

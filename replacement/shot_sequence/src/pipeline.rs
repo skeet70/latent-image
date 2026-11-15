@@ -218,7 +218,6 @@ impl Pipeline {
                 if ports.query(Query::Pipeline(Q::ToneRestart)) {
                     self.stage = Image1f;
                     ports.effect(Effect::Pipeline(P::ResumeFrame));
-                    ports.effect(Effect::Pipeline(P::ReleaseFrameLocks));
                     ports.effect(Effect::Pipeline(P::ArmFrame));
                     ports.effect(Effect::Pipeline(P::SynchronizeFrame));
                     self.request(R::Image1f, ports);
@@ -245,7 +244,6 @@ impl Pipeline {
             }
             (Image22, Image52) => {
                 ports.effect(Effect::Pipeline(P::ResumeFrame));
-                ports.effect(Effect::Pipeline(P::ReleaseFrameLocks));
                 if !ports.query(Query::Pipeline(Q::SkipLensFinish)) {
                     self.stage = FinishLens;
                     return finish.start(FinishKind::HalfPressLens, record, ports);

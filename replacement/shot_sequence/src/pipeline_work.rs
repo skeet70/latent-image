@@ -285,7 +285,6 @@ pub trait PipelineLibrary {
     fn store_converted_input(&mut self);
     fn begin_scan(&mut self);
     fn active_channels(&mut self) -> u8;
-    fn release_second_channel(&mut self);
     fn position_correction(&mut self) -> u32;
     fn scaled_value(&mut self, scan: PlanBlock, index: u8) -> u16;
     fn scaled_levels(&mut self, scan: PlanBlock, value: u16, index: u8) -> [i16; TONE_LEVELS];
@@ -299,8 +298,6 @@ pub trait PipelineLibrary {
     fn request_raw(&mut self, plan: &Plan, completion: Completion);
     fn request_tone(&mut self, request: &ToneRequest, completion: Completion);
     fn request_gradation(&mut self, request: &GradationRequest, completion: Completion);
-    /// Calc 0x3c12.
-    fn release_calculation(&mut self);
 }
 
 /// The motion library's blocks the plan names.
@@ -356,7 +353,7 @@ pub trait PipelinePeers {
     fn request_scan_selection(&mut self);
     fn request_output(&mut self, completion: Completion);
     fn request_commit(&mut self, completion: Completion);
-    /// Statistics 0x03; the request's progress callback enters `PipelineWork::statistics_progress`.
+    /// Statistics0x03; progress reads the published release gate without entering Shot.
     fn request_statistics(&mut self, setup: &StatisticsSetup, completion: Completion);
     fn request_statistics_commit(&mut self, completion: Completion);
     fn store_statistics_weights(&mut self, target: u32, weights: &StatisticsWeights);
@@ -385,6 +382,8 @@ pub trait PipelinePlatform {
     fn store_work(&mut self, area: WorkArea, store: WorkStore);
     fn work_marked(&mut self, area: WorkArea) -> bool;
     fn flush_work(&mut self, area: WorkArea);
+    /// Publishes the progress callback's release gate before entering another service.
+    fn publish_statistics_progress(&mut self, enabled: bool);
 }
 
 pub trait PipelineBoundary: PipelineLibrary + PlanMemory + PipelineRecords + PipelineProfiles + PipelinePeers + PipelinePlatform + Client + Lens {}
@@ -447,10 +446,6 @@ impl PipelineWork {
     /// A statistics upload is pending (0x16b5440).
     pub fn statistics_pending(&self) -> bool { self.flags.statistics_pending }
 
-    /// The statistics 0x03 request's progress callback (0xf20604).
-    pub fn statistics_progress(&self, library: &mut impl PipelineLibrary) {
-        if self.flags.tone_statistics { library.release_calculation(); }
-    }
 
     /// Takes the result a completion delivers to the pipeline.
     pub fn receive(&mut self, completed: Completed<'_>, boundary: &mut (impl PlanMemory + PipelinePlatform)) {
@@ -499,7 +494,6 @@ impl PipelineWork {
                 let channels = boundary.active_channels();
                 if boundary.record_mode_available(FRAME_RECORD_MODE) { boundary.finish_record_mode(channels); }
             }
-            E::ReleaseFrameLocks => boundary.release_second_channel(),
             E::PrepareFallback => self.prepare_fallback(prepared, state, boundary),
             E::ConcludeRaw => {
                 boundary.conclude_raw();
@@ -508,7 +502,7 @@ impl PipelineWork {
             E::SetStatisticsPending(pending) => self.flags.statistics_pending = pending,
             E::SetUploadDone(done) => self.flags.upload_done = done,
             E::SetPhase(phase) => self.store_work(WorkStore::Phase(phase), boundary),
-            E::SetToneResult(result) => self.set_tone_result(result),
+            E::SetToneResult(result) => self.set_tone_result(result, boundary),
             E::SetFinishDone => self.flags.finish_done = true,
             E::Reset => self.reset(boundary),
             E::Request(request) => self.request(request, boundary),
@@ -569,6 +563,7 @@ impl PipelineWork {
         self.mode = parameters.mode.0;
         if self.mode != FINISH_ONLY_MODE {
             *self = Self { mode: self.mode, bound: self.bound, frame_point: self.frame_point, ..Self::default() };
+            boundary.publish_statistics_progress(false);
         }
         self.record = Some(record);
         self.work = parameters.frame_slot.and_then(|slot| boundary.frame(slot)).map(layout::work_area);
@@ -597,17 +592,19 @@ impl PipelineWork {
         }
     }
 
-    fn reset(&mut self, boundary: &mut impl PipelineLibrary) {
+    fn reset(&mut self, boundary: &mut (impl PipelineLibrary + PipelinePlatform)) {
         if self.frame != FrameFlags::default() { boundary.store_converted_input(); }
         self.flags = Flags { statistics_pending: self.flags.statistics_pending, ..Flags::default() };
+        boundary.publish_statistics_progress(false);
         self.progress.level = 0;
         self.frame = FrameFlags::default();
         self.phase = 0;
     }
 
-    fn set_tone_result(&mut self, result: bool) {
+    fn set_tone_result(&mut self, result: bool, boundary: &mut impl PipelinePlatform) {
         self.flags.tone_result = result;
         self.flags.tone_statistics = result && (self.flags.tone_statistics || self.flags.weighted);
+        boundary.publish_statistics_progress(self.flags.tone_statistics);
     }
 
     fn start_frame(&mut self, boundary: &mut impl PipelineBoundary) {
@@ -871,7 +868,7 @@ impl PipelineWork {
             R::Image1e => self.request_frame(boundary),
             R::Image1f => {
                 self.progress.level = 0;
-                self.set_tone_result(true);
+                self.set_tone_result(true, boundary);
                 boundary.request_scan(&self.scan_request, Completion::Image50, Completion::Image51);
             }
             R::Image20 => self.request_selection(boundary),

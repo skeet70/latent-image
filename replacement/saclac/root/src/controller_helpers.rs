@@ -153,7 +153,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor, I: Isp, 
     }
     fn release_steps(&mut self, position: i16, first: u32, second: u32) -> u16 {
         let machine = &self.calculation.services.machine;
-        let reference = machine.enter(0x76_f340, &[]);
+        let reference = crate::calibration_inputs::lens_position_flags(machine);
         machine.enter(0x74_9be4, &[position as i32 as usize, first as usize, 0, reference as usize, second as usize]) as u16
     }
     fn trace_snapshot(&mut self) { self.calculation.services.machine.enter(0x72_872c, &[0x0700_0000]); }

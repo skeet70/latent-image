@@ -73,6 +73,8 @@ impl MeasurementRecords {
 
 const fn at(base: SharedAddress, offset: u32) -> SharedAddress { SharedAddress(base.0.wrapping_add(offset)) }
 
+pub const RECORDER_RESULTS: SharedAddress = SharedAddress(0x1ffe_c90c);
+
 /// A null outer request returns 0x84 without accessing it.
 pub fn read_request(request: SharedAddress, memory: &mut impl StockMemory) -> Option<MeasurementRecords> {
     if request.0 == 0 { return None; }
@@ -82,7 +84,7 @@ pub fn read_request(request: SharedAddress, memory: &mut impl StockMemory) -> Op
 
 pub fn write_request_header(request: SharedAddress, section: SharedAddress, memory: &mut impl StockMemory) {
     memory.write_u32(request, section.0);
-    memory.write_u32(at(request, 4), 0x1ffe_c90c);
+    memory.write_u32(at(request, 4), RECORDER_RESULTS.0);
 }
 
 fn common<P: Properties + StockMemory>(base: SharedAddress, ports: &mut P) {

@@ -1,13 +1,13 @@
 #![forbid(unsafe_code)]
 
 use xm1_saclac_calc::{adjust::{configuration::ProfileStore, lens::{BiasTable, LensConfiguration}, motion::ports::LensTables, profile_adjustment::{LensSteps, StepTable}}, exposure::ports::{Lens, ProfileAccess, Properties, Property, StockMemory}, profile::Profile, scene_recognition::{ports::{LensServices, Overlay, SceneEvents, SceneTrace, Steadiness, SubjectQuery, SubjectRequest}, Recognition, Scene, SceneFlags}};
-use xm1_saclac_config::channel;
+use xm1_saclac_config::{channel, dump::DumpDerivations};
 use xm1_saclac_imaging::driver::Isp;
 use xm1_saclac_interface::{calc::SharedAddress, Calc, Calc1, ImageProcessor, ImgDc, RecordHandle};
 use xm1_saclac_profile_geometry::{controller::Tables, geometry::AreaSource};
 use xm1_saclac_profile_records::{Memory, ProfileRecords, StockEntries, stock::shared::group_20};
 use xm1_saclac_shared::{settings::Channel, stock::{Argument::{Buffer, Word}, Machine}};
-use crate::{lens_calibration::Log, round_ports::{forward, RoundPorts}, services::Services, stock::acquisition::Aligned};
+use crate::{calibration_inputs::Native, lens_calibration::Log, round_ports::{forward, RoundPorts}, services::Services, stock::acquisition::Aligned};
 
 macro_rules! implement {
     ($contract:path { $($methods:tt)* }) => {
@@ -67,7 +67,7 @@ implement!(SubjectQuery {
 });
 implement!(Steadiness { fn steady(&mut self) -> bool { self.geometry.peak_active() } });
 implement!(LensServices {
-    fn lens_reference(&mut self) -> u32 { self.services.machine.enter(0x76_f340, &[]) }
+    fn lens_reference(&mut self) -> u32 { Native(&self.services.machine, &self.services.stock).lens_position_flags() }
     fn primary_tenths(&mut self, lens: u32) -> u32 { channel::base(&self.services.stock, Channel(lens as i32)) }
     fn response(&mut self, value: u16, lens: u32, step: u32, reference: u32) -> i32 { self.services.machine.enter(0x74_99a0, &[usize::from(value), lens as usize, step as usize, reference as usize, 1]) as i32 }
     fn converted_difference(&mut self, first: u32, second: u32) -> i16 { self.geometry.converted_difference(first, second) }

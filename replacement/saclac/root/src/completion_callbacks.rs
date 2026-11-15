@@ -15,6 +15,19 @@ pub fn post<B: Backend>(poster: &Poster<B>, completion: Completion, payload: &[u
     poster.post(queue, header, payload)
 }
 
+/// The statistics progress callback reads only its publication and posts calc0x3c12.
+pub fn pipeline_statistics_progress<B: Backend>(poster: &Poster<B>, gate: &crate::statistics_results::ReportingGate) -> Result<(), PostError> {
+    if !gate.is_open() { return Ok(()); }
+    let route = xm1_saclac_interface::stock::peers::CALC;
+    let (operation, payload) = xm1_saclac_interface::stock::calc_payload(&xm1_saclac_interface::calc::CalcPayload::Release);
+    let queue = MessageQueue::stock(QueueId::new(route.queue.number()).expect("calc queue"));
+    poster.post(queue, Header {
+        operation: xm1_saclac_interface::stock::calc_operation(operation),
+        sender: route.sender.byte(poster.running_task()),
+        destination: route.queue.number(),
+    }, payload.bytes())
+}
+
 /// The f2c9c4 boundary: status plus three supplied words, regardless of status.
 pub fn primary_end<B: Backend>(poster: &Poster<B>, status: u32, result: [u32; 3]) -> Result<(), PostError> {
     let mut payload = [0; 16];

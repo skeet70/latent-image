@@ -157,7 +157,6 @@ pub enum PipelineEffect {
     ArmFrame,
     SynchronizeFrame,
     ResumeFrame,
-    ReleaseFrameLocks,
     PrepareFallback,
     ConcludeRaw,
     SetStatisticsPending(bool),

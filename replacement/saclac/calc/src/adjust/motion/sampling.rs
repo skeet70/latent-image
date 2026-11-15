@@ -34,6 +34,20 @@ pub struct SpeedStep {
     pub speed: u32,
 }
 
+/// Indexed positions retained by the capture owner; no copy of its sample buffer is required.
+pub trait PositionSamples {
+    fn count(&self) -> usize;
+    fn position(&self, index: usize) -> i16;
+}
+impl PositionSamples for [i16] {
+    fn count(&self) -> usize { self.len() }
+    fn position(&self, index: usize) -> i16 { self[index] }
+}
+impl<const N: usize> PositionSamples for [i16; N] {
+    fn count(&self) -> usize { N }
+    fn position(&self, index: usize) -> i16 { self[index] }
+}
+
 impl MotionState {
     /// The lens position `frame` frame periods into the run (0xfa30c0).
     pub fn position_at_frame(&self, frame: u32) -> i16 {
@@ -93,24 +107,24 @@ impl MotionState {
     /// Replans the drive at the speed the recorded `positions` show between the run's turning
     /// points, or at the step in force, re-anchors its start time to the first position that
     /// moved, and traces both with the schedule (0xfa30f0).
-    pub fn replan_from_run(&mut self, ports: &mut (impl Properties + StockMemory + DriveLimits), earlier: &[SpeedStep], in_force: SpeedStep, positions: &[i16]) {
+    pub fn replan_from_run(&mut self, ports: &mut (impl Properties + StockMemory + DriveLimits), earlier: impl IntoIterator<Item = SpeedStep>, in_force: SpeedStep, positions: &(impl PositionSamples + ?Sized)) {
         let speed = match self.run_speed(ports, usize::from(in_force.frame) + 2, positions) {
             Some(measured) if measured != 0 => measured,
             _ => in_force.speed,
         };
         let planning = self.plan.profile.plan(speed, self.readings.drive_kind, ports);
         planning.trace(self.plan.start_time, self.section, ports);
-        if positions.len() > 2 {
-            let last = positions.len() - 1;
-            if let Some(moved) = (1..last).find(|&index| positions[index] != positions[0]) {
-                let elapsed = self.plan.profile.time_to(positions[moved]);
+        if positions.count() > 2 {
+            let last = positions.count() - 1;
+            if let Some(moved) = (1..last).find(|&index| positions.position(index) != positions.position(0)) {
+                let elapsed = self.plan.profile.time_to(positions.position(moved));
                 let frames = moved as u32 + u32::from(self.plan.first_frame);
                 self.plan.start_time = self.frame_period().wrapping_mul(frames).wrapping_sub(elapsed) as i32;
             }
         }
         ports.write_u32(trace::drive_planning(self.section, 0), self.plan.start_time as u32);
         let mut traced = 0;
-        for step in earlier.iter().chain(core::iter::once(&in_force)) {
+        for step in earlier.into_iter().chain(core::iter::once(in_force)) {
             ports.write_u32(trace::schedule_frame(self.section, traced), u32::from(step.frame));
             ports.write_u32(trace::schedule_speed(self.section, traced), step.speed);
             traced += 1;
@@ -121,9 +135,9 @@ impl MotionState {
 
     /// The speed between the frame the run starts moving after `from` and the frame it settles
     /// after its turning point, when that span is long enough.
-    fn run_speed(&self, properties: &mut impl Properties, from: usize, positions: &[i16]) -> Option<u32> {
-        let count = positions.len();
-        let at = |index: usize| i32::from(positions[index]);
+    fn run_speed(&self, properties: &mut impl Properties, from: usize, positions: &(impl PositionSamples + ?Sized)) -> Option<u32> {
+        let count = positions.count();
+        let at = |index: usize| i32::from(positions.position(index));
         let step = |index: usize| (at(index + 1) - at(index)).abs();
         let bend = |index: usize| (at(index + 1) - at(index)) + (at(index - 1) - at(index));
         let mut moving = from;

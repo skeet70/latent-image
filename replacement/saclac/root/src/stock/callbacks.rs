@@ -55,6 +55,13 @@ pub extern "C" fn xm1_saclac_root_s1_result(value: u32) {
 
 #[cfg(target_arch = "arm")]
 #[no_mangle]
+pub extern "C" fn xm1_saclac_root_pipeline_statistics_progress() {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::pipeline_statistics_progress(&poster, &crate::stock::statistics::PIPELINE_PROGRESS).expect("pipeline statistics progress post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
 pub extern "C" fn xm1_saclac_root_adjustment_synchronized() {
     let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
     crate::peer_services::signal(&Guest, &poster, crate::peer_services::Rendezvous::Adjustment).expect("adjustment waiter signal");

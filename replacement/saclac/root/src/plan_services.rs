@@ -25,7 +25,7 @@ impl<M: Machine + Clone, R, E, P> PlanServices for Services<M, R, E, P> {
         self.stock.remap(RemapArguments([request.position as i32 as u32, request.lens, request.calibration, request.step, 0, 0, request.side])).0 as i16
     }
     fn minimum_speed(&mut self) -> u32 { limits::shifted_floor(&self.stock) }
-    fn current_side(&mut self) -> u32 { self.machine.enter(0x76_dad4, &[]) }
+    fn current_side(&mut self) -> u32 { crate::calibration_inputs::lens_direction(&self.machine) }
     fn checks_drive_speed(&mut self) -> bool { self.machine.enter(0x76_e4b0, &[]) == 1 }
     fn load_register(&mut self, register: u8) -> u8 { self.machine.enter(0x74_2088, &[usize::from(register)]) as u8 }
     fn snapshot_mode(&mut self) -> u32 { self.machine.enter(0x76_fc4c, &[]) }
