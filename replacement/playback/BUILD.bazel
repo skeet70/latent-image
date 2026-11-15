@@ -34,12 +34,13 @@ $(location @lab_coreutils//:bin/sha256sum) $(SRCS) > $(location playback-owned.s
 
 haskell_binary(
     name = "qualify",
-    srcs = ["Qualify.hs", "//host/firmware:ArmElf.hs"],
+    srcs = ["Qualify.hs", "ModeProducer.hs", "ModeEntryCaller.hs", "//host/firmware:ArmElf.hs"],
     main_file = "Qualify.hs",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
     deps = [
         "//emulation:native-adapter",
         "//emulation:owned-case",
+        "//emulation:playback-owned-lib",
         "//emulation:case-sha256",
         "//host:base",
         "//host:aeson",
