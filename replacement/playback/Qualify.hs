@@ -151,7 +151,7 @@ execute runner output elf runtime base stock selected role = do
       blocks = stock ++ [Block "owned-runtime" base "rx" image codeFunctions
         ,Block "globals" (Address 0x14ea400) "rw" globals [],Block "cancel" (Address 0x1511400) "rw" cancel []
         ,Block "payload" (Address 0x2000000) "r" (payload selected) [],Block "stack" (Address 0x2200000) "rw" (B.replicate 0x4000 0) []
-        ,Block "exit" (Address 0x100000) "rx" (assemble [0xe12fff1e]) [(Address 0x100000,4)]]
+        ,Block "exit" (Address 0x100000) "rx" (assemble [0xe12fff1e]) []]
       artifact (Block name _ _ bytes _) = object ["id" .= name,"path" .= (ident++"-"++name++".bin"),"size" .= B.length bytes,"sha256" .= hashText(hash bytes)]
       region (Block name address permissions bytes _) = object ["id" .= name,"address" .= addressValue address,"size" .= B.length bytes,"permissions" .= permissions,"initial" .= object ["artifact" .= name,"offset" .= (0::Int),"length" .= B.length bytes]]
       registers = [("r"++show i,0x10101010+fromIntegral i) | i<-[0::Int ..12]]++[("sp",0x2204000),("lr",0x100000),("cpsr",0x10)]
