@@ -44,6 +44,7 @@ mod shot_lens;
 mod shot_grid;
 mod shot_capture_data;
 mod shot_capture_command_data;
+mod shot_capture_geometry;
 mod shot_records;
 mod shot_pipeline_records;
 mod shot_pipeline_peers;
