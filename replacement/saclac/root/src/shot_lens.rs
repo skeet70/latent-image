@@ -25,7 +25,7 @@ impl<M: Machine + Clone + crate::shot_native::AtomicLensChange, R: Memory, E: St
             LensReading::Reference => FinishLayers::lens(self, FinishLensValue::Distance),
         }
     }
-    fn take_change(&mut self) -> u32 { self.services.borrow().machine.take_lens_change() }
+    fn take_change(&mut self) -> u32 { self.services.borrow().machine.take_lens_change().0 }
     fn designated_point(&mut self) -> Option<LensPoint> {
         stock::designated_point(&self.services.borrow_mut().entries.lens_designation(self.record))
     }

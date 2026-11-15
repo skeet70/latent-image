@@ -16,8 +16,11 @@ impl<M: Machine> Overlay for RateOverlay<'_, M> {
     }
 }
 
-pub(crate) fn draw_rate_status(machine: &impl Machine, tenths: u16, status: u32, second_column: bool) {
-    diagnostics::draw_rate_status(&mut RateOverlay(machine), u32::from(tenths), RateStatus::from_code(status), second_column);
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RateTenths(pub u16);
+
+pub(crate) fn draw_rate_status(machine: &impl Machine, tenths: RateTenths, status: RateStatus, second_column: bool) {
+    diagnostics::draw_rate_status(&mut RateOverlay(machine), u32::from(tenths.0), status, second_column);
 }
 
 impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor, I: Isp, T: Tables, A: Placement, Q>
@@ -54,7 +57,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor, I: Isp, 
         diagnostics::clear_selection(&mut *self.services.borrow_mut(), Some(SharedAddress(frame.0)), cleared);
     }
     fn draw_rate_status(&mut self, reference: &AreaReference) {
-        draw_rate_status(&self.services.borrow().machine, reference.0[5] as u16, reference.0[4], false);
+        draw_rate_status(&self.services.borrow().machine, RateTenths(reference.0[5] as u16), RateStatus::from_code(reference.0[4]), false);
     }
     fn release_rate_status(&mut self) { self.services.borrow().machine.enter(0x111_0a84, &[]); }
 }

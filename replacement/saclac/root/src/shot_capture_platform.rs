@@ -2,6 +2,7 @@
 
 use xm1_power_lifecycle::{record_address_space::GuestAddress, record_image_command_resources};
 use xm1_saclac_calc::exposure::ports::{Properties, Property};
+use xm1_saclac_interface::calc::SharedAddress;
 use xm1_saclac_profile_records::{Memory, StockEntries};
 use xm1_saclac_shared::{settings::{AdjustmentKey, Adjustments}, stock::Machine};
 use xm1_shot_sequence::{boundary::Frame, capture_boundary::{CaptureAdjustment, CaptureDiagnostics, CapturePlatform, CaptureTrace, DistanceSplit, FrameOffset}};
@@ -14,9 +15,9 @@ impl<S: Adjustments> Properties for Configuration<'_, S> {
     }
 }
 
-pub(crate) fn dump_configuration(machine: &mut impl Machine, settings: &impl Adjustments, destination: u32) {
+pub(crate) fn dump_configuration(machine: &mut impl Machine, settings: &impl Adjustments, destination: SharedAddress) {
     for (index, value) in xm1_saclac_calc::adjust::rate_policy::configuration_words(&mut Configuration(settings)) {
-        machine.write_u32(destination.wrapping_add((index as u32 + 1) * 4), value);
+        machine.write_u32(destination.0.wrapping_add((index as u32 + 1) * 4), value);
     }
 }
 
@@ -75,6 +76,6 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: xm1_saclac_interface::Im
 
     fn prepare_dump_area(&mut self, frame: Frame, offset: FrameOffset) {
         let services = self.services.borrow();
-        dump_configuration(&mut services.machine.clone(), &services.stock, frame.0.wrapping_add(offset.0));
+        dump_configuration(&mut services.machine.clone(), &services.stock, SharedAddress(frame.0.wrapping_add(offset.0)));
     }
 }

@@ -439,7 +439,7 @@ pub fn draw_rate(machine: &impl Machine, result: SharedAddress, flag: u32) { ent
 
 /// The owned rate/status renderer formerly at0xf521d8.
 pub fn draw_rate_status(machine: &impl Machine, level: u16, status: u32, flag: u32) {
-    crate::shot_absorb_diagnostics::draw_rate_status(machine, level, status, flag != 0);
+    crate::shot_absorb_diagnostics::draw_rate_status(machine, crate::shot_absorb_diagnostics::RateTenths(level), xm1_saclac_calc::diagnostics::RateStatus::from_code(status), flag != 0);
 }
 
 /// 0xfaa7b0 over a copy of the rate record: the word and halfword it writes out.

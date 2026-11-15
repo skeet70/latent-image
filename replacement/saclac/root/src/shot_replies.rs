@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use xm1_saclac_interface::{stock::record_handle_from_a2, Calc, Calc1, CommandKind, CompletionStatus, ImageProcessor, ImgDc, RecordHandle};
+use xm1_saclac_interface::{Calc, Calc1, CommandKind, CompletionStatus, ImageProcessor, ImgDc, RecordHandle};
 use xm1_saclac_profile_records::{Memory, StockEntries};
 use xm1_saclac_shared::stock::Machine;
 use xm1_shot_sequence::{boundary::Replies, ports::Reply, primary_boundary::{CaptureReplies, CaptureStatus}};
@@ -18,18 +18,18 @@ impl<M: Machine + Clone + ProfileReplies, R: Memory, E: StockEntries, P: ImagePr
     fn reply(&mut self, reply: Reply) {
         let machine = self.services.borrow().machine.clone();
         match reply.command {
-            CommandKind::HalfPress => machine.half_press_reply(reply.record, reply.status, |profile| {
-                let record = record_handle_from_a2(profile);
+            CommandKind::HalfPress => machine.half_press_reply(reply.record, reply.status, |record| {
                 let mut services = self.services.borrow_mut();
                 let mut geometry = self.geometry.borrow_mut();
                 let mut ports = crate::round_ports::RoundPorts::new(&mut services, &mut geometry, self.recognition, record);
-                let vote = self.recognition.borrow_mut().vote(&mut ports, record, xm1_saclac_calc::scene_recognition::Mode::Capture);
-                (vote.scene.0, vote.flags.0)
-            }, |profile| {
-                xm1_saclac_calc::record_policy::apply_mode_position(&mut *self.services.borrow_mut(), record_handle_from_a2(profile));
+                self.recognition.borrow_mut().vote(&mut ports, record, xm1_saclac_calc::scene_recognition::Mode::Capture)
+            }, |record| {
+                xm1_saclac_calc::record_policy::apply_mode_position(&mut *self.services.borrow_mut(), record);
             }),
             CommandKind::Command07 => machine.capture_reply(reply.record, reply.status),
             CommandKind::Command08 => machine.setting_reply(reply.record, reply.status),
+            CommandKind::Command0c | CommandKind::Command28 => crate::controller_replies::scalar_reply(machine, reply.command, reply.status),
+            CommandKind::Autofocus => crate::controller_replies::autofocus_reply(machine, reply.status),
             _ => panic!("Shot reply command"),
         }
     }

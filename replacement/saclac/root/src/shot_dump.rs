@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use xm1_saclac_interface::calc::SharedAddress;
 use xm1_saclac_profile_records::{Memory, StockEntries};
 use xm1_saclac_shared::{settings::{AdjustmentKey, Adjustments}, stock::Machine};
 use xm1_shot_sequence::{boundary::Frame, statistics_dump::DumpBoundary, stock::statistics_dump::DUMP};
@@ -13,7 +14,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P, I, T, A, Q> DumpBoundary
     }
     fn fill_dump_header(&mut self, frame: Frame) {
         let services = self.services.borrow();
-        crate::shot_capture_platform::dump_configuration(&mut services.machine.clone(), &services.stock, frame.0.wrapping_add(DUMP));
+        crate::shot_capture_platform::dump_configuration(&mut services.machine.clone(), &services.stock, SharedAddress(frame.0.wrapping_add(DUMP)));
     }
     fn fill_frame(&mut self, frame: Frame, offset: u32, length: u32, byte: u8) {
         fill(&mut self.services.borrow().machine.clone(), frame.0.wrapping_add(offset), length, byte);

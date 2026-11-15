@@ -109,6 +109,8 @@ Capture record snapshots use canonical ProfileGeometry. Arbitrary record-source/
 
 `Lens::take_change` calls the existing owned task50 interrupt-locked take/publication/clear helper through `AtomicLensChange`; it no longer enters ROM76f438. StatisticsDump's header and CapturePlatform's dump-area header share one lazy owned `configuration_words` publisher, not retainedfa89fc. The round's rate renderer and AbsorbDiagnostics share the owned overlay renderer, not retainedf521d8. Native lifetime, interrupt and client scheduling remain image qualification duties.
 
+`Replies` admits the idle producers' Command0c/Command28 status21 and Autofocus status0, including absent records. Scalar replies use the owned command completion helper; Autofocus preserves its five-word client result and consumes lens notices. `ProfileReplies` carries `RecordHandle` and canonical `Recognition` through its effect callbacks; raw record and tuple conversion is confined to the stock bridge. `AtomicLensChange` returns `LensChange` before the existing Shot boundary converts its word.
+
 ## Completion and result ownership
 
 | Completion | Root callback payload / delivery |
