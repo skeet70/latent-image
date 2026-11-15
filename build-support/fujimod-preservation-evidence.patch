@@ -622,6 +622,15 @@
          if r.cp == 15 && r.opc1 == 0 && r.crn == 9 && r.crm == 1 {
              if r.wide || r.opc2 > 1 || r.secure > 1 {
                  return Err("unmodeled R-profile TCM selector".into());
+@@ -454,7 +466,7 @@
+         )
+     }
+     fn invalidate_code(&self, range: Option<(u64, u64)>) -> Result<(), String> {
+-        self.execution.cpu.invalidate_code(range)
++        self.execution.invalidate_code(range)
+     }
+     fn execution_refused(&self) -> bool {
+         self.execution.refusal.borrow().as_ref().is_some_and(ExecutionRefusal::is_refused)
 @@ -485,7 +497,7 @@
      fn run(&self, request: Run) -> Result<Exit, ExecutionError> {
          let e = &self.execution;
@@ -631,7 +640,7 @@
              return Err("nested R-profile execution is refused".into());
          }
          let _owner_barrier_run = e.owner_barrier_run_guard();
-@@ -509,10 +521,19 @@
+@@ -509,10 +521,15 @@
                      .into(),
              );
          }
@@ -640,10 +649,6 @@
          let _run = e
              .memory
              .reserve_run(e.id.get(), e.policy.get(), e.parallel_tcg)?;
-+        if !e.observer_index.borrow().preservation.is_empty() && e.memory.flush_pending() {
-+            e.preservation.expire_lineage(e,
-+                fujimod_emulator_cpu::preservation::EvidenceFailure::SourceChanged);
-+        }
          e.memory.flush()?;
 +        if !e.observer_index.borrow().preservation.is_empty() {
 +            e.preservation.admit(e, request.begin);
@@ -651,7 +656,7 @@
          e.cap.set(
              request
                  .instructions
-@@ -531,9 +552,14 @@
+@@ -531,9 +548,14 @@
          if e.irq.get() {
              // Entry must use the requested architectural PC, including Thumb.
              e.set(arm::PC, begin as u32)?;
@@ -667,7 +672,7 @@
                  e.observe_exception(arm::Exception::Irq);
              }
          }
-@@ -550,6 +576,7 @@
+@@ -550,6 +572,7 @@
          if let Some(clock) = e.clock.get() {
              e.clock.set(Some(clock.after(e.count.get())?));
          }
@@ -675,7 +680,7 @@
          result
      }
  
-@@ -579,6 +606,10 @@
+@@ -579,6 +602,10 @@
                      .ok_or("missing observed entry")?,
              );
          }
@@ -686,7 +691,7 @@
          self.stop()
      }
      fn rprofile_identity(&self, value: Option<u32>) -> Result<u32, String> {
-@@ -609,14 +640,23 @@
+@@ -609,14 +636,23 @@
          self.capture(previous)
      }
      fn restore(&self, snapshot: &dyn Snapshot) -> Result<(), String> {
@@ -712,7 +717,7 @@
              return Err("cannot install a hook during mutation dispatch".into());
          }
          e.observer_index
-@@ -639,6 +679,25 @@
+@@ -639,6 +675,25 @@
              .checked_add(1)
              .ok_or("R-profile hook identity overflow")?;
          let native = match hook {
@@ -738,7 +743,7 @@
              Hook::Instruction { range, .. } | Hook::Block { range, .. } | Hook::TranslationAdmission { range, .. } => {
                  self.retranslate(range)?;
                  None
-@@ -682,7 +741,7 @@
+@@ -682,7 +737,7 @@
      }
      fn remove_hook(&self, hook: HookId) -> Result<(), String> {
          let e = &self.execution;
@@ -747,7 +752,7 @@
              return Err("cannot remove a hook during mutation dispatch".into());
          }
          e.observer_index
-@@ -695,6 +754,18 @@
+@@ -695,6 +750,18 @@
          let observers = e.observers.borrow();
          let observer = observers.get(&hook.key).ok_or("unknown R-profile hook")?;
          match observer.hook {
@@ -840,7 +845,7 @@
              Some(first) => Err(first.error()),
 --- /dev/null
 +++ b/crates/emulator-cpu-unicorn/src/rprofile/core/preservation.rs
-@@ -0,0 +1,339 @@
+@@ -0,0 +1,355 @@
 +//! Native post-effect capture. This module never changes architectural execution.
 +use super::*;
 +use fujimod_emulator_cpu::preservation::*;
@@ -911,6 +916,14 @@
 +    pub(super) fn expire_lineage(&self, execution: &Execution, reason: EvidenceFailure) {
 +        let paused = self.paused.take().or(self.resuming.take());
 +        if let Some(entry) = paused { execution.evidence_failed(entry.address, reason); }
++    }
++
++    fn code_invalidated(&self, execution: &Execution, range: Option<(u64, u64)>) {
++        if self.paused.get().or(self.resuming.get()).is_some_and(|entry|
++            range.is_none_or(|(begin, end)| entry.address < end
++                && begin < entry.address.saturating_add(u64::from(entry.bytes)))) {
++            self.expire_lineage(execution, EvidenceFailure::SourceChanged);
++        }
 +    }
 +
 +    fn next(&self, execution: &Execution) -> Option<EvidenceId> {
@@ -1108,6 +1121,14 @@
 +}
 +
 +impl Execution {
++    pub(in crate::rprofile) fn invalidate_code(&self, range: Option<(u64, u64)>) -> Result<(), String> {
++        if self.preservation.dispatching() {
++            return Err("code invalidation during preservation dispatch is refused".into());
++        }
++        self.preservation.code_invalidated(self, range);
++        self.cpu.invalidate_code(range)
++    }
++
 +    fn evidence_source(&self, address: u32, word: u32) -> Option<ExecutionSource> {
 +        let address64 = u64::from(address);
 +        if self.overlaps_tcm(address64, 4) { return None; }
@@ -2039,3 +2060,15 @@
                  reply,
              })
              .map_err(|_| "R-profile snapshot worker disconnected")?;
+--- a/crates/emulator-cpu-unicorn/src/rprofile/memory.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/memory.rs
+@@ -815,8 +815,7 @@
+                 break;
+             };
+             if let Some(core) = core {
+-                core.cpu
+-                    .invalidate_code(Some((invalidation.address, invalidation.address + 4096)))?;
++                core.invalidate_code(Some((invalidation.address, invalidation.address + 4096)))?;
+             }
+             let mut s = self.state();
+             if !s

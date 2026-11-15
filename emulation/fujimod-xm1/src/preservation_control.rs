@@ -427,12 +427,21 @@ fn lifecycle(case: &str, worker: bool, context_adapter: bool) -> Result<Value, S
         return Err("lifecycle did not stop before an unexecuted PUSH".into());
     }
     let entry = points.event_context().ok_or("missing lifecycle entry")?.entry;
+    let lineage_binding = shadow::Binding { entry, registers: registers(&board)?,
+        cpsr: get(board.cpu(0)?, arm::CPSR)?, context: (1, 1) };
     points.resume(0x1000, 0x1000);
     let run = |begin, instructions| Run { begin, until: None, watchdog_us: 0, instructions: Some(instructions) };
     let mut run_error = None;
     let mut removed = false;
     let passed;
-    if matches!(case, "lineage-intervening-run" | "lineage-mapping-change" | "lineage-source-write" | "lineage-immediate-resume") {
+    let mut lineage_accepted = None;
+    let mut source_bytes = Vec::new();
+    let read_source = || -> Result<[u8; 4], String> {
+        let mut bytes = [0; 4];
+        board.cpu(0)?.read_memory(0x1000, &mut bytes)?;
+        Ok(bytes)
+    };
+    if matches!(case, "lineage-intervening-run" | "lineage-mapping-change" | "lineage-source-write" | "lineage-physical-write" | "lineage-immediate-resume") {
         if case == "lineage-intervening-run" {
             board.cpu(0)?.run(run(0x3000, 1)).map_err(|e| e.to_string())?;
         } else if case == "lineage-mapping-change" {
@@ -441,13 +450,34 @@ fn lifecycle(case: &str, worker: bool, context_adapter: bool) -> Result<Value, S
         } else if case == "lineage-source-write" {
             board.cpu(0)?.write_memory(0x1000, &0xe320f000u32.to_le_bytes())?;
             board.cpu(0)?.write_memory(0x1000, &0xe92d4ff0u32.to_le_bytes())?;
+        } else if case == "lineage-physical-write" {
+            source_bytes.push(read_source()?);
+            words(&board, 0x1000, &[0xe320f000])?;
+            source_bytes.push(read_source()?);
+            words(&board, 0x1000, &[0xe92d4ff0])?;
+            source_bytes.push(read_source()?);
         }
         board.cpu(0)?.run(run(0x1000, 1)).map_err(|e| e.to_string())?;
         let retired = events.borrow().iter().find_map(|event| match event {
             PreservationEvidence::Retired(retired) => Some(*retired), _ => None,
         }).ok_or("lifecycle PUSH did not retire")?;
         let carries_old = retired.resumed_from.is_some_and(|old| old.id == entry.id);
-        passed = carries_old == (case == "lineage-immediate-resume");
+        let source = |address, word| ExecutionSource { address, physical: u64::from(address), word, tcm: entry.tcm };
+        let mut verifier = shadow::Shadow::new(lineage_binding, shadow::StockReturn { vector: 0x18,
+            status: source(0x2044, 0xe169f001), returning: source(0x2048, 0xe8fdd00f) })
+            .map_err(|e|format!("lineage binding: {e:?}"))?;
+        let mut bytes = [0; 36];
+        board.cpu(0)?.read_memory(0x6fdc, &mut bytes)?;
+        let frame = SavedFrame { address: 0x6fdc, physical: 0x6fdc,
+            words: std::array::from_fn(|index|u32::from_le_bytes(bytes[index*4..index*4+4].try_into().unwrap())) };
+        let late = registers(&board)?;
+        let cpsr = get(board.cpu(0)?, arm::CPSR)?;
+        let accepted = events.borrow().iter().try_for_each(|event|verifier.observe(*event))
+            .and_then(|_|verifier.handoff(late, cpsr, frame, (1,1)))
+            .and_then(|_|verifier.finish()).is_ok();
+        lineage_accepted = Some(accepted);
+        passed = carries_old == (case == "lineage-immediate-resume")
+            && accepted == (case == "lineage-immediate-resume");
     } else {
         board.run_until(2, 1)?;
         board.cpu(0)?.set_interrupt(Interrupt::Irq, true)?;
@@ -510,7 +540,8 @@ fn lifecycle(case: &str, worker: bool, context_adapter: bool) -> Result<Value, S
     if !removed { watch.remove()?; }
     board.instruction_points_end(0, &mut points)?;
     Ok(json!({"case":case,"worker":worker,"context_adapter":context_adapter,"passed":passed,
-        "run_error":run_error,"events":raw,"fingerprint":fingerprint}))
+        "run_error":run_error,"events":raw,"fingerprint":fingerprint,
+        "entry":format!("{entry:?}"),"source_bytes":source_bytes,"lineage_accepted":lineage_accepted}))
 }
 
 fn main() {
