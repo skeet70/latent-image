@@ -24,10 +24,10 @@ fn list_offset(list: DeliveredList) -> u32 {
     layout::AREA_BUFFER_LISTS[match list { DeliveredList::First => 0, DeliveredList::Second => 1, DeliveredList::Third => 2 }]
 }
 
-struct ProfileSource(u32);
-impl ProfileSource {
+struct AlignedClientSource(u32);
+impl AlignedClientSource {
     fn new(source: ClientRef) -> Self {
-        assert_eq!(source.0 & 3, 0, "profile copy source alignment");
+        assert_eq!(source.0 & 3, 0, "word source alignment");
         Self(source.0)
     }
     fn word(&self, machine: &impl Machine, offset: Index<56>, index: usize) -> u32 {
@@ -94,10 +94,15 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P, I, T, A, Q> CaptureJobCl
         for (at, value) in [(0x18, end.readout[0]), (0x1c, end.readout[1]), (0x24, end.detail)] { write_word(&mut machine, selection.0.wrapping_add(at), value); }
     }
     fn calibration_block(&mut self, block: ClientRef) -> ClientCalibration {
+        let source = AlignedClientSource::new(block);
         let services = self.services.borrow();
-        ClientCalibration { word: read_word(&services.machine, block.0), calibration: Calibration(core::array::from_fn(|i| read_half(&services.machine, block.0.wrapping_add(4 + 2 * i as u32)))), rate: services.machine.read_u8(block.0.wrapping_add(0x16)) }
+        ClientCalibration { word: read_word(&services.machine, source.0), calibration: Calibration(core::array::from_fn(|i| read_half(&services.machine, source.0.wrapping_add(4 + 2 * i as u32)))), rate: services.machine.read_u8(source.0.wrapping_add(0x16)) }
     }
-    fn statistics_window(&mut self, block: ClientRef) -> [u32; 4] { core::array::from_fn(|i| read_word(&self.services.borrow().machine, block.0.wrapping_add(4 * i as u32))) }
+    fn statistics_window(&mut self, block: ClientRef) -> [u32; 4] {
+        let source = AlignedClientSource::new(block);
+        let services = self.services.borrow();
+        core::array::from_fn(|i| services.machine.read_u32(source.0.wrapping_add(4 * i as u32)))
+    }
     fn statistics_selector(&mut self, block: ClientRef) -> u32 { read_word(&self.services.borrow().machine, block.0.wrapping_add(4)) }
     fn clear_area_list(&mut self, buffer: ClientRef, list: DeliveredList) {
         let mut machine = self.services.borrow().machine.clone();
@@ -268,7 +273,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P, I, T, A, Q> CaptureRecor
         let machine = services.machine.clone();
         let mut source = None;
         let _ = services.records.copy_with_source(record, &r::group_01::AT_0090_56, CopyGranule::SixteenBytes, |offset, out| {
-            let source = source.get_or_insert_with(|| ProfileSource::new(profile));
+            let source = source.get_or_insert_with(|| AlignedClientSource::new(profile));
             for (index, chunk) in out.chunks_exact_mut(4).enumerate() { chunk.copy_from_slice(&source.word(&machine, offset, index).to_le_bytes()); }
         });
     }
