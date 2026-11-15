@@ -770,6 +770,33 @@ fn production_certificate_controls() -> Result<Value, String> {
         "facts":format!("{:?}", wrapper.last().expect("completed production certificate")),
     }));
 
+    let unchanged_destination = Snapshot { cpsr: entry.cpsr, ..destination };
+    let unchanged_context = CausalContext::from_observation(
+        &unchanged_destination,
+        actual_lifetime(trace.context.forward.0 as usize),
+    ).map_err(|failure| format!("unchanged destination context refused: {failure:?}"))?;
+    let mut unchanged = ProductionWrapper::new();
+    unchanged.begin(
+        &entry,
+        trace.binding.entry,
+        CausalContext::from_observation(&entry, actual_lifetime(trace.context.forward.0 as usize))
+            .map_err(|failure| format!("unchanged entry context refused: {failure:?}"))?,
+        trace.stock,
+    ).map_err(|failure| format!("unchanged wrapper begin refused: {failure:?}"))?;
+    unchanged.observe(trace.events[0])
+        .map_err(|failure| format!("unchanged retirement refused: {failure:?}"))?;
+    if unchanged.complete_handoff(&unchanged_destination, trace.frame, unchanged_context)
+        .map_err(|failure| format!("unchanged handoff refused: {failure:?}"))?.is_some()
+    {
+        return Err("unchanged strict-equality handoff issued a transformation certificate".into());
+    }
+    unchanged.finish().map_err(|failure| format!("unchanged wrapper finish refused: {failure:?}"))?;
+    controls.insert("unchanged-strict-equality".into(), json!({
+        "passed":true,
+        "issued":unchanged.issued(),
+        "consumed":unchanged.consumed(),
+    }));
+
     let mut strict = Monitor::<1>::new(
         Layout::stock_baseline(),
         ObservationLimit(NonZeroU64::new(4).expect("nonzero control limit")),

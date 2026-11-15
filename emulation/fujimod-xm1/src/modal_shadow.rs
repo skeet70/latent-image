@@ -2,7 +2,7 @@
 use crate::{
     modal_certificate::{AuthenticatedIrqReturn, CausalContext, CertificateFacts, CertificateFailure, ProductionWrapper},
     modal_guard::InstalledGuard,
-    modal_lifetime::{LifetimeReceipt, Word},
+    modal_lifetime::{LifetimePhase, LifetimeReceipt, Word},
     modal_permit::{CoreId, EntryInstruction, Snapshot, STOCK_ENTRY, STOCK_RESUME},
     provenance::Guest,
     trace::InstructionCount,
@@ -79,6 +79,7 @@ impl State {
     fn fail(&mut self, failure: Failure) { if self.failure.is_none() { self.failure = Some(failure); } }
     fn native(&mut self, evidence: PreservationEvidence) {
         if self.failure.is_some() { return; }
+        if !self.wrapper.active() { return; }
         let Some(events) = self.native_events.checked_add(1) else {
             self.fail(Failure::Counter);
             return;
@@ -264,6 +265,7 @@ impl Capture {
         let mut state = self.state.borrow_mut();
         if let Some(failure) = state.failure { return Err(format!("{failure:?}")); }
         if snapshot.pc == STOCK_ENTRY && snapshot.entry_instruction == EntryInstruction::OriginalPush {
+            if lifetime.phase != LifetimePhase::RollbackStored { return Ok(None); }
             let Some(point) = point else {
                 state.fail(Failure::Entry);
                 return Err(format!("{:?}", Failure::Entry));
@@ -319,7 +321,7 @@ impl Capture {
                 physical: u64::from(snapshot.sp.0 & !0x40000000),
                 words: frame.0,
             };
-            let certificate = match state.wrapper.complete(snapshot, frame, context) {
+            let certificate = match state.wrapper.complete_handoff(snapshot, frame, context) {
                 Ok(certificate) => certificate,
                 Err(failure) => {
                     state.fail(Failure::Certificate(failure));
@@ -338,7 +340,7 @@ impl Capture {
                     evidence: state.wrapper.evidence_array(),
                 });
             }
-            Ok(Some(certificate))
+            Ok(certificate)
         } else {
             Ok(None)
         }
@@ -367,12 +369,12 @@ impl Capture {
         Ok(())
     }
 
-    pub(crate) fn report(&self) -> Report {
+    pub(crate) fn report(&self, enclosing_healthy: bool) -> Report {
         let state = self.state.borrow();
         let issued = state.wrapper.issued();
         let consumed = state.wrapper.consumed();
         let task_identity_verified = consumed != 0 && issued == consumed;
-        let production_admission = state.failure.is_none() && task_identity_verified
+        let production_admission = enclosing_healthy && state.failure.is_none() && task_identity_verified
             && !state.wrapper.active() && !state.wrapper.pending();
         Report {
             core: self.request.core,

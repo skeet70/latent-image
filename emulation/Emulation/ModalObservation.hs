@@ -524,7 +524,7 @@ parseModalReport limit value = do
   tasks <- modalField "task_entries" value >>= modalList limit >>= mapM parseTaskEntry
   lifetime <- modalField "lifetime" value >>= parseNullable parseLifetimeReceipt
   watch <- modalField "watch" value >>= parseNullable parseModalWatchSummary
-  shadow <- maybe (Right Nothing) (parseNullable parseShadowReport) (optionalField "preservation_shadow" value)
+  shadow <- maybe (Right Nothing) (parseNullable (parseShadowReport lifetime)) (optionalField "preservation_shadow" value)
   countsValue <- modalField "counts" value
   modalKeys ["observations", "entries", "owned_handoffs", "fallback_handoffs", "returns", "active_frames", "peak_core_depth"] countsValue
   let count key = ModalCount <$> (modalField key countsValue >>= modalWord)
@@ -560,13 +560,14 @@ parseModalReport limit value = do
     (Left "modal report drops an admitted shadow task identity")
   pure (ModalReport enabled policy counts fetches domains guard tasks lifetime watch physicalCoverage taskVerified contextSpans failure shadow)
  where
-  parseShadowReport entry = do
+  parseShadowReport lifetime entry = do
     modalKeys ["core", "source", "started", "completed", "native_events", "active", "failure",
       "certificates_issued", "certificates_consumed", "task_identity_verified",
       "production_admission", "certificate", "context", "native_evidence", "first_irq",
       "earlier_irq_provenance"] entry
-    core <- modalField "core" entry >>= modalWord
-    unless (core <= 1) (Left "shadow report names an unavailable core")
+    coreEntry <- modalField "core" entry
+    core <- modalWord coreEntry
+    coreId <- parseCore coreEntry
     source <- modalField "source" entry
     canonical <- parseShadowPlan source
     unless (source == canonical && modalField "core" source == Right (Number (fromIntegral core)))
@@ -583,7 +584,7 @@ parseModalReport limit value = do
     consumed <- modalField "certificates_consumed" entry >>= modalWord
     taskClaim <- modalField "task_identity_verified" entry >>= modalBool
     admission <- modalField "production_admission" entry >>= modalBool
-    certificate <- modalField "certificate" entry >>= parseNullable parseCertificate
+    certificate <- modalField "certificate" entry >>= parseNullable (parseCertificate canonical coreId lifetime admission)
     unless (completed <= started && consumed <= issued && issued <= completed
       && (failure /= Nothing || started - completed == (if active then 1 else 0)))
       (Left "shadow report has inconsistent completion counters")
@@ -602,7 +603,7 @@ parseModalReport limit value = do
         modalField "evidence" raw >>= shadowEvidence
     modalField "earlier_irq_provenance" entry >>= parseEarlierIrq
     pure entry
-  parseCertificate entry = do
+  parseCertificate source core lifetime admission entry = do
     modalKeys ["task", "publication_count", "forward", "reverse", "retirement_source",
       "status_source", "return_source", "old_svc_spsr", "entry_cpsr", "returned_cpsr",
       "frame_address", "frame_physical", "frame_words"] entry
@@ -612,9 +613,21 @@ parseModalReport limit value = do
     reverseCount <- modalField "reverse" entry >>= modalWord
     unless (publications > 0 && forward == publications && reverseCount == publications)
       (Left "shadow certificate is not bound to one complete publication epoch")
-    parseCertificateSource 0xe92d4ff0 =<< modalField "retirement_source" entry
-    parseCertificateSource 0xe169f001 =<< modalField "status_source" entry
-    parseCertificateSource 0xe8fdd00f =<< modalField "return_source" entry
+    status <- modalField "status" source >>= modalWord32
+    returning <- modalField "returning" source >>= modalWord32
+    parseCertificateSource 0x00bfb028 0xe92d4ff0 =<< modalField "retirement_source" entry
+    parseCertificateSource status 0xe169f001 =<< modalField "status_source" entry
+    parseCertificateSource returning 0xe8fdd00f =<< modalField "return_source" entry
+    when admission $ do
+      receipt <- maybe (Left "admitted shadow certificate lacks its enclosing lifetime receipt") Right lifetime
+      unless (countValue (receiptPublicationCount receipt) == publications
+        && countValue (receiptForwardWrites receipt) == publications
+        && countValue (receiptReverseWrites receipt) == publications
+        && countValue (receiptPendingStores receipt) == 0
+        && receiptInstallCore receipt == Just core && receiptRollbackCore receipt == Just core
+        && receiptFailure receipt == Nothing
+        && receiptPhase receipt `elem` [RollbackStored, RollbackVerified, Ended])
+        (Left "admitted shadow certificate differs from its enclosing lifetime receipt")
     oldStatus <- modalField "old_svc_spsr" entry >>= modalWord32
     entryCpsr <- modalField "entry_cpsr" entry >>= modalWord32
     returnedCpsr <- modalField "returned_cpsr" entry >>= modalWord32
@@ -626,13 +639,13 @@ parseModalReport limit value = do
       && returnedCpsr == (oldStatus .&. 0x00ffff00) + (entryCpsr .&. 0xff0000ff))
       (Left "shadow certificate has an invalid frame or return-status derivation")
     pure entry
-  parseCertificateSource expectedWord entry = do
+  parseCertificateSource expectedAddress expectedWord entry = do
     modalKeys ["address", "physical", "word", "tcm"] entry
     address <- modalField "address" entry >>= modalWord32
     physical <- modalField "physical" entry >>= modalWord32
     word <- modalField "word" entry >>= modalWord32
     modalField "tcm" entry >>= earlierTcm
-    unless (address `mod` 4 == 0 && physical `mod` 4 == 0 && word == expectedWord)
+    unless (address == expectedAddress && physical == expectedAddress && word == expectedWord)
       (Left "shadow certificate has a noncanonical source instruction")
   parseEarlierIrq entry = do
     modalKeys ["total", "dropped", "coverage_complete", "target_post_prefix_lr",

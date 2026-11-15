@@ -262,12 +262,34 @@ impl ProductionWrapper {
         Ok(())
     }
 
+    pub fn complete_handoff(
+        &mut self,
+        snapshot: &Snapshot,
+        frame: SavedFrame,
+        context: CausalContext,
+    ) -> Result<Option<AuthenticatedIrqReturn>, CertificateFailure> {
+        self.complete_inner(snapshot, frame, context, true)
+    }
+
     pub fn complete(
         &mut self,
         snapshot: &Snapshot,
         frame: SavedFrame,
         context: CausalContext,
     ) -> Result<AuthenticatedIrqReturn, CertificateFailure> {
+        match self.complete_inner(snapshot, frame, context, false)? {
+            Some(certificate) => Ok(certificate),
+            None => self.reject(CertificateFailure::EvidenceShape),
+        }
+    }
+
+    fn complete_inner(
+        &mut self,
+        snapshot: &Snapshot,
+        frame: SavedFrame,
+        context: CausalContext,
+        allow_unchanged: bool,
+    ) -> Result<Option<AuthenticatedIrqReturn>, CertificateFailure> {
         self.healthy()?;
         if self.pending { return self.reject(CertificateFailure::PendingConsumption); }
         let Some(mut active) = self.active.take() else {
@@ -284,6 +306,12 @@ impl ProductionWrapper {
             .and_then(|_| active.verifier.finish())
         {
             return self.reject(CertificateFailure::Native(failure));
+        }
+        if allow_unchanged && matches!(
+            self.evidence,
+            [Some(PreservationEvidence::Retired(_)), None, None, None]
+        ) {
+            return Ok(None);
         }
         let (retirement, exception, saved_status, returned) = match self.evidence {
             [Some(PreservationEvidence::Retired(retirement)),
@@ -322,7 +350,7 @@ impl ProductionWrapper {
         self.issued = issued;
         self.last = Some(facts);
         self.pending = true;
-        Ok(AuthenticatedIrqReturn {
+        Ok(Some(AuthenticatedIrqReturn {
             entry: active.entry,
             destination,
             context,
@@ -330,7 +358,7 @@ impl ProductionWrapper {
             exception,
             saved_status,
             returned,
-        })
+        }))
     }
 
     pub fn consume(&mut self) -> Result<(), CertificateFailure> {

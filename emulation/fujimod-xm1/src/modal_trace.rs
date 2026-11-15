@@ -650,7 +650,7 @@ impl ModalTrace {
             context_source_spans, task_entries: &self.task_entries,
             lifetime: self.guard.as_ref().map(InstalledGuard::receipt),
             watch: self.guard.as_ref().map(|guard|guard.watch_summary(&self.config.maps)),
-            preservation_shadow: self.preservation_shadow.as_ref().map(crate::modal_shadow::Capture::report),
+            preservation_shadow: self.preservation_shadow.as_ref().map(|shadow| shadow.report(healthy_guard)),
         }
     }
 

@@ -238,6 +238,48 @@ permitTests = do
         "returned_cpsr" .= (0x80000053 :: Word32), "frame_address" .= (10800532 :: Word32),
         "frame_physical" .= (10800532 :: Word32),
         "frame_words" .= ([0, 9717120, 1, 9717124, 1074099628, 9, 1074087392, 10800572, 12565776] :: [Word32])]
+      certified = set "certificates_issued" (Number 1)
+        (set "certificates_consumed" (Number 1)
+          (set "task_identity_verified" (Bool True)
+            (set "production_admission" (Bool True)
+              (set "certificate" certificate passive))))
+      admittedLifetime = set "rollback_core" (Number 0) (completedReceipt 226)
+      admittedEnvelope = set "preservation_shadow" certified
+        (set "lifetime" admittedLifetime (completedEnvelope 226))
+      statusSource = get "status_source" certificate
+      wrongStatusAddress = set "certificate" (set "status_source"
+        (set "address" (Number 0) statusSource) certificate) certified
+      wrongStatusPhysical = set "certificate" (set "status_source"
+        (set "physical" (Number 0x40364) statusSource) certificate) certified
+      mixedHandoffs = set "started" (Number 2) (set "completed" (Number 2) certified)
+  check "an admitted certificate binds its exact source plan and enclosing lifetime receipt"
+    (not (isLeft (parseModalReport permitLimit admittedEnvelope)))
+  check "admission refuses a certificate from another instruction address"
+    (isLeft (parseModalReport permitLimit
+      (set "preservation_shadow" wrongStatusAddress (set "lifetime" admittedLifetime (completedEnvelope 226)))))
+  check "admission refuses a certificate from another physical instruction"
+    (isLeft (parseModalReport permitLimit
+      (set "preservation_shadow" wrongStatusPhysical (set "lifetime" admittedLifetime (completedEnvelope 226)))))
+  check "admission refuses a missing enclosing lifetime receipt"
+    (isLeft (parseModalReport permitLimit
+      (set "preservation_shadow" certified (set "lifetime" Null (completedEnvelope 226)))))
+  check "admission refuses a different enclosing publication epoch"
+    (isLeft (parseModalReport permitLimit
+      (set "preservation_shadow" certified (set "lifetime"
+        (set "rollback_core" (Number 0) (completedReceipt 225)) (completedEnvelope 226)))))
+  check "ordinary strict-equality handoffs do not need certificate issuance"
+    (not (isLeft (parseModalReport permitLimit
+      (set "preservation_shadow" mixedHandoffs (set "lifetime" admittedLifetime (completedEnvelope 226))))))
+  let outerFailedShadow = set "production_admission" (Bool False) certified
+      outerFailedEnvelope = set "failure" (String "outer guard failed")
+        (set "physical_fetch_coverage" (Bool False)
+          (set "task_identity_verified" (Bool False)
+            (set "preservation_shadow" outerFailedShadow
+              (set "lifetime" admittedLifetime (completedEnvelope 226)))))
+  outerFailed <- either error pure (parseModalReport permitLimit outerFailedEnvelope)
+  check "an enclosing failure clears admission but retains consumed-certificate identity"
+    (isLeft (checkModalEnd outerFailed))
+  let
       verifiedThenFailed = set "failure" (String "late packet")
         (set "certificates_issued" (Number 1)
           (set "certificates_consumed" (Number 1)
