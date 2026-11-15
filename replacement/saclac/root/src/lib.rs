@@ -52,6 +52,7 @@ mod shot_load_records;
 mod shot_load_effects;
 mod shot_trace_views;
 mod shot_absorb_records;
+mod shot_absorb_library;
 mod shot_capture_lens;
 mod shot_capture_settings;
 mod shot_dump;
