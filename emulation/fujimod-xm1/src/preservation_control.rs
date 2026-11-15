@@ -770,32 +770,97 @@ fn production_certificate_controls() -> Result<Value, String> {
         "facts":format!("{:?}", wrapper.last().expect("completed production certificate")),
     }));
 
-    let unchanged_destination = Snapshot { cpsr: entry.cpsr, ..destination };
+    let unchanged_cpsr = 0x80000053;
+    let unchanged_entry = Snapshot { cpsr: ModalCpsr(unchanged_cpsr), ..entry };
+    let unchanged_destination = Snapshot { cpsr: ModalCpsr(unchanged_cpsr), ..destination };
+    let mut unchanged_instruction = trace.binding.entry;
+    unchanged_instruction.pstate = unchanged_cpsr;
+    let mut unchanged_events = trace.events.clone();
+    let PreservationEvidence::Retired(retired) = &mut unchanged_events[0] else { unreachable!() };
+    retired.observation.as_mut().expect("actual retirement observation").pstate = unchanged_cpsr;
+    retired.resumed_from.as_mut().expect("actual resumed entry").pstate = unchanged_cpsr;
+    retired.before.cpsr = unchanged_cpsr;
+    retired.after.cpsr = unchanged_cpsr;
+    let PreservationEvidence::Entered(entered) = &mut unchanged_events[1] else { unreachable!() };
+    entered.before.cpsr = unchanged_cpsr;
+    entered.after.spsr = unchanged_cpsr;
+    let PreservationEvidence::SavedStatus(saved) = &mut unchanged_events[2] else { unreachable!() };
+    saved.before.registers[1] = unchanged_cpsr;
+    saved.after.registers[1] = unchanged_cpsr;
+    saved.before.irq_spsr = unchanged_cpsr;
+    saved.after.irq_spsr = unchanged_cpsr;
+    let PreservationEvidence::Returned(returned) = &mut unchanged_events[3] else { unreachable!() };
+    returned.before.irq_spsr = unchanged_cpsr;
+    returned.before.registers[1] = unchanged_cpsr;
+    returned.after.irq_spsr = unchanged_cpsr;
     let unchanged_context = CausalContext::from_observation(
         &unchanged_destination,
         actual_lifetime(trace.context.forward.0 as usize),
     ).map_err(|failure| format!("unchanged destination context refused: {failure:?}"))?;
     let mut unchanged = ProductionWrapper::new();
     unchanged.begin(
-        &entry,
-        trace.binding.entry,
-        CausalContext::from_observation(&entry, actual_lifetime(trace.context.forward.0 as usize))
-            .map_err(|failure| format!("unchanged entry context refused: {failure:?}"))?,
+        &unchanged_entry,
+        unchanged_instruction,
+        CausalContext::from_observation(
+            &unchanged_entry,
+            actual_lifetime(trace.context.forward.0 as usize),
+        ).map_err(|failure| format!("unchanged entry context refused: {failure:?}"))?,
         trace.stock,
     ).map_err(|failure| format!("unchanged wrapper begin refused: {failure:?}"))?;
-    unchanged.observe(trace.events[0])
-        .map_err(|failure| format!("unchanged retirement refused: {failure:?}"))?;
-    if unchanged.complete_handoff(&unchanged_destination, trace.frame, unchanged_context)
-        .map_err(|failure| format!("unchanged handoff refused: {failure:?}"))?.is_some()
-    {
-        return Err("unchanged strict-equality handoff issued a transformation certificate".into());
+    for event in unchanged_events {
+        unchanged.observe(event)
+            .map_err(|failure| format!("unchanged IRQ evidence refused: {failure:?}"))?;
     }
+    if unchanged.complete_handoff(&unchanged_destination, trace.frame, unchanged_context)
+        .map_err(|failure| format!("unchanged IRQ handoff refused: {failure:?}"))?.is_some()
+    {
+        return Err("unchanged IRQ handoff issued a transformation certificate".into());
+    }
+    let mut unchanged_monitor = Monitor::<1>::new(
+        Layout::stock_baseline(),
+        ObservationLimit(NonZeroU64::new(4).expect("nonzero control limit")),
+    );
+    unchanged_monitor.observe(unchanged_entry)
+        .map_err(|failure| format!("unchanged IRQ Monitor entry refused: {failure:?}"))?;
+    unchanged_monitor.observe(unchanged_destination)
+        .map_err(|failure| format!("unchanged IRQ Monitor handoff refused: {failure:?}"))?;
+    unchanged_monitor.observe(Snapshot {
+        pc: unchanged_entry.lr,
+        sp: unchanged_entry.sp,
+        saved_stock_frame: None,
+        entry_instruction: EntryInstruction::NotEntry,
+        ..unchanged_destination
+    }).map_err(|failure| format!("unchanged IRQ Monitor return refused: {failure:?}"))?;
+    unchanged_monitor.finish()
+        .map_err(|failure| format!("unchanged IRQ Monitor finish refused: {failure:?}"))?;
     unchanged.finish().map_err(|failure| format!("unchanged wrapper finish refused: {failure:?}"))?;
-    controls.insert("unchanged-strict-equality".into(), json!({
+    controls.insert("unchanged-irq-strict-equality".into(), json!({
         "passed":true,
+        "packets":4,
         "issued":unchanged.issued(),
         "consumed":unchanged.consumed(),
+        "monitor_handoff":true,
     }));
+
+    let (mut unnecessary_wrapper, unnecessary_certificate, _, _) = issue_actual_certificate(&trace)?;
+    let mut unnecessary_monitor = Monitor::<1>::new(
+        Layout::stock_baseline(),
+        ObservationLimit(NonZeroU64::new(4).expect("nonzero control limit")),
+    );
+    unnecessary_monitor.observe(unchanged_entry)
+        .map_err(|failure| format!("unnecessary certificate Monitor entry refused: {failure:?}"))?;
+    let failure = unnecessary_monitor
+        .observe_authenticated(unchanged_destination, unnecessary_certificate)
+        .err().ok_or("unchanged CPSR admitted an unnecessary certificate")?;
+    if !matches!(failure, fujimod_xm1::modal_permit::Failure::UnexpectedCertificate(_)) {
+        return Err(format!("unchanged CPSR returned {failure:?} for an unnecessary certificate"));
+    }
+    unnecessary_wrapper.consume()
+        .map_err(|failure| format!("unnecessary certificate cleanup consumption refused: {failure:?}"))?;
+    unnecessary_wrapper.finish()
+        .map_err(|failure| format!("unnecessary certificate cleanup finish refused: {failure:?}"))?;
+    controls.insert("unchanged-irq-unnecessary-certificate".into(),
+        json!({"refused":true,"failure":format!("{failure:?}")}));
 
     let mut strict = Monitor::<1>::new(
         Layout::stock_baseline(),

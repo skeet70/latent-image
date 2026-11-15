@@ -330,6 +330,9 @@ impl ProductionWrapper {
         {
             return self.reject(CertificateFailure::EvidenceShape);
         }
+        if allow_unchanged && snapshot.cpsr == active.entry.cpsr {
+            return Ok(None);
+        }
         let destination = BoundState::from_snapshot(snapshot, context.task);
         let facts = CertificateFacts {
             task: context.task.identity(),
