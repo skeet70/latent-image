@@ -6,6 +6,8 @@
 pub mod acquisition;
 pub mod shot;
 pub mod callbacks;
+pub(crate) mod capture_moves;
+pub(crate) mod capture_statistics;
 pub mod statistics;
 mod commands;
 pub mod stages;

@@ -20,6 +20,8 @@ pub struct Callbacks<'a> {
     pub statistics: StockCallbackWord,
     pub capture_selection_hook: StockCallbackWord,
     pub capture_calculations: CaptureCalculationCallbacks,
+    pub moves: LensMoveCallbacks,
+    pub capture_statistics: CaptureStatisticsCallbacks,
     pub pipeline: PipelineCallbacks<'a>,
 }
 
@@ -31,6 +33,19 @@ pub struct CaptureCalculationCallbacks {
     pub fourth: StockCallbackWord,
     /// Evaluation94, then refinement95; each native callback takes an84-byte result pointer.
     pub area_evaluation: [StockCallbackWord; 2],
+}
+
+#[derive(Clone, Copy)]
+pub struct LensMoveCallbacks {
+    pub relative: StockCallbackWord,
+    pub absolute: StockCallbackWord,
+}
+
+#[derive(Clone, Copy)]
+pub struct CaptureStatisticsCallbacks {
+    pub setup: StockCallbackWord,
+    pub setting: StockCallbackWord,
+    pub primary_setting: StockCallbackWord,
 }
 
 #[derive(Clone, Copy)]
@@ -64,6 +79,7 @@ pub struct Libraries<'a, M, R, E, P, I, T, A, Q> {
     /// LiveSearch's current record (native16c21fc), not the current Shot argument.
     pub live_search_record: &'a xm1_saclac_search_bindings::RecordBinding,
     pub subjects: &'a RefCell<crate::shot_subjects::Workspace>,
+    pub capture: &'a RefCell<crate::shot_capture_workspace::Workspace>,
     pub motion: &'a RefCell<Option<xm1_saclac_calc::adjust::motion::state::MotionState>>,
     pub callbacks: Callbacks<'a>,
 }

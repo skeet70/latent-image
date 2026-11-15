@@ -230,3 +230,58 @@ pub fn capture_calculation_callbacks() -> crate::shot_services::CaptureCalculati
         ],
     }
 }
+
+// X-M1 f2ef0c/f2ef34 ignore incoming registers and post empty35/3a completions.
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_capture_lens_relative() {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Lens35, &[]).expect("relative lens completion post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_capture_lens_absolute() {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Lens3a, &[]).expect("absolute lens completion post");
+}
+
+#[cfg(target_arch = "arm")]
+pub fn capture_move_callbacks() -> crate::shot_services::LensMoveCallbacks {
+    use xm1_saclac_interface::stock::StockCallbackWord;
+    crate::shot_services::LensMoveCallbacks {
+        relative: StockCallbackWord(xm1_saclac_root_capture_lens_relative as *const () as usize as u32),
+        absolute: StockCallbackWord(xm1_saclac_root_capture_lens_absolute as *const () as usize as u32),
+    }
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_capture_statistics_setup(status: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Statistics83, &status.to_le_bytes()).expect("capture statistics setup post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_capture_statistics_setting(status: u32, result: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::capture_setting(&poster, &Guest, xm1_saclac_interface::Completion::Statistics85, status, result).expect("capture statistics setting post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_primary_statistics_setting(status: u32, result: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::capture_setting(&poster, &Guest, xm1_saclac_interface::Completion::Statistics7d, status, result).expect("primary statistics setting post");
+}
+
+#[cfg(target_arch = "arm")]
+pub fn capture_statistics_callbacks() -> crate::shot_services::CaptureStatisticsCallbacks {
+    use xm1_saclac_interface::stock::StockCallbackWord;
+    crate::shot_services::CaptureStatisticsCallbacks {
+        setup: StockCallbackWord(xm1_saclac_root_capture_statistics_setup as *const () as u32),
+        setting: StockCallbackWord(xm1_saclac_root_capture_statistics_setting as *const () as u32),
+        primary_setting: StockCallbackWord(xm1_saclac_root_primary_statistics_setting as *const () as u32),
+    }
+}

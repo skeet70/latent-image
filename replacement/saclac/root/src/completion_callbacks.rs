@@ -46,6 +46,27 @@ pub fn primary_notice(machine: &impl Machine, status: u32) {
     }
 }
 
+/// f2903c/f2cad8: status followed by five pointed-to words. The primary callback's dump
+/// precedes those reads, so an aliased result observes that native publication order.
+pub fn capture_setting<B: Backend, M: Machine + Clone>(poster: &Poster<B>, machine: &M, completion: Completion, status: u32, result: u32) -> Result<(), PostError> {
+    assert!(matches!(completion, Completion::Statistics85 | Completion::Statistics7d));
+    if completion == Completion::Statistics7d && machine.enter(0x69_f8fc, &[0xa8]) & 0x80 != 0 {
+        let sources = machine.read_u32(PARAMETER_BLOCKS[7].address + 0xc);
+        let frame = machine.read_u32(sources.wrapping_add(xm1_shot_sequence::capture_stock::SOURCE_FRAME));
+        let mut dumps = crate::geometry::GeometryBindings {
+            stages: crate::stages::StageDriver { isp: (), arguments: crate::stock::stages::StageMemory, machine: machine.clone() },
+            peers: (),
+        };
+        xm1_saclac_profile_geometry::controller::dumps::dump_result(&mut dumps, (frame != 0).then_some(xm1_saclac_profile_geometry::ports::DumpBuffer(frame)));
+    }
+    let mut payload = [0; 24];
+    payload[..4].copy_from_slice(&status.to_le_bytes());
+    for (index, out) in payload[4..].chunks_exact_mut(4).enumerate() {
+        out.copy_from_slice(&machine.read_u32(result.wrapping_add(4 * index as u32)).to_le_bytes());
+    }
+    post(poster, completion, &payload)
+}
+
 /// f15070 posts the halfword and mode; its unused alignment halfword is zero here.
 pub fn lens_status<B: Backend>(poster: &Poster<B>, position: u16, mode: u32) -> Result<(), PostError> {
     let mut payload = [0; 8];
