@@ -190,3 +190,43 @@ pub extern "C" fn xm1_saclac_root_pipeline_statistics_committed() {
     let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
     crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Statistics6b, &[]).expect("pipeline statistics commit post");
 }
+
+macro_rules! capture_calculation_callback {
+    ($name:ident, $completion:ident, $bytes:literal) => {
+        #[cfg(target_arch = "arm")]
+        #[no_mangle]
+        pub extern "C" fn $name(address: u32) {
+            let result: [u8; $bytes] = crate::stock::acquisition::read_record(
+                &Guest, xm1_saclac_interface::calc::SharedAddress(address),
+            );
+            let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+            crate::completion_callbacks::post(
+                &poster, xm1_saclac_interface::Completion::$completion, &result,
+            ).expect("capture calculation completion post");
+        }
+    };
+}
+
+// X-M1 f2e6b4/f2e710/f2e6e4/f2e67c copy12/48/4/6 bytes from their first argument.
+capture_calculation_callback!(xm1_saclac_root_capture_first, Calculation99, 12);
+capture_calculation_callback!(xm1_saclac_root_capture_second, Calculation97, 48);
+capture_calculation_callback!(xm1_saclac_root_capture_third, Calculation98, 4);
+capture_calculation_callback!(xm1_saclac_root_capture_fourth, Calculation9a, 6);
+// X-M1 f2acd0/f2ac98 each copy84 bytes; the94 and95 events remain independently queued.
+capture_calculation_callback!(xm1_saclac_root_area_evaluated, Calculation94, 84);
+capture_calculation_callback!(xm1_saclac_root_area_refined, Calculation95, 84);
+
+#[cfg(target_arch = "arm")]
+pub fn capture_calculation_callbacks() -> crate::shot_services::CaptureCalculationCallbacks {
+    use xm1_saclac_interface::stock::StockCallbackWord;
+    crate::shot_services::CaptureCalculationCallbacks {
+        first: StockCallbackWord(xm1_saclac_root_capture_first as *const () as usize as u32),
+        second: StockCallbackWord(xm1_saclac_root_capture_second as *const () as usize as u32),
+        third: StockCallbackWord(xm1_saclac_root_capture_third as *const () as usize as u32),
+        fourth: StockCallbackWord(xm1_saclac_root_capture_fourth as *const () as usize as u32),
+        area_evaluation: [
+            StockCallbackWord(xm1_saclac_root_area_evaluated as *const () as usize as u32),
+            StockCallbackWord(xm1_saclac_root_area_refined as *const () as usize as u32),
+        ],
+    }
+}

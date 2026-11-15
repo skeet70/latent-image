@@ -19,7 +19,18 @@ pub struct Callbacks<'a> {
     pub calculation: StockCallbackWord,
     pub statistics: StockCallbackWord,
     pub capture_selection_hook: StockCallbackWord,
+    pub capture_calculations: CaptureCalculationCallbacks,
     pub pipeline: PipelineCallbacks<'a>,
+}
+
+#[derive(Clone, Copy)]
+pub struct CaptureCalculationCallbacks {
+    pub first: StockCallbackWord,
+    pub second: StockCallbackWord,
+    pub third: StockCallbackWord,
+    pub fourth: StockCallbackWord,
+    /// Evaluation94, then refinement95; each native callback takes an84-byte result pointer.
+    pub area_evaluation: [StockCallbackWord; 2],
 }
 
 #[derive(Clone, Copy)]

@@ -6,10 +6,12 @@ use crate::stock::acquisition::Aligned;
 pub(crate) struct Resources<'a, M>(pub(crate) &'a M, pub(crate) &'a Stock<M>);
 impl<M: Machine + Clone> LensResources for Resources<'_, M> {
     fn resource(&mut self) -> Option<u32> {
-        let resource = self.0.enter(0x76_d9c8, &[]);
+        let resource = xm1_power_lifecycle::record_profile_globals::helper_76d9c8(&mut crate::calibration_inputs::runtime(self.0)).expect("lens resource");
         ((resource as i32) >= 0).then_some(resource)
     }
-    fn reference(&mut self) -> u32 { self.0.enter(0x76_dbb4, &[]) }
+    fn reference(&mut self) -> u32 {
+        xm1_power_lifecycle::record_profile_mapping::helper_76dbb4(&mut crate::calibration_inputs::runtime(self.0)).expect("lens reference")
+    }
     fn flags(&mut self) -> u32 { crate::calibration_inputs::lens_position_flags(self.0) }
     fn channel_bias(&mut self, resource: u32) -> i32 { i32::from(channel::bias(self.1, Channel(resource as i32), 0)) }
 }
