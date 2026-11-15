@@ -1469,9 +1469,9 @@
     },
     {
       "id": "saclac_root-root-49",
-      "shim": "saclac_root: Shot lens position/state/kind/control/reference `0x76da84`/`0x76dbb4`/`0x76dad4`/`0x76f340`/`0x76d9c8`, change take `0x76f438`, distance `0x749be4`; target derivations `0x7498e0`/`0x747aac`",
+      "shim": "saclac_root: Shot atomic lens change take `0x76f438`, distance `0x749be4` and channel-position derivation `0x7498e0`",
       "kind": "trampoline into retained stock",
-      "other_side": "target calls owned Calc frame::target before direction adjustment; no f4725c trampoline",
+      "other_side": "five Shot readings reuse owned Finish/Core getters, including owned76dbb4 state normalization; target calls owned Calc frame::target and owned direction adjustment; atomic owned-export binding and actual image qualification remain open",
       "owned": "partly",
       "removal": "lens/config services owned and whole-root qualified",
       "state": "required",
@@ -1479,7 +1479,7 @@
         {
           "kind": "reference-only",
           "contract": "replacement/saclac/root/BUILD.bazel",
-          "requirement": "Source/model boundary; not linked-image execution or removal acceptance. retained lens/config primitives. Recorded host-only scope: bounded host signed tuple/target exercised."
+          "requirement": "Source/model boundary, not linked-image removal acceptance. Residual atomic/geometry interfaces remain; bounded host signed getters, target and configuration paths do not qualify native scheduling or the whole root."
         }
       ],
       "predicates": {

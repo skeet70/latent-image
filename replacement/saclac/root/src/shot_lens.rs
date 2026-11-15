@@ -6,20 +6,24 @@ use xm1_saclac_interface::{Calc, Calc1, ImageProcessor, ImgDc};
 use xm1_saclac_profile_geometry::controller::Tables;
 use xm1_saclac_profile_records::{Memory, StockEntries};
 use xm1_saclac_shared::stock::Machine;
-use xm1_shot_sequence::{boundary::{Lens, LensPoint, LensReading}, finish_work::FinishLensValue, stock};
+use xm1_shot_sequence::{boundary::{Lens, LensPoint, LensReading}, finish_work::{FinishLayers, FinishLensValue}, stock};
 use crate::{round_ports::RoundPorts, shot_services::Libraries};
 
 impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc,
     I: Isp, T: Tables, A, Q> Lens for Libraries<'_, M, R, E, P, I, T, A, Q> {
     fn read(&mut self, reading: LensReading) -> u32 {
-        let entry = match reading {
-            LensReading::Position => stock::finish::lens_accessor(FinishLensValue::Position),
-            LensReading::State => 0x76_dbb4,
-            LensReading::Kind => stock::finish::lens_accessor(FinishLensValue::Direction),
-            LensReading::Control => stock::finish::lens_accessor(FinishLensValue::Drive),
-            LensReading::Reference => stock::finish::lens_accessor(FinishLensValue::Distance),
-        };
-        self.services.borrow().machine.enter(entry, &[])
+        match reading {
+            LensReading::State => {
+                let services = self.services.borrow();
+                xm1_power_lifecycle::record_profile_mapping::helper_76dbb4(
+                    &mut crate::calibration_inputs::runtime(&services.machine),
+                ).expect("lens normalized state")
+            }
+            LensReading::Position => FinishLayers::lens(self, FinishLensValue::Position),
+            LensReading::Kind => FinishLayers::lens(self, FinishLensValue::Direction),
+            LensReading::Control => FinishLayers::lens(self, FinishLensValue::Drive),
+            LensReading::Reference => FinishLayers::lens(self, FinishLensValue::Distance),
+        }
     }
     fn take_change(&mut self) -> u32 { self.services.borrow().machine.enter(0x76_f438, &[]) }
     fn designated_point(&mut self) -> Option<LensPoint> {
