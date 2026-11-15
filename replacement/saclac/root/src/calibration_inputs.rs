@@ -71,7 +71,7 @@ impl<M: Machine + Clone> DumpDerivations for Native<'_, M> {
 }
 
 // ConfigurationMemory addresses are offsets into the canonical adjustment area.
-struct Area<'a, A>(&'a A);
+pub(crate) struct Area<'a, A>(pub(crate) &'a A);
 impl<A: xm1_saclac_shared::settings::Adjustments> ConfigurationMemory for Area<'_, A> {
     type Error = core::convert::Infallible;
     fn read_byte(&mut self, at: ConfigAddress) -> Result<u8, ConfigurationError<Self::Error>> { Ok(xm1_saclac_config::adjustment::byte(self.0, at.0)) }
@@ -80,7 +80,7 @@ impl<A: xm1_saclac_shared::settings::Adjustments> ConfigurationMemory for Area<'
 }
 
 impl<M: Machine + Clone> Native<'_, M> {
-    fn calibration(&self) -> Calibration<'_, Area<'_, xm1_saclac_shared::stock::Stock<M>>> {
+    pub(crate) fn calibration(&self) -> Calibration<'_, Area<'_, xm1_saclac_shared::stock::Stock<M>>> {
         Calibration::new(Configuration::new(Area(self.1), ConfigAddress(0)))
     }
     fn metadata(&self) -> MetadataCalibration<'_, Area<'_, xm1_saclac_shared::stock::Stock<M>>> {

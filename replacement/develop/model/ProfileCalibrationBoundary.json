@@ -14,7 +14,7 @@
   },
   "portableCore": {
     "module": "calibration_core",
-    "files": ["src/calibration_core.rs", "src/calibration_core/mapped.rs", "src/calibration_core/curves.rs", "src/calibration_core/math.rs"],
+    "files": ["src/calibration_core.rs", "src/calibration_core/mapped.rs", "src/calibration_core/curves.rs", "src/calibration_core/math.rs", "src/calibration_core/profile.rs"],
     "readerFile": "src/calibration_core/configuration.rs",
     "readerOwnerCommit": "PipelineBuffers c1ea5a98",
     "constructor": "Calibration<'data>::new(Configuration<'data>)",
@@ -35,6 +35,14 @@
       "scaled_channel_curve": "(ChannelIndex) -> Result<CurveValue, ConfigurationError>"
     },
     "rounding": "Public free round_tenths(Tenths)->RoundedValue.",
+    "profileTriplets": {
+      "owner": "calibration_core::profile",
+      "safeMethods": ["Calibration::calibrate_profile", "Calibration::clamp_geometry", "profile::apply_positive", "Calibration::clamp_profile"],
+      "factorInputs": "Typed FactorRequest and FactorInput preserve mode, split, selector and signed full-word delta indices. FactorMode enables native0/2 only. FactorBanks preserves unwritten native factor halfwords.",
+      "memoryBoundary": "Values reads and writes remain ordered. The physical ABI adapter uses volatile input/output access, preserving overlap and per-lane reloads; Root uses a typed Triplet. ConfigurationMemory borrows the canonical configuration. Tables supplies immutable split keys and history fractions, never executable callbacks.",
+      "nativeAdapters": "Existing factor, clamp, history and scaling exports delegate to the shared CPU owner. Geometry/output wrappers retain optional effective-byte and metadata writes, including native physical-byte-zero metadata observation.",
+      "tests": "Literal active/inactive full-word mode results, signed wrapped rescaling, class86 flag-shift wrap, positive/nonpositive/full-word exposure boundaries and missing checked configuration."
+    },
     "implementation": "Mapped-word, bank selection, channel count, channel bias, eleven-knot interpolation, scaled curve, signed rounding and fixed-base-two polynomial arithmetic have one implementation in the portable core. Existing AAPCS exports are adapters.",
     "data": "Concrete bounded raw configuration bytes and actual LE scalar resource reads. No desired-value trait, metadata callback, physical global or arbitrary-memory constructor is public in the scalar core.",
     "rawHalfword": "74690c uses region.read_half at the final wrapped target address. Borrowed host bytes decode LE; the private physical backing uses one A32 LDRH. Configuration.read_half retains the canonical ordered two-byte law.",

@@ -1,7 +1,36 @@
 use super::shared::{Address32, ByteOffset};
-use core::mem::MaybeUninit;
 use core::ptr::{addr_of, addr_of_mut, read_volatile, write_volatile};
 use crate::develop::calibration_core as calibration;
+use calibration::profile as profile;
+
+struct ProfileTables;
+impl profile::Tables for ProfileTables {
+    fn split_keys(&self, index: profile::SplitTableIndex) -> [calibration::configuration::CfgKey; 2] {
+        let table = Address32(0xef5048).offset(ByteOffset(u32::from(index.0) * 4));
+        unsafe { [calibration::configuration::CfgKey(table.half() as u32), calibration::configuration::CfgKey(table.offset(ByteOffset(2)).half() as u32)] }
+    }
+    fn history_fraction(&self, index: profile::HistoryIndex) -> u8 {
+        unsafe { Address32(0xee9dc8).offset(ByteOffset(index.0 as i32 as u32)).byte() }
+    }
+}
+
+struct NativeValues { input: *const CalibrationTriplet, output: *mut CalibrationTriplet }
+impl profile::Values for NativeValues {
+    fn read(&self, lane: usize) -> u16 { unsafe { read_volatile(addr_of!((*self.input).values[lane])).0 } }
+    fn write(&mut self, lane: usize, value: u16) { unsafe { write_volatile(addr_of_mut!((*self.output).values[lane]), ProfileGain(value)) }; }
+}
+struct NativeFactors(*mut FactorSet);
+impl profile::FactorBanks for NativeFactors {
+    fn read(&self, half: usize) -> u16 { unsafe { read_volatile(self.0.cast::<u16>().add(half)) } }
+    fn write(&mut self, half: usize, value: u16) { unsafe { write_volatile(self.0.cast::<u16>().add(half), value) }; }
+}
+struct NativeFactorInput(*const FactorRequest);
+impl profile::FactorInput for NativeFactorInput {
+    fn mode(&self) -> profile::FactorMode { profile::FactorMode::from_native(unsafe { read_volatile(addr_of!((*self.0).mode)).0 }) }
+    fn split(&self) -> profile::SplitIndex { profile::SplitIndex(unsafe { read_volatile(addr_of!((*self.0).split)).0 }) }
+    fn selector(&self) -> profile::ProfileSelector { profile::ProfileSelector(unsafe { read_volatile(addr_of!((*self.0).selector)).0 }) }
+    fn deltas(&self) -> [profile::DeltaIndex; 2] { unsafe { [profile::DeltaIndex(read_volatile(addr_of!((*self.0).first_delta)).0), profile::DeltaIndex(read_volatile(addr_of!((*self.0).second_delta)).0)] } }
+}
 
 #[derive(Clone, Copy)]
 #[repr(transparent)]
@@ -81,89 +110,32 @@ pub(super) unsafe extern "C" fn xm1_pipeline_image_profile_split_count() -> u32 
     calibration_value(unsafe { physical_calibration() }.split_count()).get()
 }
 
-fn delta_key(index: DeltaIndex, first: bool) -> Option<ConfigurationKey> {
-    let key = match index.0 {
-        0..=8 => (if first { 0x7ed7 } else { 0x7efb }) - index.0 as u32 * 2,
-        10..=18 => (if first { 0x7eb5 } else { 0x7ed9 }) + (index.0 as u32 - 10) * 2,
-        _ => return None,
-    };
-    Some(ConfigurationKey(key))
-}
-
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn xm1_pipeline_image_profile_delta_factors(first: DeltaIndex, second: DeltaIndex, output: *mut CalibrationTriplet) {
-    unsafe { write_volatile(addr_of_mut!((*output).values[2]), ProfileGain(1024)) };
-    for (index, selection) in [first, second].iter().enumerate() {
-        let gain = match delta_key(*selection, index == 0) {
-            Some(key) => unsafe { xm1_buffers_configuration_half(key) },
-            None => 1024,
-        };
-        unsafe { write_volatile(addr_of_mut!((*output).values[index]), ProfileGain(gain)) };
-    }
+    calibration_value(unsafe { physical_calibration() }.delta_factors([profile::DeltaIndex(first.0), profile::DeltaIndex(second.0)], &mut NativeValues { input: output, output }));
 }
 
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn xm1_pipeline_image_profile_split_factors(selection: SplitIndex, output: *mut CalibrationTriplet) {
-    let index = (selection.0 as u8 as u32).min(unsafe { xm1_pipeline_image_profile_split_count() } - 1);
-    let table = Address32(0xef5048).offset(ByteOffset(index * 4));
-    let first = unsafe { setting_half(table.half() as u32) };
-    unsafe { write_volatile(addr_of_mut!((*output).values[0]), ProfileGain(first)) };
-    let second = unsafe { setting_half(table.offset(ByteOffset(2)).half() as u32) };
-    unsafe { write_volatile(addr_of_mut!((*output).values[1]), ProfileGain(second)) };
+    calibration_value(unsafe { physical_calibration() }.split_factors(profile::SplitIndex(selection.0), &ProfileTables, &mut NativeValues { input: output, output }));
 }
 
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn xm1_pipeline_image_profile_selected_factors(selection: ProfileSelector, output: *mut CalibrationTriplet) {
-    let key = match selection.0 { 1 => Some(0x80d1), 2 => Some(0x80d5), 3 => Some(0x80e9), 4 => Some(0x80d9), 5 => Some(0x80dd), 6 => Some(0x80e1), 7..=12 => Some(0x80e5), 14 => Some(0x80ed), _ => None };
-    if let Some(key) = key {
-        let first = unsafe { setting_half(key) };
-        unsafe { write_volatile(addr_of_mut!((*output).values[0]), ProfileGain(first)) };
-        let second = unsafe { setting_half(key + 2) };
-        unsafe { write_volatile(addr_of_mut!((*output).values[1]), ProfileGain(second)) };
-    } else {
-        unsafe {
-            write_volatile(addr_of_mut!((*output).values[0]), ProfileGain(1024));
-            write_volatile(addr_of_mut!((*output).values[1]), ProfileGain(1024));
-        }
-    }
+    calibration_value(unsafe { physical_calibration() }.selected_factors(profile::ProfileSelector(selection.0), &mut NativeValues { input: output, output }));
 }
 
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn xm1_pipeline_image_build_profile_factors(input: *const FactorRequest, output: *mut FactorSet) {
-    let words = output.cast::<u16>();
-    for offset in [11, 0, 1, 3, 4, 6, 7] { unsafe { write_volatile(words.add(offset), 1024) }; }
-    let mode = unsafe { read_volatile(addr_of!((*input).mode)) };
-    if matches!(mode.0, 0 | 2) {
-        unsafe {
-            xm1_pipeline_image_profile_split_factors(read_volatile(addr_of!((*input).split)), addr_of_mut!((*output).groups[1]));
-            xm1_pipeline_image_profile_selected_factors(read_volatile(addr_of!((*input).selector)), addr_of_mut!((*output).groups[2]));
-            xm1_pipeline_image_profile_delta_factors(read_volatile(addr_of!((*input).first_delta)), read_volatile(addr_of!((*input).second_delta)), addr_of_mut!((*output).groups[0]));
-        }
-    }
-    for lane in 0..2 {
-        let selected = unsafe { read_volatile(words.add(6 + lane)) } as u64;
-        let split = unsafe { read_volatile(words.add(3 + lane)) } as u64;
-        let delta = unsafe { read_volatile(words.add(lane)) } as u64;
-        unsafe { write_volatile(words.add(9 + lane), (selected * split * delta >> 20) as u16) };
-    }
+    calibration_value(unsafe { physical_calibration() }.build_profile_factors(&NativeFactorInput(input), &ProfileTables, &mut NativeFactors(output)));
 }
 
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn xm1_pipeline_image_calibrate_profile(input: *const FactorRequest, output: *mut CalibrationTriplet, metadata: Address32) {
-    let mut factors = MaybeUninit::<FactorSet>::uninit();
-    unsafe { xm1_pipeline_image_build_profile_factors(input, factors.as_mut_ptr()) };
-    let words = factors.as_ptr().cast::<u16>();
-    for lane in 0..3 {
-        let value = unsafe { read_volatile(addr_of!((*input).values.values[lane])) }.0 as u32;
-        let result = if lane == 0 { value } else {
-            let factor = unsafe { read_volatile(words.add(8 + lane)) } as u32;
-            value.wrapping_mul(factor).wrapping_add(512) >> 10
-        };
-        unsafe { write_volatile(addr_of_mut!((*output).values[lane]), ProfileGain(result as u16)) };
-    }
+    let factors = calibration_value(unsafe { physical_calibration() }.calibrate_profile(&NativeFactorInput(input), &ProfileTables, &mut NativeValues { input: unsafe { addr_of!((*input).values) }, output }));
     if metadata.0 != 0 {
         for (slot, index) in [3, 4, 6, 7, 0, 1].iter().enumerate() {
-            let value = unsafe { read_volatile(words.add(*index)) } as u32;
+            let value = factors.0[*index] as u32;
             unsafe { metadata.offset(ByteOffset(0x9e688 + slot as u32 * 4)).write_word(value) };
         }
         unsafe { metadata.offset(ByteOffset(0x9e6a0)).write_word(1024) };
@@ -174,90 +146,19 @@ pub(super) unsafe extern "C" fn xm1_pipeline_image_calibrate_profile(input: *con
     }
 }
 
-fn clamp_bit(class: ProfileClass, lane: u32) -> u32 {
-    1u32.checked_shl(((class.0 as u8 as u32) * 3 + lane) & 255).unwrap_or(0)
-}
-
-unsafe fn rescale(values: *mut CalibrationTriplet, lane: usize, target: u32, previous: ProfileGain) {
-    let previous = previous.0 as u32;
-    for other in 0..3 {
-        if other == lane { continue; }
-        let value = unsafe { read_volatile(addr_of!((*values).values[other])) }.0 as u32;
-        let product = value.wrapping_mul(target);
-        let result = if previous == 0 { product } else { (unsafe { __aeabi_idiv(product as i32, previous as i32) }) as u32 };
-        unsafe { write_volatile(addr_of_mut!((*values).values[other]), ProfileGain(result as u16)) };
-    }
-    unsafe { write_volatile(addr_of_mut!((*values).values[lane]), ProfileGain(target as u16)) };
-}
-
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn xm1_pipeline_image_clamp_profile(class: ProfileClass, values: *mut CalibrationTriplet, flags: *mut ClampFlags, rate: ProfileRate) {
-    let mut upper = 0;
-    let mut lower = 0;
-    if class.0 <= 1 {
-        let maximum = unsafe { [32767, setting_half(0x7930) as u32, setting_half(0x7934) as u32] };
-        let minimum = if class.0 == 0 {
-            unsafe { [setting_half(0x792a) as u32, setting_half(0x7928) as u32, setting_half(0x792c) as u32] }
-        } else {
-            unsafe { [setting_half(0x7924) as u32, setting_half(0x7922) as u32, setting_half(0x7926) as u32] }
-        };
-        let scale = unsafe { setting_half(if class.0 == 0 { 0x7938 } else { 0x7936 }) } as u32;
-        let ceiling = ((rate.0.wrapping_mul(scale) as i32) / 10) as u16 as u32;
-        for lane in 0..3 {
-            let previous = unsafe { read_volatile(addr_of!((*values).values[lane])) };
-            if previous.0 as u32 >= minimum[lane] { continue; }
-            unsafe { rescale(values, lane, minimum[lane], previous) };
-            lower |= clamp_bit(class, lane as u32);
-        }
-        if lower != 0 {
-            let previous = unsafe { read_volatile(addr_of!((*values).values[0])) };
-            if previous.0 as u32 > ceiling {
-                unsafe { rescale(values, 0, ceiling, previous) };
-                lower |= clamp_bit(class, 3);
-            }
-            for lane in 1..3 {
-                if (unsafe { read_volatile(addr_of!((*values).values[lane])) }.0 as u32) < minimum[lane] {
-                    unsafe { write_volatile(addr_of_mut!((*values).values[lane]), ProfileGain(minimum[lane] as u16)) };
-                    lower |= clamp_bit(class, lane as u32 + 3);
-                }
-            }
-        }
-        for lane in 0..3 {
-            if unsafe { read_volatile(addr_of!((*values).values[lane])) }.0 as u32 > maximum[lane] {
-                unsafe { write_volatile(addr_of_mut!((*values).values[lane]), ProfileGain(maximum[lane] as u16)) };
-                upper |= clamp_bit(class, lane as u32);
-            }
-        }
-    } else {
-        let (maximum, minimum) = if class.0 == 2 {
-            let second_maximum = unsafe { setting_half(0x7cba) };
-            let third_maximum = unsafe { setting_half(0x7cbe) };
-            let second_minimum = unsafe { setting_half(0x7cb4) };
-            let third_minimum = unsafe { setting_half(0x7cb8) };
-            let _ = unsafe { setting_half(0x7938) };
-            ([32767, second_maximum, third_maximum], [256, second_minimum, third_minimum])
-        } else { ([32767; 3], [256; 3]) };
-        for lane in 0..3 {
-            let value = unsafe { read_volatile(addr_of!((*values).values[lane])) }.0;
-            if value > maximum[lane] {
-                unsafe { write_volatile(addr_of_mut!((*values).values[lane]), ProfileGain(maximum[lane])) };
-                upper |= clamp_bit(class, lane as u32);
-            } else if value < minimum[lane] {
-                unsafe { write_volatile(addr_of_mut!((*values).values[lane]), ProfileGain(minimum[lane])) };
-                lower |= clamp_bit(class, lane as u32);
-            }
-        }
-    }
-    if !flags.is_null() { unsafe { write_volatile(flags, ClampFlags { upper, lower }) }; }
+    let result = calibration_value(unsafe { physical_calibration() }.clamp_profile(profile::ClampClass(class.0), &mut NativeValues { input: values, output: values }, profile::ProfileRate(rate.0)));
+    if !flags.is_null() { unsafe { write_volatile(flags, ClampFlags { upper: result.upper, lower: result.lower }) }; }
 }
 
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn xm1_pipeline_image_clamp_geometry(_unused: u32, input: *const CalibrationTriplet, rate: ProfileRate, output: *mut CalibrationTriplet, effective: *mut u8, exposure: i16, metadata: Address32) {
-    let threshold = unsafe { xm1_buffers_configuration_byte(ConfigurationKey(0x792e)) } as i32 * 100;
+    let class = calibration_value(unsafe { physical_calibration() }.geometry_class(profile::ExposureHundredths(i32::from(exposure))));
     let mut values = unsafe { read_volatile(input) };
     let rate = ProfileRate(rate.0.max(10));
     let mut flags = ClampFlags { upper: 0, lower: 0 };
-    unsafe { xm1_pipeline_image_clamp_profile(ProfileClass(u32::from((exposure as i32) < threshold)), &mut values, &mut flags, rate) };
+    unsafe { xm1_pipeline_image_clamp_profile(ProfileClass(class.0), &mut values, &mut flags, rate) };
     if !effective.is_null() { unsafe { write_volatile(effective, rate.0 as u8) }; }
     unsafe { write_volatile(output, values) };
     if metadata.0 != 0 {
@@ -294,24 +195,12 @@ pub(super) struct Percent(pub(super) u32);
 
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn xm1_pipeline_image_profile_history_linearize(exposure: ExposureHundredths) -> u32 {
-    let quotient = exposure.0 / 100;
-    let index = exposure.0.wrapping_sub(quotient.wrapping_mul(100)).wrapping_add(100) as i16;
-    let value = unsafe { Address32(0xee9dc8).offset(ByteOffset(index as i32 as u32)).byte() } as u32;
-    let quotient = quotient as i16;
-    if quotient < 0 {
-        let shift = quotient.wrapping_neg() as u32 & 255;
-        65536u32.checked_shr(shift).unwrap_or(0).wrapping_mul(value) >> 16
-    } else {
-        1u32.checked_shl(quotient as u32 & 255).unwrap_or(0).wrapping_mul(value)
-    }
+    profile::history_percent(profile::ExposureHundredths(exposure.0), &ProfileTables).0
 }
 
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn xm1_pipeline_image_profile_scale_percent(values: *mut CalibrationTriplet, percent: Percent) {
-    for lane in 0..3 {
-        let value = unsafe { read_volatile(addr_of!((*values).values[lane])) }.0 as u64;
-        unsafe { write_volatile(addr_of_mut!((*values).values[lane]), ProfileGain((value * percent.0 as u64 / 100) as u16)) };
-    }
+    profile::scale_percent(&mut NativeValues { input: values, output: values }, profile::Percent(percent.0));
 }
 
 #[unsafe(no_mangle)]
@@ -430,7 +319,7 @@ pub(super) unsafe extern "C" fn xm1_pipeline_image_profile_apply_converted_value
 
 #[unsafe(no_mangle)]
 pub(super) unsafe extern "C" fn xm1_pipeline_image_profile_apply_positive(exposure: ExposureHundredths, values: *mut CalibrationTriplet) {
-    if exposure.0 > 0 { unsafe { xm1_pipeline_image_profile_apply_converted_value(values, exposure) }; }
+    profile::apply_positive(profile::ExposureHundredths(exposure.0), &mut NativeValues { input: values, output: values }, &ProfileTables);
 }
 
 #[unsafe(no_mangle)]
