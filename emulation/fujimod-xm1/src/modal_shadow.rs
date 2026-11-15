@@ -1,7 +1,12 @@
-//! Passive late-preservation proposal. No result admits a production handoff.
-use crate::{modal_guard::InstalledGuard, modal_lifetime::{LifetimePhase, LifetimeReceipt, Word},
+//! Exact retained-kernel IRQ-return certificate capture for the modal handoff.
+use crate::{
+    modal_certificate::{AuthenticatedIrqReturn, CausalContext, CertificateFacts, CertificateFailure, ProductionWrapper},
+    modal_guard::InstalledGuard,
+    modal_lifetime::{LifetimeReceipt, Word},
     modal_permit::{CoreId, EntryInstruction, Snapshot, STOCK_ENTRY, STOCK_RESUME},
-    modal_task::TaskExecution, provenance::Guest, trace::InstructionCount};
+    provenance::Guest,
+    trace::InstructionCount,
+};
 use fujimod_emulator::{board::observation::{CoreIndex, InstructionPointEvent, PreservationWatch}, session::Session};
 use fujimod_emulator_cpu::{HookRange, Register, arm,
     preservation::{ExecutionSource, PreservationEvidence, SavedFrame, shadow}};
@@ -55,36 +60,16 @@ pub(crate) struct EarlierIrqReport {
     normalization_underflow_events: Vec<EarlierIrq>,
     retained: Vec<EarlierIrq>,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Context {
-    task: TaskExecution,
-    phase: LifetimePhase,
-    forward: u64,
-    reverse: u64,
-    install_core: Option<usize>,
-    rollback_core: Option<usize>,
-}
-impl Context {
-    fn new(snapshot: &Snapshot, lifetime: LifetimeReceipt) -> Result<Self, Failure> {
-        if lifetime.failure.is_some() || lifetime.pending_stores != 0 { return Err(Failure::Publication); }
-        let task = snapshot.task.map_err(|_| Failure::Task)?;
-        task.validate_execution(snapshot.core, snapshot.sp, snapshot.cpsr).map_err(|_| Failure::Task)?;
-        Ok(Self { task, phase: lifetime.phase, forward: lifetime.forward_writes,
-            reverse: lifetime.reverse_writes, install_core: lifetime.install_core, rollback_core: lifetime.rollback_core })
-    }
-}
 
 #[derive(Clone, Copy, Debug)]
-enum Failure { Task, Publication, Entry, Overlap, Missing, Counter, Native(shadow::Failure) }
+enum Failure { Entry, Missing, Counter, Certificate(CertificateFailure) }
 struct State {
-    active: Option<shadow::Shadow<Context>>,
+    wrapper: ProductionWrapper,
     started: u64,
     completed: u64,
     native_events: u64,
     failure: Option<Failure>,
-    evidence: [Option<PreservationEvidence>; 16],
-    evidence_count: usize,
-    context: Option<Context>,
+    context: Option<CausalContext>,
     first_irq: Option<FrameEvidence>,
     earlier_irq: [Option<EarlierIrq>; EARLIER_IRQ_CAPACITY],
     earlier_irq_total: u64,
@@ -93,26 +78,51 @@ struct State {
 impl State {
     fn fail(&mut self, failure: Failure) { if self.failure.is_none() { self.failure = Some(failure); } }
     fn native(&mut self, evidence: PreservationEvidence) {
-        if self.failure.is_some() || self.active.is_none() { return; }
-        let Some(events) = self.native_events.checked_add(1) else { self.fail(Failure::Counter); return; };
+        if self.failure.is_some() { return; }
+        let Some(events) = self.native_events.checked_add(1) else {
+            self.fail(Failure::Counter);
+            return;
+        };
         self.native_events = events;
-        if self.evidence_count == self.evidence.len() { self.fail(Failure::Counter); return; }
-        self.evidence[self.evidence_count] = Some(evidence);
-        self.evidence_count += 1;
-        if let Some(active) = &mut self.active {
-            if let Err(failure) = active.observe(evidence) { self.fail(Failure::Native(failure)); }
+        if let Err(failure) = self.wrapper.observe(evidence) {
+            self.fail(Failure::Certificate(failure));
         }
     }
 }
 
 #[derive(Clone, Copy)]
 struct FrameEvidence {
-    context: Context,
-    evidence: [Option<PreservationEvidence>; 16],
+    context: CausalContext,
+    evidence: [Option<PreservationEvidence>; 4],
 }
 
 #[derive(Serialize)]
 pub(crate) struct IrqReport { context: String, evidence: Vec<String> }
+
+#[derive(Serialize)]
+pub(crate) struct SourceReport {
+    address: u64,
+    physical: u64,
+    word: u32,
+    tcm: [Option<TcmEvidence>; 2],
+}
+
+#[derive(Serialize)]
+pub(crate) struct CertificateReport {
+    task: String,
+    publication_count: usize,
+    forward: u64,
+    reverse: u64,
+    retirement_source: SourceReport,
+    status_source: SourceReport,
+    return_source: SourceReport,
+    old_svc_spsr: u32,
+    entry_cpsr: u32,
+    returned_cpsr: u32,
+    frame_address: u64,
+    frame_physical: u64,
+    frame_words: [u32; 9],
+}
 
 #[derive(Serialize)]
 pub(crate) struct Report {
@@ -123,7 +133,11 @@ pub(crate) struct Report {
     pub native_events: u64,
     pub active: bool,
     pub failure: Option<String>,
+    pub certificates_issued: u64,
+    pub certificates_consumed: u64,
+    pub task_identity_verified: bool,
     pub production_admission: bool,
+    pub certificate: Option<CertificateReport>,
     pub context: Option<String>,
     pub native_evidence: Vec<String>,
     pub first_irq: Option<IrqReport>,
@@ -159,9 +173,18 @@ impl Capture {
                 return Err("shadow bank-transfer prefix leaves the authenticated immutable loader image".into());
             }
         }
-        let state = Rc::new(RefCell::new(State { active: None, started: 0, completed: 0, native_events: 0, failure: None,
-            evidence: [None; 16], evidence_count: 0, context: None, first_irq: None,
-            earlier_irq: [None; EARLIER_IRQ_CAPACITY], earlier_irq_total: 0, earlier_irq_word: None }));
+        let state = Rc::new(RefCell::new(State {
+            wrapper: ProductionWrapper::new(),
+            started: 0,
+            completed: 0,
+            native_events: 0,
+            failure: None,
+            context: None,
+            first_irq: None,
+            earlier_irq: [None; EARLIER_IRQ_CAPACITY],
+            earlier_irq_total: 0,
+            earlier_irq_word: None,
+        }));
         let observed = state.clone();
         let core = request.core;
         let callback = Rc::new(move |actual: CoreIndex, evidence| {
@@ -178,6 +201,12 @@ impl Capture {
 
     pub(crate) fn wants_task(&self, core: CoreId, pc: Guest) -> bool {
         core.0 == self.request.core && (pc == STOCK_ENTRY || pc == STOCK_RESUME)
+    }
+
+    pub(crate) fn task_identity_verified(&self) -> bool {
+        let state = self.state.borrow();
+        state.failure.is_none() && state.wrapper.consumed() != 0
+            && state.wrapper.issued() == state.wrapper.consumed()
     }
 
     pub(crate) fn sites(&self) -> impl Iterator<Item = Guest> {
@@ -229,73 +258,173 @@ impl Capture {
         Ok(())
     }
 
-    pub(crate) fn observe(&mut self, snapshot: &Snapshot, point: Option<InstructionPointEvent>, lifetime: LifetimeReceipt) {
-        if snapshot.core.0 != self.request.core { return; }
+    pub(crate) fn observe(&mut self, snapshot: &Snapshot, point: Option<InstructionPointEvent>,
+        lifetime: LifetimeReceipt) -> Result<Option<AuthenticatedIrqReturn>, String> {
+        if snapshot.core.0 != self.request.core { return Ok(None); }
         let mut state = self.state.borrow_mut();
-        if state.failure.is_some() { return; }
+        if let Some(failure) = state.failure { return Err(format!("{failure:?}")); }
         if snapshot.pc == STOCK_ENTRY && snapshot.entry_instruction == EntryInstruction::OriginalPush {
-            if state.active.is_some() { state.fail(Failure::Overlap); return; }
-            let Some(point) = point else { state.fail(Failure::Entry); return; };
+            let Some(point) = point else {
+                state.fail(Failure::Entry);
+                return Err(format!("{:?}", Failure::Entry));
+            };
             if point.core.0 != snapshot.core.0 || point.entry.address != u64::from(snapshot.pc.0)
                 || point.entry.physical != Some(u64::from(snapshot.pc.0)) {
-                state.fail(Failure::Entry); return;
+                state.fail(Failure::Entry);
+                return Err(format!("{:?}", Failure::Entry));
             }
-            let context = match Context::new(snapshot, lifetime) {
-                Ok(context) => context, Err(failure) => { state.fail(failure); return; }
-            };
-            let registers = registers(snapshot);
-            let source = |address, word| ExecutionSource { address, physical: u64::from(address), word, tcm: point.entry.tcm };
-            let stock = shadow::StockReturn { vector: self.request.vector,
-                status: source(self.request.status, 0xe169f001), returning: source(self.request.returning, 0xe8fdd00f) };
-            match shadow::Shadow::new(shadow::Binding { entry: point.entry, registers, cpsr: snapshot.cpsr.0, context }, stock) {
-                Ok(active) => {
-                    let Some(started) = state.started.checked_add(1) else { state.fail(Failure::Counter); return; };
-                    state.started = started;
-                    state.active = Some(active);
-                    state.context = Some(context);
-                    state.evidence.fill(None);
-                    state.evidence_count = 0;
+            let context = match CausalContext::from_observation(snapshot, lifetime) {
+                Ok(context) => context,
+                Err(failure) => {
+                    state.fail(Failure::Certificate(failure));
+                    return Err(format!("{failure:?}"));
                 }
-                Err(failure) => state.fail(Failure::Native(failure)),
-            }
-        } else if snapshot.pc == STOCK_RESUME && state.active.is_some() {
-            let context = match Context::new(snapshot, lifetime) {
-                Ok(context) => context, Err(failure) => { state.fail(failure); return; }
             };
-            let Some(frame) = snapshot.saved_stock_frame else { state.fail(Failure::Missing); return; };
-            // Task attribution supplies the physical stack extent independently of the native packet.
-            let physical = u64::from(snapshot.sp.0 & !0x40000000);
-            let frame = SavedFrame { address: snapshot.sp.0, physical, words: frame.0 };
-            let mut active = state.active.take().expect("active shadow checked above");
-            if let Err(failure) = active.handoff(registers(snapshot), snapshot.cpsr.0, frame, context).and_then(|_| active.finish()) {
-                state.fail(Failure::Native(failure)); return;
+            let source = |address, word| ExecutionSource {
+                address,
+                physical: u64::from(address),
+                word,
+                tcm: point.entry.tcm,
+            };
+            let stock = shadow::StockReturn {
+                vector: self.request.vector,
+                status: source(self.request.status, 0xe169f001),
+                returning: source(self.request.returning, 0xe8fdd00f),
+            };
+            if let Err(failure) = state.wrapper.begin(snapshot, point.entry, context, stock) {
+                state.fail(Failure::Certificate(failure));
+                return Err(format!("{failure:?}"));
             }
-            let Some(completed) = state.completed.checked_add(1) else { state.fail(Failure::Counter); return; };
+            let Some(started) = state.started.checked_add(1) else {
+                state.fail(Failure::Counter);
+                return Err(format!("{:?}", Failure::Counter));
+            };
+            state.started = started;
+            state.context = Some(context);
+            Ok(None)
+        } else if snapshot.pc == STOCK_RESUME && state.wrapper.active() {
+            let context = match CausalContext::from_observation(snapshot, lifetime) {
+                Ok(context) => context,
+                Err(failure) => {
+                    state.fail(Failure::Certificate(failure));
+                    return Err(format!("{failure:?}"));
+                }
+            };
+            let Some(frame) = snapshot.saved_stock_frame else {
+                state.fail(Failure::Missing);
+                return Err(format!("{:?}", Failure::Missing));
+            };
+            let frame = SavedFrame {
+                address: snapshot.sp.0,
+                physical: u64::from(snapshot.sp.0 & !0x40000000),
+                words: frame.0,
+            };
+            let certificate = match state.wrapper.complete(snapshot, frame, context) {
+                Ok(certificate) => certificate,
+                Err(failure) => {
+                    state.fail(Failure::Certificate(failure));
+                    return Err(format!("{failure:?}"));
+                }
+            };
+            let Some(completed) = state.completed.checked_add(1) else {
+                state.fail(Failure::Counter);
+                return Err(format!("{:?}", Failure::Counter));
+            };
             state.completed = completed;
-            if state.first_irq.is_none() && state.evidence.iter().flatten()
+            if state.first_irq.is_none() && state.wrapper.evidence()
                 .any(|event| matches!(event, PreservationEvidence::Entered(_))) {
-                state.first_irq = Some(FrameEvidence { context, evidence: state.evidence });
+                state.first_irq = Some(FrameEvidence {
+                    context,
+                    evidence: state.wrapper.evidence_array(),
+                });
             }
+            Ok(Some(certificate))
+        } else {
+            Ok(None)
         }
     }
 
-    pub(crate) fn finish(&mut self) {
+    pub(crate) fn consume_certificate(&mut self) -> Result<(), String> {
         let mut state = self.state.borrow_mut();
-        if state.active.is_some() { state.fail(Failure::Missing); }
-        drop(state);
-        if self.watch.remove().is_err() { self.state.borrow_mut().fail(Failure::Entry); }
+        state.wrapper.consume().map_err(|failure| {
+            state.fail(Failure::Certificate(failure));
+            format!("{failure:?}")
+        })
+    }
+
+    pub(crate) fn finish(&mut self) -> Result<(), String> {
+        {
+            let mut state = self.state.borrow_mut();
+            if let Err(failure) = state.wrapper.finish() {
+                state.fail(Failure::Certificate(failure));
+            }
+            if let Some(failure) = state.failure { return Err(format!("{failure:?}")); }
+        }
+        if self.watch.remove().is_err() {
+            self.state.borrow_mut().fail(Failure::Entry);
+            return Err(format!("{:?}", Failure::Entry));
+        }
+        Ok(())
     }
 
     pub(crate) fn report(&self) -> Report {
         let state = self.state.borrow();
-        Report { core: self.request.core, source: self.request, started: state.started, completed: state.completed,
-            native_events: state.native_events, active: state.active.is_some(),
-            failure: state.failure.map(|failure| format!("{failure:?}")), production_admission: false,
+        let issued = state.wrapper.issued();
+        let consumed = state.wrapper.consumed();
+        let task_identity_verified = consumed != 0 && issued == consumed;
+        let production_admission = state.failure.is_none() && task_identity_verified
+            && !state.wrapper.active() && !state.wrapper.pending();
+        Report {
+            core: self.request.core,
+            source: self.request,
+            started: state.started,
+            completed: state.completed,
+            native_events: state.native_events,
+            active: state.wrapper.active(),
+            failure: state.failure.map(|failure| format!("{failure:?}")),
+            certificates_issued: issued,
+            certificates_consumed: consumed,
+            task_identity_verified,
+            production_admission,
+            certificate: state.wrapper.last().map(certificate_report),
             context: state.context.map(|context| format!("{context:?}")),
-            native_evidence: state.evidence.iter().flatten().map(|event| format!("{event:?}")).collect(),
-            first_irq: state.first_irq.map(|frame| IrqReport { context: format!("{:?}", frame.context),
-                evidence: frame.evidence.iter().flatten().map(|event| format!("{event:?}")).collect() }),
-            earlier_irq_provenance: earlier_irq_report(&state) }
+            native_evidence: state.wrapper.evidence().map(|event| format!("{event:?}")).collect(),
+            first_irq: state.first_irq.map(|frame| IrqReport {
+                context: format!("{:?}", frame.context),
+                evidence: frame.evidence.iter().flatten().map(|event| format!("{event:?}")).collect(),
+            }),
+            earlier_irq_provenance: earlier_irq_report(&state),
+        }
+    }
+}
+
+fn certificate_report(facts: CertificateFacts) -> CertificateReport {
+    CertificateReport {
+        task: format!("{:?}", facts.task),
+        publication_count: facts.publication_count,
+        forward: facts.forward,
+        reverse: facts.reverse,
+        retirement_source: source_report(facts.retirement_source),
+        status_source: source_report(facts.status_source),
+        return_source: source_report(facts.return_source),
+        old_svc_spsr: facts.old_svc_spsr,
+        entry_cpsr: facts.entry_cpsr,
+        returned_cpsr: facts.returned_cpsr,
+        frame_address: u64::from(facts.frame.address),
+        frame_physical: facts.frame.physical,
+        frame_words: facts.frame.words,
+    }
+}
+
+fn source_report(source: ExecutionSource) -> SourceReport {
+    SourceReport {
+        address: u64::from(source.address),
+        physical: source.physical,
+        word: source.word,
+        tcm: source.tcm.map(|entry| entry.map(|entry| TcmEvidence {
+            address: entry.address,
+            bytes: entry.bytes,
+        })),
     }
 }
 
@@ -333,10 +462,3 @@ fn earlier_irq_report(state: &State) -> EarlierIrqReport {
         raw_equal_wrong_phase_events, normalization_underflow_events, retained }
 }
 
-
-fn registers(snapshot: &Snapshot) -> [u32; 16] {
-    let mut registers = [0; 16];
-    registers[..13].copy_from_slice(&snapshot.registers);
-    registers[13] = snapshot.sp.0; registers[14] = snapshot.lr.0; registers[15] = snapshot.pc.0;
-    registers
-}

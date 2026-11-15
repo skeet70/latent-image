@@ -423,7 +423,7 @@ impl ModalTrace {
         if !self.enabled || self.failure.is_some() || counts.owned_handoffs.0 != 0 || counts.active_frames.0 != 0 {
             return Err("installed checkpoint requires a healthy observer before the first owned modal entry".into());
         }
-        if let Some(shadow) = &mut self.preservation_shadow { shadow.finish(); }
+        if let Some(shadow) = &mut self.preservation_shadow { shadow.finish()?; }
         let saved = self.guard.as_mut().ok_or("installed checkpoint requires a lifetime guard")?
             .pause_installed(session, &self.config.maps)?;
         self.enabled = false;
@@ -585,13 +585,26 @@ impl ModalTrace {
         let snapshot = Snapshot {
             core: CoreId(core), pc, registers, sp, lr, cpsr, saved_stock_frame, task, entry_instruction,
         };
-        if let (Some(shadow), Some(guard)) = (&mut self.preservation_shadow, &self.guard) {
-            let shadow_task = if needs_task || !shadow.wants_task(CoreId(core), pc) { task } else {
+        let mut certificate_task = task;
+        let certificate = if let (Some(shadow), Some(guard)) = (&mut self.preservation_shadow, &self.guard) {
+            certificate_task = if needs_task || !shadow.wants_task(CoreId(core), pc) { task } else {
                 modal_task::sample(&FixedMemory { session, maps: &self.config.maps }, CoreId(core), sp, cpsr)
             };
-            shadow.observe(&Snapshot { task: shadow_task, ..snapshot }, point, guard.receipt());
+            shadow.observe(&Snapshot { task: certificate_task, ..snapshot }, point, guard.receipt())?
+        } else { None };
+        let authenticated = certificate.is_some();
+        let observation = match certificate {
+            Some(certificate) => self.monitor.observe_authenticated(
+                Snapshot { task: certificate_task, ..snapshot },
+                certificate,
+            ),
+            None => self.monitor.observe(snapshot),
+        }.map_err(|failure| failure.to_string())?;
+        if authenticated {
+            self.preservation_shadow.as_mut()
+                .ok_or("causal certificate producer disappeared before consumption")?
+                .consume_certificate()?;
         }
-        let observation = self.monitor.observe(snapshot).map_err(|failure| failure.to_string())?;
         if let Observation::Entry { route: Route::Owned75, .. } = observation {
             if self.task_entries.len() == self.config.limit.0.get() as usize {
                 return Err("modal task-entry evidence limit reached".into());
@@ -630,7 +643,9 @@ impl ModalTrace {
             },
             stock_fetches: &self.stock_fetches, captured_domains: &self.captured_domains,
             failure: self.failure.as_deref(), physical_fetch_coverage: healthy_guard,
-            task_identity_verified: healthy_guard && context_source_spans == 16 && !self.task_entries.is_empty(),
+            task_identity_verified: healthy_guard && context_source_spans == 16
+                && (!self.task_entries.is_empty() || self.preservation_shadow.as_ref()
+                    .is_some_and(crate::modal_shadow::Capture::task_identity_verified)),
             physical_guard: self.guard.as_ref().and_then(InstalledGuard::report),
             context_source_spans, task_entries: &self.task_entries,
             lifetime: self.guard.as_ref().map(InstalledGuard::receipt),
@@ -687,7 +702,7 @@ impl ModalTrace {
     pub(crate) fn check_finish(&mut self, session: &Session) -> Result<(), String> {
         if !self.enabled { return Err("modal observation is not active".into()); }
         self.check_interval()?;
-        if let Some(shadow) = &mut self.preservation_shadow { shadow.finish(); }
+        if let Some(shadow) = &mut self.preservation_shadow { shadow.finish()?; }
         if let Err(failure) = self.monitor.finish() {
             let failure = failure.to_string();
             self.failure = Some(failure.clone());

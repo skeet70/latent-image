@@ -152,6 +152,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/machine.rs",
     "//emulation:fujimod-xm1/src/main.rs",
     "//emulation:fujimod-xm1/src/memory_view.rs",
+    "//emulation:fujimod-xm1/src/modal_certificate.rs",
     "//emulation:fujimod-xm1/src/modal_guard.rs",
     "//emulation:fujimod-xm1/src/modal_lifetime.rs",
     "//emulation:fujimod-xm1/src/modal_memory.rs",

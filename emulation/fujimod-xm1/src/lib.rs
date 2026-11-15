@@ -27,6 +27,7 @@ pub mod machine;
 mod loader_code;
 mod memory_view;
 mod modal_guard;
+pub mod modal_certificate;
 pub mod modal_lifetime;
 mod modal_memory;
 pub mod modal_permit;

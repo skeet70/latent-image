@@ -209,13 +209,21 @@ permitTests = do
   let source = object ["core" .= (0 :: Int), "vector" .= (0x18 :: Word32),
         "bank_transfer" .= (0x40208 :: Word32), "status" .= (0x40360 :: Word32),
         "returning" .= (0x40364 :: Word32), "adapter" .= ("board" :: String)]
+      emptyEarlier = object ["total" .= (0 :: Int), "dropped" .= (0 :: Int), "coverage_complete" .= True,
+        "target_post_prefix_lr" .= Null, "vector_lr_subtract" .= (4 :: Int),
+        "matching_events" .= ([] :: [Value]), "raw_equal_wrong_phase_events" .= ([] :: [Value]),
+        "normalization_underflow_events" .= ([] :: [Value]), "retained" .= ([] :: [Value])]
       passive = object ["core" .= (0 :: Int), "source" .= source, "started" .= (1 :: Int), "completed" .= (1 :: Int),
-        "native_events" .= (4 :: Int), "active" .= False, "failure" .= Null, "production_admission" .= False]
+        "native_events" .= (4 :: Int), "active" .= False, "failure" .= Null,
+        "certificates_issued" .= (0 :: Int), "certificates_consumed" .= (0 :: Int),
+        "task_identity_verified" .= False, "production_admission" .= False, "certificate" .= Null,
+        "context" .= ("bounded context" :: String), "native_evidence" .= ([] :: [Value]),
+        "first_irq" .= Null, "earlier_irq_provenance" .= emptyEarlier]
       stillFailed = set "preservation_shadow" passive (modalReportJson failed)
   shadowedFailure <- either error pure (parseModalReport permitLimit stillFailed)
-  check "a passive shadow pass cannot consume the failed production handoff"
+  check "unconsumed shadow evidence cannot consume the failed production handoff"
     (isLeft (checkModalEnd shadowedFailure) && modalReportFailure shadowedFailure == modalReportFailure failed)
-  check "passive evidence cannot assert production authority"
+  check "shadow evidence cannot assert production authority without a one-use certificate"
     (isLeft (parseModalReport permitLimit (set "preservation_shadow" (set "production_admission" (Bool True) passive) permitEnvelope)))
   let vectorEvent = object ["instructions" .= (101 :: Int), "address" .= (0x18 :: Word32),
         "physical" .= (0x18 :: Word32), "bytes" .= (4 :: Int), "progress" .= (0 :: Int),

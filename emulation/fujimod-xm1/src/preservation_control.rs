@@ -1,17 +1,20 @@
-//! Synthetic native evidence controls; no camera image or installed ownership claim.
+//! Native preservation controls; no camera image or installed ownership claim.
 use fujimod_emulator::board::{Board, bus::{Bus, Mode}, memory::{Memory, BusMapping}};
 use fujimod_emulator_cpu::{*, memory::Backing, preservation::{*, shadow}};
 use fujimod_emulator_cpu_unicorn::{Library, rprofile};
 use fujimod_emulator_devices::{Device, Cx};
 use fujimod_xm1::{
-    modal_lifetime::LifetimePhase,
-    modal_permit::{CoreId as ModalCoreId, Count as PublicationCount, Cpsr as ModalCpsr},
+    modal_certificate::{AuthenticatedIrqReturn, CausalContext, ProductionWrapper},
+    modal_lifetime::{LifetimePhase, LifetimeReceipt},
+    modal_permit::{CodeRange, CoreId as ModalCoreId, Count as PublicationCount, Cpsr as ModalCpsr,
+        EntryInstruction, Layout, Monitor, ObservationLimit, Route, Snapshot, StockFrame,
+        STOCK_ENTRY, STOCK_RESUME},
     modal_task::{self, KernelId, MemoryError, StackExtent, TaskExecution, TaskIdentity,
         ValidatedTaskMemory},
     provenance::Guest,
 };
 use serde_json::{Value, json};
-use std::{cell::{Cell, RefCell}, ptr::NonNull, rc::Rc};
+use std::{cell::{Cell, RefCell}, num::NonZeroU64, ptr::NonNull, rc::Rc};
 
 const DEVICE: u64 = 0x80000000;
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -655,6 +658,334 @@ fn actual_menu_controls() -> Result<Value, String> {
     }))
 }
 
+fn actual_lifetime(publication_count: usize) -> LifetimeReceipt {
+    LifetimeReceipt {
+        phase: LifetimePhase::RollbackStored,
+        publication_count,
+        forward_writes: publication_count as u64,
+        reverse_writes: publication_count as u64,
+        pending_stores: 0,
+        install_core: Some(0),
+        rollback_core: Some(0),
+        checked_resource_writes: 0,
+        checked_identity_writes: 0,
+        checked_scheduler_writes: 0,
+        checked_context_writes: 0,
+        checked_vfp_owner_writes: 0,
+        audited_writes: 0,
+        admitted_settings_writes: 0,
+        admitted_reload_writes: 0,
+        failure: None,
+        task33_stack_guard: None,
+        property_delta_words: None,
+    }
+}
+
+fn actual_snapshots(trace: &ActualTrace) -> (Snapshot, Snapshot) {
+    let entry = Snapshot {
+        core: ModalCoreId(0),
+        pc: STOCK_ENTRY,
+        registers: trace.binding.registers[..13].try_into().expect("fixed register prefix"),
+        sp: Guest(trace.binding.registers[13]),
+        lr: Guest(trace.binding.registers[14]),
+        cpsr: ModalCpsr(trace.binding.cpsr),
+        saved_stock_frame: None,
+        task: Ok(trace.context.task),
+        entry_instruction: EntryInstruction::OriginalPush,
+    };
+    let destination = Snapshot {
+        core: ModalCoreId(0),
+        pc: STOCK_RESUME,
+        registers: trace.registers[..13].try_into().expect("fixed register prefix"),
+        sp: Guest(trace.registers[13]),
+        lr: Guest(trace.registers[14]),
+        cpsr: ModalCpsr(trace.cpsr),
+        saved_stock_frame: Some(StockFrame(trace.frame.words)),
+        task: Ok(trace.context.task),
+        entry_instruction: EntryInstruction::NotEntry,
+    };
+    (entry, destination)
+}
+
+fn issue_actual_certificate(trace: &ActualTrace) -> Result<
+    (ProductionWrapper, AuthenticatedIrqReturn, Snapshot, Snapshot), String> {
+    let (entry, destination) = actual_snapshots(trace);
+    let lifetime = actual_lifetime(trace.context.forward.0 as usize);
+    let entry_context = CausalContext::from_observation(&entry, lifetime)
+        .map_err(|failure| format!("entry context refused: {failure:?}"))?;
+    let destination_context = CausalContext::from_observation(&destination, lifetime)
+        .map_err(|failure| format!("destination context refused: {failure:?}"))?;
+    let mut wrapper = ProductionWrapper::new();
+    wrapper.begin(&entry, trace.binding.entry, entry_context, trace.stock)
+        .map_err(|failure| format!("wrapper begin refused: {failure:?}"))?;
+    for event in &trace.events {
+        wrapper.observe(*event)
+            .map_err(|failure| format!("wrapper evidence refused: {failure:?}"))?;
+    }
+    let certificate = wrapper.complete(&destination, trace.frame, destination_context)
+        .map_err(|failure| format!("wrapper completion refused: {failure:?}"))?;
+    Ok((wrapper, certificate, entry, destination))
+}
+
+fn production_certificate_controls() -> Result<Value, String> {
+    let trace = actual_menu_trace()?;
+    let mut controls = serde_json::Map::new();
+    let (mut wrapper, certificate, entry, destination) = issue_actual_certificate(&trace)?;
+    let mut monitor = Monitor::<2>::new(
+        Layout::stock_baseline(),
+        ObservationLimit(NonZeroU64::new(16).expect("nonzero control limit")),
+    );
+    let entered = monitor.observe(entry).map_err(|failure| format!("production entry refused: {failure:?}"))?;
+    if !matches!(entered, fujimod_xm1::modal_permit::Observation::Entry {
+        route: Route::StockFallback, ..
+    }) {
+        return Err(format!("production entry returned {entered:?}"));
+    }
+    let handed = monitor.observe_authenticated(destination, certificate)
+        .map_err(|failure| format!("production certificate refused: {failure:?}"))?;
+    if !matches!(handed, fujimod_xm1::modal_permit::Observation::Handoff {
+        route: Route::StockFallback, ..
+    }) {
+        return Err(format!("production handoff returned {handed:?}"));
+    }
+    wrapper.consume().map_err(|failure| format!("production consumption refused: {failure:?}"))?;
+    let returned = monitor.observe(Snapshot {
+        pc: entry.lr,
+        sp: entry.sp,
+        saved_stock_frame: None,
+        entry_instruction: EntryInstruction::NotEntry,
+        ..destination
+    }).map_err(|failure| format!("production return refused: {failure:?}"))?;
+    if !matches!(returned, fujimod_xm1::modal_permit::Observation::Return {
+        route: Route::StockFallback, ..
+    }) {
+        return Err(format!("production return returned {returned:?}"));
+    }
+    monitor.finish().map_err(|failure| format!("production monitor finish refused: {failure:?}"))?;
+    wrapper.finish().map_err(|failure| format!("production wrapper finish refused: {failure:?}"))?;
+    controls.insert("exact-one-use-positive".into(), json!({
+        "passed":true,
+        "issued":wrapper.issued(),
+        "consumed":wrapper.consumed(),
+        "facts":format!("{:?}", wrapper.last().expect("completed production certificate")),
+    }));
+
+    let mut strict = Monitor::<1>::new(
+        Layout::stock_baseline(),
+        ObservationLimit(NonZeroU64::new(4).expect("nonzero control limit")),
+    );
+    strict.observe(entry).map_err(|failure| format!("missing-certificate entry refused: {failure:?}"))?;
+    let failure = strict.observe(destination).err()
+        .ok_or("mismatched CPSR was admitted without a certificate")?;
+    controls.insert("missing-certificate".into(), json!({"refused":true,"failure":format!("{failure:?}")}));
+
+    let mut outside = ProductionWrapper::new();
+    let failure = outside.observe(trace.events[0]).err()
+        .ok_or("packet outside active shadow was admitted")?;
+    controls.insert("packet-outside-active".into(), json!({"refused":true,"failure":format!("{failure:?}")}));
+
+    for (name, order) in [
+        ("reordered-packets", [1usize, 0, 2, 3]),
+        ("duplicate-packets", [0usize, 1, 1, 2]),
+    ] {
+        let (entry, _) = actual_snapshots(&trace);
+        let context = CausalContext::from_observation(&entry, actual_lifetime(226))
+            .map_err(|failure| format!("{name} context refused: {failure:?}"))?;
+        let mut candidate = ProductionWrapper::new();
+        candidate.begin(&entry, trace.binding.entry, context, trace.stock)
+            .map_err(|failure| format!("{name} begin refused: {failure:?}"))?;
+        let mut refusal = None;
+        for index in order {
+            if let Err(failure) = candidate.observe(trace.events[index]) {
+                refusal = Some(failure);
+                break;
+            }
+        }
+        let failure = refusal.ok_or_else(|| format!("{name} packet sequence was admitted"))?;
+        controls.insert(name.into(), json!({"refused":true,"failure":format!("{failure:?}")}));
+    }
+
+    let (entry, destination) = actual_snapshots(&trace);
+    let context = CausalContext::from_observation(&entry, actual_lifetime(226))
+        .map_err(|failure| format!("early context refused: {failure:?}"))?;
+    let mut early = ProductionWrapper::new();
+    early.begin(&entry, trace.binding.entry, context, trace.stock)
+        .map_err(|failure| format!("early begin refused: {failure:?}"))?;
+    for event in &trace.events[..3] {
+        early.observe(*event).map_err(|failure| format!("early packet refused before completion: {failure:?}"))?;
+    }
+    let destination_context = CausalContext::from_observation(&destination, actual_lifetime(226))
+        .map_err(|failure| format!("early destination context refused: {failure:?}"))?;
+    let failure = early.complete(&destination, trace.frame, destination_context).err()
+        .ok_or("early incomplete certificate was admitted")?;
+    controls.insert("early-completion".into(), json!({"refused":true,"failure":format!("{failure:?}")}));
+
+    let mut wrong_frame = trace.frame;
+    wrong_frame.words[4] ^= 1;
+    let (entry, mut destination) = actual_snapshots(&trace);
+    destination.saved_stock_frame = Some(StockFrame(wrong_frame.words));
+    let context = CausalContext::from_observation(&entry, actual_lifetime(226))
+        .map_err(|failure| format!("wrong-frame entry context refused: {failure:?}"))?;
+    let mut candidate = ProductionWrapper::new();
+    candidate.begin(&entry, trace.binding.entry, context, trace.stock)
+        .map_err(|failure| format!("wrong-frame begin refused: {failure:?}"))?;
+    for event in &trace.events {
+        candidate.observe(*event).map_err(|failure| format!("wrong-frame packet refused early: {failure:?}"))?;
+    }
+    let destination_context = CausalContext::from_observation(&destination, actual_lifetime(226))
+        .map_err(|failure| format!("wrong-frame destination context refused: {failure:?}"))?;
+    let failure = candidate.complete(&destination, wrong_frame, destination_context).err()
+        .ok_or("wrong frame was admitted")?;
+    controls.insert("wrong-frame".into(), json!({"refused":true,"failure":format!("{failure:?}")}));
+
+    let (entry, destination) = actual_snapshots(&trace);
+    let entry_context = CausalContext::from_observation(&entry, actual_lifetime(226))
+        .map_err(|failure| format!("wrong-publication entry context refused: {failure:?}"))?;
+    let destination_context = CausalContext::from_observation(&destination, actual_lifetime(227))
+        .map_err(|failure| format!("wrong-publication destination context refused early: {failure:?}"))?;
+    let mut candidate = ProductionWrapper::new();
+    candidate.begin(&entry, trace.binding.entry, entry_context, trace.stock)
+        .map_err(|failure| format!("wrong-publication begin refused: {failure:?}"))?;
+    for event in &trace.events {
+        candidate.observe(*event)
+            .map_err(|failure| format!("wrong-publication packet refused early: {failure:?}"))?;
+    }
+    let failure = candidate.complete(&destination, trace.frame, destination_context).err()
+        .ok_or("wrong publication count was admitted")?;
+    controls.insert("wrong-publication".into(), json!({"refused":true,"failure":format!("{failure:?}")}));
+
+    let mut wrong_task_destination = destination;
+    let mut alternate_words = ACTUAL_CREATION_WORDS;
+    alternate_words[0] ^= 4;
+    wrong_task_destination.task = Ok(copied_task(KernelId::Primary, alternate_words)?);
+    let wrong_task_context = CausalContext::from_observation(&wrong_task_destination, actual_lifetime(226))
+        .map_err(|failure| format!("alternate canonical task was not independently valid: {failure:?}"))?;
+    let (entry, _) = actual_snapshots(&trace);
+    let entry_context = CausalContext::from_observation(&entry, actual_lifetime(226))
+        .map_err(|failure| format!("wrong-task entry context refused: {failure:?}"))?;
+    let mut candidate = ProductionWrapper::new();
+    candidate.begin(&entry, trace.binding.entry, entry_context, trace.stock)
+        .map_err(|failure| format!("wrong-task begin refused: {failure:?}"))?;
+    for event in &trace.events {
+        candidate.observe(*event).map_err(|failure| format!("wrong-task packet refused early: {failure:?}"))?;
+    }
+    let failure = candidate.complete(&wrong_task_destination, trace.frame, wrong_task_context).err()
+        .ok_or("wrong task identity was admitted")?;
+    controls.insert("wrong-task".into(), json!({"refused":true,"failure":format!("{failure:?}")}));
+
+    let mut wrong_kernel_destination = destination;
+    wrong_kernel_destination.task = Ok(copied_task(KernelId::Secondary, ACTUAL_CREATION_WORDS)?);
+    let failure = CausalContext::from_observation(&wrong_kernel_destination, actual_lifetime(226)).err()
+        .ok_or("wrong kernel execution was admitted")?;
+    controls.insert("wrong-kernel".into(), json!({"refused":true,"failure":format!("{failure:?}")}));
+
+    let (mut consumed, _, _, _) = issue_actual_certificate(&trace)?;
+    consumed.consume().map_err(|failure| format!("first standalone consumption refused: {failure:?}"))?;
+    let failure = consumed.consume().err().ok_or("duplicate certificate consumption was admitted")?;
+    controls.insert("duplicate-consumption".into(), json!({"refused":true,"failure":format!("{failure:?}")}));
+
+    let (mut late, _, _, _) = issue_actual_certificate(&trace)?;
+    late.consume().map_err(|failure| format!("late-packet setup consumption refused: {failure:?}"))?;
+    let failure = late.observe(trace.events[0]).err().ok_or("late packet after consumption was admitted")?;
+    controls.insert("late-packet".into(), json!({"refused":true,"failure":format!("{failure:?}")}));
+
+    let (mut outer_wrapper, outer_certificate, entry, destination) = issue_actual_certificate(&trace)?;
+    let (_, nested_certificate, _, _) = issue_actual_certificate(&trace)?;
+    let mut nested = Monitor::<2>::new(
+        Layout::stock_baseline(),
+        ObservationLimit(NonZeroU64::new(8).expect("nonzero control limit")),
+    );
+    nested.observe(entry).map_err(|failure| format!("nested outer entry refused: {failure:?}"))?;
+    nested.observe_authenticated(destination, outer_certificate)
+        .map_err(|failure| format!("nested outer handoff refused: {failure:?}"))?;
+    outer_wrapper.consume().map_err(|failure| format!("nested outer certificate consumption refused: {failure:?}"))?;
+    let nested_entry = Snapshot {
+        sp: Guest(entry.sp.0 - 0x100),
+        entry_instruction: EntryInstruction::OriginalPush,
+        ..entry
+    };
+    nested.observe(nested_entry).map_err(|failure| format!("nested inner entry refused: {failure:?}"))?;
+    let failure = nested.observe_authenticated(destination, nested_certificate).err()
+        .ok_or("outer-bound certificate was admitted for a nested frame")?;
+    controls.insert("nested-frame".into(), json!({"refused":true,"failure":format!("{failure:?}")}));
+
+    let (_, route_certificate, entry, destination) = issue_actual_certificate(&trace)?;
+    let layout = Layout::new(
+        CodeRange::new(Guest(0x1000), Guest(0x1038)).map_err(|failure| format!("{failure:?}"))?,
+        CodeRange::new(Guest(0x2000), Guest(0x2100)).map_err(|failure| format!("{failure:?}"))?,
+    ).map_err(|failure| format!("route control layout refused: {failure:?}"))?;
+    let mut route_monitor = Monitor::<1>::new(
+        layout,
+        ObservationLimit(NonZeroU64::new(4).expect("nonzero control limit")),
+    );
+    let mut route_registers = entry.registers;
+    route_registers[0] = 75;
+    let route_entry = Snapshot {
+        registers: route_registers,
+        entry_instruction: EntryInstruction::ScopedBranch,
+        ..entry
+    };
+    route_monitor.observe(route_entry)
+        .map_err(|failure| format!("owned route entry refused: {failure:?}"))?;
+    let failure = route_monitor.observe_authenticated(Snapshot {
+        pc: Guest(0x2000),
+        registers: route_registers,
+        sp: entry.sp,
+        saved_stock_frame: None,
+        ..destination
+    }, route_certificate).err().ok_or("stock certificate was admitted on the owned route")?;
+    controls.insert("wrong-route".into(), json!({"refused":true,"failure":format!("{failure:?}")}));
+
+    let (mut order_wrapper, order_certificate, entry, destination) = issue_actual_certificate(&trace)?;
+    let mut order = Monitor::<2>::new(
+        Layout::stock_baseline(),
+        ObservationLimit(NonZeroU64::new(8).expect("nonzero control limit")),
+    );
+    order.observe(entry).map_err(|failure| format!("order outer entry refused: {failure:?}"))?;
+    order.observe_authenticated(destination, order_certificate)
+        .map_err(|failure| format!("order outer handoff refused: {failure:?}"))?;
+    order_wrapper.consume().map_err(|failure| format!("order outer consumption refused: {failure:?}"))?;
+    let inner_entry = Snapshot {
+        pc: STOCK_ENTRY,
+        sp: Guest(entry.sp.0 - 0x100),
+        saved_stock_frame: None,
+        entry_instruction: EntryInstruction::OriginalPush,
+        ..destination
+    };
+    order.observe(inner_entry).map_err(|failure| format!("order inner entry refused: {failure:?}"))?;
+    let mut inner_words = [0; 9];
+    inner_words[..8].copy_from_slice(&inner_entry.registers[4..12]);
+    inner_words[8] = inner_entry.lr.0;
+    order.observe(Snapshot {
+        pc: STOCK_RESUME,
+        sp: Guest(inner_entry.sp.0 - 36),
+        saved_stock_frame: Some(StockFrame(inner_words)),
+        entry_instruction: EntryInstruction::NotEntry,
+        ..inner_entry
+    }).map_err(|failure| format!("order inner handoff refused: {failure:?}"))?;
+    let failure = order.observe(Snapshot {
+        pc: entry.lr,
+        sp: entry.sp,
+        saved_stock_frame: None,
+        entry_instruction: EntryInstruction::NotEntry,
+        ..destination
+    }).err().ok_or("out-of-order outer return was admitted")?;
+    controls.insert("return-order".into(), json!({"refused":true,"failure":format!("{failure:?}")}));
+
+    Ok(json!({
+        "passed":controls.values().all(|value|
+            value.get("passed") == Some(&Value::Bool(true))
+                || value.get("refused") == Some(&Value::Bool(true))),
+        "scope":"production-certificate-mechanism-control",
+        "source":"retained actual Menu IRQ packet plus native endpoint lifecycle controls",
+        "production_proof":false,
+        "controls":controls,
+        "production_guard_changed":false,
+        "camera_operation":false,
+        "value_qualification":false
+    }))
+}
+
 fn run_controls() -> Result<Value, String> {
     let mut roles = Vec::new();
     let mut controls = serde_json::Map::new();
@@ -938,11 +1269,12 @@ fn main() {
         [] => run_controls(),
         [mode] if mode == "--bank-controls" => bank_controls(),
         [mode] if mode == "--actual-menu-controls" => actual_menu_controls(),
+        [mode] if mode == "--production-certificate-controls" => production_certificate_controls(),
         [mode, case, execution, adapter] if mode == "--lifecycle"
             && matches!(execution.as_str(), "direct" | "worker")
             && matches!(adapter.as_str(), "board" | "context") =>
                 lifecycle(case, execution == "worker", adapter == "context"),
-        _ => Err("expected --actual-menu-controls, --bank-controls or --lifecycle CASE direct|worker board|context".into()),
+        _ => Err("expected --actual-menu-controls, --production-certificate-controls, --bank-controls or --lifecycle CASE direct|worker board|context".into()),
     };
     match result {
         Ok(value) => {

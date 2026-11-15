@@ -549,15 +549,22 @@ parseModalReport limit value = do
   let taskCount = toInteger (length tasks)
       ownedCount = toInteger (countValue (modalOwnedHandoffs counts))
       entryCount = toInteger (countValue (modalEntries counts))
-  unless (not taskVerified || policy == ScopedOwned75 && physicalCoverage && countValue contextSpans == 16 && taskCount > 0 && ownedCount <= taskCount && taskCount <= entryCount
-    && (enabled || taskCount == ownedCount))
+      shadowTaskClaim = maybe False ((== Right (Bool True)) . modalField "task_identity_verified") shadow
+      shadowAdmission = maybe False ((== Right (Bool True)) . modalField "production_admission") shadow
+      ownedTaskClaim = policy == ScopedOwned75 && taskCount > 0 && ownedCount <= taskCount
+        && taskCount <= entryCount && (enabled || taskCount == ownedCount)
+  unless (not taskVerified || physicalCoverage && countValue contextSpans == 16
+    && (ownedTaskClaim || shadowTaskClaim && shadowAdmission))
     (Left "modal report makes an unsupported task identity claim")
+  unless (not shadowAdmission || taskVerified)
+    (Left "modal report drops an admitted shadow task identity")
   pure (ModalReport enabled policy counts fetches domains guard tasks lifetime watch physicalCoverage taskVerified contextSpans failure shadow)
  where
   parseShadowReport entry = do
-    let diagnostics = [key | key <- ["context", "native_evidence", "first_irq", "earlier_irq_provenance"],
-          isJust (optionalField key entry)]
-    modalKeys (["core", "source", "started", "completed", "native_events", "active", "failure", "production_admission"] ++ diagnostics) entry
+    modalKeys ["core", "source", "started", "completed", "native_events", "active", "failure",
+      "certificates_issued", "certificates_consumed", "task_identity_verified",
+      "production_admission", "certificate", "context", "native_evidence", "first_irq",
+      "earlier_irq_provenance"] entry
     core <- modalField "core" entry >>= modalWord
     unless (core <= 1) (Left "shadow report names an unavailable core")
     source <- modalField "source" entry
@@ -572,20 +579,61 @@ parseModalReport limit value = do
       Null -> Right Nothing
       String text | not (T.null text) -> Right (Just text)
       _ -> Left "shadow failure must be nonempty text or null"
+    issued <- modalField "certificates_issued" entry >>= modalWord
+    consumed <- modalField "certificates_consumed" entry >>= modalWord
+    taskClaim <- modalField "task_identity_verified" entry >>= modalBool
     admission <- modalField "production_admission" entry >>= modalBool
-    unless (not admission) (Left "passive shadow cannot admit a production handoff")
-    unless (completed <= started && (failure /= Nothing || started - completed == (if active then 1 else 0)))
+    certificate <- modalField "certificate" entry >>= parseNullable parseCertificate
+    unless (completed <= started && consumed <= issued && issued <= completed
+      && (failure /= Nothing || started - completed == (if active then 1 else 0)))
       (Left "shadow report has inconsistent completion counters")
-    forM_ (optionalField "context" entry) (fmap (const ()) . parseNullable shadowText)
-    forM_ (optionalField "native_evidence" entry) shadowEvidence
-    forM_ (optionalField "first_irq" entry) $ \raw -> case raw of
+    unless (isJust certificate == (issued > 0)
+      && taskClaim == admission
+      && (not admission || failure == Nothing && not active && issued > 0
+        && issued == consumed && completed == started))
+      (Left "shadow report makes an unsupported production certificate claim")
+    _ <- modalField "context" entry >>= parseNullable shadowText
+    modalField "native_evidence" entry >>= shadowEvidence
+    modalField "first_irq" entry >>= \raw -> case raw of
       Null -> Right ()
       _ -> do
         modalKeys ["context", "evidence"] raw
         _ <- modalField "context" raw >>= shadowText
         modalField "evidence" raw >>= shadowEvidence
-    forM_ (optionalField "earlier_irq_provenance" entry) parseEarlierIrq
+    modalField "earlier_irq_provenance" entry >>= parseEarlierIrq
     pure entry
+  parseCertificate entry = do
+    modalKeys ["task", "publication_count", "forward", "reverse", "retirement_source",
+      "status_source", "return_source", "old_svc_spsr", "entry_cpsr", "returned_cpsr",
+      "frame_address", "frame_physical", "frame_words"] entry
+    _ <- modalField "task" entry >>= shadowText
+    publications <- modalField "publication_count" entry >>= modalWord
+    forward <- modalField "forward" entry >>= modalWord
+    reverseCount <- modalField "reverse" entry >>= modalWord
+    unless (publications > 0 && forward == publications && reverseCount == publications)
+      (Left "shadow certificate is not bound to one complete publication epoch")
+    parseCertificateSource 0xe92d4ff0 =<< modalField "retirement_source" entry
+    parseCertificateSource 0xe169f001 =<< modalField "status_source" entry
+    parseCertificateSource 0xe8fdd00f =<< modalField "return_source" entry
+    oldStatus <- modalField "old_svc_spsr" entry >>= modalWord32
+    entryCpsr <- modalField "entry_cpsr" entry >>= modalWord32
+    returnedCpsr <- modalField "returned_cpsr" entry >>= modalWord32
+    frameAddress <- modalField "frame_address" entry >>= modalWord32
+    framePhysical <- modalField "frame_physical" entry >>= modalWord32
+    frameWords <- modalField "frame_words" entry >>= modalList (either error id (modalLimit 9))
+      >>= mapM modalWord32
+    unless (length frameWords == 9 && frameAddress .&. 0xbfffffff == framePhysical
+      && returnedCpsr == (oldStatus .&. 0x00ffff00) + (entryCpsr .&. 0xff0000ff))
+      (Left "shadow certificate has an invalid frame or return-status derivation")
+    pure entry
+  parseCertificateSource expectedWord entry = do
+    modalKeys ["address", "physical", "word", "tcm"] entry
+    address <- modalField "address" entry >>= modalWord32
+    physical <- modalField "physical" entry >>= modalWord32
+    word <- modalField "word" entry >>= modalWord32
+    modalField "tcm" entry >>= earlierTcm
+    unless (address `mod` 4 == 0 && physical `mod` 4 == 0 && word == expectedWord)
+      (Left "shadow certificate has a noncanonical source instruction")
   parseEarlierIrq entry = do
     modalKeys ["total", "dropped", "coverage_complete", "target_post_prefix_lr",
       "vector_lr_subtract", "matching_events", "raw_equal_wrong_phase_events",
