@@ -149,15 +149,37 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc, S:
             let services = &mut *self.services;
             u32::from(xm1_saclac_calc::profile::Profile::new(&services.records, &mut services.entries).grid_layout(record))
         };
-        let entries = boundary::record_entries(&self.services.machine, record, profile_index);
+        let lens_limit = xm1_saclac_calc::capture_requests::capture_offset(self, record);
         let category = self.services.entries.header_byte(record, SharedHeaderByte::At47);
         let cell = self.focus_cell(record, category);
         let (block_reference, block_word) = boundary::lens_snapshot_reference(&self.shared_bytes(record, &shared::group_17::LENS_SNAPSHOT));
         let selected = xm1_saclac_calc::profile::selection_code(self.services.entries.measurement_selection(record));
+        let profile_level = self.field(record, &h::AT_0022);
+        let converted_level = if selected == 1 || profile_level == 0 {
+            self.services.stock.zone_limit(3)
+        } else {
+            profile_level
+        } as i32 as u32;
+        let armed = self.services.entries.header_byte(record, SharedHeaderByte::At63);
+        let profile_position = self.services.entries.header_byte(record, SharedHeaderByte::At31);
+        let profile_position_halfword = self.field(record, &h::AT_002E);
+        let (mode, updated_position, position_halfword) = if armed == 1 {
+            let shared_position = self.services.machine.read_u32(0x0091_9788);
+            let shared_position_halfword = self.services.machine.read_u16(0x0091_978c);
+            (if selected == 1 { shared_position } else { 0 }, shared_position, shared_position_halfword)
+        } else {
+            let profile_position = u32::from(profile_position);
+            (profile_position, profile_position, profile_position_halfword)
+        };
+        let decade_index = match profile_index { 2 => 1, 3 => 2, 4 => 3, 5 => 4, _ => 0 };
+        let decade = (xm1_saclac_shared::settings::halfword(
+            &self.services.stock,
+            AdjustmentKey(0x4a24 + decade_index),
+        ) as i16).wrapping_mul(10) as u16;
         RecordView {
             start: Start::of(self.shared(record, &c::AT_0140)), selection: profile_selection(u32::from(selected)),
-            s1_mode: AcquisitionMode(u32::from(self.services.entries.header_byte(record, SharedHeaderByte::At31))),
-            halfword: self.field(record, &h::AT_002E), mode_word: u32::from(self.field(record, &h::AT_0032)),
+            s1_mode: AcquisitionMode(u32::from(profile_position)),
+            halfword: profile_position_halfword, mode_word: u32::from(self.field(record, &h::AT_0032)),
             byte: self.field(record, &h::AT_0033), second_halfword: self.field(record, &h::AT_0026),
             setting_word: u32::from(self.field(record, &h::AT_005B)), grid_kind: u32::from(self.field(record, &h::AT_005D)),
             focus_word: u32::from(self.field(record, &h::AT_0034)), window: self.field(record, &h::AT_0000),
@@ -172,7 +194,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc, S:
             change_category: u32::from(self.services.entries.header_byte(record, SharedHeaderByte::At61)),
             signed_word: if selected == 1 { self.services.stock.zone_limit(2) as u16 } else { self.field(record, &h::AT_0022) as u16 },
             eighth_word: RetainedWord(u32::from(self.field(record, &h::AT_0045))), second_word: RetainedWord(u32::from(self.field(record, &h::AT_004B))),
-            mode_flag: u32::from(self.services.entries.header_byte(record, SharedHeaderByte::At63)),
+            mode_flag: u32::from(armed),
             rate_enabled: u32::from(self.field(record, &h::INTERVAL_TRACKING).0), fifth_word: RetainedWord(u32::from(self.field(record, &h::AT_0051))),
             forced: u32::from(self.field(record, &h::AT_006B)), ninth_word: RetainedWord(u32::from(self.field(record, &h::AT_0066))),
             profile_flags: [u32::from(self.field(record, &h::AT_0067)), u32::from(self.field(record, &h::AT_0068)), u32::from(self.field(record, &h::AT_0069)),
@@ -184,9 +206,9 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc, S:
             program_word: boundary::words(&self.shared_bytes(record, &shared::group_37::AT_085C)), restore_position: u32::from(self.field(record, &h::AT_006F)),
             s1_byte: self.shared(record, &shared::group_26::AT_0236), s1_halfword: self.shared(record, &shared::group_26::AT_0238) as u16,
             release_halfword: self.shared(record, &x::AT_0246) as u16, area: boundary::words(&self.shared_bytes(record, &shared::group_22::AT_0180)),
-            mode: AcquisitionMode(entries.mode), updated_position: entries.updated_position, position_halfword: entries.position_halfword,
-            converted_level: entries.converted_level, restore_adjustment: entries.restore_adjustment, decade: entries.decade,
-            profile_index, ratio: [cell.column, cell.row], lens_limit: entries.lens_limit, block_reference, block_word,
+            mode: AcquisitionMode(mode), updated_position, position_halfword,
+            converted_level, restore_adjustment: 0, decade,
+            profile_index, ratio: [cell.column, cell.row], lens_limit, block_reference, block_word,
             s1_exposure: PipelineWord(self.shared(record, &shared::group_26::AT_0200)), s1_level: self.shared(record, &shared::group_26::AT_0206) as u16,
             s1_second: self.shared(record, &shared::group_26::AT_0208) as u16, s1_timing: TimingWord(self.shared(record, &shared::group_26::AT_0230)),
         }

@@ -256,6 +256,73 @@ fn controller_reuse_is_cleared_only_under_the_record_named_by_its_reply_block() 
 }
 
 #[test]
+fn record_view_uses_owned_capture_offset_and_constant_restore_adjustment() {
+    let kernel = fake::saclac_kernel();
+    let cx = kernel.task().unwrap();
+    let mut bytes = Bytes::default();
+    let record = fake::open(&mut bytes, &[0, 27]);
+    bytes.records[0][0x69] = 1;
+    half(&mut bytes.records[0], 0x2c, 500);
+    half(&mut bytes.records[0], 0x22, (-12i16) as u16);
+    half(&mut bytes.records[0], 0x2e, 0x1234);
+    put(&mut bytes.shared, 0x740, 2);
+    let (machine, root) = fake::root_with(fake::peers(&cx), bytes, Entries { header_31: 7, ..Entries::default() });
+    machine.adjustment(0x48a3, 25);
+    machine.adjustment(0x4a24, 0xfd);
+    machine.adjustment(0x4a25, 0xff);
+    let recognition = RefCell::new(SceneRecognition::new());
+    acquisition!(root, recognition, cx);
+
+    let view = root.record_view(record);
+    assert_eq!(
+        (
+            view.lens_limit,
+            view.restore_adjustment,
+            view.converted_level,
+            view.decade,
+            view.mode.0,
+            view.updated_position,
+            view.position_halfword,
+        ),
+        (525, 0, (-12i32) as u32, (-30i16) as u16, 7, 7, 0x1234),
+    );
+    let entered = machine.take_entered();
+    assert!(!entered.iter().any(|(address, _)| {
+        [0xfa_7634, 0xfa_7954, 0xfa_7984, 0xfa_6bb4, 0xf5_1b94, 0xf5_f9fc, 0xef_74e4].contains(address)
+    }));
+}
+
+#[test]
+fn selected_record_level_uses_the_owned_zone_fallback() {
+    let kernel = fake::saclac_kernel();
+    let cx = kernel.task().unwrap();
+    let mut bytes = Bytes::default();
+    let record = fake::open(&mut bytes, &[0]);
+    let (machine, root) = fake::root_with(fake::peers(&cx), bytes, Entries {
+        selection: xm1_saclac_profile_records::MeasurementSelection::Record,
+        header_31: 9,
+        header_63: 1,
+        ..Entries::default()
+    });
+    machine.answer(0x77_2f28, (-300i32) as u32);
+    memory(&machine, 0x0091_9788, &0x1234_5678u32.to_le_bytes());
+    memory(&machine, 0x0091_978c, &0xabcd_u16.to_le_bytes());
+    let recognition = RefCell::new(SceneRecognition::new());
+    acquisition!(root, recognition, cx);
+
+    let view = root.record_view(record);
+    assert_eq!(
+        (view.converted_level, view.mode.0, view.updated_position, view.position_halfword),
+        ((-300i32) as u32, 0x1234_5678, 0x1234_5678, 0xabcd),
+    );
+    let entered = machine.take_entered();
+    assert!(entered.contains(&(0x77_2f28, vec![3])));
+    assert!(!entered.iter().any(|(address, _)| {
+        [0xfa_7634, 0xfa_7954, 0xfa_7984, 0xfa_6bb4].contains(address)
+    }));
+}
+
+#[test]
 fn live_and_s1_keep_one_selection_preset_and_s1_consumes_the_controllers_change() {
     let kernel = fake::saclac_kernel();
     let cx = kernel.task().unwrap();

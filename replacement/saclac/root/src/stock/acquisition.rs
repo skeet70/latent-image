@@ -260,33 +260,6 @@ fn write_bytes(machine: &mut impl Machine, address: u32, bytes: &[u8]) {
     }
 }
 
-/// The record values only retained entries give: the mode word (0xfa7634), the updated position
-/// and its halfword (0xfa7954, 0xfa7984), the converted level (0xfa6bb4), the restore adjustment
-/// (0xf5f9fc), the decade of the profile index (0xef74e4) and the lens limit (0xf51b94 with
-/// 0xffff).
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct RecordEntries {
-    pub mode: u32,
-    pub updated_position: u32,
-    pub position_halfword: u16,
-    pub converted_level: u32,
-    pub restore_adjustment: u16,
-    pub decade: u16,
-    pub lens_limit: u32,
-}
-
-pub fn record_entries(machine: &impl Machine, record: RecordHandle, profile_index: u32) -> RecordEntries {
-    let of = |address| enter(machine, address, &[handle(record)]);
-    RecordEntries {
-        mode: of(0xfa_7634),
-        updated_position: of(0xfa_7954),
-        position_halfword: of(0xfa_7984) as u16,
-        converted_level: of(0xfa_6bb4),
-        restore_adjustment: of(0xf5_f9fc) as u16,
-        decade: enter(machine, 0xef_74e4, &[word(profile_index)]) as u16,
-        lens_limit: enter(machine, 0xf5_1b94, &[handle(record), word(0xffff)]),
-    }
-}
 
 /// 0xf4f16c: the record's chosen word for `lens`, 0xffff naming none.
 pub fn lens_word(machine: &impl Machine, record: RecordHandle, lens: Option<ResourceIndex>) -> u32 {

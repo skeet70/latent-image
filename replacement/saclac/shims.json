@@ -964,27 +964,6 @@
       }
     },
     {
-      "id": "saclac_root-root-24",
-      "shim": "saclac_root: Acquisition record-derived services: `0xfa7634(record)`, `0xfa7954(record)`, `0xfa7984(record)`, `0xfa6bb4(record)`, `0xf5f9fc(record)`, `0xef74e4(profile_index)`, `0xf51b94(record, 0xffff)`",
-      "kind": "trampoline into retained stock",
-      "other_side": "record conversions and the capture-profile table",
-      "owned": "no",
-      "removal": "owned record conversions and capture profiles supply these values through typed ports",
-      "state": "required",
-      "evidence": [
-        {
-          "kind": "reference-only",
-          "contract": "replacement/saclac/root/BUILD.bazel",
-          "requirement": "Source/model boundary; not linked-image execution or removal acceptance. trampoline into retained stock."
-        }
-      ],
-      "predicates": {
-        "caller_closure": "unestablished",
-        "same_image_comparison": "unestablished",
-        "direct_owned_api": "unestablished"
-      }
-    },
-    {
       "id": "saclac_root-root-25",
       "shim": "saclac_root: Acquisition lens services: `0xf4f16c(record, lens_or_ffff)`, `0xfa7edc(adjustment)`, `0xef7820(kind)`, `0x746804(step)`, `0x1007e44(code, selector)`",
       "kind": "trampoline into retained stock",
