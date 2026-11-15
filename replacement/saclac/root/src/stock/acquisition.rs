@@ -354,8 +354,8 @@ fn word_out(machine: &impl Machine, address: u32, lead: Option<Argument>) -> (u3
     (returned, u32::get(&buffer, 0))
 }
 
-/// 0xfea7bc.
-pub fn timing(machine: &impl Machine) -> TimingWord { TimingWord(word_out(machine, 0xfe_a7bc, None).1) }
+/// The pipeline snapshot counter published by 0xff6fc0.
+pub fn timing(machine: &impl Machine) -> TimingWord { TimingWord(machine.read_u32(0x016f_672c)) }
 
 /// 0xfa95a8: a nonzero return leaves the interval unknown.
 pub fn frame_interval(machine: &impl Machine, timing: TimingWord) -> Option<u32> {
@@ -368,8 +368,8 @@ pub fn frame_interval(machine: &impl Machine, timing: TimingWord) -> Option<u32>
 /// 0x103b064.
 pub fn request_mode_six_statistics(machine: &impl Machine) { enter(machine, 0x103_b064, &[]); }
 
-/// 0xfea7cc writes 1 when the pipeline raised the window refresh (0xf2fec4).
-pub fn take_window_refresh(machine: &impl Machine) -> bool { word_out(machine, 0xfe_a7cc, None).1 == 1 }
+/// The pending pipeline output flag at `pipeline_state + 0x4cd0`.
+pub fn take_window_refresh(machine: &impl Machine) -> bool { machine.read_u32(0x016f_7b20) != 0 }
 
 /// The history capture's banks (0x5ffee314, 0x5ffee414), its word (0x5ffee514) and the two
 /// halfword banks from 0x5ffee518, eight cells a row (0xf32838..0xf32878).

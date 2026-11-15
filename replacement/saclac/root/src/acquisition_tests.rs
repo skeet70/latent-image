@@ -471,6 +471,23 @@ fn owned_pipeline_snapshots_preserve_slot_and_s1_record_layouts() {
     assert_eq!((sample.status.0, sample.timing.0, sample.code, sample.flags), (0x1357_2468, 0x89ab_cdef, 0x7654, 0x32));
     assert!(!machine.take_entered().iter().any(|(address, _)| [0xfe_a7ac, 0xfe_aadc].contains(address)));
 }
+
+#[test]
+fn owned_pipeline_status_words_preserve_counter_and_pending_flag() {
+    let kernel = fake::saclac_kernel();
+    let cx = kernel.task().unwrap();
+    let (machine, root) = fake::root_with(fake::peers(&cx), Bytes::default(), Entries::default());
+    let recognition = RefCell::new(SceneRecognition::new());
+    acquisition!(root, recognition, cx);
+    machine.set_word(0x016f_672c, 0x1234_5678);
+    machine.set_word(0x016f_7b20, 7);
+
+    assert_eq!(Pipeline::timing(&mut root).0, 0x1234_5678);
+    assert!(Pipeline::take_window_refresh(&mut root));
+    machine.set_word(0x016f_7b20, 0);
+    assert!(!Pipeline::take_window_refresh(&mut root));
+    assert!(!machine.take_entered().iter().any(|(address, _)| [0xfe_a7bc, 0xfe_a7cc].contains(address)));
+}
 #[test]
 fn live_and_s1_keep_one_selection_preset_and_s1_consumes_the_controllers_change() {
     let kernel = fake::saclac_kernel();
