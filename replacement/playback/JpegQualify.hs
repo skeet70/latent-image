@@ -45,7 +45,7 @@ data Attachment = Attached | Refused deriving (Eq, Show)
 data Continuation = Finish | Restart deriving (Eq, Show)
 data Unlock = Signalled | AlreadySignalled deriving (Eq, Show)
 data Register = R0 | R1 | R2 | R3 | Ip deriving (Eq, Show)
-data RegionId = Driver | Playback | Descriptor | NextDescriptor | RecordMemory | Consumer | Stack | Runtime | StockDriver | StockPlayback | StockDevice | DeviceRegisters | Caller | FirstConsumer | SecondConsumer | Exit | Producer | Signal | Defect deriving (Eq, Show)
+data RegionId = Driver | Playback | Descriptor | NextDescriptor | RecordMemory | Consumer | Stack | Runtime | StockDriver | StockPlayback | StockDevice | DeviceRegisters | Caller | FirstConsumer | SecondConsumer | Exit | Producer | Signal | Defect | DevelopOperand | DevelopPlane deriving (Eq, Show)
 data Permission = ReadOnly | ReadWrite | ReadExecute deriving (Eq, Show)
 data Block = Block RegionId Address Permission B.ByteString [(Address, Int)]
 data Memory = Absolute Address B.ByteString | Relative Register B.ByteString
@@ -94,6 +94,7 @@ regionName selected = case selected of
   StockDriver -> "stock-driver"; StockPlayback -> "stock-playback"; Caller -> "transaction-caller"
   StockDevice -> "stock-device"; DeviceRegisters -> "register-image"
   FirstConsumer -> "first-consumer"; SecondConsumer -> "second-consumer"; Exit -> "exit"
+  DevelopOperand -> "develop-operand"; DevelopPlane -> "develop-plane"
   Producer -> "develop-job4"; Signal -> "record-notification"; Defect -> "consumer-defect"
 permission :: Permission -> String
 permission selected = case selected of ReadOnly -> "r"; ReadWrite -> "rw"; ReadExecute -> "rx"
@@ -451,7 +452,7 @@ executeBuilder runner output package elf base@(Address baseWord) runtime publica
       callbackCode=assemble $ load R1 0x2000100 ++ [0xe5910000,0xe2800001,0xe5810000] ++ load R1 0x14c56f8
         ++ [0xe5910028] ++ load R1 0x2000100 ++ [0xe5810004,0xe12fff1e]
       entry=assemble $ [0xe92d4010] ++ (if route==DevelopJob4
-        then load R0 0x2000000 ++ call (Address 0xe8fee4) ++ load R1 0x2000100 ++ [0xe5810004]
+        then load R0 0x2002000 ++ call (Address 0xe8fee4) ++ load R1 0x2000100 ++ [0xe5810004]
         else load R0 recordBase ++ call (Address 0xd98904) ++ [word|attachment selected==Attached,word<-call (Address 0xd99570)] ++ call (Address 0xd989f8))
         ++ [0xe3a0005a,0xe8bd8010]
       producerBytes=B.take 304(B.drop (0xe8fee4-0xbf1a00) image5)
@@ -501,10 +502,10 @@ executeBuilder runner output package elf base@(Address baseWord) runtime publica
         ,Block Consumer consumerAddress ReadWrite (assemble[0,0]) [],Block Stack (Address 0x2200000) ReadWrite (B.replicate 0x4000 0) []
         ,code Caller 0x110000 entry,code FirstConsumer 0x110100 callbackCode,code SecondConsumer 0x110200 (assemble[0xe12fff1e])
         ,code Producer 0xe8fee4 producerBytes,code Signal 0xe8eb18 signalBytes,Block Exit exitAddress ReadExecute (assemble[0xe12fff1e]) []]
-        ++ (if route==DevelopJob4 then [Block Descriptor descriptorAddress ReadOnly operand [],Block NextDescriptor (Address 0x2001000) ReadWrite plane []] else [])
+        ++ (if route==DevelopJob4 then [Block DevelopOperand (Address 0x2002000) ReadOnly operand [],Block DevelopPlane (Address 0x2001000) ReadWrite plane []] else [])
         ++ [code Defect 0x110300 defectBytes|defect/=Nothing]
       expected=[(Driver,finalState),(Playback,initialPlayback),(RecordMemory,finalRecord),(Consumer,finalConsumer)]
-        ++ (if route==DevelopJob4 then [(Descriptor,operand),(NextDescriptor,finalPlane)] else [])
+        ++ (if route==DevelopJob4 then [(DevelopOperand,operand),(DevelopPlane,finalPlane)] else [])
   ensure (hash producerBytes==Digest "47bb5cc27a1cd0062590dd9bf2019597b5537f698b807e3edfa8cb27980807eb") "develop job4 source body identity mismatch"
   ensure (hash signalBytes==Digest "3e54ac9af3dc1e6630f562c6a5897c97980635773395246431befb7bfc582841") "record notification source body identity mismatch"
   observed<-runNative runner output ident blocks mappedCalls expected (defect/=Nothing)
