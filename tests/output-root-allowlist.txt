@@ -9,6 +9,7 @@ build-support/xm1-decomp.sh
 emulation/CriticalPairWitness.hs
 emulation/Emulation/Image4Staging.hs
 emulation/MediaRouteSmoke.hs
+emulation/PlaybackModeObserve.hs
 emulation/VerifyCandidate.hs
 emulation/menu-engine-pair-trajectories/fn-oracle.jq
 emulation/menu-engine-pair-trajectories/oracle.jq

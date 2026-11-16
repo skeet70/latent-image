@@ -64,9 +64,8 @@ readAggregate domain union bin symbolsPath placementsPath = do
         (fail "aggregate executable symbol overlaps readonly placement")
   let entries = [address | entry <- Union.mapEntries domainMap, let Regions.GuestAddress address = Union.entryAddress entry]
   forM_ (Union.mapEntries domainMap) $ \entry -> do
-    let Regions.GuestAddress address = Union.entryAddress entry
-    unless (any (\symbol -> Agg.symbolAddress symbol == address && Agg.symbolName symbol == Union.entryVeneer entry) symbols)
-      (fail "aggregate fixed entry lacks its positive veneer symbol")
+    _ <- either fail pure (Union.resolveEntryTarget image symbols placements entry)
+    pure ()
   pure (Aggregate (Image base bytes)
     [(Agg.symbolAddress symbol, Agg.symbolSize symbol) | symbol <- symbols] placements entries)
 
@@ -487,7 +486,8 @@ runDomain runner cacheRoot directory domain stockImage ownedImage symbols aggreg
         [ entryBase domain, entryBase domain + 0x1c, entryBase domain + 0x38
         , atomicsBase domain, atomicsBase domain + 0x28, atomicsBase domain + 0x54
         ]
-  unless (map fst symbols == origins) (error "owned symbols are not the six stock extents")
+  let bound = if null aggregates then map fst symbols == origins else all (`elem` concatMap aggregateEntries aggregates) origins
+  unless bound (error "owned image does not bind the six global-lock entries")
   (rootRuns, rootControls) <- runCohort [one | one <- cases, cohortOf one == "root"] directory
   (conventionRuns, conventionControls) <- runCohort [one | one <- cases, cohortOf one == "conventions"] (directory </> "conventions")
   protectionControls <- runProtection

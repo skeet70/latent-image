@@ -8,7 +8,7 @@ import Data.Aeson (Value (..))
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
-import Data.Either (isLeft)
+import Data.Either (isLeft, isRight)
 import Data.Word (Word32)
 import qualified Emulation.PlaybackDecode as Decode
 
@@ -26,7 +26,7 @@ main = do
   let jpeg = BL.toStrict (encodeJpegAtQuality 90 (generateImage (\_ _ -> PixelYCbCr8 64 128 128) 18 9))
       n = fromIntegral (B.length jpeg)
       fixture = B.replicate 37 7 <> jpeg <> B.replicate 11 8
-      params source capacity = wordsAt 0x78 [(0,0x14eae2c),(8,source),(12,n),(16,0x40200000),(0x1c,capacity),(0x20,1)]
+      params source capacity = wordsAt 0x78 [(0,0x14eae2c),(8,source),(12,n),(16,0x40200000),(0x14,18),(0x18,9),(0x1c,capacity),(0x20,1)]
       regs source capacity = wordsAt 16 [(0,0x40200000),(4,capacity),(8,source),(12,n)]
       pixels = B.pack [if y < 9 && x < 36 then if x `mod` 4 < 2 then 64 else 128 else 0 | y <- [0..15 :: Int], x <- [0..63 :: Int]]
       snap source capacity endpoint bytes = Decode.withEndpoint endpoint <$> Decode.snapshot [params source capacity, regs source capacity, jpeg, bytes]
@@ -53,6 +53,18 @@ main = do
       case inspect 0x40100000 1024 0x40200400 (B.singleton 0 <> B.drop 1 pixels) of
         Right (Object report) -> check "visible pixel disagreement is reported without tolerance qualification" (KM.lookup "exact_match" report == Just (Bool False))
         _ -> ioError (userError "visible pixel disagreement became a layout refusal")
+      binding <- either (ioError . userError) pure (Decode.completionBinding completed (Decode.OutputEvent 0x87654321))
+      let patch offset value bytes = B.take offset bytes <> wordsAt 4 [(0,value)] <> B.drop (offset+4) bytes
+          shared = B.take 0x1a0 (wordsAt 0x210 [(0x198,0x14eae2c)]) <> B.drop 8 (params 0x40100000 1024)
+          request = wordsAt 0xb0 [(8,18),(12,9),(0x10,32),(0x14,16),(0x18,0x40100000),(0x1c,n)
+            ,(0x20,0x40200000),(0x24,1024),(0x30,0x87654321)]
+      check "completed output reaches its released request" (isRight (Decode.inspectRelease binding shared request))
+      mapM_ (\(offset,value) -> check "wrong request handback refused"
+        (isLeft (Decode.inspectRelease binding shared (patch offset value request))))
+        [(0x24,0),(0x28,1),(0x30,0x87654320),(0x18,0x40100020),(0x1c,n+1),(0x20,0x40200020),(0x10,16),(0x14,8)]
+      mapM_ (\(offset,value) -> check "unreleased or mismatched transaction refused"
+        (isLeft (Decode.inspectRelease binding (patch offset value shared) request)))
+        [(4,0x1e123456),(0x19c,0x76123456),(0x198,0x14eae30),(0x1a0,0x40100020)]
       let constructed = jpeg <> B.replicate 89 0
           countWord = wordsAt 4 [(0,fromIntegral (B.length constructed))]
           constructedParams = B.take 12 (params 0x40100000 1024) <> countWord <> B.drop 16 (params 0x40100000 1024)

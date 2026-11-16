@@ -15,6 +15,7 @@ const READ_EXECUTE: u8 = 5;
 const DEVICE: u8 = 10;
 
 const BX_LR: u32 = 0xe12f_ff1e;
+const LDR_PC_ENTRY_LITERAL: u32 = 0xe51f_f004;
 const PUSH_LR: u32 = 0xe92d_4000;
 const POP_PC: u32 = 0xe8bd_8000;
 const POP_SINGLE_PC: u32 = 0xe49d_f004;
@@ -1231,6 +1232,131 @@ fn legacy_wires_above_the_original_byte_cap_remain_invalid() {
 }
 
 #[test]
+fn an_immutable_entry_literal_reaches_its_declared_body_and_returns_ordinary_state() {
+    for cpsr in [0x10, 0xa000_0010] {
+        let observed = Case::new(&[LDR_PC_ENTRY_LITERAL, CODE + 0x40, 0xe3a0_0000, BX_LR])
+            .code(CODE + 0x40, &[ADD_R0_1, 0xe581_0000, BX_LR])
+            .function(CODE + 0x40, 12)
+            .register(0, 40)
+            .register(1, STACK)
+            .register(4, 0x1234_5678)
+            .register(15, cpsr)
+            .run();
+        observed.assert_returned();
+        assert_eq!(observed.register("r0"), 41);
+        assert_eq!(observed.register("r4"), 0x1234_5678);
+        assert_eq!(observed.register("sp"), SP);
+        assert_eq!(observed.register("lr"), EXIT);
+        assert_eq!(observed.register("cpsr"), cpsr);
+        assert!(observed.bytes(STACK).starts_with("29000000"));
+        assert!(observed.observation.kernel.is_none());
+    }
+}
+
+#[test]
+fn a_nested_entry_literal_preserves_the_callers_return_frame() {
+    let observed = Case::new(&[PUSH_LR, branch(CODE + 4, CODE + 0x40, true), ADD_R0_1, POP_PC])
+        .code(CODE + 0x40, &[LDR_PC_ENTRY_LITERAL, CODE + 0x80])
+        .function(CODE + 0x40, 8)
+        .code(CODE + 0x80, &[ADD_R0_1, BX_LR])
+        .function(CODE + 0x80, 8)
+        .register(0, 40)
+        .run();
+    observed.assert_returned();
+    assert_eq!(observed.register("r0"), 42);
+    assert_eq!(observed.register("sp"), SP);
+}
+
+#[test]
+fn a_kernel_literal_stop_keeps_its_existing_stop_contract() {
+    let observed = Case::new(&[LDR_PC_ENTRY_LITERAL, CODE + 0x80])
+        .kernel(Kernel { stop: Some(CODE + 0x80), ..Kernel::default() })
+        .register(0, 40)
+        .run();
+    observed.assert_stopped(Status::StopAddress, CODE + 0x80);
+    assert_eq!(observed.register("r0"), 40);
+    assert!(observed.observation.kernel.is_some());
+}
+
+#[test]
+fn other_ordinary_pc_writes_do_not_acquire_a_literal_transfer_contract() {
+    for instruction in [0xe59f_f000, 0xe51f_f008, 0xe591_f000, 0x151f_f004, 0xe1a0_f000] {
+        let observed = Case::new(&[instruction, CODE + 0x40])
+            .code(CODE + 0x40, &[BX_LR])
+            .function(CODE + 0x40, 4)
+            .register(0, CODE + 0x40)
+            .register(1, CODE + 4)
+            .run();
+        observed.assert_stopped(Status::UnsupportedInstruction, CODE);
+        assert_eq!(observed.register("r0"), CODE + 0x40);
+        assert_eq!(observed.register("sp"), SP);
+    }
+}
+
+#[test]
+fn an_entry_literal_cannot_start_in_the_middle_of_a_declared_function() {
+    let observed = Case::new(&[0xe1a0_0000, LDR_PC_ENTRY_LITERAL, CODE + 0x40])
+        .code(CODE + 0x40, &[BX_LR])
+        .function(CODE + 0x40, 4)
+        .run();
+    observed.assert_stopped(Status::UnsupportedInstruction, CODE + 4);
+}
+
+#[test]
+fn an_entry_literal_needs_its_second_word_in_the_same_immutable_function() {
+    for permission in [None, Some(READ), Some(READ_WRITE), Some(READ_EXECUTE)] {
+        let mut case = Case::new(&[LDR_PC_ENTRY_LITERAL])
+            .region(CODE + 0x40, READ_EXECUTE, &words(&[BX_LR]))
+            .region(EXIT, READ_EXECUTE, &words(&[0]))
+            .function(CODE + 0x40, 4);
+        case.regions[0].size = 4;
+        case.regions[0].bytes.truncate(4);
+        if let Some(permission) = permission {
+            case = case.region(CODE + 4, permission, &words(&[CODE + 0x40]));
+        }
+        case.run().assert_stopped(Status::UnsupportedInstruction, CODE);
+    }
+}
+
+#[test]
+fn an_entry_literal_requires_a_positive_aligned_declared_executable_entry() {
+    for (target, status) in [
+        (0, Status::UnsupportedInstruction),
+        (CODE + 0x42, Status::UnsupportedInstruction),
+        (CODE + 0x44, Status::UnknownCall),
+        (CODE + 0x80, Status::UnknownCall),
+        (0x4000, Status::UnknownCall),
+        (0x5000, Status::UnknownCall),
+        (STACK, Status::UnknownCall),
+        (STUB, Status::UnknownCall),
+        (EXIT, Status::UnknownCall),
+    ] {
+        let observed = Case::new(&[LDR_PC_ENTRY_LITERAL, target])
+            .code(CODE + 0x40, &[ADD_R0_1, BX_LR])
+            .function(CODE + 0x40, 8)
+            .region(0x5000, READ, &words(&[BX_LR]))
+            .stub(STUB, &[], &[(0, 0x55)])
+            .register(0, 40)
+            .run();
+        observed.assert_stopped(status, CODE);
+        assert_eq!(observed.register("r0"), 40);
+        assert_eq!(observed.register("lr"), EXIT);
+        assert!(observed.observation.events.is_empty());
+    }
+}
+
+#[test]
+fn declaring_a_literal_target_does_not_make_nonexecutable_memory_executable() {
+    for permission in [READ, READ_WRITE] {
+        let observed = Case::new(&[LDR_PC_ENTRY_LITERAL, 0x4000])
+            .region(0x4000, permission, &words(&[BX_LR]))
+            .function(0x4000, 4)
+            .run();
+        assert_eq!(observed.status(), Status::InvalidCase);
+    }
+}
+
+#[test]
 fn an_entry_tail_stub_returns_to_the_exit_with_lr_preserved() {
     // bx r12
     let tail = Case::new(&[0xe12f_ff1c]).stub(STUB, &[(1, 7)], &[(0, 0x55)]).register(12, STUB);
@@ -1558,9 +1684,9 @@ fn function_count_boundary_calls_the_last_function_and_refuses_one_more() {
 
 #[test]
 fn region_count_boundary_reads_the_last_region_and_refuses_past_limits() {
-    const LAST: u32 = 0x6000 + 4 * 61;
+    const LAST: u32 = 0x6000 + 4 * 125;
     let mut valid = Case::new(&[LDR_R0_R1, ADD_R0_1, STR_R0_R1_POST_4, BX_LR]).register(1, LAST);
-    for i in 0..61 {
+    for i in 0..125 {
         valid = valid.region(0x6000 + 4 * i, READ_WRITE, &[0; 4]);
     }
     valid = valid.region(LAST, READ_WRITE, &[0; 4]);
@@ -1570,19 +1696,19 @@ fn region_count_boundary_reads_the_last_region_and_refuses_past_limits() {
     assert_eq!(observed.bytes(LAST), "01000000");
 
     let mut too_many = Case::new(&[BX_LR]);
-    for i in 0..63 {
+    for i in 0..127 {
         too_many = too_many.region(0x6000 + 4 * i, READ_WRITE, &[0; 4]);
     }
     assert_eq!(too_many.run().status(), Status::InvalidCase);
 
     let mut oversized = Case::new(&[BX_LR]);
-    for i in 0..62 {
-        oversized = oversized.region(0x1000_0000 + 0x2_0000 * i, READ_WRITE, &vec![0; 68_782]);
+    for i in 0..126 {
+        oversized = oversized.region(0x1000_0000 + 0x2_0000 * i, READ_WRITE, &vec![0; 33_300]);
     }
     assert_eq!(oversized.run().status(), Status::InvalidCase);
 
     let mut read_only = Case::new(&[STR_R0_R1_POST_4, BX_LR]).register(0, 0xdead_beef).register(1, LAST);
-    for i in 0..61 {
+    for i in 0..125 {
         read_only = read_only.region(0x6000 + 4 * i, READ_WRITE, &[0; 4]);
     }
     read_only = read_only.region(LAST, READ, &[0; 4]);
@@ -1593,7 +1719,7 @@ fn region_count_boundary_reads_the_last_region_and_refuses_past_limits() {
     assert_eq!(observed.bytes(LAST), "00000000");
 
     let mut bad_permission = Case::new(&[BX_LR]);
-    for i in 0..61 {
+    for i in 0..125 {
         bad_permission = bad_permission.region(0x6000 + 4 * i, READ_WRITE, &[0; 4]);
     }
     bad_permission = bad_permission.region(LAST, 2, &[0; 4]);

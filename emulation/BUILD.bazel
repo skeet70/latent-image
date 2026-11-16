@@ -3580,6 +3580,43 @@ haskell_library(
 )
 
 haskell_library(
+    name = "bridge-client",
+    srcs = ["Emulation/BridgeClient.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":capture-stream-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:text",
+    ],
+)
+
+haskell_binary(
+    name = "playback-mode-observe",
+    srcs = ["PlaybackModeObserve.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":bridge-client",
+        ":capture-stream-lib",
+        ":emulator-usb",
+        ":playback-owned-lib",
+        "//broker:core",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:cryptohash-sha256",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:text",
+        "//transport:camera-core",
+    ],
+)
+
+haskell_library(
     name = "playback-decode-lib",
     srcs = ["Emulation/PlaybackDecode.hs"],
     src_strip_prefix = ".",
@@ -3606,14 +3643,79 @@ haskell_test(
     ],
 )
 
+haskell_library(
+    name = "media-inspection-lib",
+    srcs = ["Emulation/MediaInspection.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:cryptohash-sha256",
+    ],
+)
+
+haskell_test(
+    name = "media-inspection-tests",
+    size = "small",
+    srcs = ["MediaInspectionTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":media-inspection-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
+haskell_library(
+    name = "playback-owned-lib",
+    srcs = ["Emulation/PlaybackOwned.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//replacement/playback:__pkg__"],
+    deps = [
+        ":watch-observation",
+        "//host/firmware:bank-allowlist",
+        "//host/firmware:playback-contract",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:cryptohash-sha256",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+    ],
+)
+
+haskell_test(
+    name = "playback-owned-tests",
+    size = "small",
+    srcs = ["PlaybackOwnedTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":playback-owned-lib",
+        "//host/firmware:playback-contract",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:cryptohash-sha256",
+        "//host:text",
+    ],
+)
+
 haskell_binary(
     name = "media-route-smoke",
     srcs = ["MediaRouteSmoke.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
     visibility = ["//visibility:public"],
     deps = [
+        ":bridge-client",
         ":capture-stream-lib",
+        ":media-inspection-lib",
         ":playback-decode-lib",
+        ":playback-owned-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

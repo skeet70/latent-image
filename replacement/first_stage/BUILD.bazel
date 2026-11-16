@@ -2,7 +2,7 @@ load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(["format.rs"])
+exports_files(["format.rs", "engine.rs"])
 
 # The first-record image is 11,368 bytes, SHA-256 78184804... (E-FIRST-RECORD-FLASH-BOOT-CHECK-150),
 # and its three fault controls are derived from this source.

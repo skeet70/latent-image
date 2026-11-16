@@ -1,0 +1,38 @@
+.syntax unified
+.arm
+
+.macro retained name, address
+.global \name
+.type \name, %function
+.set \name, \address
+.endm
+
+retained xm1_playback_retained_dispatch, 0x011e8bf8
+retained xm1_power_output_route_set_requested_level, 0x0064982c
+retained xm1_scanout_mode_preset, 0x006d1294
+retained xm1_jpeg_wait, 0x00724b68
+retained xm1_jpeg_signal, 0x00724c00
+retained xm1_jpeg_resource_acquire, 0x0065a3cc
+retained xm1_jpeg_resource_release, 0x0065a424
+retained xm1_jpeg_reset, 0x0065a478
+retained xm1_jpeg_program, 0x0065a58c
+retained xm1_jpeg_start, 0x0065a548
+retained xm1_jpeg_publish_restart, 0x0065aa44
+retained xm1_jpeg_interrupt_acquire, 0x0064e918
+retained xm1_jpeg_interrupt_release, 0x0064eb20
+retained xm1_jpeg_cache, 0x00042634
+retained xm1_jpeg_status_read, 0x0065ab20
+retained xm1_jpeg_status_ack, 0x0065ab50
+retained xm1_jpeg_input_event_read, 0x0065ab7c
+retained xm1_jpeg_input_event_ack, 0x0065abac
+retained xm1_jpeg_output_event_read, 0x0065abd8
+retained xm1_jpeg_output_event_ack, 0x0065ac08
+retained xm1_jpeg_endpoint_read, 0x0065a9e4
+retained memcpy, 0x0089d908
+retained memmove, 0x0089d908
+retained __aeabi_memcpy, 0x0089d908
+retained __aeabi_memcpy4, 0x0089d908
+retained __aeabi_memcpy8, 0x0089d908
+retained __aeabi_memmove, 0x0089d908
+retained __aeabi_memmove4, 0x0089d908
+retained __aeabi_memmove8, 0x0089d908

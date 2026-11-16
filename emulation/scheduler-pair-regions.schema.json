@@ -17,7 +17,7 @@
       "type": "object",
       "required": ["kind", "name"],
       "properties": {
-        "kind": {"enum": ["helper", "dispatch", "service", "irq"]},
+        "kind": {"enum": ["helper", "dispatch", "service", "irq", "family", "semaphore", "task-record"]},
         "name": {"type": "string", "pattern": "^[a-z]+(-[a-z]+)*$"}
       },
       "additionalProperties": false
@@ -46,7 +46,7 @@
       "required": ["address", "kind", "register"],
       "properties": {
         "address": {"$ref": "#/$defs/address"},
-        "kind": {"enum": ["selected-read", "discarded-read"]},
+        "kind": {"enum": ["selected-read", "discarded-read", "enabled-read", "global-lock-read", "retry", "callback", "callback-return", "select-complete", "first-entry-exit", "irq-tail", "timer-insert", "timer-remove", "timer-consume", "publication-barrier"]},
         "register": {"type": "string", "pattern": "^r([0-9]|1[0-5])$"}
       },
       "additionalProperties": false

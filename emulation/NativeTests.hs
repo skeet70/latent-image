@@ -183,10 +183,8 @@ contractLimitRegressions runner=withTemporary "fuji-contract-limit-tests"$ \root
      provenance bytes=set "provenance"(s(replicate bytes 'x'))stripped
  boundary "case JSON bytes" (provenance(caseBytes-fixed)) (provenance(caseBytes-fixed+1))
 
--- A high region count admits the last region's read and write, refuses one region past the
--- count, and keeps the mapped-byte and permission refusals.
-regionCountRegressions :: FilePath -> IO ()
-regionCountRegressions runner=withTemporary "fuji-region-count-tests"$ \root->do
+regionCountRegressions :: FilePath -> FilePath -> IO ()
+regionCountRegressions runner checker=withTemporary "fuji-region-count-tests"$ \root->do
  let codeWords=[0xe5921000,0xe2811001,0xe5821000,0xe12fff1e]::[Word32]
      storeWords=[0xe5820000,0xe12fff1e]::[Word32]
      code=wordBytes codeWords
@@ -198,7 +196,7 @@ regionCountRegressions runner=withTemporary "fuji-region-count-tests"$ \root->do
  let hex value=s("0x"++replicate(8-length text)'0'++text) where text=showHex(value::Word32)""
      zero=obj[("zero",b True)]
      region name address size permissions initial=obj[("id",s name),("address",hex address),("size",n size),("permissions",s permissions),("initial",initial)]
-     last=0xc000+4*60::Word32
+     lastAddress=0xc000+4*124::Word32
      dataRegion stride i size permissions=region("data"++show i)(0xc000+stride*fromIntegral i)(fromIntegral size)permissions zero
      artifact ident path bytes digest'=obj[("id",s ident),("path",s path),("size",n(fromIntegral(B.length bytes))),("sha256",s digest')]
      baseRegions artifactId codeLength=[region "code" 0x8000 codeLength "rx"(obj[("artifact",s artifactId),("offset",n 0),("length",n codeLength)]),region "exit" 0xa000 4 "rx" zero,region "stack" 0xb000 32 "rw" zero]
@@ -214,16 +212,16 @@ regionCountRegressions runner=withTemporary "fuji-region-count-tests"$ \root->do
       ,("limits",obj[("instructions",n 1000),("wall_ms",n 10000)])
       ,("expected",obj[("status",s expectedStatus),("registers",obj expectedRegisters),("memory",arr expectedMemory),("events",arr[])])
       ,("exclusions",arr[s "high region count control"])]
-     registers=obj([("r"++show i,hex 0)|i<-[0..12::Int]]++[("r2",hex last),("sp",hex 0xb010),("lr",hex 0xa000),("cpsr",hex 0x10)])
-     storeRegisters=obj([("r"++show i,hex 0)|i<-[0..12::Int],i/=0,i/=2]++[("r0",hex 0xdeadbeef),("r2",hex last),("sp",hex 0xb010),("lr",hex 0xa000),("cpsr",hex 0x10)])
+     registers=obj([("r"++show i,hex 0)|i<-[0..12::Int]]++[("r2",hex lastAddress),("sp",hex 0xb010),("lr",hex 0xa000),("cpsr",hex 0x10)])
+     storeRegisters=obj([("r"++show i,hex 0)|i<-[0..12::Int],i/=0,i/=2]++[("r0",hex 0xdeadbeef),("r2",hex lastAddress),("sp",hex 0xb010),("lr",hex 0xa000),("cpsr",hex 0x10)])
      codeSize=fromIntegral(B.length code)::Integer
      codeArtifact=artifact "code" "region-count.bin" code codeDigest
      storeArtifact=artifact "store" "region-count-store.bin" storeCode storeDigest
-     valid=fixture "region-count" codeArtifact codeSize registers(baseRegions "code" codeSize++[dataRegion 4 i 4 "rw"|i<-[0..60::Int]]) "returned" [("r1",hex 1),("pc",hex 0xa000)][obj[("region",s "data60"),("offset",n 0),("hex",s "01000000")]]
-     tooMany=fixture "region-count-65" codeArtifact codeSize registers(baseRegions "code" codeSize++[dataRegion 4 i 4 "rw"|i<-[0..61::Int]]) "returned" [("r1",hex 1)][]
-     oversized=fixture "region-count-bytes" codeArtifact codeSize registers(baseRegions "code" codeSize++[dataRegion 0x20000 i 68782 "rw"|i<-[0..60::Int]]) "returned" [("r1",hex 1)][]
-     readOnly=fixture "region-count-read-only" storeArtifact 8 storeRegisters(baseRegions "store" 8++[dataRegion 4 i 4 (if i==60 then "r" else "rw")|i<-[0..60::Int]]) "memory_guard" [("r0",hex 0xdeadbeef),("r2",hex last)][]
-     badPermission=fixture "region-count-permission" codeArtifact codeSize registers(baseRegions "code" codeSize++[dataRegion 4 i 4 (if i==60 then "rwx" else "rw")|i<-[0..60::Int]]) "returned" [("r1",hex 1)][]
+     valid=fixture "region-count" codeArtifact codeSize registers(baseRegions "code" codeSize++[dataRegion 4 i 4 "rw"|i<-[0..124::Int]]) "returned" [("r1",hex 1),("pc",hex 0xa000)][obj[("region",s "data124"),("offset",n 0),("hex",s "01000000")]]
+     tooMany=fixture "region-count-129" codeArtifact codeSize registers(baseRegions "code" codeSize++[dataRegion 4 i 4 "rw"|i<-[0..125::Int]]) "returned" [("r1",hex 1)][]
+     oversized=fixture "region-count-bytes" codeArtifact codeSize registers(baseRegions "code" codeSize++[dataRegion 0x20000 i 33555 "rw"|i<-[0..124::Int]]) "returned" [("r1",hex 1)][]
+     readOnly=fixture "region-count-read-only" storeArtifact 8 storeRegisters(baseRegions "store" 8++[dataRegion 4 i 4 (if i==124 then "r" else "rw")|i<-[0..124::Int]]) "memory_guard" [("r0",hex 0xdeadbeef),("r2",hex lastAddress)][]
+     badPermission=fixture "region-count-permission" codeArtifact codeSize registers(baseRegions "code" codeSize++[dataRegion 4 i 4 (if i==124 then "rwx" else "rw")|i<-[0..124::Int]]) "returned" [("r1",hex 1)][]
      path=root</>"region-count.json"
      run label item=do
       B.writeFile path(encodeCanonical item)
@@ -235,11 +233,24 @@ regionCountRegressions runner=withTemporary "fuji-region-count-tests"$ \root->do
      refused label item=do
       (code',report)<-run label item
       ensure(code'==1 && get report "status"==s "invalid_case")(label++": "++show report)
- passed "64 regions read and write the last region" valid
- refused "65 regions" tooMany
- refused "64 regions over the mapped-byte budget" oversized
- passed "64 regions refuse a read-only store" readOnly
- refused "64 regions with an unsupported permission" badPermission
+ passed "128 regions read and write the last region" valid
+ (_,_,wire,_)<-loadCase path
+ let wireLines=BC.lines wire
+     extraRegion=BC.pack "c1f4 4 3 00000000"
+     tooManyWire=BC.unlines
+       ([if index==4 then BC.pack "129 1 0" else line|(index,line)<-zip[0::Int ..](init wireLines)]++[extraRegion,last wireLines])
+ forM_[(wire,ExitSuccess,"returned"),(tooManyWire,ExitFailure 1,"invalid_case")]$ \(input,expectedExit,status)->do
+   (timed,code',out,_)<-runBounded 15000000 (8*1024*1024) runner [] input
+   result<-jsonRead out
+   ensure(not timed && code'==expectedExit && get result "status"==s status)("independent region-count boundary: "++show result)
+ forM_[(valid,ExitSuccess),(tooMany,ExitFailure 1)]$ \(item,expectedExit)->do
+   B.writeFile path(encodeCanonical item)
+   (timed,code',_,_)<-runBounded 15000000 (1024*1024) checker ["--schemafile","schemas/native-case.schema.json",path] B.empty
+   ensure(not timed && code'==expectedExit)"region-count schema boundary differs"
+ refused "129 regions" tooMany
+ refused "128 regions over the mapped-byte budget" oversized
+ passed "128 regions refuse a read-only store" readOnly
+ refused "128 regions with an unsupported permission" badPermission
 
 -- A read-only region admits an expected byte that equals its initial value, refuses an
 -- expected change, and stops a store as memory_guard.
@@ -1024,7 +1035,7 @@ main=do
  instructionLimitRegressions runner checker
  recordingLimitRegressions runner
  contractLimitRegressions runner
- regionCountRegressions runner
+ regionCountRegressions runner checker
  readOnlyRegressions runner
  schemaContract
  batched<-fixtureBatch runner checker

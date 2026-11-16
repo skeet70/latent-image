@@ -35,6 +35,12 @@ The result distinguishes `host-composed`, `compared` with its evidence record, a
 | [Primary publisher](primary_initializer/), [secondary publisher](interface_initializer/) | Package `BUILD.bazel` declarations | [Publication and installation contract](../reports/replacement-inventory-baseline.md#812-image-4-phase-0-installation-contract-150) |
 | [Loader orchestration](loader_orchestration/) | `:loader-a-orchestration-image`, `:loader-b-orchestration-image` | [Owned loader source](../emulation/README.md#owned-loader-orchestration-source-149) |
 
+The shared-engine extraction changes first-stage executable bytes, not only ELF metadata. [Hash-validated old/current ELF snapshots and LLVM output](../private-data/scratch/LaterLoadingClosure/runs/20261116T042627Z-first-stage-shared-engine-runtime-comparison/result/) show identical entry/load layouts, all defined global exports and `.rodata`. Private function placement and corresponding branch encodings change: standalone `Session::open` moves from `0x6b7c` to `0x6d08`, and `close` from `0x6c88` to `0x6d5c`. Standalone remains `[0x6000,0x8c68)` and fixed-image remains `[0x6000,0x8e2c)`. Runtime-byte equivalence is not claimed.
+
+The newly qualified standalone ELF is `0f1ea73c310bbb8844f713eaa7e355b28efbd0310702b6a8014633e10594de83`, binary `b60d63cb6e2ca73af7c58cd2f7ddf7a7f3ca077f27a1b4a28403362e5e759434`. Fixed-image ELF is `dfd17727a4d21c595112a9d759f8ac5cb5b5ee95fa0ef9a5a4bb3fac77f9c709`, binary `f45910c3364c76aed9e522790cbe93c7c2545fca6c413a339e16f9fb34636593`. Both binaries were extracted using the canonical `llvm-objcopy -O binary` recipe and independently rebuilt for the affected gate.
+
+The [new RAM experiment](../private-data/scratch/LaterLoadingClosure/runs/20261116T042727Z-first-stage-shared-engine-ram-decode/result/e2e-result.json) cold-starts canonical firmware, installs the new `decode-test.o`, passes installation/trajectory/unload, and its [existing receipt consumer](../private-data/scratch/LaterLoadingClosure/runs/20261116T043257Z-first-stage-shared-engine-ram-consumer/result/verdict.json) accepts11 jobs,2,631,680 output bytes and pinned CRC-32 `0x21a1a3e5`, with a nonzero status-read count for every job. [Both stock- and RC0-derived new standalone packages pass both existing cold-menu backends](../private-data/scratch/LaterLoadingClosure/runs/20261116T043348Z-first-stage-shared-engine-boot-backends/result/). The [new fixed-image positive](../private-data/scratch/LaterLoadingClosure/runs/20261116T043724Z-first-stage-shared-engine-fixed-control/result/success/fixed-image.json) reaches the menu with six published-entry calls; its [actual body-bit corruption control](../private-data/scratch/LaterLoadingClosure/runs/20261116T043724Z-first-stage-shared-engine-fixed-control/result/corrupt/fixed-image.json) halts before handoff with zero body fetches or published-entry calls. These are host/emulator results, not hardware or Root's final composed-artifact qualification. Catalog and registry pin updates belong to the integration owner.
+
 For standalone record-2 staging, build the native image and pass its actual symbols:
 
 ```sh
@@ -108,6 +114,67 @@ loader-continuations --compare-plain-retained RETAINED --compare-plain-owned OWN
 ```
 
 Read-success comparison is not a proof of nonzero mode, error-side publication, transient mapping exclusion, continuous stack confinement or complete retained-service/resource lifetimes. Progress and completion markers do not substitute for committed executable bytes.
+
+## Bounded image5 skip/refusal and CPU-fill witness
+
+`//replacement/image5_load:image5-native-routes` executes the stock flashloader task from its entry, the retained or emitted Rust image5 producer, the actual storage adapter's unconfigured refusal, and the actual byte/word BSS fill routines. Three cases select rejected aligned fill, unaligned BSS base and unaligned BSS length. The mailbox, mode, segment and RTOS/cache service sinks are synthetic. No decoder, NAND transfer or scheduler law is supplied by this route.
+
+Build the executable, `//replacement/image5_load:image5-load-image`, `//emulation:native-runner` and `//emulation:emulator-slot`, then run:
+
+```sh
+run-output exec --label image5-native-routes-controls -- bash -c '
+  exec bazel-bin/emulation/emulator-slot --native bazel-bin/replacement/image5_load/image5-native-routes \
+    bazel-bin/emulation/native-runner "$1" \
+    bazel-bin/replacement/image5_load/image5-load-image.bin \
+    "$XM1_RUN_RESULT/routes.json" --native-jobs 1
+' _ "$IMAGE4"
+```
+
+The consumer checks exact BSS zeroing and unchanged halo/destination bytes, command done before release, cleared busy at callback, error delivery and the cache boundary. It also executes producers with omitted CPU fill, erased error status and omitted cache publication. Unknown execution cannot count as a passing negative control. This is conditional producer/caller qualification, not a natural reset route or permission to enter stale image5 code after skip-mode completion.
+
+## Missing-segment and plain skip caller witnesses
+
+The same native executable also accepts these route selections:
+
+```text
+image5-native-routes RUNNER IMAGE4 IMAGE5_BIN PLAIN_BIN REPORT --missing-segments --native-jobs 1
+image5-native-routes RUNNER IMAGE4 PLAIN_BIN REPORT --plain-skip --native-jobs 1
+```
+
+Run each under `run-output exec` and `emulator-slot --native` as above, with a fresh report path in `$XM1_RUN_RESULT`. The missing-segment route enters the actual flashloader and both retained/owned producers. Its oracle requires the source-bound halt PC at the instruction budget, command busy retained, done zero, no release/callback, no mode call and unchanged destination/BSS/flag. An executable premature-return control must instead complete the command and be refused by that oracle.
+
+Plain skip qualification executes the actual progress reporter and notification wrapper through their message-send boundary, not only the producer's progress-call arguments. Zero and three-block cases check command/resource order, delay calls, actual notification headers and payloads, monotonically retained progress and the callback. The synthetic notification recipient does not initialize an extent or set its flag. Notifications and successful command completion with unchanged destination bytes are not fresh residency.
+
+## Asynchronous image5 decoder composition
+
+`//replacement/image5_load:decoder-arm` exposes the complete stream/engine unit as an rlib. The opt-in `image5-decoder-image` links it through the existing bank root and fixed-image layout, with one panic closure, a contiguous body and 52 private BSS bytes. It does not select a global firmware image or change Root's canonical composition.
+
+The source census is `image5-decoder-source CANONICAL_DAT IMAGE4 IMAGE5 PLAIN LOADER_A LOADER_B OUTPUT_JSON`. It binds the committed stock function bytes, the conservative cross-image caller/reference scan, source98's route-table words and the adjacent settings stub. Computed runtime caller closure remains a separate obligation.
+
+The component artifact tool has these commands:
+
+```text
+image5-decoder-artifact publications IMAGE4 PRODUCER_BIN PRODUCER_SYMBOLS BODY_BIN SYMBOLS OUTPUT_JSON
+image5-decoder-artifact contract DECODER CANONICAL_DAT IMAGE4 PRODUCER_BIN PRODUCER_SYMBOLS BODY_BIN SYMBOLS CANDIDATE_DAT OUTPUT_JSON
+image5-decoder-artifact omit-clock-release BODY_BIN SYMBOLS OUTPUT_BODY OUTPUT_RECEIPT
+```
+
+Use the existing `build-first-stage` fixed-image variant and `stage-fixed-image` workflow. Supply the publication rows once against canonical image4. The rows include the admitted image5 producer, five external-entry veneers and retirement traps over `[0x6841f4,0x6848d8)` and `[0x6ae18c,0x6ae638)`. Do not replace `[0x6ae638,0x6ae650)`, the unrelated settings return-zero stub. The contract command decodes the staged DAT and checks the exact image4 mutations, carried body record and zero-once BSS bounds.
+
+The existing `loader-continuations` runner accepts `--decoder-witness retained|owned --image5-artifact PRODUCER_STAGE`. Owned additionally takes `--decoder-artifact DECODER_STAGE`, containing `decoder-contract.json`, `decoder.bin` and `decoder.symbols`. Both use the usual `--run`, `--update`, `--boot-rom`, `--analysis` and fresh `--output` arguments. Run under `run-output exec` and the current main `emulator-slot`, with `XM1_EMULATOR_SLOTS=1`; acquire a full-system slot only after staging/building.
+
+This mode observes actual storage feeds, source98 attach/detach handles, LZ MMIO, CPU IRQ exceptions, resource48 waits/completion, flashloader publication, canonical image5/BSS readback and the first image5 entry. Exception hooks do not isolate a core or synthesize completion. Canonical Method4, one natural producer session, retained device/RTOS services and finite observed callers are its bounds. Cancellation, malformed input, missing device completion, repeated sessions and concurrent engine clients are not accepted by this route.
+
+The retained IRQ dispatcher supplies word-aligned SP and can enter4 modulo8. Progress/final veneers preserve original SP/r4 and the return address, align before the Rust body and use at most12 bytes before that body. Service-return hooks are reused only for their identical purpose; each core/SP/LR invocation still records its own return.
+
+The exact dispatcher call is `CMP r0,#0; MOVNE lr,pc; MOVNE pc,r0` at `0x402d4..0x402dc`, returning at `0x402e0`. The current native CFI does not admit that manual-link transfer into a callback. Do not replace it with a BLX fixture and call that the actual caller, or widen native acceptance to make this comparison pass.
+
+`--decoder-irq-alignment progress-aligned-fixture|complete-aligned-fixture` selects a separate, explicitly synthetic full-system ABI control. From a fresh reset of the same staged image, it pads SP downward by4 before exactly one selected callback's actual `CMP/MOV` call sequence. It binds the original core/registers/frame word, checks the callback's LR, callee-saved registers and return SP, then restores the original SP before dispatcher continuation. The receipt records the pre-call padding and restoration. These controls do not qualify natural aligned-entry reachability; only the unmodified `natural` mode is firmware acceptance evidence.
+
+The artifact tool's `omit-clock-release` command creates an explicitly synthetic engine-resource defect. It replaces exactly one direct call to retained clock release `0x649ddc` with an A32 NOP and records both body identities and the instruction preimage. Stage that body with the same fixed-image workflow. The observer records the real public clock reservation output and requires that handle's retained release call before engine resource release; private engine bookkeeping is not its oracle. A rejected verification receipt preserves the missing-release verdict.
+
+Copy bounded observer JSON receipts and input/artifact identities into `XM1_RUN_RESULT` before successful managed-run closure. Bulk work is transient unless explicitly retained with `run-output keep`.
+
 
 ## Startup-consumer witness
 

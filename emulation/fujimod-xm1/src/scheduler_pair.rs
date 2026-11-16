@@ -23,7 +23,7 @@ use std::process::ExitCode;
 mod memory_view;
 use memory_view::{MemoryAddress, MemoryCore, TcmRegister, static_span, tcm_window};
 
-const USAGE: &str = "scheduler-pair --plan PLAN --run RUN --update DAT --boot-rom ROM --trajectory TRAJECTORY --output NEW_DIR";
+const USAGE: &str = "scheduler-pair --check-plan PLAN | --plan PLAN --run RUN --update DAT --boot-rom ROM --trajectory TRAJECTORY --output NEW_DIR";
 const SCHEMA: u32 = 3;
 const PLAN_SCHEMA: u32 = 3;
 const ALIAS: u32 = 0x4000_0000;
@@ -38,6 +38,7 @@ const PENDING_LIMIT: usize = 4096;
 const CLASS_LIMIT: usize = 1 << 20;
 const SAMPLE_LIMIT: usize = 64;
 const INSTRUCTION_LIMIT: u64 = 1_500_000_000;
+const TASK_RECORD_LIMIT: usize = 512;
 /// A write-hook window can hold this many rows before `advance_until` drains it.
 const WATCH_LIMIT: usize = 1 << 16;
 /// Instructions between drains inside one advance, so an untraced application loop
@@ -121,12 +122,16 @@ enum IrqKind { Doorbell }
 enum SemaphoreService { Signal, InterruptSignal, Wait, Poll, TimedWait, Create, Delete }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum TaskRecordPoint { Create, Delete }
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
-enum Semantic { Helper { name: Helper }, Dispatch { name: DispatchPoint }, Service { name: Service }, Irq { name: IrqKind }, Family { name: FamilyService }, Semaphore { name: SemaphoreService } }
+enum Semantic { Helper { name: Helper }, Dispatch { name: DispatchPoint }, Service { name: Service }, Irq { name: IrqKind }, Family { name: FamilyService }, Semaphore { name: SemaphoreService }, TaskRecord { name: TaskRecordPoint } }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum ProbeKind { SelectedRead, DiscardedRead, EnabledRead, GlobalLockRead, Retry, Callback, CallbackReturn, SelectComplete, FirstEntryExit, IrqTail, TimerInsert, TimerRemove, TimerConsume }
+enum ProbeKind { SelectedRead, DiscardedRead, EnabledRead, GlobalLockRead, Retry, Callback, CallbackReturn, SelectComplete, FirstEntryExit, IrqTail, TimerInsert, TimerRemove, TimerConsume, PublicationBarrier }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(try_from = "String", into = "String")]
@@ -222,6 +227,7 @@ struct Validated {
     plan: Plan,
     slots: Vec<Slot>,
     sites: Sites,
+    task_record_only: bool,
 }
 
 fn validate(plan: Plan) -> Result<Validated, String> {
@@ -233,6 +239,24 @@ fn validate(plan: Plan) -> Result<Validated, String> {
         for address in spellings(domain.loader_entry.0) { arms.insert(address, domain.domain); }
     }
     require(domains.len()==2, "plan does not name both loaders")?;
+    let task_records = plan.entries.iter().filter(|entry| matches!(entry.semantic, Semantic::TaskRecord { .. })).count();
+    let task_record_only = task_records != 0 && task_records == plan.entries.len();
+    if task_records != 0 {
+        require(task_records == 4 && matches!(plan.role, Role::Stock | Role::Owned), "task-record plans require both domain entry pairs")?;
+        for (domain, create, delete) in [(Domain::A, 0x4d094, 0x4d1a4), (Domain::B, 0xdd054, 0xdd168)] {
+            for (name, address) in [(TaskRecordPoint::Create, create), (TaskRecordPoint::Delete, delete)] {
+                require(plan.entries.iter().filter(|entry| entry.domain == domain && entry.entry.0 == address && entry.semantic == (Semantic::TaskRecord { name })).count() == 1,
+                    "task-record entry differs from the retained root ABI")?;
+            }
+            let barriers = plan.probes.iter().filter(|probe| probe.domain == domain && probe.kind == ProbeKind::PublicationBarrier).count();
+            require(barriers == usize::from(plan.role == Role::Owned), "task publication barrier coverage differs")?;
+        }
+        if task_record_only {
+            require(plan.probes.iter().all(|probe| probe.kind == ProbeKind::PublicationBarrier), "task-record plan includes foreign probes")?;
+        }
+    } else {
+        require(plan.probes.iter().all(|probe| probe.kind != ProbeKind::PublicationBarrier), "publication probe has no task-record entries")?;
+    }
     let mut slots = Vec::new();
     let mut entries = BTreeMap::new();
     for entry in &plan.entries {
@@ -255,7 +279,7 @@ fn validate(plan: Plan) -> Result<Validated, String> {
     }), "plan guarded ranges are malformed")?;
     let sites = Sites { entries, probes, fills, arms };
     require(sites.fills.iter().all(|address| !sites.entries.contains_key(address) && !sites.probes.contains_key(address)), "fill shares an entry or probe")?;
-    Ok(Validated { plan, slots, sites })
+    Ok(Validated { plan, slots, sites, task_record_only })
 }
 
 /// A word through the executing core's view.
@@ -433,7 +457,12 @@ struct ReturnState {
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-struct CallClass { entry: EntryState, result: ReturnState }
+struct CallClass {
+    entry: EntryState,
+    result: ReturnState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    invocation: Option<u64>,
+}
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -463,7 +492,7 @@ impl Eq for Boundary {}
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum BoundaryKind { Save, Resume, NoSave, Retry, Callback, CallbackReturn, SelectedRead, DiscardedRead, EnabledRead, GlobalLockRead, SelectComplete, FirstEntryExit, IrqTail, Return, Acquired, PrefetchAbort, TimerInsert, TimerRemove, TimerConsume }
+enum BoundaryKind { Save, Resume, NoSave, Retry, Callback, CallbackReturn, SelectedRead, DiscardedRead, EnabledRead, GlobalLockRead, SelectComplete, FirstEntryExit, IrqTail, Return, Acquired, PrefetchAbort, TimerInsert, TimerRemove, TimerConsume, PublicationBarrier }
 
 impl ProbeKind {
     fn boundary(self) -> BoundaryKind {
@@ -481,6 +510,7 @@ impl ProbeKind {
             Self::TimerInsert => BoundaryKind::TimerInsert,
             Self::TimerRemove => BoundaryKind::TimerRemove,
             Self::TimerConsume => BoundaryKind::TimerConsume,
+            Self::PublicationBarrier => BoundaryKind::PublicationBarrier,
         }
     }
 
@@ -531,6 +561,9 @@ struct OpenCall { entry: EntryState, entered: u64, writes: Vec<CapturedWrite>, b
 impl OpenCall {
     fn record(&mut self, mut boundary: Boundary) -> Result<(), String> {
         require(self.history.len() < WATCH_LIMIT, "call boundary bound exceeded")?;
+        if matches!(self.entry.slot.semantic, Semantic::TaskRecord { .. }) {
+            require(self.history.len() < 2, "task-record publication/return boundary bound exceeded")?;
+        }
         boundary.writes = self.writes[self.write_cursor..].to_vec();
         boundary.bank = self.bank[self.bank_cursor..].to_vec();
         self.write_cursor = self.writes.len();
@@ -680,7 +713,7 @@ struct Milestone { phase: String, pulse: Option<Pulse>, expected: MenuTriple, re
 struct Binding { path: PathBuf, sha256: String }
 
 #[derive(Serialize)]
-struct Limits { sites: usize, pending: usize, classes: usize, samples: usize, instructions: u64, watch_rows: usize, lock_events: usize }
+struct Limits { sites: usize, pending: usize, classes: usize, samples: usize, instructions: u64, watch_rows: usize, lock_events: usize, task_records: usize }
 
 #[derive(Serialize)]
 struct Reached { slot: SlotId, calls: u64, returns: u64, pending: u64, first: Option<u64>, last: Option<u64> }
@@ -757,6 +790,7 @@ struct DataCapture {
     active: BTreeSet<u32>, rows: Vec<(u64,CapturedWrite)>, overflow: Option<Overflow>,
     failure: Option<String>, cached: Option<(InstructionEntryId,WriteOrigin)>,
     base: Rc<Cell<u64>>, progress: Rc<[Cell<u64>;2]>,
+    capture_all: bool,
 }
 impl DataCapture {
     fn origin(&mut self) -> Result<WriteOrigin, String> {
@@ -824,7 +858,7 @@ unsafe fn data_write(_access: Access, address: u64, size: i32, value: i64, data:
         capture.note_overflow(address, size);
         return;
     };
-    let watched = |word: u32| capture.active.contains(&(word & !ALIAS & !3));
+    let watched = |word: u32| capture.capture_all || capture.active.contains(&(word & !ALIAS & !3));
     let low = watched(address);
     let high = size == 8 && watched(address.wrapping_add(4));
     if !low && !high { return; }
@@ -1339,6 +1373,58 @@ fn semaphore_snapshot(board: &Board, core: Core, tcm: [u32; 2], domain: Domain, 
     Ok(words)
 }
 
+fn task_record_words() -> BTreeSet<u32> {
+    let mut addresses = BTreeSet::from([0x400c_0804]);
+    for (definitions, tasks, ids) in [(0x4005_beacu32, 0x4005_ff0cu32, 0x4006_22d4u32), (0x400e_be6c, 0x400e_fecc, 0x400f_2294)] {
+        for (base, bytes) in [(definitions, 120*0x28), (tasks, 120*0x38), (ids, 120*4)] {
+            addresses.extend((base..base+bytes).step_by(4));
+        }
+    }
+    addresses
+}
+
+fn task_record_snapshot(board: &Board, tcm: [u32; 2], point: TaskRecordPoint, context: &Context) -> Result<Vec<WordValue>, String> {
+    let mut addresses = task_record_words();
+    let sp = context.sp;
+    require(sp % 4 == 0 && sp >= 48 && sp <= u32::MAX-24, "task-record caller frame wraps or is unaligned")?;
+    addresses.extend((sp-48..sp+24).step_by(4));
+    if point == TaskRecordPoint::Create {
+        let request = context.arguments[1];
+        require(request % 4 == 0 && request <= u32::MAX-24, "task-record request wraps or is unaligned")?;
+        addresses.extend((request..request+24).step_by(4));
+    }
+    addresses.into_iter().map(|address| Ok(WordValue { address: Hex(address), value: board.word(context.core,tcm,address)? })).collect()
+}
+
+#[derive(Serialize)]
+struct InitialCoreState {
+    context: Context,
+    tcm: [u32; 2],
+    cpacr: u32,
+    fpexc: u32,
+    tpidrurw: u32,
+    core_instructions: u64,
+    memory: Vec<WordValue>,
+}
+
+fn initial_state(machine: &Machine, maps: &[MemoryMap]) -> Result<Vec<InitialCoreState>, String> {
+    let board = Board { machine, maps };
+    let addresses = task_record_words();
+    [Core::Primary, Core::Secondary].into_iter().map(|core| {
+        let (context, tcm) = board.context(core)?;
+        let memory = addresses.iter().map(|&address| Ok(WordValue {
+            address: Hex(address), value: board.word(core,tcm,address)?,
+        })).collect::<Result<_, String>>()?;
+        Ok(InitialCoreState {
+            context, tcm, memory,
+            cpacr: board.cp15(core,1,0,2)?,
+            fpexc: board.register(core,arm::Register::Fpexc)?,
+            tpidrurw: board.cp15(core,13,0,2)?,
+            core_instructions: machine.session.board.instruction_counts()[core.index()],
+        })
+    }).collect()
+}
+
 const PC_WATCHES: [u32; 5] = [0x436ec, 0xd36ec, 0xec8014, 0x40b00, 0xd0b00];
 const DISPATCH_LOADS: [u32; 2] = [0x436e4, 0xd36e4];
 
@@ -1414,6 +1500,7 @@ struct Observer<'p> {
     open: OpenCalls,
     classes: BTreeMap<CallClass, ClassCount>,
     entries: u64,
+    task_record_entries: usize,
     returns: u64,
     unrelated_continuations: u64,
     misplaced_stops: u64,
@@ -1515,7 +1602,7 @@ impl Observer<'_> {
             for core in 0..2 {
                 let context = Box::new(RefCell::new(DataCapture { cpu: unsafe { callback_cpu(machine.session.board.cpu(core)?) },
                     core: Core::from_index(core)?, sequence: self.write_sequence.clone(),
-                    active: BTreeSet::new(), rows: Vec::new(), overflow: None, failure: None, cached: None,
+                    active: BTreeSet::new(), capture_all: false, rows: Vec::new(), overflow: None, failure: None, cached: None,
                     base: self.clock_base.clone(), progress: self.clock_progress.clone() }));
                 let data = (&*context as *const RefCell<DataCapture>).cast_mut().cast();
                 // The context is retired only after remove_hook.
@@ -1527,6 +1614,7 @@ impl Observer<'_> {
         }
         for (_, _, capture) in &self.data_hooks {
             let mut capture = capture.borrow_mut();
+            capture.capture_all = self.open.pending.values().flatten().any(|call| matches!(call.entry.slot.semantic, Semantic::TaskRecord { .. }));
             capture.active = self.open.pending.values()
                 .flat_map(|calls| calls.iter()
                     .flat_map(|call| call.entry.memory.iter().map(|word| word.address.0 & !ALIAS & !3))).collect();
@@ -1556,7 +1644,10 @@ impl Observer<'_> {
             if [0xfffb30cc,0xfffb40cc,0xfffb30ec,0xfffb40ec].contains(&write.write.address.0) { continue; }
             for calls in self.open.pending.values_mut() {
                 for call in calls.iter_mut() {
-                    if call.entry.memory.iter().any(|word| word.address.0 & !ALIAS & !3 == write.write.address.0 & !ALIAS & !3) {
+                    if matches!(call.entry.slot.semantic, Semantic::TaskRecord { .. }) || call.entry.memory.iter().any(|word| word.address.0 & !ALIAS & !3 == write.write.address.0 & !ALIAS & !3) {
+                        if matches!(call.entry.slot.semantic, Semantic::TaskRecord { .. }) {
+                            require(call.writes.len() < WATCH_LIMIT, "task-record lifetime write bound exceeded")?;
+                        }
                         call.writes.push(*write);
                     }
                 }
@@ -1597,13 +1688,17 @@ impl Observer<'_> {
 
     fn enter(&mut self, machine: &mut Machine, context: &Context, tcm: [u32; 2], index: usize, origin: Option<(DispatchPoint,Vec<Boundary>)>) -> Result<(), String> {
         let board = Board { machine, maps: &self.maps };
-        let slot = self.slot(index);
-        let domain = slot.id.domain;
-        if !matches!(slot.id.semantic, Semantic::Family { .. }) {
+        let slot = self.slot(index).id;
+        let domain = slot.domain;
+        if !matches!(slot.semantic, Semantic::Family { .. } | Semantic::TaskRecord { .. }) {
             require(context.core.index() == match domain { Domain::A => 0, Domain::B => 1 }, "scheduler entry executed on the other core")?;
         }
+        if matches!(slot.semantic, Semantic::TaskRecord { .. }) {
+            require(self.task_record_entries < TASK_RECORD_LIMIT, "task-record lifetime entry bound exceeded")?;
+            self.task_record_entries += 1;
+        }
         let mut entry = EntryState {
-            slot: slot.id, core: context.core, cpsr: context.cpsr, r0: context.r0, lr: Hex(context.lr),
+            slot, core: context.core, cpsr: context.cpsr, r0: context.r0, lr: Hex(context.lr),
             arguments: context.arguments,
             task: context.current, sp: Hex(context.sp), registers: context.registers,
             cpacr: board.register(context.core, arm::Register::Cpacr)?,
@@ -1612,11 +1707,12 @@ impl Observer<'_> {
             origin: origin.as_ref().map(|(point,_)| *point),
             kernel_context: committed(board.word(context.core,tcm,context.core.own_kernel_context())?)?,
             task_stack: None,
-            memory: match slot.id.semantic {
+            memory: match slot.semantic {
                 Semantic::Helper { name } => snapshot(&board, context.core, tcm, name, context.arguments)?,
                 Semantic::Service { name } => service_snapshot(&board, context.core, tcm, domain, name, context.arguments)?,
                 Semantic::Family { name } => family_snapshot(&board, context.core, tcm, domain, name, context.arguments, context.sp)?,
                 Semantic::Semaphore { name } => semaphore_snapshot(&board, context.core, tcm, domain, name, context.arguments)?,
+                Semantic::TaskRecord { name } => task_record_snapshot(&board, tcm, name, context)?,
                 _ => root_snapshot(&board, context.core, tcm, domain)?,
             },
             order: self.next_order(),
@@ -1697,7 +1793,7 @@ impl Observer<'_> {
             let memory = call.entry.memory.iter().map(|word| Ok(WordValue {
                 address: word.address, value: board.word(context.core, tcm, word.address.0)?,
             })).collect::<Result<Vec<_>, String>>()?;
-            if matches!(call.entry.slot.semantic, Semantic::Service { .. } | Semantic::Family { .. } | Semantic::Semaphore { .. }) && completion == Completion::Return {
+            if matches!(call.entry.slot.semantic, Semantic::Service { .. } | Semantic::Family { .. } | Semantic::Semaphore { .. } | Semantic::TaskRecord { .. }) && completion == Completion::Return {
                 call.record(Boundary { kind: BoundaryKind::Return, address: Hex(context.pc), instructions: context.instructions,
                     order: self.next_order(), core: context.core, task: context.current, sp: Hex(context.sp), cpsr: context.cpsr,
                     registers: context.registers, memory: memory.clone(), writes: Vec::new(),
@@ -1715,7 +1811,8 @@ impl Observer<'_> {
                     }
                 }
             }
-            let class = CallClass { entry: call.entry, result: ReturnState { r0: context.r0, cpsr: context.cpsr,
+            let invocation = matches!(call.entry.slot.semantic, Semantic::TaskRecord { .. }).then_some(call.entered);
+            let class = CallClass { invocation, entry: call.entry, result: ReturnState { r0: context.r0, cpsr: context.cpsr,
                 memory, writes: call.writes, bank: call.bank, completion, task: context.current,
                 sp: Hex(context.sp), registers: context.registers, history: call.history,
                 cpacr: board.register(context.core, arm::Register::Cpacr)?,
@@ -2094,6 +2191,7 @@ struct Report<'a> {
     role: Role,
     inputs: Vec<Binding>,
     reset_sha256: String,
+    initial_state: Vec<InitialCoreState>,
     limits: Limits,
     instructions: u64,
     counts: Option<[u64; 2]>,
@@ -2142,6 +2240,15 @@ fn bound(path: &Path) -> Result<(Vec<u8>, Binding), String> {
 }
 
 fn drive() -> Result<(), String> {
+    let options: Vec<_> = std::env::args_os().skip(1).collect();
+    if options.len() == 2 && options[0] == "--check-plan" {
+        let bytes = read(Path::new(&options[1]))?;
+        let plan: Plan = serde_json::from_slice(&bytes).map_err(|error| format!("plan: {error}"))?;
+        let validated = validate(plan)?;
+        println!("scheduler plan admitted: {} entries, {} immutable ranges, {} probes; no guest execution",
+            validated.plan.entries.len(), validated.plan.guarded.len(), validated.plan.probes.len());
+        return Ok(());
+    }
     let paths = arguments()?;
     let output = paths["--output"].clone();
     let (plan_bytes, plan_binding) = bound(&paths["--plan"])?;
@@ -2176,7 +2283,8 @@ fn drive() -> Result<(), String> {
     machine.session.restore(&restored)?;
     machine.rearm()?;
     require(machine.instructions() == 0, "reset checkpoint is not preexecution")?;
-    let scheduler_stops = plan_stops(&validated.plan);
+    let initial_state = initial_state(&machine, &maps)?;
+    let scheduler_stops = if validated.task_record_only { BTreeSet::new() } else { plan_stops(&validated.plan) };
 
     let mut observer = Observer {
         validated: &validated,
@@ -2185,6 +2293,7 @@ fn drive() -> Result<(), String> {
         open: OpenCalls::default(),
         classes: BTreeMap::new(),
         entries: 0,
+        task_record_entries: 0,
         returns: 0,
         unrelated_continuations: 0,
         misplaced_stops: 0,
@@ -2210,10 +2319,11 @@ fn drive() -> Result<(), String> {
         .into_iter().map(str::to_owned).collect();
     let observed = (|| -> Result<(), String> {
         let mut labels = validated.sites.labels();
-        for address in PC_WATCHES.into_iter().chain(DISPATCH_LOADS.into_iter().filter(|&address| retained_dispatch_point(&validated.plan,address))).flat_map(spellings) {
+        for address in PC_WATCHES.into_iter().filter(|_| !validated.task_record_only)
+            .chain(DISPATCH_LOADS.into_iter().filter(|&address| !validated.task_record_only && retained_dispatch_point(&validated.plan,address))).flat_map(spellings) {
             labels.insert(address, "scheduler-pc-watch".into());
         }
-        for point in [0xc].into_iter().chain(observer.scheduler_stops.iter().copied()).flat_map(spellings) {
+        for point in [0xc].into_iter().filter(|_| !validated.task_record_only).chain(observer.scheduler_stops.iter().copied()).flat_map(spellings) {
             labels.insert(point, "scheduler-pc-watch".into());
         }
         machine.traces.arm_mutable(&machine.session, labels)?;
@@ -2315,7 +2425,8 @@ fn drive() -> Result<(), String> {
         role: validated.plan.role,
         inputs: vec![plan_binding, run_binding, dat_binding, rom_binding, trajectory_binding, executable_binding],
         reset_sha256: sha256(&checkpoint),
-        limits: Limits { sites: SITE_LIMIT, pending: PENDING_LIMIT, classes: CLASS_LIMIT, samples: SAMPLE_LIMIT, instructions: INSTRUCTION_LIMIT, watch_rows: WATCH_LIMIT, lock_events: LOCK_LIMIT },
+        initial_state,
+        limits: Limits { sites: SITE_LIMIT, pending: PENDING_LIMIT, classes: CLASS_LIMIT, samples: SAMPLE_LIMIT, instructions: INSTRUCTION_LIMIT, watch_rows: WATCH_LIMIT, lock_events: LOCK_LIMIT, task_records: TASK_RECORD_LIMIT },
         instructions: machine.instructions(),
         counts: machine.session.board.instruction_counts().try_into().ok(),
         entries: observer.entries,
@@ -2622,6 +2733,7 @@ mod tests {
         let write = captured(Written { address: Hex(0x9018), size: 4, value: 0x9fd0 });
         let saved = boundary(BoundaryKind::Return);
         let class = |order: u64, writeOrder: u64, boundaryOrder: u64| CallClass {
+            invocation: None,
             entry: EntryState { order, ..base.clone() },
             result: ReturnState { r0: 0, cpsr: 0x53, memory: base.memory.clone(),
                 writes: vec![CapturedWrite { order: writeOrder, ..write }], bank: Vec::new(), completion: Completion::Return,
@@ -2850,7 +2962,7 @@ mod tests {
         let mut points = board.instruction_points_begin_mutable(0,Vec::new()).unwrap();
         let capture = Box::new(RefCell::new(DataCapture { cpu: unsafe { callback_cpu(board.cpu(0).unwrap()) },
             core: Core::Primary, sequence: Rc::new(Cell::new(0)), active: BTreeSet::from([0x3000,0xfffb30cc & !ALIAS]),
-            rows: Vec::new(), overflow: None, failure: None, cached: None,
+            capture_all: false, rows: Vec::new(), overflow: None, failure: None, cached: None,
             base: Rc::new(Cell::new(0)), progress: Rc::new([Cell::new(0),Cell::new(0)]) }));
         let data = (&*capture as *const RefCell<DataCapture>).cast_mut().cast();
         let hook = unsafe { board.cpu(0).unwrap().install_hook(Hook::Memory {
@@ -2900,7 +3012,7 @@ mod tests {
         let mut points = board.instruction_points_begin_mutable(0,Vec::new()).unwrap();
         let capture = Box::new(RefCell::new(DataCapture { cpu: unsafe { callback_cpu(board.cpu(0).unwrap()) },
             core: Core::Primary, sequence: Rc::new(Cell::new(0)), active: BTreeSet::from([0x3000,0x3004]),
-            rows: Vec::new(), overflow: None, failure: None, cached: None,
+            capture_all: false, rows: Vec::new(), overflow: None, failure: None, cached: None,
             base: Rc::new(Cell::new(0)), progress: Rc::new([Cell::new(0),Cell::new(0)]) }));
         let data = (&*capture as *const RefCell<DataCapture>).cast_mut().cast();
         board.write_physical(0x54760,&0x9000u32.to_le_bytes()).unwrap();

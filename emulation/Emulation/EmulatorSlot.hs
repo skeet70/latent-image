@@ -142,7 +142,7 @@ reexecInSlot policy arguments = do
             ioError (userError "admission scope does not contain this process")
           scope <- maybe (ioError (userError "invalid admission scope")) pure (parseScopeName unit)
           (Slot slot, pinned) <- withBinaryFile (runningImage executable) ReadMode $ \running -> do
-            acquired <- acquire directory (executionClass policy) (Just scope)
+            acquired <- acquire directory (executionClass policy) (slotCount policy) (Just scope)
             _ <- reserveMemory (memoryMax policy) (memorySwapMax policy) scope
             pinned <- pinExecutable directory executable running
             pure (acquired, pinned)
@@ -181,7 +181,7 @@ reexecInSlot policy arguments = do
             else do
               when (os == "linux") (ioError (userError "verification admission requires a systemd user scope"))
               (Slot slot, pinned) <- withBinaryFile (runningImage executable) ReadMode $ \running -> do
-                acquired <- acquire directory (executionClass policy) Nothing
+                acquired <- acquire directory (executionClass policy) (slotCount policy) Nothing
                 pinned <- pinExecutable directory executable running
                 pure (acquired, pinned)
               checkStorageBudget storage
@@ -345,10 +345,9 @@ openSlotRun = do
               hFlush stderr
               exitWith (ExitFailure 75)
 
-acquire :: FilePath -> ExecutionClass -> Maybe ScopeName -> IO Slot
-acquire directory execution scope = do
-  let maximumSlots = classConcurrency (resourceClass execution)
-      attempt = do
+acquire :: FilePath -> ExecutionClass -> SlotCount -> Maybe ScopeName -> IO Slot
+acquire directory execution (SlotCount maximumSlots) scope = do
+  let attempt = do
         free <- firstFree [Slot slot | slot <- [1 .. maximumSlots]]
         case free of
           Just slot -> pure slot

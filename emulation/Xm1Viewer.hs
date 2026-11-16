@@ -7,8 +7,8 @@ import Emulation.Ff80Rehearsal (runFujiModRehearsal)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), FixedSceneFrame, Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), fixedSceneFrameArguments, parseFixedSceneFrame, require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
 import FujiModPaths (fujimodRamPushBridge, fujimodRun)
-import FujiAF.RamPush (Payload)
-import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), OverrideReason (..), PushMode (..), RelinkMode (..), SymbolRead, UiConversionProfile (..), bankD3Payload, bankModal75Payload, bankModalEnginePayload, bankModalRenderPayload, bankModalValuePayload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromeIconPayload, classicChromePayload, experimentPayload, loadModalOwnedPackage, parseSymbolRead, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint)
+import FujiAF.RamPush (Payload, emulatorExperimentPayload)
+import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), OverrideReason (..), PushMode (..), RelinkMode (..), SymbolRead, UiConversionProfile (..), bankD3Payload, bankModal75Payload, bankModalEnginePayload, bankModalRenderPayload, bankModalValuePayload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromeIconPayload, classicChromePayload, loadModalOwnedPackage, parseSymbolRead, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint)
 import qualified Xm1RamPushE2E as RamE2E
 import Data.List (isPrefixOf, nub)
 import Data.Maybe (isJust, isNothing)
@@ -472,7 +472,7 @@ selectedPayload options = case ramPayloadOption options of
   BankModalLifecycleChoice -> bankModalLifecyclePayload
   ClassicChromeChoice -> classicChromePayload
   ClassicChromeIconChoice -> classicChromeIconPayload
-  ExperimentChoice (ExperimentName name) -> experimentPayload name
+  ExperimentChoice (ExperimentName name) -> emulatorExperimentPayload name
 
 launch :: Options -> IO ()
 launch options = do
