@@ -613,7 +613,7 @@ buildAndTest q = do
 runHostBuild :: Qualification -> [String] -> BuildPhase -> [String] -> FilePath -> IO VerdictLine
 runHostBuild q baseArguments phase targets logPath = do
   let arguments = ["shell", "--", "host-build"] ++ baseArguments
-        ++ [buildCommand phase, "--jobs=2", "--local_test_jobs=1"]
+        ++ [buildCommand phase, "--lockfile_mode=off", "--jobs=2", "--local_test_jobs=1"]
         ++ ["--test_output=errors" | CheckTargets <- [phase]]
         ++ targets
       blocked predicate detail code = do
