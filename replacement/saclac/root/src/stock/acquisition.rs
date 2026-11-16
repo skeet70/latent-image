@@ -268,8 +268,46 @@ pub fn fill_grid(machine: &impl Machine, inputs: &GridInputs, grid: &mut Acquisi
 }
 
 
-/// 0xf625cc.
-pub fn five_parameter_adjustment(machine: &impl Machine, arguments: [u32; 5]) -> u32 { enter(machine, 0xf6_25cc, &arguments.map(word)) }
+const POSITION_ADMISSION: [u8; 58] = [
+    0x00, 0x10, 0x10, 0x10, 0x10, 0x11, 0x11, 0x11, 0x10, 0x10,
+    0x12, 0x13, 0x14, 0x14, 0x10, 0x10, 0x15, 0x27, 0x19, 0x10,
+    0x10, 0x18, 0x10, 0x10, 0x16, 0x17, 0x10, 0x10, 0x1a, 0x1d,
+    0x1c, 0x1b, 0x1e, 0x27, 0x11, 0x10, 0x10, 0x11, 0x10, 0x10,
+    0x11, 0x10, 0x10, 0x03, 0x03, 0x08, 0x0a, 0x0c, 0x27, 0x20,
+    0x21, 0x22, 0x23, 0x24, 0x0a, 0x08, 0x0c, 0x03,
+];
+
+/// The five-input admission policy formerly entered through 0xf625cc.
+pub fn five_parameter_adjustment(stock: &impl Adjustments, arguments: [u32; 5]) -> u32 {
+    let [selection, position, mode_flag, modes, grid_word] = arguments;
+    if modes == 1 && (
+        xm1_saclac_config::adjustment::byte(stock, 0x4a08) == 0
+        || xm1_saclac_config::adjustment::byte(stock, 0x4a07) == 0
+        || grid_word == 0
+    ) {
+        return 0;
+    }
+    let (key, mask) = if selection == 1 {
+        (0x64a4, 0x40)
+    } else if mode_flag == 1 {
+        (0x64a4, 0x80)
+    } else {
+        let encoded = if position < POSITION_ADMISSION.len() as u32 {
+            POSITION_ADMISSION[position as usize]
+        } else {
+            0x27
+        };
+        let key = match encoded >> 3 {
+            0 => 0x64a3,
+            1 => 0x64a4,
+            2 => 0x64a5,
+            3 => 0x64a6,
+            _ => 0x64a7,
+        };
+        (key, 1 << (encoded & 7))
+    };
+    u32::from(xm1_saclac_config::adjustment::byte(stock, key) & mask != 0)
+}
 
 /// 0xfa6934 with its last two arguments 0.
 pub fn rate_divisor(machine: &impl Machine, updated_position: u32, change_category: u32, lens: ResourceIndex, grid_halfword: u16) -> u32 {

@@ -615,6 +615,33 @@ fn owned_selection_position_preserves_profile_modes_limits_and_unmeasured_flag()
 }
 
 #[test]
+fn owned_five_parameter_admission_preserves_gates_and_position_masks() {
+    use xm1_focus_measurement_round::profile::ProfileSelection;
+    let kernel = fake::saclac_kernel();
+    let cx = kernel.task().unwrap();
+    let (machine, root) = fake::root_with(fake::peers(&cx), Bytes::default(), Entries::default());
+    let recognition = RefCell::new(SceneRecognition::new());
+    acquisition!(root, recognition, cx);
+    for (key, value) in [(0x4a07, 1), (0x4a08, 1), (0x64a3, 9), (0x64a4, 0xd5), (0x64a5, 0xff), (0x64a6, 0x7f), (0x64a7, 0x9f)] {
+        machine.adjustment(key, value);
+    }
+    let admits = |selection, position, mode_flag, modes, grid_word, root: &mut _| {
+        Ports::five_parameter_adjustment(root, selection, position, mode_flag, modes, grid_word)
+    };
+
+    assert_eq!(admits(ProfileSelection::Record, 0, 0, 0, 0, &mut root), 1);
+    assert_eq!(admits(ProfileSelection::Unselected, 0, 1, 0, 0, &mut root), 1);
+    for position in [0, 5, 10, 11, 12, 16, 18, 21, 24, 25, 28, 29, 30, 31, 32, 43, 45, 46, 47, 49, 50, 51, 52, 53, 58] {
+        assert_eq!(admits(ProfileSelection::Unselected, position, 0, 0, 0, &mut root), 1, "position {position}");
+    }
+    assert_eq!(admits(ProfileSelection::Unselected, 0, 0, 1, 0, &mut root), 0);
+    assert_eq!(admits(ProfileSelection::Unselected, 0, 0, 1, 1, &mut root), 1);
+    machine.adjustment(0x4a08, 0);
+    assert_eq!(admits(ProfileSelection::Unselected, 0, 0, 1, 1, &mut root), 0);
+    assert!(!machine.take_entered().iter().any(|(address, _)| *address == 0xf6_25cc));
+}
+
+#[test]
 fn live_and_s1_keep_one_selection_preset_and_s1_consumes_the_controllers_change() {
     let kernel = fake::saclac_kernel();
     let cx = kernel.task().unwrap();

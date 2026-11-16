@@ -965,7 +965,7 @@
     },
     {
       "id": "saclac_root-root-27",
-      "shim": "saclac_root: Acquisition grid/rate helpers: `0xfa7bb8` (2), `0xf625cc` (5), `0xfa6934` (6; last two zero); refreshed-position, selection-difference clamp, rate table, rate-mode selection, admission and position-capture paths are owned",
+      "shim": "saclac_root: Acquisition grid/rate helpers: `0xfa7bb8` (2), `0xfa6934` (6; last two zero); refreshed-position, selection-difference clamp, rate table, rate-mode selection, admission, five-input policy and position-capture paths are owned",
       "kind": "trampoline into retained stock",
       "other_side": "calc's grid builder and rate-divisor contracts",
       "owned": "no",

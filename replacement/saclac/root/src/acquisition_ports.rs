@@ -417,7 +417,9 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc + S
     fn refreshed_position(&mut self) -> u32 { self.services.machine.read_u32(0x0094_2b88) }
     fn mode_one(&mut self, inputs: &ModeInputs) -> u32 { u32::from(treatments(inputs).admits(xm1_saclac_calc::adjust::scene_policy::Treatment::First)) }
     fn both_modes(&mut self, inputs: &ModeInputs) -> u32 { u32::from(treatments(inputs).admits_any()) }
-    fn five_parameter_adjustment(&mut self, selection: ProfileSelection, position: u32, mode_flag: u32, modes: u32, grid_word: u32) -> u32 { boundary::five_parameter_adjustment(&self.services.machine, [selection_word(selection), position, mode_flag, modes, grid_word]) }
+    fn five_parameter_adjustment(&mut self, selection: ProfileSelection, position: u32, mode_flag: u32, modes: u32, grid_word: u32) -> u32 {
+        boundary::five_parameter_adjustment(&self.services.stock, [selection_word(selection), position, mode_flag, modes, grid_word])
+    }
     fn rate_divisor(&mut self, position: u32, category: u32, lens: ResourceIndex, halfword: u16) -> u32 { boundary::rate_divisor(&self.services.machine, position, category, lens, halfword) }
     fn rate_limit(&mut self, selection: ProfileSelection, position: u32, halfword: u16) -> u32 {
         if halfword & 2 != 0 || selection == ProfileSelection::Record {
