@@ -1198,12 +1198,16 @@ decodeObservationSites owned =
   , Site 0x0121fec8 "jpeg-endpoint-loaded" "pinned playback_complete_jpeg_first after request handback"
   , Site (entry PC.JpegStart) "jpeg-start-store" "ordinary JPEG start entry before device write"
   , Site 0x011d3e9c "jpeg-preview-copy" "X-M1 1.50 plain image: EOI-trimmed final memcpy r0,r1,r2"
-  , Site 0x01220254 "jpeg-request-released" "X-M1 1.50 plain: return from channel9_release before the finish flag store"
-  , Site 0x01220288 "jpeg-request-cancelled" "X-M1 1.50 plain: return from channel9_release in the cancellation consumer" ]
+  , Site (released PC.PlaybackJpegFinishRequest 0x01220254) "jpeg-request-released" "return from channel9 release before the finish flag store"
+  , Site (released PC.PlaybackJpegCancelRequest 0x01220288) "jpeg-request-cancelled" "return from channel9 release in the cancellation consumer" ]
   where
     entry service = case [lo | (kind,lo,_) <- PO.deviceServices owned, kind == service] of
       [lo] -> lo
       _ -> error "validated JPEG service missing"
+    released kind stock = case owned of
+      Just package | PO.qualificationScope package == PO.JpegLifecycle ->
+        maybe (error "validated owned release observation missing") id (PO.releasedObservation package kind)
+      _ -> stock
 
 jpegBatch :: FilePath -> Bridge -> Journal -> Observed -> Maybe PO.Package -> Bool -> IO PJ.Batch
 jpegBatch directory bridge journal observed owned active = do
@@ -1225,14 +1229,17 @@ jpegBatch directory bridge journal observed owned active = do
 checkCompletionCaller :: Bridge -> Journal -> Maybe PO.Package -> IO ()
 checkCompletionCaller bridge journal owned = do
   case owned of
-    Just package | PO.qualificationScope package == PO.JpegConsumers -> checkOwnedGuest bridge journal package
+    Just package | PO.qualificationScope package `elem` [PO.JpegConsumers, PO.JpegLifecycle] -> checkOwnedGuest bridge journal package
     _ -> do
       callback <- readGuest bridge 0x0121fec8 88
       require (digestText (digest callback) == "62ed3b398b8c37d6bbce5ea41b4a8bfa3b088f33f5ab647a12a52770ec38ec23")
         "retained completion callback differs from pinned bytes"
-  configure <- readGuest bridge 0x01220004 160
-  require (digestText (digest configure) == "3d54e6d19f94ef87bdd4911e0887498e27fefc2ea2435f1fc7b889a04f1aeac1")
-    "retained completion binding caller differs from pinned bytes"
+  case owned of
+    Just package | PO.qualificationScope package == PO.JpegLifecycle -> pure ()
+    _ -> do
+      configure <- readGuest bridge 0x01220004 160
+      require (digestText (digest configure) == "3d54e6d19f94ef87bdd4911e0887498e27fefc2ea2435f1fc7b889a04f1aeac1")
+        "retained completion binding caller differs from pinned bytes"
 
 newtype PlaybackPauseId = PlaybackPauseId Word64
 
@@ -1568,7 +1575,7 @@ runRoute options owned ownedPreparation ownedWitness directory original bridge j
     writeIORef (obsCapture observed) (Just (CaptureProgress (CS.startCoverage at) Nothing CS.initialCursor False))
     _ <- captureObservationHits bridge journal observed
     pure ()
-  forM_ owned $ \package -> when (PO.qualificationScope package == PO.JpegConsumers) $
+  forM_ owned $ \package -> when (PO.qualificationScope package `elem` [PO.JpegConsumers, PO.JpegLifecycle]) $
     observeConstructionState directory bridge journal
   prefixWitness <- forM (zip (maybe [] pure owned) (maybe [] pure ownedPrefixAck)) $ \(package, ack) -> do
     state <- call bridge (command "watch-state" [])
@@ -2090,12 +2097,12 @@ main = do
   let ownedFindings = case owned of
         Nothing -> []
         Just (_, package) -> [Judged (Finding name Gate (maybe False predicate epochEvidence)
-          (if PO.qualificationScope package == PO.JpegConsumers
+          (if PO.qualificationScope package `elem` [PO.JpegConsumers, PO.JpegLifecycle]
             then maybe Null PO.qualificationEvidenceValue epochEvidence
             else maybe Null PO.witnessValue pairWitness)
           "installed package bytes and loss-accounted SDK execution watch")
           (if maybe False predicate epochEvidence then Nothing else Just
-            (if PO.qualificationScope package == PO.JpegConsumers
+            (if PO.qualificationScope package `elem` [PO.JpegConsumers, PO.JpegLifecycle]
               then "owned entry unobserved in its required preparation or PLAY interval"
               else "owned entry unobserved in the bounded PLAY interval"))
           | (name, predicate) <- PO.requiredEpochObservations package]
@@ -2106,7 +2113,8 @@ main = do
           else Just (GateName (case PO.qualificationScope package of
             PO.PreparationPair -> "owned-playback-pair-unobserved"
             PO.JpegTransaction -> "owned-playback-jpeg-transaction-unobserved"
-            PO.JpegConsumers -> "owned-playback-jpeg-consumers-unobserved"))
+            PO.JpegConsumers -> "owned-playback-jpeg-consumers-unobserved"
+            PO.JpegLifecycle -> "owned-playback-jpeg-lifecycle-unobserved"))
   ledger <- readIORef (obsLedger observed)
   recoveredCount <- readIORef (obsRecovered observed)
   captureProgress <- readIORef (obsCapture observed)

@@ -30,22 +30,23 @@ newtype Digest = Digest String deriving (Eq, Show)
 newtype CaseName = CaseName String deriving (Eq, Show)
 data Dimensions = Dimensions Pixels Pixels deriving (Eq, Show)
 data Fixture = Preview | Full deriving (Eq, Show)
-data Role = Original | Owned | OmittedIrq | OmittedFirst | ReenteredFirst | UngatedFirst deriving (Eq, Show)
+data Role = Original | Owned | OmittedIrq | OmittedFirst | ReenteredFirst | UngatedFirst | OmittedSecond | MissingRestore | FinishAsCancel deriving (Eq, Show)
 data Interrupt = Decoded | DecodedPriority | Limit | DeviceError | NeedInput | IgnoredInput deriving (Eq, Show)
 data JobStatus = RequestComplete | RequestDeviceError | RequestOutputLimit | RequestSetupFailed deriving (Eq, Show)
 newtype Coordinate = Coordinate Word32 deriving (Eq, Show)
 data Window = Whole | Cropped Coordinate Coordinate Coordinate Coordinate deriving (Eq, Show)
 data Scale = FullSize | HalfSize | QuarterSize | EighthSize | UnknownScale deriving (Eq, Show)
 data Layout = EightRows | SixteenRows deriving (Eq, Show)
-data Callbacks = Deliver | Absent | PrimaryOnly | SecondaryOnly | Reenter deriving (Eq, Show)
+data Callbacks = Deliver | Absent | PrimaryOnly | SecondaryOnly | Reenter | ReenterSecond deriving (Eq, Show)
 data CallbackPublication = RegisteredCallbacks | NullCallbacks deriving (Eq, Show)
 data Record = NoRecord | WithRecord deriving (Eq, Show)
 data Resource = NewResource | ExistingResource deriving (Eq, Show)
 data Attachment = Attached | Refused deriving (Eq, Show)
-data Continuation = Finish | Restart deriving (Eq, Show)
+data Continuation = Finish | Restart | Cancel deriving (Eq, Show)
 data Unlock = Signalled | AlreadySignalled deriving (Eq, Show)
+data SourceAlignment = Aligned | Misaligned deriving (Eq, Show)
 data Register = R0 | R1 | R2 | R3 | Ip deriving (Eq, Show)
-data RegionId = Driver | Playback | Descriptor | NextDescriptor | RecordMemory | Consumer | Stack | Runtime | StockDriver | StockPlayback | StockDevice | DeviceRegisters | Caller | FirstConsumer | SecondConsumer | Exit | Producer | Signal | Defect | DevelopOperand | DevelopPlane deriving (Eq, Show)
+data RegionId = Driver | Playback | Descriptor | NextDescriptor | RecordMemory | SourceMemory | Consumer | Stack | Runtime | StockDriver | StockPlayback | StockDevice | DeviceRegisters | Caller | FirstConsumer | SecondConsumer | Exit | Producer | Signal | Defect | DevelopOperand | DevelopPlane deriving (Eq, Show)
 data Permission = ReadOnly | ReadWrite | ReadExecute deriving (Eq, Show)
 data Block = Block RegionId Address Permission B.ByteString [(Address, Int)]
 data Memory = Absolute Address B.ByteString | Relative Register B.ByteString
@@ -54,9 +55,9 @@ data Scenario = Scenario
   { name :: CaseName, fixture :: Fixture, dimensions :: Dimensions, outputDimensions :: Dimensions
   , capacity :: Bytes, produced :: Bytes, endpoint :: Address, interrupt :: Interrupt
   , window :: Window, scale :: Scale, layout :: Layout, callbacks :: Callbacks, callbackPublication :: CallbackPublication, record :: Record
-  , resource :: Resource, attachment :: Attachment, continuation :: Continuation, unlock :: Unlock
+  , resource :: Resource, attachment :: Attachment, continuation :: Continuation, unlock :: Unlock, sourceAlignment :: SourceAlignment
   }
-data Observation = Observation B.ByteString B.ByteString B.ByteString B.ByteString deriving (Eq, Show)
+data Observation = Observation B.ByteString B.ByteString B.ByteString B.ByteString B.ByteString deriving (Eq, Show)
 
 hex :: Word32 -> T.Text
 hex value = T.pack ("0x" ++ replicate (8 - length digits) '0' ++ digits) where digits = showHex value ""
@@ -91,6 +92,7 @@ regionName :: RegionId -> String
 regionName selected = case selected of
   Driver -> "driver-state"; Playback -> "playback-request"; Descriptor -> "decode-requirements"; NextDescriptor -> "next-input-requirements"
   RecordMemory -> "record-descriptor"; Consumer -> "consumer-result"; Stack -> "stack"; Runtime -> "owned-runtime"
+  SourceMemory -> "source-prefix"
   StockDriver -> "stock-driver"; StockPlayback -> "stock-playback"; Caller -> "transaction-caller"
   StockDevice -> "stock-device"; DeviceRegisters -> "register-image"
   FirstConsumer -> "first-consumer"; SecondConsumer -> "second-consumer"; Exit -> "exit"
@@ -113,7 +115,7 @@ exitAddress = Address 0x00100000
 
 preview :: Scenario
 preview = Scenario (CaseName "actual-preview") Preview (Dimensions (Pixels 320) (Pixels 240)) (Dimensions (Pixels 320) (Pixels 240))
-  (Bytes 153600) (Bytes 153600) (Address 0x43862400) Decoded Whole FullSize EightRows Deliver RegisteredCallbacks NoRecord NewResource Attached Finish Signalled
+  (Bytes 153600) (Bytes 153600) (Address 0x43862400) Decoded Whole FullSize EightRows Deliver RegisteredCallbacks NoRecord NewResource Attached Finish Signalled Aligned
 full :: Scenario
 full = preview {name=CaseName "actual-full", fixture=Full, dimensions=Dimensions (Pixels 4896) (Pixels 2760)
   ,outputDimensions=Dimensions (Pixels 4896) (Pixels 2760),capacity=Bytes 27025920,produced=Bytes 27025920,endpoint=Address 0x45202e00}
@@ -160,12 +162,18 @@ kind :: Scenario -> Word32
 kind selected = if interrupt selected == NeedInput then 1 else 2
 sourceWords :: Scenario -> Bool -> (Word32, Word32)
 sourceWords selected next = let (Address address,Bytes count)=source (fixture selected)
-  in if next then (address+32,count-32) else (address,count)
+  in (address + (if next then 32 else 0) + sourceOffset selected, count - (if next then 32 else 0))
+sourceOffset :: Scenario -> Word32
+sourceOffset selected = if sourceAlignment selected==Aligned then 0 else 31
+programmedSource :: Scenario -> Bool -> (Word32, Word32)
+programmedSource selected next = let (address,count)=sourceWords selected next; offset=sourceOffset selected
+  in (address-offset,count+offset)
 callbackWords :: Callbacks -> (Word32, Word32)
 callbackWords Absent = (0,0)
 callbackWords PrimaryOnly = let Address first=firstAddress in (first,0)
 callbackWords SecondaryOnly = let Address second=secondAddress in (0,second)
 callbackWords Reenter = callbackWords Deliver
+callbackWords ReenterSecond = callbackWords Deliver
 callbackWords Deliver = let Address first=firstAddress; Address second=secondAddress in (first,second)
 descriptor :: Scenario -> Bool -> B.ByteString
 descriptor selected next = wordsAt [(8,kind selected),(12,if layout selected==EightRows then 0 else 1)
@@ -186,7 +194,7 @@ configuration selected next = assemble
   ([address,count,0x4383cc00,fromIntegral width,fromIntegral height,capacityBytes,packing,scaleDevice (scale selected)]
   ++ crop ++ [0,0,0,0,1,0,1,0,1,1,1,1,1,1,0])
   where
-    (address,count)=sourceWords selected next
+    (address,count)=programmedSource selected next
     Dimensions (Pixels width) (Pixels height)=dimensions selected
     Bytes capacityBytes=capacity selected
     packing=if layout selected==EightRows then 1 else 2
@@ -200,15 +208,15 @@ completionStatus selected
 statusWord :: JobStatus -> Word32
 statusWord selected = case selected of RequestComplete->0;RequestDeviceError->1;RequestOutputLimit->2;RequestSetupFailed->3
 primaryDelivered, secondaryDelivered :: Scenario -> Bool
-primaryDelivered selected = callbacks selected `elem` [Deliver,Reenter] && (interrupt selected/=NeedInput || continuation selected==Restart || attachment selected==Refused || callbackPublication selected==NullCallbacks)
-secondaryDelivered selected = callbacks selected `elem` [Deliver,Reenter] && callbackPublication selected==RegisteredCallbacks && interrupt selected==NeedInput && attachment selected==Attached
+primaryDelivered selected = callbacks selected `elem` [Deliver,Reenter,ReenterSecond] && (interrupt selected/=NeedInput || continuation selected==Restart || attachment selected==Refused || callbackPublication selected==NullCallbacks)
+secondaryDelivered selected = callbacks selected `elem` [Deliver,Reenter,ReenterSecond] && callbackPublication selected==RegisteredCallbacks && interrupt selected==NeedInput && attachment selected==Attached
 outputEvent, inputEvent :: Scenario -> Word32
 outputEvent selected = if attachment selected==Attached && (interrupt selected `elem` [Decoded,DecodedPriority] || continuation selected==Restart) then 0x87654321 else 0
 inputEvent selected = if attachment selected==Attached && interrupt selected==DeviceError then 0x13579bdf else 0
 finalProduced :: Scenario -> Word32
 finalProduced selected = let Bytes count=produced selected in count
 expectedPlayback :: Scenario -> B.ByteString
-expectedPlayback selected = byteAt 0xa1 0 . byteAt 0x60 1 $ wordsAt
+expectedPlayback selected = byteAt 0xa1 prefixLength . byteAt 0x60 (if continuation selected==Cancel then 0 else 1) . prefixImage $ wordsAt
   ([(0,kind selected),(4,if layout selected==EightRows then 0 else 1),(8,fromIntegral width),(12,fromIntegral height)
    ,(0x10,fromIntegral outputWidth),(0x14,fromIntegral outputHeight),(0x18,address),(0x1c,count),(0x20,0x4383cc00)
    ,(0x24,finalProduced selected),(0x28,statusWord (completionStatus selected)),(0x2c,inputEvent selected),(0x30,outputEvent selected)
@@ -219,8 +227,10 @@ expectedPlayback selected = byteAt 0xa1 0 . byteAt 0x60 1 $ wordsAt
   where
     Dimensions (Pixels width) (Pixels height)=dimensions selected
     Dimensions (Pixels outputWidth) (Pixels outputHeight)=outputDimensions selected
-    (address,count)=sourceWords selected (continuation selected==Restart)
+    (address,count)=programmedSource selected (continuation selected==Restart)
     (first,second)=callbackWords (callbacks selected)
+    prefixLength=if sourceAlignment selected==Aligned then 0 else 33
+    prefixImage=if sourceAlignment selected==Aligned then id else replace 0x61 (B.pack [0..32])
 expectedDriver :: Scenario -> B.ByteString
 expectedDriver selected = replace 0x1a0 (configuration selected (continuation selected==Restart))
   (wordsAt [(4,0),(0x198,0x014eae2c),(0x19c,0)] (initialDriver selected))
@@ -245,7 +255,7 @@ caller selected = assemble $ [0xe92d4010] ++ load R0 0x02000000 ++ call (Address
   ++ call (Address 0x12200c4) ++ overrides ++ call (Address 0x1220294)
   ++ [word|attachment selected==Attached,word<-call (Address 0xd99570)]
   ++ [word|continuation selected==Restart,word<-load R0 0x02000040 ++ call (Address 0x1220004) ++ call (Address 0x12200ec) ++ call (Address 0xd99570)]
-  ++ call (Address 0x1220238) ++ [0xe3a0005a,0xe8bd8010]
+  ++ call (Address (if continuation selected==Cancel then 0x122026c else 0x1220238)) ++ [0xe3a0005a,0xe8bd8010]
   where
     changes=(0x34,scaleInput (scale selected)):windowWords (window selected)
       ++ [(offset,0)|offset<-[0x4c,0x50],callbackPublication selected==NullCallbacks]
@@ -255,7 +265,7 @@ consumer secondary reentry = assemble $ [0xe92d4010] ++ load R1 0x014eae2c ++ lo
   ++ [0xe59c0000 .|. countOffset,0xe2800001,0xe58c0000 .|. countOffset]
   ++ concat [[0xe5910000 .|. input,0xe58c0000 .|. output]|(input,output)<-zip [0x28,0x24,0x2c,0x30] [snapshot,snapshot+4..snapshot+12]]
   ++ [0xe5d10060,0xe58c0000 .|. (snapshot+16)]
-  ++ (if reentry && not secondary then load R1 0x2000100 ++ [0xe5910000,0xe3500001,0x1a000002] ++ call(Address 0x121fec8) else [])
+  ++ (if reentry then load R1 0x2000100 ++ [0xe5910000 .|. countOffset,0xe3500001,0x1a000002] ++ call(Address (if secondary then 0x121ff20 else 0x121fec8)) else [])
   ++ [0xe8bd8010]
   where countOffset=if secondary then 4 else 0; snapshot=if secondary then 28 else 8
 
@@ -286,12 +296,12 @@ services selected role = [service 0x724b68 [(R0,9),(R1,0xffffffff)] [] []]
   ++ [service 0x69b7a4 [(R0,0x33001234)] [] [],service 0x65a478 [] [] []]
   ++ [service 0x64eb20 [(R0,0x76123456)] [] []|attachment selected==Attached]
   ++ [service 0x65a424 [(R0,0x1e123456)] [] [],Service (Address 0x724c00) [(R0,9)] [(R0,if unlock selected==Signalled then 0 else 0xffffffd5)] [] []]
-  ++ critical ++ [entry | role /= OmittedFirst, entry <- critical]
+  ++ [entry | continuation selected/=Cancel && role/=FinishAsCancel, entry <- [nested | role/=OmittedFirst,nested<-critical] ++ [nested | role/=OmittedSecond,nested<-critical]]
   where
     timer=service 0x69b328 [(R0,3000),(R1,0),(R2,0x121ab58),(R3,0x14eae88)] [] [Relative R3 (assemble [0x33001234])]
     timerCache=service 0x42634 [(R0,0),(R1,0)] [] []
-    irqCritical=if role/=OmittedFirst && callbackPublication selected==RegisteredCallbacks
-      then critical++[entry|callbacks selected==Reenter,entry<-critical] else []
+    irqCritical=if role/=(if interrupt selected==NeedInput then OmittedSecond else OmittedFirst) && callbackPublication selected==RegisteredCallbacks
+      then critical++[entry|callbacks selected `elem` [Reenter,ReenterSecond],entry<-critical] else []
     irq outcome = [service 0x65ab20 [] [] [Relative R0 (assemble [bits outcome])],service 0x65ab50 [(R0,bits outcome)] [] []]
       ++ case outcome of
         Decoded -> done
@@ -305,7 +315,7 @@ services selected role = [service 0x724b68 [(R0,9),(R1,0xffffffff)] [] []]
     bits outcome=case outcome of Decoded->0x10;DecodedPriority->0x01020010;Limit->0x20000;DeviceError->8;NeedInput->0x1000000;IgnoredInput->0x1000000
 
 scope :: String
-scope = "Source-bound channel9 CPU comparisons. Exact8 additionally executes the generic record builder and retained develop job4 producer, plus owned first-completion reached through retained Playback facade/IRQ callers and real publication bytes. Develop job4 setup-failure executes its source notification callback before the conditional wait; notification and wait providers remain declared boundaries. Its stale record error byte survives synchronous setup failure, and release remains the retained companion. First-completion reentry calls the published entry from the subscriber after critical leave. Native device-service, resource, IRQ registry, cache, timer and critical providers are conditional boundaries. Polling and device acceptance require the separate full-system model run. No native pixels, IRQ timing, event-flag latching, natural USB transition, capture, retirement or unload claim."
+scope = "Source-bound channel9 CPU comparisons over actual publication bytes. Exact17 owns requirements initialization, both completions, reset, restart/timer, prefix preservation/restoration, submit, finish and whole cancel/restore in addition to the prior transaction and builder. Caller observations include source-prefix bytes, final request/resource state and subscriber snapshots. Completion reentry reaches the published entry after critical leave. Setup failure calls back before resource release; the develop notification/wait and clear-record release companion remain retained. Native device-service, resource, IRQ registry, cache, timer and critical providers are conditional boundaries. Polling and device acceptance require the separate full-system model run. No native pixels, IRQ timing, event-flag latching, natural USB transition, construction serialization, quiescence, capture, retirement or unload claim."
 
 execute :: FilePath -> FilePath -> P.Package -> E.Elf -> Address -> B.ByteString -> [(Address,B.ByteString)] -> [Block] -> Scenario -> Role -> IO Observation
 execute runner output package elf base@(Address baseWord) runtime publications stock selected role = do
@@ -313,11 +323,17 @@ execute runner output package elf base@(Address baseWord) runtime publications s
       ident=label++roleSuffix role
       irqEntry=case [E.symbolValue symbol|symbol<-E.globalSymbols elf,E.symbolName symbol=="xm1_playback_jpeg_interrupt",E.symbolKind symbol==E.FunctionSymbol] of [target]->target;_->error "IRQ entry missing"
       firstEntry=case [E.symbolValue symbol|symbol<-E.globalSymbols elf,E.symbolName symbol=="xm1_playback_jpeg_complete_first",E.symbolKind symbol==E.FunctionSymbol] of [target]->target;_->error "first completion entry missing"
+      symbolAddress name'=case [E.symbolValue symbol|symbol<-E.globalSymbols elf,E.symbolName symbol==name',E.symbolKind symbol==E.FunctionSymbol] of [target]->target;_->error ("lifecycle entry missing: "++name')
+      redirected name' body=replace (fromIntegral(symbolAddress name'-baseWord)) body runtime
+      prefixOriginal=case [B.take 252(B.drop(fromIntegral(0x122013c-start)) bytes)|Block StockPlayback (Address start) _ bytes _<-stock] of [bytes]->bytes;_->error "prefix source missing"
       image=case role of
         OmittedIrq -> replace (fromIntegral (irqEntry-baseWord)) (assemble [0xe12fff1e]) runtime
         OmittedFirst -> replace (fromIntegral (firstEntry-baseWord)) (assemble [0xe12fff1e]) runtime
         ReenteredFirst -> replace (fromIntegral (firstEntry-baseWord)) (assemble(load Ip 0x110300++[0xe12fff1c])) runtime
         UngatedFirst -> replace (fromIntegral (firstEntry-baseWord)) (assemble(load Ip 0x110300++[0xe12fff1c])) runtime
+        OmittedSecond -> redirected "xm1_playback_jpeg_complete_second" (assemble [0xe12fff1e])
+        MissingRestore -> redirected "xm1_playback_jpeg_preserve_prefix" (assemble(load Ip 0x110300++[0xe12fff1c]))
+        FinishAsCancel -> redirected "xm1_playback_jpeg_finish_request" (assemble(load Ip(symbolAddress "xm1_playback_jpeg_cancel_request")++[0xe12fff1c]))
         _ -> runtime
       deviceTargets = [(C.bodyStart body,target) | role /= Original
         , (selectedService,target,_) <- P.deviceServices (Just package)
@@ -336,22 +352,27 @@ execute runner output package elf base@(Address baseWord) runtime publications s
         ,Block Playback requestAddress ReadWrite initialPlayback [],Block Descriptor descriptorAddress ReadOnly (descriptor selected False) []
         ,Block NextDescriptor nextDescriptorAddress ReadOnly (descriptor selected True) [],Block RecordMemory recordAddress ReadWrite (B.replicate 0x40 0xa5) []
         ,Block Consumer consumerAddress ReadWrite (B.replicate 48 0) [],Block Stack (Address 0x02200000) ReadWrite (B.replicate 0x4000 0) []
-        ,codeBlock Caller callerAddress (caller selected),codeBlock FirstConsumer firstAddress (consumer False (callbacks selected==Reenter)),codeBlock SecondConsumer secondAddress (consumer True False)
+        ,Block SourceMemory (let (address,_)=programmedSource selected False in Address address) ReadWrite (B.pack [0..63]) []
+        ,codeBlock Caller callerAddress (caller selected),codeBlock FirstConsumer firstAddress (consumer False (callbacks selected==Reenter)),codeBlock SecondConsumer secondAddress (consumer True (callbacks selected==ReenterSecond))
         ,Block Exit exitAddress ReadExecute (assemble [0xe12fff1e]) []]
         ++ [codeBlock Defect (Address 0x110300) (if role==ReenteredFirst then lateClearFirst else ungatedFirst)|role `elem` [ReenteredFirst,UngatedFirst]]
+        ++ [codeBlock Defect (Address 0x110300) (assemble([0xe3500000,0x112fff1e]++load Ip 0x110314++[0xe12fff1c])<>prefixOriginal) | role==MissingRestore]
       calls=[Service (maybe address Address (lookup original deviceTargets)) inputs outputs memoryReads memoryWrites
         |Service address@(Address original) inputs outputs memoryReads memoryWrites<-services selected role]
-      expected=[(Driver,expectedDriver selected),(Playback,expectedPlayback selected),(Consumer,expectedConsumer selected),(RecordMemory,expectedRecord selected)]
-  observed<-runNative runner output ident blocks calls expected (role `elem` [OmittedIrq,OmittedFirst,ReenteredFirst,UngatedFirst])
+      expected=[(Driver,expectedDriver selected),(Playback,expectedPlayback selected),(Consumer,expectedConsumer selected),(RecordMemory,expectedRecord selected),(SourceMemory,B.pack [0..63])]
+  observed<-runNative runner output ident blocks calls expected (role `notElem` [Original,Owned])
   let returned=O.nativeStatus observed==O.Returned
+  ensure (role `elem` [Original,Owned] || any (\(kind',bytes)->regionBytesOf observed (O.RegionId(regionName kind'))/=bytes) expected)
+    (ident++": defect must change caller-observed memory")
   json (output </> ident++"-identity.json") (object ["role" .= show role,"package_runtime_sha256" .= hashText(hash runtime),"executed_runtime_sha256" .= hashText(hash image)
     ,"irq_entry" .= av(Address irqEntry),"mutation" .= show role,"runner_returned" .= returned])
   pure (Observation (regionBytesOf observed (O.RegionId (regionName Driver))) (regionBytesOf observed (O.RegionId (regionName Playback)))
-    (regionBytesOf observed (O.RegionId (regionName Consumer))) (regionBytesOf observed (O.RegionId (regionName RecordMemory))))
+    (regionBytesOf observed (O.RegionId (regionName Consumer))) (regionBytesOf observed (O.RegionId (regionName RecordMemory))) (regionBytesOf observed (O.RegionId (regionName SourceMemory))))
 
 roleSuffix :: Role -> String
 roleSuffix role = case role of
   Original->"-stock";Owned->"-owned";OmittedIrq->"-omitted-irq";OmittedFirst->"-omitted-first";ReenteredFirst->"-late-clear-first";UngatedFirst->"-ungated-first"
+  OmittedSecond->"-omitted-second";MissingRestore->"-missing-restore";FinishAsCancel->"-finish-as-cancel"
 
 lateClearFirst :: B.ByteString
 lateClearFirst = assemble $ [0xe92d4010] ++ call(Address 0x7235d8) ++ load R1 0x14eae2c
@@ -532,7 +553,7 @@ executeBuilder runner output package elf base@(Address baseWord) runtime publica
           ,"executed_bytes" .= B.length defectBytes,"executed_sha256" .= hashText(hash defectBytes)]
     ,"conditional_wait_and_notification" .= (route==DevelopJob4),"runner_returned" .= True])
   pure(Observation (regionBytesOf observed(O.RegionId(regionName Driver))) (regionBytesOf observed(O.RegionId(regionName Playback)))
-    (regionBytesOf observed(O.RegionId(regionName Consumer))) (regionBytesOf observed(O.RegionId(regionName RecordMemory))))
+    (regionBytesOf observed(O.RegionId(regionName Consumer))) (regionBytesOf observed(O.RegionId(regionName RecordMemory))) B.empty)
 
 readPinned :: FilePath -> Digest -> IO B.ByteString
 readPinned path expected = do
@@ -557,9 +578,9 @@ main = do
   manifest<-B.readFile(package </> "ram-push-manifest.json")
   metadata<-B.readFile(package </> "experiment.json")
   parsed<-required(P.parsePackage manifest metadata runtime elfBytes)
-  ensure (P.qualificationScope parsed `elem` [P.JpegTransaction,P.JpegConsumers]) "exact6 or exact8 composed JPEG package required"
+  ensure (P.qualificationScope parsed `elem` [P.JpegTransaction,P.JpegConsumers,P.JpegLifecycle]) "exact JPEG transaction, consumer or lifecycle package required"
   runnerDigest<-N.runnerDigest runner
-  let consumers=P.qualificationScope parsed==P.JpegConsumers
+  let consumers=P.qualificationScope parsed `elem` [P.JpegConsumers,P.JpegLifecycle]
   ensure (not consumers || runnerDigest=="0b0e7a52908fb4232097a80ed4b8f0eb29069b414c4dd9a0550603c2159374e2") "consumer qualification requires pinned native runner"
   elf<-required(E.parseElf elfBytes)
   plain<-readPinned "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin" (Digest "ee211bdaad39005b4f72e3443a76ca194905381a967cab787d6a4ef14e2d889d")
@@ -576,7 +597,7 @@ main = do
   let driverFunctions=[(start,fromIntegral(end-start))|entry<-C.jpegEntries,let(start,end,_,_)=C.playbackContract entry]
         ++[(C.bodyStart body,fromIntegral(C.bodyEnd body-C.bodyStart body))|body<-C.jpegInternalBodies]
         ++[(0xd98904,244),(0xd989f8,32)]
-      playbackFunctions=[(0x121fec8,88),(0x121ff20,88),(0x1220004,160),(0x12200c4,40),(0x12200ec,52),(0x122013c,252),(0x1220238,52),(0x1220294,60)]
+      playbackFunctions=[(0x121fec8,88),(0x121ff20,88),(0x1220004,160),(0x12200c4,40),(0x12200ec,52),(0x1220120,28),(0x122013c,252),(0x1220238,52),(0x122026c,40),(0x1220294,60)]
       block kind' bytes imageBase start end functions=Block kind' (Address start) ReadExecute (B.take (fromIntegral(end-start))(B.drop(fromIntegral(start-imageBase))bytes)) [(Address address,count)|(address,count)<-functions]
       stock=[block StockDriver image5 0xbf1a00 0xd9882c 0xd99a5c driverFunctions,block StockPlayback plain 0x1100000 0x121fec8 0x12202d0 playbackFunctions]
   forM_ [("runtime.bin",runtime),("kernel.elf",elfBytes),("ram-push-manifest.json",manifest),("experiment.json",metadata)] $ \(file,bytes)->B.writeFile(output </> file)bytes
@@ -584,7 +605,18 @@ main = do
         ,preview {name=CaseName "first-setup-failed-reentry",attachment=Refused,produced=Bytes 0,callbacks=Reenter}
         ,preview {name=CaseName "first-no-opposite-subscriber",callbacks=PrimaryOnly}
         ,preview {name=CaseName "first-no-primary-subscriber",callbacks=SecondaryOnly}
-        ,preview {name=CaseName "first-irq-reentry",callbacks=Reenter}]
+        ,preview {name=CaseName "first-irq-reentry",callbacks=Reenter}
+        ,preview {name=CaseName "actual-cancel-restore",continuation=Cancel}
+        ,preview {name=CaseName "cancel-setup-failed",continuation=Cancel,attachment=Refused,produced=Bytes 0}
+        ,preview {name=CaseName "unaligned-cancel-restore",continuation=Cancel,sourceAlignment=Misaligned}
+        ,preview {name=CaseName "unaligned-finish-restore",sourceAlignment=Misaligned}
+        ,preview {name=CaseName "second-input-completion",interrupt=NeedInput,produced=Bytes 0}
+        ,preview {name=CaseName "second-input-restart",interrupt=NeedInput,continuation=Restart}
+        ,preview {name=CaseName "second-reentry",interrupt=NeedInput,produced=Bytes 0,callbacks=ReenterSecond}
+        ,preview {name=CaseName "second-no-opposite-subscriber",interrupt=NeedInput,produced=Bytes 0,callbacks=SecondaryOnly}
+        ,preview {name=CaseName "second-no-secondary-subscriber",interrupt=NeedInput,produced=Bytes 0,callbacks=PrimaryOnly}
+        ,preview {name=CaseName "output-limit-restored",interrupt=Limit,produced=Bytes 0,continuation=Cancel,sourceAlignment=Misaligned}
+        ,preview {name=CaseName "input-error-restored",interrupt=DeviceError,produced=Bytes 0,continuation=Cancel,sourceAlignment=Misaligned}]
         else if P.deviceOwnership parsed==P.OwnedJpegDevice then [preview,full] else scenarios
   comparisons<-forM selectedScenarios $ \selected->do
     original<-execute runner output parsed elf base runtime publications stock selected Original
@@ -598,6 +630,14 @@ main = do
     pure(object ["case" .= label,"returned_transaction_defect_rejected" .= True,"receipt" .= (label++"-omitted-irq-result.json")])
   firstControls<-if consumers then forM [(preview,OmittedFirst),(preview {name=CaseName "first-irq-reentry",callbacks=Reenter},ReenteredFirst)
     ,(preview {name=CaseName "first-no-opposite-subscriber",callbacks=PrimaryOnly},UngatedFirst)] $ \(selected,role)->do
+      _<-execute runner output parsed elf base runtime publications stock selected role
+      let CaseName label=name selected
+      pure(object ["case" .= label,"defect" .= show role,"returned_consumer_defect_rejected" .= True,"receipt" .= (label++roleSuffix role++"-result.json")])
+    else pure []
+  lifecycleControls<-if P.qualificationScope parsed==P.JpegLifecycle then forM
+    [(preview {name=CaseName "second-input-completion",interrupt=NeedInput,produced=Bytes 0},OmittedSecond)
+    ,(preview {name=CaseName "unaligned-cancel-restore",continuation=Cancel,sourceAlignment=Misaligned},MissingRestore)
+    ,(preview,FinishAsCancel)] $ \(selected,role)->do
       _<-execute runner output parsed elf base runtime publications stock selected role
       let CaseName label=name selected
       pure(object ["case" .= label,"defect" .= show role,"returned_consumer_defect_rejected" .= True,"receipt" .= (label++roleSuffix role++"-result.json")])
@@ -624,10 +664,10 @@ main = do
     ,"source_rev" .= ("55436fc85c0560dd252b0410af6f2427fe198cd3"::String)
     ,"runtime_sha256" .= hashText(hash runtime),"elf_sha256" .= hashText(hash elfBytes),"manifest_sha256" .= hashText(hash manifest),"metadata_sha256" .= hashText(hash metadata)
     ,"plain_sha256" .= hashText(hash plain),"image4_sha256" .= hashText(hash image4),"image5_sha256" .= hashText(hash image5)
-    ,"consumed_source_fixtures" .= fixtures,"comparisons" .= comparisons,"controls" .= controls,"first_completion_controls" .= firstControls
+    ,"consumed_source_fixtures" .= fixtures,"comparisons" .= comparisons,"controls" .= controls,"first_completion_controls" .= firstControls,"lifecycle_controls" .= lifecycleControls
     ,"builder_comparisons" .= builderComparisons,"builder_controls" .= builderControls,"device_cpu" .= deviceCpu
     ,"qualifier_sha256" .= qualifierDigest,"consumer_increment" .= consumers,"historical_device_matrix_repeated" .= (not consumers && P.deviceOwnership parsed==P.OwnedJpegDevice)
-    ,"retained_entries" .= map av [Address 0x1220004,Address 0x121ff20,Address 0x1220238,Address 0xd989f8]
+    ,"retained_entries" .= map av (if P.qualificationScope parsed==P.JpegLifecycle then [Address 0xd989f8] else [Address 0x1220004,Address 0x121ff20,Address 0x1220238,Address 0xd989f8])
     ,"builder_failure_lifetime" .= ("Synchronous setup failure calls back before channel9/resource1e release; the retained companion releases them. Reacquisition without an intervening release reaches the retained infinite-deadline lock wait, outside the qualified returned completion reentry."::String)])
   putStrLn ("JPEG transaction passed "++show(length selectedScenarios+length builderComparisons)++" stock/owned consumer comparisons; device qualification remains separately scoped")
 

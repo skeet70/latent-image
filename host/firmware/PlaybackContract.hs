@@ -1,6 +1,6 @@
 module PlaybackContract
   ( PlaybackEntry (..), SourceSha256 (..), playbackContract, playbackEntries
-  , preparationEntries, jpegEntries, consumerEntries, transactionEntries, PinnedBody (..), jpegInternalBodies
+  , preparationEntries, jpegEntries, consumerEntries, transactionEntries, consumerPlaybackEntries, lifecycleEntries, PinnedBody (..), jpegInternalBodies
   , JpegDeviceService (..), jpegDeviceServices, jpegDeviceContract
   ) where
 
@@ -10,15 +10,23 @@ data PlaybackEntry
   = PlaybackSource | PlaybackMode
   | PlaybackJpegAcquire | PlaybackJpegRestart | PlaybackJpegRelease | PlaybackJpegInterrupt
   | PlaybackJpegBuildRequest | PlaybackJpegCompleteFirst
+  | PlaybackJpegCompleteSecond | PlaybackJpegInitialize | PlaybackJpegResetState
+  | PlaybackJpegRestartRequest | PlaybackJpegCancelTimer | PlaybackJpegPreservePrefix
+  | PlaybackJpegFinishRequest | PlaybackJpegCancelRequest | PlaybackJpegSubmit
   deriving (Eq, Ord, Show)
 newtype SourceSha256 = SourceSha256 String deriving (Eq, Show)
 
-preparationEntries, jpegEntries, consumerEntries, transactionEntries, playbackEntries :: [PlaybackEntry]
+preparationEntries, jpegEntries, consumerEntries, transactionEntries, consumerPlaybackEntries, lifecycleEntries, playbackEntries :: [PlaybackEntry]
 preparationEntries = [PlaybackSource, PlaybackMode]
 jpegEntries = [PlaybackJpegAcquire, PlaybackJpegRestart, PlaybackJpegRelease, PlaybackJpegInterrupt]
 consumerEntries = [PlaybackJpegBuildRequest, PlaybackJpegCompleteFirst]
 transactionEntries = preparationEntries ++ jpegEntries
-playbackEntries = transactionEntries ++ consumerEntries
+consumerPlaybackEntries = transactionEntries ++ consumerEntries
+lifecycleEntries =
+  [ PlaybackJpegCompleteSecond, PlaybackJpegInitialize, PlaybackJpegResetState
+  , PlaybackJpegRestartRequest, PlaybackJpegCancelTimer, PlaybackJpegPreservePrefix
+  , PlaybackJpegFinishRequest, PlaybackJpegCancelRequest, PlaybackJpegSubmit ]
+playbackEntries = consumerPlaybackEntries ++ lifecycleEntries
 
 playbackContract :: PlaybackEntry -> (Word32, Word32, SourceSha256, String)
 playbackContract PlaybackSource =
@@ -37,6 +45,24 @@ playbackContract PlaybackJpegBuildRequest =
   (0x00d98904, 0x00d989f8, SourceSha256 "6392e76503ea8e6679b13f3003577a298a7e022d990194b7f484f686effef503", "xm1_playback_jpeg_build_request")
 playbackContract PlaybackJpegCompleteFirst =
   (0x0121fec8, 0x0121ff20, SourceSha256 "62ed3b398b8c37d6bbce5ea41b4a8bfa3b088f33f5ab647a12a52770ec38ec23", "xm1_playback_jpeg_complete_first")
+playbackContract PlaybackJpegCompleteSecond =
+  (0x0121ff20, 0x0121ff78, SourceSha256 "7044e6a3ace1333f6f16f979d45dda0e7414d0796af344d58fdade2cabae805d", "xm1_playback_jpeg_complete_second")
+playbackContract PlaybackJpegInitialize =
+  (0x01220004, 0x012200a4, SourceSha256 "3d54e6d19f94ef87bdd4911e0887498e27fefc2ea2435f1fc7b889a04f1aeac1", "xm1_playback_jpeg_initialize")
+playbackContract PlaybackJpegResetState =
+  (0x012200c4, 0x012200ec, SourceSha256 "94e29022682594ca375258295c3b62e57c662ce4818c8bc3375bd0bb9a8ef045", "xm1_playback_jpeg_reset_state")
+playbackContract PlaybackJpegRestartRequest =
+  (0x012200ec, 0x01220120, SourceSha256 "36bc30b9913ffd04354902be5224a528eb5ded37d53002a9ce9e6a5311987335", "xm1_playback_jpeg_restart_request")
+playbackContract PlaybackJpegCancelTimer =
+  (0x01220120, 0x0122013c, SourceSha256 "4fb4d166fbadaa9b717efceb858bed4c7a4ba06874a69c5a037b549f3e30b8ef", "xm1_playback_jpeg_cancel_timer")
+playbackContract PlaybackJpegPreservePrefix =
+  (0x0122013c, 0x01220238, SourceSha256 "88b6c5c06b98305342baecfbfed62d1f2eb6c07ec72f8871788179ad0b141838", "xm1_playback_jpeg_preserve_prefix")
+playbackContract PlaybackJpegFinishRequest =
+  (0x01220238, 0x0122026c, SourceSha256 "d9785ea18ca9bc37d4f0fc47d90fb6c1e4f260d446e1e01971a8fd0a9dd1a3d2", "xm1_playback_jpeg_finish_request")
+playbackContract PlaybackJpegCancelRequest =
+  (0x0122026c, 0x01220294, SourceSha256 "f4f1aa064a51f3c5bfb7f3e9441d5823bdb74b1a27ad5a0253fc79427c2bfef1", "xm1_playback_jpeg_cancel_request")
+playbackContract PlaybackJpegSubmit =
+  (0x01220294, 0x012202d0, SourceSha256 "8fd653644486cfabcb4f6733463d5bc6376b78b45e6c6dcdf96227395b6ba8ba", "xm1_playback_jpeg_submit")
 
 data PinnedBody = PinnedBody
   { bodyStart :: Word32

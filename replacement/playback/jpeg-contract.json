@@ -3,6 +3,7 @@
   "unit": "playback-jpeg-transaction",
   "source_rev": "55436fc85c0560dd252b0410af6f2427fe198cd3",
   "source_image": {"base": "0x00bf1a00", "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"},
+  "plain_image": {"base": "0x01100000", "sha256": "ee211bdaad39005b4f72e3443a76ca194905381a967cab787d6a4ef14e2d889d"},
   "entry_contracts": [
     {"source": "0x00d9882c", "end": "0x00d988a8", "handler": "xm1_playback_jpeg_acquire", "sha256": "9010056d9d8cfb72c81836b41be1d8a78bcee7144f2b50016d818eed778bf381", "abi": "void(uint32_t request)"},
     {"source": "0x00d988a8", "end": "0x00d988b8", "handler": "xm1_playback_jpeg_restart", "sha256": "8fe358e626b4776b89d0a0f40b8697fe03e3eb5c7aab77f3b59e6288c0e3f731", "abi": "void(uint32_t request)"},
@@ -13,10 +14,24 @@
     {"source": "0x00d98904", "end": "0x00d989f8", "handler": "xm1_playback_jpeg_build_request", "sha256": "6392e76503ea8e6679b13f3003577a298a7e022d990194b7f484f686effef503", "abi": "void(uint32_t record)", "record_readable_bytes": 101, "static_request": "0x014c56f8"},
     {"source": "0x0121fec8", "end": "0x0121ff20", "handler": "xm1_playback_jpeg_complete_first", "sha256": "62ed3b398b8c37d6bbce5ea41b4a8bfa3b088f33f5ab647a12a52770ec38ec23", "abi": "void(void)", "subscribers": "0x014eaed0"}
   ],
+  "owned_lifecycle_entries": [
+    {"source": "0x0121ff20", "end": "0x0121ff78", "handler": "xm1_playback_jpeg_complete_second", "sha256": "7044e6a3ace1333f6f16f979d45dda0e7414d0796af344d58fdade2cabae805d", "abi": "void(void)"},
+    {"source": "0x01220004", "end": "0x012200a4", "handler": "xm1_playback_jpeg_initialize", "sha256": "3d54e6d19f94ef87bdd4911e0887498e27fefc2ea2435f1fc7b889a04f1aeac1", "abi": "void(uint32_t requirements)"},
+    {"source": "0x012200c4", "end": "0x012200ec", "handler": "xm1_playback_jpeg_reset_state", "sha256": "94e29022682594ca375258295c3b62e57c662ce4818c8bc3375bd0bb9a8ef045", "abi": "void(void)"},
+    {"source": "0x012200ec", "end": "0x01220120", "handler": "xm1_playback_jpeg_restart_request", "sha256": "36bc30b9913ffd04354902be5224a528eb5ded37d53002a9ce9e6a5311987335", "abi": "void(void)"},
+    {"source": "0x01220120", "end": "0x0122013c", "handler": "xm1_playback_jpeg_cancel_timer", "sha256": "4fb4d166fbadaa9b717efceb858bed4c7a4ba06874a69c5a037b549f3e30b8ef", "abi": "void(void)"},
+    {"source": "0x0122013c", "end": "0x01220238", "handler": "xm1_playback_jpeg_preserve_prefix", "sha256": "88b6c5c06b98305342baecfbfed62d1f2eb6c07ec72f8871788179ad0b141838", "abi": "void(uint32_t restore)"},
+    {"source": "0x01220238", "end": "0x0122026c", "handler": "xm1_playback_jpeg_finish_request", "sha256": "d9785ea18ca9bc37d4f0fc47d90fb6c1e4f260d446e1e01971a8fd0a9dd1a3d2", "abi": "void(void)"},
+    {"source": "0x0122026c", "end": "0x01220294", "handler": "xm1_playback_jpeg_cancel_request", "sha256": "f4f1aa064a51f3c5bfb7f3e9441d5823bdb74b1a27ad5a0253fc79427c2bfef1", "abi": "void(void)"},
+    {"source": "0x01220294", "end": "0x012202d0", "handler": "xm1_playback_jpeg_submit", "sha256": "8fd653644486cfabcb4f6733463d5bc6376b78b45e6c6dcdf96227395b6ba8ba", "abi": "void(void)"}
+  ],
+  "publication_contract": {"hooks": 17, "publications": 34, "setup": 17, "activation": 17, "abi": 7, "allocation_bytes": 32768, "code_bytes": 20480, "spare_slots": 0, "layout": "ELF-derived experiment_layout table_offset and installer_end_offset; immutable runtime vector must equal manifest records"},
+  "qualification_status": "Seventeen-hook lifecycle qualifies in 22 conditional native original/owned comparisons and 17 returned memory-defect controls, installation with complete34-word rollback, and guarded preparation/PLAY with independent-stock source/output/PNG equality. Natural PLAY observes initializer/reset/submit/prefix/timer-cancel/cancel; second completion/restart/finish remain conditional native coverage. Historical two/six/eight-hook artifacts and receipts remain readable. No physical acceptance, construction serialization, quiescence, retirement or unload claim.",
+  "observation_boundary": {"cancel_entry": "0x0122026c", "stock_cancel_release_observation_only": "0x01220288", "owned_release_symbols": ["xm1_playback_jpeg_finish_released", "xm1_playback_jpeg_cancel_released"], "guard": "Every owned original body from entry+8 through end is fetch-excluded; owned release observations are immutable interior ELF labels, not callable replacement entries."},
   "consumer_ordering": {
     "builder": "Publish the record before request fields and before lock9 acquisition. Preserve default/7/8 selector mapping, packing byte equal-to-one and untouched fields. Call the existing owned acquire directly.",
     "first_completion": "Enter nested critical; require both subscribers; clear the first subscriber; leave with the saved critical state; invoke the saved callback. Nested completion sees the cleared slot.",
-    "boundaries": "Develop job4 and its notification/wait/clear-record release companion remain retained. Playback requirements initializer0x01220004, second completion0x0121ff20, timer, prefix preservation, submit and finish/cancel consumers remain retained.",
+    "boundaries": "Develop job4 and its notification/wait/clear-record release companion remain retained. Whole ordinary Playback requirements initialization, second completion, reset, restart, timer cancellation, prefix preservation, submit, finish and cancel/restore are owned.",
     "lifetime": "The static request is constructed before reserved lock9 is acquired. Neither construction concurrency nor subscriber/request quiescence is established by this increment."
   },
   "owned_internal_bodies": [
@@ -50,10 +65,11 @@
     "resource1e_acquire_and_route_options": "0x0065a3cc", "resource1e_release_and_route_options": "0x0065a424",
     "publish_restart": "0x0065aa44",
     "interrupt_acquire": "0x0064e918", "interrupt_release": "0x0064eb20", "cache": "0x00042634",
-    "nested_critical_enter": "0x007235d8", "nested_critical_leave": "0x007236b0"
+    "nested_critical_enter": "0x007235d8", "nested_critical_leave": "0x007236b0",
+    "timer_start": "0x0069b328", "timer_cancel": "0x0069b7a4"
   },
   "callback_contract": {"descriptor": "0x48", "irq_line": 76, "published_handler": "0x00d99570", "request_complete_offset": "0x4c", "request_input_needed_offset": "0x50", "request_callback_abi": "void(void)"},
-  "retained_consumers": ["0x00e8fee4 develop job4 producer", "0x00e8eb18 record notification", "0x00d989f8 clear record then release", "0x01220004 requirements initializer and callback publication", "0x01220294 submit", "0x012200ec restart", "0x01220238 finish", "0x0122026c cancel/restore", "0x0121ff20 second completion"],
-  "scope": "Owned channel9 firmware transaction, nominal low-level MMIO services, static-record request construction and first Playback completion over the existing JPEG device and source/output interface. The eight exact source-entry publications use the existing ABI7 allocation and16-word publication table. No codec-model replacement, pixel tolerance, USB-state dependency, capture continuation or retirement/unload claim.",
-  "removal_obligations": ["Replace retained resource1e routing, reserved lock9, cache and IRQ registration services through their owning units.", "Qualify and replace the retained command4 endpoint-reprogram service without inventing its device law.", "Replace retained Playback requirements initializer0x01220004 and submit0x01220294, finish0x01220238/cancel0x0122026c, second completion0x0121ff20 and machine5/deferred-notification consumers.", "Replace develop job4 notification/wait and clear-record release0x00d989f8 through the owning develop unit.", "Keep the static request, record and subscribers live through all retained callers; establish construction serialization and quiescence before publication removal.", "Keep published IRQ entry executable through retained interrupt release; establish quiescence before any unload or removal.", "Retain separate qualification for endpoint-reprogram command4 and device status bits17/24, which lack actual PLAY device execution."]
+  "retained_consumers": ["0x00e8fee4 develop job4 producer", "0x00e8eb18 record notification", "0x00d989f8 clear record then release", "machine5 and deferred-notification providers"],
+  "scope": "Owned ordinary JPEG lifecycle over the unchanged source/output and JPEG device interfaces. Seventeen exact whole source entries publish thirty-four actual words using ABI7 and the existing allocation. Native comparisons require independent stock execution. No cable/reset bit14 law, codec replacement, pixel tolerance, capture continuation or retirement/unload claim.",
+  "removal_obligations": ["Replace retained resource1e routing, reserved lock9, cache and IRQ registration services through their owning units.", "Qualify and replace the retained command4 endpoint-reprogram service without inventing its device law.", "Replace machine5/deferred-notification consumers through their owning units.", "Replace develop job4 notification/wait and clear-record release0x00d989f8 through the owning develop unit.", "Keep the static request, record and subscribers live through all retained callers; establish construction serialization and quiescence before publication removal.", "Keep published IRQ entry executable through retained interrupt release; establish quiescence before any unload or removal.", "Retain separate qualification for endpoint-reprogram command4 and device status bits17/24, which lack actual PLAY device execution."]
 }
