@@ -27,8 +27,14 @@ systemPlansForPackaged source staged candidate = do
   unless (F.sourceLoaders carried==F.stagedLoaders staged) (Left "final package loaders differ from the proved platform stage")
   let admitted=F.stagedAdmitted staged
   catalog<-catalogFor (F.admittedUnion admitted) (F.admittedLinked admitted) staged
+  symbols<-forM domains $ \domain->do
+    let linked=F.admittedLinked admitted
+        bytes=if domain==DomainA then F.linkedSymbolsA linked else F.linkedSymbolsB linked
+    parsed<-A.parseAggregateSymbols bytes
+    pure (domain,M.fromList [(A.symbolName symbol,Body (A.symbolAddress symbol) (A.symbolSize symbol)) | symbol<-parsed,A.symbolSize symbol>0])
+  let aggregate=Aggregate (M.fromList symbols) M.empty
   stock<-derivePlan Stock (F.sourceDat source) [catalog {catalogProbes=[]}] (F.sourceLoaders source)
-  owned<-derivePlan Owned candidate [catalog] (F.sourceLoaders carried)
+  owned<-derivePlanWith aggregate Owned candidate [catalog] (F.sourceLoaders carried)
   stockArmings<-loaderArmings source
   ownedArmings<-loaderArmings carried
   pure (stock {planArmingEntries=stockArmings},owned {planArmingEntries=ownedArmings})

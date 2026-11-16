@@ -63,8 +63,9 @@ emptyCallEvidence :: CallEvidence
 emptyCallEvidence = CallEvidence Nothing Nothing (CallTotals False 0) emptyCallSummary [] [] [] Nothing 0 0
 
 accumulateEvidence :: Plan -> CallEvidence -> Call -> CallEvidence
-accumulateEvidence plan prior call =
-  let timers = evidenceTimers prior ++ timerWitnesses [call]
+accumulateEvidence plan prior rawCall =
+  let call = bindCallImage plan rawCall
+      timers = evidenceTimers prior ++ timerWitnesses [call]
       timerTotal = length timers
       semantic = checkCallForInWitnesses timers (planRole plan) call
       deferred = case semantic of
@@ -170,10 +171,11 @@ emptyControlEvidence plan = ControlEvidence emptyCallEvidence (case planRole pla
   _ -> NoControlCalls) Nothing
 
 accumulateControlEvidence :: Plan -> ControlEvidence -> Call -> ControlEvidence
-accumulateControlEvidence plan (ControlEvidence compact retained controlLimit) call =
+accumulateControlEvidence plan (ControlEvidence compact retained controlLimit) rawCall =
   ControlEvidence (accumulateKnown timers deferred limit timerTotal deferredTotal plan checked compact call)
     (retainControl (planRole plan) checked retained call) control
  where
+  call = bindCallImage plan rawCall
   timers = evidenceTimers compact ++ timerWitnesses [call]
   timerTotal = length timers
   checked = checkCallForInWitnesses timers (planRole plan) call

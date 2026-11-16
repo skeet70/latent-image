@@ -2,17 +2,18 @@
 module Emulation.SchedulerPairPlan
   ( module Emulation.SchedulerPairCatalog, Role (..), roleName, parseRole, Guard (..), ArmingEntries, armingEntries, armingEntry, retainedArmingEntries
   , Body (..), Aggregate (..), emptyAggregate, Stop (..), StopKind (..), stopKindName, DroppedStop (..)
-  , Plan (..), base, derivePlan, derivePlanWith, derivePlanWithAggregate, planValue ) where
+  , Plan (..), TransitionExtent (..), TransitionBinding, stockTransitions, deriveTransitions
+  , deriveTransitionBinding, applyTransitionBinding, base, derivePlan, derivePlanWith, derivePlanWithAggregate, planValue ) where
 
-import Control.Monad (forM, unless)
-import Data.Aeson (FromJSON (..), Value, object, withObject, (.:), (.:?), (.=))
+import Control.Monad (forM, forM_, unless)
+import Data.Aeson (FromJSON (..), ToJSON (..), Value, eitherDecodeStrict', object, withObject, (.:), (.:?), (.=))
 import qualified Data.ByteString as B
 import Data.Bits ((.&.), shiftL, shiftR)
 import Data.List (nub, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
 import Emulation.SchedulerPairCatalog
-import Emulation.Sha256 (sha256, sha256Hex)
+import Emulation.Sha256 (Sha256, parseSha256Hex, sha256, sha256Hex)
 import Replacement.RtosOwnFirst.Regions (Domain (..), domains, domainLabel)
 
 data Role = Stock | Owned | Restored | SilentNotify | WrongPredicate | WakeNoInsert deriving (Eq, Ord, Show, Enum, Bounded)
@@ -50,9 +51,116 @@ stopKindName FirstEntryStop = "first-entry"
 data Stop = Stop { stopDomain :: Domain, stopAddress :: Address, stopKind :: StopKind } deriving (Eq, Show)
 data DroppedStop = DroppedStop { droppedDomain :: Domain, droppedName :: String, droppedReason :: String } deriving (Eq, Show)
 
+data TransitionExtent = TransitionExtent
+  { transitionDomain :: Domain, transitionStart :: Address, transitionEnd :: Address } deriving (Eq, Ord, Show)
+data TransitionBinding = TransitionBinding !Sha256 ![TransitionExtent]
+
+instance ToJSON TransitionExtent where
+  toJSON (TransitionExtent domain (Address start) (Address end))=object
+    ["domain" .= domainLabel domain,"start" .= hex start,"end" .= hex end]
+instance FromJSON TransitionExtent where
+  parseJSON=withObject "transition extent" $ \o->do
+    domain<-o .: "domain" >>= parseDomain
+    start<-o .: "start" >>= parseHex
+    end<-o .: "end" >>= parseHex
+    unless (start `mod` 4==0 && end `mod` 4==0 && start<end
+      && base domain<=start && end<=base domain+if domain==DomainA then 0xdae0 else 0xdaa0)
+      (fail "transition extent is outside its loader")
+    pure (TransitionExtent domain (Address start) (Address end))
+instance ToJSON TransitionBinding where
+  toJSON (TransitionBinding digest extents)=object ["plan_sha256" .= sha256Hex digest,"transition_extents" .= extents]
+instance FromJSON TransitionBinding where
+  parseJSON=withObject "image transition binding" $ \o->TransitionBinding
+    <$> (o .: "plan_sha256" >>= either fail pure . parseSha256Hex) <*> o .: "transition_extents"
+
+stockTransitions :: [TransitionExtent]
+stockTransitions=[TransitionExtent domain (Address (base domain+lo)) (Address (base domain+hi))
+  | domain<-domains,(lo,hi)<-[(0x204,0x368),(0x3640,0x3810)]]
+
+newtype TransitionSymbol = TransitionSymbol String
+
+transitionSymbol :: DispatchPoint -> TransitionSymbol
+transitionSymbol point=TransitionSymbol ("xm1_rtos_scheduler_"++case point of
+  Save->"save"; Resume->"resume"; NoSave->"no_save"; Select->"select"; FirstEntry->"first_entry"
+  IrqReturn->"irq_return"; IrqResume->"irq_resume"; IrqTail->"irq_tail")
+
+retainedDispatchExtent :: Domain -> DispatchPoint -> TransitionExtent
+retainedDispatchExtent domain point=TransitionExtent domain (Address (base domain+start)) (Address (base domain+end))
+ where
+  (start,end)=case point of
+    Save->(0x3640,0x3668); Resume->(0x3668,0x3688); NoSave->(0x3688,0x36a4); Select->(0x36a4,0x3728)
+    FirstEntry->(0x3728,0x375c); IrqReturn->(0x375c,0x37a4); IrqResume->(0x37a4,0x37a8); IrqTail->(0x37a8,0x3810)
+
+deriveTransitions :: Maybe Aggregate -> Role -> Either String [TransitionExtent]
+deriveTransitions aggregate role
+  | role==Stock=Right stockTransitions
+  | otherwise=concat <$> forM domains (\domain->do
+      let vector=TransitionExtent domain (Address (base domain+0x204)) (Address (base domain+0x368))
+          retained=[extent | extent<-stockTransitions,transitionDomain extent==domain]
+          points=[Save,Resume,NoSave,Select,FirstEntry,IrqReturn,IrqResume,IrqTail]
+      case aggregate of
+        Nothing->pure retained
+        Just linked->do
+          let symbols=M.findWithDefault M.empty domain (aggregateSymbols linked)
+          extents<-forM points $ \point->do
+            let TransitionSymbol name=transitionSymbol point
+                retainedExtent=retainedDispatchExtent domain point
+                Address entry=transitionStart retainedExtent
+            case M.lookup name symbols of
+              Nothing->do
+                unless (M.notMember (domain,entry) (aggregateEntrySymbols linked))
+                  (Left "published dispatcher transition body is missing")
+                pure retainedExtent
+              Just body->do
+                unless (bodyBytes body>0 && bodyStart body `mod` 4==0 && bodyBytes body `mod` 4==0
+                  && base domain<=bodyStart body && toInteger (bodyStart body)+toInteger (bodyBytes body)<=toInteger (base domain)+(if domain==DomainA then 0xdae0 else 0xdaa0))
+                  (Left "linked transition body is outside its loader")
+                pure (TransitionExtent domain (Address (bodyStart body)) (Address (bodyStart body+bodyBytes body)))
+          pure (vector:nub extents))
+
+transitionBinding :: B.ByteString -> Plan -> [TransitionExtent] -> Either String TransitionBinding
+transitionBinding bytes plan extents=do
+  original<-eitherDecodePlan bytes
+  unless (original {planTransitionExtents=planTransitionExtents plan}==plan) (Left "transition supplement changes its original plan")
+  pure (TransitionBinding (sha256 bytes) extents)
+
+deriveTransitionBinding :: Maybe Aggregate -> B.ByteString -> B.ByteString -> M.Map Domain B.ByteString -> Either String TransitionBinding
+deriveTransitionBinding aggregate bytes dat loaders=do
+  plan<-eitherDecodePlan bytes
+  digest<-parseSha256Hex (planDat plan)
+  unless (digest==sha256 dat) (Left "transition image differs from the plan DAT")
+  forM_ (planGuards plan) $ \guard->do
+    loader<-maybe (Left "missing transition image loader") Right (M.lookup (guardDomain guard) loaders)
+    let Address start=guardStart guard
+        Address end=guardEnd guard
+        offset=base (guardDomain guard)
+    unless (B.length loader==(if guardDomain guard==DomainA then 0xdae0 else 0xdaa0)
+      && offset<=start && start<end && toInteger end<=toInteger offset+toInteger (B.length loader))
+      (Left "transition image guard is outside its loader")
+    expected<-parseSha256Hex (guardDigest guard)
+    unless (expected==sha256 (B.take (fromIntegral (end-start)) (B.drop (fromIntegral (start-offset)) loader)))
+      (Left "transition image guard differs")
+  extents<-deriveTransitions aggregate (planRole plan)
+  forM_ extents $ \extent->unless (any (\stock->transitionDomain stock==transitionDomain extent && transitionStart stock<=transitionStart extent && transitionEnd extent<=transitionEnd stock) stockTransitions || any (\guard->
+    guardDomain guard==transitionDomain extent && guardStart guard<=transitionStart extent && transitionEnd extent<=guardEnd guard) (planGuards plan))
+    (Left "linked transition body is outside the plan's immutable guards")
+  transitionBinding bytes plan extents
+
+applyTransitionBinding :: B.ByteString -> Plan -> TransitionBinding -> Either String Plan
+applyTransitionBinding bytes plan (TransitionBinding digest extents)=do
+  unless (digest==sha256 bytes) (Left "transition supplement names another plan")
+  unless (all (\domain->TransitionExtent domain (Address (base domain+0x204)) (Address (base domain+0x368)) `elem` extents) domains)
+    (Left "transition supplement omits a retained IRQ vector")
+  _<-transitionBinding bytes plan extents
+  pure plan {planTransitionExtents=extents}
+
+eitherDecodePlan :: B.ByteString -> Either String Plan
+eitherDecodePlan = eitherDecodeStrict'
+
 data Plan = Plan
   { planRole :: Role, planDat :: String, planEntries :: [Entry], planGuards :: [Guard], planFills :: [Address], planProbes :: [Probe]
   , planArmingEntries :: ArmingEntries, planStops :: [Stop], planDroppedStops :: [DroppedStop]
+  , planTransitionExtents :: [TransitionExtent]
   } deriving (Eq, Show)
 base :: Domain -> Word32
 base DomainA = 0x40000
@@ -161,13 +269,14 @@ derivePlanWithAggregate aggregate role dat catalogs loaders = do
     unless (null deliverEntries || length callbackProbes==2)
       (Left "exception callback instruction differs")
     pure (guards,fills,domainProbes,stops,droppedStops)
+  transitions<-deriveTransitions aggregate role
   pure (Plan role (sha256Hex (sha256 dat)) entries
     (concat [guards | (guards,_,_,_,_) <- perDomain])
     (nub (concat [fills | (_,fills,_,_,_) <- perDomain]))
     (concat [probes' | (_,_,probes',_,_) <- perDomain])
     retainedArmingEntries
     (concat [stops' | (_,_,_,stops',_) <- perDomain])
-    (concat [dropped | (_,_,_,_,dropped) <- perDomain]))
+    (concat [dropped | (_,_,_,_,dropped) <- perDomain]) transitions)
  where
   unAddress (Address address) = address
   stockEntry entry@(Entry domain (DispatchSemantic Select) _) | role==Stock = entry { entryAddress=Address (base domain+0x36ac) }
@@ -218,6 +327,7 @@ planValue plan = object
   , "guarded" .= [object ["domain" .= domainLabel d,"start" .= hex lo,"end" .= hex hi,"sha256" .= digest] | Guard d (Address lo) (Address hi) digest <- planGuards plan]
   , "fills" .= [hex a | Address a <- planFills plan]
   , "probes" .= [object ["domain" .= domainLabel d,"address" .= hex a,"kind" .= probeKindName kind,"register" .= registerName register] | Probe d (Address a) kind register <- planProbes plan]
+  , "transition_extents" .= planTransitionExtents plan
   ] ++ if planRole plan == Stock then [] else
   [ "stops" .= [object ["domain" .= domainLabel d,"address" .= hex a,"kind" .= stopKindName kind] | Stop d (Address a) kind <- planStops plan]
   , "dropped_stops" .= [object ["domain" .= domainLabel d,"name" .= name,"reason" .= reason] | DroppedStop d name reason <- planDroppedStops plan]
@@ -236,4 +346,5 @@ instance FromJSON Plan where
     probes <- o .: "probes" >>= mapM (withObject "probe" $ \p -> Probe <$> (p .: "domain" >>= parseDomain) <*> (Address <$> (p .: "address" >>= parseHex)) <*> (p .: "kind" >>= named probeKindName) <*> (p .: "register" >>= registerOf))
     stops <- o .:? "stops" >>= maybe (pure []) (mapM (withObject "stop" $ \s -> Stop <$> (s .: "domain" >>= parseDomain) <*> (Address <$> (s .: "address" >>= parseHex)) <*> (s .: "kind" >>= named stopKindName)))
     dropped <- o .:? "dropped_stops" >>= maybe (pure []) (mapM (withObject "dropped stop" $ \s -> DroppedStop <$> (s .: "domain" >>= parseDomain) <*> s .: "name" <*> s .: "reason"))
-    Plan role <$> o .: "dat_sha256" <*> pure entries <*> pure guards <*> (o .: "fills" >>= mapM (fmap Address . parseHex)) <*> pure probes <*> pure parsedArmings <*> pure stops <*> pure dropped
+    transitions<-o .:? "transition_extents" >>= maybe (pure stockTransitions) pure
+    Plan role <$> o .: "dat_sha256" <*> pure entries <*> pure guards <*> (o .: "fills" >>= mapM (fmap Address . parseHex)) <*> pure probes <*> pure parsedArmings <*> pure stops <*> pure dropped <*> pure transitions

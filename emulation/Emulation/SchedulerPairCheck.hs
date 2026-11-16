@@ -46,7 +46,8 @@ originsOf :: Value -> Parser [WriteOrigin]
 originsOf value = J.parseJSON value >>= mapM (withObject "attributed write" (.: "origin"))
 data Call = Call { callDomain :: Domain, callAddress :: Address, callSemantic :: Semantic, callCore :: Int, callCpsr :: Word32, callArguments :: Arguments,
   callBefore :: Memory, callAfter :: Memory, callR0 :: Word32, callReturnCpsr :: Word32, callWrites :: [Written], callBank :: [Written], callCount :: Int, callFirst :: Word64, callTrace :: Maybe CallTrace, callTask :: Word32,
-  callKernelContext :: Word32, callTaskStack :: Maybe TaskStack, callWriteOrigins :: [WriteOrigin], callBankOrigins :: [WriteOrigin], callUnreadable :: S.Set Address } deriving (Eq,Show)
+  callKernelContext :: Word32, callTaskStack :: Maybe TaskStack, callWriteOrigins :: [WriteOrigin], callBankOrigins :: [WriteOrigin], callUnreadable :: S.Set Address,
+  callTransitionExtents :: [TransitionExtent] } deriving (Eq,Show)
 data PcWatch = PcWatch Int Address Word64 deriving (Eq,Show)
 data BankCounts = BankCounts { primaryBankWrites :: Word64, secondaryBankWrites :: Word64 } deriving (Eq,Show)
 instance FromJSON BankCounts where
@@ -174,7 +175,7 @@ instance FromJSON Call where
     Call d address semantic <$> (e .: "core" >>= coreOf) <*> e .: "cpsr" <*> (Arguments <$> e .: "arguments")
       <*> pure (fst before) <*> pure (fst after) <*> r .: "r0" <*> r .: "cpsr"
       <*> (r .: "writes" >>= mapM writtenOf) <*> (r .: "bank" >>= mapM writtenOf) <*> o .: "count" <*> o .: "first" <*> pure (Just trace) <*> (e .: "task" >>= wordRead)
-      <*> e .: "kernel_context" <*> e .:? "task_stack" <*> (r .: "writes" >>= originsOf) <*> (r .: "bank" >>= originsOf) <*> pure unreadable
+      <*> e .: "kernel_context" <*> e .:? "task_stack" <*> (r .: "writes" >>= originsOf) <*> (r .: "bank" >>= originsOf) <*> pure unreadable <*> pure stockTransitions
 instance FromJSON Observation where
   parseJSON = withObject "scheduler observation" $ \o -> do
     schema <- o .: "schema"
@@ -336,7 +337,7 @@ ownsOrigin call origin = writerCore origin==callCore call && writerTask origin==
   pc = address .&. complement 0x40000000
   transition = case callSemantic call of
     DispatchSemantic _ -> False
-    _ -> any (\loader -> (loader+0x204<=pc && pc<loader+0x368) || (loader+0x3640<=pc && pc<loader+0x3810)) [0x40000,0xd0000]
+    _ -> any (\extent -> transitionStart extent<=Address pc && Address pc<transitionEnd extent) (callTransitionExtents call)
 
 ownedWrites :: Call -> [Written] -> [WriteOrigin] -> Either Refusal [Written]
 ownedWrites call = go
@@ -349,6 +350,9 @@ ownedWrites call = go
     remaining <- go writes origins
     pure (if owned then write:remaining else remaining)
   go _ _ = Left WrittenWords
+
+bindCallImage :: Plan -> Call -> Call
+bindCallImage plan call=call {callTransitionExtents=planTransitionExtents plan}
 
 data BoundaryOwnership = CallerBoundary | ForeignBoundary | UnreadableBoundary deriving (Eq,Show)
 
@@ -439,12 +443,12 @@ qualify :: B.ByteString -> Plan -> Observation -> Either Refusal Value
 qualify bytes plan observation = do
   qualifyPrefix bytes plan observation
   checkDemandCalls plan observation
-  let calls = sortOn callFirst (obsCalls observation)
+  let calls = sortOn callFirst (map (bindCallImage plan) (obsCalls observation))
   forM_ calls $ \call -> checkCallEnvelope plan call >> checkCallForIn calls (obsRole observation) call
   let releases = [F.ReleaseWitness (lockTask event) (lockCore event) (lockCall event) (lockAt event) (lockAddress event) (lockValue event)
         | event <- obsLockEvents observation]
   qualifySuffix plan releases observation (CallTotals (not (null calls)) (sum (map callCount calls)))
-  pure (summary observation)
+  pure (summaryWith observation (foldl' (summarizeCall (obsRole observation)) emptyCallSummary calls))
 
 qualifyPrefix :: B.ByteString -> Plan -> Observation -> Either Refusal ()
 qualifyPrefix bytes plan observation = do
