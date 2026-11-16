@@ -181,6 +181,18 @@ struct PlanEntry { domain: Domain, semantic: Semantic, entry: Hex }
 #[serde(deny_unknown_fields)]
 struct PlanRange { domain: Domain, start: Hex, end: Hex, sha256: String }
 
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct TransitionExtent { domain: Domain, start: Hex, end: Hex }
+
+fn stock_transitions() -> Vec<TransitionExtent> {
+    [(Domain::A, 0x40000), (Domain::B, 0xd0000)].into_iter().flat_map(|(domain, base)| {
+        [(0x204, 0x368), (0x3640, 0x3810)].map(|(start, end)| TransitionExtent {
+            domain, start: Hex(base+start), end: Hex(base+end),
+        })
+    }).collect()
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Plan {
@@ -196,6 +208,8 @@ struct Plan {
     stops: Vec<PlanStop>,
     #[serde(default)]
     dropped_stops: Vec<PlanDroppedStop>,
+    #[serde(default = "stock_transitions")]
+    transition_extents: Vec<TransitionExtent>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -239,6 +253,17 @@ fn validate(plan: Plan) -> Result<Validated, String> {
         for address in spellings(domain.loader_entry.0) { arms.insert(address, domain.domain); }
     }
     require(domains.len()==2, "plan does not name both loaders")?;
+    for extent in &plan.transition_extents {
+        let (base, bytes) = match extent.domain { Domain::A => (0x40000, 0xdae0), Domain::B => (0xd0000, 0xdaa0) };
+        require(extent.start.0 % 4 == 0 && extent.end.0 % 4 == 0 && base <= extent.start.0
+            && extent.start.0 < extent.end.0 && extent.end.0 <= base+bytes,
+            "transition extent is outside its loader")?;
+    }
+    for (domain, base) in [(Domain::A, 0x40000), (Domain::B, 0xd0000)] {
+        require(plan.transition_extents.iter().any(|extent| extent.domain == domain
+            && extent.start.0 == base+0x204 && extent.end.0 == base+0x368),
+            "transition map omits a retained IRQ vector")?;
+    }
     let task_records = plan.entries.iter().filter(|entry| matches!(entry.semantic, Semantic::TaskRecord { .. })).count();
     let task_record_only = task_records != 0 && task_records == plan.entries.len();
     if task_records != 0 {
@@ -742,7 +767,7 @@ struct TaskStack { start: Hex, end: Hex }
 #[derive(Clone, Copy, Debug, Serialize)]
 struct WriteOrigin { core: Core, pc: Hex, sp: Hex, cpsr: u32, task: Hex, kernel_context: u32, instructions: u64 }
 
-fn owns_origin(entry: &EntryState, origin: &WriteOrigin) -> bool {
+fn owns_origin(entry: &EntryState, origin: &WriteOrigin, transitions: &[TransitionExtent]) -> bool {
     let task = matches!(entry.task, Read::Committed { value } if value == origin.task.0);
     let in_stack = match entry.task_stack {
         None => true,
@@ -750,8 +775,7 @@ fn owns_origin(entry: &EntryState, origin: &WriteOrigin) -> bool {
     };
     let pc = origin.pc.0 & !ALIAS;
     let transition = !matches!(entry.slot.semantic, Semantic::Dispatch { .. })
-        && [0x40000u32, 0xd0000].iter().any(|&loader|
-            (loader+0x204 <= pc && pc < loader+0x368) || (loader+0x3640 <= pc && pc < loader+0x3810));
+        && transitions.iter().any(|extent| extent.start.0 <= pc && pc < extent.end.0);
     entry.core == origin.core && task && origin.kernel_context == entry.kernel_context
         && origin.cpsr & 0x1f == entry.cpsr & 0x1f && in_stack && !transition
 }
@@ -1804,7 +1828,7 @@ impl Observer<'_> {
             }
             if matches!(call.entry.slot.semantic, Semantic::Helper { name: Helper::Release } | Semantic::Helper { name: Helper::Acquire }) {
                 for write in &call.writes {
-                    if owns_origin(&call.entry, &write.origin) {
+                    if owns_origin(&call.entry, &write.origin, &self.validated.plan.transition_extents) {
                         require(self.lock_events.len() < LOCK_LIMIT, "lock event bound exceeded")?;
                         self.lock_events.push(LockEvent { task: write.origin.task.0, core: write.origin.core,
                             call: call.entry.order, at: write.order, address: write.write.address, value: write.write.value });
@@ -3037,7 +3061,7 @@ mod tests {
 
     fn plan_with_stops(role: Role, stops: Vec<PlanStop>) -> Plan {
         Plan { schema: PLAN_SCHEMA, role, dat_sha256: String::new(), domains: Vec::new(), entries: Vec::new(),
-            probes: Vec::new(), guarded: Vec::new(), fills: Vec::new(), stops, dropped_stops: Vec::new() }
+            probes: Vec::new(), guarded: Vec::new(), fills: Vec::new(), stops, dropped_stops: Vec::new(), transition_extents: stock_transitions() }
     }
 
     #[test]

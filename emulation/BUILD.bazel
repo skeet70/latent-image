@@ -4439,7 +4439,7 @@ haskell_binary(
     srcs = ["SchedulerPairPlanMain.hs"],
     args = ["$(rootpath //replacement/rtos_scheduler:regions.json)"],
     data = ["//replacement/rtos_scheduler:regions.json"],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-rtsopts"],
     deps = [
         ":scheduler-pair-lib",
         "//host:aeson",
@@ -4457,7 +4457,7 @@ haskell_binary(
 haskell_binary(
     name = "scheduler-pair-check",
     srcs = ["SchedulerPairCheckMain.hs"],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-rtsopts"],
     deps = [
         ":case-sha256",
         ":scheduler-pair-lib",

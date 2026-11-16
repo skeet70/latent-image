@@ -13,7 +13,7 @@ import qualified Data.ByteString.Lazy as L
 import qualified Emulation.OwnFirstPairCheck as Q
 import Emulation.SchedulerPairCheck
 import Emulation.SchedulerPairDecode (decodeCheckedObservation, decodeControlObservation)
-import Emulation.SchedulerPairEvidence (qualifyEvidence, qualifyControlEvidence, checkControlEvidence)
+import Emulation.SchedulerPairEvidence (emptyCallEvidence, accumulateEvidence, qualifyEvidence, qualifyControlEvidence, checkControlEvidence)
 import Emulation.SchedulerPairModel
 import Emulation.SchedulerPairPlan
 import qualified Emulation.SchedulerPairS2 as D
@@ -26,11 +26,11 @@ assert :: String -> Bool -> IO ()
 assert label value = unless value (error label)
 plan :: Plan
 plan = Plan Owned "dat" [Entry DomainA (HelperSemantic Notify) (Address 0x44018),Entry DomainB (HelperSemantic Notify) (Address 0xd3fd4)]
-  [Guard DomainA (Address 0x44018) (Address 0x44044) "a",Guard DomainB (Address 0xd3fd4) (Address 0xd4004) "b"] [] [] retainedArmingEntries [] []
+  [Guard DomainA (Address 0x44018) (Address 0x44044) "a",Guard DomainB (Address 0xd3fd4) (Address 0xd4004) "b"] [] [] retainedArmingEntries [] [] stockTransitions
 planBytes :: B.ByteString
 planBytes = "synthetic-plan"
 call :: Call
-call = Call DomainA (Address 0x44018) (HelperSemantic Notify) 0 0xd3 (Arguments [2,0,0,0]) M.empty M.empty 0 0xd3 [] [Written (Address 0xfffb40cc) 4 0x1000000] 1 30 (Just (CallTrace registers registers Returned [] Nothing)) 0x9000 0 Nothing [] [ownOrigin] S.empty
+call = Call DomainA (Address 0x44018) (HelperSemantic Notify) 0 0xd3 (Arguments [2,0,0,0]) M.empty M.empty 0 0xd3 [] [Written (Address 0xfffb40cc) 4 0x1000000] 1 30 (Just (CallTrace registers registers Returned [] Nothing)) 0x9000 0 Nothing [] [ownOrigin] S.empty stockTransitions
  where registers = D.Registers (replicate 16 0) 0xd3 0 0 0
 ownOrigin :: WriteOrigin
 ownOrigin = WriteOrigin 0 (Address 0x44018) (Address 0x8000) 0xd3 (Address 0x9000) 0 1
@@ -50,6 +50,23 @@ main :: IO ()
 main = do
   assert "correct trace qualifies" (case qualify planBytes plan observation of Right _ -> True; Left _ -> False)
   assert "plan wire round trip" (J.eitherDecodeStrict (L.toStrict (J.encode (planValue plan))) == Right plan)
+  let currentImage=plan {planTransitionExtents=
+        [TransitionExtent domain (Address (base domain+0x204)) (Address (base domain+0x368)) | domain<-[DomainA,DomainB]]
+        ++[TransitionExtent DomainA (Address 0x44030) (Address 0x44044)]}
+      relocatedOrigin=ownOrigin {writerPc=Address 0x43650}
+      classified current origin=qualifyEvidence planBytes current observation
+        (accumulateEvidence current emptyCallEvidence call {callBankOrigins=[origin]})
+      accepted result=case result of Right _->True; Left _->False
+  assert "linked helper writes inside a former dispatcher interval qualify"
+    (accepted (classified currentImage relocatedOrigin))
+  assert "the same instruction remains excluded in its retained image"
+    (classified plan relocatedOrigin==Left MissingTrace)
+  assert "linked IRQ transition writes cannot supply helper effects"
+    (classified currentImage relocatedOrigin {writerPc=Address 0x44034}==Left MissingTrace)
+  assert "matching linked code cannot borrow another kernel context"
+    (classified currentImage relocatedOrigin {writerContext=1}==Left MissingTrace)
+  assert "matching linked code cannot borrow IRQ mode"
+    (classified currentImage relocatedOrigin {writerCpsr=0x92}==Left MissingTrace)
   let prefixArmings=either error id (armingEntries (Address 0x40020) (Address 0x1042c))
       prefixPlan=plan {planArmingEntries=prefixArmings}
       planFields=case planValue plan of J.Object fields->fields; _->error "fixture plan shape"
@@ -506,6 +523,20 @@ main = do
   assert "catalog list preserves actual entry addresses and semantic tags" (case catalogPlan of
     Right planned -> planEntries planned==catalogEntries firstCatalog++catalogEntries secondCatalog && planProbes planned==catalogProbes secondCatalog && length (planGuards planned)==3 && planArmingEntries planned==retainedArmingEntries
     Left _ -> False)
+  let emptyLoaders=M.fromList [(DomainA,B.replicate 0xdae0 0),(DomainB,B.replicate 0xdaa0 0)]
+      stockImage=either error id (derivePlan Stock B.empty [firstCatalog] emptyLoaders)
+      stockImageBytes=L.toStrict (J.encode (planValue stockImage))
+      boundImage=either error id (deriveTransitionBinding Nothing stockImageBytes B.empty emptyLoaders)
+      alteredLoader=B.replicate 0x2000 0<>B.singleton 1<>B.replicate (0xdae0-0x2001) 0
+      rejected result=case result of Left _->True; Right _->False
+  assert "supplemental transitions preserve the captured plan binding"
+    (applyTransitionBinding stockImageBytes stockImage boundImage==Right stockImage)
+  assert "supplemental transitions refuse another plan receipt"
+    (rejected (applyTransitionBinding (stockImageBytes<>"\n") stockImage boundImage))
+  assert "supplemental transitions refuse another DAT"
+    (rejected (deriveTransitionBinding Nothing stockImageBytes (B.singleton 1) emptyLoaders))
+  assert "supplemental transitions refuse changed guarded loader bytes"
+    (rejected (deriveTransitionBinding Nothing stockImageBytes B.empty (M.insert DomainA alteredLoader emptyLoaders)))
   let boundaryEntries =
         [Entry d semantic (Address (base d+offset-(if d==DomainB && serviceEntry then 64 else 0)))
         | d <- [DomainA,DomainB]

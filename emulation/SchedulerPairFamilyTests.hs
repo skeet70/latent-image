@@ -41,7 +41,7 @@ traceOf values history completion = CallTrace (registers values) (registers valu
 callOf :: Domain -> Word32 -> Semantic -> [Word32] -> Memory -> Memory -> Word32 -> CallTrace -> [Written] -> Call
 callOf domain address semantic arguments before after r0 trace writes =
   Call domain (Address address) semantic (if domain==DomainA then 0 else 1) 0x13 (Arguments arguments)
-    before after r0 0x13 writes [] 1 10 (Just trace) 0x9000 1 Nothing [] [] S.empty
+    before after r0 0x13 writes [] 1 10 (Just trace) 0x9000 1 Nothing [] [] S.empty stockTransitions
 
 applyWrites :: Memory -> [Written] -> Memory
 applyWrites = foldl (\memory (Written (Address address) _ value) -> M.insert (Address address) value memory)
