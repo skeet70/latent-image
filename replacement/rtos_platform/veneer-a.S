@@ -799,6 +799,22 @@ flag_veneer wait
 flag_veneer poll
 flag_veneer timed_wait
 
+.macro mailbox_veneer name
+.section .veneer.family_mailbox_\name,"ax",%progbits
+.global xm1_platform_veneer_family_mailbox_\name
+.type xm1_platform_veneer_family_mailbox_\name,%function
+xm1_platform_veneer_family_mailbox_\name:
+    b xm1_rtos_objects_family_mailbox_\name
+.size xm1_platform_veneer_family_mailbox_\name, .-xm1_platform_veneer_family_mailbox_\name
+.endm
+
+mailbox_veneer create
+mailbox_veneer delete
+mailbox_veneer send
+mailbox_veneer receive
+mailbox_veneer poll
+mailbox_veneer timed_receive
+
 .macro helper_veneer name, target
 .section .veneer.\name,"ax",%progbits
 .global xm1_platform_veneer_\name
