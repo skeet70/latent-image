@@ -54,7 +54,7 @@
       "id": "playback-jpeg-entry",
       "shim": "Channel9 acquire, restart, release and descriptor callback A32 exports",
       "kind": "stock-ABI export",
-      "other_side": "Retained Playback machine5 callers and descriptor0x48 IRQ registry",
+      "other_side": "Retained Playback machine5, channel9 request builder0x00d98904 and descriptor0x48 IRQ registry",
       "owned": "partly",
       "removal": "all transaction callers and IRQ registration use the typed owned JPEG API directly",
       "state": "required",
