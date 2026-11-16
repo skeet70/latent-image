@@ -79,7 +79,12 @@ checkGuest path bridge package = do
   required (PO.checkOriginalBodies package bodies)
   pure actual
 
-data Site = UsbEdge | UsbApplicationArm | ApplicationUsb | RequestUsbMode | UiTransition | Machine5Action5 | Packet142 | RetainedAction2 | RetainedAction3 | RetainedAction2Returned | RetainedAction3Returned deriving (Eq, Enum, Bounded)
+data Site
+  = UsbEdge | UsbApplicationArm | ApplicationUsb | RequestUsbMode | UiTransition | Machine5Action5 | Packet142
+  | RetainedAction2 | RetainedAction3 | RetainedAction2Returned | RetainedAction3Returned
+  | ControllerPresenceReader | ControllerPresencePollPhase | ControllerHandlePublish | UsbObserver
+  | ControllerIrq | ControllerIrqBody | ControllerIrqDispatch | ControllerDisconnectBranch
+  deriving (Eq, Enum, Bounded)
 
 site :: Site -> (Word32, T.Text)
 site UsbEdge = (0xecf8b8,"usb-edge")
@@ -93,6 +98,14 @@ site RetainedAction2 = (0x11ea434,"retained-action2")
 site RetainedAction3 = (0x11ea458,"retained-action3")
 site RetainedAction2Returned = (0x11ea454,"retained-action2-returned")
 site RetainedAction3Returned = (0x11ea478,"retained-action3-returned")
+site ControllerPresenceReader = (0xd7b98c,"controller-presence-reader")
+site ControllerPresencePollPhase = (0xd81d18,"controller-presence-poll-phase")
+site ControllerHandlePublish = (0xd814f4,"controller-handle-publish")
+site UsbObserver = (0xecfe64,"usb-observer")
+site ControllerIrq = (0xd7b250,"controller-irq")
+site ControllerIrqBody = (0xd81480,"controller-irq-body")
+site ControllerIrqDispatch = (0xd7d154,"controller-irq-dispatch")
+site ControllerDisconnectBranch = (0xd7d2ec,"controller-disconnect-branch")
 
 siteBytes :: Site -> Int
 siteBytes RetainedAction2 = 36
@@ -160,6 +173,25 @@ volatileGate bridge output = do
   void (tx (P.BulkIn 0x81 2) 2)
   json (output </> "volatile-configuration.json") (object ["index" .= Probe.gateIndex,"before" .= Probe.gateByteOf before,"after" .= Probe.gateByteOf after,"other_window_bytes_equal" .= True,"persistent_commit_requested" .= False])
 
+firmwareFacts :: Bridge -> IO Value
+firmwareFacts bridge = do
+  pointerBytes <- readMemory bridge 0x96ca50 4
+  let word bytes = B.foldr (\byte rest -> fromIntegral byte + 256 * rest) 0 bytes :: Word32
+      pointer = word pointerBytes
+  physical <- if pointer > 0 && pointer < 0x20000000 then pure pointer
+    else if pointer >= 0x40000000 && pointer < 0x60000000 then pure (pointer - 0x40000000)
+    else harness "adjustment cache pointer is not a DRAM spelling"
+  require (physical + fromIntegral Probe.gateIndex < 0x20000000) "adjustment gate read exceeds DRAM"
+  gate <- readMemory bridge (physical + fromIntegral Probe.gateIndex) 1
+  latch <- readMemory bridge 0x15c229c 1
+  phase <- word <$> readMemory bridge 0x146a180 4
+  handle <- word <$> readMemory bridge 0x146a090 4
+  observer <- word <$> readMemory bridge 0x146a0e4 4
+  bootPresence <- readMemory bridge 0x914828 1
+  pure (object ["cache_pointer" .= pointer,"cache_physical" .= physical,"cache_pointer_hex" .= P.hexBytes (B.unpack pointerBytes)
+    ,"gate_byte" .= B.index gate 0,"usb_manager_latch" .= B.index latch 0
+    ,"controller_phase" .= phase,"controller_completion_handle" .= handle,"controller_observer" .= observer,"boot_presence" .= B.index bootPresence 0])
+
 traceHits :: Bridge -> IO Value
 traceHits bridge = Object <$> call bridge (command "trace-hits" ["from" .= (0 :: Int)])
 
@@ -177,18 +209,23 @@ observe output bridge package = do
   json (output </> "watch-begin.json") (Object begun)
   Object <$> call bridge (command "ui-state" []) >>= json (output </> "ui-before.json")
   Object <$> call bridge (command "media-state" []) >>= json (output </> "media-before.json")
+  firmwareFacts bridge >>= json (output </> "firmware-before.json")
   volatileGate bridge output
+  firmwareFacts bridge >>= json (output </> "firmware-after-configuration-close.json")
   forM_ [(False,"detached"),(True,"attached")] $ \(connected,label) -> do
     reply <- call bridge (command "cable" ["connected" .= connected])
     require (KM.lookup "usb_connected" reply == Just (Bool connected)) "modeled cable readback differs"
     json (output </> (label ++ "-cable.json")) (Object reply)
+    firmwareFacts bridge >>= json (output </> (label ++ "-cable-firmware.json"))
     idle <- call bridge (command "idle" ["instructions" .= (40000000 :: Int)])
     json (output </> (label ++ "-idle.json")) (Object idle)
     Object <$> call bridge (command "ui-state" []) >>= json (output </> (label ++ "-ui.json"))
+    firmwareFacts bridge >>= json (output </> (label ++ "-firmware.json"))
     traceHits bridge >>= json (output </> (label ++ "-trace.json"))
   enumeration <- call bridge (command "enumerate" ["budget" .= (90000000 :: Int)])
   json (output </> "enumeration.json") (Object enumeration)
   Object <$> call bridge (command "ui-state" []) >>= json (output </> "ui-final.json")
+  firmwareFacts bridge >>= json (output </> "firmware-after-enumeration.json")
   Object <$> call bridge (command "media-state" []) >>= json (output </> "media-final.json")
   traces <- traceHits bridge
   json (output </> "trace-final.json") traces
