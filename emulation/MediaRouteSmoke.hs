@@ -1503,6 +1503,17 @@ runRoute options owned ownedWitness directory original bridge journal observed =
       sites = routeSites route ++ (if route == PlayRoute then decodeObservationSites owned else [])
   _ <- call bridge (command "trace-sites" ["sites" .= object [K.fromString (hex32 (siteAddress s)) .= siteLabel s | s <- sites]])
   note journal "trace-sites" (toJSON (map siteValue sites))
+  ownedPrefixAck <- forM owned $ \package -> do
+    checkOwnedGuest bridge journal package
+    armed <- call bridge (PO.watchRequest package)
+    either harness pure (PO.validateWatchBegin package (Object armed))
+    note journal "owned-playback-prefix-watch-begin" (Object armed)
+    pure (Object armed)
+  when (route == PlayRoute) $ do
+    begun <- call bridge (command "jpeg-observation-begin" [])
+    either harness pure (PJ.parseBegin (Object begun))
+    writeIORef (obsJpegActive observed) True
+    note journal "jpeg-observation-begin" (Object begun)
   (before, target, fixture) <- inspectCard original directory BeforeRoute bridge journal $ \view -> do
     (target, fixture) <- verifyFixture view
     pure (view, target, fixture)
@@ -1553,6 +1564,13 @@ runRoute options owned ownedWitness directory original bridge journal observed =
     writeIORef (obsCapture observed) (Just (CaptureProgress (CS.startCoverage at) Nothing CS.initialCursor False))
     _ <- captureObservationHits bridge journal observed
     pure ()
+  forM_ (zip (maybe [] pure owned) (maybe [] pure ownedPrefixAck)) $ \(package, ack) -> do
+    state <- call bridge (command "watch-state" [])
+    ended <- call bridge (command "watch-end" [])
+    note journal "owned-playback-prefix-watch-state" (Object state)
+    note journal "owned-playback-prefix-watch-end" (Object ended)
+    prefixWitness <- either harness pure (PO.witness package ack (Object state) (Object ended))
+    note journal "owned-playback-prefix-witness" (PO.witnessValue prefixWitness)
   ownedAck <- forM owned $ \package -> do
     checkOwnedGuest bridge journal package
     armed <- call bridge (PO.watchRequest package)
@@ -1566,10 +1584,9 @@ runRoute options owned ownedWitness directory original bridge journal observed =
         let (PC.PinnedBody low high (PC.SourceSha256 expected), _) = PC.jpegDeviceContract service
         bytes <- readGuest bridge low (fromIntegral (high-low))
         require (digestText (digest bytes) == expected) "retained JPEG service differs from pinned bytes"
-    begun <- call bridge (command "jpeg-observation-begin" [])
-    either harness pure (PJ.parseBegin (Object begun))
-    writeIORef (obsJpegActive observed) True
-    note journal "jpeg-observation-begin" (Object begun)
+    prefix <- jpegBatch directory bridge journal observed owned True
+    note journal "jpeg-prefix-bus" (object
+      ["empty" .= either (const False) (const True) (PJ.emptyBatch prefix), "qualified_play_jobs" .= False])
     _ <- call bridge (command "trace-sites"
       [ "sites" .= object [K.fromString (hex32 (siteAddress s)) .= siteLabel s | s <- sites]
       , "pauses" .= object [K.fromText label .= (64 :: Int) | label <- ["jpeg-preview-copy","jpeg-start-store","jpeg-status-loaded","jpeg-endpoint-loaded","jpeg-request-released","jpeg-request-cancelled"]] ])
