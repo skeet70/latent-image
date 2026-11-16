@@ -2137,4 +2137,195 @@
       {"name":"global_failures","path":"private-data/scratch/PlatformComposition/runs/20261115T214402Z-scoped-full-GlobalLock-bound/result/native-results.json","pointer":["failures"]}
     ]
   }
+,{
+  "id": "E-LATER-IMAGE5-DECODER-ASYNC-OWNED-150",
+  "claim": "The opt-in linked asynchronous image5 producer/IRQ/consumer path is accepted ({{accepted}}) at {{instructions}} instructions with saved init-time task {{task}} and {{callbacks}} decoder IRQ callbacks. Canonical image5 and BSS comparisons are {{image_equal}}/{{bss_equal}}; observed stream0x48, engine0x2b, route and public clock0x29 ownership close. The retained clock reservation returns handle {{clock_handle}}. The executed missing-clock-release control is accepted {{defect_accepted}} at {{defect_instructions}} instructions with verdict \"{{defect_error}}\", while its canonical image5/BSS comparisons remain {{defect_image_equal}}/{{defect_bss_equal}}. Separate fresh-reset synthetic aligned progress/final controls are accepted {{progress_accepted}}/{{complete_accepted}} and are not firmware acceptance.",
+  "scope": "X-M1 1.50 canonical Method4, one owned decoder session through the retained flashloader and source98/line69 callbacks on core0, command publication and first image5 entry. Opt-in ELF {{elf_sha256}}, {{body_bytes}} file bytes, zero-once BSS [{{bss_start}},{{bss_end}}). Original dispatcher SP {{original_sp}} is 4mod8; the 24-byte progress/final veneers save r4/LR, align SP to8 and restore original SP/r4 and return target, using at most12 bytes before Rust. Synthetic controls pad once to8 before the retained CMP/MOV call and restore before continuation; SP/r4-r11/frame-word preservation is checked.",
+  "notes": "The public clock0x29 oracle is the successful retained reservation output and the retained release invocation before engine0x2b release, not the owned engine clock field or inferred physical gate sharing. Source ABI: reserve [0x649c4c,0x649ddc), release [0x649ddc,0x64a010). Stock ignores registration/stream semaphore statuses and halts on engine acquire/release errors with reached ownership retained. Final Root contiguous composition/link/staging, sole panic/runtime closure, zero-once BSS and constructor/resource/stack qualification remain open. Lower stock plain-read ownership and accepted error/cleanup/stuck-stop corrections remain retained and unqualified here. Malformed input, decoder failure or missing IRQ, cancellation/safe quiescence, repeated sessions, concurrent engine clients, unobserved callers/cores, computed-caller closure, whole-machine lifetime/write confinement and physical cache/DMA coherence remain unobserved. First image5 entry does not establish later task1 context or initializer completion.",
+  "artifacts": [
+    "private-data/scratch/LaterLoadingClosure/runs/20261115T230112Z-image5-decoder-source/result/source.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T004646Z-image5-decoder-final-irq-abi-contract/result/decoder-contract.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T000954Z-image5-decoder-irq-abi-fixed-admission/result/admission.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-verification.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-continuations.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-contract.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/inputs.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-memory.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T011257Z-image5-decoder-clock-release-defect/result/decoder-verification.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T011257Z-image5-decoder-clock-release-defect/result/decoder-continuations.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T011257Z-image5-decoder-clock-release-defect/result/decoder-contract.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T011257Z-image5-decoder-clock-release-defect/result/inputs.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T011257Z-image5-decoder-clock-release-defect/result/decoder-memory.json",
+    "private-data/scratch/LaterLoadingClosure/inputs/decoder-progress-aligned-v2/decoder-verification.json",
+    "private-data/scratch/LaterLoadingClosure/inputs/decoder-progress-aligned-v2/decoder-continuations.json",
+    "private-data/scratch/LaterLoadingClosure/inputs/decoder-complete-aligned-v2/decoder-verification.json",
+    "private-data/scratch/LaterLoadingClosure/inputs/decoder-complete-aligned-v2/decoder-continuations.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T004916Z-image5-decoder-progress-aligned-v2/run.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T004931Z-image5-decoder-complete-aligned-v2/run.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T011257Z-image5-decoder-clock-release-defect/result/defect.json"
+  ],
+  "facts": [
+    {
+      "name": "accepted",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-verification.json",
+      "pointer": [
+        "accepted"
+      ]
+    },
+    {
+      "name": "instructions",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-verification.json",
+      "pointer": [
+        "instructions"
+      ]
+    },
+    {
+      "name": "task",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-continuations.json",
+      "pointer": [
+        "events",
+        "5",
+        "registers",
+        "r",
+        "0"
+      ]
+    },
+    {
+      "name": "callbacks",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-continuations.json",
+      "pointer": [
+        "callbacks"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "image_equal",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-continuations.json",
+      "pointer": [
+        "snapshots",
+        "0",
+        "expected_equal"
+      ]
+    },
+    {
+      "name": "bss_equal",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-continuations.json",
+      "pointer": [
+        "snapshots",
+        "1",
+        "expected_equal"
+      ]
+    },
+    {
+      "name": "clock_handle",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-continuations.json",
+      "pointer": [
+        "calls",
+        "4",
+        "output",
+        "values",
+        "0"
+      ]
+    },
+    {
+      "name": "original_sp",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-continuations.json",
+      "pointer": [
+        "callbacks",
+        "0",
+        "original_sp"
+      ]
+    },
+    {
+      "name": "defect_accepted",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T011257Z-image5-decoder-clock-release-defect/result/decoder-verification.json",
+      "pointer": [
+        "accepted"
+      ]
+    },
+    {
+      "name": "defect_instructions",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T011257Z-image5-decoder-clock-release-defect/result/decoder-verification.json",
+      "pointer": [
+        "instructions"
+      ]
+    },
+    {
+      "name": "defect_error",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T011257Z-image5-decoder-clock-release-defect/result/decoder-verification.json",
+      "pointer": [
+        "error"
+      ]
+    },
+    {
+      "name": "defect_image_equal",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T011257Z-image5-decoder-clock-release-defect/result/decoder-continuations.json",
+      "pointer": [
+        "snapshots",
+        "0",
+        "expected_equal"
+      ]
+    },
+    {
+      "name": "defect_bss_equal",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T011257Z-image5-decoder-clock-release-defect/result/decoder-continuations.json",
+      "pointer": [
+        "snapshots",
+        "1",
+        "expected_equal"
+      ]
+    },
+    {
+      "name": "progress_accepted",
+      "path": "private-data/scratch/LaterLoadingClosure/inputs/decoder-progress-aligned-v2/decoder-verification.json",
+      "pointer": [
+        "accepted"
+      ]
+    },
+    {
+      "name": "complete_accepted",
+      "path": "private-data/scratch/LaterLoadingClosure/inputs/decoder-complete-aligned-v2/decoder-verification.json",
+      "pointer": [
+        "accepted"
+      ]
+    },
+    {
+      "name": "firmware_sha256",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-contract.json",
+      "pointer": [
+        "firmware_sha256"
+      ]
+    },
+    {
+      "name": "body_bytes",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-contract.json",
+      "pointer": [
+        "body_bytes"
+      ]
+    },
+    {
+      "name": "bss_start",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-contract.json",
+      "pointer": [
+        "bss",
+        "0"
+      ]
+    },
+    {
+      "name": "bss_end",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-contract.json",
+      "pointer": [
+        "bss",
+        "1"
+      ]
+    },
+    {
+      "name": "elf_sha256",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T000954Z-image5-decoder-irq-abi-fixed-admission/result/admission.json",
+      "pointer": [
+        "elf_sha256"
+      ]
+    }
+  ]
+}
 ]

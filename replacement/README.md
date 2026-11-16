@@ -291,6 +291,16 @@ Scope: One FujiMod experiment route with the compile-time ReservedClock backend,
 
 <!-- /evidence-record E-RAM-DECODE-OWNERSHIP-150 -->
 
+## Asynchronous image5 decoder ownership
+
+<!-- evidence-record E-LATER-IMAGE5-DECODER-ASYNC-OWNED-150 -->
+
+E-LATER-IMAGE5-DECODER-ASYNC-OWNED-150: The opt-in linked asynchronous image5 producer/IRQ/consumer path is accepted (true) at 32102939 instructions with saved init-time task 60 and 23 decoder IRQ callbacks. Canonical image5 and BSS comparisons are true/true; observed stream0x48, engine0x2b, route and public clock0x29 ownership close. The retained clock reservation returns handle 144. The executed missing-clock-release control is accepted false at 32100755 instructions with verdict "decoder clock29 release absent", while its canonical image5/BSS comparisons remain true/true. Separate fresh-reset synthetic aligned progress/final controls are accepted true/true and are not firmware acceptance.
+
+Scope: X-M1 1.50 canonical Method4, one owned decoder session through the retained flashloader and source98/line69 callbacks on core0, command publication and first image5 entry. Opt-in ELF a6167b5df71d1a1a65f461f3508983f29b3daf4064a91745c549f373659c6e58, 1864 file bytes, zero-once BSS [12191592,12191644). Original dispatcher SP 1879056380 is 4mod8; the 24-byte progress/final veneers save r4/LR, align SP to8 and restore original SP/r4 and return target, using at most12 bytes before Rust. Synthetic controls pad once to8 before the retained CMP/MOV call and restore before continuation; SP/r4-r11/frame-word preservation is checked.
+
+<!-- /evidence-record E-LATER-IMAGE5-DECODER-ASYNC-OWNED-150 -->
+
 ## First-stage boot qualification
 
 <!-- evidence-record E-FIRST-RECORD-FLASH-BOOT-CHECK-150 -->
