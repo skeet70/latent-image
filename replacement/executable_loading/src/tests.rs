@@ -299,7 +299,7 @@ fn executed_skip_reports_completion_without_publishing_residency_or_caching() {
     assert_eq!(generation.get(), 2);
 }
 
-struct FixedBuffer(Box<[u8]>);
+struct FixedBuffer(std::boxed::Box<[u8]>);
 impl AsMut<[u8]> for FixedBuffer { fn as_mut(&mut self) -> &mut [u8] { &mut self.0 } }
 unsafe impl DmaDestination for FixedBuffer {}
 
@@ -330,7 +330,7 @@ struct DmaEngine { owner: DmaReadOwner<QualifiedPorts, FixedBuffer> }
 impl Producer for DmaEngine {
     fn execute(&mut self, request: Request) -> ProducerCompletion {
         let plan = ReadPlan::new(PhysicalBlock::new(0).unwrap(), BlockCount::new(1).unwrap(), SkipBudget::Unlimited).unwrap();
-        let destination = FixedBuffer(vec![0u8; BLOCK_BYTES as usize].into_boxed_slice());
+        let destination = FixedBuffer(std::vec![0u8; BLOCK_BYTES as usize].into_boxed_slice());
         match self.owner.read(plan, destination, request.deadline) {
             ReadOutcome::Success { report, .. } => ProducerCompletion::Loaded(unsafe { LoadedProof::from_validated_read(report) }),
             ReadOutcome::ReleasedFailure { report, failure, .. } =>

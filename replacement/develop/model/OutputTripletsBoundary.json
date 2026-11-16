@@ -1,7 +1,7 @@
 {
   "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
   "image": {"base":"0x00bf1a00","sha256":"3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"},
-  "qualification": "All eight assigned source entrypoints are implemented with owned CPU dependencies. No build, test, formatter, linter or native execution was run. Independent cases exercise integer statistics, calibration factors/clamping/positive and negative gain, raw triplet transfer, overlay synchronization and debug serialization. Full positive scan, noise-template model composition, asynchronous encoder integration and PFP device evolution remain separate qualification frontiers.",
+  "qualification": "All eight assigned source entrypoints are implemented with owned CPU dependencies. The lower-read affected gate builds the pipeline and checks the model catalogue; no output-triplets native stage was replayed for this cutover. Existing independent cases exercise integer statistics, calibration factors/clamping/positive and negative gain, raw triplet transfer, overlay synchronization and debug serialization. Full positive scan, configured loading success, noise-template model composition, asynchronous encoder integration and PFP device evolution remain separate qualification frontiers.",
   "loadingConsumerContract": {
     "requiredOwnerSymbols": ["xm1_loading_absolute_deadline", "xm1_loading_request_sync"],
     "deadline": "The caller obtains a finite absolute deadline from required configuration and passes that same Deadline to task60; Develop defines no duration or fallback.",

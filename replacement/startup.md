@@ -145,6 +145,28 @@ Run each under `run-output exec` and `emulator-slot --native` as above, with a f
 
 Plain skip qualification executes the actual progress reporter and notification wrapper through their message-send boundary, not only the producer's progress-call arguments. Zero and three-block cases check command/resource order, delay calls, actual notification headers and payloads, monotonically retained progress and the callback. The synthetic notification recipient does not initialize an extent or set its flag. Notifications and successful command completion with unchanged destination bytes are not fresh residency.
 
+## Typed lower read and task60 owner
+
+`//replacement/application_nand:arm` exposes the 128 KiB-block storage/DMA owner as an rlib. `//replacement/executable_loading:arm` exposes the sole typed queue60 sender, receiver, plain/image5 producer and completion owner as an rlib; it does not create another fixed production bank or panic closure. `//replacement/develop:develop-rust` consumes the client API and no longer publishes the overlapping `0x73b238`, `0x73aca4` or `0x73b728` entries.
+
+Before `xm1_loading_initialize`, startup must call `xm1_loading_configure` with schema1 and a non-null `deadline(context, command_kind, out_absolute_count)` callback. The callback supplies a finite absolute count on the configured qualified clock. `xm1_loading_absolute_deadline` exposes that configured value to callers; `xm1_loading_request` and `xm1_loading_request_sync` require the same absolute count. There is no relative duration, default count or renewed cleanup allowance. Abort word `0x91482c` remains the task argument.
+
+The lower owner authenticates the canonical plain and image5 descriptors, transfers one `0x20000`-byte usable block at a time, skips bad physical blocks without advancing the destination, and keeps the destination, driver and channel when stop cannot prove drain. A returned failure carries the first primary error, a separate cleanup error and one of released, held-quiescent or unproved-DMA. The conditional FujiMod law is pinned to revision `3d90035d`; physical composition must instead supply an independently established quiescence leaf. `0x100000` is programmed as the recovered controller budget and is not a buffer extent.
+
+The affected gate is:
+
+```sh
+devenv shell -- run-output exec --label lower-read-affected-gate -- \
+  host-build test //replacement/application_nand:host-tests \
+    //replacement/executable_loading:host-tests \
+    //replacement/develop:pipeline-tests \
+    //replacement/develop:model-catalogue-test
+```
+
+Its linked loading case sends a real 24-byte envelope through the typed sender/receiver and executes `DmaReadOwner`: physical block0 is bad, block1 supplies one usable 128 KiB result, and publication reports one skipped bad block only after the owner releases its leases. This is a bounded host software law. It is not physical NAND quiescence, natural skip/failure reachability or a whole Root cutover.
+
+Build the three supported consumers with `host-build build //replacement/application_nand:arm //replacement/executable_loading:arm //replacement/develop:develop-rust`. The final contiguous Root composition still must bind the retained RTOS/storage services, the owned decoder entries and the required absolute-deadline policy source. A standalone `develop-candidate` link lacks those final-composition bindings and is not an alternative owner or an accepted consumer smoke.
+
 ## Asynchronous image5 decoder composition
 
 `//replacement/image5_load:decoder-arm` exposes the complete stream/engine unit as an rlib. The opt-in `image5-decoder-image` links it through the existing bank root and fixed-image layout, with one panic closure, a contiguous body and 52 private BSS bytes. It does not select a global firmware image or change Root's canonical composition.

@@ -205,7 +205,7 @@ impl ReceiverKernel for NativeKernel {
 
 #[no_mangle]
 pub unsafe extern "C" fn xm1_loading_configure(configuration: *const LoadingConfiguration) -> i32 {
-    if unsafe { SENDER.is_some() } { return -2; }
+    if unsafe { (*(&raw const SENDER)).is_some() } { return -2; }
     let Some(configuration) = (unsafe { configuration.as_ref() }) else { return -30; };
     if configuration.version != 1 { return -30; }
     let Some(deadline) = configuration.deadline else { return -30; };
@@ -225,7 +225,7 @@ pub unsafe extern "C" fn xm1_loading_configure(configuration: *const LoadingConf
 
 #[no_mangle]
 pub unsafe extern "C" fn xm1_loading_initialize(argument: u32) -> i32 {
-    if unsafe { SENDER.is_some() } { return 0; }
+    if unsafe { (*(&raw const SENDER)).is_some() } { return 0; }
     let Some((_, drain)) = (unsafe { CONFIGURATION }) else { return -1; };
     unsafe {
         TASK_ARGUMENT = argument;
@@ -254,7 +254,7 @@ pub unsafe extern "C" fn xm1_loading_request(
     let Some(kind) = CommandKind::parse(kind) else { return -30; };
     let Some(deadline) = Deadline::new(Instant::new(deadline)) else { return -30; };
     let _guard = match SenderGuard::acquire() { Ok(guard) => guard, Err(code) => return code };
-    let Some(sender) = (unsafe { SENDER.as_mut() }) else { return -1; };
+    let Some(sender) = (unsafe { (*(&raw mut SENDER)).as_mut() }) else { return -1; };
     let callback = match Callback::parse(callback) { Some(callback) => callback, None => return -30 };
     let mut clock = NativeClock;
     let mut kernel = NativeKernel;
@@ -270,7 +270,7 @@ pub unsafe extern "C" fn xm1_loading_request_sync(kind: u32, deadline: u64, resu
     let Some(deadline) = Deadline::new(Instant::new(deadline)) else { return -30; };
     if result.is_null() || (result as usize) & (core::mem::align_of::<CompletionWords>() - 1) != 0 { return -30; }
     let _guard = match SenderGuard::acquire() { Ok(guard) => guard, Err(code) => return code };
-    let Some(sender) = (unsafe { SENDER.as_mut() }) else { return -1; };
+    let Some(sender) = (unsafe { (*(&raw mut SENDER)).as_mut() }) else { return -1; };
     let mut clock = NativeClock;
     let mut kernel = NativeKernel;
     let completion = match sender.request_sync(kind, deadline, &mut clock, &mut kernel) {
@@ -306,7 +306,7 @@ pub unsafe extern "C" fn xm1_loading_wait_channel(kind: u32, result: *mut Comple
     let Some(kind) = CommandKind::parse(kind) else { return -30; };
     if result.is_null() || (result as usize) & (core::mem::align_of::<CompletionWords>() - 1) != 0 { return -30; }
     let _guard = match SenderGuard::acquire() { Ok(guard) => guard, Err(code) => return code };
-    let Some(sender) = (unsafe { SENDER.as_mut() }) else { return -1; };
+    let Some(sender) = (unsafe { (*(&raw mut SENDER)).as_mut() }) else { return -1; };
     let Some(request) = sender.pending_for_kind(kind) else { return -30; };
     let mut clock = NativeClock;
     let mut kernel = NativeKernel;
@@ -331,10 +331,10 @@ pub unsafe extern "C" fn xm1_loading_task(_: *const u32) {
         }
         let envelope = unsafe { slice::from_raw_parts(message.data, message.length as usize) };
         store(PUBLIC_BUSY, 1);
-        let Some(producer) = (unsafe { PRODUCER.as_mut() }) else { continue; };
+        let Some(producer) = (unsafe { (*(&raw mut PRODUCER)).as_mut() }) else { continue; };
         let mut clock = NativeClock;
         let mut kernel = NativeKernel;
-        let result = unsafe { RECEIVER.receive(message.operation, envelope, &mut clock, producer, &mut kernel) };
+        let result = unsafe { (&mut *(&raw mut RECEIVER)).receive(message.operation, envelope, &mut clock, producer, &mut kernel) };
         if result.is_err() { store(PUBLIC_BUSY, 1); }
     }
 }
