@@ -285,15 +285,12 @@ services selected role = [service 0x724b68 [(R0,9),(R1,0xffffffff)] [] []]
   ++ [service 0x69b7a4 [(R0,0x33001234)] [] [],service 0x65a478 [] [] []]
   ++ [service 0x64eb20 [(R0,0x76123456)] [] []|attachment selected==Attached]
   ++ [service 0x65a424 [(R0,0x1e123456)] [] [],Service (Address 0x724c00) [(R0,9)] [(R0,if unlock selected==Signalled then 0 else 0xffffffd5)] [] []]
-  ++ critical ++ critical
+  ++ critical ++ [entry | role /= OmittedFirst, entry <- critical]
   where
     timer=service 0x69b328 [(R0,3000),(R1,0),(R2,0x121ab58),(R3,0x14eae88)] [] [Relative R3 (assemble [0x33001234])]
     timerCache=service 0x42634 [(R0,0),(R1,0)] [] []
-    irqCritical=if callbackPublication selected==RegisteredCallbacks then completionCritical++[entry|callbacks selected==Reenter,entry<-critical] else []
-    completionCritical=case critical of
-      [enter,Service address inputs outputs memoryReads memoryWrites] -> [enter,Service address inputs outputs
-        (memoryReads++[Absolute (Address 0x14eaed0) (assemble[0])|primaryDelivered selected && interrupt selected/=NeedInput]) memoryWrites]
-      _ -> error "critical boundary pair missing"
+    irqCritical=if role/=OmittedFirst && callbackPublication selected==RegisteredCallbacks
+      then critical++[entry|callbacks selected==Reenter,entry<-critical] else []
     irq outcome = [service 0x65ab20 [] [] [Relative R0 (assemble [bits outcome])],service 0x65ab50 [(R0,bits outcome)] [] []]
       ++ case outcome of
         Decoded -> done
@@ -430,7 +427,7 @@ executeBuilder runner output package elf base@(Address baseWord) runtime publica
       (recordMode,requestMode)=builderMode mode
       recordBase=if route==DevelopJob4 then 0x15b0bf8 else 0x2000200
       completed=if route==DevelopJob4 then 0xe8eb18 else 0x110100
-      recordSize=if route==DevelopJob4 then 0xd8 else 0x68
+      recordSize=if route==DevelopJob4 then 0xd8 else 0x65
       initialRecord=wordsAt [(0xc,0x4383cc00),(0x10,sourceAddress),(0x14,sourceBytes),(0x3c,completed),(0x40,0x110200)]
         . byteAt 0x34 recordMode . byteAt 0x64 (builderPacking packing) $ B.replicate recordSize 0xa5
       recordBefore=replace 0 (B.pack [fromIntegral height,fromIntegral(height `shiftR` 8),fromIntegral width,fromIntegral(width `shiftR` 8)]) initialRecord
@@ -446,8 +443,6 @@ executeBuilder runner output package elf base@(Address baseWord) runtime publica
       setupRequest=wordsAt [(0x10,outputWidth),(0x14,outputHeight),(0x24,0),(0x28,if attachment selected==Refused then 3 else 0),(0x2c,0),(0x30,0)] requestBefore
       finalRequest=if attachment selected==Refused then setupRequest else wordsAt [(0x24,finalProduced selected),(0x30,0x87654321)] setupRequest
       initialState=wordsAt [(0,0),(4,0),(0x198,0),(0x19c,0)] (B.replicate 0x210 0xa5)
-      publishedState=replace 8 requestBefore (wordsAt [(0,recordBase)] initialState)
-      setupState=replace 0x1a0 configurationBytes . replace 8 setupRequest $ wordsAt [(0,recordBase),(4,0x1e123456),(0x198,0x14c56f8),(0x19c,0)] initialState
       finalState=replace 0x1a0 configurationBytes . replace 8 finalRequest $ wordsAt [(0,0),(4,0),(0x198,0x14c56f8),(0x19c,0)] initialState
       finalRecord=if attachment selected==Refused then recordReady else byteAt 0x35 1 . byteAt 0x36 0 $ recordReady
       finalConsumer=assemble [1,if route==DevelopJob4 then 8 else statusWord(completionStatus selected)]
@@ -462,16 +457,16 @@ executeBuilder runner output package elf base@(Address baseWord) runtime publica
       code kind' address bytes=Block kind' (Address address) ReadExecute bytes [(Address address,B.length bytes)]
       deviceTargets=[(C.bodyStart body,target)|role/=Original,(selectedService,target,_)<-P.deviceServices(Just package),let(body,_)=C.jpegDeviceContract selectedService]
       mappedCalls=[Service (maybe address Address(lookup original deviceTargets)) inputs outputs memoryReads memoryWrites|Service address@(Address original) inputs outputs memoryReads memoryWrites<-calls]
-      calls=[service 0x724b68 [(R0,9),(R1,0xffffffff)] [Absolute driverAddress publishedState] []
+      calls=[service 0x724b68 [(R0,9),(R1,0xffffffff)] [] []
         ,service 0x65a3cc [(R0,0x14c56f4)] [] [Relative R0(assemble[0x1e123456])]
-        ,service 0x65a478 [] [] [],service 0x65a58c [(R0,0x14c5890)] [Relative R0 configurationBytes] []
+        ,service 0x65a478 [] [] [],service 0x65a58c [(R0,0x14c5890)] [] []
         ,Service (Address 0x64e918) [(R0,0x48),(R1,0xd99570),(R2,0x14c588c)] [(R0,if attachment selected==Attached then 0 else 0x86540003)] []
           [Relative R2(assemble[0x76123456])|attachment selected==Attached]]
         ++ (if attachment selected==Attached then [service 0x42634 [(R0,0),(R1,0)] [] [],service 0x65a548 [] [] []
           ,service 0x65ab20 [] [] [Relative R0(assemble[0x10])],service 0x65ab50 [(R0,0x10)] [] []
           ,service 0x65abd8 [] [] [Relative R0(assemble[0x87654321])],service 0x65ac08 [(R0,0x87654321)] [] []
           ,service 0x65a9e4 [(R0,0x14c571c)] [] [Relative R0(let Address endpointWord=endpoint selected in assemble[endpointWord])]] else [])
-        ++ [service 0x724558 [(R0,0x12345678),(R1,0x10)] [Absolute driverAddress setupState] [Absolute consumerAddress(assemble[1,0])]|route==DevelopJob4]
+        ++ [service 0x724558 [(R0,0x12345678),(R1,0x10)] [] [Absolute consumerAddress(assemble[1,0])]|route==DevelopJob4]
         ++ [service 0x7243a8 [(R0,0x10),(R2,0xffffffff)] [] []|route==DevelopJob4]
         ++ [service 0x65a478 [] [] []]
         ++ [service 0x64eb20 [(R0,0x76123456)] [] []|attachment selected==Attached]
@@ -507,6 +502,12 @@ executeBuilder runner output package elf base@(Address baseWord) runtime publica
   observed<-runNative runner output ident blocks mappedCalls expected (defect/=Nothing)
   json (output </> ident++"-identity.json") (object ["role" .= show role,"caller" .= show route,"defect" .= fmap show defect
     ,"runtime_sha256" .= hashText(hash runtime),"builder_source_sha256" .= hashText(hash(B.take 244(B.drop(0xd98904-0xbf1a00)image5)))
+    ,"builder_control" .= case defect of
+        Nothing -> Null
+        Just selectedDefect -> let (offset,_) = mutation selectedDefect in object
+          ["definition" .= ("relocated original builder with one source instruction omitted or replaced" :: String)
+          ,"entry" .= av(Address 0x110300),"source_instruction_offset" .= offset
+          ,"executed_bytes" .= B.length defectBytes,"executed_sha256" .= hashText(hash defectBytes)]
     ,"conditional_wait_and_notification" .= (route==DevelopJob4),"runner_returned" .= True])
   pure(Observation (regionBytesOf observed(O.RegionId(regionName Driver))) (regionBytesOf observed(O.RegionId(regionName Playback)))
     (regionBytesOf observed(O.RegionId(regionName Consumer))) (regionBytesOf observed(O.RegionId(regionName RecordMemory))))
@@ -604,7 +605,7 @@ main = do
     ,"builder_comparisons" .= builderComparisons,"builder_controls" .= builderControls,"device_cpu" .= deviceCpu
     ,"qualifier_sha256" .= qualifierDigest,"consumer_increment" .= consumers,"historical_device_matrix_repeated" .= (not consumers && P.deviceOwnership parsed==P.OwnedJpegDevice)
     ,"retained_entries" .= map av [Address 0x1220004,Address 0x121ff20,Address 0x1220238,Address 0xd989f8]
-    ,"builder_failure_lifetime" .= ("Synchronous setup failure calls back with channel9/resource1e held; the retained companion releases them. Reacquisition from that callback is nonreturning, not a qualified returned reentry."::String)])
+    ,"builder_failure_lifetime" .= ("Synchronous setup failure calls back before channel9/resource1e release; the retained companion releases them. Reacquisition without an intervening release reaches the retained infinite-deadline lock wait, outside the qualified returned completion reentry."::String)])
   putStrLn ("JPEG transaction passed "++show(length selectedScenarios+length builderComparisons)++" stock/owned consumer comparisons; device qualification remains separately scoped")
 
 data DeviceCpuCase
