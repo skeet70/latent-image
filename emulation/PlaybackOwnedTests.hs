@@ -141,7 +141,7 @@ checkJpeg = do
   check "retained service redirected away from pinned source refused"
     (isLeft (P.parsePackage (json jpegManifest) (json jpegMetadata) runtime (changeByte 0x874 (elfForFamily True allNames))))
   check "duplicate device export refused"
-    (isLeft (P.parsePackage (json jpegManifest) (json jpegMetadata) runtime (elfFor (allNames ++ take 1 ownedNames)))))
+    (isLeft (P.parsePackage (json jpegManifest) (json jpegMetadata) runtime (elfFor (allNames ++ take 1 ownedNames))))
   let changedDeviceRuntime = changeByte 0x18 runtime
       changedManifest = put "runtime_sha256" (String (sha changedDeviceRuntime)) jpegManifest
       changedMetadata = put "runtime_sha256" (String (sha changedDeviceRuntime)) jpegMetadata
