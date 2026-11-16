@@ -441,6 +441,10 @@
   },
   "interface": {
     "post": "0x72503c",
+    "owned_post": {
+      "address": "0x00bb2408",
+      "instruction": "0xe92d4ff0"
+    },
     "callers": [
       {"start":"0x00ef8ad0","end":"0x00f473a4"},
       {"start":"0x00ab1a20","end":"0x00bf1a00"}

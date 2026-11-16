@@ -44,6 +44,12 @@ pub struct Entry {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct OwnedPost {
+    address: String,
+    instruction: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct Shared {
     start: String,
     end: String,
@@ -52,6 +58,8 @@ pub struct Shared {
 #[derive(Debug, Deserialize)]
 pub struct Declaration {
     post: String,
+    #[serde(default)]
+    owned_post: Option<OwnedPost>,
     entries: Vec<Entry>,
     shared: Vec<Shared>,
     #[serde(default)]
@@ -60,6 +68,7 @@ pub struct Declaration {
 
 pub struct Plan {
     post: u32,
+    owned_post: Option<(u32, u32)>,
     entries: Vec<BoundaryEntry>,
     shared: Vec<(u32, u32)>,
     callers: Vec<(u32, u32)>,
@@ -69,6 +78,11 @@ impl Declaration {
     pub fn validate(self) -> Result<Plan, String> {
         require(self.entries.len() <= 512 && self.shared.len() <= 64, "interface declaration exceeds bounds")?;
         let post = parse_hex(&self.post)?;
+        let owned_post = match self.owned_post {
+            Some(owned) => Some((parse_hex(&owned.address)?, parse_hex(&owned.instruction)?)),
+            None => None,
+        };
+        require(owned_post.is_none_or(|(address, _)| address & 3 == 0 && address != post), "owned interface post is unaligned or duplicates stock")?;
         let mut addresses = BTreeSet::from([post]);
         let mut entries = Vec::new();
         for entry in self.entries {
@@ -96,15 +110,38 @@ impl Declaration {
             Ok((start, end))
         }).collect::<Result<Vec<_>, String>>()?;
         require(callers.len() <= 16 && (!entries.iter().any(|entry| matches!(entry.kind, EntryKind::ServiceRequest)) || !callers.is_empty()), "interface service callers missing or excessive")?;
-        Ok(Plan { post, entries, shared, callers })
+        Ok(Plan { post, owned_post, entries, shared, callers })
     }
 }
 
 impl Plan {
-    pub fn sites(&self) -> impl Iterator<Item = u32> + '_ {
-        std::iter::once(self.post).chain(self.entries.iter().map(|entry| entry.address))
+    pub fn sites(&self, machine: &Machine) -> Result<Vec<u32>, String> {
+        let mut sites = Vec::with_capacity(self.entries.len() + 2);
+        sites.push(self.post);
+        sites.extend(self.entries.iter().map(|entry| entry.address));
+        if let Some((address, expected)) = self.owned_post {
+            let actual = read_u32(&bytes(machine, 0, address, 4)?, 0);
+            if actual == expected { sites.push(address); }
+        }
+        Ok(sites)
     }
+}
 
+fn post_event(queue: u8, header: u32, payload: Vec<u8>) -> Option<Event> {
+    let operation = header as u16;
+    let sender = (header >> 16) as u8;
+    if queue == 43 { Some(Event::QueueIn { operation, sender, payload }) }
+    else if sender == 43 { Some(Event::PeerRequest { queue, operation, payload }) }
+    else { None }
+}
+
+impl Plan {
+    fn is_owned_post(&self, address: u32) -> bool {
+        self.owned_post.is_some_and(|(owned, _)| owned == address)
+    }
+}
+
+impl Plan {
     pub fn classes(&self) -> impl Iterator<Item = WatchRange> + '_ {
         self.shared.iter().map(|&(start, end)| WatchRange {
             start: u64::from(start), end: u64::from(end), kinds: WatchKinds::CPU_WRITE,
@@ -188,14 +225,19 @@ impl Stream {
         let event = if stop.address == plan.post {
             let mut descriptor = [0; 12];
             machine.session.board.read_memory(stop.core, u64::from(register("r1")?), &mut descriptor)?;
-            let operation = u16::from_le_bytes([descriptor[0], descriptor[1]]);
-            let sender = descriptor[2];
             let queue = u8::try_from(register("r0")?).map_err(|_| "interface queue exceeds byte")?;
-            if queue != 43 && sender != 43 { return Ok(()); }
             let payload = bytes(machine, stop.core, read_u32(&descriptor, 8), read_u32(&descriptor, 4) as usize)?;
-            if queue == 43 { Event::QueueIn { operation, sender, payload } }
-            else { Event::PeerRequest { queue, operation, payload } }
+            post_event(queue, read_u32(&descriptor, 0), payload)
+        } else if plan.is_owned_post(stop.address) {
+            let queue = u8::try_from(register("r1")?).map_err(|_| "owned interface queue exceeds byte")?;
+            let sp = parse_hex(&stop.sp)?;
+            let stack = bytes(machine, stop.core, sp, 8)?;
+            let payload = bytes(machine, stop.core, read_u32(&stack, 0), read_u32(&stack, 4) as usize)?;
+            post_event(queue, register("r3")?, payload)
         } else {
+            None
+        };
+        let event = if let Some(event) = event { event } else {
             match plan.entries.iter().find(|entry| entry.address == stop.address) {
                 Some(entry) if matches!(entry.kind, EntryKind::Callback) => Event::Callback { entry: Address(stop.address) },
                 Some(entry) => {
@@ -267,7 +309,13 @@ mod tests {
     use super::*;
 
     fn plan() -> Plan {
-        Declaration { post: "0x1000".into(), entries: Vec::new(), shared: vec![Shared { start: "0x2000".into(), end: "0x2010".into() }], callers: Vec::new() }.validate().unwrap()
+        Declaration {
+            post: "0x1000".into(),
+            owned_post: None,
+            entries: Vec::new(),
+            shared: vec![Shared { start: "0x2000".into(), end: "0x2010".into() }],
+            callers: Vec::new(),
+        }.validate().unwrap()
     }
 
     #[test]
@@ -289,6 +337,20 @@ mod tests {
             &Event::Callback { entry: Address(0x1004) },
             &Event::Store { address: Address(0x2002), bytes: vec![0x56] },
         ]);
+    }
+
+    #[test]
+    fn owned_post_preserves_peer_and_queue43_observations() {
+        let payload = vec![1, 2, 3];
+        assert_eq!(
+            post_event(47, 0x2f2b3f26, payload.clone()),
+            Some(Event::PeerRequest { queue: 47, operation: 0x3f26, payload: payload.clone() }),
+        );
+        assert_eq!(
+            post_event(43, 0x2b2f3f13, payload.clone()),
+            Some(Event::QueueIn { operation: 0x3f13, sender: 47, payload }),
+        );
+        assert_eq!(post_event(47, 0x2f2a3f26, Vec::new()), None);
     }
 
     #[test]

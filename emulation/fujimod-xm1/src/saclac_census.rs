@@ -25,7 +25,7 @@ mod time_interface;
 
 const CONTEXT_HIT_LIMIT: usize = 500_000;
 
-const USAGE: &str = "saclac-census --run RUN --update STOCK_DAT --boot-rom ROM --sites SITES --scenario prepare-boot|cold-boot|menu-route|half-press|shoot-without-lens|capture|playback|mode-dial [--steps STEPS] [--checkpoints ROOT] [--start reset|post-boot] [--stimulus-ticks SCHEDULE --context-interface CONTRACT] [--preparation-ticks BOOT_SCHEDULE] --output NEW_DIR | saclac-census schedule CENSUS_JSON SCHEDULE_JSON";
+const USAGE: &str = "saclac-census --run RUN --update STOCK_DAT --boot-rom ROM --sites SITES --scenario prepare-boot|cold-boot|menu-route|half-press|shoot-without-lens|capture|playback|mode-dial [--steps STEPS] [--checkpoints ROOT] [--start reset|post-boot] [--stimulus-ticks SCHEDULE --context-interface CONTRACT] [--preparation-ticks BOOT_SCHEDULE] [--diagnostic DIAGNOSTIC] --output NEW_DIR | saclac-census schedule CENSUS_JSON SCHEDULE_JSON";
 const SITE_LABEL: &str = "saclac-site";
 const SITE_LIMIT: usize = 4096;
 const CONTEXT_LIMIT: usize = 1024;
@@ -37,6 +37,11 @@ const WATCH_ROTATE_ROWS: usize = WATCH_LIMIT / 2;
 const SEGMENT_INSTRUCTIONS: u64 = 50_000_000;
 const DISPATCH_LIMIT: usize = 200_000;
 const WATCH_DECL_LIMIT: usize = 16;
+const DIAGNOSTIC_SITE_LIMIT: usize = 32;
+const DIAGNOSTIC_RANGE_LIMIT: usize = 8;
+const DIAGNOSTIC_HIT_LIMIT: usize = 4096;
+const DIAGNOSTIC_WRITE_LIMIT: usize = 1024;
+
 
 const INITIAL_MENU: u64 = 80_000_000;
 const SETUP_SETTLE: u64 = 40_000_000;
@@ -555,6 +560,175 @@ struct Stop {
     lr: String,
     cpsr: u32,
 }
+#[derive(Clone, Debug, Deserialize)]
+struct DiagnosticSiteDecl { label: String, address: String }
+
+#[derive(Clone, Debug, Deserialize)]
+struct DiagnosticReadDecl { label: String, address: String, bytes: u32 }
+
+#[derive(Clone, Debug, Deserialize)]
+struct DiagnosticRangeDecl { label: String, start: String, end: String }
+
+#[derive(Debug, Deserialize)]
+struct DiagnosticDocument {
+    schema: u32,
+    sites: Vec<DiagnosticSiteDecl>,
+    reads: Vec<DiagnosticReadDecl>,
+    writes: Vec<DiagnosticRangeDecl>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DiagnosticSite { label: String, address: Address }
+
+#[derive(Clone, Debug, Serialize)]
+struct DiagnosticRead { label: String, address: Address, bytes: u32 }
+
+#[derive(Clone, Debug, Serialize)]
+struct DiagnosticRange { label: String, start: Address, end: Address }
+
+#[derive(Debug)]
+struct DiagnosticPlan {
+    sites: Vec<DiagnosticSite>,
+    reads: Vec<DiagnosticRead>,
+    writes: Vec<DiagnosticRange>,
+}
+
+fn load_diagnostic(bytes: &[u8]) -> Result<DiagnosticPlan, String> {
+    let document: DiagnosticDocument = serde_json::from_slice(bytes).map_err(|error| format!("diagnostic: {error}"))?;
+    require(document.schema == 1, "diagnostic: unsupported schema")?;
+    require(!document.sites.is_empty() && document.sites.len() <= DIAGNOSTIC_SITE_LIMIT, "diagnostic: site count is outside bounds")?;
+    require(!document.writes.is_empty() && document.writes.len() <= DIAGNOSTIC_RANGE_LIMIT, "diagnostic: write range count is outside bounds")?;
+    let mut labels = BTreeSet::new();
+    let mut addresses = BTreeSet::new();
+    let mut sites = Vec::with_capacity(document.sites.len());
+    for declared in document.sites {
+        let address = parse_hex(&declared.address)?;
+        require(address % 4 == 0 && addresses.insert(address), "diagnostic: a site is misaligned or repeated")?;
+        require(!declared.label.is_empty() && labels.insert(declared.label.clone()), "diagnostic: a site label is empty or repeated")?;
+        sites.push(DiagnosticSite { label: declared.label, address: Address(address) });
+    }
+    labels.clear();
+    let mut reads = Vec::with_capacity(document.reads.len());
+    for declared in document.reads {
+        let address = parse_hex(&declared.address)?;
+        require(address % 4 == 0 && declared.bytes > 0 && declared.bytes <= 256, "diagnostic: a site read is invalid")?;
+        require(!declared.label.is_empty() && labels.insert(declared.label.clone()), "diagnostic: a read label is empty or repeated")?;
+        reads.push(DiagnosticRead { label: declared.label, address: Address(address), bytes: declared.bytes });
+    }
+    labels.clear();
+    let mut writes = Vec::with_capacity(document.writes.len());
+    for declared in document.writes {
+        let (start, end) = (parse_hex(&declared.start)?, parse_hex(&declared.end)?);
+        require(start % 4 == 0 && end % 4 == 0 && start < end, "diagnostic: a write range is invalid")?;
+        require(!declared.label.is_empty() && labels.insert(declared.label.clone()), "diagnostic: a write label is empty or repeated")?;
+        require(!writes.iter().any(|range: &DiagnosticRange| start < range.end.0 && range.start.0 < end),
+            "diagnostic: write ranges overlap")?;
+        writes.push(DiagnosticRange { label: declared.label, start: Address(start), end: Address(end) });
+    }
+    Ok(DiagnosticPlan { sites, reads, writes })
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DiagnosticHit {
+    label: String,
+    address: Address,
+    instructions: u64,
+    core: usize,
+    cpsr: u32,
+    sp: String,
+    lr: String,
+    registers: BTreeMap<String, String>,
+    memory: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct DiagnosticReport {
+    sites: Vec<DiagnosticSite>,
+    reads: Vec<DiagnosticRead>,
+    write_ranges: Vec<DiagnosticRange>,
+    hits: Vec<DiagnosticHit>,
+    writes: Vec<serde_json::Value>,
+    hit_overflow: u64,
+    write_overflow: u64,
+}
+
+#[derive(Debug)]
+struct DiagnosticState {
+    plan: DiagnosticPlan,
+    hits: Vec<DiagnosticHit>,
+    writes: Vec<serde_json::Value>,
+    cursor: usize,
+    hit_overflow: u64,
+    write_overflow: u64,
+}
+
+impl DiagnosticState {
+    fn new(plan: DiagnosticPlan) -> Self {
+        Self { plan, hits: Vec::new(), writes: Vec::new(), cursor: 0, hit_overflow: 0, write_overflow: 0 }
+    }
+
+    fn classes(&self) -> impl Iterator<Item = WatchRange> + '_ {
+        self.plan.writes.iter().map(|range| WatchRange {
+            start: u64::from(range.start.0), end: u64::from(range.end.0), kinds: WatchKinds::WRITES,
+        })
+    }
+
+    fn site_reads(&self) -> Vec<SiteRead> {
+        self.plan.reads.iter().map(|read| SiteRead::Absolute([u64::from(read.address.0), u64::from(read.bytes)])).collect()
+    }
+
+    fn hit(&mut self, stop: &Stop) {
+        let Some(site) = self.plan.sites.iter().find(|site| site.address.0 == stop.address) else { return };
+        if self.hits.len() >= DIAGNOSTIC_HIT_LIMIT {
+            self.hit_overflow += 1;
+            return;
+        }
+        self.hits.push(DiagnosticHit {
+            label: site.label.clone(),
+            address: site.address,
+            instructions: stop.instructions,
+            core: stop.core,
+            cpsr: stop.cpsr,
+            sp: stop.sp.clone(),
+            lr: stop.lr.clone(),
+            registers: stop.registers.iter().map(|(name, value)| ((*name).to_owned(), value.clone())).collect(),
+            memory: stop.memory.clone(),
+        });
+    }
+
+    fn stores(&mut self, state: &serde_json::Value) -> Result<(), String> {
+        let rows = state.get("records").and_then(serde_json::Value::as_array).ok_or("diagnostic watch has no records")?;
+        require(self.cursor <= rows.len(), "diagnostic watch cursor exceeds its rows")?;
+        for row in &rows[self.cursor..] {
+            let source = row.get("source").and_then(serde_json::Value::as_str).unwrap_or_default();
+            if !matches!(source, "cpu-write" | "host-write" | "model-bus-write") { continue }
+            let Some(start) = row.get("physical").and_then(serde_json::Value::as_u64) else { continue };
+            let end = start.saturating_add(row.get("size").and_then(serde_json::Value::as_u64).unwrap_or(0));
+            if !self.plan.writes.iter().any(|range| start < u64::from(range.end.0) && u64::from(range.start.0) < end) { continue }
+            if self.writes.len() < DIAGNOSTIC_WRITE_LIMIT {
+                self.writes.push(row.clone());
+            } else {
+                self.write_overflow += 1;
+            }
+        }
+        self.cursor = rows.len();
+        Ok(())
+    }
+
+    fn restart(&mut self) { self.cursor = 0; }
+
+    fn report(&self) -> DiagnosticReport {
+        DiagnosticReport {
+            sites: self.plan.sites.clone(),
+            reads: self.plan.reads.clone(),
+            write_ranges: self.plan.writes.clone(),
+            hits: self.hits.clone(),
+            writes: self.writes.clone(),
+            hit_overflow: self.hit_overflow,
+            write_overflow: self.write_overflow,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Deserialize)]
 struct FetchRow { source: String, address: u64 }
@@ -793,6 +967,8 @@ struct Report<'a> {
     watch: Vec<WatchRow>,
     interface: &'a saclac_interface::Stream,
     task_stack: Option<TaskStackSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    diagnostic: Option<DiagnosticReport>,
     error: Option<String>,
     machine_failure: Option<String>,
 }
@@ -870,6 +1046,7 @@ struct Census<'a> {
     interface: saclac_interface::Stream,
     sites: BTreeSet<u32>,
     context: Option<ContextHistory>,
+    diagnostic: Option<DiagnosticState>,
     stimuli: Stimuli<Stimulus>,
 }
 
@@ -887,7 +1064,8 @@ impl<'a> Census<'a> {
             start: u64::from(range.start),
             end: u64::from(range.end),
             kinds: WatchKinds::CPU_FETCH,
-        })).chain(self.plan.interface.iter().flat_map(|plan| plan.classes())).collect()
+        })).chain(self.plan.interface.iter().flat_map(|plan| plan.classes()))
+            .chain(self.diagnostic.iter().flat_map(DiagnosticState::classes)).collect()
     }
 
     fn restart_watch(&mut self, machine: &Machine) -> Result<(), String> {
@@ -895,13 +1073,16 @@ impl<'a> Census<'a> {
         let watch = self.watch.take().ok_or("action fetch watch is not active")?;
         watch.end(machine, &self.plan.ranges, &self.plan.watch, &mut self.ranges, &mut self.watch_ranges)?;
         self.interface.restart();
+        if let Some(diagnostic) = &mut self.diagnostic { diagnostic.restart(); }
         self.watch = Some(FetchWatch::begin(machine, &self.maps, self.classes())?);
         Ok(())
     }
 
     fn record_stores(&mut self) -> Result<(), String> {
-        if let (Some(plan), Some(watch)) = (&self.plan.interface, &self.watch) {
-            self.interface.stores(plan, &watch.watch.records.borrow().state())?;
+        if let Some(watch) = &self.watch {
+            let state = watch.watch.records.borrow().state();
+            if let Some(plan) = &self.plan.interface { self.interface.stores(plan, &state)?; }
+            if let Some(diagnostic) = &mut self.diagnostic { diagnostic.stores(&state)?; }
         }
         Ok(())
     }
@@ -909,6 +1090,7 @@ impl<'a> Census<'a> {
     fn stop(&mut self, machine: &Machine, stops: &[Stop]) -> Result<(), String> {
         self.record_stores()?;
         for stop in stops {
+            if let Some(diagnostic) = &mut self.diagnostic { diagnostic.hit(stop); }
             if let Some(plan) = &self.plan.interface {
                 self.interface.entry(machine, plan, stop)?;
             }
@@ -1366,7 +1548,7 @@ fn arguments() -> Result<BTreeMap<String, PathBuf>, String> {
     while let Some(flag) = arguments.next() {
         let name = flag.to_str().ok_or(USAGE)?.to_owned();
         let value = arguments.next().ok_or(USAGE)?;
-        require(REQUIRED.contains(&name.as_str()) || ["--steps", "--checkpoints", "--start", "--stimulus-ticks", "--preparation-ticks", "--context-interface"].contains(&name.as_str()), USAGE)?;
+        require(REQUIRED.contains(&name.as_str()) || ["--steps", "--checkpoints", "--start", "--stimulus-ticks", "--preparation-ticks", "--context-interface", "--diagnostic"].contains(&name.as_str()), USAGE)?;
         require(paths.insert(name, PathBuf::from(value)).is_none(), USAGE)?;
     }
     for name in REQUIRED {
@@ -1454,6 +1636,13 @@ fn drive() -> Result<(), String> {
         Some(path) => { let (bytes, binding) = bound(path)?; (Some(bytes), Some(binding)) }
         None => (None, None),
     };
+    let (diagnostic, diagnostic_binding) = match paths.get("--diagnostic") {
+        Some(path) => {
+            let (bytes, binding) = bound(path)?;
+            (Some(DiagnosticState::new(load_diagnostic(&bytes)?)), Some(binding))
+        }
+        None => (None, None),
+    };
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let (executable_bytes, executable_binding) = bound(&executable)?;
     let boot_identity = BootIdentity::new(&run_bytes, &dat, &rom, &[], None,
@@ -1474,7 +1663,12 @@ fn drive() -> Result<(), String> {
     let mut sites: BTreeMap<u32, String> = plan.points.iter().map(|point| (point.address, SITE_LABEL.to_owned())).collect();
     if let Some(dispatch) = &plan.dispatch { sites.insert(dispatch.trace, SITE_LABEL.to_owned()); }
     if let Some(interface) = &plan.interface {
-        sites.extend(interface.sites().map(|address| (address, SITE_LABEL.to_owned())));
+        sites.extend(interface.sites(&machine)?.into_iter().map(|address| (address, SITE_LABEL.to_owned())));
+    }
+    if let Some(diagnostic) = &diagnostic {
+        for site in &diagnostic.plan.sites {
+            require(sites.insert(site.address.0, SITE_LABEL.to_owned()).is_none(), "diagnostic: a site overlaps another trace site")?;
+        }
     }
 
     let mut census = Census {
@@ -1495,6 +1689,7 @@ fn drive() -> Result<(), String> {
         interface: saclac_interface::Stream::default(),
         sites: sites.keys().copied().collect(),
         context,
+        diagnostic,
         stimuli: Stimuli::instructions(&machine),
     };
     let setup = if start == ObservationStart::PostBoot && !observed_preparation {
@@ -1520,16 +1715,22 @@ fn drive() -> Result<(), String> {
     };
     machine.traces.bound_full_registers(NonZeroUsize::new(2).ok_or("zero hit bound")?);
     machine.traces.stop_labels = [SITE_LABEL.to_owned(), "pending-context".into(), "time-return".into()].into_iter().collect();
+    let mut site_reads = BTreeMap::new();
     if let Some(dispatch) = &plan.dispatch {
         let machines = u64::from(dispatch.machines);
-        machine.traces.site_reads = BTreeMap::from([(dispatch.trace, vec![
+        site_reads.insert(dispatch.trace, vec![
             SiteRead::Absolute([u64::from(dispatch.cell_tables), machines * 4]),
             SiteRead::Absolute([u64::from(dispatch.action_tables), machines * 4]),
             SiteRead::Absolute([u64::from(dispatch.state_counts), machines * 2]),
             SiteRead::Absolute([u64::from(dispatch.rows), machines * 2]),
             SiteRead::Absolute([u64::from(dispatch.states), machines * 2]),
-        ])]);
+        ]);
     }
+    if let Some(diagnostic) = &census.diagnostic {
+        let reads = diagnostic.site_reads();
+        for site in &diagnostic.plan.sites { site_reads.insert(site.address.0, reads.clone()); }
+    }
+    machine.traces.site_reads = site_reads;
     if let Some(context) = &census.context {
         for address in context.recorder.site_addresses() { sites.entry(address).or_insert_with(|| "pending-context".into()); }
     }
@@ -1584,10 +1785,10 @@ fn drive() -> Result<(), String> {
     };
     let error = observed.err().or(interface_end.err()).or(ended.err()).or(context_error).or(task_stack_error);
     let inputs = [Some(run_binding), Some(dat_binding), Some(rom_binding), Some(sites_binding), trajectory_binding, schedule_binding,
-        preparation_binding, context_binding, Some(executable_binding)]
+        preparation_binding, context_binding, diagnostic_binding, Some(executable_binding)]
         .into_iter().flatten().collect();
     let report = Report {
-        schema: 5,
+        schema: if census.diagnostic.is_some() { 6 } else { 5 },
         scenario,
         checkpoint,
         inputs,
@@ -1634,6 +1835,7 @@ fn drive() -> Result<(), String> {
         }).collect(),
         interface: &census.interface,
         task_stack,
+        diagnostic: census.diagnostic.as_ref().map(DiagnosticState::report),
         error: error.clone(),
         machine_failure: machine.failure.clone(),
     };
@@ -1708,6 +1910,31 @@ mod tests {
         assert!(load_sites(&sites(None, 2)).is_err(), "a sites file without a state base is refused");
         assert!(load_sites(&sites(Some("0x0169d4b5"), 2)).is_err(), "an odd state base is refused");
         assert!(load_sites(&sites(Some("0x0169d4b4"), 1)).is_err(), "schema 1 is refused");
+    }
+
+    #[test]
+    fn diagnostic_plan_bounds_sites_reads_and_write_ranges() {
+        let valid = serde_json::to_vec(&serde_json::json!({
+            "schema": 1,
+            "sites": [{"label": "compare", "address": "0x00001000"}],
+            "reads": [{"label": "capacity", "address": "0x40002000", "bytes": 4}],
+            "writes": [{"label": "capacity-writes", "start": "0x00002000", "end": "0x00002004"}],
+        })).unwrap();
+        let plan = load_diagnostic(&valid).unwrap();
+        assert_eq!(plan.sites[0].address.0, 0x1000);
+        assert_eq!(plan.reads[0].address.0, 0x4000_2000);
+        assert_eq!((plan.writes[0].start.0, plan.writes[0].end.0), (0x2000, 0x2004));
+
+        let overlapping = serde_json::to_vec(&serde_json::json!({
+            "schema": 1,
+            "sites": [],
+            "reads": [],
+            "writes": [
+                {"label": "first", "start": "0x00002000", "end": "0x00002008"},
+                {"label": "second", "start": "0x00002004", "end": "0x0000200c"}
+            ],
+        })).unwrap();
+        assert!(load_diagnostic(&overlapping).is_err());
     }
 
     fn context(machine: u32, row: u32, state: Option<u16>) -> EntryContext {
