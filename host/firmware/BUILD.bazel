@@ -2450,6 +2450,13 @@ filegroup(
     ],
 )
 
+haskell_library(
+    name = "playback-contract",
+    srcs = ["PlaybackContract.hs"],
+    ghcopts = ["-Wall", "-Werror", "-XGHC2021"],
+    deps = ["//host:base"],
+)
+
 haskell_binary(
     name = "build-experiment-ram",
     srcs = [
@@ -2461,6 +2468,7 @@ haskell_binary(
     deps = [
         ":bank-allowlist",
         ":ram-push-toolchain",
+        ":playback-contract",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -2483,6 +2491,7 @@ haskell_test(
     main_file = "ExperimentHookTest.hs",
     deps = [
         ":bank-allowlist",
+        ":playback-contract",
         "//host:base",
     ],
 )

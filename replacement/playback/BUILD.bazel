@@ -4,6 +4,8 @@ package(default_visibility = ["//visibility:public"])
 
 _SOURCES = [
     "lib.rs",
+    "jpeg_transaction.rs",
+    "jpeg-contract.json",
     "BUILD.bazel",
     "contract.json",
     "//replacement/vendor_protocol:playback_consumer.rs",
@@ -32,6 +34,30 @@ $(location @lab_coreutils//:bin/sha256sum) $(SRCS) > $(location playback-owned.s
     ],
 )
 
+genrule(
+    name = "playback-jpeg",
+    srcs = _SOURCES,
+    outs = ["playback-jpeg.o", "playback-jpeg.sources.sha256"],
+    cmd = """
+set -eu
+$(location @lab_xm1_rust//:bin/rustc) --crate-name=xm1_playback --edition=2021 --crate-type=staticlib \
+  --target=armv7r-none-eabi -C panic=abort -C relocation-model=static -C target-cpu=cortex-r4f \
+  -C codegen-units=1 -C target-feature=+strict-align -C jump-tables=no -C opt-level=z \
+  $(location lib.rs) -o $(@D)/libxm1_playback_jpeg.a
+$(location @lab_lld//:bin/ld.lld) -m armelf -r --gc-sections \
+  -u xm1_playback_source_entry -u xm1_playback_mode_entry \
+  -u xm1_playback_jpeg_acquire -u xm1_playback_jpeg_restart \
+  -u xm1_playback_jpeg_release -u xm1_playback_jpeg_interrupt \
+  $(@D)/libxm1_playback_jpeg.a -o $(location playback-jpeg.o)
+$(location @lab_coreutils//:bin/sha256sum) $(SRCS) > $(location playback-jpeg.sources.sha256)
+""",
+    tools = [
+        "@lab_xm1_rust//:bin/rustc",
+        "@lab_lld//:bin/ld.lld",
+        "@lab_coreutils//:bin/sha256sum",
+    ],
+)
+
 haskell_binary(
     name = "qualify",
     srcs = ["Qualify.hs", "ModeProducer.hs", "ModeEntryCaller.hs", "//host/firmware:ArmElf.hs"],
@@ -50,6 +76,28 @@ haskell_binary(
         "//host:filepath",
         "//host:host-support",
         "//host:json",
+        "//host:text",
+    ],
+)
+
+haskell_binary(
+    name = "qualify-jpeg",
+    srcs = ["JpegQualify.hs"],
+    main_file = "JpegQualify.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    deps = [
+        "//emulation:native-adapter",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//emulation:playback-owned-lib",
+        "//emulation:case-sha256",
+        "//host/firmware:bank-allowlist",
+        "//host/firmware:playback-contract",
+        "//host:base",
+        "//host:aeson",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
         "//host:text",
     ],
 )
