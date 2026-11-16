@@ -64,7 +64,7 @@ unsafe extern "C" {
     fn xm1_pipeline_image_geometry_levels(stage: u32, alternate: u32, secondary: u32, output: *mut u32);
     fn xm1_pipeline_sensor_defect_rows(stage: SensorStage, original: ImagePlane, selection: CaptureSelection, secondary: i32, output: Address32) -> u32;
     fn xm1_pipeline_sensor_filter_parameters(stage: SensorStage, secondary: i32, flags: u32, output: Address32);
-    fn xm1_pipeline_sensor_profile_geometry(stage: SensorStage, source: ImagePlane, selection: CaptureSelection, output: Address32);
+    fn xm1_pipeline_sensor_profile_geometry(stage: SensorStage, source: ImagePlane, selection: CaptureSelection, output: Address32) -> u32;
     fn xm1_pipeline_sensor_primary_geometry(stage: SensorStage, output: Address32, operation: ProcessingOperation, selection: CaptureSelection, secondary: i32) -> u32;
     fn xm1_pipeline_sensor_secondary_geometry(stage: SensorStage, output: Address32, operation: ProcessingOperation, selection: CaptureSelection, secondary: i32) -> u32;
     fn xm1_pipeline_sensor_capture_gain(stage: SensorStage, output: Address32);
@@ -87,7 +87,7 @@ pub unsafe extern "C" fn xm1_pipeline_image_prepare_processing(
     stage: SensorStage, request: ProcessingRequest, source: ImagePlane, features: ProcessingFeatures,
     operation: ProcessingOperation, selection: CaptureSelection, secondary: i32, _output: Address32,
     output_pointers: Address32, original: ImagePlane,
-) {
+) -> u32 {
     let configuration = unsafe { configuration_byte(ConfigurationKey(0xc0)) };
     let mut shading = Address32(0);
     if unsafe { word(features.0, 0) } & 0x200 != 0 && unsafe { word(stage.0, 0x640) } == 2 {
@@ -122,7 +122,11 @@ pub unsafe extern "C" fn xm1_pipeline_image_prepare_processing(
     };
     unsafe { store(output_pointers, 16, filter) };
     let profile = if unsafe { word(features.0, 0) } & 0x20 == 0 { 0 } else {
-        unsafe { xm1_pipeline_sensor_profile_geometry(stage, source, selection, Address32(0x156ad6c)) }; 0x156ad6c
+        unsafe { store(output_pointers, 12, 0) };
+        if unsafe { xm1_pipeline_sensor_profile_geometry(stage, source, selection, Address32(0x156ad6c)) } == 0 {
+            return 0;
+        }
+        0x156ad6c
     };
     unsafe { store(output_pointers, 12, profile); store(output_pointers, 20, 0) };
     let primary = if unsafe { word(features.0, 0) } & 0x400 != 0 && configuration & 0x10 != 0 && unsafe { xm1_pipeline_sensor_primary_geometry(stage, Address32(0x1570568), operation, selection, secondary) } != 0 { 0x1570568 } else {
@@ -137,6 +141,7 @@ pub unsafe extern "C" fn xm1_pipeline_image_prepare_processing(
         unsafe { xm1_pipeline_sensor_capture_gain(stage, Address32(0x1569600)) }; 0x1569600
     } else { 0 };
     unsafe { store(output_pointers, 36, gain) };
+    1
 }
 
 #[unsafe(no_mangle)]

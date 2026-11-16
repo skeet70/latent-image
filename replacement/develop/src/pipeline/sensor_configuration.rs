@@ -57,62 +57,6 @@ pub unsafe extern "C" fn xm1_pipeline_sensor_conversion_band(conversion: Convers
     ConversionBand(unsafe { word(table, selected * 16 + 12) })
 }
 
-#[derive(Clone, Copy)]
-#[repr(transparent)]
-pub struct ConfigurationChannel(pub u32);
-#[repr(transparent)]
-struct TaskId(u32);
-#[repr(transparent)]
-struct TaskByte(u8);
-#[repr(transparent)]
-struct MessageCode(u16);
-#[repr(transparent)]
-struct MessageBytes(u32);
-#[repr(transparent)]
-struct ReservedResource(u32);
-#[repr(transparent)]
-struct MessageQueue(u32);
-#[repr(transparent)]
-struct WaitTicks(u32);
-#[repr(C)]
-struct CancellationPayload { callback: Address32, argument: Address32 }
-#[repr(C)]
-struct CancellationMessage { code: MessageCode, sender: TaskByte, destination: TaskByte, length: MessageBytes, payload: Address32 }
-
-unsafe extern "C" {
-    fn xm1_pipeline_image_current_task() -> TaskId;
-    fn xm1_pipeline_image_send_message(channel: MessageQueue, message: *const CancellationMessage) -> i32;
-    fn xm1_pipeline_image_wait_reserved(resource: ReservedResource, timeout: WaitTicks) -> i32;
-    fn xm1_pipeline_image_signal_reserved(resource: ReservedResource) -> i32;
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn xm1_pipeline_sensor_wait_configuration(channel: ConfigurationChannel) -> i32 {
-    let handle = unsafe { word(Address32(0x817700), channel.0.wrapping_mul(4)) };
-    if handle == 0 { super::sensor_backend::xm1_pipeline_sensor_fault(); }
-    let _ = unsafe { xm1_pipeline_image_wait_reserved(ReservedResource(handle), WaitTicks(u32::MAX)) };
-    unsafe { xm1_pipeline_image_signal_reserved(ReservedResource(handle)) }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn xm1_pipeline_sensor_cancel_configuration_request(channel: ConfigurationChannel) -> i32 {
-    if unsafe { word(Address32(0x944440), channel.0.wrapping_mul(4)) } == 1 { return 0; }
-    let payload = CancellationPayload { callback: Address32(0), argument: Address32(0) };
-    if channel.0 > 8 { return -30; }
-    let sender = unsafe { xm1_pipeline_image_current_task() };
-    let message = CancellationMessage {
-        code: MessageCode(0x4c00 + channel.0 as u16), sender: TaskByte(sender.0 as u8), destination: TaskByte(60),
-        length: MessageBytes(8), payload: Address32(core::ptr::addr_of!(payload) as u32),
-    };
-    if unsafe { xm1_pipeline_image_send_message(MessageQueue(60), &message) } != 0 { return -255; }
-    let _ = unsafe { xm1_pipeline_sensor_wait_configuration(channel) };
-    0
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn xm1_pipeline_sensor_cancel_configuration(channel: ConfigurationChannel) -> i32 {
-    unsafe { xm1_pipeline_sensor_cancel_configuration_request(channel) }
-}
 
 #[derive(Clone, Copy)]
 #[repr(transparent)]

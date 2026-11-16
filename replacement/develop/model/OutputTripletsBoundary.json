@@ -2,6 +2,13 @@
   "sourcePin": "55436fc85c0560dd252b0410af6f2427fe198cd3",
   "image": {"base":"0x00bf1a00","sha256":"3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"},
   "qualification": "All eight assigned source entrypoints are implemented with owned CPU dependencies. No build, test, formatter, linter or native execution was run. Independent cases exercise integer statistics, calibration factors/clamping/positive and negative gain, raw triplet transfer, overlay synchronization and debug serialization. Full positive scan, noise-template model composition, asynchronous encoder integration and PFP device evolution remain separate qualification frontiers.",
+  "loadingConsumerContract": {
+    "requiredOwnerSymbols": ["xm1_loading_absolute_deadline", "xm1_loading_request_sync"],
+    "deadline": "The caller obtains a finite absolute deadline from required configuration and passes that same Deadline to task60; Develop defines no duration or fallback.",
+    "failure": "Typed Initialize failure returns stamp completion0 after clearing the request and before reading calibration data. outputs.rs consumes completion!=1 as failure.",
+    "candidateFailureScenarios": "OutputTripletsScenarios.loadingFailureScenarios requires a fresh unconfigured loading owner.",
+    "configuredSuccessCases": "The two output-stamp-rendering-disabled cases retain their consumer expectations. Their owned fixture must configure the actual loading owner and complete Initialize; the historical stock latch alone is not an owned completion."
+  },
   "routing": {
     "0x00daf660": "xm1_pipeline_image_write_noise_pixels",
     "0x00daf2f4": "xm1_pipeline_image_statistics_gamma",
@@ -25,9 +32,6 @@
     "0x006571a0": "xm1_pipeline_image_overlay_group",
     "0x006571bc": "xm1_pipeline_image_find_overlay_unit",
     "0x0073b7a0": "xm1_pipeline_image_wait_overlay",
-    "0x0073b728": "xm1_pipeline_image_wait_overlay_channel",
-    "0x0073b238": "xm1_pipeline_image_cancel_overlay_channel",
-    "0x0073aca4": "xm1_pipeline_image_cancel_overlay",
     "0x00e4e644": "xm1_pipeline_image_notify_output_result",
     "0x00e54c84": "xm1_pipeline_image_prepare_output_stamp",
     "0x00e53794": "xm1_pipeline_image_tune_triplets",
@@ -52,7 +56,6 @@
     "0x00e54c84": ["job:r0","image:r1","option:r2","argument:r3"],
     "0x00e4e644": ["completion_result:r0"],
     "0x0073b7a0": ["overlay:r0","timeout:r1"],
-    "0x0073b238/0x0073aca4/0x0073b728": ["overlay_channel:r0"],
     "0x006571bc": ["overlay_index:r0"],
     "0x00e61154": ["job:r0"],
     "outputRequest": ["kind:u32@0","mode:u32@4","image_work_address:u32@8"],
@@ -70,7 +73,7 @@
     "arithmetic": "Intermediate multiply/add operations wrap at 32 bits. Source uses signed division for Bayer sample counts, unsigned division for normalized sums and gamma interpolation. Signed chroma rounding adds half a unit away from zero, then divides toward zero.",
     "outputFrontends": "Complete image5 A32 e531ac..e53ca8 and e54c84..e55164 inspected. Contrary to the draft e531ac C, both capture-option bypasses write through result_pointer without a null guard. The ordinary completion path retains its null guard.",
     "stamp": "e54c6c is an exact constant-zero function. Its unreachable secondary stencil branch and unused secondary configuration reads are absent from the owned stamp implementation. Primary requests retain entry counts, 34-bit-entry data alignment, register packing and ordered PFP calls.",
-    "loader": "73b7a0 A32 confirmed: registry lookup, loaded-word test, reserved wait/signal and kernel trace only. Exact 73b238 constructs the actual zero-callback eight-byte request on channel 3c before waiting on the channel semaphore. The receiver task is not relabeled as hardware.",
+    "loader": "73b7a0 retains registry lookup, loaded-word test, reserved wait/signal and kernel trace. Task-60 command submission, completion and the 73b238/73aca4/73b728 publications belong exclusively to executable_loading. The stamp consumer requests typed Initialize and returns failure before calibration access when loading fails.",
     "debugSnapshot": "All 145 configuration key/getter/destination triples in e61154 were recovered from actual A32 and agree with the pinned C. One store uses ADD base plus immediate STR rather than the repeated register-offset form. The independent golden wire vector uses synthetic bytes low8((key-8c00)*37+11).",
     "workspace": "The three fixed SRAM planes are CPU scratch, not hardware endpoints. Both stock and owned numerical scenarios assert their written bytes and final interleaved output bytes. No application call scripts are present."
   },
@@ -121,10 +124,7 @@
     {"address":"0x006570f4","size":32,"sha256":"3b6c03dee2fb5c7f438be58623a2cf40e0aaa16b5705d7ecb369a1ed7829f6f2"},
     {"address":"0x006571a0","size":28,"sha256":"bbd05d913f5c846f3fc0c36606ea8a6a5f5b7c741b6f248831a824636082f6ab"},
     {"address":"0x006571bc","size":112,"sha256":"f9df3429ed5a1e2d82a71fa02153ebaa4d8dbf53e029343f7b58e82822101edd"},
-    {"address":"0x0073b7a0","size":148,"sha256":"ede430df3a38cd8ecf4af96832c76c1764629c86406b96b4d909ecbb3312c053"},
-    {"address":"0x0073b728","size":56,"sha256":"ef7b1a373f615962ab722c89a8b2402d332b74885d99b3b02c21f6deede3d242"},
-    {"address":"0x0073b238","size":284,"sha256":"e2f7010d601129fa596a58824ad0511875c8faa19aab64fbdd3df9080d345140"},
-    {"address":"0x0073aca4","size":16,"sha256":"961d3ae62976195216f5c06bcf50f8138aebad68f269878035895b1b172c80d5"}
+    {"address":"0x0073b7a0","size":148,"sha256":"ede430df3a38cd8ecf4af96832c76c1764629c86406b96b4d909ecbb3312c053"}
   ],
   "authenticatedData": [
     {"address":"0x00ef50e8","size":41,"sha256":"9ba3c0f9d4dfb2d969a0ab2468d0eddb8e26c983c32979c7041b2f6417b47cb8","numericProof":{"signedMinimum":0,"signedMaximum":23,"nondecreasing":true},"reader":"RateCurveIndex bounds every read to indices 0..40. Rate subtraction truncates to u8 before checking the bound."},

@@ -2,6 +2,14 @@
   "sourceRevision": "55436fc85c0560dd252b0410af6f2427fe198cd3",
   "sourceIndex": "55436fc85c0560dd252b0410af6f2427fe198cd3-a5daad359532.tsv",
   "ownership": "CPU sensor requests, settings, template projection, geometry, descriptor publication, capture and register field packing",
+  "loadingOwnership": {
+    "owner": "executable_loading",
+    "command": "Initialize (0x4c06)",
+    "client": "xm1_executable_loading::client::configured_deadline followed by request_sync with the same absolute Deadline",
+    "retiredDevelopPublications": ["0x73b238", "0x73aca4", "0x73b728"],
+    "failurePropagation": "profile_geometry and prepare_processing return u32 success (1) or failure (0). The sole stock callsites are e57990 and e647b8. Their owned callers consume the result. Failed loading leaves the profile pointer zero, preserves feature0x20 and returns process_planes failure before sensor initialization, configuration or start.",
+    "candidateFailureScenarios": "SensorRequestsScenarios.sensorLoadingFailureScenarios requires a fresh unconfigured loading owner."
+  },
   "lowMemoryObservation": {
     "route": "ram-push-attach E8 hold-Q, FujiMod warm attach",
     "checkpointKey": "077ae1f82a750d5f8348c47911350b08cf807587febb329fe6795ad763052d0d",
@@ -701,27 +709,6 @@
       "size": 104,
       "sha256": "a1e67d7322a61ccf4977b8a85d07a652591a9a08986d143296eb11af02c87c5a",
       "sourceName": "FUN_00733e78"
-    },
-    {
-      "address": "0x73aca4",
-      "symbol": "xm1_pipeline_sensor_cancel_configuration",
-      "size": 16,
-      "sha256": "961d3ae62976195216f5c06bcf50f8138aebad68f269878035895b1b172c80d5",
-      "sourceName": "flashloader_cancel_wrapper"
-    },
-    {
-      "address": "0x73b238",
-      "symbol": "xm1_pipeline_sensor_cancel_configuration_request",
-      "size": 284,
-      "sha256": "e2f7010d601129fa596a58824ad0511875c8faa19aab64fbdd3df9080d345140",
-      "sourceName": "flashloader_cancel"
-    },
-    {
-      "address": "0x73b728",
-      "symbol": "xm1_pipeline_sensor_wait_configuration",
-      "size": 56,
-      "sha256": "ef7b1a373f615962ab722c89a8b2402d332b74885d99b3b02c21f6deede3d242",
-      "sourceName": "flashloader_wait_channel"
     },
     {
       "address": "0x73ec0c",

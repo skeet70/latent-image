@@ -1,0 +1,41 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_host_rlib", "xm1_rust_host_test", "xm1_rust_rlib")
+
+package(default_visibility = ["//visibility:public"])
+
+_CORE = [
+    "src/client.rs",
+    "src/protocol.rs",
+    "src/receiver.rs",
+    "src/sender.rs",
+]
+
+xm1_rust_host_rlib(
+    name = "host",
+    src = "src/lib.rs",
+    crate_name = "xm1_executable_loading",
+    data = _CORE,
+    rlib_deps = {"xm1_application_nand": "//replacement/application_nand:host"},
+)
+
+xm1_rust_host_test(
+    name = "host-tests",
+    src = "src/lib.rs",
+    crate_name = "xm1_executable_loading",
+    data = _CORE + ["src/tests.rs"],
+    rlib_deps = {"xm1_application_nand": "//replacement/application_nand:host"},
+)
+
+xm1_rust_rlib(
+    name = "arm",
+    src = "src/lib.rs",
+    crate_name = "xm1_executable_loading",
+    out = "arm/libxm1_executable_loading.rlib",
+    data = _CORE + ["src/native.rs", "src/producer.rs"],
+    rlib_deps = {"xm1_application_nand": "//replacement/application_nand:arm"},
+)
+
+filegroup(
+    name = "shim-catalog-data",
+    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel"],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)

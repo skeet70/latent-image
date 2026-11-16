@@ -74,8 +74,6 @@
             "xm1_pipeline_image_calibration_stream_release",
             "xm1_pipeline_image_calibration_stream_stop",
             "xm1_pipeline_image_calibration_stream_write_parameters",
-            "xm1_pipeline_image_cancel_overlay",
-            "xm1_pipeline_image_cancel_overlay_channel",
             "xm1_pipeline_image_capture_output_metadata",
             "xm1_pipeline_image_channel8_acquire",
             "xm1_pipeline_image_channel8_completed",
@@ -1131,7 +1129,6 @@
             "xm1_pipeline_image_validate_radial_grid",
             "xm1_pipeline_image_wait_all",
             "xm1_pipeline_image_wait_overlay",
-            "xm1_pipeline_image_wait_overlay_channel",
             "xm1_pipeline_image_wait_reserved",
             "xm1_pipeline_image_warp_build_parameters",
             "xm1_pipeline_image_warp_cancel",
@@ -1844,8 +1841,6 @@
             "xm1_pipeline_sensor_calibration_cell",
             "xm1_pipeline_sensor_calibration_regions",
             "xm1_pipeline_sensor_calibration_unchanged",
-            "xm1_pipeline_sensor_cancel_configuration",
-            "xm1_pipeline_sensor_cancel_configuration_request",
             "xm1_pipeline_sensor_capture_coefficient_registers",
             "xm1_pipeline_sensor_capture_control_registers",
             "xm1_pipeline_sensor_capture_descriptor",
@@ -2041,7 +2036,6 @@
             "xm1_pipeline_sensor_update_center",
             "xm1_pipeline_sensor_update_secondary_center",
             "xm1_pipeline_sensor_update_template_flags",
-            "xm1_pipeline_sensor_wait_configuration",
             "xm1_preparation_configuration_byte",
             "xm1_preparation_configuration_half",
             "xm1_preparation_signed_divide",
@@ -2212,6 +2206,21 @@
         "same_image_comparison": "unestablished",
         "direct_owned_api": "unestablished"
       }
+    }
+    ,{
+      "id": "develop-loading-owner",
+      "shim": "xm1_loading_absolute_deadline and xm1_loading_request_sync",
+      "kind": "C-ABI bridge between two owned units",
+      "other_side": "executable_loading",
+      "owned": "yes",
+      "removal": "The typed loading client imports the single configured task-60 owner.",
+      "state": "required",
+      "evidence": [{
+        "image": "//replacement/develop:develop-candidate",
+        "kind": "import",
+        "symbols": ["xm1_loading_absolute_deadline", "xm1_loading_request_sync"],
+        "requirement": "The actual loading owner provides the configured absolute deadline and consumes that exact deadline. No Develop duration, loading publication or retained fallback is permitted."
+      }]
     }
   ]
 }

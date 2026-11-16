@@ -1,4 +1,4 @@
-module OutputTripletsScenarios (publications, scenarios) where
+module OutputTripletsScenarios (publications, scenarios, loadingFailureScenarios) where
 
 import qualified Data.ByteString as B
 import Data.Word (Word8, Word16, Word32)
@@ -9,7 +9,6 @@ import ImagePlanesScenarios (currentTaskCalls, priorityInitial, priorityCalls, n
 import OutputMetadataScenarios (metadataRateInitial, metadataSensitivityInitial, metadataSensitivitySamples)
 import qualified ProfileCalibrationScenarios as Profile
 import qualified BuffersScenarios as Buffers
-import qualified DebugStorageScenarios as Debug
 
 publications :: [StagePublication]
 publications =
@@ -33,9 +32,6 @@ publications =
   , StagePublication (Address 0x00e54870) (StageSymbol "xm1_pipeline_image_process_output_triplets")
   , StagePublication (Address 0x006571bc) (StageSymbol "xm1_pipeline_image_find_overlay_unit")
   , StagePublication (Address 0x0073b7a0) (StageSymbol "xm1_pipeline_image_wait_overlay")
-  , StagePublication (Address 0x0073b728) (StageSymbol "xm1_pipeline_image_wait_overlay_channel")
-  , StagePublication (Address 0x0073b238) (StageSymbol "xm1_pipeline_image_cancel_overlay_channel")
-  , StagePublication (Address 0x0073aca4) (StageSymbol "xm1_pipeline_image_cancel_overlay")
   , StagePublication (Address 0x00e4e644) (StageSymbol "xm1_pipeline_image_notify_output_result")
   , StagePublication (Address 0x00e54c84) (StageSymbol "xm1_pipeline_image_prepare_output_stamp")
   , StagePublication (Address 0x00e53794) (StageSymbol "xm1_pipeline_image_tune_triplets")
@@ -229,8 +225,8 @@ scenarios image _ = gammaCases ++ pixelCases ++ transformCases ++ bandCases ++ s
   overlayCases =
     [make ("overlay-registry-" ++ show overlay) (publications !! 18) [overlay] (overlayRegistry 1) [] (Just result)
     | (overlay,result) <- [(0,0x009b5100),(2,0x009b5118),(1,0),(9,0),(0xffffffff,0)]] ++
-    [make "overlay-descriptor-address" (publications !! 27) [] [] [] (Just 0x0061c000)
-    ,make "overlay-group-pointer" (publications !! 28) [] (overlayRegistry 1) [] (Just 0x009b5000)] ++
+    [make "overlay-descriptor-address" (publications !! 24) [] [] [] (Just 0x0061c000)
+    ,make "overlay-group-pointer" (publications !! 25) [] (overlayRegistry 1) [] (Just 0x009b5000)] ++
     [make ("overlay-already-ready-" ++ show ready ++ "-mask-" ++ show mask) (publications !! 19) [2,mask]
       (overlayRegistry ready) [] (Just 0) | ready <- [1,2,0xffffffff], mask <- [0,0xffffffff]] ++
     [make "overlay-poll-not-ready" (publications !! 19) [2,0] (overlayRegistry 0) [] (Just 0xffffffce)
@@ -238,36 +234,24 @@ scenarios image _ = gammaCases ++ pixelCases ++ transformCases ++ bandCases ++ s
     [(make ("overlay-wait-" ++ show status) (publications !! 19) [2,0xffffffff]
       (overlayRegistry 0 ++ reservedInitial 201) [] (Just status))
       { stageCalls = reservedWaitCalls 201 0xffffffff status ++ if status == 0 then reservedSignalCalls 201 0 0 ++ [call 0x42188 [0x782070] 0] else [] }
-    | status <- [0,0xffffffce]] ++
-    [(make "overlay-channel-wait" (publications !! 20) [6]
-      (reservedInitial 201 ++ [wordsAt (0x00817700+6*4) [201]]) [] Nothing)
-      { stageCalls = reservedWaitCalls 201 0xffffffff 0 ++ reservedSignalCalls 201 0 0 }] ++
-    [make ("overlay-cancel-ready-" ++ show publicationIndex ++ "-" ++ show channel) (publications !! publicationIndex)
-      [channel] [wordsAt (0x00944440+channel*4) [1]] [] (Just 0)
-    | publicationIndex <- [21,22], channel <- [0..8]] ++
-    [make "overlay-cancel-invalid-channel" (publications !! 22) [9] [wordsAt (0x00944440+9*4) [0]] [] (Just 0xffffffe2)] ++
-    [(make "overlay-cancel-posts-zero-completion-request" (publications !! 22) [6]
-      (Debug.queueInitial 0x3c ++ reservedInitial 201 ++ [wordsAt (0x00944440+6*4) [0],wordsAt (0x00817700+6*4) [201]])
-      [wordsAt (Debug.queueBuffer+4) [0x3c454c06,8,0,0]] (Just 0))
-      { stageCalls = currentTaskCalls 0x45 ++ Debug.queueCalls 0x3c 0x4c06 0x45 0x3c (B.replicate 8 0) Debug.QueueNormal 0
-        ++ reservedWaitCalls 201 0xffffffff 0 ++ reservedSignalCalls 201 0 0 }]
+    | status <- [0,0xffffffce]]
   outputNotificationCases =
-    [(make ("output-completion-" ++ show status ++ "-mode-" ++ show mode) (publications !! 23) [status]
+    [(make ("output-completion-" ++ show status ++ "-mode-" ++ show mode) (publications !! 20) [status]
       (priorityInitial 0x45 ++ [wordsAt (0x0155ccac+8) [0x45]]) [wordsAt 0x0154d960 [if status == 0 then 0 else 7]] Nothing)
       { stageCalls = notificationCalls 0x45 16 mode 0 }
     | status <- [0,1,0xffffffff], mode <- [0,1]]
   outputBypassCases =
     [make ("output-capture-option-bypass-" ++ show publicationIndex ++ "-" ++ show setting) (publications !! publicationIndex)
-      (if publicationIndex == 26 then [0x009a0000,0x009b0000,0,0x009b0100,0x009b0200,0x009b0300,1]
+      (if publicationIndex == 23 then [0x009a0000,0x009b0000,0,0x009b0100,0x009b0200,0x009b0300,1]
        else [0x009a0000,0x009b0100,0x009b0000,0x009b0200,0x009b0300])
       [wordsAt 0x009134f8 [1],wordsAt 0x0096ca50 [0x01700000],bytes 0x01700080 [setting]
       ,wordsAt 0x009a3230 [0],wordsAt 0x009b0300 [0xffffffff]] [wordsAt 0x009b0300 [0]] (Just 1)
-    | publicationIndex <- [25,26], setting <- [0xa5,0xa7,0xa9]]
+    | publicationIndex <- [22,23], setting <- [0xa5,0xa7,0xa9]]
   stampCases =
-    [make "output-stamp-capture-option-three-clears-request" (publications !! 24) [0x009a0000,0x009b0000,0,0]
+    [make "output-stamp-capture-option-three-clears-request" (publications !! 21) [0x009a0000,0x009b0000,0,0]
       [wordsAt 0x009134f8 [1],wordsAt 0x0096ca50 [0x01700000],bytes 0x01700080 [0xa9],bytes 0x0156aeb4 (replicate 32 0xa5)]
       [bytes 0x0156aeb4 (replicate 32 0)] (Just 1)] ++
-    [make ("output-stamp-rendering-disabled-packed-" ++ show packed) (publications !! 24) [0x009a0000,0x009b0000,0,0]
+    [make ("output-stamp-rendering-disabled-packed-" ++ show packed) (publications !! 21) [0x009a0000,0x009b0000,0,0]
       (metadataSensitivityInitial ++ Buffers.configurationInitial 0x01700000
         ([(0xb4,0),(0x28e0,3),(0x28e1,0),(0x28e2,0),(0x28e3,5),(0x28e4,0),(0x28e5,0)] ++ thresholdBytes)
        ++ [wordsAt 0x009134f8 [0],bytes 0x009a0000 (replicate 0x3300 0)
@@ -281,7 +265,7 @@ scenarios image _ = gammaCases ++ pixelCases ++ transformCases ++ bandCases ++ s
   snapshotWords =
     [0xb,0x30,0x33,0x58,0x7d,0xa2,0xc7,0xec,0x11,0x36,0x5b,0x80,0xa5,0xefca,0x14,0x39,0x5e,0xffffff83,0xffffffa8,0xcd,0xf2,0x17,0x3c,0x61,0x86,0xab,0xd0,0xf5,0x1a,0x3f,0x64,0xffffff89,0xffffffae,0xffffffd3,0xfffffff8,0x1d,0x6742,0xffffb18c,0xfffffbd6,0x4520,0xffff8f6a,0xffffd9b4,0xfe,0x23,0x48,0x6d,0x92,0xb7,0xdc,0x1,0x26,0x4b,0x70,0xffffff95,0xffffffba,0xffffffdf,0x4,0x29,0x4e,0xffff9873,0xffffe2bd,0x2c07,0x7651,0xffffc09b,0xae5,0x2f,0x54,0x79,0x9e,0xc3,0xe8,0xd,0x32,0x57,0x7c,0xa1,0xffffffc6,0xffffffeb,0x10,0x35,0x5a,0x7f,0xffffc9a4,0x13ee,0x5d38,0xffffa782,0xfffff1cc,0x3b16,0x63,0x88,0xad,0xd2,0xf7,0x1c,0x41,0x66,0x8b,0xd5b0,0x1ffa,0x6944,0xb38e,0xfdd8,0x4722,0x916c,0xdbb6,0x2500,0x6f4a,0xb994,0x3de,0x4d28,0x9772,0xe1bc,0x2b06,0x7550,0xbf9a,0x9e4,0x532e,0x9d78,0xe7c2,0x310c,0x7b56,0xc5a0,0xfea,0x5934,0xa37e,0xedc8,0x3712,0x5c,0x5f,0xa681,0xa984,0xf0cb,0xf3ce,0x3a15,0x3d18,0x1b,0x40,0x65,0x8a,0xaf,0xd4,0xf9,0x1e,0x6843,0x8d]
   previewSnapshotCases =
-    [make ("output-preview-snapshot-enabled-" ++ show enabled) (publications !! 29) [0x009a0000]
+    [make ("output-preview-snapshot-enabled-" ++ show enabled) (publications !! 26) [0x009a0000]
       (Buffers.configurationInitial 0x01700000
         ((0xa8,if enabled then 128 else 0) : [(0x8c00+index,fromIntegral (index*37+11)) | index <- [0..0xda]])
        ++ [wordsAt 0x009a220c [0x01c00000],wordsAt 0x009a0530 [0x12345678],wordsAt 0x009a04f0 [3]
@@ -291,3 +275,16 @@ scenarios image _ = gammaCases ++ pixelCases ++ transformCases ++ bandCases ++ s
                        ,wordsAt (0x01c00000+0xdbf54) [0xa5a5a5a5],wordsAt (0x01c00000+0xdc1a8) [0xa5a5a5a5]]
        else [bytes (0x01c00000+0xdbf54) (replicate 600 0xa5),wordsAt (0x01c00000+0xdf280) [0xa5a5a5a5]]) Nothing
     | enabled <- [False,True]]
+
+loadingFailureScenarios :: [StageScenario]
+loadingFailureScenarios =
+  [ StageScenario (StageCaseName "output-stamp-unconfigured-loading-refuses-latched-success")
+      (StagePublication (Address 0x00e54c84) (StageSymbol "xm1_pipeline_image_prepare_output_stamp"))
+      [0x009a0000,0x009b0000,0,0]
+      [wordsAt 0x009134f8 [1],wordsAt 0x0096ca50 [0x01700000]
+      ,Patch (Address 0x01700080) (B.pack [0xa5])
+      ,wordsAt (0x00944440+6*4) [1]
+      ,Patch (Address 0x0156aeb4) (B.replicate 32 0xa5)]
+      [Patch (Address 0x0156aeb4) (B.replicate 32 0)]
+      (Just 0) [] []
+  ]
