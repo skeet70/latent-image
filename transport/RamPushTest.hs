@@ -218,6 +218,19 @@ main = do
   check "nonbank payloads select no bank allowlist"
     (all ((== Nothing) . payloadBankVariant)
       [classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload "synthetic"])
+  let liveExperiment = experimentPayload "playback_owned"
+      emulatedExperiment = emulatorExperimentPayload "playback_owned"
+  check "live experiments do not opt into replacement hooks"
+    (lookup "EXPERIMENT_ADMISSION" (payloadRelinkInputs liveExperiment) == Nothing)
+  check "emulator experiments explicitly admit replacement hooks"
+    (lookup "EXPERIMENT_ADMISSION" (payloadRelinkInputs emulatedExperiment) == Just "emulator-only")
+  check "emulator replacement selection keeps the bounded experiment installer"
+    (payloadKind emulatedExperiment == Experiment
+      && payloadAllocationSize emulatedExperiment == 0x8000
+      && payloadAbiVersion emulatedExperiment == 7
+      && payloadSetupCount emulatedExperiment == 8
+      && payloadActivationCount emulatedExperiment == 8
+      && payloadBankVariant emulatedExperiment == Nothing)
   standardRelinker <- runfilesRelinker bankD3Payload
   check "the standard bank retains its Rust archive"
     (fmap (takeFileName . rustBankArchive) (relinkerRust standardRelinker) == Just "bank.a")

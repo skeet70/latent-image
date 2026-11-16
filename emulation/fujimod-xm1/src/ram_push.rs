@@ -303,6 +303,8 @@ enum Request {
     List,
     NandExport { label: NandArtifactLabel },
     Transfer(Transfer),
+    Cable { connected: bool },
+    Enumerate { budget: GuestInstructions },
     TraceSites { sites: BTreeMap<String, String>, #[serde(default)] reads: BTreeMap<String, Vec<SiteRead>>,
         #[serde(default)] task: TaskCapture, #[serde(default)] pauses: BTreeMap<String, u8> },
     TraceHits { from: usize, #[serde(default)] limit: Option<std::num::NonZeroUsize> },
@@ -367,6 +369,8 @@ enum RequestKind {
     List,
     NandExport,
     Transfer,
+    Cable,
+    Enumerate,
     TraceSites,
     TraceHits,
     TraceResume,
@@ -420,6 +424,8 @@ impl Request {
             Request::List => RequestKind::List,
             Request::NandExport { .. } => RequestKind::NandExport,
             Request::Transfer(_) => RequestKind::Transfer,
+            Request::Cable { .. } => RequestKind::Cable,
+            Request::Enumerate { .. } => RequestKind::Enumerate,
             Request::TraceSites { .. } => RequestKind::TraceSites,
             Request::TraceHits { .. } => RequestKind::TraceHits,
             Request::TraceResume { .. } => RequestKind::TraceResume,
@@ -1239,6 +1245,22 @@ impl Server {
             Request::Transfer(transfer) => {
                 let (count, payload) = self.bridge.transfer(&transfer)?;
                 json!({"count": count, "bytes": encode_hex(&payload)})
+            }
+            Request::Cable { connected } => {
+                let cable = self.bridge.machine.document.usb_cable.0.clone();
+                self.bridge.machine.session.logic_input(&cable, connected)?;
+                let usb = &self.bridge.machine.document.usb.0;
+                let actual = self.bridge.machine.session.usb_status(usb)?["connected"]
+                    .as_bool().ok_or("USB status lacks a boolean connected field")?;
+                json!({"usb_connected": actual, "instructions": self.bridge.machine.instructions()})
+            }
+            Request::Enumerate { budget: GuestInstructions(budget) } => {
+                if !(1..=MAX_SETTLE).contains(&budget) {
+                    return Err(format!("enumerate activation instructions must be 1..{MAX_SETTLE}"));
+                }
+                let (device, configuration) = self.bridge.enumerate_attached(budget)?;
+                json!({"device": encode_hex(&device), "configuration": encode_hex(&configuration),
+                    "instructions": self.bridge.machine.instructions()})
             }
             Request::TraceSites { sites, reads, task, pauses } => {
                 let mut normalized = BTreeMap::new();
@@ -2137,6 +2159,7 @@ mod tests {
         views: Option<WatchViews>,
         current_phase: Option<u8>,
         instructions: Option<u64>,
+        usb_connected: Option<bool>,
         intended_endpoint: Option<u64>,
         next: Option<CaptureCursor>,
         from: Option<CaptureCursor>,
@@ -2480,6 +2503,45 @@ mod tests {
         assert_ne!(identity(b"first").key(), identity(b"second").key());
         assert_eq!(identity(b"first").document()["committed_nand"], sha256(b"first"));
         assert!(identity(b"first").document()["adjustment_nand"].is_null());
+    }
+
+    #[test]
+    fn cable_round_trip_changes_modeled_connection_without_advancing_guest() {
+        let mut server = server(&[0xeaff_fffe]);
+        let before = (server.bridge.machine.instructions(), server.bridge.machine.session.board.now());
+        let (responses, receipt) = exchange(&mut server,
+            "{\"command\":\"cable\",\"connected\":true}\n{\"command\":\"cable\",\"connected\":false}\n{\"command\":\"cable\",\"connected\":true}\n{\"command\":\"finish\"}\n");
+        assert!(responses.iter().all(|response| response.ok));
+        assert_eq!(responses.iter().filter_map(|response| response.usb_connected).collect::<Vec<_>>(), [true, false, true]);
+        let usb = &server.bridge.machine.document.usb.0;
+        assert_eq!(server.bridge.machine.session.usb_status(usb).unwrap()["connected"].as_bool(), Some(true));
+        assert_eq!((server.bridge.machine.instructions(), server.bridge.machine.session.board.now()), before);
+        assert!(receipt.bridge_error.is_none());
+    }
+
+    #[test]
+    fn active_capture_refuses_cable_mutation() {
+        let mut server = server(&[0xeaff_fffe]);
+        let usb = server.bridge.machine.document.usb.0.clone();
+        let before = server.bridge.machine.session.usb_status(&usb).unwrap();
+        let (responses, receipt) = exchange(&mut server,
+            "{\"command\":\"capture-observation-begin\"}\n{\"command\":\"cable\",\"connected\":true}\n{\"command\":\"finish\"}\n");
+        assert_eq!(responses.iter().map(|response| response.ok).collect::<Vec<_>>(), [true, true, false, true]);
+        assert_eq!(server.bridge.machine.session.usb_status(&usb).unwrap(), before);
+        assert!(receipt.bridge_error.is_none());
+    }
+
+    #[test]
+    fn enumeration_refuses_out_of_bound_activation_without_advancing_guest() {
+        for budget in [0, MAX_SETTLE + 1] {
+            let mut server = server(&[0xeaff_fffe]);
+            let before = server.bridge.machine.instructions();
+            let (responses, receipt) = exchange(&mut server, &format!(
+                "{{\"command\":\"enumerate\",\"budget\":{budget}}}\n"));
+            assert_eq!(responses.iter().map(|response| response.ok).collect::<Vec<_>>(), [true, false]);
+            assert!(receipt.bridge_error.is_some());
+            assert_eq!(server.bridge.machine.instructions(), before);
+        }
     }
 
     #[test]

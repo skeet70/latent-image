@@ -11,6 +11,9 @@ extern crate service;
 #[cfg(rb_time_services_owned)]
 extern crate xm1_time_services;
 
+#[cfg(rb_image5_decoder_owned)]
+extern crate xm1_image5_decoder;
+
 #[cfg(rb_time_services_owned)]
 #[no_mangle]
 #[used]

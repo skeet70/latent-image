@@ -10,6 +10,7 @@ module FujiAF.RamPush
   , queryOutputAddress, configGateIndex, mailboxBytes
   , reviewedAllocationSize, installerAbiVersion, publicationCount, setupCount, activationCount
   , PayloadKind(..), Payload(..), bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, bankModalEnginePayload, bankModalRenderPayload, bankModalValuePayload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload, experimentHookCapacity, payloads, payloadOfSize, payloadPublicationCount, payloadEntries
+  , emulatorExperimentPayload
   , readRamPushManifest, parseRamPushManifest, readRamPushPrepublication, manifestPropertyCounts, readRamAllocState, readRetainedAllocation, readRamPushState
   , consumedMarkerPath, writeAllocStateFile, writeStateFile
   , ramAllocArguments, ramPushArguments, ramFreeArguments, ramUnloadArguments, ramRelinkArguments
@@ -379,6 +380,12 @@ experimentPayload name = Payload
       ]
   , payloadBankVariant = Nothing
   }
+
+-- | Admits the bounded playback entry replacements for host emulation.
+emulatorExperimentPayload :: String -> Payload
+emulatorExperimentPayload name =
+  let payload = experimentPayload name
+  in payload { payloadRelinkInputs = ("EXPERIMENT_ADMISSION", "emulator-only") : payloadRelinkInputs payload }
 
 payloads :: [Payload]
 payloads = [bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, bankModalEnginePayload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload ""]

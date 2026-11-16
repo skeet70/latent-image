@@ -1072,7 +1072,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         <*> pure (pinnedManifest pinned)
         <*> pure (pinnedAllowlist pinned)
         <*> (if experimental then Just <$> B.readFile (pinnedDirectory pinned </> "experiment.json") else pure Nothing)
-        <*> (if lifetimeGuarded then Just <$> (RelinkedModal
+        <*> (if lifetimeGuarded || experimental then Just <$> (RelinkedModal
           <$> (if scoped then B.readFile (pinnedDirectory pinned </> "modal-scope.json") else pure B.empty)
           <*> B.readFile (pinnedDirectory pinned </> "kernel.elf")) else pure Nothing)
         <*> (if isJust (payloadBankVariant selected)

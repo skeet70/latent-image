@@ -28,8 +28,15 @@ esac
 [[ -d "$OUT" && ! -L "$OUT" ]] || { printf 'output directory must exist\n' >&2; exit 1; }
 [[ -f "$EXPERIMENT/hooks.json" ]] || { printf 'no experiment at %s: it needs a hooks.json\n' "$EXPERIMENT" >&2; exit 1; }
 
+admission=()
+case "${EXPERIMENT_ADMISSION:-observe}" in
+  observe) ;;
+  emulator-only) admission=(--emulator-only) ;;
+  *) printf 'unknown experiment admission\n' >&2; exit 1 ;;
+esac
+
 read -r count setup activation abi < <("$BUILDER" --abi)
-"$BUILDER" --trampolines "$EXPERIMENT" "$STOCK_ID4" "$STOCK_ID5" "$STOCK_PLAIN" "$OUT/trampolines.S"
+"$BUILDER" "${admission[@]}" --trampolines "$EXPERIMENT" "$STOCK_ID4" "$STOCK_ID5" "$STOCK_PLAIN" "$OUT/trampolines.S"
 
 ARM=(--target=armv7r-none-eabi -march=armv7-r -marm -mfloat-abi=soft)
 FREE=(-ffreestanding -nostdlib -fno-builtin -mno-unaligned-access -fno-stack-protector)
@@ -80,4 +87,4 @@ NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" -nostdlib -static -fuse-ld=lld "--ld-
 "$OBJCOPY" -O binary "$OUT/kernel.elf" "$OUT/linked.bin"
 "$NM" --defined-only --numeric-sort "$OUT/kernel.elf" > "$OUT/kernel.syms"
 "$OBJDUMP" -d --triple=armv7-none-eabi "$OUT/kernel.elf" > "$OUT/kernel.disasm"
-"$BUILDER" "$BASE" "$OUT" "$OUT" "$EXPERIMENT" "$STOCK_ID4" "$STOCK_ID5" "$STOCK_PLAIN"
+"$BUILDER" "${admission[@]}" "$BASE" "$OUT" "$OUT" "$EXPERIMENT" "$STOCK_ID4" "$STOCK_ID5" "$STOCK_PLAIN"

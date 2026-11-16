@@ -288,6 +288,15 @@ xm1_rust_staticlib(
     visibility = ["//replacement/time_services:__pkg__"],
 )
 
+xm1_rust_staticlib(
+    name = "bank-image5-decoder",
+    src = "lib.rs",
+    crate_name = "bank",
+    rustc_flags = ["--cfg", "rb_image5_decoder_owned"],
+    rlib_deps = dict(_RLIB_DEPS, xm1_image5_decoder = "//replacement/image5_load:decoder-arm"),
+    visibility = ["//replacement/image5_load:__pkg__"],
+)
+
 rust_source_boundary_test(
     name = "unsafe-boundary-check",
     declaration = "unsafe-boundary.json",

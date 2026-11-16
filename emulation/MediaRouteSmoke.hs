@@ -5,10 +5,10 @@ module Main (main) where
 
 import Control.Applicative ((<|>))
 import Control.DeepSeq (NFData (..), force)
-import Control.Exception (Exception, IOException, SomeException, displayException, evaluate, throwIO, try)
+import Control.Exception (IOException, SomeException, displayException, evaluate, try)
 import Control.Monad (forM, forM_, unless, when)
 import qualified Crypto.Hash.SHA256 as SHA256
-import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', encode, fromJSON, object, toJSON, (.=))
+import Data.Aeson (FromJSON (..), Value (..), encode, fromJSON, object, toJSON, (.=))
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
@@ -24,16 +24,18 @@ import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Word (Word32, Word64, Word8)
+import Emulation.BridgeClient (Bridge (..), BridgeStopped (..), Fields, call, command, decodeHex, event, harness, num, objectAt, readMemory, require, send, textAt)
 import qualified Emulation.CaptureStream as CS
 import qualified Emulation.MediaInspection as MI
 import qualified Emulation.PlaybackDecode as PD
+import qualified Emulation.PlaybackOwned as PO
 import GHC.Generics (Generic)
 import Numeric (readHex, showHex)
 import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMissing, doesFileExist, doesPathExist, makeAbsolute)
 import System.Environment (getArgs, getEnvironment)
 import System.Exit (ExitCode (..), exitWith)
 import System.FilePath (takeDirectory, takeFileName, splitDirectories, (</>))
-import System.IO (Handle, IOMode (..), SeekMode (..), hClose, hFlush, hPutStrLn, hSeek, openBinaryFile, stderr, withBinaryFile)
+import System.IO (IOMode (..), SeekMode (..), hClose, hPutStrLn, hSeek, openBinaryFile, stderr, withBinaryFile)
 import System.Posix.Files (fileID, fileSize, getSymbolicLinkStatus, isRegularFile, modificationTimeHiRes)
 import System.Process (CreateProcess (..), StdStream (..), callProcess, createProcess, proc, waitForProcess)
 
@@ -85,6 +87,8 @@ data Options = Options
   , optRunDocumentSha :: Maybe Digest
   , optRamp :: Maybe RampRasterWidth
   , optCaptureObservation :: CaptureObservation
+  , optInstalled :: Maybe FilePath
+  , optOwnedPlayback :: Maybe FilePath
   }
 
 usage :: String
@@ -93,6 +97,7 @@ usage = unlines
   , "  [--checkpoints DIR] [--windows N] [--shoot-without-lens] [--card IMG] [--firmware DAT]"
   , "  [--installed-nand NAND] [--boot-rom ROM] [--run-document JSON [--run-document-sha256 HEX]]"
   , "  [--expect-ramp12-width N]"
+  , "  [--installed DIR --owned-playback PACKAGE_DIR] (requires --route play)"
   , "  [--capture-continuation-observation | --capture-second-filter-observation] (requires --route s1-s2 --windows 1)"
   , "Without --checkpoints the bridge uses private-data/emulator-checkpoints/xm1-ram-push-fujimod."
   , "It restores a matching keyed attach checkpoint or cold-boots and saves one."
@@ -103,12 +108,14 @@ parseOptions = go Nothing Nothing Nothing Nothing defaults
   where
     defaults = Options "" (Digest "") "private-data/scratch/issue117-camera-fixture/DSCF3095-DCIM.img"
       "private-data/firmware/x-m1-1.50/FWUP0002.DAT" "private-data/analysis/x-m1-1.50/stored-f7/emulation/inputs/f7-1.nand"
-      "private-data/analysis/x-m1-1.50/bootrom/bootrom-0x80000000-4000.bin" "" PlayRoute Nothing 12 False Nothing Nothing Nothing NoCaptureObservation
+      "private-data/analysis/x-m1-1.50/bootrom/bootrom-0x80000000-4000.bin" "" PlayRoute Nothing 12 False Nothing Nothing Nothing NoCaptureObservation Nothing Nothing
     hex v = length v == 64 && all (`elem` ("0123456789abcdef" :: String)) v
     go (Just sdk) (Just sha) (Just output) (Just route) o []
       | captureObservationEnabled (optCaptureObservation o) && (route /= ShutterSequenceRoute || optWindows o /= 1) =
           usageError "capture observation requires --route s1-s2 --windows 1"
-      | otherwise = pure o { optSdk = sdk, optBridgeSha = sha, optOutput = output, optRoute = route }
+      | otherwise = case PO.selection (route == PlayRoute) (optInstalled o) (optOwnedPlayback o) of
+          Left problem -> usageError problem
+          Right _ -> pure o { optSdk = sdk, optBridgeSha = sha, optOutput = output, optRoute = route }
     go _ _ _ _ _ [] = usageError "--sdk, --bridge-sha256, --output and --route are required"
     go _ h out r o ("--sdk" : v : rest) = go (Just v) h out r o rest
     go s _ out r o ("--bridge-sha256" : v : rest)
@@ -128,6 +135,8 @@ parseOptions = go Nothing Nothing Nothing Nothing defaults
     go s h out r o ("--card" : v : rest) = go s h out r o { optCard = v } rest
     go s h out r o ("--firmware" : v : rest) = go s h out r o { optFirmware = v } rest
     go s h out r o ("--installed-nand" : v : rest) = go s h out r o { optNand = v } rest
+    go s h out r o ("--installed" : v : rest) = go s h out r o { optInstalled = Just v } rest
+    go s h out r o ("--owned-playback" : v : rest) = go s h out r o { optOwnedPlayback = Just v } rest
     go s h out r o ("--boot-rom" : v : rest) = go s h out r o { optBootRom = v } rest
     go s h out r o ("--run-document" : v : rest) = go s h out r o { optRunDocument = Just (RunDocumentPath v) } rest
     go s h out r o ("--run-document-sha256" : v : rest)
@@ -162,17 +171,6 @@ cardBytes = 4294967296
 windowDial :: T.Text
 windowDial = "P"
 
--- Errors ------------------------------------------------------------------------------------
-
--- | A failed bridge command or closed transport.
-newtype BridgeStopped = BridgeStopped String deriving (Show)
-instance Exception BridgeStopped
-
-harness :: String -> IO a
-harness = ioError . userError
-
-require :: Bool -> String -> IO ()
-require ok message = unless ok (harness message)
 
 -- Hex, digests and little-endian fields ---------------------------------------------------
 
@@ -191,22 +189,6 @@ fileDigest path = Digest . hexBytes . SHA256.hashlazy <$> BL.readFile path
 digestText :: Digest -> String
 digestText (Digest d) = d
 
-decodeHex :: T.Text -> Either String B.ByteString
-decodeHex text
-  | odd (B.length raw) = Left "odd hex length"
-  | B.length decoded /= half = Left "invalid lowercase hex"
-  | otherwise = Right decoded
-  where
-    raw = TE.encodeUtf8 text
-    half = B.length raw `div` 2
-    decoded = fst (B.unfoldrN half step 0)
-    nibble w | w >= 48 && w <= 57 = Just (w - 48)
-             | w >= 97 && w <= 102 = Just (w - 87)
-             | otherwise = Nothing
-    step i = do
-      high <- nibble (B.index raw i)
-      low <- nibble (B.index raw (i + 1))
-      Just (high `shiftL` 4 .|. low, i + 2)
 
 le :: B.ByteString -> Int -> Int -> Word64
 le bytes offset width = foldr (\i acc -> acc `shiftL` 8 .|. fromIntegral (B.index bytes (offset + i))) 0 [0 .. width - 1]
@@ -219,71 +201,6 @@ parseHex32 text = case T.unpack text of
   '0' : 'x' : digits | [(value, "")] <- readHex digits -> Just value
   _ -> Nothing
 
--- JSON ----------------------------------------------------------------------------------------
-
-type Fields = KM.KeyMap Value
-
-num :: FromJSON a => K.Key -> Fields -> Maybe a
-num field fields = KM.lookup field fields >>= \value -> case fromJSON value of
-  A.Success x -> Just x
-  A.Error _ -> Nothing
-
-textAt :: K.Key -> Fields -> Maybe T.Text
-textAt field fields = case KM.lookup field fields of
-  Just (String t) -> Just t
-  _ -> Nothing
-
-objectAt :: K.Key -> Fields -> Maybe Fields
-objectAt field fields = case KM.lookup field fields of
-  Just (Object o) -> Just o
-  _ -> Nothing
-
-asObject :: Value -> Either String Fields
-asObject (Object o) = Right o
-asObject _ = Left "bridge line is not an object"
-
--- Bridge client -------------------------------------------------------------------------------
-
-data Bridge = Bridge
-  { bridgeIn :: Handle
-  , bridgeReader :: CS.BoundedReader
-  , bridgeRequests :: Handle
-  , bridgeStdout :: Handle
-  }
-
-send :: Bridge -> Value -> IO ()
-send bridge value = do
-  let line = BL.toStrict (encode value) <> "\n"
-  B.hPut (bridgeRequests bridge) line >> hFlush (bridgeRequests bridge)
-  B.hPut (bridgeIn bridge) line >> hFlush (bridgeIn bridge)
-
-receive :: Bridge -> IO B.ByteString
-receive bridge = do
-  line <- CS.readBoundedLine (bridgeReader bridge)
-  B.hPut (bridgeStdout bridge) (line <> "\n") >> hFlush (bridgeStdout bridge)
-  pure line
-
--- | One request and its one reply; ok:false or a closed pipe throws 'BridgeStopped'.
-call :: Bridge -> Value -> IO Fields
-call bridge value = do
-  exchanged <- try (send bridge value >> receive bridge)
-  line <- either (\e -> throwIO (BridgeStopped ("bridge pipe: " ++ displayException (e :: IOException)))) pure exchanged
-  fields <- either (\e -> harness ("invalid bridge reply: " ++ e)) pure (eitherDecodeStrict' line >>= asObject)
-  case KM.lookup "ok" fields of
-    Just (Bool True) -> pure (KM.delete "ok" fields)
-    Just (Bool False) -> throwIO (BridgeStopped (maybe "bridge error without message" T.unpack (textAt "message" fields)))
-    _ -> harness "bridge reply lacks boolean ok"
-
-command :: T.Text -> [(K.Key, Value)] -> Value
-command name rest = Object (KM.fromList (("command", String name) : rest))
-
-event :: Bridge -> T.Text -> IO Fields
-event bridge name = do
-  line <- receive bridge
-  fields <- either (\e -> harness ("invalid bridge event: " ++ e)) pure (eitherDecodeStrict' line >>= asObject)
-  require (KM.lookup "ok" fields == Just (Bool True) && textAt "event" fields == Just name)
-    ("bridge did not send " ++ T.unpack name ++ ": " ++ C.unpack line)
-  pure fields
 
 -- Journal -------------------------------------------------------------------------------------
 
@@ -1238,13 +1155,6 @@ ledgerValue ledger = object
 physicalAddress :: Word32 -> Word32
 physicalAddress = PD.physical
 
-readMemory :: Bridge -> Word32 -> Int -> IO B.ByteString
-readMemory bridge address count = do
-  require (count > 0 && count <= 4096 && toInteger address + toInteger count <= 0x100000000) "read-memory range exceeds page or address bound"
-  reply <- call bridge (command "read-memory" ["address" .= address, "count" .= count])
-  bytes <- either (harness . ("read-memory: " ++)) pure (maybe (Left "missing bytes") decodeHex (textAt "bytes" reply))
-  require (B.length bytes == count) "read-memory returned a different length"
-  pure bytes
 
 readGuest :: Bridge -> Word32 -> Int -> IO B.ByteString
 readGuest bridge address count = do
@@ -1525,8 +1435,8 @@ newFiles directory before after = fmap concat . forM (viewFolders after) $ \fold
                   , "extents" .= map extentValue (extentsOf (viewVolume after) clusters)
                   , "sha256" .= digestText (digest bytes), "soi" .= soi, "eoi" .= eoi, "fujifilm_in_first_64k" .= fujifilm ]))
 
-runRoute :: Options -> FilePath -> FilePath -> Bridge -> Journal -> Observed -> IO ()
-runRoute options directory original bridge journal observed = do
+runRoute :: Options -> Maybe PO.Package -> IORef (Maybe PO.Witness) -> FilePath -> FilePath -> Bridge -> Journal -> Observed -> IO ()
+runRoute options owned ownedWitness directory original bridge journal observed = do
   let route = optRoute options
       sites = routeSites route ++ (if route == PlayRoute then decodeObservationSites else [])
   _ <- call bridge (command "trace-sites" ["sites" .= object [K.fromString (hex32 (siteAddress s)) .= siteLabel s | s <- sites]])
@@ -1581,6 +1491,12 @@ runRoute options directory original bridge journal observed = do
     writeIORef (obsCapture observed) (Just (CaptureProgress (CS.startCoverage at) Nothing CS.initialCursor False))
     _ <- captureObservationHits bridge journal observed
     pure ()
+  ownedAck <- forM owned $ \package -> do
+    checkOwnedGuest bridge journal package
+    armed <- call bridge (PO.watchRequest package)
+    either harness pure (PO.validateWatchBegin package (Object armed))
+    note journal "owned-playback-watch-begin" (Object armed)
+    pure (Object armed)
   when (route == PlayRoute) $ do
     _ <- call bridge (command "trace-sites"
       [ "sites" .= object [K.fromString (hex32 (siteAddress s)) .= siteLabel s | s <- sites]
@@ -1644,6 +1560,15 @@ runRoute options directory original bridge journal observed = do
   when (route == PlayRoute) $ do
     ended <- call bridge (command "trace-sites" ["sites" .= object [K.fromString (hex32 (siteAddress s)) .= siteLabel s | s <- sites]])
     note journal "playback-observation-ended" (Object ended)
+  forM_ (zip (maybe [] pure owned) (maybe [] pure ownedAck)) $ \(package, ack) -> do
+    checkOwnedGuest bridge journal package
+    state <- call bridge (command "watch-state" [])
+    note journal "owned-playback-watch-state" (Object state)
+    ended <- call bridge (command "watch-end" [])
+    note journal "owned-playback-watch-end" (Object ended)
+    result <- either harness pure (PO.witness package ack (Object state) (Object ended))
+    writeIORef ownedWitness (Just result)
+    note journal "owned-playback-witness" (PO.witnessValue result)
   writeIORef (obsSdFinal observed) (Just final)
   ledger <- readIORef (obsLedger observed)
   note journal "trace-ledger" (ledgerValue ledger)
@@ -1894,9 +1819,25 @@ freshOutput supplied = do
 writeJson :: FilePath -> Value -> IO ()
 writeJson path value = BL.writeFile path (encode value <> "\n")
 
+checkOwnedGuest :: Bridge -> Journal -> PO.Package -> IO ()
+checkOwnedGuest bridge journal package = do
+  actual <- forM (PO.guestArtifacts package) $ \(address, expected) -> do
+    bytes <- B.concat <$> mapM (\offset -> readMemory bridge (address + fromIntegral offset) (min 4096 (B.length expected - offset))) [0,4096 .. B.length expected - 1]
+    pure (address, bytes)
+  note journal "owned-playback-artifact-comparison" (object
+    [ "artifacts" .= [object ["address" .= hex32 address, "expected_hex" .= hexBytes expected, "actual_hex" .= hexBytes bytes]
+      | ((address,expected),(_,bytes)) <- zip (PO.guestArtifacts package) actual]
+    , "installer_scalar_contract" .= ("menu/ram_push_abi.h ABI 7; menu/ram_push_installer.c completed installation reports, no pointer fields" :: T.Text) ])
+  either harness pure (PO.checkGuestArtifacts package actual)
+  bodies <- forM (PO.originalBodies package) $ \(address, count) -> readMemory bridge address count
+  either harness pure (PO.checkOriginalBodies package bodies)
+
 main :: IO ()
 main = do
   options <- getArgs >>= parseOptions
+  selection <- either harness pure (PO.selection (optRoute options == PlayRoute) (optInstalled options) (optOwnedPlayback options))
+  owned <- mapM PO.loadPackage selection
+  ownedWitness <- newIORef Nothing
   directory <- freshOutput (optOutput options)
   card <- makeAbsolute (optCard options)
   firmware <- makeAbsolute (optFirmware options)
@@ -1951,10 +1892,16 @@ main = do
   outcome <- try $ do
     startOptions <- event bridge "start-options"
     note journal "start-options" (Object startOptions)
-    send bridge (object ["command" .= ("start" :: T.Text), "installed" .= Null])
+    start <- case owned of
+      Nothing -> pure (object ["command" .= ("start" :: T.Text), "installed" .= Null])
+      Just (selected, package) -> do
+        record <- B.readFile (PO.installedDirectory selected </> "ram-push-install.json")
+        either harness pure (PO.validateInstalled selected package record (Object startOptions))
+    send bridge start
     ready <- event bridge "ready"
+    forM_ owned $ \(selected, _) -> either harness pure (PO.validateReady selected start (Object ready))
     note journal "ready" (object ["checkpoint" .= KM.lookup "checkpoint" ready, "pre_attach" .= KM.lookup "pre_attach" ready])
-    stopped <- try (runRoute options directory card bridge journal observed)
+    stopped <- try (runRoute options (snd <$> owned) ownedWitness directory card bridge journal observed)
     case stopped of
       Left (BridgeStopped message) -> do
         writeIORef (obsStop observed) (Just message)
@@ -1999,7 +1946,17 @@ main = do
     _ -> pure ()
   originalAfter <- cardStat card
   originalShaAfter <- fileDigest card
-  (findings, stopped) <- verdict (optRoute options) (optShootWithoutLens options) observed
+  (routeFindings, routeStopped) <- verdict (optRoute options) (optShootWithoutLens options) observed
+  pairWitness <- readIORef ownedWitness
+  let ownedFindings = case owned of
+        Nothing -> []
+        Just _ -> [Judged (Finding name Gate (maybe False predicate pairWitness) (maybe Null PO.witnessValue pairWitness)
+          "installed package bytes and loss-accounted SDK execution watch")
+          (if maybe False predicate pairWitness then Nothing else Just "owned entry unobserved in the bounded PLAY interval")
+          | (name, predicate) <- [("owned-playback-source-entry", PO.sourceObserved), ("owned-playback-mode-entry", PO.modeObserved)]]
+      findings = routeFindings ++ ownedFindings
+      stopped = routeStopped <|> (if null ownedFindings || maybe False (\w -> PO.sourceObserved w && PO.modeObserved w) pairWitness
+        then Nothing else Just (GateName "owned-playback-pair-unobserved"))
   ledger <- readIORef (obsLedger observed)
   recoveredCount <- readIORef (obsRecovered observed)
   captureProgress <- readIORef (obsCapture observed)
@@ -2018,7 +1975,7 @@ main = do
         _ -> Nothing
   note journal "bridge-exit" (toJSON (show exit))
   CS.closeJournal journal
-  writeJson (directory </> "result.json") (object
+  writeJson (directory </> "result.json") (object $
     [ "schema" .= (1 :: Int)
     , "scope" .= ("emulated X-M1 1.50 stock " ++ routeName (optRoute options) ++ " route on the granted FujiMod SDK; diagnostic reachability, not acceptance"
         ++ (case optRoute options of
@@ -2047,7 +2004,12 @@ main = do
     , "card_original_unchanged" .= unchanged
     , "card_original_sha256_before" .= digestText originalShaBefore
     , "card_original_sha256_after" .= digestText originalShaAfter
-    , "media_inspection_reports" .= (["media-inspection-before.json", "media-inspection-after.json"] :: [T.Text]) ])
+    , "media_inspection_reports" .= (["media-inspection-before.json", "media-inspection-after.json"] :: [T.Text]) ]
+    ++ [ "owned_playback" .= object
+        ["installed" .= PO.installedDirectory selected, "package" .= PO.packageDirectory selected
+        , "witness" .= fmap PO.witnessValue pairWitness
+        , "integrated_pair" .= maybe False (\w -> PO.sourceObserved w && PO.modeObserved w) pairWitness
+        , "whole_playback_acceptance" .= False] | (selected, _) <- maybe [] pure owned ])
   forM_ findings $ \(Judged f unknown) -> putStrLn
     ((if isJust unknown then "unknown " else if findingHolds f then "holds " else "fails ")
       ++ (if findingRole f == Gate then "gate    " else "context ") ++ T.unpack (findingName f))
