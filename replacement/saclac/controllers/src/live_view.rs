@@ -18,6 +18,8 @@ pub enum Signal<'a> {
     Suspend,
     /// End the pause `Suspend` began.
     Resume,
+    /// Bind live processing to services which are already running.
+    ResumeLive,
     /// Root quiesces live processing for S1.
     SuspendLive,
     /// The separate block-0x2a configuration, not queue Command24.
@@ -31,6 +33,8 @@ pub enum Signal<'a> {
 /// The live statistics configuration's controls.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StatisticsControl {
+    /// Bind the already-running statistics actor.
+    BindRunning,
     /// Begin once measurement and the view are configured.
     Begin,
     Stop,
@@ -205,6 +209,8 @@ impl Ready {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum State {
     Idle,
+    /// Waiting for the first live accessor tick after binding.
+    ResumePending,
     /// Idle with a statistics or measurement change outstanding.
     IdleBusy,
     /// The view start or restore is outstanding.
@@ -254,6 +260,7 @@ impl State {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Event {
+    ResumeLive,
     Suspend,
     Resume,
     SuspendLive,
@@ -290,6 +297,7 @@ enum Event {
     StatisticsSelection,
     StatisticsSettled,
     Windowed,
+    MeasurementTick,
     OtherImage,
     Statistics77,
     Statistics,
@@ -302,6 +310,7 @@ impl Event {
         match signal {
             Signal::Suspend => Self::Suspend,
             Signal::Resume => Self::Resume,
+            Signal::ResumeLive => Self::ResumeLive,
             Signal::SuspendLive => Self::SuspendLive,
             Signal::RefreshDeferred => Self::RefreshDeferred,
             Signal::Cancel => Self::Other,
@@ -342,10 +351,11 @@ impl Event {
                 C::Statistics82 => Self::StatisticsSettled,
                 C::Image65 => Self::Windowed,
                 C::Statistics77 => Self::Statistics77,
-                C::Image45 | C::Image46 | C::Image47 | C::Accessor4b | C::Image4c | C::Image4d | C::Image4e
-                | C::Image4f | C::Image50 | C::Image51 | C::Image52 | C::Image53 | C::Image57 | C::Image58
-                | C::Image59 | C::Image5a | C::Image5b | C::Image5c | C::Image5d | C::Image5e | C::Image5f
-                | C::Image60 | C::Image61 | C::Image62 | C::Image64 | C::Image66 => Self::OtherImage,
+                C::Accessor4b => Self::MeasurementTick,
+                C::Image45 | C::Image46 | C::Image47 | C::Image4c | C::Image4d | C::Image4e | C::Image4f
+                | C::Image50 | C::Image51 | C::Image52 | C::Image53 | C::Image57 | C::Image58 | C::Image59
+                | C::Image5a | C::Image5b | C::Image5c | C::Image5d | C::Image5e | C::Image5f | C::Image60
+                | C::Image61 | C::Image62 | C::Image64 | C::Image66 => Self::OtherImage,
                 C::Statistics69 | C::Statistics6b | C::Statistics6c | C::Statistics6d | C::Statistics6e
                 | C::Statistics6f | C::Statistics70 | C::Statistics71 | C::Statistics72 | C::Statistics73
                 | C::Statistics75 | C::Statistics76 | C::Statistics78 | C::Statistics79 | C::Statistics7a
@@ -516,6 +526,8 @@ impl Controller {
         use Event as E;
         use State as S;
         match (self.state, event) {
+            (S::Idle, E::ResumeLive) => { self.state = S::ResumePending; Outcome::Complete }
+            (S::Idle, E::MeasurementTick) => Outcome::Complete,
             (S::Idle, E::SuspendLive | E::Suspend | E::Resume | E::LensControl) => Outcome::Complete,
             (S::Idle, E::Capture) => {
                 self.begin(&mut call);
@@ -661,7 +673,7 @@ impl Controller {
                 self.after_start(true, &mut call)
             }
             (S::Starting, E::Restored) => self.after_start(false, &mut call),
-            (S::Sequencing, E::OtherImage | E::Calculation | E::Other) => match call.forward_sequence() {
+            (S::Sequencing, E::OtherImage | E::MeasurementTick | E::Calculation | E::Other) => match call.forward_sequence() {
                 Outcome::Complete => self.after_start(true, &mut call),
                 outcome => outcome,
             },
@@ -836,7 +848,7 @@ impl Controller {
                     measured => measured.outcome(),
                 }
             }
-            (S::Running | S::Reconfiguring | S::AutofocusRetune | S::Adjusting | S::Retuning, E::OtherImage)
+            (S::Running | S::Reconfiguring | S::AutofocusRetune | S::Adjusting | S::Retuning, E::OtherImage | E::MeasurementTick)
             | (S::Running | S::Suspending | S::Resuming | S::Measuring | S::Restarting, E::MeasurementForward) => {
                 call.forward_measurement().outcome()
             }
@@ -861,8 +873,8 @@ impl Controller {
                 Outcome::Complete
             }
             (S::Resuming, E::ViewResumed) => { self.state = S::Running; Outcome::Complete }
-            (S::Suspending | S::RetuneSuspending | S::SuspendRetune, E::OtherImage) => self.after_measurement(ViewRequest::Suspend, &mut call),
-            (S::Resuming | S::ResumeRetune | S::RetuneResuming, E::OtherImage) => self.after_measurement(ViewRequest::Resume, &mut call),
+            (S::Suspending | S::RetuneSuspending | S::SuspendRetune, E::OtherImage | E::MeasurementTick) => self.after_measurement(ViewRequest::Suspend, &mut call),
+            (S::Resuming | S::ResumeRetune | S::RetuneResuming, E::OtherImage | E::MeasurementTick) => self.after_measurement(ViewRequest::Resume, &mut call),
             (S::Suspending | S::RetuneSuspending | S::SuspendRetune, E::Calculation) => self.paused_calculation(ViewRequest::Suspend, &mut call),
             (S::Resuming | S::ResumeRetune | S::RetuneResuming, E::Calculation) => self.paused_calculation(ViewRequest::Resume, &mut call),
             (S::RetuneSuspending, E::Statistics77 | E::Statistics) => self.retuned(S::Suspending, &mut call),
@@ -928,7 +940,7 @@ impl Controller {
                 if outcome == StatisticsOutcome::Complete { self.state = S::Running; }
                 outcome.outcome()
             }
-            (S::Measuring, E::OtherImage) => {
+            (S::Measuring, E::OtherImage | E::MeasurementTick) => {
                 let measured = call.forward_measurement();
                 if measured == Measured::Complete { self.state = S::Running; }
                 measured.outcome()
@@ -943,7 +955,7 @@ impl Controller {
                 Measured::Waiting => Outcome::Pending,
                 measured => measured.outcome(),
             },
-            (S::Restarting | S::Stopping, E::OtherImage | E::Calculation) => match call.forward_measurement() {
+            (S::Restarting | S::Stopping, E::OtherImage | E::MeasurementTick | E::Calculation) => match call.forward_measurement() {
                 Measured::Complete => { self.halted(Halted::Measurement, &mut call); Outcome::Pending }
                 measured => measured.outcome(),
             },
@@ -1024,7 +1036,8 @@ impl Controller {
                 }
                 outcome.outcome()
             }
-            (S::Configuring | S::StoppingForRefresh | S::StoppingForAutofocus, E::OtherImage)
+            (S::ResumePending, E::MeasurementTick) => self.resume_live(&mut call),
+            (S::Configuring | S::StoppingForRefresh | S::StoppingForAutofocus, E::OtherImage | E::MeasurementTick)
             | (S::Refreshing | S::RefreshingForAutofocus, E::Accessor)
             | (S::StoppingForAutofocus | S::RefreshingForAutofocus | S::Restoring, E::Statistics77 | E::Statistics) => Outcome::Pending,
             (S::Restoring, E::Restored) | (S::Windowing, E::Windowed) => {
@@ -1104,6 +1117,20 @@ impl Controller {
         let direct = call.condition(Condition::DirectStart);
         call.effect(Effect::Hold);
         call.view(if direct { ViewRequest::Start { measured } } else { ViewRequest::Refresh(self.motion) });
+    }
+
+    fn resume_live<P: Port>(&mut self, call: &mut Call<'_, '_, '_, P>) -> Outcome {
+        if call.statistics(StatisticsControl::BindRunning) != StatisticsOutcome::Complete {
+            return Outcome::Fault;
+        }
+        match call.measurement(MeasurementControl::Initialize) {
+            Measured::Complete => {
+                self.state = State::Running;
+                self.measured = true;
+                call.forward_measurement().outcome()
+            }
+            measured => measured.outcome(),
+        }
     }
 
     fn restart_view<P: Port>(&mut self, next: State, call: &mut Call<'_, '_, '_, P>) -> Outcome {

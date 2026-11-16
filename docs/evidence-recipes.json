@@ -2480,9 +2480,9 @@
   }
   ,{
     "id": "E-SACLAC-CENSUS-RESET-HISTORY-150",
-    "claim": "Census board-clock post-boot routes compose independent stock boot/route schedules with checked TickSchedule::followed_by and attach shared pending-context/raw observation before reset startup. Author-run stock half-press executed from origin {{origin_tick}}/{{origin_instructions}} without checkpoint restoration. At boot boundary tick{{boundary_tick}}, raw ordinal{{boot_raw}} and context ordinal{{boot_events}} retain{{pending}} pending calls. The complete observation preserves{{raw_events}}/{{raw_lines}} recorded raw hits/lines and{{context_events}}/{{context_lines}} projected events/lines, with{{route_raw}} route raw hits. Stock action extents fetched{{action_fetches}} instructions; native exit{{native_exit}}, current native build/test gate exit{{gate_exit}}.",
-    "scope": "X-M1 1.50 original DAT{{firmware_sha256}}, fixed-RTC host emulator and stock-only producer smoke. The selected context declaration covers application Time tasks6/9. No owned Root image, RTOS-timer coverage, stock/owned pending-context equivalence, camera operation or whole-saclac acceptance is established.",
-    "notes": "Author-run evidence, not independent review. The observer was built from the uncommitted Census batch on63927d043; each census inputs binds the actual executable, not HEAD alone. Two pending queue receives are not empty-queue proof. Whole-root qualification still requires all relevant timer/queue/in-flight declarations, original independent bounds, raw-difference retention and first-causal-difference reduction where needed, plus the actual contiguous owned image and executed wrong variant. Producer raw/interface state stays continuous across the drained boundary; raw-hit budgets remain500000 separately for boot and route. Working raw streams expire under run-output; this record binds the checked result facts.",
+    "claim": "Census board-clock post-boot routes compose independent stock boot/route schedules with checked TickSchedule::followed_by and attach shared pending-context/raw observation before reset startup. Author-run stock half-press executed from origin {{origin_tick}}/{{origin_instructions}} without checkpoint restoration. At boot boundary tick{{boundary_tick}}, raw ordinal{{boot_raw}} and context ordinal{{boot_events}} retain{{pending}} pending calls. The complete observation preserves{{raw_events}}/{{raw_lines}} recorded raw hits/lines and{{context_events}}/{{context_lines}} projected events/lines, with{{route_raw}} route raw hits. Stock action extents fetched{{action_fetches}} instructions; native exit{{native_exit}}, current native build/test gate exit{{gate_exit}}. The later ordered stock/contiguous-Root/wrong-driver-store run executed the owned image for{{root_owned_instructions}} instructions and returned gate exit{{root_gate_exit}} with verdict {{root_verdict}}: first channel difference {{root_channel}} occurrence{{root_occurrence}}, stock operation{{root_stock_operation}} from sender{{root_stock_sender}}, owned absent. The run detected the wrong variant ({{root_wrong_detected}}) and kept execution inside declared subsystem extents ({{root_extents}}) for candidate{{root_image_sha256}}.",
+    "scope": "X-M1 1.50 original DAT{{firmware_sha256}}, fixed-RTC host emulator, the compatible ordered half-press schedules, contiguous owned Root candidate{{root_image_sha256}} and its wrong-driver-store control. It establishes the observed first interface difference and control detection, not interface equality, RTOS-timer coverage, camera operation, capture/playback heap headroom or whole-saclac acceptance.",
+    "notes": "Author-run evidence, not independent review. The original observer was built from the uncommitted Census batch on63927d043; every census inputs file binds the actual executable. Two pending queue receives are not empty-queue proof. The ordered run used one qualified wrapper lease with eligibility2, native jobs1 and total full-system budget2; its verdict reports causal_violation null but no stock-equivalent wake provider in owned: peer queues47/48 and wake request/post channels44/45 are absent. This is a retained causal blocker, not an observer waiver. Producer raw/interface state stays continuous across the drained boundary; raw-hit budgets remain500000 separately for boot and route. Working raw streams expire under run-output; this record binds the checked result facts.",
     "artifacts": [
       "private-data/scratch/SaclacRoot/runs/20261114T212829Z-root4-census-raw-context-preparation/result/gate.log",
       "private-data/scratch/SaclacRoot/runs/20261114T211420Z-root4-census-stock-prepare-clock/result/census.json",
@@ -2491,7 +2491,15 @@
       "private-data/scratch/SaclacRoot/runs/20261114T211840Z-root4-census-stock-halfpress-clock/result/route-schedule.json",
       "private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/census.json",
       "private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/stream-counts.txt",
-      "private-data/scratch/SaclacRoot/runs/20261114T220315Z-root4-census-clock-admission/result/cases.jsonl"
+      "private-data/scratch/SaclacRoot/runs/20261114T220315Z-root4-census-clock-admission/result/cases.jsonl",
+      "private-data/scratch/SaclacRoot/runs/20261116T094604Z-root-wake-decoder-continuous-authentic/result/inputs.sha256",
+      "private-data/scratch/SaclacRoot/runs/20261116T094604Z-root-wake-decoder-continuous-authentic/result/lease.txt",
+      "private-data/scratch/SaclacRoot/runs/20261116T094604Z-root-wake-decoder-continuous-authentic/result/stock.census.json",
+      "private-data/scratch/SaclacRoot/runs/20261116T094604Z-root-wake-decoder-continuous-authentic/result/owned.census.json",
+      "private-data/scratch/SaclacRoot/runs/20261116T094604Z-root-wake-decoder-continuous-authentic/result/wrong.census.json",
+      "private-data/scratch/SaclacRoot/runs/20261116T101032Z-root-wake-decoder-continuous-authentic-compare/result/interface-report.json",
+      "private-data/scratch/SaclacRoot/runs/20261116T101032Z-root-wake-decoder-continuous-authentic-compare/result/interface-verdict.json",
+      "private-data/scratch/SaclacRoot/runs/20261116T101032Z-root-wake-decoder-continuous-authentic-compare/result/gate-verdict.json"
     ],
     "facts": [
       {"name":"firmware_sha256","path":"private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/census.json","pointer":["inputs","1","sha256"]},
@@ -2510,7 +2518,17 @@
       {"name":"context_events","path":"private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/census.json","pointer":["context","events"]},
       {"name":"context_lines","path":"private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/verdict.json","pointer":["context_lines"]},
       {"name":"route_raw","path":"private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/census.json","pointer":["context","raw_phase_events"]},
-      {"name":"action_fetches","path":"private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/verdict.json","pointer":["action_extent_fetches"]}
+      {"name":"action_fetches","path":"private-data/scratch/SaclacRoot/runs/20261114T213820Z-root4-census-board-stock-continuous/result/verdict.json","pointer":["action_extent_fetches"]},
+      {"name":"root_owned_instructions","path":"private-data/scratch/SaclacRoot/runs/20261116T094604Z-root-wake-decoder-continuous-authentic/result/owned.census.json","pointer":["instructions"]},
+      {"name":"root_gate_exit","path":"private-data/scratch/SaclacRoot/runs/20261116T101032Z-root-wake-decoder-continuous-authentic-compare/result/gate-verdict.json","pointer":["exit_status"]},
+      {"name":"root_verdict","path":"private-data/scratch/SaclacRoot/runs/20261116T101032Z-root-wake-decoder-continuous-authentic-compare/result/interface-verdict.json","pointer":["verdict"]},
+      {"name":"root_channel","path":"private-data/scratch/SaclacRoot/runs/20261116T101032Z-root-wake-decoder-continuous-authentic-compare/result/interface-verdict.json","pointer":["channel_difference","channel"]},
+      {"name":"root_occurrence","path":"private-data/scratch/SaclacRoot/runs/20261116T101032Z-root-wake-decoder-continuous-authentic-compare/result/interface-verdict.json","pointer":["channel_difference","occurrence"]},
+      {"name":"root_stock_operation","path":"private-data/scratch/SaclacRoot/runs/20261116T101032Z-root-wake-decoder-continuous-authentic-compare/result/interface-verdict.json","pointer":["channel_difference","stock","operation"]},
+      {"name":"root_stock_sender","path":"private-data/scratch/SaclacRoot/runs/20261116T101032Z-root-wake-decoder-continuous-authentic-compare/result/interface-verdict.json","pointer":["channel_difference","stock","sender"]},
+      {"name":"root_wrong_detected","path":"private-data/scratch/SaclacRoot/runs/20261116T101032Z-root-wake-decoder-continuous-authentic-compare/result/interface-verdict.json","pointer":["conditions","1","met"]},
+      {"name":"root_extents","path":"private-data/scratch/SaclacRoot/runs/20261116T101032Z-root-wake-decoder-continuous-authentic-compare/result/interface-verdict.json","pointer":["conditions","0","met"]},
+      {"name":"root_image_sha256","path":"private-data/scratch/SaclacRoot/runs/20261116T101032Z-root-wake-decoder-continuous-authentic-compare/result/interface-verdict.json","pointer":["image_sha256"]}
     ]
   }
   ,{

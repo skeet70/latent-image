@@ -134,6 +134,29 @@ fn running(peers: &mut Peers) -> Live {
 }
 
 #[test]
+fn idle_accessor_tick_is_consumed_without_starting_measurement() {
+    let mut peers = Peers::new();
+    let mut live = Live::new();
+    assert_eq!(live.send(completed(C::Accessor4b), &mut peers), Outcome::Complete);
+    assert_eq!(peers.take(), []);
+}
+
+#[test]
+fn resumed_live_services_initialize_measurement_on_the_first_accessor_tick() {
+    let mut peers = Peers::new();
+    peers.measurement.extend([ChildOutcome::Complete, ChildOutcome::Pending]);
+    let mut live = Live::new();
+    assert_eq!(live.send(Signal::ResumeLive, &mut peers), Outcome::Complete);
+    assert_eq!(peers.take(), []);
+    assert_eq!(live.send(completed(C::Accessor4b), &mut peers), Outcome::Pending);
+    assert_eq!(peers.take(), [
+        Seen::Statistics(Stat::Control(StatisticsControl::BindRunning)),
+        Seen::Measurement(Meas::Control(MeasurementControl::Initialize)),
+        Seen::Measurement(Meas::Completed(C::Accessor4b)),
+    ]);
+}
+
+#[test]
 fn primary_profile_starts_the_view_then_configures_measurement_and_statistics() {
     let mut peers = Peers::new();
     let mut live = Live::new();

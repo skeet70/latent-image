@@ -36,6 +36,7 @@ impl<M: CommandSource + Clone, R: Memory, E: StockEntries,
         match input {
             Input::Message(Message::Command(command)) => self.view(Signal::Command(command), record),
             Input::Message(Message::Completed(done)) => self.view(Signal::Completed(done), record),
+            Input::Control(Control::ResumeLive) => self.view(Signal::ResumeLive, record),
             Input::Control(Control::SuspendLive) => self.view(Signal::SuspendLive, record),
             Input::Control(Control::Cancel) => self.view(Signal::Cancel, record),
             _ => { self.fault(); Outcome::Fault }

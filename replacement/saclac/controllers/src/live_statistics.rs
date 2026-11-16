@@ -189,7 +189,7 @@ impl<'a> Event<'a> {
             StatisticsCall::Forward(Signal::Completed(completed)) => Self::Completed(completed.completion, completed.parameters),
             StatisticsCall::Forward(Signal::Suspend) => Self::Control(StatisticsControl::Suspend),
             StatisticsCall::Forward(Signal::Resume) => Self::Control(StatisticsControl::Resume),
-            StatisticsCall::Forward(Signal::SuspendLive | Signal::RefreshDeferred | Signal::Cancel) => Self::Other,
+            StatisticsCall::Forward(Signal::ResumeLive | Signal::SuspendLive | Signal::RefreshDeferred | Signal::Cancel) => Self::Other,
         }
     }
 
@@ -294,6 +294,14 @@ impl LiveStatistics {
         use StatisticsControl as Ctl;
         use StatisticsOutcome as O;
         let outcome = match (self.state, event) {
+            (S::Idle, Event::Control(Ctl::BindRunning)) => {
+                self.owed = None;
+                self.groups = Groups { processing: false, geometry: false, measurement: false };
+                self.captured = false;
+                self.shot_idle = true;
+                self.state = if call.condition(Condition::Selected) { S::RunningSelected } else { S::Running };
+                O::Complete
+            }
             (S::Idle, Event::Control(Ctl::Begin)) => {
                 self.owe(event);
                 if call.condition(Condition::StartNeeded) && call.condition(Condition::PrimaryApplied) {

@@ -39,11 +39,11 @@ renderLinkerScript = case (entries, extents) of
     [ "ENTRY(" ++ entryVeneer firstEntry ++ ")"
     , ""
     , "/* Generated from Replacement.Saclac.Artifact.extents. */"
-    , "EXTERN(XM1_KERNEL_BOUNDARY XM1_SACLAC_TASK_STACK XM1_SACLAC_CONSTRUCTOR_STACK xm1_saclac_create_task)"
+    , "EXTERN(XM1_KERNEL_BOUNDARY XM1_SACLAC_TASK_STACK XM1_SACLAC_CONSTRUCTOR_STACK xm1_saclac_create_task XM1_DECODER_STATE xm1_decoder_init xm1_decoder_feed xm1_decoder_progress xm1_decoder_complete xm1_decoder_finish)"
     ]
       ++ [ retainedName external ++ " = " ++ hexAddress (retainedAddress external) ++ ";"
          | external <- retainedExternals ++ retainedData,
-           "xm1_kernel_" `isPrefixOf` retainedName external || "__saclac_runtime_" `isPrefixOf` retainedName external
+           any (`isPrefixOf` retainedName external) ["xm1_kernel_", "xm1_decoder_", "__saclac_runtime_"]
          ]
       ++ [ "MEMORY {"
     ]
@@ -64,7 +64,7 @@ renderLinkerScript = case (entries, extents) of
             ++ [ "  } > " ++ regionName index ]
         | (index, entry) <- zip [0 :: Int ..] entries
         ]
-      ++ [ "  .text : { __fixed_body_start = .; *(.text*) } > OWNED_FIXED"
+      ++ [ "  .text : { __fixed_body_start = .; KEEP(*(.decoder.*)) *(.text*) } > OWNED_FIXED"
          , "  .rodata : { KEEP(*(.rodata.XM1_KERNEL_BOUNDARY)) KEEP(*(.rodata.XM1_SACLAC_TASK_STACK)) KEEP(*(.rodata.XM1_SACLAC_CONSTRUCTOR_STACK)) KEEP(*(.rodata.XM1_REQUIRES_LENS_SAFETY_CONTRACT)) *(.rodata*) . = ALIGN(4); } > OWNED_FIXED"
          , "  .data : { *(.data*) *(.sdata*) *(.got*) . = ALIGN(4); __fixed_body_end = .; } > OWNED_FIXED"
          , "  .bss (NOLOAD) : { __fixed_bss_start = .; *(.bss*) *(.sbss*) *(COMMON) . = ALIGN(4); __fixed_bss_end = .; } > OWNED_FIXED"

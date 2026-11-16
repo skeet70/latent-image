@@ -12,6 +12,7 @@ _ARM_DEPS = {
     "xm1_rtos_own_first_component": "//replacement/rtos_own_first:own-first-a-component",
     "xm1_rtos_global_lock_component": "//replacement/rtos_global_lock:global-lock-component",
     "xm1_fixed_image_layout": "//replacement/fixed_image:layout",
+    "xm1_image5_decoder": "//replacement/image5_load:decoder-arm",
 }
 
 _ARM_SEARCH_DEPS = [

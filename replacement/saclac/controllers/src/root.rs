@@ -12,7 +12,7 @@ pub enum Allocation { Reuse, Replace }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Branch { Lens, Live, S1 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Control { SuspendLive, BeginS1, ReleaseS1, QueryS1, Cancel }
+pub enum Control { ResumeLive, SuspendLive, BeginS1, ReleaseS1, QueryS1, Cancel }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Input<'a> { Message(Message<'a>), Control(Control) }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -98,13 +98,17 @@ impl Root {
                 K::Start if matches!(self.mode, Mode::Stopped | Mode::Started) => {
                     let stopped = self.mode == Mode::Stopped;
                     let startup = port.startup();
+                    let resume_live = stopped && startup == Startup::ResumeLive;
                     port.initialize_contexts();
                     let record = port.context(Context::Lens, Allocation::Replace, input);
                     port.initialize_services(record, command.parameters);
+                    if resume_live && port.child(Branch::Live, Input::Control(Control::ResumeLive), record) != Outcome::Complete {
+                        return Self::fault(port);
+                    }
                     port.emit(lifecycle::Request::ReplyStarted);
                     port.release(Context::Lens, Generation::Current);
                     port.release(Context::Lens, Generation::Previous);
-                    self.mode = if stopped && startup == Startup::ResumeLive { Mode::Live } else { Mode::Started };
+                    self.mode = if resume_live { Mode::Live } else { Mode::Started };
                     return Outcome::Pending;
                 }
                 K::Stop if self.mode == Mode::Started => {

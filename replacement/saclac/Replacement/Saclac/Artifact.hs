@@ -95,6 +95,15 @@ entries =
   , Entry 0xf01bc8 "xm1_saclac_driver_entry" "xm1_saclac_driver"
   ]
 
+decoderEntries :: [(Word32, String)]
+decoderEntries =
+  [ (0x6ae360, "xm1_decoder_init")
+  , (0x6ae500, "xm1_decoder_feed")
+  , (0x6ae1dc, "xm1_decoder_progress")
+  , (0x6ae310, "xm1_decoder_complete")
+  , (0x6ae3f4, "xm1_decoder_finish")
+  ]
+
 -- | A stock word the owned image reaches outside its extents.
 data Retained = Retained
   { retainedName :: String
@@ -110,6 +119,17 @@ retainedExternals =
   , Retained "xm1_kernel_critical_exit" 0x7236b0
   , Retained "__saclac_runtime_malloc" 0x89cda4
   , Retained "__saclac_runtime_create_task" 0x725dd8
+  , Retained "xm1_decoder_current_task" 0x723cb8
+  , Retained "xm1_decoder_take" 0x724b68
+  , Retained "xm1_decoder_give" 0x724c00
+  , Retained "xm1_decoder_route" 0x6499d0
+  , Retained "xm1_decoder_clock_take" 0x649c4c
+  , Retained "xm1_decoder_clock_give" 0x649ddc
+  , Retained "xm1_decoder_irq_attach" 0x64e918
+  , Retained "xm1_decoder_irq_detach" 0x64eb20
+  , Retained "xm1_decoder_marker" 0x42188
+  , Retained "xm1_decoder_progress_entry" 0x6ae1dc
+  , Retained "xm1_decoder_complete_entry" 0x6ae310
   ]
 
 externalAddresses :: [Word32]
@@ -198,6 +218,7 @@ data PlacementError
   | EntryBranchMismatch String Word32 Word32
   | WalkRefused Word32 WalkReason
   | ExtentImageMismatch Word32 Int
+  | DecoderVeneerInvalid String
   | FillDiffers Word32
   | OwnedArrayMissing String
   | TableLengthMismatch String Int Word32 Word32
@@ -430,11 +451,44 @@ checkStackArtifact budget bin symbolsBytes disasm sectionsBytes = do
   checkStack budget artifact instructions
 
 checkStack :: StackBudget -> Admitted -> S.Set Word32 -> Either PlacementError ()
-checkStack budget admitted instructions = first stackFailure (Stack.check budget (stackImage admitted instructions))
+checkStack budget admitted instructions = do
+  generic <- stackAdmitted admitted
+  first stackFailure (Stack.check budget (stackImage generic instructions))
+
+decoderIrqVeneers :: [String]
+decoderIrqVeneers = ["xm1_decoder_progress", "xm1_decoder_complete"]
+
+stackAdmitted :: Admitted -> Either PlacementError Admitted
+stackAdmitted admitted
+  | all missing results = Right admitted
+  | otherwise = do
+      veneers <- forM results $ \(name, result) ->
+        first (const (DecoderVeneerInvalid name)) result
+      forM_ veneers $ \veneer -> do
+        let name = F.symbolName veneer
+            address = F.symbolAddress veneer
+            validWords =
+              [ wordAt admitted address
+              , wordAt admitted (address + 4)
+              , wordAt admitted (address + 8)
+              , wordAt admitted (address + 16)
+              , wordAt admitted (address + 20)
+              ] == [0xe92d4010, 0xe1a0400d, 0xe3cdd007, 0xe1a0d004, 0xe8bd8010]
+            validCall = case A.decode (address + 12) (wordAt admitted (address + 12)) of
+              A.Branch (A.Cond 14) True target -> extentContains fixedExtent target
+              _ -> False
+        require (F.symbolSize veneer == 24 && validWords && validCall) (DecoderVeneerInvalid name)
+      let addresses = map F.symbolAddress veneers
+      pure admitted { admittedSymbols = filter ((`notElem` addresses) . F.symbolAddress) (admittedSymbols admitted) }
+  where
+    results = [(name, F.lookupSymbol (admittedSymbols admitted) name) | name <- decoderIrqVeneers]
+    missing (_, Left _) = True
+    missing _ = False
 
 checkStackEntry :: StackBudget -> Word32 -> Admitted -> S.Set Word32 -> Either PlacementError ()
-checkStackEntry budget entry admitted instructions =
-  first stackFailure (Stack.checkEntry budget (Stack.Guest entry) (stackImage admitted instructions))
+checkStackEntry budget entry admitted instructions = do
+  generic <- stackAdmitted admitted
+  first stackFailure (Stack.checkEntry budget (Stack.Guest entry) (stackImage generic instructions))
 
 stackImage :: Admitted -> S.Set Word32 -> Stack.Image
 stackImage admitted instructions =
@@ -667,28 +721,45 @@ data Staged = Staged
   , stagedImage5 :: B.ByteString
   , stagedDat :: B.ByteString
   , stagedCanonicalDat :: B.ByteString
+  , stagedCanonicalImage4 :: B.ByteString
   , stagedCanonicalImage5 :: B.ByteString
   , stagedFixedBody :: B.ByteString
   , stagedPublications :: [Fixed.Publication]
   } deriving (Eq, Show)
 
+decoderPublications :: B.ByteString -> Admitted -> IO [Fixed.Publication]
+decoderPublications image4 admitted = do
+  H.ensure (B.length image4 == 0x282800
+    && digest image4 == "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16")
+    "canonical image4 differs"
+  forM decoderEntries $ \(address, name) -> do
+    target <- either H.failH pure (F.symbolAddress <$> F.lookupSymbol (admittedSymbols admitted) name)
+    H.ensure (target `mod` 4 == 0 && extentContains fixedExtent target) ("decoder entry leaves fixed body: " ++ name)
+    let delta = toInteger target - toInteger address - 8
+    H.ensure (delta `mod` 4 == 0 && delta >= -0x2000000 && delta < 0x2000000) ("decoder entry leaves A32 branch range: " ++ name)
+    let old = U.word32At image4 (fromIntegral (address - 0x61c400))
+        new = 0xea000000 .|. (fromInteger (delta `div` 4) .&. 0xffffff)
+    either H.failH pure (Fixed.publication address old new)
+
 -- | Staging the canonical image reproduces the canonical DAT: the inverse check.
 stageSaclac
-  :: Tools.Tools -> FilePath -> B.ByteString -> B.ByteString
+  :: Tools.Tools -> FilePath -> B.ByteString -> B.ByteString -> B.ByteString
   -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString
   -> IO Staged
-stageSaclac tools scratch dat image5 elf bin symbolsBytes disasm sectionsBytes = do
+stageSaclac tools scratch dat image5 image4 elf bin symbolsBytes disasm sectionsBytes = do
   admitted <- either (H.failH . show) pure (admit elf bin symbolsBytes disasm sectionsBytes)
   installed <- either (H.failH . show) pure (installedImage image5 admitted)
   either (H.failH . show) pure (admitInstalled installed admitted)
   body <- either (H.failH . show) pure (fixedBody admitted)
   let sites = taskCreateSite : concat [[low, low + 4 .. high - 4] | Extent low high <- extents]
-  publications <- fmap catMaybes $ forM sites $ \address -> do
+  image5Publications <- fmap catMaybes $ forM sites $ \address -> do
     let offset = fromIntegral (address - 0xbf1a00)
         old = U.word32At image5 offset
         new = U.word32At installed offset
     if old == new then pure Nothing
       else Just <$> either H.failH pure (Fixed.publication address old new)
+  image4Publications <- decoderPublications image4 admitted
+  let publications = image5Publications ++ image4Publications
   scratchDirectory <- Tools.validateScratchDirectory scratch
   staged <- Record5.stageRecord5 tools scratchDirectory dat image5 installed
   inverse <- Record5.stageRecord5 tools scratchDirectory dat image5 image5
@@ -699,6 +770,7 @@ stageSaclac tools scratch dat image5 elf bin symbolsBytes disasm sectionsBytes =
     , stagedImage5 = installed
     , stagedDat = Record5.stagedRecord5Dat staged
     , stagedCanonicalDat = dat
+    , stagedCanonicalImage4 = image4
     , stagedCanonicalImage5 = image5
     , stagedFixedBody = body
     , stagedPublications = publications
@@ -710,6 +782,7 @@ contractValue imagePath datPath staged = object
   , "piece_kind" .= ("saclac-placement" :: String)
   , "canonical_dat_sha256" .= digest (stagedCanonicalDat staged)
   , "canonical_image5_sha256" .= digest (stagedCanonicalImage5 staged)
+  , "canonical_image4_sha256" .= digest (stagedCanonicalImage4 staged)
   , "linked_bin_sha256" .= digest (admittedBin admitted)
   , "linked_elf_sha256" .= digest (admittedElf admitted)
   , "linked_symbols_sha256" .= digest (admittedSymbolsBytes admitted)
@@ -729,6 +802,7 @@ contractValue imagePath datPath staged = object
       ] | extent@(Extent low high) <- extents]
   , "trap_word" .= trapWord
   , "entries" .= [object ["address" .= entryAddress entry, "veneer" .= entryVeneer entry, "body" .= entryBody entry] | entry <- entries]
+  , "decoder_entries" .= [object ["address" .= address, "symbol" .= name] | (address, name) <- decoderEntries]
   , "retained_externals" .= [object ["name" .= retainedName word, "address" .= retainedAddress word] | word <- retainedExternals]
   , "retained_data" .= [object ["name" .= retainedName word, "address" .= retainedAddress word] | word <- retainedData]
   , "owned_bytes" .= sum [sectionBytes section | section <- admittedSections admitted, sectionAllocated section]

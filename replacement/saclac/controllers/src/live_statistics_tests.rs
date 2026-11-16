@@ -125,6 +125,17 @@ fn begin_completes_without_a_request_when_the_view_does_not_need_statistics() {
 }
 
 #[test]
+fn resumed_live_binding_uses_the_running_stop_path_without_a_start_request() {
+    let mut peers = Peers::new();
+    peers.selected = true;
+    let mut statistics = LiveStatistics::new();
+    assert_eq!(control(&mut statistics, &mut peers, Ctl::BindRunning), O::Complete);
+    assert_eq!(peers.take(), []);
+    assert_eq!(control(&mut statistics, &mut peers, Ctl::Stop), O::Pending);
+    assert_eq!(peers.take(), [Seen::Request(Request::Stop { pause: false, shot_idle: true })]);
+}
+
+#[test]
 fn stop_reports_the_shot_state_and_returns_to_idle() {
     let mut peers = Peers::new();
     let mut statistics = running(&mut peers);

@@ -87,8 +87,32 @@ fn startup_replies_before_releasing_the_lens_context() {
     let mut peers = Peers::default();
     root.handle(command(K::Start), &mut peers);
     assert_eq!(peers.events, [Event::Initialize, Event::Context(Context::Lens, Allocation::Replace),
-        Event::Services, Event::Lifecycle(Request::ReplyStarted),
+        Event::Services, Event::Child(Branch::Live, Input::Control(Control::ResumeLive), handle(Context::Lens)),
+        Event::Lifecycle(Request::ReplyStarted),
         Event::Release(Context::Lens, Generation::Current), Event::Release(Context::Lens, Generation::Previous)]);
+}
+
+#[test]
+fn normal_start_does_not_bind_the_resume_live_path() {
+    let mut root = Root::new();
+    let mut peers = Peers { startup: Startup::Normal, ..Peers::default() };
+    root.handle(command(K::Start), &mut peers);
+    assert!(!peers.events.iter().any(|event| matches!(event, Event::Child(Branch::Live, Input::Control(Control::ResumeLive), _))));
+}
+
+#[test]
+fn normal_lens_bring_up_starts_only_the_lens_path() {
+    let mut root = Root::new();
+    let mut peers = Peers { startup: Startup::Normal, ..Peers::default() };
+    root.handle(command(K::Start), &mut peers);
+    peers.events.clear();
+    assert_eq!(root.handle(command(K::LensBringUp), &mut peers), Outcome::Pending);
+    assert_eq!(peers.events, [
+        Event::Context(Context::Lens, Allocation::Reuse),
+        Event::Utility(Utility::RefreshLens, handle(Context::Lens)),
+        Event::Child(Branch::Lens, input(K::LensBringUp), handle(Context::Lens)),
+        Event::Release(Context::Lens, Generation::Current),
+    ]);
 }
 
 #[test]
@@ -290,6 +314,7 @@ mod consumers {
             let signal = match input {
                 Input::Message(Message::Command(command)) => view::Signal::Command(command),
                 Input::Message(Message::Completed(done)) => view::Signal::Completed(done),
+                Input::Control(Control::ResumeLive) => view::Signal::ResumeLive,
                 Input::Control(Control::SuspendLive) => return Outcome::Complete,
                 _ => return Outcome::Fault,
             };
@@ -418,15 +443,28 @@ mod consumers {
     }
 
     #[test]
+    fn normal_live_ignores_an_accessor_tick_before_a_profile_starts() {
+        let mut root = Root::new();
+        let mut port = Composition::new(Startup::Normal);
+        root.handle(command(K::Start), &mut port);
+        root.handle(command(K::LensBringUp), &mut port);
+        assert_eq!(root.handle(Message::Completed(Completed { completion: Completion::Accessor4b, parameters: stock::parameters(&[]) }), &mut port), Outcome::Pending);
+        assert!(port.boundary.statistics_requests.is_empty());
+        assert!(port.boundary.requests.is_empty());
+        assert_eq!(port.boundary.faults, 0);
+    }
+
+    #[test]
     fn pending_bridge_command17_is_silently_refused() {
         let mut root = Root::new();
         let mut port = Composition::new(Startup::ResumeLive);
         root.handle(command(K::Start), &mut port);
+        root.handle(Message::Completed(Completed { completion: Completion::Accessor4b, parameters: stock::parameters(&[]) }), &mut port);
         root.handle(command(K::Command09), &mut port);
-        assert_eq!(port.boundary.requests.len(), 1);
+        let requests = port.boundary.requests.len();
         let replies = port.boundary.replies.len();
         assert_eq!(root.handle(command(K::Command17), &mut port), Outcome::Pending);
-        assert_eq!(port.boundary.requests.len(), 1);
+        assert_eq!(port.boundary.requests.len(), requests);
         assert_eq!(port.boundary.replies.len(), replies);
         assert_eq!(port.boundary.faults, 0);
         assert_eq!(root.handle(command(K::Autofocus), &mut port), Outcome::Fault);
@@ -438,6 +476,7 @@ mod consumers {
         let mut root = Root::new();
         let mut port = Composition::new(Startup::ResumeLive);
         root.handle(command(K::Start), &mut port);
+        root.handle(Message::Completed(Completed { completion: Completion::Accessor4b, parameters: stock::parameters(&[]) }), &mut port);
         assert_eq!(root.handle(command(K::Command24), &mut port), Outcome::Pending);
         assert_eq!(port.boundary.statistics_requests, [(statistics::Request::Command24, handle(Context::Live))]);
         assert!(port.boundary.requests.is_empty());

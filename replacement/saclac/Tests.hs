@@ -101,6 +101,9 @@ main = do
       marker <- F.symbolAddress <$> symbol symbols "XM1_REQUIRES_LENS_SAFETY_CONTRACT"
       refused "missing lens safety flag" SafetyMarkerInvalid
         (admit (patch base bin marker 0) symbols disasm sections)
+      progress <- F.symbolAddress <$> symbol symbols "xm1_decoder_progress"
+      refused "decoder IRQ veneer loses its bounded alignment restore" (DecoderVeneerInvalid "xm1_decoder_progress")
+        (admit (patch base bin (progress + 8) 0xe1a00000) symbols disasm sections)
       constructorStack <- F.symbolAddress <$> symbol symbols "XM1_SACLAC_CONSTRUCTOR_STACK"
       refused "constructor stack budget differs" TaskStackContractInvalid
         (admit (patch base bin (constructorStack + 40) 0) symbols disasm sections)

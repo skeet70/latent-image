@@ -5,6 +5,8 @@
 pub extern crate xm1_rtos_own_first_component;
 #[cfg(target_arch = "arm")]
 pub extern crate xm1_rtos_global_lock_component;
+#[cfg(target_arch = "arm")]
+extern crate xm1_image5_decoder;
 
 pub mod engine;
 pub mod driver;

@@ -114,6 +114,7 @@ enum Event<'a> {
     Statistics82,
     Image47,
     Image66,
+    ResumeLive,
     Other,
 }
 
@@ -122,6 +123,7 @@ impl<'a> Event<'a> {
         use CommandKind as K;
         use Completion as C;
         match input {
+            Input::Control(RootControl::ResumeLive) => Self::ResumeLive,
             Input::Control(RootControl::Cancel) => Self::Drive(DriveOrigin::Cancel),
             Input::Control(_) => Self::Other,
             Input::Message(Message::Command(command)) => match command.kind {
@@ -188,6 +190,7 @@ impl Router {
         }
         let mut call = Call { port, input, record };
         match (self.state, event) {
+            (State::Idle, Event::ResumeLive) => call.controller(),
             (State::Idle, Event::Profile(Profile::Primary)) => self.begin_primary(&mut call),
             (State::Idle, Event::Profile(Profile::Secondary)) => self.begin_secondary(&mut call),
             (State::Primary(stage), Event::Other) => self.primary(stage, &mut call),
