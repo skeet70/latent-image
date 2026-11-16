@@ -355,6 +355,16 @@ Scope: Conditional X-M1 1.50 flashloader entry/caller continuation through retai
 
 <!-- /evidence-record E-LATER-IMAGE5-SKIP-REFUSAL-NATIVE-150 -->
 
+## Natural staged-union semantic boundary
+
+<!-- evidence-record E-RTOS-PLATFORM-CURRENT-UNION-NATURAL-150 -->
+
+E-RTOS-PLATFORM-CURRENT-UNION-NATURAL-150: The current staged-union natural scheduler/task-record observations pass the reached semantic comparison (true): Stock true, Owned true, independent preexecution projection true, route true and per-object/per-caller record sequences true. Owned completes 529656 entries and 529656 returns with ([],[]) pending, 85 task-record calls, 84 Prepare and 84 FirstEntry calls. Full lifetime acceptance remains false; both roles refuse MissingLifecycle DomainA ResetDeleted / MissingLifecycle DomainA ResetDeleted.
+
+Scope: Current-image transition ownership, linked dispatcher/probe targets and exact saved Resume/IRQ-resume continuations qualify the observed boundary, not complete kernel or final Root ownership. Frozen Stock producer 095632966b1cb956fd87c868223c1c4247dac289ec753155547816af823a998c is reused; one necessary changed-observer Owned capture f1b9be2dfdb3dd3b8d0faf8f1fe0aab1fbb585ce9a2315d16ce082bf90bc45b8 uses the unchanged DAT and trajectory. Its plan binds 42 entries, 256 guards, 14 probes, 18 transition extents and 16 dispatcher targets. Saved-continuation reclassification replays a guest=false. Capture containment: Main emulator-slot, FullSystem, 8GiB memory plus 8GiB swap, two-lane eligibility; one owned changed-observer capture, no stock or full-matrix replay.
+
+<!-- /evidence-record E-RTOS-PLATFORM-CURRENT-UNION-NATURAL-150 -->
+
 ## Authoritative references
 
 | Question | Home |

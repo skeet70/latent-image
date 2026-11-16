@@ -3078,5 +3078,225 @@
       {"name":"frame_stability","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["pre_press_frame_stability_context"]},
       {"name":"whole_playback","path":"private-data/scratch/PlaybackMediaClosure/inputs/jpeg-transaction/owned-play/result.json","pointer":["owned_playback","whole_playback_acceptance"]}
     ]
+  },
+  {
+    "id": "E-RTOS-PLATFORM-CURRENT-UNION-NATURAL-150",
+    "claim": "The current staged-union natural scheduler/task-record observations pass the reached semantic comparison ({{comparison}}): Stock {{stock_semantics}}, Owned {{owned_semantics}}, independent preexecution projection {{starts}}, route {{route}} and per-object/per-caller record sequences {{record_sequences}}. Owned completes {{entries}} entries and {{returns}} returns with {{pending}} pending, {{record_calls}} task-record calls, {{prepare_calls}} Prepare and {{first_entries}} FirstEntry calls. Full lifetime acceptance remains {{full_lifetime}}; both roles refuse {{stock_coverage}} / {{owned_coverage}}.",
+    "scope": "Current-image transition ownership, linked dispatcher/probe targets and exact saved Resume/IRQ-resume continuations qualify the observed boundary, not complete kernel or final Root ownership. Frozen Stock producer {{stock_observer}} is reused; one necessary changed-observer Owned capture {{owned_observer}} uses the unchanged DAT and trajectory. Its plan binds {{plan_entries}} entries, {{guards}} guards, {{probes}} probes, {{transitions}} transition extents and {{targets}} dispatcher targets. Saved-continuation reclassification replays a guest={{guest_replay}}. Capture containment: {{capture_scope}}.",
+    "notes": "Strict reset-delete/recreation/reuse coverage remains refused. The observed DomainA reset0 clear is not reset deletion; DomainB has no observed delete. Historical acquire/release occurrence rows omitted by the old producer cannot be reconstructed from collapsed classes. No complete lock/object lifetime, arena/raw-reader retirement, physical IRQ/cache/exclusive law, final packaged image4/Root acceptance or firmware promotion. Historical MissingTrace, NoSave and SavedContext refusals remain bound to their original observer/model artifacts; current-image binding does not waive saved-frame words, SP, CPSR or SelectStage.",
+    "artifacts": [
+      "private-data/scratch/PlatformComposition/current-union-natural-ownership-proof.json",
+      "private-data/scratch/PlatformComposition/current-union-natural-linked-proof.json",
+      "private-data/scratch/PlatformComposition/current-union-natural-continuation-proof.json",
+      "private-data/scratch/PlatformComposition/inputs/natural-lifecycle-archives/manifest.json",
+      "private-data/scratch/PlatformComposition/inputs/current-union-linked-owned-archive/manifest.json",
+      "private-data/scratch/PlatformComposition/runs/20261116T064134Z-natural-lifecycle-image-transition-maps/result/stock-transitions.json",
+      "private-data/scratch/PlatformComposition/runs/20261116T080609Z-natural-lifecycle-current-continuation-reclassification/result/diagnostic.json"
+    ],
+    "facts": [
+      {
+        "name": "firmware_sha256",
+        "path": "private-data/scratch/PlatformComposition/runs/20261116T073918Z-natural-lifecycle-linked-owned-plan/result/owned-plan.json",
+        "pointer": [
+          "dat_sha256"
+        ]
+      },
+      {
+        "name": "comparison",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "comparison_accepted"
+        ]
+      },
+      {
+        "name": "stock_semantics",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "stock",
+          "qualification",
+          "accepted"
+        ]
+      },
+      {
+        "name": "owned_semantics",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "owned",
+          "qualification",
+          "accepted"
+        ]
+      },
+      {
+        "name": "starts",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "comparable_preexecution_starts"
+        ]
+      },
+      {
+        "name": "route",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "route_comparison",
+          "accepted"
+        ]
+      },
+      {
+        "name": "record_sequences",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "observed_record_sequence_comparison",
+          "accepted"
+        ]
+      },
+      {
+        "name": "entries",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "owned",
+          "entries"
+        ]
+      },
+      {
+        "name": "returns",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "owned",
+          "returns"
+        ]
+      },
+      {
+        "name": "pending",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "owned",
+          "pending"
+        ]
+      },
+      {
+        "name": "record_calls",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "owned",
+          "task_record_calls"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "prepare_calls",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "owned",
+          "prepare_calls"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "first_entries",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "owned",
+          "first_entry_calls"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "full_lifetime",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "full_lifetime_claim"
+        ]
+      },
+      {
+        "name": "stock_coverage",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "stock",
+          "task_record_coverage",
+          "refusal"
+        ]
+      },
+      {
+        "name": "owned_coverage",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "owned",
+          "task_record_coverage",
+          "refusal"
+        ]
+      },
+      {
+        "name": "stock_observer",
+        "path": "private-data/scratch/PlatformComposition/current-union-natural-ownership-proof.json",
+        "pointer": [
+          "input",
+          "observer_sha256"
+        ]
+      },
+      {
+        "name": "owned_observer",
+        "path": "private-data/scratch/PlatformComposition/current-union-natural-linked-proof.json",
+        "pointer": [
+          "changed_capture",
+          "observer_sha256"
+        ]
+      },
+      {
+        "name": "plan_entries",
+        "path": "private-data/scratch/PlatformComposition/runs/20261116T073918Z-natural-lifecycle-linked-owned-plan/result/owned-plan.json",
+        "pointer": [
+          "entries"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "guards",
+        "path": "private-data/scratch/PlatformComposition/runs/20261116T073918Z-natural-lifecycle-linked-owned-plan/result/owned-plan.json",
+        "pointer": [
+          "guarded"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "probes",
+        "path": "private-data/scratch/PlatformComposition/runs/20261116T073918Z-natural-lifecycle-linked-owned-plan/result/owned-plan.json",
+        "pointer": [
+          "probes"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "transitions",
+        "path": "private-data/scratch/PlatformComposition/runs/20261116T073918Z-natural-lifecycle-linked-owned-plan/result/owned-plan.json",
+        "pointer": [
+          "transition_extents"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "targets",
+        "path": "private-data/scratch/PlatformComposition/runs/20261116T073918Z-natural-lifecycle-linked-owned-plan/result/owned-plan.json",
+        "pointer": [
+          "dispatch_targets"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "guest_replay",
+        "path": "private-data/scratch/PlatformComposition/current-union-natural-continuation-proof.json",
+        "pointer": [
+          "reclassification",
+          "guest_replay"
+        ]
+      },
+      {
+        "name": "capture_scope",
+        "path": "private-data/scratch/PlatformComposition/current-union-natural-linked-proof.json",
+        "pointer": [
+          "changed_capture",
+          "scope"
+        ]
+      }
+    ]
   }
 ]
