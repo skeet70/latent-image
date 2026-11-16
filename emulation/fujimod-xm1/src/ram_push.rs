@@ -2526,8 +2526,7 @@ mod tests {
         let before = server.bridge.machine.session.usb_status(&usb).unwrap();
         let (responses, receipt) = exchange(&mut server,
             "{\"command\":\"capture-observation-begin\"}\n{\"command\":\"cable\",\"connected\":true}\n");
-        assert!(responses[0].ok);
-        assert!(!responses[1].ok);
+        assert_eq!(responses.iter().map(|response| response.ok).collect::<Vec<_>>(), [true, true, false]);
         assert_eq!(server.bridge.machine.session.usb_status(&usb).unwrap(), before);
         assert!(receipt.bridge_error.is_some());
     }
@@ -2539,7 +2538,7 @@ mod tests {
             let before = server.bridge.machine.instructions();
             let (responses, receipt) = exchange(&mut server, &format!(
                 "{{\"command\":\"enumerate\",\"budget\":{budget}}}\n"));
-            assert!(!responses[0].ok);
+            assert_eq!(responses.iter().map(|response| response.ok).collect::<Vec<_>>(), [true, false]);
             assert!(receipt.bridge_error.is_some());
             assert_eq!(server.bridge.machine.instructions(), before);
         }
