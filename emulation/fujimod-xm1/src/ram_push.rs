@@ -2525,10 +2525,10 @@ mod tests {
         let usb = server.bridge.machine.document.usb.0.clone();
         let before = server.bridge.machine.session.usb_status(&usb).unwrap();
         let (responses, receipt) = exchange(&mut server,
-            "{\"command\":\"capture-observation-begin\"}\n{\"command\":\"cable\",\"connected\":true}\n");
-        assert_eq!(responses.iter().map(|response| response.ok).collect::<Vec<_>>(), [true, true, false]);
+            "{\"command\":\"capture-observation-begin\"}\n{\"command\":\"cable\",\"connected\":true}\n{\"command\":\"finish\"}\n");
+        assert_eq!(responses.iter().map(|response| response.ok).collect::<Vec<_>>(), [true, true, false, true]);
         assert_eq!(server.bridge.machine.session.usb_status(&usb).unwrap(), before);
-        assert!(receipt.bridge_error.is_some());
+        assert!(receipt.bridge_error.is_none());
     }
 
     #[test]
