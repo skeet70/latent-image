@@ -130,6 +130,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/kernel_install.rs",
     "//emulation:fujimod-xm1/src/continuation_view.rs",
     "//emulation:fujimod-xm1/src/loader_continuations.rs",
+    "//emulation:fujimod-xm1/src/decoder_continuations.rs",
     "//emulation:fujimod-xm1/src/loader_continuations_check.rs",
     "//emulation:fujimod-xm1/src/loader_orchestration_owned.rs",
     "//emulation:fujimod-xm1/src/loader_reset_check.rs",

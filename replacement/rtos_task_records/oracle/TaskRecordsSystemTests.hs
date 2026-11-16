@@ -120,6 +120,20 @@ bootstrapFixture (Address bootSp) =
     ,C.callTrace=Just (C.CallTrace entered returned C.Returned
       [observed C.PublicationBarrierBoundary initial (init stores),observed C.ReturnBoundary final [last stores]] Nothing)}
 
+sequenceObservation :: Role -> C.Observation
+sequenceObservation role=C.Observation
+  { C.obsRole=role,C.obsInputs=replicate 6 "identity",C.obsInstructions=0,C.obsEntries=0,C.obsReturns=0
+  , C.obsUntracked=0,C.obsUnarmed=0,C.obsFill=Nothing,C.obsArmings=[],C.obsSegments=[],C.obsFinal=Nothing
+  , C.obsCalls=[],C.obsLockEvents=[],C.obsPending=([],[]),C.obsMilestones=[],C.obsError=Nothing,C.obsMachineError=Nothing
+  , C.obsBankCounts=C.BankCounts 0 0,C.obsPcWatches=[],C.obsDemandPaging=[]
+  }
+
+compareSequences :: [C.Call] -> [C.Call] -> Either SystemRefusal ()
+compareSequences stock owned=compareSystemEvidence (sequenceObservation Stock) (captured Stock stock)
+  (sequenceObservation Owned) (captured Owned owned)
+ where
+  captured role=foldl' (accumulateSystem (Plan role "" [] [] [] [] retainedArmingEntries [] [])) emptySystemEvidence
+
 main :: IO ()
 main=do
   case T.recordCall True DomainA CreateTaskRecord (C.callArguments fixture) before of
@@ -178,4 +192,12 @@ main=do
   require (coverage (lifecycle DomainA++lifecycle DomainB)==Right ()) "both-domain complete lifecycle"
   require (coverage (lifecycle DomainA)==Left (MissingLifecycle DomainB Created)) "one-domain coverage refuses"
   require (coverage (map (\call->call {C.callCount=2}) (lifecycle DomainA))==Left RepeatedInvocation) "aggregated lifecycle order refuses"
+  let first=fixture {C.callFirst=1}
+      second=clearFixture {C.callFirst=2}
+      otherCaller=second {C.callTask=current+0x38}
+      swapped=[first {C.callFirst=2},otherCaller {C.callFirst=1}]
+  require (compareSequences [first,second] [first,second]==Right ()) "observed object/caller sequences compare"
+  require (compareSequences [first,second] [first {C.callFirst=2},second {C.callFirst=1}]==Left LifecycleDifference) "one caller cannot reverse its object calls"
+  require (compareSequences [first,second] [first,otherCaller]==Left LifecycleDifference) "object calls retain their caller identity"
+  require (compareSequences [first,otherCaller] swapped==Right ()) "independent object/caller interleaving is not global order"
   putStrLn "task-record system source, effect, context, publication and lifecycle controls pass"

@@ -3702,6 +3702,7 @@ haskell_test(
         "//host:text",
     ],
 )
+
 haskell_binary(
     name = "media-route-smoke",
     srcs = ["MediaRouteSmoke.hs"],

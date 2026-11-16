@@ -80,6 +80,11 @@ haskell_binary(
     ],
 )
 
+filegroup(
+    name = "shim-catalog-data",
+    srcs = ["BUILD.bazel", "contract.json", "jpeg-contract.json", "shims.json"],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)
 haskell_binary(
     name = "qualify-jpeg",
     srcs = ["JpegQualify.hs"],

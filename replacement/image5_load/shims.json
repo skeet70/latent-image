@@ -7,7 +7,7 @@
       "id": "image5_load-01",
       "shim": "`xm1_image5_load` and `xm1_image5_load_entry` in `entry.S`/`src.rs`",
       "kind": "veneer or carrier at a stock address",
-      "other_side": "the stock loader caller at `0x4c22b8`",
+      "other_side": "the stock flashloader producer call at `0x73b4ac`",
       "owned": "no",
       "removal": "the loader caller is owned",
       "state": "required",
@@ -20,7 +20,7 @@
             "xm1_image5_load_entry"
           ],
           "contract": "replacement/image5_load/image5-load.ld",
-          "requirement": "`xm1_image5_load` and `xm1_image5_load_entry` in `entry.S`/`src.rs`. the stock loader caller at `0x4c22b8`. the loader caller is owned"
+          "requirement": "`xm1_image5_load` and `xm1_image5_load_entry` in `entry.S`/`src.rs`. The flashloader task calls the producer at `0x73b4ac`; the adapter restores the marker-writer continuation `0x422b8`."
         }
       ],
       "predicates": {
@@ -101,6 +101,58 @@
         "same_image_comparison": "unestablished",
         "direct_owned_api": "unestablished"
       }
+    },
+    {
+      "id": "image5_load-decoder-entry",
+      "shim": "Five asynchronous stream entry veneers",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the image5 producer, storage callback and retained source98 IRQ dispatcher",
+      "owned": "partly",
+      "removal": "all producer and IRQ consumers call the typed owned API in the same composed image",
+      "state": "required",
+      "evidence": [{
+        "image": "//replacement/image5_load:image5-decoder-image",
+        "kind": "publication",
+        "symbols": ["xm1_decoder_init", "xm1_decoder_feed", "xm1_decoder_finish", "xm1_decoder_progress", "xm1_decoder_complete"],
+        "contract": "replacement/image5_load/decoder.ld",
+        "requirement": "The opt-in existing fixed-image composition publishes only the five externally evidenced entry veneers. DecoderArtifact retires the remaining engine and stream instructions without changing the adjacent settings stub."
+      }],
+      "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
+    },
+    {
+      "id": "image5_load-decoder-services",
+      "shim": "Native resource, clock, route, task, marker and IRQ registration boundaries",
+      "kind": "trampoline into retained stock",
+      "other_side": "retained RTOS/device services and the two published owned IRQ entry veneers",
+      "owned": "partly",
+      "removal": "the retained services and IRQ dispatcher accept direct owned typed interfaces",
+      "state": "required",
+      "evidence": [{
+        "image": "//replacement/image5_load:image5-decoder-image",
+        "kind": "retained-import",
+        "symbols": ["xm1_decoder_current_task", "xm1_decoder_take", "xm1_decoder_give", "xm1_decoder_route", "xm1_decoder_clock_take", "xm1_decoder_clock_give", "xm1_decoder_irq_attach", "xm1_decoder_irq_detach", "xm1_decoder_marker", "xm1_decoder_progress_entry", "xm1_decoder_complete_entry"],
+        "contract": "replacement/image5_load/decoder.ld",
+        "requirement": "Source98 attachment returns an IRQ registration handle. The completion handler uses the saved initialization-time task identity and gives resource48 before finish releases engine ownership.",
+        "retained_targets": []
+      }],
+      "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
+    },
+    {
+      "id": "image5_load-decoder-layout",
+      "shim": "Fixed-image body bounds and zero-once private decoder state",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "the existing fixed-image first-stage loader",
+      "owned": "partly",
+      "removal": "the composed loader and decoder share a typed image/BSS lifetime contract",
+      "state": "required",
+      "evidence": [{
+        "image": "//replacement/image5_load:image5-decoder-image",
+        "kind": "publication",
+        "symbols": ["XM1_DECODER_STATE", "__fixed_body_start", "__fixed_body_end", "__fixed_bss_start", "__fixed_bss_end"],
+        "contract": "replacement/image5_load/decoder.ld",
+        "requirement": "DecoderArtifact generates the existing fixed-image linker layout and requires exactly52 BSS bytes. First-stage zeroes them once; callback entry does not reconstruct or clear the session state."
+      }],
+      "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
     }
   ]
 }
