@@ -210,6 +210,16 @@ struct Plan {
     dropped_stops: Vec<PlanDroppedStop>,
     #[serde(default = "stock_transitions")]
     transition_extents: Vec<TransitionExtent>,
+    #[serde(default)]
+    dispatch_targets: Vec<PlanEntry>,
+}
+
+fn dispatch_target(plan: &Plan, domain: Domain, point: DispatchPoint) -> Result<Hex, String> {
+    let entries = if plan.dispatch_targets.is_empty() { &plan.entries } else { &plan.dispatch_targets };
+    let mut targets = entries.iter().filter(|entry| entry.domain == domain && entry.semantic == (Semantic::Dispatch { name: point }));
+    let target = targets.next().ok_or_else(|| "dispatch target is missing".to_owned())?;
+    require(targets.next().is_none(), "dispatch target repeats")?;
+    Ok(target.entry)
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -263,6 +273,24 @@ fn validate(plan: Plan) -> Result<Validated, String> {
         require(plan.transition_extents.iter().any(|extent| extent.domain == domain
             && extent.start.0 == base+0x204 && extent.end.0 == base+0x368),
             "transition map omits a retained IRQ vector")?;
+    }
+    if !plan.dispatch_targets.is_empty() {
+        require(plan.dispatch_targets.len() == 16, "dispatch targets do not cover both domains")?;
+        for domain in [Domain::A, Domain::B] {
+            for point in [DispatchPoint::Save, DispatchPoint::Resume, DispatchPoint::NoSave, DispatchPoint::Select,
+                DispatchPoint::FirstEntry, DispatchPoint::IrqReturn, DispatchPoint::IrqResume, DispatchPoint::IrqTail] {
+                let address = dispatch_target(&plan, domain, point)?.0;
+                require(address % 4 == 0 && plan.transition_extents.iter().any(|extent| extent.domain == domain
+                    && extent.start.0 <= address && address < extent.end.0),
+                    "dispatch target is outside its image transition extents")?;
+            }
+        }
+        for entry in &plan.entries {
+            if let Semantic::Dispatch { name } = entry.semantic {
+                require(dispatch_target(&plan, entry.domain, name)? == entry.entry,
+                    "observed dispatch entry differs from its image target")?;
+            }
+        }
     }
     let task_records = plan.entries.iter().filter(|entry| matches!(entry.semantic, Semantic::TaskRecord { .. })).count();
     let task_record_only = task_records != 0 && task_records == plan.entries.len();
@@ -1783,7 +1811,7 @@ impl Observer<'_> {
                 committed(board.word(context.core, tcm, config+8)?)? & !1
             }
             Semantic::Dispatch { name: DispatchPoint::Resume } => committed(board.word(context.core,tcm,context.sp+32)?)? & !1,
-            Semantic::Dispatch { name: DispatchPoint::IrqResume } => match domain { Domain::A => 0x437a8, Domain::B => 0xd37a8 },
+            Semantic::Dispatch { name: DispatchPoint::IrqResume } => dispatch_target(&self.validated.plan, domain, DispatchPoint::IrqTail)?.0,
             Semantic::Dispatch { name: DispatchPoint::IrqTail } => committed(board.word(context.core,tcm,context.sp+28)?)? & !1,
             _ => context.lr & !1,
         };
@@ -3061,7 +3089,7 @@ mod tests {
 
     fn plan_with_stops(role: Role, stops: Vec<PlanStop>) -> Plan {
         Plan { schema: PLAN_SCHEMA, role, dat_sha256: String::new(), domains: Vec::new(), entries: Vec::new(),
-            probes: Vec::new(), guarded: Vec::new(), fills: Vec::new(), stops, dropped_stops: Vec::new(), transition_extents: stock_transitions() }
+            probes: Vec::new(), guarded: Vec::new(), fills: Vec::new(), stops, dropped_stops: Vec::new(), transition_extents: stock_transitions(), dispatch_targets: Vec::new() }
     }
 
     #[test]

@@ -2,13 +2,13 @@
 module Emulation.SchedulerPairPlan
   ( module Emulation.SchedulerPairCatalog, Role (..), roleName, parseRole, Guard (..), ArmingEntries, armingEntries, armingEntry, retainedArmingEntries
   , Body (..), Aggregate (..), emptyAggregate, Stop (..), StopKind (..), stopKindName, DroppedStop (..)
-  , Plan (..), TransitionExtent (..), TransitionBinding, stockTransitions, deriveTransitions
+  , Plan (..), TransitionExtent (..), TransitionBinding, stockTransitions, fixedDispatchEntries, deriveTransitions
   , deriveTransitionBinding, applyTransitionBinding, base, derivePlan, derivePlanWith, derivePlanWithAggregate, planValue ) where
 
 import Control.Monad (forM, forM_, unless)
 import Data.Aeson (FromJSON (..), ToJSON (..), Value, eitherDecodeStrict', object, withObject, (.:), (.:?), (.=))
 import qualified Data.ByteString as B
-import Data.Bits ((.&.), shiftL, shiftR)
+import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import Data.List (nub, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
@@ -91,6 +91,56 @@ retainedDispatchExtent domain point=TransitionExtent domain (Address (base domai
     Save->(0x3640,0x3668); Resume->(0x3668,0x3688); NoSave->(0x3688,0x36a4); Select->(0x36a4,0x3728)
     FirstEntry->(0x3728,0x375c); IrqReturn->(0x375c,0x37a4); IrqResume->(0x37a4,0x37a8); IrqTail->(0x37a8,0x3810)
 
+fixedDispatchEntries :: Role -> [Entry]
+fixedDispatchEntries role=[Entry domain (DispatchSemantic point) (if role==Stock && point==Select then Address (base domain+0x36ac) else transitionStart (retainedDispatchExtent domain point))
+  | domain<-domains,point<-[Save,Resume,NoSave,Select,FirstEntry,IrqReturn,IrqResume,IrqTail]]
+
+linkedDispatchBody :: Aggregate -> Domain -> DispatchPoint -> Maybe Body
+linkedDispatchBody linked domain point=let TransitionSymbol name=transitionSymbol point
+  in M.lookup name (M.findWithDefault M.empty domain (aggregateSymbols linked))
+
+deriveDispatchTargets :: Maybe Aggregate -> Role -> [Entry]
+deriveDispatchTargets aggregate role=
+  [case (role,aggregate,entrySemantic entry) of
+    (Stock,_,_)->entry
+    (_,Just linked,DispatchSemantic point)->case linkedDispatchBody linked (entryDomain entry) point of
+      Just body->entry {entryAddress=Address (bodyStart body)}
+      Nothing->entry
+    _->entry
+  | entry<-fixedDispatchEntries role]
+
+newtype ArmInstruction = ArmInstruction Word32 deriving Eq
+
+linkedDispatchProbes :: Aggregate -> Domain -> (Address -> ArmInstruction) -> Either String [Probe]
+linkedDispatchProbes linked domain instruction=do
+  noSave<-body NoSave
+  select<-body Select
+  unless (bodyStart noSave+bodyBytes noSave==bodyStart select
+    && instruction (Address (bodyStart noSave+bodyBytes noSave-4))==ArmInstruction 0xe129f000)
+    (Left "linked NoSave does not commit CPSR before Select")
+  sequence
+    [ afterLoad IrqReturn EnabledRead (Register 0) 0xe5920000 0xe3500000
+    , afterLoad Select GlobalLockRead (Register 1) 0xe5901000 (0xe3510000 .|. if domain==DomainA then 0x11 else 0x12)
+    , afterLoad Select SelectedRead (Register 1) 0xe5901000 0xe5001008
+    , afterLoad Save DiscardedRead (Register 3) 0xe5913030 0xe3530001
+    , afterLoad IrqReturn DiscardedRead (Register 0) 0xe5910030 0xe3500001
+    , afterLoad IrqReturn SelectedRead (Register 0) 0xe5920000 0xe1500001
+    ]
+ where
+  body point=do
+    found<-maybe (Left "linked dispatch probe body is missing") Right (linkedDispatchBody linked domain point)
+    unless (bodyBytes found>=8 && bodyStart found `mod` 4==0 && bodyBytes found `mod` 4==0
+      && base domain<=bodyStart found && toInteger (bodyStart found)+toInteger (bodyBytes found)<=toInteger (base domain)+(if domain==DomainA then 0xdae0 else 0xdaa0))
+      (Left "linked dispatch probe body is outside its loader")
+    pure found
+  afterLoad point kind register load following=do
+    found<-body point
+    let matches=[address | address<-[bodyStart found,bodyStart found+4..bodyStart found+bodyBytes found-8]
+          ,instruction (Address address)==ArmInstruction load,instruction (Address (address+4))==ArmInstruction following]
+    case matches of
+      [address]->Right (Probe domain (Address (address+4)) kind register)
+      _->Left "linked dispatcher load is not unique"
+
 deriveTransitions :: Maybe Aggregate -> Role -> Either String [TransitionExtent]
 deriveTransitions aggregate role
   | role==Stock=Right stockTransitions
@@ -160,7 +210,7 @@ eitherDecodePlan = eitherDecodeStrict'
 data Plan = Plan
   { planRole :: Role, planDat :: String, planEntries :: [Entry], planGuards :: [Guard], planFills :: [Address], planProbes :: [Probe]
   , planArmingEntries :: ArmingEntries, planStops :: [Stop], planDroppedStops :: [DroppedStop]
-  , planTransitionExtents :: [TransitionExtent]
+  , planTransitionExtents :: [TransitionExtent], planDispatchTargets :: [Entry]
   } deriving (Eq, Show)
 base :: Domain -> Word32
 base DomainA = 0x40000
@@ -178,7 +228,15 @@ derivePlanWith = derivePlanWithAggregate . Just
 derivePlanWithAggregate :: Maybe Aggregate -> Role -> B.ByteString -> [Catalog] -> M.Map Domain B.ByteString -> Either String Plan
 derivePlanWithAggregate aggregate role dat catalogs loaders = do
   unless (not (null catalogs) && all ((==0xe7f000f0) . catalogFill) catalogs) (Left "regions fill differs")
-  let entries = map stockEntry (concatMap catalogEntries catalogs)
+  let publishedEntries = map stockEntry (concatMap catalogEntries catalogs)
+      targets=deriveDispatchTargets aggregate role
+      observed entry=case (role,aggregate,entrySemantic entry) of
+        (Stock,_,_)->entry
+        (_,Just linked,DispatchSemantic point)->case linkedDispatchBody linked (entryDomain entry) point of
+          Just body->entry {entryAddress=Address (bodyStart body)}
+          Nothing->entry
+        _->entry
+      entries=map observed publishedEntries
       keys = [(entryDomain entry,entryAddress entry) | entry <- entries]
       windows = nub (concatMap catalogWindows catalogs)
       probes = concatMap catalogProbes catalogs
@@ -203,14 +261,14 @@ derivePlanWithAggregate aggregate role dat catalogs loaders = do
         mk address kind register = Probe domain (Address address) kind (Register register)
         offset = base domain
         dispatch = any (\entry -> entryDomain entry==domain && entrySemantic entry==DispatchSemantic Select) entries
-        s2Probes = if not dispatch then [] else
+        fixedS2Probes = if not dispatch then [] else
           [mk (offset+0x376c) EnabledRead 0,mk (offset+if role==Stock then 0x371c else 0x3708) GlobalLockRead (if role==Stock then 0 else 1)] ++
           (if role==Stock then
             [mk (offset+0x36b4) SelectedRead 1,mk (offset+0x377c) SelectedRead 0,mk (offset+0x3788) DiscardedRead 0]
           else
             [mk (offset+0x36ac) SelectedRead 1,mk (offset+0x3650) DiscardedRead 3,mk (offset+0x3778) DiscardedRead 0,mk (offset+0x3788) SelectedRead 0])
         deliverEntries = [start | Entry d (ServiceSemantic DeliverTaskException) (Address start) <- entries, d==domain]
-        firstEntryEntries = [start | Entry d (DispatchSemantic FirstEntry) (Address start) <- entries, d==domain]
+        firstEntryEntries = [start | Entry d (DispatchSemantic FirstEntry) (Address start) <- publishedEntries, d==domain]
         bodyOf address = do
           bound <- aggregate
           symbol <- M.lookup (domain, address) (aggregateEntrySymbols bound)
@@ -260,12 +318,18 @@ derivePlanWithAggregate aggregate role dat catalogs loaders = do
                     [] -> [DroppedStop domain "first-entry" "the owned symbol commits no task pc"]
                     _ -> [DroppedStop domain "first-entry" "the owned symbol commits a task pc more than once"]
               | start <- firstEntryEntries]
-        usedBodies = [body | start <- deliverEntries ++ firstEntryEntries, Just body <- [bodyOf start]]
+        dispatchBodies=case aggregate of
+          Just linked | role/=Stock && dispatch->[body | point<-[Save,Resume,NoSave,Select,FirstEntry,IrqReturn,IrqResume,IrqTail],Just body<-[linkedDispatchBody linked domain point]]
+          _->[]
+        usedBodies = dispatchBodies++[body | start <- deliverEntries ++ firstEntryEntries, Just body <- [bodyOf start]]
         familyGuards = if role==Stock || not family then [] else
           [Guard domain (Address lo) (Address hi) (sha256Hex (sha256 (bytes lo hi))) | (lo,hi) <- familyRanges domain]
         guards = guards0 ++ familyGuards ++ [bodyGuard body | body <- nub usedBodies, not (bodyCovered body)]
-        domainProbes = [probe | probe <- probes,probeDomain probe==domain,not dispatch] ++ s2Probes ++ callbackProbes ++ retries ++ familyDomainProbes
         familyDomainProbes = if family then familyProbes domain else []
+    s2Probes<-case aggregate of
+      Just linked | role/=Stock && dispatch->linkedDispatchProbes linked domain (ArmInstruction . word . unAddress)
+      _->pure fixedS2Probes
+    let domainProbes=[probe | probe<-probes,probeDomain probe==domain,not dispatch]++s2Probes++callbackProbes++retries++familyDomainProbes
     unless (null deliverEntries || length callbackProbes==2)
       (Left "exception callback instruction differs")
     pure (guards,fills,domainProbes,stops,droppedStops)
@@ -276,7 +340,7 @@ derivePlanWithAggregate aggregate role dat catalogs loaders = do
     (concat [probes' | (_,_,probes',_,_) <- perDomain])
     retainedArmingEntries
     (concat [stops' | (_,_,_,stops',_) <- perDomain])
-    (concat [dropped | (_,_,_,_,dropped) <- perDomain]) transitions)
+    (concat [dropped | (_,_,_,_,dropped) <- perDomain]) transitions targets)
  where
   unAddress (Address address) = address
   stockEntry entry@(Entry domain (DispatchSemantic Select) _) | role==Stock = entry { entryAddress=Address (base domain+0x36ac) }
@@ -328,6 +392,7 @@ planValue plan = object
   , "fills" .= [hex a | Address a <- planFills plan]
   , "probes" .= [object ["domain" .= domainLabel d,"address" .= hex a,"kind" .= probeKindName kind,"register" .= registerName register] | Probe d (Address a) kind register <- planProbes plan]
   , "transition_extents" .= planTransitionExtents plan
+  , "dispatch_targets" .= [object ["domain" .= domainLabel d,"entry" .= hex a,"semantic" .= semanticValue semantic] | Entry d semantic (Address a) <- planDispatchTargets plan]
   ] ++ if planRole plan == Stock then [] else
   [ "stops" .= [object ["domain" .= domainLabel d,"address" .= hex a,"kind" .= stopKindName kind] | Stop d (Address a) kind <- planStops plan]
   , "dropped_stops" .= [object ["domain" .= domainLabel d,"name" .= name,"reason" .= reason] | DroppedStop d name reason <- planDroppedStops plan]
@@ -347,4 +412,5 @@ instance FromJSON Plan where
     stops <- o .:? "stops" >>= maybe (pure []) (mapM (withObject "stop" $ \s -> Stop <$> (s .: "domain" >>= parseDomain) <*> (Address <$> (s .: "address" >>= parseHex)) <*> (s .: "kind" >>= named stopKindName)))
     dropped <- o .:? "dropped_stops" >>= maybe (pure []) (mapM (withObject "dropped stop" $ \s -> DroppedStop <$> (s .: "domain" >>= parseDomain) <*> s .: "name" <*> s .: "reason"))
     transitions<-o .:? "transition_extents" >>= maybe (pure stockTransitions) pure
-    Plan role <$> o .: "dat_sha256" <*> pure entries <*> pure guards <*> (o .: "fills" >>= mapM (fmap Address . parseHex)) <*> pure probes <*> pure parsedArmings <*> pure stops <*> pure dropped <*> pure transitions
+    targets<-o .:? "dispatch_targets" >>= maybe (pure (fixedDispatchEntries role)) (mapM (withObject "dispatch target" $ \e->Entry <$> (e .: "domain" >>= parseDomain) <*> e .: "semantic" <*> (Address <$> (e .: "entry" >>= parseHex))))
+    Plan role <$> o .: "dat_sha256" <*> pure entries <*> pure guards <*> (o .: "fills" >>= mapM (fmap Address . parseHex)) <*> pure probes <*> pure parsedArmings <*> pure stops <*> pure dropped <*> pure transitions <*> pure targets

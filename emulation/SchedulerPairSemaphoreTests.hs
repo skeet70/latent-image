@@ -24,7 +24,7 @@ planBytes :: B.ByteString
 planBytes = "semaphore-plan"
 
 semPlan :: Plan
-semPlan = Plan Owned "dat" entries guards [] [] retainedArmingEntries [] [] stockTransitions
+semPlan = Plan Owned "dat" entries guards [] [] retainedArmingEntries [] [] stockTransitions (fixedDispatchEntries Owned)
  where
   entries =
     [ Entry DomainA (HelperSemantic Acquire) (Address 0x439d8)
@@ -65,7 +65,7 @@ callOf = callOfTask 0x9000
 callOfTask :: Word32 -> Domain -> Word32 -> Semantic -> [Word32] -> Memory -> Memory -> Word32 -> [Written] -> CallTrace -> Call
 callOfTask task domain address semantic arguments before after r0 writes trace =
   Call domain (Address address) semantic (if domain==DomainA then 0 else 1) 0x13 (Arguments arguments)
-    before after r0 0x13 writes [] 1 10 (Just trace) task 0 Nothing (map (const (originAtFor task address)) writes) [] S.empty stockTransitions
+    before after r0 0x13 writes [] 1 10 (Just trace) task 0 Nothing (map (const (originAtFor task address)) writes) [] S.empty stockTransitions (fixedDispatchEntries Owned)
 
 originAtFor :: Word32 -> Word32 -> WriteOrigin
 originAtFor task address = originAtForWith task 1 address

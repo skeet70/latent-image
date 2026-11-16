@@ -47,7 +47,7 @@ originsOf value = J.parseJSON value >>= mapM (withObject "attributed write" (.: 
 data Call = Call { callDomain :: Domain, callAddress :: Address, callSemantic :: Semantic, callCore :: Int, callCpsr :: Word32, callArguments :: Arguments,
   callBefore :: Memory, callAfter :: Memory, callR0 :: Word32, callReturnCpsr :: Word32, callWrites :: [Written], callBank :: [Written], callCount :: Int, callFirst :: Word64, callTrace :: Maybe CallTrace, callTask :: Word32,
   callKernelContext :: Word32, callTaskStack :: Maybe TaskStack, callWriteOrigins :: [WriteOrigin], callBankOrigins :: [WriteOrigin], callUnreadable :: S.Set Address,
-  callTransitionExtents :: [TransitionExtent] } deriving (Eq,Show)
+  callTransitionExtents :: [TransitionExtent], callDispatchEntries :: [Entry] } deriving (Eq,Show)
 data PcWatch = PcWatch Int Address Word64 deriving (Eq,Show)
 data BankCounts = BankCounts { primaryBankWrites :: Word64, secondaryBankWrites :: Word64 } deriving (Eq,Show)
 instance FromJSON BankCounts where
@@ -175,7 +175,7 @@ instance FromJSON Call where
     Call d address semantic <$> (e .: "core" >>= coreOf) <*> e .: "cpsr" <*> (Arguments <$> e .: "arguments")
       <*> pure (fst before) <*> pure (fst after) <*> r .: "r0" <*> r .: "cpsr"
       <*> (r .: "writes" >>= mapM writtenOf) <*> (r .: "bank" >>= mapM writtenOf) <*> o .: "count" <*> o .: "first" <*> pure (Just trace) <*> (e .: "task" >>= wordRead)
-      <*> e .: "kernel_context" <*> e .:? "task_stack" <*> (r .: "writes" >>= originsOf) <*> (r .: "bank" >>= originsOf) <*> pure unreadable <*> pure stockTransitions
+      <*> e .: "kernel_context" <*> e .:? "task_stack" <*> (r .: "writes" >>= originsOf) <*> (r .: "bank" >>= originsOf) <*> pure unreadable <*> pure stockTransitions <*> pure []
 instance FromJSON Observation where
   parseJSON = withObject "scheduler observation" $ \o -> do
     schema <- o .: "schema"
@@ -311,15 +311,15 @@ naturalControlMask :: Call -> Word32
 naturalControlMask call = if restored then 0xff else 0x1ff
  where
   history = maybe [] traceHistory (callTrace call)
-  loader = if callDomain call==DomainA then 0x40000 else 0xd0000
   sp boundary = case drop 13 (D.registers (boundaryRegisters boundary)) of value':_ -> Just value'; _ -> Nothing
-  at boundary pc = boundaryAddress boundary==Address pc && drop 15 (D.registers (boundaryRegisters boundary))==[pc]
+  at boundary point = isDispatchEntry call point (boundaryAddress boundary)
+    && drop 15 (D.registers (boundaryRegisters boundary))==[let Address pc=boundaryAddress boundary in pc]
   frame saved resumed = case (sp saved,sp resumed) of
     (Just savedSp,Just resumedSp) -> resumedSp<=maxBound-36 && resumedSp+36==savedSp
     _ -> False
   restored = or [boundaryCore saved==callCore call && boundaryCore resumed==callCore call
     && callTask call/=0 && boundaryTask saved==callTask call && boundaryTask resumed==callTask call
-    && at saved (loader+0x3640) && at resumed (loader+0x3668)
+    && at saved Save && at resumed Resume
     && boundaryInstructions saved<boundaryInstructions resumed
     && D.processorState (boundaryRegisters saved) .&. 0x9f==0x93
     && D.processorState (boundaryRegisters saved) .&. 0xff==D.processorState (boundaryRegisters resumed) .&. 0xff
@@ -352,7 +352,13 @@ ownedWrites call = go
   go _ _ = Left WrittenWords
 
 bindCallImage :: Plan -> Call -> Call
-bindCallImage plan call=call {callTransitionExtents=planTransitionExtents plan}
+bindCallImage plan call=call {callTransitionExtents=planTransitionExtents plan,callDispatchEntries=planDispatchTargets plan}
+
+isDispatchEntry :: Call -> DispatchPoint -> Address -> Bool
+isDispatchEntry call point (Address address)=any matches (callDispatchEntries call)
+ where
+  matches entry=entryDomain entry==callDomain call && entrySemantic entry==DispatchSemantic point
+    && let Address candidate=entryAddress entry in candidate .&. complement 0x40000000==address .&. complement 0x40000000
 
 data BoundaryOwnership = CallerBoundary | ForeignBoundary | UnreadableBoundary deriving (Eq,Show)
 
@@ -849,8 +855,8 @@ dispatchTags role point call = do
       pc = case drop 15 (D.registers final) of address:_ -> address .&. complement 0x40000000; _ -> 0
       selected = value SelectedBoundary
       dest
-        | pc==loaderBase+(if role==Stock then 0x36ac else 0x36a4) = D.SelectStage
-        | pc==loaderBase+0x37a8 = D.ExceptionTail
+        | isDispatchEntry call Select (Address pc) = D.SelectStage
+        | isDispatchEntry call IrqTail (Address pc) = D.ExceptionTail
         | point==FirstEntry = D.TaskEntry
         | point==Select && selected==Just 0 = D.NullWindow
         | point==Select = D.SelectedTask
