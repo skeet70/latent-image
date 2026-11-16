@@ -393,8 +393,6 @@ pub fn frame_interval(machine: &impl Machine, timing: TimingWord) -> Option<u32>
     Some(machine.read_u32(record.wrapping_add(8)).wrapping_mul(ticks >> 3) / 54)
 }
 
-/// 0x103b064.
-pub fn request_mode_six_statistics(machine: &impl Machine) { enter(machine, 0x103_b064, &[]); }
 
 /// The pending pipeline output flag at `pipeline_state + 0x4cd0`.
 pub fn take_window_refresh(machine: &impl Machine) -> bool { machine.read_u32(0x016f_7b20) != 0 }

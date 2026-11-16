@@ -33,7 +33,7 @@ impl<M: Machine, R, E, P, I, T> Drop for RoundPorts<'_, M, R, E, P, I, T> {
 
 macro_rules! forward {
     ($contract:path { $(fn $name:ident(&mut self $(, $argument:ident: $type:ty)*) $(-> $result:ty)?;)* }) => {
-        impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc, I: Isp, T: Tables>
+        impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc + xm1_saclac_interface::Statistics, I: Isp, T: Tables>
             $contract for RoundPorts<'_, M, R, E, P, I, T> {
             $(fn $name(&mut self $(, $argument: $type)*) $(-> $result)? {
                 <Services<M, R, E, P> as $contract>::$name(self.services $(, $argument)*)

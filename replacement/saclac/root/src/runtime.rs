@@ -39,7 +39,7 @@ pub struct Runtime<'s, M: Machine + Clone, R: Memory, E: StockEntries, P, I, T, 
     results: SharedAddress,
 }
 impl<'s, M: Machine + Clone, R: Memory, E: StockEntries,
-    P: ImageProcessor + Calc + Calc1 + ImgDc + LensDc, I: Isp, T: Tables, S, X, A, D>
+    P: ImageProcessor + Calc + Calc1 + ImgDc + LensDc + xm1_saclac_interface::Statistics, I: Isp, T: Tables, S, X, A, D>
     Runtime<'s, M, R, E, P, I, T, S, X, A, D> {
     pub fn new(services: &'s RefCell<Services<M, R, E, P>>, geometry: &'s RefCell<Geometry<M, P, I, T>>, recognition: &'s RefCell<SceneRecognition>, placement: &'s RefCell<A>, shot_ports: &'s RefCell<ShotPorts<S, X>>, live_record: &'s RecordBinding, s1_record: &'s RecordBinding, callbacks: Callbacks, results: SharedAddress, delivery: D) -> Self {
         Self {

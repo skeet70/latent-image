@@ -4,6 +4,7 @@ use xm1_saclac_calc::{adjust::configuration::{Centroid, FrameInterval as MotionT
 use xm1_saclac_profile_records::ProfileRecords;
 use xm1_focus_measurement_round::{lanes::Selection, profile::{ProfileRecords as RoundRecords, StatisticsInUse, PublishedResult, Profile as RoundProfile, ProfileGeometry as RoundGeometry, WindowRecord, WindowStatus as RoundWindowStatus, WindowPosition, IntervalHistory}};
 use xm1_shot_sequence::{grid_boundary::GridLayers, shot_ports::ShotPorts, state::{ShotState, StateMemory}};
+use xm1_saclac_interface::Statistics as StatisticsPeer;
 
 pub(crate) struct ServicesLoan<'a, M, R, E, P> {
     source: &'a RefCell<Services<M, R, E, P>>,
@@ -59,7 +60,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P, S, X> Properties for Acq
 
 macro_rules! forward {
     ($contract:path { $(fn $name:ident(&mut self $(, $argument:ident: $type:ty)*) $(-> $result:ty)?;)* }) => {
-        impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc, S, X>
+        impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc + xm1_saclac_interface::Statistics, S, X>
             $contract for Acquisition<'_, M, R, E, P, S, X> {
             $(fn $name(&mut self $(, $argument: $type)*) $(-> $result)? {
                 <Services<M, R, E, P> as $contract>::$name(&mut *self.services $(, $argument)*)
@@ -138,7 +139,7 @@ macro_rules! store {
     ($this:ident, $record:expr, $field:path, $value:expr) => { let _refused = $this.services.records.write_shared($record, &$field, $value); };
 }
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc, S: StateMemory, X: GridLayers> Ports for Acquisition<'_, M, R, E, P, S, X> {
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc + StatisticsPeer, S: StateMemory, X: GridLayers> Ports for Acquisition<'_, M, R, E, P, S, X> {
     fn with_selection<V>(&mut self, operation: impl FnOnce(&mut SelectionMemory) -> V) -> V { operation(&mut self.services.acquisition.selection) }
     fn acquisition_settings(&mut self) -> AcquisitionSettings { boundary::acquisition_settings(|key| self.services.stock.byte(AdjustmentKey(key))) }
 
@@ -648,6 +649,6 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc, S:
         }
     }
 }
-impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc, S: StateMemory, X: GridLayers> xm1_focus_measurement_round::children::Ports for Acquisition<'_, M, R, E, P, S, X> {
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc + StatisticsPeer, S: StateMemory, X: GridLayers> xm1_focus_measurement_round::children::Ports for Acquisition<'_, M, R, E, P, S, X> {
     fn fault(&mut self) { boundary::fault(&self.services.machine) }
 }

@@ -9,7 +9,7 @@ use xm1_saclac_profile_records::{Memory, StockEntries, SharedHeaderByte, stock::
 use xm1_saclac_shared::{settings::{Adjustments, AdjustmentKey}, stock::Machine};
 use crate::{capture_gains::Sources, profile_calibration::ProfileCalibration, round_ports::RoundPorts};
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc, I: Isp, T: Tables>
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc + xm1_saclac_interface::Statistics, I: Isp, T: Tables>
     Ports for RoundPorts<'_, M, R, E, P, I, T> {
     fn reading(&mut self, completed: Completed<'_>) -> Option<AuxiliaryReading> {
         if completed.completion != Completion::Calculation8a || completed.parameters.bytes().len() != 8 { return None; }

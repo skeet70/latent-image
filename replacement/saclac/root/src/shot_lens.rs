@@ -9,7 +9,7 @@ use xm1_saclac_shared::stock::Machine;
 use xm1_shot_sequence::{boundary::{Lens, LensPoint, LensReading}, finish_work::{FinishLayers, FinishLensValue}, stock};
 use crate::{round_ports::RoundPorts, shot_services::Libraries};
 
-impl<M: Machine + Clone + crate::shot_native::AtomicLensChange, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc,
+impl<M: Machine + Clone + crate::shot_native::AtomicLensChange, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc + xm1_saclac_interface::Statistics,
     I: Isp, T: Tables, A, Q> Lens for Libraries<'_, M, R, E, P, I, T, A, Q> {
     fn read(&mut self, reading: LensReading) -> u32 {
         match reading {

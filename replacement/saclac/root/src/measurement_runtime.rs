@@ -13,7 +13,7 @@ use xm1_saclac_calc::scene_recognition::SceneRecognition;
 use xm1_saclac_controllers::{children::{ChildEvent, ChildOutcome, MeasurementControl}, search::SearchTerminal};
 use xm1_saclac_focus_search::{contrast::Context, live::{self, LiveSearch}};
 use xm1_saclac_imaging::driver::Isp;
-use xm1_saclac_interface::{calc::SharedAddress, round::GeometryCalibration, round_acquisition::*, stock::{round_acquisition::GridLead, StockCallbackWord}, Calc, Calc1, Completed, ImageProcessor, ImgDc, RecordHandle};
+use xm1_saclac_interface::{calc::SharedAddress, round::GeometryCalibration, round_acquisition::*, stock::{round_acquisition::GridLead, StockCallbackWord}, Calc, Calc1, Completed, ImageProcessor, ImgDc, RecordHandle, Statistics as StatisticsPeer};
 use xm1_saclac_profile_geometry::controller::{ProfileGeometry, Tables};
 use xm1_saclac_profile_records::{Memory, StockEntries};
 use xm1_saclac_search_bindings::RecordBinding;
@@ -40,7 +40,7 @@ pub struct MeasurementRuntime<'s, M: Machine + Clone, R: Memory, E: StockEntries
     search: LiveSearch<SearchSession<'s, M, R, E, P>>,
 }
 
-impl<'s, M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc, I: Isp, T: Tables, S, X>
+impl<'s, M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc + StatisticsPeer, I: Isp, T: Tables, S, X>
     MeasurementRuntime<'s, M, R, E, P, I, T, S, X> {
     pub fn new(services: &'s RefCell<Services<M, R, E, P>>, geometry: &'s RefCell<Geometry<M, P, I, T>>, recognition: &'s RefCell<SceneRecognition>, record: &'s RecordBinding, shot: &'s RefCell<ShotPorts<S, X>>) -> Self {
         let session = SearchSession::new(services, record);
@@ -99,7 +99,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P, I, T, S, X> Drop for Mea
 
 macro_rules! delegate {
     ($scope:ident, $contract:path { $(fn $name:ident(&mut self $(, $argument:ident: $type:ty)*) $(-> $result:ty)?;)* } $($extra:item)*) => {
-        impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc, I: Isp, T: Tables, S: StateMemory, X: GridLayers>
+        impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc + StatisticsPeer, I: Isp, T: Tables, S: StateMemory, X: GridLayers>
             $contract for MeasurementEffects<'_, '_, M, R, E, P, I, T, S, X> {
             $(fn $name(&mut self $(, $argument: $type)*) $(-> $result)? {
                 self.$scope(|ports| <_ as $contract>::$name(ports $(, $argument)*))
@@ -156,7 +156,7 @@ delegate!(with_services, Trace { fn trace(&mut self, mark: TraceMark); });
 delegate!(with_services, Effects { fn emit(&mut self, effect: Effect<'_>); });
 delegate!(with_services, window::Ports { fn window_result(&mut self, completed: Completed<'_>) -> Option<window::WindowResult>; });
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc, I: Isp, T: Tables, S: StateMemory, X: GridLayers>
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc + StatisticsPeer, I: Isp, T: Tables, S: StateMemory, X: GridLayers>
     xm1_focus_measurement_round::record::Ports for MeasurementEffects<'_, '_, M, R, E, P, I, T, S, X> {
     fn request(&mut self, request: RecordRequest) {
         // A next auxiliary request can be planned in this same completion dispatch.
@@ -342,7 +342,7 @@ delegate!(with_round, image::Ports {
     fn request_image(&mut self, request: xm1_saclac_interface::round_image::ImageLaneRequest);
 });
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc, I: Isp, T: Tables, S: StateMemory, X: GridLayers>
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc + StatisticsPeer, I: Isp, T: Tables, S: StateMemory, X: GridLayers>
     LiveEffects for MeasurementEffects<'_, '_, M, R, E, P, I, T, S, X> {
     fn fault(&mut self) { self.with_services(|ports| crate::stock::acquisition::fault(&ports.machine)); }
     fn search(&mut self, signal: LaneSignal<'_>, record: RecordHandle, history: &MeasurementHistory) -> LaneStatus {

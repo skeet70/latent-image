@@ -12,7 +12,7 @@ use crate::{round_ports::RoundPorts, services::NO_HANDLE};
 #[repr(align(4))]
 struct AlignedSummary(Summary);
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc, I: Isp, T: Tables>
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc + xm1_saclac_interface::Statistics, I: Isp, T: Tables>
     Ports for RoundPorts<'_, M, R, E, P, I, T> {
     fn source_profile(&mut self, record: RecordHandle) -> SourceProfile {
         let services = &mut self.services;

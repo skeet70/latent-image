@@ -39,7 +39,7 @@ impl<M: Machine + Clone, R, E, P, I, T, A, Q: Calc + Calc1> Libraries<'_, M, R, 
     }
 }
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc, I: Isp, T: Tables, A: Placement, Q: Calc + Calc1>
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc + xm1_saclac_interface::Statistics, I: Isp, T: Tables, A: Placement, Q: Calc + Calc1>
     PipelineLibrary for Libraries<'_, M, R, E, P, I, T, A, Q> {
     fn plan(&mut self, input: &PlanInput, candidates: &Candidates, selection_reference: u32) -> Option<Plan> {
         let prepared = self.prepare_motion(input, candidates, selection_reference);

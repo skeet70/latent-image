@@ -30,7 +30,7 @@ pub struct ChildRuntime<'s, M: Machine + Clone, R: Memory, E: StockEntries, P, I
     terminal: Cell<Option<SearchTerminal>>,
 }
 impl<'s, M: Machine + Clone, R: Memory, E: StockEntries,
-    P: ImageProcessor + Calc + Calc1 + ImgDc + LensDc, I: Isp, T: Tables, S, X>
+    P: ImageProcessor + Calc + Calc1 + ImgDc + LensDc + xm1_saclac_interface::Statistics, I: Isp, T: Tables, S, X>
     ChildRuntime<'s, M, R, E, P, I, T, S, X> {
     pub fn new(services: &'s RefCell<Services<M, R, E, P>>, geometry: &'s RefCell<Geometry<M, P, I, T>>, recognition: &'s RefCell<SceneRecognition>, live_record: &'s RecordBinding, s1_record: &'s RecordBinding, shot_ports: &'s RefCell<ShotPorts<S, X>>) -> Self {
         Self {
@@ -48,7 +48,7 @@ impl<'s, M: Machine + Clone, R: Memory, E: StockEntries,
     pub fn take_terminal(&self) -> Option<SearchTerminal> { self.terminal.take() }
 }
 impl<M: Machine + Clone, R: Memory, E: StockEntries,
-    P: ImageProcessor + Calc + Calc1 + ImgDc + LensDc, I: Isp, T: Tables,
+    P: ImageProcessor + Calc + Calc1 + ImgDc + LensDc + xm1_saclac_interface::Statistics, I: Isp, T: Tables,
     S: StateMemory, X: ExternalPorts + BindRecord> ChildRuntime<'_, M, R, E, P, I, T, S, X> {
     pub fn dispatch(&self, request: ChildRequest<'_>) -> ChildOutcome {
         match request {
@@ -82,7 +82,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries,
     }
 }
 impl<M: Machine + Clone, R: Memory, E: StockEntries,
-    P: ImageProcessor + Calc + Calc1 + ImgDc + LensDc, I: Isp, T: Tables,
+    P: ImageProcessor + Calc + Calc1 + ImgDc + LensDc + xm1_saclac_interface::Statistics, I: Isp, T: Tables,
     S: StateMemory, X: ExternalPorts + BindRecord> Children for &ChildRuntime<'_, M, R, E, P, I, T, S, X> {
     fn handle(&mut self, request: ChildRequest<'_>) -> ChildOutcome { self.dispatch(request) }
 }

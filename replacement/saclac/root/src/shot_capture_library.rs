@@ -9,7 +9,7 @@ use xm1_saclac_shared::stock::Machine;
 use xm1_shot_sequence::{boundary::{Frame, LensPoint, LensReference}, capture_boundary::{CalcLibrary, CalculationResult, LensSample}, finish_work::FinishLibrary, stock::{calculation, state}};
 use crate::{shot_services::Libraries, shot_trace_views::{Block, Cells}};
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc, I: Isp, T: Tables, A, Q: Calc + Calc1>
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc + xm1_saclac_interface::Statistics, I: Isp, T: Tables, A, Q: Calc + Calc1>
     CalcLibrary for Libraries<'_, M, R, E, P, I, T, A, Q> {
     fn request_reference(&mut self, request: &ReferenceRequest, result: CalculationResult, completion: Completion) {
         assert_eq!(completion, Completion::Calculation90);

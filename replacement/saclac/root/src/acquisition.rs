@@ -15,7 +15,7 @@ use xm1_saclac_config::table::{self, Row, Step};
 use xm1_saclac_interface::calc::{AcquisitionGrid, Calc1Payload, CalcPayload, SharedAddress};
 use xm1_saclac_interface::round_acquisition::*;
 use xm1_saclac_interface::stock::{self as wire, round_acquisition as codec};
-use xm1_saclac_interface::{Calc, Calc1, Calc1Request, CalcRequest, Completed, ImgDc, ImgDcOperation, ImgDcRequest, RecordHandle};
+use xm1_saclac_interface::{Calc, Calc1, Calc1Request, CalcRequest, Completed, ImgDc, ImgDcOperation, ImgDcRequest, RecordHandle, Statistics as StatisticsPeer, StatisticsOperation, StatisticsRequest};
 use xm1_saclac_profile_records::field::Index;
 use xm1_saclac_profile_records::stock::{record, shared};
 use xm1_saclac_profile_records::{MeasurementSelection, Memory, SharedHeaderByte, StockEntries, WindowStatus};
@@ -48,14 +48,22 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Services<M, R, E, P> {
 
 
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Pipeline for Services<M, R, E, P> {
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P: StatisticsPeer> Pipeline for Services<M, R, E, P> {
     fn capture(&mut self, statistics: Statistics) { boundary::capture(&self.machine, statistics) }
     fn snapshot(&mut self, statistics: Statistics) -> PipelineSnapshot {
         xm1_focus_measurement_round::stock::pipeline_snapshot(&boundary::snapshot(&self.machine, statistics))
     }
     fn timing(&mut self) -> TimingWord { boundary::timing(&self.machine) }
     fn frame_interval(&mut self, timing: TimingWord) -> Option<FrameInterval> { boundary::frame_interval(&self.machine, timing).map(FrameInterval) }
-    fn request_mode_six_statistics(&mut self) { boundary::request_mode_six_statistics(&self.machine) }
+    fn request_mode_six_statistics(&mut self) {
+        if self.machine.read_u32(0x0170_3afc) == 0 {
+            assert!(self.peers.request(StatisticsRequest {
+                operation: StatisticsOperation::Request43,
+                parameters: wire::parameters(&[]),
+                completions: &[],
+            }).is_ok(), "mode-six statistics enqueue failed");
+        }
+    }
     fn take_window_refresh(&mut self) -> bool { boundary::take_window_refresh(&self.machine) }
     fn history_statistics(&mut self, cell: GridCell) -> HistoryStatistics { boundary::history_statistics(&self.machine, cell) }
 }

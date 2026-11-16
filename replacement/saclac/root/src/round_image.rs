@@ -9,7 +9,7 @@ use xm1_saclac_profile_records::{Memory, StockEntries, stock::shared::group_20};
 use xm1_saclac_shared::stock::{Machine, Stock};
 use crate::{focus_area::{Areas, Resources}, round_ports::RoundPorts, services::NO_HANDLE};
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc, I: Isp, T: Tables>
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc + xm1_saclac_interface::Statistics, I: Isp, T: Tables>
     ReplyPorts for RoundPorts<'_, M, R, E, P, I, T> {
     fn channel_count(&mut self) -> ChannelCount { ChannelCount(channel::count(&self.services.stock) as u8) }
     fn lens_report(&mut self) -> LensReport {
@@ -21,7 +21,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + 
     }
 }
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc, I: Isp, T: Tables>
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc + xm1_saclac_interface::Statistics, I: Isp, T: Tables>
     Ports for RoundPorts<'_, M, R, E, P, I, T> {
     fn image_client_callback(&mut self) -> Option<StockCallbackWord> {
         self.services.records.read_shared(NO_HANDLE, &group_20::IMAGE_CALLBACK).ok().filter(|callback| callback.0 != 0)

@@ -60,7 +60,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Effects for Services<M, 
     }
 }
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries, P: xm1_saclac_interface::Calc + xm1_saclac_interface::Calc1 + xm1_saclac_interface::ImgDc> xm1_focus_measurement_round::record::Ports for Services<M, R, E, P> {
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P: xm1_saclac_interface::Calc + xm1_saclac_interface::Calc1 + xm1_saclac_interface::ImgDc + xm1_saclac_interface::Statistics> xm1_focus_measurement_round::record::Ports for Services<M, R, E, P> {
     fn request(&mut self, request: xm1_focus_measurement_round::record::Request) {
         use xm1_focus_measurement_round::record::{Request, SearchMode};
         use xm1_saclac_interface::{Calc, Calc1, Calc1Request, CalcRequest, Completion, ImgDc, ImgDcOperation, ImgDcRequest, stock as wire};
@@ -94,7 +94,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: xm1_saclac_interface::Ca
     }
 }
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries, P: xm1_saclac_interface::Calc + xm1_saclac_interface::Calc1 + xm1_saclac_interface::ImgDc> xm1_focus_measurement_round::window::Ports for Services<M, R, E, P> {
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P: xm1_saclac_interface::Calc + xm1_saclac_interface::Calc1 + xm1_saclac_interface::ImgDc + xm1_saclac_interface::Statistics> xm1_focus_measurement_round::window::Ports for Services<M, R, E, P> {
     fn window_result(&mut self, completed: xm1_saclac_interface::Completed<'_>) -> Option<xm1_focus_measurement_round::window::WindowResult> {
         use xm1_focus_measurement_round::profile::{WindowPosition, WindowStatus};
         if completed.completion != xm1_saclac_interface::Completion::Calculation8d { return None; }

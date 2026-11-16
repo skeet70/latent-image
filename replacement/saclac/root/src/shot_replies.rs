@@ -12,7 +12,7 @@ impl<M: Machine, R, E, P> xm1_saclac_calc::record_policy::AdjustmentPosition for
     }
 }
 
-impl<M: Machine + Clone + ProfileReplies, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc,
+impl<M: Machine + Clone + ProfileReplies, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc + xm1_saclac_interface::Statistics,
     I: xm1_saclac_imaging::driver::Isp, T: xm1_saclac_profile_geometry::controller::Tables, A, Q>
     Replies for Libraries<'_, M, R, E, P, I, T, A, Q> {
     fn reply(&mut self, reply: Reply) {

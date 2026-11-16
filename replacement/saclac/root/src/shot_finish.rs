@@ -18,7 +18,7 @@ impl<M: Machine + Clone, R, E, P> TargetLens for Services<M, R, E, P> {
     fn mapped_value(&mut self, value: u32, bank: u32) -> u32 { u32::from(table::value(&self.stock, Step(value), Row(bank))) }
 }
 
-impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc, I: Isp, T: Tables, A, Q>
+impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + Calc1 + ImgDc + xm1_saclac_interface::Statistics, I: Isp, T: Tables, A, Q>
     FinishLibrary for Libraries<'_, M, R, E, P, I, T, A, Q> {
     fn point_selection(&mut self, point: &LensPoint, lens_reference: LensReference, state: u32) -> u32 {
         let mut services = self.services.borrow_mut();

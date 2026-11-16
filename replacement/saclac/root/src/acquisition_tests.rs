@@ -490,6 +490,22 @@ fn owned_pipeline_status_words_preserve_counter_and_pending_flag() {
 }
 
 #[test]
+fn owned_mode_six_request_preserves_resource_gate_and_empty_statistics_post() {
+    let kernel = fake::saclac_kernel();
+    let cx = kernel.task().unwrap();
+    let (machine, root) = fake::root_with(fake::peers(&cx), Bytes::default(), Entries::default());
+    let recognition = RefCell::new(SceneRecognition::new());
+    acquisition!(root, recognition, cx);
+
+    Pipeline::request_mode_six_statistics(&mut root);
+    assert_eq!(fake::posts(&kernel), [(48, 0x4043, Vec::new())]);
+    machine.set_word(0x0170_3afc, 1);
+    Pipeline::request_mode_six_statistics(&mut root);
+    assert_eq!(fake::posts(&kernel), [(48, 0x4043, Vec::new())]);
+    assert!(!machine.take_entered().iter().any(|(address, _)| *address == 0x103_b064));
+}
+
+#[test]
 fn owned_frame_interval_preserves_stock_projection_branches() {
     let kernel = fake::saclac_kernel();
     let cx = kernel.task().unwrap();
