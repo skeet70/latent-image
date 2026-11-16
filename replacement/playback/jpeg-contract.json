@@ -9,6 +9,16 @@
     {"source": "0x00d988b8", "end": "0x00d98904", "handler": "xm1_playback_jpeg_release", "sha256": "db638b2a6dc404d71eda6c3da34001f8fa603e181da22555d6b8aaafdc04a7aa", "abi": "void(void)"},
     {"source": "0x00d99570", "end": "0x00d99714", "handler": "xm1_playback_jpeg_interrupt", "sha256": "4ff7a2b304d223fed19b7f99f081018f54b93be2e1e7d1827956794c2c9576a5", "abi": "void(void), ordinary descriptor callback"}
   ],
+  "owned_consumer_entries": [
+    {"source": "0x00d98904", "end": "0x00d989f8", "handler": "xm1_playback_jpeg_build_request", "sha256": "6392e76503ea8e6679b13f3003577a298a7e022d990194b7f484f686effef503", "abi": "void(uint32_t record)", "record_readable_bytes": 101, "static_request": "0x014c56f8"},
+    {"source": "0x0121fec8", "end": "0x0121ff20", "handler": "xm1_playback_jpeg_complete_first", "sha256": "62ed3b398b8c37d6bbce5ea41b4a8bfa3b088f33f5ab647a12a52770ec38ec23", "abi": "void(void)", "subscribers": "0x014eaed0"}
+  ],
+  "consumer_ordering": {
+    "builder": "Publish the record before request fields and before lock9 acquisition. Preserve default/7/8 selector mapping, packing byte equal-to-one and untouched fields. Call the existing owned acquire directly.",
+    "first_completion": "Enter nested critical; require both subscribers; clear the first subscriber; leave with the saved critical state; invoke the saved callback. Nested completion sees the cleared slot.",
+    "boundaries": "Develop job4 and its notification/wait/clear-record release companion remain retained. Playback requirements initializer0x01220004, second completion0x0121ff20, timer, prefix preservation, submit and finish/cancel consumers remain retained.",
+    "lifetime": "The static request is constructed before reserved lock9 is acquired. Neither construction concurrency nor subscriber/request quiescence is established by this increment."
+  },
   "owned_internal_bodies": [
     {"start": "0x00d99714", "end": "0x00d999d4", "sha256": "13206b095f700897abfaaecefc3444ac51bb4a80a35a3f85d7b2a1f3507f0860"},
     {"start": "0x00d999d4", "end": "0x00d99a24", "sha256": "ff9f5b23ce22074d8bfbe6b358370ef5001c652ff47e1cf22cddc3a8549dbd77"},
@@ -39,10 +49,11 @@
   "retained_services": {
     "resource1e_acquire_and_route_options": "0x0065a3cc", "resource1e_release_and_route_options": "0x0065a424",
     "publish_restart": "0x0065aa44",
-    "interrupt_acquire": "0x0064e918", "interrupt_release": "0x0064eb20", "cache": "0x00042634"
+    "interrupt_acquire": "0x0064e918", "interrupt_release": "0x0064eb20", "cache": "0x00042634",
+    "nested_critical_enter": "0x007235d8", "nested_critical_leave": "0x007236b0"
   },
   "callback_contract": {"descriptor": "0x48", "irq_line": 76, "published_handler": "0x00d99570", "request_complete_offset": "0x4c", "request_input_needed_offset": "0x50", "request_callback_abi": "void(void)"},
-  "retained_consumers": ["0x01220294 submit", "0x012200ec restart", "0x01220238 finish", "0x0121fec8 first completion", "0x0121ff20 second completion", "0x00d98904 request builder; acquire call0x00d989f0 with shared request0x014c56f8 observed in the existing mode-dialP preparation prefix"],
-  "scope": "Owned channel9 firmware transaction and nominal low-level MMIO services over the existing JPEG device and Playback mode notifications. No codec-model replacement, pixel tolerance, USB-state dependency, capture continuation or retirement/unload claim.",
-  "removal_obligations": ["Replace retained resource1e routing, reserved lock9, cache and IRQ registration services through their owning units.", "Qualify and replace the retained command4 endpoint-reprogram service without inventing its device law.", "Replace retained channel9 request builders, Playback machine5 and completion/deferred-notification consumers.", "Keep published IRQ entry executable through retained interrupt release; establish quiescence before any unload or removal.", "Retain separate qualification for endpoint-reprogram command4 and device status bits17/24, which lack actual PLAY device execution."]
+  "retained_consumers": ["0x00e8fee4 develop job4 producer", "0x00e8eb18 record notification", "0x00d989f8 clear record then release", "0x01220004 requirements initializer and callback publication", "0x01220294 submit", "0x012200ec restart", "0x01220238 finish", "0x0122026c cancel/restore", "0x0121ff20 second completion"],
+  "scope": "Owned channel9 firmware transaction, nominal low-level MMIO services, static-record request construction and first Playback completion over the existing JPEG device and source/output interface. The eight exact source-entry publications use the existing ABI7 allocation and16-word publication table. No codec-model replacement, pixel tolerance, USB-state dependency, capture continuation or retirement/unload claim.",
+  "removal_obligations": ["Replace retained resource1e routing, reserved lock9, cache and IRQ registration services through their owning units.", "Qualify and replace the retained command4 endpoint-reprogram service without inventing its device law.", "Replace retained Playback requirements initializer0x01220004 and submit0x01220294, finish0x01220238/cancel0x0122026c, second completion0x0121ff20 and machine5/deferred-notification consumers.", "Replace develop job4 notification/wait and clear-record release0x00d989f8 through the owning develop unit.", "Keep the static request, record and subscribers live through all retained callers; establish construction serialization and quiescence before publication removal.", "Keep published IRQ entry executable through retained interrupt release; establish quiescence before any unload or removal.", "Retain separate qualification for endpoint-reprogram command4 and device status bits17/24, which lack actual PLAY device execution."]
 }
