@@ -16,15 +16,33 @@
   ],
   "shared_state": {"record_descriptor": "0x014c56f0", "resource_handle": "0x014c56f4", "active_request": "0x014c5888", "irq_token": "0x014c588c", "configuration": "0x014c5890", "configuration_bytes": 112, "request_bytes": 84},
   "serialization": {"reserved_lock": 9, "wait": "0x00724b68", "signal": "0x00724c00", "accepted_signal_results": [0, -43]},
+  "owned_device_services": {
+    "source_image": {"base": "0x0061c400", "sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"},
+    "window": {"start": "0xfff63000", "end": "0xfff6312c", "access": "aligned volatile 32-bit"},
+    "entries": [
+      {"handler": "xm1_jpeg_reset", "start": "0x0065a478", "end": "0x0065a548", "sha256": "e95a566fe7f4e5876b045d0be471321c783450e3c132c301cb8a095664e6f4e7"},
+      {"handler": "xm1_jpeg_program", "start": "0x0065a58c", "end": "0x0065a984", "sha256": "f1a0d6aebc6ce3c9927b056e6c068471f2a2fbd6d7759bff94f04ae39a930673"},
+      {"handler": "xm1_jpeg_start", "start": "0x0065a548", "end": "0x0065a58c", "sha256": "e3afad5b0aa3dce5bf28fe09c81df31b0cd0f3a6bf22e9039dd80d7e6a3c1223"},
+      {"handler": "xm1_jpeg_status_read", "start": "0x0065ab20", "end": "0x0065ab50", "sha256": "19ceb15672e4a76566905ab42d49ddb6caa165ad67eeaffbeb487ba24c465c53"},
+      {"handler": "xm1_jpeg_status_ack", "start": "0x0065ab50", "end": "0x0065ab7c", "sha256": "a788d3c26eec732ee01d6d185f0bfb18285728d10dce1a77d0d9af39b99d023e"},
+      {"handler": "xm1_jpeg_input_event_read", "start": "0x0065ab7c", "end": "0x0065abac", "sha256": "3e56fa3e4cdf2ceaaab220464ee8a15d1223a0d79423aaf9347243c58e44a2f9"},
+      {"handler": "xm1_jpeg_input_event_ack", "start": "0x0065abac", "end": "0x0065abd8", "sha256": "2b11ba6192f17dfb64aae257f6c845b4e28e917b0dfdc61e68e7391ac280a80d"},
+      {"handler": "xm1_jpeg_output_event_read", "start": "0x0065abd8", "end": "0x0065ac08", "sha256": "199338db6406bb63221ef0ce4fd86c829373fd6f44e4628ba4766bad22477ae5"},
+      {"handler": "xm1_jpeg_output_event_ack", "start": "0x0065ac08", "end": "0x0065ac34", "sha256": "6f99190d1f5151af505644ac7156fe41116df9873181c7deb98c77c40e66706c"},
+      {"handler": "xm1_jpeg_endpoint_read", "start": "0x0065a9e4", "end": "0x0065aa14", "sha256": "15e60c1e860137e6465147e59182cafbfb9e2717f03446b1f589e6df7d90ff95"}
+    ],
+    "reset": "Command1; poll status bit16; acknowledge the observed status; control0x100; poll control bit8 clear.",
+    "programming": "Write mode, scale, destination, capacity, source, source bytes, format and window words in source order. Window coordinates above0xffff retain the nonreturning invalid-input outcome.",
+    "native_boundary": "Ordinary AAPCS service entries remain declared conditional native boundaries. Polling and MMIO acceptance execute against the pinned full-system JPEG model.",
+    "ownership_limit": "Owned transaction calls these definitions directly. Other retained channel9 callers are not globally redirected or retired."
+  },
   "retained_services": {
     "resource1e_acquire_and_route_options": "0x0065a3cc", "resource1e_release_and_route_options": "0x0065a424",
-    "reset": "0x0065a478", "program_configuration": "0x0065a58c", "start": "0x0065a548", "publish_restart": "0x0065aa44",
-    "interrupt_acquire": "0x0064e918", "interrupt_release": "0x0064eb20", "cache": "0x00042634",
-    "status_read": "0x0065ab20", "status_ack": "0x0065ab50", "input_event_read": "0x0065ab7c", "input_event_ack": "0x0065abac",
-    "output_event_read": "0x0065abd8", "output_event_ack": "0x0065ac08", "endpoint_read": "0x0065a9e4"
+    "publish_restart": "0x0065aa44",
+    "interrupt_acquire": "0x0064e918", "interrupt_release": "0x0064eb20", "cache": "0x00042634"
   },
   "callback_contract": {"descriptor": "0x48", "irq_line": 76, "published_handler": "0x00d99570", "request_complete_offset": "0x4c", "request_input_needed_offset": "0x50", "request_callback_abi": "void(void)"},
   "retained_consumers": ["0x01220294 submit", "0x012200ec restart", "0x01220238 finish", "0x0121fec8 first completion", "0x0121ff20 second completion"],
-  "scope": "Owned channel9 firmware transaction over existing JPEG device/services and Playback mode notifications. No codec-model replacement, pixel tolerance, USB-state dependency, capture continuation or retirement/unload claim.",
-  "removal_obligations": ["Replace retained low-level JPEG device/service bodies and resource routing without changing their source-grounded hardware laws.", "Replace retained Playback machine5 and completion/deferred-notification consumers.", "Keep published IRQ entry executable through retained interrupt release; establish quiescence before any unload or removal.", "Retain separate qualification for endpoint-reprogram command4 and device status bits17/24, which lack actual PLAY device execution."]
+  "scope": "Owned channel9 firmware transaction and nominal low-level MMIO services over the existing JPEG device and Playback mode notifications. No codec-model replacement, pixel tolerance, USB-state dependency, capture continuation or retirement/unload claim.",
+  "removal_obligations": ["Replace retained resource1e routing, reserved lock9, cache and IRQ registration services through their owning units.", "Qualify and replace the retained command4 endpoint-reprogram service without inventing its device law.", "Replace retained Playback machine5 and completion/deferred-notification consumers.", "Keep published IRQ entry executable through retained interrupt release; establish quiescence before any unload or removal.", "Retain separate qualification for endpoint-reprogram command4 and device status bits17/24, which lack actual PLAY device execution."]
 }

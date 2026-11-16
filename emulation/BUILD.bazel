@@ -3642,6 +3642,35 @@ haskell_test(
 )
 
 haskell_library(
+    name = "playback-device-lib",
+    srcs = ["Emulation/PlaybackDevice.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host/firmware:playback-contract",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:text",
+    ],
+)
+
+haskell_test(
+    name = "playback-device-tests",
+    size = "small",
+    srcs = ["PlaybackDeviceTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":playback-device-lib",
+        "//host/firmware:playback-contract",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:text",
+    ],
+)
+
+haskell_library(
     name = "media-inspection-lib",
     srcs = ["Emulation/MediaInspection.hs"],
     src_strip_prefix = ".",
@@ -3713,7 +3742,9 @@ haskell_binary(
         ":capture-stream-lib",
         ":media-inspection-lib",
         ":playback-decode-lib",
+        ":playback-device-lib",
         ":playback-owned-lib",
+        "//host/firmware:playback-contract",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main (main) where
 
-import Control.Monad (unless)
+import Control.Monad (unless, forM_)
 import qualified Crypto.Hash.SHA256 as SHA
 import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson.Key as K
@@ -36,7 +36,10 @@ elf :: B.ByteString
 elf = elfFor ["xm1_playback_source_entry", "xm1_playback_mode_entry"]
 
 elfFor :: [T.Text] -> B.ByteString
-elfFor functions = B.pack [byte i | i <- [0..0x7ff]]
+elfFor = elfForFamily False
+
+elfForFamily :: Bool -> [T.Text] -> B.ByteString
+elfForFamily retained functions = B.pack [byte i | i <- [0..0xfff]]
   where
     encoded = map (B.pack . map (fromIntegral . fromEnum) . T.unpack) functions
     names = B.singleton 0 <> B.concat [name <> B.singleton 0 | name <- encoded]
@@ -45,18 +48,21 @@ elfFor functions = B.pack [byte i | i <- [0..0x7ff]]
     header = B.pack [127,69,76,70,1,1,1] <> B.replicate 9 0
       <> B.pack [2,0,40,0] <> word 1 <> word 0x10000 <> word 0 <> word 0x400 <> word 0
       <> B.pack [52,0,32,0,0,0,40,0,8,0,4,0]
-    symbol name value = word name <> word value <> word 4 <> B.pack [0x12,0,1,0]
-    symbols = B.replicate 16 0 <> B.concat [symbol name (0x10000 + index * 4) | (name,index) <- zip (take (length functions) nameOffsets) [0..]]
+    symbol name index function = case lookup function retainedTargets of
+      Just target | retained -> word name <> word target <> word 0 <> B.pack [0x12,0,0xf1,0xff]
+      _ -> word name <> word (0x10000 + index * 4) <> word 4 <> B.pack [0x12,0,1,0]
+    retainedTargets = [(T.pack name,C.bodyStart body) | service <- C.jpegDeviceServices, let (body,name) = C.jpegDeviceContract service]
+    symbols = B.replicate 16 0 <> B.concat [symbol name index function | (name,index,function) <- zip3 (take (length functions) nameOffsets) [0..] functions]
     section name typ flags addr offset size link entsize = B.concat (map word [name,typ,flags,addr,offset,size,link,0,4,entsize])
     sections = B.replicate 40 0
       <> section 1 1 6 0x10000 0x100 (fromIntegral (length functions) * 4) 0 0
-      <> section 7 2 0 0 0x140 (fromIntegral (B.length symbols)) 3 16
-      <> section 15 3 0 0 0x200 (fromIntegral (B.length names)) 0 0
-      <> section 23 3 0 0 0x300 (fromIntegral (B.length sectionNames)) 0 0
+      <> section 7 2 0 0 0x800 (fromIntegral (B.length symbols)) 3 16
+      <> section 15 3 0 0 0xa00 (fromIntegral (B.length names)) 0 0
+      <> section 23 3 0 0 0xe00 (fromIntegral (B.length sectionNames)) 0 0
       <> section 33 1 3 0x15000 0x600 128 0 0
       <> section 54 1 3 0x15080 0x680 128 0 0
       <> section 72 1 3 0x15100 0x700 256 0 0
-    chunks = [(0,header),(0x140,symbols),(0x200,names),(0x300,sectionNames),(0x400,sections)]
+    chunks = [(0,header),(0x800,symbols),(0xa00,names),(0xe00,sectionNames),(0x400,sections)]
     byte i = case [B.index bytes (i-offset) | (offset,bytes) <- chunks, i >= offset, i-offset < B.length bytes] of
       x:_ -> x
       [] -> 0
@@ -117,6 +123,30 @@ checkJpeg = do
       jpegElf = elfFor [name | (_,_,_,name,_) <- entries]
   package <- either fail pure (P.parsePackage (json jpegManifest) (json jpegMetadata) runtime jpegElf)
   check "JPEG scope is separate from preparation pair" (P.qualificationScope package == P.JpegTransaction)
+  check "six-hook package retains the device family" (P.deviceOwnership package == P.RetainedJpegDevice)
+  let ownedNames = [T.pack name | service <- C.jpegDeviceServices, let (_,name) = C.jpegDeviceContract service]
+      allNames = [name | (_,_,_,name,_) <- entries] ++ ownedNames
+  owned <- either fail pure (P.parsePackage (json jpegManifest) (json jpegMetadata) runtime (elfFor allNames))
+  check "ELF definitions select owned device family" (P.deviceOwnership owned == P.OwnedJpegDevice)
+  check "service targets are actual ELF definitions" ([(lo,hi) | (_,lo,hi) <- P.deviceServices (Just owned)]
+    == [(0x10018 + index*4,0x1001c + index*4) | index <- [0..9]])
+  check "owned family extends source guards by the ten original bodies"
+    (drop (length (P.originalBodies package)) (P.originalBodies owned)
+      == [(C.bodyStart body,fromIntegral (C.bodyEnd body-C.bodyStart body)) | service <- C.jpegDeviceServices, let (body,_) = C.jpegDeviceContract service])
+  forM_ [1..9] $ \count -> check "partial device definition family refused"
+    (isLeft (P.parsePackage (json jpegManifest) (json jpegMetadata) runtime (elfFor (take (6+count) allNames))))
+  retained <- either fail pure (P.parsePackage (json jpegManifest) (json jpegMetadata) runtime (elfForFamily True allNames))
+  check "historical absolute source service family remains admitted" (P.deviceOwnership retained == P.RetainedJpegDevice)
+  check "retained source family adds no exclusions" (P.originalBodies retained == P.originalBodies package)
+  check "retained service redirected away from pinned source refused"
+    (isLeft (P.parsePackage (json jpegManifest) (json jpegMetadata) runtime (changeByte 0x874 (elfForFamily True allNames))))
+  check "duplicate device export refused"
+    (isLeft (P.parsePackage (json jpegManifest) (json jpegMetadata) runtime (elfFor (allNames ++ take 1 ownedNames)))))
+  let changedDeviceRuntime = changeByte 0x18 runtime
+      changedManifest = put "runtime_sha256" (String (sha changedDeviceRuntime)) jpegManifest
+      changedMetadata = put "runtime_sha256" (String (sha changedDeviceRuntime)) jpegMetadata
+  check "runtime identity cannot hide ELF device code mismatch"
+    (isLeft (P.parsePackage (json changedManifest) (json changedMetadata) changedDeviceRuntime (elfFor allNames)))
   let request = P.watchRequest package
       classes = case (A.fromJSON (get "write_ranges" request), A.fromJSON (get "fetch_ranges" request)) of
         (A.Success writes, A.Success fetches) -> [object ["range" .= range,"kinds" .= kinds]
@@ -133,6 +163,15 @@ checkJpeg = do
     [[0x10008,0x10014],[0x10008,0x10010],[0x10014,0x10010],[]]
   mapM_ (\target -> check "retained internal JPEG body execution refused" (isLeft (observed [target])))
     [0xd99714,0xd999d4,0xd99a24]
+  let ownedRequest = P.watchRequest owned
+      ownedClasses = case (A.fromJSON (get "write_ranges" ownedRequest), A.fromJSON (get "fetch_ranges" ownedRequest)) of
+        (A.Success writes,A.Success fetches) -> [object ["range" .= range,"kinds" .= kinds]
+          | (ranges,kinds) <- [(writes,["cpu-write","host-write","model-bus-write"] :: [T.Text]),(fetches,["cpu-fetch"])], range <- (ranges :: [Value])]
+        _ -> []
+      ownedAck = put "classes" (A.toJSON ownedClasses) (put "ranges" (get "ranges" ownedRequest) ack)
+      ownedState target = put "classes" (A.toJSON ownedClasses) (put "ranges" (get "ranges" ownedRequest) (state [target]))
+  mapM_ (\target -> check "owned device excludes each original low-level body"
+    (isLeft (P.witness owned ownedAck (ownedState target) (ownedState target)))) [0x65a478,0x65a58c,0x65a548,0x65ab20,0x65ab50,0x65ab7c,0x65abac,0x65abd8,0x65ac08,0x65a9e4]
   mapM_ (\offset -> check "owned JPEG entry mutation refused" (isLeft (P.checkGuestArtifacts package
     ((0x10000,changeByte offset completedRuntime) : drop 1 (P.guestArtifacts package))))) [8,12,16,20]
   check "partial JPEG ownership refused" (isLeft (P.parsePackage (json jpegManifest) (json (put "hooks" (A.toJSON (take 5 hooks)) jpegMetadata)) runtime jpegElf))

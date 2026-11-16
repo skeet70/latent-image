@@ -1,6 +1,7 @@
 module PlaybackContract
   ( PlaybackEntry (..), SourceSha256 (..), playbackContract, playbackEntries
   , preparationEntries, jpegEntries, PinnedBody (..), jpegInternalBodies
+  , JpegDeviceService (..), jpegDeviceServices, jpegDeviceContract
   ) where
 
 import Data.Word (Word32)
@@ -42,3 +43,26 @@ jpegInternalBodies =
   , PinnedBody 0x00d999d4 0x00d99a24 (SourceSha256 "ff9f5b23ce22074d8bfbe6b358370ef5001c652ff47e1cf22cddc3a8549dbd77")
   , PinnedBody 0x00d99a24 0x00d99a5c (SourceSha256 "5e52e2e0793efc75abb39ba8e2b170958c1863f3a6e8f73f32108d6254ae1f5a")
   ]
+
+data JpegDeviceService
+  = JpegReset | JpegProgram | JpegStart
+  | JpegStatusRead | JpegStatusAck | JpegInputRead | JpegInputAck
+  | JpegOutputRead | JpegOutputAck | JpegEndpointRead
+  deriving (Eq, Ord, Enum, Bounded, Show)
+
+jpegDeviceServices :: [JpegDeviceService]
+jpegDeviceServices = [minBound .. maxBound]
+
+jpegDeviceContract :: JpegDeviceService -> (PinnedBody, String)
+jpegDeviceContract service = case service of
+  JpegReset -> body 0x0065a478 0x0065a548 "e95a566fe7f4e5876b045d0be471321c783450e3c132c301cb8a095664e6f4e7" "xm1_jpeg_reset"
+  JpegProgram -> body 0x0065a58c 0x0065a984 "f1a0d6aebc6ce3c9927b056e6c068471f2a2fbd6d7759bff94f04ae39a930673" "xm1_jpeg_program"
+  JpegStart -> body 0x0065a548 0x0065a58c "e3afad5b0aa3dce5bf28fe09c81df31b0cd0f3a6bf22e9039dd80d7e6a3c1223" "xm1_jpeg_start"
+  JpegStatusRead -> body 0x0065ab20 0x0065ab50 "19ceb15672e4a76566905ab42d49ddb6caa165ad67eeaffbeb487ba24c465c53" "xm1_jpeg_status_read"
+  JpegStatusAck -> body 0x0065ab50 0x0065ab7c "a788d3c26eec732ee01d6d185f0bfb18285728d10dce1a77d0d9af39b99d023e" "xm1_jpeg_status_ack"
+  JpegInputRead -> body 0x0065ab7c 0x0065abac "3e56fa3e4cdf2ceaaab220464ee8a15d1223a0d79423aaf9347243c58e44a2f9" "xm1_jpeg_input_event_read"
+  JpegInputAck -> body 0x0065abac 0x0065abd8 "2b11ba6192f17dfb64aae257f6c845b4e28e917b0dfdc61e68e7391ac280a80d" "xm1_jpeg_input_event_ack"
+  JpegOutputRead -> body 0x0065abd8 0x0065ac08 "199338db6406bb63221ef0ce4fd86c829373fd6f44e4628ba4766bad22477ae5" "xm1_jpeg_output_event_read"
+  JpegOutputAck -> body 0x0065ac08 0x0065ac34 "6f99190d1f5151af505644ac7156fe41116df9873181c7deb98c77c40e66706c" "xm1_jpeg_output_event_ack"
+  JpegEndpointRead -> body 0x0065a9e4 0x0065aa14 "15e60c1e860137e6465147e59182cafbfb9e2717f03446b1f589e6df7d90ff95" "xm1_jpeg_endpoint_read"
+  where body start end hash symbol = (PinnedBody start end (SourceSha256 hash), symbol)
