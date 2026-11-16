@@ -1,6 +1,6 @@
 {
   "unit": "rtos_platform",
-  "summary": "The platform aggregate: 126 veneer entries per domain and 60 externals per domain declared in `carriers.json`, with `veneer-a.S`/`veneer-b.S` generated from it.",
+  "summary": "The platform aggregate: 132 veneer entries per domain and 60 externals per domain declared in `carriers.json`, with `veneer-a.S`/`veneer-b.S` generated from it.",
   "classification": "linked",
   "rows": [
     {
@@ -289,7 +289,7 @@
     },
     {
       "id": "rtos_platform-03",
-      "shim": "126 veneer entries per domain in `veneer-a.S`/`veneer-b.S`, placed by `platform-a.ld`/`platform-b.ld`",
+      "shim": "132 veneer entries per domain in `veneer-a.S`/`veneer-b.S`, placed by `platform-a.ld`/`platform-b.ld`",
       "kind": "veneer or carrier at a stock address",
       "other_side": "stock callers of the replaced root slots",
       "owned": "no",
@@ -347,6 +347,12 @@
             "xm1_platform_veneer_family_flag_set_handler",
             "xm1_platform_veneer_family_flag_timed_wait",
             "xm1_platform_veneer_family_flag_wait",
+            "xm1_platform_veneer_family_mailbox_create",
+            "xm1_platform_veneer_family_mailbox_delete",
+            "xm1_platform_veneer_family_mailbox_poll",
+            "xm1_platform_veneer_family_mailbox_receive",
+            "xm1_platform_veneer_family_mailbox_send",
+            "xm1_platform_veneer_family_mailbox_timed_receive",
             "xm1_platform_veneer_family_release",
             "xm1_platform_veneer_fixed_pool_create",
             "xm1_platform_veneer_fixed_pool_delete",
@@ -484,6 +490,12 @@
             "xm1_rtos_objects_family_flag_set_handler",
             "xm1_rtos_objects_family_flag_timed_wait",
             "xm1_rtos_objects_family_flag_wait",
+            "xm1_rtos_objects_family_mailbox_create",
+            "xm1_rtos_objects_family_mailbox_delete",
+            "xm1_rtos_objects_family_mailbox_poll",
+            "xm1_rtos_objects_family_mailbox_receive",
+            "xm1_rtos_objects_family_mailbox_send",
+            "xm1_rtos_objects_family_mailbox_timed_receive",
             "xm1_rtos_objects_release",
             "xm1_rtos_objects_wait_block",
             "xm1_rtos_objects_wait_block_timed",
@@ -554,7 +566,7 @@
             "xm1_s3b_wake"
           ],
           "contract": "replacement/rtos_platform/carriers.json",
-          "requirement": "126 veneer entries per domain in `veneer-a.S`/`veneer-b.S`, placed by `platform-a.ld`/`platform-b.ld`. stock callers of the replaced root slots. every root-slot caller is owned or migrated"
+          "requirement": "132 veneer entries per domain in `veneer-a.S`/`veneer-b.S`, placed by `platform-a.ld`/`platform-b.ld`. stock callers of the replaced root slots. every root-slot caller is owned or migrated"
         },
         {
           "image": "//replacement/rtos_platform:platform-b",
@@ -607,6 +619,12 @@
             "xm1_platform_veneer_family_flag_set_handler",
             "xm1_platform_veneer_family_flag_timed_wait",
             "xm1_platform_veneer_family_flag_wait",
+            "xm1_platform_veneer_family_mailbox_create",
+            "xm1_platform_veneer_family_mailbox_delete",
+            "xm1_platform_veneer_family_mailbox_poll",
+            "xm1_platform_veneer_family_mailbox_receive",
+            "xm1_platform_veneer_family_mailbox_send",
+            "xm1_platform_veneer_family_mailbox_timed_receive",
             "xm1_platform_veneer_family_release",
             "xm1_platform_veneer_fixed_pool_create",
             "xm1_platform_veneer_fixed_pool_delete",
@@ -744,6 +762,12 @@
             "xm1_rtos_objects_family_flag_set_handler",
             "xm1_rtos_objects_family_flag_timed_wait",
             "xm1_rtos_objects_family_flag_wait",
+            "xm1_rtos_objects_family_mailbox_create",
+            "xm1_rtos_objects_family_mailbox_delete",
+            "xm1_rtos_objects_family_mailbox_poll",
+            "xm1_rtos_objects_family_mailbox_receive",
+            "xm1_rtos_objects_family_mailbox_send",
+            "xm1_rtos_objects_family_mailbox_timed_receive",
             "xm1_rtos_objects_release",
             "xm1_rtos_objects_wait_block",
             "xm1_rtos_objects_wait_block_timed",
@@ -814,7 +838,7 @@
             "xm1_s3b_wake"
           ],
           "contract": "replacement/rtos_platform/carriers.json",
-          "requirement": "126 veneer entries per domain in `veneer-a.S`/`veneer-b.S`, placed by `platform-a.ld`/`platform-b.ld`. stock callers of the replaced root slots. every root-slot caller is owned or migrated"
+          "requirement": "132 veneer entries per domain in `veneer-a.S`/`veneer-b.S`, placed by `platform-a.ld`/`platform-b.ld`. stock callers of the replaced root slots. every root-slot caller is owned or migrated"
         }
       ],
       "predicates": {

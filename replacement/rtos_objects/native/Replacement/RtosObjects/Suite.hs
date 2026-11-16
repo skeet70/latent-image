@@ -21,7 +21,7 @@ import qualified Replacement.RtosPlatform.Aggregate as Agg
 import System.FilePath ((</>), takeDirectory)
 
 newtype Slot = Slot Word32 deriving (Eq, Show)
-data Family = SetFlag | SetHandler | Clear | Wait | Poll | TimedWait | Create | Delete | Send deriving (Eq, Show)
+data Family = SetFlag | SetHandler | Clear | Wait | Poll | TimedWait | Create | Delete | Send | MailboxCreate | MailboxDelete | MailboxPoll deriving (Eq, Show)
 data Helper = WaitRelease Domain | WaitBlock Domain | WaitBlockTimed Domain | Check Domain deriving (Eq, Show)
 data Direct = Receive Domain | TimedReceive Domain deriving (Eq, Show)
 data Call
@@ -166,6 +166,9 @@ entryAddress DomainA family = case family of
   Create -> 0x4d39c
   Delete -> 0x4d434
   Send -> 0x4aa44
+  MailboxCreate -> 0x4d5bc
+  MailboxDelete -> 0x4d654
+  MailboxPoll -> 0x4af9c
 entryAddress DomainB family = case family of
   SetFlag -> 0xd80fc
   SetHandler -> 0xd835c
@@ -176,6 +179,9 @@ entryAddress DomainB family = case family of
   Create -> 0xdd360
   Delete -> 0xdd3f8
   Send -> 0xdaa04
+  MailboxCreate -> 0xdd580
+  MailboxDelete -> 0xdd618
+  MailboxPoll -> 0xdaf5c
 
 helperEntry :: Domain -> Helper -> Word32
 helperEntry DomainA helper = case helper of
@@ -335,6 +341,26 @@ cases facts executing =
       , poke oldMessage 0, poke (oldMessage + 4) 5, poke message sentinel, poke (message + 4) 5
       ] [Result 0, eq oldMessage message, eq message 0, eq (mailControl + factsMailboxControlTail facts) oldMessage]
   , service "send-waiter-peer" Send executing (Released remote) CallerReturn [(R1, message)] (mailWaiter remote) [Result 0, ready remote, eq (mailboxWait facts remote 2 + factsMailboxWaitMessage facts) message, Equals (bank remote) 0x01000000, Equals (bank executing) 0]
+  , service "mailbox-create-empty" MailboxCreate executing NoWaiter CallerReturn [(R1, requestPointer)]
+      [poke (mailbox + factsMailboxConfigExists facts) 0, poke requestPointer 2, poke (requestPointer + 4) 32]
+      [Result 0, eq (mailbox + factsMailboxConfigExists facts) 1, eq mailbox 2
+      , eq (mailbox + factsMailboxConfigPriorityLimit facts) 32, eq mailControl mailControl
+      , eq (mailControl + factsWaitQueuePrev facts) mailControl, eq (mailControl + factsMailboxControlHead facts) 0]
+  , service "mailbox-delete-idle" MailboxDelete executing NoWaiter CallerReturn [] []
+      [Result 0, eq (mailbox + factsMailboxConfigExists facts) 0, eq mailbox 2
+      , eq (mailbox + factsMailboxConfigPriorityLimit facts) 32, eq mailControl mailControl
+      , eq (mailControl + factsWaitQueuePrev facts) mailControl, eq (mailControl + factsMailboxControlHead facts) 0]
+  , service "mailbox-poll-empty" MailboxPoll executing NoWaiter CallerReturn [(R1, outputCell)] []
+      [Result 0xffffffce, eq outputCell 0]
+  , service "mailbox-poll-message" MailboxPoll executing NoWaiter CallerReturn [(R1, outputCell)]
+      [poke (mailControl + factsMailboxControlHead facts) message, poke (mailControl + factsMailboxControlTail facts) message, poke message 0]
+      [Result 0, eq outputCell message, eq (mailControl + factsMailboxControlHead facts) 0]
+  , helper "mailbox-receive-message" (DirectEntry (Receive executing)) CallerReturn [(R1, outputCell)]
+      [poke (mailControl + factsMailboxControlHead facts) message, poke (mailControl + factsMailboxControlTail facts) message, poke message 0]
+      [Result 0, eq outputCell message, eq (mailControl + factsMailboxControlHead facts) 0]
+  , helper "mailbox-timed-receive-message" (DirectEntry (TimedReceive executing)) CallerReturn [(R1, outputCell), (R2, 50)]
+      [poke (mailControl + factsMailboxControlHead facts) message, poke (mailControl + factsMailboxControlTail facts) message, poke message 0]
+      [Result 0, eq outputCell message, eq (mailControl + factsMailboxControlHead facts) 0]
   , release "release-plain-insert" executing TaskInvocation [] [Result 1, ready executing]
   , release "release-terminate-reset" executing TaskInvocation [poke (localTask + factsTaskTerminatePending facts) 1] [Result 0, state executing (factsStateDormant facts), eq (localTask + factsTaskContextDiscarded facts) 1]
   , release "release-terminate-prepare" executing TaskInvocation
@@ -983,7 +1009,7 @@ compareFamily facts executing payload one description stock owned =
       OwnerRelease _ -> []
       HelperEntry _ -> []
       ObjectService family objectDomain
-        | family `elem` [Create, Delete] -> []
+        | family `elem` [Create, Delete, MailboxCreate, MailboxDelete] -> []
         | otherwise -> objectInterval objectDomain ++ nesting objectDomain
       DirectEntry direct -> objectInterval (directDomain direct)
       where

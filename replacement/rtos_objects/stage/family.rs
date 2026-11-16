@@ -230,6 +230,7 @@ fn delete_flag_entry(id: i32) -> (i32, DispatchDecision) {
 }
 
 #[inline(never)]
+#[cfg_attr(feature = "component", link_section = ".text.objects_create_mailbox")]
 fn create_mailbox_entry(id: i32, request_pointer: u32) -> i32 {
     let words = entry_words();
     let slot = match own_mailbox_slot(EncodedId(id), load(words.context(ENTRY).mailbox_count())) {
