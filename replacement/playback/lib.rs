@@ -1,5 +1,7 @@
 #![no_std]
 
+mod jpeg_transaction;
+
 #[path = "../vendor_protocol/playback_consumer.rs"]
 mod playback_consumer;
 #[path = "../vendor_protocol/playback_source_workspace.rs"]

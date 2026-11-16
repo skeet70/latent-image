@@ -3,7 +3,8 @@ module Main (main) where
 import A32 (decode)
 import Control.Monad (unless)
 import Data.Word (Word32)
-import ExperimentHook (positionIndependent, HookMode (..), HookAdmission (..), PlaybackEntry (..), SourceSha256 (..), bindReplacement, admitHook, entryPublications, originalBody)
+import ExperimentHook (positionIndependent, HookMode (..), HookAdmission (..), bindReplacement, admitHook, entryPublications, originalBody)
+import PlaybackContract (PlaybackEntry (..), SourceSha256 (..), playbackContract, jpegEntries)
 import Numeric (showHex)
 import System.Exit (exitFailure)
 
@@ -59,4 +60,15 @@ main = do
     , source 0x0120b40c "xm1_playback_source_entry" 0x0120b40c 0x0120b77c sourceHash
     , source 0x0120b40c "xm1_playback_source_entry" 0x0120b40c 0x0120b778 modeHash
     ]
+  mapM_ (\entry -> do
+    let (start,end,digest,handler) = playbackContract entry
+    check "JPEG replacement binds its exact source contract" (source start handler start end digest == Right (ReplaceEntry entry))
+    check "JPEG replacement remains emulator-only" (refused (admitHook ObserveOnly (ReplaceEntry entry)))
+    check "JPEG body exclusion starts after both publication words" (originalBody (ReplaceEntry entry) == Just (start+8,end))
+    mapM_ (check "invalid JPEG replacement admitted" . refused)
+      [ source (start+4) handler start end digest
+      , source start "wrong_handler" start end digest
+      , source start handler (start+4) end digest
+      , source start handler start (end+4) digest
+      , source start handler start end sourceHash ]) jpegEntries
   putStrLn ("experiment hook: " ++ show (length cases) ++ " cases")

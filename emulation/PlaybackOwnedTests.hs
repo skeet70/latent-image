@@ -4,6 +4,7 @@ module Main (main) where
 import Control.Monad (unless)
 import qualified Crypto.Hash.SHA256 as SHA
 import Data.Aeson (Value (..), object, (.=))
+import qualified Data.Aeson.Key as K
 import qualified Data.Aeson as A
 import qualified Data.Aeson.KeyMap as KM
 import Data.Bits (shiftR)
@@ -14,6 +15,7 @@ import qualified Data.Text as T
 import Data.Word (Word32)
 import qualified Emulation.PlaybackOwned as P
 import Numeric (showHex)
+import qualified PlaybackContract as C
 
 check :: String -> Bool -> IO ()
 check name ok = unless ok (fail name)
@@ -31,24 +33,30 @@ word :: Word32 -> B.ByteString
 word value = B.pack [fromIntegral (value `shiftR` n) | n <- [0,8,16,24]]
 
 elf :: B.ByteString
-elf = B.pack [byte i | i <- [0..0x63f]]
+elf = elfFor ["xm1_playback_source_entry", "xm1_playback_mode_entry"]
+
+elfFor :: [T.Text] -> B.ByteString
+elfFor functions = B.pack [byte i | i <- [0..0x7ff]]
   where
-    names = "\0xm1_playback_source_entry\0xm1_playback_mode_entry\0"
+    encoded = map (B.pack . map (fromIntegral . fromEnum) . T.unpack) functions
+    names = B.singleton 0 <> B.concat [name <> B.singleton 0 | name <- encoded]
+    nameOffsets = scanl (\offset name -> offset + fromIntegral (B.length name) + 1) 1 encoded
     sectionNames = "\0.text\0.symtab\0.strtab\0.shstrtab\0.ram_push.rendezvous\0.ram_push.mailbox\0.ram_push.publications\0"
     header = B.pack [127,69,76,70,1,1,1] <> B.replicate 9 0
-      <> B.pack [2,0,40,0] <> word 1 <> word 0x10000 <> word 0 <> word 0x300 <> word 0
+      <> B.pack [2,0,40,0] <> word 1 <> word 0x10000 <> word 0 <> word 0x400 <> word 0
       <> B.pack [52,0,32,0,0,0,40,0,8,0,4,0]
     symbol name value = word name <> word value <> word 4 <> B.pack [0x12,0,1,0]
+    symbols = B.replicate 16 0 <> B.concat [symbol name (0x10000 + index * 4) | (name,index) <- zip (take (length functions) nameOffsets) [0..]]
     section name typ flags addr offset size link entsize = B.concat (map word [name,typ,flags,addr,offset,size,link,0,4,entsize])
     sections = B.replicate 40 0
-      <> section 1 1 6 0x10000 0x100 8 0 0
-      <> section 7 2 0 0 0x110 48 3 16
-      <> section 15 3 0 0 0x140 (fromIntegral (B.length names)) 0 0
-      <> section 23 3 0 0 0x200 (fromIntegral (B.length sectionNames)) 0 0
-      <> section 33 1 3 0x15000 0x440 128 0 0
-      <> section 54 1 3 0x15080 0x4c0 128 0 0
-      <> section 72 1 3 0x15100 0x540 256 0 0
-    chunks = [(0,header),(0x100,B.replicate 8 0),(0x110,B.replicate 16 0 <> symbol 1 0x10000 <> symbol 27 0x10004),(0x140,names),(0x200,sectionNames),(0x300,sections)]
+      <> section 1 1 6 0x10000 0x100 (fromIntegral (length functions) * 4) 0 0
+      <> section 7 2 0 0 0x140 (fromIntegral (B.length symbols)) 3 16
+      <> section 15 3 0 0 0x200 (fromIntegral (B.length names)) 0 0
+      <> section 23 3 0 0 0x300 (fromIntegral (B.length sectionNames)) 0 0
+      <> section 33 1 3 0x15000 0x600 128 0 0
+      <> section 54 1 3 0x15080 0x680 128 0 0
+      <> section 72 1 3 0x15100 0x700 256 0 0
+    chunks = [(0,header),(0x140,symbols),(0x200,names),(0x300,sectionNames),(0x400,sections)]
     byte i = case [B.index bytes (i-offset) | (offset,bytes) <- chunks, i >= offset, i-offset < B.length bytes] of
       x:_ -> x
       [] -> 0
@@ -95,6 +103,40 @@ fetch :: Word32 -> Value
 fetch target = object ["source" .= ("cpu-fetch" :: T.Text),"address" .= target,"physical" .= target,"size" .= (4 :: Int)
   ,"value" .= Null,"before" .= Null,"byte_order" .= ("little" :: T.Text),"core" .= (0 :: Int),"pc" .= target,"instructions" .= (10 :: Int),"tick" .= (1 :: Int)]
 
+checkJpeg :: IO ()
+checkJpeg = do
+  let entries = [(start,end,0x10000 + index * 4,T.pack name,T.pack hash)
+        | (entry,index) <- zip C.playbackEntries [0..]
+        , let (start,end,C.SourceSha256 hash,name) = C.playbackContract entry]
+      hooks = [hook start end target name hash | (start,end,target,name,hash) <- entries]
+      jpegMetadata = put "hooks" (A.toJSON hooks) (put "symbols" (object [K.fromText name .= hex target | (_,_,target,name,_) <- entries]) metadata)
+      jpegManifest = put "publications" (A.toJSON
+        ([object ["address" .= hex address,"old" .= hex 0,"new" .= hex value,"phase" .= phase]
+          | (start,_,target,_,_) <- entries,(address,value,phase) <- [(start+4,target,"setup" :: T.Text),(start,0xe51ff004,"activation")]]
+        ++ [object ["address" .= hex (0x120e000+i*4),"old" .= hex 0,"new" .= hex 0,"phase" .= ("setup" :: T.Text)] | i <- [0..3]])) manifest
+      jpegElf = elfFor [name | (_,_,_,name,_) <- entries]
+  package <- either fail pure (P.parsePackage (json jpegManifest) (json jpegMetadata) runtime jpegElf)
+  check "JPEG scope is separate from preparation pair" (P.qualificationScope package == P.JpegTransaction)
+  let request = P.watchRequest package
+      classes = case (A.fromJSON (get "write_ranges" request), A.fromJSON (get "fetch_ranges" request)) of
+        (A.Success writes, A.Success fetches) -> [object ["range" .= range,"kinds" .= kinds]
+          | (ranges,kinds) <- [(writes,["cpu-write","host-write","model-bus-write"] :: [T.Text]),(fetches,["cpu-fetch"])], range <- (ranges :: [Value])]
+        _ -> []
+      ack = object ["armed" .= True,"ranges" .= get "ranges" request,"views" .= ("fixed" :: T.Text),"classes" .= classes]
+      state targets = object ["enabled" .= True,"ranges" .= get "ranges" request,"views" .= ("fixed" :: T.Text),"classes" .= classes
+        ,"records" .= map fetch targets,"violation" .= Null]
+      observed targets = P.witness package ack (state targets) (state targets)
+  value <- either fail pure (observed [0x10008,0x10014,0x10010])
+  check "JPEG transaction needs its actual lifecycle entries" (P.qualificationObserved package value)
+  check "JPEG does not manufacture mode or source entry execution" (not (P.modeObserved value) && not (P.sourceObserved value))
+  mapM_ (\targets -> check "incomplete JPEG transaction unqualified" (fmap (P.qualificationObserved package) (observed targets) == Right False))
+    [[0x10008,0x10014],[0x10008,0x10010],[0x10014,0x10010],[]]
+  mapM_ (\target -> check "retained internal JPEG body execution refused" (isLeft (observed [target])))
+    [0xd99714,0xd999d4,0xd99a24]
+  mapM_ (\offset -> check "owned JPEG entry mutation refused" (isLeft (P.checkGuestArtifacts package
+    ((0x10000,changeByte offset completedRuntime) : drop 1 (P.guestArtifacts package))))) [8,12,16,20]
+  check "partial JPEG ownership refused" (isLeft (P.parsePackage (json jpegManifest) (json (put "hooks" (A.toJSON (take 5 hooks)) jpegMetadata)) runtime jpegElf))
+
 main :: IO ()
 main = do
   check "default route does not select an install" (P.selection True Nothing Nothing == Right Nothing)
@@ -128,13 +170,13 @@ main = do
       none = state ([] :: [Value])
   check "watch armed before PLAY" (isRight (P.validateWatchBegin package ack))
   check "unarmed watch refused before PLAY" (isLeft (P.validateWatchBegin package (put "armed" (Bool False) ack)))
-  check "pair needs actual entries" (P.witness package ack both both == Right (P.Witness True True))
-  check "missing reachable mode stays unobserved" (P.witness package ack one one == Right (P.Witness True False))
+  check "pair needs actual entries" (fmap (\w -> (P.sourceObserved w, P.modeObserved w)) (P.witness package ack both both) == Right (True, True))
+  check "missing reachable mode stays unobserved" (fmap (\w -> (P.sourceObserved w, P.modeObserved w)) (P.witness package ack one one) == Right (True, False))
   let store target = put "source" (String "cpu-write") (put "value" (A.toJSON (1 :: Int)) (put "before" (A.toJSON ([0,0,0,0] :: [Int])) (fetch target)))
   check "publication writes refused" (isLeft (P.witness package ack (state [store 0x120b410]) (state [store 0x120b410])))
   check "original body writes refused" (isLeft (P.witness package ack (state [store 0x120b414]) (state [store 0x120b414])))
   check "owned runtime writes refused" (isLeft (P.witness package ack (state [store 0x10000]) (state [store 0x10000])))
-  check "upload is not execution" (P.witness package ack none none == Right (P.Witness False False))
+  check "upload is not execution" (fmap (\w -> (P.sourceObserved w, P.modeObserved w)) (P.witness package ack none none) == Right (False, False))
   check "original source body refused" (isLeft (P.witness package ack (state [fetch 0x120b414]) (state [fetch 0x120b414])))
   check "original mode body refused" (isLeft (P.witness package ack (state [fetch 0x120cab8]) (state [fetch 0x120cab8])))
   check "lost watch rows refused" (isLeft (P.witness package ack (put "violation" (String "record limit") both) both))
@@ -150,4 +192,5 @@ main = do
   check "matching installed restore admitted" (isRight (P.validateReady selected start ready))
   check "changed snapshot refused" (isLeft (P.validateReady selected start (put "checkpoint" (put "snapshot_sha256" (String (T.replicate 64 "b")) (get "checkpoint" ready)) ready)))
   check "cold replay refused" (isLeft (P.validateReady selected start (object ["checkpoint" .= object ["start" .= ("cold" :: T.Text)]])))
+  checkJpeg
   putStrLn "owned playback package and bounded witness behavior passed"

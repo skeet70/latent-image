@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "unit": "playback-jpeg-transaction",
+  "source_rev": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "source_image": {"base": "0x00bf1a00", "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"},
+  "entry_contracts": [
+    {"source": "0x00d9882c", "end": "0x00d988a8", "handler": "xm1_playback_jpeg_acquire", "sha256": "9010056d9d8cfb72c81836b41be1d8a78bcee7144f2b50016d818eed778bf381", "abi": "void(uint32_t request)"},
+    {"source": "0x00d988a8", "end": "0x00d988b8", "handler": "xm1_playback_jpeg_restart", "sha256": "8fe358e626b4776b89d0a0f40b8697fe03e3eb5c7aab77f3b59e6288c0e3f731", "abi": "void(uint32_t request)"},
+    {"source": "0x00d988b8", "end": "0x00d98904", "handler": "xm1_playback_jpeg_release", "sha256": "db638b2a6dc404d71eda6c3da34001f8fa603e181da22555d6b8aaafdc04a7aa", "abi": "void(void)"},
+    {"source": "0x00d99570", "end": "0x00d99714", "handler": "xm1_playback_jpeg_interrupt", "sha256": "4ff7a2b304d223fed19b7f99f081018f54b93be2e1e7d1827956794c2c9576a5", "abi": "void(void), ordinary descriptor callback"}
+  ],
+  "owned_internal_bodies": [
+    {"start": "0x00d99714", "end": "0x00d999d4", "sha256": "13206b095f700897abfaaecefc3444ac51bb4a80a35a3f85d7b2a1f3507f0860"},
+    {"start": "0x00d999d4", "end": "0x00d99a24", "sha256": "ff9f5b23ce22074d8bfbe6b358370ef5001c652ff47e1cf22cddc3a8549dbd77"},
+    {"start": "0x00d99a24", "end": "0x00d99a5c", "sha256": "5e52e2e0793efc75abb39ba8e2b170958c1863f3a6e8f73f32108d6254ae1f5a"}
+  ],
+  "shared_state": {"record_descriptor": "0x014c56f0", "resource_handle": "0x014c56f4", "active_request": "0x014c5888", "irq_token": "0x014c588c", "configuration": "0x014c5890", "configuration_bytes": 112, "request_bytes": 84},
+  "serialization": {"reserved_lock": 9, "wait": "0x00724b68", "signal": "0x00724c00", "accepted_signal_results": [0, -43]},
+  "retained_services": {
+    "resource1e_acquire_and_route_options": "0x0065a3cc", "resource1e_release_and_route_options": "0x0065a424",
+    "reset": "0x0065a478", "program_configuration": "0x0065a58c", "start": "0x0065a548", "publish_restart": "0x0065aa44",
+    "interrupt_acquire": "0x0064e918", "interrupt_release": "0x0064eb20", "cache": "0x00042634",
+    "status_read": "0x0065ab20", "status_ack": "0x0065ab50", "input_event_read": "0x0065ab7c", "input_event_ack": "0x0065abac",
+    "output_event_read": "0x0065abd8", "output_event_ack": "0x0065ac08", "endpoint_read": "0x0065a9e4"
+  },
+  "callback_contract": {"descriptor": "0x48", "irq_line": 76, "published_handler": "0x00d99570", "request_complete_offset": "0x4c", "request_input_needed_offset": "0x50", "request_callback_abi": "void(void)"},
+  "retained_consumers": ["0x01220294 submit", "0x012200ec restart", "0x01220238 finish", "0x0121fec8 first completion", "0x0121ff20 second completion"],
+  "scope": "Owned channel9 firmware transaction over existing JPEG device/services and Playback mode notifications. No codec-model replacement, pixel tolerance, USB-state dependency, capture continuation or retirement/unload claim.",
+  "removal_obligations": ["Replace retained low-level JPEG device/service bodies and resource routing without changing their source-grounded hardware laws.", "Replace retained Playback machine5 and completion/deferred-notification consumers.", "Keep published IRQ entry executable through retained interrupt release; establish quiescence before any unload or removal.", "Retain separate qualification for endpoint-reprogram command4 and device status bits17/24, which lack actual PLAY device execution."]
+}

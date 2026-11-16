@@ -1,6 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
-module Emulation.PlaybackDecode (Snapshot, snapshot, withEndpoint, SourceCopy, sourceCopy, withSourceCopy, inspect, physical, ByteRange, rangeAddress, rangeCount, sourceRange, outputRange) where
+module Emulation.PlaybackDecode (Snapshot, snapshot, withEndpoint, SourceCopy, sourceCopy, withSourceCopy, inspect, physical, ByteRange, rangeAddress, rangeCount, sourceRange, outputRange, OutputEvent (..), CompletionBinding, completionBinding, completionRequestRange, inspectRelease) where
 
 import Codec.Picture (convertRGB8, decodeJpeg, imageHeight, imageWidth, pixelAt, PixelRGB8 (..))
 import Control.Monad (unless)
@@ -15,6 +15,8 @@ data Snapshot = Snapshot { parameters :: B.ByteString, registers :: B.ByteString
 data Job = Job { owner :: Word32, source :: Address, destination :: Address, count :: ByteCount, capacity :: ByteCount, scale :: Int } deriving (Eq, Show)
 data Geometry = Geometry { width :: Int, height :: Int, pitch :: Int, rows :: Int, extent :: Int }
 data ByteRange = ByteRange { rangeAddress :: Word32, rangeCount :: Int }
+newtype OutputEvent = OutputEvent Word32
+data CompletionBinding = CompletionBinding Job Geometry B.ByteString OutputEvent
 data SourceCopy = SourceCopy Address B.ByteString B.ByteString deriving (Eq, Show)
 
 physical :: Word32 -> Word32
@@ -122,6 +124,44 @@ outputRange s = do
   unless (w >= 2 && even w && h > 0) (Left "unsupported scaled JPEG dimensions")
   unless (written <= cap) (Left "decoded extent exceeds allocation")
   pure (ByteRange address written)
+
+completionBinding :: Snapshot -> OutputEvent -> Either String CompletionBinding
+completionBinding completed event = do
+  j <- job completed
+  planned <- outputRange completed
+  (sw,sh) <- jpegSize (input completed)
+  let contentWidth = sw `shiftR` scale j
+      contentHeight = sh `shiftR` scale j
+      outputPitch = ((contentWidth+15) `div` 16) * 16
+      padded = ((contentHeight+7) `div` 8) * 8
+      g = Geometry contentWidth contentHeight outputPitch padded (rangeCount planned)
+  unless (owner j /= 0 && owner j .&. 3 == 0 && toInteger (physical (owner j)) + 0xb0 <= 0x20000000)
+    (Left "completion request address leaves the observed ABI")
+  unless (B.length (output completed) == extent g
+    && fmap physical (endpoint completed) == Just (rangeAddress planned + fromIntegral (extent g)))
+    (Left "completion binding lacks its measured output and endpoint")
+  pure (CompletionBinding j g (B.drop 8 (parameters completed)) event)
+
+completionRequestRange :: CompletionBinding -> ByteRange
+completionRequestRange (CompletionBinding j _ _ _) = ByteRange (physical (owner j)) 0xb0
+
+inspectRelease :: CompletionBinding -> B.ByteString -> B.ByteString -> Either String Value
+inspectRelease (CompletionBinding j g expectedConfiguration (OutputEvent outputEvent)) shared request = do
+  unless (B.length shared == 0x210 && B.length request == 0xb0) (Left "release snapshot layout differs")
+  unless (word shared 4 == 0 && word shared 0x19c == 0) (Left "release retains a resource or interrupt token")
+  unless (word shared 0x198 == owner j && B.drop 0x1a0 shared == expectedConfiguration)
+    (Left "release belongs to another request or changed configuration")
+  unless (and [word request requestOffset == word expectedConfiguration configurationOffset
+    | (requestOffset,configurationOffset) <- [(0x18,0),(0x1c,4),(0x20,8),(8,12),(12,16)]])
+    (Left "release source, destination or image requirements changed")
+  unless (word request 0x10 == fromIntegral (pitch g) && word request 0x14 == fromIntegral (rows g))
+    (Left "release output geometry differs from the sampled output")
+  unless (word request 0x28 == 0 && word request 0x24 == fromIntegral (extent g)
+    && word request 0x2c == 0 && word request 0x30 == outputEvent)
+    (Left "release completion result differs from the measured device output")
+  pure (object ["job" .= owner j, "produced_bytes" .= extent g, "output_width" .= pitch g, "output_height" .= rows g
+    , "status" .= word request 0x28, "input_event" .= word request 0x2c, "output_event" .= word request 0x30
+    , "resource_handle" .= word shared 4, "irq_token" .= word shared 0x19c])
 
 inspect :: B.ByteString -> Snapshot -> Snapshot -> Either String Value
 inspect fixture started completed = do

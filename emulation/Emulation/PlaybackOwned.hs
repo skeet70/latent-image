@@ -4,7 +4,8 @@ module Emulation.PlaybackOwned
   , Package, loadPackage, parsePackage, validateInstalled, validateReady
   , guestArtifacts, checkGuestArtifacts, watchRequest, validateWatchBegin
   , originalBodies, checkOriginalBodies
-  , Witness (..), witness, witnessValue
+  , Witness, sourceObserved, modeObserved, witness, witnessValue
+  , QualificationScope (..), requiredObservations, qualificationObserved, qualificationScope, qualificationScopeText
   ) where
 
 import qualified ArmElf as E
@@ -22,6 +23,7 @@ import qualified Data.Text as T
 import Data.Word (Word32)
 import qualified Emulation.WatchObservation as W
 import Numeric (readHex, showHex)
+import qualified PlaybackContract as C
 import System.Directory (canonicalizePath)
 import System.FilePath ((</>))
 
@@ -41,7 +43,7 @@ packageDirectory (Selection _ (PackageDirectory path)) = path
 
 newtype Digest = Digest T.Text deriving (Eq, Show)
 newtype Address = Address Word32 deriving (Eq, Show)
-data Entry = SourceEntry | ModeEntry deriving (Eq, Show)
+type Entry = C.PlaybackEntry
 data Binding = Binding Entry Address Address Address
 
 data SourceIdentity = SourceIdentity Word32 Int B.ByteString Digest
@@ -83,8 +85,8 @@ word :: Word32 -> B.ByteString
 word value = B.pack [fromIntegral (value `shiftR` n) | n <- [0,8,16,24]]
 
 contract :: Entry -> (Word32, Word32, T.Text, T.Text)
-contract SourceEntry = (0x0120b40c, 0x0120b778, "xm1_playback_source_entry", "90da01fffdecd496e473c74aa012c9028be5d2dad33a1b8f4a95b4ea7c466d32")
-contract ModeEntry = (0x0120cab0, 0x0120cd74, "xm1_playback_mode_entry", "d9b5d69e40838f9bcecc142fb1bfeaefa18e43b790a027e0442d7b31deef0f0c")
+contract entry = let (start, end, C.SourceSha256 hash, name) = C.playbackContract entry
+  in (start, end, T.pack name, T.pack hash)
 
 loadPackage :: Selection -> IO (Selection, Package)
 loadPackage selected = do
@@ -111,8 +113,9 @@ parsePackage manifestBytes metadataBytes runtime elfBytes = do
   let runtimeDigest = digest runtime
   ensure (field "runtime_sha256" manifest == Right (digestValue runtimeDigest) && field "runtime_sha256" metadata == Right (digestValue runtimeDigest)) "runtime digest differs"
   hooks <- field "hooks" metadata >>= array
-  ensure (length hooks == 2) "owned playback requires exactly two hooks"
-  bindings <- forM [SourceEntry, ModeEntry] $ \entry -> do
+  let entries = if length hooks == length C.preparationEntries then C.preparationEntries else C.playbackEntries
+  ensure (length hooks == length entries) "owned playback requires the preparation pair or the composed JPEG transaction"
+  bindings <- forM entries $ \entry -> do
     let (site, end, name, sourceDigest) = contract entry
     hook <- case [h | h <- hooks, at "address" h == Right (Address site)] of
       [h] -> Right h
@@ -157,6 +160,10 @@ parsePackage manifestBytes metadataBytes runtime elfBytes = do
       _ -> Left "source publication word missing")
     let (_, _, _, hash) = contract entry
     pure (SourceIdentity (site + 8) (fromIntegral (end - site - 8)) header (Digest hash))
+  let internalSources =
+        [ SourceIdentity internalStart (fromIntegral (internalEnd - internalStart)) B.empty (Digest (T.pack hash))
+        | C.PlaybackJpegAcquire `elem` entries
+        , C.PinnedBody internalStart internalEnd (C.SourceSha256 hash) <- C.jpegInternalBodies ]
   let allocated = [s | s <- E.elfSections elf, E.sectionAllocated s, E.sectionSize s > 0]
   forM_ allocated $ \section -> do
     let low = toInteger (E.sectionAddress section)
@@ -170,7 +177,7 @@ parsePackage manifestBytes metadataBytes runtime elfBytes = do
     ".ram_push.mailbox" -> storage MailboxStorage section
     _ -> pure []
   ensure (null mutable || sort (map fst mutable) == [RendezvousStorage, MailboxStorage]) "installer scalar storage pair is incomplete"
-  pure (Package base runtime (digest manifestBytes) runtimeDigest bindings artifacts sources mutable)
+  pure (Package base runtime (digest manifestBytes) runtimeDigest bindings artifacts (sources ++ internalSources) mutable)
   where
     storage kind section = do
       ensure (E.sectionWritable section && not (E.sectionExecutable section) && E.sectionSize section == 128) "installer scalar storage layout differs"
@@ -253,11 +260,11 @@ checkOriginalBodies (Package _ _ _ _ _ _ sources _) bodies = do
     ensure (B.length bytes == count && digest (header <> bytes) == expected) "original playback source bytes differ from pinned source identity"
 
 ranges :: Package -> ([W.WatchRange], [W.WatchRange])
-ranges (Package (Address base) runtime _ _ bindings publications _ _) = (W.unionWatchRanges (publicationRanges ++ bodies ++ [range base (base + fromIntegral (B.length runtime))]), bodies ++ entries)
+ranges (Package (Address base) runtime _ _ bindings publications sources _) = (W.unionWatchRanges (publicationRanges ++ bodies ++ [range base (base + fromIntegral (B.length runtime))]), bodies ++ entries)
   where
     range lo hi = either error id (W.watchRange (W.watchAddress lo) (W.watchAddress hi))
     publicationRanges = W.unionWatchRanges [range a (a + 4) | (Address a,_) <- publications]
-    bodies = [range (site + 8) end | Binding _ (Address site) (Address end) _ <- bindings]
+    bodies = [range start (start + fromIntegral count) | SourceIdentity start count _ _ <- sources]
     entries = [range target (target + 4) | Binding _ _ _ (Address target) <- bindings]
 
 limit :: W.WatchLimit
@@ -283,7 +290,37 @@ validateWatchBegin package value = do
   _ <- W.judgeExecutionWrites (W.checkExecutionWritesWithRangeLimit rangeLimit W.ForbidProtectedWrites limit protected fetches ack observation)
   pure ()
 
-data Witness = Witness { sourceObserved :: Bool, modeObserved :: Bool } deriving (Eq, Show)
+newtype Witness = Witness [(Entry, Bool)] deriving (Eq, Show)
+
+entryObserved :: Entry -> Witness -> Bool
+entryObserved entry (Witness entries) = lookup entry entries == Just True
+
+sourceObserved, modeObserved :: Witness -> Bool
+sourceObserved = entryObserved C.PlaybackSource
+modeObserved = entryObserved C.PlaybackMode
+
+hasJpeg :: Package -> Bool
+hasJpeg (Package _ _ _ _ bindings _ _ _) = any (\(Binding entry _ _ _) -> entry == C.PlaybackJpegAcquire) bindings
+
+requiredObservations :: Package -> [(T.Text, Witness -> Bool)]
+requiredObservations package
+  | hasJpeg package =
+      [ ("owned-playback-jpeg-acquire", entryObserved C.PlaybackJpegAcquire)
+      , ("owned-playback-jpeg-interrupt", entryObserved C.PlaybackJpegInterrupt)
+      , ("owned-playback-jpeg-release", entryObserved C.PlaybackJpegRelease) ]
+  | otherwise = [("owned-playback-source-entry", sourceObserved), ("owned-playback-mode-entry", modeObserved)]
+
+qualificationObserved :: Package -> Witness -> Bool
+qualificationObserved package value = all (\(_, predicate) -> predicate value) (requiredObservations package)
+
+data QualificationScope = PreparationPair | JpegTransaction deriving (Eq, Show)
+
+qualificationScope :: Package -> QualificationScope
+qualificationScope package = if hasJpeg package then JpegTransaction else PreparationPair
+
+qualificationScopeText :: QualificationScope -> T.Text
+qualificationScopeText PreparationPair = "preparation-pair"
+qualificationScopeText JpegTransaction = "jpeg-transaction"
 
 witness :: Package -> Value -> Value -> Value -> Either String Witness
 witness package ackValue stateValue endValue = do
@@ -296,7 +333,8 @@ witness package ackValue stateValue endValue = do
   _ <- W.judgeExecutionWrites (W.checkExecutionWritesWithRangeLimit rangeLimit W.ForbidProtectedWrites limit protected fetches ack ended)
   ensure (W.fixedWatchRecords state == W.fixedWatchRecords ended) "watch changed between state and end"
   let records = W.fixedWatchRecords ended
-      body physical bytes = any (\(lo,hi) -> toInteger physical < hi && lo < toInteger physical + toInteger bytes) [(0x0120b414,0x0120b778),(0x0120cab8,0x0120cd74)]
+      body physical bytes = any (\(lo,count) -> toInteger physical < toInteger lo + toInteger count
+        && toInteger lo < toInteger physical + toInteger bytes) (originalBodies package)
   ensure (not (any (\r -> case r of
     W.CpuRecord {W.cpuAccess = W.CpuFetch, W.cpuPhysical = physical, W.cpuBytes = bytes} -> body (W.watchAddressValue physical) (W.watchBytesValue bytes)
     _ -> False) records)) "original playback body fetched"
@@ -304,8 +342,18 @@ witness package ackValue stateValue endValue = do
       seen entry = any (\r -> case r of
         W.CpuRecord {W.cpuAccess = W.CpuFetch, W.cpuPhysical = physical} -> any (\(Binding kind _ _ (Address target)) -> kind == entry && W.watchAddressValue physical == target) bindings
         _ -> False) records
-  pure (Witness (seen SourceEntry) (seen ModeEntry))
+  pure (Witness [(entry, seen entry) | Binding entry _ _ _ <- bindings])
 
 witnessValue :: Witness -> Value
-witnessValue value = object ["source_entry_observed" .= sourceObserved value, "mode_entry_observed" .= modeObserved value
-  , "scope" .= ("installed bounded owned preparation entries; not whole playback acceptance or retirement/unload" :: T.Text)]
+witnessValue value@(Witness entries) = object $
+  ["source_entry_observed" .= sourceObserved value, "mode_entry_observed" .= modeObserved value
+  , "scope" .= (if C.PlaybackJpegAcquire `elem` map fst entries
+      then "installed bounded owned channel9 transaction; not pixel fidelity, whole playback acceptance or retirement/unload"
+      else "installed bounded owned preparation entries; not whole playback acceptance or retirement/unload" :: T.Text)]
+  ++ ["jpeg_transaction" .= object
+      [ "acquire_observed" .= entryObserved C.PlaybackJpegAcquire value
+      , "interrupt_observed" .= entryObserved C.PlaybackJpegInterrupt value
+      , "release_observed" .= entryObserved C.PlaybackJpegRelease value
+      , "restart_observed" .= entryObserved C.PlaybackJpegRestart value
+      , "restart_in_actual_play_claim" .= False ]
+      | C.PlaybackJpegAcquire `elem` map fst entries]
