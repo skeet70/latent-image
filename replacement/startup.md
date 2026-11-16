@@ -150,6 +150,7 @@ The component artifact tool has these commands:
 ```text
 image5-decoder-artifact publications IMAGE4 PRODUCER_BIN PRODUCER_SYMBOLS BODY_BIN SYMBOLS OUTPUT_JSON
 image5-decoder-artifact contract DECODER CANONICAL_DAT IMAGE4 PRODUCER_BIN PRODUCER_SYMBOLS BODY_BIN SYMBOLS CANDIDATE_DAT OUTPUT_JSON
+image5-decoder-artifact omit-clock-release BODY_BIN SYMBOLS OUTPUT_BODY OUTPUT_RECEIPT
 ```
 
 Use the existing `build-first-stage` fixed-image variant and `stage-fixed-image` workflow. Supply the publication rows once against canonical image4. The rows include the admitted image5 producer, five external-entry veneers and retirement traps over `[0x6841f4,0x6848d8)` and `[0x6ae18c,0x6ae638)`. Do not replace `[0x6ae638,0x6ae650)`, the unrelated settings return-zero stub. The contract command decodes the staged DAT and checks the exact image4 mutations, carried body record and zero-once BSS bounds.
@@ -163,6 +164,10 @@ The retained IRQ dispatcher supplies word-aligned SP and can enter4 modulo8. Pro
 The exact dispatcher call is `CMP r0,#0; MOVNE lr,pc; MOVNE pc,r0` at `0x402d4..0x402dc`, returning at `0x402e0`. The current native CFI does not admit that manual-link transfer into a callback. Do not replace it with a BLX fixture and call that the actual caller, or widen native acceptance to make this comparison pass.
 
 `--decoder-irq-alignment progress-aligned-fixture|complete-aligned-fixture` selects a separate, explicitly synthetic full-system ABI control. From a fresh reset of the same staged image, it pads SP downward by4 before exactly one selected callback's actual `CMP/MOV` call sequence. It binds the original core/registers/frame word, checks the callback's LR, callee-saved registers and return SP, then restores the original SP before dispatcher continuation. The receipt records the pre-call padding and restoration. These controls do not qualify natural aligned-entry reachability; only the unmodified `natural` mode is firmware acceptance evidence.
+
+The artifact tool's `omit-clock-release` command creates an explicitly synthetic engine-resource defect. It replaces exactly one direct call to retained clock release `0x649ddc` with an A32 NOP and records both body identities and the instruction preimage. Stage that body with the same fixed-image workflow. The observer records the real public clock reservation output and requires that handle's retained release call before engine resource release; private engine bookkeeping is not its oracle. A rejected verification receipt preserves the missing-release verdict.
+
+Copy bounded observer JSON receipts and input/artifact identities into `XM1_RUN_RESULT` before successful managed-run closure. Bulk work is transient unless explicitly retained with `run-output keep`.
 
 
 ## Startup-consumer witness

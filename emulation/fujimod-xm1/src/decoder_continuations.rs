@@ -32,6 +32,12 @@ struct DecoderEvent { id: EventId, instructions: Count, pc: Guest, core: Core, r
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 enum Service { Task, Take, Give, Route, ClockTake, ClockGive, Attach, Detach, Marker }
 const SERVICES: [(u32, Service);9] = [(0x723cb8,Service::Task),(0x724b68,Service::Take),(0x724c00,Service::Give),(0x6499d0,Service::Route),(0x649c4c,Service::ClockTake),(0x649ddc,Service::ClockGive),(0x64e918,Service::Attach),(0x64eb20,Service::Detach),(0x42188,Service::Marker)];
+#[repr(u32)]
+enum DecoderResource { Engine = 0x2b, Stream = 0x48 }
+#[repr(u32)]
+enum DecoderClock { Decoder = 0x29 }
+#[derive(PartialEq, Eq)]
+struct ClockHandle(u32);
 #[derive(Serialize)]
 struct Invocation { service: Service, entered: EventId, returned: Option<EventId>, continuation: Guest, core: Core, sp: Guest, output: Option<Words> }
 #[derive(Serialize)]
@@ -135,9 +141,25 @@ fn check(evidence:&Evidence,contract:Option<&Contract>)->Result<(),String>{
         let task_call=task_calls.next().ok_or("initialization-time task query absent")?;
         let task_return=task_call.returned.ok_or("task query did not return")?;
         require(task_calls.next().is_none()&&task_return.0<complete.id.0&&evidence.events[task_return.0].registers.r[0]!=0,"decoder task identity was absent or queried again during callbacks")?;
-        let takes=calls.clone().filter(|call|call.service==Service::Take&&evidence.events[call.entered.0].registers.r[0]==0x48);
-        let mut gives=calls.clone().filter(|call|call.service==Service::Give&&evidence.events[call.entered.0].registers.r[0]==0x48);
+        let takes=calls.clone().filter(|call|call.service==Service::Take&&evidence.events[call.entered.0].registers.r[0]==DecoderResource::Stream as u32);
+        let mut gives=calls.clone().filter(|call|call.service==Service::Give&&evidence.events[call.entered.0].registers.r[0]==DecoderResource::Stream as u32);
         require(takes.count()==2&&gives.clone().count()==2&&gives.any(|call|call.entered.0>complete.id.0&&call.entered.0<returned.id.0),"decoder resource48 completion/wait closure differs")?;
+        let mut engine_takes=calls.clone().filter(|call|call.service==Service::Take&&evidence.events[call.entered.0].registers.r[0]==DecoderResource::Engine as u32);
+        let acquire=engine_takes.next().ok_or("decoder engine resource acquisition absent")?;
+        let mut engine_gives=calls.clone().filter(|call|call.service==Service::Give&&evidence.events[call.entered.0].registers.r[0]==DecoderResource::Engine as u32);
+        let give=engine_gives.next().ok_or("decoder engine resource release absent")?;
+        require(engine_takes.next().is_none()&&engine_gives.next().is_none()&&evidence.events[acquire.returned.ok_or("engine acquisition did not return")?.0].registers.r[0]==0&&evidence.events[give.returned.ok_or("engine release did not return")?.0].registers.r[0]==0,"decoder engine resource ownership differs")?;
+        let mut clock_takes=calls.clone().filter(|call|call.service==Service::ClockTake);
+        let reserve=clock_takes.next().ok_or("decoder clock29 reservation absent")?;
+        let mut clock_gives=calls.clone().filter(|call|call.service==Service::ClockGive);
+        let release_clock=clock_gives.next().ok_or("decoder clock29 release absent")?;
+        let handle=ClockHandle(*reserve.output.as_ref().and_then(|output|output.values.first()).ok_or("public clock reservation output absent")?);
+        require(clock_takes.next().is_none()&&clock_gives.next().is_none()&&evidence.events[reserve.entered.0].registers.r[0]==DecoderClock::Decoder as u32&&ClockHandle(evidence.events[release_clock.entered.0].registers.r[0])==handle,"decoder clock29 public handle ownership differs")?;
+        let mut routes=calls.clone().filter(|call|call.service==Service::Route);
+        let held=routes.next().ok_or("decoder route acquisition absent")?;
+        let released=routes.next().ok_or("decoder route release absent")?;
+        require(routes.next().is_none()&&evidence.events[held.entered.0].registers.r[..3]==[0x410,0x21,8]&&evidence.events[released.entered.0].registers.r[..3]==[0x410,0x21,0],"decoder route ownership differs")?;
+        require(acquire.entered.0<held.entered.0&&held.entered.0<reserve.entered.0&&reserve.entered.0<complete.id.0&&complete.id.0<released.entered.0&&released.entered.0<release_clock.entered.0&&release_clock.entered.0<give.entered.0&&give.entered.0<returned.id.0,"decoder engine route/clock/resource release order differs")?;
         let attaches=calls.clone().filter(|call|call.service==Service::Attach);let detaches=calls.filter(|call|call.service==Service::Detach);
         let registrations=attaches.clone().count();
         require(registrations>0&&registrations==detaches.clone().count(),"IRQ registrations were not released")?;
@@ -280,7 +302,8 @@ pub(super) fn drive(mut options:BTreeMap<OptionKey,PathBuf>)->Result<(),String>{
     persist(&output.join("trace.json"),&machine.traces.hits)?;
     let evidence=Evidence {schema:1,inputs,events,calls,callbacks,snapshots,ranges,transactions:batch,irq_exceptions,instructions:Count(machine.instructions()),error:outcome.and(memory_result).and(hooks_result).err(),machine_failure:machine.failure.clone(),limits:vec![Limit::CanonicalMethod4ReadOnly,Limit::SingleNaturalProducerSession,Limit::NoDeviceFailureOrCancellation,Limit::NoConcurrentEngineClients,Limit::NoWholeMachineWriteConfinement,Limit::NoRetiredComputedCallerClosure]};
     persist(&output.join("decoder-continuations.json"),&evidence)?;
-    check(&evidence,contract.as_ref())?;
+    let verdict=check(&evidence,contract.as_ref());
     let scope=if mode==IrqEntryMode::Natural {QualificationScope::NaturalProducerIrqImage5Entry}else{QualificationScope::SyntheticAlignedEntryControl};
-    persist(&output.join("decoder-verification.json"),&serde_json::json!({"schema":1,"accepted":true,"firmware_acceptance":mode==IrqEntryMode::Natural,"role":role,"irq_entry_mode":mode,"events":evidence.events.len(),"instructions":evidence.instructions,"irq_exceptions":evidence.irq_exceptions,"scope":scope,"limits":evidence.limits}))
+    persist(&output.join("decoder-verification.json"),&serde_json::json!({"schema":1,"accepted":verdict.is_ok(),"error":verdict.as_ref().err(),"firmware_acceptance":verdict.is_ok()&&mode==IrqEntryMode::Natural,"role":role,"irq_entry_mode":mode,"events":evidence.events.len(),"instructions":evidence.instructions,"irq_exceptions":evidence.irq_exceptions,"scope":scope,"limits":evidence.limits}))?;
+    verdict
 }

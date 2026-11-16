@@ -99,6 +99,24 @@ main = do
         "/DISCARD/ : { *(.ARM.exidx*) *(.ARM.extab*) *(.note*) *(.comment*) }","}",
         "ASSERT(SIZEOF(.data) == 0, \"decoder has initialized writable data\")",
         "ASSERT(__fixed_bss_end <= ORIGIN(OWNED_FIXED) + LENGTH(OWNED_FIXED), \"decoder leaves owned fixed memory\")"]))
+    ["omit-clock-release",bodyPath,symbolsPath,output,receipt] -> do
+      (body,symbols) <- linked bodyPath symbolsPath
+      start <- F.symbolAddress <$> symbol symbols (SymbolName "__fixed_body_start")
+      let sites = [(offset,old) | offset <- [0,4..B.length body-4],
+            let old = U.word32At body offset, old .&. 0xff000000 == 0xeb000000,
+            let immediate = toInteger (old .&. 0xffffff),
+            let displacement = if immediate >= 0x800000 then immediate-0x1000000 else immediate,
+            toInteger start+toInteger offset+8+4*displacement == 0x649ddc]
+      (offset,old) <- case sites of
+        [site] -> pure site
+        _ -> H.failH "clock-release defect needs exactly one direct retained clock-give call"
+      let mutant = B.concat [B.take offset body,B.pack [0,0,160,225],B.drop (offset+4) body]
+      B.writeFile output mutant
+      B.writeFile receipt (encodeCanonical (object ["schema" .= (1 :: Int),
+        "scope" .= ("synthetic-owned-decoder-clock-leak-control" :: String),
+        "source_body_sha256" .= identity body,"candidate_body_sha256" .= identity mutant,
+        "site" .= (start+fromIntegral offset),"old" .= old,"new" .= (0xe1a00000 :: Word32),
+        "retained_service" .= (0x649ddc :: Word32)]))
     ["publications",imagePath,producerPath,producerSymbolsPath,bodyPath,symbolsPath,output] -> do
       image <- canonical imagePath
       producer <- H.readRegular 388 producerPath
@@ -155,4 +173,4 @@ main = do
         "retired" .= [[low,high] | (low,high) <- retired],"publications" .= rowsValue (reservationPublications++rows),
         "producer_sha256" .= identity producer,"producer_symbols_sha256" .= identity producerSymbols,
         "qualification" .= ("host-staged-awaiting-producer-irq-consumer-execution" :: String)]))
-    _ -> H.failH "usage: image5-decoder-artifact script DECODER_LD | publications IMAGE4 PRODUCER_BIN PRODUCER_SYMBOLS BODY SYMBOLS OUTPUT | contract DECODER CANONICAL_DAT IMAGE4 PRODUCER_BIN PRODUCER_SYMBOLS BODY SYMBOLS CANDIDATE_DAT OUTPUT"
+    _ -> H.failH "usage: image5-decoder-artifact script DECODER_LD | publications IMAGE4 PRODUCER_BIN PRODUCER_SYMBOLS BODY SYMBOLS OUTPUT | contract DECODER CANONICAL_DAT IMAGE4 PRODUCER_BIN PRODUCER_SYMBOLS BODY SYMBOLS CANDIDATE_DAT OUTPUT | omit-clock-release BODY SYMBOLS OUTPUT_BODY RECEIPT"
