@@ -35,7 +35,7 @@ case "${EXPERIMENT_ADMISSION:-observe}" in
   *) printf 'unknown experiment admission\n' >&2; exit 1 ;;
 esac
 
-read -r count setup activation abi < <("$BUILDER" --abi)
+read -r count setup activation abi < <("$BUILDER" "${admission[@]}" --abi "$EXPERIMENT" "$STOCK_ID4" "$STOCK_ID5" "$STOCK_PLAIN")
 "$BUILDER" "${admission[@]}" --trampolines "$EXPERIMENT" "$STOCK_ID4" "$STOCK_ID5" "$STOCK_PLAIN" "$OUT/trampolines.S"
 
 ARM=(--target=armv7r-none-eabi -march=armv7-r -marm -mfloat-abi=soft)

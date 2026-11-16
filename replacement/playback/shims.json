@@ -1,6 +1,6 @@
 {
   "unit": "playback",
-  "summary": "Emulator-only source/mode preparation, channel9 JPEG transaction, nominal MMIO services, static-record request construction and first Playback completion compiled into relocatable RAM experiment objects. Other Playback/develop callers, command4 continuation, resource/kernel services, shared layouts and publication lifetimes remain retained boundaries.",
+  "summary": "Emulator-only source/mode preparation, ordinary JPEG lifecycle and nominal MMIO services compiled into relocatable RAM experiment objects. Seventeen whole entries use thirty-four actual publications, qualified by conditional native and guarded installed preparation/PLAY comparisons. Develop/machine5 callers, command4 continuation, resource/kernel/timer/cache/IRQ services and shared publication lifetimes remain retained boundaries.",
   "classification": "module",
   "rows": [
     {
@@ -54,7 +54,7 @@
       "id": "playback-jpeg-entry",
       "shim": "Channel9 acquire, restart, release and descriptor callback A32 exports",
       "kind": "stock-ABI export",
-      "other_side": "Retained Playback machine5 and submit/release consumers, owned static-record builder and descriptor0x48 IRQ registry",
+      "other_side": "Retained Playback machine5 and develop callers, owned ordinary lifecycle and static-record builder, descriptor0x48 IRQ registry",
       "owned": "partly",
       "removal": "all transaction callers and IRQ registration use the typed owned JPEG API directly",
       "state": "required",
@@ -62,23 +62,23 @@
         "kind": "reference-only",
         "symbols": ["xm1_playback_jpeg_acquire", "xm1_playback_jpeg_restart", "xm1_playback_jpeg_release", "xm1_playback_jpeg_interrupt"],
         "contract": "replacement/playback/jpeg-contract.json",
-        "requirement": "Native caller and installed preparation/PLAY receipts bind the transaction and consumer entries to the relinked eight-hook package."
+        "requirement": "The seventeen-hook lifecycle package has independent stock native comparisons and guarded installed preparation/PLAY receipts, with exactly thirty-four ABI7 publication records restored on rollback. Historical eight-hook consumer receipts remain separately identified."
       }],
       "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
     },
     {
       "id": "playback-jpeg-consumers",
-      "shim": "Static-record request construction and first Playback completion A32 exports",
+      "shim": "Static-record construction and whole ordinary Playback JPEG lifecycle A32 exports",
       "kind": "stock-ABI export",
-      "other_side": "Develop job4, retained Playback requirements initializer and finish/cancel consumers, nested critical providers and subscriber callbacks",
+      "other_side": "Develop job4, machine5 and deferred notification, nested critical and timer providers, subscriber callbacks",
       "owned": "partly",
       "removal": "all producer and completion callers link the typed owned API directly; static-request and subscriber quiescence permits publication removal",
       "state": "required",
       "evidence": [{
         "kind": "reference-only",
-        "symbols": ["xm1_playback_jpeg_build_request", "xm1_playback_jpeg_complete_first"],
+        "symbols": ["xm1_playback_jpeg_build_request", "xm1_playback_jpeg_complete_first", "xm1_playback_jpeg_complete_second", "xm1_playback_jpeg_initialize", "xm1_playback_jpeg_reset_state", "xm1_playback_jpeg_restart_request", "xm1_playback_jpeg_cancel_timer", "xm1_playback_jpeg_preserve_prefix", "xm1_playback_jpeg_finish_request", "xm1_playback_jpeg_cancel_request", "xm1_playback_jpeg_submit"],
         "contract": "replacement/playback/jpeg-contract.json",
-        "requirement": "Exact whole builder and first-completion bodies use the existing transaction. Qualification separates guarded natural preparation construction from both nominal PLAY handbacks; retained initializer, clear-record release, finish/cancel callers and lifetime obligations remain explicit."
+        "requirement": "Exact whole lifecycle bodies retain the source/output interface. Natural cancellation owns entry0x0122026c;0x01220288 is a stock observation interior only. Owned finish/cancel release observations are immutable interior labels. Preparation construction and PLAY handbacks remain separate epochs; retained clear-record release and lifetime obligations remain explicit."
       }],
       "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
     },
@@ -86,7 +86,7 @@
       "id": "playback-jpeg-services",
       "shim": "Retained JPEG continuation, resource routing, lock, cache and timer services",
       "kind": "trampoline into retained stock",
-      "other_side": "Command4 endpoint reprogramming0x0065aa44, resource1e, reserved lock9 and IRQ registration/release",
+      "other_side": "Command4 endpoint reprogramming0x0065aa44, resource1e, reserved lock9, cache0x00042634, IRQ registration/release and timer0x0069b328/0x0069b7a4",
       "owned": "partly",
       "removal": "the packaged transaction links owned service providers with qualified hardware laws",
       "state": "required",
@@ -101,7 +101,7 @@
       "id": "playback-jpeg-lifetime",
       "shim": "Shared JPEG request/configuration layout and published IRQ lifetime",
       "kind": "guest-memory layout view",
-      "other_side": "Retained Playback request/completion consumers and interrupt release",
+      "other_side": "Retained develop/machine5 consumers, owned ordinary Playback lifecycle and retained interrupt release",
       "owned": "partly",
       "removal": "all shared-state consumers use owned layouts and IRQ quiescence permits publication removal",
       "state": "required",

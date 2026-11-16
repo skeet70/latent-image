@@ -72,7 +72,7 @@ cp -r experiments/hello experiments/my-feature
 
 [`experiments/hello`](../experiments/hello/) hooks `0x00bfb028`, the stock dispatcher that every MENU open and key press goes through, and counts the calls in a static named `HELLO`. An experiment is:
 
-- **`hooks.json`**: up to 8 hooks, each a stock function's entry address and the handler to run first.
+- **`hooks.json`**: stock function entry addresses and handlers to run first. Each hook adds one setup and one activation publication; the linked installer and actual publication table must fit the allocation.
 
   ```json
   { "hooks": [ { "address": "0x00bfb028", "handler": "hello_on_dispatch" } ] }

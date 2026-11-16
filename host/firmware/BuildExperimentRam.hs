@@ -28,10 +28,9 @@ import FujiAF.JSON (encodeCanonical)
 import RamPushToolchain
 
 -- | Allocation layout; transport/FujiAF/RamPush.hs `experimentPayload` holds the same numbers.
-allocationBytes, codeWindowBytes, hookCapacity :: Word32
+allocationBytes, codeWindowBytes :: Word32
 allocationBytes = 0x8000
 codeWindowBytes = 0x5000
-hookCapacity = 8
 
 data Image = Image { imageName :: String, imageBase :: Word32, imageBytes :: B.ByteString }
 
@@ -51,7 +50,11 @@ main = do
         "--emulator-only" : rest -> (EmulatorOnly, rest)
         _ -> (ObserveOnly, arguments)
   case args of
-    ["--abi"] -> putStrLn (unwords (map show [2 * hookCapacity, hookCapacity, hookCapacity, 7]))
+    ["--abi", experiment, id4, id5, plain] -> do
+      images <- loadImages id4 id5 plain
+      hooks <- readHooks admission experiment images
+      let count = length hooks
+      putStrLn (unwords (map show [2 * count, count, count, 7]))
     ["--trampolines", experiment, id4, id5, plain, output] -> do
       images <- loadImages id4 id5 plain
       hooks <- readHooks admission experiment images
@@ -63,8 +66,8 @@ main = do
       images <- loadImages id4 id5 plain
       hooks <- readHooks admission experiment images
       refuseBranchesIntoSecondWord images hooks
-      build base linked out experiment images hooks
-    _ -> H.failH "usage: build-experiment-ram --abi | --trampolines EXPERIMENT ID4 ID5 PLAIN OUT.S | BASE LINKED_DIR OUT_DIR EXPERIMENT ID4 ID5 PLAIN"
+      build base linked out experiment hooks
+    _ -> H.failH "usage: build-experiment-ram --abi EXPERIMENT ID4 ID5 PLAIN | --trampolines EXPERIMENT ID4 ID5 PLAIN OUT.S | BASE LINKED_DIR OUT_DIR EXPERIMENT ID4 ID5 PLAIN"
 
 parseHex :: String -> String -> IO Word32
 parseHex label text = case text of
@@ -101,7 +104,6 @@ readHooks admission experiment images = do
   entries <- case H.get document "hooks" of
     Array _ -> pure (H.list (H.get document "hooks"))
     _ -> H.failH "hooks.json: {\"hooks\": [{\"address\": \"0x...\", \"handler\": \"name\"}, ...]} required"
-  H.ensure (length entries <= fromIntegral hookCapacity) ("hooks.json: at most " ++ show hookCapacity ++ " hooks")
   hooks <- forM (zip [0 ..] entries) $ \(index, entry) -> do
     addressText <- text entry "address"
     handler <- text entry "handler"
@@ -180,13 +182,8 @@ trampolineSource hooks = unlines $
     , ".size " ++ name hook ++ ", .-" ++ name hook ]
   name hook = "__experiment_hook_" ++ show (hookIndex hook)
 
--- | Stock code words in the AF decision functions; an unused hook slot
--- rewrites one of them with its own value.
-paddingCandidates :: [Word32]
-paddingCandidates = [0x00f41c50 + 4 * i | i <- [0 .. 15]] ++ [0x00f42ac4 + 4 * i | i <- [0 .. 15]]
-
-build :: Word32 -> FilePath -> FilePath -> FilePath -> [Image] -> [Hook] -> IO ()
-build base linked out experiment images hooks = do
+build :: Word32 -> FilePath -> FilePath -> FilePath -> [Hook] -> IO ()
+build base linked out experiment hooks = do
   forM_ pinnedTools $ \(name, expected) -> do
     actual <- lookupEnv name
     unless (actual == Just expected) (H.failH ("experiment relink tool differs: " ++ name))
@@ -211,7 +208,8 @@ build base linked out experiment images hooks = do
     ("experiment code and data take " ++ show (codeEnd - base) ++ " bytes; the limit is " ++ show codeWindowBytes)
   H.ensure (installer == (base + codeWindowBytes + 31) .&. 0xffffffe0) "installer start differs from the experiment layout"
   H.ensure (installerEnd <= base + allocationBytes) "installer runs past the allocation"
-  H.ensure (tableEnd - table == 16 * 2 * hookCapacity) "publication table size differs from the hook capacity"
+  H.ensure (table >= installer && tableEnd >= table && toInteger tableEnd - toInteger table == 32 * toInteger (length hooks)
+    && tableEnd <= installerEnd) "publication table size differs from the actual hook vector"
   H.ensure (install - installer == 0x600) "installer entry offset differs from the shared installer layout"
   trampolines <- forM hooks $ \hook -> case hookMode hook of
     Observe -> do
@@ -224,17 +222,7 @@ build base linked out experiment images hooks = do
         , hookMode hook == Observe || symbolValue s .&. 3 == 0
         , symbolValue s `notElem` [target | (observed, target) <- zip hooks trampolines, hookMode observed == Observe] -> pure ()
     _ -> H.failH ("hook at " ++ hex (hookSite hook) ++ ": handler " ++ hookHandler hook ++ " must be an aligned A32 function in the experiment's own code")
-  let used = concat [[hookSite hook, hookSite hook + 4] | hook <- hooks]
-      spare = filter (`notElem` used) paddingCandidates
-      padCount = fromIntegral hookCapacity - length hooks
-  padding <- forM (take (2 * padCount) spare) $ \address ->
-    maybe (H.failH ("padding word " ++ hex address ++ " is outside the stock decodes")) (pure . (,) address . snd) (stockWord images address)
-  H.ensure (length padding == 2 * padCount) "not enough padding words"
-  let (setupPads, activationPads) = splitAt padCount padding
-      (hookSetups, hookActivations) = unzip [entryPublications (hookSite hook) (hookFirst hook) (hookSecond hook) target | (hook, target) <- zip hooks trampolines]
-      setups = hookSetups ++ [(address, word, word) | (address, word) <- setupPads]
-      activations = hookActivations
-        ++ [(address, word, word) | (address, word) <- activationPads]
+  let (setups, activations) = unzip [entryPublications (hookSite hook) (hookFirst hook) (hookSecond hook) target | (hook, target) <- zip hooks trampolines]
       publications = [(a, old, new, 0 :: Int) | (a, old, new) <- setups] ++ [(a, old, new, 1) | (a, old, new) <- activations]
   H.ensure (length (nub [a | (a, _, _, _) <- publications]) == length publications) "publication addresses must be distinct"
   forM_ publications $ \(address, _, _, _) ->
@@ -268,6 +256,7 @@ build base linked out experiment images hooks = do
         , ("source_identity", H.obj (identities ++ [("ram-push-toolchain", H.s ramPushToolchainDigest)]))
         , ("base", H.s (hex base)), ("size", H.n (toInteger allocationBytes))
         , ("runtime_sha256", H.s runtimeHash), ("entry", entries)
+        , ("experiment_layout", H.obj [("table_offset", H.s (hex (table - base))), ("installer_end_offset", H.s (hex (installerEnd - base)))])
         , ("publications", H.arr
             [ H.obj [("index", H.n index), ("phase", H.s (if phase == 0 then "setup" else "activation")), ("address", H.s (hex address)), ("old", H.s (hex old)), ("new", H.s (hex new)), ("core", H.s "unknown")]
             | (index, (address, old, new, phase)) <- zip [0 :: Integer ..] publications ]) ]
