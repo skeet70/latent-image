@@ -1,0 +1,54 @@
+{
+  "unit": "playback",
+  "summary": "Emulator-only source/mode preparation compiled into a relocatable RAM experiment object. Queue-4 callers, dispatch/output services and shared layouts remain retained boundaries.",
+  "classification": "module",
+  "rows": [
+    {
+      "id": "playback-01",
+      "shim": "Source and mode A32 entry exports and two-word publication veneers",
+      "kind": "stock-ABI export",
+      "other_side": "Queue-4 loop, retained router and machine-1 action callers",
+      "owned": "partly",
+      "removal": "all entry callers link the typed owned preparation API directly",
+      "state": "required",
+      "evidence": [{
+        "kind": "reference-only",
+        "symbols": ["xm1_playback_source_entry", "xm1_playback_mode_entry"],
+        "contract": "replacement/playback/contract.json",
+        "requirement": "The relocatable object is linked at the experiment's allocated runtime base; installation and conditional caller receipts bind that package."
+      }],
+      "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
+    },
+    {
+      "id": "playback-02",
+      "shim": "Retained machine dispatch, output route, display preset and memory ABI",
+      "kind": "trampoline into retained stock",
+      "other_side": "Stock dispatcher0x011e8bf8, route0x0064982c, preset0x006d1294 and memory0x0089d908",
+      "owned": "partly",
+      "removal": "the packaged composition links the owned dispatch, output, preset and memory providers",
+      "state": "required",
+      "evidence": [{
+        "kind": "reference-only",
+        "symbols": ["xm1_playback_retained_dispatch", "xm1_power_output_route_set_requested_level", "xm1_scanout_mode_preset", "memcpy", "memmove", "__aeabi_memcpy", "__aeabi_memcpy4", "__aeabi_memcpy8", "__aeabi_memmove", "__aeabi_memmove4", "__aeabi_memmove8"],
+        "contract": "replacement/playback/contract.json",
+        "requirement": "The experiment binds these services to the retained addresses in the preparation contract."
+      }],
+      "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
+    },
+    {
+      "id": "playback-03",
+      "shim": "Queue-4 payload lifetime and shared playback globals",
+      "kind": "guest-memory layout view",
+      "other_side": "Retained message storage and machine0/1/11 consumers",
+      "owned": "partly",
+      "removal": "the message producer and all shared-state consumers use the owned typed lifetime and layout contract",
+      "state": "required",
+      "evidence": [{
+        "kind": "reference-only",
+        "contract": "replacement/playback/contract.json",
+        "requirement": "Queue4 serializes entry. Source-bound payload extents stay readable and disjoint from copied destinations; the experiment remains resident over the guarded PLAY interval."
+      }],
+      "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
+    }
+  ]
+}

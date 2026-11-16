@@ -127,5 +127,5 @@ compareSystemEvidence stock (SystemEvidence _ stockEvents _) owned (SystemEviden
  where
   signatures=foldl' collect (OrderedLifetimes M.empty M.empty) . sortOn eventFirst
   collect histories event=OrderedLifetimes
-    (M.insertWith (flip (++)) (recordKey event) [EventSignature event] (objectHistory histories))
-    (M.insertWith (flip (++)) (eventCaller event) [EventSignature event] (callerHistory histories))
+    (M.insertWith (++) (recordKey event) [EventSignature event] (objectHistory histories))
+    (M.insertWith (++) (eventCaller event) [EventSignature event] (callerHistory histories))

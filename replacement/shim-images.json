@@ -689,7 +689,7 @@
         "xm1_vector_table_end",
         "xm1_vector_table_start"
       ],
-      "expected_sha256": "e3813402a6264724775465eada738b62f1a6c3a1b9a3699411ee8666896c317d"
+      "expected_sha256": "dfd17727a4d21c595112a9d759f8ac5cb5b5ee95fa0ef9a5a4bb3fac77f9c709"
     },
     {
       "id": "//replacement/first_stage:first-stage-image",
@@ -715,7 +715,7 @@
         "xm1_vector_table_end",
         "xm1_vector_table_start"
       ],
-      "expected_sha256": "456fa5c10d041ac21dd0d475e964c0f54c44d1767967ce85a05a5692f8b446b8"
+      "expected_sha256": "0f1ea73c310bbb8844f713eaa7e355b28efbd0310702b6a8014633e10594de83"
     },
     {
       "id": "//replacement/fixed_image:probe-image",
@@ -832,6 +832,39 @@
         "service_ef8c90"
       ],
       "expected_sha256": "8063198ef345596b5fc01bb6497fccbd259ab409c1e3ca9e38470af395ed08f5"
+    },
+    {
+      "id": "//replacement/image5_load:image5-decoder-image",
+      "elf": "replacement/image5_load/image5-decoder-image.elf",
+      "units": [
+        "image5_load"
+      ],
+      "classification": "qualification",
+      "contracts": [
+        "replacement/image5_load/decoder.ld"
+      ],
+      "required_exports": [
+        "XM1_DECODER_STATE",
+        "xm1_decoder_complete",
+        "xm1_decoder_feed",
+        "xm1_decoder_finish",
+        "xm1_decoder_init",
+        "xm1_decoder_progress"
+      ],
+      "allowed_imports": [
+        "xm1_decoder_clock_give",
+        "xm1_decoder_clock_take",
+        "xm1_decoder_complete_entry",
+        "xm1_decoder_current_task",
+        "xm1_decoder_give",
+        "xm1_decoder_irq_attach",
+        "xm1_decoder_irq_detach",
+        "xm1_decoder_marker",
+        "xm1_decoder_progress_entry",
+        "xm1_decoder_route",
+        "xm1_decoder_take"
+      ],
+      "expected_sha256": "a6167b5df71d1a1a65f461f3508983f29b3daf4064a91745c549f373659c6e58"
     },
     {
       "id": "//replacement/image5_load:image5-load-image",
