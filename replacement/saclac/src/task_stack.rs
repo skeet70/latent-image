@@ -94,7 +94,7 @@ static XM1_SACLAC_CONSTRUCTOR_STACK: ConstructorStackContract = ConstructorStack
 pub unsafe extern "C" fn xm1_saclac_create_task(configuration: *mut u32) -> i32 {
     assert!(!configuration.is_null() && configuration as usize & 3 == 0, "task43 descriptor");
     assert!(unsafe { read_volatile(configuration) } == TASK, "task43 id");
-    assert!(unsafe { read_volatile(configuration.add(2)) } == 0xf01bc8, "task43 entry");
+    assert!(unsafe { read_volatile(configuration.add(4)) } == 0xf01bc8, "task43 entry");
     assert!(matches!(unsafe { read_volatile(configuration.add(3)) }, STOCK_STACK_BYTES | STACK_BYTES), "task43 descriptor stack");
 
     let runtime = addr_of_mut!(__saclac_runtime_stack_words).cast::<u32>();

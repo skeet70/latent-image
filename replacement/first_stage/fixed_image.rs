@@ -1,6 +1,7 @@
 use core::arch::asm;
 use core::ptr::{addr_of, read_volatile, write_volatile};
 use xm1_fixed_image_layout::{BLOCK_BYTES, HEADER_BYTES, IMAGE_BASE, IMAGE_LIMIT, RECORD_BLOCKS, RECORD_FLASH, RECORD_MAGIC};
+use super::fixed_crc;
 use super::media;
 
 #[used]
@@ -41,10 +42,7 @@ pub unsafe fn xm1_first_stage_fixed_image_load() -> Result<(), LoadError> {
     }
     let mut crc = 0xffff_ffffu32;
     for offset in HEADER_BYTES..length {
-        crc ^= read_volatile(((IMAGE_BASE | 0x4000_0000) + offset) as *const u8) as u32;
-        for _ in 0..8 {
-            crc = (crc >> 1) ^ if crc & 1 == 0 { 0 } else { 0xedb8_8320 };
-        }
+        crc = fixed_crc::update(crc, read_volatile(((IMAGE_BASE | 0x4000_0000) + offset) as *const u8));
     }
     if !crc != header(3) {
         return Err(LoadError::Integrity);

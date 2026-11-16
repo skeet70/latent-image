@@ -5,3 +5,4 @@ mod format;
 mod media;
 mod images;
 mod engine;
+mod fixed_crc;

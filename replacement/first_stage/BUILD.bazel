@@ -26,7 +26,7 @@ xm1_rust_staticlib(
     name = "first-stage-fixed-rust",
     src = "src.rs",
     crate_name = "xm1_first_stage",
-    data = ["media.rs", "images.rs", "format.rs", "engine.rs", "fixed_image.rs"],
+    data = ["media.rs", "images.rs", "format.rs", "engine.rs", "fixed_image.rs", "fixed_crc.rs"],
     rustc_flags = ["--cfg", "fixed_image"],
     rlib_deps = {"xm1_fixed_image_layout": "//replacement/fixed_image:layout"},
 )
@@ -94,7 +94,7 @@ xm1_rust_elf(
 genrule(
     name = "media-model-tests",
     testonly = True,
-    srcs = ["model.rs", "media.rs", "images.rs", "format.rs", "engine.rs", "stock_core_init_addresses.rs"],
+    srcs = ["model.rs", "media.rs", "images.rs", "format.rs", "engine.rs", "fixed_crc.rs", "stock_core_init_addresses.rs"],
     outs = ["media-model-tests-bin", "media-model-tests.passed"],
     tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
     cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location model.rs) -o $(@D)/media-model-tests-bin && $(@D)/media-model-tests-bin && touch $(@D)/media-model-tests.passed",
