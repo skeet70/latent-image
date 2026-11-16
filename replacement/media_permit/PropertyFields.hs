@@ -39,7 +39,7 @@ module PropertyFields
   ) where
 
 import qualified A32 as A
-import Data.Bits (popCount, shiftL, shiftR, (.&.))
+import Data.Bits (popCount, rotateR, shiftL, shiftR, (.&.))
 import Data.Int (Int32)
 import Data.List (nub)
 import qualified Data.Map.Strict as M
@@ -467,12 +467,13 @@ step image raw instruction address regs
         Continue next (M.insert destination (plus (valueOf regs source) (scaled (1 `shiftL` k) (valueOf regs operand))) regs)
       A.DataProcessing _ op _ _ _ _ | op `elem` [A.CMP, A.CMN, A.TST, A.TEQ] -> Continue next regs
       A.DataProcessing _ _ _ destination _ _ -> Continue next (M.insert destination Other regs)
-      A.ZeroExtend _ destination source rotation bits ->
-        let rotated
-              | rotation == 0 = valueOf regs source
-              | rotation + bits <= 32 = shifted (valueOf regs source) rotation
-              | otherwise = Other
-        in Continue next (M.insert destination (masked rotated ((1 `shiftL` bits) - 1)) regs)
+      A.ZeroExtend _ destination source rotation extension ->
+        let value = valueOf regs source
+            extended = case value of
+              Const word -> Const (A.zeroExtendValue extension (rotateR word rotation))
+              _ | rotation == 0 -> masked value (A.zeroExtendValue extension maxBound)
+              _ -> Other
+        in Continue next (M.insert destination extended regs)
       A.Multiply _ destination left right accumulator ->
         Continue next (M.insert destination (maybe id (plus . valueOf regs) accumulator (times (valueOf regs left) (valueOf regs right))) regs)
       A.Load _ A.Word False destination base (A.OffsetImmediate o) A.OffsetOnly

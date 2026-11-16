@@ -191,6 +191,8 @@ The [calculation-library binding table](saclac/calc/bindings.md) maps the shot's
 
 Admission checks allocated sections, entry veneers, retained table counts, definite ELF address relocations and direct branches, compiler trap words, trap fill and owned direct-call stack budgets. The linked image carries separate metadata for task 43's runtime stack and task 59's constructor call path. The latter admits only the call closure rooted at `xm1_saclac_create_task`; task 43's stack cannot cover code that executes before task 43 exists. Literal words and unrelocated instruction constants are not classified as addresses. Entries and regions come from `Replacement.Saclac.Artifact` and the linked kernel's boundary metadata. Memory safety inside the core rests on the compiler and bounded types. The driver, engine and router modules forbid unsafe code; `src/stock.rs` contains the retained-memory and stock-call adapters. Their unsafe operations have these invariants:
 
+Stack admission treats status-mode writes as valid only on their contiguous executed fallthrough path, rejects flag-setting conditional frame restores and charges the taken restore depth to peak demand. The shared A32 decoder represents `UXTB16` as paired-byte extension with mask `0x00ff00ff`, distinct from byte and halfword extension.
+
 | Block | Invariant |
 | --- | --- |
 | `read_word`, `read_word_indexed`, `read_half` | Reads address a declared stock array or the retained receive length, with alignment for the width. |
@@ -211,6 +213,14 @@ Live and S1 acquisition motion use the same `Services`, `SceneRecognition` and c
 Acquisition's selection defaults and reference restoration use the installed Shot state and library ports. The scoped service loan is released before lending those fields together and reacquired afterward, so grid layers read the same configuration without recursively borrowing `Services`. Saved lists, retained results, auxiliary publication and retained references use the same Shot state; no additional persistent state or input cache is constructed.
 
 The native Census site declaration accepts an optional `task_stack` object with word-aligned hexadecimal `cursor` and `allocation` addresses. Its report reads the final cursor and the allocation's three raw words (`base`, `bytes`, `active`); a read failure fails the observation rather than inventing an allocation. These guest readbacks alone do not establish cross-core/physical-alias agreement, task lifetime, composed stack demand or heap headroom. A candidate must establish an adequate physical task stack before executing code that exceeds the stock allocation. The stock task 59 constructor observation records a `0xc00` stack at `0xa24a00`, entry SP `0xa255a0`, `0x60` entry use, 72 bytes of parent frames, 128 bytes of retained allocator demand, 104 bytes of retained create-task demand and an 88-byte interrupt reserve. Subtracting the entry use, parent frames, larger retained demand and interrupt reserve leaves a `0xa80` owned constructor budget. This bounds the rooted owned call graph only; it does not establish candidate allocation, lifetime, physical aliasing or task 43 runtime demand.
+
+<!-- evidence-record E-SACLAC-TASK43-RUNTIME-150 -->
+
+E-SACLAC-TASK43-RUNTIME-150: Candidate DAT 5ed206c051d4c0c9bef95108fd7c02458479cee36bfe4914896cd28304082295 executes the authentic task43 constructor call at 0xef8d1c 1 time at model instruction 55929680. The owned stack path publishes base 11002152 and 65536 bytes at 0x40a5b354; task43 enters 0xf01bc8 1 time at instruction 55992474 with SP 11067688. The final reset-to-preparation snapshot at 284250000 instructions retains those runtime words. The retained stock allocation record at 0x40a0fe3c remains base 0, bytes 0, active 0 and therefore does not describe the owned allocation.
+
+Scope: Host FujiMod execution from reset through the preparation boundary with one X-M1 1.50 candidate, one original constructor call and one task43 entry. The observer exited 0. This establishes the candidate allocation publication and its survival through that boundary, not stop/recreate behavior, eventual release, overlap, heap pressure, cross-core visibility or camera acceptance.
+
+<!-- /evidence-record E-SACLAC-TASK43-RUNTIME-150 -->
 
 <!-- evidence-record E-SACLAC-ROOT-PERSISTENT-PROVIDERS-150 -->
 

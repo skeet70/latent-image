@@ -135,7 +135,9 @@ classify address word = case A.decode address word of
       A.MoveTop {} -> "movt"
       A.ReadStatus {} -> "mrs"
       A.WriteApplicationFlags {} -> "msr apsr_nzcvq"
-      A.ZeroExtend _ _ _ rotation bits -> (if bits == 8 then "uxtb" else "uxth") ++ (if rotation /= 0 then " ror" else "")
+      A.ZeroExtend _ _ _ rotation extension ->
+        (case extension of A.ExtendByte -> "uxtb"; A.ExtendHalfword -> "uxth"; A.ExtendBytePair -> "uxtb16")
+          ++ (if rotation /= 0 then " ror" else "")
       A.Multiply _ _ _ _ accumulator -> maybe "mul" (const "mla") accumulator
       A.Load _ width signed destination base offset indexing ->
         "ldr" ++ widthName width signed ++ " " ++ offsetShape offset ++ " " ++ indexingName indexing ++ pcNote [("base=pc", base == A.pc), ("base=sp", base == A.sp), ("rt=pc", destination == A.pc)]

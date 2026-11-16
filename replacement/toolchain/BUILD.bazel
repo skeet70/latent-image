@@ -30,5 +30,5 @@ haskell_test(
     srcs = ["StackTests.hs"],
     main_file = "StackTests.hs",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
-    deps = [":stack-proof", "//host:base", "//host:bytestring", "//host:containers", "//host:first-stage", "//host:host-support", "//host:update-container"],
+    deps = [":stack-proof", "//host:base", "//host:bytestring", "//host:containers", "//host:first-stage", "//host:host-support", "//host:update-container", "//host/firmware:bank-allowlist"],
 )

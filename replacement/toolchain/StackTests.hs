@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main (main) where
 
+import qualified A32 as A
 import Control.Monad (forM_)
 import qualified Data.ByteString as B
 import qualified Data.Set as S
@@ -203,6 +204,12 @@ main = do
               <> B.drop 8 (imageBytes bytePairs) }
     H.ensure (check eight changed == Left (FrameNotDerivable (Guest base)))
       "UXTB16 admitted an SP/PC destination or PC source"
+  H.ensure
+    (case A.decode base 0xe6cf0070 of
+      A.ZeroExtend (A.Cond 14) (A.Reg 0) (A.Reg 0) 0 extension ->
+        A.zeroExtendValue extension 0x00120034 == 0x00120034
+      _ -> False)
+    "UXTB16 collapsed its two zero-extended bytes into one scalar byte"
   forM_ [0xe59d0008, 0xe1cd00d8, 0xe5240008, 0xe4940008] $ \transfer -> do
     let framed = single [transfer, 0xe92d4800, 0xe8bd4800, 0xe12fff1e]
         leaf = single [transfer, 0xe12fff1e, 0xe320f000, 0xe320f000]
@@ -224,6 +231,22 @@ main = do
           { imageBytes = B.take 20 (imageBytes epilogue) <> U.putWord32 changedWord <> B.drop 24 (imageBytes epilogue) }
     H.ensure (check twentyFour changed == Left (FrameNotDerivable (Guest base)))
       "a conditional stack restore without its matching return was admitted"
+  flagRestoreSymbols <- either H.failH pure
+    (F.parseSymbols "00001000 00000020 T flag_restore\n")
+  let flagRestore = Image (Guest base) (B.concat (map U.putWord32
+        [0xe92d4800, 0xe1a0b00d, 0xe24dd010, 0xe3500000,
+         0x025bd000, 0x08bd8800, 0xe28dd018, 0xe12fff1e]))
+        flagRestoreSymbols (S.fromList (map Guest [base, base + 4 .. base + 28]))
+  H.ensure (check twentyFour flagRestore == Left (FrameNotDerivable (Guest base)))
+    "a flag-setting conditional restore controlled its paired conditional return"
+  peakSymbols <- either H.failH pure
+    (F.parseSymbols "00001000 00000018 T taken_peak\n")
+  let takenPeak = Image (Guest base) (B.concat (map U.putWord32
+        [0xe92d4800, 0xe1a0b00d, 0xe28dd008, 0x024bd010, 0x049df018, 0xe12fff1e]))
+        peakSymbols (S.fromList (map Guest [base, base + 4 .. base + 20]))
+  either (H.failH . show) pure (check twentyFour takenPeak)
+  H.ensure (check twentyThree takenPeak == Left (BudgetExceeded (Guest base) twentyFour))
+    "a taken conditional restore hid its deepest stack offset"
   epilogueCallSymbols <- either H.failH pure
     (F.parseSymbols "00001000 00000020 T epilogue_call\n00001024 00000008 T halt\n")
   let epilogueCallWords =
@@ -335,4 +358,8 @@ main = do
     "a control write that can change the processor mode was admitted"
   H.ensure (check eight lowInsert == Left (FrameNotDerivable (Guest base)))
     "a control write replacing processor-mode bits was admitted"
+  let skippedStatus = modeFunction
+        [0xea000001, 0xe10f1000, 0xe3812080, 0xe121f002, 0xe12fff1e]
+  H.ensure (check zero skippedStatus == Left (FrameNotDerivable (Guest base)))
+    "a branch directly into a status write borrowed skipped provenance"
   putStrLn "stack-proof: consecutive pushes, direct depth, recursion, frame and image-bound controls passed"

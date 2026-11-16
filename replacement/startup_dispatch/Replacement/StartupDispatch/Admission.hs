@@ -138,13 +138,13 @@ operand machine (A.ShiftedImmediate register shift amount) | amount > 0 && amoun
     A.LSR -> Right (Constant (word `shiftR` amount))
     _ -> Left (AdmissionError "A32 shift is outside admission")
 operand _ _ = Left (AdmissionError "A32 register shift is outside admission")
-extendScalar :: Int -> Int -> Scalar -> Either AdmissionError Scalar
-extendScalar rotation width value = do
-  require (rotation `elem` [0,8,16,24] && width `elem` [8,16])
-    "A32 zero extension has an unsupported rotation or width"
-  let mask = (1 `shiftL` width) - 1
+extendScalar :: Int -> A.ZeroExtension -> Scalar -> Either AdmissionError Scalar
+extendScalar rotation extension value = do
+  require (rotation `elem` [0,8,16,24])
+    "A32 zero extension has an unsupported rotation"
+  let mask = A.zeroExtendValue extension maxBound
   case value of
-    Constant word -> pure (Constant (rotateR word rotation .&. mask))
+    Constant word -> pure (Constant (A.zeroExtendValue extension (rotateR word rotation)))
     Interval _ lastWord | rotation == 0 && lastWord <= mask -> pure value
     Interval _ _ -> pure (Interval 0 mask)
     Unknown -> pure (Interval 0 mask)
@@ -275,10 +275,10 @@ deriveFrameProof bytes = do
               A.MoveTop cond destination word -> execute cond $ do
                 previous <- known (get machine destination)
                 assign destination (Constant ((previous .&. 0xffff) .|. (word `shiftL` 16)))
-              A.ZeroExtend cond destination source rotation width -> execute cond $ do
+              A.ZeroExtend cond destination source rotation extension -> execute cond $ do
                 require (destination /= A.sp && destination /= A.pc && source /= A.pc)
                   "A32 zero extension cannot use SP or PC as a destination or PC as a source"
-                value <- extendScalar rotation width (get machine source)
+                value <- extendScalar rotation extension (get machine source)
                 assign destination value
               A.DataProcessing cond operation updates destination source value -> execute cond $ do
                 right <- operand machine value

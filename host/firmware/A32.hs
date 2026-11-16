@@ -7,6 +7,7 @@ module A32
   , Operand (..)
   , DataOp (..)
   , Width (..)
+  , ZeroExtension (..)
   , Offset (..)
   , Indexing (..)
   , BlockMode (..)
@@ -17,6 +18,7 @@ module A32
   , StatusSource (..)
   , StatusWrite (..)
   , SignExtension (..)
+  , zeroExtendValue
   , decode
   , directTarget
   , computeSources
@@ -68,6 +70,14 @@ data DataOp = AND | EOR | SUB | RSB | ADD | ADC | SBC | RSC | TST | TEQ | CMP | 
   deriving (Eq, Show, Enum, Bounded)
 
 data Width = Byte | Half | Word | Dual deriving (Eq, Show)
+
+data ZeroExtension = ExtendByte | ExtendHalfword | ExtendBytePair deriving (Eq, Show)
+
+zeroExtendValue :: ZeroExtension -> Word32 -> Word32
+zeroExtendValue extension value = value .&. case extension of
+  ExtendByte -> 0xff
+  ExtendHalfword -> 0xffff
+  ExtendBytePair -> 0x00ff00ff
 
 data Offset = OffsetImmediate Int32 | OffsetRegister Bool Reg Shift Int
   deriving (Eq, Show)
@@ -121,7 +131,7 @@ data Instruction
   | MoveTop Cond Reg Word32
   | ReadStatus Cond Reg
   | WriteApplicationFlags Cond Reg
-  | ZeroExtend Cond Reg Reg Int Int
+  | ZeroExtend Cond Reg Reg Int ZeroExtension
   | -- | MUL or MLA: destination, the two factors and the accumulator.
     Multiply Cond Reg Reg Reg (Maybe Reg)
   | -- | Destinations of an instruction whose result the analysis does not
@@ -383,9 +393,9 @@ decode address word
         else Compute cond [reg 12 word]
     | word .&. 0x0fff03f0 == 0x06cf0070 =
         if reg 0 word == pc then Rejected Unadmitted
-        else withoutPcDestination [reg 12 word] (ZeroExtend cond (reg 12 word) (reg 0 word) rotation 8)
-    | word .&. 0x0fff03f0 == 0x06ef0070 = withoutPcDestination [reg 12 word] (ZeroExtend cond (reg 12 word) (reg 0 word) rotation 8)
-    | word .&. 0x0fff03f0 == 0x06ff0070 = withoutPcDestination [reg 12 word] (ZeroExtend cond (reg 12 word) (reg 0 word) rotation 16)
+        else withoutPcDestination [reg 12 word] (ZeroExtend cond (reg 12 word) (reg 0 word) rotation ExtendBytePair)
+    | word .&. 0x0fff03f0 == 0x06ef0070 = withoutPcDestination [reg 12 word] (ZeroExtend cond (reg 12 word) (reg 0 word) rotation ExtendByte)
+    | word .&. 0x0fff03f0 == 0x06ff0070 = withoutPcDestination [reg 12 word] (ZeroExtend cond (reg 12 word) (reg 0 word) rotation ExtendHalfword)
     | word .&. 0x0fff03f0 `elem` [0x06af0070, 0x06bf0070] = withoutPcDestination [reg 12 word] (Compute cond [reg 12 word])
     | word .&. 0x0ff003f0 `elem` [0x06e00070, 0x06f00070, 0x06a00070, 0x06b00070] = withoutPcDestination [reg 12 word] (Compute cond [reg 12 word])
     | word .&. 0x0fff0ff0 `elem` [0x06bf0f30, 0x06bf0fb0, 0x06ff0f30] = withoutPcDestination [reg 12 word] (Compute cond [reg 12 word])

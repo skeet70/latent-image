@@ -405,10 +405,10 @@ deriveFrameProof layout bytes = do
         else do
           result <- binary operation (get pc machine source) right
           (,) cond <$> assign pc destination result machine work
-      A.ZeroExtend (A.Cond cond) destination source rotation bits -> do
-        require (rotation == 0 && bits `elem` [8,16]) UnsupportedInstruction
+      A.ZeroExtend (A.Cond cond) destination source rotation extension -> do
+        require (rotation == 0) UnsupportedInstruction
         value <- case get pc machine source of
-          Constant word -> Right (constant (word .&. ((1 `shiftL` bits)-1)))
+          Constant word -> Right (constant (A.zeroExtendValue extension word))
           other -> require (not (capability other)) ArithmeticProvenanceLost >> pure Unknown
         (,) cond <$> assign pc destination value machine work
       A.Multiply (A.Cond cond) destination left right accumulator -> do

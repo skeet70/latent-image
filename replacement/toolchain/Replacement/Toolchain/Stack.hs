@@ -52,6 +52,7 @@ newtype FrameOffset = FrameOffset Integer deriving (Eq)
 data FrameState = FrameState
   { frameSp :: FrameOffset
   , frameFp :: Maybe FrameOffset
+  , frameFallthrough :: Int
   } deriving (Eq)
 
 data FrameVisit = FrameVisit Guest FrameState
@@ -131,26 +132,31 @@ frameBytes entries nonReturning image function = do
       clobber instruction writtenRegisters state
         | W.framePointer `elem` writtenRegisters || frameWriteback instruction = state { frameFp = Nothing }
         | otherwise = state
+      advanced state = state { frameFallthrough = min 4 (frameFallthrough state + 1) }
+      interrupted state = state { frameFallthrough = 0 }
       next address state = do
         unless (toInteger address + 4 < end && present (address + 4)) refused
-        pure [FrameVisit (Guest (address + 4)) state]
+        pure [FrameVisit (Guest (address + 4)) (advanced state)]
+      nextInterrupted address state = do
+        unless (toInteger address + 4 < end && present (address + 4)) refused
+        pure [FrameVisit (Guest (address + 4)) (interrupted state)]
       terminal state = unless (sp state == 0) refused
       conditional condition address state visits
         | condition == A.Cond 14 = Right visits
-        | otherwise = (visits ++) <$> next address state
+        | otherwise = (visits ++) <$> nextInterrupted address state
       jump target state
-        | inside target = if present target then Right [FrameVisit (Guest target) state] else refused
+        | inside target = if present target then Right [FrameVisit (Guest target) (interrupted state)] else refused
         | otherwise = do
             knownCallee target
             terminal state
             pure []
-      modeWritePreserves address
+      modeWritePreserves address state
         | address < start + 8 = pure False
         | otherwise = do
             current <- wordAt image address
             previous <- wordAt image (address - 4)
             beforePrevious <- wordAt image (address - 8)
-            exactRestore <- if address >= start + 16
+            exactRestore <- if address >= start + 16 && frameFallthrough state >= 4
               then (== [0xe2001080, 0xe10f2000, 0xe3c22080, 0xe1811002, 0xe121f001])
                 <$> mapM (wordAt image) [address - 16, address - 12 .. address]
               else pure False
@@ -168,7 +174,8 @@ frameBytes entries nonReturning image function = do
                   _ -> False
             pure $ case A.statusWrite current of
               Just (A.StatusWrite (A.Cond 14) A.CurrentStatus fields (A.StatusFromRegister source)) ->
-                A.ControlBits `elem` fields && (copiedControl source || insertedControl source || exactRestore)
+                A.ControlBits `elem` fields
+                  && ((frameFallthrough state >= 2 && (copiedControl source || insertedControl source)) || exactRestore)
               _ -> False
       conditionalEpilogue condition displacement address state = do
         let returnAddress = address + 4
@@ -182,14 +189,20 @@ frameBytes entries nonReturning image function = do
                   Nothing -> refused
                 returned <- adjusted (sp restored - toInteger amount) restored
                 terminal returned
-                next returnAddress state
+                visits <- nextInterrupted returnAddress state
+                pure (sp restored, visits)
           _ -> refused
       walk _ best [] = Right best
       walk seen best (FrameVisit point@(Guest address) incoming : rest) =
         case M.lookup point seen of
-          Just old | frameSp old /= frameSp incoming -> refused
-            | frameFp old == Nothing || frameFp old == frameFp incoming -> walk seen best rest
-            | otherwise -> step incoming { frameFp = Nothing }
+          Just old
+            | frameSp old /= frameSp incoming -> refused
+            | otherwise ->
+                let merged = FrameState
+                      (frameSp old)
+                      (if frameFp old == frameFp incoming then frameFp old else Nothing)
+                      (min (frameFallthrough old) (frameFallthrough incoming))
+                in if merged == old then walk seen best rest else step merged
           Nothing -> step incoming
         where
           step state = do
@@ -200,52 +213,56 @@ frameBytes entries nonReturning image function = do
             case instruction of
               A.Load {} | A.sp `elem` writtenRegisters -> refused
               _ -> pure ()
-            visits <- case instruction of
-              A.DataProcessing condition A.MOV _ destination _ (A.ShiftedImmediate source A.LSL 0)
-                | destination == A.sp && source == W.framePointer && condition /= A.Cond 14 ->
-                    conditionalEpilogue condition 0 address state
-              A.DataProcessing condition operation _ destination source (A.Immediate amount)
+            (stepPeak, visits) <- case instruction of
+              A.DataProcessing condition A.MOV setsFlags destination _ (A.ShiftedImmediate source A.LSL 0)
                 | destination == A.sp && source == W.framePointer && condition /= A.Cond 14
-                , operation `elem` [A.ADD, A.SUB] ->
+                , not setsFlags ->
+                    conditionalEpilogue condition 0 address state
+              A.DataProcessing condition operation setsFlags destination source (A.Immediate amount)
+                | destination == A.sp && source == W.framePointer && condition /= A.Cond 14
+                , operation `elem` [A.ADD, A.SUB]
+                , not setsFlags ->
                     conditionalEpilogue condition
                       (if operation == A.ADD then toInteger amount else negate (toInteger amount))
                       address state
-              _ -> case W.classify W.Strict address word of
-                W.Reserve amount -> adjusted (sp state + toInteger amount) state >>= next address
-                W.Release amount -> adjusted (sp state - toInteger amount) state
-                  >>= next address . clobber instruction writtenRegisters
-                W.FromFrame displacement -> case frameFp state of
-                  Just position -> adjusted (offset position - toInteger displacement) state >>= next address
-                  Nothing -> refused
-                W.SetFrame amount -> next address state
-                  { frameFp = Just (FrameOffset (sp state - toInteger amount)) }
-                W.Neutral
-                  | any (`elem` writtenRegisters) [A.sp, A.pc] -> refused
-                  | otherwise -> next address (clobber instruction writtenRegisters state)
-                W.Call target -> do
-                  knownCallee target
-                  case instruction of
-                    A.Branch (A.Cond 14) True _ | S.member (Guest target) nonReturning -> pure []
-                    _ -> next address state
-                W.RegisterCall _ -> next address state
-                W.Jump condition target -> jump target state >>= conditional condition address state
-                W.Return condition amount -> do
-                  returned <- adjusted (sp state - toInteger amount) state
-                  terminal returned
-                  conditional condition address state []
-                W.RegisterJump condition _ -> do
-                  terminal state
-                  conditional condition address state []
-                W.ModeWrite _ -> do
-                  preserving <- modeWritePreserves address
-                  if preserving then next address state else refused
-                _ -> refused
-            walk (M.insert point state seen) (max best (sp state)) (visits ++ rest)
+              _ -> do
+                ordinary <- case W.classify W.Strict address word of
+                  W.Reserve amount -> adjusted (sp state + toInteger amount) state >>= next address
+                  W.Release amount -> adjusted (sp state - toInteger amount) state
+                    >>= next address . clobber instruction writtenRegisters
+                  W.FromFrame displacement -> case frameFp state of
+                    Just position -> adjusted (offset position - toInteger displacement) state >>= next address
+                    Nothing -> refused
+                  W.SetFrame amount -> next address state
+                    { frameFp = Just (FrameOffset (sp state - toInteger amount)) }
+                  W.Neutral
+                    | any (`elem` writtenRegisters) [A.sp, A.pc] -> refused
+                    | otherwise -> next address (clobber instruction writtenRegisters state)
+                  W.Call target -> do
+                    knownCallee target
+                    case instruction of
+                      A.Branch (A.Cond 14) True _ | S.member (Guest target) nonReturning -> pure []
+                      _ -> nextInterrupted address state
+                  W.RegisterCall _ -> nextInterrupted address state
+                  W.Jump condition target -> jump target state >>= conditional condition address state
+                  W.Return condition amount -> do
+                    returned <- adjusted (sp state - toInteger amount) state
+                    terminal returned
+                    conditional condition address state []
+                  W.RegisterJump condition _ -> do
+                    terminal state
+                    conditional condition address state []
+                  W.ModeWrite _ -> do
+                    preserving <- modeWritePreserves address state
+                    if preserving then next address state else refused
+                  _ -> refused
+                pure (sp state, ordinary)
+            walk (M.insert point state seen) (max best stepPeak) (visits ++ rest)
   unless (size > 0 && size `mod` 4 == 0 && start `mod` 4 == 0
     && end <= toInteger (maxBound :: Word32) && start >= firstByte
     && end <= toInteger firstByte + toInteger (B.length (imageBytes image)))
     (Left (InvalidFunction (Guest start)))
-  peak <- walk M.empty 0 [FrameVisit (Guest start) (FrameState (FrameOffset 0) Nothing)]
+  peak <- walk M.empty 0 [FrameVisit (Guest start) (FrameState (FrameOffset 0) Nothing 0)]
   unless (peak <= toInteger (maxBound :: Int)) refused
   pure (fromInteger peak)
 
