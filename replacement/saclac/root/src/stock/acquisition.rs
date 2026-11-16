@@ -18,7 +18,7 @@ use xm1_saclac_interface::calc::{AcquisitionGrid, SharedAddress};
 use xm1_saclac_interface::stock::round_acquisition::{SelectionRegion, LIVE_REGION, S1_REGION};
 use xm1_saclac_interface::stock::StockCallbackWord;
 use xm1_saclac_interface::{Completion, RecordHandle};
-use xm1_saclac_shared::stock::{Argument, Machine};
+use xm1_saclac_shared::{settings::Adjustments, stock::{Argument, Machine}};
 
 /// Retained entries may load words through their buffer arguments.
 #[repr(align(4))]
@@ -299,16 +299,56 @@ pub fn clamp_selection_difference(
     difference.clamp(-200, 200)
 }
 
-/// 0xf624a8 writes the setting from +0x1c, in place where calc1 reads it; the window takes back
-/// the signed level at +0x1e and the flag word at +0x28.
-pub fn capture_selection_position(machine: &impl Machine, setting: SharedAddress, branch: Branch, inputs: &PositionInputs) -> SelectionPosition {
-    let arguments = [
-        word(setting.0 + 0x1c), word(inputs.word), signed(inputs.level), word(inputs.updated_position),
-        word(u32::from(inputs.position_halfword)), word(inputs.mode_word), word(u32::from(inputs.byte)), word(u32::from(inputs.halfword)),
-        word(match branch { Branch::Live => 0, Branch::S1 => 1 }),
-    ];
-    enter(machine, 0xf6_24a8, &arguments);
-    SelectionPosition { level: machine.read_u16(setting.0 + 0x1e), flag: machine.read_u32(setting.0 + 0x28) }
+fn profile_position(stock: &impl Adjustments, index: u32) -> u16 {
+    match index {
+        0 => 0,
+        1..=10 => xm1_saclac_config::adjustment::half(stock, 0x1900 + index * 2),
+        _ => xm1_saclac_config::adjustment::half(stock, 0x1906),
+    }
+}
+
+/// The position block formerly produced by 0xf624a8.
+pub fn capture_selection_position(
+    machine: &mut impl Machine,
+    stock: &impl Adjustments,
+    setting: SharedAddress,
+    branch: Branch,
+    inputs: &PositionInputs,
+) -> SelectionPosition {
+    let output = setting.0 + 0x1c;
+    let profile_mode = xm1_saclac_config::adjustment::byte(stock, 0xa8) & 1 != 0;
+    let initial = match branch {
+        Branch::Live => xm1_saclac_config::adjustment::half(stock, 0x6002),
+        Branch::S1 => profile_position(stock, 3),
+    };
+    machine.write_u16(output, initial);
+    machine.write_u32(output + 0x10, inputs.word);
+
+    let mut threshold = if profile_mode {
+        let configured = xm1_saclac_config::adjustment::byte(stock, 0xaa);
+        let index = if (1..=9).contains(&configured) { u32::from(configured) } else { 1 };
+        profile_position(stock, machine.read_u32(0x00ee_a284 + index * 4))
+    } else {
+        inputs.level as u16
+    };
+    machine.write_u16(output + 4, threshold);
+    let unmeasured = threshold == 0;
+    machine.write_u32(output + 0xc, u32::from(unmeasured));
+    if unmeasured { threshold = profile_position(stock, 3); }
+
+    let profile = if profile_mode {
+        if xm1_saclac_config::adjustment::byte(stock, 0xbe) & 0xf == 0 { machine.read_u32(0x00ee_a2ac) } else { 1 }
+    } else {
+        1
+    };
+    machine.write_u32(output + 8, profile);
+    let conversion = timing_offset(machine, TimingWord(profile));
+    let difference = threshold.wrapping_sub(conversion);
+    let limit = profile_position(stock, 2) as i16;
+    let bounded = if (difference as i16) < limit { limit as u16 } else { difference };
+    machine.write_u16(output + 2, conversion.wrapping_add(bounded));
+
+    SelectionPosition { level: machine.read_u16(output + 2), flag: machine.read_u32(output + 0xc) }
 }
 
 

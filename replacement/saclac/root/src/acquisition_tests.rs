@@ -3,7 +3,7 @@
 use core::cell::RefCell;
 use xm1_saclac_calc::scene_recognition::SceneRecognition;
 use xm1_focus_measurement_round::acquisition::live::LiveWork;
-use xm1_focus_measurement_round::acquisition::ports::{Branch, ExposureRecordUpdate, Ports, ProgramInputs};
+use xm1_focus_measurement_round::acquisition::ports::{Branch, ExposureRecordUpdate, Ports, PositionInputs, ProgramInputs};
 use xm1_focus_measurement_round::children::S1Acquisition;
 use xm1_focus_measurement_round::pipeline::{Exposure, GainStep, Pipeline};
 use xm1_saclac_controllers::children::{AcquisitionControl, ChildEvent, ChildOutcome};
@@ -567,6 +567,53 @@ fn owned_selection_difference_preserves_mode_sentinel_and_signed_clamp() {
     assert_eq!(difference(56, -1_000, 0, 0), -200);
     assert!(!machine.take_entered().iter().any(|(address, _)| *address == 0xf5_f368));
 }
+#[test]
+fn owned_selection_position_preserves_profile_modes_limits_and_unmeasured_flag() {
+    let kernel = fake::saclac_kernel();
+    let cx = kernel.task().unwrap();
+    let (machine, root) = fake::root_with(fake::peers(&cx), Bytes::default(), Entries::default());
+    let recognition = RefCell::new(SceneRecognition::new());
+    acquisition!(root, recognition, cx);
+    let set_half = |key: u32, value: u16| {
+        for (offset, byte) in value.to_le_bytes().into_iter().enumerate() {
+            machine.adjustment(key + offset as u32, byte);
+        }
+    };
+    set_half(0x6002, 0x1234);
+    set_half(0x1904, (-10i16) as u16);
+    set_half(0x1906, 100);
+    machine.set_byte(0x00ef_6de4 + 20 + 14, 1);
+    memory(&machine, 0x00ef_66d2, &5u16.to_le_bytes());
+    let inputs = PositionInputs {
+        word: 0x1234_5678,
+        level: 20,
+        updated_position: 0,
+        position_halfword: 0,
+        mode_word: 0,
+        byte: 0,
+        halfword: 0,
+    };
+
+    let live = Ports::capture_selection_position(&mut root, Branch::Live, &inputs);
+    let live_output = crate::stock::acquisition::region(Branch::Live).setting.0 + 0x1c;
+    assert_eq!((live.level, live.flag), (20, 0));
+    assert_eq!((machine.word(live_output), machine.word(live_output + 0x10)), (0x0014_1234, inputs.word));
+
+    let unmeasured = Ports::capture_selection_position(&mut root, Branch::S1, &PositionInputs { level: 0, ..inputs });
+    assert_eq!((unmeasured.level, unmeasured.flag), (100, 1));
+
+    machine.adjustment(0xa8, 1);
+    machine.adjustment(0xaa, 2);
+    machine.set_word(0x00ee_a284 + 8, 4);
+    set_half(0x1908, 50);
+    machine.set_word(0x00ee_a2ac, 3);
+    machine.set_byte(0x00ef_6de4 + 3 * 20 + 14, 1);
+    let configured = Ports::capture_selection_position(&mut root, Branch::Live, &PositionInputs { level: -300, ..inputs });
+    let configured_output = crate::stock::acquisition::region(Branch::Live).setting.0 + 0x1c;
+    assert_eq!((configured.level, configured.flag, machine.word(configured_output + 8)), (50, 0, 3));
+    assert!(!machine.take_entered().iter().any(|(address, _)| *address == 0xf6_24a8));
+}
+
 #[test]
 fn live_and_s1_keep_one_selection_preset_and_s1_consumes_the_controllers_change() {
     let kernel = fake::saclac_kernel();

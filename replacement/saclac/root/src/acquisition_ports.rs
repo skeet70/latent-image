@@ -457,7 +457,10 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc + S
     fn allows_unflagged_selection(&mut self, position: u32, halfword: u16) -> bool {
         halfword & 2 != 0 || matches!(position, 5 | 11 | 12 | 18 | 21 | 25 | 34 | 37 | 40)
     }
-    fn capture_selection_position(&mut self, branch: Branch, inputs: &PositionInputs) -> SelectionPosition { boundary::capture_selection_position(&self.services.machine, boundary::region(branch).setting, branch, inputs) }
+    fn capture_selection_position(&mut self, branch: Branch, inputs: &PositionInputs) -> SelectionPosition {
+        let stock = xm1_saclac_shared::stock::Stock::new(self.services.machine.clone());
+        boundary::capture_selection_position(&mut self.services.machine, &stock, boundary::region(branch).setting, branch, inputs)
+    }
     fn copy_rate_grid_source(&mut self, buffer: StatisticsBuffer) {
         self.recognition.borrow_mut().set_source(&mut *self.services, SharedAddress(buffer.0));
     }
