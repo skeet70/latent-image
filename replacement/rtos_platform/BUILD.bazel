@@ -24,6 +24,9 @@ haskell_library(
     ],
 )
 
+# These component outputs feed the carrier images, not Root's fixed-body admission.
+_CARRIER_CODEGEN = ["-C", "jump-tables=yes"]
+
 xm1_rust_staticlib(
     name = "platform-root",
     src = "src/lib.rs",
@@ -42,7 +45,7 @@ xm1_rust_staticlib(
             "//replacement/rtos_layout:src/lib.rs",
             "//replacement/rtos_reservation:src/lib.rs",
         ],
-        rustc_flags = [
+        rustc_flags = _CARRIER_CODEGEN + [
             "--cfg",
             "'feature=\"domain-%s\"'" % domain,
             "--cfg",
@@ -59,7 +62,7 @@ xm1_rust_staticlib(
         name = "scheduler-s2-%s-rlib" % domain,
         src = "//replacement/rtos_scheduler:src/s2.rs",
         crate_name = "xm1_rtos_scheduler_s2",
-        rustc_flags = [
+        rustc_flags = _CARRIER_CODEGEN + [
             "--cfg",
             "'feature=\"domain-%s\"'" % domain,
             "--cfg",
@@ -78,7 +81,7 @@ xm1_rust_staticlib(
             "//replacement/rtos_layout:src/lib.rs",
             "//replacement/rtos_reservation:src/lib.rs",
         ],
-        rustc_flags = [
+        rustc_flags = _CARRIER_CODEGEN + [
             "--cfg",
             "'feature=\"domain-%s\"'" % domain,
             "--cfg",
@@ -100,7 +103,7 @@ xm1_rust_staticlib(
             "//replacement/rtos_layout:src/lib.rs",
             "//replacement/rtos_reservation:src/lib.rs",
         ],
-        rustc_flags = [
+        rustc_flags = _CARRIER_CODEGEN + [
             "--cfg",
             "'feature=\"domain-%s\"'" % domain,
             "--cfg",
@@ -125,7 +128,7 @@ xm1_rust_staticlib(
             "//replacement/rtos_layout:src/lib.rs",
             "//replacement/rtos_reservation:src/lib.rs",
         ],
-        rustc_flags = [
+        rustc_flags = _CARRIER_CODEGEN + [
             "--cfg",
             "'feature=\"domain-%s\"'" % domain,
             "--cfg",
@@ -157,7 +160,7 @@ xm1_rust_staticlib(
             "//replacement/rtos_semaphore:src/timeout.rs",
             "//replacement/rtos_semaphore:src/wake.rs",
         ],
-        rustc_flags = [
+        rustc_flags = _CARRIER_CODEGEN + [
             "--cfg",
             "'feature=\"domain-%s\"'" % domain,
             "--cfg",
@@ -189,7 +192,7 @@ xm1_rust_staticlib(
             "//replacement/rtos_layout:src/lib.rs",
             "//replacement/rtos_reservation:src/lib.rs",
         ],
-        rustc_flags = [
+        rustc_flags = _CARRIER_CODEGEN + [
             "--cfg",
             "'feature=\"domain-%s\"'" % domain,
             "--cfg",
@@ -211,7 +214,7 @@ xm1_rust_staticlib(
             "//replacement/rtos_reservation:src/lib.rs",
             "//replacement/rtos_task_records:src/lib.rs",
         ],
-        rustc_flags = [
+        rustc_flags = _CARRIER_CODEGEN + [
             "--cfg",
             "'feature=\"domain-%s\"'" % domain,
             "--cfg",
@@ -241,7 +244,7 @@ xm1_rust_staticlib(
             "//replacement/rtos_layout:src/lib.rs",
             "//replacement/rtos_reservation:src/lib.rs",
         ],
-        rustc_flags = [
+        rustc_flags = _CARRIER_CODEGEN + [
             "--cfg",
             "'feature=\"domain-%s\"'" % domain,
             "--cfg",
@@ -269,7 +272,7 @@ xm1_rust_staticlib(
             "//replacement/rtos_layout:src/lib.rs",
             "//replacement/rtos_reservation:src/lib.rs",
         ],
-        rustc_flags = [
+        rustc_flags = _CARRIER_CODEGEN + [
             "--cfg",
             "'feature=\"domain-%s\"'" % domain,
             "--cfg",
@@ -291,7 +294,7 @@ xm1_rust_staticlib(
             "//replacement/rtos_layout:src/lib.rs",
             "//replacement/rtos_reservation:src/lib.rs",
         ],
-        rustc_flags = [
+        rustc_flags = _CARRIER_CODEGEN + [
             "--cfg",
             "'feature=\"domain-%s\"'" % domain,
             "--cfg",
@@ -312,7 +315,7 @@ xm1_rust_rlib(
         "//replacement/rtos_layout:src/lib.rs",
         "//replacement/rtos_reservation:src/lib.rs",
     ],
-    rustc_flags = [
+    rustc_flags = _CARRIER_CODEGEN + [
         "--cfg",
         "'feature=\"stage\"'",
         "--cfg",
@@ -345,7 +348,7 @@ xm1_rust_rlib(
             "//replacement/rtos_layout:src/lib.rs",
             "//replacement/rtos_reservation:src/lib.rs",
         ],
-        rustc_flags = [
+        rustc_flags = _CARRIER_CODEGEN + [
             "--cfg",
             "'feature=\"domain-%s\"'" % domain,
             "--cfg",
