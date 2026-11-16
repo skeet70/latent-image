@@ -266,6 +266,7 @@ mod consumers {
         statistics_requests: Vec<(statistics::Request, RecordHandle)>,
         statistics_replies: Vec<(bool, Vec<u8>, RecordHandle)>,
         released: Vec<(Context, Generation)>,
+        direct_start: bool,
     }
 
     impl view::Port for Boundary {
@@ -281,7 +282,9 @@ mod consumers {
         fn apply(&mut self, _: Command<'_>, _: RecordHandle) -> view::Application { view::Application::Applied }
         fn view(&mut self, request: view::ViewRequest, record: RecordHandle) { self.requests.push((request, record)); }
         fn effect(&mut self, _: view::Effect, _: RecordHandle) {}
-        fn condition(&mut self, _: view::Condition, _: Option<Command<'_>>, _: RecordHandle) -> bool { false }
+        fn condition(&mut self, condition: view::Condition, _: Option<Command<'_>>, _: RecordHandle) -> bool {
+            self.direct_start && condition == view::Condition::DirectStart
+        }
         fn motion_setting(&mut self) -> view::MotionSetting { view::MotionSetting::default() }
         fn reply(&mut self, command: Option<K>, status: view::ReplyStatus, record: RecordHandle) { self.replies.push((command, status, record)); }
         fn fault(&mut self) { self.faults += 1; }
@@ -451,6 +454,23 @@ mod consumers {
         assert_eq!(root.handle(Message::Completed(Completed { completion: Completion::Accessor4b, parameters: stock::parameters(&[]) }), &mut port), Outcome::Pending);
         assert!(port.boundary.statistics_requests.is_empty());
         assert!(port.boundary.requests.is_empty());
+        assert_eq!(port.boundary.faults, 0);
+    }
+
+    #[test]
+    fn normal_lens_start_then_primary_publishes_view_start_then_configure() {
+        let mut root = Root::new();
+        let mut port = Composition::new(Startup::Normal);
+        port.boundary.direct_start = true;
+        root.handle(command(K::Start), &mut port);
+        root.handle(command(K::LensBringUp), &mut port);
+        let parameters = [0; 20];
+        let primary = Message::Command(Command { kind: K::Command02, parameters: stock::parameters(&parameters) });
+        assert_eq!(root.handle(primary, &mut port), Outcome::Pending);
+        assert_eq!(port.boundary.requests, [(view::ViewRequest::Start { measured: true }, handle(Context::Live))]);
+        let started = Message::Completed(Completed { completion: Completion::Image3f, parameters: stock::parameters(&[]) });
+        assert_eq!(root.handle(started, &mut port), Outcome::Pending);
+        assert_eq!(port.boundary.requests.last(), Some(&(view::ViewRequest::Configure(view::MotionSetting(0)), handle(Context::Live))));
         assert_eq!(port.boundary.faults, 0);
     }
 
