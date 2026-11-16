@@ -308,4 +308,4 @@ witness package ackValue stateValue endValue = do
 
 witnessValue :: Witness -> Value
 witnessValue value = object ["source_entry_observed" .= sourceObserved value, "mode_entry_observed" .= modeObserved value
-  , "scope" .= ("installed bounded PLAY owned preparation pair; not whole playback acceptance or retirement/unload" :: T.Text)]
+  , "scope" .= ("installed bounded owned preparation entries; not whole playback acceptance or retirement/unload" :: T.Text)]
