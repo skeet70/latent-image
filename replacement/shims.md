@@ -32,6 +32,7 @@ A removal requires established caller closure, direct owned API use and a qualif
 | `//replacement/general_heap:general-heap-recipe-image` | Production | general_heap | 5 |
 | `//replacement/idle_task:idle-task-image` | Production | idle_task | 2 |
 | `//replacement/image5_init:image5-init-image` | Production | image5_init | 3 |
+| `//replacement/image5_load:image5-decoder-image` | Qualification | image5_load | 3 |
 | `//replacement/image5_load:image5-load-image` | Production | image5_load | 3 |
 | `//replacement/interface_initializer:interface-initializer-image` | Production | interface_initializer, loader_prefix, secondary_stage | 6 |
 | `//replacement/kernel_install:kernel-install-image` | Production | kernel_install | 3 |
@@ -434,9 +435,12 @@ Classification: `linked`. [Declarations](image5_load/shims.json).
 
 | Shim | Kind | Other side | Owned now | Removal condition | State | Removal predicate | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `xm1_image5_load` and `xm1_image5_load_entry` in `entry.S`/`src.rs` | veneer or carrier at a stock address | the stock loader caller at `0x4c22b8` | no | the loader caller is owned | required | unestablished | `//replacement/image5_load:image5-load-image` (Publication, 2 symbols, 0 definite references) |
+| `xm1_image5_load` and `xm1_image5_load_entry` in `entry.S`/`src.rs` | veneer or carrier at a stock address | the stock flashloader producer call at `0x73b4ac` | no | the loader caller is owned | required | unestablished | `//replacement/image5_load:image5-load-image` (Publication, 2 symbols, 0 definite references) |
 | `xm1_image5_*` retained externs (cache, CPU fill, decoder init/finish, feed, fill request/done, marker, mode, read, segment) | trampoline into retained stock | stock image-5 decoder and cache services | no | the decoder and cache services are owned | required | unestablished | `//replacement/image5_load:image5-load-image` (RetainedEntry, 2 symbols, 0 definite references); `//replacement/image5_load:image5-load-image` (Import, 12 symbols, 0 definite references) |
 | Global untyped assembly entries and linker publication labels | veneer or carrier at a stock address | retained entry, compiler ABI and image-layout consumers | partly | no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image | required | unestablished | `//replacement/image5_load:image5-load-image` (Publication, 2 symbols, 0 definite references) |
+| Five asynchronous stream entry veneers | veneer or carrier at a stock address | the image5 producer, storage callback and retained source98 IRQ dispatcher | partly | all producer and IRQ consumers call the typed owned API in the same composed image | required | unestablished | `//replacement/image5_load:image5-decoder-image` (Publication, 5 symbols, 0 definite references) |
+| Native resource, clock, route, task, marker and IRQ registration boundaries | trampoline into retained stock | retained RTOS/device services and the two published owned IRQ entry veneers | partly | the retained services and IRQ dispatcher accept direct owned typed interfaces | required | unestablished | `//replacement/image5_load:image5-decoder-image` (Import, 11 symbols, 0 definite references) |
+| Fixed-image body bounds and zero-once private decoder state | veneer or carrier at a stock address | the existing fixed-image first-stage loader | partly | the composed loader and decoder share a typed image/BSS lifetime contract | required | unestablished | `//replacement/image5_load:image5-decoder-image` (Publication, 5 symbols, 0 definite references) |
 
 ## interface_initializer
 
@@ -617,6 +621,21 @@ Classification: `linked`. [Declarations](plain_load/shims.json).
 | `xm1_plain_load` and `xm1_plain_load_entry` in `entry.S`/`src.rs` | veneer or carrier at a stock address | the stock plain-loader caller | no | the caller is owned | required | unestablished | `//replacement/plain_load:plain-load-image` (Publication, 2 symbols, 0 definite references) |
 | `xm1_plain_delay`, `xm1_plain_extents`, `xm1_plain_give`, `xm1_plain_mode`, `xm1_plain_progress`, `xm1_plain_read`, `xm1_plain_segment`, `xm1_plain_take` retained services | trampoline into retained stock | stock plain-loader and scheduler services | no | those services are owned | required | unestablished | `//replacement/plain_load:plain-load-image` (Import, 8 symbols, 0 definite references) |
 | Global untyped assembly entries and linker publication labels | veneer or carrier at a stock address | retained entry, compiler ABI and image-layout consumers | partly | no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image | required | unestablished | `//replacement/plain_load:plain-load-image` (Publication, 2 symbols, 0 definite references) |
+
+## playback
+
+Emulator-only source/mode preparation and channel9 JPEG transaction compiled into relocatable RAM experiment objects. Playback callers, device/services, shared layouts and publication lifetimes remain retained boundaries.
+
+Classification: `module`. [Declarations](playback/shims.json).
+
+| Shim | Kind | Other side | Owned now | Removal condition | State | Removal predicate | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Source and mode A32 entry exports and two-word publication veneers | stock-ABI export | Queue-4 loop, retained router and machine-1 action callers | partly | all entry callers link the typed owned preparation API directly | required | unestablished | reference-only: The relocatable object is linked at the experiment's allocated runtime base; installation and conditional caller receipts bind that package. |
+| Retained machine dispatch, output route, display preset and memory ABI | trampoline into retained stock | Stock dispatcher0x011e8bf8, route0x0064982c, preset0x006d1294 and memory0x0089d908 | partly | the packaged composition links the owned dispatch, output, preset and memory providers | required | unestablished | reference-only: The experiment binds these services to the retained addresses in the preparation contract. |
+| Queue-4 payload lifetime and shared playback globals | guest-memory layout view | Retained message storage and machine0/1/11 consumers | partly | the message producer and all shared-state consumers use the owned typed lifetime and layout contract | required | unestablished | reference-only: Queue4 serializes entry. Source-bound payload extents stay readable and disjoint from copied destinations; the experiment remains resident over the guarded PLAY interval. |
+| Channel9 acquire, restart, release and descriptor callback A32 exports | stock-ABI export | Retained Playback machine5 callers and descriptor0x48 IRQ registry | partly | all transaction callers and IRQ registration use the typed owned JPEG API directly | required | unestablished | reference-only: Native caller and installed PLAY receipts bind the transaction to the relinked six-hook package. |
+| Retained JPEG device, resource routing, lock, cache and timer services | trampoline into retained stock | Channel9 device/services, resource1e, reserved lock9 and IRQ registration/release | partly | the packaged transaction links owned service providers with qualified hardware laws | required | unestablished | reference-only: Nominal PLAY exercises existing device services; command4 restart and status17/24 device behavior remain unqualified. |
+| Shared JPEG request/configuration layout and published IRQ lifetime | guest-memory layout view | Retained Playback request/completion consumers and interrupt release | partly | all shared-state consumers use owned layouts and IRQ quiescence permits publication removal | required | unestablished | reference-only: The runtime and callback remain resident through nominal PLAY and retained IRQ release; unload and post-consumer reuse are not qualified. |
 
 ## power_lifecycle
 

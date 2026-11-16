@@ -3664,6 +3664,7 @@ haskell_library(
     deps = [
         ":watch-observation",
         "//host/firmware:bank-allowlist",
+        "//host/firmware:playback-contract",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -3681,6 +3682,7 @@ haskell_test(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":playback-owned-lib",
+        "//host/firmware:playback-contract",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

@@ -1114,6 +1114,7 @@ data Observed = Observed
   , obsDecodePending :: IORef (Maybe DecodeJob)
   , obsDecodeJobs :: IORef [(Bool, Value)]
   , obsDecodeCopy :: IORef (Maybe (PD.SourceCopy, Value))
+  , obsDecodeReleases :: IORef [DecodeRelease]
   }
 
 data NewFile = NewFile { newJpeg :: Bool, newValue :: Value }
@@ -1126,6 +1127,7 @@ newObserved = Observed <$> newIORef Nothing <*> newIORef [] <*> newIORef 0 <*> n
   <*> newIORef Nothing
   <*> newIORef Nothing <*> newIORef []
   <*> newIORef Nothing
+  <*> newIORef []
 
 -- | Folds hits into the ledger and returns their journal record; after the press, kept hits also feed the verdict.
 foldHits :: Observed -> TracePhase -> [Hit] -> IO Value
@@ -1168,7 +1170,21 @@ readDecodeRange bridge range = readGuest bridge (PD.rangeAddress range) (PD.rang
 
 data DecodeJob
   = DecodeStarted PD.Snapshot B.ByteString Value
-  | DecodeSampled PD.Snapshot PD.Snapshot Value Value
+  | DecodeSampled PD.Snapshot PD.Snapshot Value Value Hit
+  | DecodeHandback PD.CompletionBinding
+
+data DecodeRelease = DecodeRelease { releaseHolds :: Bool, releaseValue :: Value }
+data DecodePause = PreviewCopyPause | StartDecodePause | StatusPause | EndpointPause | ReleasePause
+
+decodePause :: T.Text -> Either String DecodePause
+decodePause label = case label of
+  "jpeg-preview-copy" -> Right PreviewCopyPause
+  "jpeg-start-store" -> Right StartDecodePause
+  "jpeg-status-loaded" -> Right StatusPause
+  "jpeg-endpoint-loaded" -> Right EndpointPause
+  "jpeg-request-released" -> Right ReleasePause
+  "jpeg-request-cancelled" -> Right ReleasePause
+  _ -> Left "unexpected trace pause in playback"
 
 decodeStores :: [(Word32, Word32)]
 decodeStores = [(0x0065a730,0x008),(0x0065a768,0x0a0),(0x0065a78c,0x100),(0x0065a7b0,0x104)
@@ -1185,6 +1201,9 @@ decodeObservationSites =
      , Site 0x0065aa00 "jpeg-endpoint-loaded" "X-M1 1.50 id4.dis: r2 loaded from 0xfff63108; before completion callback" ]
   ++ [Site 0x0065a57c "jpeg-start-store" "X-M1 1.50 id4.dis: ordinary start-control store r2,[r3]"]
   ++ [Site 0x011d3e9c "jpeg-preview-copy" "X-M1 1.50 plain image: EOI-trimmed final memcpy r0,r1,r2"]
+  ++ [Site 0x01220254 "jpeg-request-released" "X-M1 1.50 plain: return from channel9_release before the finish flag store"]
+  ++ [Site 0x01220288 "jpeg-request-cancelled" "X-M1 1.50 plain: return from channel9_release in the cancellation consumer"]
+  ++ [Site 0x0065abf4 "jpeg-output-event-loaded" "X-M1 1.50 id4.dis: r2 loaded from 0xfff63014 before handback and ACK"]
 
 programRegisters :: [Hit] -> B.ByteString -> IO B.ByteString
 programRegisters hits params = do
@@ -1216,8 +1235,9 @@ playbackAdvance directory bridge journal observed target request = call bridge r
           (_, hits) <- traceHits bridge 0
           hit <- maybe (harness "trace pause lacks its event") pure (case reverse hits of h:_ -> Just h; [] -> Nothing)
           require (case hitRaw hit of Object o -> num "core" o == Just (0 :: Int); _ -> False) "decode pause is not on the primary CPU"
-          case hitLabel hit of
-            "jpeg-preview-copy" -> do
+          paused <- either harness pure (decodePause (hitLabel hit))
+          case paused of
+            PreviewCopyPause -> do
               previous <- readIORef (obsDecodeCopy observed)
               active <- readIORef (obsDecodePending observed)
               require (isNothing previous && isNothing active) "preview copy is ambiguous with a pending copy or decode"
@@ -1234,7 +1254,7 @@ playbackAdvance directory bridge journal observed target request = call bridge r
                     , "copied_sha256" .= digestText (digest copied), "pre_copy_tail" .= hexBytes beforeTail]
               writeIORef (obsDecodeCopy observed) (Just (prepared, provenance))
               note journal "decode-source-copy" provenance
-            "jpeg-start-store" -> do
+            StartDecodePause -> do
               require (hitR 2 hit == Just 1 && hitR 3 hit == Just 0xfff63000) "decode start-control store operands differ"
               previous <- readIORef (obsDecodePending observed)
               require (isNothing previous) "a decode was reprogrammed before its observed completion"
@@ -1254,7 +1274,7 @@ playbackAdvance directory bridge journal observed target request = call bridge r
                     , "register_stores" .= take (length decodeStores) [hitRaw h | h <- reverse hits, "jpeg-register-" `T.isPrefixOf` hitLabel h]]
               writeIORef (obsDecodePending observed) (Just (DecodeStarted started registers provenance))
               note journal "decode-programmed" provenance
-            "jpeg-status-loaded" -> do
+            StatusPause -> do
               status <- maybe (harness "status load lacks r2") pure (hitR 2 hit)
               if status .&. 0x10 == 0 then note journal "decode-noncompletion-irq" (hitRaw hit) else do
                 pending <- readIORef (obsDecodePending observed)
@@ -1276,23 +1296,42 @@ playbackAdvance directory bridge journal observed target request = call bridge r
                       , "output_sha256" .= digestText (digest output), "output_bytes" .= B.length output]
                 B.writeFile (base ++ "-source.bin") source
                 B.writeFile (base ++ "-output.bin") output
-                writeIORef (obsDecodePending observed) (Just (DecodeSampled started completed programmed provenance))
+                writeIORef (obsDecodePending observed) (Just (DecodeSampled started completed programmed provenance hit))
                 note journal "decode-output-sampled" provenance
-            "jpeg-endpoint-loaded" -> do
+            EndpointPause -> do
               pending <- readIORef (obsDecodePending observed)
-              (started, sampled, programmed, completed) <- case pending of
-                Just (DecodeSampled a b p c) -> pure (a,b,p,c)
+              (started, sampled, programmed, completed, statusHit) <- case pending of
+                Just (DecodeSampled a b p c s) -> pure (a,b,p,c,s)
                 _ -> harness "endpoint has no sampled completion from the same job"
               endpoint <- maybe (harness "endpoint load lacks r2") pure (hitR 2 hit)
+              outputEvent <- case [value | outputHit <- hits, hitLabel outputHit == "jpeg-output-event-loaded"
+                , hitInstructions outputHit > hitInstructions statusHit, hitInstructions outputHit < hitInstructions hit
+                , Just value <- [hitR 2 outputHit]] of
+                  [value] -> pure (PD.OutputEvent value)
+                  _ -> harness "completion lacks one measured output-event word"
+              binding <- either harness pure (PD.completionBinding (PD.withEndpoint endpoint sampled) outputEvent)
               let comparison = PD.inspect (targetBytes target) started (PD.withEndpoint endpoint sampled)
                   receipt = object ["programmed" .= programmed, "completed" .= completed, "endpoint_event" .= hitRaw hit
                     , "comparison" .= either (object . pure . ("refusal" .=)) id comparison]
               modifyIORef' (obsDecodeJobs observed) (++ [(either (const False) (const True) comparison, receipt)])
-              writeIORef (obsDecodePending observed) Nothing
+              writeIORef (obsDecodePending observed) (Just (DecodeHandback binding))
               allJobs <- readIORef (obsDecodeJobs observed)
               writeIORef (obsDecode observed) (Just (all fst allJobs, toJSON (map snd allJobs)))
               note journal "decode-completed" receipt
-            _ -> harness "unexpected trace pause in playback"
+            ReleasePause -> do
+              pending <- readIORef (obsDecodePending observed)
+              binding <- case pending of
+                Just (DecodeHandback expected) -> pure expected
+                _ -> harness "release has no uniquely completed decode request"
+              shared <- readGuest bridge 0x014c56f0 0x210
+              requestBytes <- readDecodeRange bridge (PD.completionRequestRange binding)
+              let checked = PD.inspectRelease binding shared requestBytes
+                  receipt = object ["event" .= hitRaw hit
+                    , "completion" .= either (object . pure . ("refusal" .=)) id checked
+                    , "request_bytes" .= hexBytes requestBytes, "driver_bytes" .= hexBytes shared]
+              modifyIORef' (obsDecodeReleases observed) (++ [DecodeRelease (either (const False) (const True) checked) receipt])
+              writeIORef (obsDecodePending observed) Nothing
+              note journal "decode-released" receipt
           call bridge (command "trace-resume" ["pause_id" .= pauseId]) >>= continue
 
 data RawGeometry = RawGeometry
@@ -1500,7 +1539,7 @@ runRoute options owned ownedWitness directory original bridge journal observed =
   when (route == PlayRoute) $ do
     _ <- call bridge (command "trace-sites"
       [ "sites" .= object [K.fromString (hex32 (siteAddress s)) .= siteLabel s | s <- sites]
-      , "pauses" .= object [K.fromText label .= (64 :: Int) | label <- ["jpeg-preview-copy","jpeg-start-store","jpeg-status-loaded","jpeg-endpoint-loaded"]] ])
+      , "pauses" .= object [K.fromText label .= (64 :: Int) | label <- ["jpeg-preview-copy","jpeg-start-store","jpeg-status-loaded","jpeg-endpoint-loaded","jpeg-request-released","jpeg-request-cancelled"]] ])
     pure ()
   let advance = if route == PlayRoute then playbackAdvance directory bridge journal observed target else call bridge
   pressed <- if captureObservationEnabled (optCaptureObservation options)
@@ -1581,12 +1620,15 @@ runRoute options owned ownedWitness directory original bridge journal observed =
     pending <- readIORef (obsDecodePending observed)
     jobs <- readIORef (obsDecodeJobs observed)
     copyPending <- readIORef (obsDecodeCopy observed)
+    releases <- readIORef (obsDecodeReleases observed)
     let programmed = sincePress ledger "jpeg-start-store"
         endpoints = sincePress ledger "jpeg-endpoint-loaded"
-        covered = toInteger (length jobs) == programmed && programmed == endpoints
-    writeIORef (obsDecode observed) (Just (covered && isNothing pending && isNothing copyPending && not (null jobs) && all fst jobs,
-      object ["completed_jobs" .= map snd jobs, "unfinished_job" .= isJust pending
-             , "programmed_jobs" .= programmed, "endpoint_loads" .= endpoints, "all_jobs_sampled" .= covered]))
+        released = sincePress ledger "jpeg-request-released" + sincePress ledger "jpeg-request-cancelled"
+        covered = toInteger (length jobs) == programmed && programmed == endpoints && endpoints == released
+          && released == toInteger (length releases)
+    writeIORef (obsDecode observed) (Just (covered && isNothing pending && isNothing copyPending && not (null jobs) && all fst jobs && all releaseHolds releases,
+      object ["completed_jobs" .= map snd jobs, "released_requests" .= map releaseValue releases, "unfinished_job" .= isJust pending
+             , "programmed_jobs" .= programmed, "endpoint_loads" .= endpoints, "released_jobs" .= released, "all_jobs_sampled" .= covered]))
   decode <- readIORef (obsDecode observed)
   note journal "decode-binding" (maybe Null snd decode)
   (after, intact, added) <- inspectCard original directory (if route == PlayRoute then AfterPlayback else AfterCapture) bridge journal $ \view -> do
@@ -1950,13 +1992,17 @@ main = do
   pairWitness <- readIORef ownedWitness
   let ownedFindings = case owned of
         Nothing -> []
-        Just _ -> [Judged (Finding name Gate (maybe False predicate pairWitness) (maybe Null PO.witnessValue pairWitness)
+        Just (_, package) -> [Judged (Finding name Gate (maybe False predicate pairWitness) (maybe Null PO.witnessValue pairWitness)
           "installed package bytes and loss-accounted SDK execution watch")
           (if maybe False predicate pairWitness then Nothing else Just "owned entry unobserved in the bounded PLAY interval")
-          | (name, predicate) <- [("owned-playback-source-entry", PO.sourceObserved), ("owned-playback-mode-entry", PO.modeObserved)]]
+          | (name, predicate) <- PO.requiredObservations package]
       findings = routeFindings ++ ownedFindings
-      stopped = routeStopped <|> (if null ownedFindings || maybe False (\w -> PO.sourceObserved w && PO.modeObserved w) pairWitness
-        then Nothing else Just (GateName "owned-playback-pair-unobserved"))
+      stopped = routeStopped <|> case owned of
+        Nothing -> Nothing
+        Just (_, package) -> if maybe False (PO.qualificationObserved package) pairWitness then Nothing
+          else Just (GateName (case PO.qualificationScope package of
+            PO.PreparationPair -> "owned-playback-pair-unobserved"
+            PO.JpegTransaction -> "owned-playback-jpeg-transaction-unobserved"))
   ledger <- readIORef (obsLedger observed)
   recoveredCount <- readIORef (obsRecovered observed)
   captureProgress <- readIORef (obsCapture observed)
@@ -2009,7 +2055,9 @@ main = do
         ["installed" .= PO.installedDirectory selected, "package" .= PO.packageDirectory selected
         , "witness" .= fmap PO.witnessValue pairWitness
         , "integrated_pair" .= maybe False (\w -> PO.sourceObserved w && PO.modeObserved w) pairWitness
-        , "whole_playback_acceptance" .= False] | (selected, _) <- maybe [] pure owned ])
+        , "qualification_scope" .= PO.qualificationScopeText (PO.qualificationScope package)
+        , "qualification_entries_observed" .= maybe False (PO.qualificationObserved package) pairWitness
+        , "whole_playback_acceptance" .= False] | (selected, package) <- maybe [] pure owned ])
   forM_ findings $ \(Judged f unknown) -> putStrLn
     ((if isJust unknown then "unknown " else if findingHolds f then "holds " else "fails ")
       ++ (if findingRole f == Gate then "gate    " else "context ") ++ T.unpack (findingName f))

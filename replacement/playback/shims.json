@@ -1,0 +1,100 @@
+{
+  "unit": "playback",
+  "summary": "Emulator-only source/mode preparation and channel9 JPEG transaction compiled into relocatable RAM experiment objects. Playback callers, device/services, shared layouts and publication lifetimes remain retained boundaries.",
+  "classification": "module",
+  "rows": [
+    {
+      "id": "playback-01",
+      "shim": "Source and mode A32 entry exports and two-word publication veneers",
+      "kind": "stock-ABI export",
+      "other_side": "Queue-4 loop, retained router and machine-1 action callers",
+      "owned": "partly",
+      "removal": "all entry callers link the typed owned preparation API directly",
+      "state": "required",
+      "evidence": [{
+        "kind": "reference-only",
+        "symbols": ["xm1_playback_source_entry", "xm1_playback_mode_entry"],
+        "contract": "replacement/playback/contract.json",
+        "requirement": "The relocatable object is linked at the experiment's allocated runtime base; installation and conditional caller receipts bind that package."
+      }],
+      "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
+    },
+    {
+      "id": "playback-02",
+      "shim": "Retained machine dispatch, output route, display preset and memory ABI",
+      "kind": "trampoline into retained stock",
+      "other_side": "Stock dispatcher0x011e8bf8, route0x0064982c, preset0x006d1294 and memory0x0089d908",
+      "owned": "partly",
+      "removal": "the packaged composition links the owned dispatch, output, preset and memory providers",
+      "state": "required",
+      "evidence": [{
+        "kind": "reference-only",
+        "symbols": ["xm1_playback_retained_dispatch", "xm1_power_output_route_set_requested_level", "xm1_scanout_mode_preset", "memcpy", "memmove", "__aeabi_memcpy", "__aeabi_memcpy4", "__aeabi_memcpy8", "__aeabi_memmove", "__aeabi_memmove4", "__aeabi_memmove8"],
+        "contract": "replacement/playback/contract.json",
+        "requirement": "The experiment binds these services to the retained addresses in the preparation contract."
+      }],
+      "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
+    },
+    {
+      "id": "playback-03",
+      "shim": "Queue-4 payload lifetime and shared playback globals",
+      "kind": "guest-memory layout view",
+      "other_side": "Retained message storage and machine0/1/11 consumers",
+      "owned": "partly",
+      "removal": "the message producer and all shared-state consumers use the owned typed lifetime and layout contract",
+      "state": "required",
+      "evidence": [{
+        "kind": "reference-only",
+        "contract": "replacement/playback/contract.json",
+        "requirement": "Queue4 serializes entry. Source-bound payload extents stay readable and disjoint from copied destinations; the experiment remains resident over the guarded PLAY interval."
+      }],
+      "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
+    },
+    {
+      "id": "playback-jpeg-entry",
+      "shim": "Channel9 acquire, restart, release and descriptor callback A32 exports",
+      "kind": "stock-ABI export",
+      "other_side": "Retained Playback machine5 callers and descriptor0x48 IRQ registry",
+      "owned": "partly",
+      "removal": "all transaction callers and IRQ registration use the typed owned JPEG API directly",
+      "state": "required",
+      "evidence": [{
+        "kind": "reference-only",
+        "symbols": ["xm1_playback_jpeg_acquire", "xm1_playback_jpeg_restart", "xm1_playback_jpeg_release", "xm1_playback_jpeg_interrupt"],
+        "contract": "replacement/playback/jpeg-contract.json",
+        "requirement": "Native caller and installed PLAY receipts bind the transaction to the relinked six-hook package."
+      }],
+      "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
+    },
+    {
+      "id": "playback-jpeg-services",
+      "shim": "Retained JPEG device, resource routing, lock, cache and timer services",
+      "kind": "trampoline into retained stock",
+      "other_side": "Channel9 device/services, resource1e, reserved lock9 and IRQ registration/release",
+      "owned": "partly",
+      "removal": "the packaged transaction links owned service providers with qualified hardware laws",
+      "state": "required",
+      "evidence": [{
+        "kind": "reference-only",
+        "contract": "replacement/playback/jpeg-contract.json",
+        "requirement": "Nominal PLAY exercises existing device services; command4 restart and status17/24 device behavior remain unqualified."
+      }],
+      "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
+    },
+    {
+      "id": "playback-jpeg-lifetime",
+      "shim": "Shared JPEG request/configuration layout and published IRQ lifetime",
+      "kind": "guest-memory layout view",
+      "other_side": "Retained Playback request/completion consumers and interrupt release",
+      "owned": "partly",
+      "removal": "all shared-state consumers use owned layouts and IRQ quiescence permits publication removal",
+      "state": "required",
+      "evidence": [{
+        "kind": "reference-only",
+        "contract": "replacement/playback/jpeg-contract.json",
+        "requirement": "The runtime and callback remain resident through nominal PLAY and retained IRQ release; unload and post-consumer reuse are not qualified."
+      }],
+      "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
+    }
+  ]
+}

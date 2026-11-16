@@ -6,7 +6,8 @@
 module Main where
 
 import A32 (decode)
-import ExperimentHook (positionIndependent, HookMode (..), HookAdmission (..), SourceSha256 (..), playbackContract, bindReplacement, admitHook, entryPublications, originalBody)
+import ExperimentHook (positionIndependent, HookMode (..), HookAdmission (..), bindReplacement, admitHook, entryPublications, originalBody)
+import PlaybackContract (SourceSha256 (..), playbackContract)
 import ArmElf (Elf (..), Section (..), Symbol (..), SymbolKind (..), parseElf)
 import Control.Monad (filterM, forM, forM_, unless, when)
 import Data.Aeson (Value (..))
@@ -118,10 +119,11 @@ readHooks admission experiment images = do
         sourceEnd <- text source "end" >>= parseHex "ReplaceEntry source end"
         sourceHash <- SourceSha256 <$> text source "sha256"
         replacement <- either H.failH pure (bindReplacement site handler sourceEntry sourceEnd sourceHash)
-        let containing = [imageBytes candidate | candidate <- images, imageBase candidate == 0x01100000]
+        let containing = [candidate | candidate <- images, sourceEntry >= imageBase candidate
+              , toInteger sourceEnd <= toInteger (imageBase candidate) + toInteger (B.length (imageBytes candidate))]
         bytes <- case containing of
-          [plain] -> pure (B.take (fromIntegral (sourceEnd - sourceEntry)) (B.drop (fromIntegral (sourceEntry - 0x01100000)) plain))
-          _ -> H.failH "ReplaceEntry requires the pinned plain decode"
+          [candidate] -> pure (B.take (fromIntegral (sourceEnd - sourceEntry)) (B.drop (fromIntegral (sourceEntry - imageBase candidate)) (imageBytes candidate)))
+          _ -> H.failH "ReplaceEntry requires one containing pinned stock decode"
         actual <- SourceSha256 <$> H.sha256 bytes
         H.ensure (actual == sourceHash) ("hook at " ++ hex site ++ ": ReplaceEntry source bytes differ from their pinned sha256")
         pure replacement

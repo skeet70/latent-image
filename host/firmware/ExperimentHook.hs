@@ -1,26 +1,19 @@
 -- | Which stock instructions an experiment hook may displace into its trampoline.
 module ExperimentHook
-  ( positionIndependent, HookMode (..), HookAdmission (..), PlaybackEntry (..)
-  , SourceSha256 (..), playbackContract, bindReplacement, admitHook, entryPublications, originalBody
+  ( positionIndependent, HookMode (..), HookAdmission (..)
+  , bindReplacement, admitHook, entryPublications, originalBody
   ) where
 
 import A32 (Instruction (..), Offset (..), Operand (..), Reg, pc)
 import Data.Word (Word32)
+import PlaybackContract (PlaybackEntry, SourceSha256, playbackContract, playbackEntries)
 
 data HookMode = Observe | ReplaceEntry PlaybackEntry deriving (Eq, Show)
 data HookAdmission = ObserveOnly | EmulatorOnly deriving (Eq, Show)
-data PlaybackEntry = PlaybackSource | PlaybackMode deriving (Eq, Show)
-newtype SourceSha256 = SourceSha256 String deriving (Eq, Show)
-
-playbackContract :: PlaybackEntry -> (Word32, Word32, SourceSha256, String)
-playbackContract PlaybackSource =
-  (0x0120b40c, 0x0120b778, SourceSha256 "90da01fffdecd496e473c74aa012c9028be5d2dad33a1b8f4a95b4ea7c466d32", "xm1_playback_source_entry")
-playbackContract PlaybackMode =
-  (0x0120cab0, 0x0120cd74, SourceSha256 "d9b5d69e40838f9bcecc142fb1bfeaefa18e43b790a027e0442d7b31deef0f0c", "xm1_playback_mode_entry")
 
 bindReplacement :: Word32 -> String -> Word32 -> Word32 -> SourceSha256 -> Either String HookMode
 bindReplacement site handler entry end digest = do
-  supported <- case [target | target <- [PlaybackSource, PlaybackMode], let (start, _, _, _) = playbackContract target, site == start] of
+  supported <- case [target | target <- playbackEntries, let (start, _, _, _) = playbackContract target, site == start] of
     [target] -> Right target
     _ -> Left "ReplaceEntry site is not a supported playback entry"
   let (expectedEntry, expectedEnd, expectedDigest, expectedHandler) = playbackContract supported

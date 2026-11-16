@@ -1,55 +1,280 @@
 [
-  {
-    "id":"E-FIRST-RECORD-FLASH-BOOT-CHECK-150",
-    "claim":"The compile-time clock-backend first stage cold-boots both staged packages to SHOOTING MENU. Retained stock: {{retained_stock}} at {{retained_stock_instructions}} instructions; retained RC0: {{retained_rc0}} at {{retained_rc0_instructions}}; FujiMod stock: {{fujimod_stock}} at {{fujimod_stock_instructions}}; FujiMod RC0: {{fujimod_rc0}} at {{fujimod_rc0_instructions}}. Stock-derived DAT {{stock_dat}}; RC0-derived DAT {{rc0_dat}}.",
-    "scope":"Four actual cold-boot-to-menu executions, the two packages on each engine, from the committed first-stage image identified in the run's binary digest receipt. Packaging runs outside emulator admission; each emulator launcher acquires its own slot.",
-    "notes":"No camera operation or emulator model change. The RAM experiment selects ReservedClock and does not exercise BootClock clock writes on silicon. These cold-menu checks exercise BootClock in emulation, not physical startup or ordinary capture/playback. Instruction counts are engine-specific, not silicon latency or a performance comparison between engines. Use the retained package receipts for a pin update; no pin list was edited by this change.",
-    "artifacts":[
-      "private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/retained-stock/flash-boot-receipt.json",
-      "private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/retained-rc0/flash-boot-receipt.json",
-      "private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/fujimod-stock/fujimod-flash-boot-receipt.json",
-      "private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/fujimod-rc0/fujimod-flash-boot-receipt.json",
-      "private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/binaries.sha256",
-      "private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/packages.sha256"
-    ],
-    "facts":[
-      {"name":"firmware_sha256","path":"private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/retained-stock/flash-boot-receipt.json","pointer":["firmware","sha256"]},
-      {"name":"stock_dat","path":"private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/retained-stock/flash-boot-receipt.json","pointer":["firmware","sha256"]},
-      {"name":"rc0_dat","path":"private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/retained-rc0/flash-boot-receipt.json","pointer":["firmware","sha256"]},
-      {"name":"retained_stock","path":"private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/retained-stock/flash-boot-receipt.json","pointer":["result"]},
-      {"name":"retained_rc0","path":"private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/retained-rc0/flash-boot-receipt.json","pointer":["result"]},
-      {"name":"fujimod_stock","path":"private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/fujimod-stock/fujimod-flash-boot-receipt.json","pointer":["result"]},
-      {"name":"fujimod_rc0","path":"private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/fujimod-rc0/fujimod-flash-boot-receipt.json","pointer":["result"]},
-      {"name":"retained_stock_instructions","path":"private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/retained-stock/flash-boot-receipt.json","pointer":["instructions"]},
-      {"name":"retained_rc0_instructions","path":"private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/retained-rc0/flash-boot-receipt.json","pointer":["instructions"]},
-      {"name":"fujimod_stock_instructions","path":"private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/fujimod-stock/fujimod-flash-boot-receipt.json","pointer":["instructions"]},
-      {"name":"fujimod_rc0_instructions","path":"private-data/scratch/DecodeTestRequest/runs/20261113T060824Z-decode-clock-backend-boot-packages/result/fujimod-rc0/fujimod-flash-boot-receipt.json","pointer":["instructions"]}
-    ]
-  },
-  {
-    "id": "E-RAM-DECODE-OWNERSHIP-150",
-    "claim": "The stock-clock-backed RAM image-4 decode completes with state {{state}}, verdict {{verdict}}, {{jobs}} jobs, {{produced}} output bytes and CRC-32 {{crc}}. The clock word remains {{clock_closed}} after driver close and becomes {{clock_after}} after stock bookkeeping release. Install, trajectory and unload checks are {{checks}}. All job status observations, including the last job, are retained. Kernel tick-cell samples extend timing across counter wraps.",
-    "scope": "One FujiMod experiment route with the compile-time ReservedClock backend, diagnostic engine snapshot after successful acquire and clock/route check, and a trace window beginning after unload completes; boot start kind {{start}}. The RAM experiment does not exercise BootClock register writes on silicon.",
-    "notes": "The output oracle is the pinned decoded image CRC and summed count. Emulator durations are not silicon throughput. Review at 1dd539eb returned correct with P3-1; the candidate applies its prescribed one-line snapshot move. The clock-41 lifetime proof assumes successful live-view and crop waits; their inability to return an error is unproven. State 11 can retain 0x2b if clock take fails outside that invariant, requiring battery removal; no unwind is installed. Camera execution still needs the owner's go and visibly updating live view with the hook installed, then battery removal, reboot-byte check, shot and playback.",
-    "artifacts": [
-      "private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/verdict.json",
-      "private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/e2e-result.json",
-      "private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/binaries.sha256",
-      "private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/e2e-observation-3.trace-hits.jsonl"
-    ],
-    "facts": [
-      {"name":"firmware_sha256","path":"private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/e2e-result.json","pointer":["emulator_start","inputs","installed_dat"]},
-      {"name":"state","path":"private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/verdict.json","pointer":["state"]},
-      {"name":"verdict","path":"private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/verdict.json","pointer":["verdict"]},
-      {"name":"jobs","path":"private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/verdict.json","pointer":["jobs"]},
-      {"name":"produced","path":"private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/verdict.json","pointer":["produced"]},
-      {"name":"crc","path":"private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/verdict.json","pointer":["output_crc"]},
-      {"name":"clock_closed","path":"private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/verdict.json","pointer":["clock_closed"]},
-      {"name":"clock_after","path":"private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/verdict.json","pointer":["clock_after","1"]},
-      {"name":"checks","path":"private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/e2e-result.json","pointer":["checks"]},
-      {"name":"start","path":"private-data/scratch/DecodeTestRequest/runs/20261114T053100Z-decode-run-context/result/e2e-result.json","pointer":["emulator_start","start"]}
-    ]
-  },
+{
+  "id": "E-FIRST-RECORD-FLASH-BOOT-CHECK-150",
+  "claim": "The compile-time clock-backend first stage cold-boots both staged packages to SHOOTING MENU. Retained stock: {{retained_stock}} at {{retained_stock_instructions}} instructions; retained RC0: {{retained_rc0}} at {{retained_rc0_instructions}}; FujiMod stock: {{fujimod_stock}} at {{fujimod_stock_instructions}}; FujiMod RC0: {{fujimod_rc0}} at {{fujimod_rc0_instructions}}. Stock-derived DAT {{stock_dat}}; RC0-derived DAT {{rc0_dat}}. The changed-byte shared-engine fixed loader also passes its positive route ({{fixed_status}}), reaching menu {{fixed_menu}} with {{fixed_entries}} published-entry calls and {{fixed_fetches}} fixed-range instruction fetches. Actual fixed-record body-bit corruption passes its fail-stop oracle ({{corrupt_status}}): halted {{corrupt_halted}}, handoff {{corrupt_handoff}}, {{corrupt_entries}} entry calls and {{corrupt_fetches}} fixed-range fetches.",
+  "scope": "Fresh qualification of the shared-engine extraction: four actual standalone cold-boot-to-menu executions, the two packages on each engine, plus the current fixed-loader positive and reversible actual body-bit-corruption control on FujiMod. Exact old ELF identities are retained with the new ELF/runtime-binary identities. Executable text changes; runtime-byte equivalence and old receipt/checkpoint transfer are not claimed. Packaging runs outside emulator admission; each emulator launcher acquires its own slot. These affected variants do not establish Root's final composed artifact or unrelated registry joins.",
+  "notes": "The RAM experiment selects ReservedClock and does not exercise BootClock clock writes on silicon. These cold-menu checks exercise BootClock in emulation, not physical startup or ordinary capture/playback. Instruction counts are engine-specific, not silicon latency or a performance comparison between engines. Hardware clocks and cache coherence remain unqualified.",
+  "artifacts": [
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T043348Z-first-stage-shared-engine-boot-backends/result/retained-stock/flash-boot-receipt.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T043348Z-first-stage-shared-engine-boot-backends/result/retained-rc0/flash-boot-receipt.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T043348Z-first-stage-shared-engine-boot-backends/result/fujimod-stock/fujimod-flash-boot-receipt.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T043348Z-first-stage-shared-engine-boot-backends/result/fujimod-rc0/fujimod-flash-boot-receipt.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T043044Z-first-stage-shared-engine-packages/result/binaries.sha256",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T043044Z-first-stage-shared-engine-packages/result/packages.sha256",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T043044Z-first-stage-shared-engine-packages/result/staging.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T043724Z-first-stage-shared-engine-fixed-control/result/success/fixed-image.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T043724Z-first-stage-shared-engine-fixed-control/result/corrupt/fixed-image.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T042627Z-first-stage-shared-engine-runtime-comparison/result/identities.sha256",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T042627Z-first-stage-shared-engine-runtime-comparison/result/old-standalone.elf",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T042627Z-first-stage-shared-engine-runtime-comparison/result/new-standalone.elf",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T042627Z-first-stage-shared-engine-runtime-comparison/result/old-fixed.elf",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T042627Z-first-stage-shared-engine-runtime-comparison/result/new-fixed.elf"
+  ],
+  "facts": [
+    {
+      "name": "firmware_sha256",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043348Z-first-stage-shared-engine-boot-backends/result/retained-stock/flash-boot-receipt.json",
+      "pointer": [
+        "firmware",
+        "sha256"
+      ]
+    },
+    {
+      "name": "stock_dat",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043348Z-first-stage-shared-engine-boot-backends/result/retained-stock/flash-boot-receipt.json",
+      "pointer": [
+        "firmware",
+        "sha256"
+      ]
+    },
+    {
+      "name": "rc0_dat",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043348Z-first-stage-shared-engine-boot-backends/result/retained-rc0/flash-boot-receipt.json",
+      "pointer": [
+        "firmware",
+        "sha256"
+      ]
+    },
+    {
+      "name": "retained_stock",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043348Z-first-stage-shared-engine-boot-backends/result/retained-stock/flash-boot-receipt.json",
+      "pointer": [
+        "result"
+      ]
+    },
+    {
+      "name": "retained_rc0",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043348Z-first-stage-shared-engine-boot-backends/result/retained-rc0/flash-boot-receipt.json",
+      "pointer": [
+        "result"
+      ]
+    },
+    {
+      "name": "fujimod_stock",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043348Z-first-stage-shared-engine-boot-backends/result/fujimod-stock/fujimod-flash-boot-receipt.json",
+      "pointer": [
+        "result"
+      ]
+    },
+    {
+      "name": "fujimod_rc0",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043348Z-first-stage-shared-engine-boot-backends/result/fujimod-rc0/fujimod-flash-boot-receipt.json",
+      "pointer": [
+        "result"
+      ]
+    },
+    {
+      "name": "retained_stock_instructions",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043348Z-first-stage-shared-engine-boot-backends/result/retained-stock/flash-boot-receipt.json",
+      "pointer": [
+        "instructions"
+      ]
+    },
+    {
+      "name": "retained_rc0_instructions",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043348Z-first-stage-shared-engine-boot-backends/result/retained-rc0/flash-boot-receipt.json",
+      "pointer": [
+        "instructions"
+      ]
+    },
+    {
+      "name": "fujimod_stock_instructions",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043348Z-first-stage-shared-engine-boot-backends/result/fujimod-stock/fujimod-flash-boot-receipt.json",
+      "pointer": [
+        "instructions"
+      ]
+    },
+    {
+      "name": "fujimod_rc0_instructions",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043348Z-first-stage-shared-engine-boot-backends/result/fujimod-rc0/fujimod-flash-boot-receipt.json",
+      "pointer": [
+        "instructions"
+      ]
+    },
+    {
+      "name": "fixed_status",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043724Z-first-stage-shared-engine-fixed-control/result/success/fixed-image.json",
+      "pointer": [
+        "status"
+      ]
+    },
+    {
+      "name": "fixed_menu",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043724Z-first-stage-shared-engine-fixed-control/result/success/fixed-image.json",
+      "pointer": [
+        "menu"
+      ]
+    },
+    {
+      "name": "fixed_entries",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043724Z-first-stage-shared-engine-fixed-control/result/success/fixed-image.json",
+      "pointer": [
+        "published_entry_calls"
+      ]
+    },
+    {
+      "name": "fixed_fetches",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043724Z-first-stage-shared-engine-fixed-control/result/success/fixed-image.json",
+      "pointer": [
+        "fixed_instruction_fetches"
+      ]
+    },
+    {
+      "name": "corrupt_status",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043724Z-first-stage-shared-engine-fixed-control/result/corrupt/fixed-image.json",
+      "pointer": [
+        "status"
+      ]
+    },
+    {
+      "name": "corrupt_halted",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043724Z-first-stage-shared-engine-fixed-control/result/corrupt/fixed-image.json",
+      "pointer": [
+        "halted"
+      ]
+    },
+    {
+      "name": "corrupt_handoff",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043724Z-first-stage-shared-engine-fixed-control/result/corrupt/fixed-image.json",
+      "pointer": [
+        "handoff"
+      ]
+    },
+    {
+      "name": "corrupt_entries",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043724Z-first-stage-shared-engine-fixed-control/result/corrupt/fixed-image.json",
+      "pointer": [
+        "published_entry_calls"
+      ]
+    },
+    {
+      "name": "corrupt_fetches",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043724Z-first-stage-shared-engine-fixed-control/result/corrupt/fixed-image.json",
+      "pointer": [
+        "fixed_instruction_fetches"
+      ]
+    }
+  ]
+},
+{
+  "id": "E-RAM-DECODE-OWNERSHIP-150",
+  "claim": "The stock-clock-backed RAM image-4 decode completes with state {{state}}, verdict {{verdict}}, {{jobs}} jobs, {{produced}} output bytes and CRC-32 {{crc}}. The clock word remains {{clock_closed}} after driver close and becomes {{clock_after}} after stock bookkeeping release. Install, trajectory and unload checks are {{checks}}. All job status observations, including the last job, are retained. Kernel tick-cell samples extend timing across counter wraps. The retained receipt consumer is {{consumer_status}}; route ownership changes from {{route_held}} to {{route_after}}.",
+  "scope": "Fresh cold-start FujiMod qualification of the shared-engine extraction with the compile-time ReservedClock backend, diagnostic engine snapshot after successful acquire and clock/route check, and a trace window beginning after unload completes; boot start kind {{start}}. The changed experiment object is identified by the binary digest receipt. The RAM experiment does not exercise BootClock register writes on silicon or qualify Root's final composed artifact.",
+  "notes": "The output oracle is the pinned decoded image CRC and summed count. Emulator durations are not silicon throughput. The clock-41 lifetime proof assumes successful live-view and crop waits; their inability to return an error is unproven. State 11 can retain 0x2b if clock take fails outside that invariant, requiring battery removal; no unwind is installed. Camera execution still needs the owner's go and visibly updating live view with the hook installed, then battery removal, reboot-byte check, shot and playback.",
+  "artifacts": [
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T042727Z-first-stage-shared-engine-ram-decode/result/e2e-result.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T042727Z-first-stage-shared-engine-ram-decode/result/binaries.sha256",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T042727Z-first-stage-shared-engine-ram-decode/result/e2e-observation-3.trace-hits.jsonl",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T043257Z-first-stage-shared-engine-ram-consumer/result/verdict.json"
+  ],
+  "facts": [
+    {
+      "name": "firmware_sha256",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T042727Z-first-stage-shared-engine-ram-decode/result/e2e-result.json",
+      "pointer": [
+        "emulator_start",
+        "inputs",
+        "installed_dat"
+      ]
+    },
+    {
+      "name": "state",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043257Z-first-stage-shared-engine-ram-consumer/result/verdict.json",
+      "pointer": [
+        "state"
+      ]
+    },
+    {
+      "name": "verdict",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043257Z-first-stage-shared-engine-ram-consumer/result/verdict.json",
+      "pointer": [
+        "verdict"
+      ]
+    },
+    {
+      "name": "jobs",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043257Z-first-stage-shared-engine-ram-consumer/result/verdict.json",
+      "pointer": [
+        "jobs"
+      ]
+    },
+    {
+      "name": "produced",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043257Z-first-stage-shared-engine-ram-consumer/result/verdict.json",
+      "pointer": [
+        "produced"
+      ]
+    },
+    {
+      "name": "crc",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043257Z-first-stage-shared-engine-ram-consumer/result/verdict.json",
+      "pointer": [
+        "output_crc"
+      ]
+    },
+    {
+      "name": "clock_closed",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043257Z-first-stage-shared-engine-ram-consumer/result/verdict.json",
+      "pointer": [
+        "clock_closed"
+      ]
+    },
+    {
+      "name": "clock_after",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043257Z-first-stage-shared-engine-ram-consumer/result/verdict.json",
+      "pointer": [
+        "clock_after",
+        "1"
+      ]
+    },
+    {
+      "name": "checks",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T042727Z-first-stage-shared-engine-ram-decode/result/e2e-result.json",
+      "pointer": [
+        "checks"
+      ]
+    },
+    {
+      "name": "start",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T042727Z-first-stage-shared-engine-ram-decode/result/e2e-result.json",
+      "pointer": [
+        "emulator_start",
+        "start"
+      ]
+    },
+    {
+      "name": "consumer_status",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043257Z-first-stage-shared-engine-ram-consumer/result/verdict.json",
+      "pointer": [
+        "status"
+      ]
+    },
+    {
+      "name": "route_held",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043257Z-first-stage-shared-engine-ram-consumer/result/verdict.json",
+      "pointer": [
+        "route_held"
+      ]
+    },
+    {
+      "name": "route_after",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T043257Z-first-stage-shared-engine-ram-consumer/result/verdict.json",
+      "pointer": [
+        "route_after"
+      ]
+    }
+  ]
+},
   {
     "id": "E-FIXED-IMAGE-PLACEMENT-150",
     "claim": "A {{body_bytes}}-byte owned test body in a {{record_bytes}}-byte fixed record with {{publication_words}} staged words boots candidate DAT {{candidate_dat}} to the shooting menu on the retained engine ({{retained_boot}}) and FujiMod ({{fujimod_boot}}). Its load begins at {{load_begin}}, handoff is at {{handoff}}, and the first published entry is at {{first_entry}} model instructions, with {{entry_calls}} calls and {{fixed_fetches}} observed fixed-range fetches. A body-bit corruption halts before handoff ({{corrupt_halted}}), with {{corrupt_calls}} entry calls. With the lowered ceiling, the cardless capture-input scenario has heap-break high-water {{capture_peak}} with {{capture_headroom}} bytes of ceiling headroom, and the playback-input scenario has high-water {{playback_peak}} with {{playback_headroom}} bytes of headroom. Both restore post-boot checkpoints. The stock reset route has {{stock_writes}} writes after its boot fill. Narrowed ELF interface admission is {{interface_verdict}} for body {{admitted_body}}, with {{interface_instructions}} instructions, {{interface_transfers}} direct transfers and {{owned_stack}} owned direct-call stack bytes. Removing the retained continuation and supplying a zero stack budget are refused with exit statuses {{undeclared_exit}} and {{short_stack_exit}}.",
@@ -2017,9 +2242,9 @@
   }
   ,{
     "id": "E-FUJIMOD-XM1-PLAY-JPEG-150",
-    "claim": "The stock X-M1 PLAY route's source/layout/extent observation is {{result}} for {{jobs}} completed jobs, with the original card unchanged ({{card_unchanged}}). Preview: {{preview_width}}x{{preview_height}}, {{preview_output}} complete output bytes; {{preview_copy}} exact fixture codestream bytes at offset {{preview_offset}} plus {{preview_tail}} observed preserved pre-copy tail bytes make its {{preview_source}}-byte programmed span, whose literal whole-fixture-subrange identity is {{preview_literal}}. Full image: {{full_width}}x{{full_height}}, {{full_source}} literal fixture bytes and {{full_output}} complete output bytes. Both jobs are sampled before the shared destination is reused, with programmed operands, natural completion status and loaded endpoint bound separately. Independent JuicyPixels RGB-to-packed422 reference comparisons differ by {{preview_differences}} preview bytes and {{full_differences}} full-frame bytes; these are not qualified pixel agreement. The final PNG visibly shows the playback photograph and overlay. A later matching-checkpoint PLAY run independently inspects {{inspection_before_sectors}} sectors before and {{inspection_after_sectors}} after playback in {{inspection_before_reads}}/{{inspection_after_reads}} actual media-read requests, including allocation slack. All inspected sectors match the original file ({{inspection_before_matches}}/{{inspection_after_matches}}), exposed SD state is unchanged ({{inspection_before_state}}/{{inspection_after_state}}), and the whole original card remains unchanged ({{inspection_card_unchanged}}).",
-    "scope": "One stock-DAT cold-boot PLAY execution and one later matching-keyed-attach-checkpoint PLAY execution on the unchanged pinned FujiMod runtime and identified card fixture. Full sources are observed before decode and complete source/header-derived output extents before reuse; source, capacity, alias, geometry, padding and endpoint checks pass. The later run adds independent original-file sector comparisons and whole-card hashes, not another cold boot or owned playback acceptance. No added MMIO reads, device-law changes or fitted pixel tolerance.",
-    "notes": "Host provenance/layout proof, not a Rust firmware cutover, physical JPEG fidelity or capture/development/save acceptance. The preview's unchanged observed tail is not a general zero-fill law. Independent conversion differences and false pre-press stability Context remain explicit. The earlier unidentified caller reaching 0x00d350c4(2) and bounded SD-command history remain limitations; this work does not resolve them.",
+    "claim": "The stock X-M1 PLAY route's source/layout/extent observation is {{result}} for {{jobs}} completed jobs, with the original card unchanged ({{card_unchanged}}). Preview: {{preview_width}}x{{preview_height}}, {{preview_output}} complete output bytes; {{preview_copy}} exact fixture codestream bytes at offset {{preview_offset}} plus {{preview_tail}} observed preserved pre-copy tail bytes make its {{preview_source}}-byte programmed span, whose literal whole-fixture-subrange identity is {{preview_literal}}. Full image: {{full_width}}x{{full_height}}, {{full_source}} literal fixture bytes and {{full_output}} complete output bytes. Both jobs are sampled before the shared destination is reused, with programmed operands, natural completion status and loaded endpoint bound separately. Independent JuicyPixels RGB-to-packed422 reference comparisons differ by {{preview_differences}} preview bytes and {{full_differences}} full-frame bytes; these are not qualified pixel agreement. The final PNG visibly shows the playback photograph and overlay. A later matching-checkpoint PLAY run independently inspects {{inspection_before_sectors}} sectors before and {{inspection_after_sectors}} after playback in {{inspection_before_reads}}/{{inspection_after_reads}} actual media-read requests, including allocation slack. All inspected sectors match the original file ({{inspection_before_matches}}/{{inspection_after_matches}}), exposed SD state is unchanged ({{inspection_before_state}}/{{inspection_after_state}}), and the whole original card remains unchanged ({{inspection_card_unchanged}}). A distinct installed owned-package PLAY observation executes the source entry {{owned_source_fetches}} times and mode entry {{owned_mode_fetches}} times, with {{owned_original_fetches}} original-body fetches and {{owned_protected_writes}} protected CPU/host/model-bus writes. Its {{owned_allocation}}-byte allocation alone is unchanged ({{owned_allocation_unchanged}}), before/after SHA-256 {{owned_guest_before}}/{{owned_guest_after}}; {{owned_scalar_differences}} upload-to-installed differing bytes are completed ABI7 scalar reports. Publication tables, padding, owned code and retained callback code match the artifact. Runtime {{owned_runtime}} and ELF {{owned_elf}} are the native-qualified package. The historical two-entry probe returns integrated_pair={{owned_pair}} and exit {{owned_exit}} because mode is unobserved. Preview/full independent differences remain {{owned_preview_differences}}/{{owned_full_differences}}, output digests {{owned_preview_digest}}/{{owned_full_digest}}, and pre-press frame equality remains {{owned_frames_equal}}.",
+    "scope": "One stock-DAT cold-boot PLAY execution and one later matching-keyed-attach-checkpoint PLAY execution on the unchanged pinned FujiMod runtime and identified card fixture. Full sources are observed before decode and complete source/header-derived output extents before reuse; source, capacity, alias, geometry, padding and endpoint checks pass. The later run adds independent original-file sector comparisons and whole-card hashes, not another cold boot or owned playback acceptance. No added MMIO reads, device-law changes or fitted pixel tolerance. The installed observation restores its separately identified installed checkpoint on the supported PLAY bridge; it is not another cold boot. Source-entry execution supplies image preparation evidence, while JPEG decode/output ownership is independent of the historical two-entry probe outcome. Only the installed allocation is equal across PLAY, not whole RAM.",
+    "notes": "Host provenance/layout proof, not a Rust firmware cutover, physical JPEG fidelity or capture/development/save acceptance. The preview's unchanged observed tail is not a general zero-fill law. Independent conversion differences and false pre-press stability Context remain explicit. The earlier unidentified caller reaching 0x00d350c4(2) and bounded SD-command history remain limitations; this work does not resolve them. The historical integrated_pair=false is that probe outcome, not a JPEG ownership prerequisite. Installer callbacks/storage and asynchronous retirement remain retained.",
     "artifacts": [
       "private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/result.json",
       "private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/qualification.json",
@@ -2033,7 +2258,14 @@
       "private-data/scratch/PlaybackMediaClosure/runs/20261115T211205Z-playback-media-sectors/result/observer.sha256",
       "private-data/scratch/PlaybackMediaClosure/runs/20261115T211205Z-playback-media-sectors/result/final.png",
       "private-data/scratch/PlaybackMediaClosure/runs/20261115T210817Z-independent-media/result/directory.txt",
-      "private-data/scratch/PlaybackMediaClosure/runs/20261115T210817Z-independent-media/result/fixture.sha256"
+      "private-data/scratch/PlaybackMediaClosure/runs/20261115T210817Z-independent-media/result/fixture.sha256",
+      "private-data/scratch/PlaybackMediaClosure/runs/20261115T223559Z-owned-playback-play-guarded/result/result.json",
+      "private-data/scratch/PlaybackMediaClosure/runs/20261115T223559Z-owned-playback-play-guarded/result/observations.jsonl",
+      "private-data/scratch/PlaybackMediaClosure/runs/20261115T223559Z-owned-playback-play-guarded/result/final.png",
+      "private-data/scratch/PlaybackMediaClosure/runs/20261115T223559Z-owned-playback-play-guarded/result/media-inspection-before.json",
+      "private-data/scratch/PlaybackMediaClosure/runs/20261115T223559Z-owned-playback-play-guarded/result/media-inspection-after.json",
+      "private-data/scratch/PlaybackMediaClosure/inputs/play-guarded/bridge/emulator-session.json",
+      "private-data/scratch/PlaybackBoundaryEvidence/inputs/retained-boundary-selectors.json"
     ],
     "facts": [
       {"name":"firmware_sha256","path":"private-data/scratch/PlaybackDecodeHost/runs/20261114T225921Z-playback-play-final/result/emulator-session.json","pointer":["inputs","installed_dat"]},
@@ -2062,7 +2294,25 @@
       {"name":"inspection_after_matches","path":"private-data/scratch/PlaybackMediaClosure/runs/20261115T211205Z-playback-media-sectors/result/media-inspection-after.json","pointer":["all_sectors_match_original"]},
       {"name":"inspection_before_state","path":"private-data/scratch/PlaybackMediaClosure/runs/20261115T211205Z-playback-media-sectors/result/media-inspection-before.json","pointer":["media_state_unchanged"]},
       {"name":"inspection_after_state","path":"private-data/scratch/PlaybackMediaClosure/runs/20261115T211205Z-playback-media-sectors/result/media-inspection-after.json","pointer":["media_state_unchanged"]},
-      {"name":"inspection_card_unchanged","path":"private-data/scratch/PlaybackMediaClosure/runs/20261115T211205Z-playback-media-sectors/result/result.json","pointer":["card_original_unchanged"]}
+      {"name": "inspection_card_unchanged", "path": "private-data/scratch/PlaybackMediaClosure/runs/20261115T211205Z-playback-media-sectors/result/result.json", "pointer": ["card_original_unchanged"]},
+      {"name": "owned_source_fetches", "path": "private-data/scratch/PlaybackBoundaryEvidence/inputs/retained-boundary-selectors.json", "pointer": ["play", "source_fetches"]},
+      {"name": "owned_mode_fetches", "path": "private-data/scratch/PlaybackBoundaryEvidence/inputs/retained-boundary-selectors.json", "pointer": ["play", "mode_fetches"]},
+      {"name": "owned_original_fetches", "path": "private-data/scratch/PlaybackBoundaryEvidence/inputs/retained-boundary-selectors.json", "pointer": ["play", "original_fetches"]},
+      {"name": "owned_protected_writes", "path": "private-data/scratch/PlaybackBoundaryEvidence/inputs/retained-boundary-selectors.json", "pointer": ["play", "protected_writes"]},
+      {"name": "owned_allocation", "path": "private-data/scratch/PlaybackBoundaryEvidence/inputs/retained-boundary-selectors.json", "pointer": ["play", "allocation_bytes"]},
+      {"name": "owned_allocation_unchanged", "path": "private-data/scratch/PlaybackBoundaryEvidence/inputs/retained-boundary-selectors.json", "pointer": ["play", "allocation_unchanged"]},
+      {"name": "owned_guest_before", "path": "private-data/scratch/PlaybackBoundaryEvidence/inputs/retained-boundary-selectors.json", "pointer": ["play", "guest_sha256_before"]},
+      {"name": "owned_guest_after", "path": "private-data/scratch/PlaybackBoundaryEvidence/inputs/retained-boundary-selectors.json", "pointer": ["play", "guest_sha256_after"]},
+      {"name": "owned_scalar_differences", "path": "private-data/scratch/PlaybackBoundaryEvidence/inputs/retained-boundary-selectors.json", "pointer": ["play", "artifact_differing_bytes"]},
+      {"name": "owned_runtime", "path": "private-data/scratch/PlaybackMediaClosure/runs/20261115T221739Z-owned-playback-native-admitted/result/result.json", "pointer": ["runtime_sha256"]},
+      {"name": "owned_elf", "path": "private-data/scratch/PlaybackMediaClosure/runs/20261115T221739Z-owned-playback-native-admitted/result/result.json", "pointer": ["elf_sha256"]},
+      {"name": "owned_pair", "path": "private-data/scratch/PlaybackMediaClosure/runs/20261115T223559Z-owned-playback-play-guarded/result/result.json", "pointer": ["owned_playback", "integrated_pair"]},
+      {"name": "owned_exit", "path": "private-data/scratch/PlaybackMediaClosure/runs/20261115T223559Z-owned-playback-play-guarded/run.json", "pointer": ["exit_status"]},
+      {"name": "owned_frames_equal", "path": "private-data/scratch/PlaybackMediaClosure/runs/20261115T223559Z-owned-playback-play-guarded/result/result.json", "pointer": ["findings", "5", "holds"]},
+      {"name": "owned_preview_differences", "path": "private-data/scratch/PlaybackMediaClosure/runs/20261115T223559Z-owned-playback-play-guarded/result/result.json", "pointer": ["findings", "10", "detail", "completed_jobs", "0", "comparison", "different_bytes"]},
+      {"name": "owned_preview_digest", "path": "private-data/scratch/PlaybackMediaClosure/runs/20261115T223559Z-owned-playback-play-guarded/result/result.json", "pointer": ["findings", "10", "detail", "completed_jobs", "0", "completed", "output_sha256"]},
+      {"name": "owned_full_differences", "path": "private-data/scratch/PlaybackMediaClosure/runs/20261115T223559Z-owned-playback-play-guarded/result/result.json", "pointer": ["findings", "10", "detail", "completed_jobs", "1", "comparison", "different_bytes"]},
+      {"name": "owned_full_digest", "path": "private-data/scratch/PlaybackMediaClosure/runs/20261115T223559Z-owned-playback-play-guarded/result/result.json", "pointer": ["findings", "10", "detail", "completed_jobs", "1", "completed", "output_sha256"]}
     ]
   }
   ,{
@@ -2447,6 +2697,698 @@
       {"name":"matrix_certificates_issued","path":"private-data/scratch/MenuValueFix/runs/20261116T081521Z-menu-full-qualification-facts6-final/result/facts.json","pointer":["matrix","certificates_issued"]},
       {"name":"matrix_certificates_consumed","path":"private-data/scratch/MenuValueFix/runs/20261116T081521Z-menu-full-qualification-facts6-final/result/facts.json","pointer":["matrix","certificates_consumed"]},
       {"name":"matrix_certificate_role","path":"private-data/scratch/MenuValueFix/runs/20261116T081521Z-menu-full-qualification-facts6-final/result/facts.json","pointer":["matrix","certificate_role"]}
+    ]
+  }
+,{
+  "id": "E-LATER-IMAGE5-DECODER-ASYNC-OWNED-150",
+  "claim": "The opt-in linked asynchronous image5 producer/IRQ/consumer path is accepted ({{accepted}}) at {{instructions}} instructions with saved init-time task {{task}} and {{callbacks}} decoder IRQ callbacks. Canonical image5 and BSS comparisons are {{image_equal}}/{{bss_equal}}; observed stream0x48, engine0x2b, route and public clock0x29 ownership close. The retained clock reservation returns handle {{clock_handle}}. The executed missing-clock-release control is accepted {{defect_accepted}} at {{defect_instructions}} instructions with verdict \"{{defect_error}}\", while its canonical image5/BSS comparisons remain {{defect_image_equal}}/{{defect_bss_equal}}. Separate fresh-reset synthetic aligned progress/final controls are accepted {{progress_accepted}}/{{complete_accepted}} and are not firmware acceptance.",
+  "scope": "X-M1 1.50 canonical Method4, one owned decoder session through the retained flashloader and source98/line69 callbacks on core0, command publication and first image5 entry. Opt-in ELF {{elf_sha256}}, {{body_bytes}} file bytes, zero-once BSS [{{bss_start}},{{bss_end}}). Original dispatcher SP {{original_sp}} is 4mod8; the 24-byte progress/final veneers save r4/LR, align SP to8 and restore original SP/r4 and return target, using at most12 bytes before Rust. Synthetic controls pad once to8 before the retained CMP/MOV call and restore before continuation; SP/r4-r11/frame-word preservation is checked.",
+  "notes": "The public clock0x29 oracle is the successful retained reservation output and the retained release invocation before engine0x2b release, not the owned engine clock field or inferred physical gate sharing. Source ABI: reserve [0x649c4c,0x649ddc), release [0x649ddc,0x64a010). Stock ignores registration/stream semaphore statuses and halts on engine acquire/release errors with reached ownership retained. Final Root contiguous composition/link/staging, sole panic/runtime closure, zero-once BSS and constructor/resource/stack qualification remain open. Lower stock plain-read ownership and accepted error/cleanup/stuck-stop corrections remain retained and unqualified here. Malformed input, decoder failure or missing IRQ, cancellation/safe quiescence, repeated sessions, concurrent engine clients, unobserved callers/cores, computed-caller closure, whole-machine lifetime/write confinement and physical cache/DMA coherence remain unobserved. First image5 entry does not establish later task1 context or initializer completion.",
+  "artifacts": [
+    "private-data/scratch/LaterLoadingClosure/runs/20261115T230112Z-image5-decoder-source/result/source.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T004646Z-image5-decoder-final-irq-abi-contract/result/decoder-contract.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T000954Z-image5-decoder-irq-abi-fixed-admission/result/admission.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-verification.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-continuations.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-contract.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/inputs.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-memory.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T011257Z-image5-decoder-clock-release-defect/result/decoder-verification.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T011257Z-image5-decoder-clock-release-defect/result/decoder-continuations.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T011257Z-image5-decoder-clock-release-defect/result/decoder-contract.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T011257Z-image5-decoder-clock-release-defect/result/inputs.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T011257Z-image5-decoder-clock-release-defect/result/decoder-memory.json",
+    "private-data/scratch/LaterLoadingClosure/inputs/decoder-progress-aligned-v2/decoder-verification.json",
+    "private-data/scratch/LaterLoadingClosure/inputs/decoder-progress-aligned-v2/decoder-continuations.json",
+    "private-data/scratch/LaterLoadingClosure/inputs/decoder-complete-aligned-v2/decoder-verification.json",
+    "private-data/scratch/LaterLoadingClosure/inputs/decoder-complete-aligned-v2/decoder-continuations.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T004916Z-image5-decoder-progress-aligned-v2/run.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T004931Z-image5-decoder-complete-aligned-v2/run.json",
+    "private-data/scratch/LaterLoadingClosure/runs/20261116T011257Z-image5-decoder-clock-release-defect/result/defect.json"
+  ],
+  "facts": [
+    {
+      "name": "accepted",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-verification.json",
+      "pointer": [
+        "accepted"
+      ]
+    },
+    {
+      "name": "instructions",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-verification.json",
+      "pointer": [
+        "instructions"
+      ]
+    },
+    {
+      "name": "task",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-continuations.json",
+      "pointer": [
+        "events",
+        "5",
+        "registers",
+        "r",
+        "0"
+      ]
+    },
+    {
+      "name": "callbacks",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-continuations.json",
+      "pointer": [
+        "callbacks"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "image_equal",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-continuations.json",
+      "pointer": [
+        "snapshots",
+        "0",
+        "expected_equal"
+      ]
+    },
+    {
+      "name": "bss_equal",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-continuations.json",
+      "pointer": [
+        "snapshots",
+        "1",
+        "expected_equal"
+      ]
+    },
+    {
+      "name": "clock_handle",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-continuations.json",
+      "pointer": [
+        "calls",
+        "4",
+        "output",
+        "values",
+        "0"
+      ]
+    },
+    {
+      "name": "original_sp",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-continuations.json",
+      "pointer": [
+        "callbacks",
+        "0",
+        "original_sp"
+      ]
+    },
+    {
+      "name": "defect_accepted",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T011257Z-image5-decoder-clock-release-defect/result/decoder-verification.json",
+      "pointer": [
+        "accepted"
+      ]
+    },
+    {
+      "name": "defect_instructions",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T011257Z-image5-decoder-clock-release-defect/result/decoder-verification.json",
+      "pointer": [
+        "instructions"
+      ]
+    },
+    {
+      "name": "defect_error",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T011257Z-image5-decoder-clock-release-defect/result/decoder-verification.json",
+      "pointer": [
+        "error"
+      ]
+    },
+    {
+      "name": "defect_image_equal",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T011257Z-image5-decoder-clock-release-defect/result/decoder-continuations.json",
+      "pointer": [
+        "snapshots",
+        "0",
+        "expected_equal"
+      ]
+    },
+    {
+      "name": "defect_bss_equal",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T011257Z-image5-decoder-clock-release-defect/result/decoder-continuations.json",
+      "pointer": [
+        "snapshots",
+        "1",
+        "expected_equal"
+      ]
+    },
+    {
+      "name": "progress_accepted",
+      "path": "private-data/scratch/LaterLoadingClosure/inputs/decoder-progress-aligned-v2/decoder-verification.json",
+      "pointer": [
+        "accepted"
+      ]
+    },
+    {
+      "name": "complete_accepted",
+      "path": "private-data/scratch/LaterLoadingClosure/inputs/decoder-complete-aligned-v2/decoder-verification.json",
+      "pointer": [
+        "accepted"
+      ]
+    },
+    {
+      "name": "firmware_sha256",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-contract.json",
+      "pointer": [
+        "firmware_sha256"
+      ]
+    },
+    {
+      "name": "body_bytes",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-contract.json",
+      "pointer": [
+        "body_bytes"
+      ]
+    },
+    {
+      "name": "bss_start",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-contract.json",
+      "pointer": [
+        "bss",
+        "0"
+      ]
+    },
+    {
+      "name": "bss_end",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T005431Z-image5-decoder-natural-irq-v2-preserved/result/decoder-contract.json",
+      "pointer": [
+        "bss",
+        "1"
+      ]
+    },
+    {
+      "name": "elf_sha256",
+      "path": "private-data/scratch/LaterLoadingClosure/runs/20261116T000954Z-image5-decoder-irq-abi-fixed-admission/result/admission.json",
+      "pointer": [
+        "elf_sha256"
+      ]
+    }
+  ]
+},
+  {
+    "id": "E-XM1-PLAYBACK-PREPARATION-PAIR-NATIVE-150",
+    "claim": "The exact packaged playback source/mode preparation boundary passes ({{qualified}}) {{pairs}} original/owned entry pairs and rejects {{controls}} returned entry-omission controls under historical runner {{entry_runner}}. The same runtime {{runtime}} and ELF {{elf}} pass conditional published-caller/producer qualification ({{callers_qualified}}) under literal-entry runner {{caller_runner}}: {{caller_pairs}} original/owned machine-1 action2/action3 pairs, {{caller_controls}} returned caller-omission controls and {{producer_executions}} machine-5 action5/packet-0142/queue-descriptor executions, {{total_executions}} executions in that later cohort. The producer's accepted/rejected submit cases return with matching descriptor/payload, status and error ordering; its returned omission is rejected ({{producer_control}}). Actual published mode bytes {{publication}} reach {{owned_entry}}. Full dispatch return, machine-11 event, machine-1 cursor, callee-saved registers and stack are checked. Separate default Observe/install checks are {{observe_checks}}/{{install_checks}}, restoring {{observe_restored}}/{{install_restored}} original publication words.",
+    "scope": "Conditional no-argument AAPCS preparation entries and actual retained caller/producer boundaries on X-M1 1.50. The original pinned copy/move bodies execute. Native dispatch/output/preset, token/current-task/queue-submit/error services remain explicit boundaries. The producer-to-caller handoff is not real queue delivery. Observe and installation/menu/back/rollback receipts are compatibility checks; allocation is retained until power-off.",
+    "notes": "The retained router, machine-action banks, computed queue4 callers, callback/storage lifetime and asynchronous retirement remain outside this boundary. Cancellation is already implemented by owned source preparation. Natural application-mode7 and whole mode/playback ownership require separate evidence; JPEG implementation is independent of that USB trajectory.",
+    "artifacts": [
+      "private-data/scratch/PlaybackMediaClosure/runs/20261115T221739Z-owned-playback-native-admitted/result/result.json",
+      "private-data/scratch/PlaybackMediaClosure/inputs/mode-callers-attributed/result.json",
+      "private-data/scratch/PlaybackMediaClosure/inputs/mode-callers-attributed/invocation.json",
+      "private-data/scratch/PlaybackMediaClosure/inputs/mode-callers-attributed/producer/result.json",
+      "private-data/scratch/PlaybackMediaClosure/inputs/mode-callers-attributed/entry-caller/result.json",
+      "private-data/scratch/PlaybackMediaClosure/runs/20261116T003511Z-owned-mode-callers-attributed/run.json",
+      "private-data/scratch/PlaybackMediaClosure/inputs/install/e2e-result.json",
+      "private-data/scratch/PlaybackMediaClosure/inputs/observe/e2e-result.json",
+      "private-data/scratch/PlaybackBoundaryEvidence/inputs/retained-boundary-selectors.json"
+    ],
+    "facts": [
+      {
+        "name": "firmware_sha256",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/install/e2e-result.json",
+        "pointer": [
+          "emulator_start",
+          "inputs",
+          "installed_dat"
+        ]
+      },
+      {
+        "name": "qualified",
+        "path": "private-data/scratch/PlaybackMediaClosure/runs/20261115T221739Z-owned-playback-native-admitted/result/result.json",
+        "pointer": [
+          "qualified"
+        ]
+      },
+      {
+        "name": "pairs",
+        "path": "private-data/scratch/PlaybackMediaClosure/runs/20261115T221739Z-owned-playback-native-admitted/result/result.json",
+        "pointer": [
+          "scenarios"
+        ]
+      },
+      {
+        "name": "controls",
+        "path": "private-data/scratch/PlaybackMediaClosure/runs/20261115T221739Z-owned-playback-native-admitted/result/result.json",
+        "pointer": [
+          "controls"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "entry_runner",
+        "path": "private-data/scratch/PlaybackMediaClosure/runs/20261115T221739Z-owned-playback-native-admitted/result/result.json",
+        "pointer": [
+          "runner_sha256"
+        ]
+      },
+      {
+        "name": "runtime",
+        "path": "private-data/scratch/PlaybackMediaClosure/runs/20261115T221739Z-owned-playback-native-admitted/result/result.json",
+        "pointer": [
+          "runtime_sha256"
+        ]
+      },
+      {
+        "name": "elf",
+        "path": "private-data/scratch/PlaybackMediaClosure/runs/20261115T221739Z-owned-playback-native-admitted/result/result.json",
+        "pointer": [
+          "elf_sha256"
+        ]
+      },
+      {
+        "name": "callers_qualified",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-callers-attributed/result.json",
+        "pointer": [
+          "qualified"
+        ]
+      },
+      {
+        "name": "caller_runner",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-callers-attributed/result.json",
+        "pointer": [
+          "runner_sha256"
+        ]
+      },
+      {
+        "name": "caller_pairs",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-callers-attributed/result.json",
+        "pointer": [
+          "entry_caller",
+          "comparisons"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "caller_controls",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-callers-attributed/result.json",
+        "pointer": [
+          "entry_caller",
+          "controls"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "producer_executions",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-callers-attributed/result.json",
+        "pointer": [
+          "producer",
+          "executions"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "total_executions",
+        "path": "private-data/scratch/PlaybackBoundaryEvidence/inputs/retained-boundary-selectors.json",
+        "pointer": [
+          "native",
+          "caller_producer_executions"
+        ]
+      },
+      {
+        "name": "producer_control",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-callers-attributed/result.json",
+        "pointer": [
+          "producer",
+          "executions",
+          "2",
+          "control_rejected_behaviorally"
+        ]
+      },
+      {
+        "name": "publication",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-callers-attributed/result.json",
+        "pointer": [
+          "entry_caller",
+          "publication_hex"
+        ]
+      },
+      {
+        "name": "owned_entry",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-callers-attributed/result.json",
+        "pointer": [
+          "entry_caller",
+          "owned_entry"
+        ]
+      },
+      {
+        "name": "observe_checks",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/observe/e2e-result.json",
+        "pointer": [
+          "checks"
+        ]
+      },
+      {
+        "name": "install_checks",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/install/e2e-result.json",
+        "pointer": [
+          "checks"
+        ]
+      },
+      {
+        "name": "observe_restored",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/observe/e2e-result.json",
+        "pointer": [
+          "mailbox",
+          "rollback",
+          "restored"
+        ]
+      },
+      {
+        "name": "install_restored",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/install/e2e-result.json",
+        "pointer": [
+          "mailbox",
+          "rollback",
+          "restored"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "E-USB-CONFIGURED-DISCONNECT-OBSERVATION-150",
+    "claim": "The installed configured-USB model counterexample retains runtime/publication equality ({{unchanged}}) while volatile configuration f7 changes {{f7_before}} to {{f7_after}}, with other window bytes equal ({{window_equal}}) and persistent commit requested={{persistent}}. Existing Cable detach/attach and enumeration return device {{device}}, but the natural application-mode consumer and source/mode entries remain unobserved ({{natural}}/{{source}}/{{mode}}). The driver remains phase {{phase_before}}/{{phase_after}}, completion handle {{handle_before}}/{{handle_after}}, observer {{observer_before}}/{{observer_after}} and manager latch {{latch_before}}/{{latch_after}}. The retained {{trace_rows}} trace rows contain site counts {{site_counts}}, phase-compare r3 values {{phase_values}} and disconnect-test r3 values {{disconnect_values}}; bit14's mask is absent in those samples. The active fixed-view watch has {{watch_records}} records and violation={{violation}}. Bridge result {{bridge_exit}}, harness error {{harness_error}}, bounded command exit {{command_exit}}. Original card unchanged={{card_unchanged}}; accepted SD writes={{writes}}.",
+    "scope": "One identified topic SDK/installed checkpoint and unchanged natural input trajectory: volatile f7 readback, protocol close, existing Cable edges and bounded idle windows, then ordinary enumeration. Runtime allocation is {{allocation}} bytes, not all guest RAM. Full protected runtime/publication/original-body watch and raw driver-state/trace counterexample are retained. Conditional native published callers are a separate positive boundary.",
+    "notes": "The installation-session exit gap belongs to UsbController disconnect signaling after configuration. Cable presence, controller pending status, USB connection/personality and application permission are distinct. Implementation must feed existing pending-status/mask/acknowledgement/IRQ machinery. Trigger law awaits stock's existing fff54034 reads, mask state and fff5405c ACK writes for configured unplug versus reset-only/reconnect. Bit14's connection-update(0)/340a consumer is not a configured notification. This counterexample establishes no physical register law. JPEG preparation keeps its image-source and decode/output requirements; JPEG implementation proceeds independently.",
+    "artifacts": [
+      "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/result.json",
+      "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/invocation.json",
+      "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/trace-final.json",
+      "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/watch-state.json",
+      "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/firmware-before.json",
+      "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/firmware-after-configuration-close.json",
+      "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/firmware-after-enumeration.json",
+      "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/volatile-configuration.json",
+      "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/detached-cable.json",
+      "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/attached-cable.json",
+      "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/enumeration.json",
+      "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/media-before.json",
+      "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/media-final.json",
+      "private-data/scratch/PlaybackMediaClosure/runs/20261116T012301Z-playback-installed-usb-driver-state-launched/run.json",
+      "private-data/scratch/PlaybackMediaClosure/inputs/cable-install/e2e-result.json",
+      "private-data/scratch/PlaybackBoundaryEvidence/inputs/retained-boundary-selectors.json"
+    ],
+    "facts": [
+      {
+        "name": "firmware_sha256",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/install/e2e-result.json",
+        "pointer": [
+          "emulator_start",
+          "inputs",
+          "installed_dat"
+        ]
+      },
+      {
+        "name": "unchanged",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/result.json",
+        "pointer": [
+          "details",
+          "runtime_and_publication_bytes_unchanged"
+        ]
+      },
+      {
+        "name": "natural",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/result.json",
+        "pointer": [
+          "details",
+          "natural_mode_consumer_observed"
+        ]
+      },
+      {
+        "name": "source",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/result.json",
+        "pointer": [
+          "details",
+          "owned_entry_witness",
+          "source_entry_observed"
+        ]
+      },
+      {
+        "name": "mode",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/result.json",
+        "pointer": [
+          "details",
+          "owned_entry_witness",
+          "mode_entry_observed"
+        ]
+      },
+      {
+        "name": "allocation",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/result.json",
+        "pointer": [
+          "details",
+          "runtime_allocation",
+          "bytes"
+        ]
+      },
+      {
+        "name": "f7_before",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/volatile-configuration.json",
+        "pointer": [
+          "before"
+        ]
+      },
+      {
+        "name": "f7_after",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/volatile-configuration.json",
+        "pointer": [
+          "after"
+        ]
+      },
+      {
+        "name": "window_equal",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/volatile-configuration.json",
+        "pointer": [
+          "other_window_bytes_equal"
+        ]
+      },
+      {
+        "name": "persistent",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/volatile-configuration.json",
+        "pointer": [
+          "persistent_commit_requested"
+        ]
+      },
+      {
+        "name": "device",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/enumeration.json",
+        "pointer": [
+          "device"
+        ]
+      },
+      {
+        "name": "bridge_exit",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/result.json",
+        "pointer": [
+          "bridge_exit"
+        ]
+      },
+      {
+        "name": "harness_error",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/result.json",
+        "pointer": [
+          "harness_error"
+        ]
+      },
+      {
+        "name": "violation",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/watch-state.json",
+        "pointer": [
+          "violation"
+        ]
+      },
+      {
+        "name": "card_unchanged",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/result.json",
+        "pointer": [
+          "card_original_unchanged"
+        ]
+      },
+      {
+        "name": "writes",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/media-final.json",
+        "pointer": [
+          "accepted_writes"
+        ]
+      },
+      {
+        "name": "phase_before",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/firmware-before.json",
+        "pointer": [
+          "controller_phase"
+        ]
+      },
+      {
+        "name": "handle_before",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/firmware-before.json",
+        "pointer": [
+          "controller_completion_handle"
+        ]
+      },
+      {
+        "name": "observer_before",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/firmware-before.json",
+        "pointer": [
+          "controller_observer"
+        ]
+      },
+      {
+        "name": "latch_before",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/firmware-before.json",
+        "pointer": [
+          "usb_manager_latch"
+        ]
+      },
+      {
+        "name": "phase_after",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/firmware-after-enumeration.json",
+        "pointer": [
+          "controller_phase"
+        ]
+      },
+      {
+        "name": "handle_after",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/firmware-after-enumeration.json",
+        "pointer": [
+          "controller_completion_handle"
+        ]
+      },
+      {
+        "name": "observer_after",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/firmware-after-enumeration.json",
+        "pointer": [
+          "controller_observer"
+        ]
+      },
+      {
+        "name": "latch_after",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/firmware-after-enumeration.json",
+        "pointer": [
+          "usb_manager_latch"
+        ]
+      },
+      {
+        "name": "watch_records",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/watch-state.json",
+        "pointer": [
+          "records"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "trace_rows",
+        "path": "private-data/scratch/PlaybackMediaClosure/inputs/mode-driver-observe/trace-final.json",
+        "pointer": [
+          "hits"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "site_counts",
+        "path": "private-data/scratch/PlaybackBoundaryEvidence/inputs/retained-boundary-selectors.json",
+        "pointer": [
+          "usb",
+          "site_counts"
+        ]
+      },
+      {
+        "name": "phase_values",
+        "path": "private-data/scratch/PlaybackBoundaryEvidence/inputs/retained-boundary-selectors.json",
+        "pointer": [
+          "usb",
+          "phase_compare_r3"
+        ]
+      },
+      {
+        "name": "disconnect_values",
+        "path": "private-data/scratch/PlaybackBoundaryEvidence/inputs/retained-boundary-selectors.json",
+        "pointer": [
+          "usb",
+          "disconnect_r3"
+        ]
+      },
+      {
+        "name": "command_exit",
+        "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T012301Z-playback-installed-usb-driver-state-launched/run.json",
+        "pointer": [
+          "exit_status"
+        ]
+      }
+    ]
+  }
+  ,{
+    "id": "E-PLAYBACK-JPEG-TRANSACTION-NATIVE-150",
+    "claim": "The owned channel9 JPEG transaction qualifies ({{qualified}}) at actual retained Playback decode-requirements, submit, completion, restart and finish callers: {{pairs}} original/owned pairs and {{controls}} returned IRQ-omission controls. Runner {{runner}}, runtime {{runtime}} and ELF {{elf}} identify this cohort. The comparator observes consumer behavior, not native pixels or whole-request identity.",
+    "scope": "{{native_scope}} This JPEG transaction cohort is distinct from the earlier source/mode preparation entry and published-caller/producer cohorts in E-XM1-PLAYBACK-PREPARATION-PAIR-NATIVE-150.",
+    "notes": "Actual-caller native omission controls establish the bounded negative boundary. No full-system defect control, physical pixels, whole playback or natural application-mode acceptance.",
+    "artifacts": [],
+    "facts": [
+      {"name":"firmware_sha256","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json","pointer":["emulator_start","inputs","installed_dat"]},
+      {"name":"qualified","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json","pointer":["qualified"]},
+      {"name":"pairs","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json","pointer":["comparisons"],"operation":"length"},
+      {"name":"controls","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json","pointer":["controls"],"operation":"length"},
+      {"name":"runner","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json","pointer":["runner_sha256"]},
+      {"name":"runtime","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json","pointer":["runtime_sha256"]},
+      {"name":"elf","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json","pointer":["elf_sha256"]},
+      {"name":"native_scope","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json","pointer":["scope"]}
+    ]
+  },
+  {
+    "id": "E-PLAYBACK-JPEG-TRANSACTION-INSTALLED-150",
+    "claim": "The six-hook owned source/mode/JPEG package installs ({{install}}), traverses menu/back ({{trajectory}}) and rolls back ({{unload_check}}): {{restored}} old words restored, {{publications}} publications in a {{allocation}}-byte retained allocation. Nominal PLAY completes {{jobs}} jobs with independently byte-equal stock source spans, decoded buffers and final PNG ({{source_output_png_equal}}, PNG {{png}}); both released 528-byte driver snapshots are equal. Preview source {{preview_source}} bytes produces {{preview_output}} bytes; full source {{full_source}} bytes produces {{full_output}} bytes. Raw released-request differences remain offsets {{preview_offsets}}/{{full_offsets}}, timer handles stock {{preview_stock_timer}}/{{full_stock_timer}} versus owned {{preview_owned_timer}}/{{full_owned_timer}}. Independent-reference pixel differences remain {{preview_reference_diff}}/{{full_reference_diff}} bytes. Runtime before/after differences={{runtime_diff}}, uploaded/observed differences={{scalar_diff}} declared completed ABI7 rendezvous/mailbox scalar bytes, publication differences={{publication_diff}}. The protected watch records source/acquire/IRQ/release/restart fetches {{source_fetches}}/{{acquire_fetches}}/{{irq_fetches}}/{{release_fetches}}/{{restart_fetches}}, original-body fetches={{original_fetches}} and protected writes={{protected_writes}}. Observer exit {{observer_exit}} is not a passed run-output receipt: the original wrapper exits {{wrapper_exit}}, outcome {{wrapper_outcome}}, reason {{wrapper_reason}}.",
+    "scope": "One installed checkpoint and retained nominal two-job PLAY observation on emulated X-M1 1.50. The source/decoded/PNG and 528-byte driver comparisons use independent stock and owned snapshots. Runtime {{runtime}}, ELF {{elf}}; only the {{allocation}}-byte allocation and its publications are covered, not all RAM. Historical integrated-preparation pair={{integrated_pair}}, pre-press frame stability={{frame_stability}}, whole-playback acceptance={{whole_playback}}. Native actual-caller controls are E-PLAYBACK-JPEG-TRANSACTION-NATIVE-150. The older stock source/layout/tail and installed-source provenance remains E-FUJIMOD-XM1-PLAY-JPEG-150; the earlier 28-pair and 123-execution preparation scopes remain E-XM1-PLAYBACK-PREPARATION-PAIR-NATIVE-150.",
+    "notes": "Nominal PLAY does not execute restart command4 or establish device status17/24 laws. Image-source and decode/output ownership is independent of UsbController disconnect signaling and natural application-mode ownership. Independent-reference pixel disagreements remain counterexamples, not a fitted tolerance. No broad diagnostic, physical-pixel, whole-playback, capture continuation, retirement or unload acceptance. The separate menu/back rollback retains allocation until power-off.",
+    "artifacts": [
+      "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-transaction/owned-play/result.json",
+      "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-transaction/stock-play/result.json",
+      "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/run.json",
+      "private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/relinked/ram-push-manifest.json"
+    ],
+    "facts": [
+      {"name":"firmware_sha256","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json","pointer":["emulator_start","inputs","installed_dat"]},
+      {"name":"install","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json","pointer":["checks","install"]},
+      {"name":"trajectory","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json","pointer":["checks","trajectory"]},
+      {"name":"unload_check","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json","pointer":["checks","unload"]},
+      {"name":"restored","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json","pointer":["mailbox","rollback","restored"]},
+      {"name":"publications","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json","pointer":["runtime","publications"]},
+      {"name":"allocation","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json","pointer":["allocation","bytes"]},
+      {"name":"jobs","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs"],"operation":"length"},
+      {"name":"source_output_png_equal","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["stock_owned_source_output_and_final_png_cmp_equal"]},
+      {"name":"png","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["final_png_sha256"]},
+      {"name":"preview_source","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","0","source_bytes"]},
+      {"name":"preview_output","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","0","output_bytes"]},
+      {"name":"full_source","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","1","source_bytes"]},
+      {"name":"full_output","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","1","output_bytes"]},
+      {"name":"preview_offsets","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","0","stock_owned_request_different_offsets"]},
+      {"name":"full_offsets","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","1","stock_owned_request_different_offsets"]},
+      {"name":"preview_stock_timer","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","0","stock_timer_handle"]},
+      {"name":"full_stock_timer","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","1","stock_timer_handle"]},
+      {"name":"preview_owned_timer","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","0","owned_timer_handle"]},
+      {"name":"full_owned_timer","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","1","owned_timer_handle"]},
+      {"name":"preview_reference_diff","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","0","independent_reference_different_bytes"]},
+      {"name":"full_reference_diff","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","1","independent_reference_different_bytes"]},
+      {"name":"runtime_diff","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["runtime","before_after_different_bytes"]},
+      {"name":"scalar_diff","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["runtime","before_uploaded_different_bytes"]},
+      {"name":"publication_diff","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["runtime","publication_different_bytes"]},
+      {"name":"source_fetches","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["watch","source_entry_fetches"]},
+      {"name":"acquire_fetches","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["watch","jpeg_acquire_fetches"]},
+      {"name":"irq_fetches","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["watch","jpeg_irq_fetches"]},
+      {"name":"release_fetches","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["watch","jpeg_release_fetches"]},
+      {"name":"restart_fetches","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["watch","jpeg_restart_fetches"]},
+      {"name":"original_fetches","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["watch","original_body_fetches"]},
+      {"name":"protected_writes","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["watch","protected_writes"]},
+      {"name":"observer_exit","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["original_consumer_exit_status"]},
+      {"name":"wrapper_exit","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["original_wrapper_exit_status"]},
+      {"name":"wrapper_outcome","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["original_run_outcome"]},
+      {"name":"wrapper_reason","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["original_run_reason"]},
+      {"name":"runtime","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["runtime","uploaded_sha256"]},
+      {"name":"elf","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["runtime","elf_sha256"]},
+      {"name":"integrated_pair","path":"private-data/scratch/PlaybackMediaClosure/inputs/jpeg-transaction/owned-play/result.json","pointer":["owned_playback","integrated_pair"]},
+      {"name":"frame_stability","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["pre_press_frame_stability_context"]},
+      {"name":"whole_playback","path":"private-data/scratch/PlaybackMediaClosure/inputs/jpeg-transaction/owned-play/result.json","pointer":["owned_playback","whole_playback_acceptance"]}
     ]
   }
 ]
