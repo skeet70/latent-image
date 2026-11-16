@@ -6,6 +6,8 @@ module Emulation.PlaybackOwned
   , originalBodies, checkOriginalBodies
   , Witness, sourceObserved, modeObserved, witness, witnessValue
   , QualificationScope (..), requiredObservations, qualificationObserved, qualificationScope, qualificationScopeText
+  , QualificationEvidence, qualificationEvidence, preparationWitness, playWitness
+  , requiredEpochObservations, qualificationEpochsObserved, qualificationEvidenceValue
   , DeviceOwnership (..), deviceOwnership, deviceServices
   ) where
 
@@ -115,8 +117,11 @@ parsePackage manifestBytes metadataBytes runtime elfBytes = do
   let runtimeDigest = digest runtime
   ensure (field "runtime_sha256" manifest == Right (digestValue runtimeDigest) && field "runtime_sha256" metadata == Right (digestValue runtimeDigest)) "runtime digest differs"
   hooks <- field "hooks" metadata >>= array
-  let entries = if length hooks == length C.preparationEntries then C.preparationEntries else C.playbackEntries
-  ensure (length hooks == length entries) "owned playback requires the preparation pair or the composed JPEG transaction"
+  entries <- case length hooks of
+    2 -> pure C.preparationEntries
+    6 -> pure C.transactionEntries
+    8 -> pure C.playbackEntries
+    _ -> Left "owned playback requires exactly the preparation pair, JPEG transaction or JPEG consumers"
   bindings <- forM entries $ \entry -> do
     let (site, end, name, sourceDigest) = contract entry
     hook <- case [h | h <- hooks, at "address" h == Right (Address site)] of
@@ -182,7 +187,7 @@ parsePackage manifestBytes metadataBytes runtime elfBytes = do
         E.Undefined -> False) "JPEG device symbol differs from selected source/owned family"
       _ -> Left "duplicate JPEG device export"
   family <- if null present then pure RetainedDevice else do
-    ensure (entries == C.playbackEntries) "owned JPEG device requires the composed transaction"
+    ensure (C.PlaybackJpegAcquire `elem` entries) "owned JPEG device requires the composed transaction"
     definitions <- forM C.jpegDeviceServices $ \service -> do
       symbol <- case deviceDefinitions service of
         [s] | E.symbolKind s == E.FunctionSymbol -> pure s
@@ -347,23 +352,56 @@ hasJpeg (Package _ _ _ _ bindings _ _ _ _) = any (\(Binding entry _ _ _) -> entr
 
 requiredObservations :: Package -> [(T.Text, Witness -> Bool)]
 requiredObservations package
-  | hasJpeg package =
+  | qualificationScope package == JpegConsumers =
+      [ ("owned-playback-jpeg-complete-first", entryObserved C.PlaybackJpegCompleteFirst) ]
+      ++ transactionObservations
+  | hasJpeg package = transactionObservations
+  | otherwise = [("owned-playback-source-entry", sourceObserved), ("owned-playback-mode-entry", modeObserved)]
+  where
+    transactionObservations =
       [ ("owned-playback-jpeg-acquire", entryObserved C.PlaybackJpegAcquire)
       , ("owned-playback-jpeg-interrupt", entryObserved C.PlaybackJpegInterrupt)
       , ("owned-playback-jpeg-release", entryObserved C.PlaybackJpegRelease) ]
-  | otherwise = [("owned-playback-source-entry", sourceObserved), ("owned-playback-mode-entry", modeObserved)]
 
 qualificationObserved :: Package -> Witness -> Bool
-qualificationObserved package value = all (\(_, predicate) -> predicate value) (requiredObservations package)
+qualificationObserved package value = qualificationScope package /= JpegConsumers
+  && all (\(_, predicate) -> predicate value) (requiredObservations package)
 
-data QualificationScope = PreparationPair | JpegTransaction deriving (Eq, Show)
+data QualificationScope = PreparationPair | JpegTransaction | JpegConsumers deriving (Eq, Show)
 
 qualificationScope :: Package -> QualificationScope
-qualificationScope package = if hasJpeg package then JpegTransaction else PreparationPair
+qualificationScope (Package _ _ _ _ bindings _ _ _ _)
+  | any (\(Binding entry _ _ _) -> entry == C.PlaybackJpegBuildRequest) bindings = JpegConsumers
+  | any (\(Binding entry _ _ _) -> entry == C.PlaybackJpegAcquire) bindings = JpegTransaction
+  | otherwise = PreparationPair
 
 qualificationScopeText :: QualificationScope -> T.Text
 qualificationScopeText PreparationPair = "preparation-pair"
 qualificationScopeText JpegTransaction = "jpeg-transaction"
+qualificationScopeText JpegConsumers = "jpeg-consumers"
+
+data QualificationEvidence = QualificationEvidence Witness Witness deriving (Eq, Show)
+
+qualificationEvidence :: Witness -> Witness -> QualificationEvidence
+qualificationEvidence = QualificationEvidence
+
+preparationWitness, playWitness :: QualificationEvidence -> Witness
+preparationWitness (QualificationEvidence prefix _) = prefix
+playWitness (QualificationEvidence _ play) = play
+
+requiredEpochObservations :: Package -> [(T.Text, QualificationEvidence -> Bool)]
+requiredEpochObservations package =
+  [ (name, predicate . playWitness) | (name, predicate) <- requiredObservations package ]
+  ++ [ ("owned-playback-preparation-jpeg-build-request", entryObserved C.PlaybackJpegBuildRequest . preparationWitness)
+     | qualificationScope package == JpegConsumers ]
+
+qualificationEpochsObserved :: Package -> QualificationEvidence -> Bool
+qualificationEpochsObserved package value = all (\(_, predicate) -> predicate value) (requiredEpochObservations package)
+
+qualificationEvidenceValue :: QualificationEvidence -> Value
+qualificationEvidenceValue value = object
+  [ "preparation" .= witnessValue (preparationWitness value)
+  , "play" .= witnessValue (playWitness value) ]
 
 data DeviceOwnership = RetainedJpegDevice | OwnedJpegDevice deriving (Eq, Show)
 
@@ -411,3 +449,7 @@ witnessValue value@(Witness entries) = object $
       , "restart_observed" .= entryObserved C.PlaybackJpegRestart value
       , "restart_in_actual_play_claim" .= False ]
       | C.PlaybackJpegAcquire `elem` map fst entries]
+  ++ ["jpeg_consumers" .= object
+      [ "build_request_observed" .= entryObserved C.PlaybackJpegBuildRequest value
+      , "complete_first_observed" .= entryObserved C.PlaybackJpegCompleteFirst value ]
+      | C.PlaybackJpegBuildRequest `elem` map fst entries]
