@@ -487,15 +487,16 @@ executeBuilder runner output package elf base@(Address baseWord) runtime publica
         ++ [service 0x64eb20 [(R0,0x76123456)] [] []|attachment selected==Attached]
         ++ [service 0x65a424 [(R0,0x1e123456)] [] [],service 0x724c00 [(R0,9)] [] []]
       originalBuilder=B.take 236(B.drop (0xd98904-0xbf1a00) image5)
+      noStore=assemble[0xe1a00000]
       mutation selectedDefect=case selectedDefect of
-        MissingMode->BuilderMutation (SourceOffset 0x40) (assemble[0xe320f000])
-        MissingPacking->BuilderMutation (SourceOffset 0x84) (assemble[0xe320f000])
-        MissingWidth->BuilderMutation (SourceOffset 0x9c) (assemble[0xe320f000])
-        MissingHeight->BuilderMutation (SourceOffset 0x94) (assemble[0xe320f000])
-        MissingSource->BuilderMutation (SourceOffset 0xa4) (assemble[0xe320f000])
-        MissingCount->BuilderMutation (SourceOffset 0xac) (assemble[0xe320f000])
-        MissingDestination->BuilderMutation (SourceOffset 0xb4) (assemble[0xe320f000])
-        MissingClear->BuilderMutation (SourceOffset 0xc0) (assemble[0xe320f000])
+        MissingMode->BuilderMutation (SourceOffset 0x40) noStore
+        MissingPacking->BuilderMutation (SourceOffset 0x84) noStore
+        MissingWidth->BuilderMutation (SourceOffset 0x9c) noStore
+        MissingHeight->BuilderMutation (SourceOffset 0x94) noStore
+        MissingSource->BuilderMutation (SourceOffset 0xa4) noStore
+        MissingCount->BuilderMutation (SourceOffset 0xac) noStore
+        MissingDestination->BuilderMutation (SourceOffset 0xb4) noStore
+        MissingClear->BuilderMutation (SourceOffset 0xc0) noStore
         MissingCallback->BuilderMutation (SourceOffset 0xd8) (assemble[0xe3a02000])
       defectBytes=case defect of Nothing->B.empty;Just selectedDefect->let BuilderMutation (SourceOffset offset) value=mutation selectedDefect in replace offset value originalBuilder <> assemble(call(Address 0xd9882c)++[0xe8bd8800])
       publish block@(Block kind' address@(Address start) permissions bytes extents)
