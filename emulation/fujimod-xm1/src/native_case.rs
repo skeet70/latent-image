@@ -184,6 +184,8 @@ const MSR_CPSR_C: u32 = 0x0121_f000;
 const MSR_CPSR_FC: u32 = 0x0129_f000;
 /// `mov pc, lr` without cond.
 const MOV_PC_LR: u32 = 0x01a0_f00e;
+/// `ldr pc, [pc, #-4]`.
+const LDR_PC_ENTRY_LITERAL: u32 = 0xe51f_f004;
 /// `mrc p14, 0, Rt, c2, c0, 0` without cond and Rt.
 const MRC_P14_IDENTITY: u32 = 0x0e12_0e10;
 const NOP: u32 = 0xe320_f000;
@@ -2321,9 +2323,27 @@ impl State {
                 let link = arm_target(cpu, 14)?;
                 self.return_to(case, link)
             }
+            Control::UntrackedPcWrite if case.profile.kernel().is_none() && word == LDR_PC_ENTRY_LITERAL => {
+                self.literal_entry(cpu, case, Address(pc))
+            }
             Control::UntrackedPcWrite => self.load_stop(cpu, case, pc, word),
             Control::None => Ok(()),
         }
+    }
+
+    fn literal_entry(&mut self, cpu: &dyn Cpu, case: &Case, pc: Address) -> Result<(), Step> {
+        let entry = case.functions[self.shadow.state().current];
+        if entry.base != pc.0 || entry.bytes < 8 {
+            return Err(Step::Stop(Status::UnsupportedInstruction));
+        }
+        let target = Address(read_word(cpu, u64::from(pc.0) + 4)?);
+        if target.0 == 0 || target.0 % 4 != 0 {
+            return Err(Step::Stop(Status::UnsupportedInstruction));
+        }
+        if !case.functions.iter().any(|function| function.base == target.0) {
+            return Err(Step::Stop(Status::UnknownCall));
+        }
+        self.tail(cpu, case, target.0)
     }
 
     /// `ldr pc, [Rn, #+/-imm12]`: the declared stop address, or the resume address of
