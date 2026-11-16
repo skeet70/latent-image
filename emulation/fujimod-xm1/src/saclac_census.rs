@@ -1663,7 +1663,7 @@ fn drive() -> Result<(), String> {
     let mut sites: BTreeMap<u32, String> = plan.points.iter().map(|point| (point.address, SITE_LABEL.to_owned())).collect();
     if let Some(dispatch) = &plan.dispatch { sites.insert(dispatch.trace, SITE_LABEL.to_owned()); }
     if let Some(interface) = &plan.interface {
-        sites.extend(interface.sites(&machine)?.into_iter().map(|address| (address, SITE_LABEL.to_owned())));
+        sites.extend(interface.sites().into_iter().map(|address| (address, SITE_LABEL.to_owned())));
     }
     if let Some(diagnostic) = &diagnostic {
         for site in &diagnostic.plan.sites {

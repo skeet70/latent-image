@@ -115,15 +115,12 @@ impl Declaration {
 }
 
 impl Plan {
-    pub fn sites(&self, machine: &Machine) -> Result<Vec<u32>, String> {
+    pub fn sites(&self) -> Vec<u32> {
         let mut sites = Vec::with_capacity(self.entries.len() + 2);
         sites.push(self.post);
         sites.extend(self.entries.iter().map(|entry| entry.address));
-        if let Some((address, expected)) = self.owned_post {
-            let actual = read_u32(&bytes(machine, 0, address, 4)?, 0);
-            if actual == expected { sites.push(address); }
-        }
-        Ok(sites)
+        if let Some((address, _)) = self.owned_post { sites.push(address); }
+        sites
     }
 }
 
@@ -136,8 +133,8 @@ fn post_event(queue: u8, header: u32, payload: Vec<u8>) -> Option<Event> {
 }
 
 impl Plan {
-    fn is_owned_post(&self, address: u32) -> bool {
-        self.owned_post.is_some_and(|(owned, _)| owned == address)
+    fn owned_post_instruction(&self, address: u32) -> Option<u32> {
+        self.owned_post.and_then(|(owned, instruction)| (owned == address).then_some(instruction))
     }
 }
 
@@ -228,7 +225,8 @@ impl Stream {
             let queue = u8::try_from(register("r0")?).map_err(|_| "interface queue exceeds byte")?;
             let payload = bytes(machine, stop.core, read_u32(&descriptor, 8), read_u32(&descriptor, 4) as usize)?;
             post_event(queue, read_u32(&descriptor, 0), payload)
-        } else if plan.is_owned_post(stop.address) {
+        } else if let Some(expected) = plan.owned_post_instruction(stop.address) {
+            if read_u32(&bytes(machine, stop.core, stop.address, 4)?, 0) != expected { return Ok(()); }
             let queue = u8::try_from(register("r1")?).map_err(|_| "owned interface queue exceeds byte")?;
             let sp = parse_hex(&stop.sp)?;
             let stack = bytes(machine, stop.core, sp, 8)?;
@@ -340,7 +338,15 @@ mod tests {
     }
 
     #[test]
-    fn owned_post_preserves_peer_and_queue43_observations() {
+    fn owned_post_is_armed_before_update_and_preserves_boundary_observations() {
+        let owned = Declaration {
+            post: "0x1000".into(),
+            owned_post: Some(OwnedPost { address: "0x3000".into(), instruction: "0xe92d4ff0".into() }),
+            entries: Vec::new(),
+            shared: Vec::new(),
+            callers: Vec::new(),
+        }.validate().unwrap();
+        assert_eq!(owned.sites(), vec![0x1000, 0x3000]);
         let payload = vec![1, 2, 3];
         assert_eq!(
             post_event(47, 0x2f2b3f26, payload.clone()),
