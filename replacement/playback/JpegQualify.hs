@@ -399,6 +399,8 @@ data RecordMode = Mode7 | Mode8 | Mode5 | ModeNegative deriving (Eq, Show)
 data RecordPacking = PackingZero | PackingOne | PackingOther deriving (Eq, Show)
 data BuilderCase = BuilderCase CaseName BuilderCaller Scenario RecordMode RecordPacking
 data BuilderDefect = MissingMode | MissingPacking | MissingWidth | MissingHeight | MissingSource | MissingCount | MissingDestination | MissingClear | MissingCallback deriving (Eq, Show)
+newtype SourceOffset = SourceOffset Int
+data BuilderMutation = BuilderMutation SourceOffset B.ByteString
 
 builderMode7Case, builderMode8Case, builderSetupFailureCase :: BuilderCase
 builderMode7Case = BuilderCase (CaseName "builder-mode7") DirectBuilder preview Mode7 PackingZero
@@ -473,10 +475,16 @@ executeBuilder runner output package elf base@(Address baseWord) runtime publica
         ++ [service 0x65a424 [(R0,0x1e123456)] [] [],service 0x724c00 [(R0,9)] [] []]
       originalBuilder=B.take 236(B.drop (0xd98904-0xbf1a00) image5)
       mutation selectedDefect=case selectedDefect of
-        MissingMode->(0x40,assemble[0xe320f000]);MissingPacking->(0x84,assemble[0xe320f000]);MissingWidth->(0x9c,assemble[0xe320f000])
-        MissingHeight->(0x94,assemble[0xe320f000]);MissingSource->(0xa4,assemble[0xe320f000]);MissingCount->(0xac,assemble[0xe320f000])
-        MissingDestination->(0xb4,assemble[0xe320f000]);MissingClear->(0xc0,assemble[0xe320f000]);MissingCallback->(0xd8,assemble[0xe3a02000])
-      defectBytes=case defect of Nothing->B.empty;Just selectedDefect->let(offset,value)=mutation selectedDefect in replace offset value originalBuilder <> assemble(call(Address 0xd9882c)++[0xe8bd8800])
+        MissingMode->BuilderMutation (SourceOffset 0x40) (assemble[0xe320f000])
+        MissingPacking->BuilderMutation (SourceOffset 0x84) (assemble[0xe320f000])
+        MissingWidth->BuilderMutation (SourceOffset 0x9c) (assemble[0xe320f000])
+        MissingHeight->BuilderMutation (SourceOffset 0x94) (assemble[0xe320f000])
+        MissingSource->BuilderMutation (SourceOffset 0xa4) (assemble[0xe320f000])
+        MissingCount->BuilderMutation (SourceOffset 0xac) (assemble[0xe320f000])
+        MissingDestination->BuilderMutation (SourceOffset 0xb4) (assemble[0xe320f000])
+        MissingClear->BuilderMutation (SourceOffset 0xc0) (assemble[0xe320f000])
+        MissingCallback->BuilderMutation (SourceOffset 0xd8) (assemble[0xe3a02000])
+      defectBytes=case defect of Nothing->B.empty;Just selectedDefect->let BuilderMutation (SourceOffset offset) value=mutation selectedDefect in replace offset value originalBuilder <> assemble(call(Address 0xd9882c)++[0xe8bd8800])
       publish block@(Block kind' address@(Address start) permissions bytes extents)
         | kind'==StockDriver && role/=Original = Block kind' address permissions (foldr (\(Address location,value) original->replace(fromIntegral(location-start)) value original) bytes
             [(location,if location==Address 0xd98904 && defect/=Nothing then assemble(load Ip 0x110300++[0xe12fff1c]) else value)
@@ -504,7 +512,7 @@ executeBuilder runner output package elf base@(Address baseWord) runtime publica
     ,"runtime_sha256" .= hashText(hash runtime),"builder_source_sha256" .= hashText(hash(B.take 244(B.drop(0xd98904-0xbf1a00)image5)))
     ,"builder_control" .= case defect of
         Nothing -> Null
-        Just selectedDefect -> let (offset,_) = mutation selectedDefect in object
+        Just selectedDefect -> let BuilderMutation (SourceOffset offset) _ = mutation selectedDefect in object
           ["definition" .= ("relocated original builder with one source instruction omitted or replaced" :: String)
           ,"entry" .= av(Address 0x110300),"source_instruction_offset" .= offset
           ,"executed_bytes" .= B.length defectBytes,"executed_sha256" .= hashText(hash defectBytes)]
