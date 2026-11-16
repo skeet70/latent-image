@@ -21,7 +21,7 @@ import qualified FujiAF.Broker as P
 import qualified FujiAF.Probe as Probe
 import qualified FujiAF.Read as R
 import FujiAF.Transport (usbTransfer)
-import Numeric (showHex)
+import Numeric (readHex, showHex)
 import System.Directory (canonicalizePath, createDirectory, doesPathExist, makeAbsolute)
 import System.Environment (getArgs, getExecutablePath)
 import System.Exit (ExitCode (..), exitWith)
@@ -79,7 +79,7 @@ checkGuest path bridge package = do
   required (PO.checkOriginalBodies package bodies)
   pure actual
 
-data Site = UsbEdge | UsbApplicationArm | ApplicationUsb | RequestUsbMode | UiTransition | Machine5Action5 | Packet142 | RetainedAction2 | RetainedAction3 deriving (Enum, Bounded)
+data Site = UsbEdge | UsbApplicationArm | ApplicationUsb | RequestUsbMode | UiTransition | Machine5Action5 | Packet142 | RetainedAction2 | RetainedAction3 | RetainedAction2Returned | RetainedAction3Returned deriving (Eq, Enum, Bounded)
 
 site :: Site -> (Word32, T.Text)
 site UsbEdge = (0xecf8b8,"usb-edge")
@@ -91,6 +91,15 @@ site Machine5Action5 = (0xc256a8,"machine5-action5")
 site Packet142 = (0xdb3d28,"packet-0142")
 site RetainedAction2 = (0x11ea434,"retained-action2")
 site RetainedAction3 = (0x11ea458,"retained-action3")
+site RetainedAction2Returned = (0x11ea454,"retained-action2-returned")
+site RetainedAction3Returned = (0x11ea478,"retained-action3-returned")
+
+siteBytes :: Site -> Int
+siteBytes RetainedAction2 = 36
+siteBytes RetainedAction3 = 36
+siteBytes RetainedAction2Returned = 4
+siteBytes RetainedAction3Returned = 4
+siteBytes _ = 16
 
 sites :: [(Word32,T.Text)]
 sites = map site [minBound .. maxBound]
@@ -104,8 +113,10 @@ sourceIdentity output bridge = do
   require (sourceSha == Digest "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a") "stock image 5 identity differs"
   require (plainSha == Digest "ee211bdaad39005b4f72e3443a76ca194905381a967cab787d6a4ef14e2d889d") "stock plain image identity differs"
   comparisons <- withBinaryFile path ReadMode $ \image5 -> withBinaryFile plainPath ReadMode $ \plain ->
-    forM sites $ \(address,label) -> do
-      let (source,base,count) = if address >= 0x1100000 then (plain,0x1100000,36) else (image5,0xbf1a00,16)
+    forM [minBound .. maxBound] $ \kind -> do
+      let (address,label) = site kind
+          (source,base) = if address >= 0x1100000 then (plain,0x1100000) else (image5,0xbf1a00)
+          count = siteBytes kind
       hSeek source AbsoluteSeek (fromIntegral (address - base))
       expected <- B.hGet source count
       actual <- readMemory bridge address count
@@ -156,7 +167,11 @@ observe :: FilePath -> Bridge -> PO.Package -> IO Value
 observe output bridge package = do
   sourceIdentity output bridge
   before <- checkGuest (output </> "installed-artifacts-before.json") bridge package
-  void (call bridge (command "trace-sites" ["sites" .= object [K.fromString ("0x" ++ showHex address "") .= label | (address,label) <- sites]]))
+  void (call bridge (command "trace-sites"
+    [ "sites" .= object [K.fromString ("0x" ++ showHex address "") .= label | (address,label) <- sites]
+    , "reads" .= object [K.fromString ("0x" ++ showHex address "") .=
+        ([[0x14ea5ac,4],[0x14ea6e4,0x40],[0x14ea500,4]] :: [[Word32]])
+        | kind <- [RetainedAction2,RetainedAction3,RetainedAction2Returned,RetainedAction3Returned], let (address,_) = site kind] ]))
   begun <- call bridge (PO.watchRequest package)
   required (PO.validateWatchBegin package (Object begun))
   json (output </> "watch-begin.json") (Object begun)
@@ -189,10 +204,30 @@ observe output bridge package = do
           Just (Array rows) -> toList rows
           _ -> []
         _ -> []
-      hit label = any (\row -> case row of Object fields -> textAt "label" fields == Just label; _ -> False) hits
-      reached = PO.modeObserved witnessed && hit "machine5-action5" && (hit "retained-action2" || hit "retained-action3")
+      hit kind = any (hasSite kind) hits
+      reached = PO.modeObserved witnessed && hit Machine5Action5 && hit Packet142
+        && any (\row -> primaryReturned RetainedAction2Returned row || primaryReturned RetainedAction3Returned row) hits
       runtime = case before of (address,bytes) : _ -> object ["start" .= address,"end_exclusive" .= (address + fromIntegral (B.length bytes)),"bytes" .= B.length bytes]; _ -> Null
   pure (object ["natural_mode_consumer_observed" .= reached,"owned_entry_witness" .= PO.witnessValue witnessed,"runtime_allocation" .= runtime,"runtime_and_publication_bytes_unchanged" .= (before == after),"integrated_jpeg_pair_acceptance" .= False,"whole_playback_acceptance" .= False])
+
+hasSite :: Site -> Value -> Bool
+hasSite kind (Object fields) = textAt "site" fields == Just (snd (site kind))
+hasSite _ _ = False
+
+primaryReturned :: Site -> Value -> Bool
+primaryReturned kind row@(Object fields)
+  | hasSite kind row
+  , Just (Array memory) <- KM.lookup "memory" fields
+  , [String cursorHex,String messageHex,String _] <- toList memory
+  , Right cursor <- decodeHex cursorHex
+  , Right message <- decodeHex messageHex
+  , B.length cursor == 4, B.length message == 0x40, B.take 2 message == B.pack [0x42,1]
+  , Just encoded <- objectAt "registers" fields >>= textAt "r0"
+  , Just digits <- T.stripPrefix "0x" encoded, T.length digits <= 8
+  , [(result,"")] <- (readHex (T.unpack digits) :: [(Word32,String)]) =
+      let actual = fromIntegral (B.index cursor 2) + 256 * fromIntegral (B.index cursor 3) :: Word32
+      in kind `elem` [RetainedAction2Returned,RetainedAction3Returned] && actual == (if result == 3 then 0 else 1)
+primaryReturned _ _ = False
 
 main :: IO ()
 main = do
