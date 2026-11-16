@@ -151,6 +151,7 @@ main = do
         "candidate_dat_sha256" .= identity candidate,"candidate_image4_sha256" .= identity expected,
         "body_sha256" .= identity body,"symbols_sha256" .= identity symbolBytes,"body_bytes" .= B.length body,
         "body_start" .= (imageBase+headerBytes),"bss" .= [bssStart,bssEnd],"entries" .= exports,
+        "irq_abi" .= object ["entry_sp_alignment" .= (4 :: Int),"rust_sp_alignment" .= (8 :: Int),"veneer_max_stack_bytes" .= (12 :: Int),"restores_original_sp_and_r4" .= True],
         "retired" .= [[low,high] | (low,high) <- retired],"publications" .= rowsValue (reservationPublications++rows),
         "producer_sha256" .= identity producer,"producer_symbols_sha256" .= identity producerSymbols,
         "qualification" .= ("host-staged-awaiting-producer-irq-consumer-execution" :: String)]))

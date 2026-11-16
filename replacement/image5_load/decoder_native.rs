@@ -61,13 +61,45 @@ fn retain_refusal(result: Result<(), Refusal>) {
     if result.is_err() { loop { core::hint::spin_loop(); } }
 }
 
-#[no_mangle]
-#[link_section = ".decoder.progress"]
-pub unsafe extern "C" fn xm1_decoder_progress() { retain_refusal(Decoder::new(Native).progress()); }
+// The retained IRQ dispatcher can enter with SP mod8 equal to4.
+core::arch::global_asm!(
+    ".syntax unified
+    .arm
+    .section .decoder.progress,\"ax\",%progbits
+    .p2align 2
+    .global xm1_decoder_progress
+    .type xm1_decoder_progress,%function
+    xm1_decoder_progress:
+        push {{r4,lr}}
+        mov r4,sp
+        bic sp,sp,#7
+        bl {progress}
+        mov sp,r4
+        pop {{r4,pc}}
+    .size xm1_decoder_progress,.-xm1_decoder_progress
+    .section .decoder.complete,\"ax\",%progbits
+    .p2align 2
+    .global xm1_decoder_complete
+    .type xm1_decoder_complete,%function
+    xm1_decoder_complete:
+        push {{r4,lr}}
+        mov r4,sp
+        bic sp,sp,#7
+        bl {complete}
+        mov sp,r4
+        pop {{r4,pc}}
+    .size xm1_decoder_complete,.-xm1_decoder_complete",
+    progress = sym progress_callback,
+    complete = sym complete_callback,
+);
 
-#[no_mangle]
-#[link_section = ".decoder.complete"]
-pub unsafe extern "C" fn xm1_decoder_complete() { retain_refusal(Decoder::new(Native).complete()); }
+extern "C" {
+    pub fn xm1_decoder_progress();
+    pub fn xm1_decoder_complete();
+}
+
+unsafe extern "C" fn progress_callback() { retain_refusal(Decoder::new(Native).progress()); }
+unsafe extern "C" fn complete_callback() { retain_refusal(Decoder::new(Native).complete()); }
 
 #[no_mangle]
 #[link_section = ".decoder.init"]

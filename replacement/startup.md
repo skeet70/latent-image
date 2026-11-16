@@ -156,7 +156,14 @@ Use the existing `build-first-stage` fixed-image variant and `stage-fixed-image`
 
 The existing `loader-continuations` runner accepts `--decoder-witness retained|owned --image5-artifact PRODUCER_STAGE`. Owned additionally takes `--decoder-artifact DECODER_STAGE`, containing `decoder-contract.json`, `decoder.bin` and `decoder.symbols`. Both use the usual `--run`, `--update`, `--boot-rom`, `--analysis` and fresh `--output` arguments. Run under `run-output exec` and the current main `emulator-slot`, with `XM1_EMULATOR_SLOTS=1`; acquire a full-system slot only after staging/building.
 
-This mode observes actual storage feeds, source98 attach/detach handles, LZ MMIO, CPU IRQ exceptions, resource48 waits/completion, flashloader publication, canonical image5/BSS readback and the image5/task1 consumer entries. Exception hooks do not isolate a core or synthesize completion. Canonical Method4, one natural producer session, retained device/RTOS services and finite observed callers are its bounds. Cancellation, malformed input, missing device completion, repeated sessions and concurrent engine clients are not accepted by this route.
+This mode observes actual storage feeds, source98 attach/detach handles, LZ MMIO, CPU IRQ exceptions, resource48 waits/completion, flashloader publication, canonical image5/BSS readback and the first image5 entry. Exception hooks do not isolate a core or synthesize completion. Canonical Method4, one natural producer session, retained device/RTOS services and finite observed callers are its bounds. Cancellation, malformed input, missing device completion, repeated sessions and concurrent engine clients are not accepted by this route.
+
+The retained IRQ dispatcher supplies word-aligned SP and can enter4 modulo8. Progress/final veneers preserve original SP/r4 and the return address, align before the Rust body and use at most12 bytes before that body. Service-return hooks are reused only for their identical purpose; each core/SP/LR invocation still records its own return.
+
+The exact dispatcher call is `CMP r0,#0; MOVNE lr,pc; MOVNE pc,r0` at `0x402d4..0x402dc`, returning at `0x402e0`. The current native CFI does not admit that manual-link transfer into a callback. Do not replace it with a BLX fixture and call that the actual caller, or widen native acceptance to make this comparison pass.
+
+`--decoder-irq-alignment progress-aligned-fixture|complete-aligned-fixture` selects a separate, explicitly synthetic full-system ABI control. From a fresh reset of the same staged image, it pads SP downward by4 before exactly one selected callback's actual `CMP/MOV` call sequence. It binds the original core/registers/frame word, checks the callback's LR, callee-saved registers and return SP, then restores the original SP before dispatcher continuation. The receipt records the pre-call padding and restoration. These controls do not qualify natural aligned-entry reachability; only the unmodified `natural` mode is firmware acceptance evidence.
+
 
 ## Startup-consumer witness
 
