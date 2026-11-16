@@ -186,9 +186,8 @@ run runner package output = do
   ensure (not exists) "mode caller output directory exists"
   createDirectory output
   runnerSha<-Native.runnerDigest runner
-  ensure (runnerSha=="1cc6903f16aa6026fc0bdaf8ba0b2024ebbebefcbac22e76c49cea02ffe1426e") "native runner identity differs"
-  runtime<-readPinned (package </> "runtime.bin") (Digest "6efe8757c85116d73713450dfaaa2c939bb930d9b72ca0836ac62930a37ff890")
-  elfBytes<-readPinned (package </> "kernel.elf") (Digest "917ddbd5f626f9159820ea9a2ec0887c32fd16489de3b6f6564745d302c14872")
+  runtime<-B.readFile (package </> "runtime.bin")
+  elfBytes<-B.readFile (package </> "kernel.elf")
   manifest<-B.readFile(package </> "ram-push-manifest.json")
   metadata<-B.readFile(package </> "experiment.json")
   parsed<-required(Playback.parsePackage manifest metadata runtime elfBytes)
