@@ -3578,6 +3578,43 @@ haskell_library(
 )
 
 haskell_library(
+    name = "bridge-client",
+    srcs = ["Emulation/BridgeClient.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":capture-stream-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:text",
+    ],
+)
+
+haskell_binary(
+    name = "playback-mode-observe",
+    srcs = ["PlaybackModeObserve.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":bridge-client",
+        ":capture-stream-lib",
+        ":emulator-usb",
+        ":playback-owned-lib",
+        "//broker:core",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:cryptohash-sha256",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:text",
+        "//transport:camera-core",
+    ],
+)
+
+haskell_library(
     name = "playback-decode-lib",
     srcs = ["Emulation/PlaybackDecode.hs"],
     src_strip_prefix = ".",
@@ -3669,6 +3706,7 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
     visibility = ["//visibility:public"],
     deps = [
+        ":bridge-client",
         ":capture-stream-lib",
         ":media-inspection-lib",
         ":playback-decode-lib",

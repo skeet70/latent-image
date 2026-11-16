@@ -11,6 +11,7 @@ import qualified Data.Text as T
 import Data.Word (Word32)
 import qualified Emulation.NativeCase as Native
 import Emulation.OwnedCase (assemble)
+import qualified Emulation.PlaybackOwned as Playback
 import Emulation.Sha256 (sha256, sha256Hex)
 import Numeric (showHex)
 import System.Directory (canonicalizePath, createDirectory, doesPathExist)
@@ -79,11 +80,8 @@ sourcePath = "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin"
 sourceRevision = "55436fc85c0560dd252b0410af6f2427fe198cd3"
 scope = "conditional actual stock UI machine 5 action 5, packet producer and queue-4 descriptor boundary; no modeled USB route, natural device-input path, installed mode acceptance or whole mode acceptance"
 
-sourceDigest, runtimeDigest, elfDigest, runnerDigest :: Digest
+sourceDigest :: Digest
 sourceDigest = Digest "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
-runtimeDigest = Digest "6efe8757c85116d73713450dfaaa2c939bb930d9b72ca0836ac62930a37ff890"
-elfDigest = Digest "917ddbd5f626f9159820ea9a2ec0887c32fd16489de3b6f6564745d302c14872"
-runnerDigest = Digest "1cc6903f16aa6026fc0bdaf8ba0b2024ebbebefcbac22e76c49cea02ffe1426e"
 
 stockBodies :: [(BlockId, Address, [Word32])]
 stockBodies =
@@ -220,10 +218,12 @@ run runner package output = do
   ensure (not exists) "mode producer output directory exists"
   createDirectory output
   runnerHash <- Digest <$> Native.runnerDigest runner
-  ensure (runnerHash == runnerDigest) "mode producer native runner identity mismatch"
   actualPackage <- canonicalizePath package
-  runtime <- readPinned (package </> "runtime.bin") runtimeDigest
-  elf <- readPinned (package </> "kernel.elf") elfDigest
+  runtime <- B.readFile (package </> "runtime.bin")
+  elf <- B.readFile (package </> "kernel.elf")
+  manifest <- B.readFile (package </> "ram-push-manifest.json")
+  metadata <- B.readFile (package </> "experiment.json")
+  _ <- either (ioError . userError) pure (Playback.parsePackage manifest metadata runtime elf)
   source <- readPinned sourcePath sourceDigest
   stock <- stockBlocks source
   reports <- forM [Accepted,Rejected,OmittedProducer] (execute runner output stock)
@@ -233,7 +233,8 @@ run runner package output = do
         ,"source" .= object ["path" .= sourcePath,"sha256" .= digestText (digest source)]
         ,"package" .= actualPackage,"runtime_sha256" .= digestText (digest runtime)
         ,"elf_sha256" .= digestText (digest elf),"runner_sha256" .= digestText runnerHash
-        ,"sdk" .= ("/nix/store/6g84apamlbqxf162nwy4964hf49rc91f-fujimod-xm1-0.1.0" :: String)
+        ,"runner" .= runner,"manifest_sha256" .= digestText (digest manifest)
+        ,"metadata_sha256" .= digestText (digest metadata)
         ,"executions" .= reports]
   json (output </> "result.json") result
   ensure accepted "conditional mode producer boundary failed; inspect retained native receipts"

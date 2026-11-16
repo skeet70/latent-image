@@ -5,10 +5,10 @@ module Main (main) where
 
 import Control.Applicative ((<|>))
 import Control.DeepSeq (NFData (..), force)
-import Control.Exception (Exception, IOException, SomeException, displayException, evaluate, throwIO, try)
+import Control.Exception (IOException, SomeException, displayException, evaluate, try)
 import Control.Monad (forM, forM_, unless, when)
 import qualified Crypto.Hash.SHA256 as SHA256
-import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', encode, fromJSON, object, toJSON, (.=))
+import Data.Aeson (FromJSON (..), Value (..), encode, fromJSON, object, toJSON, (.=))
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
@@ -24,6 +24,7 @@ import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Word (Word32, Word64, Word8)
+import Emulation.BridgeClient (Bridge (..), BridgeStopped (..), Fields, call, command, decodeHex, event, harness, num, objectAt, readMemory, require, send, textAt)
 import qualified Emulation.CaptureStream as CS
 import qualified Emulation.MediaInspection as MI
 import qualified Emulation.PlaybackDecode as PD
@@ -34,7 +35,7 @@ import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMis
 import System.Environment (getArgs, getEnvironment)
 import System.Exit (ExitCode (..), exitWith)
 import System.FilePath (takeDirectory, takeFileName, splitDirectories, (</>))
-import System.IO (Handle, IOMode (..), SeekMode (..), hClose, hFlush, hPutStrLn, hSeek, openBinaryFile, stderr, withBinaryFile)
+import System.IO (IOMode (..), SeekMode (..), hClose, hPutStrLn, hSeek, openBinaryFile, stderr, withBinaryFile)
 import System.Posix.Files (fileID, fileSize, getSymbolicLinkStatus, isRegularFile, modificationTimeHiRes)
 import System.Process (CreateProcess (..), StdStream (..), callProcess, createProcess, proc, waitForProcess)
 
@@ -170,17 +171,6 @@ cardBytes = 4294967296
 windowDial :: T.Text
 windowDial = "P"
 
--- Errors ------------------------------------------------------------------------------------
-
--- | A failed bridge command or closed transport.
-newtype BridgeStopped = BridgeStopped String deriving (Show)
-instance Exception BridgeStopped
-
-harness :: String -> IO a
-harness = ioError . userError
-
-require :: Bool -> String -> IO ()
-require ok message = unless ok (harness message)
 
 -- Hex, digests and little-endian fields ---------------------------------------------------
 
@@ -199,22 +189,6 @@ fileDigest path = Digest . hexBytes . SHA256.hashlazy <$> BL.readFile path
 digestText :: Digest -> String
 digestText (Digest d) = d
 
-decodeHex :: T.Text -> Either String B.ByteString
-decodeHex text
-  | odd (B.length raw) = Left "odd hex length"
-  | B.length decoded /= half = Left "invalid lowercase hex"
-  | otherwise = Right decoded
-  where
-    raw = TE.encodeUtf8 text
-    half = B.length raw `div` 2
-    decoded = fst (B.unfoldrN half step 0)
-    nibble w | w >= 48 && w <= 57 = Just (w - 48)
-             | w >= 97 && w <= 102 = Just (w - 87)
-             | otherwise = Nothing
-    step i = do
-      high <- nibble (B.index raw i)
-      low <- nibble (B.index raw (i + 1))
-      Just (high `shiftL` 4 .|. low, i + 2)
 
 le :: B.ByteString -> Int -> Int -> Word64
 le bytes offset width = foldr (\i acc -> acc `shiftL` 8 .|. fromIntegral (B.index bytes (offset + i))) 0 [0 .. width - 1]
@@ -227,71 +201,6 @@ parseHex32 text = case T.unpack text of
   '0' : 'x' : digits | [(value, "")] <- readHex digits -> Just value
   _ -> Nothing
 
--- JSON ----------------------------------------------------------------------------------------
-
-type Fields = KM.KeyMap Value
-
-num :: FromJSON a => K.Key -> Fields -> Maybe a
-num field fields = KM.lookup field fields >>= \value -> case fromJSON value of
-  A.Success x -> Just x
-  A.Error _ -> Nothing
-
-textAt :: K.Key -> Fields -> Maybe T.Text
-textAt field fields = case KM.lookup field fields of
-  Just (String t) -> Just t
-  _ -> Nothing
-
-objectAt :: K.Key -> Fields -> Maybe Fields
-objectAt field fields = case KM.lookup field fields of
-  Just (Object o) -> Just o
-  _ -> Nothing
-
-asObject :: Value -> Either String Fields
-asObject (Object o) = Right o
-asObject _ = Left "bridge line is not an object"
-
--- Bridge client -------------------------------------------------------------------------------
-
-data Bridge = Bridge
-  { bridgeIn :: Handle
-  , bridgeReader :: CS.BoundedReader
-  , bridgeRequests :: Handle
-  , bridgeStdout :: Handle
-  }
-
-send :: Bridge -> Value -> IO ()
-send bridge value = do
-  let line = BL.toStrict (encode value) <> "\n"
-  B.hPut (bridgeRequests bridge) line >> hFlush (bridgeRequests bridge)
-  B.hPut (bridgeIn bridge) line >> hFlush (bridgeIn bridge)
-
-receive :: Bridge -> IO B.ByteString
-receive bridge = do
-  line <- CS.readBoundedLine (bridgeReader bridge)
-  B.hPut (bridgeStdout bridge) (line <> "\n") >> hFlush (bridgeStdout bridge)
-  pure line
-
--- | One request and its one reply; ok:false or a closed pipe throws 'BridgeStopped'.
-call :: Bridge -> Value -> IO Fields
-call bridge value = do
-  exchanged <- try (send bridge value >> receive bridge)
-  line <- either (\e -> throwIO (BridgeStopped ("bridge pipe: " ++ displayException (e :: IOException)))) pure exchanged
-  fields <- either (\e -> harness ("invalid bridge reply: " ++ e)) pure (eitherDecodeStrict' line >>= asObject)
-  case KM.lookup "ok" fields of
-    Just (Bool True) -> pure (KM.delete "ok" fields)
-    Just (Bool False) -> throwIO (BridgeStopped (maybe "bridge error without message" T.unpack (textAt "message" fields)))
-    _ -> harness "bridge reply lacks boolean ok"
-
-command :: T.Text -> [(K.Key, Value)] -> Value
-command name rest = Object (KM.fromList (("command", String name) : rest))
-
-event :: Bridge -> T.Text -> IO Fields
-event bridge name = do
-  line <- receive bridge
-  fields <- either (\e -> harness ("invalid bridge event: " ++ e)) pure (eitherDecodeStrict' line >>= asObject)
-  require (KM.lookup "ok" fields == Just (Bool True) && textAt "event" fields == Just name)
-    ("bridge did not send " ++ T.unpack name ++ ": " ++ C.unpack line)
-  pure fields
 
 -- Journal -------------------------------------------------------------------------------------
 
@@ -1246,13 +1155,6 @@ ledgerValue ledger = object
 physicalAddress :: Word32 -> Word32
 physicalAddress = PD.physical
 
-readMemory :: Bridge -> Word32 -> Int -> IO B.ByteString
-readMemory bridge address count = do
-  require (count > 0 && count <= 4096 && toInteger address + toInteger count <= 0x100000000) "read-memory range exceeds page or address bound"
-  reply <- call bridge (command "read-memory" ["address" .= address, "count" .= count])
-  bytes <- either (harness . ("read-memory: " ++)) pure (maybe (Left "missing bytes") decodeHex (textAt "bytes" reply))
-  require (B.length bytes == count) "read-memory returned a different length"
-  pure bytes
 
 readGuest :: Bridge -> Word32 -> Int -> IO B.ByteString
 readGuest bridge address count = do
