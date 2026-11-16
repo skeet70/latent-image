@@ -1383,3 +1383,5 @@ Source `e0b92c455ed859d571e94023ba2e349ac0bf69be` passes the SDK, scheduler-pair
 
 The repaired Rust classifier also controls future acquire/release `lock_events`. The old acquire body `[0x4372c,0x4375c)` overlaps the historical exclusion, so the old producer can omit caller-owned occurrence rows there. Class equality omits instruction and event order; collapsed samples cannot reconstruct a complete occurrence ledger. The preserved Prepare writes suffice for that counterexample's host reclassification, not for an omitted lock-lifetime proof.
 
+The linked dispatcher plan now observes each owned stage at its Aggregate body entry. It derives load probes from unique admitted instruction pairs inside the actual Select, Save and IRQ-return bodies and verifies the NoSave CPSR commit immediately before Select. Published veneer addresses and retained layouts are unchanged. Image-bound dispatcher targets drive strict SelectStage, IRQ-tail and caller Save/Resume recognition; no unrecorded frozen checkpoint is inferred. A changed observer capture is required for the missing intermediate boundary.
+
