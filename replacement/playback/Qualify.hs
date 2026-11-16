@@ -13,12 +13,12 @@ import Data.Word (Word16, Word32, Word8)
 import qualified Data.Text
 import qualified Emulation.NativeCase as Native
 import Emulation.OwnedCase (assemble)
-import Emulation.Sha256 (sha256, sha256Hex)
+import Emulation.Sha256 (sha256, sha256File, sha256Hex)
 import Numeric (readHex, showHex)
 import qualified ModeEntryCaller
 import qualified ModeProducer
 import System.Directory (createDirectory, doesPathExist)
-import System.Environment (getArgs)
+import System.Environment (getArgs, getExecutablePath)
 import System.FilePath ((</>))
 
 newtype Address = Address Word32 deriving (Eq, Show)
@@ -200,6 +200,10 @@ main = do
   exists<-doesPathExist output
   ensure(not exists)"output directory exists"
   createDirectory output
+  executable <- getExecutablePath
+  qualifierSha <- sha256Hex <$> sha256File executable
+  json (output </> "invocation.json") (object
+    ["qualifier" .= executable,"qualifier_sha256" .= qualifierSha,"arguments" .= arguments])
   case boundary of
     PreparationBoundary -> qualifyPreparation runner package output
     ModeCallerBoundary -> do
