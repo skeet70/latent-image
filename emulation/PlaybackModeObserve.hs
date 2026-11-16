@@ -26,7 +26,7 @@ import System.Directory (canonicalizePath, createDirectory, doesPathExist, makeA
 import System.Environment (getArgs, getExecutablePath)
 import System.Exit (ExitCode (..), exitWith)
 import System.FilePath (splitDirectories, takeDirectory, takeFileName, (</>))
-import System.IO (IOMode (..), hClose, openBinaryFile)
+import System.IO (IOMode (..), SeekMode (..), hClose, hSeek, openBinaryFile, withBinaryFile)
 import System.Process (CreateProcess (..), StdStream (..), callProcess, createProcess, proc, readProcessWithExitCode, waitForProcess)
 
 newtype Digest = Digest T.Text deriving (Eq, Show)
@@ -98,17 +98,20 @@ sites = map site [minBound .. maxBound]
 sourceIdentity :: FilePath -> Bridge -> IO ()
 sourceIdentity output bridge = do
   let path = "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin"
-  bytes <- B.readFile path
-  require (digest bytes == Digest "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a") "stock image 5 identity differs"
-  plain <- B.readFile "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin"
-  require (digest plain == Digest "ee211bdaad39005b4f72e3443a76ca194905381a967cab787d6a4ef14e2d889d") "stock plain image identity differs"
-  comparisons <- forM sites $ \(address,label) -> do
-    let (source,base,count) = if address >= 0x1100000 then (plain,0x1100000,36) else (bytes,0xbf1a00,16)
-        expected = B.take count (B.drop (fromIntegral (address - base)) source)
-    actual <- readMemory bridge address count
-    require (B.length expected == count && actual == expected) "mode route stock entry bytes differ"
-    pure (object ["address" .= address,"label" .= label,"expected_hex" .= P.hexBytes (B.unpack expected),"actual_hex" .= P.hexBytes (B.unpack actual)])
-  json (output </> "stock-entry-identities.json") (object ["revision" .= ("55436fc85c0560dd252b0410af6f2427fe198cd3" :: T.Text),"source" .= path,"sha256" .= digestValue (digest bytes),"plain_sha256" .= digestValue (digest plain),"comparisons" .= comparisons])
+      plainPath = "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin"
+  sourceSha <- fileDigest path
+  plainSha <- fileDigest plainPath
+  require (sourceSha == Digest "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a") "stock image 5 identity differs"
+  require (plainSha == Digest "ee211bdaad39005b4f72e3443a76ca194905381a967cab787d6a4ef14e2d889d") "stock plain image identity differs"
+  comparisons <- withBinaryFile path ReadMode $ \image5 -> withBinaryFile plainPath ReadMode $ \plain ->
+    forM sites $ \(address,label) -> do
+      let (source,base,count) = if address >= 0x1100000 then (plain,0x1100000,36) else (image5,0xbf1a00,16)
+      hSeek source AbsoluteSeek (fromIntegral (address - base))
+      expected <- B.hGet source count
+      actual <- readMemory bridge address count
+      require (B.length expected == count && actual == expected) "mode route stock entry bytes differ"
+      pure (object ["address" .= address,"label" .= label,"expected_hex" .= P.hexBytes (B.unpack expected),"actual_hex" .= P.hexBytes (B.unpack actual)])
+  json (output </> "stock-entry-identities.json") (object ["revision" .= ("55436fc85c0560dd252b0410af6f2427fe198cd3" :: T.Text),"source" .= path,"sha256" .= digestValue sourceSha,"plain_sha256" .= digestValue plainSha,"comparisons" .= comparisons])
 
 volatileGate :: Bridge -> FilePath -> IO ()
 volatileGate bridge output = do
