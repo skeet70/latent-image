@@ -76,8 +76,10 @@ main = do
   check "release consumes actual reset" (isRight (parse resetRows >>= P.released))
   check "release missing device reset refused" (isLeft (parse [] >>= P.released))
   check "foreign PC refused" (isLeft (parse [row 0x2000 0xfff63004 "read" 0x10]))
-  check "valid PC in wrong service refused" (isLeft (parse (put "pc" (Number 4356) (head startRows) : tail startRows) >>= P.startedStatus))
-  let access = head startRows
+  (access,following) <- case startRows of
+    firstRow:remaining -> pure (firstRow,remaining)
+    [] -> fail "start fixture is empty"
+  check "valid PC in wrong service refused" (isLeft (parse (put "pc" (Number 4356) access : following) >>= P.startedStatus))
   forM_ [("accepted",Bool False),("cpu",Number 1),("size",Number 2),("operation",String "fetch"),("address",Number 4294324524)] $ \(name,value) ->
     check "rejected or out of contract access refused" (isLeft (parse [put name value access]))
   check "omitted rows refused" (isLeft (P.parseBatch spans True (put "omitted" (Number 1) (batchValue []))))
