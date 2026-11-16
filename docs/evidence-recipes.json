@@ -3008,126 +3008,939 @@
     ]
   }
   ,{
-    "id": "E-PLAYBACK-JPEG-TRANSACTION-NATIVE-150",
-    "claim": "Current runtime {{current_runtime}}, ELF {{current_elf}}, qualifies ({{current_qualified}}) in {{current_pairs}} actual retained Playback caller pairs at declared service boundaries and {{device_pairs}} nonpolling device-service CPU pairs. The programming-omission control returns and is rejected ({{program_omission}}). Runner {{current_runner}} identifies the current cohort. Historical runtime {{runtime}}, ELF {{elf}}, separately qualifies ({{qualified}}) at retained decode-requirements, submit, completion, restart and finish callers: {{pairs}} original/owned pairs and {{controls}} returned IRQ-omission controls, runner {{runner}}. The historical cohort was not replayed on the current artifact.",
-    "scope": "{{current_scope}} Direct nonpolling scope: {{device_scope}} Historical cohort scope: {{native_scope}} This JPEG transaction topic is distinct from the preparation and published-caller/producer cohorts in E-XM1-PLAYBACK-PREPARATION-PAIR-NATIVE-150.",
-    "notes": "Native register images are ordinary RAM, not a JPEG MMIO-read/device or polling model. The installed source-length omission is a preparation-prefix counterexample, not completed PLAY or absent-IRQ acceptance. No physical pixels, whole playback or natural application-mode acceptance.",
-    "artifacts": ["private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json"],
-    "facts": [
-      {"name":"firmware_sha256","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json","pointer":["emulator_start","inputs","installed_dat"]},
-      {"name":"qualified","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json","pointer":["qualified"]},
-      {"name":"pairs","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json","pointer":["comparisons"],"operation":"length"},
-      {"name":"controls","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json","pointer":["controls"],"operation":"length"},
-      {"name":"runner","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json","pointer":["runner_sha256"]},
-      {"name":"runtime","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json","pointer":["runtime_sha256"]},
-      {"name":"elf","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json","pointer":["elf_sha256"]},
-      {"name":"native_scope","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json","pointer":["scope"]}
-      ,{"name":"current_qualified","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json","pointer":["qualified"]}
-      ,{"name":"current_pairs","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json","pointer":["comparisons"],"operation":"length"}
-      ,{"name":"device_pairs","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json","pointer":["device_cpu","cases"],"operation":"length"}
-      ,{"name":"program_omission","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json","pointer":["device_cpu","omitted_program_control_returned_and_rejected"]}
-      ,{"name":"current_runtime","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json","pointer":["runtime_sha256"]}
-      ,{"name":"current_elf","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json","pointer":["elf_sha256"]}
-      ,{"name":"current_runner","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json","pointer":["runner_sha256"]}
-      ,{"name":"current_scope","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json","pointer":["scope"]}
-      ,{"name":"device_scope","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json","pointer":["device_cpu","scope"]}
-    ]
-  },
-  {
-    "id": "E-PLAYBACK-JPEG-TRANSACTION-INSTALLED-150",
-    "claim": "Current runtime {{current_runtime}}, ELF {{current_elf}}, installs and traverses menu/back with checks {{current_install}}; the explicit negative installs with checks {{negative_install}}. Both restore {{current_restored}}/{{negative_restored}} words on rollback. Prepared/installed runtime and ELF byte equality={{prepared_runtime_equal}}/{{prepared_elf_equal}}. Prefix guard={{prefix_guard}}; PLAY guard={{play_guard}}; {{excluded_bodies}} original bodies are excluded. The {{snapshot_count}} snapshots of the {{allocation}}-byte allocation are identical ({{snapshots_equal}}), with {{current_scalar_differences}} declared completed ABI7 scalar-byte differences from upload; all {{publications}} publications are exact ({{current_publications_exact}}). Current independent stock complete sources, decoded outputs and final PNG are byte-equal ({{current_source_output_png_equal}}, PNG {{current_png}}); released 528-byte drivers agree ({{current_preview_driver_equal}}/{{current_full_driver_equal}}). Current raw request differences remain {{current_preview_offsets}}/{{current_full_offsets}}, software-timer handles stock {{current_preview_stock_timer}}/{{current_full_stock_timer}} versus owned {{current_preview_owned_timer}}/{{current_full_owned_timer}}. Current independent-reference pixel differences={{current_preview_reference_diff}}/{{current_full_reference_diff}} bytes; pre-press frame stability={{current_frame_stability}}. The source-length omission remains outcome {{negative_outcome}}, exit {{negative_exit}}, before PLAY: {{negative_matching_writes}} matching programming writes omit the {{negative_expected_length}}-byte length store at 0xfff63110; start is rejected and the strict model reports '{{negative_failure}}'. Historical runtime {{runtime}}, ELF {{elf}}: six-hook install={{install}}, menu/back={{trajectory}}, rollback={{unload_check}}, restoring {{restored}} words in {{allocation}} bytes with {{publications}} publications. Historical PLAY completes {{jobs}} jobs, independent source/output/PNG equality={{source_output_png_equal}}, PNG {{png}}, with equal released 528-byte drivers. Preview {{preview_source}} source bytes produce {{preview_output}} bytes; full {{full_source}} source bytes produce {{full_output}} bytes. Historical request offsets={{preview_offsets}}/{{full_offsets}}, stock timers={{preview_stock_timer}}/{{full_stock_timer}}, owned timers={{preview_owned_timer}}/{{full_owned_timer}}, reference differences={{preview_reference_diff}}/{{full_reference_diff}} bytes. Historical runtime before/after differences={{runtime_diff}}, upload differences={{scalar_diff}} completed ABI7 scalar bytes, publication differences={{publication_diff}}. Historical source/acquire/IRQ/release/restart fetches={{source_fetches}}/{{acquire_fetches}}/{{irq_fetches}}/{{release_fetches}}/{{restart_fetches}}, original-body fetches={{original_fetches}}, protected writes={{protected_writes}}. Historical observer exit {{observer_exit}} did not pass run-output: wrapper exit {{wrapper_exit}}, outcome {{wrapper_outcome}}, reason {{wrapper_reason}}.",
-    "scope": "Current installed nominal channel9 reset/program/start/status/event read-and-ACK/endpoint services execute under the existing full-system JPEG model, with two fixture PLAY completions and IRQ/result/release handback. Native high-level device boundaries remain conditional. Allocation equality covers [0x00a81d00,0x00a89d00) and publications, not all RAM. Passive inspection media-state equality={{inspection_before_equal}}/{{inspection_after_equal}} applies within each inspection, not across all PLAY SD activity. Historical integrated-preparation pair={{integrated_pair}}, pre-press frame stability={{frame_stability}}, whole-playback acceptance={{whole_playback}} remain separate limitations. Native cohorts are E-PLAYBACK-JPEG-TRANSACTION-NATIVE-150. Older source/layout/tail provenance is E-FUJIMOD-XM1-PLAY-JPEG-150; earlier preparation cohorts are E-XM1-PLAYBACK-PREPARATION-PAIR-NATIVE-150.",
-    "notes": "The explicit emulator-only source-length omission fails naturally before PLAY; absent IRQ/result/release is not completed-PLAY negative acceptance. Nominal PLAY does not execute restart command4 or establish device status17/24 laws. Image-source and decode/output ownership is independent of USB disconnect signaling and natural application-mode ownership. Pixel-reference disagreements are counterexamples, not a tolerance. No broad diagnostic, physical-pixel, browsing, whole-playback, capture/save continuation, retirement or unload acceptance. Menu/back rollback retains allocation until power-off.",
-    "artifacts": [
-      "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-transaction/owned-play/result.json",
-      "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-device-prefix-watch/owned-play/result.json",
-      "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-device-prefix-watch/stock-play/result.json",
-      "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-device-prefix-watch/omission-play/decode/bus-0.json",
-      "private-data/scratch/PlaybackMediaClosure/runs/20261116T074218Z-playback-jpeg-device-prefix-owned/run.json",
-      "private-data/scratch/PlaybackMediaClosure/runs/20261116T074555Z-playback-jpeg-device-stock-handback/run.json",
-      "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-transaction/stock-play/result.json",
-      "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/run.json",
-      "private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/relinked/ram-push-manifest.json"
-    ],
-    "facts": [
-      {"name":"firmware_sha256","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json","pointer":["emulator_start","inputs","installed_dat"]},
-      {"name":"install","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json","pointer":["checks","install"]},
-      {"name":"trajectory","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json","pointer":["checks","trajectory"]},
-      {"name":"unload_check","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json","pointer":["checks","unload"]},
-      {"name":"restored","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json","pointer":["mailbox","rollback","restored"]},
-      {"name":"publications","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json","pointer":["runtime","publications"]},
-      {"name":"allocation","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json","pointer":["allocation","bytes"]},
-      {"name":"jobs","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs"],"operation":"length"},
-      {"name":"source_output_png_equal","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["stock_owned_source_output_and_final_png_cmp_equal"]},
-      {"name":"png","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["final_png_sha256"]},
-      {"name":"preview_source","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","0","source_bytes"]},
-      {"name":"preview_output","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","0","output_bytes"]},
-      {"name":"full_source","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","1","source_bytes"]},
-      {"name":"full_output","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","1","output_bytes"]},
-      {"name":"preview_offsets","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","0","stock_owned_request_different_offsets"]},
-      {"name":"full_offsets","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","1","stock_owned_request_different_offsets"]},
-      {"name":"preview_stock_timer","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","0","stock_timer_handle"]},
-      {"name":"full_stock_timer","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","1","stock_timer_handle"]},
-      {"name":"preview_owned_timer","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","0","owned_timer_handle"]},
-      {"name":"full_owned_timer","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","1","owned_timer_handle"]},
-      {"name":"preview_reference_diff","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","0","independent_reference_different_bytes"]},
-      {"name":"full_reference_diff","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","1","independent_reference_different_bytes"]},
-      {"name":"runtime_diff","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["runtime","before_after_different_bytes"]},
-      {"name":"scalar_diff","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["runtime","before_uploaded_different_bytes"]},
-      {"name":"publication_diff","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["runtime","publication_different_bytes"]},
-      {"name":"source_fetches","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["watch","source_entry_fetches"]},
-      {"name":"acquire_fetches","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["watch","jpeg_acquire_fetches"]},
-      {"name":"irq_fetches","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["watch","jpeg_irq_fetches"]},
-      {"name":"release_fetches","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["watch","jpeg_release_fetches"]},
-      {"name":"restart_fetches","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["watch","jpeg_restart_fetches"]},
-      {"name":"original_fetches","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["watch","original_body_fetches"]},
-      {"name":"protected_writes","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["watch","protected_writes"]},
-      {"name":"observer_exit","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["original_consumer_exit_status"]},
-      {"name":"wrapper_exit","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["original_wrapper_exit_status"]},
-      {"name":"wrapper_outcome","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["original_run_outcome"]},
-      {"name":"wrapper_reason","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["original_run_reason"]},
-      {"name":"runtime","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["runtime","uploaded_sha256"]},
-      {"name":"elf","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["runtime","elf_sha256"]},
-      {"name":"integrated_pair","path":"private-data/scratch/PlaybackMediaClosure/inputs/jpeg-transaction/owned-play/result.json","pointer":["owned_playback","integrated_pair"]},
-      {"name":"frame_stability","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["pre_press_frame_stability_context"]},
-      {"name":"whole_playback","path":"private-data/scratch/PlaybackMediaClosure/inputs/jpeg-transaction/owned-play/result.json","pointer":["owned_playback","whole_playback_acceptance"]}
-      ,{"name":"current_runtime","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json","pointer":["runtime_sha256"]}
-      ,{"name":"current_elf","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json","pointer":["elf_sha256"]}
-      ,{"name":"current_install","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T070238Z-playback-jpeg-device-install/result/install/e2e-result.json","pointer":["checks"]}
-      ,{"name":"negative_install","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T071158Z-playback-jpeg-device-omission-install/result/install/e2e-result.json","pointer":["checks"]}
-      ,{"name":"current_restored","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T070238Z-playback-jpeg-device-install/result/install/e2e-result.json","pointer":["mailbox","rollback","restored"]}
-      ,{"name":"negative_restored","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T071158Z-playback-jpeg-device-omission-install/result/install/e2e-result.json","pointer":["mailbox","rollback","restored"]}
-      ,{"name":"prepared_runtime_equal","path":"private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json","pointer":["prepared_installed_runtime_equal"]}
-      ,{"name":"prepared_elf_equal","path":"private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json","pointer":["prepared_installed_elf_equal"]}
-      ,{"name":"prefix_guard","path":"private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json","pointer":["prefix_guard"]}
-      ,{"name":"play_guard","path":"private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json","pointer":["play_guard"]}
-      ,{"name":"excluded_bodies","path":"private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json","pointer":["excluded_original_bodies"]}
-      ,{"name":"snapshot_count","path":"private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json","pointer":["runtime_snapshots"],"operation":"length"}
-      ,{"name":"snapshots_equal","path":"private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json","pointer":["runtime_snapshots_equal"]}
-      ,{"name":"current_scalar_differences","path":"private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json","pointer":["completed_scalar_differences"]}
-      ,{"name":"current_publications_exact","path":"private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json","pointer":["publications_exact"]}
-      ,{"name":"current_source_output_png_equal","path":"private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json","pointer":["source_output_png_equal"]}
-      ,{"name":"current_png","path":"private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json","pointer":["final_png"]}
-      ,{"name":"current_preview_driver_equal","path":"private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json","pointer":["jobs","0","driver_equal"]}
-      ,{"name":"current_full_driver_equal","path":"private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json","pointer":["jobs","1","driver_equal"]}
-      ,{"name":"current_preview_offsets","path":"private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json","pointer":["jobs","0","request_difference_offsets"]}
-      ,{"name":"current_full_offsets","path":"private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json","pointer":["jobs","1","request_difference_offsets"]}
-      ,{"name":"current_preview_stock_timer","path":"private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json","pointer":["jobs","0","stock_timer"]}
-      ,{"name":"current_full_stock_timer","path":"private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json","pointer":["jobs","1","stock_timer"]}
-      ,{"name":"current_preview_owned_timer","path":"private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json","pointer":["jobs","0","owned_timer"]}
-      ,{"name":"current_full_owned_timer","path":"private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json","pointer":["jobs","1","owned_timer"]}
-      ,{"name":"current_preview_reference_diff","path":"private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json","pointer":["jobs","0","reference_different_bytes"]}
-      ,{"name":"current_full_reference_diff","path":"private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json","pointer":["jobs","1","reference_different_bytes"]}
-      ,{"name":"current_frame_stability","path":"private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json","pointer":["frame_stability"]}
-      ,{"name":"negative_outcome","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T073935Z-playback-jpeg-device-prefix-omission/run.json","pointer":["outcome"]}
-      ,{"name":"negative_exit","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T073935Z-playback-jpeg-device-prefix-omission/run.json","pointer":["exit_status"]}
-      ,{"name":"negative_matching_writes","path":"private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json","pointer":["negative","matching_program_writes"]}
-      ,{"name":"negative_expected_length","path":"private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json","pointer":["negative","expected_length_store","value"]}
-      ,{"name":"negative_failure","path":"private-data/scratch/PlaybackMediaClosure/inputs/jpeg-device-prefix-watch/omission-play/result.json","pointer":["bridge_boundary","failure"]}
-      ,{"name":"inspection_before_equal","path":"private-data/scratch/PlaybackMediaClosure/inputs/jpeg-device-prefix-watch/owned-play/media-inspection-before.json","pointer":["media_state_unchanged"]}
-      ,{"name":"inspection_after_equal","path":"private-data/scratch/PlaybackMediaClosure/inputs/jpeg-device-prefix-watch/owned-play/media-inspection-after.json","pointer":["media_state_unchanged"]}
-    ]
-  },
+  "id": "E-PLAYBACK-JPEG-TRANSACTION-NATIVE-150",
+  "claim": "The eight-hook consumer artifact qualifies ({{consumer_qualified}}): {{facade_pairs}} retained Playback facade/IRQ pairs plus {{builder_pairs}} builder pairs, including actual develop job4 and notification; returned controls are {{irq_controls}} IRQ omissions, {{builder_controls}} relocated original-builder instruction defects and {{completion_controls}} first-completion defects (11 pairs/14 controls total). Whole ordinary builder d98904..d989f8 and first completion 121fec8..121ff20 cover signed selector/default/7/8 mapping, strict packing byte1, the 101-byte minimum record, requirements forwarding, callback gates, synchronous setup failure and completion reentry. Earlier device cohort separately qualified {{current_pairs}} retained caller pairs and {{device_pairs}} nonpolling device-service CPU pairs, with returned programming-omission rejection={{program_omission}}. Historical transaction cohort separately qualified ({{qualified}}): {{pairs}} original/owned retained requirements/submit/completion/restart/finish pairs and {{controls}} returned IRQ-omission controls. Neither historical cohort was replayed on the consumer artifact.",
+  "scope": "{{consumer_scope}} Synchronous failure/lifetime boundary: {{failure_lifetime}} Nine builder controls execute relocated original-source mutants with the owned transaction, not mutated owned Rust stores. Device/resource/kernel/IRQ/cache/timer/nested-critical providers and develop notification/wait remain conditional. Earlier device scope: {{device_scope}} Historical transaction scope: {{native_scope}} No native polling, DMA, pixels, physical IRQ timing, allocation/resource/lifetime/unload or general media ownership claim. Preparation and application-mode evidence remains separate.",
+  "notes": "Native register images are ordinary RAM, not a JPEG MMIO-read/device or polling model. The installed source-length omission is a preparation-prefix counterexample, not completed PLAY or absent-IRQ acceptance. No physical pixels, whole playback or natural application-mode acceptance. Construction precedes lock9 acquisition; returned completion reentry does not establish constructor serialization, static-request/subscriber lifetime or IRQ quiescence.",
+  "artifacts": [
+    "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+    "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/install/e2e-result.json",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/owned-play/result.json",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/owned-play/observations.jsonl",
+    "private-data/scratch/PlaybackMediaClosure/runs/20261116T223544Z-playback-jpeg-consumer-native-admitted-controls/run.json"
+  ],
+  "facts": [
+    {
+      "name": "qualified",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json",
+      "pointer": [
+        "qualified"
+      ]
+    },
+    {
+      "name": "pairs",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json",
+      "pointer": [
+        "comparisons"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "controls",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json",
+      "pointer": [
+        "controls"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "runner",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json",
+      "pointer": [
+        "runner_sha256"
+      ]
+    },
+    {
+      "name": "runtime",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json",
+      "pointer": [
+        "runtime_sha256"
+      ]
+    },
+    {
+      "name": "elf",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json",
+      "pointer": [
+        "elf_sha256"
+      ]
+    },
+    {
+      "name": "native_scope",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json",
+      "pointer": [
+        "scope"
+      ]
+    },
+    {
+      "name": "current_qualified",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json",
+      "pointer": [
+        "qualified"
+      ]
+    },
+    {
+      "name": "current_pairs",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json",
+      "pointer": [
+        "comparisons"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "device_pairs",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json",
+      "pointer": [
+        "device_cpu",
+        "cases"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "program_omission",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json",
+      "pointer": [
+        "device_cpu",
+        "omitted_program_control_returned_and_rejected"
+      ]
+    },
+    {
+      "name": "current_runtime",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json",
+      "pointer": [
+        "runtime_sha256"
+      ]
+    },
+    {
+      "name": "current_elf",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json",
+      "pointer": [
+        "elf_sha256"
+      ]
+    },
+    {
+      "name": "current_runner",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json",
+      "pointer": [
+        "runner_sha256"
+      ]
+    },
+    {
+      "name": "current_scope",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json",
+      "pointer": [
+        "scope"
+      ]
+    },
+    {
+      "name": "device_scope",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json",
+      "pointer": [
+        "device_cpu",
+        "scope"
+      ]
+    },
+    {
+      "name": "consumer_qualified",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "qualified"
+      ]
+    },
+    {
+      "name": "facade_pairs",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "comparisons"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "builder_pairs",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "builder_comparisons"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "irq_controls",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "controls"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "builder_controls",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "builder_controls"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "completion_controls",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "first_completion_controls"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "consumer_scope",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "scope"
+      ]
+    },
+    {
+      "name": "failure_lifetime",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "builder_failure_lifetime"
+      ]
+    },
+    {
+      "name": "consumer_runtime",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "runtime_sha256"
+      ]
+    },
+    {
+      "name": "consumer_elf",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "elf_sha256"
+      ]
+    },
+    {
+      "name": "consumer_runner",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "runner_sha256"
+      ]
+    },
+    {
+      "name": "historical_device_matrix_repeated",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "historical_device_matrix_repeated"
+      ]
+    },
+    {
+      "name": "firmware_sha256",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/install/e2e-result.json",
+      "pointer": [
+        "emulator_start",
+        "inputs",
+        "installed_dat"
+      ]
+    }
+  ]
+} ,
+{
+  "id": "E-PLAYBACK-JPEG-TRANSACTION-INSTALLED-150",
+  "claim": "The eight-hook artifact installs and traverses menu/back with checks {{current_install}}, restoring {{current_restored}} publication words on rollback; the historical six-hook negative installed with checks {{negative_install}} and restored {{negative_restored}} words. Prepared/native/installed runtime and ELF bytes agree ({{prepared_runtime_equal}}). Natural preparation observes builder/acquire/IRQ/release once each in {{prefix_records}} guard records; two fixture PLAY jobs observe acquire/IRQ/release/first-completion twice each in {{play_records}} guard records. The distinct guarded epochs exclude {{excluded_bodies}} original body extents, with {{protected_count}} protected writes and {{body_fetch_count}} original-body fetches. Six complete {{allocation}}-byte snapshots are identical ({{snapshots_equal}}); upload differences per snapshot={{current_scalar_differences}} completed-installer ABI7 scalar bytes, with all {{publications}} publication words exact ({{current_publications_exact}}). Complete independent stock sources, decoded outputs and final PNG compare byte-equal ({{current_source_output_png_equal}}), rendering photograph963-3095. Released 528-byte drivers compare equal ({{current_driver_equal}}); 176-byte request differences={{current_request_differences}} retain raw timer offsets92/93. Independent-reference pixel differences={{current_reference_diff}} bytes; pre-press frame stability={{current_frame_stability}}. The source-length omission remains outcome {{negative_outcome}}, exit {{negative_exit}}, before PLAY: {{negative_matching_writes}} matching programming writes omit the {{negative_expected_length}}-byte length store at 0xfff63110; start is rejected and the strict model reports '{{negative_failure}}'. Historical six-hook artifact: six-hook install={{install}}, menu/back={{trajectory}}, rollback={{unload_check}}, restoring {{restored}} words in {{allocation}} bytes with {{publications}} publications. Historical PLAY completes {{jobs}} jobs, independent source/output/PNG equality={{source_output_png_equal}}, with equal released 528-byte drivers. Preview {{preview_source}} source bytes produce {{preview_output}} bytes; full {{full_source}} source bytes produce {{full_output}} bytes. Historical request offsets={{preview_offsets}}/{{full_offsets}}, stock timers={{preview_stock_timer}}/{{full_stock_timer}}, owned timers={{preview_owned_timer}}/{{full_owned_timer}}, reference differences={{preview_reference_diff}}/{{full_reference_diff}} bytes. Historical runtime before/after differences={{runtime_diff}}, upload differences={{scalar_diff}} completed ABI7 scalar bytes, publication differences={{publication_diff}}. Historical source/acquire/IRQ/release/restart fetches={{source_fetches}}/{{acquire_fetches}}/{{irq_fetches}}/{{release_fetches}}/{{restart_fetches}}, original-body fetches={{original_fetches}}, protected writes={{protected_writes}}. Historical observer exit {{observer_exit}} did not pass run-output: wrapper exit {{wrapper_exit}}, outcome {{wrapper_outcome}}, reason {{wrapper_reason}}.",
+  "scope": "Eight-hook installed nominal channel9 reset/program/start/status/event read-and-ACK/endpoint services execute under the existing full-system JPEG model, with two fixture PLAY completions and IRQ/result/release handback. Native high-level device boundaries remain conditional. Allocation equality covers [0x00a81d00,0x00a89d00) and publications, not all RAM. Passive inspection media-state equality={{inspection_before_equal}}/{{inspection_after_equal}} applies within each inspection, not across all PLAY SD activity. Historical integrated-preparation pair={{integrated_pair}}, pre-press frame stability={{frame_stability}}, whole-playback acceptance={{whole_playback}} remain separate limitations. Native cohorts are E-PLAYBACK-JPEG-TRANSACTION-NATIVE-150. Older source/layout/tail provenance is E-FUJIMOD-XM1-PLAY-JPEG-150; earlier preparation cohorts are E-XM1-PLAYBACK-PREPARATION-PAIR-NATIVE-150. Actual PLAY releases through retained cancel/restore return 0x01220288; finish0x01220238 remains conditional native. Natural constructor prefix is distinct from the two fixture PLAY jobs. No code-state writes were made by the host observer; protected-write guards cover CPU, host and model-bus writes in declared ranges, not all guest RAM. No allocation/resource/lifetime or general media ownership claim.",
+  "notes": "The explicit emulator-only source-length omission fails naturally before PLAY; absent IRQ/result/release is not completed-PLAY negative acceptance. Nominal PLAY does not execute restart command4 or establish device status17/24 laws. Image-source and decode/output ownership is independent of USB disconnect signaling and natural application-mode ownership. Pixel-reference disagreements are counterexamples, not a tolerance. No broad diagnostic, physical-pixel, browsing, whole-playback, capture/save continuation, retirement or unload acceptance. Menu/back rollback retains allocation until power-off. All 14 new defect controls are native; no eight-hook full-system negative is claimed. Retained initializer, second completion, submit, finish/cancel, develop notification/wait and clear-record release remain outside this cutover; static request/subscriber lifetime and IRQ quiescence remain open.",
+  "artifacts": [
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-transaction/owned-play/result.json",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-device-prefix-watch/owned-play/result.json",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-device-prefix-watch/stock-play/result.json",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-device-prefix-watch/omission-play/decode/bus-0.json",
+    "private-data/scratch/PlaybackMediaClosure/runs/20261116T074218Z-playback-jpeg-device-prefix-owned/run.json",
+    "private-data/scratch/PlaybackMediaClosure/runs/20261116T074555Z-playback-jpeg-device-stock-handback/run.json",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-transaction/stock-play/result.json",
+    "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/run.json",
+    "private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/relinked/ram-push-manifest.json",
+    "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/install/e2e-result.json",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/owned-play/result.json",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/owned-play/observations.jsonl",
+    "private-data/scratch/PlaybackMediaClosure/runs/20261116T221753Z-playback-jpeg-consumer-install-inherited/run.json",
+    "private-data/scratch/PlaybackMediaClosure/runs/20261116T222438Z-playback-jpeg-consumer-owned-play/run.json"
+  ],
+  "facts": [
+    {
+      "name": "install",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json",
+      "pointer": [
+        "checks",
+        "install"
+      ]
+    },
+    {
+      "name": "trajectory",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json",
+      "pointer": [
+        "checks",
+        "trajectory"
+      ]
+    },
+    {
+      "name": "unload_check",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json",
+      "pointer": [
+        "checks",
+        "unload"
+      ]
+    },
+    {
+      "name": "restored",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json",
+      "pointer": [
+        "mailbox",
+        "rollback",
+        "restored"
+      ]
+    },
+    {
+      "name": "jobs",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "source_output_png_equal",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "stock_owned_source_output_and_final_png_cmp_equal"
+      ]
+    },
+    {
+      "name": "png",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "final_png_sha256"
+      ]
+    },
+    {
+      "name": "preview_source",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs",
+        "0",
+        "source_bytes"
+      ]
+    },
+    {
+      "name": "preview_output",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs",
+        "0",
+        "output_bytes"
+      ]
+    },
+    {
+      "name": "full_source",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs",
+        "1",
+        "source_bytes"
+      ]
+    },
+    {
+      "name": "full_output",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs",
+        "1",
+        "output_bytes"
+      ]
+    },
+    {
+      "name": "preview_offsets",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs",
+        "0",
+        "stock_owned_request_different_offsets"
+      ]
+    },
+    {
+      "name": "full_offsets",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs",
+        "1",
+        "stock_owned_request_different_offsets"
+      ]
+    },
+    {
+      "name": "preview_stock_timer",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs",
+        "0",
+        "stock_timer_handle"
+      ]
+    },
+    {
+      "name": "full_stock_timer",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs",
+        "1",
+        "stock_timer_handle"
+      ]
+    },
+    {
+      "name": "preview_owned_timer",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs",
+        "0",
+        "owned_timer_handle"
+      ]
+    },
+    {
+      "name": "full_owned_timer",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs",
+        "1",
+        "owned_timer_handle"
+      ]
+    },
+    {
+      "name": "preview_reference_diff",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs",
+        "0",
+        "independent_reference_different_bytes"
+      ]
+    },
+    {
+      "name": "full_reference_diff",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs",
+        "1",
+        "independent_reference_different_bytes"
+      ]
+    },
+    {
+      "name": "runtime_diff",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "runtime",
+        "before_after_different_bytes"
+      ]
+    },
+    {
+      "name": "scalar_diff",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "runtime",
+        "before_uploaded_different_bytes"
+      ]
+    },
+    {
+      "name": "publication_diff",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "runtime",
+        "publication_different_bytes"
+      ]
+    },
+    {
+      "name": "source_fetches",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "watch",
+        "source_entry_fetches"
+      ]
+    },
+    {
+      "name": "acquire_fetches",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "watch",
+        "jpeg_acquire_fetches"
+      ]
+    },
+    {
+      "name": "irq_fetches",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "watch",
+        "jpeg_irq_fetches"
+      ]
+    },
+    {
+      "name": "release_fetches",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "watch",
+        "jpeg_release_fetches"
+      ]
+    },
+    {
+      "name": "restart_fetches",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "watch",
+        "jpeg_restart_fetches"
+      ]
+    },
+    {
+      "name": "original_fetches",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "watch",
+        "original_body_fetches"
+      ]
+    },
+    {
+      "name": "protected_writes",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "watch",
+        "protected_writes"
+      ]
+    },
+    {
+      "name": "observer_exit",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "original_consumer_exit_status"
+      ]
+    },
+    {
+      "name": "wrapper_exit",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "original_wrapper_exit_status"
+      ]
+    },
+    {
+      "name": "wrapper_outcome",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "original_run_outcome"
+      ]
+    },
+    {
+      "name": "wrapper_reason",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "original_run_reason"
+      ]
+    },
+    {
+      "name": "runtime",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "runtime",
+        "uploaded_sha256"
+      ]
+    },
+    {
+      "name": "elf",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "runtime",
+        "elf_sha256"
+      ]
+    },
+    {
+      "name": "integrated_pair",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-transaction/owned-play/result.json",
+      "pointer": [
+        "owned_playback",
+        "integrated_pair"
+      ]
+    },
+    {
+      "name": "frame_stability",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "pre_press_frame_stability_context"
+      ]
+    },
+    {
+      "name": "whole_playback",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-transaction/owned-play/result.json",
+      "pointer": [
+        "owned_playback",
+        "whole_playback_acceptance"
+      ]
+    },
+    {
+      "name": "negative_install",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T071158Z-playback-jpeg-device-omission-install/result/install/e2e-result.json",
+      "pointer": [
+        "checks"
+      ]
+    },
+    {
+      "name": "negative_restored",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T071158Z-playback-jpeg-device-omission-install/result/install/e2e-result.json",
+      "pointer": [
+        "mailbox",
+        "rollback",
+        "restored"
+      ]
+    },
+    {
+      "name": "prepared_elf_equal",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "prepared_installed_elf_equal"
+      ]
+    },
+    {
+      "name": "prefix_guard",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "prefix_guard"
+      ]
+    },
+    {
+      "name": "play_guard",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "play_guard"
+      ]
+    },
+    {
+      "name": "snapshot_count",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "runtime_snapshots"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "current_png",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "final_png"
+      ]
+    },
+    {
+      "name": "current_preview_driver_equal",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "jobs",
+        "0",
+        "driver_equal"
+      ]
+    },
+    {
+      "name": "current_full_driver_equal",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "jobs",
+        "1",
+        "driver_equal"
+      ]
+    },
+    {
+      "name": "current_preview_offsets",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "jobs",
+        "0",
+        "request_difference_offsets"
+      ]
+    },
+    {
+      "name": "current_full_offsets",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "jobs",
+        "1",
+        "request_difference_offsets"
+      ]
+    },
+    {
+      "name": "current_preview_stock_timer",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "jobs",
+        "0",
+        "stock_timer"
+      ]
+    },
+    {
+      "name": "current_full_stock_timer",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "jobs",
+        "1",
+        "stock_timer"
+      ]
+    },
+    {
+      "name": "current_preview_owned_timer",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "jobs",
+        "0",
+        "owned_timer"
+      ]
+    },
+    {
+      "name": "current_full_owned_timer",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "jobs",
+        "1",
+        "owned_timer"
+      ]
+    },
+    {
+      "name": "current_preview_reference_diff",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "jobs",
+        "0",
+        "reference_different_bytes"
+      ]
+    },
+    {
+      "name": "current_full_reference_diff",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "jobs",
+        "1",
+        "reference_different_bytes"
+      ]
+    },
+    {
+      "name": "negative_outcome",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T073935Z-playback-jpeg-device-prefix-omission/run.json",
+      "pointer": [
+        "outcome"
+      ]
+    },
+    {
+      "name": "negative_exit",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T073935Z-playback-jpeg-device-prefix-omission/run.json",
+      "pointer": [
+        "exit_status"
+      ]
+    },
+    {
+      "name": "negative_matching_writes",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "negative",
+        "matching_program_writes"
+      ]
+    },
+    {
+      "name": "negative_expected_length",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "negative",
+        "expected_length_store",
+        "value"
+      ]
+    },
+    {
+      "name": "negative_failure",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-device-prefix-watch/omission-play/result.json",
+      "pointer": [
+        "bridge_boundary",
+        "failure"
+      ]
+    },
+    {
+      "name": "inspection_before_equal",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-device-prefix-watch/owned-play/media-inspection-before.json",
+      "pointer": [
+        "media_state_unchanged"
+      ]
+    },
+    {
+      "name": "inspection_after_equal",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-device-prefix-watch/owned-play/media-inspection-after.json",
+      "pointer": [
+        "media_state_unchanged"
+      ]
+    },
+    {
+      "name": "firmware_sha256",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/install/e2e-result.json",
+      "pointer": [
+        "emulator_start",
+        "inputs",
+        "installed_dat"
+      ]
+    },
+    {
+      "name": "current_install",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/install/e2e-result.json",
+      "pointer": [
+        "checks"
+      ]
+    },
+    {
+      "name": "current_restored",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/install/e2e-result.json",
+      "pointer": [
+        "mailbox",
+        "rollback",
+        "restored"
+      ]
+    },
+    {
+      "name": "allocation",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/install/e2e-result.json",
+      "pointer": [
+        "allocation",
+        "bytes"
+      ]
+    },
+    {
+      "name": "publications",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/install/e2e-result.json",
+      "pointer": [
+        "runtime",
+        "publications"
+      ]
+    },
+    {
+      "name": "prepared_runtime_equal",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "artifacts",
+        "prepared_runtime_and_elf_compare_exact"
+      ]
+    },
+    {
+      "name": "prefix_records",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "actual_play",
+        "preparation",
+        "records"
+      ]
+    },
+    {
+      "name": "play_records",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "actual_play",
+        "play",
+        "records"
+      ]
+    },
+    {
+      "name": "excluded_bodies",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "actual_play",
+        "protected_original_extents"
+      ]
+    },
+    {
+      "name": "protected_count",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "actual_play",
+        "protected_writes"
+      ]
+    },
+    {
+      "name": "body_fetch_count",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "actual_play",
+        "original_body_fetches"
+      ]
+    },
+    {
+      "name": "snapshots_equal",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "actual_play",
+        "all_actual_runtime_snapshots_byte_identical"
+      ]
+    },
+    {
+      "name": "current_scalar_differences",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "actual_play",
+        "each_runtime_upload_difference_bytes"
+      ]
+    },
+    {
+      "name": "current_publications_exact",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "actual_play",
+        "all_16_publication_words_exact_in_all_6_snapshots"
+      ]
+    },
+    {
+      "name": "current_source_output_png_equal",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "media_and_output",
+        "both_complete_sources_outputs_and_final_png_compare_exact"
+      ]
+    },
+    {
+      "name": "current_driver_equal",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "media_and_output",
+        "driver_snapshots_each_528_bytes_compare_exact"
+      ]
+    },
+    {
+      "name": "current_request_differences",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "media_and_output",
+        "request_snapshots_each_176_bytes_differences"
+      ]
+    },
+    {
+      "name": "current_reference_diff",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "media_and_output",
+        "pixel_reference_different_bytes"
+      ]
+    },
+    {
+      "name": "current_frame_stability",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "actual_play",
+        "pre_press_frames_identical"
+      ]
+    },
+    {
+      "name": "current_runtime",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "runtime_sha256"
+      ]
+    },
+    {
+      "name": "current_elf",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "elf_sha256"
+      ]
+    }
+  ]
+},
   {
     "id": "E-RTOS-PLATFORM-CURRENT-UNION-NATURAL-150",
     "claim": "The current staged-union natural scheduler/task-record observations pass the reached semantic comparison ({{comparison}}): Stock {{stock_semantics}}, Owned {{owned_semantics}}, independent preexecution projection {{starts}}, route {{route}} and per-object/per-caller record sequences {{record_sequences}}. Owned completes {{entries}} entries and {{returns}} returns with {{pending}} pending, {{record_calls}} task-record calls, {{prepare_calls}} Prepare and {{first_entries}} FirstEntry calls. Full lifetime acceptance remains {{full_lifetime}}; both roles refuse {{stock_coverage}} / {{owned_coverage}}.",
