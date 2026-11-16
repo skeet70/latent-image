@@ -151,6 +151,31 @@ fn bytes(machine: &Machine, core: usize, address: u32, length: usize) -> Result<
     Ok(bytes)
 }
 
+fn watch_violation(state: &serde_json::Value) -> Option<String> {
+    let violation = state.get("violation").filter(|value| !value.is_null())?;
+    let records = state.get("records").and_then(serde_json::Value::as_array);
+    let rows = records.map_or(&[][..], Vec::as_slice);
+    let last = rows.last();
+    let field = |name| last.and_then(|row| row.get(name));
+    let word = |value: Option<&serde_json::Value>| {
+        value.and_then(serde_json::Value::as_u64).map_or_else(|| "?".to_owned(), |value| format!("{value:#x}"))
+    };
+    let source = field("source").and_then(serde_json::Value::as_str).unwrap_or("?");
+    let last_count = last.map_or(0, |last| rows.iter().filter(|row| {
+        row.get("source") == last.get("source") && row.get("address") == last.get("address") && row.get("pc") == last.get("pc")
+    }).count());
+    let source_count = |wanted| rows.iter().filter(|row| row.get("source").and_then(serde_json::Value::as_str) == Some(wanted)).count();
+    Some(format!(
+        "interface watch overflowed: violation={}; records={}; cpu_fetch={}; cpu_write={}; last_source={source}; last_address={}; last_pc={}; last_key_count={last_count}",
+        violation.as_str().unwrap_or("?"),
+        rows.len(),
+        source_count("cpu-fetch"),
+        source_count("cpu-write"),
+        word(field("address")),
+        word(field("pc")),
+    ))
+}
+
 impl Stream {
     fn push(&mut self, observed: Observed) -> Result<(), String> {
         require(self.events.len() < EVENT_LIMIT, "interface event limit exceeded")?;
@@ -209,7 +234,7 @@ impl Stream {
     }
 
     pub fn stores(&mut self, plan: &Plan, state: &serde_json::Value) -> Result<(), String> {
-        require(state.get("violation").is_none_or(serde_json::Value::is_null), "interface watch overflowed")?;
+        if let Some(problem) = watch_violation(state) { return Err(problem); }
         let records = state.get("records").and_then(serde_json::Value::as_array).ok_or("interface watch records missing")?;
         require(self.cursor <= records.len(), "interface watch cursor invalid")?;
         #[derive(Deserialize)]
@@ -275,5 +300,18 @@ mod tests {
             assert!(Stream::default().stores(&plan(), &serde_json::json!({"records":[record],"violation":null})).is_err());
         }
         assert!(Stream::default().stores(&plan(), &serde_json::json!({"records":[],"violation":"overflow"})).is_err());
+    }
+
+    #[test]
+    fn watch_overflow_reports_the_last_producer() {
+        let state = serde_json::json!({"records":[
+            {"source":"cpu-write","address":8192,"pc":4096},
+            {"source":"cpu-fetch","address":12288,"pc":16384},
+            {"source":"cpu-fetch","address":12288,"pc":16384}
+        ],"violation":"record-limit"});
+        assert_eq!(
+            Stream::default().stores(&plan(), &state).unwrap_err(),
+            "interface watch overflowed: violation=record-limit; records=3; cpu_fetch=2; cpu_write=1; last_source=cpu-fetch; last_address=0x3000; last_pc=0x4000; last_key_count=2",
+        );
     }
 }

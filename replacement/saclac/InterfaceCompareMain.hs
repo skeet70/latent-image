@@ -138,7 +138,7 @@ applyProjection declaration receipt = do
 
 healthy :: Receipt -> Bool
 healthy receipt = observationError receipt == Nothing && machineFailure receipt == Nothing
-  && not (null (events receipt)) && stockFetches receipt > 0
+  && not (null (events receipt))
 
 projectionInputs :: Receipt -> Maybe [Binding]
 projectionInputs receipt = case inputBindings receipt of

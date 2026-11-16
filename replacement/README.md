@@ -150,6 +150,8 @@ The census sites file keeps the watch points, the action ranges and the `dispatc
 
 `//emulation:saclac-census` records `interface.events` in execution order: queue-43 submissions with payload bytes, task-43 requests to other queues with payload bytes, retained completion callback entries, client-reply targets and complete declared arguments, and writes to shared parameter blocks. Replies capture stack arguments and pointed records; transient stack pointer addresses are omitted, while shared pointer addresses remain observable. The sites document's `interface` section declares those layouts. Instruction clocks and cores are diagnostic except for selecting a reached scenario milestone. Callback entries do not project their incoming arguments; their posted completion payloads are observed separately. A missing write value, watch overflow or event limit is an observation error. Cold boot starts from reset; other scenarios use the shared post-setup checkpoint.
 
+The census rotates the classified watch after half of its retained-row bound or 50 million instructions, accumulating each closed segment into the same receipt. Rotation checks `Records::row_count`; it does not serialize retained rows or weaken the overflow refusal.
+
 | Boundary traffic | Ordered projection | Grounding |
 | --- | --- | --- |
 | Queue 43 input | Operation, sender, declared payload fields | Retained message descriptor at `0x72503c` and field declaration |

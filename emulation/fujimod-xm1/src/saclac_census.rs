@@ -33,6 +33,7 @@ const CALLER_LIMIT: usize = 512;
 const ADDRESS_LIMIT: usize = 32_768;
 const INSTRUCTION_LIMIT: u64 = 1_500_000_000;
 const WATCH_LIMIT: usize = 1 << 20;
+const WATCH_ROTATE_ROWS: usize = WATCH_LIMIT / 2;
 const SEGMENT_INSTRUCTIONS: u64 = 50_000_000;
 const DISPATCH_LIMIT: usize = 200_000;
 const WATCH_DECL_LIMIT: usize = 16;
@@ -562,11 +563,20 @@ fn containing(ranges: impl Iterator<Item = (u32, u32)>, address: u32) -> Option<
     ranges.enumerate().find(|(_, (start, end))| *start <= address && address < *end).map(|(index, _)| index)
 }
 
+fn watch_restart_due(elapsed: u64, rows: usize) -> bool {
+    elapsed >= SEGMENT_INSTRUCTIONS || rows >= WATCH_ROTATE_ROWS
+}
+
+
 struct FetchWatch { watch: Box<MemoryWatch>, started: u64 }
 impl FetchWatch {
     fn begin(machine: &Machine, maps: &[MemoryMap], classes: Vec<WatchRange>) -> Result<Self, String> {
         let watch = machine.session.board.memory_watch_begin_classified(classes, WATCH_LIMIT, maps.to_vec(), ViewPolicy::Observe)?;
         Ok(Self { watch, started: machine.instructions() })
+    }
+
+    fn records(&self) -> Result<usize, String> {
+        Ok(self.watch.records.borrow().row_count())
     }
     fn end(
         mut self,
@@ -982,9 +992,12 @@ impl<'a> Census<'a> {
             if !stops.is_empty() { self.stop(machine, &stops)?; }
             require(machine.instructions() > before || machine.session.board.now() > before_tick || !machine.traces.hits.is_empty(),
                 "census made no progress")?;
-            if self.watch.as_ref().is_some_and(|watch| machine.instructions() - watch.started >= SEGMENT_INSTRUCTIONS) {
-                self.restart_watch(machine)?;
-            }
+            let restart_watch = if let Some(watch) = &self.watch {
+                watch_restart_due(machine.instructions() - watch.started, watch.records()?)
+            } else {
+                false
+            };
+            if restart_watch { self.restart_watch(machine)?; }
         }
         Ok(())
     }
@@ -1721,6 +1734,13 @@ mod tests {
             Counted { key: (12, 5, 0xab), count: 2 },
             Counted { key: (12, 6, 0xab), count: 1 },
         ]);
+    }
+
+    #[test]
+    fn dense_fetches_rotate_before_the_instruction_boundary() {
+        assert!(!watch_restart_due(SEGMENT_INSTRUCTIONS - 1, WATCH_ROTATE_ROWS - 1));
+        assert!(watch_restart_due(SEGMENT_INSTRUCTIONS - 1, WATCH_ROTATE_ROWS));
+        assert!(watch_restart_due(SEGMENT_INSTRUCTIONS, 0));
     }
 
     #[test]
