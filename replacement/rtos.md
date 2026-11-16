@@ -74,6 +74,8 @@ Mixed scheduler/task-record plans retain scheduler validation and require all fo
 
 Owned dispatcher entries, transition ownership and read probes derive from the admitted Aggregate bodies for the actual image. NoSave must commit CPSR immediately before the contiguous Select body, and selected/global-lock/discarded/enabled probes bind unique instruction pairs in those bytes. Published veneers and external record layouts are unchanged. Historical IRQ intervals do not classify relocated owned helpers; core, task, context, mode and stack checks still apply.
 
+Saved continuations use that same admitted dispatcher-target table: Save binds Resume, and switching IRQ return binds IRQ-resume. Neither accepts another target by function class. Saved stack deltas, every frame word, CPSR controls and SelectStage retain their existing checks. Exit and exception-delivery service veneers remain published ABI targets.
+
 Frozen observations may receive an image-bound supplemental transition map without changing their original plan digest. A missing full-register checkpoint or omitted lock-occurrence row requires a changed-observer capture; comparison cannot reconstruct either from collapsed writes. The [natural task-record composition report](../reports/rtos-platform-options.md#natural-task-record-observer-composition) records the reached boundaries and independent refusals.
 
 ## Own-first staging and oracle
