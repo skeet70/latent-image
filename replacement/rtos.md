@@ -68,6 +68,14 @@ In the aggregate the six mailbox extents are retained stock; in the standalone s
 
 Earlier receipts do not transfer. The composed timer, cyclic and app receipts and the cached family observations (`timer-effective-06`, `cyclic-effective-05`, `task-records-effective-01`, `s3b-effective-02`, `s3a-effective-02`, `semaphore-effective-03`, `context-transfer-07`, `native-increment-06`) bind their own effective slices — the timer and task-record receipts name `ee74cc3d…` / `a88f9423…` — and none names a current platform or standalone image digest. The baseline images `88e35bc2…` / `69244d9c…` entered the tree at `c2fdc01c`, after those receipts, and no `docs/evidence.jsonl` record names either. `E-RTOS-PLACEMENT-BOUNDED-HOST-150` remains the host solver's record; the current image and family qualification is E-RTOS-EVENT-FLAG-AGGREGATE-150.
 
+### Image-bound natural observation
+
+Mixed scheduler/task-record plans retain scheduler validation and require all four task-record identities. The 512-call task-record bound applies to task-record calls, not all mixed entries. Natural comparison preserves both per-object and per-caller record order; reached creation and first-entry observations do not establish reset-delete/reuse coverage.
+
+Owned dispatcher entries, transition ownership and read probes derive from the admitted Aggregate bodies for the actual image. NoSave must commit CPSR immediately before the contiguous Select body, and selected/global-lock/discarded/enabled probes bind unique instruction pairs in those bytes. Published veneers and external record layouts are unchanged. Historical IRQ intervals do not classify relocated owned helpers; core, task, context, mode and stack checks still apply.
+
+Frozen observations may receive an image-bound supplemental transition map without changing their original plan digest. A missing full-register checkpoint or omitted lock-occurrence row requires a changed-observer capture; comparison cannot reconstruct either from collapsed writes. The [natural task-record composition report](../reports/rtos-platform-options.md#natural-task-record-observer-composition) records the reached boundaries and independent refusals.
+
 ## Own-first staging and oracle
 
 ```sh
