@@ -13,8 +13,9 @@ data DispatchRole = StockDispatch | OwnedDispatch deriving (Eq,Show)
 data Destination = SelectStage | SelectedTask | ExceptionTail | CallerReturn | ExceptionDelivery | NullWindow | TaskEntry deriving (Eq,Show)
 data Registers = Registers { registers :: [Word32], processorState :: Word32, tpidrurw :: Word32, cpacr :: Word32, fpexc :: Word32 } deriving (Eq,Show)
 data Loaded = Loaded { loadedSelected :: Maybe Word32, loadedDiscarded :: Maybe Word32, loadedEnabled :: Maybe Word32, loadedGlobalLock :: Maybe Word32, sourcePoint :: DispatchPoint } deriving (Eq,Show)
-data DispatchEvent = DispatchEvent { dispatchDomain :: Domain, dispatchPoint :: DispatchPoint, dispatchRole :: DispatchRole, beforeRegisters :: Registers, afterRegisters :: Registers, beforeMemory :: Memory, afterMemory :: Memory, loaded :: Loaded, destination :: Destination } deriving (Eq,Show)
-data DispatchFailure = MissingRegister Int | MissingMemory Address | MissingLoaded | WrongDestination | SavedContext | RunningSelection | ThreadIdentity | FloatingPointState | TrampolineState | RestoredFrame | ContextWord | GlobalLock deriving (Eq,Show)
+data SavedContinuations = SavedContinuations { resumeContinuation :: Address, irqResumeContinuation :: Address } deriving (Eq,Show)
+data DispatchEvent = DispatchEvent { dispatchDomain :: Domain, dispatchPoint :: DispatchPoint, dispatchRole :: DispatchRole, beforeRegisters :: Registers, afterRegisters :: Registers, beforeMemory :: Memory, afterMemory :: Memory, loaded :: Loaded, destination :: Destination, savedContinuations :: SavedContinuations } deriving (Eq,Show)
+data DispatchFailure = MissingRegister Int | MissingMemory Address | MissingLoaded | MissingDispatchTarget DispatchPoint | WrongDestination | SavedContext | RunningSelection | ThreadIdentity | FloatingPointState | TrampolineState | RestoredFrame | ContextWord | GlobalLock deriving (Eq,Show)
 
 redesignName :: Redesign -> String
 redesignName NullSelectionOwnRegisters = "null-selection-own-registers"
@@ -47,10 +48,10 @@ checkDispatch event = do
       want destination' = require WrongDestination (destination event==destination')
       changed address value = word after address >>= require SavedContext . (==value)
       preserved address = do old <- word before address; changed address old
-      save task bytes resume = do
+      save task bytes (Address resume) = do
         sp <- reg initial 13
         changed (task+0x18) (sp-bytes)
-        changed (task+0x1c) (base+resume)
+        changed (task+0x1c) resume
         mapM_ (\(index,offset) -> reg initial index >>= changed (sp-bytes+offset)) (zip ([4..11] ++ [14 | bytes==36]) [0,4..])
       select = do
         task <- need (loadedSelected values)
@@ -84,7 +85,7 @@ checkDispatch event = do
     Save -> do
       task <- word before running
       discarded <- if owned then need (loadedDiscarded values) else pure 0
-      if discarded==1 then preserved (task+0x18) >> preserved (task+0x1c) else save task 36 0x3668
+      if discarded==1 then preserved (task+0x18) >> preserved (task+0x1c) else save task 36 (resumeContinuation (savedContinuations event))
       want SelectStage
     NoSave -> do
       word after context >>= require ContextWord . (==0)
@@ -111,7 +112,7 @@ checkDispatch event = do
       enabled <- need (loadedEnabled values)
       if enabled==0 then want ExceptionTail else do
         let switching discarded = do
-              if discarded==1 then preserved (task+0x18) >> preserved (task+0x1c) else save task 32 0x37a4
+              if discarded==1 then preserved (task+0x18) >> preserved (task+0x1c) else save task 32 (irqResumeContinuation (savedContinuations event))
               want SelectStage
         if owned then do
           discarded <- need (loadedDiscarded values)

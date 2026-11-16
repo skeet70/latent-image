@@ -21,6 +21,7 @@ main = do
         regs = Registers (replicate 13 0 ++ [stack,99,target]) (0x93 .|. asyncMask) 2 0xf00000 0
         values point = Loaded (Just task) (Just 0) (Just 1) Nothing point
         event point = DispatchEvent domain point OwnedDispatch regs regs memory memory (values point) SelectedTask
+          (SavedContinuations (Address (base+0x3668)) (Address (base+0x37a4)))
         updateReg index value state = state {registers=take index (registers state) ++ [value] ++ drop (index+1) (registers state)}
         saved point bytes resume = (event point)
           { afterMemory=M.union (M.fromList [(Address (stack-bytes+offset),value) | (offset,value) <- zip [0,4..] (replicate 8 0 ++ [99 | bytes==36])])
@@ -58,6 +59,21 @@ main = do
     let trampoline=examples !! 4
     unless (checkDispatch trampoline {afterRegisters=(afterRegisters trampoline) {processorState=0x53}}==Right [])
       (fail "trampoline incorrectly restored A across its IRQ-enabled return")
+    let currentContinuations=SavedContinuations (Address (base+0x7800)) (Address (base+0x7900))
+    forM_ [(Save,36,0x7800,0x3668),(IrqReturn,32,0x7900,0x37a4)] $ \(point,bytes,current,obsolete)->do
+      let currentSave=(saved point bytes current)
+            {savedContinuations=currentContinuations,loaded=(values point) {loadedSelected=Just (task+0x100)}}
+      unless (checkDispatch currentSave==Right []) (fail ("current-image saved continuation refused: "++show (domain,point)))
+      forM_ [base+obsolete,base+current+4] $ \wrong->
+        unless (checkDispatch currentSave {afterMemory=M.insert (Address (task+0x1c)) wrong (afterMemory currentSave)}==Left SavedContext)
+          (fail ("unbound saved continuation accepted: "++show (domain,point,wrong)))
+      forM_ [stack-bytes,stack-bytes+4..stack-4] $ \address->
+        unless (checkDispatch currentSave {afterMemory=M.adjust (+1) (Address address) (afterMemory currentSave)}==Left SavedContext)
+          (fail ("corrupt current-image frame word accepted: "++show (domain,point,address)))
+      unless (checkDispatch currentSave {afterMemory=M.insert (Address (task+0x18)) stack (afterMemory currentSave)}==Left SavedContext)
+        (fail "current-image continuation waived the saved stack delta")
+      unless (checkDispatch currentSave {afterRegisters=(afterRegisters currentSave) {processorState=0x93 .|. (0x100-asyncMask)}}==Left RestoredFrame)
+        (fail "current-image continuation waived CPSR control preservation")
     let discarded = (event Save) {loaded=(values Save) {loadedDiscarded=Just 1},destination=SelectStage}
     unless (checkDispatch discarded==Right [RemoteTerminateRestarts]) (fail "discarded save did not retain restart")
     let nullEvent = (event Select)
