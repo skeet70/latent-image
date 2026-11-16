@@ -301,9 +301,9 @@ Scope: One identified topic SDK/installed checkpoint and unchanged natural input
 
 <!-- evidence-record E-RAM-DECODE-OWNERSHIP-150 -->
 
-E-RAM-DECODE-OWNERSHIP-150: The stock-clock-backed RAM image-4 decode completes with state 2, verdict 1, 11 jobs, 2631680 output bytes and CRC-32 564241381. The clock word remains 34836 after driver close and becomes 34832 after stock bookkeeping release. Install, trajectory and unload checks are {"install":"PASS","trajectory":"PASS","unload":"PASS"}. All job status observations, including the last job, are retained. Kernel tick-cell samples extend timing across counter wraps.
+E-RAM-DECODE-OWNERSHIP-150: The stock-clock-backed RAM image-4 decode completes with state 2, verdict 1, 11 jobs, 2631680 output bytes and CRC-32 564241381. The clock word remains 34836 after driver close and becomes 34832 after stock bookkeeping release. Install, trajectory and unload checks are {"install":"PASS","trajectory":"PASS","unload":"PASS"}. All job status observations, including the last job, are retained. Kernel tick-cell samples extend timing across counter wraps. The retained receipt consumer is passed; route ownership changes from 8 to 0.
 
-Scope: One FujiMod experiment route with the compile-time ReservedClock backend, diagnostic engine snapshot after successful acquire and clock/route check, and a trace window beginning after unload completes; boot start kind restored. The RAM experiment does not exercise BootClock register writes on silicon.
+Scope: Fresh cold-start FujiMod qualification of the shared-engine extraction with the compile-time ReservedClock backend, diagnostic engine snapshot after successful acquire and clock/route check, and a trace window beginning after unload completes; boot start kind cold. The changed experiment object is identified by the binary digest receipt. The RAM experiment does not exercise BootClock register writes on silicon or qualify Root's final composed artifact.
 
 <!-- /evidence-record E-RAM-DECODE-OWNERSHIP-150 -->
 
@@ -321,9 +321,9 @@ Scope: X-M1 1.50 canonical Method4, one owned decoder session through the retain
 
 <!-- evidence-record E-FIRST-RECORD-FLASH-BOOT-CHECK-150 -->
 
-E-FIRST-RECORD-FLASH-BOOT-CHECK-150: The compile-time clock-backend first stage cold-boots both staged packages to SHOOTING MENU. Retained stock: passed at 382538404 instructions; retained RC0: passed at 382538290; FujiMod stock: passed at 381500000; FujiMod RC0: passed at 381500000. Stock-derived DAT 42488245aa329b735147874e915d98520e6fa258c1976c8ca20da30ee5db8b0c; RC0-derived DAT 8225836bed4341bed4832052e535de1c815e5f76baf3b84663eb50d072e72d8f.
+E-FIRST-RECORD-FLASH-BOOT-CHECK-150: The compile-time clock-backend first stage cold-boots both staged packages to SHOOTING MENU. Retained stock: passed at 382538404 instructions; retained RC0: passed at 382538290; FujiMod stock: passed at 381500000; FujiMod RC0: passed at 381500000. Stock-derived DAT 4e4905dbf974678133634a0e492faf3b1083d09433be00cb1fa1389c19380900; RC0-derived DAT 9a282675c6698af3f8752ca99ea2d79f4ea18f651a3132a73344894dbe1662a3. The changed-byte shared-engine fixed loader also passes its positive route (passed), reaching menu [1,5,2] with 6 published-entry calls and 132 fixed-range instruction fetches. Actual fixed-record body-bit corruption passes its fail-stop oracle (passed): halted true, handoff null, 0 entry calls and 0 fixed-range fetches.
 
-Scope: Four actual cold-boot-to-menu executions, the two packages on each engine, from the committed first-stage image identified in the run's binary digest receipt. Packaging runs outside emulator admission; each emulator launcher acquires its own slot.
+Scope: Fresh qualification of the shared-engine extraction: four actual standalone cold-boot-to-menu executions, the two packages on each engine, plus the current fixed-loader positive and reversible actual body-bit-corruption control on FujiMod. Exact old ELF identities are retained with the new ELF/runtime-binary identities. Executable text changes; runtime-byte equivalence and old receipt/checkpoint transfer are not claimed. Packaging runs outside emulator admission; each emulator launcher acquires its own slot. These affected variants do not establish Root's final composed artifact or unrelated registry joins.
 
 <!-- /evidence-record E-FIRST-RECORD-FLASH-BOOT-CHECK-150 -->
 
