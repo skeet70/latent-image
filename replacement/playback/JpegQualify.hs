@@ -400,15 +400,20 @@ runNative runner output ident blocks calls expected defect = do
 data BuilderCaller = DirectBuilder | DevelopJob4 deriving (Eq, Show)
 data RecordMode = Mode7 | Mode8 | Mode5 | ModeNegative deriving (Eq, Show)
 data RecordPacking = PackingZero | PackingOne | PackingOther deriving (Eq, Show)
-data BuilderCase = BuilderCase CaseName BuilderCaller Scenario RecordMode RecordPacking deriving (Eq, Show)
+data BuilderCase = BuilderCase CaseName BuilderCaller Scenario RecordMode RecordPacking
 data BuilderDefect = MissingMode | MissingPacking | MissingWidth | MissingHeight | MissingSource | MissingCount | MissingDestination | MissingClear | MissingCallback deriving (Eq, Show)
+
+builderMode7Case, builderMode8Case, builderSetupFailureCase :: BuilderCase
+builderMode7Case = BuilderCase (CaseName "builder-mode7") DirectBuilder preview Mode7 PackingZero
+builderMode8Case = BuilderCase (CaseName "builder-mode8") DirectBuilder full Mode8 PackingOne
+builderSetupFailureCase = BuilderCase (CaseName "builder-setup-failed") DirectBuilder (preview {attachment=Refused,produced=Bytes 0}) Mode5 PackingZero
 
 builderCases :: [BuilderCase]
 builderCases =
-  [ BuilderCase (CaseName "builder-mode7") DirectBuilder preview Mode7 PackingZero
-  , BuilderCase (CaseName "builder-mode8") DirectBuilder full Mode8 PackingOne
+  [ builderMode7Case
+  , builderMode8Case
   , BuilderCase (CaseName "builder-signed-default-strict-packing") DirectBuilder preview ModeNegative PackingOther
-  , BuilderCase (CaseName "builder-setup-failed") DirectBuilder (preview {attachment=Refused,produced=Bytes 0}) Mode5 PackingZero
+  , builderSetupFailureCase
   , BuilderCase (CaseName "develop-job4-setup-failed") DevelopJob4 (preview {attachment=Refused,produced=Bytes 0}) Mode5 PackingZero
   ]
 
@@ -582,7 +587,7 @@ main = do
         ,"stock_receipt" .= (label++"-stock-result.json"),"owned_receipt" .= (label++"-owned-result.json")])
     else pure []
   builderControls<-if consumers then forM [MissingMode,MissingPacking,MissingWidth,MissingHeight,MissingSource,MissingCount,MissingDestination,MissingClear,MissingCallback] $ \defect->do
-      let selected=case defect of MissingPacking->builderCases!!1;MissingCallback->builderCases!!3;_->head builderCases
+      let selected=case defect of MissingPacking->builderMode8Case;MissingCallback->builderSetupFailureCase;_->builderMode7Case
           BuilderCase (CaseName label) _ _ _ _=selected
       _<-executeBuilder runner output parsed elf base runtime publications stock image5 selected Owned(Just defect)
       pure(object ["case" .= label,"defect" .= show defect,"returned_source_omission_rejected" .= True
