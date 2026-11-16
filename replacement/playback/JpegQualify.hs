@@ -403,6 +403,18 @@ data BuilderDefect = MissingMode | MissingPacking | MissingWidth | MissingHeight
 newtype SourceOffset = SourceOffset Int
 data BuilderMutation = BuilderMutation SourceOffset B.ByteString
 
+builderDefectName :: BuilderDefect -> CaseName
+builderDefectName selected = CaseName $ case selected of
+  MissingMode -> "missing-mode"
+  MissingPacking -> "missing-packing"
+  MissingWidth -> "missing-width"
+  MissingHeight -> "missing-height"
+  MissingSource -> "missing-source"
+  MissingCount -> "missing-count"
+  MissingDestination -> "missing-destination"
+  MissingClear -> "missing-clear"
+  MissingCallback -> "missing-callback"
+
 builderMode7Case, builderMode8Case, builderSetupFailureCase :: BuilderCase
 builderMode7Case = BuilderCase (CaseName "builder-mode7") DirectBuilder preview Mode7 PackingZero
 builderMode8Case = BuilderCase (CaseName "builder-mode8") DirectBuilder full Mode8 PackingOne
@@ -424,7 +436,7 @@ builderPacking selected = case selected of PackingZero->0;PackingOne->1;PackingO
 
 executeBuilder :: FilePath -> FilePath -> P.Package -> E.Elf -> Address -> B.ByteString -> [(Address,B.ByteString)] -> [Block] -> B.ByteString -> BuilderCase -> Role -> Maybe BuilderDefect -> IO Observation
 executeBuilder runner output package elf base@(Address baseWord) runtime publications stock image5 (BuilderCase (CaseName label) route selected mode packing) role defect = do
-  let ident=label++roleSuffix role++maybe "" (("-"++).show) defect
+  let ident=label++roleSuffix role++maybe "" (\selectedDefect -> let CaseName suffix=builderDefectName selectedDefect in "-"++suffix) defect
       Dimensions (Pixels width) (Pixels height)=dimensions selected
       (sourceAddress,sourceBytes)=sourceWords selected False
       (recordMode,requestMode)=builderMode mode
@@ -488,7 +500,7 @@ executeBuilder runner output package elf base@(Address baseWord) runtime publica
       defectBytes=case defect of Nothing->B.empty;Just selectedDefect->let BuilderMutation (SourceOffset offset) value=mutation selectedDefect in replace offset value originalBuilder <> assemble(call(Address 0xd9882c)++[0xe8bd8800])
       publish block@(Block kind' address@(Address start) permissions bytes extents)
         | kind'==StockDriver && role/=Original = Block kind' address permissions (foldr (\(Address location,value) original->replace(fromIntegral(location-start)) value original) bytes
-            [(location,if location==Address 0xd98904 && defect/=Nothing then assemble(load Ip 0x110300++[0xe12fff1c]) else value)
+            [(location,if location==Address 0xd98908 && defect/=Nothing then assemble[0x110300] else value)
             |(location@(Address target),value)<-publications,target>=start,target<start+fromIntegral(B.length bytes)]) extents
         | otherwise=block
       runtimeFunctions=[(Address(E.symbolValue symbol),fromIntegral(E.symbolSize symbol))|symbol<-E.elfSymbols elf,E.symbolKind symbol==E.FunctionSymbol,E.symbolSize symbol>0
@@ -599,9 +611,10 @@ main = do
   builderControls<-if consumers then forM [MissingMode,MissingPacking,MissingWidth,MissingHeight,MissingSource,MissingCount,MissingDestination,MissingClear,MissingCallback] $ \defect->do
       let selected=case defect of MissingPacking->builderMode8Case;MissingCallback->builderSetupFailureCase;_->builderMode7Case
           BuilderCase (CaseName label) _ _ _ _=selected
+          CaseName defectLabel=builderDefectName defect
       _<-executeBuilder runner output parsed elf base runtime publications stock image5 selected Owned(Just defect)
       pure(object ["case" .= label,"defect" .= show defect,"returned_source_omission_rejected" .= True
-        ,"receipt" .= (label++"-owned-"++show defect++"-result.json")])
+        ,"receipt" .= (label++"-owned-"++defectLabel++"-result.json")])
     else pure []
   deviceCpu<-if not consumers && P.deviceOwnership parsed==P.OwnedJpegDevice
     then qualifyDeviceCpu runner output parsed elf base runtime image4
