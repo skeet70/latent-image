@@ -847,6 +847,10 @@ familyBoundaryOf boundary = F.FamilyBoundary
 dispatchTags :: Role -> DispatchPoint -> Call -> Either Refusal [D.Redesign]
 dispatchTags role point call = do
   trace <- maybe (Left MissingTrace) Right (callTrace call)
+  let target kind = case [entryAddress entry | entry<-callDispatchEntries call,entryDomain entry==callDomain call,entrySemantic entry==DispatchSemantic kind] of
+        [address]->Right address
+        _->Left (DispatchModel (D.MissingDispatchTarget kind))
+  continuations<-D.SavedContinuations <$> target Resume <*> target IrqResume
   let history=traceHistory trace
       value kind = case reverse [value' | boundary <- history,boundaryKind boundary==kind,Just value' <- [boundaryValue boundary]] of [] -> Nothing; value':_ -> Just value'
       initial=traceBefore trace
@@ -863,7 +867,7 @@ dispatchTags role point call = do
         | pc==loaderBase+(if callDomain call==DomainA then 0x4288 else 0x4248) = D.ExceptionDelivery
         | otherwise = D.CallerReturn
       values=D.Loaded selected (value DiscardedBoundary) (value EnabledBoundary) (value GlobalLockBoundary) (maybe point id (traceOrigin trace))
-      event=D.DispatchEvent (callDomain call) point (if role==Stock then D.StockDispatch else D.OwnedDispatch) initial final (callBefore call) (callAfter call) values dest
+      event=D.DispatchEvent (callDomain call) point (if role==Stock then D.StockDispatch else D.OwnedDispatch) initial final (callBefore call) (callAfter call) values dest continuations
   either (Left . DispatchModel) Right (D.checkDispatch event)
 
 data ServiceCheckPolicy = StockService | MissingNotifyAtReturn Written | WrongNotifyService
