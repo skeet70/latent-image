@@ -1,4 +1,4 @@
-//! Task43 keeps one explicitly charged general-heap stack across stop/recreate.
+//! Task43 allocates and publishes one explicitly charged general-heap stack during the analyzed boot creation.
 
 use core::{ptr::{addr_of_mut, read_volatile, write_volatile}, sync::atomic::{AtomicU32, Ordering}};
 

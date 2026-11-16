@@ -142,8 +142,7 @@ healthy receipt = observationError receipt == Nothing && machineFailure receipt 
 
 projectionInputs :: Receipt -> Maybe [Binding]
 projectionInputs receipt = case inputBindings receipt of
-  [run, _, rom, sites, executable] -> Just [run, rom, sites, executable]
-  [run, _, rom, sites, trajectory, executable] -> Just [run, rom, sites, trajectory, executable]
+  run : _firmware : rest -> Just (run : rest)
   _ -> Nothing
 
 -- | A side's stream, closed by the milestone marker, and the marker's index. @window-end@ closes
