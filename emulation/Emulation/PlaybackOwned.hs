@@ -6,6 +6,7 @@ module Emulation.PlaybackOwned
   , originalBodies, checkOriginalBodies
   , Witness, sourceObserved, modeObserved, witness, witnessValue
   , QualificationScope (..), requiredObservations, qualificationObserved, qualificationScope, qualificationScopeText
+  , DeviceOwnership (..), deviceOwnership, deviceServices
   ) where
 
 import qualified ArmElf as E
@@ -48,7 +49,8 @@ data Binding = Binding Entry Address Address Address
 
 data SourceIdentity = SourceIdentity Word32 Int B.ByteString Digest
 data InstallerStorage = RendezvousStorage | MailboxStorage deriving (Eq, Ord, Show)
-data Package = Package Address B.ByteString Digest Digest [Binding] [(Address, B.ByteString)] [SourceIdentity] [(InstallerStorage, Address)]
+data DeviceFamily = RetainedDevice | OwnedDevice [(C.JpegDeviceService, Word32, Word32)]
+data Package = Package Address B.ByteString Digest Digest [Binding] [(Address, B.ByteString)] [SourceIdentity] [(InstallerStorage, Address)] DeviceFamily
 
 ensure :: Bool -> String -> Either String ()
 ensure condition problem = unless condition (Left problem)
@@ -164,6 +166,47 @@ parsePackage manifestBytes metadataBytes runtime elfBytes = do
         [ SourceIdentity internalStart (fromIntegral (internalEnd - internalStart)) B.empty (Digest (T.pack hash))
         | C.PlaybackJpegAcquire `elem` entries
         , C.PinnedBody internalStart internalEnd (C.SourceSha256 hash) <- C.jpegInternalBodies ]
+  let deviceSymbols service =
+        let (_, name) = C.jpegDeviceContract service
+        in [s | s <- E.globalSymbols elf, E.symbolName s == name]
+      deviceDefinitions service = [s | s <- deviceSymbols service, E.InSection _ <- [E.symbolSection s]]
+      present = [service | service <- C.jpegDeviceServices, not (null (deviceDefinitions service))]
+  ensure (null present || present == C.jpegDeviceServices) "owned JPEG device exports are incomplete"
+  forM_ C.jpegDeviceServices $ \service -> do
+    let (body, _) = C.jpegDeviceContract service
+    case deviceSymbols service of
+      [] -> ensure (null present) "owned JPEG device symbol missing"
+      [symbol] -> ensure (E.symbolKind symbol == E.FunctionSymbol && case E.symbolSection symbol of
+        E.InSection _ -> not (null present)
+        E.Absolute -> null present && E.symbolValue symbol == C.bodyStart body
+        E.Undefined -> False) "JPEG device symbol differs from selected source/owned family"
+      _ -> Left "duplicate JPEG device export"
+  family <- if null present then pure RetainedDevice else do
+    ensure (entries == C.playbackEntries) "owned JPEG device requires the composed transaction"
+    definitions <- forM C.jpegDeviceServices $ \service -> do
+      symbol <- case deviceDefinitions service of
+        [s] | E.symbolKind s == E.FunctionSymbol -> pure s
+        _ -> Left "unique owned JPEG device ELF function required"
+      let low = E.symbolValue symbol
+          high = toInteger low + toInteger (E.symbolSize symbol)
+      ensure (low `mod` 4 == 0 && E.symbolSize symbol >= 4 && low >= start && high <= toInteger start + 0x5000)
+        "owned JPEG device definition lies outside immutable code window"
+      ensure (any (\s -> E.sectionExecutable s && not (E.sectionWritable s)
+        && low >= E.sectionAddress s && high <= toInteger (E.sectionAddress s) + toInteger (E.sectionSize s))
+        (E.elfSections elf)) "owned JPEG device definition is not immutable executable code"
+      ensure (Just (B.take (fromIntegral (E.symbolSize symbol)) (B.drop (fromIntegral (low - start)) runtime))
+        == (B.pack <$> mapM (E.byteAt elf . (low +)) [0 .. E.symbolSize symbol - 1]))
+        "owned JPEG device runtime differs from ELF"
+      pure (service, low, fromInteger high)
+    let spans = sort [(lo,hi) | (_,lo,hi) <- definitions]
+    ensure (and [hi <= next | ((_,hi),(next,_)) <- zip spans (drop 1 spans)]) "owned JPEG device definitions overlap"
+    pure (OwnedDevice definitions)
+  let deviceSources = case family of
+        RetainedDevice -> []
+        OwnedDevice _ ->
+          [ SourceIdentity low (fromIntegral (high-low)) B.empty (Digest (T.pack hash))
+          | service <- C.jpegDeviceServices
+          , let (C.PinnedBody low high (C.SourceSha256 hash), _) = C.jpegDeviceContract service ]
   let allocated = [s | s <- E.elfSections elf, E.sectionAllocated s, E.sectionSize s > 0]
   forM_ allocated $ \section -> do
     let low = toInteger (E.sectionAddress section)
@@ -177,7 +220,7 @@ parsePackage manifestBytes metadataBytes runtime elfBytes = do
     ".ram_push.mailbox" -> storage MailboxStorage section
     _ -> pure []
   ensure (null mutable || sort (map fst mutable) == [RendezvousStorage, MailboxStorage]) "installer scalar storage pair is incomplete"
-  pure (Package base runtime (digest manifestBytes) runtimeDigest bindings artifacts (sources ++ internalSources) mutable)
+  pure (Package base runtime (digest manifestBytes) runtimeDigest bindings artifacts (sources ++ internalSources ++ deviceSources) mutable family)
   where
     storage kind section = do
       ensure (E.sectionWritable section && not (E.sectionExecutable section) && E.sectionSize section == 128) "installer scalar storage layout differs"
@@ -186,7 +229,7 @@ parsePackage manifestBytes metadataBytes runtime elfBytes = do
     unique (x:xs) = x : unique (filter (/= x) xs)
 
 validateInstalled :: Selection -> Package -> B.ByteString -> Value -> Either String Value
-validateInstalled selected (Package base _ manifest runtime _ _ _ _) recordBytes options = do
+validateInstalled selected (Package base _ manifest runtime _ _ _ _ _) recordBytes options = do
   record <- A.eitherDecodeStrict' recordBytes
   listed <- field "installed" options >>= array
   candidate <- case [v | v <- listed, field "directory" v == Right (A.toJSON (installedDirectory selected))] of
@@ -210,10 +253,10 @@ validateReady selected start ready = do
   ensure (field "snapshot_sha256" checkpoint == Right expected) "restored snapshot differs from selected installed identity"
 
 guestArtifacts :: Package -> [(Word32, B.ByteString)]
-guestArtifacts (Package (Address base) runtime _ _ _ publications _ _) = (base,runtime) : [(a,b) | (Address a,b) <- publications]
+guestArtifacts (Package (Address base) runtime _ _ _ publications _ _ _) = (base,runtime) : [(a,b) | (Address a,b) <- publications]
 
 checkGuestArtifacts :: Package -> [(Word32, B.ByteString)] -> Either String ()
-checkGuestArtifacts package@(Package (Address base) runtime _ _ _ _ _ mutable) actual = do
+checkGuestArtifacts package@(Package (Address base) runtime _ _ _ _ _ mutable _) actual = do
   ensure (map (\(a,b) -> (a,B.length b)) actual == map (\(a,b) -> (a,B.length b)) (guestArtifacts package)) "guest artifact read layout differs"
   case actual of
     (_,observed) : publications -> do
@@ -251,16 +294,16 @@ checkInstallerTerminal rendezvous mailbox = do
     "installer rendezvous has not completed its declared peer callback"
 
 originalBodies :: Package -> [(Word32, Int)]
-originalBodies (Package _ _ _ _ _ _ sources _) = [(start, count) | SourceIdentity start count _ _ <- sources]
+originalBodies (Package _ _ _ _ _ _ sources _ _) = [(start, count) | SourceIdentity start count _ _ <- sources]
 
 checkOriginalBodies :: Package -> [B.ByteString] -> Either String ()
-checkOriginalBodies (Package _ _ _ _ _ _ sources _) bodies = do
+checkOriginalBodies (Package _ _ _ _ _ _ sources _ _) bodies = do
   ensure (length sources == length bodies) "original playback body reads missing"
   forM_ (zip sources bodies) $ \(SourceIdentity _ count header expected, bytes) ->
     ensure (B.length bytes == count && digest (header <> bytes) == expected) "original playback source bytes differ from pinned source identity"
 
 ranges :: Package -> ([W.WatchRange], [W.WatchRange])
-ranges (Package (Address base) runtime _ _ bindings publications sources _) = (W.unionWatchRanges (publicationRanges ++ bodies ++ [range base (base + fromIntegral (B.length runtime))]), bodies ++ entries)
+ranges (Package (Address base) runtime _ _ bindings publications sources _ _) = (W.unionWatchRanges (publicationRanges ++ bodies ++ [range base (base + fromIntegral (B.length runtime))]), bodies ++ entries)
   where
     range lo hi = either error id (W.watchRange (W.watchAddress lo) (W.watchAddress hi))
     publicationRanges = W.unionWatchRanges [range a (a + 4) | (Address a,_) <- publications]
@@ -300,7 +343,7 @@ sourceObserved = entryObserved C.PlaybackSource
 modeObserved = entryObserved C.PlaybackMode
 
 hasJpeg :: Package -> Bool
-hasJpeg (Package _ _ _ _ bindings _ _ _) = any (\(Binding entry _ _ _) -> entry == C.PlaybackJpegAcquire) bindings
+hasJpeg (Package _ _ _ _ bindings _ _ _ _) = any (\(Binding entry _ _ _) -> entry == C.PlaybackJpegAcquire) bindings
 
 requiredObservations :: Package -> [(T.Text, Witness -> Bool)]
 requiredObservations package
@@ -322,6 +365,17 @@ qualificationScopeText :: QualificationScope -> T.Text
 qualificationScopeText PreparationPair = "preparation-pair"
 qualificationScopeText JpegTransaction = "jpeg-transaction"
 
+data DeviceOwnership = RetainedJpegDevice | OwnedJpegDevice deriving (Eq, Show)
+
+deviceOwnership :: Package -> DeviceOwnership
+deviceOwnership (Package _ _ _ _ _ _ _ _ RetainedDevice) = RetainedJpegDevice
+deviceOwnership _ = OwnedJpegDevice
+
+deviceServices :: Maybe Package -> [(C.JpegDeviceService, Word32, Word32)]
+deviceServices (Just (Package _ _ _ _ _ _ _ _ (OwnedDevice definitions))) = definitions
+deviceServices _ = [(service, C.bodyStart body, C.bodyEnd body)
+  | service <- C.jpegDeviceServices, let (body, _) = C.jpegDeviceContract service]
+
 witness :: Package -> Value -> Value -> Value -> Either String Witness
 witness package ackValue stateValue endValue = do
   ack <- W.parseFixedWatchAck ackValue
@@ -338,7 +392,7 @@ witness package ackValue stateValue endValue = do
   ensure (not (any (\r -> case r of
     W.CpuRecord {W.cpuAccess = W.CpuFetch, W.cpuPhysical = physical, W.cpuBytes = bytes} -> body (W.watchAddressValue physical) (W.watchBytesValue bytes)
     _ -> False) records)) "original playback body fetched"
-  let Package _ _ _ _ bindings _ _ _ = package
+  let Package _ _ _ _ bindings _ _ _ _ = package
       seen entry = any (\r -> case r of
         W.CpuRecord {W.cpuAccess = W.CpuFetch, W.cpuPhysical = physical} -> any (\(Binding kind _ _ (Address target)) -> kind == entry && W.watchAddressValue physical == target) bindings
         _ -> False) records
