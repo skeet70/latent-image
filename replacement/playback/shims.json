@@ -1,6 +1,6 @@
 {
   "unit": "playback",
-  "summary": "Emulator-only source/mode preparation compiled into a relocatable RAM experiment object. Queue-4 callers, dispatch/output services and shared layouts remain retained boundaries.",
+  "summary": "Emulator-only source/mode preparation and channel9 JPEG transaction compiled into relocatable RAM experiment objects. Playback callers, device/services, shared layouts and publication lifetimes remain retained boundaries.",
   "classification": "module",
   "rows": [
     {
@@ -47,6 +47,52 @@
         "kind": "reference-only",
         "contract": "replacement/playback/contract.json",
         "requirement": "Queue4 serializes entry. Source-bound payload extents stay readable and disjoint from copied destinations; the experiment remains resident over the guarded PLAY interval."
+      }],
+      "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
+    },
+    {
+      "id": "playback-jpeg-entry",
+      "shim": "Channel9 acquire, restart, release and descriptor callback A32 exports",
+      "kind": "stock-ABI export",
+      "other_side": "Retained Playback machine5 callers and descriptor0x48 IRQ registry",
+      "owned": "partly",
+      "removal": "all transaction callers and IRQ registration use the typed owned JPEG API directly",
+      "state": "required",
+      "evidence": [{
+        "kind": "reference-only",
+        "symbols": ["xm1_playback_jpeg_acquire", "xm1_playback_jpeg_restart", "xm1_playback_jpeg_release", "xm1_playback_jpeg_interrupt"],
+        "contract": "replacement/playback/jpeg-contract.json",
+        "requirement": "Native caller and installed PLAY receipts bind the transaction to the relinked six-hook package."
+      }],
+      "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
+    },
+    {
+      "id": "playback-jpeg-services",
+      "shim": "Retained JPEG device, resource routing, lock, cache and timer services",
+      "kind": "trampoline into retained stock",
+      "other_side": "Channel9 device/services, resource1e, reserved lock9 and IRQ registration/release",
+      "owned": "partly",
+      "removal": "the packaged transaction links owned service providers with qualified hardware laws",
+      "state": "required",
+      "evidence": [{
+        "kind": "reference-only",
+        "contract": "replacement/playback/jpeg-contract.json",
+        "requirement": "Nominal PLAY exercises existing device services; command4 restart and status17/24 device behavior remain unqualified."
+      }],
+      "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
+    },
+    {
+      "id": "playback-jpeg-lifetime",
+      "shim": "Shared JPEG request/configuration layout and published IRQ lifetime",
+      "kind": "guest-memory layout view",
+      "other_side": "Retained Playback request/completion consumers and interrupt release",
+      "owned": "partly",
+      "removal": "all shared-state consumers use owned layouts and IRQ quiescence permits publication removal",
+      "state": "required",
+      "evidence": [{
+        "kind": "reference-only",
+        "contract": "replacement/playback/jpeg-contract.json",
+        "requirement": "The runtime and callback remain resident through nominal PLAY and retained IRQ release; unload and post-consumer reuse are not qualified."
       }],
       "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
     }

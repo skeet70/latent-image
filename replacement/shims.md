@@ -627,7 +627,7 @@ Classification: `linked`. [Declarations](plain_load/shims.json).
 
 ## playback
 
-Emulator-only source/mode preparation compiled into a relocatable RAM experiment object. Queue-4 callers, dispatch/output services and shared layouts remain retained boundaries.
+Emulator-only source/mode preparation and channel9 JPEG transaction compiled into relocatable RAM experiment objects. Playback callers, device/services, shared layouts and publication lifetimes remain retained boundaries.
 
 Classification: `module`. [Declarations](playback/shims.json).
 
@@ -636,6 +636,9 @@ Classification: `module`. [Declarations](playback/shims.json).
 | Source and mode A32 entry exports and two-word publication veneers | stock-ABI export | Queue-4 loop, retained router and machine-1 action callers | partly | all entry callers link the typed owned preparation API directly | required | unestablished | reference-only: The relocatable object is linked at the experiment's allocated runtime base; installation and conditional caller receipts bind that package. |
 | Retained machine dispatch, output route, display preset and memory ABI | trampoline into retained stock | Stock dispatcher0x011e8bf8, route0x0064982c, preset0x006d1294 and memory0x0089d908 | partly | the packaged composition links the owned dispatch, output, preset and memory providers | required | unestablished | reference-only: The experiment binds these services to the retained addresses in the preparation contract. |
 | Queue-4 payload lifetime and shared playback globals | guest-memory layout view | Retained message storage and machine0/1/11 consumers | partly | the message producer and all shared-state consumers use the owned typed lifetime and layout contract | required | unestablished | reference-only: Queue4 serializes entry. Source-bound payload extents stay readable and disjoint from copied destinations; the experiment remains resident over the guarded PLAY interval. |
+| Channel9 acquire, restart, release and descriptor callback A32 exports | stock-ABI export | Retained Playback machine5 callers and descriptor0x48 IRQ registry | partly | all transaction callers and IRQ registration use the typed owned JPEG API directly | required | unestablished | reference-only: Native caller and installed PLAY receipts bind the transaction to the relinked six-hook package. |
+| Retained JPEG device, resource routing, lock, cache and timer services | trampoline into retained stock | Channel9 device/services, resource1e, reserved lock9 and IRQ registration/release | partly | the packaged transaction links owned service providers with qualified hardware laws | required | unestablished | reference-only: Nominal PLAY exercises existing device services; command4 restart and status17/24 device behavior remain unqualified. |
+| Shared JPEG request/configuration layout and published IRQ lifetime | guest-memory layout view | Retained Playback request/completion consumers and interrupt release | partly | all shared-state consumers use owned layouts and IRQ quiescence permits publication removal | required | unestablished | reference-only: The runtime and callback remain resident through nominal PLAY and retained IRQ release; unload and post-consumer reuse are not qualified. |
 
 ## power_lifecycle
 
