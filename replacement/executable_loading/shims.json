@@ -17,7 +17,7 @@
         "contract": "replacement/executable_loading/src/native.rs",
         "requirement": "Startup supplies a required absolute-deadline provider on the qualified clock before initialization; every request carries that one deadline unchanged through read and cleanup. No duration or default is fitted here. Abort argument 0x91482c remains a task argument, not policy storage."
       }],
-      "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "established"}
+      "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
     },
     {
       "id": "executable-loading-kernel",
