@@ -2227,6 +2227,27 @@
         "same_image_comparison": "unestablished",
         "direct_owned_api": "unestablished"
       }
+    },
+    {
+      "id": "develop-loading-retained-services",
+      "shim": "X-M1 task60 and core-0 clock leaves used by executable_loading",
+      "kind": "trampoline into retained stock",
+      "other_side": "retained X-M1 RTOS and core-0 clock services",
+      "owned": "no",
+      "removal": "the final composition supplies owned queue/task and qualified monotonic clock services",
+      "state": "required",
+      "evidence": [{
+        "image": "//replacement/develop:develop-candidate",
+        "kind": "retained-import",
+        "symbols": ["xm1_loading_create_channel", "xm1_loading_create_task", "xm1_loading_current_task", "xm1_loading_receive_message", "xm1_loading_send_message", "xm1_loading_signal_reserved", "xm1_loading_wait_reserved", "xm1_lower_read_clock_mask", "xm1_lower_read_clock_restore"],
+        "contract": "replacement/develop/BUILD.bazel",
+        "requirement": "Loading_stock.S binds the source-inspected X-M1 1.50 leaves. This declares the retained ABI boundary; it does not establish a configured deadline or physical NAND quiescence."
+      }],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
     }
   ]
 }
