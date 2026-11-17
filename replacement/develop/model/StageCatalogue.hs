@@ -157,7 +157,7 @@ stages =
   , scenarioStage "output-expansion" "OutputExpansionScenarios" Bundle OutputExpansionScenarios.outputExpansionScenarios
   , scenarioStage "output-jpeg" "OutputJpegScenarios" Image5 OutputJpegScenarios.outputJpegScenarios
   , scenarioStage "output-metadata" "OutputMetadataScenarios" Bundle OutputMetadataScenarios.outputMetadataScenarios
-  , scenarioStage "output-triplets" "OutputTripletsScenarios" Image5 (OutputTripletsScenarios.scenarios ++ OutputTripletsScenarios.loadingFailureScenarios)
+  , scenarioStage "output-triplets" "OutputTripletsScenarios" Image5 (\bytes resolve -> OutputTripletsScenarios.scenarios bytes resolve ++ OutputTripletsScenarios.loadingFailureScenarios)
   , scenarioStage "outputs" "OutputsScenarios" Image5 OutputsScenarios.outputsScenarios
   , scenarioStage "packed-software" "PackedSoftwareScenarios" Image5 PackedSoftwareScenarios.packedSoftwareScenarios
   , viewStage "permit" "PermitScenarios" Image5 (\bytes _ -> map transactionView (PermitScenarios.permitScenarios bytes))
