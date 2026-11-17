@@ -1,7 +1,7 @@
 {
   "unit": "executable_loading",
   "summary": "The single typed task60 command, producer, completion and lower-read owner.",
-  "classification": "component",
+  "classification": "module",
   "rows": [
     {
       "id": "executable-loading-callers",
