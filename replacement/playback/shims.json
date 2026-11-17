@@ -1,6 +1,6 @@
 {
   "unit": "playback",
-  "summary": "Emulator-only source/mode preparation and channel9 JPEG transaction compiled into relocatable RAM experiment objects. Playback callers, device/services, shared layouts and publication lifetimes remain retained boundaries.",
+  "summary": "Emulator-only source/mode preparation, channel9 JPEG transaction and nominal MMIO services compiled into relocatable RAM experiment objects. Playback callers, command4 continuation, resource/kernel services, shared layouts and publication lifetimes remain retained boundaries.",
   "classification": "module",
   "rows": [
     {
@@ -54,7 +54,7 @@
       "id": "playback-jpeg-entry",
       "shim": "Channel9 acquire, restart, release and descriptor callback A32 exports",
       "kind": "stock-ABI export",
-      "other_side": "Retained Playback machine5 callers and descriptor0x48 IRQ registry",
+      "other_side": "Retained Playback machine5, channel9 request builder0x00d98904 and descriptor0x48 IRQ registry",
       "owned": "partly",
       "removal": "all transaction callers and IRQ registration use the typed owned JPEG API directly",
       "state": "required",
@@ -68,16 +68,16 @@
     },
     {
       "id": "playback-jpeg-services",
-      "shim": "Retained JPEG device, resource routing, lock, cache and timer services",
+      "shim": "Retained JPEG continuation, resource routing, lock, cache and timer services",
       "kind": "trampoline into retained stock",
-      "other_side": "Channel9 device/services, resource1e, reserved lock9 and IRQ registration/release",
+      "other_side": "Command4 endpoint reprogramming0x0065aa44, resource1e, reserved lock9 and IRQ registration/release",
       "owned": "partly",
       "removal": "the packaged transaction links owned service providers with qualified hardware laws",
       "state": "required",
       "evidence": [{
         "kind": "reference-only",
         "contract": "replacement/playback/jpeg-contract.json",
-        "requirement": "Nominal PLAY exercises existing device services; command4 restart and status17/24 device behavior remain unqualified."
+        "requirement": "Nominal low-level MMIO services are defined in the owned transaction artifact. Native high-level callers keep explicit device-service boundaries; full-system polling and MMIO acceptance use the existing JPEG model. Command4 and status17/24 device behavior remain unqualified."
       }],
       "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
     },

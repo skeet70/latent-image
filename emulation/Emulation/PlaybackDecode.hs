@@ -1,6 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
-module Emulation.PlaybackDecode (Snapshot, snapshot, withEndpoint, SourceCopy, sourceCopy, withSourceCopy, inspect, physical, ByteRange, rangeAddress, rangeCount, sourceRange, outputRange, OutputEvent (..), CompletionBinding, completionBinding, completionRequestRange, inspectRelease) where
+module Emulation.PlaybackDecode (Snapshot, snapshot, withEndpoint, SourceCopy, sourceCopy, withSourceCopy, inspect, physical, ByteRange, rangeAddress, rangeCount, sourceRange, outputRange, OutputEvent (..), CompletionBinding, completionBinding, completionRequestRange, inspectHandback, inspectRelease) where
 
 import Codec.Picture (convertRGB8, decodeJpeg, imageHeight, imageWidth, pixelAt, PixelRGB8 (..))
 import Control.Monad (unless)
@@ -144,6 +144,17 @@ completionBinding completed event = do
 
 completionRequestRange :: CompletionBinding -> ByteRange
 completionRequestRange (CompletionBinding j _ _ _) = ByteRange (physical (owner j)) 0xb0
+
+inspectHandback :: CompletionBinding -> B.ByteString -> Either String Value
+inspectHandback (CompletionBinding j g _ (OutputEvent outputEvent)) request = do
+  unless (B.length request == 0xb0) (Left "completion request layout differs")
+  unless (word request 0x28 == 0 && word request 0x24 == fromIntegral (extent g)
+    && word request 0x2c == 0 && word request 0x30 == outputEvent)
+    (Left "request handback differs from the measured device output")
+  unless (word request 0x4c == 0x0121fec8 && word request 0x50 == 0x0121ff20)
+    (Left "request handback callback publication differs")
+  pure (object ["job" .= owner j, "produced_bytes" .= word request 0x24, "status" .= word request 0x28
+    , "input_event" .= word request 0x2c, "output_event" .= word request 0x30, "callback" .= word request 0x4c])
 
 inspectRelease :: CompletionBinding -> B.ByteString -> B.ByteString -> Either String Value
 inspectRelease (CompletionBinding j g expectedConfiguration (OutputEvent outputEvent)) shared request = do

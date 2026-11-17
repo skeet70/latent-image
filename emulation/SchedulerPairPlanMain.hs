@@ -88,25 +88,36 @@ aggregateOf carriersPath symbolsAPath symbolsBPath = do
       (M.fromList ([((DomainA,address),symbol) | (address,symbol) <- M.toList entriesA]
                 ++ [((DomainB,address),symbol) | (address,symbol) <- M.toList entriesB])))
 
+aggregateOption :: Options -> IO (Maybe Aggregate)
+aggregateOption options=case (optionSymbolsA options,optionSymbolsB options,optionCarriers options) of
+  (Nothing,Nothing,Nothing)->pure Nothing
+  (Just symbolsA,Just symbolsB,Just carriers)->Just <$> (either H.failH pure =<< aggregateOf carriers symbolsA symbolsB)
+  _->H.failH "the aggregate needs --symbols-a, --symbols-b and --carriers together"
+
 main :: IO ()
 main = do
   args <- getArgs
   (options, positional) <- either H.failH pure (parseOptions emptyOptions args)
   case positional of
+    ["transition-map",original,datPath,loaderAPath,loaderBPath,output]->do
+      exists<-doesPathExist output
+      H.ensure (not exists) "output already exists"
+      aggregate<-aggregateOption options
+      planBytes<-B.readFile original
+      dat<-B.readFile datPath
+      a<-B.readFile loaderAPath
+      b<-B.readFile loaderBPath
+      binding<-either H.failH pure (deriveTransitionBinding aggregate planBytes dat (M.fromList [(DomainA,a),(DomainB,b)]))
+      withBinaryFile output WriteMode (\handle->L.hPut handle (J.encode binding <> L.singleton 10))
     regionsPath:roleText:datPath:loaderAPath:loaderBPath:output:additionalRegions -> do
       exists <- doesPathExist output
       H.ensure (not exists) "output already exists"
       role <- either H.failH pure (parseRole roleText)
-      aggregate <- case (optionSymbolsA options,optionSymbolsB options,optionCarriers options) of
-        (Nothing,Nothing,Nothing) -> pure Nothing
-        (Just symbolsA,Just symbolsB,Just carriersPath) -> do
-          bound <- either H.failH pure =<< aggregateOf carriersPath symbolsA symbolsB
-          pure (Just bound)
-        _ -> H.failH "the aggregate needs --symbols-a, --symbols-b and --carriers together"
+      aggregate <- aggregateOption options
       regions <- mapM (\path -> B.readFile path >>= either H.failH pure . parseCatalog) (regionsPath:additionalRegions)
       dat <- B.readFile datPath
       a <- B.readFile loaderAPath
       b <- B.readFile loaderBPath
       plan <- either H.failH pure (derivePlanWithAggregate aggregate role dat regions (M.fromList [(DomainA,a),(DomainB,b)]))
       withBinaryFile output WriteMode (\handle -> L.hPut handle (J.encode (planValue plan) <> L.singleton 10))
-    _ -> H.failH "usage: scheduler-pair-plan REGIONS ROLE DAT EXPECTED_LOADER_A EXPECTED_LOADER_B NEW_PLAN_JSON [ADDITIONAL_REGIONS ...] [--symbols-a PATH --symbols-b PATH --carriers PATH]"
+    _ -> H.failH "usage: scheduler-pair-plan REGIONS ROLE DAT EXPECTED_LOADER_A EXPECTED_LOADER_B NEW_PLAN_JSON [ADDITIONAL_REGIONS ...] [--symbols-a PATH --symbols-b PATH --carriers PATH]; or transition-map ORIGINAL_PLAN DAT LOADER_A LOADER_B NEW_MAP_JSON with the same aggregate flags"

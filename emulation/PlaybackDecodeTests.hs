@@ -57,8 +57,12 @@ main = do
       let patch offset value bytes = B.take offset bytes <> wordsAt 4 [(0,value)] <> B.drop (offset+4) bytes
           shared = B.take 0x1a0 (wordsAt 0x210 [(0x198,0x14eae2c)]) <> B.drop 8 (params 0x40100000 1024)
           request = wordsAt 0xb0 [(8,18),(12,9),(0x10,32),(0x14,16),(0x18,0x40100000),(0x1c,n)
-            ,(0x20,0x40200000),(0x24,1024),(0x30,0x87654321)]
+            ,(0x20,0x40200000),(0x24,1024),(0x30,0x87654321),(0x4c,0x121fec8),(0x50,0x121ff20)]
       check "completed output reaches its released request" (isRight (Decode.inspectRelease binding shared request))
+      check "measured completion is handed back before callback execution" (isRight (Decode.inspectHandback binding request))
+      mapM_ (\(offset,value) -> check "unbound callback or result is refused at completion entry"
+        (isLeft (Decode.inspectHandback binding (patch offset value request))))
+        [(0x24,0),(0x28,1),(0x2c,1),(0x30,0x87654320),(0x4c,0x121ff20),(0x50,0)]
       mapM_ (\(offset,value) -> check "wrong request handback refused"
         (isLeft (Decode.inspectRelease binding shared (patch offset value request))))
         [(0x24,0),(0x28,1),(0x30,0x87654320),(0x18,0x40100020),(0x1c,n+1),(0x20,0x40200020),(0x10,16),(0x14,8)]

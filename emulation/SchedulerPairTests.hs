@@ -13,7 +13,7 @@ import qualified Data.ByteString.Lazy as L
 import qualified Emulation.OwnFirstPairCheck as Q
 import Emulation.SchedulerPairCheck
 import Emulation.SchedulerPairDecode (decodeCheckedObservation, decodeControlObservation)
-import Emulation.SchedulerPairEvidence (qualifyEvidence, qualifyControlEvidence, checkControlEvidence)
+import Emulation.SchedulerPairEvidence (emptyCallEvidence, accumulateEvidence, qualifyEvidence, qualifyControlEvidence, checkControlEvidence)
 import Emulation.SchedulerPairModel
 import Emulation.SchedulerPairPlan
 import qualified Emulation.SchedulerPairS2 as D
@@ -26,11 +26,11 @@ assert :: String -> Bool -> IO ()
 assert label value = unless value (error label)
 plan :: Plan
 plan = Plan Owned "dat" [Entry DomainA (HelperSemantic Notify) (Address 0x44018),Entry DomainB (HelperSemantic Notify) (Address 0xd3fd4)]
-  [Guard DomainA (Address 0x44018) (Address 0x44044) "a",Guard DomainB (Address 0xd3fd4) (Address 0xd4004) "b"] [] [] retainedArmingEntries [] []
+  [Guard DomainA (Address 0x44018) (Address 0x44044) "a",Guard DomainB (Address 0xd3fd4) (Address 0xd4004) "b"] [] [] retainedArmingEntries [] [] stockTransitions (fixedDispatchEntries Owned)
 planBytes :: B.ByteString
 planBytes = "synthetic-plan"
 call :: Call
-call = Call DomainA (Address 0x44018) (HelperSemantic Notify) 0 0xd3 (Arguments [2,0,0,0]) M.empty M.empty 0 0xd3 [] [Written (Address 0xfffb40cc) 4 0x1000000] 1 30 (Just (CallTrace registers registers Returned [] Nothing)) 0x9000 0 Nothing [] [ownOrigin] S.empty
+call = Call DomainA (Address 0x44018) (HelperSemantic Notify) 0 0xd3 (Arguments [2,0,0,0]) M.empty M.empty 0 0xd3 [] [Written (Address 0xfffb40cc) 4 0x1000000] 1 30 (Just (CallTrace registers registers Returned [] Nothing)) 0x9000 0 Nothing [] [ownOrigin] S.empty stockTransitions (fixedDispatchEntries Owned)
  where registers = D.Registers (replicate 16 0) 0xd3 0 0 0
 ownOrigin :: WriteOrigin
 ownOrigin = WriteOrigin 0 (Address 0x44018) (Address 0x8000) 0xd3 (Address 0x9000) 0 1
@@ -50,6 +50,23 @@ main :: IO ()
 main = do
   assert "correct trace qualifies" (case qualify planBytes plan observation of Right _ -> True; Left _ -> False)
   assert "plan wire round trip" (J.eitherDecodeStrict (L.toStrict (J.encode (planValue plan))) == Right plan)
+  let currentImage=plan {planTransitionExtents=
+        [TransitionExtent domain (Address (base domain+0x204)) (Address (base domain+0x368)) | domain<-[DomainA,DomainB]]
+        ++[TransitionExtent DomainA (Address 0x44030) (Address 0x44044)]}
+      relocatedOrigin=ownOrigin {writerPc=Address 0x43650}
+      classified current origin=qualifyEvidence planBytes current observation
+        (accumulateEvidence current emptyCallEvidence call {callBankOrigins=[origin]})
+      accepted result=case result of Right _->True; Left _->False
+  assert "linked helper writes inside a former dispatcher interval qualify"
+    (accepted (classified currentImage relocatedOrigin))
+  assert "the same instruction remains excluded in its retained image"
+    (classified plan relocatedOrigin==Left MissingTrace)
+  assert "linked IRQ transition writes cannot supply helper effects"
+    (classified currentImage relocatedOrigin {writerPc=Address 0x44034}==Left MissingTrace)
+  assert "matching linked code cannot borrow another kernel context"
+    (classified currentImage relocatedOrigin {writerContext=1}==Left MissingTrace)
+  assert "matching linked code cannot borrow IRQ mode"
+    (classified currentImage relocatedOrigin {writerCpsr=0x92}==Left MissingTrace)
   let prefixArmings=either error id (armingEntries (Address 0x40020) (Address 0x1042c))
       prefixPlan=plan {planArmingEntries=prefixArmings}
       planFields=case planValue plan of J.Object fields->fields; _->error "fixture plan shape"
@@ -506,10 +523,24 @@ main = do
   assert "catalog list preserves actual entry addresses and semantic tags" (case catalogPlan of
     Right planned -> planEntries planned==catalogEntries firstCatalog++catalogEntries secondCatalog && planProbes planned==catalogProbes secondCatalog && length (planGuards planned)==3 && planArmingEntries planned==retainedArmingEntries
     Left _ -> False)
+  let emptyLoaders=M.fromList [(DomainA,B.replicate 0xdae0 0),(DomainB,B.replicate 0xdaa0 0)]
+      stockImage=either error id (derivePlan Stock B.empty [firstCatalog] emptyLoaders)
+      stockImageBytes=L.toStrict (J.encode (planValue stockImage))
+      boundImage=either error id (deriveTransitionBinding Nothing stockImageBytes B.empty emptyLoaders)
+      alteredLoader=B.replicate 0x2000 0<>B.singleton 1<>B.replicate (0xdae0-0x2001) 0
+      rejected result=case result of Left _->True; Right _->False
+  assert "supplemental transitions preserve the captured plan binding"
+    (applyTransitionBinding stockImageBytes stockImage boundImage==Right stockImage)
+  assert "supplemental transitions refuse another plan receipt"
+    (rejected (applyTransitionBinding (stockImageBytes<>"\n") stockImage boundImage))
+  assert "supplemental transitions refuse another DAT"
+    (rejected (deriveTransitionBinding Nothing stockImageBytes (B.singleton 1) emptyLoaders))
+  assert "supplemental transitions refuse changed guarded loader bytes"
+    (rejected (deriveTransitionBinding Nothing stockImageBytes B.empty (M.insert DomainA alteredLoader emptyLoaders)))
   let boundaryEntries =
         [Entry d semantic (Address (base d+offset-(if d==DomainB && serviceEntry then 64 else 0)))
         | d <- [DomainA,DomainB]
-        , (semantic,offset,serviceEntry) <- [(DispatchSemantic Select,0x36a4,False),(ServiceSemantic DisableDispatch,0xc9dc,True),
+        , (semantic,offset,serviceEntry) <- [(DispatchSemantic NoSave,0x3688,False),(DispatchSemantic Select,0x36a4,False),(ServiceSemantic DisableDispatch,0xc9dc,True),
             (ServiceSemantic SleepTask,0x5cd4,True),(ServiceSemantic SuspendTask,0x6a00,True),(ServiceSemantic EnableTaskException,0x7428,True),
             (ServiceSemantic DeliverTaskException,0x41b4,True)]]
       boundaryCatalog = Catalog 0xe7f000f0 boundaryEntries
@@ -531,12 +562,24 @@ main = do
       callbackBody = [0xe590201c,0xe5901004,0xe1a00004,0xe12fff32,0xe10f0000]
       firstBody :: [Word32]
       firstBody = [0xe5912008,0xe5920004,0xe592f008]
+      noSaveAt d=base d+0x7000
+      selectAt d=noSaveAt d+0x1c
+      dispatcherPatches d=
+        [(noSaveAt d,replicate 6 0xe1a00000++[0xe129f000])
+        ,(selectAt d,[0xe5901000,0xe5001008,0xe1a00000,0xe5901000,if d==DomainA then 0xe3510011 else 0xe3510012])
+        ,(base d+0x7100,[0xe5913030,0xe3530001])
+        ,(base d+0x7200,[0xe5920000,0xe3500000,0xe5910030,0xe3500001,0xe5920000,0xe1500001])
+        ,(base d+0x7300,[0xe1a00000]),(base d+0x7400,[0xe1a00000])]
+      dispatcherSymbols d=
+        [("xm1_rtos_scheduler_no_save",Body (noSaveAt d) 0x1c),("xm1_rtos_scheduler_select",Body (selectAt d) 20)
+        ,("xm1_rtos_scheduler_save",Body (base d+0x7100) 8),("xm1_rtos_scheduler_irq_return",Body (base d+0x7200) 24)
+        ,("xm1_rtos_scheduler_resume",Body (base d+0x7300) 4),("xm1_rtos_scheduler_irq_resume",Body (base d+0x7400) 4)]
       ownedLoaders = M.fromList
-        [(DomainA, loaderWith DomainA [(bodyA,callbackBody),(firstA,firstBody)])
-        ,(DomainB, loaderWith DomainB [(bodyB,callbackBody),(firstB,firstBody)])]
+        [(DomainA, loaderWith DomainA ([(bodyA,callbackBody),(firstA,firstBody)]++dispatcherPatches DomainA))
+        ,(DomainB, loaderWith DomainB ([(bodyB,callbackBody),(firstB,firstBody)]++dispatcherPatches DomainB))]
       ownedAggregate = Aggregate
-        (M.fromList [(DomainA, M.fromList [("s3c_exception_loop",Body bodyA (fromIntegral (4*length callbackBody))),("xm1_rtos_scheduler_first_entry",Body firstA (fromIntegral (4*length firstBody)))])
-                    ,(DomainB, M.fromList [("s3c_exception_loop",Body bodyB (fromIntegral (4*length callbackBody))),("xm1_rtos_scheduler_first_entry",Body firstB (fromIntegral (4*length firstBody)))])])
+        (M.fromList [(DomainA, M.fromList ([("s3c_exception_loop",Body bodyA (fromIntegral (4*length callbackBody))),("xm1_rtos_scheduler_first_entry",Body firstA (fromIntegral (4*length firstBody)))]++dispatcherSymbols DomainA))
+                    ,(DomainB, M.fromList ([("s3c_exception_loop",Body bodyB (fromIntegral (4*length callbackBody))),("xm1_rtos_scheduler_first_entry",Body firstB (fromIntegral (4*length firstBody)))]++dispatcherSymbols DomainB))])
         (M.fromList [((DomainA,0x441b4),"s3c_exception_loop"),((DomainA,0x43728),"xm1_rtos_scheduler_first_entry")
                     ,((DomainB,0xd4174),"s3c_exception_loop"),((DomainB,0xd3728),"xm1_rtos_scheduler_first_entry")])
       boundaryWithFirst = boundaryCatalog { catalogEntries = boundaryEntries ++
@@ -569,8 +612,47 @@ main = do
       forM_ [(DomainA,bodyA,0),(DomainB,bodyB,64)] $ \(d,body,delta) -> do
         assert "owned exception callback and return follow the body's handler call"
           (probeIn planned d (body+12) Callback 2 && probeIn planned d (body+16) CallbackReturn 0)
-        assert "owned retry and dispatch probes are unchanged"
-          (probeIn planned d (base d+0x36ac) SelectedRead 1 && probeIn planned d (base d+0xca4c-delta) Retry 0)
+        assert "owned dispatch probes follow linked loads and preserve retry admission"
+          (probeIn planned d (selectAt d+4) SelectedRead 1 && probeIn planned d (base d+0xca4c-delta) Retry 0
+            && probeIn planned d (selectAt d+16) GlobalLockRead 1 && probeIn planned d (base d+0x7204) EnabledRead 0)
+        assert "NoSave and Select checkpoints name their linked bodies"
+          (Entry d (DispatchSemantic NoSave) (Address (noSaveAt d)) `elem` planEntries planned
+            && Entry d (DispatchSemantic Select) (Address (selectAt d)) `elem` planEntries planned)
+        let (_,contextAddress,_,_,_)=D.stateAddresses d
+            entered=D.Registers (replicate 13 0++[0x8000,0x9000,noSaveAt d]) 0xd3 0 0 0
+            selectedState=entered {D.registers=replicate 13 0++[0x8000,0x9000,selectAt d]}
+            noSave=call {callDomain=d,callCore=if d==DomainA then 0 else 1,callAddress=Address (noSaveAt d)
+              ,callSemantic=DispatchSemantic NoSave,callBefore=M.singleton (Address contextAddress) 1
+              ,callAfter=M.singleton (Address contextAddress) 0,callArguments=Arguments [0,0,0,0],callR0=0
+              ,callTask=0,callKernelContext=1,callWrites=[],callWriteOrigins=[],callBank=[],callBankOrigins=[]
+              ,callTrace=Just (CallTrace entered selectedState Returned [] Nothing)}
+            publicVeneer=selectedState {D.registers=replicate 13 0++[0x8000,0x9000,base d+0x36a4]}
+        assert "NoSave validates the captured linked SelectStage"
+          (checkCallFor Owned (bindCallImage planned noSave)==Right ())
+        assert "an obsolete public Select address cannot replace the linked checkpoint"
+          (checkCallFor Owned (bindCallImage planned noSave {callTrace=Just (CallTrace entered publicVeneer Returned [] Nothing)})
+            ==Left (DispatchModel D.WrongDestination))
+        let (running,_,_,_,_)=D.stateAddresses d
+            task=0x9100
+            stack=0x10000
+            saveRegisters=D.Registers ([0..12]++[stack,0x99,base d+0x7100]) 0xd3 0 0 0
+            before=M.fromList [(Address running,task),(Address (task+0x18),stack),(Address (task+0x1c),0)]
+            savedSnapshot bytes target=M.union
+              (M.fromList ([(Address (stack-bytes+offset),value) | (offset,value)<-zip [0,4..] (take 8 (drop 4 (D.registers saveRegisters))++[0x99 | bytes==36])]++
+                [(Address (task+0x18),stack-bytes),(Address (task+0x1c),target)])) before
+        forM_ [(Save,36,0x7300),(IrqReturn,32,0x7400)] $ \(point,bytes,resume)->do
+          let final=saveRegisters {D.registers=take 13 (D.registers saveRegisters)++[stack-bytes,0x99,selectAt d]}
+              entryAddress'=base d+(if point==Save then 0x7100 else 0x7200)
+              initial=saveRegisters {D.registers=take 15 (D.registers saveRegisters)++[entryAddress']}
+              loaded=[acquired {boundaryKind=kind,boundaryValue=Just value} |
+                (kind,value)<-[(DiscardedBoundary,0),(EnabledBoundary,1),(SelectedBoundary,task+0x100)]]
+              saveCall=noSave {callAddress=Address entryAddress',callSemantic=DispatchSemantic point,callBefore=before,callAfter=savedSnapshot bytes (base d+resume)
+                ,callTrace=Just (CallTrace initial final Returned loaded Nothing)}
+          assert "qualification binds saved continuations to the admitted current image"
+            (checkCallFor Owned (bindCallImage planned saveCall)==Right ())
+          forM_ [base d+resume+4,base d+(if point==Save then 0x3668 else 0x37a4)] $ \wrongContinuation->
+            assert "qualification refuses unbound and obsolete saved continuations"
+              (checkCallFor Owned (bindCallImage planned saveCall {callAfter=savedSnapshot bytes wrongContinuation})==Left (DispatchModel D.SavedContext))
         let inside address = any (\(Guard gd (Address lo) (Address hi) _) -> gd==d && lo<=address && address<hi) (planGuards planned)
         assert "every owned stop and probe lies inside a guarded extent"
           (all (\(Stop sd (Address address) _) -> sd/=d || inside address) (planStops planned)
@@ -582,6 +664,14 @@ main = do
       Right planned -> null (planStops planned) && map droppedName (planDroppedStops planned) == ["first-entry","first-entry"])
   assert "callback probes refuse a body without the handler call"
     (case derivePlanWith ownedAggregate Owned B.empty [boundaryCatalog] stockLoaders of Left _ -> True; Right _ -> False)
+  let changedNoSave=M.insert DomainA (loaderWith DomainA
+        ([(bodyA,callbackBody),(firstA,firstBody)]++dispatcherPatches DomainA++[(selectAt DomainA-4,[0xe1a00000])])) ownedLoaders
+      changedSelectedLoad=M.insert DomainA (loaderWith DomainA
+        ([(bodyA,callbackBody),(firstA,firstBody)]++dispatcherPatches DomainA++[(selectAt DomainA,[0xe5902000])])) ownedLoaders
+  assert "linked NoSave without its CPSR commit refuses"
+    (case derivePlanWith ownedAggregate Owned B.empty [boundaryWithFirst] changedNoSave of Left _->True; Right _->False)
+  assert "a missing linked selected load refuses instead of using a fixed probe"
+    (case derivePlanWith ownedAggregate Owned B.empty [boundaryWithFirst] changedSelectedLoad of Left _->True; Right _->False)
   case derivePlan Restored B.empty [boundaryWithFirst] controlLoaders of
     Left failure -> error failure
     Right planned -> do

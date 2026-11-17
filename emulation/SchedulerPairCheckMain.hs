@@ -27,10 +27,21 @@ data QualifiedObservation = QualifiedObservation
   , qualifiedLimit :: Maybe (BudgetKind, Int, Int)
   }
 
-load :: B.ByteString -> FilePath -> FilePath -> IO QualifiedObservation
-load observer planPath observationPath = do
+newtype TransitionFile = TransitionFile FilePath
+
+loadPlan :: B.ByteString -> Maybe TransitionFile -> IO Plan
+loadPlan bytes supplement=do
+  plan<-either H.failH pure (J.eitherDecodeStrict bytes)
+  case supplement of
+    Nothing->pure plan
+    Just (TransitionFile path)->do
+      binding<-B.readFile path >>= either H.failH pure . J.eitherDecodeStrict
+      either H.failH pure (applyTransitionBinding bytes plan binding)
+
+load :: B.ByteString -> Maybe TransitionFile -> FilePath -> FilePath -> IO QualifiedObservation
+load observer supplement planPath observationPath = do
   bytes <- B.readFile planPath
-  plan <- either H.failH pure (J.eitherDecodeStrict bytes)
+  plan <- loadPlan bytes supplement
   (observation, evidence) <- L.readFile observationPath >>= either H.failH pure . decodeCheckedObservation plan
   let recorded = drop 5 (obsInputs observation)
   unless (recorded == [sha256Hex (sha256 observer)])
@@ -57,27 +68,31 @@ report qualified = hPutStrLn stderr ("scheduler-pair-check totals timers=" ++ sh
 main :: IO ()
 main = do
   args <- getArgs
-  (stockObserverPath, ownedObserverPath, command) <- case args of
+  (stockObserverPath, ownedObserverPath, remaining) <- case args of
     "--observer":path:rest | not (null rest) -> pure (path, path, rest)
     "--stock-observer":stock:"--owned-observer":owned:rest | not (null rest) -> pure (stock, owned, rest)
     _ -> H.failH "usage: scheduler-pair-check --observer PATH qualify PLAN OBSERVATION | --stock-observer PATH --owned-observer PATH compare STOCK_PLAN STOCK_OBSERVATION OWNED_PLAN OWNED_OBSERVATION | control PLAN OBSERVATION"
+  let (stockSupplement,ownedSupplement,command)=case remaining of
+        "--transitions":path:rest->(Just (TransitionFile path),Just (TransitionFile path),rest)
+        "--stock-transitions":stock:"--owned-transitions":owned:rest->(Just (TransitionFile stock),Just (TransitionFile owned),rest)
+        rest->(Nothing,Nothing,rest)
   stockObserver <- B.readFile stockObserverPath
   ownedObserver <- B.readFile ownedObserverPath
   result <- case command of
     ["qualify",planPath,observationPath] -> do
-      qualified <- load stockObserver planPath observationPath
+      qualified <- load stockObserver stockSupplement planPath observationPath
       report qualified
       pure (qualifiedSummary qualified)
     ["compare",stockPlan,stockObservation,ownedPlan,ownedObservation] -> do
-      stock <- load stockObserver stockPlan stockObservation
-      owned <- load ownedObserver ownedPlan ownedObservation
+      stock <- load stockObserver stockSupplement stockPlan stockObservation
+      owned <- load ownedObserver ownedSupplement ownedPlan ownedObservation
       report stock
       report owned
       either (H.failH . show) pure (compareRoutes (qualifiedRoute stock) (qualifiedRoute owned))
       pure (J.object ["stock" J..= qualifiedSummary stock,"owned" J..= qualifiedSummary owned])
     ["control",planPath,observationPath] -> do
       bytes <- B.readFile planPath
-      plan <- either H.failH pure (J.eitherDecodeStrict bytes)
+      plan <- loadPlan bytes stockSupplement
       (observation, evidence) <- L.readFile observationPath >>= either H.failH pure . decodeControlObservation plan
       let expected = controlRefusals (planRole plan)
       unless (not (null expected)) (H.failH "not a control role")

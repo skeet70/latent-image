@@ -45,7 +45,7 @@ data Attachment = Attached | Refused deriving (Eq, Show)
 data Continuation = Finish | Restart deriving (Eq, Show)
 data Unlock = Signalled | AlreadySignalled deriving (Eq, Show)
 data Register = R0 | R1 | R2 | R3 | Ip deriving (Eq, Show)
-data RegionId = Driver | Playback | Descriptor | NextDescriptor | RecordMemory | Consumer | Stack | Runtime | StockDriver | StockPlayback | Caller | FirstConsumer | SecondConsumer | Exit deriving (Eq, Show)
+data RegionId = Driver | Playback | Descriptor | NextDescriptor | RecordMemory | Consumer | Stack | Runtime | StockDriver | StockPlayback | StockDevice | DeviceRegisters | Caller | FirstConsumer | SecondConsumer | Exit deriving (Eq, Show)
 data Permission = ReadOnly | ReadWrite | ReadExecute deriving (Eq, Show)
 data Block = Block RegionId Address Permission B.ByteString [(Address, Int)]
 data Memory = Absolute Address B.ByteString | Relative Register B.ByteString
@@ -92,6 +92,7 @@ regionName selected = case selected of
   Driver -> "driver-state"; Playback -> "playback-request"; Descriptor -> "decode-requirements"; NextDescriptor -> "next-input-requirements"
   RecordMemory -> "record-descriptor"; Consumer -> "consumer-result"; Stack -> "stack"; Runtime -> "owned-runtime"
   StockDriver -> "stock-driver"; StockPlayback -> "stock-playback"; Caller -> "transaction-caller"
+  StockDevice -> "stock-device"; DeviceRegisters -> "register-image"
   FirstConsumer -> "first-consumer"; SecondConsumer -> "second-consumer"; Exit -> "exit"
 permission :: Permission -> String
 permission selected = case selected of ReadOnly -> "r"; ReadWrite -> "rw"; ReadExecute -> "rx"
@@ -296,21 +297,26 @@ services selected role = [service 0x724b68 [(R0,9),(R1,0xffffffff)] [] []]
     bits outcome=case outcome of Decoded->0x10;DecodedPriority->0x01020010;Limit->0x20000;DeviceError->8;NeedInput->0x1000000;IgnoredInput->0x1000000
 
 scope :: String
-scope = "Actual retained Playback decode-requirements, submit, completion, restart and finish callers versus the published owned channel9 transaction. Native JPEG/device, resource, IRQ registry, cache, timer and critical services are declared conditional boundaries. No native pixel execution, IRQ timing, restart-command4 device acceptance, natural USB transition, pixel tolerance, capture, retirement or unload claim."
+scope = "Source-bound retained Playback requirements, submit, completion and finish callers versus the published owned channel9 transaction; restart executes only in the named continuation cases. Native device-service, resource, IRQ registry, cache, timer and critical entries are declared conditional boundaries. Polling and device acceptance require the separate full-system model run. Nonpolling device CPU cases observe register-image effects, not a native device model. No native pixels, IRQ timing, command4/status17/24 device acceptance, natural USB transition, pixel tolerance, capture, retirement or unload claim."
 
-execute :: FilePath -> FilePath -> E.Elf -> Address -> B.ByteString -> [(Address,B.ByteString)] -> [Block] -> Scenario -> Role -> IO Observation
-execute runner output elf base@(Address baseWord) runtime publications stock selected role = do
+execute :: FilePath -> FilePath -> P.Package -> E.Elf -> Address -> B.ByteString -> [(Address,B.ByteString)] -> [Block] -> Scenario -> Role -> IO Observation
+execute runner output package elf base@(Address baseWord) runtime publications stock selected role = do
   let CaseName label=name selected
       ident=label++case role of Original->"-stock";Owned->"-owned";OmittedIrq->"-omitted-irq"
       irqEntry=case [E.symbolValue symbol|symbol<-E.globalSymbols elf,E.symbolName symbol=="xm1_playback_jpeg_interrupt",E.symbolKind symbol==E.FunctionSymbol] of [target]->target;_->error "IRQ entry missing"
       image=if role==OmittedIrq then replace (fromIntegral (irqEntry-baseWord)) (assemble [0xe12fff1e]) runtime else runtime
+      deviceTargets = [(C.bodyStart body,target) | role /= Original
+        , (selectedService,target,_) <- P.deviceServices (Just package)
+        , let (body,_) = C.jpegDeviceContract selectedService]
+      boundaryTargets = map snd deviceTargets
       publish block@(Block kind' address@(Address start) permissions bytes extents)
         | kind'==StockDriver && role/=Original = Block kind' address permissions
             (foldr (\(Address location,value) original->replace (fromIntegral (location-start)) value original) bytes
               [(location,value)|(location@(Address target),value)<-publications,target>=start,target<start+fromIntegral(B.length bytes)]) extents
         | otherwise = block
       functions=[(Address(E.symbolValue symbol),fromIntegral(E.symbolSize symbol))|symbol<-E.elfSymbols elf,E.symbolKind symbol==E.FunctionSymbol,E.symbolSize symbol>0
-        ,E.symbolValue symbol>=baseWord,E.symbolValue symbol<baseWord+fromIntegral(B.length runtime)]
+        ,E.symbolValue symbol>=baseWord,E.symbolValue symbol<baseWord+fromIntegral(B.length runtime)
+        ,not(any (\target -> E.symbolValue symbol<=target && target<E.symbolValue symbol+E.symbolSize symbol) boundaryTargets)]
       codeBlock kind' address bytes=Block kind' address ReadExecute bytes [(address,B.length bytes)]
       blocks=map publish stock++[Block Runtime base ReadExecute image functions,Block Driver driverAddress ReadWrite (initialDriver selected) []
         ,Block Playback requestAddress ReadWrite initialPlayback [],Block Descriptor descriptorAddress ReadOnly (descriptor selected False) []
@@ -318,7 +324,8 @@ execute runner output elf base@(Address baseWord) runtime publications stock sel
         ,Block Consumer consumerAddress ReadWrite (B.replicate 48 0) [],Block Stack (Address 0x02200000) ReadWrite (B.replicate 0x4000 0) []
         ,codeBlock Caller callerAddress (caller selected),codeBlock FirstConsumer firstAddress (consumer False),codeBlock SecondConsumer secondAddress (consumer True)
         ,Block Exit exitAddress ReadExecute (assemble [0xe12fff1e]) []]
-      calls=services selected role
+      calls=[Service (maybe address Address (lookup original deviceTargets)) inputs outputs memoryReads memoryWrites
+        |Service address@(Address original) inputs outputs memoryReads memoryWrites<-services selected role]
       artifact (Block kind' _ _ bytes _)=object ["id" .= regionName kind',"path" .= (ident++"-"++regionName kind'++".bin"),"size" .= B.length bytes,"sha256" .= hashText(hash bytes)]
       region (Block kind' address permissions bytes _)=object ["id" .= regionName kind',"address" .= av address,"size" .= B.length bytes,"permissions" .= permission permissions
         ,"initial" .= object ["artifact" .= regionName kind',"offset" .= (0::Int),"length" .= B.length bytes]]
@@ -379,7 +386,8 @@ main = do
   elf<-required(E.parseElf elfBytes)
   plain<-readPinned "private-data/analysis/x-m1-1.50/lz/plain-01100000.bin" (Digest "ee211bdaad39005b4f72e3443a76ca194905381a967cab787d6a4ef14e2d889d")
   image5<-readPinned "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin" (Digest "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a")
-  required(P.checkOriginalBodies parsed [let (base,image)=if address<0x1100000 then (0xbf1a00,image5) else (0x1100000,plain)
+  image4<-readPinned "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin" (Digest "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16")
+  required(P.checkOriginalBodies parsed [let (base,image)=if address<0xbf1a00 then (0x61c400,image4) else if address<0x1100000 then (0xbf1a00,image5) else (0x1100000,plain)
     in B.take count (B.drop (fromIntegral(address-base)) image)|(address,count)<-P.originalBodies parsed])
   fixtures<-forM [("0-source.bin",21489,"7123dc28a6cee3a1d62baa0d463cf00649ae0cf6bcd8f4abac2ed4fc13cd67de")
     ,("1-source.bin",3515192,"40bc1f32a0091307e1d2e18b5855ce110373afa60d81878296ee62f7e2f05969")] $ \(file,count,digest)->do
@@ -393,19 +401,197 @@ main = do
       block kind' bytes imageBase start end functions=Block kind' (Address start) ReadExecute (B.take (fromIntegral(end-start))(B.drop(fromIntegral(start-imageBase))bytes)) [(Address address,count)|(address,count)<-functions]
       stock=[block StockDriver image5 0xbf1a00 0xd9882c 0xd99a5c driverFunctions,block StockPlayback plain 0x1100000 0x121fec8 0x12202d0 playbackFunctions]
   forM_ [("runtime.bin",runtime),("kernel.elf",elfBytes),("ram-push-manifest.json",manifest),("experiment.json",metadata)] $ \(file,bytes)->B.writeFile(output </> file)bytes
-  comparisons<-forM scenarios $ \selected->do
-    original<-execute runner output elf base runtime publications stock selected Original
-    owned<-execute runner output elf base runtime publications stock selected Owned
+  let selectedScenarios=if P.deviceOwnership parsed==P.OwnedJpegDevice then [preview,full] else scenarios
+  comparisons<-forM selectedScenarios $ \selected->do
+    original<-execute runner output parsed elf base runtime publications stock selected Original
+    owned<-execute runner output parsed elf base runtime publications stock selected Owned
     let CaseName label=name selected
     ensure (original==owned) (label++": stock and owned consumer observations differ")
     pure(object ["case" .= label,"consumer_observations_equal" .= True,"stock_receipt" .= (label++"-stock-result.json"),"owned_receipt" .= (label++"-owned-result.json")])
-  controls<-forM [preview,full] $ \selected->do
-    _<-execute runner output elf base runtime publications stock selected OmittedIrq
+  controls<-forM (if P.deviceOwnership parsed==P.OwnedJpegDevice then [] else [preview,full]) $ \selected->do
+    _<-execute runner output parsed elf base runtime publications stock selected OmittedIrq
     let CaseName label=name selected
     pure(object ["case" .= label,"returned_transaction_defect_rejected" .= True,"receipt" .= (label++"-omitted-irq-result.json")])
+  deviceCpu<-if P.deviceOwnership parsed==P.OwnedJpegDevice
+    then qualifyDeviceCpu runner output parsed elf base runtime image4
+    else pure Null
   runnerDigest<-N.runnerDigest runner
   json (output </> "result.json") (object ["schema" .= (1::Int),"qualified" .= True,"scope" .= scope,"native_jobs" .= (1::Int),"runner_sha256" .= runnerDigest
     ,"source_rev" .= ("55436fc85c0560dd252b0410af6f2427fe198cd3"::String)
     ,"runtime_sha256" .= hashText(hash runtime),"elf_sha256" .= hashText(hash elfBytes),"manifest_sha256" .= hashText(hash manifest),"metadata_sha256" .= hashText(hash metadata)
-    ,"plain_sha256" .= hashText(hash plain),"image5_sha256" .= hashText(hash image5),"consumed_source_fixtures" .= fixtures,"comparisons" .= comparisons,"controls" .= controls])
-  putStrLn ("JPEG transaction passed "++show(length scenarios)++" actual-caller stock/owned comparisons and two returned transaction-defect controls")
+    ,"plain_sha256" .= hashText(hash plain),"image4_sha256" .= hashText(hash image4),"image5_sha256" .= hashText(hash image5)
+    ,"consumed_source_fixtures" .= fixtures,"comparisons" .= comparisons,"controls" .= controls,"device_cpu" .= deviceCpu])
+  putStrLn ("JPEG transaction passed "++show(length selectedScenarios)++" actual-caller stock/owned comparisons; device qualification remains separately scoped")
+
+data DeviceCpuCase
+  = ProgramFixture Fixture | ProgramMasks | ProgramWindow
+  | StatusTransfer | InputTransfer | OutputTransfer | EndpointTransfer | StartControl
+  deriving (Eq, Show)
+data DeviceCpuRole = DeviceOriginal | DeviceOwned | DeviceOmittedProgram deriving (Eq, Show)
+data DevicePort
+  = ControlPort | StatusPort | ModePort | InputPort | OutputPort | ScalePort
+  | DestinationPort | CapacityPort | EndpointPort | SourcePort | SourceBytesPort
+  | FormatPort | WindowEnabledPort | HorizontalPort | VerticalPort
+  deriving (Eq, Show)
+newtype PortWord = PortWord Word32 deriving (Eq, Show)
+data DeviceCpuObservation = DeviceCpuObservation B.ByteString B.ByteString deriving (Eq, Show)
+
+portOffset :: DevicePort -> Int
+portOffset selected = case selected of
+  ControlPort->0;StatusPort->4;ModePort->8;InputPort->0x10;OutputPort->0x14;ScalePort->0xa0
+  DestinationPort->0x100;CapacityPort->0x104;EndpointPort->0x108;SourcePort->0x10c;SourceBytesPort->0x110
+  FormatPort->0x11c;WindowEnabledPort->0x120;HorizontalPort->0x124;VerticalPort->0x128
+
+deviceCpuName :: DeviceCpuCase -> CaseName
+deviceCpuName selected = CaseName $ case selected of
+  ProgramFixture Preview->"device-program-preview";ProgramFixture Full->"device-program-full"
+  ProgramMasks->"device-program-field-masks";ProgramWindow->"device-program-window-lanes"
+  StatusTransfer->"device-status-read-ack";InputTransfer->"device-input-read-ack"
+  OutputTransfer->"device-output-read-ack";EndpointTransfer->"device-endpoint-read";StartControl->"device-start-rmw"
+
+deviceCpuCases :: [DeviceCpuCase]
+deviceCpuCases = [ProgramFixture Preview,ProgramFixture Full,ProgramMasks,ProgramWindow
+  ,StatusTransfer,InputTransfer,OutputTransfer,EndpointTransfer,StartControl]
+
+registerImage :: B.ByteString
+registerImage = assemble [0x5a000000+index|index<-[0..74]]
+
+deviceCpuInput :: DeviceCpuCase -> B.ByteString
+deviceCpuInput selected = case selected of
+  ProgramFixture which->with (configuration (if which==Preview then preview else full) False)
+  ProgramMasks->with (wordsAt ([(0x1c,0xffffffff),(0x20,0xfffffffe),(0x24,1),(0x28,0xfffe),(0x2c,0xffff),(0x30,0)]
+    ++zip [0x34,0x38,0x3c] [0xfffffff5,0xfffffffe,0xffffffff]
+    ++zip [0x40,0x44..0x6c] [3,2,0xffffffff,4,5,6,7,8,9,10,11,12]) (configuration preview False))
+  ProgramWindow->with (wordsAt [(0x20,3),(0x24,0xffff),(0x28,0xffff),(0x2c,0xffff),(0x30,0xffff)] (configuration preview False))
+  _->initialDriver preview
+  where with bytes=replace 0x1a0 bytes (initialDriver preview)
+
+deviceCpuWrites :: DeviceCpuCase -> [(DevicePort,PortWord)]
+deviceCpuWrites selected = case selected of
+  ProgramFixture Preview->program 0x46780c00 21489 153600 0xfd0020 0 0 0 0 0
+  ProgramFixture Full->program 0x45fc9c00 3515192 27025920 0xfd0020 0 0 0 0 0
+  ProgramMasks->program 0x46780c00 21489 153600 0xaa0110 3 0x25 0 0xfffe0001 0xffff
+  ProgramWindow->program 0x46780c00 21489 153600 0xfd0020 0 0 1 0xffffffff 0xffffffff
+  StatusTransfer->[(StatusPort,PortWord 0x13579bdf)]
+  InputTransfer->[(InputPort,PortWord 0x13579bdf)]
+  OutputTransfer->[(OutputPort,PortWord 0x13579bdf)]
+  EndpointTransfer->[]
+  StartControl->[(ControlPort,PortWord 0x5a000001)]
+  where
+    program sourceWord count capacityWord mode scaleWord format enabled horizontal vertical =
+      [(ModePort,PortWord mode),(ScalePort,PortWord scaleWord),(DestinationPort,PortWord 0x4383cc00)
+      ,(CapacityPort,PortWord capacityWord),(SourcePort,PortWord sourceWord),(SourceBytesPort,PortWord count)
+      ,(FormatPort,PortWord format),(WindowEnabledPort,PortWord enabled)
+      ,(HorizontalPort,PortWord horizontal),(VerticalPort,PortWord vertical)]
+
+deviceCpuExpected :: DeviceCpuCase -> DeviceCpuObservation
+deviceCpuExpected selected = DeviceCpuObservation driver registersImage
+  where
+    driver=case selected of
+      StatusTransfer->readResult StatusPort;InputTransfer->readResult InputPort
+      OutputTransfer->readResult OutputPort;EndpointTransfer->readResult EndpointPort
+      _->deviceCpuInput selected
+    readResult port=replace 0 (B.take 4(B.drop(portOffset port) registerImage)) (deviceCpuInput selected)
+    registersImage=wordsAt [(portOffset port,value)|(port,PortWord value)<-deviceCpuWrites selected] registerImage
+
+deviceCpuTarget :: P.Package -> DeviceCpuRole -> C.JpegDeviceService -> IO Address
+deviceCpuTarget package role selected
+  | role==DeviceOriginal = let (body,_)=C.jpegDeviceContract selected in pure(Address(C.bodyStart body))
+  | otherwise = case [Address target|(service',target,_)<-P.deviceServices(Just package),service'==selected] of
+      [target]->pure target
+      _->ioError(userError "owned device service target missing")
+
+deviceCpuCaller :: P.Package -> DeviceCpuRole -> DeviceCpuCase -> IO B.ByteString
+deviceCpuCaller package role selected = do
+  body<-case selected of
+    ProgramFixture _->program
+    ProgramMasks->program
+    ProgramWindow->program
+    StatusTransfer->transfer C.JpegStatusRead C.JpegStatusAck
+    InputTransfer->transfer C.JpegInputRead C.JpegInputAck
+    OutputTransfer->transfer C.JpegOutputRead C.JpegOutputAck
+    EndpointTransfer->do
+      target<-deviceCpuTarget package role C.JpegEndpointRead
+      pure(load R0 0x014c56f0++call target)
+    StartControl->call <$> deviceCpuTarget package role C.JpegStart
+  pure(assemble([0xe92d4010]++body++[0xe3a0005a,0xe8bd8010]))
+  where
+    program=do
+      target<-deviceCpuTarget package role C.JpegProgram
+      pure(load R0 0x014c5890++call target)
+    transfer reader acknowledger=do
+      readTarget<-deviceCpuTarget package role reader
+      ackTarget<-deviceCpuTarget package role acknowledger
+      pure(load R0 0x014c56f0++call readTarget++load R0 0x13579bdf++call ackTarget)
+
+deviceCpuScope :: String
+deviceCpuScope = "Nonpolling original and exact linked owned device-service CPU execution against an identified register image. Configuration words, bitfield masks, window lanes, read results, write values and start read-modify-write are observed. The register image is ordinary RAM, not a device model or a ready-state fixture. No polling, reset, W1C, DMA, IRQ, timing, restart-command4 or status17/24 device-law claim."
+
+executeDeviceCpu :: FilePath -> FilePath -> P.Package -> E.Elf -> Address -> B.ByteString -> B.ByteString -> DeviceCpuCase -> DeviceCpuRole -> IO DeviceCpuObservation
+executeDeviceCpu runner output package elf base@(Address baseWord) runtime image4 selected role = do
+  let CaseName label=deviceCpuName selected
+      ident=label++case role of DeviceOriginal->"-stock";DeviceOwned->"-owned";DeviceOmittedProgram->"-omitted-program"
+  Address programTarget<-deviceCpuTarget package DeviceOwned C.JpegProgram
+  callerBytes<-deviceCpuCaller package role selected
+  let executedRuntime=if role==DeviceOmittedProgram then replace(fromIntegral(programTarget-baseWord))(assemble[0xe12fff1e])runtime else runtime
+      functions=[(Address(E.symbolValue symbol),fromIntegral(E.symbolSize symbol))|symbol<-E.elfSymbols elf,E.symbolKind symbol==E.FunctionSymbol,E.symbolSize symbol>0
+        ,E.symbolValue symbol>=baseWord,E.symbolValue symbol<baseWord+fromIntegral(B.length runtime)]
+      stockFunctions=[(Address(C.bodyStart body),fromIntegral(C.bodyEnd body-C.bodyStart body))|service'<-C.jpegDeviceServices,let(body,_)=C.jpegDeviceContract service']
+      stockBytes=B.take(0x65ac40-0x65a3c0)(B.drop(0x65a3c0-0x61c400)image4)
+      blocks=[Block Runtime base ReadExecute executedRuntime functions
+        ,Block StockDevice(Address 0x65a3c0)(if role==DeviceOriginal then ReadExecute else ReadOnly)stockBytes
+          (if role==DeviceOriginal then (Address 0x65a3c0,12):stockFunctions else [])
+        ,Block Driver driverAddress ReadWrite(deviceCpuInput selected)[]
+        ,Block DeviceRegisters(Address 0xfff63000)ReadWrite registerImage []
+        ,Block Caller callerAddress ReadExecute callerBytes [(callerAddress,B.length callerBytes)]
+        ,Block Stack(Address 0x02200000)ReadWrite(B.replicate 0x4000 0)[]
+        ,Block Exit exitAddress ReadExecute(assemble[0xe12fff1e])[]]
+      artifact(Block kind' _ _ bytes _)=object["id".=regionName kind',"path".=(ident++"-"++regionName kind'++".bin"),"size".=B.length bytes,"sha256".=hashText(hash bytes)]
+      region(Block kind' address permissions bytes _)=object["id".=regionName kind',"address".=av address,"size".=B.length bytes,"permissions".=permission permissions
+        ,"initial".=object["artifact".=regionName kind',"offset".=(0::Int),"length".=B.length bytes]]
+      memory kind' bytes=object["region".=regionName kind',"offset".=(0::Int),"hex".=N.hexBytes bytes]
+      preserved=[("r"++show index,0x10101010+fromIntegral index)|index<-[4::Int ..11]]++[("sp",0x02204000)]
+      initialRegisters=[("r"++show index,0x10101010+fromIntegral index)|index<-[0::Int ..12]]++[("sp",0x02204000),("lr",0x00100000),("cpsr",0x10)]
+      rawRegisters pairs=object[K.fromString register.=hex value|(register,value)<-pairs]
+      DeviceCpuObservation expectedDriverBytes expectedRegisterBytes=deviceCpuExpected selected
+      document=object["schema_version".=(1::Int),"id".=ident,"origin".=("synthetic"::String),"provenance".=deviceCpuScope
+        ,"cpu".=object["architecture".=("arm"::String),"model".=("cortex-r5f"::String),"mode".=("arm"::String),"endian".=("little"::String)]
+        ,"entry".=av callerAddress,"exit".=av exitAddress,"registers".=rawRegisters initialRegisters
+        ,"artifacts".=map artifact blocks,"regions".=map region blocks
+        ,"functions".=[object["address".=av address,"size".=size]|Block _ _ _ _ extents<-blocks,(address,size)<-extents]
+        ,"stubs".=([]::[Value]),"limits".=object["instructions".=(100000::Int),"wall_ms".=(1000::Int)]
+        ,"expected".=object["status".=("returned"::String),"registers".=rawRegisters([("r0",0x5a),("pc",0x00100000)]++preserved)
+          ,"memory".=[memory Driver expectedDriverBytes,memory DeviceRegisters expectedRegisterBytes]
+          ,"ignored_memory".=[object["region".=regionName Stack,"offset".=(0::Int),"length".=(0x4000::Int)]],"events".=([]::[Value])]
+        ,"exclusions".=[deviceCpuScope]]
+  forM_ blocks $ \(Block kind' _ _ bytes _)->B.writeFile(output </> ident++"-"++regionName kind'++".bin")bytes
+  let path=output </> ident++".json"
+  json path document
+  (_,regions,_,_)<-N.loadCase path
+  (status,report)<-N.runCase runner path
+  json(output </> ident++"-result.json")report
+  runnerExit<-either (ioError . userError . O.renderObservationError) pure (O.reportRunnerExit report)
+  observed<-either (ioError . userError . O.renderObservationError) pure (O.observeNative runnerExit regions (field "runner" report))
+  let returned=O.nativeStatus observed==O.Returned
+  if role==DeviceOmittedProgram
+    then ensure(status/=0 && field "status" report==String "failed" && returned)(ident++": omitted programming must return with a register-image mismatch")
+    else ensure(status==0 && field "status" report==String "passed" && returned)(ident++": device CPU effects failed")
+  json(output </> ident++"-identity.json")(object["role".=show role,"scope".=deviceCpuScope
+    ,"package_runtime_sha256".=hashText(hash runtime),"executed_runtime_sha256".=hashText(hash executedRuntime)
+    ,"register_image_sha256".=hashText(hash registerImage),"program_entry".=av(Address programTarget)
+    ,"mutation".=(if role==DeviceOmittedProgram then "program entry replaced by BX LR" else "none"::String)
+    ,"runner_returned".=returned])
+  pure(DeviceCpuObservation(regionBytesOf observed(O.RegionId(regionName Driver)))(regionBytesOf observed(O.RegionId(regionName DeviceRegisters))))
+
+qualifyDeviceCpu :: FilePath -> FilePath -> P.Package -> E.Elf -> Address -> B.ByteString -> B.ByteString -> IO Value
+qualifyDeviceCpu runner output package elf base runtime image4 = do
+  cases<-forM deviceCpuCases $ \selected->do
+    original<-executeDeviceCpu runner output package elf base runtime image4 selected DeviceOriginal
+    owned<-executeDeviceCpu runner output package elf base runtime image4 selected DeviceOwned
+    let CaseName label=deviceCpuName selected
+    ensure(original==owned)(label++": device CPU effects differ")
+    pure(object["case".=label,"register_image_effects_equal".=True
+      ,"stock_receipt".=(label++"-stock-result.json"),"owned_receipt".=(label++"-owned-result.json")])
+  _<-executeDeviceCpu runner output package elf base runtime image4(ProgramFixture Preview)DeviceOmittedProgram
+  pure(object["scope".=deviceCpuScope,"cases".=cases,"omitted_program_control_returned_and_rejected".=True
+    ,"control_receipt".=("device-program-preview-omitted-program-result.json"::String)])

@@ -15,7 +15,7 @@ import Emulation.SchedulerPairEvidence
   ( CallEvidence, emptyCallEvidence, accumulateEvidence
   , ControlEvidence, emptyControlEvidence, accumulateControlEvidence )
 import Emulation.SchedulerPairModel (Memory, Arguments (..))
-import Emulation.SchedulerPairPlan (Address, Plan, Semantic (..))
+import Emulation.SchedulerPairPlan (Address, Entry (..), Plan, Semantic (..), TransitionExtent (..))
 import qualified Emulation.SchedulerPairS2 as D
 
 data Classes s = MissingClasses | ParsedClasses s | InvalidClasses String
@@ -143,12 +143,14 @@ forceSemantic (SemaphoreSemantic service) = service `seq` ()
 
 -- Classes are fully evaluated before advancing the token stream.
 forceCall :: Call -> ()
-forceCall (Call domain address semantic core cpsr (Arguments arguments) before after r0 returnedCpsr writes bank count first trace task context stack origins bankOrigins unreadable) =
+forceCall (Call domain address semantic core cpsr (Arguments arguments) before after r0 returnedCpsr writes bank count first trace task context stack origins bankOrigins unreadable transitions dispatchers) =
   domain `seq` address `seq` forceSemantic semantic `seq` core `seq` cpsr `seq`
   forceList forceScalar arguments `seq` forceMemory before `seq` forceMemory after `seq`
   r0 `seq` returnedCpsr `seq` forceList forceWritten writes `seq` forceList forceWritten bank `seq`
   count `seq` first `seq` forceMaybe forceTrace trace `seq` task `seq` context `seq`
   forceMaybe forceStack stack `seq` forceList forceOrigin origins `seq` forceList forceOrigin bankOrigins `seq`
-  forceSet unreadable
+  forceSet unreadable `seq` forceList forceExtent transitions `seq` forceList forceEntry dispatchers
  where
   forceStack (TaskStack low high) = low `seq` high `seq` ()
+  forceExtent (TransitionExtent owner start end)=owner `seq` start `seq` end `seq` ()
+  forceEntry (Entry owner point pc)=owner `seq` forceSemantic point `seq` pc `seq` ()

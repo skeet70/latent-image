@@ -136,6 +136,9 @@ macro_rules! write_field {
     }};
 }
 
+#[path = "jpeg_device.rs"]
+mod device;
+
 unsafe fn current() -> *mut Request {
     unsafe { read_volatile(ACTIVE).0 as *mut Request }
 }
@@ -274,7 +277,7 @@ pub unsafe extern "C" fn xm1_playback_jpeg_restart(address: u32) {
 }
 
 /// # Safety
-/// The caller must own lock 9. The retained reset and interrupt-release services must stop the current device transaction before its request storage is reused.
+/// The caller must own lock 9. Reset and interrupt release must stop the current device transaction before its request storage is reused.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xm1_playback_jpeg_release() {
     unsafe { finish() };
