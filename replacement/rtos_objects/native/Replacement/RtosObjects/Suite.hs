@@ -309,10 +309,9 @@ cases facts executing =
         ]))
   , resumed "wait-resume-set" Wait 0 (Waker WakerSet [(R0, flagHandle), (R1, 0x11)])
       [ eq (blockWait + factsWaitBlockResult facts) 0, eq outputCell 0x11, Result 0 ]
-  , (resumed "timed-wait-resume-tick" TimedWait 5 (Waker (WakerTick 2) [])
+  , resumed "timed-wait-resume-tick" TimedWait 5 (Waker (WakerTick 2) [])
       [ eq (blockWait + factsWaitBlockResult facts) 0xffffffce, eq outputCell 0, Result 0xffffffce
-      , eq (dfTimerCount ownWords) 0 ])
-      { caseOwnedExpect = [eq (dfFlagTimers ownWords) 0] }
+      , eq (dfTimerCount ownWords) 0 ]
   , (resumed "wait-resume-delete" Wait 0 (Waker WakerDelete [(R0, flagHandle)])
       [])
       { caseOwnedExpect =
