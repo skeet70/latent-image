@@ -2206,8 +2206,8 @@
         "same_image_comparison": "unestablished",
         "direct_owned_api": "unestablished"
       }
-    }
-    ,{
+    },
+    {
       "id": "develop-loading-owner",
       "shim": "xm1_loading_absolute_deadline and xm1_loading_request_sync",
       "kind": "C-ABI bridge between two owned units",
@@ -2221,7 +2221,12 @@
         "symbols": ["xm1_loading_absolute_deadline", "xm1_loading_request_sync"],
         "contract": "replacement/develop/develop.ld",
         "requirement": "The actual loading owner provides the configured absolute deadline and consumes that exact deadline. No Develop duration, loading publication or retained fallback is permitted."
-      }]
+      }],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
     }
   ]
 }
