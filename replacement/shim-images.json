@@ -620,7 +620,7 @@
         "xm1_stock_61d8a4",
         "xm1_stock_61df44"
       ],
-      "expected_sha256": "2ceff5202e6bae5e309d9148a7ea580259aebd2acc6060b70d90888ae68bcac7"
+      "expected_sha256": "02d351661ced7728520c967f388328bb8ac190068763e5b6b8ac1290e2b3ea3c"
     },
     {
       "id": "//replacement/display_scanout:display-scanout",
