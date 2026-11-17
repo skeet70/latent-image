@@ -2,9 +2,9 @@ use core::cell::UnsafeCell;
 use core::ptr::{read_volatile, write_volatile, NonNull};
 use core::task::Poll;
 
-use crate::boot_skip::BootSkipTable;
-use crate::dma_read::{BlockDisposition, ByteCount, Instant, LowerStatus, ReadPorts};
-use crate::{Controller, DriverState, NandSemaphore, PhysicalBlock, PinClaim, BLOCK_BYTES, PAGES_PER_BLOCK};
+use super::boot_skip::BootSkipTable;
+use super::dma_read::{BlockDisposition, ByteCount, Instant, LowerStatus, ReadPorts};
+use super::{Controller, DriverState, NandSemaphore, PhysicalBlock, PinClaim, BLOCK_BYTES, PAGES_PER_BLOCK};
 
 #[path = "../../embassy_platform/src/clock.rs"]
 mod qualified_clock;
@@ -47,9 +47,9 @@ fn status(code: i32) -> Result<(), LowerStatus> {
     if code == 0 { Ok(()) } else { Err(lower(code)) }
 }
 
-fn pin_failure(error: crate::Error) -> LowerStatus {
+fn pin_failure(error: super::Error) -> LowerStatus {
     match error {
-        crate::Error::PinRoute(failure) => lower(failure.status.code()),
+        super::Error::PinRoute(failure) => lower(failure.status.code()),
         other => lower(other.request_status()),
     }
 }
@@ -273,7 +273,8 @@ impl NandReadPorts {
     }
 }
 
-// SAFETY: Active-transfer drain succeeds only under the selected, constructor-authenticated drain contract.
+// SAFETY: FujiMod drain is restricted to the pinned synchronous-copy revision; External drain
+// is the constructor caller's device-specific no-further-writes proof; UnqualifiedPhysical never drains.
 unsafe impl ReadPorts for NandReadPorts {
     type Driver = DriverLease;
     type Channel = ChannelLease;
@@ -318,7 +319,7 @@ unsafe impl ReadPorts for NandReadPorts {
         }
         if driver.pins == PinLease::Unclaimed {
             driver.pins = PinLease::Attempted;
-            if let Err(error) = unsafe { crate::claim_pins(PinClaim::Held) } {
+            if let Err(error) = unsafe { super::claim_pins(PinClaim::Held) } {
                 return Poll::Ready(Err(pin_failure(error)));
             }
             driver.pins = PinLease::Held;
@@ -512,7 +513,7 @@ unsafe impl ReadPorts for NandReadPorts {
         }
         unsafe { driver.controller.shutdown(); }
         if matches!(driver.pins, PinLease::Attempted | PinLease::Held) {
-            unsafe { crate::claim_pins(PinClaim::Released) }.map_err(pin_failure)?;
+            unsafe { super::claim_pins(PinClaim::Released) }.map_err(pin_failure)?;
             driver.pins = PinLease::Released;
         }
         if driver.state_held {

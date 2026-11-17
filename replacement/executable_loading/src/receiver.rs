@@ -37,7 +37,7 @@ impl Receiver {
             result => result?,
         }
         self.busy = published.busy;
-        if matches!(published.completion.outcome, CompletionOutcome::Loaded(_) | CompletionOutcome::Delegated) {
+        if matches!(published.completion.outcome, CompletionOutcome::Loaded(_) | CompletionOutcome::Skipped(_) | CompletionOutcome::Delegated) {
             self.completed[request.kind.index()] = Some(published.completion.outcome);
         }
         Ok(published.completion)
@@ -58,7 +58,7 @@ fn expire(outcome: CompletionOutcome) -> CompletionOutcome {
 fn publication(request: Request, outcome: CompletionOutcome) -> Publication {
     Publication {
         completion: Completion { id: request.id, kind: request.kind, outcome },
-        completed_latch: matches!(outcome, CompletionOutcome::Loaded(_) | CompletionOutcome::Delegated),
+        completed_latch: matches!(outcome, CompletionOutcome::Loaded(_) | CompletionOutcome::Skipped(_) | CompletionOutcome::Delegated),
         busy: matches!(outcome, CompletionOutcome::Failed { retention: Retention::HeldQuiescent | Retention::Unproved, .. }),
         callback_result: if matches!(outcome, CompletionOutcome::Loaded(_) | CompletionOutcome::Skipped(_) | CompletionOutcome::Delegated) {
             crate::CallbackResult::Succeeded

@@ -6,7 +6,7 @@
     "requiredOwnerSymbols": ["xm1_loading_absolute_deadline", "xm1_loading_request_sync"],
     "deadline": "The caller obtains a finite absolute deadline from required configuration and passes that same Deadline to task60; Develop defines no duration or fallback.",
     "failure": "Typed Initialize failure returns stamp completion0 after clearing the request and before reading calibration data. outputs.rs consumes completion!=1 as failure.",
-    "candidateFailureScenarios": "OutputTripletsScenarios.loadingFailureScenarios requires a fresh unconfigured loading owner.",
+    "candidateFailureScenarios": "OutputTripletsScenarios.loadingFailureScenarios requires a fresh owner with no configured absolute-deadline provider.",
     "configuredSuccessCases": "The two output-stamp-rendering-disabled cases retain their consumer expectations. Their owned fixture must configure the actual loading owner and complete Initialize; the historical stock latch alone is not an owned completion."
   },
   "routing": {

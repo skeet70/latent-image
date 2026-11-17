@@ -1,6 +1,6 @@
 use core::{mem::ManuallyDrop, num::NonZeroI32, task::Poll};
 
-use crate::{PhysicalBlock, BLOCK_BYTES};
+use super::{PhysicalBlock, BLOCK_BYTES};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Instant(u64);

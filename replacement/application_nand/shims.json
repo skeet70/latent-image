@@ -47,7 +47,7 @@
     },
     {
       "id": "application_nand-03",
-      "shim": "`xm1_power_resource_route_request` and the other `xm1_power_*` externs in `src/lib.rs`",
+      "shim": "`xm1_power_resource_route_request` and the other `xm1_power_*` externs in `src/lib.rs` and `src/dma_native.rs`",
       "kind": "C-ABI bridge between two owned units",
       "other_side": "power_lifecycle leaf",
       "owned": "yes",
@@ -57,7 +57,28 @@
         {
           "kind": "reference-only",
           "contract": "replacement/application_nand/BUILD.bazel",
-          "requirement": "The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `xm1_power_resource_route_request` and the other `xm1_power_*` externs in `src/lib.rs`"
+          "requirement": "The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `xm1_power_resource_route_request` and the other `xm1_power_*` externs in `src/lib.rs` and `src/dma_native.rs`"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "application_nand-04",
+      "shim": "`xm1_lower_read_clean_invalidate`, `xm1_lower_read_clock_mask` and `xm1_lower_read_clock_restore`",
+      "kind": "trampoline into retained stock",
+      "other_side": "X-M1 core-0 cache and clock/critical leaves",
+      "owned": "no",
+      "removal": "the final composition supplies owned cache visibility and qualified monotonic clock leaves",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "replacement/application_nand/BUILD.bazel",
+          "requirement": "The lower-read owner calls the source-bound cache endpoint and the paired core-0 clock mask/restore leaves. This reference-only registration establishes the ABI contract, not physical cache coherence or NAND quiescence."
         }
       ],
       "predicates": {

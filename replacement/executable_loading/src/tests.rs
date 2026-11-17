@@ -277,7 +277,7 @@ fn released_failure_does_not_cache_success_or_prevent_retry() {
 }
 
 #[test]
-fn executed_skip_reports_completion_without_publishing_residency_or_caching() {
+fn executed_skip_publishes_and_caches_command_completion_without_claiming_loaded_bytes() {
     let mut transport = Transport::new(ProducerCompletion::Skipped(report()));
     let generation = transport.engine.resource_generation.clone();
     let mut clock = transport.counter.clone();
@@ -292,11 +292,11 @@ fn executed_skip_reports_completion_without_publishing_residency_or_caching() {
             bad_blocks: report().bad_blocks,
         }),
     );
-    assert!(!transport.sink.events[0].1.completed_latch);
+    assert!(transport.sink.events[0].1.completed_latch);
     assert_eq!(transport.sink.events[0].1.callback_result, CallbackResult::Succeeded);
-    transport.engine.outcome = Some(ProducerCompletion::Skipped(report()));
-    sender.request_sync(CommandKind::Plain, request_deadline(), &mut clock, &mut transport).unwrap();
-    assert_eq!(generation.get(), 2);
+    let second = sender.request_sync(CommandKind::Plain, request_deadline(), &mut clock, &mut transport).unwrap();
+    assert_eq!(second.outcome, first.outcome);
+    assert_eq!(generation.get(), 1);
 }
 
 struct FixedBuffer(std::boxed::Box<[u8]>);
