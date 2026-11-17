@@ -34,6 +34,7 @@ main = do
         , "claim" .= ("Cases {{cases}}; verdict {{verdict}}." :: String)
         , "scope" .= ("Host {{cases}} cases." :: String)
         , "notes" .= ("No hardware qualification." :: String)
+        , "camera_state_change" .= ("none" :: String)
         , "artifacts" .= [result]
         , "facts" .=
           [ object ["name" .= ("cases" :: String), "path" .= result, "pointer" .= pointer, "operation" .= ("length" :: String)]
@@ -74,6 +75,7 @@ main = do
     Object o -> do
       assert (KM.lookup "claim" o == Just (String "Cases 2; verdict equal.")) "claim not derived from result"
       assert (KM.lookup "commands" o == Just (toJSON ["run-output exec --label 'fixture-label' -- 'fixture' 'two words' 'single'\\''quote' ''" :: String])) "commands did not preserve argument boundaries"
+      assert (KM.lookup "camera_state_change" o == Just (String "none")) "camera state change not derived from recipe"
     _ -> fail "record was not an object"
   writeRecord (replace "claim" (String "hand-edited claim") first)
   refuses "check"
