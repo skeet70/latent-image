@@ -95,14 +95,20 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: xm1_saclac_interface::Ca
 }
 
 impl<M: Machine + Clone, R: Memory, E: StockEntries, P: xm1_saclac_interface::Calc + xm1_saclac_interface::Calc1 + xm1_saclac_interface::ImgDc + xm1_saclac_interface::Statistics> xm1_focus_measurement_round::window::Ports for Services<M, R, E, P> {
+    /// 0xf3a4c0: the completion's second word names calc's result record and a null record collects
+    /// nothing; the status is the record's first word (stored through 0x75810c), the position its
+    /// halfwords at +0x404 and +0x406 (stored through 0x7581b4). The completion's own status word is
+    /// not read.
     fn window_result(&mut self, completed: xm1_saclac_interface::Completed<'_>) -> Option<xm1_focus_measurement_round::window::WindowResult> {
         use xm1_focus_measurement_round::profile::{WindowPosition, WindowStatus};
         if completed.completion != xm1_saclac_interface::Completion::Calculation8d { return None; }
         let bytes = completed.parameters.bytes();
         if bytes.len() != 8 { return None; }
+        let result = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+        if result == 0 { return None; }
         Some(xm1_focus_measurement_round::window::WindowResult {
-            status: WindowStatus(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])),
-            position: WindowPosition([u16::from_le_bytes([bytes[4], bytes[5]]), u16::from_le_bytes([bytes[6], bytes[7]])]),
+            status: WindowStatus(self.machine.read_u32(result)),
+            position: WindowPosition([self.machine.read_u16(result + 0x404), self.machine.read_u16(result + 0x406)]),
         })
     }
 }

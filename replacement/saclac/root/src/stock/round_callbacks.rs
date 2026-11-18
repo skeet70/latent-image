@@ -21,9 +21,10 @@ fn pair(completion: Completion, first: u32, second: u32, marker: u32) {
     post(&crate::peer_context::Poster::new(xm1_kernel::SlotTable), completion, &bytes).expect("round pair completion");
 }
 
+/// 0xf3a3f8: calc's status and its result record, collected by 0xf3a4c0.
 #[no_mangle]
-pub extern "C" fn xm1_saclac_root_round_window(status: u32, position: u32) {
-    pair(Completion::Calculation8d, status, position, 0x1110_7000);
+pub extern "C" fn xm1_saclac_root_round_window(status: u32, result: u32) {
+    pair(Completion::Calculation8d, status, result, 0x1110_7000);
 }
 
 #[no_mangle]

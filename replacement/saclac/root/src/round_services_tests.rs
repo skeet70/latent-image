@@ -6,7 +6,7 @@ use xm1_saclac_profile_records::Bytes;
 use crate::{fake::{self, Entries}, round_services::Callbacks};
 
 #[test]
-fn a_window_completion_publishes_position_and_releases_held_power_only_once() {
+fn a_window_completion_publishes_the_result_record_and_releases_held_power_only_once() {
     let kernel = fake::saclac_kernel();
     let context = kernel.task().unwrap();
     let mut bytes = Bytes::default();
@@ -18,14 +18,23 @@ fn a_window_completion_publishes_position_and_releases_held_power_only_once() {
         auxiliary: StockCallbackWord(0x1008), source: StockCallbackWord(0x100c),
         image: StockCallbackWord(0x1010), snapshot: StockCallbackWord(0x1014),
     });
+    // calc's result record: status 3, position halfwords 0x1234 and 0xabcd at +0x404/+0x406.
+    let result = 0x0200_0000u32;
+    machine.set_word(result, 3);
+    machine.set_word(result + 0x404, 0xabcd_1234);
+    let payload = |record: u32| {
+        let mut bytes = [0u8; 8];
+        bytes[4..].copy_from_slice(&record.to_le_bytes());
+        bytes
+    };
+    let (named, null) = (payload(result), payload(0));
     let mut window = Window::new();
     window.effect(Effect::Submit, record, None, &mut root);
     window.effect(Effect::Submit, record, None, &mut root);
-    let result = [3, 0, 0, 0, 0x34, 0x12, 0xcd, 0xab];
-    let completion = |kind| Completed { completion: kind, parameters: parameters(&result) };
-    window.effect(Effect::Collect, record, Some(completion(Completion::Calculation8a)), &mut root);
+    window.effect(Effect::Collect, record, Some(Completed { completion: Completion::Calculation8a, parameters: parameters(&named) }), &mut root);
+    window.effect(Effect::Collect, record, Some(Completed { completion: Completion::Calculation8d, parameters: parameters(&null) }), &mut root);
     assert_eq!(&root.records().memory().shared[0x734..0x738], &1u32.to_le_bytes());
-    window.effect(Effect::Collect, record, Some(completion(Completion::Calculation8d)), &mut root);
+    window.effect(Effect::Collect, record, Some(Completed { completion: Completion::Calculation8d, parameters: parameters(&named) }), &mut root);
     window.effect(Effect::Release, record, None, &mut root);
     window.effect(Effect::Release, record, None, &mut root);
     let shared = &root.records().memory().shared;
