@@ -33,10 +33,10 @@ data Exclusion = Exclusion Offset Width [Word32] [Citation] deriving (Eq, Show)
 -- stock value itself, an owned role the linked address of the replacement symbol the contract
 -- names. It is admitted only with cited evidence of every retained consumer's use of the word.
 data Identity = Identity Word32 T.Text [Consumer] deriving (Eq, Show)
--- | How retained code uses an identity word: it never dereferences it (it only stores, posts or
--- enters it as a value), or it dereferences it only through an owned contract whose contents are
--- compared elsewhere. A word a retained consumer reads with stock layout assumptions has no
--- consumer kind; its pointed-to bytes are compared instead.
+-- | How retained code uses an identity word: it never dereferences it (it only stores or posts it
+-- as a value), or it uses it only through an owned contract, entering the owned code or accessing
+-- the owned storage, whose effects are compared elsewhere. A word a retained consumer reads with
+-- stock layout assumptions has no consumer kind; its pointed-to bytes are compared instead.
 data Consumer = NeverDereferenced [Citation] | OwnedContract [Citation] [Citation] deriving (Eq, Show)
 data Field = Field T.Text Offset Width [Citation] (Maybe Exclusion) (Maybe Identity) deriving (Eq, Show)
 data Padding = Padding Offset Width [Citation] deriving (Eq, Show)
