@@ -29,7 +29,6 @@ const PLAN_SCHEMA: u32 = 3;
 const ALIAS: u32 = 0x4000_0000;
 const ENTRY_LABEL: &str = "scheduler-entry";
 const CONTINUATION_LABEL: &str = "scheduler-continuation";
-const FILL_LABEL: &str = "scheduler-fill";
 const ARM_LABEL: &str = "scheduler-arm";
 
 /// The pinned engine refuses more than 4,096 instruction points per core.
@@ -231,7 +230,6 @@ struct Slot { id: SlotId }
 struct Sites {
     entries: BTreeMap<u32, usize>,
     probes: BTreeMap<u32, Vec<usize>>,
-    fills: BTreeSet<u32>,
     arms: BTreeMap<u32, Domain>,
 }
 
@@ -239,7 +237,6 @@ impl Sites {
     fn labels(&self) -> BTreeMap<u32, String> {
         self.entries.keys().map(|&address| (address, ENTRY_LABEL))
             .chain(self.probes.keys().map(|&address| (address, "scheduler-probe")))
-            .chain(self.fills.iter().map(|&address| (address, FILL_LABEL)))
             .chain(self.arms.keys().map(|&address| (address, ARM_LABEL)))
             .map(|(address, label)| (address, label.to_owned())).collect()
     }
@@ -247,10 +244,49 @@ impl Sites {
 
 fn spellings(address: u32) -> [u32; 2] { [address, address | ALIAS] }
 
+/// A maximal run of contiguous plan fill words inside one domain's guarded ranges.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FillRun { domain: Domain, start: u32, end: u32 }
+
+/// `fills` ascending and unique.
+fn fill_runs(guarded: &[PlanRange], fills: &BTreeSet<u32>) -> Result<Vec<FillRun>, String> {
+    let mut runs: Vec<FillRun> = Vec::new();
+    for &word in fills {
+        let domain = guarded.iter().find(|range| range.start.0 <= word && word + 4 <= range.end.0)
+            .ok_or("plan fill word is outside every guarded range")?.domain;
+        match runs.last_mut() {
+            Some(run) if run.domain == domain && run.end == word => run.end = word + 4,
+            _ => runs.push(FillRun { domain, start: word, end: word + 4 }),
+        }
+    }
+    Ok(runs)
+}
+
+/// Write classes for the armed domains' outermost guarded ranges and fetch classes for their fill runs.
+fn guard_classes(guarded: &[PlanRange], fill_runs: &[FillRun], domains: &[Domain]) -> Vec<WatchRange> {
+    guarded.iter().filter(|range| domains.contains(&range.domain))
+        .filter(|range| !guarded.iter().any(|outer| outer.domain == range.domain
+            && outer.start <= range.start && range.end <= outer.end && (outer.start != range.start || outer.end != range.end)))
+        .map(|range| WatchRange { start: u64::from(range.start.0), end: u64::from(range.end.0), kinds: WatchKinds::WRITES })
+        .chain(fill_runs.iter().filter(|run| domains.contains(&run.domain))
+            .map(|run| WatchRange { start: u64::from(run.start), end: u64::from(run.end), kinds: WatchKinds::CPU_FETCH }))
+        .collect()
+}
+
+/// A fetch of a fill word, as the guard watch recorded it.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+struct FillFetch { address: u64, physical: u64, core: Option<usize>, instructions: Option<u64> }
+
+fn fill_fetch(state: &serde_json::Value) -> Option<FillFetch> {
+    state["records"].as_array()?.iter().filter(|row| row["source"] == "cpu-fetch")
+        .find_map(|row| FillFetch::deserialize(row).ok())
+}
+
 struct Validated {
     plan: Plan,
     slots: Vec<Slot>,
     sites: Sites,
+    fill_runs: Vec<FillRun>,
     task_record_only: bool,
 }
 
@@ -324,15 +360,16 @@ fn validate(plan: Plan) -> Result<Validated, String> {
         require(probe.address.0 % 4==0 && probe.address.0<ALIAS, "unaligned probe")?;
         for address in spellings(probe.address.0) { probes.entry(address).or_default().push(index); }
     }
-    let fills: BTreeSet<u32> = plan.fills.iter().flat_map(|fill| spellings(fill.0)).collect();
-    require(fills.len() == 2 * plan.fills.len() && plan.fills.iter().all(|fill| fill.0 % 4 == 0 && fill.0 < ALIAS),
+    let fills: BTreeSet<u32> = plan.fills.iter().map(|fill| fill.0).collect();
+    require(fills.len() == plan.fills.len() && fills.iter().all(|&fill| fill % 4 == 0 && fill < ALIAS),
         "plan fill words are repeated or unaligned")?;
     require(!plan.guarded.is_empty() && plan.guarded.len() <= 256 && plan.guarded.iter().all(|range| {
         range.start.0 % 4 == 0 && range.end.0 % 4 == 0 && range.start.0 < range.end.0 && range.end.0 <= ALIAS
     }), "plan guarded ranges are malformed")?;
-    let sites = Sites { entries, probes, fills, arms };
-    require(sites.fills.iter().all(|address| !sites.entries.contains_key(address) && !sites.probes.contains_key(address)), "fill shares an entry or probe")?;
-    Ok(Validated { plan, slots, sites, task_record_only })
+    require(fills.iter().all(|address| !entries.contains_key(address) && !probes.contains_key(address)), "fill shares an entry or probe")?;
+    let fill_runs = fill_runs(&plan.guarded, &fills)?;
+    let sites = Sites { entries, probes, arms };
+    Ok(Validated { plan, slots, sites, fill_runs, task_record_only })
 }
 
 /// A word through the executing core's view.
@@ -1558,7 +1595,7 @@ struct Observer<'p> {
     misplaced_stops: u64,
     untracked: Sample<OpenCall>,
     unarmed_entries: Sample<StopRecord>,
-    fill_fetch: Option<StopRecord>,
+    fill_fetch: Option<FillFetch>,
     armings: Vec<Arming>,
     watch: Option<GuardWatch>,
     segments: Vec<Segment>,
@@ -1629,19 +1666,23 @@ impl Observer<'_> {
         }
         self.end_watch(machine)?;
         let domains: Vec<Domain> = self.armings.iter().map(|arming| arming.domain).collect();
-        let classes = self.validated.plan.guarded.iter().filter(|range| domains.contains(&range.domain))
-            .filter(|range| !self.validated.plan.guarded.iter().any(|outer| outer.domain == range.domain
-                && outer.start <= range.start && range.end <= outer.end && (outer.start != range.start || outer.end != range.end)))
-            .map(|range| WatchRange { start: u64::from(range.start.0), end: u64::from(range.end.0), kinds: WatchKinds::WRITES }).collect();
+        let classes = guard_classes(&self.validated.plan.guarded, &self.validated.fill_runs, &domains);
         let watch = machine.session.board.memory_watch_begin_classified(classes, WATCH_LIMIT, self.maps.clone(), ViewPolicy::Observe)?;
         self.watch = Some(GuardWatch { watch, domains, started: machine.instructions() });
         Ok(())
     }
 
-    fn check_watch(&self) -> Result<(), String> {
+    fn check_watch(&mut self) -> Result<(), String> {
         let Some(guard) = &self.watch else { return Ok(()) };
         let records = guard.watch.records.borrow();
-        require(records.violation().is_none() && records.row_count() == 0, "an immutable-byte watch recorded a write or a violation")
+        let fetch = if records.row_count() == 0 { None } else { fill_fetch(&records.state()) };
+        let clean = records.violation().is_none() && records.row_count() == 0;
+        drop(records);
+        if let Some(fetch) = fetch {
+            self.fill_fetch = Some(fetch);
+            return Err(format!("fill word at {:#x} fetched", fetch.address));
+        }
+        require(clean, "an immutable-byte watch recorded a write or a violation")
     }
     fn next_order(&self) -> u64 {
         let order = self.write_sequence.get();
@@ -2105,10 +2146,6 @@ impl Observer<'_> {
             }
             if self.return_sites.contains(&context.pc) { self.complete(machine, &context, tcm)?; }
             let sites = &self.validated.sites;
-            if sites.fills.contains(&context.pc) {
-                self.fill_fetch = Some(StopRecord::of(&context));
-                return Err(format!("fill word at {:#x} fetched", context.pc));
-            }
             if let Some(&domain) = sites.arms.get(&context.pc) { self.arm(machine, &context, domain)?; }
             if let Some(&index) = sites.entries.get(&context.pc) { self.enter(machine, &context, tcm, index, origin)?; }
         }
@@ -2254,7 +2291,7 @@ struct Report<'a> {
     continuation_sites: usize,
     untracked: &'a Sample<OpenCall>,
     unarmed_entries: &'a Sample<StopRecord>,
-    fill_fetch: Option<StopRecord>,
+    fill_fetch: Option<FillFetch>,
     armings: &'a [Arming],
     segments: &'a [Segment],
     final_readback: Option<Readback>,
@@ -2367,7 +2404,7 @@ fn drive() -> Result<(), String> {
         clock_progress: Rc::new([Cell::new(0), Cell::new(0)]),
     };
     machine.traces.bound_full_registers(NonZeroUsize::new(2).ok_or("zero hit bound")?);
-    machine.traces.stop_labels = [ENTRY_LABEL, CONTINUATION_LABEL, FILL_LABEL, ARM_LABEL, "scheduler-pc-watch", "scheduler-probe"]
+    machine.traces.stop_labels = [ENTRY_LABEL, CONTINUATION_LABEL, ARM_LABEL, "scheduler-pc-watch", "scheduler-probe"]
         .into_iter().map(str::to_owned).collect();
     let observed = (|| -> Result<(), String> {
         let mut labels = validated.sites.labels();
@@ -3090,6 +3127,45 @@ mod tests {
     fn plan_with_stops(role: Role, stops: Vec<PlanStop>) -> Plan {
         Plan { schema: PLAN_SCHEMA, role, dat_sha256: String::new(), domains: Vec::new(), entries: Vec::new(),
             probes: Vec::new(), guarded: Vec::new(), fills: Vec::new(), stops, dropped_stops: Vec::new(), transition_extents: stock_transitions(), dispatch_targets: Vec::new() }
+    }
+
+    #[test]
+    fn the_guard_watch_reports_a_fetch_inside_a_fill_run_larger_than_the_instruction_point_bound() {
+        use fujimod_emulator::board::{bus::{Bus,Mode},factory::{self,Graph,Processor,Ram},memory::BusMapping};
+        use fujimod_emulator_cpu::{ExecutionPolicy,Model,timeline::Ratio};
+        fujimod_emulator_exr2_board::register_board_builder();
+        fujimod_emulator_models::register();
+        let (start, words) = (0x40004u32, 0x2400u32);
+        let target = start + 4 * 0x2000;
+        let mut plan = plan_with_stops(Role::Owned, Vec::new());
+        plan.domains = vec![PlanDomain { domain: Domain::A, loader_entry: Hex(0x40020) }, PlanDomain { domain: Domain::B, loader_entry: Hex(0xd0020) }];
+        plan.guarded = vec![PlanRange { domain: Domain::A, start: Hex(0x40000), end: Hex(start + 4 * words), sha256: String::new() }];
+        plan.fills = (0..words).map(|index| Hex(start + 4 * index)).collect();
+        let validated = validate(plan).unwrap();
+        let maps = vec![MemoryMap { core: 0, address: 0, physical: 0, size: 0x60000, permissions: 7 },
+            MemoryMap { core: 0, address: 0x40000000, physical: 0, size: 0x60000, permissions: 7 }];
+        let graph = Graph {
+            processors: vec![Processor { model: Model::CortexR5F, rprofile: Some(Default::default()), mprofile: None,
+                released: true, registers: vec![(Register::Pc,0x40000),(Register::Pstate,0x13)] }],
+            ram: vec![Ram { base: 0, size: 0x60000 }], peripherals: vec![], decoders: vec![],
+            dma_mappings: vec![BusMapping::ram(0,0x60000)], mappings: maps.clone(),
+            instructions_per_tick: Ratio::new(24,1).unwrap(),
+        };
+        let mut board = graph.build(factory::Options { engine: factory::Engine::Unicorn, translation_cache_bytes: 1<<20 },
+            Bus::new(Mode::Strict),None).unwrap();
+        board.set_execution_policy(ExecutionPolicy::Exact).unwrap();
+        let branch = 0xea000000 | ((target - 0x40008) >> 2);
+        let code: Vec<u8> = [branch].into_iter().chain((0..words).map(|_| 0xe1a00000u32)).flat_map(u32::to_le_bytes).collect();
+        board.write_physical(0x40000,&code).unwrap();
+        board.write_register(0,Register::Arm32(arm::Register::R(15)),0x40000).unwrap();
+        let mut watch = board.memory_watch_begin_classified(guard_classes(&validated.plan.guarded, &validated.fill_runs, &[Domain::A]),
+            WATCH_LIMIT, maps, ViewPolicy::Observe).unwrap();
+        board.run_window(1,1,None,None).unwrap();
+        assert!(fill_fetch(&watch.records.borrow().state()).is_none());
+        board.run_window(2,1,None,None).unwrap();
+        let fetch = fill_fetch(&watch.records.borrow().state()).expect("the fill fetch is recorded");
+        assert_eq!((fetch.physical, fetch.core), (u64::from(target), Some(0)));
+        board.memory_watch_end(&mut watch).unwrap();
     }
 
     #[test]
