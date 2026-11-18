@@ -296,9 +296,12 @@
       "replacement_symbol": "xm1_saclac_root_lens_status",
       "consumers": [
        {
-        "use": "never-dereferenced",
+        "use": "owned-contract",
         "sources": [
-         "drivers/lens/control/lens_control_fields.h: lens control keeps the word as runtime+0x94 measurement_callback094, typed void (*)(unsigned int position, unsigned int mode), and only enters it with its position and mode"
+         "drivers/lens/control/lens_control_fields.h: lens control keeps the word as runtime+0x94 measurement_callback094, typed void (*)(unsigned int position, unsigned int mode), and only enters it with its position and mode; it loads no data through the word"
+        ],
+        "compared_by": [
+         "the entered callee's completion is compared as queue-in 0x3b3c from sender 50 (channel queue-in-50); its payload is saclac-internal and Root's later posts and replies that consume it are compared in the stream"
         ]
        }
       ]
@@ -1289,10 +1292,13 @@
       "replacement_symbol": "xm1_saclac_root_round_window",
       "consumers": [
        {
-        "use": "never-dereferenced",
+        "use": "owned-contract",
         "sources": [
          "control/af/area/tu_00f4bc58.c:523: 0xf4c6e8 posts the 80-byte record with the word through 0x00f49598 to the queue-44 calc task",
-         "stock cold-boot receipt: every entry of 0xf3a3f8 runs in the sender-44 task and is followed by its queue-in 0x3b8d; the calc task only enters the word as its completion"
+         "stock cold-boot receipt: every entry of 0xf3a3f8 runs in the sender-44 task and is followed by its queue-in 0x3b8d; the calc task only enters the word as its completion and loads no data through it"
+        ],
+        "compared_by": [
+         "the entered callee's completion is compared as queue-in 0x3b8d from sender 44 (channel wake-post-44); its payload is saclac-internal and the next 0x3c0c request that consumes it is compared field by field"
         ]
        }
       ]
@@ -1357,10 +1363,13 @@
       "replacement_symbol": "xm1_saclac_root_round_auxiliary",
       "consumers": [
        {
-        "use": "never-dereferenced",
+        "use": "owned-contract",
         "sources": [
          "control/af/area/tu_00f4bc58.c:417: 0xf4c490 posts the 128-byte record with the word through 0x00f49c18 to the queue-45 calc1 task",
-         "stock cold-boot receipt: every entry of 0xf37854 runs in the sender-45 task and is followed by its queue-in 0x3b8a; the calc1 task only enters the word as its completion"
+         "stock cold-boot receipt: every entry of 0xf37854 runs in the sender-45 task and is followed by its queue-in 0x3b8a; the calc1 task only enters the word as its completion and loads no data through it"
+        ],
+        "compared_by": [
+         "the entered callee's completion is compared as queue-in 0x3b8a from sender 45 (channel wake-post-45-3b8a); its payload is saclac-internal and the next 0x3d00/0x3d02 requests that consume it are compared field by field"
         ]
        }
       ]
