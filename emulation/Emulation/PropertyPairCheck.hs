@@ -2051,7 +2051,9 @@ parseStoragePress action result = do
   unless (began >= ran) (Left "storage key idle instruction boundary is invalid")
   press <- at "press" result
   fields <- asObject press
-  exact ["snapshot","key","menu","settle","instructions","display_wait_instructions","failure"] fields
+  -- Current SDK display-key responses also report the presentation and publication they waited on.
+  exact (["snapshot","key","menu","settle","instructions","display_wait_instructions","failure"]
+    ++ [name | name <- ["presentation","publication"], KM.member (K.fromText name) fields]) fields
   let expected = case action of
         StorageCrawlKey key -> T.pack (crawlKeyWire key)
         StorageHalfShutter -> "half-press"
