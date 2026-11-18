@@ -27,7 +27,7 @@ unsafe extern "C" {
     fn xm1_power_record_helper_752928(output:*mut u8,item:u32,index:u32);
     fn xm1_power_record_helper_75ae78(item:u32,record:*const u8);
     fn xm1_power_record_helper_f15708()->i32;
-    fn xm1_power_record_helper_7582c0(output:*mut u8,item:u32);
+    fn xm1_power_record_helper_7582c0(output:*mut u32)->*mut u32;
     fn xm1_power_record_helper_f1db30(item:u32,record:*mut u8,output:u32)->u32;
     fn xm1_power_record_helper_75060c(item:u32)->u32;
     fn xm1_power_record_helper_fa6904(first:u32,second:u32)->u32;
@@ -110,7 +110,7 @@ pub unsafe extern "C" fn xm1_power_record_helper_f2a468() {
         }
         if xm1_power_record_helper_f15708()!=0 && byte(selection)==1 && word(request+8)!=3 {
             let mut source=MaybeUninit::<[u32;42]>::uninit();
-            xm1_power_record_helper_7582c0(source.as_mut_ptr().cast(),item());
+            xm1_power_record_helper_7582c0(source.as_mut_ptr().cast());
             let mut record=MaybeUninit::<[u32;10]>::uninit();
             core::ptr::copy_nonoverlapping(source.as_ptr().cast::<u32>(),record.as_mut_ptr().cast::<u32>(),10);
             let changed=xm1_power_record_helper_f1db30(item(),record.as_mut_ptr().cast(),word(word(request+12)+80));

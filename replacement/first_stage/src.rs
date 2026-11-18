@@ -7,6 +7,8 @@ mod media;
 mod images;
 mod engine;
 #[cfg(fixed_image)]
+mod fixed_crc;
+#[cfg(fixed_image)]
 mod fixed_image;
 
 use core::arch::asm;

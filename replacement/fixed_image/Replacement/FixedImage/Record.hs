@@ -108,7 +108,7 @@ stageRecord record parts = do
   offset <- recordOffset parts
   let spanBytes = fromIntegral (recordBlocks * blockBytes)
       source = U.partPostHead parts
-  unless (B.length record >= fromIntegral headerBytes && B.length record <= spanBytes) (Left "record exceeds two blocks or lacks header")
+  unless (B.length record >= fromIntegral headerBytes && B.length record <= spanBytes) (Left "record exceeds its carrier or lacks header")
   unless (B.all (== 0) (B.take spanBytes (B.drop offset source))) (Left "fixed record carrier is not shipped fill")
   let padded = record <> B.replicate (spanBytes - B.length record) 0xff
   pure parts { U.partPostHead = B.take offset source <> B.map complement padded <> B.drop (offset + spanBytes) source }

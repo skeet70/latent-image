@@ -178,6 +178,7 @@ impl Recorder {
             watch: None, maps: None, kernel_bound: false, rows: VecDeque::new(), visited: BTreeMap::new(), retired_body_fetches: BTreeMap::new(), events: 0 })
     }
     pub fn raw_sites(&self) -> BTreeMap<u32, (String, Vec<u8>)> { self.sites.iter().map(|(pc, site)| (*pc, site.raw())).collect() }
+    pub fn site_addresses(&self) -> impl Iterator<Item = u32> + '_ { self.sites.keys().copied() }
     pub fn require_owned(&self) -> Result<(), String> { require(self.retired_body_fetches.is_empty(), "retired time service body executed") }
     fn contains(ranges: &[[u32; 2]], pc: u32) -> bool { ranges.iter().any(|[start, end]| *start <= pc && pc < *end) }
     fn normalized(&self, word: u32) -> u32 { self.normalized.get(&word).copied().unwrap_or(word) }

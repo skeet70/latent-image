@@ -1,5 +1,23 @@
 use crate::*;
 
+pub mod area_measurement;
+pub mod calculation_result;
+pub mod capture_job;
+pub mod capture_results;
+pub mod calc_sub;
+pub mod exposure;
+pub mod imaging;
+pub mod peers;
+pub mod pipeline;
+pub mod round_acquisition;
+pub mod round_image;
+pub mod search;
+pub mod shared;
+pub mod statistics;
+
+pub const fn record_handle_from_a2(word: u32) -> RecordHandle { RecordHandle(word) }
+
+pub const fn record_handle_word(handle: RecordHandle) -> u32 { handle.0 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CommandDescriptor {
     pub kind: CommandKind,
@@ -35,7 +53,7 @@ pub const COMMANDS: [CommandDescriptor; 40] = [
     CommandDescriptor { kind: CommandKind::Prepare, code: 26, producer: 0xef955c, payload_bytes: 20 },
     CommandDescriptor { kind: CommandKind::Command1d, code: 29, producer: 0xef9598, payload_bytes: 12 },
     CommandDescriptor { kind: CommandKind::Command1e, code: 30, producer: 0xef95c8, payload_bytes: 8 },
-    CommandDescriptor { kind: CommandKind::Command1f, code: 31, producer: 0xef95f8, payload_bytes: 20 },
+    CommandDescriptor { kind: CommandKind::Command1f, code: 31, producer: 0xef95f4, payload_bytes: 20 },
     CommandDescriptor { kind: CommandKind::Command20, code: 32, producer: 0xef9650, payload_bytes: 8 },
     CommandDescriptor { kind: CommandKind::Command21, code: 33, producer: 0xef967c, payload_bytes: 8 },
     CommandDescriptor { kind: CommandKind::Command22, code: 34, producer: 0xef96a8, payload_bytes: 8 },
@@ -483,6 +501,22 @@ pub fn client_callback(parameters: Parameters<'_>) -> Result<ClientCallback, Par
 
 pub fn callback_word(callback: ClientCallback) -> u32 { callback.0 }
 
+pub fn optional_callback(word: u32) -> Option<ClientCallback> {
+    if word == 0 { None } else { Some(ClientCallback(word)) }
+}
+
+pub fn reply_target_code(target: ReplyTarget) -> u8 {
+    match target {
+        ReplyTarget::Command(kind) => command_code(kind),
+        ReplyTarget::Notification(notification) => match notification {
+            ClientNotification::Notification12 => 0x12,
+            ClientNotification::Notification18 => 0x18,
+            ClientNotification::Notification19 => 0x19,
+            ClientNotification::Notification1b => 0x1b,
+            ClientNotification::Notification1c => 0x1c,
+        },
+    }
+}
 pub fn parse(operation: u16, payload: &[u8]) -> Result<Message<'_>, ParseError> {
     let code = operation.checked_sub(0x3b00).and_then(|code| u8::try_from(code).ok()).ok_or(ParseError::UnknownOperation)?;
     if let Some(kind) = command(code) {
@@ -508,11 +542,18 @@ pub fn lens_dc_operation(operation: LensDcOperation) -> u16 {
         LensDcOperation::Request08 => 0x4208,
         LensDcOperation::Request09 => 0x4209,
         LensDcOperation::Request0b => 0x420b,
+        LensDcOperation::Request0c => 0x420c,
         LensDcOperation::Request11 => 0x4211,
         LensDcOperation::Request12 => 0x4212,
         LensDcOperation::Request13 => 0x4213,
         LensDcOperation::Request14 => 0x4214,
+        LensDcOperation::Request15 => 0x4215,
+        LensDcOperation::Request16 => 0x4216,
         LensDcOperation::Request17 => 0x4217,
+        LensDcOperation::Request18 => 0x4218,
+        LensDcOperation::Request19 => 0x4219,
+        LensDcOperation::Request1a => 0x421a,
+        LensDcOperation::Request1c => 0x421c,
         LensDcOperation::Request1d => 0x421d,
         LensDcOperation::Request1e => 0x421e,
         LensDcOperation::Request20 => 0x4220,
@@ -549,6 +590,7 @@ pub fn img_dc_operation(operation: ImgDcOperation) -> u16 {
         ImgDcOperation::Request31 => 0x3f31,
         ImgDcOperation::Request32 => 0x3f32,
         ImgDcOperation::Request33 => 0x3f33,
+        ImgDcOperation::Request34 => 0x3f34,
         ImgDcOperation::Request3a => 0x3f3a,
         ImgDcOperation::Request3b => 0x3f3b,
         ImgDcOperation::Request42 => 0x3f42,
@@ -561,6 +603,8 @@ pub fn img_dc_operation(operation: ImgDcOperation) -> u16 {
         ImgDcOperation::Request4a => 0x3f4a,
         ImgDcOperation::Request4e => 0x3f4e,
         ImgDcOperation::Request4f => 0x3f4f,
+        ImgDcOperation::Request56 => 0x3f56,
+        ImgDcOperation::Request57 => 0x3f57,
     }
 }
 
@@ -580,9 +624,381 @@ pub fn calc_operation(operation: CalcOperation) -> u16 {
         CalcOperation::Request0f => 0x3c0f,
         CalcOperation::Request10 => 0x3c10,
         CalcOperation::Request11 => 0x3c11,
+        CalcOperation::Request12 => 0x3c12,
     }
 }
 
+/// A stock code word a peer enters when it finishes a request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StockCallbackWord(pub u32);
+
+/// One calc, calc1 or statistics message as the peer receives it. Bytes stock leaves unwritten
+/// are zero.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Encoded { bytes: [u8; 248], length: usize }
+
+impl Encoded {
+    pub fn bytes(&self) -> &[u8] { &self.bytes[..self.length] }
+
+    fn new(length: usize) -> Self { Self { bytes: [0; 248], length } }
+
+    fn put(&mut self, offset: usize, value: &[u8]) { self.bytes[offset..offset + value.len()].copy_from_slice(value); }
+
+    fn word(&mut self, offset: usize, value: u32) { self.put(offset, &value.to_le_bytes()); }
+
+    fn halfword(&mut self, offset: usize, value: u16) { self.put(offset, &value.to_le_bytes()); }
+}
+
+/// X-M1 1.50: the primary statistics buffer the window calculation reads, as 0xf3a564..0xf3a73c names it.
+const WINDOW_STATISTICS: (u32, u32) = (0x5ffe_c1b4, 4096);
+
+/// X-M1 1.50: 0xf601fc (0x3c02), 0xf4c7d0 (0x3c03), 0xf4c82c (0x3c04), 0xf4c8ac (0x3c05),
+/// 0xf4c400 (0x3c09), 0xf4c448 (0x3c0a), 0xf4c6e8 (0x3c0c), 0xf4c4d8 (0x3c11) and 0xf4c88c (0x3c12)
+/// lay out and size each message they post through 0xf49598.
+pub fn calc_payload(payload: &calc::CalcPayload) -> (CalcOperation, Encoded) {
+    use calc::CalcPayload as P;
+    match *payload {
+        P::Evaluation { request, callback } => {
+            let mut message = Encoded::new(exposure::EVALUATION_REQUEST_BYTES);
+            message.put(0, &exposure::evaluation_request(&request, callback));
+            (CalcOperation::Request00, message)
+        }
+        P::Correction { request, callback } => {
+            let mut message = Encoded::new(exposure::CORRECTION_REQUEST_BYTES);
+            message.put(0, &exposure::correction_request(&request, callback));
+            (CalcOperation::Request01, message)
+        }
+        P::Calculation { block, source, callback } => {
+            let mut message = Encoded::new(232);
+            message.word(0, callback.0);
+            message.word(4, block.0);
+            message.word(8, source.0);
+            (CalcOperation::Request02, message)
+        }
+        P::PipelineFirst { first, second, callback } => {
+            let mut message = Encoded::new(232);
+            message.word(0, callback.0);
+            message.put(4, &first.0);
+            message.put(64, &second.0);
+            (CalcOperation::Request03, message)
+        }
+        P::PipelineSecond { block, callback } => (CalcOperation::Request04, callback_first(callback, &block.0)),
+        P::PipelineThird { block, callback } => (CalcOperation::Request05, callback_first(callback, &block.0)),
+        P::Search { record, callback } => (CalcOperation::Request09, callback_first(callback, &record.0)),
+        P::Image { record, callback } => (CalcOperation::Request0a, callback_first(callback, &record.0)),
+        P::Window { request, callback } => (CalcOperation::Request0c, window(request, callback)),
+        P::AreaEvaluation { request, callbacks } => (CalcOperation::Request0d, area_evaluation(&request, callbacks)),
+        P::CaptureThird { request, callback } => (CalcOperation::Request0e, capture_third(&request, callback)),
+        P::CaptureFirst { request, callback } => (CalcOperation::Request0f, capture_first(&request, callback)),
+        P::CaptureSecond { request, callback } => (CalcOperation::Request10, capture_second(&request, callback)),
+        P::Source { request, callback } => (CalcOperation::Request11, source(request, callback)),
+        P::Release => (CalcOperation::Request12, Encoded::new(0)),
+    }
+}
+
+/// X-M1 1.50: 0xf4c584 (0x3d00), 0xf4c620 (0x3d01) and 0xf4c490 (0x3d02) post the whole
+/// record followed by the callback through 0xf49c18.
+pub fn calc1_payload(payload: &calc::Calc1Payload) -> (Calc1Operation, Encoded) {
+    use calc::Calc1Payload as P;
+    match *payload {
+        P::Acquisition { request, callback } => {
+            (Calc1Operation::Request00, callback_last(&round_acquisition::acquisition_request(&request), callback))
+        }
+        P::Selection { request, region, callback } => {
+            (Calc1Operation::Request01, callback_last(&round_acquisition::selection_request(&request, region), callback))
+        }
+        P::Auxiliary { request, callback } => (Calc1Operation::Request02, auxiliary(request, callback)),
+    }
+}
+
+/// X-M1 1.50: 0xf4c584 copies the 1236-byte grid to 0x16d4280 and cleans the first 1204
+/// bytes from the data cache (0x740e3c) before posting 0x3d00.
+pub const ACQUISITION_GRID: (u32, usize, usize) = (0x016d_4280, 1236, 1204);
+
+fn callback_first(callback: StockCallbackWord, record: &[u8]) -> Encoded {
+    let mut message = Encoded::new(4 + record.len());
+    message.word(0, callback.0);
+    message.put(4, record);
+    message
+}
+
+fn callback_last(record: &[u8], callback: StockCallbackWord) -> Encoded {
+    let mut message = Encoded::new(record.len() + 4);
+    message.put(0, record);
+    message.word(record.len(), callback.0);
+    message
+}
+
+/// X-M1 1.50: the auxiliary statistics buffers the 0x3d02 request names (0xf37bcc..0xf37be0).
+const AUXILIARY_BUFFERS: [u32; 2] = [0x5ffe_d304, 0x5ffe_e304];
+
+/// X-M1 1.50: 0xf37ab8 fills the 124-byte record at 0x16bfff0 that 0xf38048 zeroes on pass 1
+/// and whose pass byte it rewrites on passes 2 and 3; 0xf4c490 appends the callback.
+fn auxiliary(request: calc::AuxiliaryRequest, callback: StockCallbackWord) -> Encoded {
+    let sample = request.sample;
+    let mut message = Encoded::new(128);
+    message.word(0x00, u32::from(request.complete));
+    message.put(0x04, &[request.pass]);
+    message.word(0x08, u32::from(request.selection));
+    for (index, word) in request.profile.into_iter().enumerate() { message.word(0x0c + 4 * index, word); }
+    message.word(0x1c, sample.gain_step);
+    message.halfword(0x22, sample.level);
+    message.word(0x24, sample.exposure[0]);
+    message.halfword(0x28, request.reference);
+    message.halfword(0x2a, sample.offset_level);
+    message.word(0x2c, sample.mode);
+    message.word(0x30, sample.exposure[1]);
+    message.word(0x34, sample.size[0]);
+    message.word(0x38, sample.size[1]);
+    message.word(0x3c, sample.extent[0]);
+    message.word(0x40, sample.extent[1]);
+    message.halfword(0x44, 100);
+    message.halfword(0x46, 100);
+    message.halfword(0x48, 256);
+    message.word(0x4c, sample.origin[0]);
+    message.word(0x50, sample.origin[1]);
+    message.word(0x54, request.rate);
+    message.word(0x58, AUXILIARY_BUFFERS[0]);
+    message.word(0x5c, AUXILIARY_BUFFERS[1]);
+    message.word(0x64, request.level_class);
+    message.word(0x68, sample.adjustment);
+    message.word(0x6c, u32::from(matches!(request.window_status, 3 | 4)));
+    message.halfword(0x70, request.resource_level);
+    message.halfword(0x72, request.window_halfword);
+    message.word(0x74, request.word);
+    message.halfword(0x78, request.halfword);
+    message.word(0x7c, callback.0);
+    message
+}
+
+/// X-M1 1.50: 0xf3a564..0xf3a73c builds the 76-byte record and 0xf4c6e8 appends the
+/// callback. Bytes 56..63 are adjustment words +0x48 (0xfa8018) and, for a profile whose
+/// 0x74fa2c byte is 6, +0x44 (0xfa9588).
+fn window(request: calc::WindowRequest, callback: StockCallbackWord) -> Encoded {
+    let mut message = Encoded::new(80);
+    message.word(0, u32::from(request.selection));
+    message.word(4, request.window.first);
+    message.halfword(8, request.level);
+    message.word(12, request.sample.mode);
+    message.put(16, &[request.sample.flags]);
+    message.word(20, request.sample.exposure);
+    message.halfword(24, request.sample.level);
+    message.halfword(26, request.reference);
+    message.halfword(32, request.window.halfword);
+    message.word(36, WINDOW_STATISTICS.0);
+    message.word(40, WINDOW_STATISTICS.1);
+    message.word(44, request.sample.adjustment);
+    message.word(48, request.window.status);
+    message.word(52, request.window.second);
+    message.word(56, request.adjustment.controllers.0);
+    message.word(60, request.adjustment.search.0);
+    message.word(64, u32::from(request.refresh));
+    message.word(68, u32::from(request.mode));
+    message.word(72, u32::from(request.selected));
+    message.word(76, callback.0);
+    message
+}
+
+/// X-M1 1.50: the statistics buffer the source lane's request names (0xf38730..0xf38738) and the
+/// capture pipeline's, which the capture's requests name (0xf4cc5c, 0xf4d38c, 0xf4d468,
+/// 0xf51de0, 0xf52138).
+const SOURCE_STATISTICS: u32 = 0x5ffe_d304;
+const CAPTURE_STATISTICS: u32 = 0x5ffb_6120;
+/// X-M1 1.50: the capture buffers 0xf4d398..0xf4d3ac name for 0x3c0e and 0xf4cc68 for 0x3c0d.
+const CAPTURE_THIRD_BUFFERS: [u32; 2] = [0x5ffb_7120, 0x5ffb_7130];
+const AREA_EVALUATION_BUFFER: u32 = 0x5ffb_71d0;
+
+/// X-M1 1.50: 0xf386b8 fills the 48-byte record at 0x16c0088 and 0xf4c4f4..0xf4c568 moves
+/// its selection word ahead of the reference and the words after the reference after it,
+/// leaving message bytes 18..19 and 26..27 unwritten. 0xf52120 builds the capture's request in
+/// the same layout at r11-0x44 (0xf52134..0xf521bc), with the processing's offset mode at 44.
+fn source(request: calc::SourceRequest, callback: StockCallbackWord) -> Encoded {
+    let mut message = Encoded::new(56);
+    message.word(0, callback.0);
+    message.word(4, match request.statistics {
+        calc::SourceStatistics::Primary => SOURCE_STATISTICS,
+        calc::SourceStatistics::Capture => CAPTURE_STATISTICS,
+    });
+    message.word(8, request.profile[0]);
+    message.halfword(12, request.decade);
+    message.halfword(14, request.profile_halfword);
+    message.halfword(16, request.level);
+    message.word(20, u32::from(request.selection));
+    message.halfword(24, request.reference);
+    message.word(28, request.size[0]);
+    message.word(32, request.size[1]);
+    message.word(36, request.profile[1]);
+    message.word(40, request.exposure);
+    message.word(44, request.offset_mode);
+    message.word(48, request.mode);
+    message.word(52, request.extension);
+    message
+}
+
+/// X-M1 1.50: 0xf4d448 builds 40 bytes at r11-0x60 (0xf4d45c..0xf4d498) behind the callback and
+/// posts 44, leaving bytes 6..7 and 28..43 unwritten.
+fn capture_first(request: &calc::CaptureFirstRequest, callback: StockCallbackWord) -> Encoded {
+    let processing = &request.processing;
+    let mut message = Encoded::new(44);
+    message.word(0, callback.0);
+    message.halfword(4, request.at_0022 as u16);
+    message.word(8, CAPTURE_STATISTICS);
+    message.halfword(12, processing.reference);
+    message.halfword(14, processing.level);
+    message.word(16, processing.extent[0]);
+    message.word(20, processing.extent[1]);
+    message.word(24, processing.profile);
+    message
+}
+
+/// X-M1 1.50: 0xf4d350 builds 56 bytes at r11-0x88 (0xf4d364..0xf4d414) behind the callback and
+/// posts 60, leaving bytes 26..27 unwritten.
+fn capture_third(request: &calc::CaptureThirdRequest, callback: StockCallbackWord) -> Encoded {
+    let processing = &request.processing;
+    let mut message = Encoded::new(60);
+    message.word(0, callback.0);
+    message.word(4, u32::from(request.scene));
+    message.halfword(8, request.scene_flags);
+    message.halfword(10, request.at_0022 as u16);
+    message.word(12, CAPTURE_STATISTICS);
+    message.word(16, CAPTURE_THIRD_BUFFERS[0]);
+    message.word(20, CAPTURE_THIRD_BUFFERS[1]);
+    message.halfword(24, processing.reference);
+    message.word(28, processing.extent[0]);
+    message.word(32, processing.extent[1]);
+    message.word(36, processing.grid[0]);
+    message.word(40, processing.grid[1]);
+    message.word(44, processing.lens_reference);
+    message.word(48, processing.profile);
+    message.halfword(52, request.calibration[0] as u16);
+    message.halfword(54, request.calibration[1] as u16);
+    message.word(56, request.detail);
+    message
+}
+
+/// X-M1 1.50: 0xf51bcc builds 220 bytes at r11-0x1d8 (0xf51be4..0xf52038) behind the callback and
+/// posts 224, leaving bytes 26..27, 38..39, 62..63, 144..151 and 183 unwritten. Its second argument
+/// is 0 from its only caller (0xf2eb9c), so word 4 is 0. 0xf51e04 stores the processing's decade
+/// at 88, which 0xf51ee8 overwrites with record field 0x186.
+fn capture_second(request: &calc::CaptureSecondRequest, callback: StockCallbackWord) -> Encoded {
+    let processing = &request.processing;
+    let measurement = &request.measurement;
+    let mut message = Encoded::new(224);
+    message.word(0, callback.0);
+    message.word(8, u32::from(request.scene));
+    message.word(12, u32::from(request.at_003e));
+    message.word(16, u32::from(request.at_003f));
+    message.word(20, u32::from(request.auxiliary));
+    message.halfword(24, request.at_0022 as u16);
+    message.word(28, u32::from(request.at_0048));
+    message.put(32, &request.at_000e);
+    message.word(40, u32::from(request.at_0045));
+    message.word(44, u32::from(request.at_002a));
+    message.halfword(48, request.scene_flags);
+    message.halfword(50, request.at_00a0 as u16);
+    message.halfword(52, request.at_0092 as u16);
+    message.halfword(54, measurement.first as u16);
+    message.halfword(56, measurement.second as u16);
+    message.halfword(58, request.level_total);
+    message.halfword(60, request.lens_level as u16);
+    message.word(64, request.offsets[0]);
+    message.word(68, request.offsets[1]);
+    message.word(72, processing.offset_mode);
+    message.word(76, request.at_01ec);
+    message.halfword(80, request.at_017a as u16);
+    message.halfword(82, request.at_017c as u16);
+    message.halfword(84, request.at_017e as u16);
+    message.halfword(86, request.at_0180 as u16);
+    message.halfword(88, request.at_0186 as u16);
+    message.halfword(90, processing.companion);
+    message.word(92, request.at_0188);
+    message.word(96, request.capture_offset);
+    message.word(100, request.at_0164);
+    message.word(104, request.at_0168);
+    message.word(108, CAPTURE_STATISTICS);
+    message.halfword(112, processing.reference);
+    message.halfword(114, processing.level);
+    message.word(116, processing.extent[0]);
+    message.word(120, processing.extent[1]);
+    message.word(124, processing.lens_reference);
+    message.word(128, processing.lens);
+    message.word(132, processing.profile);
+    message.word(136, request.at_01f4);
+    message.word(140, u32::from(request.window_measured));
+    message.halfword(152, measurement.base as u16);
+    message.halfword(154, measurement.third as u16);
+    message.halfword(156, measurement.fourth as u16);
+    message.put(158, &measurement.slot);
+    message.halfword(170, measurement.fifth as u16);
+    message.word(172, u32::from(measurement.paired));
+    message.word(176, u32::from(request.profile_kind));
+    message.halfword(180, measurement.sixth as u16);
+    message.put(182, &[measurement.count]);
+    message.put(184, &measurement.block);
+    message.halfword(208, request.at_001a as u16);
+    message.halfword(210, measurement.seventh as u16);
+    message.word(212, u32::from(request.header_63));
+    message.word(216, u32::from(request.scene_class));
+    message.word(220, request.detail);
+    message
+}
+
+/// X-M1 1.50: 0xf4ca60 builds 212 bytes at r11-0x1d4 (0xf4ca7c..0xf4cdf0) behind the two callbacks
+/// and posts 220, leaving bytes 74..75, 182..183 and 215 unwritten. It copies the geometry
+/// block's area pairs and shares for the chosen list's area count, which the secondary job keeps
+/// at three or fewer.
+fn area_evaluation(request: &calc::AreaEvaluationRequest, callbacks: [StockCallbackWord; 2]) -> Encoded {
+    let processing = &request.processing;
+    let block = area_measurement::area_geometry(&request.geometry);
+    let areas = usize::from(request.geometry.count).min(3);
+    let mut message = Encoded::new(220);
+    message.word(0, callbacks[0].0);
+    message.word(4, callbacks[1].0);
+    message.word(8, u32::from(request.scene));
+    message.word(12, u32::from(request.profile_kind));
+    message.word(16, u32::from(request.header_47));
+    message.halfword(20, request.at_001a as u16);
+    message.halfword(22, request.at_0022 as u16);
+    message.word(24, u32::from(request.at_0045));
+    message.word(28, u32::from(request.at_004b));
+    message.word(32, u32::from(request.at_0048));
+    message.word(36, u32::from(request.at_0041));
+    message.put(40, &block[0x198..0x19c]);
+    message.word(44, request.at_01b4);
+    message.halfword(48, request.at_01f2 as u16);
+    message.halfword(50, request.level_total);
+    message.halfword(52, request.at_017c as u16);
+    message.halfword(54, request.at_0186 as u16);
+    message.put(56, &block[0x1a4..0x1a8]);
+    message.word(60, request.at_0170);
+    message.halfword(64, request.at_0174 as u16);
+    message.halfword(66, request.at_0176 as u16);
+    message.word(68, request.at_0188);
+    message.halfword(72, request.at_01f0 as u16);
+    message.word(76, CAPTURE_STATISTICS);
+    message.word(80, AREA_EVALUATION_BUFFER);
+    message.word(84, request.frames[1]);
+    message.halfword(88, request.lens_level as u16);
+    message.halfword(90, processing.reference);
+    message.halfword(92, processing.level);
+    message.halfword(94, request.level_offset as u16);
+    message.word(96, processing.extent[0]);
+    message.word(100, processing.extent[1]);
+    message.put(104, &processing.geometry);
+    message.word(128, processing.lens_reference);
+    message.put(132, &block[0x00..0x08]);
+    message.put(140, &block[0x0a..0x0e]);
+    message.put(144, &block[0x10..0x10 + 8 * areas]);
+    message.put(168, &block[0x28..0x28 + 4 * areas]);
+    message.put(180, &block[0x34..0x36]);
+    message.put(184, &block[0x38..0x40]);
+    message.put(192, &block[0x178..0x188]);
+    message.put(208, &block[0x1a0..0x1a4]);
+    message.halfword(212, request.scene_flags);
+    message.put(214, &[request.lens_temperature as u8]);
+    message.word(216, request.frames[0]);
+    message
+}
 pub fn calc1_operation(operation: Calc1Operation) -> u16 {
     match operation {
         Calc1Operation::Request00 => 0x3d00,
@@ -620,4 +1036,225 @@ pub fn statistics_operation(operation: StatisticsOperation) -> u16 {
         StatisticsOperation::Request41 => 0x4041,
         StatisticsOperation::Request43 => 0x4043,
     }
+}
+
+pub const fn flash_operation(operation: FlashOperation) -> u16 {
+    match operation { FlashOperation::Request0d => 0x1a0d, FlashOperation::Request0e => 0x1a0e }
+}
+
+/// X-M1 1.50: 0xf3292c..0xf329f8 builds this geometry; 0xfea57c..0xfea5b4 sends 40 bytes to imgdc 0x3f2b.
+pub fn measurement_geometry(value: crate::round::MeasurementGeometry) -> [u8; 40] {
+    let mut bytes = [0; 40];
+    bytes[0..2].copy_from_slice(&[16, 16]);
+    bytes[2..4].copy_from_slice(&100u16.to_le_bytes());
+    bytes[4..6].copy_from_slice(&100u16.to_le_bytes());
+    bytes[10..12].copy_from_slice(&value.resource.0[0].to_le_bytes());
+    bytes[12..14].copy_from_slice(&value.resource.0[1].to_le_bytes());
+    bytes[14..16].copy_from_slice(&[7, 7]);
+    for (offset, calibration) in [18, 16, 22, 20].into_iter().zip(value.calibration.0) {
+        bytes[offset..offset + 2].copy_from_slice(&calibration.to_le_bytes());
+    }
+    bytes[24..26].copy_from_slice(&value.resource.0[0].to_le_bytes());
+    bytes[26..28].copy_from_slice(&value.resource.0[1].to_le_bytes());
+    bytes[28..32].copy_from_slice(&value.converted_profile.0.to_le_bytes());
+    bytes[32..36].copy_from_slice(&value.first_parameter.0.to_le_bytes());
+    bytes[36..40].copy_from_slice(&value.second_parameter.0.to_le_bytes());
+    bytes
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CaptureRecordField {
+    Completion, Auxiliary, Sample, ReservedHeaderA, Progress, ReservedHeaderB,
+    PrimarySource, SecondarySource, SourceChannel, SourceDimensions, ReservedSource,
+    PolicyDimensions, ReservedPolicy, RecordKind, Channel, Policy, ReservedBeforeAuxiliary,
+    AuxiliaryValue, ReservedAfterAuxiliary, Scale, ReservedBeforePosition, Position,
+    ReservedAfterPosition, ConvertedDimensions, ReservedBeforePositionCode, PositionCode,
+    SourceOption, ReservedOption, Option, PolicyEnabled, MultipleFrames, ReservedMode,
+    OrdinaryMode, Enabled, ReservedTail,
+}
+
+impl CaptureRecordField {
+    pub fn bytes(self, packet: &[u8; 176]) -> &[u8] {
+        let range = match self {
+            Self::Completion => 0..4, Self::Auxiliary => 4..8, Self::Sample => 8..12,
+            Self::ReservedHeaderA => 12..16, Self::Progress => 16..20, Self::ReservedHeaderB => 20..24,
+            Self::PrimarySource => 24..40, Self::SecondarySource => 40..56,
+            Self::SourceChannel => 56..60, Self::SourceDimensions => 60..64,
+            Self::ReservedSource => 64..84, Self::PolicyDimensions => 84..88,
+            Self::ReservedPolicy => 88..96, Self::RecordKind => 96..100, Self::Channel => 100..104,
+            Self::Policy => 104..108, Self::ReservedBeforeAuxiliary => 108..116,
+            Self::AuxiliaryValue => 116..120, Self::ReservedAfterAuxiliary => 120..128,
+            Self::Scale => 128..132, Self::ReservedBeforePosition => 132..136,
+            Self::Position => 136..138, Self::ReservedAfterPosition => 138..140,
+            Self::ConvertedDimensions => 140..150, Self::ReservedBeforePositionCode => 150..161,
+            Self::PositionCode => 161..162, Self::SourceOption => 162..163,
+            Self::ReservedOption => 163..164, Self::Option => 164..165,
+            Self::PolicyEnabled => 165..166, Self::MultipleFrames => 166..167,
+            Self::ReservedMode => 167..171, Self::OrdinaryMode => 171..172,
+            Self::Enabled => 172..173, Self::ReservedTail => 173..176,
+        };
+        &packet[range]
+    }
+}
+
+/// The largest lens payload, 0x4202's and 0x420b's.
+pub const LENS_PAYLOAD_BYTES: usize = 28;
+
+/// The retained callback a lens payload names in its first word; zero for none.
+pub const fn lens_callback_word(payload: &crate::lens::LensPayload) -> u32 {
+    use crate::lens::{DriveOwner, LensPayload as P, Setting};
+    match payload {
+        P::BringUp { .. } => 0xf150f0,
+        P::Stop { .. } => 0xf150c4,
+        P::Setting { setting: Setting::Request04, .. } => 0xf14b50,
+        P::Setting { setting: Setting::Request05, .. } => 0xf14b8c,
+        P::Setting { setting: Setting::Request06, .. } => 0xf14b14,
+        P::Drive { owner: DriveOwner::Live, .. } => 0xf14be4,
+        P::Drive { owner: DriveOwner::S1, .. } => 0xf28e94,
+        P::Step(_) => 0xf14bc8,
+        P::Select { .. } => 0xf14ae4,
+        P::Finish { .. } | P::Halt | P::Release => 0,
+    }
+}
+
+/// Writes a lens payload's wire bytes and returns the posted length. X-M1 1.50 senders:
+/// 0x4202 0x76dbe4 (seven words, built at 0xf15148..0xf151a0); 0x4203 0x76dc90 (four words,
+/// 0xf151dc..0xf15208); 0x4204/0x4205/0x4206 0x76dd24/0x76ddb0/0x76de3c (three words stored at
+/// 0x76dddc..0x76dde4); 0x4207 0x76dec8 (r0..r3 and two stack words, 0x76df04..0x76df20);
+/// 0x4208 0x76df7c (three words, r0 zero at 0xf14e4c and 0xf28fc0); 0x4209 0x76e008 and
+/// 0x4212 0x770080 (no payload); 0x420b 0x76e1ac (callback, halfword step, zero halfword,
+/// mode 0x81a170[0] = 0, then 1, 0, 0, 4 from 0xf14e80..0xf14e9c); 0x4211 0x76ffec (four words,
+/// 0x77001c..0x770028, code 11 or 12 from 0xf14fe8..0xf14ff0).
+pub fn lens_payload(payload: &crate::lens::LensPayload, bytes: &mut [u8; LENS_PAYLOAD_BYTES]) -> usize {
+    use crate::lens::{LensPayload as P, SelectionCode};
+    fn put(bytes: &mut [u8; LENS_PAYLOAD_BYTES], words: &[u32]) -> usize {
+        for (chunk, word) in bytes.chunks_exact_mut(4).zip(words) {
+            chunk.copy_from_slice(&word.to_le_bytes());
+        }
+        words.len() * 4
+    }
+    *bytes = [0; LENS_PAYLOAD_BYTES];
+    let callback = lens_callback_word(payload);
+    match *payload {
+        P::BringUp { parameters: p, record } => put(bytes, &[callback, p[0].0, p[1].0, p[2].0, record.0, p[3].0, p[4].0]),
+        P::Stop { parameters: p, record } => put(bytes, &[callback, p[0].0, p[1].0, record.0]),
+        P::Setting { slot, mode, .. } => put(bytes, &[callback, slot.0, mode.0]),
+        P::Drive { parameters: p, slot, .. } => put(bytes, &[callback, p[0].0, p[1].0, p[2].0, p[3].0, slot.0]),
+        P::Finish { value, record } => put(bytes, &[callback, value.0, record.0]),
+        P::Halt | P::Release => 0,
+        P::Step(step) => {
+            let length = put(bytes, &[callback, 0, 0, 1, 0, 0, 4]);
+            bytes[4..6].copy_from_slice(&step.0.to_le_bytes());
+            length
+        }
+        P::Select { value, code, record } => {
+            let code = match code { SelectionCode::Unconfigured => 11, SelectionCode::Configured => 12 };
+            put(bytes, &[callback, value.0, code, record.0])
+        }
+    }
+}
+
+/// The interface request a lens payload posts, its bytes in `bytes`.
+pub fn lens_dc_request<'a>(payload: &crate::lens::LensPayload, bytes: &'a mut [u8; LENS_PAYLOAD_BYTES]) -> LensDcRequest<'a> {
+    let length = lens_payload(payload, bytes);
+    LensDcRequest { operation: payload.operation(), parameters: Parameters(&bytes[..length]), completions: payload.completions() }
+}
+
+/// X-M1 1.50: 0xfea5cc loads 0x016f4488 and 0xfea5d4 copies the 296-byte record there.
+pub const RECORD_2C: (u32, usize) = (0x016f_4488, 296);
+
+/// X-M1 1.50: 0xfeab48 loads 0x016f224c and 0xfeab54 copies the 80-byte record there.
+pub const RECORD_45: (u32, usize) = (0x016f_224c, 80);
+
+/// Encodes each request as its sender 0xfea468..0xfeadfc stores it.
+pub fn imgdc_payload<'a>(payload: &'a imgdc::ImgDcPayload) -> (ImgDcOperation, imgdc::ImgDcMessage<'a>) {
+    use imgdc::ImgDcMessage as M;
+    use imgdc::ImgDcPayload as P;
+    match payload {
+        P::Selection { callback, first, second, third } => {
+            let mut message = Encoded::new(16);
+            message.word(0, callback.0);
+            message.word(4, *first);
+            message.word(8, *second);
+            message.word(12, *third);
+            (ImgDcOperation::Request16, M::Bytes(message))
+        }
+        P::Scan { callback, record } => {
+            let mut message = Encoded::new(232);
+            message.word(0, callback.0);
+            message.put(4, &record.0);
+            (ImgDcOperation::Request26, M::Bytes(message))
+        }
+        P::Request28 { callback } => (ImgDcOperation::Request28, callback_only(*callback, 4)),
+        P::Request29 { callback, value } => {
+            let mut message = Encoded::new(8);
+            message.word(0, callback.0);
+            message.word(4, *value);
+            (ImgDcOperation::Request29, M::Bytes(message))
+        }
+        P::Request2a { callback, value } => {
+            let mut message = Encoded::new(8);
+            message.word(0, callback.0);
+            message.word(4, *value);
+            (ImgDcOperation::Request2a, M::Bytes(message))
+        }
+        P::Request2c { record } => (
+            ImgDcOperation::Request2c,
+            M::Block { address: RECORD_2C.0, capacity: RECORD_2C.1, record: &record.0 },
+        ),
+        P::Request2d { record } => {
+            let mut message = Encoded::new(44);
+            message.put(0, &record.0);
+            (ImgDcOperation::Request2d, M::Bytes(message))
+        }
+        P::Request2f => (ImgDcOperation::Request2f, M::Bytes(Encoded::new(0))),
+        P::Request1b => (ImgDcOperation::Request1b, M::Bytes(Encoded::new(0))),
+        P::Request21 => (ImgDcOperation::Request21, M::Bytes(Encoded::new(0))),
+        P::Request22 { callback } => (ImgDcOperation::Request22, callback_only(*callback, 4)),
+        P::Request23 { callback } => (ImgDcOperation::Request23, callback_only(*callback, 4)),
+        P::ChildSelection { record, callback, first, second } => {
+            let mut message = Encoded::new(136);
+            message.put(0, &record.0);
+            message.word(124, callback.0);
+            message.word(128, first.0);
+            message.word(132, second.0);
+            (ImgDcOperation::Request42, M::Bytes(message))
+        }
+        P::Request43 { callback } => (ImgDcOperation::Request43, callback_only(*callback, 4)),
+        P::Request44 { callback, halfword, first, second, third, fourth } => {
+            let mut message = Encoded::new(24);
+            message.word(0, callback.0);
+            message.halfword(4, *halfword);
+            message.word(8, *first);
+            message.word(12, *second);
+            message.word(16, *third);
+            message.word(20, *fourth);
+            (ImgDcOperation::Request44, M::Bytes(message))
+        }
+        P::Request45 { record } => (
+            ImgDcOperation::Request45,
+            M::Block { address: RECORD_45.0, capacity: RECORD_45.1, record: &record.0 },
+        ),
+        P::Request3a { callback, first, second, third, fourth, fifth, sixth, seventh, eighth, ninth } => {
+            let mut message = Encoded::new(40);
+            message.word(0, callback.0);
+            message.word(4, *first);
+            message.put(8, &[*second]);
+            message.word(12, *third);
+            message.word(16, *fourth);
+            message.word(20, *fifth);
+            message.word(24, *sixth);
+            message.word(28, *seventh);
+            message.word(32, *eighth);
+            message.word(36, *ninth);
+            (ImgDcOperation::Request3a, M::Bytes(message))
+        }
+        P::Request3b => (ImgDcOperation::Request3b, M::Bytes(Encoded::new(0))),
+    }
+}
+
+fn callback_only(callback: StockCallbackWord, length: usize) -> imgdc::ImgDcMessage<'static> {
+    let mut message = Encoded::new(length);
+    message.word(0, callback.0);
+    imgdc::ImgDcMessage::Bytes(message)
 }

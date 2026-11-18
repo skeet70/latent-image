@@ -51,3 +51,17 @@ Each crate supplies its own `#[panic_handler]`; the macros do not inject one. Th
 ```sh
 devenv shell -- bazel test //replacement/abi:pilot-abi-tests --test_output=all
 ```
+
+## Direct stack proof
+
+`//replacement/toolchain:stack-proof` exposes `Replacement.Toolchain.Stack` for linked A32 artifacts. `Image` binds the flat binary's base, bytes, symbols and instruction addresses; `check` accepts a nonnegative `StackBytes` budget. It walks each function's control flow with the shared strict A32 stack-effect classifier, tracks SP and the known r11 frame position, and bounds direct-call depth. Returns and tail exits must restore entry SP. Tail branches reuse the caller frame; indirect callees and retained callees need separate boundary budgets.
+
+Every reachable fall-through and branch target inside a function must be a declared instruction. Paths joining at different SP offsets, unknown SP/frame restores, register-sized reservations, mode-changing operations and unmodeled instructions return `FrameNotDerivable`. Balanced loops reuse their known state; stack-growing loops refuse. Immediate single-store reservations and later allocations contribute to the frame peak wherever they occur, including shrink-wrapped paths.
+
+An unconditional direct call stops the local walk only when the linked instruction graph proves its callee cannot return. This proof uses a descending fixed point over declared functions, not panic names or assumed dead data. Conditional calls retain their fall-through, and unknown transfers remain returning possibilities. The callee's frame still contributes to composed demand; recursion and growing-loop refusals remain independent checks.
+
+The native Rust profile uses `-C jump-tables=no` so switch lowering leaves explicit CFG edges. An unbounded `ldr pc,[base,index]` remains refused rather than assigning a table extent from source enum assumptions.
+
+The strict register model includes both destinations of `LDRD` and [A32 `LDREXD`](https://mikhailarkhipov.github.io/ARM-doc/A32/ldrexd.html). An unmodeled SP/PC destination refuses; a changed or unknown r11 invalidates frame-based SP restoration.
+
+`//replacement/toolchain:stack-proof-tests` uses synthetic instruction fixtures for direct depth, recursion, tail cycles, shrink wrapping, balanced and growing loops, unknown restores and instruction coverage. The balanced `str lr,[sp,#-8]!; push {r11,lr}; pop {r11,lr}; ldr pc,[sp],#8` fixture passes at 16 bytes and refuses at 8. Further controls reject a hidden later allocation, a dual load's second SP destination and an omitted conditional fall-through instruction. It has no subsystem tables, entries or firmware input.

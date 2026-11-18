@@ -1,0 +1,394 @@
+#[cfg(target_arch = "arm")]
+use xm1_saclac_shared::stock::{Guest, Machine};
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_primary_end(status: u32, result: u32) {
+    let machine = Guest;
+    let words = [machine.read_u32(result), machine.read_u32(result + 4), machine.read_u32(result + 8)];
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::primary_end(&poster, status, words).expect("primary end completion post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_primary_notice(status: u32) {
+    crate::completion_callbacks::primary_notice(&Guest, status);
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_image_finished(status: u32) {
+    let mut payload = [0; 8];
+    payload[..4].copy_from_slice(&status.to_le_bytes());
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Image47, &payload).expect("image completion post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_snapshot_finished(status: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Image66, &status.to_le_bytes()).expect("snapshot completion post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_lens_status(position: u16, mode: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::lens_status(&poster, position, mode).expect("lens status completion post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_lens_corrected() {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Lens37, &[]).expect("lens correction completion post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_s1_result(value: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::s1_result(&poster, &crate::stock::statistics::S1_REPORTS, value).expect("S1 result completion post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_pipeline_statistics_progress() {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::pipeline_statistics_progress(&poster, &crate::stock::statistics::PIPELINE_PROGRESS).expect("pipeline statistics progress post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_adjustment_synchronized() {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::peer_services::signal(&Guest, &poster, crate::peer_services::Rendezvous::Adjustment).expect("adjustment waiter signal");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_lens_synchronized() {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::peer_services::signal(&Guest, &poster, crate::peer_services::Rendezvous::Lens).expect("lens waiter signal");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_subject_selected() {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::peer_services::subject_selected(&Guest, &poster).expect("subject selection waiter signal");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_exposure_statistics(status: u32, entry: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::exposure_statistics(&Guest, &poster, status, entry).expect("exposure statistics post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_exposure_evaluated(address: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    let evaluation = crate::stock::acquisition::read_record::<{ xm1_saclac_interface::exposure::EVALUATION_BYTES }>(&Guest, xm1_saclac_interface::calc::SharedAddress(address));
+    crate::completion_callbacks::exposure_evaluation(&Guest, &poster, &evaluation).expect("exposure evaluation post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_exposure_corrected(address: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    let correction = (address != 0).then(|| crate::stock::acquisition::read_record::<{ xm1_saclac_interface::stock::exposure::CORRECTION_BYTES }>(&Guest, xm1_saclac_interface::calc::SharedAddress(address)));
+    crate::completion_callbacks::exposure_correction(&Guest, &poster, correction.as_ref()).expect("exposure correction post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_calculated(result: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::calculated(&poster, &Guest, result).expect("calculation completion post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_pipeline_raw_checked(value: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::pipeline_raw_check(&poster, value).expect("pipeline raw check post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_pipeline_tone_progress(status: u32, level: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::pipeline_tone_progress(&poster, status, level as u16).expect("pipeline tone progress post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_pipeline_tone_finished(value: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::pipeline_tone_status(&poster, value).expect("pipeline tone status post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_pipeline_raw_calculated(address: u32) {
+    let result = xm1_saclac_interface::pipeline::RawCalculation(crate::stock::acquisition::read_record(&Guest, xm1_saclac_interface::calc::SharedAddress(address)));
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::pipeline_raw_calculation(&poster, &result).expect("pipeline raw calculation post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_pipeline_tone_calculated(address: u32) {
+    let result = xm1_saclac_interface::pipeline::ToneCalculation(crate::stock::acquisition::read_record(&Guest, xm1_saclac_interface::calc::SharedAddress(address)));
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::pipeline_tone_calculation(&poster, &result).expect("pipeline tone calculation post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_pipeline_gradation_calculated(address: u32) {
+    let result = xm1_saclac_interface::pipeline::GradationCalculation(crate::stock::acquisition::read_record(&Guest, xm1_saclac_interface::calc::SharedAddress(address)));
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::pipeline_gradation_calculation(&poster, &result).expect("pipeline gradation calculation post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_pipeline_frame_finished() {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Image4f, &[]).expect("pipeline frame completion post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_pipeline_output_finished() {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Image52, &[]).expect("pipeline output completion post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_pipeline_commit_finished() {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Image53, &[]).expect("pipeline commit completion post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_pipeline_statistics_finished() {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Statistics7a, &[]).expect("pipeline statistics completion post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_pipeline_statistics_committed() {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Statistics6b, &[]).expect("pipeline statistics commit post");
+}
+
+macro_rules! capture_calculation_callback {
+    ($name:ident, $completion:ident, $bytes:literal) => {
+        #[cfg(target_arch = "arm")]
+        #[no_mangle]
+        pub extern "C" fn $name(address: u32) {
+            let result: [u8; $bytes] = crate::stock::acquisition::read_record(
+                &Guest, xm1_saclac_interface::calc::SharedAddress(address),
+            );
+            let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+            crate::completion_callbacks::post(
+                &poster, xm1_saclac_interface::Completion::$completion, &result,
+            ).expect("capture calculation completion post");
+        }
+    };
+}
+
+// X-M1 f2e6b4/f2e710/f2e6e4/f2e67c copy12/48/4/6 bytes from their first argument.
+capture_calculation_callback!(xm1_saclac_root_capture_first, Calculation99, 12);
+capture_calculation_callback!(xm1_saclac_root_capture_second, Calculation97, 48);
+capture_calculation_callback!(xm1_saclac_root_capture_third, Calculation98, 4);
+capture_calculation_callback!(xm1_saclac_root_capture_fourth, Calculation9a, 6);
+// X-M1 f2acd0/f2ac98 each copy84 bytes; the94 and95 events remain independently queued.
+capture_calculation_callback!(xm1_saclac_root_area_evaluated, Calculation94, 84);
+capture_calculation_callback!(xm1_saclac_root_area_refined, Calculation95, 84);
+
+#[cfg(target_arch = "arm")]
+pub fn capture_calculation_callbacks() -> crate::shot_services::CaptureCalculationCallbacks {
+    use xm1_saclac_interface::stock::StockCallbackWord;
+    crate::shot_services::CaptureCalculationCallbacks {
+        first: StockCallbackWord(xm1_saclac_root_capture_first as *const () as usize as u32),
+        second: StockCallbackWord(xm1_saclac_root_capture_second as *const () as usize as u32),
+        third: StockCallbackWord(xm1_saclac_root_capture_third as *const () as usize as u32),
+        fourth: StockCallbackWord(xm1_saclac_root_capture_fourth as *const () as usize as u32),
+        area_evaluation: [
+            StockCallbackWord(xm1_saclac_root_area_evaluated as *const () as usize as u32),
+            StockCallbackWord(xm1_saclac_root_area_refined as *const () as usize as u32),
+        ],
+    }
+}
+
+// Capture/return35/3a callbacks post, then trace13030000/13030100; Finish only posts.
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_capture_lens_relative() {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::capture_lens_moved(&poster, &Guest, xm1_saclac_interface::Completion::Lens35).expect("relative capture lens completion");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_capture_lens_absolute() {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::capture_lens_moved(&poster, &Guest, xm1_saclac_interface::Completion::Lens3a).expect("absolute capture lens completion");
+}
+
+#[cfg(target_arch = "arm")]
+pub fn capture_move_callbacks() -> crate::shot_services::LensMoveCallbacks {
+    use xm1_saclac_interface::stock::StockCallbackWord;
+    crate::shot_services::LensMoveCallbacks {
+        finish_relative: StockCallbackWord(xm1_saclac_root_finish_lens_relative as *const () as usize as u32),
+        finish_absolute: StockCallbackWord(xm1_saclac_root_finish_lens_absolute as *const () as usize as u32),
+        capture_relative: StockCallbackWord(xm1_saclac_root_capture_lens_relative as *const () as usize as u32),
+        capture_absolute: StockCallbackWord(xm1_saclac_root_capture_lens_absolute as *const () as usize as u32),
+    }
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_capture_statistics_setup(status: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Statistics83, &status.to_le_bytes()).expect("capture statistics setup post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_capture_statistics_setting(status: u32, result: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::capture_setting(&poster, &Guest, xm1_saclac_interface::Completion::Statistics85, status, result).expect("capture statistics setting post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_primary_statistics_setting(status: u32, result: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::capture_setting(&poster, &Guest, xm1_saclac_interface::Completion::Statistics7d, status, result).expect("primary statistics setting post");
+}
+
+#[cfg(target_arch = "arm")]
+pub fn capture_statistics_callbacks() -> crate::shot_services::CaptureStatisticsCallbacks {
+    use xm1_saclac_interface::stock::StockCallbackWord;
+    crate::shot_services::CaptureStatisticsCallbacks {
+        setup: StockCallbackWord(xm1_saclac_root_capture_statistics_setup as *const () as u32),
+        setting: StockCallbackWord(xm1_saclac_root_capture_statistics_setting as *const () as u32),
+        primary_setting: StockCallbackWord(xm1_saclac_root_primary_statistics_setting as *const () as u32),
+    }
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_finish_lens_relative() {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Lens35, &[]).expect("relative finish lens completion");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_finish_lens_absolute() {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Lens3a, &[]).expect("absolute finish lens completion");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_measurement_finished(status: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Image5b, &status.to_le_bytes()).expect("measurement finished post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_measurement_ready(status: u32, source: u32) {
+    let mut payload = [0; 8];
+    payload[..4].copy_from_slice(&status.to_le_bytes());
+    payload[4] = source as u8;
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Image5c, &payload).expect("measurement ready post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_measurement_transferred(status: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::post(&poster, xm1_saclac_interface::Completion::Image5d, &status.to_le_bytes()).expect("measurement transferred post");
+}
+
+#[cfg(target_arch = "arm")]
+pub fn measurement_callbacks() -> crate::shot_services::MeasurementCallbacks {
+    use xm1_saclac_interface::stock::StockCallbackWord;
+    crate::shot_services::MeasurementCallbacks {
+        finished: StockCallbackWord(xm1_saclac_root_measurement_finished as *const () as u32),
+        ready: StockCallbackWord(xm1_saclac_root_measurement_ready as *const () as u32),
+        transferred: StockCallbackWord(xm1_saclac_root_measurement_transferred as *const () as u32),
+    }
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_primary_output(status: u32, result: u32) {
+    let bytes = crate::stock::acquisition::read_record::<88>(&Guest, xm1_saclac_interface::calc::SharedAddress(result));
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::primary_output(&poster, status, &bytes).expect("primary output post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_primary_readout(status: u32, source: u32, descriptor: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::primary_readout(&poster, &Guest, status, source, descriptor).expect("primary readout post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_primary_delivery(status: u32, word: u32) {
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::primary_delivery(&poster, status, word).expect("primary delivery post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_primary_complete(status: u32, result: u32) {
+    let words = core::array::from_fn(|index| Guest.read_u32(result.wrapping_add(index as u32 * 4)));
+    let poster = crate::peer_context::Poster::new(xm1_kernel::SlotTable);
+    crate::completion_callbacks::primary_complete(&poster, status, words).expect("primary complete post");
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_command_c_finished(status: u32) {
+    crate::controller_replies::scalar_reply(Guest, xm1_saclac_interface::CommandKind::Command0c, xm1_saclac_interface::CompletionStatus(status as i32));
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_root_command_28_finished(status: u32) {
+    crate::controller_replies::scalar_reply(Guest, xm1_saclac_interface::CommandKind::Command28, xm1_saclac_interface::CompletionStatus(status as i32));
+}
+
+#[cfg(target_arch = "arm")]
+pub fn capture_image_callbacks() -> crate::shot_services::CaptureImageCallbacks {
+    use xm1_saclac_interface::stock::StockCallbackWord;
+    crate::shot_services::CaptureImageCallbacks {
+        end: StockCallbackWord(xm1_saclac_root_primary_end as *const () as u32),
+        outputs: StockCallbackWord(xm1_saclac_root_primary_output as *const () as u32),
+        readout: StockCallbackWord(xm1_saclac_root_primary_readout as *const () as u32),
+        delivery: StockCallbackWord(xm1_saclac_root_primary_delivery as *const () as u32),
+        complete: StockCallbackWord(xm1_saclac_root_primary_complete as *const () as u32),
+        notice: StockCallbackWord(xm1_saclac_root_primary_notice as *const () as u32),
+        command_c: StockCallbackWord(xm1_saclac_root_command_c_finished as *const () as u32),
+        command_28: StockCallbackWord(xm1_saclac_root_command_28_finished as *const () as u32),
+    }
+}

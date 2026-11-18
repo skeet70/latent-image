@@ -1,30 +1,21 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Admission of the linked image over the two retired image-5 extents, and
--- record-5 staging of the admitted bytes into a candidate DAT.
---
--- Admission checks owned symbols and sections, entry words, literal words,
--- direct branches, stores, trap fill, function frames and direct-call depth
--- against task 43's stack. Register branches are admitted only within the
--- symbol extents of 'boundarySymbols'. Their targets come from the typed
--- stock-code-word values at the source boundary.
---
--- Memory safety of the rest rests on the compiler and the bounded types: the
--- crate root denies @unsafe_code@, @engine@ and @machine0@ forbid it, every
--- index is a bounded type parsed at entry. The comparison suites and the census
--- fetch traps cover the retained callers' actual entries, and the @unsafe@
--- blocks of @src/stock.rs@ are listed with their invariants in
--- @replacement/README.md@.
+-- | Entry veneers stay in image 5; the body is loaded separately before handoff.
 module Replacement.Saclac.Artifact
   ( Extent (..)
   , extents
   , extentBytes
   , extentContains
+  , fixedExtent
   , Entry (..)
   , entries
   , Retained (..)
   , retainedExternals
   , retainedData
+  , taskStackRuntime
+  , taskStackBytes
+  , taskCreateSite
+  , taskCreateWord
   , trapWord
   , trapBytes
   , Section (..)
@@ -32,25 +23,32 @@ module Replacement.Saclac.Artifact
   , PlacementError (..)
   , WalkReason (..)
   , Admitted (..)
+  , StackBudget
+  , stackBudget
+  , checkStackArtifact
   , admit
   , ownedSpans
   , installExtent
+  , fixedBody
   , installedImage
   , admitInstalled
   , Staged (..)
   , stageSaclac
   , contractValue
+  , publicationsValue
   , digest
   ) where
 
 import qualified A32 as A
+import qualified ArmElf as ELF
 import Control.Monad (foldM, forM, forM_, unless, when)
-import Data.Aeson (Value, object, (.=))
+import Data.Aeson (Value, object, toJSON, (.=))
+import Data.Bifunctor (first)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
+import Data.Bits ((.&.), (.|.))
 import Data.List (sortOn)
-import qualified Data.Map.Strict as M
-import Data.Maybe (catMaybes, listToMaybe, mapMaybe)
+import Data.Maybe (catMaybes, mapMaybe)
 import qualified Data.Set as S
 import Data.Word (Word32)
 import qualified Emulation.Image4Staging as Tools
@@ -59,16 +57,22 @@ import qualified FujiAF.FirstStage as F
 import qualified FujiAF.Host as H
 import Numeric (readHex)
 import qualified Replacement.Record5Staging as Record5
+import qualified Replacement.FixedImage.Layout as Fixed
+import qualified Replacement.FixedImage.Record as Fixed
+import qualified Replacement.Toolchain.Stack as Stack
+import qualified StackWalk as W
+import qualified FujiAF.UpdateContainer as U
 
--- | One retired stock extent of the decoded image 5.
 data Extent = Extent
   { extentLow :: Word32
   , extentHigh :: Word32
   } deriving (Eq, Show)
 
--- | The dispatcher's extent and machine 0's router extent, in address order.
 extents :: [Extent]
-extents = [Extent 0xefca6c 0xefcb88, Extent 0xefcb88 0xefd2fc]
+extents = [Extent 0xefca6c 0xefcb88, Extent 0xefcb88 0xefd2fc, Extent 0xf01bc8 0xf01c48]
+
+fixedExtent :: Extent
+fixedExtent = Extent (Fixed.imageBase + Fixed.headerBytes) Fixed.imageLimit
 
 extentBytes :: Extent -> Int
 extentBytes (Extent low high) = fromIntegral (high - low)
@@ -88,6 +92,16 @@ entries :: [Entry]
 entries =
   [ Entry 0xefca6c "xm1_saclac_dispatch_entry" "xm1_saclac_dispatch"
   , Entry 0xefcb88 "xm1_saclac_router_entry" "xm1_saclac_router"
+  , Entry 0xf01bc8 "xm1_saclac_driver_entry" "xm1_saclac_driver"
+  ]
+
+decoderEntries :: [(Word32, String)]
+decoderEntries =
+  [ (0x6ae360, "xm1_decoder_init")
+  , (0x6ae500, "xm1_decoder_feed")
+  , (0x6ae1dc, "xm1_decoder_progress")
+  , (0x6ae310, "xm1_decoder_complete")
+  , (0x6ae3f4, "xm1_decoder_finish")
   ]
 
 -- | A stock word the owned image reaches outside its extents.
@@ -96,10 +110,27 @@ data Retained = Retained
   , retainedAddress :: Word32
   } deriving (Eq, Show)
 
--- | Code entries the owned image calls: the dispatcher's trace call. The shim
--- register lists it as the saclac trace row.
 retainedExternals :: [Retained]
-retainedExternals = [Retained "trace" 0xf46c38]
+retainedExternals =
+  [ Retained "trace" 0xf46c38
+  , Retained "fault" 0xf46c20
+  , Retained "xm1_kernel_console9" 0x41a34
+  , Retained "xm1_kernel_critical_enter" 0x7235d8
+  , Retained "xm1_kernel_critical_exit" 0x7236b0
+  , Retained "__saclac_runtime_malloc" 0x89cda4
+  , Retained "__saclac_runtime_create_task" 0x725dd8
+  , Retained "xm1_decoder_current_task" 0x723cb8
+  , Retained "xm1_decoder_take" 0x724b68
+  , Retained "xm1_decoder_give" 0x724c00
+  , Retained "xm1_decoder_route" 0x6499d0
+  , Retained "xm1_decoder_clock_take" 0x649c4c
+  , Retained "xm1_decoder_clock_give" 0x649ddc
+  , Retained "xm1_decoder_irq_attach" 0x64e918
+  , Retained "xm1_decoder_irq_detach" 0x64eb20
+  , Retained "xm1_decoder_marker" 0x42188
+  , Retained "xm1_decoder_progress_entry" 0x6ae1dc
+  , Retained "xm1_decoder_complete_entry" 0x6ae310
+  ]
 
 externalAddresses :: [Word32]
 externalAddresses = map retainedAddress retainedExternals
@@ -129,10 +160,20 @@ stockArrays =
 -- | Data words the owned image reads: the four per-machine tables and the two
 -- halfword arrays the boundary module supplies.
 retainedData :: [Retained]
-retainedData = [Retained name address | (_, name, address, _) <- stockArrays]
+retainedData = [Retained name address | (_, name, address, _) <- stockArrays] ++ [taskStackRuntime]
 
-stockArrayAddresses :: [Word32]
-stockArrayAddresses = [address | (_, _, address, _) <- stockArrays]
+taskStackRuntime :: Retained
+taskStackRuntime = Retained "__saclac_runtime_stack_words" 0x40a5b354
+
+taskStackBytes, taskCreateSite, taskCreateWord :: Word32
+taskStackBytes = 0x10000
+taskCreateSite = 0xef8d1c
+taskCreateWord = 0xebe0b42d
+
+constructorStackBytes, constructorOwnedStackBudget :: Int
+constructorStackBytes = 0xc00
+constructorOwnedStackBudget = constructorStackBytes - 0x60 - 72 - max 128 104 - 88
+
 
 -- | The platform stager's trap word for unused extent bytes.
 trapWord :: Word32
@@ -154,15 +195,10 @@ data Section = Section
 -- | Why admission refused an instruction. Each constructor is one rule.
 data WalkReason
   = DecoderRejected A.Forbidden
-  | PcRelativeTransferWriteback
-  | PcRelativeLiteralOutside
   | BranchTargetNotAllowed Word32
   | BranchToDataWord
   | FallThroughIntoDataWord
   | FallThroughOutsideOwned
-  | LiteralOutside Word32
-  | StoreToCode
-  | IndirectOutsideBoundary String
   | FrameNotDerivable
   | RecursiveCall Word32
   | StackBudgetExceeded Int
@@ -182,9 +218,16 @@ data PlacementError
   | EntryBranchMismatch String Word32 Word32
   | WalkRefused Word32 WalkReason
   | ExtentImageMismatch Word32 Int
+  | DecoderVeneerInvalid String
   | FillDiffers Word32
   | OwnedArrayMissing String
   | TableLengthMismatch String Int Word32 Word32
+  | SafetyMarkerInvalid
+  | ElfRejected String
+  | ReferenceOutside Word32 Word32
+  | KernelBoundaryInvalid
+  | TaskStackContractInvalid
+  | TaskCreatePreimage Word32
   deriving (Eq, Show)
 
 require :: Bool -> PlacementError -> Either PlacementError ()
@@ -228,16 +271,6 @@ instructionAddresses bytes = fmap (S.fromList . catMaybes) (mapM row (C.lines by
        in case hexWord32 (C.unpack (C.dropWhile (== ' ') addressText)) of
             Just address | not (C.null after), C.head after == '\t' -> Right (Just address)
             _ -> Right Nothing
-
--- | The words the disassembly prints as literal pool entries.
-literalAddresses :: B.ByteString -> Either PlacementError (S.Set Word32)
-literalAddresses bytes = fmap (S.fromList . concat) (mapM row (C.lines bytes))
-  where
-    row line =
-      let (addressText, rest) = C.break (== ':') line
-       in case hexWord32 (C.unpack (C.dropWhile (== ' ') addressText)) of
-            Just address | ".word" `elem` C.words (C.drop 1 rest) -> Right [address]
-            _ -> Right []
 
 -- | Each machine's cell count, action-table word count, second-table word count
 -- and row count, from image 5's pointer arrays and table bytes. A table ends at
@@ -309,57 +342,6 @@ ownedArraySymbol OwnedSecondCounts = "SACLAC_SECOND_COUNTS"
 ownedArraySymbol OwnedRowCounts = "SACLAC_ROW_COUNTS"
 ownedArraySymbol OwnedRowMap = "SACLAC_ROW_MAP"
 
--- | The functions the compiler emits for @src/stock.rs@. The two veneers are its
--- @#[no_mangle]@ entries; the third is @engine::dispatch@ instantiated at
--- @StockTables@ and @StockPorts@, into which the module's @call3@ and
--- @enter_word@ inline their @unsafe@ code-pointer calls.
-boundarySymbols :: [String]
-boundarySymbols =
-  [ "xm1_saclac_dispatch"
-  , "xm1_saclac_router"
-  , "_RINvNtCs5dX5h91vudr_10xm1_saclac6engine8dispatchNtNtB4_5stock11StockTablesNtBM_10StockPortsEB4_"
-  ]
-
--- | The set of instructions from a function's entry that set up its frame: the
--- push of lr and any sp or frame-pointer arithmetic that follows it.
-prologueWords :: Admitted -> Word32 -> Word32 -> S.Set Word32
-prologueWords admitted start end = go start True
-  where
-    go address first
-      | address >= end = S.empty
-      | isPrologueInstruction first (A.decode address (wordAt admitted address)) =
-          S.insert address (go (address + 4) False)
-      | otherwise = S.empty
-
-isPrologueInstruction :: Bool -> A.Instruction -> Bool
-isPrologueInstruction first instruction = case instruction of
-  A.StoreMultiple (A.Cond 14) base A.DecrementBefore True registers
-    | first -> base == A.sp && A.lr `elem` registers
-  A.DataProcessing (A.Cond 14) _ _ destination base (A.Immediate _) ->
-    destination == A.sp || base == A.sp
-  A.DataProcessing (A.Cond 14) A.MOV _ destination _ (A.ShiftedImmediate source A.LSL 0) ->
-    destination == A.sp || source == A.sp
-  _ -> False
-
--- | The registers a function loads from a pc-relative literal whose word names
--- an owned address.
-codeLiteralRegisters :: Admitted -> S.Set Word32 -> F.Symbol -> S.Set A.Reg
-codeLiteralRegisters admitted instructions symbol = S.fromList
-  [ destination
-  | address <- [F.symbolAddress symbol, F.symbolAddress symbol + 4 .. F.symbolAddress symbol + F.symbolSize symbol - 4]
-  , S.member address instructions
-  , A.Load _ _ _ destination base (A.OffsetImmediate immediate) A.OffsetOnly <-
-      [A.decode address (wordAt admitted address)]
-  , base == A.pc
-  , insideExtents (wordAt admitted (address + 8 + fromIntegral immediate))
-  ]
-
-
-checkBoundary :: Admitted -> Word32 -> Either PlacementError ()
-checkBoundary admitted address =
-  case containingSymbol admitted address of
-    Just symbol | F.symbolName symbol `elem` boundarySymbols -> Right ()
-    symbol -> Left (WalkRefused address (IndirectOutsideBoundary (maybe "" F.symbolName symbol)))
 
 unconditionalPcWrite :: A.Instruction -> Bool
 unconditionalPcWrite instruction = case instruction of
@@ -377,57 +359,22 @@ mayFallThrough instruction = case instruction of
   A.Branch (A.Cond 14) _ _ -> False
   A.BranchExchange (A.Cond 14) _ _ -> False
   _ -> not (unconditionalPcWrite instruction)
+compilerTrapWord :: Word32
+compilerTrapWord = 0xe7ffdefe
 
--- | A pc-relative load or store with writeback is unpredictable.
-isPcRelativeWriteback :: A.Instruction -> Bool
-isPcRelativeWriteback instruction = case instruction of
-  A.Load _ _ _ _ base _ indexing -> base == A.pc && indexing /= A.OffsetOnly
-  A.Store _ _ _ base _ indexing -> base == A.pc && indexing /= A.OffsetOnly
-  _ -> False
 
-isPcRelativeLoad :: A.Instruction -> Maybe Word32
-isPcRelativeLoad instruction = case instruction of
-  A.Load _ _ _ _ base (A.OffsetImmediate immediate) A.OffsetOnly
-    | base == A.pc -> Just (fromIntegral immediate)
-  _ -> Nothing
 
-ownedAddress :: Admitted -> Word32 -> Bool
-ownedAddress admitted address =
-  any (\(low, high) -> low <= address && address + 4 <= high) (ownedSpans admitted)
-
--- | Every literal pool entry names an owned address, a declared external or a
--- declared stock table or array.
-checkLiterals :: Admitted -> S.Set Word32 -> Either PlacementError ()
-checkLiterals admitted literals = forM_ (S.toList literals) $ \address -> do
-  let value = wordAt admitted address
-  unless (insideExtents value || value `elem` externalAddresses || value `elem` stockArrayAddresses) $
-    Left (WalkRefused address (LiteralOutside value))
-
--- | No store uses a base that a pc-relative literal naming the extents loaded in
--- the same function, and no store addresses memory through pc.
-checkStores :: Admitted -> S.Set Word32 -> Either PlacementError ()
-checkStores admitted instructions =
-  forM_ [symbol | symbol <- admittedSymbols admitted, F.symbolSize symbol > 0] $ \symbol -> do
-    let codeRegisters = codeLiteralRegisters admitted instructions symbol
-        start = F.symbolAddress symbol
-        end = start + F.symbolSize symbol
-    forM_ [start, start + 4 .. end - 4] $ \address ->
-      when (S.member address instructions) $ case A.decode address (wordAt admitted address) of
-        A.Store _ _ _ base _ _ | S.member base codeRegisters ->
-          Left (WalkRefused address StoreToCode)
-        A.Store _ _ _ base _ _ | base == A.pc -> Left (WalkRefused address StoreToCode)
-        A.StoreMultiple _ base _ _ _ | S.member base codeRegisters ->
-          Left (WalkRefused address StoreToCode)
-        A.StoreMultiple _ base _ _ _ | base == A.pc -> Left (WalkRefused address StoreToCode)
-        _ -> Right ()
-
--- | Instructions decode, direct targets name admitted code, and no branch or
--- fall-through enters a data word.
+-- | Direct targets stay in owned code or enter a declared retained entry.
 checkControl :: Admitted -> S.Set Word32 -> S.Set Word32 -> Either PlacementError ()
 checkControl admitted instructions dataWords = forM_ (S.toList instructions) $ \address -> do
-  let instruction = A.decode address (wordAt admitted address)
+  let word = wordAt admitted address
+      instruction = A.decode address word
   case instruction of
-    A.Rejected forbidden -> Left (WalkRefused address (DecoderRejected forbidden))
+    A.Rejected A.UndefinedEncoding | word == compilerTrapWord -> Right ()
+    A.Rejected forbidden -> case W.classify W.Strict address word of
+      W.Refuse _ -> Left (WalkRefused address (DecoderRejected forbidden))
+      W.Stop -> Left (WalkRefused address (DecoderRejected forbidden))
+      _ -> Right ()
     A.Branch _ _ target -> do
       unless (insideExtents target || target `elem` externalAddresses) $
         Left (WalkRefused address (BranchTargetNotAllowed target))
@@ -435,32 +382,15 @@ checkControl admitted instructions dataWords = forM_ (S.toList instructions) $ \
         Left (WalkRefused address BranchToDataWord)
       unless (S.member target instructions || target `elem` externalAddresses) $
         Left (WalkRefused address (BranchTargetNotAllowed target))
-    A.BranchExchange _ _ _ -> checkBoundary admitted address
-    _ -> do
-      when (isPcRelativeWriteback instruction) $
-        Left (WalkRefused address PcRelativeTransferWriteback)
-      case isPcRelativeLoad instruction of
-        Just immediate
-          | not (ownedAddress admitted (address + 8 + immediate)) ->
-              Left (WalkRefused address PcRelativeLiteralOutside)
-        _ -> Right ()
-  when (mayFallThrough instruction && S.member (address + 4) dataWords) $
+    _ -> Right ()
+  when (word /= compilerTrapWord && mayFallThrough instruction && S.member (address + 4) dataWords) $
     Left (WalkRefused (address + 4) FallThroughIntoDataWord)
-  when (mayFallThrough instruction && not (insideExtents (address + 4))) $
+  when (word /= compilerTrapWord && mayFallThrough instruction && not (insideExtents (address + 4))) $
     Left (WalkRefused (address + 4) FallThroughOutsideOwned)
 
-containingSymbol :: Admitted -> Word32 -> Maybe F.Symbol
-containingSymbol admitted at =
-  listToMaybe
-    [ symbol
-    | symbol <- admittedSymbols admitted
-    , F.symbolSize symbol > 0
-    , F.symbolAddress symbol <= at
-    , at < F.symbolAddress symbol + F.symbolSize symbol
-    ]
-
 data Admitted = Admitted
-  { admittedBin :: B.ByteString
+  { admittedElf :: B.ByteString
+  , admittedBin :: B.ByteString
   , admittedSymbolsBytes :: B.ByteString
   , admittedDisasm :: B.ByteString
   , admittedSectionsBytes :: B.ByteString
@@ -476,7 +406,7 @@ ownedSpans admitted =
              | section <- admittedSections admitted, sectionAllocated section, sectionBytes section > 0]
 
 insideExtents :: Word32 -> Bool
-insideExtents address = any (`extentContains` address) extents
+insideExtents address = any (`extentContains` address) (fixedExtent : extents)
 
 binBase :: Admitted -> Word32
 binBase admitted = minimum [sectionLow section | section <- admittedSections admitted, sectionAllocated section, sectionBytes section > 0]
@@ -489,125 +419,95 @@ wordAt admitted address =
        then byte 0 + byte 1 * 0x100 + byte 2 * 0x10000 + byte 3 * 0x1000000
        else 0
 
-symbolKinds :: B.ByteString -> [String]
+symbolKinds :: B.ByteString -> [(Word32, String)]
 symbolKinds bytes =
-  [ C.unpack kind
+  [ (address, C.unpack kind)
   | line <- C.lines bytes
-  , [_, _, kind, _] <- [C.words line]
+  , [addressText, _, kind, _] <- [C.words line]
+  , Just address <- [hexWord32 (C.unpack addressText)]
   ]
 
--- | Task 43's stack is 0x1000 bytes: the creator at 0xef8c90 submits entry
--- 0xf01bc8 with @StackBytes(0x1000)@ (replacement/task_constructors/src.rs and
--- reports/replacement-inventory-baseline.md). The owned chain may use 1,024 of
--- those bytes; the stock actor, the row functions and the action bodies share
--- the rest of the same stack.
+-- | Task43 receives the linked stack contract before its retained creation call.
+-- The retained reserve is separate from owned demand, not a callee-depth proof.
 ownedStackBudget :: Int
-ownedStackBudget = 1024
+ownedStackBudget = fromIntegral taskStackBytes - 4096
 
-spWrite :: A.Instruction -> Bool
-spWrite instruction = case instruction of
-  A.DataProcessing _ _ _ destination _ _ -> destination == A.sp
-  A.LoadMultiple _ base _ writeback _ -> base == A.sp && writeback
-  A.StoreMultiple _ base _ writeback _ -> base == A.sp && writeback
-  _ -> False
+type StackBudget = Stack.StackBytes
 
--- | A function's frame bytes from its prologue push and immediate sp decrements.
-functionFrame :: Admitted -> F.Symbol -> Either PlacementError Int
-functionFrame admitted symbol = do
-  let start = F.symbolAddress symbol
-      end = start + F.symbolSize symbol
-      prologue = prologueWords admitted start end
-      pushed = case A.decode start (wordAt admitted start) of
-        A.StoreMultiple (A.Cond 14) base A.DecrementBefore True registers
-          | base == A.sp -> 4 * length registers
-        _ -> 0
-      adjustments = sum
-        [ fromIntegral immediate
-        | address <- S.toList prologue
-        , A.DataProcessing (A.Cond 14) A.SUB False destination base (A.Immediate immediate) <-
-            [A.decode address (wordAt admitted address)]
-        , destination == A.sp
-        , base == A.sp
-        ]
-  if S.null prologue
-    then if any (\address -> spWrite (A.decode address (wordAt admitted address)))
-             [start, start + 4 .. end - 4]
-           then Left (WalkRefused start FrameNotDerivable)
-           else Right 0
-    else Right (pushed + adjustments)
+stackBudget :: Int -> Maybe StackBudget
+stackBudget bytes = if bytes > 0 then Stack.stackBytes bytes else Nothing
 
-entrySymbol :: Admitted -> S.Set Word32 -> Word32 -> Maybe F.Symbol
-entrySymbol admitted instructions target =
-  listToMaybe
-    [ symbol
-    | symbol <- admittedSymbols admitted
-    , F.symbolSize symbol > 0
-    , F.symbolAddress symbol == target
-    , S.member target instructions
-    ]
-
-data Frame = Frame
-  { frameAddress :: Word32
-  , frameBytes :: Int
-  , frameCallees :: [(Word32, Word32)]
-  }
-
-functionFrames :: Admitted -> S.Set Word32 -> Either PlacementError [Frame]
-functionFrames admitted instructions = forM codeSymbols $ \symbol -> do
-  bytes <- functionFrame admitted symbol
-  let start = F.symbolAddress symbol
-      end = start + F.symbolSize symbol
-      callees =
-        [ (address, target)
-        | address <- [start, start + 4 .. end - 4]
-        , S.member address instructions
-        , A.Branch _ _ target <- [A.decode address (wordAt admitted address)]
-        , Just _ <- [entrySymbol admitted instructions target]
-        ]
-  pure (Frame start bytes callees)
-  where
-    codeSymbols =
-      [ symbol
-      | symbol <- admittedSymbols admitted
-      , F.symbolSize symbol > 0
-      , S.member (F.symbolAddress symbol) instructions
-      ]
-
--- | Every owned function's frame from its prologue, no cycle in the direct call
--- graph, and every chain inside 'ownedStackBudget'.
-checkStack :: Admitted -> S.Set Word32 -> Either PlacementError ()
-checkStack admitted instructions = do
-  frames <- functionFrames admitted instructions
-  let byAddress = M.fromList [(frameAddress frame, frame) | frame <- frames]
-      visit path address = case M.lookup address byAddress of
-        Nothing -> Right ()
-        Just frame ->
-          forM_ (frameCallees frame) $ \(branchAddress, target) ->
-            if target `elem` path
-              then Left (WalkRefused branchAddress (RecursiveCall target))
-              else visit (target : path) target
-      chain path frame
-        | frameAddress frame `elem` path = 0
-        | otherwise =
-            frameBytes frame
-              + maximum
-                (0 :
-                  [ chain (frameAddress frame : path) callee
-                  | (_, target) <- frameCallees frame
-                  , Just callee <- [M.lookup target byAddress]
-                  ])
-  forM_ frames $ \frame -> visit [frameAddress frame] (frameAddress frame)
-  forM_ frames $ \frame ->
-    when (chain [] frame > ownedStackBudget) $
-      Left (WalkRefused (frameAddress frame) (StackBudgetExceeded (chain [] frame)))
-
--- | Admit the linked image over the two declared extents.
-admit :: B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Either PlacementError Admitted
-admit bin symbolsBytes disasm sectionsBytes = do
+checkStackArtifact :: StackBudget -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Either PlacementError ()
+checkStackArtifact budget bin symbolsBytes disasm sectionsBytes = do
   symbols <- either (const (Left SymbolsRejected)) Right (F.parseSymbols symbolsBytes)
   sections <- parseSections sectionsBytes
   instructions <- instructionAddresses disasm
-  literals <- literalAddresses disasm
+  require (any (\section -> sectionAllocated section && sectionBytes section > 0) sections) SectionsRejected
+  let artifact = Admitted B.empty bin symbolsBytes disasm sectionsBytes sections symbols []
+      begin = binBase artifact
+  forM_ (S.toList instructions) $ \address ->
+    require (address >= begin && toInteger address + 4 <= toInteger begin + toInteger (B.length bin))
+      (ExtentImageMismatch address 4)
+  checkStack budget artifact instructions
+
+checkStack :: StackBudget -> Admitted -> S.Set Word32 -> Either PlacementError ()
+checkStack budget admitted instructions = do
+  generic <- stackAdmitted admitted
+  first stackFailure (Stack.check budget (stackImage generic instructions))
+
+decoderIrqVeneers :: [String]
+decoderIrqVeneers = ["xm1_decoder_progress", "xm1_decoder_complete"]
+
+stackAdmitted :: Admitted -> Either PlacementError Admitted
+stackAdmitted admitted
+  | all missing results = Right admitted
+  | otherwise = do
+      veneers <- forM results $ \(name, result) ->
+        first (const (DecoderVeneerInvalid name)) result
+      forM_ veneers $ \veneer -> do
+        let name = F.symbolName veneer
+            address = F.symbolAddress veneer
+            validWords =
+              [ wordAt admitted address
+              , wordAt admitted (address + 4)
+              , wordAt admitted (address + 8)
+              , wordAt admitted (address + 16)
+              , wordAt admitted (address + 20)
+              ] == [0xe92d4010, 0xe1a0400d, 0xe3cdd007, 0xe1a0d004, 0xe8bd8010]
+            validCall = case A.decode (address + 12) (wordAt admitted (address + 12)) of
+              A.Branch (A.Cond 14) True target -> extentContains fixedExtent target
+              _ -> False
+        require (F.symbolSize veneer == 24 && validWords && validCall) (DecoderVeneerInvalid name)
+      let addresses = map F.symbolAddress veneers
+      pure admitted { admittedSymbols = filter ((`notElem` addresses) . F.symbolAddress) (admittedSymbols admitted) }
+  where
+    results = [(name, F.lookupSymbol (admittedSymbols admitted) name) | name <- decoderIrqVeneers]
+    missing (_, Left _) = True
+    missing _ = False
+
+checkStackEntry :: StackBudget -> Word32 -> Admitted -> S.Set Word32 -> Either PlacementError ()
+checkStackEntry budget entry admitted instructions = do
+  generic <- stackAdmitted admitted
+  first stackFailure (Stack.checkEntry budget (Stack.Guest entry) (stackImage generic instructions))
+
+stackImage :: Admitted -> S.Set Word32 -> Stack.Image
+stackImage admitted instructions =
+  Stack.Image (Stack.Guest (binBase admitted)) (admittedBin admitted)
+    (admittedSymbols admitted) (S.map Stack.Guest instructions)
+
+stackFailure :: Stack.Failure -> PlacementError
+stackFailure problem = case problem of
+  Stack.OutsideImage (Stack.Guest address) -> ExtentImageMismatch address 4
+  Stack.InvalidFunction (Stack.Guest address) -> WalkRefused address FrameNotDerivable
+  Stack.FrameNotDerivable (Stack.Guest address) -> WalkRefused address FrameNotDerivable
+  Stack.RecursiveCall (Stack.Guest address) (Stack.Guest target) -> WalkRefused address (RecursiveCall target)
+  Stack.BudgetExceeded (Stack.Guest address) bytes -> WalkRefused address (StackBudgetExceeded (Stack.stackByteCount bytes))
+-- | Admit layout, direct control-flow targets and the owned stack budget.
+admit :: B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Either PlacementError Admitted
+admit elfBytes bin symbolsBytes disasm sectionsBytes = do
+  symbols <- either (const (Left SymbolsRejected)) Right (F.parseSymbols symbolsBytes)
+  sections <- parseSections sectionsBytes
+  instructions <- instructionAddresses disasm
   ownedArrays <- forM
     [OwnedCellCounts, OwnedActionCounts, OwnedSecondCounts, OwnedRowCounts, OwnedRowMap]
     $ \array -> do
@@ -616,7 +516,7 @@ admit bin symbolsBytes disasm sectionsBytes = do
         Right
         (F.lookupSymbol symbols (ownedArraySymbol array))
       pure (array, F.symbolAddress symbol, F.symbolSize symbol)
-  let admitted = Admitted bin symbolsBytes disasm sectionsBytes sections symbols ownedArrays
+  let admitted = Admitted elfBytes bin symbolsBytes disasm sectionsBytes sections symbols ownedArrays
       ownedWords = S.fromList
         [ address
         | (low, high) <- ownedSpans admitted
@@ -624,10 +524,13 @@ admit bin symbolsBytes disasm sectionsBytes = do
         ]
       dataWords = ownedWords `S.difference` instructions
       dataKinds = ["d", "D", "b", "B"]
-  forM_ (symbolKinds symbolsBytes) $ \kind -> when (kind `elem` dataKinds) (Left (DataSymbol kind))
+  forM_ (symbolKinds symbolsBytes) $ \(address, kind) ->
+    when (kind `elem` dataKinds && not (extentContains fixedExtent address)) (Left (DataSymbol kind))
   forM_ [section | section <- sections, sectionAllocated section, sectionBytes section > 0] $ \section -> do
-    require (not (sectionWritable section)) (WritableSection (sectionName section))
-    require (not (sectionNoBits section)) (WritableSection (sectionName section))
+    let inFixed = extentContains fixedExtent (sectionLow section)
+          && extentContains fixedExtent (sectionLow section + fromIntegral (sectionBytes section) - 1)
+    require (not (sectionWritable section) || inFixed) (WritableSection (sectionName section))
+    require (not (sectionNoBits section) || (inFixed && sectionName section == ".bss")) (WritableSection (sectionName section))
     unless (insideExtents (sectionLow section) && insideExtents (sectionLow section + fromIntegral (sectionBytes section) - 1)) $
       Left (SectionOutside (sectionName section) (sectionLow section) (sectionBytes section))
   forM_ [symbol | symbol <- symbols, F.symbolSize symbol > 0] $ \symbol ->
@@ -639,10 +542,12 @@ admit bin symbolsBytes disasm sectionsBytes = do
     body <- either (const (Left (EntryMissing (entryBody entry)))) Right (F.lookupSymbol symbols (entryBody entry))
     require (F.symbolAddress veneer == entryAddress entry) (EntryMoved (entryVeneer entry) (entryAddress entry) (F.symbolAddress veneer))
     require (F.symbolSize veneer == 4) (EntryVeneerSize (entryVeneer entry) (F.symbolSize veneer))
-    require (insideExtents (F.symbolAddress body)) (EntryNotOwned (entryBody entry) (F.symbolAddress body))
+    require (extentContains fixedExtent (F.symbolAddress body)) (EntryNotOwned (entryBody entry) (F.symbolAddress body))
     require (A.decode (entryAddress entry) (wordAt admitted (entryAddress entry))
              == A.Branch (A.Cond 14) False (F.symbolAddress body))
       (EntryBranchMismatch (entryVeneer entry) (entryAddress entry) (F.symbolAddress body))
+  marker <- either (const (Left SafetyMarkerInvalid)) Right (F.lookupSymbol symbols "XM1_REQUIRES_LENS_SAFETY_CONTRACT")
+  require (F.symbolSize marker == 4 && wordAt admitted (F.symbolAddress marker) == 1) SafetyMarkerInvalid
   forM_ (zip [0 :: Int ..] machineLengths) $ \(index, lengths) -> do
     let wordOf array =
           case [address | (other, address, _) <- ownedArrays, other == array] of
@@ -656,11 +561,102 @@ admit bin symbolsBytes disasm sectionsBytes = do
       (TableLengthMismatch "SACLAC_SECOND_COUNTS" index (machineSecondWords lengths) (wordOf OwnedSecondCounts))
     require (wordOf OwnedRowCounts == machineRowCount lengths)
       (TableLengthMismatch "SACLAC_ROW_COUNTS" index (machineRowCount lengths) (wordOf OwnedRowCounts))
-  checkLiterals admitted literals
-  checkStores admitted instructions
-  checkStack admitted instructions
+  checkTaskStackContract admitted instructions
+  budget <- maybe (Left SectionsRejected) Right (stackBudget ownedStackBudget)
+  checkStack budget admitted instructions
+  checkReferences elfBytes admitted
   checkControl admitted instructions dataWords
   pure admitted
+
+checkTaskStackContract :: Admitted -> S.Set Word32 -> Either PlacementError ()
+checkTaskStackContract admitted instructions = do
+  metadata <- either (const (Left TaskStackContractInvalid)) Right
+    (F.lookupSymbol (admittedSymbols admitted) "XM1_SACLAC_TASK_STACK")
+  constructor <- either (const (Left TaskStackContractInvalid)) Right
+    (F.lookupSymbol (admittedSymbols admitted) "XM1_SACLAC_CONSTRUCTOR_STACK")
+  body <- either (const (Left TaskStackContractInvalid)) Right
+    (F.lookupSymbol (admittedSymbols admitted) "xm1_saclac_create_task")
+  let begin = F.symbolAddress metadata
+      constructorBegin = F.symbolAddress constructor
+      allocatedReadOnly :: Word32 -> Word32 -> Bool
+      allocatedReadOnly low bytes = any (\section -> sectionAllocated section
+        && not (sectionWritable section) && not (sectionNoBits section)
+        && sectionLow section <= low
+        && toInteger low + toInteger bytes <= toInteger (sectionLow section) + toInteger (sectionBytes section))
+        (admittedSections admitted)
+  require (F.symbolSize metadata == 24 && begin `mod` 4 == 0
+    && allocatedReadOnly begin 24
+    && map (wordAt admitted . (begin +)) [0, 4 .. 20]
+       == [0x31545354, 43, taskStackBytes, retainedAddress taskStackRuntime, 0xa71a00, Fixed.imageBase]
+    && F.symbolSize constructor == 56 && constructorBegin `mod` 4 == 0
+    && allocatedReadOnly constructorBegin 56
+    && map (wordAt admitted . (constructorBegin +)) [0, 4 .. 52]
+       == [0x31545343, 59, fromIntegral constructorStackBytes, 0xa24a00, 0xa255a0,
+           0x60, 72, 128, 104, 88, fromIntegral constructorOwnedStackBudget,
+           0xd985a4, 0xef8c90, taskCreateSite]
+    && F.symbolSize body > 0 && F.symbolAddress body `mod` 4 == 0
+    && allocatedReadOnly (F.symbolAddress body) (F.symbolSize body)
+    && any (\(address, kind) -> address == F.symbolAddress body && kind `elem` ["T", "t"])
+       (symbolKinds (admittedSymbolsBytes admitted))) TaskStackContractInvalid
+  budget <- maybe (Left TaskStackContractInvalid) Right (stackBudget constructorOwnedStackBudget)
+  checkStackEntry budget (F.symbolAddress body) admitted instructions
+
+taskCreateBranch :: Admitted -> Either PlacementError Word32
+taskCreateBranch admitted = do
+  body <- either (const (Left TaskStackContractInvalid)) Right
+    (F.lookupSymbol (admittedSymbols admitted) "xm1_saclac_create_task")
+  let delta = toInteger (F.symbolAddress body) - toInteger taskCreateSite - 8
+  require (delta `mod` 4 == 0 && delta >= -0x2000000 && delta < 0x2000000) TaskStackContractInvalid
+  pure (0xeb000000 .|. (fromIntegral (delta `div` 4) .&. 0xffffff))
+
+checkReferences :: B.ByteString -> Admitted -> Either PlacementError ()
+checkReferences elfBytes admitted = do
+  elf <- first ElfRejected (ELF.parseElf elfBytes)
+  references <- first ElfRejected (ELF.addressRelocations elf)
+  boundary <- either (const (Left KernelBoundaryInvalid)) Right
+    (F.lookupSymbol (admittedSymbols admitted) "XM1_KERNEL_BOUNDARY")
+  let begin = F.symbolAddress boundary
+      at index = wordAt admitted (begin + 4 * index)
+      windows = at 1
+      entryCount = at 2
+  require (at 0 == 0x314e524b && windows <= 16 && entryCount <= 32
+    && F.symbolSize boundary == 4 * (3 + 2 * windows + entryCount)) KernelBoundaryInvalid
+  let ranges = [(at (3 + 2 * index), at (4 + 2 * index)) | index <- take (fromIntegral windows) [0 ..]]
+      retained address = address `elem` externalAddresses
+        || any (\(_, _, low, bytes) -> low <= address && toInteger address < toInteger low + toInteger bytes) stockArrays
+        || any (\(low, high) -> low <= address && address < high) ranges
+      metadataBoundary reference symbol = ELF.addressKind reference == ELF.DataReference
+        && ELF.symbolName symbol == "__power_cpu_end"
+        && ELF.symbolSize symbol == 0
+        && ELF.symbolKind symbol == ELF.OtherSymbol
+        && case [section | section <- admittedSections admitted, sectionAllocated section,
+                  sectionNoBits section, sectionName section == ".bss"] of
+          [section] ->
+            let end = toInteger (sectionLow section) + toInteger (sectionBytes section)
+                matchingBss =
+                  [index | (index, linked) <- zip [0 ..] (ELF.elfSections elf),
+                    ELF.sectionName linked == ".bss", ELF.sectionAllocated linked,
+                    ELF.sectionType linked == 8, ELF.sectionAddress linked == sectionLow section,
+                    toInteger (ELF.sectionSize linked) == toInteger (sectionBytes section)]
+            in sectionBytes section >= 0
+              && extentContains fixedExtent (sectionLow section)
+              && end <= toInteger (extentHigh fixedExtent)
+              && toInteger (ELF.symbolValue symbol) == end
+              && toInteger (ELF.addressTarget reference) == end
+              && case matchingBss of
+                [index] -> ELF.symbolSection symbol `elem` [ELF.Absolute, ELF.InSection index]
+                _ -> False
+          _ -> False
+  forM_ references $ \reference -> do
+    let symbol = ELF.addressSymbol reference
+        site = ELF.addressSite reference
+        target = ELF.addressTarget reference
+        owned address = any (\(low, high) -> low <= address && address < high) (ownedSpans admitted)
+    require (wordAt admitted site == maybe 0 id (ELF.wordAt elf site)) (ExtentImageMismatch site 4)
+    let stackRuntime = ELF.addressKind reference == ELF.DataReference
+          && retainedAddress taskStackRuntime <= target
+          && toInteger target < toInteger (retainedAddress taskStackRuntime) + 8
+    require (owned target || retained target || stackRuntime || metadataBoundary reference symbol) (ReferenceOutside site target)
 
 -- | Install one extent: section bytes stay, every other byte is the trap word.
 installExtent :: Admitted -> Extent -> Either PlacementError B.ByteString
@@ -677,9 +673,26 @@ installExtent admitted extent@(Extent low _) = B.pack <$> mapM byteAt [0 .. exte
                      else Left (ExtentImageMismatch address offset)
            else Right (B.index trapBytes (offset `mod` 4))
 
--- | The canonical decoded image 5 with both extents installed.
+fixedBody :: Admitted -> Either PlacementError B.ByteString
+fixedBody admitted = do
+  let Extent begin _ = fixedExtent
+      sections = [section | section <- admittedSections admitted, sectionAllocated section,
+        not (sectionNoBits section), sectionBytes section > 0, extentContains fixedExtent (sectionLow section)]
+      end = maximum (begin : [sectionLow section + fromIntegral (sectionBytes section) | section <- sections])
+      count = fromIntegral (end - begin)
+      offset = fromIntegral (begin - binBase admitted)
+  require (count > 0 && offset + count <= B.length (admittedBin admitted)) (ExtentImageMismatch begin count)
+  pure (B.take count (B.drop offset (admittedBin admitted)))
+
 installedImage :: B.ByteString -> Admitted -> Either PlacementError B.ByteString
-installedImage image5 admitted = foldM put image5 extents
+installedImage image5 admitted = do
+  let offset = fromIntegral (taskCreateSite - 0xbf1a00)
+  require (offset + 4 <= B.length image5) (ExtentImageMismatch taskCreateSite 4)
+  let previous = U.word32At image5 offset
+  require (previous == taskCreateWord) (TaskCreatePreimage previous)
+  branch <- taskCreateBranch admitted
+  let prepared = B.take offset image5 <> U.putWord32 branch <> B.drop (offset + 4) image5
+  foldM put prepared extents
   where
     put current extent = do
       installed <- installExtent admitted extent
@@ -690,33 +703,63 @@ installedImage image5 admitted = foldM put image5 extents
 
 -- | Refuse an installed extent whose unused bytes are not the trap fill.
 admitInstalled :: B.ByteString -> Admitted -> Either PlacementError ()
-admitInstalled image5 admitted = forM_ extents $ \extent@(Extent low _) -> do
-  let spans = ownedSpans admitted
-      covered address = any (\(spanLow, spanHigh) -> spanLow <= address && address < spanHigh) spans
-      offset = (fromIntegral low :: Int) - fromIntegral (0xbf1a00 :: Word32)
-  require (offset >= 0 && offset + extentBytes extent <= B.length image5) (ExtentImageMismatch low (extentBytes extent))
-  forM_ [0 .. extentBytes extent - 1] $ \index -> do
-    let address = low + fromIntegral index
-    unless (covered address) $
-      require (B.index image5 (offset + index) == B.index trapBytes (index `mod` 4)) (FillDiffers address)
+admitInstalled image5 admitted = do
+  branch <- taskCreateBranch admitted
+  require (U.word32At image5 (fromIntegral (taskCreateSite - 0xbf1a00)) == branch) (ExtentImageMismatch taskCreateSite 4)
+  forM_ extents $ \extent@(Extent low _) -> do
+    let spans = ownedSpans admitted
+        covered address = any (\(spanLow, spanHigh) -> spanLow <= address && address < spanHigh) spans
+        offset = (fromIntegral low :: Int) - fromIntegral (0xbf1a00 :: Word32)
+    require (offset >= 0 && offset + extentBytes extent <= B.length image5) (ExtentImageMismatch low (extentBytes extent))
+    forM_ [0 .. extentBytes extent - 1] $ \index -> do
+      let address = low + fromIntegral index
+      unless (covered address) $
+        require (B.index image5 (offset + index) == B.index trapBytes (index `mod` 4)) (FillDiffers address)
 
 data Staged = Staged
   { stagedAdmitted :: Admitted
   , stagedImage5 :: B.ByteString
   , stagedDat :: B.ByteString
   , stagedCanonicalDat :: B.ByteString
+  , stagedCanonicalImage4 :: B.ByteString
   , stagedCanonicalImage5 :: B.ByteString
+  , stagedFixedBody :: B.ByteString
+  , stagedPublications :: [Fixed.Publication]
   } deriving (Eq, Show)
+
+decoderPublications :: B.ByteString -> Admitted -> IO [Fixed.Publication]
+decoderPublications image4 admitted = do
+  H.ensure (B.length image4 == 0x282800
+    && digest image4 == "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16")
+    "canonical image4 differs"
+  forM decoderEntries $ \(address, name) -> do
+    target <- either H.failH pure (F.symbolAddress <$> F.lookupSymbol (admittedSymbols admitted) name)
+    H.ensure (target `mod` 4 == 0 && extentContains fixedExtent target) ("decoder entry leaves fixed body: " ++ name)
+    let delta = toInteger target - toInteger address - 8
+    H.ensure (delta `mod` 4 == 0 && delta >= -0x2000000 && delta < 0x2000000) ("decoder entry leaves A32 branch range: " ++ name)
+    let old = U.word32At image4 (fromIntegral (address - 0x61c400))
+        new = 0xea000000 .|. (fromInteger (delta `div` 4) .&. 0xffffff)
+    either H.failH pure (Fixed.publication address old new)
 
 -- | Staging the canonical image reproduces the canonical DAT: the inverse check.
 stageSaclac
-  :: Tools.Tools -> FilePath -> B.ByteString -> B.ByteString
-  -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString
+  :: Tools.Tools -> FilePath -> B.ByteString -> B.ByteString -> B.ByteString
+  -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString
   -> IO Staged
-stageSaclac tools scratch dat image5 bin symbolsBytes disasm sectionsBytes = do
-  admitted <- either (H.failH . show) pure (admit bin symbolsBytes disasm sectionsBytes)
+stageSaclac tools scratch dat image5 image4 elf bin symbolsBytes disasm sectionsBytes = do
+  admitted <- either (H.failH . show) pure (admit elf bin symbolsBytes disasm sectionsBytes)
   installed <- either (H.failH . show) pure (installedImage image5 admitted)
   either (H.failH . show) pure (admitInstalled installed admitted)
+  body <- either (H.failH . show) pure (fixedBody admitted)
+  let sites = taskCreateSite : concat [[low, low + 4 .. high - 4] | Extent low high <- extents]
+  image5Publications <- fmap catMaybes $ forM sites $ \address -> do
+    let offset = fromIntegral (address - 0xbf1a00)
+        old = U.word32At image5 offset
+        new = U.word32At installed offset
+    if old == new then pure Nothing
+      else Just <$> either H.failH pure (Fixed.publication address old new)
+  image4Publications <- decoderPublications image4 admitted
+  let publications = image5Publications ++ image4Publications
   scratchDirectory <- Tools.validateScratchDirectory scratch
   staged <- Record5.stageRecord5 tools scratchDirectory dat image5 installed
   inverse <- Record5.stageRecord5 tools scratchDirectory dat image5 image5
@@ -727,7 +770,10 @@ stageSaclac tools scratch dat image5 bin symbolsBytes disasm sectionsBytes = do
     , stagedImage5 = installed
     , stagedDat = Record5.stagedRecord5Dat staged
     , stagedCanonicalDat = dat
+    , stagedCanonicalImage4 = image4
     , stagedCanonicalImage5 = image5
+    , stagedFixedBody = body
+    , stagedPublications = publications
     }
 
 contractValue :: FilePath -> FilePath -> Staged -> Value
@@ -736,10 +782,16 @@ contractValue imagePath datPath staged = object
   , "piece_kind" .= ("saclac-placement" :: String)
   , "canonical_dat_sha256" .= digest (stagedCanonicalDat staged)
   , "canonical_image5_sha256" .= digest (stagedCanonicalImage5 staged)
+  , "canonical_image4_sha256" .= digest (stagedCanonicalImage4 staged)
   , "linked_bin_sha256" .= digest (admittedBin admitted)
+  , "linked_elf_sha256" .= digest (admittedElf admitted)
   , "linked_symbols_sha256" .= digest (admittedSymbolsBytes admitted)
   , "linked_disasm_sha256" .= digest (admittedDisasm admitted)
   , "linked_sections_sha256" .= digest (admittedSectionsBytes admitted)
+  , "fixed_body" .= object ["address" .= (Fixed.imageBase + Fixed.headerBytes), "bytes" .= B.length (stagedFixedBody staged), "sha256" .= digest (stagedFixedBody staged)]
+  , "fixed_body_loaded" .= False
+  , "lens_safety_contract_required" .= True
+  , "publications" .= publicationsValue staged
   , "staged_image5" .= object ["path" .= imagePath, "sha256" .= digest (stagedImage5 staged)]
   , "candidate_dat" .= object ["path" .= datPath, "sha256" .= digest (stagedDat staged)]
   , "extents" .= [object
@@ -750,6 +802,7 @@ contractValue imagePath datPath staged = object
       ] | extent@(Extent low high) <- extents]
   , "trap_word" .= trapWord
   , "entries" .= [object ["address" .= entryAddress entry, "veneer" .= entryVeneer entry, "body" .= entryBody entry] | entry <- entries]
+  , "decoder_entries" .= [object ["address" .= address, "symbol" .= name] | (address, name) <- decoderEntries]
   , "retained_externals" .= [object ["name" .= retainedName word, "address" .= retainedAddress word] | word <- retainedExternals]
   , "retained_data" .= [object ["name" .= retainedName word, "address" .= retainedAddress word] | word <- retainedData]
   , "owned_bytes" .= sum [sectionBytes section | section <- admittedSections admitted, sectionAllocated section]
@@ -757,3 +810,9 @@ contractValue imagePath datPath staged = object
   ]
   where
     admitted = stagedAdmitted staged
+
+publicationsValue :: Staged -> Value
+publicationsValue staged = toJSON
+  [ object ["address" .= address, "old" .= old, "new" .= new]
+  | Fixed.Publication _ address old new <- stagedPublications staged
+  ]

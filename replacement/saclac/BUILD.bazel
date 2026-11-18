@@ -1,26 +1,75 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
-load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_host_test", "xm1_rust_rlib", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
 
-_SOURCES = ["src/engine.rs", "src/machine0.rs", "src/stock.rs"]
+_SOURCES = ["src/driver.rs", "src/engine.rs", "src/machine0.rs", "src/stock.rs", "src/task_stack.rs"]
+
+_ARM_DEPS = {
+    "xm1_saclac_root": "//replacement/saclac/root:root",
+    "xm1_kernel": "//replacement/kernel:arm",
+    "xm1_saclac_interface": "//replacement/saclac_interface:saclac-interface",
+    "xm1_rtos_own_first_component": "//replacement/rtos_own_first:own-first-a-component",
+    "xm1_rtos_global_lock_component": "//replacement/rtos_global_lock:global-lock-component",
+    "xm1_fixed_image_layout": "//replacement/fixed_image:layout",
+    "xm1_image5_decoder": "//replacement/image5_load:decoder-arm",
+}
+
+_ARM_SEARCH_DEPS = [
+
+    "//replacement/calibration_core:libxm1_calibration_core",
+    "//replacement/power_lifecycle:arm-core",
+    "//replacement/vendor_protocol:core-arm",
+    "//replacement/saclac/root/search_bindings:bindings",
+    "//replacement/shot_sequence:shot-sequence",
+    "//replacement/saclac/focus_search:focus-search",
+    "//replacement/display_scanout:libdisplay_scanout_panel",
+    "//replacement/calibration_liveview:libcalibration_liveview",
+    "//replacement/focus_measurement/round:round",
+    "//replacement/saclac/calc:calc",
+    "//replacement/saclac/config:config",
+    "//replacement/saclac/controllers:controllers",
+    "//replacement/saclac/imaging:imaging",
+    "//replacement/saclac/lens_drive:lens-drive",
+    "//replacement/saclac/peers:peers",
+    "//replacement/saclac/profile_geometry:profile_geometry",
+    "//replacement/saclac/profile_records:profile_records",
+    "//replacement/saclac/shared:shared",
+    "//replacement/settings_storage:record-store-guest-rlib",
+    "//replacement/settings_storage:property-core",
+    "//replacement/settings_storage:area3-validator-arm-rlib",
+    "//replacement/power_lifecycle:services-arm",
+    "//replacement/callback_core:arm",
+    "//replacement/vendor_protocol:settings-core-arm",
+    "//replacement/vendor_protocol:arm/libxm1_wireless_crypto.rlib",
+    "//replacement/lens_transport:libxm1_lens_transport",
+    "//replacement/rtos_own_first:libxm1_rtos_own_first",
+]
+
 
 # The unit's rlib: the engine and machine 0's router, joined into the owned image later.
 xm1_rust_rlib(
     name = "saclac",
     src = "src/lib.rs",
     crate_name = "xm1_saclac",
+    out = "arm/libxm1_saclac.rlib",
     rustc_flags = ["-C", "jump-tables=no"],
     data = _SOURCES,
+    rlib_deps = _ARM_DEPS,
+    rlib_search_deps = _ARM_SEARCH_DEPS,
+    dependency_archives = ["//replacement/vendor_protocol:arm/wireless-crypto-deps.tar"],
 )
 
-# The same crate with the image's panic handler, linked for the comparison.
+# The composed archive inherits record_store's one guest panic handler.
 xm1_rust_staticlib(
     name = "saclac-rust",
     src = "src/lib.rs",
     crate_name = "xm1_saclac",
-    rustc_flags = ["-C", "jump-tables=no", "--cfg", "saclac_image"],
+    rustc_flags = ["-C", "jump-tables=no"],
     data = _SOURCES,
+    rlib_deps = _ARM_DEPS,
+    rlib_search_deps = _ARM_SEARCH_DEPS,
+    dependency_archives = ["//replacement/vendor_protocol:arm/wireless-crypto-deps.tar"],
 )
 
 xm1_rust_elf(
@@ -29,7 +78,7 @@ xm1_rust_elf(
     asm_srcs = ["entry.S"],
     entry = "xm1_saclac_dispatch_entry",
     link_script = ":saclac.ld",
-    extra_ldflags = ["-Wl,--gc-sections"],
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs", "-Wl,--error-limit=0"],
 )
 
 # The comparison's deliberately wrong variant: the action entry sees the table base in r3.
@@ -37,8 +86,60 @@ xm1_rust_staticlib(
     name = "saclac-rust-wrong-r3",
     src = "src/lib.rs",
     crate_name = "xm1_saclac",
-    rustc_flags = ["-C", "jump-tables=no", "--cfg", "saclac_image", "--cfg", "saclac_wrong_r3"],
+    rustc_flags = ["-C", "jump-tables=no", "--cfg", "saclac_wrong_r3"],
     data = _SOURCES,
+    rlib_deps = _ARM_DEPS,
+    rlib_search_deps = _ARM_SEARCH_DEPS,
+    dependency_archives = ["//replacement/vendor_protocol:arm/wireless-crypto-deps.tar"],
+)
+
+xm1_rust_staticlib(
+    name = "saclac-rust-wrong-driver-store",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac",
+    rustc_flags = ["-C", "jump-tables=no", "--cfg", "saclac_wrong_driver_store"],
+    data = _SOURCES,
+    rlib_deps = _ARM_DEPS,
+    rlib_search_deps = _ARM_SEARCH_DEPS,
+    dependency_archives = ["//replacement/vendor_protocol:arm/wireless-crypto-deps.tar"],
+)
+
+xm1_rust_elf(
+    name = "saclac-image-wrong-driver-store",
+    rust_staticlib = ":saclac-rust-wrong-driver-store",
+    asm_srcs = ["entry.S"],
+    entry = "xm1_saclac_driver_entry",
+    link_script = ":saclac.ld",
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs", "-Wl,--error-limit=0"],
+)
+
+# The playback control: the cyclic wake 0x3b4b is not routed after 110 dispatches.
+xm1_rust_staticlib(
+    name = "saclac-rust-wrong-driver-playback",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac",
+    rustc_flags = ["-C", "jump-tables=no", "--cfg", "saclac_wrong_driver_playback"],
+    data = _SOURCES,
+    rlib_deps = _ARM_DEPS,
+    rlib_search_deps = _ARM_SEARCH_DEPS,
+    dependency_archives = ["//replacement/vendor_protocol:arm/wireless-crypto-deps.tar"],
+)
+
+xm1_rust_elf(
+    name = "saclac-image-wrong-driver-playback",
+    rust_staticlib = ":saclac-rust-wrong-driver-playback",
+    asm_srcs = ["entry.S"],
+    entry = "xm1_saclac_driver_entry",
+    link_script = ":saclac.ld",
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
+)
+
+genrule(
+    name = "saclac-image-wrong-driver-playback-sections",
+    srcs = [":saclac-image-wrong-driver-playback.elf"],
+    outs = ["saclac-image-wrong-driver-playback.sections"],
+    cmd = "$(location @lab_llvm//:bin/llvm-readelf) -S $(location :saclac-image-wrong-driver-playback.elf) > $@",
+    tools = ["@lab_llvm//:bin/llvm-readelf"],
 )
 
 xm1_rust_elf(
@@ -47,7 +148,7 @@ xm1_rust_elf(
     asm_srcs = ["entry.S"],
     entry = "xm1_saclac_dispatch_entry",
     link_script = ":saclac.ld",
-    extra_ldflags = ["-Wl,--gc-sections"],
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
 )
 
 # The two extents are typed once, in Replacement.Saclac.Artifact; this emits the
@@ -59,6 +160,7 @@ haskell_library(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":saclac-artifact",
+        "//replacement/fixed_image:contract",
         "//host:aeson",
         "//host:base",
     ],
@@ -130,6 +232,14 @@ genrule(
     tools = ["@lab_llvm//:bin/llvm-readelf"],
 )
 
+genrule(
+    name = "saclac-image-wrong-driver-store-sections",
+    srcs = [":saclac-image-wrong-driver-store.elf"],
+    outs = ["saclac-image-wrong-driver-store.sections"],
+    cmd = "$(location @lab_llvm//:bin/llvm-readelf) -S $(location :saclac-image-wrong-driver-store.elf) > $@",
+    tools = ["@lab_llvm//:bin/llvm-readelf"],
+)
+
 haskell_library(
     name = "saclac-artifact",
     srcs = ["Replacement/Saclac/Artifact.hs"],
@@ -145,8 +255,11 @@ haskell_library(
         "//host:containers",
         "//host:first-stage",
         "//host:host-support",
+        "//host:update-container",
         "//host/firmware:bank-allowlist",
         "//replacement/record5_staging:record5-staging",
+        "//replacement/fixed_image:contract",
+        "//replacement/toolchain:stack-proof",
     ],
 )
 
@@ -180,12 +293,14 @@ haskell_test(
     name = "saclac-placement-tests",
     srcs = ["Tests.hs"],
     args = [
+        "$(rootpath :saclac-image.elf)",
         "$(rootpath :saclac-image.bin)",
         "$(rootpath :saclac-image.symbols)",
         "$(rootpath :saclac-image.disasm)",
         "$(rootpath :saclac-image-sections)",
     ],
     data = [
+        ":saclac-image.elf",
         ":saclac-image-sections",
         ":saclac-image.bin",
         ":saclac-image.disasm",
@@ -196,8 +311,10 @@ haskell_test(
         ":saclac-artifact",
         "//host:base",
         "//host:bytestring",
+        "//host:directory",
         "//host:first-stage",
         "//host:host-support",
+        "//host:update-container",
         "//host/firmware:bank-allowlist",
     ],
 )
@@ -217,12 +334,49 @@ haskell_binary(
     ],
 )
 
-genrule(
+haskell_library(
+    name = "payload-projection",
+    srcs = ["Replacement/Saclac/PayloadProjection.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = ["//host:aeson", "//host:base", "//host:bytestring", "//host:text"],
+)
+
+haskell_test(
+    name = "payload-projection-tests",
+    size = "small",
+    srcs = ["PayloadProjectionTests.hs"],
+    args = ["$(location :payload-fields.json)"],
+    data = ["payload-fields.json"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [":payload-projection", "//host:aeson", "//host:base", "//host:bytestring"],
+)
+
+haskell_binary(
+    name = "saclac-interface-compare",
+    srcs = ["InterfaceCompareMain.hs"],
+    main_file = "InterfaceCompareMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":saclac-artifact",
+        ":payload-projection",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+        "//host:text",
+    ],
+)
+
+xm1_rust_host_test(
     name = "host-tests",
-    srcs = ["src/lib.rs", "src/tests.rs"] + _SOURCES,
-    tools = ["@lab_xm1_rust//:bin/rustc"],
-    outs = ["host-tests.passed"],
-    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test $(location src/lib.rs) -o $(@D)/host-tests && $(@D)/host-tests && touch $@",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac",
+    data = ["src/tests.rs", "src/driver_tests.rs"] + _SOURCES,
+    rlib_deps = {
+        "xm1_kernel": "//replacement/kernel:host",
+        "xm1_saclac_interface": "//replacement/saclac_interface:host",
+    },
 )
 
 haskell_library(
@@ -290,6 +444,16 @@ filegroup(
 
 filegroup(
     name = "shim-catalog-data",
-    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel", "Replacement/Saclac/Artifact.hs"],
+    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + [
+        "BUILD.bazel",
+        "Replacement/Saclac/Artifact.hs",
+        "//replacement/saclac/config:src/stock.rs",
+        "//replacement/saclac/imaging:src/stock.rs",
+        "//replacement/saclac/lens_drive:src/stock.rs",
+        "//replacement/saclac/profile_geometry:src/stock/mod.rs",
+        "//replacement/saclac/profile_records:src/stock/mod.rs",
+        "//replacement/saclac/root:BUILD.bazel",
+        "//replacement/saclac/shared:src/stock.rs",
+    ],
     visibility = ["//replacement/shim_check:__pkg__"],
 )

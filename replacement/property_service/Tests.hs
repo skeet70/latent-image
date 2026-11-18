@@ -263,6 +263,7 @@ referenceTests = do
       bytes = B.concat (map U.putWord32 [0xe59f0000, 0xe12fff1e, 0x90000000])
       admit references = () <$ admitCode layout {layoutReferences = references} bytes
       reference target kind = ELF.AddressRelocation 0x1008 target kind
+        (ELF.Symbol "fixture-reference" target 0 ELF.OtherSymbol ELF.Absolute)
   expect "unrelocated literal is not classified" (Right ()) (admit [])
   expect "owned relocation" (Right ()) (admit [reference 0x1004 ELF.DataReference])
   expect "declared stock region relocation" (Right ()) (admit [reference 0x2000 ELF.DataReference])

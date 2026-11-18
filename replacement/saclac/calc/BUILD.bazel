@@ -1,0 +1,39 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_host_rlib", "xm1_rust_host_test", "xm1_rust_rlib")
+
+package(default_visibility = ["//visibility:public"])
+
+_SOURCES = glob(["src/**/*.rs"], exclude = ["src/lib.rs", "src/**/*_tests.rs"])
+
+xm1_rust_rlib(
+    name = "calc",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac_calc",
+    out = "arm/libxm1_saclac_calc.rlib",
+    data = _SOURCES,
+    rlib_deps = {
+        "xm1_saclac_interface": "//replacement/saclac_interface:saclac-interface",
+        "xm1_saclac_profile_records": "//replacement/saclac/profile_records:profile_records",
+    },
+)
+
+xm1_rust_host_rlib(
+    name = "host",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac_calc",
+    data = _SOURCES,
+    rlib_deps = {
+        "xm1_saclac_interface": "//replacement/saclac_interface:host",
+        "xm1_saclac_profile_records": "//replacement/saclac/profile_records:host",
+    },
+)
+
+xm1_rust_host_test(
+    name = "host-tests",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac_calc_tests",
+    data = glob(["src/**/*.rs"], exclude = ["src/lib.rs"]),
+    rlib_deps = {
+        "xm1_saclac_interface": "//replacement/saclac_interface:host",
+        "xm1_saclac_profile_records": "//replacement/saclac/profile_records:host",
+    },
+)

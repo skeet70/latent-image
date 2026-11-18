@@ -1,6 +1,6 @@
 .syntax unified
 .arm
-.text
+.section .text.xm1_power_record_helper_f17838,"ax",%progbits
 .balign 4
 .global xm1_power_record_helper_f17838
 .type xm1_power_record_helper_f17838,%function
@@ -13,6 +13,7 @@ xm1_power_record_helper_f17838:
     sub sp,r11,#12
     pop {r4,r5,r11,pc}
 .size xm1_power_record_helper_f17838,.-xm1_power_record_helper_f17838
+.section .text.xm1_power_record_helper_f17984,"ax",%progbits
 .balign 4
 .global xm1_power_record_helper_f17984
 .type xm1_power_record_helper_f17984,%function

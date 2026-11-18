@@ -1,10 +1,33 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+pub mod area_measurement;
+pub mod calc;
+pub mod calculation;
+pub mod capture_job;
+pub mod capture_results;
+pub mod exposure;
+pub mod imaging;
+pub mod imgdc;
+pub mod lens;
+pub mod pipeline;
+pub mod round;
+pub mod round_acquisition;
+#[cfg(test)]
+mod round_acquisition_tests;
+pub mod round_image;
+pub mod search;
+pub mod selection;
+pub mod shared;
+pub mod statistics;
 pub mod stock;
+pub mod calc_sub;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClientCallback(pub(crate) u32);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecordHandle(pub(crate) u32);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ParameterValue(pub u32);
@@ -177,7 +200,7 @@ pub struct Completed<'a> {
 pub enum Message<'a> { Command(Command<'a>), Completed(Completed<'a>) }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BlockingRequest { LensSynchronize, AdjustmentSynchronize, FileSynchronize }
+pub enum BlockingRequest { LensSynchronize, AdjustmentSynchronize }
 
 pub trait Blocking {
     type Error;
@@ -229,11 +252,18 @@ pub enum LensDcOperation {
     Request08,
     Request09,
     Request0b,
+    Request0c,
     Request11,
     Request12,
     Request13,
     Request14,
+    Request15,
+    Request16,
     Request17,
+    Request18,
+    Request19,
+    Request1a,
+    Request1c,
     Request1d,
     Request1e,
     Request20,
@@ -281,6 +311,10 @@ pub enum ImgDcOperation {
     Request31,
     Request32,
     Request33,
+    /// 20 bytes from 0xfea7dc (0xfea7f0..0xfea810): the completion word, then four words
+    /// in argument order. The live view's two senders (0xf31548, 0xf315bc) pass completion
+    /// 0xf2f684, which posts 0x63.
+    Request34,
     Request3a,
     Request3b,
     Request42,
@@ -293,6 +327,8 @@ pub enum ImgDcOperation {
     Request4a,
     Request4e,
     Request4f,
+    Request56,
+    Request57,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -323,6 +359,7 @@ pub enum CalcOperation {
     Request0f,
     Request10,
     Request11,
+    Request12,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -354,6 +391,23 @@ pub struct Calc1Request<'a> {
 pub trait Calc1 {
     type Error;
     fn request(&mut self, request: Calc1Request<'_>) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CalcSubOperation {
+    Request00,
+}
+
+/// A request to calcsub, queue 46.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CalcSubRequest<'a> {
+    pub operation: CalcSubOperation,
+    pub parameters: Parameters<'a>,
+}
+
+pub trait CalcSub {
+    type Error;
+    fn request(&mut self, request: CalcSubRequest<'_>) -> Result<(), Self::Error>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -394,6 +448,8 @@ pub struct StatisticsRequest<'a> {
 }
 
 pub trait Statistics {
+    /// Raw ports preserve linked words; a composition may bind an owned callback instead.
+    fn resolve_callback(&self, word: stock::StockCallbackWord) -> stock::StockCallbackWord { word }
     type Error;
     fn request(&mut self, request: StatisticsRequest<'_>) -> Result<(), Self::Error>;
 }
@@ -404,5 +460,122 @@ pub trait SharedParameters {
     fn write(&mut self, command: CommandKind, values: Parameters<'_>) -> Result<(), Self::Error>;
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FlashOperation { Request0d, Request0e }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FlashRequest<'a> {
+    pub operation: FlashOperation,
+    pub parameters: Parameters<'a>,
+    pub completions: &'a [Completion],
+}
+
+pub trait Flash {
+    type Error;
+    fn request(&mut self, request: FlashRequest<'_>) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LensComOperation { Request2d }
+
+/// A request to lenscom, queue 0x62.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LensComRequest<'a> {
+    pub operation: LensComOperation,
+    pub parameters: Parameters<'a>,
+    pub completions: &'a [Completion],
+}
+
+pub trait LensCom {
+    type Error;
+    fn request(&mut self, request: LensComRequest<'_>) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ImageProcessorOperation { Request03 }
+
+/// A request to the image processor, queue 55.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ImageProcessorRequest<'a> {
+    pub operation: ImageProcessorOperation,
+    pub parameters: Parameters<'a>,
+}
+
+pub trait ImageProcessor {
+    type Error;
+    fn request(&mut self, request: ImageProcessorRequest<'_>) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PeerOperation {
+    LensDc(LensDcOperation),
+    ImgDc(ImgDcOperation),
+    Calc(CalcOperation),
+    Calc1(Calc1Operation),
+    CalcSub(CalcSubOperation),
+    Statistics(StatisticsOperation),
+    Flash(FlashOperation),
+    LensCom(LensComOperation),
+    ImageProcessor(ImageProcessorOperation),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LensEffect { NoLensDrive, DirectDrive, DriveThroughImageBridge, Unclassified }
+impl LensEffect {
+    pub const fn requires_lens_safety_contract(self) -> bool { !matches!(self, Self::NoLensDrive) }
+}
+
+pub const fn lens_effect(operation: PeerOperation) -> LensEffect {
+    match operation {
+        PeerOperation::LensDc(LensDcOperation::Request07 | LensDcOperation::Request08 | LensDcOperation::Request0c) => LensEffect::DirectDrive,
+        // 0x3f2e reaches lensdc 0x420c; 0x3f2f in imgdc state 7 reaches lensdc 0x420e (0xff4dac -> 0xff7a98 -> 0x76e450);
+        // 0x3f44 (handler 0xff091c) arms a drive that imgdc's frame event sends as lensdc 0x420c (0xff1048), or sends
+        // lensdc 0x420b itself when it carries no move (0xff04cc -> 0x76e1ac).
+        PeerOperation::ImgDc(ImgDcOperation::Request2e | ImgDcOperation::Request2f | ImgDcOperation::Request44) => {
+            LensEffect::DriveThroughImageBridge
+        }
+        PeerOperation::Calc(_) | PeerOperation::Calc1(_) | PeerOperation::CalcSub(_) | PeerOperation::Statistics(_) => LensEffect::NoLensDrive,
+        PeerOperation::LensDc(_)
+        | PeerOperation::ImgDc(_)
+        | PeerOperation::Flash(_)
+        | PeerOperation::LensCom(_)
+        | PeerOperation::ImageProcessor(_) => {
+            LensEffect::Unclassified
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod area_measurement_tests;
+#[cfg(test)]
+mod calculation_tests;
+#[cfg(test)]
+mod capture_job_tests;
+#[cfg(test)]
+mod capture_results_tests;
+#[cfg(test)]
+mod exposure_tests;
+#[cfg(test)]
+mod imaging_tests;
+#[cfg(test)]
+mod imgdc_tests;
+#[cfg(test)]
+mod pipeline_tests;
+#[cfg(test)]
+mod round_image_tests;
+#[cfg(test)]
+mod search_record_tests;
+#[cfg(test)]
+mod search_tests;
+#[cfg(test)]
+mod selection_tests;
+#[cfg(test)]
+mod shared_tests;
+#[cfg(test)]
+mod statistics_tests;
+#[cfg(test)]
+mod calc_sub_tests;
+#[cfg(test)]
+mod calc_tests;

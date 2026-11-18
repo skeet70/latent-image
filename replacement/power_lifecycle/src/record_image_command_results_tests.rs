@@ -61,7 +61,8 @@ fn capture_history_rotates_at_the_next_write_position() {
 #[test]
 fn preview_configuration_truncates_fields_without_replacing_adjacent_state() {
     with_context(|context| {
-        context.write_u8(GuestAddress::new(0x0170_5896), 0xee).unwrap();
+        context.write_u32(GuestAddress::new(0x0170_5888), 0x5a11_9b3d).unwrap();
+        context.write_u8(GuestAddress::new(0x0170_589b), 0xee).unwrap();
         for index in 0..14 { context.write_u8(GuestAddress::new(0x2000 + index), index as u8 + 20).unwrap(); }
         helper_1042e9c(context, PreviewConfiguration {
             handle: 123, table: GuestAddress::new(0x2000), kind: 0x123,
@@ -73,8 +74,9 @@ fn preview_configuration_truncates_fields_without_replacing_adjacent_state() {
         assert_eq!(context.read_u32(GuestAddress::new(0x0170_58a8)), Ok(0x3456_2345));
         assert_eq!(context.read_u32(GuestAddress::new(0x0170_58ac)), Ok(0x5678_4567));
         assert_eq!(context.read_u32(GuestAddress::new(0x0170_58b0)), Ok(0x789a_6789));
-        for index in 0..14 { assert_eq!(context.read_u8(GuestAddress::new(0x0170_5888 + index)), Ok(index as u8 + 20)); }
-        assert_eq!(context.read_u8(GuestAddress::new(0x0170_5896)), Ok(0xee));
+        assert_eq!(context.read_u32(GuestAddress::new(0x0170_5888)), Ok(0x5a11_9b3d));
+        for index in 0..14 { assert_eq!(context.read_u8(GuestAddress::new(0x0170_588c + index)), Ok(index as u8 + 20)); }
+        assert_eq!(context.read_u8(GuestAddress::new(0x0170_589b)), Ok(0xee));
     });
 }
 

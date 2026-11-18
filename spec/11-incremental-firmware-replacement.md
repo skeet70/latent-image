@@ -48,6 +48,15 @@ Stages overlap across subsystems. Do not wait for application-wide replacement b
 
 For each retirement, distinguish executable code, data, initialization duties and intentionally retained resources. Scan for remaining references, including pointer tables and instruction-built addresses; retain unresolved computed references as obligations. Trap fetches from retired code and prohibited accesses to retired data during capability scenarios. Where feasible, build and boot an artifact with the retired implementation absent. If removal is not yet possible, record the remaining dependency rather than declaring full retirement. These checks establish independence within the declared scenario and artifact scope, not all possible executions.
 
+### Composition placement and heap pressure
+
+Use a simple contiguous composition layout during implementation. Do not fit subsystems into scattered retired-code holes or optimize early reservations from pre-link size estimates. Keep explicit address, overlap and admission checks; a contiguous layout does not waive correctness or permit overwriting live stock state.
+
+Defer space optimization until actual on-camera operation demonstrates a problem, not emulator measurements or projected image sizes. Record linked code, data and reservation sizes as facts without turning estimates into a packing prerequisite. This policy authorizes no camera operation; the camera-run procedure still governs each live run.
+
+Measure demand and pressure in the particular heap affected by capture, playback or another exercised operation. Unused RAM elsewhere does not establish that heap's headroom. Distinguish transition-time stock-plus-Rust dual residency from the final composition after stock code is reclaimed, and report both scopes explicitly.
+
+
 ## Replacement contract
 
 Each selected target has a versioned, machine-readable contract and a short human explanation. Develop its typed representation with the bounded computation pilot in #120, extending existing artifact/native-case contracts only where the running consumer needs it. #118 supplies an inventory and baseline, not a prerequisite schema or a second pilot-selection process.
@@ -107,6 +116,42 @@ When an original or emulated path hangs but its intended functionality is known,
 Timing, image-quality and numerical tolerances require their own evidence; instruction counts are not physical latency.
 
 Exercise boundary values, invalid inputs, repeated operations, resource exhaustion, cancellation and relevant completion orderings. Scheduling exploration is bounded and reports the explored domain; it is not a proof over every interleaving. A plausible deliberately incorrect implementation must fail the pilot's oracle. Expectations must not be derived solely from the candidate implementation.
+
+#### Task-43 intake corrections, X-M1 1.50
+
+The owned saclac driver corrects two accepted defects at the retained queue-43 boundary. A command payload longer than its parameter block reaches an unbounded copy in stock at `0xf01c14..0xf01c28`. The owned driver releases the received block, calls stock's fault reaction `0xf46c20`, and neither copies nor dispatches that message. A failed receive calls the fault reaction in stock at `0xf01bf8..0xf01c04`, then dispatches the stale receive scratch. The owned driver calls the same fault reaction and receives again without copying or dispatching stale data. The command producers, shared block layouts, engine A and stock machines remain retained boundaries. No consumer dependence on either defect has been observed; that is not a claim that malformed messages cannot reach the queue.
+
+#### Lens child corrections, X-M1 1.50
+
+The owned live lens child corrects the refused Command2c reply at the retained queue-50 boundary. When the `0x4211` send is refused, stock's handler `0xf033b4..0xf033f4` calls `0xf15000(-98)`, whose reply entry `0xefb654` takes its third argument from the word at `0x169d388` (`0xf15034..0xf15048`); Command2c's payload is 8 bytes, so that word is left by an earlier message. The owned child replies -98 with a zero third word and prepares no record. The reply entry `0xefb654`, the lensdc sender `0x76ffec` and Command2c's client callback remain retained boundaries, and that callback is the only reader of the third word. A client that reads the third reply word as a value of this command would observe the difference; none has been observed.
+
+#### Saclac shared-layer corrections, X-M1 1.50
+
+The owned saclac shared layer corrects two accepted defects. The lens synchronization (`0xf472bc`) posts lensdc operation 0x4217 through `0x76f660`; stock discards the post's result at `0xf472e4` and waits at `0xf472f4`, so a refused post blocks the calling task forever. The owned synchronization returns the refusal without waiting, and the owned caller returns it to its task boundary, whose fault reaction is the intake corrections' `0xf46c20`. The capture window (`0xdca798`) returns no variant where stock loops at `0xdca8a4` after the compare at `0xdca87c`: the conversion selection `0x73958c` returns 255 for a scaled mode and aspect with no variant, so the stock loop cannot make progress. With the 1.50 tables the case cannot arise, because `0x73946c` maps modes 1..7 to rows 0, 1, 2, 4, 5, 3 and 6 of the table at `0x817478` and every pair the `SCALED` table admits has a value there. The retained lensdc post and the conversion and capture-window tables remain retained boundaries. The stock callers of the synchronization, `0xf170a0` (ShotSequence) and `0xf30ed4` (Controllers), have no error path and ignore its outcome. No consumer dependence on either defect has been observed.
+#### Measurement-round corrections, X-M1 1.50
+
+These are source-inspected contracts, not stock-execution or camera evidence. The
+decomp reference is x70view commit `55436fc85c0560dd252b0410af6f2427fe198cd3`;
+the address-level claims below were checked against the X-M1 1.50 image bytes.
+
+| Trigger | Original behavior | Intended behavior | Retained boundary and dependency evidence |
+| --- | --- | --- | --- |
+| A timing class other than 2, 3 or 5 cannot supply a frame interval. | `0xfa95a8` enters `0x1005f60`; `0x1005f90..0x1005fa8` and `0x1005ff4` return 133 without writing the output. In `0xf32bc4`, the output at `[r11-0x38]` is unwritten: `0xfea7bc`/`0xff5690`/`0xff6fc0` write only the timing at `[r11-0x3c]`, and the history load starts at `[r11-0x34]`. Stock appends that undefined stack word at `0xf32c00..0xf32c28`, or shifts then appends at `0xf32c2c..0xf32c54`, and stores 48 bytes through `0x758028` at `0xf32c68`. | Do not append or write the history when the interval is unavailable. Preserve its count and previous values. | Shared interval history `0x9198b0`, count halfword at +40. The rate layer reads it through `0xfa964c` (`0xfa95b8`) and clears it at `0xfa89cc`. Those readers can observe one fewer entry; none supplies meaning for the undefined word. Runtime dependence on the discarded residue remains unmeasured. |
+| An auxiliary channel's accumulated count is zero. | The unsigned division at `0x4d978` enters `0x43614` and the supervisor trap at `0x43604` for divisor zero. | Use mean zero for the empty channel, allowing the remaining channels to be processed. | Auxiliary publication and subsequent ratio bands remain the consumer boundary. A zero ratio divisor is **not** corrected: `0x89bed0` returns all ones for nonzero dividend and zero divisor, and zero for zero dividend and divisor. The owned ratio preserves its low word `0xffffffff` or zero, including unsigned wrapping band arithmetic (`0xf382f4..0xf3832c`, `0xf38340..0xf38390`, `0xf383e0` onward). No consumer dependence on the empty-channel trap has been demonstrated. |
+| A source collection averages all four segments after the publication was withdrawn. | `0xf396f0..0xf39718` writes the summary and means pointers and strength but leaves the publication's first word unwritten. | Publish flag 1 for fresh, kept and averaged publications; flag 0 when withdrawn. Continue updating the stable summary and means buffers even when one empty, unweighted segment withholds a new publication. | The 16-byte publication names summary `0x16c05a4` and means `0x16c0622`; a fresh publication aliases both pointers to the summary (`0xf38cb8..0xf38cd4`), a kept one names both buffers (`0xf38d0c..0xf38d38`). Readers `0xf22b08`, `0xf2cf44`, `0xf3b13c`, `0xf3b8f0`, `0xfa3bac` retain the published summary pointer, so partial updates remain visible without changing the old strength. No dependence on an invalid flag accompanying new pointers is established. |
+| The source's capture-window helper declines scaling. | `0xdca798` returns without writing its two-word output when the mode/aspect is unscaled or unrecognized. The unchecked source calls at `0xf388b0` and `0xf38e80` pass stack output words that were not initialized. | Initialize both words to zero before using an unscaled processing request; preserve the owned scaled-window result. A missing configured variant stops processing rather than fabricating a scaled window. | The exported 63-halfword processing summary and its retained publication readers remain the boundary. This is a defined-output correction, not equality to meaningful stock stack residue. |
+| Program adjustment declines to choose a program. | Selection can return without storing its output. Initializations (`0xf33b08`, `0xf3415c`, `0xf3486c`), the live preliminary selection (`0xf373f4`), table publication (`0xf35f40`) and S1 focus (`0xf24900`) pass stack output slots with no defined prior value. Final request selections (`0xf3754c`, `0xf25024`) instead write a persistent request's +0xb0 word. | Represent no choice explicitly. Keep the record's stored program for the undefined stack-output cases; preserve the previous request program for the persistent-output cases. | Program adjustment and the calc1 request program remain retained boundaries. The no-choice result is distinct from choosing program zero. No retained caller supplies or depends on a defined previous value for those stack slots; runtime dependence remains unmeasured. |
+
+Invalidation is not a blanket first-word clear. `0xf32a48` clears acquisition
+block +4 (`collected`, `0xf32a98..0xf32ab0`), search +0
+(`0xf32ac8..0xf32ae0`), auxiliary publication +12 (`published`,
+`0xf32b00..0xf32b28`), source publication +0 (`0xf32b4c..0xf32b68`) and
+focus result +0 (`0xf32b88..0xf32ba8`). Other fields remain intact.
+
+The release always names its copy buffer in acquisition block +0x48
+(`0xf3510c..0xf35114`). Only configuration `0x4a07` enables the preceding
+`0x1150`-byte copy from `0x5ffec1b4` to `0x5ffb6120`
+(`0xf35090..0xf3509c`, `0xf350f4..0xf35108`).
 
 ### Mechanical work
 

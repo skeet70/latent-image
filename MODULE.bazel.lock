@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "NAE9f1G1DLsUAK3hcU0xXXeNQyioqkNHBVhQKyeZ2rE=",
+        "bzlTransitiveDigest": "VjrKt1aLxrCWVyGo5/1RWGfo3xklH2BnkbJ7bXh8f34=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -584,6 +584,7 @@
                 "@@//emulation:fujimod-xm1/src/kernel_install.rs": "//emulation:fujimod-xm1/src/kernel_install.rs",
                 "@@//emulation:fujimod-xm1/src/continuation_view.rs": "//emulation:fujimod-xm1/src/continuation_view.rs",
                 "@@//emulation:fujimod-xm1/src/loader_continuations.rs": "//emulation:fujimod-xm1/src/loader_continuations.rs",
+                "@@//emulation:fujimod-xm1/src/decoder_continuations.rs": "//emulation:fujimod-xm1/src/decoder_continuations.rs",
                 "@@//emulation:fujimod-xm1/src/loader_continuations_check.rs": "//emulation:fujimod-xm1/src/loader_continuations_check.rs",
                 "@@//emulation:fujimod-xm1/src/loader_orchestration_owned.rs": "//emulation:fujimod-xm1/src/loader_orchestration_owned.rs",
                 "@@//emulation:fujimod-xm1/src/loader_reset_check.rs": "//emulation:fujimod-xm1/src/loader_reset_check.rs",
@@ -648,6 +649,7 @@
                 "@@//emulation:fujimod-xm1/src/root_compact.rs": "//emulation:fujimod-xm1/src/root_compact.rs",
                 "@@//emulation:fujimod-xm1/src/rtos_census.rs": "//emulation:fujimod-xm1/src/rtos_census.rs",
                 "@@//emulation:fujimod-xm1/src/saclac_census.rs": "//emulation:fujimod-xm1/src/saclac_census.rs",
+                "@@//emulation:fujimod-xm1/src/saclac_interface.rs": "//emulation:fujimod-xm1/src/saclac_interface.rs",
                 "@@//emulation:fujimod-xm1/src/scheduler_pair.rs": "//emulation:fujimod-xm1/src/scheduler_pair.rs",
                 "@@//emulation:fujimod-xm1/src/sd_host.rs": "//emulation:fujimod-xm1/src/sd_host.rs",
                 "@@//emulation:fujimod-xm1/src/startup_callers.rs": "//emulation:fujimod-xm1/src/startup_callers.rs",
@@ -791,6 +793,7 @@
                 "@@//emulation:fujimod-xm1/src/kernel_install.rs": "//emulation:fujimod-xm1/src/kernel_install.rs",
                 "@@//emulation:fujimod-xm1/src/continuation_view.rs": "//emulation:fujimod-xm1/src/continuation_view.rs",
                 "@@//emulation:fujimod-xm1/src/loader_continuations.rs": "//emulation:fujimod-xm1/src/loader_continuations.rs",
+                "@@//emulation:fujimod-xm1/src/decoder_continuations.rs": "//emulation:fujimod-xm1/src/decoder_continuations.rs",
                 "@@//emulation:fujimod-xm1/src/loader_continuations_check.rs": "//emulation:fujimod-xm1/src/loader_continuations_check.rs",
                 "@@//emulation:fujimod-xm1/src/loader_orchestration_owned.rs": "//emulation:fujimod-xm1/src/loader_orchestration_owned.rs",
                 "@@//emulation:fujimod-xm1/src/loader_reset_check.rs": "//emulation:fujimod-xm1/src/loader_reset_check.rs",
@@ -855,6 +858,7 @@
                 "@@//emulation:fujimod-xm1/src/root_compact.rs": "//emulation:fujimod-xm1/src/root_compact.rs",
                 "@@//emulation:fujimod-xm1/src/rtos_census.rs": "//emulation:fujimod-xm1/src/rtos_census.rs",
                 "@@//emulation:fujimod-xm1/src/saclac_census.rs": "//emulation:fujimod-xm1/src/saclac_census.rs",
+                "@@//emulation:fujimod-xm1/src/saclac_interface.rs": "//emulation:fujimod-xm1/src/saclac_interface.rs",
                 "@@//emulation:fujimod-xm1/src/scheduler_pair.rs": "//emulation:fujimod-xm1/src/scheduler_pair.rs",
                 "@@//emulation:fujimod-xm1/src/sd_host.rs": "//emulation:fujimod-xm1/src/sd_host.rs",
                 "@@//emulation:fujimod-xm1/src/startup_callers.rs": "//emulation:fujimod-xm1/src/startup_callers.rs",
@@ -998,6 +1002,7 @@
                 "@@//emulation:fujimod-xm1/src/kernel_install.rs": "//emulation:fujimod-xm1/src/kernel_install.rs",
                 "@@//emulation:fujimod-xm1/src/continuation_view.rs": "//emulation:fujimod-xm1/src/continuation_view.rs",
                 "@@//emulation:fujimod-xm1/src/loader_continuations.rs": "//emulation:fujimod-xm1/src/loader_continuations.rs",
+                "@@//emulation:fujimod-xm1/src/decoder_continuations.rs": "//emulation:fujimod-xm1/src/decoder_continuations.rs",
                 "@@//emulation:fujimod-xm1/src/loader_continuations_check.rs": "//emulation:fujimod-xm1/src/loader_continuations_check.rs",
                 "@@//emulation:fujimod-xm1/src/loader_orchestration_owned.rs": "//emulation:fujimod-xm1/src/loader_orchestration_owned.rs",
                 "@@//emulation:fujimod-xm1/src/loader_reset_check.rs": "//emulation:fujimod-xm1/src/loader_reset_check.rs",
@@ -1062,6 +1067,7 @@
                 "@@//emulation:fujimod-xm1/src/root_compact.rs": "//emulation:fujimod-xm1/src/root_compact.rs",
                 "@@//emulation:fujimod-xm1/src/rtos_census.rs": "//emulation:fujimod-xm1/src/rtos_census.rs",
                 "@@//emulation:fujimod-xm1/src/saclac_census.rs": "//emulation:fujimod-xm1/src/saclac_census.rs",
+                "@@//emulation:fujimod-xm1/src/saclac_interface.rs": "//emulation:fujimod-xm1/src/saclac_interface.rs",
                 "@@//emulation:fujimod-xm1/src/scheduler_pair.rs": "//emulation:fujimod-xm1/src/scheduler_pair.rs",
                 "@@//emulation:fujimod-xm1/src/sd_host.rs": "//emulation:fujimod-xm1/src/sd_host.rs",
                 "@@//emulation:fujimod-xm1/src/startup_callers.rs": "//emulation:fujimod-xm1/src/startup_callers.rs",
@@ -1208,6 +1214,7 @@
                 "@@//emulation:fujimod-xm1/src/kernel_install.rs": "//emulation:fujimod-xm1/src/kernel_install.rs",
                 "@@//emulation:fujimod-xm1/src/continuation_view.rs": "//emulation:fujimod-xm1/src/continuation_view.rs",
                 "@@//emulation:fujimod-xm1/src/loader_continuations.rs": "//emulation:fujimod-xm1/src/loader_continuations.rs",
+                "@@//emulation:fujimod-xm1/src/decoder_continuations.rs": "//emulation:fujimod-xm1/src/decoder_continuations.rs",
                 "@@//emulation:fujimod-xm1/src/loader_continuations_check.rs": "//emulation:fujimod-xm1/src/loader_continuations_check.rs",
                 "@@//emulation:fujimod-xm1/src/loader_orchestration_owned.rs": "//emulation:fujimod-xm1/src/loader_orchestration_owned.rs",
                 "@@//emulation:fujimod-xm1/src/loader_reset_check.rs": "//emulation:fujimod-xm1/src/loader_reset_check.rs",
@@ -1272,6 +1279,7 @@
                 "@@//emulation:fujimod-xm1/src/root_compact.rs": "//emulation:fujimod-xm1/src/root_compact.rs",
                 "@@//emulation:fujimod-xm1/src/rtos_census.rs": "//emulation:fujimod-xm1/src/rtos_census.rs",
                 "@@//emulation:fujimod-xm1/src/saclac_census.rs": "//emulation:fujimod-xm1/src/saclac_census.rs",
+                "@@//emulation:fujimod-xm1/src/saclac_interface.rs": "//emulation:fujimod-xm1/src/saclac_interface.rs",
                 "@@//emulation:fujimod-xm1/src/scheduler_pair.rs": "//emulation:fujimod-xm1/src/scheduler_pair.rs",
                 "@@//emulation:fujimod-xm1/src/sd_host.rs": "//emulation:fujimod-xm1/src/sd_host.rs",
                 "@@//emulation:fujimod-xm1/src/startup_callers.rs": "//emulation:fujimod-xm1/src/startup_callers.rs",
@@ -1418,6 +1426,7 @@
                 "@@//emulation:fujimod-xm1/src/kernel_install.rs": "//emulation:fujimod-xm1/src/kernel_install.rs",
                 "@@//emulation:fujimod-xm1/src/continuation_view.rs": "//emulation:fujimod-xm1/src/continuation_view.rs",
                 "@@//emulation:fujimod-xm1/src/loader_continuations.rs": "//emulation:fujimod-xm1/src/loader_continuations.rs",
+                "@@//emulation:fujimod-xm1/src/decoder_continuations.rs": "//emulation:fujimod-xm1/src/decoder_continuations.rs",
                 "@@//emulation:fujimod-xm1/src/loader_continuations_check.rs": "//emulation:fujimod-xm1/src/loader_continuations_check.rs",
                 "@@//emulation:fujimod-xm1/src/loader_orchestration_owned.rs": "//emulation:fujimod-xm1/src/loader_orchestration_owned.rs",
                 "@@//emulation:fujimod-xm1/src/loader_reset_check.rs": "//emulation:fujimod-xm1/src/loader_reset_check.rs",
@@ -1482,6 +1491,7 @@
                 "@@//emulation:fujimod-xm1/src/root_compact.rs": "//emulation:fujimod-xm1/src/root_compact.rs",
                 "@@//emulation:fujimod-xm1/src/rtos_census.rs": "//emulation:fujimod-xm1/src/rtos_census.rs",
                 "@@//emulation:fujimod-xm1/src/saclac_census.rs": "//emulation:fujimod-xm1/src/saclac_census.rs",
+                "@@//emulation:fujimod-xm1/src/saclac_interface.rs": "//emulation:fujimod-xm1/src/saclac_interface.rs",
                 "@@//emulation:fujimod-xm1/src/scheduler_pair.rs": "//emulation:fujimod-xm1/src/scheduler_pair.rs",
                 "@@//emulation:fujimod-xm1/src/sd_host.rs": "//emulation:fujimod-xm1/src/sd_host.rs",
                 "@@//emulation:fujimod-xm1/src/startup_callers.rs": "//emulation:fujimod-xm1/src/startup_callers.rs",
@@ -1809,7 +1819,7 @@
     },
     "//replacement/rtos_timer:synthetic.bzl%synthetic_source_inputs": {
       "general": {
-        "bzlTransitiveDigest": "JyUrJcMJfpbaI5eTUORQeX2Iis7ox95cQEqaK5xUhoo=",
+        "bzlTransitiveDigest": "TjPFnsW4aGRfvVLezYJ2Hl80qeZwTS/Iny2GME4RyL8=",
         "usagesDigest": "zrtiqr84oE8gQiOIVM79HfpfH5LurbKVi9Xi/MZcq9k=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -1821,7 +1831,13 @@
             "attributes": {}
           }
         },
-        "recordedRepoMappingEntries": []
+        "recordedRepoMappingEntries": [
+          [
+            "",
+            "rules_shell",
+            "rules_shell~"
+          ]
+        ]
       }
     },
     "@@apple_support~//crosstool:setup.bzl%apple_cc_configure_extension": {

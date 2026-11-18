@@ -1,6 +1,6 @@
 .syntax unified
 .arm
-.text
+.section .text.xm1_power_record_helper_f33a18,"ax",%progbits
 .align 2
 .global xm1_power_record_helper_f33a18
 .type xm1_power_record_helper_f33a18,%function
@@ -13,6 +13,7 @@ xm1_power_record_helper_f33a18:
     pop {r4, pc}
 .size xm1_power_record_helper_f33a18, .-xm1_power_record_helper_f33a18
 
+.section .text.xm1_power_record_helper_f33ef4,"ax",%progbits
 .align 2
 .global xm1_power_record_helper_f33ef4
 .type xm1_power_record_helper_f33ef4,%function
@@ -25,6 +26,7 @@ xm1_power_record_helper_f33ef4:
     pop {r4, pc}
 .size xm1_power_record_helper_f33ef4, .-xm1_power_record_helper_f33ef4
 
+.section .text.xm1_power_record_helper_f34710,"ax",%progbits
 .align 2
 .global xm1_power_record_helper_f34710
 .type xm1_power_record_helper_f34710,%function
@@ -40,6 +42,7 @@ xm1_power_record_helper_f34710:
     pop {r4, pc}
 .size xm1_power_record_helper_f34710, .-xm1_power_record_helper_f34710
 
+.section .text.xm1_power_record_helper_f3382c,"ax",%progbits
 .align 2
 .global xm1_power_record_helper_f3382c
 .type xm1_power_record_helper_f3382c,%function

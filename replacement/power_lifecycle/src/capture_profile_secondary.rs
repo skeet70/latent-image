@@ -79,3 +79,22 @@ pub fn helper_737968<M: GuestAddressSpace, E>(_context: &mut RecordContext<M, E>
 pub fn helper_737988<M: GuestAddressSpace, E>(_context: &mut RecordContext<M, E>) -> Result<u32, MemoryError> {
     Ok(0)
 }
+
+#[cfg(target_arch = "arm")]
+mod native {
+    use super::*;
+    use crate::record_helper_native_memory::InstalledMemory;
+
+    /// # Safety
+    /// ABI records must be mapped; `values` must name 28 aligned writable bytes.
+    #[no_mangle]
+    pub unsafe extern "C" fn xm1_power_capture_profile_secondary_with_residue(
+        profile: u32, settings: u32, work: u32, values: *mut [u32; 7],
+    ) -> u32 {
+        helper_738800(
+            &mut RecordContext::new(InstalledMemory, ()),
+            GuestAddress::new(profile), GuestAddress::new(settings), GuestAddress::new(work),
+            SecondaryScratch { values: GuestAddress::new(values as u32) },
+        ).unwrap_or_else(|_| crate::record_native_boundary::fault())
+    }
+}

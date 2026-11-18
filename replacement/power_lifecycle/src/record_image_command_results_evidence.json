@@ -12,7 +12,7 @@
     {"symbol": "record_image_command_resources::helper_103eefc", "extent": ["0x0103eefc", "0x0103f190"], "behavior": "Configurationa8:80 gates output. Export selected resource16fec34+4ea0 fields250..14bb to output+dbf58 with actual word ordering."},
     {"symbol": "record_image_command_results::helper_1036a70", "extent": ["0x01036a70", "0x01036b4c"], "behavior": "Export 64 unsigned byte history entries as words, with start/end magic. Before wrap, unused entries are ffffffff; after wrap, rotate using the next-write cursor. Null output has no effect."},
     {"symbol": "record_image_command_results::helper_103b044", "extent": ["0x0103b044", "0x0103b054"], "behavior": "Forward to full owned 1036a70 history exporter."},
-    {"symbol": "record_image_command_results::helper_1042e9c", "extent": ["0x01042e9c", "0x01042f28"], "behavior": "Write handle, truncated kind byte, six truncated halfwords and fourteen table bytes to preview state 01705784."},
+    {"symbol": "record_image_command_results::helper_1042e9c", "extent": ["0x01042e9c", "0x01042f28"], "behavior": "Write handle, kind byte at+116, six truncated halfwords and fourteen table bytes at+108..115 of state01705784. Preserve+104..107:1042efc/1042f00 form+107 and1042f10 pre-increments before its first byte store."},
     {"symbol": "record_image_command_results::helper_10517f8", "extent": ["0x010517f8", "0x0105181c"], "behavior": "Return132 on null output; otherwise execute full10452e8 exporter and return0."}
   ],
   "transitive_cpu": [
@@ -30,6 +30,6 @@
   },
   "execution": "Canonical helpers accept RecordContext<M,E>, M:GuestAddressSpace. Scalar accesses and block copies use the same checked address-space CPU path on host and ARM. Only10452e8/10517f8 require E:ImageCache and return canonical RecordError; physical cache-service and memory failures propagate without synthetic success. No caller pointers or callbacks are retained.",
   "integration": "Parent owns root module declarations, BUILD integration, admitted native regions and C ABI bridges. Add record_image_command_results, record_image_command_resources and cfg(test) record_image_command_results_tests modules. Bind ImageCache::clean_cache to the canonical physical cache service. No local context factory or native pointer singleton exists.",
-  "verification": "Source inspection and input SHA-256 only. Behavioral tests added but not executed. No build, test, lint, formatter, native, SDK, guest or camera execution.",
+  "verification": "Behavioral host suite and ARM build passed in Root's coherent provider gate. A production-helper consumer first reproduced the incorrect+104 table store, then passed with+108, preserving the four-byte prefix and adjacent kind/guard bytes. A Root production consumer also exercised the writer between serialized owned sample requests. Synthetic host memory only; no native task, SDK, guest or camera execution is established by these checks.",
   "qualification": "This receipt covers only the listed result providers. It does not establish task48 queued command execution or callback completion."
 }

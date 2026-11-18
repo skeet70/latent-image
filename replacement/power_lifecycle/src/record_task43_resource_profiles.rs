@@ -290,7 +290,7 @@ pub unsafe extern "C" fn xm1_power_record_helper_f24b58(request: u32) {
 unsafe extern "C" {
     fn xm1_power_record_helper_69f8fc(key: u32) -> u32;
     fn xm1_power_record_helper_750474(request: u32) -> u32;
-    fn xm1_power_record_helper_7582c0(output: *mut u32, request: u32);
+    fn xm1_power_record_helper_7582c0(output: *mut u32) -> *mut u32;
     fn xm1_power_record_helper_f1c8fc(request: u32, record: *const u32, first: *mut i16, second: *mut i16, output: *mut u32, a: *mut u16, b: *mut u16, c: *mut u16, d: *mut u16);
 }
 
@@ -299,7 +299,7 @@ pub unsafe extern "C" fn xm1_power_record_helper_f249f0(request: u32, first: *mu
     unsafe {
         if xm1_power_record_helper_69f8fc(0x5257) & 3 == 0 || xm1_power_record_helper_750474(request) != 1 { return; }
         let mut record = [0; 10];
-        xm1_power_record_helper_7582c0(record.as_mut_ptr(), request);
+        xm1_power_record_helper_7582c0(record.as_mut_ptr());
         let mut second = 0;
         let mut output = 0;
         xm1_power_record_helper_f1c8fc(request, record.as_ptr(), first, &mut second, &mut output, a, b, c, d);

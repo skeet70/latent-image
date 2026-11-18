@@ -8,6 +8,8 @@ _SOURCES = [
     "//replacement/develop:src/calibration_core/mapped.rs",
     "//replacement/develop:src/calibration_core/curves.rs",
     "//replacement/develop:src/calibration_core/math.rs",
+    "//replacement/develop:src/calibration_core/profile.rs",
+    "//replacement/develop:src/calibration_core/profile_tests.rs",
 ]
 
 genrule(

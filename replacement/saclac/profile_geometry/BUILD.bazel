@@ -1,0 +1,72 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_host_rlib", "xm1_rust_host_test", "xm1_rust_rlib")
+
+package(default_visibility = ["//visibility:public"])
+
+_SOURCES = [
+    "src/controller/changes.rs",
+    "src/controller/crop.rs",
+    "src/controller/dumps.rs",
+    "src/controller/frame.rs",
+    "src/controller/lifecycle.rs",
+    "src/controller/mod.rs",
+    "src/controller/operations.rs",
+    "src/controller/payloads.rs",
+    "src/controller/queries.rs",
+    "src/controller/rectangles.rs",
+    "src/controller/refresh.rs",
+    "src/controller/scan.rs",
+    "src/controller/statistics.rs",
+    "src/controller/scan_geometry.rs",
+    "src/controller/stages.rs",
+    "src/controller/windows.rs",
+    "src/diagnostics.rs",
+    "src/geometry.rs",
+    "src/memory.rs",
+    "src/numeric.rs",
+    "src/ports.rs",
+    "src/profile.rs",
+    "src/record_mode.rs",
+    "src/services.rs",
+    "src/stock/areas.rs",
+    "src/stock/dumps.rs",
+    "src/stock/layout.rs",
+    "src/stock/mod.rs",
+    "src/stock/records.rs",
+    "src/stock/statistics.rs",
+    "src/stock/tables.rs",
+]
+
+xm1_rust_rlib(
+    name = "profile_geometry",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac_profile_geometry",
+    out = "arm/libxm1_saclac_profile_geometry.rlib",
+    data = _SOURCES,
+    rlib_deps = {"xm1_saclac_interface": "//replacement/saclac_interface:saclac-interface"},
+)
+
+xm1_rust_host_rlib(
+    name = "host",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac_profile_geometry",
+    data = _SOURCES,
+    rlib_deps = {"xm1_saclac_interface": "//replacement/saclac_interface:host"},
+)
+
+xm1_rust_host_test(
+    name = "host-tests",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac_profile_geometry_tests",
+    data = _SOURCES + ["src/controller_tests.rs", "src/tests.rs"],
+    rlib_deps = {"xm1_saclac_interface": "//replacement/saclac_interface:host"},
+)
+
+xm1_rust_host_test(
+    name = "public-path-smoke",
+    src = "src/public_path_tests.rs",
+    crate_name = "xm1_saclac_profile_geometry_public_tests",
+    rlib_deps = {
+        "xm1_saclac_profile_geometry": ":host",
+        "xm1_saclac_interface": "//replacement/saclac_interface:host",
+    },
+)

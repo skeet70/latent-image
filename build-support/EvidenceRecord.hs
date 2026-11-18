@@ -51,8 +51,21 @@ hexText n t = T.length t == n && T.all (\c -> c `elem` ("0123456789abcdef" :: St
 
 data Operation = Identity | Length | DecimalBetween T.Text T.Text deriving Show
 data Fact = Fact T.Text ArtifactPath [T.Text] Operation deriving Show
-data Recipe = Recipe RecordId T.Text T.Text T.Text [ArtifactPath] [Fact] deriving Show
+data CameraStateChange = NoStateChange | TemporaryStateChange | PersistentStateChange deriving Show
+data Recipe = Recipe RecordId T.Text T.Text T.Text [ArtifactPath] [Fact] (Maybe CameraStateChange) deriving Show
 data Mode = Write | Check deriving Eq
+
+instance FromJSON CameraStateChange where
+  parseJSON = withText "camera state change" $ \t -> case t of
+    "none" -> pure NoStateChange
+    "temporary" -> pure TemporaryStateChange
+    "persistent" -> pure PersistentStateChange
+    _ -> fail "expected none, temporary or persistent"
+instance ToJSON CameraStateChange where
+  toJSON change = String $ case change of
+    NoStateChange -> "none"
+    TemporaryStateChange -> "temporary"
+    PersistentStateChange -> "persistent"
 
 instance FromJSON ArtifactPath where
   parseJSON = withText "relative artifact path" $ \t -> do
@@ -69,7 +82,7 @@ instance FromJSON Fact where
       _ -> fail "unknown fact operation"
     Fact <$> o .: "name" <*> o .: "path" <*> o .:? "pointer" .!= [] <*> pure operation
 instance FromJSON Recipe where
-  parseJSON = withObject "recipe" $ \o -> Recipe . RecordId <$> o .: "id" <*> o .: "claim" <*> o .: "scope" <*> o .: "notes" <*> o .: "artifacts" <*> o .: "facts"
+  parseJSON = withObject "recipe" $ \o -> Recipe . RecordId <$> o .: "id" <*> o .: "claim" <*> o .: "scope" <*> o .: "notes" <*> o .: "artifacts" <*> o .: "facts" <*> o .:? "camera_state_change"
 
 failure :: String -> IO a
 failure = throwIO . userError
@@ -148,7 +161,7 @@ runDirectory (ArtifactPath p) = go [] (splitDirectories p)
     go _ [] = Nothing
 
 regenerate :: FilePath -> Recipe -> Value -> IO Value
-regenerate root (Recipe _ claim scope notes artifacts facts) old = do
+regenerate root (Recipe _ claim scope notes artifacts facts cameraStateChange) old = do
   unless (length facts == length (nub [n | Fact n _ _ _ <- facts])) $ failure "duplicate fact name"
   let paths = sort $ nub (artifacts <> [p | Fact _ p _ _ <- facts])
       runs = sort $ nub [p | Just p <- map runDirectory paths]
@@ -183,7 +196,8 @@ regenerate root (Recipe _ claim scope notes artifacts facts) old = do
     pure ("run-output exec --label " <> shellQuote label <> " -- " <> T.intercalate " " (map shellQuote argv))
   case old of
     Object o -> pure $ Object $ foldl (\m (k,v) -> KM.insert k v m) o
-      [("claim",String claimText),("scope",String scopeText),("limitations",toJSON [notes]),("artifacts",toJSON hashes),("figures",object ["facts" .= Object values,"runs" .= map fst runFacts]),("generated_by",String "//build-support:evidence-record"),("firmware_sha256",toJSON firmware),("recorded_at",toJSON newest),("commands",toJSON commands)]
+      ([("claim",String claimText),("scope",String scopeText),("limitations",toJSON [notes]),("artifacts",toJSON hashes),("figures",object ["facts" .= Object values,"runs" .= map fst runFacts]),("generated_by",String "//build-support:evidence-record"),("firmware_sha256",toJSON firmware),("recorded_at",toJSON newest),("commands",toJSON commands)]
+       <> maybe [] (\change -> [("camera_state_change", toJSON change)]) cameraStateChange)
     _ -> failure "ledger record is not an object"
 
 shellQuote :: T.Text -> T.Text
@@ -197,21 +211,21 @@ run args = case args of
 execute :: Mode -> Bool -> FilePath -> FilePath -> FilePath -> [FilePath] -> IO ()
 execute mode available root recipePath ledgerPath readmes = do
   recipes <- jsonFile (root </> recipePath) :: IO [Recipe]
-  let ids = [i | Recipe i _ _ _ _ _ <- recipes]
+  let ids = [i | Recipe i _ _ _ _ _ _ <- recipes]
   unless (length ids == length (nub ids)) $ failure "duplicate recipe id"
   bytes <- BS.readFile (root </> ledgerPath)
   let linesIn = BS.split 10 bytes
   decoded <- forM (filter (not . BS.null) linesIn) $ \line -> either failure (\v -> pure (line,v)) (eitherDecodeStrict' line)
-  forM_ recipes $ \(Recipe (RecordId ident) _ _ _ _ _) -> do
+  forM_ recipes $ \(Recipe (RecordId ident) _ _ _ _ _ _) -> do
     matching <- filterMRecord ident decoded
     unless (length matching == 1) $ failure (T.unpack ident <> ": expected exactly one ledger record")
   result <- forM decoded $ \(line, old) -> do
     ident <- RecordId <$> field "id" old
-    case [r | r@(Recipe i _ _ _ _ _) <- recipes, i == ident] of
+    case [r | r@(Recipe i _ _ _ _ _ _) <- recipes, i == ident] of
       [] -> case old of
         Object fields | KM.member "generated_by" fields -> failure "generated ledger record has no recipe"
         _ -> pure line
-      [recipe@(Recipe (RecordId name) _ _ _ paths facts)] -> do
+      [recipe@(Recipe (RecordId name) _ _ _ paths facts _)] -> do
         presence <- mapM (\(ArtifactPath p) -> doesFileExist (root </> p)) (nub (paths <> [p | Fact _ p _ _ <- facts]))
         if available && not (or presence)
           then putStrLn (T.unpack name <> ": unavailable, no cited artifacts present") >> pure line

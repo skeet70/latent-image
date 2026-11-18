@@ -21,6 +21,9 @@ _TARGET_FLAGS = [
     "codegen-units=1",
     "-C",
     "debuginfo=0",
+    # Keep switch edges explicit for the native CFG/stack admission proof.
+    "-C",
+    "jump-tables=no",
 ]
 
 def _strict_align_flags(strict_align):
@@ -66,12 +69,15 @@ def xm1_rust_staticlib(
         env = {},
         strict_align = True,
         testonly = False,
-        visibility = None):
+        visibility = None,
+        rlib_search_deps = [],
+        dependency_archives = []):
     """Compiles one no_std crate root to a staticlib for armv7r-none-eabi.
 
     `data` stages additional module files at their package paths; `mod` names in
     the crate root resolve against them. `env` sets compile-time variables for
     `include!` and `env!`.
+    Search-only rlibs and dependency archives use the same scoped setup as `xm1_rust_rlib`.
     """
     if crate_name == None:
         crate_name = name.replace("-", "_")
@@ -89,7 +95,7 @@ def xm1_rust_staticlib(
         ] + [
             "-Ldependency=$$(dirname $(location %s))" % label
             for label in rlib_deps.values()
-        ] + [
+        ] + _rlib_search_flags(rlib_search_deps, dependency_archives) + [
             "$(location %s)" % src,
             "-o",
             "$@",
@@ -97,12 +103,12 @@ def xm1_rust_staticlib(
     )
     native.genrule(
         name = name,
-        srcs = [src] + data + rlib_deps.values(),
+        srcs = [src] + data + rlib_deps.values() + rlib_search_deps + dependency_archives,
         outs = [name + ".a"],
-        cmd = cmd,
+        cmd = _rlib_archive_setup(dependency_archives) + cmd,
         message = "Cross-compiling %s for armv7r-none-eabi" % crate_name,
         testonly = testonly,
-        tools = [_RUSTC],
+        tools = [_RUSTC] + (["@lab_gnutar//:bin/tar"] if dependency_archives else []),
         visibility = visibility,
     )
 
@@ -203,6 +209,18 @@ def xm1_rust_elf(
         visibility = visibility,
     )
 
+def _rlib_search_flags(rlib_search_deps, dependency_archives):
+    flags = ["-Ldependency=$$(dirname $(location %s))" % label for label in rlib_search_deps]
+    return flags + (["-Ldependency=\"$$rlib_dependencies\""] if dependency_archives else [])
+
+def _rlib_archive_setup(dependency_archives):
+    if not dependency_archives:
+        return ""
+    return "set -eu; rlib_dependencies=$$(mktemp -d); trap 'rm -rf \"$$rlib_dependencies\"' EXIT; " + " ".join([
+        "$(location @lab_gnutar//:bin/tar) -xf $(location %s) -C \"$$rlib_dependencies\";" % archive
+        for archive in dependency_archives
+    ]) + " "
+
 def xm1_rust_rlib(
         name,
         src,
@@ -217,12 +235,16 @@ def xm1_rust_rlib(
         strict_align = True,
         testonly = False,
         tags = [],
-        visibility = None):
+        visibility = None,
+        rlib_search_deps = [],
+        dependency_archives = []):
     """Compiles one no_std crate root to an rlib for armv7r-none-eabi.
 
     The rlib carries no panic handler unless its root declares one, so a final
     image can own the single handler. `env` sets compile-time variables for
     `include!` and `env!`.
+    `rlib_search_deps` stages dependency rlibs without extern bindings.
+    `dependency_archives` supplies dependency files unpacked into a scoped temporary directory.
     """
     if crate_name == None:
         crate_name = name.replace("-", "_")
@@ -242,7 +264,7 @@ def xm1_rust_rlib(
         ] + [
             "-Ldependency=$$(dirname $(location %s))" % label
             for label in rlib_deps.values()
-        ] + [
+        ] + _rlib_search_flags(rlib_search_deps, dependency_archives) + [
             "$(location %s)" % src,
             "-o",
             "$@",
@@ -250,47 +272,47 @@ def xm1_rust_rlib(
     )
     native.genrule(
         name = name,
-        srcs = [src] + data + rlib_deps.values(),
+        srcs = [src] + data + rlib_deps.values() + rlib_search_deps + dependency_archives,
         outs = [out],
-        cmd = cmd,
+        cmd = _rlib_archive_setup(dependency_archives) + cmd,
         message = "Cross-compiling %s as an rlib" % crate_name,
         testonly = testonly,
         tags = tags,
-        tools = [_RUSTC],
+        tools = [_RUSTC] + (["@lab_gnutar//:bin/tar"] if dependency_archives else []),
         visibility = visibility,
     )
 
-def xm1_rust_host_rlib(name, src, crate_name, data = [], rlib_deps = {}, testonly = False, visibility = None):
-    """Compiles a host rlib with dependencies declared by Rust crate name."""
+def xm1_rust_host_rlib(name, src, crate_name, data = [], rlib_deps = {}, testonly = False, visibility = None, rlib_search_deps = [], dependency_archives = []):
+    """Compiles a host rlib; search-only rlibs and dependency archives add no extern bindings."""
     native.genrule(
         name = name,
-        srcs = [src] + data + rlib_deps.values(),
+        srcs = [src] + data + rlib_deps.values() + rlib_search_deps + dependency_archives,
         outs = ["lib" + crate_name + ".rlib"],
-        cmd = " ".join([
+        cmd = _rlib_archive_setup(dependency_archives) + " ".join([
             "$(location %s)" % _RUSTC,
             "--edition=2021 --crate-type=rlib --crate-name=" + crate_name,
         ] + ["--extern=%s=$(location %s)" % (crate, label) for crate, label in rlib_deps.items()] + [
             "-Ldependency=$$(dirname $(location %s))" % label for label in rlib_deps.values()
-        ] + ["$(location %s) -o $@" % src]),
-        tools = [_RUSTC],
+        ] + _rlib_search_flags(rlib_search_deps, dependency_archives) + ["$(location %s) -o $@" % src]),
+        tools = [_RUSTC] + (["@lab_gnutar//:bin/tar"] if dependency_archives else []),
         testonly = testonly,
         visibility = visibility,
     )
 
-def xm1_rust_host_test(name, src, crate_name, data = [], rlib_deps = {}, size = "small", visibility = None):
-    """Builds and runs a host test crate with the same dependency interface as rlibs."""
+def xm1_rust_host_test(name, src, crate_name, data = [], rlib_deps = {}, size = "small", visibility = None, rlib_search_deps = [], dependency_archives = []):
+    """Builds and runs host tests with optional search-only rlibs and scoped dependency archives."""
     binary = name + "-binary"
     native.genrule(
         name = binary,
-        srcs = [src] + data + rlib_deps.values(),
+        srcs = [src] + data + rlib_deps.values() + rlib_search_deps + dependency_archives,
         outs = [binary + ".bin"],
-        cmd = " ".join([
+        cmd = _rlib_archive_setup(dependency_archives) + " ".join([
             "$(location %s)" % _RUSTC,
             "--edition=2021 --test --crate-name=" + crate_name,
         ] + ["--extern=%s=$(location %s)" % (crate, label) for crate, label in rlib_deps.items()] + [
             "-Ldependency=$$(dirname $(location %s))" % label for label in rlib_deps.values()
-        ] + ["$(location %s) -o $@" % src]),
-        tools = [_RUSTC],
+        ] + _rlib_search_flags(rlib_search_deps, dependency_archives) + ["$(location %s) -o $@" % src]),
+        tools = [_RUSTC] + (["@lab_gnutar//:bin/tar"] if dependency_archives else []),
         executable = True,
         testonly = True,
     )

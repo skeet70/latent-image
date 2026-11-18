@@ -86,7 +86,7 @@ admitCodeWithCallbacks callbacks layout bytes = do
     A.Rejected A.ThumbBranch -> Left (AdmissionError (GuestAddress site)
       (CallOutsideOwned (GuestAddress (maybe site id (A.directTarget site (word site))))))
     _ -> pure ()
-  forM_ (layoutReferences layout) $ \(ELF.AddressRelocation site target kind) -> do
+  forM_ (layoutReferences layout) $ \(ELF.AddressRelocation site target kind _) -> do
     require site LayoutInvalid (site .&. 3 == 0 && owned site && toInteger site + 4 <= end)
     require site (ReferenceOutsideOwned (GuestAddress target)) (owned target || declaredEntry target
       || (kind == ELF.DataReference && any (contains target) (layoutBoundaryWindows layout)))

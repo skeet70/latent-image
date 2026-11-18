@@ -19,9 +19,8 @@ main = do
       bounds bytes = BodyBounds (imageBase + headerBytes) (imageBase + headerBytes + fromIntegral (B.length bytes))
   record <- either die pure (makeRecord (BuildId 7) (bounds body) (Bss (imageBase + 36) (imageBase + 40)) body)
   check "header/body load layout" (B.length record == 36 && U.word32At record 4 == imageBase && U.word32At record 8 == 36 && B.drop 32 record == body)
-  check "two block range" (imageLimit - imageBase == recordBlocks * blockBytes)
   check "empty image refused" (isLeft (makeRecord (BuildId 7) (bounds B.empty) (Bss imageLimit imageLimit) B.empty))
-  let oversized = B.replicate 0x40000 0
+  let oversized = B.replicate (fromIntegral (imageLimit - imageBase - headerBytes + 1)) 0
   check "oversize image refused" (isLeft (makeRecord (BuildId 7) (bounds oversized) (Bss imageLimit imageLimit) oversized))
   check "BSS cannot cover data" (isLeft (makeRecord (BuildId 7) (bounds body) (Bss imageBase imageLimit) body))
   check "shifted body link refused" (isLeft (makeRecord (BuildId 7) (BodyBounds (imageBase+36) (imageBase+40)) (Bss imageLimit imageLimit) body))

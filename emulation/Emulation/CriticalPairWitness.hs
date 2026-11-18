@@ -506,8 +506,8 @@ step contract core1Identity (Machine before bytes pendingEvents) after = do
         finish (set [(A.lr,pc+4) | link]) (readReg reg) cpsr bytes events
       A.MoveWide _ reg value -> finish (set [(reg,value)]) (pc+4) cpsr bytes events
       A.MoveTop _ reg value -> finish (set [(reg,(readReg reg .&. 0xffff) .|. (value `shiftL` 16))]) (pc+4) cpsr bytes events
-      A.ZeroExtend _ destination source rotation width ->
-        finish (set [(destination,rotateR (readReg source) rotation .&. ((1 `shiftL` width)-1))]) (pc+4) cpsr bytes events
+      A.ZeroExtend _ destination source rotation extension ->
+        finish (set [(destination,A.zeroExtendValue extension (rotateR (readReg source) rotation))]) (pc+4) cpsr bytes events
       A.Multiply _ destination left right accumulator ->
         finish (set [(destination,readReg left*readReg right+maybe 0 readReg accumulator)]) (pc+4) cpsr bytes events
       A.DataProcessing _ operation update destination left right -> do

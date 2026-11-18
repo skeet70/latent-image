@@ -1,0 +1,42 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_host_rlib", "xm1_rust_host_test", "xm1_rust_rlib")
+
+package(default_visibility = ["//visibility:public"])
+
+_SOURCES = [
+    "src/entries.rs",
+    "src/field.rs",
+    "src/handle.rs",
+    "src/image.rs",
+    "src/memory.rs",
+    "src/values.rs",
+    "src/view.rs",
+    "src/stock/mod.rs",
+    "src/stock/layout.rs",
+    "src/stock/record.rs",
+    "src/stock/shared.rs",
+]
+
+xm1_rust_rlib(
+    name = "profile_records",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac_profile_records",
+    out = "arm/libxm1_saclac_profile_records.rlib",
+    data = _SOURCES,
+    rlib_deps = {"xm1_saclac_interface": "//replacement/saclac_interface:saclac-interface"},
+)
+
+xm1_rust_host_rlib(
+    name = "host",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac_profile_records",
+    data = _SOURCES,
+    rlib_deps = {"xm1_saclac_interface": "//replacement/saclac_interface:host"},
+)
+
+xm1_rust_host_test(
+    name = "host-tests",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac_profile_records_tests",
+    data = _SOURCES + ["src/tests.rs"],
+    rlib_deps = {"xm1_saclac_interface": "//replacement/saclac_interface:host"},
+)

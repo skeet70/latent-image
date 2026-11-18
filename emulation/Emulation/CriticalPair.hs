@@ -573,9 +573,9 @@ frameExtent image symbols body = do
             A.MoveWide condition destination value -> assign condition destination (knownWord value)
             A.MoveTop condition destination value ->
               scalarUnary (\low -> (low .&. 0xffff) .|. (value `shiftL` 16)) (readReg destination) >>= assign condition destination
-            A.ZeroExtend condition destination source rotation width -> do
+            A.ZeroExtend condition destination source rotation extension -> do
               require (source /= A.pc) "critical-pair Rust extension uses an unadmitted PC operand"
-              scalarUnary (\value -> rotateR value rotation .&. ((1 `shiftL` width)-1)) (readReg source) >>= assign condition destination
+              scalarUnary (\value -> A.zeroExtendValue extension (rotateR value rotation)) (readReg source) >>= assign condition destination
             A.Multiply condition destination left right accumulator -> do
               require (A.pc `notElem` [destination,left,right] && accumulator /= Just A.pc)
                 "critical-pair Rust multiply uses an unadmitted PC operand"

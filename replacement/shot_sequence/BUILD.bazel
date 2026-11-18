@@ -1,0 +1,107 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_host_rlib", "xm1_rust_host_test", "xm1_rust_rlib")
+
+package(default_visibility = ["//visibility:public"])
+
+SOURCES = [
+    "src/absorb.rs",
+    "src/boundary.rs",
+    "src/calculation.rs",
+    "src/calculation_work.rs",
+    "src/calculations_work.rs",
+    "src/capture.rs",
+    "src/capture_boundary.rs",
+    "src/capture_control.rs",
+    "src/capture_dump.rs",
+    "src/capture_stock.rs",
+    "src/classification.rs",
+    "src/dump_boundary.rs",
+    "src/exposure.rs",
+    "src/exposure_callbacks.rs",
+    "src/exposure_work.rs",
+    "src/finish.rs",
+    "src/finish_work.rs",
+    "src/grid.rs",
+    "src/grid_boundary.rs",
+    "src/grid_refresh.rs",
+    "src/jobs.rs",
+    "src/lens_return.rs",
+    "src/outcome.rs",
+    "src/pipeline.rs",
+    "src/pipeline_work.rs",
+    "src/ports.rs",
+    "src/preparation.rs",
+    "src/primary_boundary.rs",
+    "src/primary_job.rs",
+    "src/record_load.rs",
+    "src/sequence.rs",
+    "src/secondary_boundary.rs",
+    "src/secondary_job.rs",
+    "src/selection.rs",
+    "src/selection_operations.rs",
+    "src/shared.rs",
+    "src/shot_ports.rs",
+    "src/state.rs",
+    "src/state_operations.rs",
+    "src/statistics_dump.rs",
+    "src/stock.rs",
+    "src/stock/absorb.rs",
+    "src/stock/calculation.rs",
+    "src/stock/calculations.rs",
+    "src/stock/finish.rs",
+    "src/stock/exposure.rs",
+    "src/stock/pipeline.rs",
+    "src/stock/record_load.rs",
+    "src/stock/state.rs",
+    "src/stock/statistics_dump.rs",
+    "src/subjects.rs",
+    "src/summary.rs",
+]
+
+xm1_rust_rlib(
+    name = "shot-sequence",
+    src = "src/lib.rs",
+    crate_name = "xm1_shot_sequence",
+    data = SOURCES,
+    out = "arm/libxm1_shot_sequence.rlib",
+    rlib_deps = {
+        "xm1_saclac_calc": "//replacement/saclac/calc:calc",
+        "xm1_saclac_controllers": "//replacement/saclac/controllers:controllers",
+        "xm1_saclac_interface": "//replacement/saclac_interface:saclac-interface",
+        "xm1_saclac_profile_records": "//replacement/saclac/profile_records:profile_records",
+        "xm1_saclac_profile_geometry": "//replacement/saclac/profile_geometry:profile_geometry",
+    },
+)
+
+xm1_rust_host_rlib(
+    name = "host",
+    src = "src/lib.rs",
+    crate_name = "xm1_shot_sequence",
+    data = SOURCES,
+    rlib_deps = {
+        "xm1_saclac_calc": "//replacement/saclac/calc:host",
+        "xm1_saclac_controllers": "//replacement/saclac/controllers:host",
+        "xm1_saclac_interface": "//replacement/saclac_interface:host",
+        "xm1_saclac_profile_records": "//replacement/saclac/profile_records:host",
+        "xm1_saclac_profile_geometry": "//replacement/saclac/profile_geometry:host",
+    },
+)
+
+xm1_rust_host_test(
+    name = "host-tests",
+    src = "src/lib.rs",
+    crate_name = "xm1_shot_sequence_tests",
+    data = glob(["src/**/*.rs"], exclude = ["src/lib.rs"]),
+    rlib_deps = {
+        "xm1_saclac_calc": "//replacement/saclac/calc:host",
+        "xm1_saclac_controllers": "//replacement/saclac/controllers:host",
+        "xm1_saclac_interface": "//replacement/saclac_interface:host",
+        "xm1_saclac_profile_records": "//replacement/saclac/profile_records:host",
+        "xm1_saclac_profile_geometry": "//replacement/saclac/profile_geometry:host",
+    },
+)
+
+filegroup(
+    name = "shim-catalog-data",
+    srcs = ["BUILD.bazel", "shims.json"],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)

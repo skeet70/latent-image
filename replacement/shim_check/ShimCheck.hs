@@ -13,6 +13,7 @@ import System.Directory (getCurrentDirectory, doesFileExist)
 import System.Environment (getArgs, getExecutablePath, lookupEnv)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
+import System.IO (IOMode (ReadMode, WriteMode), hGetContents, hPutStr, hSetEncoding, utf8, withFile)
 
 data Action = Check | Render FilePath | Inspect FilePath deriving (Eq, Show)
 data Options = Options { catalogRoot :: FilePath, manifestPath :: FilePath, receiptPath :: Maybe FilePath, action :: Action, checkRenderPath :: Maybe FilePath, buildRoot :: FilePath }
@@ -31,12 +32,15 @@ run = do
   units <- loadUnits (catalogRoot options)
   manifest <- readJson (catalogRoot options </> manifestPath options)
   case checkRenderPath options of
-    Just path -> do
-      actual <- readFile path
+    Just path -> withFile path ReadMode $ \handle -> do
+      hSetEncoding handle utf8
+      actual <- hGetContents handle
       H.ensure (actual == renderRegister units manifest) "generated shim register differs from declarations"
     Nothing -> pure ()
   case action options of
-    Render path -> writeFile path (renderRegister units manifest)
+    Render path -> withFile path WriteMode $ \handle -> do
+      hSetEncoding handle utf8
+      hPutStr handle (renderRegister units manifest)
     Inspect path -> do
       inventory <- inspectArtifacts (catalogRoot options) manifest
       L.writeFile path (encode inventory <> "\n")

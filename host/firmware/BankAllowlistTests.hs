@@ -130,9 +130,10 @@ main = do
       changedPair = either error id (parseElf (patch engineImage
         (patch engineImage engineBytes wideSite ((wideWord .&. 0xfff0f000) .|. 4)) upperSite ((upperWord .&. 0xfff0f000) .|. 0x90)))
   changedReferences <- either fail pure (addressRelocations changedPair)
+  let resolvesAt site reference = addressSite reference == site
+        && addressTarget reference == 0x00900004 && addressKind reference == DataReference
   check "relocated MOVW/MOVT resolves the linked address"
-    (AddressRelocation wideSite 0x00900004 DataReference `elem` changedReferences
-      && AddressRelocation upperSite 0x00900004 DataReference `elem` changedReferences)
+    (any (resolvesAt wideSite) changedReferences && any (resolvesAt upperSite) changedReferences)
   refuses "undeclared relocated MOVW/MOVT address" enginePolicy changedPair wideSite (ExternalAddress 0x00900004)
   engineLayout <- either fail pure (readLayout engineImage)
   case engine engineLayout of

@@ -151,6 +151,7 @@ filegroup(
         "//replacement/secondary_stage:shim-catalog-data",
         "//replacement/service:shim-catalog-data",
         "//replacement/settings_storage:shim-catalog-data",
+        "//replacement/shot_sequence:shim-catalog-data",
         "//replacement/startup_dispatch:shim-catalog-data",
         "//replacement/task1_actor:shim-catalog-data",
         "//replacement/task_constructors:shim-catalog-data",

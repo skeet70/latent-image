@@ -4,7 +4,6 @@ use crate::engine::{
     dispatch_raw, CellIndex, CellSource, Machine, MachineTable, Ports, Row, State, StockCodeWord,
     TableBase, Tables, WordIndex, WordSource,
 };
-use crate::machine0::route;
 
 const CELL_TABLES: u32 = 0xf12f70;
 const ACTION_TABLES: u32 = 0xf133ec;
@@ -13,6 +12,100 @@ const STATE_COUNTS: u32 = 0xf1158c;
 const ROWS: u32 = 0x169d468;
 const STATES: u32 = 0x169d4b4;
 const TRACE: u32 = 0xf46c38;
+#[derive(Clone, Copy)]
+struct StockAddress(u32);
+
+const RECEIVE: StockAddress = StockAddress(0x169d374);
+const RECEIVE_PAYLOAD: StockAddress = StockAddress(0x169d380);
+const COMMAND_FLAGS: StockAddress = StockAddress(0x169cf24);
+const FAULT: u32 = 0xf46c20;
+
+/// The cyclic wake post 0x3b4b.
+#[cfg(saclac_wrong_driver_playback)]
+const CYCLIC_WAKE: u32 = 0x4b;
+/// Above the 81 receives the boot leaves and below the playback window's 143.
+#[cfg(saclac_wrong_driver_playback)]
+const PLAYBACK_AFTER: u32 = 110;
+#[cfg(saclac_wrong_driver_playback)]
+static mut RECEIVED: u32 = 0;
+
+#[used]
+#[no_mangle]
+#[link_section = ".rodata.XM1_REQUIRES_LENS_SAFETY_CONTRACT"]
+pub static XM1_REQUIRES_LENS_SAFETY_CONTRACT: u32 = 1;
+
+#[cfg(target_arch = "arm")]
+#[used]
+#[no_mangle]
+pub static XM1_KERNEL_BOUNDARY: xm1_kernel::slot_table::Boundary<7, 26> =
+    xm1_kernel::slot_table::FULL_BOUNDARY;
+
+struct DriverPorts;
+
+impl crate::driver::Ports for DriverPorts {
+    fn event(&self, operation: u16) -> crate::driver::Event {
+        crate::driver::Event::new(u32::from(operation).wrapping_sub(0x3b00))
+    }
+
+    fn command_capacity(&self, event: crate::driver::Event) -> Option<crate::driver::PayloadLimit> {
+        xm1_saclac_interface::stock::PARAMETER_BLOCKS.get(event.code() as usize).map(|block| crate::driver::PayloadLimit::new(block.capacity))
+    }
+
+    fn stage(&mut self, header: xm1_kernel::Header, payload: &[u8]) {
+        unsafe {
+            core::ptr::write_volatile(RECEIVE.0 as *mut u16, header.operation);
+            core::ptr::write_volatile((RECEIVE.0 + 2) as *mut u8, header.sender);
+            core::ptr::write_volatile((RECEIVE.0 + 3) as *mut u8, header.destination);
+            core::ptr::write_volatile((RECEIVE.0 + 4) as *mut u32, payload.len() as u32);
+            core::ptr::write_volatile((RECEIVE.0 + 8) as *mut u32, RECEIVE_PAYLOAD.0);
+            core::ptr::copy_nonoverlapping(payload.as_ptr(), RECEIVE_PAYLOAD.0 as *mut u8, payload.len());
+        }
+    }
+
+    fn dispatch(&mut self, event: crate::driver::Event) {
+        #[cfg(saclac_wrong_driver_store)]
+        unsafe {
+            core::ptr::write_volatile((COMMAND_FLAGS.0 + event.code()) as *mut u8, 1);
+        }
+        let block = xm1_saclac_interface::stock::PARAMETER_BLOCKS.get(event.code() as usize);
+        if let Some(block) = block {
+            let length = read_word(RECEIVE.0 + 4) as usize;
+            unsafe {
+                core::ptr::copy_nonoverlapping(RECEIVE_PAYLOAD.0 as *const u8, block.address as *mut u8, length);
+                #[cfg(not(saclac_wrong_driver_store))]
+                core::ptr::write_volatile((COMMAND_FLAGS.0 + event.code()) as *mut u8, 1);
+            }
+        }
+        // The playback control: the cyclic wake is not routed after PLAYBACK_AFTER dispatches.
+        #[cfg(saclac_wrong_driver_playback)]
+        {
+            let received = unsafe {
+                RECEIVED = RECEIVED.wrapping_add(1);
+                RECEIVED
+            };
+            if received > PLAYBACK_AFTER && event.code() == CYCLIC_WAKE {
+                return;
+            }
+        }
+        xm1_saclac_router(event.code(), u32::MAX);
+    }
+
+    fn fault(&mut self) { call3(FAULT, 0, 0, 0); }
+}
+
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+pub extern "C" fn xm1_saclac_driver() -> ! {
+    for machine in 0..37 { write_half(STATES + machine * 2, 0); }
+    let kernel = xm1_kernel::Kernel::new(xm1_kernel::SlotTable);
+    let queue = xm1_kernel::MessageQueue::stock(xm1_kernel::QueueId::new(43).unwrap());
+    loop {
+        if let Some(caller) = kernel.task() {
+            crate::driver::run(queue, &caller, &mut DriverPorts);
+        }
+        call3(FAULT, 0, 0, 0);
+    }
+}
 
 fn read_word(address: u32) -> u32 {
     unsafe { core::ptr::read_volatile(address as *const u32) }
@@ -199,6 +292,13 @@ pub extern "C" fn xm1_saclac_dispatch(machine: u32, a1: u32, a2: u32) -> i32 {
 
 /// Machine 0's router entry retained stock callers enter at 0xefcb88.
 #[no_mangle]
-pub extern "C" fn xm1_saclac_router(event: u32, a2: u32) -> i32 {
-    route(&StockTables, &mut StockPorts, event, a2)
+pub extern "C" fn xm1_saclac_router(event: u32, _record: u32) -> i32 {
+    #[cfg(target_arch = "arm")]
+    {
+        let length = read_word(RECEIVE.0 + 4) as usize;
+        let parameters = unsafe { core::slice::from_raw_parts(RECEIVE_PAYLOAD.0 as *const u8, length) };
+        xm1_saclac_root::stock::composition::dispatch(event, parameters, &XM1_REQUIRES_LENS_SAFETY_CONTRACT)
+    }
+    #[cfg(not(target_arch = "arm"))]
+    { let _ = event; panic!("native saclac router requires ARM"); }
 }

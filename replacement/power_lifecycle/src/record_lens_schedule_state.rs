@@ -1,6 +1,9 @@
 //! Lens scheduling publications in the canonical task 50 runtime at 0x00942ab0.
 
 #[cfg(target_arch = "arm")]
+pub use native::xm1_power_record_helper_76f438;
+
+#[cfg(target_arch = "arm")]
 mod native {
     use core::ptr::{read_volatile, write_volatile};
 

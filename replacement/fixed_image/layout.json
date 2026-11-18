@@ -1,8 +1,8 @@
 {
-  "imageBase": 12189696,
-  "imageLimit": 12451840,
+  "imageBase": 11139584,
+  "imageLimit": 12524032,
   "recordFlash": 9437184,
-  "recordBlocks": 2,
+  "recordBlocks": 11,
   "blockBytes": 131072,
   "headerBytes": 32,
   "recordMagic": 1481453903

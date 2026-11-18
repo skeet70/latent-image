@@ -27,7 +27,7 @@ getters!(xm1_power_record_helper_74e648, xm1_power_record_helper_74e718, xm1_pow
 unsafe extern "C" {
     fn xm1_power_record_helper_69f8fc(key: u32) -> u32;
     fn xm1_power_record_helper_69fec8(key: u32) -> u32;
-    fn xm1_power_record_helper_7582c0(output: *mut u32, item: u32);
+    fn xm1_power_record_helper_7582c0(output: *mut u32) -> *mut u32;
     fn xm1_power_record_helper_753540(item: u32, index: u32) -> u32;
     fn xm1_power_record_helper_752a40(item: u32, index: u32) -> u32;
     fn xm1_power_record_helper_754300(item: u32, index: u32) -> u32;
@@ -94,7 +94,7 @@ pub unsafe extern "C" fn xm1_power_record_helper_f29318() {
         let first = xm1_power_record_helper_74e648(item);
         let mut flags = xm1_power_record_helper_74e718(item);
         let mut profile = core::mem::MaybeUninit::<[u32; 10]>::uninit();
-        xm1_power_record_helper_7582c0(profile.as_mut_ptr().cast(), item);
+        xm1_power_record_helper_7582c0(profile.as_mut_ptr().cast());
         if xm1_power_record_helper_7503ec(item) != 0 {
             flags = if profile.as_ptr().cast::<u32>().add(4).read() == 1 { (flags | 1) & 0xffff } else { flags & 0xfffe };
         }

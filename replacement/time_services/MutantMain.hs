@@ -14,6 +14,7 @@ import Emulation.ScenarioGeneration (GeneratorVersion(..), ScenarioSeed(..))
 import Emulation.Sha256 (sha256, sha256Hex)
 import qualified FujiAF.Host as H
 import qualified FujiAF.UpdateContainer as U
+import qualified Replacement.FixedImage.Layout as Fixed
 import System.Directory (createDirectory)
 import System.Environment (getArgs)
 import System.FilePath ((</>))
@@ -83,7 +84,7 @@ emit elf bytes output variants header = do
         _ -> H.failH ("missing or duplicate symbol " ++ name)
   first <- symbol "__fixed_body_start"
   end <- symbol "__fixed_body_end"
-  H.ensure (first == 0xba0020 && end > first && end <= 0xbe0000) "fixed body bounds differ"
+  H.ensure (first == Fixed.imageBase + Fixed.headerBytes && end > first && end <= Fixed.imageLimit) "fixed body bounds differ"
   body <- B.pack <$> either H.failH pure (traverse (maybe (Left "fixed body has a file gap") Right . E.byteAt elf) [first..end-1])
   createDirectory output
   rows <- forM variants $ \variant -> do

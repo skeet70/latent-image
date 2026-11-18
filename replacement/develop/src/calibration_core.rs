@@ -2,6 +2,10 @@ pub mod configuration;
 mod curves;
 mod mapped;
 mod math;
+pub mod profile;
+
+#[cfg(test)]
+mod profile_tests;
 
 pub use math::round_tenths;
 use configuration::{CfgKey, Configuration, ConfigurationError, ConfigurationMemory, ConfigurationRegion};

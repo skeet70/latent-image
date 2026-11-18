@@ -36,6 +36,7 @@ import A32
   , pc
   , regName
   , sp
+  , zeroExtendValue
   )
 import Data.Aeson (Value, object, (.=))
 import Data.Bits (bit, complement, rotateR, shiftL, shiftR, testBit, xor, (.&.), (.|.))
@@ -456,8 +457,8 @@ execute analysis address word instruction regs = case instruction of
   MoveTop _ rd value -> plain (setReg rd (mapKnown (\old -> (value `shiftL` 16) .|. (old .&. 0xffff)) (regAt regs rd)) regs)
   ReadStatus _ rd -> plain (setReg rd Unknown regs)
   WriteApplicationFlags _ _ -> (plain regs) {effectSetsFlags = True}
-  ZeroExtend _ rd rm rotation width ->
-    plain (setReg rd (mapKnown (\v -> rotateR v rotation .&. (bit width - 1)) (readReg address regs rm)) regs)
+  ZeroExtend _ rd rm rotation extension ->
+    plain (setReg rd (mapKnown (zeroExtendValue extension . (`rotateR` rotation)) (readReg address regs rm)) regs)
   Multiply _ rd rm rs accumulator ->
     let productVal = combine (*) (readReg address regs rm) (readReg address regs rs)
         total = maybe productVal (combine (+) productVal . readReg address regs) accumulator

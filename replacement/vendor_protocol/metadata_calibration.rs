@@ -1,7 +1,7 @@
 //! Device-info calibration functions distinct from the shared profile-calibration exports.
 
 use xm1_calibration_core::{Calibration, ChannelIndex, CurveIndex, Tenths, round_tenths};
-use xm1_calibration_core::configuration::{CfgKey, ConfigAddress, Configuration, ConfigurationError, ConfigurationMemory};
+use xm1_calibration_core::configuration::{CfgKey, ConfigAddress, Configuration, ConfigurationError, ConfigurationMemory, ConfigurationRegion};
 use super::metadata_math::{CalibrationScale, CalibrationValue, scale_transformed_word, transform_mapped_value};
 use super::metadata_selection::CalibrationChannel;
 
@@ -17,16 +17,16 @@ pub enum ModeClass { Zero, One, Two, Three }
 /// Vendor reads the configuration through the borrowed RAM image.
 pub type RegionError = ConfigurationError<core::convert::Infallible>;
 
-pub struct MetadataCalibration<'data> { profile: Calibration<'data> }
+pub struct MetadataCalibration<'data, M: ConfigurationMemory = ConfigurationRegion<'data>> { profile: Calibration<'data, M> }
 
-impl<'data> MetadataCalibration<'data> {
-    pub const fn new(configuration: Configuration<'data>) -> Self {
+impl<'data, M: ConfigurationMemory> MetadataCalibration<'data, M> {
+    pub const fn new(configuration: Configuration<'data, M>) -> Self {
         Self { profile: Calibration::new(configuration) }
     }
-    pub fn profile(&mut self) -> &mut Calibration<'data> { &mut self.profile }
-    pub fn configuration(&mut self) -> &mut Configuration<'data> { self.profile.configuration_mut() }
+    pub fn profile(&mut self) -> &mut Calibration<'data, M> { &mut self.profile }
+    pub fn configuration(&mut self) -> &mut Configuration<'data, M> { self.profile.configuration_mut() }
 
-    pub fn mapped_value(&mut self, index: CurveIndex, channel: ChannelIndex) -> Result<CalibrationValue, RegionError> {
+    pub fn mapped_value(&mut self, index: CurveIndex, channel: ChannelIndex) -> Result<CalibrationValue, ConfigurationError<M::Error>> {
         let collapsed = self.profile.collapse_curve_index(index)?.0;
         let offset = 0x3f4600u32.wrapping_add((channel.0 as u32).wrapping_mul(31)).wrapping_add(collapsed);
         let configuration = self.configuration();
@@ -37,16 +37,16 @@ impl<'data> MetadataCalibration<'data> {
         }))
     }
 
-    pub fn rounded_word(&mut self, index: CurveIndex, channel: ChannelIndex) -> Result<i16, RegionError> {
+    pub fn rounded_word(&mut self, index: CurveIndex, channel: ChannelIndex) -> Result<i16, ConfigurationError<M::Error>> {
         let value = self.profile.mapped_word(index, channel)?;
         Ok(round_tenths(Tenths(value.0 as i32)).0 as i16)
     }
 
-    pub fn transformed_value(&mut self, index: CurveIndex, channel: ChannelIndex) -> Result<i16, RegionError> {
+    pub fn transformed_value(&mut self, index: CurveIndex, channel: ChannelIndex) -> Result<i16, ConfigurationError<M::Error>> {
         Ok(transform_mapped_value(self.mapped_value(index, channel)?))
     }
 
-    pub fn scaled_mapped_word(&mut self, index: CurveIndex, channel: ChannelIndex) -> Result<CalibrationValue, RegionError> {
+    pub fn scaled_mapped_word(&mut self, index: CurveIndex, channel: ChannelIndex) -> Result<CalibrationValue, ConfigurationError<M::Error>> {
         if index.0 > self.profile.split_count()?.get().wrapping_sub(1) || channel.0 < 0 {
             return Ok(CalibrationValue(0xffff));
         }
@@ -56,9 +56,9 @@ impl<'data> MetadataCalibration<'data> {
         Ok(CalibrationValue(scale_transformed_word(CalibrationValue(word.0), CalibrationScale(scale))))
     }
 
-    pub fn channel_count(&mut self) -> Result<u32, RegionError> { Ok(self.profile.channel_count()?.get()) }
+    pub fn channel_count(&mut self) -> Result<u32, ConfigurationError<M::Error>> { Ok(self.profile.channel_count()?.get()) }
 
-    pub fn read_word(&mut self, key: CfgKey) -> Result<u32, RegionError> {
+    pub fn read_word(&mut self, key: CfgKey) -> Result<u32, ConfigurationError<M::Error>> {
         let mut bytes = [0; 4];
         for (index, byte) in bytes.iter_mut().enumerate() {
             *byte = self.configuration().read_byte(key.wrapping_add(index as u32))?;
@@ -66,13 +66,13 @@ impl<'data> MetadataCalibration<'data> {
         Ok(u32::from_le_bytes(bytes))
     }
 
-    pub fn scaled_limit(&mut self, key: CfgKey) -> Result<u32, RegionError> {
+    pub fn scaled_limit(&mut self, key: CfgKey) -> Result<u32, ConfigurationError<M::Error>> {
         let value = self.configuration().read_half(key)? as u32;
         let shift = self.configuration().read_byte(CfgKey(0x3e162f))?;
         Ok(if shift >= 32 { 0 } else { value << shift })
     }
 
-    pub fn mode_limit(&mut self, kind: LimitKind, bank: LimitBank, side: LimitSide, mode: ModeClass) -> Result<u32, RegionError> {
+    pub fn mode_limit(&mut self, kind: LimitKind, bank: LimitBank, side: LimitSide, mode: ModeClass) -> Result<u32, ConfigurationError<M::Error>> {
         let second = u32::from(bank == LimitBank::Second);
         let other = u32::from(side == LimitSide::Other);
         let group = match mode { ModeClass::One => 1, ModeClass::Two => 2, _ => 0 };

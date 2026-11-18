@@ -1,0 +1,34 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_host_rlib", "xm1_rust_host_test", "xm1_rust_rlib")
+
+package(default_visibility = ["//visibility:public"])
+
+_HOST_DEPS = {
+    "xm1_kernel": "//replacement/kernel:host",
+    "xm1_saclac_interface": "//replacement/saclac_interface:host",
+}
+
+xm1_rust_rlib(
+    name = "peers",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac_peers",
+    out = "arm/libxm1_saclac_peers.rlib",
+    rlib_deps = {
+        "xm1_kernel": "//replacement/kernel:arm",
+        "xm1_saclac_interface": "//replacement/saclac_interface:saclac-interface",
+    },
+)
+
+xm1_rust_host_rlib(
+    name = "host",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac_peers",
+    rlib_deps = _HOST_DEPS,
+)
+
+xm1_rust_host_test(
+    name = "host-tests",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac_peers",
+    data = ["src/tests.rs"],
+    rlib_deps = _HOST_DEPS,
+)

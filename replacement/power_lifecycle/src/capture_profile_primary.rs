@@ -206,3 +206,29 @@ pub fn helper_73964c<M: GuestAddressSpace, E>(context: &mut RecordContext<M, E>,
         config65c: ProfileOption(config65c), config678: ProfileOption(config678), config_extra: ProfileOption(config_extra),
     }, scratch)
 }
+
+#[cfg(target_arch = "arm")]
+mod native {
+    use super::*;
+    use crate::record_helper_native_memory::InstalledMemory;
+
+    /// # Safety
+    /// ABI records must be mapped; `residue` must name eight aligned writable bytes.
+    #[no_mangle]
+    pub unsafe extern "C" fn xm1_power_capture_profile_primary_with_residue(
+        profile: u32, settings: u32, outputs: u32, conversion: u32,
+        burst: u32, option: u32, state: u32, config65c: u32, config678: u32, config_extra: u32,
+        residue: *mut [u8; 8],
+    ) -> u32 {
+        let mut comparison = core::mem::MaybeUninit::<[u32; 2]>::uninit();
+        helper_73964c(
+            &mut RecordContext::new(InstalledMemory, ()),
+            GuestAddress::new(profile), GuestAddress::new(settings), GuestAddress::new(outputs),
+            conversion, burst, option, state, config65c, config678, config_extra,
+            PrimaryScratch {
+                values: GuestAddress::new(residue as u32),
+                comparison: GuestAddress::new(comparison.as_mut_ptr() as u32),
+            },
+        ).unwrap_or_else(|_| crate::record_native_boundary::fault())
+    }
+}
