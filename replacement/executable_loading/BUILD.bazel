@@ -1,4 +1,5 @@
-load("//replacement/toolchain:rust.bzl", "xm1_rust_host_rlib", "xm1_rust_host_test", "xm1_rust_rlib")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_host_rlib", "xm1_rust_host_test", "xm1_rust_rlib", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -34,8 +35,103 @@ xm1_rust_rlib(
     rlib_deps = {"xm1_application_nand": "//replacement/application_nand:arm"},
 )
 
+genrule(
+    name = "runtime-fixed-script",
+    srcs = ["runtime.ld"],
+    outs = ["runtime-fixed.ld"],
+    tools = ["//replacement/image5_load:image5-decoder-artifact"],
+    cmd = "$(location //replacement/image5_load:image5-decoder-artifact) script $(location runtime.ld) > $@",
+)
+
+_RUNTIME_RLIBS = {
+    "xm1_application_nand": "//replacement/application_nand:arm",
+    "xm1_executable_loading": ":arm",
+    "xm1_image5_decoder": "//replacement/image5_load:decoder-arm",
+}
+
+xm1_rust_staticlib(
+    name = "runtime-fujimod-rust",
+    src = "runtime.rs",
+    crate_name = "xm1_loading_runtime",
+    rlib_deps = _RUNTIME_RLIBS,
+    rustc_flags = ["--cfg", "loading_qualification_fujimod"],
+    env = {"XM1_LOADING_POLICY_TICKS": "4294967296"},
+    testonly = True,
+)
+
+xm1_rust_staticlib(
+    name = "runtime-native-rust",
+    src = "runtime.rs",
+    crate_name = "xm1_loading_runtime",
+    rlib_deps = _RUNTIME_RLIBS,
+    rustc_flags = ["--cfg", "loading_qualification_external"],
+    env = {"XM1_LOADING_POLICY_TICKS": "1048576"},
+    testonly = True,
+)
+
+xm1_rust_staticlib(
+    name = "runtime-retention-rust",
+    src = "runtime.rs",
+    crate_name = "xm1_loading_runtime",
+    rlib_deps = _RUNTIME_RLIBS,
+    rustc_flags = ["--cfg", "loading_qualification_retention"],
+    env = {"XM1_LOADING_POLICY_TICKS": "65536"},
+    testonly = True,
+)
+
+[
+    xm1_rust_elf(
+        name = name,
+        rust_staticlib = rust,
+        entry = "xm1_loading_startup",
+        link_script = ":runtime-fixed-script",
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
+        link_map = True,
+        testonly = True,
+    )
+    for name, rust in [
+        ("runtime-fujimod", ":runtime-fujimod-rust"),
+        ("runtime-native", ":runtime-native-rust"),
+        ("runtime-retention", ":runtime-retention-rust"),
+    ]
+]
+
+haskell_binary(
+    name = "runtime-artifact",
+    srcs = ["RuntimeArtifact.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    deps = [
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
+        "//host:first-stage",
+        "//host:host-support",
+        "//host:json",
+        "//host:update-container",
+        "//replacement/fixed_image:contract",
+    ],
+)
+
+haskell_binary(
+    name = "runtime-native-qualify",
+    srcs = ["RuntimeNative.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    deps = [
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:json",
+    ],
+)
+
 filegroup(
     name = "shim-catalog-data",
-    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel"],
+    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel", "RuntimeArtifact.hs", "runtime.rs"],
     visibility = ["//replacement/shim_check:__pkg__"],
 )

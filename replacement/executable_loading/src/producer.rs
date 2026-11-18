@@ -42,7 +42,7 @@ extern "C" {
     fn xm1_loading_segment(kind: u32) -> *const Segment;
     fn xm1_loading_extents() -> *const Extents;
     fn xm1_loading_mode() -> u32;
-    fn xm1_loading_plain_progress(bytes: u32) -> i32;
+    fn xm1_loading_plain_progress(bytes: u32);
     fn xm1_loading_take(resource: u32, timeout: u32) -> i32;
     fn xm1_loading_give(resource: u32) -> i32;
     fn xm1_loading_delay(ticks: u32) -> i32;
@@ -83,8 +83,8 @@ impl AsMut<[u8]> for NativeDestination {
 unsafe impl DmaDestination for NativeDestination {}
 
 unsafe fn plain_prefix(_: PrefixContext, completed: ByteCount) -> Result<(), LowerStatus> {
-    let code = unsafe { xm1_loading_plain_progress(completed.get() as u32) };
-    if code == 0 { Ok(()) } else { Err(LowerStatus::new(code).unwrap()) }
+    unsafe { xm1_loading_plain_progress(completed.get() as u32); }
+    Ok(())
 }
 
 unsafe fn image5_prefix(_: PrefixContext, completed: ByteCount) -> Result<(), LowerStatus> {
@@ -168,15 +168,8 @@ impl NativeProducer {
         let outcome = self.plain.read(plan, destination, request.deadline);
         match outcome {
             ReadOutcome::Success { destination, report } => {
-                let code = unsafe { xm1_loading_plain_progress(segment.flash_bytes) };
-                if code == 0 {
-                    Self::outcome(ReadOutcome::Success { destination, report }, false)
-                } else {
-                    Self::outcome(ReadOutcome::ReleasedFailure {
-                        destination, report,
-                        failure: Failure::Primary { primary: PrimaryError::Lower(LowerStatus::new(code).unwrap()), cleanup: None },
-                    }, false)
-                }
+                unsafe { xm1_loading_plain_progress(segment.flash_bytes); }
+                Self::outcome(ReadOutcome::Success { destination, report }, false)
             }
             other => Self::outcome(other, false),
         }
@@ -222,13 +215,7 @@ impl NativeProducer {
                 };
             }
             let bytes = completed as usize * BLOCK_BYTES as usize;
-            let code = unsafe { xm1_loading_plain_progress(bytes as u32) };
-            if code != 0 {
-                return ProducerCompletion::Failed {
-                    failure: Failure::Primary { primary: PrimaryError::Lower(LowerStatus::new(code).unwrap()), cleanup: None },
-                    report, retention: Retention::HeldQuiescent,
-                };
-            }
+            unsafe { xm1_loading_plain_progress(bytes as u32); }
             report.bytes = ByteCount::new(bytes);
         }
         if self.clock.now() >= request.deadline.instant() {
@@ -259,10 +246,7 @@ impl NativeProducer {
             };
         }
         first = false;
-        let final_progress = unsafe { xm1_loading_plain_progress(segment.flash_bytes) };
-        if final_progress != 0 {
-            return Self::failed(PrimaryError::Lower(LowerStatus::new(final_progress).unwrap()), report, Retention::Released);
-        }
+        unsafe { xm1_loading_plain_progress(segment.flash_bytes); }
         let _ = (first, second);
         ProducerCompletion::Skipped(report)
     }

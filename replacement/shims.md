@@ -21,7 +21,7 @@ A removal requires established caller closure, direct owned API use and a qualif
 | `//replacement/capture:capture-candidate` | Production | capture | 4 |
 | `//replacement/completion_delay:completion-delay-image` | Production | completion_delay | 2 |
 | `//replacement/critical_pair:critical-pair-image` | Production | critical_pair, interface_initializer, loader_prefix, secondary_stage | 8 |
-| `//replacement/develop:develop-candidate` | Production | callback_core, capture, develop, kernel, media_permit, property_service, record_store, save, settings_storage | 27 |
+| `//replacement/develop:develop-candidate` | Production | callback_core, capture, develop, kernel, media_permit, property_service, record_store, save, settings_storage | 29 |
 | `//replacement/display_scanout:display-scanout` | Production | display_scanout | 4 |
 | `//replacement/display_scanout:display-scanout-panel` | Production | display_scanout | 4 |
 | `//replacement/first_stage:first-stage-fixed-image` | Production | first_stage | 7 |
@@ -129,13 +129,14 @@ These rows are derived from the C-ABI bridge declarations. Each removal predicat
 | Unit | Family | State | Removal predicate |
 | --- | --- | --- | --- |
 | application_nand | `xm1_app_nand_*` exports (14 functions in `src/lib.rs`) | required | unestablished |
-| application_nand | `xm1_power_resource_route_request` and the other `xm1_power_*` externs in `src/lib.rs` | required | unestablished |
+| application_nand | `xm1_power_resource_route_request` and the other `xm1_power_*` externs in `src/lib.rs` and `src/dma_native.rs` | required | unestablished |
 | calibration_liveview | `xm1_calibration_u16`/`xm1_calibration_i16` exports | required | unestablished |
 | capture | `rb_capture_*` exports in `src/lib.rs` and `rb_capture_stock.S` | required | unestablished |
 | develop | `xm1_pipeline_image_*` exports | required | unestablished |
 | develop | `xm1_property_get`/`xm1_property_set` externs | required | unestablished |
 | develop | `xm1_save_facade` extern | required | unestablished |
 | develop | `rb_capture_*` externs in `src/pipeline` and `develop/src` | required | unestablished |
+| develop | xm1_loading_absolute_deadline and xm1_loading_request_sync | required | unestablished |
 | display_scanout | `xm1_scanout_*` and `xm1_power_lcd_operation_action` exports (31 families in `src/abi.rs`, panel and formatter modules) | required | unestablished |
 | lens_transport | `xm1_power_current_task`, `xm1_power_interrupt_lock`, `xm1_power_interrupt_unlock`, `xm1_power_service_post`, `xm1_power_set_task_flags`, `xm1_power_resource_route_request` externs | required | unestablished |
 | menu_value | `rb_menu_value_cancel`/`rb_menu_value_confirm` exports | required | unestablished |
@@ -199,7 +200,8 @@ Classification: `reference-only`. [Declarations](application_nand/shims.json).
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `xm1_app_nand_*` exports (14 functions in `src/lib.rs`) | C-ABI bridge between two owned units | power_lifecycle and vendor_protocol | yes | both callers link the NAND crate directly and both sides compare with stock in one image | required | unestablished | reference-only: The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `xm1_app_nand_*` exports (14 functions in `src/lib.rs`) |
 | NAND register and profile-map layout (`NAND = 0xfff50000`, profile base `0x380`, `src/physical.rs`, `src/memory.rs`) | guest-memory layout view | the stock raw-NAND clients and the boot-time map that the controller must reproduce | partly | every stock raw-NAND client uses the owned flash layer and the map is initialized by owned startup | required | unestablished | reference-only: The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. NAND register and profile-map layout (`NAND = 0xfff50000`, profile base `0x380`, `src/physical.rs`, `src/memory.rs`) |
-| `xm1_power_resource_route_request` and the other `xm1_power_*` externs in `src/lib.rs` | C-ABI bridge between two owned units | power_lifecycle leaf | yes | the leaf is linked directly and both sides compare with stock in one image | required | unestablished | reference-only: The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `xm1_power_resource_route_request` and the other `xm1_power_*` externs in `src/lib.rs` |
+| `xm1_power_resource_route_request` and the other `xm1_power_*` externs in `src/lib.rs` and `src/dma_native.rs` | C-ABI bridge between two owned units | power_lifecycle leaf | yes | the leaf is linked directly and both sides compare with stock in one image | required | unestablished | reference-only: The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `xm1_power_resource_route_request` and the other `xm1_power_*` externs in `src/lib.rs` and `src/dma_native.rs` |
+| `xm1_lower_read_clean_invalidate`, `xm1_lower_read_clock_mask` and `xm1_lower_read_clock_restore` | trampoline into retained stock | X-M1 core-0 cache and clock/critical leaves | no | the final composition supplies owned cache visibility and qualified monotonic clock leaves | required | unestablished | reference-only: The lower-read owner calls the source-bound cache endpoint and the paired core-0 clock mask/restore leaves. This reference-only registration establishes the ABI contract, not physical cache coherence or NAND quiescence. |
 
 ## application_pump
 
@@ -305,7 +307,7 @@ Classification: `linked`. [Declarations](develop/shims.json).
 
 | Shim | Kind | Other side | Owned now | Removal condition | State | Removal predicate | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `xm1_pipeline_image_*` exports | C-ABI bridge between two owned units | power_lifecycle | yes | power links the pipeline directly and both sides compare with stock in one image | required | unestablished | `//replacement/develop:develop-candidate` (Export, 1159 symbols, 0 definite references) |
+| `xm1_pipeline_image_*` exports | C-ABI bridge between two owned units | power_lifecycle | yes | power links the pipeline directly and both sides compare with stock in one image | required | unestablished | `//replacement/develop:develop-candidate` (Export, 1156 symbols, 0 definite references) |
 | `xm1_property_get`/`xm1_property_set` externs | C-ABI bridge between two owned units | property_service | yes | develop links the property service directly and both sides compare with stock in one image | required | unestablished | `//replacement/develop:develop-candidate` (Export, 1 symbols, 0 definite references) |
 | `xm1_save_facade` extern | C-ABI bridge between two owned units | save | yes | develop links the save facade directly and both sides compare with stock in one image | required | unestablished | `//replacement/develop:develop-candidate` (Export, 1 symbols, 0 definite references) |
 | `rb_capture_*` externs in `src/pipeline` and `develop/src` | C-ABI bridge between two owned units | capture | yes | develop links the capture crate directly and both sides compare with stock in one image | required | unestablished | `//replacement/develop:develop-candidate` (RetainedEntry, 1 symbols, 0 definite references) |
@@ -316,8 +318,10 @@ Classification: `linked`. [Declarations](develop/shims.json).
 | `font_core` asset and glyph layout (`src/font_core`, `FontFdl_stock.S`, `FontBuiltin_stock.S`, `FontScripts_stock.S`) | guest-memory layout view | retained stock font resources and text consumers | no | owned assets and every text consumer are owned | required | unestablished | `//replacement/develop:develop-candidate` (Layout, 1 symbols, 0 definite references) |
 | `calibration_core` configuration/curve layout (`src/calibration_core`) | guest-memory layout view | retained calibration data and power/vendor consumers | partly | the calibration image and every consumer are owned | required | unestablished | `//replacement/develop:develop-candidate` (Layout, 1 symbols, 0 definite references) |
 | `develop.ld`, `services.ld` and `caller_observer.ld` placements | veneer or carrier at a stock address | stock callers of develop stages | no | owned code is reached directly | required | unestablished | `//replacement/develop:develop-candidate` (Publication, 1 symbols, 0 definite references) |
-| Additional linked unmangled ABI entry points | stock-ABI export | the publication or qualification consumers of the current linked image | partly | all consumers use owned typed interfaces and both sides have a qualified comparison in the same image | required | unestablished | `//replacement/develop:develop-candidate` (Export, 549 symbols, 0 definite references) |
-| Definite retained references in the current linked instruction and relocation metadata | retained stock seam in assembly | retained code and guest address contracts reached by the composed image | partly | all declared retained targets have owned typed replacements and both sides are compared in the same image | required | unestablished | `//replacement/develop:develop-candidate` (RetainedEntry, 0 symbols, 122 definite references) |
+| Additional linked unmangled ABI entry points | stock-ABI export | the publication or qualification consumers of the current linked image | partly | all consumers use owned typed interfaces and both sides have a qualified comparison in the same image | required | unestablished | `//replacement/develop:develop-candidate` (Export, 546 symbols, 0 definite references) |
+| Definite retained references in the current linked instruction and relocation metadata | retained stock seam in assembly | retained code and guest address contracts reached by the composed image | partly | all declared retained targets have owned typed replacements and both sides are compared in the same image | required | unestablished | `//replacement/develop:develop-candidate` (RetainedEntry, 0 symbols, 138 definite references) |
+| xm1_loading_absolute_deadline and xm1_loading_request_sync | C-ABI bridge between two owned units | executable_loading | yes | The typed loading client imports the single configured task-60 owner. | required | unestablished | `//replacement/develop:develop-candidate` (Export, 2 symbols, 0 definite references) |
+| X-M1 task60 and core-0 clock leaves used by executable_loading | trampoline into retained stock | retained X-M1 RTOS and core-0 clock services | no | the final composition supplies owned queue/task and qualified monotonic clock services | required | unestablished | `//replacement/develop:develop-candidate` (Import, 9 symbols, 0 definite references) |
 
 ## display_scanout
 
@@ -351,6 +355,18 @@ Classification: `module`. [Declarations](embassy_trial/shims.json).
 
 | Shim | Kind | Other side | Owned now | Removal condition | State | Removal predicate | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+
+## executable_loading
+
+The single typed task60 command, producer, completion and lower-read owner.
+
+Classification: `module`. [Declarations](executable_loading/shims.json).
+
+| Shim | Kind | Other side | Owned now | Removal condition | State | Removal predicate | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| xm1_loading_configuration, xm1_loading_startup, xm1_loading_ready, xm1_loading_legacy_request, xm1_loading_legacy_cancel, xm1_loading_configure, xm1_loading_absolute_deadline, xm1_loading_initialize, xm1_loading_request, xm1_loading_request_sync, xm1_loading_cancel, xm1_loading_wait_channel and xm1_loading_observe_completion | stock-ABI export | startup construction, stock task60 wrapper callers and Develop loading callers | yes | all callers use the Rust API in one final composition | required | unestablished | reference-only: The startup/request/cancel veneers at 0x73ac74/0x73ac94/0x73aca4 select the sole owner. The composition supplies schema1 configuration; each legacy request forms one finite absolute deadline through that provider and carries it unchanged through read and cleanup. No duration, default or cleanup budget is fitted by the library. Abort argument 0x91482c remains a task argument, not policy storage. |
+| task60 queue, task, wait, signal and current-task leaves | trampoline into retained stock | retained RTOS message and semaphore services | partly | the kernel owns typed queue and wait APIs | required | unestablished | reference-only: Queue60 retains the source 48-byte capacity and 16-message depth. The 24-byte envelope carries the request's original absolute deadline. The receiver supplies its own 24-byte payload buffer, and task startup preserves the nine reserved completion semaphores and task-id publication. |
+| NAND, decoder, segment, extent, progress and delegated-command leaves | trampoline into retained stock | retained X-M1 services and the owned image5 decoder component | partly | the corresponding device and delegated command units are owned | required | unestablished | reference-only: The DMA unit is fixed at 0x20000 bytes. Plain backing is 0x360000 bytes and image5 staging is 0x2e0000 bytes; 0x100000 remains a controller budget, not a lease extent. The plain progress reporter is the source-inspected void ABI at 0x73b924. |
 
 ## first_stage
 

@@ -17,7 +17,11 @@ impl Sender {
     }
 
     pub fn send<C: Clock, K: SenderKernel>(&mut self, kind: CommandKind, deadline: Deadline, callback: Callback, argument: CallbackArgument, clock: &mut C, kernel: &mut K) -> Result<Request, ProtocolError> {
+        self.reap_completed(kernel);
         if self.retained { return Err(ProtocolError::RetainedOperation); }
+        if self.pending.iter().flatten().any(|request| request.kind == kind) {
+            return Err(ProtocolError::Outstanding);
+        }
         let slot = self.pending.iter().position(Option::is_none).ok_or(ProtocolError::Outstanding)?;
         let now = clock.now();
         if self.pending.iter().flatten().any(|request| !request.live(now)) {
@@ -30,6 +34,16 @@ impl Sender {
         kernel.post(QUEUE_ID, kind.operation(), &request.encode(), deadline)?;
         self.pending[slot] = Some(request);
         Ok(request)
+    }
+
+    fn reap_completed<K: SenderKernel>(&mut self, kernel: &mut K) {
+        for slot in &mut self.pending {
+            let Some(request) = *slot else { continue; };
+            let Some(completion) = kernel.peek_completion(request.id, request.kind) else { continue; };
+            self.retained |= matches!(completion.outcome,
+                CompletionOutcome::Failed { retention: crate::Retention::HeldQuiescent | crate::Retention::Unproved, .. });
+            *slot = None;
+        }
     }
 
     pub fn wait<C: Clock, K: SenderKernel>(&mut self, request: Request, clock: &mut C, kernel: &mut K) -> Result<Completion, ProtocolError> {

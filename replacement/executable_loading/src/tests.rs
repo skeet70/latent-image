@@ -77,6 +77,9 @@ impl<P: Producer> SenderKernel for Transport<P> {
         if self.counter.now().count() >= deadline.instant().count() { return Err(ProtocolError::Expired); }
         self.queue.push_back((operation, *envelope)); Ok(())
     }
+    fn peek_completion(&mut self, id: RequestId, kind: CommandKind) -> Option<Completion> {
+        self.completions.iter().find(|completion| completion.id == id && completion.kind == kind).copied()
+    }
     fn take_completion(&mut self, id: RequestId, kind: CommandKind) -> Option<Completion> {
         let index = self.completions.iter().position(|completion| completion.id == id && completion.kind == kind)?;
         self.completions.remove(index)
@@ -124,6 +127,18 @@ fn wire_preserves_original_deadline_callback_and_argument() {
     transport.deliver().unwrap();
     assert_eq!(transport.sink.events[0].0.callback, callback);
     assert_eq!(transport.sink.events[0].0.argument, CallbackArgument(0xabcdef01));
+}
+
+#[test]
+fn async_completion_is_reaped_before_the_next_legacy_request() {
+    let mut transport = Transport::new(loaded());
+    let mut clock = transport.counter.clone();
+    let mut sender = Sender::new(&mut transport).unwrap();
+    sender.send(CommandKind::Plain, request_deadline(), Callback::None, CallbackArgument(0), &mut clock, &mut transport).unwrap();
+    transport.deliver().unwrap();
+    transport.engine.outcome = Some(ProducerCompletion::Delegated);
+    sender.send(CommandKind::FixedBlock, request_deadline(), Callback::None, CallbackArgument(0), &mut clock, &mut transport).unwrap();
+    assert_eq!(transport.queue.len(), 1);
 }
 
 #[test]

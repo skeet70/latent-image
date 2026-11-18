@@ -147,25 +147,35 @@ Plain skip qualification executes the actual progress reporter and notification 
 
 ## Typed lower read and task60 owner
 
-`//replacement/application_nand:arm` exposes the 128 KiB-block storage/DMA owner as an rlib. `//replacement/executable_loading:arm` exposes the sole typed queue60 sender, receiver, plain/image5 producer and completion owner as an rlib; it does not create another fixed production bank or panic closure. `//replacement/develop:develop-rust` consumes the client API and no longer publishes the overlapping `0x73b238`, `0x73aca4` or `0x73b728` entries.
+`//replacement/application_nand:arm` exposes the 128 KiB-block storage/DMA owner as an rlib. `//replacement/executable_loading:arm` exposes the sole typed queue60 sender, receiver, plain/image5 producer and completion owner as an rlib. `//replacement/image5_load:decoder-arm` supplies the asynchronous decoder. The opt-in `runtime-fujimod` target links all three into the existing fixed-image composition with one panic closure and one contiguous body/BSS; it is a qualification package, not a second production bank or Root layout decision. `//replacement/develop:develop-rust` consumes the typed client API and no longer publishes the overlapping `0x73b238`, `0x73aca4` or `0x73b728` entries.
 
-Before `xm1_loading_initialize`, startup must call `xm1_loading_configure` with schema1 and a non-null `deadline(context, command_kind, out_absolute_count)` callback. The callback supplies a finite absolute count on the configured qualified clock. `xm1_loading_absolute_deadline` exposes that configured value to callers; `xm1_loading_request` and `xm1_loading_request_sync` require the same absolute count. There is no relative duration, default count or renewed cleanup allowance. Abort word `0x91482c` remains the task argument.
+The stock constructor wrapper at `0x73ac74` selects `xm1_loading_startup`; request and cancel wrappers `0x73ac94` and `0x73aca4` select the typed legacy adapters. Startup obtains schema1 `LoadingConfiguration`, configures the owner, creates queue60 with capacity `0x30` and depth16, creates the priority4/`0xc00`-stack receiver task, and publishes readiness only after those owned objects exist. The receiver supplies the stock message service with a mutable 24-byte payload buffer. Existing wrapper callers and the affected Develop callers therefore use one Sender/Receiver; there is no deadline-less old receiver or compatibility owner.
 
-The lower owner authenticates the canonical plain and image5 descriptors, transfers one `0x20000`-byte usable block at a time, skips bad physical blocks without advancing the destination, and keeps the destination, driver and channel when stop cannot prove drain. A returned failure carries the first primary error, a separate cleanup error and one of released, held-quiescent or unproved-DMA. Task60 publishes the command-completion latch before signal/callback for loaded, delegated and executed-skip outcomes; a cached skip remains `Skipped` and does not claim fresh executable bytes. The conditional FujiMod law is pinned to revision `3d90035d`; physical composition must instead supply an independently established quiescence leaf. `0x100000` is programmed as the recovered controller budget and is not a buffer extent.
+`LoadingConfiguration.deadline(context, command_kind, out_absolute_count)` is required and must return a finite absolute count on the qualified clock. Each wrapper request invokes it once, stores that exact value in the 24-byte envelope and uses it for read, stop, quiescence, release and publication. Cleanup receives no renewed budget. Abort word `0x91482c` remains the task argument. The library defines no policy duration. Qualification images use explicit artifact policies: `runtime-fujimod` selects the pinned FujiMod `3d90035d` synchronous-copy drain; `runtime-native` and `runtime-retention` select explicit true/false external quiescence leaves. None is a production numeric default.
 
-The affected gate is:
+The lower owner authenticates the canonical plain and image5 descriptors, transfers one `0x20000`-byte usable block at a time, skips bad physical blocks without advancing the destination, and keeps the destination, driver and channel when stop cannot prove drain. A returned failure carries the first primary error, a separate cleanup error and one of released, held-quiescent or unproved-DMA. Task60 publishes the command-completion latch before signal/callback for loaded, delegated and executed-skip outcomes; a cached skip remains `Skipped` and does not claim fresh executable bytes. The conditional FujiMod law is pinned to revision `3d90035d`; physical composition must instead supply an independently established quiescence leaf. `0x100000` is a controller budget, not a lease extent.
+
+`runtime-artifact extract-image4` authenticates and decodes canonical DAT image4. `publications` emits exact-preimage rows for the three loading wrappers, five decoder veneers and two retired decoder extents. `contract` independently re-decodes staged image4, checks every publication and fixed record, binds the complete DAT/body/symbol identities, records the explicit deadline/drain policy, and requires the decoder's 52-byte state inside the shared BSS.
+
+The affected source/build gate is:
 
 ```sh
-devenv shell -- run-output exec --label lower-read-affected-gate -- \
-  host-build test //replacement/application_nand:host-tests \
+devenv shell -- /nix/store/bffmr8vszdqslmfar3yshn6swhq08vgc-host-build/bin/host-build \
+  test //replacement/application_nand:host-tests \
     //replacement/executable_loading:host-tests \
     //replacement/develop:pipeline-tests \
-    //replacement/develop:model-catalogue-test
+    //replacement/develop:model-catalogue-test \
+    //replacement/shim_check:shim-check-tests
+devenv shell -- /nix/store/bffmr8vszdqslmfar3yshn6swhq08vgc-host-build/bin/host-build \
+  build //replacement/executable_loading:runtime-fujimod \
+    //replacement/executable_loading:runtime-native \
+    //replacement/executable_loading:runtime-retention \
+    //replacement/executable_loading:runtime-artifact \
+    //replacement/executable_loading:runtime-native-qualify \
+    //emulation:loading-runtime-observer
 ```
 
-Its linked loading case sends a real 24-byte envelope through the typed sender/receiver and executes `DmaReadOwner`: physical block0 is bad, block1 supplies one usable 128 KiB result, and publication reports one skipped bad block only after the owner releases its leases. This is a bounded host software law. It is not physical NAND quiescence, natural skip/failure reachability or a whole Root cutover.
-
-Build the linked consumers with `host-build build //replacement/application_nand:arm //replacement/executable_loading:arm //replacement/develop:develop-rust //replacement/develop:develop-candidate`. The candidate binds the source-inspected X-M1 clock and task60 leaves and proves the affected Develop callsites link to the sole typed client API. It does not configure the required absolute-deadline provider, construct and drive the task60 owner, bind owned decoder entries or establish physical storage laws; it is not an alternative Root composition.
+`runtime-native-qualify` executes the linked ARM startup, Sender, envelope, Receiver, `NativeProducer` and `NandReadPorts` under two explicit host device leaves: released success and primary-error-plus-expired-drain retention. This is bounded software qualification, not physical NAND quiescence. `loading-runtime-observer` starts from reset with a staged DAT and observes natural wrapper calls, actual task60 execution, producer/decoder NAND traffic, callbacks, publications and final storage ownership. Its retention role changes only the explicit drain policy; it does not inject a mailbox message or reload live code.
 
 ## Asynchronous image5 decoder composition
 

@@ -87,6 +87,8 @@ pub trait SenderKernel {
     fn start_receiver(&mut self) -> Result<(), ProtocolError>;
     /// Queue admission is bounded by the supplied absolute deadline.
     fn post(&mut self, queue: u32, operation: u16, envelope: &[u8; protocol::ENVELOPE_BYTES], deadline: Deadline) -> Result<(), ProtocolError>;
+    /// Inspect a committed completion without consuming its typed result.
+    fn peek_completion(&mut self, id: RequestId, kind: CommandKind) -> Option<Completion>;
     /// The completion slot is consumed only for the supplied request and command.
     fn take_completion(&mut self, id: RequestId, kind: CommandKind) -> Option<Completion>;
     /// A wake is not a completion. This wait is bounded by the absolute deadline.

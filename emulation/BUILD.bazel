@@ -4067,6 +4067,12 @@ sh_binary(
 )
 
 sh_binary(
+    name = "loading-runtime-observer",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-loading-runtime"],
+    visibility = ["//visibility:public"],
+)
+
+sh_binary(
     name = "loader-startup-capture",
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-loader-continuations"],
     visibility = ["//visibility:public"],
