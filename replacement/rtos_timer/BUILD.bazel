@@ -97,6 +97,7 @@ haskell_test(
         "//host:containers",
         "//host:update-container",
         "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_platform:aggregate",
         "//replacement/rtos_platform:platform-artifact",
         "//replacement/startup_artifact:startup-artifact",
     ],
@@ -136,6 +137,7 @@ _ROOT_LINKED_INPUTS = [
     "//replacement/rtos_platform:platform-b.symbols",
     "//replacement/rtos_platform:platform-b.disasm",
     "//replacement/rtos_platform:placement-b.json",
+    "//replacement/saclac:saclac-image.symbols",
 ]
 
 haskell_binary(

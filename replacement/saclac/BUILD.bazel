@@ -13,6 +13,8 @@ _ARM_DEPS = {
     "xm1_rtos_global_lock_component": "//replacement/rtos_global_lock:global-lock-component",
     "xm1_fixed_image_layout": "//replacement/fixed_image:layout",
     "xm1_image5_decoder": "//replacement/image5_load:decoder-arm",
+    "xm1_rtos_objects_bank_a": "//replacement/rtos_objects:objects-bank-a",
+    "xm1_rtos_objects_bank_b": "//replacement/rtos_objects:objects-bank-b",
 }
 
 _ARM_SEARCH_DEPS = [
@@ -161,6 +163,7 @@ haskell_library(
     deps = [
         ":saclac-artifact",
         "//replacement/fixed_image:contract",
+        "//replacement/rtos_platform:aggregate",
         "//host:aeson",
         "//host:base",
     ],
@@ -173,6 +176,7 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":saclac-placement",
+        "//replacement/rtos_platform:aggregate",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -182,8 +186,9 @@ haskell_binary(
 
 genrule(
     name = "saclac-linker-script",
+    srcs = ["//replacement/rtos_platform:carriers.json"],
     outs = ["saclac.ld"],
-    cmd = "$(location :saclac-extents) linker-script > $@",
+    cmd = "$(location :saclac-extents) linker-script $(location //replacement/rtos_platform:carriers.json) > $@",
     tools = [":saclac-extents"],
 )
 
@@ -259,6 +264,7 @@ haskell_library(
         "//host/firmware:bank-allowlist",
         "//replacement/record5_staging:record5-staging",
         "//replacement/fixed_image:contract",
+        "//replacement/rtos_platform:aggregate",
         "//replacement/toolchain:stack-proof",
     ],
 )
@@ -280,6 +286,7 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":saclac-artifact",
+        "//replacement/rtos_platform:aggregate",
         "//emulation:image4-staging-lib",
         "//host:aeson",
         "//host:base",
@@ -298,6 +305,7 @@ haskell_test(
         "$(rootpath :saclac-image.symbols)",
         "$(rootpath :saclac-image.disasm)",
         "$(rootpath :saclac-image-sections)",
+        "$(rootpath //replacement/rtos_platform:carriers.json)",
     ],
     data = [
         ":saclac-image.elf",
@@ -305,10 +313,12 @@ haskell_test(
         ":saclac-image.bin",
         ":saclac-image.disasm",
         ":saclac-image.symbols",
+        "//replacement/rtos_platform:carriers.json",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":saclac-artifact",
+        "//replacement/rtos_platform:aggregate",
         "//host:base",
         "//host:bytestring",
         "//host:directory",

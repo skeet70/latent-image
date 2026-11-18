@@ -3,6 +3,7 @@
 module Main (main) where
 
 import Control.Monad (forM_)
+import Data.Bits ((.&.), (.|.), shiftR)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.Bits (complement, xor)
@@ -16,6 +17,7 @@ import qualified FujiAF.FirstStage as F
 import qualified FujiAF.UpdateContainer as U
 import Replacement.RtosOwnFirst.Regions (Domain (..), Extent (..), GuestAddress (..), extentEnd, extentStart)
 import Replacement.RtosPlatform.Artifact
+import Replacement.RtosPlatform.Bank
 import Replacement.RtosPlatform.Place
 import Replacement.RtosPlatform.Union
 import qualified Replacement.RtosPlatform.Aggregate as Aggregate
@@ -26,10 +28,39 @@ synthetic = Union 0xe7f000f0 domainA domainB []
   where
     domainA = DomainMap DomainA (GuestAddress 0x40000) 0xdae0 [entry 0x40430 "body_a" "veneer_a"] [Carrier FixedPool (Extent (GuestAddress 0x40430) (GuestAddress 0x40530))] [] [Demand FixedPool "body_a" 0x20]
     domainB = DomainMap DomainB (GuestAddress 0xd0000) 0xdaa0 [entry 0xd0430 "body_b" "veneer_b"] [Carrier FixedPool (Extent (GuestAddress 0xd0430) (GuestAddress 0xd0530))] [] [Demand FixedPool "body_b" 0x20]
-    entry at symbol veneer = Entry FixedPool "test" (GuestAddress at) symbol (".text." ++ symbol) veneer False
+    entry at symbol veneer = Entry FixedPool "test" (GuestAddress at) symbol (".text." ++ symbol) veneer False Aggregate.LoaderBody
 
 linkedFor :: Union -> Linked
-linkedFor _ = Linked (bin (GuestAddress 0x40430)) (symbols (GuestAddress 0x40430) "veneer_a" "body_a") "" [(0x40460, 8)] (bin (GuestAddress 0xd0430)) (symbols (GuestAddress 0xd0430) "veneer_b" "body_b") "" [(0xd0460, 8)]
+linkedFor _ = Linked (bin (GuestAddress 0x40430)) (symbols (GuestAddress 0x40430) "veneer_a" "body_a") "" [(0x40460, 8)] (bin (GuestAddress 0xd0430)) (symbols (GuestAddress 0xd0430) "veneer_b" "body_b") "" [(0xd0460, 8)] bankSymbolsText
+
+-- | A 0x40-byte fixed body holding one family body per domain.
+bankSymbolsText :: B.ByteString
+bankSymbolsText = C.unlines
+  [ "00a9fa20 00000000 T __fixed_body_start"
+  , "00a9fa20 00000010 T family_a"
+  , "00a9fa30 00000010 T family_b"
+  , "00a9fa60 00000000 T __fixed_body_end"
+  ]
+
+branchWord :: Word32 -> Word32 -> Word32
+branchWord source target = 0xea000000 .|. (((target - source - 8) `shiftR` 2) .&. 0xffffff)
+
+-- | The synthetic union with its one entry per domain bodied in the bank.
+bankUnion :: Union
+bankUnion = synthetic
+  { unionA = (unionA synthetic) { mapEntries = [bankEntry 0x40430 "family_a" "veneer_a"], mapDemand = [] }
+  , unionB = (unionB synthetic) { mapEntries = [bankEntry 0xd0430 "family_b" "veneer_b"], mapDemand = [] }
+  }
+  where
+    bankEntry at symbol veneer = Entry EventFlag "test" (GuestAddress at) symbol (".text." ++ symbol) veneer False Aggregate.BankBody
+
+-- | Platform links whose only owned bytes are the bank-entry veneers.
+bankLinked :: Word32 -> Word32 -> Linked
+bankLinked targetA targetB =
+  Linked (veneerBin 0x40430 targetA) (veneerSymbol 0x40430 "veneer_a") "" [] (veneerBin 0xd0430 targetB) (veneerSymbol 0xd0430 "veneer_b") "" [] bankSymbolsText
+  where
+    veneerBin at target = U.putWord32 (branchWord at target) <> B.replicate 0xfc 0
+    veneerSymbol at veneer = C.pack (hex at ++ " 00000004 T " ++ veneer ++ "\n")
 
 bin :: GuestAddress -> B.ByteString
 bin (GuestAddress _base) =
@@ -113,13 +144,13 @@ main = do
   check "zero-extent labels do not become native functions"
     (Aggregate.parseAggregateSymbols "0004282c 00000000 T label\n00042830 00000004 T function\n"
       == Right [Aggregate.AggregateSymbol "function" 0x42830 4])
-  let aliasEntry = Entry S3d "terminate" (GuestAddress 0x1000) "terminate" ".text.scheduler_timeout_entry" "veneer" False
+  let aliasEntry = Entry S3d "terminate" (GuestAddress 0x1000) "terminate" ".text.scheduler_timeout_entry" "veneer" False Aggregate.LoaderBody
       aliasImage = Aggregate.AggregateImage 0x1000 (U.putWord32 0xea000002 <> B.replicate 0x0c 0 <> U.putWord32 0xea000002 <> B.replicate 0x10 0)
       aliasSymbols = [Aggregate.AggregateSymbol "veneer" 0x1000 4, Aggregate.AggregateSymbol "terminate_body" 0x1020 4]
       aliasPlacement = Aggregate.SectionPlacement 0x1010 4 ".text.scheduler_timeout_entry"
       resolvedAlias = resolveEntryTarget aliasImage aliasSymbols [aliasPlacement] aliasEntry
   check "allocated public thunk resolves without a zero-size function"
-    (resolvedAlias == Right (Aggregate.AggregateSymbol "terminate" 0x1010 4))
+    (resolvedAlias == Right (LinkedTarget (Aggregate.AggregateSymbol "terminate" 0x1010 4)))
   expectLeft "entry thunk corruption is refused" (const True)
     (resolveEntryTarget (Aggregate.AggregateImage 0x1000 (B.replicate 0x24 0)) aliasSymbols [aliasPlacement] aliasEntry)
   expectLeft "fixed veneer corruption is refused" (const True)
@@ -186,7 +217,7 @@ main = do
           check "allocated readonly zero words survive DAT staging" (B.take 8 (B.drop (fromIntegral (base + 0x30 - loaderBase)) loader) == B.replicate 8 0)
   let refusedDemand = synthetic { unionA = (unionA synthetic) { mapDemand = [Demand FixedPool "body_a" 0x100] } }
   expectLeft "demand larger than the largest run refuses" (\e -> case e of FitRejected (CarrierDeficit DomainA FixedPool "body_a" 0x100 0xfc) -> True; _ -> False) (withLink refusedDemand (linkedFor synthetic))
-  let movedVeneer = synthetic { unionA = (unionA synthetic) { mapEntries = [Entry FixedPool "test" (GuestAddress 0x40434) "body_a" ".text.body_a" "veneer_a" False] } }
+  let movedVeneer = synthetic { unionA = (unionA synthetic) { mapEntries = [Entry FixedPool "test" (GuestAddress 0x40434) "body_a" ".text.body_a" "veneer_a" False Aggregate.LoaderBody] } }
   expectLeft "a moved entry refuses" (\e -> case e of EntryMoved DomainA _ (GuestAddress 0x40430) -> True; _ -> False) (withLink movedVeneer (linkedFor synthetic))
   let wrongSize = synthetic { unionA = (unionA synthetic) { mapDemand = [Demand FixedPool "body_a" 0x24] } }
   expectLeft "a demand-size mismatch refuses" (\e -> case e of DemandSize DomainA _ 0x20 -> True; _ -> False) (withLink wrongSize (linkedFor synthetic))
@@ -277,6 +308,51 @@ main = do
   case parseUnionError (withExternals [External "entry" (GuestAddress 0x40430) OwnedEntry]) of
     Nothing -> pure ()
     Just err -> check ("an owned external on an entry address: " ++ err) False
+  bank <- either (fail . show) pure (parseBank bankSymbolsText)
+  let veneer domain at target = Veneer domain (GuestAddress at) (branchWord at target)
+      bothDomains = [veneer DomainA 0x40430 0xa9fa20, veneer DomainB 0xd0430 0xa9fa30]
+  check "veneers into each domain's own bank body are admitted"
+    (fmap (map admittedTarget) (admitVeneers bankUnion bank bothDomains) == Right [0xa9fa20, 0xa9fa30])
+  expectLeft "a veneer whose target lies outside the admitted bank refuses"
+    (\e -> case e of VeneerOutsideBank DomainA _ 0x40500 -> True; _ -> False)
+    (admitVeneers bankUnion bank [veneer DomainA 0x40430 0x40500, veneer DomainB 0xd0430 0xa9fa30])
+  expectLeft "a veneer targeting the other domain's bank body refuses"
+    (\e -> case e of VeneerWrongDomain DomainA _ 0xa9fa30 -> True; _ -> False)
+    (admitVeneers bankUnion bank [veneer DomainA 0x40430 0xa9fa30, veneer DomainB 0xd0430 0xa9fa30])
+  expectLeft "a bank body without its veneer refuses"
+    (\e -> case e of BankBodyWithoutVeneer DomainA _ -> True; _ -> False)
+    (admitVeneers bankUnion bank [veneer DomainB 0xd0430 0xa9fa30])
+  expectLeft "a loader word that is not a branch refuses as a veneer"
+    (\e -> case e of VeneerNotBranch DomainB _ 0xe7f000f0 -> True; _ -> False)
+    (admitVeneers bankUnion bank [veneer DomainA 0x40430 0xa9fa20, Veneer DomainB (GuestAddress 0xd0430) 0xe7f000f0])
+  expectLeft "a veneer at an address that is no bank entry refuses"
+    (\e -> case e of VeneerUndeclared _ -> True; _ -> False)
+    (admitVeneers bankUnion bank (veneer DomainA 0x40434 0xa9fa20 : bothDomains))
+  expectLeft "a body outside the record's first body byte refuses"
+    (\e -> case e of BankBoundsInvalid 0xa9fa24 _ -> True; _ -> False)
+    (parseBank (C.unlines ["00a9fa24 00000000 T __fixed_body_start", "00a9fa60 00000000 T __fixed_body_end"]))
+  case withLink bankUnion (bankLinked 0xa9fa20 0xa9fa30) of
+    Left err -> check ("bank-entry platform admission: " ++ show err) False
+    Right (source, _, staged) -> do
+      let held :: Domain -> Word32 -> Word32
+          held domain at = U.word32At (sourceLoaders source M.! domain) (fromIntegral (at - (if domain == DomainA then 0x40000 else 0xd0000)))
+      check "the platform stage leaves bank-entry words for the fixed-image stager"
+        (stagedBankEntries staged == [BankEntryRow (GuestAddress 0x40430) (held DomainA 0x40430) (branchWord 0x40430 0xa9fa20), BankEntryRow (GuestAddress 0xd0430) (held DomainB 0xd0430) (branchWord 0xd0430 0xa9fa30)])
+      check "the staged loader keeps the source word at the bank entry"
+        (U.word32At (stagedLoader staged DomainA) 0x430 == held DomainA 0x40430)
+  expectLeft "a linked veneer out of the bank refuses platform admission"
+    (\e -> case e of BankRejected (VeneerOutsideBank DomainB _ _) -> True; _ -> False)
+    (withLink bankUnion (bankLinked 0xa9fa20 0xbf1a00))
+  expectLeft "a linked veneer into the other domain's body refuses platform admission"
+    (\e -> case e of BankRejected (VeneerWrongDomain DomainB _ 0xa9fa20) -> True; _ -> False)
+    (withLink bankUnion (bankLinked 0xa9fa20 0xa9fa20))
+  check "bank entry bodies parse"
+    (case parseUnion (encodeUnion bankUnion) of
+      Right parsed -> map entryBody (mapEntries (unionA parsed)) == [Aggregate.BankBody]
+      Left _ -> False)
+  case parseUnionError bankUnion { unionB = (unionB bankUnion) { mapEntries = [e { entrySymbol = "family_a" } | e <- mapEntries (unionB bankUnion)] } } of
+    Just _ -> pure ()
+    Nothing -> check "a bank symbol shared by both domains is refused" False
   count <- readIORef failures
   if count == 0 then putStrLn "platform-tests: passed" else putStrLn ("platform-tests: " ++ show count ++ " failures") >> fail "platform-tests failed"
 
@@ -299,7 +375,7 @@ encodeUnion union = C.pack ("{\"schema\":1,\"fill_word\":\"0xe7f000f0\"" ++ rese
     comma [] = ""
     comma [x] = x
     comma (x : xs) = x ++ "," ++ comma xs
-    entryJson e = "{\"group\":\"" ++ groupLabel (entryGroup e) ++ "\",\"name\":\"" ++ entryName e ++ "\",\"address\":\"" ++ addressText (entryAddress e) ++ "\",\"symbol\":\"" ++ entrySymbol e ++ "\",\"section\":\"" ++ entrySection e ++ "\",\"veneer\":\"" ++ entryVeneer e ++ "\"" ++ (if entryPinned e then ",\"pinned\":true" else "") ++ "}"
+    entryJson e = "{\"group\":\"" ++ groupLabel (entryGroup e) ++ "\",\"name\":\"" ++ entryName e ++ "\",\"address\":\"" ++ addressText (entryAddress e) ++ "\",\"symbol\":\"" ++ entrySymbol e ++ "\",\"section\":\"" ++ entrySection e ++ "\",\"veneer\":\"" ++ entryVeneer e ++ "\"" ++ (if entryPinned e then ",\"pinned\":true" else "") ++ (if entryBody e == Aggregate.BankBody then ",\"body\":\"bank\"" else "") ++ "}"
     carrierJson c = "{\"group\":\"" ++ groupLabel (carrierGroup c) ++ "\",\"start\":\"" ++ addressText (extentStart (carrierExtent c)) ++ "\",\"end\":\"" ++ addressText (extentEnd (carrierExtent c)) ++ "\"}"
     externalJson e = "{\"name\":\"" ++ externalName e ++ "\",\"address\":\"" ++ addressText (externalAddress e) ++ "\",\"kind\":\"" ++ kindText (externalKind e) ++ "\"}"
     kindText OwnedEntry = "owned"

@@ -73,7 +73,7 @@ main = do
       let results = [fit (domainMap union domain) | domain <- domains]
       L.putStr (J.encode (fitValue union) <> L.singleton 10)
       if any isLeft results then exitFailure else pure ()
-    ["stage", carriersPath, binA, symA, disA, placeA, binB, symB, disB, placeB, datPath, loaderAPath, loaderBPath, output] -> do
+    ["stage", carriersPath, binA, symA, disA, placeA, binB, symB, disB, placeB, bankSymbols, datPath, loaderAPath, loaderBPath, output] -> do
       union <- either (H.failH . show) pure . parseUnion =<< readInput carriersPath
       dat <- readInput datPath
       loaderA <- readInput loaderAPath
@@ -81,7 +81,7 @@ main = do
       spansA <- either H.failH pure . placementSpans =<< readInput placeA
       spansB <- either H.failH pure . placementSpans =<< readInput placeB
       source <- either (H.failH . show) pure (canonicalSource dat loaderA loaderB)
-      linked <- Linked <$> readInput binA <*> readInput symA <*> readInput disA <*> pure spansA <*> readInput binB <*> readInput symB <*> readInput disB <*> pure spansB
+      linked <- Linked <$> readInput binA <*> readInput symA <*> readInput disA <*> pure spansA <*> readInput binB <*> readInput symB <*> readInput disB <*> pure spansB <*> readInput bankSymbols
       admitted <- either (H.failH . show) pure (admit union source linked)
       staged <- either (H.failH . show) pure (stage admitted)
       exists <- doesPathExist output
@@ -90,7 +90,9 @@ main = do
       B.writeFile (output </> "candidate.DAT") (stagedDat staged)
       forM_ domains $ \domain -> B.writeFile (output </> ("loader-" ++ domainLabel domain ++ ".bin")) (stagedLoader staged domain)
       L.writeFile (output </> "contract.json") (J.encode (contractValue staged) <> L.singleton 10)
-    _ -> H.failH "usage: stage-platform fit CARRIERS | stage CARRIERS BIN_A SYMBOLS_A DISASM_A PLACEMENT_A BIN_B SYMBOLS_B DISASM_B PLACEMENT_B SOURCE_DAT LOADER_A LOADER_B NEW_OUTPUT_DIRECTORY"
+      L.writeFile (output </> "bank-entries.json") (J.encode (map bankEntryValue (stagedBankEntries staged)) <> L.singleton 10)
+    _ -> H.failH "usage: stage-platform fit CARRIERS | stage CARRIERS BIN_A SYMBOLS_A DISASM_A PLACEMENT_A BIN_B SYMBOLS_B DISASM_B PLACEMENT_B BANK_SYMBOLS SOURCE_DAT LOADER_A LOADER_B NEW_OUTPUT_DIRECTORY"
   where
     isLeft (Left _) = True
     isLeft _ = False
+    bankEntryValue (BankEntryRow (GuestAddress address) old new) = object ["address" .= address, "old" .= old, "new" .= new]

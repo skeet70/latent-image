@@ -63,7 +63,7 @@ haskell_binary(
     name = "stage-fixed-image",
     srcs = ["StageMain.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
-    deps = [":contract", "//host:aeson", "//host:base", "//host:bytestring", "//host:filepath", "//host:first-stage", "//host:host-support", "//host:update-container"],
+    deps = [":contract", "//host:aeson", "//host:base", "//host:bytestring", "//host:filepath", "//host:first-stage", "//host:host-support", "//host:update-container", "//replacement/rtos_own_first/stage:own-first-artifact", "//replacement/rtos_platform:platform-artifact"],
 )
 
 haskell_binary(

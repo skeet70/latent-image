@@ -67,6 +67,7 @@ data AggregatePayload = AggregatePayload
   , aggregatePlacements :: [Agg.SectionPlacement]
   , aggregateCarriers :: [Regions.Extent]
   , aggregateFill :: Word32
+  , aggregateBank :: Agg.BankImage
   }
 
 data Payload = Standalone Image | Aggregate AggregatePayload
@@ -702,12 +703,16 @@ functionSpans domain role payload = case payload of
         spans = sections ++ [(Agg.symbolAddress s, Agg.symbolSize s) | s <- symbols, Agg.symbolSize s > 0] ++ kept
         cuts = sort (nub (concat [[at, at + size] | (at, size) <- spans]))
      in [(lo, hi - lo) | (lo,hi) <- zip cuts (drop 1 cuts), any (\(at,size) -> at <= lo && hi <= at + size) spans]
+          ++ [bankSpan (aggregateBank aggregate)]
   Aggregate _ ->
     let base = timerEntry domain - 0x1e8
      in extents domain ++ retained domain ++ [(base, 0xc4), (base + 0xc4, 0xdc), (timerEntry domain, 0xe4)]
   Standalone _ ->
     let base = timerEntry domain - 0x1e8
      in extents domain ++ retained domain ++ [(base, 0xc4), (base + 0xc4, 0xdc), (timerEntry domain, fromIntegral (B.length timerStub))]
+
+bankSpan :: Agg.BankImage -> (Word32, Word32)
+bankSpan fixed = (Agg.bankBase fixed, fromIntegral (B.length (Agg.bankBytes fixed)))
 
 caseFor :: Facts -> Domain -> ObservationRole -> Image -> Payload -> Case -> CaseSpec
 caseFor facts executing role loader payload one
@@ -724,6 +729,7 @@ caseFor facts executing role loader payload one
       , caseExit = wireAddress (GuestAddress exitAddress)
       , caseRegions =
           codeRegions
+            ++ bankRegions
             ++ [mkRegion ident (wireAddress address) size permission (overlay address background words') | Page ident address size permission background <- dataPages]
             ++ [mkRegion (RegionId "continuations") (wireAddress (GuestAddress exitAddress)) (fromIntegral (stopAddress - exitAddress + 4)) ReadExecute (continuationBytes facts executing one)]
       , caseFunctions =
@@ -751,6 +757,11 @@ caseFor facts executing role loader payload one
         (if any (\(at,end) -> at <= lo && hi <= end) readonly then ReadOnly else ReadExecute)
         (B.take (fromIntegral (hi-lo)) (B.drop (fromIntegral (lo-codeBase)) installed))
       | (index,(lo,hi)) <- zip [0 :: Int ..] (zip cuts (drop 1 cuts)), hi > lo]
+    bankRegions = case (role, payload) of
+      (OwnedObservation, Aggregate aggregate) ->
+        let Agg.BankImage bankAt bankContent = aggregateBank aggregate
+         in [mkRegion (RegionId "bank") (wireAddress (GuestAddress bankAt)) (B.length bankContent) ReadExecute bankContent]
+      _ -> []
     dataPages = pages facts one
     words' = layoutWords facts one ++ [poke (dfHandlerContext (domainFacts facts executing)) (if caseInvocation one `elem` [HandlerCallback, HandlerContext] then 1 else 0)] ++ caseWords one
     outside = [address | (address, _) <- words', not (any (contains address 4) dataPages)]

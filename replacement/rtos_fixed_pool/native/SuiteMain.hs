@@ -65,8 +65,11 @@ main = do
   forM_ [placementsA, placementsB] $ \selected ->
     when (maybe False (const True) selected && maybe True (const False) carriers)
       (failH "--carriers is required with --placements-a or --placements-b")
-  ownedAImage <- ownedImage DomainA ownedABytes ownedASymbols placementsA carriers
-  ownedBImage <- ownedImage DomainB ownedBBytes ownedBSymbols placementsB carriers
+  bank <- if any isJust [placementsAPath, placementsBPath, wrongPlacementsAPath, wrongPlacementsBPath]
+    then Just <$> readBank
+    else pure Nothing
+  ownedAImage <- ownedImage DomainA ownedABytes ownedASymbols placementsA carriers bank
+  ownedBImage <- ownedImage DomainB ownedBBytes ownedBSymbols placementsB carriers bank
   wrongABytes <- traverse B.readFile wrongAPath
   wrongBBytes <- traverse B.readFile wrongBPath
   wrongSymbolsA <- traverse (fmap parseSymbols . B.readFile) wrongSymbolsAPath
@@ -78,10 +81,10 @@ main = do
   when (any isJust wrongInputs) $
     unless (all isJust wrongInputs) (failH "the wrong variant needs --wrong-a-bin, --wrong-a-symbols, --wrong-a-placements, --wrong-b-bin, --wrong-b-symbols and --wrong-b-placements")
   wrongAImage <- case (wrongABytes, wrongSymbolsA, wrongPlacementsA) of
-    (Just bytes, Just symbols, Just placements) -> Just <$> ownedImage DomainA bytes symbols (Just placements) carriers
+    (Just bytes, Just symbols, Just placements) -> Just <$> ownedImage DomainA bytes symbols (Just placements) carriers bank
     _ -> pure Nothing
   wrongBImage <- case (wrongBBytes, wrongSymbolsB, wrongPlacementsB) of
-    (Just bytes, Just symbols, Just placements) -> Just <$> ownedImage DomainB bytes symbols (Just placements) carriers
+    (Just bytes, Just symbols, Just placements) -> Just <$> ownedImage DomainB bytes symbols (Just placements) carriers bank
     _ -> pure Nothing
   executableDigest <- sha256Hex <$> (sha256File =<< getExecutablePath)
   runnerDigest <- sha256Hex <$> sha256File runner
@@ -96,8 +99,8 @@ main = do
   placementsDigestB <- traverse (fmap sha256Hex . sha256File) placementsBPath
   wrongDigestA <- traverse (fmap sha256Hex . sha256File) wrongAPath
   wrongDigestB <- traverse (fmap sha256Hex . sha256File) wrongBPath
-  let stockA = Image 0x40000 loaderABytes [] [] [] 0
-      stockB = Image 0xd0000 loaderBBytes [] [] [] 0
+  let stockA = Image 0x40000 loaderABytes [] [] [] 0 Nothing
+      stockB = Image 0xd0000 loaderBBytes [] [] [] 0 Nothing
   runA <- runFamily runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA ownedAImage
   runB <- runFamily runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB ownedBImage
   wrongRunA <- traverse (\image -> runFamily runner cacheRoot (takeDirectory resultsPath </> "wrong-domain-a") facts DomainA stockA image) wrongAImage
@@ -278,11 +281,19 @@ readPlacements path = either failH pure . Agg.parsePlacements =<< B.readFile pat
 readCarriers :: FilePath -> IO Agg.CarrierUnion
 readCarriers path = either failH pure . Agg.parseCarrierUnion =<< B.readFile path
 
-ownedImage :: Domain -> B.ByteString -> [Agg.AggregateSymbol] -> Maybe [Agg.SectionPlacement] -> Maybe Agg.CarrierUnion -> IO Image
-ownedImage domain bytes symbols placements carriers
+-- | The fixed bank that bank-bodied entry veneers branch into.
+readBank :: IO Agg.BankImage
+readBank = do
+  body <- B.readFile =<< required "--bank-body"
+  symbols <- B.readFile =<< required "--bank-symbols"
+  either failH pure (Agg.parseBankImage symbols body)
+
+ownedImage :: Domain -> B.ByteString -> [Agg.AggregateSymbol] -> Maybe [Agg.SectionPlacement] -> Maybe Agg.CarrierUnion -> Maybe Agg.BankImage -> IO Image
+ownedImage domain bytes symbols placements carriers bank
   | Just sections <- placements = do
       unless (not (null sections)) (failH "aggregate placements are empty")
       union <- maybe (failH ("carrier extents are missing for " ++ show domain)) pure carriers
+      fixed <- maybe (failH ("the fixed bank is missing for " ++ show domain)) pure bank
       image <- either failH pure (Agg.aggregateImage symbols bytes)
       forM_ sections $ \section -> do
         _ <- either failH pure (Agg.sliceAggregate image (Agg.placementAddress section) (Agg.placementBytes section))
@@ -291,12 +302,12 @@ ownedImage domain bytes symbols placements carriers
             DomainA -> Agg.carrierExtentsA union
             DomainB -> Agg.carrierExtentsB union
           extents' = [(lo, hi - lo) | (lo, hi) <- declared]
-      pure (Image (Agg.imageBase image) (Agg.imageBytes image) symbols sections extents' (Agg.carrierFill union))
+      pure (Image (Agg.imageBase image) (Agg.imageBytes image) symbols sections extents' (Agg.carrierFill union) (Just fixed))
   | any (isAggregate . Agg.symbolName) symbols =
       failH "aggregate fixed-pool qualification requires --placements-a and --placements-b"
   | otherwise = do
       base <- origin domain (M.fromList [(Agg.symbolName symbol, Agg.symbolAddress symbol) | symbol <- symbols])
-      pure (Image base bytes [] [] [] 0)
+      pure (Image base bytes [] [] [] 0 Nothing)
   where
     isAggregate name = take 20 name == "xm1_platform_veneer_"
 

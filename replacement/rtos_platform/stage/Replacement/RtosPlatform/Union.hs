@@ -16,6 +16,8 @@ module Replacement.RtosPlatform.Union
   , parseUnion
   , domainMap
   , groupedRuns
+  , EntryTarget (..)
+  , branchTarget
   , resolveEntryTarget
   , runs
   , fit
@@ -32,6 +34,7 @@ import Data.Aeson.Types (Parser)
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import qualified Data.ByteString as B
 import qualified Data.Text as T
+import Data.Int (Int32)
 import Data.List (sortOn)
 import Data.Word (Word32)
 import Numeric (readHex)
@@ -68,6 +71,7 @@ data Entry = Entry
   , entrySection :: String
   , entryVeneer :: String
   , entryPinned :: Bool
+  , entryBody :: A.EntryBody
   }
   deriving (Eq, Show)
 
@@ -110,6 +114,8 @@ data UnionError
   | ExternalOutsideLoader Domain External
   | RetainedInsideCarrier Domain External
   | OwnedOutsideEntries Domain External
+  | BankEntryPinned Domain Entry
+  | BankSymbolShared Entry
   deriving (Eq, Show)
 
 data FitError
@@ -143,6 +149,12 @@ instance FromJSON ParsedEntry where
         <*> o .: "section"
         <*> o .: "veneer"
         <*> (o .:? "pinned" .!= False)
+        <*> (o .:? "body" >>= body)
+    where
+      body value = case value :: Maybe String of
+        Nothing -> pure A.LoaderBody
+        Just "bank" -> pure A.BankBody
+        Just other -> fail ("unknown entry body: " ++ other)
 
 newtype ParsedCarrier = ParsedCarrier Carrier
 instance FromJSON ParsedCarrier where
@@ -210,6 +222,8 @@ parseUnion bytes = do
       unless (any (\c -> extentContains (carrierExtent c) (entryAddress e)) (mapCarriers dm)) (Left (EntryOutsideCarrier domain e))
     forM_ (zip (sortOn entryAddress (mapEntries dm)) (drop 1 (sortOn entryAddress (mapEntries dm)))) $ \(left, right) ->
       when (entryAddress left == entryAddress right) (Left (EntryRepeated domain (entryAddress left)))
+    forM_ [e | e <- mapEntries dm, entryBody e == A.BankBody, entryPinned e] $ \e ->
+      Left (BankEntryPinned domain e)
     forM_ (mapExternals dm) $ \e -> case externalKind e of
       ScratchEntry -> pure ()
       _ -> do
@@ -223,6 +237,9 @@ parseUnion bytes = do
           OwnedEntry ->
             unless (any (\entry -> entryAddress entry == externalAddress e) (mapEntries dm))
               (Left (OwnedOutsideEntries domain e))
+  let bankSymbols domain = [entrySymbol e | e <- mapEntries (domainMap union domain), entryBody e == A.BankBody]
+  forM_ [e | e <- mapEntries (unionA union), entryBody e == A.BankBody, entrySymbol e `elem` bankSymbols DomainB] $ \e ->
+    Left (BankSymbolShared e)
   pure union
 
 domainMap :: Union -> Domain -> DomainMap
@@ -267,36 +284,55 @@ fit dm = do
   where
     domainOf = mapDomain
 
-resolveEntryTarget :: A.AggregateImage -> [A.AggregateSymbol] -> [A.SectionPlacement] -> Entry -> Either String A.AggregateSymbol
+-- | Where an entry veneer leads: a body in the linked aggregate, or the fixed-bank address
+-- of a bank-bodied entry, which only the joint bank admission accepts.
+data EntryTarget = LinkedTarget A.AggregateSymbol | BankTarget GuestAddress
+  deriving (Eq, Show)
+
+-- | The destination of an unconditional A32 @b@ at @source@.
+branchTarget :: Word32 -> Word32 -> Maybe Word32
+branchTarget source word
+  | word .&. 0xff000000 == 0xea000000 =
+      let offset = (fromIntegral ((word .&. 0xffffff) `shiftL` 8) :: Int32) `shiftR` 6
+       in Just (source + 8 + fromIntegral offset)
+  | otherwise = Nothing
+
+resolveEntryTarget :: A.AggregateImage -> [A.AggregateSymbol] -> [A.SectionPlacement] -> Entry -> Either String EntryTarget
 resolveEntryTarget image symbols placements entry = do
-  target <- case named (entrySymbol entry) of
-    [symbol] -> Right symbol
-    [] -> do
-      thunk <- case [placement | placement <- placements,
-        A.placementSection placement == entrySection entry,
-        A.placementBytes placement == 4] of
-        [placement] -> Right placement
-        _ -> Left ("missing allocated entry thunk: " ++ entrySymbol entry)
-      body <- case named (entrySymbol entry ++ "_body") of
-        [symbol] -> Right symbol
-        _ -> Left ("missing positive-size entry body: " ++ entrySymbol entry)
-      let thunkAddress = A.placementAddress thunk
-      instruction <- wordAt thunkAddress
-      unless (instruction == branch thunkAddress (A.symbolAddress body))
-        (Left ("allocated entry thunk does not branch to its body: " ++ entrySymbol entry))
-      pure (A.AggregateSymbol (entrySymbol entry) thunkAddress 4)
-    _ -> Left ("duplicate entry symbol: " ++ entrySymbol entry)
   let GuestAddress veneerAddress = entryAddress entry
   case named (entryVeneer entry) of
     [veneer] | A.symbolAddress veneer == veneerAddress, A.symbolSize veneer == 4 -> Right ()
     _ -> Left ("missing exact fixed entry veneer: " ++ entryVeneer entry)
   instruction <- wordAt veneerAddress
-  unless (instruction == branch veneerAddress (A.symbolAddress target))
-    (Left ("fixed entry veneer does not branch to its target: " ++ entryVeneer entry))
-  pure target
+  case entryBody entry of
+    A.BankBody -> case branchTarget veneerAddress instruction of
+      Just target | not (insideImage target) -> Right (BankTarget (GuestAddress target))
+      _ -> Left ("bank entry veneer does not leave the aggregate: " ++ entryVeneer entry)
+    A.LoaderBody -> do
+      target <- case named (entrySymbol entry) of
+        [symbol] -> Right symbol
+        [] -> do
+          thunk <- case [placement | placement <- placements,
+            A.placementSection placement == entrySection entry,
+            A.placementBytes placement == 4] of
+            [placement] -> Right placement
+            _ -> Left ("missing allocated entry thunk: " ++ entrySymbol entry)
+          body <- case named (entrySymbol entry ++ "_body") of
+            [symbol] -> Right symbol
+            _ -> Left ("missing positive-size entry body: " ++ entrySymbol entry)
+          let thunkAddress = A.placementAddress thunk
+          thunkWord <- wordAt thunkAddress
+          unless (branchTarget thunkAddress thunkWord == Just (A.symbolAddress body))
+            (Left ("allocated entry thunk does not branch to its body: " ++ entrySymbol entry))
+          pure (A.AggregateSymbol (entrySymbol entry) thunkAddress 4)
+        _ -> Left ("duplicate entry symbol: " ++ entrySymbol entry)
+      unless (branchTarget veneerAddress instruction == Just (A.symbolAddress target))
+        (Left ("fixed entry veneer does not branch to its target: " ++ entryVeneer entry))
+      pure (LinkedTarget target)
   where
     named name = [symbol | symbol <- symbols, A.symbolName symbol == name, A.symbolSize symbol > 0]
-    branch source target = 0xea000000 .|. (((target - source - 8) `shiftR` 2) .&. 0xffffff)
+    insideImage at = A.imageBase image <= at
+      && toInteger at < toInteger (A.imageBase image) + toInteger (B.length (A.imageBytes image))
     wordAt location = do
       bytes <- A.sliceAggregate image location 4
       pure (B.foldr (\byte value -> fromIntegral byte .|. (value `shiftL` 8)) (0 :: Word32) bytes)

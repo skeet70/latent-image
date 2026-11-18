@@ -12,6 +12,7 @@ import Data.Word (Word32)
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.Host as H
 import qualified FujiAF.UpdateContainer as U
+import qualified Replacement.RtosPlatform.Aggregate as Agg
 import Replacement.Saclac.Artifact hiding (admit)
 import qualified Replacement.Saclac.Artifact as Artifact
 import System.Environment (getArgs)
@@ -44,9 +45,10 @@ main :: IO ()
 main = do
   arguments <- getArgs
   case arguments of
-    [elfPath, binPath, symbolsPath, disasmPath, sectionsPath] -> do
+    [elfPath, binPath, symbolsPath, disasmPath, sectionsPath, carriersPath] -> do
       elf <- canonicalizePath elfPath >>= H.readRegular (8 * 1024 * 1024)
-      let admit = Artifact.admit elf
+      carriers <- canonicalizePath carriersPath >>= H.readRegular (1024 * 1024) >>= either H.failH pure . Agg.parseCarrierUnion
+      let admit = Artifact.admit carriers elf
       bin <- canonicalizePath binPath >>= H.readRegular (8 * 1024 * 1024)
       symbols <- canonicalizePath symbolsPath >>= H.readRegular (4 * 1024 * 1024)
       disasm <- canonicalizePath disasmPath >>= H.readRegular (64 * 1024 * 1024)
@@ -123,16 +125,21 @@ main = do
               target = 0x123454
               badElf = patch 0 elf fileOffset target
           refused "undeclared definite reference" (ReferenceOutside site target)
-            (Artifact.admit badElf (patch base bin site target) symbols disasm sections)
+            (Artifact.admit carriers badElf (patch base bin site target) symbols disasm sections)
         [] -> H.failH "linked ELF has no data relocation for the refusal control"
-      boundaryReferenceTests elf bin symbols disasm sections admitted parsed dataReferences
+      let loaderEntries = [Agg.carrierEntryAddress entry | entry <- Agg.carrierEntriesA carriers ++ Agg.carrierEntriesB carriers, Agg.carrierEntryBody entry == Agg.LoaderBody]
+      case Artifact.admit carriers { Agg.carrierEntriesA = [], Agg.carrierEntriesB = [] } elf bin symbols disasm sections of
+        Left (ReferenceOutside _ target) | target `elem` loaderEntries -> pure ()
+        Left (WalkRefused _ (BranchTargetNotAllowed target)) | target `elem` loaderEntries -> pure ()
+        other -> H.failH ("saclac-placement: a bank call into an undeclared loader entry was not refused: " ++ either show (const "admitted") other)
+      boundaryReferenceTests carriers elf bin symbols disasm sections admitted parsed dataReferences
       stackTests
       putStrLn ("saclac-placement: fixed body " ++ show (B.length body) ++ " bytes; veneers, layout, publications and stack controls passed")
-    _ -> H.failH "usage: saclac-placement-tests LINKED_ELF LINKED_BIN SYMBOLS DISASM SECTIONS"
+    _ -> H.failH "usage: saclac-placement-tests LINKED_ELF LINKED_BIN SYMBOLS DISASM SECTIONS CARRIERS"
 
-boundaryReferenceTests :: B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString
+boundaryReferenceTests :: Agg.CarrierUnion -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString
   -> Admitted -> ELF.Elf -> [(ELF.AddressRelocation, ELF.Section)] -> IO ()
-boundaryReferenceTests elf bin symbols disasm sections admitted parsed references = do
+boundaryReferenceTests carriers elf bin symbols disasm sections admitted parsed references = do
   let bss = [section | section <- admittedSections admitted, sectionAllocated section,
         sectionNoBits section, sectionName section == ".bss"]
       boundarySymbols = [(index, value) | (index, value) <- zip [0 :: Word32 ..] (ELF.elfSymbols parsed),
@@ -149,7 +156,7 @@ boundaryReferenceTests elf bin symbols disasm sections admitted parsed reference
               offset <- [ELF.sectionOffset relocation, ELF.sectionOffset relocation + 8
                 .. ELF.sectionOffset relocation + ELF.sectionSize relocation - 8],
               U.word32At elf (fromIntegral offset) == site]
-          run image target = Artifact.admit (patch 0 image contentOffset target)
+          run image target = Artifact.admit carriers (patch 0 image contentOffset target)
             (patch (extentLow fixedExtent) bin site target) symbols disasm sections
           refusedEndpoint name result = case result of
             Left (ReferenceOutside _ target) -> check name (target == end)
@@ -171,13 +178,13 @@ boundaryReferenceTests elf bin symbols disasm sections admitted parsed reference
           refused "boundary addend leaves endpoint" (ReferenceOutside site (end + 4)) (run metadata (end + 4))
           refusedEndpoint "sized symbol is not endpoint metadata" (run sized end)
           refused "endpoint metadata is not a branch destination" (ReferenceOutside site end)
-            (Artifact.admit (patch 0 direct contentOffset (branch site end))
+            (Artifact.admit carriers (patch 0 direct contentOffset (branch site end))
               (patch (extentLow fixedExtent) bin site (branch site end)) symbols disasm sections)
           case run undefinedSymbol end of
             Left (ElfRejected _) -> pure ()
             other -> H.failH ("undefined boundary symbol admitted: " ++ show other)
           refused "raw ELF/bin reference disagreement" (ExtentImageMismatch site 4)
-            (Artifact.admit (patch 0 metadata contentOffset end) (patch (extentLow fixedExtent) bin site (end + 4))
+            (Artifact.admit carriers (patch 0 metadata contentOffset end) (patch (extentLow fixedExtent) bin site (end + 4))
               symbols disasm sections)
         _ -> H.failH "fixture requires one relocation at its data-reference site"
     _ -> H.failH "fixture requires allocated BSS, __power_cpu_end and a data relocation"

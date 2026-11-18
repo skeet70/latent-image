@@ -98,6 +98,48 @@ xm1_rust_staticlib(
     for domain in ["a", "b"]
 ]
 
+# The fixed-bank bodies, joined into the Root image under domain-qualified symbols.
+[
+    xm1_rust_rlib(
+        name = "objects-bank-%s" % domain,
+        src = "stage/adapter.rs",
+        crate_name = "xm1_rtos_objects_bank_%s" % domain,
+        out = "arm/libxm1_rtos_objects_bank_%s.rlib" % domain,
+        data = [
+            "stage/abi.rs",
+            "stage/family.rs",
+            "src/admission.rs",
+            "src/block.rs",
+            "src/create.rs",
+            "src/id.rs",
+            "src/lib.rs",
+            "src/locked.rs",
+            "src/matching.rs",
+            "src/message.rs",
+            "src/order.rs",
+            "src/status.rs",
+            "src/teardown.rs",
+            "src/timeout.rs",
+            "src/wake.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
+        ],
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"stage\"'",
+            "--cfg",
+            "'feature=\"family\"'",
+            "--cfg",
+            "'feature=\"component\"'",
+            "--cfg",
+            "'feature=\"bank\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
 [
     xm1_rust_elf(
         name = "objects-family-stage-%s" % domain,

@@ -8,7 +8,11 @@ module Replacement.RtosPlatform.Aggregate
   , parseAggregateSymbols
   , parsePlacements
   , CarrierUnion (..)
+  , CarrierEntry (..)
+  , EntryBody (..)
   , parseCarrierUnion
+  , BankImage (..)
+  , parseBankImage
   , installPlacements
   , aggregateImage
   , symbolsWithPrefixes
@@ -20,7 +24,7 @@ module Replacement.RtosPlatform.Aggregate
   ) where
 
 import Control.Monad (foldM)
-import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:))
+import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:), (.:?))
 import Data.Bits (shiftR)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
@@ -67,13 +71,27 @@ parsePlacements bytes = do
   ParsedPlacements placements <- eitherDecodeStrict' bytes
   pure placements
 
--- | The fill word and the carrier extents of both domains, from the declared carrier union.
--- A staged loader is the stock loader with each carrier extent replaced by the aggregate
--- image's bytes where a symbol or placement covers them and by the fill word elsewhere.
+-- | Where an entry's body is linked: in its domain's loader carriers, or in the fixed bank
+-- behind a four-byte veneer at the entry.
+data EntryBody = LoaderBody | BankBody
+  deriving (Eq, Show)
+
+data CarrierEntry = CarrierEntry
+  { carrierEntryAddress :: Word32
+  , carrierEntrySymbol :: String
+  , carrierEntryBody :: EntryBody
+  }
+  deriving (Eq, Show)
+
+-- | The fill word, the carrier extents and the entries of both domains, from the declared
+-- carrier union. A staged loader is the stock loader with each carrier extent replaced by the
+-- aggregate image's bytes where a symbol or placement covers them and by the fill word elsewhere.
 data CarrierUnion = CarrierUnion
   { carrierFill :: Word32
   , carrierExtentsA :: [(Word32, Word32)]
   , carrierExtentsB :: [(Word32, Word32)]
+  , carrierEntriesA :: [CarrierEntry]
+  , carrierEntriesB :: [CarrierEntry]
   }
   deriving (Eq, Show)
 
@@ -83,20 +101,54 @@ instance FromJSON ParsedCarrierUnion where
   parseJSON = withObject "carrier union" $ \o -> do
     fill <- o .: "fill_word" >>= either fail pure . hexPlacement
     domains <- o .: "domains"
-    a <- carriersOf domains "a"
-    b <- carriersOf domains "b"
-    pure (ParsedCarrierUnion (CarrierUnion fill a b))
+    a <- domainOf domains "a"
+    b <- domainOf domains "b"
+    pure (ParsedCarrierUnion (CarrierUnion fill (fst a) (fst b) (snd a) (snd b)))
     where
-      carriersOf value label =
-        withObject "domains" (\domains -> domains .: label >>= withObject "domain" (\one -> one .: "carriers" >>= mapM carrier)) value
+      domainOf value label =
+        withObject "domains" (\domains -> domains .: label >>= withObject "domain" (\one ->
+          (,) <$> (one .: "carriers" >>= mapM carrier) <*> (one .: "entries" >>= mapM entry))) value
       carrier = withObject "carrier" $ \c ->
         (,) <$> (c .: "start" >>= either fail pure . hexPlacement)
             <*> (c .: "end" >>= either fail pure . hexPlacement)
+      entry = withObject "entry" $ \e ->
+        CarrierEntry
+          <$> (e .: "address" >>= either fail pure . hexPlacement)
+          <*> e .: "symbol"
+          <*> (e .:? "body" >>= entryBody)
+      entryBody body = case body :: Maybe T.Text of
+        Nothing -> pure LoaderBody
+        Just "bank" -> pure BankBody
+        Just other -> fail ("unknown entry body: " ++ T.unpack other)
 
 parseCarrierUnion :: B.ByteString -> Either String CarrierUnion
 parseCarrierUnion bytes = do
   ParsedCarrierUnion union <- eitherDecodeStrict' bytes
   pure union
+
+-- | The fixed bank body at the address its final link names with @__fixed_body_start@.
+data BankImage = BankImage
+  { bankBase :: Word32
+  , bankBytes :: B.ByteString
+  }
+  deriving (Eq, Show)
+
+-- | Binds a fixed body binary to the @llvm-nm -S --defined-only@ rows of the link that produced it.
+parseBankImage :: B.ByteString -> B.ByteString -> Either String BankImage
+parseBankImage symbols body = do
+  start <- boundary "__fixed_body_start"
+  end <- boundary "__fixed_body_end"
+  if toInteger end - toInteger start /= toInteger (B.length body) || B.null body
+    then Left ("fixed body spans " ++ show (B.length body) ++ " bytes, its symbols span " ++ show (toInteger end - toInteger start))
+    else Right (BankImage start body)
+  where
+    boundary :: String -> Either String Word32
+    boundary name = case [address | row <- C.lines symbols, (addressText : rest) <- [C.words row], lastName rest == Just name, [(address, "")] <- [readHex (C.unpack addressText)]] of
+      [address] | address <= toInteger (maxBound :: Word32) -> Right (fromInteger address)
+      _ -> Left ("fixed body symbols lack exactly one " ++ name)
+    lastName rest = case reverse rest of
+      (name : _) -> Just (C.unpack name)
+      [] -> Nothing
 
 hexPlacement :: T.Text -> Either String Word32
 hexPlacement text =
