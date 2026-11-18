@@ -577,7 +577,7 @@ deriveFor shape = case shape of
 stageFor :: PublicEntryShape -> CanonicalSource -> LinkedArtifact -> Either ArtifactError B.ByteString
 stageFor shape = case shape of
   CanonicalEntry -> stagedImage4Bytes
-  PublicWrapperEntry -> \source artifact -> stagedBytes <$> stageNativeImage4 source artifact
+  PublicWrapperEntry -> \source artifact -> stagedBytes <$> stageNativeImage4 AdmittedRetirement source artifact
 
 -- | The ids `--ids` lists as comma-separated hex, or Nothing for every id.
 subsetIds :: [String] -> IO (Maybe (S.Set PropertyId))

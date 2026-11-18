@@ -6,6 +6,7 @@ module Replacement.PropertyService.Artifact
   , ArtifactInput (..)
   , ArtifactPurpose (..)
   , StagedImage4
+  , RetirementAuthority (..)
   , NativeImage4View
   , StagedCandidate
   , StagedPlacement (..)

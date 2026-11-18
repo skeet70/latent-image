@@ -178,6 +178,38 @@ hullContractBytes = case A.decodeStrict contractBytes of
     ]
   scanImage name base bytes = object ["image" .= (name :: T.Text), "base" .= base, "bytes" .= B.length bytes, "sha256" .= digestOf bytes]
 
+-- A schema-2 contract whose wider carrier holds the owned storage accessors instead of the raw
+-- bank/save accessors.
+storageCarrierEnd :: Word32
+storageCarrierEnd = carrierStart + 0x300
+
+storageBoundaries :: [(StoreAccessor,Word32,[Word32],Int)]
+storageBoundaries = take 5 composedBoundaries
+
+storageLinked :: B.ByteString
+storageLinked = foldl' (\bytes (_,address,instructions,_) -> foldl' (\image (index,instruction) -> placed (address+index*4) instruction image) bytes (zip [0..] instructions))
+  (B.replicate (fromIntegral (storageCarrierEnd - carrierStart)) 0) storageBoundaries
+  where placed address value image = let offset = fromIntegral (address-carrierStart) in B.take offset image <> littleWords [value] <> B.drop (offset+4) image
+
+storageHullBindings :: B.ByteString -> Bindings
+storageHullBindings bytes = bindings {bindContract = contractFor, bindLinked = bytes, bindImages = hullImages}
+  where
+    offset address = fromIntegral (address - image4Base)
+    kept address = any (\(start, end) -> start <= address && address < end) retainedSpans
+    hullWords = B.concat [if kept address then B.take 4 (B.drop (offset address) canonicalHull4) else littleWords [fillWord] | address <- [getterEntry, getterEntry + 4 .. hullEnd' - 4]]
+    filled = B.take (offset getterEntry) canonicalHull4 <> hullWords <> B.drop (offset hullEnd') canonicalHull4
+    fill = littleWords (replicate ((fromIntegral (storageCarrierEnd - carrierStart) - B.length bytes) `div` 4) fillWord)
+    spliced = B.take (offset carrierStart) filled <> bytes <> fill <> B.drop (offset storageCarrierEnd) filled
+    staged = putWord getterEntry getterAdapter (putWord setterEntry setterAdapter spliced)
+    contractFor = case A.decodeStrict hullContractBytes of
+      Just (Object fields) -> BL.toStrict (A.encode (Object (KM.union (KM.fromList
+        [ "carrier" .= object ["start" .= carrierStart, "end" .= storageCarrierEnd, "fill_word" .= fillWord]
+        , "linked_sha256" .= digestOf bytes, "linked_bytes" .= B.length bytes
+        , "staged_image4_sha256" .= digestOf staged
+        , "stack" .= object ["entries" .= [object ["name" .= storeAccessorName accessor, "entry" .= address] | (accessor,address,_,_) <- storageBoundaries]]
+        ]) fields)))
+      _ -> error "hullContractBytes is not an object"
+
 composedCodeStart :: Word32
 composedCodeStart = 0x627578
 

@@ -81,6 +81,12 @@ main = do
         (isLeft (do inputs <- composedInputs
                     let contract = inputContract inputs
                     derivePlan inputs{inputContract=contract{contractEntries=[("xm1_bank_store8",composedCodeStart)]}}))
+    , check "a property-only contract naming storage accessors checks them in its carrier"
+        (case fixturePlanInputs OwnedRole (storageHullBindings storageLinked) >>= derivePlan of
+          Right plan -> all (\(accessor,address,_,index) -> M.lookup (address+fromIntegral (index*4)) (planStores plan) == Just accessor) storageBoundaries
+          Left _ -> False)
+    , check "a property-only storage accessor with a changed encoding is refused"
+        (isLeft (fixturePlanInputs OwnedRole (storageHullBindings (B.take 4 storageLinked <> littleWords [0] <> B.drop 8 storageLinked)) >>= derivePlan))
     , check "guarded absolute stores resolve their actual destination and reject whole-write overflow"
         (storeEffect StorageByte [0x409c295c,0xab] == Just (0x409c295c,1,0xab)
           && storeEffect StorageHalf [0x96d1a9,0x1234] == Nothing

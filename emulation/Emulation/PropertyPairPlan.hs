@@ -736,10 +736,23 @@ deriveStoragePlan inputs matrix = do
   forM_ added $ \(address,_) -> unless (M.notMember address (planSites plan)) (Left "storage lifecycle trace site collides with the property plan")
   pure plan {planSites=M.union (M.fromList added) (planSites plan),planReads=M.union (M.fromList readRanges) (planReads plan)}
 
+-- | The checked accessor stores. A property-only contract that names the raw bank/save accessors
+-- uses them; one without them uses the owned storage accessors in its carrier.
 storeSites :: Contract -> B.ByteString -> Either String [(Word32, StoreAccessor)]
 storeSites contract linked = case contractPublication contract of
-  Nothing -> legacyStoreSites contract linked
-  Just publication -> concat <$> forM [StorageByte,StorageHalf,CustomByte,CustomHalf,CustomWord,OutputByte,OutputHalf,StatusWord] (\accessor -> do
+  Nothing
+    | any ((`elem` map storeAccessorName [BankStore8,BankStore16,SaveStore8,SaveStore16]) . fst) (contractEntries contract) -> legacyStoreSites contract linked
+    | otherwise ->
+        checkedStoreSites contract (contractCarrierStart contract) [propertyCarrier] [StorageByte,StorageHalf,OutputByte,OutputHalf,StatusWord] linked
+  Just publication ->
+    checkedStoreSites contract image4Base (propertyCarrier : publicationCarriers publication) [StorageByte,StorageHalf,CustomByte,CustomHalf,CustomWord,OutputByte,OutputHalf,StatusWord] linked
+  where
+    propertyCarrier = PhysicalRange (contractCarrierStart contract) (contractCarrierEnd contract)
+
+-- | Each accessor's entries in `linked`, whose first byte is at `base`, with their exact encodings
+-- inside `carriers`.
+checkedStoreSites :: Contract -> Word32 -> [PhysicalRange] -> [StoreAccessor] -> B.ByteString -> Either String [(Word32, StoreAccessor)]
+checkedStoreSites contract base carriers accessors linked = concat <$> forM accessors (\accessor -> do
     let name = storeAccessorName accessor
         entries = [entry | (candidate,entry) <- contractEntries contract, candidate == name]
         (expected,index) = case accessor of
@@ -752,12 +765,11 @@ storeSites contract linked = case contractPublication contract of
           OutputHalf -> (StorageEncoding.storageOutputWords StorageEncoding.StorageHalf,12)
           StatusWord -> (StorageEncoding.storageStatusWords,2)
           _ -> ([],0)
-        carriers = PhysicalRange (contractCarrierStart contract) (contractCarrierEnd contract) : publicationCarriers publication
     unless (not (null entries) && length entries == S.size (S.fromList entries)) (Left (T.unpack name ++ ": missing or duplicate boundary instance"))
     forM entries $ \entry -> do
       let size = 4*length expected
-          offset = fromIntegral (entry-image4Base)
-      unless (entry >= image4Base && offset+size <= B.length linked && any (\region -> entry >= rangeStart region && toInteger entry+toInteger size <= toInteger (rangeEnd region)) carriers) (Left (T.unpack name ++ ": boundary outside admitted carriers"))
+          offset = fromIntegral (entry-base)
+      unless (entry >= base && offset+size <= B.length linked && any (\region -> entry >= rangeStart region && toInteger entry+toInteger size <= toInteger (rangeEnd region)) carriers) (Left (T.unpack name ++ ": boundary outside admitted carriers"))
       unless ([word32At linked (offset+word*4) | word <- [0..length expected-1]] == expected) (Left (T.unpack name ++ ": checked boundary encoding differs"))
       pure (entry+fromIntegral (index*4),accessor))
 

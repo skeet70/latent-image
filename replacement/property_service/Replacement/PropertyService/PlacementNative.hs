@@ -13,8 +13,17 @@ module Replacement.PropertyService.PlacementNative
 import qualified Data.Set as S
 import Data.List.NonEmpty (NonEmpty)
 import Replacement.PropertyService.Placement
+import Replacement.PropertyService.RetainedClosure (ClosedSite, closesHit)
 import qualified Replacement.PropertyService.RetainedGvff as Gvff
-import qualified Replacement.PropertyService.RetainedScalar as Scalar
+import Replacement.PropertyService.RetainedImage4EarlyTables (image4EarlyTableClosures)
+import Replacement.PropertyService.RetainedImage5Blocks (image5BlockClosures)
+import Replacement.PropertyService.RetainedImage5Cfg (image5CfgClosures)
+import Replacement.PropertyService.RetainedImage5Tables (image5TableClosures)
+import Replacement.PropertyService.RetainedPlainBlocks (plainBlockClosures)
+import Replacement.PropertyService.RetainedPlainCfg (plainCfgClosures)
+import Replacement.PropertyService.RetainedPlainTables (plainTableClosures)
+import Replacement.PropertyService.RetainedScalar (scalarClosures)
+import Replacement.PropertyService.RetainedStrings (stringClosures)
 import ServiceInventory (Image)
 
 retiredRegions :: [Carrier]
@@ -31,14 +40,24 @@ retiredReferences images =
   [ hit
   | region <- retiredRegions
   , hit <- scanReferences region images S.empty
-  , not (provedInstruction hit)
+  , not (any (`closesHit` hit) closures)
   , not (hitImage hit == ScanImage4 && any (\retired -> inCarrier retired (hitSite hit)) retiredRegions)
   ]
   where
-    proofs = [(label, proof) | (label, image) <- images, Just proof <- [Scalar.deriveInstructionProof image]]
-    provedInstruction hit =
-      hitReference hit == WordInto
-        && maybe False (\proof -> Scalar.scalarProvesNonPointer proof (hitSite hit) (hitWord hit)) (lookup (hitImage hit) proofs)
+    closures = retainedClosures images
+
+retainedClosures :: [(ScanImage, Image)] -> [ClosedSite]
+retainedClosures images = concatMap ($ images)
+  [ scalarClosures
+  , plainCfgClosures
+  , image5CfgClosures
+  , image4EarlyTableClosures
+  , plainBlockClosures
+  , stringClosures
+  , image5TableClosures
+  , image5BlockClosures
+  , plainTableClosures
+  ]
 
 data RetainedFieldEvidence = RetainedGvffField
   { retainedFieldHit :: ScanHit

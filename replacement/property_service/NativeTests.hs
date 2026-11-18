@@ -188,9 +188,10 @@ placementTests properties artifact = do
       word address = U.word32At staged (fromIntegral (address - 0x61c400))
   expect "owned public getter branch" (branchWord False 0x61e110 getter) (word 0x61e110)
   expect "owned public setter branch" (branchWord False 0x624694 setter) (word 0x624694)
-  expect "retired getter bytes are not reused" 0 (word 0x61e128)
-  expect "retired setter shared exit is not reused" 0 (word 0x630200)
+  expect "retired getter body is trapped" 0xe7f000f0 (word 0x61e128)
+  expect "retired setter body is trapped" 0xe7f000f0 (word 0x630200)
   expect "unaltered wrapper" 0 (word 0x6245f8)
+  expect "stock word past the setter body" 0 (word 0x6309c4)
   expect "valid locally placed image" (Right ()) (validateLocalImage4 artifact stock staged)
   let refusal label address value = expectRefusal label StagingRejected (validateLocalImage4 artifact stock (changed address value staged))
   refusal "getter redirected" 0x61e110 (branchWord False 0x61e110 setter)
@@ -276,7 +277,7 @@ canonicalTests inputs paths = do
           expect "native readback identity" (Just (toJSON (SHA.sha256Hex (SHA.sha256 bytes)))) (KM.lookup "native_image4_sha256" identity)
         _ -> fail "native view identity is not an object"
       let hits = nativeRetiredReferences source
-      expect "strict canonical reference refusal" 188 (length hits)
+      expect "strict canonical reference refusal" 137 (length hits)
       let at label address hit = hitImage hit == label && hitSite hit == GuestAddress address
           fields = sourceRetainedFieldEvidence source hits
           proved = [(ScanImage4,0x6a49ac),(ScanImage5,0xd96fac),(ScanImage5,0xee99e0),(ScanImage5,0xee9a2c),(ScanPlain,0x11126e0),(ScanPlain,0x1112764)]
@@ -288,12 +289,14 @@ canonicalTests inputs paths = do
         (all (\field -> all (`elem` retainedFieldUnclosedPremises field) [Callback890facWriteClosure,LabelPayloadAliasClosure,ProductionFieldAndDispatchLifetime]) fields)
       expect "FDL fields remain unproved" True
         (all (\address -> any (at ScanImage3 address) hits) [0x3f8078,0x3f807c,0x3fadf0,0x3fb1e8,0x4031b8,0x3fb858])
-      expect "legacy entropy window cannot discharge a branch"
-        [ScanHit ScanPlain (GuestAddress 0x12ba48c) 0xcacdc8b4 (BranchInto (GuestAddress 0x62c764))]
+      expect "WLAN firmware block bytes are not a branch" []
         [hit | hit <- hits, at ScanPlain 0x12ba48c hit]
       let changed = Image "image4" "" 0x61c400 (putWordAt 0x61c400 0x6a4918 0xe320f000 four)
       expect "changed retained function withdraws its instruction binding" True
         (any (at ScanImage4 0x6a49ac) (retiredReferences [(ScanImage4,changed)]))
+      let changedBlock = [(label, if label == ScanPlain then image {imageBytes = putWordAt (imageBase image) 0x12c0000 0 (imageBytes image)} else image) | (label, image) <- sourceScanned source]
+      expect "changed WLAN firmware block withdraws its closure" True
+        (any (at ScanPlain 0x12ba48c) (retiredReferences changedBlock))
     _ -> fail "canonical tests require seven input paths"
 
 admitImages :: [FilePath] -> IO ()
