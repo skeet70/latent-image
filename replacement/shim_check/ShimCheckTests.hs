@@ -137,6 +137,15 @@ main = H.withTemporary "shim-check-behavior" $ \root -> do
   B.writeFile (root </> "fixture.elf") absoluteBytes
   declaredImport <- run (withRow row {rowEvidence = [evidence,evidence {evidenceKind = Import,evidenceSymbols = [SymbolName "retained_service"]}]}) (Manifest [image {imageImports = [SymbolName "retained_service"],imageExpected = Just (digestBytes absoluteBytes)}] [])
   unless (isRight declaredImport) (H.failH "allowlisted import with its family should remain admitted")
+  -- A constant branch to a global label one past .text (0x100c) is not allocated; only this image's own publication
+  -- row may declare it.
+  let endpointBytes = fixtureWithValues [0xe59f1000,0xe12fff11,0x100c] [("xm1_fixture",1,0x12,0x1000),("__fixture_end",1,0x10,0x100c)]
+      endpointImage = image {imageExpected = Just (digestBytes endpointBytes)}
+      endpointLabel = evidence {evidenceKind = Publication,evidenceSymbols = [SymbolName "__fixture_end"],evidenceContract = Just (ContractPath "fixture.ld")}
+  B.writeFile (root </> "fixture.elf") endpointBytes
+  expect UnexpectedImport (run (withRow row {rowEvidence = [evidence,endpointLabel {evidenceKind = Layout}]}) (Manifest [endpointImage] []))
+  endpointResult <- run (withRow row {rowEvidence = [evidence,endpointLabel]}) (Manifest [endpointImage] [])
+  unless (isRight endpointResult) (H.failH "a published endpoint label of this image should bound its own reference")
   let undeclaredDirectory = root </> "replacement/undeclared"
       rootDirectory = root </> "replacement/rtos_timer"
   createDirectoryIfMissing True undeclaredDirectory
@@ -203,13 +212,16 @@ fixtureWithBindings :: [(String,Word32,Word8)] -> B.ByteString
 fixtureWithBindings = fixtureWithInstructions [0xe12fff1e]
 
 fixtureWithInstructions :: [Word32] -> [(String,Word32,Word8)] -> B.ByteString
-fixtureWithInstructions instructions functions = B.concat [header,B.replicate (0x100 - B.length header) 0,text,names,strings,symbols,sections]
+fixtureWithInstructions instructions functions = fixtureWithValues instructions [(name,sectionIndex,binding,0x1000) | (name,sectionIndex,binding) <- functions]
+
+fixtureWithValues :: [Word32] -> [(String,Word32,Word8,Word32)] -> B.ByteString
+fixtureWithValues instructions functions = B.concat [header,B.replicate (0x100 - B.length header) 0,text,names,strings,symbols,sections]
   where
     text = B.concat (map w32 instructions)
     names = C.pack "\0.text\0.shstrtab\0.strtab\0.symtab\0"
-    strings = B.singleton 0 <> C.pack (concatMap (\(name,_,_) -> name ++ "\0") functions)
-    offsets = snd (mapAccumL (\offset (name,_,_) -> (offset + length name + 1,offset)) 1 functions)
-    symbols = B.replicate 16 0 <> B.concat [w32 (fromIntegral offset) <> w32 0x1000 <> w32 (fromIntegral (B.length text)) <> B.pack [binding,0] <> w16 sectionIndex | (offset,(_,sectionIndex,binding)) <- zip offsets functions]
+    strings = B.singleton 0 <> C.pack (concatMap (\(name,_,_,_) -> name ++ "\0") functions)
+    offsets = snd (mapAccumL (\offset (name,_,_,_) -> (offset + length name + 1,offset)) 1 functions)
+    symbols = B.replicate 16 0 <> B.concat [w32 (fromIntegral offset) <> w32 value <> w32 (fromIntegral (B.length text)) <> B.pack [binding,0] <> w16 sectionIndex | (offset,(_,sectionIndex,binding,value)) <- zip offsets functions]
     namesAt = 0x100 + B.length text
     stringsAt = namesAt + B.length names
     symbolsAt = stringsAt + B.length strings

@@ -216,7 +216,12 @@ checkImage units image digest elf = do
   let declared = S.fromList (concatMap (evidenceSymbols . snd) active)
       seamNames = [SymbolName text | symbol <- E.globalSymbols elf, let text = E.symbolName symbol, not (rustItem text), E.symbolSection symbol /= E.Undefined, E.symbolSection symbol /= E.Absolute]
   forM_ seamNames $ \name -> require (S.member name declared) MissingDeclaration (show (imageId image,name))
-  let declaredTargets = S.fromList (concatMap (evidenceTargets . snd) active ++ [GuestAddress (E.symbolValue symbol) | symbol <- E.globalSymbols elf, E.symbolSection symbol == E.Absolute, SymbolName (E.symbolName symbol) `elem` imageImports image, S.member (SymbolName (E.symbolName symbol)) declared])
+  -- A reference may name an absolute import declared by its family or a layout label this image defines and its own
+  -- publication rows declare: a linker end label such as a BSS endpoint lies one past its allocated section.
+  let published = S.fromList [name | (_,evidence) <- active, evidenceKind evidence == Publication, name <- evidenceSymbols evidence]
+      declaredTargets = S.fromList (concatMap (evidenceTargets . snd) active
+        ++ [GuestAddress (E.symbolValue symbol) | symbol <- E.globalSymbols elf, E.symbolSection symbol == E.Absolute, SymbolName (E.symbolName symbol) `elem` imageImports image, S.member (SymbolName (E.symbolName symbol)) declared]
+        ++ [GuestAddress (E.symbolValue symbol) | symbol <- E.globalSymbols elf, E.symbolSection symbol `notElem` [E.Undefined,E.Absolute], S.member (SymbolName (E.symbolName symbol)) published])
   forM_ (S.toList linkedReferences) $ \target@(GuestAddress address) -> require (allocated address || S.member target declaredTargets) UnexpectedImport (show (imageId image,target))
   forM_ [(row,evidence) | unit <- units, unitId unit `elem` imageUnits image, row <- unitRows unit, evidence <- rowEvidence row, evidenceKind evidence == Reference] $ \(row,evidence) ->
     forM_ (evidenceSymbols evidence) $ \name -> require (not (M.member name symbols)) ContradictorySeam (show (rowId row,imageId image,name))
