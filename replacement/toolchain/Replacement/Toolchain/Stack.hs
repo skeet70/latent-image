@@ -53,6 +53,8 @@ data FrameState = FrameState
   { frameSp :: FrameOffset
   , frameFp :: Maybe FrameOffset
   , frameFallthrough :: Int
+  -- | Registers holding the CPSR this function read and has not overwritten since.
+  , frameStatus :: S.Set A.Reg
   } deriving (Eq)
 
 data FrameVisit = FrameVisit Guest FrameState
@@ -202,14 +204,22 @@ frameBytes entries nonReturning image function = do
                       (frameSp old)
                       (if frameFp old == frameFp incoming then frameFp old else Nothing)
                       (min (frameFallthrough old) (frameFallthrough incoming))
+                      (S.intersection (frameStatus old) (frameStatus incoming))
                 in if merged == old then walk seen best rest else step merged
           Nothing -> step incoming
         where
-          step state = do
+          step entered = do
             unless (present address) refused
             word <- wordAt image address
             let instruction = A.decode address word
                 writtenRegisters = W.writes address word
+                state = entered { frameStatus = case instruction of
+                  A.ReadStatus (A.Cond 14) destination -> S.insert destination (frameStatus entered)
+                  _ -> foldr S.delete (frameStatus entered) writtenRegisters }
+                restoresSnapshot = case A.statusWrite word of
+                  Just (A.StatusWrite (A.Cond 14) A.CurrentStatus _ (A.StatusFromRegister source)) ->
+                    S.member source (frameStatus entered)
+                  _ -> False
             case instruction of
               A.Load {} | A.sp `elem` writtenRegisters -> refused
               _ -> pure ()
@@ -254,15 +264,15 @@ frameBytes entries nonReturning image function = do
                     conditional condition address state []
                   W.ModeWrite _ -> do
                     preserving <- modeWritePreserves address state
-                    if preserving then next address state else refused
+                    if preserving || restoresSnapshot then next address state else refused
                   _ -> refused
                 pure (sp state, ordinary)
-            walk (M.insert point state seen) (max best stepPeak) (visits ++ rest)
+            walk (M.insert point entered seen) (max best stepPeak) (visits ++ rest)
   unless (size > 0 && size `mod` 4 == 0 && start `mod` 4 == 0
     && end <= toInteger (maxBound :: Word32) && start >= firstByte
     && end <= toInteger firstByte + toInteger (B.length (imageBytes image)))
     (Left (InvalidFunction (Guest start)))
-  peak <- walk M.empty 0 [FrameVisit (Guest start) (FrameState (FrameOffset 0) Nothing 0)]
+  peak <- walk M.empty 0 [FrameVisit (Guest start) (FrameState (FrameOffset 0) Nothing 0 S.empty)]
   unless (peak <= toInteger (maxBound :: Int)) refused
   pure (fromInteger peak)
 

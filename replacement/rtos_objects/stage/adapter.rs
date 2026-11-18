@@ -83,6 +83,18 @@ extern "C" {
 
 struct Cpu;
 
+/// Sets CPSR I and F to their bits in `saved`; mode, A and T are not written.
+#[cfg(feature = "bank")]
+#[inline(always)]
+fn restore_if(saved: u32) {
+    match saved & 0xc0 {
+        0 => unsafe { asm!("cpsie if", options(nostack)) },
+        0x40 => unsafe { asm!("cpsid f", "cpsie i", options(nostack)) },
+        0x80 => unsafe { asm!("cpsid i", "cpsie f", options(nostack)) },
+        _ => unsafe { asm!("cpsid if", options(nostack)) },
+    }
+}
+
 #[inline(always)]
 fn load(address: GuestAddress) -> u32 {
     unsafe { read_volatile(address.0 as *const u32) }
@@ -116,6 +128,9 @@ impl Machine for Cpu {
     }
 
     fn restore_interrupts(&self, saved: SavedInterrupts) {
+        #[cfg(feature = "bank")]
+        restore_if(saved.0);
+        #[cfg(not(feature = "bank"))]
         unsafe { asm!("msr cpsr_fc, {saved}", saved = in(reg) saved.0, options(nostack)) };
     }
 

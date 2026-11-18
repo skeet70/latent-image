@@ -59,6 +59,9 @@ impl IrqScope for Cpu {
     }
 
     fn restore_i(&self, saved: SavedMask) {
+        #[cfg(feature = "bank")]
+        super::restore_if(saved.0);
+        #[cfg(not(feature = "bank"))]
         unsafe { core::arch::asm!("msr cpsr_fc, {saved}", saved = in(reg) saved.0, options(nostack)) };
     }
 }
@@ -117,20 +120,25 @@ fn mask_lifecycle() -> LifecycleMask {
 
 #[inline(never)]
 fn restore_lifecycle(saved: LifecycleMask) {
-    let current: u32;
-    let restored: u32;
-    unsafe {
-        core::arch::asm!(
-            "mrs {current}, cpsr",
-            "bic {restored}, {current}, #0xc0",
-            "orr {restored}, {restored}, {saved}",
-            "msr cpsr_c, {restored}",
-            current = out(reg) current,
-            restored = out(reg) restored,
-            saved = in(reg) saved.0,
-            options(nostack),
-        )
-    };
+    #[cfg(feature = "bank")]
+    super::restore_if(saved.0);
+    #[cfg(not(feature = "bank"))]
+    {
+        let current: u32;
+        let restored: u32;
+        unsafe {
+            core::arch::asm!(
+                "mrs {current}, cpsr",
+                "bic {restored}, {current}, #0xc0",
+                "orr {restored}, {restored}, {saved}",
+                "msr cpsr_c, {restored}",
+                current = out(reg) current,
+                restored = out(reg) restored,
+                saved = in(reg) saved.0,
+                options(nostack),
+            )
+        };
+    }
 }
 
 /// Stock retry addresses `0x488e8` / `0x4892c`.
