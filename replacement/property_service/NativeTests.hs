@@ -277,7 +277,7 @@ canonicalTests inputs paths = do
           expect "native readback identity" (Just (toJSON (SHA.sha256Hex (SHA.sha256 bytes)))) (KM.lookup "native_image4_sha256" identity)
         _ -> fail "native view identity is not an object"
       let hits = nativeRetiredReferences source
-      expect "strict canonical reference refusal" 137 (length hits)
+      expect "strict canonical reference refusal" 109 (length hits)
       let at label address hit = hitImage hit == label && hitSite hit == GuestAddress address
           fields = sourceRetainedFieldEvidence source hits
           proved = [(ScanImage4,0x6a49ac),(ScanImage5,0xd96fac),(ScanImage5,0xee99e0),(ScanImage5,0xee9a2c),(ScanPlain,0x11126e0),(ScanPlain,0x1112764)]
@@ -287,8 +287,8 @@ canonicalTests inputs paths = do
       expect "GVFF findings remain refused" True (all ((`elem` hits) . retainedFieldHit) fields)
       expect "known GVFF alias and lifetime premises remain" True
         (all (\field -> all (`elem` retainedFieldUnclosedPremises field) [Callback890facWriteClosure,LabelPayloadAliasClosure,ProductionFieldAndDispatchLifetime]) fields)
-      expect "FDL fields remain unproved" True
-        (all (\address -> any (at ScanImage3 address) hits) [0x3f8078,0x3f807c,0x3fadf0,0x3fb1e8,0x4031b8,0x3fb858])
+      expect "FDL format fields are not references" []
+        [hit | hit <- hits, hitImage hit == ScanImage3]
       expect "WLAN firmware block bytes are not a branch" []
         [hit | hit <- hits, at ScanPlain 0x12ba48c hit]
       let changed = Image "image4" "" 0x61c400 (putWordAt 0x61c400 0x6a4918 0xe320f000 four)

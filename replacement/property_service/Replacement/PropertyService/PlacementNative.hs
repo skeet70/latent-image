@@ -15,7 +15,9 @@ import Data.List.NonEmpty (NonEmpty)
 import Replacement.PropertyService.Placement
 import Replacement.PropertyService.RetainedClosure (ClosedSite, closesHit)
 import qualified Replacement.PropertyService.RetainedGvff as Gvff
+import Replacement.PropertyService.RetainedFdl (fdlClosures)
 import Replacement.PropertyService.RetainedImage4EarlyTables (image4EarlyTableClosures)
+import Replacement.PropertyService.RetainedImage4Pcm (pcmClosures)
 import Replacement.PropertyService.RetainedImage5Blocks (image5BlockClosures)
 import Replacement.PropertyService.RetainedImage5Cfg (image5CfgClosures)
 import Replacement.PropertyService.RetainedImage5Tables (image5TableClosures)
@@ -57,6 +59,8 @@ retainedClosures images = concatMap ($ images)
   , image5TableClosures
   , image5BlockClosures
   , plainTableClosures
+  , fdlClosures
+  , pcmClosures
   ]
 
 data RetainedFieldEvidence = RetainedGvffField
