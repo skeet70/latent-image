@@ -34,6 +34,9 @@ const ADDRESS_LIMIT: usize = 32_768;
 const INSTRUCTION_LIMIT: u64 = 1_500_000_000;
 const WATCH_LIMIT: usize = 1 << 20;
 const WATCH_ROTATE_ROWS: usize = WATCH_LIMIT / 2;
+/// One observed step between rotation checks; below a quarter of the rotation headroom so a step that
+/// starts just under the rotation threshold cannot fill the watch even when every instruction is a watched fetch.
+const CONTEXT_STEP_INSTRUCTIONS: u64 = ((WATCH_LIMIT - WATCH_ROTATE_ROWS) / 4) as u64;
 const SEGMENT_INSTRUCTIONS: u64 = 50_000_000;
 const DISPATCH_LIMIT: usize = 200_000;
 const WATCH_DECL_LIMIT: usize = 16;
@@ -1140,7 +1143,7 @@ impl<'a> Census<'a> {
             require(before < INSTRUCTION_LIMIT, "census instruction bound exceeded")?;
             let before_tick = machine.session.board.now();
             machine.traces.hits.clear();
-            let budget = if self.context.is_some() { (INSTRUCTION_LIMIT - before).min(1_000_000) } else { INSTRUCTION_LIMIT - before };
+            let budget = if self.context.is_some() { (INSTRUCTION_LIMIT - before).min(CONTEXT_STEP_INSTRUCTIONS) } else { INSTRUCTION_LIMIT - before };
             let outcome = deadline.run(machine, budget);
             machine.require_running()?;
             require(matches!(outcome, RunOutcome::Stopped | RunOutcome::Completed), "unexpected census run outcome")?;

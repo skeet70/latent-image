@@ -284,7 +284,7 @@ fn record_view_uses_owned_capture_offset_and_constant_restore_adjustment() {
             view.updated_position,
             view.position_halfword,
         ),
-        (525, 0, (-12i32) as u32, (-30i16) as u16, 7, 7, 0x1234),
+        (525, 0, (-12i32) as u32, 2530, 7, 7, 0x1234),
     );
     let entered = machine.take_entered();
     assert!(!entered.iter().any(|(address, _)| {

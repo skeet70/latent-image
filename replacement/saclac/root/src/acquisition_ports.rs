@@ -172,11 +172,12 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1 + ImgDc + S
             let profile_position = u32::from(profile_position);
             (profile_position, profile_position, profile_position_halfword)
         };
+        // 0xef74ac: the configured byte (0x69fffc over 0x69f8fc) times ten; the following key is a separate band row.
         let decade_index = match profile_index { 2 => 1, 3 => 2, 4 => 3, 5 => 4, _ => 0 };
-        let decade = (xm1_saclac_shared::settings::halfword(
+        let decade = u16::from(xm1_saclac_shared::settings::Adjustments::byte(
             &self.services.stock,
             AdjustmentKey(0x4a24 + decade_index),
-        ) as i16).wrapping_mul(10) as u16;
+        )).wrapping_mul(10);
         RecordView {
             start: Start::of(self.shared(record, &c::AT_0140)), selection: profile_selection(u32::from(selected)),
             s1_mode: AcquisitionMode(u32::from(profile_position)),
