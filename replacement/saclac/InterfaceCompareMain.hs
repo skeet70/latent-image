@@ -2,6 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main (main) where
 
+import Control.Monad (join, unless)
 import Data.Aeson
 import qualified Data.Aeson.Types as J
 import qualified Data.ByteString.Lazy as L
@@ -97,6 +98,8 @@ data Receipt = Receipt
   , watches :: [Watch]
   , observationStart :: Integer
   , checkpointAt :: Maybe Integer
+  -- | The board tick of a board-clock schedule's `end` stimulus, when the run stopped exactly there.
+  , scheduleEnd :: Maybe Integer
   , inputBindings :: [Binding]
   , observationError :: Maybe String
   , machineFailure :: Maybe String
@@ -114,8 +117,21 @@ instance FromJSON Receipt where
     checkpoint <- value .:? "checkpoint"
     checkpointTick <- traverse (withObject "checkpoint" $ \row ->
       withObject "checkpoint record" (.: "instructions") =<< row .: "record") checkpoint
+    executed <- value .: "instructions"
+    stimuli <- value .:? "stimuli"
+    ending <- traverse (withObject "stimuli" $ \row -> do
+      clock <- row .: "clock"
+      points <- row .: "points" :: J.Parser [Value]
+      final <- case reverse points of
+        point : _ -> withObject "stimulus point" (\entry -> do
+          action <- withObject "stimulus" (.: "action") =<< entry .: "stimulus"
+          tick <- entry .: "tick"
+          at <- entry .: "instructions"
+          pure (if (action :: String) == "end" && at == (executed :: Integer) then Just tick else Nothing)) point
+        [] -> pure Nothing
+      pure (if (clock :: String) == "board-ticks" then final else Nothing)) stimuli
     Receipt name (concatMap (normalize . observedEvent) rows) rows phases (sum fetches)
-      watches start checkpointTick bindings <$> value .:? "error" <*> value .:? "machine_failure"
+      watches start checkpointTick (join ending) bindings <$> value .:? "error" <*> value .:? "machine_failure"
 
 normalize :: Event -> [Event]
 normalize (Store (Address address) bytes) = zipWith (\offset byte -> Store (Address (address + offset)) [byte]) [0..] bytes
@@ -182,14 +198,17 @@ projectionInputs receipt = case inputBindings receipt of
   run : _firmware : rest -> Just (run : rest)
   _ -> Nothing
 
--- | A side's stream, closed by the milestone marker, and the marker's index. @window-end@ closes
--- a route resumed at the saved post-boot checkpoint after its last event; a census milestone the
--- side reached closes it at that instruction and drops later events. A side that reaches neither
--- carries no marker.
+-- | A side's stream, closed by the milestone marker, and the marker's index. @window-end@ closes a
+-- side after its last event when it is a route resumed at the saved post-boot checkpoint, or a
+-- continuous board-clock route that stopped exactly at its schedule's `end` stimulus; the caller
+-- requires every side's end at the same board tick. A census milestone the side reached closes it
+-- at that instruction and drops later events. A side that reaches neither carries no marker.
 project :: Maybe String -> Receipt -> ([Value], Int)
 project Nothing receipt = (map toJSON (events receipt), length (events receipt))
 project (Just phase) receipt
   | phase == "window-end", Just tick <- checkpointAt receipt, tick > 0, tick == observationStart receipt =
+      (map toJSON (events receipt) ++ [marker], length (events receipt))
+  | phase == "window-end", checkpointAt receipt == Nothing, Just _ <- scheduleEnd receipt =
       (map toJSON (events receipt) ++ [marker], length (events receipt))
   | Just tick <- reachedAt =<< find ((== phase) . reachedPhase) (milestones receipt) =
       let left = concatMap (normalize . observedEvent) (takeWhile ((<= tick) . observedInstructions) (timedEvents receipt))
@@ -252,6 +271,14 @@ main = do
   stock <- applyProjection Payload.StockRole declaration stockReceipt
   candidate <- applyProjection candidateRole declaration candidateReceipt
   control <- applyProjection controlRole declaration controlReceipt
+  -- A continuous window end is one bound only when every side stopped at the same scheduled tick.
+  let sides = [stock, candidate, control]
+      continuous = all ((== Nothing) . checkpointAt) sides
+      sameEnd = case map scheduleEnd sides of
+        first : rest -> first /= Nothing && all (== first) rest
+        [] -> False
+  unless (phase /= Just "window-end" || not continuous || sameEnd)
+    (H.failH "window-end needs every continuous side to stop at the same scheduled end tick")
   let sameScenario = scenario stock == scenario candidate && scenario stock == scenario control
       sameInputs = case map projectionInputs [stock, candidate, control] of
         [Just left, Just middle, Just right] -> left == middle && left == right
