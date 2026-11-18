@@ -5,7 +5,7 @@ module Emulation.PlaybackOwned
   , guestArtifacts, checkGuestArtifacts, watchRequest, validateWatchBegin
   , originalBodies, checkOriginalBodies
   , Witness, sourceObserved, modeObserved, witness, witnessValue
-  , QualificationScope (..), requiredObservations, qualificationObserved, qualificationScope, qualificationScopeText
+  , QualificationScope (..), requiredObservations, qualificationObserved, qualificationScope, qualificationScopeText, ownsEntry
   , QualificationEvidence, qualificationEvidence, preparationWitness, playWitness
   , requiredEpochObservations, qualificationEpochsObserved, qualificationEvidenceValue
   , DeviceOwnership (..), deviceOwnership, deviceServices, releasedObservation
@@ -121,8 +121,9 @@ parsePackage manifestBytes metadataBytes runtime elfBytes = do
     2 -> pure C.preparationEntries
     6 -> pure C.transactionEntries
     8 -> pure C.consumerPlaybackEntries
-    17 -> pure C.playbackEntries
-    _ -> Left "owned playback requires exactly the preparation pair, JPEG transaction, JPEG consumers or full JPEG lifecycle"
+    17 -> pure (C.consumerPlaybackEntries ++ C.lifecycleEntries)
+    20 -> pure C.playbackEntries
+    _ -> Left "owned playback requires exactly the preparation pair, JPEG transaction, JPEG consumers, JPEG lifecycle or develop consumers"
   bindings <- forM entries $ \entry -> do
     let (site, end, name, sourceDigest) = contract entry
     hook <- case [h | h <- hooks, at "address" h == Right (Address site)] of
@@ -167,7 +168,7 @@ parsePackage manifestBytes metadataBytes runtime elfBytes = do
     ensure (any (\p -> at "address" p == Right (Address site) && field "phase" p == Right (String "activation")) publications
       && any (\p -> at "address" p == Right (Address (site + 4)) && field "phase" p == Right (String "setup")) publications) "publication phases differ"
   case field "experiment_layout" manifest of
-    Left _ -> ensure (length hooks /= 17) "full JPEG lifecycle requires linked installer layout"
+    Left _ -> ensure (length hooks < 17) "full JPEG lifecycle requires linked installer layout"
     Right layout -> do
       Address tableOffset <- at "table_offset" layout
       Address installerEnd <- at "installer_end_offset" layout
@@ -403,7 +404,10 @@ sourceObserved = entryObserved C.PlaybackSource
 modeObserved = entryObserved C.PlaybackMode
 
 hasJpeg :: Package -> Bool
-hasJpeg (Package _ _ _ _ bindings _ _ _ _) = any (\(Binding entry _ _ _ _) -> entry == C.PlaybackJpegAcquire) bindings
+hasJpeg package = ownsEntry package C.PlaybackJpegAcquire
+
+ownsEntry :: Package -> Entry -> Bool
+ownsEntry (Package _ _ _ _ bindings _ _ _ _) entry = any (\(Binding bound _ _ _ _) -> bound == entry) bindings
 
 requiredObservations :: Package -> [(T.Text, Witness -> Bool)]
 requiredObservations package
@@ -453,6 +457,11 @@ requiredEpochObservations package =
   [ (name, predicate . playWitness) | (name, predicate) <- requiredObservations package ]
   ++ [ ("owned-playback-preparation-jpeg-build-request", entryObserved C.PlaybackJpegBuildRequest . preparationWitness)
      | qualificationScope package `elem` [JpegConsumers, JpegLifecycle] ]
+  ++ [ (name, entryObserved entry . preparationWitness)
+     | (name, entry) <- [ ("owned-playback-preparation-jpeg-develop-job4", C.PlaybackJpegDevelopJob4)
+                        , ("owned-playback-preparation-jpeg-record-notification", C.PlaybackJpegRecordNotification)
+                        , ("owned-playback-preparation-jpeg-clear-record-release", C.PlaybackJpegClearRecordRelease) ]
+     , ownsEntry package entry ]
 
 qualificationEpochsObserved :: Package -> QualificationEvidence -> Bool
 qualificationEpochsObserved package value = all (\(_, predicate) -> predicate value) (requiredEpochObservations package)
@@ -529,3 +538,8 @@ witnessValue value@(Witness entries) = object $
       , "cancel_request_observed" .= entryObserved C.PlaybackJpegCancelRequest value
       , "submit_observed" .= entryObserved C.PlaybackJpegSubmit value ]
       | C.PlaybackJpegCancelRequest `elem` map fst entries]
+  ++ ["jpeg_develop" .= object
+      [ "develop_job4_observed" .= entryObserved C.PlaybackJpegDevelopJob4 value
+      , "record_notification_observed" .= entryObserved C.PlaybackJpegRecordNotification value
+      , "clear_record_release_observed" .= entryObserved C.PlaybackJpegClearRecordRelease value ]
+      | C.PlaybackJpegDevelopJob4 `elem` map fst entries]

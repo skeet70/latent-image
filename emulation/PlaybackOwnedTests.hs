@@ -51,8 +51,9 @@ elfForFamily retained functions = B.pack [byte i | i <- [0..fileEnd]]
       [("xm1_playback_jpeg_finish_released",0x10074,1)
       ,("xm1_playback_jpeg_cancel_released",0x1007c,1)
       ,("__ram_push_publications_start",0x15100,0xfff1)
-      ,("__ram_push_publications_end",0x15320,0xfff1)
-      ,("__experiment_installer_end",0x15320,0xfff1)] else []
+      ,("__ram_push_publications_end",0x15100 + tableBytes,0xfff1)
+      ,("__experiment_installer_end",0x15100 + tableBytes,0xfff1)] else []
+    tableBytes = 32 * fromIntegral (length functions)
     encoded = map (B.pack . map (fromIntegral . fromEnum) . T.unpack) (functions ++ [name | (name,_,_) <- extraSymbols])
     names = B.singleton 0 <> B.concat [name <> B.singleton 0 | name <- encoded]
     nameOffsets = scanl (\offset name -> offset + fromIntegral (B.length name) + 1) 1 encoded
@@ -75,7 +76,7 @@ elfForFamily retained functions = B.pack [byte i | i <- [0..fileEnd]]
       <> section 23 3 0 0 (fromIntegral sectionNamesOffset) (fromIntegral (B.length sectionNames)) 0 0
       <> section 33 1 3 0x15000 0x600 128 0 0
       <> section 54 1 3 0x15080 0x680 128 0 0
-      <> section 72 1 3 0x15100 0x700 (if lifecycle then 544 else 256) 0 0
+      <> section 72 1 3 0x15100 0x700 (if lifecycle then tableBytes else 256) 0 0
     chunks = [(0,header),(0x800,symbols),(stringsOffset,names),(sectionNamesOffset,sectionNames),(0x400,sections)]
     byte i = case [B.index bytes (i-offset) | (offset,bytes) <- chunks, i >= offset, i-offset < B.length bytes] of
       x:_ -> x
@@ -252,11 +253,12 @@ checkConsumers = do
     (put "violation" (String "record limit") (state playTargets)) (state playTargets)))
   check "consumer source read omissions are refused" (isLeft (P.checkOriginalBodies owned []))
 
-checkLifecycle :: IO ()
-checkLifecycle = do
+checkLifecycle :: [C.PlaybackEntry] -> IO ()
+checkLifecycle owned = do
   let entries = [(entry,start,end,0x10000 + index*8,T.pack name,T.pack hash)
-        | (entry,index) <- zip C.playbackEntries [0..]
+        | (entry,index) <- zip owned [0..]
         , let (start,end,C.SourceSha256 hash,name) = C.playbackContract entry]
+      hookCount = fromIntegral (length entries) :: Word32
       names = [name | (_,_,_,_,name,_) <- entries]
       hooks = [hook start end target name hash | (_,start,end,target,name,hash) <- entries]
       publications = [(site,0,value,phase)
@@ -267,16 +269,16 @@ checkLifecycle = do
       meta = put "runtime_sha256" (String (sha bytes)) $ put "hooks" (A.toJSON hooks) $
         put "symbols" (object [K.fromText name .= hex target | (_,_,_,target,name,_) <- entries]) metadata
       man = put "runtime_sha256" (String (sha bytes)) $ put "size" (A.toJSON (B.length bytes)) $
-        put "experiment_layout" (object ["table_offset" .= hex 0x5100,"installer_end_offset" .= hex 0x5320]) $
+        put "experiment_layout" (object ["table_offset" .= hex 0x5100,"installer_end_offset" .= hex (0x5100 + 32*hookCount)]) $
         put "publications" (A.toJSON [object ["address" .= hex site,"old" .= hex old,"new" .= hex new
           ,"phase" .= (if phase == 0 then "setup" else "activation" :: T.Text)] | (site,old,new,phase) <- publications]) manifest
       parse m metadata' runtime' = P.parsePackage (json m) (json metadata') runtime' (elfFor names)
       patch offset value original = B.take offset original <> word value <> B.drop (offset+4) original
       terminal = foldr (uncurry patch) (B.take 0x5100 completedRuntime <> B.drop 0x5100 bytes)
-        [(0x506c,34),(0x5094,34),(0x5098,17),(0x509c,17),(0x50b4,34)]
+        [(0x506c,2*hookCount),(0x5094,2*hookCount),(0x5098,hookCount),(0x509c,hookCount),(0x50b4,2*hookCount)]
   package <- either fail pure (parse man meta bytes)
   check "lifecycle scope is explicit" (P.qualificationScope package == P.JpegLifecycle)
-  check "full lifecycle publishes exactly thirty-four words" (length (P.guestArtifacts package) == 35)
+  check "full lifecycle publishes two words per hook" (length (P.guestArtifacts package) == 1 + 2 * length entries)
   check "release observations resolve inside their owned functions"
     (P.releasedObservation package C.PlaybackJpegFinishRequest == Just 0x10074
       && P.releasedObservation package C.PlaybackJpegCancelRequest == Just 0x1007c)
@@ -285,9 +287,9 @@ checkLifecycle = do
   forM_ [0x506c,0x5094,0x5098,0x509c,0x50b4] $ \offset ->
     check "stale fixed-eight terminal counts refused" (isLeft (P.checkGuestArtifacts package
       ((0x10000,patch offset 8 terminal) : drop 1 (P.guestArtifacts package))))
-  forM_ C.lifecycleEntries $ \entry -> do
+  forM_ (filter (`elem` owned) (C.lifecycleEntries ++ C.developEntries)) $ \entry -> do
     let (start,end,_,_) = C.playbackContract entry
-    check "every whole lifecycle body is excluded" ((start+8,fromIntegral (end-start-8)) `elem` P.originalBodies package)
+    check "every whole lifecycle and develop body is excluded" ((start+8,fromIntegral (end-start-8)) `elem` P.originalBodies package)
   check "interior cancellation observation is not an owned entry"
     (let (start,_,_,_) = C.playbackContract C.PlaybackJpegCancelRequest in start == 0x122026c)
   check "full lifecycle requires linked installer layout" (isLeft (parse (case man of
@@ -296,7 +298,7 @@ checkLifecycle = do
   check "rehashed publication vector corruption refused" (isLeft (parse
     (put "runtime_sha256" (String (sha corrupt)) man)
     (put "runtime_sha256" (String (sha corrupt)) meta) corrupt))
-  forM_ [0..16] $ \index -> do
+  forM_ [0 .. length hooks - 1] $ \index -> do
     let changed = take index hooks ++ [put "original_body" (object ["start" .= hex 0x1220288,"end" .= hex 0x1220294]) (hooks !! index)] ++ drop (index+1) hooks
     check "partial original-body exclusions refused" (isLeft (parse man (put "hooks" (A.toJSON changed) meta) bytes))
   let request = P.watchRequest package
@@ -310,13 +312,21 @@ checkLifecycle = do
         ,"classes" .= classes,"records" .= map fetch targets,"violation" .= Null]
       observe targets = P.witness package ack (state targets) (state targets)
       playTargets = [0x10010,0x10028,0x10020,0x10038,0x10078]
-  prefix <- either fail pure (observe [0x10030])
+      developTargets = [target | (entry,_,_,target,_,_) <- entries, entry `elem` C.developEntries]
+  prefix <- either fail pure (observe (0x10030 : developTargets))
   play <- either fail pure (observe playTargets)
   check "lifecycle requires natural owned cancellation in PLAY"
     (P.qualificationEpochsObserved package (P.qualificationEvidence prefix play))
   missingCancel <- either fail pure (observe (filter (/= 0x10078) playTargets))
   check "other handbacks cannot substitute the cancel entry"
     (not (P.qualificationEpochsObserved package (P.qualificationEvidence prefix missingCancel)))
+  forM_ developTargets $ \missing -> do
+    partial <- either fail pure (observe (0x10030 : filter (/= missing) developTargets))
+    check "each develop consumer is required in preparation" (not (P.qualificationEpochsObserved package (P.qualificationEvidence partial play)))
+  playDevelop <- either fail pure (observe (playTargets ++ developTargets))
+  builderOnly <- either fail pure (observe [0x10030])
+  check "PLAY develop consumers cannot substitute preparation"
+    (null developTargets || not (P.qualificationEpochsObserved package (P.qualificationEvidence builderOnly playDevelop)))
   forM_ [start | (start,_) <- P.originalBodies package] $ \start ->
     check "every original lifecycle fetch is refused" (isLeft (observe [start]))
   check "stock cancel interior is observation only and cannot execute under ownership" (isLeft (observe [0x1220288]))
@@ -391,5 +401,6 @@ main = do
   check "cold replay refused" (isLeft (P.validateReady selected start (object ["checkpoint" .= object ["start" .= ("cold" :: T.Text)]])))
   checkJpeg
   checkConsumers
-  checkLifecycle
+  checkLifecycle (C.consumerPlaybackEntries ++ C.lifecycleEntries)
+  checkLifecycle C.playbackEntries
   putStrLn "owned playback package and bounded witness behavior passed"

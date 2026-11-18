@@ -22,6 +22,8 @@ retained xm1_jpeg_critical_enter, 0x007235d8
 retained xm1_jpeg_critical_leave, 0x007236b0
 retained xm1_jpeg_timer_start, 0x0069b328
 retained xm1_jpeg_timer_cancel, 0x0069b7a4
+retained xm1_jpeg_task_notify, 0x00724558
+retained xm1_jpeg_current_wait, 0x007243a8
 retained memcpy, 0x0089d908
 retained memmove, 0x0089d908
 retained __aeabi_memcpy, 0x0089d908

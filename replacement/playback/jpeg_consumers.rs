@@ -7,6 +7,12 @@ struct RecordPixels(u16);
 struct RecordSelector(i8);
 #[repr(transparent)]
 struct RecordPacking(u8);
+#[repr(transparent)]
+struct RecordHalf(u16);
+#[repr(transparent)]
+struct RecordByte(u8);
+#[repr(transparent)]
+struct RecordWord(u32);
 
 #[derive(Clone, Copy)]
 #[repr(u32)]
@@ -18,19 +24,31 @@ impl BuilderKind {
 }
 
 #[repr(C)]
-struct RecordInputs {
+struct DecodeRecord {
     height: RecordPixels,
     width: RecordPixels,
-    retained_04: [MaybeUninit<u8>; 8],
+    develop_04: RecordHalf,
+    row_pitch: RecordPixels,
+    retained_08: [MaybeUninit<u8>; 4],
     destination: BusAddress,
     source: BusAddress,
     source_bytes: ByteCount,
     retained_18: [MaybeUninit<u8>; 28],
     selector: RecordSelector,
-    retained_35: [MaybeUninit<u8>; 7],
+    retained_35: MaybeUninit<u8>,
+    failed: RecordByte,
+    retained_37: [MaybeUninit<u8>; 5],
     completed: CallbackWord,
     input_needed: CallbackWord,
-    retained_44: [MaybeUninit<u8>; 32],
+    retained_44: [MaybeUninit<u8>; 4],
+    develop_48: RecordHalf,
+    develop_4a: RecordByte,
+    develop_4b: RecordByte,
+    retained_4c: [MaybeUninit<u8>; 16],
+    develop_5c: RecordWord,
+    develop_60: RecordByte,
+    develop_61: RecordByte,
+    retained_62: [MaybeUninit<u8>; 2],
     packing: RecordPacking,
 }
 
@@ -240,7 +258,7 @@ pub unsafe extern "C" fn xm1_playback_jpeg_submit() {
 /// The aligned record must cover 0x65 readable bytes and remain live through release. Nonzero callbacks must implement void(void). Construction precedes lock 9 acquisition and must not race another constructor.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xm1_playback_jpeg_build_request(address: u32) {
-    let record = address as *const RecordInputs;
+    let record = address as *const DecodeRecord;
     let request = STATIC_REQUEST;
     unsafe { write_volatile(RECORD, RecordAddress(address)) };
     write_field!(request, kind, RequestKind(0));
@@ -267,6 +285,119 @@ pub unsafe extern "C" fn xm1_playback_jpeg_build_request(address: u32) {
     write_field!(request, completed, read_field!(record, completed));
     write_field!(request, input_needed, read_field!(record, input_needed));
     unsafe { xm1_playback_jpeg_acquire(request as u32) };
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+struct TaskWord(u32);
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+struct EventBits(u32);
+#[repr(transparent)]
+struct PlaneAddress(u32);
+#[repr(transparent)]
+struct PlaneFlag(u32);
+#[repr(transparent)]
+struct PlaneLayout(u32);
+
+#[repr(C)]
+struct DevelopOperand {
+    retained_000: [MaybeUninit<u8>; 8],
+    task: TaskWord,
+    retained_00c: [MaybeUninit<u8>; 0x7ec],
+    plane: PlaneAddress,
+}
+
+#[repr(C)]
+struct DevelopPlane {
+    retained_00: [MaybeUninit<u8>; 4],
+    source: BusAddress,
+    source_bytes: ByteCount,
+    width: Pixels,
+    height: Pixels,
+    sixteen_row_packing: PlaneFlag,
+    retained_18: [MaybeUninit<u8>; 4],
+    destination: BusAddress,
+    output_bytes: ByteCount,
+    row_pitch: ByteCount,
+    row_bytes: ByteCount,
+    rows: Pixels,
+    layout: PlaneLayout,
+}
+
+#[derive(Clone, Copy)]
+#[repr(i32)]
+pub enum DevelopJobStatus { Complete = 0, RecordFailed = 8 }
+
+const DEVELOP_RECORD: *mut DecodeRecord = 0x015b_0bf8 as *mut DecodeRecord;
+const FRAME_TASK: *mut TaskWord = 0x015b_0ccc as *mut TaskWord;
+const RECORD_NOTIFICATION_ENTRY: CallbackWord = CallbackWord(0x00e8_eb18);
+const DEVELOP_COMPLETION_EVENT: EventBits = EventBits(0x10);
+
+unsafe extern "C" {
+    fn xm1_jpeg_task_notify(task: TaskWord, bits: EventBits) -> ServiceResult;
+    fn xm1_jpeg_current_wait(bits: EventBits, observed: *mut EventBits, timeout: WaitDeadline) -> ServiceResult;
+}
+
+/// # Safety
+/// The operand must cover 0x7fc readable bytes and a nonzero plane 0x34 writable bytes. Event 0x10 of the current task must be signalled only by this request's completion. Record construction precedes lock 9 acquisition and must not race another constructor.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xm1_playback_jpeg_develop_job4(address: u32) -> DevelopJobStatus {
+    let operand = address as *const DevelopOperand;
+    let plane = read_field!(operand, plane).0 as *mut DevelopPlane;
+    if plane.is_null() { return DevelopJobStatus::Complete; }
+    write_field!(plane, output_bytes, ByteCount(read_field!(plane, width).0.wrapping_mul(read_field!(plane, height).0) << 1));
+    if read_field!(plane, row_pitch).0 == 0 {
+        write_field!(plane, row_pitch, ByteCount(read_field!(plane, width).0 << 1));
+    }
+    write_field!(plane, row_bytes, ByteCount(read_field!(plane, width).0 << 1));
+    write_field!(plane, rows, read_field!(plane, height));
+    write_field!(plane, layout, PlaneLayout(0x0010_0000));
+    let record = DEVELOP_RECORD;
+    write_field!(record, source_bytes, read_field!(plane, source_bytes));
+    write_field!(record, source, read_field!(plane, source));
+    write_field!(record, destination, read_field!(plane, destination));
+    write_field!(record, row_pitch, RecordPixels((read_field!(plane, row_pitch).0 >> 1) as u16));
+    write_field!(record, width, RecordPixels(read_field!(plane, width).0 as u16));
+    write_field!(record, height, RecordPixels(read_field!(plane, height).0 as u16));
+    write_field!(record, completed, RECORD_NOTIFICATION_ENTRY);
+    write_field!(record, packing, RecordPacking((read_field!(plane, sixteen_row_packing).0 != 0) as u8));
+    write_field!(record, develop_48, RecordHalf(3));
+    write_field!(record, selector, RecordSelector(5));
+    write_field!(record, develop_4a, RecordByte(0));
+    write_field!(record, develop_4b, RecordByte(1));
+    write_field!(record, develop_5c, RecordWord(0));
+    write_field!(record, develop_60, RecordByte(0));
+    write_field!(record, develop_61, RecordByte(0));
+    write_field!(record, develop_04, RecordHalf(0));
+    unsafe {
+        write_volatile(FRAME_TASK, read_field!(operand, task));
+        xm1_playback_jpeg_build_request(record as u32);
+        let mut observed = MaybeUninit::<EventBits>::uninit();
+        xm1_jpeg_current_wait(DEVELOP_COMPLETION_EVENT, observed.as_mut_ptr(), WaitDeadline::Forever);
+        xm1_playback_jpeg_clear_record_release();
+    }
+    if read_field!(record, failed).0 != 0 { DevelopJobStatus::RecordFailed } else { DevelopJobStatus::Complete }
+}
+
+/// # Safety
+/// The frame task word must name a live task.
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub unsafe extern "C" fn xm1_playback_jpeg_record_notification() {
+    let task = unsafe { read_volatile(FRAME_TASK) };
+    unsafe { xm1_jpeg_task_notify(task, DEVELOP_COMPLETION_EVENT) };
+}
+
+/// # Safety
+/// The caller must own lock 9. Reset and interrupt release must stop the current device transaction before the record is reused.
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub unsafe extern "C" fn xm1_playback_jpeg_clear_record_release() {
+    unsafe {
+        write_volatile(RECORD, RecordAddress(0));
+        xm1_playback_jpeg_release();
+    }
 }
 
 /// # Safety
@@ -309,10 +440,21 @@ pub unsafe extern "C" fn xm1_playback_jpeg_complete_second() {
     unsafe { xm1_jpeg_critical_leave(state) };
 }
 
-const _: () = assert!(core::mem::offset_of!(RecordInputs, selector) == 0x34);
-const _: () = assert!(core::mem::offset_of!(RecordInputs, completed) == 0x3c);
-const _: () = assert!(core::mem::offset_of!(RecordInputs, input_needed) == 0x40);
-const _: () = assert!(core::mem::offset_of!(RecordInputs, packing) == 0x64);
+const _: () = assert!(core::mem::offset_of!(DecodeRecord, row_pitch) == 6);
+const _: () = assert!(core::mem::offset_of!(DecodeRecord, destination) == 0xc);
+const _: () = assert!(core::mem::offset_of!(DecodeRecord, selector) == 0x34);
+const _: () = assert!(core::mem::offset_of!(DecodeRecord, failed) == 0x36);
+const _: () = assert!(core::mem::offset_of!(DecodeRecord, completed) == 0x3c);
+const _: () = assert!(core::mem::offset_of!(DecodeRecord, input_needed) == 0x40);
+const _: () = assert!(core::mem::offset_of!(DecodeRecord, develop_48) == 0x48);
+const _: () = assert!(core::mem::offset_of!(DecodeRecord, develop_5c) == 0x5c);
+const _: () = assert!(core::mem::offset_of!(DecodeRecord, develop_60) == 0x60);
+const _: () = assert!(core::mem::offset_of!(DecodeRecord, packing) == 0x64);
+const _: () = assert!(core::mem::offset_of!(DevelopOperand, task) == 8);
+const _: () = assert!(core::mem::offset_of!(DevelopOperand, plane) == 0x7f8);
+const _: () = assert!(core::mem::offset_of!(DevelopPlane, sixteen_row_packing) == 0x14);
+const _: () = assert!(core::mem::offset_of!(DevelopPlane, destination) == 0x1c);
+const _: () = assert!(core::mem::offset_of!(DevelopPlane, layout) == 0x30);
 const _: () = assert!(core::mem::offset_of!(PlaybackRequest, timer) == 0x5c);
 const _: () = assert!(core::mem::offset_of!(PlaybackRequest, saved_prefix) == 0x61);
 const _: () = assert!(core::mem::offset_of!(PlaybackRequest, prefix_bytes) == 0xa1);

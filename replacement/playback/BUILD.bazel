@@ -55,7 +55,8 @@ $(location @lab_lld//:bin/ld.lld) -m armelf -r --gc-sections \
   -u xm1_playback_jpeg_reset_state -u xm1_playback_jpeg_restart_request \
   -u xm1_playback_jpeg_cancel_timer -u xm1_playback_jpeg_preserve_prefix \
   -u xm1_playback_jpeg_finish_request -u xm1_playback_jpeg_cancel_request \
-  -u xm1_playback_jpeg_submit \
+  -u xm1_playback_jpeg_submit -u xm1_playback_jpeg_develop_job4 \
+  -u xm1_playback_jpeg_record_notification -u xm1_playback_jpeg_clear_record_release \
   $(@D)/libxm1_playback_jpeg.a -o $(location playback-jpeg.o)
 $(location @lab_coreutils//:bin/sha256sum) $(SRCS) > $(location playback-jpeg.sources.sha256)
 """,
@@ -85,7 +86,8 @@ $(location @lab_lld//:bin/ld.lld) -m armelf -r --gc-sections \
   -u xm1_playback_jpeg_reset_state -u xm1_playback_jpeg_restart_request \
   -u xm1_playback_jpeg_cancel_timer -u xm1_playback_jpeg_preserve_prefix \
   -u xm1_playback_jpeg_finish_request -u xm1_playback_jpeg_cancel_request \
-  -u xm1_playback_jpeg_submit \
+  -u xm1_playback_jpeg_submit -u xm1_playback_jpeg_develop_job4 \
+  -u xm1_playback_jpeg_record_notification -u xm1_playback_jpeg_clear_record_release \
   $(@D)/libxm1_playback_jpeg_no_source_bytes.a -o $(location playback-jpeg-no-source-bytes.o)
 $(location @lab_coreutils//:bin/sha256sum) $(SRCS) > $(location playback-jpeg-no-source-bytes.sources.sha256)
 """,

@@ -315,7 +315,7 @@ services selected role = [service 0x724b68 [(R0,9),(R1,0xffffffff)] [] []]
     bits outcome=case outcome of Decoded->0x10;DecodedPriority->0x01020010;Limit->0x20000;DeviceError->8;NeedInput->0x1000000;IgnoredInput->0x1000000
 
 scope :: String
-scope = "Source-bound channel9 CPU comparisons over actual publication bytes. Exact17 owns requirements initialization, both completions, reset, restart/timer, prefix preservation/restoration, submit, finish and whole cancel/restore in addition to the prior transaction and builder. Caller observations include source-prefix bytes, final request/resource state and subscriber snapshots. Completion reentry reaches the published entry after critical leave. Setup failure calls back before resource release; the develop notification/wait and clear-record release companion remain retained. Native device-service, resource, IRQ registry, cache, timer and critical providers are conditional boundaries. Polling and device acceptance require the separate full-system model run. No native pixels, IRQ timing, event-flag latching, natural USB transition, construction serialization, quiescence, capture, retirement or unload claim."
+scope = "Source-bound channel9 CPU comparisons over actual publication bytes. Exact20 owns requirements initialization, both completions, reset, restart/timer, prefix preservation/restoration, submit, finish and whole cancel/restore, plus develop job4, its record notification and clear-record release, in addition to the prior transaction and builder. Exact17 packages keep job4, notification and clear-record release retained. Caller observations include source-prefix bytes, final request/resource state, subscriber snapshots, the develop record, plane and returned job status. Completion reentry reaches the published entry after critical leave. Native device-service, resource, IRQ registry, cache, timer, critical and develop task-event notify/wait providers are conditional boundaries; the wait returns without delivering an IRQ. Polling and device acceptance require the separate full-system model run. No native pixels, IRQ timing, event-flag latching, natural USB transition, construction serialization, quiescence, capture, retirement or unload claim."
 
 execute :: FilePath -> FilePath -> P.Package -> E.Elf -> Address -> B.ByteString -> [(Address,B.ByteString)] -> [Block] -> Scenario -> Role -> IO Observation
 execute runner output package elf base@(Address baseWord) runtime publications stock selected role = do
@@ -416,11 +416,15 @@ runNative runner output ident blocks calls expected defect = do
     (ident++": native receipt must return with "++if defect then "a consumer-visible mismatch" else "matching consumer observations")
   pure observed
 
-data BuilderCaller = DirectBuilder | DevelopJob4 deriving (Eq, Show)
+data PlaneInput = MissingPlane | DefaultPitch | PresetPitch deriving (Eq, Show)
+data CompletionFlag = FlagFailed | FlagClear deriving (Eq, Show)
+data BuilderCaller = DirectBuilder | NotifiedBuilder | DevelopJob4 PlaneInput CompletionFlag deriving (Eq, Show)
 data RecordMode = Mode7 | Mode8 | Mode5 | ModeNegative deriving (Eq, Show)
 data RecordPacking = PackingZero | PackingOne | PackingOther deriving (Eq, Show)
 data BuilderCase = BuilderCase CaseName BuilderCaller Scenario RecordMode RecordPacking
 data BuilderDefect = MissingMode | MissingPacking | MissingWidth | MissingHeight | MissingSource | MissingCount | MissingDestination | MissingClear | MissingCallback deriving (Eq, Show)
+data ConsumerDefect = OmittedJob4 | OmittedNotification | ReleaseWithoutClear deriving (Eq, Show)
+data BuilderControl = SourceMutation BuilderDefect | RuntimeDefect ConsumerDefect deriving (Eq, Show)
 newtype SourceOffset = SourceOffset Int
 data BuilderMutation = BuilderMutation SourceOffset B.ByteString
 
@@ -436,10 +440,28 @@ builderDefectName selected = CaseName $ case selected of
   MissingClear -> "missing-clear"
   MissingCallback -> "missing-callback"
 
-builderMode7Case, builderMode8Case, builderSetupFailureCase :: BuilderCase
+consumerDefectName :: ConsumerDefect -> CaseName
+consumerDefectName selected = CaseName $ case selected of
+  OmittedJob4 -> "omitted-job4"
+  OmittedNotification -> "omitted-notification"
+  ReleaseWithoutClear -> "release-without-clear"
+
+controlSuffix :: Maybe BuilderControl -> String
+controlSuffix control = case control of
+  Nothing -> ""
+  Just (SourceMutation defect) -> let CaseName suffix=builderDefectName defect in "-"++suffix
+  Just (RuntimeDefect defect) -> let CaseName suffix=consumerDefectName defect in "-"++suffix
+
+developJob :: BuilderCaller -> Maybe (PlaneInput, CompletionFlag)
+developJob (DevelopJob4 plane flag) = Just (plane,flag)
+developJob _ = Nothing
+
+builderMode7Case, builderMode8Case, builderSetupFailureCase, job4SetupFailureCase, job4CompleteCase :: BuilderCase
 builderMode7Case = BuilderCase (CaseName "builder-mode7") DirectBuilder preview Mode7 PackingZero
 builderMode8Case = BuilderCase (CaseName "builder-mode8") DirectBuilder full Mode8 PackingOne
 builderSetupFailureCase = BuilderCase (CaseName "builder-setup-failed") DirectBuilder (preview {attachment=Refused,produced=Bytes 0}) Mode5 PackingZero
+job4SetupFailureCase = BuilderCase (CaseName "develop-job4-setup-failed") (DevelopJob4 DefaultPitch FlagFailed) (preview {attachment=Refused,produced=Bytes 0}) Mode5 PackingZero
+job4CompleteCase = BuilderCase (CaseName "develop-job4-attached-complete") (DevelopJob4 DefaultPitch FlagClear) preview Mode5 PackingZero
 
 builderCases :: [BuilderCase]
 builderCases =
@@ -447,7 +469,11 @@ builderCases =
   , builderMode8Case
   , BuilderCase (CaseName "builder-signed-default-strict-packing") DirectBuilder preview ModeNegative PackingOther
   , builderSetupFailureCase
-  , BuilderCase (CaseName "develop-job4-setup-failed") DevelopJob4 (preview {attachment=Refused,produced=Bytes 0}) Mode5 PackingZero
+  , job4SetupFailureCase
+  , job4CompleteCase
+  , BuilderCase (CaseName "develop-job4-sixteen-row-preset-pitch") (DevelopJob4 PresetPitch FlagFailed) full Mode5 PackingOne
+  , BuilderCase (CaseName "develop-job4-no-plane") (DevelopJob4 MissingPlane FlagFailed) preview Mode5 PackingZero
+  , BuilderCase (CaseName "record-notification-irq-complete") NotifiedBuilder preview Mode7 PackingZero
   ]
 
 builderMode :: RecordMode -> (Word32,Word32)
@@ -455,55 +481,76 @@ builderMode selected = case selected of Mode7->(7,1);Mode8->(8,2);Mode5->(5,0);M
 builderPacking :: RecordPacking -> Word32
 builderPacking selected = case selected of PackingZero->0;PackingOne->1;PackingOther->2
 
-executeBuilder :: FilePath -> FilePath -> P.Package -> E.Elf -> Address -> B.ByteString -> [(Address,B.ByteString)] -> [Block] -> B.ByteString -> BuilderCase -> Role -> Maybe BuilderDefect -> IO Observation
-executeBuilder runner output package elf base@(Address baseWord) runtime publications stock image5 (BuilderCase (CaseName label) route selected mode packing) role defect = do
-  let ident=label++roleSuffix role++maybe "" (\selectedDefect -> let CaseName suffix=builderDefectName selectedDefect in "-"++suffix) defect
-      Dimensions (Pixels width) (Pixels height)=dimensions selected
+halfwords :: [Word32] -> B.ByteString
+halfwords = B.concat . map (\value -> B.pack [fromIntegral value,fromIntegral(value `shiftR` 8)])
+
+executeBuilder :: FilePath -> FilePath -> P.Package -> E.Elf -> Address -> B.ByteString -> [(Address,B.ByteString)] -> [Block] -> B.ByteString -> BuilderCase -> Role -> Maybe BuilderControl -> IO Observation
+executeBuilder runner output package elf base@(Address baseWord) runtime publications stock image5 (BuilderCase (CaseName label) route selected mode packing) role control = do
+  let ident=label++roleSuffix role++controlSuffix control
+      Dimensions (Pixels width16) (Pixels height16)=dimensions selected
+      width=fromIntegral width16 :: Word32
+      height=fromIntegral height16 :: Word32
       (sourceAddress,sourceBytes)=sourceWords selected False
       (recordMode,requestMode)=builderMode mode
-      recordBase=if route==DevelopJob4 then 0x15b0bf8 else 0x2000200
-      completed=if route==DevelopJob4 then 0xe8eb18 else 0x110100
-      recordSize=if route==DevelopJob4 then 0xd8 else 0x65
-      initialRecord=wordsAt [(0xc,0x4383cc00),(0x10,sourceAddress),(0x14,sourceBytes),(0x3c,completed),(0x40,0x110200)]
+      job=developJob route
+      constructs=case job of Just(MissingPlane,_)->False;_->True
+      irqRuns=attachment selected==Attached && job==Nothing
+      notificationRuns=route/=DirectBuilder && constructs && (attachment selected==Refused || irqRuns)
+      taskWord=0x12345678
+      recordBase=if route==DirectBuilder then 0x2000200 else 0x15b0bf8
+      completed=if route==DirectBuilder then 0x110100 else 0xe8eb18
+      recordSize=if route==DirectBuilder then 0x65 else 0xd8
+      directRecord=replace 0 (halfwords [height,width]) . wordsAt [(0xc,0x4383cc00),(0x10,sourceAddress),(0x14,sourceBytes),(0x3c,completed),(0x40,0x110200)]
         . byteAt 0x34 recordMode . byteAt 0x64 (builderPacking packing) $ B.replicate recordSize 0xa5
-      recordBefore=replace 0 (B.pack [fromIntegral height,fromIntegral(height `shiftR` 8),fromIntegral width,fromIntegral(width `shiftR` 8)]) initialRecord
-      producerRecord=wordsAt [(0x5c,0),(0xd4,0x12345678)] . byteAt 0x34 5 . byteAt 0x60 0 . byteAt 0x61 0 . byteAt 0x4a 0 . byteAt 0x4b 1
-        $ replace 0x48 (B.pack [3,0]) . replace 4 (B.pack [0,0,fromIntegral width,fromIntegral(width `shiftR` 8)]) $ recordBefore
-      recordReady=if route==DevelopJob4 then producerRecord else recordBefore
+      recordBefore=case job of
+        Just(_,flag)->wordsAt [(0x40,0x110200)] . byteAt 0x36 (if flag==FlagClear then 0 else 0xa5) $ B.replicate recordSize 0xa5
+        Nothing->if route==NotifiedBuilder then wordsAt [(0xd4,taskWord)] directRecord else directRecord
+      presetPitch=width*2+64
+      pitch=case job of Just(PresetPitch,_)->presetPitch;_->width*2
+      planeFlag=if packing==PackingOne then 1 else 0
+      producerRecord=replace 0 (halfwords [height,width,0,pitch `shiftR` 1])
+        . wordsAt [(0xc,0x4383cc00),(0x10,sourceAddress),(0x14,sourceBytes),(0x3c,0xe8eb18),(0x5c,0),(0xd4,taskWord)]
+        . replace 0x48 (halfwords [3]) . byteAt 0x34 5 . byteAt 0x4a 0 . byteAt 0x4b 1 . byteAt 0x60 0 . byteAt 0x61 0 . byteAt 0x64 planeFlag
+        $ recordBefore
+      recordReady=if job/=Nothing && constructs then producerRecord else recordBefore
       configurationBytes=configuration (selected {layout=if packing==PackingOne then SixteenRows else EightRows,capacity=if packing==PackingOne then Bytes 27104256 else capacity selected}) False
       outputWidth=if fixture selected==Full then 4896 else 320
       outputHeight=if fixture selected==Full then 2768 else 240
-      requestBefore=wordsAt [(0,requestMode),(4,if packing==PackingOne then 1 else 0),(8,fromIntegral width),(12,fromIntegral height)
+      requestBefore=wordsAt [(0,requestMode),(4,if packing==PackingOne then 1 else 0),(8,width),(12,height)
         ,(0x18,sourceAddress),(0x1c,sourceBytes),(0x20,0x4383cc00),(0x24,0),(0x34,0),(0x38,0),(0x3c,0),(0x40,0),(0x44,0),(0x48,0)
         ,(0x4c,completed),(0x50,0x110200)] (B.replicate 0x58 0xa5)
       setupRequest=wordsAt [(0x10,outputWidth),(0x14,outputHeight),(0x24,0),(0x28,if attachment selected==Refused then 3 else 0),(0x2c,0),(0x30,0)] requestBefore
-      finalRequest=if attachment selected==Refused then setupRequest else wordsAt [(0x24,finalProduced selected),(0x30,0x87654321)] setupRequest
+      finalRequest=if irqRuns then wordsAt [(0x24,finalProduced selected),(0x30,0x87654321)] setupRequest else setupRequest
       initialState=wordsAt [(0,0),(4,0),(0x198,0),(0x19c,0)] (B.replicate 0x210 0xa5)
-      finalState=replace 0x1a0 configurationBytes . replace 8 finalRequest $ wordsAt [(0,0),(4,0),(0x198,0x14c56f8),(0x19c,0)] initialState
-      finalRecord=if attachment selected==Refused then recordReady else byteAt 0x35 1 . byteAt 0x36 0 $ recordReady
-      finalConsumer=assemble [1,if route==DevelopJob4 then 8 else statusWord(completionStatus selected)]
+      finalState=if constructs then replace 0x1a0 configurationBytes . replace 8 finalRequest $ wordsAt [(0,0),(4,0),(0x198,0x14c56f8),(0x19c,0)] initialState else initialState
+      finalRecord=if irqRuns then byteAt 0x35 1 . byteAt 0x36 0 $ recordReady else recordReady
+      jobResult=case job of Just(_,FlagFailed) | constructs -> 8;_->0
+      finalConsumer=case job of
+        Just _->assemble [if notificationRuns then 1 else 0,jobResult]
+        Nothing->if route==NotifiedBuilder then assemble [1,0] else assemble [1,statusWord(completionStatus selected)]
       callbackCode=assemble $ load R1 0x2000100 ++ [0xe5910000,0xe2800001,0xe5810000] ++ load R1 0x14c56f8
         ++ [0xe5910028] ++ load R1 0x2000100 ++ [0xe5810004,0xe12fff1e]
-      entry=assemble $ [0xe92d4010] ++ (if route==DevelopJob4
-        then load R0 0x2002000 ++ call (Address 0xe8fee4) ++ load R1 0x2000100 ++ [0xe5810004]
-        else load R0 recordBase ++ call (Address 0xd98904) ++ [word|attachment selected==Attached,word<-call (Address 0xd99570)] ++ call (Address 0xd989f8))
+      entry=assemble $ [0xe92d4010] ++ (case job of
+        Just _->load R0 0x2002000 ++ call (Address 0xe8fee4) ++ load R1 0x2000100 ++ [0xe5810004]
+        Nothing->load R0 recordBase ++ call (Address 0xd98904) ++ [word|irqRuns,word<-call (Address 0xd99570)] ++ call (Address 0xd989f8))
         ++ [0xe3a0005a,0xe8bd8010]
       producerBytes=B.take 304(B.drop (0xe8fee4-0xbf1a00) image5)
       signalBytes=B.take 32(B.drop (0xe8eb18-0xbf1a00) image5)
       code kind' address bytes=Block kind' (Address address) ReadExecute bytes [(Address address,B.length bytes)]
       deviceTargets=[(C.bodyStart body,target)|role/=Original,(selectedService,target,_)<-P.deviceServices(Just package),let(body,_)=C.jpegDeviceContract selectedService]
       mappedCalls=[Service (maybe address Address(lookup original deviceTargets)) inputs outputs memoryReads memoryWrites|Service address@(Address original) inputs outputs memoryReads memoryWrites<-calls]
-      calls=[service 0x724b68 [(R0,9),(R1,0xffffffff)] [] []
+      calls=if not constructs then [] else
+        [service 0x724b68 [(R0,9),(R1,0xffffffff)] [] []
         ,service 0x65a3cc [(R0,0x14c56f4)] [] [Relative R0(assemble[0x1e123456])]
         ,service 0x65a478 [] [] [],service 0x65a58c [(R0,0x14c5890)] [] []
         ,Service (Address 0x64e918) [(R0,0x48),(R1,0xd99570),(R2,0x14c588c)] [(R0,if attachment selected==Attached then 0 else 0x86540003)] []
           [Relative R2(assemble[0x76123456])|attachment selected==Attached]]
-        ++ (if attachment selected==Attached then [service 0x42634 [(R0,0),(R1,0)] [] [],service 0x65a548 [] [] []
-          ,service 0x65ab20 [] [] [Relative R0(assemble[0x10])],service 0x65ab50 [(R0,0x10)] [] []
+        ++ (if attachment selected==Attached then [service 0x42634 [(R0,0),(R1,0)] [] [],service 0x65a548 [] [] []] else [])
+        ++ (if irqRuns then [service 0x65ab20 [] [] [Relative R0(assemble[0x10])],service 0x65ab50 [(R0,0x10)] [] []
           ,service 0x65abd8 [] [] [Relative R0(assemble[0x87654321])],service 0x65ac08 [(R0,0x87654321)] [] []
           ,service 0x65a9e4 [(R0,0x14c571c)] [] [Relative R0(let Address endpointWord=endpoint selected in assemble[endpointWord])]] else [])
-        ++ [service 0x724558 [(R0,0x12345678),(R1,0x10)] [] [Absolute consumerAddress(assemble[1,0])]|route==DevelopJob4]
-        ++ [service 0x7243a8 [(R0,0x10),(R2,0xffffffff)] [] []|route==DevelopJob4]
+        ++ [service 0x724558 [(R0,taskWord),(R1,0x10)] [] [Absolute consumerAddress(assemble[1,0])]|notificationRuns]
+        ++ [service 0x7243a8 [(R0,0x10),(R2,0xffffffff)] [] []|job/=Nothing]
         ++ [service 0x65a478 [] [] []]
         ++ [service 0x64eb20 [(R0,0x76123456)] [] []|attachment selected==Attached]
         ++ [service 0x65a424 [(R0,0x1e123456)] [] [],service 0x724c00 [(R0,9)] [] []]
@@ -519,41 +566,53 @@ executeBuilder runner output package elf base@(Address baseWord) runtime publica
         MissingDestination->BuilderMutation (SourceOffset 0xb4) noStore
         MissingClear->BuilderMutation (SourceOffset 0xc0) noStore
         MissingCallback->BuilderMutation (SourceOffset 0xd8) (assemble[0xe3a02000])
-      defectBytes=case defect of Nothing->B.empty;Just selectedDefect->let BuilderMutation (SourceOffset offset) value=mutation selectedDefect in replace offset value originalBuilder <> assemble(call(Address 0xd9882c)++[0xe8bd8800])
+      sourceDefect=case control of Just(SourceMutation selectedDefect)->Just selectedDefect;_->Nothing
+      defectBytes=case sourceDefect of Nothing->B.empty;Just selectedDefect->let BuilderMutation (SourceOffset offset) value=mutation selectedDefect in replace offset value originalBuilder <> assemble(call(Address 0xd9882c)++[0xe8bd8800])
+      symbolAddress name'=case [E.symbolValue symbol|symbol<-E.globalSymbols elf,E.symbolName symbol==name',E.symbolKind symbol==E.FunctionSymbol] of [target]->target;_->error ("develop consumer entry missing: "++name')
+      redirected name' body=replace (fromIntegral(symbolAddress name'-baseWord)) body runtime
+      image=case control of
+        Just(RuntimeDefect OmittedJob4)->redirected "xm1_playback_jpeg_develop_job4" (assemble[0xe3a00000,0xe12fff1e])
+        Just(RuntimeDefect OmittedNotification)->redirected "xm1_playback_jpeg_record_notification" (assemble[0xe12fff1e])
+        Just(RuntimeDefect ReleaseWithoutClear)->redirected "xm1_playback_jpeg_clear_record_release" (assemble(load Ip(symbolAddress "xm1_playback_jpeg_release")++[0xe12fff1c]))
+        _->runtime
       publish block@(Block kind' address@(Address start) permissions bytes extents)
-        | kind'==StockDriver && role/=Original = Block kind' address permissions (foldr (\(Address location,value) original->replace(fromIntegral(location-start)) value original) bytes
-            [(location,if location==Address 0xd98908 && defect/=Nothing then assemble[0x110300] else value)
+        | kind' `elem` [StockDriver,Producer,Signal] && role/=Original = Block kind' address permissions (foldr (\(Address location,value) original->replace(fromIntegral(location-start)) value original) bytes
+            [(location,if location==Address 0xd98908 && sourceDefect/=Nothing then assemble[0x110300] else value)
             |(location@(Address target),value)<-publications,target>=start,target<start+fromIntegral(B.length bytes)]) extents
         | otherwise=block
       runtimeFunctions=[(Address(E.symbolValue symbol),fromIntegral(E.symbolSize symbol))|symbol<-E.elfSymbols elf,E.symbolKind symbol==E.FunctionSymbol,E.symbolSize symbol>0
         ,E.symbolValue symbol>=baseWord,E.symbolValue symbol<baseWord+fromIntegral(B.length runtime)
         ,not(any(\(_,target)->E.symbolValue symbol<=target && target<E.symbolValue symbol+E.symbolSize symbol)deviceTargets)]
-      operand=wordsAt [(8,0x12345678),(0x7f8,0x2001000)] (B.replicate 0x800 0)
-      plane=wordsAt [(4,sourceAddress),(8,sourceBytes),(0xc,fromIntegral width),(0x10,fromIntegral height),(0x14,0),(0x1c,0x4383cc00),(0x24,0)] (B.replicate 0x34 0)
-      finalPlane=wordsAt [(0x20,fromIntegral width*fromIntegral height*2),(0x24,fromIntegral width*2),(0x28,fromIntegral width*2),(0x2c,fromIntegral height),(0x30,0x100000)] plane
-      blocks=map publish stock++[Block Runtime base ReadExecute runtime runtimeFunctions,Block Driver driverAddress ReadWrite initialState []
+      operand=wordsAt [(8,taskWord),(0x7f8,if constructs then 0x2001000 else 0)] (B.replicate 0x800 0)
+      plane=wordsAt [(4,sourceAddress),(8,sourceBytes),(0xc,width),(0x10,height),(0x14,planeFlag),(0x1c,0x4383cc00)
+        ,(0x24,case job of Just(PresetPitch,_)->presetPitch;_->0)] (B.replicate 0x34 0)
+      finalPlane=if constructs then wordsAt [(0x20,width*height*2),(0x24,pitch),(0x28,width*2),(0x2c,height),(0x30,0x100000)] plane else plane
+      blocks=map publish stock++[Block Runtime base ReadExecute image runtimeFunctions,Block Driver driverAddress ReadWrite initialState []
         ,Block Playback requestAddress ReadWrite initialPlayback [],Block RecordMemory (Address recordBase) ReadWrite recordBefore []
         ,Block Consumer consumerAddress ReadWrite (assemble[0,0]) [],Block Stack (Address 0x2200000) ReadWrite (B.replicate 0x4000 0) []
         ,code Caller 0x110000 entry,code FirstConsumer 0x110100 callbackCode,code SecondConsumer 0x110200 (assemble[0xe12fff1e])
         ,code Producer 0xe8fee4 producerBytes,code Signal 0xe8eb18 signalBytes,Block Exit exitAddress ReadExecute (assemble[0xe12fff1e]) []]
-        ++ (if route==DevelopJob4 then [Block DevelopOperand (Address 0x2002000) ReadOnly operand [],Block DevelopPlane (Address 0x2001000) ReadWrite plane []] else [])
-        ++ [code Defect 0x110300 defectBytes|defect/=Nothing]
+        ++ (if job/=Nothing then [Block DevelopOperand (Address 0x2002000) ReadOnly operand [],Block DevelopPlane (Address 0x2001000) ReadWrite plane []] else [])
+        ++ [code Defect 0x110300 defectBytes|sourceDefect/=Nothing]
       expected=[(Driver,finalState),(Playback,initialPlayback),(RecordMemory,finalRecord),(Consumer,finalConsumer)]
-        ++ (if route==DevelopJob4 then [(DevelopOperand,operand),(DevelopPlane,finalPlane)] else [])
+        ++ (if job/=Nothing then [(DevelopOperand,operand),(DevelopPlane,finalPlane)] else [])
   ensure (hash producerBytes==Digest "47bb5cc27a1cd0062590dd9bf2019597b5537f698b807e3edfa8cb27980807eb") "develop job4 source body identity mismatch"
   ensure (hash signalBytes==Digest "3e54ac9af3dc1e6630f562c6a5897c97980635773395246431befb7bfc582841") "record notification source body identity mismatch"
-  observed<-runNative runner output ident blocks mappedCalls expected (defect/=Nothing)
-  json (output </> ident++"-identity.json") (object ["role" .= show role,"caller" .= show route,"defect" .= fmap show defect
-    ,"runtime_sha256" .= hashText(hash runtime),"builder_source_sha256" .= hashText(hash(B.take 244(B.drop(0xd98904-0xbf1a00)image5)))
-    ,"builder_control" .= case defect of
+  observed<-runNative runner output ident blocks mappedCalls expected (control/=Nothing)
+  ensure (control==Nothing || any (\(kind',bytes)->regionBytesOf observed (O.RegionId(regionName kind'))/=bytes) expected)
+    (ident++": defect must change caller-observed memory")
+  json (output </> ident++"-identity.json") (object ["role" .= show role,"caller" .= show route,"defect" .= fmap show control
+    ,"runtime_sha256" .= hashText(hash runtime),"executed_runtime_sha256" .= hashText(hash image),"builder_source_sha256" .= hashText(hash(B.take 244(B.drop(0xd98904-0xbf1a00)image5)))
+    ,"builder_control" .= case sourceDefect of
         Nothing -> Null
         Just selectedDefect -> let BuilderMutation (SourceOffset offset) _ = mutation selectedDefect in object
           ["definition" .= ("relocated original builder with one source instruction omitted or replaced" :: String)
           ,"entry" .= av(Address 0x110300),"source_instruction_offset" .= offset
           ,"executed_bytes" .= B.length defectBytes,"executed_sha256" .= hashText(hash defectBytes)]
-    ,"conditional_wait_and_notification" .= (route==DevelopJob4),"runner_returned" .= True])
+    ,"conditional_wait_and_notification" .= (job/=Nothing),"runner_returned" .= True])
   pure(Observation (regionBytesOf observed(O.RegionId(regionName Driver))) (regionBytesOf observed(O.RegionId(regionName Playback)))
-    (regionBytesOf observed(O.RegionId(regionName Consumer))) (regionBytesOf observed(O.RegionId(regionName RecordMemory))) B.empty)
+    (regionBytesOf observed(O.RegionId(regionName Consumer))) (regionBytesOf observed(O.RegionId(regionName RecordMemory)))
+    (if job/=Nothing then regionBytesOf observed(O.RegionId(regionName DevelopPlane)) else B.empty))
 
 readPinned :: FilePath -> Digest -> IO B.ByteString
 readPinned path expected = do
@@ -653,8 +712,16 @@ main = do
       let selected=case defect of MissingPacking->builderMode8Case;MissingCallback->builderSetupFailureCase;_->builderMode7Case
           BuilderCase (CaseName label) _ _ _ _=selected
           CaseName defectLabel=builderDefectName defect
-      _<-executeBuilder runner output parsed elf base runtime publications stock image5 selected Owned(Just defect)
+      _<-executeBuilder runner output parsed elf base runtime publications stock image5 selected Owned(Just(SourceMutation defect))
       pure(object ["case" .= label,"defect" .= show defect,"returned_source_omission_rejected" .= True
+        ,"receipt" .= (label++"-owned-"++defectLabel++"-result.json")])
+    else pure []
+  let developOwned=all (P.ownsEntry parsed) C.developEntries
+  developControls<-if developOwned then forM [(job4CompleteCase,OmittedJob4),(job4SetupFailureCase,OmittedNotification),(job4CompleteCase,ReleaseWithoutClear)] $ \(selected,defect)->do
+      let BuilderCase (CaseName label) _ _ _ _=selected
+          CaseName defectLabel=consumerDefectName defect
+      _<-executeBuilder runner output parsed elf base runtime publications stock image5 selected Owned(Just(RuntimeDefect defect))
+      pure(object ["case" .= label,"defect" .= show defect,"returned_consumer_defect_rejected" .= True
         ,"receipt" .= (label++"-owned-"++defectLabel++"-result.json")])
     else pure []
   deviceCpu<-if not consumers && P.deviceOwnership parsed==P.OwnedJpegDevice
@@ -665,10 +732,13 @@ main = do
     ,"runtime_sha256" .= hashText(hash runtime),"elf_sha256" .= hashText(hash elfBytes),"manifest_sha256" .= hashText(hash manifest),"metadata_sha256" .= hashText(hash metadata)
     ,"plain_sha256" .= hashText(hash plain),"image4_sha256" .= hashText(hash image4),"image5_sha256" .= hashText(hash image5)
     ,"consumed_source_fixtures" .= fixtures,"comparisons" .= comparisons,"controls" .= controls,"first_completion_controls" .= firstControls,"lifecycle_controls" .= lifecycleControls
-    ,"builder_comparisons" .= builderComparisons,"builder_controls" .= builderControls,"device_cpu" .= deviceCpu
+    ,"builder_comparisons" .= builderComparisons,"builder_controls" .= builderControls,"develop_controls" .= developControls,"device_cpu" .= deviceCpu
     ,"qualifier_sha256" .= qualifierDigest,"consumer_increment" .= consumers,"historical_device_matrix_repeated" .= (not consumers && P.deviceOwnership parsed==P.OwnedJpegDevice)
-    ,"retained_entries" .= map av (if P.qualificationScope parsed==P.JpegLifecycle then [Address 0xd989f8] else [Address 0x1220004,Address 0x121ff20,Address 0x1220238,Address 0xd989f8])
-    ,"builder_failure_lifetime" .= ("Synchronous setup failure calls back before channel9/resource1e release; the retained companion releases them. Reacquisition without an intervening release reaches the retained infinite-deadline lock wait, outside the qualified returned completion reentry."::String)])
+    ,"retained_entries" .= map av (if developOwned then [] else if P.qualificationScope parsed==P.JpegLifecycle then [Address 0xd989f8] else [Address 0x1220004,Address 0x121ff20,Address 0x1220238,Address 0xd989f8])
+    ,"builder_failure_lifetime" .= ((if developOwned
+      then "Synchronous setup failure calls back before channel9/resource1e release; owned develop job4 then waits for its completion event and calls owned clear-record release."
+      else "Synchronous setup failure calls back before channel9/resource1e release; the retained companion releases them.")
+      ++ " Reacquisition without an intervening release reaches the retained infinite-deadline lock wait, outside the qualified returned completion reentry."::String)])
   putStrLn ("JPEG transaction passed "++show(length selectedScenarios+length builderComparisons)++" stock/owned consumer comparisons; device qualification remains separately scoped")
 
 data DeviceCpuCase
