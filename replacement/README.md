@@ -491,6 +491,18 @@ Scope: Conditional X-M1 1.50 flashloader entry/caller continuation through retai
 
 <!-- /evidence-record E-LATER-IMAGE5-SKIP-REFUSAL-NATIVE-150 -->
 
+### Task60 loading owner in the Root bank
+
+[Startup workflow](startup.md#typed-lower-read-and-task60-owner).
+
+<!-- evidence-record E-LATER-TASK60-OWNER-ROOT-BANK-150 -->
+
+E-LATER-TASK60-OWNER-ROOT-BANK-150: Root's fixed bank links the typed task60/lower-read owner, the NAND owner already in power services, the owned image5 decoder and one explicit policy. From reset the natural stock wrappers construct and drive it: success role reaches image5 decoder finish and callback failed=0 with 8 configured deadlines for 8 posts and final latches [1,0,1,1,1,1,1,1,1]; the false-drain role reports callback failed=1, NAND state 2 and busy 1 with the lease retained. Native harness passed=true.
+
+Scope: Emulator (FujiMod) and native harness, X-M1 1.50, Root source 87e78874d plus LowerReadOwnership a71860750; queue60 keeps stock 0x30x16-byte geometry with 8-byte (id, kind) messages and owned envelope records.
+
+<!-- /evidence-record E-LATER-TASK60-OWNER-ROOT-BANK-150 -->
+
 ## Natural staged-union semantic boundary
 
 <!-- evidence-record E-RTOS-PLATFORM-CURRENT-UNION-NATURAL-150 -->

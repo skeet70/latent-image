@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 # Changed-path runs for the task60 loading owner: native harness, then the
 # Root bank (saclac-image-loading-*) staged and observed from reset.
-# Run from the worktree root under run-output exec.
+# Run from the worktree root under run-output exec:
+#   loading-runtime-runs.sh CANONICAL_DAT CANONICAL_IMAGE4 CANONICAL_IMAGE5 BOOT_ROM
 set -euo pipefail
 : "${XM1_RUN_WORK:?}" "${XM1_RUN_RESULT:?}"
+[ "$#" -eq 4 ] || { echo "usage: loading-runtime-runs.sh DAT IMAGE4 IMAGE5 BOOT_ROM" >&2; exit 2; }
 export XM1_EMULATOR_SLOTS=1
-DAT=private-data/firmware/x-m1-1.50/FWUP0002.DAT
-ID4=private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin
-ID5=private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin
+DAT=$1 ID4=$2 ID5=$3 ROM=$(realpath "$4")
 RUN=emulation/fujimod-xm1/data/xm1-150.json
-ROM=private-data/scratch/LaterLoadingClosure/inputs/decoder-owned-v1/input-rom.bin
 B=bazel-bin
 L=$B/replacement/executable_loading
 S=$B/replacement/saclac
@@ -43,7 +42,7 @@ stage() {
 observe() {
   local policy=$1 out=$XM1_RUN_WORK/$1 status=0
   "$B/emulation/emulator-slot" "$PWD/$B/emulation/loading-runtime-observer" --run "$PWD/$RUN" \
-    --update "$out/candidate.DAT" --boot-rom "$PWD/$ROM" --artifact "$out/artifact" \
+    --update "$out/candidate.DAT" --boot-rom "$ROM" --artifact "$out/artifact" \
     --output "$out/observed" > "$XM1_RUN_RESULT/$policy-observer.log" 2>&1 || status=$?
   echo "$status" > "$XM1_RUN_RESULT/$policy-observer.status"
   if [ -f "$out/observed/receipt.json" ]; then cp "$out/observed/receipt.json" "$XM1_RUN_RESULT/$policy-receipt.json"; fi

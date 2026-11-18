@@ -4664,5 +4664,84 @@
         ]
       }
     ]
+  },
+  {
+    "id": "E-LATER-TASK60-OWNER-ROOT-BANK-150",
+    "claim": "Root's fixed bank links the typed task60/lower-read owner, the NAND owner already in power services, the owned image5 decoder and one explicit policy. From reset the natural stock wrappers construct and drive it: success role reaches image5 decoder finish and callback failed={{success_callback_failed}} with {{success_deadlines}} configured deadlines for {{success_deadlines}} posts and final latches {{success_latches}}; the false-drain role reports callback failed={{retention_callback_failed}}, NAND state {{retention_nand_state}} and busy {{retention_busy}} with the lease retained. Native harness passed={{native_passed}}.",
+    "scope": "Emulator (FujiMod) and native harness, X-M1 1.50, Root source 87e78874d plus LowerReadOwnership a71860750; queue60 keeps stock 0x30x16-byte geometry with 8-byte (id, kind) messages and owned envelope records.",
+    "facts": [
+      {
+        "name": "firmware_sha256",
+        "path": "private-data/scratch/LowerReadOwnership/runs/20261118T121217Z-lower-read-loading-runtime/result/fujimod-runtime-contract.json",
+        "pointer": [
+          "firmware_sha256"
+        ]
+      },
+      {
+        "name": "success_callback_failed",
+        "path": "private-data/scratch/LowerReadOwnership/runs/20261118T121217Z-lower-read-loading-runtime/result/fujimod-receipt.json",
+        "pointer": [
+          "callbacks",
+          "0",
+          "failed"
+        ]
+      },
+      {
+        "name": "success_deadlines",
+        "path": "private-data/scratch/LowerReadOwnership/runs/20261118T121217Z-lower-read-loading-runtime/result/fujimod-receipt.json",
+        "pointer": [
+          "deadline_calls"
+        ]
+      },
+      {
+        "name": "success_latches",
+        "path": "private-data/scratch/LowerReadOwnership/runs/20261118T121217Z-lower-read-loading-runtime/result/fujimod-receipt.json",
+        "pointer": [
+          "final_state",
+          "latches"
+        ]
+      },
+      {
+        "name": "retention_callback_failed",
+        "path": "private-data/scratch/LowerReadOwnership/runs/20261118T121217Z-lower-read-loading-runtime/result/retention-receipt.json",
+        "pointer": [
+          "callbacks",
+          "0",
+          "failed"
+        ]
+      },
+      {
+        "name": "retention_nand_state",
+        "path": "private-data/scratch/LowerReadOwnership/runs/20261118T121217Z-lower-read-loading-runtime/result/retention-receipt.json",
+        "pointer": [
+          "final_state",
+          "nand_state"
+        ]
+      },
+      {
+        "name": "retention_busy",
+        "path": "private-data/scratch/LowerReadOwnership/runs/20261118T121217Z-lower-read-loading-runtime/result/retention-receipt.json",
+        "pointer": [
+          "final_state",
+          "busy"
+        ]
+      },
+      {
+        "name": "native_passed",
+        "path": "private-data/scratch/LowerReadOwnership/runs/20261118T121217Z-lower-read-loading-runtime/result/native.json",
+        "pointer": [
+          "passed"
+        ]
+      }
+    ],
+    "artifacts": [
+      "private-data/scratch/LowerReadOwnership/runs/20261118T121217Z-lower-read-loading-runtime/result/fujimod-receipt.json",
+      "private-data/scratch/LowerReadOwnership/runs/20261118T121217Z-lower-read-loading-runtime/result/retention-receipt.json",
+      "private-data/scratch/LowerReadOwnership/runs/20261118T121217Z-lower-read-loading-runtime/result/native.json",
+      "private-data/scratch/LowerReadOwnership/runs/20261118T121217Z-lower-read-loading-runtime/result/fujimod-runtime-contract.json",
+      "private-data/scratch/LowerReadOwnership/runs/20261118T121217Z-lower-read-loading-runtime/result/retention-runtime-contract.json",
+      "private-data/scratch/LowerReadOwnership/runs/20261118T120640Z-lower-read-root-bank-gate/result/gate.log"
+    ],
+    "notes": "FujiMod 3d90035d synchronous-copy drain is emulator-only; physical NAND/DMA quiescence, a production deadline policy, natural skip/missing-segment/device-failure reachability, retained-operation recovery and whole-system menu acceptance of the composed bank remain open."
   }
 ]
