@@ -22,7 +22,7 @@ import Replacement.PropertyService.Artifact
 import Replacement.PropertyService.Classify
 import Replacement.PropertyService.Encoding (EncodedTables (..), EncodingError (..), encodeTables)
 import Replacement.PropertyService.Placement
-import Replacement.PropertyService.PlacementNative (RetainedFieldEvidence (..), retiredReferences)
+import Replacement.PropertyService.PlacementNative (RetainedFieldEvidence (..), retainedFieldEvidence, retiredReferences)
 import Replacement.PropertyService.RetainedGvff (GvffUnclosedPremise (..))
 import ServiceInventory (Image (..))
 import System.Environment (getArgs)
@@ -277,16 +277,23 @@ canonicalTests inputs paths = do
           expect "native readback identity" (Just (toJSON (SHA.sha256Hex (SHA.sha256 bytes)))) (KM.lookup "native_image4_sha256" identity)
         _ -> fail "native view identity is not an object"
       let hits = nativeRetiredReferences source
-      expect "strict canonical reference refusal" 109 (length hits)
+      expect "strict canonical reference refusal" 16 (length hits)
       let at label address hit = hitImage hit == label && hitSite hit == GuestAddress address
-          fields = sourceRetainedFieldEvidence source hits
           proved = [(ScanImage4,0x6a49ac),(ScanImage5,0xd96fac),(ScanImage5,0xee99e0),(ScanImage5,0xee9a2c),(ScanPlain,0x11126e0),(ScanPlain,0x1112764)]
       expect "six exact instruction encodings are not pointer fields" []
         [hit | hit <- hits, (hitImage hit,case hitSite hit of GuestAddress address -> address) `elem` proved]
-      expect "all GVFF findings remain diagnostic only" 93 (length fields)
-      expect "GVFF findings remain refused" True (all ((`elem` hits) . retainedFieldHit) fields)
-      expect "known GVFF alias and lifetime premises remain" True
-        (all (\field -> all (`elem` retainedFieldUnclosedPremises field) [Callback890facWriteClosure,LabelPayloadAliasClosure,ProductionFieldAndDispatchLifetime]) fields)
+      expect "GVFF fields landing inside the setter dispatch table are not references" []
+        [hit | hit <- hits, hitImage hit == ScanImage2]
+      let withImage label change = [(name, if name == label then change image else image) | (name, image) <- sourceScanned source]
+          putImageWord address value image = image {imageBytes = putWordAt (imageBase image) address value (imageBytes image)}
+          alignedField = withImage ScanImage2 (putImageWord 0x137764 0x624908)
+          alignedHits = retiredReferences alignedField
+          alignedEvidence = retainedFieldEvidence alignedField alignedHits
+      expect "aligned GVFF field word stays refused with its premises" True
+        (any (\field -> at ScanImage2 0x137764 (retainedFieldHit field)
+            && all (`elem` retainedFieldUnclosedPremises field) [Callback890facWriteClosure,LabelPayloadAliasClosure,ProductionFieldAndDispatchLifetime]) alignedEvidence)
+      expect "changed setter dispatch withdraws the GVFF closure" True
+        (any (at ScanImage2 0x137764) (retiredReferences (withImage ScanImage4 (putImageWord 0x6246c4 0xe59ff103))))
       expect "FDL format fields are not references" []
         [hit | hit <- hits, hitImage hit == ScanImage3]
       expect "WLAN firmware block bytes are not a branch" []

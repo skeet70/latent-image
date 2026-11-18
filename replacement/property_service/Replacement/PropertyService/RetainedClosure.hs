@@ -30,6 +30,9 @@ data ClosedRole
   | -- | Bytes no code materializes an address of and no data word names, between bound neighbours
     -- whose bound readers' index bounds stop outside them.
     UnreferencedData
+  | -- | A data word whose value is an unaligned address inside a bound jump table that its
+    -- dispatch reads only as aligned words.
+    UnalignedTableTarget
   deriving (Eq, Show)
 
 data ClosedSite = ClosedSite

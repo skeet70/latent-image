@@ -61,6 +61,7 @@ retainedClosures images = concatMap ($ images)
   , plainTableClosures
   , fdlClosures
   , pcmClosures
+  , Gvff.gvffClosures
   ]
 
 data RetainedFieldEvidence = RetainedGvffField
