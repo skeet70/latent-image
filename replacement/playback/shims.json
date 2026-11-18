@@ -54,7 +54,7 @@
       "id": "playback-jpeg-entry",
       "shim": "Channel9 acquire, restart, release and descriptor callback A32 exports",
       "kind": "stock-ABI export",
-      "other_side": "Retained Playback machine5 and develop callers, owned ordinary lifecycle and static-record builder, descriptor0x48 IRQ registry",
+      "other_side": "Retained Playback machine5 and overlay47 callers, owned ordinary lifecycle, static-record builder and develop job4, descriptor0x48 IRQ registry",
       "owned": "partly",
       "removal": "all transaction callers and IRQ registration use the typed owned JPEG API directly",
       "state": "required",
@@ -62,31 +62,31 @@
         "kind": "reference-only",
         "symbols": ["xm1_playback_jpeg_acquire", "xm1_playback_jpeg_restart", "xm1_playback_jpeg_release", "xm1_playback_jpeg_interrupt"],
         "contract": "replacement/playback/jpeg-contract.json",
-        "requirement": "The seventeen-hook lifecycle package has independent stock native comparisons and guarded installed preparation/PLAY receipts, with exactly thirty-four ABI7 publication records restored on rollback. Historical eight-hook consumer receipts remain separately identified."
+        "requirement": "The twenty-hook lifecycle and develop-consumer package has independent stock native comparisons and guarded installed preparation/PLAY receipts, with exactly forty ABI7 publication records restored on rollback. Historical eight- and seventeen-hook receipts remain separately identified."
       }],
       "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
     },
     {
       "id": "playback-jpeg-consumers",
-      "shim": "Static-record construction and whole ordinary Playback JPEG lifecycle A32 exports",
+      "shim": "Static-record construction, develop job4 consumers and whole ordinary Playback JPEG lifecycle A32 exports",
       "kind": "stock-ABI export",
-      "other_side": "Develop job4, machine5 and deferred notification, nested critical and timer providers, subscriber callbacks",
+      "other_side": "Develop framework finish caller 0x00e936a8, overlay47 clear-record caller 0x01238160, machine5 and deferred notification, task-event notify/wait, nested critical and timer providers, subscriber callbacks",
       "owned": "partly",
       "removal": "all producer and completion callers link the typed owned API directly; static-request and subscriber quiescence permits publication removal",
       "state": "required",
       "evidence": [{
         "kind": "reference-only",
-        "symbols": ["xm1_playback_jpeg_build_request", "xm1_playback_jpeg_complete_first", "xm1_playback_jpeg_complete_second", "xm1_playback_jpeg_initialize", "xm1_playback_jpeg_reset_state", "xm1_playback_jpeg_restart_request", "xm1_playback_jpeg_cancel_timer", "xm1_playback_jpeg_preserve_prefix", "xm1_playback_jpeg_finish_request", "xm1_playback_jpeg_cancel_request", "xm1_playback_jpeg_submit"],
+        "symbols": ["xm1_playback_jpeg_build_request", "xm1_playback_jpeg_complete_first", "xm1_playback_jpeg_complete_second", "xm1_playback_jpeg_initialize", "xm1_playback_jpeg_reset_state", "xm1_playback_jpeg_restart_request", "xm1_playback_jpeg_cancel_timer", "xm1_playback_jpeg_preserve_prefix", "xm1_playback_jpeg_finish_request", "xm1_playback_jpeg_cancel_request", "xm1_playback_jpeg_submit", "xm1_playback_jpeg_develop_job4", "xm1_playback_jpeg_record_notification", "xm1_playback_jpeg_clear_record_release"],
         "contract": "replacement/playback/jpeg-contract.json",
-        "requirement": "Exact whole lifecycle bodies retain the source/output interface. Natural cancellation owns entry0x0122026c;0x01220288 is a stock observation interior only. Owned finish/cancel release observations are immutable interior labels. Preparation construction and PLAY handbacks remain separate epochs; retained clear-record release and lifetime obligations remain explicit."
+        "requirement": "Exact whole lifecycle and develop job4/notification/clear-record bodies retain the source/output interface. Natural cancellation owns entry0x0122026c;0x01220288 is a stock observation interior only. Owned finish/cancel release observations are immutable interior labels. Preparation construction through job4 and PLAY handbacks remain separate epochs; constructor serialization and record-specific completion wait remain explicit obligations."
       }],
       "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
     },
     {
       "id": "playback-jpeg-services",
-      "shim": "Retained JPEG continuation, resource routing, lock, cache and timer services",
+      "shim": "Retained JPEG continuation, resource routing, lock, cache, timer and task-event services",
       "kind": "trampoline into retained stock",
-      "other_side": "Command4 endpoint reprogramming0x0065aa44, resource1e, reserved lock9, cache0x00042634, IRQ registration/release and timer0x0069b328/0x0069b7a4",
+      "other_side": "Command4 endpoint reprogramming0x0065aa44, resource1e, reserved lock9, cache0x00042634, IRQ registration/release, timer0x0069b328/0x0069b7a4 and task-event notify0x00724558/wait0x007243a8",
       "owned": "partly",
       "removal": "the packaged transaction links owned service providers with qualified hardware laws",
       "state": "required",
@@ -101,7 +101,7 @@
       "id": "playback-jpeg-lifetime",
       "shim": "Shared JPEG request/configuration layout and published IRQ lifetime",
       "kind": "guest-memory layout view",
-      "other_side": "Retained develop/machine5 consumers, owned ordinary Playback lifecycle and retained interrupt release",
+      "other_side": "Retained machine5/overlay47 consumers, owned develop job4 and ordinary Playback lifecycle, retained interrupt release",
       "owned": "partly",
       "removal": "all shared-state consumers use owned layouts and IRQ quiescence permits publication removal",
       "state": "required",
