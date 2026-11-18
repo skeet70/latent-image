@@ -418,7 +418,7 @@ prepareSteps witnesses changes bootTrace = build (StepNumber 1) (HitCursor (leng
     build number@(StepNumber ordinal) from@(HitCursor first) previous (kind:rest) =
       let witness=case M.lookup kind witnesses of Just value -> value; Nothing -> error "matrix step has no shared witness"
           rawTrace=case M.lookup kind changes of Just change -> change (writeTrace witness); Nothing -> writeTrace witness
-          idle=InstructionCounter (counterValue previous+case stepAction kind of Storage.SetModeDial _ -> 0; _ -> instructionsValue preKeyIdle)
+          idle=InstructionCounter (counterValue previous+case stepAction kind of Storage.SetModeDial _ -> 40000000; _ -> instructionsValue preKeyIdle)
           spanCount=100*fromIntegral (max (length rawTrace) (length (writeRows witness)))+1000
           end=InstructionCounter (counterValue idle+spanCount+10)
           to=HitCursor (first+length rawTrace)
@@ -572,7 +572,7 @@ bootIdentity role session = object
   , "adjustment_nand" .= (if session == BootSession 0 then A.toJSON (digestOf "nand") else Null)
   , "record_nand" .= Null,"committed_nand" .= (if session == BootSession 0 then Null else A.toJSON (roleExportDigest role))
   , "source_kind" .= (if session == BootSession 0 then "initial-seeded" else "full-committed"::T.Text)
-  , "card_sha256" .= Null,"procedure" .= digestOf "synthetic SDK procedure"
+  , "card_sha256" .= Null,"procedure" .= digestOf "synthetic SDK procedure","emulator_binary" .= digestOf "synthetic emulator"
   ]
 
 freshStart :: Role -> BootSession -> B.ByteString -> Value

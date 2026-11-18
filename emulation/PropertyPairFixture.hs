@@ -222,15 +222,15 @@ bankApplyFixture :: StorageBoundaries.BankApplyElfInput
 bankApplyFixture = bankApplyFixtureAt (Placement.GuestAddress bankApplyBody)
 composedBoundaries :: [(StoreAccessor,Word32,[Word32],Int)]
 composedBoundaries =
-  [ (StorageByte,carrierStart,StorageEncoding.storageStoreWords StorageEncoding.StorageByte,33)
-  , (StorageHalf,carrierStart+0x100,StorageEncoding.storageStoreWords StorageEncoding.StorageHalf,33)
+  [ (StorageByte,carrierStart,StorageEncoding.storageStoreWords StorageEncoding.StorageByte,8)
+  , (StorageHalf,carrierStart+0x100,StorageEncoding.storageStoreWords StorageEncoding.StorageHalf,8)
   , (OutputByte,carrierStart+0x200,StorageEncoding.storageOutputWords StorageEncoding.StorageByte,7)
   , (StatusWord,carrierStart+0x240,StorageEncoding.storageStatusWords,2)
   , (OutputHalf,carrierStart+0x280,StorageEncoding.storageOutputWords StorageEncoding.StorageHalf,12)
   , (CustomByte,composedCodeStart,StorageBoundaries.customStoreWords StorageBoundaries.CustomStoreByte,fromIntegral (StorageBoundaries.customStoreIndex StorageBoundaries.CustomStoreByte))
   , (CustomHalf,composedCodeStart+0x60,StorageBoundaries.customStoreWords StorageBoundaries.CustomStoreHalf,fromIntegral (StorageBoundaries.customStoreIndex StorageBoundaries.CustomStoreHalf))
   , (CustomWord,composedCodeStart+0xc0,StorageBoundaries.customStoreWords StorageBoundaries.CustomStoreWord,fromIntegral (StorageBoundaries.customStoreIndex StorageBoundaries.CustomStoreWord))
-  , (StorageByte,composedCodeStart+0x100,StorageEncoding.storageStoreWords StorageEncoding.StorageByte,33) ]
+  , (StorageByte,composedCodeStart+0x100,StorageEncoding.storageStoreWords StorageEncoding.StorageByte,8) ]
 composedCanonical :: B.ByteString
 composedCanonical = foldl' (\image (address,instruction) -> putWord address instruction image)
   (canonicalHull4 <> B.replicate (0x100000-B.length canonicalHull4) 0)

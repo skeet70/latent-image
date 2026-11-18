@@ -425,7 +425,10 @@ parseHit :: Value -> Parse Hit
 parseHit value = do
   fields <- asObject value
   exact (["site", "address", "core", "instructions", "registers", "sp", "lr", "cpsr"]
-    ++ ["memory" | KM.member "memory" fields] ++ ["task" | KM.member "task" fields]) fields
+    ++ ["memory" | KM.member "memory" fields] ++ ["task" | KM.member "task" fields]
+    ++ [provenanceKey | KM.member (K.fromText provenanceKey) fields]) fields
+  -- The runtime's render-object stream ordinal; property pairs do not observe that stream.
+  forM_ (KM.lookup (K.fromText provenanceKey) fields) asWord64
   registers <- at "registers" fields >>= asObject
   let general = KM.member "r8" registers
   exact (["r0", "r1", "r2", "r3"] ++ if general then ["r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12"] else []) registers
@@ -450,6 +453,9 @@ parseHit value = do
   Hit <$> (at "site" fields >>= asText >>= parseHitSite) <*> (at "address" fields >>= hexWordText)
     <*> pure core <*> pure instructions <*> pure arguments <*> pure r8
     <*> pure task <*> pure sp <*> (at "lr" fields >>= hexWordText) <*> pure flags <*> pure memory
+  where
+    provenanceKey :: T.Text
+    provenanceKey = "render_object_provenance_sequence"
 
 persistenceEvents :: Contract -> Value -> Either Refusal [PersistenceEvent]
 persistenceEvents contract value = do
@@ -562,7 +568,7 @@ parseWatch policy value = do
   views <- maybe (Left "unknown watch views") Right (lookup viewText [(viewPolicyWire known, known) | known <- [minBound .. maxBound]])
   unless (views == policy) (Left "watch views differ from the expected policy")
   ranges <- at "ranges" fields >>= asArray >>= mapM (\pair -> asArray pair >>= mapM asWord)
-  unless (ranges == [[rangeStart range, rangeEnd range] | range <- settingsRanges]) (Left "watch ranges differ from the settings ranges")
+  unless (sort ranges == sort [[rangeStart range, rangeEnd range] | range <- settingsRanges]) (Left "watch ranges differ from the settings ranges")
   rows <- at "records" fields >>= asArray
   when (length rows > watchLimit) (Left "watch rows exceed the declared bound")
   mapM parseRow rows
@@ -1825,6 +1831,7 @@ data BootIdentity = BootIdentity
   , identityRom :: Sha256
   , identityProcedure :: Sha256
   , identitySeed :: BootSeed
+  , identityEmulator :: Maybe Sha256
   } deriving Eq
 data FreshStart = FreshStart
   { freshIdentity :: BootIdentity
@@ -1870,7 +1877,8 @@ bootResetPaths bytes = either (Left . StorageShape) Right $ do
 parseBootIdentity :: Value -> Parse BootIdentity
 parseBootIdentity value = do
   fields <- asObject value
-  exact ["schema","model","run_document","installed_dat","boot_rom","adjustment_nand","record_nand","committed_nand","source_kind","card_sha256","procedure"] fields
+  exact (["schema","model","run_document","installed_dat","boot_rom","adjustment_nand","record_nand","committed_nand","source_kind","card_sha256","procedure"]
+    ++ ["emulator_binary" | KM.member "emulator_binary" fields]) fields
   schema <- at "schema" fields >>= asInt
   unless (schema == 3) (Left "SDK boot identity schema differs")
   model <- at "model" fields >>= asText
@@ -1889,6 +1897,7 @@ parseBootIdentity value = do
   BootIdentity (SdkModel model) <$> (at "run_document" fields >>= parseDigest)
     <*> (at "installed_dat" fields >>= parseDigest) <*> (at "boot_rom" fields >>= parseDigest)
     <*> (at "procedure" fields >>= parseDigest) <*> pure seed
+    <*> traverse parseDigest (KM.lookup "emulator_binary" fields)
 
 parseFreshStart :: BootSession -> Value -> Parse FreshStart
 parseFreshStart (BootSession number) value = do
@@ -2065,6 +2074,11 @@ parseStoragePress action result = do
   unless (toInteger began+toInteger pressed+toInteger prefixRan == toInteger end)
     (Left "storage key and bounded prefix instruction ranges are discontinuous")
   pure (Press status menu endpointMenu endpointMode,Instructions began)
+
+-- | Instructions the SDK's mode-dial request executes before it replies (`MODE_DIAL_SETTLE` in
+-- fujimod-xm1/src/ram_push.rs).
+modeDialSettle :: Integer
+modeDialSettle = 40000000
 
 parseModeDialWitness :: ModeDial -> A.Object -> Parse (ModeDialWitness,StorageEndpoint)
 parseModeDialWitness expected result = do
@@ -2508,8 +2522,9 @@ qualifyStorage role observation receipt contract plan bankBoundary hits matrix =
         (from,to)=manifestHitRange manifest
     require (sha256Hex (identityRun identity) == expectedRun && sha256Hex (identityDat identity) == expectedDat
       && sha256Hex (identityRom identity) == expectedRom
-      && identityModel identity == identityModel firstIdentity && identityProcedure identity == identityProcedure firstIdentity)
-      "SDK boot changes the actual program, model, ROM, or procedure"
+      && identityModel identity == identityModel firstIdentity && identityProcedure identity == identityProcedure firstIdentity
+      && identityEmulator identity == identityEmulator firstIdentity)
+      "SDK boot changes the actual program, model, ROM, procedure or emulator"
     require (from >= 0 && from <= to && to <= V.length hits) "SDK boot hit range leaves the captured trace"
     _ <- foldM (\previous index -> do
       let counter=hitInstructions (hits V.! index)
@@ -2552,7 +2567,7 @@ qualifyStorage role observation receipt contract plan bankBoundary hits matrix =
           end <- field "instructions" elapsed >>= asWord64
           ran <- field "ran" elapsed >>= asWord64
           case Storage.storageStepAction spec of
-            Storage.SetModeDial _ -> unless (ran <= end && Instructions (end-ran) == clock)
+            Storage.SetModeDial _ -> unless (ran <= end && toInteger (end-ran) == toInteger (instructionsValue clock)+modeDialSettle)
               (Left "physical dial prefix does not continue the previous action")
             _ -> do
               idleEnd <- field "idle" result >>= field "instructions" >>= asWord64

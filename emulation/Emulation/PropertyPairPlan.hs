@@ -755,23 +755,27 @@ checkedStoreSites :: Contract -> Word32 -> [PhysicalRange] -> [StoreAccessor] ->
 checkedStoreSites contract base carriers accessors linked = concat <$> forM accessors (\accessor -> do
     let name = storeAccessorName accessor
         entries = [entry | (candidate,entry) <- contractEntries contract, candidate == name]
-        (expected,index) = case accessor of
-          StorageByte -> (StorageEncoding.storageStoreWords StorageEncoding.StorageByte,33)
-          StorageHalf -> (StorageEncoding.storageStoreWords StorageEncoding.StorageHalf,33)
-          CustomByte -> (customStoreWords CustomStoreByte,customStoreIndex CustomStoreByte)
-          CustomHalf -> (customStoreWords CustomStoreHalf,customStoreIndex CustomStoreHalf)
-          CustomWord -> (customStoreWords CustomStoreWord,customStoreIndex CustomStoreWord)
-          OutputByte -> (StorageEncoding.storageOutputWords StorageEncoding.StorageByte,7)
-          OutputHalf -> (StorageEncoding.storageOutputWords StorageEncoding.StorageHalf,12)
-          StatusWord -> (StorageEncoding.storageStatusWords,2)
-          _ -> ([],0)
+        (expected,indices) = case accessor of
+          StorageByte -> windowStores StorageEncoding.StorageByte
+          StorageHalf -> windowStores StorageEncoding.StorageHalf
+          CustomByte -> (customStoreWords CustomStoreByte,[customStoreIndex CustomStoreByte])
+          CustomHalf -> (customStoreWords CustomStoreHalf,[customStoreIndex CustomStoreHalf])
+          CustomWord -> (customStoreWords CustomStoreWord,[customStoreIndex CustomStoreWord])
+          OutputByte -> (StorageEncoding.storageOutputWords StorageEncoding.StorageByte,[7])
+          OutputHalf -> (StorageEncoding.storageOutputWords StorageEncoding.StorageHalf,[12])
+          StatusWord -> (StorageEncoding.storageStatusWords,[2])
+          _ -> ([],[])
+        -- Each address window ends in its own store instruction.
+        windowStores width =
+          let encoded = StorageEncoding.storageStoreWords width
+          in (encoded,[index | (index,word) <- zip [0..] encoded, word == StorageEncoding.storageStoreWord width])
     unless (not (null entries) && length entries == S.size (S.fromList entries)) (Left (T.unpack name ++ ": missing or duplicate boundary instance"))
-    forM entries $ \entry -> do
+    concat <$> forM entries (\entry -> do
       let size = 4*length expected
           offset = fromIntegral (entry-base)
       unless (entry >= base && offset+size <= B.length linked && any (\region -> entry >= rangeStart region && toInteger entry+toInteger size <= toInteger (rangeEnd region)) carriers) (Left (T.unpack name ++ ": boundary outside admitted carriers"))
       unless ([word32At linked (offset+word*4) | word <- [0..length expected-1]] == expected) (Left (T.unpack name ++ ": checked boundary encoding differs"))
-      pure (entry+fromIntegral (index*4),accessor))
+      pure [(entry+fromIntegral (index*4),accessor) | index <- indices]))
 
 legacyStoreSites :: Contract -> B.ByteString -> Either String [(Word32, StoreAccessor)]
 legacyStoreSites contract linked = forM [BankStore8,BankStore16,SaveStore8,SaveStore16] $ \accessor -> do
