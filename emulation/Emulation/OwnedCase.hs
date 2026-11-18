@@ -43,8 +43,8 @@ module Emulation.OwnedCase
   , required
   ) where
 
-import Control.Exception (IOException, try)
-import Control.Monad (foldM, forM_, unless, when)
+import Control.Exception (IOException, evaluate, try)
+import Control.Monad (foldM, forM_, unless, void, when)
 import Data.Aeson (Value, object, (.=))
 import qualified Data.ByteString as B
 import Data.Bits (shiftR, (.&.))
@@ -59,6 +59,7 @@ import Emulation.NativeObservation
   ( GuestAddress (..)
   , KernelObservation (..)
   , NativeObservation (..)
+  , evaluateObservation
   , Ordered (..)
   , Register (..)
   , RegionId (..)
@@ -518,7 +519,9 @@ loadObservedBatch runner path = do
           Just regions -> either (Left . (\problem -> str (get value "status") ++ ": " ++ renderObservationError problem)) Right $ do
             exit <- reportRunnerExit value
             observeNative exit regions (get value "runner")
-    modifyIORef' collected ((reportCase report, observed) :)
+    ident <- evaluate (reportCase report)
+    either (void . evaluate . length) evaluateObservation observed
+    modifyIORef' collected ((ident, observed) :)
   results <- reverse <$> readIORef collected
   let missing =
         [caseIdText ident ++ ": " ++ reason | (ident, Left reason) <- results]
