@@ -591,7 +591,7 @@ executeBuilder runner output package elf base@(Address baseWord) runtime publica
         ,Block Playback requestAddress ReadWrite initialPlayback [],Block RecordMemory (Address recordBase) ReadWrite recordBefore []
         ,Block Consumer consumerAddress ReadWrite (assemble[0,0]) [],Block Stack (Address 0x2200000) ReadWrite (B.replicate 0x4000 0) []
         ,code Caller 0x110000 entry,code FirstConsumer 0x110100 callbackCode,code SecondConsumer 0x110200 (assemble[0xe12fff1e])
-        ,code Producer 0xe8fee4 producerBytes,code Signal 0xe8eb18 signalBytes,Block Exit exitAddress ReadExecute (assemble[0xe12fff1e]) []]
+        ,publish (code Producer 0xe8fee4 producerBytes),publish (code Signal 0xe8eb18 signalBytes),Block Exit exitAddress ReadExecute (assemble[0xe12fff1e]) []]
         ++ (if job/=Nothing then [Block DevelopOperand (Address 0x2002000) ReadOnly operand [],Block DevelopPlane (Address 0x2001000) ReadWrite plane []] else [])
         ++ [code Defect 0x110300 defectBytes|sourceDefect/=Nothing]
       expected=[(Driver,finalState),(Playback,initialPlayback),(RecordMemory,finalRecord),(Consumer,finalConsumer)]
@@ -603,6 +603,7 @@ executeBuilder runner output package elf base@(Address baseWord) runtime publica
     (ident++": defect must change caller-observed memory")
   json (output </> ident++"-identity.json") (object ["role" .= show role,"caller" .= show route,"defect" .= fmap show control
     ,"runtime_sha256" .= hashText(hash runtime),"executed_runtime_sha256" .= hashText(hash image),"builder_source_sha256" .= hashText(hash(B.take 244(B.drop(0xd98904-0xbf1a00)image5)))
+    ,"published_develop_sites" .= [av location|role/=Original,(location@(Address target),_)<-publications,target `elem` [0xe8fee4,0xe8eb18,0xd989f8]]
     ,"builder_control" .= case sourceDefect of
         Nothing -> Null
         Just selectedDefect -> let BuilderMutation (SourceOffset offset) _ = mutation selectedDefect in object
