@@ -328,7 +328,7 @@ main = do
           if holds then removeDirectoryRecursive dir else pure ()
           let report=object ["domain_b".=b,"service".=show s,"cases".=length cases,"case_rows".=caseRows,"reused_observations".=reused,"stock_completed".=completed,"owned_matches".=matches "owned","equivalent_matches".=matches "equivalent","mutant_matches".=matches "mutant","negative_control".=negativeControl,"controls".=mutantRows,"observation_controls".=observationRows,"negative_controls".=[object ["control".=name,"holds".=held] | (name,held)<-controlRows],"stock_instructions".=stockInstructions,"passed".=holds]
           B.writeFile (work </> (show b++show s++".json")) (encodeCanonical report)
-          pure (ServiceReport b s holds report (length cases) inputs caseRows failures mutantRows observationRows loaderDigest candidateDigest)
+          failures `seq` pure (ServiceReport b s holds report (length cases) inputs caseRows failures mutantRows observationRows loaderDigest candidateDigest)
       let flat=concat reports
           passed=all srHolds flat
           families=[object ["domain_b".=srDomainB r,"family".=show (srService r),"cases".=srCaseCount r,"passed".=srHolds r] | r<-flat]
