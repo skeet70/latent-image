@@ -14,7 +14,7 @@ import System.Environment (getArgs)
 import Replacement.Saclac.PayloadProjection hiding (projectPayload)
 import qualified Replacement.Saclac.PayloadProjection as P
 
--- | The stock stream's projection; the callback identity cases below exercise the owned role.
+-- | The stock stream's projection; the owned-identity cases below exercise the owned role.
 projectPayload :: Declaration -> Direction -> QueueId -> Operation -> [Word8] -> Either String [Word8]
 projectPayload = P.projectPayload StockRole
 
@@ -69,7 +69,7 @@ main = do
   mapM_ (\offset -> check (sourceRequest sourceBytes == sourceRequest (mutate offset sourceBytes))) sourceUnwritten
   mapM_ (\offset -> check (sourceRequest sourceBytes /= sourceRequest (mutate offset sourceBytes))) (filter (`notElem` sourceUnwritten) [0..55])
   let through = projectPayload recovered Outgoing (QueueId 48) (Operation 0x4002)
-      throughBytes = replicate 208 0
+      throughBytes = withWord 188 0x016c0728 (replicate 208 0)
       nonzero = take 32 throughBytes ++ [8] ++ drop 33 throughBytes
       zeroAlternate = take 32 throughBytes ++ [1] ++ drop 33 throughBytes
       nonzeroAlternate = take 32 throughBytes ++ [9] ++ drop 33 throughBytes
@@ -114,7 +114,7 @@ main = do
   internalCompletions
   recoveredInternal recovered
   recoveredLayouts recovered
-  callbackIdentities recovered
+  ownedIdentities recovered
   putStrLn "payload field projection behavioral tests passed"
   where parse = either fail pure . parseDeclaration . L.toStrict . encode
 
@@ -254,7 +254,8 @@ recoveredLayouts recovered = do
       setupGaps = [127] ++ [144..156] ++ [162,163,182,183]
   request 48 0x4003 176 ([107] ++ [124..136] ++ [142..159] ++ [162,163])
   request 48 0x4004 208 ([36..39] ++ setupGaps)
-  request 48 0x4002 208 ([36..39] ++ familyGaps)
+  -- 0x4002 +188 is an owned identity: the stock stream carries stock's results buffer.
+  layout (outgoing 48 0x4002) (withWord 188 0x016c0728 (zeros 208)) ([36..39] ++ familyGaps)
   let selected selector = take 32 (zeros 248) ++ [selector] ++ drop 33 (zeros 248)
       buffered = outgoing 48 0x4008
       bufferedGaps = familyGaps ++ [200..203] ++ [208..223]
@@ -286,10 +287,10 @@ recoveredLayouts recovered = do
   request 48 0x400f 4 []
   request 48 0x4043 0 []
 
--- A callback identity word: stock must pass the declared callee; an owned image must pass the
+-- An owned-identity word: stock must pass the declared stock value; an owned image must pass the
 -- declared replacement symbol's address from its own symbol table. Each refusal is separate.
-callbackIdentities :: Declaration -> IO ()
-callbackIdentities recovered = do
+ownedIdentities :: Declaration -> IO ()
+ownedIdentities recovered = do
   let linked = 0x00b7f514
       owned name = if name == "xm1_saclac_root_round_window" then Right linked else Left "absent"
       window role = P.projectPayload role recovered Outgoing (QueueId 44) (Operation 0x3c0c)
@@ -314,11 +315,34 @@ callbackIdentities recovered = do
   check (isLeft (auxiliary (OwnedRole bound) 0x00f37854))
   check (lens (OwnedRole bound) 0x00b7ed70 == lens StockRole 0x00f15070)
   check (isLeft (lens StockRole 0x00b7ed70))
-  -- A declared callback identity is one unconditional word.
-  check (isLeft (parseDeclaration (L.toStrict (encode (policy [object
-    [ "name" .= ("synthetic-callback" :: String), "offset" .= (0 :: Int), "bytes" .= (2 :: Int)
-    , "sources" .= (["synthetic fixture"] :: [String])
-    , "callback" .= object ["stock_entry" .= (1 :: Int), "replacement_symbol" .= ("xm1_fixture" :: String)] ], field 2 3] [])))))
+  -- Owned storage follows the same law: the statistics notice's results pointer is stock's
+  -- buffer in the stock role and Root's exported buffer in an owned role.
+  let results = 0x00bde6b8
+      storage name = if name == "XM1_SACLAC_ROOT_STATISTICS_RESULTS" then Right results else Left "absent"
+      notice role word = P.projectPayload role recovered Outgoing (QueueId 48) (Operation 0x4002) (withWord 188 word (replicate 208 0))
+  check (not (isLeft (notice StockRole 0x016c0728)))
+  check (notice (OwnedRole storage) results == notice StockRole 0x016c0728)
+  check (isLeft (notice (OwnedRole storage) 0x016c0728))
+  check (isLeft (notice StockRole results))
+  -- Admission: an identity is one unconditional word naming its replacement, and it cites every
+  -- retained consumer as never dereferencing the word or using it only through an owned
+  -- contract whose contents are compared elsewhere.
+  let never = object ["use" .= ("never-dereferenced" :: String), "sources" .= (["synthetic consumer"] :: [String])]
+      contract = object ["use" .= ("owned-contract" :: String), "sources" .= (["synthetic consumer"] :: [String]), "compared_by" .= (["synthetic comparison"] :: [String])]
+      declared width consumers = parseDeclaration (L.toStrict (encode (policy [object
+        [ "name" .= ("synthetic-identity" :: String), "offset" .= (0 :: Int), "bytes" .= (width :: Int)
+        , "sources" .= (["synthetic fixture"] :: [String])
+        , "identity" .= object ["stock_value" .= (1 :: Int), "replacement_symbol" .= ("xm1_fixture" :: String), "consumers" .= consumers] ]
+        , field width (5 - width)] [])))
+  check (not (isLeft (declared 4 [never])))
+  check (not (isLeft (declared 4 [never, contract])))
+  check (isLeft (declared 2 [never]))
+  check (isLeft (declared 4 ([] :: [Value])))
+  check (isLeft (declared 4 [object ["use" .= ("stock-layout" :: String), "sources" .= (["synthetic consumer"] :: [String])]]))
+  check (isLeft (declared 4 [object ["use" .= ("never-dereferenced" :: String), "sources" .= ([] :: [String])]]))
+  check (isLeft (declared 4 [object ["use" .= ("owned-contract" :: String), "sources" .= (["synthetic consumer"] :: [String])]]))
+  check (isLeft (declared 4 [object ["use" .= ("owned-contract" :: String), "sources" .= (["synthetic consumer"] :: [String]), "compared_by" .= ([] :: [String])]]))
+  check (isLeft (declared 4 [object ["use" .= ("never-dereferenced" :: String), "sources" .= (["synthetic consumer"] :: [String]), "compared_by" .= (["synthetic comparison"] :: [String])]]))
 
 -- Two senders of one operation are separated by the word each copies at the
 -- same offset, and a payload matching neither is refused.

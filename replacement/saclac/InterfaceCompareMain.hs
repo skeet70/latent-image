@@ -275,7 +275,7 @@ main = do
     , "controls" .= [object ["name" .= variant, "run" .= wrongRun]]
     , "milestone" .= milestone
     , "same_observer_and_scenario_inputs" .= sameInputs
-    , "callback_identity_bindings" .= object ["owned" .= candidateBound, "controls" .= [controlBound]]
+    , "owned_identity_bindings" .= object ["owned" .= candidateBound, "controls" .= [controlBound]]
     , "stock_executed_instructions_in_action_extents" .= stockFetches stock
-    , "normalization" .= ("instruction clocks and cores omitted; each store expanded into ascending-address bytes without reordering events; transient reply pointer addresses omitted and contents retained; a declared callback-identity word projects to its stock callee only when it equals that callee (stock) or the declared replacement symbol's address in the lane's own bound symbol table (owned), and any other word refuses the comparison" :: String)
+    , "normalization" .= ("instruction clocks and cores omitted; each store expanded into ascending-address bytes without reordering events; transient reply pointer addresses omitted and contents retained; a declared owned-identity word (owned code or storage, admitted only with cited retained-consumer use) projects to its stock value only when it equals that value (stock) or the declared replacement symbol's address in the lane's own bound symbol table (owned), and any other word refuses the comparison" :: String)
     ]))

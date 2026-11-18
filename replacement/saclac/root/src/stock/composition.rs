@@ -36,7 +36,6 @@ struct Owner {
     motion: RefCell<Option<MotionState>>,
     live_record: RecordBinding,
     s1_record: RecordBinding,
-    results: [u32; xm1_saclac_interface::statistics::RESULTS_BYTES / 4],
     shot: RefCell<Shot>,
     root: Root,
 }
@@ -44,6 +43,12 @@ struct Owner {
 static mut OWNER: MaybeUninit<Owner> = MaybeUninit::uninit();
 static mut READY: bool = false;
 static mut RECOGNITION: RefCell<SceneRecognition> = RefCell::new(SceneRecognition::new());
+/// The statistics task copies its 0x414-byte result here (0x0102ff04's copy to the address a
+/// 0x4002/0x4004 notice carries); only Root reads it, through `statistics_results::ResultBuffer`.
+/// Exported so the payload contract binds the notice's pointer word to this symbol in each link.
+#[no_mangle]
+static mut XM1_SACLAC_ROOT_STATISTICS_RESULTS: [u32; xm1_saclac_interface::statistics::RESULTS_BYTES / 4] =
+    [0; xm1_saclac_interface::statistics::RESULTS_BYTES / 4];
 
 macro_rules! word {
     ($function:path) => { StockCallbackWord($function as *const () as u32) };
@@ -104,7 +109,6 @@ unsafe fn initialize(marker: &'static u32) -> &'static Root {
         addr_of_mut!((*owner).motion).write(RefCell::new(None));
         addr_of_mut!((*owner).live_record).write(RecordBinding::new(wire::record_handle_from_a2(u32::MAX)));
         addr_of_mut!((*owner).s1_record).write(RecordBinding::new(wire::record_handle_from_a2(u32::MAX)));
-        addr_of_mut!((*owner).results).write([0; xm1_saclac_interface::statistics::RESULTS_BYTES / 4]);
     }
     let services = unsafe { &*addr_of_mut!((*owner).services) };
     let geometry = unsafe { &*addr_of_mut!((*owner).geometry) };
@@ -121,7 +125,7 @@ unsafe fn initialize(marker: &'static u32) -> &'static Root {
     unsafe { addr_of_mut!((*owner).shot).write(RefCell::new(ShotPorts::new(super::shot::ShotMemory(Guest, &exposure.context), libraries))); }
     let shot = unsafe { &*addr_of_mut!((*owner).shot) };
     services.borrow_mut().bind_round_callbacks(super::round_callbacks::callbacks());
-    let results = SharedAddress(unsafe { addr_of_mut!((*owner).results) } as u32);
+    let results = SharedAddress(addr_of_mut!(XM1_SACLAC_ROOT_STATISTICS_RESULTS) as u32);
     unsafe {
         addr_of_mut!((*owner).root).write(Runtime::new(services, geometry, recognition, placement, shot, live_record, s1_record,
             crate::runtime::Callbacks {

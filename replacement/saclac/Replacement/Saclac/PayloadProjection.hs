@@ -29,10 +29,16 @@ newtype Width = Width Int deriving (Eq, Show)
 newtype Citation = Citation T.Text deriving (Eq, Show)
 data Direction = Incoming | Outgoing deriving (Eq, Show)
 data Exclusion = Exclusion Offset Width [Word32] [Citation] deriving (Eq, Show)
--- | A callback-identity word: the stock role passes the stock callee itself, an owned role the
--- linked address of the symbol the replacement contract declares for that callee.
-data Callback = Callback Word32 T.Text deriving (Eq, Show)
-data Field = Field T.Text Offset Width [Citation] (Maybe Exclusion) (Maybe Callback) deriving (Eq, Show)
+-- | A word carrying the identity of owned code or storage: the stock role passes the declared
+-- stock value itself, an owned role the linked address of the replacement symbol the contract
+-- names. It is admitted only with cited evidence of every retained consumer's use of the word.
+data Identity = Identity Word32 T.Text [Consumer] deriving (Eq, Show)
+-- | How retained code uses an identity word: it never dereferences it (it only stores, posts or
+-- enters it as a value), or it dereferences it only through an owned contract whose contents are
+-- compared elsewhere. A word a retained consumer reads with stock layout assumptions has no
+-- consumer kind; its pointed-to bytes are compared instead.
+data Consumer = NeverDereferenced [Citation] | OwnedContract [Citation] [Citation] deriving (Eq, Show)
+data Field = Field T.Text Offset Width [Citation] (Maybe Exclusion) (Maybe Identity) deriving (Eq, Show)
 data Padding = Padding Offset Width [Citation] deriving (Eq, Show)
 
 -- | Whose stream a payload belongs to. An owned role resolves a symbol in the compared image's own
@@ -81,14 +87,35 @@ instance FromJSON Exclusion where
 instance ToJSON Exclusion where
   toJSON (Exclusion (Offset offset) (Width width) values sources) = object
     ["offset" .= offset, "bytes" .= width, "values" .= values, "sources" .= sources]
-instance FromJSON Callback where
-  parseJSON = withObject "callback identity" $ \row -> do
-    entry <- row .: "stock_entry"
+instance FromJSON Consumer where
+  parseJSON = withObject "identity consumer" $ \row -> do
+    use <- row .: "use"
+    sources <- row .: "sources"
+    unless (not (null sources)) (fail "an identity consumer cites its use")
+    case use :: T.Text of
+      "never-dereferenced" -> do
+        unless (not (KM.member "compared_by" row)) (fail "a never-dereferenced consumer has no compared contents")
+        pure (NeverDereferenced sources)
+      "owned-contract" -> do
+        compared <- row .: "compared_by"
+        unless (not (null compared)) (fail "an owned-contract consumer cites where its contents are compared")
+        pure (OwnedContract sources compared)
+      _ -> fail "an identity consumer never dereferences the word or uses it only through an owned contract"
+instance ToJSON Consumer where
+  toJSON (NeverDereferenced sources) = object ["use" .= ("never-dereferenced" :: T.Text), "sources" .= sources]
+  toJSON (OwnedContract sources compared) =
+    object ["use" .= ("owned-contract" :: T.Text), "sources" .= sources, "compared_by" .= compared]
+instance FromJSON Identity where
+  parseJSON = withObject "owned identity" $ \row -> do
+    value <- row .: "stock_value"
     symbol <- row .: "replacement_symbol"
-    unless (not (T.null (T.strip symbol))) (fail "a callback identity names its replacement symbol")
-    pure (Callback entry symbol)
-instance ToJSON Callback where
-  toJSON (Callback entry symbol) = object ["stock_entry" .= entry, "replacement_symbol" .= symbol]
+    consumers <- row .: "consumers"
+    unless (not (T.null (T.strip symbol))) (fail "an owned identity names its replacement symbol")
+    unless (not (null consumers)) (fail "an owned identity cites its retained consumers")
+    pure (Identity value symbol consumers)
+instance ToJSON Identity where
+  toJSON (Identity value symbol consumers) =
+    object ["stock_value" .= value, "replacement_symbol" .= symbol, "consumers" .= consumers]
 instance FromJSON Field where
   parseJSON = withObject "payload field" $ \row -> do
     name <- row .: "name"
@@ -96,16 +123,16 @@ instance FromJSON Field where
     width <- row .: "bytes"
     sources <- row .: "sources"
     exclusion <- row .:? "excluded_when"
-    callback <- row .:? "callback"
+    identity <- row .:? "identity"
     unless (not (T.null (T.strip name)) && offset >= 0 && width > 0 && not (null sources)) (fail "invalid payload field")
-    unless (maybe True (const (width == 4 && exclusion == Nothing)) callback)
-      (fail "a callback identity is one unconditional word")
-    pure (Field name (Offset offset) (Width width) sources exclusion callback)
+    unless (maybe True (const (width == 4 && exclusion == Nothing)) identity)
+      (fail "an owned identity is one unconditional word")
+    pure (Field name (Offset offset) (Width width) sources exclusion identity)
 instance ToJSON Field where
-  toJSON (Field name (Offset offset) (Width width) sources exclusion callback) = object
+  toJSON (Field name (Offset offset) (Width width) sources exclusion identity) = object
     (["name" .= name, "offset" .= offset, "bytes" .= width, "sources" .= sources]
       ++ maybe [] (\condition -> ["excluded_when" .= condition]) exclusion
-      ++ maybe [] (\identity -> ["callback" .= identity]) callback)
+      ++ maybe [] (\declared -> ["identity" .= declared]) identity)
 instance FromJSON Padding where
   parseJSON = withObject "payload padding" $ \row -> do
     offset <- row .: "offset"
@@ -213,10 +240,10 @@ declarationJson (Declaration source messages channels causal) = object
   ["schema" .= (1 :: Int), "source_commit" .= source, "messages" .= messages
   , "channels" .= channels, "causal_pairs" .= causal]
 
--- | A callback identity projects to its declared stock callee once the word is that callee in the
+-- | An owned identity projects to its declared stock value once the word is that value in the
 -- stock role, or the declared replacement symbol's address in the owned image's own symbol table.
--- Any other word is refused: a residual stock address or an unsymbolized word in an owned role,
--- and anything but the declared callee in the stock role.
+-- Any other word is refused: a residual stock value or an unsymbolized word in an owned role,
+-- and anything but the declared value in the stock role.
 projectPayload :: Role -> Declaration -> Direction -> QueueId -> Operation -> [Word8] -> Either String [Word8]
 projectPayload role (Declaration _ messages _ _) direction queue operation payload = do
   let candidates = filter ((== (direction, queue, operation)) . messageAddress) messages
@@ -232,14 +259,14 @@ projectPayload role (Declaration _ messages _ _) direction queue operation paylo
       concat <$> sequence [project field | field@(Field _ _ _ _ condition _) <- fields, included condition]
   where
     project (Field _ (Offset offset) (Width width) _ _ Nothing) = pure (take width (drop offset payload))
-    project (Field name (Offset offset) _ _ _ (Just (Callback entry symbol))) = do
+    project (Field name (Offset offset) _ _ _ (Just (Identity value symbol _))) = do
       let word = wordAt offset 4 payload
-          refuse detail = Left ("callback identity " ++ T.unpack name ++ " at " ++ show offset ++ ": " ++ detail)
+          refuse detail = Left ("owned identity " ++ T.unpack name ++ " at " ++ show offset ++ ": " ++ detail)
       expected <- case role of
-        StockRole -> pure entry
+        StockRole -> pure value
         OwnedRole resolve -> either (refuse . ("replacement " ++)) pure (resolve symbol)
       unless (word == expected) (refuse ("word " ++ show word ++ " is not " ++ show expected))
-      pure [fromIntegral (entry `div` 256 ^ index) | index <- [0 .. 3 :: Int]]
+      pure [fromIntegral (value `div` 256 ^ index) | index <- [0 .. 3 :: Int]]
     selectedBy Internal {} _ = True
     selectedBy (Message _ _ _ _ _ _ Nothing) _ = True
     selectedBy (Message _ _ _ (PayloadSize size) _ _ (Just (Discriminator (Offset offset) value))) bytes =

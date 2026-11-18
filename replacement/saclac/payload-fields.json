@@ -291,9 +291,17 @@
       "drivers/lens/control/tu_0076f044.c: both words assigned before send_payload_first_result(0x4214,2,words)",
       "X-M1 1.50 id5 0xf46f88: the only saclac caller of 0x76f5dc passes callee 0xf15070; Root passes xm1_saclac_root_lens_status, which posts the same halfword and mode"
      ],
-     "callback": {
-      "stock_entry": 15814768,
-      "replacement_symbol": "xm1_saclac_root_lens_status"
+     "identity": {
+      "stock_value": 15814768,
+      "replacement_symbol": "xm1_saclac_root_lens_status",
+      "consumers": [
+       {
+        "use": "never-dereferenced",
+        "sources": [
+         "drivers/lens/control/lens_control_fields.h: lens control keeps the word as runtime+0x94 measurement_callback094, typed void (*)(unsigned int position, unsigned int mode), and only enters it with its position and mode"
+        ]
+       }
+      ]
      }
     },
     {
@@ -1276,9 +1284,18 @@
       "0x00f4c6e8: callback word after copied record",
       "X-M1 1.50 id5 0xf3a73c: the only caller of 0xf4c6e8 passes callee 0xf3a3f8; Root passes xm1_saclac_root_round_window, which traces 0x11107000 and posts 0x8d {status, result}"
      ],
-     "callback": {
-      "stock_entry": 15967224,
-      "replacement_symbol": "xm1_saclac_root_round_window"
+     "identity": {
+      "stock_value": 15967224,
+      "replacement_symbol": "xm1_saclac_root_round_window",
+      "consumers": [
+       {
+        "use": "never-dereferenced",
+        "sources": [
+         "control/af/area/tu_00f4bc58.c:523: 0xf4c6e8 posts the 80-byte record with the word through 0x00f49598 to the queue-44 calc task",
+         "stock cold-boot receipt: every entry of 0xf3a3f8 runs in the sender-44 task and is followed by its queue-in 0x3b8d; the calc task only enters the word as its completion"
+        ]
+       }
+      ]
      }
     }
    ],
@@ -1335,9 +1352,18 @@
       "0x00f4c490: callback word after copied record",
       "X-M1 1.50 id5 0xf385ac: the only caller of 0xf4c490 passes callee 0xf37854; Root passes xm1_saclac_root_round_auxiliary, which traces 0x11104000 and posts 0x8a"
      ],
-     "callback": {
-      "stock_entry": 15956052,
-      "replacement_symbol": "xm1_saclac_root_round_auxiliary"
+     "identity": {
+      "stock_value": 15956052,
+      "replacement_symbol": "xm1_saclac_root_round_auxiliary",
+      "consumers": [
+       {
+        "use": "never-dereferenced",
+        "sources": [
+         "control/af/area/tu_00f4bc58.c:417: 0xf4c490 posts the 128-byte record with the word through 0x00f49c18 to the queue-45 calc1 task",
+         "stock cold-boot receipt: every entry of 0xf37854 runs in the sender-45 task and is followed by its queue-in 0x3b8a; the calc1 task only enters the word as its completion"
+        ]
+       }
+      ]
      }
     }
    ],
@@ -2443,11 +2469,44 @@
      ]
     },
     {
-     "name": "optional-words",
+     "name": "notice-pending",
      "offset": 184,
-     "bytes": 12,
+     "bytes": 4,
      "sources": [
-      "0x01039638 source copied or three zero words"
+      "capture/pipeline/operation_start_request_senders.c:110 start_copy_optional copies the 12-byte notice or three zero words; word 0 is the notice's pending word"
+     ]
+    },
+    {
+     "name": "notice-results",
+     "offset": 188,
+     "bytes": 4,
+     "sources": [
+      "capture/pipeline/operation_start_request_senders.c:110: notice word 1; stock control/af/profile/tu_00f3b058.c:573 s54_get_callback_descriptor (0xf3bb70) supplies &g_016c0728"
+     ],
+     "identity": {
+      "stock_value": 23856936,
+      "replacement_symbol": "XM1_SACLAC_ROOT_STATISTICS_RESULTS",
+      "consumers": [
+       {
+        "use": "owned-contract",
+        "sources": [
+         "capture/pipeline/tu_01031c54.c:442: the queue-48 pipeline task keeps the word at state+0x4634",
+         "capture/pipeline/tu_0102ff04.c:320: category_message_copy_payload(state+0x4634, &g_01703b40, 0x414) writes its 0x414-byte result there as the copy destination, then enters notice word 2; it never reads through the word",
+         "Root reads the buffer only through statistics_results::ResultBuffer (RESULTS_BYTES 0x414); the stock readers of the fixed buffer (0xf3b460, 0xf3bf44, 0xf3bfa4, 0xf3bfe0, all control/af/profile/tu_00f3b058.c) are not entered in the owned lane (runs/20261118T185216Z-root-results-pointer-consumers)"
+        ],
+        "compared_by": [
+         "the result's effects reach the stream only through owned code: notice word 2 (0xf3a794) posts 0x7f to queue 43 and Root's subsequent posts and replies are compared; the copied bytes themselves are not yet observed, and the half-press receipt above records no copy into either buffer"
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "name": "notice-callback",
+     "offset": 192,
+     "bytes": 4,
+     "sources": [
+      "capture/pipeline/operation_start_request_senders.c:110: notice word 2; stock 0xf3a794 (s54_post_message_7f_0126ed70) posts 0x7f with its argument and never dereferences the results buffer"
      ]
     },
     {
