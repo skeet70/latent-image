@@ -539,7 +539,7 @@ executeBuilder runner output package elf base@(Address baseWord) runtime publica
       code kind' address bytes=Block kind' (Address address) ReadExecute bytes [(Address address,B.length bytes)]
       deviceTargets=[(C.bodyStart body,target)|role/=Original,(selectedService,target,_)<-P.deviceServices(Just package),let(body,_)=C.jpegDeviceContract selectedService]
       mappedCalls=[Service (maybe address Address(lookup original deviceTargets)) inputs outputs memoryReads memoryWrites|Service address@(Address original) inputs outputs memoryReads memoryWrites<-calls]
-      calls=if not constructs then [] else
+      calls=if not constructs || control==Just(RuntimeDefect OmittedJob4) then [] else
         [service 0x724b68 [(R0,9),(R1,0xffffffff)] [] []
         ,service 0x65a3cc [(R0,0x14c56f4)] [] [Relative R0(assemble[0x1e123456])]
         ,service 0x65a478 [] [] [],service 0x65a58c [(R0,0x14c5890)] [] []
@@ -549,7 +549,7 @@ executeBuilder runner output package elf base@(Address baseWord) runtime publica
         ++ (if irqRuns then [service 0x65ab20 [] [] [Relative R0(assemble[0x10])],service 0x65ab50 [(R0,0x10)] [] []
           ,service 0x65abd8 [] [] [Relative R0(assemble[0x87654321])],service 0x65ac08 [(R0,0x87654321)] [] []
           ,service 0x65a9e4 [(R0,0x14c571c)] [] [Relative R0(let Address endpointWord=endpoint selected in assemble[endpointWord])]] else [])
-        ++ [service 0x724558 [(R0,taskWord),(R1,0x10)] [] [Absolute consumerAddress(assemble[1,0])]|notificationRuns]
+        ++ [service 0x724558 [(R0,taskWord),(R1,0x10)] [] [Absolute consumerAddress(assemble[1,0])]|notificationRuns,control/=Just(RuntimeDefect OmittedNotification)]
         ++ [service 0x7243a8 [(R0,0x10),(R2,0xffffffff)] [] []|job/=Nothing]
         ++ [service 0x65a478 [] [] []]
         ++ [service 0x64eb20 [(R0,0x76123456)] [] []|attachment selected==Attached]
