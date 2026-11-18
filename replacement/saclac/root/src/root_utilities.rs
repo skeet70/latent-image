@@ -5,7 +5,7 @@ use xm1_saclac_controllers::root::{Input, Utility};
 use xm1_saclac_interface::{stock::{record_handle_from_a2, StockCallbackWord}, CommandKind, Completion, CompletionStatus, Message, RecordHandle};
 use xm1_saclac_profile_records::{stock::record, ChangeSet, Header, Memory, MeasurementSelection, SharedHeaderByte, StockEntries};
 use xm1_saclac_shared::{lens::{self, LensBounds}, settings, stock::{Machine, Stock}};
-use crate::{controller_helpers::{bounds, current_bounds}, controller_replies::{autofocus_reply, command_reply, parameter_word, scalar_reply}, record_contexts::apply_trigger, services::Services};
+use crate::{controller_helpers::{bounds, current_bounds}, controller_replies::{autofocus_reply, parameter_word, record_reply, scalar_reply}, record_contexts::apply_trigger, services::Services};
 
 #[derive(Clone, Copy)]
 pub struct Callbacks { pub lens_status: StockCallbackWord }
@@ -63,7 +63,8 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Utilities<'_, M, R, E, P
                 let mode = if machine.enter(0x76_da38, &[]) != 0 { 1 } else { crate::calibration_inputs::lens_direction(&machine) };
                 // f02840 supplies zero to this query, independently of the Root cache owner.
                 let LensBounds(values) = bounds(&mut *self.services.borrow_mut(), record_handle_from_a2(0), position, mode);
-                command_reply(machine, CommandKind::Command25, CompletionStatus(0), &values);
+                // 0xf46fc8 enters 0xefb984(0, bounds, 0): the client reads [0, bounds] through r1.
+                record_reply(machine, CommandKind::Command25, CompletionStatus(0), 0, &values);
             }
             Utility::RestoreLensStatus => {
                 let Input::Message(Message::Completed(done)) = self.trigger else { panic!("lens status requires its completion") };

@@ -27,6 +27,22 @@ pub(crate) fn command_reply<M: Machine + Clone>(machine: M, command: CommandKind
     }
 }
 
+/// 0xefb984: the reply record the client reads through r1, `leading` then `words`, copied to an
+/// aligned record the client copies whole.
+pub(crate) fn record_reply<M: Machine + Clone>(machine: M, command: CommandKind, status: CompletionStatus, leading: u32, words: &[u32; 3]) {
+    let callback = xm1_saclac_interface::stock::optional_callback(parameter_word(&machine, command, 0));
+    if replies::ends_command(status) {
+        Stock::new(machine.clone()).set_pending(ReplyTarget::Command(command), false);
+    }
+    if let Some(callback) = callback {
+        let mut record = crate::stock::acquisition::Aligned([0; 16]);
+        for (slot, word) in record.0.chunks_exact_mut(4).zip([leading, words[0], words[1], words[2]]) {
+            slot.copy_from_slice(&word.to_le_bytes());
+        }
+        replies::Clients::enter(&mut Clients(machine), callback, status, Values::Record(&record.0));
+    }
+}
+
 pub(crate) fn autofocus_reply<M: Machine + Clone>(machine: M, status: CompletionStatus) {
     xm1_saclac_shared::commands::Commands::new(Stock::new(machine.clone())).reply_autofocus_lens(
         status, &mut Stock::new(machine.clone()), &mut Stock::new(machine.clone()), &mut Stock::new(machine));

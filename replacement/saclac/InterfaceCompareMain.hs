@@ -159,7 +159,7 @@ ownedRole receipt binding = do
   contract <- jsonFile (bindingContract binding)
   staging <- jsonFile (bindingStaging binding)
   symbolsBytes <- H.readRegular (16 * 1024 * 1024) (bindingSymbols binding)
-  symbolsDigest <- Text.pack <$> H.sha256 symbolsBytes
+  let symbolsDigest = Text.pack (Artifact.digest symbolsBytes)
   let field path value = either H.failH pure (J.parseEither path value)
   stagedCandidate <- field (withObject "staging" (.: "dat_sha256")) staging
   stagedBody <- field (withObject "staging" (.: "body_sha256")) staging
