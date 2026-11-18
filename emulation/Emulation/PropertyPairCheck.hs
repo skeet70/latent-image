@@ -2200,10 +2200,6 @@ checkSnapshotRegions number snapshot regions = do
     unless (case M.lookupLE address regions of
       Just (base,region) -> let offset=fromIntegral (address-base) in offset+B.length bytes <= B.length region && B.take (B.length bytes) (B.drop offset region) == bytes
       _ -> False) (Left (StorageShape ("storage snapshot differs from watched bytes in step " ++ show number ++ " at " ++ show address)))
-  unless (snapshotScannerRow snapshot == canonicalScannerRow) (Left (StorageShape "C scanner row differs from its source binding"))
-
-canonicalScannerRow :: ScannerRowBytes
-canonicalScannerRow = ScannerRowBytes (B.pack (concatMap (valueBytes True 4) [0x317,0,0x101,3,0x37243726,8,0]))
 
 data StorageCall = StorageCall
   { boundaryEntryIndex :: Int

@@ -874,6 +874,12 @@ matrixConsumerCases =
   [comparisonCase label StorageEvidenceDiffers retainedMatrix (matrixObservation OwnedRole (M.singleton HalfPressApplication change))
   | (label,change) <- s1ComparisonMutations] ++
   coldProvenanceCases ++ coverageCases ++ matrixControlCases ++ optionalEeCases ++ repetitionFamilyCases ++ [fullImageProofBindingCase]
+  ++ [ comparisonCase "a C scanner row the firmware rewrites is admitted per role and compared across roles" RolesAgree
+         (mapStorageSnapshots (wireField ["c_scanner_row"] rewritten) retainedMatrix) (mapStorageSnapshots (wireField ["c_scanner_row"] rewritten) ownedMatrix)
+     , comparisonCase "an owned C scanner row value that differs from retained is refused" StorageEvidenceDiffers retainedMatrix
+         (mapStorageSnapshots (wireField ["c_scanner_row"] rewritten) ownedMatrix) ]
+  where
+    rewritten = A.toJSON (wireBytes (littleWords [0x317,0,0x101,3,0x37243726,8,8]))
 
 mapStorageSnapshots :: (Value -> Value) -> Observation -> Observation
 mapStorageSnapshots change = transformObservation (mapWireTree update)
