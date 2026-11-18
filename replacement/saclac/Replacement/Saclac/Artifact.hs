@@ -27,6 +27,7 @@ module Replacement.Saclac.Artifact
   , stackBudget
   , checkStackArtifact
   , admit
+  , wordAt
   , ownedSpans
   , installExtent
   , fixedBody

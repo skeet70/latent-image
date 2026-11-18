@@ -163,6 +163,7 @@ haskell_library(
         "//replacement/fixed_image:contract",
         "//host:aeson",
         "//host:base",
+        "//host:first-stage",
     ],
 )
 
@@ -172,6 +173,7 @@ haskell_binary(
     main_file = "ExtentsMain.hs",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
+        ":saclac-artifact",
         ":saclac-placement",
         "//host:aeson",
         "//host:base",
@@ -187,11 +189,19 @@ genrule(
     tools = [":saclac-extents"],
 )
 
+# The owned post entry is bound from the linked image, so the observer follows every relink.
 genrule(
     name = "saclac-census-sites",
-    srcs = ["//emulation:saclac-census-sites"],
+    srcs = [
+        "//emulation:saclac-census-sites",
+        ":saclac-image.elf",
+        ":saclac-image.bin",
+        ":saclac-image.symbols",
+        ":saclac-image.disasm",
+        ":saclac-image.sections",
+    ],
     outs = ["saclac-census-sites.json"],
-    cmd = "$(location :saclac-extents) census-sites $(location //emulation:saclac-census-sites) $@",
+    cmd = "$(location :saclac-extents) census-sites $(location //emulation:saclac-census-sites) $(location :saclac-image.elf) $(location :saclac-image.bin) $(location :saclac-image.symbols) $(location :saclac-image.disasm) $(location :saclac-image.sections) $@",
     tools = [":saclac-extents"],
 )
 
